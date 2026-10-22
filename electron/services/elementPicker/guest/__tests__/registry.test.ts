@@ -137,6 +137,53 @@ describe("element refs", () => {
     );
   });
 
+  it("does not name a node a listener moved behind a closed root after it was referenced", () => {
+    document.body.innerHTML = '<p id="a"></p><p id="b"></p><div id="closed-host"></div>';
+    const a = document.getElementById("a")!;
+    const b = document.getElementById("b")!;
+    const closed = document.getElementById("closed-host")!.attachShadow({ mode: "closed" });
+    install("react", {
+      extract: (_element, _phase, refs) => {
+        refs.ref(a);
+        refs.ref(b);
+        return null;
+      },
+    });
+    // Page code on the channel, moving the second node as the first is named.
+    document.addEventListener(
+      channelEvent(CHANNEL, "element"),
+      () => {
+        if (b.isConnected && b.getRootNode() === document) closed.appendChild(b);
+      },
+      { capture: true, once: true }
+    );
+    const bootstrap = listenAsBootstrap();
+    request(a);
+    bootstrap.stop();
+
+    expect(bootstrap.log.filter((entry) => entry.type === "element").map((e) => e.target)).toEqual([
+      a,
+    ]);
+  });
+
+  it("keeps every other framework's answer when one extractor throws", () => {
+    document.body.innerHTML = "<p></p>";
+    install("vue", {
+      extract: () => {
+        throw new Error("broken reader");
+      },
+    });
+    install("react", {
+      extract: () => ({ componentChain: { nearestId: null, components: [], truncated: false } }),
+    });
+    const bootstrap = listenAsBootstrap();
+    request(document.querySelector("p")!, 5);
+    bootstrap.stop();
+
+    const reply = JSON.parse(bootstrap.log.at(-1)!.detail as string) as ExtractReply;
+    expect(reply.contributions.map((entry) => entry.framework)).toEqual(["react"]);
+  });
+
   it("names nothing when the reply itself has to be dropped for size", () => {
     document.body.innerHTML = "<p></p>";
     const p = document.querySelector("p")!;

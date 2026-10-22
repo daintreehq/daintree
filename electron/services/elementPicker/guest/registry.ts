@@ -182,6 +182,8 @@ function createRegistry(channel: string): Registry {
     named.forEach((node, ref) => {
       const message: ElementRefMessage = { id: request.id, ref };
       try {
+        // Again: a listener on an earlier one can move this node behind a closed root.
+        if (!reachesDocument(node)) return;
         node.dispatchEvent(
           new CustomEvent(elementEvent, { detail: JSON.stringify(message), composed: true })
         );

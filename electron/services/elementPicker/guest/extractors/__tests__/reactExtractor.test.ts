@@ -1,5 +1,17 @@
 // @vitest-environment jsdom
-import { act, createElement, type ComponentType } from "react";
+import {
+  Activity,
+  Fragment,
+  Suspense,
+  act,
+  createElement,
+  use,
+  useEffect,
+  useState,
+  type ComponentType,
+  type ReactElement,
+  type ReactNode,
+} from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ComponentRecord } from "../../../../../../shared/elementPicker/component.js";
@@ -32,6 +44,8 @@ let picker: PickerHandle | null = null;
 let root: Root | null = null;
 let frames: FrameRequestCallback[] = [];
 
+const actFlag = Object.getOwnPropertyDescriptor(scope, "IS_REACT_ACT_ENVIRONMENT");
+
 beforeAll(async () => {
   scope.IS_REACT_ACT_ENVIRONMENT = true;
   fixtures = {
@@ -42,7 +56,8 @@ beforeAll(async () => {
 
 afterAll(() => {
   removeFixtures();
-  delete scope.IS_REACT_ACT_ENVIRONMENT;
+  if (actFlag) Object.defineProperty(scope, "IS_REACT_ACT_ENVIRONMENT", actFlag);
+  else delete scope.IS_REACT_ACT_ENVIRONMENT;
 });
 
 beforeEach(() => {
@@ -67,8 +82,12 @@ afterEach(() => {
 });
 
 function mount(App: ComponentType<{ portal: Element }>): void {
+  mountTree(createElement(App, { portal: document.getElementById("portal")! }));
+}
+
+function mountTree(element: ReactElement): void {
   root = createRoot(document.getElementById("root")!);
-  act(() => root!.render(createElement(App, { portal: document.getElementById("portal")! })));
+  act(() => root!.render(element));
   installExtractor(
     { channel: CHANNEL, framework: "react", installed: false },
     createReactExtractor()
@@ -122,11 +141,15 @@ function fiberOf(node: Element): Record<string, unknown> {
   return (node as unknown as Record<string, Record<string, unknown>>)[key]!;
 }
 
-/** Re-render through React itself, with the picker out of the way of the page's click. */
-function bump(): void {
+/** Click through React itself, with the picker out of the way of the page's click. */
+function press(selector: string): void {
   picker!.setMode("browse");
-  act(() => (query(".bump") as HTMLButtonElement).click());
+  act(() => (query(selector) as HTMLButtonElement).click());
   picker!.setMode("select");
+}
+
+function bump(): void {
+  press(".bump");
 }
 
 describe.each(["plain", "compiled"] as const)("the React extractor, compiler %s", (variant) => {
@@ -181,17 +204,19 @@ describe.each(["plain", "compiled"] as const)("the React extractor, compiler %s"
     expect(at(invocation)).not.toEqual(at(own));
     expect(observation.capabilities.file).toEqual({ state: "unknown" });
     expect(observation.capabilities.line).toEqual({ state: "unknown" });
-    expect(observation.frameworkEvidence).toEqual([
-      {
-        kind: "generic",
-        framework: "react",
-        fields: [
-          { name: "fiberLookup", value: "element" },
-          { name: "debugFields", value: true },
-          { name: "framesOmitted", value: expect.any(Number) },
-        ],
-      },
+    // App's element was made by this test, outside any render: its stack has no
+    // bottom marker and runs past what one record sends, and the rest is counted.
+    expect(record(observation, "App").sourceCandidates).toHaveLength(4);
+    const fields =
+      observation.frameworkEvidence[0]?.kind === "generic"
+        ? observation.frameworkEvidence[0].fields
+        : [];
+    expect(fields.slice(0, 2)).toEqual([
+      { name: "fiberLookup", value: "element" },
+      { name: "debugFields", value: true },
     ]);
+    const omitted = fields.find((entry) => entry.name === "framesOmitted")?.value;
+    expect(typeof omitted === "number" && omitted > 0).toBe(true);
   });
 
   it("lists every element of a fragment as its component's roots", () => {
@@ -253,9 +278,18 @@ describe.each(["plain", "compiled"] as const)("the React extractor, compiler %s"
     const badgeBefore = record(pick("span.badge"), "Badge").componentId;
 
     bump();
-    // One render on: the title's fiber key is the half React just retired.
-    const fiber = fiberOf(query("b.notice-title"));
-    expect(fiber.alternate).not.toBeNull();
+    // One render on, the title's fiber key is the half React retired, and so is
+    // the Notice it returns to: that half still lists the title alone.
+    const reached = fiberOf(query("b.notice-title")).return as Record<string, unknown>;
+    let children = 0;
+    for (
+      let child = reached.child as Record<string, unknown> | null;
+      child;
+      child = child.sibling as Record<string, unknown> | null
+    ) {
+      children += 1;
+    }
+    expect(children).toBe(1);
 
     const after = pick("b.notice-title");
     const noticeAfter = record(after, "Notice");
@@ -292,16 +326,25 @@ describe.each(["plain", "compiled"] as const)("the React extractor, compiler %s"
     );
   });
 
-  it("reads no stack, owner or child on hover", () => {
+  it("reads no stack, owner, child or sibling anywhere up the chain on hover", () => {
     mount(fixtures[variant]);
+    // Rendered again first, so the ancestry has both halves to read from.
+    bump();
     const target = query("button.action-go");
-    const host = fiberOf(target);
-    const button = host.return as Record<string, unknown>;
+    const fibers = new Set<Record<string, unknown>>();
+    for (
+      let at = fiberOf(target) as Record<string, unknown> | null;
+      at !== null && fibers.size < 200;
+      at = at.return as Record<string, unknown> | null
+    ) {
+      fibers.add(at);
+      if (at.alternate) fibers.add(at.alternate as Record<string, unknown>);
+    }
+    expect([...fibers].some((fiber) => fiber.alternate !== null)).toBe(true);
     const reads: string[] = [];
     const restores: Array<() => void> = [];
-    for (const fiber of [host, host.alternate, button, button.alternate]) {
-      if (fiber === null || fiber === undefined) continue;
-      for (const key of ["_debugStack", "_debugOwner", "child"]) {
+    for (const fiber of fibers) {
+      for (const key of ["_debugStack", "_debugOwner", "child", "sibling", "stateNode"]) {
         const descriptor = Object.getOwnPropertyDescriptor(fiber, key)!;
         Object.defineProperty(fiber, key, {
           configurable: true,
@@ -324,6 +367,101 @@ describe.each(["plain", "compiled"] as const)("the React extractor, compiler %s"
     } finally {
       for (const restore of restores) restore();
     }
+  });
+});
+
+describe("the React extractor on what a render hides or hands elsewhere", () => {
+  it("leaves content a fallback replaced out of the roots, and lists the fallback", () => {
+    const never = new Promise<never>(() => {});
+    function Content({ suspended }: { suspended: boolean }) {
+      if (suspended) use(never);
+      return createElement("article", { className: "content" }, "ready");
+    }
+    function Gate() {
+      const [suspended, setSuspended] = useState(false);
+      return createElement(
+        Fragment,
+        null,
+        createElement("button", { className: "suspend", onClick: () => setSuspended(true) }),
+        createElement(
+          Suspense,
+          { fallback: createElement("i", { className: "loading" }, "loading") },
+          createElement(Content, { suspended })
+        )
+      );
+    }
+    mountTree(createElement(Gate));
+    const toggle = idOf("button.suspend");
+    const before = record(pick("article.content"), "Gate");
+    expect(before.rootElementIds).toEqual([toggle, idOf("article.content")]);
+
+    press("button.suspend");
+    // React keeps the content's nodes, hidden; the fallback is what is on screen.
+    expect(document.querySelector("article.content")).not.toBeNull();
+    const after = record(pick("i.loading"), "Gate");
+    expect(after.componentId).toBe(before.componentId);
+    expect(after.rootElementIds).toEqual([toggle, idOf("i.loading")]);
+    expect(after.rootsComplete).toBe(true);
+  });
+
+  it("leaves an Activity it hid out of the roots", () => {
+    function Panels() {
+      const [hidden, setHidden] = useState(false);
+      return createElement(
+        Fragment,
+        null,
+        createElement("nav", { className: "nav", onClick: () => setHidden(true) }),
+        createElement(Activity, {
+          mode: hidden ? "hidden" : "visible",
+          children: createElement("aside", { className: "panel" }),
+        })
+      );
+    }
+    mountTree(createElement(Panels));
+    const nav = idOf("nav.nav");
+    const panel = idOf("aside.panel");
+    expect(record(pick("nav.nav"), "Panels").rootElementIds).toEqual([nav, panel]);
+
+    press("nav.nav");
+    expect(document.querySelector("aside.panel")).not.toBeNull();
+    expect(record(pick("nav.nav"), "Panels").rootElementIds).toEqual([nav]);
+  });
+
+  it("names an element's creator even where another component renders it", () => {
+    function Badge() {
+      return createElement("b", { className: "made" }, "made");
+    }
+    // Makes the element in its own render and hands it up; renders only text itself.
+    function Producer({ onMade }: { onMade: (node: ReactNode) => void }) {
+      const [made] = useState(() => createElement(Badge));
+      useEffect(() => onMade(made), [made, onMade]);
+      return "producer";
+    }
+    function Consumer({ children }: { children?: ReactNode }) {
+      return createElement("div", { className: "consumer" }, children);
+    }
+    function Page() {
+      const [made, setMade] = useState<ReactNode>(null);
+      return createElement(
+        Fragment,
+        null,
+        createElement(Producer, { onMade: setMade }),
+        createElement(Consumer, null, made)
+      );
+    }
+    mountTree(createElement(Page));
+    const observation = pick("b.made");
+    expect(chainNames(observation)).toEqual(["Badge", "Consumer", "Page", "Producer"]);
+    const badge = record(observation, "Badge");
+    expect(nameOf(observation, badge.renderParentId)).toBe("Consumer");
+    expect(nameOf(observation, badge.ownerId)).toBe("Producer");
+    const producer = record(observation, "Producer");
+    // Its record came from the owner edge; nobody walked its render parent.
+    expect(producer).not.toHaveProperty("renderParentId");
+    expect(nameOf(observation, producer.ownerId)).toBe("Page");
+    // Text is all it rendered, and text has no element id.
+    expect(producer.rootElementIds).toEqual([]);
+    expect(producer.rootsComplete).toBe(false);
   });
 });
 

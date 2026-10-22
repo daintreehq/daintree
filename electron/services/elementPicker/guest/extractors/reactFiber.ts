@@ -49,6 +49,8 @@ const HOST_TAGS: ReadonlySet<number> = new Set([
 ]);
 
 const MAX_NAME_CHARS = 256;
+/** memo(forwardRef(fn)) and memo(memo(fn)) are as deep as React nests a component type. */
+const MAX_TYPE_DEPTH = 4;
 /** DOM parents tried when the picked node is not one React rendered. */
 const MAX_DOM_ANCESTORS = 64;
 
@@ -212,8 +214,14 @@ export function committedFiber(fiber: Fiber, budget: Budget): Fiber {
  * memo, so the child stands for its memo wherever it appears.
  */
 export function canonicalFiber(fiber: Fiber): Fiber {
-  const parent = parentOf(fiber);
-  return parent !== null && tagOf(parent) === FIBER_TAGS.memo ? parent : fiber;
+  let canonical = fiber;
+  // memo(memo(fn)) nests one implementation inside another.
+  for (let depth = 0; depth < MAX_TYPE_DEPTH; depth += 1) {
+    const parent = parentOf(canonical);
+    if (parent === null || tagOf(parent) !== FIBER_TAGS.memo) break;
+    canonical = parent;
+  }
+  return canonical;
 }
 
 export function isMemoImplementation(fiber: Fiber): boolean {
@@ -261,9 +269,6 @@ function stringAt(value: unknown, key: string, path: string): FiberName | null {
   if (typeof read !== "string" || read.length === 0) return null;
   return { value: read.slice(0, MAX_NAME_CHARS), field: path };
 }
-
-/** memo(forwardRef(fn)) is as deep as React nests a component type. */
-const MAX_TYPE_DEPTH = 4;
 
 /** A component type's own name: what `displayName` or the function says it is. */
 function typeName(type: unknown, path: string, depth = 0): FiberName | null {
@@ -325,7 +330,7 @@ export interface HostRoots {
  * layer: a portal below a host node renders into another container, and a
  * hoisted `<title>` or `<meta>` lands in `<head>`, so each is a root of its own
  * wherever it sits in the tree. An element inside one already collected is
- * covered by it, and so is text.
+ * covered by it, whichever came first, and so is text inside one.
  *
  * A hidden Activity or Suspense subtree is skipped: its nodes are not on
  * screen. Uncovered text, unhydrated markup, a node from another realm, or a
@@ -333,9 +338,11 @@ export interface HostRoots {
  * than wrong. A stylesheet resource has no node of its own and is no root.
  */
 export function hostRoots(component: Fiber, limit: number, budget: Budget): HostRoots {
-  const elements: Element[] = [];
+  let elements: Element[] = [];
   let complete = true;
-  const pending: Array<{ fiber: Fiber; cover: Element | null }> = [];
+  const covered = (node: Node): boolean =>
+    elements.some((root) => root === node || root.contains(node));
+  const pending: Array<{ fiber: Fiber; cover: Node | null }> = [];
   const first = fiberField(component, "child");
   if (first !== null) pending.push({ fiber: first, cover: null });
   while (pending.length > 0) {
@@ -345,31 +352,34 @@ export function hostRoots(component: Fiber, limit: number, budget: Budget): Host
     if (sibling !== null) pending.push({ fiber: sibling, cover });
     const tag = tagOf(fiber);
     let childCover = cover;
-    if (HOST_TAGS.has(tag)) {
-      const element = field(fiber, "stateNode");
-      if (element instanceof Element) {
-        if (cover === null || !cover.contains(element)) {
-          if (!elements.includes(element)) {
+    // Page values: an `instanceof` or `contains` on a hostile one can throw.
+    try {
+      if (HOST_TAGS.has(tag)) {
+        const node = field(fiber, "stateNode");
+        if (node instanceof Element) {
+          if (!covered(node)) {
+            elements = elements.filter((root) => !node.contains(root));
             if (elements.length >= limit) return { elements, complete: false };
-            elements.push(element);
+            elements.push(node);
           }
-          childCover = element;
+          childCover = node;
+        } else if (!(node == null && tag === FIBER_TAGS.hostHoistable)) {
+          if (cover === null) complete = false;
         }
-      } else if (cover === null && tag !== FIBER_TAGS.hostHoistable) {
+      } else if (tag === FIBER_TAGS.hostText) {
+        if (cover === null) complete = false;
+      } else if (tag === FIBER_TAGS.hostPortal) {
+        // Its children land in its container, covered only if that is.
+        const container = field(field(fiber, "stateNode"), "containerInfo");
+        childCover = container instanceof Node && covered(container) ? container : null;
+      } else if (isDehydrated(fiber)) {
         complete = false;
+        continue;
+      } else if (isHidden(fiber)) {
+        continue;
       }
-    } else if (tag === FIBER_TAGS.hostText) {
-      if (cover === null) complete = false;
-    } else if (tag === FIBER_TAGS.hostPortal) {
-      // Its children land in its container: still covered only if that is.
-      const container = field(field(fiber, "stateNode"), "containerInfo");
-      if (cover !== null && !(container instanceof Node && cover.contains(container))) {
-        childCover = null;
-      }
-    } else if (isDehydrated(fiber)) {
+    } catch {
       complete = false;
-      continue;
-    } else if (isHidden(fiber)) {
       continue;
     }
     const child = fiberField(fiber, "child");

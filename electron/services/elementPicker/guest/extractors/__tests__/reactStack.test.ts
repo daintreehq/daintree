@@ -2,10 +2,11 @@ import { afterEach, describe, expect, it } from "vitest";
 import { creationFrames, readRawStack } from "../reactStack.js";
 
 const ctor = Error as unknown as { prepareStackTrace?: unknown };
-const original = ctor.prepareStackTrace;
+const original = Object.getOwnPropertyDescriptor(Error, "prepareStackTrace");
 
 afterEach(() => {
-  ctor.prepareStackTrace = original;
+  if (original) Object.defineProperty(Error, "prepareStackTrace", original);
+  else delete ctor.prepareStackTrace;
 });
 
 /** An object shaped like React's `_debugStack`, with a stack as V8 would print it. */
@@ -45,12 +46,15 @@ describe("creationFrames", () => {
         "    at eval (eval at run (http://localhost:5173/src/a.ts:1:1), <anonymous>:2:3)",
         "    at async Promise.all (index 0)",
         "    at List (/Users/me/My Project (copy)/src/List.tsx:40:12)",
+        "    at Wrapped (inner) (http://localhost:5173/src/wrap.tsx:7:2)",
         BOTTOM
       ),
       4
     );
+    // A parenthesis in a path or in a function name leaves the location whole.
     expect(frames).toEqual([
       { index: 4, file: "/Users/me/My Project (copy)/src/List.tsx", line: 40, column: 12 },
+      { index: 5, file: "http://localhost:5173/src/wrap.tsx", line: 7, column: 2 },
     ]);
   });
 

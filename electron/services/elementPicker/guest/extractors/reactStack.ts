@@ -73,7 +73,6 @@ export function readRawStack(error: unknown): string | null {
 }
 
 function parseLocation(text: string): { file: string; line: number; column: number } | null {
-  if (text.startsWith("eval at ")) return null;
   const match = LOCATION.exec(text);
   if (match === null) return null;
   const file = match[1]!;
@@ -84,18 +83,27 @@ function parseLocation(text: string): { file: string; line: number; column: numb
   return { file, line, column };
 }
 
+const LOCATION_START = /^(?:[a-z][a-z0-9+.-]*:|\/)/i;
+
 /**
- * `at name (location)` or `at location`. The location is everything after the
- * first ` (`, so a path with a parenthesis in it survives; a function name
- * with one in it does not, and that frame is skipped rather than misread.
+ * `at name (location)` or `at location`. A function name and a file path can
+ * both hold ` (`, so the location is the rightmost parenthesised tail that
+ * starts like one — a URL, which is all a browser prints, or a path. A frame
+ * with no such tail is skipped rather than misread.
  */
 function parseFrame(line: string): { file: string; line: number; column: number } | null {
   const text = line.trim();
   if (!text.startsWith("at ")) return null;
   const body = text.slice(3);
-  const open = body.indexOf(" (");
-  if (open >= 0 && body.endsWith(")")) return parseLocation(body.slice(open + 2, -1));
-  return parseLocation(body);
+  // Inside an eval: the position is in code no file holds.
+  if (body.includes("eval at ")) return null;
+  if (!body.endsWith(")")) return parseLocation(body);
+  for (let open = body.lastIndexOf(" ("); open >= 0; open = body.lastIndexOf(" (", open - 1)) {
+    const location = body.slice(open + 2, -1);
+    if (LOCATION_START.test(location)) return parseLocation(location);
+    if (open === 0) break;
+  }
+  return null;
 }
 
 /**

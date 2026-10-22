@@ -280,54 +280,80 @@ function selectionOf(
     });
   }
 
-  const componentChain: ComponentChain = {
-    nearestId: rendered > 0 ? records[0]!.componentId : null,
-    components: records,
-    truncated,
-  };
-  const hasFrames =
-    sourceCandidates.length > 0 || records.some((record) => record.sourceCandidates.length > 0);
-  const contribution: ExtractorContribution = {
-    componentChain,
-    sourceCandidates,
-    // What the reading rests on, for a reader deciding how far to trust it.
-    frameworkEvidence: [
-      {
-        kind: "generic",
-        framework: "react",
-        fields: [
-          { name: "fiberLookup", value: host.own ? "element" : "ancestor" },
-          { name: "debugFields", value: development },
-          { name: "framesOmitted", value: writer.omitted },
-        ],
+  let kept = records;
+  let elementCandidates = sourceCandidates;
+  let omitted = writer.omitted;
+  const build = (): ExtractorContribution => {
+    const componentChain: ComponentChain = {
+      nearestId: rendered > 0 ? kept[0]!.componentId : null,
+      components: kept,
+      truncated,
+    };
+    const hasFrames =
+      elementCandidates.length > 0 || kept.some((record) => record.sourceCandidates.length > 0);
+    return {
+      componentChain,
+      sourceCandidates: elementCandidates,
+      // What the reading rests on, for a reader deciding how far to trust it.
+      frameworkEvidence: [
+        {
+          kind: "generic",
+          framework: "react",
+          fields: [
+            { name: "fiberLookup", value: host.own ? "element" : "ancestor" },
+            { name: "debugFields", value: development },
+            { name: "framesOmitted", value: omitted },
+          ],
+        },
+      ],
+      capabilities: {
+        names: kept.length > 0 ? AVAILABLE : NOT_EXPOSED,
+        chain: kept.length > 0 ? AVAILABLE : NOT_EXPOSED,
+        componentSelection: kept.some((record) => record.rootElementIds.length > 0)
+          ? AVAILABLE
+          : NOT_EXPOSED,
+        // A frame is a claim in generated coordinates: the host has yet to map it.
+        file: development ? (hasFrames ? UNKNOWN : NOT_EXPOSED) : PRODUCTION,
+        line: development ? (hasFrames ? UNKNOWN : NOT_EXPOSED) : PRODUCTION,
+        exactRange: development ? NOT_EXPOSED : PRODUCTION,
       },
-    ],
-    capabilities: {
-      names: records.length > 0 ? AVAILABLE : NOT_EXPOSED,
-      chain: records.length > 0 ? AVAILABLE : NOT_EXPOSED,
-      componentSelection: records.some((record) => record.rootElementIds.length > 0)
-        ? AVAILABLE
-        : NOT_EXPOSED,
-      // A frame is a claim in generated coordinates: the host has yet to map it.
-      file: development ? (hasFrames ? UNKNOWN : NOT_EXPOSED) : PRODUCTION,
-      line: development ? (hasFrames ? UNKNOWN : NOT_EXPOSED) : PRODUCTION,
-      exactRange: development ? NOT_EXPOSED : PRODUCTION,
-    },
+    };
   };
-  return fitReply(contribution);
+
+  // The frame budget keeps a reply small, but names are page data too. Past
+  // the ceiling the frames go first, then the outermost records, until it fits.
+  let contribution = build();
+  if (fits(contribution)) return contribution;
+  omitted += elementCandidates.length;
+  elementCandidates = [];
+  for (const record of kept) {
+    omitted += record.sourceCandidates.length;
+    record.sourceCandidates = [];
+  }
+  contribution = build();
+  while (!fits(contribution) && kept.length > 1) {
+    kept = keepInnermost(kept, Math.floor(kept.length / 2));
+    truncated = true;
+    contribution = build();
+  }
+  return contribution;
 }
 
-/**
- * The frame budget keeps a reply small, but names and ids are page data too;
- * past the ceiling the frames go first, so the chain still arrives.
- */
-function fitReply(contribution: ExtractorContribution): ExtractorContribution {
-  if (new TextEncoder().encode(JSON.stringify(contribution)).length <= MAX_REPLY_BYTES) {
-    return contribution;
+function fits(contribution: ExtractorContribution): boolean {
+  return new TextEncoder().encode(JSON.stringify(contribution)).length <= MAX_REPLY_BYTES;
+}
+
+/** The first `count` records, with every edge into a record left behind omitted rather than dangling. */
+function keepInnermost(records: ComponentRecord[], count: number): ComponentRecord[] {
+  const kept = records.slice(0, count);
+  const ids = new Set(kept.map((record) => record.componentId));
+  for (const record of kept) {
+    if (typeof record.renderParentId === "string" && !ids.has(record.renderParentId)) {
+      delete record.renderParentId;
+    }
+    if (typeof record.ownerId === "string" && !ids.has(record.ownerId)) delete record.ownerId;
   }
-  contribution.sourceCandidates = [];
-  for (const record of contribution.componentChain?.components ?? []) record.sourceCandidates = [];
-  return contribution;
+  return kept;
 }
 
 export function createReactExtractor(): ElementPickerExtractor {

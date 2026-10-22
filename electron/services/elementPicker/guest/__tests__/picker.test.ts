@@ -450,6 +450,52 @@ describe("createPicker", () => {
       });
     });
 
+    it("stops taking names past what one reply could hold, and takes them again for the next", () => {
+      const first = document.getElementById("first")!;
+      let flood = true;
+      answerWith((id, name) => {
+        if (flood) {
+          // Page noise on the channel: malformed, out of range, for another request.
+          for (let index = 0; index < 600; index += 1) {
+            name(
+              first,
+              index % 3 === 0 ? "noise" : { id: index % 3 === 1 ? id : id + 9, ref: 999 }
+            );
+          }
+        }
+        name(first, { id, ref: 0 });
+        return {
+          id,
+          contributions: [
+            {
+              framework: "react",
+              data: {
+                componentChain: {
+                  nearestId: "c1",
+                  components: [record(["ref-0"])],
+                  truncated: false,
+                },
+              },
+            },
+          ],
+        };
+      });
+      start();
+      first.click();
+      expect(selectedChain()?.components[0]).toMatchObject({
+        rootElementIds: [],
+        rootsComplete: false,
+      });
+
+      flood = false;
+      first.click();
+      const observation = ofType("selectionChanged").at(-1)?.observations[0];
+      expect(observation?.componentChain.components[0]).toMatchObject({
+        rootElementIds: [observation?.elementId],
+        rootsComplete: true,
+      });
+    });
+
     it("gives a description set off inside another's dispatch no answer of its own", () => {
       const first = document.getElementById("first")!;
       const second = document.getElementById("second")!;

@@ -589,6 +589,7 @@ describe("core Element Picker guest loading", () => {
 
   it("describes a React selection with the shipped extractor: names, owner, raw frames, and roots as element ids", async () => {
     const scope = globalThis as Record<string, unknown>;
+    const actFlag = Object.getOwnPropertyDescriptor(scope, "IS_REACT_ACT_ENVIRONMENT");
     scope.IS_REACT_ACT_ENVIRONMENT = true;
     document.body.innerHTML = '<div id="root"></div>';
     const Card = ({ children }: { children?: ReactNode }) =>
@@ -596,8 +597,8 @@ describe("core Element Picker guest loading", () => {
     const Label = () => createElement("button", { id: "cta" }, "Go");
     const App = () => createElement(Card, null, createElement(Label));
     const root = createRoot(document.getElementById("root")!);
-    act(() => root.render(createElement(App)));
     try {
+      act(() => root.render(createElement(App)));
       const h = makeHarness({ catalog: shipped });
       await h.bind();
       await settle();
@@ -638,7 +639,8 @@ describe("core Element Picker guest loading", () => {
       expect(observation.sourceCandidates[0]!.file).toContain("coreGuestHost.test.ts");
     } finally {
       act(() => root.unmount());
-      delete scope.IS_REACT_ACT_ENVIRONMENT;
+      if (actFlag) Object.defineProperty(scope, "IS_REACT_ACT_ENVIRONMENT", actFlag);
+      else delete scope.IS_REACT_ACT_ENVIRONMENT;
     }
   });
 });

@@ -1,6 +1,8 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it } from "vitest";
 import { SelectionObservationSchema } from "../../../../../../shared/elementPicker/observation.js";
+import { MAX_ELEMENT_PICKER_MESSAGE_BYTES } from "../../../../../../shared/elementPicker/protocol.js";
+import { MAX_BRIDGE_MESSAGE_CHARS } from "../../../guestChannel.js";
 import type { ExtractorContribution } from "../../types.js";
 import { createReactExtractor } from "../reactExtractor.js";
 import {
@@ -153,6 +155,32 @@ describe("hostRoots", () => {
     });
   });
 
+  it("lists a root portaled into another of the component's roots once, under it", () => {
+    const frame = host("main");
+    const into = link(
+      fiber(FIBER_TAGS.hostPortal, { stateNode: { containerInfo: frame.stateNode } }),
+      [host("dialog")]
+    );
+    (frame.stateNode as Element).appendChild((into.child as Fiber).stateNode as Element);
+    // The portal comes first, before the root that turns out to hold it.
+    expect(hostRoots(link(component("Shell"), [into, frame]), 32, new Budget(1_000))).toEqual({
+      elements: [frame.stateNode],
+      complete: true,
+    });
+  });
+
+  it("marks a node it cannot represent, or cannot safely inspect, incomplete without throwing", () => {
+    const foreign = fiber(FIBER_TAGS.hostHoistable, { stateNode: { nodeType: 1 } });
+    expect(hostRoots(link(component("Head"), [foreign]), 32, new Budget(100)).complete).toBe(false);
+
+    const { proxy, revoke } = Proxy.revocable({}, {});
+    revoke();
+    const hostile = fiber(FIBER_TAGS.hostComponent, { stateNode: proxy });
+    const after = host("p");
+    const roots = hostRoots(link(component("Hostile"), [hostile, after]), 32, new Budget(100));
+    expect(roots).toEqual({ elements: [after.stateNode], complete: false });
+  });
+
   it("counts a component that rendered nothing as complete", () => {
     expect(hostRoots(component("Empty"), 32, new Budget(10))).toEqual({
       elements: [],
@@ -205,6 +233,17 @@ describe("committedFiber", () => {
 });
 
 describe("FiberIds", () => {
+  it("folds memo(memo(fn)) into its outer memo, whichever fiber is asked about", () => {
+    const ids = new FiberIds("react-");
+    const outer = fiber(FIBER_TAGS.memo);
+    const inner = fiber(FIBER_TAGS.memo);
+    const implementation = component("Inner");
+    link(outer, [inner]);
+    link(inner, [implementation]);
+    expect(ids.idOf(implementation)).toBe(ids.idOf(outer));
+    expect(ids.idOf(inner)).toBe(ids.idOf(outer));
+  });
+
   it("gives both halves of a pair, and a memo's implementation, the memo's one id", () => {
     const ids = new FiberIds("react-");
     const memo = fiber(FIBER_TAGS.memo);
@@ -314,6 +353,65 @@ describe("the React extractor on a hostile or partial tree", () => {
     const [slot, page] = chain.components;
     expect(slot?.ownerId).toBe(page?.componentId);
     expect(page).not.toHaveProperty("renderParentId");
+  });
+
+  it("sends at most four frames a record, within the reply's share, and counts every one it held back", () => {
+    const frames = (count: number, file: string) => ({
+      stack: [
+        "Error: react-stack-top-frame",
+        "    at jsxDEV (http://localhost/react.js:1:1)",
+        ...Array.from({ length: count }, (_, at) => `    at F${at} (${file}:${at + 1}:1)`),
+        "    at Object.react_stack_bottom_frame (http://localhost/react-dom.js:1:1)",
+      ].join("\n"),
+    });
+    const leaf = host("button");
+    leaf._debugStack = frames(6, "http://localhost/src/leaf.tsx");
+    let below = leaf;
+    const long = "http://localhost/src/" + "x".repeat(1_500) + ".tsx";
+    for (let depth = 0; depth < 40; depth += 1) {
+      const next = component(`Level${depth}`, { _debugStack: frames(5, long) });
+      below.return = next;
+      below = next;
+    }
+    below.return = hostRoot();
+    const contribution = select(attach(leaf));
+    const sent = [
+      ...(contribution.sourceCandidates ?? []),
+      ...contribution.componentChain!.components.flatMap((record) => record.sourceCandidates),
+    ];
+    expect(contribution.sourceCandidates).toHaveLength(4);
+    expect(
+      contribution.componentChain!.components.every((record) => record.sourceCandidates.length <= 4)
+    ).toBe(true);
+    // The outer records' long frames ran past the reply's share.
+    expect(contribution.componentChain!.components.at(-1)?.sourceCandidates).toEqual([]);
+    const omitted = contribution.frameworkEvidence?.[0];
+    expect(omitted).toMatchObject({
+      fields: expect.arrayContaining([{ name: "framesOmitted", value: 6 + 40 * 5 - sent.length }]),
+    });
+    expect(new Set(sent.map((candidate) => candidate.candidateId)).size).toBe(sent.length);
+  });
+
+  it("drops frames, then outer records, until a reply of page-sized names fits", () => {
+    const leaf = host("button");
+    let below = leaf;
+    for (let depth = 0; depth < 64; depth += 1) {
+      // Every character escapes to six in JSON.
+      const next = component("\u0001".repeat(250) + String(depth).padStart(2, "0"));
+      below.return = next;
+      below = next;
+    }
+    below.return = hostRoot();
+    const contribution = select(attach(leaf));
+    const chain = contribution.componentChain!;
+    expect(chain.components.length).toBeGreaterThan(0);
+    expect(chain.components.length).toBeLessThan(64);
+    expect(chain.truncated).toBe(true);
+    expect(chain.nearestId).toBe(chain.components[0]?.componentId);
+    // It survives the bridge, and the host's envelope around it.
+    const text = JSON.stringify(contribution);
+    expect(text.length).toBeLessThanOrEqual(MAX_BRIDGE_MESSAGE_CHARS);
+    expect(new TextEncoder().encode(text).length).toBeLessThan(MAX_ELEMENT_PICKER_MESSAGE_BYTES);
   });
 
   it("says a build without debug fields is not a dev build, and claims no owners", () => {
