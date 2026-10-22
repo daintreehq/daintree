@@ -2084,6 +2084,12 @@ describe("createHost setWorktreeCardStatus", () => {
       label: "up",
       command: "acme.open",
     });
+
+    await host.setWorktreeCardStatus("wt-a", { label: "up" });
+    expect(emitted).toHaveBeenCalledTimes(3);
+    expect(h.deps.pluginWorktreeCardStatuses.get(PLUGIN_ID)?.get(PROJECT_A)?.get("wt-a")).toEqual({
+      label: "up",
+    });
   });
 
   it("replaces, skips an identical republish, and clears down to nothing", async () => {

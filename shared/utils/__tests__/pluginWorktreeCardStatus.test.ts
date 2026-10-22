@@ -133,15 +133,32 @@ describe("validatePluginWorktreeCardStatus command", () => {
     expect(!result.ok && result.error).toContain('written "acme.docker.<id>"');
   });
 
-  it("refuses a command whose own namespace spells a built-in", () => {
+  // The project instance's rewritten id is never a built-in, so that case
+  // passes only on the authored form's check — the one the worker makes.
+  it.each([
+    ["an installed plugin", "worktree"],
+    ["a project plugin", "project__proj-a__worktree"],
+  ])("refuses a command whose own namespace spells a built-in, for %s", (_name, instanceId) => {
     const result = validatePluginWorktreeCardStatus(
       "/wt",
       { label: "x", command: "worktree.delete" },
       "worktree",
-      "worktree"
+      instanceId
     );
     expect(result.ok).toBe(false);
     expect(!result.ok && result.error).toContain("is a built-in action");
+  });
+
+  it("reads fields without running a getter", () => {
+    const status = {
+      label: "x",
+      get command(): string {
+        throw new Error("boom");
+      },
+    };
+    // An accessor reads as absent, as a panel menu's fields do, so a host
+    // method still settles rather than throwing out of the call.
+    expect(vet("/wt", status)).toEqual({ ok: true, worktreeId: "/wt", status: { label: "x" } });
   });
 });
 

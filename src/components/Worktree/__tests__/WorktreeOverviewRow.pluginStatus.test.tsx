@@ -2,7 +2,7 @@
  * @vitest-environment jsdom
  */
 import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import type { WorktreeState } from "@shared/types";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { WorktreeStoreContext } from "@/contexts/WorktreeStoreContext";
@@ -110,9 +110,11 @@ describe("WorktreeOverviewRow plugin statuses (#13776)", () => {
     expect(chip.tabIndex).toBe(-1);
   });
 
-  it("runs the chip's command for this worktree, then gets the overview out of the way", async () => {
+  it("gets the overview out of the way as the chip's command starts, for this worktree", () => {
     publishRegisteredPluginActions([["acme.docker.show", "Show containers"]]);
     showStatus({ label: "2 up", command: "acme.docker.show" });
+    // Never settles: the overview must not wait on the command to close.
+    dispatchMock.mockReturnValue(new Promise(() => {}));
     const { onActivate, onBeforeMenuAction } = renderRow();
 
     fireEvent.click(screen.getByRole("button", { name: "Docker: 2 up" }));
@@ -122,20 +124,17 @@ describe("WorktreeOverviewRow plugin statuses (#13776)", () => {
       { worktreeId: WT },
       { source: "user" }
     );
+    expect(onBeforeMenuAction).toHaveBeenCalledTimes(1);
     expect(onActivate).not.toHaveBeenCalled();
-    await waitFor(() => expect(onBeforeMenuAction).toHaveBeenCalledTimes(1));
   });
 
-  it("stays open when the command fails", async () => {
-    publishRegisteredPluginActions([["acme.docker.show", "Show containers"]]);
+  it("keeps the overview up for a chip with nothing to run", () => {
     showStatus({ label: "2 up", command: "acme.docker.show" });
-    dispatchMock.mockResolvedValue({ ok: false, error: { code: "EXECUTION_ERROR" } });
     const { onActivate, onBeforeMenuAction } = renderRow();
 
     fireEvent.click(screen.getByRole("button", { name: "Docker: 2 up" }));
-    await waitFor(() => expect(dispatchMock).toHaveBeenCalledTimes(1));
-    await Promise.resolve();
 
+    expect(dispatchMock).not.toHaveBeenCalled();
     expect(onBeforeMenuAction).not.toHaveBeenCalled();
     expect(onActivate).not.toHaveBeenCalled();
   });

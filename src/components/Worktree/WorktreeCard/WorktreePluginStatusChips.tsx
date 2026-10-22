@@ -16,6 +16,7 @@ import {
 import type { ActionId } from "@shared/types/actions";
 import type { PluginWorktreeCardStatus } from "@shared/types/plugin";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../../ui/tooltip";
+import { FocusHandoffGuard } from "../FocusHandoffGuard";
 
 interface PluginStatusChipProps {
   pluginId: string;
@@ -23,7 +24,7 @@ interface PluginStatusChipProps {
   status: PluginWorktreeCardStatus;
   registeredActions: ReadonlyMap<string, string>;
   tabIndex?: number;
-  onDispatched?: () => void;
+  onBeforeRun?: () => void;
 }
 
 function PluginStatusChip({
@@ -32,7 +33,7 @@ function PluginStatusChip({
   status,
   registeredActions,
   tabIndex,
-  onDispatched,
+  onBeforeRun,
 }: PluginStatusChipProps) {
   const { name } = usePluginAttribution(pluginId);
   // Runs only the plugin's own action, and only while it is registered; until
@@ -43,17 +44,13 @@ function PluginStatusChip({
       : undefined;
   const actionTitle = command !== undefined ? registeredActions.get(command) : undefined;
 
-  const handleClick = async (event: MouseEvent<HTMLButtonElement>) => {
+  const handleClick = (event: MouseEvent<HTMLButtonElement>) => {
     // A press (or Enter/Space, which click it) must never reach the card and
     // select the worktree, whether or not the chip runs anything.
     event.stopPropagation();
     if (command === undefined || actionTitle === undefined) return;
-    const result = await actionService.dispatch(
-      command as ActionId,
-      { worktreeId },
-      { source: "user" }
-    );
-    if (result.ok) onDispatched?.();
+    onBeforeRun?.();
+    void actionService.dispatch(command as ActionId, { worktreeId }, { source: "user" });
   };
 
   return (
@@ -66,7 +63,7 @@ function PluginStatusChip({
           data-no-dnd
           tabIndex={tabIndex}
           aria-label={`${name}: ${status.label}`}
-          onClick={(event) => void handleClick(event)}
+          onClick={handleClick}
           className={cn(
             "inline-flex h-6 min-w-0 max-w-full items-center rounded-[var(--radius-sm)] px-1 text-xs text-text-secondary focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary",
             actionTitle !== undefined &&
@@ -116,18 +113,21 @@ export function useWorktreePluginStatuses(worktreeId: string): WorktreeCardPlugi
  * never hide each other. Drawn like the attachment chips. A chip whose status
  * names a registered command of its plugin runs it with `{ worktreeId }` when
  * clicked (#13776). The overview passes `tabIndex={-1}` (F2 reaches its row's
- * controls) and `onDispatched` to get out of the way once a command ran.
+ * controls), `onBeforeRun` to get out of the way as a command starts, as its
+ * context-menu actions do, and `onFocusLost` for a focused chip that goes.
  */
 export function WorktreePluginStatusChips({
   worktreeId,
   statuses,
   tabIndex,
-  onDispatched,
+  onBeforeRun,
+  onFocusLost,
 }: {
   worktreeId: string;
   statuses: readonly WorktreeCardPluginStatus[];
   tabIndex?: number;
-  onDispatched?: () => void;
+  onBeforeRun?: () => void;
+  onFocusLost?: () => void;
 }) {
   // Subscribed, not read from ActionService: a command registering after its
   // status arrived must still make the chip clickable.
@@ -139,17 +139,28 @@ export function WorktreePluginStatusChips({
   if (statuses.length === 0) return null;
   return (
     <>
-      {statuses.map(({ pluginId, status }) => (
-        <PluginStatusChip
-          key={pluginId}
-          pluginId={pluginId}
-          worktreeId={worktreeId}
-          status={status}
-          registeredActions={registeredActions}
-          tabIndex={tabIndex}
-          onDispatched={onDispatched}
-        />
-      ))}
+      {statuses.map(({ pluginId, status }) => {
+        const chip = (
+          <PluginStatusChip
+            key={pluginId}
+            pluginId={pluginId}
+            worktreeId={worktreeId}
+            status={status}
+            registeredActions={registeredActions}
+            tabIndex={tabIndex}
+            onBeforeRun={onBeforeRun}
+          />
+        );
+        // Each chip guarded on its own: one plugin clearing its status while
+        // its chip has focus must hand the keyboard back, even as others stay.
+        return onFocusLost ? (
+          <FocusHandoffGuard key={pluginId} onFocusLeaving={onFocusLost}>
+            {chip}
+          </FocusHandoffGuard>
+        ) : (
+          chip
+        );
+      })}
     </>
   );
 }

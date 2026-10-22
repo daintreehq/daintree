@@ -1093,7 +1093,7 @@ await host.setWorktreeCardStatus(wt.id, {
 });
 ```
 
-Statuses sit in their own row under an expanded card's header, one chip per plugin, named after the plugin in its tooltip and accessible name, so two plugins never hide each other; the row wraps rather than crowding the card. A collapsed card leaves them out. The worktree overview shows the same chips under each worktree's branch line, where F2 reaches them with the row's other controls and a chip that ran its command closes the overview. Each chip is focusable, and its tooltip opens on keyboard focus as well as hover.
+Statuses sit in their own row under an expanded card's header, one chip per plugin, named after the plugin in its tooltip and accessible name, so two plugins never hide each other; the row wraps rather than crowding the card. A collapsed card leaves them out. The worktree overview shows the same chips under each worktree's branch line, where F2 reaches them with the row's other controls, and clicking one that runs a command closes the overview as the command starts. Each chip is focusable, and its tooltip opens on keyboard focus as well as hover.
 
 Statuses are not persisted. They are cleared when the worktree is removed, when its project closes, and when your plugin unloads or its worker is replaced, so republish them after a restart, for example from `onDidChangeWorktrees`. Not revoke-guarded, and a silent no-op once the plugin unloads. `createMockHost` applies the same checks against its seeded worktrees, records accepted calls in `setWorktreeCardStatusCalls`, and holds the current statuses in `worktreeCardStatuses`.
 

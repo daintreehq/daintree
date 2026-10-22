@@ -557,22 +557,18 @@ export function WorktreeOverviewRow({
               </div>
               {/* Plugin statuses, the card's own chips (#13776). Aligned with
                   the line above's text, past the chip's own padding. A chip
-                  that ran its command gets the overview out of the way, as a
-                  session does once it is focused. */}
+                  that runs its command gets the overview out of the way as
+                  it starts, as the row's context-menu actions do. */}
               {pluginStatuses.length > 0 && (
-                <FocusHandoffGuard onFocusLeaving={onFocusLost}>
-                  <div className="mt-1 flex min-w-0 flex-wrap items-center gap-1 pl-5">
-                    <WorktreePluginStatusChips
-                      worktreeId={worktree.id}
-                      statuses={pluginStatuses}
-                      tabIndex={-1}
-                      onDispatched={() => {
-                        suppressPaletteFocusRestore();
-                        onBeforeMenuAction();
-                      }}
-                    />
-                  </div>
-                </FocusHandoffGuard>
+                <div className="mt-1 flex min-w-0 flex-wrap items-center gap-1 pl-5">
+                  <WorktreePluginStatusChips
+                    worktreeId={worktree.id}
+                    statuses={pluginStatuses}
+                    tabIndex={-1}
+                    onBeforeRun={onBeforeMenuAction}
+                    onFocusLost={onFocusLost}
+                  />
+                </div>
               )}
             </div>
 

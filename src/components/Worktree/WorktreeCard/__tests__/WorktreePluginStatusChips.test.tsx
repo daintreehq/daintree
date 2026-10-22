@@ -187,19 +187,49 @@ describe("WorktreePluginStatusChips commands (#13776)", () => {
     expect(dispatchMock).not.toHaveBeenCalled();
   });
 
-  it("reports a command that ran, and only one that ran", async () => {
+  it("goes passive again when its command unregisters", async () => {
     publishRegisteredPluginActions([["acme.docker.show", "Show containers"]]);
-    const onDispatched = vi.fn();
-    renderChips([docker], { onDispatched });
+    renderChips([docker]);
 
+    act(() => publishRegisteredPluginActions([]));
+    fireEvent.focus(screen.getByRole("button"));
+    expect((await screen.findByRole("tooltip")).textContent).not.toContain("Click");
     fireEvent.click(screen.getByRole("button"));
-    await waitFor(() => expect(onDispatched).toHaveBeenCalledTimes(1));
+    expect(dispatchMock).not.toHaveBeenCalled();
+  });
 
-    dispatchMock.mockResolvedValueOnce({ ok: false, error: { code: "EXECUTION_ERROR" } });
-    fireEvent.click(screen.getByRole("button"));
-    await waitFor(() => expect(dispatchMock).toHaveBeenCalledTimes(2));
-    await Promise.resolve();
-    expect(onDispatched).toHaveBeenCalledTimes(1);
+  it("calls onBeforeRun as a command starts, and never for a plain status", () => {
+    publishRegisteredPluginActions([["acme.docker.show", "Show containers"]]);
+    const order: string[] = [];
+    const onBeforeRun = vi.fn(() => order.push("before"));
+    dispatchMock.mockImplementation(() => {
+      order.push("dispatch");
+      return new Promise(() => {});
+    });
+    renderChips(
+      [docker, { pluginId: "acme.plain", status: { label: "idle", command: "acme.plain.x" } }],
+      { onBeforeRun }
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "acme.plain: idle" }));
+    expect(onBeforeRun).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "acme.docker: 2 up" }));
+    expect(order).toEqual(["before", "dispatch"]);
+  });
+
+  it("hands focus back when the focused chip's status goes while another stays", async () => {
+    const onFocusLost = vi.fn();
+    const other = { pluginId: "acme.other", status: { label: "ok" } };
+    const { rerender } = renderChips([docker, other], { onFocusLost });
+    screen.getByRole("button", { name: "acme.docker: 2 up" }).focus();
+
+    rerender(
+      <TooltipProvider delayDuration={0}>
+        <WorktreePluginStatusChips worktreeId="/wt" statuses={[other]} onFocusLost={onFocusLost} />
+      </TooltipProvider>
+    );
+
+    await waitFor(() => expect(onFocusLost).toHaveBeenCalledTimes(1));
   });
 
   it("takes the tab order it is given", () => {

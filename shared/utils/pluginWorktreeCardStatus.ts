@@ -14,6 +14,12 @@ const ALLOWED_KEYS = new Set(["label", "tooltip", "command"]);
 /** The authored form a plugin writes its own action ids in, `"{manifestId}.{id}"`. */
 const AUTHORED_ACTION_ID = /^[a-z0-9][a-z0-9_-]*\.[a-z0-9][a-zA-Z0-9._-]*$/;
 
+// Read without invoking an accessor, so a getter on plugin data can neither
+// throw out of a host method that must reject nor answer differently twice.
+function readField(value: object, key: string): unknown {
+  return Object.getOwnPropertyDescriptor(value, key)?.value;
+}
+
 /**
  * Vet one `host.setWorktreeCardStatus(worktreeId, status)` call (#13704).
  * `null` and `undefined` both clear. Returns a fresh plain copy, so nothing the
@@ -45,7 +51,9 @@ export function validatePluginWorktreeCardStatus(
   if (unknownKey !== undefined) {
     return { ok: false, error: `status has an unsupported field "${unknownKey}"` };
   }
-  const { label, tooltip, command } = status as Record<string, unknown>;
+  const label = readField(status, "label");
+  const tooltip = readField(status, "tooltip");
+  const command = readField(status, "command");
   if (typeof label !== "string") return { ok: false, error: "status.label must be a string" };
   const trimmed = label.trim();
   if (trimmed.length === 0) return { ok: false, error: "status.label must not be empty" };
