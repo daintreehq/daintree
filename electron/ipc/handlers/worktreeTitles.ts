@@ -23,6 +23,12 @@ import type { WorktreeTitlesSnapshot } from "../../../shared/types/ipc/worktreeT
 /** More stale ids than any sidebar holds; anything past it is not a prune. */
 const MAX_PRUNE_IDS = 1000;
 
+/**
+ * Past the workspace client's 150 ms reuse of a finished read, so a second read
+ * is taken after the prune was asked for and sees any worktree made before it.
+ */
+const PRUNE_RECHECK_DELAY_MS = 200;
+
 function snapshotOf(projectId: string, stored: StoredWorktreeCustomTitles): WorktreeTitlesSnapshot {
   return { projectId, titles: { ...stored.titles }, revision: stored.revision };
 }
@@ -117,10 +123,17 @@ async function handlePrune(
     (id) => typeof id === "string" && Object.hasOwn(held.titles, id)
   );
   if (candidates.length === 0) return snapshotOf(projectId, held);
-  const live = await liveWorktreeIds(projectId);
-  // Re-read after the await, so the reply never carries an older set than a push sent meanwhile.
+  const first = await liveWorktreeIds(projectId);
+  let gone = first === null ? [] : candidates.filter((id) => !first.has(id));
+  if (gone.length > 0) {
+    // The first read may be one the client reused from just before a sibling
+    // made the worktree; a clear is permanent, so only one both reads miss goes.
+    await new Promise((resolve) => setTimeout(resolve, PRUNE_RECHECK_DELAY_MS));
+    const second = await liveWorktreeIds(projectId);
+    gone = second === null ? [] : gone.filter((id) => !second.has(id));
+  }
+  // Re-read after the awaits, so the reply never carries an older set than a push sent meanwhile.
   const before = getWorktreeCustomTitles(projectId).revision;
-  const gone = live === null ? [] : candidates.filter((id) => !live.has(id));
   return reply(projectId, before, clearWorktreeCustomTitles(projectId, gone));
 }
 

@@ -204,6 +204,22 @@ describe("worktreeTitles prune", () => {
     const snapshot = await prune(ctx(PROJECT_A), [WT_2]);
 
     expect(snapshot.titles).toEqual({ [WT_1]: "One", [WT_2]: "Two" });
+    expect(workspaceClientMock.getAllStatesForProjectResultAsync).toHaveBeenCalledTimes(1);
+    expect(broadcastMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps a title the second read finds, when the first was reused from before it existed", async () => {
+    liveWorktrees(WT_1, WT_2);
+    workspaceClientMock.getAllStatesForProjectResultAsync.mockResolvedValueOnce({
+      status: "ok",
+      projectId: PROJECT_A,
+      states: [{ id: WT_1 }],
+    });
+
+    const snapshot = await prune(ctx(PROJECT_A), [WT_2]);
+
+    expect(workspaceClientMock.getAllStatesForProjectResultAsync).toHaveBeenCalledTimes(2);
+    expect(snapshot.titles).toEqual({ [WT_1]: "One", [WT_2]: "Two" });
     expect(broadcastMock).not.toHaveBeenCalled();
   });
 

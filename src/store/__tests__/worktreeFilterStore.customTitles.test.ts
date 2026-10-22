@@ -281,4 +281,52 @@ describe("custom worktree titles held by main (#14022)", () => {
     });
     stop();
   });
+
+  it("reads once more after a pull that was in flight when the link came back", async () => {
+    const bridge = installBridge();
+    const { startWorktreeCustomTitlesSync, useWorktreeFilterStore } = await loadStore();
+    const { notifyHostResync } = await import("../hostResyncSignal");
+    const stop = startWorktreeCustomTitlesSync();
+    await flush();
+
+    const stale = deferred<WorktreeTitlesSnapshot | null>();
+    bridge.hydrate.mockImplementationOnce(() => stale.promise);
+    bridge.hydrate.mockImplementationOnce(async () => snapshot({ "wt-1": "After the drop" }, 9));
+    notifyHostResync();
+    notifyHostResync();
+    stale.resolve(snapshot({ "wt-1": "Before the drop" }, 2));
+    await flush();
+
+    expect(bridge.hydrate).toHaveBeenCalledTimes(3);
+    expect(useWorktreeFilterStore.getState().worktreeCustomTitles).toEqual({
+      "wt-1": "After the drop",
+    });
+    stop();
+  });
+
+  it("carries a remote view's pins and labels over from the old key, but not its titles", async () => {
+    localStorage.setItem(
+      LOCAL_KEY,
+      JSON.stringify({
+        state: {
+          pinnedWorktrees: ["wt-1"],
+          worktreeLabelColors: { "wt-1": "category-teal" },
+          worktreeCustomTitles: { "wt-1": "This machine's" },
+        },
+        version: 2,
+      })
+    );
+    Object.defineProperty(window, "__DAINTREE_HOST_ID__", {
+      value: { id: "studio-mac" },
+      configurable: true,
+      writable: true,
+    });
+    installBridge();
+    const { useWorktreeFilterStore } = await loadStore();
+
+    const state = useWorktreeFilterStore.getState();
+    expect(state.pinnedWorktrees).toEqual(["wt-1"]);
+    expect(state.worktreeLabelColors).toEqual({ "wt-1": "category-teal" });
+    expect(state.worktreeCustomTitles).toEqual({});
+  });
 });

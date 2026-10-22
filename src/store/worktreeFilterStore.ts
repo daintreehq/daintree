@@ -244,6 +244,8 @@ const _projectId = resolveProjectIdFromUrl();
 // load-bearing: a remote view's copy of its host's titles must never become the
 // hand-over a local view of the same id gives this machine's main (#14022).
 const PROJECT_KEY = `${GLOBAL_KEY}:${hostScopedKey(_projectId)}`;
+/** Where a remote view's state lived before the key was host-scoped. */
+const BARE_PROJECT_KEY = `${GLOBAL_KEY}:${_projectId}`;
 
 const GLOBAL_FIELD_KEYS = new Set<keyof WorktreeFilterStore>([
   "orderBy",
@@ -318,6 +320,25 @@ function loadLegacySeedForProject(): Partial<ProjectPersistedShape> {
       return {};
     }
     // Fall through — scoped blob was corrupt, try legacy seed instead.
+  }
+
+  // A remote view kept its state under the bare key until it was host-scoped
+  // (#14022). Its pins, filters and labels carry over; its titles don't, since
+  // they come from the host's main and the bare copy may be this machine's.
+  if (PROJECT_KEY !== BARE_PROJECT_KEY) {
+    const bareRaw = readLocalStorageItemSafely(BARE_PROJECT_KEY);
+    const bare =
+      bareRaw === null
+        ? null
+        : safeJSONParse<{ state?: Partial<ProjectPersistedShape> } | null>(
+            bareRaw,
+            { store: "worktreeFilterStore", key: BARE_PROJECT_KEY },
+            null
+          );
+    if (bare?.state && typeof bare.state === "object") {
+      const { worktreeCustomTitles: _titles, ...carried } = toProjectFiltersPersisted(bare.state);
+      return carried;
+    }
   }
 
   const raw = readLocalStorageItemSafely(GLOBAL_KEY);
@@ -599,11 +620,11 @@ const _projectStore = create<ProjectScopedState>()(
       typeFilters: new Set<TypeFilter>(_legacySeed.typeFilters ?? []),
       prIssueFilters: new Set<PrIssueFilter>(_legacySeed.prIssueFilters ?? []),
       sessionFilters: new Set<SessionFilter>(_legacySeed.sessionFilters ?? []),
-      hasAgentFilter: false,
+      hasAgentFilter: _legacySeed.hasAgentFilter ?? false,
       activityFilters: new Set<ActivityFilter>(_legacySeed.activityFilters ?? []),
       pinnedWorktrees: _legacySeed.pinnedWorktrees ?? [],
       collapsedWorktrees: _legacySeed.collapsedWorktrees ?? [],
-      worktreeLabelColors: {},
+      worktreeLabelColors: _legacySeed.worktreeLabelColors ?? {},
       worktreeCustomTitles: {},
       manualOrder: _legacySeed.manualOrder ?? [],
       quickStateFilter: "all",
@@ -814,7 +835,13 @@ export function startWorktreeCustomTitlesSync(): () => void {
   };
   const offResync = onHostResync(() => {
     if (disposed) return;
-    pullWorktreeTitles().catch((error: unknown) => {
+    // A pull already in flight may have been answered before the lost pushes,
+    // so read once more after it settles rather than joining it.
+    const inFlight = titlesPull;
+    const pullAfter = inFlight
+      ? inFlight.catch(() => undefined).then(() => pullWorktreeTitles())
+      : pullWorktreeTitles();
+    pullAfter.catch((error: unknown) => {
       logWarn("[worktreeFilterStore] Failed to read worktree titles after reconnecting", {
         error,
       });
