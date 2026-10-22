@@ -781,6 +781,249 @@ describe("host-owned saves held through a reconnect", () => {
   });
 });
 
+describe("coming back to drive after someone else drove meanwhile (#13921)", () => {
+  /** This view's own lease, as the host reports it to the holder endpoint. */
+  const mine = (overrides: Partial<DriveLeaseHolder> = {}): DriveLeaseView => ({
+    ...leaseView(
+      holder({
+        endpointId: "me",
+        clientId: "shell-a",
+        clientName: "shell-a",
+        leaseId: 3,
+        tenureId: "tenure-a",
+        ...overrides,
+      }),
+      true
+    ),
+    isHolderEndpoint: true,
+  });
+
+  const authoritativeReads = () =>
+    rehydrate.mock.calls.filter((call) => optionsOf(call).authoritative === true);
+
+  /**
+   * This view opens the project under `lease`, then its link drops: a dropped
+   * link resumes, an explicit disconnect comes back on a fresh session.
+   */
+  async function openUnder(
+    lease: DriveLeaseView,
+    drop: "connecting" | "disconnected" = "connecting"
+  ) {
+    const installed = installElectron();
+    installed.electron.driveLease.get.mockResolvedValue(lease);
+    installed.electron.driveLease.takeOver.mockResolvedValue(lease);
+    bindView("studio-01");
+    const stop = startHostConnectionSync();
+    // Opening reads the project back (the claim, or following the driver);
+    // only what follows is under test.
+    await vi.waitFor(() => expect(rehydrate).toHaveBeenCalled());
+    await flush();
+    rehydrate.mockClear();
+    installed.emitHost({
+      type: "connection-changed",
+      hostId: "studio-01",
+      connection: drop === "connecting" ? { status: "connecting", attempt: 1 } : { status: drop },
+    } as RemoteHostsEvent);
+    return { ...installed, stop };
+  }
+
+  async function holdASave(key = "app-state:mruList") {
+    const send = vi.fn(async () => undefined);
+    const replay = vi.fn();
+    expect(await sendHostOwnedWrite(key, send, replay)).toBe("deferred");
+    return { send, replay };
+  }
+
+  /** The link comes back; a resumed session also says what it missed. */
+  async function bringTheLinkBack(emitHost: (event: RemoteHostsEvent) => void, resumed = true) {
+    emitHost({
+      type: "connection-changed",
+      hostId: "studio-01",
+      connection: { status: "connected", rttMs: 5, handshake: HANDSHAKE },
+    });
+    await flush();
+    if (resumed) emitHost({ type: "resync-required", hostId: "studio-01", reason: "reattached" });
+  }
+
+  it("drops what it held and reads the host's state back when another client drove meanwhile", async () => {
+    const { electron, emitHost, stop } = await openUnder(mine());
+    const held = await holdASave();
+
+    // Another Shell drove and left inside the outage: the host grants the
+    // project back under a lease of a new tenure.
+    electron.driveLease.get.mockResolvedValue(mine({ leaseId: 9, tenureId: "tenure-b" }));
+    await bringTheLinkBack(emitHost);
+
+    await vi.waitFor(() => expect(authoritativeReads()).toHaveLength(1));
+    expect(optionsOf(authoritativeReads()[0]!)).toMatchObject({ follow: true });
+    await flush();
+    expect(held.replay).not.toHaveBeenCalled();
+    expect(held.send).not.toHaveBeenCalled();
+    expect(hasDeferredHostOwnedWrite("app-state:mruList")).toBe(false);
+    stop();
+  });
+
+  it("sends none of its own saves until the host's state is read back, and drops the ones it made meanwhile", async () => {
+    const { electron, emitHost, stop } = await openUnder(mine());
+    await holdASave();
+    electron.driveLease.get.mockResolvedValue(mine({ leaseId: 9, tenureId: "tenure-b" }));
+    let finishRead!: () => void;
+    rehydrate.mockImplementationOnce(
+      () => new Promise<undefined>((resolve) => (finishRead = () => resolve(undefined)))
+    );
+    await bringTheLinkBack(emitHost);
+    await vi.waitFor(() => expect(rehydrate).toHaveBeenCalledTimes(1));
+
+    // A save made from the stale state, while the host's is still on its way.
+    const meanwhile = await holdASave("app-state:activeWorktreeId");
+    finishRead();
+    await flush();
+    await flush();
+    expect(meanwhile.send).not.toHaveBeenCalled();
+    expect(meanwhile.replay).not.toHaveBeenCalled();
+    expect(hasDeferredHostOwnedWrite("app-state:activeWorktreeId")).toBe(false);
+
+    // Once the host's state is this view's, its saves go out again.
+    const send = vi.fn(async () => undefined);
+    expect(await sendHostOwnedWrite("app-state:mruList", send, vi.fn())).toBe("sent");
+    expect(send).toHaveBeenCalledTimes(1);
+    stop();
+  });
+
+  it("still replays what it held when nobody else took the project (a blip)", async () => {
+    const { emitHost, stop } = await openUnder(mine());
+    const held = await holdASave();
+
+    await bringTheLinkBack(emitHost);
+
+    await vi.waitFor(() => expect(held.replay).toHaveBeenCalledTimes(1));
+    expect(authoritativeReads()).toHaveLength(0);
+    stop();
+  });
+
+  it("keeps its own state on a fresh session when the host kept the project for its client", async () => {
+    const { electron, emitHost, stop } = await openUnder(mine(), "disconnected");
+    const held = await holdASave();
+
+    // A fresh session is a new endpoint and a new lease, but the same tenure.
+    electron.driveLease.get.mockResolvedValue(mine({ leaseId: 9, endpointId: "me-again" }));
+    await bringTheLinkBack(emitHost, false);
+
+    await vi.waitFor(() => expect(held.replay).toHaveBeenCalledTimes(1));
+    expect(rehydrate).toHaveBeenCalledTimes(1);
+    expect(optionsOf(rehydrate.mock.calls[0]!).authoritative).toBe(false);
+    stop();
+  });
+
+  it("takes the host's state whole on a fresh session after another client drove", async () => {
+    const { electron, emitHost, stop } = await openUnder(mine(), "disconnected");
+    const held = await holdASave();
+
+    electron.driveLease.get.mockResolvedValue(
+      mine({ leaseId: 9, endpointId: "me-again", tenureId: "tenure-b" })
+    );
+    await bringTheLinkBack(emitHost, false);
+
+    await vi.waitFor(() => expect(authoritativeReads()).toHaveLength(1));
+    await resyncFromHost();
+    await flush();
+    // The merge-style read a fresh session makes would let this view's stale state win.
+    expect(rehydrate.mock.calls.every((call) => optionsOf(call).authoritative)).toBe(true);
+    expect(held.replay).not.toHaveBeenCalled();
+    stop();
+  });
+
+  it("reads the host's state back when it watched as the link dropped and drives once it is back", async () => {
+    const other = holder({ endpointId: "theirs", clientId: "shell-b", clientName: "shell-b" });
+    const { electron, emitHost, stop } = await openUnder(leaseView(other, false));
+
+    electron.driveLease.get.mockResolvedValue(mine({ leaseId: 9, tenureId: "tenure-c" }));
+    await bringTheLinkBack(emitHost);
+
+    await vi.waitFor(() => expect(authoritativeReads().length).toBeGreaterThan(0));
+    const read = optionsOf(authoritativeReads().at(-1)!);
+    expect(read.follow).toBe(true);
+    expect(read.isCurrent()).toBe(true);
+    stop();
+  });
+
+  it("reads nothing back when its lease moves while the link stays up", async () => {
+    const { emitHost, emitLease, stop } = await openUnder(mine());
+    emitHost({
+      type: "connection-changed",
+      hostId: "studio-01",
+      connection: { status: "connected", rttMs: 5, handshake: HANDSHAKE },
+    });
+    await flush();
+    rehydrate.mockClear();
+
+    emitLease({ type: "changed", state: mine({ leaseId: 9, tenureId: "tenure-b" }) });
+    await flush();
+    expect(rehydrate).not.toHaveBeenCalled();
+    const send = vi.fn(async () => undefined);
+    expect(await sendHostOwnedWrite("app-state:mruList", send, vi.fn())).toBe("sent");
+    stop();
+  });
+
+  it("goes by the lease itself against a host that predates tenures", async () => {
+    const { electron, emitHost, stop } = await openUnder(mine({ tenureId: undefined }));
+    const held = await holdASave();
+
+    electron.driveLease.get.mockResolvedValue(mine({ leaseId: 9, tenureId: undefined }));
+    await bringTheLinkBack(emitHost);
+
+    await vi.waitFor(() => expect(authoritativeReads()).toHaveLength(1));
+    await flush();
+    expect(held.replay).not.toHaveBeenCalled();
+    stop();
+  });
+
+  it("says where it is only once it has read the host's state back", async () => {
+    const { electron, emitHost, stop } = await openUnder(mine());
+    electron.driveLease.get.mockResolvedValue(mine({ leaseId: 9, tenureId: "tenure-b" }));
+    let finishRead!: () => void;
+    rehydrate.mockImplementationOnce(
+      () => new Promise<undefined>((resolve) => (finishRead = () => resolve(undefined)))
+    );
+    const reporter = reporters.at(-1)!;
+    reporter.reportNow.mockClear();
+
+    await bringTheLinkBack(emitHost);
+    await vi.waitFor(() => expect(rehydrate).toHaveBeenCalledTimes(1));
+    await flush();
+    expect(reporter.reportNow).not.toHaveBeenCalled();
+    expect(reporter.mayReport()).toBe(false);
+
+    finishRead();
+    await vi.waitFor(() => expect(reporter.reportNow).toHaveBeenCalled());
+    expect(reporter.mayReport()).toBe(true);
+    stop();
+  });
+
+  it("keeps its saves held when the host's state can't be read, and reads it on the next answer", async () => {
+    const { electron, emitHost, stop } = await openUnder(mine());
+    const held = await holdASave();
+    electron.driveLease.get.mockResolvedValue(mine({ leaseId: 9, tenureId: "tenure-b" }));
+    rehydrate.mockRejectedValueOnce(new Error("[AppError|HOST_DISCONNECTED] down"));
+
+    await bringTheLinkBack(emitHost, false);
+    await vi.waitFor(() => expect(rehydrate).toHaveBeenCalledTimes(1));
+    await flush();
+    const meanwhile = await holdASave("app-state:activeWorktreeId");
+    expect(meanwhile.send).not.toHaveBeenCalled();
+
+    emitHost({ type: "resync-required", hostId: "studio-01", reason: "overflow" });
+    await vi.waitFor(() => expect(rehydrate).toHaveBeenCalledTimes(2));
+    expect(optionsOf(rehydrate.mock.calls[1]!).authoritative).toBe(true);
+    await flush();
+    await flush();
+    expect(held.replay).not.toHaveBeenCalled();
+    expect(meanwhile.replay).not.toHaveBeenCalled();
+    expect(hasDeferredHostOwnedWrite("app-state:activeWorktreeId")).toBe(false);
+    stop();
+  });
+});
+
 describe("drivenElsewhereBy", () => {
   it("locks only when a holder exists and the host says this view isn't driving", () => {
     expect(drivenElsewhereBy(null)).toBeNull();

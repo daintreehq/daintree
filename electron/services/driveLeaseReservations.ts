@@ -25,13 +25,16 @@ export function parseReservations(raw: string): Record<string, DriveLeaseReserva
   for (const [projectId, value] of Object.entries(parsed as Record<string, unknown>)) {
     if (count >= MAX_RESERVATIONS) break;
     if (!isField(projectId) || !value || typeof value !== "object") continue;
-    const { clientId, clientName, deviceId } = value as Record<string, unknown>;
+    const { clientId, clientName, deviceId, tenureId } = value as Record<string, unknown>;
     if (!isField(clientId) || !isField(clientName)) continue;
-    // One saved before installs were recorded, or with a damaged install,
-    // still holds the project for its client.
-    out[projectId] = isField(deviceId)
-      ? { clientId, clientName, deviceId }
-      : { clientId, clientName };
+    // One saved before installs were recorded, or with a damaged install or
+    // tenure, still holds the project for its client.
+    out[projectId] = {
+      clientId,
+      clientName,
+      ...(isField(deviceId) ? { deviceId } : {}),
+      ...(isField(tenureId) ? { tenureId } : {}),
+    };
     count++;
   }
   return out;

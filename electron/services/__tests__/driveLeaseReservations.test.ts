@@ -38,13 +38,20 @@ describe("drive lease reservations on disk", () => {
       parseReservations(
         JSON.stringify({
           ok: { clientId: "c", clientName: "n" },
+          tenure: { clientId: "c", clientName: "n", tenureId: "t" },
+          badTenure: { clientId: "c", clientName: "n", tenureId: 7 },
           noName: { clientId: "c" },
           empty: { clientId: "", clientName: "n" },
           wrong: 5,
           long: { clientId: "x".repeat(600), clientName: "n" },
         })
       )
-    ).toEqual({ ok: { clientId: "c", clientName: "n" } });
+    ).toEqual({
+      ok: { clientId: "c", clientName: "n" },
+      tenure: { clientId: "c", clientName: "n", tenureId: "t" },
+      // A tenure it can't read starts afresh; the reservation itself still holds.
+      badTenure: { clientId: "c", clientName: "n" },
+    });
     expect(parseReservations("[]")).toEqual({});
     expect(parseReservations("null")).toEqual({});
   });

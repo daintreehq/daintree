@@ -381,6 +381,52 @@ describe("DriveLeaseService", () => {
     expect(arbitrated()).toEqual([]);
   });
 
+  it("keeps one tenure while a client holds the project, and starts another for anyone else", async () => {
+    const hostWindow = local(1);
+    const laptop = remote("s1:e1", "c1");
+    const other = remote("s9:e1", "c2");
+    registry.add(hostWindow);
+    registry.add(laptop);
+    registry.add(other);
+    await settle();
+    const taken = service.takeOver("p", laptop);
+    expect(taken.tenureId).toEqual(expect.any(String));
+
+    // Its link drops and resumes, then its window comes back on a new session.
+    service.noteEndpointTransport([laptop.endpointId], false);
+    service.noteEndpointTransport([laptop.endpointId], true);
+    laptop.close();
+    await settle();
+    const reopened = remote("s2:e1", "c1");
+    registry.add(reopened);
+    await settle();
+    const regranted = service.getHolder("p")!;
+    expect(regranted.leaseId).toBeGreaterThan(taken.leaseId);
+    expect(regranted.tenureId).toBe(taken.tenureId);
+    expect(reopened.events().at(-1)?.state.holder?.tenureId).toBe(taken.tenureId);
+
+    const elsewhere = service.takeOver("p", other);
+    expect(elsewhere.tenureId).not.toBe(taken.tenureId);
+    const back = service.takeOver("p", reopened);
+    expect(new Set([taken.tenureId, elsewhere.tenureId, back.tenureId]).size).toBe(3);
+  });
+
+  it("starts a new tenure once nobody held the project", async () => {
+    const laptop = remote("s1:e1", "c1");
+    registry.add(laptop);
+    await settle();
+    const first = service.getHolder("p")!;
+
+    service.noteEndpointTransport([laptop.endpointId], false);
+    vi.advanceTimersByTime(GRACE_MS);
+    expect(service.getState("p").holder).toBeNull();
+    service.noteEndpointTransport([laptop.endpointId], true);
+
+    const regranted = service.getHolder("p")!;
+    expect(regranted.endpointId).toBe("s1:e1");
+    expect(regranted.tenureId).not.toBe(first.tenureId);
+  });
+
   it("treats a remote view rebound to another project as having left", async () => {
     const hostWindow = local(1);
     const laptop = remote("s1:e1", "c1");
@@ -921,13 +967,13 @@ describe("DriveLeaseService and the Host's own screen in use (#13285)", () => {
 });
 
 describe("DriveLeaseService across a restart of this app", () => {
-  function memoryStore(initial: Record<string, { clientId: string; clientName: string }> = {}) {
-    const saved: Array<Record<string, { clientId: string; clientName: string }>> = [];
+  function memoryStore(initial: Record<string, DriveLeaseReservation> = {}) {
+    const saved: Array<Record<string, DriveLeaseReservation>> = [];
     return {
       saved,
       store: {
         load: () => initial,
-        save: (next: Record<string, { clientId: string; clientName: string }>) => {
+        save: (next: Record<string, DriveLeaseReservation>) => {
           saved.push(next);
         },
       },
@@ -936,7 +982,7 @@ describe("DriveLeaseService across a restart of this app", () => {
 
   const RESTORED_GRACE_MS = GRACE_MS * 3;
 
-  function restarted(initial: Record<string, { clientId: string; clientName: string }>) {
+  function restarted(initial: Record<string, DriveLeaseReservation>) {
     const memory = memoryStore(initial);
     const next = new DriveLeaseService({
       registry,
@@ -979,7 +1025,11 @@ describe("DriveLeaseService across a restart of this app", () => {
     });
     await settle();
     expect(memory.saved.at(-1)).toEqual({
-      p: { clientId: "shell-launch-1", clientName: "greg-mbp" },
+      p: {
+        clientId: "shell-launch-1",
+        clientName: "greg-mbp",
+        tenureId: service.getHolder("p")!.tenureId,
+      },
     });
 
     registry.add(hostWindow);
@@ -1076,6 +1126,26 @@ describe("DriveLeaseService across a restart of this app", () => {
     ]);
   });
 
+  it("carries the tenure across the restart, so the Shell that drove carries on in it", async () => {
+    service.dispose();
+    const { next } = restarted({
+      p: { ...greg, tenureId: "tenure-before-restart" },
+      q: greg,
+    });
+    service = next;
+    expect(service.getHolder("p")?.tenureId).toBe("tenure-before-restart");
+    // Saved by a Host that predates tenures: a tenure of its own from here on.
+    expect(service.getHolder("q")?.tenureId).toEqual(expect.any(String));
+
+    const back = remote("s2:e1", "shell-launch-1");
+    registry.add(back);
+    await settle();
+    expect(service.getHolder("p")).toMatchObject({
+      endpointId: "s2:e1",
+      tenureId: "tenure-before-restart",
+    });
+  });
+
   it("gives it to the Shell that waited once the grace runs out; the old driver returning late observes", async () => {
     service.dispose();
     const { next } = restarted({ p: greg });
@@ -1118,6 +1188,7 @@ describe("DriveLeaseService across a restart of this app", () => {
     registry.add(laptop);
     await settle();
     expect(saved).toEqual([]);
+    const { tenureId } = service.getHolder("p")!;
 
     // Same client, same name, a new endpoint: nothing new to say, but the file is behind.
     laptop.close();
@@ -1125,7 +1196,7 @@ describe("DriveLeaseService across a restart of this app", () => {
     registry.add(again);
     await settle();
     expect(saved.at(-1)).toEqual({
-      p: { clientId: "shell-launch-1", clientName: "shell-launch-1" },
+      p: { clientId: "shell-launch-1", clientName: "shell-launch-1", tenureId },
     });
     errors.mockRestore();
   });

@@ -19,6 +19,10 @@ import { logDebug } from "@/utils/logger";
  *   still drives; a write the link lost on the way is held the same way. A
  *   takeover by someone else drops what was held, since the rehydrate that
  *   follows reads the host's state as authoritative.
+ * - Once the link is back, writes stay held until the host says whether this
+ *   view kept the project meanwhile ({@link holdHostOwnedWrites}): one that
+ *   did replays them, one that comes back over another driver's state drops
+ *   them and reads the host's back first.
  *
  * A view that never had a host or a lease sees no block at all, so every write
  * goes straight out and its errors reach the caller exactly as before.
@@ -47,11 +51,14 @@ let lostWriteFlushArmed = true;
  */
 let hostStateEpoch = 0;
 let gateSubscribed = false;
+/** Set while this view can't yet tell whether its saves still belong on the host. */
+let heldUntilReleased = false;
 
 type Verdict = "send" | "defer" | "skip";
 
 function verdict(): Verdict {
   if (getLeaseInputBlock()?.kind === "driven-elsewhere") return "skip";
+  if (heldUntilReleased) return "defer";
   const block = getTerminalInputBlock();
   // A pending switch holds back only what the user types: the view's own
   // saves still belong to the host it is on.
@@ -198,6 +205,27 @@ export function dropDeferredHostOwnedWrites(reason: string): void {
 }
 
 /**
+ * Hold every write, as a lost link does, whatever the gate says, until
+ * {@link releaseHostOwnedWrites}: the link is back, but whether this view
+ * still drives the project it left isn't known yet.
+ */
+export function holdHostOwnedWrites(): void {
+  heldUntilReleased = true;
+}
+
+/**
+ * Stop holding. What was held goes out as it would when the gate opens, or,
+ * given a reason, is dropped: the host's state is the project's now, and a
+ * replay would put back the state this view had before reading it.
+ */
+export function releaseHostOwnedWrites(dropReason?: string): void {
+  if (!heldUntilReleased) return;
+  heldUntilReleased = false;
+  if (dropReason !== undefined) dropDeferredHostOwnedWrites(dropReason);
+  else onGateChange();
+}
+
+/**
  * What a flush waits on before replaying: set by the host connection sync to
  * refresh the lease and wait out a resync in flight. Returns the unregister.
  */
@@ -219,6 +247,7 @@ export function _resetHostOwnedWritesForTesting(): void {
   unsubscribeGate = null;
   gateSubscribed = false;
   hostStateEpoch = 0;
+  heldUntilReleased = false;
   flushBarrier = null;
   flushScheduled = false;
   lostWriteFlushArmed = true;

@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { app } from "electron";
 import { CHANNELS } from "../ipc/channels.js";
 import { LOCAL_CLIENT_ID, isCanopyViewerEndpointId } from "../ipc/endpoint.js";
@@ -80,6 +81,8 @@ export interface DriveLeaseReservation {
   clientName: string;
   /** Its Shell's install, when its HELLO named one: a relaunch of it takes the project back. */
   deviceId?: string;
+  /** Carried across the restart: nobody else can have driven while this app was down. */
+  tenureId?: string;
 }
 
 export interface DriveLeaseReservationStore {
@@ -192,6 +195,7 @@ export class DriveLeaseService {
     for (const [projectId, reservation] of Object.entries(restored)) {
       const holder: DriveLeaseHolder = {
         leaseId: this.nextLeaseId++,
+        tenureId: reservation.tenureId ?? randomUUID(),
         endpointId: `${RESTORED_HOLDER_ENDPOINT_PREFIX}${reservation.clientId}`,
         clientId: reservation.clientId,
         clientName: reservation.clientName,
@@ -226,6 +230,7 @@ export class DriveLeaseService {
         clientId: holder.clientId,
         clientName: holder.clientName,
         ...(holderDeviceId ? { deviceId: holderDeviceId } : {}),
+        ...(holder.tenureId ? { tenureId: holder.tenureId } : {}),
       };
     }
     return out;
@@ -724,8 +729,11 @@ export class DriveLeaseService {
     const previous = this.leases.get(projectId);
     if (previous?.releaseTimer) clearTimeout(previous.releaseTimer);
     const client = this.clientOf(endpoint);
+    // The project stays with one client, so nobody else drove it in between.
+    const sameClient = previous?.holder.clientId === endpoint.clientId;
     const holder: DriveLeaseHolder = {
       leaseId: this.nextLeaseId++,
+      tenureId: (sameClient ? previous?.holder.tenureId : undefined) ?? randomUUID(),
       endpointId: endpoint.endpointId,
       clientId: endpoint.clientId,
       clientName: client?.clientName ?? endpoint.clientId,
