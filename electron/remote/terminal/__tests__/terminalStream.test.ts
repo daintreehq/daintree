@@ -682,15 +682,18 @@ describe("terminal stream over the link", () => {
     });
   });
 
-  it("still repaints a terminal whose PTY restarts before its owed reset lands", async () => {
-    const h = await setup({ maxOutstandingBytes: 10 });
+  it("still repaints after a pty-host restart whose respawned PTY outruns the repaint", async () => {
+    const h = await setup();
     await h.connectLink();
+    h.pty().emit("t1", "before");
+    await waitFor(() => rendererData(h).length === 1);
+
+    // The pty-host restarted: every followed stream is owed a repaint...
+    h.bridge.reconnect();
     h.pty().holdFences = true;
     h.pty().stampStreams = true;
-
-    // Owed a repaint; the pty-host restarts the PTY before the snapshot comes back.
-    h.pty().emit("t1", "0123456789ABC");
     await waitFor(() => h.pty().pendingFences.length === 1);
+    // ...and the respawned PTY emits before that snapshot comes back.
     h.incarnations.set("t1", 2);
     h.pty().emit("t1", "fresh");
     await waitFor(() => h.pty().pendingFences.length === 2);
@@ -700,7 +703,25 @@ describe("terminal stream over the link", () => {
     h.pty().postSnapshot(fence, { data: "fresh", cols: 80, rows: 24 });
     await waitFor(() => h.renderer().ofType("reset").length === 1);
     expect(h.resets[0]).toMatchObject({ terminalId: "t1", incarnation: 2, seq: 1 });
-    expect(rendererData(h)).toEqual([]);
+    expect(rendererData(h)).toEqual(["before"]);
+  });
+
+  it("streams a restarted PTY live when only a resync for a slow client was pending", async () => {
+    const h = await setup({ maxOutstandingBytes: 10 });
+    await h.connectLink();
+    h.pty().holdFences = true;
+
+    h.pty().emit("t1", "0123456789ABC");
+    await waitFor(() => h.pty().pendingFences.length === 1);
+    h.incarnations.set("t1", 2);
+    h.pty().emit("t1", "fresh");
+
+    // On top of the scrollback the pane already has, rather than a repaint
+    // of the new PTY that would wipe it.
+    await waitFor(() => rendererData(h).includes("fresh"));
+    expect(h.outFrames.at(-1)).toMatchObject({ incarnation: 2, seq: 1 });
+    expect(h.resets).toEqual([]);
+    expect(h.pty().pendingFences).toHaveLength(1);
   });
 
   it("drops the continuation along with a snapshot too large to send", async () => {

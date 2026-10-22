@@ -110,6 +110,12 @@ interface StreamState {
   lastActivity: number;
   needsReset: boolean;
   resetting: boolean;
+  /**
+   * Owed a repaint because the pty-host connection it streamed on was
+   * replaced. A restarted pty-host numbers its streams afresh, so until that
+   * reset lands the client's restore fence may sit above the new offsets.
+   */
+  owedReplacement: boolean;
 }
 
 /** A snapshot requested through the pty-host port, fenced against the stream. */
@@ -276,7 +282,10 @@ export class TerminalStreamBridge {
     this.abandonFences(true);
     for (const stream of this.streams.values()) {
       this.setOutstanding(stream, 0);
-      if (replaced) stream.needsReset = true;
+      if (replaced) {
+        stream.needsReset = true;
+        stream.owedReplacement = true;
+      }
     }
     if (this.projectId !== null) {
       const port = this.opts.openPort(this.projectId);
@@ -388,6 +397,7 @@ export class TerminalStreamBridge {
         this.settleOutstanding(stream);
         stream.sentSeq = stream.seq;
         stream.needsReset = false;
+        stream.owedReplacement = false;
       }
     }
     // Creating a stream above can retire one answered earlier in this call:
@@ -512,12 +522,12 @@ export class TerminalStreamBridge {
     const incarnation = this.incarnationOf(id);
     let stream = this.streams.get(id);
     if (!stream || stream.incarnation !== incarnation) {
-      // A repaint the old incarnation still owed (its pty-host connection was
-      // replaced, or the client fell behind) is owed to the new one: the
-      // client's screen is stale either way, and only a reset retires the
-      // restore fence it holds, which a restarted pty-host's offsets may sit
-      // below.
-      const owed = stream !== undefined && (stream.needsReset || stream.resetting);
+      // A repaint owed for a replaced pty-host connection is owed to the new
+      // incarnation too: the PTYs it respawned emit before the old one's reset
+      // lands, and only a reset retires the client's restore fence. A resync
+      // for a client that fell behind is not carried; the new incarnation
+      // streams from seq 1 on top of the scrollback it already has.
+      const owed = stream?.owedReplacement === true;
       if (stream) {
         // The PTY restarted under the same id: its old output is history the
         // client already has; the new incarnation streams from seq 1.
@@ -531,6 +541,7 @@ export class TerminalStreamBridge {
       }
       stream = this.createStream(id, incarnation);
       stream.needsReset = owed;
+      stream.owedReplacement = owed;
     }
     stream.seq++;
     stream.lastActivity = ++this.activityClock;
@@ -582,6 +593,7 @@ export class TerminalStreamBridge {
       lastActivity: 0,
       needsReset: false,
       resetting: false,
+      owedReplacement: false,
     };
     this.streams.set(id, stream);
     return stream;
@@ -727,6 +739,7 @@ export class TerminalStreamBridge {
       this.behind.add(stream);
       return;
     }
+    stream.owedReplacement = false;
     stream.sentSeq = boundary;
     this.pump(stream);
   }
