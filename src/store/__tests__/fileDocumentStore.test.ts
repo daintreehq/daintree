@@ -68,4 +68,22 @@ describe("fileDocumentStore (#12323)", () => {
     useFileDocumentStore.getState().clearFileDocument("p1");
     expect(getFileDocumentProjection("p1")).toBeUndefined();
   });
+
+  // #13809: the built-in editor and a plugin editor can both hold a document
+  // for one panel; whichever has a draft keeps the projection.
+  it("never lets another document replace or clear a standing draft", () => {
+    const store = useFileDocumentStore.getState();
+    store.setFileDocument("p1", projection({ identityKey: "plugin", draftText: "x", dirty: true }));
+    store.setFileDocument("p1", projection({ identityKey: "builtin" }));
+    expect(getFileDocumentProjection("p1")?.identityKey).toBe("plugin");
+    store.clearFileDocument("p1", "builtin");
+    expect(getFileDocumentProjection("p1")?.identityKey).toBe("plugin");
+    // The owner itself still updates and clears it.
+    store.setFileDocument("p1", projection({ identityKey: "plugin" }));
+    expect(getFileDocumentProjection("p1")?.dirty).toBe(false);
+    store.setFileDocument("p1", projection({ identityKey: "builtin" }));
+    expect(getFileDocumentProjection("p1")?.identityKey).toBe("builtin");
+    store.clearFileDocument("p1", "builtin");
+    expect(getFileDocumentProjection("p1")).toBeUndefined();
+  });
 });

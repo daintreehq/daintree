@@ -87,6 +87,9 @@ export const CHANNELS = {
   FILES_READ: "files:read",
   FILES_TRASH: "files:trash",
 
+  FILE_DOCUMENT_READ: "file-document:read",
+  FILE_DOCUMENT_SAVE: "file-document:save",
+
   DIFF_MEDIA_READ_FILE_VERSIONS: "diff-media:read-file-versions",
 
   FILE_BROWSER_LIST_DIRECTORY: "file-browser:list-directory",
@@ -1099,6 +1102,8 @@ export const CHANNELS = {
    * scope exists to prevent.
    */
   PLUGIN_PROJECT_SURFACES_GET: "plugin:project-surfaces-get",
+  PLUGIN_FILE_EDITOR_CHOICES_GET: "plugin:file-editor-choices-get",
+  PLUGIN_FILE_EDITOR_CHOICE_SET: "plugin:file-editor-choice-set",
   /** Remember one slot answer for the SENDER's project, resolved against what is on offer. */
   PLUGIN_PROJECT_SURFACE_CHOICE_SET: "plugin:project-surface-choice-set",
   /** Remember an answer about several slots in one write, all or none, for the SENDER's project. */

@@ -275,6 +275,7 @@ describe("location: sidebar views", () => {
     ["panel", { name: "Rich" }, "name"],
     ["panel", { priority: 5 }, "priority"],
     ["settings", { when: "isGitBacked" }, "when"],
+    ["fileEditor", { name: "Records" }, "name"],
   ])("rejects a %s view that sets the sidebar-only %o", (location, extra, field) => {
     const result = manifestWith({
       panels: [panel("rich")],
@@ -380,8 +381,11 @@ describe("MCP server ${settings:*} token references (#10620)", () => {
   });
 });
 
-describe("contributes.fileEditors (#12323)", () => {
-  function fileEditor(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+describe("contributes.fileEditors (#12323, #13809)", () => {
+  const builtinSchema = getPluginManifestSchema("builtin");
+  const projectSchema = getPluginManifestSchema("project");
+
+  function slotEditor(overrides: Record<string, unknown> = {}): Record<string, unknown> {
     return {
       id: "markdown",
       slot: "markdown.editor",
@@ -390,36 +394,160 @@ describe("contributes.fileEditors (#12323)", () => {
     };
   }
 
-  it("accepts a well-formed entry and defaults the group to empty", () => {
-    expect(manifestWith({ fileEditors: [fileEditor()] }).success).toBe(true);
+  function viewEditor(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+    return {
+      id: "records",
+      view: "records-editor",
+      mode: "edit",
+      extensions: ["json"],
+      ...overrides,
+    };
+  }
+
+  const editorView = {
+    id: "records-editor",
+    componentPath: "dist/editor.js",
+    location: "fileEditor",
+  };
+
+  function builtinWith(contributes: Record<string, unknown>) {
+    return builtinSchema.safeParse({ name: "daintree.my-plugin", version: "1.0.0", contributes });
+  }
+
+  function projectWith(contributes: Record<string, unknown>) {
+    return projectSchema.safeParse({
+      name: "acme.my-plugin",
+      version: "1.0.0",
+      scope: "project",
+      contributes,
+    });
+  }
+
+  it("accepts a slot-backed entry from a built-in plugin and defaults the group to empty", () => {
+    expect(builtinWith({ fileEditors: [slotEditor()] }).success).toBe(true);
     const bare = manifestWith({});
     expect(bare.success && bare.data.contributes.fileEditors).toEqual([]);
   });
 
-  it("accepts an explicit byte ceiling and refuses one above the host ceiling", () => {
-    expect(manifestWith({ fileEditors: [fileEditor({ maxBytes: 2 * 1024 * 1024 })] }).success).toBe(
+  it("refuses a slot-backed entry from any other origin", () => {
+    const result = manifestWith({ fileEditors: [slotEditor()] });
+    expect(result.success).toBe(false);
+    expect(issueWithCode(result, "fileEditors_slot_builtin_only")?.path).toEqual([
+      "contributes",
+      "fileEditors",
+      0,
+      "slot",
+    ]);
+  });
+
+  it("accepts a view-backed entry from an installed plugin", () => {
+    const result = manifestWith({ views: [editorView], fileEditors: [viewEditor()] });
+    expect(result.success).toBe(true);
+    expect(
+      manifestWith({
+        views: [editorView],
+        fileEditors: [viewEditor({ mode: "view", extensions: ["csv"] })],
+      }).success
+    ).toBe(true);
+  });
+
+  it("requires exactly one of slot and view, and a mode with a view", () => {
+    expect(
+      builtinWith({ views: [editorView], fileEditors: [viewEditor({ slot: "markdown.editor" })] })
+        .success
+    ).toBe(false);
+    expect(builtinWith({ fileEditors: [{ id: "x", extensions: ["md"] }] }).success).toBe(false);
+    expect(
+      manifestWith({ views: [editorView], fileEditors: [viewEditor({ mode: undefined })] }).success
+    ).toBe(false);
+    expect(builtinWith({ fileEditors: [slotEditor({ mode: "edit" })] }).success).toBe(false);
+  });
+
+  it("requires a view-backed entry to name one of its own fileEditor views", () => {
+    const missing = manifestWith({ fileEditors: [viewEditor()] });
+    expect(issueWithCode(missing, "file_editor_view_ref_unknown")).toBeDefined();
+    const panelView = manifestWith({
+      panels: [panel("records-editor")],
+      views: [{ id: "records-editor", componentPath: "dist/editor.js", location: "panel" }],
+      fileEditors: [viewEditor()],
+    });
+    expect(issueWithCode(panelView, "file_editor_view_ref_unknown")).toBeDefined();
+  });
+
+  it("does not require a panel for a fileEditor view, and refuses one sharing a panel id", () => {
+    expect(manifestWith({ views: [editorView] }).success).toBe(true);
+    const collision = manifestWith({ panels: [panel("records-editor")], views: [editorView] });
+    expect(issueWithCode(collision, "file_editor_view_panel_id_collision")).toBeDefined();
+  });
+
+  it("refuses a surface claim naming a fileEditor view", () => {
+    const result = projectWith({
+      views: [editorView],
+      surfaces: { emptyCanvas: { viewId: "records-editor" } },
+    });
+    expect(issueWithCode(result, "surface_view_ref_file_editor")).toBeDefined();
+  });
+
+  it("accepts paths only from a project plugin", () => {
+    const paths = ["content/entries/*.json", "data/**/*.record"];
+    expect(projectWith({ views: [editorView], fileEditors: [viewEditor({ paths })] }).success).toBe(
       true
     );
-    expect(manifestWith({ fileEditors: [fileEditor({ maxBytes: 0 })] }).success).toBe(false);
     expect(
-      manifestWith({ fileEditors: [fileEditor({ maxBytes: 65 * 1024 * 1024 })] }).success
+      projectWith({
+        views: [editorView],
+        fileEditors: [viewEditor({ extensions: undefined, paths })],
+      }).success
+    ).toBe(true);
+    const installed = manifestWith({ views: [editorView], fileEditors: [viewEditor({ paths })] });
+    expect(issueWithCode(installed, "fileEditors_paths_project_only")).toBeDefined();
+  });
+
+  it("refuses paths that reach outside the project or negate", () => {
+    for (const pattern of [
+      "/etc/*.json",
+      "../x.json",
+      "a/../b.json",
+      "C:/x.json",
+      "a\\b",
+      "!x.json",
+    ]) {
+      expect(
+        projectWith({ views: [editorView], fileEditors: [viewEditor({ paths: [pattern] })] })
+          .success
+      ).toBe(false);
+    }
+  });
+
+  it("requires extensions or paths", () => {
+    expect(
+      manifestWith({ views: [editorView], fileEditors: [viewEditor({ extensions: undefined })] })
+        .success
     ).toBe(false);
   });
 
-  it("requires bare lower-case extensions without the dot", () => {
-    expect(manifestWith({ fileEditors: [fileEditor({ extensions: [".md"] })] }).success).toBe(
+  it("accepts an explicit byte ceiling and refuses one above the host ceiling", () => {
+    expect(builtinWith({ fileEditors: [slotEditor({ maxBytes: 2 * 1024 * 1024 })] }).success).toBe(
+      true
+    );
+    expect(builtinWith({ fileEditors: [slotEditor({ maxBytes: 0 })] }).success).toBe(false);
+    expect(builtinWith({ fileEditors: [slotEditor({ maxBytes: 65 * 1024 * 1024 })] }).success).toBe(
       false
     );
-    expect(manifestWith({ fileEditors: [fileEditor({ extensions: ["MD"] })] }).success).toBe(false);
-    expect(manifestWith({ fileEditors: [fileEditor({ extensions: [] })] }).success).toBe(false);
+  });
+
+  it("requires bare lower-case extensions without the dot", () => {
+    expect(builtinWith({ fileEditors: [slotEditor({ extensions: [".md"] })] }).success).toBe(false);
+    expect(builtinWith({ fileEditors: [slotEditor({ extensions: ["MD"] })] }).success).toBe(false);
+    expect(builtinWith({ fileEditors: [slotEditor({ extensions: [] })] }).success).toBe(false);
   });
 
   it("is strict about unknown fields", () => {
-    expect(manifestWith({ fileEditors: [fileEditor({ component: "x" })] }).success).toBe(false);
+    expect(builtinWith({ fileEditors: [slotEditor({ component: "x" })] }).success).toBe(false);
   });
 
   it("rejects duplicate ids", () => {
-    const result = manifestWith({ fileEditors: [fileEditor(), fileEditor()] });
+    const result = builtinWith({ fileEditors: [slotEditor(), slotEditor()] });
     expect(result.success).toBe(false);
   });
 });

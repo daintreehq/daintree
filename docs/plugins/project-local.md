@@ -167,9 +167,10 @@ Forbidden under `scope: "project"`, each rejected at manifest validation with an
 | `processTools` | Process-tool detections are mirrored into the shared pty-host as one detection table for every terminal in the app |
 | `mcpServers` | Daintree is the client of a contributed server, and the plugin-MCP IPC surface that reaches it is app-global: servers are addressed by plugin and server id alone, so a call through it carries no project to check the contribution against. (These tools never reach terminal agents at all — for that, use `agentMcp`.) |
 | `tours` | Plugin tours are offered from the app-wide Help menu and command palette with no project axis, and tour playback has no per-project visibility to narrow a panel tour to the owning project's views |
+| `themes` | The app theme is one machine-wide selection painted into every window and every project's view, so there is no per-project theme for the contribution to narrow to |
 | `forgeProviders` | Forge providers need synchronous host methods (`parseRemote`, the URL builders) that cannot cross the plugin worker's async message port, so the descriptor could never be given an implementation |
 
-`fileEditors`, `previewTools` and `guestAdapters` are refused too, as they are for every plugin but a built-in one.
+`previewTools`, `guestAdapters` and a slot-backed `fileEditors` entry are refused too, as they are for every plugin but a built-in one. A view-backed file editor is allowed: it appears only in this project, and may match project-relative `paths` as well as extensions (see [File editors](./contribution-points.md#file-editors--shipped)).
 
 These are deferred, not closed. Each error names the structural obstacle so that when the obstacle goes, the rule can go with it. An installed or builtin plugin is unaffected — being app-wide is what the absent `scope` means.
 

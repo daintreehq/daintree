@@ -107,6 +107,104 @@ interface MockViewHost {
 }
 declare function createMockViewHost(options?: MockViewHostOptions): MockViewHost;
 
+/** Which file panel mode a view-backed file editor fills. */
+type FileEditorMode = "edit" | "view";
+/** What {@link PluginFileDocument.read} found on disk. */
+type PluginFileDocumentReadResult = {
+    status: "ok";
+    /** The file's text: a UTF-8 BOM stripped, line endings as `\n`. */
+    text: string;
+    /** Opaque token for these exact bytes; pass it back to `save`. */
+    revision: string;
+}
+/** Gone, unreadable, or outside the project. */
+ | {
+    status: "unavailable";
+}
+/** Larger than the editor's `maxBytes`. */
+ | {
+    status: "too-large";
+}
+/** Not UTF-8 text. */
+ | {
+    status: "not-text";
+};
+/** The outcome of {@link PluginFileDocument.save}. */
+type PluginFileDocumentSaveResult = {
+    status: "saved";
+    revision: string;
+}
+/**
+ * The file changed on disk since `expectedRevision`. Nothing was written,
+ * and the document is marked as in conflict until a later save lands or the
+ * draft is discarded. `revision` is what is on disk now, null when the file
+ * is gone.
+ */
+ | {
+    status: "conflict";
+    revision: string | null;
+} | {
+    status: "refused";
+    reason: "read-only" | "too-large" | "unavailable";
+} | {
+    status: "error";
+    message: string;
+};
+/** Why a {@link PluginFileDocument} changed under the view. */
+interface PluginFileDocumentChange {
+    /**
+     * `"disk"`: the file changed on disk — re-read it, or keep your draft and
+     * let the conflict stand. `"saved"`: the host saved the draft (the close
+     * prompt's Save). `"discarded"`: the host dropped the draft — re-read.
+     */
+    readonly reason: "disk" | "saved" | "discarded";
+    /**
+     * The revision now on disk; null when the file is gone, grew past the
+     * editor's `maxBytes`, or no longer reads as UTF-8 text.
+     */
+    readonly revision: string | null;
+}
+/**
+ * The host-owned document a `location: "fileEditor"` view edits (#13809),
+ * handed to it as {@link PanelViewProps.fileDocument}.
+ *
+ * The host reads and writes the file; the view never touches the filesystem
+ * for it. A save names the revision it was based on and is refused, not
+ * merged, when the file moved underneath — the same compare-and-replace the
+ * built-in Markdown editor relies on, checked in the main process at write
+ * time. A `mode: "view"` editor gets a read-only document.
+ */
+interface PluginFileDocument {
+    /** Absolute path of the file. */
+    readonly filePath: string;
+    /** Path relative to the project or worktree root, with forward slashes. */
+    readonly relativePath: string;
+    readonly fileName: string;
+    /** The mode this editor was opened in. */
+    readonly mode: FileEditorMode;
+    /** True for a `mode: "view"` editor: `save` and `setDraft` are refused. */
+    readonly readOnly: boolean;
+    /** Read the file as it is on disk now. */
+    read(): Promise<PluginFileDocumentReadResult>;
+    /** Write `text` if the file is still at `expectedRevision`. Clears the draft on success. */
+    save(text: string, options: {
+        expectedRevision: string;
+    }): Promise<PluginFileDocumentSaveResult>;
+    /**
+     * The unsaved text the host holds for this panel, or null when clean — read
+     * it on mount to restore a draft from before the user switched modes.
+     */
+    getDraft(): string | null;
+    /** Report the unsaved text (null when clean). The host derives "dirty" from it. */
+    setDraft(text: string | null): void;
+    /**
+     * Report a conflict your editor detected itself. It can raise the host's
+     * conflict flag but never clear one the host observed on disk.
+     */
+    setConflict(conflict: boolean): void;
+    /** Subscribe to changes made outside the view. Returns the unsubscribe. */
+    onDidChange(listener: (change: PluginFileDocumentChange) => void): () => void;
+}
 /**
  * The live state of one panel `toolbar` button, set by the view with
  * `setToolbarItemState`. Every field is optional; an omitted field is the
@@ -170,7 +268,7 @@ interface PluginSettingsViewContext {
  * so a view that switches on this must give unknown kinds a sensible default
  * rather than treat the list as exhaustive.
  */
-type PluginViewHostKind = "panel" | "surface" | "settings" | "sidebar";
+type PluginViewHostKind = "panel" | "surface" | "settings" | "fileEditor" | "sidebar";
 interface PluginViewHostContext {
     readonly kind: PluginViewHostKind;
 }
@@ -473,6 +571,16 @@ interface PanelViewProps {
      * mounted in, so it renders the rows for that scope. Absent for a panel view.
      */
     readonly settingsContext?: PluginSettingsViewContext;
+    /**
+     * Present only for a `location: "fileEditor"` view (#13809): the file it was
+     * opened for, owned by the host. Read it with a revision, save against the
+     * revision you read, and report your unsaved text with `setDraft` so the
+     * host's dirty indicator, Rendered preview and Save / Discard / Cancel prompt
+     * on close all apply. The draft is the host's, not the view's: it survives
+     * the user switching to Source and back, and the close prompt can save it
+     * after your view has unmounted.
+     */
+    readonly fileDocument?: PluginFileDocument;
     /**
      * Where the host mounted this view — a panel, a project surface, the plugin's
      * settings section, the sidebar — so one view can lay itself out for each

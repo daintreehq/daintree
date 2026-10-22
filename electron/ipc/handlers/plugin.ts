@@ -59,6 +59,10 @@ import {
   type PanelKindConfig,
 } from "../../../shared/config/panelKindRegistry.js";
 import { isPluginInvokeOwnershipError } from "../../services/plugin/PluginInvokeErrors.js";
+import {
+  getProjectFileEditorChoices,
+  setProjectFileEditorChoice,
+} from "../../services/plugin/projectFileEditorChoices.js";
 import { pluginInstallJobs } from "../../services/plugin/PluginInstallJobRegistry.js";
 import { sendToRendererContext } from "../utils.js";
 import { getPluginMenuItems } from "../../services/pluginMenuRegistry.js";
@@ -112,9 +116,14 @@ import type {
   ProjectSurfaceChoiceUpdate,
   ProjectSurfaceSlot,
   ProjectSurfacesSnapshot,
+  FileEditorChoice,
+  FileEditorChoiceKey,
+  FileEditorChoices,
 } from "../../../shared/types/plugin.js";
 import {
   PROJECT_SURFACE_SLOTS,
+  isFileEditorChoice,
+  isFileEditorChoiceKey,
   isProjectSurfaceChoice,
   isProjectSurfaceSlot,
   parsePluginHostedViewKindId,
@@ -828,6 +837,30 @@ async function handlePanelKindsGet(ctx: IpcContext): Promise<PanelKindConfig[]> 
  * would read as "never answered" and ask the user again. The renderer re-reads
  * on the next push.
  */
+/** The SENDER's project's "Edit with…" answers (#13809); empty for a view with no project. */
+async function handleFileEditorChoicesGet(ctx: IpcContext): Promise<FileEditorChoices> {
+  if (!ctx.projectId) return {};
+  return getProjectFileEditorChoices(ctx.projectId);
+}
+
+/**
+ * Remember (or, with `null`, forget) one "Edit with…" answer in the SENDER's
+ * project. Shape-checked only: an answer naming an editor that isn't on offer
+ * right now simply never matches, and falls back to the host's own.
+ */
+async function handleFileEditorChoiceSet(
+  ctx: IpcContext,
+  key: FileEditorChoiceKey,
+  choice: FileEditorChoice | null
+): Promise<FileEditorChoices> {
+  if (!ctx.projectId) throw new Error("file editor choice: sender has no project");
+  if (!isFileEditorChoiceKey(key)) throw new Error("file editor choice: malformed key");
+  if (choice !== null && !isFileEditorChoice(choice)) {
+    throw new Error("file editor choice: malformed choice");
+  }
+  return setProjectFileEditorChoice(ctx.projectId, key, choice);
+}
+
 async function handleProjectSurfacesGet(ctx: IpcContext): Promise<ProjectSurfacesSnapshot | null> {
   // Same init-race guard as handlePanelKindsGet: a mount-time pull before the
   // deferred initialize() would cache "no surfaces" and leave the project on
@@ -2183,6 +2216,14 @@ export const pluginNamespace = defineIpcNamespace({
       handleProjectSurfaceChoicesSet,
       { withContext: true }
     ),
+    getFileEditorChoices: op(
+      PLUGIN_METHOD_CHANNELS.getFileEditorChoices,
+      handleFileEditorChoicesGet,
+      { withContext: true }
+    ),
+    setFileEditorChoice: op(PLUGIN_METHOD_CHANNELS.setFileEditorChoice, handleFileEditorChoiceSet, {
+      withContext: true,
+    }),
     getProjectPlugins: op(PLUGIN_METHOD_CHANNELS.getProjectPlugins, handleProjectPluginsList, {
       withContext: true,
     }),

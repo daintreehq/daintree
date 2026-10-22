@@ -41,17 +41,31 @@ export interface FileDocumentProjection {
 
 interface FileDocumentState {
   byPanelId: Readonly<Record<string, FileDocumentProjection>>;
+  /**
+   * Publish a panel's projection. A standing draft belongs to its document:
+   * a projection for a different document never replaces a dirty one, so an
+   * editor the user has moved away from — the built-in editor beside a plugin
+   * editor (#13809) — can't wipe the other's draft out of the dirty mark and
+   * the close prompt.
+   */
   setFileDocument: (panelId: string, projection: FileDocumentProjection) => void;
-  clearFileDocument: (panelId: string) => void;
+  /** Drop a panel's projection; with `identityKey`, only if it is still that document's. */
+  clearFileDocument: (panelId: string, identityKey?: string) => void;
 }
 
 export const useFileDocumentStore = create<FileDocumentState>()((set) => ({
   byPanelId: {},
   setFileDocument: (panelId, projection) =>
-    set((state) => ({ byPanelId: { ...state.byPanelId, [panelId]: projection } })),
-  clearFileDocument: (panelId) =>
     set((state) => {
-      if (!(panelId in state.byPanelId)) return state;
+      const current = state.byPanelId[panelId];
+      if (current?.dirty && current.identityKey !== projection.identityKey) return state;
+      return { byPanelId: { ...state.byPanelId, [panelId]: projection } };
+    }),
+  clearFileDocument: (panelId, identityKey) =>
+    set((state) => {
+      const current = state.byPanelId[panelId];
+      if (current === undefined) return state;
+      if (identityKey !== undefined && current.identityKey !== identityKey) return state;
       const { [panelId]: _removed, ...rest } = state.byPanelId;
       return { byPanelId: rest };
     }),

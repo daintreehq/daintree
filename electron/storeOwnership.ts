@@ -89,6 +89,7 @@ export const STORE_KEY_OWNERSHIP = {
   projectPluginTrust: "host",
   projectPluginVisibility: "host",
   projectSurfaceChoices: "host",
+  projectFileEditorChoices: "host",
   projectPresentation: "host",
   projectAgentMcpEnablement: "host",
   projectAgentMcpAccess: "host",

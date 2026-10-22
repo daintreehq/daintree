@@ -397,6 +397,13 @@ function whenClauseReads(expression: string, key: string): boolean {
   return visit(root);
 }
 
+/** Where a view other than a sidebar view takes its display from. */
+const VIEW_DISPLAY_SOURCE: Record<Exclude<ViewContribution["location"], "sidebar">, string> = {
+  panel: "the matching panel",
+  settings: "the plugin's settings home",
+  fileEditor: "the file panel, which labels it with the plugin's name",
+};
+
 /**
  * View contribution. A `location: "panel"` view renders into a
  * `contributes.panels` entry with a matching `id`; at plugin load
@@ -405,7 +412,9 @@ function whenClauseReads(expression: string, key: string): boolean {
  * is rejected by the manifest-level `superRefine` (#10620) — it would otherwise
  * silently never render. A `location: "settings"` view is the plugin's custom
  * settings section instead: it names no panel, and a manifest may declare at
- * most one. A `location: "sidebar"` view is one of the sidebar's views, chosen
+ * most one. A `location: "fileEditor"` view backs a view-backed
+ * `contributes.fileEditors` entry: it names no panel and mounts only inside the
+ * file panel. A `location: "sidebar"` view is one of the sidebar's views, chosen
  * from the header switcher beside the built-in worktree list; it names no
  * panel either, and it alone carries the display fields a switcher entry
  * needs (`name`, `iconId`, `priority`, `when`). Contributed via the stable
@@ -422,8 +431,10 @@ export const ViewContributionSchema = z
     // `"settings"` is the plugin's custom settings section: tied to no panel,
     // at most one per manifest (both checked in the manifest `superRefine`),
     // and mounted in the plugin's settings home below its declared fields.
-    // `"sidebar"` mounts below the sidebar header when chosen in its switcher.
-    location: z.enum(["panel", "settings", "sidebar"]),
+    // `"fileEditor"` backs a view-backed `contributes.fileEditors` entry and
+    // mounts only inside the file panel; `"sidebar"` mounts below the sidebar
+    // header when chosen in its switcher.
+    location: z.enum(["panel", "settings", "fileEditor", "sidebar"]),
     // For a panel view `iconId` is advisory only — the SDK `validate` command
     // flags an unrenderable id, but at runtime the matching `contributes.panels`
     // entry owns the rendered icon (the panels loop reads `panel.iconId`, never
@@ -1027,17 +1038,57 @@ export const FileDecorationContributionSchema = z
  */
 export const FILE_EDITOR_MAX_BYTES_CEILING = 64 * 1024 * 1024;
 
+/** Most `paths` patterns one `fileEditors` entry may declare. */
+export const FILE_EDITOR_MAX_PATH_PATTERNS = 20;
+
 /**
- * `fileEditors` manifest entry (#12323). `slot` names the builtin view the
- * plugin's renderer registers for the editor; `extensions` are bare lower-case
- * suffixes. Strict so a misspelt field is a manifest error, not a silently
- * missing Edit mode. Built-in plugins only — enforced at load, where the
- * origin is known, not here where it isn't.
+ * A project-relative glob a project plugin's file editor claims (#13809).
+ * Forward slashes only, relative to the project or worktree root, and no way
+ * out of it: no leading `/`, no drive letter, no `..` segment, no backslash,
+ * no NUL, and no `!` negation (a claim says what it edits, never what it
+ * doesn't).
+ */
+const FileEditorPathPatternSchema = z
+  .string()
+  .min(1)
+  .max(256)
+  .refine(
+    (pattern) =>
+      !pattern.startsWith("/") &&
+      !pattern.startsWith("!") &&
+      !/^[a-zA-Z]:/.test(pattern) &&
+      !pattern.includes("\\") &&
+      !pattern.includes("\0") &&
+      !pattern.split("/").includes(".."),
+    {
+      message:
+        "paths are project-relative globs with forward slashes — no leading /, drive letter, .. segment, backslash or ! negation",
+    }
+  );
+
+/**
+ * `fileEditors` manifest entry (#12323, #13809). Two forms, exactly one of
+ * `slot` / `view`:
+ *
+ * - `slot` names the builtin view a built-in plugin's renderer registers for
+ *   the file panel's Edit mode. Built-in plugins only — the slot resolves
+ *   through the host-bundled builtin view registry. Enforced at load, where
+ *   the origin is known.
+ * - `view` names one of the plugin's own `location: "fileEditor"` views, and
+ *   `mode` says what it fills: `"edit"` the file panel's Edit mode, `"view"`
+ *   its Rendered mode for a type the host cannot render. Open to every origin.
+ *
+ * `extensions` are bare lower-case suffixes; `paths` are project-relative
+ * globs, accepted from project plugins only (checked in the manifest
+ * refinement). Strict so a misspelt field is a manifest error, not a silently
+ * missing mode.
  */
 export const FileEditorContributionSchema = z
   .object({
     id: z.string().min(1).max(64).regex(SAFE_ID_PATTERN),
-    slot: z.string().min(1).max(128).regex(SAFE_ID_PATTERN),
+    slot: z.string().min(1).max(128).regex(SAFE_ID_PATTERN).optional(),
+    view: z.string().min(1).max(64).regex(SAFE_ID_PATTERN).optional(),
+    mode: z.enum(["edit", "view"]).optional(),
     extensions: z
       .array(
         z
@@ -1047,7 +1098,13 @@ export const FileEditorContributionSchema = z
           .regex(/^[a-z0-9]+$/, "extensions are bare lower-case suffixes without the dot")
       )
       .min(1)
-      .max(20),
+      .max(20)
+      .optional(),
+    paths: z
+      .array(FileEditorPathPatternSchema)
+      .min(1)
+      .max(FILE_EDITOR_MAX_PATH_PATTERNS)
+      .optional(),
     maxBytes: z.number().int().positive().max(FILE_EDITOR_MAX_BYTES_CEILING).optional(),
   })
   .strict();
@@ -2340,10 +2397,6 @@ export const PROJECT_SCOPE_UNSCOPED_CONTRIBUTIONS = [
     "decoration requests carry a resource path with no owning-project routing, so the provider would be consulted for files in every project the app has open.",
   ],
   [
-    "fileEditors",
-    "the editor slot resolves through the host-bundled builtin view registry, which only a built-in plugin's renderer can register into; a project plugin has no renderer in that bundle to resolve.",
-  ],
-  [
     "processTools",
     "process-tool detections are mirrored into the shared pty-host as one detection table for every terminal in the app, so the icon mapping would apply to every project's processes.",
   ],
@@ -2954,6 +3007,67 @@ function buildPluginManifestSchema(origin: PluginOrigin) {
       // build and then executed with full DOM access inside whatever site the
       // user is previewing, and the site-preview bridge exists precisely so that
       // only main, from an asset it shipped, chooses that code.
+      // A slot-backed file editor resolves through the builtin view registry
+      // compiled into the host bundle, so only a built-in plugin can back one.
+      // A view-backed editor mounts one of the plugin's own views and is open to
+      // every origin (#13809); its `paths` claims are a project plugin's alone,
+      // because only a project plugin is bound to a project they are relative to.
+      manifest.contributes.fileEditors.forEach((entry, index) => {
+        const at = (field: string) => ["contributes", "fileEditors", index, field];
+        if ((entry.slot === undefined) === (entry.view === undefined)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: at("view"),
+            message: 'A file editor names exactly one of "slot" (built-in plugins) or "view".',
+            params: { errorCode: "file_editor_backing_invalid" },
+          });
+        }
+        if (entry.slot !== undefined && (entry.mode !== undefined || entry.paths !== undefined)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: at("slot"),
+            message:
+              'A slot-backed file editor is always an Edit mode matched by extension — "mode" and "paths" belong to a view-backed one.',
+            params: { errorCode: "file_editor_backing_invalid" },
+          });
+        }
+        if (entry.view !== undefined && entry.mode === undefined) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: at("mode"),
+            message: 'A view-backed file editor declares "mode": "edit" or "view".',
+            params: { errorCode: "file_editor_mode_missing" },
+          });
+        }
+        if (entry.extensions === undefined && entry.paths === undefined) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: at("extensions"),
+            message:
+              'A file editor matches files by "extensions", "paths" or both — it declares neither.',
+            params: { errorCode: "file_editor_match_missing" },
+          });
+        }
+        if (entry.slot !== undefined && origin !== "builtin") {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ["contributes", "fileEditors", index, "slot"],
+            message:
+              'contributes.fileEditors[].slot is only available to built-in plugins — the slot resolves through the host-bundled builtin view registry. Back the editor with one of your own views instead: "view" naming a location: "fileEditor" view.',
+            params: { errorCode: "fileEditors_slot_builtin_only" },
+          });
+        }
+        if (entry.paths !== undefined && manifest.scope !== "project") {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ["contributes", "fileEditors", index, "paths"],
+            message:
+              'contributes.fileEditors[].paths is only available to a "scope": "project" plugin — the patterns are relative to the project it belongs to. Match by "extensions" instead.',
+            params: { errorCode: "fileEditors_paths_project_only" },
+          });
+        }
+      });
+
       for (const group of ["previewTools", "guestAdapters"] as const) {
         if (origin === "builtin" || manifest.contributes[group].length === 0) continue;
         ctx.addIssue({
@@ -3265,6 +3379,11 @@ function buildPluginManifestSchema(origin: PluginOrigin) {
       const settingsViewIds = new Set(
         manifest.contributes.views.filter((view) => view.location === "settings").map((v) => v.id)
       );
+      const fileEditorViewIds = new Set(
+        manifest.contributes.views
+          .filter((view) => view.location === "fileEditor")
+          .map((view) => view.id)
+      );
       const sidebarViewIds = new Set(
         manifest.contributes.views.filter((view) => view.location === "sidebar").map((v) => v.id)
       );
@@ -3324,6 +3443,16 @@ function buildPluginManifestSchema(origin: PluginOrigin) {
           });
           continue;
         }
+        // Nor does a file editor view, which mounts only in the file panel.
+        if (fileEditorViewIds.has(claim.viewId)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ["contributes", "surfaces", slot, "viewId"],
+            message: `surfaces.${slot}.viewId "${claim.viewId}" names a location: "fileEditor" view — a surface draws a panel view, and a file editor view renders only in the file panel.`,
+            params: { errorCode: "surface_view_ref_file_editor" },
+          });
+          continue;
+        }
         if (sidebarViewIds.has(claim.viewId)) {
           ctx.addIssue({
             code: z.ZodIssueCode.custom,
@@ -3361,6 +3490,22 @@ function buildPluginManifestSchema(origin: PluginOrigin) {
             params: { errorCode: "tour_panel_kind_unknown" },
           });
         }
+      });
+
+      // A view-backed file editor must name one of this plugin's own
+      // `location: "fileEditor"` views — anything else would advertise a mode
+      // that mounts nothing, or mount a panel or settings view somewhere it was
+      // never written for.
+      manifest.contributes.fileEditors.forEach((entry, index) => {
+        if (entry.view === undefined || fileEditorViewIds.has(entry.view)) return;
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["contributes", "fileEditors", index, "view"],
+          message: viewIds.has(entry.view)
+            ? `File editor "${entry.id}" names view "${entry.view}", which is not a location: "fileEditor" view.`
+            : `File editor "${entry.id}" names view "${entry.view}", which matches no contributes.views[].id.`,
+          params: { errorCode: "file_editor_view_ref_unknown" },
+        });
       });
 
       // A settings view is the plugin's one custom settings section. It renders
@@ -3407,9 +3552,22 @@ function buildPluginManifestSchema(origin: PluginOrigin) {
           ctx.addIssue({
             code: z.ZodIssueCode.custom,
             path: ["contributes", "views", index, field],
-            message: `View "${view.id}" sets ${field}, which only a location: "sidebar" view uses — a ${view.location} view takes its display from ${view.location === "panel" ? "the matching panel" : "the plugin's settings home"}.`,
+            message: `View "${view.id}" sets ${field}, which only a location: "sidebar" view uses — a ${view.location} view takes its display from ${VIEW_DISPLAY_SOURCE[view.location]}.`,
             params: { errorCode: "view_sidebar_field_misplaced" },
           });
+        }
+        if (view.location === "fileEditor") {
+          // Mounted only inside the file panel, never as a panel, so it must
+          // not share an id with one (the panels loop would attach it there).
+          if (panelIds.has(view.id)) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              path: ["contributes", "views", index, "id"],
+              message: `File editor view "${view.id}" shares its id with a contributes.panels entry — a file editor view renders in the file panel, not a panel of its own, so give it an id of its own.`,
+              params: { errorCode: "file_editor_view_panel_id_collision" },
+            });
+          }
+          return;
         }
         if (view.location === "settings") {
           if (settingsViewSeen) {

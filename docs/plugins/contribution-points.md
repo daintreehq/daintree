@@ -35,7 +35,7 @@ A plugin that declares `"scope": "project"` lives in a project's own repository 
 | `tours` | Rejected — plugin tours are offered from the app-wide Help menu and command palette, and tour playback has no per-project visibility yet |
 | `themes` | Rejected — the app theme is one machine-wide selection painted into every window, with no per-project theme to narrow to |
 | `forgeProviders` | Rejected — forge providers need synchronous host methods that cannot cross the plugin worker's message port |
-| `fileEditors` | Rejected — built-in only; the editor slot resolves through the host-bundled builtin view registry, which a project plugin has no renderer in |
+| `fileEditors` | Allowed, view-backed only — editors apply only in the plugin's own project and may also match project-relative `paths`. A `slot` is built-in only |
 | `previewTools` | Rejected — built-in only; the tool's components resolve out of the host bundle, which no other origin's renderer reaches |
 | `guestAdapters` | Rejected — built-in only; the bundle is emitted by Daintree's own build and runs with full DOM access inside the previewed site |
 
@@ -446,7 +446,7 @@ Views are the React components a plugin renders. A `location: "panel"` view bind
 | --- | --- | --- |
 | `id` | yes | For a panel view, the panel `id` it provides a component for; for a settings or sidebar view, an id of its own. Letters, digits, `.`, `_` and `-`, at most 64 characters. |
 | `componentPath` | yes | POSIX-relative path to an ESM module inside the plugin (`.js` or `.mjs`). The module's default export is a React component. Absolute paths, backslashes, URL schemes, `?`, `#` and `..` segments are rejected at manifest validation. |
-| `location` | yes | `"panel"` (rendered in the panel of the same id, in the grid, the dock or a dialog), `"settings"` for the plugin's custom settings section, or `"sidebar"` for a sidebar view. |
+| `location` | yes | `"panel"` (rendered in the panel of the same id, in the grid, the dock or a dialog), `"settings"` for the plugin's custom settings section, `"fileEditor"` for a view that backs a [file editor](#file-editors--shipped), or `"sidebar"` for a sidebar view. |
 | `iconId` | no | A sidebar view's glyph in the switcher: a plugin icon id or a `./…svg` [custom icon](#custom-icons). On a panel or settings view it is accepted for compatibility but **ignored at runtime** — the matching `contributes.panels` entry owns the rendered icon. |
 | `name` | sidebar only | The sidebar view's name in the switcher and the header, at most 40 characters. Required for a sidebar view. |
 | `priority` | sidebar only | Integer from `-1000` to `1000`, default `0`; orders the switcher against the worktree list's `0`. |
@@ -1347,37 +1347,51 @@ From your `activate()` subscriptions and timers, call `host.invalidateFileDecora
 
 On the worktree card, a decoration renders as the app's count pill in its own column at the end of the row, with the `tooltip` text added under the file path in the row's own tooltip (on hover and on keyboard focus) and read out as the row's description. Keep `badge` to two characters; a longer badge widens the column for the whole list. A decoration with a `url` is underlined, opens the link when its badge is clicked, and adds **Open in browser** to the row's context menu, which is how keyboard users reach it. If you pass a `color`, you own its contrast: a status wash under primary text (`bg-status-error/20 text-text-primary`) holds 4.5:1 across the built-in themes, while status-coloured text on its own wash does not.
 
-## File editors — _Shipped (built-in only)_
+## File editors — _Shipped_
 
-Declares a writable **Edit** mode alongside Source and Rendered in the host’s file browser and standalone file panel for the listed extensions. The manifest names the builtin view slot the plugin's renderer registers for the editor surface; the host resolves it enable-aware, so disabling the plugin removes Edit live and a panel persisted in `edit` mode falls back to Source without rewriting the preference. The first-party Markdown editor (`plugins/builtin/markdown-editor/`) is the one contributor.
+Declares an editor the host's file panel offers for matching files. An entry takes one of two forms.
+
+A **view-backed** editor names one of the plugin's own `location: "fileEditor"` views. `"mode": "edit"` fills the file panel's writable **Edit** mode; `"mode": "view"` fills **Rendered** for a type the host can't render itself (CSV, data exports). Any plugin may declare one. Installed plugins match by extension; a `"scope": "project"` plugin may also match project-relative `paths`, and its editors only ever appear in its own project.
 
 ```json
 {
   "contributes": {
+    "views": [
+      { "id": "records-editor", "componentPath": "dist/editor.js", "location": "fileEditor" }
+    ],
     "fileEditors": [
       {
-        "id": "markdown",
-        "slot": "markdown.editor",
-        "extensions": ["md", "markdown", "mkd"],
-        "maxBytes": 2097152
+        "id": "records",
+        "view": "records-editor",
+        "mode": "edit",
+        "extensions": ["json"],
+        "paths": ["content/entries/*.json"],
+        "maxBytes": 1048576
       }
     ]
   }
 }
 ```
 
+A **slot-backed** editor names a builtin view the plugin's renderer registers with `registerBuiltinView`. It is built-in only: the builtin view registry is compiled into the host bundle, which no other plugin's renderer reaches, so the manifest is refused (`fileEditors_slot_builtin_only`) from any other origin. The first-party Markdown editor (`plugins/builtin/markdown-editor/`) is the one slot-backed contributor.
+
 **Fields:**
 
 | Field | Required | Notes |
 | --- | --- | --- |
 | `id` | yes | Namespaced at runtime as `{pluginId}.{id}`. |
-| `slot` | yes | The builtin view id the plugin's renderer entry registers with `registerBuiltinView`; the `builtinViewRegistrations` test keeps the two halves in step. Letters, digits, `.`, `_` and `-`, at most 128 characters. |
-| `extensions` | yes | Bare lower-case suffixes without the dot (`[a-z0-9]+`, 1–16 characters each, 1–20 entries), matched case-insensitively against the file name. Extensions the entry omits (`mdx`) are never offered. |
-| `maxBytes` | no | Largest file the editor accepts, a positive integer. Above it the file stays viewable and Edit is not offered. Defaults to 2 MiB; capped at 64 MiB. |
+| `view` | one of `view`/`slot` | Id of one of this plugin's `location: "fileEditor"` views. Such a view needs no panel and may not share an id with one. |
+| `mode` | with `view` | `"edit"` or `"view"`. A `view` editor's document is read-only. |
+| `slot` | one of `view`/`slot` | Built-in plugins only. The builtin view id the plugin's renderer registers; always an Edit mode matched by extension. |
+| `extensions` | `extensions` and/or `paths` | Bare lower-case suffixes without the dot (`[a-z0-9]+`, 1–16 characters each, 1–20 entries), matched case-insensitively against the file name. |
+| `paths` | `extensions` and/or `paths` | `"scope": "project"` plugins only (`fileEditors_paths_project_only`). Up to 20 globs relative to the project or worktree root, forward slashes only: `**` as a whole segment matches any number of directories, `*` any run within one segment, `?` one character; everything else is literal and case-sensitive. No leading `/`, drive letter, `..`, backslash or `!` negation. |
+| `maxBytes` | no | Largest file the editor accepts, a positive integer. Above it the file stays viewable and the editor is not offered; the host document also refuses larger reads and saves. Defaults to 2 MiB; capped at 64 MiB. |
 
-**Built-in only.** The slot resolves through the builtin view registry compiled into the host bundle, which an installed plugin's renderer cannot register into, so the host refuses the contribution from any other origin at load with a recorded load error. Opening file editors to installed plugins is a separate decision.
+**Choosing an editor.** The host's own editor or renderer stays the default; an installed or project editor adds a choice rather than displacing it. When more than one editor can fill a mode, the panel's toolbar shows **Edit with…** (or **View with…** for Rendered), and the pick is remembered per project and per file type in Daintree's own settings, never in the repository. A mode a plugin fills is labelled with the plugin's name (`Edit · Acme records`), and Source is always one click away.
 
-The host offers Edit inside the file browser’s existing content area and in standalone file panels (the standalone file viewer dialog stays read-only), only for a file the reader loaded as text, and only inside a project or worktree root. The editor view receives the panel's fixed identity — file, containment root, worktree and project — and publishes its document state (draft, dirty, conflict, and the Save and Discard operations) through the host's file-document store, which drives the dirty mark in the panel chrome, the draft-aware Rendered preview and the Save / Discard / Cancel prompt on close.
+**The host-owned document.** A view-backed editor's view receives `PanelViewProps.fileDocument` (`PluginFileDocument` in the SDK): `read()` returns the text and an opaque revision; `save(text, { expectedRevision })` writes only if the file is still at that revision, checked in the main process at write time, and otherwise returns `conflict` without writing; `setDraft(text | null)` reports unsaved text, and `setConflict` raises a conflict the editor detected itself; `onDidChange` reports a disk change, a save made by the host, or a discard. The host keeps the draft, so it survives a switch to Source and back, and the dirty mark, the draft-aware Rendered preview and the Save / Discard / Cancel prompt on close apply exactly as for the built-in editor. Text is UTF-8 with lines joined by `\n`; a save keeps the file's BOM, dominant line ending and mode.
+
+The host offers editors inside the file browser’s existing content area (built-in editors only) and in standalone file panels (the standalone file viewer dialog stays read-only), only inside a project or worktree root. Plugin editors load only when chosen, so they never weigh on the file panel's first render.
 
 ## Preview tools — _Shipped (built-in only)_
 

@@ -76,10 +76,12 @@ vi.mock("@/components/FileViewer/CodeViewer", () => ({
 vi.mock("@/panels/diff/useDiffContent", () => ({
   useDiffContent: () => ({ content: undefined, stale: false, retry: vi.fn() }),
 }));
-vi.mock("@/registry/fileEditorRegistry", () => ({
+vi.mock("@/registry/fileEditorRegistry", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/registry/fileEditorRegistry")>()),
   resolveFileEditor: () => null,
   useResolvedFileEditor: () => null,
   useFileEditor: () => null,
+  usePluginFileEditorCandidates: () => [],
 }));
 
 import { FilePane } from "../FilePane";

@@ -637,11 +637,11 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
       consumers: [
         {
           file: PLUGIN_SCHEMA,
-          symbol: "ViewContributionSchema (enum 'panel' | 'settings' | 'sidebar')",
+          symbol: "ViewContributionSchema (enum 'panel' | 'settings' | 'fileEditor' | 'sidebar')",
         },
         { file: PLUGIN_SERVICE, symbol: "loadPlugin → registerPluginHostedViews (non-panel)" },
       ],
-      note: "'panel' ties the view to the panel host; any other location is registered as a hosted view that mounts outside the panel grid — 'settings' is the plugin's one custom settings section, mounted in its settings home, and 'sidebar' a sidebar view chosen from the header switcher. Neither is ever matched to a panel.",
+      note: "'panel' ties the view to the panel host; any other location is registered as a hosted view that mounts outside the panel grid — 'settings' is the plugin's one custom settings section, mounted in its settings home; 'fileEditor' backs a view-backed file editor and mounts only in the file panel; and 'sidebar' a sidebar view chosen from the header switcher. None is ever matched to a panel.",
     },
     iconId: {
       mode: "verbatim",
@@ -650,7 +650,7 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
         { file: PLUGIN_SERVICE, symbol: "loadPlugin → sidebar hosted view (resolveIconId)" },
         { file: SIDEBAR_VIEW_SWITCHER, symbol: "SidebarViewSwitcher (resolvePluginIcon)" },
       ],
-      note: "A sidebar view's switcher glyph, custom SVG references resolved at load. Advisory on a panel or settings view: the SDK validate command flags it as ignored there.",
+      note: "A sidebar view's switcher glyph, custom SVG references resolved at load. Advisory on a panel, settings or file editor view: the SDK validate command flags it as ignored there.",
     },
     name: {
       mode: "verbatim",
@@ -844,23 +844,46 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
   fileEditors: {
     id: {
       mode: "verbatim",
-      consumers: [{ file: "src/registry/fileEditorRegistry.ts", symbol: "registerFileEditor" }],
-      note: "Keys the renderer-side editor registration the plugin's renderer entry mirrors from its manifest.",
+      consumers: [
+        { file: "src/registry/fileEditorRegistry.ts", symbol: "registerFileEditor" },
+        { file: PLUGIN_SERVICE, symbol: "loadPlugin → hosted view fileEditors" },
+      ],
+      note: "Keys the renderer-side editor registration, and a view-backed editor's 'Edit with…' answer.",
     },
     slot: {
       mode: "verbatim",
       consumers: [{ file: "src/registry/fileEditorRegistry.ts", symbol: "useFileEditor" }],
-      note: "Resolved enable-aware through the builtin view registry to the component the file panel mounts for Edit mode.",
+      note: "Resolved enable-aware through the builtin view registry to the component the file panel mounts for Edit mode. Built-in plugins only.",
+    },
+    view: {
+      mode: "cross-reference",
+      consumers: [{ file: PLUGIN_SERVICE, symbol: "loadPlugin → hosted view fileEditors" }],
+      note: "Names the plugin's location: 'fileEditor' view the editor mounts; attached to that view's hosted descriptor.",
+    },
+    mode: {
+      mode: "verbatim",
+      consumers: [
+        { file: "src/registry/fileEditorRegistry.ts", symbol: "pluginFileEditorCandidates" },
+      ],
+      note: "Whether the editor fills the file panel's Edit mode or its Rendered mode.",
     },
     extensions: {
       mode: "verbatim",
-      consumers: [{ file: "src/registry/fileEditorRegistry.ts", symbol: "resolveFileEditor" }],
-      note: "Matched case-insensitively against the panel file's extension to decide whether Edit is offered.",
+      consumers: [
+        { file: "src/registry/fileEditorRegistry.ts", symbol: "resolveFileEditor" },
+        { file: "src/registry/fileEditorRegistry.ts", symbol: "pluginFileEditorCandidates" },
+      ],
+      note: "Matched case-insensitively against the panel file's extension to decide whether the editor is offered.",
+    },
+    paths: {
+      mode: "verbatim",
+      consumers: [{ file: "src/registry/fileEditorGlob.ts", symbol: "matchesFileEditorGlob" }],
+      note: "Project plugins only: globs matched against the file's path relative to the project or worktree root.",
     },
     maxBytes: {
       mode: "verbatim",
       consumers: [{ file: "src/panels/file/FilePane.tsx", symbol: "availableModes (edit gate)" }],
-      note: "Upper bound on the loaded file's byte size before the panel offers Edit.",
+      note: "Upper bound on the loaded file's byte size before the panel offers the editor; the host document refuses larger reads and saves.",
     },
   },
   previewTools: {

@@ -82,9 +82,24 @@ import { logError } from "@/utils/logger";
 import { lookupLocalChangeStatus } from "./localChangeStatus";
 import { useHeightHold } from "./useHeightHold";
 import { useProjectViewRevealed } from "@/hooks/useProjectViewRevealed";
-import { useFileEditor } from "@/registry/fileEditorRegistry";
+import {
+  HOST_FILE_EDITOR_CHOICE,
+  fileEditorChoiceKey,
+  pickFileEditorChoice,
+  useFileEditor,
+  usePluginFileEditorCandidates,
+  type PluginFileEditorCandidate,
+} from "@/registry/fileEditorRegistry";
+import { useFileEditorChoicesStore } from "@/store/fileEditorChoicesStore";
+import { usePluginRuntimeStore } from "@/store/pluginRuntimeStore";
+import { FileEditorPicker, type FileEditorPickerOption } from "./FileEditorPicker";
 import { FileEditorBanner } from "@/components/FileViewer/FileEditorBanner";
-import { useFileDocumentDraftText, useFileDocumentFlags } from "@/store/fileDocumentStore";
+import {
+  useFileDocumentDraftText,
+  useFileDocumentFlags,
+  useFileDocumentStore,
+} from "@/store/fileDocumentStore";
+import { isPluginFileDocumentIdentity } from "@/services/plugin/pluginFileDocumentIdentity";
 import { FilePanePicker } from "./FilePanePicker";
 import { useFileRowMenuItems } from "@/hooks/useFileRowMenuItems";
 import { FileContentContextMenu } from "@/components/FileViewer/FileContentContextMenu";
@@ -104,6 +119,36 @@ export interface FilePaneProps extends BasePanelProps {
 const LazyDiffViewer = lazy(() =>
   import("@/components/Worktree/DiffViewer").then((m) => ({ default: m.DiffViewer }))
 );
+
+// A plugin's file editor (#13809) pulls the plugin view loader and the host
+// document controller; neither belongs on the first render of a plain file.
+const LazyPluginFileEditorHost = lazy(() => import("./PluginFileEditorHost"));
+
+/** Whether a loaded file fits an editor's ceiling; a file not loaded as text yet always does. */
+function fitsFile(maxBytes: number, loadedBytes: number | null): boolean {
+  return loadedBytes === null || loadedBytes <= maxBytes;
+}
+
+/** "Edit with…" option labels: the plugin's name, disambiguated when one plugin offers two. */
+function pickerOptions(
+  candidates: readonly PluginFileEditorCandidate[],
+  host: FileEditorPickerOption | null
+): FileEditorPickerOption[] {
+  const nameCounts = new Map<string, number>();
+  for (const candidate of candidates) {
+    nameCounts.set(candidate.pluginName, (nameCounts.get(candidate.pluginName) ?? 0) + 1);
+  }
+  return [
+    ...(host ? [host] : []),
+    ...candidates.map((candidate) => ({
+      value: candidate.choiceId,
+      label:
+        (nameCounts.get(candidate.pluginName) ?? 0) > 1
+          ? `${candidate.pluginName} (${candidate.editor.id})`
+          : candidate.pluginName,
+    })),
+  ];
+}
 
 const MODE_LABELS: Record<FileViewMode, string> = {
   source: "Source",
@@ -449,22 +494,106 @@ export function FilePane({
   const draftText = useFileDocumentDraftText(id);
   const { dirty: isDirty, conflict: hasConflict } = useFileDocumentFlags(id);
 
-  // Edit joins the toggle for a file a built-in editor claims, inside a
-  // governed root, and only in the panel (the file viewer dialog stays
-  // read-only). Offered once the reader loaded it as text under the editor's
-  // byte ceiling — and kept while Edit is the mode already asked for or a
-  // draft is standing, so a file that is deleted, or a recovered draft whose
-  // file is missing, still reaches the editor's own unavailable state rather
-  // than a read-only error that hides the draft. The editor refuses what it
-  // cannot edit (binary, oversized, undecodable) itself.
+  // Installed and project plugins' view-backed editors (#13809), from this
+  // project view's hosted-view snapshot — a project plugin's only reach its own
+  // project. Offered in the panel only, inside a governed root, like Edit.
+  // A plugin may fill Rendered only for a type the host can't render itself.
+  const pluginEditorsAllowed = location !== "dialog" && isInsideGovernedRoot;
+  const pluginEditCandidates = usePluginFileEditorCandidates(
+    filePath,
+    effectiveRootPath,
+    "edit",
+    pluginEditorsAllowed
+  );
+  const pluginViewCandidates = usePluginFileEditorCandidates(
+    filePath,
+    effectiveRootPath,
+    "view",
+    pluginEditorsAllowed && !isRenderable
+  );
+  const initEditorChoices = useFileEditorChoicesStore((s) => s.init);
+  useEffect(() => {
+    initEditorChoices();
+  }, [initEditorChoices]);
+  const editorChoicesLoaded = useFileEditorChoicesStore((s) => s.loaded);
+  const editorChoices = useFileEditorChoicesStore((s) => s.choices);
+  const setEditorChoice = useFileEditorChoicesStore((s) => s.setChoice);
+  const builtinEditorName = usePluginRuntimeStore((s) =>
+    editor ? (s.pluginMetaById.get(editor.registration.pluginId)?.displayName ?? null) : null
+  );
+
+  // Which editor fills each mode. The remembered "Edit with…" answer wins when
+  // it is still on offer; otherwise the host's own editor where there is one,
+  // so an installed editor adds a choice rather than displacing the built-in.
+  // Until the answers have loaded only the built-in may open — a plugin the
+  // user has already turned away from must not flash in first. Once the file
+  // has loaded, an editor whose ceiling it exceeds is not on offer, so a
+  // remembered small editor never hides a capable one.
+  //
+  // A standing draft pins its owner: the built-in editor and the plugin
+  // document controller each keep their own, and handing Edit to the other
+  // would hide the draft from the dirty mark and the close prompt. The user
+  // saves or discards before switching.
+  const loadedBytes = loadState === "loaded" ? contentBytes : null;
+  const draftOwner = useFileDocumentStore((s) => {
+    const projection = s.byPanelId[id];
+    if (!projection?.dirty) return null;
+    return isPluginFileDocumentIdentity(projection.identityKey) ? "plugin" : "host";
+  });
+  const editOptions = useMemo(
+    () => [
+      ...(editor && draftOwner !== "plugin" && fitsFile(editor.registration.maxBytes, loadedBytes)
+        ? [HOST_FILE_EDITOR_CHOICE]
+        : []),
+      ...(draftOwner === "host"
+        ? []
+        : pluginEditCandidates
+            .filter((candidate) => fitsFile(candidate.editor.maxBytes, loadedBytes))
+            .map((candidate) => candidate.choiceId)),
+    ],
+    [editor, draftOwner, pluginEditCandidates, loadedBytes]
+  );
+  const editChoice =
+    filePath === undefined
+      ? null
+      : editorChoicesLoaded
+        ? pickFileEditorChoice(editOptions, editorChoices, fileEditorChoiceKey("edit", filePath))
+        : editOptions.includes(HOST_FILE_EDITOR_CHOICE)
+          ? HOST_FILE_EDITOR_CHOICE
+          : null;
+  const builtinEditor = editChoice === HOST_FILE_EDITOR_CHOICE ? editor : null;
+  const pluginEditor =
+    pluginEditCandidates.find((candidate) => candidate.choiceId === editChoice) ?? null;
+  const viewOptions = useMemo(
+    () =>
+      pluginViewCandidates
+        .filter((candidate) => fitsFile(candidate.editor.maxBytes, loadedBytes))
+        .map((candidate) => candidate.choiceId),
+    [pluginViewCandidates, loadedBytes]
+  );
+  const viewChoice =
+    filePath === undefined || !editorChoicesLoaded
+      ? null
+      : pickFileEditorChoice(viewOptions, editorChoices, fileEditorChoiceKey("view", filePath));
+  const pluginViewer =
+    pluginViewCandidates.find((candidate) => candidate.choiceId === viewChoice) ?? null;
+
+  // Edit joins the toggle for a file an editor claims, inside a governed
+  // root, and only in the panel (the file viewer dialog stays read-only).
+  // Offered once the reader loaded it as text under the editor's byte ceiling
+  // — and kept while Edit is the mode already asked for or a draft is
+  // standing, so a file that is deleted, or a recovered draft whose file is
+  // missing, still reaches the editor's own unavailable state rather than a
+  // read-only error that hides the draft. The editor refuses what it cannot
+  // edit (binary, oversized, undecodable) itself.
   const requestedMode = panel?.fileViewMode ?? "source";
   const isEditable =
-    editor !== null &&
+    (builtinEditor !== null || pluginEditor !== null) &&
     location !== "dialog" &&
     isInsideGovernedRoot &&
-    (loadState === "loaded"
-      ? contentBytes <= editor.registration.maxBytes
-      : requestedMode === "edit" || isDirty);
+    (loadState === "loaded" || requestedMode === "edit" || isDirty);
+  // A plugin viewer fills Rendered for a type the host can't render.
+  const hasPluginRendered = pluginViewer !== null;
 
   // Rendered, Diff and Edit are independent capabilities. One derived list
   // drives both the toggle and the clamp, so a persisted mode whose capability
@@ -474,16 +603,72 @@ export function FilePane({
   const availableModes = useMemo<FileViewMode[]>(
     () => [
       "source",
-      ...(isRenderable ? (["rendered"] as const) : []),
+      ...(isRenderable || hasPluginRendered ? (["rendered"] as const) : []),
       ...(localChangeStatus !== undefined ? (["diff"] as const) : []),
       ...(isEditable ? (["edit"] as const) : []),
     ],
-    [isRenderable, localChangeStatus, isEditable]
+    [isRenderable, hasPluginRendered, localChangeStatus, isEditable]
   );
   const viewMode: FileViewMode = availableModes.includes(requestedMode) ? requestedMode : "source";
+  const showPluginViewer = viewMode === "rendered" && !isRenderable && pluginViewer !== null;
+
+  // "Edit with…" (#13809): offered in a mode more than one editor can fill,
+  // and remembered per project for the file's type.
+  const editorPicker = useMemo(() => {
+    if (filePath === undefined) return null;
+    if (viewMode === "edit" && editOptions.length > 1 && editChoice !== null) {
+      return {
+        label: "Edit with…",
+        choiceKey: fileEditorChoiceKey("edit", filePath),
+        value: editChoice,
+        options: pickerOptions(
+          pluginEditCandidates.filter((candidate) => editOptions.includes(candidate.choiceId)),
+          editor && editOptions.includes(HOST_FILE_EDITOR_CHOICE)
+            ? { value: HOST_FILE_EDITOR_CHOICE, label: builtinEditorName ?? "Built-in editor" }
+            : null
+        ),
+      };
+    }
+    if (showPluginViewer && viewOptions.length > 1 && viewChoice !== null) {
+      return {
+        label: "View with…",
+        choiceKey: fileEditorChoiceKey("view", filePath),
+        value: viewChoice,
+        options: pickerOptions(
+          pluginViewCandidates.filter((candidate) => viewOptions.includes(candidate.choiceId)),
+          null
+        ),
+      };
+    }
+    return null;
+  }, [
+    filePath,
+    viewMode,
+    editOptions,
+    editChoice,
+    pluginEditCandidates,
+    editor,
+    builtinEditorName,
+    showPluginViewer,
+    viewOptions,
+    viewChoice,
+    pluginViewCandidates,
+  ]);
+  // A mode a plugin fills carries the plugin's name, so it is never mistaken
+  // for the host's own (#13809).
+  const editPluginName = pluginEditor?.pluginName ?? null;
+  const renderedPluginName = !isRenderable ? (pluginViewer?.pluginName ?? null) : null;
   const toggleOptions = useMemo(
-    () => availableModes.map((mode) => ({ value: mode, label: MODE_LABELS[mode] })),
-    [availableModes]
+    () =>
+      availableModes.map((mode) => {
+        const pluginName =
+          mode === "edit" ? editPluginName : mode === "rendered" ? renderedPluginName : null;
+        return {
+          value: mode,
+          label: pluginName ? `${MODE_LABELS[mode]} · ${pluginName}` : MODE_LABELS[mode],
+        };
+      }),
+    [availableModes, editPluginName, renderedPluginName]
   );
 
   // A dialog host sizes to its content every frame, so swapping markdown source
@@ -1205,6 +1390,14 @@ export function FilePane({
             />
           </div>
         )}
+        {editorPicker && (
+          <FileEditorPicker
+            label={editorPicker.label}
+            options={editorPicker.options}
+            value={editorPicker.value}
+            onChange={(choice) => void setEditorChoice(editorPicker.choiceKey, choice)}
+          />
+        )}
         <FileViewerToolbar.Path
           path={displayPath}
           icon={getFileTypeIcon(fileName ?? filePath).Icon}
@@ -1548,16 +1741,21 @@ export function FilePane({
             </div>
           )}
 
-          {filePath && viewMode !== "diff" && viewMode !== "edit" && loadState === "loading" && (
-            <div className="p-4 space-y-3">
-              <Skeleton label="Loading file">
-                <SkeletonBone className="h-5 w-1/3" />
-                <SkeletonText lines={12} />
-              </Skeleton>
-            </div>
-          )}
+          {filePath &&
+            !showPluginViewer &&
+            viewMode !== "diff" &&
+            viewMode !== "edit" &&
+            loadState === "loading" && (
+              <div className="p-4 space-y-3">
+                <Skeleton label="Loading file">
+                  <SkeletonBone className="h-5 w-1/3" />
+                  <SkeletonText lines={12} />
+                </Skeleton>
+              </div>
+            )}
 
           {filePath &&
+            !showPluginViewer &&
             viewMode !== "diff" &&
             viewMode !== "edit" &&
             loadState === "error" &&
@@ -1574,22 +1772,25 @@ export function FilePane({
               />
             )}
 
-          {filePath && viewMode !== "diff" && (loadState === "image" || loadState === "svg") && (
-            <FileImagePreview
-              filePath={filePath}
-              rootPath={effectiveRootPath}
-              alt={fileName ?? filePath}
-              sanitizedSvg={loadState === "svg" ? sanitizedSvg : null}
-              cacheBust={String(reloadNonce)}
-              onError={() => {
-                setErrorCode("NOT_FOUND");
-                setLoadState("error");
-              }}
-              maxHeightClassName="max-h-full"
-            />
-          )}
+          {filePath &&
+            !showPluginViewer &&
+            viewMode !== "diff" &&
+            (loadState === "image" || loadState === "svg") && (
+              <FileImagePreview
+                filePath={filePath}
+                rootPath={effectiveRootPath}
+                alt={fileName ?? filePath}
+                sanitizedSvg={loadState === "svg" ? sanitizedSvg : null}
+                cacheBust={String(reloadNonce)}
+                onError={() => {
+                  setErrorCode("NOT_FOUND");
+                  setLoadState("error");
+                }}
+                maxHeightClassName="max-h-full"
+              />
+            )}
 
-          {filePath && viewMode !== "diff" && loadState === "video" && (
+          {filePath && !showPluginViewer && viewMode !== "diff" && loadState === "video" && (
             <FileVideoPreview
               filePath={filePath}
               rootPath={effectiveRootPath}
@@ -1607,7 +1808,7 @@ export function FilePane({
             />
           )}
 
-          {filePath && viewMode !== "diff" && loadState === "audio" && (
+          {filePath && !showPluginViewer && viewMode !== "diff" && loadState === "audio" && (
             <FileAudioPreview
               filePath={filePath}
               rootPath={effectiveRootPath}
@@ -1624,7 +1825,7 @@ export function FilePane({
             />
           )}
 
-          {filePath && viewMode !== "diff" && loadState === "pdf" && (
+          {filePath && !showPluginViewer && viewMode !== "diff" && loadState === "pdf" && (
             <FilePdfPreview
               filePath={filePath}
               rootPath={effectiveRootPath}
@@ -1638,9 +1839,39 @@ export function FilePane({
             />
           )}
 
-          {filePath && viewMode === "edit" && editor && (
+          {filePath && viewMode === "edit" && pluginEditor && (
             <Suspense fallback={<EditorLoadingSkeleton />}>
-              <editor.Component
+              <LazyPluginFileEditorHost
+                key={`${pluginEditor.choiceId}\u0000${filePath}`}
+                panelId={id}
+                projectId={projectId}
+                filePath={filePath}
+                fileName={fileName ?? filePath}
+                rootPath={effectiveRootPath}
+                candidate={pluginEditor}
+                changeTick={changeTick}
+              />
+            </Suspense>
+          )}
+
+          {filePath && showPluginViewer && pluginViewer && (
+            <Suspense fallback={<EditorLoadingSkeleton />}>
+              <LazyPluginFileEditorHost
+                key={`${pluginViewer.choiceId}\u0000${filePath}`}
+                panelId={id}
+                projectId={projectId}
+                filePath={filePath}
+                fileName={fileName ?? filePath}
+                rootPath={effectiveRootPath}
+                candidate={pluginViewer}
+                changeTick={changeTick}
+              />
+            </Suspense>
+          )}
+
+          {filePath && viewMode === "edit" && builtinEditor && (
+            <Suspense fallback={<EditorLoadingSkeleton />}>
+              <builtinEditor.Component
                 panelId={id}
                 filePath={filePath}
                 fileName={fileName ?? filePath}
@@ -1660,6 +1891,7 @@ export function FilePane({
           {filePath &&
             viewMode !== "diff" &&
             viewMode !== "edit" &&
+            !showPluginViewer &&
             loadState === "loaded" &&
             content !== null &&
             (viewMode === "rendered" && isMarkdown ? (

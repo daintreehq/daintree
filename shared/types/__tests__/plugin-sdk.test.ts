@@ -21,6 +21,7 @@ import type {
   PanelViewProps,
   PluginViewHostContext,
   PluginViewHostKind,
+  PluginFileDocument,
   PluginPanelLifecycleEvent,
   PluginPanelLifecyclePhase,
   PanelReloadResult,
@@ -593,8 +594,10 @@ describe("plugin-sdk boundary", () => {
       // view built against it still runs on a host that predates it.
       expectTypeOf(props.hostContext).toEqualTypeOf<PluginViewHostContext | undefined>();
       expectTypeOf<PluginViewHostKind>().toEqualTypeOf<
-        "panel" | "surface" | "settings" | "sidebar"
+        "panel" | "surface" | "settings" | "fileEditor" | "sidebar"
       >();
+      // A file editor view's host-owned document (#13809), a named SDK type.
+      expectTypeOf(props.fileDocument).toEqualTypeOf<PluginFileDocument | undefined>();
     });
 
     it("exposes the panel lifecycle contract as named SDK types", () => {
