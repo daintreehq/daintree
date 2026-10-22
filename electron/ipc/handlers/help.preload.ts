@@ -14,6 +14,7 @@ export const HELP_METHOD_CHANNELS = {
   adoptDetachedSession: "help:adopt-detached-session",
   discardConversation: "help:discard-conversation",
   listPastSessions: "help:list-past-sessions",
+  getStarterPrompts: "help:get-starter-prompts",
   reportPanelOpen: "help:report-panel-open",
   getPinnedActionContext: "help:get-pinned-action-context",
 } as const satisfies Record<string, keyof IpcInvokeMap>;

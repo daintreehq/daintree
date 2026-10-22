@@ -6,6 +6,7 @@ import { getProjectAssistantContentDir } from "../AssistantContentMirror.js";
 import { parse as parseToml } from "smol-toml";
 import {
   loadAssistantUserConfig,
+  loadProjectStarterPrompts,
   readCodexNativeServerNames,
   toCodexMcpServerArgs,
   toJsonMcpServerEntry,
@@ -488,5 +489,57 @@ describe("toCodexMcpServerArgs", () => {
       toCodexMcpServerArgs({ old: { type: "sse", url: "https://x/sse", headers: {} } }, warnings)
     ).toEqual([]);
     expect(warnings[0]).toContain("SSE");
+  });
+});
+
+describe("project starter prompts", () => {
+  it("returns nothing when the project has no file", async () => {
+    expect(await loadProjectStarterPrompts(projectPath)).toEqual([]);
+  });
+
+  it("reads a bare array or a prompts object", async () => {
+    await write(projectDir, "starter-prompts.json", JSON.stringify(["One", "Two"]));
+    expect(await loadProjectStarterPrompts(projectPath)).toEqual(["One", "Two"]);
+
+    await write(projectDir, "starter-prompts.json", JSON.stringify({ prompts: ["Three"] }));
+    expect(await loadProjectStarterPrompts(projectPath)).toEqual(["Three"]);
+  });
+
+  it("cleans entries, drops the unusable ones and keeps four", async () => {
+    await write(
+      projectDir,
+      "starter-prompts.json",
+      JSON.stringify([
+        "  Spaced \n out  ",
+        "Spaced out",
+        "",
+        "   ",
+        42,
+        null,
+        "x".repeat(401),
+        "A",
+        "B",
+        "C",
+        "D",
+      ])
+    );
+    expect(await loadProjectStarterPrompts(projectPath)).toEqual(["Spaced out", "A", "B", "C"]);
+  });
+
+  it("returns nothing for malformed JSON or an unexpected shape", async () => {
+    await write(projectDir, "starter-prompts.json", "{ nope");
+    expect(await loadProjectStarterPrompts(projectPath)).toEqual([]);
+
+    await write(projectDir, "starter-prompts.json", JSON.stringify({ prompts: "no" }));
+    expect(await loadProjectStarterPrompts(projectPath)).toEqual([]);
+  });
+
+  it("ignores a file symlinked outside the project", async () => {
+    const outside = path.join(tmpDir, "outside.json");
+    await fs.writeFile(outside, JSON.stringify(["Leaked"]), "utf-8");
+    await fs.mkdir(projectDir, { recursive: true });
+    await fs.symlink(outside, path.join(projectDir, "starter-prompts.json"));
+
+    expect(await loadProjectStarterPrompts(projectPath)).toEqual([]);
   });
 });

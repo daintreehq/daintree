@@ -430,6 +430,7 @@ export const CHANNEL_LOCALITY = {
   "help:discard-conversation": "host",
   "help:get-folder-path": "host",
   "help:get-pinned-action-context": "host",
+  "help:get-starter-prompts": "host",
   "help:list-past-sessions": "host",
   "help:list-pending-hibernation-slots": "host",
   "help:mark-terminal": "host",

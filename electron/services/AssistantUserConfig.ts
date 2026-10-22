@@ -27,9 +27,13 @@ import {
 export const INSTRUCTIONS_FILE = "instructions.md";
 export const MCP_CONFIG_FILE = "mcp.json";
 export const HOOKS_CONFIG_FILE = "hooks.json";
+export const STARTER_PROMPTS_FILE = "starter-prompts.json";
 
 const MAX_INSTRUCTIONS_BYTES = 64 * 1024;
 const MAX_CONFIG_BYTES = 256 * 1024;
+const MAX_STARTER_PROMPTS = 4;
+const MAX_STARTER_PROMPT_CHARS = 400;
+const MAX_STARTER_FILE_BYTES = 16 * 1024;
 
 // Daintree's own server names. A user entry must never shadow them: the
 // `daintree` entry carries the session bearer and the tier boundary.
@@ -414,6 +418,53 @@ function parseHooksConfig(raw: string, filePath: string): Record<string, unknown
     });
   }
   return parsed.hooks;
+}
+
+// eslint-disable-next-line no-control-regex -- stripping control characters is the point
+const CONTROL_CHARS = /[\u0000-\u001f\u007f]/g;
+
+/**
+ * Starter prompts a project offers on the assistant's empty state. They are
+ * text from the repository that the user sends only by clicking, so a bad file
+ * never blocks a launch: anything missing, unreadable or malformed yields none
+ * and the caller shows the stock prompts. Entries are cleaned, not rejected:
+ * a single line each, trimmed, de-duplicated, over-long ones dropped, four at most.
+ */
+export async function loadProjectStarterPrompts(projectPath: string): Promise<string[]> {
+  let raw: string | null;
+  try {
+    raw = await readBoundedFile(
+      path.join(getProjectAssistantContentDir(projectPath), STARTER_PROMPTS_FILE),
+      MAX_STARTER_FILE_BYTES,
+      projectPath
+    );
+  } catch (err) {
+    console.warn(`[assistant] Ignoring ${STARTER_PROMPTS_FILE}:`, err);
+    return [];
+  }
+  if (raw === null) return [];
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    console.warn(`[assistant] Ignoring ${STARTER_PROMPTS_FILE}: not valid JSON`);
+    return [];
+  }
+  const list = Array.isArray(parsed)
+    ? parsed
+    : isPlainObject(parsed) && Array.isArray(parsed.prompts)
+      ? parsed.prompts
+      : [];
+  const prompts: string[] = [];
+  for (const entry of list) {
+    if (typeof entry !== "string") continue;
+    const prompt = entry.replace(CONTROL_CHARS, " ").replace(/ {2,}/g, " ").trim();
+    if (!prompt || prompt.length > MAX_STARTER_PROMPT_CHARS || !isWellFormed(prompt)) continue;
+    if (prompts.includes(prompt)) continue;
+    prompts.push(prompt);
+    if (prompts.length === MAX_STARTER_PROMPTS) break;
+  }
+  return prompts;
 }
 
 export async function loadAssistantUserConfig(

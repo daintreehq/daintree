@@ -587,6 +587,28 @@ async function handleListPastSessions(
   });
 }
 
+/**
+ * The project's own starter prompts for the assistant's empty state. The path
+ * comes from main's record of the view's workspace, never the renderer, and a
+ * view may only ask about the project it is bound to.
+ */
+async function handleGetStarterPrompts(
+  ctx: import("../types.js").IpcContext,
+  projectId: string
+): Promise<string[]> {
+  if (typeof projectId !== "string" || !projectId) return [];
+  if (!ctx.projectId || ctx.projectId !== projectId) return [];
+  const [{ loadProjectStarterPrompts }, { projectStore }, { scratchStore }] = await Promise.all([
+    import("../../services/AssistantUserConfig.js"),
+    import("../../services/ProjectStore.js"),
+    import("../../services/ScratchStore.js"),
+  ]);
+  const projectPath =
+    projectStore.getProjectById(projectId)?.path ?? scratchStore.getScratchById(projectId)?.path;
+  if (!projectPath) return [];
+  return loadProjectStarterPrompts(projectPath);
+}
+
 async function handleTakePendingHibernation(
   ctx: import("../types.js").IpcContext,
   projectId: string,
@@ -757,6 +779,9 @@ export const helpNamespace = defineIpcNamespace({
       withContext: true,
     }),
     listPastSessions: op(HELP_METHOD_CHANNELS.listPastSessions, handleListPastSessions, {
+      withContext: true,
+    }),
+    getStarterPrompts: op(HELP_METHOD_CHANNELS.getStarterPrompts, handleGetStarterPrompts, {
       withContext: true,
     }),
     reportPanelOpen: op(HELP_METHOD_CHANNELS.reportPanelOpen, handleReportPanelOpen, {

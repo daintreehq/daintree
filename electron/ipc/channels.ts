@@ -636,6 +636,7 @@ export const CHANNELS = {
   HELP_ADOPT_DETACHED_SESSION: "help:adopt-detached-session",
   HELP_DISCARD_CONVERSATION: "help:discard-conversation",
   HELP_LIST_PAST_SESSIONS: "help:list-past-sessions",
+  HELP_GET_STARTER_PROMPTS: "help:get-starter-prompts",
   HELP_REPORT_PANEL_OPEN: "help:report-panel-open",
   HELP_GET_PINNED_ACTION_CONTEXT: "help:get-pinned-action-context",
 
