@@ -1,0 +1,211 @@
+import type {
+  HostSourceResolver,
+  ResolveRequest,
+  ResolveResponse,
+  ResolverSourceAccess,
+  RevisionedSource,
+  RevisionedSourceMap,
+  SourceAccessResult,
+} from "../../../../shared/elementPicker/resolver.js";
+import type { ResolutionResult } from "../../../../shared/elementPicker/resolution.js";
+import type {
+  ElementPickerFramework,
+  SourceCandidate,
+} from "../../../../shared/elementPicker/source.js";
+import type { SelectionObservation } from "../../../../shared/elementPicker/observation.js";
+import { formatErrorMessage } from "../../../../shared/utils/errorMessage.js";
+import type { HostInbound, HostOutbound } from "../hostProtocol.js";
+import { observationCandidates, unavailableResult } from "../outcomes.js";
+
+/**
+ * The host process's dispatcher, apart from the process itself so it can be
+ * driven over any channel. It has no file or network access of its own: a
+ * resolver's every read is a message to main, answered with bytes.
+ */
+
+/**
+ * One explicit `import()` per framework, so loading a request's resolver loads
+ * that resolver and nothing else. Never a barrel, and never a specifier built
+ * from the request.
+ */
+export type ResolverLoaders = Partial<
+  Record<ElementPickerFramework, () => Promise<HostSourceResolver>>
+>;
+
+export interface HostRuntime {
+  handle(message: HostInbound): void;
+}
+
+interface RuntimeJob {
+  readonly controller: AbortController;
+  readonly pending: Map<number, (result: SourceAccessResult<unknown>) => void>;
+}
+
+/** Bounded: the wire refuses a longer one. */
+function errorMessage(error: unknown): string {
+  return formatErrorMessage(error, "resolver failed").slice(0, 1024);
+}
+
+/** The request as one framework's resolver sees it: only the candidates it owns. */
+function requestFor(request: ResolveRequest, framework: ElementPickerFramework): ResolveRequest {
+  const owns = (candidate: SourceCandidate) => candidate.framework === framework;
+  const observations: SelectionObservation[] = [];
+  for (const observation of request.observations) {
+    if (!observationCandidates(observation).some(owns)) continue;
+    observations.push({
+      ...observation,
+      sourceCandidates: observation.sourceCandidates.filter(owns),
+      componentChain: {
+        ...observation.componentChain,
+        components: observation.componentChain.components.map((record) => ({
+          ...record,
+          sourceCandidates: record.sourceCandidates.filter(owns),
+        })),
+      },
+    });
+  }
+  return { ...request, observations };
+}
+
+export function createHostRuntime(
+  post: (message: HostOutbound) => void,
+  loaders: ResolverLoaders
+): HostRuntime {
+  const jobs = new Map<number, RuntimeJob>();
+  const loaded = new Map<ElementPickerFramework, Promise<HostSourceResolver>>();
+  let nextAccessId = 1;
+
+  function load(framework: ElementPickerFramework): Promise<HostSourceResolver> | null {
+    const loader = loaders[framework];
+    if (!loader) return null;
+    let resolver = loaded.get(framework);
+    if (!resolver) {
+      resolver = loader().catch((error: unknown) => {
+        // A failed import is not cached: a transient failure must not disable
+        // the framework for the rest of this process.
+        loaded.delete(framework);
+        throw error;
+      });
+      loaded.set(framework, resolver);
+    }
+    return resolver;
+  }
+
+  function access(jobId: number, job: RuntimeJob): ResolverSourceAccess {
+    const ask = <T>(
+      message: (accessId: number) => HostOutbound,
+      signal: AbortSignal
+    ): Promise<SourceAccessResult<T>> => {
+      if (signal.aborted || job.controller.signal.aborted) {
+        return Promise.resolve({ ok: false, reason: "cancelled" });
+      }
+      const accessId = nextAccessId++;
+      return new Promise((resolve) => {
+        const settle = (result: SourceAccessResult<unknown>) => {
+          if (!job.pending.delete(accessId)) return;
+          signal.removeEventListener("abort", onAbort);
+          resolve(result as SourceAccessResult<T>);
+        };
+        const onAbort = () => settle({ ok: false, reason: "cancelled" });
+        job.pending.set(accessId, settle);
+        signal.addEventListener("abort", onAbort, { once: true });
+        post(message(accessId));
+      });
+    };
+    return {
+      readSource: (file, signal) =>
+        ask<RevisionedSource>(
+          (accessId) => ({ type: "read-source", jobId, accessId, file }),
+          signal
+        ),
+      fetchSourceMap: (generatedUrl, signal) =>
+        ask<RevisionedSourceMap>(
+          (accessId) => ({ type: "fetch-source-map", jobId, accessId, generatedUrl }),
+          signal
+        ),
+    };
+  }
+
+  async function run(jobId: number, job: RuntimeJob, request: ResolveRequest): Promise<void> {
+    const { signal } = job.controller;
+    const frameworks = [
+      ...new Set(
+        request.observations.flatMap((observation) =>
+          observationCandidates(observation).map((candidate) => candidate.framework)
+        )
+      ),
+    ];
+    const sourceAccess = access(jobId, job);
+    const answers = new Map<ElementPickerFramework, ResolveResponse | "cancelled" | null>();
+    await Promise.all(
+      frameworks.map(async (framework) => {
+        const resolver = load(framework);
+        if (!resolver) {
+          answers.set(framework, null);
+          return;
+        }
+        try {
+          answers.set(
+            framework,
+            await (await resolver).resolve(requestFor(request, framework), sourceAccess, signal)
+          );
+        } catch (error) {
+          if (!signal.aborted) throw error;
+          answers.set(framework, "cancelled");
+        }
+      })
+    );
+
+    const response: ResolveResponse = {
+      requestId: request.requestId,
+      documentEpoch: request.documentEpoch,
+      outcomes: request.observations.map((observation) => ({
+        elementId: observation.elementId,
+        results: observationCandidates(observation).map((candidate): ResolutionResult => {
+          const answer = answers.get(candidate.framework);
+          if (answer === null || answer === undefined)
+            return unavailableResult(candidate, "unsupported");
+          if (answer === "cancelled") return unavailableResult(candidate, "cancelled");
+          const found = answer.outcomes
+            .find((outcome) => outcome.elementId === observation.elementId)
+            ?.results.find((result) => result.candidateId === candidate.candidateId);
+          return (
+            found ?? unavailableResult(candidate, signal.aborted ? "cancelled" : "unsupported")
+          );
+        }),
+      })),
+    };
+    post({ type: "resolved", jobId, response });
+  }
+
+  return {
+    handle(message) {
+      switch (message.type) {
+        case "resolve": {
+          if (jobs.has(message.jobId)) return;
+          const job: RuntimeJob = { controller: new AbortController(), pending: new Map() };
+          jobs.set(message.jobId, job);
+          void run(message.jobId, job, message.request)
+            .catch((error: unknown) => {
+              // The other frameworks' resolvers are answering a job that has failed.
+              job.controller.abort();
+              post({ type: "failed", jobId: message.jobId, message: errorMessage(error) });
+            })
+            .finally(() => {
+              jobs.delete(message.jobId);
+              for (const settle of job.pending.values()) settle({ ok: false, reason: "cancelled" });
+            });
+          return;
+        }
+        case "cancel":
+          jobs.get(message.jobId)?.controller.abort();
+          return;
+        case "access-result":
+          jobs.get(message.jobId)?.pending.get(message.accessId)?.(message.result);
+          return;
+        case "dispose":
+          return;
+      }
+    },
+  };
+}

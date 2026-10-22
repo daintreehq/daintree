@@ -737,6 +737,13 @@ async function runShutdownChain(deps: ShutdownDeps): Promise<ShutdownOutcome> {
           .catch((err) => {
             console.warn("[MAIN] Plugin managed-process shutdown failed:", err);
           }),
+        // Retire the Element Picker source host (#13871) if anything started
+        // it. Importing the module creates nothing, so this is free otherwise.
+        import("../services/elementPicker/index.js")
+          .then(({ shutdownElementPickerHost }) => shutdownElementPickerHost())
+          .catch((err) => {
+            console.warn("[MAIN] Element Picker host shutdown failed:", err);
+          }),
         import("../services/IdleBackgroundAutoCloseService.js")
           .then(({ getIdleBackgroundAutoCloseService }) =>
             getIdleBackgroundAutoCloseService().stop()
