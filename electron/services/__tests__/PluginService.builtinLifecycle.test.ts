@@ -214,6 +214,10 @@ vi.mock("../plugin/PluginDevWorkerMainBridge.js", () => ({
 
 import { PluginService } from "../PluginService.js";
 import { CHANNELS } from "../../ipc/channels.js";
+import {
+  clearPluginHostedViewRegistry,
+  getPluginHostedViews,
+} from "../plugin/PluginHostedViewRegistry.js";
 
 let tmpDir: string;
 
@@ -866,6 +870,27 @@ describe("contributes.fileEditors is built-in only (#12323)", () => {
     // The plugin never entered the registry; the provenance record carries the
     // reason so the plugin manager can show it.
     expect(record).toBeUndefined();
+  });
+
+  it("loads an installed plugin's view-backed file editor and serves it with its view (#13809)", async () => {
+    const userRoot = path.join(tmpDir, "user");
+    await writePluginAt(userRoot, "acme-csv", {
+      name: "acme.csv",
+      version: "1.0.0",
+      contributes: {
+        views: [{ id: "grid", componentPath: "dist/grid.js", location: "fileEditor" }],
+        fileEditors: [{ id: "csv", view: "grid", mode: "view", extensions: ["csv"] }],
+      },
+    });
+    clearPluginHostedViewRegistry();
+    const service = new PluginService(userRoot, "0.0.0", { builtinPluginsRoot: builtinDir });
+    await service.initialize();
+    expect(service.hasPlugin("acme.csv")).toBe(true);
+    const view = getPluginHostedViews().find((entry) => entry.pluginId === "acme.csv");
+    expect(view).toMatchObject({ viewId: "grid", location: "fileEditor" });
+    expect(view?.fileEditors).toEqual([
+      { id: "csv", mode: "view", extensions: ["csv"], paths: [], maxBytes: 2 * 1024 * 1024 },
+    ]);
   });
 
   it("still loads an installed plugin whose fileEditors is empty", async () => {

@@ -291,8 +291,24 @@ vi.mock("@/components/Html/HtmlViewer", () => ({
 const fileEditorState = vi.hoisted(() => ({
   resolved: null as null | { maxBytes: number },
   renderedProps: [] as Array<Record<string, unknown>>,
+  // View-backed plugin editors on offer, by mode (#13809).
+  plugin: { edit: [], view: [] } as Record<"edit" | "view", unknown[]>,
+  pluginHostProps: [] as Array<Record<string, unknown>>,
 }));
-vi.mock("@/registry/fileEditorRegistry", () => ({
+vi.mock("../PluginFileEditorHost", () => ({
+  default: (props: Record<string, unknown>) => {
+    fileEditorState.pluginHostProps.push(props);
+    return <div data-testid="plugin-file-editor-mock" />;
+  },
+}));
+vi.mock("@/registry/fileEditorRegistry", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/registry/fileEditorRegistry")>()),
+  usePluginFileEditorCandidates: (
+    _filePath: string | undefined,
+    _rootPath: string,
+    mode: "edit" | "view",
+    enabled = true
+  ) => (enabled ? fileEditorState.plugin[mode] : []),
   resolveFileEditor: () => null,
   useResolvedFileEditor: () => null,
   useFileEditor: () =>
@@ -315,6 +331,7 @@ vi.mock("@/registry/fileEditorRegistry", () => ({
 
 import { FilePane } from "../FilePane";
 import { useFileDocumentStore } from "@/store/fileDocumentStore";
+import { useFileEditorChoicesStore } from "@/store/fileEditorChoicesStore";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { FILE_READ_ERROR_MESSAGES } from "@/components/FileViewer/fileReadErrors";
 import { revealCopy } from "@/components/FileViewer/revealCopy";
@@ -3818,6 +3835,106 @@ describe("FilePane edit mode (#12323)", () => {
     expect(screen.getByTestId("file-pane-dirty").getAttribute("aria-label")).toBe(
       "Unsaved changes, file changed on disk"
     );
+  });
+
+  describe("installed and project plugin editors (#13809)", () => {
+    function candidate(pluginId: string, pluginName: string, mode: "edit" | "view") {
+      return {
+        choiceId: `${pluginId}/main`,
+        pluginId,
+        pluginName,
+        editor: { id: "main", mode, extensions: ["md", "csv"], paths: [], maxBytes: 1024 },
+        view: {
+          id: `plugin-view:${pluginId}/editor`,
+          pluginId,
+          viewId: "editor",
+          location: "fileEditor",
+          name: `${pluginName} fileEditor`,
+          componentPath: `plugin://${pluginId}/editor.js`,
+        },
+      };
+    }
+
+    function radioLabels(): string[] {
+      return screen.queryAllByRole("radio").map((b) => b.textContent ?? "");
+    }
+
+    beforeEach(() => {
+      fileEditorState.pluginHostProps = [];
+      useFileEditorChoicesStore.setState({ choices: {}, loaded: true });
+    });
+
+    afterEach(() => {
+      fileEditorState.plugin = { edit: [], view: [] };
+      useFileEditorChoicesStore.setState({ choices: {}, loaded: false });
+    });
+
+    it("keeps the built-in editor by default and offers the plugin through Edit with…", async () => {
+      seedWorktree();
+      fileEditorState.plugin.edit = [candidate("acme.records", "Acme records", "edit")];
+      await renderPane({ fileViewMode: "edit" });
+      expect(radioLabels()).toEqual(["Source", "Rendered", "Edit"]);
+      expect(await screen.findByTestId("file-editor-mock")).toBeTruthy();
+      expect(screen.queryByTestId("plugin-file-editor-mock")).toBeNull();
+      expect(screen.getByTestId("file-editor-picker").textContent).toContain("Edit with…");
+    });
+
+    it("opens the remembered plugin editor, labelled with the plugin's name", async () => {
+      seedWorktree();
+      fileEditorState.plugin.edit = [candidate("acme.records", "Acme records", "edit")];
+      useFileEditorChoicesStore.setState({
+        choices: { "edit:md": "acme.records/main" },
+        loaded: true,
+      });
+      await renderPane({ fileViewMode: "edit" });
+      expect(radioLabels()).toEqual(["Source", "Rendered", "Edit · Acme records"]);
+      expect(await screen.findByTestId("plugin-file-editor-mock")).toBeTruthy();
+      expect(screen.queryByTestId("file-editor-mock")).toBeNull();
+      expect(fileEditorState.pluginHostProps.at(-1)).toMatchObject({
+        panelId: "file-1",
+        filePath: "/repo/docs/spec.md",
+        rootPath: WORKTREE_PATH,
+      });
+    });
+
+    it("lets a plugin viewer fill Rendered for a type the host can't render", async () => {
+      seedWorktree();
+      fileEditorState.resolved = null;
+      fileEditorState.plugin.view = [candidate("acme.csv", "Acme CSV", "view")];
+      await renderPane({
+        filePath: "/repo/data/table.csv",
+        fileViewMode: "rendered",
+        content: "a,b\n",
+      });
+      expect(radioLabels()).toEqual(["Source", "Rendered · Acme CSV"]);
+      expect(await screen.findByTestId("plugin-file-editor-mock")).toBeTruthy();
+      expect(screen.queryByTestId("file-editor-picker")).toBeNull();
+    });
+
+    it("never offers plugin editors in the read-only dialog", async () => {
+      seedWorktree();
+      fileEditorState.resolved = null;
+      fileEditorState.plugin.edit = [candidate("acme.records", "Acme records", "edit")];
+      await renderPane({ location: "dialog" });
+      expect(radioLabels()).toEqual(["Source", "Rendered"]);
+    });
+
+    it("does not open a plugin editor before the remembered answers have loaded", async () => {
+      seedWorktree();
+      fileEditorState.resolved = null;
+      fileEditorState.plugin.edit = [candidate("acme.records", "Acme records", "edit")];
+      useFileEditorChoicesStore.setState({ choices: {}, loaded: false });
+      // Keep init from flipping `loaded` during the render under test.
+      const init = useFileEditorChoicesStore.getState().init;
+      useFileEditorChoicesStore.setState({ init: () => {} });
+      try {
+        await renderPane({ fileViewMode: "edit" });
+        expect(radioLabels()).toEqual(["Source", "Rendered"]);
+        expect(screen.queryByTestId("plugin-file-editor-mock")).toBeNull();
+      } finally {
+        useFileEditorChoicesStore.setState({ init });
+      }
+    });
   });
 });
 

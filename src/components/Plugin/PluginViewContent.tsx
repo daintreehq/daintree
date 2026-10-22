@@ -17,6 +17,7 @@ import type {
   PanelMenuItemContribution,
   PanelReloadResult,
   PanelViewProps,
+  PluginFileDocument,
   PluginPanelToolbarItemState,
   PluginSettingsViewContext,
   PluginViewHostContext,
@@ -125,6 +126,7 @@ const HOST_CONTEXTS: Readonly<Record<PluginViewHostKind, PluginViewHostContext>>
   panel: Object.freeze({ kind: "panel" }),
   surface: Object.freeze({ kind: "surface" }),
   settings: Object.freeze({ kind: "settings" }),
+  fileEditor: Object.freeze({ kind: "fileEditor" }),
   sidebar: Object.freeze({ kind: "sidebar" }),
 };
 
@@ -232,6 +234,8 @@ export interface PluginViewContentProps {
   setPanelTitle?: (title: string) => void;
   /** Forwarded as `PanelViewProps.settingsContext`, for a settings view's host only. */
   settingsContext?: PluginSettingsViewContext;
+  /** Forwarded as `PanelViewProps.fileDocument`, for a file editor's host only (#13809). */
+  fileDocument?: PluginFileDocument;
   /**
    * Forwarded as `PanelViewProps.hostContext`. Panel hosts leave it unset and
    * get `"panel"`; a host outside the grid passes its own kind.
@@ -1061,6 +1065,7 @@ export function makePluginViewContent(
     offerToolbar = false,
     setPanelTitle,
     settingsContext,
+    fileDocument,
     hostContext = HOST_CONTEXTS.panel,
   }: PluginViewContentProps) {
     // Resolved before any attempt is built so the first attempt already takes
@@ -2022,6 +2027,7 @@ export function makePluginViewContent(
                           worktreeId={worktreeId}
                           styleRootAttributes={styleRootProps}
                           {...(settingsContext ? { settingsContext } : {})}
+                          {...(fileDocument ? { fileDocument } : {})}
                           hostContext={hostContext}
                         />
                       </PluginKitViewHostContext.Provider>

@@ -5,6 +5,7 @@ import {
   type PanelKindConfig,
 } from "@shared/config/panelKindRegistry";
 import type {
+  PluginFileDocument,
   PluginHostedViewDescriptor,
   PluginSettingsViewContext,
   PluginViewHostKind,
@@ -187,6 +188,7 @@ export function PluginHostedView({
   settingsContext,
   onRequestClose,
   requestCloseLabel,
+  fileDocument,
   className,
   testId,
 }: {
@@ -201,6 +203,7 @@ export function PluginHostedView({
   /** The failure fallback's way out, beside "Try again"; omitted, there is none. */
   onRequestClose?: () => void;
   requestCloseLabel?: string;
+  fileDocument?: PluginFileDocument;
   className?: string;
   testId?: string;
 }) {
@@ -218,6 +221,7 @@ export function PluginHostedView({
         {...(settingsContext ? { settingsContext } : {})}
         {...(onRequestClose ? { onRequestClose } : {})}
         {...(requestCloseLabel !== undefined ? { requestCloseLabel } : {})}
+        {...(fileDocument ? { fileDocument } : {})}
       />
     </div>
   );

@@ -339,6 +339,14 @@ export interface GeneratedElectronAPI {
       ...args: IpcInvokeMap["file-browser:stat-paths"]["args"]
     ): Promise<IpcInvokeMap["file-browser:stat-paths"]["result"]>;
   };
+  fileDocument: {
+    read(
+      ...args: IpcInvokeMap["file-document:read"]["args"]
+    ): Promise<IpcInvokeMap["file-document:read"]["result"]>;
+    save(
+      ...args: IpcInvokeMap["file-document:save"]["args"]
+    ): Promise<IpcInvokeMap["file-document:save"]["result"]>;
+  };
   files: {
     trash(
       ...args: IpcInvokeMap["files:trash"]["args"]
@@ -835,6 +843,9 @@ export interface GeneratedElectronAPI {
     getDiagnosticsSnapshot(
       ...args: IpcInvokeMap["plugin:get-diagnostics-snapshot"]["args"]
     ): Promise<IpcInvokeMap["plugin:get-diagnostics-snapshot"]["result"]>;
+    getFileEditorChoices(
+      ...args: IpcInvokeMap["plugin:file-editor-choices-get"]["args"]
+    ): Promise<IpcInvokeMap["plugin:file-editor-choices-get"]["result"]>;
     getForgeProviders(
       ...args: IpcInvokeMap["plugin:forge-providers-get"]["args"]
     ): Promise<IpcInvokeMap["plugin:forge-providers-get"]["result"]>;
@@ -943,6 +954,9 @@ export interface GeneratedElectronAPI {
     setEnabled(
       ...args: IpcInvokeMap["plugin:set-enabled"]["args"]
     ): Promise<IpcInvokeMap["plugin:set-enabled"]["result"]>;
+    setFileEditorChoice(
+      ...args: IpcInvokeMap["plugin:file-editor-choice-set"]["args"]
+    ): Promise<IpcInvokeMap["plugin:file-editor-choice-set"]["result"]>;
     setPluginVisibilityDefault(
       ...args: IpcInvokeMap["plugin:visibility-default-set"]["args"]
     ): Promise<IpcInvokeMap["plugin:visibility-default-set"]["result"]>;

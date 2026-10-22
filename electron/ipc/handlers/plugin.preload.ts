@@ -27,6 +27,8 @@ export const PLUGIN_METHOD_CHANNELS = {
   getProjectSurfaces: "plugin:project-surfaces-get",
   setProjectSurfaceChoice: "plugin:project-surface-choice-set",
   setProjectSurfaceChoices: "plugin:project-surface-choices-set",
+  getFileEditorChoices: "plugin:file-editor-choices-get",
+  setFileEditorChoice: "plugin:file-editor-choice-set",
   getProjectPlugins: "plugin:project-list",
   setProjectPluginTrust: "plugin:project-set-trust",
   activateStagedProjectPlugin: "plugin:project-activate-staged",

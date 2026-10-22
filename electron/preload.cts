@@ -101,6 +101,7 @@ import { buildConnectivityPreloadBindings } from "./ipc/handlers/connectivity.pr
 import { buildProjectPresencePreloadBindings } from "./ipc/handlers/projectPresence.preload.js";
 import { buildProjectPresentationPreloadBindings } from "./ipc/handlers/projectPresentation.preload.js";
 import { buildDiffMediaPreloadBindings } from "./ipc/handlers/diffMedia.preload.js";
+import { buildFileDocumentPreloadBindings } from "./ipc/handlers/fileDocument.preload.js";
 import { buildFileBrowserPreloadBindings } from "./ipc/handlers/fileBrowser.preload.js";
 import { buildFileWatchPreloadBindings } from "./ipc/handlers/fileWatch.preload.js";
 import { buildSessionRestorePreloadBindings } from "./ipc/handlers/sessionRestore.preload.js";
@@ -1747,6 +1748,9 @@ function buildElectronApi(): ElectronAPI {
 
     // Diff media API — HEAD vs working-tree image versions for image compare
     diffMedia: buildDiffMediaPreloadBindings(_unwrappingInvoke),
+
+    // Host-owned document for view-backed file editors (#13809).
+    fileDocument: buildFileDocumentPreloadBindings(_unwrappingInvoke),
 
     // File browser API — lazy directory listings for the read-only browser panel
     fileBrowser: buildFileBrowserPreloadBindings(_unwrappingInvoke),

@@ -1,6 +1,19 @@
-import type { ComponentType } from "react";
+import { useEffect, useMemo, type ComponentType } from "react";
+import {
+  DEFAULT_FILE_EDITOR_MAX_BYTES,
+  HOST_FILE_EDITOR_CHOICE,
+  fileEditorChoiceId,
+  type FileEditorChoice,
+  type FileEditorChoiceKey,
+  type FileEditorChoices,
+  type FileEditorMode,
+  type HostedFileEditorDescriptor,
+  type PluginHostedViewDescriptor,
+} from "@shared/types/plugin";
 import { getBuiltinView, useBuiltinView } from "@/registry/builtinRendererRegistry";
 import { usePluginRuntimeStore } from "@/store/pluginRuntimeStore";
+import { usePluginHostedViewsStore } from "@/store/pluginHostedViewsStore";
+import { matchesFileEditorGlob, relativeFilePath } from "@/registry/fileEditorGlob";
 
 /**
  * Renderer-side registry for `contributes.fileEditors` (#12323): which
@@ -55,8 +68,7 @@ export interface FileEditorViewProps {
   onOpenExternalEditor: () => void;
 }
 
-/** Default byte ceiling when a contribution omits `maxBytes`. */
-export const DEFAULT_FILE_EDITOR_MAX_BYTES = 2 * 1024 * 1024;
+export { DEFAULT_FILE_EDITOR_MAX_BYTES };
 
 const REGISTRY: FileEditorRegistration[] = [];
 
@@ -192,6 +204,132 @@ export function useFileEditor(filePath: string | undefined): ResolvedFileEditor 
   if (!registration || !Component) return null;
   return { registration, Component };
 }
+
+/**
+ * A view-backed file editor from an installed or project plugin (#13809),
+ * resolved from the project view's hosted-view snapshot — which main has
+ * already narrowed to plugins this project may see, so a project plugin's
+ * editors never reach another project.
+ */
+export interface PluginFileEditorCandidate {
+  /** The "Edit with…" answer that picks this editor. */
+  choiceId: FileEditorChoice;
+  /** The plugin's runtime instance key. */
+  pluginId: string;
+  /** The plugin's display name, the mode's label. */
+  pluginName: string;
+  editor: HostedFileEditorDescriptor;
+  /** The `location: "fileEditor"` view the editor mounts. */
+  view: PluginHostedViewDescriptor;
+}
+
+/**
+ * The "Edit with…" key a file's answer is remembered under: the mode and the
+ * lower-case extension, or `*` for a file without one.
+ */
+export function fileEditorChoiceKey(mode: FileEditorMode, filePath: string): FileEditorChoiceKey {
+  return `${mode}:${extensionOf(filePath) ?? "*"}`;
+}
+
+function editorMatches(
+  editor: HostedFileEditorDescriptor,
+  ext: string | null,
+  relative: string | null
+): boolean {
+  if (ext !== null && editor.extensions.includes(ext)) return true;
+  return (
+    relative !== null && editor.paths.some((pattern) => matchesFileEditorGlob(relative, pattern))
+  );
+}
+
+/**
+ * Every plugin editor of `mode` claiming the file, in a deterministic order —
+ * plugin instance key, then editor id — so load order never decides which one
+ * opens. Pure over its inputs.
+ */
+export function pluginFileEditorCandidates(
+  views: readonly PluginHostedViewDescriptor[] | null,
+  options: {
+    filePath: string;
+    rootPath: string;
+    mode: FileEditorMode;
+    disabled: ReadonlySet<string>;
+    displayNameOf: (pluginId: string) => string;
+  }
+): PluginFileEditorCandidate[] {
+  if (views === null) return [];
+  const ext = extensionOf(options.filePath);
+  const relative = relativeFilePath(options.rootPath, options.filePath);
+  const out: PluginFileEditorCandidate[] = [];
+  for (const view of views) {
+    if (view.location !== "fileEditor" || options.disabled.has(view.pluginId)) continue;
+    for (const editor of view.fileEditors ?? []) {
+      if (editor.mode !== options.mode || !editorMatches(editor, ext, relative)) continue;
+      out.push({
+        choiceId: fileEditorChoiceId(view.pluginId, editor.id),
+        pluginId: view.pluginId,
+        pluginName: options.displayNameOf(view.pluginId),
+        editor,
+        view,
+      });
+    }
+  }
+  return out.sort((a, b) =>
+    a.pluginId === b.pluginId
+      ? a.editor.id.localeCompare(b.editor.id)
+      : a.pluginId.localeCompare(b.pluginId)
+  );
+}
+
+/**
+ * {@link pluginFileEditorCandidates} as a subscribed read against this project
+ * view's hosted-view snapshot and the plugin runtime mirror.
+ */
+export function usePluginFileEditorCandidates(
+  filePath: string | undefined,
+  rootPath: string,
+  mode: FileEditorMode,
+  enabled = true
+): PluginFileEditorCandidate[] {
+  const initHosted = usePluginHostedViewsStore((s) => s.init);
+  useEffect(() => {
+    initHosted();
+  }, [initHosted]);
+  const views = usePluginHostedViewsStore((s) => s.views);
+  const meta = usePluginRuntimeStore((s) => s.pluginMetaById);
+  const disabled = usePluginRuntimeStore((s) => s.disabledPluginIds);
+  return useMemo(
+    () =>
+      !enabled || filePath === undefined
+        ? []
+        : pluginFileEditorCandidates(views, {
+            filePath,
+            rootPath,
+            mode,
+            disabled,
+            displayNameOf: (pluginId) => meta.get(pluginId)?.displayName ?? pluginId,
+          }),
+    [enabled, filePath, rootPath, mode, views, meta, disabled]
+  );
+}
+
+/**
+ * Which option a mode opens with. The user's remembered answer wins whenever
+ * it names an option still on offer; otherwise the first option, which is the
+ * host's own when the host has one — an installed or project editor adds a
+ * choice, it never displaces the built-in editor or renderer by itself.
+ */
+export function pickFileEditorChoice(
+  options: readonly FileEditorChoice[],
+  choices: FileEditorChoices,
+  key: FileEditorChoiceKey
+): FileEditorChoice | null {
+  const remembered = choices[key];
+  if (remembered !== undefined && options.includes(remembered)) return remembered;
+  return options[0] ?? null;
+}
+
+export { HOST_FILE_EDITOR_CHOICE };
 
 export function __resetFileEditorRegistryForTests(): void {
   REGISTRY.length = 0;

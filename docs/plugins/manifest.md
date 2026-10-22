@@ -117,7 +117,8 @@ Daintree reads the manifest eagerly at startup. Contribution points declared her
     "forgeProviders": [/* ... */],
     "fileDecorationProviders": [/* ... */],
     "surfaces": {/* project-scope only; see "contributes.surfaces" below */},
-    // Built-in plugins only: "fileEditors", "previewTools", "guestAdapters".
+    "fileEditors": [/* view-backed; a "slot" is built-in only */],
+    // Built-in plugins only: "previewTools", "guestAdapters".
   },
 }
 ```
@@ -238,7 +239,7 @@ The manifest gate enforces it in both directions, against the root the manifest 
 
 This is a guardrail against accidental promotion, not a security control — the trust decision is the project folder, not this field. What it prevents is a plugin loading under assumptions its author never made: a project plugin copied into the user directory would go app-wide with project-shaped expectations about its settings tier and its bound project, and a user plugin dropped into `.daintree/plugins/` would load with none of the project-local guarantees. Neither failure is visible at runtime, so both are refused at the gate.
 
-Declaring `"scope": "project"` also changes what the manifest may contribute. `contributes.surfaces` and `"project"` [databases](./contribution-points.md#databases--shipped) become available, and nine contribution groups become unavailable — `menuItems`, `agents`, `skills`, `fileDecorationProviders`, `fileEditors`, `processTools`, `mcpServers`, `tours` and `forgeProviders`, each rejected with an error naming the structural reason it cannot yet be narrowed to one project. `previewTools` and `guestAdapters` are refused too, as they are for every plugin that is not built in. `agentMcp` stays available, because its credentials are bound to one project. See [Project-local plugins](./project-local.md) and the per-point status in [Contribution points](./contribution-points.md).
+Declaring `"scope": "project"` also changes what the manifest may contribute. `contributes.surfaces` and `"project"` [databases](./contribution-points.md#databases--shipped) become available, and eight contribution groups become unavailable — `menuItems`, `agents`, `skills`, `fileDecorationProviders`, `processTools`, `mcpServers`, `tours` and `forgeProviders`, each rejected with an error naming the structural reason it cannot yet be narrowed to one project. `previewTools`, `guestAdapters` and a slot-backed `fileEditors` entry are refused too, as they are for every plugin that is not built in; a view-backed file editor is available, and may also match project-relative `paths`. `agentMcp` stays available, because its credentials are bound to one project. See [Project-local plugins](./project-local.md) and the per-point status in [Contribution points](./contribution-points.md).
 
 ### `remote`
 
@@ -496,7 +497,6 @@ Run `npx daintree-plugin validate` in your plugin directory to check the manifes
 
 A few rules are only known when the plugin loads, so a manifest that passes the schema and `daintree-plugin validate` can still fail there:
 
-- **`fileEditors` outside a built-in.** The schema accepts the group for an installed plugin; the load refuses the whole plugin and records a load error.
 - **A command id that collides with a built-in action.** The colliding command is not registered and the plugin records a load error, as described under [Commands](./contribution-points.md#commands--shipped).
 
 ## Unknown fields

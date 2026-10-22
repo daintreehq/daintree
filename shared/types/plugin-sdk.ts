@@ -280,11 +280,18 @@ export type {
   FileDecorationContribution,
 } from "./forge.js";
 
-// ── File editor contract (#12323) ───────────────────────────────────
-// Manifest shape only: the editor itself is a built-in renderer view, so no
-// runtime registration API crosses the SDK boundary.
+// ── File editor contract (#12323, #13809) ───────────────────────────
+// The manifest shape and the host-owned document a `location: "fileEditor"`
+// view receives as `PanelViewProps.fileDocument`.
 
-export type { FileEditorContribution } from "./plugin.js";
+export type {
+  FileEditorContribution,
+  FileEditorMode,
+  PluginFileDocument,
+  PluginFileDocumentChange,
+  PluginFileDocumentReadResult,
+  PluginFileDocumentSaveResult,
+} from "./plugin.js";
 
 // ── Forge types appearing in worktree projections ───────────────────
 

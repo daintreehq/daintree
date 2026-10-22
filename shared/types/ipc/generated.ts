@@ -629,6 +629,22 @@ export interface GeneratedIpcInvokeMap {
     args: [payload: import("./fileBrowser.js").FileBrowserStatPathsPayload];
     result: import("./fileBrowser.js").FileBrowserStatPathsResult;
   };
+  "file-document:read": {
+    args: [payload: { rootPath: string; filePath: string; maxBytes: number }];
+    result: import("../plugin.js").PluginFileDocumentReadResult;
+  };
+  "file-document:save": {
+    args: [
+      payload: {
+        rootPath: string;
+        filePath: string;
+        maxBytes: number;
+        text: string;
+        expectedRevision: string;
+      },
+    ];
+    result: import("../plugin.js").PluginFileDocumentSaveResult;
+  };
   "file-transfer:answer-host-pick": {
     args: [payload: import("./fileTransfer.js").AnswerHostPickPayload];
     result: void;
@@ -1692,6 +1708,14 @@ export interface GeneratedIpcInvokeMap {
   "plugin:file-decorations-get": {
     args: [scope: string, paths: string[]];
     result: Record<string, import("../forge.js").FileDecoration>;
+  };
+  "plugin:file-editor-choice-set": {
+    args: [key: `view:${string}` | `edit:${string}`, choice: string | null];
+    result: Readonly<Record<`view:${string}` | `edit:${string}`, string>>;
+  };
+  "plugin:file-editor-choices-get": {
+    args: [];
+    result: Readonly<Record<`view:${string}` | `edit:${string}`, string>>;
   };
   "plugin:forge-providers-get": {
     args: [];

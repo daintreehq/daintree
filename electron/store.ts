@@ -30,7 +30,11 @@ import type { PluginMcpAuditRecord } from "../shared/types/ipc/pluginMcpAudit.js
 import { PLUGIN_MCP_AUDIT_DEFAULT_MAX_RECORDS } from "../shared/types/ipc/pluginMcpAudit.js";
 import type { PluginMcpConsentRecord } from "../shared/types/pluginMcpConsent.js";
 import type { PluginCapabilityConsentRecord } from "../shared/types/pluginCapabilityConsent.js";
-import type { ProjectPluginTrustRecord, ProjectSurfaceChoices } from "../shared/types/plugin.js";
+import type {
+  FileEditorChoices,
+  ProjectPluginTrustRecord,
+  ProjectSurfaceChoices,
+} from "../shared/types/plugin.js";
 import { PLUGIN_MCP_DEFAULT_MAX_TOOLS_PER_SESSION } from "../shared/types/ipc/pluginMcp.js";
 import type { ForgeAuditRecord } from "../shared/types/ipc/forge.js";
 import type { RunParkRecord, RunSnoozeRecord } from "../shared/types/ipc/fleet.js";
@@ -678,6 +682,14 @@ export interface StoreSchema {
   projectSurfaceChoices?: Record<string, ProjectSurfaceChoices>;
 
   /**
+   * Per-project "Edit with…" answers (#13809): which file editor opens a
+   * file type's Edit or Rendered mode when more than one matches. Keyed by
+   * project id, then by {@link FileEditorChoiceKey}. Daintree's own settings,
+   * never the repository. Same additive-key convention as above.
+   */
+  projectFileEditorChoices?: Record<string, FileEditorChoices>;
+
+  /**
    * Per-project presentation profiles (#13771): the levels the user set or
    * accepted for each built-in surface, and their answer to the repository's
    * `.daintree/presentation.json` suggestion. Read and written only through
@@ -1001,6 +1013,7 @@ const storeOptions = {
     pluginCapabilityConsent: {},
     projectPluginTrust: {},
     projectSurfaceChoices: {},
+    projectFileEditorChoices: {},
     projectPresentation: {},
     projectAgentMcpEnablement: {},
     projectAgentMcpAccess: {},

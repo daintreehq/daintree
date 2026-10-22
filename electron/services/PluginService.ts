@@ -155,6 +155,7 @@ import { projectStore } from "./ProjectStore.js";
 import { store } from "../store.js";
 import type { EventBusEnvelope } from "../../shared/types/ipc/maps.js";
 import {
+  DEFAULT_FILE_EDITOR_MAX_BYTES,
   makeProjectPluginInstanceKey,
   parseProjectPluginInstanceKey,
   parsePluginHostedViewKindId,
@@ -2076,14 +2077,16 @@ export class PluginService {
     const pluginId = opts.instanceKey ?? manifest.name;
     const binding = opts.binding ?? UNBOUND_PLUGIN_HOST_BINDING;
 
-    // `contributes.fileEditors` is built-in only in v1 (#12323): the editor
-    // slot resolves through the builtin view registry compiled into the host
-    // bundle, which an installed plugin's renderer never reaches, so accepting
-    // the entry would advertise an Edit mode that mounts nothing. The schema
-    // cannot see the origin, so the refusal lives here where it is known.
-    if (!opts.isBuiltin && manifest.contributes.fileEditors.length > 0) {
+    // A slot-backed `contributes.fileEditors` entry is built-in only (#12323):
+    // the slot resolves through the builtin view registry compiled into the
+    // host bundle, which an installed plugin's renderer never reaches, so
+    // accepting it would advertise an Edit mode that mounts nothing. The
+    // manifest schema refuses it too; this is the load-time backstop. A
+    // view-backed entry mounts the plugin's own view and is open to every
+    // origin (#13809).
+    if (!opts.isBuiltin && manifest.contributes.fileEditors.some((e) => e.slot !== undefined)) {
       const message =
-        "contributes.fileEditors is only available to built-in plugins — the editor slot resolves through the host-bundled builtin view registry, which an installed plugin's renderer cannot register into.";
+        'contributes.fileEditors[].slot is only available to built-in plugins — the editor slot resolves through the host-bundled builtin view registry, which an installed plugin\'s renderer cannot register into. Use "view" instead.';
       console.error(`[PluginService] Invalid manifest in ${dirName}: ${message}`);
       if (isUserInstalled) {
         this.records.upsertInstalledRecord(manifest.name, {
@@ -2706,11 +2709,12 @@ export class PluginService {
       this.broadcaster.scheduleToursBroadcast();
     }
 
-    // Views that mount outside the panel grid (#13770) — the settings section
-    // and sidebar views. Registered here, after the map commit and with no
-    // await since, for the same addressability reason as the panel kinds above:
-    // the URL is only resolvable once the protocol handler can see this load's
-    // authority. Never registered as panel kinds, so nothing can spawn one.
+    // Views that mount outside the panel grid (#13770) — the settings section,
+    // file editor views and sidebar views. Registered here, after the map
+    // commit and with no await since, for the same addressability reason as the
+    // panel kinds above: the URL is only resolvable once the protocol handler
+    // can see this load's authority. Never registered as panel kinds, so
+    // nothing can spawn one.
     const pluginName = manifest.displayName ?? manifest.name;
     const hostedViews = manifest.contributes.views.flatMap((view): PluginHostedViewDescriptor[] => {
       if (view.location === "panel") return [];
@@ -2722,6 +2726,31 @@ export class PluginService {
       };
       if (view.location === "settings") {
         return [{ ...base, location: "settings", name: `${pluginName} settings` }];
+      }
+      if (view.location === "fileEditor") {
+        return [
+          {
+            ...base,
+            location: "fileEditor",
+            name: `${pluginName} fileEditor`,
+            // The view-backed file editors this view backs (#13809), so the
+            // renderer learns the claim and the module URL from one snapshot,
+            // narrowed to the projects that may see the plugin.
+            fileEditors: manifest.contributes.fileEditors.flatMap((entry) =>
+              entry.view === view.id && entry.mode !== undefined
+                ? [
+                    {
+                      id: entry.id,
+                      mode: entry.mode,
+                      extensions: entry.extensions ?? [],
+                      paths: entry.paths ?? [],
+                      maxBytes: entry.maxBytes ?? DEFAULT_FILE_EDITOR_MAX_BYTES,
+                    },
+                  ]
+                : []
+            ),
+          },
+        ];
       }
       // The schema requires a sidebar view's name; the id stands in only for
       // a manifest that skipped validation.
@@ -3749,7 +3778,7 @@ export class PluginService {
           const view = panel.hasPty
             ? undefined
             : live.manifest.contributes.views.find(
-                (v) => v.id === panel.id && v.location !== "settings"
+                (v) => v.id === panel.id && v.location === "panel"
               );
           if (!view) return { ok: true };
           // Same reason the map re-read above exists: without a live authority
