@@ -33,7 +33,7 @@ import { notify } from "@/lib/notify";
 import { copyWithToast } from "@/lib/copyWithToast";
 import { captureCopyFlash } from "@/lib/copyFlash";
 import { actionService } from "@/services/ActionService";
-import { matchesFileMenuTarget } from "@/registry/fileMenuMatch";
+import { isWorktreeRelativePath, matchesFileMenuTarget } from "@/registry/fileMenuMatch";
 import { usePluginRuntimeStore } from "@/store/pluginRuntimeStore";
 import type { BuiltInRuntimeActionId } from "@shared/config/actionIds";
 import type { CopyTreeRunSource, GitStatus } from "@shared/types";
@@ -592,7 +592,7 @@ export function useFileRowMenuItems(surface: FileRowMenuSurface): FileRowMenuCon
                         dispatchArgs={{
                           path: absolutePath,
                           isDirectory,
-                          relativePath,
+                          ...(isWorktreeRelativePath(relativePath) && { relativePath }),
                           ...(worktreePath && { worktreePath }),
                           ...(status && { status }),
                         }}

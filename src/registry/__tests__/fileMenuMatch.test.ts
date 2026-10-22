@@ -39,6 +39,11 @@ describe("matchesFileMenuTarget", () => {
     expect(matchesFileMenuTarget({ paths: ["content/**"] }, file("src/b.md"))).toBe(false);
   });
 
+  it("never matches a path glob against an absolute path outside a worktree", () => {
+    expect(matchesFileMenuTarget({ paths: ["**"] }, file("/tmp/a.json"))).toBe(false);
+    expect(matchesFileMenuTarget({ paths: ["**/*.json"] }, file("C:/tmp/a.json"))).toBe(false);
+  });
+
   it("requires every declared field to hold", () => {
     const item = { kind: "file" as const, extensions: ["json"], paths: ["records/**"] };
     expect(matchesFileMenuTarget(item, file("records/a.json"))).toBe(true);

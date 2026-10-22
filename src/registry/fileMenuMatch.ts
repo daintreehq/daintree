@@ -8,6 +8,15 @@ export interface FileMenuTarget {
   name: string;
 }
 
+/**
+ * A file outside every worktree reaches the menu with a display or absolute
+ * path as its `relativePath`; that is not a worktree-relative path and must
+ * neither match a `paths` glob nor be dispatched as one.
+ */
+export function isWorktreeRelativePath(relativePath: string): boolean {
+  return relativePath !== "" && !/^([/\\]|[a-zA-Z]:)/.test(relativePath);
+}
+
 type FileMenuMatchFields = Pick<ContextMenuContribution, "kind" | "extensions" | "paths">;
 
 /**
@@ -22,6 +31,7 @@ export function matchesFileMenuTarget(item: FileMenuMatchFields, target: FileMen
     if (ext === null || !item.extensions.includes(ext)) return false;
   }
   if (item.paths) {
+    if (!isWorktreeRelativePath(target.relativePath)) return false;
     const relative = target.relativePath.replace(/\\/g, "/");
     if (!item.paths.some((pattern) => matchesFileEditorGlob(relative, pattern))) return false;
   }
