@@ -358,11 +358,10 @@ describe("DriveLeaseService", () => {
     registry.add(reopened);
     await settle();
 
-    const holder = service.getHolder("p")!;
-    expect(holder.leaseId).toBeGreaterThan(taken.leaseId);
-    expect(leaseTables.at(-1)).toEqual([
-      { projectId: "p", leaseId: holder.leaseId, holderConnection: reopened.handle },
-    ]);
+    const [published] = leaseTables.at(-1)!;
+    expect(published).toMatchObject({ projectId: "p", holderConnection: reopened.handle });
+    expect(published!.leaseId).toBeGreaterThan(taken.leaseId);
+    expect(service.getHolder("p")?.leaseId).toBe(published!.leaseId);
     expect(service.isDriving("p", reopened)).toBe(true);
   });
 

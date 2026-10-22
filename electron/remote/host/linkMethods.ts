@@ -58,6 +58,11 @@ export interface EndpointReconcilePayload {
   endpointIds: string[];
 }
 
+/** Endpoints the Shell holds that the Host still lacks once it has reconciled. */
+export interface EndpointReconcileResult {
+  missing: string[];
+}
+
 /**
  * One endpoint's assistant, as the host sees it. `projectId` is the binding the
  * answer was computed for, so a Shell that has since moved the view to another
@@ -132,6 +137,10 @@ export const EndpointResyncPayloadSchema = z.object({
 
 export const EndpointReconcilePayloadSchema = z.object({
   endpointIds: z.array(endpointId).max(4096),
+});
+
+export const EndpointReconcileResultSchema = z.object({
+  missing: z.array(endpointId).max(4096),
 });
 
 export const EndpointAssistantPayloadSchema = z.object({

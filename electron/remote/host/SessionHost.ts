@@ -26,6 +26,7 @@ import {
   MAX_LISTED_PROJECTS,
   type EndpointAgentActivityPayload,
   type EndpointAssistantPayload,
+  type EndpointReconcileResult,
   type EndpointResyncPayload,
   type EndpointResyncReason,
   type HostInfo,
@@ -471,10 +472,7 @@ export class SessionHost {
       link.registerCallHandler(
         LinkMethod.ENDPOINT_RECONCILE,
         EndpointReconcilePayloadSchema,
-        ({ endpointIds }) => {
-          this.reconcileEndpoints(s, endpointIds);
-          return null;
-        }
+        ({ endpointIds }) => this.reconcileEndpoints(s, endpointIds)
       ),
       link.onClose(() => {
         if (s.link !== link) return;
@@ -623,9 +621,10 @@ export class SessionHost {
    * A resumed Shell holds `held` and has repeated each one's open on this
    * link. Any other endpoint kept for it was closed in a frame the drop lost;
    * one of `held` this link had to create was opened in one, and its view
-   * missed everything sent since.
+   * missed everything sent since. One still missing had its repeated open
+   * refused at the endpoint cap, which closing the lost ones may have freed.
    */
-  private reconcileEndpoints(state: SessionState, held: string[]): void {
+  private reconcileEndpoints(state: SessionState, held: string[]): EndpointReconcileResult {
     const holds = new Set(held);
     const lost = [...state.endpoints.values()].filter(
       (endpoint) =>
@@ -644,6 +643,7 @@ export class SessionHost {
     for (const endpoint of lost) endpoint.close("client-closed");
     for (const id of holds) if (state.createdOnLink.has(id)) state.stale.add(id);
     if (state.stale.size > 0 && !state.resyncing) this.announceResync(state);
+    return { missing: [...holds].filter((id) => !state.endpoints.has(id)) };
   }
 
   private transportFor(state: SessionState): RemoteEndpointTransport {

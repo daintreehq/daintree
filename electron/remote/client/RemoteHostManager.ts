@@ -25,6 +25,7 @@ import type { LinkSession, LinkSessionOptions } from "../link/session.js";
 import {
   EndpointAgentActivityPayloadSchema,
   EndpointAssistantPayloadSchema,
+  EndpointReconcileResultSchema,
   EndpointResyncPayloadSchema,
   HostInfoSchema,
   HostProjectListSchema,
@@ -661,7 +662,7 @@ export class HostConnection {
       this.checkReady();
     });
     this.flushPendingCloses(session);
-    // A resume keeps the host's endpoints, so the views' streams move to the new session.
+    // Only a resume still holds endpoints here: a fresh session forgot them above.
     for (const [webContentsId, open] of [...this.endpoints]) {
       if (!this.isBoundHere(webContentsId)) {
         this.closeEndpoint(webContentsId, "view-moved");
@@ -670,24 +671,28 @@ export class HostConnection {
       // An open or move still queued when the link dropped never reached the
       // host. Saying each again costs nothing where it did: the host takes the
       // same open on the same project as a no-op.
-      if (!this.postOpen(session, open)) {
-        this.closeEndpoint(webContentsId, "reopen-refused");
-        continue;
-      }
+      if (!this.postOpen(session, open)) this.closeEndpoint(webContentsId, "reopen-refused");
+    }
+    // So is a close, which leaves the host keeping an endpoint (and any lease
+    // it holds) for a view that is gone. Asked before the views' streams move,
+    // so no stream's requests stand ahead of it. A host from before this call
+    // refuses it and keeps such endpoints until the session ends.
+    if (resumed) {
+      const reconcile: EndpointReconcilePayload = {
+        endpointIds: [...this.endpoints.values()].map((open) => open.endpointId),
+      };
+      session.call(LinkMethod.ENDPOINT_RECONCILE, reconcile).then(
+        (answer) => this.reopenMissing(session, answer),
+        () => {}
+      );
+    }
+    // A resume keeps the host's endpoints, so the views' streams move to the new session.
+    for (const [webContentsId, open] of [...this.endpoints]) {
       notifyEndpointOpened(this.openedListeners, {
         session,
         webContentsId,
         endpointId: open.endpointId,
       });
-    }
-    // So is a close, which leaves the host keeping an endpoint (and any lease
-    // it holds) for a view that is gone. A host from before this call refuses
-    // it and keeps such endpoints until the session ends.
-    if (resumed) {
-      const reconcile: EndpointReconcilePayload = {
-        endpointIds: [...this.endpoints.values()].map((open) => open.endpointId),
-      };
-      session.call(LinkMethod.ENDPOINT_RECONCILE, reconcile).catch(() => {});
     }
     // A fresh session reopens the endpoints of views still bound here, so
     // their terminal and worktree streams come back without waiting for the
@@ -794,6 +799,23 @@ export class HostConnection {
       cause,
       ...extra,
     });
+  }
+
+  /**
+   * Endpoints a reconcile found the host still lacks: their repeated open
+   * came while its endpoint allowance was full of ones it has since closed.
+   * Opened again from what the view holds now, so a later move or close
+   * already on its way is never undone.
+   */
+  private reopenMissing(session: LinkSession, answer: unknown): void {
+    const parsed = EndpointReconcileResultSchema.safeParse(answer);
+    if (!parsed.success || this.session !== session || !session.isOpen) return;
+    for (const endpointId of parsed.data.missing) {
+      const webContentsId = this.viewsByEndpoint.get(endpointId);
+      const open = webContentsId === undefined ? undefined : this.endpoints.get(webContentsId);
+      if (!open || !this.postOpen(session, open)) continue;
+      this.views.resync(webContentsId!, this.hostId, "reattached");
+    }
   }
 
   private postOpen(session: LinkSession, open: OpenEndpoint): boolean {

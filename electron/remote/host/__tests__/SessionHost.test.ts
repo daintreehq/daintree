@@ -1,6 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { z } from "zod";
+
+vi.mock("electron", () => ({
+  webContents: { fromId: vi.fn(() => null), getAllWebContents: vi.fn(() => []) },
+  BrowserWindow: { fromWebContents: vi.fn(() => null), getAllWindows: vi.fn(() => []) },
+}));
+
 import { EndpointRegistryImpl } from "../../../ipc/endpointRegistry.js";
+import { DriveLeaseService } from "../../../services/DriveLeaseService.js";
 import type { EndpointInvocation, RemoteSessionExpiryCause } from "../../../ipc/endpoint.js";
 import { logBuffer } from "../../../services/LogBuffer.js";
 import { wrapSuccess } from "../../../../shared/utils/ipcErrorSerialization.js";
@@ -100,11 +107,11 @@ function fakeServer() {
       expiredListeners.add(l);
       return () => expiredListeners.delete(l);
     },
-    attach(sessionId: string, link: ReturnType<typeof fakeLink>, resumed = false) {
+    attach(sessionId: string, link: ReturnType<typeof fakeLink>, resumed = false, clientId = "c1") {
       const ctx = {
         sessionId,
         resumed,
-        client: { clientId: "c1", clientName: "greg-mbp", platform: "darwin" as const },
+        client: { clientId, clientName: "greg-mbp", platform: "darwin" as const },
         session: link as unknown as LinkSession,
       };
       for (const l of sessionListeners) l(ctx);
@@ -497,11 +504,34 @@ describe("SessionHost: endpoint changes a dropped link lost (#13917)", () => {
 
     const second = resumed();
     open(second, "view-1", "p1", "o1");
-    second.runCall(LinkMethod.ENDPOINT_RECONCILE, { endpointIds: ["view-1"] });
+    const answer = second.runCall(LinkMethod.ENDPOINT_RECONCILE, { endpointIds: ["view-1"] });
 
+    expect(answer).toEqual({ missing: [] });
     expect(lost.closeCause).toBe("client-closed");
     expect(host.getEndpoint("s1", "view-2")).toBeUndefined();
     expect(registry.getRemote()).toEqual([kept]);
+  });
+
+  it("names a held endpoint whose repeated open the lost ones crowded out", () => {
+    const first = fakeLink();
+    server.attach("s1", first);
+    open(first, "view-1", "p1", "o1");
+    open(first, "view-2", "p2", "o2");
+    first.drop();
+
+    const second = resumed();
+    open(second, "view-1", "p1", "o1");
+    // Refused: the closed view-2 still fills this session's allowance of two.
+    open(second, "view-3", "p3", "o3");
+    expect(host.getEndpoint("s1", "view-3")).toBeUndefined();
+    const answer = second.runCall(LinkMethod.ENDPOINT_RECONCILE, {
+      endpointIds: ["view-1", "view-3"],
+    });
+
+    expect(answer).toEqual({ missing: ["view-3"] });
+    expect(host.getEndpoint("s1", "view-2")).toBeUndefined();
+    open(second, "view-3", "p3", "o3");
+    expect(host.getEndpoint("s1", "view-3")?.projectId).toBe("p3");
   });
 
   it("keeps an endpoint opened after the Shell's list, which the control lane put ahead of it", () => {
@@ -563,6 +593,70 @@ describe("SessionHost: endpoint changes a dropped link lost (#13917)", () => {
         payload: { endpointIds: ["view-2"], reason: "reattached" },
       },
     ]);
+  });
+
+  describe("and the drive lease the lost view held", () => {
+    const GRACE_MS = 1_000;
+    let lease: DriveLeaseService;
+
+    const settle = async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    };
+
+    beforeEach(() => {
+      lease = new DriveLeaseService({
+        registry,
+        releaseGraceMs: GRACE_MS,
+        now: () => 1_000,
+        applyDriveLeases: () => {},
+      });
+      host.onTransportChange((endpointIds, attached) =>
+        lease.noteEndpointTransport(endpointIds, attached)
+      );
+    });
+
+    afterEach(() => lease.dispose());
+
+    /** A laptop holding p closes its view, loses the close with its link, and comes back. */
+    async function laptopLosesItsClose() {
+      const laptop = fakeLink();
+      server.attach("s1", laptop);
+      open(laptop, "view-1", "p", "o1");
+      await settle();
+      const desk = fakeLink();
+      server.attach("s2", desk, false, "c2");
+      open(desk, "view-1", "p", "o1");
+      await settle();
+      expect(lease.getHolder("p")?.endpointId).toBe("remote:s1:view-1");
+      laptop.drop();
+      return {
+        desk: host.getEndpoint("s2", "view-1")!,
+        resume: async () => {
+          resumed().runCall(LinkMethod.ENDPOINT_RECONCILE, { endpointIds: [] });
+          await settle();
+        },
+      };
+    }
+
+    it("gives it up through the release grace, then to the successor", async () => {
+      const { resume } = await laptopLosesItsClose();
+      await resume();
+
+      vi.advanceTimersByTime(GRACE_MS - 1);
+      expect(lease.getHolder("p")?.endpointId).toBe("remote:s1:view-1");
+      vi.advanceTimersByTime(1);
+      expect(lease.getHolder("p")?.endpointId).toBe("remote:s2:view-1");
+    });
+
+    it("leaves a takeover made while the laptop was away where it is", async () => {
+      const { desk, resume } = await laptopLosesItsClose();
+      const taken = lease.takeOver("p", desk);
+      await resume();
+
+      vi.advanceTimersByTime(GRACE_MS * 2);
+      expect(lease.getHolder("p")).toEqual(taken);
+    });
   });
 });
 

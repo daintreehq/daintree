@@ -501,6 +501,8 @@ describe("remote session wiring", () => {
     const envelope = await invoke(HOST_CHANNEL, VIEW_A, {});
     expect(envelope.ok).toBe(true);
     expect(hostContexts.at(-1)!.endpoint).toBe(endpoint);
+    // The resume's own reconcile, answered by now, repaired nothing and repainted nothing more.
+    expect(h.sink.resyncs).toHaveLength(1);
   });
 
   it("tells endpoint listeners when a view's endpoint opens and again on a resumed session", async () => {
@@ -717,6 +719,9 @@ describe("remote session wiring", () => {
   });
 
   describe("endpoint changes still queued when the link drops (#13917)", () => {
+    /** A grace long enough that a busy worker still resumes rather than starting over. */
+    const RESUMABLE = { resumeGraceMs: 10_000 };
+
     /** Run `act`, then drop the link in the same tick so what it queued is never written. */
     async function dropWith(act: (connection: HostConnection) => void): Promise<void> {
       const connection = h.manager.get(HOST_ID)!;
@@ -733,7 +738,7 @@ describe("remote session wiring", () => {
     }
 
     it("opens the endpoint on resume and tells the view it missed events", async () => {
-      await startHarness();
+      await startHarness(RESUMABLE);
       await connect();
 
       await dropWith((connection) => connection.send(VIEW_B, "proj-2", HOST_CHANNEL, [{}]));
@@ -745,7 +750,7 @@ describe("remote session wiring", () => {
     });
 
     it("moves the endpoint to the view's project on resume", async () => {
-      await startHarness();
+      await startHarness(RESUMABLE);
       await connect();
       await invoke(HOST_CHANNEL, VIEW_A, {});
       const endpoint = getEndpointRegistry().getRemote()[0]!;
@@ -757,7 +762,7 @@ describe("remote session wiring", () => {
     });
 
     it("closes the endpoint of a view closed just before the drop, and keeps the rest", async () => {
-      await startHarness();
+      await startHarness(RESUMABLE);
       await connect();
       await invoke(HOST_CHANNEL, VIEW_A, {});
       await invoke(HOST_CHANNEL, VIEW_B, {});
@@ -779,7 +784,7 @@ describe("remote session wiring", () => {
     });
 
     it("ends with the reopened view when a close and reopen under one id were both lost", async () => {
-      await startHarness();
+      await startHarness(RESUMABLE);
       await connect();
       await invoke(HOST_CHANNEL, VIEW_A, {});
       const closed = getEndpointRegistry().getRemote()[0]!;
@@ -798,8 +803,28 @@ describe("remote session wiring", () => {
       expect(getEndpointRegistry().getRemote()).toEqual([reopened]);
     });
 
+    it("opens a view whose repeated open the lost closes crowded out once they are gone", async () => {
+      await startHarness({ ...RESUMABLE, maxEndpoints: 2 });
+      await connect();
+      await invoke(HOST_CHANNEL, VIEW_A, {});
+      await invoke(HOST_CHANNEL, VIEW_B, {});
+      const viewC = 14;
+      projectKeys.set(viewC, `${HOST_ID}:proj-1`);
+
+      await dropWith((connection) => {
+        h.sink.gone(VIEW_B);
+        connection.send(viewC, "proj-1", HOST_CHANNEL, [{}]);
+      });
+
+      await waitFor(() => h.sink.resyncs.some((resync) => resync.webContentsId === viewC));
+      expect(h.sink.resyncs).toContainEqual({ webContentsId: viewC, reason: "reattached" });
+      const envelope = await invoke(HOST_CHANNEL, viewC, {});
+      expect(envelope).toEqual(wrapSuccess({ answeredFor: "proj-1", remote: true }));
+      expect(getEndpointRegistry().getRemote()).toHaveLength(2);
+    });
+
     it("still opens what was lost on a host too old to reconcile", async () => {
-      await startHarness();
+      await startHarness(RESUMABLE);
       // A host from before the reconcile call has no handler for it.
       cleanups.push(
         h.server.onSession(({ session }) => {
