@@ -1,5 +1,6 @@
 import type { HostId } from "../../../shared/types/remoteHosts.js";
 import { AppError } from "../../utils/errorTypes.js";
+import { relayCallArmsNotice } from "../../services/mcp-server/terminalNotify.js";
 import type { LinkSession } from "../link/session.js";
 import {
   AssistantLinkMethod,
@@ -156,6 +157,7 @@ export class HostControlLinkClient {
   }
 
   private followNoticesLater(hostId: HostId, session: LinkSession): void {
+    if (this.disposed) return;
     const follow = this.followOf(session);
     if (follow.timer !== undefined) return;
     follow.timer = setTimeout(() => {
@@ -199,6 +201,7 @@ export class HostControlLinkClient {
     if (receiver === undefined || calls.length === 0 || !session.isOpen) return;
     try {
       await this.authenticate(hostId, session);
+      if (this.disposed || !session.isOpen) return;
       const parsed = RelayNoticeStatusAnswerSchema.safeParse(
         await this.call(hostId, session, AssistantLinkMethod.RELAY_NOTICE_STATUS, { calls })
       );
@@ -233,6 +236,9 @@ export class HostControlLinkClient {
       await this.call(hostId, session, AssistantLinkMethod.MCP_CALL, payload, timeoutMs)
     );
     if (!parsed.success) throw invalidAnswer(hostId, AssistantLinkMethod.MCP_CALL);
+    // A call can arm nothing, or have its notice answered by its own reply
+    // wait, without a notice ever coming: ask, so its link need not wait on it.
+    if (relayCallArmsNotice(payload.tool, payload.args)) this.followNoticesLater(hostId, session);
     return parsed.data;
   }
 

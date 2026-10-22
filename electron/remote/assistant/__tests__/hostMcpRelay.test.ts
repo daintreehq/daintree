@@ -11,9 +11,11 @@ import {
 } from "../hostMcpRelay.js";
 import {
   AssistantLinkMethod,
+  MAX_RELAY_NOTICE_STATUS_CALLS,
   MAX_RELAY_RESULT_BYTES,
   type McpCallPayload,
 } from "../linkMethods.js";
+import { MAX_RELAY_NOTICES_PER_SENDER } from "../relayNoticeOutbox.js";
 import { SenderSessions } from "../senderSessions.js";
 
 interface FakeLink {
@@ -631,6 +633,79 @@ describe("installHostMcpRelay notices (#13500)", () => {
       await status(unanswered.links[0]!, [{ helpSessionId: "help-1", callId: "call-1" }])
     ).toEqual({ calls: [{ helpSessionId: "help-1", callId: "call-1", status: "watching" }] });
     unanswered.relay.dispose();
+  });
+
+  it("answers for a watch still armed even once it has no record of the call", async () => {
+    const { links, relay } = harness([["link-1", "sender-a"]], {
+      watchingNoticeCalls: () => new Set(["call-x"]),
+    });
+    expect(await status(links[0]!, [{ helpSessionId: "help-1", callId: "call-x" }])).toEqual({
+      calls: [{ helpSessionId: "help-1", callId: "call-x", status: "watching" }],
+    });
+    relay.dispose();
+  });
+
+  it("keeps no record of a call it refused, so refusals never crowd out one it holds", async () => {
+    const { links, relay } = harness([["link-1", "sender-a"]], {
+      hasProject: async (projectId) => projectId === "project-1",
+    });
+    await links[0]!.call({ ...notifyCall, callId: "call-1" });
+    for (let i = 0; i < MAX_RELAY_NOTICE_STATUS_CALLS; i++) {
+      await links[0]!.call({ ...notifyCall, callId: `refused-${i}`, projectId: "nope" });
+    }
+    expect(
+      await status(links[0]!, [
+        { helpSessionId: "help-1", callId: "call-1" },
+        { helpSessionId: "help-1", callId: "refused-0" },
+      ])
+    ).toEqual({
+      calls: [
+        { helpSessionId: "help-1", callId: "call-1", status: "settled" },
+        { helpSessionId: "help-1", callId: "refused-0", status: "unknown" },
+      ],
+    });
+    relay.dispose();
+  });
+
+  it("counts a notice that left for its Shell while it read the notice service as watched", async () => {
+    let handOff: () => void = () => {};
+    const { links, opened, relay } = harness([["link-1", "sender-a"]], {
+      watchingNoticeCalls: async () => {
+        handOff();
+        return new Set();
+      },
+    });
+    // The Shell hasn't answered the notices yet, so they still wait here.
+    (links[0]!.ctx.session as unknown as { call: unknown }).call = () => new Promise(() => {});
+    await links[0]!.call({ ...notifyCall, callId: "call-1" });
+    handOff = () => opened[0]!.spec.deliverNotices([notice("call-1")]);
+    expect(await status(links[0]!, [{ helpSessionId: "help-1", callId: "call-1" }])).toEqual({
+      calls: [{ helpSessionId: "help-1", callId: "call-1", status: "watching" }],
+    });
+    relay.dispose();
+  });
+
+  it("says a call whose notice was crowded out before its Shell took it is gone", async () => {
+    const { links, opened, relay } = harness([["link-1", "sender-a"]]);
+    (links[0]!.ctx.session as unknown as { call: unknown }).call = () => new Promise(() => {});
+    await links[0]!.call({ ...notifyCall, callId: "call-1" });
+    await links[0]!.call({ ...notifyCall, callId: "call-2" });
+    opened[0]!.spec.deliverNotices([
+      notice("call-1"),
+      ...Array.from({ length: MAX_RELAY_NOTICES_PER_SENDER }, () => notice("call-2")),
+    ]);
+    expect(
+      await status(links[0]!, [
+        { helpSessionId: "help-1", callId: "call-1" },
+        { helpSessionId: "help-1", callId: "call-2" },
+      ])
+    ).toEqual({
+      calls: [
+        { helpSessionId: "help-1", callId: "call-1", status: "unknown" },
+        { helpSessionId: "help-1", callId: "call-2", status: "watching" },
+      ],
+    });
+    relay.dispose();
   });
 
   it("forgets a retired principal's calls, so its Shell hears their notices are gone", async () => {

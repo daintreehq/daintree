@@ -37,6 +37,8 @@ export interface RelayNoticeOutboxDeps {
   server: MetricsSessionSource;
   /** Read at each send: the sender each session proved, by its transport or its session id. */
   senders(): Pick<SenderSessions, "senderOf" | "senderOfSessionId"> | undefined;
+  /** Told of notices crowded out before their Shell took them: they will never reach it. */
+  onDropped?(senderId: string, notices: readonly RelayNotice[]): void;
   now?: () => number;
   newId?: () => string;
   ttlMs?: number;
@@ -102,7 +104,9 @@ export class RelayNoticeOutbox {
         },
         expiresAt,
       });
-      if (queue.entries.length > MAX_RELAY_NOTICES_PER_SENDER) queue.entries.shift();
+      if (queue.entries.length > MAX_RELAY_NOTICES_PER_SENDER) {
+        this.dropped(senderId, queue.entries.shift()!);
+      }
     }
     while (this.waiting() > MAX_RELAY_NOTICES_TOTAL) this.dropOldest();
     this.flush(senderId);
@@ -185,17 +189,25 @@ export class RelayNoticeOutbox {
   }
 
   private dropOldest(): void {
-    let oldest: SenderQueue | null = null;
-    for (const queue of this.queues.values()) {
+    let oldest: [string, SenderQueue] | null = null;
+    for (const [senderId, queue] of this.queues) {
       const head = queue.entries[0];
       if (
         head !== undefined &&
-        (oldest === null || head.expiresAt < oldest.entries[0]!.expiresAt)
+        (oldest === null || head.expiresAt < oldest[1].entries[0]!.expiresAt)
       ) {
-        oldest = queue;
+        oldest = [senderId, queue];
       }
     }
-    oldest?.entries.shift();
+    if (oldest !== null) this.dropped(oldest[0], oldest[1].entries.shift()!);
+  }
+
+  private dropped(senderId: string, entry: Entry): void {
+    try {
+      this.deps.onDropped?.(senderId, [entry.notice]);
+    } catch (error) {
+      console.warn("[RelayNoticeOutbox] Couldn't report a notice crowded out:", error);
+    }
   }
 
   /** An open session that proved `senderId`: its transport did, or the session it resumes did. */

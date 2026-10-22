@@ -232,6 +232,39 @@ describe("HostControlLinkClient relay notices (#13500)", () => {
     }
   });
 
+  it("asks a little after a call that asked for notices answers", async () => {
+    vi.useFakeTimers();
+    try {
+      const taker = receiver();
+      const { relay, calls } = opened(taker, (method) => {
+        if (method === AssistantLinkMethod.MCP_CALL) {
+          return { status: "done", result: { isError: false, structured: null, text: "ok" } };
+        }
+        return statusAnswer(method);
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      await relay.relayCall("studio", { ...PAYLOAD, tool: "terminal.list" }, 1_000);
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(taker.noticeCalls).toHaveBeenCalledTimes(1);
+
+      taker.noticeCalls.mockReturnValue(AWAITED);
+      await relay.relayCall(
+        "studio",
+        { ...PAYLOAD, tool: "terminal.notifyWhenIdle", args: { terminalId: "t-1" } },
+        1_000
+      );
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(calls.at(-1)).toEqual({
+        method: AssistantLinkMethod.RELAY_NOTICE_STATUS,
+        payload: { calls: AWAITED },
+      });
+      expect(taker.receiveNoticeStatus).toHaveBeenCalledWith("studio", STATUS);
+      relay.dispose();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("leaves an older host that can't say alone, and holds nothing it couldn't read", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     try {

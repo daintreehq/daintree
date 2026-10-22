@@ -890,6 +890,8 @@ interface PaneOwner {
   notices: Map<string, Notice>;
   /** Launches with `notify` whose result has not come back. */
   pendingLaunches: number;
+  /** A relay principal's of those, by the relayed call that made each (#13930). */
+  launchingCalls?: Map<string, number>;
   fired: FiredEntry[];
   /** Lane wakes by exchange handle, until typed, finished or expired. */
   wakes: Map<string, WakeEntry>;
@@ -1118,14 +1120,22 @@ export class TerminalNotifyService {
     const replyLines = options.replyLines;
     const preparedAt = this.now();
     const epochBefore = this.epoch;
+    const callId = relayTagOf(pane)?.callId;
     const owner = await this.admit(pane, undefined, (owner) => {
       owner.pendingLaunches++;
+      if (callId !== undefined) {
+        owner.launchingCalls ??= new Map();
+        owner.launchingCalls.set(callId, (owner.launchingCalls.get(callId) ?? 0) + 1);
+      }
       this.publish(owner);
       return owner;
     });
     let settled = false;
     const release = () => {
       owner.pendingLaunches = Math.max(0, owner.pendingLaunches - 1);
+      const launching = callId === undefined ? 0 : (owner.launchingCalls?.get(callId) ?? 0);
+      if (launching > 1) owner.launchingCalls!.set(callId!, launching - 1);
+      else if (callId !== undefined) owner.launchingCalls?.delete(callId);
     };
     return {
       complete: (result) => {
@@ -1337,6 +1347,8 @@ export class TerminalNotifyService {
     for (const entry of owner.fired) {
       if (entry.relay !== undefined) calls.add(entry.relay.callId);
     }
+    // A launch whose call has answered may still be on its way to arming one.
+    for (const callId of owner.launchingCalls?.keys() ?? []) calls.add(callId);
     return calls;
   }
 

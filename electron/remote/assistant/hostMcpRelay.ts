@@ -108,6 +108,8 @@ interface NoticeCall {
   helpSessionId: string;
   at: number;
   running: number;
+  /** A notice it armed was crowded out before its Shell took it. */
+  lost?: boolean;
 }
 
 interface CachedSession {
@@ -212,7 +214,17 @@ export function installHostMcpRelay(
   const ledger = new RelayCallLedger<McpCallAnswer>({ now });
   // What relayed calls ask to hear about goes back to their Shell's sender,
   // over whichever of its sessions is open when it fires.
-  const notices = new RelayNoticeOutbox({ server, senders: () => deps.senders(), now });
+  const notices = new RelayNoticeOutbox({
+    server,
+    senders: () => deps.senders(),
+    now,
+    onDropped: (senderId, dropped) => {
+      for (const { callId } of dropped) {
+        const call = noticeCalls.get(senderId)?.get(callId);
+        if (call !== undefined) call.lost = true;
+      }
+    },
+  });
   // The calls that asked for notices, by sender then callId, least recent
   // first: a call a Shell still follows that is missing here is one whose
   // notices this host lost, as by restarting.
@@ -236,7 +248,8 @@ export function installHostMcpRelay(
     const held = principals.get(senderId);
     held?.delete(helpSessionId);
     if (held?.size === 0) principals.delete(senderId);
-    // Its notices go with its hold: a Shell still following one hears it is gone.
+    // Its watches go with its hold: a Shell still following one hears they are gone,
+    // unless a notice is still on its way, which the outbox answers for.
     const calls = noticeCalls.get(senderId);
     for (const [callId, call] of calls ?? []) {
       if (call.helpSessionId === helpSessionId && call.running === 0) calls!.delete(callId);
@@ -345,22 +358,34 @@ export function installHostMcpRelay(
     return { cached, session: opened };
   };
 
-  /** Remembered from when it runs: a resend of one this host never ran arms nothing. */
-  const noteNoticeCall = (senderId: string, helpSessionId: string, callId: string): NoticeCall => {
+  /**
+   * Remembered, as running, from when it runs: a resend of one this host
+   * never ran arms nothing. Taken back once its call is refused.
+   */
+  const startNoticeCall = (
+    senderId: string,
+    helpSessionId: string,
+    callId: string
+  ): (() => NoticeCall) => {
     let calls = noticeCalls.get(senderId);
     if (!calls) {
       calls = new Map();
       noticeCalls.set(senderId, calls);
     }
-    const call = calls.get(callId) ?? { helpSessionId, at: now(), running: 0 };
-    calls.delete(callId);
-    calls.set(callId, call);
+    const held = calls;
+    const call = held.get(callId) ?? { helpSessionId, at: now(), running: 0 };
+    call.running += 1;
+    held.delete(callId);
+    held.set(callId, call);
     // As many as the Shell follows; one still running stays.
-    for (const [oldId, old] of calls) {
-      if (calls.size <= MAX_RELAY_NOTICE_STATUS_CALLS) break;
-      if (old.running === 0) calls.delete(oldId);
+    for (const [oldId, old] of held) {
+      if (held.size <= MAX_RELAY_NOTICE_STATUS_CALLS) break;
+      if (old.running === 0) held.delete(oldId);
     }
-    return call;
+    return () => {
+      call.running -= 1;
+      return call;
+    };
   };
 
   const execute = async (
@@ -368,14 +393,21 @@ export function installHostMcpRelay(
     payload: McpCallPayload
   ): Promise<McpCallAnswer> => {
     const release = holdPrincipal(spec.senderId, spec.helpSessionId);
-    const noticeCall = relayCallArmsNotice(payload.tool, payload.args)
-      ? noteNoticeCall(spec.senderId, spec.helpSessionId, payload.callId)
+    const endNoticeCall = relayCallArmsNotice(payload.tool, payload.args)
+      ? startNoticeCall(spec.senderId, spec.helpSessionId, payload.callId)
       : null;
-    if (noticeCall) noticeCall.running += 1;
+    let answer: McpCallAnswer | undefined;
     try {
-      return await executeHeld(spec, payload);
+      answer = await executeHeld(spec, payload);
+      return answer;
     } finally {
-      if (noticeCall) noticeCall.running -= 1;
+      const call = endNoticeCall?.();
+      // Refused before it ran: it armed nothing, and its Shell forgets it too.
+      if (call !== undefined && call.running === 0 && answer?.status === "refused") {
+        const calls = noticeCalls.get(spec.senderId);
+        if (calls?.get(payload.callId) === call) calls.delete(payload.callId);
+        if (calls?.size === 0) noticeCalls.delete(spec.senderId);
+      }
       release();
     }
   };
@@ -399,18 +431,30 @@ export function installHostMcpRelay(
       }
       return armed.get(helpSessionId)!;
     };
+    const pending = (helpSessionId: string, callId: string): boolean => {
+      const call = noticeCalls.get(senderId)?.get(callId);
+      return (
+        (call?.helpSessionId === helpSessionId && call.running > 0) ||
+        notices.waitingCalls(senderId, helpSessionId).has(callId)
+      );
+    };
     const answered: RelayNoticeStatusAnswer["calls"] = [];
     for (const { helpSessionId, callId } of calls) {
-      const call = noticeCalls.get(senderId)?.get(callId);
       let status: RelayNoticeStatusAnswer["calls"][number]["status"];
-      if (call === undefined || call.helpSessionId !== helpSessionId) {
-        status = "unknown";
-      } else if (call.running > 0 || notices.waitingCalls(senderId, helpSessionId).has(callId)) {
+      if (pending(helpSessionId, callId)) {
         status = "watching";
       } else {
         // Unreadable reads as still watching: holding a link open costs less than a lost notice.
         const watching = await armedFor(helpSessionId);
-        status = watching === null || watching.has(callId) ? "watching" : "settled";
+        const call = noticeCalls.get(senderId)?.get(callId);
+        if (watching === null || watching.has(callId) || pending(helpSessionId, callId)) {
+          // Read again after the wait: a notice may have left for the outbox meanwhile.
+          status = "watching";
+        } else if (call === undefined || call.helpSessionId !== helpSessionId || call.lost) {
+          status = "unknown";
+        } else {
+          status = "settled";
+        }
       }
       answered.push({ helpSessionId, callId, status });
     }

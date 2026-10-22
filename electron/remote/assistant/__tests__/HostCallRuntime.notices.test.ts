@@ -434,6 +434,78 @@ describe("HostCallRuntime notices from hosts (#13500)", () => {
     expect(runtime.awaitsNotices("studio")).toBe(true);
   });
 
+  it("reports a loss for a call whose resend got the answer its first send lost", async () => {
+    relayCall.mockRejectedValueOnce(Object.assign(new Error("lost"), { code: "OUTCOME_UNKNOWN" }));
+    await runtime.call("a", LAUNCH, { tier: "core" });
+    relayCall.mockResolvedValueOnce({
+      status: "done",
+      result: { isError: false, structured: { launched: true, terminalId: "host-t-9" }, text: null },
+    } satisfies McpCallAnswer);
+    await runtime.call("a", { ...LAUNCH, callId: "call-1" }, { tier: "core" });
+
+    runtime.receiveNoticeStatus("studio", {
+      calls: [{ helpSessionId: "a", callId: "call-1", status: "unknown" }],
+    });
+    expect(queued.map(({ wake }) => wake.lostNotices)).toEqual([
+      { hostName: "studio-01", terminalIds: ["host-t-9"] },
+    ]);
+  });
+
+  it("leaves a call whose resend is out alone until the host answers it", async () => {
+    await runtime.call("a", LAUNCH, { tier: "core" });
+    let answer!: (value: McpCallAnswer) => void;
+    relayCall.mockImplementationOnce(
+      () =>
+        new Promise<McpCallAnswer>((resolve) => {
+          answer = resolve;
+        })
+    );
+    const resend = runtime.call("a", { ...LAUNCH, callId: "call-1" }, { tier: "core" });
+    await vi.waitFor(() => expect(relayCall).toHaveBeenCalledTimes(2));
+    runtime.receiveNoticeStatus("studio", {
+      calls: [{ helpSessionId: "a", callId: "call-1", status: "unknown" }],
+    });
+    expect(queued).toEqual([]);
+    expect(runtime.awaitsNotices("studio")).toBe(true);
+
+    answer(DONE);
+    await resend;
+    expect(runtime.noticeCalls("studio")).toEqual([{ helpSessionId: "a", callId: "call-1" }]);
+  });
+
+  it("reports no loss for a terminal whose notice already came", async () => {
+    await runtime.call(
+      "a",
+      { ...LAUNCH, tool: "terminal.notifyWhenIdle", args: { terminalId: "host-t-1" } },
+      { tier: "core" }
+    );
+    await runtime.call(
+      "a",
+      { ...LAUNCH, tool: "terminal.notifyWhenIdle", args: { terminalId: "host-t-2" } },
+      { tier: "core" }
+    );
+    runtime.receiveNotices("studio", { notices: [notice({ callId: "call-1" })] });
+    // One that stopped short of its handback may still be followed by another.
+    runtime.receiveNotices("studio", {
+      notices: [
+        notice({
+          noticeId: "n-2",
+          callId: "call-2",
+          terminalId: "host-t-2",
+          awaitingHandback: true,
+        }),
+      ],
+    });
+    runtime.receiveNoticeStatus("studio", {
+      calls: [
+        { helpSessionId: "a", callId: "call-1", status: "unknown" },
+        { helpSessionId: "a", callId: "call-2", status: "unknown" },
+      ],
+    });
+    expect(queued.map(({ wake }) => wake.kind)).toEqual(["notice", "notice", "lost"]);
+    expect(queued[2]!.wake.lostNotices).toEqual({ hostName: "studio-01", terminalIds: ["host-t-2"] });
+  });
+
   it("reports no loss for a call whose answer never came back, which may never have reached the host", async () => {
     relayCall.mockRejectedValueOnce(Object.assign(new Error("lost"), { code: "OUTCOME_UNKNOWN" }));
     await runtime.call("a", LAUNCH, { tier: "core" });

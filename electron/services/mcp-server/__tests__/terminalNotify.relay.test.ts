@@ -268,6 +268,12 @@ describe("relayed notices (#13500)", () => {
     expect(h.delivered.flat().map((notice) => notice.callId)).toEqual(["call-1"]);
     expect([...h.service.relayCallsWatching(key)]).toEqual(["call-2"]);
 
+    // A launch is watched from before it reports its terminal.
+    const launch = await h.service.prepareLaunch(h.pane({ callId: "call-launch" }));
+    expect([...h.service.relayCallsWatching(key)].sort()).toEqual(["call-2", "call-launch"]);
+    launch.complete({ launched: false });
+    expect([...h.service.relayCallsWatching(key)]).toEqual(["call-2"]);
+
     h.service.revokeOwner(key);
     expect([...h.service.relayCallsWatching(key)]).toEqual([]);
     expect([...h.service.relayCallsWatching(relayNotifyKey("someone-else"))]).toEqual([]);

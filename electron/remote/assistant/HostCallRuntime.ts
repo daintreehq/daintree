@@ -206,10 +206,24 @@ interface NoticePin {
   note?: string;
   /** The host terminals it asked about: named by its arguments, or a launch's result. */
   terminalIds: string[];
+  /** Terminals whose notice has come, with nothing more to follow it. */
+  noticed: Set<string>;
   /** The host answered it, so it holds a record of the call (#13930). */
   answered?: boolean;
   /** The host has nothing more for it: its link need not stay open for it. */
   settled?: boolean;
+}
+
+/** The host answered a call: it holds a record of it, and a launch names its terminal. */
+function noteAnswered(
+  pin: NoticePin,
+  result: Extract<McpCallAnswer, { status: "done" }>["result"]
+): void {
+  pin.answered = true;
+  const launched = result.structured?.terminalId;
+  if (typeof launched === "string" && !pin.terminalIds.includes(launched)) {
+    pin.terminalIds.push(launched);
+  }
 }
 
 /** The host terminals a call asking for notices names, as far as its arguments say. */
@@ -469,17 +483,19 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
       if (pin === undefined || pin.hostId !== hostId || pin.run.sessionId !== helpSessionId) {
         continue;
       }
-      if (status === "watching") continue;
+      // A resend out now may change what the host holds: the next ask hears it.
+      if (status === "watching" || this.callsInFlight.has(callId)) continue;
       pin.settled = true;
       // One the host never answered may never have reached it: nothing was lost.
-      if (status !== "unknown" || pin.answered !== true || this.callsInFlight.has(callId)) {
-        continue;
-      }
+      if (status !== "unknown" || pin.answered !== true) continue;
+      // Nor was a notice that already came, with nothing to follow it.
+      const missing = pin.terminalIds.filter((terminalId) => !pin.noticed.has(terminalId));
+      if (pin.terminalIds.length > 0 ? missing.length === 0 : pin.noticed.size > 0) continue;
       this.noticePins.delete(callId);
       if (!this.stillRunning(pin.run)) continue;
       const key = `${pin.run.sessionId}\u0000${pin.run.terminalId}\u0000${pin.run.launchGeneration}`;
       const entry = lost.get(key) ?? { run: pin.run, terminalIds: new Set<string>() };
-      for (const terminalId of pin.terminalIds) entry.terminalIds.add(terminalId);
+      for (const terminalId of missing) entry.terminalIds.add(terminalId);
       lost.set(key, entry);
     }
     if (queue === undefined || lost.size === 0) return;
@@ -589,6 +605,8 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
       ) {
         continue;
       }
+      // It came, whether or not it is still worth typing.
+      if (notice.awaitingHandback !== true) pin.noticed.add(notice.terminalId);
       const check = this.checkNotice(pin, notice, receivedAt);
       if (check.kind !== "ready") continue;
       remember(this.seenNotices, seenKey, true, MAX_SEEN_NOTICES);
@@ -690,6 +708,7 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
         armedAt: this.now(),
         ...(note !== undefined ? { note } : {}),
         terminalIds: noticeTargets(tool, args),
+        noticed: new Set(),
       };
       remember(this.noticePins, callId, pin, MAX_NOTICE_PINS);
     }
@@ -699,13 +718,7 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
         if (settled) return;
         settled = true;
         for (const mark of marks) mark.ran = true;
-        if (pin === undefined || result === undefined) return;
-        pin.answered = true;
-        // A launch names the terminal it made only in its result.
-        const launched = result.structured?.terminalId;
-        if (typeof launched === "string" && !pin.terminalIds.includes(launched)) {
-          pin.terminalIds.push(launched);
-        }
+        if (pin !== undefined && result !== undefined) noteAnswered(pin, result);
       },
       notRun: () => {
         if (settled) return;
@@ -850,9 +863,15 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
       }
       switch (answer.status) {
         // A tool error may still have run some of a batch before it failed.
-        case "done":
+        case "done": {
           noted.ran(answer.result);
+          // A resend that got the answer its first send lost: the host has the call.
+          const pin = resend ? this.noticePins.get(callId) : undefined;
+          if (pin?.hostId === args.hostId && pin.run.sessionId === helpSessionId) {
+            noteAnswered(pin, answer.result);
+          }
           return { ...this.ok(), callId, result: answer.result };
+        }
         case "unknown":
           noted.ran();
           return { ...this.outcomeWith("expired", CALL_UNKNOWN_DETAIL), ...sent };
