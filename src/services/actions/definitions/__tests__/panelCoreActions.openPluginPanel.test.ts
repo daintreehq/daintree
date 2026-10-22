@@ -3,7 +3,18 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ActionCallbacks, ActionRegistry, AnyActionDefinition } from "../../actionTypes";
 
 const panelStoreMock = vi.hoisted(() => ({ getState: vi.fn() }));
-const registryMock = vi.hoisted(() => ({ getPanelKindConfig: vi.fn() }));
+/** The registry fields this action reads. */
+interface MockKindConfig {
+  id: string;
+  extensionId?: string;
+  hasPty?: boolean;
+  dockable?: boolean;
+  scope?: "worktree" | "project";
+}
+
+const registryMock = vi.hoisted(() => ({
+  getPanelKindConfig: vi.fn<(kind: string) => MockKindConfig | undefined>(),
+}));
 const focusPanelInput = vi.hoisted(() => vi.fn(() => true));
 
 vi.mock("@/store/panelStore", () => ({ usePanelStore: panelStoreMock }));
@@ -14,11 +25,11 @@ vi.mock("@shared/config/panelKindRegistry", () => ({
   getPanelKindConfig: registryMock.getPanelKindConfig,
   // The real predicates, read off the mocked registry entry.
   panelKindIsDockable: (kind: string) => {
-    const config = registryMock.getPanelKindConfig(kind) as { dockable?: boolean } | undefined;
+    const config = registryMock.getPanelKindConfig(kind);
     return config !== undefined && config.dockable !== false;
   },
   panelKindIsProjectScoped: (kind: string) =>
-    (registryMock.getPanelKindConfig(kind) as { scope?: string } | undefined)?.scope === "project",
+    registryMock.getPanelKindConfig(kind)?.scope === "project",
 }));
 vi.mock("@/components/Panel/panelFocusRegistry", () => ({ focusPanelInput }));
 
@@ -284,7 +295,11 @@ describe("panel.openPluginPanel", () => {
 });
 
 describe("panel.openPluginPanel in the dock and across worktrees (#13778)", () => {
-  const PROJECT_KIND = { id: "acme.records", extensionId: "acme", scope: "project" };
+  const PROJECT_KIND: MockKindConfig = {
+    id: "acme.records",
+    extensionId: "acme",
+    scope: "project",
+  };
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -332,6 +347,39 @@ describe("panel.openPluginPanel in the dock and across worktrees (#13778)", () =
     expect(addPanel).not.toHaveBeenCalled();
   });
 
+  it("refuses a dock it can't use before judging the worktree, and touches nothing", async () => {
+    registryMock.getPanelKindConfig.mockReturnValue({
+      id: "acme.dash",
+      extensionId: "acme",
+      dockable: false,
+    });
+    panelStoreMock.getState.mockReturnValue({
+      panelIds: ["p-existing"],
+      panelsById: {
+        "p-existing": { id: "p-existing", kind: "acme.dash", worktreeId: "wt-1", location: "grid" },
+      },
+      addPanel,
+      activateTerminal,
+    });
+
+    await expect(
+      setup({
+        kind: "acme.dash",
+        presentation: "dock",
+        worktreeId: "wt-elsewhere",
+        initialArgs: { id: 1 },
+      })
+    ).rejects.toThrow(/opts out of the dock/);
+    worktrees = [];
+    await expect(
+      setup({ kind: "acme.dash", presentation: "dock", worktreeId: "wt-1" })
+    ).rejects.toThrow(/opts out of the dock/);
+
+    expect(activateTerminal).not.toHaveBeenCalled();
+    expect(addPanel).not.toHaveBeenCalled();
+    expect(openRequestOf("p-existing")).toBeUndefined();
+  });
+
   it("opens a project-scoped kind in the dock with no worktree by default", async () => {
     registryMock.getPanelKindConfig.mockReturnValue(PROJECT_KIND);
 
@@ -377,11 +425,26 @@ describe("panel.openPluginPanel in the dock and across worktrees (#13778)", () =
       { id: "p-moved", worktreeId: "wt-1", location: "grid" },
     ]);
 
-    const result = await setup({ kind: "acme.records" });
+    const result = await setup({ kind: "acme.records", initialArgs: { id: 7 } });
 
     expect(result).toEqual({ panelId: "p-moved" });
     expect(activateTerminal).toHaveBeenCalledWith("p-moved");
+    expect(openRequestOf("p-moved")?.args).toEqual({ id: 7 });
     expect(addPanel).not.toHaveBeenCalled();
+  });
+
+  it("never reuses a parked panel, which activation would leave out of sight", async () => {
+    registryMock.getPanelKindConfig.mockReturnValue(PROJECT_KIND);
+    seedProjectPanels([
+      { id: "p-parked", location: "background" },
+      { id: "p-moved", worktreeId: "wt-1", location: "background" },
+    ]);
+
+    const result = await setup({ kind: "acme.records" });
+
+    expect(activateTerminal).not.toHaveBeenCalled();
+    expect(addPanel).toHaveBeenCalledTimes(1);
+    expect(result).toEqual({ panelId: "panel-new" });
   });
 
   it("keeps a worktree kind's reuse to its own worktree", async () => {
@@ -405,12 +468,12 @@ describe("panel.openPluginPanel in the dock and across worktrees (#13778)", () =
     usePanelDialogStore.setState({ dialogStack: [], dialogFrames: {}, requestSeq: 0 });
     addPanel.mockImplementation(async (options: { requestedId?: string }) => options.requestedId);
 
-    const result = (await setup({ kind: "acme.records", presentation: "dialog" })) as {
-      panelId: string;
-    };
+    await setup({ kind: "acme.records", presentation: "dialog" });
 
     expect(addPanel.mock.calls[0]![0].worktreeId).toBeUndefined();
-    expect(usePanelDialogStore.getState().dialogFrames[result.panelId]).toEqual({
+    const [panelId] = usePanelDialogStore.getState().dialogStack;
+    expect(panelId).toBeDefined();
+    expect(usePanelDialogStore.getState().dialogFrames[panelId!]).toEqual({
       kind: "acme.records",
     });
     usePanelDialogStore.setState({ dialogStack: [], dialogFrames: {}, requestSeq: 0 });

@@ -194,7 +194,11 @@ describe("launchPanelKind", () => {
       await launch({ kindId: PLUGIN_KIND, location, worktreeId: "wt-1" });
 
       const opts = addPanelMock.mock.calls[0]![0];
-      expect(opts).toMatchObject({ kind: PLUGIN_KIND, location: "dock", activateDockOnCreate: true });
+      expect(opts).toMatchObject({
+        kind: PLUGIN_KIND,
+        location: "dock",
+        activateDockOnCreate: true,
+      });
       expect(opts.worktreeId).toBeUndefined();
     }
   });

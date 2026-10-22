@@ -35,7 +35,7 @@ const openPluginPanelArgsSchema = z.object({
     .enum(["panel", "dock", "dialog"])
     .optional()
     .describe(
-      "Where the view opens. Default `panel` (the grid), or `dock` for a kind declaring `scope: \"project\"`, which never opens in the grid. `dock` opens it as a dock chip and shows it. `dialog` presents the view as a modal, replacing any panel dialog already open; when one of this kind is already open for the worktree, returns its id instead. PTY-backed kinds can't be presented as a dialog."
+      'Where the view opens. Default `panel` (the grid), or `dock` for a kind declaring `scope: "project"`, which never opens in the grid. `dock` opens it as a dock chip and shows it. `dialog` presents the view as a modal, replacing any panel dialog already open; when one of this kind is already open for the worktree, returns its id instead. PTY-backed kinds can\'t be presented as a dialog.'
     ),
   size: z
     .enum(PLUGIN_PANEL_DIALOG_SIZES)
@@ -316,11 +316,12 @@ export function registerPanelCoreActions(
             (p): p is PanelInstance =>
               p !== undefined &&
               p.kind === kind &&
-              p.location !== "trash" &&
-              // Never reuse an ephemeral dialog panel as a grid/dock target —
-              // it is uncounted and unpersisted, so adopting it would leak a
-              // panel the grid can't account for.
-              p.location !== "dialog"
+              // Only a panel the user can see once it is activated. A trashed or
+              // parked one would be focused where it is and never shown, and an
+              // ephemeral dialog panel is uncounted and unpersisted, so adopting
+              // it as a grid/dock target would leak a panel the grid can't
+              // account for.
+              (p.location === undefined || p.location === "grid" || p.location === "dock")
           );
         const inTarget = live.find(
           (p) => (p.worktreeId ?? undefined) === (targetWorktreeId ?? undefined)

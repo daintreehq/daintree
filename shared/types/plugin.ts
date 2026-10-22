@@ -1044,11 +1044,13 @@ export interface PanelViewProps {
    * copies of the kind's `name`. `null` (or a blank string) goes back to the
    * kind's name.
    *
-   * The title belongs to the panel, not the view: it is saved with the panel,
-   * so it survives the view unmounting, a reload and a restart, and unmounting
-   * leaves it alone. A name the user typed wins: once they rename the panel,
-   * this does nothing until they clear their rename. Control characters are
-   * dropped and the title is cut at 80 characters.
+   * The title belongs to the panel, not the view: it survives the view
+   * unmounting and reloading, and a grid or dock panel keeps it across a
+   * restart. A dialog keeps it until the dialog closes, since closing one
+   * removes its panel. A name the user typed wins: once they rename the panel,
+   * this does nothing until they clear their rename. The title is held to one
+   * line: control and invisible formatting characters become spaces, and it is
+   * cut at 80 characters.
    *
    * Only ever titles this panel. The setter belongs to the attempt that
    * received it: a call held past this attempt's teardown does nothing.

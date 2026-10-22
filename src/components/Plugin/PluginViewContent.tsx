@@ -1710,16 +1710,15 @@ export function makePluginViewContent(
       [offerToolbar, setMenuItemsFor, retryCount]
     );
     /**
-     * The view's name for its panel, bound to the attempt that set it like
-     * `setHasUnsavedChanges`. Unlike the menu it is not cleared on a reload or a
-     * crash: the title is saved with the panel and outlives any one view. Not
-     * held to `toolbarClosedRef` either: a StrictMode replay runs the view's
-     * mount effect before this host's setup lifts it, and a title written in
-     * that gap is wanted, while one written after the panel is gone finds no
-     * record to change.
+     * The view's name for its panel, held to the same attempt and teardown
+     * guards as the menu, so a `disposeSignal` listener of a view that is going
+     * away cannot rename a panel that lives on. Unlike the menu it is not
+     * cleared on a reload or a crash: the title is saved with the panel and
+     * outlives any one view.
      */
     const setTitleFor = useCallback(
       (attempt: number, title: unknown): void => {
+        if (toolbarClosedRef.current) return;
         if (attempt !== attemptRef.current || !setPanelTitle) return;
         const normalized = normalizePluginPanelTitle(title);
         if (normalized === null) {
@@ -1731,10 +1730,7 @@ export function makePluginViewContent(
       [setPanelTitle]
     );
     const setTitle = useMemo(
-      () =>
-        setPanelTitle
-          ? (title: string | null) => setTitleFor(retryCount, title)
-          : undefined,
+      () => (setPanelTitle ? (title: string | null) => setTitleFor(retryCount, title) : undefined),
       [setPanelTitle, setTitleFor, retryCount]
     );
     const runningActions = useAuthoredRunningActions(pluginId);

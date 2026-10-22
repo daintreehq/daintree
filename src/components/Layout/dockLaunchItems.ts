@@ -435,8 +435,7 @@ function toPanelItem(
   // The one exception is a project-scoped plugin kind, which `launchPanelKind`
   // always puts in the dock (#13778).
   const location =
-    panelKindIsProjectScoped(config.id) ||
-    (surface === "dock" && panelKindIsDockable(config.id))
+    panelKindIsProjectScoped(config.id) || (surface === "dock" && panelKindIsDockable(config.id))
       ? "dock"
       : "grid";
   return {

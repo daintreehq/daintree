@@ -1535,6 +1535,49 @@ describe("rendererStoreOrchestrator", () => {
       expect(worktreeSnapshot?.activeWorktreeId).toBe("wt-real");
     });
 
+    it("names a plugin panel from its view as automation, so a user rename wins (#13778)", async () => {
+      const { setPanelTitleThroughAccessor } = await import("../storeAccessors");
+      const { registerPanelKind, unregisterPanelKind } =
+        await import("@shared/config/panelKindRegistry");
+      registerPanelKind({
+        id: "acme.records",
+        name: "Records",
+        iconId: "database",
+        color: "#123456",
+        hasPty: false,
+        canRestart: false,
+        canConvert: false,
+        extensionId: "acme",
+      });
+      try {
+        usePanelStore.setState({
+          panelsById: {
+            rec: { id: "rec", kind: "acme.records", title: "Records", location: "dock" },
+          },
+          panelIds: ["rec"],
+        });
+        const read = () => {
+          const panel = usePanelStore.getState().panelsById.rec;
+          return { title: panel?.title, titleMode: panel?.titleMode };
+        };
+
+        setPanelTitleThroughAccessor("rec", "Record #42");
+        expect(read()).toEqual({ title: "Record #42", titleMode: "custom" });
+
+        usePanelStore.getState().updateTitle("rec", "My records", "user");
+        setPanelTitleThroughAccessor("rec", "Record #43");
+        setPanelTitleThroughAccessor("rec", "");
+        expect(read()).toEqual({ title: "My records", titleMode: "user" });
+
+        usePanelStore.getState().updateTitle("rec", "", "user");
+        expect(read()).toEqual({ title: "Records", titleMode: "default" });
+        setPanelTitleThroughAccessor("rec", "Record #44");
+        expect(read()).toEqual({ title: "Record #44", titleMode: "custom" });
+      } finally {
+        unregisterPanelKind("acme.records");
+      }
+    });
+
     it("clears accessor slots on destroy so consumers see the null fallback before re-init", async () => {
       const { getPanelStoreSnapshot, getWorktreeSelectionSnapshot, getFleetArmedIds } =
         await import("../storeAccessors");

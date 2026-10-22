@@ -296,7 +296,7 @@ describe("createPreviewPanelController", () => {
     const first = panel.props();
     first.setTitle?.(" Record\n#42 ");
     expect(panel.title).toBe("Record #42");
-    (first.setTitle as unknown as (value: unknown) => void)(42);
+    Reflect.apply(first.setTitle!, undefined, [42]);
     expect(panel.title).toBe("Record #42");
 
     // The title belongs to the panel, so a new attempt neither clears nor

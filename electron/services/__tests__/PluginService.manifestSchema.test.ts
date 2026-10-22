@@ -768,9 +768,9 @@ describe("panel contribution scope (#13778)", () => {
     const omitted = parsePanel({});
     expect(omitted.success).toBe(true);
     if (omitted.success) {
-      expect(Object.prototype.hasOwnProperty.call(omitted.data.contributes.panels[0], "scope")).toBe(
-        false
-      );
+      expect(
+        Object.prototype.hasOwnProperty.call(omitted.data.contributes.panels[0], "scope")
+      ).toBe(false);
     }
   });
 
