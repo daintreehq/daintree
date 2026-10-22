@@ -34,6 +34,11 @@ import {
 } from "@/components/Settings/ProjectPluginSelectorDropdown";
 import { useRenderableSurfaceClaim } from "@/hooks/useRenderableSurfaceClaim";
 import {
+  describeSurfaceRefusal,
+  surfacePluginFallbackName,
+  useProjectSurfaceRefusals,
+} from "@/hooks/useProjectSurfaceRefusals";
+import {
   selectFailedSave,
   selectSurfaceChoice,
   usePluginProjectSurfacesStore,
@@ -662,6 +667,14 @@ function ProjectPluginPane({
   const muteFailure = useStoreFailure("mute", plugin.id);
   const activateFailure = useStoreFailure("activate", plugin.id);
   const reloadFailure = useStoreFailure("reload");
+  const projectPlugins = useProjectPluginStore((s) => s.plugins);
+  // A claim this plugin lost, or one the host couldn't apply. Shown whatever the
+  // claim's own state, because a loaded plugin whose surface never appears is
+  // exactly what the author would otherwise have no way to explain.
+  const refusals = useProjectSurfaceRefusals(plugin.instanceId);
+  const nameOf = (pluginId: string) =>
+    projectPlugins.find((p) => p.instanceId === pluginId)?.displayName ??
+    surfacePluginFallbackName(pluginId);
 
   const folderTrusted = trust?.enabled === true;
   const declared = new Set(plugin.capabilities);
@@ -825,6 +838,17 @@ function ProjectPluginPane({
               description="Both load — the instance key keeps them apart — so check which one a command or panel came from."
             />
           )}
+
+          {refusals.map((refusal) => {
+            const copy = describeSurfaceRefusal(refusal, nameOf);
+            return (
+              <SettingsRow
+                key={`${refusal.slot}:${refusal.reason}`}
+                label={copy.title}
+                description={copy.detail}
+              />
+            );
+          })}
 
           {awaitingActivation && capabilitiesRow}
         </SettingsGroup>

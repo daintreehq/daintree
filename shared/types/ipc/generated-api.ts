@@ -852,9 +852,6 @@ export interface GeneratedElectronAPI {
     getProjectPluginVisibility(
       ...args: IpcInvokeMap["plugin:project-visibility-get"]["args"]
     ): Promise<IpcInvokeMap["plugin:project-visibility-get"]["result"]>;
-    getProjectSurfaceChoices(
-      ...args: IpcInvokeMap["plugin:project-surface-choices-get"]["args"]
-    ): Promise<IpcInvokeMap["plugin:project-surface-choices-get"]["result"]>;
     getProjectSurfaces(
       ...args: IpcInvokeMap["plugin:project-surfaces-get"]["args"]
     ): Promise<IpcInvokeMap["plugin:project-surfaces-get"]["result"]>;

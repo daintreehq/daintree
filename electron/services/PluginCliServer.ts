@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import crypto from "node:crypto";
 import { z } from "zod";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
+import { getProjectSurfaceRefusals } from "./plugin/PluginSurfaceRegistry.js";
 import {
   getCliSocketPath,
   getCliControlFilePath,
@@ -395,12 +396,17 @@ export async function startPluginCliServer(): Promise<void> {
           .find((row) => path.resolve(row.path) === normalized);
         // A path Daintree has never opened is a legitimate answer, not an
         // error: the author may be checking a clone before adding it.
-        if (!project) return { known: false, projectId: null, trust: null, plugins: [] };
+        if (!project) {
+          return { known: false, projectId: null, trust: null, plugins: [], surfaceRefusals: [] };
+        }
         return {
           known: true,
           projectId: project.id,
           trust: pluginService.getProjectPluginTrustState(project.id),
           plugins: pluginService.listProjectPlugins(project.id),
+          // Slot claims the host refused, by plugin instance key, so `doctor`
+          // can tell an author why a surface they declared isn't showing.
+          surfaceRefusals: getProjectSurfaceRefusals(project.id),
         };
       },
     },

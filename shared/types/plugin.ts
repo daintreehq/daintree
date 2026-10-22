@@ -431,13 +431,49 @@ export interface ViewContribution {
 }
 
 /**
- * The project surfaces a project-local plugin can own. See §7.8 and
- * `SurfaceContributionsSchema` in `electron/schemas/plugin.ts` for why
- * `projectHome` and `defaultLayout` are not here yet.
+ * How a slot arbitrates between the plugins that claim it.
+ *
+ * - `exclusive` — one plugin replaces the stock content. Project plugins only:
+ *   an installed plugin is bound to no project, so letting it take one over
+ *   would reshape every project at once.
+ * - `selectable` — several plugins offer options and one is the default. An
+ *   installed plugin may offer one, but only a project plugin can be the
+ *   default; an installed option shows only once the user picks it.
+ *
+ * Stock is an option in every slot, whatever its mode.
  */
-export const PROJECT_SURFACE_SLOTS = ["emptyCanvas"] as const;
+export type ProjectSurfaceSlotMode = "exclusive" | "selectable";
 
-export type ProjectSurfaceSlot = (typeof PROJECT_SURFACE_SLOTS)[number];
+/** What a claim on a slot carries: a view to mount, or data the host applies. */
+export type ProjectSurfaceClaimKind = "view" | "data";
+
+/** One host-declared slot: its arbitration mode, claim shape and user-facing name. */
+export interface ProjectSurfaceSlotDescriptor {
+  mode: ProjectSurfaceSlotMode;
+  claim: ProjectSurfaceClaimKind;
+  /** Sentence-case name for the slot in settings and diagnostics. */
+  label: string;
+}
+
+/**
+ * Every slot a plugin can claim in a project (§7.8). The host declares them
+ * here, once, and every slot list — the manifest cross-checks, the registry,
+ * the persisted answers — derives from this table, so a slot is a public id
+ * the same way an action id is.
+ *
+ * See `SurfaceContributionsSchema` in `electron/schemas/plugin.ts` for why
+ * `projectHome` and `defaultLayout` are not here yet: a slot joins the
+ * catalogue with the consumer that renders it.
+ */
+export const PROJECT_SURFACE_SLOT_CATALOGUE = {
+  emptyCanvas: { mode: "exclusive", claim: "view", label: "Empty canvas" },
+} as const satisfies Record<string, ProjectSurfaceSlotDescriptor>;
+
+export type ProjectSurfaceSlot = keyof typeof PROJECT_SURFACE_SLOT_CATALOGUE;
+
+export const PROJECT_SURFACE_SLOTS = Object.keys(
+  PROJECT_SURFACE_SLOT_CATALOGUE
+) as readonly ProjectSurfaceSlot[];
 
 /** A surface slot claim naming one of the plugin's own `contributes.views`. */
 export interface SurfaceViewSlot {
@@ -472,6 +508,109 @@ export function isProjectSurfaceSlot(value: unknown): value is ProjectSurfaceSlo
 }
 
 /**
+ * What one claim carries, in the shape its slot declares.
+ *
+ * A view claim names the manifest view; `panelKindId` is set when the view
+ * mounts through the plugin panel path, which is how every view slot mounts
+ * today. A data claim carries a JSON value the slot's own consumer validates.
+ */
+export type ProjectSurfaceClaimValue =
+  { kind: "view"; viewId: string; panelKindId?: string } | { kind: "data"; data: unknown };
+
+/** One plugin's claim on one slot, as the registry arbitrates it. */
+export interface ProjectSurfaceSlotClaim {
+  /** The claiming plugin INSTANCE key. */
+  pluginId: string;
+  /** Where the plugin came from. Host-derived, never declared by the plugin. */
+  scope: "project" | "installed";
+  value: ProjectSurfaceClaimValue;
+}
+
+/**
+ * Why a plugin's claim on a slot is not in force.
+ *
+ * - `outranked` — another plugin holds the exclusive slot. Project plugins
+ *   outrank installed ones, then the lower manifest id wins.
+ * - `installed-exclusive` — an installed plugin claimed an exclusive slot.
+ * - `claim-kind` — the claim carries a view where the slot takes data, or the
+ *   reverse.
+ * - `unresolved-view` — the claimed view registered nothing the host can mount.
+ */
+export type ProjectSurfaceRefusalReason =
+  "outranked" | "installed-exclusive" | "claim-kind" | "unresolved-view";
+
+/** A claim the host did not apply, attributed so the user and author can see why. */
+export interface ProjectSurfaceRefusal {
+  slot: ProjectSurfaceSlot;
+  /** The refused plugin's INSTANCE key. */
+  pluginId: string;
+  reason: ProjectSurfaceRefusalReason;
+  /** For `outranked`, the instance key of the plugin holding the slot. */
+  heldBy?: string;
+}
+
+/**
+ * One slot's arbitrated state in one project. Independent of the user's
+ * answer — {@link resolveProjectSurfaceSelection} applies that.
+ */
+export interface ProjectSurfaceSlotState {
+  mode: ProjectSurfaceSlotMode;
+  /**
+   * The plugin options, highest rank first. An exclusive slot has at most one
+   * (its owner); a selectable slot lists every claimant. Stock is always an
+   * option too and is never listed.
+   */
+  options: ProjectSurfaceSlotClaim[];
+  /** The option shown with no answer from the user; `null` is stock. */
+  defaultOptionId: string | null;
+  refused: ProjectSurfaceRefusal[];
+}
+
+/**
+ * Everything a project's views know about its slots, in one read.
+ *
+ * `revision` is main's per-project counter, bumped on every change to a claim,
+ * a refusal or an answer. A view adopts a snapshot only when its revision is at
+ * least the last one it adopted, so a slow read can never roll back a newer
+ * push or save.
+ */
+export interface ProjectSurfacesSnapshot {
+  projectId: string;
+  revision: number;
+  slots: Partial<Record<ProjectSurfaceSlot, ProjectSurfaceSlotState>>;
+  /**
+   * The project's remembered answers, or `null` when main could not read them.
+   * Unreadable is not the same as unanswered: read as empty, it would show a
+   * canvas the user switched off and ask them again.
+   */
+  choices: ProjectSurfaceChoices | null;
+}
+
+/**
+ * `plugin:project-surfaces-changed` — a project's slot state changed (a claim,
+ * a release, a refusal or an answer). Signal-only: views re-read the snapshot.
+ */
+export interface ProjectSurfacesChangedEvent {
+  projectId: string;
+  revision: number;
+}
+
+/**
+ * The surface an exclusive slot's owner mounts, in the shape the renderer's
+ * panel-backed surface path takes. `null` for a selectable slot, a data claim,
+ * or a view that does not mount through a panel kind.
+ */
+export function projectSurfaceClaimFromState(
+  state: ProjectSurfaceSlotState | undefined
+): ProjectSurfaceClaim | null {
+  if (state === undefined || state.mode !== "exclusive") return null;
+  const owner = state.options[0];
+  if (owner === undefined || owner.value.kind !== "view") return null;
+  const { panelKindId } = owner.value;
+  return panelKindId === undefined ? null : { pluginId: owner.pluginId, panelKindId };
+}
+
+/**
  * What the user wants a claimed slot to show: the plugin's surface, or the
  * host's own stock content in its place.
  */
@@ -491,28 +630,52 @@ export interface ProjectSurfaceChoiceRecord {
    * The MANIFEST id of the plugin the answer was about. A slot that has since
    * passed to a different plugin is undecided again — agreeing to one plugin's
    * canvas is not agreeing to whatever claims the slot next.
+   *
+   * On a selectable slot, the picked option's manifest id, or empty when the
+   * user picked stock: that answer is about the slot, not about any plugin.
    */
   pluginId: string;
   choice: ProjectSurfaceChoice;
   /** Epoch ms of the answer. */
   decidedAt: number;
+  /**
+   * For a selectable slot, the INSTANCE key of the option the user picked —
+   * what tells a project plugin and an installed one sharing a manifest id
+   * apart. Absent on exclusive slots, whose one option is the owner.
+   */
+  optionId?: string;
 }
 
 /** Every remembered surface answer in one project, keyed by slot. */
 export type ProjectSurfaceChoices = Partial<Record<ProjectSurfaceSlot, ProjectSurfaceChoiceRecord>>;
 
 /**
- * One project's remembered surface answers, named by the project main resolved
- * them for. Every read, write and push carries the name, so a view can refuse a
- * set that is not its own.
+ * The option a slot shows once the user's answer is applied, or `null` for
+ * stock.
+ *
+ * An exclusive answer counts only for the plugin it was about: a slot that has
+ * passed to another plugin is undecided again, because agreeing to one
+ * plugin's surface is not agreeing to whatever claims it next. A selectable
+ * answer naming an option that is not on offer right now falls back to the
+ * default without being forgotten, so the pick returns with its plugin.
  */
-export interface ProjectSurfaceChoicesSnapshot {
-  projectId: string;
-  choices: ProjectSurfaceChoices;
+export function resolveProjectSurfaceSelection(
+  state: ProjectSurfaceSlotState | undefined,
+  record: ProjectSurfaceChoiceRecord | undefined
+): ProjectSurfaceSlotClaim | null {
+  if (state === undefined) return null;
+  const byId = (id: string | null) =>
+    id === null ? null : (state.options.find((option) => option.pluginId === id) ?? null);
+  const fallback = byId(state.defaultOptionId);
+  if (record === undefined) return fallback;
+  if (state.mode === "exclusive") {
+    if (fallback === null) return null;
+    if (record.pluginId !== pluginManifestIdFromInstanceKey(fallback.pluginId)) return fallback;
+    return record.choice === "stock" ? null : fallback;
+  }
+  if (record.choice === "stock") return null;
+  return (record.optionId === undefined ? null : byId(record.optionId)) ?? fallback;
 }
-
-/** `plugin:project-surface-choices-changed` — the full set, for every view of the project. */
-export type ProjectSurfaceChoicesChangedEvent = ProjectSurfaceChoicesSnapshot;
 
 /**
  * The attribute the host stamps on the element a plugin view renders into, and

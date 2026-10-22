@@ -52,6 +52,7 @@ import { z } from "zod";
 import {
   isBuiltInPluginCapability,
   PLUGIN_WORKER_SELF_RESTART_COOLDOWN_MS,
+  PROJECT_SURFACE_SLOTS,
   UNBOUND_PLUGIN_HOST_BINDING,
   type ProjectSurfaceSlot,
   type WorkerRestartResult,
@@ -98,7 +99,7 @@ import type {
   ProjectPluginVisibility,
   ProjectSurfaceChoice,
   ProjectSurfaceChoices,
-  ProjectSurfaceChoicesSnapshot,
+  ProjectSurfacesSnapshot,
 } from "../../shared/types/plugin.js";
 import {
   PluginFileLogLimiter,
@@ -118,7 +119,14 @@ import {
   setPluginContributionScope,
   clearPluginContributionScope,
 } from "./plugin/PluginContributionBroadcaster.js";
-import { claimProjectSurface, releasePluginSurfaces } from "./plugin/PluginSurfaceRegistry.js";
+import {
+  bumpProjectSurfaceRevision,
+  claimProjectSurface,
+  getProjectSurfaceRevision,
+  getProjectSurfaceSlots,
+  refuseProjectSurface,
+  releasePluginSurfaces,
+} from "./plugin/PluginSurfaceRegistry.js";
 import {
   getProjectSurfaceChoices as readProjectSurfaceChoices,
   setProjectSurfaceChoice as writeProjectSurfaceChoice,
@@ -2621,11 +2629,11 @@ export class PluginService {
     if (isProject && binding.projectId != null && binding.projectId.length > 0) {
       const surfaceProjectId = binding.projectId;
       const surfaces = manifest.contributes.surfaces ?? {};
-      for (const [slot, claim] of Object.entries(surfaces) as [
-        ProjectSurfaceSlot,
-        { viewId: string } | undefined,
-      ][]) {
+      let surfacesChanged = false;
+      for (const slot of PROJECT_SURFACE_SLOTS) {
+        const claim = surfaces[slot];
         if (claim === undefined) continue;
+        surfacesChanged = true;
         const panelKindId = toRuntimePanelKindId(
           { origin: "project", pluginId: manifest.name, kindId: claim.viewId },
           surfaceProjectId
@@ -2633,29 +2641,40 @@ export class PluginService {
         // The schema already cross-checks `viewId` against `contributes.views`,
         // and a view without a matching panel is a manifest error — so a miss
         // here means the panels loop skipped the kind (an unqualifiable id, or
-        // a `hasPty` panel whose view is ignored). Skip the slot rather than
+        // a `hasPty` panel whose view is ignored). Refuse the slot rather than
         // publish a claim the renderer cannot resolve.
         // `componentPath`, not merely a registered kind: the panels loop leaves
         // it off for a PTY panel (and for a view it skipped), and a claim with
         // no module to load would hold the project's slot against every other
         // plugin while rendering nothing.
         if (panelKindId === null || getPanelKindConfig(panelKindId)?.componentPath === undefined) {
+          refuseProjectSurface(surfaceProjectId, slot, pluginId, "unresolved-view");
           console.warn(
             `[PluginService] Plugin "${manifest.name}": surfaces.${slot} names view "${claim.viewId}", which registered no loadable panel kind — the slot keeps its stock content`
           );
           continue;
         }
-        const result = claimProjectSurface(surfaceProjectId, slot, { pluginId, panelKindId });
-        if (!result.ok) {
-          // Never a silent last-wins: which surface the user sees would then be
-          // a function of directory-scan order. First claim stands and BOTH
-          // plugins are named, because the fix is to change one of the two
-          // manifests and the author cannot do that without knowing the other.
-          console.error(
-            `[PluginService] Project surface conflict: "${manifest.name}" claims surfaces.${slot}, which is already owned by "${result.heldBy}" in this project. The incumbent keeps the slot; only one plugin may claim it.`
+        const result = claimProjectSurface(surfaceProjectId, slot, {
+          pluginId,
+          scope: "project",
+          value: { kind: "view", viewId: claim.viewId, panelKindId },
+        });
+        // Never a silent winner: which surface the user sees follows a fixed
+        // rank, and BOTH plugins are named, because the fix is to change one of
+        // the two manifests and the author cannot do that without knowing the
+        // other. The same refusal reaches project plugin settings and
+        // `daintree-plugin doctor`.
+        if (!result.ok && result.reason === "outranked" && result.heldBy !== undefined) {
+          console.warn(
+            `[PluginService] Project surface conflict: "${manifest.name}" claims surfaces.${slot}, which "${pluginManifestIdFromInstanceKey(result.heldBy)}" holds in this project. Only one plugin may claim it; the lower manifest id keeps it.`
+          );
+        } else if (result.ok && result.displaced !== undefined) {
+          console.warn(
+            `[PluginService] Project surface conflict: "${manifest.name}" takes surfaces.${slot} from "${pluginManifestIdFromInstanceKey(result.displaced)}" in this project. Only one plugin may claim it; the lower manifest id keeps it.`
           );
         }
       }
+      if (surfacesChanged) this.publishProjectSurfaces([surfaceProjectId]);
     }
 
     // Plugins without a `main` entry contribute no executable code — the
@@ -6174,27 +6193,61 @@ export class PluginService {
     await this.syncProjectPluginWatcher(projectId);
   }
 
-  /** This project's remembered answers about its plugin surface claims. */
-  getProjectSurfaceChoices(projectId: string): ProjectSurfaceChoices {
-    return readProjectSurfaceChoices(projectId);
+  /**
+   * Everything this project's views know about its slots — the arbitrated
+   * claims, the refusals and the user's answers — read in one synchronous pass
+   * so the revision describes all three.
+   *
+   * An unreadable answer store yields `choices: null` rather than failing the
+   * whole read: the claims and refusals are still worth showing, and the
+   * renderer already treats an unknown answer as "stay on stock, don't ask".
+   */
+  getProjectSurfacesSnapshot(projectId: string): ProjectSurfacesSnapshot {
+    let choices: ProjectSurfaceChoices | null;
+    try {
+      choices = readProjectSurfaceChoices(projectId);
+    } catch (err) {
+      console.warn("[PluginService] Could not read project surface choices:", err);
+      choices = null;
+    }
+    return {
+      projectId,
+      revision: getProjectSurfaceRevision(projectId),
+      slots: getProjectSurfaceSlots(projectId),
+      choices,
+    };
   }
 
   /**
-   * Remember whether a claimed slot shows the plugin's surface or the stock
-   * content, and tell every view of the project: the canvas and the settings
-   * pane that discloses the answer can be open in different windows.
+   * Remember the user's answer about a slot, and tell every view of the
+   * project: the canvas and the settings pane that discloses the answer can be
+   * open in different windows.
    */
   setProjectSurfaceChoice(
     projectId: string,
     slot: ProjectSurfaceSlot,
-    choice: ProjectSurfaceChoice | null
-  ): ProjectSurfaceChoicesSnapshot {
-    const snapshot = { projectId, choices: writeProjectSurfaceChoice(projectId, slot, choice) };
-    broadcastToProjectRenderers(projectId, CHANNELS.EVENTS_PUSH, {
-      name: "plugin:project-surface-choices-changed",
-      payload: snapshot,
-    } satisfies EventBusEnvelope);
-    return snapshot;
+    choice: ProjectSurfaceChoice | null,
+    optionId?: string
+  ): ProjectSurfacesSnapshot {
+    writeProjectSurfaceChoice(projectId, slot, choice, optionId);
+    bumpProjectSurfaceRevision(projectId);
+    this.publishProjectSurfaces([projectId]);
+    return this.getProjectSurfacesSnapshot(projectId);
+  }
+
+  /**
+   * The one project-scoped signal that a project's slot state changed — a
+   * claim, a release, a refusal or an answer. Carries only the revision; each
+   * view re-reads the snapshot, which main resolves from the view's own
+   * project.
+   */
+  private publishProjectSurfaces(projectIds: Iterable<string>): void {
+    for (const projectId of new Set(projectIds)) {
+      broadcastToProjectRenderers(projectId, CHANNELS.EVENTS_PUSH, {
+        name: "plugin:project-surfaces-changed",
+        payload: { projectId, revision: getProjectSurfaceRevision(projectId) },
+      } satisfies EventBusEnvelope);
+    }
   }
 
   /** The per-project visibility overlay for INSTALLED plugins. */
@@ -6742,8 +6795,12 @@ export class PluginService {
     // module is unimportable the moment its authority is dropped, so a
     // surviving claim would leave the project rendering a permanently-failing
     // view where its stock content used to be. Trust revoke unloads through
-    // this same cascade, so revoking trust releases the slot too.
-    runUnloadStep(pluginId, "releasePluginSurfaces", () => releasePluginSurfaces(pluginId));
+    // this same cascade, so revoking trust releases the slot too. Every
+    // project it touched is told, so its views fall back (to stock or to the
+    // next claimant) now rather than at the next unrelated panel-kind change.
+    runUnloadStep(pluginId, "releasePluginSurfaces", () =>
+      this.publishProjectSurfaces(releasePluginSurfaces(pluginId))
+    );
 
     // Drop any live panel badges this plugin set and tell the renderer to clear
     // them (#10585). Only broadcast when the plugin actually had badges so an

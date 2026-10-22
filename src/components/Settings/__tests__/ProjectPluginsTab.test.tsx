@@ -19,6 +19,9 @@ import type {
   PluginManifest,
   ProjectPluginInfo,
   ProjectSurfaceChoice,
+  ProjectSurfaceChoices,
+  ProjectSurfaceSlotState,
+  ProjectSurfacesSnapshot,
 } from "@shared/types/plugin";
 
 const PROJECT_ID = "a".repeat(64);
@@ -148,13 +151,11 @@ const pluginApi = {
   setProjectPluginTrust: vi.fn().mockResolvedValue(undefined),
   // Main records the answer against the slot's owner and returns the new set.
   setProjectSurfaceChoice: vi.fn((_slot: string, choice: ProjectSurfaceChoice | null) =>
-    Promise.resolve({
-      projectId: PROJECT_ID,
-      choices:
-        choice === null
-          ? {}
-          : { emptyCanvas: { pluginId: "acme.dashboard", choice, decidedAt: 2 } },
-    })
+    Promise.resolve(
+      canvasSnapshot(
+        choice === null ? {} : { emptyCanvas: { pluginId: "acme.dashboard", choice, decidedAt: 2 } }
+      )
+    )
   ),
   activateStagedProjectPlugin: vi.fn().mockResolvedValue(undefined),
   reloadProjectPlugins: vi.fn().mockResolvedValue(undefined),
@@ -219,6 +220,26 @@ afterEach(() => {
 
 const CANVAS_KIND_ID = `project:${PROJECT_ID}/acme.dashboard/overview`;
 const CANVAS_OWNER = `project__${PROJECT_ID}__acme.dashboard`;
+
+function canvasSlot(refused: ProjectSurfaceSlotState["refused"] = []): ProjectSurfaceSlotState {
+  return {
+    mode: "exclusive",
+    options: [
+      {
+        pluginId: CANVAS_OWNER,
+        scope: "project",
+        value: { kind: "view", viewId: "overview", panelKindId: CANVAS_KIND_ID },
+      },
+    ],
+    defaultOptionId: CANVAS_OWNER,
+    refused,
+  };
+}
+
+/** What main returns once it has recorded an answer: the canvas owner plus the answers. */
+function canvasSnapshot(choices: ProjectSurfaceChoices): ProjectSurfacesSnapshot {
+  return { projectId: PROJECT_ID, revision: 2, slots: { emptyCanvas: canvasSlot() }, choices };
+}
 
 /** A running project plugin whose empty-canvas claim can render, answered or not. */
 function claimEmptyCanvas(choice?: ProjectSurfaceChoice) {
@@ -393,6 +414,43 @@ describe("ProjectPluginsTab", () => {
     const pane = await screen.findByTestId("project-plugin-detail");
     expect(pane.textContent).toContain("Switched off on its own");
     expect(pane.textContent).not.toContain("turned off as a folder");
+  });
+
+  it("tells a plugin that lost the empty canvas which plugin holds it and why", async () => {
+    const loser = projectPlugin({
+      id: "zeta.board",
+      instanceId: `project__${PROJECT_ID}__zeta.board`,
+      displayName: "Zeta Board",
+      dirName: "zeta",
+    });
+    seed([projectPlugin(), loser]);
+    act(() => {
+      usePluginProjectSurfacesStore.setState({
+        slots: {
+          emptyCanvas: canvasSlot([
+            {
+              slot: "emptyCanvas",
+              pluginId: `project__${PROJECT_ID}__zeta.board`,
+              reason: "outranked",
+              heldBy: CANVAS_OWNER,
+            },
+          ]),
+        },
+      });
+    });
+    render(<ProjectPluginsTab />);
+    await waitFor(() => expect(pluginApi.list).toHaveBeenCalled());
+
+    await select("Zeta Board");
+    const pane = await screen.findByTestId("project-plugin-detail");
+    expect(pane.textContent).toContain("Empty canvas not shown");
+    // The holder by its display name, so the author knows which manifest to change.
+    expect(pane.textContent).toContain("Acme Dashboard also claims it in this project");
+
+    // The winner's own pane says nothing about a conflict it won.
+    await select("Acme Dashboard");
+    const winner = await screen.findByTestId("project-plugin-detail");
+    expect(winner.textContent).not.toContain("not shown");
   });
 
   it("offers a staged plugin's activation in place of a switch that would read as on", async () => {

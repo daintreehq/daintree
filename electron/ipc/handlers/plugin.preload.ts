@@ -25,7 +25,6 @@ export const PLUGIN_METHOD_CHANNELS = {
   unregisterAction: "plugin:actions-unregister",
   getPanelKinds: "plugin:panel-kinds-get",
   getProjectSurfaces: "plugin:project-surfaces-get",
-  getProjectSurfaceChoices: "plugin:project-surface-choices-get",
   setProjectSurfaceChoice: "plugin:project-surface-choice-set",
   getProjectPlugins: "plugin:project-list",
   setProjectPluginTrust: "plugin:project-set-trust",
