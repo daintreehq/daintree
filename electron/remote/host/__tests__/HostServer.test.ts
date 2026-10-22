@@ -1011,7 +1011,7 @@ describe("HostServer session cap", () => {
     await waitFor(() => seen.length === 2);
     one.socket.destroy();
     await waitFor(() => resumable.size === 1);
-    // Only what a resume must match is parked, never the dropped session.
+    // A few identifiers and a timer are parked, never the dropped session.
     expect(Object.keys(resumable.get(seen[0]!.sessionId)!).sort()).toEqual([
       "clientId",
       "parkedAt",
@@ -1122,11 +1122,11 @@ describe("HostServer and a relaunched Shell (#13909)", () => {
   it("ends nothing for a resume or a refused HELLO naming the install", async () => {
     const server = await startServer({ resumeGraceMs: 60_000 });
     const { expired, park } = await watched(server);
-    const older = await helloOn(server, "launch-1", null, INSTALL);
-    await park(older);
-    const current = await helloOn(server, "launch-1b", null, INSTALL);
-    expect(expired).toHaveLength(1);
-    await park(current);
+    // Two launches sharing the install's id, both attached before either drops.
+    const one = await helloOn(server, "launch-1", null, INSTALL);
+    const two = await helloOn(server, "launch-2", null, INSTALL);
+    await park(one);
+    await park(two);
 
     const intruder = await rawConnect();
     intruder.socket.write(
@@ -1144,16 +1144,29 @@ describe("HostServer and a relaunched Shell (#13909)", () => {
       )
     );
     await closedSocket(intruder.socket);
-    expect(expired).toHaveLength(1);
+    expect(intruder.frames.map((f) => frameToMessage(f)?.body)).toContainEqual(
+      expect.objectContaining({ reason: "unauthorized" })
+    );
+    expect(expired).toEqual([]);
 
+    // One resuming leaves the other's parked session to it.
     const resumed = await helloOn(
       server,
-      "launch-1b",
-      { id: current.welcome.sessionId, secret: current.welcome.resumeSecret },
+      "launch-1",
+      { id: one.welcome.sessionId, secret: one.welcome.resumeSecret },
       INSTALL
     );
     expect(resumed.welcome.resumed).toBe(true);
-    expect(expired).toHaveLength(1);
+    expect(expired).toEqual([]);
+    const back = await helloOn(
+      server,
+      "launch-2",
+      { id: two.welcome.sessionId, secret: two.welcome.resumeSecret },
+      INSTALL
+    );
+    expect(back.welcome.resumed).toBe(true);
+    expect(expired).toEqual([]);
     resumed.raw.socket.destroy();
+    back.raw.socket.destroy();
   });
 });

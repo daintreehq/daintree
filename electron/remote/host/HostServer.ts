@@ -75,9 +75,10 @@ export interface HostServerOptions {
 }
 
 /**
- * What a parked session keeps: only what a resume has to match, and when it
- * was parked. The dropped LinkSession and its context are not retained, so a
- * parked slot costs a few strings and a timer however much the session carried.
+ * What a parked session keeps: what a resume has to match, the install a
+ * fresh session of the same Shell ends it by, and when it was parked. The
+ * dropped LinkSession and its context are not retained, so a parked slot
+ * costs a few strings and a timer however much the session carried.
  */
 interface Resumable {
   sessionId: string;

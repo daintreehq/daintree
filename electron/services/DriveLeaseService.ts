@@ -590,19 +590,20 @@ export class DriveLeaseService {
 
   /**
    * Who carries on for a holder that has gone: another window of its client,
-   * else one of the same Shell install on a new launch. The install is the
-   * Shell's own word, which hands over nothing Take control doesn't, and a
-   * holder still there is never asked.
+   * else, once the holder's endpoint is gone for good (closed, its session
+   * ended, or restored after a restart), one of the same Shell install on a
+   * new launch. A holder whose link merely dropped keeps its grace for a
+   * resume, even from another launch sharing its install's id. The install is
+   * the Shell's own word, which hands over nothing Take control doesn't.
    */
   private continuer(attached: ClientEndpoint[], lease: ProjectLease): ClientEndpoint | undefined {
     const { holder, holderDeviceId } = lease;
-    return (
-      attached.find((endpoint) => endpoint.clientId === holder.clientId) ??
-      (holderDeviceId === null
-        ? undefined
-        : attached.find(
-            (endpoint) => this.clients.get(endpoint.endpointId)?.deviceId === holderDeviceId
-          ))
+    const sameClient = attached.find((endpoint) => endpoint.clientId === holder.clientId);
+    if (sameClient || holderDeviceId === null) return sameClient;
+    const holderEndpoint = this.registry.get(holder.endpointId);
+    if (holderEndpoint && !holderEndpoint.isClosed()) return undefined;
+    return attached.find(
+      (endpoint) => this.clients.get(endpoint.endpointId)?.deviceId === holderDeviceId
     );
   }
 

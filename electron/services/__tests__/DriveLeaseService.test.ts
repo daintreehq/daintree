@@ -1182,19 +1182,27 @@ describe("DriveLeaseService and a relaunched Shell (#13909)", () => {
     expect(service.getHolder("p")?.endpointId).toBe("s2:e1");
   });
 
-  it("takes it back from a launch whose session the host still holds for resume", async () => {
+  it("leaves a holder whose link merely dropped its grace, and carries on once its session ends", async () => {
     const before = await drivenThenGone(INSTALL, "parked");
 
+    // Another launch sharing the install's id waits: a resume keeps the lease.
     const after = remote("s2:e1", "launch-2");
     registry.add(after);
     note(after, "greg-studio", INSTALL);
     await settle();
-    expect(service.getHolder("p")?.endpointId).toBe("s2:e1");
-
-    // The old link coming back observes; it doesn't take the project back.
+    expect(service.getHolder("p")?.endpointId).toBe("s1:e1");
+    expect(service.isDriving("p", after)).toBe(false);
     service.noteEndpointTransport([before.endpointId], true);
-    expect(service.getHolder("p")?.endpointId).toBe("s2:e1");
+    expect(service.getHolder("p")?.endpointId).toBe("s1:e1");
+
+    // Its link drops again and the host ends the session, as a relaunch's HELLO does.
+    service.noteEndpointTransport([before.endpointId], false);
+    before.close();
+    await settle();
+    expect(changes.at(-1)?.holder?.endpointId).toBe("s2:e1");
     expect(service.isDriving("p", before)).toBe(false);
+    vi.advanceTimersByTime(GRACE_MS * 2);
+    expect(service.getHolder("p")?.endpointId).toBe("s2:e1");
   });
 
   it.each([
@@ -1265,7 +1273,11 @@ describe("DriveLeaseService and a relaunched Shell (#13909)", () => {
     expect(service.getHolder("p")?.clientId).toBe("launch-1");
     note(after, "greg-studio", INSTALL);
     await settle();
-    expect(service.getHolder("p")?.endpointId).toBe("s2:e1");
+    // Settled by the note itself, not by a later read.
+    expect(changes.at(-1)?.holder?.endpointId).toBe("s2:e1");
+    expect(leaseTables.at(-1)).toEqual([
+      expect.objectContaining({ projectId: "p", holderConnection: after.handle }),
+    ]);
   });
 
   it("keeps the install id off everything other Shells see", async () => {
@@ -1313,6 +1325,19 @@ describe("DriveLeaseService and a relaunched Shell (#13909)", () => {
       await settle();
       expect(saved.at(-1)).toEqual({
         p: { clientId: "launch-1", clientName: "greg-studio", deviceId: INSTALL },
+      });
+    });
+
+    it("saves the install a late note names, even one that leaves the name as it was", async () => {
+      const saved = restartedWith({});
+      const driver = remote("s1:e1", "launch-1");
+      registry.add(driver);
+      await settle();
+      expect(saved.at(-1)).toEqual({ p: { clientId: "launch-1", clientName: "launch-1" } });
+
+      note(driver, "launch-1", INSTALL);
+      expect(saved.at(-1)).toEqual({
+        p: { clientId: "launch-1", clientName: "launch-1", deviceId: INSTALL },
       });
     });
 

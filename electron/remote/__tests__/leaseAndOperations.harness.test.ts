@@ -103,12 +103,17 @@ import { registerTerminalLayoutHandlers } from "../../ipc/handlers/terminalLayou
 import { registerWorktreeLifecycleHandlers } from "../../ipc/handlers/worktree/lifecycle.js";
 import type { HandlerDependencies } from "../../ipc/types.js";
 import type { WorkspaceClient } from "../../services/WorkspaceClient.js";
-import { getDriveLeaseService } from "../../services/DriveLeaseService.js";
+import { getEndpointRegistry } from "../../ipc/endpointRegistry.js";
+import {
+  DEFAULT_DRIVE_LEASE_RELEASE_GRACE_MS,
+  getDriveLeaseService,
+} from "../../services/DriveLeaseService.js";
 import { getOperationRegistry } from "../../services/operations/index.js";
 import { readOrCreateDeviceId } from "../client/deviceId.js";
 import { LinkClient, type LinkSessionEstablished } from "../client/LinkClient.js";
 import { createDirectTransport } from "../client/transport.js";
 import { getLocalHandshakeInfo } from "../handshakeInfo.js";
+import type { RemoteViewEndpoint } from "../host/RemoteViewEndpoint.js";
 import { Lane } from "../link/frames.js";
 import { ControlKind } from "../link/messages.js";
 import type { FakeView } from "./harness/fakeView.js";
@@ -461,26 +466,38 @@ describe("drive lease across a relaunch of the Shell (integration harness, #1390
         worktreeService: worktrees.service as unknown as WorkspaceClient,
       } as HandlerDependencies)
     );
+    const expired: Array<{ sessionId: string; cause: string }> = [];
+    cleanups.push(
+      r.server().onSessionExpired((info) => {
+        expired.push({ sessionId: info.sessionId, cause: info.cause });
+      })
+    );
     const install = readOrCreateDeviceId(path.join(harnessState.userDataDir, "rh"));
     const branches = () => worktrees.creates.map((create) => create.newBranch);
-    return { r, install, branches };
+    return { r, install, branches, expired };
   }
 
   it(
     "quit and relaunch: the new launch's first change goes through, inside the grace the old one left",
     async () => {
-      const { r, install, branches } = await hostWithWorktrees();
+      const { r, install, branches, expired } = await hostWithWorktrees();
       const first = await shellLaunch(r, "launch-1", install);
       unwrap(await first.openAndChange("view-1", createPayload(r, "before-quit")));
       await first.quit();
+      const quitAt = Date.now();
       await waitUntil(
-        () => !r.server().sessions.some((ctx) => ctx.sessionId === first.sessionId),
-        "the host to end the first launch's session"
+        () => expired.some((e) => e.sessionId === first.sessionId && e.cause === "goodbye"),
+        "the host to end the first launch's session on its GOODBYE"
       );
+      expect(getDriveLeaseService().getDriveTarget("proj-1")).toMatchObject({
+        kind: "reserved",
+        holder: { clientId: "launch-1" },
+      });
 
       const second = await shellLaunch(r, "launch-2", install);
       const created = await second.openAndChange("view-1", createPayload(r, "after-relaunch"));
       expect(created.ok ? null : created.error.userMessage).toBeNull();
+      expect(Date.now() - quitAt).toBeLessThan(DEFAULT_DRIVE_LEASE_RELEASE_GRACE_MS);
       expect(branches()).toEqual(["before-quit", "after-relaunch"]);
       expect(getDriveLeaseService().getHolder("proj-1")).toMatchObject({
         endpointId: `remote:${second.sessionId}:view-1`,
@@ -493,20 +510,18 @@ describe("drive lease across a relaunch of the Shell (integration harness, #1390
   it(
     "crash and relaunch: the new launch's HELLO ends the parked session, and another install still waits",
     async () => {
-      const { r, install, branches } = await hostWithWorktrees();
-      const expired: Array<{ sessionId: string; cause: string }> = [];
-      cleanups.push(
-        r.server().onSessionExpired((info) => {
-          expired.push({ sessionId: info.sessionId, cause: info.cause });
-        })
-      );
+      const { r, install, branches, expired } = await hostWithWorktrees();
       const first = await shellLaunch(r, "launch-1", install);
       unwrap(await first.openAndChange("view-1", createPayload(r, "before-crash")));
+      const oldViewId = `remote:${first.sessionId}:view-1`;
+      const oldView = getEndpointRegistry().get(oldViewId) as RemoteViewEndpoint | undefined;
+      expect(oldView).toBeDefined();
       first.crash();
       await waitUntil(
         () => !r.server().sessions.some((ctx) => ctx.sessionId === first.sessionId),
         "the host to park the crashed launch's session"
       );
+      expect(oldView!.isClosed()).toBe(false);
 
       // Another install with the same machine name is still kept out.
       const laptop = await shellLaunch(r, "laptop-launch", crypto.randomUUID());
@@ -516,6 +531,8 @@ describe("drive lease across a relaunch of the Shell (integration harness, #1390
 
       const second = await shellLaunch(r, "launch-2", install);
       expect(expired).toEqual([{ sessionId: first.sessionId, cause: "session-replaced" }]);
+      expect(oldView!.closeCause).toBe("session-replaced");
+      expect(getEndpointRegistry().get(oldViewId)).toBeUndefined();
       const created = await second.openAndChange("view-1", createPayload(r, "after-relaunch"));
       expect(created.ok ? null : created.error.userMessage).toBeNull();
       expect(branches()).toEqual(["before-crash", "after-relaunch"]);
