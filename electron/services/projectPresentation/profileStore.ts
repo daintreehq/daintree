@@ -95,8 +95,9 @@ export function isOwnProjectPluginButtonId(projectId: string, buttonId: unknown)
   // `{publisher}.{name}.{button}`: manifest names are always `publisher.name`
   // with no dot in either half, so a bare instance key — a plugin, not one of
   // its buttons — has one dot fewer.
-  const parts = pluginManifestIdFromInstanceKey(buttonId).split(".");
-  return parts.length >= 3 && parts.every((part) => part.length > 0);
+  const [publisher = "", name = "", ...button] =
+    pluginManifestIdFromInstanceKey(buttonId).split(".");
+  return publisher.length > 0 && name.length > 0 && button.join(".").length > 0;
 }
 
 /** Deduped, own-project only and capped: the list is read from a user-editable file (#10938). */

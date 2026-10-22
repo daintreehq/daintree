@@ -252,6 +252,10 @@ describe("project toolbar (#13783)", () => {
     // A bare instance key: manifest names are `publisher.name`, so this is the
     // plugin itself, not one of its buttons.
     expect(isOwnProjectPluginButtonId(PROJECT_A, `project__${PROJECT_A}__acme.tools`)).toBe(false);
+    // A button id may itself hold dots, even empty segments.
+    expect(
+      isOwnProjectPluginButtonId(PROJECT_A, `project__${PROJECT_A}__acme.tools.run..all`)
+    ).toBe(true);
     expect(() => setProjectPluginButtonPromoted(PROJECT_A, "acme.tools.btn", true)).toThrow();
   });
 
