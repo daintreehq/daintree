@@ -205,9 +205,6 @@ export function buildOpenWindowRecords(
   const windows: Array<{ windowId: number; projectId: string | null; pvm?: ProjectViewManager }> =
     [];
   const claimed = new Set<string>();
-  // Every window's views, so a project one window is only waiting to bring
-  // back never takes the place of the window actually holding it.
-  const held = new Set<string>();
 
   for (const ctx of registry.focusOrder()) {
     if (ctx.windowId === excludeWindowId) continue;
@@ -237,25 +234,33 @@ export function buildOpenWindowRecords(
     }
 
     if (projectId !== null) claimed.add(projectId);
-    try {
-      for (const view of pvm?.getAllViews() ?? []) held.add(view.projectId);
-    } catch {
-      // Its own background read below fails the same way and costs only that list.
-    }
     windows.push({ windowId: ctx.windowId, projectId, pvm });
     if (windows.length >= MAX_RESTORED_WINDOWS) break;
   }
 
-  const records: OpenWindowRecord[] = [];
-  for (const win of windows) {
-    let backgroundProjectIds: string[];
+  // Every window's views are claimed before any window's pending restores, so
+  // a project one window is only waiting to bring back never takes the place
+  // of the window actually holding it, and one dropped by its holder's cap
+  // can still be kept by the window waiting for it. Claimed as we go, so the
+  // next window — and the orphan sweep below — can see what this one took.
+  const viewIds = windows.map((win) => {
+    let ids: string[];
     try {
-      backgroundProjectIds = collectWindowBackgroundIds(win.pvm, win.windowId, claimed, held);
+      ids = collectWindowViewIds(win.pvm, claimed);
     } catch {
-      backgroundProjectIds = [];
+      ids = [];
     }
-    // Claimed as we go, so the next window — and the orphan sweep below — can
-    // see what this one already took.
+    for (const id of ids) claimed.add(id);
+    return ids;
+  });
+
+  const records: OpenWindowRecord[] = [];
+  for (const [index, win] of windows.entries()) {
+    const pending = [
+      ...(pendingBackgroundRestores.get(win.windowId) ?? []),
+      ...(pendingRemoteBackgroundRestores.get(win.windowId) ?? []),
+    ].filter((id) => !claimed.has(id));
+    const backgroundProjectIds = capBackgroundProjectIds([...viewIds[index]!, ...pending]);
     for (const id of backgroundProjectIds) claimed.add(id);
     records.push(
       backgroundProjectIds.length > 0
@@ -268,42 +273,26 @@ export function buildOpenWindowRecords(
 }
 
 /**
- * A window's own background workspaces, most-recently-used first: its cached
- * views, plus whatever it is still restoring.
+ * A window's own cached views, most-recently-used first, within the caps.
+ * Whatever it is still restoring follows them, in its persisted order, which
+ * is already a recency ordering from the previous session.
  *
  * `lastUsed` descending rather than insertion order — it is the same recency
  * signal `EvictionController` scores against, so the projects the manifest
  * keeps under the per-window caps are the ones the user actually rotates
- * through. Pending restores follow the live views and hold their persisted
- * order, which is already a recency ordering from the previous session; one
- * any window has a view of by now is that window's.
+ * through.
  */
-function collectWindowBackgroundIds(
+function collectWindowViewIds(
   pvm: ProjectViewManager | undefined,
-  windowId: number,
-  claimed: ReadonlySet<string>,
-  held: ReadonlySet<string>
+  claimed: ReadonlySet<string>
 ): string[] {
-  const ids: string[] = [];
-  const seen = new Set<string>();
-
-  const push = (id: string): void => {
-    if (seen.has(id) || claimed.has(id)) return;
-    seen.add(id);
-    ids.push(id);
-  };
-
   const views = pvm?.getAllViews() ?? [];
-  for (const entry of [...views].sort((a, b) => b.lastUsed - a.lastUsed)) {
-    push(entry.projectId);
-  }
-  const pending = [
-    ...(pendingBackgroundRestores.get(windowId) ?? []),
-    ...(pendingRemoteBackgroundRestores.get(windowId) ?? []),
-  ];
-  for (const id of pending) if (!held.has(id)) push(id);
-
-  return capBackgroundProjectIds(ids);
+  return capBackgroundProjectIds(
+    [...views]
+      .sort((a, b) => b.lastUsed - a.lastUsed)
+      .map((entry) => entry.projectId)
+      .filter((id) => !claimed.has(id))
+  );
 }
 
 /**

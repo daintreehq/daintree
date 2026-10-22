@@ -35,6 +35,7 @@ import {
   suppressOpenWindowsSaves,
 } from "../openWindowsTracker.js";
 import {
+  MAX_BACKGROUND_HOST_PROJECTS_PER_WINDOW,
   MAX_BACKGROUND_PROJECTS_PER_WINDOW,
   MAX_RESTORED_WINDOWS,
 } from "../../services/persistence/windowManifest.js";
@@ -715,6 +716,31 @@ describe("background host projects (#13932)", () => {
       "warm",
       host("studio-02"),
     ]);
+  });
+
+  it.each([
+    ["first", [1, 2]],
+    ["second", [2, 1]],
+  ])("keeps a waiting host project another window's cap left out, focused %s", (_label, order) => {
+    const over = MAX_BACKGROUND_HOST_PROJECTS_PER_WINDOW + 1;
+    const views: Array<[string, number]> = Array.from({ length: over }, (_v, i) => [
+      host(`studio-${i}`),
+      100 - i,
+    ]);
+    const oldest = views[over - 1]![0];
+    const wins: Record<number, FakeWindow> = {
+      1: { windowId: 1, projectId: "a" },
+      2: { windowId: 2, projectId: "b", views },
+    };
+    addPendingRemoteBackgroundRestores(1, [oldest]);
+    const records = buildOpenWindowRecords(makeRegistry(order.map((id) => wins[id]!)));
+    expect(records.find((r) => r.projectId === "a")).toEqual({
+      projectId: "a",
+      backgroundProjectIds: [oldest],
+    });
+    expect(records.find((r) => r.projectId === "b")?.backgroundProjectIds).toEqual(
+      views.slice(0, MAX_BACKGROUND_HOST_PROJECTS_PER_WINDOW).map(([id]) => id)
+    );
   });
 
   it("never names a waiting host project twice once its view is back", () => {
