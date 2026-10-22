@@ -814,6 +814,42 @@ describe("the bridge's element exchanges", () => {
     expect(selectedTag()).toBe("a");
   });
 
+  it("gathers evidence only from frameworks that saw the element a pick stands for", () => {
+    const first = document.getElementById("first")!;
+    const list = document.getElementById("list")!;
+    let standIn: Element = first;
+    const note = (framework: "react" | "astro") => ({
+      kind: "generic" as const,
+      framework,
+      fields: [{ name: "saw", value: framework }],
+    });
+    installReact({
+      extract: () => ({}),
+      pick: () => ({ target: standIn, data: { frameworkEvidence: [note("react")] } }),
+    });
+    installExtractor(
+      { channel: CHANNEL, framework: "astro", installed: false },
+      { extract: () => ({ frameworkEvidence: [note("astro")] }) }
+    );
+    const handle = start();
+    const gathered = () =>
+      ofType("selectionChanged")
+        .at(-1)
+        ?.observations[0]?.frameworkEvidence.map((entry) =>
+          entry.kind === "generic" ? entry.framework : entry.kind
+        );
+
+    first.click();
+    expect(selectedTag()).toBe("a");
+    expect(gathered()).toEqual(["react", "astro"]);
+
+    // React's pick now stands for the list; Astro only looked at the hit.
+    standIn = list;
+    handle.refresh();
+    expect(selectedTag()).toBe("section");
+    expect(gathered()).toEqual(["react"]);
+  });
+
   it("stays on the hit when page code claims a pick's token for another node", () => {
     const first = document.getElementById("first")!;
     const list = document.getElementById("list")!;

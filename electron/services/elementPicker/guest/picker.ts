@@ -291,13 +291,13 @@ function describes(contribution: ExtractorContribution): boolean {
  * anything about it, the first of equals in install order. One carrying
  * evidence alone describes nothing, so it never stands in for a framework
  * whose extractor is absent or silent. In a pick it is also the one whose
- * named element the pick stands for.
+ * named element the pick stands for, and naming one is itself a description.
  */
 function primaryOf(contributions: Extracted[]): Extracted | null {
   let best: Extracted | null = null;
   let bestRank = Infinity;
   for (const contribution of contributions) {
-    if (!describes(contribution.data)) continue;
+    if (contribution.target === null && !describes(contribution.data)) continue;
     // Compared, not looked up: the value is the page's, and `"constructor"` is a key of every object.
     const ownership = contribution.data.ownership;
     const rank = ownership === "direct" ? 0 : ownership === "fallback" ? 2 : 1;
