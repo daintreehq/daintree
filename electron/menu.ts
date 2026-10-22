@@ -156,8 +156,16 @@ function hiddenMenuPluginsKey(projectId: string | null): string {
 /** {@link hiddenMenuPluginsKey} of the menu currently installed. */
 let builtHiddenMenuPluginsKey = "";
 
+/**
+ * The project whose plugin choices the menu shows: the most recently focused
+ * window's, not necessarily the window a caller rebuilt the menu for. Several
+ * rebuilds (a keybinding override, an agent config reload, CLI or plugin init)
+ * name a fixed window, and the menu bar is process-global.
+ */
 function menuProjectIdFor(win: BrowserWindow): string | null {
-  return win.isDestroyed() ? null : getProjectForWebContents(getAppWebContents(win).id);
+  const primary = getWindowRegistry()?.getPrimary()?.browserWindow;
+  const shown = primary && !primary.isDestroyed() ? primary : win;
+  return shown.isDestroyed() ? null : getProjectForWebContents(getAppWebContents(shown).id);
 }
 
 /**

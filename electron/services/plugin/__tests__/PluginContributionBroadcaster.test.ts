@@ -925,6 +925,33 @@ describe("per-project visibility of installed plugins", () => {
       ]);
     });
 
+    it("shows a default-hidden plugin's recipes only where a project opted in, and to an unbound view", async () => {
+      setPluginVisibilityDefault(GLOBAL_PLUGIN, true);
+      setProjectPluginVisibility(VIS_PROJECT_A, GLOBAL_PLUGIN, true);
+      registryMock.getProjectForWebContents.mockReturnValue(VIS_PROJECT_B);
+      const b = makeBroadcaster();
+
+      const optedIn = fakeWebContents(41);
+      await b.pushSnapshotTo(optedIn as unknown as Electron.WebContents, VIS_PROJECT_A);
+      expect(sentPayloads(optedIn, "plugin:recipes-changed")).toEqual([
+        { recipes: [globalRecipe], complete: false },
+      ]);
+
+      const undecided = fakeWebContents(42);
+      await b.pushSnapshotTo(undecided as unknown as Electron.WebContents);
+      expect(sentPayloads(undecided, "plugin:recipes-changed")).toEqual([
+        { recipes: [], complete: false },
+      ]);
+
+      // An explicit null wins over the registry lookup: the project picker is
+      // not a project, so "hidden in undecided projects" does not reach it.
+      const picker = fakeWebContents(43);
+      await b.pushSnapshotTo(picker as unknown as Electron.WebContents, null);
+      expect(sentPayloads(picker, "plugin:recipes-changed")).toEqual([
+        { recipes: [globalRecipe], complete: false },
+      ]);
+    });
+
     it("keeps a project-local plugin's recipes inside its own project", async () => {
       setPluginContributionScope(PROJECT_PLUGIN_A, VIS_PROJECT_A);
       const localRecipe = {

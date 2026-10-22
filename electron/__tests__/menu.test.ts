@@ -2339,8 +2339,11 @@ describe("Help menu plugin tours (#12773)", () => {
 describe("plugin menu items in a project that hides the plugin (#13765)", () => {
   afterEach(() => {
     vi.mocked(getPluginMenuItems).mockReturnValue([]);
+    vi.mocked(getPluginTours).mockReturnValue([]);
     getProjectForWebContentsMock.mockReturnValue(null);
+    getAppWebContentsMock.mockImplementation(() => mockWebContents);
     isPluginVisibleInProjectMock.mockReturnValue(true);
+    windowRefMock.getWindowRegistry.mockReturnValue(null);
   });
 
   function submenuLabels(role: string): unknown[] {
@@ -2410,6 +2413,69 @@ describe("plugin menu items in a project that hides the plugin (#13765)", () => 
     getProjectForWebContentsMock.mockReturnValue("project-b");
     rebuildApplicationMenuIfPluginVisibilityChanged(win);
     expect(builds).toHaveBeenCalledTimes(2);
+  });
+
+  it("counts a hidden plugin's Help tour as a change even when other plugins' items still show", () => {
+    vi.mocked(getPluginMenuItems).mockReturnValue([
+      {
+        pluginId: "acme.docs",
+        item: { label: "Acme Docs", actionId: "app.settings", location: "help" },
+      },
+    ]);
+    vi.mocked(getPluginTours).mockReturnValue([
+      {
+        id: "acme.site.welcome",
+        pluginId: "acme.site",
+        pluginName: "Acme Site Builder",
+        title: "Welcome Tour",
+        moduleUrl: "plugin://pi-1/__dtv-1/dist/tour.js",
+        chapters: [],
+      },
+    ]);
+    isPluginVisibleInProjectMock.mockImplementation(
+      (pluginId, projectId) => !(pluginId === "acme.site" && projectId === "project-a")
+    );
+    const win = mockBrowserWindow as unknown as Electron.BrowserWindow;
+    getProjectForWebContentsMock.mockReturnValue("project-b");
+    createApplicationMenu(win);
+    const builds = vi.mocked(Menu.setApplicationMenu);
+    builds.mockClear();
+
+    getProjectForWebContentsMock.mockReturnValue("project-a");
+    rebuildApplicationMenuIfPluginVisibilityChanged(win);
+    rebuildApplicationMenuIfPluginVisibilityChanged(win);
+
+    expect(builds).toHaveBeenCalledTimes(1);
+    const help = capturedTemplate.find((m) => m.role === "help")!;
+    const labels = (help.submenu as Electron.MenuItemConstructorOptions[]).map((i) => i.label);
+    expect(labels).toContain("Acme Docs");
+    expect(labels).not.toContain("Acme Site Builder: Welcome Tour");
+  });
+
+  it("filters by the most recently focused window's project, whichever window the build names", () => {
+    vi.mocked(getPluginMenuItems).mockReturnValue([
+      {
+        pluginId: "acme.site",
+        item: { label: "Acme Docs", actionId: "app.settings", location: "help" },
+      },
+    ]);
+    isPluginVisibleInProjectMock.mockImplementation(
+      (pluginId, projectId) => !(pluginId === "acme.site" && projectId === "project-a")
+    );
+    // A keybinding override rebuilds through the window its handler was bound
+    // to, which shows project-b; the window the user is in shows project-a.
+    const focused = { id: 2, isDestroyed: () => false };
+    windowRefMock.getWindowRegistry.mockReturnValue({
+      getPrimary: () => ({ browserWindow: focused, services: {} }),
+    });
+    getAppWebContentsMock.mockImplementation((win) =>
+      win.id === 2 ? { id: 22 } : mockWebContents
+    );
+    getProjectForWebContentsMock.mockImplementation((id) =>
+      id === 22 ? "project-a" : "project-b"
+    );
+
+    expect(submenuLabels("help")).not.toContain("Acme Docs");
   });
 });
 

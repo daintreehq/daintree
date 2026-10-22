@@ -62,6 +62,20 @@ vi.mock("../../../window/webContentsRegistry.js", async (importOriginal) => ({
   isCachedViewWebContents: (...args: [number]) => mockIsCachedViewWebContents(...args),
 }));
 
+// Per-project hiding of installed plugins, held in memory: the real overlay
+// reads electron-store, which this suite does not stand up. Only the two reads
+// the contribution selector makes are replaced, so the selector itself is real.
+const hiddenPlugins = vi.hoisted(() => new Set<string>());
+vi.mock("../../../services/plugin/projectPluginVisibility.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../services/plugin/projectPluginVisibility.js")>()),
+  hasProjectPluginVisibilityOverrides: () => hiddenPlugins.size > 0,
+  isPluginVisibleInProject: (pluginId: string, projectId: string | null) =>
+    !hiddenPlugins.has(`${projectId}|${pluginId}`),
+}));
+function hidePluginInProject(projectId: string, pluginId: string): void {
+  hiddenPlugins.add(`${projectId}|${pluginId}`);
+}
+
 const { mockStableArgsSha256 } = vi.hoisted(() => ({ mockStableArgsSha256: vi.fn() }));
 vi.mock("../../../utils/pluginMcpHash.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../../utils/pluginMcpHash.js")>();
@@ -220,6 +234,7 @@ beforeEach(() => {
   mockIsCachedViewWebContents.mockReturnValue(false);
   mockGetActiveWorktreeIdForWindow.mockResolvedValue(null);
   clearAllPluginContributionScopes();
+  hiddenPlugins.clear();
   _resetIpcGuardForTesting();
   markIpcSecurityReady();
 });
@@ -2364,6 +2379,23 @@ describe("PLUGIN_FILE_DECORATIONS_GET handler", () => {
       expect(localImpl.impl.provideDecorations).not.toHaveBeenCalled();
     });
 
+    it("neither activates nor queries an installed plugin the sender's project hides", async () => {
+      const { pluginService } = await import("../../../services/PluginService.js");
+      hidePluginInProject("project-b", "acme.global");
+      mockGetFileDecorationImpls.mockReturnValue([globalImpl]);
+
+      mockGetProjectForWebContents.mockReturnValue("project-b");
+      expect(await getHandler()(SENDER, "s:1", ["a.ts"])).toEqual({});
+      expect(globalImpl.impl.provideDecorations).not.toHaveBeenCalled();
+      expect(pluginService.activatePluginsForFileDecorationScope).toHaveBeenCalledWith(
+        "s:1",
+        "project-b"
+      );
+
+      mockGetProjectForWebContents.mockReturnValue("project-c");
+      expect(await getHandler()(SENDER, "s:1", ["a.ts"])).toEqual({ "a.ts": { tooltip: "G" } });
+    });
+
     it("still serves the owning project's own provider", async () => {
       setPluginContributionScope(LOCAL_A, "project-a");
       mockGetProjectForWebContents.mockReturnValue("project-a");
@@ -2530,6 +2562,38 @@ describe("plugin install jobs (#11302)", () => {
       expect(mockGetPluginTours).not.toHaveBeenCalled();
       releaseGate();
       await expect(inFlight).resolves.toEqual([tour]);
+    });
+
+    it("plugin:recipes-get serves only the recipes the sender's project shows, after init (#13765)", async () => {
+      const { pluginService } = await import("../../../services/PluginService.js");
+      const waitForInit = vi.mocked(pluginService.waitForInit);
+      let releaseGate: () => void = () => {};
+      waitForInit.mockReturnValueOnce(new Promise<void>((resolve) => (releaseGate = resolve)));
+      mockGetPluginRecipes.mockReturnValue([registered]);
+      hidePluginInProject("project-a", "acme.tools");
+      mockGetProjectForWebContents.mockReturnValue("project-a");
+
+      try {
+        const inFlight = getHandler("plugin:recipes-get")({
+          sender: { id: 1 },
+        }) as Promise<unknown>;
+        await Promise.resolve();
+        expect(mockGetPluginRecipes).not.toHaveBeenCalled();
+        releaseGate();
+        await expect(inFlight).resolves.toEqual([]);
+
+        mockGetProjectForWebContents.mockReturnValue("project-b");
+        await expect(getHandler("plugin:recipes-get")({ sender: { id: 1 } })).resolves.toEqual([
+          registered,
+        ]);
+        // A sender with no project binding is not a project that hid anything.
+        mockGetProjectForWebContents.mockReturnValue(null);
+        await expect(getHandler("plugin:recipes-get")({ sender: { id: 1 } })).resolves.toEqual([
+          registered,
+        ]);
+      } finally {
+        mockGetPluginRecipes.mockReturnValue([]);
+      }
     });
 
     it("plugin:recipe-record-use forwards a valid id and timestamp", async () => {
