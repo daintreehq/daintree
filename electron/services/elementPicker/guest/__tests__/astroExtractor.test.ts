@@ -436,6 +436,11 @@ describe("a page with islands in two frameworks", () => {
     "gives Astro the content it slotted into a React island, installed as %s, %s, %s",
     (...order) => {
       install(order);
+      // Nothing is reported absent until the host's look at the page settles.
+      picker?.setAvailability({
+        detection: "settled",
+        extractors: { astro: "installed", react: "installed", svelte: "installed" },
+      });
       const slotted = select("slotted");
       expect(slotted.sourceCandidates).toEqual([
         expect.objectContaining({ framework: "astro", kind: "template-location" }),

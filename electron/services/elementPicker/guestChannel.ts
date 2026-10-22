@@ -97,8 +97,8 @@ export interface ExtractReply {
   }>;
   /**
    * Frameworks whose reader looked at the element and had nothing to say. A
-   * reader that threw, or a reply cut for size, is in neither list: only this
-   * one lets the picker report something as not exposed.
+   * reader that threw, or a reply cut for size, is in neither list and has not
+   * looked, so it never lets the picker report something as not exposed.
    */
   empty?: string[];
 }

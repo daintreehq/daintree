@@ -645,12 +645,13 @@ export function createPicker(host: PickerHost): PickerHandle {
    * What a capability no reader offered comes to. Unavailable only once
    * nothing could still supply it: the host has finished looking at the page,
    * and every framework it, this element's markup or a reply named — other
-   * than the one that describes the element — has a reader that looked at
-   * this element and found nothing. A reader still loading, missing from this
-   * build, broken, or silent has not looked, and one whose answer was
-   * outranked, carried evidence alone, or stands for another element did not
-   * find nothing, so the answer stays open rather than becoming a claim about
-   * the page.
+   * than the one describing the element — has a reader that looked at the
+   * element described and found nothing, or described it and was outranked. A
+   * reader still loading, missing from this build, broken, or silent has not
+   * looked; one that sent evidence alone, or an answer offering nothing, has
+   * not said what it could; and one asked about the hit has not looked at the
+   * element a pick moved to. Each leaves the answer open rather than becoming
+   * a claim about the page.
    */
   function absence(
     detections: FrameworkDetection[],
@@ -659,6 +660,7 @@ export function createPicker(host: PickerHost): PickerHandle {
   ): Capability {
     if (availability.detection !== "settled") return UNKNOWN;
     const speaker = primary?.framework ?? null;
+    const described = primary?.target ?? null;
     const frameworks = new Set<ElementPickerFramework>(
       Object.keys(availability.extractors) as ElementPickerFramework[]
     );
@@ -667,9 +669,14 @@ export function createPicker(host: PickerHost): PickerHandle {
     if (frameworks.size === 0) return { state: "unavailable", reason: "no-framework" };
     for (const framework of frameworks) {
       if (framework === speaker) continue;
-      const looked =
-        availability.extractors[framework] === "installed" && extraction.empty.has(framework);
-      if (!looked) return UNKNOWN;
+      if (availability.extractors[framework] !== "installed") return UNKNOWN;
+      // `empty` is about the node asked, which a pick that moved is not.
+      const foundNothing = described === null && extraction.empty.has(framework);
+      const outranked = extraction.contributions.some(
+        (entry) =>
+          entry.framework === framework && entry.target === described && describes(entry.data)
+      );
+      if (!foundNothing && !outranked) return UNKNOWN;
     }
     return NOT_EXPOSED;
   }

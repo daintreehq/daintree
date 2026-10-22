@@ -856,6 +856,59 @@ describe("createPicker", () => {
     expect(selectedCapabilities()).toEqual(every({ state: "unknown" }));
   });
 
+  it("takes an outranked reader's answer as its look, so the describing reader's word holds", () => {
+    const astro = {
+      ...every({ state: "unavailable", reason: "not-exposed" }),
+      file: { state: "available" },
+      line: { state: "available" },
+    } as const;
+    answerWith((id) => ({
+      id,
+      contributions: [
+        { framework: "react", data: { capabilities: every({ state: "available" }) } },
+        { framework: "astro", data: { ownership: "direct", capabilities: astro } },
+      ],
+      empty: ["svelte"],
+    }));
+    const handle = start();
+    const installed = { astro: "installed", react: "installed", svelte: "installed" } as const;
+    handle.setAvailability({ detection: "settled", extractors: installed });
+    document.getElementById("first")!.click();
+    expect(selectedCapabilities()).toEqual(astro);
+
+    // A reader the host has not confirmed has not looked, whatever it answered.
+    handle.setAvailability({
+      detection: "settled",
+      extractors: { ...installed, react: "pending" },
+    });
+    expect(selectedCapabilities()).toEqual({
+      ...every({ state: "unknown" }),
+      file: { state: "available" },
+      line: { state: "available" },
+    });
+  });
+
+  it("keeps the answer open beside a reader that sent evidence alone", () => {
+    const island = {
+      kind: "generic",
+      framework: "astro",
+      fields: [{ name: "islandRenderer", value: "svelte" }],
+    };
+    answerWith((id) => ({
+      id,
+      contributions: [{ framework: "astro", data: { frameworkEvidence: [island] } }],
+      empty: ["svelte"],
+    }));
+    const handle = start();
+    handle.setAvailability({
+      detection: "settled",
+      extractors: { astro: "installed", svelte: "installed" },
+    });
+    document.getElementById("first")!.click();
+    expect(selectedCapabilities()).toEqual(every({ state: "unknown" }));
+    expect(ofType("selectionChanged").at(-1)?.observations[0]?.frameworkEvidence).toEqual([island]);
+  });
+
   it("describes a hover again when the host's account changes what it says, without the pointer moving", () => {
     const handle = start();
     pointAt(document.getElementById("second")!);
@@ -1096,6 +1149,39 @@ describe("the bridge's element exchanges", () => {
     // A plain walk selects what it reaches; only a pick is stood in for.
     press("ArrowDown");
     expect(selectedTag()).toBe("a");
+  });
+
+  it("judges what is absent about the element a pick stands for, not the one it landed on", () => {
+    const react = {
+      ...every({ state: "unavailable", reason: "not-exposed" }),
+      names: { state: "available" },
+    } as const;
+    let standIn: Element = document.getElementById("first")!;
+    installReact({
+      extract: () => ({}),
+      pick: () => ({ target: standIn, data: { capabilities: react } }),
+    });
+    installExtractor(
+      { channel: CHANNEL, framework: "solid", installed: false },
+      { extract: () => null }
+    );
+    const handle = start();
+    const settled = {
+      detection: "settled",
+      extractors: { react: "installed", solid: "installed" },
+    } as const;
+    handle.setAvailability(settled);
+    document.getElementById("first")!.click();
+    expect(selectedCapabilities()).toEqual(react);
+
+    // Solid looked only at the hit, so what React calls unavailable on the list stays open.
+    standIn = document.getElementById("list")!;
+    handle.setAvailability(settled);
+    expect(selectedTag()).toBe("section");
+    expect(selectedCapabilities()).toEqual({
+      ...every({ state: "unknown" }),
+      names: { state: "available" },
+    });
   });
 
   it("gathers evidence only from frameworks that saw the element a pick stands for", () => {
