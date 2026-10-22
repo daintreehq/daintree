@@ -53,13 +53,10 @@ import { pluginViewHostId } from "@/components/Plugin/remotePluginView";
 import { notify } from "@/lib/notify";
 import { panelNotificationAddress } from "@/lib/notificationAddress";
 import {
-  HostPortInUseError,
+  hostForwardFailure,
   needsHostForward,
-  parseLoopbackLink,
   resolveBrowserUrlForView,
 } from "@/services/terminal/remoteLoopbackLinks";
-import { isClientAppError } from "@/utils/clientAppError";
-import { formatErrorMessage } from "@shared/utils/errorMessage";
 
 export interface BrowserPaneProps extends BasePanelProps {
   initialUrl: string;
@@ -76,19 +73,6 @@ export interface BrowserPaneProps extends BasePanelProps {
 // ERR_ABORTED (-3) fires when a pending load is superseded by a new navigation —
 // benign. Any other rejection is unexpected and worth a log; did-fail-load
 // surfaces user-visible failures, so this only catches non-event paths.
-/** Why a host's localhost page couldn't be forwarded here, in the host's own words where it gave some. */
-function hostForwardFailure(url: string, error: unknown): string {
-  if (error instanceof HostPortInUseError) return error.message;
-  const port = parseLoopbackLink(url)?.port;
-  const reason =
-    isClientAppError(error) && error.userMessage
-      ? error.userMessage
-      : formatErrorMessage(error, "The host didn't answer.");
-  return port === undefined
-    ? reason
-    : `Port ${port} on the host couldn't be forwarded to this machine. ${reason}`;
-}
-
 function loadWebviewUrl(webview: Electron.WebviewTag, url: string): void {
   const result = (webview.loadURL as (url: string) => unknown)(url);
   if (

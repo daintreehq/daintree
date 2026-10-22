@@ -1,5 +1,7 @@
 import { LOCAL_HOST_ID } from "@shared/types/remoteHosts";
 import { isLoopbackHostname, normalizeBrowserUrl } from "@shared/utils/urlUtils";
+import { formatErrorMessage } from "@shared/utils/errorMessage";
+import { isClientAppError } from "@/utils/clientAppError";
 
 /**
  * Links a remote terminal prints that point at `localhost` mean the host's
@@ -110,6 +112,19 @@ export class HostPortInUseError extends Error {
     );
     this.name = "HostPortInUseError";
   }
+}
+
+/** Why a host's localhost page couldn't be forwarded here, in the host's own words where it gave some. */
+export function hostForwardFailure(url: string, error: unknown): string {
+  if (error instanceof HostPortInUseError) return error.message;
+  const port = parseLoopbackLink(url)?.port;
+  const reason =
+    isClientAppError(error) && error.userMessage
+      ? error.userMessage
+      : formatErrorMessage(error, "The host didn't answer.");
+  return port === undefined
+    ? reason
+    : `Port ${port} on the host couldn't be forwarded to this machine. ${reason}`;
 }
 
 /** Whether a browser panel in this view has to forward `text`'s port before loading it. */

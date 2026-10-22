@@ -10,8 +10,11 @@ vi.mock("@/store/panelStore", () => ({
   usePanelStore: { getState: () => ({ panelsById: {}, panelIds: [] }) },
 }));
 
+import { ClientAppError } from "@/utils/clientAppError";
 import {
   callbackPortOf,
+  HostPortInUseError,
+  hostForwardFailure,
   needsHostForward,
   parseLoopbackLink,
   resolveBrowserUrlForView,
@@ -97,6 +100,26 @@ describe("browser panel URLs", () => {
     bindView("studio-01");
     forward.mockRejectedValueOnce(new Error("host gone"));
     await expect(resolveBrowserUrlForView("http://localhost:3000/")).rejects.toThrow("host gone");
+  });
+});
+
+describe("hostForwardFailure", () => {
+  it("says the port is taken here, in the conflict's own words", () => {
+    const error = new HostPortInUseError(8080);
+    expect(hostForwardFailure("http://127.0.0.1:8080", error)).toBe(error.message);
+  });
+
+  it("names the port and gives the host's reason where it gave one", () => {
+    const error = new ClientAppError("UNSUPPORTED", "raw", "The host isn't connected.");
+    expect(hostForwardFailure("http://localhost:3000", error)).toBe(
+      "Port 3000 on the host couldn't be forwarded to this machine. The host isn't connected."
+    );
+  });
+
+  it("falls back to a plain reason for an error with no message and a URL with no loopback port", () => {
+    expect(hostForwardFailure("https://gpu.staging.dev", undefined)).toBe(
+      "The host didn't answer."
+    );
   });
 });
 

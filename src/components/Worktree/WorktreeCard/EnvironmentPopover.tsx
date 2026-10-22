@@ -28,6 +28,13 @@ import { Spinner } from "../../ui/Spinner";
 import { SpinningIcon } from "../../ui/SpinningIcon";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { systemClient } from "@/clients/systemClient";
+import { isRemoteBoundView } from "@/clients/operationsClient";
+import { notify } from "@/lib/notify";
+import { logError } from "@/utils/logger";
+import {
+  hostForwardFailure,
+  resolveBrowserUrlForView,
+} from "@/services/terminal/remoteLoopbackLinks";
 import { useDohertyGate } from "@/hooks/useDeferredLoading";
 import { UI_ACTION_SUCCESS_DWELL_MS } from "@/lib/animationUtils";
 import { actionService } from "@/services/ActionService";
@@ -88,6 +95,28 @@ function isOpenableUrl(value: string): boolean {
   } catch {
     return false;
   }
+}
+
+/**
+ * In a view on a host, a `localhost` endpoint is the host's, so its port is
+ * forwarded here first; opening the raw URL would reach this machine's server.
+ */
+function openEndpointInBrowser(endpoint: string): void {
+  resolveBrowserUrlForView(endpoint).then(
+    (url) =>
+      systemClient
+        .openExternal(url)
+        .catch((error: unknown) => logError("[EnvironmentPopover] openExternal failed", error)),
+    (error: unknown) => {
+      notify({
+        type: "error",
+        title: "Couldn't open endpoint",
+        message: hostForwardFailure(endpoint, error),
+        context: { eventKind: "connectivity" },
+        action: { label: "Try again", onClick: () => openEndpointInBrowser(endpoint) },
+      });
+    }
+  );
 }
 
 interface EnvironmentPopoverProps {
@@ -335,7 +364,7 @@ export function EnvironmentPopover({
                     aria-label="Copy endpoint"
                     announcement="Endpoint copied"
                   />
-                  {onPreviewEndpoint && isOpenableUrl(resourceEndpoint) && (
+                  {onPreviewEndpoint && isOpenableUrl(resourceEndpoint) && !isRemoteBoundView() && (
                     <Tooltip>
                       <TooltipTrigger asChild>
                         <Button
@@ -362,7 +391,7 @@ export function EnvironmentPopover({
                           size="icon-xs"
                           aria-label="Open endpoint in browser"
                           className="[&_svg]:size-3.5"
-                          onClick={() => void systemClient.openExternal(resourceEndpoint)}
+                          onClick={() => openEndpointInBrowser(resourceEndpoint)}
                         >
                           <ExternalLink aria-hidden="true" />
                         </Button>
