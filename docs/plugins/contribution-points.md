@@ -612,26 +612,36 @@ Keybindings map a key combination to an action.
 | `description` | no | Human-readable description of what the binding does. |
 | `when` | no | Context expression gating when the binding is active. Evaluated live at each keydown against the context keys below; unknown identifiers evaluate falsy — which makes negated expressions permissive (a misspelled `!modalOpne` is always true), so double-check identifier spelling. Supports `&&`, `\|\|`, `!`, `==`, `!=`, and single-quoted string literals. |
 
-**`when` context keys:**
+**`when` context keys.** The project keys describe the project this window shows. Every renderer `when` sees them: keybindings, [context menus](#context-menus--shipped), and each chrome contribution that takes a `when`. They update live, so an entry appears or disappears as soon as a key it reads changes.
 
 | Key | Type | Meaning |
 | --- | --- | --- |
-| `terminalFocused` | boolean | Keyboard focus is inside an xterm terminal. |
-| `textInputFocused` | boolean | Keyboard focus is in a text field or editor (not a terminal). |
-| `modalOpen` | boolean | A modal dialog (`aria-modal`) is open. |
-| `paletteOpen` | boolean | Any palette (command palette, quick switcher, …) is open. |
-| `paletteId` | string | Identifier of the open palette, or `""` when none. |
-| `fleetArmed` | boolean | At least one terminal is armed for fleet broadcast. |
-| `fleetWaiting` | boolean | At least one armed terminal's agent is in the `waiting` state. |
-| `sidebarVisible` | boolean | The worktree sidebar is currently visible. |
-| `canopyHidden` | boolean | The user hid Canopy; its panel cannot open. |
+| `isGitBacked` | boolean | The project is a git repository. `false` in a folder opened without git, in a scratch workspace, and when no workspace is open. |
+| `workspaceKind` | string | `"project"`, `"scratch"`, or `""` when no workspace is open. |
+| `activeSidebarView` | string | The sidebar view the project shows: `"worktrees"` for the built-in worktree list. It names the selected view whether or not the sidebar is visible. |
 | `presentationForgeStats` | string | How this project presents the toolbar's forge stats pill: `"shown"`, `"demoted"` (in the toolbar's `…` menu) or `"hidden"`. Always `"hidden"` in a folder without a git repository. |
+
+A `when` turns one entry on or off. It never gates the action behind it, which still runs from anywhere else that offers it.
+
+Keybindings also see the focus and UI keys:
+
+| Key                | Type    | Meaning                                                        |
+| ------------------ | ------- | -------------------------------------------------------------- |
+| `terminalFocused`  | boolean | Keyboard focus is inside an xterm terminal.                    |
+| `textInputFocused` | boolean | Keyboard focus is in a text field or editor (not a terminal).  |
+| `modalOpen`        | boolean | A modal dialog (`aria-modal`) is open.                         |
+| `paletteOpen`      | boolean | Any palette (command palette, quick switcher, …) is open.      |
+| `paletteId`        | string  | Identifier of the open palette, or `""` when none.             |
+| `fleetArmed`       | boolean | At least one terminal is armed for fleet broadcast.            |
+| `fleetWaiting`     | boolean | At least one armed terminal's agent is in the `waiting` state. |
+| `sidebarVisible`   | boolean | The worktree sidebar is currently visible.                     |
+| `canopyHidden`     | boolean | The user hid Canopy; its panel cannot open.                    |
 
 The `presentation*` keys come from the project's presentation profile, which the user sets in Project settings → General → Features. A repository can suggest one by committing `.daintree/presentation.json` — `{ "features": { "forgeStats": "hidden" } }` — and the suggestion applies only once the user accepts it when the project opens. Daintree reads that file and never writes it, unknown features and levels are ignored, and no plugin API changes a level.
 
-A plugin adds keys of its own with [`host.setContext`](./host-api.md#setcontext). They sit under its manifest name — `setContext("needsYou", true)` from `digitalfrontier.beads` reads as `digitalfrontier.beads.needsYou` — so a binding can stay off until the plugin has something to act on. Manifest names with hyphens or leading digits (`acme.linear-planner`, `3m.tools`) parse as paths. Renderer `contextMenus` `when` clauses see these keys too.
+A plugin adds keys of its own with [`host.setContext`](./host-api.md#setcontext). They sit under its manifest name — `setContext("needsYou", true)` from `digitalfrontier.beads` reads as `digitalfrontier.beads.needsYou` — so a binding can stay off until the plugin has something to act on. Manifest names with hyphens or leading digits (`acme.linear-planner`, `3m.tools`) parse as paths. Every renderer `when` sees these keys too, like the project keys.
 
-Note: this context applies to keybinding `when` clauses, which resolve in the renderer. Native menu-item `when` clauses (the `menuItems` contribution) are evaluated once at menu build time against an empty context — only literal/negation expressions are useful there.
+Note: none of these keys reach native menu-item `when` clauses (the `menuItems` contribution). Those resolve in the main process, once at menu build time, against an empty context — only literal/negation expressions are useful there.
 
 Bindings register when the plugin loads and unregister on unload. Conflicts with user overrides or other plugins' bindings are resolved by Daintree's existing keybinding service — plugin bindings are low-priority and yield to user overrides. See `registerBinding` in `src/services/KeybindingService.ts` for the registration API.
 
@@ -752,7 +762,7 @@ Adds entries to right-click menus on specific UI elements.
 | `terminal` | `panelId` — the clicked pane's id; `panelKind` — its panel kind |
 | `file`     | None                                                            |
 
-An identifier that names no key evaluates false, so `"worktree.hasBranch"` hides the item everywhere while `"!worktree.hasBranch"` shows it everywhere; an expression that fails to parse hides the item. Every location also sees the keys plugins publish with [`host.setContext`](./host-api.md#setcontext), under each plugin's manifest name; a location's own key wins a clash. Because `file` supplies no keys of its own, a `when` on a `file` item can only test those plugin keys or a constant.
+An identifier that names no key evaluates false, so `"worktree.hasBranch"` hides the item everywhere while `"!worktree.hasBranch"` shows it everywhere; an expression that fails to parse hides the item. Every location also sees the [project keys](#keybindings--shipped) (`isGitBacked`, `workspaceKind`, `activeSidebarView`, `presentation*`) and the keys plugins publish with [`host.setContext`](./host-api.md#setcontext), under each plugin's manifest name; a location's own key wins a clash. Because `file` supplies no keys of its own, a `when` on a `file` item can only test those shared keys or a constant.
 
 **Dispatch arguments.** A `worktree` or `terminal` item is dispatched with no arguments, so its handler cannot tell which worktree or pane was clicked; use it for actions that act on the user's current context. A `file` item is dispatched with the clicked file, as described next.
 

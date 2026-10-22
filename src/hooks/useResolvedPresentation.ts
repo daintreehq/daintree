@@ -7,6 +7,8 @@ import {
 } from "@shared/config/presentationProfile";
 import { useProjectStore } from "@/store/projectStore";
 import { useProjectPresentationStore } from "@/store/projectPresentationStore";
+import { getViewWorkspaceId } from "@/store/viewWorkspaceId";
+import { selectViewProject } from "@/store/viewWorkspace";
 
 const NO_LEVELS: PresentationLevels = {};
 
@@ -30,18 +32,24 @@ export function resolvePresentationFor(
 /** Non-reactive read, for paths that resolve once per event (keybinding `when` clauses). */
 export function getResolvedPresentation(): ResolvedPresentation {
   return resolvePresentationFor(
-    useProjectStore.getState().currentProject,
+    selectViewProject(getViewWorkspaceId(), useProjectStore.getState()),
     useProjectPresentationStore.getState()
   );
 }
 
-/** This view's resolved presentation profile; starts following main on first use. */
+/**
+ * This view's resolved presentation profile; starts following main on first use.
+ * Resolved against the project this view owns, not the globally broadcast
+ * `currentProject`: main loads the profile for the view's own project, and a
+ * sibling window switching projects repoints `currentProject` here too.
+ */
 export function useResolvedPresentation(): ResolvedPresentation {
+  const viewWorkspaceId = getViewWorkspaceId();
   // Primitives, not the row: worktree cards call this through their context
   // menus, and a project row update that moves neither field shouldn't
   // re-render every card.
-  const projectId = useProjectStore((s) => s.currentProject?.id);
-  const gitBacked = useProjectStore((s) => s.currentProject?.gitBacked);
+  const projectId = useProjectStore((s) => selectViewProject(viewWorkspaceId, s)?.id);
+  const gitBacked = useProjectStore((s) => selectViewProject(viewWorkspaceId, s)?.gitBacked);
   const levels = useProjectPresentationStore((s) => s.levels);
   const loaded = useProjectPresentationStore((s) => s.loaded);
   const profileProjectId = useProjectPresentationStore((s) => s.projectId);

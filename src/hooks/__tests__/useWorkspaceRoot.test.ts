@@ -18,16 +18,22 @@ let projectSlice: ProjectSliceShape = { projects: [], currentProject: null };
 let scratchSlice: ScratchSliceShape = { scratches: [], currentScratch: null };
 
 vi.mock("@/store/projectStore", () => ({
-  useProjectStore: (selector: (state: ProjectSliceShape) => unknown) => selector(projectSlice),
+  useProjectStore: Object.assign(
+    (selector: (state: ProjectSliceShape) => unknown) => selector(projectSlice),
+    { getState: () => projectSlice }
+  ),
 }));
 vi.mock("@/store/scratchStore", () => ({
-  useScratchStore: (selector: (state: ScratchSliceShape) => unknown) => selector(scratchSlice),
+  useScratchStore: Object.assign(
+    (selector: (state: ScratchSliceShape) => unknown) => selector(scratchSlice),
+    { getState: () => scratchSlice }
+  ),
 }));
 vi.mock("@/store/viewWorkspaceId", () => ({
   getViewWorkspaceId: () => getViewWorkspaceId(),
 }));
 
-const { useWorkspaceRoot } = await import("../useWorkspaceRoot");
+const { useWorkspaceRoot, getWorkspaceRoot } = await import("../useWorkspaceRoot");
 
 function makeProject(overrides: Partial<Project> = {}): Project {
   return {
@@ -171,5 +177,33 @@ describe("useWorkspaceRoot", () => {
     const { result } = renderHook(() => useWorkspaceRoot());
 
     expect(result.current?.id).toBe("proj-bg");
+  });
+});
+
+describe("getWorkspaceRoot", () => {
+  it("answers exactly what the hook does for the same stores", () => {
+    const own = makeProject({ id: "proj-own", gitBacked: false });
+    const scratch = makeScratch({ id: "scratch-own" });
+    const cases: Array<() => void> = [
+      () => {},
+      () => {
+        projectSlice = { projects: [own, makeProject()], currentProject: makeProject() };
+        getViewWorkspaceId.mockReturnValue("proj-own");
+      },
+      () => {
+        projectSlice = { projects: [makeProject()], currentProject: makeProject() };
+        scratchSlice = { scratches: [scratch], currentScratch: null };
+        getViewWorkspaceId.mockReturnValue("scratch-own");
+      },
+      () => {
+        projectSlice = { projects: [{ ...own, status: "closed" }], currentProject: null };
+        getViewWorkspaceId.mockReturnValue("proj-own");
+      },
+    ];
+    for (const seed of cases) {
+      seed();
+      const { result } = renderHook(() => useWorkspaceRoot());
+      expect(getWorkspaceRoot()).toEqual(result.current);
+    }
   });
 });
