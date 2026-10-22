@@ -1000,6 +1000,18 @@ describe("PluginDevWorkerHostProxy terminal lifecycle (#13814)", () => {
     expect(Object.isFrozen(received[0])).toBe(true);
   });
 
+  it("hands an async listener's rejection to the dispatcher instead of escaping it", async () => {
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    const rejection = new Error("listener failed");
+    const { deliver } = await subscribeLifecycle(() => Promise.reject(rejection));
+
+    deliver({ type: "spawned", terminalId: "t1", kind: "shell", timestamp: 1 });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(errors).toHaveBeenCalledWith(expect.stringContaining("subscription callback"), rejection);
+  });
+
   it("drops a payload that is not a well-formed event", async () => {
     const onEvent = vi.fn();
     const { deliver } = await subscribeLifecycle(onEvent);

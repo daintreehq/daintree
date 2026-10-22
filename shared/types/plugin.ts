@@ -6342,10 +6342,11 @@ export interface PluginActivationApi {
    * every workspace for an installed plugin, and in its own project only for a
    * project plugin. The callback receives one frozen
    * {@link PluginTerminalLifecycleEvent} per change, in the order the host saw
-   * them; nothing is coalesced, and nothing is replayed on subscribe, so read
-   * {@link PluginAgentsApi.list} for the terminals already open. Resolves to a
-   * disposer; calling it more than once is a no-op. Disposed automatically when
-   * the plugin is unloaded.
+   * them; nothing is coalesced, and nothing is replayed on subscribe. There is
+   * no snapshot of the terminals already open — {@link PluginAgentsApi.list}
+   * covers only the project's live agent panes. Resolves to a disposer; calling
+   * it more than once is a no-op. Disposed automatically when the plugin is
+   * unloaded.
    *
    * Observation only — there is no companion method to start, stop or restart a
    * terminal.

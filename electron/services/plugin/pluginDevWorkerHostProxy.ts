@@ -1206,9 +1206,11 @@ export class PluginDevWorkerHostProxy {
         this.assertActivationOpen("onDidChangeTerminalLifecycle");
         // Re-projected on arrival: the port's structured clone hands back a
         // plain mutable object, and the allowlist is re-applied this side too.
+        // The callback's result is returned so the dispatcher can catch an
+        // async listener's rejection, as it does for every sibling.
         const dispose = this.subscribe("terminal-lifecycle", (payload) => {
           const event = toPluginTerminalLifecycleEvent(payload);
-          if (event !== null) callback(event);
+          return event === null ? undefined : callback(event);
         });
         return Promise.resolve(dispose);
       },

@@ -8,11 +8,20 @@ import { createLogger } from "../../utils/logger.js";
 const logger = createLogger("main:TerminalLifecycleObserver");
 
 /**
- * Exited terminals whose metadata is kept so a later trash or restore can still
- * be attributed — an exit is commonly followed by the pane being trashed. Live
- * terminals are never evicted; only exited records past this count are.
+ * Terminals that are no longer running whose metadata is kept so a later trash
+ * or restore can still be attributed — an exit is commonly followed by the pane
+ * being trashed. Live terminals are never evicted; only retired records past
+ * this count are.
  */
 export const MAX_RETAINED_EXITED_TERMINALS = 256;
+
+/**
+ * Live records past this count trigger a sweep for ones the client no longer
+ * holds any launch for — a terminal killed just before its host died, or one
+ * whose crash respawn was never confirmed. Far above any real terminal count,
+ * so the sweep is a backstop, not a hot path.
+ */
+export const LIVE_RECORD_SWEEP_THRESHOLD = 1024;
 
 /**
  * The routing facts a terminal was launched with, as
@@ -49,6 +58,8 @@ interface TerminalRecord {
   kind: PluginTerminalKind;
   agentId?: string;
   launchGeneration?: number;
+  /** Its exit was reported; a second one is not. */
+  exited: boolean;
 }
 
 export interface TerminalLifecycleObserverOptions {
@@ -56,6 +67,7 @@ export interface TerminalLifecycleObserverOptions {
   emit: (observation: TerminalLifecycleObservation) => void;
   now?: () => number;
   maxRetainedExited?: number;
+  liveRecordSweepThreshold?: number;
 }
 
 const nonEmpty = (value: unknown): string | undefined =>
@@ -75,6 +87,7 @@ function toRecord(attribution: TerminalLaunchAttribution): TerminalRecord {
     kind,
     agentId: kind === "agent" ? launchAgentId : undefined,
     launchGeneration: attribution.launchGeneration,
+    exited: false,
   };
 }
 
@@ -92,25 +105,37 @@ function toRecord(attribution: TerminalLaunchAttribution): TerminalRecord {
  * Never consumes the client's restart-exit suppression: that flag belongs to
  * the renderer's exit path, and the public `exit` it reads here is already
  * filtered of superseded (predecessor-generation) exits.
+ *
+ * A terminal killed before its spawn was confirmed is reported not at all: the
+ * client forgets it on kill, so its success has nothing to attribute to.
  */
 export class TerminalLifecycleObserver {
   private readonly records = new Map<string, TerminalRecord>();
-  /** Exited terminals with a retained record, oldest first. */
-  private readonly exited = new Set<string>();
+  /** Records of terminals no longer running, oldest first; always a subset of `records`. */
+  private readonly retired = new Set<string>();
   private readonly getAttribution: (id: string) => TerminalLaunchAttribution | null;
   private readonly emitObservation: (observation: TerminalLifecycleObservation) => void;
   private readonly now: () => number;
   private readonly maxRetainedExited: number;
+  private readonly liveRecordSweepThreshold: number;
 
   constructor(options: TerminalLifecycleObserverOptions) {
     this.getAttribution = options.getAttribution;
     this.emitObservation = options.emit;
     this.now = options.now ?? Date.now;
     this.maxRetainedExited = options.maxRetainedExited ?? MAX_RETAINED_EXITED_TERMINALS;
+    this.liveRecordSweepThreshold = options.liveRecordSweepThreshold ?? LIVE_RECORD_SWEEP_THRESHOLD;
   }
 
   handleSpawnResult(id: string, result: SpawnResult): void {
-    if (!result.success) return;
+    if (!result.success) {
+      // A failed launch that leaves the client holding nothing under this id —
+      // a crash respawn that did not take — ends whatever ran there before,
+      // with no exit to say so. Retired, not marked exited: should that
+      // predecessor's own exit still arrive, it is reported.
+      if (this.getAttribution(id) === null) this.retire(id);
+      return;
+    }
     const attribution = this.getAttribution(id);
     // A spawn the client no longer holds, or a stale success from a killed
     // predecessor under the same id, is not the terminal now running.
@@ -126,7 +151,7 @@ export class TerminalLifecycleObserver {
     // The same launch confirmed twice (a deferred-start replay) is one spawn.
     if (
       previous !== undefined &&
-      !this.exited.has(id) &&
+      !previous.exited &&
       previous.launchGeneration !== undefined &&
       previous.launchGeneration === attribution.launchGeneration
     ) {
@@ -134,18 +159,22 @@ export class TerminalLifecycleObserver {
     }
     const record = toRecord(attribution);
     this.records.set(id, record);
-    this.exited.delete(id);
+    this.retired.delete(id);
+    if (this.records.size - this.retired.size > this.liveRecordSweepThreshold) {
+      this.retireAbandoned();
+    }
     this.publish("spawned", id, record);
   }
 
   handleExit(id: string, exitCode: number, signal?: number): void {
     const record = this.records.get(id);
-    if (!record || this.exited.has(id)) return;
+    if (!record || record.exited) return;
+    record.exited = true;
     this.publish("exited", id, record, {
       exitCode,
       ...(typeof signal === "number" && signal > 0 && { signal }),
     });
-    this.retainExited(id);
+    this.retire(id);
   }
 
   handleTrashed(id: string): void {
@@ -170,7 +199,7 @@ export class TerminalLifecycleObserver {
 
   clear(): void {
     this.records.clear();
-    this.exited.clear();
+    this.retired.clear();
   }
 
   /**
@@ -180,7 +209,7 @@ export class TerminalLifecycleObserver {
    */
   private refresh(id: string): TerminalRecord | undefined {
     const record = this.records.get(id);
-    if (!record || this.exited.has(id)) return record;
+    if (!record || this.retired.has(id)) return record;
     const attribution = this.getAttribution(id);
     if (!attribution) return record;
     if (
@@ -194,14 +223,23 @@ export class TerminalLifecycleObserver {
     return record;
   }
 
-  private retainExited(id: string): void {
-    this.exited.delete(id);
-    this.exited.add(id);
-    while (this.exited.size > this.maxRetainedExited) {
-      const oldest = this.exited.values().next().value;
+  /** Move a terminal's record into the bounded set of ones no longer running. */
+  private retire(id: string): void {
+    if (!this.records.has(id)) return;
+    this.retired.delete(id);
+    this.retired.add(id);
+    while (this.retired.size > this.maxRetainedExited) {
+      const oldest = this.retired.values().next().value;
       if (oldest === undefined) break;
-      this.exited.delete(oldest);
+      this.retired.delete(oldest);
       this.records.delete(oldest);
+    }
+  }
+
+  /** Retire every live record the client no longer holds any launch for. */
+  private retireAbandoned(): void {
+    for (const id of [...this.records.keys()]) {
+      if (!this.retired.has(id) && this.getAttribution(id) === null) this.retire(id);
     }
   }
 

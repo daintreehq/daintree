@@ -1167,7 +1167,11 @@ export const ALL_EVENT_TYPES: Array<keyof DaintreeEventMap> = [
   "action:dispatched",
   "terminal:trashed",
   "terminal:restored",
-  "terminal:lifecycle",
+  // `terminal:lifecycle` is deliberately absent: it restates the trash,
+  // restore and PTY events above with every terminal's project attached, for
+  // the plugin host's scoped feed. Buffered here it would reach the event
+  // inspector, which any plugin can dispatch without `agent:read` or a
+  // project filter.
   "terminal:park-changed",
   "terminal:park-released",
   "terminal:title-changed",

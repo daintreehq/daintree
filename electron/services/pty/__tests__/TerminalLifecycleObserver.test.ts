@@ -10,7 +10,7 @@ import {
   type TerminalLifecycleSource,
 } from "../TerminalLifecycleObserver.js";
 
-function harness(maxRetainedExited?: number) {
+function harness(limits: { maxRetainedExited?: number; liveRecordSweepThreshold?: number } = {}) {
   const live = new Map<string, TerminalLaunchAttribution>();
   const emitted: TerminalLifecycleObservation[] = [];
   let clock = 1000;
@@ -18,7 +18,7 @@ function harness(maxRetainedExited?: number) {
     getAttribution: (id) => live.get(id) ?? null,
     emit: (observation) => emitted.push(observation),
     now: () => clock++,
-    maxRetainedExited,
+    ...limits,
   });
   return { live, emitted, observer };
 }
@@ -189,7 +189,7 @@ describe("TerminalLifecycleObserver", () => {
   });
 
   it("forgets the oldest exited terminals past the cap, never a live one", () => {
-    const { live, emitted, observer } = harness(2);
+    const { live, emitted, observer } = harness({ maxRetainedExited: 2 });
     for (const id of ["live", "a", "b", "c"]) {
       live.set(id, { projectId: "p1" });
       observer.handleSpawnResult(id, ok(id));
@@ -198,6 +198,61 @@ describe("TerminalLifecycleObserver", () => {
     emitted.length = 0;
     for (const id of ["live", "a", "b", "c"]) observer.handleTrashed(id);
     expect(emitted.map((e) => e.terminalId)).toEqual(["live", "b", "c"]);
+  });
+
+  it("retires a terminal whose crash respawn failed, still taking its own late exit", () => {
+    const { live, emitted, observer } = harness({ maxRetainedExited: 1 });
+    live.set("t1", { projectId: "p1", launchGeneration: 1 });
+    observer.handleSpawnResult("t1", ok("t1", 1));
+    // The respawn is refused and the client drops the terminal: no exit comes.
+    live.delete("t1");
+    observer.handleSpawnResult("t1", { success: false, id: "t1", launchGeneration: 2 });
+    observer.handleExit("t1", 1);
+    expect(emitted.map((e) => e.type)).toEqual(["spawned", "exited"]);
+
+    // Retired, it counts toward the cap like any exited terminal.
+    live.set("t2", { projectId: "p1" });
+    observer.handleSpawnResult("t2", ok("t2"));
+    live.delete("t2");
+    observer.handleSpawnResult("t2", { success: false, id: "t2" });
+    emitted.length = 0;
+    observer.handleTrashed("t1");
+    observer.handleTrashed("t2");
+    expect(emitted.map((e) => e.terminalId)).toEqual(["t2"]);
+  });
+
+  it("does not retire a live terminal over a refused duplicate spawn", () => {
+    const { live, emitted, observer } = harness({ maxRetainedExited: 1 });
+    live.set("t1", { projectId: "p1", launchGeneration: 1 });
+    observer.handleSpawnResult("t1", ok("t1", 1));
+    // TERMINAL_ALREADY_LIVE: the client keeps the running launch.
+    observer.handleSpawnResult("t1", { success: false, id: "t1", launchGeneration: 2 });
+    live.set("t2", { projectId: "p1" });
+    observer.handleSpawnResult("t2", ok("t2"));
+    observer.handleExit("t2", 0);
+    emitted.length = 0;
+    observer.handleTrashed("t1");
+    expect(emitted.map((e) => e.terminalId)).toEqual(["t1"]);
+  });
+
+  it("sweeps live records the client has abandoned once they pass the ceiling", () => {
+    const { live, emitted, observer } = harness({
+      maxRetainedExited: 1,
+      liveRecordSweepThreshold: 2,
+    });
+    for (const id of ["a", "b"]) {
+      live.set(id, { projectId: "p1" });
+      observer.handleSpawnResult(id, ok(id));
+    }
+    // Killed just before its host died: the exit never comes.
+    live.delete("a");
+    live.set("c", { projectId: "p1" });
+    observer.handleSpawnResult("c", ok("c"));
+    // "a" was swept into the bounded set, so the next retirement evicts it.
+    observer.handleExit("b", 0);
+    emitted.length = 0;
+    for (const id of ["a", "b", "c"]) observer.handleTrashed(id);
+    expect(emitted.map((e) => e.terminalId)).toEqual(["b", "c"]);
   });
 
   it("keeps the client's other listeners running when a subscriber throws", () => {
