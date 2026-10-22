@@ -36,7 +36,18 @@ import {
   DropdownMenuItem,
   DropdownMenuSeparator,
 } from "@/components/ui/dropdown-menu";
-import { FileUnavailableState } from "@/components/FileViewer/FileUnavailableState";
+import {
+  FileUnavailableState,
+  refusalReason,
+  unavailableCopy,
+  type RemoteFileContext,
+} from "@/components/FileViewer/FileUnavailableState";
+import {
+  SaveHostFileButton,
+  TakeControlButton,
+  useRemoteFileContext,
+  useRetryOnControl,
+} from "@/components/FileViewer/hostFileActions";
 import { getFileTypeIcon } from "@/panels/file-browser/fileTypeIcons";
 import { DiffChangeStepper } from "@/components/FileViewer/DiffChangeStepper";
 import { revealCopy } from "@/components/FileViewer/revealCopy";
@@ -438,6 +449,11 @@ export function DiffPane({
     // worktree move that filePath (relative) alone would miss.
     setPreviewError(null);
   }, [filePath, absolutePath, worktreePath, previewReloadNonce]);
+  const remoteFile = useRemoteFileContext();
+  // A preview the host refused to a watching window loads once this one has control.
+  useRetryOnControl(previewError?.refusal === "driven-elsewhere", () =>
+    setPreviewReloadNonce((nonce) => nonce + 1)
+  );
 
   // dispatch() resolves an ActionDispatchResult and never rejects, so a failed
   // open would otherwise vanish entirely (the #11114 bug FilePane already hit).
@@ -1280,21 +1296,14 @@ export function DiffPane({
                 // Same body as the file browser and file panel: the cause, the
                 // next step, and the one way out that fits — here the OS app,
                 // which plays codecs Chromium can't.
-                <FileUnavailableState
-                  icon={getFileTypeIcon(filePath).Icon}
-                  title={previewError.title}
-                  description={previewError.description}
-                  data-testid="diff-pane-unavailable"
-                  action={
-                    <Button
-                      variant="contrast"
-                      size="sm"
-                      onClick={() => void handleExternalAction("default-app")}
-                    >
-                      <ExternalLink />
-                      Open in default app
-                    </Button>
-                  }
+                <DiffPreviewUnavailable
+                  filePath={filePath}
+                  hostPath={absolutePath}
+                  error={previewError}
+                  fileReason="MEDIA_FAILED"
+                  remote={remoteFile}
+                  revealLabel={reveal.label}
+                  onExternal={(target) => void handleExternalAction(target)}
                 />
               ) : isAudioMode ? (
                 <FileAudioPreview
@@ -1328,21 +1337,14 @@ export function DiffPane({
                   />
                 </div>
               ) : previewError !== null ? (
-                <FileUnavailableState
-                  icon={getFileTypeIcon(filePath).Icon}
-                  title={previewError.title}
-                  description={previewError.description}
-                  data-testid="diff-pane-unavailable"
-                  action={
-                    <Button
-                      variant="contrast"
-                      size="sm"
-                      onClick={() => void handleExternalAction("default-app")}
-                    >
-                      <ExternalLink />
-                      Open in default app
-                    </Button>
-                  }
+                <DiffPreviewUnavailable
+                  filePath={filePath}
+                  hostPath={absolutePath}
+                  error={previewError}
+                  fileReason="PDF_FAILED"
+                  remote={remoteFile}
+                  revealLabel={reveal.label}
+                  onExternal={(target) => void handleExternalAction(target)}
                 />
               ) : (
                 <FilePdfPreview
@@ -1521,5 +1523,61 @@ export function DiffPane({
         </div>
       )}
     </ContentPanel>
+  );
+}
+
+/**
+ * A preview the diff panel couldn't show, in the shared unavailable body. On
+ * this machine the preview's own words stand, with the OS default app as the
+ * way out. A remote window's host refusal names control or location instead,
+ * and where this computer can't open the host's files, a copy saved here
+ * replaces the default app.
+ */
+function DiffPreviewUnavailable({
+  filePath,
+  hostPath,
+  error,
+  fileReason,
+  remote,
+  revealLabel,
+  onExternal,
+}: {
+  filePath: string;
+  hostPath: string;
+  error: MediaPreviewError;
+  fileReason: "MEDIA_FAILED" | "PDF_FAILED";
+  remote: RemoteFileContext | null;
+  revealLabel: string;
+  onExternal: (target: "reveal" | "default-app") => void;
+}) {
+  const refused = refusalReason(error);
+  const copy =
+    refused !== null || remote?.saveTarget != null
+      ? unavailableCopy(refused ?? fileReason, error.title, remote)
+      : { title: error.title, description: error.description, action: "open" as const };
+  return (
+    <FileUnavailableState
+      icon={getFileTypeIcon(filePath).Icon}
+      title={copy.title}
+      description={copy.description}
+      data-testid="diff-pane-unavailable"
+      action={
+        copy.action === "take-control" ? (
+          <TakeControlButton variant="contrast" />
+        ) : copy.action === "save" ? (
+          <SaveHostFileButton hostPath={hostPath} variant="contrast" />
+        ) : copy.action === "reveal" ? (
+          <Button variant="contrast" size="sm" onClick={() => onExternal("reveal")}>
+            <FolderOpen />
+            {revealLabel}
+          </Button>
+        ) : (
+          <Button variant="contrast" size="sm" onClick={() => onExternal("default-app")}>
+            <ExternalLink />
+            Open in default app
+          </Button>
+        )
+      }
+    />
   );
 }

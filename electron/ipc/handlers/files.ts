@@ -14,6 +14,7 @@ import {
   type FileReadPayload,
 } from "../../schemas/ipc.js";
 import type { FileReadResult } from "../../../shared/types/ipc/files.js";
+import type { UploadIdentity } from "../../remote/files/HostFileService.js";
 import { AppError } from "../../utils/errorTypes.js";
 import { readBoundedFromHandle } from "../../utils/boundedRead.js";
 import { FILE_PREVIEW_MAX_BYTES } from "../../utils/fileLimits.js";
@@ -37,6 +38,37 @@ export async function remoteCallerHoldsRoot(ctx: IpcContext, root: string): Prom
   const files = getRemoteService("hostFileService");
   if (!projectId || !files) return false;
   return files.holdsRoot(projectId, root);
+}
+
+/**
+ * A remote Shell's view reading a file it uploaded into this host's inbox
+ * itself, from that file's own folder: the identity it was placed as, or null.
+ * The inbox holds every Shell's uploads, so this is that one file, never the
+ * folder: the read below still has to resolve to a file inside the folder, and
+ * the descriptor it opens has to be the file the view placed.
+ */
+export async function remoteCallerUpload(
+  ctx: IpcContext,
+  filePath: string,
+  root: string
+): Promise<UploadIdentity | null> {
+  if (ctx.endpoint?.kind !== "remote-view" || !ctx.endpoint.projectId) return null;
+  const files = getRemoteService("hostFileService");
+  if (!files || path.dirname(path.resolve(filePath)) !== path.resolve(root)) return null;
+  return files.uploadIdentity(ctx.endpoint, filePath);
+}
+
+/** The opened descriptor is the upload as it was placed: compared as bigints, so no inode loses precision. */
+async function isPlacedUpload(
+  handle: Awaited<ReturnType<typeof fs.open>>,
+  placed: UploadIdentity
+): Promise<boolean> {
+  const now = await handle.stat({ bigint: true });
+  return (
+    BigInt(now.dev) === placed.dev &&
+    BigInt(now.ino) === placed.ino &&
+    BigInt(now.size) === placed.size
+  );
 }
 
 export function registerFilesHandlers(): () => void {
@@ -79,12 +111,16 @@ export function registerFilesHandlers(): () => void {
         context: { filePath, rootPath },
       });
     }
+    let ownUpload: UploadIdentity | null = null;
     if (!(await remoteCallerHoldsRoot(ctx, rootPath))) {
-      throw new AppError({
-        code: "OUTSIDE_ROOT",
-        message: "Root is outside the calling view's project",
-        context: { rootPath },
-      });
+      ownUpload = await remoteCallerUpload(ctx, filePath, rootPath);
+      if (!ownUpload) {
+        throw new AppError({
+          code: "OUTSIDE_ROOT",
+          message: "Root is outside the calling view's project",
+          context: { rootPath },
+        });
+      }
     }
 
     // Map fs errors uniformly across realpath/stat/open — the file can
@@ -246,6 +282,13 @@ export function registerFilesHandlers(): () => void {
           context: { filePath, rootPath },
         });
       }
+      if (ownUpload && !(await isPlacedUpload(fileHandle, ownUpload))) {
+        throw new AppError({
+          code: "OUTSIDE_ROOT",
+          message: "The upload is no longer the file this view placed",
+          context: { filePath, rootPath },
+        });
+      }
       // The stat above is only a hint: a writer can grow the file after it, so
       // the read itself holds the budget and never returns oversized text.
       const read = await readBoundedFromHandle(fileHandle, opened.size, FILE_PREVIEW_MAX_BYTES);
@@ -289,9 +332,10 @@ export function registerFilesHandlers(): () => void {
     // #11191: on opt-in, mint a sandboxed-iframe preview URL for HTML files. The
     // token maps to the canonical root; the daintree-html:// handler re-applies
     // full containment, so this never widens access. realRoot/realFile are
-    // already realpath-resolved and contained above.
+    // already realpath-resolved and contained above. Never for an upload: its
+    // root is an inbox folder, which a token would open to the whole folder.
     const htmlPreviewUrl =
-      htmlPreview && /\.html?$/i.test(realFile)
+      htmlPreview && ownUpload === null && /\.html?$/i.test(realFile)
         ? (buildHtmlPreviewUrl(realRoot, realFile) ?? undefined)
         : undefined;
 

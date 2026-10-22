@@ -1,6 +1,7 @@
 import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Copy,
+  Download,
   ExternalLink,
   FileDiff,
   FileText,
@@ -61,9 +62,17 @@ import { toFileReadErrorCode } from "@/components/FileViewer/fileReadErrors";
 import { useFileChangeCount, type FileChangeSignal } from "@/hooks/useFileChangeCount";
 import {
   FileUnavailableState as UnavailableState,
+  refusalReason,
   unavailableCopy,
   type UnavailableReason,
 } from "@/components/FileViewer/FileUnavailableState";
+import {
+  SaveHostFileButton,
+  TakeControlButton,
+  useRemoteFileContext,
+  useRetryOnControl,
+} from "@/components/FileViewer/hostFileActions";
+import { saveHostFile, saveHostFileLabel } from "@/services/hostFileSave";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { copyWithToast } from "@/lib/copyWithToast";
 import { Skeleton, SkeletonBone, SkeletonHint, SkeletonText } from "@/components/ui/Skeleton";
@@ -840,9 +849,22 @@ export function FileBrowserViewer({
               isUnsupportedAudioFilePath(filePath)
             ? "default-app"
             : "editor";
-  const openAction = OPEN_ACTION_COPY[openTarget];
-  const runOpen = () =>
+  const remoteFile = useRemoteFileContext();
+  // A default app or browser here can't open a file on an ssh host, so a copy
+  // saved here stands in for it (a WSL distro's files open from this PC as they are).
+  const savesInstead = openTarget !== "editor" && remoteFile?.saveTarget != null;
+  const openAction = savesInstead
+    ? { label: saveHostFileLabel(), icon: Download }
+    : OPEN_ACTION_COPY[openTarget];
+  const runOpen = () => {
+    if (savesInstead) {
+      if (filePath) void saveHostFile(filePath);
+      return;
+    }
     void handleExternalAction(openTarget === "browser" ? "default-app" : openTarget);
+  };
+  // A preview the host refused to a watching window loads once this one has control.
+  useRetryOnControl(state.status === "error" && state.reason === "DRIVEN_ELSEWHERE", onRefresh);
 
   const identityIcon: LucideIcon = filePath
     ? getFileTypeIcon(fileName).Icon
@@ -1294,9 +1316,13 @@ export function FileBrowserViewer({
         );
 
       case "error": {
-        const copy = unavailableCopy(state.reason, state.message);
+        const copy = unavailableCopy(state.reason, state.message, remoteFile);
         const action =
-          copy.action === "open" ? (
+          copy.action === "take-control" ? (
+            <TakeControlButton />
+          ) : copy.action === "save" ? (
+            <SaveHostFileButton hostPath={filePath} />
+          ) : copy.action === "open" ? (
             <Button variant="subtle" size="sm" onClick={runOpen}>
               <openAction.icon />
               {openAction.label}
@@ -1334,7 +1360,13 @@ export function FileBrowserViewer({
             rootPath={rootPath}
             alt={fileName}
             cacheBust={revision}
-            onError={() => setState({ status: "error", reason: "IMAGE_FAILED", message: "" })}
+            onError={(error) =>
+              setState({
+                status: "error",
+                reason: refusalReason(error) ?? "IMAGE_FAILED",
+                message: "",
+              })
+            }
           />
         );
 
@@ -1369,7 +1401,9 @@ export function FileBrowserViewer({
               onError={(error) =>
                 setState({
                   status: "error",
-                  reason: error?.code === "FILE_TOO_LARGE" ? "FILE_TOO_LARGE" : "MEDIA_FAILED",
+                  reason:
+                    refusalReason(error) ??
+                    (error?.code === "FILE_TOO_LARGE" ? "FILE_TOO_LARGE" : "MEDIA_FAILED"),
                   message: error?.title ?? "This video couldn't be played",
                 })
               }
@@ -1393,7 +1427,9 @@ export function FileBrowserViewer({
               onError={(error) =>
                 setState({
                   status: "error",
-                  reason: error?.code === "FILE_TOO_LARGE" ? "FILE_TOO_LARGE" : "MEDIA_FAILED",
+                  reason:
+                    refusalReason(error) ??
+                    (error?.code === "FILE_TOO_LARGE" ? "FILE_TOO_LARGE" : "MEDIA_FAILED"),
                   message: error?.title ?? "This audio file couldn't be played",
                 })
               }
@@ -1414,7 +1450,9 @@ export function FileBrowserViewer({
             onError={(error) =>
               setState({
                 status: "error",
-                reason: error.code === "FILE_TOO_LARGE" ? "FILE_TOO_LARGE" : "PDF_FAILED",
+                reason:
+                  refusalReason(error) ??
+                  (error.code === "FILE_TOO_LARGE" ? "FILE_TOO_LARGE" : "PDF_FAILED"),
                 message: error.title,
               })
             }

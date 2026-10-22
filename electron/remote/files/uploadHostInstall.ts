@@ -28,6 +28,9 @@ export function installHostUploadService(options: { inbox?: HostInbox } = {}): {
     isDriving: (projectId, endpoint) => lease.isDriving(projectId, endpoint),
     leaseIdFor: (projectId) => lease.getHolder(projectId)?.leaseId ?? null,
     inbox,
+    // What a view uploaded it may open again from the path the agent prints.
+    onInboxFile: (endpoint, projectId, hostPath) =>
+      getRemoteService("hostFileService")?.recordUpload(endpoint, projectId, hostPath),
   });
   void inbox
     .ensure()

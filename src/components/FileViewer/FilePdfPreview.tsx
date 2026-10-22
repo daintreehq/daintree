@@ -1,6 +1,7 @@
 import { useEffect, useEffectEvent, useMemo, useState } from "react";
 import { Skeleton, SkeletonBone, SkeletonHint } from "@/components/ui/Skeleton";
 import { buildDaintreePdfUrl } from "./filePreviewKinds";
+import { previewRefusalOf, refusedPreviewError } from "./previewRefusal";
 import type { MediaPreviewError } from "./useMediaSourceUrl";
 
 /** Why a PDF couldn't be framed, split so callers can render a headline and a way forward. */
@@ -132,7 +133,12 @@ export function FilePdfPreview({
         setProbing(false);
         if (!response.ok) {
           setAdmitted(null);
-          reportError(PDF_ERRORS_BY_STATUS.get(response.status) ?? PDF_UNAVAILABLE_ERROR);
+          const refusal = previewRefusalOf(response);
+          reportError(
+            refusal
+              ? refusedPreviewError(refusal)
+              : (PDF_ERRORS_BY_STATUS.get(response.status) ?? PDF_UNAVAILABLE_ERROR)
+          );
           return;
         }
         setAdmitted({ documentUrl, src });

@@ -19,7 +19,7 @@ import { BUNDLE_SINK_PREFIX } from "../../projects/linkMethods.js";
 import { ClientUploadTransport } from "../ClientUploadTransport.js";
 import type { HostFileEndpoint } from "../HostFileService.js";
 import { HostInbox } from "../hostInbox.js";
-import { HostUploadService } from "../HostUploadService.js";
+import { HostUploadService, type HostUploadServiceOptions } from "../HostUploadService.js";
 import { createHostUploadClient } from "../uploadClient.js";
 import type {
   FileTransferEvent,
@@ -79,6 +79,7 @@ async function setup(
     maxPendingPerSession?: number;
     /** Transfers the host's bulk receiver takes at once. */
     maxIncoming?: number;
+    onInboxFile?: HostUploadServiceOptions["onInboxFile"];
   } = {}
 ) {
   const { host, client } = await openSessionPair(
@@ -95,6 +96,7 @@ async function setup(
     maxPendingPerSession: options.maxPendingPerSession,
     leaseIdFor: () => (options.leaseId ? options.leaseId() : 1),
     inbox,
+    onInboxFile: options.onInboxFile,
     freeBytes: async () => (options.freeBytes === undefined ? null : options.freeBytes),
   });
   service.attach(host, endpoint);
@@ -169,6 +171,31 @@ describe("uploads into the host inbox", () => {
       deduplicated: true,
     });
     expect(await listFilesBucket()).toHaveLength(1);
+  });
+
+  it("lets the uploading endpoint open what it placed or reused, and nothing it didn't", async () => {
+    const onInboxFile = vi.fn();
+    const { upload, endpoint } = await setup({ onInboxFile });
+    const placed = await upload(TEXT("screenshot bytes"), "shot.txt");
+    expect(onInboxFile).toHaveBeenCalledWith(endpoint, "p1", placed.hostPath);
+
+    onInboxFile.mockClear();
+    const reused = await upload(TEXT("screenshot bytes"), "shot.txt");
+    expect(reused.deduplicated).toBe(true);
+    expect(onInboxFile).toHaveBeenCalledWith(endpoint, "p1", placed.hostPath);
+
+    onInboxFile.mockClear();
+    await expect(
+      upload(TEXT("added"), "added.txt", { kind: "worktree", directory: project })
+    ).resolves.toMatchObject({ hostPath: path.join(project, "added.txt") });
+    expect(onInboxFile).not.toHaveBeenCalled();
+  });
+
+  it("grants nothing for an upload that didn't land", async () => {
+    const onInboxFile = vi.fn();
+    const { upload } = await setup({ onInboxFile, driving: () => false });
+    await expect(upload(TEXT("refused"), "refused.txt")).rejects.toBeTruthy();
+    expect(onInboxFile).not.toHaveBeenCalled();
   });
 
   it("does not reuse a file whose content changed on the host", async () => {

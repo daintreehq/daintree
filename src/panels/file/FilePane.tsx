@@ -1,6 +1,7 @@
 import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Copy,
+  Download,
   ExternalLink,
   FileDiff as FileDiffIcon,
   FileText,
@@ -35,9 +36,19 @@ import {
 import { getFileTypeIcon } from "@/panels/file-browser/fileTypeIcons";
 import {
   FileUnavailableState,
+  refusalReason,
   unavailableCopy,
+  type RemoteFileContext,
   type UnavailableReason,
 } from "@/components/FileViewer/FileUnavailableState";
+import {
+  SaveHostFileButton,
+  TakeControlButton,
+  useRemoteFileContext,
+  useRetryOnControl,
+} from "@/components/FileViewer/hostFileActions";
+import type { MediaPreviewError } from "@/components/FileViewer/useMediaSourceUrl";
+import { saveHostFile, saveHostFileLabel } from "@/services/hostFileSave";
 import { HtmlViewer } from "@/components/Html/HtmlViewer";
 import { isHtmlFilePath } from "@/components/Html/isHtmlFile";
 import { CodeViewer, type CodeViewerHandle } from "@/components/FileViewer/CodeViewer";
@@ -744,7 +755,7 @@ export function FilePane({
   const changeTick = worktreeChangeTick ?? externalChangeTick;
 
   const [sanitizedSvg, setSanitizedSvg] = useState<string | null>(null);
-  const [errorCode, setErrorCode] = useState<FileReadErrorCode | null>(null);
+  const [errorCode, setErrorCode] = useState<FilePaneErrorCode | null>(null);
   // Overrides the code-derived copy for failures that no `FileReadErrorCode`
   // describes (a readable file whose SVG content the sanitizer rejects).
   // Mirrors FileViewerModal's `displayErrorMessage`.
@@ -1037,6 +1048,12 @@ export function FilePane({
     loadFile("explicit");
   }, [loadFile]);
 
+  const remoteFile = useRemoteFileContext();
+  // A preview the host refused to a watching window loads once this one has control.
+  useRetryOnControl(loadState === "error" && errorCode === "DRIVEN_ELSEWHERE", () =>
+    loadFile("explicit")
+  );
+
   // Toolbar Refresh: spin the icon until the refreshed surface settles. Capture
   // the mode at press time so switching source⇄diff mid-refresh can't clear the
   // spin against the wrong signal. A synchronous branch (image/svg, or an
@@ -1310,6 +1327,16 @@ export function FilePane({
     [filePath, relativeFilePath, revealWorktreeId]
   );
 
+  // A browser here can't open a page on an ssh host: a copy saved here stands in for it.
+  const savesPageInstead = openTarget === "browser" && remoteFile?.saveTarget != null;
+  const runOpenTarget = () => {
+    if (savesPageInstead) {
+      if (filePath) void saveHostFile(filePath);
+      return;
+    }
+    void handleOpenExternal(openTarget);
+  };
+
   const isErrorTargetPending =
     externalError !== null && pendingTargets.includes(externalError.target);
   // Below the Doherty threshold a spinner is just a flash; `disabled` still
@@ -1474,10 +1501,18 @@ export function FilePane({
                   <FolderOpen className={TOOLBAR_ICON_CLASS} />
                 </FileViewerToolbar.IconButton>
                 <FileViewerToolbar.IconButton
-                  label={openTarget === "browser" ? "Open in browser" : "Open in editor"}
-                  onClick={() => void handleOpenExternal(openTarget)}
+                  label={
+                    savesPageInstead
+                      ? saveHostFileLabel()
+                      : openTarget === "browser"
+                        ? "Open in browser"
+                        : "Open in editor"
+                  }
+                  onClick={runOpenTarget}
                 >
-                  {openTarget === "browser" ? (
+                  {savesPageInstead ? (
+                    <Download className={TOOLBAR_ICON_CLASS} />
+                  ) : openTarget === "browser" ? (
                     <Globe className={TOOLBAR_ICON_CLASS} />
                   ) : (
                     <ExternalLink className={TOOLBAR_ICON_CLASS} />
@@ -1539,8 +1574,10 @@ export function FilePane({
                     <FolderOpen className="mr-2 h-3.5 w-3.5" aria-hidden="true" data-menu-icon />
                     {reveal.label}
                   </DropdownMenuItem>
-                  <DropdownMenuItem onSelect={() => void handleOpenExternal(openTarget)}>
-                    {openTarget === "browser" ? (
+                  <DropdownMenuItem onSelect={runOpenTarget}>
+                    {savesPageInstead ? (
+                      <Download className="mr-2 h-3.5 w-3.5" aria-hidden="true" data-menu-icon />
+                    ) : openTarget === "browser" ? (
                       <Globe className="mr-2 h-3.5 w-3.5" aria-hidden="true" data-menu-icon />
                     ) : (
                       <ExternalLink
@@ -1549,7 +1586,11 @@ export function FilePane({
                         data-menu-icon
                       />
                     )}
-                    {openTarget === "browser" ? "Open in browser" : "Open in editor"}
+                    {savesPageInstead
+                      ? saveHostFileLabel()
+                      : openTarget === "browser"
+                        ? "Open in browser"
+                        : "Open in editor"}
                   </DropdownMenuItem>
                 </FileViewerToolbar.MoreActions>
               </>
@@ -1763,10 +1804,12 @@ export function FilePane({
               <FilePaneUnavailable
                 reason={toUnavailableReason(filePath, errorCode, errorMessage)}
                 message={errorMessage ?? ""}
+                filePath={filePath}
                 fileName={fileName ?? filePath}
                 revealLabel={reveal.label}
                 openTarget={openTarget}
                 canOpenInDefaultApp={isInsideGovernedRoot}
+                remote={remoteFile}
                 onRetry={() => loadFile("explicit")}
                 onExternal={(target) => void handleOpenExternal(target)}
               />
@@ -1782,8 +1825,8 @@ export function FilePane({
                 alt={fileName ?? filePath}
                 sanitizedSvg={loadState === "svg" ? sanitizedSvg : null}
                 cacheBust={String(reloadNonce)}
-                onError={() => {
-                  setErrorCode("NOT_FOUND");
+                onError={(error) => {
+                  setErrorCode(previewErrorCode(error, "NOT_FOUND"));
                   setLoadState("error");
                 }}
                 maxHeightClassName="max-h-full"
@@ -1800,7 +1843,7 @@ export function FilePane({
               onError={(error) => {
                 // An allowlisted container can still hold a codec Chromium lacks;
                 // name that instead of implying the file is missing.
-                setErrorCode(error?.code ?? "BINARY_FILE");
+                setErrorCode(previewErrorCode(error, "BINARY_FILE"));
                 setErrorMessage(error?.title ?? "This video couldn't be played");
                 setLoadState("error");
               }}
@@ -1818,7 +1861,7 @@ export function FilePane({
               onError={(error) => {
                 // An allowlisted extension can still hold a codec Chromium lacks;
                 // name that instead of implying the file is missing.
-                setErrorCode(error?.code ?? "BINARY_FILE");
+                setErrorCode(previewErrorCode(error, "BINARY_FILE"));
                 setErrorMessage(error?.title ?? "This audio file couldn't be played");
                 setLoadState("error");
               }}
@@ -1832,7 +1875,7 @@ export function FilePane({
               label={fileName ?? filePath}
               reloadKey={reloadNonce}
               onError={(error) => {
-                setErrorCode(error.code ?? "BINARY_FILE");
+                setErrorCode(previewErrorCode(error, "BINARY_FILE"));
                 setErrorMessage(error.title);
                 setLoadState("error");
               }}
@@ -1963,6 +2006,21 @@ export function FilePane({
 }
 
 /**
+ * What the pane's error state keeps: a read's code, or a remote host's
+ * refusal of a preview, which is about control or location and not the file.
+ */
+type FilePaneErrorCode = FileReadErrorCode | "DRIVEN_ELSEWHERE" | "OUTSIDE_PROJECT";
+
+function previewErrorCode(
+  error: MediaPreviewError | undefined,
+  fallback: FileReadErrorCode
+): FilePaneErrorCode {
+  const refused = refusalReason(error);
+  if (refused === "DRIVEN_ELSEWHERE" || refused === "OUTSIDE_PROJECT") return refused;
+  return error?.code ?? fallback;
+}
+
+/**
  * The structured reason behind the pane's error state, recovered from the
  * code and message it already keeps. The pane stores a read-error code even
  * for failures no read produced — an image that won't decode, a codec the
@@ -1970,9 +2028,12 @@ export function FilePane({
  */
 function toUnavailableReason(
   filePath: string,
-  code: FileReadErrorCode,
+  code: FilePaneErrorCode,
   message: string | null
 ): UnavailableReason {
+  // A host refusal is about control or location, never the file: it outranks
+  // whatever the file's kind would otherwise make of a failure.
+  if (code === "DRIVEN_ELSEWHERE" || code === "OUTSIDE_PROJECT") return code;
   if (isUnsupportedVideoFilePath(filePath) || isUnsupportedAudioFilePath(filePath)) {
     return "UNSUPPORTED_MEDIA";
   }
@@ -2001,6 +2062,7 @@ const NOT_RETRYABLE: ReadonlySet<UnavailableReason> = new Set<UnavailableReason>
   "NOT_A_FILE",
   "UNSUPPORTED_MEDIA",
   "BINARY_FILE",
+  "OUTSIDE_PROJECT",
 ]);
 
 /**
@@ -2016,23 +2078,27 @@ const NOT_RETRYABLE: ReadonlySet<UnavailableReason> = new Set<UnavailableReason>
 function FilePaneUnavailable({
   reason,
   message,
+  filePath,
   fileName,
   revealLabel,
   openTarget,
   canOpenInDefaultApp,
+  remote,
   onRetry,
   onExternal,
 }: {
   reason: UnavailableReason;
   message: string;
+  filePath: string;
   fileName: string;
   revealLabel: string;
   openTarget: "browser" | "editor";
   canOpenInDefaultApp: boolean;
+  remote: RemoteFileContext | null;
   onRetry: () => void;
   onExternal: (target: ExternalTarget) => void;
 }) {
-  const shared = unavailableCopy(reason, message);
+  const shared = unavailableCopy(reason, message, remote);
   // Refreshing this pane can't turn a folder into something it can show; the
   // file manager can.
   const copy =
@@ -2067,6 +2133,8 @@ function FilePaneUnavailable({
       data-testid="file-pane-unavailable"
       action={
         <div className="flex flex-wrap items-center justify-center gap-2">
+          {copy.action === "take-control" && <TakeControlButton />}
+          {copy.action === "save" && <SaveHostFileButton hostPath={filePath} />}
           {openVia !== null && (
             <Button variant="subtle" size="sm" onClick={() => onExternal(openVia)}>
               {openVia === "browser" ? <Globe /> : <ExternalLink />}
