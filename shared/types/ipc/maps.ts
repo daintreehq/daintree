@@ -1621,6 +1621,9 @@ export interface IpcEventMap {
   // The sender project's own theme changed (#13833); main sends it to every view of that project.
   "project-theme:changed": import("./projectTheme.js").ProjectThemeChange;
 
+  // The sender project's custom worktree titles changed (#14022); main sends them to every view of that project.
+  "worktree-titles:changed": import("./worktreeTitles.js").WorktreeTitlesSnapshot;
+
   /**
    * MCP server runtime-state transition. Distinct from
    * `connectivity:service-changed` because the renderer needs the derived

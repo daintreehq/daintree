@@ -118,6 +118,8 @@ function makeDeps(capabilities: string[] = []): PluginHostFactoryDeps {
     isPathUnder: () => false,
     expandAllowedPathEntries: async () => [],
     subscribeWorktreeEvent: vi.fn(() => () => {}),
+    getWorktreeCustomTitles: vi.fn(() => ({})),
+    subscribeWorktreeCustomTitles: vi.fn(() => () => {}),
     registerHandler: vi.fn(),
     validateAndBuildActionDescriptor: vi.fn(),
     safeAppendAudit: vi.fn(),

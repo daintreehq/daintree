@@ -33,6 +33,7 @@ import {
 } from "../schemas/plugin.js";
 import { getPluginMcpSupervisor } from "./PluginMcpSupervisor.js";
 import { PluginProcessManager } from "./plugin/PluginProcessManager.js";
+import { getWorktreeCustomTitles, onWorktreeCustomTitlesChanged } from "./worktreeCustomTitles.js";
 import {
   actionHandlerArityHint,
   appendHandlerHint,
@@ -4367,6 +4368,9 @@ export class PluginService {
       fetchWorktreeSnapshotsResult: () => this.fetchAllWorktreeSnapshotsResult(),
       fetchWorktreeSnapshotsForProjectResult: (projectId, projectRoot) =>
         this.fetchWorktreeSnapshotsForProjectResult(projectId, projectRoot),
+      getWorktreeCustomTitles: (projectId) => this.readWorktreeCustomTitles(projectId),
+      // The factory tracks the disposer against the plugin, so an unload drops it.
+      subscribeWorktreeCustomTitles: (listener) => onWorktreeCustomTitlesChanged(listener),
       recordPluginLog: (boundPlugin, pluginId, level, message, fields) =>
         this.recordPluginLog(boundPlugin, pluginId, level, message, fields),
       serializePluginBadges: (pluginId) => this.serializePluginBadges(pluginId),
@@ -4985,6 +4989,22 @@ export class PluginService {
         err
       );
       return { status: "unavailable", reason: "fetch-failed" };
+    }
+  }
+
+  /**
+   * A project's custom worktree titles for the plugin projection (#14022). A
+   * store that cannot be read costs the titles, never the worktree read.
+   */
+  private readWorktreeCustomTitles(projectId: string): Readonly<Record<string, string>> {
+    try {
+      return getWorktreeCustomTitles(projectId).titles;
+    } catch (err) {
+      console.error(
+        `[PluginService] Failed to read custom worktree titles for project ${projectId}:`,
+        err
+      );
+      return {};
     }
   }
 

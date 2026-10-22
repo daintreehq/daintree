@@ -658,6 +658,7 @@ interface PluginWorktreeSnapshot {
   readonly worktreeId: string;
   readonly path: string;
   readonly name: string;
+  readonly customTitle: string | null;
   readonly isCurrent: boolean;
   readonly branch?: string;
   readonly isMainWorktree?: boolean;
@@ -702,6 +703,8 @@ interface PluginWorktreeLinkedPR {
 ```
 
 `linked` is a provider-agnostic projection of the worktree's linked forge resources (issue and/or PR), or `null` when none is linked. It replaces the removed GitHub-shaped `issueNumber` / `issueTitle` / `prNumber` / `prUrl` / `prState` / `prTitle` fields — route through `linked.providerId` and the shared `ResourceRef` shape instead.
+
+`customTitle` is the title the user gave the worktree, which Daintree shows in place of its issue, PR or branch headline, or `null` when they gave none. Whitespace is collapsed and it is at most 80 characters. A rename or a clear is a change to the worktree: it reaches `onDidChangeWorktrees` with the worktree in `change.changed`, from whichever window made it. `name` stays the worktree's own name.
 
 `headOid` is the object id of the commit HEAD points at, read from the same status poll as `status`. It is the oid only, with no commit message, author or time. A new value means HEAD moved: a commit from the commit dialog, an agent or `git commit` in a terminal, or a checkout, reset or pull. Compare it across `onDidChangeWorktrees` deliveries to see that; a worktree whose HEAD differs from the previous delivery is in `change.changed`. It is a sample rather than a commit log. Deliveries are coalesced by default, so several commits in one window arrive as one change, and a HEAD that moves and comes back to the same oid between deliveries reads as unchanged. It is `null` before the first status poll and on a repository with no commits, and it holds its last value while a git operation is in progress, because the host pauses status polling then.
 

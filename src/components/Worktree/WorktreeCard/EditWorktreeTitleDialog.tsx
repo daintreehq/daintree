@@ -7,7 +7,7 @@ import {
   WORKTREE_CUSTOM_TITLE_MAX_LENGTH,
   isWorktreeCustomTitleTooLong,
   normalizeWorktreeCustomTitle,
-} from "@/lib/worktreeCustomTitle";
+} from "@shared/utils/worktreeCustomTitle";
 
 interface EditWorktreeTitleDialogProps {
   isOpen: boolean;

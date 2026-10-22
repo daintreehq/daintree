@@ -111,6 +111,7 @@ export function worktreeSnapshotFingerprint(snapshot: PluginWorktreeSnapshot): s
     snapshot.worktreeId,
     snapshot.path,
     snapshot.name,
+    snapshot.customTitle ?? null,
     snapshot.isCurrent,
     snapshot.branch ?? null,
     snapshot.isMainWorktree ?? null,

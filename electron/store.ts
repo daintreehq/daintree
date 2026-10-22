@@ -728,6 +728,22 @@ export interface StoreSchema {
   >;
 
   /**
+   * Per-workspace custom worktree titles (#14022): worktree id → title, or
+   * `null` for one the user cleared, kept so a view's stale localStorage copy
+   * can't bring it back. Read and written only through
+   * `services/worktreeCustomTitles.ts`, which validates every entry. Same
+   * additive-key convention as `projectPresentation`.
+   */
+  worktreeCustomTitles?: Record<
+    string,
+    {
+      titles?: Record<string, string | null>;
+      /** Bumped on every write; views drop snapshots older than one they hold. */
+      revision?: number;
+    }
+  >;
+
+  /**
    * Plugin agent-tool access, read and written only through
    * `services/pluginAgentMcp/projectEnablement.ts`: the per-endpoint answers
    * given before access levels (`projectAgentMcpEnablement`, read-only now),
@@ -1044,6 +1060,7 @@ const storeOptions = {
     projectHiddenLaunchGroups: {},
     pluginNotificationSilences: [],
     projectPresentation: {},
+    worktreeCustomTitles: {},
     projectAgentMcpEnablement: {},
     projectAgentMcpAccess: {},
     pluginAgentMcpAccess: {},

@@ -389,35 +389,35 @@ describe("worktreeFilterStore", () => {
   });
 
   describe("setWorktreeCustomTitle", () => {
-    it("normalises, replaces and clears a title", () => {
+    it("normalises, replaces and clears a title", async () => {
       const store = useWorktreeFilterStore.getState();
-      store.setWorktreeCustomTitle("wt-1", "  Release   prep ");
-      store.setWorktreeCustomTitle("wt-2", "Integration");
+      await store.setWorktreeCustomTitle("wt-1", "  Release   prep ");
+      await store.setWorktreeCustomTitle("wt-2", "Integration");
       expect(useWorktreeFilterStore.getState().worktreeCustomTitles).toEqual({
         "wt-1": "Release prep",
         "wt-2": "Integration",
       });
 
-      store.setWorktreeCustomTitle("wt-1", "\u200B ");
-      store.setWorktreeCustomTitle("wt-2", null);
+      await store.setWorktreeCustomTitle("wt-1", "\u200B ");
+      await store.setWorktreeCustomTitle("wt-2", null);
       expect(useWorktreeFilterStore.getState().worktreeCustomTitles).toEqual({});
     });
 
-    it("is a no-op for an unchanged title, nothing to clear, or an over-long title", () => {
+    it("is a no-op for an unchanged title, nothing to clear, or an over-long title", async () => {
       const store = useWorktreeFilterStore.getState();
-      store.setWorktreeCustomTitle("wt-1", "Integration");
+      await store.setWorktreeCustomTitle("wt-1", "Integration");
       const before = useWorktreeFilterStore.getState().worktreeCustomTitles;
 
-      store.setWorktreeCustomTitle("wt-1", " Integration ");
-      store.setWorktreeCustomTitle("wt-other", null);
-      store.setWorktreeCustomTitle("wt-1", "x".repeat(81));
+      await store.setWorktreeCustomTitle("wt-1", " Integration ");
+      await store.setWorktreeCustomTitle("wt-other", null);
+      await store.setWorktreeCustomTitle("wt-1", "x".repeat(81));
 
       expect(useWorktreeFilterStore.getState().worktreeCustomTitles).toBe(before);
     });
 
-    it("survives clearAll, which only resets search and filters", () => {
+    it("survives clearAll, which only resets search and filters", async () => {
       const store = useWorktreeFilterStore.getState();
-      store.setWorktreeCustomTitle("wt-1", "Integration");
+      await store.setWorktreeCustomTitle("wt-1", "Integration");
       store.setQuery("abc");
 
       store.clearAll();
@@ -456,10 +456,10 @@ describe("worktreeFilterStore", () => {
       });
     });
 
-    it("removes titles for worktrees not in validIds and keeps the rest", () => {
+    it("removes titles for worktrees not in validIds and keeps the rest", async () => {
       const store = useWorktreeFilterStore.getState();
-      store.setWorktreeCustomTitle("wt-1", "Integration");
-      store.setWorktreeCustomTitle("wt-gone", "Spike");
+      await store.setWorktreeCustomTitle("wt-1", "Integration");
+      await store.setWorktreeCustomTitle("wt-gone", "Spike");
 
       store.pruneStaleWorktreeIds(new Set(["wt-1"]));
 
@@ -468,9 +468,9 @@ describe("worktreeFilterStore", () => {
       });
     });
 
-    it("preserves title map identity when no title is stale", () => {
+    it("preserves title map identity when no title is stale", async () => {
       const store = useWorktreeFilterStore.getState();
-      store.setWorktreeCustomTitle("wt-1", "Integration");
+      await store.setWorktreeCustomTitle("wt-1", "Integration");
       store.setWorktreeLabelColor("wt-stale", "category-blue");
       const before = useWorktreeFilterStore.getState().worktreeCustomTitles;
 

@@ -81,13 +81,22 @@ export function toPluginWorktreeStatus(
  *
  * Explicit field assignment — do NOT spread. Internal shape changes must not
  * implicitly leak to third-party plugins.
+ *
+ * `customTitle` is the user's title for the worktree, which the workspace host
+ * never sees: main and the renderer each pass the one they hold (#14022). Map
+ * with a closure, never `.map(toPluginWorktreeSnapshot)`, or the index lands
+ * here.
  */
-export function toPluginWorktreeSnapshot(snapshot: WorktreeSnapshot): PluginWorktreeSnapshot {
+export function toPluginWorktreeSnapshot(
+  snapshot: WorktreeSnapshot,
+  customTitle: string | null = null
+): PluginWorktreeSnapshot {
   const projection: PluginWorktreeSnapshot = {
     id: snapshot.id,
     worktreeId: snapshot.worktreeId,
     path: snapshot.path,
     name: snapshot.name,
+    customTitle,
     isCurrent: snapshot.isCurrent,
     branch: snapshot.branch,
     isMainWorktree: snapshot.isMainWorktree,

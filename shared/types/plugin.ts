@@ -3999,6 +3999,13 @@ export interface PluginWorktreeSnapshot {
   readonly worktreeId: string;
   readonly path: string;
   readonly name: string;
+  /**
+   * The title the user gave this worktree, shown in place of its issue, PR or
+   * branch headline, or `null` when they gave none. Whitespace is collapsed and
+   * it is at most 80 characters. A rename or clear is a change to the worktree,
+   * so it reaches {@link PluginHostApi.onDidChangeWorktrees} like any other.
+   */
+  readonly customTitle: string | null;
   readonly isCurrent: boolean;
   readonly branch?: string;
   readonly isMainWorktree?: boolean;

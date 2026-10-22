@@ -18,6 +18,7 @@ function snap(id: string, overrides: Partial<PluginWorktreeSnapshot> = {}): Plug
     worktreeId: id,
     path: `/repo/${id}`,
     name: id,
+    customTitle: null,
     isCurrent: false,
     linked: null,
     status: null,
@@ -142,6 +143,9 @@ describe("WorktreeChangeTracker", () => {
       { headOid: "bbb", setup: { state: "ready", stage: null } },
     ];
     t.next([snap("a")]);
+    // A user's rename and clear of the title, which the workspace host never sees (#14022).
+    expect(t.next([snap("a", { customTitle: "Release prep" })]).changed).toEqual(["a"]);
+    expect(t.next([snap("a")]).changed).toEqual(["a"]);
     for (const step of steps) {
       expect(t.next([snap("a", step)]).changed).toEqual(["a"]);
     }
@@ -163,6 +167,7 @@ describe("WorktreeChangeTracker", () => {
     const fields: Array<Partial<PluginWorktreeSnapshot>> = [
       { path: "/elsewhere" },
       { name: "renamed" },
+      { customTitle: "Release prep" },
       { isCurrent: true },
       { branch: "feature" },
       { isMainWorktree: true },
@@ -197,6 +202,7 @@ describe("createMockHost parity with the host's coalescing rules", () => {
       [snap("c", { status: status([["g", "added"]]) })],
       [snap("c", { status: status([["g", "added"]]), headOid: "aaa" })],
       [snap("c", { status: status([["g", "added"]]), headOid: "aaa", gitOperation: "rebase" })],
+      [snap("c", { status: status([["g", "added"]]), headOid: "aaa", customTitle: "Prep" })],
       [
         snap("c", {
           status: status([["g", "added"]]),

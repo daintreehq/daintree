@@ -141,4 +141,31 @@ describe("worktree.setCustomTitle", () => {
     ).rejects.toThrow(/not found/);
     expect(useWorktreeFilterStore.getState().worktreeCustomTitles).toEqual({});
   });
+
+  it("waits for main to record the title and fails when main can't (#14022)", async () => {
+    const set = vi.fn(async () => {
+      throw new Error("store is read-only");
+    });
+    // `defineProperty`: a partial stub of the full bridge would need a type assertion.
+    Object.defineProperty(window, "electron", {
+      value: {
+        worktreeTitles: {
+          hydrate: vi.fn(async () => ({ projectId: "p", titles: {}, revision: 1 })),
+          set,
+          onChanged: vi.fn(() => () => {}),
+        },
+      },
+      configurable: true,
+      writable: true,
+    });
+    try {
+      await expect(
+        getAction("worktree.setCustomTitle").run({ worktreeId: "wt-main", title: "X" }, ctx)
+      ).rejects.toThrow("store is read-only");
+      expect(set).toHaveBeenCalledWith("wt-main", "X");
+      expect(useWorktreeFilterStore.getState().worktreeCustomTitles).toEqual({});
+    } finally {
+      Reflect.deleteProperty(window, "electron");
+    }
+  });
 });

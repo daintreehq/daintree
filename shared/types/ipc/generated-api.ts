@@ -1509,4 +1509,15 @@ export interface GeneratedElectronAPI {
       ...args: IpcInvokeMap["workspace-residency:set"]["args"]
     ): Promise<IpcInvokeMap["workspace-residency:set"]["result"]>;
   };
+  worktreeTitles: {
+    hydrate(
+      ...args: IpcInvokeMap["worktree-titles:hydrate"]["args"]
+    ): Promise<IpcInvokeMap["worktree-titles:hydrate"]["result"]>;
+    prune(
+      ...args: IpcInvokeMap["worktree-titles:prune"]["args"]
+    ): Promise<IpcInvokeMap["worktree-titles:prune"]["result"]>;
+    set(
+      ...args: IpcInvokeMap["worktree-titles:set"]["args"]
+    ): Promise<IpcInvokeMap["worktree-titles:set"]["result"]>;
+  };
 }
