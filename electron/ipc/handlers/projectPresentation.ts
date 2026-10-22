@@ -8,8 +8,14 @@ import {
   answerFor,
   answerProjectPresentationSuggestion,
   getProjectPresentation,
+  isOwnProjectPluginButtonId,
+  resetProjectToolbar,
+  setProjectPluginButtonPromoted,
   setProjectPresentationLevel,
+  setProjectToolbarEnabled,
 } from "../../services/projectPresentation/profileStore.js";
+import { getToolbarButtonConfig } from "../../../shared/config/toolbarButtonRegistry.js";
+import { projectIdFromPluginInstanceKey } from "../../../shared/types/plugin.js";
 import { readPresentationSuggestion } from "../../services/projectPresentation/repoSuggestion.js";
 import {
   isLevelAllowed,
@@ -49,6 +55,8 @@ function snapshotOf(
     levels: stored.levels,
     suggestion,
     suggestionAnswer: answerFor(stored, suggestion),
+    useProjectToolbar: stored.useProjectToolbar,
+    promotedPluginButtons: stored.promotedPluginButtons,
     revision: stored.revision,
   };
 }
@@ -108,6 +116,59 @@ async function handleAnswerSuggestion(
   return publish(snapshotOf(projectId, suggestion));
 }
 
+async function handleSetToolbarEnabled(
+  ctx: IpcContext,
+  enabled: boolean
+): Promise<ProjectPresentationSnapshot> {
+  const projectId = requireProjectId(ctx);
+  if (typeof enabled !== "boolean") {
+    throw new Error("project presentation: enabled must be a boolean");
+  }
+  setProjectToolbarEnabled(projectId, enabled);
+  return publish(snapshotOf(projectId, await readSuggestion(projectId)));
+}
+
+/**
+ * Promotion is checked against the live registry as well as the id's shape:
+ * the button has to be registered right now by a plugin loaded for the
+ * sender's own project. An installed plugin never gets a say over placement
+ * (#11304), and taking a promotion back needs neither, so a button whose
+ * plugin has since gone can still be let go.
+ */
+async function handleSetPluginButtonPromoted(
+  ctx: IpcContext,
+  buttonId: string,
+  promoted: boolean
+): Promise<ProjectPresentationSnapshot> {
+  const projectId = requireProjectId(ctx);
+  if (typeof buttonId !== "string" || buttonId.length === 0) {
+    throw new Error("project presentation: buttonId is required");
+  }
+  if (typeof promoted !== "boolean") {
+    throw new Error("project presentation: promoted must be a boolean");
+  }
+  if (promoted) {
+    const config = getToolbarButtonConfig(buttonId);
+    if (
+      config === undefined ||
+      projectIdFromPluginInstanceKey(config.pluginId) !== projectId ||
+      !isOwnProjectPluginButtonId(projectId, buttonId)
+    ) {
+      throw new Error(
+        "project presentation: only this project's own plugin buttons can be promoted"
+      );
+    }
+  }
+  setProjectPluginButtonPromoted(projectId, buttonId, promoted);
+  return publish(snapshotOf(projectId, await readSuggestion(projectId)));
+}
+
+async function handleResetToolbar(ctx: IpcContext): Promise<ProjectPresentationSnapshot> {
+  const projectId = requireProjectId(ctx);
+  resetProjectToolbar(projectId);
+  return publish(snapshotOf(projectId, await readSuggestion(projectId)));
+}
+
 export const projectPresentationNamespace = defineIpcNamespace({
   name: "projectPresentation",
   ops: {
@@ -120,6 +181,19 @@ export const projectPresentationNamespace = defineIpcNamespace({
       handleAnswerSuggestion,
       { withContext: true }
     ),
+    setToolbarEnabled: op(
+      PROJECT_PRESENTATION_METHOD_CHANNELS.setToolbarEnabled,
+      handleSetToolbarEnabled,
+      { withContext: true }
+    ),
+    setPluginButtonPromoted: op(
+      PROJECT_PRESENTATION_METHOD_CHANNELS.setPluginButtonPromoted,
+      handleSetPluginButtonPromoted,
+      { withContext: true }
+    ),
+    resetToolbar: op(PROJECT_PRESENTATION_METHOD_CHANNELS.resetToolbar, handleResetToolbar, {
+      withContext: true,
+    }),
   },
 });
 

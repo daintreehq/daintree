@@ -53,6 +53,7 @@ export function PresentationFeaturesSection({ isOpen }: { isOpen: boolean }) {
   const failedSave = useProjectPresentationStore((s) => s.failedSave);
   const setLevel = useProjectPresentationStore((s) => s.setLevel);
   const answerSuggestion = useProjectPresentationStore((s) => s.answerSuggestion);
+  const retryFailedSave = useProjectPresentationStore((s) => s.retryFailedSave);
 
   useEffect(() => {
     init();
@@ -70,11 +71,6 @@ export function PresentationFeaturesSection({ isOpen }: { isOpen: boolean }) {
   // user made in another window.
   const applies = project != null && loaded && profileProjectId === project.id;
 
-  const retry = () => {
-    if (failedSave === null) return;
-    if (failedSave.kind === "level") void setLevel(failedSave.feature, failedSave.level);
-    else void answerSuggestion(failedSave.hash, failedSave.answer);
-  };
 
   return (
     <SettingsSection
@@ -146,7 +142,7 @@ export function PresentationFeaturesSection({ isOpen }: { isOpen: boolean }) {
         {failedSave !== null && (
           <SettingsEmptyRow
             action={
-              <Button variant="outline" size="sm" onClick={retry}>
+              <Button variant="outline" size="sm" onClick={retryFailedSave}>
                 Retry
               </Button>
             }

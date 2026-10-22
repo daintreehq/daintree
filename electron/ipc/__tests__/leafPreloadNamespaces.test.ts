@@ -354,11 +354,17 @@ describe("leaf preload namespace bindings", () => {
       await bindings.get();
       await bindings.setLevel("forgeStats", "demoted");
       await bindings.answerSuggestion("abc", "declined");
+      await bindings.setToolbarEnabled(false);
+      await bindings.setPluginButtonPromoted("p.run", true);
+      await bindings.resetToolbar();
 
       expect(invoke.mock.calls).toEqual([
         ["project-presentation:get"],
         ["project-presentation:set-level", "forgeStats", "demoted"],
         ["project-presentation:answer-suggestion", "abc", "declined"],
+        ["project-presentation:set-toolbar-enabled", false],
+        ["project-presentation:set-plugin-button-promoted", "p.run", true],
+        ["project-presentation:reset-toolbar"],
       ]);
     });
   });

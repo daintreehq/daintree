@@ -14,6 +14,7 @@ import { WorktreeStoreContext } from "@/contexts/WorktreeStoreContext";
 import { createWorktreeStore, setCurrentViewStore } from "@/store/createWorktreeStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useProjectStore } from "@/store/projectStore";
+import { useToolbarPreferencesStore } from "@/store/toolbarPreferencesStore";
 import {
   _resetProjectPresentationStoreForTest,
   useProjectPresentationStore,
@@ -45,12 +46,16 @@ async function settle(): Promise<void> {
   });
 }
 
-async function applyProfile(levels: PresentationLevels): Promise<void> {
+async function applyProfile(
+  levels: PresentationLevels,
+  useProjectToolbar: boolean | null = null
+): Promise<void> {
   act(() => {
     useProjectPresentationStore.setState({
       loaded: true,
       projectId: PREVIEW_PROJECT.id,
       levels,
+      useProjectToolbar,
     });
   });
   await settle();
@@ -93,10 +98,13 @@ beforeEach(async () => {
   await settle();
 });
 
+const initialToolbarLayout = useToolbarPreferencesStore.getState().layout;
+
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
   _resetProjectPresentationStoreForTest();
+  useToolbarPreferencesStore.setState({ layout: initialToolbarLayout });
 });
 
 describe("Toolbar forge stats under the presentation profile", () => {
@@ -136,5 +144,52 @@ describe("Toolbar forge stats under the presentation profile", () => {
     await applyProfile({ forgeStats: "shown" });
 
     expect(forgeSlot()).toBeNull();
+  });
+});
+
+describe("Toolbar items under the project's toolbar (#13783)", () => {
+  const resumeSlot = () => document.querySelector('[data-toolbar-button-id="resume-sessions"]');
+  // Resume sessions sits in the right-hand row by default, as forge stats does.
+  const rightMenuShown = forgeMenuShown;
+
+  it("demoted: folds a built-in button into … for this project, writing nothing app-wide", async () => {
+    const layoutBefore = useToolbarPreferencesStore.getState().layout;
+    expect(resumeSlot()?.getAttribute("aria-hidden")).toBeNull();
+
+    await applyProfile({ resumeSessions: "demoted" });
+
+    expect(resumeSlot()?.getAttribute("aria-hidden")).toBe("true");
+    expect(rightMenuShown()).toBe(true);
+    expect(useToolbarPreferencesStore.getState().layout).toBe(layoutBefore);
+  });
+
+  it("turned off: draws the app-wide toolbar while keeping the profile's choices", async () => {
+    await applyProfile({ resumeSessions: "demoted", forgeStats: "hidden" }, false);
+
+    expect(resumeSlot()?.getAttribute("aria-hidden")).toBeNull();
+    expect(rightMenuShown()).toBe(false);
+    expect(forgeSlot()).not.toBeNull();
+    expect(useProjectPresentationStore.getState().levels).toEqual({
+      resumeSessions: "demoted",
+      forgeStats: "hidden",
+    });
+  });
+
+  it("explicitly shown: keeps a button on this project's toolbar while it's off app-wide", async () => {
+    act(() => {
+      useToolbarPreferencesStore.setState((state) => ({
+        layout: { ...state.layout, pinnedButtons: { ...state.layout.pinnedButtons, "resume-sessions": false }, },
+      }));
+    });
+    await settle();
+    expect(resumeSlot()).toBeNull();
+
+    await applyProfile({ resumeSessions: "shown" });
+    expect(resumeSlot()?.getAttribute("aria-hidden")).toBeNull();
+    // The app-wide pin is untouched: other projects still go without it.
+    expect(useToolbarPreferencesStore.getState().layout.pinnedButtons["resume-sessions"]).toBe(false);
+
+    await applyProfile({ resumeSessions: "shown" }, false);
+    expect(resumeSlot()).toBeNull();
   });
 });

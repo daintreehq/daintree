@@ -1,7 +1,14 @@
 import { store } from "../../store.js";
 import { isProjectWorkspaceId } from "../../../shared/utils/workspaceIds.js";
 import {
+  pluginManifestIdFromInstanceKey,
+  projectIdFromPluginInstanceKey,
+} from "../../../shared/types/plugin.js";
+import {
+  MAX_PROMOTED_PLUGIN_BUTTONS,
+  PRESENTATION_FEATURE_IDS,
   isLevelAllowed,
+  isToolbarPresentationFeature,
   isPresentationFeatureId,
   parsePresentationLevels,
   type PresentationFeatureId,
@@ -37,6 +44,10 @@ export interface StoredProjectPresentation {
   levels: PresentationLevels;
   /** Suggestion hash → the user's answer to it. */
   suggestionAnswers: Record<string, AnswerEntry>;
+  /** "Use this project's toolbar" as last set, or `null` for never set. */
+  useProjectToolbar: boolean | null;
+  /** This project's own plugin buttons promoted onto its toolbar, in the order promoted. */
+  promotedPluginButtons: string[];
   /**
    * Bumped on every write and kept on disk, so it only ever grows — across
    * restarts too. A view drops any snapshot older than one it already holds:
@@ -72,15 +83,51 @@ function parseAnswers(value: unknown): Record<string, AnswerEntry> {
   return answers;
 }
 
+/**
+ * Whether `buttonId` is a toolbar button of a plugin loaded for `projectId`
+ * itself. Plugin button ids are `{instanceKey}.{id}`, and a project plugin's
+ * instance key names its project, so an installed plugin's button — or
+ * another project's — never passes.
+ */
+export function isOwnProjectPluginButtonId(projectId: string, buttonId: unknown): boolean {
+  if (typeof buttonId !== "string" || buttonId.length > 512) return false;
+  if (projectIdFromPluginInstanceKey(buttonId) !== projectId) return false;
+  // `{manifest}.{button}`: a bare instance key is a plugin, not one of its buttons.
+  const rest = pluginManifestIdFromInstanceKey(buttonId);
+  const dot = rest.lastIndexOf(".");
+  return dot > 0 && dot < rest.length - 1;
+}
+
+/** Deduped, own-project only and capped: the list is read from a user-editable file (#10938). */
+function parsePromoted(projectId: string, value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  const out: string[] = [];
+  for (const id of value) {
+    if (out.length >= MAX_PROMOTED_PLUGIN_BUTTONS) break;
+    if (isOwnProjectPluginButtonId(projectId, id) && !out.includes(id as string)) {
+      out.push(id as string);
+    }
+  }
+  return out;
+}
+
 /** The file is user-editable, so every level is checked and anything malformed is skipped. */
-function parseEntry(value: unknown): StoredProjectPresentation {
+function parseEntry(projectId: string, value: unknown): StoredProjectPresentation {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return { levels: {}, suggestionAnswers: parseAnswers(undefined), revision: 0 };
+    return {
+      levels: {},
+      suggestionAnswers: parseAnswers(undefined),
+      useProjectToolbar: null,
+      promotedPluginButtons: [],
+      revision: 0,
+    };
   }
   const entry = value as Record<string, unknown>;
   return {
     levels: parsePresentationLevels(entry.levels),
     suggestionAnswers: parseAnswers(entry.suggestionAnswers),
+    useProjectToolbar: typeof entry.useProjectToolbar === "boolean" ? entry.useProjectToolbar : null,
+    promotedPluginButtons: parsePromoted(projectId, entry.promotedPluginButtons),
     revision: parseRevision(entry.revision),
   };
 }
@@ -133,7 +180,7 @@ function writeEntry(
 ): StoredProjectPresentation {
   entry.revision = parseRevision(entry.revision) + 1;
   store.set(STORE_KEY, { ...all, [projectId]: entry });
-  return parseEntry(entry);
+  return parseEntry(projectId, entry);
 }
 
 function assertProjectId(projectId: string): void {
@@ -150,7 +197,7 @@ function assertProjectId(projectId: string): void {
  * the suggestion question again.
  */
 export function getProjectPresentation(projectId: string): StoredProjectPresentation {
-  return parseEntry(rawEntry(readAll(), projectId));
+  return parseEntry(projectId, rawEntry(readAll(), projectId));
 }
 
 /**
@@ -177,6 +224,8 @@ export function setProjectPresentationLevel(
     delete levels[feature];
   } else {
     levels[feature] = level;
+    // Choosing a toolbar level is choosing this project's toolbar.
+    if (isToolbarPresentationFeature(feature)) delete entry.useProjectToolbar;
   }
   if (Object.keys(levels).length === 0) {
     delete entry.levels;
@@ -216,10 +265,13 @@ export function answerProjectPresentationSuggestion(
   const entry = rawEntry(all, projectId);
   if (answer === "accepted") {
     entry.levels = { ...rawLevels(entry), ...suggestion.levels };
+    if (Object.keys(suggestion.levels).some((id) => isToolbarPresentationFeature(id as never))) {
+      delete entry.useProjectToolbar;
+    }
   }
   // The answer just given always survives the cap, whatever timestamps an
   // edited file carries; the rest keep their most recent.
-  const others = Object.entries(parseEntry(entry).suggestionAnswers)
+  const others = Object.entries(parseEntry(projectId, entry).suggestionAnswers)
     .filter(([key]) => key !== hash)
     .sort(([, a], [, b]) => a.decidedAt - b.decidedAt)
     .slice(-(MAX_REMEMBERED_ANSWERS - 1));
@@ -227,5 +279,86 @@ export function answerProjectPresentationSuggestion(
     ...others,
     [hash, { answer, decidedAt: isTimestamp(now) ? now : 0 }],
   ]);
+  return writeEntry(all, projectId, entry);
+}
+
+/**
+ * Turn "Use this project's toolbar" on or off (#13783). Off keeps every
+ * toolbar level and promotion stored, so turning it back on restores them.
+ */
+export function setProjectToolbarEnabled(
+  projectId: string,
+  enabled: boolean
+): StoredProjectPresentation {
+  assertProjectId(projectId);
+  if (typeof enabled !== "boolean") {
+    throw new Error("project presentation: enabled must be a boolean");
+  }
+  const all = readAll();
+  const entry = rawEntry(all, projectId);
+  entry.useProjectToolbar = enabled;
+  return writeEntry(all, projectId, entry);
+}
+
+/**
+ * Promote one of this project's own plugin buttons onto its toolbar, or take
+ * it back to the tray. Added or removed one id at a time against what is on
+ * disk, so two windows promoting different buttons both land.
+ *
+ * Removal takes any id, so a button whose plugin has gone can still be let go.
+ */
+export function setProjectPluginButtonPromoted(
+  projectId: string,
+  buttonId: string,
+  promoted: boolean
+): StoredProjectPresentation {
+  assertProjectId(projectId);
+  if (typeof buttonId !== "string" || buttonId.length === 0) {
+    throw new Error("project presentation: buttonId is required");
+  }
+  if (promoted && !isOwnProjectPluginButtonId(projectId, buttonId)) {
+    throw new Error("project presentation: only this project's own plugin buttons can be promoted");
+  }
+  const all = readAll();
+  const entry = rawEntry(all, projectId);
+  const current = parsePromoted(projectId, entry.promotedPluginButtons).filter(
+    (id) => id !== buttonId
+  );
+  if (promoted) {
+    if (current.length >= MAX_PROMOTED_PLUGIN_BUTTONS) {
+      throw new Error(
+        `project presentation: at most ${MAX_PROMOTED_PLUGIN_BUTTONS} plugin buttons can be promoted`
+      );
+    }
+    current.push(buttonId);
+  }
+  if (current.length === 0) {
+    delete entry.promotedPluginButtons;
+  } else {
+    entry.promotedPluginButtons = current;
+  }
+  return writeEntry(all, projectId, entry);
+}
+
+/**
+ * Put the app-wide toolbar back for this project: every toolbar feature's
+ * level, every promotion and the toggle are cleared. Levels for features off
+ * the toolbar, suggestion answers and the revision stay.
+ */
+export function resetProjectToolbar(projectId: string): StoredProjectPresentation {
+  assertProjectId(projectId);
+  const all = readAll();
+  const entry = rawEntry(all, projectId);
+  const levels = rawLevels(entry);
+  for (const id of PRESENTATION_FEATURE_IDS) {
+    if (isToolbarPresentationFeature(id)) delete levels[id];
+  }
+  if (Object.keys(levels).length === 0) {
+    delete entry.levels;
+  } else {
+    entry.levels = levels;
+  }
+  delete entry.promotedPluginButtons;
+  delete entry.useProjectToolbar;
   return writeEntry(all, projectId, entry);
 }

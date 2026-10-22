@@ -4,6 +4,9 @@ export const PROJECT_PRESENTATION_METHOD_CHANNELS = {
   get: "project-presentation:get",
   setLevel: "project-presentation:set-level",
   answerSuggestion: "project-presentation:answer-suggestion",
+  setToolbarEnabled: "project-presentation:set-toolbar-enabled",
+  setPluginButtonPromoted: "project-presentation:set-plugin-button-promoted",
+  resetToolbar: "project-presentation:reset-toolbar",
 } as const satisfies Record<string, keyof IpcInvokeMap>;
 
 type Methods = typeof PROJECT_PRESENTATION_METHOD_CHANNELS;

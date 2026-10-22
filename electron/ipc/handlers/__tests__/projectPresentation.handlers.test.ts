@@ -54,6 +54,11 @@ vi.mock("../../../services/projectPresentation/repoSuggestion.js", async (import
 });
 
 import { CHANNELS } from "../../channels.js";
+import {
+  registerToolbarButton,
+  unregisterPluginToolbarButtons,
+} from "../../../../shared/config/toolbarButtonRegistry.js";
+import type { PluginToolbarButtonId } from "../../../../shared/types/toolbar.js";
 import { registerProjectPresentationHandlers } from "../projectPresentation.js";
 import { hashPresentationLevels } from "../../../services/projectPresentation/repoSuggestion.js";
 import type { ProjectPresentationSnapshot } from "../../../../shared/types/ipc/projectPresentation.js";
@@ -101,6 +106,8 @@ describe("project-presentation:get", () => {
       levels: {},
       suggestion: { levels: HIDDEN, hash: hashPresentationLevels(HIDDEN) },
       suggestionAnswer: null,
+      useProjectToolbar: null,
+      promotedPluginButtons: [],
       revision: 0,
     });
   });
@@ -191,5 +198,85 @@ describe("project-presentation:answer-suggestion", () => {
     ).rejects.toThrow();
     expect(storeMock.set).not.toHaveBeenCalled();
     expect(broadcastMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("project toolbar ops (#13783)", () => {
+  const OWN_PLUGIN = `project__${PROJECT_A}__acme.tools`;
+  const OTHER_PLUGIN = `project__${"b".repeat(64)}__acme.tools`;
+  const ownButton = `${OWN_PLUGIN}.run`;
+
+  function register(pluginId: string, id: string) {
+    registerToolbarButton({
+      id: id as PluginToolbarButtonId,
+      label: "Run",
+      iconId: "play",
+      actionId: `${pluginId}.run`,
+      priority: 3,
+      pluginId,
+    });
+  }
+
+  afterEach(() => {
+    for (const pluginId of [OWN_PLUGIN, OTHER_PLUGIN, "acme.tools"]) {
+      unregisterPluginToolbarButtons(pluginId);
+    }
+  });
+
+  it("promotes a registered button of the sender's own project plugin", async () => {
+    register(OWN_PLUGIN, ownButton);
+    const snapshot = (await invoke(
+      "project-presentation:set-plugin-button-promoted",
+      ownButton,
+      true
+    )) as ProjectPresentationSnapshot;
+    expect(snapshot.promotedPluginButtons).toEqual([ownButton]);
+    expect(broadcastMock).toHaveBeenCalledWith(
+      PROJECT_A,
+      CHANNELS.PROJECT_PRESENTATION_CHANGED,
+      snapshot
+    );
+  });
+
+  it("refuses an installed plugin's button, another project's, or one not registered", async () => {
+    register("acme.tools", "acme.tools.run");
+    register(OTHER_PLUGIN, `${OTHER_PLUGIN}.run`);
+    await expect(
+      invoke("project-presentation:set-plugin-button-promoted", "acme.tools.run", true)
+    ).rejects.toThrow(/own plugin buttons/);
+    await expect(
+      invoke("project-presentation:set-plugin-button-promoted", `${OTHER_PLUGIN}.run`, true)
+    ).rejects.toThrow(/own plugin buttons/);
+    await expect(
+      invoke("project-presentation:set-plugin-button-promoted", ownButton, true)
+    ).rejects.toThrow(/own plugin buttons/);
+    expect(broadcastMock).not.toHaveBeenCalled();
+  });
+
+  it("lets a promotion go after its plugin has unloaded", async () => {
+    register(OWN_PLUGIN, ownButton);
+    await invoke("project-presentation:set-plugin-button-promoted", ownButton, true);
+    unregisterPluginToolbarButtons(OWN_PLUGIN);
+    const snapshot = (await invoke(
+      "project-presentation:set-plugin-button-promoted",
+      ownButton,
+      false
+    )) as ProjectPresentationSnapshot;
+    expect(snapshot.promotedPluginButtons).toEqual([]);
+  });
+
+  it("sets the toggle and resets the toolbar for the sender's project", async () => {
+    await invoke("project-presentation:set-level", "copyTree", "demoted");
+    const off = (await invoke(
+      "project-presentation:set-toolbar-enabled",
+      false
+    )) as ProjectPresentationSnapshot;
+    expect(off.useProjectToolbar).toBe(false);
+    expect(off.levels).toEqual({ copyTree: "demoted" });
+    await expect(invoke("project-presentation:set-toolbar-enabled", "no")).rejects.toThrow();
+
+    const reset = (await invoke("project-presentation:reset-toolbar")) as ProjectPresentationSnapshot;
+    expect(reset.levels).toEqual({});
+    expect(reset.useProjectToolbar).toBeNull();
   });
 });

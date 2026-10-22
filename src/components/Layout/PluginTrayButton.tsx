@@ -28,7 +28,14 @@ import { ARIA_DISABLED_CLASSES } from "@/components/ui/ariaDisabled";
 import { actionService } from "@/services/ActionService";
 import { useToolbarPreferencesStore } from "@/store/toolbarPreferencesStore";
 import { usePluginRuntimeStore } from "@/store/pluginRuntimeStore";
-import { pluginManifestIdFromInstanceKey, type PluginPanelBadge } from "@shared/types/plugin";
+import { useProjectPresentationStore } from "@/store/projectPresentationStore";
+import { useProjectToolbarOverlay } from "@/hooks/useResolvedPresentation";
+import { MAX_PROMOTED_PLUGIN_BUTTONS } from "@shared/config/presentationProfile";
+import {
+  pluginManifestIdFromInstanceKey,
+  projectIdFromPluginInstanceKey,
+  type PluginPanelBadge,
+} from "@shared/types/plugin";
 import { useAriaKeyshortcuts, useShortcutHintHover } from "@/hooks";
 import type { ToolbarButtonConfig } from "@shared/config/toolbarButtonRegistry";
 import type { PluginToolbarButtonId } from "@shared/types/toolbar";
@@ -111,6 +118,9 @@ export function PluginToolbarButton({
   const hover = useShortcutHintHover(config.actionId);
   const ariaShortcut = useAriaKeyshortcuts(config.actionId);
   const setPluginButtonPromoted = useToolbarPreferencesStore((s) => s.setPluginButtonPromoted);
+  const appPromoted = useToolbarPreferencesStore((s) => s.layout.pinnedButtons[pluginId] === true);
+  const projectPromoted = useProjectToolbarOverlay().promotedPluginButtons.includes(pluginId);
+  const setProjectPromoted = useProjectPresentationStore((s) => s.setPluginButtonPromoted);
   const reasonId = useId();
   const { Icon, tooltip, pressed, busy, disabled, blocked } = presentPluginToolbarButton(
     config,
@@ -197,7 +207,12 @@ export function PluginToolbarButton({
         <ToolbarContextMenuItems
           buttonId={pluginId}
           side="right"
-          onUnpin={() => setPluginButtonPromoted(pluginId, false)}
+          onUnpin={() => {
+            // Promoted by this project's toolbar (#13783): unpinning takes it
+            // back out of the profile, not out of the app-wide layout.
+            if (projectPromoted && !appPromoted) void setProjectPromoted(pluginId, false);
+            else setPluginButtonPromoted(pluginId, false);
+          }}
         />
       </ContextMenuContent>
     </ContextMenu>
@@ -421,6 +436,11 @@ export function PluginTrayButton({
 }) {
   const pinnedButtons = useToolbarPreferencesStore((s) => s.layout.pinnedButtons);
   const setPluginButtonPromoted = useToolbarPreferencesStore((s) => s.setPluginButtonPromoted);
+  const toolbarOverlay = useProjectToolbarOverlay();
+  const projectPromoted = toolbarOverlay.promotedPluginButtons;
+  const setProjectPromoted = useProjectPresentationStore((s) => s.setPluginButtonPromoted);
+  const isPromoted = (id: PluginToolbarButtonId) =>
+    pinnedButtons[id] === true || projectPromoted.includes(id);
   const pluginMetaById = usePluginRuntimeStore((s) => s.pluginMetaById);
   const badgesByPlugin = usePluginToolbarBadgeStore((s) => s.badgesByPlugin);
 
@@ -448,12 +468,12 @@ export function PluginTrayButton({
   const trayBadges = useMemo(() => {
     const out: PluginPanelBadge[] = [];
     for (const config of configs.values()) {
-      if (pinnedButtons[config.id] === true) continue;
+      if (pinnedButtons[config.id] === true || projectPromoted.includes(config.id)) continue;
       const badge = toolbarBadgeFor(badgesByPlugin, config);
       if (badge) out.push(badge);
     }
     return out;
-  }, [configs, pinnedButtons, badgesByPlugin]);
+  }, [configs, pinnedButtons, projectPromoted, badgesByPlugin]);
   const trayBadgeColor = mostSevereBadgeColor(trayBadges);
   // The dot keeps its last colour while it fades out, rather than greying.
   const [shownTrayColor, setShownTrayColor] = useState(trayBadgeColor);
@@ -499,7 +519,22 @@ export function PluginTrayButton({
     const now = Date.now();
     if (now - lastPinActionAt.current < 50) return;
     lastPinActionAt.current = now;
-    setPluginButtonPromoted(config.id, pinnedButtons[config.id] !== true);
+    const appPinned = pinnedButtons[config.id] === true;
+    // While this project's toolbar is in use, its own plugin's buttons are
+    // promoted by the profile (#13783), up to its cap; past that, and for
+    // installed plugins, the pin is the app-wide one it always was.
+    if (
+      toolbarOverlay.active &&
+      !appPinned &&
+      projectIdFromPluginInstanceKey(config.pluginId) !== null
+    ) {
+      const promoted = projectPromoted.includes(config.id);
+      if (promoted || projectPromoted.length < MAX_PROMOTED_PLUGIN_BUTTONS) {
+        void setProjectPromoted(config.id, !promoted);
+        return;
+      }
+    }
+    setPluginButtonPromoted(config.id, !appPinned);
   };
 
   return (
@@ -577,7 +612,7 @@ export function PluginTrayButton({
               <PluginTrayRow
                 key={config.id}
                 config={config}
-                promoted={pinnedButtons[config.id] === true}
+                promoted={isPromoted(config.id)}
                 onSelect={handleSelect}
                 onTogglePin={handleTogglePin}
               />

@@ -1187,9 +1187,18 @@ export interface GeneratedElectronAPI {
     get(
       ...args: IpcInvokeMap["project-presentation:get"]["args"]
     ): Promise<IpcInvokeMap["project-presentation:get"]["result"]>;
+    resetToolbar(
+      ...args: IpcInvokeMap["project-presentation:reset-toolbar"]["args"]
+    ): Promise<IpcInvokeMap["project-presentation:reset-toolbar"]["result"]>;
     setLevel(
       ...args: IpcInvokeMap["project-presentation:set-level"]["args"]
     ): Promise<IpcInvokeMap["project-presentation:set-level"]["result"]>;
+    setPluginButtonPromoted(
+      ...args: IpcInvokeMap["project-presentation:set-plugin-button-promoted"]["args"]
+    ): Promise<IpcInvokeMap["project-presentation:set-plugin-button-promoted"]["result"]>;
+    setToolbarEnabled(
+      ...args: IpcInvokeMap["project-presentation:set-toolbar-enabled"]["args"]
+    ): Promise<IpcInvokeMap["project-presentation:set-toolbar-enabled"]["result"]>;
   };
   projectRelocation: {
     apply(

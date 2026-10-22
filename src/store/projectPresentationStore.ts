@@ -24,12 +24,19 @@ import { logWarn } from "@/utils/logger";
  */
 export type PresentationFailedSave =
   | { kind: "level"; feature: PresentationFeatureId; level: PresentationLevel | null }
-  | { kind: "answer"; hash: string; answer: PresentationSuggestionAnswer };
+  | { kind: "answer"; hash: string; answer: PresentationSuggestionAnswer }
+  | { kind: "toolbarEnabled"; enabled: boolean }
+  | { kind: "pluginPromotion"; buttonId: string; promoted: boolean }
+  | { kind: "resetToolbar" };
 
 interface ProjectPresentationState {
   levels: PresentationLevels;
   suggestion: PresentationSuggestion | null;
   suggestionAnswer: PresentationSuggestionAnswerRecord | null;
+  /** "Use this project's toolbar" as last set, or `null` for never (#13783). */
+  useProjectToolbar: boolean | null;
+  /** This project's own plugin buttons its profile promotes onto the toolbar. */
+  promotedPluginButtons: string[];
   /** Main's write count for the profile held here; an older snapshot is dropped. */
   revision: number;
   /**
@@ -54,6 +61,11 @@ interface ProjectPresentationState {
   deferredSuggestionHash: string | null;
   setLevel: (feature: PresentationFeatureId, level: PresentationLevel | null) => Promise<void>;
   answerSuggestion: (hash: string, answer: PresentationSuggestionAnswer) => Promise<void>;
+  setToolbarEnabled: (enabled: boolean) => Promise<void>;
+  setPluginButtonPromoted: (buttonId: string, promoted: boolean) => Promise<void>;
+  resetToolbar: () => Promise<void>;
+  /** Make the last failed write again. */
+  retryFailedSave: () => void;
   dismissFailedSave: () => void;
   deferSuggestion: (hash: string) => void;
   /** Re-read the profile and the repository's suggestion. */
@@ -63,6 +75,8 @@ interface ProjectPresentationState {
   /** Idempotent: pulls once, then follows main's pushes. */
   init: () => void;
 }
+
+const NO_PROMOTED: string[] = [];
 
 let initialized = false;
 let unsubscribe: (() => void) | null = null;
@@ -125,6 +139,9 @@ export const useProjectPresentationStore = create<ProjectPresentationState>((set
       levels: snapshot.levels,
       suggestion: snapshot.suggestion,
       suggestionAnswer: snapshot.suggestionAnswer,
+      // `??`: a snapshot from a main that predates #13783 carries neither.
+      useProjectToolbar: snapshot.useProjectToolbar ?? null,
+      promotedPluginButtons: snapshot.promotedPluginButtons ?? NO_PROMOTED,
       revision: snapshot.revision,
       projectId: snapshot.projectId,
       loaded: true,
@@ -211,6 +228,8 @@ export const useProjectPresentationStore = create<ProjectPresentationState>((set
     levels: {},
     suggestion: null,
     suggestionAnswer: null,
+    useProjectToolbar: null,
+    promotedPluginButtons: NO_PROMOTED,
     revision: 0,
     loaded: false,
     loadFailed: false,
@@ -237,6 +256,45 @@ export const useProjectPresentationStore = create<ProjectPresentationState>((set
         if (!saved) pull();
       } finally {
         set({ answering: null });
+      }
+    },
+    setToolbarEnabled: async (enabled) => {
+      const api = window.electron?.projectPresentation;
+      if (typeof api?.setToolbarEnabled !== "function") return;
+      await write({ kind: "toolbarEnabled", enabled }, () => api.setToolbarEnabled(enabled));
+    },
+    setPluginButtonPromoted: async (buttonId, promoted) => {
+      const api = window.electron?.projectPresentation;
+      if (typeof api?.setPluginButtonPromoted !== "function") return;
+      await write({ kind: "pluginPromotion", buttonId, promoted }, () =>
+        api.setPluginButtonPromoted(buttonId, promoted)
+      );
+    },
+    resetToolbar: async () => {
+      const api = window.electron?.projectPresentation;
+      if (typeof api?.resetToolbar !== "function") return;
+      await write({ kind: "resetToolbar" }, () => api.resetToolbar());
+    },
+    retryFailedSave: () => {
+      const failed = get().failedSave;
+      if (failed === null) return;
+      const state = get();
+      switch (failed.kind) {
+        case "level":
+          void state.setLevel(failed.feature, failed.level);
+          return;
+        case "answer":
+          void state.answerSuggestion(failed.hash, failed.answer);
+          return;
+        case "toolbarEnabled":
+          void state.setToolbarEnabled(failed.enabled);
+          return;
+        case "pluginPromotion":
+          void state.setPluginButtonPromoted(failed.buttonId, failed.promoted);
+          return;
+        case "resetToolbar":
+          void state.resetToolbar();
+          return;
       }
     },
     dismissFailedSave: () => set({ failedSave: null }),
@@ -284,6 +342,8 @@ export function _resetProjectPresentationStoreForTest(): void {
     levels: {},
     suggestion: null,
     suggestionAnswer: null,
+    useProjectToolbar: null,
+    promotedPluginButtons: NO_PROMOTED,
     revision: 0,
     loaded: false,
     loadFailed: false,

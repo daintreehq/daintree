@@ -16,6 +16,8 @@ const snapshot = (levels: PresentationLevels): ProjectPresentationSnapshot => ({
   levels,
   suggestion: null,
   suggestionAnswer: null,
+  useProjectToolbar: null,
+  promotedPluginButtons: [],
   revision: 0,
 });
 
@@ -143,6 +145,8 @@ describe("PresentationFeaturesSection", () => {
     expect(radio("Hidden").getAttribute("aria-checked")).toBe("true");
     expect(featureRow("forgeStats").getByText(/Default: Hidden/)).not.toBeNull();
     expect(featureRow("forgeStats").getByText(/Needs a git repository/)).not.toBeNull();
+    // Forge stats, the branch chip and git detail report on the repository; nothing else does.
+    expect(screen.getAllByText(/Needs a git repository/)).toHaveLength(3);
     expect(radio("Shown").hasAttribute("disabled")).toBe(true);
   });
 

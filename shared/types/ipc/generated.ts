@@ -1783,7 +1783,7 @@ export interface GeneratedIpcInvokeMap {
   };
   "plugin:project-surface-choice-set": {
     args: [
-      slot: "emptyCanvas" | "projectHome",
+      slot: "emptyCanvas",
       choice: import("../plugin.js").ProjectSurfaceChoice | null,
       optionId?: string | undefined,
     ];
@@ -2069,8 +2069,31 @@ export interface GeneratedIpcInvokeMap {
     args: [];
     result: import("./projectPresentation.js").ProjectPresentationSnapshot | null;
   };
+  "project-presentation:reset-toolbar": {
+    args: [];
+    result: import("./projectPresentation.js").ProjectPresentationSnapshot;
+  };
   "project-presentation:set-level": {
-    args: [feature: "forgeStats" | "gitDetail", level: "hidden" | "shown" | "demoted" | null];
+    args: [
+      feature:
+        | "forgeStats"
+        | "copyTree"
+        | "resumeSessions"
+        | "terminal"
+        | "fileBrowser"
+        | "browser"
+        | "devServer"
+        | "branchChip",
+      level: "hidden" | "shown" | "demoted" | null,
+    ];
+    result: import("./projectPresentation.js").ProjectPresentationSnapshot;
+  };
+  "project-presentation:set-plugin-button-promoted": {
+    args: [buttonId: string, promoted: boolean];
+    result: import("./projectPresentation.js").ProjectPresentationSnapshot;
+  };
+  "project-presentation:set-toolbar-enabled": {
+    args: [enabled: boolean];
     result: import("./projectPresentation.js").ProjectPresentationSnapshot;
   };
   "project-relocation:apply": {

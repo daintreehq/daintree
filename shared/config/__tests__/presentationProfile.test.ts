@@ -1,8 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
+  PRESENTATION_FEATURE_BY_TOOLBAR_BUTTON,
   PRESENTATION_FEATURE_IDS,
   PRESENTATION_FEATURES,
   buildPresentationWhenContext,
+  hasProjectToolbarOverrides,
+  isProjectToolbarActive,
+  isToolbarPresentationFeature,
   defaultPresentationLevel,
   isLevelAllowed,
   isPresentationFeatureAvailable,
@@ -10,6 +14,7 @@ import {
   parsePresentationLevels,
   resolvePresentation,
 } from "../presentationProfile.js";
+import type { ToolbarButtonId } from "../../types/toolbar.js";
 
 describe("presentation profile vocabulary", () => {
   it("gives every feature a shown level and a unique camelCase context key", () => {
@@ -62,40 +67,115 @@ describe("resolvePresentation", () => {
   it("keeps today's behaviour as the defaults: a non-git folder hides forge stats", () => {
     expect(defaultPresentationLevel("forgeStats", { gitBacked: true })).toBe("shown");
     expect(defaultPresentationLevel("forgeStats", { gitBacked: false })).toBe("hidden");
-    expect(resolvePresentation({}, { gitBacked: true })).toEqual({
-      forgeStats: "shown",
-      gitDetail: "shown",
-    });
-    expect(resolvePresentation({}, { gitBacked: false })).toEqual({
-      forgeStats: "hidden",
-      gitDetail: "hidden",
-    });
+    expect(resolvePresentation({}, { gitBacked: true }).forgeStats).toBe("shown");
+    expect(resolvePresentation({}, { gitBacked: false }).forgeStats).toBe("hidden");
+    expect(resolvePresentation({}, { gitBacked: true }).gitDetail).toBe("shown");
+    expect(resolvePresentation({}, { gitBacked: false }).gitDetail).toBe("hidden");
   });
 
   it("lets a set level win over the default", () => {
-    expect(resolvePresentation({ forgeStats: "demoted" }, { gitBacked: true })).toEqual({
-      forgeStats: "demoted",
-      gitDetail: "shown",
-    });
+    const resolved = resolvePresentation({ forgeStats: "demoted" }, { gitBacked: true });
+    expect(resolved.forgeStats).toBe("demoted");
+    expect(resolved.gitDetail).toBe("shown");
   });
 
   it("hides a repository surface in a folder without one, whatever level is set", () => {
     // An explicit "shown" must not mount a pill that polls git in a non-repo.
     expect(isPresentationFeatureAvailable("forgeStats", { gitBacked: false })).toBe(false);
-    expect(
-      resolvePresentation({ forgeStats: "shown", gitDetail: "demoted" }, { gitBacked: false })
-    ).toEqual({
-      forgeStats: "hidden",
-      gitDetail: "hidden",
+    expect(resolvePresentation({ forgeStats: "shown" }, { gitBacked: false }).forgeStats).toBe(
+      "hidden"
+    );
+    expect(resolvePresentation({ branchChip: "shown" }, { gitBacked: false }).branchChip).toBe(
+      "hidden"
+    );
+    expect(resolvePresentation({ gitDetail: "demoted" }, { gitBacked: false }).gitDetail).toBe(
+      "hidden"
+    );
+  });
+
+  it("draws every toolbar feature at its default while the project's toolbar is off", () => {
+    const levels = { copyTree: "demoted", forgeStats: "hidden", gitDetail: "demoted" } as const;
+    const on = resolvePresentation(levels, { gitBacked: true });
+    expect(on.copyTree).toBe("demoted");
+    expect(on.forgeStats).toBe("hidden");
+    const off = resolvePresentation(levels, { gitBacked: true }, { toolbar: false });
+    expect(off.copyTree).toBe("shown");
+    expect(off.forgeStats).toBe("shown");
+    // Git detail lives on worktree cards, not the toolbar, so the toggle leaves it alone.
+    expect(off.gitDetail).toBe("demoted");
+  });
+});
+
+describe("toolbar features (#13783)", () => {
+  // The never-demotable buttons that hold a toolbar id; the app menu, memory
+  // pause and the overflow trigger never had one to map.
+  const NEVER_DEMOTABLE: ToolbarButtonId[] = [
+    "sidebar-toggle",
+    "assistant-toggle",
+    "portal-toggle",
+    "voice-recording",
+    "problems",
+    "notification-center",
+    "canopy",
+    "settings",
+    "launcher",
+    "plugin-tray",
+  ];
+
+  it("maps no feature onto a button that must stay on the toolbar", () => {
+    for (const id of NEVER_DEMOTABLE) {
+      expect(PRESENTATION_FEATURE_BY_TOOLBAR_BUTTON.has(id)).toBe(false);
+    }
+  });
+
+  it("maps each toolbar button to exactly one feature that follows the toolbar toggle", () => {
+    for (const [buttonId, feature] of PRESENTATION_FEATURE_BY_TOOLBAR_BUTTON) {
+      expect(isToolbarPresentationFeature(feature)).toBe(true);
+      expect((PRESENTATION_FEATURES[feature] as { toolbar?: unknown }).toolbar).toBe(buttonId);
+    }
+    expect(isToolbarPresentationFeature("branchChip")).toBe(true);
+  });
+
+  it("only demotes the new toolbar items, never hides them", () => {
+    for (const id of PRESENTATION_FEATURE_IDS) {
+      if (id === "forgeStats" || !isToolbarPresentationFeature(id)) continue;
+      expect(isLevelAllowed(id, "demoted")).toBe(true);
+      expect(isLevelAllowed(id, "hidden")).toBe(false);
+    }
+    expect(parsePresentationLevels({ copyTree: "hidden", terminal: "demoted" })).toEqual({
+      terminal: "demoted",
     });
+  });
+
+  it("turns the project's toolbar on by itself only once the profile places something", () => {
+    const none = { levels: {}, useProjectToolbar: null, promotedPluginButtons: [] };
+    expect(hasProjectToolbarOverrides(none)).toBe(false);
+    expect(isProjectToolbarActive(none)).toBe(false);
+    expect(isProjectToolbarActive({ ...none, levels: { devServer: "demoted" } })).toBe(true);
+    expect(isProjectToolbarActive({ ...none, promotedPluginButtons: ["x"] })).toBe(true);
+    // An explicit choice wins either way.
+    expect(isProjectToolbarActive({ ...none, useProjectToolbar: true })).toBe(true);
+    expect(
+      isProjectToolbarActive({
+        ...none,
+        levels: { devServer: "demoted" },
+        useProjectToolbar: false,
+      })
+    ).toBe(false);
   });
 });
 
 describe("buildPresentationWhenContext", () => {
   it("publishes each resolved level under its feature's context key", () => {
-    expect(buildPresentationWhenContext({ forgeStats: "demoted", gitDetail: "shown" })).toEqual({
-      presentationForgeStats: "demoted",
-      presentationGitDetail: "shown",
-    });
+    const context = buildPresentationWhenContext(
+      resolvePresentation(
+        { forgeStats: "demoted", devServer: "demoted", gitDetail: "demoted" },
+        { gitBacked: true }
+      )
+    );
+    expect(context.presentationForgeStats).toBe("demoted");
+    expect(context.presentationDevServer).toBe("demoted");
+    expect(context.presentationCopyTree).toBe("shown");
+    expect(context.presentationGitDetail).toBe("demoted");
   });
 });

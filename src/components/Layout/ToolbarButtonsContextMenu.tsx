@@ -10,6 +10,7 @@ import {
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
 import type { AnyToolbarButtonId } from "@/../../shared/types/toolbar";
+import { GitBranch, PanelTop } from "@/components/icons";
 import { TOOLBAR_CUSTOMIZE_ICON, TOOLBAR_CUSTOMIZE_LABEL } from "./toolbarMenuStrings";
 import {
   isToolbarEmptySpaceTarget,
@@ -18,8 +19,17 @@ import {
   type ToolbarVisibilityMenuRows,
 } from "./toolbarVisibilityMenu";
 
+/** "Use this project's toolbar" (#13783), offered once this view's project profile has loaded. */
+export interface ProjectToolbarMenuState {
+  active: boolean;
+  onToggle: (active: boolean) => void;
+  /** The project pill's branch chip, which has no toolbar slot of its own to list. */
+  branchChip: { checked: boolean; onToggle: (shown: boolean) => void } | null;
+}
+
 interface ToolbarButtonsContextMenuProps {
   rows: ToolbarVisibilityMenuRows;
+  projectToolbar?: ProjectToolbarMenuState | null;
   onToggle: (buttonId: AnyToolbarButtonId, side: ToolbarSide, onToolbar: boolean) => void;
   /**
    * The toolbar root. Cloned with a composed `onContextMenu` — the one prop this
@@ -33,6 +43,10 @@ interface ToolbarButtonsContextMenuProps {
  * toolbar slot as a checkbox, so a hidden one comes back from the surface it
  * was hidden on, then "Customize toolbar…" for the full editor.
  *
+ * In a project it opens with "Use this project's toolbar" (#13783). While that
+ * is on, the rows place buttons for this project only, through its
+ * presentation profile; rows the profile can't place stay listed, disabled.
+ *
  * Right-click only. Nothing on the toolbar takes focus without being a control,
  * so there is no keyboard route here; every control's own menu carries
  * "Customize toolbar…" instead.
@@ -44,6 +58,7 @@ interface ToolbarButtonsContextMenuProps {
  */
 export function ToolbarButtonsContextMenu({
   rows,
+  projectToolbar = null,
   onToggle,
   children,
 }: ToolbarButtonsContextMenuProps) {
@@ -80,6 +95,7 @@ export function ToolbarButtonsContextMenu({
       <ContextMenuCheckboxItem
         key={row.id}
         checked={row.checked}
+        disabled={row.disabled}
         onCheckedChange={(checked) => onToggle(row.id, row.side, checked)}
       >
         <Icon className="mr-2 h-3.5 w-3.5 shrink-0" />
@@ -101,6 +117,29 @@ export function ToolbarButtonsContextMenu({
           <span ref={setTrigger} hidden />
         </ContextMenuTrigger>
         <ContextMenuContent aria-label="Toolbar buttons">
+          {projectToolbar !== null && (
+            <>
+              <ContextMenuCheckboxItem
+                checked={projectToolbar.active}
+                onCheckedChange={(checked) => projectToolbar.onToggle(checked)}
+                data-project-toolbar-toggle=""
+              >
+                <PanelTop className="mr-2 h-3.5 w-3.5 shrink-0" />
+                Use this project&apos;s toolbar
+              </ContextMenuCheckboxItem>
+              <ContextMenuSeparator />
+              {projectToolbar.branchChip !== null && (
+                <ContextMenuCheckboxItem
+                  checked={projectToolbar.branchChip.checked}
+                  onCheckedChange={(checked) => projectToolbar.branchChip?.onToggle(checked)}
+                  data-branch-chip-toggle=""
+                >
+                  <GitBranch className="mr-2 h-3.5 w-3.5 shrink-0" />
+                  Branch chip
+                </ContextMenuCheckboxItem>
+              )}
+            </>
+          )}
           {hasLeft && (
             <ContextMenuGroup aria-label="Left side">{rows.left.map(renderRow)}</ContextMenuGroup>
           )}

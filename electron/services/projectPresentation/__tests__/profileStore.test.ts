@@ -18,7 +18,11 @@ import {
   answerFor,
   answerProjectPresentationSuggestion,
   getProjectPresentation,
+  isOwnProjectPluginButtonId,
+  resetProjectToolbar,
+  setProjectPluginButtonPromoted,
   setProjectPresentationLevel,
+  setProjectToolbarEnabled,
 } from "../profileStore.js";
 import { hashPresentationLevels } from "../repoSuggestion.js";
 import type { PresentationSuggestion } from "../../../../shared/types/ipc/projectPresentation.js";
@@ -231,5 +235,95 @@ describe("answering the repository's suggestion", () => {
       answerProjectPresentationSuggestion(PROJECT_A, null, shown.hash, "accepted")
     ).toThrow(/suggestion has changed/);
     expect(storeMock.set).not.toHaveBeenCalled();
+  });
+});
+
+describe("project toolbar (#13783)", () => {
+  const own = (n: number) => `project__${PROJECT_A}__acme.tools.btn${n}`;
+
+  it("accepts only this project's own plugin buttons", () => {
+    expect(isOwnProjectPluginButtonId(PROJECT_A, own(1))).toBe(true);
+    // An installed plugin's button, another project's, and a bare instance key.
+    expect(isOwnProjectPluginButtonId(PROJECT_A, "acme.tools.btn")).toBe(false);
+    expect(isOwnProjectPluginButtonId(PROJECT_A, `project__${PROJECT_B}__acme.tools.btn`)).toBe(
+      false
+    );
+    expect(isOwnProjectPluginButtonId(PROJECT_A, `project__${PROJECT_A}__acme`)).toBe(false);
+    expect(() => setProjectPluginButtonPromoted(PROJECT_A, "acme.tools.btn", true)).toThrow();
+  });
+
+  it("promotes up to three buttons, in order, and refuses a fourth", () => {
+    setProjectPluginButtonPromoted(PROJECT_A, own(1), true);
+    setProjectPluginButtonPromoted(PROJECT_A, own(2), true);
+    // Promoting again is not a second entry.
+    setProjectPluginButtonPromoted(PROJECT_A, own(2), true);
+    setProjectPluginButtonPromoted(PROJECT_A, own(3), true);
+    expect(getProjectPresentation(PROJECT_A).promotedPluginButtons).toEqual([
+      own(1),
+      own(2),
+      own(3),
+    ]);
+    expect(() => setProjectPluginButtonPromoted(PROJECT_A, own(4), true)).toThrow(/at most 3/);
+    expect(
+      setProjectPluginButtonPromoted(PROJECT_A, own(2), false).promotedPluginButtons
+    ).toEqual([own(1), own(3)]);
+  });
+
+  it("reads a hand-edited list deduped, own-project only and capped", () => {
+    storeMock.data.set("projectPresentation", {
+      [PROJECT_A]: {
+        promotedPluginButtons: [own(1), own(1), "acme.tools.btn", 7, own(2), own(3), own(4)],
+        useProjectToolbar: "yes",
+      },
+    });
+    const stored = getProjectPresentation(PROJECT_A);
+    expect(stored.promotedPluginButtons).toEqual([own(1), own(2), own(3)]);
+    expect(stored.useProjectToolbar).toBeNull();
+  });
+
+  it("keeps every toolbar choice while the toggle is off", () => {
+    setProjectPresentationLevel(PROJECT_A, "copyTree", "demoted");
+    setProjectPluginButtonPromoted(PROJECT_A, own(1), true);
+    const off = setProjectToolbarEnabled(PROJECT_A, false);
+    expect(off.useProjectToolbar).toBe(false);
+    expect(off.levels).toEqual({ copyTree: "demoted" });
+    expect(off.promotedPluginButtons).toEqual([own(1)]);
+  });
+
+  it("turns the toggle back to following the profile when a toolbar level is chosen", () => {
+    setProjectToolbarEnabled(PROJECT_A, false);
+    expect(setProjectPresentationLevel(PROJECT_A, "devServer", "demoted").useProjectToolbar).toBe(
+      null
+    );
+  });
+
+  it("resets only the toolbar, keeping answers, other projects and the revision count", () => {
+    const suggestion = suggest({ forgeStats: "hidden" });
+    answerProjectPresentationSuggestion(PROJECT_A, suggestion, suggestion.hash, "declined", 5);
+    setProjectPresentationLevel(PROJECT_A, "copyTree", "demoted");
+    setProjectPluginButtonPromoted(PROJECT_A, own(1), true);
+    setProjectToolbarEnabled(PROJECT_A, true);
+    setProjectPresentationLevel(PROJECT_B, "copyTree", "demoted");
+    const before = getProjectPresentation(PROJECT_A).revision;
+
+    const reset = resetProjectToolbar(PROJECT_A);
+    expect(reset.levels).toEqual({});
+    expect(reset.promotedPluginButtons).toEqual([]);
+    expect(reset.useProjectToolbar).toBeNull();
+    expect(reset.suggestionAnswers[suggestion.hash]?.answer).toBe("declined");
+    expect(reset.revision).toBe(before + 1);
+    expect(getProjectPresentation(PROJECT_B).levels).toEqual({ copyTree: "demoted" });
+  });
+
+  it("keeps a level from a newer build through a toolbar reset", () => {
+    storeMock.data.set("projectPresentation", {
+      [PROJECT_A]: { levels: { copyTree: "demoted", futureFeature: "demoted" } },
+    });
+    resetProjectToolbar(PROJECT_A);
+    const raw = storeMock.data.get("projectPresentation") as Record<
+      string,
+      { levels?: Record<string, string> }
+    >;
+    expect(raw[PROJECT_A]?.levels).toEqual({ futureFeature: "demoted" });
   });
 });

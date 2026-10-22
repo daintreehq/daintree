@@ -18,6 +18,8 @@ const snapshot = (
   levels,
   suggestion: null,
   suggestionAnswer: null,
+  useProjectToolbar: null,
+  promotedPluginButtons: [],
   revision: 0,
   ...overrides,
 });
@@ -295,5 +297,44 @@ describe("projectPresentationStore", () => {
     pending.resolve(snapshot());
     await answering;
     expect(state().answering).toBeNull();
+  });
+});
+
+describe("projectPresentationStore toolbar writes (#13783)", () => {
+  it("adopts the toolbar fields main records, and retries a failed promotion as it was", async () => {
+    installBridge();
+    const promote = vi
+      .fn<(buttonId: string, promoted: boolean) => Promise<ProjectPresentationSnapshot>>()
+      .mockRejectedValueOnce(new Error("offline"))
+      .mockResolvedValueOnce(
+        snapshot({}, { revision: 5, promotedPluginButtons: ["p.run"], useProjectToolbar: true })
+      );
+    const bridge = window.electron!.projectPresentation as unknown as Record<string, unknown>;
+    bridge.setPluginButtonPromoted = promote;
+    state().init();
+    await flush();
+
+    await state().setPluginButtonPromoted("p.run", true);
+    expect(state().failedSave).toEqual({ kind: "pluginPromotion", buttonId: "p.run", promoted: true });
+    expect(state().promotedPluginButtons).toEqual([]);
+
+    state().retryFailedSave();
+    await flush();
+    expect(promote).toHaveBeenLastCalledWith("p.run", true);
+    expect(state().failedSave).toBeNull();
+    expect(state().promotedPluginButtons).toEqual(["p.run"]);
+    expect(state().useProjectToolbar).toBe(true);
+  });
+
+  it("reads a snapshot from a main without toolbar fields as never set", async () => {
+    const legacy = { ...snapshot(), revision: 3 } as Partial<ProjectPresentationSnapshot>;
+    delete legacy.useProjectToolbar;
+    delete legacy.promotedPluginButtons;
+    installBridge({ get: () => Promise.resolve(legacy as ProjectPresentationSnapshot) });
+    state().init();
+    await flush();
+    expect(state().loaded).toBe(true);
+    expect(state().useProjectToolbar).toBeNull();
+    expect(state().promotedPluginButtons).toEqual([]);
   });
 });
