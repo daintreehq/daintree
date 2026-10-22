@@ -237,6 +237,7 @@ function KitVirtualGrid(props: PluginVirtualGridProps) {
 
   const frame = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState(0);
+  const [shown, setShown] = useState(false);
   // Before paint, so the first frame already has its columns: Virtuoso hands
   // out its scroller only from a passive effect, so it is found in the frame.
   // The rows span the scroller's client width (its viewport is absolutely
@@ -247,6 +248,7 @@ function KitVirtualGrid(props: PluginVirtualGridProps) {
     if (!scroller) return;
     const measure = () => {
       const next = scroller.clientWidth;
+      setShown(next > 0);
       if (next > 0) setWidth((previous) => (previous === next ? previous : next));
     };
     measure();
@@ -274,27 +276,45 @@ function KitVirtualGrid(props: PluginVirtualGridProps) {
   const handle = useRef<VirtuosoHandle>(null);
   const reveal = (index: number) =>
     handle.current?.scrollIntoView({ index: Math.floor(index / columns) });
-  const [range, setRange] = useState<ListRange | null>(null);
 
-  // The plugin's own `activeIndex` is kept in view as it changes; one that
-  // only echoes the cursor this grid just reported is already where the key
-  // or click put it.
+  // The rows Virtuoso mounted for the render it just committed. Its own
+  // effects run before this component's, so the paging effect reads the
+  // ref fresh; the state, which follows only a change of bounds, is for
+  // aria-activedescendant.
+  const mountedRows = useRef<ListRange | null>(null);
+  const [range, setRange] = useState<ListRange | null>(null);
+  const onItemsRendered = (rows: readonly { index: number }[]) => {
+    const first = rows[0];
+    const last = rows[rows.length - 1];
+    const next = first && last ? { startIndex: first.index, endIndex: last.index } : null;
+    const previous = mountedRows.current;
+    if (previous?.startIndex === next?.startIndex && previous?.endIndex === next?.endIndex) return;
+    mountedRows.current = next;
+    setRange(next);
+  };
+
+  // The plugin's own `activeIndex` is kept in view as it changes, once the
+  // grid is on screen with its columns: a change made while it is hidden
+  // waits for it to show. One that echoes a click is already in view.
   const echoed = useRef<number | null>(null);
   const columnsNow = useRef(columns);
   useLayoutEffect(() => {
     columnsNow.current = columns;
   });
   const controlled = given !== undefined && current >= 0 ? current : -1;
-  // Not before the first measurement: until then there is one column, and
-  // the row would be the wrong one.
-  const measured = width > 0;
+  const pendingReveal = useRef(-1);
   useEffect(() => {
-    if (!measured) return;
     const echo = echoed.current;
     echoed.current = null;
-    if (controlled < 0 || controlled === echo) return;
-    handle.current?.scrollIntoView({ index: Math.floor(controlled / columnsNow.current) });
-  }, [controlled, measured]);
+    pendingReveal.current = controlled >= 0 && controlled !== echo ? controlled : -1;
+  }, [controlled]);
+  useEffect(() => {
+    if (!shown || pendingReveal.current < 0) return;
+    handle.current?.scrollIntoView({
+      index: Math.floor(pendingReveal.current / columnsNow.current),
+    });
+    pendingReveal.current = -1;
+  }, [controlled, shown]);
 
   // A regroup moves the cursor's card to another row; keep it in view while
   // the grid has focus, and leave the scroll alone when it does not.
@@ -309,7 +329,6 @@ function KitVirtualGrid(props: PluginVirtualGridProps) {
   }, [columns, currentRow]);
 
   const moveCursor = (index: number) => {
-    echoed.current = index;
     setCursor(index);
     onActiveChange?.(index);
   };
@@ -341,7 +360,8 @@ function KitVirtualGrid(props: PluginVirtualGridProps) {
     if (next !== null) {
       event.preventDefault();
       moveCursor(next);
-      reveal(next);
+      // A controlled cursor is revealed where the plugin puts it.
+      if (given === undefined) reveal(next);
       if (event.shiftKey && selection) {
         // A range needs somewhere to start: the item the cursor left.
         if (selection.anchor === null && current >= 0) selection.handleSelect(keyOf(current));
@@ -365,6 +385,7 @@ function KitVirtualGrid(props: PluginVirtualGridProps) {
 
   const onCellClick = (index: number, event: MouseEvent<HTMLElement>) => {
     if (fromCellControl(event)) return;
+    if (given !== undefined) echoed.current = index;
     moveCursor(index);
     const primary = isMac() ? event.metaKey : event.ctrlKey;
     if (selection && (event.shiftKey || primary)) {
@@ -409,9 +430,9 @@ function KitVirtualGrid(props: PluginVirtualGridProps) {
           const fromPress = pressed.current;
           release();
           if (event.target !== event.currentTarget || total === 0 || fromPress) return;
-          const at = current < 0 ? 0 : current;
+          // Virtuoso scrolls only when the row is not already in view.
           if (current < 0) moveCursor(0);
-          if (!activeMounted(Math.floor(at / columns), range)) reveal(at);
+          reveal(current < 0 ? 0 : current);
         },
       }
     : { ...identity, role: "list", "aria-label": label };
@@ -446,19 +467,21 @@ function KitVirtualGrid(props: PluginVirtualGridProps) {
     );
   };
 
-  // Paging follows the mounted range, the same rendered rows Virtuoso's own
-  // end detection reads: once the last row is mounted, each new item count is
-  // reported once, including a page that only fills out the last row, which
-  // adds no row for Virtuoso to report. A count that drops is reported again
-  // when it grows back.
-  const lastRowMounted = rowCount > 0 && range !== null && range.endIndex >= rowCount - 1;
+  // Paging reads the rows mounted for this render, the same rendered rows
+  // Virtuoso's own end detection reads: once the last row is mounted, each
+  // new item count is reported once, including a page that only fills out
+  // the last row and adds none. After the count drops, the same count is news
+  // again.
   const reported = useRef(-1);
+  const lastTotal = useRef(total);
   useEffect(() => {
-    if (total < reported.current) reported.current = -1;
-    if (!endReached || !lastRowMounted || total === 0 || reported.current === total) return;
+    if (total < lastTotal.current) reported.current = -1;
+    lastTotal.current = total;
+    const end = mountedRows.current?.endIndex ?? -1;
+    if (!endReached || total === 0 || end < rowCount - 1 || reported.current === total) return;
     reported.current = total;
     endReached(total - 1);
-  }, [endReached, lastRowMounted, total]);
+  }, [endReached, range, rowCount, total]);
 
   const { ref: shadowRef, topShadow, bottomShadow } = useScrollShadowOverlays();
   const withShadows = shadows === true;
@@ -489,7 +512,7 @@ function KitVirtualGrid(props: PluginVirtualGridProps) {
           for (let index = row * columns; index < end; index++) cells.push(cell(index));
           return cells;
         }}
-        rangeChanged={setRange}
+        itemsRendered={onItemsRendered}
       />
     </div>
   );

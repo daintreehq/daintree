@@ -9,14 +9,19 @@ import {
 } from "react";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { VirtuosoMockContext, type VirtuosoHandle, type VirtuosoProps } from "react-virtuoso";
+import {
+  VirtuosoMockContext,
+  type ListItem,
+  type VirtuosoHandle,
+  type VirtuosoProps,
+} from "react-virtuoso";
 
-// jsdom lays nothing out, so Virtuoso never scrolls there and reports its
-// rendered range only as its mock context dictates. The grid's props to it and
-// its scroll requests are recorded instead, passing through unchanged, and a
-// test can report a range of its own.
+// jsdom lays nothing out, so Virtuoso never scrolls there. The grid's props to
+// it and its scroll requests are recorded, passing through unchanged, except
+// for the rendered rows: those come from the test alone, as Virtuoso would
+// report them after a scroll, so no mock-context guess competes with them.
 interface RecordedProps {
-  rangeChanged: ((range: { startIndex: number; endIndex: number }) => void) | undefined;
+  itemsRendered: ((items: ListItem<unknown>[]) => void) | undefined;
   totalCount: number | undefined;
   defaultItemHeight: number | undefined;
   increaseViewportBy: unknown;
@@ -31,12 +36,13 @@ vi.mock("react-virtuoso", async (importOriginal) => {
   const actual = await importOriginal<typeof import("react-virtuoso")>();
   function RecordingVirtuoso({
     ref,
+    itemsRendered,
     ...rest
   }: VirtuosoProps<unknown, unknown> & { ref?: Ref<VirtuosoHandle> }) {
     const inner = useRef<VirtuosoHandle>(null);
     useLayoutEffect(() => {
       virtuoso.props.push({
-        rangeChanged: rest.rangeChanged,
+        itemsRendered,
         totalCount: rest.totalCount,
         defaultItemHeight: rest.defaultItemHeight,
         increaseViewportBy: rest.increaseViewportBy,
@@ -60,9 +66,12 @@ vi.mock("react-virtuoso", async (importOriginal) => {
 
 const lastProps = (): RecordedProps => virtuoso.props[virtuoso.props.length - 1]!;
 
-/** Reports the rows Virtuoso has mounted, as it would after a scroll. */
-function mountedRows(startIndex: number, endIndex: number) {
-  act(() => lastProps().rangeChanged?.({ startIndex, endIndex }));
+/** Reports the rows Virtuoso has mounted, as it would after a scroll; none when `end` is before `start`. */
+function mountedRows(start: number, end: number) {
+  const rows: ListItem<unknown>[] = [];
+  for (let index = start; index <= end; index++)
+    rows.push({ index, offset: index * 100, size: 100 });
+  act(() => lastProps().itemsRendered?.(rows));
 }
 
 vi.mock("@/services/ActionService", () => ({
@@ -610,6 +619,7 @@ describe("VirtualGrid", () => {
     );
     const view = render(grid(9));
     expect(lastProps().totalCount).toBe(5);
+    expect(onEndReached).not.toHaveBeenCalled();
     mountedRows(0, 4);
     expect(onEndReached).toHaveBeenCalledTimes(1);
     expect(onEndReached).toHaveBeenLastCalledWith(8);
@@ -617,6 +627,7 @@ describe("VirtualGrid", () => {
     // A page that only fills out the last row adds no row to report.
     view.rerender(grid(10));
     expect(lastProps().totalCount).toBe(5);
+    expect(screen.getByText("Photo 9")).toBeTruthy();
     expect(onEndReached).toHaveBeenCalledTimes(2);
     expect(onEndReached).toHaveBeenLastCalledWith(9);
 
@@ -632,12 +643,26 @@ describe("VirtualGrid", () => {
     expect(onEndReached).toHaveBeenCalledTimes(3);
     expect(onEndReached).toHaveBeenLastCalledWith(199);
 
-    // Emptied and filled again, the same count is news.
+    // Emptied and filled again from the top: the same count is news, once
+    // the end is mounted again, and not before.
     view.rerender(grid(0));
+    mountedRows(0, -1);
     view.rerender(grid(200));
+    mountedRows(0, 9);
+    expect(onEndReached).toHaveBeenCalledTimes(3);
     mountedRows(42, 49);
     expect(onEndReached).toHaveBeenCalledTimes(4);
     expect(onEndReached).toHaveBeenLastCalledWith(199);
+
+    // Grown without reaching the end, then back to a count already reported.
+    view.rerender(grid(10));
+    mountedRows(0, 2);
+    view.rerender(grid(300));
+    mountedRows(0, 9);
+    view.rerender(grid(10));
+    mountedRows(0, 2);
+    expect(onEndReached).toHaveBeenLastCalledWith(9);
+    expect(onEndReached).toHaveBeenCalledTimes(6);
   });
 
   it("does not report the end of ten thousand cards from the top", () => {
@@ -667,6 +692,53 @@ describe("VirtualGrid", () => {
     );
     expect(lastProps().defaultItemHeight).toBe(100);
     expect(lastProps().increaseViewportBy).toBe(300);
+  });
+
+  it("reveals an activeIndex set while the grid is hidden once it shows again", () => {
+    const grid = (active: number) => (
+      <VirtuosoMockContext.Provider value={{ viewportHeight: 600, itemHeight: 100 }}>
+        <div style={{ height: 600 }}>
+          <kit.VirtualGrid
+            aria-label="Photos"
+            count={40}
+            activeIndex={active}
+            renderItem={(index) => `#${index}`}
+          />
+        </div>
+      </VirtuosoMockContext.Provider>
+    );
+    const view = render(grid(0));
+    resizeTo(0);
+    virtuoso.scrolls.length = 0;
+    view.rerender(grid(30));
+    expect(virtuoso.scrolls).toEqual([]);
+    resizeTo(400);
+    // Item 30 of 40 in two columns is on row 15.
+    expect(virtuoso.scrolls).toEqual([15]);
+    // Shown again with nothing pending, it stays where it is.
+    resizeTo(0);
+    resizeTo(400);
+    expect(virtuoso.scrolls).toEqual([15]);
+  });
+
+  it("does not scroll to a move a controlling plugin refuses", () => {
+    const onActiveIndexChange = vi.fn();
+    mount(
+      <kit.VirtualGrid
+        aria-label="Photos"
+        count={40}
+        activeIndex={0}
+        onActiveIndexChange={onActiveIndexChange}
+        onItemActivate={() => {}}
+        renderItem={(index) => `#${index}`}
+      />
+    );
+    const grid = screen.getByRole("grid", { name: "Photos" });
+    virtuoso.scrolls.length = 0;
+    fireEvent.keyDown(grid, { key: "End", ctrlKey: true });
+    expect(onActiveIndexChange).toHaveBeenLastCalledWith(39);
+    expect(activeTitle(grid)).toBe("#0");
+    expect(virtuoso.scrolls).toEqual([]);
   });
 
   it("keeps the cursor's row in view through a regroup only while the grid has focus", () => {
