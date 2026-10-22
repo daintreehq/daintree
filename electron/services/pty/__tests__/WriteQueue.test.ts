@@ -123,6 +123,84 @@ describe("WriteQueue.submit", () => {
   });
 });
 
+describe("WriteQueue.hasPendingSubmission (#13854)", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("counts the in-flight submit, which has already left the queue, until it settles", async () => {
+    const m = makeOptions();
+    let resolve!: () => void;
+    m.performSubmit.mockImplementation(
+      () =>
+        new Promise<void>((r) => {
+          resolve = r;
+        })
+    );
+    const wq = new WriteQueue(m.options);
+    expect(wq.hasPendingSubmission()).toBe(false);
+
+    wq.submit("untokened");
+    await vi.advanceTimersByTimeAsync(0);
+    expect(m.performSubmit).toHaveBeenCalledTimes(1);
+    expect(wq.hasPendingSubmission()).toBe(true);
+
+    resolve();
+    await vi.runAllTimersAsync();
+    expect(wq.hasPendingSubmission()).toBe(false);
+  });
+
+  it("counts a submit queued behind another until the queue drains", async () => {
+    const m = makeOptions();
+    const resolvers: Array<() => void> = [];
+    m.performSubmit.mockImplementation(
+      () =>
+        new Promise<void>((r) => {
+          resolvers.push(r);
+        })
+    );
+    const wq = new WriteQueue(m.options);
+
+    wq.submit("first");
+    wq.submit("second", "tok");
+    await vi.advanceTimersByTimeAsync(0);
+    resolvers.shift()!();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(wq.hasPendingSubmission()).toBe(true);
+
+    resolvers.shift()!();
+    await vi.runAllTimersAsync();
+    expect(wq.hasPendingSubmission()).toBe(false);
+  });
+
+  it("clears the queued part on cancel but keeps the submit still writing", async () => {
+    const m = makeOptions();
+    let resolve!: () => void;
+    m.performSubmit.mockImplementation(
+      () =>
+        new Promise<void>((r) => {
+          resolve = r;
+        })
+    );
+    const wq = new WriteQueue(m.options);
+
+    wq.submit("writing");
+    wq.submit("queued");
+    await vi.advanceTimersByTimeAsync(0);
+    wq.cancelPendingInput();
+    expect(wq.hasPendingSubmission()).toBe(true);
+
+    resolve();
+    await vi.runAllTimersAsync();
+    expect(wq.hasPendingSubmission()).toBe(false);
+    expect(m.performSubmit).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("WriteQueue.cancelPendingInput", () => {
   beforeEach(() => {
     vi.useFakeTimers();

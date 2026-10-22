@@ -97,9 +97,9 @@ export function idleBackgroundAutoCloseSection(): SectionHandler {
         normalize: boundedInteger(15, 1440),
         display: minutes,
       },
-      includeIdleShells: { label: "Include projects with idle shells", normalize: asBoolean },
+      includeIdleShells: { label: "Include projects with idle terminals", normalize: asBoolean },
       idleShellThresholdMinutes: {
-        label: "Sleep shell projects after",
+        label: "Sleep terminal projects after",
         normalize: (value) => (isIdleShellThresholdMinutes(value) ? value : undefined),
         invalidReason: "Not 60, 120, 240 or 480 minutes",
         display: minutes,

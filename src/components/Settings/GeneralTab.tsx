@@ -1241,8 +1241,8 @@ export function GeneralTab({
                   />
                   <SettingsSwitchCard
                     id="general-idle-background-include-shells"
-                    title="Include projects with idle shells"
-                    subtitle="Also sleeps projects whose terminals are plain shells with nothing running in them. Never projects with agents."
+                    title="Include projects with idle terminals"
+                    subtitle="Also sleeps projects whose shells have nothing running and whose agents sit at their prompt with nothing running beside them. An agent sleeps only if it will resume its conversation."
                     isEnabled={idleAutoCloseConfig?.includeIdleShells ?? false}
                     onChange={() =>
                       void updateIdleAutoCloseConfig({
@@ -1257,14 +1257,14 @@ export function GeneralTab({
                     disabled={!idleAutoCloseConfig?.includeIdleShells}
                     reason={
                       idleAutoCloseConfig?.enabled
-                        ? "Include projects with idle shells to choose when they sleep"
+                        ? "Include projects with idle terminals to choose when they sleep"
                         : undefined
                     }
                   >
                     <SettingsPresetGroup<IdleShellThresholdMinutes>
                       id="general-idle-shell-threshold"
                       label="Sleep after"
-                      description="How long a shell project stays off screen with no terminal input or output"
+                      description="How long a project with terminals stays off screen with no terminal input or output"
                       options={IDLE_SHELL_THRESHOLD_PRESETS}
                       value={idleAutoCloseConfig?.idleShellThresholdMinutes ?? null}
                       onChange={(v) =>

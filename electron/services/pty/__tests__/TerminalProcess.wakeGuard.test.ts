@@ -336,6 +336,9 @@ describe("TerminalProcess typed-input stamp and settled-prompt guard (#12491)", 
 
     expect(ptyWriteMock.mock.calls.map((c) => c[0])).toEqual(["wake"]);
     expect(terminal.getSubmission("tok-1")).toMatchObject({ phase: "cancelled" });
+    // The body is still in the composer: a draft to every reader of the
+    // settle, auto-sleep included (#13854), until the agent settles again.
+    expect(info(terminal).lastTypedInputAt).toBeGreaterThanOrEqual(info(terminal).lastStateChange!);
   });
 
   it("never withdraws an ordinary submission", async () => {

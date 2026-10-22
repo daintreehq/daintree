@@ -260,6 +260,30 @@ describe("AnalysisWorkerPool", () => {
     vi.useRealTimers();
   });
 
+  it("restarts the observed span when output is lost, and ends it with no worker left (#13854)", async () => {
+    vi.useFakeTimers();
+    const soloWorkers: FakeWorker[] = [];
+    const solo = new AnalysisWorkerPool(1, () => {
+      const worker = new FakeWorker();
+      soloWorkers.push(worker);
+      return worker;
+    });
+    const backend = solo.createBackend(makeSpec("t1"), makeDelegate())!;
+    const createdAt = backend.observedSince();
+    expect(createdAt).toBe(Date.now());
+
+    soloWorkers[0].emit("exit", 1);
+    await vi.advanceTimersByTimeAsync(600);
+    // Respawned: the mirror is rebuilt empty, so it has read nothing from before.
+    expect(backend.observedSince()).toBeGreaterThan(createdAt!);
+
+    soloWorkers[soloWorkers.length - 1].emit("exit", 1);
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(backend.observedSince()).toBeNull();
+    solo.dispose();
+    vi.useRealTimers();
+  });
+
   it("frees the slot and stops routing after release", () => {
     const backend = pool.createBackend(makeSpec("t1"), makeDelegate())!;
     const worker = workers[0];

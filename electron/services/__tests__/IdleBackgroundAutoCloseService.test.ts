@@ -220,6 +220,20 @@ const pluginLifecycleMock = vi.hoisted(() => ({
 vi.mock("../../window/projectPluginLifecycle.js", () => pluginLifecycleMock);
 vi.mock("../panelRecoveryQuery.js", () => ({ readPanelRecoveryHold: async () => null }));
 
+/** Every agent resumes its conversation unless a test says otherwise (#13854). */
+const allResume = vi.hoisted(
+  () => async (terminals: ReadonlyArray<{ id: string }>) =>
+    terminals.map((terminal) => ({
+      terminalId: terminal.id,
+      verdict: { resumesExactly: true } as
+        { resumesExactly: true } | { resumesExactly: false; reason: string },
+    }))
+);
+const exactResumeMock = vi.hoisted(() => ({
+  observeExactAgentResumes: vi.fn(allResume),
+}));
+vi.mock("../pty/exactAgentResume.js", () => exactResumeMock);
+
 import { IdleBackgroundAutoCloseService } from "../IdleBackgroundAutoCloseService.js";
 import { ProjectVisibilityClock, trackProjectVisibility } from "../projectVisibilityClock.js";
 import { collectActiveProjectIds } from "../../window/activeProjectIds.js";
@@ -348,6 +362,7 @@ describe("IdleBackgroundAutoCloseService", () => {
     liveTerminalIds.clear();
     snapshotDegraded.value = false;
     resourceProfile.value = null;
+    exactResumeMock.observeExactAgentResumes.mockImplementation(allResume);
   });
 
   afterEach(() => {
@@ -1754,11 +1769,19 @@ describe("IdleBackgroundAutoCloseService", () => {
           ),
       ],
       [
-        "an agent terminal",
-        "agent-terminal",
+        "an agent launched but never detected",
+        "agent-resume-unproven",
         () =>
           ptyClientMock.getAllTerminalsAsync.mockResolvedValue([
             shellTerminal("proj-1", { launchAgentId: "claude" }),
+          ]),
+      ],
+      [
+        "a dev preview",
+        "agent-terminal",
+        () =>
+          ptyClientMock.getAllTerminalsAsync.mockResolvedValue([
+            shellTerminal("proj-1", { kind: "dev-preview" }),
           ]),
       ],
       [
@@ -1847,6 +1870,209 @@ describe("IdleBackgroundAutoCloseService", () => {
 
       expect(ptyClientMock.gracefulKillByProject).not.toHaveBeenCalled();
       expect(skipLog()).toEqual({ ineligible: ["proj-1"] });
+    });
+
+    describe("agents (#13854)", () => {
+      /** A launched Claude off screen and at rest for three hours, still redrawing its status line. */
+      function agentTerminal(projectId: string, overrides: Record<string, unknown> = {}) {
+        const quietSince = Date.now() - 3 * HOUR_MS;
+        return makeTerminal(projectId, {
+          kind: "terminal",
+          launchAgentId: "claude",
+          detectedAgentId: "claude",
+          everDetectedAgent: true,
+          agentSessionId: "session-1",
+          agentIncarnation: 0,
+          agentState: "waiting",
+          waitingReason: "prompt",
+          lastStateChange: quietSince,
+          spawnedAt: quietSince - 1,
+          lastInputTime: quietSince - 1,
+          lastTypedInputAt: quietSince - 1,
+          lastOutputChangeAt: quietSince,
+          lastOutputTime: Date.now() - 1_000,
+          hasPendingSubmission: false,
+          outputObservedSince: quietSince - 1,
+          ...overrides,
+        });
+      }
+
+      function agentCensus(projectId: string, agentTree = "runtime-and-servers") {
+        const read = census(projectId, { processCount: 3 });
+        Object.assign(read.inventories[0].terminals[0], { agentTree });
+        return read;
+      }
+
+      function setUpIdleAgentProject(projectId = "proj-1") {
+        const service = setUpIdleShellProject(projectId);
+        ptyClientMock.getAllTerminalsAsync.mockResolvedValue([agentTerminal(projectId)]);
+        ptyClientMock.getProcessInventory.mockResolvedValue(agentCensus(projectId));
+        return service;
+      }
+
+      it("sleeps a project whose agent rests at its prompt and will resume its conversation", async () => {
+        enableShells();
+        const service = setUpIdleAgentProject();
+        await runCheck(service);
+
+        expect(exactResumeMock.observeExactAgentResumes).toHaveBeenCalledWith([
+          expect.objectContaining({ id: "t-proj-1", agentSessionId: "session-1" }),
+        ]);
+        expect(ptyClientMock.gracefulKillByProject).toHaveBeenCalledWith("proj-1", {
+          preserveSession: true,
+        });
+        expect(projectStoreMock.updateProjectStatus).toHaveBeenCalledWith("proj-1", "closed", {
+          autoParkedAt: expect.any(Number),
+        });
+      });
+
+      it("leaves agent projects alone until idle terminals are opted in", async () => {
+        enable();
+        const service = setUpIdleAgentProject();
+        await runCheck(service);
+
+        expect(ptyClientMock.gracefulKillByProject).not.toHaveBeenCalled();
+        expect(exactResumeMock.observeExactAgentResumes).not.toHaveBeenCalled();
+      });
+
+      it("stays awake when an agent won't resume its conversation, and logs what it saw", async () => {
+        enableShells();
+        const service = setUpIdleAgentProject();
+        exactResumeMock.observeExactAgentResumes.mockImplementation(async (terminals) =>
+          terminals.map((terminal) => ({
+            terminalId: terminal.id,
+            verdict: { resumesExactly: false as const, reason: "no-transcript" },
+          }))
+        );
+        await runCheck(service);
+
+        expect(ptyClientMock.gracefulKillByProject).not.toHaveBeenCalled();
+        expect(skipLog()).toEqual({ "agent-resume-unproven": ["proj-1"] });
+        expect(logInfoMock).toHaveBeenCalledWith("idle-background-auto-close-resume-unproven", {
+          projectId: "proj-1",
+          refused: [{ terminalId: "t-proj-1", reason: "no-transcript" }],
+        });
+      });
+
+      it("stays awake when any one of its agents won't resume", async () => {
+        enableShells();
+        const service = setUpIdleAgentProject();
+        const second = agentTerminal("proj-1", { id: "t-proj-1-b", agentSessionId: "session-2" });
+        ptyClientMock.getAllTerminalsAsync.mockResolvedValue([agentTerminal("proj-1"), second]);
+        const read = agentCensus("proj-1");
+        read.inventories[0].terminals.push({
+          ...read.inventories[0].terminals[0],
+          id: "t-proj-1-b",
+        });
+        ptyClientMock.getProcessInventory.mockResolvedValue(read);
+        exactResumeMock.observeExactAgentResumes.mockImplementation(async (terminals) =>
+          terminals.map((terminal) => ({
+            terminalId: terminal.id,
+            verdict:
+              terminal.id === "t-proj-1-b"
+                ? { resumesExactly: false as const, reason: "store-unknown" }
+                : { resumesExactly: true as const },
+          }))
+        );
+        await runCheck(service);
+
+        expect(exactResumeMock.observeExactAgentResumes).toHaveBeenCalledWith([
+          expect.objectContaining({ id: "t-proj-1" }),
+          expect.objectContaining({ id: "t-proj-1-b" }),
+        ]);
+        expect(ptyClientMock.gracefulKillByProject).not.toHaveBeenCalled();
+        expect(skipLog()).toEqual({ "agent-resume-unproven": ["proj-1"] });
+      });
+
+      it("stays awake when the transcript read fails", async () => {
+        enableShells();
+        const service = setUpIdleAgentProject();
+        exactResumeMock.observeExactAgentResumes.mockRejectedValue(new Error("EIO"));
+        await runCheck(service);
+
+        expect(ptyClientMock.gracefulKillByProject).not.toHaveBeenCalled();
+        expect(skipLog()).toEqual({ "agent-resume-unproven": ["proj-1"] });
+      });
+
+      it.each<[string, string, () => void]>([
+        [
+          "an approval prompt",
+          "agent-not-at-prompt",
+          () =>
+            ptyClientMock.getAllTerminalsAsync.mockResolvedValue([
+              agentTerminal("proj-1", { waitingReason: "approval" }),
+            ]),
+        ],
+        [
+          "a queued submission",
+          "agent-input-pending",
+          () =>
+            ptyClientMock.getAllTerminalsAsync.mockResolvedValue([
+              agentTerminal("proj-1", { hasPendingSubmission: true }),
+            ]),
+        ],
+        [
+          "a visible change inside the threshold",
+          "terminal-activity",
+          () =>
+            ptyClientMock.getAllTerminalsAsync.mockResolvedValue([
+              agentTerminal("proj-1", { lastOutputChangeAt: Date.now() - 60_000 }),
+            ]),
+        ],
+        [
+          "a background shell under the agent",
+          "terminal-busy",
+          () => ptyClientMock.getProcessInventory.mockResolvedValue(agentCensus("proj-1", "other")),
+        ],
+      ])("stays awake for %s without reading the transcript", async (_case, reason, arrange) => {
+        enableShells();
+        const service = setUpIdleAgentProject();
+        arrange();
+        await runCheck(service);
+
+        expect(ptyClientMock.gracefulKillByProject).not.toHaveBeenCalled();
+        expect(exactResumeMock.observeExactAgentResumes).not.toHaveBeenCalled();
+        expect(skipLog()).toEqual({ [reason]: ["proj-1"] });
+      });
+
+      it("won't kill an agent that took a turn after it was vetted", async () => {
+        enableShells();
+        const service = setUpIdleAgentProject();
+        // The sweep and the close see it at rest; the kill's own snapshot sees a turn.
+        ptyClientMock.getAllTerminalsAsync
+          .mockResolvedValueOnce([agentTerminal("proj-1")])
+          .mockResolvedValueOnce([agentTerminal("proj-1")])
+          .mockResolvedValue([
+            agentTerminal("proj-1", { agentState: "working", lastStateChange: Date.now() }),
+          ]);
+        await runCheck(service);
+
+        expect(ptyClientMock.gracefulKillByProject).not.toHaveBeenCalled();
+        expect(skipLog()).toEqual({ ineligible: ["proj-1"] });
+      });
+
+      it("won't kill an agent whose session changed while its transcript was read", async () => {
+        enableShells();
+        const service = setUpIdleAgentProject();
+        exactResumeMock.observeExactAgentResumes.mockImplementation(async (terminals) => {
+          ptyClientMock.getAllTerminalsAsync.mockResolvedValue([
+            agentTerminal("proj-1", { agentSessionId: "session-2" }),
+          ]);
+          return allResume(terminals);
+        });
+        await runCheck(service);
+
+        expect(ptyClientMock.gracefulKillByProject).not.toHaveBeenCalled();
+      });
+
+      it("sleeps under memory pressure behind the same gates", async () => {
+        enableShells(480);
+        const service = setUpIdleAgentProject();
+        ptyClientMock.gracefulKillByProject.mockResolvedValue([{ id: "t-proj-1" }]);
+
+        await expect(service.sleepUnderMemoryPressure()).resolves.toBe(1);
+        expect(exactResumeMock.observeExactAgentResumes).toHaveBeenCalledTimes(1);
+      });
     });
 
     it("keeps zero-terminal projects on their own shorter threshold", async () => {

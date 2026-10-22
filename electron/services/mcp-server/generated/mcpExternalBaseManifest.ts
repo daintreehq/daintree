@@ -1560,7 +1560,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
               },
               lastTypedInputAt: {
                 description:
-                  "Epoch ms of the last raw PTY input (keys, paste, broadcast; not sends). Before `lastTransitionAt` means none since. Not proof of delivery or authorship.",
+                  "Epoch ms of last PTY input (keys, paste, broadcast, withdrawn sends). Before `lastTransitionAt` means none since. Not proof of delivery or authorship.",
                 type: "number",
               },
               exitCode: {

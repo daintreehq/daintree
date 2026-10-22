@@ -8,6 +8,8 @@ function createCtx(overrides: Partial<HostContext> = {}): HostContext {
     isInTrash: vi.fn(() => false),
     getActivityTier: vi.fn(() => "active" as const),
     getSubmission: vi.fn(() => undefined),
+    hasPendingSubmission: vi.fn(() => false),
+    analysisObservedSince: vi.fn(() => 1_000),
   } as unknown as HostContext["ptyManager"];
 
   return {
@@ -104,6 +106,8 @@ describe("mapTerminalInfo", () => {
       ptyManager: {
         isInTrash,
         getActivityTier: vi.fn(() => "active" as const),
+        hasPendingSubmission: vi.fn(() => false),
+        analysisObservedSince: vi.fn(() => 1_000),
       } as unknown as HostContext["ptyManager"],
     });
 
@@ -122,6 +126,8 @@ describe("mapTerminalInfo", () => {
       ptyManager: {
         isInTrash: vi.fn(() => false),
         getActivityTier: vi.fn(() => "active" as const),
+        hasPendingSubmission: vi.fn(() => false),
+        analysisObservedSince: vi.fn(() => 1_000),
       } as unknown as HostContext["ptyManager"],
     });
 
@@ -182,6 +188,46 @@ describe("mapTerminalInfo", () => {
       mapTerminalInfo(makeTerminal({ lastOutputChangeAt: 4242 }), ctx).lastOutputChangeAt
     ).toBe(4242);
     expect(mapTerminalInfo(makeTerminal(), ctx).lastOutputChangeAt).toBeUndefined();
+  });
+
+  it("reports whether a submission is still queued, keeping an explicit false (#13854)", () => {
+    // Auto-sleep holds an agent awake on anything but an explicit false, so a
+    // dropped field must read as unknown rather than as an empty queue.
+    const hasPendingSubmission = vi.fn((id: string) => id === "busy");
+    const ctx = createCtx({
+      ptyManager: {
+        isInTrash: vi.fn(() => false),
+        getActivityTier: vi.fn(() => "active" as const),
+        hasPendingSubmission,
+        analysisObservedSince: vi.fn(() => 1_000),
+      } as unknown as HostContext["ptyManager"],
+    });
+    expect(mapTerminalInfo(makeTerminal({ id: "busy" }), ctx).hasPendingSubmission).toBe(true);
+    expect(mapTerminalInfo(makeTerminal({ id: "idle" }), ctx).hasPendingSubmission).toBe(false);
+  });
+
+  it("reports since when a mirror has read the output, and nothing while none does (#13854)", () => {
+    // A detached analysis backend or paused reads freeze agent state and the
+    // visible-change stamp; auto-sleep must see that rather than read them.
+    const paused = { isReadPaused: true };
+    const ctx = createCtx({
+      ptyManager: {
+        isInTrash: vi.fn(() => false),
+        getActivityTier: vi.fn(() => "active" as const),
+        hasPendingSubmission: vi.fn(() => false),
+        analysisObservedSince: vi.fn((id: string) => (id === "detached" ? null : 4_200)),
+      } as unknown as HostContext["ptyManager"],
+      getPauseCoordinator: vi.fn((id: string) =>
+        id === "paused" ? paused : { isReadPaused: false }
+      ) as unknown as HostContext["getPauseCoordinator"],
+    });
+    expect(mapTerminalInfo(makeTerminal({ id: "live" }), ctx).outputObservedSince).toBe(4_200);
+    expect(
+      mapTerminalInfo(makeTerminal({ id: "detached" }), ctx).outputObservedSince
+    ).toBeUndefined();
+    expect(
+      mapTerminalInfo(makeTerminal({ id: "paused" }), ctx).outputObservedSince
+    ).toBeUndefined();
   });
 
   it("emits exactly the field set the host response type declares", () => {
@@ -260,6 +306,8 @@ describe("mapTerminalInfo submission projection (#12337)", () => {
         isInTrash: vi.fn(() => false),
         getActivityTier: vi.fn(() => "active" as const),
         getSubmission,
+        hasPendingSubmission: vi.fn(() => false),
+        analysisObservedSince: vi.fn(() => 1_000),
       } as unknown as HostContext["ptyManager"],
     });
   }

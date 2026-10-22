@@ -8,6 +8,7 @@ import type {
   ProcessTreeSample,
 } from "../../../shared/types/processes.js";
 import { reapLineageEntries } from "../../services/TerminalLineageLedger.js";
+import { classifyAgentTree } from "../../services/pty/agentProcessTree.js";
 import { narrowDetectedAgentId } from "./terminalInfo.js";
 import type { HostContext } from "./types.js";
 
@@ -49,6 +50,7 @@ export function buildProcessInventory(
     if (info.isExited || info.wasKilled) continue;
     const pid = info.ptyProcess?.pid;
     const rootPid = Number.isInteger(pid) && (pid as number) > 0 ? (pid as number) : null;
+    const sample = rootPid === null ? null : sampleTree(ctx, rootPid);
     const isTrashed = ctx.ptyManager.isInTrash(info.id);
     // The bulk record never carries the expiry; only the registry knows it.
     const trashExpiresAt = isTrashed
@@ -68,7 +70,12 @@ export function buildProcessInventory(
       isTrashed,
       trashExpiresAt,
       rootPid,
-      sample: rootPid === null ? null : sampleTree(ctx, rootPid),
+      sample,
+      // Classified here because only the host holds the full tree and its
+      // command lines, which never leave it.
+      ...(info.launchAgentId && rootPid !== null && sample
+        ? { agentTree: classifyAgentTree(ctx.processTreeCache, rootPid, info.launchAgentId) }
+        : {}),
     });
   }
 

@@ -44,7 +44,7 @@ export const LAST_OUTPUT_CHANGE_AT_DESCRIPTION =
 
 /** Model-facing description of `lastTypedInputAt`. */
 export const LAST_TYPED_INPUT_AT_DESCRIPTION =
-  "Epoch ms of the last raw PTY input (keys, paste, broadcast; not sends). Before `lastTransitionAt` means none since. Not proof of delivery or authorship.";
+  "Epoch ms of last PTY input (keys, paste, broadcast, withdrawn sends). Before `lastTransitionAt` means none since. Not proof of delivery or authorship.";
 
 /** One terminal's status, in the shape `TerminalStatusEntrySchema` publishes. */
 export interface TerminalStatusEntry {
@@ -63,8 +63,9 @@ export interface TerminalStatusEntry {
   lastOutputChangeAt?: number;
   /**
    * When Daintree last recorded raw input for this PTY (#12718) — keystrokes
-   * including control keys, pastes, staging, broadcast — excluding the submit
-   * lane's own writes and the reports xterm sends by itself. Stamped as the
+   * including control keys, pastes, staging, broadcast, and a send withdrawn
+   * after its body was written but before its Enter — excluding the submit
+   * lane's own completed writes and the reports xterm sends by itself. Stamped as the
    * write is attempted, so it proves neither delivery nor what the composer
    * holds. A CLI can pre-fill its own suggested prompt, which nothing here
    * records, so a caller can compare this against `lastTransitionAt` to see

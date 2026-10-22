@@ -85,6 +85,14 @@ export interface AnalysisBackend {
   /** Drain pending parses, then capture both preserved + persistence forms. */
   captureFinalSnapshot(): Promise<AnalysisFinalCapture>;
 
+  /**
+   * Since when this mirror has read every byte of the terminal's output: its
+   * creation, or the last time output was lost to it (a rebuilt worker slot, a
+   * dropped feed). Agent state and the visible-change stamp only cover that
+   * span. Null once nothing reads the output any more.
+   */
+  observedSince(): number | null;
+
   /** Free the analysis resources (worker slot / headless instance). Idempotent. */
   release(): void;
 }

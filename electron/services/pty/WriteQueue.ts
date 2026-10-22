@@ -239,6 +239,15 @@ export class WriteQueue {
    * aged out of the retained window, or lost to a pty-host restart. The read
    * surface reports that as `unknown` rather than inventing an outcome.
    */
+  /**
+   * Whether a submission is waiting in the queue or still being written,
+   * tokened or not — the in-flight one is shifted off the queue before its
+   * write finishes, so the queue alone would miss it.
+   */
+  hasPendingSubmission(): boolean {
+    return this.submitInFlight || this.submitQueue.length > 0;
+  }
+
   getSubmission(token: string): TerminalSubmissionRecord | undefined {
     const pending = this.pendingSubmissions.get(token);
     if (pending !== undefined) return { ...pending };

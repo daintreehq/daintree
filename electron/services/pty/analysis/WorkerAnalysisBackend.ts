@@ -114,6 +114,9 @@ export class WorkerAnalysisBackend implements AnalysisBackend {
   // empty). Its snapshots then no longer cover the stream they would be
   // fenced against, so they go out without a continuation (#12791).
   private continuityLost = false;
+  // When the mirror last lost output, or was created: what it reports covers
+  // only the stream since.
+  private continuousSince = Date.now();
   private viewportLines: string[] = [];
   private cursorLine: string | null = null;
   private monitorSpec: MonitorStartOptions | null = null;
@@ -219,6 +222,7 @@ export class WorkerAnalysisBackend implements AnalysisBackend {
       // The caller may keep the hold and retry, but a chunk it drops instead
       // is a hole in the mirror no later snapshot can be fenced across.
       this.continuityLost = true;
+      this.continuousSince = Date.now();
     }
     return sent;
   }
@@ -476,6 +480,10 @@ export class WorkerAnalysisBackend implements AnalysisBackend {
     };
   }
 
+  observedSince(): number | null {
+    return this.inactive() ? null : this.continuousSince;
+  }
+
   release(): void {
     if (this.released) return;
     this.released = true;
@@ -578,6 +586,7 @@ export class WorkerAnalysisBackend implements AnalysisBackend {
   // (and the dropped hold) can't debit the new one.
   private rebuildFreshSlot(): void {
     this.continuityLost = true;
+    this.continuousSince = Date.now();
     this.feedEpoch++;
     this.outstandingFeedBytes = 0;
     this.heldFeed = null;
