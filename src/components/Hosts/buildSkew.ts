@@ -37,28 +37,46 @@ export function useBuildSkewUpdate(): BuildSkewUpdate | null {
 }
 
 const noticed = new Set<string>();
-/** Notices held for the view to hear how its link stands, by title, each with its unsubscribe. */
-const awaitingLink = new Map<string, () => void>();
+
+interface HeldNotice {
+  message: string;
+  stillTrue: () => boolean;
+  unsubscribe: () => void;
+}
+
+/** Notices held for the view to hear how its link stands, by title: the latest failure for each. */
+const awaitingLink = new Map<string, HeldNotice>();
 
 /**
  * Something this view shows didn't load because its host's build doesn't
  * have it: `message` is the Shell's account of the two builds. Once per thing
  * per host build in this view, in the grid bar since nothing on screen failed
- * visibly, and filed with the build warning it follows up on.
+ * visibly, and filed with the build warning it follows up on. `stillTrue`
+ * says whether the failure still stands, for a notice that has to wait.
  */
-export function noticeBuildSkew(title: string, message: string): void {
+export function noticeBuildSkew(
+  title: string,
+  message: string,
+  stillTrue: () => boolean = () => true
+): void {
   const state = useHostConnectionStore.getState();
   if (state.connection?.status !== "connected") {
     // The call can fail before this view has heard how its link stands; say
-    // it once the view has, if the builds still differ then.
-    if (awaitingLink.has(title)) return;
+    // it once the view has, if the failure stands and the builds still differ.
+    const held = awaitingLink.get(title);
+    if (held) {
+      held.message = message;
+      held.stillTrue = stillTrue;
+      return;
+    }
     const unsubscribe = useHostConnectionStore.subscribe((next) => {
       if (next.connection?.status !== "connected") return;
+      const notice = awaitingLink.get(title);
       unsubscribe();
       awaitingLink.delete(title);
-      noticeBuildSkew(title, message);
+      if (notice?.stillTrue()) noticeBuildSkew(title, notice.message, notice.stillTrue);
     });
-    awaitingLink.set(title, unsubscribe);
+    awaitingLink.set(title, { message, stillTrue, unsubscribe });
     return;
   }
   const update = updateFor(state.hostId, state.hostName, viewMismatch(state));
@@ -80,6 +98,6 @@ export function noticeBuildSkew(title: string, message: string): void {
 
 export function _resetBuildSkewNoticesForTesting(): void {
   noticed.clear();
-  for (const unsubscribe of awaitingLink.values()) unsubscribe();
+  for (const { unsubscribe } of awaitingLink.values()) unsubscribe();
   awaitingLink.clear();
 }

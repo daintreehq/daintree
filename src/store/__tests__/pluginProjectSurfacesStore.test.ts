@@ -21,7 +21,9 @@ import {
 } from "../pluginProjectSurfacesStore";
 import { notifyHostResync } from "../hostResyncSignal";
 
-const noticeBuildSkew = vi.hoisted(() => vi.fn());
+const noticeBuildSkew = vi.hoisted(() =>
+  vi.fn<(title: string, message: string, stillTrue?: () => boolean) => void>()
+);
 vi.mock("@/components/Hosts/buildSkew", () => ({ noticeBuildSkew }));
 
 const PROJECT = "p1";
@@ -297,7 +299,13 @@ describe("pluginProjectSurfacesStore", () => {
 
     expect(state().readFailure).toBe(why);
     expect(state().surfaces).toEqual({});
-    expect(noticeBuildSkew).toHaveBeenCalledWith("Plugin setup unavailable", why);
+    expect(noticeBuildSkew).toHaveBeenCalledWith(
+      "Plugin setup unavailable",
+      why,
+      expect.any(Function)
+    );
+    const stands = noticeBuildSkew.mock.calls[0]![2]!;
+    expect(stands()).toBe(true);
 
     fail = false;
     bridge.listeners[0]?.();
@@ -305,6 +313,8 @@ describe("pluginProjectSurfacesStore", () => {
 
     expect(state().readFailure).toBeNull();
     expect(state().surfaces).toEqual({ emptyCanvas: claim });
+    // A notice still waiting on the view's link takes it back.
+    expect(stands()).toBe(false);
   });
 
   it("keeps any other read failure to the log", async () => {

@@ -77,6 +77,24 @@ describe("noticeBuildSkew", () => {
     expect(notify.mock.calls[0]![0].message).toBe(WHY);
   });
 
+  it("says only the latest held failure, and only while it still stands", () => {
+    let stands = true;
+    noticeBuildSkew("Plugin setup unavailable", "older", () => stands);
+    noticeBuildSkew("Plugin setup unavailable", WHY, () => stands);
+    connectedTo({ kind: "version", local: "1.4.0", remote: "1.3.0" });
+    expect(notify).toHaveBeenCalledTimes(1);
+    expect(notify.mock.calls[0]![0].message).toBe(WHY);
+
+    _resetBuildSkewNoticesForTesting();
+    notify.mockReset();
+    useHostConnectionStore.getState().reset();
+    noticeBuildSkew("Plugin setup unavailable", WHY, () => stands);
+    // A read that worked while the view was still hearing about its link.
+    stands = false;
+    connectedTo({ kind: "version", local: "1.4.0", remote: "1.3.0" });
+    expect(notify).not.toHaveBeenCalled();
+  });
+
   it("lets a held notice go when the link comes up on matching builds", () => {
     noticeBuildSkew("Plugin setup unavailable", WHY);
     connectedTo();
