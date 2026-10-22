@@ -1,5 +1,6 @@
 import { Fragment, useCallback, useMemo } from "react";
 import type React from "react";
+import { useShallow } from "zustand/react/shallow";
 import { Copy, ExternalLink, FileDiff, RotateCcw, Trash2 } from "lucide-react";
 import { AtSign, FileText, FolderOpen, Folders, Package } from "@/components/icons";
 import {
@@ -32,8 +33,10 @@ import { notify } from "@/lib/notify";
 import { copyWithToast } from "@/lib/copyWithToast";
 import { captureCopyFlash } from "@/lib/copyFlash";
 import { actionService } from "@/services/ActionService";
+import { usePluginRuntimeStore } from "@/store/pluginRuntimeStore";
 import type { BuiltInRuntimeActionId } from "@shared/config/actionIds";
 import type { CopyTreeRunSource, GitStatus } from "@shared/types";
+import { pluginManifestIdFromInstanceKey } from "@shared/types/plugin";
 
 const ICON_CLASS = "w-3.5 h-3.5 mr-2";
 
@@ -303,6 +306,19 @@ export function useFileRowMenuItems(surface: FileRowMenuSurface): FileRowMenuCon
     }
     return [...byPluginId.entries()];
   }, [filePluginItems]);
+  // A group's `pluginId` is the instance key, which for a project plugin prints
+  // a machine-local project id (#12211), so the heading is the display name with
+  // the manifest id as fallback. Names rather than meta records: the store
+  // rebuilds every record on each provenance pull, and this hook's surface
+  // re-renders every row it lists.
+  const pluginGroupNames = usePluginRuntimeStore(
+    useShallow((s) =>
+      pluginGroups.map(
+        ([pluginId]) =>
+          s.pluginMetaById.get(pluginId)?.displayName ?? pluginManifestIdFromInstanceKey(pluginId)
+      )
+    )
+  );
 
   const reveal = useMemo(() => revealCopy(), []);
   const insertAriaKeyshortcuts = comboToAriaKeyshortcuts(INSERT_FILE_REFERENCE_COMBO, isMac());
@@ -551,7 +567,9 @@ export function useFileRowMenuItems(surface: FileRowMenuSurface): FileRowMenuCon
                   {pluginGroups.map(([pluginId, entries], groupIndex) => (
                     <Fragment key={pluginId}>
                       {pluginGroups.length > 1 && groupIndex > 0 && <ContextMenuSeparator />}
-                      {pluginGroups.length > 1 && <ContextMenuLabel>{pluginId}</ContextMenuLabel>}
+                      {pluginGroups.length > 1 && (
+                        <ContextMenuLabel>{pluginGroupNames[groupIndex]}</ContextMenuLabel>
+                      )}
                       {/* Still the shared section, one call per group: it owns
                           the action source, the namespaced keys and the
                           dispatch, and a second copy of that here is how the
@@ -599,6 +617,7 @@ export function useFileRowMenuItems(surface: FileRowMenuSurface): FileRowMenuCon
       worktreePath,
       worktreeId,
       pluginGroups,
+      pluginGroupNames,
       canInsert,
       insertRefusalMeta,
       insertRefusalLabel,

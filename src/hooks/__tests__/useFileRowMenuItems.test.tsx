@@ -2,7 +2,16 @@
  * @vitest-environment jsdom
  */
 import { describe, it, expect, vi, beforeEach, afterEach, beforeAll } from "vitest";
-import { render, screen, cleanup, fireEvent, within, waitFor } from "@testing-library/react";
+import {
+  act,
+  render,
+  renderHook,
+  screen,
+  cleanup,
+  fireEvent,
+  within,
+  waitFor,
+} from "@testing-library/react";
 import type { PluginContextMenuItemEntry } from "@/hooks/usePluginContextMenuItems";
 import type {
   InsertFileReference,
@@ -82,6 +91,7 @@ vi.mock("@/lib/platform", async (importOriginal) => ({
 import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from "@/components/ui/context-menu";
 import { primeRadix } from "@/components/ui/radix-loader";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
+import { _resetPluginRuntimeStoreForTest, usePluginRuntimeStore } from "@/store/pluginRuntimeStore";
 import { _resetCopyFlashForTests, getCopyFlash, invalidateCopyFlash } from "@/lib/copyFlash";
 import {
   isFileRowMenuKey,
@@ -204,7 +214,11 @@ beforeEach(() => {
   Object.assign(navigator, { clipboard: { writeText: writeTextMock } });
 });
 
-afterEach(() => cleanup());
+afterEach(() => {
+  // Unmounted first, so the reset doesn't notify a subscriber still on screen.
+  cleanup();
+  _resetPluginRuntimeStoreForTest();
+});
 
 describe("useFileRowMenuItems — canonical order", () => {
   it("keeps only the direct actions at the root and nests the copies", async () => {
@@ -316,6 +330,99 @@ describe("useFileRowMenuItems — canonical order", () => {
     // Back on the trigger, not stranded on the document — the root menu is
     // still open and still navigable.
     expect(document.activeElement).toBe(trigger);
+  });
+});
+
+describe("useFileRowMenuItems — Extensions group labels (#13764)", () => {
+  // A contribution's `pluginId` is the host's instance key, so a project
+  // plugin's raw id carries a machine-local project id (#12211).
+  const PROJECT_KEY = "project__b6700c7a__gregpriday.video-manager";
+
+  function contribution(pluginId: string, label: string, actionId: string) {
+    return { pluginId, item: { label, actionId, location: "file" as const } };
+  }
+
+  function nameProjectPlugin(displayName: string, devMode = false) {
+    usePluginRuntimeStore.setState({
+      pluginMetaById: new Map([[PROJECT_KEY, { devMode, displayName }]]),
+    });
+  }
+
+  it("labels each group with the plugin's display name, never its instance key", async () => {
+    // An installed plugin and a project build of the same manifest are separate
+    // instances, so each heading is looked up by its own key.
+    usePluginRuntimeStore.setState({
+      pluginMetaById: new Map([
+        [PROJECT_KEY, { devMode: false, displayName: "Video Manager (project)" }],
+        ["gregpriday.video-manager", { devMode: false, displayName: "Video Manager" }],
+      ]),
+    });
+    itemsRef.current = [
+      contribution(PROJECT_KEY, "Trim clip", "vm.trim"),
+      contribution("gregpriday.video-manager", "Export clip", "vm.export"),
+    ];
+    const extensions = await openSubmenu(await openMenu(), "Extensions");
+
+    expect(structure(extensions)).toEqual([
+      "Video Manager (project)",
+      "Trim clip",
+      "---",
+      "Video Manager",
+      "Export clip",
+    ]);
+  });
+
+  it("falls back to the manifest id before the runtime snapshot lands", async () => {
+    itemsRef.current = [
+      contribution(PROJECT_KEY, "Trim clip", "vm.trim"),
+      contribution("beta", "Beta thing", "beta.do"),
+    ];
+    const extensions = await openSubmenu(await openMenu(), "Extensions");
+
+    expect(structure(extensions)).toEqual([
+      "gregpriday.video-manager",
+      "Trim clip",
+      "---",
+      "beta",
+      "Beta thing",
+    ]);
+  });
+
+  it("renames an open submenu's heading when the snapshot lands", async () => {
+    itemsRef.current = [
+      contribution(PROJECT_KEY, "Trim clip", "vm.trim"),
+      contribution("beta", "Beta thing", "beta.do"),
+    ];
+    await openSubmenu(await openMenu(), "Extensions");
+
+    act(() => nameProjectPlugin("Video Manager"));
+
+    expect(structure(screen.getByRole("menu", { name: "Extensions" }))[0]).toBe("Video Manager");
+  });
+
+  it("keeps renderItems stable across snapshots that rename no contributor", () => {
+    // The runtime store rebuilds every meta record on each provenance pull. A
+    // surface re-rendering on those would rebuild the menu of every row in a
+    // long listing over a change it can't show.
+    itemsRef.current = [
+      contribution(PROJECT_KEY, "Trim clip", "vm.trim"),
+      contribution("beta", "Beta thing", "beta.do"),
+    ];
+    nameProjectPlugin("Video Manager");
+    const { result } = renderHook(() =>
+      useFileRowMenuItems({
+        worktreePath: WORKTREE,
+        worktreeId: "wt-1",
+        copyTreeRunSource: "file-browser",
+      })
+    );
+    const initial = result.current.renderItems;
+
+    act(() => nameProjectPlugin("Video Manager", true));
+    expect(result.current.renderItems).toBe(initial);
+
+    act(() => nameProjectPlugin("Video Manager 2"));
+    expect(result.current.renderItems).not.toBe(initial);
   });
 });
 
