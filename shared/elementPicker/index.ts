@@ -120,3 +120,19 @@ export {
   type ElementPickerVerdict,
   type SelectionScope,
 } from "./protocol.js";
+export {
+  PROJECT_CONTEXT_LIMITS,
+  ProjectAdapterIdSchema,
+  ProjectContextOutcomeSchema,
+  ProjectContextSchema,
+  ProjectDiagnosticSchema,
+  ProjectRouteSchema,
+  RouteFileSchema,
+  SvelteKitProjectContextSchema,
+  type ProjectAdapterId,
+  type ProjectContext,
+  type ProjectContextOutcome,
+  type ProjectDiagnostic,
+  type ProjectRoute,
+  type RouteFile,
+} from "./projectContext.js";

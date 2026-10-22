@@ -1,15 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { discoverSvelteKitApps, findSvelteKitApps, selectApp } from "../project/discovery.js";
-import {
-  MAX_DIRECTORY_ENTRIES,
-  MAX_METADATA_BYTES,
-  type ProjectFileReader,
-} from "../project/fs.js";
+import { discoverSvelteKitApps, findSvelteKitApps, selectApp } from "../discovery.js";
+import { MAX_DIRECTORY_ENTRIES, MAX_METADATA_BYTES, type ProjectFileReader } from "../../fs.js";
 import {
   createFixtureReader,
   createMemoryReader,
   fixtureWorktree,
-} from "../project/__testing__/fixtureReader.js";
+} from "../__testing__/fixtureReader.js";
 
 const reader = createFixtureReader();
 

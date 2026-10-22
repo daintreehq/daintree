@@ -13,6 +13,7 @@ import type {
   PluginIpcHandler,
 } from "../../../../../shared/types/plugin.js";
 import { PLUGIN_ID } from "../../shared/protocol.js";
+import { fixtureWorktree } from "../../../../../electron/services/elementPicker/projectAdapters/sveltekit/__testing__/fixtureReader.js";
 
 /**
  * A mock host whose `fs` is a real temp directory. Handlers are invoked through
@@ -27,6 +28,8 @@ import { PLUGIN_ID } from "../../shared/protocol.js";
  */
 
 const FIXTURES = path.join(import.meta.dirname, "..", "..", "__fixtures__");
+/** The project fixtures moved with the project model into the picker host. */
+const PROJECT_FIXTURES = fixtureWorktree("plain");
 
 export const sha = (data: Uint8Array | string): string =>
   createHash("sha256")
@@ -67,13 +70,13 @@ export async function createSandbox(): Promise<Sandbox> {
   await write(path.join(worktree, "package.json"), JSON.stringify({ name: "mono", private: true }));
   await write(
     path.join(appRoot, "package.json"),
-    await fs.readFile(path.join(FIXTURES, "projects", "plain", "package.json"), "utf8")
+    await fs.readFile(path.join(PROJECT_FIXTURES, "package.json"), "utf8")
   );
   for (const pkg of ["svelte", "vite", "tailwindcss", "@sveltejs/kit"]) {
     await write(
       path.join(worktree, "node_modules", pkg, "package.json"),
       await fs.readFile(
-        path.join(FIXTURES, "projects", "plain", "__node_modules__", pkg, "package.json"),
+        path.join(PROJECT_FIXTURES, "__node_modules__", pkg, "package.json"),
         "utf8"
       )
     );

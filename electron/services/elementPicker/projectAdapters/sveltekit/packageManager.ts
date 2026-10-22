@@ -6,7 +6,7 @@ import {
   joinPath,
   readJsonFile,
   toWorktreeRelative,
-} from "./fs.js";
+} from "../fs.js";
 
 export type PackageManagerName = "npm" | "pnpm" | "yarn" | "bun";
 

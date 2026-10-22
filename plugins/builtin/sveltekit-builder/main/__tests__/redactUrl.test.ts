@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { redactUrl } from "../selection.js";
-import { matchRoute } from "../../shared/project/routeMatch.js";
+import { matchRoute } from "../../../../../shared/elementPicker/sveltekit/routeMatch.js";
 import type { RouteNode } from "../../shared/protocol.js";
 
 const PLACEHOLDER = "about:unavailable";

@@ -1,4 +1,9 @@
-import type { RouteNode } from "../protocol.js";
+/** All the matcher reads of a route; a caller's richer route type comes back unchanged. */
+export interface MatchableRoute {
+  /** SvelteKit route id, e.g. `/products/[slug]`. */
+  routeId: string;
+  endpointOnly: boolean;
+}
 
 /**
  * The route a URL path is served by, read against the route templates the
@@ -8,7 +13,11 @@ import type { RouteNode } from "../protocol.js";
  * the same order. Where Kit would run a param matcher — code in the user's app —
  * it answers "unknown" rather than guess which route wins.
  */
-export function matchRoute(routes: RouteNode[], pathname: string, basePath = ""): RouteNode | null {
+export function matchRoute<R extends MatchableRoute>(
+  routes: readonly R[],
+  pathname: string,
+  basePath = ""
+): R | null {
   const path = withoutBase(decodePathname(pathname), basePath);
   if (path === null) return null;
   // Endpoints stay in: a `+server.ts` that wins the URL serves it, and the
@@ -162,7 +171,7 @@ function sortStatic(a: string, b: string): number {
   }
 }
 
-function compareRoutes(routeA: RouteNode, routeB: RouteNode): number {
+function compareRoutes(routeA: MatchableRoute, routeB: MatchableRoute): number {
   const segmentsA = sortSegments(routeA.routeId);
   const segmentsB = sortSegments(routeB.routeId);
   for (let i = 0; i < Math.max(segmentsA.length, segmentsB.length); i += 1) {
@@ -198,6 +207,6 @@ function compareRoutes(routeA: RouteNode, routeB: RouteNode): number {
   return routeA.routeId < routeB.routeId ? +1 : -1;
 }
 
-function sortRoutes(routes: RouteNode[]): RouteNode[] {
+function sortRoutes<R extends MatchableRoute>(routes: readonly R[]): R[] {
   return [...routes].sort(compareRoutes);
 }

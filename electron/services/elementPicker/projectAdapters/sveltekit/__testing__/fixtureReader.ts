@@ -1,6 +1,6 @@
 import { promises as fs } from "node:fs";
 import { join, sep } from "node:path";
-import type { ProjectFileReader, ProjectFsDirEntry, ProjectFsStat } from "../fs.js";
+import type { ProjectFileReader, ProjectFsDirEntry, ProjectFsStat } from "../../fs.js";
 
 /**
  * Test-only. `host.fs` is the production reader; this exists so the fixture
@@ -44,7 +44,7 @@ export function createFixtureReader(): ProjectFileReader {
 
 /** Absolute path of a fixture worktree root. */
 export function fixtureWorktree(name: string): string {
-  return join(import.meta.dirname, "..", "..", "..", "__fixtures__", "projects", name);
+  return join(import.meta.dirname, "..", "__fixtures__", "projects", name);
 }
 
 /**

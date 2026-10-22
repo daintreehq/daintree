@@ -6,7 +6,7 @@ import {
   readJsonFile,
   rethrowIfAborted,
   toWorktreeRelative,
-} from "./fs.js";
+} from "../fs.js";
 
 /**
  * Directories a project-wide scan must never descend into. `node_modules` is

@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { join } from "node:path";
-import { detectPackageManager } from "../project/packageManager.js";
+import { detectPackageManager } from "../packageManager.js";
 import {
   createFixtureReader,
   createMemoryReader,
   fixtureWorktree,
-} from "../project/__testing__/fixtureReader.js";
+} from "../__testing__/fixtureReader.js";
 
 const reader = createFixtureReader();
 const manifest = (extra: Record<string, unknown> = {}) => JSON.stringify({ name: "app", ...extra });

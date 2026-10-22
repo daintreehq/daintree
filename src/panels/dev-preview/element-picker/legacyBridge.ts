@@ -32,7 +32,6 @@ export type {
   Viewport,
 } from "../../../../plugins/builtin/sveltekit-builder/shared/model.js";
 export { redactUrl } from "../../../../plugins/builtin/sveltekit-builder/shared/redactUrl.js";
-export { untestedVersionNotes } from "../../../../plugins/builtin/sveltekit-builder/shared/project/versions.js";
+export { untestedVersionNotes } from "@shared/elementPicker/sveltekit/versionNotes";
 
-export const loadRouteMatch = () =>
-  import("../../../../plugins/builtin/sveltekit-builder/shared/project/routeMatch.js");
+export const loadRouteMatch = () => import("@shared/elementPicker/sveltekit/routeMatch");

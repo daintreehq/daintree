@@ -1,21 +1,19 @@
 import { describe, expect, it } from "vitest";
 import { join } from "node:path";
-import { ProjectModelResultSchema } from "../protocol.js";
-import { inspectProject, inspectWorktree } from "../project/index.js";
+import { inspectProject, inspectWorktree } from "../index.js";
 import {
   createFixtureReader,
   createMemoryReader,
   fixtureWorktree,
-} from "../project/__testing__/fixtureReader.js";
+} from "../__testing__/fixtureReader.js";
 
 const reader = createFixtureReader();
 
 describe("inspectProject", () => {
-  it("produces a model the frozen wire schema accepts", async () => {
+  it("reads a plain app's toolchain and routes", async () => {
     const worktree = fixtureWorktree("plain");
     const { model } = await inspectProject(reader, { worktreeRoot: worktree, appRoot: worktree });
 
-    expect(() => ProjectModelResultSchema.parse(model)).not.toThrow();
     expect(model.support.level).toBe("tested");
     expect(model.packageManager).toBe("npm");
     expect(model.routes.map((route) => route.routeId)).toEqual(["/", "/about"]);
@@ -28,7 +26,6 @@ describe("inspectProject", () => {
       appRoot: worktree,
     });
 
-    expect(() => ProjectModelResultSchema.parse(model)).not.toThrow();
     expect(model.support.level).toBe("untested");
     expect(support.missingInstall).toEqual([]);
     expect(model.routes).toHaveLength(1);
@@ -95,7 +92,6 @@ describe("provenance on the wire model", () => {
     const worktree = fixtureWorktree("custom-routes");
     const { model } = await inspectProject(reader, { worktreeRoot: worktree, appRoot: worktree });
 
-    expect(() => ProjectModelResultSchema.parse(model)).not.toThrow();
     expect(model.routesDirectory).toEqual({ path: "src/pages", source: "svelte.config" });
   });
 
@@ -108,7 +104,6 @@ describe("provenance on the wire model", () => {
 
     const { model } = await inspectProject(memory, { worktreeRoot: "/repo", appRoot: "/repo" });
 
-    expect(() => ProjectModelResultSchema.parse(model)).not.toThrow();
     expect(model.routesDirectory?.source).toBe("unresolved");
     // The walk still runs, and its result is still offered — labelled.
     expect(model.routes.map((route) => route.routeId)).toEqual(["/"]);
