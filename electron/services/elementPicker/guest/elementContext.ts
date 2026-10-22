@@ -149,7 +149,9 @@ export function classWordsOf(node: Element): string[] {
 }
 
 function step(node: Element): string {
-  const tag = node.tagName.toLowerCase();
+  // `localName`, not a lowercased `tagName`: an SVG type selector is
+  // case-sensitive, so `textpath` would never find a `<textPath>`.
+  const tag = escapeIdent(node.localName);
   const classes = classWordsOf(node)
     .filter(usableClass)
     .slice(0, 2)
@@ -506,7 +508,7 @@ export function elementContextOf(node: Element): ElementContext | null {
   try {
     const { markup, truncated } = markupFor(node);
     return {
-      selector: selectorFor(node) || node.tagName.toLowerCase(),
+      selector: selectorFor(node) || escapeIdent(node.localName),
       markup,
       ...(truncated ? { markupTruncated: true as const } : {}),
       styles: stylesFor(node),

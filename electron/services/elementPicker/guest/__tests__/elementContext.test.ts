@@ -61,6 +61,16 @@ describe("the guest's element context", () => {
     expect(selectorFor(inside)).toBe("#card > span");
   });
 
+  it("keeps an SVG element's case, which its type selector is matched by", () => {
+    mountHtml(
+      '<svg id="art"><text><textPath href="#curve">One</textPath><textPath href="#curve">Two</textPath></text></svg>'
+    );
+    const second = document.querySelectorAll("textPath")[1]!;
+    const selector = selectorFor(second);
+    expect(selector).toBe("textPath:nth-of-type(2)");
+    expect(document.querySelector(selector)).toBe(second);
+  });
+
   it("leaves build-generated class names out of the selector", () => {
     mountHtml('<div><p class="svelte-1x2y3z card css-9ab8cd text-[13px]">Hi</p></div>');
     expect(selectorFor(document.querySelector("p")!)).toBe("p.card");
