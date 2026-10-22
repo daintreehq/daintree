@@ -238,6 +238,7 @@ vi.mock("../../services/ProcessMemoryMonitor.js", () => ({
 const idleAutoCloseServiceMock = vi.hoisted(() => ({
   setPtyClient: vi.fn(),
   setProjectViewManagersProvider: vi.fn(),
+  setCoordinationHoldProvider: vi.fn(),
   start: vi.fn(),
   sleepUnderMemoryPressure: vi.fn(async () => 0),
 }));

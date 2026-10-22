@@ -2181,6 +2181,55 @@ describe("IdleBackgroundAutoCloseService", () => {
         expect(ptyClientMock.gracefulKillByProject).not.toHaveBeenCalled();
         expect(pressureBroadcast()).toBeUndefined();
       });
+
+      it("still leaves a project that opted out of automatic sleep awake", async () => {
+        enableShells(480);
+        const service = setUpIdleShellProject();
+        projectStoreMock.getAllProjects.mockReturnValue([
+          makeIdleProject("proj-1", { lastOpened: Date.now() - 3 * HOUR_MS, neverAutoSleep: true }),
+        ]);
+
+        await expect(service.sleepUnderMemoryPressure()).resolves.toBe(0);
+        expect(ptyClientMock.getProcessInventory).not.toHaveBeenCalled();
+        expect(ptyClientMock.gracefulKillByProject).not.toHaveBeenCalled();
+        expect(projectStoreMock.updateProjectStatus).not.toHaveBeenCalled();
+      });
+
+      it("still drops a deferred sleep when the project opts out after the screen", async () => {
+        enableShells(480);
+        const service = setUpIdleShellProject();
+        const lastOpened = Date.now() - 3 * HOUR_MS;
+        projectStoreMock.getProjectById.mockImplementation((id) =>
+          makeIdleProject(id, { lastOpened, neverAutoSleep: true })
+        );
+
+        await expect(service.sleepUnderMemoryPressure()).resolves.toBe(0);
+        expect(ptyClientMock.gracefulKillByProject).not.toHaveBeenCalled();
+        expect(projectStoreMock.updateProjectStatus).not.toHaveBeenCalled();
+      });
+
+      it("still holds a project with pending coordination", async () => {
+        enableShells(480);
+        const service = setUpIdleShellProject();
+        service.setCoordinationHoldProvider(() => "queued-notify");
+
+        await expect(service.sleepUnderMemoryPressure()).resolves.toBe(0);
+        expect(ptyClientMock.getProcessInventory).not.toHaveBeenCalled();
+        expect(ptyClientMock.gracefulKillByProject).not.toHaveBeenCalled();
+        expect(skipLog()).toEqual({ "coordination-hold": ["proj-1"] });
+      });
+
+      it("still drops a deferred sleep when a hold appears after the screen", async () => {
+        enableShells(480);
+        const service = setUpIdleShellProject();
+        let reads = 0;
+        service.setCoordinationHoldProvider(() => (++reads > 1 ? "pending-reply-wait" : null));
+
+        await expect(service.sleepUnderMemoryPressure()).resolves.toBe(0);
+        expect(ptyClientMock.gracefulKillByProject).not.toHaveBeenCalled();
+        expect(projectStoreMock.updateProjectStatus).not.toHaveBeenCalled();
+        expect(skipLog()).toEqual({ "coordination-hold": ["proj-1"] });
+      });
     });
   });
 });
