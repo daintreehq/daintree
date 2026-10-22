@@ -349,12 +349,13 @@ export class WorkspaceHostPool {
     } catch (error) {
       if (this.entries.get(normalizedPath) === newEntry) {
         this.entries.delete(normalizedPath);
-        newEntry.windowIds.delete(windowId);
-        newEntry.refCount--;
+        this.detachWindow(newEntry, windowId);
         newEntry.host.dispose("init-failed");
       }
       throw error;
     }
+
+    if (this.entries.get(normalizedPath) === newEntry) this.announceSpawn(newEntry);
 
     if (isStale()) {
       // Superseded while the host was spawning. Keep the now-warm host for a
@@ -366,8 +367,7 @@ export class WorkspaceHostPool {
         this.entries.get(normalizedPath) === newEntry &&
         this.windowToProject.get(windowId) !== normalizedPath
       ) {
-        newEntry.windowIds.delete(windowId);
-        newEntry.refCount--;
+        this.detachWindow(newEntry, windowId);
         if (newEntry.refCount <= 0) {
           newEntry.host.send({ type: "background" });
           this.scheduleDormantCleanup(normalizedPath, newEntry);
@@ -422,20 +422,50 @@ export class WorkspaceHostPool {
     this.wireHostEvents(entry);
     this.scheduleDormantCleanup(normalizedPath, entry);
 
-    initPromise.catch(() => {
-      if (this.entries.get(normalizedPath) === entry) {
-        this.entries.delete(normalizedPath);
-        entry.host.dispose("init-failed");
+    initPromise.then(
+      () => {
+        if (this.entries.get(normalizedPath) === entry) this.announceSpawn(entry);
+      },
+      () => {
+        if (this.entries.get(normalizedPath) === entry) {
+          this.entries.delete(normalizedPath);
+          entry.host.dispose("init-failed");
+        }
       }
-    });
+    );
+  }
+
+  /**
+   * A new host process for a project is up and loaded. Holders of the host it
+   * replaced lost their worktree ports when that one went away, and a view
+   * whose port closed with it has nothing of its own that reconnects it.
+   */
+  private announceSpawn(entry: ProcessEntry): void {
+    this.emit("host-spawned", { projectPath: entry.projectPath, host: entry.host });
+  }
+
+  /**
+   * Drop `windowId`'s hold on `entry`, if it has one. A window can still be
+   * mapped to a project whose host was disposed and re-spawned under it; it
+   * never held the replacement, and releasing it must not take another
+   * holder's reference with it.
+   */
+  private detachWindow(entry: ProcessEntry, windowId: number): void {
+    if (entry.windowIds.delete(windowId)) entry.refCount--;
+  }
+
+  /** Whether `windowId` holds the host currently serving `projectPath`. */
+  isWindowAttached(windowId: number, projectPath: string): boolean {
+    return (
+      this.entries.get(this.normalizeProjectPath(projectPath))?.windowIds.has(windowId) ?? false
+    );
   }
 
   private releaseOldProject(windowId: number, oldProjectPath: string): void {
     const oldEntry = this.entries.get(oldProjectPath);
     if (!oldEntry) return;
 
-    oldEntry.windowIds.delete(windowId);
-    oldEntry.refCount--;
+    this.detachWindow(oldEntry, windowId);
 
     if (oldEntry.refCount <= 0) {
       // No window holds this project anymore — demote its host to background so
@@ -462,8 +492,7 @@ export class WorkspaceHostPool {
     const entry = this.entries.get(projectPath);
     if (!entry) return;
 
-    entry.windowIds.delete(windowId);
-    entry.refCount--;
+    this.detachWindow(entry, windowId);
 
     for (const [wcId, wc] of entry.directPortViews) {
       if (wc.isDestroyed()) {

@@ -87,6 +87,7 @@ import {
   _resetHostResidencyForTesting,
   activateProjectOnHost,
   getHostResidentProject,
+  isProjectHeldOnHost,
   releaseProjectOnHost,
 } from "../ProjectSwitchService.js";
 
@@ -554,6 +555,7 @@ describe("Host activation for a remote view", () => {
         return load();
       }),
       unregisterWindow: vi.fn(),
+      isWindowAttached: vi.fn((_residentId: number, _rootPath: string) => true),
     };
   }
 
@@ -595,6 +597,24 @@ describe("Host activation for a remote view", () => {
     expect(getHostResidentProject(-4)).toBeNull();
     await expect(activateProjectOnHost(ws, project, -4)).rejects.toThrow();
     expect(ws.loadProject).toHaveBeenCalledTimes(2);
+  });
+
+  it("re-holds a project whose host was re-spawned under the view", async () => {
+    const ws = workspace();
+    await activateProjectOnHost(ws, project, -4);
+    await Promise.resolve();
+    expect(isProjectHeldOnHost(ws, -4, "project-new")).toBe(true);
+
+    ws.isWindowAttached.mockReturnValue(false);
+    expect(isProjectHeldOnHost(ws, -4, "project-new")).toBe(false);
+    expect(ws.isWindowAttached).toHaveBeenLastCalledWith(-4, "/tmp/new");
+
+    await activateProjectOnHost(ws, project, -4);
+    expect(ws.loadProject).toHaveBeenCalledTimes(2);
+    expect(ws.loadProject).toHaveBeenLastCalledWith("/tmp/new", -4);
+    expect(getHostResidentProject(-4)).toBe("project-new");
+    // The view never left the project: re-holding it is not another activation.
+    expect(projectStoreMock.recordRemoteActivation).toHaveBeenCalledTimes(1);
   });
 
   it("releases the view's hold once, when it leaves", async () => {

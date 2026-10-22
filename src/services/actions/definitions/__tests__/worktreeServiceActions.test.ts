@@ -18,7 +18,13 @@ const setWorktreeLoadErrorMock = vi.fn<(error: string | null) => void>();
 
 let worktreeLoadError: string | null = null;
 let currentProject: { id: string } | null = null;
-let viewState: { isInitialized: boolean; isLoading: boolean; error: string | null } | null = null;
+let viewState: {
+  isInitialized: boolean;
+  isLoading: boolean;
+  error: string | null;
+  isReconnecting?: boolean;
+  reconnectingAt?: number | null;
+} | null = null;
 
 vi.mock("@/clients", () => ({
   worktreeClient: {
@@ -326,6 +332,22 @@ describe("worktree.retryProjectLoad (#8400)", () => {
     expect(getAction().isEnabled({})).toBe(false);
 
     viewState = { isInitialized: true, isLoading: false, error: null };
+    expect(getAction().isEnabled({})).toBe(false);
+  });
+
+  it("is enabled once a lost worktree port is past any restart's time to return (#13748)", () => {
+    currentProject = { id: "p1" };
+    const base = { isInitialized: true, isLoading: false, error: null, isReconnecting: true };
+    // A crash restart can still be on its way back here.
+    viewState = { ...base, reconnectingAt: Date.now() - 15_000 };
+    expect(getAction().isEnabled({})).toBe(false);
+
+    viewState = { ...base, reconnectingAt: Date.now() - 120_000 };
+    const action = getAction();
+    expect(action.isEnabled({})).toBe(true);
+    expect(action.disabledReason({})).toBeUndefined();
+
+    viewState = { ...base, isReconnecting: false, reconnectingAt: null };
     expect(getAction().isEnabled({})).toBe(false);
   });
 

@@ -195,6 +195,10 @@ export class WorkspaceClient extends EventEmitter {
     return this.pool.getHostForWindow(windowId);
   }
 
+  isWindowAttached(windowId: number, projectPath: string): boolean {
+    return this.pool.isWindowAttached(windowId, projectPath);
+  }
+
   // ── Process lifecycle ──
 
   async loadProject(rootPath: string, windowId: number): Promise<HostLoadKind> {

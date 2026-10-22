@@ -298,11 +298,14 @@ export type HostActivationWorkspace = {
   loadProject(rootPath: string, residentId: number): Promise<unknown>;
   resumeProject(rootPath: string): void;
   unregisterWindow(residentId: number): void;
+  isWindowAttached(residentId: number, rootPath: string): boolean;
 };
 
 interface HostResidency {
   projectId: string;
+  path: string;
   load: Promise<void>;
+  settled: boolean;
 }
 
 /**
@@ -329,19 +332,50 @@ export function activateProjectOnHost(
   residentId: number
 ): Promise<void> {
   const current = hostResidency.get(residentId);
-  if (current?.projectId === project.id) return current.load;
+  if (current?.projectId === project.id && isResidencyHeld(workspace, residentId, current)) {
+    return current.load;
+  }
 
   // Foreground first: a warm host demoted by an earlier switch-away must be
   // accepting worktree calls by the time the view's first ones arrive.
   workspace.resumeProject(project.path);
   const load = workspace.loadProject(project.path, residentId).then(() => undefined);
-  const entry: HostResidency = { projectId: project.id, load };
+  const entry: HostResidency = { projectId: project.id, path: project.path, load, settled: false };
   hostResidency.set(residentId, entry);
-  load.catch(() => {
-    if (hostResidency.get(residentId) === entry) hostResidency.delete(residentId);
-  });
-  markProjectActiveOnHost(project.id);
+  load.then(
+    () => {
+      entry.settled = true;
+    },
+    () => {
+      if (hostResidency.get(residentId) === entry) hostResidency.delete(residentId);
+    }
+  );
+  // Re-holding a project the view never left is not a fresh activation.
+  if (current?.projectId !== project.id) markProjectActiveOnHost(project.id);
   return load;
+}
+
+/**
+ * A loaded residency is only as good as the pool's hold behind it: when the
+ * project's host was disposed and re-spawned under the view, the view is no
+ * longer one of its holders and nothing keeps that host up for it (#13748).
+ */
+function isResidencyHeld(
+  workspace: HostActivationWorkspace,
+  residentId: number,
+  residency: HostResidency
+): boolean {
+  return !residency.settled || workspace.isWindowAttached(residentId, residency.path);
+}
+
+/** Whether a remote view still holds `projectId` resident here, its host included. */
+export function isProjectHeldOnHost(
+  workspace: HostActivationWorkspace,
+  residentId: number,
+  projectId: string
+): boolean {
+  const current = hostResidency.get(residentId);
+  return current?.projectId === projectId && isResidencyHeld(workspace, residentId, current);
 }
 
 /**
