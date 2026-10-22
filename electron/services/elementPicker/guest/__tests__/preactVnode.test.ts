@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { h, render } from "preact";
+import { h, hydrate, render, type ComponentChild } from "preact";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   Budget,
@@ -21,7 +21,7 @@ import {
 
 const containers: Array<Element | ShadowRoot> = [];
 
-function mount(tree: ReturnType<typeof h>, into?: Element | ShadowRoot): Element | ShadowRoot {
+function mount(tree: ComponentChild, into?: Element | ShadowRoot): Element | ShadowRoot {
   const container = into ?? document.body.appendChild(document.createElement("div"));
   render(tree, container);
   containers.push(container);
@@ -113,6 +113,52 @@ describe("the Preact vnode reader", () => {
     const roots = new KnownRoots();
     roots.discover(document);
     expect(roots.others([]).map((root) => root.container)).toEqual([shadow]);
+  });
+
+  it("reads a tree hydrate() adopted the server's markup into", () => {
+    const container = document.body.appendChild(document.createElement("div"));
+    container.innerHTML = '<p class="served">served</p>';
+    const served = container.querySelector("p.served")!;
+    const Page = () => h("p", { class: "served" }, "served");
+    hydrate(h(Page, null), container);
+    containers.push(container);
+    const lookup = lookupHost(served, new KnownRoots(), new Budget(1_000), false);
+    expect(lookup.match?.own).toBe(true);
+    const root = lookup.match!.root;
+    expect(componentsAbove(lookup.match!.vnode, root, new Budget(100), 64)).toMatchObject({
+      components: [expect.anything()],
+      reachedRoot: true,
+    });
+  });
+
+  it("answers from the innermost tree when one is rendered into another's markup", () => {
+    const Outer = () => h("div", { class: "island" });
+    const outer = mount(h(Outer, null)) as Element;
+    const Inner = () => h("b", { class: "inner" }, "inner");
+    const island = mount(h(Inner, null), outer.querySelector("div.island")!) as Element;
+    const lookup = lookupHost(
+      island.querySelector("b.inner")!,
+      new KnownRoots(),
+      new Budget(1_000),
+      false
+    );
+    expect(lookup.match?.root.container).toBe(island);
+    const ancestry = componentsAbove(lookup.match!.vnode, lookup.match!.root, new Budget(100), 64);
+    expect(ancestry.components.map((entry) => componentName(entry)?.value)).toEqual(["Inner"]);
+    expect(ancestry.reachedRoot).toBe(true);
+  });
+
+  it("finds nothing for a node its tree has since unmounted", () => {
+    const Page = () => h("p", { class: "gone" }, "gone");
+    const container = mount(h(Page, null));
+    const gone = (container as Element).querySelector("p.gone")!;
+    const roots = new KnownRoots();
+    roots.remember([container]);
+    render(null, container);
+    expect(lookupHost(gone, roots, new Budget(1_000), true)).toEqual({
+      match: null,
+      truncated: false,
+    });
   });
 
   it("says when a lookup ran out of steps rather than calling the node unrendered", () => {

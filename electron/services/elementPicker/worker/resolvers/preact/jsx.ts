@@ -99,13 +99,67 @@ export type TagReading =
   | { status: "tag"; tag: JsxTag }
   /** Nothing that starts an element is at the offset. */
   | { status: "none" }
-  /** An element starts there, but the parse recovered from an error inside it. */
+  /** An element starts there, but the source around it is not well-formed JSX. */
   | { status: "broken" };
 
-function hasError(node: SyntaxNode): boolean {
-  if (node.type.isError) return true;
+const TAG_NAMES: ReadonlySet<string> = new Set([
+  "JSXBuiltin",
+  "JSXIdentifier",
+  "JSXMemberExpression",
+  "JSXNamespacedName",
+]);
+
+/** The name node of an opening or closing tag, past any comment after its `<`; null for a fragment's. */
+function nameNode(tag: SyntaxNode): SyntaxNode | null {
+  for (let child = tag.firstChild?.nextSibling ?? null; child !== null; child = child.nextSibling) {
+    if (TAG_NAMES.has(child.name)) return child;
+    if (child.name !== "BlockComment" && child.name !== "LineComment") return null;
+  }
+  return null;
+}
+
+function identifiers(node: SyntaxNode, text: string, into: string[]): string[] {
+  if (node.name === "JSXIdentifier") into.push(text.slice(node.from, node.to));
   for (let child = node.firstChild; child !== null; child = child.nextSibling) {
-    if (hasError(child)) return true;
+    identifiers(child, text, into);
+  }
+  return into;
+}
+
+/**
+ * The name a tag spells, rebuilt from its identifiers so that the spacing and
+ * comments JSX allows between them do not count; empty for a fragment's.
+ */
+function tagName(tag: SyntaxNode, text: string): string {
+  const name = nameNode(tag);
+  if (name === null) return "";
+  if (name.name === "JSXMemberExpression") return identifiers(name, text, []).join(".");
+  if (name.name === "JSXNamespacedName") return identifiers(name, text, []).join(":");
+  return text.slice(name.from, name.to);
+}
+
+/**
+ * Whether the parse had to recover anywhere inside `node`, or paired an
+ * opening tag with a closing tag of another name: the grammar takes the two
+ * names independently, so `<div></span>` parses cleanly, and an element whose
+ * end it found that way is not an extent anyone wrote.
+ */
+function malformed(node: SyntaxNode, text: string): boolean {
+  if (node.type.isError) return true;
+  if (node.name === "JSXElement") {
+    const open = node.firstChild;
+    const close = node.lastChild;
+    if (
+      open !== null &&
+      close !== null &&
+      close.name === "JSXCloseTag" &&
+      tagName(open, text) !== tagName(close, text)
+    ) {
+      return true;
+    }
+  }
+  for (let child = node.firstChild; child !== null; child = child.nextSibling) {
+    if (malformed(child, text)) return true;
   }
   return false;
 }
@@ -125,13 +179,12 @@ export function tagAt(tree: Tree, text: string, offset: number): TagReading {
   }
   if (tag === null) return { status: "none" };
   const element = tag.parent;
-  if (element === null || element.name !== "JSXElement" || hasError(element)) {
+  if (element === null || element.name !== "JSXElement" || malformed(element, text)) {
     return { status: "broken" };
   }
-  // The opening `<` is the tag's first child; the name follows it.
-  const name = tag.firstChild?.nextSibling ?? null;
+  const name = nameNode(tag);
   if (name === null) return { status: "broken" };
-  const spelled = text.slice(name.from, name.to);
+  const spelled = tagName(tag, text);
   switch (name.name) {
     case "JSXBuiltin":
     case "JSXNamespacedName":

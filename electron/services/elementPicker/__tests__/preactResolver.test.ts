@@ -251,20 +251,48 @@ describe("the Preact resolver", () => {
     }
   });
 
-  it("will not vouch for an element the parse had to recover inside", async () => {
-    const source = 'export const Broken = () => <div class="x">{oops(</div>;\n';
-    await sandbox.write("src/Broken.jsx", source);
-    const result = await resolveOne(
-      sandbox,
+  it("will not vouch for an element that is not well-formed JSX, whatever the parse made of it", async () => {
+    const recovered = 'export const Recovered = () => <div class="x">{oops(</div>;\n';
+    // The grammar takes these names independently, so each parses without an error node.
+    const mismatched = [
+      'export const Mismatched = () => <div class="y"><b>x</b></span>;',
+      'export const Nested = () => <section class="z"><p>x</div></section>;',
+      'export const Fine = () => <section class="w"><p>x</p></section>;',
+      // Comments between a tag's parts are no part of its name, either way round.
+      'export const Commented = () => <section class="c"><UI /* c */ . Card></UI.Card></section>;',
+      'export const Hidden = () => <div class="h">< /*a*/ b></ /*b*/ i></div>;',
+      "",
+    ].join("\n");
+    await sandbox.write("src/Recovered.jsx", recovered);
+    await sandbox.write("src/Mismatched.jsx", mismatched);
+    const file = sandbox.file("src/Mismatched.jsx");
+    const { results } = await resolveIn(sandbox, [
       selection({
-        sourceCandidates: [creation(sandbox.file("src/Broken.jsx"), at(source, "<div"))],
-      })
-    );
-    expect(result).toMatchObject({
-      state: "unavailable",
-      reason: "unsupported",
-      read: { file: ref("src/Broken.jsx") },
-    });
+        tagName: "div",
+        sourceCandidates: [creation(sandbox.file("src/Recovered.jsx"), at(recovered, "<div"))],
+      }),
+      selection({ tagName: "div", sourceCandidates: [creation(file, at(mismatched, "<div"))] }),
+      selection({
+        tagName: "section",
+        sourceCandidates: [creation(file, at(mismatched, '<section class="z"'))],
+      }),
+      selection({
+        tagName: "section",
+        sourceCandidates: [creation(file, at(mismatched, '<section class="w"'))],
+      }),
+      selection({
+        tagName: "section",
+        sourceCandidates: [creation(file, at(mismatched, '<section class="c"'))],
+      }),
+      selection({
+        tagName: "div",
+        sourceCandidates: [creation(file, at(mismatched, '<div class="h"'))],
+      }),
+    ]);
+    expect(
+      results.map((result) => (result.state === "unavailable" ? result.reason : result.state))
+    ).toEqual(["unsupported", "unsupported", "unsupported", "verified", "verified", "unsupported"]);
+    expect(results[0]).toMatchObject({ read: { file: ref("src/Recovered.jsx") } });
   });
 
   it("reports a file that changed or went away since an earlier result as stale, never resolving it anew", async () => {

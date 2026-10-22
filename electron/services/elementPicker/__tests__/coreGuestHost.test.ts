@@ -1141,13 +1141,8 @@ describe("the shipped Preact extractor", () => {
     }
   });
 
-  it("carries neither Preact nor the shared schemas into the page", () => {
-    const asset = shipped["extractor:preact"];
-    expect(asset).toBeDefined();
-    expect(asset).not.toMatch(/ZodError|\$ZodType/);
-    // Strings only Preact's runtime and its debug build hold: the extractor reads, never imports.
-    expect(asset).not.toMatch(
-      /debounceRendering|__PREACT_DEVTOOLS__|plugin-transform-react-jsx-source/
-    );
+  it("carries none of the shared schemas into the page", () => {
+    // That it bundles nothing of Preact's is core-picker-assets.test.mjs's to prove, from the bundler's graph.
+    expect(shipped["extractor:preact"]).not.toMatch(/ZodError|\$ZodType/);
   });
 });

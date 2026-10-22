@@ -263,19 +263,28 @@ export class KnownRoots {
     return out;
   }
 
-  /** A bounded sweep of the document, open shadow roots included, for render containers. */
+  /**
+   * A bounded sweep of the document for render containers, into every open
+   * shadow tree it passes: a tree whose portal sent content out of one has its
+   * container in there. One sample bounds the whole sweep.
+   */
   discover(doc: Document): void {
-    const start = doc.documentElement;
-    if (start === null) return;
-    const walker = doc.createTreeWalker(start, 1 /* NodeFilter.SHOW_ELEMENT */);
     const found: Node[] = [];
+    const trees: Node[] = doc.documentElement === null ? [] : [doc.documentElement];
     let visited = 0;
-    for (let node: Node | null = walker.currentNode; node !== null && visited < DISCOVERY_SAMPLE;) {
-      visited += 1;
-      if (rootOf(node) !== null) found.push(node);
-      const shadow = node instanceof Element ? node.shadowRoot : null;
-      if (shadow !== null && rootOf(shadow) !== null) found.push(shadow);
-      node = walker.nextNode();
+    while (trees.length > 0 && visited < DISCOVERY_SAMPLE) {
+      const tree = trees.shift()!;
+      const walker = doc.createTreeWalker(tree, 1 /* NodeFilter.SHOW_ELEMENT */);
+      // A shadow root was checked when its host was; the walk starts on it.
+      let node: Node | null = tree instanceof ShadowRoot ? walker.nextNode() : walker.currentNode;
+      for (; node !== null && visited < DISCOVERY_SAMPLE; node = walker.nextNode()) {
+        visited += 1;
+        if (rootOf(node) !== null) found.push(node);
+        const shadow = node instanceof Element ? node.shadowRoot : null;
+        if (shadow === null) continue;
+        if (rootOf(shadow) !== null) found.push(shadow);
+        trees.push(shadow);
+      }
     }
     this.remember(found);
   }
@@ -362,27 +371,33 @@ class Search {
     return null;
   }
 
-  /** Every portal under `start` into one of the target's ancestors, wherever the portal sits. */
-  portals(start: VNode, root: PreactRoot): VNode[] {
-    const found: VNode[] = [];
+  /**
+   * Everywhere under `start`, for a portal into one of the target's ancestors,
+   * wherever the portal itself sits; each is searched the moment it is found,
+   * so a portal met early is not starved by the rest of a large tree.
+   */
+  throughPortals(start: VNode, root: PreactRoot): HostMatch | null {
     const pending: VNode[] = [start];
     while (pending.length > 0) {
       if (!this.budget.spend()) {
         this.truncated = true;
-        return found;
+        return null;
       }
       const vnode = pending.pop()!;
       const kind = kindOf(vnode, root.fragment);
       if (kind === "text") continue;
-      if (kind === "portal" && this.depths.has(portalContainer(vnode))) found.push(vnode);
+      if (kind === "portal" && this.depths.has(portalContainer(vnode))) {
+        const found = this.guided(vnode, root);
+        if (found !== null || this.truncated) return found;
+      }
       const children = childrenOf(vnode, this.budget);
       if (children === null) {
         this.truncated = true;
-        return found;
+        return null;
       }
       pending.push(...children);
     }
-    return found;
+    return null;
   }
 }
 
@@ -416,10 +431,8 @@ export function lookupHost(
   }
   if (discover) roots.discover(target.ownerDocument);
   for (const root of [...local, ...roots.others(local)]) {
-    for (const portal of search.portals(root.vnode, root)) {
-      const found = search.guided(portal, root);
-      if (found !== null) return { match: found, truncated: false };
-    }
+    const found = search.throughPortals(root.vnode, root);
+    if (found !== null) return { match: found, truncated: false };
     if (search.truncated) break;
   }
   return { match: search.best, truncated: search.truncated };

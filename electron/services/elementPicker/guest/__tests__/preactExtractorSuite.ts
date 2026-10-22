@@ -1,4 +1,4 @@
-import { h, render, type ComponentChildren } from "preact";
+import { h, render, type ComponentChild, type ComponentChildren } from "preact";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ComponentRecord } from "../../../../../shared/elementPicker/component.js";
 import type { SelectionObservation } from "../../../../../shared/elementPicker/observation.js";
@@ -62,7 +62,7 @@ export function describePreactExtractor(debug: boolean): void {
     document.body.innerHTML = "";
   });
 
-  function draw(tree: ReturnType<typeof h>): void {
+  function draw(tree: ComponentChild): void {
     root = document.getElementById("root")!;
     render(tree, root);
   }
@@ -83,7 +83,7 @@ export function describePreactExtractor(debug: boolean): void {
     });
   }
 
-  function app(count = 0): ReturnType<typeof h> {
+  function app(count = 0): ComponentChild {
     return h(fixture.App, { portal: document.getElementById("portal")!, count });
   }
 
@@ -373,8 +373,34 @@ export function describePreactExtractor(debug: boolean): void {
       expect(evidence(pick("button.action-go")).debugPrototype).toBe(debug);
     });
 
+    it("keeps a reply of long paths and wide names inside the bridge's ceiling, sources first", () => {
+      const source = {
+        fileName: "/app/src/" + "nested/".repeat(285) + "Wide.tsx",
+        lineNumber: 1,
+        columnNumber: 1,
+      };
+      const Wide = ({ depth }: { depth: number }): ComponentChild => {
+        const props = { depth: depth - 1, __source: source };
+        return depth === 0 ? h("i", { class: "wide" }) : h(Wide, props);
+      };
+      // Three UTF-8 bytes a character, past the name ceiling.
+      Wide.displayName = "漢".repeat(300);
+      const top = { depth: 64, __source: source };
+      draw(h(Wide, top));
+      start();
+      // Unbounded, this reply would be too big for the bridge, which drops it whole.
+      const observation = pick("i.wide");
+      const records = observation.componentChain.components;
+      expect(records.length).toBeGreaterThan(0);
+      expect(records[0]?.name?.value).toBe("漢".repeat(256));
+      const omitted = evidence(observation).sourcesOmitted;
+      expect(typeof omitted === "number" && omitted > 0).toBe(true);
+      // Sources held back for size are still sources the page exposed.
+      expect(observation.capabilities.file).toEqual({ state: "available" });
+    });
+
     it("stays within the bridge's ceiling however deep the chain runs", () => {
-      const Nest = ({ depth }: { depth: number }): ReturnType<typeof h> =>
+      const Nest = ({ depth }: { depth: number }): ComponentChild =>
         depth === 0 ? h("i", { class: "deep" }) : h(Nest, { depth: depth - 1 });
       draw(h(Nest, { depth: 100 }));
       start();

@@ -169,7 +169,9 @@ function selectionOf(
     new Budget(STEPS.ancestry),
     LIMITS.records
   );
-  let truncated = ancestry.truncated;
+  // A lookup that ran out settled for an ancestor, and whatever it never
+  // reached between that and the picked node is missing from the chain.
+  let truncated = ancestry.truncated || lookupTruncated;
   const records: ComponentRecord[] = [];
   const vnodes: VNode[] = [];
   for (const vnode of ancestry.components) {
