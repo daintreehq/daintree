@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { categoryIconFor, pluginIconForIdentity } from "../pluginIcons";
 import { DEFAULT_PLUGIN_ICON } from "@/components/icons/pluginIconRegistry";
 import { GitHubIcon } from "@/components/icons";
+import { resolvePluginKitIcon } from "@/components/PluginKit/PluginKitIcons";
 import { PLUGIN_CATEGORIES } from "@shared/config/pluginCategoryRegistry";
 import type { PluginCategoryId } from "@shared/types/plugin";
 
@@ -25,6 +26,13 @@ describe("pluginIconForIdentity", () => {
   it("keeps the brand mark regardless of the resolved category", () => {
     expect(pluginIconForIdentity("daintree.github", "forge")).toBe(
       pluginIconForIdentity("daintree.github", "other")
+    );
+  });
+
+  it("draws the Element Picker with the same glyph as its toolbar button", () => {
+    // The plugin is framework-agnostic; a Svelte mark on its tile misreads it.
+    expect(pluginIconForIdentity("daintree.sveltekit-builder", "other")).toBe(
+      resolvePluginKitIcon("square-dashed-mouse-pointer")
     );
   });
 

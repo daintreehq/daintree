@@ -81,6 +81,7 @@ export {
   Settings2, // managing a list of things in Settings — hosts, presets — kept apart from Settings, which is project settings
   Shuffle, // a refactor branch (refactor/) — paths rearranged, kept apart from the worktree overview's Layers
   Sprout, // origin / first step (main worktree, first agent launch)
+  SquareDashedMousePointer, // the dev preview's Element Picker — pick an element on the page to hand to an agent, on its toolbar button and its plugin tile alike
   Star, // the default recipe a new worktree launches — kept apart from Pin, which means pinned to the canvas
   Tag, // a worktree's colour label — the identity a user pins to a card, kept apart from Pin, which is its position
   Telescope, // Canopy: the long view out over every agent, read off its screen and laid out by what it needs from you — binoculars read clumsy at 16px, and both trees read as the notifications bell beside it
