@@ -31,6 +31,7 @@ function LauncherItemIcon({ item }: { item: DockLaunchItem }) {
   if (item.category === "panel") {
     return <PanelKindIcon iconId={item.iconId} color={item.color} />;
   }
+  if (item.category === "plugin-entry") return <PanelKindIcon iconId={item.iconId} />;
   return <Workflow />;
 }
 
@@ -40,6 +41,16 @@ const ACTION_VERB = {
   panel: "Open",
   recipe: "Run",
 } as const;
+
+/**
+ * The tooltip and accessible name. A plugin entry's label is already the
+ * author's verb phrase ("New record…"), so it carries its plugin's name in
+ * place of a verb — the same words Settings → Toolbar shows for it.
+ */
+function launcherButtonLabel(item: DockLaunchItem): string {
+  if (item.category === "plugin-entry") return `${item.name} (${item.pluginName})`;
+  return `${ACTION_VERB[item.category]} ${item.name}`;
+}
 
 /**
  * A launcher row the user pinned to its own top-level toolbar slot (#12217).
@@ -66,7 +77,7 @@ export function LauncherToolbarButton({
 }) {
   const setLauncherItemOnToolbar = useToolbarPreferencesStore((s) => s.setLauncherItemOnToolbar);
   const { item } = entry;
-  const label = `${ACTION_VERB[item.category]} ${item.name}`;
+  const label = launcherButtonLabel(item);
   const disabledReason = item.disabled?.reason;
 
   return (

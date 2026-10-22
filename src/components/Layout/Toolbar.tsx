@@ -89,6 +89,7 @@ import {
   activateDockLaunchItem,
   useDockLaunchModel,
   type ActivateDockLaunchItemContext,
+  type DockLaunchAgentOptions,
 } from "./dockLaunchItems";
 import { buildLauncherToolbarMeta, useLauncherToolbarCatalog } from "./launcherToolbarCatalog";
 import { LauncherToolbarButton } from "./LauncherToolbarButton";
@@ -1075,16 +1076,24 @@ export function Toolbar({
   // location override, so they land where they always have. The dock's copy of
   // the launcher passes its own callback and keeps landing in the dock — the
   // shared component decides how a row looks, never where it opens.
-  const launchAgentFromToolbar = useCallback((agentId: string, presetId?: string | null) => {
-    void actionService.dispatch(
-      "agent.launch",
-      // `null` is the explicit-default sentinel and must survive into the
-      // payload; `undefined` must leave the key off so the saved preset still
-      // resolves. A `!= null` test here would collapse the two.
-      { agentId, ...(presetId !== undefined ? { presetId } : {}) },
-      { source: "user" }
-    );
-  }, []);
+  const launchAgentFromToolbar = useCallback(
+    (agentId: string, presetId?: string | null, options?: DockLaunchAgentOptions) => {
+      void actionService.dispatch(
+        "agent.launch",
+        // `null` is the explicit-default sentinel and must survive into the
+        // payload; `undefined` must leave the key off so the saved preset still
+        // resolves. A `!= null` test here would collapse the two. A plugin
+        // launch entry adds its first turn and nothing else.
+        {
+          agentId,
+          ...(presetId !== undefined ? { presetId } : {}),
+          ...(options?.prompt !== undefined ? { prompt: options.prompt } : {}),
+        },
+        { source: "user" }
+      );
+    },
+    []
+  );
 
   const handleOpenProjectSettings = useCallback(() => {
     projectSwitcher.close();

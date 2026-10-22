@@ -281,6 +281,89 @@ export const ToolbarButtonContributionSchema = z
   })
   .strict();
 
+/** Most characters a launch entry's agent prompt may carry. */
+export const LAUNCH_ENTRY_PROMPT_MAX_LENGTH = 4000;
+
+/** Most bytes of JSON a launch entry's `args` may carry. */
+export const LAUNCH_ENTRY_ARGS_MAX_BYTES = 8192;
+
+/** The launch kinds `agent.launch` takes that are panels, not agents. */
+const NON_AGENT_LAUNCH_IDS: ReadonlySet<string> = new Set(["terminal", "browser", "dev-preview"]);
+
+const LaunchEntryArgsSchema = z
+  .record(z.string(), z.unknown())
+  .refine((args) => JSON.stringify(args).length <= LAUNCH_ENTRY_ARGS_MAX_BYTES, {
+    message: `args must be at most ${LAUNCH_ENTRY_ARGS_MAX_BYTES} bytes of JSON`,
+  });
+
+/**
+ * A launch entry's panel target. `id` must name one of this plugin's own
+ * `contributes.panels`, and `placement` must be one that panel can take; both
+ * are checked with the manifest's cross-references.
+ */
+export const LaunchEntryPanelTargetSchema = z
+  .object({
+    id: z.string().min(1).max(64).regex(SAFE_ID_PATTERN),
+    args: LaunchEntryArgsSchema.optional(),
+    placement: z.enum(["dock", "grid", "dialog"]).optional(),
+  })
+  .strict();
+
+/** A launch entry's command target, held to the plugin's own namespace by the manifest's cross-references. */
+export const LaunchEntryCommandTargetSchema = z
+  .object({
+    actionId: z.string().min(1).max(200),
+    args: LaunchEntryArgsSchema.optional(),
+  })
+  .strict();
+
+/**
+ * A launch entry's agent target: which agent, and its first turn. Nothing else
+ * about the launch — flags, env, a preset — is the plugin's to choose, and a
+ * prompt the CLI could read as an option is refused for the same reason
+ * `agent.launch` refuses one from a plugin (#13762).
+ */
+export const LaunchEntryAgentTargetSchema = z
+  .object({
+    id: z
+      .string()
+      .min(1)
+      .max(64)
+      .refine((id) => !NON_AGENT_LAUNCH_IDS.has(id), {
+        message: "agent.id must name an agent, not a panel kind",
+      }),
+    prompt: z
+      .string()
+      .trim()
+      .min(1)
+      .max(LAUNCH_ENTRY_PROMPT_MAX_LENGTH)
+      .refine((prompt) => !prompt.startsWith("-"), {
+        message: "agent.prompt must not start with '-', which an agent CLI could read as an option",
+      }),
+  })
+  .strict();
+
+/**
+ * A launcher row (#13788). `panel`, `command` and `agent` are each optional
+ * here so the object keeps a `.shape`; that exactly one is present is checked
+ * with the manifest's cross-references (`launch_entry_target_*`).
+ */
+export const LaunchEntryContributionSchema = z
+  .object({
+    id: z.string().min(1).max(64).regex(SAFE_ID_PATTERN),
+    label: z.string().trim().min(1).max(80),
+    iconId: z.string().min(1),
+    description: z.string().trim().min(1).max(200).optional(),
+    priority: z
+      .union([z.literal(1), z.literal(2), z.literal(3), z.literal(4), z.literal(5)])
+      .optional(),
+    when: z.string().min(1).optional(),
+    panel: LaunchEntryPanelTargetSchema.optional(),
+    command: LaunchEntryCommandTargetSchema.optional(),
+    agent: LaunchEntryAgentTargetSchema.optional(),
+  })
+  .strict();
+
 export const MenuItemContributionSchema = z
   .object({
     label: z.string().min(1),
@@ -2352,6 +2435,9 @@ export const SurfaceContributionsSchema = z
 export const MANIFEST_CONTRIBUTION_CAPS = {
   panels: 50,
   toolbarButtons: 100,
+  // Small on purpose, unlike the rest: these are rows in a shared launcher, and
+  // one plugin must not be able to bury everyone else's.
+  launchEntries: 20,
   menuItems: 200,
   keybindings: 200,
   contextMenus: 200,
@@ -2456,8 +2542,8 @@ function reportReservedTourCueNames(raw: unknown, ctx: z.RefinementCtx): void {
  *
  * The dividing line is {@link
  * ../services/plugin/PluginContributionBroadcaster.js}: the groups it filters by
- * owning plugin id (panels, commands/actions, toolbarButtons, keybindings,
- * contextMenus, recipes) reach only the owning project's views, and `settings`
+ * owning plugin id (panels, commands/actions, toolbarButtons, launchEntries,
+ * keybindings, contextMenus, recipes) reach only the owning project's views, and `settings`
  * resolves through the bound instance handle. Everything here registers into a
  * registry with no project axis — a single app menu, one agent roster mirrored
  * into the shared pty-host, one skill index behind the MCP server — so the
@@ -2767,6 +2853,10 @@ function buildPluginManifestSchema(origin: PluginOrigin) {
               .array(ToolbarButtonContributionSchema)
               .max(MANIFEST_CONTRIBUTION_CAPS.toolbarButtons)
               .default([]),
+            launchEntries: z
+              .array(LaunchEntryContributionSchema)
+              .max(MANIFEST_CONTRIBUTION_CAPS.launchEntries)
+              .default([]),
             menuItems: z
               .array(MenuItemContributionSchema)
               .max(MANIFEST_CONTRIBUTION_CAPS.menuItems)
@@ -2862,6 +2952,7 @@ function buildPluginManifestSchema(origin: PluginOrigin) {
           .default(() => ({
             panels: [],
             toolbarButtons: [],
+            launchEntries: [],
             menuItems: [],
             keybindings: [],
             contextMenus: [],
@@ -3441,6 +3532,7 @@ function buildPluginManifestSchema(origin: PluginOrigin) {
       };
       reportDuplicateIds("panels", manifest.contributes.panels);
       reportDuplicateIds("toolbarButtons", manifest.contributes.toolbarButtons);
+      reportDuplicateIds("launchEntries", manifest.contributes.launchEntries);
       reportDuplicateIds("commands", manifest.contributes.commands);
       reportDuplicateIds("views", manifest.contributes.views);
       reportDuplicateIds("mcpServers", manifest.contributes.mcpServers);
@@ -3703,6 +3795,101 @@ function buildPluginManifestSchema(origin: PluginOrigin) {
             path: viewPath,
             message: `toolbarButtons "${button.id}" popover.viewId "${viewId}" names a panel with hasPty: true — PTY panels are rendered by the terminal host and never load the view module, so the popover would open empty.`,
             params: { errorCode: "toolbar_popover_view_pty" },
+          });
+        }
+      });
+
+      // A launch entry targets exactly one thing, and only something of this
+      // plugin's own (#13788): one of its panels, one of its commands, or an
+      // agent given a prompt. A built-in or another plugin's action is never a
+      // target — the launcher is not a side door to dispatch.
+      manifest.contributes.launchEntries.forEach((entry, index) => {
+        const path = ["contributes", "launchEntries", index] as const;
+        const targets = [entry.panel, entry.command, entry.agent].filter(
+          (target) => target !== undefined
+        );
+        if (targets.length === 0) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: [...path],
+            message: `Launch entry "${entry.id}" declares no target — give it one of panel, command or agent.`,
+            params: { errorCode: "launch_entry_target_missing" },
+          });
+          return;
+        }
+        if (targets.length > 1) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: [...path],
+            message: `Launch entry "${entry.id}" declares more than one of panel, command and agent — an entry launches one thing, so keep one.`,
+            params: { errorCode: "launch_entry_target_conflict" },
+          });
+          return;
+        }
+
+        if (entry.command !== undefined) {
+          const { actionId } = entry.command;
+          const actionPath = [...path, "command", "actionId"];
+          if (
+            !actionId.startsWith(ownNamespacePrefix) ||
+            actionId.length === ownNamespacePrefix.length ||
+            !PANEL_MENU_ACTION_ID.test(actionId)
+          ) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              path: actionPath,
+              message: `Launch entry "${entry.id}" command.actionId "${actionId}" must be one of this plugin's own actions, written "${manifest.name}.<id>" — a launch entry can't run built-in or other plugins' actions.`,
+              params: { errorCode: "launch_entry_command_not_own" },
+            });
+          } else if (declaredCommandActionIds.size > 0 && !declaredCommandActionIds.has(actionId)) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              path: actionPath,
+              message: `Launch entry "${entry.id}" command.actionId "${actionId}" is in this plugin's "${manifest.name}" namespace but matches no entry in contributes.commands — likely a typo for a declared command.`,
+              params: { errorCode: "action_id_undeclared_command" },
+            });
+          }
+          return;
+        }
+
+        if (entry.panel === undefined) return;
+        const { id: panelId, placement, args } = entry.panel;
+        const panel = manifest.contributes.panels.find((candidate) => candidate.id === panelId);
+        if (panel === undefined) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: [...path, "panel", "id"],
+            message: `Launch entry "${entry.id}" panel.id "${panelId}" matches no contributes.panels[].id — an entry opens only this plugin's own panels.`,
+            params: { errorCode: "launch_entry_panel_unknown" },
+          });
+          return;
+        }
+        // The same refusals `panel.openPluginPanel` makes at runtime, moved to
+        // the gate so the author hears about them before any user clicks.
+        const placementProblem =
+          placement === "grid" && panel.scope === "project"
+            ? 'a scope: "project" panel opens in the dock or a dialog, never the grid'
+            : placement === "dock" && panel.dockable === false
+              ? "the panel opts out of the dock with dockable: false"
+              : placement === "dialog" && panel.hasPty === true
+                ? "a PTY-backed panel (hasPty: true) can't open as a dialog"
+                : undefined;
+        if (placementProblem !== undefined) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: [...path, "panel", "placement"],
+            message: `Launch entry "${entry.id}" can't open panel "${panelId}" with placement "${placement}": ${placementProblem}.`,
+            params: { errorCode: "launch_entry_panel_placement" },
+          });
+        }
+        // A PTY panel becomes an ordinary terminal and has no view to hand
+        // arguments to, so they would be dropped without a word.
+        if (args !== undefined && panel.hasPty === true) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: [...path, "panel", "args"],
+            message: `Launch entry "${entry.id}" passes args to panel "${panelId}", which is PTY-backed (hasPty: true) and has no view to receive them.`,
+            params: { errorCode: "launch_entry_panel_args_pty" },
           });
         }
       });

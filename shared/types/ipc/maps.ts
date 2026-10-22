@@ -2054,6 +2054,13 @@ export interface IpcEventMap {
     complete: boolean;
   };
 
+  // Plugin launch-entry registry events (main → renderer, #13788). No
+  // `complete` flag: every snapshot replaces the renderer's set wholesale, and
+  // nothing is swept against it.
+  "plugin:launch-entries-changed": {
+    entries: import("../plugin.js").PluginLaunchEntryConfig[];
+  };
+
   // Plugin keybinding registry events (main → renderer). Same `complete` flag
   // semantics as toolbar buttons.
   "plugin:keybindings-changed": {
@@ -2380,6 +2387,8 @@ export type IpcEventBusMap = Pick<
   | "plugin:panel-kinds-changed"
   // Plugin toolbar button registry (global broadcast)
   | "plugin:toolbar-buttons-changed"
+  // Plugin launch-entry registry (global broadcast)
+  | "plugin:launch-entries-changed"
   // Plugin keybinding registry (global broadcast)
   | "plugin:keybindings-changed"
   // Plugin context-menu item registry (global broadcast)

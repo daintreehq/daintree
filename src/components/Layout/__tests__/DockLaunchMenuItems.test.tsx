@@ -75,6 +75,10 @@ vi.mock("@/components/PanelPalette/PanelKindIcon", () => ({
 }));
 
 import { DockLaunchMenuItems, type DockLaunchAgent } from "../DockLaunchMenuItems";
+import {
+  resetPluginLaunchEntriesStoreForTests,
+  usePluginLaunchEntriesStore,
+} from "@/store/pluginLaunchEntriesStore";
 
 // Stand-ins for the Radix ContextMenu primitives the real consumers pass. The
 // point is that this component drives them through `onSelect`, not `onClick`.
@@ -139,6 +143,41 @@ describe("DockLaunchMenuItems", () => {
       "Open in grid",
       "Recipes",
     ]);
+  });
+
+  it("lists a plugin's entries under its name, ended by the item that hides the group (#13788)", () => {
+    actionDispatchMock.mockResolvedValue({ ok: true, result: null });
+    const setGroupHidden = vi.fn();
+    usePluginLaunchEntriesStore.setState({
+      entries: [
+        {
+          id: "acme.records.publish",
+          pluginId: "acme.records",
+          pluginName: "Records",
+          label: "Publish site",
+          iconId: "upload",
+          priority: 3,
+          target: { type: "command", actionId: "acme.records.publish" },
+        },
+      ],
+      setGroupHidden,
+    });
+    try {
+      const { getAllByTestId, getByText } = renderItems({ source: "context-menu" });
+      const labels = getAllByTestId("label").map((el) => el.textContent);
+      expect(labels.indexOf("Records")).toBeGreaterThan(-1);
+      expect(labels.indexOf("Records")).toBeLessThan(labels.indexOf("Recipes"));
+
+      fireEvent.click(getByText("Publish site"));
+      expect(actionDispatchMock).toHaveBeenCalledWith("acme.records.publish", undefined, {
+        source: "context-menu",
+      });
+
+      fireEvent.click(getByText("Hide in this project"));
+      expect(setGroupHidden).toHaveBeenCalledWith("acme.records", true);
+    } finally {
+      resetPluginLaunchEntriesStoreForTests();
+    }
   });
 
   it("names the one destination on the grid surface, where nothing docks", () => {

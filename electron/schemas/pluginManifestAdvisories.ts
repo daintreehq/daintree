@@ -150,6 +150,13 @@ export async function collectManifestAdvisories({
       );
     }
   }
+  for (const [index, entry] of (manifest.contributes.launchEntries ?? []).entries()) {
+    if (entry.iconId && !isPluginIconId(entry.iconId) && !isPluginCustomIconRef(entry.iconId)) {
+      warnings.push(
+        `launchEntries[${index}].iconId "${entry.iconId}" isn't a recognized plugin icon — it will render as the default panel icon. Known ids: ${knownIds}`
+      );
+    }
+  }
   // Same advisory treatment for process detections (#11613), with NO
   // agent-brand exemption — unlike panels, an unrecognized id here is collapsed
   // to `terminal` by the host at registration so a plugin can't borrow a

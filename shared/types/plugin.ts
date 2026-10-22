@@ -400,6 +400,84 @@ export interface ToolbarButtonContribution {
   priority?: 1 | 2 | 3 | 4 | 5;
 }
 
+/** Where a panel launch entry opens its panel. `grid` is the worktree's panel grid. */
+export type PluginLaunchEntryPlacement = "dock" | "grid" | "dialog";
+
+/** Opens one of the plugin's own panels, optionally with arguments. */
+export interface PluginLaunchEntryPanelTarget {
+  /** A `contributes.panels[].id` of this plugin. */
+  id: string;
+  /** Handed to the view as `initialArgs`, or as `openRequest` to a panel the open reuses. */
+  args?: Record<string, unknown>;
+  /** Omitted: where the launcher surface opens panels, and the dock for a project panel. */
+  placement?: PluginLaunchEntryPlacement;
+}
+
+/** Dispatches one of the plugin's own commands. */
+export interface PluginLaunchEntryCommandTarget {
+  /** Written `{manifest name}.{command id}`; another namespace is a manifest error. */
+  actionId: string;
+  args?: Record<string, unknown>;
+}
+
+/** Starts an agent with a first turn. Nothing else about the launch is the plugin's to choose. */
+export interface PluginLaunchEntryAgentTarget {
+  /** An agent id from the agent registry. */
+  id: string;
+  prompt: string;
+}
+
+/**
+ * A row a plugin adds to the launcher (#13788). Declaring exactly one of
+ * `panel`, `command` and `agent` is required; none or several is a manifest
+ * error.
+ */
+export interface PluginLaunchEntryContribution {
+  id: string;
+  label: string;
+  /** A generic plugin icon id, or a `./…svg` path to the plugin's own icon. */
+  iconId: string;
+  description?: string;
+  /** Order within the plugin's group, 1 first. Default 3. */
+  priority?: 1 | 2 | 3 | 4 | 5;
+  when?: string;
+  panel?: PluginLaunchEntryPanelTarget;
+  command?: PluginLaunchEntryCommandTarget;
+  agent?: PluginLaunchEntryAgentTarget;
+}
+
+/** A launch entry's target as main resolved it, with runtime ids in place of manifest ones. */
+export type PluginLaunchEntryTarget =
+  | {
+      type: "panel";
+      /** The runtime panel kind id, project-qualified for a project plugin. */
+      panelKindId: string;
+      args?: Record<string, unknown>;
+      placement?: PluginLaunchEntryPlacement;
+    }
+  | {
+      type: "command";
+      /** The runtime action id, in the plugin instance's own namespace. */
+      actionId: string;
+      args?: Record<string, unknown>;
+    }
+  | { type: "agent"; agentId: string; prompt: string };
+
+/** A registered launch entry, as main broadcasts it to the renderer. */
+export interface PluginLaunchEntryConfig {
+  /** `{pluginId}.{entry id}`: the plugin instance id, so project-qualified for a project plugin. */
+  id: string;
+  pluginId: string;
+  /** The plugin's display name, the group's heading. */
+  pluginName: string;
+  label: string;
+  iconId: string;
+  description?: string;
+  priority: 1 | 2 | 3 | 4 | 5;
+  when?: string;
+  target: PluginLaunchEntryTarget;
+}
+
 /**
  * Semantic color for a {@link PluginPanelBadge}. Plugins pick intent, not a raw
  * hex value, so badges stay theme-consistent. `"warning"` and `"error"` map to
@@ -2265,6 +2343,12 @@ export interface PluginManifest {
     menuItems: MenuItemContribution[];
     keybindings: KeybindingContribution[];
     contextMenus: ContextMenuContribution[];
+    /**
+     * Rows the plugin adds to the launcher (#13788). Optional in the type but
+     * always materialized by the manifest schema's `.default([])`, like
+     * `agentMcp`.
+     */
+    launchEntries?: PluginLaunchEntryContribution[];
     /**
      * Manifest-declared commands. Each entry registers a {@link PluginActionDescriptor}
      * at load time (so the command appears in the palette before the plugin

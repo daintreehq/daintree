@@ -18,6 +18,10 @@ import {
   ForgeProviderContributionSchema,
   getPluginManifestSchema,
   KeybindingContributionSchema,
+  LaunchEntryAgentTargetSchema,
+  LaunchEntryCommandTargetSchema,
+  LaunchEntryContributionSchema,
+  LaunchEntryPanelTargetSchema,
   McpServerContributionSchema,
   MenuItemContributionSchema,
   PanelContributionObjectSchema,
@@ -128,6 +132,8 @@ const PLUGIN_PANEL_TOOLBAR = "src/components/Panel/PluginPanelToolbar.tsx";
 const SIDEBAR_VIEWS = "src/lib/sidebarViews.ts";
 const SIDEBAR_VIEW_HOST = "src/components/Sidebar/SidebarViewHost.tsx";
 const SIDEBAR_VIEW_SWITCHER = "src/components/Sidebar/SidebarViewSwitcher.tsx";
+const LAUNCH_ENTRY_REGISTRY = "shared/config/pluginLaunchEntryRegistry.ts";
+const DOCK_LAUNCH_ITEMS = "src/components/Layout/dockLaunchItems.ts";
 
 /**
  * The schemas swept for field coverage. The first block matches the fourteen
@@ -138,6 +144,7 @@ const SIDEBAR_VIEW_SWITCHER = "src/components/Sidebar/SidebarViewSwitcher.tsx";
 const SWEPT_SCHEMAS = {
   panels: PanelContributionObjectSchema,
   toolbarButtons: ToolbarButtonContributionSchema,
+  launchEntries: LaunchEntryContributionSchema,
   menuItems: MenuItemContributionSchema,
   keybindings: KeybindingContributionSchema,
   contextMenus: ContextMenuContributionSchema,
@@ -169,6 +176,9 @@ const SWEPT_SCHEMAS = {
   "surfaces.projectHome": SurfaceViewSlotSchema,
   "surfaces.worktreeCreate": SurfaceViewSlotSchema,
   "toolbarButtons.popover": ToolbarButtonPopoverSchema,
+  "launchEntries.panel": LaunchEntryPanelTargetSchema,
+  "launchEntries.command": LaunchEntryCommandTargetSchema,
+  "launchEntries.agent": LaunchEntryAgentTargetSchema,
   "recipes.terminals": RecipeContributionTerminalSchema,
   "forgeProviders.credentialFields": CredentialFieldSchema,
   "forgeProviders.slots": ForgeProviderContributionSchema.shape.slots,
@@ -186,6 +196,7 @@ type SweptGroup = keyof typeof SWEPT_SCHEMAS;
 const TOP_LEVEL_GROUPS = [
   "panels",
   "toolbarButtons",
+  "launchEntries",
   "menuItems",
   "keybindings",
   "contextMenus",
@@ -233,6 +244,19 @@ type ForgeSlots = NonNullable<z.infer<typeof ForgeProviderContributionSchema>["s
 type FieldConsumerCoverage = {
   panels: Record<keyof z.infer<typeof PanelContributionObjectSchema>, ConsumerDescriptor>;
   toolbarButtons: Record<keyof z.infer<typeof ToolbarButtonContributionSchema>, ConsumerDescriptor>;
+  launchEntries: Record<keyof z.infer<typeof LaunchEntryContributionSchema>, ConsumerDescriptor>;
+  "launchEntries.panel": Record<
+    keyof z.infer<typeof LaunchEntryPanelTargetSchema>,
+    ConsumerDescriptor
+  >;
+  "launchEntries.command": Record<
+    keyof z.infer<typeof LaunchEntryCommandTargetSchema>,
+    ConsumerDescriptor
+  >;
+  "launchEntries.agent": Record<
+    keyof z.infer<typeof LaunchEntryAgentTargetSchema>,
+    ConsumerDescriptor
+  >;
   menuItems: Record<keyof z.infer<typeof MenuItemContributionSchema>, ConsumerDescriptor>;
   keybindings: Record<keyof z.infer<typeof KeybindingContributionSchema>, ConsumerDescriptor>;
   contextMenus: Record<keyof z.infer<typeof ContextMenuContributionSchema>, ConsumerDescriptor>;
@@ -506,6 +530,127 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
         { file: "src/hooks/usePluginToolbarButtons.ts", symbol: "useVisiblePluginToolbarButtons" },
       ],
       note: "Registered on the toolbar button config and evaluated live in the renderer; a false clause drops the button from the toolbar and the tray without touching its saved position.",
+    },
+  },
+  launchEntries: {
+    id: {
+      mode: "verbatim",
+      consumers: [{ file: PLUGIN_SERVICE, symbol: "loadPlugin → registerPluginLaunchEntry" }],
+      note: "Namespaced into the runtime entry id `{pluginId}.{id}`, which also keys the entry's toolbar pin.",
+    },
+    label: {
+      mode: "verbatim",
+      consumers: [
+        { file: LAUNCH_ENTRY_REGISTRY, symbol: "registerPluginLaunchEntry" },
+        { file: DOCK_LAUNCH_ITEMS, symbol: "toPluginEntryItem" },
+      ],
+      note: "The launcher row's text and its pinned button's label.",
+    },
+    iconId: {
+      mode: "derived-input",
+      consumers: [
+        { file: PLUGIN_SERVICE, symbol: "loadPlugin (resolveIconId)" },
+        { file: PLUGIN_ICON_ASSETS, symbol: "collectPluginCustomIconRefs" },
+      ],
+      note: "The row's glyph; a `./…svg` reference is loaded and rewritten to its custom-icon runtime key first.",
+    },
+    description: {
+      mode: "verbatim",
+      consumers: [
+        { file: DOCK_LAUNCH_ITEMS, symbol: "toPluginEntryItem" },
+        { file: "src/components/Layout/DockLaunchButton.tsx", symbol: "DockLaunchOption (title)" },
+      ],
+      note: "Searched, and shown as the row's tooltip and accessible description.",
+    },
+    priority: {
+      mode: "verbatim",
+      consumers: [
+        { file: PLUGIN_SERVICE, symbol: "loadPlugin (priority ?? 3)" },
+        { file: DOCK_LAUNCH_ITEMS, symbol: "buildPluginGroups" },
+      ],
+      note: "Orders entries within their plugin's group (defaulted to 3).",
+    },
+    when: {
+      mode: "verbatim",
+      consumers: [
+        { file: PLUGIN_SERVICE, symbol: "loadPlugin → trackPluginExpression" },
+        { file: DOCK_LAUNCH_ITEMS, symbol: "buildPluginGroups (evaluateWhenClause)" },
+      ],
+      note: "Evaluated live against the chrome context; a false clause drops the row without unpinning it.",
+    },
+    panel: {
+      mode: "derived-input",
+      consumers: [
+        { file: PLUGIN_SCHEMA, symbol: "manifest superRefine (launch_entry_target_*)" },
+        { file: PLUGIN_SERVICE, symbol: "loadPlugin (launch entry panel target)" },
+      ],
+      note: "One of three exclusive targets: open one of the plugin's own panels.",
+    },
+    command: {
+      mode: "derived-input",
+      consumers: [
+        { file: PLUGIN_SCHEMA, symbol: "manifest superRefine (launch_entry_command_not_own)" },
+        { file: PLUGIN_SERVICE, symbol: "loadPlugin (qualifyActionId)" },
+      ],
+      note: "One of three exclusive targets: dispatch one of the plugin's own commands.",
+    },
+    agent: {
+      mode: "derived-input",
+      consumers: [
+        { file: PLUGIN_SCHEMA, symbol: "LaunchEntryAgentTargetSchema" },
+        { file: PLUGIN_SERVICE, symbol: "loadPlugin (launch entry agent target)" },
+      ],
+      note: "One of three exclusive targets: start an agent with a first prompt.",
+    },
+  },
+  "launchEntries.panel": {
+    id: {
+      mode: "derived-input",
+      consumers: [
+        { file: PLUGIN_SCHEMA, symbol: "manifest superRefine (launch_entry_panel_unknown)" },
+        { file: PLUGIN_SERVICE, symbol: "loadPlugin (toRuntimePanelKindId)" },
+      ],
+      note: "Resolved to the runtime panel kind id, project-qualified for a project plugin.",
+    },
+    args: {
+      mode: "verbatim",
+      consumers: [{ file: DOCK_LAUNCH_ITEMS, symbol: "activatePluginLaunchEntry (initialArgs)" }],
+      note: "Handed to `panel.openPluginPanel` as `initialArgs`.",
+    },
+    placement: {
+      mode: "derived-input",
+      consumers: [
+        { file: PLUGIN_SCHEMA, symbol: "manifest superRefine (launch_entry_panel_placement)" },
+        { file: DOCK_LAUNCH_ITEMS, symbol: "entryPresentation" },
+      ],
+      note: "Mapped to `panel.openPluginPanel`'s presentation, `grid` as `panel`.",
+    },
+  },
+  "launchEntries.command": {
+    actionId: {
+      mode: "derived-input",
+      consumers: [
+        { file: PLUGIN_SERVICE, symbol: "loadPlugin (qualifyActionId)" },
+        { file: DOCK_LAUNCH_ITEMS, symbol: "activatePluginLaunchEntry" },
+      ],
+      note: "Rewritten into the instance namespace and dispatched, after an own-namespace check.",
+    },
+    args: {
+      mode: "verbatim",
+      consumers: [{ file: DOCK_LAUNCH_ITEMS, symbol: "activatePluginLaunchEntry" }],
+      note: "Passed to the dispatched action as its arguments.",
+    },
+  },
+  "launchEntries.agent": {
+    id: {
+      mode: "verbatim",
+      consumers: [{ file: DOCK_LAUNCH_ITEMS, symbol: "activatePluginLaunchEntry (onLaunchAgent)" }],
+      note: "The agent the surface's own launch starts.",
+    },
+    prompt: {
+      mode: "verbatim",
+      consumers: [{ file: DOCK_LAUNCH_ITEMS, symbol: "activatePluginLaunchEntry (onLaunchAgent)" }],
+      note: "The launch's first turn, and the only thing about it the plugin chooses.",
     },
   },
   menuItems: {

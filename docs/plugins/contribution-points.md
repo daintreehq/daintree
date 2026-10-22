@@ -19,6 +19,7 @@ A plugin that declares `"scope": "project"` lives in a project's own repository 
 | `views` | Available — served and mounted only in the owning project's renderer; a `location: "settings"` view renders in Project settings → Plugins |
 | `commands` | Available — in that project's palette, dispatched into that project's renderer |
 | `toolbarButtons` | Available — only in the owning project's toolbar |
+| `launchEntries` | Available — only in the owning project's launcher, and a pinned entry's toolbar button is that project's alone |
 | `contextMenus` | Available — only in the owning project's views |
 | `keybindings` | Available — renderer-level, so they resolve within the focused project |
 | `settings` | Available — every field, whatever its `scope`, lives in Project settings; `project` and `local` values resolve from the bound project root, not the focused one |
@@ -633,6 +634,72 @@ A `menu` lists your own actions only — a built-in or another plugin's id fails
 ```
 
 `viewId` names a `location: "panel"` view whose panel is not `hasPty` (`toolbar_popover_view_unknown`, `toolbar_popover_view_settings`, `toolbar_popover_view_sidebar`, `toolbar_popover_view_file_editor` and `toolbar_popover_view_pty` otherwise). The same view stays spawnable as a panel. The host draws the popover itself — 450 by up to 500 pixels, clamped to the room on screen — anchored under the promoted button, or under the plugin tray or the toolbar's overflow menu when the button is picked from one of their rows. It stays open while a dialog, menu or picker your view opened is up, and closes on Escape or a click outside; closing it from inside hands focus back to the button that opened it. Only one plugin popover is open at a time. Your view mounts fresh on each opening, with `hostContext.kind` set to `"popover"` and `hostContext.close()` to dismiss it, after a quick-add submits for example. Like a project surface, it has no panel record behind it, so `persistState`, `initialArgs` and the other panel-record props are absent. A popover button takes `when` and [`host.setToolbarButtonState`](./host-api.md#settoolbarbuttonstate) like any other: a disabled or busy one doesn't open, and an open popover closes when its button's `when` turns false. Works the same for installed and project plugins.
+
+## Launch entries — _Shipped_
+
+Launch entries are rows in the launcher: the dock's `+`, its right-click menu, the grid's right-click menu and the toolbar launcher. Each entry opens one of your panels (with arguments, where you choose), runs one of your commands, or starts an agent with a first prompt.
+
+Your entries form one group under your plugin's name, below the panels and above the recipes. They are searchable like every other row, and the user can pin any of them to its own toolbar button. The host draws every row from the manifest; a plugin can't draw its own. A user can hide your group in one project from the group's last row, **Hide in this project**, and bring it back from Project settings → Plugins.
+
+```json
+{
+  "contributes": {
+    "panels": [{ "id": "records", "name": "Records", "iconId": "database", "color": "#0ea5e9" }],
+    "commands": [
+      {
+        "id": "publish",
+        "title": "Publish site",
+        "description": "Publish the records site",
+        "category": "records",
+        "kind": "command",
+        "danger": "confirm"
+      }
+    ],
+    "launchEntries": [
+      {
+        "id": "new-record",
+        "label": "New record…",
+        "iconId": "plus",
+        "description": "Open Records on an empty form",
+        "priority": 1,
+        "panel": { "id": "records", "args": { "mode": "new" }, "placement": "dialog" }
+      },
+      {
+        "id": "publish",
+        "label": "Publish site",
+        "iconId": "upload",
+        "command": { "actionId": "acme.records.publish" }
+      },
+      {
+        "id": "chat",
+        "label": "Chat with the records agent",
+        "iconId": "bot",
+        "agent": { "id": "claude", "prompt": "Read RECORDS.md, then wait for my question." }
+      }
+    ]
+  }
+}
+```
+
+**Fields:**
+
+| Field | Required | Notes |
+| --- | --- | --- |
+| `id` | yes | Namespaced at runtime as `{pluginId}.{id}`. It also keys a pinned toolbar button, so renaming it unpins the entry. |
+| `label` | yes | The row's text, up to 80 characters. Write it as the action: "New record…", "Publish site". |
+| `iconId` | yes | A shared plugin icon id, the same set panels use, or a [custom SVG](#custom-icons). |
+| `description` | no | Up to 200 characters, shown as the row's tooltip and searched. |
+| `priority` | no | `1`–`5`, lower = earlier within your group. Default `3`; ties keep manifest order. Groups themselves are ordered by plugin name. |
+| `when` | no | Context expression deciding whether the row shows, evaluated live like a [toolbar button's](#showing-a-button-only-when-it-applies). A pinned entry's button follows it. |
+| `panel` | one of `panel`, `command`, `agent` | `{ "id", "args"?, "placement"? }`. `id` names one of your own `contributes.panels`. `args` (at most 8 KB of JSON) reaches the view as `initialArgs`, or as `openRequest` when an open panel of that kind is reused. `placement` is `"dock"`, `"grid"` or `"dialog"`; without it the panel opens where that launcher opens panels, and a `scope: "project"` panel in the dock. |
+| `command` | one of `panel`, `command`, `agent` | `{ "actionId", "args"? }`. `actionId` must be one of your own actions, written `{manifest name}.{id}`; when you declare `contributes.commands` it must name one of them. `args` (at most 8 KB of JSON) is passed to the action. |
+| `agent` | one of `panel`, `command`, `agent` | `{ "id", "prompt" }`. Starts that agent with `prompt` as its first turn, up to 4,000 characters. Nothing else about the launch is yours to choose — no flags, environment or preset — and a prompt starting with `-` is refused. The agent lands where that launcher puts agents and uses the user's own preset. If no agent with that id is registered, the row is shown disabled. |
+
+An entry declares exactly one target (`launch_entry_target_missing`, `launch_entry_target_conflict`). A target outside your own plugin fails validation: a command in another namespace or a built-in action (`launch_entry_command_not_own`), a panel you don't declare (`launch_entry_panel_unknown`). So does a placement the panel can't take — the grid for a `scope: "project"` panel, the dock for `dockable: false`, a dialog for `hasPty: true` (`launch_entry_panel_placement`) — and `args` for a PTY-backed panel, which has no view to receive them (`launch_entry_panel_args_pty`). A plugin may declare at most 20 entries.
+
+Declaring an entry for one of your panels replaces that panel's own row in the launcher, even while the entry's `when` is false or its group is hidden, so the panel is never listed twice. A panel no entry targets keeps its plain row.
+
+Entries are user-only. They run when the user picks the row or presses its pinned button, never from the command palette, an MCP client or an agent; those reach the same panels, commands and `agent.launch` through their own routes and confirmations.
 
 ## Menu items — _Shipped_
 

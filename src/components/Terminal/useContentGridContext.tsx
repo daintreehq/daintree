@@ -88,6 +88,7 @@ import {
   type DockLaunchAgent,
   type DockLaunchMenuComponents,
 } from "@/components/Layout/DockLaunchMenuItems";
+import type { DockLaunchAgentOptions } from "@/components/Layout/dockLaunchItems";
 import { useToolbarPreferencesStore } from "@/store/toolbarPreferencesStore";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
 import { sortAgentsByToolbarPin } from "@/lib/agentMenuOrder";
@@ -845,10 +846,16 @@ export function useContentGridContext({
   ]);
 
   const handleGridLaunch = useCallback(
-    (agentId: string) => {
+    (agentId: string, _presetId?: string | null, options?: DockLaunchAgentOptions) => {
       void actionService.dispatch(
         "agent.launch",
-        { agentId, location: "grid", cwd: defaultCwd || undefined },
+        {
+          agentId,
+          location: "grid",
+          cwd: defaultCwd || undefined,
+          // A plugin launch entry's first turn, and nothing else of its own.
+          ...(options?.prompt !== undefined ? { prompt: options.prompt } : {}),
+        },
         { source: "user" }
       );
     },

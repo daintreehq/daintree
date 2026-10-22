@@ -21,10 +21,10 @@ export function isPluginToolbarButtonIdShape(id: string): id is PluginToolbarBut
 
 /**
  * Identifier for a launcher row that has no toolbar button id of its own: a
- * plugin or user-defined agent, a panel kind outside the fixed four, or a
- * recipe (#12217).
+ * plugin or user-defined agent, a panel kind outside the fixed four, a recipe
+ * (#12217), or a plugin's launch entry (#13788).
  *
- * One prefix for all three categories rather than three sibling prefixes,
+ * One prefix for every category rather than sibling prefixes,
  * because `sweepStalePluginPinnedButtons` has to be taught to leave these keys
  * alone and one thing to teach it is one thing that can go stale. The category
  * is the second segment, so a caller that needs it still gets it without a
@@ -39,7 +39,8 @@ export function isPluginToolbarButtonIdShape(id: string): id is PluginToolbarBut
 export type LauncherItemToolbarButtonId =
   | `${typeof LAUNCHER_ITEM_BUTTON_PREFIX}agent:${string}`
   | `${typeof LAUNCHER_ITEM_BUTTON_PREFIX}panel:${string}`
-  | `${typeof LAUNCHER_ITEM_BUTTON_PREFIX}recipe:${string}`;
+  | `${typeof LAUNCHER_ITEM_BUTTON_PREFIX}recipe:${string}`
+  | `${typeof LAUNCHER_ITEM_BUTTON_PREFIX}plugin-entry:${string}`;
 
 /** Identifier for any toolbar button (built-in, plugin, or launcher item) */
 export type AnyToolbarButtonId =
@@ -201,11 +202,13 @@ export function getLauncherPanelButtonIdForKind(kindId: string): LauncherPanelBu
 export const LAUNCHER_ITEM_BUTTON_PREFIX = "launcher:" as const;
 
 /** Which launcher category a launcher-item button id came from. */
-export type LauncherItemCategory = "agent" | "panel" | "recipe";
+export type LauncherItemCategory = "agent" | "panel" | "recipe" | "plugin-entry";
 
 /**
  * Build the persisted toolbar button id for a launcher row that has none of its
- * own. `sourceId` is the agent id, panel kind id, or recipe id — taken verbatim,
+ * own. `sourceId` is the agent id, panel kind id, recipe id, or runtime launch
+ * entry id (`{plugin instance id}.{entry id}`, so project-qualified for a
+ * project plugin) — taken verbatim,
  * because it is only ever compared against a live catalog, never re-parsed into
  * its parts.
  */
@@ -246,7 +249,14 @@ export function decodeLauncherItemToolbarButtonId(
   const category = rest.slice(0, separator);
   const sourceId = rest.slice(separator + 1);
   if (sourceId.length === 0) return null;
-  if (category !== "agent" && category !== "panel" && category !== "recipe") return null;
+  if (
+    category !== "agent" &&
+    category !== "panel" &&
+    category !== "recipe" &&
+    category !== "plugin-entry"
+  ) {
+    return null;
+  }
   return { category, sourceId };
 }
 

@@ -14,6 +14,10 @@ import {
 } from "@/store/pluginProjectSurfacesStore";
 import { usePluginManagerStore } from "@/store/pluginManagerStore";
 import { useHostConnectionStore } from "@/store/hostConnectionStore";
+import {
+  resetPluginLaunchEntriesStoreForTests,
+  usePluginLaunchEntriesStore,
+} from "@/store/pluginLaunchEntriesStore";
 import { registerPanelKind, unregisterPanelKind } from "@shared/config/panelKindRegistry";
 import type {
   LoadedPluginInfo,
@@ -164,6 +168,7 @@ const pluginApi = {
     );
   }),
   activateStagedProjectPlugin: vi.fn().mockResolvedValue(undefined),
+  setLaunchGroupHidden: vi.fn().mockResolvedValue([]),
   reloadProjectPlugins: vi.fn().mockResolvedValue(undefined),
   getSettingValues: vi.fn().mockResolvedValue({
     values: {},
@@ -222,6 +227,7 @@ afterEach(() => {
   __resetProjectPluginStoreForTesting();
   _resetPluginProjectSurfacesStoreForTest();
   useHostConnectionStore.getState().reset();
+  resetPluginLaunchEntriesStoreForTests();
   unregisterPanelKind(CANVAS_KIND_ID);
 });
 
@@ -318,6 +324,28 @@ describe("ProjectPluginsTab", () => {
     await waitFor(() => expect(row.textContent).toContain("You haven't chosen yet, so it shows."));
     // Nothing is remembered now, so there is nothing left to reset.
     expect(within(row).queryByRole("button", { name: "Ask again about the canvas" })).toBeNull();
+  });
+
+  it("lists a launcher group the project hid and shows it again from its reset (#13788)", async () => {
+    seed([projectPlugin()]);
+    act(() => usePluginLaunchEntriesStore.setState({ hiddenPluginIds: [CANVAS_OWNER] }));
+    render(<ProjectPluginsTab />);
+    await waitFor(() => expect(pluginApi.list).toHaveBeenCalled());
+
+    // Named from the project plugin list even while none of its entries are
+    // loaded: the hide is still remembered, so it has to stay findable.
+    const row = screen.getByTestId(`hidden-launch-group-${CANVAS_OWNER}`);
+    expect(row.textContent).toContain("Acme Dashboard");
+
+    fireEvent.click(
+      within(row).getByRole("button", { name: "Show Acme Dashboard in the launcher" })
+    );
+    await waitFor(() =>
+      expect(pluginApi.setLaunchGroupHidden).toHaveBeenCalledWith(CANVAS_OWNER, false)
+    );
+    await waitFor(() =>
+      expect(screen.queryByTestId("project-plugins-hidden-launch-groups")).toBeNull()
+    );
   });
 
   it("switches the empty canvas to Daintree's own from settings", async () => {

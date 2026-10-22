@@ -849,6 +849,9 @@ export interface GeneratedElectronAPI {
     getForgeProviders(
       ...args: IpcInvokeMap["plugin:forge-providers-get"]["args"]
     ): Promise<IpcInvokeMap["plugin:forge-providers-get"]["result"]>;
+    getHiddenLaunchGroups(
+      ...args: IpcInvokeMap["plugin:launch-groups-hidden-get"]["args"]
+    ): Promise<IpcInvokeMap["plugin:launch-groups-hidden-get"]["result"]>;
     getHostedViews(
       ...args: IpcInvokeMap["plugin:hosted-views-get"]["args"]
     ): Promise<IpcInvokeMap["plugin:hosted-views-get"]["result"]>;
@@ -909,6 +912,9 @@ export interface GeneratedElectronAPI {
     keybindings(
       ...args: IpcInvokeMap["plugin:keybindings"]["args"]
     ): Promise<IpcInvokeMap["plugin:keybindings"]["result"]>;
+    launchEntries(
+      ...args: IpcInvokeMap["plugin:launch-entries"]["args"]
+    ): Promise<IpcInvokeMap["plugin:launch-entries"]["result"]>;
     list(
       ...args: IpcInvokeMap["plugin:list"]["args"]
     ): Promise<IpcInvokeMap["plugin:list"]["result"]>;
@@ -957,6 +963,9 @@ export interface GeneratedElectronAPI {
     setFileEditorChoice(
       ...args: IpcInvokeMap["plugin:file-editor-choice-set"]["args"]
     ): Promise<IpcInvokeMap["plugin:file-editor-choice-set"]["result"]>;
+    setLaunchGroupHidden(
+      ...args: IpcInvokeMap["plugin:launch-group-hidden-set"]["args"]
+    ): Promise<IpcInvokeMap["plugin:launch-group-hidden-set"]["result"]>;
     setPluginVisibilityDefault(
       ...args: IpcInvokeMap["plugin:visibility-default-set"]["args"]
     ): Promise<IpcInvokeMap["plugin:visibility-default-set"]["result"]>;
