@@ -204,6 +204,87 @@ describe("RemoteHostsClient", () => {
     expect(installRouter).not.toHaveBeenCalled();
   });
 
+  describe("restoreHostProjectInBackground (#13932)", () => {
+    let restore: Mock<NonNullable<WindowControl["restoreRemoteProjectInBackground"]>>;
+
+    beforeEach(() => {
+      restore = vi.fn<NonNullable<WindowControl["restoreRemoteProjectInBackground"]>>(
+        async () => "restored"
+      );
+      windows.restoreRemoteProjectInBackground = restore;
+    });
+
+    it("loads the project at the host's path, and nothing the window shows changes", async () => {
+      await expect(
+        client.restoreHostProjectInBackground(1, "studio-01", "proj-1", { lastUsed: 42 })
+      ).resolves.toBe("restored");
+      expect(manager.connect).toHaveBeenCalledWith("studio-01");
+      expect(installRouter).toHaveBeenCalledWith(router);
+      expect(restore).toHaveBeenCalledWith(1, "studio-01", "proj-1", "/srv/proj-1", 42);
+      expect(bindings.get(1)).toBe("local");
+      expect(windows.openRemoteProject).not.toHaveBeenCalled();
+      expect(manager.connect("studio-01").noteActiveProject).not.toHaveBeenCalled();
+      expect(client.listRecent()).toEqual([]);
+    });
+
+    it("leaves a project another window has to it, without dialling the host", async () => {
+      windows.projectOwner = vi.fn(() => ({ windowId: 2, showing: false }));
+      await expect(
+        client.restoreHostProjectInBackground(1, "studio-01", "proj-1", { lastUsed: 1 })
+      ).resolves.toBe("owned-elsewhere");
+      expect(manager.connect).not.toHaveBeenCalled();
+      expect(restore).not.toHaveBeenCalled();
+    });
+
+    it("says so when the host no longer has the project", async () => {
+      manager.connect("studio-01").describeProject.mockResolvedValueOnce(null);
+      await expect(
+        client.restoreHostProjectInBackground(1, "studio-01", "proj-1", { lastUsed: 1 })
+      ).resolves.toBe("project-gone");
+      expect(restore).not.toHaveBeenCalled();
+    });
+
+    it("says so for a host removed from this device, without dialling anything", async () => {
+      await expect(
+        client.restoreHostProjectInBackground(1, "nowhere", "proj-1", { lastUsed: 1 })
+      ).resolves.toBe("host-removed");
+      expect(manager.connect).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ["timeout", "HOST_DISCONNECTED"],
+      ["version-mismatch", "HOST_VERSION_MISMATCH"],
+    ])("throws as a switch does when the host comes back %s", async (readiness, code) => {
+      manager.readiness = readiness;
+      await expect(
+        client.restoreHostProjectInBackground(1, "studio-01", "proj-1", { lastUsed: 1 })
+      ).rejects.toMatchObject({ code });
+      expect(restore).not.toHaveBeenCalled();
+    });
+
+    it("treats a lookup the host couldn't answer as the host being unreachable", async () => {
+      manager.connect("studio-01").describeProject.mockRejectedValueOnce(new Error("link dropped"));
+      await expect(
+        client.restoreHostProjectInBackground(1, "studio-01", "proj-1", { lastUsed: 1 })
+      ).rejects.toMatchObject({ code: "HOST_DISCONNECTED" });
+    });
+
+    it("gives up once it is no longer wanted", async () => {
+      let wanted = true;
+      manager.connect("studio-01").whenReady.mockImplementationOnce(async () => {
+        wanted = false;
+        return "ready";
+      });
+      await expect(
+        client.restoreHostProjectInBackground(1, "studio-01", "proj-1", {
+          lastUsed: 1,
+          stillWanted: () => wanted,
+        })
+      ).resolves.toBe("cancelled");
+      expect(restore).not.toHaveBeenCalled();
+    });
+  });
+
   it("leaves the router installed when it is disposed, so host views fail closed at quit", async () => {
     await client.switchWindowHost(ctxFor(5, 1), {
       hostId: "studio-01",

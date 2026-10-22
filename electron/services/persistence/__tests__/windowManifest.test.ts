@@ -1,7 +1,9 @@
 import { describe, it, expect } from "vitest";
 import {
+  MAX_BACKGROUND_HOST_PROJECTS_PER_WINDOW,
   MAX_BACKGROUND_PROJECTS_PER_WINDOW,
   MAX_RESTORED_WINDOWS,
+  capBackgroundProjectIds,
   OPEN_WINDOWS_MANIFEST_VERSION,
   filterRestorableWindows,
   isReadableOpenWindowsManifest,
@@ -318,5 +320,84 @@ describe("filterRestorableWindows with background projects (#12320)", () => {
         new Set(["beta"])
       )
     ).toEqual([{ projectId: null, backgroundProjectIds: ["beta"] }]);
+  });
+});
+
+describe("background host projects (#13932)", () => {
+  const SHARED = "9".repeat(64);
+  const LOCAL_A = "c".repeat(64);
+  const LOCAL_B = "d".repeat(64);
+  const host = (hostId: string, projectId = SHARED) => `${hostId}:${projectId}`;
+  const locals = (n: number) =>
+    Array.from({ length: n }, (_v, i) => i.toString(16).padStart(2, "0").repeat(32));
+  const hosts = (n: number) => Array.from({ length: n }, (_v, i) => host(`studio-${i}`));
+
+  it("keeps a window's host projects through a relaunch's read, beside its local ones", () => {
+    const backgroundProjectIds = [
+      host("studio-01"),
+      host("studio-03"),
+      host("studio-02"),
+      LOCAL_A,
+      LOCAL_B,
+    ];
+    const raw = serializeOpenWindowsManifest([
+      { projectId: host("studio-02", "e".repeat(64)), backgroundProjectIds },
+    ]);
+    const restorable = filterRestorableWindows(
+      parseOpenWindowsManifest(raw),
+      new Set([LOCAL_A, LOCAL_B])
+    );
+    expect(restorable).toEqual([
+      { projectId: host("studio-02", "e".repeat(64)), backgroundProjectIds },
+    ]);
+  });
+
+  it("still drops a background id that is neither a project here nor a host's", () => {
+    const filtered = filterRestorableWindows(
+      [{ projectId: LOCAL_A, backgroundProjectIds: ["bad host:abc", host("studio-01"), "gone"] }],
+      new Set([LOCAL_A])
+    );
+    expect(filtered).toEqual([{ projectId: LOCAL_A, backgroundProjectIds: [host("studio-01")] }]);
+  });
+
+  it("never lets host projects cost local ones their slots", () => {
+    const local = locals(MAX_BACKGROUND_PROJECTS_PER_WINDOW);
+    const remote = hosts(MAX_BACKGROUND_HOST_PROJECTS_PER_WINDOW);
+    // Host projects first: the most recent, and the ones that used to fill the cap.
+    const parsed = parseOpenWindowsManifest(
+      manifestJson([{ projectId: null, backgroundProjectIds: [...remote, ...local] }])
+    );
+    expect(parsed[0].backgroundProjectIds).toEqual([...remote, ...local]);
+  });
+
+  it("caps each kind on its own, keeping the most recent of each", () => {
+    const local = locals(MAX_BACKGROUND_PROJECTS_PER_WINDOW + 2);
+    const remote = hosts(MAX_BACKGROUND_HOST_PROJECTS_PER_WINDOW + 2);
+    const interleaved = local.flatMap((id, i) => [id, remote[i]]);
+    const ids = parseOpenWindowsManifest(
+      manifestJson([{ projectId: null, backgroundProjectIds: interleaved }])
+    )[0].backgroundProjectIds;
+    expect(ids?.filter((id) => !isRemoteWorkspaceKey(id))).toEqual(
+      local.slice(0, MAX_BACKGROUND_PROJECTS_PER_WINDOW)
+    );
+    expect(ids?.filter(isRemoteWorkspaceKey)).toEqual(
+      remote.slice(0, MAX_BACKGROUND_HOST_PROJECTS_PER_WINDOW)
+    );
+  });
+
+  it("writes the same two caps", () => {
+    const local = locals(MAX_BACKGROUND_PROJECTS_PER_WINDOW + 1);
+    const remote = hosts(MAX_BACKGROUND_HOST_PROJECTS_PER_WINDOW + 1);
+    const written = JSON.parse(
+      serializeOpenWindowsManifest([
+        { projectId: LOCAL_A, backgroundProjectIds: [...remote, ...local] },
+      ])
+    ) as { windows: OpenWindowRecord[] };
+    expect(written.windows[0].backgroundProjectIds).toEqual(
+      capBackgroundProjectIds([...remote, ...local], LOCAL_A)
+    );
+    expect(written.windows[0].backgroundProjectIds).toHaveLength(
+      MAX_BACKGROUND_PROJECTS_PER_WINDOW + MAX_BACKGROUND_HOST_PROJECTS_PER_WINDOW
+    );
   });
 });

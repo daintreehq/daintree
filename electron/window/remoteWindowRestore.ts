@@ -13,6 +13,12 @@
  * host connects, and the host re-dialled now and then while it waits, since a
  * host that quit cleanly parks its link and nothing else would dial it.
  *
+ * What a window had in the background on hosts comes back the same way, as
+ * cached views it never shows (#13932): after the window's own project, one
+ * host project at a time per host, dialling only those hosts. One whose host
+ * can't be reached waits for it like the window's own project does, and stays
+ * in the manifest meanwhile.
+ *
  * Core code: reaches the client through the remote runtime, never by import.
  */
 
@@ -21,10 +27,15 @@ import type { WebContents } from "electron";
 import type { MainProcessToastPayload } from "../../shared/types/ipc/maps.js";
 import { CHANNELS } from "../ipc/channels.js";
 import { getRemoteService } from "../remote/runtime.js";
+import { isRemoteWorkspaceKey } from "../services/persistence/windowManifest.js";
 import { getUserMessage, isAppError } from "../utils/errorTypes.js";
 import {
+  addPendingRemoteBackgroundRestores,
+  clearPendingRemoteBackgroundRestores,
   clearPendingRemoteRestore,
+  getPendingRemoteBackgroundRestores,
   getPendingRemoteRestore,
+  removePendingRemoteBackgroundRestores,
   setPendingRemoteRestore,
 } from "./openWindowsTracker.js";
 
@@ -37,9 +48,14 @@ export interface RemoteWindowRestoreDeps {
    * person's in flight or waiting on them: nothing of theirs to replace.
    */
   isWindowWaiting(windowId: number): boolean;
+  /**
+   * Open, with its view manager, and the app not quitting: its background
+   * projects can still come back, whatever it is showing.
+   */
+  canRestoreInBackground(windowId: number): boolean;
   /** The view a toast for that window goes to. */
   viewOf(windowId: number): WebContents | null;
-  /** A window moved to its host: the manifest describes it now. */
+  /** A window moved to its host, or its background changed: the manifest describes it now. */
   onRestored(): void;
 }
 
@@ -68,18 +84,68 @@ let offConnection: (() => void) | null = null;
 /** Switch failures a later dial can't change: the person has to act first. */
 const NOT_REDIALLED = new Set(["HOST_SSH_ACCESS_DENIED", "HOST_VERSION_MISMATCH"]);
 
+/** Windows whose background projects on a host wait for it to connect, by host id. */
+const backgroundAwaiting = new Map<string, Set<number>>();
+/**
+ * Each host's background restores, chained: every one boots a renderer, so a
+ * host's come back one at a time, while a host that can't be reached holds up
+ * only its own.
+ */
+const hostChains = new Map<string, Promise<void>>();
+/** Window and host pairs with a pass queued or running, so a retry never doubles one. */
+const backgroundPasses = new Set<string>();
+/** Windows whose background restore met the warm-view ceiling: the rest wait for the next launch. */
+const backgroundFull = new Set<number>();
+/**
+ * Each waiting background project's recency, fixed when it was noted: below
+ * every live view and in the order the manifest kept, as the local restore
+ * queue ranks this machine's, however late its host connects.
+ */
+const backgroundLastUsed = new Map<number, Map<string, number>>();
+
 /** A restored window belongs on `workspaceKey` (`<hostId>:<projectId>`). */
 export function noteRemoteWindowRestore(windowId: number, workspaceKey: string): void {
   setPendingRemoteRestore(windowId, workspaceKey);
   waiting.add(windowId);
 }
 
+/**
+ * Take a restored window's projects on hosts out of its background list, to
+ * come back here once their hosts connect, and return the rest, this
+ * machine's, for the local restore queue, which can only find a project on
+ * this machine's disk (#13932).
+ */
+export function takeHostBackgroundRestores(windowId: number, ids: readonly string[]): string[] {
+  const hostKeys = ids.filter(isRemoteWorkspaceKey);
+  if (hostKeys.length > 0) {
+    const epoch = Date.now();
+    const lastUsed = backgroundLastUsed.get(windowId) ?? new Map<string, number>();
+    for (const key of hostKeys) {
+      if (!lastUsed.has(key)) lastUsed.set(key, epoch - (lastUsed.size + 1) * 1000);
+    }
+    backgroundLastUsed.set(windowId, lastUsed);
+    addPendingRemoteBackgroundRestores(windowId, hostKeys);
+    // A window set up already (a crash recovery handing it its saved
+    // projects) starts now; one still setting up starts once it is.
+    if (armed && setUp.has(windowId) && !waiting.has(windowId)) {
+      restoreBackground(armed, windowId);
+    }
+  }
+  return ids.filter((id) => !isRemoteWorkspaceKey(id));
+}
+
 /** The window finished setting up. Once Remote Hosts is up, its restore starts now. */
 export function remoteWindowReady(windowId: number): void {
   setUp.add(windowId);
-  if (!armed || !waiting.has(windowId)) return;
+  const deps = armed;
+  if (!deps) return;
+  if (!waiting.has(windowId)) {
+    restoreBackground(deps, windowId);
+    return;
+  }
   waiting.delete(windowId);
-  void restoreOne(armed, windowId);
+  // The project it was showing first; what it had behind it follows.
+  void restoreOne(deps, windowId).finally(() => restoreBackground(deps, windowId));
 }
 
 /** The window closed: nothing to bring back, nothing to keep. */
@@ -88,6 +154,14 @@ export function forgetRemoteWindowRestore(windowId: number): void {
   setUp.delete(windowId);
   stopAwaiting(windowId);
   clearPendingRemoteRestore(windowId);
+  for (const [hostId, windows] of backgroundAwaiting) {
+    windows.delete(windowId);
+    if (windows.size === 0) backgroundAwaiting.delete(hostId);
+  }
+  stopRedialIfIdle();
+  backgroundFull.delete(windowId);
+  backgroundLastUsed.delete(windowId);
+  clearPendingRemoteBackgroundRestores(windowId);
 }
 
 function waitFor(hostId: string) {
@@ -116,7 +190,12 @@ function waitFor(hostId: string) {
  */
 function stopAwaiting(windowId: number): void {
   awaitingHost.delete(windowId);
-  if (awaitingHost.size > 0) return;
+  stopRedialIfIdle();
+}
+
+/** Nothing waits for any host any more: stop dialling them. */
+function stopRedialIfIdle(): void {
+  if (awaitingHost.size > 0 || backgroundAwaiting.size > 0) return;
   if (redialTimer) clearInterval(redialTimer);
   redialTimer = null;
 }
@@ -164,7 +243,10 @@ function onHostConnection(hostId: string, state: HostConnectionState): void {
     wait.redial = true;
     wait.delayMs = REMOTE_RESTORE_REDIAL_MS;
     wait.nextDialAt = 0;
-    if (was !== "connected" && armed) retryAwaiting(armed, hostId);
+    if (was !== "connected" && armed) {
+      retryAwaiting(armed, hostId);
+      retryBackground(armed, hostId);
+    }
     return;
   }
   if (state.status === "version-mismatch") wait.redial = false;
@@ -177,9 +259,16 @@ function onHostConnection(hostId: string, state: HostConnectionState): void {
 /** Dial each awaited host whose wait is up, backing off while it stays away. */
 function redialAwaitedHosts(deps: RemoteWindowRestoreDeps): void {
   for (const [windowId, hostId] of [...awaitingHost]) stillAwaiting(deps, windowId, hostId);
+  for (const [hostId, windows] of [...backgroundAwaiting]) {
+    for (const windowId of [...windows]) {
+      if (!stillAwaitingInBackground(deps, windowId, hostId)) windows.delete(windowId);
+    }
+    if (windows.size === 0) backgroundAwaiting.delete(hostId);
+  }
+  stopRedialIfIdle();
   const client = getRemoteService("remoteHostsClient");
   const now = Date.now();
-  for (const hostId of new Set(awaitingHost.values())) {
+  for (const hostId of new Set([...awaitingHost.values(), ...backgroundAwaiting.keys()])) {
     const wait = waitFor(hostId);
     if (!wait.redial || wait.lastStatus === "connected" || now < wait.nextDialAt) continue;
     wait.delayMs = Math.min(wait.delayMs * 2, REMOTE_RESTORE_REDIAL_MAX_MS);
@@ -203,6 +292,11 @@ function awaitHost(
   code: string | null
 ): void {
   awaitingHost.set(windowId, hostId);
+  watchHost(deps, hostId, code);
+}
+
+/** Retry what waits on `hostId` once it connects, and dial it now and then meanwhile. */
+function watchHost(deps: RemoteWindowRestoreDeps, hostId: string, code: string | null): void {
   const wait = waitFor(hostId);
   if (code !== null && NOT_REDIALLED.has(code)) wait.redial = false;
   if (wait.nextDialAt === 0) wait.nextDialAt = Date.now() + wait.delayMs;
@@ -219,19 +313,157 @@ export function forgetRemoteRestoresForHost(hostId: string): void {
   for (const [windowId, awaited] of [...awaitingHost]) {
     if (awaited === hostId) stopAwaiting(windowId);
   }
+  backgroundAwaiting.delete(hostId);
+  stopRedialIfIdle();
   hostWait.delete(hostId);
 }
 
 /**
  * Remote Hosts is up: switch every waiting window that is set up to its host's
  * project, and do the same for each one that finishes setting up from now on.
- * Settles once those already set up have.
+ * Each window's background projects on hosts follow its own. Settles once the
+ * windows already set up have switched, never waiting on their backgrounds.
  */
 export async function restoreRemoteWindows(deps: RemoteWindowRestoreDeps): Promise<void> {
   armed = deps;
   const ready = [...waiting].filter((windowId) => setUp.has(windowId));
   for (const windowId of ready) waiting.delete(windowId);
-  await Promise.allSettled(ready.map((windowId) => restoreOne(deps, windowId)));
+  for (const windowId of setUp) {
+    if (!ready.includes(windowId) && !waiting.has(windowId)) restoreBackground(deps, windowId);
+  }
+  await Promise.allSettled(
+    ready.map((windowId) =>
+      restoreOne(deps, windowId).finally(() => restoreBackground(deps, windowId))
+    )
+  );
+}
+
+/** Start bringing back a window's background projects on hosts: one pass per host. */
+function restoreBackground(deps: RemoteWindowRestoreDeps, windowId: number): void {
+  if (backgroundFull.has(windowId)) return;
+  const hosts = new Set(
+    getPendingRemoteBackgroundRestores(windowId).map((key) => parseHostScopedKey(key).hostId)
+  );
+  for (const hostId of hosts) queueBackgroundPass(deps, windowId, hostId);
+}
+
+function queueBackgroundPass(
+  deps: RemoteWindowRestoreDeps,
+  windowId: number,
+  hostId: string,
+  options: { quiet?: boolean } = {}
+): void {
+  const pass = `${windowId}\0${hostId}`;
+  if (backgroundPasses.has(pass)) return;
+  backgroundPasses.add(pass);
+  const run = (hostChains.get(hostId) ?? Promise.resolve())
+    .then(() => restoreOnHost(deps, windowId, hostId, options))
+    .catch((error: unknown) => {
+      console.warn(`[RemoteHosts] Bringing back a window's projects on ${hostId} failed:`, error);
+    })
+    .finally(() => backgroundPasses.delete(pass));
+  hostChains.set(hostId, run);
+  void run.then(() => {
+    if (hostChains.get(hostId) === run) hostChains.delete(hostId);
+  });
+}
+
+/**
+ * Bring back each of a window's waiting projects on `hostId`, in the order the
+ * manifest kept them. A host that can't be reached keeps them all waiting.
+ */
+async function restoreOnHost(
+  deps: RemoteWindowRestoreDeps,
+  windowId: number,
+  hostId: string,
+  { quiet = false }: { quiet?: boolean }
+): Promise<void> {
+  const client = getRemoteService("remoteHostsClient");
+  if (!client) return;
+  const onHost = (key: string) => parseHostScopedKey(key).hostId === hostId;
+  for (const key of getPendingRemoteBackgroundRestores(windowId).filter(onHost)) {
+    const stillWanted = () =>
+      deps.canRestoreInBackground(windowId) &&
+      !backgroundFull.has(windowId) &&
+      getPendingRemoteBackgroundRestores(windowId).includes(key);
+    if (!deps.canRestoreInBackground(windowId) || backgroundFull.has(windowId)) return;
+    if (!stillWanted()) continue;
+    const settled = await client
+      .restoreHostProjectInBackground(windowId, hostId, parseHostScopedKey(key).projectId, {
+        lastUsed: backgroundLastUsed.get(windowId)?.get(key) ?? Date.now(),
+        stillWanted,
+      })
+      .then(
+        (outcome) => ({ outcome }),
+        (error: unknown) => ({ error })
+      );
+    if ("error" in settled) {
+      if (!stillWanted()) continue;
+      // The host can't be reached: this and the rest of its projects wait for it.
+      const code = isAppError(settled.error) ? settled.error.code : null;
+      const windows = backgroundAwaiting.get(hostId) ?? new Set<number>();
+      windows.add(windowId);
+      backgroundAwaiting.set(hostId, windows);
+      watchHost(deps, hostId, code);
+      if (!quiet) {
+        console.warn(
+          `[RemoteHosts] Couldn't bring back a window's projects on ${hostId} yet:`,
+          settled.error
+        );
+      }
+      return;
+    }
+    switch (settled.outcome) {
+      case "deferred":
+        // At the window's warm-view ceiling: what is left comes back next launch,
+        // or when the person opens it.
+        backgroundFull.add(windowId);
+        return;
+      case "host-removed":
+        removePendingRemoteBackgroundRestores(windowId, onHost);
+        deps.onRestored();
+        return;
+      case "cancelled":
+      case "failed":
+        // Kept for the next launch: nothing says it's gone.
+        continue;
+      default:
+        // Back, or nothing to bring back here: either way it's no longer waiting.
+        removePendingRemoteBackgroundRestores(windowId, (pending) => pending === key);
+        deps.onRestored();
+    }
+  }
+}
+
+/** Whether a window still has projects waiting on `hostId` that can come back. */
+function stillAwaitingInBackground(
+  deps: RemoteWindowRestoreDeps,
+  windowId: number,
+  hostId: string
+): boolean {
+  return (
+    deps.canRestoreInBackground(windowId) &&
+    !backgroundFull.has(windowId) &&
+    getPendingRemoteBackgroundRestores(windowId).some(
+      (key) => parseHostScopedKey(key).hostId === hostId
+    ) &&
+    getRemoteService("remoteHostsClient")
+      ?.list()
+      .some((entry) => entry.descriptor.id === hostId) === true
+  );
+}
+
+/** `hostId` connected: bring back what windows had waiting on it. */
+function retryBackground(deps: RemoteWindowRestoreDeps, hostId: string): void {
+  const windows = backgroundAwaiting.get(hostId);
+  if (!windows) return;
+  backgroundAwaiting.delete(hostId);
+  stopRedialIfIdle();
+  for (const windowId of windows) {
+    if (stillAwaitingInBackground(deps, windowId, hostId)) {
+      queueBackgroundPass(deps, windowId, hostId, { quiet: true });
+    }
+  }
 }
 
 async function restoreOne(
@@ -314,6 +546,11 @@ export function resetRemoteWindowRestoreForTests(): void {
   waiting.clear();
   setUp.clear();
   awaitingHost.clear();
+  backgroundAwaiting.clear();
+  hostChains.clear();
+  backgroundPasses.clear();
+  backgroundFull.clear();
+  backgroundLastUsed.clear();
   hostWait.clear();
   if (redialTimer) clearInterval(redialTimer);
   redialTimer = null;

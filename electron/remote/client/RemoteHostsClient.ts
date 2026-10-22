@@ -130,6 +130,19 @@ export interface WindowControl {
   /** Call `onClosed` once when the window closes. */
   watchWindow(windowId: number, onClosed: () => void): void;
   /**
+   * Load `(hostId, projectId)` into the window's cache as a view that is
+   * never shown, as a relaunch brings back a window's background projects.
+   * Nothing the window shows changes, and a project another window has by
+   * then is left to it.
+   */
+  restoreRemoteProjectInBackground?(
+    windowId: number,
+    hostId: HostId,
+    projectId: string,
+    projectPath: string,
+    lastUsed: number
+  ): Promise<HostBackgroundRestoreOutcome>;
+  /**
    * Whether a switch the user asked for may start a renderer at critical
    * memory pressure (#13638): asked before a new window opens (`windowId`
    * null), or before `windowId` loads a project it has no reusable view of.
@@ -203,6 +216,26 @@ export interface RemoteHostsClientOptions {
    */
   isInstalling?: (connection: HostConnection) => boolean;
 }
+
+/**
+ * How bringing back a window's background project on a host ended. Thrown
+ * instead when the host can't be reached, as a switch is.
+ */
+export type HostBackgroundRestoreOutcome =
+  | "restored"
+  | "already-live"
+  /** Another window has a view of it: that window keeps it. */
+  | "owned-elsewhere"
+  /** The host says it has no such project. */
+  | "project-gone"
+  /** The host was removed from this device. */
+  | "host-removed"
+  /** The window is at its warm-view ceiling, or memory pressure pulled it down. */
+  | "deferred"
+  /** No longer wanted, or the host was re-pointed or the window closed meanwhile. */
+  | "cancelled"
+  /** The view didn't load or hydrate. */
+  | "failed";
 
 const DEFAULT_READY_TIMEOUT_MS = 20_000;
 /**
@@ -649,6 +682,65 @@ export class RemoteHostsClient {
   }
 
   /**
+   * Bring one of a host's projects back into `windowId`'s cache, never shown:
+   * how main restores what a window had in the background on a host when the
+   * app last quit (#13932). Dials only this host, and only for a project no
+   * other window has; the window keeps showing what it shows, on the host it
+   * is on. Throws as a switch does when the host can't be reached.
+   */
+  async restoreHostProjectInBackground(
+    windowId: number,
+    hostId: HostId,
+    projectId: string,
+    { lastUsed, stillWanted }: { lastUsed: number; stillWanted?: () => boolean }
+  ): Promise<HostBackgroundRestoreOutcome> {
+    const restore = this.options.windows.restoreRemoteProjectInBackground;
+    if (!restore || isLocalHostId(hostId)) return "cancelled";
+    if (this.options.registry.get(hostId) === null) return "host-removed";
+    if (this.retiring.has(hostId)) return "cancelled";
+    const epoch = this.epochs.get(hostId) ?? 0;
+    // Asked after every wait: the host may be removed or re-pointed meanwhile,
+    // and a lookup begun before then is about the old machine.
+    const stale = (): HostBackgroundRestoreOutcome | null => {
+      if (this.options.registry.get(hostId) === null) return "host-removed";
+      if (this.retiring.has(hostId) || (this.epochs.get(hostId) ?? 0) !== epoch) return "cancelled";
+      return stillWanted?.() === false ? "cancelled" : null;
+    };
+    // A project has one view in the app: one another window has stays there.
+    const ownedElsewhere = () =>
+      (this.options.windows.projectOwner?.(hostId, projectId, windowId) ?? null) !== null;
+    if (ownedElsewhere()) return "owned-elsewhere";
+
+    this.ensureRouter();
+    const connection = this.options.manager.connect(hostId);
+    if (connection.linkState.status === "version-mismatch") throw versionMismatch(hostId);
+    const readiness = await this.whenReady(connection, hostId);
+    const staleReady = stale();
+    if (staleReady) return staleReady;
+    if (readiness !== "ready") throw this.notReady(hostId, connection, readiness);
+
+    let description: Awaited<ReturnType<typeof connection.describeProject>>;
+    try {
+      description = await connection.describeProject(projectId);
+    } catch (error) {
+      const staleFailure = stale();
+      if (staleFailure) return staleFailure;
+      throw unreachableLookup(hostId, error);
+    }
+    const staleLookup = stale();
+    if (staleLookup) return staleLookup;
+    if (!description?.path) return "project-gone";
+    if (ownedElsewhere()) return "owned-elsewhere";
+    // Named as a switch names it, for whenever the view is shown.
+    rememberRemoteWorkspaceTitle(
+      toHostScopedKey(hostId, projectId),
+      description.name || projectId,
+      hostId
+    );
+    return restore(windowId, hostId, projectId, description.path, lastUsed);
+  }
+
+  /**
    * Open a host's project in a new window on that host, the project named by
    * its path there: what a remote view's "open in new window" hands main.
    */
@@ -860,33 +952,12 @@ export class RemoteHostsClient {
       );
       const stale = superseded();
       if (stale || readiness === ABANDONED) return stale ?? { outcome: "superseded", hostId };
-      if (readiness === "version-mismatch") throw versionMismatch(hostId);
-      if (readiness === "host-mode-off") {
-        const descriptor = this.options.registry.get(hostId);
-        throw hostModeOff(descriptor?.name ?? hostId, (descriptor?.lastSeenAt ?? null) !== null);
-      }
-      if (readiness === "stopped-retrying") {
-        // ssh couldn't log in (Host mode off is ruled out above). It won't
-        // change by waiting, and a new window could never show the host either.
-        const link = hostConnection.linkState;
-        throw sshAccessDenied(
-          this.options.registry.get(hostId)?.name ?? hostId,
-          link.status === "unreachable" ? link.detail : null
-        );
-      }
       if (readiness !== "ready") {
         // A new window can show the host's project list while it connects;
         // anything that has to find a project there needs the host's answer.
-        if (projectId !== undefined || !newWindow) {
-          if (hostConnection.restarting) {
-            throw hostRestarting(hostId, this.options.registry.get(hostId)?.name ?? hostId);
-          }
-          throw new AppError({
-            code: "HOST_DISCONNECTED",
-            message: `Host ${hostId} did not connect (${readiness})`,
-            userMessage: "Couldn't reach this host. Check that it is on and try again.",
-          });
-        }
+        // What waiting won't change fails either way.
+        const error = this.notReady(hostId, hostConnection, readiness);
+        if (projectId !== undefined || !newWindow || !isWaitable(readiness)) throw error;
       } else if (projectId === undefined) {
         // Where this window last was on the host first, newest first and past
         // any the host no longer has; the host's memory of this machine is the
@@ -1391,6 +1462,32 @@ export class RemoteHostsClient {
     return windowId === null ? LOCAL_HOST_ID : this.options.bindings.get(windowId);
   }
 
+  /** Why a host that didn't come up can't be used yet. */
+  private notReady(
+    hostId: HostId,
+    connection: Pick<ReturnType<RemoteHostManager["connect"]>, "linkState" | "restarting">,
+    readiness: Exclude<HostReadiness, "ready">
+  ): AppError {
+    const descriptor = this.options.registry.get(hostId);
+    const name = descriptor?.name ?? hostId;
+    if (readiness === "version-mismatch") return versionMismatch(hostId);
+    if (readiness === "host-mode-off") {
+      return hostModeOff(name, (descriptor?.lastSeenAt ?? null) !== null);
+    }
+    if (readiness === "stopped-retrying") {
+      // ssh couldn't log in (Host mode off is ruled out above). It won't
+      // change by waiting, and a new window could never show the host either.
+      const link = connection.linkState;
+      return sshAccessDenied(name, link.status === "unreachable" ? link.detail : null);
+    }
+    if (connection.restarting) return hostRestarting(hostId, name);
+    return new AppError({
+      code: "HOST_DISCONNECTED",
+      message: `Host ${hostId} did not connect (${readiness})`,
+      userMessage: "Couldn't reach this host. Check that it is on and try again.",
+    });
+  }
+
   private ensureRouter(): void {
     if (this.routerInstalled) return;
     this.routerInstalled = true;
@@ -1435,6 +1532,15 @@ export class RemoteHostsClient {
     const windowId = this.windowOf(ctx);
     return windowId === null ? LOCAL_HOST_ID : this.options.bindings.get(windowId);
   }
+}
+
+/** A host that didn't come up in time, which a later wait may still find. */
+function isWaitable(readiness: HostReadiness): boolean {
+  return (
+    readiness !== "version-mismatch" &&
+    readiness !== "host-mode-off" &&
+    readiness !== "stopped-retrying"
+  );
 }
 
 /** A lookup on the host that couldn't get an answer: the host being unreachable, not the project gone. */

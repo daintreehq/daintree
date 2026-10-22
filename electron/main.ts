@@ -1343,6 +1343,17 @@ if (!gotTheLock) {
                 if (hasPendingOpen(windowId)) return false;
                 return (ctx.services.projectViewManager?.getActiveProjectId() ?? null) === null;
               },
+              canRestoreInBackground: (windowId) => {
+                const ctx = windowRegistry.getByWindowId(windowId);
+                const pvm = ctx?.services.projectViewManager;
+                return (
+                  ctx !== undefined &&
+                  !ctx.browserWindow.isDestroyed() &&
+                  pvm !== undefined &&
+                  !pvm.disposed &&
+                  getActiveShutdown() === null
+                );
+              },
               viewOf: (windowId) => {
                 const ctx = windowRegistry.getByWindowId(windowId);
                 if (!ctx || ctx.browserWindow.isDestroyed()) return null;
