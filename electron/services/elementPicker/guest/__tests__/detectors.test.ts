@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { h, render } from "preact";
 import { afterEach, describe, expect, it } from "vitest";
 import { z } from "zod";
 import {
@@ -122,6 +123,23 @@ describe("detectExpandos", () => {
     const set = new DetectionSet();
     detectExpandos(document.createElement("div"), set);
     expect(set.size).toBe(0);
+  });
+
+  it("finds Preact on the container it rendered into, the only node that carries its tree", () => {
+    const container = document.createElement("div");
+    render(h("p", null, "rendered"), container);
+    try {
+      const atContainer = new DetectionSet();
+      detectExpandos(container, atContainer);
+      expect(atContainer.toArray()).toEqual([
+        { framework: "preact", signals: [{ via: "expando", name: "__k" }] },
+      ]);
+      const atRendered = new DetectionSet();
+      detectExpandos(container.querySelector("p")!, atRendered);
+      expect(atRendered.size).toBe(0);
+    } finally {
+      render(null, container);
+    }
   });
 });
 

@@ -1080,7 +1080,10 @@ export function createPicker(host: PickerHost): PickerHandle {
 
   /**
    * Alt+ArrowUp: widen to the next component out that the page can name and
-   * place, as that invocation's rendered roots — not every copy a line drew.
+   * its framework can find the roots of, as that invocation's rendered roots —
+   * not every copy a line drew. Whether the page also placed it in source is a
+   * separate observation: a Preact app without a jsx-source transform still
+   * names its components and still knows what each one rendered.
    */
   function widen(): void {
     const anchor = primary();
@@ -1090,9 +1093,7 @@ export function createPicker(host: PickerHost): PickerHandle {
     const current = chain.components.findIndex((record) => record.componentId === scoped);
     for (let at = current + 1; at < chain.components.length; at += 1) {
       const record = chain.components[at];
-      if (record === undefined || record.name === null || record.sourceCandidates.length === 0) {
-        continue;
-      }
+      if (record === undefined || record.name === null) continue;
       const found = locate(framework, { kind: "roots", componentId: record.componentId }, anchor);
       if (found === null || found.elements.length === 0) continue;
       commit(

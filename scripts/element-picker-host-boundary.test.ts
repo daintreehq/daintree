@@ -84,6 +84,7 @@ const isHostProcessCode = (file: string) =>
 const isSourceMapDecoder = (file: string) =>
   file.includes("node_modules/@jridgewell/trace-mapping/");
 const isJsParser = (file: string) => file.includes("node_modules/@babel/parser/");
+const isJsxParser = (file: string) => file.includes("node_modules/@lezer/");
 
 describe("the Element Picker host boundary", () => {
   it("keeps the host process's code out of main, eagerly or lazily", async () => {
@@ -198,6 +199,19 @@ describe("the Element Picker host boundary", () => {
     const metafile = await metafileOf(entry, NATIVE_EXTERNAL);
     const reachable = Object.keys(metafile.inputs);
     expect(reachable).toContain(`${RESOLVERS_DIR}astroSource.ts`);
+    expect(scanForbiddenModules(reachable)).toEqual([]);
+    expect(authorityImports(metafile)).toEqual([]);
+    expect(
+      reachable.filter((file) => file.startsWith("electron/") && !file.startsWith(HOST_DIR))
+    ).toEqual([]);
+  }, 60_000);
+
+  it("holds Preact's resolver, which the registry does not list yet either, to the same rule", async () => {
+    // Its parser comes with it, to load when the registry first asks for it once #13888 lists it.
+    const entry = `${RESOLVERS_DIR}preact.ts`;
+    const metafile = await metafileOf(entry, NATIVE_EXTERNAL);
+    const reachable = Object.keys(metafile.inputs);
+    expect(reachable.some(isJsxParser)).toBe(true);
     expect(scanForbiddenModules(reachable)).toEqual([]);
     expect(authorityImports(metafile)).toEqual([]);
     expect(
