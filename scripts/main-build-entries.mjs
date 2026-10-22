@@ -28,6 +28,10 @@ export const MAIN_STATIC_ESM_ENTRIES = [
   // utilityProcess by openaiVadProcess (#12577); needs its own entry so
   // esbuild emits a standalone bundle at the resolved path.
   "electron/services/voice/openaiVadWorker.ts",
+  // Element Picker source host (#13871): forked as a utilityProcess on the
+  // first resolve and retired when idle, so resolvers never load in main.
+  "electron/services/elementPicker/host-bootstrap.ts",
+  "electron/services/elementPicker/host.ts",
   // Multi-threading workers: per-terminal analysis (headless xterm +
   // activity detection) inside pty-host, SQLite maintenance off the main
   // event loop, and copytree generation inside workspace-host. Each is
