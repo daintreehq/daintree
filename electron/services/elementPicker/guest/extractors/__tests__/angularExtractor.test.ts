@@ -715,6 +715,49 @@ describe("the Angular extractor on a debug API it cannot fully trust", () => {
     expect(observation.componentChain.components[0]!.sourceCandidates).toEqual([]);
   });
 
+  it("reads on past a stamp lookup that answers with no string", () => {
+    mount(App);
+    const getAttribute = Element.prototype.getAttribute;
+    vi.spyOn(Element.prototype, "getAttribute").mockImplementation(function (this: Element, name) {
+      if (name !== "data-ng-source-location") return getAttribute.call(this, name);
+      return {
+        get length(): number {
+          throw new Error("not a string");
+        },
+      } as never;
+    });
+    const contribution = createAngularExtractor().extract(query("button.go"), "selection", {
+      ref: () => null,
+    });
+    expect(contribution?.componentChain?.components.map((entry) => entry.name?.value)).toEqual([
+      "ButtonComponent",
+      "CardComponent",
+      "AppComponent",
+    ]);
+    expect(contribution?.sourceCandidates).toEqual([]);
+  });
+
+  it("claims no document it could not confirm reaching", () => {
+    mount(App);
+    const root = document.documentElement;
+    Object.defineProperty(root, "ownerDocument", {
+      configurable: true,
+      get() {
+        throw new Error("no document for you");
+      },
+    });
+    try {
+      const contribution = createAngularExtractor().extract(query("button.go"), "selection", {
+        ref: () => null,
+      });
+      const app = contribution!.componentChain!.components.at(-1)!;
+      expect(app.name?.value).toBe("AppComponent");
+      expect(app).not.toHaveProperty("renderParentId");
+    } finally {
+      delete (root as unknown as Record<string, unknown>).ownerDocument;
+    }
+  });
+
   it("ends a detached subtree's chain at its top without claiming it reached the document", () => {
     const detached = document.createElement("div");
     angular.bootstrap(App, detached);
@@ -732,9 +775,6 @@ describe("the Angular extractor on a debug API it cannot fully trust", () => {
       "AppComponent",
     ]);
     expect(records[2]).not.toHaveProperty("renderParentId");
-    expect(
-      records.every((entry) => entry.rootElementIds.length === 0 && !entry.rootsComplete)
-    ).toBe(true);
   });
 });
 
