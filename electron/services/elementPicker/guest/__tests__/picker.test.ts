@@ -539,6 +539,161 @@ describe("createPicker", () => {
     });
   });
 
+  describe("with several frameworks answering", () => {
+    const evidence = (framework: string, note: string) => ({
+      kind: "generic",
+      framework,
+      fields: [{ name: "note", value: note }],
+    });
+    const capabilitiesWith = (names: "available" | "unknown") => ({
+      names: { state: names },
+      chain: { state: "unknown" },
+      componentSelection: { state: "unknown" },
+      file: { state: "unknown" },
+      line: { state: "unknown" },
+      exactRange: { state: "unknown" },
+    });
+
+    function answerWith(contributions: Array<{ framework: string; data: unknown }>): void {
+      document.addEventListener(
+        channelEvent(CHANNEL, "extract"),
+        (event) => {
+          const { id } = JSON.parse((event as CustomEvent<string>).detail) as { id: number };
+          document.dispatchEvent(
+            new CustomEvent(channelEvent(CHANNEL, "extracted"), {
+              detail: JSON.stringify({ id, contributions }),
+            })
+          );
+        },
+        { capture: true, signal: testListeners.signal }
+      );
+    }
+
+    function selected() {
+      start();
+      document.getElementById("first")!.click();
+      return ofType("selectionChanged")[0]!.observations[0]!;
+    }
+
+    it("lets the best-ranked describing answer describe, and gathers every framework's evidence", () => {
+      const direct = { ...capabilitiesWith("available"), line: { state: "available" } };
+      answerWith([
+        { framework: "vue", data: { frameworkEvidence: [evidence("vue", "around")] } },
+        {
+          framework: "react",
+          data: {
+            ownership: "fallback",
+            capabilities: capabilitiesWith("unknown"),
+            frameworkEvidence: [evidence("react", "fallback")],
+          },
+        },
+        {
+          framework: "svelte",
+          data: {
+            capabilities: capabilitiesWith("available"),
+            frameworkEvidence: [evidence("svelte", "unmarked")],
+          },
+        },
+        {
+          framework: "astro",
+          data: {
+            ownership: "direct",
+            capabilities: direct,
+            frameworkEvidence: [evidence("astro", "direct")],
+          },
+        },
+      ]);
+      const observation = selected();
+      expect(observation.capabilities).toEqual(direct);
+      expect(
+        observation.frameworkEvidence.map((entry) =>
+          entry.kind === "generic" ? entry.framework : entry.kind
+        )
+      ).toEqual(["astro", "vue", "react", "svelte"]);
+    });
+
+    it("never lets evidence alone describe the element", () => {
+      answerWith([
+        { framework: "astro", data: { frameworkEvidence: [evidence("astro", "island")] } },
+        { framework: "svelte", data: { ownership: "direct", frameworkEvidence: [] } },
+      ]);
+      const observation = selected();
+      expect(observation.capabilities.names).toEqual({ state: "unknown" });
+      expect(observation.frameworkEvidence).toEqual([evidence("astro", "island")]);
+    });
+
+    const rankings: Array<{
+      ownerships: [string | undefined, string | undefined];
+      describedBy: "first" | "second";
+    }> = [
+      // Equal to unmarked: the first installed of the two describes.
+      { ownerships: ["constructor", undefined], describedBy: "first" },
+      { ownerships: [undefined, "constructor"], describedBy: "first" },
+      // Above fallback, wherever it sits.
+      { ownerships: ["fallback", "constructor"], describedBy: "second" },
+    ];
+    it.each(rankings)(
+      "ranks an ownership it does not know as unmarked: $ownerships",
+      ({ ownerships, describedBy }) => {
+        answerWith(
+          ownerships.map((ownership, index) => ({
+            framework: index === 0 ? "react" : "vue",
+            data: {
+              ...(ownership === undefined ? {} : { ownership }),
+              capabilities: capabilitiesWith(index === 0 ? "available" : "unknown"),
+            },
+          }))
+        );
+        expect(selected().capabilities.names).toEqual({
+          state: describedBy === "first" ? "available" : "unknown",
+        });
+      }
+    );
+
+    it("drops evidence the host would refuse, keeping the rest and the description", () => {
+      answerWith([
+        {
+          framework: "react",
+          data: {
+            capabilities: capabilitiesWith("available"),
+            frameworkEvidence: [
+              null,
+              {},
+              { kind: "generic", framework: "react", fields: [], extra: 1 },
+            ],
+          },
+        },
+        {
+          framework: "astro",
+          data: {
+            frameworkEvidence: [
+              { kind: "generic", framework: "astro", fields: [{ name: "", value: "x" }] },
+              { kind: "generic", framework: "qwik", fields: [] },
+              // Only the describing framework sends its own variant.
+              { kind: "svelte", ancestry: [{}], sameLocCount: 0, unmapped: false },
+              evidence("astro", "kept"),
+            ],
+          },
+        },
+      ]);
+      // The schema check in `post` is the assertion that what is left is admissible.
+      const observation = selected();
+      expect(observation.capabilities.names).toEqual({ state: "available" });
+      expect(observation.frameworkEvidence).toEqual([evidence("astro", "kept")]);
+    });
+
+    it("gathers evidence only up to what the host admits", () => {
+      const many = (framework: string) =>
+        Array.from({ length: 5 }, (_, index) => evidence(framework, String(index)));
+      answerWith([
+        { framework: "react", data: { frameworkEvidence: many("react") } },
+        { framework: "astro", data: { frameworkEvidence: many("astro") } },
+      ]);
+      // The schema check in `post` holds the total to the wire's limit.
+      expect(selected().frameworkEvidence).toHaveLength(8);
+    });
+  });
+
   it("describes the selection again when the host asks, and reports one the document removed", () => {
     const handle = start();
     const target = document.getElementById("first")!;
@@ -657,6 +812,42 @@ describe("the bridge's element exchanges", () => {
     // A plain walk selects what it reaches; only a pick is stood in for.
     press("ArrowDown");
     expect(selectedTag()).toBe("a");
+  });
+
+  it("gathers evidence only from frameworks that saw the element a pick stands for", () => {
+    const first = document.getElementById("first")!;
+    const list = document.getElementById("list")!;
+    let standIn: Element = first;
+    const note = (framework: "react" | "astro") => ({
+      kind: "generic" as const,
+      framework,
+      fields: [{ name: "saw", value: framework }],
+    });
+    installReact({
+      extract: () => ({}),
+      pick: () => ({ target: standIn, data: { frameworkEvidence: [note("react")] } }),
+    });
+    installExtractor(
+      { channel: CHANNEL, framework: "astro", installed: false },
+      { extract: () => ({ frameworkEvidence: [note("astro")] }) }
+    );
+    const handle = start();
+    const gathered = () =>
+      ofType("selectionChanged")
+        .at(-1)
+        ?.observations[0]?.frameworkEvidence.map((entry) =>
+          entry.kind === "generic" ? entry.framework : entry.kind
+        );
+
+    first.click();
+    expect(selectedTag()).toBe("a");
+    expect(gathered()).toEqual(["react", "astro"]);
+
+    // React's pick now stands for the list; Astro only looked at the hit.
+    standIn = list;
+    handle.refresh();
+    expect(selectedTag()).toBe("section");
+    expect(gathered()).toEqual(["react"]);
   });
 
   it("stays on the hit when page code claims a pick's token for another node", () => {

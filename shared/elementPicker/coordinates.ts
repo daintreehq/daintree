@@ -16,6 +16,8 @@ export const COORDINATE_CONVENTIONS = {
   svelteMeta: { lineBase: 1, columnBase: 0 },
   v8StackFrame: { lineBase: 1, columnBase: 1 },
   sourceMap: { lineBase: 1, columnBase: 0 },
+  /** `data-astro-source-loc`, as Astro's compiler writes it. */
+  astroSourceLoc: { lineBase: 1, columnBase: 1 },
 } as const;
 
 /** Far past any real file; it exists so a page cannot hand the host an unbounded number. */

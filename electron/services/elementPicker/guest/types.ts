@@ -12,17 +12,33 @@ import type { SourceCandidate } from "../../../../shared/elementPicker/source.js
 export type PickerMode = "browse" | "select";
 
 /**
+ * How firmly an extractor claims the element it describes. `direct` is the
+ * framework's own stamp on the element itself (an Astro source attribute, the
+ * content of an Astro slot); `fallback` is a description given only for want
+ * of a better one. Unmarked sits between them.
+ */
+export type ExtractorOwnership = "direct" | "fallback";
+
+/**
  * What one framework's extractor adds to an observation. Every field is
  * optional: an extractor that can name a component but not place it leaves
- * the candidates out rather than inventing them. The bootstrap takes the first
- * contribution that arrives, whole, so ids within it only need to be unique
- * among themselves.
+ * the candidates out rather than inventing them.
+ *
+ * One contribution describes the element, whole: the bootstrap takes its
+ * chain, candidates and capabilities from the highest-ranked one that has any,
+ * the first of equals in install order, so ids within it only need to be
+ * unique among themselves. Evidence is the exception, and comes from every
+ * contribution about the same element (a pick another framework moved
+ * elsewhere is not): a framework can say what surrounds the element (the
+ * island a React tree hydrates in) without describing it, by sending evidence
+ * alone.
  */
 export interface ExtractorContribution {
   componentChain?: ComponentChain;
   sourceCandidates?: SourceCandidate[];
   frameworkEvidence?: FrameworkEvidence[];
   capabilities?: Capabilities;
+  ownership?: ExtractorOwnership;
 }
 
 /** The half of the host prelude's `api` the bootstrap reads or replaces. */
