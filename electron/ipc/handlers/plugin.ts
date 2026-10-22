@@ -158,6 +158,7 @@ import {
 import { observeIpcEnvelopeRejections } from "../envelopeRejections.js";
 import { getIpcDispatcher } from "../dispatcher.js";
 import { isRemoteEndpointHandle } from "../endpoint.js";
+import { panelLifecycleSourceFor } from "./pluginPanelLifecycleSource.js";
 import { getLocalEndpoint } from "../localEndpoint.js";
 import { LOCAL_HOST_ID } from "../../../shared/types/remoteHosts.js";
 import {
@@ -1184,7 +1185,7 @@ async function handleReportPanelLifecycle(
   (await getPluginService()).ingestPanelLifecycleEvents(
     ctx.webContentsId,
     events,
-    ctx.event?.sender
+    panelLifecycleSourceFor(ctx)
   );
 }
 
@@ -1197,7 +1198,7 @@ async function handleReportPanelInventory(
   (await getPluginService()).ingestPanelInventory(
     ctx.webContentsId,
     nonPluginPanelIds,
-    ctx.event?.sender
+    panelLifecycleSourceFor(ctx)
   );
 }
 
