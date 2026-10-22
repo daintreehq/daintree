@@ -18,12 +18,14 @@ vi.mock("../../lifecycle/shutdownCoordinator.js", () => ({
 }));
 
 import {
+  addPendingRemoteBackgroundRestores,
   buildOpenWindowRecords,
   clearPendingBackgroundRestores,
   clearPendingRemoteRestoresForHost,
   enableOpenWindowsSaves,
   freezeAndSnapshotOpenWindows,
   initOpenWindowsTracker,
+  removePendingRemoteBackgroundRestores,
   resetOpenWindowsTrackerForTests,
   resumeOpenWindowsSaves,
   saveOpenWindowsNow,
@@ -33,6 +35,7 @@ import {
   suppressOpenWindowsSaves,
 } from "../openWindowsTracker.js";
 import {
+  MAX_BACKGROUND_HOST_PROJECTS_PER_WINDOW,
   MAX_BACKGROUND_PROJECTS_PER_WINDOW,
   MAX_RESTORED_WINDOWS,
 } from "../../services/persistence/windowManifest.js";
@@ -653,5 +656,127 @@ describe("background project capture (#12320)", () => {
     });
     saveOpenWindowsNow();
     expect(lastWritten()[0].backgroundProjectIds).toEqual(["warm"]);
+  });
+});
+
+describe("background host projects (#13932)", () => {
+  const host = (hostId: string, ch = "9") => `${hostId}:${ch.repeat(64)}`;
+
+  it("keeps all of a window's local projects beside its host ones", () => {
+    // The host views are the most recent: under one shared cap they used to
+    // push out local projects that would have come back.
+    const local: Array<[string, number]> = Array.from(
+      { length: MAX_BACKGROUND_PROJECTS_PER_WINDOW },
+      (_v, i) => [`p${i}`, 100 - i]
+    );
+    const remote: Array<[string, number]> = [
+      [host("studio-01"), 300],
+      [host("studio-02"), 200],
+    ];
+    const registry = makeRegistry([{ windowId: 1, projectId: "a", views: [...remote, ...local] }]);
+    expect(buildOpenWindowRecords(registry)[0].backgroundProjectIds).toEqual([
+      ...local.map(([id]) => id),
+      host("studio-01"),
+      host("studio-02"),
+    ]);
+  });
+
+  it.each([
+    ["first", [1, 2]],
+    ["second", [2, 1]],
+  ])(
+    "leaves a waiting host project to the window holding its view, focused %s",
+    (_label, order) => {
+      // Window 1 never got to it; the person opened it in window 2 meanwhile.
+      const wins: Record<number, FakeWindow> = {
+        1: { windowId: 1, projectId: "a" },
+        2: { windowId: 2, projectId: "b", views: [[host("studio-01"), 10]] },
+      };
+      addPendingRemoteBackgroundRestores(1, [host("studio-01")]);
+      const records = buildOpenWindowRecords(makeRegistry(order.map((id) => wins[id]!)));
+      expect(records.find((r) => r.projectId === "a")).toEqual({ projectId: "a" });
+      expect(records.find((r) => r.projectId === "b")).toEqual({
+        projectId: "b",
+        backgroundProjectIds: [host("studio-01")],
+      });
+    }
+  );
+
+  it("keeps naming a window's waiting host projects until each is let go", () => {
+    const registry = makeRegistry([{ windowId: 1, projectId: "a", views: [["warm", 10]] }]);
+    addPendingRemoteBackgroundRestores(1, [host("studio-01"), host("studio-02")]);
+    addPendingRemoteBackgroundRestores(1, [host("studio-01")]);
+    expect(buildOpenWindowRecords(registry)[0].backgroundProjectIds).toEqual([
+      "warm",
+      host("studio-01"),
+      host("studio-02"),
+    ]);
+    removePendingRemoteBackgroundRestores(1, (key) => key === host("studio-01"));
+    expect(buildOpenWindowRecords(registry)[0].backgroundProjectIds).toEqual([
+      "warm",
+      host("studio-02"),
+    ]);
+  });
+
+  it.each([
+    ["first", [1, 2]],
+    ["second", [2, 1]],
+  ])("keeps a waiting host project another window's cap left out, focused %s", (_label, order) => {
+    const over = MAX_BACKGROUND_HOST_PROJECTS_PER_WINDOW + 1;
+    const views: Array<[string, number]> = Array.from({ length: over }, (_v, i) => [
+      host(`studio-${i}`),
+      100 - i,
+    ]);
+    const oldest = views[over - 1]![0];
+    const wins: Record<number, FakeWindow> = {
+      1: { windowId: 1, projectId: "a" },
+      2: { windowId: 2, projectId: "b", views },
+    };
+    addPendingRemoteBackgroundRestores(1, [oldest]);
+    const records = buildOpenWindowRecords(makeRegistry(order.map((id) => wins[id]!)));
+    expect(records.find((r) => r.projectId === "a")).toEqual({
+      projectId: "a",
+      backgroundProjectIds: [oldest],
+    });
+    expect(records.find((r) => r.projectId === "b")?.backgroundProjectIds).toEqual(
+      views.slice(0, MAX_BACKGROUND_HOST_PROJECTS_PER_WINDOW).map(([id]) => id)
+    );
+  });
+
+  it("never names a waiting host project twice once its view is back", () => {
+    const registry = makeRegistry([
+      { windowId: 1, projectId: "a", views: [[host("studio-01"), 10]] },
+    ]);
+    addPendingRemoteBackgroundRestores(1, [host("studio-01")]);
+    expect(buildOpenWindowRecords(registry)[0].backgroundProjectIds).toEqual([host("studio-01")]);
+  });
+
+  it("stops naming a removed host's background projects, and only that host's", () => {
+    const registry = makeRegistry([
+      { windowId: 1, projectId: "a" },
+      { windowId: 2, projectId: "b" },
+    ]);
+    addPendingRemoteBackgroundRestores(1, [host("studio-01"), host("studio-02")]);
+    addPendingRemoteBackgroundRestores(2, [host("studio-01", "8")]);
+    clearPendingRemoteRestoresForHost("studio-01");
+    expect(buildOpenWindowRecords(registry)).toEqual([
+      { projectId: "a", backgroundProjectIds: [host("studio-02")] },
+      { projectId: "b" },
+    ]);
+  });
+
+  it("keeps waiting host projects in the quit's snapshot, while the local queue's go", () => {
+    // A host that stayed unreachable all session still holds those projects
+    // for the next launch; the local queue's unfinished work does not.
+    initOpenWindowsTracker({
+      registry: makeRegistry([{ windowId: 1, projectId: "a" }]),
+      readOnly: false,
+    });
+    setPendingBackgroundRestores(1, ["queued"]);
+    addPendingRemoteBackgroundRestores(1, [host("studio-01")]);
+    clearPendingBackgroundRestores(1);
+    getActiveShutdown.mockReturnValue({ initiator: "app-quit", phase: "cleaning" });
+    freezeAndSnapshotOpenWindows();
+    expect(lastWritten()).toEqual([{ projectId: "a", backgroundProjectIds: [host("studio-01")] }]);
   });
 });

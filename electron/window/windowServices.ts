@@ -34,6 +34,7 @@ import { logError, logInfo, logWarn } from "../utils/logger.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 import { resolveRestoreWorkspace, resolveWorktreeLoadPath } from "./restoreWorkspaceBinding.js";
 import { enqueueBackgroundRestores } from "../lifecycle/projectRestore.js";
+import { takeHostBackgroundRestores } from "./remoteWindowRestore.js";
 import { checkKernelPressureCritical } from "../services/SystemMemoryPressureMonitor.js";
 import { extractRestorePanelCwds } from "./restorePanelCwds.js";
 import { mergeProjectEnv } from "./restoreProjectEnv.js";
@@ -961,7 +962,8 @@ export async function setupWindowServices(
 /**
  * Queue a window's background projects (#12320). Shared by window setup and by
  * a single-crash fleet restore handing the recovery window the projects its
- * saved record carried (#12801).
+ * saved record carried (#12801). Those on hosts wait for their hosts instead
+ * (#13932).
  */
 export function queueWindowBackgroundProjects(opts: {
   windowId: number;
@@ -973,7 +975,7 @@ export function queueWindowBackgroundProjects(opts: {
   enqueueBackgroundRestores({
     windowId: opts.windowId,
     getManager: opts.getManager,
-    projectIds: [...opts.projectIds],
+    projectIds: takeHostBackgroundRestores(opts.windowId, opts.projectIds),
     resolveWorkspacePath: (projectId) => {
       const workspacePath =
         resolveRestoreWorkspace(projectId, {

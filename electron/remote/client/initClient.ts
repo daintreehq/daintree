@@ -43,6 +43,7 @@ import {
 } from "../../window/projectOwnership.js";
 import { hasPendingActivation } from "../../window/projectActivationClaims.js";
 import { confirmColdOpenAtMemoryPressure } from "../../services/projectOpenMemoryPressure.js";
+import { checkKernelPressureCritical } from "../../services/SystemMemoryPressureMonitor.js";
 import { activateScratchInWindow } from "../../ipc/handlers/scratch/activation.js";
 import {
   getPtyClient,
@@ -404,6 +405,27 @@ function createWindowControl(hooks: RemoteHostsClientHooks): WindowControl {
         const wc = view.webContents;
         if (wc && !wc.isDestroyed()) hooks.onLocalViewActivated?.(windowId, wc);
       });
+    },
+    async restoreRemoteProjectInBackground(
+      windowId,
+      hostId,
+      projectId,
+      projectPath,
+      { lastUsed, stillWanted }
+    ) {
+      // First, as the local restore queue does: the kernel pressure reading
+      // its admission works from may hold nothing yet at startup (#13530).
+      await checkKernelPressureCritical();
+      const pvm = getWindowRegistry()?.getByWindowId(windowId)?.services.projectViewManager;
+      // A quit, or the host removed or re-pointed, while the reading was taken.
+      if (!pvm || pvm.disposed || !stillWanted()) return "cancelled";
+      const key = toHostScopedKey(hostId, projectId);
+      // Asked again after the reading, in the same tick the view is registered.
+      if (otherOwnerOf(key, windowId)) return "owned-elsewhere";
+      // Never on this window's switch turn: a background boot runs for tens of
+      // seconds, and the view manager reconciles a switch to it that lands meanwhile.
+      const result = await pvm.restoreInBackground(key, projectPath, { lastUsed });
+      return result.status === "skipped" ? result.reason : result.status;
     },
     lastLocalProjectId,
     recentProjectsOnHost,
