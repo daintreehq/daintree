@@ -25,6 +25,7 @@ import {
   SIDEBAR_VIEW_PRIORITY_MIN,
 } from "../../shared/types/plugin.js";
 import { isBuiltInAgentId } from "../../shared/config/agentIds.js";
+import { PLUGIN_ACTION_CATEGORY_MAX_LENGTH } from "../../shared/config/actionCategories.js";
 import { MAX_TERMINALS_PER_RECIPE } from "../../shared/utils/recipeSanitizer.js";
 import {
   PROMPT_TEMPLATE_ARG_NAME_PATTERN,
@@ -354,10 +355,12 @@ export const CommandContributionSchema = z
     id: z.string().min(1).max(64).regex(SAFE_ID_PATTERN),
     title: z.string().min(1),
     description: z.string(),
-    category: z.string().min(1),
+    category: z.string().min(1).max(PLUGIN_ACTION_CATEGORY_MAX_LENGTH),
     kind: z.enum(["command", "query"]),
     danger: z.enum(["safe", "confirm"]),
     keywords: z.array(z.string().min(1)).optional(),
+    when: z.string().min(1).optional(),
+    enablement: z.string().min(1).optional(),
     inputSchema: z.record(z.string(), z.unknown()).optional(),
     // Per-action capability intent (#11299). Deliberately NOT `.min(1)`: an
     // empty array is the meaningful "this command exercises no capability"

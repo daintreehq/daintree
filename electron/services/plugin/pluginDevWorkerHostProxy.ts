@@ -869,6 +869,8 @@ export class PluginDevWorkerHostProxy {
               kind: descriptor.kind,
               danger: descriptor.danger,
               keywords: descriptor.keywords,
+              when: descriptor.when,
+              enablement: descriptor.enablement,
               inputSchema: descriptor.inputSchema,
               requires: descriptor.requires,
             },

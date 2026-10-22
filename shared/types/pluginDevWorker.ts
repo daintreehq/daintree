@@ -381,6 +381,8 @@ export interface RegisterActionParams {
     kind: "command" | "query";
     danger: "safe" | "confirm";
     keywords?: string[];
+    when?: string;
+    enablement?: string;
     inputSchema?: Record<string, unknown>;
     /**
      * Per-action capability intent (#11299). Must cross the port explicitly:

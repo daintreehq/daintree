@@ -169,6 +169,12 @@ import {
   PluginPanelLifecycleBroker,
   type PanelLifecycleSourceHandle,
 } from "./plugin/PluginPanelLifecycleBroker.js";
+import {
+  PLUGIN_ACTION_CATEGORY_MAX_LENGTH,
+  isReservedActionCategory,
+  normalizePluginActionCategory,
+} from "../../shared/config/actionCategories.js";
+import { parse as parseWhenClause } from "../../shared/utils/whenClause/index.js";
 import { PLUGIN_VIEW_GENERATION_PREFIX } from "../../shared/utils/pluginViewUrl.js";
 import { onWebContentsDestroyed } from "../window/webContentsDestroyed.js";
 import { PluginRendererDispatcher } from "./plugin/PluginRendererDispatcher.js";
@@ -7897,9 +7903,24 @@ export class PluginService {
     if (typeof description !== "string") {
       throw new Error(`Plugin action "${id}" must have a string description`);
     }
-    if (typeof category !== "string" || !category.trim()) {
+    if (typeof category !== "string" || !normalizePluginActionCategory(category)) {
       throw new Error(`Plugin action "${id}" must have a non-empty category`);
     }
+    // The category is a sub-label inside the plugin's own palette group, so a
+    // built-in id would pass for that built-in group's name.
+    const normalizedCategory = normalizePluginActionCategory(category);
+    if (normalizedCategory.length > PLUGIN_ACTION_CATEGORY_MAX_LENGTH) {
+      throw new Error(
+        `Plugin action "${id}" category is longer than ${PLUGIN_ACTION_CATEGORY_MAX_LENGTH} characters`
+      );
+    }
+    if (isReservedActionCategory(normalizedCategory)) {
+      throw new Error(
+        `Plugin action "${id}" category "${normalizedCategory}" is reserved for a built-in group. Pick your own label.`
+      );
+    }
+    const when = this.validateActionClause(id, "when", contribution.when);
+    const enablement = this.validateActionClause(id, "enablement", contribution.enablement);
     if (!PLUGIN_ACTION_KINDS.has(kind as string)) {
       throw new Error(`Plugin action "${id}" has invalid kind "${kind}"`);
     }
@@ -7946,10 +7967,12 @@ export class PluginService {
       id,
       title,
       description,
-      category,
+      category: normalizedCategory,
       kind,
       danger,
       effectiveDanger,
+      when,
+      enablement,
       keywords: Array.isArray(contribution.keywords) ? [...contribution.keywords] : undefined,
       inputSchema:
         contribution.inputSchema && typeof contribution.inputSchema === "object"
@@ -7957,6 +7980,31 @@ export class PluginService {
           : undefined,
       requires,
     };
+  }
+
+  /**
+   * Validate a command's optional `when` / `enablement` clause. Refused rather
+   * than dropped: a clause that never parses would otherwise hide (or grey out)
+   * the command for good with nothing pointing at the typo.
+   */
+  private validateActionClause(
+    actionId: string,
+    field: "when" | "enablement",
+    raw: unknown
+  ): string | undefined {
+    if (raw === undefined) return undefined;
+    if (typeof raw !== "string" || !raw.trim()) {
+      throw new Error(`Plugin action "${actionId}" has an empty or non-string "${field}" clause`);
+    }
+    try {
+      parseWhenClause(raw);
+    } catch (err) {
+      throw new Error(
+        `Plugin action "${actionId}" has an invalid "${field}" clause: ${formatErrorMessage(err, "could not parse")}`,
+        { cause: err }
+      );
+    }
+    return raw;
   }
 
   /**

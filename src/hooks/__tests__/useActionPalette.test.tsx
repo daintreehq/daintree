@@ -53,6 +53,11 @@ import { useActionPrefsStore } from "@/store/actionPrefsStore";
 import { useActionPalette } from "../useActionPalette";
 import { getActionCategoryLabel, orderActionCategories } from "@/config/actionCategoryOrder";
 import { ConfirmationStagedError } from "@/services/actions/confirmationStaged";
+import { publishPluginPaletteGates } from "@/services/plugin/pluginPaletteGating";
+import {
+  _resetPluginContextKeyStoreForTest,
+  usePluginContextKeyStore,
+} from "@/store/pluginContextKeyStore";
 
 function makeEntry(
   id: string,
@@ -1526,6 +1531,99 @@ describe("useActionPalette", () => {
       expect(result.current.results[0]!.id).toBe("terminal.saveOutput");
     });
   });
+  describe("plugin command metadata", () => {
+    const pluginCmd = (id: string, title: string, category = "worktree") => ({
+      ...makeEntry(id, title, true, category),
+      pluginId: "acme",
+    });
+
+    async function openWith(entries: unknown[]) {
+      listMock.mockReturnValue(entries);
+      const hook = renderHook(() => useActionPalette());
+      act(() => hook.result.current.open());
+      await waitFor(() => expect(hook.result.current.results.length).toBeGreaterThan(0));
+      return hook;
+    }
+
+    beforeEach(() => {
+      _resetPluginContextKeyStoreForTest();
+      publishPluginPaletteGates([]);
+    });
+
+    it("groups a plugin's commands under its own section, not the category it declared", async () => {
+      const { result } = await openWith([
+        makeEntry("builtin.wt", "Built-in worktree", true, "worktree"),
+        pluginCmd("acme.run", "Run"),
+      ]);
+      expect(result.current.sections.map((s) => s.id)).toEqual([
+        "category:worktree",
+        "plugin:acme",
+      ]);
+      expect(sectionIds(result.current, "category:worktree")).toEqual(["builtin.wt"]);
+      expect(sectionIds(result.current, "plugin:acme")).toEqual(["acme.run"]);
+      expect(result.current.results.find((r) => r.id === "acme.run")!.category).toBe("worktree");
+    });
+
+    it("hides a command while its when clause is false and shows it when the key flips", async () => {
+      publishPluginPaletteGates([["acme.run", { when: "acme.ready" }]]);
+      const { result } = await openWith([pluginCmd("acme.run", "Run"), pluginCmd("acme.b", "B")]);
+      expect(result.current.results.map((r) => r.id)).toEqual(["acme.b"]);
+
+      act(() => {
+        usePluginContextKeyStore.setState({ whenContext: { acme: { ready: true } } });
+      });
+      await waitFor(() =>
+        expect(result.current.results.map((r) => r.id).sort()).toEqual(["acme.b", "acme.run"])
+      );
+    });
+
+    it("greys a command out with a reason while its enablement is false, and does not touch dispatch", async () => {
+      publishPluginPaletteGates([["acme.run", { enablement: "acme.ready" }]]);
+      dispatchMock.mockResolvedValue({ ok: true, result: undefined });
+      const { result } = await openWith([pluginCmd("acme.run", "Run")]);
+      const row = result.current.results[0]!;
+      expect(row.enabled).toBe(false);
+      expect(row.disabledReason).toBeTruthy();
+
+      act(() => result.current.executeAction(row));
+      expect(dispatchMock).not.toHaveBeenCalled();
+    });
+
+    it("does not dispatch collected arguments once the command's enablement has gone false", async () => {
+      const spec = {
+        fields: [
+          {
+            kind: "enum",
+            name: "env",
+            title: "Environment",
+            options: [{ value: "dev", label: "dev" }],
+          },
+        ],
+      };
+      paletteArgsMock.mockReturnValue(spec);
+      dispatchMock.mockResolvedValue({ ok: true, result: undefined });
+      publishPluginPaletteGates([["acme.run", { enablement: "acme.ok" }]]);
+      act(() => {
+        usePluginContextKeyStore.setState({ whenContext: { acme: { ok: true } } });
+      });
+      const { result } = await openWith([{ ...pluginCmd("acme.run", "Run"), requiresArgs: true }]);
+      act(() => result.current.executeAction(result.current.results[0]!));
+      expect(result.current.argPrompt).not.toBeNull();
+
+      act(() => {
+        usePluginContextKeyStore.setState({ whenContext: { acme: { ok: false } } });
+      });
+      act(() => result.current.confirmSelection());
+      expect(dispatchMock).not.toHaveBeenCalled();
+    });
+
+    it("leaves a built-in action alone even if a gate shares its id", async () => {
+      publishPluginPaletteGates([["builtin.x", { when: "never" }]]);
+      const { result } = await openWith([makeEntry("builtin.x", "X")]);
+      expect(result.current.results.map((r) => r.id)).toEqual(["builtin.x"]);
+    });
+  });
+
   describe("plugin command arguments", () => {
     const spec = {
       fields: [

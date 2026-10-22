@@ -342,6 +342,49 @@ describe("Plugin action registry", () => {
     ).toThrow(/invalid kind/i);
   });
 
+  it("registerPluginAction refuses a category that names a built-in group, however it is spelled", () => {
+    for (const category of ["worktree", "Worktree", "  GIT ", "ter\u0000minal", "agents"]) {
+      expect(() =>
+        service.registerPluginAction("acme.my-plugin", { ...validContribution(), category })
+      ).toThrow(/reserved/);
+    }
+  });
+
+  it("registerPluginAction caps category length after normalising it", () => {
+    expect(() =>
+      service.registerPluginAction("acme.my-plugin", {
+        ...validContribution(),
+        category: "x".repeat(41),
+      })
+    ).toThrow(/longer than 40/);
+    service.registerPluginAction("acme.my-plugin", {
+      ...validContribution(),
+      category: ` ${"x".repeat(40)} `,
+    });
+    expect(service.listPluginActions()[0]!.category).toBe("x".repeat(40));
+  });
+
+  it("registerPluginAction keeps when/enablement on the descriptor and refuses unparsable ones", () => {
+    service.registerPluginAction("acme.my-plugin", {
+      ...validContribution(),
+      when: "acme.my-plugin.ready",
+      enablement: "!acme.my-plugin.busy",
+    });
+    expect(service.listPluginActions()[0]).toMatchObject({
+      when: "acme.my-plugin.ready",
+      enablement: "!acme.my-plugin.busy",
+    });
+    for (const field of ["when", "enablement"] as const) {
+      expect(() =>
+        service.registerPluginAction("acme.my-plugin", {
+          ...validContribution(),
+          id: "acme.my-plugin.other",
+          [field]: "a &&",
+        })
+      ).toThrow(new RegExp(`invalid "${field}" clause`));
+    }
+  });
+
   it("registerPluginAction throws on duplicate id", () => {
     service.registerPluginAction("acme.my-plugin", validContribution());
     expect(() => service.registerPluginAction("acme.my-plugin", validContribution())).toThrow(

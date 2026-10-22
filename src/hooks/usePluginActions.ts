@@ -9,6 +9,7 @@ import { logWarn } from "@/utils/logger";
 import { notify } from "@/lib/notify";
 import { resolvePluginAttribution } from "@/hooks/usePluginAttribution";
 import { publishRegisteredPluginActions } from "@/services/plugin/registeredPluginActions";
+import { publishPluginPaletteGates } from "@/services/plugin/pluginPaletteGating";
 
 /**
  * Pull plugin-registered actions on mount and keep the renderer registry in
@@ -66,6 +67,12 @@ export function usePluginActions(): void {
       publishRegisteredPluginActions(
         Array.from(registered, ([id, descriptor]) => [id, descriptor.title ?? ""] as const)
       );
+      publishPluginPaletteGates(
+        Array.from(
+          registered,
+          ([id, d]) => [id, { when: d.when, enablement: d.enablement }] as const
+        )
+      );
     };
 
     const electron = typeof window !== "undefined" ? window.electron : undefined;
@@ -104,6 +111,7 @@ export function usePluginActions(): void {
       }
       registered.clear();
       publishRegisteredPluginActions([]);
+      publishPluginPaletteGates([]);
     };
   }, []);
 }
@@ -116,6 +124,8 @@ function descriptorsEqual(a: PluginActionDescriptor, b: PluginActionDescriptor):
     a.description === b.description &&
     a.category === b.category &&
     a.kind === b.kind &&
+    a.when === b.when &&
+    a.enablement === b.enablement &&
     a.danger === b.danger &&
     a.effectiveDanger === b.effectiveDanger &&
     JSON.stringify(a.keywords ?? null) === JSON.stringify(b.keywords ?? null) &&

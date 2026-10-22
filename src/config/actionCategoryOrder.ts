@@ -1,3 +1,5 @@
+import { ACTION_CATEGORY_ORDER } from "@shared/config/actionCategories";
+
 /**
  * Browse-order taxonomy for the command palette's empty-query inventory.
  *
@@ -11,41 +13,7 @@
  * unlisted still renders, appended alphabetically after the known set.
  */
 
-/**
- * Fixed browse order. Sequenced by task flow rather than by how many actions a
- * category happens to hold — raw counts overweight low-level terminal and
- * worktree plumbing and would reshuffle as actions are added. Stability is the
- * point: a browse list that reorders itself between opens isn't browsable.
- */
-export const ACTION_CATEGORY_ORDER: readonly string[] = [
-  "worktree",
-  "panel",
-  "git",
-  "project",
-  "forge",
-  "agent",
-  "terminal",
-  "files",
-  "browser",
-  "portal",
-  "recipes",
-  "devServer",
-  "copyTree",
-  "navigation",
-  "app",
-  "ui",
-  "settings",
-  "preferences",
-  "plugins",
-  "voice",
-  "help",
-  "diagnostics",
-  "logs",
-  "errors",
-  "system",
-  "artifacts",
-  "introspection",
-];
+export { ACTION_CATEGORY_ORDER };
 
 /**
  * Display labels for the known categories. Plural where the category names a

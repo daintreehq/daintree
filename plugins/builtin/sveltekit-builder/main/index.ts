@@ -159,7 +159,7 @@ export async function activate(host: BuiltinPluginHostApi): Promise<() => void> 
       title: "Toggle Element Picker",
       description:
         "Switch the Element Picker on or off in this worktree's dev preview, opening the preview if none is running.",
-      category: "panels",
+      category: "Dev preview",
       kind: "command",
       danger: "safe",
       keywords: [

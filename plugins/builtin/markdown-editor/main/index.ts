@@ -398,7 +398,7 @@ export async function activate(
       title: "Markdown: Recover drafts…",
       description:
         "List unsaved Markdown drafts whose panel is gone and reopen one in Edit mode in its own project and worktree.",
-      category: "files",
+      category: "Markdown",
       kind: "command",
       danger: "safe",
       keywords: ["markdown", "draft", "recover", "unsaved", "restore"],

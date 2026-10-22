@@ -70,12 +70,16 @@ Commands are callable actions that appear in the command palette and can be boun
 | `id` | yes | Bare command id. Daintree namespaces it as `{pluginId}.{id}` at runtime — matching every other contribution surface. |
 | `title` | yes | Palette entry label. |
 | `description` | yes | One-line summary surfaced in the palette description. |
-| `category` | yes | Grouping label in the palette. Free-form; mirror your plugin's display name. |
+| `category` | yes | Sub-label on the command's row. The palette gives your plugin one group of its own, titled with its display name, so this only tells your commands apart inside it. Up to 40 characters; a built-in category id (`worktree`, `git`, `terminal`, …, compared case-insensitively) is refused. |
 | `kind` | yes | `"command"` or `"query"`. |
 | `danger` | yes | `"safe"` or `"confirm"`. `"restricted"` is rejected — plugins cannot self-register restricted actions. The host raises `"safe"` to `"confirm"` automatically when the plugin holds a high-risk capability. |
 | `keywords` | no | Extra search terms for the palette. |
 | `inputSchema` | no | JSON schema validated against the dispatched `args` payload. |
+| `when` | no | A `when` clause over your plugin's context keys. While it is false the command is left out of the palette. |
+| `enablement` | no | Same grammar. While it is false the command stays in the palette, greyed out with a reason, and Enter does nothing. |
 | `requires` | no | The capabilities _this command_ actually uses — see below. |
+
+`when` and `enablement` only shape the palette. Keybindings, context menus, MCP and `host.dispatch` never evaluate them, so they decide what is offered, not what can run. A clause that doesn't parse is refused when the command registers.
 
 **`requires` — per-action capability intent:**
 
