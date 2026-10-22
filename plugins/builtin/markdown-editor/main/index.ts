@@ -79,7 +79,9 @@ function saveErrorMessage(error: unknown): string {
   const message = formatErrorMessage(error, "Save failed");
   const { code, userMessage } = (error ?? {}) as { code?: unknown; userMessage?: unknown };
   if (code !== "DRIVEN_ELSEWHERE") return message;
-  return typeof userMessage === "string" ? userMessage : message.replace(/^DRIVEN_ELSEWHERE:\s*/, "");
+  return typeof userMessage === "string"
+    ? userMessage
+    : message.replace(/^DRIVEN_ELSEWHERE:\s*/, "");
 }
 
 const RECOVER_ACK_TIMEOUT_MS = 10_000;

@@ -434,7 +434,10 @@ describe("markdown-editor main (#12323)", () => {
     it("drops the code from a lease refusal that reaches it as a message alone", async () => {
       const target = path.join(dir, "repo", "docs", "plan-draft.md");
       vi.spyOn(fake.host.fs, "writeFile").mockRejectedValueOnce(
-        fsError("DRIVEN_ELSEWHERE", "Another screen has control of this project. Take control first.")
+        fsError(
+          "DRIVEN_ELSEWHERE",
+          "Another screen has control of this project. Take control first."
+        )
       );
       const result = await call<DocumentSaveAsResult>(CHANNELS.saveAs, {
         identity,

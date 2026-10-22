@@ -71,7 +71,8 @@ function resolveSource(
     const when = source.when;
     if (when) {
       const value = readArg(args, when.at);
-      const applies = "absent" in when ? value === undefined || value === null : value === when.equals;
+      const applies =
+        "absent" in when ? value === undefined || value === null : value === when.equals;
       if (!applies) return [];
     }
     return "every";

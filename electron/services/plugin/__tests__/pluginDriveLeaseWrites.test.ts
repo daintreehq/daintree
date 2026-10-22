@@ -242,9 +242,9 @@ describe("plugin writes from a view that doesn't drive the project", () => {
     installLeases(new Map([["p2", HOLDER]]));
     owners.projectsForPath = () => Promise.reject(new Error("lookup timed out"));
 
-    await expect(asCaller(WATCHER, () => api().writeFile(target, "edited"))).rejects.toMatchObject(
-      { code: "DRIVEN_ELSEWHERE" }
-    );
+    await expect(asCaller(WATCHER, () => api().writeFile(target, "edited"))).rejects.toMatchObject({
+      code: "DRIVEN_ELSEWHERE",
+    });
     expect(await fs.readFile(target, "utf-8")).toBe("original");
   });
 });

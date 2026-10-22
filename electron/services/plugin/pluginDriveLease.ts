@@ -2,7 +2,8 @@ import { AppError } from "../../utils/errorTypes.js";
 import { getPluginInvokeOrigin } from "./pluginFrontendRouting.js";
 
 /** What a plugin's host call is about to change: paths on disk, or a terminal it types into. */
-export type PluginWriteTarget = { readonly paths: readonly string[] } | { readonly terminalId: string };
+export type PluginWriteTarget =
+  { readonly paths: readonly string[] } | { readonly terminalId: string };
 
 /**
  * Refuse a plugin's change to a project when the call it runs in came from a

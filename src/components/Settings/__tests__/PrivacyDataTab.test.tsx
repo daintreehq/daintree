@@ -502,7 +502,9 @@ describe("PrivacyDataTab", () => {
       Reflect.set(window, "electron", {
         privacy: createPrivacyApi(),
         agentSessionHistory: createAgentSessionHistoryApi({
-          setRetentionDays: vi.fn().mockRejectedValue(new ClientAppError("DRIVEN_ELSEWHERE", "refused", TAKE_CONTROL)),
+          setRetentionDays: vi
+            .fn()
+            .mockRejectedValue(new ClientAppError("DRIVEN_ELSEWHERE", "refused", TAKE_CONTROL)),
         }),
       });
       await renderStorage();
@@ -529,7 +531,9 @@ describe("PrivacyDataTab", () => {
     Reflect.set(window, "electron", {
       privacy: createPrivacyApi(),
       agentSessionHistory: createAgentSessionHistoryApi({
-        clear: vi.fn().mockRejectedValue(new ClientAppError("DRIVEN_ELSEWHERE", "refused", TAKE_CONTROL)),
+        clear: vi
+          .fn()
+          .mockRejectedValue(new ClientAppError("DRIVEN_ELSEWHERE", "refused", TAKE_CONTROL)),
       }),
     });
     render(<PrivacyDataTab activeSubtab="storage" onSubtabChange={vi.fn()} />, {

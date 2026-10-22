@@ -108,7 +108,9 @@ describe("pluginFileDocument (#13809)", () => {
     bridge.read.mockResolvedValue({ status: "ok", text: "{}", revision: REV_A });
     // As the preload rethrows a host AppError across the bridge.
     bridge.save.mockRejectedValue(
-      new Error(`[AppError|DRIVEN_ELSEWHERE|${encodeURIComponent(wording)}] file-document:save changes p1`)
+      new Error(
+        `[AppError|DRIVEN_ELSEWHERE|${encodeURIComponent(wording)}] file-document:save changes p1`
+      )
     );
     const handle = openPluginFileDocument(target());
     handle.retain();

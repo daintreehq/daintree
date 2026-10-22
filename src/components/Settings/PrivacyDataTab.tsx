@@ -279,9 +279,7 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange }: PrivacyDataTabP
     setShortenPending(false);
     if (failure === null) setPendingSessionRetention(null);
     else
-      setShortenError(
-        failure.refusal ?? "Session history retention couldn't be saved. Try again."
-      );
+      setShortenError(failure.refusal ?? "Session history retention couldn't be saved. Try again.");
   };
 
   // A shorter window prunes records the moment it's saved, so it asks first;

@@ -243,9 +243,9 @@ describe("resolveLeaseTarget", () => {
         kind: "every",
       });
     }
-    expect(
-      resolveLeaseTarget(clear, [{ worktreeId: "/repo/b/wt" }], "a", stubResolvers())
-    ).toEqual({ kind: "projects", projectIds: ["b"] });
+    expect(resolveLeaseTarget(clear, [{ worktreeId: "/repo/b/wt" }], "a", stubResolvers())).toEqual(
+      { kind: "projects", projectIds: ["b"] }
+    );
     // The handler refuses an empty scope rather than widening it; so does the gate.
     expect(resolveLeaseTarget(clear, [{ worktreeId: "" }], "a", stubResolvers())).toMatchObject({
       kind: "unresolved",

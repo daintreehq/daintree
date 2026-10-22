@@ -1019,13 +1019,13 @@ export function FileBrowserViewer({
         editLockedBy === null &&
         renderMode !== "edit" &&
         state.status === "text" && (
-        <FileEditorBanner
-          key={`${panelId}:${filePath}`}
-          filePath={filePath}
-          content={state.content}
-          onEdit={() => setExplicitRenderMode("edit")}
-        />
-      )}
+          <FileEditorBanner
+            key={`${panelId}:${filePath}`}
+            filePath={filePath}
+            content={state.content}
+            onEdit={() => setExplicitRenderMode("edit")}
+          />
+        )}
       {filePath && renderMode === "diff" && diffStale && diffContent !== undefined && (
         <InlineStatusBanner
           severity="info"

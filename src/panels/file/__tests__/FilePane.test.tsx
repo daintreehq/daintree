@@ -3894,7 +3894,13 @@ describe("FilePane edit mode (#12323)", () => {
       expect(screen.getByTestId("file-editor-mock")).toBe(editor);
       expect(toggleLabels()).toEqual(["Source", "Rendered", "Edit"]);
 
-      panelsById["file-1"] = { ...(panelsById["file-1"] as object), fileViewMode: "source" };
+      panelsById["file-1"] = {
+        id: "file-1",
+        kind: "file",
+        filePath: "/repo/docs/spec.md",
+        worktreeId: WORKTREE_ID,
+        fileViewMode: "source",
+      };
       view.rerender(paneElement());
       await act(async () => {});
       expect(toggleLabels()).toEqual(["Source", "Rendered"]);
