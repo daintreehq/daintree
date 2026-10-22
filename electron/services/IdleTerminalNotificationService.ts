@@ -407,6 +407,13 @@ export class IdleTerminalNotificationService {
     // synchronously from here, so sampling visibility any earlier would let a
     // project brought on-screen during that await be nudged anyway.
     const activeIds = this.collectActiveProjectIds();
+    // Re-read after the await too: an opt-out made during it must still win.
+    const optedOut = new Set(
+      projectStore
+        .getAllProjects()
+        .filter((p) => p.neverAutoSleep)
+        .map((p) => p.id)
+    );
 
     const clearNotified = (pid: string): void => {
       if (notifiedAt[pid] !== undefined) {
@@ -431,7 +438,7 @@ export class IdleTerminalNotificationService {
       if (activeIds.has(pid)) continue;
 
       // Opted out of automatic sleep, so the "Sleep project" suggestion is noise.
-      if (project.neverAutoSleep) continue;
+      if (optedOut.has(pid)) continue;
 
       // Any remaining non-qualifying reason (no terminals, active agent, recent
       // activity) means the project has left the idle state, so its notified
