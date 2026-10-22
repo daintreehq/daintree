@@ -5,6 +5,7 @@ import type {
   RevisionedSourceMap,
   SourceAccessResult,
 } from "../../../shared/elementPicker/resolver.js";
+import type { SourceFileRef } from "../../../shared/elementPicker/resolution.js";
 
 /**
  * The wire between main and the Element Picker source host. Ids are main's:
@@ -26,7 +27,10 @@ export type HostInbound =
       type: "access-result";
       jobId: number;
       accessId: number;
-      result: SourceAccessResult<RevisionedSource> | SourceAccessResult<RevisionedSourceMap>;
+      result:
+        | SourceAccessResult<RevisionedSource>
+        | SourceAccessResult<RevisionedSourceMap>
+        | SourceAccessResult<SourceFileRef>;
     }
   /** Exit now. Main has already settled every job the host held. */
   | { type: "dispose" };
@@ -58,6 +62,14 @@ export const HostOutboundSchema = z.discriminatedUnion("type", [
     accessId: JobIdSchema,
     generatedUrl: z.string().min(1).max(2048),
   }),
+  z.strictObject({
+    type: z.literal("locate-source"),
+    jobId: JobIdSchema,
+    accessId: JobIdSchema,
+    generatedUrl: z.string().min(1).max(2048),
+    source: z.string().max(4096),
+    sourceRoot: z.string().max(4096).nullable(),
+  }),
   // Unbounded: a bootstrap failure posts a whole stack, and refusing it would
   // misreport a failed start as a malformed message.
   z.strictObject({ type: z.literal("fatal"), message: z.string() }),
@@ -70,4 +82,12 @@ export type HostOutbound =
   | { type: "failed"; jobId: number; message: string }
   | { type: "read-source"; jobId: number; accessId: number; file: unknown }
   | { type: "fetch-source-map"; jobId: number; accessId: number; generatedUrl: string }
+  | {
+      type: "locate-source";
+      jobId: number;
+      accessId: number;
+      generatedUrl: string;
+      source: string;
+      sourceRoot: string | null;
+    }
   | { type: "fatal"; message: string };

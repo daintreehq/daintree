@@ -20,7 +20,8 @@ const otherTarget = { file: { ...file, path: "src/components/CardAlt.tsx" }, loc
 const sourceMap = {
   mapUrl: "http://localhost:5173/src/components/Card.tsx.map",
   mapRevision: REVISION_B,
-};
+  sourceCheck: "matches",
+} as const;
 const claim = { candidateId: "c-1", claim: "element-creation" } as const;
 
 type Of<S extends ResolutionResult["state"]> = Extract<ResolutionResult, { state: S }>;
@@ -74,6 +75,23 @@ describe("ResolutionResultSchema", () => {
   it("names the map a mapped result came through", () => {
     const { sourceMap: _map, ...unmapped } = mapped;
     expect(ResolutionResultSchema.safeParse(unmapped).success).toBe(false);
+  });
+
+  it("says whether the map's source still matches the file, and never leaves it unsaid", () => {
+    for (const sourceCheck of ["matches", "differs", "unchecked"]) {
+      expect(
+        ResolutionResultSchema.safeParse({ ...mapped, sourceMap: { ...sourceMap, sourceCheck } })
+          .success
+      ).toBe(true);
+    }
+    const { sourceCheck: _check, ...unsaid } = sourceMap;
+    expect(ResolutionResultSchema.safeParse({ ...mapped, sourceMap: unsaid }).success).toBe(false);
+    expect(
+      ResolutionResultSchema.safeParse({
+        ...mapped,
+        sourceMap: { ...sourceMap, sourceCheck: "probably" },
+      }).success
+    ).toBe(false);
   });
 
   it("never lets a result claim a check without the revision it checked", () => {

@@ -18,6 +18,10 @@ import type {
 } from "../../../../shared/elementPicker/resolver.js";
 import type { ResolverLoaders } from "../worker/runtime.js";
 import type { SourceChange } from "../sourceTracker.js";
+import { revisionOf, type SourceMapProvider } from "../sourceAccess.js";
+import { createSourceMapSymbolicator, symbolicatedResult } from "../worker/symbolication.js";
+import { COORDINATE_CONVENTIONS } from "../../../../shared/elementPicker/coordinates.js";
+import type { SourceCandidate } from "../../../../shared/elementPicker/source.js";
 import {
   RuntimeChild,
   STUB_MARKER,
@@ -532,6 +536,121 @@ describe("ElementPickerHost", () => {
       host.resolve(request(id, [observation("el-1", [candidate("c-1", "app/src/App.svelte")])]))
     ).rejects.toMatchObject({ code: "HOST_DISPOSED" });
     expect(children).toHaveLength(1);
+  });
+
+  it("maps a frame through a map main served, and rejects an answer citing one it did not", async () => {
+    const module = "http://localhost:5173/src/App.svelte?t=1";
+    const content = fs.readFileSync(path.join(root, "app", "src", "App.svelte"), "utf8");
+    const text = JSON.stringify({
+      version: 3,
+      sources: ["App.svelte"],
+      names: [],
+      mappings: "AAAA",
+      sourcesContent: [content],
+    });
+    const sourceMaps = vi.fn<SourceMapProvider>(async ({ generatedUrl, allowance }) => {
+      allowance.request();
+      return {
+        ok: true,
+        value: {
+          url: null,
+          base: generatedUrl,
+          revision: revisionOf(new TextEncoder().encode(text)),
+          text,
+        },
+      };
+    });
+    const frame: Extract<SourceCandidate, { kind: "element-creation" }> = {
+      kind: "element-creation",
+      candidateId: "c-1",
+      framework: "svelte",
+      extraction: { kind: "generated-stack-frame", field: "stack", frameIndex: 0 },
+      file: module,
+      location: { ...COORDINATE_CONVENTIONS.v8StackFrame, columnUnit: "utf16", line: 1, column: 1 },
+    };
+    const mapper = (forge: boolean): HostSourceResolver => ({
+      framework: "svelte",
+      resolve: async (req, access, signal) => {
+        const symbolication = await createSourceMapSymbolicator(access).symbolicate(
+          { url: frame.file, location: frame.location },
+          signal
+        );
+        const result = symbolicatedResult(frame, symbolication);
+        if (forge && result.state === "mapped") {
+          result.sourceMap = { ...result.sourceMap, mapUrl: "http://localhost:5173/forged.map" };
+        }
+        return {
+          requestId: req.requestId,
+          documentEpoch: req.documentEpoch,
+          outcomes: [{ elementId: "el-1", results: [result] }],
+        };
+      },
+    });
+    for (const forge of [false, true]) {
+      const { host } = harness({ svelte: async () => mapper(forge) }, { sourceMaps });
+      const id = await host.registerWorkspace({
+        worktreePath: root,
+        appRoot: path.join(root, "app"),
+        previewOrigin: "http://localhost:5173/some/page",
+        onSourceChanged: () => {},
+      });
+      const resolving = host.resolve(request(id, [observation("el-1", [frame])]));
+      if (forge) {
+        await expect(resolving).rejects.toMatchObject({ code: "RESOLVER_FAILED" });
+        continue;
+      }
+      await expect(resolving).resolves.toMatchObject({
+        outcomes: [
+          {
+            results: [
+              {
+                state: "mapped",
+                target: { file: { workspaceId: id, path: "app/src/App.svelte" } },
+                fileRevision: sha256(path.join(root, "app", "src", "App.svelte")),
+                sourceMap: { mapUrl: null, sourceCheck: "matches" },
+              },
+            ],
+          },
+        ],
+      });
+      expect(sourceMaps).toHaveBeenLastCalledWith(
+        expect.objectContaining({ previewOrigin: "http://localhost:5173", generatedUrl: module }),
+        expect.anything()
+      );
+    }
+  });
+
+  it("fetches no map for a workspace registered without a preview origin", async () => {
+    const sourceMaps = vi.fn<SourceMapProvider>();
+    const fetched: unknown[] = [];
+    const { host } = harness(
+      {
+        svelte: async () => ({
+          framework: "svelte",
+          resolve: async (req, access, signal) => {
+            fetched.push(await access.fetchSourceMap("http://localhost:5173/a.js", signal));
+            return { requestId: req.requestId, documentEpoch: req.documentEpoch, outcomes: [] };
+          },
+        }),
+      },
+      { sourceMaps }
+    );
+    const id = await workspace(host);
+    await host.resolve(
+      request(id, [observation("el-1", [candidate("c-1", "app/src/App.svelte")])])
+    );
+    expect(fetched).toEqual([{ ok: false, reason: "unsupported" }]);
+    expect(sourceMaps).not.toHaveBeenCalled();
+  });
+
+  it("refuses a preview origin that is not a plain HTTP(S) origin", async () => {
+    const { host } = harness();
+    for (const previewOrigin of ["not a url", "file:///srv/app", "http://user:pw@localhost:5173"]) {
+      await expect(
+        host.registerWorkspace({ worktreePath: root, previewOrigin, onSourceChanged: () => {} }),
+        previewOrigin
+      ).rejects.toMatchObject({ code: "INVALID_REQUEST" });
+    }
   });
 
   it("refuses a malformed request and an app root outside the worktree", async () => {

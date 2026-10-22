@@ -170,9 +170,21 @@ export interface RevisionedSourceMap {
 }
 
 /**
- * All the file and network access a resolver gets. The host implements both
- * and owns containment, origin policy, redirects and the request's budget, so
- * a resolver holds bytes and never a path or a socket it could take further.
+ * One source as a map names it, raw: `sourceRoot` not yet joined and nothing
+ * resolved, since resolving against the map's URL is what turns a Windows or
+ * absolute path into a path on the dev server.
+ */
+export interface MapSourceLocation {
+  /** The module whose map names the source, as the resolver fetched it. */
+  generatedUrl: string;
+  source: string;
+  sourceRoot: string | null;
+}
+
+/**
+ * All the file and network access a resolver gets. The host implements all of
+ * it and owns containment, origin policy, redirects and the request's budget,
+ * so a resolver holds bytes and never a path or a socket it could take further.
  */
 export interface ResolverSourceAccess {
   readSource(
@@ -184,6 +196,15 @@ export interface ResolverSourceAccess {
     generatedUrl: string,
     signal: AbortSignal
   ): Promise<SourceAccessResult<RevisionedSourceMap>>;
+  /**
+   * The workspace file a source in a map this job fetched names, if it names
+   * one: resolved against that map's own URL, or the module's for an inline
+   * map. Reads nothing and costs nothing against the budget.
+   */
+  locateSource(
+    location: MapSourceLocation,
+    signal: AbortSignal
+  ): Promise<SourceAccessResult<SourceFileRef>>;
 }
 
 /** Resolves the candidates of one framework; the host routes each candidate by its `framework`. */

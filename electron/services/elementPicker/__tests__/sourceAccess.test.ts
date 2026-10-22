@@ -10,6 +10,8 @@ import {
   readBoundedSource,
   revisionOf,
   type JobSourceAccessOptions,
+  type ServedSourceMap,
+  type SourceMapProvider,
   type SourceRoots,
 } from "../sourceAccess.js";
 
@@ -136,6 +138,7 @@ function access(overrides: Partial<JobSourceAccessOptions> = {}) {
     budget: fullBudget,
     signal: controller.signal,
     expired: () => false,
+    previewOrigin: "http://localhost:5173",
     sourceMaps: async () => ({ ok: false, reason: "unsupported" }),
     onRead,
     ...overrides,
@@ -216,36 +219,6 @@ describe("JobSourceAccess", () => {
     });
   });
 
-  it("counts source-map fetches and their bytes against the network budget", async () => {
-    const text = "x".repeat(6);
-    const sourceMaps = vi.fn(async () => ({
-      ok: true as const,
-      value: { url: null, revision: revisionOf(new TextEncoder().encode(text)), text },
-    }));
-    const { access: job } = access({
-      sourceMaps,
-      budget: { ...fullBudget, maxNetworkRequests: 2, maxNetworkBytes: 10 },
-    });
-    await expect(job.fetchSourceMap("http://localhost/a.js")).resolves.toMatchObject({ ok: true });
-    expect(sourceMaps).toHaveBeenLastCalledWith(
-      expect.objectContaining({ generatedUrl: "http://localhost/a.js", maxBytes: 10 }),
-      expect.anything()
-    );
-    await expect(job.fetchSourceMap("http://localhost/b.js")).resolves.toEqual({
-      ok: false,
-      reason: "budget-exhausted",
-    });
-    expect(sourceMaps).toHaveBeenLastCalledWith(
-      expect.objectContaining({ maxBytes: 4 }),
-      expect.anything()
-    );
-    await expect(job.fetchSourceMap("http://localhost/c.js")).resolves.toEqual({
-      ok: false,
-      reason: "budget-exhausted",
-    });
-    expect(sourceMaps).toHaveBeenCalledTimes(2);
-  });
-
   it("remembers the revision it served for each path, and only those", async () => {
     const { access: job } = access();
     const read = await job.readSource(ref("app/src/A.svelte"));
@@ -253,45 +226,147 @@ describe("JobSourceAccess", () => {
     expect(job.servedRevision("app/src/B.svelte")).toBeUndefined();
   });
 
-  it("runs source-map fetches one at a time against what is left of the byte budget", async () => {
+  it("runs source-map fetches one at a time, each charged as it spends", async () => {
     const releases: Array<() => void> = [];
-    const text = "x".repeat(6);
-    const sourceMaps = vi.fn(
-      () =>
-        new Promise<{ ok: true; value: { url: null; revision: string; text: string } }>((resolve) =>
-          releases.push(() =>
-            resolve({
-              ok: true,
-              value: { url: null, revision: revisionOf(new TextEncoder().encode(text)), text },
-            })
-          )
+    const sourceMaps = vi.fn<SourceMapProvider>(
+      ({ generatedUrl, allowance }) =>
+        new Promise((resolve) =>
+          releases.push(() => {
+            allowance.request();
+            resolve(
+              allowance.bytes(6) ? served(generatedUrl) : { ok: false, reason: "budget-exhausted" }
+            );
+          })
         )
     );
-    const { access: job } = access({
-      sourceMaps,
-      budget: { ...fullBudget, maxNetworkBytes: 8 },
-    });
-    const first = job.fetchSourceMap("http://localhost/a.js");
-    const second = job.fetchSourceMap("http://localhost/b.js");
+    const { access: job } = access({ sourceMaps, budget: { ...fullBudget, maxNetworkBytes: 8 } });
+    const first = job.fetchSourceMap("http://localhost:5173/a.js");
+    const second = job.fetchSourceMap("http://localhost:5173/b.js");
     await vi.waitFor(() => expect(sourceMaps).toHaveBeenCalledTimes(1));
     releases[0]!();
     await expect(first).resolves.toMatchObject({ ok: true });
     await vi.waitFor(() => expect(sourceMaps).toHaveBeenCalledTimes(2));
-    expect(sourceMaps).toHaveBeenLastCalledWith(
-      expect.objectContaining({ maxBytes: 2 }),
-      expect.anything()
-    );
     releases[1]!();
     await expect(second).resolves.toEqual({ ok: false, reason: "budget-exhausted" });
+    // Nothing is left, so a third never reaches the provider.
+    await expect(job.fetchSourceMap("http://localhost:5173/c.js")).resolves.toEqual({
+      ok: false,
+      reason: "budget-exhausted",
+    });
+    expect(sourceMaps).toHaveBeenCalledTimes(2);
+  });
+
+  it("charges every request a provider makes, and refuses one past the limit", async () => {
+    const spent: boolean[] = [];
+    const sourceMaps = vi.fn<SourceMapProvider>(async ({ generatedUrl, allowance }) => {
+      spent.push(allowance.request(), allowance.request());
+      return served(generatedUrl);
+    });
+    const { access: job } = access({
+      sourceMaps,
+      budget: { ...fullBudget, maxNetworkRequests: 3 },
+    });
+    await job.fetchSourceMap("http://localhost:5173/a.js");
+    await job.fetchSourceMap("http://localhost:5173/b.js");
+    expect(spent).toEqual([true, true, true, false]);
+    await expect(job.fetchSourceMap("http://localhost:5173/c.js")).resolves.toEqual({
+      ok: false,
+      reason: "budget-exhausted",
+    });
+    expect(sourceMaps).toHaveBeenCalledTimes(2);
   });
 
   it("never calls the provider once no network bytes are left", async () => {
     const sourceMaps = vi.fn();
     const { access: job } = access({ sourceMaps, budget: { ...fullBudget, maxNetworkBytes: 0 } });
-    await expect(job.fetchSourceMap("http://localhost/a.js")).resolves.toEqual({
+    await expect(job.fetchSourceMap("http://localhost:5173/a.js")).resolves.toEqual({
       ok: false,
       reason: "budget-exhausted",
     });
     expect(sourceMaps).not.toHaveBeenCalled();
   });
+
+  it("fetches nothing for a workspace registered with no preview origin", async () => {
+    const sourceMaps = vi.fn();
+    const { access: job } = access({ sourceMaps, previewOrigin: null });
+    await expect(job.fetchSourceMap("http://localhost:5173/a.js")).resolves.toEqual({
+      ok: false,
+      reason: "unsupported",
+    });
+    expect(sourceMaps).not.toHaveBeenCalled();
+  });
+
+  it("hands the provider the workspace's origin, and fetches each module once per job", async () => {
+    const sourceMaps = vi.fn<SourceMapProvider>(async ({ generatedUrl }) => served(generatedUrl));
+    const { access: job } = access({ sourceMaps });
+    const first = await job.fetchSourceMap("http://localhost:5173/a.js");
+    await expect(job.fetchSourceMap("http://localhost:5173/a.js")).resolves.toEqual(first);
+    // The base stays in main: the host is told the map, not what it resolves against.
+    expect(first.ok && Object.keys(first.value).sort()).toEqual(["revision", "text", "url"]);
+    expect(sourceMaps).toHaveBeenCalledTimes(1);
+    expect(sourceMaps).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workspaceId: "ws",
+        previewOrigin: "http://localhost:5173",
+        generatedUrl: "http://localhost:5173/a.js",
+      }),
+      expect.anything()
+    );
+  });
+
+  it("remembers which maps it served, by URL and revision", async () => {
+    const sourceMaps = vi.fn<SourceMapProvider>(async ({ generatedUrl }) =>
+      served(generatedUrl, "http://localhost:5173/a.js.map")
+    );
+    const { access: job } = access({ sourceMaps });
+    const result = await job.fetchSourceMap("http://localhost:5173/a.js");
+    const revision = result.ok ? result.value.revision : revisionOf(new Uint8Array());
+    expect(job.servedMap("http://localhost:5173/a.js.map", revision)).toBe(true);
+    expect(job.servedMap(null, revision)).toBe(false);
+    expect(job.servedMap("http://localhost:5173/a.js.map", revisionOf(new Uint8Array([1])))).toBe(
+      false
+    );
+  });
+
+  it("locates a source against the base of a map this job served, and nothing else", async () => {
+    const sourceMaps = vi.fn<SourceMapProvider>(async ({ generatedUrl }) => served(generatedUrl));
+    const { access: job } = access({ sourceMaps });
+    await expect(
+      job.locateSource("http://localhost:5173/src/A.svelte", "A.svelte", null)
+    ).resolves.toEqual({ ok: false, reason: "map-missing" });
+    await job.fetchSourceMap("http://localhost:5173/src/A.svelte?t=1");
+    await expect(
+      job.locateSource("http://localhost:5173/src/A.svelte?t=1", "A.svelte", null)
+    ).resolves.toEqual({ ok: true, value: ref("app/src/A.svelte") });
+    const outside = `/@fs${path.join(root, "outside", "secret.txt")}`;
+    await expect(
+      job.locateSource("http://localhost:5173/src/A.svelte?t=1", outside, null)
+    ).resolves.toEqual({ ok: false, reason: "outside-workspace" });
+  });
+
+  it("locates nothing through a map that failed to fetch", async () => {
+    const { access: job } = access({
+      sourceMaps: async () => ({ ok: false, reason: "map-missing" }),
+    });
+    await job.fetchSourceMap("http://localhost:5173/src/A.svelte");
+    await expect(
+      job.locateSource("http://localhost:5173/src/A.svelte", "A.svelte", null)
+    ).resolves.toEqual({ ok: false, reason: "map-missing" });
+  });
 });
+
+function served(
+  generatedUrl: string,
+  url: string | null = null
+): { ok: true; value: ServedSourceMap } {
+  const text = JSON.stringify({ version: 3, sources: [], mappings: "" });
+  return {
+    ok: true,
+    value: {
+      url,
+      base: url ?? generatedUrl,
+      revision: revisionOf(new TextEncoder().encode(text)),
+      text,
+    },
+  };
+}

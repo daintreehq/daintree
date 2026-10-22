@@ -7,7 +7,10 @@ import type {
   RevisionedSourceMap,
   SourceAccessResult,
 } from "../../../../shared/elementPicker/resolver.js";
-import type { ResolutionResult } from "../../../../shared/elementPicker/resolution.js";
+import type {
+  ResolutionResult,
+  SourceFileRef,
+} from "../../../../shared/elementPicker/resolution.js";
 import type {
   ElementPickerFramework,
   SourceCandidate,
@@ -39,6 +42,17 @@ export interface HostRuntime {
 interface RuntimeJob {
   readonly controller: AbortController;
   readonly pending: Map<number, (result: SourceAccessResult<unknown>) => void>;
+}
+
+/**
+ * What the wire carries. Main retires a host that sends more, so an access
+ * that would not fit is refused here instead of costing every job in flight.
+ */
+const URL_LIMIT = 2048;
+const SOURCE_LIMIT = 4096;
+
+function fitsWire(value: string, limit: number): boolean {
+  return value.length > 0 && value.length <= limit;
 }
 
 /** Bounded: the wire refuses a longer one. */
@@ -157,10 +171,28 @@ export function createHostRuntime(
           signal
         ),
       fetchSourceMap: (generatedUrl, signal) =>
-        ask<RevisionedSourceMap>(
-          (accessId) => ({ type: "fetch-source-map", jobId, accessId, generatedUrl }),
-          signal
-        ),
+        fitsWire(generatedUrl, URL_LIMIT)
+          ? ask<RevisionedSourceMap>(
+              (accessId) => ({ type: "fetch-source-map", jobId, accessId, generatedUrl }),
+              signal
+            )
+          : Promise.resolve({ ok: false, reason: "map-missing" }),
+      locateSource: ({ generatedUrl, source, sourceRoot }, signal) =>
+        !fitsWire(generatedUrl, URL_LIMIT) ||
+        source.length > SOURCE_LIMIT ||
+        (sourceRoot !== null && sourceRoot.length > SOURCE_LIMIT)
+          ? Promise.resolve({ ok: false, reason: "unsupported" })
+          : ask<SourceFileRef>(
+              (accessId) => ({
+                type: "locate-source",
+                jobId,
+                accessId,
+                generatedUrl,
+                source,
+                sourceRoot,
+              }),
+              signal
+            ),
     };
   }
 

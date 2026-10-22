@@ -79,6 +79,10 @@ function authorityImports(metafile: Metafile): string[] {
 const isHostProcessCode = (file: string) =>
   file.startsWith(WORKER_DIR) || file === BOOTSTRAP || file === HOST_ENTRY;
 
+/** Wherever the install resolves from: a worktree's node_modules can be a link to another checkout's. */
+const isSourceMapDecoder = (file: string) =>
+  file.includes("node_modules/@jridgewell/trace-mapping/");
+
 describe("the Element Picker host boundary", () => {
   it("keeps the host process's code out of main, eagerly or lazily", async () => {
     const metafile = await metafileOf("electron/main.ts", MAIN_EXTERNAL);
@@ -86,6 +90,7 @@ describe("the Element Picker host boundary", () => {
     // main can ever evaluate.
     const reachable = Object.keys(metafile.inputs);
     expect(reachable.filter(isHostProcessCode)).toEqual([]);
+    expect(reachable.filter(isSourceMapDecoder)).toEqual([]);
     expect(
       [...walkEagerGraph(metafile, "electron/main.ts")].filter((f) => f.startsWith(HOST_DIR))
     ).toEqual([]);
@@ -123,5 +128,20 @@ describe("the Element Picker host boundary", () => {
     expect(
       reachable.filter((file) => file.startsWith("electron/") && !file.startsWith(HOST_DIR))
     ).toEqual(["electron/utils/bootstrapErrorGuard.ts"]);
+  }, 60_000);
+
+  it("decodes source maps only in the host, loading the decoder when a frame is first mapped", async () => {
+    const entry = `${WORKER_DIR}symbolication.ts`;
+    const metafile = await metafileOf(entry, NATIVE_EXTERNAL);
+    // Not a vacuous pass: the decoder is reachable, behind the dynamic import.
+    expect(Object.keys(metafile.inputs).some(isSourceMapDecoder)).toBe(true);
+    expect([...walkEagerGraph(metafile, entry)].filter(isSourceMapDecoder)).toEqual([]);
+    // Maps arrive as bytes from main; the host fetches nothing itself.
+    expect(authorityImports(metafile)).toEqual([]);
+    expect(
+      Object.keys(metafile.inputs).filter(
+        (file) => file.startsWith("electron/") && !file.startsWith(HOST_DIR)
+      )
+    ).toEqual([]);
   }, 60_000);
 });

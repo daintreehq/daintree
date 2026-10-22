@@ -9,6 +9,8 @@ import type { SourceTracker } from "./sourceTracker.js";
 export interface PickerWorkspace {
   readonly id: string;
   readonly roots: SourceRoots;
+  /** The origin source maps may be fetched from, as `URL.origin` gives it; null when none was registered. */
+  readonly previewOrigin: string | null;
   /**
    * Aborted when the workspace is released, by its owner or by the LRU. Every
    * resolve in it carries the signal, so a queued one leaves the queue and a

@@ -41,6 +41,16 @@ export const SourceTargetSchema = z.strictObject({
 export type SourceTarget = z.infer<typeof SourceTargetSchema>;
 
 /**
+ * Whether the source a map was built from is the file on disk: the map's
+ * embedded `sourcesContent` compared with what the host read, a BOM ignored
+ * on either side and line endings not. `unchecked` when the map embeds no
+ * content for the source or the file could not be read under the budget; it
+ * never implies a match.
+ */
+export const SourceContentCheckSchema = z.enum(["matches", "differs", "unchecked"]);
+export type SourceContentCheck = z.infer<typeof SourceContentCheckSchema>;
+
+/**
  * Which source map turned a generated position into this target. The
  * generated position itself is the candidate's. `mapRevision` hashes the map
  * bytes, so an HMR update that changes the map is visible as a change even
@@ -50,6 +60,7 @@ export const SourceMapProvenanceSchema = z.strictObject({
   /** Null when the map was inlined in the generated module. */
   mapUrl: z.string().min(1).max(2048).nullable(),
   mapRevision: FileRevisionSchema,
+  sourceCheck: SourceContentCheckSchema,
 });
 export type SourceMapProvenance = z.infer<typeof SourceMapProvenanceSchema>;
 
