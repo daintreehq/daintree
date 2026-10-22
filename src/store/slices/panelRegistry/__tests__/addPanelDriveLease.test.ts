@@ -99,8 +99,12 @@ const { resetDriveLeaseHoldsForTesting, useDriveLeaseWaitStore } =
   await import("@/store/driveLeaseWaitStore");
 const { ClientAppError } = await import("@/utils/clientAppError");
 const { terminalInstanceService } = await import("@/services/TerminalInstanceService");
-const { launchDespiteMemoryPressure, panelHoldKey, resetMemoryPressureHoldsForTesting } =
-  await import("@/store/memoryPressureWaitStore");
+const {
+  launchDespiteMemoryPressure,
+  panelHoldKey,
+  resetMemoryPressureHoldsForTesting,
+  useMemoryPressureWaitStore,
+} = await import("@/store/memoryPressureWaitStore");
 
 function getPtyPanel(id: string): PtyPanelData | undefined {
   const panel = usePanelStore.getState().panelsById[id];
@@ -497,6 +501,65 @@ describe("launches the drive lease blocks (#13913)", () => {
 
     expect(terminalClient.spawn).not.toHaveBeenCalled();
     expect(getPtyPanel("memory-1")?.spawnStatus).toBe("ready");
+  });
+
+  it("keeps a restart off a released launch through a memory-pressure wait", async () => {
+    setDriveLeaseSnapshot(lease(false));
+    await restoreAgent("memory-2");
+    await drainMicrotasks();
+
+    // Control arrives while memory pressure is critical: the launch waits again.
+    isMemoryPressureCriticalMock.mockResolvedValue(true);
+    setDriveLeaseSnapshot(lease(true));
+    await drainMicrotasks();
+    expect(useMemoryPressureWaitStore.getState().heldPanelIds["memory-2"]).toBe(true);
+    expect(terminalClient.spawn).not.toHaveBeenCalled();
+
+    let finishSpawn: () => void = () => {};
+    terminalClient.spawn.mockImplementationOnce(
+      ({ id }) =>
+        new Promise((resolve) => {
+          finishSpawn = () => resolve(id ?? "memory-2");
+        })
+    );
+    launchDespiteMemoryPressure(panelHoldKey("memory-2"));
+    await drainMicrotasks();
+    expect(spawnedIds()).toEqual(["memory-2"]);
+
+    await usePanelStore.getState().restartTerminal("memory-2");
+    await drainMicrotasks();
+    expect(spawnedIds()).toEqual(["memory-2"]);
+    expect(terminalClient.kill).not.toHaveBeenCalled();
+
+    finishSpawn();
+    await drainMicrotasks();
+    expect(getPtyPanel("memory-2")?.spawnStatus).toBe("ready");
+    expect(isWaiting("memory-2")).toBe(false);
+  });
+
+  it("puts a launch back to its memory wait when it is closed while the host is asked", async () => {
+    setDriveLeaseSnapshot(lease(true));
+    isMemoryPressureCriticalMock.mockResolvedValue(true);
+    await restoreAgent("memory-3");
+    await drainMicrotasks();
+
+    let answerProbe: () => void = () => {};
+    terminalClient.reconnect.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          answerProbe = () => resolve({ exists: false });
+        })
+    );
+    launchDespiteMemoryPressure(panelHoldKey("memory-3"));
+    await drainMicrotasks();
+    expect(terminalClient.reconnect).toHaveBeenCalledWith("memory-3");
+
+    usePanelStore.getState().trashPanel("memory-3");
+    answerProbe();
+    await drainMicrotasks();
+
+    expect(terminalClient.spawn).not.toHaveBeenCalled();
+    expect(useMemoryPressureWaitStore.getState().heldPanelIds["memory-3"]).toBe(true);
   });
 
   it("leaves the assistant's launch to fail as before", async () => {

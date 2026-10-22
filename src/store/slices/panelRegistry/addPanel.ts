@@ -1402,13 +1402,34 @@ export const createAddPanelActions = (
             clearPanelDriveLeaseMark(id);
           }
         };
+        const waitOutMemoryPressure = (): void => {
+          // A launch control released keeps its mark through the memory wait:
+          // a restart stays off it until its spawn has an answer.
+          if (controlArrived) handedOn = true;
+          holdForMemoryPressure(panelHoldKey(id), {
+            panelId: id,
+            resume: (anyway) =>
+              terminalStartupQueue.enqueue(() => startPty(anyway, true, controlArrived)),
+            isStale: () => !isStillStarting(),
+            // A pane closed while it waited stays held in the trash, so an
+            // undo brings back the same waiting launch rather than one that
+            // started unseen.
+            isDeferred: () => get().panelsById[id]?.location === "trash",
+          });
+        };
         // A released launch whose pane was closed before its turn goes back to
-        // waiting in the trash rather than starting unseen.
+        // the wait it came from, in the trash, rather than starting unseen.
         const waitInTrash = (): boolean => {
-          if (!controlArrived || !capturedWorkspaceId) return false;
           if (get().panelsById[id]?.location !== "trash") return false;
-          waitForControl(capturedWorkspaceId);
-          return true;
+          if (controlArrived && capturedWorkspaceId) {
+            waitForControl(capturedWorkspaceId);
+            return true;
+          }
+          if (resumed && holdsForMemoryPressure) {
+            waitOutMemoryPressure();
+            return true;
+          }
+          return false;
         };
         const _p0 = get().panelsById[id];
         if (!_p0 || !isPtyPanel(_p0) || _p0.spawnStatus !== "spawning") {
@@ -1441,16 +1462,7 @@ export const createAddPanelActions = (
             // time, whatever its batch: pressure has only just eased. One that
             // was closed while its release queued goes back to waiting.
             if (pressureCritical || (resumed && _p1.location === "trash")) {
-              holdForMemoryPressure(panelHoldKey(id), {
-                panelId: id,
-                resume: (anyway) =>
-                  terminalStartupQueue.enqueue(() => startPty(anyway, true, controlArrived)),
-                isStale: () => !isStillStarting(),
-                // A pane closed while it waited stays held in the trash, so an
-                // undo brings back the same waiting launch rather than one that
-                // started unseen.
-                isDeferred: () => get().panelsById[id]?.location === "trash",
-              });
+              waitOutMemoryPressure();
               return;
             }
           }
