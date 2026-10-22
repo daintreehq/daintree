@@ -18,7 +18,9 @@ import type {
 import type { ElementPickerEvent } from "../../../../shared/elementPicker/protocol.js";
 import {
   MAX_BRIDGE_MESSAGE_CHARS,
+  MAX_ELEMENT_REFS,
   channelEvent,
+  elementRefToken,
   type ExtractRequest,
   type ExtractionPhase,
 } from "../guestChannel.js";
@@ -33,6 +35,8 @@ const LIMITS = {
   url: 2048,
   sourceCandidates: 16,
   frameworkEvidence: 8,
+  components: 64,
+  roots: 32,
 } as const;
 const MAX_RECT_PX = 2 ** 52;
 const FRAMEWORKS: ReadonlySet<string> = new Set([
@@ -159,6 +163,12 @@ export function createPicker(host: PickerHost): PickerHandle {
   let nextRequest = 0;
   let awaitingRequest = 0;
   let replies: string[] = [];
+  /**
+   * The elements the pending request's reply names, by the token it names
+   * them with; null where two events claimed one token for different nodes.
+   */
+  let named = new Map<string, Element | null>();
+  let namingEvents = 0;
   /** Frameworks this document already reported from a selection, so a walk is not re-sent on every click. */
   const reported = new Set<string>();
   const teardown: Array<() => void> = [];
@@ -167,6 +177,7 @@ export function createPicker(host: PickerHost): PickerHandle {
   const handshakeEvent = channelEvent(host.channel, "handshake");
   const extractEvent = channelEvent(host.channel, "extract");
   const extractedEvent = channelEvent(host.channel, "extracted");
+  const elementEvent = channelEvent(host.channel, "element");
   const disposeEvent = channelEvent(host.channel, "dispose");
 
   function listen(
@@ -226,6 +237,40 @@ export function createPicker(host: PickerHost): PickerHandle {
   }
 
   /**
+   * Swap a reply's element tokens for element ids, in place. Anything else in
+   * `rootElementIds` is dropped: a main-world reader cannot know an element
+   * id, so a string that is not one of this request's tokens names nothing. A
+   * record that lost a root that way no longer lists them all.
+   */
+  function adoptRoots(chain: unknown, nodes: ReadonlyMap<string, Element | null>): void {
+    if (!isPlainObject(chain) || !Array.isArray(chain.components)) return;
+    for (const record of chain.components.slice(0, LIMITS.components)) {
+      if (!isPlainObject(record) || !Array.isArray(record.rootElementIds)) continue;
+      const tokens: unknown[] = record.rootElementIds;
+      const ids: string[] = [];
+      let lost = tokens.length > LIMITS.roots;
+      for (const token of tokens.slice(0, LIMITS.roots)) {
+        const node = typeof token === "string" ? nodes.get(token) : undefined;
+        // Rechecked: a page listener can move a node while the reply is dispatched.
+        if (
+          node === undefined ||
+          node === null ||
+          node.ownerDocument !== document ||
+          !node.isConnected ||
+          isOverlay(node)
+        ) {
+          lost = true;
+          continue;
+        }
+        const id = idOf(node);
+        if (!ids.includes(id)) ids.push(id);
+      }
+      record.rootElementIds = ids;
+      if (lost) record.rootsComplete = false;
+    }
+  }
+
+  /**
    * Ask the extractors in the main world about `node`. The request is
    * dispatched on the node itself, so the other world's listener gets its own
    * wrapper for the same element without anything being written into the page
@@ -233,11 +278,16 @@ export function createPicker(host: PickerHost): PickerHandle {
    * extractor is installed, which is the common case and costs one event.
    */
   function extract(node: Element, phase: ExtractionPhase): ExtractorContribution | null {
+    // Page code runs inside the dispatch and can set off another description;
+    // that one goes without, rather than taking over this request's replies.
+    if (awaitingRequest !== 0) return null;
     nextRequest += 1;
     const id = nextRequest;
     const request: ExtractRequest = { id, phase };
     awaitingRequest = id;
     replies = [];
+    named = new Map();
+    namingEvents = 0;
     try {
       node.dispatchEvent(
         new CustomEvent(extractEvent, { detail: JSON.stringify(request), composed: true })
@@ -248,7 +298,9 @@ export function createPicker(host: PickerHost): PickerHandle {
       awaitingRequest = 0;
     }
     const received = replies;
+    const nodes = named;
     replies = [];
+    named = new Map();
     for (const text of received) {
       let parsed: unknown;
       try {
@@ -262,6 +314,7 @@ export function createPicker(host: PickerHost): PickerHandle {
       for (const entry of parsed.contributions.slice(0, FRAMEWORKS.size)) {
         if (!isPlainObject(entry) || typeof entry.framework !== "string") continue;
         if (!FRAMEWORKS.has(entry.framework) || !isPlainObject(entry.data)) continue;
+        adoptRoots(entry.data.componentChain, nodes);
         return entry.data as ExtractorContribution;
       }
       return null;
@@ -812,6 +865,38 @@ export function createPicker(host: PickerHost): PickerHandle {
         if (event.cancelable) event.preventDefault();
       },
       {},
+      teardown
+    );
+    // Capture: the event is dispatched on the element itself and does not bubble.
+    listen(
+      document,
+      elementEvent,
+      (event) => {
+        if (awaitingRequest === 0) return;
+        // The reply names at most this many; past it the rest are noise.
+        namingEvents += 1;
+        if (namingEvents > MAX_ELEMENT_REFS * 2) return;
+        const detail = (event as CustomEvent).detail;
+        if (typeof detail !== "string" || detail.length > 64) return;
+        let message: unknown;
+        try {
+          message = JSON.parse(detail);
+        } catch {
+          return;
+        }
+        if (!isPlainObject(message) || message.id !== awaitingRequest) return;
+        const ref = message.ref;
+        if (typeof ref !== "number" || !Number.isSafeInteger(ref)) return;
+        if (ref < 0 || ref >= MAX_ELEMENT_REFS) return;
+        const token = elementRefToken(ref);
+        const target = hitFromEvent(event);
+        if (target === null) return;
+        // Page code can dispatch on this channel too: a token two nodes claim names neither.
+        const claimed = named.get(token);
+        if (claimed === undefined) named.set(token, target);
+        else if (claimed !== target) named.set(token, null);
+      },
+      { capture: true },
       teardown
     );
     listen(

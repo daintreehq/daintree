@@ -29,6 +29,13 @@ export const CHANNEL_EVENTS = {
   extract: "extract",
   /** Extractors → bootstrap, on the document, while the request is still being dispatched. */
   extracted: "extracted",
+  /**
+   * Extractors → bootstrap, dispatched on each element a reply names, just
+   * before `extracted`. An element crosses between worlds only as an event's
+   * target, so this is how a component's rendered roots reach the bootstrap,
+   * which alone can give them element ids.
+   */
+  element: "element",
   /** Bootstrap → extractors: the bootstrap is gone, and so is everything installed for it. */
   dispose: "dispose",
 } as const;
@@ -70,4 +77,21 @@ export interface ExtractRequest {
 export interface ExtractReply {
   id: number;
   contributions: Array<{ framework: string; data: unknown }>;
+}
+
+/** Distinct elements one reply may name; a reference past it is never made. */
+export const MAX_ELEMENT_REFS = 256;
+
+/**
+ * What a reply's `rootElementIds` hold until the bootstrap swaps each for the
+ * element id of the node its `element` event arrived on.
+ */
+export function elementRefToken(ref: number): string {
+  return `ref-${ref}`;
+}
+
+export interface ElementRefMessage {
+  /** The request the reply answers. */
+  id: number;
+  ref: number;
 }

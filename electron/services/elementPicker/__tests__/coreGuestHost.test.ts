@@ -1,5 +1,7 @@
 // @vitest-environment jsdom
 import { EventEmitter } from "node:events";
+import { act, createElement, type ReactNode } from "react";
+import { createRoot } from "react-dom/client";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("electron", () => ({
@@ -167,15 +169,19 @@ class FakeWebContents extends EventEmitter {
   }
 }
 
+/** The bundles the app ships. */
+let shipped: Record<string, string> = {};
+/** The same, with the contributing fixture standing in for React's extractor. */
 let assets: Record<string, string> = {};
 
 beforeAll(() => {
-  assets = buildCoreGuestAssets([
+  shipped = buildCoreGuestAssets([
     {
-      id: "extractor:react",
+      id: "fixture:react",
       entry: "electron/services/elementPicker/__tests__/fixtures/contributingExtractor.ts",
     },
   ]);
+  assets = { ...shipped, "extractor:react": shipped["fixture:react"]! };
 }, 60_000);
 
 function makeHarness(options: { catalog?: Record<string, string> } = {}) {
@@ -579,5 +585,62 @@ describe("core Element Picker guest loading", () => {
       }),
     ]);
     expect(h.wc.debugger.evaluates().filter((entry) => entry.kind === "extractor")).toHaveLength(1);
+  });
+
+  it("describes a React selection with the shipped extractor: names, owner, raw frames, and roots as element ids", async () => {
+    const scope = globalThis as Record<string, unknown>;
+    const actFlag = Object.getOwnPropertyDescriptor(scope, "IS_REACT_ACT_ENVIRONMENT");
+    scope.IS_REACT_ACT_ENVIRONMENT = true;
+    document.body.innerHTML = '<div id="root"></div>';
+    const Card = ({ children }: { children?: ReactNode }) =>
+      createElement("section", { className: "card" }, children);
+    const Label = () => createElement("button", { id: "cta" }, "Go");
+    const App = () => createElement(Card, null, createElement(Label));
+    const root = createRoot(document.getElementById("root")!);
+    try {
+      act(() => root.render(createElement(App)));
+      const h = makeHarness({ catalog: shipped });
+      await h.bind();
+      await settle();
+      expect(h.kinds("extractor-installed")).toEqual([
+        expect.objectContaining({ framework: "react" }),
+      ]);
+
+      document.getElementById("cta")!.click();
+      await settle();
+      const selections = h.pickerEvents("selectionChanged");
+      const observation = (
+        selections.at(-1)!.event as {
+          observations: Array<{
+            elementId: string;
+            componentChain: {
+              nearestId: string;
+              components: Array<{
+                componentId: string;
+                name: { value: string } | null;
+                renderParentId?: string | null;
+                ownerId?: string | null;
+                rootElementIds: string[];
+              }>;
+            };
+            sourceCandidates: Array<{ kind: string; file: string }>;
+          }>;
+        }
+      ).observations[0]!;
+      const records = observation.componentChain.components;
+      expect(records.map((record) => record.name?.value)).toEqual(["Label", "Card", "App"]);
+      const [label, card, app] = records;
+      expect(observation.componentChain.nearestId).toBe(label!.componentId);
+      expect(label!.renderParentId).toBe(card!.componentId);
+      expect(label!.ownerId).toBe(app!.componentId);
+      // The page-world tokens arrived as the picker's own id for the picked element.
+      expect(label!.rootElementIds).toEqual([observation.elementId]);
+      expect(observation.sourceCandidates[0]).toMatchObject({ kind: "element-creation" });
+      expect(observation.sourceCandidates[0]!.file).toContain("coreGuestHost.test.ts");
+    } finally {
+      act(() => root.unmount());
+      if (actFlag) Object.defineProperty(scope, "IS_REACT_ACT_ENVIRONMENT", actFlag);
+      else delete scope.IS_REACT_ACT_ENVIRONMENT;
+    }
   });
 });
