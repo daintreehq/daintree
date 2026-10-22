@@ -458,6 +458,27 @@ describe("IdleBackgroundAutoCloseService", () => {
       expect(ptyClientMock.gracefulKillByProject).not.toHaveBeenCalled();
     });
 
+    it("resolves a record's owner from the sweep's terminal snapshot once its terminal exited", async () => {
+      enable();
+      projectStoreMock.getAllProjects.mockReturnValue([
+        makeIdleProject("proj-1"),
+        makeIdleProject("proj-2"),
+      ]);
+      ptyClientMock.getAllTerminalsAsync.mockResolvedValue([
+        makeTerminal("proj-1", { id: "t-exited", hasPty: false }),
+      ]);
+      const service = makeService();
+      service.setCoordinationHoldProvider((projectId, ownerOf) =>
+        ownerOf("t-exited") === projectId ? "unseen-hand-back" : null
+      );
+      await runCheck(service);
+
+      expect(ptyClientMock.gracefulKillByProject).toHaveBeenCalledTimes(1);
+      expect(ptyClientMock.gracefulKillByProject).toHaveBeenCalledWith("proj-2", {
+        preserveSession: true,
+      });
+    });
+
     it("sleeps again once the hold clears", async () => {
       enable();
       projectStoreMock.getAllProjects.mockReturnValue([makeIdleProject("proj-1")]);

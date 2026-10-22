@@ -48,6 +48,12 @@ const MAX_THRESHOLD_MINUTES = 1440; // 24h
 /** One entry of the live terminal snapshot PtyClient serves. */
 type AutoCloseTerminal = Awaited<ReturnType<PtyClient["getAllTerminalsAsync"]>>[number];
 
+/** The observed kind of pending coordination, or null; `ownerOf` reads the latest terminal snapshot. */
+type CoordinationHoldProvider = (
+  projectId: string,
+  ownerOf: (terminalId: string) => string | null
+) => string | null;
+
 /** Why a project must not be reclaimed this sweep. */
 type BlockingReason = "terminal" | "assistant" | "coordination-hold";
 
@@ -105,7 +111,13 @@ export class IdleBackgroundAutoCloseService {
   private readonly WAKE_QUIET_MS = 30_000;
   private ptyClient: PtyClient | null = null;
   private projectViewManagersProvider: (() => ProjectViewManager[]) | null = null;
-  private coordinationHoldProvider: ((projectId: string) => string | null) | null = null;
+  private coordinationHoldProvider: CoordinationHoldProvider | null = null;
+  /**
+   * Owners from the latest terminal read. It still lists a terminal that has
+   * exited, which the spawn registry and the fleet no longer do, so a record
+   * left on one keeps its project instead of reading as unattributable.
+   */
+  private terminalOwners: ReadonlyMap<string, string> = new Map();
   /** Guards against overlapping sweeps when one cycle outruns the 5-min tick. */
   private sweepInProgress = false;
 
@@ -125,13 +137,16 @@ export class IdleBackgroundAutoCloseService {
    * that sleeping would drop. Read synchronously and only on the automatic
    * path; manual Sleep never asks. A missing or throwing provider holds nothing.
    */
-  setCoordinationHoldProvider(provider: ((projectId: string) => string | null) | null): void {
+  setCoordinationHoldProvider(provider: CoordinationHoldProvider | null): void {
     this.coordinationHoldProvider = provider;
   }
 
   private coordinationHold(projectId: string): string | null {
     try {
-      return this.coordinationHoldProvider?.(projectId) ?? null;
+      return (
+        this.coordinationHoldProvider?.(projectId, (id) => this.terminalOwners.get(id) ?? null) ??
+        null
+      );
     } catch (error) {
       logError("idle-background-auto-close-hold-read-failed", error, { projectId });
       // An unreadable hold is not a clear one: leave the project awake.
@@ -207,6 +222,9 @@ export class IdleBackgroundAutoCloseService {
       });
       return null;
     }
+    this.terminalOwners = new Map(
+      snapshot.terminals.flatMap((t) => (t.projectId ? [[t.id, t.projectId] as const] : []))
+    );
     return snapshot.terminals;
   }
 

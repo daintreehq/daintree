@@ -1100,7 +1100,7 @@ export async function initGlobalServices(
       );
       // Wired BEFORE start() as well; every source is resolved per call, since
       // the services behind it are created and replaced after this runs.
-      svc.setCoordinationHoldProvider((projectId) => {
+      svc.setCoordinationHoldProvider((projectId, ownerOf) => {
         const ptyClient = getPtyClient();
         const fleet = getFleetSnapshotService()?.getLastBroadcast() ?? null;
         const fleetProjects = new Map(fleet?.runs.map((r) => [r.runId, r.workspaceId]));
@@ -1108,7 +1108,7 @@ export async function initGlobalServices(
         const attention = getRunAttentionService();
         return findCoordinationHold(projectId, {
           projectOfTerminal: (id) =>
-            ptyClient?.getTerminalProjectId(id) ?? fleetProjects.get(id) ?? null,
+            ptyClient?.getTerminalProjectId(id) ?? fleetProjects.get(id) ?? ownerOf(id),
           waitingRunProjectIds: () =>
             fleet?.runs.filter((r) => r.agentState === "waiting").map((r) => r.workspaceId) ?? [],
           unseenHandBackRunIds: () => handBacks?.listUnseenRunIds() ?? [],
