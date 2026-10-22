@@ -2787,7 +2787,7 @@ export interface GeneratedIpcInvokeMap {
           sourcePrNumber?: number | undefined;
           sourcePrTitle?: string | undefined;
           sourcePrUrl?: string | undefined;
-          sourcePrState?: "open" | "closed" | "merged" | undefined;
+          sourcePrState?: "merged" | "open" | "closed" | undefined;
           sourcePrLinkedIssueNumber?: number | undefined;
           submoduleInit?: "inherit" | "all" | "none" | undefined;
           collisionPolicy?: "error" | "suffix" | undefined;
