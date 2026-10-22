@@ -823,6 +823,29 @@ describe("remote session wiring", () => {
       expect(getEndpointRegistry().getRemote()).toHaveLength(2);
     });
 
+    it("asks for the reconcile before the views' streams move to the resumed session", async () => {
+      await startHarness(RESUMABLE);
+      await connect();
+      await invoke(HOST_CHANNEL, VIEW_A, {});
+      const connection = h.manager.get(HOST_ID)!;
+      const askedBeforeStreams: boolean[] = [];
+      let call: { mock: { calls: unknown[][] } } | null = null;
+      cleanups.push(
+        connection.onSessionOpened((session) => {
+          call = vi.spyOn(session, "call");
+        }),
+        connection.onEndpointOpened(() => {
+          const asked = call?.mock.calls.some(([method]) => method === LinkMethod.ENDPOINT_RECONCILE);
+          askedBeforeStreams.push(asked ?? false);
+        })
+      );
+
+      for (const socket of h.sockets.splice(0)) socket.destroy();
+
+      await waitFor(() => askedBeforeStreams.length === 1);
+      expect(askedBeforeStreams).toEqual([true]);
+    });
+
     it("still opens what was lost on a host too old to reconcile", async () => {
       await startHarness(RESUMABLE);
       // A host from before the reconcile call has no handler for it.

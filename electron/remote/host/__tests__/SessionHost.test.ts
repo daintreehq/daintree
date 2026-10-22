@@ -504,34 +504,63 @@ describe("SessionHost: endpoint changes a dropped link lost (#13917)", () => {
 
     const second = resumed();
     open(second, "view-1", "p1", "o1");
-    const answer = second.runCall(LinkMethod.ENDPOINT_RECONCILE, { endpointIds: ["view-1"] });
+    second.runCall(LinkMethod.ENDPOINT_RECONCILE, { endpointIds: ["view-1"] });
 
-    expect(answer).toEqual({ missing: [] });
     expect(lost.closeCause).toBe("client-closed");
     expect(host.getEndpoint("s1", "view-2")).toBeUndefined();
     expect(registry.getRemote()).toEqual([kept]);
   });
 
-  it("names a held endpoint whose repeated open the lost ones crowded out", () => {
-    const first = fakeLink();
-    server.attach("s1", first);
-    open(first, "view-1", "p1", "o1");
-    open(first, "view-2", "p2", "o2");
-    first.drop();
+  describe("with the endpoint cap full of what the Shell closed", () => {
+    /** view-2's close was lost; view-3's repeated open finds the allowance of two taken. */
+    function crowded() {
+      const first = fakeLink();
+      server.attach("s1", first);
+      open(first, "view-1", "p1", "o1");
+      open(first, "view-2", "p2", "o2");
+      first.drop();
+      const second = resumed();
+      const opened = vi.fn();
+      host.onEndpointOpened(opened);
+      open(second, "view-1", "p1", "o1");
+      open(second, "view-3", "p3", "o3");
+      expect(host.getEndpoint("s1", "view-3")).toBeUndefined();
+      return { second, opened };
+    }
 
-    const second = resumed();
-    open(second, "view-1", "p1", "o1");
-    // Refused: the closed view-2 still fills this session's allowance of two.
-    open(second, "view-3", "p3", "o3");
-    expect(host.getEndpoint("s1", "view-3")).toBeUndefined();
-    const answer = second.runCall(LinkMethod.ENDPOINT_RECONCILE, {
-      endpointIds: ["view-1", "view-3"],
+    it("opens the crowded-out view within the reconcile, and tells it to resync", () => {
+      const { second, opened } = crowded();
+
+      second.runCall(LinkMethod.ENDPOINT_RECONCILE, { endpointIds: ["view-1", "view-3"] });
+
+      expect(host.getEndpoint("s1", "view-2")).toBeUndefined();
+      const reopened = host.getEndpoint("s1", "view-3")!;
+      expect(reopened).toMatchObject({ projectId: "p3", openId: "o3" });
+      // Its bridges are in place before the stream requests behind the call arrive.
+      expect(opened).toHaveBeenCalledWith(reopened, expect.anything());
+      expect(second.calls.at(-1)).toEqual({
+        method: LinkMethod.ENDPOINT_RESYNC,
+        payload: { endpointIds: ["view-3"], reason: "reattached" },
+      });
     });
 
-    expect(answer).toEqual({ missing: ["view-3"] });
-    expect(host.getEndpoint("s1", "view-2")).toBeUndefined();
-    open(second, "view-3", "p3", "o3");
-    expect(host.getEndpoint("s1", "view-3")?.projectId).toBe("p3");
+    it("opens it on the project the Shell moved it to since", () => {
+      const { second } = crowded();
+      second.emit(Lane.CONTROL, ControlKind.ENDPOINT_REBIND, {
+        endpointId: "view-3",
+        projectId: "p4",
+      });
+      second.runCall(LinkMethod.ENDPOINT_RECONCILE, { endpointIds: ["view-1", "view-3"] });
+      expect(host.getEndpoint("s1", "view-3")?.projectId).toBe("p4");
+    });
+
+    it("leaves closed a crowded-out view the Shell closed before reconciling", () => {
+      const { second } = crowded();
+      second.emit(Lane.CONTROL, ControlKind.ENDPOINT_CLOSE, { endpointId: "view-3" });
+      second.runCall(LinkMethod.ENDPOINT_RECONCILE, { endpointIds: ["view-1", "view-3"] });
+      expect(host.getEndpoint("s1", "view-3")).toBeUndefined();
+      expect(registry.getRemote()).toHaveLength(1);
+    });
   });
 
   it("keeps an endpoint opened after the Shell's list, which the control lane put ahead of it", () => {

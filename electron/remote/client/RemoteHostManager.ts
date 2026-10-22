@@ -25,7 +25,6 @@ import type { LinkSession, LinkSessionOptions } from "../link/session.js";
 import {
   EndpointAgentActivityPayloadSchema,
   EndpointAssistantPayloadSchema,
-  EndpointReconcileResultSchema,
   EndpointResyncPayloadSchema,
   HostInfoSchema,
   HostProjectListSchema,
@@ -681,10 +680,7 @@ export class HostConnection {
       const reconcile: EndpointReconcilePayload = {
         endpointIds: [...this.endpoints.values()].map((open) => open.endpointId),
       };
-      session.call(LinkMethod.ENDPOINT_RECONCILE, reconcile).then(
-        (answer) => this.reopenMissing(session, answer),
-        () => {}
-      );
+      session.call(LinkMethod.ENDPOINT_RECONCILE, reconcile).catch(() => {});
     }
     // A resume keeps the host's endpoints, so the views' streams move to the new session.
     for (const [webContentsId, open] of [...this.endpoints]) {
@@ -799,23 +795,6 @@ export class HostConnection {
       cause,
       ...extra,
     });
-  }
-
-  /**
-   * Endpoints a reconcile found the host still lacks: their repeated open
-   * came while its endpoint allowance was full of ones it has since closed.
-   * Opened again from what the view holds now, so a later move or close
-   * already on its way is never undone.
-   */
-  private reopenMissing(session: LinkSession, answer: unknown): void {
-    const parsed = EndpointReconcileResultSchema.safeParse(answer);
-    if (!parsed.success || this.session !== session || !session.isOpen) return;
-    for (const endpointId of parsed.data.missing) {
-      const webContentsId = this.viewsByEndpoint.get(endpointId);
-      const open = webContentsId === undefined ? undefined : this.endpoints.get(webContentsId);
-      if (!open || !this.postOpen(session, open)) continue;
-      this.views.resync(webContentsId!, this.hostId, "reattached");
-    }
   }
 
   private postOpen(session: LinkSession, open: OpenEndpoint): boolean {

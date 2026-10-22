@@ -26,7 +26,6 @@ import {
   MAX_LISTED_PROJECTS,
   type EndpointAgentActivityPayload,
   type EndpointAssistantPayload,
-  type EndpointReconcileResult,
   type EndpointResyncPayload,
   type EndpointResyncReason,
   type HostInfo,
@@ -161,6 +160,12 @@ interface SessionState {
    */
   openedOnLink: Set<string>;
   createdOnLink: Set<string>;
+  /**
+   * Opens the current link refused at the endpoint cap, as the Shell has
+   * since moved them (a close drops one), for its reconcile to retry once
+   * closing what it no longer holds has made room.
+   */
+  refusedOnLink: Map<string, { projectId: string | null; openId: string | undefined }>;
   /**
    * What the Shell was last told about each endpoint, per answer, by client
    * endpoint id. An endpoint missing here is owed an answer: cleared when the
@@ -393,6 +398,7 @@ export class SessionHost {
         staleReason: "reattached",
         openedOnLink: new Set(),
         createdOnLink: new Set(),
+        refusedOnLink: new Map(),
         told: { assistant: new Map(), agents: new Map() },
         answerRetry: { assistant: null, agents: null },
         overHighWaterTimer: null,
@@ -435,6 +441,7 @@ export class SessionHost {
     state.link = link;
     state.openedOnLink.clear();
     state.createdOnLink.clear();
+    state.refusedOnLink.clear();
     const s = state;
     s.detach.push(
       link.on(Lane.CONTROL, ControlKind.ENDPOINT_OPEN, (body) =>
@@ -443,9 +450,10 @@ export class SessionHost {
       link.on(Lane.CONTROL, ControlKind.ENDPOINT_REBIND, (body) =>
         this.rebindEndpoint(s, body.endpointId, body.projectId)
       ),
-      link.on(Lane.CONTROL, ControlKind.ENDPOINT_CLOSE, (body) =>
-        s.endpoints.get(body.endpointId)?.close("client-closed")
-      ),
+      link.on(Lane.CONTROL, ControlKind.ENDPOINT_CLOSE, (body) => {
+        s.refusedOnLink.delete(body.endpointId);
+        s.endpoints.get(body.endpointId)?.close("client-closed");
+      }),
       link.onWritable(() => this.maybeFinishResync(s)),
       link.registerCallHandler(LinkMethod.HOST_INFO, EmptyPayloadSchema, () =>
         (this.options.hostInfo ?? defaultHostInfo)()
@@ -543,6 +551,7 @@ export class SessionHost {
       // with a dropped link: the reopened view starts afresh, as it would have.
       existing.close("client-closed");
     }
+    state.refusedOnLink.delete(clientEndpointId);
     if (state.endpoints.size >= this.maxEndpoints) {
       logger.warn("Remote session is at its endpoint cap; ignoring a view", {
         sessionId: state.sessionId,
@@ -550,6 +559,11 @@ export class SessionHost {
         clientEndpointId,
         maxEndpoints: this.maxEndpoints,
       });
+      state.refusedOnLink.set(clientEndpointId, { projectId, openId });
+      const oldest = state.refusedOnLink.keys().next().value;
+      if (state.refusedOnLink.size > this.maxEndpoints && oldest !== undefined) {
+        state.refusedOnLink.delete(oldest);
+      }
       return;
     }
     const endpoint = new RemoteViewEndpoint(
@@ -600,7 +614,13 @@ export class SessionHost {
 
   private rebindEndpoint(state: SessionState, clientEndpointId: string, projectId: string | null) {
     const endpoint = state.endpoints.get(clientEndpointId);
-    if (!endpoint || endpoint.isClosed() || endpoint.projectId === projectId) return;
+    if (!endpoint || endpoint.isClosed()) {
+      // Moved since its open was refused: opened where it is now, if room is made.
+      const refused = state.refusedOnLink.get(clientEndpointId);
+      if (refused) refused.projectId = projectId;
+      return;
+    }
+    if (endpoint.projectId === projectId) return;
     logger.info("Remote view endpoint rebound", {
       ...describeEndpoint(endpoint),
       nextProjectId: projectId,
@@ -621,10 +641,9 @@ export class SessionHost {
    * A resumed Shell holds `held` and has repeated each one's open on this
    * link. Any other endpoint kept for it was closed in a frame the drop lost;
    * one of `held` this link had to create was opened in one, and its view
-   * missed everything sent since. One still missing had its repeated open
-   * refused at the endpoint cap, which closing the lost ones may have freed.
+   * missed everything sent since.
    */
-  private reconcileEndpoints(state: SessionState, held: string[]): EndpointReconcileResult {
+  private reconcileEndpoints(state: SessionState, held: string[]): null {
     const holds = new Set(held);
     const lost = [...state.endpoints.values()].filter(
       (endpoint) =>
@@ -641,9 +660,14 @@ export class SessionHost {
     }
     // The ordinary close, so the lease, streams and rings go as they would have.
     for (const endpoint of lost) endpoint.close("client-closed");
+    // Opens the lost ones crowded out of the endpoint cap get their room now,
+    // before the views' stream requests queued behind this call arrive.
+    for (const [id, refused] of [...state.refusedOnLink]) {
+      this.openEndpoint(state, id, refused.projectId, refused.openId);
+    }
     for (const id of holds) if (state.createdOnLink.has(id)) state.stale.add(id);
     if (state.stale.size > 0 && !state.resyncing) this.announceResync(state);
-    return { missing: [...holds].filter((id) => !state.endpoints.has(id)) };
+    return null;
   }
 
   private transportFor(state: SessionState): RemoteEndpointTransport {
