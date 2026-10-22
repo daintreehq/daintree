@@ -2436,6 +2436,24 @@ describe("HelpSessionService", () => {
       await revoke;
     });
 
+    it("revokes the grants of a PTY that bound to the session while its capture ran", async () => {
+      let resolveKill!: (id: string | null) => void;
+      mockPtyGracefulKill.mockImplementationOnce(
+        () => new Promise<string | null>((resolve) => (resolveKill = resolve))
+      );
+      const result = await service.provisionSession(provisionInput());
+      if (!result) throw new Error("expected result");
+      expect(service.markTerminalForToken(result.token, "term-1")).toBe(true);
+
+      const revoke = service.revokeSession(result.sessionId, { captureHibernation: true });
+      expect(service.markTerminalForToken(result.token, "term-2")).toBe(true);
+      const late = grantFor("term-2");
+      resolveKill(null);
+      await revoke;
+
+      expect(pluginMcpGrantRegistry.isLive(late.credentialId)).toBe(false);
+    });
+
     it("revokes a displaced lane's plugin grants", async () => {
       const first = await service.provisionSession(provisionInput());
       if (!first) throw new Error("expected first provision");

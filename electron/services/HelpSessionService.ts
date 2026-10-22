@@ -2112,6 +2112,10 @@ export class HelpSessionService {
       }
     }
 
+    // A launch that bound to this session while the capture ran got plugin
+    // grants of its own; the session ends here either way.
+    this.revokeLanePluginGrants(this.terminalBySessionId.get(sessionId));
+
     // Race guard: a same-project re-provision can call `displacePriorSessions`
     // during the `gracefulKill` await above, which marks our record revoked
     // and lets a fresh session take over the project's active slot. Detect

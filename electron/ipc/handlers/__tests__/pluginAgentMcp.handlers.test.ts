@@ -1019,6 +1019,18 @@ describe("plugin agent MCP access IPC", () => {
       expect(pluginMcpGrantRegistry.isLive(agentGrant.credentialId)).toBe(true);
     });
 
+    it("always lets the Assistant's access be lowered, after the agents lost theirs or the plugin went away", async () => {
+      setProjectAgentMcpAccess(PROJECT, "acme.ledger", "read-write");
+      await assistant("read-write");
+
+      setProjectAgentMcpAccess(PROJECT, "acme.ledger", "off");
+      expect(rowOf(await assistant("read-only"))?.assistantAccess).toBe("read-only");
+
+      mocks.hasPlugin.mockReturnValue(false);
+      await assistant("off");
+      expect(assistantAgentMcpAccess(PROJECT, "acme.ledger")).toBe("off");
+    });
+
     it("rejects an Assistant answer that clears instead of choosing", async () => {
       await expect(
         set({ pluginInstanceId: "acme.ledger", access: null, scope: "assistant" })

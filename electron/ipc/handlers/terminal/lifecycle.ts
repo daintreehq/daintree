@@ -76,6 +76,7 @@ import {
   refreshProjectAgentMcpDefaults,
 } from "../../../services/pluginAgentMcp/projectEnablement.js";
 import { pluginServerKeysFor } from "../../../services/pluginAgentMcp/serverKeys.js";
+import { pluginMcpGrantRegistry } from "../../../services/pluginAgentMcp/grantRegistry.js";
 import { isProjectWorkspaceId } from "../../../../shared/utils/workspaceIds.js";
 
 type ValidatedTerminalSpawnOptions = z.output<typeof TerminalSpawnOptionsSchema>;
@@ -163,6 +164,13 @@ async function getMcpServerService(): Promise<McpServerSingleton> {
 // registers one wires them first — before the CLI's first handshake.
 // Re-setting is a handful of reference writes, and doing it per registration
 // keeps the wiring ahead of each one.
+/** So the Assistant's panel shows its plugin tool calls beside its calls to Daintree's own server. */
+function wireAssistantPluginActivity(mcpServerService: McpServerSingleton): void {
+  mcpServerService.setAssistantPluginLaneResolver((terminalId) =>
+    helpSessionService.getAssistantPluginLane(terminalId)
+  );
+}
+
 function wirePaneTokenResolvers(mcpServerService: McpServerSingleton): void {
   mcpServerService.setPaneWorkspaceBindingResolver((token) =>
     mcpPaneConfigService.getPaneWorkspaceBindingForToken(token)
@@ -857,11 +865,7 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
           ).filter((server) => !pluginLaunch.serverNamesInUse.has(server.serverKey));
           if (servers.length > 0) {
             const mcpServerService = await getMcpServerService();
-            // So the Assistant's panel shows its plugin tool calls beside its
-            // calls to Daintree's own server.
-            mcpServerService.setAssistantPluginLaneResolver((terminalId) =>
-              helpSessionService.getAssistantPluginLane(terminalId)
-            );
+            wireAssistantPluginActivity(mcpServerService);
             const ready = mcpServerService.isRunning || (await mcpServerService.ensureReady());
             const port = mcpServerService.currentPort;
             if (ready && port) {
@@ -919,6 +923,12 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
           "Daintree Assistant session token is invalid or already displaced; refusing to spawn"
         );
       }
+      // A session whose teardown began while its plugin servers were prepared
+      // still binds — its capture needs the PTY — but must not hand them over:
+      // that teardown already revoked whatever its old PTY held.
+      if (pluginsPrepared && helpSessionService.getPluginLaunchContext(helpToken) === null) {
+        pluginMcpGrantRegistry.revokeTerminal(id);
+      }
     } else if (launchMcp !== undefined && safeCommand.length > 0 && resolvedProject) {
       // Daintree MCP injection for normal agent launches, in the dialect the
       // agent's registry entry declares (`capabilities.launchMcp`): Claude's
@@ -972,12 +982,18 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
             return { runCommands: [] };
           });
         const tier = resolveDaintreeMcpTier(projSettings);
+        // A restart respawns an Assistant's pane under the same id with no help
+        // token (`buildRestartEnv`), so it lands here rather than above; its
+        // plugin servers stay the Assistant's, held to the Assistant's answer.
+        const pluginConsumer = helpSessionService.isHelpTerminal(id) ? "assistant" : undefined;
         const pluginServers = await resolvePluginMcpServers(
           resolvedProject.id,
-          resolvedProject.path
+          resolvedProject.path,
+          pluginConsumer
         );
         if (tier !== "off" || pluginServers.length > 0) {
           const mcpServerService = await getMcpServerService();
+          if (pluginConsumer !== undefined) wireAssistantPluginActivity(mcpServerService);
           const ready = mcpServerService.isRunning || (await mcpServerService.ensureReady());
           if (!ready) {
             console.warn(
@@ -999,7 +1015,11 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
                       projectId: resolvedProject.id,
                       servers: pluginServers,
                       launchAgentIdHint: launchAgentId,
-                      isEligible: isPluginMcpServerStillEligible(resolvedProject.id),
+                      isEligible: isPluginMcpServerStillEligible(
+                        resolvedProject.id,
+                        pluginConsumer
+                      ),
+                      ...(pluginConsumer !== undefined ? { consumer: pluginConsumer } : {}),
                     },
                   }
                 : {}),

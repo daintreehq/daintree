@@ -3652,7 +3652,8 @@ interface PluginManifest {
     /**
      * The short name agents see this plugin's MCP server under, as
      * `daintree-<mcpName>`: lowercase letters, digits and hyphens, at most 16
-     * characters. Without one the host derives a name from the last segment of
+     * characters. `docs` and `runbooks` are taken by the Daintree Assistant's own
+     * servers. Without one the host derives a name from the last segment of
      * `name`. The same name in every project; see `docs/plugins/manifest.md` for
      * how a clash between two plugins is settled.
      */

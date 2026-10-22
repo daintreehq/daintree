@@ -140,6 +140,7 @@ const {
   mockCodexLaunchArgs,
   mockCopilotLaunchArgs,
   mockPluginLaunchContext,
+  mockIsHelpTerminal,
 } = vi.hoisted(() => ({
   mockValidateToken: vi.fn<(token: string) => "core" | "full" | false>(),
   mockMarkTerminalForToken: vi.fn(() => true),
@@ -147,6 +148,7 @@ const {
   mockCodexLaunchArgs: vi.fn<() => string[] | null>(() => null),
   mockCopilotLaunchArgs: vi.fn<() => string[] | null>(() => null),
   mockPluginLaunchContext: vi.fn<(token: string) => PluginLaunchContext | null>(() => null),
+  mockIsHelpTerminal: vi.fn<(terminalId: string) => boolean>(() => false),
 }));
 
 vi.mock("../../../../services/HelpSessionService.js", () => ({
@@ -161,7 +163,7 @@ vi.mock("../../../../services/HelpSessionService.js", () => ({
     getAssistantPluginLane: () => null,
     markTerminalForToken: mockMarkTerminalForToken,
     unbindTerminal: vi.fn(),
-    isHelpTerminal: () => false,
+    isHelpTerminal: (terminalId: string) => mockIsHelpTerminal(terminalId),
   },
 }));
 
@@ -325,6 +327,7 @@ describe("terminal spawn handler - plugin MCP servers for agent launches", () =>
     mockWaitForInit.mockImplementation(() => Promise.resolve());
     mockWaitForProjectPlugins.mockImplementation(() => Promise.resolve(true));
     mockMarkTerminalForToken.mockReturnValue(true);
+    mockIsHelpTerminal.mockReturnValue(false);
     mockClaudeLaunchArgs.mockReturnValue([]);
     mockCodexLaunchArgs.mockReturnValue(null);
     mockCopilotLaunchArgs.mockReturnValue(null);
@@ -836,6 +839,42 @@ describe("terminal spawn handler - plugin MCP servers for agent launches", () =>
       await expect(helpSpawn()).rejects.toThrow(/invalid or already displaced/);
 
       expect(ptyClient.spawn).not.toHaveBeenCalled();
+      expect(pluginMcpGrantRegistry.listForTerminal("term-help")).toEqual([]);
+    });
+
+    it("hands over nothing live when the session's teardown began while its servers were prepared", async () => {
+      setProjectAgentMcpAccess(PROJECT_A, "acme.ledger", "read-write");
+      setProjectAssistantAgentMcpAccess(PROJECT_A, "acme.ledger", "read-only");
+      const context = mockPluginLaunchContext.getMockImplementation()!;
+      // Live when the launch asks, ending once it has bound.
+      mockPluginLaunchContext.mockImplementationOnce(context).mockImplementation(() => null);
+
+      await helpSpawn();
+
+      expect(ptyClient.spawn).toHaveBeenCalledTimes(1);
+      expect(pluginMcpGrantRegistry.listForTerminal("term-help")).toEqual([]);
+    });
+
+    it("holds a restarted Assistant, which arrives with no help token, to the Assistant's answer", async () => {
+      setProjectAgentMcpAccess(PROJECT_A, "acme.ledger", "read-write");
+      setProjectAssistantAgentMcpAccess(PROJECT_A, "acme.ledger", "read-only");
+      mockIsHelpTerminal.mockImplementation((terminalId) => terminalId === "term-help");
+
+      await spawn({ id: "term-help" });
+
+      const [grant] = pluginMcpGrantRegistry.listForTerminal("term-help");
+      expect(grant).toMatchObject({ scope: { databases: true }, consumer: "assistant" });
+
+      setProjectAssistantAgentMcpAccess(PROJECT_A, "acme.ledger", "off");
+      expect(pluginMcpGrantRegistry.listForTerminal("term-help")).toEqual([]);
+    });
+
+    it("mints nothing for a restarted Assistant whose answer is off", async () => {
+      setProjectAgentMcpAccess(PROJECT_A, "acme.ledger", "read-write");
+      mockIsHelpTerminal.mockImplementation((terminalId) => terminalId === "term-help");
+
+      await spawn({ id: "term-help" });
+
       expect(pluginMcpGrantRegistry.listForTerminal("term-help")).toEqual([]);
     });
 

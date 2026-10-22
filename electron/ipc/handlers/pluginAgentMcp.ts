@@ -323,8 +323,9 @@ function isMeaningful(plugin: DeclaredAgentMcpPlugin, access: AgentMcpAccess): b
 
 /**
  * Record how much of a plugin's tools the project's Daintree Assistant may use.
- * Off is always accepted, so an answer for a plugin that went away can be
- * cleared. Anything else needs the plugin running here, and never goes past
+ * Less than it has now is always accepted, so an answer for a plugin that went
+ * away, or that the agents lost, can be lowered or cleared. More needs the
+ * plugin running here, and never goes past
  * what this project's agents have: the Assistant's answer is a share of theirs.
  * Read only is accepted for a plugin with no database tools, where it reaches
  * nothing until read and write is chosen as well.
@@ -334,7 +335,9 @@ async function setAssistantAccess(
   pluginInstanceId: string,
   access: AgentMcpAccess
 ): Promise<void> {
-  if (access === "off") {
+  // Taking access away is always accepted, whatever became of the plugin or
+  // the agents' access since it was given.
+  if (ACCESS_RANK[access] <= ACCESS_RANK[assistantAgentMcpAccess(projectId, pluginInstanceId)]) {
     setProjectAssistantAgentMcpAccess(projectId, pluginInstanceId, access);
     return;
   }

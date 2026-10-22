@@ -994,6 +994,22 @@ describe("ProjectAgentToolsSection", () => {
       });
     });
 
+    it("lets changes be taken back after the agents lost access", async () => {
+      await renderWith([plugin({ access: "off", assistantAccess: "read-write" })]);
+      agentMcpApi.setPluginAccess.mockResolvedValue(
+        snapshot([plugin({ access: "off", assistantAccess: "read-only" })])
+      );
+
+      fireEvent.click(changesSwitch("Ledger"));
+
+      expect(agentMcpApi.setPluginAccess).toHaveBeenCalledWith({
+        pluginInstanceId: "acme.ledger",
+        access: "read-only",
+        scope: "assistant",
+      });
+      await waitFor(() => expect(isOn(changesSwitch("Ledger"))).toBe(false));
+    });
+
     it("says a plugin with no read-only tools gives the Assistant nothing until changes are allowed", async () => {
       await renderWith([notes({ access: "read-write", source: "project" })]);
 
