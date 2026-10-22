@@ -105,6 +105,15 @@ export class RunHandBackService {
     return track.record;
   }
 
+  /** Runs whose hand-back is unseen, as recorded; reading never expires or marks one. */
+  listUnseenRunIds(): string[] {
+    const ids: string[] = [];
+    for (const [runId, track] of this.tracks) {
+      if (isHandBackUnseen(track.record ?? undefined)) ids.push(runId);
+    }
+    return ids;
+  }
+
   /**
    * Forget every run a complete inventory, read from `readStartedAt`, no longer
    * has. A run observed since the read began may simply be newer than it.

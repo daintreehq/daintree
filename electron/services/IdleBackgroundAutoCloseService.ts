@@ -49,10 +49,10 @@ const MAX_THRESHOLD_MINUTES = 1440; // 24h
 type AutoCloseTerminal = Awaited<ReturnType<PtyClient["getAllTerminalsAsync"]>>[number];
 
 /** Why a project must not be reclaimed this sweep. */
-type BlockingReason = "terminal" | "assistant";
+type BlockingReason = "terminal" | "assistant" | "coordination-hold";
 
 /** Why a project past its threshold was left awake, as the sweep log names it. */
-type SkipReason = IdleShellSkipReason | "mcp-dispatch" | "ineligible";
+type SkipReason = IdleShellSkipReason | "mcp-dispatch" | "ineligible" | "coordination-hold";
 
 type ShellCloseResult =
   | { status: "slept"; entry: IdleBackgroundClosedProjectEntry }
@@ -105,6 +105,7 @@ export class IdleBackgroundAutoCloseService {
   private readonly WAKE_QUIET_MS = 30_000;
   private ptyClient: PtyClient | null = null;
   private projectViewManagersProvider: (() => ProjectViewManager[]) | null = null;
+  private coordinationHoldProvider: ((projectId: string) => string | null) | null = null;
   /** Guards against overlapping sweeps when one cycle outruns the 5-min tick. */
   private sweepInProgress = false;
 
@@ -117,6 +118,25 @@ export class IdleBackgroundAutoCloseService {
    */
   setPtyClient(client: PtyClient | null): void {
     this.ptyClient = client;
+  }
+
+  /**
+   * Inject the question of whether a project has in-memory agent coordination
+   * that sleeping would drop. Read synchronously and only on the automatic
+   * path; manual Sleep never asks. A missing or throwing provider holds nothing.
+   */
+  setCoordinationHoldProvider(provider: ((projectId: string) => string | null) | null): void {
+    this.coordinationHoldProvider = provider;
+  }
+
+  private coordinationHold(projectId: string): string | null {
+    try {
+      return this.coordinationHoldProvider?.(projectId) ?? null;
+    } catch (error) {
+      logError("idle-background-auto-close-hold-read-failed", error, { projectId });
+      // An unreadable hold is not a clear one: leave the project awake.
+      return "unreadable";
+    }
   }
 
   /**
@@ -208,6 +228,7 @@ export class IdleBackgroundAutoCloseService {
     if (terminals.some((t) => t.projectId === projectId && t.hasPty !== false)) {
       return "terminal";
     }
+    if (this.coordinationHold(projectId) !== null) return "coordination-hold";
     return null;
   }
 
@@ -488,6 +509,10 @@ export class IdleBackgroundAutoCloseService {
           skip("remote-host", pid);
           continue;
         }
+        if (this.coordinationHold(pid) !== null) {
+          skip("coordination-hold", pid);
+          continue;
+        }
         // Screen with the sweep's own snapshot first, so a project with a busy
         // shell costs no workspace or git reads. The census is read per project
         // because an earlier project's teardown can outlast its freshness bound.
@@ -525,6 +550,7 @@ export class IdleBackgroundAutoCloseService {
       const blocked = this.blockingReason(pid, allTerminals);
       if (blocked) {
         if (blocked === "assistant") assistantProtected.push(pid);
+        else if (blocked === "coordination-hold") skip("coordination-hold", pid);
         continue;
       }
 
@@ -707,6 +733,9 @@ export class IdleBackgroundAutoCloseService {
     ]);
     if (!terminals) return { status: "skipped", reason: "terminal-unknown" };
     if (!this.readEligibleShellProject(projectId)) return { status: "ineligible" };
+    if (this.coordinationHold(projectId) !== null) {
+      return { status: "skipped", reason: "coordination-hold" };
+    }
     const vetted = evaluateShellTerminals(
       projectId,
       terminals,
@@ -723,7 +752,9 @@ export class IdleBackgroundAutoCloseService {
         initiator: "policy",
         autoParkedAt: Date.now(),
         isStillEligible: () =>
-          this.ptyClient === client && this.readEligibleShellProject(projectId) !== null,
+          this.ptyClient === client &&
+          this.readEligibleShellProject(projectId) !== null &&
+          this.coordinationHold(projectId) === null,
         allowsTerminals: (snapshot) =>
           !snapshot.degraded &&
           terminalsStillVetted(
@@ -804,7 +835,8 @@ export class IdleBackgroundAutoCloseService {
         autoParkedAt: now,
         isStillEligible: () =>
           this.ptyClient === client &&
-          this.readEligibleProject(projectId, now, thresholdMs) !== null,
+          this.readEligibleProject(projectId, now, thresholdMs) !== null &&
+          this.coordinationHold(projectId) === null,
         allowsTerminals: (snapshot) =>
           !snapshot.degraded && this.blockingReason(projectId, snapshot.terminals) === null,
       },
