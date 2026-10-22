@@ -162,7 +162,30 @@ describe("sleepProject", () => {
         autoParkedAt: 1234,
       });
       expect(pluginLifecycleMock.notifyProjectPluginsClosed).toHaveBeenCalledWith("proj-1");
-      expect(broadcastMock).toHaveBeenCalledWith(CHANNELS.PROJECT_SLEPT, "proj-1");
+      expect(broadcastMock).toHaveBeenCalledWith(
+        CHANNELS.PROJECT_UPDATED,
+        expect.objectContaining({ id: "proj-1" })
+      );
+      // No window is showing it, so there is nothing to drop — and a view that
+      // outlived the eviction must not be blanked by it.
+      expect(broadcastMock).not.toHaveBeenCalledWith(CHANNELS.PROJECT_SLEPT, "proj-1");
+    });
+
+    it("refuses when a dispatch starts while the kill's snapshot is in flight", async () => {
+      teardownMock.gracefulTeardownAndJournalProject.mockImplementationOnce(
+        async (_scopeId, _client, _ws, options) => {
+          await flushMicrotasks();
+          leased.add("proj-1");
+          const allowed = options.beforeKill!(killSnapshot.value);
+          return { confirmed: false, aborted: !allowed, terminalsKilled: 0, sessions: [] };
+        }
+      );
+
+      const outcome = await sleepProject("proj-1", policy(), makeDeps());
+
+      expect(outcome).toEqual({ status: "skipped", reason: "mcp-dispatch" });
+      expect(persistenceMock.writeHibernatedMarker).not.toHaveBeenCalled();
+      expect(projectStoreMock.updateProjectStatus).not.toHaveBeenCalled();
     });
 
     it("touches nothing while an MCP dispatch is waiting on the project's view", async () => {
@@ -275,6 +298,31 @@ describe("sleepProject", () => {
       expect(options.beforeKill).toBeUndefined();
     });
 
+    it("tells a window showing the project to drop it", async () => {
+      await sleepProject("proj-1", { initiator: "user" }, makeDeps());
+      expect(broadcastMock).toHaveBeenCalledWith(CHANNELS.PROJECT_SLEPT, "proj-1");
+    });
+
+    it("still announces the sleep when the row broadcast fails", async () => {
+      broadcastMock.mockImplementationOnce(() => {
+        throw new Error("window closing");
+      });
+
+      const outcome = await sleepProject("proj-1", { initiator: "user" }, makeDeps());
+
+      expect(outcome.status).toBe("slept");
+      expect(broadcastMock).toHaveBeenCalledWith(CHANNELS.PROJECT_SLEPT, "proj-1");
+    });
+
+    it("announces the sleep even when the row is gone by the end", async () => {
+      projectStoreMock.getProjectById.mockReturnValueOnce(PROJECT).mockReturnValue(null);
+
+      await sleepProject("proj-1", { initiator: "user" }, makeDeps());
+
+      expect(broadcastMock).not.toHaveBeenCalledWith(CHANNELS.PROJECT_UPDATED, expect.anything());
+      expect(broadcastMock).toHaveBeenCalledWith(CHANNELS.PROJECT_SLEPT, "proj-1");
+    });
+
     it("fails before revoking anything when there is no terminal host", async () => {
       await expect(
         sleepProject("proj-1", { initiator: "user" }, { ...makeDeps(), ptyClient: null })
@@ -304,6 +352,22 @@ describe("sleepProject", () => {
       expect(second).toEqual({ status: "already-closed" });
       expect(helpSessionServiceMock.revokeByProjectId).toHaveBeenCalledTimes(1);
       expect(teardownMock.gracefulTeardownAndJournalProject).toHaveBeenCalledTimes(1);
+    });
+
+    it("lets a waiting user retry after the sleep ahead of it failed", async () => {
+      const deps = makeDeps();
+      teardownMock.gracefulTeardownAndJournalProject.mockImplementationOnce(async () => {
+        await flushMicrotasks();
+        throw new Error("host gone");
+      });
+      const first = sleepProject("proj-1", { initiator: "user" }, deps);
+      const second = sleepProject("proj-1", { initiator: "user" }, deps);
+
+      await expect(first).rejects.toBeInstanceOf(AppError);
+      expect((await second).status).toBe("slept");
+      expect(teardownMock.gracefulTeardownAndJournalProject).toHaveBeenCalledTimes(2);
+      // Nothing is left holding the claim.
+      expect(await sleepProject("proj-1", policy(), deps)).toEqual({ status: "already-closed" });
     });
 
     it("skips a policy sleep while another sleep of the project is running", async () => {

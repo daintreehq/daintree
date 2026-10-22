@@ -401,6 +401,34 @@ describe("gracefulTeardownAndJournalProject", () => {
       expect(journalMock.journalAgentSession).toHaveBeenCalledTimes(1);
     });
 
+    it("sends the kill in the same turn the guard allowed it", async () => {
+      // Whatever the guard checked must still hold when the kill lands, so no
+      // await may sit between them. Armed by the guard, disarmed by the first
+      // microtask after it.
+      let armed = false;
+      let killSawGuardArmed = false;
+      const { client, gracefulKillByProjectConfirmed } = makePtyClient({
+        terminals: TERMINALS,
+        outcome: { confirmed: true, sessions: [] },
+      });
+      gracefulKillByProjectConfirmed.mockImplementation(async () => {
+        killSawGuardArmed = armed;
+        return { confirmed: true, sessions: [] };
+      });
+
+      await gracefulTeardownAndJournalProject("proj", client, undefined, {
+        beforeKill: () => {
+          armed = true;
+          queueMicrotask(() => {
+            armed = false;
+          });
+          return true;
+        },
+      });
+
+      expect(killSawGuardArmed).toBe(true);
+    });
+
     it("is told when the snapshot may be missing terminals", async () => {
       const { client } = makePtyClient({
         terminals: TERMINALS,

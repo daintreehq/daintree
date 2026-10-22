@@ -31,15 +31,21 @@ type IdleTerminalInfo = Awaited<ReturnType<PtyClient["getAllTerminalsAsync"]>>[n
 
 /**
  * When someone last did something in this terminal: typed into it, or saw its
- * screen change. 0 when neither was ever observed.
+ * screen change. 0 when that can't be told.
  *
  * Deliberately not `lastOutputTime` or `lastInputTime` (#13845). The raw output
  * clock moves on every byte, so a spinner or a TUI repainting its status line
  * keeps a quiet agent looking busy forever, and the raw input clock moves on
  * the focus and mouse reports xterm sends by itself.
+ *
+ * A terminal with neither has done nothing since it spawned, so it has been
+ * idle that long. That is the common case, not an edge: a shell whose prompt
+ * lands inside the first fit's resize window is re-baselined without a stamp,
+ * and an untouched prompt never changes again.
  */
 function lastRealActivity(terminal: IdleTerminalInfo): number {
-  return Math.max(terminal.lastTypedInputAt ?? 0, terminal.lastOutputChangeAt ?? 0);
+  const observed = Math.max(terminal.lastTypedInputAt ?? 0, terminal.lastOutputChangeAt ?? 0);
+  return observed || terminal.spawnedAt || 0;
 }
 
 /**

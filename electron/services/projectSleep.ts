@@ -303,19 +303,31 @@ async function runSleep(
       projectStore.clearCurrentProject();
     }
 
+    // Each broadcast on its own: a window closing mid-send must not swallow
+    // the other one.
     try {
       const updated = projectStore.getProjectById(projectId);
       if (updated) {
         broadcastToRenderer(CHANNELS.PROJECT_UPDATED, updated);
       }
-      // Its OWN event, not an inference from the `closed` status above:
-      // relocation and project adoption reach `closed` too, and a window
-      // blanking itself on those would be wrong. This is what tells a window
-      // showing the project to drop to the no-project state — main
-      // deliberately leaves its view alive.
-      broadcastToRenderer(CHANNELS.PROJECT_SLEPT, projectId);
-    } catch {
-      // Window may be closing.
+    } catch (broadcastError) {
+      console.warn(`[ProjectSleep] project update broadcast failed:`, broadcastError);
+    }
+
+    // Its OWN event, not an inference from the `closed` status above:
+    // relocation, project adoption and idle auto-close reach `closed` too, and
+    // a window blanking itself on those would be wrong. This is what tells a
+    // window showing the project to drop to the no-project state — main
+    // deliberately leaves its view alive. A user sleep only: a policy never
+    // sleeps a project that is on screen, so all its event could reach is a
+    // view that outlived the eviction — a remote Shell revealing its cached
+    // view before the visibility report lands — and blank it.
+    if (!policy) {
+      try {
+        broadcastToRenderer(CHANNELS.PROJECT_SLEPT, projectId);
+      } catch (broadcastError) {
+        console.warn(`[ProjectSleep] project slept broadcast failed:`, broadcastError);
+      }
     }
 
     console.log(

@@ -80,11 +80,15 @@ vi.mock("../../ipc/channels.js", () => ({
   },
 }));
 
+/** Whether the host acknowledges the fake kill below — false models a timeout. */
+const killConfirmed = vi.hoisted(() => ({ value: true }));
+
 // Sleep's kill runs through the journal helper, whose real module boots the
 // agent journal and lifecycle ledger. Faked over the PtyClient mock instead, so
 // every kill assertion below still reads `gracefulKillByProject` — and faithful
-// to the one part of its contract a policy leans on: a `beforeKill` guard sees
-// the scope's terminals from a completeness-aware snapshot, and can refuse.
+// to the parts of its contract a policy leans on: a `beforeKill` guard sees the
+// scope's terminals from a completeness-aware snapshot (a failed read counts as
+// degraded) and can refuse, and the kill reports whether the host confirmed it.
 vi.mock("../pty/projectSessionJournal.js", () => ({
   gracefulTeardownAndJournalProject: vi.fn(
     async (
@@ -106,7 +110,12 @@ vi.mock("../pty/projectSessionJournal.js", () => ({
       } = {}
     ) => {
       if (options.beforeKill) {
-        const snapshot = await client.getAllTerminalsWithCompletenessAsync();
+        let snapshot: { terminals: unknown[]; degraded: boolean };
+        try {
+          snapshot = await client.getAllTerminalsWithCompletenessAsync();
+        } catch {
+          snapshot = { terminals: [], degraded: true };
+        }
         const terminals = snapshot.terminals.filter(
           (t) => (t as { projectId?: string }).projectId === scopeId
         );
@@ -117,7 +126,12 @@ vi.mock("../pty/projectSessionJournal.js", () => ({
       const sessions = await client.gracefulKillByProject(scopeId, {
         preserveSession: options.preserveSession,
       });
-      return { confirmed: true, aborted: false, terminalsKilled: sessions.length, sessions };
+      return {
+        confirmed: killConfirmed.value,
+        aborted: false,
+        terminalsKilled: sessions.length,
+        sessions,
+      };
     }
   ),
 }));
@@ -273,6 +287,7 @@ describe("IdleBackgroundAutoCloseService", () => {
     }));
     ptyClientMock.getAllTerminalsAsync.mockResolvedValue([]);
     ptyClientMock.gracefulKillByProject.mockResolvedValue([]);
+    killConfirmed.value = true;
     evictProjectRendererMock.mockReturnValue(1);
     workspaceClientMock.evictProject.mockReturnValue(true);
     assistantBackends.clear();
@@ -1231,6 +1246,23 @@ describe("IdleBackgroundAutoCloseService", () => {
           expect.anything()
         );
       }
+    });
+
+    it("leaves a project open when the host can't confirm its kill (#11340)", async () => {
+      enable();
+      projectStoreMock.getAllProjects.mockReturnValue([makeIdleProject("proj-1")]);
+      killConfirmed.value = false;
+      const service = makeService();
+      await runCheck(service);
+
+      expect(ptyClientMock.gracefulKillByProject).toHaveBeenCalledTimes(1);
+      expect(writeHibernatedMarkerMock).not.toHaveBeenCalled();
+      expect(evictProjectRendererMock).not.toHaveBeenCalled();
+      expect(projectStoreMock.updateProjectStatus).not.toHaveBeenCalled();
+      expect(broadcastToRendererMock).not.toHaveBeenCalledWith(
+        "idle-background:closed",
+        expect.anything()
+      );
     });
 
     it("writes hibernation markers for each killed terminal", async () => {

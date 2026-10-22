@@ -302,7 +302,41 @@ describe("IdleTerminalNotificationService", () => {
       expect(broadcastToRendererMock).not.toHaveBeenCalled();
     });
 
-    it("never calls a terminal idle when no real activity was ever observed", async () => {
+    // A shell whose prompt landed inside its first resize window never gets a
+    // change stamp, and an untouched prompt never changes again.
+    it("counts a terminal with no real activity as idle since it spawned", async () => {
+      setup();
+      ptyManagerMock.getAllTerminalsAsync.mockResolvedValue([
+        makeTerminal({
+          lastTypedInputAt: undefined,
+          lastOutputChangeAt: undefined,
+          lastOutputTime: Date.now(),
+          spawnedAt: Date.now() - 2 * SIXTY_MIN_MS,
+        }),
+      ]);
+      const service = makeService();
+      await runCheck(service);
+
+      expect(broadcastToRendererMock).toHaveBeenCalledTimes(1);
+      const [, payload] = broadcastToRendererMock.mock.calls[0];
+      expect(payload.projects[0].idleMinutes).toBeGreaterThanOrEqual(119);
+    });
+
+    it("doesn't count a freshly spawned terminal with no activity yet as idle", async () => {
+      setup();
+      ptyManagerMock.getAllTerminalsAsync.mockResolvedValue([
+        makeTerminal({
+          lastTypedInputAt: undefined,
+          lastOutputChangeAt: undefined,
+          spawnedAt: Date.now() - 5 * 60 * 1000,
+        }),
+      ]);
+      const service = makeService();
+      await runCheck(service);
+      expect(broadcastToRendererMock).not.toHaveBeenCalled();
+    });
+
+    it("never calls a terminal idle when nothing about its activity is known", async () => {
       setup();
       ptyManagerMock.getAllTerminalsAsync.mockResolvedValue([
         makeTerminal({ lastTypedInputAt: undefined, lastOutputChangeAt: undefined }),

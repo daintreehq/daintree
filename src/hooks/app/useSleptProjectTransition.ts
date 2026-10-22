@@ -15,8 +15,8 @@ import { logDebug } from "@/utils/logger";
  *
  * Listens on the dedicated `project:slept` event rather than inferring the
  * teardown from a `project:updated` that reaches `closed`: relocation, project
- * adoption and a plain metadata write all reach that status too, and blanking
- * a visible window on any of those would be wrong.
+ * adoption, the idle sweep and a plain metadata write all reach that status
+ * too, and blanking a visible window on any of those would be wrong.
  */
 export function useSleptProjectTransition(): void {
   useEffect(() => {

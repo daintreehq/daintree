@@ -46,7 +46,11 @@ export function useIdleTerminalNotifications(): void {
               actionId: "idleTerminalNotify.closeProject",
               actionArgs: { projectId: project.projectId },
               onClick: () => {
-                void idleTerminalClient.closeProject(project.projectId);
+                // Lazy: the store graph it needs has no business loading
+                // with this app-lifetime listener.
+                void import("@/lib/sleepIdleTerminalProject").then(({ sleepIdleTerminalProject }) =>
+                  sleepIdleTerminalProject(project.projectId)
+                );
               },
             },
             {

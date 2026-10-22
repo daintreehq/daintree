@@ -11,6 +11,7 @@ import {
   worktreeConfigClient,
 } from "@/clients";
 import { dispatchEscape } from "@/lib/escapeStack";
+import { sleepIdleTerminalProject } from "@/lib/sleepIdleTerminalProject";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
 import { OPEN_FOLDERS_IN_NEW_WINDOW_VALUES } from "@shared/types/windowOpen";
 import { RESUME_ON_RESTART_VALUES } from "@shared/types/agentSettings";
@@ -257,7 +258,7 @@ export function registerAppConfigActions(
     argsSchema: ProjectIdArgsSchema,
     run: async (args: unknown) => {
       const { projectId } = ProjectIdArgsSchema.parse(args);
-      await idleTerminalClient.closeProject(projectId);
+      await sleepIdleTerminalProject(projectId);
     },
   }));
 
