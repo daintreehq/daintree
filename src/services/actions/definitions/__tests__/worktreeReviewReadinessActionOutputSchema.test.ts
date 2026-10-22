@@ -99,16 +99,14 @@ describe("worktree.reviewReadiness emits a manifest outputSchema", () => {
     // Item ids and suggested action ids are closed enums, not bare strings.
     expect(json).toContain('"nothing-staged"');
     expect(json).toContain('"worktree.openReviewHub"');
+    const props = schema!.properties as Record<string, unknown>;
     // Plugin checks are their own list: advisory severities only, and the
     // closed host item id set is not widened to carry them.
-    const pluginChecks = JSON.stringify(
-      (schema!.properties as Record<string, unknown>).pluginChecks
-    );
+    const pluginChecks = JSON.stringify(props.pluginChecks);
     expect(pluginChecks).toContain('"warning"');
     expect(pluginChecks).not.toContain('"blocker"');
     expect(pluginChecks).not.toContain('"nothing-staged"');
     // prReady must encode the boolean | "unknown" union.
-    const props = schema!.properties as Record<string, unknown>;
     expect(JSON.stringify(props.prReady)).toContain("boolean");
     expect(JSON.stringify(props.prReady)).toContain('"unknown"');
   });

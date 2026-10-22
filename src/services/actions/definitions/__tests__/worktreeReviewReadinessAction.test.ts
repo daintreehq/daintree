@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { z } from "zod";
 import type { ActionContext } from "@shared/types/actions";
 import type { StagingStatus } from "@shared/types";
 import type { AnyActionDefinition } from "../../actionTypes";
@@ -108,6 +109,8 @@ const BASE_WORKTREE: TestWorktree = {
   behindCount: 0,
 };
 
+const asRecord = (value: unknown) => z.record(z.string(), z.unknown()).parse(value);
+
 describe("worktree.reviewReadiness run()", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -148,10 +151,7 @@ describe("worktree.reviewReadiness run()", () => {
 
   it("lists plugin checks separately, attributed by manifest id, and leaves readiness alone", async () => {
     const def = getDefinition();
-    const clean = (await def.run({ worktreeId: "wt-1" } as never, {} as ActionContext)) as Record<
-      string,
-      unknown
-    >;
+    const clean = asRecord(await def.run({ worktreeId: "wt-1" }, {} as ActionContext));
     expect(clean.pluginChecks).toEqual([]);
 
     mockPluginChecks.current = {
@@ -165,10 +165,7 @@ describe("worktree.reviewReadiness run()", () => {
       },
       "proj-other": { "acme.lint": { "wt-1": [{ label: "other project", severity: "info" }] } },
     };
-    const result = (await def.run({ worktreeId: "wt-1" } as never, {} as ActionContext)) as Record<
-      string,
-      unknown
-    >;
+    const result = asRecord(await def.run({ worktreeId: "wt-1" }, {} as ActionContext));
 
     expect(result.pluginChecks).toEqual([
       {
