@@ -56,6 +56,7 @@ const UNENCODED_RULES = [
   'A secret setting (type "secret" or secret: true) may not declare a default, since it would ship in plugin.json.',
   'Under project scope, menuItems, agents, skills, fileDecorationProviders, processTools, mcpServers, tours and forgeProviders are refused, and "scope": "project" is required.',
   'A fileEditors entry names exactly one of slot or view. A slot is accepted only for built-in plugins and takes no mode or paths; a view must name one of the plugin\'s location: "fileEditor" views and needs a mode. Every entry declares extensions, paths or both, and paths are accepted only under "scope": "project".',
+  'A contextMenus entry may declare kind, extensions or paths only at location "file", and extensions may not be combined with kind "folder". Paths are globs relative to the worktree root.',
   "The reserved daintree.* publisher namespace is accepted only for built-in plugins.",
   "previewTools and guestAdapters are accepted only for built-in plugins, each id must be namespaced under the plugin's own name, and a preview tool's guestAdapter must name an adapter the same manifest declares.",
   "A command id may not collide with a built-in action id, and some built-in ids refuse plugin dispatch outright.",

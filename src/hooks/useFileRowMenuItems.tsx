@@ -33,6 +33,7 @@ import { notify } from "@/lib/notify";
 import { copyWithToast } from "@/lib/copyWithToast";
 import { captureCopyFlash } from "@/lib/copyFlash";
 import { actionService } from "@/services/ActionService";
+import { matchesFileMenuTarget } from "@/registry/fileMenuMatch";
 import { usePluginRuntimeStore } from "@/store/pluginRuntimeStore";
 import type { BuiltInRuntimeActionId } from "@shared/config/actionIds";
 import type { CopyTreeRunSource, GitStatus } from "@shared/types";
@@ -433,6 +434,16 @@ export function useFileRowMenuItems(surface: FileRowMenuSurface): FileRowMenuCon
       // file gets this alone: with nothing to restore to, discarding it and
       // deleting it are one operation, so it is offered once.
       const showDelete = canMutate && status !== "deleted" && status !== "conflicted";
+      // The host decides which rows an item applies to (kind, extensions,
+      // paths), so a plugin never has to no-op on a row it wasn't meant for. A
+      // group left empty drops out, and with it the submenu and its label.
+      const rowGroups = pluginGroups
+        .map(([pluginId, entries], index) => ({
+          pluginId,
+          name: pluginGroupNames[index],
+          entries: entries.filter((entry) => matchesFileMenuTarget(entry.item, target)),
+        }))
+        .filter((group) => group.entries.length > 0);
 
       return (
         <>
@@ -555,7 +566,7 @@ export function useFileRowMenuItems(surface: FileRowMenuSurface): FileRowMenuCon
               similarly named items stay tellable apart — the same shape the
               worktree card's Extensions uses. Rendered only when something
               contributes: an empty submenu is a dead end. */}
-          {pluginGroups.length > 0 && (
+          {rowGroups.length > 0 && (
             <>
               <ContextMenuSeparator />
               <ContextMenuSub>
@@ -564,12 +575,10 @@ export function useFileRowMenuItems(surface: FileRowMenuSurface): FileRowMenuCon
                   Extensions
                 </ContextMenuSubTrigger>
                 <ContextMenuSubContent>
-                  {pluginGroups.map(([pluginId, entries], groupIndex) => (
+                  {rowGroups.map(({ pluginId, name: groupName, entries }, groupIndex) => (
                     <Fragment key={pluginId}>
-                      {pluginGroups.length > 1 && groupIndex > 0 && <ContextMenuSeparator />}
-                      {pluginGroups.length > 1 && (
-                        <ContextMenuLabel>{pluginGroupNames[groupIndex]}</ContextMenuLabel>
-                      )}
+                      {rowGroups.length > 1 && groupIndex > 0 && <ContextMenuSeparator />}
+                      {rowGroups.length > 1 && <ContextMenuLabel>{groupName}</ContextMenuLabel>}
                       {/* Still the shared section, one call per group: it owns
                           the action source, the namespaced keys and the
                           dispatch, and a second copy of that here is how the
@@ -582,6 +591,8 @@ export function useFileRowMenuItems(surface: FileRowMenuSurface): FileRowMenuCon
                         leadingSeparator={false}
                         dispatchArgs={{
                           path: absolutePath,
+                          isDirectory,
+                          relativePath,
                           ...(worktreePath && { worktreePath }),
                           ...(status && { status }),
                         }}
