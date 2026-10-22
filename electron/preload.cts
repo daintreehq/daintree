@@ -3316,10 +3316,18 @@ function buildElectronApi(): ElectronAPI {
         _unwrappingInvoke(CHANNELS.FORGE_OPEN_PRS, cwd, query, state),
       openCommits: (cwd: string, branch?: string) =>
         _unwrappingInvoke(CHANNELS.FORGE_OPEN_COMMITS, cwd, branch),
-      openIssue: (payload: { cwd: string; issueNumber: number }) =>
-        _unwrappingInvoke(CHANNELS.FORGE_OPEN_ISSUE, payload),
-      getIssueUrl: (payload: { cwd: string; issueNumber: number }) =>
-        _unwrappingInvoke(CHANNELS.FORGE_GET_ISSUE_URL, payload),
+      openIssue: (
+        payload: {
+          cwd: string;
+          issueNumber: number;
+        } & import("../shared/types/ipc/forge.js").IssueLinkTarget
+      ) => _unwrappingInvoke(CHANNELS.FORGE_OPEN_ISSUE, payload),
+      getIssueUrl: (
+        payload: {
+          cwd: string;
+          issueNumber: number;
+        } & import("../shared/types/ipc/forge.js").IssueLinkTarget
+      ) => _unwrappingInvoke(CHANNELS.FORGE_GET_ISSUE_URL, payload),
       openRepo: (payload: { cwd: string }) => _unwrappingInvoke(CHANNELS.FORGE_OPEN_REPO, payload),
       getRepoUrl: (payload: { cwd: string }) =>
         _unwrappingInvoke(CHANNELS.FORGE_GET_REPO_URL, payload),
@@ -3407,8 +3415,12 @@ function buildElectronApi(): ElectronAPI {
         _unwrappingInvoke(CHANNELS.FORGE_GET_FIRST_PAGE_CACHE, payload),
       getProjectHealth: (payload: { cwd: string; bypassCache?: boolean }) =>
         _unwrappingInvoke(CHANNELS.FORGE_GET_PROJECT_HEALTH, payload),
-      getIssueTooltip: (payload: { cwd: string; issueNumber: number }) =>
-        _unwrappingInvoke(CHANNELS.FORGE_GET_ISSUE_TOOLTIP, payload),
+      getIssueTooltip: (
+        payload: {
+          cwd: string;
+          issueNumber: number;
+        } & import("../shared/types/ipc/forge.js").IssueLinkTarget
+      ) => _unwrappingInvoke(CHANNELS.FORGE_GET_ISSUE_TOOLTIP, payload),
       getPRTooltip: (payload: { cwd: string; prNumber: number }) =>
         _unwrappingInvoke(CHANNELS.FORGE_GET_PR_TOOLTIP, payload),
       getIssuesByNumbers: (payload: { cwd: string; numbers: number[] }) =>

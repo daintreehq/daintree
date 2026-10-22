@@ -3,6 +3,7 @@ import type {
   WorkspaceHostEvent,
   ForgeRpcMethod,
   ForgeResolveProviderResult,
+  ForgeIssueBranchClaimResult,
 } from "../../shared/types/workspace-host.js";
 import type {
   CIStatus,
@@ -105,6 +106,29 @@ export class ForgeBridge {
 
   getIssue(namespacedId: string, repo: RepoRef, issueNumber: number): Promise<Issue | null> {
     return this.invoke<Issue | null>("getIssue", namespacedId, [repo, issueNumber]);
+  }
+
+  /**
+   * The literal issue keys the project's issues provider claims in branch
+   * names (#13744). Main resolves the binding from the project's own settings,
+   * so the host never names a provider here.
+   */
+  resolveIssueBranchClaim(projectPath: string): Promise<ForgeIssueBranchClaimResult> {
+    return this.invoke<ForgeIssueBranchClaimResult>("resolveIssueBranchClaim", undefined, [
+      { projectPath },
+    ]);
+  }
+
+  /**
+   * A branch-claimed issue, looked up through the provider that claimed it by
+   * its key — never through the code forge's numbers (#13744).
+   */
+  getIssueForLink(link: {
+    projectPath: string;
+    issueProviderId: string;
+    issueKey: string;
+  }): Promise<Issue | null> {
+    return this.invoke<Issue | null>("getIssueForLink", undefined, [link]);
   }
 
   getCIStatus(namespacedId: string, repo: RepoRef, prNumber: number): Promise<CIStatus | null> {

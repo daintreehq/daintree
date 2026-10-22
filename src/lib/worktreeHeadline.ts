@@ -104,7 +104,7 @@ function getComputedWorktreeHeadline(worktree: Worktree | WorktreeState): Comput
       kind: "issue",
       number: issueNumber,
       title: issueTitle,
-      label: `#${issueNumber} ${issueTitle}`,
+      label: `${worktree.issueKey ?? `#${issueNumber}`} ${issueTitle}`,
     };
   }
 

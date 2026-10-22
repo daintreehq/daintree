@@ -188,6 +188,7 @@ export function NonMainSecondaryRow({
         <IssueBadge
           issueNumber={worktree.issueNumber}
           issueTitle={issueBadgeTitle}
+          provenance={worktree}
           worktreePath={worktree.path}
           onOpen={badges.onOpenIssue}
           isActive={isActive}

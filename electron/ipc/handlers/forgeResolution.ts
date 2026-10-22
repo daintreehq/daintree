@@ -16,9 +16,11 @@ import type {
   ForgeProviderBaseImpl,
   ForgeProviderImpl,
   Issue,
+  IssueTooltipData,
   Page,
   RepoRef,
 } from "../../../shared/types/forge.js";
+import type { IssueLinkTarget } from "../../../shared/types/ipc/forge.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import {
   makeForgeProviderId,
@@ -480,6 +482,149 @@ export async function resolveIssueOverrideForCwd(
 }
 
 /**
+ * Resolve the provider an issue link names (#13744): the link's stored
+ * provider, the code forge for `role: "code"`, else the project's issues
+ * provider — what an unqualified number has always meant. A named provider is
+ * resolved by canonical id alone and fails with the reason when it's gone; it
+ * never falls back to whichever provider the project binds now.
+ */
+export async function resolveIssueLinkForCwd(
+  cwd: string,
+  target: IssueLinkTarget | undefined
+): Promise<ResolvedForgeIssueContext> {
+  if (target?.issueProviderId) {
+    return resolveNamedIssueProviderForCwd(cwd, target.issueProviderId);
+  }
+  if (target?.role === "code") {
+    return { ...(await resolveForCwd(cwd)), viaIssueOverride: false };
+  }
+  return resolveForCwd(cwd, "issues");
+}
+
+/**
+ * {@link resolveIssueLinkForCwd} for a named provider, which may be neither of
+ * the project's current bindings. Its repository comes from the provider's own
+ * project settings, or the project's remote for a provider that serves code.
+ */
+export async function resolveNamedIssueProviderForCwd(
+  cwd: string,
+  issueProviderId: string
+): Promise<ResolvedForgeIssueContext> {
+  if (typeof cwd !== "string" || !cwd) {
+    throw new Error("Invalid working directory");
+  }
+  if (!path.isAbsolute(cwd)) {
+    throw new Error("Working directory must be an absolute path");
+  }
+  const gitService = gitServiceCache.getGitService(cwd);
+  if (!gitService) {
+    throw new Error("Not a git repository");
+  }
+  const { forgeRemote, forgeProviderOverride, mainWorktreePath } = await readProjectForgeSettings(
+    gitService,
+    cwd
+  );
+  return resolveIssueOverride(
+    issueProviderId,
+    mainWorktreePath,
+    () => resolveEffectiveRemoteUrl(gitService, cwd, forgeRemote, forgeProviderOverride),
+    `The provider this issue came from (${issueProviderId}) isn't available. Enable it in Settings.`
+  );
+}
+
+/**
+ * Validate the optional {@link IssueLinkTarget} fields of an issue-read
+ * payload. Throws on a malformed field rather than dropping it: a dropped
+ * provider would silently re-route the number to another tracker.
+ */
+export function readIssueLinkTarget(payload: {
+  [K in keyof IssueLinkTarget]?: unknown;
+}): IssueLinkTarget | undefined {
+  const target: IssueLinkTarget = {};
+  if (payload.role !== undefined) {
+    if (payload.role !== "code") throw new Error("Invalid issue role");
+    target.role = "code";
+  }
+  for (const field of ["issueProviderId", "issueId", "issueKey"] as const) {
+    const value = payload[field];
+    if (value === undefined) continue;
+    if (typeof value !== "string" || !value.trim() || value.length > 256) {
+      throw new Error(`Invalid ${field}`);
+    }
+    target[field] = value.trim();
+  }
+  if (target.role && target.issueProviderId) {
+    throw new Error("An issue link names either its provider or the code role, not both");
+  }
+  return Object.keys(target).length > 0 ? target : undefined;
+}
+
+/**
+ * The identifier to look a named link up by, when its provider can: the stored
+ * stable id first, then the display key. `undefined` means address the issue
+ * by number, as every provider can.
+ */
+function issueLookupId(
+  context: ResolvedForgeIssueContext,
+  target: IssueLinkTarget | undefined
+): string | undefined {
+  if (!target?.issueProviderId || !context.impl.getIssueById) return undefined;
+  return target.issueId ?? target.issueKey;
+}
+
+/**
+ * The issue behind a named link, looked up by its stable id or key. `undefined`
+ * when the link has neither or its provider can't look issues up that way;
+ * `null` when the provider says the issue doesn't exist.
+ */
+export async function getIssueForLink(
+  context: ResolvedForgeIssueContext,
+  target: IssueLinkTarget | undefined
+): Promise<Issue | null | undefined> {
+  const id = issueLookupId(context, target);
+  if (id === undefined) return undefined;
+  return (await context.impl.getIssueById!(context.repoRef, id)) ?? null;
+}
+
+/**
+ * The page an issue link opens. A link looked up by id opens the URL its
+ * provider returns, so an issue renumbered since the link was made isn't
+ * rebuilt from its old number.
+ */
+export async function resolveIssueLinkUrl(
+  context: ResolvedForgeIssueContext,
+  issueNumber: number,
+  target: IssueLinkTarget | undefined
+): Promise<string> {
+  const issue = await getIssueForLink(context, target);
+  if (issue === null) {
+    throw new Error(`${target?.issueKey ?? `Issue #${issueNumber}`} wasn't found`);
+  }
+  return issue ? issue.url : context.impl.buildIssueUrl(context.repoRef, issueNumber);
+}
+
+const TOOLTIP_BODY_EXCERPT_LENGTH = 150;
+
+/** Project an {@link Issue} onto the hover card, for a link looked up by id. */
+export function issueToTooltipData(issue: Issue): IssueTooltipData {
+  const body = (issue.body ?? "").replace(/\r?\n/g, " ").trim();
+  return {
+    number: issue.number,
+    title: issue.title,
+    bodyExcerpt:
+      body.length <= TOOLTIP_BODY_EXCERPT_LENGTH
+        ? body
+        : `${body.slice(0, TOOLTIP_BODY_EXCERPT_LENGTH).trim()}…`,
+    state: issue.state,
+    rawState: issue.rawState,
+    createdAt: issue.createdAt,
+    author: issue.author,
+    assignees: issue.assignees,
+    labels: issue.labels,
+  };
+}
+
+/**
  * Stamp {@link Issue.providerId} when the issues override served the issue —
  * see {@link ResolvedForgeIssueContext.viaIssueOverride}. Unstamped otherwise,
  * so a project without an issues provider returns exactly what it always did.
@@ -510,7 +655,8 @@ export function stampIssuePageProvider(
 async function resolveIssueOverride(
   issueProviderOverride: string,
   mainWorktreePath: string,
-  readRemoteUrl: () => Promise<string | null>
+  readRemoteUrl: () => Promise<string | null>,
+  unavailableMessage = "This project's issues provider isn't available. Enable it, or pick another in Project settings."
 ): Promise<ResolvedForgeIssueContext> {
   const { issues } = resolveForgeProvider({
     remoteUrl: null,
@@ -520,9 +666,7 @@ async function resolveIssueOverride(
   });
   const entry = issues?.entry;
   if (!entry) {
-    throw new Error(
-      "This project's issues provider isn't available. Enable it, or pick another in Project settings."
-    );
+    throw new Error(unavailableMessage);
   }
 
   const namespaceId = makeForgeProviderId(entry.pluginId, entry.contribution.id);

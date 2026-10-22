@@ -27,6 +27,7 @@ import { BaseDivergence, type BaseDivergenceHost } from "./BaseDivergence.js";
 import { GitStatusPass, type GitStatusPassHost } from "./GitStatusPass.js";
 import type { StatusAdmissionController } from "./StatusAdmissionController.js";
 import { withTimeout } from "../utils/withTimeout.js";
+import type { ClaimedIssue, IssueClaimProvenance } from "../services/issueBranchClaim.js";
 
 // Hard ceiling for individual filesystem syscalls on the poll path. On a
 // healthy disk these return in well under a millisecond; on a stalled mount
@@ -157,6 +158,8 @@ export class WorktreeMonitor {
 
   // Issue/PR state
   private _issueNumber: number | undefined;
+  /** Set when an issues provider claimed `_issueNumber` from the branch name (#13744). */
+  private _issueClaim: IssueClaimProvenance | undefined;
   private prNumber: number | undefined;
   private prUrl: string | undefined;
   private prState: import("../../shared/types/forge.js").NormalizedPRState | undefined;
@@ -581,6 +584,9 @@ export class WorktreeMonitor {
       get issueNumber() {
         return monitor._issueNumber;
       },
+      get issueClaim() {
+        return monitor._issueClaim;
+      },
       get prNumber() {
         return monitor.prNumber;
       },
@@ -875,6 +881,10 @@ export class WorktreeMonitor {
       },
       set issueNumber(value: number | undefined) {
         monitor._issueNumber = value;
+        monitor._issueClaim = undefined;
+      },
+      setClaimedIssue(claim: ClaimedIssue) {
+        monitor.setClaimedIssue(claim);
       },
       get branchDerivedTitle() {
         return monitor._branchDerivedTitle;
@@ -1253,6 +1263,10 @@ export class WorktreeMonitor {
     return this._issueNumber;
   }
 
+  get issueClaim(): IssueClaimProvenance | undefined {
+    return this._issueClaim;
+  }
+
   get createdAt(): number | undefined {
     return this._createdAt;
   }
@@ -1274,8 +1288,20 @@ export class WorktreeMonitor {
     return this.watcherController.watcherArmed;
   }
 
+  /** A code-forge number (or none): drops any branch claim with the old number. */
   setIssueNumber(issueNumber: number | undefined): void {
     this._issueNumber = issueNumber;
+    this._issueClaim = undefined;
+  }
+
+  /** An issues provider's branch-claimed issue (#13744). */
+  setClaimedIssue(claim: ClaimedIssue, issueId?: string): void {
+    this._issueNumber = claim.number;
+    this._issueClaim = {
+      issueProviderId: claim.issueProviderId,
+      issueKey: claim.issueKey,
+      ...(issueId ? { issueId } : {}),
+    };
   }
 
   setIssueTitle(title: string | undefined): void {

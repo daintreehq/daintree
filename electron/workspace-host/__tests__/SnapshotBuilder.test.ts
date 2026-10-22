@@ -397,3 +397,68 @@ describe("SnapshotBuilder hasRemote", () => {
     expect(new SnapshotBuilder(makeHost()).build().hasRemote).toBeUndefined();
   });
 });
+
+describe("SnapshotBuilder — branch-claimed issues (#13744)", () => {
+  const claim = { issueProviderId: "acme.linear.linear", issueKey: "ENG-42", issueId: "uuid-42" };
+  const githubRef = (number: number) => ({
+    providerId: BUILTIN_GITHUB_PROVIDER_ID,
+    owner: "o",
+    repo: "r",
+    number,
+    rawData: null,
+  });
+
+  it("projects the claim's provenance alongside its number and title", () => {
+    const snapshot = new SnapshotBuilder(
+      makeHost({ issueNumber: 42, issueTitle: "Fix login", issueClaim: claim })
+    ).build();
+
+    expect(snapshot).toMatchObject({
+      issueNumber: 42,
+      issueTitle: "Fix login",
+      issueProviderId: "acme.linear.linear",
+      issueKey: "ENG-42",
+      issueId: "uuid-42",
+    });
+  });
+
+  it("never borrows the code forge's linked issue for a claimed number", () => {
+    const snapshot = new SnapshotBuilder(
+      makeHost({
+        issueNumber: 42,
+        issueTitle: undefined,
+        issueClaim: claim,
+        linked: {
+          providerId: BUILTIN_GITHUB_PROVIDER_ID,
+          issue: { ref: githubRef(13), title: "GitHub issue" },
+        },
+      })
+    ).build();
+
+    expect(snapshot.issueNumber).toBe(42);
+    expect(snapshot.issueTitle).toBeUndefined();
+    expect(snapshot.issueKey).toBe("ENG-42");
+  });
+
+  it("keeps a claimed ENG-42 next to a linked GitHub PR #42", () => {
+    const snapshot = new SnapshotBuilder(
+      makeHost({
+        issueNumber: 42,
+        issueClaim: claim,
+        linked: {
+          providerId: BUILTIN_GITHUB_PROVIDER_ID,
+          pr: { ref: githubRef(42), url: "https://github.com/o/r/pull/42", state: "open" },
+        },
+      })
+    ).build();
+
+    expect(snapshot.issueNumber).toBe(42);
+    expect(snapshot.issueKey).toBe("ENG-42");
+  });
+
+  it("carries no provenance for a code-forge number", () => {
+    const snapshot = new SnapshotBuilder(makeHost({ issueNumber: 42 })).build();
+    expect(snapshot.issueProviderId).toBeUndefined();
+    expect(snapshot.issueKey).toBeUndefined();
+  });
+});

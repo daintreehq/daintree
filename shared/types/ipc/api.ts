@@ -150,6 +150,7 @@ import type {
   ForgeRepoCountsUpdatedPayload,
   ForgeFirstPageCachePayload,
   ForgeProjectHealthPayload,
+  IssueLinkTarget,
 } from "./forge.js";
 import type { TerminalConfig } from "./config.js";
 import type { HibernationProjectHibernatedPayload } from "./hibernation.js";
@@ -1743,9 +1744,11 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     /** Open the commits page for the resolved forge provider. */
     openCommits(cwd: string, branch?: string): Promise<string | undefined>;
     /** Open a single issue in the system browser via the resolved forge provider. */
-    openIssue(payload: { cwd: string; issueNumber: number }): Promise<string | undefined>;
+    openIssue(
+      payload: { cwd: string; issueNumber: number } & IssueLinkTarget
+    ): Promise<string | undefined>;
     /** Resolve the canonical URL for a single issue via the resolved forge provider. */
-    getIssueUrl(payload: { cwd: string; issueNumber: number }): Promise<string>;
+    getIssueUrl(payload: { cwd: string; issueNumber: number } & IssueLinkTarget): Promise<string>;
     /**
      * Open the repository's home page via the resolved forge provider. Rejects
      * when the provider doesn't implement the optional `buildRepoUrl`.
@@ -1968,10 +1971,12 @@ export interface ElectronAPI extends GeneratedElectronAPI {
       bypassCache?: boolean;
     }): Promise<ForgeProjectHealthPayload>;
     /** Hover-tooltip projection of an issue. Best-effort — `null` on any failure. */
-    getIssueTooltip(payload: {
-      cwd: string;
-      issueNumber: number;
-    }): Promise<import("../forge.js").IssueTooltipData | null>;
+    getIssueTooltip(
+      payload: {
+        cwd: string;
+        issueNumber: number;
+      } & IssueLinkTarget
+    ): Promise<import("../forge.js").IssueTooltipData | null>;
     /** Hover-tooltip projection of a PR. Best-effort — `null` on any failure. */
     getPRTooltip(payload: {
       cwd: string;

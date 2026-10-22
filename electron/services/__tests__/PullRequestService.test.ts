@@ -85,6 +85,9 @@ function makeMockBridge(impl: ForgeProviderImpl) {
     getIssue: vi.fn((_id: string, repo: RepoRef, issueNumber: number) =>
       impl.getIssue(repo, issueNumber)
     ),
+    getIssueForLink: vi.fn<
+      (link: { projectPath: string; issueProviderId: string; issueKey: string }) => Promise<unknown>
+    >(async () => null),
     getCIStatus: vi.fn((_id: string, repo: RepoRef, prNumber: number) =>
       impl.getCIStatus(repo, prNumber)
     ),
@@ -449,6 +452,63 @@ describe("PullRequestService", () => {
       providerId: "daintree.github.github",
       owner: "testowner",
       repo: "testrepo",
+    });
+
+    unsubscribe();
+    pullRequestService.destroy();
+  });
+
+  it("takes a branch-claimed issue's title from the provider that claimed it (#13744)", async () => {
+    const mockImpl = mockForgeProviderResolved();
+    const bridge = lastMockBridge!;
+    bridge.getIssueForLink.mockResolvedValue({
+      number: 42,
+      title: "Fix login",
+      state: "open",
+      rawState: "started",
+      url: "https://tracker.invalid/issue/ENG-42",
+      id: "uuid-42",
+      key: "ENG-42",
+      rawData: null,
+    });
+
+    const { pullRequestService } = await import("../PullRequestService.js");
+    const { events } = await import("../events.js");
+
+    const issues: DaintreeEventMap["sys:issue:detected"][] = [];
+    const unsubscribe = events.on("sys:issue:detected", (payload) => issues.push(payload));
+
+    pullRequestService.initialize("/repo", "test-project-id");
+    events.emit(
+      "sys:worktree:update",
+      makeWorktreeSnapshot({
+        worktreeId: "wt-1",
+        branch: "eng-42-fix-login",
+        issueNumber: 42,
+        issueProviderId: "acme.linear.linear",
+        issueKey: "ENG-42",
+      })
+    );
+
+    await pullRequestService.refresh();
+
+    expect(bridge.getIssueForLink).toHaveBeenCalledWith({
+      projectPath: "/repo",
+      issueProviderId: "acme.linear.linear",
+      issueKey: "ENG-42",
+    });
+    // The code forge's issue #42 is a different issue entirely.
+    expect(mockImpl.getIssue).not.toHaveBeenCalled();
+    expect(issues).toHaveLength(1);
+    expect(issues[0]).toMatchObject({
+      worktreeId: "wt-1",
+      issueNumber: 42,
+      issueTitle: "Fix login",
+      issueProvenance: {
+        issueProviderId: "acme.linear.linear",
+        issueKey: "ENG-42",
+        issueId: "uuid-42",
+      },
     });
 
     unsubscribe();

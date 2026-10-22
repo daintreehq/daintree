@@ -332,6 +332,15 @@ export interface Worktree {
   issueTitle?: string;
 
   /**
+   * Who owns `issueNumber` (#13744) — see `IssueProvenance`. Absent means the
+   * code forge's number; present when an issues provider served the link or
+   * claimed the branch name in its own key format.
+   */
+  issueProviderId?: string;
+  issueId?: string;
+  issueKey?: string;
+
+  /**
    * Offline-derived sentence-cased title parsed from the `issue-<n>-<slug>`
    * branch naming convention. Used as a fallback headline when `issueTitle`
    * hasn't been fetched yet so the sidebar never shows the raw slug.

@@ -132,6 +132,8 @@ import {
   clearGitCommonDirCache,
 } from "../utils/gitUtils.js";
 import { extractIssueNumberSync, extractIssueNumber } from "../services/issueExtractor.js";
+import { claimIssueFromBranch, setIssueBranchClaim } from "../services/issueBranchClaim.js";
+import { getForgeBridge } from "./forgeBridge.js";
 import { pullRequestService } from "../services/PullRequestService.js";
 import { events } from "../services/events.js";
 import {
@@ -224,6 +226,10 @@ export { probeGitLfsAvailable } from "./worktreeUtils.js";
 
 // Configuration
 const DEFAULT_ACTIVE_WORKTREE_INTERVAL_MS = 2000;
+// Cold start: the plugin scan that knows the issues provider usually lands
+// within seconds of the project loading.
+const ISSUE_CLAIM_RETRY_MS = 5_000;
+const ISSUE_CLAIM_MAX_RETRIES = 6;
 const DEFAULT_BACKGROUND_WORKTREE_INTERVAL_MS = 10000;
 // Default cap on concurrent background `git-only` file watchers per
 // workspace-host. Matches the `balanced` profile's `backgroundGitWatcherCap`
@@ -589,6 +595,13 @@ export class WorkspaceService {
   private forgeReselectSeq = 0;
   private forgeReselectTimer: NodeJS.Timeout | null = null;
   private forgeReselectRetries = 0;
+  // Re-asks main for the issues provider's branch keys while the answer isn't
+  // knowable yet (cold-start plugin scan) — see `refreshIssueBranchClaim`.
+  private issueClaimRetryTimer: NodeJS.Timeout | null = null;
+  private issueClaimRetries = 0;
+  private issueClaimSeq = 0;
+  private issueClaimInFlight = false;
+  private issueClaimRefreshQueued = false;
   private forgeRemoteProbeSeq = 0;
   private forgeRemoteReprobeTimer: NodeJS.Timeout | null = null;
   // Bumped whenever a `.git/config` write is OBSERVED. A baseline read that
@@ -957,6 +970,48 @@ export class WorkspaceService {
           return;
         }
 
+        // An issues provider's branch-claimed issue (#13744): its title rides
+        // on the claim, and `linked` stays the code forge's — it can't name a
+        // second provider's issue.
+        if (data.issueProvenance) {
+          const claim = monitor.issueClaim;
+          const number = monitor.issueNumber;
+          if (
+            !claim ||
+            number === undefined ||
+            claim.issueProviderId !== data.issueProvenance.issueProviderId ||
+            claim.issueKey !== data.issueProvenance.issueKey
+          ) {
+            return;
+          }
+          monitor.setClaimedIssue(
+            { number, issueProviderId: claim.issueProviderId, issueKey: claim.issueKey },
+            data.issueProvenance.issueId
+          );
+          monitor.setIssueTitle(data.issueTitle);
+          if (data.issueLastUpdatedAt !== undefined) {
+            monitor.setIssueLastUpdatedAt(data.issueLastUpdatedAt);
+          }
+          if (monitor.hasInitialStatus) {
+            this.emitUpdate(monitor);
+          }
+          this.sendEvent({
+            type: "issue-detected",
+            worktreeId,
+            issueNumber: number,
+            issueTitle: data.issueTitle,
+            issueLastUpdatedAt: data.issueLastUpdatedAt,
+            branchName: data.branchName,
+            providerId: data.issueProvenance.issueProviderId,
+            linked: monitor.getSnapshot().linked ?? null,
+            issueProvenance: monitor.issueClaim,
+          });
+          return;
+        }
+        // A code-forge result can't describe a number an issues provider
+        // claimed — it raced the claim and names a different issue.
+        if (monitor.issueClaim) return;
+
         // Keep the private flat issue number in lockstep so the
         // onIssueNotFound guard (`monitor.issueNumber !== issueNumber`)
         // matches forge-resolved issues, not just branch-parsed ones.
@@ -1172,6 +1227,7 @@ export class WorkspaceService {
 
       // Backstop for a disabled or silently-degraded git watcher (#11155).
       this.startForgeRemoteDetection();
+      this.refreshIssueBranchClaim();
       this.listService.setGit(this.git, projectRootPath);
 
       // #6669: clean up at startup so externally-deleted worktrees (kept in
@@ -1389,8 +1445,11 @@ export class WorkspaceService {
           }
 
           if (branchChanged && wt.branch) {
-            const syncIssueNumber = extractIssueNumberSync(wt.branch, wt.name);
-            if (syncIssueNumber) {
+            const claimed = claimIssueFromBranch(wt.branch, wt.name);
+            const syncIssueNumber = claimed ? null : extractIssueNumberSync(wt.branch, wt.name);
+            if (claimed) {
+              existingMonitor.setClaimedIssue(claimed);
+            } else if (syncIssueNumber) {
               existingMonitor.setIssueNumber(syncIssueNumber);
             } else {
               existingMonitor.setIssueNumber(undefined);
@@ -1904,7 +1963,9 @@ export class WorkspaceService {
     wt = enrichedWt;
 
     await ensureNoteFile(wt.path);
-    const issueNumber = wt.branch ? extractIssueNumberSync(wt.branch, wt.name) : null;
+    const claimedIssue = wt.branch ? claimIssueFromBranch(wt.branch, wt.name) : null;
+    const issueNumber =
+      claimedIssue?.number ?? (wt.branch ? extractIssueNumberSync(wt.branch, wt.name) : null);
     const interval = isActive ? this.pollIntervalActive : this.pollIntervalBackground;
 
     let createdAt: number | undefined;
@@ -1967,7 +2028,11 @@ export class WorkspaceService {
       this.statusAdmission
     );
 
-    monitor.setIssueNumber(issueNumber ?? undefined);
+    if (claimedIssue) {
+      monitor.setClaimedIssue(claimedIssue);
+    } else {
+      monitor.setIssueNumber(issueNumber ?? undefined);
+    }
     monitor.setCreatedAt(createdAt);
     monitor.setAttachments(this.attachmentService.projectionFor(wt.id));
 
@@ -2119,6 +2184,116 @@ export class WorkspaceService {
         "[WorkspaceHost] Resource config initialization failed (continuing without resources):",
         formatErrorMessage(error, "Resource config initialization failed")
       );
+    }
+  }
+
+  /**
+   * Ask main which literal issue keys the project's issues provider claims in
+   * branch names (#13744), then re-read every worktree's issue against them.
+   * No claim is the safe state while the answer is in flight; a `retry`
+   * answer keeps the current claim and asks again shortly.
+   */
+  private refreshIssueBranchClaim(): void {
+    const projectRootPath = this.projectRootPath;
+    if (!projectRootPath) return;
+    if (this.issueClaimRetryTimer) {
+      clearTimeout(this.issueClaimRetryTimer);
+      this.issueClaimRetryTimer = null;
+    }
+    let bridge: ReturnType<typeof getForgeBridge>;
+    try {
+      bridge = getForgeBridge();
+    } catch {
+      return;
+    }
+    // Identical in-flight requests are joined at the bridge and in main, so a
+    // request started now could hand back an answer read before the change
+    // that prompted it. Ask again once the one in flight settles instead.
+    if (this.issueClaimInFlight) {
+      this.issueClaimRefreshQueued = true;
+      return;
+    }
+    this.issueClaimInFlight = true;
+    const seq = ++this.issueClaimSeq;
+    const settle = (): boolean => {
+      this.issueClaimInFlight = false;
+      if (this.issueClaimRefreshQueued) {
+        this.issueClaimRefreshQueued = false;
+        this.refreshIssueBranchClaim();
+        return false;
+      }
+      return true;
+    };
+    bridge.resolveIssueBranchClaim(projectRootPath).then(
+      (result) => {
+        if (!settle()) return;
+        if (seq !== this.issueClaimSeq || this.projectRootPath !== projectRootPath) return;
+        if (result.status === "retry") {
+          this.scheduleIssueBranchClaimRetry();
+          return;
+        }
+        this.issueClaimRetries = 0;
+        if (setIssueBranchClaim(result.claim)) this.reapplyIssueBranchClaims();
+      },
+      () => {
+        if (!settle()) return;
+        if (seq !== this.issueClaimSeq || this.projectRootPath !== projectRootPath) return;
+        this.scheduleIssueBranchClaimRetry();
+      }
+    );
+  }
+
+  private scheduleIssueBranchClaimRetry(): void {
+    if (this.issueClaimRetries >= ISSUE_CLAIM_MAX_RETRIES || this.issueClaimRetryTimer) return;
+    this.issueClaimRetries += 1;
+    this.issueClaimRetryTimer = setTimeout(() => {
+      this.issueClaimRetryTimer = null;
+      this.refreshIssueBranchClaim();
+    }, ISSUE_CLAIM_RETRY_MS);
+    this.issueClaimRetryTimer.unref?.();
+  }
+
+  private clearIssueBranchClaim(): void {
+    this.issueClaimSeq += 1;
+    this.issueClaimRetries = 0;
+    this.issueClaimRefreshQueued = false;
+    if (this.issueClaimRetryTimer) {
+      clearTimeout(this.issueClaimRetryTimer);
+      this.issueClaimRetryTimer = null;
+    }
+    setIssueBranchClaim(null);
+  }
+
+  /**
+   * Re-derive each worktree's issue after the claimed keys changed: a branch
+   * the provider now claims becomes its issue, and one it no longer claims
+   * goes back to the built-in code-forge patterns.
+   */
+  private reapplyIssueBranchClaims(): void {
+    for (const monitor of this.monitors.values()) {
+      const branch = monitor.branch;
+      if (!branch) continue;
+      const claimed = claimIssueFromBranch(branch, monitor.name);
+      const current = monitor.issueClaim;
+      if (claimed) {
+        if (
+          current?.issueProviderId === claimed.issueProviderId &&
+          current.issueKey === claimed.issueKey
+        ) {
+          continue;
+        }
+        monitor.setClaimedIssue(claimed);
+        // `linked.issue` named the code forge's issue for the old number.
+        const linked = monitor.getSnapshot().linked;
+        if (linked?.issue) {
+          monitor.setLinked(linked.pr ? { providerId: linked.providerId, pr: linked.pr } : null);
+        }
+      } else {
+        if (!current) continue;
+        monitor.setIssueNumber(extractIssueNumberSync(branch, monitor.name) ?? undefined);
+      }
+      monitor.setIssueTitle(undefined);
+      if (monitor.hasInitialStatus) this.emitUpdate(monitor);
     }
   }
 
@@ -5947,6 +6122,8 @@ export class WorkspaceService {
     const remoteSelectionChanged = args.forgeRemote !== this.forgeRemoteName;
     this.forgeRemoteName = args.forgeRemote;
     pullRequestService.setForgeSettings(args);
+    // The issues binding may be what changed; its branch keys go with it.
+    this.refreshIssueBranchClaim();
     // A backgrounded host re-resolves when it is foregrounded; refreshing now
     // would query the forge for a project nothing is showing (#12519).
     if (!this.backgrounded) void pullRequestService.refresh();
@@ -6040,6 +6217,9 @@ export class WorkspaceService {
    */
   notifyForgeProviderRegistryUpdated(): void {
     pullRequestService.notifyForgeProviderRegistryUpdated();
+    // The issues provider may have just become available (#13744).
+    this.issueClaimRetries = 0;
+    this.refreshIssueBranchClaim();
   }
 
   updateForgeCredentials(
@@ -6104,6 +6284,8 @@ export class WorkspaceService {
         worktreeId: string;
         branch?: string;
         issueNumber?: number;
+        issueProviderId?: string;
+        issueKey?: string;
         isMainWorktree?: boolean;
       }> = [];
       for (const monitor of this.monitors.values()) {
@@ -6111,6 +6293,8 @@ export class WorkspaceService {
           worktreeId: monitor.id,
           branch: monitor.branch,
           issueNumber: monitor.issueNumber,
+          issueProviderId: monitor.issueClaim?.issueProviderId,
+          issueKey: monitor.issueClaim?.issueKey,
           isMainWorktree: monitor.isMainWorktree,
         });
       }
@@ -6148,6 +6332,7 @@ export class WorkspaceService {
     // start probe re-seeds it, and an in-flight probe from this project must
     // not signal against the incoming one.
     this.stopForgeRemoteDetection();
+    this.clearIssueBranchClaim();
 
     this.activeWorktreeId = null;
     this.mainBranch = "main";
@@ -6296,6 +6481,7 @@ export class WorkspaceService {
     this.authFailureConfirmedNotified.clear();
     this.pollQueue.clear();
     this.stopForgeRemoteDetection();
+    this.clearIssueBranchClaim();
     this.listService.invalidateCache();
     this.fileDiffCache.dispose();
   }

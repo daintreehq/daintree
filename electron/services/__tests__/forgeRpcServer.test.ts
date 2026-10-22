@@ -14,6 +14,13 @@ vi.mock("../PluginService.js", () => ({
   pluginService: pluginServiceMock,
 }));
 
+const forgeResolutionMock = vi.hoisted(() => ({
+  resolveIssueOverrideForCwd: vi.fn(),
+  resolveNamedIssueProviderForCwd: vi.fn(),
+  getIssueForLink: vi.fn(),
+}));
+vi.mock("../../ipc/handlers/forgeResolution.js", () => forgeResolutionMock);
+
 import { _resetForgeRpcInFlightForTests, dispatchForgeRpc } from "../forgeRpcServer.js";
 import {
   clearForgeProviderImplRegistry,
@@ -461,5 +468,120 @@ describe("resolveProvider miss discrimination (#9997)", () => {
     };
     expect(pathFor("ra")).toBe("/repo-a");
     expect(pathFor("rb")).toBe("/repo-b");
+  });
+});
+
+describe("issue branch claims (#13744)", () => {
+  const trackerRef: RepoRef = { host: "tracker.invalid", owner: "ENG", repo: "ENG", rawData: null };
+
+  function dispatch(
+    method: "resolveIssueBranchClaim" | "getIssueForLink",
+    args: unknown[]
+  ): Promise<ForgeRpcResult> {
+    const { send, sent } = captureSender();
+    return dispatchForgeRpc({ forgeRequestId: `${method}-1`, method, args }, send).then(
+      () => sent[0]!
+    );
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("reports the bound issues provider's normalized keys", async () => {
+    forgeResolutionMock.resolveIssueOverrideForCwd.mockResolvedValue({
+      namespaceId: "acme.tracker.tracker",
+      repoRef: trackerRef,
+      impl: { getIssueBranchKeys: vi.fn(async () => ["eng", "bad key", "DES"]) },
+    });
+
+    const result = await dispatch("resolveIssueBranchClaim", [{ projectPath: "/repo" }]);
+
+    expect(forgeResolutionMock.resolveIssueOverrideForCwd).toHaveBeenCalledWith("/repo", "/repo");
+    expect(result).toMatchObject({
+      ok: true,
+      value: {
+        status: "resolved",
+        claim: { providerId: "acme.tracker.tracker", keys: ["DES", "ENG"] },
+      },
+    });
+  });
+
+  it("claims nothing without an issues provider or one that reports keys", async () => {
+    forgeResolutionMock.resolveIssueOverrideForCwd.mockResolvedValue(null);
+    expect(await dispatch("resolveIssueBranchClaim", [{ projectPath: "/repo" }])).toMatchObject({
+      value: { status: "resolved", claim: null },
+    });
+
+    forgeResolutionMock.resolveIssueOverrideForCwd.mockResolvedValue({
+      namespaceId: "acme.tracker.tracker",
+      repoRef: trackerRef,
+      impl: {},
+    });
+    expect(await dispatch("resolveIssueBranchClaim", [{ projectPath: "/other" }])).toMatchObject({
+      value: { status: "resolved", claim: null },
+    });
+  });
+
+  it("asks the host to retry while the plugin scan is still running", async () => {
+    pluginServiceMock.isPluginScanComplete = false;
+    forgeResolutionMock.resolveIssueOverrideForCwd.mockRejectedValue(new Error("not available"));
+
+    expect(await dispatch("resolveIssueBranchClaim", [{ projectPath: "/repo" }])).toMatchObject({
+      value: { status: "retry" },
+    });
+  });
+
+  it("asks the host to retry when the provider fails to report its keys", async () => {
+    forgeResolutionMock.resolveIssueOverrideForCwd.mockResolvedValue({
+      namespaceId: "acme.tracker.tracker",
+      repoRef: trackerRef,
+      impl: { getIssueBranchKeys: vi.fn(async () => Promise.reject(new Error("offline"))) },
+    });
+
+    expect(await dispatch("resolveIssueBranchClaim", [{ projectPath: "/repo" }])).toMatchObject({
+      value: { status: "retry" },
+    });
+  });
+
+  it("rejects a relative project path", async () => {
+    expect(await dispatch("resolveIssueBranchClaim", [{ projectPath: "repo" }])).toMatchObject({
+      ok: false,
+    });
+  });
+
+  it("looks a claimed issue up through the provider that claimed it", async () => {
+    const context = { namespaceId: "acme.tracker.tracker", repoRef: trackerRef, impl: {} };
+    forgeResolutionMock.resolveNamedIssueProviderForCwd.mockResolvedValue(context);
+    forgeResolutionMock.getIssueForLink.mockResolvedValue({ number: 42, title: "Fix login" });
+
+    const result = await dispatch("getIssueForLink", [
+      { projectPath: "/repo", issueProviderId: "acme.tracker.tracker", issueKey: "ENG-42" },
+    ]);
+
+    expect(forgeResolutionMock.resolveNamedIssueProviderForCwd).toHaveBeenCalledWith(
+      "/repo",
+      "acme.tracker.tracker"
+    );
+    expect(forgeResolutionMock.getIssueForLink).toHaveBeenCalledWith(context, {
+      issueProviderId: "acme.tracker.tracker",
+      issueKey: "ENG-42",
+    });
+    expect(result).toMatchObject({ ok: true, value: { title: "Fix login" } });
+  });
+
+  it("fails rather than fall back to a number when the provider has no key lookup", async () => {
+    forgeResolutionMock.resolveNamedIssueProviderForCwd.mockResolvedValue({
+      namespaceId: "acme.tracker.tracker",
+      repoRef: trackerRef,
+      impl: {},
+    });
+    forgeResolutionMock.getIssueForLink.mockResolvedValue(undefined);
+
+    const result = await dispatch("getIssueForLink", [
+      { projectPath: "/repo", issueProviderId: "acme.tracker.tracker", issueKey: "ENG-42" },
+    ]);
+
+    expect(result).toMatchObject({ ok: false });
   });
 });

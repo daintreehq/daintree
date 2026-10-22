@@ -353,6 +353,7 @@ export class WorkspaceHostEventRouter {
           branchName: event.branchName,
           providerId: event.providerId,
           linked: event.linked,
+          ...(event.issueProvenance ? { issueProvenance: event.issueProvenance } : {}),
         };
         events.emit("sys:issue:detected", {
           ...issuePayload,

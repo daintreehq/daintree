@@ -37,6 +37,7 @@ import type {
   PRClearedPayload,
   IssueDetectedPayload,
   IssueNotFoundPayload,
+  IssueLinkTarget,
 } from "@shared/types/ipc/forge";
 
 // The open calls answer with a URL only to a window on another machine, whose
@@ -54,12 +55,12 @@ export const forgeClient = {
     return window.electron.forge.openCommits(cwd, branch).then(() => undefined);
   },
 
-  openIssue: (cwd: string, issueNumber: number): Promise<void> => {
-    return window.electron.forge.openIssue({ cwd, issueNumber }).then(() => undefined);
+  openIssue: (cwd: string, issueNumber: number, target?: IssueLinkTarget): Promise<void> => {
+    return window.electron.forge.openIssue({ ...target, cwd, issueNumber }).then(() => undefined);
   },
 
-  getIssueUrl: (cwd: string, issueNumber: number): Promise<string> => {
-    return window.electron.forge.getIssueUrl({ cwd, issueNumber });
+  getIssueUrl: (cwd: string, issueNumber: number, target?: IssueLinkTarget): Promise<string> => {
+    return window.electron.forge.getIssueUrl({ ...target, cwd, issueNumber });
   },
 
   openRepo: (cwd: string): Promise<void> => {
@@ -186,8 +187,12 @@ export const forgeClient = {
     return window.electron.forge.getProjectHealth({ cwd, bypassCache });
   },
 
-  getIssueTooltip: (cwd: string, issueNumber: number): Promise<IssueTooltipData | null> => {
-    return window.electron.forge.getIssueTooltip({ cwd, issueNumber });
+  getIssueTooltip: (
+    cwd: string,
+    issueNumber: number,
+    target?: IssueLinkTarget
+  ): Promise<IssueTooltipData | null> => {
+    return window.electron.forge.getIssueTooltip({ ...target, cwd, issueNumber });
   },
 
   getPRTooltip: (cwd: string, prNumber: number): Promise<PRTooltipData | null> => {

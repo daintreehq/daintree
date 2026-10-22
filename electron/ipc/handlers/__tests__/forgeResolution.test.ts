@@ -63,8 +63,12 @@ const pluginServiceMock = vi.hoisted(() => ({
 vi.mock("../../../services/PluginService.js", () => ({ pluginService: pluginServiceMock }));
 
 import {
+  issueToTooltipData,
+  readIssueLinkTarget,
   resolveForCwd,
   resolveForgeRemoteNameForCwd,
+  resolveIssueLinkForCwd,
+  resolveIssueLinkUrl,
   resolveIssueOverrideForCwd,
   resolvePRHeadRefspecForCwd,
   stampIssueProvider,
@@ -920,5 +924,161 @@ describe("resolveForCwd — issues role (#13700)", () => {
       key: "ENG-42",
       providerId: "acme.tracker.tracker",
     });
+  });
+});
+
+describe("issue links name their provider (#13744)", () => {
+  const trackerEntry: ForgeProviderEntry = {
+    pluginId: "acme.tracker",
+    contribution: { id: "tracker", name: "Tracker", matches: [], roles: ["issues"] },
+  };
+  const TRACKER = "acme.tracker.tracker";
+
+  function codeForge() {
+    return {
+      parseRemote: vi.fn(() => ({ host: "gitea.example.com", owner: "o", repo: "r" })),
+      buildIssueUrl: vi.fn(
+        (_repo: unknown, n: number) => `https://gitea.example.com/o/r/issues/${n}`
+      ),
+    };
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    gitServiceCacheMock.getGitService.mockReturnValue(gitServiceMock);
+    gitServiceMock.listWorktrees.mockResolvedValue([
+      { path: "/repo", branch: "main", bare: false, isMainWorktree: true },
+    ]);
+    gitServiceMock.getRemoteUrl.mockResolvedValue("https://gitea.example.com/owner/repo.git");
+    gitServiceMock.listRemotes.mockResolvedValue([
+      { name: "origin", fetchUrl: "https://gitea.example.com/owner/repo.git" },
+    ]);
+    projectStoreMock.getProjectByPath.mockImplementation(async (p: string) =>
+      p === "/repo" ? { id: "project-1", path: "/repo" } : null
+    );
+    projectStoreMock.getProjectSettings.mockResolvedValue({
+      runCommands: [],
+      issueProviderOverride: TRACKER,
+    });
+    registryMock.listMatchingProviders.mockReturnValue([{}]);
+    resolverMock.resolveForgeProvider.mockImplementation((inputs) =>
+      inputs.issueProviderOverride === TRACKER
+        ? {
+            entry: null,
+            resolvedVia: null,
+            issues: { entry: trackerEntry, resolvedVia: "override" },
+          }
+        : { entry: giteaEntry, resolvedVia: "hostname", issues: { entry: null, resolvedVia: null } }
+    );
+  });
+
+  it("reads a number without provenance from the code forge, not the bound tracker", async () => {
+    const forge = codeForge();
+    registryMock.getForgeProviderImpl.mockReturnValue(forge);
+    const tracker = makeIssuesOnlyProvider();
+    registryMock.getForgeIssueProviderImpl.mockReturnValue(tracker);
+
+    const target = { role: "code" as const };
+    const context = await resolveIssueLinkForCwd("/repo", target);
+    const url = await resolveIssueLinkUrl(context, 42, target);
+
+    expect(context.namespaceId).toBe("acme.gitea");
+    expect(url).toBe("https://gitea.example.com/o/r/issues/42");
+  });
+
+  it("keeps a bare number on the project's issues provider", async () => {
+    registryMock.getForgeIssueProviderImpl.mockReturnValue(makeIssuesOnlyProvider());
+
+    const context = await resolveIssueLinkForCwd("/repo", undefined);
+
+    expect(context.namespaceId).toBe(TRACKER);
+  });
+
+  it("reads a link from the provider it names even after the project rebinds", async () => {
+    projectStoreMock.getProjectSettings.mockResolvedValue({ runCommands: [] });
+    registryMock.getForgeIssueProviderImpl.mockReturnValue(makeIssuesOnlyProvider());
+
+    const context = await resolveIssueLinkForCwd("/repo", { issueProviderId: TRACKER });
+
+    expect(context.namespaceId).toBe(TRACKER);
+  });
+
+  it("fails with the reason when the named provider is gone, never falling back", async () => {
+    registryMock.getForgeProviderImpl.mockReturnValue(codeForge());
+
+    await expect(
+      resolveIssueLinkForCwd("/repo", { issueProviderId: "acme.gone.gone" })
+    ).rejects.toThrow("The provider this issue came from (acme.gone.gone) isn't available");
+  });
+
+  it("opens a renumbered issue through its stable id, not its stored number", async () => {
+    const moved = { ...makeTrackerIssue(57, "Fix login"), id: "uuid-42", key: "ENG-57" };
+    registryMock.getForgeIssueProviderImpl.mockReturnValue(makeIssuesOnlyProvider([moved]));
+    const target = { issueProviderId: TRACKER, issueId: "uuid-42", issueKey: "ENG-42" };
+
+    const context = await resolveIssueLinkForCwd("/repo", target);
+
+    await expect(resolveIssueLinkUrl(context, 42, target)).resolves.toBe(
+      "https://tracker.invalid/issue/ENG-57"
+    );
+  });
+
+  it("reports a missing issue rather than rebuilding a URL from its number", async () => {
+    registryMock.getForgeIssueProviderImpl.mockReturnValue(makeIssuesOnlyProvider([]));
+    const target = { issueProviderId: TRACKER, issueKey: "ENG-42" };
+
+    const context = await resolveIssueLinkForCwd("/repo", target);
+
+    await expect(resolveIssueLinkUrl(context, 42, target)).rejects.toThrow("ENG-42 wasn't found");
+  });
+
+  it("builds the URL by number when the provider has no id lookup", async () => {
+    const tracker = makeIssuesOnlyProvider();
+    delete tracker.getIssueById;
+    registryMock.getForgeIssueProviderImpl.mockReturnValue(tracker);
+    const target = { issueProviderId: TRACKER, issueId: "uuid-42" };
+
+    const context = await resolveIssueLinkForCwd("/repo", target);
+
+    await expect(resolveIssueLinkUrl(context, 42, target)).resolves.toBe(
+      "https://tracker.invalid/issue/ENG-42"
+    );
+  });
+});
+
+describe("readIssueLinkTarget", () => {
+  it("is undefined for a payload that names no owner", () => {
+    expect(readIssueLinkTarget({ issueProviderId: undefined })).toBeUndefined();
+  });
+
+  it("reads and trims the provenance fields", () => {
+    expect(
+      readIssueLinkTarget({ issueProviderId: " acme.tracker.tracker ", issueKey: "ENG-1" })
+    ).toEqual({ issueProviderId: "acme.tracker.tracker", issueKey: "ENG-1" });
+    expect(readIssueLinkTarget({ role: "code" })).toEqual({ role: "code" });
+  });
+
+  it("rejects malformed fields instead of dropping them", () => {
+    expect(() => readIssueLinkTarget({ role: "issues" })).toThrow("Invalid issue role");
+    expect(() => readIssueLinkTarget({ issueProviderId: 7 })).toThrow("Invalid issueProviderId");
+    expect(() => readIssueLinkTarget({ issueKey: "  " })).toThrow("Invalid issueKey");
+    expect(() => readIssueLinkTarget({ issueId: "x".repeat(257) })).toThrow("Invalid issueId");
+  });
+
+  it("rejects a payload naming both a provider and the code role", () => {
+    expect(() =>
+      readIssueLinkTarget({ role: "code", issueProviderId: "acme.tracker.tracker" })
+    ).toThrow("not both");
+  });
+});
+
+describe("issueToTooltipData", () => {
+  it("flattens and truncates the body into an excerpt", () => {
+    const issue = { ...makeTrackerIssue(42, "Fix login"), body: `line one\n${"x".repeat(300)}` };
+    const data = issueToTooltipData(issue);
+    expect(data.bodyExcerpt.startsWith("line one x")).toBe(true);
+    expect(data.bodyExcerpt.endsWith("…")).toBe(true);
+    expect(data.bodyExcerpt.length).toBeLessThanOrEqual(151);
+    expect(data).toMatchObject({ number: 42, title: "Fix login", state: "open" });
   });
 });

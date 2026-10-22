@@ -179,8 +179,12 @@ export function PulseHealthSignals({
       <CountLabel count={alerts} one="security alert" many="security alerts" />
     </HealthChip>
   );
-  const issuesChip = (
-    <HealthChip key="issues" icon={<CircleDot />} onClick={() => openUrl("/issues")}>
+  const issuesChip = !health.issueCountUnavailable && (
+    <HealthChip
+      key="issues"
+      icon={<CircleDot />}
+      onClick={() => openUrl(health.issuesUrl ?? "/issues")}
+    >
       <CountLabel count={health.issueCount} one="issue" many="issues" />
     </HealthChip>
   );

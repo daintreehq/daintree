@@ -4,6 +4,7 @@ import { z } from "zod";
 import type { ActionContext } from "@shared/types/actions";
 import { forgeClient, systemClient } from "@/clients";
 import { getCurrentViewStore } from "@/store/createWorktreeStore";
+import { worktreeIssueLinkTarget } from "@shared/utils/worktreeIssueProjection";
 
 export function registerWorktreeForgeActions(
   actions: ActionRegistry,
@@ -26,7 +27,13 @@ export function registerWorktreeForgeActions(
         const worktree = getCurrentViewStore().getState().worktrees.get(targetWorktreeId);
         if (!worktree) throw new Error("Worktree not found");
         if (!worktree.issueNumber) throw new Error("Worktree has no associated issue");
-        await forgeClient.openIssue(worktree.path, worktree.issueNumber);
+        // Always say whose number this is (#13744): with an issues provider
+        // bound, an unqualified number would be looked up in that tracker.
+        await forgeClient.openIssue(
+          worktree.path,
+          worktree.issueNumber,
+          worktreeIssueLinkTarget(worktree)
+        );
       },
     })
   );

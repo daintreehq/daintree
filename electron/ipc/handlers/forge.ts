@@ -10,9 +10,13 @@ import {
   getImplForNamespace,
   getImplForNamespaceActivating,
   getIssueImplForNamespace,
+  readIssueLinkTarget,
+  resolveIssueLinkForCwd,
+  resolveIssueLinkUrl,
   stampIssueProvider,
   type ResolvedForgeContext,
 } from "./forgeResolution.js";
+import type { IssueLinkTarget } from "../../../shared/types/ipc/forge.js";
 import { auditForgeCall, summarizeForgeArgs } from "../../services/forge/forgeAuditService.js";
 import type {
   CreateIssueInput,
@@ -896,7 +900,7 @@ export function registerForgeHandlers(): () => void {
   cleanups.push(
     typedHandleWithContext(
       CHANNELS.FORGE_OPEN_ISSUE,
-      async (ctx, payload: { cwd: string; issueNumber: number }) => {
+      async (ctx, payload: { cwd: string; issueNumber: number } & IssueLinkTarget) => {
         checkRateLimit(CHANNELS.FORGE_OPEN_ISSUE, 20, 10_000);
         if (!payload || typeof payload !== "object") {
           throw new Error("Invalid payload");
@@ -911,9 +915,9 @@ export function registerForgeHandlers(): () => void {
         ) {
           throw new Error("Invalid issue number");
         }
-        const { namespaceId, repoRef } = await resolveForCwd(payload.cwd, "issues");
-        const impl = getIssueImplForNamespace(namespaceId);
-        const url = impl.buildIssueUrl(repoRef, payload.issueNumber);
+        const target = readIssueLinkTarget(payload);
+        const context = await resolveIssueLinkForCwd(payload.cwd, target);
+        const url = await resolveIssueLinkUrl(context, payload.issueNumber, target);
         return openForCaller(ctx, url);
       }
     )
@@ -926,7 +930,7 @@ export function registerForgeHandlers(): () => void {
   cleanups.push(
     typedHandle(
       CHANNELS.FORGE_GET_ISSUE_URL,
-      async (payload: { cwd: string; issueNumber: number }) => {
+      async (payload: { cwd: string; issueNumber: number } & IssueLinkTarget) => {
         checkRateLimit(CHANNELS.FORGE_GET_ISSUE_URL, 10, 10_000);
         if (!payload || typeof payload !== "object") {
           throw new Error("Invalid payload");
@@ -941,9 +945,9 @@ export function registerForgeHandlers(): () => void {
         ) {
           throw new Error("Invalid issue number");
         }
-        const { namespaceId, repoRef } = await resolveForCwd(payload.cwd, "issues");
-        const impl = getIssueImplForNamespace(namespaceId);
-        return impl.buildIssueUrl(repoRef, payload.issueNumber);
+        const target = readIssueLinkTarget(payload);
+        const context = await resolveIssueLinkForCwd(payload.cwd, target);
+        return resolveIssueLinkUrl(context, payload.issueNumber, target);
       }
     )
   );

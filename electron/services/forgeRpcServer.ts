@@ -1,5 +1,7 @@
+import path from "node:path";
 import { configure } from "safe-stable-stringify";
 import type {
+  ForgeIssueBranchClaimResult,
   ForgeRpcMethod,
   ForgeResolveProviderResult,
   WorkspaceHostRequest,
@@ -18,6 +20,13 @@ import { makeForgeProviderId } from "../../shared/utils/forgeProviderIds.js";
 import { getForgeProviderImpl } from "./forgeProviderRegistry.js";
 import { resolveForgeProvider } from "./forgeProviderResolver.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
+import { normalizeIssueBranchKeys } from "./issueBranchClaim.js";
+
+// Issue-link resolution lives with the forge IPC handlers; loaded lazily so
+// this module's eager import graph doesn't pull in the project store.
+function getForgeResolution(): Promise<typeof import("../ipc/handlers/forgeResolution.js")> {
+  return import("../ipc/handlers/forgeResolution.js");
+}
 
 // PluginService is loaded lazily so importing this file (e.g. from
 // `WorkspaceHostProcess` in tests that mock electron's `app` without
@@ -198,6 +207,12 @@ async function invoke(req: ForgeRpcRequest): Promise<unknown> {
   if (req.method === "resolveProvider") {
     return invokeResolveProvider(req.args);
   }
+  if (req.method === "resolveIssueBranchClaim") {
+    return invokeResolveIssueBranchClaim(req.args);
+  }
+  if (req.method === "getIssueForLink") {
+    return invokeGetIssueForLink(req.args);
+  }
 
   if (!req.namespacedId) {
     throw new Error(`Forge RPC ${req.method} requires a namespacedId`);
@@ -283,6 +298,83 @@ async function invokeResolveProvider(args: unknown[]): Promise<ForgeResolveProvi
   // the parsed ref.
   const stamped: RepoRef = opts.projectPath ? { ...repo, projectPath: opts.projectPath } : repo;
   return { status: "resolved", namespacedId, repo: stamped };
+}
+
+/** The issue-link fields of an RPC argument, unvalidated. */
+function readIssueLinkArg(arg: unknown): {
+  projectPath?: unknown;
+  issueProviderId?: unknown;
+  issueKey?: unknown;
+} {
+  if (typeof arg !== "object" || arg === null) return {};
+  return {
+    projectPath: "projectPath" in arg ? arg.projectPath : undefined,
+    issueProviderId: "issueProviderId" in arg ? arg.issueProviderId : undefined,
+    issueKey: "issueKey" in arg ? arg.issueKey : undefined,
+  };
+}
+
+function readProjectPath(value: unknown): string {
+  if (typeof value !== "string" || !path.isAbsolute(value)) {
+    throw new Error("Invalid project path");
+  }
+  return value;
+}
+
+/**
+ * The literal keys the project's bound issues provider claims in branch names
+ * (#13744). `retry` while the plugin scan is still running or the provider
+ * failed to answer, so the host keeps its current claim rather than dropping
+ * one over a blip.
+ */
+async function invokeResolveIssueBranchClaim(
+  args: unknown[]
+): Promise<ForgeIssueBranchClaimResult> {
+  const projectPath = readProjectPath(readIssueLinkArg(args[0]).projectPath);
+  const pluginService = await getPluginService();
+  const { resolveIssueOverrideForCwd } = await getForgeResolution();
+  let context: Awaited<ReturnType<typeof resolveIssueOverrideForCwd>>;
+  try {
+    context = await resolveIssueOverrideForCwd(projectPath, projectPath);
+  } catch {
+    return pluginService.isPluginScanComplete
+      ? { status: "resolved", claim: null }
+      : { status: "retry" };
+  }
+  if (!context?.impl.getIssueBranchKeys) return { status: "resolved", claim: null };
+  let keys: string[];
+  try {
+    keys = normalizeIssueBranchKeys(await context.impl.getIssueBranchKeys(context.repoRef));
+  } catch {
+    return { status: "retry" };
+  }
+  return {
+    status: "resolved",
+    claim: keys.length > 0 ? { providerId: context.namespaceId, keys } : null,
+  };
+}
+
+/**
+ * A branch-claimed issue, from the provider that claimed it. Fails with the
+ * reason when that provider is gone rather than asking another one.
+ */
+async function invokeGetIssueForLink(args: unknown[]): Promise<Issue | null> {
+  const link = readIssueLinkArg(args[0]);
+  const projectPath = readProjectPath(link.projectPath);
+  const { issueProviderId, issueKey } = link;
+  if (typeof issueProviderId !== "string" || !issueProviderId) {
+    throw new Error("Invalid issue provider");
+  }
+  if (typeof issueKey !== "string" || !issueKey) {
+    throw new Error("Invalid issue key");
+  }
+  const { resolveNamedIssueProviderForCwd, getIssueForLink } = await getForgeResolution();
+  const context = await resolveNamedIssueProviderForCwd(projectPath, issueProviderId);
+  const issue = await getIssueForLink(context, { issueProviderId, issueKey });
+  if (issue === undefined) {
+    throw new Error(`Forge provider "${issueProviderId}" can't look issues up by key`);
+  }
+  return issue;
 }
 
 function invokeFindPRByBranch(impl: ForgeProviderImpl, args: unknown[]): Promise<PR | null> {

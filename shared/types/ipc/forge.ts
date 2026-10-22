@@ -18,6 +18,20 @@ import type {
  * not GitHub-specific even though GitHub is currently the only built-in
  * provider that reports it.
  */
+/**
+ * Whose number an issue read is about (#13744). Omitted, the read goes to the
+ * project's issues provider — what a bare number has always meant on the
+ * agent surface. Worktree callers always say: the link's stored provider
+ * (with its stable id or key when it has them), or `role: "code"` for a number
+ * without provenance, which belongs to the code forge.
+ */
+export interface IssueLinkTarget {
+  role?: "code";
+  issueProviderId?: string;
+  issueId?: string;
+  issueKey?: string;
+}
+
 export type ForgeRateLimitKind = "primary" | "secondary";
 
 /**
@@ -242,6 +256,19 @@ export interface ForgeProjectHealthPayload extends ProjectHealthSnapshot {
    * steps that wouldn't help.
    */
   unsupported?: boolean;
+  /**
+   * The issues provider's issue list when the project takes its issues from a
+   * provider other than its code forge (#13744). `issueCount` is then that
+   * provider's count, so the issues chip opens this instead of the code
+   * forge's `/issues`.
+   */
+  issuesUrl?: string;
+  /**
+   * `true` when the issues provider's count couldn't be read. The code forge's
+   * count belongs to a different tracker, so the issues chip hides rather than
+   * show it.
+   */
+  issueCountUnavailable?: boolean;
 }
 
 /**

@@ -118,6 +118,8 @@ interface IssueDetectedEvent {
   branchName?: string;
   providerId?: string;
   linked?: PluginWorktreeLinked | null;
+  /** Set for an issues provider's branch-claimed issue (#13744). */
+  issueProvenance?: { issueProviderId: string; issueKey: string; issueId?: string };
 }
 
 interface IssueNotFoundEvent {
@@ -921,6 +923,11 @@ export function WorktreeStoreProvider({ children }: { children: ReactNode }) {
             ...existing,
             issueNumber: event.issueNumber,
             issueTitle: event.issueTitle,
+            // The provenance belongs to this detection's number: a code-forge
+            // detection carries none (#13744).
+            issueProviderId: event.issueProvenance?.issueProviderId,
+            issueId: event.issueProvenance?.issueId,
+            issueKey: event.issueProvenance?.issueKey,
             issueLastUpdatedAt: event.issueLastUpdatedAt ?? existing.issueLastUpdatedAt,
             linked: event.linked ?? existing.linked,
           },

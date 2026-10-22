@@ -61,6 +61,8 @@ export interface PRIntegrationCallbacks {
       owner: string;
       /** Canonical repository name the issue belongs to. */
       repo: string;
+      /** Set for an issues provider's branch-claimed issue (#13744). */
+      issueProvenance?: { issueProviderId: string; issueKey: string; issueId?: string };
     }
   ): void;
   onIssueNotFound(worktreeId: string, issueNumber: number): void;
@@ -112,6 +114,9 @@ export class PRIntegrationService {
       worktreeId: string;
       branch?: string;
       issueNumber?: number;
+      /** Owner of a branch-claimed `issueNumber` (#13744). */
+      issueProviderId?: string;
+      issueKey?: string;
       isMainWorktree?: boolean;
     }>
   ): Promise<void> {
@@ -157,6 +162,7 @@ export class PRIntegrationService {
           providerId: data.providerId,
           owner: data.owner,
           repo: data.repo,
+          issueProvenance: data.issueProvenance,
         });
       })
     );
@@ -191,6 +197,8 @@ export class PRIntegrationService {
           worktreeId: candidate.worktreeId,
           branch: candidate.branch,
           issueNumber: candidate.issueNumber,
+          issueProviderId: candidate.issueProviderId,
+          issueKey: candidate.issueKey,
           isMainWorktree: candidate.isMainWorktree,
         } as unknown as WorktreeSnapshot);
       }

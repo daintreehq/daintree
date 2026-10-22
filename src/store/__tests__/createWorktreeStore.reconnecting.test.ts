@@ -1688,3 +1688,160 @@ describe("createWorktreeStore — attachment-only updates", () => {
     expect(store.getState().worktrees).toBe(settled);
   });
 });
+
+describe("createWorktreeStore — issue provenance (#13744)", () => {
+  const LINEAR = "acme.linear.linear";
+
+  function githubPr(number: number): PluginWorktreeLinked {
+    return {
+      providerId: BUILTIN_GITHUB_PROVIDER_ID,
+      pr: {
+        ref: {
+          providerId: BUILTIN_GITHUB_PROVIDER_ID,
+          owner: "daintreehq",
+          repo: "daintree",
+          number,
+          rawData: null,
+        },
+        url: `https://github.com/daintreehq/daintree/pull/${number}`,
+        state: "open",
+      },
+    };
+  }
+
+  it("carries a manual association's provenance onto the worktree", () => {
+    const store = createWorktreeStore();
+    store.getState().applySnapshot([makeSnapshot("wt-1")], nextV(), {
+      "wt-1": {
+        issueNumber: 42,
+        issueTitle: "Fix login",
+        issueProviderId: LINEAR,
+        issueId: "uuid-42",
+        issueKey: "ENG-42",
+      },
+    });
+
+    store.getState().applyUpdate(makeSnapshot("wt-1", { branch: "feature/x" }), nextV());
+
+    expect(store.getState().worktrees.get("wt-1")).toMatchObject({
+      issueNumber: 42,
+      issueProviderId: LINEAR,
+      issueId: "uuid-42",
+      issueKey: "ENG-42",
+    });
+  });
+
+  it("drops a branch claim's provenance when a legacy manual link overrides it", () => {
+    const store = createWorktreeStore();
+    store
+      .getState()
+      .applySnapshot(
+        [makeSnapshot("wt-1", { issueNumber: 7, issueProviderId: LINEAR, issueKey: "ENG-7" })],
+        nextV(),
+        { "wt-1": { issueNumber: 42, issueTitle: "GitHub issue" } }
+      );
+
+    const wt = store.getState().worktrees.get("wt-1");
+    expect(wt?.issueNumber).toBe(42);
+    expect(wt?.issueProviderId).toBeUndefined();
+    expect(wt?.issueKey).toBeUndefined();
+  });
+
+  it("keeps a tracker's claimed number when the linked GitHub PR has the same number", () => {
+    const store = createWorktreeStore();
+    store.getState().applySnapshot(
+      [
+        makeSnapshot("wt-1", {
+          issueNumber: 42,
+          issueTitle: "Fix login",
+          issueProviderId: LINEAR,
+          issueKey: "ENG-42",
+          linked: githubPr(42),
+        }),
+      ],
+      nextV()
+    );
+
+    expect(store.getState().worktrees.get("wt-1")).toMatchObject({
+      issueNumber: 42,
+      issueKey: "ENG-42",
+    });
+  });
+
+  it("doesn't carry a title across a change of owner for the same number", () => {
+    const store = createWorktreeStore();
+    store
+      .getState()
+      .applySnapshot(
+        [makeSnapshot("wt-1", { issueNumber: 42, issueTitle: "GitHub #42" })],
+        nextV()
+      );
+
+    store
+      .getState()
+      .applyUpdate(
+        makeSnapshot("wt-1", { issueNumber: 42, issueProviderId: LINEAR, issueKey: "ENG-42" }),
+        nextV()
+      );
+
+    const wt = store.getState().worktrees.get("wt-1");
+    expect(wt?.issueKey).toBe("ENG-42");
+    expect(wt?.issueTitle).toBeUndefined();
+  });
+
+  it("treats a provenance-only change as a real update", () => {
+    const store = createWorktreeStore();
+    store.getState().applySnapshot([makeSnapshot("wt-1", { issueNumber: 42 })], nextV());
+    const before = store.getState().worktrees;
+
+    store
+      .getState()
+      .applyUpdate(
+        makeSnapshot("wt-1", { issueNumber: 42, issueProviderId: LINEAR, issueKey: "ENG-42" }),
+        nextV()
+      );
+
+    expect(store.getState().worktrees).not.toBe(before);
+    expect(store.getState().worktrees.get("wt-1")?.issueKey).toBe("ENG-42");
+  });
+
+  it("keeps a manual link's title when the branch's own number comes back not-found", () => {
+    const store = createWorktreeStore();
+    store.getState().applySnapshot([makeSnapshot("wt-1", { issueNumber: 42 })], nextV(), {
+      "wt-1": {
+        issueNumber: 42,
+        issueTitle: "Fix login",
+        issueProviderId: LINEAR,
+        issueKey: "ENG-42",
+      },
+    });
+
+    store.getState().applyIssueNotFound("wt-1", 42);
+
+    expect(store.getState().worktrees.get("wt-1")?.issueTitle).toBe("Fix login");
+  });
+
+  it("doesn't carry a title between two of one tracker's issues with the same number", () => {
+    const store = createWorktreeStore();
+    store.getState().applySnapshot(
+      [
+        makeSnapshot("wt-1", {
+          issueNumber: 42,
+          issueTitle: "Engineering issue",
+          issueProviderId: LINEAR,
+          issueKey: "ENG-42",
+        }),
+      ],
+      nextV()
+    );
+
+    store
+      .getState()
+      .applyUpdate(
+        makeSnapshot("wt-1", { issueNumber: 42, issueProviderId: LINEAR, issueKey: "DES-42" }),
+        nextV()
+      );
+
+    expect(store.getState().worktrees.get("wt-1")?.issueTitle).toBeUndefined();
+  });
+});
