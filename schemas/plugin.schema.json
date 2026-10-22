@@ -522,6 +522,7 @@
                   "worktree",
                   "terminal",
                   "file",
+                  "browser",
                   "project"
                 ]
               },
