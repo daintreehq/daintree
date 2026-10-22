@@ -349,6 +349,11 @@ export function hasViewUnsavedChanges(panelId: string): boolean {
   return unsavedOwners.has(panelId);
 }
 
+/** Whether any plugin panel in this view says it holds unsaved work. */
+export function hasAnyViewUnsavedChanges(): boolean {
+  return unsavedOwners.size > 0;
+}
+
 /**
  * Reconcile the tracked set against the store.
  *

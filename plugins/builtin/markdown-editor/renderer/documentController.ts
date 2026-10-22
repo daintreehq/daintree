@@ -77,13 +77,15 @@ interface IdentityState {
    * panel started must not land over a newer one a sibling finished.
    */
   loadRequest: number;
+  /** The draft text recovery storage last acknowledged or handed back. */
+  storedDraftText: string | null;
 }
 const identities = new Map<string, IdentityState>();
 
 function identityState(key: string): IdentityState {
   let shared = identities.get(key);
   if (!shared) {
-    shared = { generation: 0, controllers: new Set(), loadRequest: 0 };
+    shared = { generation: 0, controllers: new Set(), loadRequest: 0, storedDraftText: null };
     identities.set(key, shared);
   }
   return shared;
@@ -281,6 +283,8 @@ export class DocumentController {
       fileName: this.fileName,
       draftText: record.draft?.text ?? null,
       dirty: record.draft !== null,
+      recoveryStored:
+        record.draft !== null && identityState(this.key).storedDraftText === record.draft.text,
       conflict: record.conflict !== null || record.status === "unavailable",
       save: () => this.save(),
       discard: () => this.discard(),
@@ -691,6 +695,7 @@ export class DocumentController {
       const result = await invoke<{ record: DraftRecord | null }>(CHANNELS.draftGet, {
         identity: this.identity,
       });
+      if (result.record) identityState(this.key).storedDraftText = result.record.draftText;
       return result.record;
     } catch (error) {
       logError("[markdown-editor] drafts.get failed", error);
@@ -747,6 +752,10 @@ export class DocumentController {
       result = { status: "error", message: formatErrorMessage(error, "Draft could not be stored") };
     }
     if (this.disposed) return;
+    if (result.status === "stored") {
+      identityState(this.key).storedDraftText = draft.draftText;
+      this.publishProjection();
+    }
     const warning =
       result.status === "full"
         ? "Draft recovery storage is full, so this draft lives only in this panel until you save it"

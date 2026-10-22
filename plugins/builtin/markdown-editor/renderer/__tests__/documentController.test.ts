@@ -573,6 +573,29 @@ describe("DocumentController (#12323)", () => {
     expect(controller.record().draft?.text).toBe("# Plan\n\nedit\n");
   });
 
+  it("marks a draft recoverable only once recovery storage acknowledged that text", async () => {
+    const controller = await open();
+    const recoverable = () => getFileDocumentProjection("panel-1")?.recoveryStored;
+    controller.setText("# Plan\n\none\n");
+    expect(recoverable()).toBe(false);
+    await flush(1000);
+    expect(recoverable()).toBe(true);
+    controller.setText("# Plan\n\none more\n");
+    expect(recoverable()).toBe(false);
+  });
+
+  it("never marks a draft recoverable when the recovery store is full or ignores it", async () => {
+    const controller = await open();
+    main.overrides.set(CHANNELS.draftPut, () => ({ status: "full", records: 50, bytes: 1 }));
+    controller.setText("# Plan\n\nfull\n");
+    await flush(1000);
+    expect(getFileDocumentProjection("panel-1")?.recoveryStored).toBe(false);
+    main.overrides.set(CHANNELS.draftPut, () => ({ status: "ignored" }));
+    controller.setText("# Plan\n\nignored\n");
+    await flush(1000);
+    expect(getFileDocumentProjection("panel-1")?.recoveryStored).toBe(false);
+  });
+
   it("refuses a draft that grew past the byte ceiling and says so", async () => {
     const controller = await open();
     controller.setText("x".repeat(2 * 1024 * 1024 + 1));

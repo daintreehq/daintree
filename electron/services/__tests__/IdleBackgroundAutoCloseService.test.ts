@@ -213,6 +213,7 @@ const pluginLifecycleMock = vi.hoisted(() => ({
   notifyProjectPluginsClosed: vi.fn<(projectId: string) => void>(),
 }));
 vi.mock("../../window/projectPluginLifecycle.js", () => pluginLifecycleMock);
+vi.mock("../panelRecoveryQuery.js", () => ({ readPanelRecoveryHold: async () => null }));
 
 import { IdleBackgroundAutoCloseService } from "../IdleBackgroundAutoCloseService.js";
 import { ProjectVisibilityClock, trackProjectVisibility } from "../projectVisibilityClock.js";

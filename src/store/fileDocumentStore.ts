@@ -28,6 +28,11 @@ export interface FileDocumentProjection {
   /** The unsaved buffer, or null when the document is clean. */
   draftText: string | null;
   dirty: boolean;
+  /**
+   * The current draft is held in durable recovery storage. Absent means the
+   * plugin does not say, which reads as not recoverable.
+   */
+  recoveryStored?: boolean;
   /** Disk moved under a dirty draft, or a save was refused as stale. */
   conflict: boolean;
   /**
@@ -88,4 +93,11 @@ export function useFileDocumentFlags(panelId: string): { dirty: boolean; conflic
 
 export function getFileDocumentProjection(panelId: string): FileDocumentProjection | undefined {
   return useFileDocumentStore.getState().byPanelId[panelId];
+}
+
+/** A dirty draft that nothing durable would bring back after the view is destroyed. */
+export function hasUnrecoverableFileDraft(): boolean {
+  return Object.values(useFileDocumentStore.getState().byPanelId).some(
+    (projection) => projection.dirty && projection.recoveryStored !== true
+  );
 }

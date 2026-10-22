@@ -65,6 +65,11 @@ vi.mock("../../ipc/utils.js", () => ({ broadcastToRenderer: broadcastMock }));
 
 vi.mock("../../utils/logger.js", () => ({ logInfo: vi.fn(), logError: vi.fn() }));
 
+const panelRecoveryMock = vi.hoisted(() => ({
+  readPanelRecoveryHold: vi.fn<(projectId: string, provider: unknown) => Promise<string | null>>(),
+}));
+vi.mock("../panelRecoveryQuery.js", () => panelRecoveryMock);
+
 import { CHANNELS } from "../../ipc/channels.js";
 import { sleepProject, type SleepProjectOptions } from "../projectSleep.js";
 import { AppError } from "../../utils/errorTypes.js";
@@ -119,6 +124,7 @@ describe("sleepProject", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     leased = new Set();
+    panelRecoveryMock.readPanelRecoveryHold.mockReset().mockResolvedValue(null);
     killSnapshot.value = { terminals: [], degraded: false };
     workspaceClient = {
       evictProject: vi.fn(() => true),
@@ -199,6 +205,32 @@ describe("sleepProject", () => {
       expect(outcome).toEqual({ status: "skipped", reason: "mcp-dispatch" });
       expect(helpSessionServiceMock.revokeByProjectId).not.toHaveBeenCalled();
       expect(teardownMock.gracefulTeardownAndJournalProject).not.toHaveBeenCalled();
+    });
+
+    it.each(["panel-unrecoverable", "panel-unknown"] as const)(
+      "touches nothing while a view reports %s",
+      async (hold) => {
+        panelRecoveryMock.readPanelRecoveryHold.mockResolvedValue(hold);
+
+        const outcome = await sleepProject("proj-1", policy(), makeDeps());
+
+        expect(outcome).toEqual({ status: "skipped", reason: hold });
+        expect(helpSessionServiceMock.revokeByProjectId).not.toHaveBeenCalled();
+        expect(teardownMock.gracefulTeardownAndJournalProject).not.toHaveBeenCalled();
+      }
+    );
+
+    it("keeps the view when a draft appears while the kill is in flight", async () => {
+      panelRecoveryMock.readPanelRecoveryHold
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce("panel-unrecoverable");
+
+      const outcome = await sleepProject("proj-1", policy(), makeDeps());
+
+      expect(outcome).toEqual({ status: "skipped", reason: "panel-unrecoverable" });
+      expect(teardownMock.gracefulTeardownAndJournalProject).toHaveBeenCalledTimes(1);
+      expect(hibernationMock.evictProjectRenderer).not.toHaveBeenCalled();
+      expect(projectStoreMock.updateProjectStatus).not.toHaveBeenCalled();
     });
 
     it("treats a window list it can't read as a dispatch it can't rule out", async () => {
@@ -289,6 +321,15 @@ describe("sleepProject", () => {
   });
 
   describe("a user sleep", () => {
+    it("does not ask the views about unsaved work", async () => {
+      panelRecoveryMock.readPanelRecoveryHold.mockResolvedValue("panel-unrecoverable");
+
+      const outcome = await sleepProject("proj-1", { initiator: "user" }, makeDeps());
+
+      expect(outcome.status).toBe("slept");
+      expect(panelRecoveryMock.readPanelRecoveryHold).not.toHaveBeenCalled();
+    });
+
     it("goes through an MCP dispatch — the user asked", async () => {
       leased.add("proj-1");
 
