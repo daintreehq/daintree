@@ -422,11 +422,18 @@ export function createSvelteExtractor(): ElementPickerExtractor {
     const belongs = (node: Element): boolean =>
       readMeta(node) !== null && componentFrames(node).includes(frame);
     let root: Element = start;
+    let edge = false;
     for (let depth = 0; depth < SVELTE_LIMITS.ancestors; depth += 1) {
       const parent = parentOf(root);
-      if (parent === null || !belongs(parent)) break;
+      if (parent === null || !belongs(parent)) {
+        edge = true;
+        break;
+      }
       root = parent;
     }
+    // Out of ancestors before the invocation's edge: its siblings there are
+    // its interior, not its roots, and nothing is better than them.
+    if (!edge) return { roots: [], complete: false };
     const container = parentOf(root);
     if (container === null) return { roots: [root], complete: true };
     const roots: Element[] = [];

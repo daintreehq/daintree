@@ -820,14 +820,53 @@ describe("the bridge's element exchanges", () => {
     handle.refresh();
     expect(ofType("selectionChanged").at(-1)?.scope).toEqual({ kind: "element" });
 
-    // Widening starts again from the innermost component, not past the old scope.
+    // Described again, the selection stays what the host was told it is.
     described = true;
     handle.refresh();
+    expect(ofType("selectionChanged").at(-1)?.scope).toEqual({ kind: "element" });
+
+    // Widening starts again from the innermost component, not past the old scope.
+    const before = ofType("selectionChanged").length;
     press("ArrowUp", { altKey: true });
+    expect(ofType("selectionChanged")).toHaveLength(before + 1);
     expect(ofType("selectionChanged").at(-1)?.scope).toEqual({
       kind: "component",
       componentId: "c1",
     });
+  });
+
+  it("adopts a pick's new answer on a refresh, and walks on from it", () => {
+    const first = document.getElementById("first")!;
+    const list = document.getElementById("list")!;
+    let standIn: Element = first;
+    installReact({ extract: () => ({}), pick: () => ({ target: standIn, data: {} }) });
+    const handle = start();
+    first.click();
+    expect(selectedTag()).toBe("a");
+
+    standIn = list;
+    handle.refresh();
+    expect(selectedTag()).toBe("section");
+    press("ArrowRight");
+    expect(selectedTag()).toBe("input");
+  });
+
+  it("can be asked for an element again after its lookup was let go", () => {
+    const list = document.getElementById("list")!;
+    list.innerHTML = Array.from({ length: 2_001 }, (_, index) => `<i id="i${index}"></i>`).join("");
+    const handle = start();
+    const first = document.getElementById("i0")!;
+    first.click();
+    const id = ofType("selectionChanged")[0]!.observations[0]!.elementId;
+    for (let index = 1; index <= 2_000; index += 1) {
+      pointAt(document.getElementById("i" + index)!);
+      runFrames();
+    }
+    expect(handle.reselect({ elementId: id })).toBe(false);
+
+    // Reported again, it can be asked for again.
+    first.click();
+    expect(handle.reselect({ elementId: id })).toBe(true);
   });
 
   it("selects again by the id it reported, while that is still the same node", () => {

@@ -89,15 +89,21 @@ function looksLikeDevServer(): boolean {
   return false;
 }
 
-/** `found` and `complete` are separate: an unfinished scan proves nothing. */
-function scanForSvelteMeta(): { found: boolean; complete: boolean } {
+/**
+ * `found` and `complete` are separate: an unfinished scan proves nothing.
+ * `stamped` is any stamp at all, readable or not, which the probe then reads.
+ */
+function scanForSvelteMeta(): { found: boolean; complete: boolean; stamped: boolean } {
   const all = document.getElementsByTagName("*");
   const limit = Math.min(all.length, SVELTE_LIMITS.scan);
+  let stamped = false;
   for (let index = 0; index < limit; index += 1) {
     const element = all[index];
-    if (element !== undefined && readLoc(element) !== null) return { found: true, complete: true };
+    if (element === undefined || readMeta(element) === null) continue;
+    if (readLoc(element) !== null) return { found: true, complete: true, stamped: true };
+    stamped = true;
   }
-  return { found: false, complete: all.length <= SVELTE_LIMITS.scan };
+  return { found: false, complete: all.length <= SVELTE_LIMITS.scan, stamped };
 }
 
 export interface MetadataAudit {
@@ -173,8 +179,9 @@ export function createMetadataAudit(notify: (notice: ExtractorNotice) => void): 
       return;
     }
     // Stamps seen on any look are remembered: hydration can replace a node
-    // that carried one before the verdict comes due.
-    probe();
+    // that carried one before the verdict comes due. Only then is the page
+    // swept a second time, and only until the probe has its answer.
+    if (scan.stamped) probe();
     // A page that has not finished loading, or a document too big to sweep,
     // is not evidence of a production build. Stay silent and look again.
     if (scan.complete && document.readyState === "complete" && auditTimer === null) {

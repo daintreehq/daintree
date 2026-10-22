@@ -256,8 +256,11 @@ export function createPicker(host: PickerHost): PickerHandle {
   let awaitingRequest = 0;
   /** The terminal event the pending request is answered by; any other is not its answer. */
   let awaitingReply: "extracted" | "located" | null = null;
-  /** Each reply with how many points had arrived before it: later ones are not its elements. */
-  let replies: Array<{ text: string; points: number }> = [];
+  /**
+   * Each reply with how many points had arrived before it — later ones are not
+   * its elements — and whether any distinct one had been turned away by then.
+   */
+  let replies: Array<{ text: string; points: number; overflowed: boolean }> = [];
   /**
    * The elements the pending request's reply names, by the token it names
    * them with; null where two events claimed one token for different nodes.
@@ -265,6 +268,7 @@ export function createPicker(host: PickerHost): PickerHandle {
   let named = new Map<string, Element | null>();
   let namingEvents = 0;
   let pointed: Element[] = [];
+  let overflowed = false;
   /** A selection being described: page code that runs inside it cannot start another. */
   let emitting = false;
   /** Notices already turned into issues in this document, by framework and code. */
@@ -425,7 +429,7 @@ export function createPicker(host: PickerHost): PickerHandle {
     id: number,
     reply: "extracted" | "located"
   ): {
-    replies: Array<{ text: string; points: number }>;
+    replies: Array<{ text: string; points: number; overflowed: boolean }>;
     pointed: Element[];
     named: Map<string, Element | null>;
   } {
@@ -438,6 +442,7 @@ export function createPicker(host: PickerHost): PickerHandle {
     pointed = [];
     named = new Map();
     namingEvents = 0;
+    overflowed = false;
     try {
       target.dispatchEvent(new CustomEvent(type, { detail, composed: true }));
     } catch {
@@ -519,7 +524,7 @@ export function createPicker(host: PickerHost): PickerHandle {
       const parsed = parseReply(reply.text, id);
       if (parsed === null) continue;
       const elements: Element[] = [];
-      let omitted = parsed.truncated === true;
+      let omitted = parsed.truncated === true || reply.overflowed;
       for (const node of received.pointed.slice(0, reply.points)) {
         if (elements.includes(node)) continue;
         if (usable(node)) elements.push(node);
@@ -1437,7 +1442,7 @@ export function createPicker(host: PickerHost): PickerHandle {
         if (awaitingReply !== "extracted" || replies.length >= MAX_REPLIES) return;
         const detail = (event as CustomEvent).detail;
         if (typeof detail === "string" && detail.length <= MAX_BRIDGE_MESSAGE_CHARS) {
-          replies.push({ text: detail, points: pointed.length });
+          replies.push({ text: detail, points: pointed.length, overflowed });
         }
       },
       {},
@@ -1450,7 +1455,7 @@ export function createPicker(host: PickerHost): PickerHandle {
         if (awaitingReply !== "located" || replies.length >= MAX_REPLIES) return;
         const detail = (event as CustomEvent).detail;
         if (typeof detail === "string" && detail.length <= MAX_LOCATED_REPLY_CHARS) {
-          replies.push({ text: detail, points: pointed.length });
+          replies.push({ text: detail, points: pointed.length, overflowed });
         }
       },
       {},
@@ -1462,10 +1467,14 @@ export function createPicker(host: PickerHost): PickerHandle {
       document,
       pointEvent,
       (event) => {
-        if (awaitingRequest === 0 || pointed.length >= MAX_POINTED_ELEMENTS) return;
+        if (awaitingRequest === 0) return;
         if ((event as CustomEvent).detail !== String(awaitingRequest)) return;
         const node = hitFromEvent(event);
-        if (node !== null) pointed.push(node);
+        // Repeats take no room, so page code pointing at one element again and
+        // again cannot crowd out the extractor's own answer.
+        if (node === null || pointed.includes(node)) return;
+        if (pointed.length >= MAX_POINTED_ELEMENTS) overflowed = true;
+        else pointed.push(node);
       },
       { capture: true },
       teardown

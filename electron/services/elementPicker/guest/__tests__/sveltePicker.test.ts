@@ -274,6 +274,27 @@ describe("reselect", () => {
     expect(lastSelection(events).map((observation) => observation.tagName)).toEqual(["h2", "p"]);
   });
 
+  it("names no roots for an invocation deeper than it can climb out of", () => {
+    const card = { ...page, line: 6, column: 6, componentTag: "Card", parent: page };
+    const main = document.createElement("main");
+    setMeta(main, loc(1), page);
+    document.body.appendChild(main);
+    let parent: Element = main;
+    for (let depth = 0; depth < 520; depth += 1) {
+      const div = document.createElement("div");
+      setMeta(div, loc(depth + 2, 0, "src/lib/Card.svelte"), card);
+      parent.appendChild(div);
+      parent = div;
+    }
+    const { events } = start();
+    click(parent);
+    const before = ofType(events, "selectionChanged").length;
+
+    key({ key: "ArrowUp", altKey: true });
+
+    expect(ofType(events, "selectionChanged")).toHaveLength(before);
+  });
+
   it("keeps a widened component through a reselect, for the invocation that was edited", () => {
     renderCards();
     const { picker, events } = start();
