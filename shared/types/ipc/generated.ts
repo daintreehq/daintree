@@ -1748,16 +1748,16 @@ export interface GeneratedIpcInvokeMap {
     result: void;
   };
   "plugin:project-surface-choice-set": {
-    args: [slot: "emptyCanvas", choice: import("../plugin.js").ProjectSurfaceChoice | null];
-    result: import("../plugin.js").ProjectSurfaceChoicesSnapshot;
-  };
-  "plugin:project-surface-choices-get": {
-    args: [];
-    result: import("../plugin.js").ProjectSurfaceChoicesSnapshot | null;
+    args: [
+      slot: "emptyCanvas",
+      choice: import("../plugin.js").ProjectSurfaceChoice | null,
+      optionId?: string | undefined,
+    ];
+    result: import("../plugin.js").ProjectSurfacesSnapshot;
   };
   "plugin:project-surfaces-get": {
     args: [];
-    result: Partial<Record<"emptyCanvas", import("../plugin.js").ProjectSurfaceClaim>>;
+    result: import("../plugin.js").ProjectSurfacesSnapshot | null;
   };
   "plugin:project-visibility-get": {
     args: [];

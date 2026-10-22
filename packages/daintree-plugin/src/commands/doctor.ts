@@ -219,6 +219,51 @@ interface HostQuery {
   host: DoctorHostReport;
   /** Directory name → the state Daintree computed for it. Empty when unreachable. */
   states: Map<string, string>;
+  /** Directory name → slot claims Daintree refused for it, worded. Empty when unreachable. */
+  surfaceNotes: Map<string, string[]>;
+}
+
+interface HostSurfaceRefusal {
+  slot?: string;
+  pluginId?: string;
+  reason?: string;
+  heldBy?: string;
+}
+
+/**
+ * Why each refused slot claim isn't showing, keyed by the directory of the
+ * plugin that made it. The host names plugins by instance key; the plugin rows
+ * it sends alongside map those back to directories and names.
+ */
+export function describeHostSurfaceRefusals(
+  plugins: Array<{ instanceId?: string; dirName?: string; displayName?: string; id?: string }>,
+  refusals: HostSurfaceRefusal[]
+): Map<string, string[]> {
+  const byInstance = new Map(
+    plugins
+      .filter((plugin) => typeof plugin.instanceId === "string")
+      .map((plugin) => [plugin.instanceId as string, plugin])
+  );
+  const notes = new Map<string, string[]>();
+  for (const refusal of refusals) {
+    const dirName = byInstance.get(refusal.pluginId ?? "")?.dirName;
+    if (typeof dirName !== "string" || typeof refusal.slot !== "string") continue;
+    const holder = byInstance.get(refusal.heldBy ?? "");
+    const holderName = holder?.displayName ?? holder?.id ?? refusal.heldBy ?? "another plugin";
+    const what = `surfaces.${refusal.slot} is not showing`;
+    const note =
+      refusal.reason === "outranked"
+        ? `${what}: ${holderName} also claims it in this project, and only one plugin can — ${holderName} keeps it because its plugin id sorts first`
+        : refusal.reason === "unresolved-view"
+          ? `${what}: the view it names registered nothing Daintree can show`
+          : refusal.reason === "claim-kind"
+            ? `${what}: the claim carries the wrong kind of value for that slot`
+            : refusal.reason === "installed-exclusive"
+              ? `${what}: only a project's own plugins can replace it`
+              : `${what} (${refusal.reason ?? "unknown reason"})`;
+    notes.set(dirName, [...(notes.get(dirName) ?? []), note]);
+  }
+  return notes;
 }
 
 async function queryHost(projectRoot: string, offline: boolean): Promise<HostQuery> {
@@ -233,13 +278,21 @@ async function queryHost(projectRoot: string, offline: boolean): Promise<HostQue
         note: "Skipped — running offline.",
       },
       states: empty,
+      surfaceNotes: new Map(),
     };
   }
   try {
     const status = (await sendCliRequest("plugin.project.status", { projectRoot })) as {
       known?: boolean;
       trust?: { decision?: string | null; enabled?: boolean } | null;
-      plugins?: Array<{ id?: string; dirName?: string; state?: string }>;
+      plugins?: Array<{
+        id?: string;
+        instanceId?: string;
+        dirName?: string;
+        displayName?: string;
+        state?: string;
+      }>;
+      surfaceRefusals?: HostSurfaceRefusal[];
     };
     if (!status.known) {
       return {
@@ -251,6 +304,7 @@ async function queryHost(projectRoot: string, offline: boolean): Promise<HostQue
           note: "Daintree is running but has never opened this project, so it has computed no trust or staging state for it yet.",
         },
         states: empty,
+        surfaceNotes: new Map(),
       };
     }
     const decision = status.trust?.decision ?? null;
@@ -273,6 +327,8 @@ async function queryHost(projectRoot: string, offline: boolean): Promise<HostQue
           )
           .map((plugin) => [plugin.dirName, plugin.state])
       ),
+      // An older host sends no `surfaceRefusals`, which reads as none.
+      surfaceNotes: describeHostSurfaceRefusals(status.plugins ?? [], status.surfaceRefusals ?? []),
     };
   } catch (err) {
     const note =
@@ -282,6 +338,7 @@ async function queryHost(projectRoot: string, offline: boolean): Promise<HostQue
     return {
       host: { reachable: false, known: false, trustDecision: null, trustEnabled: null, note },
       states: empty,
+      surfaceNotes: new Map(),
     };
   }
 }
@@ -300,7 +357,7 @@ export async function runDoctor(
   const root = path.resolve(projectRoot);
   const pluginsDir = path.join(root, ...PROJECT_PLUGINS_SEGMENTS);
 
-  const { host, states: hostStates } = await queryHost(root, opts.offline === true);
+  const { host, states: hostStates, surfaceNotes } = await queryHost(root, opts.offline === true);
 
   if (!(await pathExists(pluginsDir))) {
     return { projectRoot: root, pluginsDir, plugins: [], host, ok: true };
@@ -376,6 +433,10 @@ export async function runDoctor(
         "Not a git repository, so the two checks that decide whether this plugin exists for anyone who clones it were skipped."
       );
     }
+
+    // Warnings, not errors: the plugin loads and runs, it just doesn't draw the
+    // slot it declared, so this doesn't decide doctor's exit status.
+    warnings.push(...(surfaceNotes.get(dirName) ?? []));
 
     plugins.push({
       dirName,

@@ -17,6 +17,8 @@ import {
   PLUGIN_CATEGORY_IDS,
   PLUGIN_NOTIFY_MAX_ACTIONS,
   PLUGIN_PANEL_BADGE_LABEL_MAX,
+  PROJECT_SURFACE_SLOT_CATALOGUE,
+  PROJECT_SURFACE_SLOTS,
 } from "../../shared/types/plugin.js";
 import { isBuiltInAgentId } from "../../shared/config/agentIds.js";
 import { MAX_TERMINALS_PER_RECIPE } from "../../shared/utils/recipeSanitizer.js";
@@ -1956,8 +1958,11 @@ export const SurfaceViewSlotSchema = z
  * reachable in every case, which is the boundary that keeps a broken plugin
  * from stranding the user with no way back. Available to `scope: "project"`
  * plugins alone — an installed plugin claiming a project's surfaces is exactly
- * what locality is supposed to rule out — and at most one plugin may claim each
- * slot per project, enforced at load, where both claimants are known.
+ * what locality is supposed to rule out. Each key is a slot in
+ * `PROJECT_SURFACE_SLOT_CATALOGUE`; at most one plugin holds an exclusive slot
+ * per project, arbitrated at load by `PluginSurfaceRegistry` in a fixed order
+ * (project plugins first, then the lower manifest id), and every other claimant
+ * is refused by name.
  *
  * `emptyCanvas` is the only slot accepted today. The spec also describes
  * `projectHome` (a persistent home surface in the project's primary
@@ -3053,7 +3058,8 @@ function buildPluginManifestSchema(origin: PluginOrigin) {
       const ptyPanelIds = new Set(
         manifest.contributes.panels.filter((p) => p.hasPty === true).map((p) => p.id)
       );
-      for (const slot of ["emptyCanvas"] as const) {
+      for (const slot of PROJECT_SURFACE_SLOTS) {
+        if (PROJECT_SURFACE_SLOT_CATALOGUE[slot].claim !== "view") continue;
         const claim = manifest.contributes.surfaces[slot];
         if (claim === undefined) continue;
         if (!viewIds.has(claim.viewId)) {

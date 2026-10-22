@@ -1093,14 +1093,13 @@ export const CHANNELS = {
   PLUGIN_ACTIONS_UNREGISTER: "plugin:actions-unregister",
   PLUGIN_PANEL_KINDS_GET: "plugin:panel-kinds-get",
   /**
-   * Project surfaces (§7.8) claimed in the SENDER's project. Never takes a
-   * project id from the caller — a renderer asking for another project's
-   * surfaces is the leak project scope exists to prevent.
+   * The SENDER project's slot state (§7.8): arbitrated claims, refusals and
+   * the user's answers, with one revision. Never takes a project id from the
+   * caller — a renderer asking for another project's slots is the leak project
+   * scope exists to prevent.
    */
   PLUGIN_PROJECT_SURFACES_GET: "plugin:project-surfaces-get",
-  /** The SENDER project's remembered answers about its surface claims (plugin surface or stock). */
-  PLUGIN_PROJECT_SURFACE_CHOICES_GET: "plugin:project-surface-choices-get",
-  /** Remember one surface answer for the SENDER's project, about the slot's current owner. */
+  /** Remember one slot answer for the SENDER's project, resolved against what is on offer. */
   PLUGIN_PROJECT_SURFACE_CHOICE_SET: "plugin:project-surface-choice-set",
   /** Project-local plugins: the sender project's rows, valid and invalid alike. */
   PLUGIN_PROJECT_LIST: "plugin:project-list",

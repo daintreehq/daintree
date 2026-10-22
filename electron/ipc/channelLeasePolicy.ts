@@ -453,7 +453,6 @@ export const CHANNEL_LEASE_POLICY = {
   "plugin:project-set-muted": "driver",
   "plugin:project-set-trust": "driver",
   "plugin:project-surface-choice-set": "driver",
-  "plugin:project-surface-choices-get": "free",
   "plugin:project-surfaces-get": "free",
   "plugin:project-visibility-get": "free",
   "plugin:project-visibility-set": "driver",

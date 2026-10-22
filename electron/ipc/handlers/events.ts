@@ -119,7 +119,7 @@ const EVENT_BUS_BRIDGED_MANIFEST = {
   "plugin:project-plugins-changed": "external",
   "plugin:project-plugin-staged": "external",
   "plugin:project-plugin-visibility-changed": "external",
-  "plugin:project-surface-choices-changed": "external",
+  "plugin:project-surfaces-changed": "external",
   "forge:remote-changed": "external",
   "plugin:bg-update-available": "external",
   "project-groups:update": "external",

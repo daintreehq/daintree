@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { execa } from "execa";
-import { runDoctor } from "../commands/doctor.js";
+import { describeHostSurfaceRefusals, runDoctor } from "../commands/doctor.js";
 
 let projectRoot: string;
 
@@ -271,5 +271,44 @@ describe("runDoctor", () => {
     const result = await runDoctor(projectRoot, { offline: true });
     expect(result.host.reachable).toBe(false);
     expect(result.host.note).toContain("offline");
+  });
+});
+
+describe("describeHostSurfaceRefusals", () => {
+  const plugins = [
+    {
+      id: "acme.board",
+      instanceId: "project__p__acme.board",
+      dirName: "board",
+      displayName: "Acme Board",
+    },
+    { id: "zeta.board", instanceId: "project__p__zeta.board", dirName: "zeta" },
+  ];
+
+  it("files each refusal under the refused plugin's directory, naming the holder", () => {
+    const notes = describeHostSurfaceRefusals(plugins, [
+      {
+        slot: "emptyCanvas",
+        pluginId: "project__p__zeta.board",
+        reason: "outranked",
+        heldBy: "project__p__acme.board",
+      },
+    ]);
+
+    expect([...notes.keys()]).toEqual(["zeta"]);
+    expect(notes.get("zeta")?.[0]).toContain("surfaces.emptyCanvas is not showing");
+    expect(notes.get("zeta")?.[0]).toContain("Acme Board also claims it");
+  });
+
+  it("explains a view that registered nothing and skips refusals it can't place", () => {
+    const notes = describeHostSurfaceRefusals(plugins, [
+      { slot: "emptyCanvas", pluginId: "project__p__acme.board", reason: "unresolved-view" },
+      { slot: "emptyCanvas", pluginId: "project__elsewhere__x.y", reason: "outranked" },
+    ]);
+
+    expect(notes.get("board")).toEqual([
+      "surfaces.emptyCanvas is not showing: the view it names registered nothing Daintree can show",
+    ]);
+    expect(notes.size).toBe(1);
   });
 });

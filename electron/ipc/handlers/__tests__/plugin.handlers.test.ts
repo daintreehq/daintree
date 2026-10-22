@@ -28,7 +28,7 @@ const mockGetWindowForWebContents = vi.fn<(wc: { id: number }) => { id: number }
 const mockIsCachedViewWebContents = vi.fn<(webContentsId: number) => boolean>();
 const mockListProjectPlugins = vi.fn();
 const mockSetProjectPluginTrust = vi.fn();
-const mockGetProjectSurfaceChoices = vi.fn();
+const mockGetProjectSurfacesSnapshot = vi.fn();
 const mockSetProjectSurfaceChoice = vi.fn();
 const mockActivateStagedProjectPlugin = vi.fn();
 const mockSetProjectPluginMuted = vi.fn();
@@ -111,7 +111,7 @@ vi.mock("../../../services/PluginService.js", () => ({
       mockUpdatePluginRecipeMetadata(recipeId, updates),
     listProjectPlugins: (...args: unknown[]) => mockListProjectPlugins(...args),
     setProjectPluginTrust: (...args: unknown[]) => mockSetProjectPluginTrust(...args),
-    getProjectSurfaceChoices: (...args: unknown[]) => mockGetProjectSurfaceChoices(...args),
+    getProjectSurfacesSnapshot: (...args: unknown[]) => mockGetProjectSurfacesSnapshot(...args),
     setProjectSurfaceChoice: (...args: unknown[]) => mockSetProjectSurfaceChoice(...args),
     activateStagedProjectPlugin: (...args: unknown[]) => mockActivateStagedProjectPlugin(...args),
     setProjectPluginMuted: (...args: unknown[]) => mockSetProjectPluginMuted(...args),
@@ -1733,7 +1733,12 @@ describe("pull handlers wait for PluginService init (#9285)", () => {
     );
     const project = "a".repeat(64);
     mockGetProjectForWebContents.mockReturnValue(project);
-    mockSetProjectSurfaceChoice.mockReturnValue({ projectId: project, choices: {} });
+    mockSetProjectSurfaceChoice.mockReturnValue({
+      projectId: project,
+      revision: 1,
+      slots: {},
+      choices: {},
+    });
     const handler = getHandler("plugin:project-surface-choice-set");
     const inFlight = handler({ sender: { id: 1 } }, "emptyCanvas", "stock") as Promise<unknown>;
     await Promise.resolve();
@@ -1741,11 +1746,18 @@ describe("pull handlers wait for PluginService init (#9285)", () => {
     expect(mockSetProjectSurfaceChoice).not.toHaveBeenCalled();
     releaseGate();
     await inFlight;
-    expect(mockSetProjectSurfaceChoice).toHaveBeenCalledWith(project, "emptyCanvas", "stock");
+    expect(mockSetProjectSurfaceChoice).toHaveBeenCalledWith(
+      project,
+      "emptyCanvas",
+      "stock",
+      undefined
+    );
   });
 
-  it("PLUGIN_PROJECT_SURFACE_CHOICES_GET reads only after waitForInit() resolves", async () => {
-    // Same await depth as the setter, so a read sent after a write lands after it.
+  it("PLUGIN_PROJECT_SURFACES_GET reads only after waitForInit() resolves", async () => {
+    // Same await depth as the setter, so a read sent after a write lands after
+    // it — and a read before init would report "no surfaces" for a project
+    // whose plugins have not loaded yet.
     const { pluginService } = await import("../../../services/PluginService.js");
     const waitForInit = vi.mocked(pluginService.waitForInit);
     let releaseGate: () => void = () => {};
@@ -1756,17 +1768,18 @@ describe("pull handlers wait for PluginService init (#9285)", () => {
     );
     const project = "a".repeat(64);
     mockGetProjectForWebContents.mockReturnValue(project);
-    mockGetProjectSurfaceChoices.mockReturnValue({});
-    const handler = getHandler("plugin:project-surface-choices-get");
+    const snapshot = { projectId: project, revision: 0, slots: {}, choices: {} };
+    mockGetProjectSurfacesSnapshot.mockReturnValue(snapshot);
+    const handler = getHandler("plugin:project-surfaces-get");
     const inFlight = handler({ sender: { id: 1 } }) as Promise<unknown>;
     await Promise.resolve();
     await Promise.resolve();
-    expect(mockGetProjectSurfaceChoices).not.toHaveBeenCalled();
+    expect(mockGetProjectSurfacesSnapshot).not.toHaveBeenCalled();
     releaseGate();
-    expect(await inFlight).toEqual({ projectId: project, choices: {} });
+    expect(await inFlight).toEqual(snapshot);
   });
 
-  it("answers a surface-choices read sent after a write with that write", async () => {
+  it("answers a surfaces read sent after a write with that write", async () => {
     // Renderers adopt only what main returns, so a read queued behind a write
     // must not overtake it on the way through init.
     const { pluginService } = await import("../../../services/PluginService.js");
@@ -1781,9 +1794,14 @@ describe("pull handlers wait for PluginService init (#9285)", () => {
     const written = { emptyCanvas: { pluginId: "acme.dashboard", choice: "stock", decidedAt: 1 } };
     mockSetProjectSurfaceChoice.mockImplementation(() => {
       disk = written;
-      return { projectId: project, choices: disk };
+      return { projectId: project, revision: 2, slots: {}, choices: disk };
     });
-    mockGetProjectSurfaceChoices.mockImplementation(() => disk);
+    mockGetProjectSurfacesSnapshot.mockImplementation(() => ({
+      projectId: project,
+      revision: 2,
+      slots: {},
+      choices: disk,
+    }));
     mockGetProjectForWebContents.mockReturnValue(project);
 
     const write = getHandler("plugin:project-surface-choice-set")(
@@ -1791,13 +1809,13 @@ describe("pull handlers wait for PluginService init (#9285)", () => {
       "emptyCanvas",
       "stock"
     ) as Promise<unknown>;
-    const read = getHandler("plugin:project-surface-choices-get")({
+    const read = getHandler("plugin:project-surfaces-get")({
       sender: { id: 1 },
     }) as Promise<unknown>;
     releaseGate();
 
     await write;
-    expect(await read).toEqual({ projectId: project, choices: written });
+    expect(await read).toEqual({ projectId: project, revision: 2, slots: {}, choices: written });
   });
 
   it("PLUGIN_TOOLBAR_BUTTONS reads the registry only after waitForInit() resolves", async () => {
@@ -2609,31 +2627,36 @@ describe("project-local plugin handlers", () => {
     ).rejects.toThrow(/no project/);
   });
 
-  it("reads surface choices for the sender's project, named by that project", async () => {
-    const choices = { emptyCanvas: { pluginId: "acme.dashboard", choice: "stock", decidedAt: 1 } };
-    mockGetProjectSurfaceChoices.mockReturnValue(choices);
+  it("reads the sender's project slot state, named by that project", async () => {
+    const snapshot = {
+      projectId: PROJECT,
+      revision: 3,
+      slots: {},
+      choices: { emptyCanvas: { pluginId: "acme.dashboard", choice: "stock", decidedAt: 1 } },
+    };
+    mockGetProjectSurfacesSnapshot.mockReturnValue(snapshot);
     mockGetProjectForWebContents.mockReturnValue(PROJECT);
 
-    expect(await getHandler("plugin:project-surface-choices-get")({ sender: { id: 1 } })).toEqual({
-      projectId: PROJECT,
-      choices,
-    });
-    expect(mockGetProjectSurfaceChoices).toHaveBeenCalledWith(PROJECT);
+    expect(await getHandler("plugin:project-surfaces-get")({ sender: { id: 1 } })).toEqual(
+      snapshot
+    );
+    // The project comes from the sender's registration; the call takes no argument.
+    expect(mockGetProjectSurfacesSnapshot).toHaveBeenCalledWith(PROJECT);
   });
 
   it("answers null, not an empty set, for a sender with no project binding yet", async () => {
     // An empty set would read as "never answered" and re-ask a user who did.
     mockGetProjectForWebContents.mockReturnValue(null);
 
-    expect(
-      await getHandler("plugin:project-surface-choices-get")({ sender: { id: 1 } })
-    ).toBeNull();
-    expect(mockGetProjectSurfaceChoices).not.toHaveBeenCalled();
+    expect(await getHandler("plugin:project-surfaces-get")({ sender: { id: 1 } })).toBeNull();
+    expect(mockGetProjectSurfacesSnapshot).not.toHaveBeenCalled();
   });
 
   it("records a surface choice against the sender's project without naming a plugin", async () => {
     const snapshot = {
       projectId: PROJECT,
+      revision: 4,
+      slots: {},
       choices: { emptyCanvas: { pluginId: "acme.dashboard", choice: "stock", decidedAt: 1 } },
     };
     mockSetProjectSurfaceChoice.mockReturnValue(snapshot);
@@ -2643,10 +2666,29 @@ describe("project-local plugin handlers", () => {
     // Main answers about the slot's current owner; the renderer only says which
     // canvas it wants.
     expect(await set({ sender: { id: 1 } }, "emptyCanvas", "stock")).toEqual(snapshot);
-    expect(mockSetProjectSurfaceChoice).toHaveBeenCalledWith(PROJECT, "emptyCanvas", "stock");
+    expect(mockSetProjectSurfaceChoice).toHaveBeenCalledWith(
+      PROJECT,
+      "emptyCanvas",
+      "stock",
+      undefined
+    );
 
     await set({ sender: { id: 1 } }, "emptyCanvas", null);
-    expect(mockSetProjectSurfaceChoice).toHaveBeenLastCalledWith(PROJECT, "emptyCanvas", null);
+    expect(mockSetProjectSurfaceChoice).toHaveBeenLastCalledWith(
+      PROJECT,
+      "emptyCanvas",
+      null,
+      undefined
+    );
+
+    // A selectable answer names its option; main checks it against what is on offer.
+    await set({ sender: { id: 1 } }, "emptyCanvas", "surface", "acme.side");
+    expect(mockSetProjectSurfaceChoice).toHaveBeenLastCalledWith(
+      PROJECT,
+      "emptyCanvas",
+      "surface",
+      "acme.side"
+    );
   });
 
   it("rejects an unknown surface slot or choice, and a sender with no project", async () => {
@@ -2658,6 +2700,12 @@ describe("project-local plugin handlers", () => {
     );
     await expect(set({ sender: { id: 1 } }, "emptyCanvas", "hidden")).rejects.toThrow(
       /choice must be/
+    );
+    await expect(set({ sender: { id: 1 } }, "emptyCanvas", "surface", "")).rejects.toThrow(
+      /optionId must be/
+    );
+    await expect(set({ sender: { id: 1 } }, "emptyCanvas", "surface", 7)).rejects.toThrow(
+      /optionId must be/
     );
 
     mockGetProjectForWebContents.mockReturnValue(null);

@@ -15,6 +15,10 @@ import {
 import type { ProjectPluginInfo, ProjectPluginState } from "@shared/types/plugin";
 import type { ReactElement } from "react";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import {
+  _resetPluginProjectSurfacesStoreForTest,
+  usePluginProjectSurfacesStore,
+} from "@/store/pluginProjectSurfacesStore";
 
 function render(ui: ReactElement, options?: Omit<RenderOptions, "queries">) {
   return rtlRender(ui, { wrapper: TooltipProvider, ...options });
@@ -59,6 +63,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   __resetProjectPluginStoreForTesting();
+  _resetPluginProjectSurfacesStoreForTest();
 });
 
 describe("ProjectPluginSection load errors", () => {
@@ -194,6 +199,75 @@ describe("ProjectPluginSection", () => {
 
     screen.getAllByRole("listitem")[0]?.querySelector("button")?.click();
     expect(onSelect).toHaveBeenCalledWith(null);
+  });
+});
+
+describe("ProjectPluginDetailPane slot refusals", () => {
+  const WINNER = "project__proj-a__acme.dashboard";
+  const LOSER = "project__proj-a__zeta.board";
+  const winner = plugin({ state: "active", id: "acme.dashboard", instanceId: WINNER });
+  const loser = plugin({
+    state: "active",
+    id: "zeta.board",
+    instanceId: LOSER,
+    displayName: "Zeta Board",
+    dirName: "zeta",
+  });
+
+  function refuse(reason: "outranked" | "unresolved-view") {
+    act(() => {
+      useProjectPluginStore.setState({ plugins: [winner, loser] });
+      usePluginProjectSurfacesStore.setState({
+        slots: {
+          emptyCanvas: {
+            mode: "exclusive",
+            options: [
+              {
+                pluginId: WINNER,
+                scope: "project",
+                value: { kind: "view", viewId: "overview" },
+              },
+            ],
+            defaultOptionId: WINNER,
+            refused: [
+              {
+                slot: "emptyCanvas",
+                pluginId: LOSER,
+                reason,
+                ...(reason === "outranked" ? { heldBy: WINNER } : {}),
+              },
+            ],
+          },
+        },
+      });
+    });
+  }
+
+  it("warns beside a loaded plugin that lost its slot, naming the holder", () => {
+    refuse("outranked");
+    render(<ProjectPluginDetailPane plugin={loser} />);
+
+    const callout = screen.getByTestId("project-plugin-surface-refusal");
+    expect(callout.textContent).toContain("Empty canvas not shown");
+    expect(callout.textContent).toContain("Acme Dashboard also claims it");
+    // A lost slot is not a failed load.
+    expect(screen.queryByText("Error")).toBeNull();
+  });
+
+  it("explains a claim whose view registered nothing", () => {
+    refuse("unresolved-view");
+    render(<ProjectPluginDetailPane plugin={loser} />);
+
+    expect(screen.getByTestId("project-plugin-surface-refusal").textContent).toContain(
+      "didn't register anything Daintree can show"
+    );
+  });
+
+  it("says nothing on the pane of the plugin that holds the slot", () => {
+    refuse("outranked");
+    render(<ProjectPluginDetailPane plugin={winner} />);
+
+    expect(screen.queryByTestId("project-plugin-surface-refusal")).toBeNull();
   });
 });
 

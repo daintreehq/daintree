@@ -10,6 +10,7 @@ import type {
   ProjectSurfaceChoice,
   ProjectSurfaceChoices,
   ProjectSurfaceSnapshot,
+  ProjectSurfacesSnapshot,
 } from "@shared/types/plugin";
 
 const h = vi.hoisted(() => ({ dispatch: vi.fn() }));
@@ -138,6 +139,34 @@ describe("ProjectSurfaceFrame", () => {
   let disk: ProjectSurfaceChoices;
   let failNextSave: boolean;
   const kindsListeners: Array<() => void> = [];
+  let mainRevision = 0;
+
+  /** Main's snapshot of what it holds, under a revision newer than the last. */
+  const mainSnapshot = (): ProjectSurfacesSnapshot => {
+    const owner = surfacesOnMain.emptyCanvas;
+    return {
+      projectId: "p1",
+      revision: ++mainRevision,
+      slots:
+        owner === undefined
+          ? {}
+          : {
+              emptyCanvas: {
+                mode: "exclusive",
+                options: [
+                  {
+                    pluginId: owner.pluginId,
+                    scope: "project",
+                    value: { kind: "view", viewId: "overview", panelKindId: owner.panelKindId },
+                  },
+                ],
+                defaultOptionId: owner.pluginId,
+                refused: [],
+              },
+            },
+      choices: disk,
+    };
+  };
 
   const setProjectSurfaceChoice = vi.fn((_slot: string, choice: ProjectSurfaceChoice | null) => {
     if (failNextSave) {
@@ -146,7 +175,7 @@ describe("ProjectSurfaceFrame", () => {
     }
     // Main records the answer against the slot's owner, from its own registry.
     disk = choice === null ? {} : answer(choice);
-    return Promise.resolve({ projectId: "p1", choices: disk });
+    return Promise.resolve(mainSnapshot());
   });
 
   beforeEach(() => {
@@ -162,12 +191,11 @@ describe("ProjectSurfaceFrame", () => {
       writable: true,
       value: {
         plugin: {
-          getProjectSurfaces: () => Promise.resolve(surfacesOnMain),
+          getProjectSurfaces: () => Promise.resolve(mainSnapshot()),
           onPanelKindsChanged: (cb: () => void) => {
             kindsListeners.push(cb);
             return () => {};
           },
-          getProjectSurfaceChoices: () => Promise.resolve({ projectId: "p1", choices: disk }),
           setProjectSurfaceChoice,
         },
       },

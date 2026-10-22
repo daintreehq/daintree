@@ -17,6 +17,11 @@ import {
 } from "@/components/Plugin/PluginPerformanceTab";
 import { usePluginPerfSnapshot } from "@/hooks/usePluginPerfSnapshot";
 import {
+  describeSurfaceRefusal,
+  surfacePluginFallbackName,
+  useProjectSurfaceRefusals,
+} from "@/hooks/useProjectSurfaceRefusals";
+import {
   BUILT_IN_PLUGIN_CAPABILITIES,
   type ProjectPluginInfo,
   type ProjectPluginState,
@@ -206,6 +211,11 @@ export function ProjectPluginDetailPane({ plugin }: { plugin: ProjectPluginInfo 
   const decide = useProjectPluginStore((s) => s.decide);
   const activateStaged = useProjectPluginStore((s) => s.activateStaged);
   const reload = useProjectPluginStore((s) => s.reload);
+  const projectPlugins = useProjectPluginStore((s) => s.plugins);
+  const refusals = useProjectSurfaceRefusals(plugin.instanceId);
+  const nameOf = (pluginId: string) =>
+    projectPlugins.find((p) => p.instanceId === pluginId)?.displayName ??
+    surfacePluginFallbackName(pluginId);
 
   const declared = new Set(plugin.capabilities);
   const granted = BUILT_IN_PLUGIN_CAPABILITIES.filter((c) => declared.has(c));
@@ -290,6 +300,23 @@ export function ProjectPluginDetailPane({ plugin }: { plugin: ProjectPluginInfo 
           </p>
         </Callout>
       )}
+
+      {/* A slot claim the plugin declared but isn't drawing. The plugin itself
+          loaded fine, so this is a warning beside it, never its load error. */}
+      {refusals.map((refusal) => {
+        const copy = describeSurfaceRefusal(refusal, nameOf);
+        return (
+          <Callout
+            key={`${refusal.slot}:${refusal.reason}`}
+            severity="warning"
+            size="compact"
+            title={copy.title}
+            data-testid="project-plugin-surface-refusal"
+          >
+            <p>{copy.detail}</p>
+          </Callout>
+        );
+      })}
 
       {granted.length > 0 && (
         <div className="space-y-2">
