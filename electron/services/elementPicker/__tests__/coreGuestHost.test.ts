@@ -175,14 +175,19 @@ class FakeWebContents extends EventEmitter {
 let shipped: Record<string, string> = {};
 /** The same, with the contributing fixture standing in for React's extractor. */
 let assets: Record<string, string> = {};
+/** Built as the app would build it, but kept out of the shipped catalog until #13888 lists it. */
+let astroAsset = "";
 
 beforeAll(() => {
-  shipped = buildCoreGuestAssets([
+  const { "extractor:astro": astro, ...built } = buildCoreGuestAssets([
     {
       id: "fixture:react",
       entry: "electron/services/elementPicker/__tests__/fixtures/contributingExtractor.ts",
     },
+    { id: "extractor:astro", entry: "electron/services/elementPicker/guest/extractors/astro.ts" },
   ]);
+  shipped = built;
+  astroAsset = astro ?? "";
   assets = { ...shipped, "extractor:react": shipped["fixture:react"]! };
 }, 60_000);
 
@@ -391,6 +396,73 @@ describe("core Element Picker guest loading", () => {
     expect(described.observations[0]!.componentChain.components[0]!.name.value).toBe(
       "FixtureButton"
     );
+  });
+
+  it("describes Astro, React and Svelte selections side by side on a page of islands", async () => {
+    const page = "/proj/src/pages/index.astro";
+    document.body.innerHTML = `
+      <main data-astro-cid-x1="" data-astro-source-file="${page}" data-astro-source-loc="4:7">
+        <h1 id="title" data-astro-source-file="${page}" data-astro-source-loc="5:9">Shop</h1>
+        <astro-island renderer-url="/@id/@astrojs/react/client.js" client="load"
+          opts='{"name":"BuyButton","value":true}' props='{"token":[0,"s3cret"]}'><button id="buy">Buy</button></astro-island>
+        <astro-island renderer-url="/@id/@astrojs/svelte/client.js" client="visible"><span id="count">0</span></astro-island>
+      </main>`;
+    const h = makeHarness({ catalog: { ...assets, "extractor:astro": astroAsset } });
+    await h.bind();
+    await settle();
+    expect(
+      h.wc.debugger
+        .evaluates()
+        .filter((entry) => entry.kind === "extractor")
+        .map((entry) => entry.framework)
+        .sort()
+    ).toEqual(["astro", "react", "svelte"]);
+
+    type Described = {
+      observations: Array<{
+        sourceCandidates: Array<{ framework: string; kind: string }>;
+        componentChain: { components: Array<{ name: { value: string } | null }> };
+        capabilities: Record<string, { state: string }>;
+        frameworkEvidence: Array<{
+          framework: string;
+          fields: Array<{ name: string; value: unknown }>;
+        }>;
+      }>;
+    };
+    const select = async (id: string) => {
+      (document.getElementById(id) as HTMLElement).click();
+      await settle();
+      return (h.pickerEvents("selectionChanged").at(-1)!.event as Described).observations[0]!;
+    };
+
+    const title = await select("title");
+    expect(title.sourceCandidates).toEqual([
+      expect.objectContaining({ framework: "astro", kind: "template-location" }),
+    ]);
+
+    const buy = await select("buy");
+    expect(buy.componentChain.components.map((record) => record.name?.value)).toEqual([
+      "FixtureButton",
+    ]);
+    expect(buy.frameworkEvidence.map((entry) => entry.framework)).toEqual(["astro"]);
+    expect(buy.frameworkEvidence[0]!.fields).toContainEqual({
+      name: "astro-island[opts].name",
+      value: "BuyButton",
+    });
+
+    // Svelte's extractor in this build says nothing: Astro's evidence stands,
+    // and no capability is claimed absent on Svelte's behalf.
+    const count = await select("count");
+    expect(new Set(Object.values(count.capabilities).map((entry) => entry.state))).toEqual(
+      new Set(["unknown"])
+    );
+    expect(count.frameworkEvidence[0]!.fields).toContainEqual({
+      name: "islandRenderer",
+      value: "svelte",
+    });
+
+    expect(JSON.stringify(h.sunk)).not.toContain("s3cret");
+    expect(h.kinds("host-issue")).toHaveLength(0);
   });
 
   it("drops an install still in flight when the document changes, and starts over in the new one", async () => {

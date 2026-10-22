@@ -13,6 +13,7 @@ import {
   detectExpandos,
   detectGlobals,
   detectMarkup,
+  islandRenderer,
   sampleDocument,
 } from "../detectors.js";
 
@@ -123,6 +124,20 @@ describe("detectMarkup", () => {
     const set = new DetectionSet();
     detectMarkup(document.querySelector("astro-island")!, "attribute", set);
     expect(frameworks(set)).toEqual(["astro", "svelte"]);
+  });
+
+  it("names an island's renderer from the fixed table, and nothing else", () => {
+    expect(islandRenderer("/@fs/app/node_modules/@astrojs/preact/dist/client.js")).toBe("preact");
+    expect(islandRenderer("/@id/@astrojs/qwik/client.js")).toBeNull();
+  });
+
+  it("reads a static slot as Astro's", () => {
+    document.body.innerHTML = "<astro-static-slot><p>Server text</p></astro-static-slot>";
+    const set = new DetectionSet();
+    detectAncestry(document.querySelector("p")!, set);
+    expect(set.toArray()).toEqual([
+      { framework: "astro", signals: [{ via: "attribute", name: "<astro-static-slot>" }] },
+    ]);
   });
 
   it("never reports a value the page chose as a signal name", () => {

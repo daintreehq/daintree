@@ -91,6 +91,7 @@ const ATTRIBUTE_MARKERS: readonly AttributeMarker[] = [
 const TAG_MARKERS: ReadonlyMap<string, ElementPickerFramework> = new Map([
   ["astro-island", "astro"],
   ["astro-slot", "astro"],
+  ["astro-static-slot", "astro"],
   ["next-route-announcer", "react"],
   ["nextjs-portal", "react"],
 ]);
@@ -103,6 +104,14 @@ const ISLAND_RENDERERS: ReadonlyArray<[string, ElementPickerFramework]> = [
   ["@astrojs/svelte", "svelte"],
   ["@astrojs/solid", "solid"],
 ];
+
+/** The framework a `renderer-url` names, by the same fixed table detection reads; null for any other. */
+export function islandRenderer(rendererUrl: string): ElementPickerFramework | null {
+  for (const [needle, framework] of ISLAND_RENDERERS) {
+    if (rendererUrl.includes(needle)) return framework;
+  }
+  return null;
+}
 
 /**
  * Svelte's scoped-style class: `svelte-` and a base-36 hash of five to eight

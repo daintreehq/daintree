@@ -18,6 +18,7 @@ import type {
 } from "../../../../shared/elementPicker/resolver.js";
 import type { ResolverLoaders } from "../worker/runtime.js";
 import type { ProjectAdapter, ProjectAdapterRegistration } from "../projectAdapters/types.js";
+import { astroResolver } from "../worker/resolvers/astro.js";
 import type { SourceChange } from "../sourceTracker.js";
 import { revisionOf, type SourceMapProvider } from "../sourceAccess.js";
 import { createSourceMapSymbolicator, symbolicatedResult } from "../worker/symbolication.js";
@@ -148,6 +149,60 @@ describe("ElementPickerHost", () => {
           file: { workspaceId: id, path: "app/src/Plain.svelte" },
           fileRevision: sha256(path.join(root, "app", "src", "Plain.svelte")),
         },
+      },
+    ]);
+  });
+
+  it("checks an Astro stamp against the file through the real host, placing the path the page reported", async () => {
+    const page = path.join(root, "app", "src", "index.astro");
+    fs.writeFileSync(page, "<main>\n  <h1>Shop</h1>\n</main>\n");
+    const stamp = (candidateId: string, file: string, line: number, column: number) =>
+      ({
+        kind: "template-location",
+        candidateId,
+        framework: "astro",
+        extraction: { kind: "attribute", attribute: "data-astro-source-loc" },
+        file,
+        location: { lineBase: 1, columnBase: 1, columnUnit: "utf16", line, column },
+      }) satisfies SourceCandidate;
+    const { host } = harness({ astro: async () => astroResolver });
+    const id = await workspace(host);
+    const ref = { workspaceId: id, path: "app/src/index.astro" };
+
+    const response = await host.resolve(
+      request(id, [
+        { ...observation("el-1", [stamp("c-1", page, 2, 7)]), tagName: "h1" },
+        // `<main>` has children, so the compiler stamps its first child, not its name.
+        { ...observation("el-2", [stamp("c-2", page, 1, 2)]), tagName: "main" },
+        {
+          ...observation("el-3", [
+            stamp("c-3", path.join(root, "other", "Elsewhere.svelte"), 1, 4),
+          ]),
+          tagName: "p",
+        },
+      ])
+    );
+
+    expect(results(response)).toEqual([
+      {
+        state: "verified",
+        candidateId: "c-1",
+        claim: "template-location",
+        target: { file: ref, location: stamp("c-1", page, 2, 7).location },
+        fileRevision: sha256(page),
+      },
+      {
+        state: "unavailable",
+        candidateId: "c-2",
+        claim: "template-location",
+        reason: "mismatch",
+        read: { file: ref, fileRevision: sha256(page) },
+      },
+      {
+        state: "unavailable",
+        candidateId: "c-3",
+        claim: "template-location",
+        reason: "outside-workspace",
       },
     ]);
   });

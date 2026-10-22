@@ -49,6 +49,9 @@ const LIMITS = {
   componentName: 128,
   /** `MAX_ELEMENT_PICKER_MESSAGE_BYTES`, less what the prelude's envelope adds around the event. */
   eventBytes: 256 * 1024 - 1024,
+  evidenceFields: 16,
+  evidenceFieldName: 64,
+  evidenceFieldValue: 256,
 } as const;
 const MAX_RECT_PX = 2 ** 52;
 const FRAMEWORKS: ReadonlySet<string> = new Set([
@@ -220,6 +223,90 @@ function isCapabilitiesShape(value: unknown): value is ObservationFields["capabi
       return isPlainObject(entry) && CAPABILITY_STATES.has(entry.state);
     })
   );
+}
+
+function hasOnlyKeys(value: Record<string, unknown>, keys: ReadonlySet<string>): boolean {
+  return Object.keys(value).every((key) => keys.has(key));
+}
+
+const GENERIC_KEYS: ReadonlySet<string> = new Set(["kind", "framework", "fields"]);
+const FIELD_KEYS: ReadonlySet<string> = new Set(["name", "value"]);
+
+function isFieldShape(value: unknown): boolean {
+  if (!isPlainObject(value) || !hasOnlyKeys(value, FIELD_KEYS)) return false;
+  const { name, value: field } = value;
+  return (
+    typeof name === "string" &&
+    name.length >= 1 &&
+    name.length <= LIMITS.evidenceFieldName &&
+    (field === null ||
+      typeof field === "boolean" ||
+      (typeof field === "number" && Number.isFinite(field)) ||
+      (typeof field === "string" && field.length <= LIMITS.evidenceFieldValue))
+  );
+}
+
+type EvidenceEntry = ObservationFields["frameworkEvidence"][number];
+
+/** Every rule `GenericEvidenceSchema` holds it to, so an entry that passes here passes the host. */
+function isGenericEvidenceShape(value: unknown): value is EvidenceEntry {
+  return (
+    isPlainObject(value) &&
+    value.kind === "generic" &&
+    hasOnlyKeys(value, GENERIC_KEYS) &&
+    typeof value.framework === "string" &&
+    FRAMEWORKS.has(value.framework) &&
+    Array.isArray(value.fields) &&
+    value.fields.length <= LIMITS.evidenceFields &&
+    value.fields.every(isFieldShape)
+  );
+}
+
+/**
+ * The describing framework's own evidence. Svelte's variant is checked only
+ * for its shape and the host holds it to the rest, as it did when one
+ * framework's answer was taken whole.
+ */
+function isEvidenceShape(value: unknown): value is EvidenceEntry {
+  if (isPlainObject(value) && value.kind === "svelte") {
+    return (
+      Array.isArray(value.ancestry) &&
+      typeof value.sameLocCount === "number" &&
+      typeof value.unmapped === "boolean"
+    );
+  }
+  return isGenericEvidenceShape(value);
+}
+
+function describes(contribution: ExtractorContribution): boolean {
+  return (
+    isChainShape(contribution.componentChain) ||
+    isCapabilitiesShape(contribution.capabilities) ||
+    (isObjectArray(contribution.sourceCandidates) && contribution.sourceCandidates.length > 0)
+  );
+}
+
+/**
+ * The contribution that describes the element: the best-ranked one that says
+ * anything about it, the first of equals in install order. One carrying
+ * evidence alone describes nothing, so it never stands in for a framework
+ * whose extractor is absent or silent. In a pick it is also the one whose
+ * named element the pick stands for.
+ */
+function primaryOf(contributions: Extracted[]): Extracted | null {
+  let best: Extracted | null = null;
+  let bestRank = Infinity;
+  for (const contribution of contributions) {
+    if (!describes(contribution.data)) continue;
+    // Compared, not looked up: the value is the page's, and `"constructor"` is a key of every object.
+    const ownership = contribution.data.ownership;
+    const rank = ownership === "direct" ? 0 : ownership === "fallback" ? 2 : 1;
+    if (rank < bestRank) {
+      best = contribution;
+      bestRank = rank;
+    }
+  }
+  return best;
 }
 
 export function createPicker(host: PickerHost): PickerHandle {
@@ -458,10 +545,12 @@ export function createPicker(host: PickerHost): PickerHandle {
   }
 
   /**
-   * Ask the extractors in the main world about `node`. A pick lets the
-   * framework whose answer is adopted name the element the pick stands for.
+   * Ask the extractors in the main world about `node`, and keep every
+   * framework's answer: one describes the element, and the rest may add
+   * evidence around it. A pick lets each framework name the element the pick
+   * stands for; the one whose answer is adopted decides it.
    */
-  function extract(node: Element, phase: ExtractionPhase, pick = false): Extracted | null {
+  function extract(node: Element, phase: ExtractionPhase, pick = false): Extracted[] {
     nextRequest += 1;
     const id = nextRequest;
     const request: ExtractRequest = pick ? { id, phase, pick: true } : { id, phase };
@@ -469,6 +558,7 @@ export function createPicker(host: PickerHost): PickerHandle {
     for (const text of received.replies) {
       const parsed = parseReply(text, id);
       if (parsed === null || !Array.isArray(parsed.contributions)) continue;
+      const contributions: Extracted[] = [];
       for (const entry of parsed.contributions.slice(0, FRAMEWORKS.size)) {
         if (!isPlainObject(entry) || typeof entry.framework !== "string") continue;
         if (!FRAMEWORKS.has(entry.framework) || !isPlainObject(entry.data)) continue;
@@ -479,15 +569,15 @@ export function createPicker(host: PickerHost): PickerHandle {
           if (target === null) continue;
         }
         adoptRoots(entry.data.componentChain, received.named);
-        return {
+        contributions.push({
           framework: entry.framework,
           data: entry.data as ExtractorContribution,
           target: target === node ? null : target,
-        };
+        });
       }
-      return null;
+      return contributions;
     }
-    return null;
+    return [];
   }
 
   /**
@@ -534,7 +624,8 @@ export function createPicker(host: PickerHost): PickerHandle {
   function fieldsFor(
     node: Element,
     detections: FrameworkDetection[],
-    contribution: ExtractorContribution | null
+    contributions: Extracted[],
+    primary: Extracted | null
   ): ObservationFields {
     const fields: ObservationFields = {
       elementId: idOf(node),
@@ -558,21 +649,39 @@ export function createPicker(host: PickerHost): PickerHandle {
     };
     // One framework describes the element, whole: merging two frameworks'
     // chains is a resolver's call to make with both in view, not the page's.
-    if (contribution === null) return fields;
+    // Evidence is what the others may still add around it.
     // Each field is taken only in the shape the wire needs, so one malformed
     // field costs that field rather than the whole observation. Deeper rules —
     // ids that resolve, edges without cycles — stay the host's to enforce.
-    if (isChainShape(contribution.componentChain)) {
-      fields.componentChain = contribution.componentChain;
+    if (primary !== null) {
+      const { data } = primary;
+      if (isChainShape(data.componentChain)) {
+        fields.componentChain = data.componentChain;
+      }
+      if (isObjectArray(data.sourceCandidates)) {
+        fields.sourceCandidates = data.sourceCandidates.slice(0, LIMITS.sourceCandidates);
+      }
+      if (isCapabilitiesShape(data.capabilities)) {
+        fields.capabilities = data.capabilities;
+      }
     }
-    if (isObjectArray(contribution.sourceCandidates)) {
-      fields.sourceCandidates = contribution.sourceCandidates.slice(0, LIMITS.sourceCandidates);
-    }
-    if (isObjectArray(contribution.frameworkEvidence)) {
-      fields.frameworkEvidence = contribution.frameworkEvidence.slice(0, LIMITS.frameworkEvidence);
-    }
-    if (isCapabilitiesShape(contribution.capabilities)) {
-      fields.capabilities = contribution.capabilities;
+    // The element described: the adopted pick's, else the node asked about.
+    const described = primary?.target ?? null;
+    for (const contribution of primary === null
+      ? contributions
+      : [primary, ...contributions.filter((entry) => entry !== primary)]) {
+      // A framework whose pick stands for another element saw a different one.
+      if (contribution.target !== described) continue;
+      const evidence: unknown = contribution.data.frameworkEvidence;
+      if (!Array.isArray(evidence)) continue;
+      for (const entry of evidence) {
+        if (fields.frameworkEvidence.length >= LIMITS.frameworkEvidence) break;
+        // A framework that does not describe the element adds context in the
+        // flat generic form only, so it cannot cost the one that does its observation.
+        if (contribution === primary ? isEvidenceShape(entry) : isGenericEvidenceShape(entry)) {
+          fields.frameworkEvidence.push(entry);
+        }
+      }
     }
     return fields;
   }
@@ -586,9 +695,10 @@ export function createPicker(host: PickerHost): PickerHandle {
 
   // Hover never walks ancestry: it is paid for on every element the pointer crosses.
   function hoverOf(node: Element): HoverObservation {
+    const contributions = extract(node, "hover");
     const observation: HoverObservation = {
       phase: "hover",
-      ...fieldsFor(node, [], extract(node, "hover")?.data ?? null),
+      ...fieldsFor(node, [], contributions, primaryOf(contributions)),
     };
     hoverName = nearestName(observation.componentChain);
     return observation;
@@ -680,19 +790,20 @@ export function createPicker(host: PickerHost): PickerHandle {
     const chains: Array<{ framework: string; chain: ComponentChain } | null> = [];
     let detections: FrameworkDetection[] = [];
     for (const entry of selection) {
-      const extracted = entry.picked
+      const contributions = entry.picked
         ? extract(entry.hit, "selection", true)
         : extract(entry.target, "selection");
-      const target = entry.picked ? (extracted?.target ?? entry.hit) : entry.target;
+      const primary = primaryOf(contributions);
+      const target = entry.picked ? (primary?.target ?? entry.hit) : entry.target;
       targets.push(target);
       const entryDetections = ancestryDetections(target);
-      const fields = fieldsFor(target, entryDetections, extracted?.data ?? null);
+      const fields = fieldsFor(target, entryDetections, contributions, primary);
       if (observations.length === 0) detections = entryDetections;
       // A pick that lands where another entry already is says nothing new.
       if (observations.some((observation) => observation.elementId === fields.elementId)) continue;
       observations.push({ phase: "selection", ...fields });
       chains.push(
-        extracted === null ? null : { framework: extracted.framework, chain: fields.componentChain }
+        primary === null ? null : { framework: primary.framework, chain: fields.componentChain }
       );
     }
     // Widening steps out from the chain the selection is scoped in, or the
