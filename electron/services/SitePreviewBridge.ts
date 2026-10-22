@@ -63,7 +63,7 @@ import {
   type GuestOriginPolicy,
 } from "./sitePreview/originPolicy.js";
 import { onWebContentsDestroyed } from "../window/webContentsDestroyed.js";
-import { loadCoreGuestAsset, type CoreGuestAssetLoader } from "./elementPicker/guestAssets.js";
+import type { CoreGuestAssetLoader } from "./elementPicker/guestAssets.js";
 import type { CoreGuest } from "./elementPicker/coreGuest.js";
 import type { ElementPickerPushPayload, ElementPickerSink } from "./elementPicker/types.js";
 
@@ -268,6 +268,11 @@ function defaultListGuests(): GuestDescriptor[] {
   }
   return out;
 }
+
+// Behind a dynamic import like the rest of elementPicker/: main must not
+// evaluate the picker's code until a core bind first asks for an asset.
+const loadCoreGuestAsset: CoreGuestAssetLoader = async (id) =>
+  (await import("./elementPicker/guestAssets.js")).loadCoreGuestAsset(id);
 
 /**
  * A `<webview>` guest is never itself a registered project view, so its project
