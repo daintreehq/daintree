@@ -108,6 +108,8 @@ describe("the Vue extractor without instances", () => {
     // A Vapor app's root is no VDOM instance, and its nodes carry none.
     const button = app(instance({ type: { __name: "App" }, vapor: true, block: {} }));
     const contribution = select(button);
+    // A description for want of a better one: another framework's outranks it.
+    expect(contribution.ownership).toBe("fallback");
     expect(contribution.componentChain).toEqual({
       nearestId: null,
       components: [],

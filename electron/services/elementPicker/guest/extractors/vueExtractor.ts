@@ -187,6 +187,9 @@ function withoutInstance(found: Extract<Lookup, { kind: "app" }>, phase: "hover"
     : NOT_EXPOSED;
   const sources = phase === "hover" ? UNKNOWN : missing;
   const contribution: ExtractorContribution = {
+    // It says only that Vue is here and keeps nothing on its nodes; any
+    // framework that can say more about the element should.
+    ownership: "fallback",
     componentChain: { nearestId: null, components: [], truncated: false },
     capabilities: {
       names: missing,
