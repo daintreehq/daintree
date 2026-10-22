@@ -104,6 +104,14 @@ function useForgeTooltipGate(role: "issues" | "code", namedProviderId?: string) 
 
 const inFlightIssues = new Map<string, Promise<IssueTooltipData | null>>();
 
+type IssueTooltipState = TooltipState<IssueTooltipData> & { key: string | null };
+const IDLE_ISSUE_TOOLTIP: IssueTooltipState = {
+  data: null,
+  loading: false,
+  error: false,
+  key: null,
+};
+
 /**
  * `target` says whose number this is (#13744) — see {@link IssueLinkTarget}.
  * Omitted, the number is read from the project's issues provider.
@@ -113,11 +121,9 @@ export function useIssueTooltip(
   issueNumber: number | undefined,
   target?: IssueLinkTarget
 ) {
-  const [state, setState] = useState<TooltipState<IssueTooltipData>>({
-    data: null,
-    loading: false,
-    error: false,
-  });
+  // State remembers which issue it describes, so a response for a link the
+  // badge no longer shows is never painted under it (#13744).
+  const [state, setState] = useState<IssueTooltipState>(IDLE_ISSUE_TOOLTIP);
   const mountedRef = useRef(true);
   const targetRole = target?.role;
   const issueProviderId = target?.issueProviderId;
@@ -125,6 +131,13 @@ export function useIssueTooltip(
   const issueKey = target?.issueKey;
   const { providerResolved, providerId, missingCredential, recheckCredential } =
     useForgeTooltipGate(targetRole === "code" ? "code" : "issues", issueProviderId);
+  // The provider and the issue's own identity, never the number alone: two
+  // trackers can both have an issue 42, and a renumbered issue keeps its id.
+  // Tagged by kind so a stable id of "7" never meets issue #7.
+  const cacheKey =
+    cwd && issueNumber
+      ? `${providerId ?? ""}:${cwd}:${issueId ? `id:${issueId}` : issueKey ? `key:${issueKey}` : `#${issueNumber}`}`
+      : null;
 
   useEffect(() => {
     mountedRef.current = true;
@@ -134,42 +147,46 @@ export function useIssueTooltip(
   }, []);
 
   const fetchTooltip = useCallback(async () => {
-    if (!cwd || !issueNumber || !providerResolved) return;
+    if (!cwd || !issueNumber || !cacheKey || !providerResolved) return;
     if (missingCredential && !(await recheckCredential())) return;
 
-    // The provider and the issue's own identity, never the number alone: two
-    // trackers can both have an issue 42, and a renumbered issue keeps its id.
-    const cacheKey = `${providerId ?? ""}:${cwd}:${issueId ?? issueKey ?? issueNumber}`;
+    const toSettled = (result: IssueTooltipData | null): IssueTooltipState => ({
+      data: result,
+      loading: false,
+      error: result === null,
+      key: cacheKey,
+    });
+    const toLoading = (prev: IssueTooltipState): IssueTooltipState =>
+      prev.key === cacheKey
+        ? { ...prev, loading: true, error: false }
+        : { data: null, loading: true, error: false, key: cacheKey };
+
     const cached = issueCache.get(cacheKey);
     if (cached) {
-      setState({ data: cached, loading: false, error: false });
+      setState(toSettled(cached));
       return;
     }
 
     const inFlight = inFlightIssues.get(cacheKey);
     if (inFlight) {
       const joinedGeneration = cacheGeneration;
-      setState((prev) => ({ ...prev, loading: true, error: false }));
+      setState(toLoading);
       try {
-        const data = await inFlight;
+        const result = await inFlight;
         if (!mountedRef.current || joinedGeneration !== cacheGeneration) return;
-        if (data) {
-          setState({ data, loading: false, error: false });
-        } else {
-          setState({ data: null, loading: false, error: true });
-        }
+        setState(toSettled(result));
       } catch {
         if (!mountedRef.current || joinedGeneration !== cacheGeneration) return;
-        setState({ data: null, loading: false, error: true });
+        setState(toSettled(null));
       }
       return;
     }
 
-    setState((prev) => ({ ...prev, loading: true, error: false }));
+    setState(toLoading);
 
     const generation = cacheGeneration;
     const promise = (async () => {
-      const data = await forgeClient.getIssueTooltip(
+      const fetched = await forgeClient.getIssueTooltip(
         cwd,
         issueNumber,
         targetRole || issueProviderId
@@ -184,10 +201,10 @@ export function useIssueTooltip(
       // A sidebar refresh landed while this was in flight: the response predates
       // the invalidation, so writing it back would re-poison the cache the
       // refresh just cleared and the next hover would serve pre-refresh data.
-      if (data && generation === cacheGeneration) {
-        issueCache.set(cacheKey, data);
+      if (fetched && generation === cacheGeneration) {
+        issueCache.set(cacheKey, fetched);
       }
-      return data;
+      return fetched;
     })();
 
     inFlightIssues.set(cacheKey, promise);
@@ -199,39 +216,36 @@ export function useIssueTooltip(
     promise.then(clearInFlight, clearInFlight);
 
     try {
-      const data = await promise;
+      const result = await promise;
       // Same fence as the cache write: a response from before the refresh must
       // not paint pre-refresh detail into an open tooltip, and must not
       // overwrite a newer request that already resolved. The tooltip re-fetches
       // on its next open rather than committing data the refresh invalidated.
       if (!mountedRef.current || generation !== cacheGeneration) return;
-      if (data) {
-        setState({ data, loading: false, error: false });
-      } else {
-        setState({ data: null, loading: false, error: true });
-      }
+      setState(toSettled(result));
     } catch {
       if (!mountedRef.current || generation !== cacheGeneration) return;
-      setState({ data: null, loading: false, error: true });
+      setState(toSettled(null));
     }
   }, [
     cwd,
     issueNumber,
+    cacheKey,
     targetRole,
     issueProviderId,
     issueId,
     issueKey,
-    providerId,
     providerResolved,
     missingCredential,
     recheckCredential,
   ]);
 
   const reset = useCallback(() => {
-    setState({ data: null, loading: false, error: false });
+    setState(IDLE_ISSUE_TOOLTIP);
   }, []);
 
-  return { ...state, missingCredential, providerId, fetchTooltip, reset };
+  const { data, loading, error } = state.key === cacheKey ? state : IDLE_ISSUE_TOOLTIP;
+  return { data, loading, error, missingCredential, providerId, fetchTooltip, reset };
 }
 
 const inFlightPRs = new Map<string, Promise<PRTooltipData | null>>();

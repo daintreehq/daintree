@@ -2108,7 +2108,12 @@ class PullRequestService {
         // marker, let the next pass retry against the new branch's issue.
         const current = this.candidates.get(worktreeId);
         if (current?.branchName !== branchAtFetchStart) return;
-        if (current?.issueClaim?.issueKey !== issueClaim?.issueKey) return;
+        if (
+          current?.issueClaim?.issueProviderId !== issueClaim?.issueProviderId ||
+          current?.issueClaim?.issueKey !== issueClaim?.issueKey
+        ) {
+          return;
+        }
         if (issue) {
           this.issueTitleFetchedWorktrees.add(worktreeId);
           events.emit("sys:issue:detected", {

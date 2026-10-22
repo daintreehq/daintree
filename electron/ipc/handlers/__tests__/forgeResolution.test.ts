@@ -1048,8 +1048,7 @@ describe("issue links name their provider (#13744)", () => {
 
 describe("readIssueLinkTarget", () => {
   it("is undefined for a payload that names no owner", () => {
-    const payload = { cwd: "/repo", issueNumber: 1 };
-    expect(readIssueLinkTarget(payload)).toBeUndefined();
+    expect(readIssueLinkTarget({ issueProviderId: undefined })).toBeUndefined();
   });
 
   it("reads and trims the provenance fields", () => {

@@ -666,11 +666,13 @@ async function handleForgeGetProjectHealth(payload: {
       // The project's issues come from another tracker (#13744): the code
       // forge's count would disagree with the toolbar's, so take the issues
       // provider's count and list — or hide the chip when it has no count.
+      // Without the tracker's own list the chip would open the code forge's,
+      // so a count with nowhere to go hides like a missing count.
+      const usable = overrideIssues.count !== null && overrideIssues.issuesUrl !== undefined;
       return {
         ...health,
         issueCount: overrideIssues.count ?? 0,
-        ...(overrideIssues.count === null ? { issueCountUnavailable: true } : {}),
-        ...(overrideIssues.issuesUrl ? { issuesUrl: overrideIssues.issuesUrl } : {}),
+        ...(usable ? { issuesUrl: overrideIssues.issuesUrl } : { issueCountUnavailable: true }),
       };
     }
     return buildEmptyForgeProjectHealth({

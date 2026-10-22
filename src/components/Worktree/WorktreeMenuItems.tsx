@@ -1101,7 +1101,7 @@ export function WorktreeMenuItems({
     hasIssueItem && (
       <C.Item key="issue" onSelect={onOpenIssueExternal}>
         <CircleDot className={ICON} />
-        Open issue #{worktree?.issueNumber}
+        Open issue {worktree?.issueKey ?? `#${worktree?.issueNumber}`}
       </C.Item>
     ),
     hasPRItem && (

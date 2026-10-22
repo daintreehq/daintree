@@ -858,6 +858,9 @@ export function createWorktreeStore(): WorktreeViewStoreApi {
       const existing = prev.worktrees.get(worktreeId);
       if (!existing) return;
       if (existing.issueNumber !== issueNumber) return;
+      // The lookup was for the branch's own number; a link the user attached
+      // is a different issue even when its number matches (#13744).
+      if (prev.manualAssociations.has(worktreeId)) return;
       // Direct mutation: bypasses mergeIssueState's title-restoration rule so
       // the not-found response actually clears the title. issueNumber is the
       // branch-parsed local fact and stays put.
@@ -2115,6 +2118,7 @@ function mergeIssueState(
     issueNumber !== undefined &&
     issueNumber === existing.issueNumber &&
     incoming.issueProviderId === existing.issueProviderId &&
+    incoming.issueKey === existing.issueKey &&
     issueTitle === undefined &&
     existing.issueTitle !== undefined
   ) {

@@ -1804,4 +1804,44 @@ describe("createWorktreeStore — issue provenance (#13744)", () => {
     expect(store.getState().worktrees).not.toBe(before);
     expect(store.getState().worktrees.get("wt-1")?.issueKey).toBe("ENG-42");
   });
+
+  it("keeps a manual link's title when the branch's own number comes back not-found", () => {
+    const store = createWorktreeStore();
+    store.getState().applySnapshot([makeSnapshot("wt-1", { issueNumber: 42 })], nextV(), {
+      "wt-1": {
+        issueNumber: 42,
+        issueTitle: "Fix login",
+        issueProviderId: LINEAR,
+        issueKey: "ENG-42",
+      },
+    });
+
+    store.getState().applyIssueNotFound("wt-1", 42);
+
+    expect(store.getState().worktrees.get("wt-1")?.issueTitle).toBe("Fix login");
+  });
+
+  it("doesn't carry a title between two of one tracker's issues with the same number", () => {
+    const store = createWorktreeStore();
+    store.getState().applySnapshot(
+      [
+        makeSnapshot("wt-1", {
+          issueNumber: 42,
+          issueTitle: "Engineering issue",
+          issueProviderId: LINEAR,
+          issueKey: "ENG-42",
+        }),
+      ],
+      nextV()
+    );
+
+    store
+      .getState()
+      .applyUpdate(
+        makeSnapshot("wt-1", { issueNumber: 42, issueProviderId: LINEAR, issueKey: "DES-42" }),
+        nextV()
+      );
+
+    expect(store.getState().worktrees.get("wt-1")?.issueTitle).toBeUndefined();
+  });
 });

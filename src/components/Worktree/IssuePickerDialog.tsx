@@ -393,7 +393,12 @@ export function IssuePickerDialog({
             id={optionId(index)}
             issue={issue}
             isActive={index === selectedIndex}
-            isCurrentlyAttached={issue.number === currentIssueNumber}
+            // Same number and same owner (#13744): a tracker's ENG-42 isn't the
+            // code forge's #42 the worktree is linked to.
+            isCurrentlyAttached={
+              issue.number === currentIssueNumber &&
+              (issue.providerId ?? undefined) === (worktree.issueProviderId ?? undefined)
+            }
             onPoint={() => {
               if (index !== selectedIndex) setSelectedIndex(index);
             }}
@@ -474,7 +479,7 @@ export function IssuePickerDialog({
         {isLinked && (
           <Button variant="ghost" onClick={handleDetach} className="text-text-secondary mr-auto">
             <Link2Off aria-hidden="true" />
-            Unlink issue #{currentIssueNumber}
+            Unlink issue {worktree.issueKey ?? `#${currentIssueNumber}`}
           </Button>
         )}
         <Button variant="ghost" onClick={onClose} className="text-text-secondary">

@@ -151,18 +151,22 @@ export function IssueBadge({
         {...HOVER_CARD_EVENT_FENCE}
         aria-label={
           data && !missingCredential
-            ? describeIssueTooltip(data, freshness, { includeTitle: !issueTitle })
+            ? describeIssueTooltip(data, freshness, {
+                includeTitle: !issueTitle,
+                issueKey: provenance?.issueKey,
+              })
             : undefined
         }
       >
         {missingCredential ? (
           <TokenMissingTooltip type="issue" />
         ) : data ? (
-          <IssueTooltipContent data={data} freshness={freshness} />
+          <IssueTooltipContent data={data} freshness={freshness} issueKey={provenance?.issueKey} />
         ) : (
           <TooltipFallback
             type="issue"
             number={issueNumber}
+            reference={provenance?.issueKey}
             title={issueTitle}
             status={loading ? "loading" : error ? "failed" : "idle"}
             freshness={freshness}

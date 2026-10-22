@@ -208,6 +208,8 @@ interface CardHeaderProps {
   colorClass: string;
   stateLabel: string;
   number: number;
+  /** A tracker's own identifier (`ENG-42`) in place of `#number` (#13744). */
+  reference?: string;
   title?: string;
   /** Right-aligned on the status line — the PR's CI rollup. */
   trailing?: React.ReactNode;
@@ -224,13 +226,21 @@ interface CardHeaderProps {
  * and gets four lines before it clamps: the card is where the title the
  * sidebar had to truncate is read in full.
  */
-function CardHeader({ Glyph, colorClass, stateLabel, number, title, trailing }: CardHeaderProps) {
+function CardHeader({
+  Glyph,
+  colorClass,
+  stateLabel,
+  number,
+  reference,
+  title,
+  trailing,
+}: CardHeaderProps) {
   return (
     <div className="space-y-1">
       <div className="flex items-center gap-1.5 text-2xs">
         <Glyph className={cn("w-3.5 h-3.5 shrink-0", colorClass)} aria-hidden="true" />
         <span className={cn("font-medium", colorClass)}>{stateLabel}</span>
-        <span className="text-text-secondary tabular-nums">#{number}</span>
+        <span className="text-text-secondary tabular-nums">{reference ?? `#${number}`}</span>
         {trailing}
       </div>
       {title && (
@@ -389,9 +399,11 @@ function MetaRow({
 interface IssueTooltipContentProps {
   data: IssueTooltipData;
   freshness?: TooltipFreshness;
+  /** The link's own identifier when its tracker has one (`ENG-42`). */
+  issueKey?: string;
 }
 
-export function IssueTooltipContent({ data, freshness }: IssueTooltipContentProps) {
+export function IssueTooltipContent({ data, freshness, issueKey }: IssueTooltipContentProps) {
   const { Glyph, colorClass, label } = issueStateVisual(data.state);
 
   return (
@@ -401,6 +413,7 @@ export function IssueTooltipContent({ data, freshness }: IssueTooltipContentProp
         colorClass={colorClass}
         stateLabel={label}
         number={data.number}
+        reference={issueKey}
         title={data.title}
       />
 
@@ -462,6 +475,8 @@ export function PRTooltipContent({ data, freshness, ciStatus }: PRTooltipContent
 interface TooltipFallbackProps {
   type: "issue" | "pr";
   number: number;
+  /** A tracker's own identifier (`ENG-42`) in place of `#number` (#13744). */
+  reference?: string;
   /** What the badge already knows — never say less than the badge did. */
   title?: string;
   prState?: string;
@@ -484,6 +499,7 @@ interface TooltipFallbackProps {
 export function TooltipFallback({
   type,
   number,
+  reference,
   title,
   prState,
   ciStatus,
@@ -510,6 +526,7 @@ export function TooltipFallback({
         colorClass={header.colorClass}
         stateLabel={header.label}
         number={number}
+        reference={reference}
         title={title}
         trailing={
           type === "pr" && ciStatus && (prState === undefined || prState === "open") ? (
@@ -558,6 +575,8 @@ function joinList(parts: (string | false | null | undefined)[]): string {
 interface DescribeOptions {
   /** Speak the title too — for a trigger whose own name doesn't carry it. */
   includeTitle?: boolean;
+  /** A tracker's own identifier (`ENG-42`) in place of `#number` (#13744). */
+  issueKey?: string;
 }
 
 function describeMeta(
@@ -591,7 +610,7 @@ export function describeIssueTooltip(
   options: DescribeOptions = {}
 ): string {
   return joinList([
-    `${issueStateVisual(data.state).label} issue #${data.number}`,
+    `${issueStateVisual(data.state).label} issue ${options.issueKey ?? `#${data.number}`}`,
     ...describeMeta(data, freshness, options),
   ]);
 }

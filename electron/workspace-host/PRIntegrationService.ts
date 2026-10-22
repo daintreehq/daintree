@@ -114,6 +114,9 @@ export class PRIntegrationService {
       worktreeId: string;
       branch?: string;
       issueNumber?: number;
+      /** Owner of a branch-claimed `issueNumber` (#13744). */
+      issueProviderId?: string;
+      issueKey?: string;
       isMainWorktree?: boolean;
     }>
   ): Promise<void> {
@@ -194,6 +197,8 @@ export class PRIntegrationService {
           worktreeId: candidate.worktreeId,
           branch: candidate.branch,
           issueNumber: candidate.issueNumber,
+          issueProviderId: candidate.issueProviderId,
+          issueKey: candidate.issueKey,
           isMainWorktree: candidate.isMainWorktree,
         } as unknown as WorktreeSnapshot);
       }

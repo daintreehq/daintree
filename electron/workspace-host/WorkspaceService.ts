@@ -600,6 +600,8 @@ export class WorkspaceService {
   private issueClaimRetryTimer: NodeJS.Timeout | null = null;
   private issueClaimRetries = 0;
   private issueClaimSeq = 0;
+  private issueClaimInFlight = false;
+  private issueClaimRefreshQueued = false;
   private forgeRemoteProbeSeq = 0;
   private forgeRemoteReprobeTimer: NodeJS.Timeout | null = null;
   // Bumped whenever a `.git/config` write is OBSERVED. A baseline read that
@@ -1006,6 +1008,9 @@ export class WorkspaceService {
           });
           return;
         }
+        // A code-forge result can't describe a number an issues provider
+        // claimed — it raced the claim and names a different issue.
+        if (monitor.issueClaim) return;
 
         // Keep the private flat issue number in lockstep so the
         // onIssueNotFound guard (`monitor.issueNumber !== issueNumber`)
@@ -2201,9 +2206,27 @@ export class WorkspaceService {
     } catch {
       return;
     }
+    // Identical in-flight requests are joined at the bridge and in main, so a
+    // request started now could hand back an answer read before the change
+    // that prompted it. Ask again once the one in flight settles instead.
+    if (this.issueClaimInFlight) {
+      this.issueClaimRefreshQueued = true;
+      return;
+    }
+    this.issueClaimInFlight = true;
     const seq = ++this.issueClaimSeq;
+    const settle = (): boolean => {
+      this.issueClaimInFlight = false;
+      if (this.issueClaimRefreshQueued) {
+        this.issueClaimRefreshQueued = false;
+        this.refreshIssueBranchClaim();
+        return false;
+      }
+      return true;
+    };
     bridge.resolveIssueBranchClaim(projectRootPath).then(
       (result) => {
+        if (!settle()) return;
         if (seq !== this.issueClaimSeq || this.projectRootPath !== projectRootPath) return;
         if (result.status === "retry") {
           this.scheduleIssueBranchClaimRetry();
@@ -2213,6 +2236,7 @@ export class WorkspaceService {
         if (setIssueBranchClaim(result.claim)) this.reapplyIssueBranchClaims();
       },
       () => {
+        if (!settle()) return;
         if (seq !== this.issueClaimSeq || this.projectRootPath !== projectRootPath) return;
         this.scheduleIssueBranchClaimRetry();
       }
@@ -2232,6 +2256,7 @@ export class WorkspaceService {
   private clearIssueBranchClaim(): void {
     this.issueClaimSeq += 1;
     this.issueClaimRetries = 0;
+    this.issueClaimRefreshQueued = false;
     if (this.issueClaimRetryTimer) {
       clearTimeout(this.issueClaimRetryTimer);
       this.issueClaimRetryTimer = null;
@@ -6192,6 +6217,9 @@ export class WorkspaceService {
    */
   notifyForgeProviderRegistryUpdated(): void {
     pullRequestService.notifyForgeProviderRegistryUpdated();
+    // The issues provider may have just become available (#13744).
+    this.issueClaimRetries = 0;
+    this.refreshIssueBranchClaim();
   }
 
   updateForgeCredentials(
@@ -6256,6 +6284,8 @@ export class WorkspaceService {
         worktreeId: string;
         branch?: string;
         issueNumber?: number;
+        issueProviderId?: string;
+        issueKey?: string;
         isMainWorktree?: boolean;
       }> = [];
       for (const monitor of this.monitors.values()) {
@@ -6263,6 +6293,8 @@ export class WorkspaceService {
           worktreeId: monitor.id,
           branch: monitor.branch,
           issueNumber: monitor.issueNumber,
+          issueProviderId: monitor.issueClaim?.issueProviderId,
+          issueKey: monitor.issueClaim?.issueKey,
           isMainWorktree: monitor.isMainWorktree,
         });
       }
