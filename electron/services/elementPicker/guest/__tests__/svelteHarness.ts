@@ -136,7 +136,9 @@ export function locOf(observation: HoverObservation | SelectionObservation | nul
   const candidate = observation?.sourceCandidates.find(
     (entry) => entry.kind === "template-location"
   );
-  if (candidate === undefined || !("location" in candidate)) return null;
+  if (candidate === undefined || !("location" in candidate) || candidate.location === null) {
+    return null;
+  }
   return { file: candidate.file, line: candidate.location.line, column: candidate.location.column };
 }
 
