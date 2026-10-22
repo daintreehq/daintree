@@ -369,9 +369,11 @@ export const usePluginProjectSurfacesStore = create<PluginProjectSurfacesState>(
         // Stock content alone would read as the plugin having nothing here.
         if (skew) {
           safeFireAndForget(
-            import("@/components/Hosts/buildSkew").then(({ noticeBuildSkew }) =>
-              noticeBuildSkew("Plugin setup unavailable", skew)
-            ),
+            import("@/components/Hosts/buildSkew").then(({ noticeBuildSkew }) => {
+              // A read that worked, or a reset, while the notice loaded.
+              if (started.generation !== generation || get().readFailure !== skew) return;
+              noticeBuildSkew("Plugin setup unavailable", skew);
+            }),
             { context: "Saying why a host's plugin setup isn't showing" }
           );
         }

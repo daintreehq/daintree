@@ -928,9 +928,11 @@ export class HostConnection {
     if (name === null) return;
     // Per host build: one that moves on may send it for a different reason.
     const key = `${state.handshake.version}\u0000${state.handshake.commit}\u0000${name}`;
-    if (this.unknownPushNames.has(key)) return;
-    // A host can name anything; the record of what was said stays small.
-    if (this.unknownPushNames.size >= MAX_UNKNOWN_PUSH_NAMES) this.unknownPushNames.clear();
+    // A host can name anything: past the budget the rest go unsaid, rather
+    // than forgetting what was said and saying it all again.
+    if (this.unknownPushNames.has(key) || this.unknownPushNames.size >= MAX_UNKNOWN_PUSH_NAMES) {
+      return;
+    }
     this.unknownPushNames.add(key);
     logger.warn("Dropped a push from a host on another build that this build doesn't know", {
       hostId: this.hostId,

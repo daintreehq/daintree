@@ -61,11 +61,26 @@ describe("noticeBuildSkew", () => {
     expect(notify.mock.calls[0]![0].action.label).toBe("Update this machine");
   });
 
-  it("stays quiet once the builds match, or off a host", () => {
+  it("stays quiet when the builds match", () => {
     connectedTo();
     noticeBuildSkew("Plugin setup unavailable", WHY);
-    useHostConnectionStore.getState().reset();
+    expect(notify).not.toHaveBeenCalled();
+  });
+
+  it("says it once the view hears how its link stands, if the builds still differ", () => {
     noticeBuildSkew("Plugin setup unavailable", WHY);
+    noticeBuildSkew("Plugin setup unavailable", WHY);
+    expect(notify).not.toHaveBeenCalled();
+
+    connectedTo({ kind: "version", local: "1.4.0", remote: "1.3.0" });
+    expect(notify).toHaveBeenCalledTimes(1);
+    expect(notify.mock.calls[0]![0].message).toBe(WHY);
+  });
+
+  it("lets a held notice go when the link comes up on matching builds", () => {
+    noticeBuildSkew("Plugin setup unavailable", WHY);
+    connectedTo();
+    connectedTo({ kind: "version", local: "1.4.0", remote: "1.3.0" });
     expect(notify).not.toHaveBeenCalled();
   });
 });

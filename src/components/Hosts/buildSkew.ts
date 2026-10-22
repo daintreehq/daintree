@@ -37,6 +37,8 @@ export function useBuildSkewUpdate(): BuildSkewUpdate | null {
 }
 
 const noticed = new Set<string>();
+/** Notices held for the view to hear how its link stands, by title, each with its unsubscribe. */
+const awaitingLink = new Map<string, () => void>();
 
 /**
  * Something this view shows didn't load because its host's build doesn't
@@ -46,6 +48,19 @@ const noticed = new Set<string>();
  */
 export function noticeBuildSkew(title: string, message: string): void {
   const state = useHostConnectionStore.getState();
+  if (state.connection?.status !== "connected") {
+    // The call can fail before this view has heard how its link stands; say
+    // it once the view has, if the builds still differ then.
+    if (awaitingLink.has(title)) return;
+    const unsubscribe = useHostConnectionStore.subscribe((next) => {
+      if (next.connection?.status !== "connected") return;
+      unsubscribe();
+      awaitingLink.delete(title);
+      noticeBuildSkew(title, message);
+    });
+    awaitingLink.set(title, unsubscribe);
+    return;
+  }
   const update = updateFor(state.hostId, state.hostName, viewMismatch(state));
   if (update === null || state.connection?.status !== "connected") return;
   const { version, commit } = state.connection.handshake;
@@ -65,4 +80,6 @@ export function noticeBuildSkew(title: string, message: string): void {
 
 export function _resetBuildSkewNoticesForTesting(): void {
   noticed.clear();
+  for (const unsubscribe of awaitingLink.values()) unsubscribe();
+  awaitingLink.clear();
 }

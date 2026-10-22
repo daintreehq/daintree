@@ -38,7 +38,8 @@ export function noticeBuildMismatch(
   remote: HostHandshakeInfo
 ): void {
   // The host's whole build: a new commit behind an unchanged version is news
-  // too. And this machine's, since updating it can open a different gap.
+  // too. And this machine's side of the gap (its version, or its commit when
+  // only that differs), since updating it can open a different one.
   const key = `${hostId}\u0000${remote.version}\u0000${remote.commit}\u0000${mismatch.local}`;
   if (alreadyNoticed(key)) return;
   notify({
