@@ -429,8 +429,9 @@ export function syncPluginPanels(
 export function resetPluginPanelLifecycleForTests(): void {
   tracked.clear();
   userReloadHandlers.clear();
+  const hadUnsaved = unsavedOwners.size > 0;
   unsavedOwners.clear();
-  unsavedListeners.clear();
+  if (hadUnsaved) notifyUnsavedChanged();
   pending = [];
   flushScheduled = false;
   nextMountToken = 1;
