@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { ResolutionResult } from "../../../../shared/elementPicker/resolution.js";
+import type { SourceCandidate } from "../../../../shared/elementPicker/source.js";
 import {
   component,
   createSandbox,
@@ -483,10 +484,14 @@ describe("a component's reported definition", () => {
   });
 
   it("answers a positioned definition claim with the file alone", async () => {
-    const definition = {
-      ...invocation({ file: "src/lib/card.svelte", line: 5, column: 0 }),
+    const definition: SourceCandidate = {
       kind: "component-definition",
-    } as const;
+      candidateId: "definition-1",
+      framework: "svelte",
+      extraction: { kind: "runtime-field", field: "__svelte_meta.loc" },
+      file: "src/lib/card.svelte",
+      location: { lineBase: 1, columnBase: 0, columnUnit: "utf16", line: 5, column: 0 },
+    };
     const { results } = await resolveIn(sandbox, [
       selection({ components: [component([invocation(site), definition])] }),
     ]);
