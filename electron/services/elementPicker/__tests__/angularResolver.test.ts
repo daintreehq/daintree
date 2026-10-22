@@ -52,6 +52,8 @@ const APP_HTML = `<main>
 
 let root: string;
 let roots: SourceRoots;
+/** Every ref the resolver asked main to read, worktree-relative, in order. */
+let reads: string[] = [];
 
 async function put(appRelative: string, contents: string | Uint8Array): Promise<void> {
   const target = path.join(roots.appRoot, ...appRelative.split("/"));
@@ -60,6 +62,7 @@ async function put(appRelative: string, contents: string | Uint8Array): Promise<
 }
 
 beforeEach(async () => {
+  reads = [];
   root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "picker-angular-")));
   const worktree = path.join(root, "worktree");
   roots = { worktreePath: worktree, appRoot: path.join(worktree, ...APP.split("/")) };
@@ -208,7 +211,10 @@ async function resolve(
     onRead: () => {},
   });
   const access: ResolverSourceAccess = {
-    readSource: (file) => job.readSource(file),
+    readSource: (file) => {
+      reads.push(file.path);
+      return job.readSource(file);
+    },
     fetchSourceMap: (generatedUrl) => job.fetchSourceMap(generatedUrl),
     locateSource: ({ generatedUrl, source, sourceRoot }) =>
       job.locateSource(generatedUrl, source, sourceRoot),
@@ -407,9 +413,43 @@ describe("the Angular resolver on template stamps", () => {
       selection({ components: [component([button]), component([card])] })
     );
     expect(results.map((result) => result.state)).toEqual(["verified", "verified"]);
-    expect(
-      new Set(results.map((result) => "fileRevision" in result && result.fileRevision)).size
-    ).toBe(1);
+    expect(reads).toEqual([`${APP}/src/app/app.component.html`]);
+  });
+
+  it.each([
+    ["inside an HTML comment", '<!-- <button class="go"> -->\n<p>x</p>\n', '<button class="go">'],
+    ["cut off where the file ends", "<p>x</p>\n<button", "<button"],
+  ])("refuses a stamp on tag-like text %s", async (_label, html, marker) => {
+    await put("src/app/odd.component.html", html);
+    const at = stampAt(html, marker);
+    const result = await resolveOne(
+      selection({
+        sourceCandidates: [stamped("template-location", "src/app/odd.component.html", at)],
+        templateOffset: at.offset,
+      })
+    );
+    expect(result).toMatchObject({ state: "unavailable", reason: "mismatch" });
+  });
+
+  it("matches a namespaced SVG tag to the element it renders", async () => {
+    const html = '<svg viewBox="0 0 1 1">\n  <svg:path d="M0 0" />\n</svg>\n';
+    await put("src/app/icon.component.html", html);
+    const at = stampAt(html, "<svg:path");
+    const result = await resolveOne(
+      selection({
+        tagName: "path",
+        sourceCandidates: [stamped("template-location", "src/app/icon.component.html", at)],
+        templateOffset: at.offset,
+      })
+    );
+    expect(result).toMatchObject({ state: "verified", claim: "template-location" });
+  });
+
+  it("reads a class's file once however many records name it", async () => {
+    const records = [0, 1, 2].map(() => component([classFile("src/app/button.component.ts")]));
+    const results = await resolve(selection({ components: records }));
+    expect(results.map((result) => result.state)).toEqual(["verified", "verified", "verified"]);
+    expect(reads).toEqual([`${APP}/src/app/button.component.ts`]);
   });
 
   it("leaves claims it has no way to check unsupported", async () => {
@@ -442,6 +482,13 @@ describe("declaresClass", () => {
     ["const tpl = `${a}class ButtonComponent`;", false],
     ['const s = "it\'s a class ButtonComponent";', false],
     ["const ButtonComponent = class {};", false],
+    ["export class /* the shop's */ ButtonComponent {}", true],
+    ["const half = width / 2; export class ButtonComponent {}", true],
+    ["const pattern = /class ButtonComponent/u;", false],
+    ["if (/[/]class ButtonComponent/.test(s)) {}", false],
+    ["return /class ButtonComponent/;", false],
+    ["const s = `${`inner`} class ButtonComponent`;", false],
+    ["const s = `${{ a: 1 }.a}`; export class ButtonComponent {}", true],
   ])("%s -> %s", (source, expected) => {
     expect(declaresClass(source, "ButtonComponent")).toBe(expected);
   });

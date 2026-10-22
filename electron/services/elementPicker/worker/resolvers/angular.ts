@@ -141,7 +141,7 @@ async function resolveClassFile(
     };
   }
   if (source.text === null) return unreadableResult(candidate, "unsupported", source);
-  if (!declaresClass(source.text, className)) {
+  if (!job.declares(source, className)) {
     return unreadableResult(candidate, "mismatch", source);
   }
   return {
@@ -206,64 +206,195 @@ function offsetOf(text: string, line: number, column: number): number | null {
   return offset < (end === -1 ? text.length : end) ? offset : null;
 }
 
-const TAG_NAME = /^<([A-Za-z][\w.:-]*)/;
+/** An opening tag's name, ended where a real tag's name ends: not at a cut-off `<button` the file stops in. */
+const OPENING_TAG = /^<([A-Za-z][\w.:-]*)(?=[\s/>])/;
 
-/** The name of the tag that opens at `offset`, or null when none does. */
-function tagAt(text: string, offset: number): string | null {
-  return TAG_NAME.exec(text.slice(offset, offset + 256))?.[1] ?? null;
+/** Whether `offset` sits inside an HTML comment, where text that reads like a tag renders nothing. */
+function inComment(text: string, offset: number): boolean {
+  const open = text.lastIndexOf("<!--", offset);
+  if (open === -1) return false;
+  const close = text.indexOf("-->", open + 4);
+  return close === -1 || close + 3 > offset;
 }
 
-const IDENTIFIER_PART = /[\p{ID_Continue}$‌‍]/u;
+/**
+ * The name of the element a tag opening at `offset` renders, or null when no
+ * tag opens there. Angular keeps a namespace apart from the name, so
+ * `<svg:path>` renders a `path`.
+ */
+function tagAt(text: string, offset: number): string | null {
+  const name = OPENING_TAG.exec(text.slice(offset, offset + 256))?.[1];
+  if (name === undefined || inComment(text, offset)) return null;
+  return name.slice(name.lastIndexOf(":") + 1);
+}
+
+const IDENTIFIER_PART = /[\p{ID_Continue}$\u200c\u200d]/u;
 
 function isIdentifierPart(char: string | undefined): boolean {
   return char !== undefined && IDENTIFIER_PART.test(char);
 }
 
-/** Past a string or template literal opening at `start`: an approximation that ignores a backtick nested in `${}`. */
-function skipQuoted(text: string, start: number): number {
+/** Words after which an expression starts, so a `/` there opens a regular expression. */
+const EXPRESSION_KEYWORDS: ReadonlySet<string> = new Set([
+  "return",
+  "typeof",
+  "instanceof",
+  "in",
+  "of",
+  "new",
+  "delete",
+  "void",
+  "throw",
+  "case",
+  "do",
+  "else",
+  "yield",
+  "await",
+]);
+
+/** Past a comment starting at `at`, or `at` itself when none does. */
+function skipComment(text: string, at: number): number {
+  if (text[at] !== "/") return at;
+  if (text[at + 1] === "/") {
+    const end = text.indexOf("\n", at);
+    return end === -1 ? text.length : end + 1;
+  }
+  if (text[at + 1] === "*") {
+    const end = text.indexOf("*/", at + 2);
+    return end === -1 ? text.length : end + 2;
+  }
+  return at;
+}
+
+/** Past the whitespace and comments from `at`: what may sit between a keyword and its name. */
+function skipTrivia(text: string, at: number): number {
+  for (;;) {
+    while (at < text.length && /\s/.test(text[at]!)) at += 1;
+    const past = skipComment(text, at);
+    if (past === at) return at;
+    at = past;
+  }
+}
+
+/** Past a string literal opening at `start`. */
+function skipString(text: string, start: number): number {
   const quote = text[start];
   for (let at = start + 1; at < text.length; at += 1) {
     const char = text[at];
     if (char === "\\") at += 1;
-    else if (char === quote) return at + 1;
-    else if (char === "\n" && quote !== "`") return at + 1;
+    else if (char === quote || char === "\n") return at + 1;
+  }
+  return text.length;
+}
+
+/** Past a regular expression literal opening at `start`, a `/` inside a character class included. */
+function skipRegExp(text: string, start: number): number {
+  let inClass = false;
+  for (let at = start + 1; at < text.length; at += 1) {
+    const char = text[at];
+    if (char === "\\") at += 1;
+    else if (char === "\n") return at;
+    else if (char === "[") inClass = true;
+    else if (char === "]") inClass = false;
+    else if (char === "/" && !inClass) {
+      let end = at + 1;
+      while (isIdentifierPart(text[end])) end += 1;
+      return end;
+    }
   }
   return text.length;
 }
 
 /**
- * Whether `text` declares a class named `name` in code: the `class` keyword
- * and then the name, outside comments and string and template literals. A
- * scan, not a parse, but enough that a comment, a string or an import naming
- * the class cannot stand in for its declaration.
+ * Template literal text from `at` to the end of the literal or the start of a
+ * substitution, whichever comes first.
+ */
+function scanTemplate(text: string, at: number): { end: number; substitution: boolean } {
+  for (; at < text.length; at += 1) {
+    const char = text[at];
+    if (char === "\\") at += 1;
+    else if (char === "`") return { end: at + 1, substitution: false };
+    else if (char === "$" && text[at + 1] === "{") return { end: at + 2, substitution: true };
+  }
+  return { end: text.length, substitution: false };
+}
+
+/**
+ * Whether `text` declares a class named `name` in code: the `class` keyword,
+ * then the name, with nothing but whitespace and comments between, outside
+ * comments, strings, template literals and regular expressions. A scan rather
+ * than a parse: a `/` is taken for a regular expression where an expression
+ * may start, as a parser would, so a comment, a string, a pattern or an import
+ * naming the class cannot stand in for its declaration.
  */
 export function declaresClass(text: string, name: string): boolean {
+  /** The brace depth each open template substitution began at, innermost last. */
+  const substitutions: number[] = [];
+  let depth = 0;
+  /** Whether the last token ended a value, so a `/` after it divides. */
+  let afterValue = false;
   let at = 0;
   while (at < text.length) {
     const char = text[at]!;
-    const next = text[at + 1];
-    if (char === "/" && next === "/") {
-      const end = text.indexOf("\n", at);
-      if (end === -1) return false;
-      at = end + 1;
-    } else if (char === "/" && next === "*") {
-      const end = text.indexOf("*/", at + 2);
-      if (end === -1) return false;
-      at = end + 2;
-    } else if (char === '"' || char === "'" || char === "`") {
-      at = skipQuoted(text, at);
-    } else if (isIdentifierPart(char) && !isIdentifierPart(text[at - 1])) {
+    const past = skipComment(text, at);
+    if (past !== at) {
+      at = past;
+      continue;
+    }
+    if (/\s/.test(char)) {
+      at += 1;
+    } else if (char === '"' || char === "'") {
+      at = skipString(text, at);
+      afterValue = true;
+    } else if (char === "`") {
+      const scanned = scanTemplate(text, at + 1);
+      at = scanned.end;
+      if (scanned.substitution) {
+        substitutions.push(depth);
+        depth += 1;
+        afterValue = false;
+      } else {
+        afterValue = true;
+      }
+    } else if (char === "/") {
+      at = afterValue ? at + 1 : skipRegExp(text, at);
+      afterValue = !afterValue;
+    } else if (isIdentifierPart(char)) {
       let end = at;
       while (isIdentifierPart(text[end])) end += 1;
-      if (text.slice(at, end) === "class") {
-        let start = end;
-        while (start < text.length && /\s/.test(text[start]!)) start += 1;
+      const word = text.slice(at, end);
+      if (word === "class") {
+        const start = skipTrivia(text, end);
         let stop = start;
         while (isIdentifierPart(text[stop])) stop += 1;
         if (start > end && text.slice(start, stop) === name) return true;
       }
       at = end;
+      afterValue = !EXPRESSION_KEYWORDS.has(word);
+    } else if (char === "{") {
+      depth += 1;
+      at += 1;
+      afterValue = false;
+    } else if (char === "}") {
+      depth -= 1;
+      at += 1;
+      // The brace that closes a substitution resumes the template it sits in.
+      if (substitutions.length > 0 && substitutions[substitutions.length - 1] === depth) {
+        substitutions.pop();
+        const scanned = scanTemplate(text, at);
+        at = scanned.end;
+        if (scanned.substitution) {
+          substitutions.push(depth);
+          depth += 1;
+          afterValue = false;
+        } else {
+          afterValue = true;
+        }
+      } else {
+        afterValue = false;
+      }
     } else {
+      afterValue = char === ")" || char === "]";
       at += 1;
     }
   }
@@ -295,6 +426,7 @@ function decode(bytes: Uint8Array): string | null {
 class AngularJob {
   private readonly located = new Map<string, Promise<SourceAccessResult<SourceFileRef>>>();
   private readonly reads = new Map<string, Promise<Read>>();
+  private readonly declarations = new Map<string, boolean>();
   private readonly known: Map<string, FileRevision>;
 
   constructor(
@@ -311,6 +443,17 @@ class AngularJob {
 
   get cancelled(): boolean {
     return this.signal.aborted;
+  }
+
+  /** A recursive chain names one class on every record; its file is scanned for it once. */
+  declares(source: ReadSource & { text: string }, className: string): boolean {
+    const key = `${source.revision}\0${source.file.path}\0${className}`;
+    let found = this.declarations.get(key);
+    if (found === undefined) {
+      found = declaresClass(source.text, className);
+      this.declarations.set(key, found);
+    }
+    return found;
   }
 
   locate(reported: string): Promise<SourceAccessResult<SourceFileRef>> {
