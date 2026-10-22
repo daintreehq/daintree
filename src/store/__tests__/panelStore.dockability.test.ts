@@ -387,6 +387,29 @@ describe("docked plugin panels across a cold restart (#13907)", () => {
     expect(panel?.pendingDockWorktreeId).toBeUndefined();
   });
 
+  it("does not leave a maximized placeholder pointing at a panel that left the grid", async () => {
+    await restore("wt-saved");
+    usePanelStore.setState({ maximizedId: "plugin-1", focusedId: "plugin-1" });
+
+    registerPanelKind(pluginConfig());
+    restorePendingDockPanels();
+
+    const state = usePanelStore.getState();
+    expect(state.panelsById["plugin-1"]?.location).toBe("dock");
+    expect(state.maximizedId).toBeNull();
+  });
+
+  it("does not pull a panel back after it is filed under another worktree", async () => {
+    await restore("wt-saved");
+    usePanelStore.getState().moveTerminalToWorktree("plugin-1", "wt-other");
+
+    registerPanelKind(pluginConfig());
+    restorePendingDockPanels();
+
+    expect(usePanelStore.getState().panelsById["plugin-1"]?.location).toBe("grid");
+    expect(usePanelStore.getState().panelsById["plugin-1"]?.worktreeId).toBe("wt-other");
+  });
+
   it("does not move a panel the user placed after restore", async () => {
     await restore("wt-saved");
     usePanelStore.getState().moveTerminalToPosition("plugin-1", 0, "grid", "wt-active");

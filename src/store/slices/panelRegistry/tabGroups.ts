@@ -500,6 +500,8 @@ export const createTabGroupActions = (
         newById[pid] = {
           ...t,
           worktreeId,
+          // Explicit placement settles it; see `moveTerminalToWorktree` (#13907).
+          pendingDockWorktreeId: undefined,
           location: targetLocation,
           isVisible: targetLocation === "grid",
           runtimeStatus: deriveRuntimeStatus(

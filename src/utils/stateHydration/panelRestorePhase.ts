@@ -783,7 +783,16 @@ export async function restorePanelsPhase(
           if (saved.worktreeId !== undefined) {
             movedRootsById.set(saved.id, { oldRoot: saved.worktreeId, newRoot: patch.worktreeId });
           }
-          return { ...saved, ...patch };
+          return {
+            ...saved,
+            ...patch,
+            // A pending dock restore names the worktree the panel was docked
+            // with, so it follows the same move.
+            ...(saved.worktreeId !== undefined &&
+              saved.pendingDockWorktreeId === saved.worktreeId && {
+                pendingDockWorktreeId: patch.worktreeId,
+              }),
+          };
         })
       : savedPanels;
 

@@ -98,9 +98,11 @@ export function reconcileDockMembership(): void {
  * `scope: "project"` panel). A kind that registers non-dockable is gone for
  * good, so the request is dropped and the grid placement stands.
  *
- * Scans `panelsById` for the same reason `reconcileDockMembership` does, and
- * restores the same focus tuple: this is a background reconciliation, not a
- * user gesture.
+ * Scans `panelsById` for the same reason `reconcileDockMembership` does. Each
+ * panel goes through `placeTerminal`, the store's non-navigating placement: it
+ * detaches the panel from any group, repairs only the focus/maximize pointers
+ * aimed at it, and focuses or opens nothing — this is a background
+ * reconciliation, not a user gesture.
  */
 export function restorePendingDockPanels(): void {
   const before = usePanelStore.getState();
@@ -115,15 +117,6 @@ export function restorePendingDockPanels(): void {
     (panelKindIsDockable(kind) ? pending : dropped).push(id);
   }
   if (pending.length === 0 && dropped.length === 0) return;
-
-  const {
-    focusedId,
-    previousFocusedId,
-    activeDockTerminalId,
-    maximizedId,
-    maximizeTarget,
-    preMaximizeLayout,
-  } = before;
 
   usePanelStore.setState((state) => {
     const panelsById = { ...state.panelsById };
@@ -149,30 +142,6 @@ export function restorePendingDockPanels(): void {
   });
 
   for (const id of pending) {
-    if (usePanelStore.getState().panelsById[id]?.location === "grid") {
-      usePanelStore.getState().moveTerminalToDock(id, { moveGroup: false });
-    }
+    usePanelStore.getState().placeTerminal(id, "dock");
   }
-
-  const after = usePanelStore.getState();
-  const restore: Partial<
-    Pick<
-      PanelGridState,
-      | "focusedId"
-      | "previousFocusedId"
-      | "activeDockTerminalId"
-      | "maximizedId"
-      | "maximizeTarget"
-      | "preMaximizeLayout"
-    >
-  > = {};
-  if (after.focusedId !== focusedId) restore.focusedId = focusedId;
-  if (after.previousFocusedId !== previousFocusedId) restore.previousFocusedId = previousFocusedId;
-  if (after.maximizedId !== maximizedId) restore.maximizedId = maximizedId;
-  if (after.maximizeTarget !== maximizeTarget) restore.maximizeTarget = maximizeTarget;
-  if (after.preMaximizeLayout !== preMaximizeLayout) restore.preMaximizeLayout = preMaximizeLayout;
-  if (after.activeDockTerminalId !== activeDockTerminalId) {
-    restore.activeDockTerminalId = activeDockTerminalId;
-  }
-  if (Object.keys(restore).length > 0) usePanelStore.setState(restore);
 }

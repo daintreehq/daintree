@@ -1245,6 +1245,9 @@ export const createRestartActions = (
         [id]: {
           ...t,
           worktreeId,
+          // Filing the panel under a worktree is an explicit placement; a pending
+          // boot-time dock restore must not pull it back (#13907).
+          pendingDockWorktreeId: undefined,
           location: newLocation,
           isVisible: newLocation === "grid" ? true : false,
           runtimeStatus: deriveRuntimeStatus(
