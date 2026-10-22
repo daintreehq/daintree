@@ -439,6 +439,35 @@ describe("createMockHost", () => {
     ]);
   });
 
+  it("records setWorktreeReviewChecks calls against the seeded worktrees (#13806)", async () => {
+    const host = createMockHost({ worktrees: [sampleSnapshot, otherSnapshot] });
+    await host.setWorktreeReviewChecks("wt-1", [
+      { label: " 2 broken links ", severity: "warning", detail: "in docs" },
+    ]);
+    await host.setWorktreeReviewChecks("wt-2", [{ label: "ok", severity: "info" }]);
+    await host.setWorktreeReviewChecks("wt-2", null);
+    expect(host.setWorktreeReviewChecksCalls).toEqual([
+      {
+        worktreeId: "wt-1",
+        checks: [{ label: "2 broken links", severity: "warning", detail: "in docs" }],
+      },
+      { worktreeId: "wt-2", checks: [{ label: "ok", severity: "info" }] },
+      { worktreeId: "wt-2", checks: null },
+    ]);
+    expect([...host.worktreeReviewChecks.keys()]).toEqual(["wt-1"]);
+  });
+
+  it("setWorktreeReviewChecks rejects what the real host rejects, recording nothing (#13806)", async () => {
+    const host = createMockHost({ worktrees: [sampleSnapshot] });
+    await expect(
+      host.setWorktreeReviewChecks("wt-9", [{ label: "x", severity: "info" }])
+    ).rejects.toThrow(/"wt-9" is not a worktree this plugin can see/);
+    await expect(
+      host.setWorktreeReviewChecks("wt-1", [{ label: "x", severity: "blocker" } as never])
+    ).rejects.toThrow(/setWorktreeReviewChecks: checks\[0\]\.severity/);
+    expect(host.setWorktreeReviewChecksCalls).toEqual([]);
+  });
+
   it("setWorktreeCardStatus keys a status by the snapshot id, whichever id is passed (#13704)", async () => {
     const host = createMockHost({
       worktrees: [{ ...sampleSnapshot, id: "/tmp/repo", worktreeId: "wt-stable" }],

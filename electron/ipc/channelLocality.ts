@@ -1184,6 +1184,7 @@ export const EVENT_LOCALITY: Readonly<Record<string, ChannelLocality>> = {
   "plugin:hosted-views-changed": "host",
   "plugin:themes-changed": "shell",
   "plugin:worktree-card-statuses-changed": "host",
+  "plugin:worktree-review-checks-changed": "host",
   "resource:profile-changed": "host",
   "project-groups:update": "host",
   "run-history:update": "host",

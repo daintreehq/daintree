@@ -28,6 +28,7 @@ import { toRuntimePanelKindId } from "../config/panelKindRegistry.js";
 import { normalizePanelMenuItems } from "../utils/pluginPanelMenuItems.js";
 import { applyPluginContextEntry, validatePluginContextEntry } from "../utils/pluginContextKeys.js";
 import { validatePluginWorktreeCardStatus } from "../utils/pluginWorktreeCardStatus.js";
+import { validatePluginWorktreeReviewChecks } from "../utils/pluginWorktreeReviewChecks.js";
 import {
   PLUGIN_INVOKE_MAX_RESULT_BYTES,
   PLUGIN_SUBSCRIPTION_DEFAULT_DEBOUNCE_MS,
@@ -106,6 +107,7 @@ import type {
   PluginToolbarButtonRuntimeState,
   PluginContextValue,
   PluginWorktreeCardStatus,
+  PluginWorktreeReviewCheck,
   SettingDefinition,
   SettingsApi,
   StorageApi,
@@ -227,6 +229,15 @@ export interface SetContextRecord {
 }
 
 /**
+ * Captured `host.setWorktreeReviewChecks(worktreeId, checks)` calls, as the
+ * host stores them (`worktreeId` is the snapshot's `id`). `null` clears.
+ */
+export interface SetWorktreeReviewChecksRecord {
+  worktreeId: string;
+  checks: PluginWorktreeReviewCheck[] | null;
+}
+
+/**
  * Captured `host.setWorktreeCardStatus(worktreeId, status)` calls, as the host
  * stores them (`worktreeId` is the snapshot's `id`). `null` clears.
  */
@@ -322,6 +333,10 @@ export interface MockHostState {
   readonly setWorktreeCardStatusCalls: ReadonlyArray<SetWorktreeCardStatusRecord>;
   /** The card statuses this plugin shows right now, keyed by worktree `id`. */
   readonly worktreeCardStatuses: ReadonlyMap<string, PluginWorktreeCardStatus>;
+  /** Accepted `host.setWorktreeReviewChecks` calls, in order. */
+  readonly setWorktreeReviewChecksCalls: ReadonlyArray<SetWorktreeReviewChecksRecord>;
+  /** The readiness checks this plugin shows right now, keyed by worktree `id`. */
+  readonly worktreeReviewChecks: ReadonlyMap<string, readonly PluginWorktreeReviewCheck[]>;
   readonly setPanelMenuItemsCalls: ReadonlyArray<SetPanelMenuItemsRecord>;
   /**
    * Panel ids passed to `host.reloadPanel(panelId)`, in order (#12610). Only
@@ -1127,6 +1142,8 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
   const contextKeys = new Map<string, PluginContextValue>();
   const setWorktreeCardStatusCalls: SetWorktreeCardStatusRecord[] = [];
   const worktreeCardStatuses = new Map<string, PluginWorktreeCardStatus>();
+  const setWorktreeReviewChecksCalls: SetWorktreeReviewChecksRecord[] = [];
+  const worktreeReviewChecks = new Map<string, readonly PluginWorktreeReviewCheck[]>();
   const setPanelMenuItemsCalls: SetPanelMenuItemsRecord[] = [];
   const reloadPanelCalls: string[] = [];
   const restartWorkerCalls: WorkerRestartResult[] = [];
@@ -2306,6 +2323,34 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
       else worktreeCardStatuses.set(target.id, entry.status);
       setWorktreeCardStatusCalls.push({ worktreeId: target.id, status: entry.status });
     },
+    async setWorktreeReviewChecks(worktreeId, checks) {
+      const entry = validatePluginWorktreeReviewChecks(
+        worktreeId,
+        checks,
+        mockManifestId,
+        pluginId
+      );
+      if (!entry.ok) throw new Error(`setWorktreeReviewChecks: ${entry.error}`);
+      const result: PluginWorktreesResult = worktreesResult ?? {
+        status: "ok",
+        projectId: "test-project",
+        worktrees,
+      };
+      if (result.status !== "ok") {
+        throw new Error(`setWorktreeReviewChecks: worktrees are unavailable (${result.reason})`);
+      }
+      const target = result.worktrees.find(
+        (w) => w.id === entry.worktreeId || w.worktreeId === entry.worktreeId
+      );
+      if (!target) {
+        throw new Error(
+          `setWorktreeReviewChecks: "${entry.worktreeId}" is not a worktree this plugin can see`
+        );
+      }
+      if (entry.checks === null) worktreeReviewChecks.delete(target.id);
+      else worktreeReviewChecks.set(target.id, entry.checks);
+      setWorktreeReviewChecksCalls.push({ worktreeId: target.id, checks: entry.checks });
+    },
     setPanelMenuItems(panelId, items) {
       // Vetted by the host's own normalizer, so a list the real host refuses
       // rejects here too.
@@ -2974,6 +3019,8 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
     contextKeys,
     setWorktreeCardStatusCalls,
     worktreeCardStatuses,
+    setWorktreeReviewChecksCalls,
+    worktreeReviewChecks,
     setPanelMenuItemsCalls,
     reloadPanelCalls,
     restartWorkerCalls,

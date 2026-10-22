@@ -1897,6 +1897,23 @@ interface PluginWorktreeCardStatus {
      */
     command?: string;
 }
+/**
+ * One advisory readiness check a plugin shows in a worktree's Review Hub via
+ * {@link PluginHostApi.setWorktreeReviewChecks} (#13806). Never a blocker: it
+ * cannot change whether commit or push is ready.
+ */
+interface PluginWorktreeReviewCheck {
+    /** One line naming what the plugin found. */
+    label: string;
+    severity: "warning" | "info";
+    detail?: string;
+    /**
+     * One of this plugin's own actions, written `"{manifestId}.{id}"`, offered
+     * as a button and dispatched with `{ worktreeId }`. Until the action is
+     * registered the check stays plain text.
+     */
+    command?: string;
+}
 /** Value a plugin publishes to `when` clauses via {@link PluginHostApi.setContext}. */
 type PluginContextValue = boolean | string;
 declare const BUILT_IN_PLUGIN_CAPABILITIES: readonly ["fs:project-read", "fs:project-write", "fs:user-data-read", "fs:user-data-write", "network:fetch", "agent:invoke", "agent:read", "agent:register", "agent:input", "terminal:read", "git:read", "git:write", "clipboard:read", "clipboard:write", "shell:exec", "socket:connect", "mcp:expose", "project:dispatch", "panel:focus-read", "notification:os"];
@@ -4893,6 +4910,30 @@ interface PluginHostApi extends PluginActivationApi {
      */
     setWorktreeCardStatus(worktreeId: string, status: PluginWorktreeCardStatus | null): Promise<void>;
     /**
+     * Publish (or clear) this plugin's advisory readiness checks for one
+     * worktree. They show attributed to the plugin in the Review Hub's readiness
+     * rail and in the `worktree.reviewReadiness` tool's `pluginChecks`, and never
+     * change whether commit or push is ready. Each call replaces the plugin's
+     * whole list for that worktree; pass `null` or `[]` to clear it.
+     *
+     * `worktreeId` is a worktree this host can see right now, as for
+     * {@link setWorktreeCardStatus}. The call rejects when it is not one of
+     * them, when the host has no worktree answer yet, when a check is malformed
+     * (empty or multi-line label longer than
+     * {@link PLUGIN_WORKTREE_REVIEW_CHECK_LABEL_MAX}, a severity other than
+     * `"warning"` or `"info"`, detail longer than
+     * {@link PLUGIN_WORKTREE_REVIEW_CHECK_DETAIL_MAX}), or when the list holds
+     * more than {@link PLUGIN_WORKTREE_REVIEW_CHECKS_MAX} checks. A `command`
+     * follows the rules of {@link PluginWorktreeCardStatus.command}.
+     *
+     * Checks are not persisted. They are cleared when the worktree is removed,
+     * when its project closes, and when the plugin unloads or its worker is
+     * replaced, so republish them after a restart. Like {@link setPanelBadge}
+     * this is NOT revoke-guarded and becomes a silent no-op once the plugin is
+     * unloaded.
+     */
+    setWorktreeReviewChecks(worktreeId: string, checks: readonly PluginWorktreeReviewCheck[] | null): Promise<void>;
+    /**
      * Publish the contextual actions the ⋯ and right-click menus of one of this
      * plugin's own panels offer right now — the backend-side twin of the view's
      * `PanelViewProps.setMenuItems`, and the only way a PTY-backed panel (which
@@ -5369,6 +5410,14 @@ interface SetContextRecord {
     value: PluginContextValue | null;
 }
 /**
+ * Captured `host.setWorktreeReviewChecks(worktreeId, checks)` calls, as the
+ * host stores them (`worktreeId` is the snapshot's `id`). `null` clears.
+ */
+interface SetWorktreeReviewChecksRecord {
+    worktreeId: string;
+    checks: PluginWorktreeReviewCheck[] | null;
+}
+/**
  * Captured `host.setWorktreeCardStatus(worktreeId, status)` calls, as the host
  * stores them (`worktreeId` is the snapshot's `id`). `null` clears.
  */
@@ -5455,6 +5504,10 @@ interface MockHostState {
     readonly setWorktreeCardStatusCalls: ReadonlyArray<SetWorktreeCardStatusRecord>;
     /** The card statuses this plugin shows right now, keyed by worktree `id`. */
     readonly worktreeCardStatuses: ReadonlyMap<string, PluginWorktreeCardStatus>;
+    /** Accepted `host.setWorktreeReviewChecks` calls, in order. */
+    readonly setWorktreeReviewChecksCalls: ReadonlyArray<SetWorktreeReviewChecksRecord>;
+    /** The readiness checks this plugin shows right now, keyed by worktree `id`. */
+    readonly worktreeReviewChecks: ReadonlyMap<string, readonly PluginWorktreeReviewCheck[]>;
     readonly setPanelMenuItemsCalls: ReadonlyArray<SetPanelMenuItemsRecord>;
     /**
      * Panel ids passed to `host.reloadPanel(panelId)`, in order (#12610). Only

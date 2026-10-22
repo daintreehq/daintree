@@ -2524,6 +2524,18 @@ export interface ElectronAPI extends GeneratedElectronAPI {
       }) => void
     ): () => void;
     /**
+     * Subscribe to plugin readiness checks (#13806). The callback fires with
+     * one plugin's COMPLETE map for one project (worktreeId → checks); an empty
+     * map clears that plugin's checks there. Returns a cleanup.
+     */
+    onWorktreeReviewChecksChanged(
+      callback: (payload: {
+        pluginId: string;
+        projectId: string;
+        checks: Record<string, import("../plugin.js").PluginWorktreeReviewCheck[]>;
+      }) => void
+    ): () => void;
+    /**
      * Subscribe to plugin runtime panel menus (#13213). The callback fires with
      * one plugin's COMPLETE current map (`panelId → items`); an empty map clears
      * that plugin's lists, as on unload. Returns a cleanup.

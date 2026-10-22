@@ -563,6 +563,33 @@ export const PLUGIN_WORKTREE_CARD_STATUS_LABEL_MAX = 32;
 /** Max length of a {@link PluginWorktreeCardStatus} `tooltip`, enforced host-side. */
 export const PLUGIN_WORKTREE_CARD_STATUS_TOOLTIP_MAX = 512;
 
+/**
+ * One advisory readiness check a plugin shows in a worktree's Review Hub via
+ * {@link PluginHostApi.setWorktreeReviewChecks} (#13806). Never a blocker: it
+ * cannot change whether commit or push is ready.
+ */
+export interface PluginWorktreeReviewCheck {
+  /** One line naming what the plugin found. */
+  label: string;
+  severity: "warning" | "info";
+  detail?: string;
+  /**
+   * One of this plugin's own actions, written `"{manifestId}.{id}"`, offered
+   * as a button and dispatched with `{ worktreeId }`. Until the action is
+   * registered the check stays plain text.
+   */
+  command?: string;
+}
+
+/** Max length of a {@link PluginWorktreeReviewCheck} `label`, enforced host-side. */
+export const PLUGIN_WORKTREE_REVIEW_CHECK_LABEL_MAX = 120;
+
+/** Max length of a {@link PluginWorktreeReviewCheck} `detail`, enforced host-side. */
+export const PLUGIN_WORKTREE_REVIEW_CHECK_DETAIL_MAX = 2048;
+
+/** Most checks one plugin may hold on one worktree, enforced host-side. */
+export const PLUGIN_WORKTREE_REVIEW_CHECKS_MAX = 10;
+
 /** Value a plugin publishes to `when` clauses via {@link PluginHostApi.setContext}. */
 export type PluginContextValue = boolean | string;
 
@@ -6131,6 +6158,33 @@ export interface PluginHostApi extends PluginActivationApi {
    * no-op once the plugin is unloaded.
    */
   setWorktreeCardStatus(worktreeId: string, status: PluginWorktreeCardStatus | null): Promise<void>;
+  /**
+   * Publish (or clear) this plugin's advisory readiness checks for one
+   * worktree. They show attributed to the plugin in the Review Hub's readiness
+   * rail and in the `worktree.reviewReadiness` tool's `pluginChecks`, and never
+   * change whether commit or push is ready. Each call replaces the plugin's
+   * whole list for that worktree; pass `null` or `[]` to clear it.
+   *
+   * `worktreeId` is a worktree this host can see right now, as for
+   * {@link setWorktreeCardStatus}. The call rejects when it is not one of
+   * them, when the host has no worktree answer yet, when a check is malformed
+   * (empty or multi-line label longer than
+   * {@link PLUGIN_WORKTREE_REVIEW_CHECK_LABEL_MAX}, a severity other than
+   * `"warning"` or `"info"`, detail longer than
+   * {@link PLUGIN_WORKTREE_REVIEW_CHECK_DETAIL_MAX}), or when the list holds
+   * more than {@link PLUGIN_WORKTREE_REVIEW_CHECKS_MAX} checks. A `command`
+   * follows the rules of {@link PluginWorktreeCardStatus.command}.
+   *
+   * Checks are not persisted. They are cleared when the worktree is removed,
+   * when its project closes, and when the plugin unloads or its worker is
+   * replaced, so republish them after a restart. Like {@link setPanelBadge}
+   * this is NOT revoke-guarded and becomes a silent no-op once the plugin is
+   * unloaded.
+   */
+  setWorktreeReviewChecks(
+    worktreeId: string,
+    checks: readonly PluginWorktreeReviewCheck[] | null
+  ): Promise<void>;
   /**
    * Publish the contextual actions the ⋯ and right-click menus of one of this
    * plugin's own panels offer right now — the backend-side twin of the view's

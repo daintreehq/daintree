@@ -72,6 +72,7 @@ import { PR_CHECKS_OPEN_ATTR } from "./PrChecksPopover";
 import { CommitPanel } from "./CommitPanel";
 import { ConflictPanel } from "./ConflictPanel";
 import { ReadinessRail } from "./ReadinessRail";
+import { PluginReadinessChecks, useWorktreeReviewPluginChecks } from "./PluginReadinessChecks";
 import {
   deriveReviewReadiness,
   type ReviewReadinessCta,
@@ -853,6 +854,8 @@ export function ReviewHubContent({
       ? selectForgeProviderHealth(forgeHealthProviderId)
       : selectNoProviderHealth
   );
+
+  const pluginChecks = useWorktreeReviewPluginChecks(worktreeId ?? "");
 
   const readinessSummary = useMemo(
     () =>
@@ -2081,6 +2084,9 @@ export function ReviewHubContent({
             renders only; `readinessSummary` itself keeps the blocker so
             readiness and push gating are unchanged. */}
         <ReadinessRail summary={railSummary} onCta={handleReadinessCta} />
+        {/* Advisory plugin checks (#13806): outside the rail and never fed to
+            `deriveReviewReadiness`, so they cannot change commit or push. */}
+        {worktreeId && <PluginReadinessChecks worktreeId={worktreeId} plugins={pluginChecks} />}
 
         {/* Inline error banners */}
         {actionError && (

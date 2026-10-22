@@ -88,6 +88,7 @@ import type {
   PluginLaunchEntryTarget,
   PluginContextValue,
   PluginWorktreeCardStatus,
+  PluginWorktreeReviewCheck,
   PluginRuntimeStatus,
   PluginWorkerStatus,
   PluginWorkerState,
@@ -840,6 +841,18 @@ export class PluginService {
   /** Bumped per plugin on each clear of its statuses; see `worktreeCardStatusGeneration`. */
   private worktreeCardStatusGenerations = new Map<string, number>();
   /**
+   * Readiness checks set via `host.setWorktreeReviewChecks`, keyed `pluginId →
+   * projectId → worktreeId → checks` (#13806). Scoped, replayed and cleaned up
+   * exactly like {@link pluginWorktreeCardStatuses}, and retired by the same
+   * removal and close records.
+   */
+  private pluginWorktreeReviewChecks = new Map<
+    string,
+    Map<string, Map<string, readonly PluginWorktreeReviewCheck[]>>
+  >();
+  /** Bumped per plugin on each clear of its checks; see `worktreeReviewChecksGeneration`. */
+  private worktreeReviewChecksGenerations = new Map<string, number>();
+  /**
    * When each worktree was removed (`w:{id}`) or project closed (`p:{id}`), so
    * a setter whose worktree read was already in flight — or answered from the
    * workspace client's short read coalescing — cannot put a status back.
@@ -1025,6 +1038,14 @@ export class PluginService {
         if (statuses.size === 0) byProject.delete(projectId);
         if (byProject.size === 0) this.pluginWorktreeCardStatuses.delete(pluginId);
         this.emitWorktreeCardStatuses(pluginId, projectId);
+      }
+    }
+    for (const [pluginId, byProject] of [...this.pluginWorktreeReviewChecks]) {
+      for (const [projectId, checks] of [...byProject]) {
+        if (!checks.delete(payload.worktreeId)) continue;
+        if (checks.size === 0) byProject.delete(projectId);
+        if (byProject.size === 0) this.pluginWorktreeReviewChecks.delete(pluginId);
+        this.emitWorktreeReviewChecks(pluginId, projectId);
       }
     }
   };
@@ -3426,6 +3447,7 @@ export class PluginService {
         if (this.pluginToolbarStates.delete(pluginId)) this.emitToolbarStates(pluginId);
         this.resetPluginContextKeys(pluginId);
         this.clearPluginWorktreeCardStatuses(pluginId);
+        this.clearPluginWorktreeReviewChecks(pluginId);
       },
       // A protocol violation terminates the worker for good (#12276). Provenance
       // is already recorded by `onActivationResult`; this releases the runtime
@@ -4189,6 +4211,11 @@ export class PluginService {
         this.emitWorktreeCardStatuses(pluginId, projectId),
       worktreeCardStatusGeneration: (pluginId) =>
         this.worktreeCardStatusGenerations.get(pluginId) ?? 0,
+      pluginWorktreeReviewChecks: this.pluginWorktreeReviewChecks,
+      emitWorktreeReviewChecks: (pluginId, projectId) =>
+        this.emitWorktreeReviewChecks(pluginId, projectId),
+      worktreeReviewChecksGeneration: (pluginId) =>
+        this.worktreeReviewChecksGenerations.get(pluginId) ?? 0,
       worktreeCardTargetRevision: () => this.worktreeCardTargetRevision,
       isWorktreeCardTargetRetired: (projectId, worktreeId, since) =>
         this.isWorktreeCardTargetRetired(projectId, worktreeId, since),
@@ -5967,6 +5994,44 @@ export class PluginService {
     return Object.fromEntries(statuses);
   }
 
+  /**
+   * Publish one plugin's complete readiness checks for one project, to that
+   * project's views only. An empty map clears them.
+   */
+  private emitWorktreeReviewChecks(pluginId: string, projectId: string): void {
+    if (this.disposed) return;
+    broadcastToProjectRenderers(projectId, CHANNELS.EVENTS_PUSH, {
+      name: "plugin:worktree-review-checks-changed" as const,
+      payload: {
+        pluginId,
+        projectId,
+        checks: this.serializePluginWorktreeReviewChecks(pluginId, projectId),
+      },
+    });
+  }
+
+  /** One plugin's readiness checks in one project (`worktreeId → checks`), empty when none. */
+  private serializePluginWorktreeReviewChecks(
+    pluginId: string,
+    projectId: string
+  ): Record<string, PluginWorktreeReviewCheck[]> {
+    const checks = this.pluginWorktreeReviewChecks.get(pluginId)?.get(projectId);
+    if (!checks || checks.size === 0) return {};
+    return Object.fromEntries([...checks].map(([id, list]) => [id, [...list]]));
+  }
+
+  /** Drop a plugin's readiness checks everywhere, clearing each project's views. */
+  private clearPluginWorktreeReviewChecks(pluginId: string): void {
+    this.worktreeReviewChecksGenerations.set(
+      pluginId,
+      (this.worktreeReviewChecksGenerations.get(pluginId) ?? 0) + 1
+    );
+    const byProject = this.pluginWorktreeReviewChecks.get(pluginId);
+    if (!byProject) return;
+    this.pluginWorktreeReviewChecks.delete(pluginId);
+    for (const projectId of byProject.keys()) this.emitWorktreeReviewChecks(pluginId, projectId);
+  }
+
   private retireWorktreeCardTarget(key: string): void {
     const now = Date.now();
     for (const [retired, { at }] of this.retiredWorktreeCardTargets) {
@@ -6443,6 +6508,11 @@ export class PluginService {
       if (!byProject.delete(projectId)) continue;
       if (byProject.size === 0) this.pluginWorktreeCardStatuses.delete(pluginId);
       this.emitWorktreeCardStatuses(pluginId, projectId);
+    }
+    for (const [pluginId, byProject] of [...this.pluginWorktreeReviewChecks]) {
+      if (!byProject.delete(projectId)) continue;
+      if (byProject.size === 0) this.pluginWorktreeReviewChecks.delete(pluginId);
+      this.emitWorktreeReviewChecks(pluginId, projectId);
     }
     if (!this.projectPluginController) return;
     await this.projectPluginController.onProjectClosed(projectId);
@@ -7194,6 +7264,10 @@ export class PluginService {
 
     runUnloadStep(pluginId, "clearWorktreeCardStatuses", () =>
       this.clearPluginWorktreeCardStatuses(pluginId)
+    );
+
+    runUnloadStep(pluginId, "clearWorktreeReviewChecks", () =>
+      this.clearPluginWorktreeReviewChecks(pluginId)
     );
 
     runUnloadStep(pluginId, "clearPanelMenus", () => this.clearPluginPanelMenus(pluginId));
@@ -8440,6 +8514,30 @@ export class PluginService {
         };
         // Withheld from a local view bound to a remote host, like the context
         // keys: this machine's statuses are not about the cards it shows.
+        if (
+          projectId === undefined &&
+          isWithheldFromView(webContents.id, CHANNELS.EVENTS_PUSH, [envelope])
+        ) {
+          continue;
+        }
+        try {
+          webContents.send(CHANNELS.EVENTS_PUSH, envelope);
+        } catch {
+          // Silently ignore send failures during window initialization/disposal.
+        }
+      }
+    }
+    for (const [pluginId, byProject] of this.pluginWorktreeReviewChecks) {
+      for (const checksProjectId of byProject.keys()) {
+        if (!inView(checksProjectId)) continue;
+        const envelope = {
+          name: "plugin:worktree-review-checks-changed",
+          payload: {
+            pluginId,
+            projectId: checksProjectId,
+            checks: this.serializePluginWorktreeReviewChecks(pluginId, checksProjectId),
+          },
+        };
         if (
           projectId === undefined &&
           isWithheldFromView(webContents.id, CHANNELS.EVENTS_PUSH, [envelope])

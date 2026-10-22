@@ -10,6 +10,11 @@ import { actionService } from "@/services/ActionService";
 import { getCurrentViewStore, getCurrentViewStoreOrNull } from "@/store/createWorktreeStore";
 import { copiesWorkspaceRoot } from "./workspaceRootCopyTarget";
 import { useForgeProviderHealthStore } from "@/store/forgeProviderHealthStore";
+import {
+  usePluginWorktreeReviewChecksStore,
+  worktreeReviewChecksFor,
+} from "@/store/pluginWorktreeReviewChecksStore";
+import { pluginManifestIdFromInstanceKey } from "@shared/types/plugin";
 // Static, unlike the panel stores below: both are leaf modules (a lease map and
 // a zustand store) that pull in no client graph, and they are the same two
 // guards `panelStore.addPanel` reads before it decides whether a spawn may
@@ -122,6 +127,19 @@ const reviewReadinessItemSchema = z.object({
     .optional(),
 });
 
+/**
+ * A check a plugin published for the worktree (#13806). Advisory and
+ * attributed: it is a separate list so the closed `id` set of the host's own
+ * items stays the whole of what can block, and nothing here moves `level`,
+ * `commitReady`, `pushReady` or `prReady`.
+ */
+const reviewReadinessPluginCheckSchema = z.object({
+  pluginId: z.string(),
+  label: z.string(),
+  severity: z.enum(["warning", "info"]),
+  detail: z.string().optional(),
+});
+
 const reviewReadinessResultSchema = z.object({
   worktreeId: z.string(),
   worktreePath: z.string(),
@@ -135,6 +153,7 @@ const reviewReadinessResultSchema = z.object({
   warnings: z.array(reviewReadinessItemSchema),
   infos: z.array(reviewReadinessItemSchema),
   nextActions: z.array(reviewReadinessItemSchema),
+  pluginChecks: z.array(reviewReadinessPluginCheckSchema),
   counts: z.object({
     staged: z.number(),
     unstaged: z.number(),
@@ -1135,6 +1154,27 @@ export function registerWorktreeContextActions(
         });
 
         const target = { worktreeId: targetWorktreeId, worktreePath: worktree.path };
+        // Subscribes on first use; the preload replays what main already holds.
+        usePluginWorktreeReviewChecksStore.getState().init();
+        // Lazy, like the other stores this module reaches for at run time.
+        const { useProjectStore } = await import("@/store/projectStore");
+        const projectId = useProjectStore.getState().currentProject?.id ?? null;
+        const pluginChecks = worktreeReviewChecksFor(
+          projectId
+            ? usePluginWorktreeReviewChecksStore.getState().checksByProject[projectId]
+            : undefined,
+          targetWorktreeId
+        ).flatMap(({ pluginId, checks }) =>
+          checks.map((check) => ({
+            // The manifest id, never the instance key: a project plugin's key
+            // carries a machine-local project id (#12211). A check's command
+            // is left out too; this query runs nothing.
+            pluginId: pluginManifestIdFromInstanceKey(pluginId),
+            label: check.label,
+            severity: check.severity,
+            ...(check.detail !== undefined ? { detail: check.detail } : {}),
+          }))
+        );
         return {
           worktreeId: targetWorktreeId,
           worktreePath: worktree.path,
@@ -1148,6 +1188,7 @@ export function registerWorktreeContextActions(
           warnings: summary.warnings.map((i) => toReadinessResultItem(i, target)),
           infos: summary.infos.map((i) => toReadinessResultItem(i, target)),
           nextActions: summary.nextActions.map((i) => toReadinessResultItem(i, target)),
+          pluginChecks,
           counts: {
             staged: status.staged.length,
             unstaged: status.unstaged.length,

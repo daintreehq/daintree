@@ -798,7 +798,11 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // external ceiling above pays; it carries no unscoped twin to remove.
   // 129_800 → 129_830 for #13742, measured at 129_814 B: the `ssh` target a
   // ready resource status may report, in `worktree.resource.status`'s output.
-  const MAX_COHORT_PAYLOAD_BYTES = 129_830;
+  // 129_830 → 130_130 for #13806, measured at 130_111 B: the `pluginChecks`
+  // list in `worktree.reviewReadiness`'s output, a separate attributed array
+  // so the closed item id set stays closed. Output only, so the external
+  // ceiling does not move.
+  const MAX_COHORT_PAYLOAD_BYTES = 130_130;
 
   const wireBytes = (t: WireTool) => t.descriptionBytes + t.paramsBytes + t.outputBytes;
 

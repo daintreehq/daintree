@@ -147,6 +147,9 @@ function makeHarness(): Harness {
     pluginWorktreeCardStatuses: new Map(),
     emitWorktreeCardStatuses: () => {},
     worktreeCardStatusGeneration: () => 0,
+    pluginWorktreeReviewChecks: new Map(),
+    emitWorktreeReviewChecks: () => {},
+    worktreeReviewChecksGeneration: () => 0,
     worktreeCardTargetRevision: () => 0,
     isWorktreeCardTargetRetired: () => false,
     pluginPanelMenus: new Map(),
@@ -2263,5 +2266,114 @@ describe("createHost setWorktreeCardStatus", () => {
 
     expect(emitted).toHaveBeenCalledWith(PLUGIN_ID, "project-focus");
     expect(h.deps.pluginWorktreeCardStatuses.get(PLUGIN_ID)?.has("project-focus")).toBe(true);
+  });
+});
+
+describe("createHost setWorktreeReviewChecks", () => {
+  function withEmitter(h: Harness): ReturnType<typeof vi.fn> {
+    const emitted = vi.fn();
+    h.deps.pluginWorktreeReviewChecks = new Map();
+    h.deps.emitWorktreeReviewChecks = emitted;
+    h.deps.worktreeReviewChecksGeneration = () => 0;
+    h.deps.worktreeCardTargetRevision = () => 0;
+    h.deps.isWorktreeCardTargetRetired = () => false;
+    return emitted;
+  }
+  const stored = (h: Harness) =>
+    h.deps.pluginWorktreeReviewChecks.get(PLUGIN_ID)?.get(PROJECT_A)?.get("wt-a");
+
+  it("stores a plugin's checks on a visible worktree and publishes that project", async () => {
+    const h = makeHarness();
+    const emitted = withEmitter(h);
+    h.projectFetch.mockResolvedValue(okFetch([worktree({ id: "wt-a" })]));
+    const { host } = createHost(h.deps, PLUGIN_ID, BOUND);
+
+    await host.setWorktreeReviewChecks("wt-a", [{ label: "3 broken links", severity: "warning" }]);
+
+    expect(stored(h)).toEqual([{ label: "3 broken links", severity: "warning" }]);
+    expect(emitted).toHaveBeenCalledWith(PLUGIN_ID, PROJECT_A);
+  });
+
+  it("replaces the whole list on each call, and skips an identical one", async () => {
+    const h = makeHarness();
+    const emitted = withEmitter(h);
+    h.projectFetch.mockResolvedValue(okFetch([worktree({ id: "wt-a" })]));
+    const { host } = createHost(h.deps, PLUGIN_ID, BOUND);
+
+    await host.setWorktreeReviewChecks("wt-a", [
+      { label: "one", severity: "info" },
+      { label: "two", severity: "info" },
+    ]);
+    await host.setWorktreeReviewChecks("wt-a", [{ label: "only", severity: "info" }]);
+    expect(stored(h)).toEqual([{ label: "only", severity: "info" }]);
+    expect(emitted).toHaveBeenCalledTimes(2);
+
+    await host.setWorktreeReviewChecks("wt-a", [{ label: "only", severity: "info" }]);
+    expect(emitted).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([null, []])("clears with %j and prunes the empty maps", async (value) => {
+    const h = makeHarness();
+    const emitted = withEmitter(h);
+    h.projectFetch.mockResolvedValue(okFetch([worktree({ id: "wt-a" })]));
+    const { host } = createHost(h.deps, PLUGIN_ID, BOUND);
+
+    await host.setWorktreeReviewChecks("wt-a", [{ label: "x", severity: "info" }]);
+    await host.setWorktreeReviewChecks("wt-a", value);
+
+    expect(h.deps.pluginWorktreeReviewChecks.size).toBe(0);
+    expect(emitted).toHaveBeenCalledTimes(2);
+  });
+
+  it("rejects (not throws) a malformed list, and a worktree the plugin cannot see", async () => {
+    const h = makeHarness();
+    const emitted = withEmitter(h);
+    h.projectFetch.mockResolvedValue(okFetch([worktree({ id: "wt-a" })]));
+    const { host } = createHost(h.deps, PLUGIN_ID, BOUND);
+
+    await expect(
+      host.setWorktreeReviewChecks("wt-a", [{ label: "x", severity: "blocker" } as never])
+    ).rejects.toThrow(/severity/);
+    await expect(
+      host.setWorktreeReviewChecks("wt-nope", [{ label: "x", severity: "info" }])
+    ).rejects.toThrow(/not a worktree this plugin can see/);
+    expect(h.deps.pluginWorktreeReviewChecks.size).toBe(0);
+    expect(emitted).not.toHaveBeenCalled();
+  });
+
+  it("does not store a check for a worktree removed while the call was queued", async () => {
+    const h = makeHarness();
+    const emitted = withEmitter(h);
+    h.deps.isWorktreeCardTargetRetired = () => true;
+    h.projectFetch.mockResolvedValue(okFetch([worktree({ id: "wt-a" })]));
+    const { host } = createHost(h.deps, PLUGIN_ID, BOUND);
+
+    await expect(
+      host.setWorktreeReviewChecks("wt-a", [{ label: "x", severity: "info" }])
+    ).rejects.toThrow(/was removed/);
+    expect(h.deps.pluginWorktreeReviewChecks.size).toBe(0);
+    expect(emitted).not.toHaveBeenCalled();
+  });
+
+  it("drops a call its worker generation made once that generation was cleared", async () => {
+    const h = makeHarness();
+    const emitted = withEmitter(h);
+    let generation = 0;
+    h.deps.worktreeReviewChecksGeneration = () => generation;
+    let release: (value: PluginWorktreeSnapshotFetchResult) => void = () => {};
+    h.projectFetch.mockReturnValueOnce(
+      new Promise<PluginWorktreeSnapshotFetchResult>((resolve) => {
+        release = resolve;
+      })
+    );
+    const { host } = createHost(h.deps, PLUGIN_ID, BOUND);
+
+    const stale = host.setWorktreeReviewChecks("wt-a", [{ label: "old", severity: "info" }]);
+    await flush();
+    generation = 1;
+    release(okFetch([worktree({ id: "wt-a" })]));
+    await expect(stale).resolves.toBeUndefined();
+    expect(h.deps.pluginWorktreeReviewChecks.size).toBe(0);
+    expect(emitted).not.toHaveBeenCalled();
   });
 });
