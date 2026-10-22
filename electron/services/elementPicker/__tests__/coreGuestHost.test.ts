@@ -13,8 +13,10 @@ import { SitePreviewBridge } from "../../SitePreviewBridge.js";
 import { __resetCdpLeasesForTests } from "../../cdp/WebContentsCdpService.js";
 import { LATE_PROBE_DELAY_MS } from "../coreGuest.js";
 import { BOOTSTRAP_GLOBAL, EXTRACTOR_REGISTRY_GLOBAL } from "../guestChannel.js";
+import { buildPickerReselectSource } from "../guestSources.js";
 import type { ElementPickerPushPayload } from "../types.js";
 import type { SitePreviewPushPayload } from "../../../../shared/types/ipc/sitePreview.js";
+import { ELEMENT_PICKER_PROTOCOL_VERSION } from "../../../../shared/elementPicker/protocol.js";
 import { buildCoreGuestAssets } from "./buildCoreGuestAssets.js";
 
 /**
@@ -285,7 +287,7 @@ describe("core Element Picker guest loading", () => {
     expect(scope[EXTRACTOR_REGISTRY_GLOBAL]).toBeUndefined();
   });
 
-  it("injects the dummy extractor only after a detection names its framework", async () => {
+  it("injects an extractor only after a detection names its framework", async () => {
     svelteNode();
     const h = makeHarness();
     await h.bind();
@@ -481,7 +483,7 @@ describe("core Element Picker guest loading", () => {
       name: BINDING_NAME,
       executionContextId: ISOLATED_CONTEXT_ID + 1,
       payload: JSON.stringify({
-        protocolVersion: 1,
+        protocolVersion: ELEMENT_PICKER_PROTOCOL_VERSION,
         sessionId: state.sessionId,
         documentEpoch: 0,
         sequence: 99,
@@ -642,5 +644,62 @@ describe("core Element Picker guest loading", () => {
       if (actFlag) Object.defineProperty(scope, "IS_REACT_ACT_ENVIRONMENT", actFlag);
       else delete scope.IS_REACT_ACT_ENVIRONMENT;
     }
+  });
+});
+
+describe("the shipped Svelte extractor", () => {
+  type Selection = {
+    cause: string;
+    observations: Array<{
+      elementId: string;
+      sourceCandidates: Array<{ kind: string; file: string }>;
+      frameworkEvidence: Array<{ kind: string; sameLocCount?: number; locIndex?: number }>;
+    }>;
+  };
+  const lastSelection = (h: ReturnType<typeof makeHarness>) =>
+    h.pickerEvents("selectionChanged").at(-1)?.event as Selection | undefined;
+
+  it("describes a stamped element in terms the host admits", async () => {
+    const node = svelteNode();
+    const h = makeHarness();
+    const state = await h.bind();
+    await settle();
+
+    (node as HTMLButtonElement).click();
+    await settle();
+
+    const [observation] = lastSelection(h)?.observations ?? [];
+    expect(observation?.sourceCandidates).toEqual([
+      expect.objectContaining({ kind: "template-location", file: "src/App.svelte" }),
+    ]);
+    expect(observation?.frameworkEvidence).toEqual([
+      expect.objectContaining({ kind: "svelte", sameLocCount: 1, locIndex: 0 }),
+    ]);
+    // Every envelope the guest sent was admitted by the host's own schema.
+    expect(h.bridge.getState(PROJECT_ID, state.sessionId)?.droppedMessages).toBe(0);
+  });
+
+  it("selects again through the host's reselect source, for its own install only", async () => {
+    svelteNode();
+    const h = makeHarness();
+    await h.bind();
+    await settle();
+    const installId = (scope[BOOTSTRAP_GLOBAL] as { installId: number }).installId;
+    const request = {
+      framework: "svelte" as const,
+      locator: { loc: { file: "src/App.svelte", line: 3, column: 2 }, index: 0 },
+    };
+    const evaluate = (source: string) => new Function(`return ${source}`)() as unknown;
+
+    expect(evaluate(buildPickerReselectSource(installId + 1, request))).toBe(false);
+    expect(evaluate(buildPickerReselectSource(installId, request))).toBe(true);
+    await settle();
+
+    expect(lastSelection(h)?.cause).toBe("reselect");
+    expect(lastSelection(h)?.observations).toHaveLength(1);
+  });
+
+  it("carries none of the shared schemas into the page", () => {
+    expect(assets["extractor:svelte"]).not.toMatch(/ZodError|\$ZodType/);
   });
 });

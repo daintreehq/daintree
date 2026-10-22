@@ -20,7 +20,7 @@ import { ElementPickerFrameworkSchema, PickerIdSchema } from "./source.js";
  * Bumped whenever a guest-visible shape changes, so a runtime injected by an
  * older app version cannot talk to a newer host.
  */
-export const ELEMENT_PICKER_PROTOCOL_VERSION = 1;
+export const ELEMENT_PICKER_PROTOCOL_VERSION = 2;
 
 /** Hard ceiling on one envelope, measured in UTF-8 bytes on the raw string before parsing. */
 export const MAX_ELEMENT_PICKER_MESSAGE_BYTES = 256 * 1024;
@@ -91,7 +91,19 @@ export const ElementPickerEventSchema = z.discriminatedUnion("type", [
   SelectionChangedSchema,
   z.strictObject({
     type: z.literal("runtimeIssue"),
-    code: z.enum(["not-dev-build", "overlay-blocked", "capacity", "extractor-failed", "internal"]),
+    /**
+     * `not-dev-build` and `metadata-unavailable` both mean a framework's page
+     * carries none of its dev metadata; the second is said where the page is
+     * visibly served by a dev server, which a production build is not.
+     */
+    code: z.enum([
+      "not-dev-build",
+      "metadata-unavailable",
+      "overlay-blocked",
+      "capacity",
+      "extractor-failed",
+      "internal",
+    ]),
     framework: ElementPickerFrameworkSchema.optional(),
     detail: z.string().max(512),
   }),

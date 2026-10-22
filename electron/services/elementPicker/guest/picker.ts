@@ -15,14 +15,23 @@ import type {
   HoverObservation,
   SelectionObservation,
 } from "../../../../shared/elementPicker/observation.js";
-import type { ElementPickerEvent } from "../../../../shared/elementPicker/protocol.js";
+import type {
+  ElementPickerEvent,
+  SelectionScope,
+} from "../../../../shared/elementPicker/protocol.js";
+import type { ElementPickerFramework } from "../../../../shared/elementPicker/source.js";
 import {
+  EXTRACTOR_NOTICES,
   MAX_BRIDGE_MESSAGE_CHARS,
   MAX_ELEMENT_REFS,
+  MAX_LOCATED_REPLY_CHARS,
+  MAX_LOCATE_REQUEST_CHARS,
   channelEvent,
   elementRefToken,
   type ExtractRequest,
   type ExtractionPhase,
+  type ExtractorNotice,
+  type LocateRequest,
 } from "../guestChannel.js";
 import { DetectionSet, detectAncestry, parentAcrossShadow } from "./detectors.js";
 import type { ExtractorContribution, PickerMode } from "./types.js";
@@ -37,6 +46,9 @@ const LIMITS = {
   frameworkEvidence: 8,
   components: 64,
   roots: 32,
+  componentName: 128,
+  /** `MAX_ELEMENT_PICKER_MESSAGE_BYTES`, less what the prelude's envelope adds around the event. */
+  eventBytes: 256 * 1024 - 1024,
 } as const;
 const MAX_RECT_PX = 2 ** 52;
 const FRAMEWORKS: ReadonlySet<string> = new Set([
@@ -50,6 +62,10 @@ const FRAMEWORKS: ReadonlySet<string> = new Set([
 ]);
 /** Replies kept per request; the first one whose id matches wins. */
 const MAX_REPLIES = 4;
+/** Reverse id lookups kept before dead ones are swept and the oldest let go. */
+const MAX_HELD_IDS = 2_000;
+/** What an over-ceiling selection keeps of each framework's ancestry. */
+const SHORTENED_ANCESTRY = 4;
 const PROBE_SIZE = 100;
 /** 16px line plus padding; the label is one line. */
 const LABEL_HEIGHT = 20;
@@ -96,12 +112,68 @@ export interface PickerHandle {
   clearHover(): void;
   /** Describe the selection again, for a host that just gave the page a new extractor. */
   refresh(): void;
+  /**
+   * Select again what the host had selected, typically after an edit replaced
+   * its nodes. False, with the selection unchanged, when it cannot be found.
+   */
+  reselect(request: unknown): boolean;
   dispose(): void;
   /** The overlay's closed shadow root, which nothing outside the picker can otherwise reach. */
   getOverlayRoot(): ShadowRoot | null;
 }
 
 type ObservationFields = Omit<HoverObservation, "phase">;
+type ComponentChain = ObservationFields["componentChain"];
+
+/**
+ * One selected element. A click keeps the node it landed on as well as the
+ * element its framework says the click stands for: the pick is asked again
+ * every time the selection is described, so the answer never outlives the
+ * page it was given for.
+ */
+interface SelectionEntry {
+  hit: Element;
+  target: Element;
+  picked: boolean;
+}
+
+type ScopeState =
+  | { kind: "element" }
+  | { kind: "component"; componentId: string; framework: string; rootsComplete: boolean };
+
+const ELEMENT_SCOPE: ScopeState = { kind: "element" };
+
+interface Extracted {
+  framework: string;
+  data: ExtractorContribution;
+  /** The element a pick stands for, when its framework named one other than the node asked about. */
+  target: Element | null;
+}
+
+/** Bootstrap-worded, so nothing the page writes reaches a notice the host shows. */
+const NOTICE_ISSUES: Record<
+  ExtractorNotice,
+  (framework: ElementPickerFramework) => Extract<ElementPickerEvent, { type: "runtimeIssue" }>
+> = {
+  "not-dev-build": (framework) => ({
+    type: "runtimeIssue",
+    code: "not-dev-build",
+    framework,
+    detail: `this page has no ${framework} dev metadata; it looks like a production build`,
+  }),
+  "metadata-unavailable": (framework) => ({
+    type: "runtimeIssue",
+    code: "metadata-unavailable",
+    framework,
+    detail: `the dev server is running but no element carries ${framework} dev metadata`,
+  }),
+  "ancestry-truncated": (framework) => ({
+    type: "runtimeIssue",
+    code: "capacity",
+    framework,
+    detail: `${framework} ancestry was shortened to the picker's limits`,
+  }),
+};
 
 function clamp(value: string, max: number): string {
   return value.length > max ? value.slice(0, max) : value;
@@ -110,6 +182,14 @@ function clamp(value: string, max: number): string {
 function finite(value: number): number {
   if (!Number.isFinite(value)) return 0;
   return Math.max(-MAX_RECT_PX, Math.min(MAX_RECT_PX, value));
+}
+
+/** UTF-8 bytes, as the host measures the envelope; code units undercount non-ASCII text. */
+function byteLength(value: unknown): number {
+  const text = JSON.stringify(value);
+  return typeof TextEncoder === "function"
+    ? new TextEncoder().encode(text).length
+    : text.length * 3;
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -146,7 +226,12 @@ export function createPicker(host: PickerHost): PickerHandle {
   let mode: PickerMode = host.mode;
   let disposed = false;
   let hovered: Element | null = null;
-  let selected: Element | null = null;
+  /** The nearest component the hovered element's framework named, for its label. */
+  let hoverName: string | null = null;
+  let selection: SelectionEntry[] = [];
+  let scope: ScopeState = ELEMENT_SCOPE;
+  /** The primary selected element's chain, as its framework described it, for widening. */
+  let selectedChain: { framework: string; chain: ComponentChain } | null = null;
   /** The latest pointer hit not yet resolved; `undefined` when nothing is pending. */
   let pendingHit: Element | null | undefined = undefined;
   let frame = 0;
@@ -159,9 +244,17 @@ export function createPicker(host: PickerHost): PickerHandle {
   let resizes: ResizeObserver | null = null;
   let tracked: Element[] = [];
   const ids = new WeakMap<Element, string>();
+  /**
+   * The other direction, for a host asking for an element by the id it was
+   * told. Weak, so a replaced node is not kept alive; a replaced node is not
+   * the same element and is not returned.
+   */
+  const held = new Map<string, WeakRef<Element>>();
   let nextId = 0;
   let nextRequest = 0;
   let awaitingRequest = 0;
+  /** The terminal event the pending request is answered by; any other is not its answer. */
+  let awaitingReply: "extracted" | "located" | null = null;
   let replies: string[] = [];
   /**
    * The elements the pending request's reply names, by the token it names
@@ -169,6 +262,10 @@ export function createPicker(host: PickerHost): PickerHandle {
    */
   let named = new Map<string, Element | null>();
   let namingEvents = 0;
+  /** A selection being described: page code that runs inside it cannot start another. */
+  let emitting = false;
+  /** Notices already turned into issues in this document, by framework and code. */
+  const noticed = new Set<string>();
   /** Frameworks this document already reported from a selection, so a walk is not re-sent on every click. */
   const reported = new Set<string>();
   const teardown: Array<() => void> = [];
@@ -179,6 +276,9 @@ export function createPicker(host: PickerHost): PickerHandle {
   const extractedEvent = channelEvent(host.channel, "extracted");
   const elementEvent = channelEvent(host.channel, "element");
   const disposeEvent = channelEvent(host.channel, "dispose");
+  const locateEvent = channelEvent(host.channel, "locate");
+  const locatedEvent = channelEvent(host.channel, "located");
+  const noticeEvent = channelEvent(host.channel, "notice");
 
   function listen(
     target: EventTarget,
@@ -197,8 +297,45 @@ export function createPicker(host: PickerHost): PickerHandle {
       nextId += 1;
       id = "el-" + nextId;
       ids.set(node, id);
+      hold(id, node);
+    } else if (!held.has(id)) {
+      // Reported again after its lookup was let go: the host may ask for it now.
+      hold(id, node);
     }
     return id;
+  }
+
+  function hold(id: string, node: Element): void {
+    if (typeof WeakRef !== "function") return;
+    if (held.size >= MAX_HELD_IDS) {
+      for (const [key, ref] of held) {
+        const node = ref.deref();
+        if (node === undefined || !node.isConnected) held.delete(key);
+      }
+      // A long-lived document is pointed at more live elements than the cap;
+      // past it the oldest ids go, and a host asking for one falls back to its
+      // framework's locator.
+      while (held.size >= MAX_HELD_IDS) {
+        const oldest = held.keys().next();
+        if (oldest.done === true) break;
+        held.delete(oldest.value);
+      }
+    }
+    held.set(id, new WeakRef(node));
+  }
+
+  /** An element this picker can select: in this document, connected, and not its own overlay. */
+  function usable(node: Element | null | undefined): node is Element {
+    return (
+      node instanceof Element &&
+      node.isConnected &&
+      node.ownerDocument === document &&
+      !isOverlay(node)
+    );
+  }
+
+  function primary(): Element | null {
+    return selection[0]?.target ?? null;
   }
 
   function describe(node: Element): string {
@@ -237,10 +374,21 @@ export function createPicker(host: PickerHost): PickerHandle {
   }
 
   /**
+   * The node a reply names by `token`, when this request's `element` events
+   * gave it one and only one. Rechecked: a page listener can move a node while
+   * the reply is dispatched. A string that is not one of this request's tokens
+   * names nothing: a main-world reader cannot know an element id.
+   */
+  function adopt(token: unknown, nodes: ReadonlyMap<string, Element | null>): Element | null {
+    if (typeof token !== "string") return null;
+    const node = nodes.get(token);
+    return usable(node) ? node : null;
+  }
+
+  /**
    * Swap a reply's element tokens for element ids, in place. Anything else in
-   * `rootElementIds` is dropped: a main-world reader cannot know an element
-   * id, so a string that is not one of this request's tokens names nothing. A
-   * record that lost a root that way no longer lists them all.
+   * `rootElementIds` is dropped, and a record that lost a root that way no
+   * longer lists them all.
    */
   function adoptRoots(chain: unknown, nodes: ReadonlyMap<string, Element | null>): void {
     if (!isPlainObject(chain) || !Array.isArray(chain.components)) return;
@@ -250,15 +398,8 @@ export function createPicker(host: PickerHost): PickerHandle {
       const ids: string[] = [];
       let lost = tokens.length > LIMITS.roots;
       for (const token of tokens.slice(0, LIMITS.roots)) {
-        const node = typeof token === "string" ? nodes.get(token) : undefined;
-        // Rechecked: a page listener can move a node while the reply is dispatched.
-        if (
-          node === undefined ||
-          node === null ||
-          node.ownerDocument !== document ||
-          !node.isConnected ||
-          isOverlay(node)
-        ) {
+        const node = adopt(token, nodes);
+        if (node === null) {
           lost = true;
           continue;
         }
@@ -271,61 +412,129 @@ export function createPicker(host: PickerHost): PickerHandle {
   }
 
   /**
-   * Ask the extractors in the main world about `node`. The request is
-   * dispatched on the node itself, so the other world's listener gets its own
-   * wrapper for the same element without anything being written into the page
-   * to name it. Replies arrive inside the dispatch; none at all means no
-   * extractor is installed, which is the common case and costs one event.
+   * One synchronous exchange with the main world: dispatched on `target` so
+   * the other world's listener gets its own wrapper for the same node, with
+   * every reply and every element it names arriving inside the dispatch.
+   * Nothing at all means no extractor is installed, which is the common case
+   * and costs one event.
    */
-  function extract(node: Element, phase: ExtractionPhase): ExtractorContribution | null {
-    // Page code runs inside the dispatch and can set off another description;
-    // that one goes without, rather than taking over this request's replies.
-    if (awaitingRequest !== 0) return null;
-    nextRequest += 1;
-    const id = nextRequest;
-    const request: ExtractRequest = { id, phase };
+  function exchange(
+    target: EventTarget,
+    type: string,
+    detail: string,
+    id: number,
+    reply: "extracted" | "located"
+  ): { replies: string[]; named: Map<string, Element | null> } {
+    // Page code runs inside the dispatch and can set off another request; that
+    // one goes unanswered rather than taking over this one's replies.
+    if (awaitingRequest !== 0) return { replies: [], named: new Map() };
     awaitingRequest = id;
+    awaitingReply = reply;
     replies = [];
     named = new Map();
     namingEvents = 0;
     try {
-      node.dispatchEvent(
-        new CustomEvent(extractEvent, { detail: JSON.stringify(request), composed: true })
-      );
+      target.dispatchEvent(new CustomEvent(type, { detail, composed: true }));
     } catch {
       // A node that refuses the event has nothing more to say about itself.
     } finally {
       awaitingRequest = 0;
+      awaitingReply = null;
     }
-    const received = replies;
-    const nodes = named;
+    const received = { replies, named };
     replies = [];
     named = new Map();
-    for (const text of received) {
-      let parsed: unknown;
-      try {
-        parsed = JSON.parse(text);
-      } catch {
-        continue;
-      }
-      if (!isPlainObject(parsed) || parsed.id !== id || !Array.isArray(parsed.contributions)) {
-        continue;
-      }
+    return received;
+  }
+
+  function parseReply(text: string, id: number): Record<string, unknown> | null {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(text);
+    } catch {
+      return null;
+    }
+    return isPlainObject(parsed) && parsed.id === id ? parsed : null;
+  }
+
+  /**
+   * Ask the extractors in the main world about `node`. A pick lets the
+   * framework whose answer is adopted name the element the pick stands for.
+   */
+  function extract(node: Element, phase: ExtractionPhase, pick = false): Extracted | null {
+    nextRequest += 1;
+    const id = nextRequest;
+    const request: ExtractRequest = pick ? { id, phase, pick: true } : { id, phase };
+    const received = exchange(node, extractEvent, JSON.stringify(request), id, "extracted");
+    for (const text of received.replies) {
+      const parsed = parseReply(text, id);
+      if (parsed === null || !Array.isArray(parsed.contributions)) continue;
       for (const entry of parsed.contributions.slice(0, FRAMEWORKS.size)) {
         if (!isPlainObject(entry) || typeof entry.framework !== "string") continue;
         if (!FRAMEWORKS.has(entry.framework) || !isPlainObject(entry.data)) continue;
-        adoptRoots(entry.data.componentChain, nodes);
-        return entry.data as ExtractorContribution;
+        let target: Element | null = null;
+        if (pick && entry.target !== undefined) {
+          target = adopt(entry.target, received.named);
+          // It describes an element this side cannot be shown, not the hit.
+          if (target === null) continue;
+        }
+        adoptRoots(entry.data.componentChain, received.named);
+        return {
+          framework: entry.framework,
+          data: entry.data as ExtractorContribution,
+          target: target === node ? null : target,
+        };
       }
       return null;
     }
     return null;
   }
 
-  function describeFor(
+  /**
+   * Elements one framework finds by a query in its own terms, from `anchor`
+   * or from the whole document. Null when no extractor for it answered.
+   */
+  function locate(
+    framework: string,
+    query: unknown,
+    anchor: Element | null
+  ): { elements: Element[]; data: Record<string, unknown>; truncated: boolean } | null {
+    nextRequest += 1;
+    const id = nextRequest;
+    const request: LocateRequest = { id, framework, query };
+    let detail: string;
+    try {
+      detail = JSON.stringify(request);
+    } catch {
+      return null;
+    }
+    if (detail.length > MAX_LOCATE_REQUEST_CHARS) return null;
+    const received = exchange(anchor ?? document, locateEvent, detail, id, "located");
+    for (const text of received.replies) {
+      const parsed = parseReply(text, id);
+      if (parsed === null) continue;
+      const tokens: unknown[] = Array.isArray(parsed.elements) ? parsed.elements : [];
+      const elements: Element[] = [];
+      // As many as a component's roots, and no more: past that the list is not whole.
+      let omitted = parsed.truncated === true || tokens.length > LIMITS.roots;
+      for (const token of tokens.slice(0, LIMITS.roots)) {
+        const node = adopt(token, received.named);
+        if (node === null) omitted = true;
+        else if (!elements.includes(node)) elements.push(node);
+      }
+      return {
+        elements,
+        data: isPlainObject(parsed.data) ? parsed.data : {},
+        truncated: omitted,
+      };
+    }
+    return null;
+  }
+
+  function fieldsFor(
     node: Element,
-    phase: ExtractionPhase,
-    detections: FrameworkDetection[]
+    detections: FrameworkDetection[],
+    contribution: ExtractorContribution | null
   ): ObservationFields {
     const fields: ObservationFields = {
       elementId: idOf(node),
@@ -349,7 +558,6 @@ export function createPicker(host: PickerHost): PickerHandle {
     };
     // One framework describes the element, whole: merging two frameworks'
     // chains is a resolver's call to make with both in view, not the page's.
-    const contribution = extract(node, phase);
     if (contribution === null) return fields;
     // Each field is taken only in the shape the wire needs, so one malformed
     // field costs that field rather than the whole observation. Deeper rules —
@@ -369,24 +577,161 @@ export function createPicker(host: PickerHost): PickerHandle {
     return fields;
   }
 
+  function nearestName(chain: ComponentChain): string | null {
+    const nearest = chain.components.find((record) => record.componentId === chain.nearestId);
+    // Page data in the declared shape, unchecked below the record.
+    const name: unknown = nearest?.name?.value;
+    return typeof name === "string" && name.length > 0 ? clamp(name, LIMITS.componentName) : null;
+  }
+
   // Hover never walks ancestry: it is paid for on every element the pointer crosses.
   function hoverOf(node: Element): HoverObservation {
-    return { phase: "hover", ...describeFor(node, "hover", []) };
+    const observation: HoverObservation = {
+      phase: "hover",
+      ...fieldsFor(node, [], extract(node, "hover")?.data ?? null),
+    };
+    hoverName = nearestName(observation.componentChain);
+    return observation;
   }
 
-  function selectionOf(node: Element, detections: FrameworkDetection[]): SelectionObservation {
-    return { phase: "selection", ...describeFor(node, "selection", detections) };
-  }
-
-  function emitSelection(cause: "user" | "document" | "reselect"): FrameworkDetection[] {
-    const detections = selected === null ? [] : ancestryDetections(selected);
+  /**
+   * Fit the selection into one envelope: whole if it fits, else with every
+   * framework's ancestry shortened and each chain cut to the records the
+   * selection names. The prelude would otherwise swap an oversized event for a
+   * capacity issue while this side went on believing it had been sent.
+   */
+  function fitSelection(
+    event: Extract<ElementPickerEvent, { type: "selectionChanged" }>
+  ): Extract<ElementPickerEvent, { type: "selectionChanged" }> | null {
+    if (byteLength(event) <= LIMITS.eventBytes) return event;
+    const scoped = event.scope.kind === "component" ? event.scope.componentId : null;
+    const shortened = {
+      ...event,
+      observations: event.observations.map((observation) => ({
+        ...observation,
+        componentChain: shortenChain(observation.componentChain, scoped),
+        // Page data in the declared shape, unchecked below the entry.
+        frameworkEvidence: observation.frameworkEvidence.map((entry) =>
+          entry.kind === "svelte" && Array.isArray(entry.ancestry)
+            ? { ...entry, ancestry: entry.ancestry.slice(0, SHORTENED_ANCESTRY) }
+            : entry
+        ),
+      })),
+    };
+    if (byteLength(shortened) > LIMITS.eventBytes) return null;
     host.post({
-      type: "selectionChanged",
-      observations: selected === null ? [] : [selectionOf(selected, detections)],
-      cause,
-      scope: { kind: "element" },
+      type: "runtimeIssue",
+      code: "capacity",
+      detail: "ancestry shortened to fit the selection into one envelope",
     });
-    return detections;
+    return shortened;
+  }
+
+  /** Keeps the nearest and scoped records, and drops edges to anything it let go. */
+  function shortenChain(chain: ComponentChain, scoped: string | null): ComponentChain {
+    const kept = chain.components.filter(
+      (record) => record.componentId === chain.nearestId || record.componentId === scoped
+    );
+    if (kept.length === chain.components.length) return chain;
+    const ids = new Set(kept.map((record) => record.componentId));
+    return {
+      nearestId: chain.nearestId,
+      truncated: true,
+      components: kept.map((record) => {
+        const copy = { ...record };
+        if (typeof copy.renderParentId === "string" && !ids.has(copy.renderParentId)) {
+          delete copy.renderParentId;
+        }
+        if (typeof copy.ownerId === "string" && !ids.has(copy.ownerId)) delete copy.ownerId;
+        return copy;
+      }),
+    };
+  }
+
+  /**
+   * Describe and send the selection. A pick is asked again, so the element it
+   * stands for is the one its framework names now — adopted only once the
+   * description is sent. `capacity` when it would not fit one envelope and
+   * `failed` when it could not be described at all, with nothing sent.
+   */
+  function emitSelection(cause: "user" | "document" | "reselect"): {
+    sent: boolean;
+    failure?: "capacity" | "failed";
+    detections: FrameworkDetection[];
+  } {
+    if (emitting) return { sent: false, failure: "failed", detections: [] };
+    emitting = true;
+    try {
+      return describeSelection(cause);
+    } catch {
+      return { sent: false, failure: "failed", detections: [] };
+    } finally {
+      emitting = false;
+    }
+  }
+
+  function describeSelection(cause: "user" | "document" | "reselect"): {
+    sent: boolean;
+    failure?: "capacity" | "failed";
+    detections: FrameworkDetection[];
+  } {
+    const observations: SelectionObservation[] = [];
+    const targets: Element[] = [];
+    const chains: Array<{ framework: string; chain: ComponentChain } | null> = [];
+    let detections: FrameworkDetection[] = [];
+    for (const entry of selection) {
+      const extracted = entry.picked
+        ? extract(entry.hit, "selection", true)
+        : extract(entry.target, "selection");
+      const target = entry.picked ? (extracted?.target ?? entry.hit) : entry.target;
+      targets.push(target);
+      const entryDetections = ancestryDetections(target);
+      const fields = fieldsFor(target, entryDetections, extracted?.data ?? null);
+      if (observations.length === 0) detections = entryDetections;
+      // A pick that lands where another entry already is says nothing new.
+      if (observations.some((observation) => observation.elementId === fields.elementId)) continue;
+      observations.push({ phase: "selection", ...fields });
+      chains.push(
+        extracted === null ? null : { framework: extracted.framework, chain: fields.componentChain }
+      );
+    }
+    // Widening steps out from the chain the selection is scoped in, or the
+    // primary element's when it is one element.
+    let chain = chains[0] ?? null;
+    let reportedScope: SelectionScope = { kind: "element" };
+    const scoped = scope;
+    if (scoped.kind === "component") {
+      const componentId = scoped.componentId;
+      const rootIds = observations.map((observation) => observation.elementId);
+      observations.forEach((observation, index) => {
+        for (const record of observation.componentChain.components) {
+          if (record.componentId !== componentId) continue;
+          record.rootElementIds = rootIds.slice(0, LIMITS.roots);
+          record.rootsComplete = scoped.rootsComplete && rootIds.length <= LIMITS.roots;
+          if (reportedScope.kind === "element") chain = chains[index] ?? null;
+          reportedScope = { kind: "component", componentId };
+        }
+      });
+    }
+    const event = fitSelection({
+      type: "selectionChanged",
+      observations,
+      cause,
+      scope: reportedScope,
+    });
+    if (event === null) return { sent: false, failure: "capacity", detections };
+    // The picker went away while page code ran inside one of the exchanges.
+    if (disposed) return { sent: false, failure: "failed", detections };
+    selection.forEach((entry, index) => {
+      const target = targets[index];
+      if (target !== undefined) entry.target = target;
+    });
+    // A component no observation names any more is not a selection the host
+    // was told about: what it was told is element scope.
+    if (reportedScope.kind === "element") scope = ELEMENT_SCOPE;
+    selectedChain = chain;
+    host.post(event);
+    return { sent: true, detections };
   }
 
   /**
@@ -401,16 +746,97 @@ export function createPicker(host: PickerHost): PickerHandle {
     host.post({ type: "frameworksDetected", detections: fresh });
   }
 
-  function select(node: Element | null, cause: "user" | "document" | "reselect"): void {
-    selected = node;
-    const detections = emitSelection(cause);
-    if (cause === "user") reportDetections(detections);
+  /**
+   * Replace the selection, or keep the old one when the new one cannot be
+   * sent whole: the host must never be left looking at a different selection
+   * from the one outlined here.
+   */
+  function commit(
+    entries: SelectionEntry[],
+    next: ScopeState,
+    cause: "user" | "reselect"
+  ): boolean {
+    if (emitting || disposed) return false;
+    const previous = { selection, scope, selectedChain };
+    selection = entries;
+    scope = next;
+    const result = emitSelection(cause);
+    if (!result.sent) {
+      selection = previous.selection;
+      scope = previous.scope;
+      selectedChain = previous.selectedChain;
+      if (result.failure === "capacity") {
+        host.post({
+          type: "runtimeIssue",
+          code: "capacity",
+          detail: "selection left unchanged: the observation did not fit one envelope",
+        });
+      }
+      return false;
+    }
+    if (cause === "user") reportDetections(result.detections);
     schedule();
+    return true;
+  }
+
+  function select(node: Element | null, cause: "user" | "reselect", picked = false): void {
+    commit(node === null ? [] : [{ hit: node, target: node, picked }], ELEMENT_SCOPE, cause);
+  }
+
+  /**
+   * The selection lost a node to the document — a re-render, an HMR patch.
+   * What is left is described as it is; nothing is kept alive for the rest.
+   */
+  function dropDetached(): void {
+    if (emitting) return;
+    const live = selection.filter((entry) => entry.target.isConnected && entry.hit.isConnected);
+    if (live.length === selection.length) return;
+    selection = live;
+    if (live.length === 0) scope = ELEMENT_SCOPE;
+    // What is left of a component is no longer every root it rendered.
+    else if (scope.kind === "component") scope = { ...scope, rootsComplete: false };
+    if (!emitSelection("document").sent) {
+      selection = [];
+      scope = ELEMENT_SCOPE;
+      emitSelection("document");
+    }
+  }
+
+  /**
+   * Alt+ArrowUp: widen to the next component out that the page can name and
+   * place, as that invocation's rendered roots — not every copy a line drew.
+   */
+  function widen(): void {
+    const anchor = primary();
+    if (anchor === null || selectedChain === null) return;
+    const { framework, chain } = selectedChain;
+    const scoped = scope.kind === "component" ? scope.componentId : null;
+    const current = chain.components.findIndex((record) => record.componentId === scoped);
+    for (let at = current + 1; at < chain.components.length; at += 1) {
+      const record = chain.components[at];
+      if (record === undefined || record.name === null || record.sourceCandidates.length === 0) {
+        continue;
+      }
+      const found = locate(framework, { kind: "roots", componentId: record.componentId }, anchor);
+      if (found === null || found.elements.length === 0) continue;
+      commit(
+        found.elements.map((root) => ({ hit: root, target: root, picked: false })),
+        {
+          kind: "component",
+          componentId: record.componentId,
+          framework,
+          rootsComplete: found.data.complete === true && !found.truncated,
+        },
+        "user"
+      );
+      return;
+    }
   }
 
   function setHover(node: Element | null): void {
     if (node === hovered) return;
     hovered = node;
+    if (node === null) hoverName = null;
     host.post({ type: "hoverChanged", observation: node === null ? null : hoverOf(node) });
   }
 
@@ -445,7 +871,7 @@ export function createPicker(host: PickerHost): PickerHandle {
     }
     // A re-render can replace nodes outright; a detached one has no geometry
     // worth drawing and must not be kept alive by the picker.
-    if (selected !== null && !selected.isConnected) select(null, "document");
+    dropDetached();
     if (hovered !== null && !hovered.isConnected) setHover(null);
     paint();
   }
@@ -570,7 +996,17 @@ export function createPicker(host: PickerHost): PickerHandle {
   function drawLabel(layer: HTMLElement, node: Element, transform: Transform): void {
     const rect = node.getBoundingClientRect();
     const label = document.createElement("div");
-    label.textContent = describe(node);
+    // The component its framework named, then the element: a selection can be
+    // widened to the component, so the label says which one that would be.
+    if (hoverName !== null) {
+      const name = document.createElement("span");
+      name.textContent = hoverName;
+      style(name, [["font-weight", "600"]]);
+      label.appendChild(name);
+      label.appendChild(document.createTextNode(" " + describe(node)));
+    } else {
+      label.textContent = describe(node);
+    }
     style(label, [
       ["position", "fixed"],
       ["left", "0px"],
@@ -614,9 +1050,11 @@ export function createPicker(host: PickerHost): PickerHandle {
     if (layer === null) return;
     layer.textContent = "";
     const transform = readTransform();
-    if (selected !== null) drawBox(layer, selected, "selected", transform);
+    for (const entry of selection) drawBox(layer, entry.target, "selected", transform);
     if (hovered !== null) {
-      if (hovered !== selected) drawBox(layer, hovered, "hover", transform);
+      if (!selection.some((entry) => entry.target === hovered)) {
+        drawBox(layer, hovered, "hover", transform);
+      }
       drawLabel(layer, hovered, transform);
     }
     trackOutlined();
@@ -659,15 +1097,22 @@ export function createPicker(host: PickerHost): PickerHandle {
     if (keyboard.key === "Escape") {
       // Swallowed only when there was a selection to clear; otherwise the host
       // still owns Escape for leaving the picker.
-      if (selected === null) return;
+      if (selection.length === 0) return;
       suppress(event);
       select(null, "user");
       return;
     }
-    const current = selected;
+    const current = primary();
     if (current === null || !keyboard.key.startsWith("Arrow")) return;
-    if (keyboard.altKey || keyboard.ctrlKey || keyboard.metaKey || keyboard.shiftKey) return;
+    if (keyboard.ctrlKey || keyboard.metaKey || keyboard.shiftKey) return;
+    const widening = keyboard.altKey && keyboard.key === "ArrowUp";
+    if (keyboard.altKey && !widening) return;
     if (keyTargetsPageControl(event)) return;
+    if (widening) {
+      suppress(event);
+      widen();
+      return;
+    }
     let next: Element | null | undefined;
     if (keyboard.key === "ArrowUp") {
       next = parentAcrossShadow(current);
@@ -705,7 +1150,7 @@ export function createPicker(host: PickerHost): PickerHandle {
     suppress(event);
     const hit = hitFromEvent(event);
     if (hit === null || isOverlay(hit)) return;
-    select(hit, "user");
+    select(hit, "user", true);
   }
 
   /**
@@ -765,9 +1210,11 @@ export function createPicker(host: PickerHost): PickerHandle {
    */
   function trackOutlined(): void {
     if (resizes === null) return;
-    const next = [document.documentElement, selected, hovered].filter(
-      (node): node is Element => node !== null
-    );
+    const next = [
+      document.documentElement,
+      ...selection.map((entry) => entry.target),
+      hovered,
+    ].filter((node): node is Element => node !== null);
     if (next.length === tracked.length && next.every((node, index) => node === tracked[index])) {
       return;
     }
@@ -801,7 +1248,9 @@ export function createPicker(host: PickerHost): PickerHandle {
 
   function clearSelection(): void {
     if (disposed) return;
-    selected = null;
+    selection = [];
+    scope = ELEMENT_SCOPE;
+    selectedChain = null;
     schedule();
   }
 
@@ -813,8 +1262,86 @@ export function createPicker(host: PickerHost): PickerHandle {
   }
 
   function refresh(): void {
-    if (disposed || selected === null) return;
-    emitSelection("reselect");
+    if (disposed || selection.length === 0) return;
+    // A pick asked again may stand for another element now, which is outlined
+    // only once the host has been told.
+    if (emitSelection("reselect").sent) schedule();
+  }
+
+  function heldElement(id: unknown): Element | null {
+    if (typeof id !== "string") return null;
+    const node = held.get(id)?.deref();
+    return usable(node) ? node : null;
+  }
+
+  /**
+   * The element the host names by the id it was told, while that is still the
+   * same node; else whatever the framework's locator finds — exactly the copy
+   * it names, never the first in its place. A locator that asks for a widened
+   * component gets that invocation's roots back, the way Alt+ArrowUp would.
+   */
+  function reselect(request: unknown): boolean {
+    if (disposed || mode !== "select" || !isPlainObject(request)) return false;
+    const framework =
+      typeof request.framework === "string" && FRAMEWORKS.has(request.framework)
+        ? request.framework
+        : null;
+    let target = heldElement(request.elementId);
+    let componentId: unknown;
+    if (framework !== null && request.locator !== undefined) {
+      const found = locate(framework, { kind: "reselect", locator: request.locator }, target);
+      const first = found?.elements[0];
+      if (first !== undefined) {
+        target = first;
+        componentId = found?.data.componentId;
+      }
+    }
+    if (target === null) return false;
+    let entries: SelectionEntry[] = [{ hit: target, target, picked: false }];
+    let next: ScopeState = ELEMENT_SCOPE;
+    if (framework !== null && typeof componentId === "string") {
+      const roots = locate(framework, { kind: "roots", componentId }, target);
+      if (roots !== null && roots.elements.length > 0) {
+        entries = roots.elements.map((root) => ({ hit: root, target: root, picked: false }));
+        next = {
+          kind: "component",
+          componentId,
+          framework,
+          rootsComplete: roots.data.complete === true && !roots.truncated,
+        };
+      }
+    }
+    if (!commit(entries, next, "reselect")) return false;
+    // A crumb asks to be shown; a host selecting again after a hot update
+    // must not pull the page back to something the user scrolled away from.
+    const first = selection[0]?.target;
+    if (
+      request.reveal === true &&
+      first !== undefined &&
+      typeof first.scrollIntoView === "function"
+    ) {
+      first.scrollIntoView({ block: "nearest", inline: "nearest" });
+    }
+    return true;
+  }
+
+  function onNotice(event: Event): void {
+    const detail = (event as CustomEvent).detail;
+    if (typeof detail !== "string" || detail.length > 256) return;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(detail);
+    } catch {
+      return;
+    }
+    if (!isPlainObject(parsed)) return;
+    const { framework, notice } = parsed;
+    if (typeof framework !== "string" || !FRAMEWORKS.has(framework)) return;
+    if (!(EXTRACTOR_NOTICES as readonly unknown[]).includes(notice)) return;
+    const key = framework + " " + String(notice);
+    if (noticed.has(key)) return;
+    noticed.add(key);
+    host.post(NOTICE_ISSUES[notice as ExtractorNotice](framework as ElementPickerFramework));
   }
 
   function dispose(): void {
@@ -828,7 +1355,10 @@ export function createPicker(host: PickerHost): PickerHandle {
     }
     removeOverlay();
     hovered = null;
-    selected = null;
+    hoverName = null;
+    selection = [];
+    selectedChain = null;
+    held.clear();
     pendingHit = undefined;
     // Whatever was installed in the main world for this bootstrap answers to it
     // and to nothing else, so it goes too.
@@ -903,7 +1433,7 @@ export function createPicker(host: PickerHost): PickerHandle {
       document,
       extractedEvent,
       (event) => {
-        if (awaitingRequest === 0 || replies.length >= MAX_REPLIES) return;
+        if (awaitingReply !== "extracted" || replies.length >= MAX_REPLIES) return;
         const detail = (event as CustomEvent).detail;
         if (typeof detail === "string" && detail.length <= MAX_BRIDGE_MESSAGE_CHARS) {
           replies.push(detail);
@@ -912,6 +1442,20 @@ export function createPicker(host: PickerHost): PickerHandle {
       {},
       teardown
     );
+    listen(
+      document,
+      locatedEvent,
+      (event) => {
+        if (awaitingReply !== "located" || replies.length >= MAX_REPLIES) return;
+        const detail = (event as CustomEvent).detail;
+        if (typeof detail === "string" && detail.length <= MAX_LOCATED_REPLY_CHARS) {
+          replies.push(detail);
+        }
+      },
+      {},
+      teardown
+    );
+    listen(document, noticeEvent, onNotice, {}, teardown);
     if (document.readyState === "loading") {
       listen(document, "DOMContentLoaded", emitDocumentReady, { once: true }, teardown);
     } else {
@@ -928,6 +1472,7 @@ export function createPicker(host: PickerHost): PickerHandle {
     clearSelection,
     clearHover,
     refresh,
+    reselect,
     dispose,
     getOverlayRoot: () => overlayRoot,
   };

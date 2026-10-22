@@ -35,5 +35,7 @@ export interface BootstrapHostApi {
   clearHover(): void;
   /** Describe the selection again; the host calls it after installing an extractor. */
   refresh(): void;
+  /** Select again by element id or a framework's locator; false when nothing was found. */
+  reselect(request: unknown): boolean;
   dispose: (() => void) | null;
 }

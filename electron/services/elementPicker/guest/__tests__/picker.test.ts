@@ -4,8 +4,9 @@ import {
   ElementPickerEventSchema,
   type ElementPickerEvent,
 } from "../../../../../shared/elementPicker/protocol.js";
-import { channelEvent } from "../../guestChannel.js";
+import { EXTRACTOR_REGISTRY_GLOBAL, channelEvent } from "../../guestChannel.js";
 import { createPicker, type PickerHandle } from "../picker.js";
+import { installExtractor } from "../registry.js";
 import type { PickerMode } from "../types.js";
 
 const CHANNEL = "test-channel";
@@ -84,6 +85,7 @@ afterEach(() => {
   testListeners.abort();
   picker?.dispose();
   picker = null;
+  delete (globalThis as Record<string, unknown>)[EXTRACTOR_REGISTRY_GLOBAL];
   vi.unstubAllGlobals();
   document.body.innerHTML = "";
 });
@@ -496,7 +498,7 @@ describe("createPicker", () => {
       });
     });
 
-    it("gives a description set off inside another's dispatch no answer of its own", () => {
+    it("gives a selection set off inside another's dispatch no answer of its own", () => {
       const first = document.getElementById("first")!;
       const second = document.getElementById("second")!;
       let nested = false;
@@ -526,8 +528,11 @@ describe("createPicker", () => {
       start();
       first.click();
 
-      const [inner, outer] = ofType("selectionChanged");
-      expect(inner?.observations[0]?.componentChain.components).toEqual([]);
+      // The nested click is refused outright, and the outer reply keeps its names.
+      const selections = ofType("selectionChanged");
+      expect(selections).toHaveLength(1);
+      const [outer] = selections;
+      expect(outer?.observations[0]?.label).toBe("a#first");
       expect(outer?.observations[0]?.componentChain.components[0]?.rootElementIds).toEqual([
         outer?.observations[0]?.elementId,
       ]);
@@ -584,5 +589,404 @@ describe("createPicker", () => {
     const count = events.length;
     document.getElementById("second")!.click();
     expect(events).toHaveLength(count);
+  });
+});
+
+describe("the bridge's element exchanges", () => {
+  function installReact(extractor: Parameters<typeof installExtractor>[1]): void {
+    installExtractor({ channel: CHANNEL, framework: "react", installed: false }, extractor);
+  }
+
+  const record = {
+    componentId: "c1",
+    framework: "react" as const,
+    name: { value: "List", extraction: { kind: "runtime-field" as const, field: "type.name" } },
+    environment: "client" as const,
+    rootElementIds: [],
+    rootsComplete: false,
+    sourceCandidates: [
+      {
+        kind: "component-invocation" as const,
+        candidateId: "call",
+        framework: "react" as const,
+        extraction: { kind: "runtime-field" as const, field: "_debugSource" },
+        file: "src/List.tsx",
+        location: {
+          lineBase: 1 as const,
+          columnBase: 1 as const,
+          columnUnit: "utf16" as const,
+          line: 3,
+          column: 1,
+        },
+      },
+    ],
+  };
+
+  it("selects the element an extractor's pick names, and takes no forged name", () => {
+    const first = document.getElementById("first")!;
+    const list = document.getElementById("list")!;
+    installReact({
+      extract: () => ({}),
+      pick: (hit) => ({ target: hit === first ? list : hit, data: {} }),
+    });
+    // A page naming something during the exchange: under the wrong request,
+    // and under a token the reply does not use.
+    document.addEventListener(
+      channelEvent(CHANNEL, "extract"),
+      (event) => {
+        const { id } = JSON.parse((event as CustomEvent<string>).detail) as { id: number };
+        const field = document.getElementById("field")!;
+        for (const message of [
+          { id: 999, ref: 0 },
+          { id, ref: 7 },
+        ]) {
+          field.dispatchEvent(
+            new CustomEvent(channelEvent(CHANNEL, "element"), {
+              detail: JSON.stringify(message),
+              composed: true,
+            })
+          );
+        }
+      },
+      { capture: true, signal: testListeners.signal }
+    );
+    start();
+
+    first.click();
+    expect(selectedTag()).toBe("section");
+    // A plain walk selects what it reaches; only a pick is stood in for.
+    press("ArrowDown");
+    expect(selectedTag()).toBe("a");
+  });
+
+  it("stays on the hit when page code claims a pick's token for another node", () => {
+    const first = document.getElementById("first")!;
+    const list = document.getElementById("list")!;
+    // Ahead of the registry: the page claims the token the pick is about to use.
+    document.addEventListener(
+      channelEvent(CHANNEL, "extract"),
+      (event) => {
+        const { id } = JSON.parse((event as CustomEvent<string>).detail) as { id: number };
+        document.getElementById("field")!.dispatchEvent(
+          new CustomEvent(channelEvent(CHANNEL, "element"), {
+            detail: JSON.stringify({ id, ref: 0 }),
+            composed: true,
+          })
+        );
+      },
+      { capture: true, signal: testListeners.signal }
+    );
+    installReact({
+      extract: () => ({}),
+      pick: () => ({
+        target: list,
+        data: { componentChain: { nearestId: "c1", components: [record], truncated: false } },
+      }),
+    });
+    start();
+
+    first.click();
+    // On the hit, and without the description of the element the pick stood for.
+    const observation = ofType("selectionChanged").at(-1)?.observations[0];
+    expect(observation?.label).toBe("a#first");
+    expect(observation?.componentChain.components).toEqual([]);
+  });
+
+  it("widens to the component's roots and back to the element on the next click", () => {
+    const first = document.getElementById("first")!;
+    const second = document.getElementById("second")!;
+    installReact({
+      extract: () => ({
+        componentChain: { nearestId: "c1", components: [record], truncated: false },
+      }),
+      locate: (query) =>
+        (query as { kind?: string }).kind === "roots"
+          ? { elements: [first, second], data: { complete: true } }
+          : null,
+    });
+    start();
+    first.click();
+
+    expect(press("ArrowUp", { altKey: true }).defaultPrevented).toBe(true);
+    const widened = ofType("selectionChanged").at(-1)!;
+    expect(widened.scope).toEqual({ kind: "component", componentId: "c1" });
+    const ids = widened.observations.map((observation) => observation.elementId);
+    expect(ids).toHaveLength(2);
+    for (const observation of widened.observations) {
+      expect(observation.componentChain.components[0]).toMatchObject({
+        rootElementIds: ids,
+        rootsComplete: true,
+      });
+    }
+
+    second.click();
+    expect(ofType("selectionChanged").at(-1)?.scope).toEqual({ kind: "element" });
+  });
+
+  it("stops calling a widened component's roots complete once the document drops one", () => {
+    const first = document.getElementById("first")!;
+    const second = document.getElementById("second")!;
+    installReact({
+      extract: () => ({
+        componentChain: { nearestId: "c1", components: [record], truncated: false },
+      }),
+      locate: () => ({ elements: [first, second], data: { complete: true } }),
+    });
+    start();
+    first.click();
+    press("ArrowUp", { altKey: true });
+    expect(
+      ofType("selectionChanged").at(-1)?.observations[0]?.componentChain.components[0]
+    ).toMatchObject({ rootsComplete: true });
+
+    second.remove();
+    runFrames();
+
+    const latest = ofType("selectionChanged").at(-1)!;
+    expect(latest.cause).toBe("document");
+    expect(latest.scope).toEqual({ kind: "component", componentId: "c1" });
+    expect(latest.observations).toHaveLength(1);
+    expect(latest.observations[0]?.componentChain.components[0]).toMatchObject({
+      rootElementIds: [latest.observations[0]?.elementId],
+      rootsComplete: false,
+    });
+  });
+
+  it("keeps the old selection when the new one cannot fit one envelope", () => {
+    const first = document.getElementById("first")!;
+    const second = document.getElementById("second")!;
+    // Three UTF-8 bytes a character: each answer fits the bridge and one
+    // envelope on its own, and two of them fit neither however shortened.
+    const wide = "€".repeat(2048);
+    const heavy = {
+      componentChain: { nearestId: "c1", components: [record], truncated: false },
+      sourceCandidates: Array.from({ length: 16 }, (_, index) => ({
+        ...record.sourceCandidates[0]!,
+        kind: "element-creation" as const,
+        candidateId: "e" + index,
+        file: wide,
+      })),
+      frameworkEvidence: Array.from({ length: 8 }, () => ({
+        kind: "generic" as const,
+        framework: "react" as const,
+        fields: Array.from({ length: 16 }, (_, index) => ({
+          name: "f" + index,
+          value: "€".repeat(256),
+        })),
+      })),
+    };
+    installReact({
+      extract: () => heavy,
+      locate: () => ({ elements: [first, second], data: { complete: true } }),
+    });
+    start();
+    first.click();
+    const before = ofType("selectionChanged").length;
+
+    press("ArrowUp", { altKey: true });
+
+    expect(ofType("selectionChanged")).toHaveLength(before);
+    expect(ofType("runtimeIssue").at(-1)).toMatchObject({
+      code: "capacity",
+      detail: expect.stringContaining("selection left unchanged"),
+    });
+    // Still the click's selection, so the next walk starts from it.
+    press("ArrowRight");
+    expect(ofType("selectionChanged").at(-1)?.observations[0]?.label).toBe("a#second");
+  });
+
+  it("lets page code inside an exchange start no selection of its own", () => {
+    const first = document.getElementById("first")!;
+    const list = document.getElementById("list")!;
+    installReact({
+      extract: (element, phase) => {
+        // The page, running inside the bootstrap's dispatch, clicks elsewhere.
+        if (element === first && phase === "selection") list.click();
+        return {};
+      },
+    });
+    start();
+
+    first.click();
+
+    expect(ofType("selectionChanged").map((event) => event.observations[0]?.label)).toEqual([
+      "a#first",
+    ]);
+    // The guest is on the selection the host was told about.
+    press("ArrowRight");
+    expect(ofType("selectionChanged").at(-1)?.observations[0]?.label).toBe("a#second");
+  });
+
+  it("takes a locate's answer only from a locate reply, and only the elements it names", () => {
+    const first = document.getElementById("first")!;
+    const second = document.getElementById("second")!;
+    document.addEventListener(
+      channelEvent(CHANNEL, "locate"),
+      (event) => {
+        const { id } = JSON.parse((event as CustomEvent<string>).detail) as { id: number };
+        const name = (node: Element, ref: number) =>
+          node.dispatchEvent(
+            new CustomEvent(channelEvent(CHANNEL, "element"), {
+              detail: JSON.stringify({ id, ref }),
+              composed: true,
+            })
+          );
+        name(first, 0);
+        // Shaped like an extract reply: not the answer a locate waits for.
+        document.dispatchEvent(
+          new CustomEvent(channelEvent(CHANNEL, "extracted"), {
+            detail: JSON.stringify({
+              id,
+              contributions: [],
+              elements: ["ref-0", "ref-1"],
+              data: {},
+            }),
+          })
+        );
+        document.dispatchEvent(
+          new CustomEvent(channelEvent(CHANNEL, "located"), {
+            detail: JSON.stringify({ id, elements: ["ref-0"], data: {}, truncated: false }),
+          })
+        );
+        name(second, 1);
+      },
+      { capture: true, signal: testListeners.signal }
+    );
+    const handle = start();
+
+    expect(handle.reselect({ framework: "react", locator: {} })).toBe(true);
+    expect(
+      ofType("selectionChanged")
+        .at(-1)
+        ?.observations.map((entry) => entry.label)
+    ).toEqual(["a#first"]);
+  });
+
+  it("does not call a component's roots complete when some were never shown to it", () => {
+    const list = document.getElementById("list")!;
+    list.innerHTML = Array.from({ length: 33 }, (_, index) => `<b id="b${index}"></b>`).join("");
+    const roots = Array.from(list.children);
+    installReact({
+      extract: () => ({
+        componentChain: { nearestId: "c1", components: [record], truncated: false },
+      }),
+      locate: () => ({ elements: roots, data: { complete: true } }),
+    });
+    start();
+    roots[0]!.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+
+    press("ArrowUp", { altKey: true });
+
+    const widened = ofType("selectionChanged").at(-1)!;
+    expect(widened.observations).toHaveLength(32);
+    expect(widened.observations[0]?.componentChain.components[0]?.rootsComplete).toBe(false);
+  });
+
+  it("goes back to element scope when the component is no longer described", () => {
+    const first = document.getElementById("first")!;
+    const second = document.getElementById("second")!;
+    let described = true;
+    installReact({
+      extract: () =>
+        described
+          ? { componentChain: { nearestId: "c1", components: [record], truncated: false } }
+          : {},
+      locate: () => ({ elements: [first, second], data: { complete: true } }),
+    });
+    const handle = start();
+    first.click();
+    press("ArrowUp", { altKey: true });
+    expect(ofType("selectionChanged").at(-1)?.scope.kind).toBe("component");
+
+    described = false;
+    handle.refresh();
+    expect(ofType("selectionChanged").at(-1)?.scope).toEqual({ kind: "element" });
+
+    // Described again, the selection stays what the host was told it is.
+    described = true;
+    handle.refresh();
+    expect(ofType("selectionChanged").at(-1)?.scope).toEqual({ kind: "element" });
+
+    // Widening starts again from the innermost component, not past the old scope.
+    const before = ofType("selectionChanged").length;
+    press("ArrowUp", { altKey: true });
+    expect(ofType("selectionChanged")).toHaveLength(before + 1);
+    expect(ofType("selectionChanged").at(-1)?.scope).toEqual({
+      kind: "component",
+      componentId: "c1",
+    });
+  });
+
+  it("adopts a pick's new answer on a refresh, and walks on from it", () => {
+    const first = document.getElementById("first")!;
+    const list = document.getElementById("list")!;
+    let standIn: Element = first;
+    installReact({ extract: () => ({}), pick: () => ({ target: standIn, data: {} }) });
+    const handle = start();
+    first.click();
+    expect(selectedTag()).toBe("a");
+
+    standIn = list;
+    handle.refresh();
+    expect(selectedTag()).toBe("section");
+    press("ArrowRight");
+    expect(selectedTag()).toBe("input");
+  });
+
+  it("can be asked for an element again after its lookup was let go", () => {
+    const list = document.getElementById("list")!;
+    list.innerHTML = Array.from({ length: 2_001 }, (_, index) => `<i id="i${index}"></i>`).join("");
+    const handle = start();
+    const first = document.getElementById("i0")!;
+    first.click();
+    const id = ofType("selectionChanged")[0]!.observations[0]!.elementId;
+    for (let index = 1; index <= 2_000; index += 1) {
+      pointAt(document.getElementById("i" + index)!);
+      runFrames();
+    }
+    expect(handle.reselect({ elementId: id })).toBe(false);
+
+    // Reported again, it can be asked for again.
+    first.click();
+    expect(handle.reselect({ elementId: id })).toBe(true);
+  });
+
+  it("selects again by the id it reported, while that is still the same node", () => {
+    const handle = start();
+    const first = document.getElementById("first")!;
+    first.click();
+    document.getElementById("second")!.click();
+    const id = ofType("selectionChanged")[0]!.observations[0]!.elementId;
+
+    expect(handle.reselect({ elementId: id })).toBe(true);
+    expect(ofType("selectionChanged").at(-1)).toMatchObject({
+      cause: "reselect",
+      observations: [{ elementId: id }],
+    });
+    expect(handle.reselect({ elementId: "el-999" })).toBe(false);
+    first.remove();
+    expect(handle.reselect({ elementId: id })).toBe(false);
+    expect(handle.reselect("not a request")).toBe(false);
+  });
+
+  it("turns an extractor's notice into one issue per document, in its own words", () => {
+    start();
+    const notify = (detail: unknown) =>
+      document.dispatchEvent(
+        new CustomEvent(channelEvent(CHANNEL, "notice"), { detail: JSON.stringify(detail) })
+      );
+    notify({ framework: "svelte", notice: "not-dev-build" });
+    notify({ framework: "svelte", notice: "not-dev-build" });
+    notify({ framework: "jquery", notice: "not-dev-build" });
+    notify({ framework: "svelte", notice: "<b>anything the page likes</b>" });
+
+    expect(ofType("runtimeIssue")).toEqual([
+      {
+        type: "runtimeIssue",
+        code: "not-dev-build",
+        framework: "svelte",
+        detail: expect.stringContaining("production build"),
+      },
+    ]);
   });
 });
