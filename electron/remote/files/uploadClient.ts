@@ -16,6 +16,7 @@ import {
 } from "../../../shared/types/remoteHosts.js";
 import { CHANNELS } from "../../ipc/channels.js";
 import { AppError } from "../../utils/errorTypes.js";
+import { onWebContentsDestroyed } from "../../window/webContentsDestroyed.js";
 import { resolveLiveWebContents } from "../../window/webContentsRegistry.js";
 import { bytesTransferSource, fileTransferSource, type TransferSource } from "../link/transfer.js";
 import { getRemoteService, registerRemoteService } from "../runtime.js";
@@ -76,8 +77,14 @@ export interface HostUploadClientDeps {
   maxUploadBytes?: number;
   /** How long a granted local file stays sendable from its view. */
   grantTtlMs?: number;
-  /** How long an upload whose answer was lost waits for its host to come back. */
+  /** How long an upload whose link dropped (or whose answer was lost) waits for its host to come back. */
   reconnectWaitMs?: number;
+  /** Uploads one host is sent at once; the rest wait their turn. */
+  maxConcurrentPerHost?: number;
+  /** In [0, 1): spreads out the retries of uploads a busy host turned away. */
+  random?: () => number;
+  /** Calls `onGone` once the view is destroyed; returns a function that stops watching. */
+  watchView?(webContentsId: number, onGone: () => void): () => void;
 }
 
 const PROGRESS_INTERVAL_MS = 100;
@@ -89,8 +96,17 @@ const MAX_GRANTS_PER_VIEW = 1_000;
 const MAX_GRANT_VIEWS = 64;
 const MAX_GRANT_BATCH = 1_000;
 const DEFAULT_RECONNECT_WAIT_MS = 30_000;
-/** Answers lost in transit are reconciled with the host at most this many times. */
+/** An upload cut off by its link (or whose answer was lost) is resumed at most this many times. */
 const MAX_RECONCILE_ATTEMPTS = 2;
+/**
+ * Well inside what a host takes from one Shell at once (16 prepares, 8
+ * incoming transfers), which older hosts enforce too.
+ */
+const DEFAULT_MAX_CONCURRENT_PER_HOST = 4;
+/** A host that is busy anyway is asked again this many times, further apart each time. */
+const MAX_BUSY_RETRIES = 10;
+const BUSY_RETRY_BASE_MS = 500;
+const BUSY_RETRY_CAP_MS = 10_000;
 const REPLACE_TOKEN = /^[0-9a-f]{32}$/;
 const CLIPBOARD_DESTINATION: TransferDestination = { kind: "inbox", bucket: "clipboard" };
 /** Cancels that arrived before their upload started, kept this long for it to catch up. */
@@ -158,6 +174,27 @@ function codeOf(error: unknown): string | null {
   return typeof error.code === "string" ? error.code : null;
 }
 
+function cancelled(): AppError {
+  return new AppError({ code: "CANCELLED", message: "Upload cancelled" });
+}
+
+/** Resolves true after `ms`, or false as soon as `signal` aborts. */
+function pause(ms: number, signal: AbortSignal): Promise<boolean> {
+  if (signal.aborted) return Promise.resolve(false);
+  return new Promise((resolve) => {
+    const onAbort = () => {
+      clearTimeout(timer);
+      resolve(false);
+    };
+    const timer = setTimeout(() => {
+      signal.removeEventListener("abort", onAbort);
+      resolve(true);
+    }, ms);
+    timer.unref?.();
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
 export function createHostUploadClient(deps: HostUploadClientDeps): HostUploadClient {
   const running = new Map<
     string,
@@ -197,6 +234,50 @@ export function createHostUploadClient(deps: HostUploadClientDeps): HostUploadCl
     forView.delete(opId);
     if (forView.size === 0) earlyCancels.delete(webContentsId);
     return until > Date.now();
+  };
+  const maxPerHost = deps.maxConcurrentPerHost ?? DEFAULT_MAX_CONCURRENT_PER_HOST;
+  const random = deps.random ?? Math.random;
+  /** Per host, how many uploads hold a slot, and those waiting for one, in order. */
+  const hostSlots = new Map<HostId, { active: number; waiting: Array<() => void> }>();
+  /**
+   * One of the host's upload slots, once one is free: every view on the host
+   * shares them, so a big drop queues here instead of being turned away busy.
+   * Rejects CANCELLED if the upload is cancelled while it waits.
+   */
+  const takeSlot = (hostId: HostId, signal: AbortSignal): Promise<() => void> => {
+    if (signal.aborted) return Promise.reject(cancelled());
+    let slots = hostSlots.get(hostId);
+    if (!slots) {
+      slots = { active: 0, waiting: [] };
+      hostSlots.set(hostId, slots);
+    }
+    const held = slots;
+    let released = false;
+    const release = () => {
+      if (released) return;
+      released = true;
+      const next = held.waiting.shift();
+      if (next) return next();
+      held.active -= 1;
+      if (held.active === 0 && hostSlots.get(hostId) === held) hostSlots.delete(hostId);
+    };
+    if (held.active < maxPerHost) {
+      held.active += 1;
+      return Promise.resolve(release);
+    }
+    return new Promise((resolve, reject) => {
+      const grant = () => {
+        signal.removeEventListener("abort", onAbort);
+        resolve(release);
+      };
+      const onAbort = () => {
+        const index = held.waiting.indexOf(grant);
+        if (index !== -1) held.waiting.splice(index, 1);
+        reject(cancelled());
+      };
+      held.waiting.push(grant);
+      signal.addEventListener("abort", onAbort, { once: true });
+    });
   };
   const maxBytes = deps.maxUploadBytes ?? UPLOAD_REFUSE_BYTES;
   const grantTtlMs = deps.grantTtlMs ?? DEFAULT_GRANT_TTL_MS;
@@ -264,11 +345,12 @@ export function createHostUploadClient(deps: HostUploadClientDeps): HostUploadCl
     if (takeEarlyCancel(opId, webContentsId)) controller.abort();
     let lastSent = 0;
     const attempt = async (): Promise<UploadResult> => {
+      if (controller.signal.aborted) throw cancelled();
+      // A queued or resumed upload goes nowhere once its view has left the host.
+      requireBoundHost(webContentsId, hostId);
       const opened = await openSource();
       try {
-        if (controller.signal.aborted) {
-          throw new AppError({ code: "CANCELLED", message: "Upload cancelled" });
-        }
+        if (controller.signal.aborted) throw cancelled();
         return await deps.transport.upload(hostId, opened, {
           webContentsId,
           opId,
@@ -292,33 +374,54 @@ export function createHostUploadClient(deps: HostUploadClientDeps): HostUploadCl
         await Promise.resolve(opened.close?.()).catch(() => {});
       }
     };
+    // A destroyed view has nothing left to hand the path to: its uploads stop,
+    // queued or not, rather than hold the host's slots.
+    const unwatch = deps.watchView?.(webContentsId, () => controller.abort());
     const promise = (async () => {
-      let reconciled = 0;
-      for (;;) {
-        try {
-          return await attempt();
-        } catch (error) {
-          // The file may have landed and only the answer was lost. Ask the host
-          // again under the same id once it is reachable: it answers from what
-          // it recorded instead of placing (or replacing) the file a second time.
-          if (
-            codeOf(error) !== "OUTCOME_UNKNOWN" ||
-            controller.signal.aborted ||
-            reconciled >= MAX_RECONCILE_ATTEMPTS ||
-            !deps.transport.whenReachable ||
-            !(await deps.transport.whenReachable(
-              hostId,
-              webContentsId,
-              deps.reconnectWaitMs ?? DEFAULT_RECONNECT_WAIT_MS,
-              controller.signal
-            ))
-          ) {
-            throw error;
+      const release = await takeSlot(hostId, controller.signal);
+      try {
+        let reconciled = 0;
+        let busyRetries = 0;
+        for (;;) {
+          try {
+            return await attempt();
+          } catch (error) {
+            const code = codeOf(error);
+            if (controller.signal.aborted) throw error;
+            // Turned away busy: the host is still placing an earlier attempt of
+            // this one, or other uploads (another build's, a bundle's) fill it.
+            if (code === "RATE_LIMITED" && busyRetries < MAX_BUSY_RETRIES) {
+              const ceiling = Math.min(BUSY_RETRY_CAP_MS, BUSY_RETRY_BASE_MS * 2 ** busyRetries);
+              busyRetries += 1;
+              if (!(await pause(Math.floor(random() * ceiling), controller.signal))) throw error;
+              continue;
+            }
+            // The link dropped mid-upload, or after the last byte with the
+            // answer lost. Ask the host again under the same id once it is
+            // reachable: it answers from what it recorded instead of placing
+            // (or replacing) the file a second time, and an upload whose bytes
+            // it discarded starts over.
+            if (
+              (code !== "OUTCOME_UNKNOWN" && code !== "HOST_DISCONNECTED") ||
+              reconciled >= MAX_RECONCILE_ATTEMPTS ||
+              !deps.transport.whenReachable ||
+              !(await deps.transport.whenReachable(
+                hostId,
+                webContentsId,
+                deps.reconnectWaitMs ?? DEFAULT_RECONNECT_WAIT_MS,
+                controller.signal
+              ))
+            ) {
+              throw error;
+            }
+            reconciled += 1;
           }
-          reconciled += 1;
         }
+      } finally {
+        release();
       }
     })().finally(() => {
+      unwatch?.();
       if (running.get(opId)?.promise === promise) running.delete(opId);
     });
     running.set(opId, { webContentsId, fingerprint, promise, controller });
@@ -490,6 +593,14 @@ export function installHostUploadClient(
       } catch {
         // A view mid-teardown.
       }
+    },
+    watchView(webContentsId, onGone) {
+      const wc = resolveLiveWebContents(webContentsId);
+      if (!wc) {
+        queueMicrotask(onGone);
+        return () => {};
+      }
+      return onWebContentsDestroyed(wc, onGone);
     },
   });
   const disposers = [

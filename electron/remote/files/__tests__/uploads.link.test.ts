@@ -74,9 +74,14 @@ async function setup(
     rootsFor?: (projectId: string) => Promise<string[]>;
     outcomeTtlMs?: number;
     maxPendingPerSession?: number;
+    /** Transfers the host's bulk receiver takes at once. */
+    maxIncoming?: number;
   } = {}
 ) {
-  const { host, client } = await openSessionPair(socketDir);
+  const { host, client } = await openSessionPair(
+    socketDir,
+    options.maxIncoming === undefined ? {} : { transfers: { maxIncoming: options.maxIncoming } }
+  );
   sessions.push(host, client);
   const endpoint = new FakeEndpoint();
   const inbox = new HostInbox({ root: inboxRoot });
@@ -188,6 +193,16 @@ describe("uploads into the host inbox", () => {
     expect(path.dirname(path.dirname(result.hostPath))).toBe(path.join(inboxRoot, "files"));
   });
 
+  it("shortens a name too long for the host's filesystem, keeping its extension", async () => {
+    const { upload } = await setup();
+    const stem = "界".repeat(100);
+    const result = await upload(TEXT("long"), `${stem}.txt`);
+    const placed = path.basename(result.hostPath);
+    expect(placed.endsWith(".txt")).toBe(true);
+    expect(stem.startsWith(placed.slice(0, -".txt".length))).toBe(true);
+    expect(await fs.readFile(result.hostPath, "utf8")).toBe("long");
+  });
+
   it("names pasted images by timestamp and content in clipboard/", async () => {
     const { upload } = await setup();
     const result = await upload(bytesTransferSource(bytes("png", PNG_HEAD)), "clipboard.png", {
@@ -276,6 +291,18 @@ describe("Add to project", () => {
     });
     expect(await fs.readFile(path.join(project, "docs", "spec.md"), "utf8")).toBe("spec");
     expect(await fs.readdir(path.join(project, "docs"))).toEqual(["spec.md"]);
+  });
+
+  it("adds a long non-ASCII name the host's filesystem can hold under that name", async () => {
+    const { upload } = await setup();
+    // 244 bytes: a name Linux can hold, though its temporary entry must be shorter.
+    const name = `${"界".repeat(80)}.txt`;
+    const result = await upload(bytesTransferSource(bytes("notes")), name, {
+      kind: "worktree",
+      directory: project,
+    });
+    expect(result.hostPath).toBe(path.join(project, name));
+    expect(await fs.readdir(project)).toEqual([name]);
   });
 
   it("never overwrites an existing file without confirmation", async () => {
@@ -926,6 +953,90 @@ describe("operation ids", () => {
       webContentsId: 9,
     });
     expect(path.basename(second.hostPath)).toBe("b.txt");
+  });
+});
+
+describe("a remote window's drop", () => {
+  const windowUploads = (
+    transport: ClientUploadTransport,
+    sendToView: Parameters<typeof createHostUploadClient>[0]["sendToView"] = () => {}
+  ) =>
+    createHostUploadClient({
+      transport,
+      hostForView: () => HOST,
+      hostLabel: () => "studio-01",
+      sendToView,
+      localLabel: "This Mac",
+      // Short retry waits that still let the receiver free up between them.
+      random: () => 0.1,
+    });
+  const toInbox = (index: number) => ({
+    hostId: HOST,
+    bytes: bytes(`screenshot ${index}`),
+    name: `shot-${index}.txt`,
+    mimeType: null,
+    destination: { kind: "inbox", bucket: "files" } as const,
+    opId: `op-shot-${index}`,
+  });
+
+  it("lands every file of a drop larger than the host admits at once", async () => {
+    const { transport } = await setup();
+    const uploads = windowUploads(transport);
+    const results = await Promise.all(
+      Array.from({ length: 24 }, (_, index) => uploads.uploadBytes(7, toInbox(index)))
+    );
+    expect(results.map((result) => path.basename(result.hostPath))).toEqual(
+      Array.from({ length: 24 }, (_, index) => `shot-${index}.txt`)
+    );
+    expect(await listFilesBucket()).toHaveLength(24);
+  });
+
+  it("sends a file the bulk receiver turned away busy again under its id", async () => {
+    const { transport, client } = await setup({ maxIncoming: 1 });
+    const send = vi.spyOn(client.transfers, "send");
+    const uploads = windowUploads(transport);
+    const results = await Promise.all(
+      Array.from({ length: 6 }, (_, index) => uploads.uploadBytes(7, toInbox(index)))
+    );
+    expect(results).toHaveLength(6);
+    expect(await listFilesBucket()).toHaveLength(6);
+    expect(send.mock.calls.length).toBeGreaterThan(6);
+  });
+
+  it("resumes an upload whose link dropped mid-transfer, and places it once", async () => {
+    const { transport, client: firstLink, service, endpoint } = await setup();
+    const content = new Uint8Array(4 * 1024 * 1024).fill(7);
+    let dropped = false;
+    const reconnect = async () => {
+      const { host, client } = await openSessionPair(socketDir);
+      sessions.push(host, client);
+      service.attach(host, new FakeEndpoint("session-2:view-7", "view-7", endpoint.clientId));
+      transport.noteEndpointOpened(HOST, {
+        session: client,
+        webContentsId: 7,
+        endpointId: "view-7",
+      });
+    };
+    const uploads = windowUploads(transport, (_id, event) => {
+      if (dropped || event.type !== "progress" || event.transferredBytes >= event.totalBytes) {
+        return;
+      }
+      dropped = true;
+      firstLink.close("network went away");
+      void reconnect();
+    });
+    const result = await uploads.uploadBytes(7, {
+      hostId: HOST,
+      bytes: content,
+      name: "big.bin",
+      mimeType: null,
+      destination: { kind: "inbox", bucket: "files" },
+      opId: "op-big",
+    });
+    expect(dropped).toBe(true);
+    expect(path.basename(result.hostPath)).toBe("big.bin");
+    expect((await fs.readFile(result.hostPath)).equals(Buffer.from(content))).toBe(true);
+    expect(await listFilesBucket()).toHaveLength(1);
   });
 });
 
