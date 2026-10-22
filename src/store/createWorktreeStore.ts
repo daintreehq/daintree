@@ -2359,8 +2359,30 @@ function setupStatusEqual(
     a.stage === b.stage &&
     a.startedAt === b.startedAt &&
     a.completedAt === b.completedAt &&
-    a.error === b.error
+    a.error === b.error &&
+    setupPluginStepsEqual(a.pluginSteps, b.pluginSteps)
   );
+}
+
+/** A plugin step moving from running to failed is, on its own, a whole update. */
+function setupPluginStepsEqual(
+  a: NonNullable<WorktreeSnapshot["setupStatus"]>["pluginSteps"],
+  b: NonNullable<WorktreeSnapshot["setupStatus"]>["pluginSteps"]
+): boolean {
+  if (a === b) return true;
+  if (a == null || b == null || a.length !== b.length) return false;
+  return a.every((step, index) => {
+    const other = b[index];
+    return (
+      other !== undefined &&
+      step.pluginId === other.pluginId &&
+      step.stepId === other.stepId &&
+      step.label === other.label &&
+      step.pluginName === other.pluginName &&
+      step.state === other.state &&
+      step.error === other.error
+    );
+  });
 }
 
 function lifecyclePhaseResultsEqual(

@@ -40,6 +40,8 @@ import { isBinaryDiffOutput } from "../../shared/utils/gitDiffParsing.js";
 import type {
   LifecycleCommandReview,
   Worktree,
+  WorktreeSetupPluginStep,
+  WorktreeSetupStage,
   WorktreeSetupStatus,
   WorktreeSetupState,
   WorktreeTeardownPreview,
@@ -62,10 +64,35 @@ interface CreatedWorktree {
 
 type LifecycleSetupOutcome =
   | { ok: true }
-  | { ok: false; timedOut: boolean; error: string }
-  // The repository's commands have not been approved, so nothing ran. Only the
-  // user can change that, from the worktree card.
-  | { ok: false; needsApproval: true };
+  | { ok: false; timedOut: boolean; error: string; stage?: WorktreeSetupStage }
+  // The repository's commands, or a plugin's setup steps, have not been
+  // approved, so they did not run. Only the user can change that, from the
+  // worktree card.
+  | { ok: false; needsApproval: true; stage?: WorktreeSetupStage };
+
+/** What {@link WorkspaceService.runPluginSetupSteps} learned, and the record it kept. */
+interface PluginSetupOutcome {
+  outcome: LifecycleSetupOutcome;
+  pluginSteps?: WorktreeSetupPluginStep[];
+}
+
+function pluginStepKey(step: { pluginId: string; stepId: string }): string {
+  return `${step.pluginId}\0${step.stepId}`;
+}
+
+/**
+ * One line naming each plugin step that did not succeed, by plugin — the card
+ * shows it as the setup error, so it has to say whose step it was.
+ */
+function describePluginStepFailures(steps: readonly WorktreeSetupPluginStep[]): string {
+  const [first, ...rest] = steps.map((step) => {
+    const name = `${step.pluginName} "${step.label}"`;
+    if (step.state === "skipped") return `${name} was skipped: ${step.error ?? "not run"}`;
+    if (step.state === "timed-out") return `${name} ${step.error ?? "timed out"}`;
+    return `${name} failed: ${step.error ?? "unknown error"}`;
+  });
+  return rest.length > 0 ? `${first} (and ${rest.length} more)` : first;
+}
 
 /** What a setup that stopped for approval was asked to do, so approving can finish it. */
 interface SetupAwaitingApproval {
@@ -77,18 +104,22 @@ interface SetupAwaitingApproval {
 function setupStatusForOutcome(
   outcome: LifecycleSetupOutcome,
   startedAt: number,
-  completedAt: number
+  completedAt: number,
+  pluginSteps?: WorktreeSetupPluginStep[]
 ): WorktreeSetupStatus {
-  if (outcome.ok) return { state: "ready", startedAt, completedAt };
+  const steps = pluginSteps ? { pluginSteps } : {};
+  if (outcome.ok) return { state: "ready", startedAt, completedAt, ...steps };
+  const stage = outcome.stage ?? "setup-script";
   if ("needsApproval" in outcome) {
-    return { state: "needs-approval", stage: "setup-script", startedAt, completedAt };
+    return { state: "needs-approval", stage, startedAt, completedAt, ...steps };
   }
   return {
     state: outcome.timedOut ? "timed-out" : "failed",
-    stage: "setup-script",
+    stage,
     startedAt,
     completedAt,
     error: outcome.error,
+    ...steps,
   };
 }
 import type {
@@ -99,6 +130,8 @@ import type {
   CreateWorktreeOptions,
   BranchInfo,
   HostStatusTimingMarks,
+  WorktreeSetupStepDescriptor,
+  WorktreeSetupStepRunOutcome,
 } from "../../shared/types/workspace-host.js";
 import type {
   PluginWorktreeLinked,
@@ -134,6 +167,8 @@ import {
 import { extractIssueNumberSync, extractIssueNumber } from "../services/issueExtractor.js";
 import { claimIssueFromBranch, setIssueBranchClaim } from "../services/issueBranchClaim.js";
 import { getForgeBridge } from "./forgeBridge.js";
+import { getWorktreeSetupBridge } from "./worktreeSetupBridge.js";
+import { fingerprintPluginSetupStep } from "./lifecycleCommandTrust.js";
 import { pullRequestService } from "../services/PullRequestService.js";
 import { events } from "../services/events.js";
 import {
@@ -664,6 +699,15 @@ export class WorkspaceService {
   // Monitors whose approved setup is already being resumed, so a second
   // approval arriving meanwhile does not run it again once the first settles.
   private resumingApprovedSetup = new WeakSet<WorktreeMonitor>();
+  // The plugin setup steps main last listed for this project (#13807), so a
+  // card's approval flag can count them without a round trip per worktree.
+  private pluginSetupSteps: WorktreeSetupStepDescriptor[] = [];
+  // Plugin setup steps in flight, by the incarnation they run for, so removing
+  // the worktree cancels the step instead of letting it run on unobserved.
+  private pluginSetupRuns = new Map<WorktreeMonitor, AbortController>();
+  // Which plugin step declarations succeeded for an incarnation, so a resumed
+  // setup skips them only while the declaration is the one that succeeded.
+  private pluginStepSuccesses = new WeakMap<WorktreeMonitor, Set<string>>();
   private listService = new WorktreeListService();
   private readonly fileDiffCache = new FileDiffCache();
   private prService: PRIntegrationService;
@@ -1182,6 +1226,7 @@ export class WorkspaceService {
       if (!existsSync(projectRootPath)) {
         throw new Error(`Project directory does not exist: ${projectRootPath}`);
       }
+      if (this.projectRootPath !== projectRootPath) this.pluginSetupSteps = [];
       this.projectRootPath = projectRootPath;
       this.projectId = projectId;
       if (wslGitByWorktree && typeof wslGitByWorktree === "object") {
@@ -1686,6 +1731,7 @@ export class WorkspaceService {
 
     this.resourceActionExecutor.cleanupResourceActionState(id);
     this.attachmentService.handleWorktreeRemoved(id);
+    this.cancelPluginSetup(monitor);
     monitor.stop();
     this.monitors.delete(id);
     this.emitGate.forget(monitor);
@@ -4087,6 +4133,16 @@ export class WorkspaceService {
           rootPath,
           options.provisionResource ?? options.worktreeMode === "remote-worker"
         );
+        // Plugin steps follow a setup script that succeeded and never one that
+        // did not: a step may well depend on what the script installed. They
+        // run for this tail's incarnation only — a replacement at the same path
+        // has a tail of its own.
+        const tailMonitor = this.monitors.get(canonicalWorktreeId);
+        const ownsMonitor = tailMonitor !== undefined && tailMonitor.generation === setupGeneration;
+        const plugins: PluginSetupOutcome =
+          setup.ok && ownsMonitor
+            ? await this.runPluginSetupSteps(tailMonitor, setupStartedAt)
+            : { outcome: setup };
 
         // The verdict comes from what these steps RETURNED. Neither a submodule
         // failure, nor a non-zero setup script, nor a failed auto-provision
@@ -4103,9 +4159,13 @@ export class WorkspaceService {
             startedAt: setupStartedAt,
             completedAt,
             error: submoduleFailure,
+            ...(plugins.pluginSteps ? { pluginSteps: plugins.pluginSteps } : {}),
           });
         } else {
-          setSetupStatus(setupStatusForOutcome(setup, setupStartedAt, completedAt));
+          setSetupStatus(
+            setupStatusForOutcome(plugins.outcome, setupStartedAt, completedAt, plugins.pluginSteps)
+          );
+          if (ownsMonitor) await this.refreshApprovalAfterPluginSteps(tailMonitor, plugins.outcome);
         }
       })().catch((err) => {
         const message = formatErrorMessage(err, "createWorktree async tail failed");
@@ -4424,11 +4484,311 @@ export class WorkspaceService {
   }
 
   /**
+   * The plugin setup steps main lists for this project, remembered for the
+   * approval flag. Rejects when main does not answer: an unanswered list is
+   * not an empty one.
+   */
+  private async listPluginSetupSteps(): Promise<WorktreeSetupStepDescriptor[]> {
+    const bridge = getWorktreeSetupBridge();
+    if (!bridge) return [];
+    const projectRootPath = this.projectRootPath;
+    const steps = await bridge.listSteps();
+    if (this.projectRootPath === projectRootPath) this.pluginSetupSteps = steps;
+    return steps;
+  }
+
+  /**
+   * The plugin steps a review covers: every one the project declares that the
+   * user has not allowed, listed fresh. The same set whether the review is
+   * being shown or approved, whatever the worktree's setup does in between, so
+   * the fingerprint a dialog showed is the one its approval is checked against.
+   */
+  private async pluginStepsForReview(): Promise<WorktreeSetupStepDescriptor[]> {
+    try {
+      return await this.listPluginSetupSteps();
+    } catch (err) {
+      console.warn("[WorkspaceService] Couldn't list plugin setup steps:", err);
+      return this.pluginSetupSteps;
+    }
+  }
+
+  /**
+   * The plugin steps a card's approval flag counts: the last listed, and only
+   * while that worktree's setup is waiting for approval. Plugin steps run only
+   * when a worktree is set up, so a card with nothing waiting has nothing of
+   * theirs to ask about.
+   */
+  private pluginStepsForFlag(monitor: WorktreeMonitor): WorktreeSetupStepDescriptor[] {
+    return monitor.setupStatus?.state === "needs-approval" ? this.pluginSetupSteps : [];
+  }
+
+  /** Cancel the plugin setup steps running for this incarnation, if any. */
+  private cancelPluginSetup(monitor: WorktreeMonitor): void {
+    this.pluginSetupRuns.get(monitor)?.abort();
+    this.pluginSetupRuns.delete(monitor);
+  }
+
+  /**
+   * A setup that stopped for approval of plugin steps leaves the card a review
+   * to offer, which only the approval flag tells it about.
+   */
+  private async refreshApprovalAfterPluginSteps(
+    monitor: WorktreeMonitor,
+    outcome: LifecycleSetupOutcome
+  ): Promise<void> {
+    if (outcome.ok || !("needsApproval" in outcome) || outcome.stage !== "plugin-steps") return;
+    if (this.monitors.get(monitor.id) !== monitor) return;
+    await this.refreshLifecycleCommandApproval(monitor).catch((err) => {
+      console.warn("[WorkspaceHost] Command approval check failed:", err);
+    });
+  }
+
+  /**
+   * Run the project's plugin setup steps (#13807) for one worktree incarnation
+   * and REPORT the outcome, like {@link runLifecycleSetup}. Called only once the
+   * setup script succeeded.
+   *
+   * Steps run one at a time, in the order main lists them. Each one's failure
+   * is recorded and passed over rather than ending the run — one plugin must
+   * not hold another's setup hostage — and the verdict waits for all of them.
+   * A step the user has not allowed for the project does not run, and is what
+   * the verdict asks approval for; approval is read at each step, so one that
+   * lands while earlier steps run counts.
+   *
+   * `previous` is the record a retry resumes from. A step that succeeded is not
+   * run again while its declaration is the one that succeeded, and a step the
+   * record expected whose plugin is no longer there to run it is recorded as
+   * skipped rather than forgotten.
+   *
+   * Progress is written to `lifecycleStatus` as well as `setupStatus`: it is
+   * where the worktree card reads what setup is doing, its error and its retry
+   * guard, and the plugin steps are part of setup.
+   */
+  private async runPluginSetupSteps(
+    monitor: WorktreeMonitor,
+    startedAt: number,
+    previous?: readonly WorktreeSetupPluginStep[]
+  ): Promise<PluginSetupOutcome> {
+    const bridge = getWorktreeSetupBridge();
+    const projectRootPath = this.projectRootPath;
+    if (!bridge || !projectRootPath) return { outcome: { ok: true } };
+    const isLive = (): boolean => this.monitors.get(monitor.id) === monitor;
+    const cancelledOutcome: LifecycleSetupOutcome = {
+      ok: false,
+      timedOut: false,
+      stage: "plugin-steps",
+      error: "Setup was cancelled",
+    };
+    if (!isLive()) return { outcome: cancelledOutcome };
+
+    // Registered before the first await, so a delete that starts while the
+    // steps are still being listed cancels them too.
+    const controller = new AbortController();
+    this.pluginSetupRuns.set(monitor, controller);
+    const cancelled = (): boolean => controller.signal.aborted || !isLive();
+    if (!previous) this.pluginStepSuccesses.delete(monitor);
+    const successes = this.pluginStepSuccesses.get(monitor) ?? new Set<string>();
+    this.pluginStepSuccesses.set(monitor, successes);
+
+    let steps: WorktreeSetupPluginStep[] = [];
+    let ranAny = false;
+    const publish = (): void => {
+      if (!isLive()) return;
+      monitor.setSetupStatus({
+        state: "running",
+        stage: "plugin-steps",
+        startedAt,
+        pluginSteps: steps,
+      });
+      this.emitUpdate(monitor);
+    };
+
+    const run = async (): Promise<LifecycleSetupOutcome> => {
+      let declared: WorktreeSetupStepDescriptor[];
+      try {
+        declared = await this.listPluginSetupSteps();
+      } catch (err) {
+        return {
+          ok: false,
+          timedOut: false,
+          stage: "plugin-steps",
+          error: `Couldn't read the plugin setup steps: ${formatErrorMessage(err, "no answer")}`,
+        };
+      }
+      if (cancelled()) return cancelledOutcome;
+
+      const listed = new Set(declared.map(pluginStepKey));
+      steps = [
+        ...declared.map((step): WorktreeSetupPluginStep => ({
+          pluginId: step.pluginId,
+          pluginName: step.pluginName,
+          stepId: step.stepId,
+          label: step.label,
+          state: successes.has(fingerprintPluginSetupStep(step)) ? "succeeded" : "pending",
+        })),
+        ...(previous ?? [])
+          .filter((step) => !listed.has(pluginStepKey(step)))
+          .map((step): WorktreeSetupPluginStep =>
+            step.state === "succeeded"
+              ? step
+              : { ...step, state: "skipped", error: "the plugin isn't loaded for this project" }
+          ),
+      ];
+      if (steps.length === 0) return { ok: true };
+      publish();
+
+      const target = {
+        worktreeId: monitor.id,
+        worktreePath: monitor.path,
+        branch: monitor.branch ?? null,
+      };
+      // Passes repeat while an approval lands for a step already passed over:
+      // the approval's own resume can't start while this run holds setup, so
+      // this run is what has to pick it up. Each pass settles at least one
+      // step for good, which bounds them.
+      for (let pass = 0; pass <= declared.length; pass++) {
+        for (const [index, step] of declared.entries()) {
+          if (steps[index].state !== "pending") continue;
+          const unapproved =
+            (await this.lifecycleService.pendingPluginSteps([step], projectRootPath)).length > 0;
+          if (cancelled()) return cancelledOutcome;
+          if (unapproved) {
+            steps[index] = { ...steps[index], state: "needs-approval" };
+            publish();
+            continue;
+          }
+          ranAny = true;
+          steps[index] = { ...steps[index], state: "running" };
+          monitor.setLifecycleStatus({
+            phase: "setup",
+            state: "running",
+            currentCommand: `${step.label} (${step.pluginName})`,
+            startedAt: Date.now(),
+          });
+          publish();
+          let result: WorktreeSetupStepRunOutcome;
+          try {
+            result = await bridge.runStep(step, target, controller.signal);
+          } catch (err) {
+            if (cancelled()) return cancelledOutcome;
+            result = { state: "failed", error: formatErrorMessage(err, "no answer") };
+          }
+          if (cancelled()) return cancelledOutcome;
+          if (result.state === "succeeded") {
+            successes.add(fingerprintPluginSetupStep(step));
+            steps[index] = { ...steps[index], state: "succeeded" };
+          } else {
+            steps[index] = { ...steps[index], state: result.state, error: result.error };
+          }
+          publish();
+        }
+
+        const waiting = declared.filter((_, index) => steps[index].state === "needs-approval");
+        if (waiting.length === 0) break;
+        const stillWaiting = new Set(
+          (await this.lifecycleService.pendingPluginSteps(waiting, projectRootPath)).map(
+            pluginStepKey
+          )
+        );
+        if (cancelled()) return cancelledOutcome;
+        let reopened = false;
+        for (const [index, step] of declared.entries()) {
+          if (steps[index].state !== "needs-approval" || stillWaiting.has(pluginStepKey(step))) {
+            continue;
+          }
+          steps[index] = { ...steps[index], state: "pending" };
+          reopened = true;
+        }
+        if (!reopened) break;
+      }
+      // Reopened on the last pass the bound allows: still waiting, as far as
+      // this run got to see.
+      steps = steps.map((step) =>
+        step.state === "pending" ? { ...step, state: "needs-approval" } : step
+      );
+
+      const unfinished = steps.filter((step) => step.state !== "succeeded");
+      if (unfinished.length === 0) return { ok: true };
+      if (unfinished.some((step) => step.state === "needs-approval")) {
+        return { ok: false, needsApproval: true, stage: "plugin-steps" };
+      }
+      return {
+        ok: false,
+        timedOut: unfinished[0].state === "timed-out",
+        stage: "plugin-steps",
+        error: describePluginStepFailures(unfinished),
+      };
+    };
+
+    let outcome: LifecycleSetupOutcome;
+    try {
+      outcome = await run();
+    } catch (err) {
+      outcome = {
+        ok: false,
+        timedOut: false,
+        stage: "plugin-steps",
+        error: formatErrorMessage(err, "Plugin setup steps failed"),
+      };
+    } finally {
+      if (this.pluginSetupRuns.get(monitor) === controller) this.pluginSetupRuns.delete(monitor);
+    }
+    // A cancel that lands after the steps settled still wins: the worktree is
+    // going, and nothing should be left waiting to resume it.
+    const wasCancelled = controller.signal.aborted || outcome === cancelledOutcome;
+    if (wasCancelled) {
+      outcome = cancelledOutcome;
+      steps = steps.map((step) =>
+        step.state === "running"
+          ? { ...step, state: "failed", error: "setup was cancelled" }
+          : step.state === "pending"
+            ? { ...step, state: "skipped", error: "setup was cancelled" }
+            : step
+      );
+    }
+    if (!isLive()) return { outcome, ...(steps.length > 0 ? { pluginSteps: steps } : {}) };
+
+    // Approving resumes here, through the same path as unapproved commands.
+    if (!outcome.ok && "needsApproval" in outcome) {
+      this.setupAwaitingApproval.set(monitor, { provisionResource: false });
+    } else {
+      this.setupAwaitingApproval.delete(monitor);
+    }
+
+    // Settle the slot the card reads. Always when this run left it running —
+    // a slot left running wedges every later retry — and otherwise only when
+    // there is something to report and no other lifecycle phase holds it.
+    const slot = monitor.lifecycleStatus;
+    const ownsSlot = slot?.phase === "setup" && slot.state === "running";
+    const reports = !wasCancelled && (!outcome.ok || ranAny);
+    if (ownsSlot || (slot?.state !== "running" && reports)) {
+      monitor.setLifecycleStatus({
+        phase: "setup",
+        state: outcome.ok
+          ? "success"
+          : "needsApproval" in outcome
+            ? "needs-approval"
+            : outcome.timedOut
+              ? "timed-out"
+              : "failed",
+        startedAt,
+        completedAt: Date.now(),
+        ...(!outcome.ok && "error" in outcome ? { error: outcome.error } : {}),
+      });
+      this.emitUpdate(monitor);
+    }
+    return { outcome, ...(steps.length > 0 ? { pluginSteps: steps } : {}) };
+  }
+
+  /**
    * Re-run the lifecycle setup script for an existing worktree without
    * recreating it. Surfaced via the `run-lifecycle-setup` port action so the
    * worktree card can offer a "Retry setup" affordance after a failed/timed-out
    * setup. Same idempotence assumption as resource provisioning — the user
    * authors setup scripts knowing they may be re-run in place.
+   *
+   * A setup that got as far as its plugin steps resumes there: the script
+   * already succeeded, and only the plugin steps that did not are run again.
    */
   async retryLifecycleSetup(worktreeId: string): Promise<void> {
     const monitor = this.monitors.get(worktreeId);
@@ -4438,9 +4798,15 @@ export class WorkspaceService {
     if (!this.projectRootPath) {
       throw new Error("Cannot retry setup before a project is loaded");
     }
-    if (monitor.lifecycleStatus?.state === "running") {
+    if (monitor.lifecycleStatus?.state === "running" || monitor.setupStatus?.state === "running") {
       throw new Error("Setup is already running");
     }
+    const previous = monitor.setupStatus;
+    const resumePluginSteps =
+      previous?.stage === "plugin-steps" &&
+      (previous.state === "failed" ||
+        previous.state === "timed-out" ||
+        previous.state === "needs-approval");
 
     // Set running synchronously *before* the first await so a second concurrent
     // request (rapid clicks, multi-window, retry-after-error) sees the in-flight
@@ -4456,21 +4822,40 @@ export class WorkspaceService {
     // left `setupStatus` reading `failed` while the script was demonstrably
     // running again would make the readiness contract a lie the moment anyone
     // used the retry affordance.
-    monitor.setSetupStatus({ state: "running", stage: "setup-script", startedAt });
+    monitor.setSetupStatus(
+      resumePluginSteps
+        ? {
+            state: "running",
+            stage: "plugin-steps",
+            startedAt,
+            ...(previous.pluginSteps ? { pluginSteps: previous.pluginSteps } : {}),
+          }
+        : { state: "running", stage: "setup-script", startedAt }
+    );
     this.emitUpdate(monitor);
 
     // A setup that stopped for approval resumes with what it was originally
     // asked to do; a plain retry never provisions.
     const intent = this.setupAwaitingApproval.get(monitor);
     let outcome: LifecycleSetupOutcome;
+    let pluginSteps: WorktreeSetupPluginStep[] | undefined;
     try {
-      outcome = await this.runLifecycleSetup(
-        worktreeId,
-        monitor.path,
-        this.projectRootPath,
-        intent?.provisionResource ?? false,
-        intent?.environmentId
-      );
+      const setup: LifecycleSetupOutcome = resumePluginSteps
+        ? { ok: true }
+        : await this.runLifecycleSetup(
+            worktreeId,
+            monitor.path,
+            this.projectRootPath,
+            intent?.provisionResource ?? false,
+            intent?.environmentId
+          );
+      ({ outcome, pluginSteps } = setup.ok
+        ? await this.runPluginSetupSteps(
+            monitor,
+            startedAt,
+            resumePluginSteps ? (previous.pluginSteps ?? []) : undefined
+          )
+        : { outcome: setup });
     } catch (err) {
       const message = formatErrorMessage(err, "Setup retry failed");
       // BOTH statuses have to settle here. `runLifecycleSetup` writes the
@@ -4478,9 +4863,10 @@ export class WorkspaceService {
       // throw skips that — and the guard above rejects a retry while
       // `lifecycleStatus.state === "running"`, so leaving it running would make
       // the FIRST failed retry the last one this worktree ever accepts.
-      const live = this.monitors.get(worktreeId);
-      if (live) {
-        live.setLifecycleStatus({
+      // Only this retry's incarnation: a replacement at the same path is not
+      // the worktree that failed.
+      if (this.monitors.get(worktreeId) === monitor) {
+        monitor.setLifecycleStatus({
           phase: "setup",
           state: "failed",
           startedAt,
@@ -4488,13 +4874,17 @@ export class WorkspaceService {
           error: message,
         });
       }
-      this.setWorktreeSetupStatus(worktreeId, {
-        state: "failed",
-        stage: "setup-script",
-        startedAt,
-        completedAt: Date.now(),
-        error: message,
-      });
+      this.setWorktreeSetupStatus(
+        worktreeId,
+        {
+          state: "failed",
+          stage: monitor.setupStatus?.stage ?? "setup-script",
+          startedAt,
+          completedAt: Date.now(),
+          error: message,
+        },
+        monitor.generation
+      );
       throw err;
     }
 
@@ -4507,7 +4897,7 @@ export class WorkspaceService {
     // such a project was the last one it would ever accept. The status is
     // written here rather than by removing the pre-set, because the pre-set is
     // what makes the guard reject a concurrent second request.
-    const live = this.monitors.get(worktreeId);
+    const live = this.monitors.get(worktreeId) === monitor ? monitor : undefined;
     if (live?.lifecycleStatus?.phase === "setup" && live.lifecycleStatus.state === "running") {
       const settledState = outcome.ok
         ? "success"
@@ -4525,7 +4915,12 @@ export class WorkspaceService {
       this.emitUpdate(live);
     }
 
-    this.setWorktreeSetupStatus(worktreeId, setupStatusForOutcome(outcome, startedAt, Date.now()));
+    this.setWorktreeSetupStatus(
+      worktreeId,
+      setupStatusForOutcome(outcome, startedAt, Date.now(), pluginSteps),
+      monitor.generation
+    );
+    await this.refreshApprovalAfterPluginSteps(monitor, outcome);
   }
 
   /**
@@ -4542,8 +4937,19 @@ export class WorkspaceService {
     if (!monitor) throw new Error(`Worktree not found: ${worktreeId}`);
     const projectRootPath = this.projectRootPath;
     if (!projectRootPath) throw new Error("Cannot review commands before a project is loaded");
-    const review = await this.lifecycleService.getCommandReview(monitor.path, projectRootPath);
-    this.applyCommandApprovalFlag(monitor, projectRootPath, review !== null);
+    const review = await this.lifecycleService.getCommandReview(
+      monitor.path,
+      projectRootPath,
+      await this.pluginStepsForReview()
+    );
+    // The flag counts plugin steps only while this worktree's setup waits on
+    // them, as `refreshLifecycleCommandApproval` does.
+    this.applyCommandApprovalFlag(
+      monitor,
+      projectRootPath,
+      review !== null &&
+        (review.sources.length > 0 || monitor.setupStatus?.state === "needs-approval")
+    );
     // What approving sets running straight away is part of what is approved.
     const intent = this.setupAwaitingApproval.get(monitor);
     if (review && intent?.provisionResource) {
@@ -4573,7 +4979,12 @@ export class WorkspaceService {
     const projectRootPath = this.projectRootPath;
     if (!projectRootPath) throw new Error("Cannot approve commands before a project is loaded");
 
-    await this.lifecycleService.approveCommandReview(monitor.path, projectRootPath, fingerprint);
+    await this.lifecycleService.approveCommandReview(
+      monitor.path,
+      projectRootPath,
+      fingerprint,
+      await this.pluginStepsForReview()
+    );
 
     await Promise.all(
       [...this.monitors.values()].map(async (m) => {
@@ -4621,7 +5032,11 @@ export class WorkspaceService {
   private async refreshLifecycleCommandApproval(monitor: WorktreeMonitor): Promise<void> {
     const projectRootPath = this.projectRootPath;
     if (!projectRootPath) return;
-    const review = await this.lifecycleService.getCommandReview(monitor.path, projectRootPath);
+    const review = await this.lifecycleService.getCommandReview(
+      monitor.path,
+      projectRootPath,
+      this.pluginStepsForFlag(monitor)
+    );
     this.applyCommandApprovalFlag(monitor, projectRootPath, review !== null);
   }
 
@@ -4647,6 +5062,9 @@ export class WorkspaceService {
     monitor: WorktreeMonitor,
     force: boolean
   ): Promise<void> {
+    // A plugin step still setting the worktree up is setting up one that is
+    // about to be gone.
+    this.cancelPluginSetup(monitor);
     // First, while the worktree's own stack is still up for its detach to talk to.
     await this.attachmentService.detachForDelete(worktreeId);
     const ctx = this.getLifecycleContext();

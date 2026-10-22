@@ -2,9 +2,12 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtemp, readFile, rm, writeFile, readdir } from "fs/promises";
 import { tmpdir } from "os";
 import { join } from "path";
+import { createHash } from "crypto";
 import {
   FileLifecycleCommandApprovalStore,
   fingerprintCommandGroups,
+  fingerprintPluginSetupStep,
+  fingerprintReview,
   lifecycleConfigCommandGroups,
   resolveLifecycleCommandApprovalsDir,
   resourceEnvironmentCommandGroups,
@@ -137,6 +140,51 @@ describe("lifecycle command fingerprints", () => {
     expect(
       resourceEnvironmentCommandGroups({ gpu: { status: "check" } }).map((group) => group.label)
     ).toEqual(['Environment "gpu" status']);
+  });
+});
+
+describe("plugin setup step fingerprints (#13807)", () => {
+  const step = {
+    pluginId: "acme",
+    pluginVersion: "1.0.0",
+    stepId: "db",
+    label: "Provision DB",
+    timeoutMs: 60_000,
+  };
+
+  it("is stable for the same declaration", () => {
+    expect(fingerprintPluginSetupStep({ ...step })).toBe(fingerprintPluginSetupStep(step));
+  });
+
+  it("asks again for a new plugin version, label, timeout or step", () => {
+    const original = fingerprintPluginSetupStep(step);
+    for (const changed of [
+      { pluginVersion: "1.0.1" },
+      { label: "Provision database" },
+      { timeoutMs: 120_000 },
+      { stepId: "db2" },
+      { pluginId: "acme-fork" },
+    ]) {
+      expect(fingerprintPluginSetupStep({ ...step, ...changed })).not.toBe(original);
+    }
+  });
+
+  it("never collides with a command fingerprint", () => {
+    expect(fingerprintPluginSetupStep(step)).not.toBe(
+      fingerprintCommandGroups("config", [{ label: "Provision DB", commands: [] }])
+    );
+  });
+
+  it("leaves a review with no plugin steps on the fingerprint it always had", () => {
+    const source = {
+      origin: "repository" as const,
+      path: "/repo/.daintree/config.json",
+      groups: [{ label: "Setup", commands: ["npm ci"] }],
+      fingerprint: configFingerprint({ setup: ["npm ci"] }),
+    };
+    const legacy = createHash("sha256").update(source.fingerprint).digest("hex");
+    expect(fingerprintReview([source])).toBe(legacy);
+    expect(fingerprintReview([source], [fingerprintPluginSetupStep(step)])).not.toBe(legacy);
   });
 });
 

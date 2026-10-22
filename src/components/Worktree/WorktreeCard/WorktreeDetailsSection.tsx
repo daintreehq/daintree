@@ -205,9 +205,22 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
   const reviewHubButtonLabel = isUnpushedClean ? "Review & push" : "Review & commit";
 
   const lifecycleState = worktree.lifecycleStatus?.state;
-  const lifecycleFailed = lifecycleState === "failed" || lifecycleState === "timed-out";
-  const lifecycleError = worktree.lifecycleStatus?.error;
-  const lifecycleOutput = worktree.lifecycleStatus?.output;
+  const lifecycleSlotFailed = lifecycleState === "failed" || lifecycleState === "timed-out";
+  // Plugin steps that did not succeed stay retryable after a later resource
+  // action overwrites the lifecycle slot, so their failure is read from
+  // `setupStatus`, which no later phase repurposes.
+  const pluginStepsFailed =
+    !lifecycleSlotFailed &&
+    lifecycleState !== "running" &&
+    worktree.setupStatus?.stage === "plugin-steps" &&
+    (worktree.setupStatus.state === "failed" || worktree.setupStatus.state === "timed-out");
+  // Setup still running refuses a retry, whatever an overwritten slot says.
+  const lifecycleFailed =
+    worktree.setupStatus?.state !== "running" && (lifecycleSlotFailed || pluginStepsFailed);
+  const lifecycleError = pluginStepsFailed
+    ? worktree.setupStatus?.error
+    : worktree.lifecycleStatus?.error;
+  const lifecycleOutput = pluginStepsFailed ? undefined : worktree.lifecycleStatus?.output;
   const hasLifecycleDetails = lifecycleFailed && Boolean(lifecycleError || lifecycleOutput);
   // Two separate observations: the host found unapproved repository commands
   // this worktree would run, and/or its setup was skipped for want of approval.
@@ -220,6 +233,10 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
   const setupNeedsApproval =
     worktree.setupStatus?.state === "needs-approval" ||
     (worktree.lifecycleStatus?.phase === "setup" && lifecycleState === "needs-approval");
+  // The setup script ran; what waits is a plugin's step, not repository commands.
+  const pluginStepsNeedApproval =
+    worktree.setupStatus?.state === "needs-approval" &&
+    worktree.setupStatus.stage === "plugin-steps";
   const [isApprovalDialogOpen, setIsApprovalDialogOpen] = useState(false);
   const approvalDialogMounted = useKeepMounted(isApprovalDialogOpen);
   const handleReviewCommands = (e: React.MouseEvent) => {
@@ -677,9 +694,11 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
           >
             <span className="text-xs text-text-secondary truncate">
               {commandsNeedApproval
-                ? setupNeedsApproval
-                  ? "Setup is waiting for you to approve its commands"
-                  : "Repository commands need your approval to run"
+                ? pluginStepsNeedApproval
+                  ? "Setup is waiting for you to allow plugin steps"
+                  : setupNeedsApproval
+                    ? "Setup is waiting for you to approve its commands"
+                    : "Repository commands need your approval to run"
                 : "Setup was skipped, and its commands are approved now"}
             </span>
             <Button
@@ -696,7 +715,11 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
               ) : (
                 <RefreshCw aria-hidden="true" />
               )}
-              {commandsNeedApproval ? "Review commands" : "Run setup"}
+              {commandsNeedApproval
+                ? pluginStepsNeedApproval
+                  ? "Review steps"
+                  : "Review commands"
+                : "Run setup"}
             </Button>
           </div>
         )}

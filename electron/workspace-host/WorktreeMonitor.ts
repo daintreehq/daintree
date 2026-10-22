@@ -1408,10 +1408,25 @@ export class WorktreeMonitor {
    * reaches model context, so the bound has to hold no matter who writes it.
    */
   setSetupStatus(status: WorktreeSetupStatus | undefined): void {
-    this._setupStatus =
-      status && status.error !== undefined
-        ? { ...status, error: status.error.slice(0, WORKTREE_SETUP_ERROR_MAX_LENGTH) }
-        : status;
+    if (!status) {
+      this._setupStatus = undefined;
+      return;
+    }
+    this._setupStatus = {
+      ...status,
+      ...(status.error !== undefined
+        ? { error: status.error.slice(0, WORKTREE_SETUP_ERROR_MAX_LENGTH) }
+        : {}),
+      ...(status.pluginSteps
+        ? {
+            pluginSteps: status.pluginSteps.map((step) =>
+              step.error !== undefined
+                ? { ...step, error: step.error.slice(0, WORKTREE_SETUP_ERROR_MAX_LENGTH) }
+                : { ...step }
+            ),
+          }
+        : {}),
+    };
   }
 
   get lifecyclePhaseResults(): readonly WorktreeLifecyclePhaseResult[] {

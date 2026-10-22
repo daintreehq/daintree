@@ -270,7 +270,7 @@ export function registerWorktreeQueryActions(
       id: "worktree.waitUntilReady",
       title: "Wait until worktree ready",
       description:
-        "Wait for a worktree's post-create setup (config copy, submodules, setup script, provisioning) and report where it got. Setup can outlive creation, so work started earlier may see an unpopulated tree. A zero timeout reads without blocking; running out of time is not a failure.",
+        "Wait for a worktree's post-create setup (config copy, submodules, setup script, provisioning, plugin steps) and report where it got. Setup can outlive creation, so earlier work may see an unpopulated tree. A zero timeout reads without blocking; timing out is not a failure.",
       category: "worktree",
       kind: "query",
       danger: "safe",
@@ -293,7 +293,7 @@ export function registerWorktreeQueryActions(
         worktreeId: z.string(),
         setupState: WorktreeSetupStateSchema,
         stage: z
-          .enum(["copy-config", "submodules", "setup-script"])
+          .enum(["copy-config", "submodules", "setup-script", "plugin-steps"])
           .nullable()
           .describe("Stage running or failed; null before setup starts and once ready or unknown."),
         error: z

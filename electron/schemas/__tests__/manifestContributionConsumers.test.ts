@@ -46,6 +46,7 @@ import {
   TourChapterSchema,
   TourContributionSchema,
   ViewContributionSchema,
+  WorktreeSetupStepContributionSchema,
 } from "../plugin.js";
 
 /**
@@ -125,6 +126,9 @@ const AGENT_MCP_DECLARED = "electron/services/pluginAgentMcp/declaredEndpoints.t
 const DEV_PREVIEW_TOOL_REGISTRY = "src/registry/devPreviewToolRegistry.ts";
 const BUILTIN_GUEST_ADAPTERS = "electron/services/sitePreview/builtinGuestAdapters.ts";
 const GUEST_ADAPTER_ASSETS = "electron/services/sitePreview/guestAdapterAssets.ts";
+const WORKTREE_SETUP_STEP_REGISTRY = "electron/services/worktreeSetupStepRegistry.ts";
+const WORKTREE_SETUP_RPC = "electron/services/worktreeSetupRpcServer.ts";
+const LIFECYCLE_COMMAND_TRUST = "electron/workspace-host/lifecycleCommandTrust.ts";
 const PLUGIN_DATABASE = "electron/services/plugin/pluginDatabase.ts";
 const PLUGIN_DATABASE_HANDLE = "shared/utils/pluginDatabaseHandle.ts";
 const PLUGIN_HOST_FACTORY = "electron/services/plugin/PluginHostFactory.ts";
@@ -172,6 +176,7 @@ const SWEPT_SCHEMAS = {
   agentMcp: AgentMcpContributionSchema,
   tours: TourContributionSchema,
   databases: DatabaseContributionSchema,
+  worktreeSetupSteps: WorktreeSetupStepContributionSchema,
   surfaces: SurfaceContributionsSchema,
   "databases.queries": DatabaseQueryContributionSchema,
   "databases.queries.params": DatabaseQueryParamSchema,
@@ -226,6 +231,7 @@ const TOP_LEVEL_GROUPS = [
   "agentMcp",
   "tours",
   "databases",
+  "worktreeSetupSteps",
   "surfaces",
 ] as const;
 
@@ -296,6 +302,10 @@ type FieldConsumerCoverage = {
   recipes: Record<keyof z.infer<typeof RecipeContributionSchema>, ConsumerDescriptor>;
   agentMcp: Record<keyof z.infer<typeof AgentMcpContributionSchema>, ConsumerDescriptor>;
   databases: Record<keyof z.infer<typeof DatabaseContributionSchema>, ConsumerDescriptor>;
+  worktreeSetupSteps: Record<
+    keyof z.infer<typeof WorktreeSetupStepContributionSchema>,
+    ConsumerDescriptor
+  >;
   "databases.queries": Record<
     keyof z.infer<typeof DatabaseQueryContributionSchema>,
     ConsumerDescriptor
@@ -1482,6 +1492,29 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
       mode: "intentional-metadata",
       consumers: [{ file: PLUGIN_SCHEMA, symbol: "AgentMcpContributionSchema (literal 'tools')" }],
       note: "Only 'tools' is accepted; kept explicit so a later endpoint mode is additive.",
+    },
+  },
+  worktreeSetupSteps: {
+    id: {
+      mode: "verbatim",
+      consumers: [
+        { file: WORKTREE_SETUP_STEP_REGISTRY, symbol: "isWorktreeSetupStepDeclared" },
+        { file: WORKTREE_SETUP_RPC, symbol: "WorktreeSetupRpcServer.runStep" },
+      ],
+      note: "The id a handler registers under, and the step the host asks main to run.",
+    },
+    label: {
+      mode: "verbatim",
+      consumers: [
+        { file: WORKTREE_SETUP_STEP_REGISTRY, symbol: "getWorktreeSetupSteps" },
+        { file: LIFECYCLE_COMMAND_TRUST, symbol: "fingerprintPluginSetupStep" },
+      ],
+      note: "Shown on the worktree card while the step runs and in the approval dialog; part of what is approved.",
+    },
+    timeoutMs: {
+      mode: "verbatim",
+      consumers: [{ file: WORKTREE_SETUP_RPC, symbol: "WorktreeSetupRpcServer.runStep" }],
+      note: "The step's deadline: its signal aborts and it is recorded as timed out. Part of what is approved.",
     },
   },
   databases: {

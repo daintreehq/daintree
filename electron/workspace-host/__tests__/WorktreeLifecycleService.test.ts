@@ -2135,6 +2135,64 @@ describe("WorktreeLifecycleService", () => {
       expect(monitor.setResourceConnectCommand).toHaveBeenLastCalledWith(undefined);
     });
 
+    describe("plugin setup steps (#13807)", () => {
+      const DB = {
+        pluginId: "acme",
+        pluginName: "Acme",
+        pluginVersion: "1.0.0",
+        stepId: "db",
+        label: "Provision DB",
+        timeoutMs: 60_000,
+      };
+
+      it("asks to allow a plugin step even when no repository command waits", async () => {
+        serveFiles({});
+
+        const review = await service.getCommandReview(WT, ROOT, [DB]);
+
+        expect(review?.sources).toEqual([]);
+        expect(review?.pluginSteps).toEqual([
+          { pluginId: "acme", pluginName: "Acme", stepId: "db", label: "Provision DB" },
+        ]);
+        expect(await service.pendingPluginSteps([DB], ROOT)).toEqual([DB]);
+      });
+
+      it("allows it once for the project, and asks again for a new version", async () => {
+        serveFiles({});
+        const review = await service.getCommandReview(WT, ROOT, [DB]);
+        await service.approveCommandReview(WT, ROOT, review!.fingerprint, [DB]);
+
+        expect(await service.getCommandReview("/another-wt", ROOT, [DB])).toBeNull();
+        expect(await service.pendingPluginSteps([DB], ROOT)).toEqual([]);
+        const upgraded = { ...DB, pluginVersion: "2.0.0" };
+        expect(await service.pendingPluginSteps([upgraded], ROOT)).toEqual([upgraded]);
+      });
+
+      it("refuses an approval for steps that changed after they were shown", async () => {
+        serveFiles({});
+        const review = await service.getCommandReview(WT, ROOT, [DB]);
+
+        await expect(
+          service.approveCommandReview(WT, ROOT, review!.fingerprint, [
+            DB,
+            { ...DB, stepId: "seed", label: "Seed fixtures" },
+          ])
+        ).rejects.toThrow("changed after you reviewed them");
+        expect(approved.size).toBe(0);
+      });
+
+      it("approves commands and plugin steps shown together in one go", async () => {
+        serveFiles({ "/wt/.daintree/config.json": { setup: ["npm ci"] } });
+        const review = await service.getCommandReview(WT, ROOT, [DB]);
+        expect(review?.sources).toHaveLength(1);
+        expect(review?.pluginSteps).toHaveLength(1);
+
+        await service.approveCommandReview(WT, ROOT, review!.fingerprint, [DB]);
+
+        expect(await service.getCommandReview(WT, ROOT, [DB])).toBeNull();
+      });
+    });
+
     it("reads attachments from the project root, never a branch's copy", async () => {
       serveFiles({
         "/root/.daintree/config.json": {

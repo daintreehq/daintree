@@ -357,6 +357,7 @@ vi.mock("@/components/Worktree/worktreeCreationErrors", () => ({
 Element.prototype.scrollIntoView = vi.fn();
 
 import { NewWorktreeDialog, clearBranchListCache } from "../NewWorktreeDialog";
+import { useRecipeStore } from "@/store/recipeStore";
 import {
   buildCacheKey,
   setCache,
@@ -2115,6 +2116,106 @@ describe("NewWorktreeDialog — first agent and prompt (#12796)", () => {
     expect(actionCalls("worktree.create")).toHaveLength(1);
     expect(actionCalls("worktree.waitUntilReady")).toHaveLength(0);
     expect(actionCalls("agent.launch")).toHaveLength(0);
+  });
+
+  it("runs a recipe that starts an agent only once setup reports ready (#13807)", async () => {
+    recipePickerCalls.selected = {
+      id: "r1",
+      name: "Agent recipe",
+      terminals: [{ type: "claude" }],
+    };
+    const runRecipe = vi.mocked(useRecipeStore((s) => s.runRecipeWithResults));
+    runRecipe.mockResolvedValue({ spawned: [], failed: [] });
+    let markReady!: () => void;
+    const ready = new Promise<void>((resolve) => (markReady = resolve));
+    mockDispatch.mockImplementation(async (actionId: string) => {
+      if (actionId === "worktree.create") {
+        return { ok: true, result: { worktreeId: "new-wt-id", branch: "feature/test" } };
+      }
+      if (actionId === "worktree.waitUntilReady") {
+        await ready;
+        return {
+          ok: true,
+          result: {
+            worktreeId: "new-wt-id",
+            setupState: "ready",
+            stage: null,
+            error: null,
+            timedOut: false,
+          },
+        };
+      }
+      return { ok: true, result: undefined };
+    });
+    renderDialog();
+    await advanceTimersGradually(500);
+    await nameBranch();
+    await submit();
+
+    expect(actionCalls("worktree.waitUntilReady")).toHaveLength(1);
+    expect(runRecipe).not.toHaveBeenCalled();
+
+    await act(async () => {
+      markReady();
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    expect(runRecipe).toHaveBeenCalledTimes(1);
+    expect(mockNotify.mock.calls.some(([payload]) => /recipe/i.test(payload.title ?? ""))).toBe(
+      false
+    );
+  });
+
+  it("hands back a recipe that starts an agent when setup is waiting for approval", async () => {
+    recipePickerCalls.selected = {
+      id: "r1",
+      name: "Agent recipe",
+      terminals: [{ type: "claude" }],
+    };
+    const runRecipe = vi.mocked(useRecipeStore((s) => s.runRecipeWithResults));
+    mockDispatch.mockImplementation(async (actionId: string) => {
+      if (actionId === "worktree.create") {
+        return { ok: true, result: { worktreeId: "new-wt-id", branch: "feature/test" } };
+      }
+      if (actionId === "worktree.waitUntilReady") {
+        return {
+          ok: true,
+          result: {
+            worktreeId: "new-wt-id",
+            setupState: "needs-approval",
+            stage: "plugin-steps",
+            error: null,
+            timedOut: false,
+          },
+        };
+      }
+      return { ok: true, result: undefined };
+    });
+    renderDialog();
+    await advanceTimersGradually(500);
+    await nameBranch();
+    await submit();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    expect(runRecipe).not.toHaveBeenCalled();
+    expect(
+      mockNotify.mock.calls.find(([payload]) => payload.title === "Recipe not started")
+    ).toBeDefined();
+  });
+
+  it("runs a recipe with no agent straight away, without waiting on setup", async () => {
+    recipePickerCalls.selected = { id: "r2", name: "Shells", terminals: [{ type: "terminal" }] };
+    const runRecipe = vi.mocked(useRecipeStore((s) => s.runRecipeWithResults));
+    runRecipe.mockResolvedValue({ spawned: [], failed: [] });
+    renderDialog();
+    await advanceTimersGradually(500);
+    await nameBranch();
+    await submit();
+
+    expect(runRecipe).toHaveBeenCalledTimes(1);
+    expect(actionCalls("worktree.waitUntilReady")).toHaveLength(0);
   });
 
   it("hands the agent back instead of starting a second one when the recipe starts an agent", async () => {

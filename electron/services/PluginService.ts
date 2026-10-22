@@ -286,6 +286,11 @@ import {
   unregisterFileDecorationProviders,
 } from "./fileDecorationRegistry.js";
 import {
+  registerWorktreeSetupSteps,
+  unregisterWorktreeSetupStepHandlers,
+  unregisterWorktreeSetupSteps,
+} from "./worktreeSetupStepRegistry.js";
+import {
   getPluginIdForAgent,
   registerPluginAgents,
   unregisterPluginAgents,
@@ -2581,6 +2586,15 @@ export class PluginService {
 
     if (manifest.contributes.fileDecorationProviders.length > 0) {
       registerFileDecorationProviders(pluginId, manifest.contributes.fileDecorationProviders);
+    }
+
+    const worktreeSetupSteps = manifest.contributes.worktreeSetupSteps ?? [];
+    if (worktreeSetupSteps.length > 0) {
+      registerWorktreeSetupSteps(
+        pluginId,
+        { pluginName: manifest.displayName || manifest.name, pluginVersion: manifest.version },
+        worktreeSetupSteps
+      );
     }
 
     // Skills (#10892) are read and parsed eagerly here so the built-in MCP
@@ -5179,6 +5193,11 @@ export class PluginService {
     return this.plugins.has(pluginId);
   }
 
+  /** Whether the plugin is loaded and its latest activation succeeded. */
+  isPluginActivated(pluginId: string): boolean {
+    return this.activatedPlugins.has(pluginId);
+  }
+
   /**
    * What "Back up data…" needs to find a loaded plugin's databases, read from
    * the host's own manifest and binding so a caller can name nothing but the
@@ -7331,6 +7350,12 @@ export class PluginService {
     runUnloadStep(pluginId, "unregisterFileDecorationProviderImpls", () =>
       unregisterFileDecorationProviderImpls(pluginId)
     );
+    runUnloadStep(pluginId, "unregisterWorktreeSetupSteps", () =>
+      unregisterWorktreeSetupSteps(pluginId)
+    );
+    runUnloadStep(pluginId, "unregisterWorktreeSetupStepHandlers", () =>
+      unregisterWorktreeSetupStepHandlers(pluginId)
+    );
     runUnloadStep(pluginId, "unregisterPluginSkills", () => unregisterPluginSkills(pluginId));
     runUnloadStep(pluginId, "unregisterPluginThemes", () => {
       if (!unregisterPluginThemes(pluginId)) return;
@@ -7750,6 +7775,9 @@ export class PluginService {
     );
     runUnloadStep(pluginId, "unregisterFileDecorationProviderImpls", () =>
       unregisterFileDecorationProviderImpls(pluginId)
+    );
+    runUnloadStep(pluginId, "unregisterWorktreeSetupStepHandlers", () =>
+      unregisterWorktreeSetupStepHandlers(pluginId)
     );
     runUnloadStep(pluginId, "cancelUiPrompts", () =>
       this.promptDispatcher.cancelForPlugin(pluginId)

@@ -234,3 +234,64 @@ describe("LifecycleCommandApprovalDialog", () => {
     expect(approveButton().disabled).toBe(true);
   });
 });
+
+describe("LifecycleCommandApprovalDialog plugin setup steps (#13807)", () => {
+  const PLUGIN_REVIEW: LifecycleCommandReview = {
+    fingerprint: "a".repeat(64),
+    sources: [],
+    pluginSteps: [{ pluginId: "acme", pluginName: "Acme", stepId: "db", label: "Provision DB" }],
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("asks to allow each step by plugin, as its own request rather than a repository's", async () => {
+    worktreeClientMock.getLifecycleCommandReview.mockResolvedValue(PLUGIN_REVIEW);
+
+    renderDialog();
+
+    expect(
+      await screen.findByText("Acme will run “Provision DB” when worktrees are created")
+    ).toBeDefined();
+    expect(screen.getByRole("heading", { name: "Allow plugin setup steps?" })).toBeDefined();
+    expect(document.querySelectorAll("pre")).toHaveLength(0);
+  });
+
+  it("allows exactly the reviewed steps and resumes the setup that waited on them", async () => {
+    worktreeClientMock.getLifecycleCommandReview.mockResolvedValue(PLUGIN_REVIEW);
+    worktreeClientMock.approveLifecycleCommands.mockResolvedValue(undefined);
+    const onClose = vi.fn();
+
+    renderDialog({ setupAwaitingApproval: true, onClose });
+    await screen.findByText("Acme will run “Provision DB” when worktrees are created");
+
+    fireEvent.click(approveButton(/allow and run setup/i));
+
+    await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
+    expect(worktreeClientMock.approveLifecycleCommands).toHaveBeenCalledWith(
+      "/repo-wt",
+      PLUGIN_REVIEW.fingerprint
+    );
+  });
+
+  it("lists plugin steps beside repository commands under one approval", async () => {
+    worktreeClientMock.getLifecycleCommandReview.mockResolvedValue({
+      ...REVIEW,
+      pluginSteps: PLUGIN_REVIEW.pluginSteps,
+    });
+
+    renderDialog({ setupAwaitingApproval: true });
+
+    await findSourcePath("/repo/.daintree/config.json");
+    expect(
+      screen.getByText("Acme will run “Provision DB” when worktrees are created")
+    ).toBeDefined();
+    expect(screen.getByRole("heading", { name: "Approve repository commands?" })).toBeDefined();
+    expect(screen.getByText("Runs right after setup")).toBeDefined();
+  });
+});

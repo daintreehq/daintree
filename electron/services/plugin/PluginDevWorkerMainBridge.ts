@@ -29,6 +29,7 @@ import type {
   PluginSettingsScope,
   PluginStorageScope,
   PluginRenderPdfOptions,
+  PluginWorktreeSetupStepContext,
 } from "../../../shared/types/plugin.js";
 import type { FileDecoration, FileDecorationProviderImpl } from "../../../shared/types/forge.js";
 import type {
@@ -70,6 +71,8 @@ import type {
   ShowConfirmParams,
   UnregisterFileDecorationProviderParams,
   UnregisterMcpToolsParams,
+  WorktreeSetupStepRegistrationParams,
+  WorktreeSetupStepWireContext,
   FsPathParams,
   FsReadFilesParams,
   FsWalkParams,
@@ -177,7 +180,8 @@ type InvokeTarget =
       toolName: string;
       args: Record<string, unknown>;
       caller: PluginMcpCaller;
-    };
+    }
+  | { kind: "worktree-setup-step"; stepId: string; context: WorktreeSetupStepWireContext };
 
 export interface PluginDevWorkerMainBridgeDeps {
   pluginId: string;
@@ -292,6 +296,9 @@ export class PluginDevWorkerMainBridge {
    * Retired with the generation like providers: the roster's `execute`s live in
    * the outgoing worker, and the replacement re-registers its own on activate. */
   private readonly mcpRosterDisposers = new Map<string, () => void>();
+  /** Disposers for the worktree setup step handlers the worker bound, keyed by
+   * step id. Retired with the generation like providers. */
+  private readonly setupStepDisposers = new Map<string, () => void>();
   /** Live handles for processes the worker spawned via `host.process.spawn`,
    * keyed by the host-assigned handle id. The worker addresses `kill` /
    * `restart` / `onExit` / `onCrash` by id; all are killed when a generation is
@@ -425,6 +432,7 @@ export class PluginDevWorkerMainBridge {
     for (const dispose of [
       ...this.providerDisposers.values(),
       ...this.mcpRosterDisposers.values(),
+      ...this.setupStepDisposers.values(),
     ]) {
       try {
         dispose();
@@ -434,6 +442,7 @@ export class PluginDevWorkerMainBridge {
     }
     this.providerDisposers.clear();
     this.mcpRosterDisposers.clear();
+    this.setupStepDisposers.clear();
   }
 
   /** Kill every process the worker spawned (the worker is going away — a fresh
@@ -1359,6 +1368,48 @@ export class PluginDevWorkerMainBridge {
         }
         return;
       }
+      case "registerWorktreeSetupStep": {
+        const { stepId } = params as WorktreeSetupStepRegistrationParams;
+        if (typeof stepId !== "string" || stepId.length === 0) {
+          throw new Error("registerWorktreeSetupStep: stepId must be a non-empty string");
+        }
+        const prior = this.setupStepDisposers.get(stepId);
+        if (prior) {
+          try {
+            prior();
+          } catch {
+            // best-effort
+          }
+        }
+        // The handler lives in the worker. Its signal cannot cross the port, so
+        // the wrapper forwards the context without it and cancels the invoke
+        // when it aborts; the worker aborts a signal of its own in turn.
+        const handler = ({ signal, ...context }: PluginWorktreeSetupStepContext) =>
+          this.invoke({ kind: "worktree-setup-step", stepId, context }, signal).then(
+            () => undefined
+          );
+        const generation = this.reloadGeneration;
+        const dispose = await this.host.registerWorktreeSetupStep(stepId, handler);
+        if (this.disposed || generation !== this.reloadGeneration) {
+          try {
+            dispose();
+          } catch {
+            // best-effort
+          }
+          return;
+        }
+        this.setupStepDisposers.set(stepId, dispose);
+        return;
+      }
+      case "unregisterWorktreeSetupStep": {
+        const { stepId } = params as WorktreeSetupStepRegistrationParams;
+        const dispose = this.setupStepDisposers.get(stepId);
+        if (dispose) {
+          this.setupStepDisposers.delete(stepId);
+          dispose();
+        }
+        return;
+      }
       case "mcp.registerTools": {
         const p = params as Partial<RegisterMcpToolsParams> | null | undefined;
         if (
@@ -1753,6 +1804,14 @@ export class PluginDevWorkerMainBridge {
           channel: target.channel,
           ctx: target.ctx,
           args: target.args,
+        });
+      } else if (target.kind === "worktree-setup-step") {
+        sent = this.workerHost.send({
+          type: "invoke",
+          requestId,
+          kind: "worktree-setup-step",
+          stepId: target.stepId,
+          context: target.context,
         });
       } else {
         sent = this.workerHost.send({

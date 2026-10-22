@@ -59,6 +59,7 @@ import type {
   PluginPtyProcessHandle,
   PluginProcessDataChunk,
   PluginProcessMode,
+  PluginWorktreeSetupStepHandler,
 } from "../../../shared/types/plugin.js";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { pathToFileURL } from "node:url";
@@ -226,6 +227,16 @@ export class PluginDevWorkerHostProxy {
   /** Signals handed to in-flight `mcp-tool` executes, keyed by invoke requestId,
    * so a main-side `invoke-cancel` reaches the plugin's `execute`. */
   private readonly mcpInvokeAborts = new Map<string, AbortController>();
+  /** Bound `worktreeSetupSteps` handlers, keyed by step id. Each registration
+   * is its own binding object, so a disposer owns exactly the one it made even
+   * when a later registration reuses the same callback. */
+  private readonly worktreeSetupSteps = new Map<
+    string,
+    { readonly handler: PluginWorktreeSetupStepHandler }
+  >();
+  /** Signals handed to in-flight `worktree-setup-step` handlers, keyed by invoke
+   * requestId, so a main-side `invoke-cancel` reaches the handler. */
+  private readonly setupStepInvokeAborts = new Map<string, AbortController>();
   /**
    * Non-MCP invokes still running, and whether main has since cancelled each
    * (its deadline passed). A cancelled invoke's handler cannot be interrupted,
@@ -287,6 +298,9 @@ export class PluginDevWorkerHostProxy {
     this.mcpRosters.clear();
     for (const controller of this.mcpInvokeAborts.values()) controller.abort();
     this.mcpInvokeAborts.clear();
+    this.worktreeSetupSteps.clear();
+    for (const controller of this.setupStepInvokeAborts.values()) controller.abort();
+    this.setupStepInvokeAborts.clear();
     // Forgotten, not cancelled: an invoke settling after dispose still reports
     // (a command disposed mid-import answers with that error), but nothing
     // here keeps it alive.
@@ -328,6 +342,7 @@ export class PluginDevWorkerHostProxy {
       }
       case "invoke":
         if (msg.kind === "mcp-tool") void this.handleMcpToolInvoke(msg);
+        else if (msg.kind === "worktree-setup-step") void this.handleSetupStepInvoke(msg);
         else void this.invocation.run(msg.requestId, () => this.handleInvoke(msg));
         return true;
       case "invoke-cancel": {
@@ -338,6 +353,9 @@ export class PluginDevWorkerHostProxy {
         const controller = this.mcpInvokeAborts.get(msg.requestId);
         this.mcpInvokeAborts.delete(msg.requestId);
         controller?.abort();
+        const setupStep = this.setupStepInvokeAborts.get(msg.requestId);
+        this.setupStepInvokeAborts.delete(msg.requestId);
+        setupStep?.abort();
         // Same for a plain invoke: the entry goes now, and the cancelled mark on
         // the object its settle closure holds makes a late result a no-op.
         const running = this.runningInvokes.get(msg.requestId);
@@ -441,8 +459,41 @@ export class PluginDevWorkerHostProxy {
     }
   }
 
+  /**
+   * Run one worktree setup step. Like {@link handleMcpToolInvoke}, the handler
+   * gets a signal a matching `invoke-cancel` aborts — main's timeout, or the
+   * worktree being deleted — and nothing is posted back once it has.
+   */
+  private async handleSetupStepInvoke(
+    msg: Extract<PluginHostToWorkerMessage, { type: "invoke"; kind: "worktree-setup-step" }>
+  ): Promise<void> {
+    const controller = new AbortController();
+    this.setupStepInvokeAborts.set(msg.requestId, controller);
+    const settle = (outcome: { ok: true; result: null } | { ok: false; error: string }): void => {
+      if (controller.signal.aborted || this.disposed) return;
+      this.post({ type: "invoke-result", requestId: msg.requestId, ...outcome });
+    };
+    try {
+      const handler = this.worktreeSetupSteps.get(msg.stepId)?.handler;
+      if (!handler) {
+        throw new Error(`No worktree setup step registered for "${msg.stepId}"`);
+      }
+      await handler(Object.freeze({ ...msg.context, signal: controller.signal }));
+      settle({ ok: true, result: null });
+    } catch (err) {
+      settle({ ok: false, error: formatErrorMessage(err, "setup step failed") });
+    } finally {
+      if (this.setupStepInvokeAborts.get(msg.requestId) === controller) {
+        this.setupStepInvokeAborts.delete(msg.requestId);
+      }
+    }
+  }
+
   private async handleInvoke(
-    msg: Exclude<Extract<PluginHostToWorkerMessage, { type: "invoke" }>, { kind: "mcp-tool" }>
+    msg: Exclude<
+      Extract<PluginHostToWorkerMessage, { type: "invoke" }>,
+      { kind: "mcp-tool" } | { kind: "worktree-setup-step" }
+    >
   ): Promise<void> {
     const running = { cancelled: false };
     this.runningInvokes.set(msg.requestId, running);
@@ -1206,6 +1257,33 @@ export class PluginDevWorkerHostProxy {
             this.fileDecorationProviders.delete(providerId);
           }
           this.notify("unregisterFileDecorationProvider", { providerId });
+        };
+        return Promise.resolve(dispose);
+      },
+      registerWorktreeSetupStep: (stepId: string, handler: PluginWorktreeSetupStepHandler) => {
+        this.assertActivationOpen("registerWorktreeSetupStep");
+        if (typeof stepId !== "string" || stepId.length === 0) {
+          throw new Error(
+            `Plugin "${this.pluginId}" registerWorktreeSetupStep: stepId must be a non-empty string`
+          );
+        }
+        if (typeof handler !== "function") {
+          throw new Error(
+            `Plugin "${this.pluginId}" registerWorktreeSetupStep: handler must be a function`
+          );
+        }
+        const binding = { handler };
+        this.worktreeSetupSteps.set(stepId, binding);
+        this.notify("registerWorktreeSetupStep", { stepId }, `worktreeSetupStep:${stepId}`);
+        let disposed = false;
+        const dispose = (): void => {
+          if (disposed) return;
+          disposed = true;
+          // A disposer whose binding a later register replaced is inert: main
+          // holds one binding per step id, and it is the replacement's.
+          if (this.worktreeSetupSteps.get(stepId) !== binding) return;
+          this.worktreeSetupSteps.delete(stepId);
+          this.notify("unregisterWorktreeSetupStep", { stepId });
         };
         return Promise.resolve(dispose);
       },

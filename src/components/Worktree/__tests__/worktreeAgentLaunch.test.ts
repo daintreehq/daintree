@@ -47,6 +47,7 @@ vi.mock("@/store/panelStore", () => ({ usePanelStore: panelStore }));
 import {
   launchFirstAgent,
   notifyAgentNotStarted,
+  runAgentLayoutWhenReady,
   startFirstAgentWhenReady,
   waitForWorktreeSetup,
   waitForSpawnOutcome,
@@ -302,5 +303,49 @@ describe("waitForSpawnOutcome", () => {
     await vi.advanceTimersByTimeAsync(1_000);
     await expect(outcome).resolves.toBe("unknown");
     expect(panelStore.listenerCount()).toBe(0);
+  });
+});
+
+describe("runAgentLayoutWhenReady (#13807)", () => {
+  function layout() {
+    return { worktreeId: "wt-1", name: "Dev agents", run: vi.fn(async () => undefined) };
+  }
+
+  it("runs the layout once setup, plugin steps included, reports ready", async () => {
+    scriptDispatch([readiness("running", true), readiness("ready")]);
+    const recipe = layout();
+
+    await runAgentLayoutWhenReady(recipe);
+
+    expect(recipe.run).toHaveBeenCalledTimes(1);
+    expect(mockNotify).not.toHaveBeenCalled();
+  });
+
+  it.each(["failed", "timed-out", "needs-approval"])(
+    "hands the layout back instead of starting its agent when setup is %s",
+    async (state) => {
+      scriptDispatch([readiness(state)]);
+      const recipe = layout();
+
+      await runAgentLayoutWhenReady(recipe);
+
+      expect(recipe.run).not.toHaveBeenCalled();
+      const payload = lastNotifyPayload();
+      expect(payload.title).toBe("Recipe not started");
+      expect(payload.action.label).toBe("Run Dev agents");
+      expect(payload.placement).toBe("grid-bar");
+    }
+  );
+
+  it("runs a handed-back layout at most once, straight away after a hard failure", async () => {
+    scriptDispatch([readiness("failed")]);
+    const recipe = layout();
+    await runAgentLayoutWhenReady(recipe);
+
+    const { action } = lastNotifyPayload();
+    action.onClick();
+    action.onClick();
+    await vi.waitFor(() => expect(recipe.run).toHaveBeenCalledTimes(1));
+    expect(mockDismissNotification).toHaveBeenCalledWith("bar-1");
   });
 });

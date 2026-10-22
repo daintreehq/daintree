@@ -16,6 +16,7 @@ import type {
 import { PERF_MARKS } from "../../shared/perf/marks.js";
 import { BrokerError, RequestResponseBroker } from "./rpc/RequestResponseBroker.js";
 import { dispatchForgeRpc } from "./forgeRpcServer.js";
+import { WorktreeSetupRpcServer } from "./worktreeSetupRpcServer.js";
 import { createLogger, ingestHostLogEvent } from "../utils/logger.js";
 import { describeProcessDeath } from "./processDeathDescription.js";
 import { mainBootAbsMs, markPerformance } from "../utils/performance.js";
@@ -228,10 +229,16 @@ export class WorkspaceHostProcess extends EventEmitter {
    */
   private flushCurrentHostOutput: (() => void) | null = null;
 
+  /** Runs plugin worktree setup steps for this host's project (#13807). */
+  private readonly worktreeSetupRpc: WorktreeSetupRpcServer;
+
   constructor(projectPath: string, config: Required<WorkspaceClientConfig>) {
     super();
     this.projectPath = projectPath;
     this.config = config;
+    this.worktreeSetupRpc = new WorktreeSetupRpcServer(projectPath, (request) =>
+      this.send(request)
+    );
 
     const safeName = path
       .basename(projectPath)
@@ -586,6 +593,7 @@ export class WorkspaceHostProcess extends EventEmitter {
         projectScopeId: this.projectPath,
       })
     );
+    this.worktreeSetupRpc.dispose();
 
     if (this.child) {
       this.disposeTrace = {
@@ -901,6 +909,8 @@ export class WorkspaceHostProcess extends EventEmitter {
       this.missedHeartbeats = 0;
       this.isInitialized = false;
       this.child = null;
+      // Nobody is waiting on these any more; a restarted host starts its own.
+      this.worktreeSetupRpc.abortAll();
 
       this.broker.clear(
         new BrokerError("HOST_EXITED", "Workspace Host crashed", {
@@ -1280,6 +1290,18 @@ export class WorkspaceHostProcess extends EventEmitter {
           },
           (request) => this.send(request)
         );
+        break;
+
+      case "worktree-setup:list":
+        this.worktreeSetupRpc.handleList(event.setupRequestId);
+        break;
+
+      case "worktree-setup:run":
+        this.worktreeSetupRpc.handleRun(event.setupRequestId, event.step, event.target);
+        break;
+
+      case "worktree-setup:cancel":
+        this.worktreeSetupRpc.handleCancel(event.setupRequestId);
         break;
 
       // Spontaneous events - re-emit for the manager to route. The relay is

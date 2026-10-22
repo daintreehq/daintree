@@ -21,10 +21,12 @@ import type {
   WorktreeTeardownPhasePreview,
   WorktreeTeardownPreview,
 } from "../../shared/types/worktree.js";
+import type { WorktreeSetupStepDescriptor } from "../../shared/types/workspace-host.js";
 import { applyResourceConfigToMonitor } from "./resourceConfigHelpers.js";
 import {
   FileLifecycleCommandApprovalStore,
   fingerprintCommandGroups,
+  fingerprintPluginSetupStep,
   fingerprintReview,
   lifecycleConfigCommandGroups,
   resolveLifecycleCommandApprovalsDir,
@@ -302,39 +304,77 @@ export class WorktreeLifecycleService {
   }
 
   /**
-   * The unapproved repository commands this worktree would run, or `null` when
-   * everything it would run is the user's own or already approved.
+   * The unapproved repository commands this worktree would run, and the
+   * project's plugin setup steps not yet allowed, or `null` when everything is
+   * the user's own or already approved.
    */
   async getCommandReview(
     worktreePath: string,
-    projectRootPath: string
+    projectRootPath: string,
+    pluginSteps: readonly WorktreeSetupStepDescriptor[] = []
   ): Promise<LifecycleCommandReview | null> {
     const pending = await this.pendingSources(worktreePath, projectRootPath);
-    if (pending.length === 0) return null;
+    const pendingSteps = await this.pendingPluginSteps(pluginSteps, projectRootPath);
+    if (pending.length === 0 && pendingSteps.length === 0) return null;
     return {
-      fingerprint: fingerprintReview(pending),
+      fingerprint: fingerprintReview(pending, pendingSteps.map(fingerprintPluginSetupStep)),
       sources: pending.map(({ path, groups }) => ({ path, groups })),
+      ...(pendingSteps.length > 0
+        ? {
+            pluginSteps: pendingSteps.map(({ pluginId, pluginName, stepId, label }) => ({
+              pluginId,
+              pluginName,
+              stepId,
+              label,
+            })),
+          }
+        : {}),
     };
   }
 
   /**
-   * Approve the commands a review showed. Recomputed here rather than trusted
-   * from the caller, and refused when they no longer match what was reviewed.
+   * Approve the commands and plugin steps a review showed. Recomputed here
+   * rather than trusted from the caller, and refused when they no longer match
+   * what was reviewed.
    */
   async approveCommandReview(
     worktreePath: string,
     projectRootPath: string,
-    fingerprint: string
+    fingerprint: string,
+    pluginSteps: readonly WorktreeSetupStepDescriptor[] = []
   ): Promise<void> {
     const pending = await this.pendingSources(worktreePath, projectRootPath);
-    if (pending.length === 0) return;
-    if (fingerprintReview(pending) !== fingerprint) {
+    const pendingSteps = await this.pendingPluginSteps(pluginSteps, projectRootPath);
+    if (pending.length === 0 && pendingSteps.length === 0) return;
+    const stepFingerprints = pendingSteps.map(fingerprintPluginSetupStep);
+    if (fingerprintReview(pending, stepFingerprints) !== fingerprint) {
       throw new Error("These commands changed after you reviewed them. Review them again.");
     }
-    await this.approvals.approve(
-      projectRootPath,
-      pending.map((source) => source.fingerprint)
-    );
+    await this.approvals.approve(projectRootPath, [
+      ...pending.map((source) => source.fingerprint),
+      ...stepFingerprints,
+    ]);
+  }
+
+  /** The plugin setup steps the user has not allowed for this project (#13807). */
+  async pendingPluginSteps(
+    steps: readonly WorktreeSetupStepDescriptor[],
+    projectRootPath: string
+  ): Promise<WorktreeSetupStepDescriptor[]> {
+    const pending: WorktreeSetupStepDescriptor[] = [];
+    for (const step of steps) {
+      let approved: boolean;
+      try {
+        approved = await this.approvals.isApproved(
+          projectRootPath,
+          fingerprintPluginSetupStep(step)
+        );
+      } catch {
+        approved = false;
+      }
+      if (!approved) pending.push(step);
+    }
+    return pending;
   }
 
   private async pendingSources(

@@ -2482,3 +2482,136 @@ describe("PluginDevWorkerHostProxy restartWorker (#13410)", () => {
     await expect(promise).resolves.toBe("unavailable");
   });
 });
+
+describe("PluginDevWorkerHostProxy worktree setup steps (#13807)", () => {
+  const context = {
+    projectId: "project-1",
+    worktreeId: "/repo/wt",
+    worktreePath: "/repo/wt",
+    branch: "feature/x",
+  };
+
+  it("notifies main on register, keeps the handler in the worker, and unregisters on dispose", async () => {
+    const { proxy, sent } = makeProxy();
+    const dispose = await proxy.host.registerWorktreeSetupStep("db", vi.fn());
+
+    expect(sent.find((m) => m.type === "host-notify")).toMatchObject({
+      method: "registerWorktreeSetupStep",
+      registrationKey: "worktreeSetupStep:db",
+      params: { stepId: "db" },
+    });
+    dispose();
+    expect(sent.at(-1)).toMatchObject({
+      method: "unregisterWorktreeSetupStep",
+      params: { stepId: "db" },
+    });
+  });
+
+  it("runs the handler with the context and a signal of its own, and reports success", async () => {
+    const { proxy, sent } = makeProxy();
+    const handler = vi.fn(async () => undefined);
+    await proxy.host.registerWorktreeSetupStep("db", handler);
+
+    proxy.handleMessage({
+      type: "invoke",
+      requestId: "s1",
+      kind: "worktree-setup-step",
+      stepId: "db",
+      context,
+    } as any);
+    await flush();
+
+    expect(handler).toHaveBeenCalledWith({ ...context, signal: expect.any(AbortSignal) });
+    expect(sent.find((m) => m.type === "invoke-result")).toMatchObject({
+      requestId: "s1",
+      ok: true,
+    });
+  });
+
+  it("reports a throwing handler as a failure with its message", async () => {
+    const { proxy, sent } = makeProxy();
+    await proxy.host.registerWorktreeSetupStep("db", async () => {
+      throw new Error("quota exceeded");
+    });
+
+    proxy.handleMessage({
+      type: "invoke",
+      requestId: "s2",
+      kind: "worktree-setup-step",
+      stepId: "db",
+      context,
+    } as any);
+    await flush();
+
+    expect(sent.find((m) => m.type === "invoke-result")).toMatchObject({
+      requestId: "s2",
+      ok: false,
+      error: "quota exceeded",
+    });
+  });
+
+  it("aborts the handler's signal on invoke-cancel and posts nothing after", async () => {
+    const { proxy, sent } = makeProxy();
+    let signal: AbortSignal | undefined;
+    let finish!: () => void;
+    await proxy.host.registerWorktreeSetupStep("db", (ctx) => {
+      signal = ctx.signal;
+      return new Promise<void>((resolve) => (finish = resolve));
+    });
+
+    proxy.handleMessage({
+      type: "invoke",
+      requestId: "s3",
+      kind: "worktree-setup-step",
+      stepId: "db",
+      context,
+    } as any);
+    await flush();
+    proxy.handleMessage({ type: "invoke-cancel", requestId: "s3" } as any);
+    finish();
+    await flush();
+
+    expect(signal?.aborted).toBe(true);
+    expect(sent.some((m) => m.type === "invoke-result" && m.requestId === "s3")).toBe(false);
+  });
+
+  it("leaves the replacement bound in main when an overwritten binding's disposer runs", async () => {
+    const { proxy, sent } = makeProxy();
+    const disposeFirst = await proxy.host.registerWorktreeSetupStep("db", vi.fn());
+    await proxy.host.registerWorktreeSetupStep("db", vi.fn());
+
+    disposeFirst();
+
+    expect(
+      sent.some((m) => m.type === "host-notify" && m.method === "unregisterWorktreeSetupStep")
+    ).toBe(false);
+  });
+
+  it("keeps a replacement that reuses the same callback when the first disposer runs", async () => {
+    const { proxy, sent } = makeProxy();
+    const handler = vi.fn(async () => undefined);
+    const disposeFirst = await proxy.host.registerWorktreeSetupStep("db", handler);
+    await proxy.host.registerWorktreeSetupStep("db", handler);
+
+    disposeFirst();
+
+    expect(
+      sent.some((m) => m.type === "host-notify" && m.method === "unregisterWorktreeSetupStep")
+    ).toBe(false);
+    proxy.handleMessage({
+      type: "invoke",
+      requestId: "s9",
+      kind: "worktree-setup-step",
+      stepId: "db",
+      context,
+    } as any);
+    await flush();
+    expect(handler).toHaveBeenCalledTimes(1);
+  });
+
+  it("refuses registration once activation has closed", () => {
+    const { proxy } = makeProxy();
+    proxy.revoke();
+    expect(() => proxy.host.registerWorktreeSetupStep("db", vi.fn())).toThrow(/revoked/);
+  });
+});
