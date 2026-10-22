@@ -16,7 +16,8 @@ import { onProjectPresenceChanged } from "../window/projectPresenceChanges.js";
  * announced is stamped at the next snapshot instead, which only delays a
  * reclaim. The one early stamp is a cold switch's outgoing project: the active
  * pointer moves before the bridge that keeps its view painted is armed, so it
- * reads as gone up to one view-load timeout before it is.
+ * reads as gone up to one hard load timeout plus paint gate (under a minute)
+ * before it is.
  *
  * In memory only. A project nothing has seen counts as idle from the first
  * snapshot, taken as tracking starts during boot, so a restart grants every
