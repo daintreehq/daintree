@@ -96,6 +96,7 @@ import { registerCommands } from "../services/commands/index.js";
 import { store, wasStoreFreshAtBoot } from "../store.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 import type { ResourceProfile } from "../../shared/types/resourceProfile.js";
+import type { IdleBackgroundAutoCloseService } from "../services/IdleBackgroundAutoCloseService.js";
 import {
   setCcrConfigService,
   getResourceProfileService,
@@ -747,6 +748,10 @@ export async function initGlobalServices(
     },
   });
 
+  // Set once the idle auto-close scheduler is wired; until then the pressure
+  // ladder's sleep lever has nothing to run and reports nothing done.
+  let idleSleepService: IdleBackgroundAutoCloseService | null = null;
+
   registerDeferredTask({
     name: "app-metrics-monitor",
     run: () => {
@@ -800,7 +805,8 @@ export async function initGlobalServices(
             }
             return tabsEvicted;
           },
-          hibernateIdleProjects: () => getHibernationService().hibernateUnderMemoryPressure(),
+          hibernateIdleProjects: async () =>
+            (await idleSleepService?.sleepUnderMemoryPressure()) ?? 0,
           evictCachedProjectViews: () => {
             if (!windowRegistry) return 0;
             let viewsEvicted = 0;
@@ -1120,6 +1126,7 @@ export async function initGlobalServices(
         });
       });
       svc.start();
+      idleSleepService = svc;
     },
   });
 

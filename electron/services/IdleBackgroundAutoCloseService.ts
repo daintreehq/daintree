@@ -4,12 +4,18 @@ import {
   type IdleBackgroundAutoCloseConfig,
   type IdleBackgroundClosedPayload,
   type IdleBackgroundClosedProjectEntry,
+  type IdleBackgroundSweepTrigger,
 } from "../../shared/types/ipc/idleBackgroundAutoClose.js";
+import { RESOURCE_PROFILE_CONFIGS } from "../../shared/types/resourceProfile.js";
 import type { PtyClient } from "./PtyClient.js";
 import type { ProjectViewManager } from "../window/ProjectViewManager.js";
 import { collectActiveProjectIds } from "../window/activeProjectIds.js";
 import { projectVisibilityClock, type ProjectVisibilityClock } from "./projectVisibilityClock.js";
-import { getPtyClient, getWorkspaceClientRef } from "../window/serviceRefs.js";
+import {
+  getPtyClient,
+  getResourceProfileService,
+  getWorkspaceClientRef,
+} from "../window/serviceRefs.js";
 import { store } from "../store.js";
 import { projectStore } from "./ProjectStore.js";
 import { helpSessionService } from "./HelpSessionService.js";
@@ -23,6 +29,7 @@ import { probeRepositorySleepSafety } from "../utils/gitSleepSafety.js";
 import { probeResourceConfig } from "../utils/resourceConfigProbe.js";
 import { withTimeout } from "../utils/withTimeout.js";
 import {
+  censusMemoryKb,
   evaluateGit,
   evaluateShellTerminals,
   evaluateWorkspace,
@@ -41,6 +48,12 @@ const DEFAULT_CONFIG: IdleBackgroundAutoCloseConfig = {
 
 /** Bounds the workspace-host read a shell project's sleep waits on. */
 const WORKSPACE_READ_TIMEOUT_MS = 5_000;
+
+/**
+ * How long a pressure sweep keeps starting sleeps. The ladder's view and host
+ * levers wait on it, so the smallest candidates are left for the next pass.
+ */
+const PRESSURE_SWEEP_BUDGET_MS = 30_000;
 
 const MIN_THRESHOLD_MINUTES = 15;
 const MAX_THRESHOLD_MINUTES = 1440; // 24h
@@ -61,8 +74,8 @@ type BlockingReason = "terminal" | "assistant" | "coordination-hold";
 type SkipReason = IdleShellSkipReason | "mcp-dispatch" | "ineligible" | "coordination-hold";
 
 type ShellCloseResult =
-  | { status: "slept"; entry: IdleBackgroundClosedProjectEntry }
-  | { status: "skipped"; reason: SkipReason }
+  | { status: "slept"; entry: IdleBackgroundClosedProjectEntry; terminalsKilled: number }
+  | { status: "skipped"; reason: SkipReason; terminalsKilled?: number }
   | { status: "ineligible" };
 
 /**
@@ -75,6 +88,10 @@ type ShellCloseResult =
  * plain shells with nothing running, on their own 1h–8h threshold, behind the
  * gates in `idleShellSleepGates` (#13849). One scheduler for both, so the two
  * classes can never race each other over the same project.
+ *
+ * Memory pressure runs the same sweep early through
+ * {@link sleepUnderMemoryPressure} (#13852): the idle-shell threshold shortens
+ * to the resource profile's, and nothing else the project is held to changes.
  *
  * @pattern Factory/Accessor Methods (Pattern C)
  *
@@ -442,51 +459,89 @@ export class IdleBackgroundAutoCloseService {
   }
 
   private async checkAndClose(): Promise<void> {
+    await this.sweep("idle");
+  }
+
+  /**
+   * The tier-2 memory ladder's sleep lever (#13852). Runs the regular sweep
+   * now, for idle shell projects only, with their threshold shortened to the
+   * resource profile's `memoryPressureInactiveMs` — never past the user's own
+   * — and every other gate as it is. Projects with no terminals hold no
+   * processes to free and stay on their own schedule.
+   *
+   * Resolves with the number of terminals Sleep killed, the ladder's only
+   * account of whether this lever did anything (#12517). Zero, touching
+   * nothing, unless idle shells are opted in, and whenever a quiet window or
+   * another sweep is in the way: the ladder re-measures and backs off.
+   */
+  async sleepUnderMemoryPressure(): Promise<number> {
     const config = this.getConfig();
-    if (!config.enabled) return;
+    if (!config.enabled || !config.includeIdleShells) return 0;
+    return this.sweep("memory-pressure");
+  }
+
+  private async sweep(trigger: IdleBackgroundSweepTrigger): Promise<number> {
+    const config = this.getConfig();
+    if (!config.enabled) return 0;
 
     // Startup quiet period — let services settle and don't act immediately after
     // launch. Gated on `quietUntil`, seeded once on first start.
     if (this.quietUntil !== null && Date.now() < this.quietUntil) {
-      return;
+      return 0;
     }
 
     // Post-wake quiet period — don't sweep while the OS is still stabilizing.
     if (this.wakeQuietUntil !== null && Date.now() < this.wakeQuietUntil) {
-      return;
+      return 0;
     }
 
     // Skip if a prior sweep is still running — a stalled `getAllTerminalsAsync`
     // (pty-host backpressure/restart) must not let the 5-min tick stack overlapping
     // sweeps that double-evaluate the same project against pre-write snapshots.
-    if (this.sweepInProgress) return;
+    // A pressure sweep and a scheduled one share the guard for the same reason.
+    if (this.sweepInProgress) return 0;
     this.sweepInProgress = true;
     try {
-      await this.runSweep();
+      return await this.runSweep(trigger);
     } finally {
       this.sweepInProgress = false;
     }
   }
 
-  private async runSweep(): Promise<void> {
+  /** Resolves with the number of terminals the sweep's sleeps killed. */
+  private async runSweep(trigger: IdleBackgroundSweepTrigger): Promise<number> {
+    const startedAt = performance.now();
     const config = this.getConfig();
-    if (!config.enabled) return;
+    if (!config.enabled) return 0;
+    const underPressure = trigger === "memory-pressure";
+    if (underPressure && !config.includeIdleShells) return 0;
+
+    // Read at every check rather than fixed here, so a threshold the user
+    // raises mid-sweep holds the projects the sweep hasn't reached yet.
+    const shellThresholdMs = !config.includeIdleShells
+      ? null
+      : underPressure
+        ? () => this.pressureShellThresholdMs()
+        : () => this.shellThresholdMs();
+    const thresholdMs = underPressure ? null : config.thresholdMinutes * 60 * 1000;
 
     const projects = projectStore.getAllProjects();
-    if (projects.length === 0) return;
+    if (projects.length === 0) return 0;
 
     // Read the live terminal registry every sweep — never cache it in the timer
     // closure, so a project that briefly held a terminal and dropped back to
     // zero is re-evaluated fresh (lesson #8998). A degraded read aborts the
     // whole sweep: one silent shard would make every project on it look empty.
     const allTerminals = await this.readTerminals();
-    if (!allTerminals) return;
+    if (!allTerminals) return 0;
 
     const now = Date.now();
-    const thresholdMs = config.thresholdMinutes * 60 * 1000;
     const activeIds = this.collectActiveProjectIds();
 
     const closed: IdleBackgroundClosedProjectEntry[] = [];
+    let terminalsKilled = 0;
+    /** Shell projects through the sweep's screen, slept after it, largest first. */
+    const shellCandidates: Array<{ projectId: string; memoryKb: number }> = [];
     /** Projects held back purely by a live assistant — logged once per sweep. */
     const assistantProtected: string[] = [];
     /** Shell projects past their threshold that stayed awake, by the gate that held them. */
@@ -521,12 +576,12 @@ export class IdleBackgroundAutoCloseService {
       // A project whose only terminals are idle shells has a separate opt-in,
       // a separate threshold and a far longer list of things that hold it.
       const hasTerminals = allTerminals.some((t) => t.projectId === pid && isLiveTerminal(t));
-      if (hasTerminals && config.includeIdleShells) {
+      if (hasTerminals && shellThresholdMs) {
         if (this.hasLiveAssistantBackend(pid)) {
           assistantProtected.push(pid);
           continue;
         }
-        if (!this.isShellIdleOffScreen(pid, project.lastOpened)) continue;
+        if (!this.isShellIdleOffScreen(pid, project.lastOpened, shellThresholdMs())) continue;
         if (this.hasRemoteView(pid)) {
           skip("remote-host", pid);
           continue;
@@ -538,27 +593,28 @@ export class IdleBackgroundAutoCloseService {
         // Screen with the sweep's own snapshot first, so a project with a busy
         // shell costs no workspace or git reads. The census is read per project
         // because an earlier project's teardown can outlast its freshness bound.
+        const census = await this.readProcessInventory();
         const screened = evaluateShellTerminals(
           pid,
           allTerminals,
-          await this.readProcessInventory(),
+          census,
           Date.now(),
-          this.shellThresholdMs(),
+          shellThresholdMs(),
           this.awakeSince
         );
         if (!screened.ok) {
           skip(screened.reason, pid);
           continue;
         }
-        try {
-          const result = await this.closeShellProject(pid);
-          if (result.status === "slept") closed.push(result.entry);
-          else if (result.status === "skipped") skip(result.reason, pid);
-        } catch (error) {
-          logError("idle-background-auto-close-project-failed", error, { projectId: pid });
-        }
+        shellCandidates.push({
+          projectId: pid,
+          memoryKb: censusMemoryKb(census, pid, screened.value),
+        });
         continue;
       }
+
+      // Pressure only brings idle shells forward; these keep their own clock.
+      if (thresholdMs === null) continue;
 
       // Still within the idle threshold.
       if (this.isWithinIdleThreshold(pid, project.lastOpened, now, thresholdMs)) continue;
@@ -578,10 +634,47 @@ export class IdleBackgroundAutoCloseService {
 
       try {
         const result = await this.closeProject(pid, now, thresholdMs);
-        if (result) closed.push(result);
+        if (result) {
+          closed.push(result.entry);
+          terminalsKilled += result.terminalsKilled;
+        }
       } catch (error) {
         // Isolate per project — one teardown failure must not abort the sweep.
         logError("idle-background-auto-close-project-failed", error, { projectId: pid });
+      }
+    }
+
+    // Largest first, by the census's estimate: under pressure the ladder
+    // re-measures as soon as this returns, so the projects freeing the most
+    // shouldn't queue behind ones a later gate might hold anyway. Each one is
+    // still vetted from scratch before its sleep; this order is all the
+    // screen's census decides. Ties keep the store's order.
+    if (shellThresholdMs) {
+      shellCandidates.sort((a, b) => b.memoryKb - a.memoryKb);
+      for (const [index, { projectId }] of shellCandidates.entries()) {
+        if (
+          underPressure &&
+          index > 0 &&
+          performance.now() - startedAt >= PRESSURE_SWEEP_BUDGET_MS
+        ) {
+          logInfo("idle-background-auto-close-pressure-budget-spent", {
+            deferred: shellCandidates.slice(index).map((candidate) => candidate.projectId),
+          });
+          break;
+        }
+        try {
+          const result = await this.closeShellProject(projectId, shellThresholdMs);
+          if (result.status === "slept") {
+            closed.push(result.entry);
+            terminalsKilled += result.terminalsKilled;
+          } else if (result.status === "skipped") {
+            skip(result.reason, projectId);
+            // A refusal after the kill still took the terminals.
+            terminalsKilled += result.terminalsKilled ?? 0;
+          }
+        } catch (error) {
+          logError("idle-background-auto-close-project-failed", error, { projectId });
+        }
       }
     }
 
@@ -594,25 +687,33 @@ export class IdleBackgroundAutoCloseService {
       });
     }
     if (Object.keys(skipped).length > 0) {
-      logInfo("idle-background-auto-close-skip-idle-shells", { reasons: skipped });
+      logInfo("idle-background-auto-close-skip-idle-shells", { reasons: skipped, trigger });
     }
 
-    if (closed.length === 0) return;
+    if (closed.length === 0) return terminalsKilled;
 
     logInfo("idle-background-auto-close-fire", {
+      trigger,
       projectCount: closed.length,
+      terminalsKilled,
+      estimatedMemoryKb: closed.reduce((sum, entry) => sum + (entry.estimatedMemoryKb ?? 0), 0),
       thresholdMinutes: config.thresholdMinutes,
+      ...(shellThresholdMs
+        ? { shellThresholdMinutes: Math.round(shellThresholdMs() / 60_000) }
+        : {}),
     });
 
     const payload: IdleBackgroundClosedPayload = {
       projects: closed,
       timestamp: now,
+      trigger,
     };
     try {
       broadcastToRenderer(CHANNELS.IDLE_BACKGROUND_CLOSED, payload);
     } catch {
       // Window may be closing.
     }
+    return terminalsKilled;
   }
 
   /**
@@ -651,14 +752,31 @@ export class IdleBackgroundAutoCloseService {
   }
 
   /**
+   * The idle-shell threshold while memory is short: the active resource
+   * profile's `memoryPressureInactiveMs`, but never longer than the threshold
+   * the user chose. Read per check, so a profile change mid-sweep applies.
+   */
+  private pressureShellThresholdMs(): number {
+    const profile = getResourceProfileService()?.getProfile() ?? "balanced";
+    return Math.min(
+      this.shellThresholdMs(),
+      RESOURCE_PROFILE_CONFIGS[profile].memoryPressureInactiveMs
+    );
+  }
+
+  /**
    * Off screen everywhere for the whole shell threshold, counting only time
    * the machine was awake. `getAwakeTimeSince` also starts no earlier than
    * this launch, so a restart gives every project the full threshold again.
    */
-  private isShellIdleOffScreen(projectId: string, lastOpened: number): boolean {
+  private isShellIdleOffScreen(
+    projectId: string,
+    lastOpened: number,
+    thresholdMs: number
+  ): boolean {
     const idleSince = Math.max(this.visibilityClock.lastVisibleAt(projectId), lastOpened);
     if (idleSince > Date.now()) return false;
-    return this.awakeSince(idleSince) >= this.shellThresholdMs();
+    return this.awakeSince(idleSince) >= thresholdMs;
   }
 
   /**
@@ -707,7 +825,7 @@ export class IdleBackgroundAutoCloseService {
   }
 
   /** {@link readEligibleProject} for a project with idle shells. */
-  private readEligibleShellProject(projectId: string) {
+  private readEligibleShellProject(projectId: string, thresholdMs: () => number) {
     const config = this.getConfig();
     if (!config.enabled || !config.includeIdleShells) return null;
     const fresh = projectStore.getProjectById(projectId);
@@ -716,7 +834,7 @@ export class IdleBackgroundAutoCloseService {
     if (!fresh.lastOpened || fresh.lastOpened <= 0) return null;
     if (this.collectActiveProjectIds().has(projectId)) return null;
     if (this.hasRemoteView(projectId)) return null;
-    if (!this.isShellIdleOffScreen(projectId, fresh.lastOpened)) return null;
+    if (!this.isShellIdleOffScreen(projectId, fresh.lastOpened, thresholdMs())) return null;
     if (this.hasLiveAssistantBackend(projectId)) return null;
     return fresh;
   }
@@ -731,9 +849,15 @@ export class IdleBackgroundAutoCloseService {
    * vetted here, still quiet, so a shell opened or typed into after this point
    * stops it. Resource config and the repository are read from disk rather
    * than from the host, whose view of both is a cache.
+   *
+   * `thresholdMs` is the sweep's idle-shell threshold, the user's or the
+   * shorter one memory pressure allows; every check here reads it.
    */
-  private async closeShellProject(projectId: string): Promise<ShellCloseResult> {
-    const project = this.readEligibleShellProject(projectId);
+  private async closeShellProject(
+    projectId: string,
+    thresholdMs: () => number
+  ): Promise<ShellCloseResult> {
+    const project = this.readEligibleShellProject(projectId, thresholdMs);
     if (!project) return { status: "ineligible" };
 
     const read = await this.readWorkspace(project.path, projectId);
@@ -756,7 +880,7 @@ export class IdleBackgroundAutoCloseService {
       this.readProcessInventory(),
     ]);
     if (!terminals) return { status: "skipped", reason: "terminal-unknown" };
-    if (!this.readEligibleShellProject(projectId)) return { status: "ineligible" };
+    if (!this.readEligibleShellProject(projectId, thresholdMs)) return { status: "ineligible" };
     if (this.coordinationHold(projectId) !== null) {
       return { status: "skipped", reason: "coordination-hold" };
     }
@@ -765,10 +889,16 @@ export class IdleBackgroundAutoCloseService {
       terminals,
       census,
       Date.now(),
-      this.shellThresholdMs(),
+      thresholdMs(),
       this.awakeSince
     );
     if (!vetted.ok) return { status: "skipped", reason: vetted.reason };
+    // Every shell it had is gone since the sweep looked, so it is a project
+    // with no terminals now, and those sleep on their own clock.
+    if (vetted.value.size === 0) return { status: "ineligible" };
+    // Taken now: once the kill lands there is no tree left to read. The kill
+    // is held to exactly these terminals, so this is what it frees.
+    const estimatedMemoryKb = censusMemoryKb(census, projectId, vetted.value);
 
     const outcome = await sleepProject(
       projectId,
@@ -777,7 +907,7 @@ export class IdleBackgroundAutoCloseService {
         autoParkedAt: Date.now(),
         isStillEligible: () =>
           this.ptyClient === client &&
-          this.readEligibleShellProject(projectId) !== null &&
+          this.readEligibleShellProject(projectId, thresholdMs) !== null &&
           this.coordinationHold(projectId) === null,
         allowsTerminals: (snapshot) =>
           !snapshot.degraded &&
@@ -786,7 +916,7 @@ export class IdleBackgroundAutoCloseService {
             snapshot.terminals,
             vetted.value,
             Date.now(),
-            this.shellThresholdMs(),
+            thresholdMs(),
             this.awakeSince
           ),
       },
@@ -800,6 +930,7 @@ export class IdleBackgroundAutoCloseService {
       return {
         status: "skipped",
         reason: outcome.reason === "in-flight" ? "ineligible" : outcome.reason,
+        terminalsKilled: outcome.terminalsKilled,
       };
     }
     if (outcome.status !== "slept") return { status: "ineligible" };
@@ -807,8 +938,17 @@ export class IdleBackgroundAutoCloseService {
     logInfo("idle-background-auto-close-slept-idle-shells", {
       projectId,
       terminalsKilled: outcome.terminalsKilled,
+      estimatedMemoryKb,
     });
-    return { status: "slept", entry: { projectId, projectName: project.name } };
+    return {
+      status: "slept",
+      entry: {
+        projectId,
+        projectName: project.name,
+        ...(estimatedMemoryKb > 0 ? { estimatedMemoryKb } : {}),
+      },
+      terminalsKilled: outcome.terminalsKilled,
+    };
   }
 
   /**
@@ -823,7 +963,7 @@ export class IdleBackgroundAutoCloseService {
     projectId: string,
     now: number,
     thresholdMs: number
-  ): Promise<IdleBackgroundClosedProjectEntry | null> {
+  ): Promise<{ entry: IdleBackgroundClosedProjectEntry; terminalsKilled: number } | null> {
     // Re-verify eligibility against FRESH state immediately before the
     // irreversible teardown. The sweep snapshotted projects (status, lastOpened)
     // and terminals before this async loop, so during an earlier project's awaits
@@ -877,7 +1017,10 @@ export class IdleBackgroundAutoCloseService {
       terminalsKilled: outcome.terminalsKilled,
     });
 
-    return { projectId, projectName: project.name };
+    return {
+      entry: { projectId, projectName: project.name },
+      terminalsKilled: outcome.terminalsKilled,
+    };
   }
 }
 

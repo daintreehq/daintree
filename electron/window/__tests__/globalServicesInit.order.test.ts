@@ -235,6 +235,18 @@ vi.mock("../../services/ProcessMemoryMonitor.js", () => ({
   startAppMetricsMonitor: vi.fn(() => () => {}),
 }));
 
+const idleAutoCloseServiceMock = vi.hoisted(() => ({
+  setPtyClient: vi.fn(),
+  setProjectViewManagersProvider: vi.fn(),
+  setCoordinationHoldProvider: vi.fn(),
+  start: vi.fn(),
+  sleepUnderMemoryPressure: vi.fn(async () => 0),
+}));
+
+vi.mock("../../services/IdleBackgroundAutoCloseService.js", () => ({
+  getIdleBackgroundAutoCloseService: () => idleAutoCloseServiceMock,
+}));
+
 vi.mock("../../services/ResourceProfileService.js", () => ({
   ResourceProfileService: class {
     start = vi.fn();
@@ -359,10 +371,13 @@ import {
   setPtyClientRef,
   getStopEventLoopLagMonitor,
   setStopEventLoopLagMonitor,
+  getStopAppMetricsMonitor,
+  setStopAppMetricsMonitor,
 } from "../serviceRefs.js";
 import type { WindowRegistry } from "../WindowRegistry.js";
 import { app, ipcMain, powerMonitor } from "electron";
 import { startEventLoopLagMonitor } from "../../utils/performance.js";
+import { startAppMetricsMonitor } from "../../services/ProcessMemoryMonitor.js";
 import type { Mock } from "vitest";
 import { CHANNELS } from "../../ipc/channels.js";
 import { store } from "../../store.js";
@@ -889,6 +904,35 @@ describe("initGlobalServices task ordering", () => {
     } finally {
       getStopEventLoopLagMonitor()?.();
       setStopEventLoopLagMonitor(previousStop);
+    }
+  });
+
+  it("hands the pressure ladder's sleep lever to idle auto-close once it is wired (#13852)", async () => {
+    const previousStop = getStopAppMetricsMonitor();
+    setStopAppMetricsMonitor(null);
+    vi.mocked(startAppMetricsMonitor).mockClear();
+    idleAutoCloseServiceMock.sleepUnderMemoryPressure.mockClear();
+
+    try {
+      const fakeRegistry = { all: () => [], size: 0 } as unknown as WindowRegistry;
+      await initGlobalServices(fakeRegistry);
+      registeredTaskRuns.get("app-metrics-monitor")!();
+
+      expect(startAppMetricsMonitor).toHaveBeenCalledTimes(1);
+      const actions = vi.mocked(startAppMetricsMonitor).mock.calls[0]![0]!;
+
+      // Before the scheduler is wired there is nothing to sleep, and the lever
+      // says so rather than building the scheduler itself.
+      await expect(actions.hibernateIdleProjects()).resolves.toBe(0);
+      expect(idleAutoCloseServiceMock.sleepUnderMemoryPressure).not.toHaveBeenCalled();
+
+      await registeredTaskRuns.get("idle-background-auto-close-service")!();
+      idleAutoCloseServiceMock.sleepUnderMemoryPressure.mockResolvedValueOnce(3);
+      await expect(actions.hibernateIdleProjects()).resolves.toBe(3);
+      expect(idleAutoCloseServiceMock.sleepUnderMemoryPressure).toHaveBeenCalledTimes(1);
+    } finally {
+      getStopAppMetricsMonitor()?.();
+      setStopAppMetricsMonitor(previousStop);
     }
   });
 

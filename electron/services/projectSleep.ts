@@ -70,6 +70,11 @@ export type SleepProjectOutcome =
        * storage would not bring back, or could not say whether it does.
        */
       reason: "in-flight" | PolicyRefusal;
+      /**
+       * Terminals the kill already took when the refusal came after it; the
+       * project stays open without them. Absent when nothing was killed.
+       */
+      terminalsKilled?: number;
     };
 
 /**
@@ -167,9 +172,11 @@ async function runSleep(
   // destroyed view would lose.
   const panelRefusal = async (): Promise<PolicyRefusal | null> =>
     policy ? readPanelRecoveryHold(projectId, deps.projectViewManagers) : null;
-  const skip = (reason: PolicyRefusal): SleepProjectOutcome => {
+  const skip = (reason: PolicyRefusal, terminalsKilled?: number): SleepProjectOutcome => {
     logInfo("project-sleep-skipped", { projectId, initiator: options.initiator, reason });
-    return { status: "skipped", reason };
+    return terminalsKilled === undefined
+      ? { status: "skipped", reason }
+      : { status: "skipped", reason, terminalsKilled };
   };
 
   // Before the first side effect, so a project an MCP client is driving is
@@ -257,7 +264,7 @@ async function runSleep(
     const panelHoldBeforeEviction = await panelRefusal();
     if (panelHoldBeforeEviction) {
       logInfo("project-sleep-panel-hold-after-kill", { projectId, terminalsKilled });
-      return skip(panelHoldBeforeEviction);
+      return skip(panelHoldBeforeEviction, terminalsKilled);
     }
 
     // A policy asks once more after the slowest await of all. A project picked
@@ -268,7 +275,7 @@ async function runSleep(
     const refusedAfterKill = policyRefusal();
     if (refusedAfterKill) {
       logInfo("project-sleep-ineligible-after-kill", { projectId, terminalsKilled });
-      return skip(refusedAfterKill);
+      return skip(refusedAfterKill, terminalsKilled);
     }
 
     // Past this point the terminals are gone and the kill is confirmed, so the

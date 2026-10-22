@@ -3,6 +3,8 @@ import { isElectronAvailable } from "./useElectron";
 import { idleBackgroundAutoCloseClient } from "@/clients/idleBackgroundAutoCloseClient";
 import { notify } from "@/lib/notify";
 import { pluralize } from "@/lib/pluralize";
+import { formatMemory } from "@/components/Project/ProjectResourceBadge.utils";
+import type { IdleBackgroundClosedProjectEntry } from "@shared/types";
 
 const NAMED_PROJECTS_LIMIT = 3;
 
@@ -15,6 +17,22 @@ export function formatProjectNames(names: readonly string[]): string {
   }
   const rest = quoted.length - NAMED_PROJECTS_LIMIT;
   return `${quoted.slice(0, NAMED_PROJECTS_LIMIT).join(", ")} and ${pluralize(rest, "other project")}`;
+}
+
+/** `"A"` or `"A" (about 96 MB)`: the figure is the census's estimate, never a measurement. */
+function describeSleptProject(project: IdleBackgroundClosedProjectEntry): string {
+  const kb = project.estimatedMemoryKb;
+  if (kb === undefined || !Number.isFinite(kb) || kb <= 0) return `"${project.projectName}"`;
+  return `"${project.projectName}" (about ${formatMemory(Math.max(1, kb / 1024))})`;
+}
+
+/** Every project a pressure sweep slept, each with its estimate, joined as a sentence. */
+export function formatPressureSleptProjects(
+  projects: readonly IdleBackgroundClosedProjectEntry[]
+): string {
+  const parts = projects.map(describeSleptProject);
+  if (parts.length <= 1) return parts.join("");
+  return `${parts.slice(0, -1).join(", ")} and ${parts[parts.length - 1]}`;
 }
 
 // One-way latch: app-lifetime, notify-only singleton listener with no teardown.
@@ -34,14 +52,21 @@ export function useIdleBackgroundCloseNotifications(): void {
       // event — the user can keep working and reopen the project at any time.
       // Per the Runtime Signals rules it routes to the durable inbox only
       // (`priority: "low"` → no toast). One payload is one sweep, so it is one
-      // row naming everything that sweep slept.
-      const message = `${formatProjectNames(projects.map((p) => p.projectName))} ${
-        projects.length === 1 ? "was" : "were"
-      } put to sleep to free memory. Reopen ${projects.length === 1 ? "it" : "them"} any time.`;
+      // row naming everything that sweep slept. A pressure sweep's row names
+      // every project with the census's estimate of what it held (#13852).
+      const one = projects.length === 1;
+      const message =
+        payload.trigger === "memory-pressure"
+          ? `Memory ran low, so ${formatPressureSleptProjects(projects)} ${
+              one ? "was" : "were"
+            } put to sleep. Reopen ${one ? "it" : "them"} any time.`
+          : `${formatProjectNames(projects.map((p) => p.projectName))} ${
+              one ? "was" : "were"
+            } put to sleep to free memory. Reopen ${one ? "it" : "them"} any time.`;
 
       notify({
         type: "info",
-        title: projects.length === 1 ? "Project slept" : "Projects slept",
+        title: one ? "Project slept" : "Projects slept",
         message,
         inboxMessage: message,
         priority: "low",
@@ -49,7 +74,7 @@ export function useIdleBackgroundCloseNotifications(): void {
         // disk-space warnings — routes via EVENT_POLICY's "host" kind.
         context: {
           eventKind: "host",
-          projectId: projects.length === 1 ? projects[0]?.projectId : undefined,
+          projectId: one ? projects[0]?.projectId : undefined,
         },
       });
     });

@@ -72,7 +72,11 @@ export interface ResourceProfileConfig {
    * very high aggregate rates.
    */
   portBatchThroughputDelayMs: number;
-  /** HibernationService memory-pressure inactivity threshold (ms) */
+  /**
+   * How long an opted-in idle shell project must be off screen and quiet
+   * before memory pressure puts it to sleep (ms). Only ever shortens the
+   * user's own idle-shell threshold, never lengthens it.
+   */
   memoryPressureInactiveMs: number;
   /**
    * Cold-start paint-gate SOFT timeout (ms). Bounds the wait for the incoming

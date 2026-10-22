@@ -227,7 +227,12 @@ describe("sleepProject", () => {
 
       const outcome = await sleepProject("proj-1", policy(), makeDeps());
 
-      expect(outcome).toEqual({ status: "skipped", reason: "panel-unrecoverable" });
+      // The kill already happened, so the outcome owns up to it.
+      expect(outcome).toEqual({
+        status: "skipped",
+        reason: "panel-unrecoverable",
+        terminalsKilled: 1,
+      });
       expect(teardownMock.gracefulTeardownAndJournalProject).toHaveBeenCalledTimes(1);
       expect(hibernationMock.evictProjectRenderer).not.toHaveBeenCalled();
       expect(projectStoreMock.updateProjectStatus).not.toHaveBeenCalled();
@@ -297,7 +302,7 @@ describe("sleepProject", () => {
 
       const outcome = await sleepProject("proj-1", policy(), makeDeps());
 
-      expect(outcome).toEqual({ status: "skipped", reason: "mcp-dispatch" });
+      expect(outcome).toEqual({ status: "skipped", reason: "mcp-dispatch", terminalsKilled: 1 });
       // Its PTYs are gone either way; the markers let the panels restore.
       expect(persistenceMock.writeHibernatedMarker).toHaveBeenCalledWith("t1");
       expect(hibernationMock.evictProjectRenderer).not.toHaveBeenCalled();

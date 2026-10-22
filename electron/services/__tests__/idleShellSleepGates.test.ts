@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   CENSUS_MAX_AGE_MS,
+  censusMemoryKb,
   evaluateGit,
   evaluateShellTerminals,
   evaluateWorkspace,
@@ -154,6 +155,81 @@ describe("terminalsStillVetted", () => {
 
   it("refuses a vetted terminal touched since", () => {
     expect(check([terminal("a", { lastInputTime: NOW - 1_000 })])).toBe(false);
+  });
+});
+
+describe("censusMemoryKb", () => {
+  function shard(
+    entries: Array<{ id: string; projectId?: string; memoryKb: number | null }>
+  ): ProcessInventoryRead["inventories"][number] {
+    return {
+      terminals: entries.map((entry, index) => ({
+        id: entry.id,
+        projectId: entry.projectId ?? "p",
+        cwd: "/p",
+        isAssistantTerminal: false,
+        spawnedAt: 0,
+        isTrashed: false,
+        rootPid: 100 + index,
+        sample:
+          entry.memoryKb === null
+            ? null
+            : {
+                cpuPercent: 0,
+                memoryKb: entry.memoryKb,
+                processCount: 3,
+                // Capped by the host: the tree total is what counts.
+                members: [{ pid: 100 + index, comm: "zsh", cpuPercent: 0, memoryKb: 1 }],
+              },
+      })),
+      pidSamples: { 999: { cpuPercent: 0, memoryKb: 50_000, processCount: 1, members: [] } },
+      available: true,
+      sampledAt: NOW,
+    };
+  }
+
+  it("sums the whole tree of every named terminal in the project", () => {
+    const census = {
+      shardsFailed: 0,
+      inventories: [shard([{ id: "a", memoryKb: 4096 }]), shard([{ id: "b", memoryKb: 2048 }])],
+    };
+    expect(censusMemoryKb(census, "p", new Set(["a", "b"]))).toBe(6144);
+  });
+
+  it("leaves out other projects, unnamed terminals and stray pid samples", () => {
+    const census = {
+      shardsFailed: 0,
+      inventories: [
+        shard([
+          { id: "a", memoryKb: 4096 },
+          { id: "other", memoryKb: 8192 },
+          { id: "x", projectId: "q", memoryKb: 16_384 },
+        ]),
+      ],
+    };
+    expect(censusMemoryKb(census, "p", new Set(["a", "x"]))).toBe(4096);
+  });
+
+  it("counts a terminal two shards both list once", () => {
+    const census = {
+      shardsFailed: 0,
+      inventories: [shard([{ id: "a", memoryKb: 4096 }]), shard([{ id: "a", memoryKb: 4096 }])],
+    };
+    expect(censusMemoryKb(census, "p", new Set(["a"]))).toBe(4096);
+  });
+
+  it("adds nothing for a terminal without a reading", () => {
+    const census = {
+      shardsFailed: 0,
+      inventories: [
+        shard([
+          { id: "a", memoryKb: 4096 },
+          { id: "b", memoryKb: null },
+        ]),
+      ],
+    };
+    expect(censusMemoryKb(census, "p", new Set(["a", "b"]))).toBe(4096);
+    expect(censusMemoryKb(null, "p", new Set(["a"]))).toBe(0);
   });
 });
 
