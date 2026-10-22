@@ -1063,6 +1063,65 @@ describe("coming back to drive after someone else drove meanwhile (#13921)", () 
     stop();
   });
 
+  it("reads the host's state again when the link drops mid read-back and comes back under the same lease", async () => {
+    const { electron, emitHost, stop } = await openUnder(mine());
+    electron.driveLease.get.mockResolvedValue(mine({ leaseId: 9, tenureId: "tenure-b" }));
+    let finishFirst!: () => void;
+    rehydrate.mockImplementationOnce(
+      () => new Promise<undefined>((resolve) => (finishFirst = () => resolve(undefined)))
+    );
+    await bringTheLinkBack(emitHost, false);
+    await vi.waitFor(() => expect(rehydrate).toHaveBeenCalledTimes(1));
+
+    emitHost({
+      type: "connection-changed",
+      hostId: "studio-01",
+      connection: { status: "connecting", attempt: 2 },
+    });
+    // The host answers before the first read is done: what it read can't
+    // vouch for the outage that came after it started.
+    await bringTheLinkBack(emitHost, false);
+    await vi.waitFor(() => expect(rehydrate).toHaveBeenCalledTimes(2));
+    await flush();
+    await flush();
+    const send = vi.fn(async () => undefined);
+    expect(await sendHostOwnedWrite("app-state:mruList", send, vi.fn())).toBe("sent");
+
+    finishFirst();
+    await flush();
+    await flush();
+    expect(await sendHostOwnedWrite("app-state:mruList", send, vi.fn())).toBe("sent");
+    stop();
+  });
+
+  it("counts a link first seen down as lost once it knows the lease", async () => {
+    const installed = installElectron({ status: "connecting", attempt: 1 });
+    const { electron, emitHost } = installed;
+    electron.driveLease.get.mockResolvedValue(mine());
+    electron.driveLease.takeOver.mockResolvedValue(mine());
+    // The claim on open is answered before this window's link state is.
+    const windowHost = electron.remoteHosts.getWindowHost.getMockImplementation()!;
+    let answerWindowHost!: () => void;
+    electron.remoteHosts.getWindowHost.mockImplementationOnce(
+      () => new Promise((resolve) => (answerWindowHost = () => resolve(windowHost())))
+    );
+    bindView("studio-01");
+    const stop = startHostConnectionSync();
+    await vi.waitFor(() => expect(rehydrate).toHaveBeenCalled());
+    await flush();
+    rehydrate.mockClear();
+    answerWindowHost();
+    await vi.waitFor(() => expect(getTerminalInputBlock()?.kind).toBe("disconnected"));
+    const held = await holdASave();
+
+    electron.driveLease.get.mockResolvedValue(mine({ leaseId: 9, tenureId: "tenure-b" }));
+    await bringTheLinkBack(emitHost);
+    await vi.waitFor(() => expect(authoritativeReads()).toHaveLength(1));
+    await flush();
+    expect(held.replay).not.toHaveBeenCalled();
+    stop();
+  });
+
   it("keeps saves held through a takeover made while the host's state was owed, until it is read", async () => {
     const { electron, emitHost, stop } = await openUnder(mine());
     electron.driveLease.get.mockResolvedValue(mine({ leaseId: 9, tenureId: "tenure-b" }));
@@ -1101,6 +1160,25 @@ describe("coming back to drive after someone else drove meanwhile (#13921)", () 
     await flush();
     expect(held.replay).not.toHaveBeenCalled();
     expect(hasDeferredHostOwnedWrite("app-state:mruList")).toBe(false);
+  });
+
+  it("counts a read-back whose worktrees couldn't be refreshed as not done", async () => {
+    const { electron, emitHost, stop } = await openUnder(mine());
+    electron.driveLease.get.mockResolvedValue(mine({ leaseId: 9, tenureId: "tenure-b" }));
+    electron.worktree.refresh.mockRejectedValueOnce(new Error("link down"));
+
+    await bringTheLinkBack(emitHost, false);
+    await vi.waitFor(() => expect(rehydrate).toHaveBeenCalledTimes(1));
+    await flush();
+    const meanwhile = await holdASave("app-state:activeWorktreeId");
+    expect(meanwhile.send).not.toHaveBeenCalled();
+
+    await vi.waitFor(() => expect(rehydrate).toHaveBeenCalledTimes(2), { timeout: 4_000 });
+    await flush();
+    await flush();
+    const send = vi.fn(async () => undefined);
+    expect(await sendHostOwnedWrite("app-state:mruList", send, vi.fn())).toBe("sent");
+    stop();
   });
 
   it("counts a read-back whose terminals couldn't be read as not done", async () => {

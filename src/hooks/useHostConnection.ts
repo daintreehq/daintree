@@ -484,9 +484,10 @@ function noteLeaseOutOfSight(): void {
   if (lease === null) return;
   leaseBeforeGap = lease;
   // Nothing begun before the link went down answers for after it: not a
-  // lookup, nor the end of a read-back.
+  // lookup, nor a read-back, which the host's next answer starts afresh.
   leaseGeneration += 1;
   gapGeneration += 1;
+  readBackLeaseId = undefined;
   cancelLeaseRecheck();
   holdHostOwnedWrites();
 }
@@ -693,7 +694,9 @@ export async function takeOverDrive(
   applyLease(view, "take-over");
   // The previous driver's terminals and saved layout are the project's now;
   // this view's were stale while it was displaced.
-  const done = readBackAsDriver(projectId, view, settling, "after taking over");
+  const done = readBackAsDriver(projectId, view, settling, "after taking over", {
+    refreshWorktrees: heldForGap,
+  });
   if (heldForGap) settleReadBack(done);
 }
 
@@ -701,9 +704,9 @@ export async function takeOverDrive(
  * Read the project back as the driver before this view left it, once it
  * drives under `view`: the host's terminals first, so the saved order also
  * places the ones just adopted, then its saved state as authoritative, then
- * where that driver was. Resolves whether the terminals and the saved state
- * were both read; this view reports its own navigation only once `settling`
- * is let go, at the end.
+ * where that driver was. Resolves whether everything was read (the
+ * terminals, the worktrees when asked, the saved state); this view reports
+ * its own navigation only once `settling` is let go, at the end.
  */
 function readBackAsDriver(
   projectId: string,
@@ -732,10 +735,14 @@ function readBackAsDriver(
     // The saved active worktree may be one the last driver made meanwhile,
     // which this view only learns of from the refresh.
     const worktrees = options.refreshWorktrees
-      ? window.electron.worktree.refresh().catch((error: unknown) => {
-          logWarn(`[HostConnection] Couldn't refresh the worktrees ${occasion}`, { error });
-        })
-      : null;
+      ? window.electron.worktree.refresh().then(
+          () => true,
+          (error: unknown) => {
+            logWarn(`[HostConnection] Couldn't refresh the worktrees ${occasion}`, { error });
+            return false;
+          }
+        )
+      : Promise.resolve(true);
     let terminalsRead = false;
     try {
       await resyncHostTerminals(projectId, { isCurrent, follow: true });
@@ -743,7 +750,7 @@ function readBackAsDriver(
     } catch (error) {
       logWarn(`[HostConnection] Couldn't read the host's terminals ${occasion}`, { error });
     }
-    await worktrees;
+    const worktreesRead = await worktrees;
     if (!isCurrent()) return;
     try {
       await rehydrateHostProjectState(projectId, {
@@ -753,8 +760,8 @@ function readBackAsDriver(
         keepActiveWorktree: navigation !== null,
       });
       // Without the terminals, the panels a later save sends would miss the
-      // ones the last driver opened.
-      read = terminalsRead && isCurrent();
+      // ones the last driver opened; without the worktrees, its active one.
+      read = terminalsRead && worktreesRead && isCurrent();
     } catch (error) {
       logWarn(`[HostConnection] Couldn't read the project's saved state ${occasion}`, { error });
     }
@@ -994,9 +1001,9 @@ function beginSync(): () => void {
           if (getLeaseInputBlock()?.kind === "lease-unknown") {
             setLeaseInputBlock({ kind: "lease-unknown", hostName: hostLabel() });
           }
-          if (isHostLinkUp(prev) && !isHostLinkUp(next) && next.connection !== null) {
-            noteLeaseOutOfSight();
-          }
+          // Down from up, or first seen down by a view that already knows the lease.
+          const wasUp = isHostLinkUp(prev) || prev.connection === null;
+          if (wasUp && !isHostLinkUp(next) && next.connection !== null) noteLeaseOutOfSight();
         }
         if (next.connection?.status === "disconnected" && next.everConnected) {
           resyncPending = true;
