@@ -13,7 +13,7 @@ import {
   getPluginPaletteGatesSnapshot,
   subscribeToPluginPaletteGates,
 } from "@/services/plugin/pluginPaletteGating";
-import { resolvePluginAttribution } from "@/hooks/usePluginAttribution";
+import { pluginManifestIdFromInstanceKey } from "@shared/types/plugin";
 import { evaluateWhenClause } from "@shared/utils/whenClause";
 import { createActionRanker, extractAcronym, rankActionMatches } from "@/lib/actionPaletteSearch";
 import { getActionCategoryLabel, orderActionCategories } from "@/config/actionCategoryOrder";
@@ -259,13 +259,11 @@ export function useActionPalette(): UseActionPaletteReturn {
           const enablement = pluginGates.get(e.id)?.enablement;
           if (enablement && !evaluateWhenClause(enablement, pluginWhenContext)) {
             item.enabled = false;
-            item.disabledReason ??= PLUGIN_DISABLED_REASON;
+            item.disabledReason = item.disabledReason ?? PLUGIN_DISABLED_REASON;
           }
         }
         return item;
       });
-    // `pluginMetaById` is not read here: the group label is resolved in the
-    // browse model, which depends on it directly.
   }, [isActionOpen, pluginGates, pluginWhenContext]);
 
   // Strip confirm-danger ids from the MRU/Favorites lists so destructive actions
@@ -372,7 +370,7 @@ export function useActionPalette(): UseActionPaletteReturn {
 
     const pluginGroups = [...byPlugin].map(([pluginId, rows]) => ({
       pluginId,
-      label: resolvePluginAttribution(pluginId).name,
+      label: pluginMetaById.get(pluginId)?.displayName ?? pluginManifestIdFromInstanceKey(pluginId),
       rows,
     }));
     pluginGroups.sort(
@@ -386,7 +384,6 @@ export function useActionPalette(): UseActionPaletteReturn {
     }
 
     return { items, sections: sections as readonly ActionPaletteSection[] };
-    // `pluginMetaById` is a dependency because the group label is resolved from it.
   }, [
     pluginMetaById,
     pinnedActionIds,
@@ -616,9 +613,16 @@ export function useActionPalette(): UseActionPaletteReturn {
         setQuery(argSession.returnQuery);
         return;
       }
+      // Its `when` / `enablement` may have flipped while the user typed; the
+      // palette must not offer what it would no longer list.
+      const live = itemById.get(argSession.item.id);
+      if (!live || !live.enabled) {
+        setQuery(argSession.returnQuery);
+        return;
+      }
       dispatchAction(argSession.item, values);
     },
-    [argSession, argField, dispatchAction, setQuery]
+    [argSession, argField, dispatchAction, setQuery, itemById]
   );
 
   const argBack = useCallback(() => {

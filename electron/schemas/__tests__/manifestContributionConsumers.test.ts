@@ -650,6 +650,16 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
       consumers: [{ file: PLUGIN_SERVICE, symbol: "validateAndBuildActionDescriptor" }],
       note: "Copied into the action descriptor keywords for palette search.",
     },
+    when: {
+      mode: "verbatim",
+      consumers: [{ file: PLUGIN_SERVICE, symbol: "validateAndBuildActionDescriptor" }],
+      note: "Parse-checked, then copied onto the descriptor; the command palette alone evaluates it to hide the command.",
+    },
+    enablement: {
+      mode: "verbatim",
+      consumers: [{ file: PLUGIN_SERVICE, symbol: "validateAndBuildActionDescriptor" }],
+      note: "Parse-checked, then copied onto the descriptor; the command palette alone evaluates it to grey the command out.",
+    },
     inputSchema: {
       mode: "verbatim",
       consumers: [{ file: PLUGIN_SERVICE, symbol: "validateAndBuildActionDescriptor" }],

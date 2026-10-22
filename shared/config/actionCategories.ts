@@ -42,8 +42,6 @@ export const ACTION_CATEGORY_ORDER: readonly string[] = [
  */
 const EXTRA_RESERVED_ACTION_CATEGORIES: readonly string[] = [
   "workspace",
-  "test",
-  "core",
   "github",
   "agents",
   "panels",
@@ -61,10 +59,13 @@ export const PLUGIN_ACTION_CATEGORY_MAX_LENGTH = 40;
  * characters removed, outer whitespace trimmed.
  */
 export function normalizePluginActionCategory(raw: string): string {
-  return raw
-    .normalize("NFC")
-    .replace(/[\u0000-\u001F\u007F-\u009F]/g, "")
-    .trim();
+  let out = "";
+  for (const ch of raw.normalize("NFC")) {
+    const code = ch.codePointAt(0)!;
+    if (code <= 0x1f || (code >= 0x7f && code <= 0x9f)) continue;
+    out += ch;
+  }
+  return out.trim();
 }
 
 /** Whether a (normalised) category collides with a built-in category id. */

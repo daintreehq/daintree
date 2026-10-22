@@ -6880,6 +6880,20 @@ interface PluginActionContribution {
     keywords?: string[];
     inputSchema?: Record<string, unknown>;
     /**
+     * `when` clause over the plugin's own context keys (`host.setContext`). While
+     * it is false the command is left out of the command palette. Palette-only:
+     * keybindings, context menus, MCP and `host.dispatch` never evaluate it, so it
+     * decides what is offered, not what can run. A clause that fails to parse is
+     * refused at registration.
+     */
+    when?: string;
+    /**
+     * Same grammar as {@link when}. While it is false the command stays in the
+     * palette, greyed out with a short reason, and Enter does nothing. Also
+     * palette-only.
+     */
+    enablement?: string;
+    /**
      * Per-action capability intent: the subset of the plugin's declared
      * `manifest.capabilities` this specific action actually exercises. Mirrors
      * {@link PluginChannelSchema.requires} in both spelling and enforcement — the

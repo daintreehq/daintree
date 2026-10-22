@@ -8000,7 +8000,8 @@ export class PluginService {
       parseWhenClause(raw);
     } catch (err) {
       throw new Error(
-        `Plugin action "${actionId}" has an invalid "${field}" clause: ${formatErrorMessage(err, "could not parse")}`
+        `Plugin action "${actionId}" has an invalid "${field}" clause: ${formatErrorMessage(err, "could not parse")}`,
+        { cause: err }
       );
     }
     return raw;

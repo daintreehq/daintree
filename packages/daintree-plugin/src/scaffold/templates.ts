@@ -444,7 +444,9 @@ const DNTRIGNORE = `# Files to keep OUT of the packaged .dntr, in .gitignore syn
 function commandEntry(ctx: ScaffoldContext): string {
   const title = q(`${ctx.displayName}: Run`);
   const description = q(`Run the ${ctx.displayName} command.`);
-  const category = q(ctx.displayName);
+  // A command's category is a sub-label inside the plugin's own palette group; a display
+  // name can be reserved (e.g. "Terminal") or over the length cap.
+  const category = q("Commands");
   const message = q(`Hello from ${ctx.displayName}`);
   return `import type { PluginHostApi } from "@daintreehq/plugin-sdk";
 
@@ -649,7 +651,7 @@ function templateFiles(ctx: ScaffoldContext): Record<string, string> {
               id: "run",
               title: `${ctx.displayName}: Run`,
               description: `Run the ${ctx.displayName} command.`,
-              category: ctx.displayName,
+              category: "Commands",
               kind: "command",
               danger: "safe",
               keywords: [ctx.pluginName, "run"],
@@ -717,7 +719,7 @@ function templateFiles(ctx: ScaffoldContext): Record<string, string> {
               id: "run",
               title: `${ctx.displayName}: Run`,
               description: `Run the ${ctx.displayName} command.`,
-              category: ctx.displayName,
+              category: "Commands",
               kind: "command",
               danger: "safe",
               keywords: [ctx.pluginName, "run"],

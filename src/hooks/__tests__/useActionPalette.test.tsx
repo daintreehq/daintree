@@ -1589,6 +1589,34 @@ describe("useActionPalette", () => {
       expect(dispatchMock).not.toHaveBeenCalled();
     });
 
+    it("does not dispatch collected arguments once the command's enablement has gone false", async () => {
+      const spec = {
+        fields: [
+          {
+            kind: "enum",
+            name: "env",
+            title: "Environment",
+            options: [{ value: "dev", label: "dev" }],
+          },
+        ],
+      };
+      paletteArgsMock.mockReturnValue(spec);
+      dispatchMock.mockResolvedValue({ ok: true, result: undefined });
+      publishPluginPaletteGates([["acme.run", { enablement: "acme.ok" }]]);
+      act(() => {
+        usePluginContextKeyStore.setState({ whenContext: { acme: { ok: true } } });
+      });
+      const { result } = await openWith([{ ...pluginCmd("acme.run", "Run"), requiresArgs: true }]);
+      act(() => result.current.executeAction(result.current.results[0]!));
+      expect(result.current.argPrompt).not.toBeNull();
+
+      act(() => {
+        usePluginContextKeyStore.setState({ whenContext: { acme: { ok: false } } });
+      });
+      act(() => result.current.confirmSelection());
+      expect(dispatchMock).not.toHaveBeenCalled();
+    });
+
     it("leaves a built-in action alone even if a gate shares its id", async () => {
       publishPluginPaletteGates([["builtin.x", { when: "never" }]]);
       const { result } = await openWith([makeEntry("builtin.x", "X")]);
