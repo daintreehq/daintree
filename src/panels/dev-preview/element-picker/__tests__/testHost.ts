@@ -7,8 +7,7 @@ import type {
   SitePreviewMode,
   SitePreviewPushPayload,
 } from "@shared/types/ipc/sitePreview";
-import { CHANNELS, PLUGIN_ID } from "../../shared/protocol";
-import type { SelectedNode, SiteSelection } from "../../shared/model";
+import { CHANNELS, PLUGIN_ID, type SelectedNode, type SiteSelection } from "../legacyBridge";
 
 export const sha = (text: string) => createHash("sha256").update(text, "utf8").digest("hex");
 
@@ -222,7 +221,7 @@ export function createFakeHost() {
   const on = vi.fn((_pluginId: string, channel: string, callback: (payload: unknown) => void) =>
     subscribe(channel, callback)
   );
-  // The builder subscribes per preview panel, as main addresses its pushes.
+  // The picker subscribes per preview panel, as main addresses its pushes.
   const onPanel = vi.fn(
     (_pluginId: string, channel: string, _panelId: string, callback: (payload: unknown) => void) =>
       subscribe(channel, callback)

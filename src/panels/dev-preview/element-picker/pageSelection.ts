@@ -1,5 +1,4 @@
-import type { SiteSelection, Viewport } from "../shared/model.js";
-import type { ElementContext } from "../shared/protocol.js";
+import type { ElementContext, SiteSelection, Viewport } from "./legacyBridge.js";
 
 /**
  * A selection with no source behind it: what the page showed, in the page's

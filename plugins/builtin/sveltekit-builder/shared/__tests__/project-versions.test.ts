@@ -177,7 +177,7 @@ describe("assessSupport", () => {
     expect(oneAbove.verdict.level).toBe("untested");
     expect(kitAbove.verdict.level).toBe("untested");
     const reasons = oneAbove.verdict.level === "untested" ? oneAbove.verdict.reasons : [];
-    expect(reasons[0]).toMatch(/newer than this builder was tested against/);
+    expect(reasons[0]).toMatch(/newer than the Element Picker was tested against/);
   });
 
   it("does not let Tailwind decide the verdict: its version is context, not a gate", () => {

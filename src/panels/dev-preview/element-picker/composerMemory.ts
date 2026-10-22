@@ -163,7 +163,7 @@ export function __resetComposerMemoryForTests(): void {
 
 const collapsedDrawers = new Set<string>();
 
-/** Whether the user folded the builder's drawer away for this preview. */
+/** Whether the user folded the picker's drawer away for this preview. */
 export function useDrawerCollapsed(previewPanelId: string): boolean {
   return useSyncExternalStore(subscribe, () => collapsedDrawers.has(previewPanelId));
 }

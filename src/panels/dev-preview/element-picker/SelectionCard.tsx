@@ -1,14 +1,17 @@
 import { ExternalLink } from "lucide-react";
-import { Badge, CopyButton, IconButton, TruncatedTooltip } from "@daintreehq/plugin-ui";
+import { Badge } from "@/components/ui/badge";
+import { CopyButton } from "@/components/ui/CopyButton";
+import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 import { actionService } from "@/services/ActionService";
 import { cn } from "@/lib/utils";
-import type { SelectedNode } from "../shared/model.js";
+import type { SelectedNode } from "./legacyBridge.js";
 import { worktreeRelative, type SelectionState } from "./inspectorController.js";
 import { InspectorNotice } from "./InspectorNotice.js";
 import { scopesFor, type CallSite } from "./agentTask.js";
 import { STALE_COPY } from "./copy.js";
 import { middleTruncatePath } from "@/utils/textParsing";
 import { SelectionTrail, trailFor } from "./SelectionTrail.js";
+import { PickerIconButton } from "./PickerIconButton.js";
 
 type ReadySelection = Extract<SelectionState, { status: "ready" }>;
 
@@ -97,17 +100,15 @@ export function SelectionIdentity({
           <>
             <SourcePath file={file} line={line} className="min-w-0 flex-1" />
             <CopyButton
-              size="xs"
+              size="icon-xs"
               text={source}
               aria-label="Copy path"
               announcement="Path copied"
               tooltipSide="bottom"
             />
             {absolute ? (
-              <IconButton
+              <PickerIconButton
                 icon={<ExternalLink aria-hidden="true" />}
-                size="xs"
-                tooltipSide="bottom"
                 // The glyph, not the hit box, sits on the column edge the
                 // fields below end at.
                 className="-mr-1"

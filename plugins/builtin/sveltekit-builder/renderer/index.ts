@@ -13,21 +13,14 @@ export const ENTRY_TOOL_ID = "daintree.sveltekit-builder.builder";
 
 // Registration is synchronous, at module eval (the builtin renderer glob imports
 // this entry for exactly that side effect). Only the toolbar button is eager;
-// the builder itself — zod schemas, the controller, the surfaces — is a lazy
-// chunk loaded the first time someone switches it on.
-// The kit loads with the surfaces: its components render nothing until it is
-// ready, and the strip's roving focus needs its buttons on the first frame.
-// Dynamic, because the kit must stay off the startup path.
-const loadSurfaces = () =>
-  Promise.all([
-    import("./SiteBuilderSurfaces.js"),
-    import("@daintreehq/plugin-ui").then((kit) => kit.whenPluginUiReady()),
-  ]).then(([m]) => m);
-const SiteBuilderToolbar = lazy(() =>
-  loadSurfaces().then((m) => ({ default: m.SiteBuilderToolbar }))
+// the picker itself — zod schemas, the controller, the surfaces — is core code
+// in a lazy chunk loaded the first time someone switches it on.
+const loadSurfaces = () => import("@/panels/dev-preview/element-picker/ElementPickerSurfaces");
+const ElementPickerToolbar = lazy(() =>
+  loadSurfaces().then((m) => ({ default: m.ElementPickerToolbar }))
 );
-const SiteBuilderDrawer = lazy(() =>
-  loadSurfaces().then((m) => ({ default: m.SiteBuilderDrawer }))
+const ElementPickerDrawer = lazy(() =>
+  loadSurfaces().then((m) => ({ default: m.ElementPickerDrawer }))
 );
 
 registerDevPreviewTool({
@@ -38,9 +31,11 @@ registerDevPreviewTool({
   isAvailable: siteBuilderApplies,
   unavailableReason: SITE_BUILDER_UNAVAILABLE_REASON,
   // The session is the controller, and it lives in the same lazy chunk as the
-  // surfaces: switching the builder on is what pulls that chunk in.
+  // surfaces: switching the picker on is what pulls that chunk in.
   createSession: (context) =>
-    import("./inspectorController.js").then((m) => m.createBuilderSession(context)),
-  Toolbar: SiteBuilderToolbar,
-  Drawer: SiteBuilderDrawer,
+    import("@/panels/dev-preview/element-picker/inspectorController").then((m) =>
+      m.createElementPickerSession(context)
+    ),
+  Toolbar: ElementPickerToolbar,
+  Drawer: ElementPickerDrawer,
 });

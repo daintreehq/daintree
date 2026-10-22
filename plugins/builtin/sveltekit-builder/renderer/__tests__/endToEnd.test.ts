@@ -10,7 +10,10 @@ import type {
 } from "@shared/types/ipc/sitePreview";
 import { activate } from "../../main/index.js";
 import { createSandbox, createTestHost, type Sandbox } from "../../main/__tests__/testHost.js";
-import { InspectorController, type InspectorDeps } from "../inspectorController.js";
+import {
+  InspectorController,
+  type InspectorDeps,
+} from "@/panels/dev-preview/element-picker/inspectorController";
 
 /**
  * The panel controller and plugin main were written in parallel against the
