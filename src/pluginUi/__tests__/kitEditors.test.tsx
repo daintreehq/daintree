@@ -841,4 +841,143 @@ describe("MarkdownEditor", () => {
     expect(root.dataset.mode).toBe("write");
     expect(screen.getByRole("button", { name: "Comment" })).toBeDefined();
   });
+
+  describe("fill", () => {
+    function previewOf(root: HTMLElement): HTMLElement {
+      const found = root.querySelector<HTMLElement>("[data-kit-markdown-preview]");
+      if (!found) throw new Error("no preview");
+      return found;
+    }
+
+    it("leaves the row-bounded height alone by default and drops it when filling", () => {
+      const props = { defaultValue: "a\nb", layout: "split", "data-testid": "md" } as const;
+      const { rerender } = render(withTooltips(createElement(kit.MarkdownEditor, props)));
+      const root = screen.getByTestId("md");
+      expect(textarea(root).style.height).not.toBe("");
+      expect(previewOf(root).style.height).not.toBe("");
+      rerender(withTooltips(createElement(kit.MarkdownEditor, { ...props, fill: true })));
+      expect(textarea(root).style.height).toBe("");
+      expect(textarea(root).style.overflowY).toBe("");
+      expect(previewOf(root).style.height).toBe("");
+      rerender(withTooltips(createElement(kit.MarkdownEditor, props)));
+      expect(textarea(root).style.height).not.toBe("");
+    });
+
+    it("ignores the row bounds and keeps tabs working", () => {
+      render(
+        withTooltips(
+          createElement(kit.MarkdownEditor, {
+            fill: true,
+            maxRows: 2,
+            defaultValue: "1\n2\n3\n4\n5",
+            "data-testid": "md",
+          })
+        )
+      );
+      const root = screen.getByTestId("md");
+      expect(textarea(root).style.height).toBe("");
+      fireEvent.click(screen.getByRole("tab", { name: "Preview" }));
+      expect(textarea(root).closest("[hidden]")).not.toBeNull();
+      expect(previewOf(root).hidden).toBe(false);
+      expect(previewOf(root).style.height).toBe("");
+    });
+
+    it("draws the header above the field and drops content off the contract", () => {
+      const { rerender } = render(
+        withTooltips(
+          createElement(kit.MarkdownEditor, {
+            header: createElement("input", { "aria-label": "Title" }),
+            "data-testid": "md",
+          })
+        )
+      );
+      const root = screen.getByTestId("md");
+      const title = screen.getByLabelText("Title");
+      expect(title.compareDocumentPosition(textarea(root)) & Node.DOCUMENT_POSITION_FOLLOWING).toBe(
+        Node.DOCUMENT_POSITION_FOLLOWING
+      );
+      expect(textarea(root).value).toBe("");
+      rerender(
+        withTooltips(untyped("MarkdownEditor", { header: { not: "a node" }, "data-testid": "md" }))
+      );
+      expect(screen.queryByLabelText("Title")).toBeNull();
+    });
+
+    describe("scroll in step", () => {
+      function geometry(el: HTMLElement, scrollHeight: number, clientHeight: number) {
+        Object.defineProperty(el, "scrollHeight", { configurable: true, value: scrollHeight });
+        Object.defineProperty(el, "clientHeight", { configurable: true, value: clientHeight });
+      }
+
+      function setup(extra: Record<string, unknown> = {}) {
+        const frames = new Map<number, FrameRequestCallback>();
+        let next = 0;
+        vi.stubGlobal("requestAnimationFrame", (cb: FrameRequestCallback) => {
+          frames.set(++next, cb);
+          return next;
+        });
+        vi.stubGlobal("cancelAnimationFrame", (id: number) => void frames.delete(id));
+        onTestFinished(() => void vi.unstubAllGlobals());
+        render(
+          withTooltips(
+            createElement(kit.MarkdownEditor, {
+              fill: true,
+              layout: "split",
+              defaultValue: "x",
+              "data-testid": "md",
+              ...extra,
+            })
+          )
+        );
+        const root = screen.getByTestId("md");
+        const source = textarea(root);
+        const view = previewOf(root);
+        geometry(source, 1100, 100);
+        geometry(view, 2100, 100);
+        const flush = () =>
+          act(() => {
+            const pending = [...frames.values()];
+            frames.clear();
+            for (const cb of pending) cb(0);
+          });
+        return { source, view, flush };
+      }
+
+      it("moves the preview by the source's scroll fraction", () => {
+        const { source, view, flush } = setup();
+        source.scrollTop = 500;
+        fireEvent.scroll(source);
+        flush();
+        expect(view.scrollTop).toBe(1000);
+      });
+
+      it("lets the pane the pointer entered lead, and ignores the follower's echo", () => {
+        const { source, view, flush } = setup();
+        fireEvent.pointerEnter(view);
+        view.scrollTop = 1000;
+        fireEvent.scroll(view);
+        flush();
+        expect(source.scrollTop).toBe(500);
+        // The write above fires a scroll on the source in a browser: not a lead.
+        source.scrollTop = 123;
+        fireEvent.scroll(source);
+        flush();
+        expect(view.scrollTop).toBe(1000);
+      });
+
+      it("does nothing when either pane has no range to scroll", () => {
+        const { source, view, flush } = setup();
+        geometry(view, 100, 100);
+        source.scrollTop = 500;
+        fireEvent.scroll(source);
+        flush();
+        expect(view.scrollTop).toBe(0);
+      });
+
+      it("makes the split preview a focus stop", () => {
+        const { view } = setup();
+        expect(view.tabIndex).toBe(0);
+      });
+    });
+  });
 });
