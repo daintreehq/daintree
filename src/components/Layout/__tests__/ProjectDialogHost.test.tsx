@@ -9,34 +9,57 @@ interface MockProject {
   path: string;
 }
 
-const { refreshMock, forgeState, BOTH_FORGES, projectState, MANAGER_RECIPE } = vi.hoisted(() => {
-  const MANAGER_RECIPE: TerminalRecipe = {
-    id: "recipe-managed",
-    name: "Managed",
-    projectId: "project-1",
-    worktreeId: "wt-3",
-    terminals: [],
-    createdAt: 0,
-  };
-  const BOTH_FORGES = {
-    entry: { contribution: { slots: { bulkCreateWorktreeDialog: "code-forge.bulk" } } },
-    issues: {
-      entry: { contribution: { slots: { bulkCreateWorktreeDialog: "issue-forge.bulk" } } },
-    },
-  };
-  return {
-    refreshMock: vi.fn(() => Promise.resolve()),
-    forgeState: { current: BOTH_FORGES as unknown },
-    BOTH_FORGES,
-    projectState: { current: null as MockProject | null },
-    MANAGER_RECIPE,
-  };
-});
+const { refreshMock, forgeState, BOTH_FORGES, projectState, MANAGER_RECIPE, surfaceState } =
+  vi.hoisted(() => {
+    const MANAGER_RECIPE: TerminalRecipe = {
+      id: "recipe-managed",
+      name: "Managed",
+      projectId: "project-1",
+      worktreeId: "wt-3",
+      terminals: [],
+      createdAt: 0,
+    };
+    const BOTH_FORGES = {
+      entry: { contribution: { slots: { bulkCreateWorktreeDialog: "code-forge.bulk" } } },
+      issues: {
+        entry: { contribution: { slots: { bulkCreateWorktreeDialog: "issue-forge.bulk" } } },
+      },
+    };
+    return {
+      refreshMock: vi.fn(() => Promise.resolve()),
+      forgeState: { current: BOTH_FORGES as unknown },
+      BOTH_FORGES,
+      projectState: { current: null as MockProject | null },
+      MANAGER_RECIPE,
+      surfaceState: { current: null as { config: { id: string } } | null },
+    };
+  });
 
 // Seeded before each render; nothing here changes the project mid-test.
 vi.mock("@/store/projectStore", () => ({
   useProjectStore: <T,>(selector: (state: { currentProject: MockProject | null }) => T) =>
     selector({ currentProject: projectState.current }),
+}));
+
+vi.mock("@/components/Plugin/ProjectSurfaceView", () => ({
+  useProjectSurface: () => surfaceState.current,
+}));
+
+vi.mock("../ProjectWorktreeCreateDialog", () => ({
+  ProjectWorktreeCreateDialog: ({
+    config,
+    onClose,
+    onUseStock,
+  }: {
+    config: { id: string };
+    onClose: () => void;
+    onUseStock: () => void;
+  }) => (
+    <div data-testid="plugin-create-dialog" data-kind={config.id}>
+      <button onClick={onUseStock}>standard dialog</button>
+      <button onClick={onClose}>close plugin</button>
+    </div>
+  ),
 }));
 
 vi.mock("@/hooks/useWorktrees", () => ({
@@ -145,6 +168,7 @@ describe("ProjectDialogHost", () => {
     refreshMock.mockClear();
     forgeState.current = BOTH_FORGES;
     setProject({ id: "project-1", path: "/repo" });
+    surfaceState.current = null;
     useWorktreeSelectionStore.setState(initialSelectionState, true);
     useFleetPickerPaletteStore.setState({ isOpen: false });
     useRecipeEditorActivityStore.setState({ openCount: 0 });
@@ -203,6 +227,134 @@ describe("ProjectDialogHost", () => {
       expect((await screen.findByTestId("fleet-picker")).dataset.open).toBe("true");
       expect((await screen.findByTestId("recipe-manager")).dataset.open).toBe("true");
       expect(screen.queryByTestId("new-worktree-dialog")).toBeNull();
+    });
+  });
+
+  describe("plugin-owned New worktree dialog", () => {
+    const PLUGIN_KIND = "plugin.acme.create";
+
+    it("shows the plugin's dialog in place of the stock one while its claim renders", async () => {
+      surfaceState.current = { config: { id: PLUGIN_KIND } };
+      render(<ProjectDialogHost />);
+      act(() =>
+        useWorktreeSelectionStore.getState().openCreateDialog(null, {
+          surfacePanelKindId: PLUGIN_KIND,
+        })
+      );
+
+      const dialog = await screen.findByTestId("plugin-create-dialog");
+      expect(dialog.dataset.kind).toBe(PLUGIN_KIND);
+      expect(screen.queryByTestId("new-worktree-dialog")).toBeNull();
+    });
+
+    it("keeps an opening that wasn't handed to the plugin on the stock dialog", async () => {
+      surfaceState.current = { config: { id: PLUGIN_KIND } };
+      render(<ProjectDialogHost />);
+      act(() => useWorktreeSelectionStore.getState().openCreateDialog());
+
+      expect((await screen.findByTestId("new-worktree-dialog")).dataset.open).toBe("true");
+      expect(screen.queryByTestId("plugin-create-dialog")).toBeNull();
+    });
+
+    it("falls back to the stock dialog when the claim no longer renders", async () => {
+      surfaceState.current = null;
+      render(<ProjectDialogHost />);
+      act(() =>
+        useWorktreeSelectionStore.getState().openCreateDialog(null, {
+          surfacePanelKindId: PLUGIN_KIND,
+        })
+      );
+
+      expect((await screen.findByTestId("new-worktree-dialog")).dataset.open).toBe("true");
+      expect(screen.queryByTestId("plugin-create-dialog")).toBeNull();
+    });
+
+    it("moves one opening to the stock dialog from the Standard dialog link, keeping its callback", async () => {
+      surfaceState.current = { config: { id: PLUGIN_KIND } };
+      const onCreated = vi.fn();
+      render(<ProjectDialogHost />);
+      act(() =>
+        useWorktreeSelectionStore.getState().openCreateDialog(null, {
+          surfacePanelKindId: PLUGIN_KIND,
+          initialBranchInput: "feature/x",
+          onCreated,
+        })
+      );
+
+      fireEvent.click(await screen.findByText("standard dialog"));
+
+      expect(screen.queryByTestId("plugin-create-dialog")).toBeNull();
+      expect((await screen.findByTestId("new-worktree-dialog")).dataset.open).toBe("true");
+      const { createDialog } = useWorktreeSelectionStore.getState();
+      expect(createDialog.initialBranchInput).toBe("feature/x");
+      expect(createDialog.onCreated).toBe(onCreated);
+
+      act(() => useWorktreeSelectionStore.getState().closeCreateDialog());
+      act(() =>
+        useWorktreeSelectionStore.getState().openCreateDialog(null, {
+          surfacePanelKindId: PLUGIN_KIND,
+        })
+      );
+      expect(await screen.findByTestId("plugin-create-dialog")).toBeDefined();
+    });
+
+    it("keeps an opening on stock once its claim is lost, even if the claim comes back", async () => {
+      surfaceState.current = { config: { id: PLUGIN_KIND } };
+      const { rerender } = render(<ProjectDialogHost />);
+      act(() =>
+        useWorktreeSelectionStore.getState().openCreateDialog(null, {
+          surfacePanelKindId: PLUGIN_KIND,
+        })
+      );
+      await screen.findByTestId("plugin-create-dialog");
+
+      surfaceState.current = null;
+      rerender(<ProjectDialogHost />);
+      expect((await screen.findByTestId("new-worktree-dialog")).dataset.open).toBe("true");
+
+      surfaceState.current = { config: { id: PLUGIN_KIND } };
+      rerender(<ProjectDialogHost />);
+      expect(screen.queryByTestId("plugin-create-dialog")).toBeNull();
+      expect(screen.getByTestId("new-worktree-dialog").dataset.open).toBe("true");
+    });
+
+    it("ignores a close from a plugin view whose opening has ended", async () => {
+      surfaceState.current = { config: { id: PLUGIN_KIND } };
+      render(<ProjectDialogHost />);
+      act(() =>
+        useWorktreeSelectionStore.getState().openCreateDialog(null, {
+          surfacePanelKindId: PLUGIN_KIND,
+        })
+      );
+      const staleClose = await screen.findByText("close plugin");
+      const firstOpening = useWorktreeSelectionStore.getState().createDialog.openingId;
+      act(() => useWorktreeSelectionStore.getState().closeCreateDialog());
+      act(() =>
+        useWorktreeSelectionStore.getState().openCreateDialog(null, {
+          surfacePanelKindId: PLUGIN_KIND,
+        })
+      );
+      expect(useWorktreeSelectionStore.getState().createDialog.openingId).not.toBe(firstOpening);
+
+      act(() => useWorktreeSelectionStore.getState().closeSurfaceCreateDialog(firstOpening));
+
+      expect(useWorktreeSelectionStore.getState().createDialog.isOpen).toBe(true);
+      expect(staleClose).toBeDefined();
+    });
+
+    it("closes the opening when the plugin's view closes", async () => {
+      surfaceState.current = { config: { id: PLUGIN_KIND } };
+      render(<ProjectDialogHost />);
+      act(() =>
+        useWorktreeSelectionStore.getState().openCreateDialog(null, {
+          surfacePanelKindId: PLUGIN_KIND,
+        })
+      );
+
+      fireEvent.click(await screen.findByText("close plugin"));
+
+      expect(useWorktreeSelectionStore.getState().createDialog.isOpen).toBe(false);
+      expect(screen.queryByTestId("plugin-create-dialog")).toBeNull();
     });
   });
 

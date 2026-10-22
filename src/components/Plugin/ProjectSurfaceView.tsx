@@ -65,12 +65,20 @@ export function useProjectSurface(slot: ProjectSurfaceSlot): ResolvedProjectSurf
  * surface is the switch in `ProjectSurfaceFrame`'s strip, laid out above this
  * box, which the shared host's containment keeps the plugin from painting over.
  */
-export function ProjectSurfaceView({ config }: { config: PanelKindConfig }) {
+export function ProjectSurfaceView({
+  config,
+  onClose,
+}: {
+  config: PanelKindConfig;
+  /** Handed to the view as `hostContext.close`, for a slot the view can finish, like a dialog. */
+  onClose?: () => void;
+}) {
   return (
     <PluginHostedView
       source={{ from: "panel-kind", config }}
       host="surface"
       mountId={`surface:${config.id}`}
+      onClose={onClose}
       className="h-full w-full"
     />
   );

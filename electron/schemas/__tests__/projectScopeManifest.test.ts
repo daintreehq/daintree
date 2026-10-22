@@ -343,6 +343,31 @@ describe("contributes.surfaces", () => {
     expect(result.success).toBe(true);
   });
 
+  it("accepts a worktreeCreate claim naming a declared view", () => {
+    const result = parse("project", withSurface({ worktreeCreate: { viewId: "overview" } }));
+    expect(result.success).toBe(true);
+  });
+
+  it("rejects a worktreeCreate viewId matching no declared view", () => {
+    const result = parse("project", withSurface({ worktreeCreate: { viewId: "nope" } }));
+    expect(result.success).toBe(false);
+    expect(errorCodes(result)).toContain("surface_view_ref_unknown");
+  });
+
+  it("rejects a worktreeCreate claim from an installed plugin", () => {
+    const result = getPluginManifestSchema("user").safeParse({
+      name: "acme.installed",
+      version: "1.0.0",
+      contributes: {
+        panels: [panel],
+        views: [view],
+        surfaces: { worktreeCreate: { viewId: "overview" } },
+      },
+    });
+    expect(result.success).toBe(false);
+    expect(errorCodes(result)).toContain("surfaces_project_scope_only");
+  });
+
   it("rejects a projectHome viewId matching no declared view", () => {
     const result = parse("project", withSurface({ projectHome: { viewId: "nope" } }));
     expect(result.success).toBe(false);

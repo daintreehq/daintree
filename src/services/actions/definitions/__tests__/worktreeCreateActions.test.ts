@@ -22,6 +22,12 @@ let panelState: {
 };
 const originalWindow = globalThis.window;
 
+const surfaceMock = vi.hoisted(() => ({ current: null as { config: { id: string } } | null }));
+
+vi.mock("@/hooks/useRenderableSurfaceClaim", () => ({
+  currentProjectSurface: () => surfaceMock.current,
+}));
+
 vi.mock("@/clients", () => ({
   worktreeClient: worktreeClientMock,
 }));
@@ -167,5 +173,41 @@ describe("worktree.delete action", () => {
     );
 
     expect(error).toBe(raw);
+  });
+});
+
+describe("worktree.createDialog.open action", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    surfaceMock.current = null;
+  });
+
+  it("opens the stock dialog when no worktreeCreate claim renders", async () => {
+    const run = setupActions();
+    await run("worktree.createDialog.open");
+
+    expect(selectionStoreMock.openCreateDialog).toHaveBeenCalledWith(null, {
+      surfacePanelKindId: undefined,
+    });
+  });
+
+  it("hands the opening to the claimed view's panel kind", async () => {
+    surfaceMock.current = { config: { id: "plugin.acme.create" } };
+    const run = setupActions();
+    await run("worktree.createDialog.open");
+
+    expect(selectionStoreMock.openCreateDialog).toHaveBeenCalledWith(null, {
+      surfacePanelKindId: "plugin.acme.create",
+    });
+  });
+
+  it("leaves programmatic and quick create on their stock paths", async () => {
+    surfaceMock.current = { config: { id: "plugin.acme.create" } };
+    worktreeClientMock.create.mockResolvedValue({ worktreeId: "wt-1", branch: "b" });
+    const run = setupActions();
+    await run("worktree.quickCreate");
+
+    expect(selectionStoreMock.openQuickCreate).toHaveBeenCalledTimes(1);
+    expect(selectionStoreMock.openCreateDialog).not.toHaveBeenCalled();
   });
 });

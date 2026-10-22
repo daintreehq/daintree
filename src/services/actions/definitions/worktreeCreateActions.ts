@@ -4,6 +4,7 @@ import { z } from "zod";
 import { worktreeClient } from "@/clients";
 import { withWorktreeLocation, requireWorktreePath } from "./locationArgs";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
+import { currentProjectSurface } from "@/hooks/useRenderableSurfaceClaim";
 import {
   captureWorktreeTerminalSnapshot,
   closeTerminalsForWorktree,
@@ -42,7 +43,12 @@ export function registerWorktreeCreateActions(
     scope: "renderer",
     keywords: ["create", "branch", "checkout", "add"],
     run: async () => {
-      useWorktreeSelectionStore.getState().openCreateDialog();
+      // Resolved here, at the click, and again by the host at render: a claim
+      // that goes away between the two falls back to the stock dialog.
+      const surface = currentProjectSurface("worktreeCreate");
+      useWorktreeSelectionStore.getState().openCreateDialog(null, {
+        surfacePanelKindId: surface?.config.id,
+      });
     },
   }));
 

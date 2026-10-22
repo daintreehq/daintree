@@ -1807,7 +1807,7 @@ export interface GeneratedIpcInvokeMap {
   };
   "plugin:project-surface-choice-set": {
     args: [
-      slot: "emptyCanvas" | "projectHome",
+      slot: "emptyCanvas" | "projectHome" | "worktreeCreate",
       choice: import("../plugin.js").ProjectSurfaceChoice | null,
       optionId?: string | undefined,
     ];
