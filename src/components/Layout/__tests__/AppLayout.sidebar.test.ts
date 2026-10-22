@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import fs from "fs/promises";
 import path from "path";
+import ts from "typescript";
 
 const APP_LAYOUT_PATH = path.resolve(__dirname, "../AppLayout.tsx");
 const SIDEBAR_PATH = path.resolve(__dirname, "../Sidebar.tsx");
@@ -72,6 +73,70 @@ describe("AppLayout sidebar visibility — issue #5023 hide on welcome screen", 
     // Degrade, don't delete: the button stays put and explains itself in its
     // tooltip rather than vanishing from the toolbar.
     expect(source).toContain("hasWorkspace={hasWorkspace}");
+  });
+
+  it("mounts the project dialogs beside the toolbar, not inside the sidebar (issue #13773)", () => {
+    // worktree.createDialog.open, the recipe events and the fleet picker must
+    // answer whatever the sidebar is showing — another view, a collapsed
+    // sidebar, a workspace with no git worktrees — so the host hangs off the
+    // workspace and hydration gates alone, outside both the sidebar subtree and
+    // the inert chrome wrappers. Neither sidebar visibility nor git may gate it.
+    const file = ts.createSourceFile(
+      APP_LAYOUT_PATH,
+      source,
+      ts.ScriptTarget.Latest,
+      true,
+      ts.ScriptKind.TSX
+    );
+    const selfClosing = (tag: string): ts.JsxSelfClosingElement[] => {
+      const found: ts.JsxSelfClosingElement[] = [];
+      const visit = (node: ts.Node): void => {
+        if (ts.isJsxSelfClosingElement(node) && node.tagName.getText(file) === tag) {
+          found.push(node);
+        }
+        ts.forEachChild(node, visit);
+      };
+      visit(file);
+      return found;
+    };
+
+    const hosts = selfClosing("ProjectDialogHost");
+    expect(hosts).toHaveLength(1);
+
+    // The only thing between the host and its parent element is an `&&` chain.
+    let gate: ts.Expression = hosts[0]!;
+    while (
+      ts.isBinaryExpression(gate.parent) &&
+      gate.parent.operatorToken.kind === ts.SyntaxKind.AmpersandAmpersandToken
+    ) {
+      gate = gate.parent;
+    }
+    const conditions: string[] = [];
+    const flatten = (node: ts.Expression): void => {
+      if (
+        ts.isBinaryExpression(node) &&
+        node.operatorToken.kind === ts.SyntaxKind.AmpersandAmpersandToken
+      ) {
+        flatten(node.left);
+        flatten(node.right);
+      } else if (node !== hosts[0]) {
+        conditions.push(node.getText(file));
+      }
+    };
+    flatten(gate);
+    expect(conditions.sort()).toEqual(["hasWorkspace", "isHydrated"]);
+    expect(ts.isJsxExpression(gate.parent)).toBe(true);
+
+    // ...and that parent is the root element AppLayout returns, the same one the
+    // other app dialogs hang off, so no wrapper, fragment or ternary sits between.
+    const container = gate.parent.parent;
+    expect(ts.isJsxElement(container)).toBe(true);
+    expect(ts.isParenthesizedExpression(container.parent)).toBe(true);
+    expect(ts.isReturnStatement(container.parent.parent)).toBe(true);
+    const siblings = selfClosing("ImportConfigDialog");
+    expect(siblings).toHaveLength(1);
+    expect(siblings[0]!.parent).toBe(container);
+    expect(source.match(/<ProjectDialogHost\b/g)).toHaveLength(1);
   });
 
   it("uses showSidebar for the macro-focus sidebar visibility effect", () => {

@@ -1254,7 +1254,7 @@ describe("BulkCreateWorktreeDialog", () => {
     expect(startedCreates).toBeGreaterThan(0);
     expect(startedCreates).toBeLessThan(props.selectedIssues.length);
 
-    // The parent drops the dialog (SidebarContent renders it only while open),
+    // The parent drops the dialog (ProjectDialogHost renders it only while open),
     // bypassing handleClose entirely.
     await act(async () => {
       unmount();

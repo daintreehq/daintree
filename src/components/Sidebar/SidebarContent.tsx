@@ -1,8 +1,5 @@
-import { lazyWithPreload } from "@/lib/lazyWithPreload";
 import { AGENT_BUCKET_LABEL } from "@/lib/agentStateVocabulary";
 import {
-  Suspense,
-  lazy,
   useCallback,
   useDeferredValue,
   useEffect,
@@ -34,16 +31,12 @@ import {
   useAriaKeyshortcuts,
   useEffectiveCombo,
   useDohertyGate,
-  useKeepMounted,
 } from "@/hooks";
 import {
   WorktreeSidebarSearchBar,
   QuickStateFilterBar,
   QuickStateArmButton,
 } from "@/components/Worktree";
-import { useBuiltinView } from "@/registry/builtinRendererRegistry";
-import type { ForgeBulkCreateWorktreeDialogProps } from "@/types/forgeSlotProps";
-import { useResolvedForgeProvider } from "@/hooks/useResolvedForgeProvider";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { createTooltipContent } from "@/lib/tooltipShortcut";
 import { WorktreesReconnectingBadge } from "./WorktreesReconnectingBadge";
@@ -57,7 +50,6 @@ import { splitHostName } from "@/components/Hosts/hostModel";
 import { Button } from "@/components/ui/button";
 import { SIDEBAR_HEADER_ACTION, SIDEBAR_HEADER_ROW } from "./sidebarHeader";
 import { useDispatchedSidebarRefresh } from "./useDispatchedSidebarRefresh";
-import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { SortableContext, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { useDndMonitor } from "@dnd-kit/core";
 import {
@@ -78,6 +70,8 @@ import { planDeletedWorktreePlacement } from "@/components/Sidebar/deletedWorktr
 import { DeletedWorktreeCard } from "@/components/Sidebar/DeletedWorktreeCard";
 import { DeletedWorktreeGroup } from "@/components/Sidebar/DeletedWorktreeGroup";
 import { useFleetArmingStore } from "@/store/fleetArmingStore";
+import { useFleetPickerPaletteStore } from "@/store/fleetPickerPaletteStore";
+import { preloadNewWorktreeDialog } from "@/components/Layout/ProjectDialogHost";
 import {
   selectSidebarVisiblePanelIds,
   selectSidebarAgentStateByPanelId,
@@ -123,7 +117,6 @@ import { useShouldSkipMotion } from "@/hooks/useShouldSkipMotion";
 import { useVisibilityAwareInterval } from "@/hooks/useVisibilityAwareInterval";
 import { useScrollIndicator } from "./useScrollIndicator";
 import { useSidebarVirtuosoReset } from "./useSidebarVirtuosoReset";
-import { useRecipeDialogState } from "./useRecipeDialogState";
 import { useWorktreeIds } from "@/hooks/useTerminalSelectors";
 import { logError } from "@/utils/logger";
 import { useWorktreeSidebarKeyboard, type SidebarKeyboardItem } from "./useWorktreeSidebarKeyboard";
@@ -132,23 +125,6 @@ import type { WorktreeActions } from "@/hooks/useWorktreeActions";
 import { LIST_LABEL_CLASS } from "@/components/ui/sectionLabel";
 import { CountBadge } from "@/components/ui/badge";
 import { isReconnectStalled } from "@/lib/worktreeReconnect";
-
-const LazyNewWorktreeDialog = lazyWithPreload(
-  () => import("@/components/Worktree/NewWorktreeDialog"),
-  (m) => m.NewWorktreeDialog
-);
-export const preloadNewWorktreeDialog = LazyNewWorktreeDialog.preload;
-const LazyFleetPickerPalette = lazy(() =>
-  import("@/components/Fleet/FleetPickerPalette").then((m) => ({
-    default: m.FleetPickerPalette,
-  }))
-);
-const LazyRecipeEditor = lazy(() =>
-  import("@/components/TerminalRecipe/RecipeEditor").then((m) => ({ default: m.RecipeEditor }))
-);
-const LazyRecipeManager = lazy(() =>
-  import("@/components/TerminalRecipe/RecipeManager").then((m) => ({ default: m.RecipeManager }))
-);
 
 const SIDEBAR_DEFER_FILTER_MIN_WORKTREES = 60;
 
@@ -531,7 +507,6 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
     isReconnecting,
     reconnectingAt,
     error,
-    refresh,
   } = useWorktrees();
   const [bannerDismissed, setBannerDismissed] = useState(false);
   useEffect(() => {
@@ -609,34 +584,12 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
   const isLoading = isStoreLoading && worktreeLoadError === null && error === null;
   useProjectSettings();
   const { availability, agentSettings } = useAgentLauncher();
-  const {
-    activeWorktreeId,
-    focusedWorktreeId,
-    selectWorktree,
-    createDialog,
-    closeCreateDialog,
-    bulkCreateDialog,
-    closeBulkCreateDialog,
-  } = useWorktreeSelectionStore(
+  const { activeWorktreeId, focusedWorktreeId, selectWorktree } = useWorktreeSelectionStore(
     useShallow((state) => ({
       activeWorktreeId: state.activeWorktreeId,
       focusedWorktreeId: state.focusedWorktreeId,
       selectWorktree: state.selectWorktree,
-      createDialog: state.createDialog,
-      closeCreateDialog: state.closeCreateDialog,
-      bulkCreateDialog: state.bulkCreateDialog,
-      closeBulkCreateDialog: state.closeBulkCreateDialog,
     }))
-  );
-  // Resolved reactively from the active provider's slot so the dialog drops
-  // out (and back in) live with the owning plugin's enable state instead of
-  // holding a stale slot reference. Issue mode lists issues, so it's the
-  // issues provider's dialog; PR mode stays with the code forge.
-  const resolvedForge = useResolvedForgeProvider(currentProject?.id ?? null);
-  const forgeProviderEntry =
-    bulkCreateDialog.mode === "issue" ? resolvedForge.issues.entry : resolvedForge.entry;
-  const BulkCreateWorktreeDialog = useBuiltinView<ForgeBulkCreateWorktreeDialogProps>(
-    forgeProviderEntry?.contribution.slots?.bulkCreateWorktreeDialog ?? ""
   );
   // Direct subscription (no useDeferredValue) so the skeleton renders the
   // moment the dialog submits — defer would make the placeholder lag the
@@ -671,16 +624,8 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
     ));
   }, [pendingCreations, handleRetryPendingCreation, dismissPendingCreation]);
 
-  const [hasOpenedNewWorktree, setHasOpenedNewWorktree] = useState(false);
-  useEffect(() => {
-    if (createDialog.isOpen) setHasOpenedNewWorktree(true);
-  }, [createDialog.isOpen]);
-
-  const [isFleetPickerOpen, setIsFleetPickerOpen] = useState(false);
-  const shouldMountFleetPicker = useKeepMounted(isFleetPickerOpen);
+  const openFleetPicker = useFleetPickerPaletteStore((s) => s.open);
   const [isRestartConfirmOpen, setIsRestartConfirmOpen] = useState(false);
-  const openFleetPicker = useCallback(() => setIsFleetPickerOpen(true), []);
-  const closeFleetPicker = useCallback(() => setIsFleetPickerOpen(false), []);
 
   useEffect(() => {
     if (!error) setIsRestartConfirmOpen(false);
@@ -809,22 +754,6 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
   );
 
   const searchInputRef = useRef<HTMLInputElement>(null);
-
-  const {
-    isRecipeEditorOpen,
-    recipeEditorWorktreeId,
-    recipeEditorInitialTerminals,
-    recipeEditorDefaultScope,
-    recipeManagerEdit,
-    isRecipeManagerOpen,
-    handleOpenRecipeEditor,
-    handleCloseRecipeEditor,
-    handleCloseRecipeManager,
-    handleRecipeManagerEdit,
-    handleRecipeManagerCreate,
-  } = useRecipeDialogState();
-  const shouldMountRecipeEditor = useKeepMounted(isRecipeEditorOpen);
-  const shouldMountRecipeManager = useKeepMounted(isRecipeManagerOpen);
 
   const [homeDir, setHomeDir] = useState<string | undefined>(undefined);
 
@@ -1207,9 +1136,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
       worktreeCustomTitles,
     ]);
 
-  const worktreeActions = useWorktreeActions({
-    onOpenRecipeEditor: handleOpenRecipeEditor,
-  });
+  const worktreeActions = useWorktreeActions();
 
   // `filteredWorktrees` gets a new identity on every worktree update, even when
   // only one card's status changed. Keying the id order on its content keeps
@@ -1667,37 +1594,6 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
     ]
   );
 
-  // Hoisted before early returns so the dialog still mounts when the zero-
-  // worktrees branch fires — its empty-state nudge dispatches
-  // worktree.createDialog.open and the dialog has nowhere else to live.
-  const dialogRootPath = currentProject?.path ?? "";
-  const newWorktreeDialogElement = dialogRootPath &&
-    (createDialog.isOpen || hasOpenedNewWorktree) && (
-      <ErrorBoundary
-        variant="component"
-        componentName="NewWorktreeDialog"
-        resetKeys={[Number(createDialog.isOpen)]}
-      >
-        <Suspense fallback={null}>
-          <LazyNewWorktreeDialog
-            isOpen={createDialog.isOpen}
-            onClose={closeCreateDialog}
-            rootPath={dialogRootPath}
-            onWorktreeCreated={(worktreeId) => {
-              refresh();
-              createDialog.onCreated?.(worktreeId);
-            }}
-            initialIssue={createDialog.initialIssue}
-            initialPR={createDialog.initialPR}
-            initialRecipeId={createDialog.initialRecipeId}
-            initialBranchInput={createDialog.initialBranchInput}
-            initialAgentId={createDialog.initialAgentId}
-            initialPrompt={createDialog.initialPrompt}
-          />
-        </Suspense>
-      </ErrorBoundary>
-    );
-
   // An open project whose worktree store never received a snapshot has no port
   // to the workspace service. That is a connection failure, not an empty
   // repository, so it must never fall through to the "Open a Git repository"
@@ -1858,7 +1754,6 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
             />
           )}
         </div>
-        {newWorktreeDialogElement}
         {restartConfirmDialog}
       </>
     );
@@ -2341,75 +2236,6 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
       </div>
 
       <OtherHostsWorktreeGroup projectId={getViewWorkspaceId()} />
-
-      <ErrorBoundary
-        variant="component"
-        componentName="RecipeEditor"
-        resetKeys={[Number(isRecipeEditorOpen)]}
-      >
-        {shouldMountRecipeEditor && (
-          <Suspense fallback={null}>
-            <LazyRecipeEditor
-              recipe={recipeManagerEdit}
-              worktreeId={recipeEditorWorktreeId}
-              initialTerminals={recipeEditorInitialTerminals}
-              defaultScope={recipeEditorDefaultScope}
-              isOpen={isRecipeEditorOpen}
-              onClose={handleCloseRecipeEditor}
-            />
-          </Suspense>
-        )}
-      </ErrorBoundary>
-
-      <ErrorBoundary
-        variant="component"
-        componentName="RecipeManager"
-        resetKeys={[Number(isRecipeManagerOpen)]}
-      >
-        {shouldMountRecipeManager && (
-          <Suspense fallback={null}>
-            <LazyRecipeManager
-              isOpen={isRecipeManagerOpen}
-              onClose={handleCloseRecipeManager}
-              onEditRecipe={handleRecipeManagerEdit}
-              onCreateRecipe={handleRecipeManagerCreate}
-            />
-          </Suspense>
-        )}
-      </ErrorBoundary>
-
-      {newWorktreeDialogElement}
-
-      <ErrorBoundary
-        variant="component"
-        componentName="BulkCreateWorktreeDialog"
-        resetKeys={[Number(bulkCreateDialog.isOpen)]}
-      >
-        {bulkCreateDialog.isOpen && BulkCreateWorktreeDialog && (
-          <Suspense fallback={null}>
-            <BulkCreateWorktreeDialog
-              isOpen
-              onClose={closeBulkCreateDialog}
-              mode={bulkCreateDialog.mode}
-              selectedIssues={bulkCreateDialog.selectedIssues}
-              selectedPRs={bulkCreateDialog.selectedPRs}
-              onComplete={closeBulkCreateDialog}
-            />
-          </Suspense>
-        )}
-      </ErrorBoundary>
-
-      <ErrorBoundary
-        variant="component"
-        componentName="FleetPickerPalette"
-        resetKeys={[Number(isFleetPickerOpen)]}
-      >
-        {shouldMountFleetPicker && (
-          <Suspense fallback={null}>
-            <LazyFleetPickerPalette isOpen={isFleetPickerOpen} onClose={closeFleetPicker} />
-          </Suspense>
-        )}
-      </ErrorBoundary>
 
       {restartConfirmDialog}
     </div>

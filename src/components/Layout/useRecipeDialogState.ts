@@ -11,7 +11,6 @@ interface UseRecipeDialogStateReturn {
   recipeEditorDefaultScope: "global" | "project" | undefined;
   recipeManagerEdit: TerminalRecipe | undefined;
   isRecipeManagerOpen: boolean;
-  handleOpenRecipeEditor: (worktreeId: string, initialTerminals?: RecipeTerminal[]) => void;
   handleCloseRecipeEditor: () => void;
   handleCloseRecipeManager: () => void;
   handleRecipeManagerEdit: (recipe: TerminalRecipe) => void;
@@ -159,7 +158,6 @@ function useRecipeDialogState(): UseRecipeDialogStateReturn {
     recipeEditorDefaultScope,
     recipeManagerEdit,
     isRecipeManagerOpen,
-    handleOpenRecipeEditor,
     handleCloseRecipeEditor,
     handleCloseRecipeManager,
     handleRecipeManagerEdit,

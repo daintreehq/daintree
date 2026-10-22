@@ -679,29 +679,27 @@ describe("SidebarContent zero-worktrees empty state — issue #6752 (supersedes 
     expect(source).not.toMatch(/<kbd[^>]*>\s*File → Open Project/);
   });
 
-  it("mounts NewWorktreeDialog from the zero-worktrees branch so populated-sidebar shortcuts still work", () => {
-    // Even without the inline nudge, the dialog mount must remain reachable
-    // from every branch so worktree.createDialog.open dispatched from
-    // elsewhere (command palette, menu) opens correctly.
-    expect(source).toContain("const newWorktreeDialogElement");
-    const branchStart = source.indexOf("if (worktrees.length === 0) {");
-    const branchEnd = source.indexOf("const hasNonMainWorktrees", branchStart);
-    expect(branchStart).toBeGreaterThan(0);
-    expect(branchEnd).toBeGreaterThan(branchStart);
-    const branch = source.slice(branchStart, branchEnd);
-    expect(branch).toContain("{newWorktreeDialogElement}");
-  });
-
-  it("hoists the dialog mount before all early returns so it is reachable from every branch", () => {
-    // The dialog declaration must appear before the first early-return guard
-    // (`isLoading && worktrees.length === 0`); otherwise dispatching
-    // worktree.createDialog.open from outside the populated sidebar (loading,
-    // error, or empty state) would be a no-op.
-    const dialogIdx = source.indexOf("const newWorktreeDialogElement");
-    const firstEarlyReturnIdx = source.indexOf("if (isLoading && worktrees.length === 0)");
-    expect(dialogIdx).toBeGreaterThan(0);
-    expect(firstEarlyReturnIdx).toBeGreaterThan(0);
-    expect(dialogIdx).toBeLessThan(firstEarlyReturnIdx);
+  it("leaves every project dialog to ProjectDialogHost (#13773)", () => {
+    // The zero-worktrees branch, the skeleton and the non-git early return all
+    // used to drop some or all of these mounts, so an action dispatched while
+    // the sidebar sat in one of them opened nothing. The host mounts them once,
+    // outside the sidebar, whatever branch or view is showing.
+    for (const mount of [
+      "<LazyNewWorktreeDialog",
+      "<LazyRecipeEditor",
+      "<LazyRecipeManager",
+      "<BulkCreateWorktreeDialog",
+      "<LazyFleetPickerPalette",
+    ]) {
+      expect(source).not.toContain(mount);
+    }
+    expect(source).not.toContain("useRecipeDialogState");
+    // The triggers stay: the header still opens the picker through the shared
+    // store and warms the New worktree chunk on hover.
+    expect(source).toMatch(
+      /const openFleetPicker = useFleetPickerPaletteStore\(\(s\) => s\.open\)/
+    );
+    expect(source).toContain("onPointerEnter={() => void preloadNewWorktreeDialog()}");
   });
 });
 

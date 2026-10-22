@@ -161,7 +161,7 @@ describe("useResolvedForgeProvider", () => {
   });
 
   it("converges EVERY concurrently-mounted instance on a provenance change", async () => {
-    // Regression: Toolbar, ForgeStatsToolbarButton, SidebarContent, and
+    // Regression: Toolbar, ForgeStatsToolbarButton, ProjectDialogHost, and
     // useRepositoryStats all hold an instance for the same project. A
     // provenance event re-resolves all of them in the same tick; with the
     // shared stale-response guard gating setState, only the last instance to

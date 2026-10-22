@@ -16,6 +16,7 @@ import { TerminalDestructiveActionConfirmDialog } from "@/components/Terminal/Te
 import { PluginPanelReloadConfirmDialog } from "@/components/Plugin/PluginPanelReloadConfirmDialog";
 import { MoveOrRenameProjectDialog } from "@/components/Project/MoveOrRenameProjectDialog";
 import { ImportConfigDialog } from "@/components/Config/ImportConfigDialog";
+import { ProjectDialogHost } from "./ProjectDialogHost";
 import { ChordIndicator } from "./ChordIndicator";
 
 import { AllClearOverlay } from "../AllClearOverlay";
@@ -993,6 +994,9 @@ export function AppLayout({
       <PortalCloseConfirmDialog />
       <MoveOrRenameProjectDialog />
       <ImportConfigDialog />
+      {/* Not under the sidebar: these open from actions, the palette and
+          keybindings too, so they must answer whatever the sidebar shows. */}
+      {hasWorkspace && isHydrated && <ProjectDialogHost />}
       <div
         {...(chromeInert ? { inert: true } : {})}
         className="flex-1 flex flex-col overflow-hidden"
