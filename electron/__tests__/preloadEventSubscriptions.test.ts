@@ -160,7 +160,11 @@ describe("preload event subscriptions", () => {
     ipcRenderer.emit("events:push", {}, { name: "terminal:exit", payload: ["t3", 0, null] });
     dispose();
 
-    expect(exits).toEqual([["t1", 0, { preserveSession: true }], ["t2", 0], ["t3", 0]]);
+    expect(exits).toEqual([
+      ["t1", 0, { preserveSession: true }],
+      ["t2", 0],
+      ["t3", 0],
+    ]);
   });
 
   it("replays each plugin's latest toolbar-badge map to a late subscriber (#13503)", () => {

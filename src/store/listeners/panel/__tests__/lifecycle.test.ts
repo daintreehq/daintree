@@ -29,11 +29,7 @@ const restoredHandlers = vi.hoisted(() => [] as Array<(data: { id: string }) => 
 const trashedHandlers = vi.hoisted(
   () => [] as Array<(data: { id: string; expiresAt: number }) => void>
 );
-type ExitHandler = (
-  id: string,
-  exitCode: number,
-  context?: { preserveSession?: boolean }
-) => void;
+type ExitHandler = (id: string, exitCode: number, context?: { preserveSession?: boolean }) => void;
 const exitHandlers = vi.hoisted(() => [] as Array<ExitHandler>);
 const reliabilityMetricHandlers = vi.hoisted(
   () =>
