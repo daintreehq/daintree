@@ -3823,7 +3823,7 @@ interface PluginManifest {
         /**
          * Plugin welcome tours (#12768). Optional in the type but always
          * materialized by the manifest schema's `.default([])`, for the same reason
-         * as `agentMcp`. Not available to a `scope: "project"` plugin.
+         * as `agentMcp`.
          */
         tours?: PluginTourContribution[];
         /**

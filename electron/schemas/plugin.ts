@@ -2617,10 +2617,6 @@ export const PROJECT_SCOPE_UNSCOPED_CONTRIBUTIONS = [
     "contributed MCP servers run under one app-wide supervisor whose tools Daintree and its in-app Assistant call with no project binding to check the contribution against. To serve tools to this project's agents, declare contributes.agentMcp instead.",
   ],
   [
-    "tours",
-    "plugin tours are offered from the app-wide Help menu and command palette with no project axis, and tour playback has no per-project visibility to narrow a panel tour to the owning project's views either.",
-  ],
-  [
     "themes",
     "the app theme is one machine-wide selection painted into every window and every project's view, so there is no per-project theme for the contribution to narrow to.",
   ],

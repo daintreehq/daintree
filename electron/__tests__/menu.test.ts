@@ -239,6 +239,13 @@ vi.mock("../services/plugin/PluginTourRegistry.js", () => ({
   getPluginTours: vi.fn(() => []),
 }));
 
+// The real selector narrows by project ownership; the menu tests drive that
+// through `getPluginToursForProjectMock` and default to the visibility filter.
+const getPluginToursForProjectMock = vi.hoisted(() => vi.fn());
+vi.mock("../services/plugin/PluginContributionBroadcaster.js", () => ({
+  getPluginToursForProject: getPluginToursForProjectMock,
+}));
+
 const getAppWebContentsMock = vi.hoisted(() =>
   vi.fn((_win: { id: number }): unknown => mockWebContents)
 );
@@ -288,11 +295,18 @@ import {
 import { getBuildChannelLabel } from "../../shared/config/distribution.js";
 import { getPluginMenuItems } from "../services/pluginMenuRegistry.js";
 import { getPluginTours } from "../services/plugin/PluginTourRegistry.js";
+import { isPluginVisibleInProject } from "../services/plugin/projectPluginVisibility.js";
 import { webContents, app, Menu, dialog } from "electron";
 import { CHANNELS } from "../ipc/channels.js";
 import { getWorkspaceClientRef } from "../window/windowServices.js";
 import { AppError } from "../utils/errorTypes.js";
 import { registerRemoteService } from "../remote/runtime.js";
+
+beforeEach(() => {
+  getPluginToursForProjectMock.mockImplementation((projectId: string | null) =>
+    getPluginTours().filter((t) => isPluginVisibleInProject(t.pluginId, projectId))
+  );
+});
 
 function findMenuItem(
   template: Electron.MenuItemConstructorOptions[],
@@ -2334,6 +2348,27 @@ describe("Help menu plugin tours (#12773)", () => {
     getProjectForWebContentsMock.mockReturnValue("project-b");
     expect(helpItems().some((i) => i.label === "Acme Site Builder: Welcome Tour")).toBe(true);
   });
+
+  it("lists a project plugin's tour only in the project that owns it", () => {
+    const projectTour = {
+      ...tour("acme.proj.welcome", "Project Tour"),
+      pluginId: "project__a__acme",
+    };
+    vi.mocked(getPluginTours).mockReturnValue([projectTour]);
+    getPluginToursForProjectMock.mockImplementation((projectId: string | null) =>
+      projectId === "a" ? [projectTour] : []
+    );
+    const label = "Acme Site Builder: Project Tour";
+
+    getProjectForWebContentsMock.mockReturnValue("a");
+    expect(helpItems().some((i) => i.label === label)).toBe(true);
+
+    getProjectForWebContentsMock.mockReturnValue("b");
+    expect(helpItems().some((i) => i.label === label)).toBe(false);
+
+    getProjectForWebContentsMock.mockReturnValue(null);
+    expect(helpItems().some((i) => i.label === label)).toBe(false);
+  });
 });
 
 describe("plugin menu items in a project that hides the plugin (#13765)", () => {
@@ -2450,6 +2485,33 @@ describe("plugin menu items in a project that hides the plugin (#13765)", () => 
     const labels = (help.submenu as Electron.MenuItemConstructorOptions[]).map((i) => i.label);
     expect(labels).toContain("Acme Docs");
     expect(labels).not.toContain("Acme Site Builder: Welcome Tour");
+  });
+
+  it("rebuilds when a switch of project changes which project plugin's tours show", () => {
+    const projectTour = {
+      id: "acme.proj.welcome",
+      pluginId: "project__a__acme",
+      pluginName: "Acme",
+      title: "Project Tour",
+      moduleUrl: "plugin://pi-1/__dtv-1/dist/tour.js",
+      chapters: [],
+    };
+    vi.mocked(getPluginTours).mockReturnValue([projectTour]);
+    getPluginToursForProjectMock.mockImplementation((projectId: string | null) =>
+      projectId === "a" ? [projectTour] : []
+    );
+    const win = mockBrowserWindow as unknown as Electron.BrowserWindow;
+    getProjectForWebContentsMock.mockReturnValue("b");
+    createApplicationMenu(win);
+    const builds = vi.mocked(Menu.setApplicationMenu);
+    builds.mockClear();
+
+    getProjectForWebContentsMock.mockReturnValue("a");
+    rebuildApplicationMenuIfPluginVisibilityChanged(win);
+    expect(builds).toHaveBeenCalledTimes(1);
+
+    rebuildApplicationMenuIfPluginVisibilityChanged(win);
+    expect(builds).toHaveBeenCalledTimes(1);
   });
 
   it("filters by the most recently focused window's project, whichever window the build names", () => {

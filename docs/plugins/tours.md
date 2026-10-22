@@ -2,7 +2,7 @@
 
 A plugin can ship a narrated welcome tour that plays in the same dialog as the Daintree Tour: a few short chapters, each a minimal animated mockup of one idea with a voice-over and captions. This guide covers the whole path, from the manifest entry to a voiced, previewed tour, and the house style every tour is held to.
 
-For the manifest field table on its own, see [Contribution points → Tours](./contribution-points.md#tours--shipped-installed-plugins).
+For the manifest field table on its own, see [Contribution points → Tours](./contribution-points.md#tours--shipped).
 
 To have Claude Code author the tour with you, use the bundled `daintree-tour` skill: plugins scaffolded with `daintree-plugin new` already include it in `.claude/skills/daintree-tour/`, and `npx daintree-plugin skill add` copies it into an existing plugin. Start Claude Code in the plugin directory and ask for a tour, or run `/daintree-tour`. The skill and the `daintree-plugin skill` and `tour` commands this guide uses are not in the 0.1.0 release on npm; they ship in the next one.
 
@@ -17,7 +17,7 @@ Tours need Daintree 0.39.0 or later: `contributes.tours` and the `@daintreehq/to
 | Length | As many chapters as the story needs, up to 32 | A couple of chapters |
 | Wiring in your code | None | None — the menu item appears once the tour registers and disappears when it is withdrawn |
 
-Both are the same contribution, validated and played the same way. If two tours name the same panel, the first wins. Tours are available to installed plugins only; a manifest with `"scope": "project"` that declares one is refused.
+Both are the same contribution, validated and played the same way. If two tours name the same panel, the first wins. A project plugin may declare tours too; they are offered only in that project, and never play on their own when the project opens.
 
 ## The standard
 

@@ -34,7 +34,7 @@ A plugin that declares `"scope": "project"` lives in a project's own repository 
 | `skills` | Rejected — contributed skills land in one app-wide index behind the MCP server's `skills.search` / `skills.load`, which filter by no project |
 | `processTools` | Rejected — detections are mirrored into the shared pty-host as one table for every terminal |
 | `mcpServers` | Rejected — the plugin-MCP IPC surface is app-global: servers are addressed by plugin and server id alone, and a tool call carries no project to check the contribution against. To serve tools to the project's agents, declare `agentMcp` instead |
-| `tours` | Rejected — plugin tours are offered from the app-wide Help menu and command palette, and tour playback has no per-project visibility yet |
+| `tours` | Allowed — a project plugin's tours are offered only in its own project |
 | `themes` | Rejected — the app theme is one machine-wide selection painted into every window, with no per-project theme to narrow to |
 | `forgeProviders` | Rejected — forge providers need synchronous host methods that cannot cross the plugin worker's message port |
 | `fileEditors` | Allowed, view-backed only — editors apply only in the plugin's own project and may also match project-relative `paths`. A `slot` is built-in only |
@@ -385,7 +385,7 @@ Every panel of a plugin carries some entries you never declare. The ⋯ menu and
 2. Rename panel and **Reload panel** — a fresh view attempt, the same one `requestReload` asks for; see [Views → Reloading a view](./views.md#reloading-a-view).
 3. Your `menu` entries, then the [runtime entries](#runtime-menu-entries) your view and backend publish.
 4. Your plugin's own entries, in this order, each only when it applies:
-   - **<Panel name> Welcome Tour** — once a tour whose `panelKind` names this panel is registered (see [Tours](#tours--shipped-installed-plugins)).
+   - **<Panel name> Welcome Tour** — once a tour whose `panelKind` names this panel is registered (see [Tours](#tours--shipped)).
    - **Back up data…** — when the plugin declares any [database](#databases--shipped).
    - **Plugin settings…** — when the plugin declares any [settings](#settings-schema--shipped) field or a `location: "settings"` view. It opens whichever home those settings live in.
 5. Send to background, Trash panel, Remove panel.
@@ -1280,7 +1280,7 @@ Named multi-terminal launch layouts a plugin ships. A contributed recipe is regi
 
 **Agent-initiated runs are confirmation-gated.** Any agent or MCP dispatch that carries a `recipeId` — through `recipe.run` or a composite like `worktree.createWithRecipe` — pauses for a single human approval showing the resolved recipe, its origin, and the commands each terminal will run (env keys are listed, values are not). This applies to every recipe tier, not just plugin-contributed ones. An external MCP session bound to one workspace has no one watching that view to answer the dialog, so there the dispatch is refused outright rather than paused (#11789).
 
-## Tours — _Shipped (installed plugins)_
+## Tours — _Shipped_
 
 Welcome tours that play in the same dialog as the Daintree tour. An enabled plugin's tours register when it loads and are withdrawn when it is disabled, uninstalled or hidden in the project; a tour that is open at that moment closes, keeping the viewer's progress. A reload closes it too, and reopening plays the new version.
 
@@ -1340,7 +1340,7 @@ A tour without `panelKind` is a **plugin tour**, offered from Help and the comma
 
 **Shipping one.** [Tours](./tours.md) is the full guide: the file layout, a minimal tour to copy, writing narration with `[[cue]]` markers, building scenes with `@daintreehq/tour/kit` and the mock Daintree window, the anchor-naming contract, voicing with `daintree-plugin tour voice` or your own recordings with `tour align`, previewing with `tour preview`, and the house style every tour is held to. In short: you write the narration and a scene module that default-exports `{ scenes, chapterTitles?, mockKit? }`, and the CLI writes `chapters` for you. The bundled `daintree-tour` Claude Code skill (`npx daintree-plugin skill add`) walks through the whole path.
 
-A malformed tour is reported with the offending path, like any other malformed contribution: `daintree-plugin validate` and the installer refuse it, and at load Daintree logs the issues and drops only that tour, so the rest of the plugin still loads. Exceeding the cap of 10 tours is still a whole-manifest error. Audio that is missing, refused or blocked leaves the chapter playing silently with its captions. Tours are refused under `scope: "project"`.
+A malformed tour is reported with the offending path, like any other malformed contribution: `daintree-plugin validate` and the installer refuse it, and at load Daintree logs the issues and drops only that tour, so the rest of the plugin still loads. Exceeding the cap of 10 tours is still a whole-manifest error. Audio that is missing, refused or blocked leaves the chapter playing silently with its captions. A project plugin's tours are offered only in its own project, and their progress is kept separately from the same plugin's tours in any other project.
 
 ## Surfaces — _Shipped (project scope only)_
 

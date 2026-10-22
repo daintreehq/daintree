@@ -28,7 +28,6 @@ Run every command from the plugin directory (where `plugin.json` is). Read the r
 
 Read `plugin.json`, `package.json`, `vite.config.ts` and any existing `tours/` folder.
 
-- `"scope": "project"` in `plugin.json` means a project plugin, and Daintree refuses tours from project plugins. Stop and tell the author; a tour needs an installed (packaged) plugin.
 - If tours already exist, ask whether the author wants to change one of them (which) or add another. Revising: skip to the step the change needs (usually 3 or 6), and pass that tour's `--tour <id>` to every `tour` command. Adding: leave the existing entries, narration and scenes untouched, give the new tour its own id, narration file and scene module, and pass its `--tour <id>` too, since the CLI needs one when a plugin has several tours.
 - A plugin may declare at most 10 tours, a tour at most 32 chapters.
 

@@ -322,6 +322,7 @@ const PROJECT_GITIGNORE = `node_modules/
 .dev-marker
 test-results/
 playwright-report/
+.tour-preview/
 
 # dist/ is deliberately NOT ignored, and is force-included below.
 #

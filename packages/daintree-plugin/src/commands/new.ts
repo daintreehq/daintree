@@ -107,8 +107,7 @@ export async function scaffoldPlugin(opts: ScaffoldPluginOptions): Promise<Scaff
   const files = buildTemplateFiles(ctx);
   // The tour-authoring skill ships in every installed-plugin scaffold, so an
   // author's Claude Code session can build a tour without a Daintree checkout.
-  // Project plugins can't contribute tours, so they don't get it.
-  if (!projectLocal) Object.assign(files, await loadBundledSkill("daintree-tour"));
+  Object.assign(files, await loadBundledSkill("daintree-tour"));
 
   // The recipe lands outside the plugin directory, so check it before writing
   // anything: a half-scaffolded plugin with no watcher is worse than a clean
