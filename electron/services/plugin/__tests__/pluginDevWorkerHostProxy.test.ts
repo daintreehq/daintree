@@ -1517,6 +1517,24 @@ describe("PluginDevWorkerHostProxy setToolbarButtonState (#13785)", () => {
     expect(sent.find((m) => m.type === "host-call")).toBeUndefined();
   });
 
+  it("reads an inherited getter and keeps a __proto__ key, as the in-process schema does", () => {
+    const { proxy, sent } = makeProxy();
+    class Busy {
+      get busy(): boolean {
+        return true;
+      }
+    }
+    void proxy.host.setToolbarButtonState("sync", new Busy()).catch(() => {});
+    void proxy.host
+      .setToolbarButtonState("sync", JSON.parse('{"__proto__":false}') as never)
+      .catch(() => {});
+    const calls = sent.filter(
+      (m) => m.type === "host-call" && m.method === "setToolbarButtonState"
+    );
+    expect(calls[0]?.params.state).toEqual({ busy: true });
+    expect(Object.keys(calls[1]?.params.state ?? {})).toEqual(["__proto__"]);
+  });
+
   it("carries an unknown key to main even when it is undefined, so the strict schema refuses it", () => {
     const { proxy, sent } = makeProxy();
     void proxy.host.setToolbarButtonState("sync", { label: undefined } as never).catch(() => {});

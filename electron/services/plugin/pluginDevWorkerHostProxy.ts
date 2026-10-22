@@ -166,6 +166,15 @@ function promptQueueParam(callOptions?: PluginPromptCallOptions): { whenNoFronte
 
 /** Push channels one worker may watch for listeners; past it `hasListeners` answers `true`. */
 const MAX_WATCHED_PUSH_CHANNELS = 256;
+/** The fields of a `PluginToolbarButtonRuntimeState`, read explicitly before the copy crosses the port. */
+const TOOLBAR_STATE_FIELDS: readonly string[] = [
+  "pressed",
+  "disabled",
+  "disabledReason",
+  "busy",
+  "tooltip",
+  "iconId",
+] satisfies readonly (keyof PluginToolbarButtonRuntimeState)[];
 
 interface ListenerState {
   value: boolean;
@@ -1287,7 +1296,15 @@ export class PluginDevWorkerHostProxy {
           }
           let entries: [string, unknown][];
           try {
-            entries = Object.entries(state);
+            // Known fields are read as the in-process schema reads them, so an
+            // inherited getter counts; any other own key is carried along.
+            const fields = state as Record<string, unknown>;
+            entries = [
+              ...TOOLBAR_STATE_FIELDS.map((key): [string, unknown] => [key, fields[key]]),
+              ...Object.keys(fields)
+                .filter((key) => !TOOLBAR_STATE_FIELDS.includes(key))
+                .map((key): [string, unknown] => [key, fields[key]]),
+            ];
           } catch (err) {
             return Promise.reject(
               new Error(
@@ -1295,7 +1312,6 @@ export class PluginDevWorkerHostProxy {
               )
             );
           }
-          copy = {};
           for (const [key, value] of entries) {
             if (
               value !== undefined &&
@@ -1309,8 +1325,14 @@ export class PluginDevWorkerHostProxy {
                 )
               );
             }
-            copy[key] = value;
           }
+          // `fromEntries` defines every key as an own property — even
+          // `__proto__` — so main's strict schema still sees it.
+          copy = Object.fromEntries(
+            entries.filter(
+              ([key, value]) => value !== undefined || !TOOLBAR_STATE_FIELDS.includes(key)
+            )
+          ) as Record<string, string | boolean | number | undefined>;
         }
         return this.callWithGrace<void>(
           "setToolbarButtonState",
