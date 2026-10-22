@@ -555,6 +555,7 @@ describe("host plugin toasts", () => {
       duration: undefined,
       rateLimitKey: `plugin:${HOST}:acme.deploy`,
       rateLimitLabel: "acme.deploy",
+      context: { plugin: { id: "acme.deploy", name: "acme.deploy" } },
     });
   });
 
@@ -600,7 +601,29 @@ describe("host plugin toasts", () => {
     expect(wc.send.mock.calls[0]![1]).toMatchObject({
       rateLimitKey: `plugin:${HOST}:${instanceKey}`,
       rateLimitLabel: "acme.deploy",
+      // A project plugin's row files under the host project its key names (#13818).
+      context: { projectId: PROJECT, plugin: { id: instanceKey, name: "acme.deploy" } },
     });
+  });
+
+  it("keeps a host's passive notification to the inbox, and a malformed flag costs nothing (#13818)", async () => {
+    const wc = makeView();
+    await ask(PluginFrontendMethod.TOAST, {
+      pluginId: "acme.deploy",
+      type: "warning",
+      message: "Deploy: queued — behind two others",
+      passive: true,
+    });
+    expect(wc.send.mock.calls[0]![1]).toMatchObject({ type: "warning", priority: "low" });
+
+    await ask(PluginFrontendMethod.TOAST, {
+      pluginId: "acme.deploy",
+      type: "info",
+      message: "Deploy: shipped",
+      passive: "yes",
+    });
+    expect(wc.send).toHaveBeenCalledTimes(2);
+    expect(wc.send.mock.calls[1]![1]).not.toHaveProperty("priority");
   });
 
   it("draws every plugin's toasts from the host's one budget, shown as plain text", async () => {

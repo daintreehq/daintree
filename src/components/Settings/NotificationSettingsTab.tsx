@@ -7,6 +7,7 @@ import { SettingsSwitchCard } from "./SettingsSwitchCard";
 import { SettingsLoadErrorBanner } from "./SettingsLoadErrorBanner";
 import { SettingsDependents, SettingsGroup, SettingsRow } from "./SettingsGroup";
 import { SettingsPresetGroup } from "./SettingsPresetGroup";
+import { SilencedPluginsSection } from "./SilencedPluginsSection";
 import {
   Select,
   SelectContent,
@@ -576,6 +577,8 @@ export function NotificationSettingsTab() {
           )}
         </SettingsGroup>
       </SettingsSection>
+
+      <SilencedPluginsSection />
     </div>
   );
 }

@@ -699,6 +699,15 @@ export interface StoreSchema {
   projectHiddenLaunchGroups?: Record<string, string[]>;
 
   /**
+   * Plugin instance ids whose toasts and notifications the user silenced
+   * (#13818). A project plugin's instance id names its project, so its silence
+   * is that project's alone. Read and written only through
+   * `services/plugin/pluginNotificationSilences.ts`. Daintree's own settings,
+   * never the repository. Same additive-key convention as above.
+   */
+  pluginNotificationSilences?: string[];
+
+  /**
    * Per-project presentation profiles (#13771): the levels the user set or
    * accepted for each built-in surface, and their answer to the repository's
    * `.daintree/presentation.json` suggestion. Read and written only through
@@ -1033,6 +1042,7 @@ const storeOptions = {
     projectSurfaceChoices: {},
     projectFileEditorChoices: {},
     projectHiddenLaunchGroups: {},
+    pluginNotificationSilences: [],
     projectPresentation: {},
     projectAgentMcpEnablement: {},
     projectAgentMcpAccess: {},

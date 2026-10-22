@@ -186,6 +186,9 @@ export function useMainProcessToastListener(): void {
         action,
         ...(pluginActions ? { actions: pluginActions, urgent: false } : {}),
         ...(payload.replaceKey !== undefined ? { replaceKey: payload.replaceKey } : {}),
+        // Where it came from and what it is about (#13818): the inbox row's
+        // source, its "Silence <Plugin>" and its Go to source.
+        ...(payload.context !== undefined ? { context: payload.context } : {}),
       });
     });
 

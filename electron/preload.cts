@@ -3038,6 +3038,12 @@ function buildElectronApi(): ElectronAPI {
             args?: Record<string, unknown>;
           }>;
           replaceKey?: string;
+          context?: {
+            projectId?: string;
+            worktreeId?: string;
+            panelId?: string;
+            plugin?: { id: string; name: string };
+          };
         }) => void
       ) => _typedOn(CHANNELS.NOTIFICATION_SHOW_TOAST, callback),
     },

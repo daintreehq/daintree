@@ -365,11 +365,16 @@ export function installPluginShellRequests(deps: PluginShellRequestDeps = {}): (
   const showToast = (request: ViewReverseRequest): null => {
     const parsed = PluginToastPayloadSchema.safeParse(request.payload);
     if (!parsed.success) throw malformed("toast");
-    const { pluginId, type, message, durationMs, pluginDisplayName } = parsed.data;
+    const { pluginId, type, message, durationMs, pluginDisplayName, passive } = parsed.data;
     const wc = scopeView(request, pluginId);
     // Every plugin on a host draws on the host's one budget, so naming more
     // plugins can't raise more toasts; past it, a toast is dropped quietly.
     if (!admitHostNotice(request.hostId)) return null;
+    // An older host sends no name; the manifest id still keeps the instance
+    // key out of the overflow summary.
+    const pluginName =
+      displaySafeText(pluginDisplayName ?? "").trim() || pluginManifestIdFromInstanceKey(pluginId);
+    const pluginProjectId = projectIdFromPluginInstanceKey(pluginId);
     // Straight to the one view: the push filter keeps this machine's own
     // toasts out of a host's window, and this one is the host's.
     wc.send(CHANNELS.NOTIFICATION_SHOW_TOAST, {
@@ -377,11 +382,18 @@ export function installPluginShellRequests(deps: PluginShellRequestDeps = {}): (
       message: displaySafeText(message),
       duration: durationMs,
       rateLimitKey: `plugin:${request.hostId}:${pluginId}`,
-      // An older host sends no name; the manifest id still keeps the instance
-      // key out of the overflow summary.
-      rateLimitLabel:
-        displaySafeText(pluginDisplayName ?? "").trim() ||
-        pluginManifestIdFromInstanceKey(pluginId),
+      rateLimitLabel: pluginName,
+      // The host already applied its silence and project mute; passive only
+      // decides where this screen puts it.
+      ...(passive === true ? { priority: "low" as const } : {}),
+      // The row names the host's plugin and offers its "Silence <Plugin>",
+      // which this view's plugin IPC carries back to the host that keeps it.
+      // A project plugin's instance key names the host project it belongs to,
+      // whose ids are the ones this host-bound view knows.
+      context: {
+        ...(pluginProjectId !== null ? { projectId: pluginProjectId } : {}),
+        plugin: { id: pluginId, name: pluginName },
+      },
     });
     return null;
   };

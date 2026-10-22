@@ -27,6 +27,8 @@ import { ConfirmationStagedError, confirmationStagedMessage } from "../confirmat
 import { UnactionableTargetError } from "../unactionableTarget";
 import { actionService } from "@/services/ActionService";
 import { notify } from "@/lib/notify";
+import { UNDO_TOAST_DURATION_MS } from "@/lib/undoToast";
+import { pluginSilenceScope } from "@/lib/notificationSourceLabel";
 import { systemClient } from "@/clients/systemClient";
 import { revealCopy } from "@/components/FileViewer/revealCopy";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
@@ -595,6 +597,86 @@ export function registerPluginActions(actions: ActionRegistry, callbacks: Action
             : {}),
         });
         return outcome;
+      },
+    })
+  );
+
+  actions.set("plugin.setNotificationsSilenced", () =>
+    defineAction({
+      id: "plugin.setNotificationsSilenced",
+      title: "Silence plugin notifications",
+      description:
+        "Stop one plugin's toasts and notifications, or let them through again. A project plugin is silenced in its own project only. Main holds them back before any window sees them; rows already in the inbox stay.",
+      category: "plugins",
+      kind: "command",
+      danger: "safe",
+      nonRepeatable: true,
+      // Needs a plugin id, and there is no focused-plugin fallback to act on.
+      palette: { mode: "hidden" },
+      // The notification row's menu and Settings → Notifications. It turns off
+      // what a plugin can tell the user, so it is the user's alone: in no
+      // assistant or external tier, and hidden from tool listings too.
+      mcpVisibility: "hidden",
+      // A plugin reaching this could lift its own silence or silence a rival.
+      denyPluginDispatch: true,
+      scope: "renderer",
+      argsSchema: z.object({
+        pluginId: z
+          .string()
+          .min(1)
+          .describe("The plugin instance key, as a notification's context names it."),
+        silenced: z.boolean().describe("true to silence, false to let notifications through."),
+      }),
+      selfNotifiesOnExecutionError: true,
+      run: async ({ pluginId, silenced }) => {
+        const retry = () =>
+          void actionService.dispatch(
+            "plugin.setNotificationsSilenced",
+            { pluginId, silenced },
+            { source: "user" }
+          );
+        let silences;
+        try {
+          silences = await pluginClient.setNotificationSilenced(pluginId, silenced);
+        } catch (error) {
+          notify({
+            type: "error",
+            priority: "high",
+            title: silenced ? "Couldn't silence plugin" : "Couldn't unsilence plugin",
+            message: formatErrorMessage(error, "The setting wasn't saved."),
+            context: { eventKind: "settings" },
+            action: { label: "Try again", onClick: retry },
+          });
+          throw error;
+        }
+        if (!silenced) return;
+        const silence = silences.find((entry) => entry.pluginId === pluginId);
+        const name =
+          silence?.name ?? parseProjectPluginInstanceKey(pluginId)?.manifestId ?? pluginId;
+        const projectId = silence?.projectId ?? null;
+        const projectName = projectId
+          ? useProjectStore.getState().projects.find((p) => p.id === projectId)?.name
+          : undefined;
+        notify({
+          type: "success",
+          message: `Silenced ${name}${pluginSilenceScope(projectId, projectName)}`,
+          priority: "high",
+          duration: UNDO_TOAST_DURATION_MS,
+          context: { eventKind: "settings" },
+          // One-shot Undo confirmation; Settings → Notifications lists every
+          // silenced plugin, so the inbox needs no row for it.
+          transient: true,
+          action: {
+            label: "Undo",
+            // Through the action, so a failed Undo says so and offers Try again.
+            onClick: () =>
+              void actionService.dispatch(
+                "plugin.setNotificationsSilenced",
+                { pluginId, silenced: false },
+                { source: "user" }
+              ),
+          },
+        });
       },
     })
   );

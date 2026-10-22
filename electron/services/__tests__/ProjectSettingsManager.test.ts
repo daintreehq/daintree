@@ -687,6 +687,36 @@ describe("ProjectSettingsManager caching", () => {
     });
   });
 
+  describe("isNotificationsMuted (#13818)", () => {
+    it("reads a cold project's file, and counts only both of its own switches off", async () => {
+      const settingsPath = path.join(tempDir, projectId, "settings.json");
+      await fs.writeFile(
+        settingsPath,
+        JSON.stringify({
+          runCommands: [],
+          notificationOverrides: { completedEnabled: false, waitingEnabled: false },
+        }),
+        "utf-8"
+      );
+      expect(await manager.isNotificationsMuted(projectId)).toBe(true);
+
+      await manager.saveProjectSettings(projectId, {
+        runCommands: [],
+        notificationOverrides: { completedEnabled: false },
+      });
+      expect(await manager.isNotificationsMuted(projectId)).toBe(false);
+    });
+
+    it("leaves a project with no overrides unmuted, whatever the global defaults", async () => {
+      const store = {
+        get: vi.fn(() => ({ enabled: true, completedEnabled: false, waitingEnabled: false })),
+        set: vi.fn(),
+      } as unknown as ConstructorParameters<typeof ProjectSettingsManager>[1];
+      const coldManager = new ProjectSettingsManager(tempDir, store);
+      expect(await coldManager.isNotificationsMuted(projectId)).toBe(false);
+    });
+  });
+
   describe("addBrowserAllowedHost", () => {
     const readFromDisk = () =>
       new ProjectSettingsManager(tempDir, createMockStore()).getProjectSettings(projectId);

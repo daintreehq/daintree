@@ -710,6 +710,8 @@ export const CHANNEL_LOCALITY = {
   "plugin:layouts": "host",
   "plugin:launch-groups-hidden-get": "host",
   "plugin:launch-group-hidden-set": "host",
+  "plugin:notification-silences-get": "host",
+  "plugin:notification-silence-set": "host",
   "plugin:ui-prompt-cancel": "shell",
   "plugin:ui-prompt-request": "shell",
   "plugin:ui-prompt-response": "shell",

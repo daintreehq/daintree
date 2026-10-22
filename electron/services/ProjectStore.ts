@@ -1901,6 +1901,10 @@ export class ProjectStore {
     return this.settingsManager.getEffectiveNotificationSettings(this.getCurrentProjectId());
   }
 
+  async isProjectNotificationsMuted(projectId: string): Promise<boolean> {
+    return this.settingsManager.isNotificationsMuted(projectId);
+  }
+
   // --- Copy-tree run history (#11732) ---
 
   async getCopyTreeHistory(projectId: string): Promise<CopyTreeHistoryRecord[]> {

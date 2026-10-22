@@ -3,6 +3,7 @@ import type { PluginDiagnosticsSnapshot } from "@shared/types/ipc/pluginDiagnost
 import type { PluginManifestValidationResult } from "@shared/types/ipc/pluginValidation";
 import type { PluginDataBackupOutcome } from "@shared/types/ipc/pluginDataBackup";
 import type { PluginPerfSnapshot } from "@shared/types/pluginMetrics";
+import type { PluginNotificationSilence } from "@shared/types/ipc/maps";
 
 /**
  * Renderer surface for the plugin-authoring feedback loop (#12214) — the reads
@@ -29,6 +30,17 @@ export const pluginClient = {
   /** Snapshot a plugin's existing databases through a native save or folder dialog. */
   backupDatabases: (pluginId: string): Promise<PluginDataBackupOutcome> =>
     window.electron.plugin.backupDatabases(pluginId),
+
+  /** The plugins whose toasts and notifications the user silenced (#13818). */
+  getNotificationSilences: (): Promise<PluginNotificationSilence[]> =>
+    window.electron.plugin.getNotificationSilences(),
+
+  /** Silence or unsilence one plugin instance; resolves with every silence now in force. */
+  setNotificationSilenced: (
+    pluginId: string,
+    silenced: boolean
+  ): Promise<PluginNotificationSilence[]> =>
+    window.electron.plugin.setNotificationSilenced(pluginId, silenced),
 
   /** Every plugin the host is running, with the instance key each is addressed by. */
   list: (): Promise<LoadedPluginInfo[]> => window.electron.plugin.list(),

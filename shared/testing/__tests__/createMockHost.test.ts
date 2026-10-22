@@ -368,6 +368,55 @@ describe("createMockHost", () => {
     });
   });
 
+  it("holds severity, delivery and target to the host's rules (#13818)", async () => {
+    const host = createMockHost({ pluginId: "acme.demo", capabilities: ["notification:os"] });
+    const retry = { id: "retry", label: "Retry", actionId: "acme.demo.retry" };
+
+    await expect(host.notify({ title: "t", body: "b", severity: "error" })).rejects.toThrow(
+      /exactly one action/
+    );
+    await expect(
+      host.notify({
+        title: "t",
+        body: "b",
+        severity: "error",
+        actions: [retry, { ...retry, id: "again" }],
+      })
+    ).rejects.toThrow(/exactly one action/);
+    await expect(
+      host.notify({
+        title: "t",
+        body: "b",
+        severity: "error",
+        delivery: "passive",
+        actions: [retry],
+      })
+    ).rejects.toThrow(/can't be passive/);
+    await expect(
+      host.notify({ title: "t", body: "b", delivery: "passive", os: true })
+    ).rejects.toThrow(/can't page the OS/);
+    await expect(
+      host.notify({ title: "t", body: "b", severity: "fatal" as never })
+    ).rejects.toThrow(/severity/);
+    await expect(
+      host.notify({ title: "t", body: "b", target: { panelId: "p", worktreeId: "w" } as never })
+    ).rejects.toThrow(/target/);
+    await expect(host.notify({ title: "t", body: "b", target: { panelId: "" } })).rejects.toThrow(
+      /target/
+    );
+    expect(host.notifications).toEqual([]);
+
+    await host.notify({ title: "t", body: "b", severity: "error", actions: [retry] });
+    await host.notify({
+      title: "t",
+      body: "b",
+      severity: "warning",
+      delivery: "passive",
+      target: { worktreeId: "/repo/feature" },
+    });
+    expect(host.notifications.map((n) => n.options.severity)).toEqual(["error", "warning"]);
+  });
+
   it("rejects toast options the production schema would reject (#10617)", async () => {
     const host = createMockHost();
     // Message past the 2000-char cap.

@@ -793,7 +793,18 @@ function validateToastOptions(opts: PluginToastOptions): void {
   }
 }
 
-const NOTIFY_OPTION_KEYS = new Set(["title", "body", "actions", "os", "dedupeKey"]);
+const NOTIFY_OPTION_KEYS = new Set([
+  "title",
+  "body",
+  "severity",
+  "delivery",
+  "target",
+  "actions",
+  "os",
+  "dedupeKey",
+]);
+const NOTIFY_SEVERITIES = new Set(["info", "warning", "error"]);
+const NOTIFY_DELIVERIES = new Set(["active", "passive"]);
 const NOTIFY_ACTION_KEYS = new Set(["id", "label", "actionId", "args"]);
 const NOTIFY_ARGS_MAX_BYTES = 4096;
 
@@ -880,6 +891,38 @@ function validateNotifyOptions(
   }
   if (opts.os !== undefined && typeof opts.os !== "boolean") issues.push("os: must be a boolean");
   if (opts.dedupeKey !== undefined) text("dedupeKey", opts.dedupeKey, 200);
+  if (opts.severity !== undefined && !NOTIFY_SEVERITIES.has(opts.severity)) {
+    issues.push('severity: must be "info", "warning" or "error"');
+  }
+  if (opts.delivery !== undefined && !NOTIFY_DELIVERIES.has(opts.delivery)) {
+    issues.push('delivery: must be "active" or "passive"');
+  }
+  // Only the target's shape: whether the panel is the plugin's own and the
+  // worktree one it can see is the real host's to check (#13818).
+  if (opts.target !== undefined) {
+    const target: unknown = opts.target;
+    const keys = target && typeof target === "object" ? Object.keys(target) : [];
+    const [key] = keys;
+    const value = key ? (target as Record<string, unknown>)[key] : undefined;
+    if (
+      keys.length !== 1 ||
+      (key !== "panelId" && key !== "worktreeId") ||
+      typeof value !== "string" ||
+      value.length < 1 ||
+      value.length > (key === "panelId" ? 256 : 4096)
+    ) {
+      issues.push("target: must be { panelId } or { worktreeId } with a non-empty string");
+    }
+  }
+  if (opts.severity === "error" && (!Array.isArray(opts.actions) || opts.actions.length !== 1)) {
+    issues.push('actions: an "error" notification needs exactly one action, the way out of it');
+  }
+  if (opts.delivery === "passive" && opts.severity === "error") {
+    issues.push('delivery: an "error" notification can\'t be passive');
+  }
+  if (opts.delivery === "passive" && opts.os === true) {
+    issues.push("os: a passive notification stays in the inbox and can't page the OS");
+  }
   if (issues.length > 0) {
     throw new Error(`notify: invalid options — ${issues.join("; ")}`);
   }

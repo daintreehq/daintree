@@ -1687,6 +1687,8 @@ The host prefixes `message` with your plugin's display name (`{displayName}: {me
 
 Toasts route through Daintree's standard `notify()` path, so quiet-hours and inbox-history semantics apply. Each plugin has one rate limit for all of its toasts whatever their `type`, shared with [`notify`](#notify) and with its views' toasts; two plugins sharing a display name still get separate ones, so a noisy plugin can't suppress another plugin's toasts (or system toasts). The host enforces it before a toast leaves main: past a burst of six followed by one a second, a toast is dropped quietly. Within that, each window shows a burst of three followed by one every ten seconds and folds the rest into one inbox row. Audit your toasts against the four-question checklist (timely, helpful, not already visible, ignorable) — the host delivers what you ask for, it doesn't second-guess. There's no "sticky" or "action required" toast type — for persistent UI, register a panel view instead. A toast with an action button, or an Undo toast, comes from the view instead: [`useToast`](./ui-kit.md#hooks) in `@daintreehq/plugin-ui` routes through the same `notify()` path under the same limits, and its button calls straight back into the view.
 
+The inbox row names your plugin and, for a project plugin, its project ("Acme · Helios"), and offers the user **Silence Acme**. A silenced plugin's toasts and notifications, and those of a project the user muted, are dropped in main before any window sees them and don't count against your rate limit; the call still resolves normally, so your plugin can't tell. An installed plugin is silenced everywhere, a project plugin in its own project only. Your views' own `useToast` toasts answer what the user just did in your view, so neither the silence nor the project mute holds them back.
+
 When the project is driven from a window on another machine (see [Remote hosts](#remote-hosts--when-nobody-is-sitting-at-this-machine)), the toast is shown in that window.
 
 ## `notify`
@@ -1701,6 +1703,9 @@ const { id } = await host.notify({
   ],
   os: true, // also page the OS — needs `notification:os` and the user's switch
   dedupeKey: `run:${runId}`, // replace this run's earlier notification instead of stacking
+  severity: "warning", // "info" | "warning" | "error" — defaults to "info"
+  delivery: "active", // "passive" puts it in the inbox only
+  target: { worktreeId }, // or { panelId } — the inbox row's Go to source
 });
 ```
 
@@ -1710,9 +1715,15 @@ It routes through the same `notify()` path as `showToast`: the toast shows when 
 
 `os: true` asks for an OS banner as well. It is a request the host may turn down: the banner is dropped while the user's **Allow OS notifications** switch is off, when notifications are off, during quiet hours or a session mute, while the user is looking at your project (or, for an app-wide plugin, at any Daintree window), and past a burst of three banners followed by one every ten seconds. Banners carry no buttons. Clicking one brings your project forward and runs the first action; with no actions it just brings the project forward. A project with no open view isn't opened. `os: true` without `notification:os` declared rejects with `PERMISSION_REQUIRED`. Unsigned macOS development builds never display banners.
 
+`severity` sets how the toast and inbox row are drawn. An `"error"` needs exactly one action, the way out of it, the same rule Daintree holds its own errors to. `delivery: "passive"` skips the toast and keeps the notification to the inbox, for news the user can pick up later; a passive notification can't be an error and can't use `os`. Each of those combinations rejects.
+
+`target` points the notification at one of your own panels (`{ panelId }`, an id from [`onDidChangePanelLifecycle`](#ondidchangepanellifecycle)) or at a worktree your plugin can see (`{ worktreeId }`), and the inbox row gets a Go to source. Another plugin's panel, a built-in panel or a worktree you can't see rejects. A target the host can't check yet — a panel no window has reported, or a worktree list that isn't available — is dropped and the notification still goes out. When an app-wide plugin points at a worktree, the row files under that worktree's project and that project's mute covers it; a project plugin's notifications always belong to its own project.
+
+The same silence and project mute as [`showToast`](#showtoast) apply: a call held back by either shows, pages and replaces nothing, and costs no rate budget.
+
 `dedupeKey` (up to 200 characters) replaces your earlier notification with the same key — its toast, its inbox row and its banner — rather than adding beside it. Keys are scoped to your plugin. The returned `id` is fresh per call and says nothing about which surfaces showed it.
 
-When the project is driven from a window on another machine, that window gets a plain toast with the title and body, and no banner is shown on either machine.
+When the project is driven from a window on another machine, that window gets a plain toast with the title and body (in the inbox only for a passive one), and no banner is shown on either machine.
 
 ## User prompts — `showQuickPick`, `showInputBox`, `showConfirm`
 

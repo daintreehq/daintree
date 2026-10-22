@@ -1094,6 +1094,8 @@ export const CHANNELS = {
   PLUGIN_LAYOUTS: "plugin:layouts",
   PLUGIN_LAUNCH_GROUPS_HIDDEN_GET: "plugin:launch-groups-hidden-get",
   PLUGIN_LAUNCH_GROUP_HIDDEN_SET: "plugin:launch-group-hidden-set",
+  PLUGIN_NOTIFICATION_SILENCES_GET: "plugin:notification-silences-get",
+  PLUGIN_NOTIFICATION_SILENCE_SET: "plugin:notification-silence-set",
   PLUGIN_KEYBINDINGS: "plugin:keybindings",
   PLUGIN_CONTEXT_MENU_ITEMS: "plugin:context-menu-items",
   PLUGIN_VALIDATE_ACTION_IDS: "plugin:validate-action-ids",

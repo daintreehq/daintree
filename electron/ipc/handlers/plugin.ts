@@ -21,6 +21,7 @@ import {
 } from "../../../shared/types/ipc/pluginAudit.js";
 import type { PluginDiagnosticsSnapshot } from "../../../shared/types/ipc/pluginDiagnostics.js";
 import type { PluginDataBackupOutcome } from "../../../shared/types/ipc/pluginDataBackup.js";
+import type { PluginNotificationSilence } from "../../../shared/types/ipc/maps.js";
 import type {
   PluginManifestIssue,
   PluginManifestValidationResult,
@@ -68,6 +69,10 @@ import {
   isHiddenGroupId,
   setProjectLaunchGroupHidden,
 } from "../../services/plugin/projectHiddenLaunchGroups.js";
+import {
+  getPluginNotificationSilences,
+  setPluginNotificationSilenced,
+} from "../../services/plugin/pluginNotificationSilences.js";
 import { pluginInstallJobs } from "../../services/plugin/PluginInstallJobRegistry.js";
 import { sendToRendererContext } from "../utils.js";
 import { getPluginMenuItems } from "../../services/pluginMenuRegistry.js";
@@ -753,6 +758,40 @@ async function handleLaunchGroupHiddenSet(
   if (!isHiddenGroupId(pluginId)) throw new Error("launch group: malformed plugin id");
   if (typeof hidden !== "boolean") throw new Error("launch group: malformed hidden flag");
   return setProjectLaunchGroupHidden(ctx.projectId, pluginId, hidden);
+}
+
+/**
+ * Every plugin whose notifications the user silenced (#13818), named for
+ * Settings → Notifications. A plugin that isn't loaded is named by its
+ * manifest id, so a silence outlives the plugin and can still be lifted.
+ */
+async function handleNotificationSilencesGet(): Promise<PluginNotificationSilence[]> {
+  const svc = await getPluginService();
+  return getPluginNotificationSilences().map((pluginId) => ({
+    pluginId,
+    name: svc.getPluginDisplayName(pluginId),
+    projectId: projectIdFromPluginInstanceKey(pluginId),
+  }));
+}
+
+/**
+ * Silence or unsilence one plugin instance's toasts and notifications. A
+ * project plugin's instance id names its project, so the silence is that
+ * project's alone. Shape-checked only: an id that names no loaded plugin is
+ * remembered as asked, as the launcher's hidden groups are.
+ */
+async function handleNotificationSilenceSet(
+  pluginId: string,
+  silenced: boolean
+): Promise<PluginNotificationSilence[]> {
+  if (typeof pluginId !== "string" || !isSafePluginInstanceId(pluginId)) {
+    throw new Error("plugin notifications: malformed plugin id");
+  }
+  if (typeof silenced !== "boolean") {
+    throw new Error("plugin notifications: malformed silenced flag");
+  }
+  setPluginNotificationSilenced(pluginId, silenced);
+  return handleNotificationSilencesGet();
 }
 
 async function handleKeybindings(ctx: IpcContext) {
@@ -2253,6 +2292,14 @@ export const pluginNamespace = defineIpcNamespace({
       PLUGIN_METHOD_CHANNELS.setLaunchGroupHidden,
       handleLaunchGroupHiddenSet,
       { withContext: true }
+    ),
+    getNotificationSilences: op(
+      PLUGIN_METHOD_CHANNELS.getNotificationSilences,
+      handleNotificationSilencesGet
+    ),
+    setNotificationSilenced: op(
+      PLUGIN_METHOD_CHANNELS.setNotificationSilenced,
+      handleNotificationSilenceSet
     ),
     keybindings: op(PLUGIN_METHOD_CHANNELS.keybindings, handleKeybindings, { withContext: true }),
     contextMenuItems: op(PLUGIN_METHOD_CHANNELS.contextMenuItems, handleContextMenuItems, {

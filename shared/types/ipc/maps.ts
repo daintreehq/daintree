@@ -277,6 +277,38 @@ export interface MainProcessToastPayload {
     projectId: string;
     code: import("../appError.js").AppErrorCode | null;
   };
+  /**
+   * Threaded through to `notify({ context })`: what a plugin's toast or
+   * notification is about and which plugin raised it (#13818). Main sets every
+   * field from the plugin's own binding and its checked target, never from
+   * what the plugin wrote.
+   */
+  context?: {
+    projectId?: string;
+    worktreeId?: string;
+    panelId?: string;
+    plugin?: NotificationPluginSource;
+  };
+}
+
+/**
+ * The plugin a notification came from: its instance id, which is the key a
+ * silence is stored under (a project plugin's names its project), and the
+ * display name the inbox shows.
+ */
+export interface NotificationPluginSource {
+  id: string;
+  name: string;
+}
+
+/** One plugin the user silenced, as Settings → Notifications lists it (#13818). */
+export interface PluginNotificationSilence {
+  /** The plugin's instance id, as a notification's `context.plugin.id` names it. */
+  pluginId: string;
+  /** Its display name while it is loaded, else its manifest id. */
+  name: string;
+  /** The project a project plugin's silence covers; `null` for an installed plugin. */
+  projectId: string | null;
 }
 
 // IPC Contract Maps

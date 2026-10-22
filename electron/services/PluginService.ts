@@ -157,6 +157,10 @@ import {
   resolveLiveWebContents,
 } from "../window/webContentsRegistry.js";
 import { projectStore } from "./ProjectStore.js";
+import { isPluginNotificationSilenced } from "./plugin/pluginNotificationSilences.js";
+
+/** How long a plugin notification waits on a project's mute before going out anyway. */
+const PLUGIN_NOTIFICATION_MUTE_READ_TIMEOUT_MS = 2_000;
 import { store } from "../store.js";
 import type { EventBusEnvelope } from "../../shared/types/ipc/maps.js";
 import {
@@ -4394,7 +4398,45 @@ export class PluginService {
       trackPromptWait: (pluginId) => this.metrics.beginPromptWait(pluginId),
       requestWorkerSelfRestart: (pluginId, boundPlugin) =>
         this.requestWorkerSelfRestart(pluginId, boundPlugin),
+      pluginNotificationsBlocked: (pluginId, projectId) =>
+        this.pluginNotificationsBlocked(pluginId, projectId),
     };
+  }
+
+  /**
+   * The user's off switches for a plugin's toasts and notifications (#13818):
+   * the plugin silenced, or the project the notification is about muted. A
+   * project's settings that can't be read mute nothing — the failure is the
+   * settings file's to report, and a lost plugin error would be a second one.
+   */
+  private async pluginNotificationsBlocked(
+    pluginId: string,
+    projectId: string | null
+  ): Promise<boolean> {
+    if (isPluginNotificationSilenced(pluginId)) return true;
+    if (projectId === null) return false;
+    // Bounded: the plugin's notifications queue behind this read, and a file
+    // stuck on a dead mount must not hold every later one back for good.
+    let muted = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      muted = await Promise.race([
+        projectStore.isProjectNotificationsMuted(projectId),
+        new Promise<boolean>((resolve) => {
+          timer = setTimeout(() => {
+            console.warn("[PluginService] A project's notification mute took too long to read");
+            resolve(false);
+          }, PLUGIN_NOTIFICATION_MUTE_READ_TIMEOUT_MS);
+        }),
+      ]);
+    } catch (err) {
+      console.warn("[PluginService] Couldn't read a project's notification mute:", err);
+    } finally {
+      clearTimeout(timer);
+    }
+    // Asked again after the read: the user may have silenced the plugin while
+    // a cold project file was loading.
+    return muted || isPluginNotificationSilenced(pluginId);
   }
 
   /**

@@ -1536,6 +1536,7 @@ describe("createHost — showToast", () => {
       duration: undefined,
       rateLimitKey: "plugin:acme.toast-test",
       rateLimitLabel: "acme.toast-test",
+      context: { plugin: { id: "acme.toast-test", name: "acme.toast-test" } },
     });
   });
 
@@ -1566,6 +1567,7 @@ describe("createHost — showToast", () => {
       // display name; an overflow summary prints the label (#13760).
       rateLimitKey: "plugin:acme.toast-named",
       rateLimitLabel: "Video Manager",
+      context: { plugin: { id: "acme.toast-named", name: "Video Manager" } },
     });
   });
 
@@ -1612,6 +1614,7 @@ describe("createHost — showToast", () => {
       duration: 3000,
       rateLimitKey: "plugin:acme.toast-duration",
       rateLimitLabel: "acme.toast-duration",
+      context: { plugin: { id: "acme.toast-duration", name: "acme.toast-duration" } },
     });
   });
 
@@ -1720,6 +1723,7 @@ describe("createHost — showToast", () => {
       duration: undefined,
       rateLimitKey: "plugin:acme.toast-revoke",
       rateLimitLabel: "acme.toast-revoke",
+      context: { plugin: { id: "acme.toast-revoke", name: "acme.toast-revoke" } },
     });
   });
 

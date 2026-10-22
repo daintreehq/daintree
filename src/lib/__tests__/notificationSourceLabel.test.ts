@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { formatNotificationSource, worktreeNameFromId } from "../notificationSourceLabel";
+import {
+  formatNotificationSource,
+  pluginSilenceScope,
+  worktreeNameFromId,
+} from "../notificationSourceLabel";
 
 describe("notification source labels", () => {
   it("names a worktree by its path's last segment on either separator", () => {
@@ -24,5 +28,23 @@ describe("notification source labels", () => {
     expect(formatNotificationSource("Helios", "feature-x", "studio-01")).toBe(
       "studio-01 · Helios · feature-x"
     );
+  });
+
+  it("names the plugin before its project, and alone for an app-wide plugin (#13818)", () => {
+    expect(formatNotificationSource("Helios", undefined, undefined, "Acme Records")).toBe(
+      "Acme Records · Helios"
+    );
+    expect(formatNotificationSource(undefined, undefined, undefined, " Acme Records ")).toBe(
+      "Acme Records"
+    );
+    expect(formatNotificationSource("Helios", "feature-x", "studio-01", "Acme")).toBe(
+      "studio-01 · Acme · Helios · feature-x"
+    );
+  });
+
+  it("scopes a project plugin's silence to its project by name, and an installed one to nothing", () => {
+    expect(pluginSilenceScope(null, "Helios")).toBe("");
+    expect(pluginSilenceScope("p1", "Helios")).toBe(" in Helios");
+    expect(pluginSilenceScope("p1", undefined)).toBe(" in another project");
   });
 });

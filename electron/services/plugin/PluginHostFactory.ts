@@ -875,6 +875,13 @@ export interface PluginHostFactoryDeps {
    * instance can never restart its successor.
    */
   requestWorkerSelfRestart: (pluginId: string, boundPlugin: LoadedPlugin) => WorkerRestartResult;
+  /**
+   * Whether the user has turned this plugin's toasts and notifications off
+   * (#13818): the plugin silenced, or `projectId` (the project a notification
+   * is about) muted. Asked before the rate budget, so a held-back call costs
+   * the plugin nothing.
+   */
+  pluginNotificationsBlocked: (pluginId: string, projectId: string | null) => Promise<boolean>;
 }
 
 /**
@@ -1051,6 +1058,70 @@ export function createHost(
     deps.trackPromptWait
   );
   const panelReloadDispatcher = withPushFlushBarrier(deps.panelReloadDispatcher);
+
+  /**
+   * What a plugin's toast or notification carries into the inbox (#13818):
+   * which plugin raised it, the project it is about, and where it leads. All
+   * of it comes from this closure's binding and the host's own checks.
+   */
+  const pluginNotificationContext = (
+    displayName: string,
+    projectId: string | null,
+    address?: { panelId: string } | { worktreeId: string }
+  ) => ({
+    ...(projectId !== null ? { projectId } : {}),
+    ...address,
+    plugin: { id: pluginId, name: displayName },
+  });
+
+  /**
+   * This plugin's toasts and notifications, delivered one at a time in the
+   * order it raised them (#13818). Each waits on a different lookup first (a
+   * worktree list, a cold read of a project's mute), so without a queue a later
+   * call could reach the renderer first and an earlier one then replace it.
+   */
+  let notificationTail: Promise<unknown> = Promise.resolve();
+  const inNotificationOrder = <T>(deliver: () => Promise<T>): Promise<T> => {
+    const delivery = notificationTail.then(deliver);
+    notificationTail = delivery.catch(() => undefined);
+    return delivery;
+  };
+
+  /**
+   * Hold a `host.notify` target to the caller (#13818). A panel must be one of
+   * this plugin's own, by the same kind registry `reloadPanel` trusts, and a
+   * worktree one this host can see. One proven to be someone else's rejects;
+   * one that can't be checked yet (no window has reported the panel, the
+   * worktree list is unavailable) is dropped and the notification goes out
+   * without it.
+   */
+  const resolveNotifyTarget = async (
+    target: { panelId: string } | { worktreeId: string } | undefined
+  ): Promise<{
+    address: { panelId: string } | { worktreeId: string };
+    projectId?: string;
+  } | null> => {
+    if (target === undefined) return null;
+    if ("panelId" in target) {
+      const located = deps.panelLifecycleBroker.locate(target.panelId, pluginId);
+      if (located.kind === "foreign" || located.kind === "non-plugin") {
+        throw new Error(
+          `Plugin "${pluginId}" notify: target.panelId "${target.panelId.slice(0, 200)}" is not one of this plugin's panels`
+        );
+      }
+      return located.kind === "located" || located.kind === "not-mounted"
+        ? { address: { panelId: target.panelId } }
+        : null;
+    }
+    const result = await fetchWorktreeSnapshotsResult();
+    if (result.status !== "ok") return null;
+    if (!result.snapshots.some((snapshot) => snapshot.id === target.worktreeId)) {
+      throw new Error(
+        `Plugin "${pluginId}" notify: target.worktreeId "${target.worktreeId.slice(0, 200)}" is not a worktree this plugin can see`
+      );
+    }
+    return { address: { worktreeId: target.worktreeId }, projectId: result.projectId };
+  };
 
   /**
    * The `plugin:{pluginId}:{channel}` transport shared by broadcastToRenderer
@@ -3238,38 +3309,46 @@ export function createHost(
       // fall into the global type-keyed bucket and a burst of unrelated system
       // toasts could silently suppress a plugin's toast. Past main's own
       // budget the toast is dropped quietly, here and for a remote window alike.
-      if (!admitPluginToast(pluginId)) return;
-      const displayName = deps.pluginDisplayName(pluginId);
-      const message = `${displayName}: ${parsed.data.message}`;
-      pushToRenderers(CHANNELS.NOTIFICATION_SHOW_TOAST, {
-        type: parsed.data.type,
-        message,
-        duration: parsed.data.durationMs,
-        rateLimitKey: `plugin:${pluginId}`,
-        rateLimitLabel: displayName,
+      // A plugin the user silenced, or a project the user muted, is held back
+      // before that budget, so it costs the plugin nothing (#13818).
+      return inNotificationOrder(async () => {
+        if (!isBound()) return;
+        if (await deps.pluginNotificationsBlocked(pluginId, boundProjectId)) return;
+        if (!isBound()) return;
+        if (!admitPluginToast(pluginId)) return;
+        const displayName = deps.pluginDisplayName(pluginId);
+        const message = `${displayName}: ${parsed.data.message}`;
+        pushToRenderers(CHANNELS.NOTIFICATION_SHOW_TOAST, {
+          type: parsed.data.type,
+          message,
+          duration: parsed.data.durationMs,
+          rateLimitKey: `plugin:${pluginId}`,
+          rateLimitLabel: displayName,
+          context: pluginNotificationContext(displayName, boundProjectId),
+        });
+        // A toast is the Shell's to show, so a push never reaches a window on
+        // another machine; the one driving the project is asked to show it.
+        const frontend = resolvePluginFrontend(boundProjectId, pluginId);
+        if (frontend.kind === "remote") {
+          frontend.endpoint
+            .request(
+              PluginFrontendMethod.TOAST,
+              {
+                pluginId,
+                type: parsed.data.type,
+                message,
+                pluginDisplayName: displayName,
+                ...(parsed.data.durationMs !== undefined
+                  ? { durationMs: parsed.data.durationMs }
+                  : {}),
+              },
+              { timeoutMs: 10_000 }
+            )
+            .catch(() => {
+              // Best-effort, like the local push: a Shell that went has no screen.
+            });
+        }
       });
-      // A toast is the Shell's to show, so a push never reaches a window on
-      // another machine; the one driving the project is asked to show it.
-      const frontend = resolvePluginFrontend(boundProjectId, pluginId);
-      if (frontend.kind === "remote") {
-        frontend.endpoint
-          .request(
-            PluginFrontendMethod.TOAST,
-            {
-              pluginId,
-              type: parsed.data.type,
-              message,
-              pluginDisplayName: displayName,
-              ...(parsed.data.durationMs !== undefined
-                ? { durationMs: parsed.data.durationMs }
-                : {}),
-            },
-            { timeoutMs: 10_000 }
-          )
-          .catch(() => {
-            // Best-effort, like the local push: a Shell that went has no screen.
-          });
-      }
     },
     // NOT revoke-guarded, like showToast (#13505). Each action is held to the
     // caller's own namespace here, where the caller is known, and rewritten to
@@ -3287,6 +3366,8 @@ export function createHost(
         );
       }
       const { title, body, os, dedupeKey } = parsed.data;
+      const severity = parsed.data.severity ?? "info";
+      const passive = parsed.data.delivery === "passive";
       const ownPrefix = `${manifestId}.`;
       const actions = (parsed.data.actions ?? []).map((action, index) => {
         if (!action.actionId.startsWith(ownPrefix) || action.actionId.length === ownPrefix.length) {
@@ -3315,69 +3396,93 @@ export function createHost(
         );
       }
 
-      // The same budget as showToast. A call past it does nothing at all — no
-      // toast, no banner, no retired banner — as if it was never made.
-      if (!admitPluginToast(pluginId)) return { id };
-      const displayName = deps.pluginDisplayName(pluginId);
-      const displayTitle = `${displayName}: ${title}`;
-      const replaceKey = dedupeKey !== undefined ? `plugin:${pluginId}:${dedupeKey}` : undefined;
-      pushToRenderers(CHANNELS.NOTIFICATION_SHOW_TOAST, {
-        type: "info",
-        title: displayTitle,
-        message: body,
-        rateLimitKey: `plugin:${pluginId}`,
-        rateLimitLabel: displayName,
-        ...(actions.length > 0 ? { pluginActions: actions } : {}),
-        ...(replaceKey !== undefined ? { replaceKey } : {}),
-      });
-      // The switch is the whole grant: no first-use prompt, no builtin bypass.
-      // A notification that doesn't page still retires the banner it replaces.
-      // The pager is loaded only here, since it pulls in the notification and
-      // window services that nothing else in the host needs.
-      const frontend = resolvePluginFrontend(boundProjectId, pluginId);
-      const pages = os === true && frontend.kind !== "remote" && hasOsNotificationsGrant(pluginId);
-      if (
-        pages ||
-        (replaceKey !== undefined && deps.declaredCapabilities(pluginId).has("notification:os"))
-      ) {
-        const pager = await import("./pluginNotificationPager.js");
-        if (!deps.plugins.has(pluginId)) return { id };
-        if (pages) {
-          pager.pagePluginNotification({
-            pluginId,
-            projectId: boundProjectId,
-            title: displayTitle,
-            body,
-            ...(replaceKey !== undefined ? { replaceKey } : {}),
-            ...(actions[0]
-              ? { firstAction: { actionId: actions[0].actionId, args: actions[0].args } }
-              : {}),
-          });
-        } else if (replaceKey !== undefined) {
-          pager.retirePluginNotification(replaceKey);
-        }
-      }
-      // A Shell driving the project gets the plain toast. The banner belongs
-      // on that Shell's screen, which this machine can't page, so it is
-      // dropped rather than shown here to nobody. The reverse toast carries no
-      // replacement key, so a Shell's toasts for one key stack.
-      if (frontend.kind === "remote") {
-        frontend.endpoint
-          .request(
-            PluginFrontendMethod.TOAST,
-            {
+      // Delivered in the order the plugin raised them: the lookups below take
+      // different times per call, and a later notification with the same
+      // `dedupeKey` must never land first and be replaced by an older one.
+      return inNotificationOrder(async () => {
+        if (!isBound()) return { id };
+        const target = await resolveNotifyTarget(parsed.data.target);
+        if (!isBound()) return { id };
+        // A bound plugin's notifications are its project's. An app-wide plugin's
+        // belong to a project only when it points at one of that project's
+        // worktrees, and then that project's mute covers it too.
+        const projectId = boundProjectId ?? target?.projectId ?? null;
+
+        // Silenced or muted, then the same budget as showToast. A call held back
+        // by either does nothing at all — no toast, no banner, no retired
+        // banner — as if it was never made.
+        if (await deps.pluginNotificationsBlocked(pluginId, projectId)) return { id };
+        if (!isBound()) return { id };
+        if (!admitPluginToast(pluginId)) return { id };
+        const displayName = deps.pluginDisplayName(pluginId);
+        const displayTitle = `${displayName}: ${title}`;
+        const replaceKey = dedupeKey !== undefined ? `plugin:${pluginId}:${dedupeKey}` : undefined;
+        pushToRenderers(CHANNELS.NOTIFICATION_SHOW_TOAST, {
+          type: severity,
+          title: displayTitle,
+          message: body,
+          rateLimitKey: `plugin:${pluginId}`,
+          rateLimitLabel: displayName,
+          // Passive is the app's inbox-only route: no toast, and no OS banner
+          // either, which the schema already refused alongside `os`.
+          ...(passive ? { priority: "low" as const } : {}),
+          ...(actions.length > 0 ? { pluginActions: actions } : {}),
+          ...(replaceKey !== undefined ? { replaceKey } : {}),
+          context: pluginNotificationContext(displayName, projectId, target?.address),
+        });
+        // The switch is the whole grant: no first-use prompt, no builtin bypass.
+        // A notification that doesn't page still retires the banner it replaces.
+        // The pager is loaded only here, since it pulls in the notification and
+        // window services that nothing else in the host needs.
+        const frontend = resolvePluginFrontend(boundProjectId, pluginId);
+        const pages =
+          os === true && frontend.kind !== "remote" && hasOsNotificationsGrant(pluginId);
+        if (
+          pages ||
+          (replaceKey !== undefined && deps.declaredCapabilities(pluginId).has("notification:os"))
+        ) {
+          const pager = await import("./pluginNotificationPager.js");
+          if (!isBound()) return { id };
+          if (pages) {
+            // The project the notification is about, so the banner's focus check
+            // and its click land where the inbox row files it.
+            pager.pagePluginNotification({
               pluginId,
-              type: "info",
-              message: `${displayTitle} — ${body}`,
-              pluginDisplayName: displayName,
-            },
-            { timeoutMs: 10_000 }
-          )
-          .catch(() => {
-            // Best-effort, like the local push.
-          });
-      }
-      return { id };
+              projectId,
+              title: displayTitle,
+              body,
+              ...(replaceKey !== undefined ? { replaceKey } : {}),
+              ...(actions[0]
+                ? { firstAction: { actionId: actions[0].actionId, args: actions[0].args } }
+                : {}),
+            });
+          } else if (replaceKey !== undefined) {
+            pager.retirePluginNotification(replaceKey);
+          }
+        }
+        // A Shell driving the project gets the plain toast. The banner belongs
+        // on that Shell's screen, which this machine can't page, so it is
+        // dropped rather than shown here to nobody. The reverse toast carries no
+        // replacement key, so a Shell's toasts for one key stack.
+        if (frontend.kind === "remote") {
+          frontend.endpoint
+            .request(
+              PluginFrontendMethod.TOAST,
+              {
+                pluginId,
+                type: severity,
+                message: `${displayTitle} — ${body}`,
+                pluginDisplayName: displayName,
+                ...(passive ? { passive: true } : {}),
+              },
+              { timeoutMs: 10_000 }
+            )
+            .catch(() => {
+              // Best-effort, like the local push.
+            });
+        }
+        return { id };
+      });
     },
     // NOT revoke-guarded for the same reason as invalidateFileDecorations and
     // showToast: plugins dispatch actions from post-activation callbacks and

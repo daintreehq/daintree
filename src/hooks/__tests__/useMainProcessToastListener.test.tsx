@@ -43,6 +43,12 @@ type ToastCallback = (payload: {
   hostSwitchFailure?: { hostId: string; projectId: string; code: string | null };
   pluginActions?: Array<{ label: string; actionId: string; args?: Record<string, unknown> }>;
   replaceKey?: string;
+  context?: {
+    projectId?: string;
+    worktreeId?: string;
+    panelId?: string;
+    plugin?: { id: string; name: string };
+  };
 }) => void;
 
 let capturedCallback: ToastCallback | null = null;
@@ -121,6 +127,21 @@ describe("useMainProcessToastListener", () => {
     expect(payload.actions).toBeUndefined();
     expect(payload.replaceKey).toBeUndefined();
     expect(payload.urgent).toBeUndefined();
+    expect(payload.context).toBeUndefined();
+  });
+
+  it("hands main's provenance and target to the inbox row (#13818)", () => {
+    renderHook(() => useMainProcessToastListener());
+    const context = {
+      projectId: "project-a",
+      worktreeId: "/repos/alpha/feature",
+      plugin: { id: "project__abc__acme.records", name: "Acme Records" },
+    };
+    act(() => {
+      capturedCallback!({ type: "warning", message: "Acme Records: Stale", context });
+    });
+
+    expect(notifyMock.mock.calls[0]![0].context).toEqual(context);
   });
 
   it("retries a window's host restore from its toast, and ignores a malformed target", async () => {

@@ -198,6 +198,11 @@ export const PluginToastPayloadSchema = z.object({
    * rather than costing the toast.
    */
   pluginDisplayName: z.string().min(1).max(256).optional().catch(undefined),
+  /**
+   * A passive `host.notify` (#13818): the inbox only, no toast. Absent from an
+   * older host, and an older Shell drops it and shows the toast.
+   */
+  passive: z.boolean().optional().catch(undefined),
 });
 export type PluginToastPayload = z.infer<typeof PluginToastPayloadSchema>;
 
