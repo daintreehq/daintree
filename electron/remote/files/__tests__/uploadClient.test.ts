@@ -29,6 +29,7 @@ function setup(
     maxUploadBytes?: number;
     bound?: string | null;
     whenReachable?: (hostId: string, webContentsId: number) => Promise<boolean>;
+    random?: () => number;
   } = {}
 ) {
   const events: FileTransferEvent[] = [];
@@ -58,6 +59,7 @@ function setup(
     sendToView: (_id, event) => events.push(event),
     localLabel: "This Mac",
     maxUploadBytes: options.maxUploadBytes,
+    random: options.random,
   });
   return { client, upload, events, release: () => release?.() };
 }
@@ -380,5 +382,307 @@ describe("operation ids", () => {
       })
     ).rejects.toMatchObject({ code: "OUTCOME_UNKNOWN" });
     expect(upload).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("a busy or dropped host", () => {
+  const send = (client: ReturnType<typeof setup>["client"], opId: string, name = `${opId}.bin`) =>
+    client.uploadBytes(7, {
+      hostId: "studio-01",
+      bytes: new Uint8Array([1]),
+      name,
+      mimeType: null,
+      destination: inbox,
+      opId,
+    });
+  const failWith = (code: string) => async () => {
+    throw Object.assign(new Error(code), { code });
+  };
+
+  /** Uploads that run until the test lets each one finish. */
+  function heldUploads(upload: ReturnType<typeof setup>["upload"]) {
+    const releases = new Map<string, () => void>();
+    upload.mockImplementation(async (_hostId, source, opts) => {
+      await new Promise<void>((resolve, reject) => {
+        releases.set(opts.opId, resolve);
+        opts.signal?.addEventListener("abort", () =>
+          reject(Object.assign(new Error("cancelled"), { code: "CANCELLED" }))
+        );
+      });
+      return { hostPath: `/tmp/${opts.name}`, bytes: source.size, deduplicated: false };
+    });
+    return {
+      running: () => upload.mock.calls.map(([, , opts]) => opts.opId),
+      finish: (opId: string) => releases.get(opId)?.(),
+    };
+  }
+
+  it("sends a big drop a few at a time, starting each as another finishes", async () => {
+    const { client, upload } = setup();
+    const held = heldUploads(upload);
+    const drop = Array.from({ length: 20 }, (_, index) => send(client, `op-${index}`));
+    await vi.waitFor(() => expect(upload).toHaveBeenCalled());
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    const started = held.running();
+    expect(started.length).toBeGreaterThan(0);
+    expect(started.length).toBeLessThan(8);
+
+    held.finish(started[0]!);
+    await vi.waitFor(() => expect(held.running()).toHaveLength(started.length + 1));
+    for (let index = 0; index < 20; index++) {
+      await vi.waitFor(() => expect(held.running()).toContain(`op-${index}`));
+      held.finish(`op-${index}`);
+    }
+    const results = await Promise.all(drop);
+    expect(results.map((result) => result.hostPath)).toEqual(
+      Array.from({ length: 20 }, (_, index) => `/tmp/op-${index}.bin`)
+    );
+  });
+
+  it("drops a queued upload that is cancelled before its turn, and its slot stays free", async () => {
+    const { client, upload } = setup();
+    const held = heldUploads(upload);
+    const ahead = Array.from({ length: 20 }, (_, index) => send(client, `op-${index}`));
+    await vi.waitFor(() => expect(upload).toHaveBeenCalled());
+    const queued = send(client, "op-queued");
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(client.cancel("op-queued", 7)).toBe(true);
+    await expect(queued).rejects.toMatchObject({ code: "CANCELLED" });
+
+    for (let index = 0; index < 20; index++) {
+      await vi.waitFor(() => expect(held.running()).toContain(`op-${index}`));
+      held.finish(`op-${index}`);
+    }
+    await Promise.all(ahead);
+    expect(held.running()).not.toContain("op-queued");
+    const after = send(client, "op-after");
+    await vi.waitFor(() => expect(held.running()).toContain("op-after"));
+    held.finish("op-after");
+    await expect(after).resolves.toMatchObject({ hostPath: "/tmp/op-after.bin" });
+  });
+
+  it("queues each host separately", async () => {
+    const { upload } = setup();
+    const held = heldUploads(upload);
+    const hostFor = new Map<number, string>([
+      [7, "studio-01"],
+      [8, "studio-02"],
+    ]);
+    const multi = createHostUploadClient({
+      transport: { upload },
+      hostForView: (id) => hostFor.get(id) ?? null,
+      hostLabel: (hostId) => hostId,
+      sendToView: () => {},
+      localLabel: "This Mac",
+    });
+    const toHost = (webContentsId: number, opId: string) =>
+      multi.uploadBytes(webContentsId, {
+        hostId: hostFor.get(webContentsId)!,
+        bytes: new Uint8Array([1]),
+        name: `${opId}.bin`,
+        mimeType: null,
+        destination: inbox,
+        opId,
+      });
+    const first = Array.from({ length: 20 }, (_, index) => toHost(7, `a-${index}`));
+    await vi.waitFor(() => expect(upload).toHaveBeenCalled());
+    const second = toHost(8, "b-0");
+    await vi.waitFor(() => expect(held.running()).toContain("b-0"));
+    held.finish("b-0");
+    await second;
+    for (let index = 0; index < 20; index++) {
+      await vi.waitFor(() => expect(held.running()).toContain(`a-${index}`));
+      held.finish(`a-${index}`);
+    }
+    await Promise.all(first);
+  });
+
+  const bytesFor = (opId: string) => ({
+    hostId: "studio-01",
+    bytes: new Uint8Array([1]),
+    name: `${opId}.bin`,
+    mimeType: null,
+    destination: inbox,
+    opId,
+  });
+
+  it("stops a destroyed view's uploads, queued or running, and frees their slots", async () => {
+    const { upload } = setup();
+    const held = heldUploads(upload);
+    const watchers = new Set<{ webContentsId: number; onGone: () => void }>();
+    const uploads = createHostUploadClient({
+      transport: { upload },
+      hostForView: () => "studio-01",
+      hostLabel: (hostId) => hostId,
+      sendToView: () => {},
+      localLabel: "This Mac",
+      watchView: (webContentsId, onGone) => {
+        const entry = { webContentsId, onGone };
+        watchers.add(entry);
+        return () => watchers.delete(entry);
+      },
+    });
+    const drop = Array.from({ length: 20 }, (_, index) =>
+      uploads.uploadBytes(7, bytesFor(`op-${index}`))
+    );
+    await vi.waitFor(() => expect(upload).toHaveBeenCalled());
+    const other = uploads.uploadBytes(8, bytesFor("op-other"));
+    for (const entry of [...watchers]) if (entry.webContentsId === 7) entry.onGone();
+
+    const settled = await Promise.allSettled(drop);
+    expect(settled.every((result) => result.status === "rejected")).toBe(true);
+    await vi.waitFor(() => expect(held.running()).toContain("op-other"));
+    held.finish("op-other");
+    await expect(other).resolves.toMatchObject({ hostPath: "/tmp/op-other.bin" });
+    expect(watchers.size).toBe(0);
+  });
+
+  it("drops a queued upload whose view left the host while it waited", async () => {
+    const { upload } = setup();
+    const held = heldUploads(upload);
+    let bound: string | null = "studio-01";
+    const uploads = createHostUploadClient({
+      transport: { upload },
+      hostForView: (webContentsId) => (webContentsId === 7 ? bound : "studio-01"),
+      hostLabel: (hostId) => hostId,
+      sendToView: () => {},
+      localLabel: "This Mac",
+      maxConcurrentPerHost: 1,
+    });
+    const ahead = uploads.uploadBytes(8, bytesFor("op-ahead"));
+    await vi.waitFor(() => expect(held.running()).toContain("op-ahead"));
+    const queued = uploads.uploadBytes(7, bytesFor("op-queued"));
+    bound = null;
+    held.finish("op-ahead");
+    await ahead;
+    await expect(queued).rejects.toMatchObject({ code: "VALIDATION" });
+    expect(held.running()).not.toContain("op-queued");
+  });
+
+  it("asks a busy host again under the same id until it takes the file", async () => {
+    const { client, upload } = setup({ random: () => 0 });
+    upload
+      .mockImplementationOnce(failWith("RATE_LIMITED"))
+      .mockImplementationOnce(failWith("RATE_LIMITED"));
+    await expect(send(client, "op-busy")).resolves.toMatchObject({
+      hostPath: "/tmp/daintree-inbox/files/x/op-busy.bin",
+    });
+    expect(upload.mock.calls.map(([, , opts]) => opts.opId)).toEqual([
+      "op-busy",
+      "op-busy",
+      "op-busy",
+    ]);
+  });
+
+  it("reports the host busy when it never frees up", async () => {
+    const { client, upload } = setup({ random: () => 0 });
+    upload.mockImplementation(failWith("RATE_LIMITED"));
+    await expect(send(client, "op-busy")).rejects.toMatchObject({ code: "RATE_LIMITED" });
+    expect(upload.mock.calls.length).toBeGreaterThan(1);
+    const calls = upload.mock.calls.length;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(upload).toHaveBeenCalledTimes(calls);
+  });
+
+  it("stops waiting on a busy host the moment the upload is cancelled", async () => {
+    vi.useFakeTimers();
+    try {
+      const { client, upload } = setup({ random: () => 0.99 });
+      upload.mockImplementation(failWith("RATE_LIMITED"));
+      const outcome = send(client, "op-busy").catch((error: unknown) => error);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(upload).toHaveBeenCalledTimes(1);
+      expect(client.cancel("op-busy", 7)).toBe(true);
+      // Settles with the clock standing still: the retry wait is cut short, not waited out.
+      await expect(outcome).resolves.toMatchObject({ code: "CANCELLED" });
+      expect(vi.getTimerCount()).toBe(0);
+      expect(upload).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("resumes an upload its link cut off once the host is back, under the same id", async () => {
+    const whenReachable = vi.fn(async () => true);
+    const { client, upload } = setup({ whenReachable });
+    upload.mockImplementationOnce(failWith("HOST_DISCONNECTED"));
+    await expect(send(client, "op-cut")).resolves.toMatchObject({
+      hostPath: "/tmp/daintree-inbox/files/x/op-cut.bin",
+    });
+    expect(whenReachable).toHaveBeenCalledWith(
+      "studio-01",
+      7,
+      expect.any(Number),
+      expect.any(AbortSignal)
+    );
+    expect(upload.mock.calls.map(([, , opts]) => opts.opId)).toEqual(["op-cut", "op-cut"]);
+  });
+
+  it("reports the disconnect when the host doesn't come back", async () => {
+    const { client, upload } = setup({ whenReachable: async () => false });
+    upload.mockImplementation(failWith("HOST_DISCONNECTED"));
+    await expect(send(client, "op-cut")).rejects.toMatchObject({ code: "HOST_DISCONNECTED" });
+    expect(upload).toHaveBeenCalledTimes(1);
+  });
+
+  it("shares one budget between a dropped link and a lost answer", async () => {
+    const alone = setup({ whenReachable: async () => true });
+    alone.upload.mockImplementation(failWith("HOST_DISCONNECTED"));
+    await expect(send(alone.client, "op-cut")).rejects.toMatchObject({
+      code: "HOST_DISCONNECTED",
+    });
+
+    const { client, upload } = setup({ whenReachable: async () => true });
+    let calls = 0;
+    upload.mockImplementation(async () => {
+      calls += 1;
+      const code = calls % 2 === 1 ? "HOST_DISCONNECTED" : "OUTCOME_UNKNOWN";
+      throw Object.assign(new Error(code), { code });
+    });
+    await expect(send(client, "op-flaky")).rejects.toBeTruthy();
+    expect(upload).toHaveBeenCalledTimes(alone.upload.mock.calls.length);
+    expect(new Set(upload.mock.calls.map(([, , opts]) => opts.opId))).toEqual(
+      new Set(["op-flaky"])
+    );
+  });
+
+  it("starts queued uploads in the order they came", async () => {
+    const { upload } = setup();
+    const held = heldUploads(upload);
+    const uploads = createHostUploadClient({
+      transport: { upload },
+      hostForView: () => "studio-01",
+      hostLabel: (hostId) => hostId,
+      sendToView: () => {},
+      localLabel: "This Mac",
+      maxConcurrentPerHost: 1,
+    });
+    const outcomes = ["op-a", "op-b", "op-c", "op-d"].map((opId) =>
+      uploads.uploadBytes(7, bytesFor(opId)).catch((error: unknown) => error)
+    );
+    await vi.waitFor(() => expect(held.running()).toEqual(["op-a"]));
+    expect(uploads.cancel("op-c", 7)).toBe(true);
+    held.finish("op-a");
+    await vi.waitFor(() => expect(held.running()).toEqual(["op-a", "op-b"]));
+    held.finish("op-b");
+    await vi.waitFor(() => expect(held.running()).toEqual(["op-a", "op-b", "op-d"]));
+    held.finish("op-d");
+    const settled = await Promise.all(outcomes);
+    expect(settled[2]).toMatchObject({ code: "CANCELLED" });
+    expect([settled[0], settled[1], settled[3]]).toEqual([
+      expect.objectContaining({ hostPath: "/tmp/op-a.bin" }),
+      expect.objectContaining({ hostPath: "/tmp/op-b.bin" }),
+      expect.objectContaining({ hostPath: "/tmp/op-d.bin" }),
+    ]);
+  });
+
+  it("gives up on a link that keeps dropping", async () => {
+    const { client, upload } = setup({ whenReachable: async () => true });
+    upload.mockImplementation(failWith("HOST_DISCONNECTED"));
+    await expect(send(client, "op-cut")).rejects.toMatchObject({ code: "HOST_DISCONNECTED" });
+    expect(upload.mock.calls.length).toBeGreaterThan(1);
+    const calls = upload.mock.calls.length;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(upload).toHaveBeenCalledTimes(calls);
   });
 });

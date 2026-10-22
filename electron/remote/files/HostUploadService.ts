@@ -9,7 +9,7 @@ import type { TransferSink } from "../link/transfer.js";
 import { copyInto, NEW_FILE_FLAGS } from "./exclusiveCopy.js";
 import { componentsBelow, openDirectoryBeneath, type HeldDirectory } from "./hostContainment.js";
 import type { HostFileEndpoint } from "./HostFileService.js";
-import { HostInbox, sanitizeInboxName } from "./hostInbox.js";
+import { HostInbox, sanitizeInboxName, truncateName } from "./hostInbox.js";
 import {
   UPLOAD_SINK_PREFIX,
   UploadLinkMethod,
@@ -406,21 +406,26 @@ export class HostUploadService {
     if (record.fingerprint !== fingerprint) throw operationInUse();
     if (record.state === "preparing") return { status: "refused", reason: "busy" };
     if (record.state === "placing") {
+      let timer: ReturnType<typeof setTimeout> | undefined;
       const waited = await Promise.race([
         record.settled.then(() => true),
         new Promise<false>((resolve) => {
-          const timer = setTimeout(
+          timer = setTimeout(
             () => resolve(false),
             this.options.retryWaitMs ?? DEFAULT_RETRY_WAIT_MS
           );
           timer.unref?.();
         }),
       ]);
+      clearTimeout(timer);
       if (!waited) return { status: "refused", reason: "busy" };
       record = this.operations.get(key);
       if (!record) return "fresh";
       if (record.fingerprint !== fingerprint) throw operationInUse();
-      if (record.state === "preparing") return { status: "refused", reason: "busy" };
+      // Another attempt of this operation took the id meanwhile: never clear what it holds.
+      if (record.state === "preparing" || record.state === "placing") {
+        return { status: "refused", reason: "busy" };
+      }
     }
     if (record.state === "committed" && record.hostPath !== null) {
       return { status: "done", hostPath: record.hostPath, bytes: record.bytes };
@@ -821,7 +826,9 @@ export class HostUploadService {
       }
       // The bytes go into a temporary entry of our own first, so a failure
       // never touches the final name, and only that entry is ever cleaned up.
-      const tempName = `.${target.name.slice(0, 100)}.daintree-upload-${token.slice(0, 8)}`;
+      // Its share of the name is bounded as the host's filesystem counts it,
+      // so the entry fits wherever the final name does.
+      const tempName = `.${truncateName(target.name, 100)}.daintree-upload-${token.slice(0, 8)}`;
       const source = await fs.open(part.path, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
       let tempExists = false;
       try {
