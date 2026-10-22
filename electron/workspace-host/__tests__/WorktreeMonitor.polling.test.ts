@@ -1767,7 +1767,10 @@ describe("WorktreeMonitor", () => {
       expect(mockGetWorktreeChangesWithStats).toHaveBeenCalledTimes(1);
       expect(monitor.getWorktreeChanges()).toBeNull();
 
-      await vi.advanceTimersByTimeAsync(FIRST_STATUS_DEADLINE_MS * 2);
+      // The retry backs off: nothing just before the doubled delay.
+      await vi.advanceTimersByTimeAsync(FIRST_STATUS_DEADLINE_MS * 2 - 1);
+      expect(mockGetWorktreeChangesWithStats).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(1);
       expect(mockGetWorktreeChangesWithStats).toHaveBeenCalledTimes(2);
       expect(monitor.getWorktreeChanges()).not.toBeNull();
 
