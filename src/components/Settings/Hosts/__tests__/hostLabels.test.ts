@@ -9,6 +9,7 @@ import {
   restartConfirmLabel,
   restartImpactLines,
   restartTerminalCount,
+  sshRefusalAdvice,
 } from "../hostLabels";
 
 const unresolved = (name: string) =>
@@ -172,5 +173,35 @@ describe("removeHostOutcome", () => {
     expect(outcome.label).toBe("Terminals and agents in Ubuntu end once WSL stops it");
     expect(outcome.sentence).toContain("Daintree stops keeping Ubuntu running");
     expect(outcome.sentence).not.toContain("keep running.");
+  });
+});
+
+describe("sshRefusalAdvice", () => {
+  it("names an unknown host key", () => {
+    expect(
+      sshRefusalAdvice(
+        "No ED25519 host key is known for studio and you have requested strict checking.\nHost key verification failed."
+      )
+    ).toBe("untrusted-host-key");
+    expect(sshRefusalAdvice("Host key verification failed.")).toBe("untrusted-host-key");
+  });
+
+  it("names a changed host key from the last lines alone, before the generic verification failure", () => {
+    expect(
+      sshRefusalAdvice(
+        "Offending ED25519 key in /Users/g/.ssh/known_hosts:3\nHost key for studio has changed and you have requested strict checking.\nHost key verification failed."
+      )
+    ).toBe("changed-host-key");
+  });
+
+  it("names a refused login", () => {
+    expect(sshRefusalAdvice("greg@studio: Permission denied (publickey,password).")).toBe(
+      "login-refused"
+    );
+  });
+
+  it("stays quiet for other failures", () => {
+    expect(sshRefusalAdvice(null)).toBeNull();
+    expect(sshRefusalAdvice("ssh: connect to host studio port 22: Connection refused")).toBeNull();
   });
 });

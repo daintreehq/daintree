@@ -50,6 +50,7 @@ import {
   defaultHostName,
   deliveryLabel,
   localNameSuggestion,
+  sshRefusalAdvice,
   hostModeSwitchedOn,
   installLabel,
   platformLabel,
@@ -749,6 +750,7 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
       !viaWsl && !existing && !saved && probe && !probe.reachable
         ? localNameSuggestion(target.trim(), probe.sshError)
         : null;
+    const refusal = !viaWsl && probe && !probe.reachable ? sshRefusalAdvice(probe.sshError) : null;
     body = !probe ? (
       <p className="flex items-center gap-2 text-sm text-text-secondary">
         <Spinner size="sm" /> Checking {target}
@@ -826,6 +828,42 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
               Daintree runs programs in the distribution with <code>wsl.exe</code>. Check that{" "}
               <code>wsl -d {wslCommandArg(target)}</code> opens a shell there.
             </p>
+          ) : refusal ? (
+            <div className="mt-3 space-y-2" data-testid="add-host-ssh-refusal">
+              {refusal === "untrusted-host-key" && (
+                <>
+                  <p className="text-xs text-text-secondary">
+                    ssh doesn&apos;t trust this machine&apos;s host key yet, and Daintree never
+                    accepts one for you. Connect once in a terminal and answer yes, then check
+                    again.
+                  </p>
+                  <HostCommand label="Trust the host key" command={`ssh ${target.trim()}`} />
+                </>
+              )}
+              {refusal === "changed-host-key" && (
+                <>
+                  <p className="text-xs text-text-secondary">
+                    ssh says this machine&apos;s host key differs from the one on file. If you
+                    didn&apos;t expect that, stop here. If you did, remove the old key, connect once
+                    to trust the new one, then check again.
+                  </p>
+                  <HostCommand
+                    label="Remove the old host key"
+                    command={`ssh-keygen -R ${target.trim().slice(target.trim().lastIndexOf("@") + 1)}`}
+                  />
+                  <HostCommand label="Trust the new host key" command={`ssh ${target.trim()}`} />
+                </>
+              )}
+              {refusal === "login-refused" && (
+                <>
+                  <p className="text-xs text-text-secondary">
+                    This machine refused the login, and Daintree can&apos;t type a password. Set up
+                    key login so your own ssh gets in, then check again.
+                  </p>
+                  <HostCommand label="Set up key login" command={`ssh-copy-id ${target.trim()}`} />
+                </>
+              )}
+            </div>
           ) : (
             <p className="mt-3 text-xs text-text-secondary">
               Daintree connects with your own ssh and never asks for a password. On a Mac, turn on

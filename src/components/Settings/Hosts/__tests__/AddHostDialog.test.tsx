@@ -181,6 +181,41 @@ describe("AddHostDialog", () => {
     expect(screen.queryByRole("button", { name: /^Try / })).toBeNull();
   });
 
+  it.each([
+    ["Host key verification failed.", "Trust the host key", "ssh greg@studio"],
+    [
+      "Host key for studio has changed and you have requested strict checking.\nHost key verification failed.",
+      "Remove the old host key",
+      "ssh-keygen -R studio",
+    ],
+    [
+      "greg@studio: Permission denied (publickey,password).",
+      "Set up key login",
+      "ssh-copy-id greg@studio",
+    ],
+  ])("names the next step when ssh says %j", async (sshError, label, command) => {
+    remoteHosts.probe!.mockResolvedValueOnce(
+      probeResult({
+        reachable: false,
+        sshError,
+        platform: null,
+        install: null,
+        hostModeListening: false,
+        matchesClient: null,
+      })
+    );
+    render(<AddHostDialog isOpen onClose={() => {}} />);
+    fireEvent.change(screen.getByPlaceholderText("user@devbox.local"), {
+      target: { value: "greg@studio" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Check host" }));
+    const guidance = await screen.findByTestId("add-host-ssh-refusal");
+    expect(guidance.textContent).toContain(label);
+    expect(guidance.textContent).toContain(command);
+    expect(screen.queryByText(/turn on\s+Remote Login/)).toBeNull();
+    expect(screen.getByRole("button", { name: "Check again" })).toBeTruthy();
+  });
+
   it("shows a discovery failure with Retry rather than an empty scan", async () => {
     remoteHosts.discover!.mockRejectedValueOnce(new Error("tailscale crashed"));
     render(<AddHostDialog isOpen onClose={() => {}} />);
