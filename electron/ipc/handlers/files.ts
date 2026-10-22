@@ -58,6 +58,19 @@ export async function remoteCallerUpload(
   return files.uploadIdentity(ctx.endpoint, filePath);
 }
 
+/** The opened descriptor is the upload as it was placed: compared as bigints, so no inode loses precision. */
+async function isPlacedUpload(
+  handle: Awaited<ReturnType<typeof fs.open>>,
+  placed: UploadIdentity
+): Promise<boolean> {
+  const now = await handle.stat({ bigint: true });
+  return (
+    BigInt(now.dev) === placed.dev &&
+    BigInt(now.ino) === placed.ino &&
+    BigInt(now.size) === placed.size
+  );
+}
+
 export function registerFilesHandlers(): () => void {
   const handlers: Array<() => void> = [];
 
@@ -269,12 +282,7 @@ export function registerFilesHandlers(): () => void {
           context: { filePath, rootPath },
         });
       }
-      if (
-        ownUpload &&
-        (String(opened.ino) !== String(ownUpload.ino) ||
-          String(opened.dev) !== String(ownUpload.dev) ||
-          String(opened.size) !== String(ownUpload.size))
-      ) {
+      if (ownUpload && !(await isPlacedUpload(fileHandle, ownUpload))) {
         throw new AppError({
           code: "OUTSIDE_ROOT",
           message: "The upload is no longer the file this view placed",
