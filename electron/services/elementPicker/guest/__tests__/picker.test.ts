@@ -498,7 +498,7 @@ describe("createPicker", () => {
       });
     });
 
-    it("gives a description set off inside another's dispatch no answer of its own", () => {
+    it("gives a selection set off inside another's dispatch no answer of its own", () => {
       const first = document.getElementById("first")!;
       const second = document.getElementById("second")!;
       let nested = false;
@@ -528,8 +528,11 @@ describe("createPicker", () => {
       start();
       first.click();
 
-      const [inner, outer] = ofType("selectionChanged");
-      expect(inner?.observations[0]?.componentChain.components).toEqual([]);
+      // The nested click is refused outright, and the outer reply keeps its names.
+      const selections = ofType("selectionChanged");
+      expect(selections).toHaveLength(1);
+      const [outer] = selections;
+      expect(outer?.observations[0]?.label).toBe("a#first");
       expect(outer?.observations[0]?.componentChain.components[0]?.rootElementIds).toEqual([
         outer?.observations[0]?.elementId,
       ]);
@@ -619,22 +622,31 @@ describe("the bridge's element exchanges", () => {
     ],
   };
 
-  it("selects the element an extractor's pick points at, and takes no forged point", () => {
+  it("selects the element an extractor's pick names, and takes no forged name", () => {
     const first = document.getElementById("first")!;
     const list = document.getElementById("list")!;
     installReact({
       extract: () => ({}),
       pick: (hit) => ({ target: hit === first ? list : hit, data: {} }),
     });
-    // A page pointing at something during the exchange, under the wrong id.
+    // A page naming something during the exchange: under the wrong request,
+    // and under a token the reply does not use.
     document.addEventListener(
       channelEvent(CHANNEL, "extract"),
-      () => {
-        document
-          .getElementById("field")!
-          .dispatchEvent(
-            new CustomEvent(channelEvent(CHANNEL, "point"), { detail: "999", composed: true })
+      (event) => {
+        const { id } = JSON.parse((event as CustomEvent<string>).detail) as { id: number };
+        const field = document.getElementById("field")!;
+        for (const message of [
+          { id: 999, ref: 0 },
+          { id, ref: 7 },
+        ]) {
+          field.dispatchEvent(
+            new CustomEvent(channelEvent(CHANNEL, "element"), {
+              detail: JSON.stringify(message),
+              composed: true,
+            })
           );
+        }
       },
       { capture: true, signal: testListeners.signal }
     );
@@ -645,6 +657,39 @@ describe("the bridge's element exchanges", () => {
     // A plain walk selects what it reaches; only a pick is stood in for.
     press("ArrowDown");
     expect(selectedTag()).toBe("a");
+  });
+
+  it("stays on the hit when page code claims a pick's token for another node", () => {
+    const first = document.getElementById("first")!;
+    const list = document.getElementById("list")!;
+    // Ahead of the registry: the page claims the token the pick is about to use.
+    document.addEventListener(
+      channelEvent(CHANNEL, "extract"),
+      (event) => {
+        const { id } = JSON.parse((event as CustomEvent<string>).detail) as { id: number };
+        document.getElementById("field")!.dispatchEvent(
+          new CustomEvent(channelEvent(CHANNEL, "element"), {
+            detail: JSON.stringify({ id, ref: 0 }),
+            composed: true,
+          })
+        );
+      },
+      { capture: true, signal: testListeners.signal }
+    );
+    installReact({
+      extract: () => ({}),
+      pick: () => ({
+        target: list,
+        data: { componentChain: { nearestId: "c1", components: [record], truncated: false } },
+      }),
+    });
+    start();
+
+    first.click();
+    // On the hit, and without the description of the element the pick stood for.
+    const observation = ofType("selectionChanged").at(-1)?.observations[0];
+    expect(observation?.label).toBe("a#first");
+    expect(observation?.componentChain.components).toEqual([]);
   });
 
   it("widens to the component's roots and back to the element on the next click", () => {
@@ -743,30 +788,38 @@ describe("the bridge's element exchanges", () => {
     expect(ofType("selectionChanged").at(-1)?.observations[0]?.label).toBe("a#second");
   });
 
-  it("takes a locate's answer only from a locate reply, and only the elements before it", () => {
+  it("takes a locate's answer only from a locate reply, and only the elements it names", () => {
     const first = document.getElementById("first")!;
     const second = document.getElementById("second")!;
     document.addEventListener(
       channelEvent(CHANNEL, "locate"),
       (event) => {
         const { id } = JSON.parse((event as CustomEvent<string>).detail) as { id: number };
-        const point = (node: Element) =>
+        const name = (node: Element, ref: number) =>
           node.dispatchEvent(
-            new CustomEvent(channelEvent(CHANNEL, "point"), { detail: String(id), composed: true })
+            new CustomEvent(channelEvent(CHANNEL, "element"), {
+              detail: JSON.stringify({ id, ref }),
+              composed: true,
+            })
           );
-        point(first);
+        name(first, 0);
         // Shaped like an extract reply: not the answer a locate waits for.
         document.dispatchEvent(
           new CustomEvent(channelEvent(CHANNEL, "extracted"), {
-            detail: JSON.stringify({ id, contributions: [], data: {} }),
+            detail: JSON.stringify({
+              id,
+              contributions: [],
+              elements: ["ref-0", "ref-1"],
+              data: {},
+            }),
           })
         );
         document.dispatchEvent(
           new CustomEvent(channelEvent(CHANNEL, "located"), {
-            detail: JSON.stringify({ id, data: {}, truncated: false }),
+            detail: JSON.stringify({ id, elements: ["ref-0"], data: {}, truncated: false }),
           })
         );
-        point(second);
+        name(second, 1);
       },
       { capture: true, signal: testListeners.signal }
     );

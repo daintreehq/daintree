@@ -26,7 +26,6 @@ import {
   MAX_ELEMENT_REFS,
   MAX_LOCATED_REPLY_CHARS,
   MAX_LOCATE_REQUEST_CHARS,
-  MAX_POINTED_ELEMENTS,
   channelEvent,
   elementRefToken,
   type ExtractRequest,
@@ -147,8 +146,8 @@ const ELEMENT_SCOPE: ScopeState = { kind: "element" };
 interface Extracted {
   framework: string;
   data: ExtractorContribution;
-  /** The element the framework pointed at for a pick, when not the one asked about. */
-  pointed: Element | null;
+  /** The element a pick stands for, when its framework named one other than the node asked about. */
+  target: Element | null;
 }
 
 /** Bootstrap-worded, so nothing the page writes reaches a notice the host shows. */
@@ -256,19 +255,13 @@ export function createPicker(host: PickerHost): PickerHandle {
   let awaitingRequest = 0;
   /** The terminal event the pending request is answered by; any other is not its answer. */
   let awaitingReply: "extracted" | "located" | null = null;
-  /**
-   * Each reply with how many points had arrived before it — later ones are not
-   * its elements — and whether any distinct one had been turned away by then.
-   */
-  let replies: Array<{ text: string; points: number; overflowed: boolean }> = [];
+  let replies: string[] = [];
   /**
    * The elements the pending request's reply names, by the token it names
    * them with; null where two events claimed one token for different nodes.
    */
   let named = new Map<string, Element | null>();
   let namingEvents = 0;
-  let pointed: Element[] = [];
-  let overflowed = false;
   /** A selection being described: page code that runs inside it cannot start another. */
   let emitting = false;
   /** Notices already turned into issues in this document, by framework and code. */
@@ -283,7 +276,6 @@ export function createPicker(host: PickerHost): PickerHandle {
   const extractedEvent = channelEvent(host.channel, "extracted");
   const elementEvent = channelEvent(host.channel, "element");
   const disposeEvent = channelEvent(host.channel, "dispose");
-  const pointEvent = channelEvent(host.channel, "point");
   const locateEvent = channelEvent(host.channel, "locate");
   const locatedEvent = channelEvent(host.channel, "located");
   const noticeEvent = channelEvent(host.channel, "notice");
@@ -382,10 +374,21 @@ export function createPicker(host: PickerHost): PickerHandle {
   }
 
   /**
+   * The node a reply names by `token`, when this request's `element` events
+   * gave it one and only one. Rechecked: a page listener can move a node while
+   * the reply is dispatched. A string that is not one of this request's tokens
+   * names nothing: a main-world reader cannot know an element id.
+   */
+  function adopt(token: unknown, nodes: ReadonlyMap<string, Element | null>): Element | null {
+    if (typeof token !== "string") return null;
+    const node = nodes.get(token);
+    return usable(node) ? node : null;
+  }
+
+  /**
    * Swap a reply's element tokens for element ids, in place. Anything else in
-   * `rootElementIds` is dropped: a main-world reader cannot know an element
-   * id, so a string that is not one of this request's tokens names nothing. A
-   * record that lost a root that way no longer lists them all.
+   * `rootElementIds` is dropped, and a record that lost a root that way no
+   * longer lists them all.
    */
   function adoptRoots(chain: unknown, nodes: ReadonlyMap<string, Element | null>): void {
     if (!isPlainObject(chain) || !Array.isArray(chain.components)) return;
@@ -395,15 +398,8 @@ export function createPicker(host: PickerHost): PickerHandle {
       const ids: string[] = [];
       let lost = tokens.length > LIMITS.roots;
       for (const token of tokens.slice(0, LIMITS.roots)) {
-        const node = typeof token === "string" ? nodes.get(token) : undefined;
-        // Rechecked: a page listener can move a node while the reply is dispatched.
-        if (
-          node === undefined ||
-          node === null ||
-          node.ownerDocument !== document ||
-          !node.isConnected ||
-          isOverlay(node)
-        ) {
+        const node = adopt(token, nodes);
+        if (node === null) {
           lost = true;
           continue;
         }
@@ -418,7 +414,7 @@ export function createPicker(host: PickerHost): PickerHandle {
   /**
    * One synchronous exchange with the main world: dispatched on `target` so
    * the other world's listener gets its own wrapper for the same node, with
-   * every reply and every element pointed at arriving inside the dispatch.
+   * every reply and every element it names arriving inside the dispatch.
    * Nothing at all means no extractor is installed, which is the common case
    * and costs one event.
    */
@@ -428,21 +424,15 @@ export function createPicker(host: PickerHost): PickerHandle {
     detail: string,
     id: number,
     reply: "extracted" | "located"
-  ): {
-    replies: Array<{ text: string; points: number; overflowed: boolean }>;
-    pointed: Element[];
-    named: Map<string, Element | null>;
-  } {
+  ): { replies: string[]; named: Map<string, Element | null> } {
     // Page code runs inside the dispatch and can set off another request; that
     // one goes unanswered rather than taking over this one's replies.
-    if (awaitingRequest !== 0) return { replies: [], pointed: [], named: new Map() };
+    if (awaitingRequest !== 0) return { replies: [], named: new Map() };
     awaitingRequest = id;
     awaitingReply = reply;
     replies = [];
-    pointed = [];
     named = new Map();
     namingEvents = 0;
-    overflowed = false;
     try {
       target.dispatchEvent(new CustomEvent(type, { detail, composed: true }));
     } catch {
@@ -451,9 +441,8 @@ export function createPicker(host: PickerHost): PickerHandle {
       awaitingRequest = 0;
       awaitingReply = null;
     }
-    const received = { replies, pointed, named };
+    const received = { replies, named };
     replies = [];
-    pointed = [];
     named = new Map();
     return received;
   }
@@ -470,29 +459,30 @@ export function createPicker(host: PickerHost): PickerHandle {
 
   /**
    * Ask the extractors in the main world about `node`. A pick lets the
-   * framework that answers first point at the element the pick stands for.
+   * framework whose answer is adopted name the element the pick stands for.
    */
   function extract(node: Element, phase: ExtractionPhase, pick = false): Extracted | null {
     nextRequest += 1;
     const id = nextRequest;
     const request: ExtractRequest = pick ? { id, phase, pick: true } : { id, phase };
     const received = exchange(node, extractEvent, JSON.stringify(request), id, "extracted");
-    for (const reply of received.replies) {
-      const parsed = parseReply(reply.text, id);
+    for (const text of received.replies) {
+      const parsed = parseReply(text, id);
       if (parsed === null || !Array.isArray(parsed.contributions)) continue;
       for (const entry of parsed.contributions.slice(0, FRAMEWORKS.size)) {
         if (!isPlainObject(entry) || typeof entry.framework !== "string") continue;
         if (!FRAMEWORKS.has(entry.framework) || !isPlainObject(entry.data)) continue;
+        let target: Element | null = null;
+        if (pick && entry.target !== undefined) {
+          target = adopt(entry.target, received.named);
+          // It describes an element this side cannot be shown, not the hit.
+          if (target === null) continue;
+        }
         adoptRoots(entry.data.componentChain, received.named);
-        const target = pick
-          ? received.pointed
-              .slice(0, reply.points)
-              .find((candidate) => usable(candidate) && candidate !== node)
-          : undefined;
         return {
           framework: entry.framework,
           data: entry.data as ExtractorContribution,
-          pointed: target ?? null,
+          target: target === node ? null : target,
         };
       }
       return null;
@@ -520,15 +510,17 @@ export function createPicker(host: PickerHost): PickerHandle {
     }
     if (detail.length > MAX_LOCATE_REQUEST_CHARS) return null;
     const received = exchange(anchor ?? document, locateEvent, detail, id, "located");
-    for (const reply of received.replies) {
-      const parsed = parseReply(reply.text, id);
+    for (const text of received.replies) {
+      const parsed = parseReply(text, id);
       if (parsed === null) continue;
+      const tokens: unknown[] = Array.isArray(parsed.elements) ? parsed.elements : [];
       const elements: Element[] = [];
-      let omitted = parsed.truncated === true || reply.overflowed;
-      for (const node of received.pointed.slice(0, reply.points)) {
-        if (elements.includes(node)) continue;
-        if (usable(node)) elements.push(node);
-        else omitted = true;
+      // As many as a component's roots, and no more: past that the list is not whole.
+      let omitted = parsed.truncated === true || tokens.length > LIMITS.roots;
+      for (const token of tokens.slice(0, LIMITS.roots)) {
+        const node = adopt(token, received.named);
+        if (node === null) omitted = true;
+        else if (!elements.includes(node)) elements.push(node);
       }
       return {
         elements,
@@ -691,7 +683,7 @@ export function createPicker(host: PickerHost): PickerHandle {
       const extracted = entry.picked
         ? extract(entry.hit, "selection", true)
         : extract(entry.target, "selection");
-      const target = entry.picked ? (extracted?.pointed ?? entry.hit) : entry.target;
+      const target = entry.picked ? (extracted?.target ?? entry.hit) : entry.target;
       targets.push(target);
       const entryDetections = ancestryDetections(target);
       const fields = fieldsFor(target, entryDetections, extracted?.data ?? null);
@@ -714,8 +706,8 @@ export function createPicker(host: PickerHost): PickerHandle {
       observations.forEach((observation, index) => {
         for (const record of observation.componentChain.components) {
           if (record.componentId !== componentId) continue;
-          record.rootElementIds = rootIds.slice(0, MAX_POINTED_ELEMENTS);
-          record.rootsComplete = scoped.rootsComplete && rootIds.length <= MAX_POINTED_ELEMENTS;
+          record.rootElementIds = rootIds.slice(0, LIMITS.roots);
+          record.rootsComplete = scoped.rootsComplete && rootIds.length <= LIMITS.roots;
           if (reportedScope.kind === "element") chain = chains[index] ?? null;
           reportedScope = { kind: "component", componentId };
         }
@@ -1442,7 +1434,7 @@ export function createPicker(host: PickerHost): PickerHandle {
         if (awaitingReply !== "extracted" || replies.length >= MAX_REPLIES) return;
         const detail = (event as CustomEvent).detail;
         if (typeof detail === "string" && detail.length <= MAX_BRIDGE_MESSAGE_CHARS) {
-          replies.push({ text: detail, points: pointed.length, overflowed });
+          replies.push(detail);
         }
       },
       {},
@@ -1455,28 +1447,10 @@ export function createPicker(host: PickerHost): PickerHandle {
         if (awaitingReply !== "located" || replies.length >= MAX_REPLIES) return;
         const detail = (event as CustomEvent).detail;
         if (typeof detail === "string" && detail.length <= MAX_LOCATED_REPLY_CHARS) {
-          replies.push({ text: detail, points: pointed.length, overflowed });
+          replies.push(detail);
         }
       },
       {},
-      teardown
-    );
-    // Captured on the document: a point is dispatched on the element itself,
-    // and does not bubble.
-    listen(
-      document,
-      pointEvent,
-      (event) => {
-        if (awaitingRequest === 0) return;
-        if ((event as CustomEvent).detail !== String(awaitingRequest)) return;
-        const node = hitFromEvent(event);
-        // Repeats take no room, so page code pointing at one element again and
-        // again cannot crowd out the extractor's own answer.
-        if (node === null || pointed.includes(node)) return;
-        if (pointed.length >= MAX_POINTED_ELEMENTS) overflowed = true;
-        else pointed.push(node);
-      },
-      { capture: true },
       teardown
     );
     listen(document, noticeEvent, onNotice, {}, teardown);

@@ -31,22 +31,17 @@ export const CHANNEL_EVENTS = {
   extracted: "extracted",
   /**
    * Extractors → bootstrap, dispatched on each element a reply names, just
-   * before `extracted`. An element crosses between worlds only as an event's
-   * target, so this is how a component's rendered roots reach the bootstrap,
+   * before `extracted` or `located`. An element crosses between worlds only as
+   * an event's target, so this is how a component's rendered roots, the
+   * element a pick stands for and what a locate found reach the bootstrap,
    * which alone can give them element ids.
    */
   element: "element",
   /** Bootstrap → extractors: the bootstrap is gone, and so is everything installed for it. */
   dispose: "dispose",
-  /**
-   * Extractor → bootstrap, dispatched ON an element while a request is being
-   * answered. JSON cannot carry a node from one world to the other, but an
-   * event can: each world's listener sees its own wrapper of the same element.
-   */
-  point: "point",
   /** Bootstrap → one framework's extractor: find elements by a query only that framework reads. */
   locate: "locate",
-  /** Extractor → bootstrap, on the document: the end of a locate, after its points. */
+  /** Extractor → bootstrap, on the document: the end of a locate, after its `element` events. */
   located: "located",
   /** Extractor → bootstrap, on the document: a fact about the page, from a fixed vocabulary. */
   notice: "notice",
@@ -86,7 +81,7 @@ export interface ExtractRequest {
   phase: ExtractionPhase;
   /**
    * A user's pick rather than a description: the extractor may answer for the
-   * element the pick stands for, and point at it, when that is not the node the
+   * element the pick stands for, and name it, when that is not the node the
    * pointer landed on.
    */
   pick?: true;
@@ -94,15 +89,21 @@ export interface ExtractRequest {
 
 export interface ExtractReply {
   id: number;
-  contributions: Array<{ framework: string; data: unknown }>;
+  contributions: Array<{
+    framework: string;
+    data: unknown;
+    /** A pick's answer: the token for the element it stands for, when not the one asked about. */
+    target?: string;
+  }>;
 }
 
 /** Distinct elements one reply may name; a reference past it is never made. */
 export const MAX_ELEMENT_REFS = 256;
 
 /**
- * What a reply's `rootElementIds` hold until the bootstrap swaps each for the
- * element id of the node its `element` event arrived on.
+ * How a reply names an element — in `rootElementIds`, as a pick's `target`,
+ * in a locate's `elements` — until the bootstrap swaps it for the element id
+ * of the node its `element` event arrived on.
  */
 export function elementRefToken(ref: number): string {
   return `ref-${ref}`;
@@ -116,10 +117,11 @@ export interface ElementRefMessage {
 
 /** Ceiling on a locate request's detail; a locator names a file, which can be long. */
 export const MAX_LOCATE_REQUEST_CHARS = 4096;
-/** Ceiling on a locate's terminal reply: a few ids and flags, never a description. */
-export const MAX_LOCATED_REPLY_CHARS = 1024;
-/** Elements one request may point at: the most roots a component selection holds. */
-export const MAX_POINTED_ELEMENTS = 32;
+/**
+ * Ceiling on a locate's terminal reply: a few flags and at most
+ * `MAX_ELEMENT_REFS` tokens, never a description.
+ */
+export const MAX_LOCATED_REPLY_CHARS = 4096;
 
 export interface LocateRequest {
   id: number;
@@ -130,8 +132,10 @@ export interface LocateRequest {
 
 export interface LocatedReply {
   id: number;
+  /** Tokens for what the extractor found, in its order. */
+  elements: string[];
   data: Record<string, unknown> | null;
-  /** Some of what the extractor found was not pointed at: past the ceiling, or not in the document. */
+  /** Some of what the extractor found could not be named: past the ceiling, or not in the document. */
   truncated: boolean;
 }
 

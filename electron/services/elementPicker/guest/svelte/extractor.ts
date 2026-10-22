@@ -42,7 +42,7 @@ import { structureOf, type SvelteStructure } from "./structure.js";
 
 /** Restated from `COMPONENT_LIMITS`: a value import would bundle zod into the page. */
 const MAX_COMPONENTS = 64;
-/** The most roots one component selection holds, matching the bridge's point ceiling. */
+/** Restated from `COMPONENT_LIMITS.roots`: the most roots one component selection holds. */
 const MAX_ROOTS = 32;
 /** Distinct locations the same-location scan caches before it starts over. */
 const MAX_LOC_ENTRIES = 1_000;

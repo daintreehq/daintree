@@ -9,9 +9,10 @@
  * Requests are answered synchronously, inside the bootstrap's own
  * `dispatchEvent`, so there is no correlation window for a reply to arrive
  * late into a different request. The reply is still checked by id and by size
- * on the other side: page code shares this world and can send its own. The
- * same holds for a locate, whose answer is elements: each is pointed at with
- * an event dispatched on it, the only way a node crosses between worlds.
+ * on the other side: page code shares this world and can send its own. A
+ * reply that names elements — a component's roots, a pick's element, what a
+ * locate found — names each by a token and dispatches an `element` event on
+ * it, the only way a node crosses between worlds.
  */
 
 import {
@@ -21,7 +22,6 @@ import {
   MAX_ELEMENT_REFS,
   MAX_LOCATED_REPLY_CHARS,
   MAX_LOCATE_REQUEST_CHARS,
-  MAX_POINTED_ELEMENTS,
   channelEvent,
   elementRefToken,
   type ElementRefMessage,
@@ -35,9 +35,10 @@ import {
 import type { ExtractorContribution } from "./types.js";
 
 /**
- * How an extractor names an element in `rootElementIds`: element ids are the
- * bootstrap's, minted in a world this one cannot see, so the reply carries a
- * token and the element follows it across as an event's target.
+ * How a reply names an element, in `rootElementIds` or anywhere else an
+ * answer refers to one: element ids are the bootstrap's, minted in a world
+ * this one cannot see, so the reply carries a token and the element follows
+ * it across as an event's target.
  */
 export interface ElementRefs {
   /**
@@ -63,12 +64,17 @@ export interface ElementPickerExtractor {
   /**
    * A user's pick of `hit`: the element it stands for, described. Only for a
    * framework that selects something other than the node the pointer landed
-   * on; without it a pick is `extract(hit, "selection")`.
+   * on; without it a pick is `extract(hit, "selection", refs)`. The registry
+   * names `target` from the same `refs`.
    */
-  pick?(hit: Element): { target: Element; data: ExtractorContribution | null } | null;
+  pick?(
+    hit: Element,
+    refs: ElementRefs
+  ): { target: Element; data: ExtractorContribution | null } | null;
   /**
    * Elements found by a query in this framework's own terms, from `anchor` or
-   * from the whole document. Synchronous and bounded like `extract`.
+   * from the whole document. Synchronous and bounded like `extract`; the
+   * registry names what it returns.
    */
   locate?(
     query: unknown,
@@ -193,23 +199,30 @@ function createRegistry(channel: string): Registry {
   const extractedEvent = channelEvent(channel, "extracted");
   const elementEvent = channelEvent(channel, "element");
   const disposeEvent = channelEvent(channel, "dispose");
-  const pointEvent = channelEvent(channel, "point");
   const locateEvent = channelEvent(channel, "locate");
   const locatedEvent = channelEvent(channel, "located");
   const noticeEvent = channelEvent(channel, "notice");
   let disposed = false;
 
   /**
+   * Send each element a reply names across, just before the reply itself.
    * Composed, so a node inside an open shadow root still reaches the
    * bootstrap's document listener; not bubbling, because that listener
    * captures and nothing else in the page needs to see it.
    */
-  function point(element: Element, id: number): void {
-    try {
-      element.dispatchEvent(new CustomEvent(pointEvent, { detail: String(id), composed: true }));
-    } catch {
-      // A node that refuses the event is not one the bootstrap can be shown.
-    }
+  function sendElements(nodes: readonly Element[], id: number): void {
+    nodes.forEach((node, ref) => {
+      const message: ElementRefMessage = { id, ref };
+      try {
+        // Again: a listener on an earlier one can move this node behind a closed root.
+        if (!reachesDocument(node)) return;
+        node.dispatchEvent(
+          new CustomEvent(elementEvent, { detail: JSON.stringify(message), composed: true })
+        );
+      } catch {
+        // That element goes unnamed; the bootstrap counts it as lost.
+      }
+    });
   }
 
   function pickOf(
@@ -220,7 +233,7 @@ function createRegistry(channel: string): Registry {
     if (typeof extractor.pick !== "function") {
       return { target: hit, data: extractor.extract(hit, "selection", refs) };
     }
-    const picked = extractor.pick(hit);
+    const picked = extractor.pick(hit, refs);
     return picked ?? { target: hit, data: null };
   }
 
@@ -233,17 +246,20 @@ function createRegistry(channel: string): Registry {
     // One table for the whole reply: the bootstrap adopts one contribution,
     // and whichever it is, its tokens are this request's.
     const refs = createRefTable();
-    // The bootstrap takes the first contribution whole, so only that one's
-    // framework may say the pick stands for another element.
-    let pointed: Element | null = null;
     for (const [framework, extractor] of extractors) {
       let data: ExtractorContribution | null = null;
-      let subject: Element = target;
+      // Each contribution names its own pick: the bootstrap reads the one it adopts.
+      let token: string | null = null;
       try {
         if (request.pick === true) {
           const picked = pickOf(extractor, target, refs);
-          data = picked.data;
-          subject = picked.target;
+          if (picked.target !== target) token = refs.ref(picked.target);
+          // An element the bootstrap cannot be shown is not one it can select,
+          // so the description is of the hit after all, or of nothing if that throws.
+          data =
+            picked.target === target || token !== null
+              ? picked.data
+              : extractor.extract(target, "selection", refs);
         } else {
           data = extractor.extract(target, request.phase, refs);
         }
@@ -251,10 +267,10 @@ function createRegistry(channel: string): Registry {
         // One framework's reader failing must not cost the others their answer.
       }
       if (data === null || data === undefined) continue;
-      if (reply.contributions.length === 0 && subject !== target) pointed = subject;
-      reply.contributions.push({ framework, data });
+      reply.contributions.push(
+        token === null ? { framework, data } : { framework, data, target: token }
+      );
     }
-    if (pointed !== null && pointed.isConnected) point(pointed, request.id);
     let text: string;
     let named = refs.nodes;
     try {
@@ -268,18 +284,7 @@ function createRegistry(channel: string): Registry {
       text = JSON.stringify({ id: request.id, contributions: [] });
       named = [];
     }
-    named.forEach((node, ref) => {
-      const message: ElementRefMessage = { id: request.id, ref };
-      try {
-        // Again: a listener on an earlier one can move this node behind a closed root.
-        if (!reachesDocument(node)) return;
-        node.dispatchEvent(
-          new CustomEvent(elementEvent, { detail: JSON.stringify(message), composed: true })
-        );
-      } catch {
-        // That root goes unnamed; the bootstrap marks its record incomplete.
-      }
-    });
+    sendElements(named, request.id);
     document.dispatchEvent(new CustomEvent(extractedEvent, { detail: text }));
   };
 
@@ -297,21 +302,18 @@ function createRegistry(channel: string): Registry {
       return;
     }
     if (found === null || !Array.isArray(found.elements)) return;
-    const seen = new Set<Element>();
+    const refs = createRefTable();
+    const elements: string[] = [];
+    // An element that cannot be named makes whatever list it was part of incomplete.
+    let truncated = false;
     for (const element of found.elements) {
-      if (seen.size >= MAX_POINTED_ELEMENTS) break;
-      if (!(element instanceof Element) || !element.isConnected || seen.has(element)) continue;
-      seen.add(element);
-      point(element, request.id);
+      const token = refs.ref(element);
+      if (token === null) truncated = true;
+      else if (!elements.includes(token)) elements.push(token);
     }
-    // An element the bootstrap was not shown makes whatever list it was part of incomplete.
-    const reply: LocatedReply = {
-      id: request.id,
-      data: found.data ?? null,
-      truncated: seen.size < new Set(found.elements).size,
-    };
-    const bare = (): string =>
-      JSON.stringify({ id: request.id, data: null, truncated: reply.truncated });
+    const reply: LocatedReply = { id: request.id, elements, data: found.data ?? null, truncated };
+    // The tokens always fit the ceiling; only the extractor's data can overflow it.
+    const bare = (): string => JSON.stringify({ ...reply, data: null });
     let text: string;
     try {
       text = JSON.stringify(reply);
@@ -319,6 +321,7 @@ function createRegistry(channel: string): Registry {
       text = bare();
     }
     if (text.length > MAX_LOCATED_REPLY_CHARS) text = bare();
+    sendElements(refs.nodes, request.id);
     document.dispatchEvent(new CustomEvent(locatedEvent, { detail: text }));
   };
 
