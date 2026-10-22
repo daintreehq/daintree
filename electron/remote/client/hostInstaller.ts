@@ -742,7 +742,7 @@ export async function runHostInstall(
     const outcome = { result: before.result, parsed: before.parsed };
     return applyStagedUpdate(payload, payload.applyStaged.version, deps, outcome, signal, report);
   }
-  const probe = before.result;
+  let probe = before.result;
   const plan = planInstall({
     client: deps.client,
     probe,
@@ -845,8 +845,9 @@ export async function runHostInstall(
   const platform = probe.platform!;
   let parsed = before.parsed;
   // Staging and waiting can take a while: the host may have downloaded an
-  // update meanwhile, which stopping it would install over this one, or
-  // someone may have opened or closed its windows. Looked at again here.
+  // update meanwhile, which stopping it would install over this one, moved
+  // past this build on its own, or had its windows opened or closed. Looked
+  // at again here, and planned again from what is there now.
   if (parsed.appRunning || parsed.hostModeListening) {
     const fresh = await deps.probe(signal);
     if (signal.aborted || !fresh.parsed) {
@@ -856,10 +857,29 @@ export async function runHostInstall(
     }
     if (fresh.result.stagedUpdate?.installsOnQuit) {
       await dropStaged();
-      throw stagedRefusal(
+      throw refusal(
         `The host has just downloaded Daintree ${fresh.result.stagedUpdate.version}, which installs when Daintree there restarts. Nothing was changed: install that update first.`
       );
     }
+    const now = planInstall({
+      client: deps.client,
+      probe: fresh.result,
+      linuxPackage: payload.linuxPackage,
+      appImageConflict: fresh.parsed.appImageConflict,
+      allowDowngrade: payload.allowDowngrade === true,
+    });
+    if (now.kind === "up-to-date" || now.kind === "host-newer") {
+      await dropStaged();
+      return { status: now.kind, probe: fresh.result };
+    }
+    if (now.kind !== "install" || now.packaging !== plan.packaging) {
+      await dropStaged();
+      throw refusal(
+        now.reason ??
+          "The host changed while the update was being prepared. Nothing was changed: check again."
+      );
+    }
+    probe = fresh.result;
     parsed = fresh.parsed;
   }
   const hasUnit = parsed.advice.hostModeUnit === true;
@@ -1041,7 +1061,7 @@ export async function runHostInstall(
   return { status: "installed", probe: after.result, reconnected };
 }
 
-function stagedRefusal(userMessage: string): AppError {
+function refusal(userMessage: string): AppError {
   return new AppError({ code: "UNSUPPORTED", message: userMessage, userMessage });
 }
 
@@ -1085,11 +1105,11 @@ async function applyStagedUpdate(
 ): Promise<InstallHostResult> {
   const hostId = payload.hostId ?? null;
   const platform = before.result.platform!;
-  const refusal = stagedProblem(before.result, version);
-  if (refusal) throw stagedRefusal(refusal);
+  const problem = stagedProblem(before.result, version);
+  if (problem) throw refusal(problem);
   const hasUnitBefore = before.parsed.advice.hostModeUnit === true;
   if (startScript(platform, before.parsed, hasUnitBefore, macAppPath(before.result)) === null) {
-    throw stagedRefusal(NO_SERVICE_TO_RESTART);
+    throw refusal(NO_SERVICE_TO_RESTART);
   }
 
   const whileWorking = payload.whileWorking ?? "refuse";
@@ -1120,11 +1140,11 @@ async function applyStagedUpdate(
     throw failed("The host stopped answering right before the restart. Nothing was changed");
   }
   const changed = stagedProblem(current.result, version);
-  if (changed) throw stagedRefusal(changed);
+  if (changed) throw refusal(changed);
   const parsed = current.parsed;
   const hasUnit = parsed.advice.hostModeUnit === true;
   const start = startScript(platform, parsed, hasUnit, macAppPath(current.result));
-  if (start === null) throw stagedRefusal(NO_SERVICE_TO_RESTART);
+  if (start === null) throw refusal(NO_SERVICE_TO_RESTART);
 
   // From the stop on, every step runs to completion whatever the cancel does,
   // and any failure starts Daintree there again, so the host isn't left stopped.
@@ -1166,6 +1186,8 @@ async function applyStagedUpdate(
     );
 
   let after: ProbeOutcome;
+  /** What the wait after a start last saw, so recovery doesn't wait it out again. */
+  let lastSeen: ProbeOutcome | null = null;
   try {
     report({ stage: "stopping", fraction: 0.3, message: "Stopping Daintree on the host" });
     const stopped = await exec(
@@ -1196,6 +1218,7 @@ async function applyStagedUpdate(
       throw failed("Couldn't start Daintree on the host", failureDetail(result, "ssh failed"));
     }
     after = await waitForNewListener();
+    lastSeen = after;
     if (!after.parsed || !after.result.hostModeListening) {
       throw failed("Host mode didn't come back on the host after restarting");
     }
@@ -1214,10 +1237,16 @@ async function applyStagedUpdate(
     // Started once more if it isn't, whatever went wrong; never put back on an older build.
     let back = false;
     try {
-      if (!started) await runStart();
-      // Any process listening will do: one that never quit counts as running.
-      if (started)
-        back = (await probeUntil((seen) => seen.result.hostModeListening)).result.hostModeListening;
+      if (started && lastSeen) {
+        back = lastSeen.result.hostModeListening;
+      } else {
+        if (!started) await runStart();
+        // Any process listening will do: one that never quit counts as running.
+        if (started) {
+          back = (await probeUntil((seen) => seen.result.hostModeListening)).result
+            .hostModeListening;
+        }
+      }
     } catch {
       // Reported below as not started.
     }

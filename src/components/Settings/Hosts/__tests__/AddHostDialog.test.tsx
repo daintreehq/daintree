@@ -703,6 +703,22 @@ describe("AddHostDialog", () => {
       expect(await screen.findByTestId("add-host-downgrade")).toBeTruthy();
     });
 
+    it("offers to check again when a plan can't go ahead for something at the host", async () => {
+      remoteHosts.probe!.mockResolvedValue(probeResult({ matchesClient: false }));
+      remoteHosts.planInstall!.mockResolvedValueOnce({
+        ...UPDATE_PLAN,
+        kind: "unsupported",
+        delivery: null,
+        reason:
+          "The host has downloaded Daintree 1.4.0, which installs when Daintree there restarts. Install that update first.",
+      });
+      render(<AddHostDialog isOpen onClose={() => {}} existing={EXISTING} />);
+      fireEvent.click(screen.getByRole("button", { name: "Check host" }));
+      fireEvent.click(await screen.findByRole("button", { name: "Plan update" }));
+      fireEvent.click(await screen.findByRole("button", { name: "Check again" }));
+      await waitFor(() => expect(remoteHosts.probe).toHaveBeenCalledTimes(2));
+    });
+
     it("waits while the host is still preparing its update", async () => {
       remoteHosts.probe!.mockResolvedValue(
         probeResult({

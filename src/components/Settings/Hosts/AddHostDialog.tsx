@@ -1148,6 +1148,9 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
       primary = { label: "Check again", onClick: () => check(), disabled: busy, loading: busy };
     } else if (plan?.kind === "up-to-date") {
       primary = { label: "Continue", onClick: () => toEnable(probe), disabled: busy };
+    } else if (plan?.kind === "unsupported") {
+      // What stopped it (a download waiting there, AppImages to sort out) is fixed at the host.
+      primary = { label: "Check again", onClick: () => check(), disabled: busy, loading: busy };
     } else if (plan?.kind === "host-newer") {
       primary = {
         label: "Update this machine",
@@ -1156,6 +1159,8 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
       };
       leading = { label: "Check again", onClick: () => check(), disabled: busy };
     } else if (plan?.kind === "install" && installResult?.status !== "needs-confirmation") {
+      // An attempt that failed may have failed on what changed at the host.
+      if (error) leading = { label: "Check again", onClick: () => check(), disabled: busy };
       primary = plan.downgrade
         ? {
             label: `Downgrade ${hostLabel}…`,

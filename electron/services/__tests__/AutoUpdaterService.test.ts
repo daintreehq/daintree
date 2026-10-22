@@ -1693,6 +1693,21 @@ describe("AutoUpdaterService", () => {
       expect(getStagedUpdate()).toMatchObject({ version: "2.0.1", ready: true });
     });
 
+    it("lets a handoff that failed stop counting, so a later one can still land", () => {
+      const native = (event: string) =>
+        (
+          (nativeUpdaterMock.on as Mock).mock.calls.find(
+            (args) => args[0] === event
+          )![1] as () => void
+        )();
+      downloadedHandler({ version: "2.0.0" });
+      native("error");
+      expect(getStagedUpdate()).toMatchObject({ ready: false });
+      downloadedHandler({ version: "2.0.0" });
+      native("update-downloaded");
+      expect(getStagedUpdate()).toMatchObject({ version: "2.0.0", ready: true });
+    });
+
     it("keeps a Mac's staged update across a channel change, which can't take it back", async () => {
       downloadedHandler({ version: "2.0.0" });
       await setChannelHandler(null, "nightly");

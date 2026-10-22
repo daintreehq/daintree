@@ -216,6 +216,7 @@ class AutoUpdaterService {
   private errorHandler: ((err: Error) => void) | null = null;
   private progressHandler: ((progress: ProgressInfo) => void) | null = null;
   private nativeDownloadedHandler: (() => void) | null = null;
+  private nativeErrorHandler: (() => void) | null = null;
   // Downloads handed to macOS's own updater that it hasn't said it has yet. A
   // staged update is ready only once none is outstanding, so an earlier
   // handoff finishing late never vouches for a later download.
@@ -1191,6 +1192,12 @@ class AutoUpdaterService {
           }
         };
         nativeAutoUpdater.on("update-downloaded", this.nativeDownloadedHandler);
+        // A handoff that failed will never say it landed: it stops counting,
+        // and the staged update waits for one that does.
+        this.nativeErrorHandler = () => {
+          this.nativeHandoffsPending = 0;
+        };
+        nativeAutoUpdater.on("error", this.nativeErrorHandler);
       }
 
       // AppImageUpdater installs a versioned image under the new version's
@@ -1372,6 +1379,10 @@ class AutoUpdaterService {
     if (this.nativeDownloadedHandler) {
       nativeAutoUpdater.off("update-downloaded", this.nativeDownloadedHandler);
       this.nativeDownloadedHandler = null;
+    }
+    if (this.nativeErrorHandler) {
+      nativeAutoUpdater.off("error", this.nativeErrorHandler);
+      this.nativeErrorHandler = null;
     }
     this.nativeHandoffsPending = 0;
     setStagedUpdate(null);

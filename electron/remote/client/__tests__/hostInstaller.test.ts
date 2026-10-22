@@ -68,6 +68,7 @@ function macProbe(opts: {
   running?: boolean;
   record?: RecordFields;
   hostPid?: number;
+  appPath?: string;
 }): string {
   const record = opts.record
     ? JSON.stringify({
@@ -85,7 +86,7 @@ function macProbe(opts: {
     "@@dt:uname Darwin arm64",
     ...(opts.build
       ? [
-          "@@dt:install app-bundle /Applications/Daintree.app",
+          `@@dt:install app-bundle ${opts.appPath ?? "/Applications/Daintree.app"}`,
           `@@dt:version ${JSON.parse(opts.build).version}`,
           `@@dt:buildinfo ${opts.build}`,
         ]
@@ -359,6 +360,8 @@ describe("runHostInstall", () => {
       shell,
       probes: [
         macProbe({ build: OLD_BUILD, hostMode: true }),
+        // Looked at again right before the stop.
+        macProbe({ build: OLD_BUILD, hostMode: true }),
         macProbe({ build: NEW_BUILD, hostMode: true }),
       ],
       // The first answer is what the user is shown before staging.
@@ -563,7 +566,7 @@ describe("runHostInstall", () => {
     ].join("\n");
     // The install leaves the build marker beside the AppImage, which is how it is read back.
     const after = before.replace("@@dt:unit yes", `@@dt:appimageinfo ${NEW_BUILD}\n@@dt:unit yes`);
-    const deps = makeDeps({ shell, probes: [before, after], working: [0] });
+    const deps = makeDeps({ shell, probes: [before, before, after], working: [0] });
     const result = await install(deps, { hostId: "box" });
     expect(result.status).toBe("installed");
     const swap = shell.scripts.find((s) => s.includes("mv -f"))!;
@@ -650,6 +653,8 @@ describe("runHostInstall", () => {
       shell: fakeShell(),
       probes: [
         macProbe({ build: OLD_BUILD, hostMode: true }),
+        // Looked at again right before the stop.
+        macProbe({ build: OLD_BUILD, hostMode: true }),
         macProbe({ build: NEW_BUILD, hostMode: true }),
       ],
       working: [waiting, waiting, idle],
@@ -666,6 +671,8 @@ describe("runHostInstall", () => {
       shell: fakeShell(),
       probes: [
         macProbe({ build: OLD_BUILD, hostMode: true }),
+        // Looked at again right before the stop.
+        macProbe({ build: OLD_BUILD, hostMode: true }),
         macProbe({ build: NEW_BUILD, hostMode: true }),
       ],
       working: [1, 1, null, 0],
@@ -678,6 +685,8 @@ describe("runHostInstall", () => {
     const deps = makeDeps({
       shell: fakeShell(),
       probes: [
+        macProbe({ build: OLD_BUILD, hostMode: true }),
+        // Looked at again right before the stop.
         macProbe({ build: OLD_BUILD, hostMode: true }),
         macProbe({ build: NEW_BUILD, hostMode: true }),
       ],
@@ -927,6 +936,8 @@ describe("runHostInstall", () => {
     const deps = makeDeps({
       shell,
       probes: [
+        macProbe({ build: OLD_BUILD, hostMode: true }),
+        // Looked at again right before the stop.
         macProbe({ build: OLD_BUILD, hostMode: true }),
         macProbe({ build: NEW_BUILD, hostMode: true }),
       ],
@@ -1278,6 +1289,24 @@ describe("runHostInstall: a host on a later release", () => {
     expect(shell.scripts.at(-1)).toBe("rm -rf '/tmp/daintree-stage.abc123'");
   });
 
+  it("leaves a host that moved past this build while it was staged alone", async () => {
+    const shell = fakeShell();
+    const deps = makeDeps({
+      shell,
+      probes: [
+        macProbe({ build: OLD_BUILD, hostMode: true }),
+        macProbe({ build: NEWER_BUILD, hostMode: true }),
+      ],
+    });
+    await expect(
+      install(deps, { hostId: "studio", whileWorking: "proceed" })
+    ).resolves.toMatchObject({
+      status: "host-newer",
+    });
+    expect(shell.scripts.some((s) => s.includes("@@dt:stopped"))).toBe(false);
+    expect(shell.scripts.at(-1)).toBe("rm -rf '/tmp/daintree-stage.abc123'");
+  });
+
   it("won't swap in a build while the host holds an update that installs when it stops", async () => {
     const shell = fakeShell();
     const deps = makeDeps({
@@ -1325,6 +1354,41 @@ describe("runHostInstall applying the host's own downloaded update", () => {
     );
     expect(stopAt).toBeGreaterThanOrEqual(0);
     expect(startAt).toBeGreaterThan(stopAt);
+  });
+
+  it("stops only the process the host recorded and starts the app where the probe found it", async () => {
+    const shell = fakeShell();
+    const appPath = "/Users/me/Applications/Daintree.app";
+    const listening = macProbe({
+      build: OLD_BUILD,
+      hostMode: true,
+      appPath,
+      record: { build: OLD_RUNNING, stagedUpdate: STAGED },
+    });
+    const deps = makeDeps({
+      shell,
+      probes: [
+        listening,
+        listening,
+        macProbe({ build: NEW_BUILD, hostMode: false, appPath }),
+        macProbe({
+          build: NEW_BUILD,
+          hostMode: true,
+          hostPid: 5151,
+          appPath,
+          record: { build: NEW_RUNNING },
+        }),
+      ],
+    });
+    await expect(
+      install(deps, { hostId: "studio", applyStaged: { version: "1.4.0" } })
+    ).resolves.toMatchObject({ status: "staged-applied" });
+    const stop = shell.scripts.find((s) => s.includes("@@dt:stopped"))!;
+    expect(stop).toContain("hp=4242");
+    expect(stop).toContain(`"$hn" = 'Wed Oct 22 10:00:00 2026'`);
+    expect(stop).not.toContain("pkill");
+    expect(shell.scripts).toContain(`open -g -a '${appPath}' --args --host-mode`);
+    expect(shell.scripts.some((s) => s.includes("'/Applications/Daintree.app'"))).toBe(false);
   });
 
   it("starts the Mac only once the installed app reads as the new version", async () => {
