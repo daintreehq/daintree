@@ -25,6 +25,8 @@ import {
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { usePanelStore } from "@/store/panelStore";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
+import type { AgentSettings } from "@shared/types/agentSettings";
+import type { PtyPanelData } from "@shared/types/panel";
 
 function renderBadge(terminalId: string) {
   return render(
@@ -92,32 +94,29 @@ describe("TerminalRateLimitBadge (#12797)", () => {
     const observedAt = 1_700_000_000_000;
     clock.now = observedAt + 60_000;
     useRateLimitObservationStore.setState({ observedAtByTerminalId: { t1: observedAt } });
-    useAgentSettingsStore.setState({
-      settings: {
-        agents: {
-          codex: {
-            customPresets: [
-              { id: "personal", name: "Personal" },
-              { id: "work", name: "Work" },
-            ],
-          },
+    const settings: AgentSettings = {
+      agents: {
+        codex: {
+          customPresets: [
+            { id: "personal", name: "Personal" },
+            { id: "work", name: "Work" },
+          ],
         },
       },
-    } as never);
-    usePanelStore.setState({
-      panelsById: {
-        t1: {
-          id: "t1",
-          kind: "terminal",
-          title: "Codex [Personal]",
-          cwd: "/repo",
-          location: "grid",
-          launchAgentId: "codex",
-          agentPresetId: "personal",
-        },
-      } as never,
-      panelIds: ["t1"],
-    });
+    };
+    useAgentSettingsStore.setState({ settings });
+    const pane: PtyPanelData = {
+      id: "t1",
+      kind: "terminal",
+      title: "Codex [Personal]",
+      cwd: "/repo",
+      cols: 80,
+      rows: 24,
+      location: "grid",
+      launchAgentId: "codex",
+      agentPresetId: "personal",
+    };
+    usePanelStore.setState({ panelsById: { t1: pane }, panelIds: ["t1"] });
 
     renderBadge("t1");
 

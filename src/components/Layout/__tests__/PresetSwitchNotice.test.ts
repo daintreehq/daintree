@@ -1,22 +1,28 @@
 import { describe, expect, it } from "vitest";
-import type { PanelInstance } from "@shared/types/panel";
+import type { PanelInstance, PtyPanelData } from "@shared/types/panel";
 import { isPaneLeftOnPreset } from "../PresetSwitchNotice";
 
 const notice = { worktreeId: "wt-1", fromPresetId: "personal" };
 
-const pane = (overrides: Record<string, unknown> = {}): PanelInstance =>
-  ({
+type PaneOverrides = Partial<Omit<PtyPanelData, "cols" | "rows">>;
+
+const pane = (overrides: PaneOverrides = {}): PanelInstance => {
+  const panel: PtyPanelData = {
     id: "p1",
     kind: "terminal",
     title: "Codex [Personal]",
     cwd: "/repo",
+    cols: 80,
+    rows: 24,
     location: "grid",
     launchAgentId: "codex",
     worktreeId: "wt-1",
     agentPresetId: "personal",
     agentState: "waiting",
     ...overrides,
-  }) as PanelInstance;
+  };
+  return panel;
+};
 
 describe("isPaneLeftOnPreset (#13746)", () => {
   it("counts a live pane of the agent still on the preset the pick moved off", () => {
@@ -40,7 +46,7 @@ describe("isPaneLeftOnPreset (#13746)", () => {
     ["an exited agent", { agentState: "exited" }],
     ["a pane in the trash", { location: "trash" }],
     ["a pane held for recovery", { restoreRecovery: { reason: "session-unresolved" } }],
-  ])("leaves out %s", (_label, overrides) => {
+  ] satisfies [string, PaneOverrides][])("leaves out %s", (_label, overrides) => {
     expect(isPaneLeftOnPreset(pane(overrides), "codex", notice)).toBe(false);
   });
 });

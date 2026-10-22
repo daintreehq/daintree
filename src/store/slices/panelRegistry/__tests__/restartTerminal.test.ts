@@ -1933,7 +1933,7 @@ describe("restartTerminalOnPreset", () => {
     );
     buildAgentLaunchFlagsMock.mockReturnValue([]);
     const { agentSettingsClient } = await import("@/clients");
-    (agentSettingsClient.get as ReturnType<typeof vi.fn>).mockResolvedValue({});
+    vi.mocked(agentSettingsClient.get).mockResolvedValue({ agents: {} });
   });
 
   function seed(overrides: Partial<PtyPanelData> = {}): void {

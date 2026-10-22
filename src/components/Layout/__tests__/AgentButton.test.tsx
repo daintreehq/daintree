@@ -653,9 +653,7 @@ describe("AgentButton preset UX", () => {
       mockPanelIds = ["p1", "p2", "p3"];
       mockPanelIdsByWorktreeId = { "wt-A": ["p1", "p2", "p3"] };
 
-      const { getAllByTestId } = render(
-        <AgentButton type="claude" availability={"ready" as unknown as CliAvailability[string]} />
-      );
+      const { getAllByTestId } = render(<AgentButton type="claude" availability="ready" />);
       await act(async () => {
         clickGutter(rowByText(getAllByTestId, "Beta"));
       });
@@ -692,9 +690,7 @@ describe("AgentButton preset UX", () => {
         () => new Promise<void>((resolve) => (resolveSave = resolve))
       );
 
-      const { getAllByTestId } = render(
-        <AgentButton type="claude" availability={"ready" as unknown as CliAvailability[string]} />
-      );
+      const { getAllByTestId } = render(<AgentButton type="claude" availability="ready" />);
       clickGutter(rowByText(getAllByTestId, "Beta"));
       act(() => dropdownOnOpenChange?.(false));
       await act(async () => resolveSave());
@@ -710,9 +706,7 @@ describe("AgentButton preset UX", () => {
         { id: "user-beta", name: "Beta" },
       ];
 
-      const { getAllByTestId } = render(
-        <AgentButton type="claude" availability={"ready" as unknown as CliAvailability[string]} />
-      );
+      const { getAllByTestId } = render(<AgentButton type="claude" availability="ready" />);
       await act(async () => {
         clickGutter(rowByText(getAllByTestId, "Beta"));
       });
