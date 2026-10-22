@@ -56,6 +56,16 @@ describe("resolveRecipeAgentStep (#13797)", () => {
     expect(step.ok).toBe(false);
   });
 
+  it("leaves {{plugin.<name>}} as typed in a user's own recipe, and empties it in a plugin's", () => {
+    const terminal: RecipeTerminal = { type: "claude", initialPrompt: "Explain {{plugin.foo}}" };
+    const user = resolveRecipeAgentStep(userRecipe(terminal), terminal, "claude", {
+      pluginVariables: { foo: "smuggled" },
+    });
+    expect(user.ok && user.initialPrompt).toBe("Explain {{plugin.foo}}");
+    const plugin = resolveRecipeAgentStep(pluginRecipe(terminal), terminal, "claude", {});
+    expect(plugin.ok && plugin.initialPrompt).toBe("Explain");
+  });
+
   it("leaves a user's own dash-leading prompt as it always was", () => {
     const terminal: RecipeTerminal = { type: "claude", initialPrompt: "--help" };
     expect(resolveRecipeAgentStep(userRecipe(terminal), terminal, "claude", {}).ok).toBe(true);

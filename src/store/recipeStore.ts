@@ -49,6 +49,7 @@ import { resolveRecipeAgentStep } from "@/utils/recipeAgentStep";
 import { getPanelKindConfig, panelKindIsProjectScoped } from "@shared/config/panelKindRegistry";
 import { pluginAgentToolsProblem, recipeRunNeedsAgentTools } from "@/utils/pluginRecipeAgentTools";
 import {
+  importedRecipeUsesPluginOnlyFeatures,
   pluginOnlyCopyRefusal,
   recipeTerminalsUsePluginOnlyFeatures,
   recipeUsesPluginOnlyFeatures,
@@ -647,11 +648,11 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
     if (terminals.length > MAX_TERMINALS_PER_RECIPE) {
       throw new Error(`Recipe cannot exceed ${MAX_TERMINALS_PER_RECIPE} terminals`);
     }
-    // A user-owned recipe has no plugin to own a panel step or fill a plugin
-    // variable (#13797); a copy carrying one would launch less than it shows.
+    // A user-owned recipe has no plugin to own a panel step or a system
+    // prompt (#13797); a copy carrying one would launch less than it shows.
     if (recipeTerminalsUsePluginOnlyFeatures(terminals)) {
       throw new Error(
-        "This recipe opens a plugin's panels or uses its variables, which only work in the plugin's own recipe."
+        "This recipe opens a plugin's panels or sets a system prompt, which only work in the plugin's own recipe."
       );
     }
 
@@ -1691,6 +1692,13 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
     }
     if (recipe.terminals.length > MAX_TERMINALS_PER_RECIPE) {
       throw new Error(`Recipe cannot exceed ${MAX_TERMINALS_PER_RECIPE} terminals`);
+    }
+    // An exported plugin recipe would import as a copy that quietly does less:
+    // the sanitizer below drops its panel steps and system prompts (#13797).
+    if (importedRecipeUsesPluginOnlyFeatures(recipe)) {
+      throw new Error(
+        `"${String(recipe.name)}" opens a plugin's panels, uses its variables or needs its agent tools, which only work in the plugin's own recipe, so it can't be imported.`
+      );
     }
 
     // Content-validate at the import trust boundary. Shared with the in-repo

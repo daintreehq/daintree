@@ -11,7 +11,11 @@ import { useProjectSettingsStore } from "@/store/projectSettingsStore";
 import { usePanelStore } from "@/store/panelStore";
 import { actionService } from "@/services/ActionService";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
-import { detectUnresolvedVariables, type RecipeContext } from "@/utils/recipeVariables";
+import {
+  NO_PLUGIN_VARIABLE_VALUES,
+  detectUnresolvedVariables,
+  type RecipeContext,
+} from "@/utils/recipeVariables";
 import { getAgentConfig } from "@/config/agents";
 import { recipePanelStepName } from "@/components/Terminal/utils/recipeUtils";
 import { isInRepoRecipeId } from "@shared/utils/recipeFilename";
@@ -105,7 +109,11 @@ function getTerminalDisplayName(terminal: RecipeTerminal, index: number): string
 // terminal.devCommand, and terminal.args are forwarded raw, so flagging
 // {{var}} in them would mislead the user into thinking the substitution was
 // expected to happen.
-function collectUnresolvedVars(recipe: TerminalRecipe, context: RecipeContext): string[] {
+function collectUnresolvedVars(recipe: TerminalRecipe, baseContext: RecipeContext): string[] {
+  // A plugin recipe started from here has no values for its own variables.
+  const context: RecipeContext = isPluginRecipe(recipe)
+    ? { ...baseContext, pluginVariables: NO_PLUGIN_VARIABLE_VALUES }
+    : baseContext;
   const seen = new Set<string>();
   for (const terminal of recipe.terminals) {
     for (const text of [terminal.initialPrompt, terminal.systemPrompt]) {

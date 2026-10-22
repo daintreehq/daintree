@@ -199,8 +199,10 @@ describe("plugin recipe variables (#13797)", () => {
   });
 
   it("leaves a declared variable with no value empty, like a host variable", () => {
-    expect(replaceRecipeVariables("Record: {{plugin.record_id}}.", {})).toBe("Record: .");
-    expect(detectUnresolvedVariables("Record: {{plugin.record_id}}", {})).toEqual([
+    expect(replaceRecipeVariables("Record: {{plugin.record_id}}.", withValues({}))).toBe(
+      "Record: ."
+    );
+    expect(detectUnresolvedVariables("Record: {{plugin.record_id}}", withValues({}))).toEqual([
       "plugin.record_id",
     ]);
     expect(
@@ -208,16 +210,24 @@ describe("plugin recipe variables (#13797)", () => {
     ).toEqual([]);
   });
 
+  it("keeps {{plugin.<name>}} as typed text outside a plugin's own recipe", () => {
+    const user: RecipeContext = { branchName: "feature/x" };
+    expect(replaceRecipeVariables("Explain {{plugin.foo}} on {{branch_name}}", user)).toBe(
+      "Explain {{plugin.foo}} on feature/x"
+    );
+    expect(detectUnresolvedVariables("Explain {{plugin.foo}}", user)).toEqual([]);
+    expect(segmentRecipePrompt("Explain {{plugin.foo}}", user)).toEqual([
+      { kind: "text", text: "Explain " },
+      { kind: "unknown", text: "{{plugin.foo}}", name: "plugin.foo" },
+    ]);
+  });
+
   it("never resolves a name through the prototype chain", () => {
     expect(replaceRecipeVariables("[{{plugin.constructor}}]", withValues({}))).toBe("[]");
     expect(replaceRecipeVariables("[{{plugin.toString}}]", withValues({}))).toBe("[]");
   });
 
-  it("previews plugin variables as variables, values or missing", () => {
-    expect(segmentRecipePrompt("Open {{plugin.record_id}}", null)).toEqual([
-      { kind: "text", text: "Open " },
-      { kind: "variable", text: "{{plugin.record_id}}", name: "plugin.record_id" },
-    ]);
+  it("previews plugin variables as values or missing", () => {
     expect(
       segmentRecipePrompt("Open {{plugin.record_id}}", withValues({ record_id: "7" }))
     ).toEqual([

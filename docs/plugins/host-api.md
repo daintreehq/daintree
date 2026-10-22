@@ -1345,7 +1345,7 @@ if (result.status === "refused" && result.reason === "agent-tools-off") {
 }
 ```
 
-It needs no capability: the recipe is your own declared content, and every run is the user's decision. Only your own recipes are reachable. Another plugin's id, qualified or not, throws. So does a variable the recipe doesn't declare, a value that isn't a string, holds control characters, or is longer than 8,192 characters (32,768 across all of them). A declared variable you leave out is empty. Each prompt is resolved once, and the dialog shows the same text the launch uses. A first turn your values make start with `-` is refused, because the agent would read it as an option.
+It needs no capability: the recipe is your own declared content, and every run is the user's decision. Only your own recipes are reachable. Another plugin's id, qualified or not, throws. So does a recipe whose agent step sets `args` or `env`: a plugin never chooses how an agent runs, as with [`agent.launch`](./trust-model.md), although the user can still run that recipe from the recipe list. So does a variable the recipe doesn't declare, a value that isn't a string, holds control characters, or is longer than 8,192 characters (32,768 across all of them). A declared variable you leave out is empty. Each prompt is resolved once, and the dialog shows the same text the launch uses. A first turn your values make start with `-` is refused, because the agent would read it as an option.
 
 It resolves to one of:
 

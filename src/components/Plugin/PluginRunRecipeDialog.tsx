@@ -276,6 +276,9 @@ export function PluginRunRecipeDialog() {
   const answer = useCallback(
     (value: PluginRunRecipeResult | Promise<PluginRunRecipeResult>) => {
       if (promptId === null || handledPromptIdRef.current === promptId) return;
+      // `resolveCurrent` answers whichever prompt is in front. A timer or a
+      // check that outlived its prompt must not answer the next one.
+      if (usePluginPromptStore.getState().current?.promptId !== promptId) return;
       handledPromptIdRef.current = promptId;
       resolveCurrent(value);
     },

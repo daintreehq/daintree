@@ -187,6 +187,7 @@ import { SEND_TO_AGENT_MAX_ID_LENGTH, SEND_TO_AGENT_REFUSAL_REASONS } from "./se
 import { RUN_RECIPE_MAX_ID_LENGTH, toRunRecipeResult } from "./runRecipeLimits.js";
 import { getPluginRecipe, getPluginRecipeOwner } from "./PluginRecipeRegistry.js";
 import { validatePluginRecipeVariables } from "../../../shared/utils/pluginRecipeVariables.js";
+import { isAgentRecipeType } from "../../../shared/types/project.js";
 import {
   AGENT_CONTEXT_MAX_TEXT_LENGTH,
   AGENT_CONTEXT_MAX_TITLE_LENGTH,
@@ -531,6 +532,20 @@ function validateRunRecipeCall(
   ) {
     throw new Error(
       `Plugin "${pluginId}" runRecipe: this plugin contributes no recipe "${recipeId}"`
+    );
+  }
+  // A plugin never chooses an agent's launch flags or environment: its own
+  // `agent.launch` is refused for either (#13762), and a recipe it runs is held
+  // to the same rule. The system prompt is the one exception, and the user
+  // reads it in full before anything starts.
+  const configuredStep = recipe.terminals.findIndex(
+    (terminal) =>
+      isAgentRecipeType(terminal.type) &&
+      ((terminal.args?.trim() ?? "") !== "" || Object.keys(terminal.env ?? {}).length > 0)
+  );
+  if (configuredStep !== -1) {
+    throw new Error(
+      `Plugin "${pluginId}" runRecipe: recipe "${recipeId}" step ${configuredStep + 1} sets launch arguments or environment for its agent, which a plugin can't choose, as with agent.launch. The user can still run it from the recipe list.`
     );
   }
   if (options !== undefined && (options === null || typeof options !== "object")) {

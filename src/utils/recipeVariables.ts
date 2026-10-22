@@ -5,10 +5,17 @@ export interface RecipeContext {
   branchName?: string;
   /**
    * Values for a plugin recipe's `{{plugin.<name>}}` variables (#13797), as
-   * `host.runRecipe` supplied them. Read by own key only.
+   * `host.runRecipe` supplied them, read by own key only. Set — empty when a
+   * run supplies none — only for a plugin's own recipe; absent, `{{plugin.x}}`
+   * is ordinary text, as it always was in a user's recipe.
    */
   pluginVariables?: Readonly<Record<string, string>>;
 }
+
+/** The values for a plugin recipe run that supplied none: every variable empty. */
+export const NO_PLUGIN_VARIABLE_VALUES: Readonly<Record<string, string>> = Object.freeze(
+  Object.create(null) as Record<string, string>
+);
 
 const PLUGIN_VARIABLE_PREFIX = "plugin.";
 
@@ -34,6 +41,7 @@ export function replaceRecipeVariables(text: string, context: RecipeContext): st
   return text.replace(VARIABLE_PATTERN, (match, name: string) => {
     const lowered = name.toLowerCase();
     if (lowered.startsWith(PLUGIN_VARIABLE_PREFIX)) {
+      if (context.pluginVariables === undefined) return match;
       return pluginVariableValue(lowered, context) ?? "";
     }
     switch (lowered) {
@@ -72,7 +80,12 @@ export function detectUnresolvedVariables(text: string, context: RecipeContext):
     if (seen.has(name)) continue;
     seen.add(name);
     if (name.startsWith(PLUGIN_VARIABLE_PREFIX)) {
-      if (pluginVariableValue(name, context) === undefined) unresolved.push(name);
+      if (
+        context.pluginVariables !== undefined &&
+        pluginVariableValue(name, context) === undefined
+      ) {
+        unresolved.push(name);
+      }
       continue;
     }
     if (name === "number") {
@@ -148,7 +161,9 @@ export function segmentRecipePrompt(
   // `{{issue-number}}` is sent as typed, so it has to show up as unknown.
   const pattern = /\{\{([^{}\n]+?)\}\}/g;
   const knownNames = new Set<string>(KNOWN_VARIABLE_NAMES);
-  const isKnown = (name: string) => knownNames.has(name) || PLUGIN_VARIABLE_NAME.test(name);
+  const isKnown = (name: string) =>
+    knownNames.has(name) ||
+    (context?.pluginVariables !== undefined && PLUGIN_VARIABLE_NAME.test(name));
   let lastIndex = 0;
   let match: RegExpExecArray | null;
   while ((match = pattern.exec(source)) !== null) {

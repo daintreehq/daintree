@@ -4260,7 +4260,6 @@ describe("plugin recipe panels, variables and agent tools (#13797)", () => {
   it("won't create a user-owned recipe carrying a plugin's panel step or variables", async () => {
     for (const terminals of [
       [{ type: "plugin-panel" as const, panelKindId: "acme.tools.records" }],
-      [{ type: "claude" as const, initialPrompt: "Open {{plugin.record}}" }],
       [{ type: "claude" as const, systemPrompt: "Use the tools." }],
     ]) {
       await expect(
@@ -4268,6 +4267,21 @@ describe("plugin recipe panels, variables and agent tools (#13797)", () => {
       ).rejects.toThrow(/only work in the plugin's own recipe/);
     }
     expect(globalAddRecipeMock).not.toHaveBeenCalled();
+  });
+
+  it("won't import an exported plugin recipe as a copy that does less", async () => {
+    const exported = JSON.stringify({
+      name: "Review record",
+      pluginVariables: ["record"],
+      terminals: [
+        { type: "plugin-panel", panelKindId: "acme.tools.records" },
+        { type: "claude", initialPrompt: "Review {{plugin.record}}" },
+      ],
+    });
+    await expect(useRecipeStore.getState().importRecipe("project-1", exported)).rejects.toThrow(
+      /can't be imported/
+    );
+    expect(updateInRepoRecipeMock).not.toHaveBeenCalled();
   });
 
   it("drops plugin-only fields a user-owned recipe file carries when it loads", async () => {

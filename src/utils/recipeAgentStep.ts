@@ -1,6 +1,10 @@
 import { isPluginRecipe, type RecipeTerminal, type TerminalRecipe } from "@shared/types/project";
 import { normalizeSystemPrompt, resolveSystemPromptArgs } from "@shared/utils/agentSystemPrompt";
-import { replaceRecipeVariables, type RecipeContext } from "@/utils/recipeVariables";
+import {
+  NO_PLUGIN_VARIABLE_VALUES,
+  replaceRecipeVariables,
+  type RecipeContext,
+} from "@/utils/recipeVariables";
 
 export type ResolvedRecipeAgentStep =
   | {
@@ -31,15 +35,24 @@ export function resolveRecipeAgentStep(
   agentId: string,
   context: RecipeContext
 ): ResolvedRecipeAgentStep {
+  // `{{plugin.<name>}}` is a variable only in a plugin's own recipe, where one
+  // the run gave no value is empty; anywhere else it is text the user typed.
+  const fromPlugin = isPluginRecipe(recipe);
+  const stepContext: RecipeContext = {
+    ...context,
+    pluginVariables: fromPlugin
+      ? (context.pluginVariables ?? NO_PLUGIN_VARIABLE_VALUES)
+      : undefined,
+  };
   const rawPrompt = terminal.initialPrompt?.trim();
   // The command builder sends the first turn as one trimmed line; resolve it
   // to exactly that here, so a dialog showing it shows what launches.
   const initialPrompt =
-    (rawPrompt ? replaceRecipeVariables(rawPrompt, context) : "")
+    (rawPrompt ? replaceRecipeVariables(rawPrompt, stepContext) : "")
       .replace(/\r\n/g, " ")
       .replace(/\n/g, " ")
       .trim() || undefined;
-  if (isPluginRecipe(recipe) && initialPrompt?.startsWith("-")) {
+  if (fromPlugin && initialPrompt?.startsWith("-")) {
     return {
       ok: false,
       reason:
@@ -49,8 +62,8 @@ export function resolveRecipeAgentStep(
   // Only a plugin's own recipe carries a system prompt; one that reached a
   // user-owned recipe some other way is ignored rather than launched.
   const systemPromptText =
-    terminal.systemPrompt && isPluginRecipe(recipe)
-      ? replaceRecipeVariables(terminal.systemPrompt, context)
+    terminal.systemPrompt && fromPlugin
+      ? replaceRecipeVariables(terminal.systemPrompt, stepContext)
       : undefined;
   const systemPromptArgs = resolveSystemPromptArgs(agentId, systemPromptText);
   if (!systemPromptArgs.ok) return { ok: false, reason: systemPromptArgs.reason };

@@ -1276,7 +1276,7 @@ Named multi-terminal launch layouts a plugin ships. A contributed recipe is regi
 }
 ```
 
-**Running your own recipe.** Your plugin can offer to run one of its own recipes with values for its variables through [`host.runRecipe`](./host-api.md#runrecipe--offer-to-run-one-of-your-recipes) — "Open in agent" from your own panel, for example. Nothing starts until the user confirms a dialog showing every step resolved, final prompt and system prompt included. A launch the user starts from the recipe list leaves a variable with no value empty, as a host variable with no value is.
+**Running your own recipe.** Your plugin can offer to run one of its own recipes with values for its variables through [`host.runRecipe`](./host-api.md#runrecipe--offer-to-run-one-of-your-recipes) — "Open in agent" from your own panel, for example. Nothing starts until the user confirms a dialog showing every step resolved, final prompt and system prompt included. A recipe whose agent steps set `args` or `env` can't be run this way, since a plugin never chooses how an agent runs. A launch the user starts from the recipe list leaves a variable with no value empty, as a host variable with no value is.
 
 **Agent-initiated runs are confirmation-gated.** Any agent or MCP dispatch that carries a `recipeId` — through `recipe.run` or a composite like `worktree.createWithRecipe` — pauses for a single human approval showing the resolved recipe, its origin, and the commands each terminal will run (env keys are listed, values are not). This applies to every recipe tier, not just plugin-contributed ones. An external MCP session bound to one workspace has no one watching that view to answer the dialog, so there the dispatch is refused outright rather than paused (#11789).
 
