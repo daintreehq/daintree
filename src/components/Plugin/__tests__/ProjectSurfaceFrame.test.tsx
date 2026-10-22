@@ -8,7 +8,10 @@ import {
 } from "@shared/config/panelKindRegistry";
 import type {
   ProjectSurfaceChoice,
+  ProjectSurfaceChoiceUpdate,
   ProjectSurfaceChoices,
+  ProjectSurfaceClaim,
+  ProjectSurfaceSlotState,
   ProjectSurfaceSnapshot,
   ProjectSurfacesSnapshot,
 } from "@shared/types/plugin";
@@ -36,6 +39,7 @@ vi.mock("@/components/Plugin/PluginViewContent", () => ({
 
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { ProjectSurfaceFrame } from "../ProjectSurfaceFrame";
+import { SurfacePaletteAction } from "../SurfacePaletteAction";
 import { ProjectSurfaceView, useProjectSurface } from "../ProjectSurfaceView";
 import { _resetPluginHostedViewRuntimesForTest } from "../PluginHostedView";
 import {
@@ -75,10 +79,27 @@ function surfaceKind(overrides: Partial<PanelKindConfig> = {}): PanelKindConfig 
 const registerSurfaceKind = (overrides: Partial<PanelKindConfig> = {}) =>
   registerPanelKind(surfaceKind(overrides));
 
+/** The arbitrated slot state main would report for `owner` holding the canvas. */
+const ownedBy = (owner: ProjectSurfaceClaim = claim): { emptyCanvas: ProjectSurfaceSlotState } => ({
+  emptyCanvas: {
+    mode: "exclusive",
+    options: [
+      {
+        pluginId: owner.pluginId,
+        scope: "project",
+        value: { kind: "view", viewId: "overview", panelKindId: owner.panelKindId },
+      },
+    ],
+    defaultOptionId: owner.pluginId,
+    refused: [],
+  },
+});
+
 /** Seed the store the way the combined claims-and-answers pull would. */
 const setClaim = (choices: ProjectSurfaceChoices = {}, choicesLoaded = true) =>
   act(() => {
     usePluginProjectSurfacesStore.setState({
+      slots: ownedBy(),
       surfaces: { emptyCanvas: claim },
       choices,
       choicesLoaded,
@@ -145,43 +166,30 @@ describe("ProjectSurfaceFrame", () => {
     return {
       projectId: "p1",
       revision: ++mainRevision,
-      slots:
-        owner === undefined
-          ? {}
-          : {
-              emptyCanvas: {
-                mode: "exclusive",
-                options: [
-                  {
-                    pluginId: owner.pluginId,
-                    scope: "project",
-                    value: { kind: "view", viewId: "overview", panelKindId: owner.panelKindId },
-                  },
-                ],
-                defaultOptionId: owner.pluginId,
-                refused: [],
-              },
-            },
+      slots: owner === undefined ? {} : ownedBy(owner),
       choices: disk,
     };
   };
 
-  const setProjectSurfaceChoice = vi.fn((_slot: string, choice: ProjectSurfaceChoice | null) => {
+  const setProjectSurfaceChoices = vi.fn((updates: ProjectSurfaceChoiceUpdate[]) => {
     if (failNextSave) {
       failNextSave = false;
       return Promise.reject(new Error("ENOSPC"));
     }
     // Main records the answer against the slot's owner, from its own registry.
+    const { choice } = updates[0]!;
     disk = choice === null ? {} : answer(choice);
     return Promise.resolve(mainSnapshot());
   });
+  /** What a press of the strip or the notice sends main: one canvas answer. */
+  const sent = (choice: ProjectSurfaceChoice | null) => [{ slot: "emptyCanvas", choice }];
 
   beforeEach(() => {
     surfacesOnMain = { emptyCanvas: claim };
     disk = {};
     failNextSave = false;
     kindsListeners.length = 0;
-    setProjectSurfaceChoice.mockClear();
+    setProjectSurfaceChoices.mockClear();
     // `defineProperty` rather than an assignment + cast: a partial stub of the
     // full `ElectronAPI` would otherwise need a type assertion.
     Object.defineProperty(window, "electron", {
@@ -194,7 +202,7 @@ describe("ProjectSurfaceFrame", () => {
             kindsListeners.push(cb);
             return () => {};
           },
-          setProjectSurfaceChoice,
+          setProjectSurfaceChoices,
         },
       },
     });
@@ -206,7 +214,9 @@ describe("ProjectSurfaceFrame", () => {
   const renderFrame = (children: React.ReactNode = <div data-testid="surface" />) =>
     render(
       <TooltipProvider>
-        <ProjectSurfaceFrame>{children}</ProjectSurfaceFrame>
+        <ProjectSurfaceFrame slot="emptyCanvas" surfaceActions={<SurfacePaletteAction />}>
+          {children}
+        </ProjectSurfaceFrame>
       </TooltipProvider>
     );
 
@@ -368,12 +378,12 @@ describe("ProjectSurfaceFrame", () => {
     renderFrame();
 
     await press(segment("Launcher"));
-    expect(setProjectSurfaceChoice).toHaveBeenLastCalledWith("emptyCanvas", "stock");
+    expect(setProjectSurfaceChoices).toHaveBeenLastCalledWith(sent("stock"));
     expect(disk).toEqual(answer("stock"));
     expect(segment("Launcher").getAttribute("aria-checked")).toBe("true");
 
     await press(segment("Mission Control"));
-    expect(setProjectSurfaceChoice).toHaveBeenLastCalledWith("emptyCanvas", "surface");
+    expect(setProjectSurfaceChoices).toHaveBeenLastCalledWith(sent("surface"));
     expect(disk).toEqual(answer("surface"));
   });
 
@@ -386,7 +396,7 @@ describe("ProjectSurfaceFrame", () => {
     // quietly answer the question the notice is asking.
     await press(segment("Mission Control"));
 
-    expect(setProjectSurfaceChoice).not.toHaveBeenCalled();
+    expect(setProjectSurfaceChoices).not.toHaveBeenCalled();
     expect(notice()).toBeTruthy();
   });
 
@@ -445,13 +455,14 @@ describe("ProjectSurfaceFrame", () => {
     // The plugin's DISPLAY name, not its manifest id and not the panel's name:
     // the question is "do you want this plugin drawing your canvas", and the
     // only name that answers it is the one the user sees in settings.
-    expect(notice().textContent).toContain("Acme Dashboard");
+    expect(notice().textContent).toContain("Acme Dashboard set up this project: Empty canvas");
     // Unanswered is the manifest's own intent: the surface is already showing.
     expect(segment("Mission Control").getAttribute("aria-checked")).toBe("true");
 
-    await press(within(notice()).getByRole("button", { name: "Keep it" }));
+    await press(within(notice()).getByRole("button", { name: "Keep" }));
 
-    expect(setProjectSurfaceChoice).toHaveBeenCalledWith("emptyCanvas", "surface");
+    expect(setProjectSurfaceChoices).toHaveBeenCalledTimes(1);
+    expect(setProjectSurfaceChoices).toHaveBeenCalledWith(sent("surface"));
     expect(screen.queryByRole("status")).toBeNull();
     expect(segment("Mission Control").getAttribute("aria-checked")).toBe("true");
   });
@@ -461,7 +472,7 @@ describe("ProjectSurfaceFrame", () => {
     setClaim();
     renderFrame();
 
-    const useLauncher = within(notice()).getByRole("button", { name: "Use the launcher" });
+    const useLauncher = within(notice()).getByRole("button", { name: "Use Daintree's" });
     useLauncher.focus();
     await act(async () => {
       // Keyboard activation arrives as a click with no detail.
@@ -486,7 +497,7 @@ describe("ProjectSurfaceFrame", () => {
     // mouse user nothing.
     const keyboardTarget = segment("Launcher");
     const keyboardSpy = vi.spyOn(keyboardTarget, "focus");
-    await press(within(notice()).getByRole("button", { name: "Use the launcher" }));
+    await press(within(notice()).getByRole("button", { name: "Use Daintree's" }));
     expect(keyboardSpy).toHaveBeenCalledWith({ preventScroll: true, focusVisible: true });
 
     // Same answer, reached by pointer this time.
@@ -494,7 +505,7 @@ describe("ProjectSurfaceFrame", () => {
     await flush();
     const pointerTarget = segment("Launcher");
     const pointerSpy = vi.spyOn(pointerTarget, "focus");
-    const answerButton = within(notice()).getByRole("button", { name: "Use the launcher" });
+    const answerButton = within(notice()).getByRole("button", { name: "Use Daintree's" });
     await act(async () => {
       fireEvent.pointerDown(answerButton);
       answerButton.click();
@@ -508,8 +519,8 @@ describe("ProjectSurfaceFrame", () => {
     setClaim();
     const first = renderFrame();
 
-    await press(within(notice()).getByRole("button", { name: "Use the launcher" }));
-    expect(setProjectSurfaceChoice).toHaveBeenLastCalledWith("emptyCanvas", "stock");
+    await press(within(notice()).getByRole("button", { name: "Use Daintree's" }));
+    expect(setProjectSurfaceChoices).toHaveBeenLastCalledWith(sent("stock"));
     first.unmount();
 
     // A fresh view: nothing in memory, and the claim and the answer both come
@@ -555,7 +566,7 @@ describe("ProjectSurfaceFrame", () => {
     await press(segment("Launcher"));
 
     expect(screen.getByText(SAVE_FAILED)).toBeTruthy();
-    expect(screen.queryByText(/replaced the launcher/)).toBeNull();
+    expect(screen.queryByText(/set up this project/)).toBeNull();
     // Nothing was recorded, so nothing changed.
     expect(canvasChoice()).toBeNull();
     expect(segment("Mission Control").getAttribute("aria-checked")).toBe("true");
@@ -598,6 +609,7 @@ describe("ProjectSurfaceFrame", () => {
     // about the last one, so retrying it would answer for this one unasked.
     act(() => {
       usePluginProjectSurfacesStore.setState({
+        slots: ownedBy({ ...claim, pluginId: "project__p1__acme.other" }),
         surfaces: { emptyCanvas: { ...claim, pluginId: "project__p1__acme.other" } },
       });
     });

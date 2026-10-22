@@ -668,6 +668,7 @@ export const CHANNEL_LOCALITY = {
   "plugin:project-set-muted": "host",
   "plugin:project-set-trust": "host",
   "plugin:project-surface-choice-set": "host",
+  "plugin:project-surface-choices-set": "host",
   "plugin:project-surfaces-get": "host",
   "plugin:project-visibility-get": "host",
   "plugin:project-visibility-set": "host",

@@ -32,7 +32,7 @@ import {
   ProjectPluginSelectorDropdown,
   type ProjectPluginOption,
 } from "@/components/Settings/ProjectPluginSelectorDropdown";
-import { useRenderableSurfaceClaim } from "@/hooks/useRenderableSurfaceClaim";
+import { renderableSurfaceClaim, usePanelKindRegistry } from "@/hooks/useRenderableSurfaceClaim";
 import {
   describeSurfaceRefusal,
   surfacePluginFallbackName,
@@ -41,6 +41,7 @@ import {
 import {
   selectFailedSave,
   selectSurfaceChoice,
+  surfaceAnswerUpdates,
   usePluginProjectSurfacesStore,
 } from "@/store/pluginProjectSurfacesStore";
 import { useProjectPluginStore, type ProjectPluginErrorSource } from "@/store/projectPluginStore";
@@ -54,10 +55,13 @@ import { formatErrorMessage } from "@shared/utils/errorMessage";
 import {
   BUILT_IN_PLUGIN_CAPABILITIES,
   PROJECT_PLUGIN_INSTANCE_PREFIX,
-  pluginManifestIdFromInstanceKey,
+  PROJECT_SURFACE_SLOT_CATALOGUE,
+  PROJECT_SURFACE_SLOTS,
+  projectSurfaceClaimFromState,
   type LoadedPluginInfo,
   type ProjectPluginInfo,
   type ProjectPluginState,
+  type ProjectSurfaceSlot,
 } from "@shared/types/plugin";
 import { PathSegments } from "@/components/ui/PathSegments";
 import { pluralize } from "@/lib/pluralize";
@@ -154,89 +158,131 @@ function useStoreFailure<A extends ProjectPluginErrorSource["action"]>(
   return { source, detail: source.reason };
 }
 
-const EMPTY_CANVAS_STATUS = {
+const SURFACE_SLOT_STATUS = {
   none: "You haven't chosen yet, so it shows.",
   surface: "You chose to keep it.",
-  stock: "You chose the launcher, so it's hidden.",
+  stock: "You chose Daintree's own, so it's hidden.",
 } as const;
 
 /**
- * Which plugin draws this project's empty canvas, and the user's remembered
- * answer about it.
+ * Every place in Daintree a plugin set up for this project — which plugin, the
+ * user's remembered answer about it, and any plugin whose claim on it isn't
+ * shown — with the way back to Daintree's own and a reset.
  *
- * The answer persists, so it has to be findable: without this, a project whose
- * owner once chose the launcher would keep hiding a canvas its plugin still
- * claims, with nothing anywhere saying why. Rendered only while the claim can
- * render and its answer is known — the canvas's own test — so this never
- * describes a surface the canvas would not draw.
+ * The answers persist, so they have to be findable: without this, a project
+ * whose owner once chose Daintree's own would keep hiding what its plugin still
+ * claims, with nothing anywhere saying why. A framed slot is listed only while
+ * its claim can render and its answer is known — the frame's own test — so this
+ * never describes a surface the slot would not draw.
  */
-function EmptyCanvasSection() {
+function ProjectSurfacesSection() {
   const init = usePluginProjectSurfacesStore((s) => s.init);
-  const renderable = useRenderableSurfaceClaim("emptyCanvas");
+  const slots = usePluginProjectSurfacesStore((s) => s.slots);
   const choicesLoaded = usePluginProjectSurfacesStore((s) => s.choicesLoaded);
-  const choice = usePluginProjectSurfacesStore((s) => selectSurfaceChoice(s, "emptyCanvas"));
-  const setSurfaceChoice = usePluginProjectSurfacesStore((s) => s.setSurfaceChoice);
-  const failedSave = usePluginProjectSurfacesStore((s) => selectFailedSave(s, "emptyCanvas"));
-  const plugins = useProjectPluginStore((s) => s.plugins);
+  const registry = usePanelKindRegistry();
 
   useEffect(() => {
     init();
   }, [init]);
 
-  if (renderable === null || !choicesLoaded) return null;
-
-  const { claim } = renderable;
-  const pluginName =
-    plugins.find((p) => p.instanceId === claim.pluginId)?.displayName ??
-    pluginManifestIdFromInstanceKey(claim.pluginId);
+  if (!choicesLoaded) return null;
+  const listed = PROJECT_SURFACE_SLOTS.filter((slot) => {
+    const state = slots[slot];
+    if (state === undefined) return false;
+    if (state.defaultOptionId === null) return state.refused.length > 0;
+    const { mode, claim } = PROJECT_SURFACE_SLOT_CATALOGUE[slot];
+    if (mode !== "exclusive" || claim !== "view") return true;
+    return renderableSurfaceClaim(projectSurfaceClaimFromState(state), registry) !== null;
+  });
+  if (listed.length === 0) return null;
 
   return (
-    <div data-testid="project-plugins-empty-canvas">
+    <div data-testid="project-plugins-surfaces">
       <SettingsSection
-        title="Empty canvas"
-        description={`${pluginName} draws what this project shows when no panels are open, in place of the launcher.`}
+        title="Set up by plugins"
+        description="Where this project's plugins replace what Daintree draws"
       >
         <SettingsGroup>
-          <SettingsRow
-            label="Show on the empty canvas"
-            description={EMPTY_CANVAS_STATUS[choice ?? "none"]}
-            error={
-              failedSave !== null ? (
-                <RowFailure
-                  summary="Couldn't save the canvas choice"
-                  onRetry={() => void setSurfaceChoice("emptyCanvas", failedSave.choice)}
-                />
-              ) : undefined
-            }
-            control={({ descriptionId }) => (
-              <SettingsSwitch
-                checked={choice !== "stock"}
-                onCheckedChange={(next) =>
-                  void setSurfaceChoice("emptyCanvas", next ? "surface" : "stock")
-                }
-                aria-label="Show on the empty canvas"
-                aria-describedby={descriptionId}
-                data-testid="project-empty-canvas-switch"
-              />
-            )}
-          />
-          <SettingsRow
-            label="Remembered choice"
-            description="Resetting shows the plugin's canvas again and asks the next time it appears"
-            control={
-              <Button
-                variant="outline"
-                size="sm"
-                disabled={choice === null}
-                onClick={() => void setSurfaceChoice("emptyCanvas", null)}
-              >
-                Reset choice
-              </Button>
-            }
-          />
+          {listed.map((slot) => (
+            <ProjectSurfaceRow key={slot} slot={slot} />
+          ))}
         </SettingsGroup>
       </SettingsSection>
     </div>
+  );
+}
+
+/**
+ * One slot: who set it up and what the user said about it. The switch is the
+ * way back to Daintree's own; the reset forgets the answer, so the plugin's
+ * version shows again and the slot is asked about the next time it appears.
+ */
+function ProjectSurfaceRow({ slot }: { slot: ProjectSurfaceSlot }) {
+  const { label, noun } = PROJECT_SURFACE_SLOT_CATALOGUE[slot];
+  const state = usePluginProjectSurfacesStore((s) => s.slots[slot]);
+  const choice = usePluginProjectSurfacesStore((s) => selectSurfaceChoice(s, slot));
+  const failedSave = usePluginProjectSurfacesStore((s) => selectFailedSave(s, slot));
+  const setSurfaceChoice = usePluginProjectSurfacesStore((s) => s.setSurfaceChoice);
+  const setSurfaceChoices = usePluginProjectSurfacesStore((s) => s.setSurfaceChoices);
+  const plugins = useProjectPluginStore((s) => s.plugins);
+  const nameOf = (pluginId: string) =>
+    plugins.find((p) => p.instanceId === pluginId)?.displayName ??
+    surfacePluginFallbackName(pluginId);
+
+  const owner = state?.defaultOptionId ?? null;
+  const ownerName = owner === null ? null : nameOf(owner);
+
+  return (
+    <SettingsRow
+      label={label}
+      rootAttributes={{ "data-testid": `project-surface-row-${slot}` }}
+      description={
+        <>
+          <span className="block">
+            {ownerName === null
+              ? "Daintree's own is showing."
+              : `Set up by ${ownerName}. ${SURFACE_SLOT_STATUS[choice ?? "none"]}`}
+          </span>
+          {state?.refused.map((refusal) => (
+            <span key={`${refusal.pluginId}:${refusal.reason}`} className="block">
+              {`${nameOf(refusal.pluginId)}'s claim isn't shown: ${describeSurfaceRefusal(refusal, nameOf).detail}`}
+            </span>
+          ))}
+        </>
+      }
+      isModified={choice !== null}
+      onReset={() => void setSurfaceChoice(slot, null)}
+      resetAriaLabel={`Ask again about the ${noun}`}
+      resetTestId={`project-surface-reset-${slot}`}
+      error={
+        failedSave !== null ? (
+          <RowFailure
+            summary={`Couldn't save the ${noun} choice`}
+            onRetry={() => void setSurfaceChoices(failedSave.updates)}
+          />
+        ) : undefined
+      }
+      control={
+        owner === null
+          ? undefined
+          : ({ descriptionId }) => (
+              <SettingsSwitch
+                checked={choice !== "stock"}
+                onCheckedChange={(next) =>
+                  void setSurfaceChoices(
+                    surfaceAnswerUpdates(
+                      [{ slot, pluginId: owner, choice }],
+                      next ? "surface" : "stock"
+                    )
+                  )
+                }
+                aria-label={`Use ${ownerName}'s ${noun}`}
+                aria-describedby={descriptionId}
+                data-testid={`project-surface-switch-${slot}`}
+              />
+            )
+      }
+    />
   );
 }
 
@@ -567,7 +613,7 @@ function ProjectOverviewPane({
         </div>
       </SettingsSection>
 
-      <EmptyCanvasSection />
+      <ProjectSurfacesSection />
 
       <ProjectAgentToolsSection />
     </div>

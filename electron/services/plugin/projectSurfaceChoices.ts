@@ -7,6 +7,7 @@ import {
   pluginManifestIdFromInstanceKey,
   type ProjectSurfaceChoice,
   type ProjectSurfaceChoiceRecord,
+  type ProjectSurfaceChoiceUpdate,
   type ProjectSurfaceChoices,
   type ProjectSurfaceSlot,
   type ProjectSurfaceSlotMode,
@@ -128,16 +129,8 @@ export function getProjectSurfaceChoices(projectId: string): ProjectSurfaceChoic
 }
 
 /**
- * Remember this project's answer about `slot`, or forget it with `null`.
- *
- * The answer is resolved against main's own claim registry (see
- * {@link buildProjectSurfaceChoiceRecord}): an exclusive answer names whichever
- * plugin owns the slot NOW, and a selectable one must name an option on offer.
- *
- * Throws when a non-null answer has nothing on offer to be about, and when the
- * store cannot be read or written — the caller reports success and rebroadcasts
- * on the strength of this returning. Returns the project's full set after the
- * write.
+ * Remember this project's answer about `slot`, or forget it with `null`. One
+ * slot's {@link setProjectSurfaceChoices}.
  */
 export function setProjectSurfaceChoice(
   projectId: string,
@@ -146,30 +139,57 @@ export function setProjectSurfaceChoice(
   optionId?: string,
   now: number = Date.now()
 ): ProjectSurfaceChoices {
+  return setProjectSurfaceChoices(projectId, [{ slot, choice, optionId }], now);
+}
+
+/**
+ * Remember this project's answers about several slots at once — a consent
+ * notice answers for every slot one plugin set up — in one write: either all of
+ * them land or none do, so a half-saved answer can never leave one slot asked
+ * and another not.
+ *
+ * Each answer is resolved against main's own claim registry (see
+ * {@link buildProjectSurfaceChoiceRecord}): an exclusive answer names whichever
+ * plugin owns the slot NOW, and a selectable one must name an option on offer.
+ *
+ * Throws, before writing anything, when an update is malformed, names a slot
+ * twice, or has nothing on offer to be about; and when the store cannot be
+ * read or written — the caller reports success and rebroadcasts on the
+ * strength of this returning. Returns the project's full set after the write.
+ */
+export function setProjectSurfaceChoices(
+  projectId: string,
+  updates: readonly ProjectSurfaceChoiceUpdate[],
+  now: number = Date.now()
+): ProjectSurfaceChoices {
   if (!isProjectWorkspaceId(projectId)) {
     throw new Error("project surfaces: projectId must be a project workspace id");
   }
-  if (!isProjectSurfaceSlot(slot)) {
-    throw new Error("project surfaces: unknown surface slot");
-  }
-  if (choice !== null && !isProjectSurfaceChoice(choice)) {
-    throw new Error('project surfaces: choice must be "surface", "stock" or null');
-  }
-  if (optionId !== undefined && (typeof optionId !== "string" || optionId.length === 0)) {
-    throw new Error("project surfaces: optionId must be a non-empty string");
+  if (!Array.isArray(updates) || updates.length === 0) {
+    throw new Error("project surfaces: an answer needs at least one slot");
   }
 
-  const record =
-    choice === null
-      ? undefined
-      : buildProjectSurfaceChoiceRecord(
-          PROJECT_SURFACE_SLOT_CATALOGUE[slot].mode,
-          slot,
-          getProjectSurfaceSlots(projectId)[slot],
-          choice,
-          optionId,
-          now
-        );
+  const slots = getProjectSurfaceSlots(projectId);
+  // Every record is built before the store is touched, so one bad update
+  // rejects the whole answer rather than half of it.
+  const records = new Map<ProjectSurfaceSlot, ProjectSurfaceChoiceRecord | undefined>();
+  for (const update of updates) {
+    const { slot, choice, optionId } = parseProjectSurfaceChoiceUpdate(update);
+    if (records.has(slot)) throw new Error(`project surfaces: ${slot} is answered twice`);
+    records.set(
+      slot,
+      choice === null
+        ? undefined
+        : buildProjectSurfaceChoiceRecord(
+            PROJECT_SURFACE_SLOT_CATALOGUE[slot].mode,
+            slot,
+            slots[slot],
+            choice,
+            optionId,
+            now
+          )
+    );
+  }
 
   // A read failure propagates rather than falling back to empty: this rewrites
   // the whole key, so writing from a map we could not read would delete every
@@ -182,10 +202,12 @@ export function setProjectSurfaceChoice(
     stored && typeof stored === "object" && !Array.isArray(stored)
       ? { ...(stored as Record<string, unknown>) }
       : {};
-  if (record === undefined) {
-    delete entry[slot];
-  } else {
-    entry[slot] = record;
+  for (const [slot, record] of records) {
+    if (record === undefined) {
+      delete entry[slot];
+    } else {
+      entry[slot] = record;
+    }
   }
   if (Object.keys(entry).length === 0) {
     delete all[projectId];
@@ -196,4 +218,25 @@ export function setProjectSurfaceChoice(
   // containing dots, and a project id is opaque.
   store.set(STORE_KEY, all);
   return parseChoices(entry);
+}
+
+/**
+ * One update as it arrived over IPC, checked field by field: the renderer is
+ * not trusted to have sent the shape its types promise.
+ */
+export function parseProjectSurfaceChoiceUpdate(value: unknown): ProjectSurfaceChoiceUpdate {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("project surfaces: an update must be an object");
+  }
+  const { slot, choice, optionId } = value as Record<string, unknown>;
+  if (!isProjectSurfaceSlot(slot)) {
+    throw new Error("project surfaces: unknown surface slot");
+  }
+  if (choice !== null && !isProjectSurfaceChoice(choice)) {
+    throw new Error('project surfaces: choice must be "surface", "stock" or null');
+  }
+  if (optionId !== undefined && (typeof optionId !== "string" || optionId.length === 0)) {
+    throw new Error("project surfaces: optionId must be a non-empty string");
+  }
+  return optionId === undefined ? { slot, choice } : { slot, choice, optionId };
 }

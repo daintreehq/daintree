@@ -540,7 +540,7 @@ test("project surface strip review — host chrome above a plugin's canvas", asy
       // off the canvas is the failure this state exists to catch, and it looks
       // perfectly fine in a screenshot cropped to the canvas.
       const canvas = await page.locator(CANVAS).first().boundingBox();
-      for (const label of ["Keep it", "Use the launcher"]) {
+      for (const label of ["Keep", "Use Daintree's"]) {
         const box = await notice.getByRole("button", { name: label }).boundingBox();
         if (!box || !canvas) throw new Error(`no box for the ${label} answer`);
         if (box.x < canvas.x || box.x + box.width > canvas.x + canvas.width + 1) {
