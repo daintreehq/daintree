@@ -114,6 +114,8 @@ const baseProps = {
   pinAction: noopPin,
   unpinAction: noop,
   hideAction: noopHide,
+  argPrompt: null,
+  argBack: () => {},
 };
 
 function fireKey(
@@ -143,6 +145,7 @@ function fireKey(
     preventDefault: () => {
       prevented = true;
     },
+    stopPropagation: () => {},
     get defaultPrevented() {
       return prevented;
     },
@@ -724,6 +727,49 @@ describe("ActionPalette", () => {
       useActionPrefsStore.setState({ pinnedActionIds: ["b.beta"] });
       renderRows();
       expect(screen.getByText("unpin")).toBeTruthy();
+    });
+  });
+  describe("collecting plugin command arguments", () => {
+    const prompt = {
+      actionTitle: "Deploy",
+      fieldTitle: "Environment",
+      step: 1,
+      total: 2,
+      kind: "enum" as const,
+    };
+
+    it("steps back on Escape instead of closing, and names the field", () => {
+      const argBack = vi.fn();
+      const close = vi.fn();
+      render(<ActionPalette {...baseProps} argPrompt={prompt} argBack={argBack} close={close} />);
+
+      expect(fireKey("Escape")).toBe(true);
+      expect(argBack).toHaveBeenCalledTimes(1);
+      expect(close).not.toHaveBeenCalled();
+
+      const props = lastSearchablePaletteProps.current!;
+      expect(props.label).toBe("Deploy · 1 of 2");
+      expect(props.searchPlaceholder).toBe("Environment");
+    });
+
+    it("retreats on an Escape close, but a scrim click still closes the palette", () => {
+      const argBack = vi.fn();
+      const close = vi.fn();
+      render(<ActionPalette {...baseProps} argPrompt={prompt} argBack={argBack} close={close} />);
+      const onClose = lastSearchablePaletteProps.current?.onClose;
+      if (typeof onClose !== "function") throw new Error("onClose not forwarded");
+
+      onClose("escape");
+      expect(argBack).toHaveBeenCalledTimes(1);
+      expect(close).not.toHaveBeenCalled();
+
+      onClose("backdrop");
+      expect(close).toHaveBeenCalledTimes(1);
+    });
+
+    it("doesn't treat prefix characters as mode routes while answering", () => {
+      render(<ActionPalette {...baseProps} argPrompt={prompt} query="" />);
+      expect(fireKey(">")).toBe(false);
     });
   });
 });
