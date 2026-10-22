@@ -1,7 +1,10 @@
 import { h, render, type ComponentChild, type ComponentChildren } from "preact";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ComponentRecord } from "../../../../../shared/elementPicker/component.js";
-import type { SelectionObservation } from "../../../../../shared/elementPicker/observation.js";
+import type {
+  HoverObservation,
+  SelectionObservation,
+} from "../../../../../shared/elementPicker/observation.js";
 import {
   ElementPickerEventSchema,
   type ElementPickerEvent,
@@ -83,6 +86,11 @@ export function describePreactExtractor(debug: boolean): void {
     });
   }
 
+  /** Detection done, Preact's the one reader installed: a null from it now reads as nothing found. */
+  function settle(): void {
+    picker!.setAvailability({ detection: "settled", extractors: { preact: "installed" } });
+  }
+
   function app(count = 0): ComponentChild {
     return h(fixture.App, { portal: document.getElementById("portal")!, count });
   }
@@ -106,12 +114,15 @@ export function describePreactExtractor(debug: boolean): void {
     return observation;
   }
 
-  function hover(selector: string): string[] {
+  function hovered(selector: string): HoverObservation | null {
     query(selector).dispatchEvent(new MouseEvent("pointermove", { bubbles: true, composed: true }));
     for (const callback of frames.splice(0)) callback(0);
     const last = events.filter((event) => event.type === "hoverChanged").at(-1);
-    const observation = last?.type === "hoverChanged" ? last.observation : null;
-    return (observation?.componentChain.components ?? []).map(
+    return last?.type === "hoverChanged" ? last.observation : null;
+  }
+
+  function hover(selector: string): string[] {
+    return (hovered(selector)?.componentChain.components ?? []).map(
       (entry) => entry.name?.value ?? "(anonymous)"
     );
   }
@@ -326,6 +337,7 @@ export function describePreactExtractor(debug: boolean): void {
       const Leaf = () => h("b", { class: "leaf" }, "leaf");
       draw(h(Shell, null, h(Leaf, null)));
       start();
+      settle();
       const observation = pick("b.leaf");
       expect(chainNames(observation)).toEqual(["Leaf", "Shell"]);
       expect(observation.sourceCandidates).toEqual([]);
@@ -410,6 +422,58 @@ export function describePreactExtractor(debug: boolean): void {
       expect(chainNames(observation).every((name) => name === "Nest")).toBe(true);
       // The outermost record kept has a render parent nobody sent: it is left out, not dangling.
       expect(observation.componentChain.components.at(-1)).not.toHaveProperty("renderParentId");
+    });
+
+    it("says Preact drew nothing at a node outside every tree a full sweep found", () => {
+      mount();
+      settle();
+      document.body.appendChild(document.createElement("p")).className = "plain";
+      expect(pick("p.plain").capabilities.names).toEqual({
+        state: "unavailable",
+        reason: "not-exposed",
+      });
+    });
+
+    it("gives no answer, rather than none found, when a selection's lookup runs out of steps", () => {
+      // The root's children alone outrun the lookup before it reaches the picked node's parent.
+      const filler = Array.from({ length: 9_000 }, (_, index) => h("i", { key: index }));
+      draw([h("div", { class: "holder" }, h("b", { class: "far" }, "far")), ...filler]);
+      start();
+      settle();
+      const observation = pick("b.far");
+      expect(observation.componentChain.components).toEqual([]);
+      expect(observation.capabilities.names).toEqual({ state: "unknown" });
+      expect(observation.capabilities.file).toEqual({ state: "unknown" });
+    });
+
+    it("gives no answer where a selection's sweep stopped short of the whole page", () => {
+      mount();
+      settle();
+      for (let index = 0; index < 2_100; index += 1) {
+        document.body.appendChild(document.createElement("span"));
+      }
+      document.body.appendChild(document.createElement("p")).className = "plain";
+      expect(pick("p.plain").capabilities.names).toEqual({ state: "unknown" });
+    });
+
+    it("gives a hover no answer where only a sweep would find the tree, not that Preact drew nothing", () => {
+      mount();
+      settle();
+      // The portal's content, whose tree no hover has met yet.
+      const observation = hovered(".modal-body");
+      expect(observation?.componentChain.components).toEqual([]);
+      expect(observation?.capabilities.names).toEqual({ state: "unknown" });
+    });
+
+    it("throws once disposed, so it never reads as having found nothing", () => {
+      draw(h("b", { class: "leaf" }, "leaf"));
+      const extractor = createPreactExtractor();
+      const target = query("b.leaf");
+      const refs = { ref: () => null };
+      expect(extractor.extract(target, "selection", refs)).not.toBeNull();
+      extractor.dispose?.();
+      expect(() => extractor.extract(target, "selection", refs)).toThrow();
+      expect(() => extractor.extract(target, "hover", refs)).toThrow();
     });
   });
 }

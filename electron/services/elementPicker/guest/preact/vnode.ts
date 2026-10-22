@@ -266,18 +266,24 @@ export class KnownRoots {
   /**
    * A bounded sweep of the document for render containers, into every open
    * shadow tree it passes: a tree whose portal sent content out of one has its
-   * container in there. One sample bounds the whole sweep.
+   * container in there. One sample bounds the whole sweep. True when it
+   * reached every element and every container it found is still remembered.
    */
-  discover(doc: Document): void {
+  discover(doc: Document): boolean {
     const found: Node[] = [];
     const trees: Node[] = doc.documentElement === null ? [] : [doc.documentElement];
     let visited = 0;
-    while (trees.length > 0 && visited < DISCOVERY_SAMPLE) {
+    let cut = false;
+    while (trees.length > 0 && !cut) {
       const tree = trees.shift()!;
       const walker = doc.createTreeWalker(tree, 1 /* NodeFilter.SHOW_ELEMENT */);
       // A shadow root was checked when its host was; the walk starts on it.
       let node: Node | null = tree instanceof ShadowRoot ? walker.nextNode() : walker.currentNode;
-      for (; node !== null && visited < DISCOVERY_SAMPLE; node = walker.nextNode()) {
+      for (; node !== null; node = walker.nextNode()) {
+        if (visited >= DISCOVERY_SAMPLE) {
+          cut = true;
+          break;
+        }
         visited += 1;
         if (rootOf(node) !== null) found.push(node);
         const shadow = node instanceof Element ? node.shadowRoot : null;
@@ -287,6 +293,7 @@ export class KnownRoots {
       }
     }
     this.remember(found);
+    return !cut && found.every((node) => this.containers.includes(node));
   }
 
   clear(): void {
@@ -306,6 +313,12 @@ export interface Lookup {
   match: HostMatch | null;
   /** The search stopped at its budget, so a closer match may exist than the one reported. */
   truncated: boolean;
+  /**
+   * A sweep of the whole document found every render container a portal into
+   * the target's ancestry could come from. Without one, a tree never seen can
+   * have drawn the target, so a missing match says nothing.
+   */
+  swept: boolean;
 }
 
 function ancestryOf(node: Node): Node[] {
@@ -426,16 +439,16 @@ export function lookupHost(
   roots.remember(local.map((root) => root.container));
   for (const root of local) {
     const found = search.guided(root.vnode, root);
-    if (found !== null) return { match: found, truncated: false };
-    if (search.truncated) return { match: search.best, truncated: true };
+    if (found !== null) return { match: found, truncated: false, swept: false };
+    if (search.truncated) return { match: search.best, truncated: true, swept: false };
   }
-  if (discover) roots.discover(target.ownerDocument);
+  const swept = discover && roots.discover(target.ownerDocument);
   for (const root of [...local, ...roots.others(local)]) {
     const found = search.throughPortals(root.vnode, root);
-    if (found !== null) return { match: found, truncated: false };
+    if (found !== null) return { match: found, truncated: false, swept };
     if (search.truncated) break;
   }
-  return { match: search.best, truncated: search.truncated };
+  return { match: search.best, truncated: search.truncated, swept };
 }
 
 /** The innermost component above `vnode`, or null when the walk reaches its root first. */

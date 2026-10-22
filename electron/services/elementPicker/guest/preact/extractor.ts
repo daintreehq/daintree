@@ -13,7 +13,9 @@
  * says the file and line are not exposed.
  *
  * Hover pays for one bounded lookup and a walk up to the nearest component;
- * the chain, roots and sources are read on selection only.
+ * the chain, roots and sources are read on selection only. Hover never sweeps
+ * the page, so it cannot rule out a portal's unseen tree: where it finds
+ * nothing it gives no answer rather than say Preact drew nothing.
  */
 
 import type {
@@ -303,7 +305,8 @@ export function createPreactExtractor(): ElementPickerExtractor {
   let disposed = false;
   return {
     extract(element, phase, refs) {
-      if (disposed) return null;
+      // A null says Preact drew nothing here, so a reader that cannot look throws.
+      if (disposed) throw new Error("preact extractor disposed");
       const selection = phase === "selection";
       // Only a selection sweeps the document for a portal's tree; hover uses what it has seen.
       const lookup = lookupHost(
@@ -312,7 +315,11 @@ export function createPreactExtractor(): ElementPickerExtractor {
         new Budget(selection ? STEPS.lookup : STEPS.hover),
         selection
       );
-      if (lookup.match === null) return null;
+      if (lookup.match === null) {
+        // Out of steps, or with trees on the page it never searched, it cannot tell.
+        if (lookup.truncated || !lookup.swept) throw new Error("preact lookup inconclusive");
+        return null;
+      }
       return selection
         ? selectionOf(lookup.match, lookup.truncated, ids, refs)
         : hoverOf(lookup.match, ids);

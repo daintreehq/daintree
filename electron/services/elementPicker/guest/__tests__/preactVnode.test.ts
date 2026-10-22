@@ -155,10 +155,27 @@ describe("the Preact vnode reader", () => {
     const roots = new KnownRoots();
     roots.remember([container]);
     render(null, container);
+    // A sweep that saw the whole page backs the null: nothing drew this node now.
     expect(lookupHost(gone, roots, new Budget(1_000), true)).toEqual({
       match: null,
       truncated: false,
+      swept: true,
     });
+    // Without one, a portal's tree it never met could have.
+    expect(lookupHost(gone, roots, new Budget(1_000), false)).toEqual({
+      match: null,
+      truncated: false,
+      swept: false,
+    });
+  });
+
+  it("calls a sweep partial when the page outruns its sample", () => {
+    mount(h("b", null, "tree"));
+    expect(new KnownRoots().discover(document)).toBe(true);
+    for (let index = 0; index < 2_100; index += 1) {
+      document.body.appendChild(document.createElement("span"));
+    }
+    expect(new KnownRoots().discover(document)).toBe(false);
   });
 
   it("says when a lookup ran out of steps rather than calling the node unrendered", () => {
@@ -168,10 +185,12 @@ describe("the Preact vnode reader", () => {
     expect(lookupHost(last, new KnownRoots(), new Budget(50), false)).toEqual({
       match: expect.objectContaining({ own: false }),
       truncated: true,
+      swept: false,
     });
     expect(lookupHost(last, new KnownRoots(), new Budget(10_000), false)).toEqual({
       match: expect.objectContaining({ own: true }),
       truncated: false,
+      swept: false,
     });
   });
 });
