@@ -1,5 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { collectActiveProjectIds } from "../../../window/activeProjectIds.js";
+import { onProjectPresenceChanged } from "../../../window/projectPresenceChanges.js";
+import {
+  ProjectVisibilityClock,
+  trackProjectVisibility,
+} from "../../../services/projectVisibilityClock.js";
 import { _resetRemoteServicesForTest, getRemoteService } from "../../runtime.js";
 import {
   ENDPOINT_VISIBILITY_METHOD,
@@ -90,6 +95,31 @@ describe("EndpointVisibility", () => {
     ep.closed = false;
     expect(visibility.isVisible("remote:s1:view-1")).toBe(true);
   });
+
+  it("announces a change in which projects the Shells show, and only then", () => {
+    const registry = fakeRegistry();
+    const visibility = new EndpointVisibility(registry);
+    const changes = vi.fn();
+    const off = onProjectPresenceChanged(changes);
+    try {
+      registry.add("remote:s1:view-1", "p1");
+      expect(changes).toHaveBeenCalledTimes(1);
+
+      // A second Shell on the same project, then the first one hiding it:
+      // p1 is on screen throughout.
+      registry.add("remote:s2:view-9", "p1");
+      visibility.report("remote:s1:view-1", false);
+      expect(changes).toHaveBeenCalledTimes(1);
+
+      visibility.report("remote:s2:view-9", false);
+      expect(changes).toHaveBeenCalledTimes(2);
+      visibility.report("remote:s2:view-9", false);
+      expect(changes).toHaveBeenCalledTimes(2);
+    } finally {
+      off();
+      visibility.dispose();
+    }
+  });
 });
 
 describe("installEndpointVisibility", () => {
@@ -126,6 +156,66 @@ describe("installEndpointVisibility", () => {
     expect(getRemoteService("endpointVisibility")).toBeUndefined();
     expect(collectActiveProjectIds(null, null, "test")).toEqual(new Set());
     expect(onSession).toBeNull();
+  });
+
+  it("lets the idle clock stamp a project as the last Shell stops showing it (#13844)", () => {
+    const registry = fakeRegistry();
+    const dispose = installEndpointVisibility({ server: null, registry });
+    const time = { now: 1_000 };
+    const clock = new ProjectVisibilityClock(() => time.now);
+    const stop = trackProjectVisibility(() => collectActiveProjectIds(null, null, "test"), clock);
+    try {
+      time.now = 2_000;
+      registry.add("remote:s1:view-1", "p1");
+      time.now = 5_000;
+      getRemoteService("endpointVisibility")!.report("remote:s1:view-1", false);
+      time.now = 60_000;
+      expect(clock.lastVisibleAt("p1")).toBe(5_000);
+    } finally {
+      stop();
+      dispose();
+    }
+  });
+
+  it("lets the idle clock stamp a project whose Shell view closed or moved to another project", () => {
+    const registry = fakeRegistry();
+    const dispose = installEndpointVisibility({ server: null, registry });
+    const time = { now: 1_000 };
+    const clock = new ProjectVisibilityClock(() => time.now);
+    const stop = trackProjectVisibility(() => collectActiveProjectIds(null, null, "test"), clock);
+    try {
+      time.now = 2_000;
+      const closing = registry.add("remote:s1:view-1", "p1");
+      const moving = registry.add("remote:s2:view-1", "p2");
+      time.now = 5_000;
+      closing.closed = true;
+      registry.change();
+      time.now = 7_000;
+      moving.projectId = "p3";
+      registry.change();
+      time.now = 60_000;
+      expect(clock.lastVisibleAt("p1")).toBe(5_000);
+      expect(clock.lastVisibleAt("p2")).toBe(7_000);
+      expect(clock.lastVisibleAt("p3")).toBe(60_000);
+    } finally {
+      stop();
+      dispose();
+    }
+  });
+
+  it("announces that the Shells' projects stopped counting once uninstalled", () => {
+    const registry = fakeRegistry();
+    const dispose = installEndpointVisibility({ server: null, registry });
+    registry.add("remote:s1:view-1", "p1");
+    const changes = vi.fn(() => collectActiveProjectIds(null, null, "test"));
+    const off = onProjectPresenceChanged(changes);
+    try {
+      dispose();
+      expect(changes).toHaveBeenCalledTimes(1);
+      expect(changes.mock.results[0]?.value).toEqual(new Set());
+    } finally {
+      off();
+    }
   });
 });
 

@@ -268,6 +268,7 @@ vi.mock("../../ipc/handlers/projectCrud/index.js", () => ({
 }));
 
 const projectStoreMock = vi.hoisted(() => ({
+  getCurrentProjectId: vi.fn<() => string | null>(() => null),
   getAllProjects: vi.fn<() => { id: string; resumableAgentCount?: number }[]>(() => []),
   getProjectState: vi.fn<(id: string) => Promise<{ terminals?: Record<string, unknown>[] } | null>>(
     async () => null
@@ -366,6 +367,8 @@ import type { Mock } from "vitest";
 import { CHANNELS } from "../../ipc/channels.js";
 import { store } from "../../store.js";
 import { helpSessionService } from "../../services/HelpSessionService.js";
+import { projectVisibilityClock } from "../../services/projectVisibilityClock.js";
+import { notifyProjectPresenceChanged } from "../projectPresenceChanges.js";
 
 describe("evictStaleSessionFiles orphan-pass safety (#11349)", () => {
   function resetSweepMocks() {
@@ -985,6 +988,46 @@ describe("initGlobalServices task ordering", () => {
     // Windows without a ProjectViewManager are filtered out.
     contexts.push({ services: {} });
     expect(provider()).toEqual([pvm]);
+  });
+
+  it("stamps a project into the idle visibility clock as it leaves every window (#13844)", async () => {
+    const contexts: Array<{ services: { projectViewManager?: unknown } }> = [];
+    const fakeRegistry = {
+      all: () => contexts,
+      get size() {
+        return contexts.length;
+      },
+    } as unknown as WindowRegistry;
+
+    await initGlobalServices(fakeRegistry);
+    const run = registeredTaskRuns.get("project-visibility-clock");
+    expect(run).toBeDefined();
+
+    const nowSpy = vi.spyOn(Date, "now");
+    try {
+      nowSpy.mockReturnValue(1_000);
+      await run!();
+
+      // A window that opens after wiring is still seen.
+      nowSpy.mockReturnValue(2_000);
+      contexts.push({
+        services: {
+          projectViewManager: {
+            getActiveProjectId: () => "p-clock",
+            getOutgoingBridgeProjectId: () => null,
+          },
+        },
+      });
+      notifyProjectPresenceChanged();
+      nowSpy.mockReturnValue(5_000);
+      contexts.length = 0;
+      notifyProjectPresenceChanged();
+
+      nowSpy.mockReturnValue(60_000);
+      expect(projectVisibilityClock.lastVisibleAt("p-clock")).toBe(5_000);
+    } finally {
+      nowSpy.mockRestore();
+    }
   });
 
   it("calls helpSessionService.setMcpRegistry before pushing the mcp-server task", async () => {
