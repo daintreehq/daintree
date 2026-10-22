@@ -399,6 +399,7 @@ function KitMarkdownEditor({
   // leads and the other follows by scroll fraction. The leader is a ref, not a
   // flag raised around the write: the follower's own scroll event arrives
   // later and must not be taken for a lead.
+  const resyncRef = useRef<(() => void) | null>(null);
   useEffect(() => {
     const source = textareaRef.current;
     const view = previewRef.current;
@@ -412,36 +413,44 @@ function KitMarkdownEditor({
       const next = Math.round((from.scrollTop / fromRange) * toRange);
       if (Math.abs(to.scrollTop - next) >= 1) to.scrollTop = next;
     };
-    const lead = (el: HTMLElement) => () => {
-      leader = el;
-    };
-    const onScroll = (from: HTMLElement, to: HTMLElement) => () => {
-      if (leader !== from) return;
+    const schedule = () => {
       cancelAnimationFrame(frame);
-      frame = requestAnimationFrame(() => follow(from, to));
+      frame = requestAnimationFrame(() => follow(leader, leader === source ? view : source));
     };
+    resyncRef.current = schedule;
     const pairs: [HTMLElement, HTMLElement][] = [
       [source, view],
       [view, source],
     ];
-    const cleanups = pairs.flatMap(([from, to]) => {
-      const take = lead(from);
-      const scroll = onScroll(from, to);
-      const events = ["pointerenter", "wheel", "touchstart", "focus", "keydown"] as const;
+    const events = ["pointerenter", "wheel", "touchstart", "focus", "keydown"] as const;
+    const cleanups = pairs.map(([from]) => {
+      const take = () => {
+        if (leader === from) return;
+        leader = from;
+        // A frame queued for the old leader would move the new one.
+        cancelAnimationFrame(frame);
+      };
+      const scroll = () => {
+        if (leader === from) schedule();
+      };
       for (const name of events) from.addEventListener(name, take, { passive: true });
       from.addEventListener("scroll", scroll, { passive: true });
-      return [
-        () => {
-          for (const name of events) from.removeEventListener(name, take);
-          from.removeEventListener("scroll", scroll);
-        },
-      ];
+      return () => {
+        for (const name of events) from.removeEventListener(name, take);
+        from.removeEventListener("scroll", scroll);
+      };
     });
     return () => {
+      resyncRef.current = null;
       cancelAnimationFrame(frame);
       for (const cleanup of cleanups) cleanup();
     };
   }, [filling, split]);
+
+  // New text changes both scroll ranges without a scroll event.
+  useEffect(() => {
+    resyncRef.current?.();
+  }, [text]);
 
   const setText = (next: string) => {
     if (controlled === undefined) setOwnText(next);

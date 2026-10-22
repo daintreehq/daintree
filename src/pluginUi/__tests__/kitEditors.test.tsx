@@ -965,6 +965,27 @@ describe("MarkdownEditor", () => {
         expect(view.scrollTop).toBe(1000);
       });
 
+      it("drops a frame queued for the old leader when another pane takes the lead", () => {
+        const { source, view, flush } = setup();
+        source.scrollTop = 500;
+        fireEvent.scroll(source);
+        fireEvent.pointerEnter(view);
+        flush();
+        expect(view.scrollTop).toBe(0);
+      });
+
+      it("follows again after the text changes the ranges", () => {
+        const { source, view, flush } = setup();
+        source.scrollTop = 500;
+        fireEvent.scroll(source);
+        flush();
+        expect(view.scrollTop).toBe(1000);
+        geometry(view, 4100, 100);
+        fireEvent.change(source, { target: { value: "x\ny" } });
+        flush();
+        expect(view.scrollTop).toBe(2000);
+      });
+
       it("does nothing when either pane has no range to scroll", () => {
         const { source, view, flush } = setup();
         geometry(view, 100, 100);

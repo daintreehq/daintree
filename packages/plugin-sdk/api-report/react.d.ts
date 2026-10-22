@@ -4969,7 +4969,7 @@ interface PluginMarkdownEditorProps extends PluginRootAttributes {
      * an editor that is a whole pane's document. The source and the preview each
      * scroll inside the editor, `minRows` and `maxRows` no longer apply, and
      * with a side-by-side `layout` the two scroll in step. The parent needs a
-     * definite height: a `PaneLayout` with `scroll="none"`, or a flex column.
+     * definite height: a `PaneLayout` with `scroll="none"`, or a flex column with a bounded height.
      */
     fill?: boolean;
     /**
