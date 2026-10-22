@@ -154,10 +154,7 @@ export function PluginPanelActivityDockCue({
         <div
           aria-hidden="true"
           data-plugin-panel-activity={activity.shown}
-          className={cn(
-            "ml-1.5 flex items-center shrink-0 transition-[color] duration-150 ease-out",
-            COLORS[activity.shown]
-          )}
+          className={cn("ml-1.5 flex items-center shrink-0", COLORS[activity.shown])}
         >
           <ActivityGlyph shown={activity.shown} className={DOCK_STATE_GLYPH_CLASS} />
         </div>

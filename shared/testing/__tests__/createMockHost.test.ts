@@ -553,6 +553,18 @@ describe("createMockHost", () => {
       createMockHost({ reportsActivityPanelIds: [] }).setPanelActivity("p", { state: "working" })
     ).rejects.toThrow(/none of this plugin's contributes\.panels/);
 
+    const project = createMockHost({
+      pluginId: "project__b6700c7a__acme.chat",
+      reportsActivityPanelIds: ["chat"],
+    });
+    project.simulatePanelLifecycleChange({
+      panelId: "mine",
+      panelKindId: project.panelKindId("chat"),
+      pluginId: "project__b6700c7a__acme.chat",
+      phase: "mounted",
+    });
+    await expect(project.setPanelActivity("mine", { state: "waiting" })).resolves.toBeUndefined();
+
     const many = createMockHost();
     for (let i = 0; i < 256; i++) await many.setPanelActivity(`p${i}`, { state: "working" });
     await expect(many.setPanelActivity("p256", { state: "working" })).rejects.toThrow(

@@ -1344,7 +1344,7 @@ export function GeneralTab({
               <SettingsSwitchCard
                 id="general-grid-agent-highlights"
                 title="Grid panel agent highlights"
-                subtitle="Show waiting and working borders on grid panels, for agents and for plugins reporting their own work — failed borders always show"
+                subtitle="Show waiting and working borders on grid panels — failed borders always show"
                 isEnabled={showGridAgentHighlights}
                 onChange={() =>
                   void actionService.dispatch(

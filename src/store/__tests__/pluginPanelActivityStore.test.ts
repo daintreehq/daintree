@@ -91,6 +91,14 @@ describe("pluginPanelActivityStore", () => {
     expect(store().seenRevisionByPanelId.p1).not.toBe(store().activityByPanelId.p1?.acme?.revision);
   });
 
+  it("keeps a seen mark while another plugin's report on the panel remains", () => {
+    push!({ pluginId: "acme", activity: { p1: { state: "finished", revision: 1 } } });
+    push!({ pluginId: "other", activity: { p1: { state: "working", revision: 2 } } });
+    store().markSeen("p1", 1);
+    push!({ pluginId: "other", activity: {} });
+    expect(store().seenRevisionByPanelId.p1).toBe(1);
+  });
+
   it("drops a seen mark once the panel has no reports left", () => {
     push!({ pluginId: "acme", activity: { p1: { state: "finished", revision: 1 } } });
     store().markSeen("p1", 1);

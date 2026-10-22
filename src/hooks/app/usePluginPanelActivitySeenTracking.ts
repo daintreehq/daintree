@@ -6,6 +6,7 @@ import { canopyViewIsWatched } from "@/lib/canopySeen";
 import { subscribeProjectViewObservability } from "@/lib/viewCacheState";
 import { useCanopyStore } from "@/store/canopyStore";
 import { usePanelStore } from "@/store/panelStore";
+import { useProjectHomeStore } from "@/store/projectHomeStore";
 import {
   selectPanelActivityReport,
   usePluginPanelActivityStore,
@@ -21,7 +22,8 @@ interface Unseen {
  * been in front of the user (#13820), by the rule an agent's hand-back is held
  * to: the focused pane, while its view can be seen, its window has focus and
  * Canopy is not open over it, for `HAND_BACK_SEEN_DWELL_MS`. Opening a docked
- * panel focuses it, so a look in the dock counts the same. Seen is this view's
+ * panel focuses it, so a look in the dock counts the same; the project's Home
+ * hides the grid, focused panel and all, so nothing counts while it shows. Seen is this view's
  * own record — nothing is told to main, and no agent read mark moves.
  */
 export function usePluginPanelActivitySeenTracking(): void {
@@ -30,6 +32,7 @@ export function usePluginPanelActivitySeenTracking(): void {
 
     const unseenInFront = (): Unseen | null => {
       if (!canopyViewIsWatched() || useCanopyStore.getState().isOpen) return null;
+      if (useProjectHomeStore.getState().presented) return null;
       const { focusedId, panelsById } = usePanelStore.getState();
       if (focusedId === null) return null;
       const panel = panelsById[focusedId];
@@ -88,6 +91,9 @@ export function usePluginPanelActivitySeenTracking(): void {
     const offCanopy = useCanopyStore.subscribe((state, prev) => {
       if (state.isOpen !== prev.isOpen) sync();
     });
+    const offHome = useProjectHomeStore.subscribe((state, prev) => {
+      if (state.presented !== prev.presented) sync();
+    });
     window.addEventListener("focus", sync);
     window.addEventListener("blur", sync);
 
@@ -97,6 +103,7 @@ export function usePluginPanelActivitySeenTracking(): void {
       offRegistry();
       offObservable();
       offCanopy();
+      offHome();
       window.removeEventListener("focus", sync);
       window.removeEventListener("blur", sync);
       cancel();

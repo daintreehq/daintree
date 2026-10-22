@@ -21,6 +21,8 @@ let mockActiveDockTerminalId: string | null = null;
 let mockDockAgentState: string | undefined = undefined;
 let mockIsAgent = false;
 let mockPluginActivity: { pluginId: string; shown: string; description: string } | null = null;
+let mockDeprioritized = false;
+let mockShowDockHighlights = false;
 let capturedOnOpenChange: ((open: boolean) => void) | null = null;
 let capturedOnOpenAutoFocus: ((event: { preventDefault: () => void }) => void) | null = null;
 let capturedOnFocusOutside: ((event: { preventDefault: () => void }) => void) | null = null;
@@ -44,7 +46,7 @@ vi.mock("@/store", () => ({
     selector: (s: { isFocusMode: boolean; gestureSidebarHidden: boolean }) => unknown
   ) => selector({ isFocusMode: false, gestureSidebarHidden: false }),
   usePreferencesStore: (selector: (s: { showDockAgentHighlights: boolean }) => unknown) =>
-    selector({ showDockAgentHighlights: false }),
+    selector({ showDockAgentHighlights: mockShowDockHighlights }),
 }));
 
 vi.mock("@/store/agentSettingsStore", () => ({
@@ -97,7 +99,7 @@ vi.mock("../dockPanelPortalContext", () => ({
 vi.mock("../useDockBlockedState", () => ({
   useDockBlockedState: () => null,
   getDockDisplayAgentState: () => mockDockAgentState,
-  isDockAgentStateDeprioritized: () => false,
+  isDockAgentStateDeprioritized: () => mockDeprioritized,
 }));
 
 vi.mock("../dockPopoverGuard", () => ({
@@ -326,6 +328,30 @@ describe("DockedTerminalItem plain-terminal activity cue (#11187)", () => {
     expect(
       screen.getByRole("button", { name: /— Reported by Acme: Waiting — Pick a branch/ })
     ).not.toBeNull();
+  });
+
+  it("keeps a plain PTY plugin panel's chip un-dimmed while its plugin reports it waiting", () => {
+    mockDeprioritized = true;
+    mockShowDockHighlights = true;
+    try {
+      const resting = render(<DockedTerminalItem terminal={makeTerminal({ id: "t-1" })} />);
+      const restingChip = resting.container.querySelector("[data-dock-item]");
+      expect(restingChip?.className).toContain("border-transparent");
+      resting.unmount();
+
+      mockPluginActivity = {
+        pluginId: "acme",
+        shown: "waiting",
+        description: "Reported by Acme: Waiting",
+      };
+      const waiting = render(<DockedTerminalItem terminal={makeTerminal({ id: "t-1" })} />);
+      const chip = waiting.container.querySelector("[data-dock-item]");
+      expect(chip?.className).not.toContain("border-transparent");
+      expect(chip?.className).not.toBe(restingChip?.className);
+    } finally {
+      mockDeprioritized = false;
+      mockShowDockHighlights = false;
+    }
   });
 
   it("never lets a plugin's report displace an observed agent state", () => {

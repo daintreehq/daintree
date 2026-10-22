@@ -2572,7 +2572,13 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
         known &&
         declared &&
         !declared.some(
-          (id) => known.panelKindId === id || known.panelKindId === `${mockManifestId}.${id}`
+          (id) =>
+            known.panelKindId === id ||
+            known.panelKindId ===
+              toRuntimePanelKindId(
+                { origin: pluginInfo.origin, pluginId: mockManifestId, kindId: id },
+                mockProjectId
+              )
         )
       ) {
         throw new Error(

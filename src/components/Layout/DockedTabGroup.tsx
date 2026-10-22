@@ -712,6 +712,9 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
   const StateIcon = shownAgentState ? SESSION_ICONS[shownAgentState] : null;
   // Only where no agent glyph is drawn, and never folded into the agent state.
   const pluginActivity = displayAgentState ? null : reportedActivity;
+  // An active plugin report on the active tab is not a resting chip.
+  const chipDeprioritized =
+    isDeprioritized && pluginActivity?.shown !== "working" && pluginActivity?.shown !== "waiting";
 
   return (
     <DockPopoverChildProvider>
@@ -728,7 +731,7 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
                   showDockAgentHighlights &&
                   (blockedState === "waiting" || pluginActivity?.shown === "waiting") &&
                   DOCK_CHIP_WAITING_CLASS,
-                isDeprioritized && "border-transparent"
+                chipDeprioritized && "border-transparent"
               )}
               onClick={(e) => {
                 e.preventDefault();

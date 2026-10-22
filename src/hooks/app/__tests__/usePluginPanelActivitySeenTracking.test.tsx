@@ -6,6 +6,7 @@ import { registerPanelKind, unregisterPluginPanelKinds } from "@shared/config/pa
 import { HAND_BACK_SEEN_DWELL_MS } from "@shared/utils/runHandBack";
 import { usePanelStore } from "@/store/panelStore";
 import { useCanopyStore } from "@/store/canopyStore";
+import { useProjectHomeStore } from "@/store/projectHomeStore";
 import {
   _resetPluginPanelActivityStoreForTest,
   usePluginPanelActivityStore,
@@ -208,6 +209,60 @@ describe("usePluginPanelActivitySeenTracking", () => {
       vi.advanceTimersByTime(HAND_BACK_SEEN_DWELL_MS);
     });
     expect(seen().a).toBe(3);
+  });
+
+  it("does not count a focused grid panel hidden behind the project's Home", () => {
+    act(() => {
+      useProjectHomeStore.getState().setPresented(true);
+    });
+    try {
+      renderHook(() => usePluginPanelActivitySeenTracking());
+      report({ a: { state: "finished", revision: 1 } });
+      act(() => {
+        vi.advanceTimersByTime(HAND_BACK_SEEN_DWELL_MS * 2);
+      });
+      expect(seen().a).toBeUndefined();
+
+      act(() => {
+        useProjectHomeStore.getState().setPresented(false);
+      });
+      act(() => {
+        vi.advanceTimersByTime(HAND_BACK_SEEN_DWELL_MS);
+      });
+      expect(seen().a).toBe(1);
+    } finally {
+      act(() => {
+        useProjectHomeStore.getState().setPresented(false);
+      });
+    }
+  });
+
+  it("restarts the dwell when a new completion replaces one mid-dwell", () => {
+    renderHook(() => usePluginPanelActivitySeenTracking());
+    report({ a: { state: "finished", revision: 1 } });
+    act(() => {
+      vi.advanceTimersByTime(HAND_BACK_SEEN_DWELL_MS - 10);
+    });
+    report({ a: { state: "finished", reason: "Synced again", revision: 2 } });
+    act(() => {
+      vi.advanceTimersByTime(20);
+    });
+    expect(seen().a).toBeUndefined();
+    act(() => {
+      vi.advanceTimersByTime(HAND_BACK_SEEN_DWELL_MS);
+    });
+    expect(seen().a).toBe(2);
+  });
+
+  it("never marks a working or waiting report", () => {
+    renderHook(() => usePluginPanelActivitySeenTracking());
+    for (const state of ["working", "waiting"] as const) {
+      report({ a: { state, revision: state === "working" ? 1 : 2 } });
+      act(() => {
+        vi.advanceTimersByTime(HAND_BACK_SEEN_DWELL_MS * 2);
+      });
+    }
+    expect(seen()).toEqual({});
   });
 
   it("stops watching on unmount", () => {

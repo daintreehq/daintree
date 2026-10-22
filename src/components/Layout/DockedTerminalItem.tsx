@@ -352,7 +352,8 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
   const stateLabel =
     isHandBack && shownAgentState ? SESSION_LABELS[shownAgentState] : observedStateLabel;
   const StateIcon = shownAgentState ? SESSION_ICONS[shownAgentState] : null;
-  const isDeprioritized = !isOpen && isDockAgentStateDeprioritized(agentState);
+  const pluginActive = pluginActivity?.shown === "working" || pluginActivity?.shown === "waiting";
+  const isDeprioritized = !isOpen && !pluginActive && isDockAgentStateDeprioritized(agentState);
 
   // Re-fit the terminal once a resize gesture settles on a new popover height.
   const {
