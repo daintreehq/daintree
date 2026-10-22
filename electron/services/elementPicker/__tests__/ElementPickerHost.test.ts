@@ -22,6 +22,7 @@ import { revisionOf, type SourceMapProvider } from "../sourceAccess.js";
 import { createSourceMapSymbolicator, symbolicatedResult } from "../worker/symbolication.js";
 import { COORDINATE_CONVENTIONS } from "../../../../shared/elementPicker/coordinates.js";
 import type { SourceCandidate } from "../../../../shared/elementPicker/source.js";
+import type { ResolutionResult } from "../../../../shared/elementPicker/resolution.js";
 import {
   RuntimeChild,
   STUB_MARKER,
@@ -568,26 +569,51 @@ describe("ElementPickerHost", () => {
       file: module,
       location: { ...COORDINATE_CONVENTIONS.v8StackFrame, columnUnit: "utf16", line: 1, column: 1 },
     };
-    const mapper = (forge: boolean): HostSourceResolver => ({
+    type Variant = "mapped" | "ambiguous" | "forged-url" | "forged-revision" | "forged-alternative";
+    const mapper = (variant: Variant): HostSourceResolver => ({
       framework: "svelte",
       resolve: async (req, access, signal) => {
         const symbolication = await createSourceMapSymbolicator(access).symbolicate(
           { url: frame.file, location: frame.location },
           signal
         );
-        const result = symbolicatedResult(frame, symbolication);
-        if (forge && result.state === "mapped") {
-          result.sourceMap = { ...result.sourceMap, mapUrl: "http://localhost:5173/forged.map" };
-        }
+        const mapped = symbolicatedResult(frame, symbolication);
+        if (mapped.state !== "mapped") throw new Error(`expected a mapping, got ${mapped.state}`);
+        const { candidateId, claim, ...held } = mapped;
+        const forged = {
+          ...held,
+          sourceMap: { ...held.sourceMap, mapUrl: "http://localhost:5173/forged.map" },
+        };
+        const answers: Record<Variant, ResolutionResult> = {
+          mapped,
+          ambiguous: { state: "ambiguous", candidateId, claim, alternatives: [held, held] },
+          "forged-url": { ...mapped, sourceMap: forged.sourceMap },
+          "forged-revision": {
+            ...mapped,
+            sourceMap: { ...held.sourceMap, mapRevision: `sha256:${"0".repeat(64)}` },
+          },
+          "forged-alternative": {
+            state: "ambiguous",
+            candidateId,
+            claim,
+            alternatives: [held, forged],
+          },
+        };
         return {
           requestId: req.requestId,
           documentEpoch: req.documentEpoch,
-          outcomes: [{ elementId: "el-1", results: [result] }],
+          outcomes: [{ elementId: "el-1", results: [answers[variant]] }],
         };
       },
     });
-    for (const forge of [false, true]) {
-      const { host } = harness({ svelte: async () => mapper(forge) }, { sourceMaps });
+    for (const variant of [
+      "mapped",
+      "ambiguous",
+      "forged-url",
+      "forged-revision",
+      "forged-alternative",
+    ] as const) {
+      const { host } = harness({ svelte: async () => mapper(variant) }, { sourceMaps });
       const id = await host.registerWorkspace({
         worktreePath: root,
         appRoot: path.join(root, "app"),
@@ -595,23 +621,17 @@ describe("ElementPickerHost", () => {
         onSourceChanged: () => {},
       });
       const resolving = host.resolve(request(id, [observation("el-1", [frame])]));
-      if (forge) {
-        await expect(resolving).rejects.toMatchObject({ code: "RESOLVER_FAILED" });
+      if (variant.startsWith("forged")) {
+        await expect(resolving, variant).rejects.toMatchObject({ code: "RESOLVER_FAILED" });
         continue;
       }
-      await expect(resolving).resolves.toMatchObject({
-        outcomes: [
-          {
-            results: [
-              {
-                state: "mapped",
-                target: { file: { workspaceId: id, path: "app/src/App.svelte" } },
-                fileRevision: sha256(path.join(root, "app", "src", "App.svelte")),
-                sourceMap: { mapUrl: null, sourceCheck: "matches" },
-              },
-            ],
-          },
-        ],
+      const [result] = results(await resolving);
+      expect(result?.state, variant).toBe(variant);
+      if (variant !== "mapped") continue;
+      expect(result).toMatchObject({
+        target: { file: { workspaceId: id, path: "app/src/App.svelte" } },
+        fileRevision: sha256(path.join(root, "app", "src", "App.svelte")),
+        sourceMap: { mapUrl: null, sourceCheck: "matches" },
       });
       expect(sourceMaps).toHaveBeenLastCalledWith(
         expect.objectContaining({ previewOrigin: "http://localhost:5173", generatedUrl: module }),

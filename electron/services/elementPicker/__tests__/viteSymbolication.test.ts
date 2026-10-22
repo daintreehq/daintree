@@ -1,5 +1,5 @@
 import fs from "node:fs";
-import net from "node:net";
+import type { AddressInfo } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -58,17 +58,6 @@ let origin: string;
 let host: ElementPickerHost;
 let workspaceId: string;
 
-function freePort(): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const probe = net.createServer();
-    probe.once("error", reject);
-    probe.listen(0, "127.0.0.1", () => {
-      const { port } = probe.address() as net.AddressInfo;
-      probe.close(() => resolve(port));
-    });
-  });
-}
-
 /** What React's resolver will do with a `_debugStack` frame, as far as mapping goes. */
 function symbolicatingResolver(): HostSourceResolver {
   return {
@@ -109,11 +98,14 @@ function positionOf(text: string, needle: string): { line: number; column: numbe
   return { line: index + 1, column: lines[index]!.indexOf(needle) };
 }
 
+async function served(url: string): Promise<string> {
+  return (await fetch(url)).text();
+}
+
 /** The frame a `jsxDEV` call for `<h2>` reports: V8 numbers both from 1. */
 async function h2Frame(): Promise<SourceCandidate> {
   const url = `${origin}/src/Card.tsx?t=${Date.now()}`;
-  const served = await (await fetch(url)).text();
-  const call = positionOf(served, 'jsxDEV("h2"');
+  const call = positionOf(await served(url), 'jsxDEV("h2"');
   return {
     kind: "element-creation",
     candidateId: "c-1",
@@ -149,7 +141,6 @@ beforeAll(async () => {
   fs.writeFileSync(cardPath, CARD);
   fs.symlinkSync(REPO_NODE_MODULES, path.join(root, "node_modules"), "junction");
 
-  const port = await freePort();
   server = await createServer({
     root,
     configFile: false,
@@ -157,14 +148,15 @@ beforeAll(async () => {
     logLevel: "silent",
     cacheDir: path.join(root, ".vite"),
     plugins: [react()],
-    // No watcher: the test decides when the dev server notices an edit.
-    server: { host: "127.0.0.1", port, strictPort: true, watch: null },
+    // No watcher: the test decides when the dev server notices an edit. The
+    // port is Vite's to pick, moving past one in use, and is read back below.
+    server: { host: "127.0.0.1", watch: null },
     // Pre-bundling React changes nothing about Card.tsx's own map, and an
     // optimizer run still in flight holds `close()` open under vitest.
     optimizeDeps: { disabled: true },
   });
   await server.listen();
-  origin = `http://127.0.0.1:${port}`;
+  origin = `http://127.0.0.1:${(server.httpServer!.address() as AddressInfo).port}`;
 
   host = new ElementPickerHost({
     fork: () => new RuntimeChild({ react: async () => symbolicatingResolver() }),
@@ -186,9 +178,7 @@ afterAll(async () => {
 });
 
 describe("symbolication against a real Vite 8 React dev server", () => {
-  let firstMap: string;
-
-  it("maps a generated frame to the authored file and line", async () => {
+  it("maps a frame, calls it stale while the server lags an edit, and maps it again after", async () => {
     const result = await resolveFrame(await h2Frame());
     expect(result).toEqual({
       state: "mapped",
@@ -202,15 +192,14 @@ describe("symbolication against a real Vite 8 React dev server", () => {
         sourceCheck: "matches",
       },
     });
-    firstMap = result.state === "mapped" ? result.sourceMap.mapRevision : "";
-  });
+    const firstMap = result.state === "mapped" ? result.sourceMap.mapRevision : "";
 
-  it("calls the mapping stale once the file changes under a map the server has not rebuilt", async () => {
-    const frame = await h2Frame();
+    // The file changes on disk; with no watcher the server keeps serving the
+    // transform, and the map, it built from the old text.
+    const before = await served(`${origin}/src/Card.tsx`);
     const edited = `// edited\n// again\n${CARD}`;
     fs.writeFileSync(cardPath, edited);
-    const result = await resolveFrame(frame);
-    expect(result).toMatchObject({
+    await expect(resolveFrame(await h2Frame())).resolves.toMatchObject({
       state: "stale",
       reason: "file-changed",
       currentFileRevision: revisionOf(fs.readFileSync(cardPath)),
@@ -220,18 +209,20 @@ describe("symbolication against a real Vite 8 React dev server", () => {
         sourceMap: { mapRevision: firstMap, sourceCheck: "differs" },
       },
     });
-  });
 
-  it("maps through the new map once the update reaches the server", async () => {
+    // The update reaches the server, as HMR would deliver it. The change
+    // handler is async, so wait until the server is serving the new transform.
     server.watcher.emit("change", cardPath);
-    const edited = fs.readFileSync(cardPath, "utf8");
-    const result = await resolveFrame(await h2Frame());
-    expect(result).toMatchObject({
+    await vi.waitFor(async () => expect(await served(`${origin}/src/Card.tsx`)).not.toBe(before), {
+      timeout: 5_000,
+    });
+    const updated = await resolveFrame(await h2Frame());
+    expect(updated).toMatchObject({
       state: "mapped",
       target: { file: { path: "src/Card.tsx" }, location: authoredH2(edited) },
       sourceMap: { sourceCheck: "matches" },
     });
-    expect(result.state === "mapped" && result.sourceMap.mapRevision).not.toBe(firstMap);
+    expect(updated.state === "mapped" && updated.sourceMap.mapRevision).not.toBe(firstMap);
     expect(authoredH2(edited).line).toBe(authoredH2(CARD).line + 2);
   });
 

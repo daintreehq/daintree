@@ -259,8 +259,13 @@ export class JobSourceAccess {
     const stopped = this.stopped();
     if (stopped) return stopped;
     const fetched = await this.maps.get(generatedUrl);
+    const late = this.stopped();
+    if (late) return late;
+    if (!fetched) return { ok: false, reason: "map-missing" };
+    // Whatever kept the map from this job keeps its sources from it too.
+    if (!fetched.ok) return fetched;
     const { previewOrigin } = this.options;
-    if (!fetched?.ok || previewOrigin === null) return { ok: false, reason: "map-missing" };
+    if (previewOrigin === null) return { ok: false, reason: "unsupported" };
     return locateMapSource(source, sourceRoot, {
       workspaceId: this.options.workspaceId,
       roots: this.options.roots,

@@ -276,6 +276,37 @@ describe("source map provider", () => {
     });
   });
 
+  it("follows only real redirects: a 304 naming another module is not one", async () => {
+    preview.routes.set("/a.js", (_request, response) =>
+      response.writeHead(304, { location: "/other.js" }).end()
+    );
+    preview.routes.set("/other.js", body(inline()));
+    await expect(fetchMap(`${preview.origin}/a.js`)).resolves.toEqual({
+      ok: false,
+      reason: "map-missing",
+    });
+    expect(preview.hits).toEqual(["/a.js"]);
+  });
+
+  it("keeps the bytes a cancelled read already moved charged to the job", async () => {
+    const chunk = "x".repeat(1000);
+    preview.routes.set("/partial.js", (_request, response) => {
+      response.writeHead(200, { "content-type": "text/javascript" });
+      response.write(chunk);
+    });
+    const controller = new AbortController();
+    const spent = meter();
+    const pending = fetchMap(`${preview.origin}/partial.js`, spent, controller.signal);
+    const settled = pending.then(
+      () => "resolved",
+      () => "rejected"
+    );
+    await expect.poll(() => spent.received).toBe(chunk.length);
+    controller.abort();
+    await expect(settled).resolves.toBe("rejected");
+    expect(spent).toMatchObject({ requests: 1, received: chunk.length });
+  });
+
   it("stops when the job is cancelled", async () => {
     preview.routes.set("/slow.js", () => undefined);
     const controller = new AbortController();
@@ -297,12 +328,16 @@ describe("sourceMappingReference", () => {
       "a.map"
     );
     expect(sourceMappingReference("//# sourceMappingURL=only.map")).toBe("only.map");
+    expect(sourceMappingReference("a;\n//# sourceMappingURL=a.map\n/* license */\n")).toBe("a.map");
   });
 
   it("ignores an annotation that code follows, or one inside the module's own text", () => {
     expect(sourceMappingReference("//# sourceMappingURL=a.map\nexport const a = 1;\n")).toBeNull();
     expect(sourceMappingReference('const s = "//# sourceMappingURL=a.map";\n')).toBeNull();
     expect(sourceMappingReference("x; //# sourceMappingURL=a.map")).toBeNull();
+    expect(
+      sourceMappingReference("//# sourceMappingURL=a.map\n/* a */ run(); /* b */\n")
+    ).toBeNull();
     expect(sourceMappingReference("\n")).toBeNull();
     expect(sourceMappingReference("")).toBeNull();
   });

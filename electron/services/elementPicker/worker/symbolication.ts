@@ -78,9 +78,10 @@ interface DecodedMap {
  * nowhere near them; they bound what a map can make the host build.
  */
 export const SOURCE_MAP_LIMITS = {
-  sectionDepth: 4,
   sections: 4_096,
   sources: 16_384,
+  /** Where a section may start: the decoder builds every generated line before it. */
+  sectionLine: 1_000_000,
 } as const;
 
 /**
@@ -106,6 +107,8 @@ function cached(revision: FileRevision): DecodedMap | undefined {
 
 function remember(revision: FileRevision, entry: DecodedMap): void {
   if (entry.size > DECODED_MAP_CACHE_LIMITS.size) return;
+  // Two jobs can decode the same map at once; the second replaces the first.
+  decodedSize -= decodedMaps.get(revision)?.size ?? 0;
   decodedMaps.set(revision, entry);
   decodedSize += entry.size;
   for (const [key, oldest] of decodedMaps) {
@@ -146,39 +149,46 @@ function isCoordinate(value: unknown): value is number {
 }
 
 /**
- * The map as the decoder will see it: each leaf's sources swapped for opaque
- * ids, with what they named kept here by index. Left to the decoder, a source
- * is resolved as a URL, which rewrites a Windows or absolute path into a path
- * on the dev server, and is looked up by name, which confuses two sections
- * that both name `index.ts`.
+ * The map as the decoder will see it: each source swapped for an opaque id,
+ * with what it named kept here by index. Left to the decoder, a source is
+ * resolved as a URL, which rewrites a Windows or absolute path into a path on
+ * the dev server, and is looked up by name, which confuses two sections that
+ * both name `index.ts`.
+ *
+ * An index map is taken one level deep, as bundlers write them: each section
+ * embeds a regular map. The pinned decoder places a nested section's columns
+ * wrongly, and a section that points at a `url` would have the host fetch.
  */
-function opaque(
-  input: unknown,
-  sources: MapSource[],
-  depth: number,
-  counts: { sections: number }
-): Record<string, unknown> | null {
-  if (!isRecord(input) || input.version !== 3) return null;
-  if ("sections" in input) {
-    if (depth >= SOURCE_MAP_LIMITS.sectionDepth || !Array.isArray(input.sections)) return null;
-    const sections: Record<string, unknown>[] = [];
-    for (const section of input.sections) {
-      // A section may only embed its map: the `url` form would have the host fetch on its own.
-      if (!isRecord(section) || "url" in section || !isRecord(section.offset)) return null;
-      const { line, column } = section.offset;
-      if (!isCoordinate(line) || !isCoordinate(column)) return null;
-      counts.sections += 1;
-      if (counts.sections > SOURCE_MAP_LIMITS.sections) return null;
-      const map = opaque(section.map, sources, depth + 1, counts);
-      if (!map) return null;
-      sections.push({ offset: { line, column }, map });
-    }
-    return { version: 3, sections };
+function opaque(input: unknown): { map: Record<string, unknown>; sources: MapSource[] } | null {
+  if (!isRecord(input)) return null;
+  const sources: MapSource[] = [];
+  if (!("sections" in input)) {
+    const map = opaqueLeaf(input, sources);
+    return map && { map, sources };
   }
+  if (input.version !== 3 || !Array.isArray(input.sections)) return null;
+  if (input.sections.length > SOURCE_MAP_LIMITS.sections) return null;
+  const sections: Record<string, unknown>[] = [];
+  for (const section of input.sections) {
+    if (!isRecord(section) || "url" in section || !isRecord(section.offset)) return null;
+    const { line, column } = section.offset;
+    if (!isCoordinate(line) || !isCoordinate(column)) return null;
+    if (line > SOURCE_MAP_LIMITS.sectionLine) return null;
+    if (!isRecord(section.map) || "sections" in section.map) return null;
+    const map = opaqueLeaf(section.map, sources);
+    if (!map) return null;
+    sections.push({ offset: { line, column }, map });
+  }
+  return { map: { version: 3, sections }, sources };
+}
 
+function opaqueLeaf(
+  input: Record<string, unknown>,
+  sources: MapSource[]
+): Record<string, unknown> | null {
   const { mappings, names, sourceRoot, sourcesContent } = input;
-  if (typeof mappings !== "string" || !Array.isArray(input.sources)) return null;
-  if (names !== undefined && !Array.isArray(names)) return null;
+  if (input.version !== 3 || typeof mappings !== "string") return null;
+  if (!Array.isArray(input.sources) || (names !== undefined && !Array.isArray(names))) return null;
   if (sources.length + input.sources.length > SOURCE_MAP_LIMITS.sources) return null;
   const ignoreList = Array.isArray(input.ignoreList)
     ? input.ignoreList
@@ -207,13 +217,12 @@ function decode(trace: Decoder, text: string): DecodedMap | null {
   } catch {
     return null;
   }
-  const sources: MapSource[] = [];
-  const map = opaque(parsed, sources, 0, { sections: 0 });
-  if (!map) return null;
+  const prepared = opaque(parsed);
+  if (!prepared) return null;
   try {
     return {
-      trace: trace.AnyMap(map as Parameters<Decoder["AnyMap"]>[0]),
-      sources,
+      trace: trace.AnyMap(prepared.map as Parameters<Decoder["AnyMap"]>[0]),
+      sources: prepared.sources,
       size: text.length,
     };
   } catch {
@@ -261,10 +270,14 @@ export function createSourceMapSymbolicator(access: ResolverSourceAccess): Frame
     if (!decoded) {
       const trace = await loadDecoder();
       if (signal.aborted) return unavailable("cancelled");
-      const fresh = decode(trace, text);
-      if (!fresh) return unavailable("map-missing");
-      remember(revision, fresh);
-      decoded = fresh;
+      // Another job may have decoded the same bytes while the decoder loaded.
+      decoded = cached(revision);
+      if (!decoded) {
+        const fresh = decode(trace, text);
+        if (!fresh) return unavailable("map-missing");
+        remember(revision, fresh);
+        decoded = fresh;
+      }
     }
     return { ok: true, mapUrl, revision, decoded };
   }
@@ -330,7 +343,13 @@ export function createSourceMapSymbolicator(access: ResolverSourceAccess): Frame
       const index = Number(found.source);
       const source = loaded.decoded.sources[index];
       if (!source || source.raw === null) return unavailable("map-missing");
-      if (found.line > MAX_SOURCE_COORDINATE || found.column > MAX_SOURCE_COORDINATE) {
+      // A map can encode a position before the start of its source; that is no position at all.
+      if (
+        found.line < 1 ||
+        found.column < 0 ||
+        found.line > MAX_SOURCE_COORDINATE ||
+        found.column > MAX_SOURCE_COORDINATE
+      ) {
         return unavailable("map-missing");
       }
 
@@ -354,7 +373,7 @@ export function createSourceMapSymbolicator(access: ResolverSourceAccess): Frame
             column: found.column,
           },
         },
-        name: found.name,
+        name: typeof found.name === "string" ? found.name : null,
         ignoreListed: source.ignored,
         sourceMap: {
           mapUrl: loaded.mapUrl,

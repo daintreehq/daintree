@@ -344,14 +344,34 @@ describe("JobSourceAccess", () => {
     ).resolves.toEqual({ ok: false, reason: "outside-workspace" });
   });
 
-  it("locates nothing through a map that failed to fetch", async () => {
-    const { access: job } = access({
-      sourceMaps: async () => ({ ok: false, reason: "map-missing" }),
-    });
-    await job.fetchSourceMap("http://localhost:5173/src/A.svelte");
-    await expect(
-      job.locateSource("http://localhost:5173/src/A.svelte", "A.svelte", null)
-    ).resolves.toEqual({ ok: false, reason: "map-missing" });
+  it("locates nothing through a map that failed to fetch, and says why", async () => {
+    for (const reason of ["map-missing", "outside-workspace", "budget-exhausted"] as const) {
+      const { access: job } = access({ sourceMaps: async () => ({ ok: false, reason }) });
+      await job.fetchSourceMap("http://localhost:5173/src/A.svelte");
+      await expect(
+        job.locateSource("http://localhost:5173/src/A.svelte", "A.svelte", null)
+      ).resolves.toEqual({ ok: false, reason });
+    }
+  });
+
+  it("reports a locate that waited on a fetch the job lost as cancelled, or out of time", async () => {
+    for (const deadline of [false, true]) {
+      let release!: () => void;
+      const sourceMaps = vi.fn<SourceMapProvider>(
+        ({ generatedUrl }) =>
+          new Promise((resolve) => (release = () => resolve(served(generatedUrl))))
+      );
+      const { access: job, controller } = access({ sourceMaps, expired: () => deadline });
+      void job.fetchSourceMap("http://localhost:5173/src/A.svelte");
+      await vi.waitFor(() => expect(sourceMaps).toHaveBeenCalled());
+      const located = job.locateSource("http://localhost:5173/src/A.svelte", "A.svelte", null);
+      controller.abort();
+      release();
+      await expect(located).resolves.toEqual({
+        ok: false,
+        reason: deadline ? "budget-exhausted" : "cancelled",
+      });
+    }
   });
 });
 

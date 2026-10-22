@@ -351,25 +351,44 @@ describe("source map symbolication", () => {
     });
   });
 
+  it("refuses a mapping to before the start of its source rather than naming line 0", async () => {
+    // Source line -1 and source column -1: decodable, but no position in any file.
+    for (const mappings of ["AADA", "AAAD"]) {
+      await expect(symbolicate(fake(cardMap({ mappings })), v8(1, 1)), mappings).resolves.toEqual({
+        ok: false,
+        reason: "map-missing",
+      });
+    }
+  });
+
+  it("names nothing when the map's name at that position is not a string", async () => {
+    await expect(symbolicate(fake(cardMap({ names: [42] })))).resolves.toMatchObject({
+      ok: true,
+      name: null,
+    });
+  });
+
   it("refuses a map it cannot or should not decode", async () => {
-    const nest = (map: unknown, depth: number): unknown =>
-      depth === 0
-        ? map
-        : { version: 3, sections: [{ offset: { line: 0, column: 0 }, map: nest(map, depth - 1) }] };
+    const section = (map: unknown, line = 0) => ({
+      version: 3,
+      sections: [{ offset: { line, column: 0 }, map }],
+    });
     for (const map of [
       "{ not json",
       cardMap({ version: 2 }),
       cardMap({ mappings: 42 }),
       { version: 3, sections: [{ offset: { line: 0, column: 0 }, url: "http://localhost/x.map" }] },
       { version: 3, sections: [{ offset: { line: -1, column: 0 }, map: cardMap() }] },
-      nest(cardMap(), SOURCE_MAP_LIMITS.sectionDepth + 1),
+      // Nested sections: the pinned decoder misplaces their columns.
+      section(section(cardMap())),
+      // The decoder would build every line before the offset, a billion of them here.
+      section(cardMap(), 1_000_000_000),
+      section(cardMap(), SOURCE_MAP_LIMITS.sectionLine + 1),
       cardMap({ sources: Array.from({ length: SOURCE_MAP_LIMITS.sources + 1 }, () => "a.ts") }),
     ]) {
       await expect(symbolicate(fake(map))).resolves.toEqual({ ok: false, reason: "map-missing" });
     }
-    await expect(
-      symbolicate(fake(nest(cardMap(), SOURCE_MAP_LIMITS.sectionDepth)))
-    ).resolves.toMatchObject({ ok: true });
+    await expect(symbolicate(fake(section(cardMap())))).resolves.toMatchObject({ ok: true });
   });
 
   it("marks a source the map ignore-lists", async () => {

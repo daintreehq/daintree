@@ -20,6 +20,9 @@ import {
 
 export const MAX_SOURCE_MAP_REDIRECTS = 5;
 
+/** Only these move a resource; a 304 or 300 carrying a Location is not a redirect to follow. */
+const REDIRECTS = new Set([301, 302, 303, 307, 308]);
+
 /** The provenance a result carries is bounded; a longer map URL could never be named. */
 const MAX_MAP_URL_LENGTH = 2048;
 
@@ -41,7 +44,8 @@ function isHttp(url: URL): boolean {
 /**
  * The map a module names in its trailing comments: the last annotation in the
  * run of comment and blank lines that ends the file, and none at all once a
- * line of code comes after it. Conservative on purpose: an annotation-shaped
+ * line of code comes after it. A block comment counts when it opens and closes
+ * on its own line. Conservative on purpose: an annotation-shaped
  * string inside the module's own code is not where its map is.
  */
 export function sourceMappingReference(text: string): string | null {
@@ -55,7 +59,10 @@ export function sourceMappingReference(text: string): string | null {
       /^\/\/[#@]\s*sourceMappingURL=(\S+)$/.exec(line) ??
       /^\/\*[#@]\s*sourceMappingURL=(\S+?)\s*\*\/$/.exec(line);
     if (match) return match[1]!;
-    if (!line.startsWith("//")) return null;
+    const comment =
+      line.startsWith("//") ||
+      (line.startsWith("/*") && line.endsWith("*/") && line.indexOf("*/") === line.length - 2);
+    if (!comment) return null;
   }
   return null;
 }
@@ -136,7 +143,7 @@ export function createSourceMapProvider(options: SourceMapProviderOptions = {}):
         credentials: "omit",
         signal,
       });
-      if (response.status >= 300 && response.status < 400) {
+      if (REDIRECTS.has(response.status)) {
         await response.body?.cancel().catch(() => undefined);
         const location = response.headers.get("location");
         if (location === null || hop >= maxRedirects) return refused("map-missing");
