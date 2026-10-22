@@ -49,6 +49,12 @@ const DEFAULT_CONFIG: IdleBackgroundAutoCloseConfig = {
 /** Bounds the workspace-host read a shell project's sleep waits on. */
 const WORKSPACE_READ_TIMEOUT_MS = 5_000;
 
+/**
+ * How long a pressure sweep keeps starting sleeps. The ladder's view and host
+ * levers wait on it, so the smallest candidates are left for the next pass.
+ */
+const PRESSURE_SWEEP_BUDGET_MS = 30_000;
+
 const MIN_THRESHOLD_MINUTES = 15;
 const MAX_THRESHOLD_MINUTES = 1440; // 24h
 
@@ -69,7 +75,7 @@ type SkipReason = IdleShellSkipReason | "mcp-dispatch" | "ineligible" | "coordin
 
 type ShellCloseResult =
   | { status: "slept"; entry: IdleBackgroundClosedProjectEntry; terminalsKilled: number }
-  | { status: "skipped"; reason: SkipReason }
+  | { status: "skipped"; reason: SkipReason; terminalsKilled?: number }
   | { status: "ineligible" };
 
 /**
@@ -504,6 +510,7 @@ export class IdleBackgroundAutoCloseService {
 
   /** Resolves with the number of terminals the sweep's sleeps killed. */
   private async runSweep(trigger: IdleBackgroundSweepTrigger): Promise<number> {
+    const startedAt = performance.now();
     const config = this.getConfig();
     if (!config.enabled) return 0;
     const underPressure = trigger === "memory-pressure";
@@ -644,7 +651,17 @@ export class IdleBackgroundAutoCloseService {
     // screen's census decides. Ties keep the store's order.
     if (shellThresholdMs) {
       shellCandidates.sort((a, b) => b.memoryKb - a.memoryKb);
-      for (const { projectId } of shellCandidates) {
+      for (const [index, { projectId }] of shellCandidates.entries()) {
+        if (
+          underPressure &&
+          index > 0 &&
+          performance.now() - startedAt >= PRESSURE_SWEEP_BUDGET_MS
+        ) {
+          logInfo("idle-background-auto-close-pressure-budget-spent", {
+            deferred: shellCandidates.slice(index).map((candidate) => candidate.projectId),
+          });
+          break;
+        }
         try {
           const result = await this.closeShellProject(projectId, shellThresholdMs);
           if (result.status === "slept") {
@@ -652,6 +669,8 @@ export class IdleBackgroundAutoCloseService {
             terminalsKilled += result.terminalsKilled;
           } else if (result.status === "skipped") {
             skip(result.reason, projectId);
+            // A refusal after the kill still took the terminals.
+            terminalsKilled += result.terminalsKilled ?? 0;
           }
         } catch (error) {
           logError("idle-background-auto-close-project-failed", error, { projectId });
@@ -874,6 +893,9 @@ export class IdleBackgroundAutoCloseService {
       this.awakeSince
     );
     if (!vetted.ok) return { status: "skipped", reason: vetted.reason };
+    // Every shell it had is gone since the sweep looked, so it is a project
+    // with no terminals now, and those sleep on their own clock.
+    if (vetted.value.size === 0) return { status: "ineligible" };
     // Taken now: once the kill lands there is no tree left to read. The kill
     // is held to exactly these terminals, so this is what it frees.
     const estimatedMemoryKb = censusMemoryKb(census, projectId, vetted.value);
@@ -908,6 +930,7 @@ export class IdleBackgroundAutoCloseService {
       return {
         status: "skipped",
         reason: outcome.reason === "in-flight" ? "ineligible" : outcome.reason,
+        terminalsKilled: outcome.terminalsKilled,
       };
     }
     if (outcome.status !== "slept") return { status: "ineligible" };

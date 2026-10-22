@@ -1891,12 +1891,16 @@ describe("IdleBackgroundAutoCloseService", () => {
       it("sleeps a shell project the user's threshold hasn't reached yet", async () => {
         enableShells(480);
         const service = setUpIdleShellProject();
-        ptyClientMock.gracefulKillByProject.mockResolvedValue([{ id: "t-proj-1" }]);
+        // Two sessions for one project: the ladder is told terminals, not projects.
+        ptyClientMock.gracefulKillByProject.mockResolvedValue([
+          { id: "t-proj-1" },
+          { id: "t-proj-1-b" },
+        ]);
 
         await runCheck(service);
         expect(ptyClientMock.gracefulKillByProject).not.toHaveBeenCalled();
 
-        await expect(service.sleepUnderMemoryPressure()).resolves.toBe(1);
+        await expect(service.sleepUnderMemoryPressure()).resolves.toBe(2);
         expect(ptyClientMock.gracefulKillByProject).toHaveBeenCalledWith("proj-1", {
           preserveSession: true,
         });
@@ -1909,6 +1913,7 @@ describe("IdleBackgroundAutoCloseService", () => {
       });
 
       it.each([
+        ["efficiency", 10 * MINUTE_MS, false],
         ["efficiency", 20 * MINUTE_MS, true],
         ["balanced", 20 * MINUTE_MS, false],
         ["balanced", 45 * MINUTE_MS, true],
@@ -2053,6 +2058,128 @@ describe("IdleBackgroundAutoCloseService", () => {
         release([shellTerminal("proj-1")]);
         await scheduled;
         expect(ptyClientMock.gracefulKillByProject).not.toHaveBeenCalled();
+
+        // The guard is released with the sweep, so the next pass goes ahead.
+        await service.sleepUnderMemoryPressure();
+        expect(ptyClientMock.gracefulKillByProject).toHaveBeenCalledTimes(1);
+      });
+
+      /** Three shell projects off screen for three hours, censused at these sizes. */
+      function setUpRankedShellProjects(sizes: Record<string, number>) {
+        const lastOpened = Date.now() - 3 * HOUR_MS;
+        const ids = Object.keys(sizes);
+        projectStoreMock.getAllProjects.mockReturnValue(
+          ids.map((id) => makeIdleProject(id, { lastOpened }))
+        );
+        projectStoreMock.getProjectById.mockImplementation((id) =>
+          makeIdleProject(id, { lastOpened })
+        );
+        ptyClientMock.getAllTerminalsAsync.mockResolvedValue(ids.map((id) => shellTerminal(id)));
+        // Fresh on every read, so a sweep that outlasts the freshness bound
+        // isn't what holds a later project back.
+        ptyClientMock.getProcessInventory.mockImplementation(async () => {
+          const reads = ids.map((id) => census(id, { memoryKb: sizes[id] }));
+          return {
+            ...reads[0]!,
+            inventories: [
+              {
+                ...reads[0]!.inventories[0]!,
+                terminals: reads.flatMap((read) => read.inventories[0]!.terminals),
+              },
+            ],
+          };
+        });
+        ptyClientMock.gracefulKillByProject.mockImplementation(async (projectId) => [
+          { id: `t-${projectId}` },
+        ]);
+        return makeService(makeClock(3 * HOUR_MS));
+      }
+
+      it("goes on to the next project when one sleep throws", async () => {
+        enableShells();
+        const service = setUpRankedShellProjects({ small: 2048, large: 512_000 });
+        resourceProbeMock.probeResourceConfig.mockRejectedValueOnce(new Error("disk gone"));
+
+        await expect(service.sleepUnderMemoryPressure()).resolves.toBe(1);
+        expect(ptyClientMock.gracefulKillByProject.mock.calls.map(([id]) => id)).toEqual(["small"]);
+        expect(pressureBroadcast()?.projects).toEqual([
+          { projectId: "small", projectName: "small", estimatedMemoryKb: 2048 },
+        ]);
+      });
+
+      it("leaves the smallest projects for the next pass once its time is spent", async () => {
+        enableShells();
+        const service = setUpRankedShellProjects({ small: 2048, large: 512_000, medium: 65_536 });
+        let elapsedMs = 0;
+        vi.spyOn(performance, "now").mockImplementation(() => elapsedMs);
+        ptyClientMock.gracefulKillByProject.mockImplementation(async (projectId) => {
+          elapsedMs += 31_000;
+          return [{ id: `t-${projectId}` }];
+        });
+
+        await expect(service.sleepUnderMemoryPressure()).resolves.toBe(1);
+        expect(ptyClientMock.gracefulKillByProject.mock.calls.map(([id]) => id)).toEqual(["large"]);
+        expect(logInfoMock).toHaveBeenCalledWith(
+          "idle-background-auto-close-pressure-budget-spent",
+          {
+            deferred: ["medium", "small"],
+          }
+        );
+      });
+
+      it("counts the terminals a sleep killed before it was refused", async () => {
+        enableShells();
+        const service = setUpIdleShellProject();
+        // The user opens the project while its shells are going down.
+        ptyClientMock.gracefulKillByProject.mockImplementation(async () => {
+          projectStoreMock.getCurrentProjectId.mockReturnValue("proj-1");
+          return [{ id: "t-proj-1" }];
+        });
+
+        await expect(service.sleepUnderMemoryPressure()).resolves.toBe(1);
+        expect(projectStoreMock.updateProjectStatus).not.toHaveBeenCalled();
+        expect(pressureBroadcast()).toBeUndefined();
+      });
+
+      it("leaves a candidate open whose last shell exited after the screen", async () => {
+        enableShells();
+        const service = setUpIdleShellProject();
+        ptyClientMock.getAllTerminalsAsync
+          .mockResolvedValueOnce([shellTerminal("proj-1")])
+          .mockResolvedValue([]);
+        ptyClientMock.getProcessInventory
+          .mockResolvedValueOnce(census("proj-1"))
+          .mockResolvedValue({ inventories: [], shardsTotal: 1, shardsFailed: 0 });
+
+        await expect(service.sleepUnderMemoryPressure()).resolves.toBe(0);
+        expect(ptyClientMock.gracefulKillByProject).not.toHaveBeenCalled();
+        expect(projectStoreMock.updateProjectStatus).not.toHaveBeenCalled();
+      });
+
+      it("stops when idle shells are turned off partway through", async () => {
+        enableShells();
+        const service = setUpIdleShellProject();
+        let releaseWorkspace!: () => void;
+        workspaceClientMock.getAllStatesWithGitBackedForProjectAsync.mockImplementationOnce(
+          (path) =>
+            new Promise((resolve) => {
+              releaseWorkspace = () => resolve({ states: [{ path }], gitBacked: true });
+            })
+        );
+
+        const pressure = service.sleepUnderMemoryPressure();
+        await vi.waitFor(() =>
+          expect(workspaceClientMock.getAllStatesWithGitBackedForProjectAsync).toHaveBeenCalled()
+        );
+        storeBacking.idleBackgroundAutoClose = {
+          ...(storeBacking.idleBackgroundAutoClose as Record<string, unknown>),
+          includeIdleShells: false,
+        };
+        releaseWorkspace();
+
+        await expect(pressure).resolves.toBe(0);
+        expect(ptyClientMock.gracefulKillByProject).not.toHaveBeenCalled();
+        expect(pressureBroadcast()).toBeUndefined();
       });
     });
   });

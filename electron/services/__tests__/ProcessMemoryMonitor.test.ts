@@ -2018,6 +2018,22 @@ describe("ProcessMemoryMonitor", () => {
       );
     });
 
+    it("keeps pulling the view and host levers when the sleep lever throws", async () => {
+      mockGetAppMetrics.mockReturnValue(underPressure);
+      mockActions.hibernateIdleProjects = vi.fn().mockRejectedValue(new Error("sweep failed"));
+      mockActions.reclaimDormantWorkspaceHosts = vi.fn(() => 0);
+
+      stop = startAppMetricsMonitor(mockActions);
+      await advanceToTier2();
+
+      expect(logWarn).toHaveBeenCalledWith(
+        "memory-pressure-tier2-action-failed",
+        expect.objectContaining({ action: "hibernateIdleProjects" })
+      );
+      expect(mockActions.evictCachedProjectViews).toHaveBeenCalledTimes(1);
+      expect(mockActions.reclaimDormantWorkspaceHosts).toHaveBeenCalledTimes(1);
+    });
+
     it("logs tier-2 escalation inputs instead of a no-action delta", async () => {
       // The mitigation line used to carry `deltaMb` from a before/after pair
       // sampled back-to-back with nothing acting between them — ~0 by
