@@ -108,6 +108,9 @@ let generation = 0;
 // Monotonic read sequence, so a slow read that FAILS can never clear state a
 // newer read already adopted. Successful reads are ordered by revision instead.
 let pullSeq = 0;
+// Monotonic save sequence, so a save that fails after a later one was sent
+// never offers its stale answer for retry.
+let saveSeq = 0;
 // Bumped on every adoption, so a read that fails after something newer was
 // adopted leaves it alone.
 let adoptions = 0;
@@ -237,7 +240,7 @@ export function claimedSurfaceSlots(
 export function consentHostSlot<Slot extends string = ProjectSurfaceSlot>(
   claimed: readonly (Omit<ClaimedSurfaceSlot, "slot"> & { slot: Slot })[],
   pluginId: string,
-  framed: ReadonlySet<Slot>
+  framed: { has(slot: Slot): boolean }
 ): Slot | null {
   return (
     claimed.find(
@@ -247,9 +250,10 @@ export function consentHostSlot<Slot extends string = ProjectSurfaceSlot>(
 }
 
 /**
- * One answer about `claimed` slots as the updates that record it. A selectable
- * slot's "keep" names its default, the option it was showing; an exclusive one
- * has only its owner, which main fills in.
+ * One answer about `claimed` slots as the updates that record it, each naming
+ * the plugin it was about so main refuses it if the slot has changed hands. A
+ * selectable slot's "keep" also names its default as the option picked: the
+ * one it was showing.
  */
 export function surfaceAnswerUpdates(
   claimed: readonly ClaimedSurfaceSlot[],
@@ -260,8 +264,8 @@ export function surfaceAnswerUpdates(
     // the slots declared today, and this is written for every mode.
     const descriptor: ProjectSurfaceSlotDescriptor = PROJECT_SURFACE_SLOT_CATALOGUE[slot];
     return choice === "surface" && descriptor.mode === "selectable"
-      ? { slot, choice, optionId: pluginId }
-      : { slot, choice };
+      ? { slot, choice, optionId: pluginId, ownerId: pluginId }
+      : { slot, choice, ownerId: pluginId };
   });
 }
 
@@ -362,15 +366,26 @@ export const usePluginProjectSurfacesStore = create<PluginProjectSurfacesState>(
     choicesLoaded: false,
     choicesProjectId: null,
     failedSave: null,
-    setSurfaceChoice: (slot, choice) => get().setSurfaceChoices([{ slot, choice }]),
+    setSurfaceChoice: (slot, choice) => {
+      // An answer names the plugin it is about; forgetting one is about nobody.
+      const owner = get().slots[slot]?.defaultOptionId ?? null;
+      return get().setSurfaceChoices([
+        choice === null || owner === null ? { slot, choice } : { slot, choice, ownerId: owner },
+      ]);
+    },
     setSurfaceChoices: async (updates) => {
       const plugin = window.electron?.plugin;
       if (typeof plugin?.setProjectSurfaceChoices !== "function") return;
-      const { slots } = get();
+      const { slots, choices } = get();
       const owners: FailedSurfaceSave["owners"] = {};
-      for (const { slot } of updates) owners[slot] = ownerManifestId(slots[slot]);
+      const before: ProjectSurfaceChoices = {};
+      for (const { slot } of updates) {
+        owners[slot] = ownerManifestId(slots[slot]);
+        before[slot] = choices[slot];
+      }
       set({ failedSave: null });
       const startedIn = generation;
+      const seq = ++saveSeq;
       try {
         // Not applied ahead of the round trip. Main records answers in the
         // order they arrive and bumps the revision for each, so adopting only
@@ -380,11 +395,20 @@ export const usePluginProjectSurfacesStore = create<PluginProjectSurfacesState>(
         if (startedIn === generation) adopt(snapshot);
       } catch (err) {
         if (startedIn !== generation) return;
-        set({ failedSave: { updates, owners } });
         logWarn("[pluginProjectSurfacesStore] Failed to save a project surface choice", {
           updates,
           error: err,
         });
+        // Superseded: a later save was sent, or an answer was recorded since —
+        // this view's or another's — and retrying this one would overwrite it.
+        const current = get().choices;
+        if (
+          seq !== saveSeq ||
+          updates.some(({ slot }) => !sameRecord(current[slot], before[slot]))
+        ) {
+          return;
+        }
+        set({ failedSave: { updates, owners } });
       }
     },
     dismissFailedSave: () => set({ failedSave: null }),
@@ -452,6 +476,7 @@ export function _resetPluginProjectSurfacesStoreForTest(): void {
   initialized = false;
   generation += 1;
   pullSeq = 0;
+  saveSeq = 0;
   adoptions = 0;
   adoptedRevision = -1;
   announcedRevisions.clear();

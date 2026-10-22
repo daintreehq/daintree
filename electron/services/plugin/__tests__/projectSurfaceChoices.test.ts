@@ -226,6 +226,31 @@ describe("answers about several slots at once", () => {
     expect(storeMock.set).toHaveBeenCalledTimes(1);
   });
 
+  it("refuses an answer about a plugin the slot has passed from, writing nothing", () => {
+    claimCanvas();
+    const other = makeProjectPluginInstanceKey(PROJECT_A, "acme.other");
+
+    // The user answered about acme.other; acme.dash holds the slot by the time
+    // the answer arrives, and it was never asked.
+    expect(() =>
+      setProjectSurfaceChoices(PROJECT_A, [
+        { slot: "emptyCanvas", choice: "stock", ownerId: other },
+      ])
+    ).toThrow(/has passed to another plugin/);
+    expect(storeMock.set).not.toHaveBeenCalled();
+
+    setProjectSurfaceChoices(
+      PROJECT_A,
+      [{ slot: "emptyCanvas", choice: "stock", ownerId: INSTANCE_A }],
+      3
+    );
+    expect(getProjectSurfaceChoices(PROJECT_A).emptyCanvas).toEqual({
+      pluginId: "acme.dash",
+      choice: "stock",
+      decidedAt: 3,
+    });
+  });
+
   it("writes nothing when any part of the answer is bad", () => {
     claimCanvas();
     setProjectSurfaceChoice(PROJECT_A, "emptyCanvas", "stock", undefined, 1);

@@ -1,4 +1,4 @@
-import { useEffect, useRef, type ReactNode } from "react";
+import { useEffect, useId, useRef, type ReactNode } from "react";
 import {
   PROJECT_SURFACE_SLOT_CATALOGUE,
   type ProjectSurfaceChoice,
@@ -112,9 +112,13 @@ export function ProjectSurfaceFrame({
   // the region will not draw, or show it pressed while the stock content is
   // what is actually on screen.
   const framing = renderable !== null && choicesLoaded;
+  const frameId = useId();
 
   // On screen as a place the plugin's consent question can be asked.
-  useEffect(() => (framing ? frameSurfaceSlot(slot) : undefined), [framing, slot]);
+  useEffect(
+    () => (framing ? frameSurfaceSlot(slot, frameId) : undefined),
+    [framing, slot, frameId]
+  );
 
   if (!framing) {
     return <>{children}</>;
@@ -217,7 +221,7 @@ export function ProjectSurfaceFrame({
         }}
       />
     ) : (
-      <ProjectSurfaceConsentNotice slot={slot} onAnswered={restoreFocus} />
+      <ProjectSurfaceConsentNotice slot={slot} frameId={frameId} onAnswered={restoreFocus} />
     );
   // The surface's plugin still needs setting up: said here, in the host's own
   // chrome beside the region, never inside the plugin's box. Only while the

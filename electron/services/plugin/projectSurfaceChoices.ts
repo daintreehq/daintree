@@ -153,7 +153,8 @@ export function setProjectSurfaceChoice(
  * plugin owns the slot NOW, and a selectable one must name an option on offer.
  *
  * Throws, before writing anything, when an update is malformed, names a slot
- * twice, or has nothing on offer to be about; and when the store cannot be
+ * twice, names an owner the slot has since passed from, or has nothing on
+ * offer to be about; and when the store cannot be
  * read or written — the caller reports success and rebroadcasts on the
  * strength of this returning. Returns the project's full set after the write.
  */
@@ -174,8 +175,11 @@ export function setProjectSurfaceChoices(
   // rejects the whole answer rather than half of it.
   const records = new Map<ProjectSurfaceSlot, ProjectSurfaceChoiceRecord | undefined>();
   for (const update of updates) {
-    const { slot, choice, optionId } = parseProjectSurfaceChoiceUpdate(update);
+    const { slot, choice, optionId, ownerId } = parseProjectSurfaceChoiceUpdate(update);
     if (records.has(slot)) throw new Error(`project surfaces: ${slot} is answered twice`);
+    if (ownerId !== undefined && (slots[slot]?.defaultOptionId ?? null) !== ownerId) {
+      throw new Error(`project surfaces: ${slot} has passed to another plugin`);
+    }
     records.set(
       slot,
       choice === null
@@ -228,7 +232,7 @@ export function parseProjectSurfaceChoiceUpdate(value: unknown): ProjectSurfaceC
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new Error("project surfaces: an update must be an object");
   }
-  const { slot, choice, optionId } = value as Record<string, unknown>;
+  const { slot, choice, optionId, ownerId } = value as Record<string, unknown>;
   if (!isProjectSurfaceSlot(slot)) {
     throw new Error("project surfaces: unknown surface slot");
   }
@@ -238,5 +242,11 @@ export function parseProjectSurfaceChoiceUpdate(value: unknown): ProjectSurfaceC
   if (optionId !== undefined && (typeof optionId !== "string" || optionId.length === 0)) {
     throw new Error("project surfaces: optionId must be a non-empty string");
   }
-  return optionId === undefined ? { slot, choice } : { slot, choice, optionId };
+  if (ownerId !== undefined && (typeof ownerId !== "string" || ownerId.length === 0)) {
+    throw new Error("project surfaces: ownerId must be a non-empty string");
+  }
+  const parsed: ProjectSurfaceChoiceUpdate = { slot, choice };
+  if (optionId !== undefined) parsed.optionId = optionId;
+  if (ownerId !== undefined) parsed.ownerId = ownerId;
+  return parsed;
 }

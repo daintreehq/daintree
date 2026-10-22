@@ -736,6 +736,13 @@ export interface ProjectSurfaceChoiceUpdate {
   choice: ProjectSurfaceChoice | null;
   /** For a selectable slot's `"surface"`, the INSTANCE key of the option picked. */
   optionId?: string;
+  /**
+   * The INSTANCE key of the plugin the user was answering about. Main refuses
+   * the whole answer if the slot has passed to another plugin since: agreeing
+   * to one plugin is not agreeing to whatever holds the slot by the time the
+   * click arrives.
+   */
+  ownerId?: string;
 }
 
 /**

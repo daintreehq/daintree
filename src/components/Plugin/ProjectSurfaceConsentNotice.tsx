@@ -27,8 +27,8 @@ import { useProjectPluginStore } from "@/store/projectPluginStore";
  * unanswered slot again — so it asks again, with nothing stored to say it was
  * seen.
  *
- * Rendered by each slot's host frame for its own `slot`; only the frame of the
- * plugin's first unanswered slot on screen draws it, so several framed slots
+ * Rendered by each slot's host frame for its own `slot`; only the first frame
+ * of the plugin's first unanswered slot on screen draws it, so several frames
  * still ask once. Not modal, and never inside the plugin's own box.
  *
  * Single-line by construction: a `title` and no `description`, the layout
@@ -36,9 +36,12 @@ import { useProjectPluginStore } from "@/store/projectPluginStore";
  */
 export function ProjectSurfaceConsentNotice({
   slot,
+  frameId,
   onAnswered,
 }: {
   slot: ProjectSurfaceSlot;
+  /** The frame drawing this, as it registered with `frameSurfaceSlot`. */
+  frameId: string;
   /** After the answer is recorded: the notice is gone, so focus needs a new home. */
   onAnswered: () => void;
 }) {
@@ -56,7 +59,9 @@ export function ProjectSurfaceConsentNotice({
   // project that answered long ago must not be asked again.
   if (pluginId === null || !choicesLoaded) return null;
   const claimed = claimedSurfaceSlots(slots, choices);
-  if (consentHostSlot(claimed, pluginId, framed) !== slot) return null;
+  if (consentHostSlot(claimed, pluginId, framed) !== slot || framed.get(slot) !== frameId) {
+    return null;
+  }
 
   const undecided = claimed.filter((entry) => entry.pluginId === pluginId && entry.choice === null);
   const labels = undecided.map((entry) => PROJECT_SURFACE_SLOT_CATALOGUE[entry.slot].label);

@@ -2903,6 +2903,9 @@ describe("project-local plugin handlers", () => {
     await expect(
       set({ sender: { id: 1 } }, [{ slot: "emptyCanvas", choice: "surface", optionId: "" }])
     ).rejects.toThrow(/optionId must be/);
+    await expect(
+      set({ sender: { id: 1 } }, [{ slot: "emptyCanvas", choice: "stock", ownerId: 7 }])
+    ).rejects.toThrow(/ownerId must be/);
 
     mockGetProjectForWebContents.mockReturnValue(null);
     await expect(set({ sender: { id: 1 } }, [ok])).rejects.toThrow(/no project/);

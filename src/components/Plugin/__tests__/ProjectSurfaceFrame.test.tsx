@@ -181,8 +181,10 @@ describe("ProjectSurfaceFrame", () => {
     disk = choice === null ? {} : answer(choice);
     return Promise.resolve(mainSnapshot());
   });
-  /** What a press of the strip or the notice sends main: one canvas answer. */
-  const sent = (choice: ProjectSurfaceChoice | null) => [{ slot: "emptyCanvas", choice }];
+  /** What a press of the strip or the notice sends main: one canvas answer, about its owner. */
+  const sent = (choice: ProjectSurfaceChoice) => [
+    { slot: "emptyCanvas", choice, ownerId: claim.pluginId },
+  ];
 
   beforeEach(() => {
     surfacesOnMain = { emptyCanvas: claim };

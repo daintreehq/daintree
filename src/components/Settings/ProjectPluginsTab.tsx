@@ -158,6 +158,15 @@ function useStoreFailure<A extends ProjectPluginErrorSource["action"]>(
   return { source, detail: source.reason };
 }
 
+/**
+ * `text` as a closed sentence. A slot row's description runs several sentences
+ * together, and some of the refusal wording it borrows is written to stand alone
+ * without a period.
+ */
+function asSentence(text: string): string {
+  return /[.!?]$/.test(text) ? text : `${text}.`;
+}
+
 const SURFACE_SLOT_STATUS = {
   none: "You haven't chosen yet, so it shows.",
   surface: "You chose to keep it.",
@@ -245,7 +254,7 @@ function ProjectSurfaceRow({ slot }: { slot: ProjectSurfaceSlot }) {
           </span>
           {state?.refused.map((refusal) => (
             <span key={`${refusal.pluginId}:${refusal.reason}`} className="block">
-              {`${nameOf(refusal.pluginId)}'s claim isn't shown: ${describeSurfaceRefusal(refusal, nameOf).detail}`}
+              {`${nameOf(refusal.pluginId)}'s claim isn't shown: ${asSentence(describeSurfaceRefusal(refusal, nameOf).detail)}`}
             </span>
           ))}
         </>

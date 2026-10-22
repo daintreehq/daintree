@@ -865,7 +865,8 @@ async function handleProjectSurfaceChoiceSet(
  * Remember one answer about several slots in the SENDER's project, in one write
  * — a consent notice answers for every slot one plugin set up. Each update is
  * checked as {@link handleProjectSurfaceChoiceSet} checks its arguments, and
- * main resolves each against the slot's current owner the same way.
+ * main resolves each against the slot's current owner the same way — refusing
+ * the lot if an update names an owner the slot has since passed from.
  */
 async function handleProjectSurfaceChoicesSet(
   ctx: IpcContext,
@@ -882,13 +883,16 @@ async function handleProjectSurfaceChoicesSet(
     if (!update || typeof update !== "object" || Array.isArray(update)) {
       throw new Error("project surfaces: an update must be an object");
     }
-    const { slot, choice, optionId } = update as Record<string, unknown>;
+    const { slot, choice, optionId, ownerId } = update as Record<string, unknown>;
     if (!isProjectSurfaceSlot(slot)) throw new Error("project surfaces: unknown surface slot");
     if (choice !== null && !isProjectSurfaceChoice(choice)) {
       throw new Error('project surfaces: choice must be "surface", "stock" or null');
     }
     if (optionId !== undefined && (typeof optionId !== "string" || optionId.length === 0)) {
       throw new Error("project surfaces: optionId must be a non-empty string");
+    }
+    if (ownerId !== undefined && (typeof ownerId !== "string" || ownerId.length === 0)) {
+      throw new Error("project surfaces: ownerId must be a non-empty string");
     }
   }
   const svc = await getPluginService();

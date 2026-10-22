@@ -332,7 +332,7 @@ describe("ProjectPluginsTab", () => {
 
     await waitFor(() =>
       expect(pluginApi.setProjectSurfaceChoices).toHaveBeenCalledWith([
-        { slot: "emptyCanvas", choice: "stock" },
+        { slot: "emptyCanvas", choice: "stock", ownerId: CANVAS_OWNER },
       ])
     );
     await waitFor(() =>
@@ -422,7 +422,7 @@ describe("ProjectPluginsTab", () => {
     const row = screen.getByTestId("project-surface-row-emptyCanvas");
     expect(row.textContent).toContain("Daintree's own is showing.");
     expect(row.textContent).toContain(
-      "installed.board's claim isn't shown: Only a project's own plugins can replace it"
+      "installed.board's claim isn't shown: Only a project's own plugins can replace it."
     );
     expect(screen.queryByTestId("project-surface-switch-emptyCanvas")).toBeNull();
   });
