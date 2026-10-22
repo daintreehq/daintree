@@ -4,7 +4,10 @@ import type {
   PluginSendToAgentResult,
 } from "@shared/types/plugin";
 import {
+  AGENT_CONTEXT_FENCE_INFO,
+  agentContextBlockRanges,
   appendAgentContextToDraft,
+  closingFenceForOpenBlock,
   formatAgentContextBlock,
   type AgentContextReferenceDragPayload,
 } from "@shared/utils/agentContextDrag";
@@ -163,6 +166,27 @@ export function draftAgentContext(
 }
 
 /**
+ * What goes between a draft and a reference appended to it. The reference has
+ * to land outside any handoff block — one left without its closing fence is
+ * closed first — and never on a fence line, where it would stop the line from
+ * closing its block. Otherwise a space, unless the draft already ends in one.
+ */
+function referenceSeparator(draft: string): string {
+  if (draft.length === 0) return "";
+  if (draft.includes(AGENT_CONTEXT_FENCE_INFO)) {
+    const last = agentContextBlockRanges(draft).at(-1);
+    const closer =
+      last !== undefined && last[1] === draft.length
+        ? closingFenceForOpenBlock(draft.slice(last[0]))
+        : null;
+    if (closer !== null) return `${draft.endsWith("\n") ? "" : "\n"}${closer}\n`;
+  }
+  const lastLine = draft.slice(draft.lastIndexOf("\n") + 1);
+  if (/^ {0,3}(`{3,}|~{3,})/.test(lastLine)) return "\n";
+  return /\s$/.test(draft) ? "" : " ";
+}
+
+/**
  * Append a plugin context reference (#13795) to an agent's draft as the same
  * `@{prefix}:{id}` chip the `@` menu leaves, or refuse with the reason. The
  * item is read when the user sends, not now. Refused when no provider holds the
@@ -173,10 +197,10 @@ export function draftAgentContextReference(
   terminalId: string,
   reference: AgentContextReferenceDragPayload["reference"]
 ): PluginSendToAgentResult | { status: "unavailable" } {
-  const held = usePluginContextProvidersStore
+  const holder = usePluginContextProvidersStore
     .getState()
-    .entries.some((entry) => entry.status === "active" && entry.prefix === reference.prefix);
-  if (!held) {
+    .entries.find((entry) => entry.status === "active" && entry.prefix === reference.prefix);
+  if (!holder) {
     reportDraftNotAdded(`nothing in this project offers @${reference.prefix}:`);
     return { status: "unavailable" };
   }
@@ -186,11 +210,13 @@ export function draftAgentContextReference(
     return { status: "refused", reason: refusal };
   }
 
-  if (reference.label !== undefined) rememberContextReferenceLabel(reference, reference.label);
+  if (reference.label !== undefined) {
+    rememberContextReferenceLabel(holder.pluginId, reference, reference.label);
+  }
   const inputStore = useTerminalInputStore.getState();
   const projectId = useProjectStore.getState().currentProject?.id;
   const draft = inputStore.getDraftInput(terminalId, projectId);
-  const separator = draft.length === 0 || /\s$/.test(draft) ? "" : " ";
+  const separator = referenceSeparator(draft);
   inputStore.setDraftInput(
     terminalId,
     `${draft}${separator}${formatContextReference(reference)} `,

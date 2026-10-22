@@ -17,7 +17,7 @@ const noProvider = () => undefined;
 
 describe("expandContextReferences (#13795)", () => {
   it("quotes resolved content as a literal handoff block headed by the plugin", async () => {
-    rememberContextReferenceLabel({ prefix: "rec", id: "1" }, "Fix login");
+    rememberContextReferenceLabel("acme.kanban", { prefix: "rec", id: "1" }, "Fix login");
     const text = "fix @rec:1 please";
     const expansions = await expandContextReferences(
       findContextReferences(text),

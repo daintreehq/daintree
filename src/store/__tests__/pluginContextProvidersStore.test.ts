@@ -88,17 +88,19 @@ describe("pluginContextProvidersStore (#13795)", () => {
     expect(usePluginContextProvidersStore.getState().entries).toHaveLength(2);
   });
 
-  it("names the plugin whose switch couldn't be saved and reads main's state back", async () => {
+  it("undoes a switch main couldn't record, even when reading back fails too", async () => {
     usePluginContextProvidersStore.getState().init();
     await flush();
     setContextProvidersEnabled.mockRejectedValue(new Error("disk full"));
+    getContextProviders.mockRejectedValue(new Error("main is busy"));
 
     expect(await usePluginContextProvidersStore.getState().setEnabled("acme.kanban", false)).toBe(
       false
     );
     await flush();
     const state = usePluginContextProvidersStore.getState();
-    expect(state.saveError).toBe("acme.kanban");
+    // What was asked is kept for Retry, and the switch shows what main has.
+    expect(state.saveError).toEqual({ pluginId: "acme.kanban", enabled: false });
     expect(state.entries[0]!.status).toBe("active");
   });
 });

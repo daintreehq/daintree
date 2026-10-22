@@ -29,10 +29,12 @@ function entry(overrides: Partial<ContextProviderEntry> = {}): ContextProviderEn
 
 function host(entries: ContextProviderEntry[]): ContextProviderCallHost & {
   activatePlugin: ReturnType<typeof vi.fn>;
+  waitForInit: ReturnType<typeof vi.fn>;
 } {
   return {
     getContextProvidersForProject: vi.fn(() => entries),
     activatePlugin: vi.fn(async () => {}),
+    waitForInit: vi.fn(async () => {}),
   };
 }
 
@@ -123,7 +125,7 @@ describe("resolveContextReferences (#13795)", () => {
     const pending = resolveContextReferences(host([entry()]), "p1", [{ prefix: "rec", id: "1" }]);
     await vi.advanceTimersByTimeAsync(CONTEXT_RESOLVE_TIMEOUT_MS);
     const [result] = await pending;
-    expect(result).toMatchObject({ status: "failed", reason: "timed out after 5 s" });
+    expect(result).toMatchObject({ status: "failed", reason: "timed out" });
     expect(seen?.aborted).toBe(true);
   });
 
@@ -134,6 +136,32 @@ describe("resolveContextReferences (#13795)", () => {
     const pending = resolveContextReferences(h, "p1", [{ prefix: "rec", id: "1" }]);
     await vi.advanceTimersByTimeAsync(CONTEXT_RESOLVE_TIMEOUT_MS);
     expect((await pending)[0]).toMatchObject({ status: "failed" });
+  });
+
+  it("spends one deadline across startup loading and the provider's answer", async () => {
+    vi.useFakeTimers();
+    const h = host([entry()]);
+    let ready!: () => void;
+    h.waitForInit.mockReturnValue(new Promise<void>((resolve) => (ready = resolve)));
+    bind({
+      resolve: vi.fn(() => new Promise<never>(() => {})),
+    });
+    const pending = resolveContextReferences(h, "p1", [{ prefix: "rec", id: "1" }]);
+    await vi.advanceTimersByTimeAsync(4_000);
+    ready();
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect((await pending)[0]).toMatchObject({ status: "failed", reason: "timed out" });
+  });
+
+  it("fails a held reference past the read limit instead of sending it as typed", async () => {
+    const h = host([entry()]);
+    bind({ resolve: vi.fn(async (id: string) => ({ text: id })) });
+    const references = [
+      ...Array.from({ length: 1_000 }, (_, i) => ({ prefix: "nope", id: `n${i}` })),
+      { prefix: "rec", id: "7" },
+    ];
+    const results = await resolveContextReferences(h, "p1", references);
+    expect(results[1_000]).toMatchObject({ status: "failed", pluginName: "Kanban" });
   });
 
   it("reports a provider's error, a missing item and oversized content as failures", async () => {

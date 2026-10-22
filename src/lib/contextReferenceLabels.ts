@@ -7,12 +7,25 @@ import type { ContextReference } from "@shared/types/pluginContextProvider";
  * from the `@` menu's rows and from dropped references; a reference typed by
  * hand or recalled after a restart has no name here and its chip shows the id.
  * Display only — the draft text and what resolves never depend on it.
+ *
+ * Keyed by the plugin that named the item as well as the reference: when
+ * another plugin comes to hold the prefix, the first one's names don't stick
+ * to its chips.
  */
 const MAX_LABELS = 500;
 const labels = new Map<string, string>();
 
-export function rememberContextReferenceLabel(reference: ContextReference, label: string): void {
-  const key = formatContextReference(reference);
+function labelKey(pluginId: string, reference: ContextReference): string {
+  // Neither a plugin id nor a reference holds a space.
+  return `${pluginId} ${formatContextReference(reference)}`;
+}
+
+export function rememberContextReferenceLabel(
+  pluginId: string,
+  reference: ContextReference,
+  label: string
+): void {
+  const key = labelKey(pluginId, reference);
   // Re-inserted so the most recently seen names are the last to be evicted.
   labels.delete(key);
   labels.set(key, label);
@@ -22,8 +35,11 @@ export function rememberContextReferenceLabel(reference: ContextReference, label
   }
 }
 
-export function contextReferenceLabel(reference: ContextReference): string | undefined {
-  return labels.get(formatContextReference(reference));
+export function contextReferenceLabel(
+  pluginId: string,
+  reference: ContextReference
+): string | undefined {
+  return labels.get(labelKey(pluginId, reference));
 }
 
 /** Test seam. */

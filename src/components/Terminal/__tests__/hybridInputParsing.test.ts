@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import type { CompletionTrigger } from "@shared/types";
-import { appendAgentContextToDraft, formatAgentContextBlock } from "@shared/utils/agentContextDrag";
+import {
+  appendAgentContextToDraft,
+  closingFenceForOpenBlock,
+  formatAgentContextBlock,
+} from "@shared/utils/agentContextDrag";
 import {
   getActiveCompletionContext,
   getDaintreeAtClaim,
@@ -577,13 +581,17 @@ describe("plugin context references (#13795)", () => {
     expect(out).toBe("compare\n```daintree-context\nbody\n```\nwith this");
   });
 
-  it("close a fence the user left open before a block lands", () => {
-    const text = "```\nconst a = 1; @rec:1";
+  it("close the user's open fence around a block and reopen it after", () => {
+    const text = "```\nconst a = 1; @rec:1\nconst b = 2;\n```\nPlease fix.";
     const start = text.indexOf("@rec:1");
     const out = resolveTokenExpansions(text, [
-      { start, end: text.length, replacement: "```daintree-context\nbody\n```", block: true },
+      { start, end: start + 6, replacement: "```daintree-context\nbody\n```", block: true },
     ]);
-    expect(out).toBe("```\nconst a = 1;\n```\n```daintree-context\nbody\n```");
+    expect(out).toBe(
+      "```\nconst a = 1;\n```\n```daintree-context\nbody\n```\n```\nconst b = 2;\n```\nPlease fix."
+    );
+    // The user's closing fence still closes their block: nothing is left open.
+    expect(closingFenceForOpenBlock(out)).toBeNull();
   });
 
   it("leave an inline expansion where it was", () => {

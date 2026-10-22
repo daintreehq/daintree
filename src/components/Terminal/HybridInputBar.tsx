@@ -34,8 +34,8 @@ import { usePluginContextProvidersStore } from "@/store/pluginContextProvidersSt
 import { useContextProviderSearch } from "./hooks/useContextProviderSearch";
 import { contextItemKey, type ContextProviderClaim } from "./hooks/useAutocompleteItems";
 import {
+  applyContextReferenceProviders,
   contextReferenceChipProviders,
-  setContextReferenceProviders,
   type ContextReferenceChipProvider,
 } from "./inputEditorExtensions/contextReferenceChip";
 import type { CompletionTrigger } from "@shared/types";
@@ -645,7 +645,12 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
         (e) => e.status === "active" && e.prefix === split.prefix
       );
       return entry
-        ? { prefix: entry.prefix, pluginName: entry.pluginName, query: split.query }
+        ? {
+            prefix: entry.prefix,
+            pluginId: entry.pluginId,
+            pluginName: entry.pluginName,
+            query: split.query,
+          }
         : null;
     }, [triggerChar, completionQuery, contextProviderEntries]);
     const atClaim =
@@ -673,9 +678,8 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       [thisMachineOff, contextProviderEntries]
     );
     useEffect(() => {
-      editorViewRef.current?.dispatch({
-        effects: setContextReferenceProviders.of(contextChipProviders),
-      });
+      const view = editorViewRef.current;
+      if (view) applyContextReferenceProviders(view, contextChipProviders);
     }, [contextChipProviders, editorViewRef, terminalId]);
 
     const {
@@ -684,13 +688,16 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       resultsFor: contextResultsFor,
     } = useContextProviderSearch({
       prefix: contextClaim?.prefix ?? null,
+      pluginId: contextClaim?.pluginId ?? null,
       query: contextClaim?.query ?? "",
       enabled: isAutocompleteOpen && contextClaim !== null,
     });
-    // Rows another provider answered are never shown under this one's prefix:
-    // its ids mean nothing here.
+    // Rows another provider answered — another prefix, or another plugin that
+    // held this one a moment ago — are never shown: their ids mean nothing here.
     const contextItems =
-      contextClaim !== null && contextResultsFor?.prefix === contextClaim.prefix
+      contextClaim !== null &&
+      contextResultsFor?.prefix === contextClaim.prefix &&
+      contextResultsFor.pluginId === contextClaim.pluginId
         ? contextSearchItems
         : NO_CONTEXT_ITEMS;
 

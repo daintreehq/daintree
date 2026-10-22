@@ -82,7 +82,7 @@ export async function expandContextReferences(
       block: true,
       replacement: formatAgentContextBlock({
         text: result.text,
-        title: result.title ?? contextReferenceLabel(token) ?? reference,
+        title: result.title ?? contextReferenceLabel(result.pluginId, token) ?? reference,
         sourceLabel: result.pluginName,
       }),
     });

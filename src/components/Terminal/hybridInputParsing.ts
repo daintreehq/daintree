@@ -44,19 +44,25 @@ export interface TokenExpansion {
   replacement: string;
   /**
    * The replacement is a fenced block that must stand on lines of its own: a
-   * fence the text before it leaves open is closed first, and what follows it
-   * on the token's line moves to the next one, so its closing fence ends it.
+   * fence the text before it leaves open is closed first and reopened after
+   * it, and what follows it on the token's line moves to the next one, so its
+   * closing fence ends it.
    */
   block?: boolean;
 }
 
-/** `out` with `block` started on a fresh line, after any fence `out` leaves open is closed. */
-function spliceBlock(out: string, block: string): string {
+/**
+ * `out` with `block` started on a fresh line, after any fence `out` leaves
+ * open is closed. Returns that fence, which the caller reopens once the block
+ * is in, so the user's own closing fence still closes their code block rather
+ * than opening a new one over the rest of the prompt.
+ */
+function spliceBlock(out: string, block: string): { out: string; reopen: string | null } {
   let head = out.replace(/[ \t]+$/, "");
   const closer = closingFenceForOpenBlock(head);
   if (head.length > 0 && !head.endsWith("\n")) head += "\n";
   if (closer !== null) head += `${closer}\n`;
-  return head + block;
+  return { out: head + block, reopen: closer };
 }
 
 /**
@@ -91,11 +97,13 @@ export function resolveTokenExpansions(
         cursor = expansion.end;
         continue;
       }
-      out = spliceBlock(out, expansion.replacement);
+      const spliced = spliceBlock(out, expansion.replacement);
+      out = spliced.out;
       // Spaces after the token would open the next line; a newline is never
       // skipped, so this can't run past a handoff block, which starts a line.
       cursor = expansion.end;
       while (cursor < text.length && (text[cursor] === " " || text[cursor] === "\t")) cursor++;
+      if (spliced.reopen !== null) out += `\n${spliced.reopen}`;
       if (cursor < text.length && text[cursor] !== "\n") out += "\n";
     }
     if (cursor < limit) out += text.slice(cursor, limit);

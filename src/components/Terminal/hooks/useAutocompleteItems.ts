@@ -11,6 +11,7 @@ import {
 /** The plugin context provider an `@{prefix}:` query names (#13795). */
 export interface ContextProviderClaim {
   prefix: string;
+  pluginId: string;
   pluginName: string;
   /** What the user typed after the prefix. */
   query: string;

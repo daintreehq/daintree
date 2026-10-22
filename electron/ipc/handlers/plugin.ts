@@ -897,9 +897,7 @@ async function handleContextProvidersResolve(
   ctx: IpcContext,
   references: ContextReference[]
 ): Promise<ContextReferenceResolution[]> {
-  const service = await getPluginService();
-  await service.waitForInit();
-  return resolveContextReferences(service, ctx.projectId, references);
+  return resolveContextReferences(await getPluginService(), ctx.projectId, references);
 }
 
 /**

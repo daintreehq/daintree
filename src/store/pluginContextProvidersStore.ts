@@ -17,11 +17,14 @@ import { logWarn } from "@/utils/logger";
  */
 interface PluginContextProvidersState {
   entries: readonly ContextProviderEntry[];
-  /** The plugin whose switch main last could not record, so settings can say so. */
-  saveError: string | null;
+  /**
+   * The switch main last could not record — which plugin, and what was asked —
+   * so settings can say so and Retry asks for the same thing again.
+   */
+  saveError: { pluginId: string; enabled: boolean } | null;
   init: () => void;
   refresh: () => void;
-  /** Resolves `false` when main couldn't record it; `saveError` then names the plugin. */
+  /** Resolves `false` when main couldn't record it; `saveError` then holds the request. */
   setEnabled: (pluginId: string, enabled: boolean) => Promise<boolean>;
 }
 
@@ -86,12 +89,14 @@ export const usePluginContextProvidersStore = create<PluginContextProvidersState
     refresh: pull,
 
     // Optimistic, so the switch moves in the same render. A write main
-    // refused is undone by reading main's answer back.
+    // refused is undone on the spot — unless a newer write or pull has landed
+    // since — and main's answer is then read back to confirm it.
     setEnabled: async (pluginId, enabled) => {
       const bridge = window.electron?.plugin;
       if (typeof bridge?.setContextProvidersEnabled !== "function") return false;
+      const before = get().entries;
       set({
-        entries: get().entries.map((entry) =>
+        entries: before.map((entry) =>
           entry.pluginId !== pluginId
             ? entry
             : { ...entry, status: enabled ? "active" : "off", heldBy: undefined }
@@ -101,11 +106,14 @@ export const usePluginContextProvidersStore = create<PluginContextProvidersState
       try {
         const entries = await bridge.setContextProvidersEnabled(pluginId, enabled);
         if (writeSeq === seq) commit(entries);
-        if (get().saveError === pluginId) set({ saveError: null });
+        if (get().saveError?.pluginId === pluginId) set({ saveError: null });
         return true;
       } catch (error) {
         logWarn("[PluginContextProviders] Failed to save a context provider switch", { error });
-        set({ saveError: pluginId });
+        set({
+          saveError: { pluginId, enabled },
+          ...(writeSeq === seq ? { entries: before } : {}),
+        });
         pull();
         return false;
       }

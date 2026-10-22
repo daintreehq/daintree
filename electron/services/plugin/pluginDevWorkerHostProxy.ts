@@ -670,9 +670,17 @@ export class PluginDevWorkerHostProxy {
           const [arg] = msg.args;
           const options = { signal: controller.signal };
           let result: unknown;
-          if (msg.method === "search") result = await impl.search(arg, options);
-          else if (msg.method === "resolve") result = await impl.resolve(arg, options);
-          else throw new Error(`Unknown context provider method "${String(msg.method)}"`);
+          try {
+            if (msg.method === "search") result = await impl.search(arg, options);
+            else if (msg.method === "resolve") result = await impl.resolve(arg, options);
+            else throw new Error(`Unknown context provider method "${String(msg.method)}"`);
+          } catch (err) {
+            // Aborted by a cancel or by dispose: main has stopped waiting, so
+            // whatever the plugin made of the abort is not sent.
+            if (controller.signal.aborted) return;
+            throw err;
+          }
+          if (controller.signal.aborted) return;
           settle({ ok: true, result });
         } finally {
           if (this.contextProviderAborts.get(msg.requestId) === controller) {

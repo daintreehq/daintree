@@ -4,6 +4,7 @@ import { EditorSelection } from "@codemirror/state";
 import type { Compartment } from "@codemirror/state";
 import type { AutocompleteItem } from "../AutocompleteMenu";
 import type { ActiveCompletionContext } from "../hybridInputParsing";
+import { currentContextReferenceProvidersEffects } from "../inputEditorExtensions/contextReferenceChip";
 
 interface LatestRefShape {
   terminalId: string;
@@ -311,10 +312,13 @@ export function useEditorKeymap({
       const stashed = popStashedEditorState(latest.terminalId, latest.projectId);
       if (!stashed) return false;
       view.setState(stashed);
+      // The stashed state carries the editable flag and the chip providers of
+      // when it was stashed; both are brought back to now.
       view.dispatch({
-        effects: editableCompartmentRef.current.reconfigure(
-          EditorView.editable.of(!latest.disabled)
-        ),
+        effects: [
+          editableCompartmentRef.current.reconfigure(EditorView.editable.of(!latest.disabled)),
+          ...currentContextReferenceProvidersEffects(view),
+        ],
       });
       return true;
     },

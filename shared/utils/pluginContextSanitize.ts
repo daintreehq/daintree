@@ -16,6 +16,14 @@ import {
 } from "./pluginContextReference.js";
 
 /**
+ * One display line of at most `max`, from a value cut well past `max` first, so
+ * a provider's megabyte "label" costs no more than a long one to tidy.
+ */
+function boundedLine(value: string, max: number): string {
+  return boundedAgentContextLine(value.slice(0, max * 8), max);
+}
+
+/**
  * A provider's search results held to the contract: at most fifty, each with a
  * valid id and a one-line label, duplicates dropped. A malformed row is
  * skipped rather than failing the list.
@@ -31,11 +39,11 @@ export function sanitizeContextProviderItems(value: unknown): ContextProviderIte
     if (!isContextItemId(record.id) || seen.has(record.id)) continue;
     const label =
       typeof record.label === "string"
-        ? boundedAgentContextLine(record.label, CONTEXT_ITEM_LABEL_MAX_LENGTH)
+        ? boundedLine(record.label, CONTEXT_ITEM_LABEL_MAX_LENGTH)
         : "";
     const description =
       typeof record.description === "string"
-        ? boundedAgentContextLine(record.description, CONTEXT_ITEM_DESCRIPTION_MAX_LENGTH)
+        ? boundedLine(record.description, CONTEXT_ITEM_DESCRIPTION_MAX_LENGTH)
         : "";
     seen.add(record.id);
     items.push({
@@ -61,17 +69,19 @@ export function sanitizeContextProviderContent(
   }
   const record = value as Record<string, unknown>;
   if (typeof record.text !== "string") return { ok: false, reason: "returned no text" };
+  const tooLong = {
+    ok: false as const,
+    reason: `returned more than ${AGENT_CONTEXT_MAX_TEXT_LENGTH.toLocaleString("en-US")} characters`,
+  };
+  // Normalising only ever shortens text, by at most half (CRLF to LF), so
+  // anything past twice the limit is refused before paying to walk it.
+  if (record.text.length > AGENT_CONTEXT_MAX_TEXT_LENGTH * 2) return tooLong;
   const text = normalizeAgentContextText(record.text).replace(/\n+$/, "");
-  if (text.length > AGENT_CONTEXT_MAX_TEXT_LENGTH) {
-    return {
-      ok: false,
-      reason: `returned more than ${AGENT_CONTEXT_MAX_TEXT_LENGTH.toLocaleString("en-US")} characters`,
-    };
-  }
+  if (text.length > AGENT_CONTEXT_MAX_TEXT_LENGTH) return tooLong;
   if (text.trim().length === 0) return { ok: false, reason: "returned empty text" };
   const title =
     typeof record.title === "string"
-      ? boundedAgentContextLine(record.title, AGENT_CONTEXT_MAX_TITLE_LENGTH)
+      ? boundedLine(record.title, AGENT_CONTEXT_MAX_TITLE_LENGTH)
       : "";
   return { ok: true, content: { text, ...(title ? { title } : {}) } };
 }

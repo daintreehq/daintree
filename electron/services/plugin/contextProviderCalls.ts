@@ -33,12 +33,17 @@ export const CONTEXT_RESOLVE_TIMEOUT_MS = 5_000;
 
 /** Longest failure reason carried back to the draft's placeholder. */
 const MAX_REASON_LENGTH = 160;
-/** References one resolve call reads at all; past this the rest stay as typed. */
-const MAX_REFERENCES_READ = 200;
+/**
+ * References one resolve call looks up a provider for. Past this, one a
+ * provider holds fails as over the limit rather than going as typed.
+ */
+const MAX_REFERENCES_READ = 1_000;
 
 export interface ContextProviderCallHost {
   getContextProvidersForProject(projectId: string | null): ContextProviderEntry[];
   activatePlugin(pluginId: string): Promise<void>;
+  /** Startup plugin loading, which a send right after launch waits on within its deadline. */
+  waitForInit(): Promise<void>;
 }
 
 type CallOutcome<T> = { ok: true; value: T } | { ok: false; reason: string };
@@ -52,11 +57,14 @@ async function callProvider<T>(
   const controller = new AbortController();
   let timer: ReturnType<typeof setTimeout> | undefined;
   const deadline = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => {
-      const error = new Error(`timed out after ${timeoutMs / 1000} s`);
-      controller.abort(error);
-      reject(error);
-    }, timeoutMs);
+    timer = setTimeout(
+      () => {
+        const error = new Error("timed out");
+        controller.abort(error);
+        reject(error);
+      },
+      Math.max(0, timeoutMs)
+    );
   });
   const work = (async () => {
     await host.activatePlugin(entry.pluginId);
@@ -108,12 +116,28 @@ export async function searchContextProvider(
   return outcome.ok ? sanitizeContextProviderItems(outcome.value) : [];
 }
 
+/** Settle when `promise` does or `ms` passes, whichever is first; never rejects. */
+async function within(promise: Promise<unknown>, ms: number): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  await Promise.race([
+    promise.catch(() => {}),
+    new Promise<void>((resolve) => {
+      timer = setTimeout(resolve, Math.max(0, ms));
+    }),
+  ]);
+  clearTimeout(timer);
+}
+
 /**
  * What each of a draft's references reads as now, in the order asked. A
  * reference no provider in the project claims is `unknown` and goes as typed;
  * one whose provider is switched off, failed or timed out is `failed`, which
  * the draft shows as a placeholder rather than dropping. The same reference
  * twice is asked for once.
+ *
+ * One deadline covers the whole call — startup loading, activation and the
+ * providers' answers — so a send never waits longer than it, however soon
+ * after launch it comes.
  */
 export async function resolveContextReferences(
   host: ContextProviderCallHost,
@@ -121,15 +145,27 @@ export async function resolveContextReferences(
   references: unknown
 ): Promise<ContextReferenceResolution[]> {
   if (!Array.isArray(references)) return [];
+  const deadlineAt = Date.now() + CONTEXT_RESOLVE_TIMEOUT_MS;
+  await within(host.waitForInit(), CONTEXT_RESOLVE_TIMEOUT_MS);
   const entries = host.getContextProvidersForProject(projectId);
   const results: ContextReferenceResolution[] = references.map(() => ({ status: "unknown" }));
   const pending = new Map<string, { entry: ContextProviderEntry; id: string; indices: number[] }>();
+  const tooMany = (entry: ContextProviderEntry): ContextReferenceResolution => ({
+    status: "failed",
+    pluginId: entry.pluginId,
+    pluginName: entry.pluginName,
+    reason: `a message can attach at most ${CONTEXT_RESOLVE_MAX_REFERENCES} context items`,
+  });
 
-  references.slice(0, MAX_REFERENCES_READ).forEach((raw: unknown, index) => {
+  references.forEach((raw: unknown, index) => {
     if (typeof raw !== "object" || raw === null) return;
     const { prefix, id } = raw as Record<string, unknown>;
     if (!isContextProviderPrefix(prefix) || !isContextItemId(id)) return;
     const active = entries.find((e) => e.status === "active" && e.prefix === prefix);
+    if (active && index >= MAX_REFERENCES_READ) {
+      results[index] = tooMany(active);
+      return;
+    }
     if (!active) {
       const off = entries.find((e) => e.status === "off" && e.prefix === prefix);
       if (off) {
@@ -147,12 +183,7 @@ export async function resolveContextReferences(
     if (existing) {
       existing.indices.push(index);
     } else if (pending.size >= CONTEXT_RESOLVE_MAX_REFERENCES) {
-      results[index] = {
-        status: "failed",
-        pluginId: active.pluginId,
-        pluginName: active.pluginName,
-        reason: `a message can attach at most ${CONTEXT_RESOLVE_MAX_REFERENCES} context items`,
-      };
+      results[index] = tooMany(active);
     } else {
       pending.set(key, { entry: active, id, indices: [index] });
     }
@@ -164,7 +195,7 @@ export async function resolveContextReferences(
         host,
         entry,
         (impl, signal) => impl.resolve(id, { signal }),
-        CONTEXT_RESOLVE_TIMEOUT_MS
+        deadlineAt - Date.now()
       );
       const content = outcome.ok
         ? sanitizeContextProviderContent(outcome.value)

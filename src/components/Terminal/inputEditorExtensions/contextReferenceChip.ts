@@ -17,6 +17,7 @@ import { chipCardText, chipHoverTooltip, chipTooltip } from "./chipCard";
 
 /** What the chip needs to know about the provider holding a prefix. */
 export interface ContextReferenceChipProvider {
+  pluginId: string;
   pluginName: string;
   label: string;
 }
@@ -25,13 +26,44 @@ export interface ContextReferenceChipProvider {
 export const setContextReferenceProviders =
   StateEffect.define<ReadonlyMap<string, ContextReferenceChipProvider>>();
 
+/** What each view was last told, for a state that replaces the view's own. */
+const appliedProviders = new WeakMap<
+  EditorView,
+  ReadonlyMap<string, ContextReferenceChipProvider>
+>();
+
+/** Point a view's chips at `providers`, the prefixes held in its project now. */
+export function applyContextReferenceProviders(
+  view: EditorView,
+  providers: ReadonlyMap<string, ContextReferenceChipProvider>
+): void {
+  appliedProviders.set(view, providers);
+  view.dispatch({ effects: setContextReferenceProviders.of(providers) });
+}
+
+/**
+ * The effect that brings a view's chips back to its current providers after
+ * `view.setState` restored an older state (a popped stash), which carries the
+ * providers it was stashed with. Empty when none were ever applied.
+ */
+export function currentContextReferenceProvidersEffects(
+  view: EditorView
+): StateEffect<ReadonlyMap<string, ContextReferenceChipProvider>>[] {
+  const providers = appliedProviders.get(view);
+  return providers ? [setContextReferenceProviders.of(providers)] : [];
+}
+
 export function contextReferenceChipProviders(
   entries: readonly ContextProviderEntry[]
 ): ReadonlyMap<string, ContextReferenceChipProvider> {
   const providers = new Map<string, ContextReferenceChipProvider>();
   for (const entry of entries) {
     if (entry.status !== "active") continue;
-    providers.set(entry.prefix, { pluginName: entry.pluginName, label: entry.label });
+    providers.set(entry.prefix, {
+      pluginId: entry.pluginId,
+      pluginName: entry.pluginName,
+      label: entry.label,
+    });
   }
   return providers;
 }
@@ -146,7 +178,8 @@ export const contextReferenceChipField = StateField.define<ContextChipState>({
           Decoration.replace({
             widget: new ContextReferenceChipWidget(
               token.provider.pluginName,
-              contextReferenceLabel(token) ?? formatContextReference(token),
+              contextReferenceLabel(token.provider.pluginId, token) ??
+                formatContextReference(token),
               chipDescription(token),
               isChipSelected(pending, token.start, token.end)
             ),
@@ -167,9 +200,9 @@ export const contextReferenceChipField = StateField.define<ContextChipState>({
 });
 
 /**
- * The references drawn as chips. One the caret sits in or at the end of, with
- * no name known for it, is still being typed — a search query, most likely —
- * and stays text until the user moves on or picks a match.
+ * The references drawn as chips. One the caret sits after the `@` of — inside
+ * it or at its end — with no name known for it, is still being typed (a search
+ * query, most likely) and stays text until the user moves on or picks a match.
  */
 function drawnTokens(
   state: EditorState,
@@ -180,9 +213,9 @@ function drawnTokens(
   const caret = state.selection.main;
   return value.tokens.filter(
     (token) =>
-      contextReferenceLabel(token) !== undefined ||
+      contextReferenceLabel(token.provider.pluginId, token) !== undefined ||
       !caret.empty ||
-      caret.head < token.start ||
+      caret.head <= token.start ||
       caret.head > token.end
   );
 }

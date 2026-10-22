@@ -45,7 +45,10 @@ vi.mock("@/store/preferencesStore", () => ({
 }));
 vi.mock("@/store/createWorktreeStore", () => ({ getCurrentViewStoreOrNull: () => null }));
 
-const { canDraftAnywhere, draftAgentContext, listAgentPanes } = await import("../agentDraft");
+const { canDraftAnywhere, draftAgentContext, draftAgentContextReference, listAgentPanes } =
+  await import("../agentDraft");
+const { usePluginContextProvidersStore } = await import("@/store/pluginContextProvidersStore");
+const { contextReferenceLabel } = await import("@/lib/contextReferenceLabels");
 const { useTypingLocatorStore } = await import("@/store/typingLocatorStore");
 
 function agentPanel(id: string, overrides: Partial<PtyPanelData> = {}): PtyPanelData {
@@ -137,6 +140,61 @@ describe("draftAgentContext", () => {
     drafts.set("proj-1:a", "note  \n\n\n");
     draftAgentContext("a", { text: "body" });
     expect(drafts.get("proj-1:a")).toBe("note  \n\n\n```daintree-context\nbody\n```\n");
+  });
+});
+
+describe("draftAgentContextReference (#13795)", () => {
+  beforeEach(() => {
+    usePluginContextProvidersStore.setState({
+      entries: [
+        {
+          pluginId: "acme.kanban",
+          pluginName: "Kanban",
+          providerId: "cards",
+          prefix: "rec",
+          label: "Cards",
+          scope: "global",
+          status: "active",
+        },
+      ],
+    });
+  });
+
+  it("leaves the same token the @ menu would, and learns its name for the chip", () => {
+    setPanels(agentPanel("a"));
+    drafts.set("proj-1:a", "look at");
+    const result = draftAgentContextReference("a", {
+      prefix: "rec",
+      id: "142",
+      label: "Fix login",
+    });
+
+    expect(result).toEqual({ status: "drafted", terminalId: "a" });
+    expect(drafts.get("proj-1:a")).toBe("look at @rec:142 ");
+    expect(contextReferenceLabel("acme.kanban", { prefix: "rec", id: "142" })).toBe("Fix login");
+  });
+
+  it("lands outside a handoff block, never on its fence line", () => {
+    setPanels(agentPanel("a"));
+    drafts.set("proj-1:a", "```daintree-context\ncard\n```");
+    draftAgentContextReference("a", { prefix: "rec", id: "1" });
+    expect(drafts.get("proj-1:a")).toBe("```daintree-context\ncard\n```\n@rec:1 ");
+
+    drafts.set("proj-1:a", "```daintree-context\nunfinished");
+    draftAgentContextReference("a", { prefix: "rec", id: "2" });
+    expect(drafts.get("proj-1:a")).toBe("```daintree-context\nunfinished\n```\n@rec:2 ");
+  });
+
+  it("refuses a prefix no provider here holds, and the draft gate's refusals", () => {
+    setPanels(agentPanel("a"), agentPanel("locked", { isInputLocked: true }));
+    expect(draftAgentContextReference("a", { prefix: "wiki", id: "1" })).toEqual({
+      status: "unavailable",
+    });
+    expect(draftAgentContextReference("locked", { prefix: "rec", id: "1" })).toEqual({
+      status: "refused",
+      reason: "input-locked",
+    });
+    expect(inputState.setDraftInput).not.toHaveBeenCalled();
   });
 });
 

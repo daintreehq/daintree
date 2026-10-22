@@ -619,10 +619,10 @@ function ContextProvidersSection() {
                 resetAriaLabel={`Reset ${pluginName}'s context providers`}
                 resetTestId={`context-provider-reset-${pluginId}`}
                 error={
-                  saveError === pluginId ? (
+                  saveError?.pluginId === pluginId ? (
                     <RowFailure
                       summary={`Couldn't save whether ${pluginName} offers context`}
-                      onRetry={() => void setEnabled(pluginId, !on)}
+                      onRetry={() => void setEnabled(pluginId, saveError.enabled)}
                     />
                   ) : undefined
                 }

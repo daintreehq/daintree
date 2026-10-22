@@ -42,6 +42,8 @@ export { diffChipField, createDiffChipTooltip } from "./diffChip";
 export { terminalChipField, createTerminalChipTooltip } from "./terminalChip";
 export { selectionChipField, createSelectionChipTooltip } from "./selectionChip";
 export {
+  applyContextReferenceProviders,
+  currentContextReferenceProvidersEffects,
   contextReferenceChipField,
   contextReferenceChipProviders,
   createContextReferenceChipTooltip,
