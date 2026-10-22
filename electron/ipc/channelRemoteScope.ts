@@ -4,6 +4,7 @@ import {
   resolveLeaseTarget,
   type LeaseTargetResolution,
   type LeaseTargetResolvers,
+  type TerminalRecord,
 } from "../services/driveLeaseTargets.js";
 import { AppError } from "../utils/errorTypes.js";
 
@@ -117,18 +118,7 @@ function judge(
     : outOfScope(channel);
 }
 
-/** What the host knows of a terminal: gone, or its project (null for none). */
-export type TerminalRecord = "missing" | { projectId: string | null };
-
-export function createRemoteScopeGate(
-  resolvers: LeaseTargetResolvers,
-  describeTerminal: (id: string) => TerminalRecord | Promise<TerminalRecord> = (id) => {
-    const owner = resolvers.projectForTerminal(id);
-    const toRecord = (projectId: string | null): TerminalRecord =>
-      projectId === null ? "missing" : { projectId };
-    return owner instanceof Promise ? owner.then(toRecord) : toRecord(owner);
-  }
-): RemoteScopeGate {
+export function createRemoteScopeGate(resolvers: LeaseTargetResolvers): RemoteScopeGate {
   return (channel, endpoint, args) => {
     if (endpoint.kind !== "remote-view" || !Object.hasOwn(CHANNEL_REMOTE_SCOPE, channel)) {
       return null;
@@ -145,7 +135,7 @@ export function createRemoteScopeGate(
       ) {
         return outOfScope(channel);
       }
-      const records = (ids as string[]).map((id) => describeTerminal(id));
+      const records = (ids as string[]).map((id) => resolvers.describeTerminal(id));
       const verdict = (resolved: TerminalRecord[]) =>
         resolved.every(
           (record) => record === "missing" || (projectId !== null && record.projectId === projectId)

@@ -9,6 +9,7 @@ const { projects, pty, gitProbe } = vi.hoisted(() => ({
   pty: {
     tracked: new Map<string, string>(),
     recorded: new Map<string, string>(),
+    timingOut: new Set<string>(),
   },
   gitProbe: { override: null as null | ((p: string) => Promise<unknown>) },
 }));
@@ -29,8 +30,15 @@ vi.mock("../ProjectStore.js", () => ({
 vi.mock("../../window/serviceRefs.js", () => ({
   getPtyClient: () => ({
     getTerminalProjectId: (id: string) => pty.tracked.get(id) ?? null,
-    getTerminalAsync: async (id: string) =>
-      pty.recorded.has(id) ? { id, projectId: pty.recorded.get(id) } : null,
+    hasTerminal: (id: string) => pty.tracked.has(id),
+    // As the real client: a timeout reads as no terminal unless asked to be strict.
+    getTerminalAsync: async (id: string, _token?: string, options?: { strict?: boolean }) => {
+      if (pty.timingOut.has(id)) {
+        if (options?.strict) throw new Error("timed out");
+        return null;
+      }
+      return pty.recorded.has(id) ? { id, projectId: pty.recorded.get(id) } : null;
+    },
   }),
 }));
 
@@ -43,7 +51,14 @@ function stubResolvers(overrides: Partial<LeaseTargetResolvers> = {}): LeaseTarg
   return {
     projectsForPath: (p) =>
       p.startsWith("/repo/a") ? ["a"] : p.startsWith("/repo/b") ? ["b"] : [],
-    projectForTerminal: (id) => (id === "ta" ? "a" : id === "tb" ? "b" : null),
+    describeTerminal: (id) =>
+      id === "ta"
+        ? { projectId: "a" }
+        : id === "tb"
+          ? { projectId: "b" }
+          : id === "host-shell"
+            ? { projectId: null }
+            : "missing",
     projectsForOperation: () => [],
     projectsForDevPreviewPanel: () => [],
     projectsForHelpSession: () => [],
@@ -93,10 +108,55 @@ describe("resolveLeaseTarget", () => {
       kind: "unresolved",
     });
     expect(
-      resolveLeaseTarget(target("terminal:kill"), ["gone"], "a", stubResolvers())
+      resolveLeaseTarget(target("terminal:kill"), ["host-shell"], "a", stubResolvers())
     ).toMatchObject({
       kind: "unresolved",
     });
+    expect(
+      resolveLeaseTarget(target("terminal:restore"), ["gone"], "a", stubResolvers())
+    ).toMatchObject({
+      kind: "unresolved",
+    });
+  });
+
+  it("lets a call that only ends a terminal through once the host has none, and nothing else", async () => {
+    for (const channel of ["terminal:kill", "terminal:graceful-kill", "terminal:trash"]) {
+      expect(resolveLeaseTarget(target(channel), ["gone"], "a", stubResolvers())).toEqual({
+        kind: "projects",
+        projectIds: [],
+      });
+      expect(resolveLeaseTarget(target(channel), ["tb"], "a", stubResolvers())).toEqual({
+        kind: "projects",
+        projectIds: ["b"],
+      });
+      for (const args of [["host-shell"], [""], []]) {
+        expect(
+          resolveLeaseTarget(target(channel), args, "a", stubResolvers()),
+          `${channel} ${JSON.stringify(args)}`
+        ).toMatchObject({ kind: "unresolved" });
+      }
+      const broken = stubResolvers({
+        describeTerminal: () => Promise.reject(new Error("timed out")),
+      });
+      await expect(
+        Promise.resolve(resolveLeaseTarget(target(channel), ["gone"], "a", broken))
+      ).resolves.toMatchObject({ kind: "unresolved" });
+    }
+    // A call that does more than end it still has to be placed in a project.
+    const elsewhere: Array<[string, unknown[]]> = [
+      ["terminal:restore", ["gone"]],
+      ["canopy:trash", ["gone"]],
+      ["canopy:rename", ["gone", "name"]],
+      ["terminal:update-title", [{ id: "gone", title: "x" }]],
+      ["agent-session:prepare-bookmark", [{ terminalId: "gone" }]],
+      ["copytree:inject", [{ terminalId: "gone", worktreeId: "/repo/a" }]],
+    ];
+    for (const [channel, args] of elsewhere) {
+      expect(
+        resolveLeaseTarget(target(channel), args, "a", stubResolvers()),
+        channel
+      ).toMatchObject({ kind: "unresolved" });
+    }
   });
 
   it("checks every project a call touches, and falls back only where declared", () => {
@@ -218,12 +278,14 @@ describe("resolveLeaseTarget", () => {
   });
 
   it("answers later when a record needs a lookup, and a failed lookup refuses", async () => {
-    const slow = stubResolvers({ projectForTerminal: async (id) => (id === "tb" ? "b" : null) });
+    const slow = stubResolvers({
+      describeTerminal: async (id) => (id === "tb" ? { projectId: "b" } : "missing"),
+    });
     const pending = resolveLeaseTarget(target("terminal:kill"), ["tb"], "a", slow);
     expect(pending).toBeInstanceOf(Promise);
     await expect(pending).resolves.toEqual({ kind: "projects", projectIds: ["b"] });
     const broken = stubResolvers({
-      projectForTerminal: () => Promise.reject(new Error("pty-host gone")),
+      describeTerminal: () => Promise.reject(new Error("pty-host gone")),
     });
     await expect(
       resolveLeaseTarget(target("terminal:kill"), ["tb"], "a", broken)
@@ -391,9 +453,27 @@ describe("createLeaseTargetResolvers", () => {
     pty.tracked.set("t1", "a");
     pty.recorded.set("t2", "b");
     const r = createLeaseTargetResolvers();
-    expect(r.projectForTerminal("t1")).toBe("a");
-    await expect(Promise.resolve(r.projectForTerminal("t2"))).resolves.toBe("b");
-    await expect(Promise.resolve(r.projectForTerminal("t3"))).resolves.toBeNull();
+    expect(r.describeTerminal("t1")).toEqual({ projectId: "a" });
+    await expect(Promise.resolve(r.describeTerminal("t2"))).resolves.toEqual({ projectId: "b" });
+    await expect(Promise.resolve(r.describeTerminal("t3"))).resolves.toBe("missing");
+  });
+
+  it("calls a terminal gone only when the pty-host has none and main holds no spawn for it", async () => {
+    const r = createLeaseTargetResolvers();
+    pty.recorded.set("t-unowned", "");
+    await expect(Promise.resolve(r.describeTerminal("t-unowned"))).resolves.toEqual({
+      projectId: null,
+    });
+    // A spawn main still holds, with no project, that the pty-host doesn't answer for.
+    pty.tracked.set("t-pending", "");
+    await expect(Promise.resolve(r.describeTerminal("t-pending"))).resolves.toEqual({
+      projectId: null,
+    });
+    // A lookup that times out can't vouch that it's gone.
+    pty.timingOut.add("t-slow");
+    await expect(Promise.resolve(r.describeTerminal("t-slow"))).resolves.toEqual({
+      projectId: null,
+    });
   });
 
   it("reads an operation's project from the registry", async () => {

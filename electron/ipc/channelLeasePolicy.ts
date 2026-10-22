@@ -739,6 +739,10 @@ export type LeaseArgPath = readonly [index: number, ...keys: string[]];
  *   Otherwise an absent argument leaves the target unresolved, and the call
  *   is refused.
  * - `unowned: "allow"`: a path inside no registered project changes none.
+ * - `missing: "allow"`: a terminal this Host confirms it no longer has changes
+ *   none, for a call that only ends one: the pane closing after the host has
+ *   already ended it. One that exists with no project, or whose lookup fails,
+ *   is still unresolved.
  */
 export type LeaseTargetSource =
   | { readonly from: "caller" }
@@ -747,9 +751,15 @@ export type LeaseTargetSource =
       readonly when?: { readonly at: LeaseArgPath; readonly equals: string };
     }
   | {
-      readonly from: "project" | "worktree" | "terminal";
+      readonly from: "project" | "worktree";
       readonly at: LeaseArgPath;
       readonly optional?: true | "caller" | "current-project";
+    }
+  | {
+      readonly from: "terminal";
+      readonly at: LeaseArgPath;
+      readonly optional?: true | "caller" | "current-project";
+      readonly missing?: "allow";
     }
   | {
       readonly from: "path";
@@ -777,6 +787,7 @@ const PROJECT_FIELD: LeaseTarget = [{ from: "project", at: [0, "projectId"] }];
 const CWD_ARG: LeaseTarget = [{ from: "path", at: [0] }];
 const CWD_FIELD: LeaseTarget = [{ from: "path", at: [0, "cwd"] }];
 const TERMINAL_ARG: LeaseTarget = [{ from: "terminal", at: [0] }];
+const ENDED_TERMINAL_ARG: LeaseTarget = [{ from: "terminal", at: [0], missing: "allow" }];
 const WORKTREE_FIELD: LeaseTarget = [{ from: "worktree", at: [0, "worktreeId"] }];
 const WORKTREE_PATH_FIELD: LeaseTarget = [{ from: "path", at: [0, "worktreePath"] }];
 
@@ -891,8 +902,8 @@ export const CHANNEL_LEASE_TARGETS = {
   "project:update-inrepo-recipe": PROJECT_FIELD,
   "project:update-recipe": PROJECT_FIELD,
   "project:write-claude-md": PROJECT_FIELD,
-  "terminal:graceful-kill": TERMINAL_ARG,
-  "terminal:kill": TERMINAL_ARG,
+  "terminal:graceful-kill": ENDED_TERMINAL_ARG,
+  "terminal:kill": ENDED_TERMINAL_ARG,
   "terminal:restart-service": [{ from: "every-project" }],
   "terminal:restore": TERMINAL_ARG,
   // With no projectId the handler spawns into this Host's current project.
@@ -900,7 +911,7 @@ export const CHANNEL_LEASE_TARGETS = {
     { from: "project", at: [0, "projectId"], optional: "current-project" },
     { from: "path", at: [0, "cwd"], optional: true, unowned: "allow" },
   ],
-  "terminal:trash": TERMINAL_ARG,
+  "terminal:trash": ENDED_TERMINAL_ARG,
   "terminal:update-title": [{ from: "terminal", at: [0, "id"] }],
   "terminal:update-worktree-id": [{ from: "terminal", at: [0, "id"] }],
   "worktree:attach-issue": WORKTREE_FIELD,

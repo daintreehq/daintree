@@ -4,8 +4,7 @@ import { projectStore } from "./ProjectStore.js";
 import { getOperationRegistry, normalizeOperationId } from "./operations/index.js";
 import { probeGitCommonDir } from "../utils/gitUtils.js";
 import { getPtyClient } from "../window/serviceRefs.js";
-import type { LeaseTargetResolvers } from "./driveLeaseTargets.js";
-import type { TerminalRecord } from "../ipc/channelRemoteScope.js";
+import type { LeaseTargetResolvers, TerminalRecord } from "./driveLeaseTargets.js";
 
 /** A lookup that takes longer than this can't vouch for a call, which is then refused. */
 const PATH_LOOKUP_TIMEOUT_MS = 5_000;
@@ -152,26 +151,29 @@ async function projectsForPathOwnership(
   return [...owners];
 }
 
-/** The lease gate's lookups, over this Host's project registry, pty-host and services. */
 /**
- * What the host knows of a terminal for scoping a remote view's reads: gone,
- * or the project it belongs to (null for one with none). A lookup that fails
- * answers "no project", which no view may read.
+ * What the host knows of a terminal: gone, or the project it belongs to (null
+ * for one with none). A lookup that fails answers "no project", which no call
+ * or view can be traced to.
  */
-export function describeTerminalForScope(
-  terminalId: string
-): TerminalRecord | Promise<TerminalRecord> {
+function describeTerminal(terminalId: string): TerminalRecord | Promise<TerminalRecord> {
   const pty = getPtyClient();
   if (!pty) return "missing";
   const tracked = pty.getTerminalProjectId(terminalId);
   if (tracked) return { projectId: tracked };
   // Strict: a lookup that times out throws rather than reading as "no such terminal".
   return pty.getTerminalAsync(terminalId, undefined, { strict: true }).then(
-    (info): TerminalRecord => (info ? { projectId: info.projectId || null } : "missing"),
+    (info): TerminalRecord => {
+      if (info) return { projectId: info.projectId || null };
+      // A pty-host that answers nothing for a spawn main still holds (a dead
+      // one answers null too) hasn't confirmed it gone.
+      return pty.hasTerminal(terminalId) ? { projectId: null } : "missing";
+    },
     (): TerminalRecord => ({ projectId: null })
   );
 }
 
+/** The lease gate's lookups, over this Host's project registry, pty-host and services. */
 export function createLeaseTargetResolvers(): LeaseTargetResolvers {
   return {
     projectsForPath(target) {
@@ -184,16 +186,7 @@ export function createLeaseTargetResolvers(): LeaseTargetResolvers {
       return withTimeout(projectsForPathOwnership(projects, unicodeForm(target)));
     },
 
-    projectForTerminal(terminalId) {
-      const pty = getPtyClient();
-      if (!pty) return null;
-      const tracked = pty.getTerminalProjectId(terminalId);
-      if (tracked) return tracked;
-      return pty.getTerminalAsync(terminalId).then(
-        (info) => info?.projectId || null,
-        () => null
-      );
-    },
+    describeTerminal,
 
     projectsForOperation(opId) {
       const id = normalizeOperationId(opId);

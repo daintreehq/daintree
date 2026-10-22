@@ -2,6 +2,9 @@ import type { LeaseArgPath, LeaseTarget, LeaseTargetSource } from "../ipc/channe
 
 type MaybePromise<T> = T | Promise<T>;
 
+/** What the host knows of a terminal: gone, or its project (null for none). */
+export type TerminalRecord = "missing" | { projectId: string | null };
+
 /**
  * This Host's own records, which the lease gate reads to find the project a
  * call changes. Each answers null, throws or rejects when it can't tell, which
@@ -16,8 +19,11 @@ export interface LeaseTargetResolvers {
    * or times out throws or rejects, never answers [].
    */
   projectsForPath(path: string): MaybePromise<readonly string[]>;
-  /** The project a terminal's pty-host record names. */
-  projectForTerminal(terminalId: string): MaybePromise<string | null>;
+  /**
+   * A terminal's record: "missing" only when the host confirms it has none; a
+   * lookup that fails or times out answers `{ projectId: null }` or rejects.
+   */
+  describeTerminal(terminalId: string): MaybePromise<TerminalRecord>;
   projectsForOperation(opId: string): MaybePromise<readonly string[]>;
   projectsForDevPreviewPanel(panelId: string): MaybePromise<readonly string[]>;
   projectsForHelpSession(sessionId: string): MaybePromise<readonly string[]>;
@@ -99,8 +105,12 @@ function resolveSource(
             : { unresolved: `a ${source.from} in no registered project` }
       );
     case "terminal":
-      return then(resolvers.projectForTerminal(value), (projectId) =>
-        one(projectId, "a terminal with no owning project")
+      return then(resolvers.describeTerminal(value), (record) =>
+        record !== "missing"
+          ? one(record.projectId, "a terminal with no owning project")
+          : source.missing === "allow"
+            ? []
+            : { unresolved: "a terminal this host doesn't have" }
       );
     case "operation":
       return then(resolvers.projectsForOperation(value), (ids) => ids);

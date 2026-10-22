@@ -276,6 +276,67 @@ describe("drive lease on the project a call targets (integration harness)", () =
   );
 
   it(
+    "a window closing terminals the host already ended isn't refused for its sibling window's project",
+    async () => {
+      const r = (h = await startRemoteHarness());
+      await r.connect();
+      const kill = vi.fn(() => undefined);
+      const gracefulKill = vi.fn(() => null);
+      const trash = vi.fn(() => undefined);
+      const restore = vi.fn(() => true);
+      cleanups.push(
+        typedHandleWithContext(CHANNELS.TERMINAL_KILL as never, kill as never),
+        typedHandleWithContext(CHANNELS.TERMINAL_GRACEFUL_KILL as never, gracefulKill as never),
+        typedHandleWithContext(CHANNELS.TERMINAL_TRASH as never, trash as never),
+        typedHandleWithContext(CHANNELS.TERMINAL_RESTORE as never, restore as never)
+      );
+      r.pty.spawn("live-2", "proj-2");
+      r.pty.spawn("host-shell", "");
+      // Two windows of one Shell, each driving its own project on the host.
+      const one = r.addView(11, "proj-1");
+      await r.openStreams(one);
+      const two = r.addView(12, "proj-2");
+      await r.openStreams(two);
+      expect((await leaseOf(r, one, "proj-1")).isHolderEndpoint).toBe(true);
+      expect((await leaseOf(r, two, "proj-2")).isHolderEndpoint).toBe(true);
+
+      // A batch of trash expired on the host; the window's kills arrive after.
+      for (const id of ["gone-1", "gone-2", "gone-3"]) {
+        unwrap(await r.invoke(CHANNELS.TERMINAL_KILL, one, id));
+      }
+      unwrap(await r.invoke(CHANNELS.TERMINAL_GRACEFUL_KILL, one, "gone-1"));
+      unwrap(await r.invoke(CHANNELS.TERMINAL_TRASH, one, "gone-1"));
+      expect(kill).toHaveBeenCalledTimes(3);
+      expect(gracefulKill).toHaveBeenCalledTimes(1);
+      expect(trash).toHaveBeenCalledTimes(1);
+
+      // Bringing one back still changes a project nobody can name.
+      expect(refusal(await r.invoke(CHANNELS.TERMINAL_RESTORE, one, "gone-1")).code).toBe(
+        "DRIVEN_ELSEWHERE"
+      );
+      // The sibling's live terminal stays the sibling's.
+      expect(refusal(await r.invoke(CHANNELS.TERMINAL_KILL, one, "live-2"))).toEqual({
+        code: "DRIVEN_ELSEWHERE",
+        projectId: "proj-2",
+      });
+      // A terminal with no project, or one whose lookup fails, can't be placed.
+      expect(refusal(await r.invoke(CHANNELS.TERMINAL_KILL, one, "host-shell")).code).toBe(
+        "DRIVEN_ELSEWHERE"
+      );
+      const failing = vi
+        .spyOn(r.pty.client, "getTerminalAsync")
+        .mockRejectedValue(new Error("timed out"));
+      cleanups.push(() => failing.mockRestore());
+      expect(refusal(await r.invoke(CHANNELS.TERMINAL_KILL, one, "gone-4")).code).toBe(
+        "DRIVEN_ELSEWHERE"
+      );
+      expect(kill).toHaveBeenCalledTimes(3);
+      expect(restore).not.toHaveBeenCalled();
+    },
+    TEST_TIMEOUT_MS
+  );
+
+  it(
     "a displaced view switching away leaves the driver's saved layout, drafts and active worktree alone",
     async () => {
       const r = (h = await startRemoteHarness());

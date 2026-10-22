@@ -4,10 +4,7 @@ import {
   getProjectStatsService,
 } from "../../ipc/handlers/projectCrud/index.js";
 import { createDriveLeaseGate, getDriveLeaseService } from "../../services/DriveLeaseService.js";
-import {
-  createLeaseTargetResolvers,
-  describeTerminalForScope,
-} from "../../services/driveLeaseTargetResolvers.js";
+import { createLeaseTargetResolvers } from "../../services/driveLeaseTargetResolvers.js";
 import { getIpcDispatcher } from "../../ipc/dispatcher.js";
 import {
   notifyMcpDriveTargetChange,
@@ -253,15 +250,10 @@ async function buildHostListener(
   // Only the holder changes a project: the channels that do are refused to
   // everyone else, from a link or from this machine's own views, on whichever
   // project the call targets.
-  teardowns.push(
-    getIpcDispatcher().setLeaseGate(createDriveLeaseGate(lease, createLeaseTargetResolvers()))
-  );
+  const resolvers = createLeaseTargetResolvers();
+  teardowns.push(getIpcDispatcher().setLeaseGate(createDriveLeaseGate(lease, resolvers)));
   // A remote view reads only its own project's terminals, images and history.
-  teardowns.push(
-    getIpcDispatcher().setScopeGate(
-      createRemoteScopeGate(createLeaseTargetResolvers(), describeTerminalForScope)
-    )
-  );
+  teardowns.push(getIpcDispatcher().setScopeGate(createRemoteScopeGate(resolvers)));
   teardowns.push(
     setMcpDriveTargetResolver((projectId) => {
       const target = lease.getDriveTarget(projectId);

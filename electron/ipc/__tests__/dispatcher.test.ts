@@ -577,7 +577,14 @@ describe("drive-lease gate", () => {
       },
       {
         projectsForPath: (p) => (p === P1 ? ["proj-1"] : p === P2 ? ["proj-2"] : []),
-        projectForTerminal: (id) => (id === "t1" ? "proj-1" : id === "t2" ? "proj-2" : null),
+        describeTerminal: (id) =>
+          id === "t1"
+            ? { projectId: "proj-1" }
+            : id === "t2"
+              ? { projectId: "proj-2" }
+              : id === "host-shell"
+                ? { projectId: null }
+                : "missing",
         projectsForOperation: () => [],
         projectsForDevPreviewPanel: () => [],
         projectsForHelpSession: () => [],
@@ -757,7 +764,7 @@ describe("drive-lease gate", () => {
     const handler = handle("terminal:kill");
     getProjectMock.mockReturnValue("proj-1");
     installGate(new Map([["proj-2", { endpointId: "remote:-9", clientId: "client-c" }]]), {
-      projectForTerminal: async (id) => (id === "t1" ? "proj-1" : "proj-2"),
+      describeTerminal: async (id) => ({ projectId: id === "t1" ? "proj-1" : "proj-2" }),
     });
     await expect(invokeLocal("terminal:kill", makeEvent(), "t1")).resolves.toEqual(
       wrapSuccess("ran")
@@ -780,6 +787,37 @@ describe("drive-lease gate", () => {
     await vi.waitFor(() => expect(listener).toHaveBeenCalledTimes(1));
     expect(listener.mock.calls[0]![1]).toMatchObject({ id: "t1" });
     warn.mockRestore();
+  });
+
+  it("lets a view end a terminal the host no longer has while another drives a project here", async () => {
+    const kill = handle("terminal:kill");
+    const trash = handle("terminal:trash");
+    const restore = handle("terminal:restore");
+    const { endpoint } = makeRemoteEndpoint(-4, "proj-1");
+    installGate(new Map([["proj-2", { endpointId: "remote:-9", clientId: "client-c" }]]), {
+      describeTerminal: async (id) =>
+        id === "t2"
+          ? { projectId: "proj-2" }
+          : id === "host-shell"
+            ? { projectId: null }
+            : "missing",
+    });
+    const ask = (channel: string, id: string) =>
+      getIpcDispatcher().invokeForEndpoint({ endpoint, client: REMOTE_CLIENT }, channel, [id]);
+
+    await expect(ask("terminal:kill", "gone")).resolves.toEqual(wrapSuccess("ran"));
+    await expect(ask("terminal:trash", "gone")).resolves.toEqual(wrapSuccess("ran"));
+    for (const [channel, id] of [
+      ["terminal:restore", "gone"],
+      ["terminal:kill", "host-shell"],
+      ["terminal:kill", "t2"],
+    ] as const) {
+      const refused = await ask(channel, id);
+      expect(refused.ok ? null : refused.error.code, `${channel} ${id}`).toBe("DRIVEN_ELSEWHERE");
+    }
+    expect(kill).toHaveBeenCalledTimes(1);
+    expect(trash).toHaveBeenCalledTimes(1);
+    expect(restore).not.toHaveBeenCalled();
   });
 
   it("judges a lookup that answered later against the leases as they stand then", async () => {
@@ -828,31 +866,28 @@ describe("remote scope gate", () => {
   function installScope() {
     cleanups.push(
       getIpcDispatcher().setScopeGate(
-        createRemoteScopeGate(
-          {
-            projectsForPath: (p) =>
-              p.startsWith(`${P1}/nested-wt-of-2`)
-                ? ["proj-1", "proj-2"]
-                : p.startsWith(P1)
-                  ? ["proj-1"]
-                  : p.startsWith(P2)
-                    ? ["proj-2"]
-                    : [],
-            projectForTerminal: (id) => (id === "t1" ? "proj-1" : id === "t2" ? "proj-2" : null),
-            projectsForOperation: () => [],
-            projectsForDevPreviewPanel: () => [],
-            projectsForHelpSession: () => [],
-            currentProjectId: () => null,
-          },
-          (id) =>
+        createRemoteScopeGate({
+          projectsForPath: (p) =>
+            p.startsWith(`${P1}/nested-wt-of-2`)
+              ? ["proj-1", "proj-2"]
+              : p.startsWith(P1)
+                ? ["proj-1"]
+                : p.startsWith(P2)
+                  ? ["proj-2"]
+                  : [],
+          describeTerminal: (id) =>
             id === "t1"
               ? { projectId: "proj-1" }
               : id === "t2"
                 ? { projectId: "proj-2" }
                 : id === "host-shell"
                   ? { projectId: null }
-                  : "missing"
-        )
+                  : "missing",
+          projectsForOperation: () => [],
+          projectsForDevPreviewPanel: () => [],
+          projectsForHelpSession: () => [],
+          currentProjectId: () => null,
+        })
       )
     );
   }
