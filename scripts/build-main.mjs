@@ -218,6 +218,32 @@ export function discoverGuestRuntimeAssets(rootDir) {
 export const GUEST_RUNTIME_ASSETS = discoverGuestRuntimeAssets(root);
 
 /**
+ * The core Element Picker's guest bundles: a fixed list, not discovered from
+ * any manifest, because no plugin owns them. Restates `CORE_GUEST_ASSET_FILES`
+ * in `electron/services/elementPicker/guestAssets.ts`, which reads them back at
+ * runtime; `electron/services/elementPicker/__tests__/guestAssets.test.ts`
+ * pins the two together. Each is evaluated by the host inside a prelude, so
+ * each takes the same IIFE build as a plugin guest.
+ */
+export const CORE_PICKER_GUEST_ASSETS = [
+  {
+    id: "bootstrap",
+    entry: "electron/services/elementPicker/guest/bootstrap.ts",
+    outfile: "dist-electron/element-picker/guest/bootstrap.js",
+  },
+  {
+    id: "probe",
+    entry: "electron/services/elementPicker/guest/probe.ts",
+    outfile: "dist-electron/element-picker/guest/probe.js",
+  },
+  {
+    id: "extractor:svelte",
+    entry: "electron/services/elementPicker/guest/extractors/svelte.ts",
+    outfile: "dist-electron/element-picker/guest/extractors/svelte.js",
+  },
+];
+
+/**
  * Pure so it is unit testable. The wrapping banner is what keeps the emitted
  * IIFE strict: esbuild puts its own `"use strict"` at file scope, and the host
  * splices the asset inside a `try` block, where a directive prologue no longer
@@ -511,12 +537,30 @@ export function findMissingGuestAssets(rootDir, distPluginsRoot) {
 }
 
 /**
+ * Every core picker bundle absent from the output. Parameterized on the output
+ * root so it is unit testable.
+ */
+export function findMissingCorePickerAssets(distRoot) {
+  const missing = [];
+  for (const asset of CORE_PICKER_GUEST_ASSETS) {
+    const resolved = path.resolve(distRoot, asset.outfile.replace("dist-electron/", ""));
+    if (!fs.existsSync(resolved)) {
+      missing.push(`${asset.id}: "${asset.outfile}" not found in built output`);
+    }
+  }
+  return missing;
+}
+
+/**
  * Same severity model as `validateCopiedPluginAssets`: a warning under watch,
  * where a cold build may not have emitted the bundle yet, and a hard failure
  * otherwise.
  */
 function validateGuestAssets() {
-  const missing = findMissingGuestAssets(root, path.join(root, "dist-electron/plugins"));
+  const missing = [
+    ...findMissingGuestAssets(root, path.join(root, "dist-electron/plugins")),
+    ...findMissingCorePickerAssets(path.join(root, "dist-electron")),
+  ];
   if (missing.length === 0) return;
 
   const detail = missing.map((m) => `  - ${m}`).join("\n");
@@ -713,7 +757,7 @@ async function run() {
     plugins: isWatch ? [createReadyMarkerPlugin()] : [],
   };
 
-  const guestConfigs = GUEST_RUNTIME_ASSETS.map((asset) =>
+  const guestConfigs = [...GUEST_RUNTIME_ASSETS, ...CORE_PICKER_GUEST_ASSETS].map((asset) =>
     guestRuntimeBuildConfig(asset, { minify: isProd, absWorkingDir: root })
   );
 
