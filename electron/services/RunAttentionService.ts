@@ -201,6 +201,15 @@ export class RunAttentionService {
     return this.records;
   }
 
+  /** Parks waiting on another run to finish; an ungated park is not one. */
+  listGatedParks(): Array<{ runId: string; gateRunId: string }> {
+    const gated: Array<{ runId: string; gateRunId: string }> = [];
+    for (const [runId, record] of this.records) {
+      if (record.gateRunId !== undefined) gated.push({ runId, gateRunId: record.gateRunId });
+    }
+    return gated;
+  }
+
   /**
    * Park a run. Re-parking replaces the record wholesale — a new note or a new
    * gate is a new decision, so `parkedAt` restarts too.

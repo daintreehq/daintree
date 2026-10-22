@@ -719,6 +719,15 @@ export class McpServerService {
     );
   }
 
+  /** What automatic sleep must not drop: reply waits held, and the projects with notify work. */
+  getPendingReplyWaitTerminalIds(): Array<string | undefined> {
+    return this.replyWaiter.pendingTerminalIds();
+  }
+
+  getNotifyProjectIdsWithPendingWork(): string[] {
+    return this.terminalNotify.projectIdsWithPendingWork();
+  }
+
   /** The pane's own "stop": every notice it has pending goes, and nothing more is typed. */
   stopPaneNotices(terminalId: string): void {
     this.terminalNotify.stopPane(terminalId);

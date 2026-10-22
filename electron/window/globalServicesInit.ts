@@ -78,7 +78,10 @@ import type { ProjectViewManager } from "./ProjectViewManager.js";
 import {
   getProjectStatsService,
   getFleetSnapshotService,
+  getRunAttentionService,
+  getRunHandBackService,
 } from "../ipc/handlers/projectCrud/index.js";
+import { findCoordinationHold } from "../services/coordinationHolds.js";
 import { registerDeferredTask } from "./deferredInitQueue.js";
 import { collectActiveProjectIds, projectViewManagersFrom } from "./activeProjectIds.js";
 import { isSmokeTest } from "../setup/environment.js";
@@ -107,6 +110,7 @@ import {
   getStopProcessMemoryMonitor,
   setStopProcessMemoryMonitor,
   getPtyClient,
+  getMcpServerServiceRef,
   getWorkspaceClientRef,
   setAutoUpdaterServiceRef,
   getAutoUpdaterServiceRef,
@@ -1094,6 +1098,27 @@ export async function initGlobalServices(
             .map((wCtx) => wCtx.services.projectViewManager)
             .filter((pvm): pvm is ProjectViewManager => pvm !== undefined) ?? []
       );
+      // Wired BEFORE start() as well; every source is resolved per call, since
+      // the services behind it are created and replaced after this runs.
+      svc.setCoordinationHoldProvider((projectId, ownerOf) => {
+        const ptyClient = getPtyClient();
+        const fleet = getFleetSnapshotService()?.getLastBroadcast() ?? null;
+        const fleetProjects = new Map(fleet?.runs.map((r) => [r.runId, r.workspaceId]));
+        const handBacks = getRunHandBackService();
+        const attention = getRunAttentionService();
+        return findCoordinationHold(projectId, {
+          projectOfTerminal: (id) =>
+            ptyClient?.getTerminalProjectId(id) ?? fleetProjects.get(id) ?? ownerOf(id),
+          waitingRunProjectIds: () =>
+            fleet?.runs.filter((r) => r.agentState === "waiting").map((r) => r.workspaceId) ?? [],
+          unseenHandBackRunIds: () => handBacks?.listUnseenRunIds() ?? [],
+          gatedParks: () => attention?.listGatedParks() ?? [],
+          replyWaitTerminalIds: () =>
+            getMcpServerServiceRef()?.getPendingReplyWaitTerminalIds() ?? [],
+          notifyProjectIds: () =>
+            getMcpServerServiceRef()?.getNotifyProjectIdsWithPendingWork() ?? [],
+        });
+      });
       svc.start();
     },
   });

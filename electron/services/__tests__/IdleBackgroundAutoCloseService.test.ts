@@ -431,6 +431,82 @@ describe("IdleBackgroundAutoCloseService", () => {
       );
     });
 
+    it("leaves a zero-terminal project awake while it holds pending coordination", async () => {
+      enable();
+      projectStoreMock.getAllProjects.mockReturnValue([
+        makeIdleProject("proj-1"),
+        makeIdleProject("proj-2"),
+      ]);
+      const service = makeService();
+      service.setCoordinationHoldProvider((id) => (id === "proj-1" ? "unseen-hand-back" : null));
+      await runCheck(service);
+
+      expect(ptyClientMock.gracefulKillByProject).toHaveBeenCalledTimes(1);
+      expect(ptyClientMock.gracefulKillByProject).toHaveBeenCalledWith("proj-2", {
+        preserveSession: true,
+      });
+    });
+
+    it("holds the project when the hold provider throws", async () => {
+      enable();
+      projectStoreMock.getAllProjects.mockReturnValue([makeIdleProject("proj-1")]);
+      const service = makeService();
+      service.setCoordinationHoldProvider(() => {
+        throw new Error("source unreadable");
+      });
+      await runCheck(service);
+
+      expect(ptyClientMock.gracefulKillByProject).not.toHaveBeenCalled();
+    });
+
+    it("resolves a record's owner from the sweep's terminal snapshot once its terminal exited", async () => {
+      enable();
+      projectStoreMock.getAllProjects.mockReturnValue([
+        makeIdleProject("proj-1"),
+        makeIdleProject("proj-2"),
+      ]);
+      ptyClientMock.getAllTerminalsAsync.mockResolvedValue([
+        makeTerminal("proj-1", { id: "t-exited", hasPty: false }),
+      ]);
+      const service = makeService();
+      service.setCoordinationHoldProvider((projectId, ownerOf) =>
+        ownerOf("t-exited") === projectId ? "unseen-hand-back" : null
+      );
+      await runCheck(service);
+
+      expect(ptyClientMock.gracefulKillByProject).toHaveBeenCalledTimes(1);
+      expect(ptyClientMock.gracefulKillByProject).toHaveBeenCalledWith("proj-2", {
+        preserveSession: true,
+      });
+    });
+
+    it("sleeps again once the hold clears", async () => {
+      enable();
+      projectStoreMock.getAllProjects.mockReturnValue([makeIdleProject("proj-1")]);
+      const service = makeService();
+      let hold: string | null = "gated-park";
+      service.setCoordinationHoldProvider(() => hold);
+      await runCheck(service);
+      expect(ptyClientMock.gracefulKillByProject).not.toHaveBeenCalled();
+
+      hold = null;
+      await runCheck(service);
+      expect(ptyClientMock.gracefulKillByProject).toHaveBeenCalledWith("proj-1", {
+        preserveSession: true,
+      });
+    });
+
+    it("stops the teardown when a hold appears after the sweep's own read", async () => {
+      enable();
+      projectStoreMock.getAllProjects.mockReturnValue([makeIdleProject("proj-1")]);
+      const service = makeService();
+      let reads = 0;
+      service.setCoordinationHoldProvider(() => (++reads > 1 ? "pending-reply-wait" : null));
+      await runCheck(service);
+
+      expect(ptyClientMock.gracefulKillByProject).not.toHaveBeenCalled();
+    });
+
     it("unloads the reclaimed project's plugins (#12216)", async () => {
       enable();
       projectStoreMock.getAllProjects.mockReturnValue([makeIdleProject("proj-1")]);
@@ -1542,6 +1618,27 @@ describe("IdleBackgroundAutoCloseService", () => {
       );
       return (call?.[1] as { reasons: Record<string, string[]> } | undefined)?.reasons;
     }
+
+    it("skips an idle shell project that holds pending coordination", async () => {
+      enableShells();
+      const service = setUpIdleShellProject();
+      service.setCoordinationHoldProvider(() => "queued-notify");
+      await runCheck(service);
+
+      expect(ptyClientMock.gracefulKillByProject).not.toHaveBeenCalled();
+      expect(skipLog()).toEqual({ "coordination-hold": ["proj-1"] });
+    });
+
+    it("stops an idle shell project's teardown when a hold appears during its probes", async () => {
+      enableShells();
+      const service = setUpIdleShellProject();
+      let reads = 0;
+      service.setCoordinationHoldProvider(() => (++reads > 1 ? "queued-notify" : null));
+      await runCheck(service);
+
+      expect(ptyClientMock.gracefulKillByProject).not.toHaveBeenCalled();
+      expect(skipLog()).toEqual({ "coordination-hold": ["proj-1"] });
+    });
 
     it("sleeps a project whose only terminal is an idle plain shell", async () => {
       enableShells();

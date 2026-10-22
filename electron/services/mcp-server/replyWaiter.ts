@@ -225,6 +225,11 @@ export class ReplyWaiterService {
     };
   }
 
+  /** Target of each wait still held; undefined for a launch that has not bound. */
+  pendingTerminalIds(): Array<string | undefined> {
+    return [...this.waiters].map((waiter) => waiter.terminalId);
+  }
+
   dispose(): void {
     for (const waiter of [...this.waiters]) waiter.finish("timeout");
     this.unsubscribe();

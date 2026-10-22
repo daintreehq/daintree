@@ -1313,6 +1313,24 @@ export class TerminalNotifyService {
     this.publish(owner);
   }
 
+  /** Projects whose panes hold notices, launches, wakes or lines not yet delivered. */
+  projectIdsWithPendingWork(): string[] {
+    const ids = new Set<string>();
+    for (const owner of this.ownersByKey.values()) {
+      if (owner.disposed) continue;
+      if (
+        owner.notices.size > 0 ||
+        owner.pendingLaunches > 0 ||
+        owner.wakes.size > 0 ||
+        owner.fired.length > 0 ||
+        owner.inHost !== undefined
+      ) {
+        ids.add(owner.projectId);
+      }
+    }
+    return [...ids];
+  }
+
   getPaneState(terminalId: string): PaneNotifyState | null {
     const owner = this.ownersByTerminal.get(terminalId);
     return owner === undefined ? null : this.paneState(owner);
