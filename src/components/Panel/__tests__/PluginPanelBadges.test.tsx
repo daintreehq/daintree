@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import type { LoadedPluginInfo } from "@shared/types/plugin";
-import { PluginPanelBadges } from "../PluginPanelBadges";
+import { PluginBadgeIndicator, PluginPanelBadges } from "../PluginPanelBadges";
 import { usePluginPanelBadgeStore } from "@/store/pluginPanelBadgeStore";
 import { _resetPluginRuntimeStoreForTest, usePluginRuntimeStore } from "@/store/pluginRuntimeStore";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -284,14 +284,40 @@ describe("PluginPanelBadges on a panel the plugin does not own (#13766)", () => 
     }
   });
 
-  it("names the plugin in the label of a badge on a foreign panel", () => {
+  it("names the plugin in the label and tooltip of a badge on a foreign panel", async () => {
     seedPanel({ kind: "terminal" });
 
     renderBadge({ kind: "dot", color: "warning", tooltip: "2 checks failing" });
 
-    expect(screen.getByRole("status").getAttribute("aria-label")).toBe(
+    const status = screen.getByRole("status");
+    expect(status.getAttribute("aria-label")).toBe("Video Manager: 2 checks failing");
+    fireEvent.focus(status);
+    expect((await screen.findByRole("tooltip")).textContent).toContain(
       "Video Manager: 2 checks failing"
     );
+  });
+
+  it("gives a foreign badge with no tooltip of its own one that names the plugin", async () => {
+    seedPanel({ kind: "terminal" });
+
+    renderBadge({ kind: "label", text: "3", color: "error" });
+
+    fireEvent.focus(screen.getByRole("status"));
+    expect((await screen.findByRole("tooltip")).textContent).toContain("Video Manager: 3");
+  });
+
+  it("repaints when the panel's ownership changes under a mounted badge", () => {
+    seedPanel({ kind: "terminal" });
+    const { container } = renderBadge({ kind: "dot", color: "error" });
+    expect(container.querySelector("svg")).toBeNull();
+
+    act(() => seedPanel({ kind: OWN_KIND }));
+    expect(container.querySelector("svg")).not.toBeNull();
+
+    act(() => {
+      unregisterPanelKind(OWN_KIND);
+    });
+    expect(container.querySelector("svg")).toBeNull();
   });
 
   it("treats a panel of another plugin's kind as foreign", () => {
@@ -317,6 +343,14 @@ describe("PluginPanelBadges on a panel the plugin does not own (#13766)", () => 
 
     expect(container.querySelector("svg")).not.toBeNull();
     expect(screen.getByRole("status").getAttribute("aria-label")).toBe("Sync failed");
+  });
+
+  it("keeps full colour for a caller that draws the indicator itself, like the toolbar", () => {
+    const { container } = render(
+      <PluginBadgeIndicator pluginId={INSTANCE_ID} badge={{ kind: "dot", color: "error" }} />
+    );
+
+    expect(container.querySelector("svg")).not.toBeNull();
   });
 
   it("counts a PTY-backed panel opened as the plugin's kind as its own", () => {

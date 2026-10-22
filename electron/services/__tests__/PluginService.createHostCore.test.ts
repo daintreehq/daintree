@@ -1592,7 +1592,7 @@ describe("createHost — showToast", () => {
         .filter((call: unknown[]) => call[0] === CHANNELS.NOTIFICATION_SHOW_TOAST)
         .map((call: unknown[]) => call[1] as { message: string; rateLimitKey: string });
 
-    const now = vi.spyOn(Date, "now").mockReturnValue(1_000_000);
+    const now = vi.spyOn(performance, "now").mockReturnValue(1_000_000);
     try {
       broadcastToRendererMock.mockClear();
       const tones = ["info", "success", "warning", "error"] as const;

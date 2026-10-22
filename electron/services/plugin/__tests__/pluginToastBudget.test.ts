@@ -45,8 +45,10 @@ describe("admitPluginToast", () => {
     expect(admitPluginToast("acme", T0 + PLUGIN_TOAST_REFILL_MS / 2)).toBe(false);
   });
 
-  it("refills nothing when the clock steps backwards", () => {
+  it("refills nothing when the clock steps backwards, or when it comes back", () => {
     admitted("acme", PLUGIN_TOAST_BURST, T0);
     expect(admitPluginToast("acme", T0 - 60_000)).toBe(false);
+    expect(admitPluginToast("acme", T0)).toBe(false);
+    expect(admitPluginToast("acme", T0 + PLUGIN_TOAST_REFILL_MS)).toBe(true);
   });
 });

@@ -295,7 +295,7 @@ describe("host.notify", () => {
       ].filter((c) => c[0] === CHANNELS.NOTIFICATION_SHOW_TOAST).length;
 
     let clock = 5_000_000;
-    const now = vi.spyOn(Date, "now").mockImplementation(() => clock);
+    const now = vi.spyOn(performance, "now").mockImplementation(() => clock);
     try {
       for (let n = 0; n < PLUGIN_TOAST_BURST; n++) {
         if (n % 2 === 0) await host.showToast({ message: `toast ${n}`, type: "error" });
@@ -321,7 +321,7 @@ describe("host.notify", () => {
 
   it("charges nothing for a call it rejects", async () => {
     const { host } = createHost(makeDeps(), PLUGIN_ID, UNBOUND_PLUGIN_HOST_BINDING);
-    const now = vi.spyOn(Date, "now").mockReturnValue(5_000_000);
+    const now = vi.spyOn(performance, "now").mockReturnValue(5_000_000);
     try {
       for (let n = 0; n < PLUGIN_TOAST_BURST * 2; n++) {
         await expect(host.notify({ title: "", body: "b" })).rejects.toThrow(/notify: invalid/);

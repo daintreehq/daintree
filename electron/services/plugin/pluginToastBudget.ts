@@ -15,20 +15,21 @@ export const PLUGIN_TOAST_REFILL_MS = 1_000;
 const buckets = new Map<string, { tokens: number; at: number }>();
 
 function refilled(bucket: { tokens: number; at: number }, now: number): number {
-  // A clock that went backwards refills nothing rather than draining.
   const elapsed = Math.max(0, now - bucket.at);
   return Math.min(PLUGIN_TOAST_BURST, bucket.tokens + elapsed / PLUGIN_TOAST_REFILL_MS);
 }
 
 /** Whether `pluginId` may raise a toast now; spends a token when it may. */
-export function admitPluginToast(pluginId: string, now = Date.now()): boolean {
+export function admitPluginToast(pluginId: string, now = performance.now()): boolean {
   // A full bucket is the same as none, so idle plugins cost nothing.
   for (const [id, bucket] of buckets) {
     if (id !== pluginId && refilled(bucket, now) >= PLUGIN_TOAST_BURST) buckets.delete(id);
   }
   const bucket = buckets.get(pluginId) ?? { tokens: PLUGIN_TOAST_BURST, at: now };
   bucket.tokens = refilled(bucket, now);
-  bucket.at = now;
+  // Never wound back: an earlier `now` followed by a later one would count
+  // the same stretch twice and mint a burst.
+  bucket.at = Math.max(bucket.at, now);
   buckets.set(pluginId, bucket);
   if (bucket.tokens < 1) return false;
   bucket.tokens -= 1;
