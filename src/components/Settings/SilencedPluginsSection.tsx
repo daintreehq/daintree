@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { SettingsSection } from "./SettingsSection";
-import { SettingsGroup, SettingsRow } from "./SettingsGroup";
+import { SettingsEmptyRow, SettingsGroup, SettingsRow } from "./SettingsGroup";
 import { SettingsLoadErrorBanner } from "./SettingsLoadErrorBanner";
 import { pluginClient } from "@/clients/pluginClient";
 import { useProjectStore } from "@/store/projectStore";
@@ -12,7 +12,7 @@ import type { PluginNotificationSilence } from "@shared/types/ipc/maps";
 /**
  * The way back from "Silence <Plugin>" in a notification's menu (#13818):
  * every plugin whose toasts and notifications main holds back, each with an
- * Unsilence. Absent while there are none, since the menu is where one starts.
+ * Unsilence. One change at a time, so each answer from main is the whole list.
  */
 export function SilencedPluginsSection() {
   const ownerMarker = useSettingsOwnerMarker();
@@ -44,6 +44,7 @@ export function SilencedPluginsSection() {
   }, [loadNonce]);
 
   const unsilence = (silence: PluginNotificationSilence) => {
+    if (pending !== null) return;
     const seq = ++requestSeq.current;
     setPending(silence.pluginId);
     pluginClient
@@ -61,13 +62,11 @@ export function SilencedPluginsSection() {
       });
   };
 
-  if (!loadFailed && (silences === null || silences.length === 0)) return null;
-
   return (
     <SettingsSection
       title="Silenced plugins"
       badge={ownerMarker("host")}
-      description="Their toasts and notifications are held back before they reach any window"
+      description="A silenced plugin's toasts and notifications are held back before they reach any window"
     >
       {loadFailed && (
         <SettingsLoadErrorBanner
@@ -83,16 +82,23 @@ export function SilencedPluginsSection() {
           onRetry={() => unsilence(failedUnsilence)}
         />
       )}
-      {silences && silences.length > 0 && (
+      {/* A list that couldn't be read isn't an empty one: the banner says so. */}
+      {!(loadFailed && silences === null) && (
         <SettingsGroup>
-          {silences.map((silence) => (
-            <SilencedPluginRow
-              key={silence.pluginId}
-              silence={silence}
-              busy={pending === silence.pluginId}
-              onUnsilence={() => unsilence(silence)}
-            />
-          ))}
+          {silences && silences.length > 0 ? (
+            silences.map((silence) => (
+              <SilencedPluginRow
+                key={silence.pluginId}
+                silence={silence}
+                busy={pending !== null}
+                onUnsilence={() => unsilence(silence)}
+              />
+            ))
+          ) : (
+            <SettingsEmptyRow>
+              Silence a plugin from the menu on one of its notifications to hold the rest back
+            </SettingsEmptyRow>
+          )}
         </SettingsGroup>
       )}
     </SettingsSection>

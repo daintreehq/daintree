@@ -598,3 +598,98 @@ describe("provenance, delivery and silence (#13818)", () => {
     expect(toasts[1]![1]).not.toHaveProperty("passive");
   });
 });
+
+describe("delivery order and paging (#13818)", () => {
+  function toastBodies(): unknown[] {
+    return [
+      ...ipcUtilsMock.broadcastToRenderer.mock.calls,
+      ...ipcUtilsMock.broadcastToProjectRenderers.mock.calls.map((c) => c.slice(1)),
+    ]
+      .filter((c) => c[0] === CHANNELS.NOTIFICATION_SHOW_TOAST)
+      .map((c) => (c[1] as Record<string, unknown>).message);
+  }
+
+  it("delivers in the order the plugin raised them, whatever each waits on", async () => {
+    const deps = makeDeps();
+    const fetch = deps.fetchWorktreeSnapshotsResult as unknown as ReturnType<typeof vi.fn>;
+    let release: (value: unknown) => void = () => {};
+    fetch.mockReturnValueOnce(
+      new Promise((resolve) => {
+        release = resolve;
+      })
+    );
+    const { host } = createHost(deps, PLUGIN_ID, UNBOUND_PLUGIN_HOST_BINDING);
+
+    const first = host.notify({
+      title: "t",
+      body: "building",
+      dedupeKey: "k",
+      target: { worktreeId: "/repos/beta/feature" },
+    });
+    const second = host.notify({ title: "t", body: "done", dedupeKey: "k" });
+    const third = host.showToast({ message: "after" });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(toastBodies()).toEqual([]);
+
+    release({ status: "ok", projectId: "project-b", snapshots: [{ id: "/repos/beta/feature" }] });
+    await Promise.all([first, second, third]);
+    expect(toastBodies()).toEqual(["building", "done", "Acme: after"]);
+  });
+
+  it("keeps delivering after a call it rejects partway through the queue", async () => {
+    const deps = makeDeps();
+    (deps.fetchWorktreeSnapshotsResult as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
+      status: "ok",
+      projectId: "project-b",
+      snapshots: [],
+    });
+    const { host } = createHost(deps, PLUGIN_ID, UNBOUND_PLUGIN_HOST_BINDING);
+
+    const refused = host.notify({ title: "t", body: "b", target: { worktreeId: "/elsewhere" } });
+    const next = host.notify({ title: "t", body: "next" });
+    await expect(refused).rejects.toThrow(/not a worktree this plugin can see/);
+    await next;
+    expect(toastBodies()).toEqual(["next"]);
+  });
+
+  it("drops a call from an instance that was replaced while it waited", async () => {
+    const deps = makeDeps();
+    const blocked = deps.pluginNotificationsBlocked as unknown as ReturnType<typeof vi.fn>;
+    let release: (value: boolean) => void = () => {};
+    blocked.mockReturnValueOnce(
+      new Promise<boolean>((resolve) => {
+        release = resolve;
+      })
+    );
+    const { host } = createHost(deps, PLUGIN_ID, UNBOUND_PLUGIN_HOST_BINDING);
+
+    const pending = host.notify({ title: "t", body: "stale" });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const plugins = deps.plugins as Map<string, LoadedPlugin>;
+    plugins.set(PLUGIN_ID, { ...plugins.get(PLUGIN_ID)! } as LoadedPlugin);
+    release(false);
+    await pending;
+    expect(toastBodies()).toEqual([]);
+  });
+
+  it("pages under the project an app-wide plugin's worktree belongs to", async () => {
+    grants.hasGrant.mockReturnValue(true);
+    const deps = makeDeps(["notification:os"]);
+    (deps.fetchWorktreeSnapshotsResult as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
+      status: "ok",
+      projectId: "project-b",
+      snapshots: [{ id: "/repos/beta/feature" }],
+    });
+    const { host } = createHost(deps, PLUGIN_ID, UNBOUND_PLUGIN_HOST_BINDING);
+
+    await host.notify({
+      title: "t",
+      body: "b",
+      os: true,
+      target: { worktreeId: "/repos/beta/feature" },
+    });
+    expect(pager.pagePluginNotification).toHaveBeenCalledWith(
+      expect.objectContaining({ projectId: "project-b" })
+    );
+  });
+});

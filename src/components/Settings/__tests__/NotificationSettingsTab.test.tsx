@@ -349,10 +349,39 @@ describe("NotificationSettingsTab silenced plugins (#13818)", () => {
     { pluginId: `project__${PROJECT}__acme.records`, name: "Acme Records", projectId: PROJECT },
   ];
 
-  it("lists nothing while no plugin is silenced", async () => {
+  it("says how to silence one while no plugin is silenced", async () => {
     render(<NotificationSettingsTab />);
     await waitFor(() => expect(getNotificationSilences).toHaveBeenCalled());
-    expect(screen.queryByText("Silenced plugins")).toBeNull();
+    expect(screen.getByText("Silenced plugins")).toBeTruthy();
+    expect(screen.getByText(/Silence a plugin from the menu on one of its notifications/)).toBeTruthy();
+  });
+
+  it("takes one Unsilence at a time, so each answer is the whole list", async () => {
+    getNotificationSilences.mockResolvedValue(silences);
+    let finish: (value: unknown) => void = () => {};
+    setNotificationSilenced.mockReturnValueOnce(
+      new Promise((resolve) => {
+        finish = resolve;
+      })
+    );
+    render(<NotificationSettingsTab />);
+
+    const tools = await screen.findByRole("button", { name: "Unsilence Acme Tools" });
+    await act(async () => {
+      fireEvent.click(tools);
+    });
+    const records = screen.getByRole("button", { name: "Unsilence Acme Records" });
+    expect((records as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(records);
+    expect(setNotificationSilenced).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      finish([silences[1]]);
+    });
+    await waitFor(() => expect(screen.queryByTestId("silenced-plugin-acme.tools")).toBeNull());
+    expect(
+      (screen.getByRole("button", { name: "Unsilence Acme Records" }) as HTMLButtonElement).disabled
+    ).toBe(false);
   });
 
   it("lists each silence with its scope and lifts one on Unsilence", async () => {
@@ -390,7 +419,8 @@ describe("NotificationSettingsTab silenced plugins (#13818)", () => {
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: "Retry" }));
     });
-    await waitFor(() => expect(screen.queryByText("Silenced plugins")).toBeNull());
+    await waitFor(() => expect(screen.queryByTestId("silenced-plugin-acme.tools")).toBeNull());
+    expect(screen.queryByText("Couldn't unsilence Acme Tools")).toBeNull();
   });
 
   it("says the list couldn't be read, with a Retry", async () => {
@@ -398,6 +428,8 @@ describe("NotificationSettingsTab silenced plugins (#13818)", () => {
     render(<NotificationSettingsTab />);
 
     expect(await screen.findByText("Couldn't load silenced plugins")).toBeTruthy();
+    // A list that couldn't be read is not passed off as an empty one.
+    expect(screen.queryByText(/Silence a plugin from the menu/)).toBeNull();
     getNotificationSilences.mockResolvedValueOnce([silences[0]]);
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: "Retry" }));

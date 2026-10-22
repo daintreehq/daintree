@@ -28,6 +28,7 @@ import { UnactionableTargetError } from "../unactionableTarget";
 import { actionService } from "@/services/ActionService";
 import { notify } from "@/lib/notify";
 import { UNDO_TOAST_DURATION_MS } from "@/lib/undoToast";
+import { pluginSilenceScope } from "@/lib/notificationSourceLabel";
 import { systemClient } from "@/clients/systemClient";
 import { revealCopy } from "@/components/FileViewer/revealCopy";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
@@ -648,13 +649,15 @@ export function registerPluginActions(actions: ActionRegistry, callbacks: Action
           throw error;
         }
         if (!silenced) return;
-        const name =
-          silences.find((silence) => silence.pluginId === pluginId)?.name ??
-          parseProjectPluginInstanceKey(pluginId)?.manifestId ??
-          pluginId;
+        const silence = silences.find((entry) => entry.pluginId === pluginId);
+        const name = silence?.name ?? parseProjectPluginInstanceKey(pluginId)?.manifestId ?? pluginId;
+        const projectId = silence?.projectId ?? null;
+        const projectName = projectId
+          ? useProjectStore.getState().projects.find((p) => p.id === projectId)?.name
+          : undefined;
         notify({
           type: "success",
-          message: `Silenced ${name}${parseProjectPluginInstanceKey(pluginId) ? " in this project" : ""}`,
+          message: `Silenced ${name}${pluginSilenceScope(projectId, projectName)}`,
           priority: "high",
           duration: UNDO_TOAST_DURATION_MS,
           context: { eventKind: "settings" },
@@ -663,13 +666,13 @@ export function registerPluginActions(actions: ActionRegistry, callbacks: Action
           transient: true,
           action: {
             label: "Undo",
-            onClick: async () => {
-              try {
-                await pluginClient.setNotificationSilenced(pluginId, false);
-              } catch {
-                // Undo failed silently — Settings → Notifications can still lift it.
-              }
-            },
+            // Through the action, so a failed Undo says so and offers Try again.
+            onClick: () =>
+              void actionService.dispatch(
+                "plugin.setNotificationsSilenced",
+                { pluginId, silenced: false },
+                { source: "user" }
+              ),
           },
         });
       },

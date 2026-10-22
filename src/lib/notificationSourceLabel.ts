@@ -46,3 +46,14 @@ export function formatNotificationSource(
   const parts = [h, g, p, w && w !== p ? w : undefined].filter((x): x is string => !!x);
   return parts.length > 0 ? parts.join(" · ") : null;
 }
+
+/**
+ * What "Silence <Plugin>" covers, said after the plugin's name (#13818): an
+ * installed plugin everywhere, so nothing; a project plugin only in its own
+ * project, named, since the inbox can show a row from a project other than
+ * the one in view.
+ */
+export function pluginSilenceScope(projectId: string | null, projectName?: string): string {
+  if (projectId === null) return "";
+  return ` in ${projectName?.trim() || UNKNOWN_PROJECT_LABEL.toLowerCase()}`;
+}

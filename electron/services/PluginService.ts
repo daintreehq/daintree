@@ -4412,12 +4412,15 @@ export class PluginService {
   ): Promise<boolean> {
     if (isPluginNotificationSilenced(pluginId)) return true;
     if (projectId === null) return false;
+    let muted = false;
     try {
-      return await projectStore.isProjectNotificationsMuted(projectId);
+      muted = await projectStore.isProjectNotificationsMuted(projectId);
     } catch (err) {
       console.warn("[PluginService] Couldn't read a project's notification mute:", err);
-      return false;
     }
+    // Asked again after the read: the user may have silenced the plugin while
+    // a cold project file was loading.
+    return muted || isPluginNotificationSilenced(pluginId);
   }
 
   /**

@@ -23,7 +23,7 @@ import type { NotificationHistoryEntry } from "@/store/slices/notificationHistor
 import { actionService } from "@/services/ActionService";
 import { EVENT_KIND_LABEL, isNotificationEventKind, notify } from "@/lib/notify";
 import type { ActionId } from "@shared/types/actions";
-import { parseProjectPluginInstanceKey } from "@shared/types/plugin";
+import { projectIdFromPluginInstanceKey } from "@shared/types/plugin";
 import type { NotificationType } from "@/store/notificationStore";
 import { DURATION_150, DURATION_250 } from "@/lib/animationUtils";
 import { useCopyWithFeedback } from "@/hooks/useCopyWithFeedback";
@@ -58,6 +58,8 @@ import {
   type NotificationDestination,
 } from "@/lib/notificationDestination";
 import { useProjectSettingsStore } from "@/store/projectSettingsStore";
+import { useProjectStore } from "@/store/projectStore";
+import { pluginSilenceScope } from "@/lib/notificationSourceLabel";
 import { useUIStore } from "@/store/uiStore";
 import { CountBadge } from "@/components/ui/badge";
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
@@ -774,6 +776,10 @@ function RowOptionsMenu({
 }: RowOptionsMenuProps) {
   const eventKind = entry.context?.eventKind;
   const plugin = entry.context?.plugin;
+  const pluginProjectId = plugin ? projectIdFromPluginInstanceKey(plugin.id) : null;
+  const pluginProjectName = useProjectStore((s) =>
+    pluginProjectId ? s.projects.find((p) => p.id === pluginProjectId)?.name : undefined
+  );
   const hasContextActions =
     isNotificationEventKind(eventKind) || !!entry.context?.projectId || !!plugin;
   // Not on a filed row: the Snoozed tab never shows archived entries, so a
@@ -1088,7 +1094,7 @@ function RowOptionsMenu({
               >
                 <BellMinus data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
                 Silence {plugin.name}
-                {parseProjectPluginInstanceKey(plugin.id) ? " in this project" : ""}
+                {pluginSilenceScope(pluginProjectId, pluginProjectName)}
               </DropdownMenuItem>
             )}
             {entry.context?.projectId && (

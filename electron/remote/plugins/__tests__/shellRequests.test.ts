@@ -555,6 +555,7 @@ describe("host plugin toasts", () => {
       duration: undefined,
       rateLimitKey: `plugin:${HOST}:acme.deploy`,
       rateLimitLabel: "acme.deploy",
+      context: { plugin: { id: "acme.deploy", name: "acme.deploy" } },
     });
   });
 

@@ -92,7 +92,8 @@ describe("NotificationCenterEntry overflow menu", () => {
 });
 
 describe("NotificationCenterEntry plugin provenance (#13818)", () => {
-  const PROJECT_PLUGIN = `project__${"a".repeat(64)}__acme.records`;
+  const PROJECT_A = "a".repeat(64);
+  const PROJECT_PLUGIN = `project__${PROJECT_A}__acme.records`;
 
   async function openMenu() {
     const trigger = screen.getByLabelText(/^Options for /);
@@ -106,7 +107,10 @@ describe("NotificationCenterEntry plugin provenance (#13818)", () => {
   const initialProjects = useProjectStore.getState().projects;
   beforeEach(() => {
     useProjectStore.setState({
-      projects: [{ id: "p1", name: "Helios" }] as never,
+      projects: [
+        { id: "p1", name: "Helios" },
+        { id: PROJECT_A, name: "Atlas" },
+      ] as never,
     });
   });
   afterEach(() => {
@@ -117,26 +121,27 @@ describe("NotificationCenterEntry plugin provenance (#13818)", () => {
     render(
       <NotificationCenterEntry
         entry={makeEntry({
-          context: { projectId: "p1", plugin: { id: PROJECT_PLUGIN, name: "Acme Records" } },
+          context: { projectId: PROJECT_A, plugin: { id: PROJECT_PLUGIN, name: "Acme Records" } },
         })}
       />
     );
-    expect(screen.getByTestId("notification-source").textContent).toBe("Acme Records · Helios");
+    expect(screen.getByTestId("notification-source").textContent).toBe("Acme Records · Atlas");
   });
 
-  it("silences a project plugin in this project from the row menu", async () => {
+  it("silences a project plugin in its own project, named, from the row menu", async () => {
     render(
       <NotificationCenterEntry
         entry={makeEntry({
-          context: { projectId: "p1", plugin: { id: PROJECT_PLUGIN, name: "Acme Records" } },
+          context: { projectId: PROJECT_A, plugin: { id: PROJECT_PLUGIN, name: "Acme Records" } },
         })}
       />
     );
     await openMenu();
     // Project mute stays on offer beside it: it covers the plugin too.
     expect(screen.getByText("Mute project notifications")).toBeTruthy();
+    // Named rather than "this project": the inbox can show another project's row.
     await act(async () => {
-      fireEvent.click(screen.getByText("Silence Acme Records in this project"));
+      fireEvent.click(screen.getByText("Silence Acme Records in Atlas"));
     });
 
     expect(dispatchMock).toHaveBeenCalledWith("plugin.setNotificationsSilenced", {
