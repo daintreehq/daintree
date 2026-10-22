@@ -13,9 +13,7 @@ export interface RecipeContext {
 }
 
 /** The values for a plugin recipe run that supplied none: every variable empty. */
-export const NO_PLUGIN_VARIABLE_VALUES: Readonly<Record<string, string>> = Object.freeze(
-  Object.create(null) as Record<string, string>
-);
+export const NO_PLUGIN_VARIABLE_VALUES: Readonly<Record<string, string>> = Object.freeze({});
 
 const PLUGIN_VARIABLE_PREFIX = "plugin.";
 

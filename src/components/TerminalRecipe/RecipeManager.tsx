@@ -209,6 +209,9 @@ export function RecipeManager({
         type: "warning",
         title: "Can't duplicate recipe",
         message: pluginOnlyCopyRefusal(recipe),
+        // The click did nothing else, so it stays a toast rather than inbox-only.
+        priority: "high",
+        context: { eventKind: "uiFeedback" },
       });
       return;
     }

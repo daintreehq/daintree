@@ -101,9 +101,13 @@ const panelStoreState: {
   exitMaximize: exitMaximizeMock,
 };
 
+// A test can hand out a fresh snapshot, as the real store does on every
+// change, instead of mutating the shared one in place.
+const panelStateOverride: { current: typeof panelStoreState | null } = { current: null };
+
 vi.mock("../panelStore", () => ({
   usePanelStore: {
-    getState: vi.fn(() => panelStoreState),
+    getState: vi.fn(() => panelStateOverride.current ?? panelStoreState),
   },
 }));
 
@@ -150,7 +154,6 @@ const runHistoryAppendMock = vi.fn().mockResolvedValue(undefined);
 
 import { useRecipeStore } from "../recipeStore";
 import { usePanelLimitStore } from "../panelLimitStore";
-import { usePanelStore } from "../panelStore";
 import type { RecipeTerminal } from "@shared/types/project";
 import { recipeApprovalDigest } from "@/utils/recipeApprovalDigest";
 
@@ -4119,7 +4122,7 @@ describe("plugin recipe panels, variables and agent tools (#13797)", () => {
     dispatchMock.mockResolvedValue({ ok: true, result: { panelId: "panel-1" } });
     listProjectPluginsMock.mockResolvedValue(toolsOn);
     viewStoreRef.current = null;
-    vi.mocked(usePanelStore.getState).mockImplementation(() => panelStoreState as never);
+    panelStateOverride.current = null;
   });
 
   const run = (overrides: Record<string, unknown> = {}, values?: Record<string, string>) => {
@@ -4332,7 +4335,7 @@ describe("plugin recipe panels, variables and agent tools (#13797)", () => {
             "panel-1": { id: "panel-1", kind: "acme.tools.records", location: "grid" },
           },
         };
-        vi.mocked(usePanelStore.getState).mockImplementation(() => after as never);
+        panelStateOverride.current = after;
         return { ok: true, result: { panelId: "panel-1" } };
       });
       let spawned = 0;

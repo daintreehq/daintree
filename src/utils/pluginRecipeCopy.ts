@@ -41,15 +41,16 @@ export function pluginOnlyCopyRefusal(recipe: TerminalRecipe): string {
  * it would make the reduced copy that Duplicate and Save to repo refuse.
  */
 export function importedRecipeUsesPluginOnlyFeatures(raw: unknown): boolean {
-  if (raw === null || typeof raw !== "object") return false;
-  const recipe = raw as Record<string, unknown>;
-  if (recipe.pluginVariables !== undefined || recipe.requiresAgentTools !== undefined) return true;
-  const terminals = Array.isArray(recipe.terminals) ? (recipe.terminals as unknown[]) : [];
+  if (!isRecord(raw)) return false;
+  if (raw.pluginVariables !== undefined || raw.requiresAgentTools !== undefined) return true;
+  const terminals: unknown[] = Array.isArray(raw.terminals) ? raw.terminals : [];
   return terminals.some(
     (terminal) =>
-      terminal !== null &&
-      typeof terminal === "object" &&
-      ((terminal as Record<string, unknown>).type === "plugin-panel" ||
-        (terminal as Record<string, unknown>).systemPrompt !== undefined)
+      isRecord(terminal) &&
+      (terminal.type === "plugin-panel" || terminal.systemPrompt !== undefined)
   );
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
