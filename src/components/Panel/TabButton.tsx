@@ -419,7 +419,7 @@ const TabButtonComponent = forwardRef<HTMLDivElement, TabButtonProps>(function T
                 </AnimatePresence>
               )}
 
-              {presetName && !(fullTitle ?? title).includes(presetName) && (
+              {presetName && !title.includes(presetName) && (
                 <span
                   className="max-w-24 shrink-0 truncate text-xs text-text-secondary"
                   data-testid="tab-preset-name"

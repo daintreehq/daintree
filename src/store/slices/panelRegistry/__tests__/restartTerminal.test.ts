@@ -1976,10 +1976,15 @@ describe("restartTerminalOnPreset", () => {
   it("starts a new conversation: no session id survives into the new home", async () => {
     seed();
 
+    const { buildResumeCommand, buildResumeLatestCommand } = await import("@shared/types");
+
     await usePanelStore.getState().restartTerminalOnPreset("test-1", "work");
 
     expect(pane().agentSessionId).toBeUndefined();
-    expect(mockSpawn.mock.calls[0]![0].command).not.toMatch(/resume|--continue/);
+    expect(mockSpawn.mock.calls[0]![0].agentSessionId).toBeUndefined();
+    // Neither an exact resume nor resume-latest is ever built for this respawn.
+    expect(vi.mocked(buildResumeCommand)).not.toHaveBeenCalled();
+    expect(vi.mocked(buildResumeLatestCommand)).not.toHaveBeenCalled();
   });
 
   it("makes the chosen preset the pane's own when it was on a fallback", async () => {

@@ -1756,7 +1756,11 @@ async function respawnAgentOnPreset(
       // rollback, any subsequent fallback trigger would jump past this
       // preset even though the PTY never started.
       ...priorSnapshot,
-      ...(switchedTitle && t.title === switchedTitle.title
+      // Only the stamp this switch wrote: a rename since then, even one that
+      // happens to spell the same title, now belongs to the user.
+      ...(switchedTitle &&
+      t.title === switchedTitle.title &&
+      t.titleMode === switchedTitle.titleMode
         ? { title: terminal.title, titleMode: terminal.titleMode }
         : {}),
       restartError: {

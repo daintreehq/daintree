@@ -61,9 +61,21 @@ function RateLimitChip({ terminalId, observedAt }: { terminalId: string; observe
   const [menuOpen, setMenuOpen] = useState(false);
   const [request, setRequest] = useState<RestartOnPresetRequest | null>(null);
   const closeRequest = useCallback(() => setRequest(null), []);
-  const choices = useRestartPresetChoices(agentId, presetId, menuOpen);
+  const live = isRateLimitObservationLive(observedAt, now);
+  // An expired chip takes its menu with it, so the quota stops being read too,
+  // and a later observation doesn't bring the chip back with the menu open.
+  if (!live && menuOpen) setMenuOpen(false);
+  const choices = useRestartPresetChoices(agentId, presetId, menuOpen && live);
 
-  if (!isRateLimitObservationLive(observedAt, now)) return null;
+  const confirmDialog = (
+    <RestartOnPresetConfirmDialog
+      request={request}
+      onClose={closeRequest}
+      sourceRef={CHIP_SOURCE}
+    />
+  );
+  // A confirm already asked outlives the chip: the user's answer still counts.
+  if (!live) return request ? confirmDialog : null;
 
   const chipClass = cn(
     HEADER_CHIP_CLASS,
@@ -132,11 +144,7 @@ function RateLimitChip({ terminalId, observedAt }: { terminalId: string; observe
             />
           </DropdownMenuContent>
         </DropdownMenu>
-        <RestartOnPresetConfirmDialog
-          request={request}
-          onClose={closeRequest}
-          sourceRef={CHIP_SOURCE}
-        />
+        {confirmDialog}
       </>
     );
   }

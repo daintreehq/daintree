@@ -237,6 +237,9 @@ export function AgentButton({
   // Raised by a default pick in this picker and dropped when it closes: the
   // offer is said once, at the moment of the change (#13746).
   const [presetNotice, setPresetNotice] = useState<PresetSwitchNoticeState | null>(null);
+  // Bumped by every pick and every close, so a save that resolves late can't
+  // bring back an offer the user already moved past.
+  const presetNoticeGenerationRef = useRef(0);
   const [presetRestartRequest, setPresetRestartRequest] =
     useState<PresetSwitchRestartRequest | null>(null);
   const panesLeftOnPreset = usePanesLeftOnPreset(type, presetNotice);
@@ -433,6 +436,11 @@ export function AgentButton({
   // button to the agent-level default). Guard on activeWorktreeId — when no
   // worktree is active we skip persistence entirely rather than polluting the
   // global scope.
+  const dismissPresetNotice = () => {
+    setPresetNotice(null);
+    return ++presetNoticeGenerationRef.current;
+  };
+
   const persistWorktreePick = (presetId: string | undefined) => {
     if (!activeWorktreeId) return;
     const worktreeId = activeWorktreeId;
@@ -450,12 +458,14 @@ export function AgentButton({
             toName: presetDisplayName(next),
           }
         : null;
-    setPresetNotice(null);
+    const generation = dismissPresetNotice();
     void useAgentSettingsStore
       .getState()
       .updateWorktreePreset(type, worktreeId, presetId)
-      .then(() => setPresetNotice(notice))
-      .catch(() => setPresetNotice(null));
+      .then(() => {
+        if (presetNoticeGenerationRef.current === generation) setPresetNotice(notice);
+      })
+      .catch(() => {});
   };
 
   // The agent-default row clears BOTH scopes: the worktree override and the
@@ -507,6 +517,7 @@ export function AgentButton({
   const launchWithPreset = (presetId: string | null) => {
     wasPointerCloseRef.current = true;
     setDropdownOpen(false);
+    dismissPresetNotice();
     void actionService.dispatch("agent.launch", { agentId: type, presetId }, { source: "user" });
   };
 
@@ -760,7 +771,7 @@ export function AgentButton({
               open={dropdownOpen}
               onOpenChange={(open) => {
                 setDropdownOpen(open);
-                if (!open) setPresetNotice(null);
+                if (!open) dismissPresetNotice();
                 if (open) {
                   setPrimaryTooltipOpen(false);
                   setChevronTooltipOpen(false);

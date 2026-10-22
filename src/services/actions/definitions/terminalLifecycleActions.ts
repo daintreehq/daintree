@@ -631,12 +631,17 @@ export function registerTerminalLifecycleActions(
       const state = usePanelStore.getState();
       const targetId = terminalId ?? state.focusedId;
       if (!targetId) return;
+      const observedBefore =
+        useRateLimitObservationStore.getState().observedAtByTerminalId[targetId];
       const result = await state.restartTerminalOnPreset(targetId, presetId);
       if (!result.success) {
         throw new Error(result.error ?? "Couldn't restart the terminal on that preset");
       }
-      // The chip reported this pane's old account; the new one hasn't said anything yet.
-      useRateLimitObservationStore.getState().clearObservation(targetId);
+      // The chip reported this pane's old account. Only that observation goes:
+      // the new process may already have reported one of its own.
+      if (observedBefore !== undefined) {
+        useRateLimitObservationStore.getState().clearObservation(targetId, observedBefore);
+      }
     },
   }));
 

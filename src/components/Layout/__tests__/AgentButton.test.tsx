@@ -665,6 +665,43 @@ describe("AgentButton preset UX", () => {
       expect(screen.getByText("Restart it on Beta…")).toBeTruthy();
     });
 
+    it("doesn't bring the offer back when the save lands after the picker closed (#13746)", async () => {
+      mockActiveWorktreeId = "wt-A";
+      mockSettings = settingsWith({ claude: { worktreePresets: { "wt-A": "user-alpha" } } });
+      mockMergedPresetsFn = () => [
+        { id: "user-alpha", name: "Alpha" },
+        { id: "user-beta", name: "Beta" },
+      ];
+      mockPanelsById = {
+        p1: {
+          id: "p1",
+          kind: "terminal",
+          title: "Claude [Alpha]",
+          cwd: "/repo",
+          location: "grid",
+          launchAgentId: "claude",
+          worktreeId: "wt-A",
+          agentPresetId: "user-alpha",
+          agentState: "waiting",
+        },
+      };
+      mockPanelIds = ["p1"];
+      mockPanelIdsByWorktreeId = { "wt-A": ["p1"] };
+      let resolveSave: () => void = () => {};
+      updateWorktreePresetMock.mockImplementationOnce(
+        () => new Promise<void>((resolve) => (resolveSave = resolve))
+      );
+
+      const { getAllByTestId } = render(
+        <AgentButton type="claude" availability={"ready" as unknown as CliAvailability[string]} />
+      );
+      clickGutter(rowByText(getAllByTestId, "Beta"));
+      act(() => dropdownOnOpenChange?.(false));
+      await act(async () => resolveSave());
+
+      expect(screen.queryByRole("status")).toBeNull();
+    });
+
     it("offers nothing when the pick leaves no pane behind (#13746)", async () => {
       mockActiveWorktreeId = "wt-A";
       mockSettings = settingsWith({ claude: { worktreePresets: { "wt-A": "user-alpha" } } });

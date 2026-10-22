@@ -1,8 +1,18 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 
 const clock = vi.hoisted(() => ({ now: 0 }));
+const dispatchMock = vi.hoisted(() => vi.fn().mockResolvedValue({ ok: true }));
+vi.mock("@/clients/codexClient", () => ({
+  codexClient: {
+    readQuota: vi.fn().mockResolvedValue([]),
+    refreshQuota: vi.fn().mockResolvedValue([]),
+  },
+}));
+vi.mock("@/services/ActionService", () => ({
+  actionService: { dispatch: (...args: unknown[]) => dispatchMock(...args) },
+}));
 vi.mock("@/hooks/useGlobalMinuteTicker", () => ({
   useGlobalMinuteClock: () => clock.now,
 }));
@@ -112,8 +122,28 @@ describe("TerminalRateLimitBadge (#12797)", () => {
     renderBadge("t1");
 
     const badge = screen.getByTestId("terminal-rate-limit-badge");
-    expect(badge.tagName).toBe("BUTTON");
-    expect(badge.getAttribute("aria-haspopup")).toBe("menu");
     expect(badge.textContent).toBe("Rate limit reported");
+    act(() => {
+      fireEvent.keyDown(badge, { key: "Enter" });
+    });
+
+    // Only the other preset is offered; the pane is already on Personal.
+    const items = screen.getAllByRole("menuitem");
+    expect(items.map((item) => item.textContent)).toEqual(["Work"]);
+    act(() => {
+      fireEvent.click(items[0]!);
+    });
+
+    // Asked even though the agent isn't working: the conversation ends either way.
+    expect(screen.getByText("Restart 'Codex [Personal]' on 'Work'?")).toBeTruthy();
+    expect(dispatchMock).not.toHaveBeenCalled();
+    act(() => {
+      fireEvent.click(screen.getByRole("button", { name: "Restart on preset" }));
+    });
+    expect(dispatchMock).toHaveBeenCalledWith(
+      "terminal.restartOnPreset",
+      { terminalId: "t1", presetId: "work", confirmed: true },
+      { source: "user" }
+    );
   });
 });

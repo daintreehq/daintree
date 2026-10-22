@@ -891,6 +891,24 @@ describe("terminal.restartOnPreset (#13746)", () => {
     expect(useRateLimitObservationStore.getState().observedAtByTerminalId.p1).toBeUndefined();
   });
 
+  it("keeps an observation the new process made before the restart resolved", async () => {
+    const { useRateLimitObservationStore } = await import("@/store/rateLimitObservationStore");
+    useRateLimitObservationStore.setState({ observedAtByTerminalId: { p1: 1_000 } });
+    const { restartTerminalOnPreset } = setRichPanelState({
+      focusedId: "p1",
+      panels: [{ id: "p1", location: "grid", detectedAgentId: "codex", agentState: "waiting" }],
+    });
+    restartTerminalOnPreset.mockImplementation(async () => {
+      useRateLimitObservationStore.setState({ observedAtByTerminalId: { p1: 2_000 } });
+      return { success: true };
+    });
+    const run = setupActions();
+
+    await run("terminal.restartOnPreset", { terminalId: "p1", presetId: "work", confirmed: true });
+
+    expect(useRateLimitObservationStore.getState().observedAtByTerminalId.p1).toBe(2_000);
+  });
+
   it("reports a respawn that failed instead of claiming success", async () => {
     const { restartTerminalOnPreset } = setRichPanelState({
       focusedId: "p1",
