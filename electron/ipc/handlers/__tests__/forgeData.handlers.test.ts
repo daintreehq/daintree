@@ -1281,6 +1281,37 @@ describe("issues bound to a separate provider (#13700)", () => {
     );
   });
 
+  it("dates the issue count by when the issues provider counted it, not the code forge", async () => {
+    const code = codeImplWithStats();
+    resolveForCwdMock.mockResolvedValue({ namespaceId: "fake.provider", repoRef, impl: code });
+    const countedAt = 1_000;
+    resolveIssueOverrideForCwdMock.mockResolvedValue({
+      namespaceId: "acme.tracker.tracker",
+      repoRef: trackerRef,
+      impl: {
+        listIssues: vi.fn(),
+        buildIssuesUrl: () => "https://tracker.test/issues",
+        repoStats: {
+          getRepoStats: vi.fn(async () => ({
+            counts: {
+              issueCount: 3,
+              prCount: null,
+              lastUpdated: countedAt,
+              issueCountRefreshedAt: countedAt,
+            },
+            source: "memory-cache" as const,
+          })),
+        },
+      },
+      viaIssueOverride: true,
+    });
+    registerForgeDataHandlers();
+
+    const stats = await findHandler("forge:get-repo-stats")(null, { cwd: "/repo" });
+
+    expect(stats).toMatchObject({ issueCount: 3, issueCountRefreshedAt: countedAt });
+  });
+
   it("reports an unknown issue count, never the code forge's, when the issues provider fails", async () => {
     resolveForCwdMock.mockResolvedValue({
       namespaceId: "fake.provider",

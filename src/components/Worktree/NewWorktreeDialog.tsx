@@ -211,6 +211,11 @@ export function NewWorktreeDialog({
   const [firstPrompt, setFirstPrompt] = useState("");
   const [agentPickerOpen, setAgentPickerOpen] = useState(false);
   const [issuePickerOpen, setIssuePickerOpen] = useState(false);
+  // The picker reports its own closes; one that goes away with the dialog
+  // can't, so its flag must not outlive the dialog either.
+  useEffect(() => {
+    if (!isOpen) setIssuePickerOpen(false);
+  }, [isOpen]);
   // A remembered or restored agent that is no longer launchable reads as "No
   // agent" rather than launching something the picker can't show.
   const firstAgent = agentOptions.find((a) => a.id === firstAgentId);
@@ -219,6 +224,9 @@ export function NewWorktreeDialog({
   const { issues: issueForge } = useResolvedForgeProvider(currentProject?.id ?? null);
   const forgeEntry = issueForge.entry;
   const forgeName = forgeEntry?.contribution.name ?? "the forge";
+  // Any issues provider gets the row: one without an `issueSelector` slot is
+  // served by the host's own picker over `listIssues`.
+  const showIssueRow = !initialPR && !!forgeEntry;
 
   // Forge-agnostic viewer identity, resolved per-cwd via the active forge
   // provider's `identity` capability so every project mirrors through the
@@ -1211,8 +1219,9 @@ export function NewWorktreeDialog({
 
   useEffect(() => {
     // A picker layered over the form owns the keyboard: Cmd/Ctrl+Enter there
-    // must not create the worktree mid-selection.
-    if (!isOpen || isDiscardConfirmOpen || issuePickerOpen) return;
+    // must not create the worktree mid-selection. Only while its row is shown:
+    // a row hidden mid-pick takes the picker with it, unreported.
+    if (!isOpen || isDiscardConfirmOpen || (issuePickerOpen && showIssueRow)) return;
     const handler = (e: KeyboardEvent) => {
       if (e.key !== "Enter" || !(e.metaKey || e.ctrlKey) || e.isComposing) return;
       const { handleCreate: create, submitDisabled: blocked } = submitRef.current;
@@ -1222,7 +1231,7 @@ export function NewWorktreeDialog({
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [isOpen, isDiscardConfirmOpen, issuePickerOpen]);
+  }, [isOpen, isDiscardConfirmOpen, issuePickerOpen, showIssueRow]);
 
   // What the form is actually about to do, said once. Replaces the mono echo
   // line that used to sit under the branch input restating its own value.
@@ -1258,9 +1267,6 @@ export function NewWorktreeDialog({
     </span>
   );
 
-  // Any issues provider gets the row: one without an `issueSelector` slot is
-  // served by the host's own picker over `listIssues`.
-  const showIssueRow = !initialPR && !!forgeEntry;
   // Without saved recipes the layout silently defaults to a clone of the
   // current one, which can itself start an agent — so once an agent is picked
   // the layout choice is shown too.

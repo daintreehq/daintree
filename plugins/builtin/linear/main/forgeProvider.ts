@@ -59,26 +59,36 @@ export function setTeamKeyReader(
 
 let cachedViewer: { version: number; viewer: Viewer } | null = null;
 
+/**
+ * One operation's credential, captured once. Every request an operation makes
+ * carries the same key, so a key swapped mid-way can't have its later requests
+ * answered for a different account, and `version` lets it drop what it learned
+ * rather than cache it under the new key.
+ */
+interface Op {
+  auth: { token?: string };
+  version: number;
+}
+
+function beginOp(): Op {
+  const token = getToken();
+  return { auth: token ? { token } : {}, version: getTokenVersion() };
+}
+
+function isCurrent(op: Op): boolean {
+  return op.version === getTokenVersion();
+}
+
 /** The key's own user and workspace, cached for as long as the key is unchanged. */
-async function getViewer(): Promise<Viewer> {
-  const version = getTokenVersion();
-  if (cachedViewer && cachedViewer.version === version) return cachedViewer.viewer;
+async function getViewer(op: Op = beginOp()): Promise<Viewer> {
+  if (cachedViewer && cachedViewer.version === op.version) return cachedViewer.viewer;
   const data = await linearGraphQL<{ viewer: Viewer }>(
     `query { viewer { id name displayName avatarUrl organization { urlKey } } }`,
     {},
-    pinnedToken()
+    op.auth
   );
-  if (getTokenVersion() === version) cachedViewer = { version, viewer: data.viewer };
+  if (isCurrent(op)) cachedViewer = { version: op.version, viewer: data.viewer };
   return data.viewer;
-}
-
-/**
- * The key a multi-request operation started under, so a key swapped mid-way
- * can't have the operation's later requests answered for a different account.
- */
-function pinnedToken(): { token?: string } {
-  const token = getToken();
-  return token ? { token } : {};
 }
 
 /** Counting pages through every open issue's id; past this many, the count reads as unknown. */
@@ -95,11 +105,24 @@ const statsCache = new Map<string, { version: number; at: number; issueCount: nu
 /** Team key → team, per key version: every issue call resolves the project's team first. */
 const teamCache = new Map<string, { id: string; key: string }>();
 /**
- * Who an issue was assigned to before "Assign to me" replaced them, by issue
- * id. Linear issues take one assignee, so the Undo has to put that person back
- * rather than leave the issue unassigned.
+ * Who an issue was assigned to before "Assign to me", by issue id. Linear
+ * issues take one assignee, so the Undo has to put that person back rather
+ * than leave the issue unassigned — and leave it alone when it was already the
+ * viewer's. Undo is offered for seconds, so only the latest few are kept.
  */
 const previousAssignees = new Map<string, string | null>();
+const PREVIOUS_ASSIGNEES_LIMIT = 50;
+
+function rememberPreviousAssignee(op: Op, issueId: string, assigneeId: string | null): void {
+  // A key change cleared this history; don't refill it from the old key's work.
+  if (!isCurrent(op)) return;
+  previousAssignees.delete(issueId);
+  previousAssignees.set(issueId, assigneeId);
+  if (previousAssignees.size > PREVIOUS_ASSIGNEES_LIMIT) {
+    const oldest = previousAssignees.keys().next().value;
+    if (oldest !== undefined) previousAssignees.delete(oldest);
+  }
+}
 
 export function clearLinearCaches(): void {
   cachedViewer = null;
@@ -149,21 +172,29 @@ function issueFilter(repo: RepoRef, opts: ListOptions): Record<string, unknown> 
   return filter;
 }
 
-async function findIssue(filter: Record<string, unknown>): Promise<Issue | null> {
+async function findIssue(
+  filter: Record<string, unknown>,
+  op: Op = beginOp()
+): Promise<Issue | null> {
   const data = await linearGraphQL<{ issues: { nodes: LinearIssueNode[] } }>(
     `query ($filter: IssueFilter) { issues(filter: $filter, first: 1) { nodes { ${ISSUE_FIELDS} } } }`,
-    { filter }
+    { filter },
+    op.auth
   );
   const node = data.issues.nodes[0];
   return node ? mapIssue(node) : null;
 }
 
 /** The issue a mutation targets, with the UUID every Linear mutation takes. */
-async function requireIssue(repo: RepoRef, number: number): Promise<Issue & { id: string }> {
-  const issue = await findIssue({
-    team: { key: { eq: teamKeyOf(repo) } },
-    number: { eq: number },
-  });
+async function requireIssue(
+  repo: RepoRef,
+  number: number,
+  op: Op
+): Promise<Issue & { id: string }> {
+  const issue = await findIssue(
+    { team: { key: { eq: teamKeyOf(repo) } }, number: { eq: number } },
+    op
+  );
   if (!issue?.id) {
     throw new Error(`Linear issue ${teamKeyOf(repo)}-${number} wasn't found`);
   }
@@ -174,7 +205,7 @@ function assigneeIdOf(issue: Issue): string | null {
   return (issue.assignees[0]?.rawData as { id?: string } | undefined)?.id ?? null;
 }
 
-async function setAssignee(id: string, assigneeId: string | null): Promise<ForgeUser[]> {
+async function setAssignee(id: string, assigneeId: string | null, op: Op): Promise<ForgeUser[]> {
   const data = await linearGraphQL<{
     issueUpdate: { success: boolean; issue: { assignee: LinearUserNode | null } | null };
   }>(
@@ -184,7 +215,8 @@ async function setAssignee(id: string, assigneeId: string | null): Promise<Forge
         issue { assignee { id name displayName avatarUrl } }
       }
     }`,
-    { id, input: { assigneeId } }
+    { id, input: { assigneeId } },
+    op.auth
   );
   if (!data.issueUpdate.success) throw new Error("Linear didn't update the issue's assignee");
   const assignee = data.issueUpdate.issue?.assignee;
@@ -196,8 +228,8 @@ async function setAssignee(id: string, assigneeId: string | null): Promise<Forge
  * ("Assign to me" and its Undo), so the username names the viewer: assigning
  * anyone else is refused rather than guessed at.
  */
-async function requireViewerFor(username: string): Promise<Viewer> {
-  const viewer = await getViewer();
+async function requireViewerFor(username: string, op: Op): Promise<Viewer> {
+  const viewer = await getViewer(op);
   const handles = [viewer.displayName, viewer.name, viewer.id].filter(Boolean);
   if (!handles.includes(username)) {
     throw new Error("Linear issues can only be assigned to you from Daintree");
@@ -225,9 +257,8 @@ async function validateWithToken(token?: string): Promise<AuthValidation> {
  * the page size rather than a count. Teams too large to count within
  * {@link COUNT_PAGE_LIMIT} pages report the count as unknown.
  */
-async function countOpenIssues(repo: RepoRef): Promise<number | null> {
+async function countOpenIssues(repo: RepoRef, op: Op): Promise<number | null> {
   const filter = issueFilter(repo, { state: "open" });
-  const auth = pinnedToken();
   let count = 0;
   let after: string | null = null;
   for (let page = 0; page < COUNT_PAGE_LIMIT; page++) {
@@ -244,7 +275,7 @@ async function countOpenIssues(repo: RepoRef): Promise<number | null> {
         }
       }`,
       { filter, first: COUNT_PAGE_SIZE, after },
-      auth
+      op.auth
     );
     count += data.issues.nodes.length;
     if (!data.issues.pageInfo.hasNextPage) return count;
@@ -262,13 +293,13 @@ async function countOpenIssues(repo: RepoRef): Promise<number | null> {
 const repoStatsCapability: RepoStatsCapability = {
   async getRepoStats(repo: RepoRef, opts?: { bypassCache?: boolean }): Promise<RepoStatsSnapshot> {
     const key = `${repo.owner}/${teamKeyOf(repo)}`;
-    const version = getTokenVersion();
+    const op = beginOp();
     const now = Date.now();
     const cached = statsCache.get(key);
     if (
       !opts?.bypassCache &&
       cached &&
-      cached.version === version &&
+      cached.version === op.version &&
       now - cached.at < STATS_CACHE_TTL_MS
     ) {
       return {
@@ -281,8 +312,8 @@ const repoStatsCapability: RepoStatsCapability = {
         source: "memory-cache",
       };
     }
-    const issueCount = await countOpenIssues(repo);
-    if (getTokenVersion() === version) statsCache.set(key, { version, at: now, issueCount });
+    const issueCount = await countOpenIssues(repo, op);
+    if (isCurrent(op)) statsCache.set(key, { version: op.version, at: now, issueCount });
     return {
       counts: { issueCount, prCount: null, lastUpdated: now, issueCountRefreshedAt: now },
       source: "network",
@@ -327,15 +358,15 @@ export const linearForgeProvider: ForgeIssueProviderImpl = {
   async resolveIssueRepo(projectPath: string): Promise<RepoRef | null> {
     const teamKey = normalizeTeamKey(await teamKeyReader?.(projectPath));
     if (!teamKey) return null;
-    const version = getTokenVersion();
-    const viewer = await getViewer();
-    const cacheKey = `${version}\u0000${teamKey}`;
+    const op = beginOp();
+    const viewer = await getViewer(op);
+    const cacheKey = `${op.version}\u0000${teamKey}`;
     let team = teamCache.get(cacheKey);
     if (!team) {
       const data = await linearGraphQL<{ teams: { nodes: Array<{ id: string; key: string }> } }>(
         `query ($key: String!) { teams(filter: { key: { eq: $key } }, first: 1) { nodes { id key } } }`,
         { key: teamKey },
-        pinnedToken()
+        op.auth
       );
       team = data.teams.nodes[0];
       if (!team) {
@@ -343,7 +374,7 @@ export const linearForgeProvider: ForgeIssueProviderImpl = {
           `Linear has no team with the key ${teamKey} in this workspace. Check the team key in Project settings.`
         );
       }
-      if (getTokenVersion() === version) teamCache.set(cacheKey, team);
+      if (isCurrent(op)) teamCache.set(cacheKey, team);
     }
     const rawData: ResolvedRepoData = { teamId: team.id };
     return { host: LINEAR_HOST, owner: viewer.organization.urlKey, repo: team.key, rawData };
@@ -406,29 +437,31 @@ export const linearForgeProvider: ForgeIssueProviderImpl = {
   },
 
   async assignIssue(repo: RepoRef, issueNumber: number, username: string): Promise<ForgeUser[]> {
-    const viewer = await requireViewerFor(username);
-    const issue = await requireIssue(repo, issueNumber);
+    const op = beginOp();
+    const viewer = await requireViewerFor(username, op);
+    const issue = await requireIssue(repo, issueNumber, op);
     const before = assigneeIdOf(issue);
+    rememberPreviousAssignee(op, issue.id, before);
     if (before === viewer.id) return issue.assignees;
-    const assignees = await setAssignee(issue.id, viewer.id);
-    previousAssignees.set(issue.id, before);
-    return assignees;
+    return setAssignee(issue.id, viewer.id, op);
   },
 
   async unassignIssue(repo: RepoRef, issueNumber: number, username: string): Promise<ForgeUser[]> {
-    const viewer = await requireViewerFor(username);
-    const current = await requireIssue(repo, issueNumber);
-    // Only take the issue off the viewer: if someone else picked it up since,
-    // the Undo has nothing of ours to undo.
-    if (assigneeIdOf(current) !== viewer.id) {
-      previousAssignees.delete(current.id);
+    const op = beginOp();
+    const viewer = await requireViewerFor(username, op);
+    const current = await requireIssue(repo, issueNumber, op);
+    const previous = previousAssignees.has(current.id)
+      ? (previousAssignees.get(current.id) ?? null)
+      : null;
+    previousAssignees.delete(current.id);
+    // Only take the issue off the viewer, and only if "Assign to me" put it
+    // there: if someone else picked it up since, or it was already the
+    // viewer's, there is nothing of ours to undo.
+    if (assigneeIdOf(current) !== viewer.id || previous === viewer.id) {
       return current.assignees;
     }
     // Hand it back to whoever "Assign to me" took it from.
-    const previous = previousAssignees.get(current.id) ?? null;
-    const assignees = await setAssignee(current.id, previous);
-    previousAssignees.delete(current.id);
-    return assignees;
+    return setAssignee(current.id, previous, op);
   },
 
   createIssue: () => notSupported("Creating issues"),

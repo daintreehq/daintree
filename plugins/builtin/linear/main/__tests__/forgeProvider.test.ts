@@ -436,6 +436,37 @@ describe("assignment Undo", () => {
     expect(assignees.map((a) => a.login)).toEqual(["ada"]);
     expect(fetchMock()).toHaveBeenCalledTimes(2);
   });
+
+  it("leaves an issue the viewer already held when that no-op assignment is undone", async () => {
+    fetchMock()
+      .mockResolvedValueOnce(gql({ viewer: VIEWER }))
+      .mockResolvedValueOnce(gql({ issues: { nodes: [issueNode({ assignee: VIEWER })] } }))
+      .mockResolvedValueOnce(gql({ issues: { nodes: [issueNode({ assignee: VIEWER })] } }));
+
+    await linearForgeProvider.assignIssue(REPO, 42, "ada");
+    const assignees = await linearForgeProvider.unassignIssue(REPO, 42, "ada");
+
+    expect(assignees.map((a) => a.login)).toEqual(["ada"]);
+    expect(fetchMock()).toHaveBeenCalledTimes(3);
+  });
+
+  it("keeps every request of one assignment on the key it started with", async () => {
+    fetchMock()
+      .mockImplementationOnce(async () => {
+        // The key changes while the operation is under way.
+        linearForgeProvider.setCredentials!({ kind: "bearer", value: "lin_api_other" });
+        return gql({ viewer: VIEWER });
+      })
+      .mockResolvedValueOnce(gql({ issues: { nodes: [issueNode()] } }))
+      .mockResolvedValueOnce(gql({ issueUpdate: { success: true, issue: { assignee: VIEWER } } }));
+
+    await linearForgeProvider.assignIssue(REPO, 42, "ada");
+
+    const keys = fetchMock().mock.calls.map(
+      (call) => ((call[1] as RequestInit).headers as Record<string, string>).Authorization
+    );
+    expect(keys).toEqual(["lin_api_secret", "lin_api_secret", "lin_api_secret"]);
+  });
 });
 
 describe("search scoping", () => {
