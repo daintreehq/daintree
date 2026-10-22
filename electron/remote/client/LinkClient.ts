@@ -101,6 +101,12 @@ export interface LinkClientOptions {
   now?: () => number;
   /** Silence from the host, in ms, before the link is reported quiet; 0 never reports it. */
   quietAfterMs?: number;
+  /**
+   * When the host was last heard from by any link before this one (the
+   * registry's record), so a link made after a release or at launch still
+   * reads a restart as one.
+   */
+  lastSeenAt?: () => number | null;
 }
 
 const SHORT_SESSION_MS = 5_000;
@@ -147,6 +153,8 @@ export class LinkClient {
   /** The secret the last WELCOME carried, presented with `sessionId` to resume. */
   private resumeSecret: string | null = null;
   private lastSeenAt: number | null = null;
+  /** The last dial found no Host mode there while that still read as a restart. */
+  private restartSeen = false;
   /** What the last logged failure said, so a host down for hours logs once, not every retry. */
   private lastLoggedFailure: string | null = null;
   private generation = 0;
@@ -176,6 +184,15 @@ export class LinkClient {
   /** The session id the host last gave this link, kept while it is down so a resume can ask for it. */
   get lastSessionId(): string | null {
     return this.sessionId;
+  }
+
+  /**
+   * The host was heard from moments before its last answer said no Daintree
+   * is listening there, and the link hasn't connected since: what a restart
+   * looks like, though nothing here can say that it is one.
+   */
+  get restarting(): boolean {
+    return this.restartSeen;
   }
 
   onStateChange(listener: (state: LinkClientState) => void): () => void {
@@ -215,6 +232,7 @@ export class LinkClient {
     if (connection) void this.release(connection);
     await Promise.all([...this.releasing]);
     this.failures = 0;
+    this.restartSeen = false;
     this.setState({ status: "disconnected" });
   }
 
@@ -243,11 +261,13 @@ export class LinkClient {
       const hostModeOff = err instanceof HostModeOffError;
       // A host heard from moments ago that now says host mode is off is most
       // likely restarting: it removes host.json on the way down and writes it
-      // again on the way up, so that window is worth retrying through.
+      // again on the way up, so that window is worth retrying through. A time
+      // ahead of the clock (it moved back) says nothing about a restart.
+      const heard = this.lastHeard();
+      const sinceHeard = heard === null ? null : this.now() - heard;
       const restarting =
-        hostModeOff &&
-        this.lastSeenAt !== null &&
-        this.now() - this.lastSeenAt < HOST_RESTART_GRACE_MS;
+        hostModeOff && sinceHeard !== null && sinceHeard >= 0 && sinceHeard < HOST_RESTART_GRACE_MS;
+      this.restartSeen = restarting;
       this.fail(err instanceof TransportError ? err.detail : formatErrorMessage(err, "failed"), {
         hostModeOff,
         // Otherwise nothing a later attempt does differently would change these.
@@ -264,6 +284,8 @@ export class LinkClient {
       await connection.dispose().catch(() => {});
       return;
     }
+    // Something is listening there again, whatever its handshake says.
+    this.restartSeen = false;
     this.connection = connection;
 
     const session = new LinkSession(connection.socket, { ...this.options.session, role: "client" });
@@ -306,6 +328,13 @@ export class LinkClient {
       return;
     }
     this.fail(outcome.reason);
+  }
+
+  /** When the host was last heard from, by this link or by one before it. */
+  private lastHeard(): number | null {
+    const recorded = this.options.lastSeenAt?.() ?? null;
+    if (recorded === null) return this.lastSeenAt;
+    return this.lastSeenAt === null ? recorded : Math.max(recorded, this.lastSeenAt);
   }
 
   private handshake(session: LinkSession, token: string): Promise<HandshakeOutcome> {
@@ -380,6 +409,7 @@ export class LinkClient {
       logger.info("Remote host link established", accepted);
     }
     this.lastLoggedFailure = null;
+    this.restartSeen = false;
     this.current = session;
     this.sessionId = welcome.sessionId;
     this.resumeSecret = welcome.resumeSecret ?? null;

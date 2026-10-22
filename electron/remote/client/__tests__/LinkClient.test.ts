@@ -178,6 +178,76 @@ describe("LinkClient backoff", () => {
     });
   });
 
+  it("reads a new link's Host mode off as a restart while the host was heard from moments ago", async () => {
+    let now = 10 * 60_000;
+    // An earlier link, released or from before this launch, heard it 30 s ago.
+    const heard = now - 30_000;
+    const transport = {
+      opens: 0,
+      async open(): Promise<never> {
+        transport.opens++;
+        throw new HostModeOffError("Daintree isn't running in Host mode there (no host.json).");
+      },
+    };
+    client = new LinkClient({
+      transport,
+      handshake: TEST_HANDSHAKE,
+      client: { clientId: "c", clientName: "n", platform: "linux" },
+      backoff: { initialMs: 1, maxMs: 1, jitter: 0 },
+      random: () => 0,
+      now: () => now,
+      lastSeenAt: () => heard,
+    });
+    client.start();
+    await waitFor(() => transport.opens >= 3);
+    await waitFor(() => client!.getState().status === "unreachable");
+    expect(client.getState()).toMatchObject({ hostModeOff: true, retryAt: expect.any(Number) });
+    expect(client.restarting).toBe(true);
+
+    // Two minutes on from when it was heard, the same answer is no longer a restart.
+    now = heard + 2 * 60_000;
+    await waitFor(() => {
+      const state = client!.getState();
+      return state.status === "unreachable" && state.retryAt === null;
+    });
+    expect(client.getState()).toMatchObject({ hostModeOff: true });
+    expect(client.restarting).toBe(false);
+    const parkedAt = transport.opens;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(transport.opens).toBe(parkedAt);
+  });
+
+  it("parks a new link once the host was last heard from longer ago than a restart takes", async () => {
+    const now = 10 * 60_000;
+    const transport = {
+      opens: 0,
+      async open(): Promise<never> {
+        transport.opens++;
+        throw new HostModeOffError("Daintree isn't running in Host mode there (no host.json).");
+      },
+    };
+    for (const lastSeenAt of [now - 2 * 60_000, now + 60 * 60_000]) {
+      transport.opens = 0;
+      client = new LinkClient({
+        transport,
+        handshake: TEST_HANDSHAKE,
+        client: { clientId: "c", clientName: "n", platform: "linux" },
+        backoff: { initialMs: 1, maxMs: 1, jitter: 0 },
+        random: () => 0,
+        now: () => now,
+        // An hour ahead is a clock that moved back: it proves nothing about a restart.
+        lastSeenAt: () => lastSeenAt,
+      });
+      client.start();
+      await waitFor(() => client!.getState().status === "unreachable");
+      expect(client.getState()).toMatchObject({ hostModeOff: true, retryAt: null });
+      expect(client.restarting).toBe(false);
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(transport.opens).toBe(1);
+      await client.stop();
+    }
+  });
+
   it("stops retrying when ssh can't log in, until asked to try again", async () => {
     const transport = {
       opens: 0,
@@ -520,8 +590,10 @@ describe("LinkClient host restart (#13392)", () => {
         hostModeOff: true,
         retryAt: expect.any(Number),
       });
+      expect(client.restarting).toBe(true);
       hostModeOff = false;
       await waitFor(() => client!.getState().status === "connected");
+      expect(client.restarting).toBe(false);
 
       // Down again, and still not in Host mode long after it was last heard from.
       hostModeOff = true;
@@ -532,6 +604,61 @@ describe("LinkClient host restart (#13392)", () => {
       const parkedAt = transport.opens;
       await new Promise((resolve) => setTimeout(resolve, 30));
       expect(transport.opens).toBe(parkedAt);
+    } finally {
+      await client?.stop();
+      server.close();
+      await removeTempDir(dir);
+    }
+  });
+
+  it("stops reading a restart once something answers there, even one that refuses the link", async () => {
+    const dir = await makeTempDir();
+    const socketPath = path.join(dir, "r.sock");
+    const server = net.createServer((socket) => {
+      const decoder = new FrameDecoder();
+      socket.on("data", (chunk: Buffer) => {
+        for (const frame of decoder.push(chunk)) {
+          if (frame.kind !== ControlKind.HELLO) continue;
+          const reject: LinkMessage = {
+            lane: Lane.CONTROL,
+            kind: ControlKind.REJECT,
+            body: { reason: "busy", handshake: null, detail: null },
+          };
+          socket.write(Buffer.from(encodeFrame(messageToFrame(reject))));
+        }
+      });
+    });
+    await new Promise<void>((resolve) => server.listen(socketPath, resolve));
+    let hostModeOff = true;
+    const direct = createDirectTransport({ socketPath, token: "t" });
+    const transport: LinkTransport & { opens: number } = {
+      opens: 0,
+      async open(signal) {
+        transport.opens++;
+        if (hostModeOff) {
+          throw new HostModeOffError("Daintree isn't running in Host mode there (no host.json).");
+        }
+        return direct.open(signal);
+      },
+    };
+    try {
+      client = new LinkClient({
+        transport,
+        handshake: TEST_HANDSHAKE,
+        client: { clientId: "c", clientName: "n", platform: "linux" },
+        session: { pingIntervalMs: 0, idleTimeoutMs: 0 },
+        backoff: { initialMs: 1, maxMs: 1, jitter: 0 },
+        random: () => 0,
+        lastSeenAt: () => Date.now() - 10_000,
+      });
+      client.start();
+      await waitFor(() => client!.restarting);
+      hostModeOff = false;
+      await waitFor(() => {
+        const state = client!.getState();
+        return state.status === "unreachable" && state.detail?.includes("busy") === true;
+      });
+      expect(client.restarting).toBe(false);
     } finally {
       await client?.stop();
       server.close();

@@ -46,7 +46,7 @@ export function HostConnectionBanner() {
   const transient =
     variant === "reconnecting" || variant === "connecting" || variant === "checking";
   const transientShown = useDohertyGate(transient);
-  const now = useNow(variant === "unreachable");
+  const now = useNow(variant === "unreachable" || variant === "host-mode-off");
 
   if (variant === null) return null;
   if (transient && !transientShown) return null;
@@ -89,7 +89,9 @@ export function HostConnectionBanner() {
   }
 
   if (variant === "host-mode-off" && hostId !== null) {
-    // Trying again finds the same: setting Host mode up there is what helps.
+    // A host that is set up checks back by itself and comes back once its
+    // Daintree does; Retry doesn't wait for the next check. Setting Host mode
+    // up is for one that never had it.
     return (
       <InlineStatusBanner
         title={title}
@@ -98,12 +100,12 @@ export function HostConnectionBanner() {
         role="status"
         ariaLive="off"
         animated={false}
-        action={{
-          id: "set-up",
-          label: "Set up…",
-          variant: "primary",
-          onClick: () => runHostUpdate("host", hostId),
-        }}
+        action={{ id: "reconnect", label: "Retry", variant: "primary", onClick: reconnectHost }}
+        trailingSlot={
+          <Button variant="ghost" size="sm" onClick={() => runHostUpdate("host", hostId)}>
+            Set up…
+          </Button>
+        }
       />
     );
   }

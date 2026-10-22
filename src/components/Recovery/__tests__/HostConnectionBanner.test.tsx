@@ -130,12 +130,42 @@ describe("HostConnectionBanner", () => {
     expect(screen.getByRole("status").getAttribute("aria-live")).toBe("off");
   });
 
-  it("says Host mode is off and offers to set it up instead of Retry", () => {
+  it("says Daintree isn't listening on the host, offering Retry beside setting it up", () => {
     seed({ status: "unreachable", lastSeenAt: null, detail: null, hostModeOff: true });
     render(<HostConnectionBanner />);
-    expect(screen.getByText("Daintree isn't running in Host mode on studio-01")).toBeTruthy();
-    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+    expect(screen.getByText("Daintree isn't listening on studio-01")).toBeTruthy();
+    expect(screen.getByRole("status").textContent).toContain(
+      "This window reconnects once Daintree is running there again."
+    );
+    // Not a prompt to install: the host may well be set up and on its way back.
+    expect(screen.getByRole("status").textContent).not.toContain("set up there");
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(connect).toHaveBeenCalledWith({ hostId: "studio-01" });
     expect(screen.getByRole("button", { name: "Set up…" })).toBeTruthy();
+  });
+
+  it("keeps counting how long ago a host whose Daintree isn't listening was last seen", () => {
+    vi.useFakeTimers();
+    try {
+      const start = Date.UTC(2026, 9, 22, 12);
+      vi.setSystemTime(start);
+      seed(
+        { status: "unreachable", lastSeenAt: start - 60_000, detail: null, hostModeOff: true },
+        { lastSeenAt: start - 60_000 }
+      );
+      render(<HostConnectionBanner />);
+      expect(
+        screen.getByText("Daintree isn't listening on studio-01 · last seen 1 minute ago")
+      ).toBeTruthy();
+      act(() => {
+        vi.advanceTimersByTime(4 * 60_000);
+      });
+      expect(
+        screen.getByText("Daintree isn't listening on studio-01 · last seen 5 minutes ago")
+      ).toBeTruthy();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("says ssh couldn't log in, in ssh's words, with Retry and the host's settings", () => {

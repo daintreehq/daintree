@@ -189,7 +189,7 @@ export function describeHostRowStatus(row: HostMenuRow, now: number = Date.now()
         return `Not connected${lastSeenSuffix(row.lastSeenAt, now)}`;
       case "unreachable":
         return connection.hostModeOff
-          ? "Host mode off"
+          ? `Not listening${lastSeenSuffix(row.lastSeenAt, now)}`
           : `Unreachable${lastSeenSuffix(row.lastSeenAt, now)}`;
       case "version-mismatch":
         return `Runs a different build (${connection.remote.version})`;
@@ -246,8 +246,15 @@ export function describeHostMenuState(
     case "disconnected":
       return { state: "Not connected", note: null };
     case "unreachable":
-      // The machine answered; Daintree there isn't hosting, which setting up fixes.
-      if (connection.hostModeOff) return { state: "Host mode off", note: null };
+      // The machine answered and no Daintree is listening there: quit, not
+      // started since a reboot, or never set up all look the same from here.
+      if (connection.hostModeOff) {
+        return {
+          state: "Not listening",
+          note:
+            row.lastSeenAt === null ? null : `Last seen ${formatRelativeTime(row.lastSeenAt, now)}`,
+        };
+      }
       // The same answer the chip gives: SSH reached it and refused the login.
       if (connection.stoppedRetrying) return { state: "Can't log in", note: null };
       return {
@@ -273,10 +280,10 @@ export function hostMenuNoteAge(row: HostMenuRow): { prefix: string; at: number 
   if (connection.status === "connected" && connection.quietSince !== undefined) {
     return { prefix: "Last heard ", at: connection.quietSince };
   }
+  // The same rows describeHostMenuState gives a last-seen note: not one ssh refused.
   if (
     connection.status === "unreachable" &&
-    !connection.hostModeOff &&
-    !connection.stoppedRetrying &&
+    (connection.hostModeOff === true || !connection.stoppedRetrying) &&
     row.lastSeenAt !== null
   ) {
     return { prefix: "Last seen ", at: row.lastSeenAt };
@@ -371,7 +378,7 @@ export function hostChipStatusText(status: HostChipStatus): string | null {
     case "unreachable":
       return "unreachable";
     case "host-mode-off":
-      return "host mode off";
+      return "not listening";
     case "access-denied":
       return "can't log in";
     case "version-mismatch":

@@ -86,7 +86,9 @@ export function connectionLabel(state: HostConnectionState, now: number = Date.n
       return state.rttMs === null ? "Connected" : `Connected · ${Math.round(state.rttMs)} ms`;
     }
     case "unreachable":
-      if (state.hostModeOff) return "Daintree isn't running in Host mode there";
+      if (state.hostModeOff) {
+        return `Daintree isn't listening there · ${formatSeen(state.lastSeenAt, now)}`;
+      }
       // What was seen, when there is something: ssh's own words for why it couldn't reach it.
       return [
         "Unreachable",

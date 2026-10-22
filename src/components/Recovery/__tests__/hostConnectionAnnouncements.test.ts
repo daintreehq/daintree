@@ -100,7 +100,7 @@ describe("watchHostConnectionAnnouncements", () => {
     stop = watchHostConnectionAnnouncements("studio-01");
     link({ status: "unreachable", lastSeenAt: null, detail: null, hostModeOff: true });
     vi.advanceTimersByTime(400);
-    expect(spoken()).toEqual(["Daintree isn't running in Host mode on studio-01."]);
+    expect(spoken()).toEqual(["Daintree isn't listening on studio-01."]);
 
     // A retry that fails the same way is the same answer, not a new one.
     link(RECONNECTING);

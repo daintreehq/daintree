@@ -1,6 +1,7 @@
 import type { HostId } from "../../../shared/types/remoteHosts.js";
 import { getProjectAcrossHostsService } from "../../services/projectAcrossHosts/index.js";
 import { AppError } from "../../utils/errorTypes.js";
+import { hostModeOff } from "../client/hostModeOffError.js";
 import { sshAccessDenied } from "../client/sshAccessError.js";
 import type { RemoteHostsClient } from "../client/RemoteHostsClient.js";
 import type { LinkSession } from "../link/session.js";
@@ -27,16 +28,11 @@ function unreachable(
   hostId: HostId,
   readiness: string,
   hostName: string,
-  linkDetail: string | null
+  linkDetail: string | null,
+  everSeen: boolean
 ): AppError {
   if (readiness === "stopped-retrying") return sshAccessDenied(hostName, linkDetail);
-  if (readiness === "host-mode-off") {
-    return new AppError({
-      code: "HOST_MODE_OFF",
-      message: `Daintree isn't running in Host mode on ${hostName}`,
-      userMessage: `Daintree isn't running in Host mode on ${hostName}. Set it up to work there.`,
-    });
-  }
+  if (readiness === "host-mode-off") return hostModeOff(hostName, everSeen);
   if (readiness === "version-mismatch") {
     return new AppError({
       code: "HOST_VERSION_MISMATCH",
@@ -62,7 +58,13 @@ export function createHostSwitchService(deps: HostSwitchClientDeps): HostSwitchS
       const entry = deps.client.list().find((candidate) => candidate.descriptor.id === hostId);
       const link = readiness === "stopped-retrying" ? entry?.connection : undefined;
       const detail = link?.status === "unreachable" ? link.detail : null;
-      throw unreachable(hostId, readiness, entry?.descriptor.name ?? hostId, detail);
+      throw unreachable(
+        hostId,
+        readiness,
+        entry?.descriptor.name ?? hostId,
+        detail,
+        (entry?.descriptor.lastSeenAt ?? null) !== null
+      );
     }
     return session;
   };

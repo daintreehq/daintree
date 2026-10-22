@@ -61,7 +61,7 @@ export function hostLinkAnnouncement(
         ? `Connection to ${hostName} lost. Terminals are read-only until it reconnects.`
         : `${hostName} is unreachable. Terminals are read-only until it reconnects.`;
     case "host-mode-off":
-      return `Daintree isn't running in Host mode on ${hostName}.`;
+      return `Daintree isn't listening on ${hostName}.`;
     case "access-denied":
       return `ssh couldn't log in to ${hostName}.`;
     case "version-mismatch":
