@@ -425,6 +425,8 @@ export class ProjectViewManager {
   mcpViewActivity?: (workspaceId: string, webContentsId: number) => McpViewActivity | null;
   windowRegistry?: import("./WindowRegistry.js").WindowRegistry;
   private switchChain: Promise<void> = Promise.resolve();
+  /** Switches queued or running on `switchChain`; the idle release waits them out (#14217). */
+  pendingSwitchCount = 0;
   private resizeHandler: (() => void) | null = null;
   private contentAreaGrowthHandler: (() => void) | null = null;
   evictionTimestamps = new Map<string, number>();
@@ -642,6 +644,13 @@ export class ProjectViewManager {
           });
         }
         try {
+          this.evictIdleViews();
+        } catch (error) {
+          logWarn("projectview.idle-release.error", {
+            error: formatErrorMessage(error, "evictIdleViews threw"),
+          });
+        }
+        try {
           this.refreezeUnprotectedCachedViews();
         } catch (error) {
           logWarn("projectview.refreeze.error", {
@@ -697,12 +706,17 @@ export class ProjectViewManager {
     trace?: ProjectSwitchTrace,
     request?: SwitchRequestOptions
   ): Promise<{ view: WebContentsView; isNew: boolean }> {
+    this.pendingSwitchCount++;
     const task = this.switchChain.then(() =>
       performSwitch(this, projectId, projectPath, trace, request)
     );
     this.switchChain = task.then(
-      () => undefined,
-      () => undefined
+      () => {
+        this.pendingSwitchCount--;
+      },
+      () => {
+        this.pendingSwitchCount--;
+      }
     );
     return task;
   }
@@ -1284,6 +1298,11 @@ export class ProjectViewManager {
 
   maybeEvictUnderPressure(): void {
     EvictionController.maybeEvictUnderPressure(this);
+  }
+
+  /** Returns the number of cached views released — 0 means none had sat unused long enough. */
+  evictIdleViews(): number {
+    return EvictionController.evictIdleViews(this);
   }
 
   /** Returns the number of cached views evicted — 0 means nothing was eligible. */

@@ -27,7 +27,7 @@ import { getWebContentsForProject } from "../window/webContentsRegistry.js";
 
 /** Why a workspace's last live view went away, as eviction itself classified it. */
 export type WorkspaceEvictionReason =
-  "lru" | "limit-change" | "pressure" | "memory-eviction" | "crash";
+  "lru" | "limit-change" | "pressure" | "idle" | "memory-eviction" | "crash";
 
 /**
  * What a workspace-bound MCP session can learn about its own binding without
