@@ -10,9 +10,16 @@ import {
   type HostEnsureAnswer,
   type HostEnsureProjectArgs,
   type HostEnsureProjectResult,
+  type HostListArgs,
   type HostListEntry,
   type HostListResult,
 } from "../../../shared/types/hostControl.js";
+import {
+  AGENT_DIRECTORY_BYTES_MAX,
+  fitAgentDirectory,
+  unreadAgentDirectory,
+  type AgentDirectory,
+} from "../../../shared/types/agentDirectory.js";
 import type { HostProjectSummary } from "../../../shared/types/ipc/remoteHosts.js";
 import {
   LOCAL_HOST_ID,
@@ -73,6 +80,8 @@ export interface LocalHostReach {
   /** Its projects, most used first. */
   projects(): Promise<readonly HostProjectSummary[]>;
   relayCall(payload: McpCallPayload): Promise<McpCallAnswer>;
+  /** Its workers and assistants, as `host.list` shows them with `includeAgents` (#14160). */
+  agents?(options: { projectId?: string }): Promise<AgentDirectory>;
 }
 
 /** The run a help session is answering in, as `host.call` pins what it arms to. */
@@ -443,6 +452,23 @@ class RefusalError extends Error {
 }
 
 /** Settles with `work`, or with `fallback` once `ms` pass; the timer never outlives it. */
+/**
+ * Cuts a directory so the whole `host.list` answer, not the directory alone,
+ * stays within the agent budget the MCP result is capped to.
+ */
+function fitToResponse(
+  agents: AgentDirectory,
+  entry: HostListEntry,
+  others: readonly HostListEntry[]
+): AgentDirectory {
+  const { agents: _agents, ...rest } = entry;
+  const encoder = new TextEncoder();
+  const restBytes = encoder.encode(
+    JSON.stringify({ hosts: [rest, ...others], agents: null })
+  ).length;
+  return fitAgentDirectory(agents, Math.max(0, AGENT_DIRECTORY_BYTES_MAX - restBytes));
+}
+
 function withinMs<T>(work: Promise<T>, ms: number, fallback: T): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   const late = new Promise<T>((resolve) => {
@@ -1065,10 +1091,14 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
     });
   }
 
-  list(helpSessionId: string): Promise<HostControlOutcome<HostListResult>> {
+  list(
+    helpSessionId: string,
+    args: HostListArgs = {}
+  ): Promise<HostControlOutcome<HostListResult>> {
+    const agentsOf = args.includeAgents === true ? { projectId: args.projectId } : null;
     return this.settle(helpSessionId, async (caller) => {
       const local = this.deps.local;
-      const here = local ? this.localEntry(local, caller) : null;
+      const here = local ? this.localEntry(local, caller, agentsOf) : null;
       const hosts = await Promise.all(
         this.deps.hosts().map(async (seen): Promise<HostListEntry> => {
           const host = await this.dialed(seen);
@@ -1094,10 +1124,14 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
               connected && summary?.agentsObserved ? { ...summary.agentsObserved } : null,
             projects: connected && control ? await this.hostProjects(host.hostId) : null,
             control,
+            // No link reads a host's agents yet: said so, never an empty inventory.
+            ...(agentsOf ? { agents: unreadAgentDirectory("unsupported") } : {}),
           };
         })
       );
-      return { hosts: here ? [await here, ...hosts] : hosts };
+      const first = here ? await here : null;
+      if (first?.agents) first.agents = fitToResponse(first.agents, first, hosts);
+      return { hosts: first ? [first, ...hosts] : hosts };
     });
   }
 
@@ -1106,7 +1140,11 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
    * `local` reaches, which are all but the caller's own, or null when they
    * couldn't be read in time. Nothing about it is sampled or tallied here.
    */
-  private async localEntry(local: LocalHostReach, caller: OpenRun): Promise<HostListEntry> {
+  private async localEntry(
+    local: LocalHostReach,
+    caller: OpenRun,
+    agentsOf: { projectId?: string } | null
+  ): Promise<HostListEntry> {
     const projects = await withinMs(
       Promise.resolve()
         .then(() => local.projects())
@@ -1130,7 +1168,24 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
               .slice(0, HOST_LIST_PROJECTS_MAX)
               .map(listedProject),
       control: true,
+      ...(agentsOf ? { agents: await this.localAgents(local, agentsOf) } : {}),
     };
+  }
+
+  private async localAgents(
+    local: LocalHostReach,
+    options: { projectId?: string }
+  ): Promise<AgentDirectory> {
+    const read = local.agents;
+    if (!read) return unreadAgentDirectory("unsupported");
+    const directory = await withinMs(
+      Promise.resolve()
+        .then(() => read.call(local, options))
+        .catch(() => null),
+      PROJECTS_READ_MS,
+      null
+    );
+    return directory === null ? unreadAgentDirectory("unreachable") : directory;
   }
 
   /**

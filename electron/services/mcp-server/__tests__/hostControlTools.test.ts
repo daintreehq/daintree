@@ -35,7 +35,13 @@ describe("bindHostControl (#13493)", () => {
 
     expect(access.isCallReachable()).toBe(true);
     await access.run("host.list", {});
-    expect(runtime.list).toHaveBeenCalledWith("hub");
+    expect(runtime.list).toHaveBeenCalledWith("hub", {});
+    await access.run("host.list", { includeAgents: true, projectId: "p1" });
+    expect(runtime.list).toHaveBeenLastCalledWith("hub", { includeAgents: true, projectId: "p1" });
+    expect(await access.run("host.list", { includeAgents: "yes" })).toMatchObject({
+      ok: false,
+      code: "INVALID_ARGS",
+    });
 
     bound = undefined;
     expect(access.isCallReachable()).toBe(false);
@@ -43,7 +49,7 @@ describe("bindHostControl (#13493)", () => {
       ok: false,
       code: "NOT_ELIGIBLE",
     });
-    expect(runtime.list).toHaveBeenCalledTimes(1);
+    expect(runtime.list).toHaveBeenCalledTimes(2);
   });
 
   it("offers nothing once the runtime is gone, and keeps a newer one on a late teardown", async () => {

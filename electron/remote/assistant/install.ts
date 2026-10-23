@@ -2,6 +2,11 @@ import type Database from "better-sqlite3";
 import type { HostProjectSummary } from "../../../shared/types/ipc/remoteHosts.js";
 import { LOCAL_HOST_ID, type HostId } from "../../../shared/types/remoteHosts.js";
 import { isRemoteEndpointHandle } from "../../ipc/endpoint.js";
+import { AGENT_DIRECTORY_RESUMABLE_PROJECTS_MAX } from "../../../shared/types/agentDirectory.js";
+import { MAX_ASSISTANT_SLOTS, assistantSlotKey } from "../../../shared/config/assistantSlots.js";
+import { LocalAgentDirectory, type ResumableLane } from "../../services/agentDirectory.js";
+import { getAgentAvailabilityStore } from "../../services/AgentAvailabilityStore.js";
+import { getPendingHelpHibernationStore } from "../../services/PendingHelpHibernationStore.js";
 import { helpSessionService } from "../../services/HelpSessionService.js";
 import type { RunbooksHostsState } from "../../services/helpSessionRunbooks.js";
 import { setHostControlRuntime } from "../../services/mcp-server/hostControlTools.js";
@@ -164,6 +169,43 @@ export function installHostControl(deps: HostControlInstallDeps): () => void {
     receiveNotices: (payload) => runtime.receiveNotices(LOCAL_HOST_ID, payload),
     receiveApproval: (payload) => runtime.receiveApproval(LOCAL_HOST_ID, payload),
   });
+  const agentDirectory = new LocalAgentDirectory({
+    hostId: LOCAL_HOST_ID,
+    now: () => Date.now(),
+    listRunningLanes: () => helpSessionService.listRunningLanes(),
+    getRunningLaneSession: (projectId, slot) =>
+      helpSessionService.getRunningLaneSession(projectId, slot),
+    getLiveGeneration: (terminalId) => getPtyClient()?.getLiveGeneration(terminalId) ?? null,
+    // Read fresh: a cached inventory can describe a run that has since been replaced.
+    readTerminals: async () => {
+      const pty = getPtyClient();
+      if (!pty) throw new Error("No pty client");
+      return pty.getAllTerminalsWithCompletenessAsync();
+    },
+    isHelpTerminal: (terminalId) => getAgentAvailabilityStore().isHelpTerminal(terminalId),
+    resumableLanes: async (projectId) => {
+      const { projectStore } = await import("../../services/ProjectStore.js");
+      const store = getPendingHelpHibernationStore();
+      await store.load();
+      const known = projectId ? [projectId] : projectStore.getProjectSummaries().map((p) => p.id);
+      const projectIds = known.slice(0, AGENT_DIRECTORY_RESUMABLE_PROJECTS_MAX);
+      const pointers: ResumableLane[] = [];
+      for (const id of projectIds) {
+        for (let slot = 0; slot < MAX_ASSISTANT_SLOTS; slot++) {
+          const pending = store.get(assistantSlotKey(id, slot));
+          if (pending) {
+            pointers.push({
+              projectId: id,
+              slot,
+              agentId: pending.agentId,
+              capturedAt: pending.capturedAt,
+            });
+          }
+        }
+      }
+      return { lanes: pointers, complete: projectIds.length === known.length };
+    },
+  });
   const runtime = new HostCallRuntime({
     getSessionLane: (helpSessionId) => helpSessionService.getSessionLane(helpSessionId),
     callerRun: localRunOf,
@@ -211,6 +253,7 @@ export function installHostControl(deps: HostControlInstallDeps): () => void {
         }));
       },
       relayCall: (payload) => local.relayCall(payload),
+      agents: (options) => agentDirectory.read(options),
     },
   });
   // A help session that won't run again holds nothing it made in another

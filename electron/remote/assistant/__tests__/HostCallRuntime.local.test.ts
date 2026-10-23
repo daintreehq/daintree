@@ -1,6 +1,7 @@
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { LaneWake } from "../../../services/mcp-server/terminalNotify.js";
+import { AGENT_DIRECTORY_BYTES_MAX } from "../../../../shared/types/agentDirectory.js";
 import {
   HOST_LIST_PROJECTS_MAX,
   HostCallResultSchema,
@@ -149,6 +150,115 @@ describe("HostCallRuntime reaching this machine's other projects (#14024)", () =
       expect(listed.value.hosts[1]?.projects).toEqual([
         { projectId: "host-p", name: "remote repo", frontendAttached: true },
       ]);
+    });
+
+    it("adds the agent inventory only when asked, local read, remote hosts unsupported", async () => {
+      const agents = vi.fn(async () => ({
+        coverage: "ok" as const,
+        observedAt: 42,
+        complete: true,
+        omitted: 0,
+        entries: [],
+      }));
+      const withAgents = new HostCallRuntime({
+        getSessionLane: () => ({ projectId: "proj-1", slot: 0 }),
+        callerRun: () => RUN_A,
+        client: () => null,
+        hosts: () => [STUDIO],
+        controlEnabled: () => true,
+        local: { name: () => "greg-mbp", projects: async () => [], relayCall: vi.fn(), agents },
+      });
+
+      const plain = await withAgents.list("a");
+      if (!plain.ok) throw new Error("refused");
+      expect(plain.value.hosts.every((host) => host.agents === undefined)).toBe(true);
+      expect(agents).not.toHaveBeenCalled();
+
+      const listed = await withAgents.list("a", { includeAgents: true, projectId: "proj-1" });
+      if (!listed.ok) throw new Error("refused");
+      expect(HostListResultSchema.safeParse(listed.value).success).toBe(true);
+      expect(agents).toHaveBeenCalledWith({ projectId: "proj-1" });
+      expect(listed.value.hosts[0]?.agents).toMatchObject({ coverage: "ok", observedAt: 42 });
+      // A host this Shell can't read agents from is not an empty inventory.
+      expect(listed.value.hosts[1]?.agents).toMatchObject({
+        coverage: "unsupported",
+        complete: false,
+        entries: [],
+      });
+      withAgents.dispose();
+    });
+
+    it("fits the agents so the whole host.list answer stays within the directory budget", async () => {
+      const entry = (index: number) => ({
+        state: "live" as const,
+        role: "worker" as const,
+        subject: {
+          hostId: "local",
+          scope: { kind: "project" as const, projectId: "p" },
+          terminalId: `terminal-${index}`,
+          incarnation: 1,
+        },
+        agentId: "claude",
+        agentState: "idle" as const,
+        waitingReason: null,
+        since: null,
+        label: "x".repeat(120),
+        attached: null,
+        handback: null,
+      });
+      const full = new HostCallRuntime({
+        getSessionLane: () => ({ projectId: "proj-1", slot: 0 }),
+        callerRun: () => RUN_A,
+        client: () => null,
+        hosts: () => [],
+        local: {
+          name: () => "greg-mbp",
+          projects: async () =>
+            Array.from({ length: 50 }, (_, index) => ({
+              id: `q-${index}`,
+              name: `Project ${index}`,
+              path: "/p",
+            })),
+          relayCall: vi.fn(),
+          agents: async () => ({
+            coverage: "ok" as const,
+            observedAt: 1,
+            complete: true,
+            omitted: 0,
+            entries: Array.from({ length: 256 }, (_, index) => entry(index)),
+          }),
+        },
+      });
+      const listed = await full.list("a", { includeAgents: true });
+      if (!listed.ok) throw new Error("refused");
+      expect(new TextEncoder().encode(JSON.stringify(listed.value)).length).toBeLessThanOrEqual(
+        AGENT_DIRECTORY_BYTES_MAX
+      );
+      const agents = listed.value.hosts[0]?.agents;
+      expect(agents?.omitted).toBeGreaterThan(0);
+      expect(agents?.entries.length).toBeGreaterThan(0);
+      full.dispose();
+    });
+
+    it("reports an unreadable local inventory as unreachable, not empty", async () => {
+      const broken = new HostCallRuntime({
+        getSessionLane: () => ({ projectId: "proj-1", slot: 0 }),
+        callerRun: () => RUN_A,
+        client: () => null,
+        hosts: () => [],
+        local: {
+          name: () => "greg-mbp",
+          projects: async () => [],
+          relayCall: vi.fn(),
+          agents: async () => {
+            throw new Error("boom");
+          },
+        },
+      });
+      const listed = await broken.list("a", { includeAgents: true });
+      if (!listed.ok) throw new Error("refused");
+      expect(listed.value.hosts[0]?.agents).toMatchObject({ coverage: "unreachable", entries: [] });
+      broken.dispose();
     });
 
     it("caps the projects it names, and names none when they can't be read", async () => {
