@@ -4,8 +4,11 @@ import { act, cleanup, fireEvent, render, waitFor } from "@testing-library/react
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { Project } from "@shared/types/project";
 import type { ProjectSleepResult, ProjectStatusEntry } from "@shared/types/ipc/project";
+import { ProjectSleepConfirmDialog } from "@/components/Project/ProjectSleepConfirmDialog";
+import { projectClient } from "@/clients/projectClient";
 import { projectPresenceClient } from "@/clients/projectPresenceClient";
 import { terminalClient } from "@/clients/terminalClient";
+import { useProjectSleepConfirmStore } from "@/store/projectSleepConfirmStore";
 import { useProjectStatsStore } from "@/store/projectStatsStore";
 import { useProjectStore } from "@/store/projectStore";
 import { useSystemMemoryNoticeStore } from "@/store/systemMemoryNoticeStore";
@@ -18,6 +21,7 @@ function renderRow() {
   return render(
     <TooltipProvider>
       <SidebarMemoryNotice />
+      <ProjectSleepConfirmDialog />
     </TooltipProvider>
   );
 }
@@ -44,6 +48,7 @@ const initialSleep = useProjectStore.getState().sleepProject;
 
 afterEach(() => {
   cleanup();
+  useProjectSleepConfirmStore.getState().resolveConfirmation(false);
   vi.restoreAllMocks();
   useSystemMemoryNoticeStore.setState({ notice: null });
   useProjectStore.setState({ projects: [], currentProject: null, sleepProject: initialSleep });
@@ -215,6 +220,9 @@ describe("SidebarMemoryNotice", () => {
       otherWindows: [],
     });
     vi.spyOn(terminalClient, "getAll").mockResolvedValue([]);
+    vi.spyOn(projectClient, "getBulkStats").mockResolvedValue({
+      a: { terminalMemoryMB: 512 },
+    } as Awaited<ReturnType<typeof projectClient.getBulkStats>>);
     const { container } = renderRow();
 
     const sleepItem = openMenu(container).querySelector("[data-sidebar-memory-sleep]")!;
@@ -222,10 +230,15 @@ describe("SidebarMemoryNotice", () => {
     const dialog = await findDialog();
     expect(dialog.textContent).toContain("Sleep 2 idle projects?");
     const listed = Array.from(
-      dialog.querySelectorAll("[data-sleep-idle-projects] li"),
+      dialog.querySelectorAll("[data-sleep-projects] li"),
       (li) => li.textContent
     );
-    expect(listed).toEqual(["Project a/repos/a", "Project b/repos/b"]);
+    expect(listed).toEqual([
+      "Project aAbout 512 MB/repos/a",
+      "Project bMemory unavailable/repos/b",
+    ]);
+    // A figure for only some projects is still a lower bound, so it says "up to".
+    expect(dialog.textContent).toContain("Up to 512 MB of terminal memory, estimated");
     expect(dialog.textContent).toContain("Their terminals will be stopped");
     expect(dialog.textContent).toContain("4 waiting agents");
     expect(sleepProject).not.toHaveBeenCalled();

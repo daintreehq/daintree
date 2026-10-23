@@ -289,6 +289,11 @@ export const LazyGitForcePushConfirmDialog = lazyWithPreload(
 );
 export const preloadGitForcePushConfirmDialog = LazyGitForcePushConfirmDialog.preload;
 
+export const LazyProjectSleepConfirmDialog = lazyWithPreload(
+  () => import("./components/Project/ProjectSleepConfirmDialog"),
+  (m) => m.ProjectSleepConfirmDialog
+);
+
 export const LazyRecipeConflictDialog = lazyWithPreload(
   () => import("./components/TerminalRecipe/RecipeConflictDialog"),
   (m) => m.RecipeConflictDialog

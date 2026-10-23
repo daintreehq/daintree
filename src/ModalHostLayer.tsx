@@ -78,6 +78,7 @@ import {
   LazyFileMutationConfirmDialog,
   LazyGitWorktreeOperationConfirmDialog,
   LazyGitForcePushConfirmDialog,
+  LazyProjectSleepConfirmDialog,
   LazyRecipeConflictDialog,
   LazyOnboardingFlow,
   LazyGettingStartedChecklist,
@@ -153,6 +154,7 @@ interface ModalHostLayerProps {
   fileMutationResetKey: number;
   gitWorktreeOperationResetKey: number;
   gitForcePushResetKey: number;
+  projectSleepResetKey: number;
   recipeConflictResetKey: number;
   gitInitDialogOpen: boolean;
   shouldMountGitInitDialog: boolean;
@@ -250,6 +252,7 @@ export function ModalHostLayer({
   fileMutationResetKey,
   gitWorktreeOperationResetKey,
   gitForcePushResetKey,
+  projectSleepResetKey,
   recipeConflictResetKey,
   gitInitDialogOpen,
   shouldMountGitInitDialog,
@@ -984,6 +987,18 @@ export function ModalHostLayer({
         >
           <Suspense fallback={null}>
             <LazyGitForcePushConfirmDialog />
+          </Suspense>
+        </ErrorBoundary>
+      )}
+
+      {isStateLoaded && (
+        <ErrorBoundary
+          variant="component"
+          componentName="ProjectSleepConfirmDialog"
+          resetKeys={[projectSleepResetKey]}
+        >
+          <Suspense fallback={null}>
+            <LazyProjectSleepConfirmDialog />
           </Suspense>
         </ErrorBoundary>
       )}

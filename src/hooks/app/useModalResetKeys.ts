@@ -3,6 +3,7 @@ import { useGitPushConfirmStore } from "@/store/gitPushConfirmStore";
 import { useGitPullRebaseConfirmStore } from "@/store/gitPullRebaseConfirmStore";
 import { useGitWorktreeOperationConfirmStore } from "@/store/gitWorktreeOperationConfirmStore";
 import { useGitForcePushStore } from "@/store/gitForcePushStore";
+import { useProjectSleepConfirmStore } from "@/store/projectSleepConfirmStore";
 import { useFileMutationConfirmStore } from "@/store/fileMutationConfirmStore";
 import { usePanelLimitStore } from "@/store/panelLimitStore";
 import { useRecipeConflictStore } from "@/store/recipeConflictStore";
@@ -18,6 +19,7 @@ export interface ModalResetKeys {
   gitPullRebaseResetKey: number;
   gitWorktreeOperationResetKey: number;
   gitForcePushResetKey: number;
+  projectSleepResetKey: number;
   fileMutationResetKey: number;
   panelLimitResetKey: number;
   recipeConflictResetKey: number;
@@ -48,6 +50,7 @@ export function useModalResetKeys(): ModalResetKeys {
   const gitPullRebaseResetKey = useGitPullRebaseConfirmStore((s) => s.requestSeq);
   const gitWorktreeOperationResetKey = useGitWorktreeOperationConfirmStore((s) => s.requestSeq);
   const gitForcePushResetKey = useGitForcePushStore((s) => s.requestSeq);
+  const projectSleepResetKey = useProjectSleepConfirmStore((s) => s.requestSeq);
   const fileMutationResetKey = useFileMutationConfirmStore((s) => s.requestSeq);
   const panelLimitResetKey = usePanelLimitStore((s) => s.requestSeq);
   const recipeConflictResetKey = useRecipeConflictStore((s) => s.requestSeq);
@@ -75,6 +78,7 @@ export function useModalResetKeys(): ModalResetKeys {
     gitPullRebaseResetKey,
     gitWorktreeOperationResetKey,
     gitForcePushResetKey,
+    projectSleepResetKey,
     fileMutationResetKey,
     panelLimitResetKey,
     recipeConflictResetKey,

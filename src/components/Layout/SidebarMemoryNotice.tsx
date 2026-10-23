@@ -2,8 +2,6 @@ import { useRef } from "react";
 import { MoreHorizontal } from "lucide-react";
 import { MemoryStick } from "@/components/icons";
 import { SidebarFooterGlyph } from "@/components/Layout/SidebarFooterGlyph";
-import { Callout } from "@/components/ui/Callout";
-import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -12,8 +10,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
-import { useSleepIdleProjects, type IdleProject } from "@/hooks/useSleepIdleProjects";
-import { pluralize } from "@/lib/pluralize";
+import { useSleepIdleProjects } from "@/hooks/useSleepIdleProjects";
 import { cn } from "@/lib/utils";
 import {
   useSystemMemoryNoticeStore,
@@ -150,74 +147,6 @@ function MemoryNoticeRow({ notice }: { notice: SystemMemoryNotice }) {
           </DropdownMenuContent>
         </DropdownMenu>
       )}
-      {sleep.preview && (
-        <SleepIdleProjectsDialog
-          projects={sleep.preview}
-          isSleeping={sleep.isSleeping}
-          onClose={sleep.closePreview}
-          onConfirm={sleep.confirm}
-        />
-      )}
     </div>
-  );
-}
-
-function SleepIdleProjectsDialog({
-  projects,
-  isSleeping,
-  onClose,
-  onConfirm,
-}: {
-  projects: IdleProject[];
-  isSleeping: boolean;
-  onClose: () => void;
-  onConfirm: () => Promise<void>;
-}) {
-  const waitingAgentCount = projects.reduce((sum, p) => sum + p.waitingAgentCount, 0);
-  const terminalCount = projects.reduce((sum, p) => sum + p.terminalCount, 0);
-  const single = projects.length === 1;
-  return (
-    <ConfirmDialog
-      isOpen={true}
-      onClose={onClose}
-      title={
-        single
-          ? `Sleep '${projects[0]!.name}'?`
-          : `Sleep ${pluralize(projects.length, "idle project")}?`
-      }
-      confirmLabel={single ? "Sleep project" : "Sleep projects"}
-      cancelLabel="Cancel"
-      onConfirm={onConfirm}
-      isConfirmLoading={isSleeping}
-      variant="default"
-    >
-      <div className="space-y-3">
-        <ul data-sleep-idle-projects="" className="space-y-2">
-          {projects.map((project) => (
-            <li key={project.id}>
-              <div className="text-sm font-medium">{project.name}</div>
-              <div className="mt-1 font-mono text-xs text-text-secondary">{project.path}</div>
-            </li>
-          ))}
-        </ul>
-        <Callout
-          severity="warning"
-          title={single ? "Its terminals will be stopped" : "Their terminals will be stopped"}
-        >
-          {(terminalCount > 0 || waitingAgentCount > 0) && (
-            <div>
-              {terminalCount > 0 && <div>• {pluralize(terminalCount, "terminal")}</div>}
-              {waitingAgentCount > 0 && (
-                <div>• {pluralize(waitingAgentCount, "waiting agent")}</div>
-              )}
-            </div>
-          )}
-        </Callout>
-        <div className="text-xs text-text-secondary">
-          The layout, terminal scrollback, and agent sessions come back when you reopen{" "}
-          {single ? "the project" : "each project"}.
-        </div>
-      </div>
-    </ConfirmDialog>
   );
 }

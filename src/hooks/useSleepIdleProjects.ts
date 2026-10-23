@@ -1,14 +1,16 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useMemo } from "react";
 import type { AgentState, WaitingReason } from "@shared/types/agent";
 import type { Project } from "@shared/types/project";
 import type { ProjectStatusMap } from "@shared/types/ipc/project";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { actionableWaitingReason } from "@shared/utils/waitingReasonDisplay";
 import { projectPresenceClient } from "@/clients/projectPresenceClient";
+import { projectClient } from "@/clients/projectClient";
 import { terminalClient } from "@/clients/terminalClient";
 import { notify } from "@/lib/notify";
 import { pluralize } from "@/lib/pluralize";
 import { useProjectStatsStore } from "@/store/projectStatsStore";
+import { useProjectSleepConfirmStore } from "@/store/projectSleepConfirmStore";
 import { useProjectStore } from "@/store/projectStore";
 
 export interface IdleProject {
@@ -66,7 +68,7 @@ export function selectIdleProjects(
   return idle;
 }
 
-function currentCandidates(): IdleProject[] {
+export function currentCandidates(): IdleProject[] {
   const { projects, currentProject } = useProjectStore.getState();
   return selectIdleProjects(
     projects,
@@ -128,7 +130,7 @@ async function confirmStillIdle(ids: readonly string[]): Promise<IdleProject[]> 
  */
 let batchQueue: Promise<void> = Promise.resolve();
 
-function sleepProjects(ids: readonly string[]): Promise<void> {
+export function sleepProjects(ids: readonly string[]): Promise<void> {
   const run = batchQueue.then(() => runBatch(ids));
   batchQueue = run;
   return run;
@@ -178,15 +180,68 @@ async function runBatch(ids: readonly string[]): Promise<void> {
   });
 }
 
+/**
+ * The terminal memory reading per project, for the preview. One bulk call for
+ * the whole batch; a project without a reading, or a call that fails, is left
+ * out rather than counted as zero.
+ */
+async function readTerminalMemory(ids: readonly string[]): Promise<Map<string, number>> {
+  const readings = new Map<string, number>();
+  try {
+    const bulk = await projectClient.getBulkStats([...ids]);
+    for (const id of ids) {
+      const mb = bulk[id]?.terminalMemoryMB;
+      if (typeof mb === "number") readings.set(id, mb);
+    }
+  } catch {
+    // The estimate is garnish; the preview shows it as unavailable.
+  }
+  return readings;
+}
+
+/**
+ * Previews, confirms and sleeps every idle background project, however it was
+ * reached: the memory notice, the palette, a keybinding or MCP. The checked set
+ * is frozen when the preview opens and the batch only ever narrows it. Resolves
+ * false when there was nothing to offer or the user cancelled.
+ */
+export async function sleepIdleProjectsWithConfirm(): Promise<boolean> {
+  const candidates = currentCandidates();
+  const checked = await confirmStillIdle(candidates.map((project) => project.id));
+  if (checked.length === 0) {
+    notify({
+      type: "info",
+      priority: "high",
+      title: "No idle projects",
+      message:
+        "Every background project has an agent working or waiting on you, or is open in a window.",
+      context: { eventKind: "uiFeedback" },
+    });
+    return false;
+  }
+  const memory = await readTerminalMemory(checked.map((project) => project.id));
+  const ok = await useProjectSleepConfirmStore.getState().requestConfirmation({
+    kind: "idle",
+    projects: checked.map((project) => ({
+      id: project.id,
+      name: project.name,
+      path: project.path,
+      terminalCount: project.terminalCount,
+      waitingAgentCount: project.waitingAgentCount,
+      activeAgentCount: 0,
+      isActive: false,
+      terminalMemoryMB: memory.get(project.id),
+    })),
+  });
+  if (!ok) return false;
+  await sleepProjects(checked.map((project) => project.id));
+  return true;
+}
+
 export interface SleepIdleProjects {
   /** Candidates by the stats; the offer is shown only while this is non-empty. */
   idleProjects: IdleProject[];
-  /** The checked set frozen when the confirmation opened, or null while closed. */
-  preview: IdleProject[] | null;
-  isSleeping: boolean;
   openPreview: () => Promise<void>;
-  closePreview: () => void;
-  confirm: () => Promise<void>;
 }
 
 export function useSleepIdleProjects(): SleepIdleProjects {
@@ -198,38 +253,9 @@ export function useSleepIdleProjects(): SleepIdleProjects {
     [projects, stats, currentProjectId]
   );
 
-  const [preview, setPreview] = useState<IdleProject[] | null>(null);
-  const [isSleeping, setIsSleeping] = useState(false);
-
   const openPreview = useCallback(async () => {
-    const checked = await confirmStillIdle(idleProjects.map((project) => project.id));
-    if (checked.length > 0) {
-      setPreview(checked);
-      return;
-    }
-    notify({
-      type: "info",
-      priority: "high",
-      title: "No idle projects",
-      message:
-        "Every background project has an agent working or waiting on you, or is open in a window.",
-      context: { eventKind: "uiFeedback" },
-    });
-  }, [idleProjects]);
+    await sleepIdleProjectsWithConfirm();
+  }, []);
 
-  const closePreview = useCallback(() => {
-    if (!isSleeping) setPreview(null);
-  }, [isSleeping]);
-
-  const confirm = useCallback(async () => {
-    if (!preview || isSleeping) return;
-    setIsSleeping(true);
-    // Only ever narrows what the user saw: a project that changed since the
-    // preview is skipped, never swapped in.
-    await sleepProjects(preview.map((project) => project.id));
-    setIsSleeping(false);
-    setPreview(null);
-  }, [preview, isSleeping]);
-
-  return { idleProjects, preview, isSleeping, openPreview, closePreview, confirm };
+  return { idleProjects, openPreview };
 }

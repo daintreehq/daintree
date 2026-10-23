@@ -1082,6 +1082,8 @@ const EXPECTED_CONFIRM_DANGER: ReadonlyArray<ActionId> = [
   "keybinding.resetAll",
   "logs.clear",
   "project.remove",
+  "project.sleep",
+  "project.sleepIdle",
   "recipe.delete",
   "recipe.run",
   "devPreview.restartAndClearCache",
@@ -1154,6 +1156,10 @@ const CONFIRMED_WIRED: ReadonlyArray<ActionId> = [
  * See docs/architecture/destructive-action-safeguards.md Known Bypasses.
  */
 const BYPASS_WIRED: ReadonlyArray<ActionId> = [
+  // Deferred-promise via projectSleepConfirmStore (#13846); run() awaits the
+  // app-level ProjectSleepConfirmDialog before sleeping.
+  "project.sleep",
+  "project.sleepIdle",
   // The fleet ribbon's own inline confirmation (useFleetPendingActionStore,
   // buildConfirmMessage), not a ConfirmDialog-family component.
   "fleet.kill",

@@ -950,6 +950,23 @@ const CORE_KEYBINDINGS: KeybindingConfig[] = [
     category: "Project",
   },
   {
+    // Unbound by default; here so it can be bound (#13846).
+    actionId: "project.sleep",
+    combo: "",
+    scope: "global",
+    priority: 0,
+    description: "Sleep project",
+    category: "Project",
+  },
+  {
+    actionId: "project.sleepIdle",
+    combo: "",
+    scope: "global",
+    priority: 0,
+    description: "Sleep idle projects",
+    category: "Project",
+  },
+  {
     actionId: "app.theme.pick",
     combo: "Cmd+K Cmd+T",
     scope: "global",
