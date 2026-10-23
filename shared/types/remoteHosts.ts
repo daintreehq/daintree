@@ -465,11 +465,6 @@ export interface HostMetricsSummary {
    * tally must never pass for "nothing working".
    */
   agentsObserved: { working: number; waiting: number; idle: number } | null;
-  /**
-   * Agents this host starts before further launches wait, from its memory
-   * (#14221). Absent from older hosts; null when its memory is unknown.
-   */
-  agentLaunchLimit?: number | null;
   /** Open projects; null when the read failed. */
   projectCount: number | null;
   /** Worktrees across open projects; null when the read failed. */

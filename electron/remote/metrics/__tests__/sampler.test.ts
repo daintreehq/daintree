@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { HostMetricsSampler, type HostSampleSources } from "../sampler.js";
 import { MAX_HOST_SUMMARY_DRIVERS } from "../../../../shared/types/remoteHosts.js";
-import { agentLaunchLimit } from "../../../../shared/config/agentLaunchCapacity.js";
 
 function sources(overrides: Partial<HostSampleSources> = {}): HostSampleSources {
   let tick = 0;
@@ -144,21 +143,6 @@ describe("HostMetricsSampler", () => {
     expect(summary.memoryUsedBytes).toBe(1048576);
     expect(summary.memoryTotalBytes).toBe(4194304);
     expect(summary.metricsScope).toBe("cgroup");
-  });
-
-  it("reports the agent launch limit the cgroup's memory allows, not the machine's (#14221)", async () => {
-    const gib = 1024 ** 3;
-    const files: Record<string, string> = {
-      "/proc/meminfo": `MemTotal: ${64 * 1024 * 1024} kB\nMemAvailable: ${60 * 1024 * 1024} kB\n`,
-      "/sys/fs/cgroup/memory.current": `${gib}`,
-      "/sys/fs/cgroup/memory.max": `${16 * gib}`,
-    };
-    const summary = await new HostMetricsSampler(
-      sources({ readText: async (path) => files[path] ?? null })
-    ).sample();
-    expect(summary.memoryTotalBytes).toBe(16 * gib);
-    expect(agentLaunchLimit(16 * gib)).not.toBe(agentLaunchLimit(64 * gib));
-    expect(summary.agentLaunchLimit).toBe(agentLaunchLimit(16 * gib));
   });
 
   describe("cgroup scope", () => {
@@ -357,7 +341,6 @@ describe("HostMetricsSampler", () => {
       memoryPressure: null,
       memoryUsedBytes: null,
       memoryTotalBytes: null,
-      agentLaunchLimit: null,
       swapUsedBytes: null,
       swapTotalBytes: null,
       thermal: null,

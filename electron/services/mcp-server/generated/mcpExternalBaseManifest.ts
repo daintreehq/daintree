@@ -371,7 +371,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
             },
           ],
           description:
-            "Null on a launch, else why not: panel-limit (see panelLimit), already-launching (retry), missing-cli (setup panel opened), host-memory (no project view to wait in, and the host is at its agent launch limit or critical memory pressure: retry later or use another host). With a view, such a launch waits in its pane instead.",
+            "Null if launched. panel-limit: see panelLimit; already-launching, host-memory: retry; missing-cli: setup opened.",
         },
         worktreeId: {
           type: ["string", "null"],

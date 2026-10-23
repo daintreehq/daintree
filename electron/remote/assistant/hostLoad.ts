@@ -51,10 +51,6 @@ export function projectHostLoad(summary: HostMetricsSummary, now: number): HostL
     ...(summary.memoryPressureSomeAvg10 !== undefined
       ? { memoryPressureSomeAvg10: usable ? finiteOrNull(summary.memoryPressureSomeAvg10) : null }
       : {}),
-    // Fixed by the hardware, like the total it is worked out from: kept when stale.
-    ...(summary.agentLaunchLimit !== undefined
-      ? { agentLaunchLimit: finiteOrNull(summary.agentLaunchLimit) }
-      : {}),
     ...(summary.temperatureCelsius !== undefined
       ? {
           temperatureCelsius: usable ? finiteOrNull(summary.temperatureCelsius) : null,
