@@ -3904,6 +3904,34 @@ describe("GitHubResourceList — every row lands once (#14067)", () => {
     await waitFor(() => expect(screen.queryByText(/Page fetch failed/)).toBeNull());
     expect(screen.getByRole("button", { name: /load more/i })).toBeTruthy();
   });
+
+  it("does not carry a failed page's error into a filter it never ran in", async () => {
+    // Warm and just fetched: the switch hydrates from cache and fetches
+    // nothing, so no landing page is there to clear the error instead.
+    setCache(buildCacheKey("/test/proj", "issue", "closed", "created"), {
+      items: [makeIssue(60)],
+      nextCursor: "closed-1",
+      hasMore: true,
+      timestamp: Date.now(),
+      freshBypassAt: Date.now(),
+    });
+    mockListIssues.mockResolvedValueOnce(page([1, 2], "after-2"));
+
+    render(<GitHubResourceList type="issue" projectPath="/test/proj" />);
+    const loadMore = await screen.findByRole("button", { name: /load more/i });
+
+    mockListIssues.mockRejectedValueOnce(new Error("Page fetch failed"));
+    act(() => loadMore.click());
+    await waitFor(() => expect(screen.getByText(/Page fetch failed/)).toBeTruthy());
+
+    act(() => {
+      useGitHubFilterStore.getState().setIssueFilter("closed");
+    });
+
+    await waitFor(() => expect(renderedNumbers()).toEqual([60]));
+    expect(screen.queryByText(/Page fetch failed/)).toBeNull();
+    expect(screen.getByRole("button", { name: /load more/i })).toBeTruthy();
+  });
 });
 
 describe("GitHubResourceList — only a cursor move scrolls the list (#14067)", () => {

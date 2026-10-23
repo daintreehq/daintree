@@ -558,11 +558,13 @@ export function useGitHubResourceListSWR({
     const abortController = new AbortController();
     // Neither aborted fetch will run its cleanup, and a path below can start
     // no fetch at all (a skip plan, a rate-limit pause), so release their
-    // flags here; a fetch that does start sets its own again.
+    // flags here; a fetch that does start sets its own again. Every path also
+    // replaces the page chain, so a failed page's error goes with it.
     loadMoreAbortRef.current?.abort();
     userFetchAbortRef.current?.abort();
     setLoadingMore(false);
     setRefreshing(false);
+    setLoadMoreError(null);
     const gen = nextGeneration(cacheKey);
     const isFirstMount = !mountedRef.current;
     // The cacheKey doesn't include `debouncedSearch` (search results aren't
