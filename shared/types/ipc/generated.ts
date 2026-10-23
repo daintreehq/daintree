@@ -1913,6 +1913,14 @@ export interface GeneratedIpcInvokeMap {
     args: [payload: import("./hostMode.js").SetHostModePayload];
     result: import("./hostMode.js").HostModeStatus;
   };
+  "host-settings:read": {
+    args: [payload: import("../hostSettings.js").HostSettingsReadPayload];
+    result: import("../hostSettings.js").HostSettingsSnapshot;
+  };
+  "host-settings:update": {
+    args: [payload: import("../hostSettings.js").HostSettingsUpdatePayload];
+    result: import("../hostSettings.js").HostSettingsUpdateResult;
+  };
   "host-switch:cancel": {
     args: [payload: import("./hostSwitch.js").HostSwitchOpPayload];
     result: boolean;

@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import { app } from "electron";
 import type {
   CanopyLookPlace,
@@ -37,6 +36,7 @@ import {
   wakeCanopy,
 } from "../../services/canopy/canopyBackend.js";
 import { store } from "../../store.js";
+import { hostInstanceId } from "../../services/hostInstance.js";
 import { traced } from "../../services/canopy/canopyTrace.js";
 import {
   checkRateLimit,
@@ -122,7 +122,7 @@ function backgroundPollOverride(): number | undefined {
 /** Changes of mode since launch; see `CanopyPlan.modeRevision`. */
 let modeRevision = 0;
 /** Names this launch, which `modeRevision` counts in; see `CanopyPlan.hostEpoch`. */
-const hostEpoch = randomUUID();
+const hostEpoch = hostInstanceId;
 
 function currentPlan(): CanopyPlan {
   const mode = readCanopyMode();
@@ -174,6 +174,53 @@ function publishSnapshot(snapshot: CanopySnapshot): void {
       console.error("[Canopy] Snapshot observer failed:", error);
     }
   }
+}
+
+/** Canopy's mode and the revision it is at in this launch, without making a service. */
+export function canopyModeState(): { mode: CanopyMode; modeRevision: number; hostEpoch: string } {
+  return { mode: readCanopyMode(), modeRevision, hostEpoch };
+}
+
+/**
+ * The guarded mode change behind `canopy:set-mode`, for callers that already
+ * checked their arguments: Settings on another machine editing this one
+ * (#14167) goes through exactly the same steps. A change made against a
+ * revision or launch that isn't current changes nothing and answers how
+ * Canopy stands now.
+ */
+export function changeCanopyMode(
+  mode: CanopyMode,
+  expectRevision?: number,
+  expectHostEpoch?: string
+): CanopySnapshot {
+  if (
+    (expectRevision !== undefined && expectRevision !== modeRevision) ||
+    (expectHostEpoch !== undefined && expectHostEpoch !== hostEpoch)
+  ) {
+    return service ? service.getSnapshot() : hiddenOrIdleSnapshot();
+  }
+  const was = readCanopyMode();
+  if (mode === "on" && was === "hidden") {
+    throw new AppError({
+      code: "PERMISSION",
+      message: "Canopy is hidden",
+      userMessage: "Show Canopy before turning it on.",
+    });
+  }
+  if (mode !== was) modeRevision++;
+  store.set("canopyMode", mode);
+  if (mode !== "on") stopWorkerTerminalWatches();
+  // Nothing was started, and nothing is wanted: no service to tell, but
+  // every view still hears the change, as a service would have told them.
+  if (!service && mode !== "on") {
+    const idle = hiddenOrIdleSnapshot();
+    publishSnapshot(idle);
+    return idle;
+  }
+  const canopy = getService();
+  canopy.setPlan(currentPlan());
+  wakeService();
+  return canopy.getSnapshot();
 }
 
 /**
@@ -1109,34 +1156,7 @@ export const canopyNamespace = defineIpcNamespace({
           if (expectRevision === undefined) throw new Error("A host epoch needs a revision");
         }
         checkRateLimit(CANOPY_METHOD_CHANNELS.setMode, 10, 10_000);
-        if (
-          (expectRevision !== undefined && expectRevision !== modeRevision) ||
-          (expectHostEpoch !== undefined && expectHostEpoch !== hostEpoch)
-        ) {
-          return service ? service.getSnapshot() : hiddenOrIdleSnapshot();
-        }
-        const was = readCanopyMode();
-        if (mode === "on" && was === "hidden") {
-          throw new AppError({
-            code: "PERMISSION",
-            message: "Canopy is hidden",
-            userMessage: "Show Canopy before turning it on.",
-          });
-        }
-        if (mode !== was) modeRevision++;
-        store.set("canopyMode", mode);
-        if (mode !== "on") stopWorkerTerminalWatches();
-        // Nothing was started, and nothing is wanted: no service to tell, but
-        // every view still hears the change, as a service would have told them.
-        if (!service && mode !== "on") {
-          const idle = hiddenOrIdleSnapshot();
-          publishSnapshot(idle);
-          return idle;
-        }
-        const canopy = getService();
-        canopy.setPlan(currentPlan());
-        wakeService();
-        return canopy.getSnapshot();
+        return changeCanopyMode(mode, expectRevision, expectHostEpoch);
       }
     ),
 

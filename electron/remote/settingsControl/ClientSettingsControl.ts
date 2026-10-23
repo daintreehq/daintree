@@ -1,0 +1,248 @@
+import {
+  HOST_SETTING_KEYS,
+  HostSettingsPatchSchema,
+  HostSettingsReadingSchema,
+  HostSettingsUpdateReplySchema,
+  isHostSettingKey,
+  type HostSettingKey,
+  type HostSettingLeaf,
+  type HostSettingsReadPayload,
+  type HostSettingsReading,
+  type HostSettingsSnapshot,
+  type HostSettingsUpdatePayload,
+  type HostSettingsUpdateResult,
+} from "../../../shared/types/hostSettings.js";
+import { isValidRemoteHostId, type HostId } from "../../../shared/types/remoteHosts.js";
+import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
+import { AppError } from "../../utils/errorTypes.js";
+import { SettingsControlLinkMethod } from "./linkMethods.js";
+
+/** The slice of a link session this client calls through. */
+export interface SettingsControlSession {
+  readonly isOpen: boolean;
+  call(method: string, payload: unknown, options?: { timeoutMs?: number }): Promise<unknown>;
+}
+
+export interface ClientSettingsControlDeps {
+  sessionFor(hostId: HostId): SettingsControlSession | null;
+  /** Keep the host's connection open until released, across an update. */
+  holdHost?(hostId: HostId): () => void;
+  isKnownHost(hostId: HostId): boolean;
+  hostLabel(hostId: HostId): string;
+}
+
+const READ_TIMEOUT_MS = 15_000;
+const UPDATE_TIMEOUT_MS = 30_000;
+
+function errorCode(error: unknown): string | null {
+  if (typeof error !== "object" || error === null || !("code" in error)) return null;
+  return typeof error.code === "string" ? error.code : null;
+}
+
+/** Codes that are the host's own answer: the change was refused, not lost. */
+const REFUSALS: ReadonlySet<string> = new Set(["VALIDATION", "PERMISSION", "UNSUPPORTED"]);
+
+function sameValue(a: unknown, b: unknown): boolean {
+  return JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
+}
+
+/**
+ * The Shell side of editing a host's settings by name (#14167), for Settings
+ * here and for this machine's assistants. It works per session, so no window
+ * or project needs to be on the host, and it never changes this machine: a
+ * host's settings travel only to and from that host.
+ */
+export class ClientSettingsControl {
+  constructor(private readonly deps: ClientSettingsControlDeps) {}
+
+  private requireHost(hostId: unknown): HostId {
+    if (typeof hostId !== "string" || !isValidRemoteHostId(hostId)) {
+      throw new AppError({ code: "VALIDATION", message: "Invalid host" });
+    }
+    if (!this.deps.isKnownHost(hostId)) {
+      throw new AppError({
+        code: "NOT_FOUND",
+        message: `Unknown host ${hostId}`,
+        userMessage: "That host isn't in your host list any more.",
+      });
+    }
+    return hostId;
+  }
+
+  private session(hostId: HostId): SettingsControlSession {
+    const session = this.deps.sessionFor(hostId);
+    if (!session?.isOpen) {
+      throw new AppError({
+        code: "HOST_DISCONNECTED",
+        message: "The host is not connected",
+        userMessage: `Not connected to ${this.deps.hostLabel(hostId)}. Connect to it and try again.`,
+      });
+    }
+    return session;
+  }
+
+  private translate(error: unknown, hostId: HostId, fallback: string): AppError {
+    const host = this.deps.hostLabel(hostId);
+    switch (errorCode(error)) {
+      case "UNSUPPORTED":
+        return new AppError({
+          code: "UNSUPPORTED",
+          message: "The host can't be edited from here",
+          userMessage: `Daintree on ${host} is too old to change its settings from here. Update it there and try again.`,
+        });
+      case "HOST_DISCONNECTED":
+        return new AppError({
+          code: "HOST_DISCONNECTED",
+          message: "The host is not connected",
+          userMessage: `Not connected to ${host}. Connect to it and try again.`,
+        });
+      case "VALIDATION":
+      case "PERMISSION": {
+        // The host's own fixed words on why it wouldn't take the value.
+        const said =
+          typeof error === "object" && error !== null && "userMessage" in error
+            ? error.userMessage
+            : undefined;
+        return new AppError({
+          code: errorCode(error) as "VALIDATION" | "PERMISSION",
+          message: formatErrorMessage(error, `${host} refused the change`),
+          userMessage:
+            typeof said === "string" && said.length > 0 && said.length <= 200
+              ? `${host}: ${said}`
+              : `${host} refused the change.`,
+        });
+      }
+      default:
+        return new AppError({
+          code: "INTERNAL",
+          message: formatErrorMessage(error, fallback),
+          userMessage: `${fallback}.`,
+        });
+    }
+  }
+
+  private snapshot(hostId: HostId, reading: HostSettingsReading): HostSettingsSnapshot {
+    return { hostId, hostName: this.deps.hostLabel(hostId), scope: "host", ...reading };
+  }
+
+  private async readFrom(
+    hostId: HostId,
+    keys: readonly HostSettingKey[]
+  ): Promise<HostSettingsReading> {
+    let raw: unknown;
+    try {
+      raw = await this.session(hostId).call(
+        SettingsControlLinkMethod.READ,
+        { keys },
+        { timeoutMs: READ_TIMEOUT_MS }
+      );
+    } catch (error) {
+      throw this.translate(
+        error,
+        hostId,
+        `Couldn't read settings on ${this.deps.hostLabel(hostId)}`
+      );
+    }
+    const parsed = HostSettingsReadingSchema.safeParse(raw);
+    if (!parsed.success) {
+      throw new AppError({
+        code: "INTERNAL",
+        message: "The host's settings reply was malformed",
+        userMessage: `${this.deps.hostLabel(hostId)} answered in a way this Daintree can't read. Update both to the same version.`,
+      });
+    }
+    return parsed.data;
+  }
+
+  /** The named settings (every one by default) as the host reads them now. */
+  async read(payload: HostSettingsReadPayload): Promise<HostSettingsSnapshot> {
+    const hostId = this.requireHost(payload?.hostId);
+    const keys =
+      payload.keys === undefined
+        ? [...HOST_SETTING_KEYS]
+        : HOST_SETTING_KEYS.filter((key) => payload.keys!.includes(key));
+    if (payload.keys !== undefined && !payload.keys.every(isHostSettingKey)) {
+      throw new AppError({ code: "VALIDATION", message: "Unknown host setting" });
+    }
+    if (keys.length === 0) throw new AppError({ code: "VALIDATION", message: "No settings named" });
+    return this.snapshot(hostId, await this.readFrom(hostId, keys));
+  }
+
+  /**
+   * Changes the named settings on the host, against the revisions they were
+   * read at. A reply that never comes is not a verdict: the host is read back
+   * and its own state says whether the change landed. Nothing is resent.
+   */
+  async update(payload: HostSettingsUpdatePayload): Promise<HostSettingsUpdateResult> {
+    const hostId = this.requireHost(payload?.hostId);
+    const parsedPatch = HostSettingsPatchSchema.safeParse(payload.patch);
+    if (!parsedPatch.success) {
+      throw new AppError({
+        code: "VALIDATION",
+        message: "Invalid host settings change",
+        userMessage: "That isn't a setting, or a value, this host takes.",
+      });
+    }
+    const patch = parsedPatch.data;
+    const keys = HOST_SETTING_KEYS.filter((key) => Object.hasOwn(patch, key));
+    const session = this.session(hostId);
+    const base = { hostId, hostName: this.deps.hostLabel(hostId), scope: "host" as const };
+    const release = this.deps.holdHost?.(hostId);
+    try {
+      let raw: unknown;
+      try {
+        raw = await session.call(
+          SettingsControlLinkMethod.UPDATE,
+          { patch, expect: payload.expect },
+          { timeoutMs: UPDATE_TIMEOUT_MS }
+        );
+      } catch (error) {
+        const code = errorCode(error);
+        if (code !== null && REFUSALS.has(code)) {
+          throw this.translate(error, hostId, `Couldn't change settings on ${base.hostName}`);
+        }
+        return { ...base, ...(await this.readBack(hostId, keys, patch, payload.expect)) };
+      }
+      const reply = HostSettingsUpdateReplySchema.safeParse(raw);
+      if (!reply.success) {
+        // A host that answered nonsense may still have written: its state says.
+        return { ...base, ...(await this.readBack(hostId, keys, patch, payload.expect)) };
+      }
+      return {
+        ...base,
+        outcome: reply.data.outcome,
+        confirmedBy: reply.data.outcome === "applied" ? "reply" : null,
+        instanceId: reply.data.instanceId,
+        settings: reply.data.settings,
+      };
+    } finally {
+      release?.();
+    }
+  }
+
+  private async readBack(
+    hostId: HostId,
+    keys: readonly HostSettingKey[],
+    patch: Record<string, unknown>,
+    expect: HostSettingsUpdatePayload["expect"]
+  ): Promise<Omit<HostSettingsUpdateResult, "hostId" | "hostName" | "scope">> {
+    let now: HostSettingsReading;
+    try {
+      now = await this.readFrom(hostId, keys);
+    } catch {
+      return { outcome: "unconfirmed", confirmedBy: null, instanceId: null, settings: [] };
+    }
+    const result = (outcome: HostSettingsUpdateResult["outcome"], settings: HostSettingLeaf[]) => ({
+      outcome,
+      confirmedBy: outcome === "applied" ? ("readback" as const) : null,
+      instanceId: now.instanceId,
+      settings,
+    });
+    // A restart since the read: whatever stands there now isn't this change's doing.
+    if (now.instanceId !== expect.instanceId) return result("conflict", now.settings);
+    const landed = now.settings.every((leaf) => sameValue(leaf.value, patch[leaf.key]));
+    if (landed) return result("applied", now.settings);
+    const untouched = now.settings.every((leaf) => expect.revisions[leaf.key] === leaf.revision);
+    return result(untouched ? "not-applied" : "conflict", now.settings);
+  }
+}

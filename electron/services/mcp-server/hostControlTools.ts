@@ -3,9 +3,11 @@ import {
   HOST_CALL_TOOL,
   HOST_ENSURE_PROJECT_TOOL,
   HOST_LIST_TOOL,
+  HOST_SETTINGS_TOOL,
   HostCallArgsSchema,
   HostEnsureProjectArgsSchema,
   HostListArgsSchema,
+  HostSettingsArgsSchema,
   type HostCallArgs,
   type HostCallResult,
   type HostControlOutcome,
@@ -15,6 +17,8 @@ import {
   type HostEnsureProjectResult,
   type HostListArgs,
   type HostListResult,
+  type HostSettingsArgs,
+  type HostSettingsResult,
 } from "../../../shared/types/hostControl.js";
 
 /**
@@ -39,6 +43,11 @@ export interface HostControlRuntimeHandle {
     helpSessionId: string,
     args: HostEnsureProjectArgs
   ): Promise<HostControlOutcome<HostEnsureProjectResult>>;
+  /** Reads, previews and applies a host's named settings, asking the person before any change (#14167). */
+  settings(
+    helpSessionId: string,
+    args: HostSettingsArgs
+  ): Promise<HostControlOutcome<HostSettingsResult>>;
 }
 
 /** What a `host.call` carries from the calling session beyond its arguments. */
@@ -80,6 +89,29 @@ function invalidArgs(): { ok: false; code: "INVALID_ARGS"; message: string } {
   return { ok: false, code: "INVALID_ARGS", message: INVALID_ARGS_MESSAGE };
 }
 
+/** Each operation takes its own arguments and no other's, so an apply carries nothing but its ticket. */
+function settingsArgsFit(args: HostSettingsArgs): boolean {
+  switch (args.operation) {
+    case "read":
+      return args.hostIds !== undefined && args.patch === undefined && args.ticket === undefined;
+    case "preview":
+      return (
+        args.hostIds !== undefined &&
+        args.patch !== undefined &&
+        Object.keys(args.patch).length > 0 &&
+        args.keys === undefined &&
+        args.ticket === undefined
+      );
+    case "apply":
+      return (
+        args.ticket !== undefined &&
+        args.hostIds === undefined &&
+        args.keys === undefined &&
+        args.patch === undefined
+      );
+  }
+}
+
 /**
  * Arguments are checked against the manifest schema here, since a
  * main-process tool never passes through renderer dispatch; a refusal is fixed
@@ -103,6 +135,12 @@ async function dispatch(
     case HOST_ENSURE_PROJECT_TOOL: {
       const parsed = HostEnsureProjectArgsSchema.safeParse(raw);
       return parsed.success ? runtime.ensureProject(helpSessionId, parsed.data) : invalidArgs();
+    }
+    case HOST_SETTINGS_TOOL: {
+      const parsed = HostSettingsArgsSchema.safeParse(raw);
+      return parsed.success && settingsArgsFit(parsed.data)
+        ? runtime.settings(helpSessionId, parsed.data)
+        : invalidArgs();
     }
     case HOST_LIST_TOOL: {
       const parsed = HostListArgsSchema.safeParse(raw);

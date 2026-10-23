@@ -6,6 +6,8 @@ import {
   HostEnsureProjectResultSchema,
   HostListArgsSchema,
   HostListResultSchema,
+  HostSettingsArgsSchema,
+  HostSettingsResultSchema,
 } from "@shared/types/hostControl";
 
 function mainProcessOnly(id: string): () => Promise<never> {
@@ -24,7 +26,8 @@ function mainProcessOnly(id: string): () => Promise<never> {
  * one of this machine's own views may call them (#13468), and they reach
  * hosts over the link from main, and this machine's other projects in
  * process under its own id, `local` (#14024). Delegating to a host's assistant is agent
- * messaging run through `host.call` (#13496).
+ * messaging run through `host.call` (#13496), and a host's own named settings
+ * are read and changed through `host.settings` (#14167).
  * `run()` throws if the renderer ever invokes it directly.
  */
 export function registerHostControlActions(actions: ActionRegistry): void {
@@ -100,5 +103,30 @@ export function registerHostControlActions(actions: ActionRegistry): void {
       openWorldHint: true,
     },
     run: mainProcessOnly("host.ensureProject"),
+  }));
+
+  actions.set("host.settings", () => ({
+    id: "host.settings",
+    title: "Change a host's settings",
+    description:
+      "Read or change named settings on hosts, such as turning Canopy on across several. preview returns a ticket and changes nothing; apply asks the person to approve exactly that preview, then writes it. Never this machine's own settings.",
+    category: "help",
+    kind: "command",
+    danger: "safe",
+    denyPluginDispatch: true,
+    scope: "renderer",
+    keywords: ["host", "remote", "settings", "canopy", "enable", "configure"],
+    palette: { mode: "hidden" },
+    argsSchema: HostSettingsArgsSchema,
+    resultSchema: HostSettingsResultSchema,
+    mcpOutputSchema: true,
+    mcpAnnotations: {
+      readOnlyHint: false,
+      // A ticket is spent by its first apply; a repeat writes nothing.
+      idempotentHint: true,
+      destructiveHint: false,
+      openWorldHint: true,
+    },
+    run: mainProcessOnly("host.settings"),
   }));
 }

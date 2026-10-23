@@ -615,6 +615,14 @@ export interface GeneratedElectronAPI {
       ...args: IpcInvokeMap["host-mode:set-enabled"]["args"]
     ): Promise<IpcInvokeMap["host-mode:set-enabled"]["result"]>;
   };
+  hostSettings: {
+    read(
+      ...args: IpcInvokeMap["host-settings:read"]["args"]
+    ): Promise<IpcInvokeMap["host-settings:read"]["result"]>;
+    update(
+      ...args: IpcInvokeMap["host-settings:update"]["args"]
+    ): Promise<IpcInvokeMap["host-settings:update"]["result"]>;
+  };
   hostSwitch: {
     cancel(
       ...args: IpcInvokeMap["host-switch:cancel"]["args"]

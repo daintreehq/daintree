@@ -1578,6 +1578,10 @@ export const CHANNELS = {
   SETTINGS_COPY_APPLY: "settings-copy:apply",
   SETTINGS_COPY_STATUS: "settings-copy:status",
   SETTINGS_COPY_UNDO: "settings-copy:undo",
+
+  // Remote Hosts: hostSettings (shell).
+  HOST_SETTINGS_READ: "host-settings:read",
+  HOST_SETTINGS_UPDATE: "host-settings:update",
 } as const;
 
 export type ChannelName = (typeof CHANNELS)[keyof typeof CHANNELS];

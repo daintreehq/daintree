@@ -235,6 +235,16 @@ export function installHostControl(deps: HostControlInstallDeps): () => void {
       return { lanes: pointers, complete: projectIds.length === known.length };
     },
   });
+  // The global assistant has no window of its own: it is asked in one that
+  // shows it, never the focused one, and not at all while none does.
+  const askingWindow = (helpSessionId: string): number | null => {
+    const webContentsId = isGlobalAssistantId(
+      helpSessionService.getSessionLane(helpSessionId)?.projectId ?? ""
+    )
+      ? (peekGlobalAssistantService()?.presenterWebContentsId() ?? null)
+      : helpSessionService.getWebContentsIdForSessionId(helpSessionId);
+    return webContentsId === null || isRemoteEndpointHandle(webContentsId) ? null : webContentsId;
+  };
   const runtime = new HostCallRuntime({
     getSessionLane: (helpSessionId) => helpSessionService.getSessionLane(helpSessionId),
     callerRun: localRunOf,
@@ -255,16 +265,18 @@ export function installHostControl(deps: HostControlInstallDeps): () => void {
     // the window of the assistant that made the call (#13501), never the
     // focused one: an assistant a remote Shell's view runs here has none.
     askApproval: async (ask) => {
-      // The global assistant has no window of its own: it is asked in one that
-      // shows it, never the focused one, and not at all while none does.
-      const webContentsId = isGlobalAssistantId(
-        helpSessionService.getSessionLane(ask.helpSessionId)?.projectId ?? ""
-      )
-        ? (peekGlobalAssistantService()?.presenterWebContentsId() ?? null)
-        : helpSessionService.getWebContentsIdForSessionId(ask.helpSessionId);
-      if (webContentsId === null || isRemoteEndpointHandle(webContentsId)) return null;
+      const webContentsId = askingWindow(ask.helpSessionId);
+      if (webContentsId === null) return null;
       const { askHostApprovalInWindow } = await import("../client/viewRequests.js");
       return askHostApprovalInWindow(webContentsId, ask);
+    },
+    // A host's settings, read and changed by name with no view there (#14167).
+    settingsClient: () => getRemoteService("settingsControlClient") ?? null,
+    askSettingsApproval: async ({ helpSessionId, ...ask }) => {
+      const webContentsId = askingWindow(helpSessionId);
+      if (webContentsId === null) return null;
+      const { askSettingsApprovalInWindow } = await import("../client/viewRequests.js");
+      return askSettingsApprovalInWindow(webContentsId, ask);
     },
     // A host's notice rides its run's own notice line (#13500).
     queueNotice: queueOnNoticeLine,

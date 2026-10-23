@@ -23,6 +23,7 @@ import type { LinkSession } from "../link/session.js";
 import { attachHostPluginAssets, installPluginHost } from "../plugins/install.js";
 import { installPluginParityHost } from "../plugins/parity/install.js";
 import { installSettingsCopyHost } from "../settingsCopy/install.js";
+import { installSettingsControlHost } from "../settingsControl/install.js";
 import { installHostPortService } from "../ports/hostPorts.js";
 import { installProjectsHost } from "../projects/hostInstall.js";
 import { getRemoteService, registerRemoteService } from "../runtime.js";
@@ -252,6 +253,8 @@ async function buildHostListener(
   teardowns.push(installPluginParityHost(server));
   // Settings an attached Shell copies here, previewed and applied on request.
   teardowns.push(installSettingsCopyHost(server));
+  // This machine's own settings, read and changed by name when a Shell asks (#14167).
+  teardowns.push(installSettingsControlHost(server));
   // Plugin prompts go to the project's driving frontend; view bundles are
   // served per endpoint alongside its other streams.
   teardowns.push(installPluginHost());

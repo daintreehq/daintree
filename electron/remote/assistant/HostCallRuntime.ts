@@ -14,7 +14,10 @@ import {
   type HostListArgs,
   type HostListEntry,
   type HostListResult,
+  type HostSettingsArgs,
+  type HostSettingsResult,
 } from "../../../shared/types/hostControl.js";
+import { HostSettingsRequests, type HostSettingsRequestDeps } from "./HostSettingsRequests.js";
 import {
   AGENT_DIRECTORY_BYTES_MAX,
   fitAgentDirectory,
@@ -153,6 +156,13 @@ export interface HostCallRuntimeDeps {
    * (#14140): the Shell's switch service. Absent, no project is ever brought.
    */
   ensureProject?(request: AssistantEnsureRequest): Promise<HostEnsureAnswer>;
+  /** The Shell's client for a host's named settings (#14167). Absent, `host.settings` reaches none. */
+  settingsClient?: HostSettingsRequestDeps["client"];
+  /**
+   * Puts a `host.settings` change to the person in the calling assistant's
+   * window. Null when it couldn't be asked; absent, no change is ever applied.
+   */
+  askSettingsApproval?: HostSettingsRequestDeps["askApproval"];
   now?: () => number;
   newId?: () => string;
 }
@@ -640,10 +650,19 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
   /** Recent prompts sent from here to each host terminal, by host and terminal. */
   private readonly prompted = new Map<string, PromptMark[]>();
   private disposed = false;
+  private readonly settingsRequests: HostSettingsRequests;
 
   constructor(private readonly deps: HostCallRuntimeDeps) {
     this.now = deps.now ?? Date.now;
     this.newId = deps.newId ?? randomUUID;
+    this.settingsRequests = new HostSettingsRequests({
+      client: () => deps.settingsClient?.() ?? null,
+      hostName: (hostId) => deps.hosts().find((host) => host.hostId === hostId)?.name ?? null,
+      controlOn: (hostId) => this.controlOn(hostId),
+      ...(deps.askSettingsApproval ? { askApproval: deps.askSettingsApproval } : {}),
+      now: () => this.now(),
+      newId: () => this.newId(),
+    });
   }
 
   /** The run a calling session answers in, when it may reach hosts at all. */
@@ -990,6 +1009,7 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
     this.noticePins.clear();
     this.seenNotices.clear();
     this.prompted.clear();
+    this.settingsRequests.dispose();
   }
 
   /**
@@ -1216,6 +1236,22 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
         }
       }
     });
+  }
+
+  /**
+   * Reads, previews and applies a host's named settings for the calling
+   * assistant (#14167), under the person's control switch for each host. A
+   * change is applied only once the person approves the exact preview, asked
+   * in this assistant's own window, and only while this run is still the one
+   * running.
+   */
+  settings(
+    helpSessionId: string,
+    args: HostSettingsArgs
+  ): Promise<HostControlOutcome<HostSettingsResult>> {
+    return this.settle(helpSessionId, (caller) =>
+      this.settingsRequests.run(helpSessionId, () => this.stillRunning(caller), args)
+    );
   }
 
   list(
