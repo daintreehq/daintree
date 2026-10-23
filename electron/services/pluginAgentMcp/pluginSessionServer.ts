@@ -107,10 +107,10 @@ const ABORT_MESSAGES: Record<AbortCause, (timeoutMs: number) => string> = {
     "The plugin's tools changed while the call was running. List tools again and retry.",
 };
 
-/** Said after any abort of a write that had started: the commit may have landed first. */
 /** The `_meta` key a grouped tool's group is advertised under on `tools/list`. */
 export const TOOL_GROUP_META_KEY = "dev.daintree/toolGroup";
 
+/** Said after any abort of a write that had started: the commit may have landed first. */
 const WRITE_MAY_HAVE_APPLIED =
   " The write may still have been applied; read the data before retrying.";
 
