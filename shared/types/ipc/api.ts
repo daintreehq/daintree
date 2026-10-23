@@ -453,9 +453,7 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     updateTitle(id: string, title: string, titleMode: PanelTitleMode): void;
     updateWorktreeId(id: string, worktreeId: string | null): void;
     onSpawnResult(callback: (id: string, result: SpawnResult) => void): () => void;
-    onReduceScrollback(
-      callback: (data: { terminalIds: string[]; targetLines: number }) => void
-    ): () => void;
+    onReduceScrollback(callback: (data: { targetLines: number }) => void): () => void;
     onRestoreScrollback(callback: (data: { terminalIds: string[] }) => void): () => void;
     restartService(): Promise<void>;
     onReclaimMemory(callback: () => void): () => void;

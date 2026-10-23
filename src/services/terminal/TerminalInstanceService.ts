@@ -97,6 +97,7 @@ import {
 import type { TerminalResizeResult } from "@shared/types/pty-host";
 import { applyXtermReflowFastpath } from "@shared/utils/xtermReflowFastpath";
 import { usePanelStore } from "@/store/panelStore";
+import { usePerformanceModeStore } from "@/store/performanceModeStore";
 import { useHelpPanelStore, selectSlot, selectSlotForTerminal } from "@/store/helpPanelStore";
 import { logDebug, logWarn, logError } from "@/utils/logger";
 import { getErrorMessage } from "@/utils/errorContext";
@@ -404,9 +405,10 @@ class TerminalInstanceService {
             managed.lastHeight = 0;
           }
         } else {
-          // Tier upgrade path: clear the reduce cooldown so restoreScrollback
-          // is unconditional and the next BACKGROUND drop isn't artificially
-          // delayed by stale state from a long-completed reduce.
+          // Tier upgrade path: re-derive the configured capacity, which may have
+          // been lowered by a memory-pressure reduce or a profile downshift
+          // while hidden (raising it never brings back dropped lines). Clearing
+          // the cooldown keeps a long-completed reduce from blocking it.
           managed.lastScrollbackReduceAt = undefined;
           restoreScrollback(managed);
 
@@ -4054,6 +4056,18 @@ class TerminalInstanceService {
     reduceScrollback(managed, targetLines);
   }
 
+  // Memory-pressure reclaim for every terminal this view isn't showing.
+  // Visibility, not refresh tier: a hidden pane streaming output sits at BURST,
+  // and a just-revealed one can still read BACKGROUND. Eligibility is read
+  // here, when the request lands, so a pane revealed after main sent it is
+  // spared; the reducer's own guards and cooldown still apply.
+  reduceScrollbackHidden(targetLines: number): void {
+    for (const managed of this.instances.values()) {
+      if (managed.isVisible) continue;
+      reduceScrollback(managed, targetLines);
+    }
+  }
+
   restoreScrollback(id: string): void {
     const managed = this.instances.get(id);
     if (!managed) return;
@@ -4102,15 +4116,17 @@ class TerminalInstanceService {
     this.maybeReflowTerminal(managed);
   }
 
-  // Re-derive the scrollback policy for every live foreground terminal.
-  // Called on resource-profile changes after setAgentScrollbackMaxLines so
-  // the new agent ceiling applies to terminals that are already open.
-  // Background terminals are skipped: their scrollback was deliberately
-  // reduced and is restored by the tier-upgrade path.
-  restoreScrollbackAllForeground(): void {
+  // Re-derive the scrollback policy for every live terminal. Called on
+  // resource-profile changes after setAgentScrollbackMaxLines so the new agent
+  // ceiling applies to terminals that are already open — background ones
+  // included, since they hold most of the memory. restoreScrollback guards any
+  // shrink that would evict history.
+  //
+  // Skipped in performance mode: its fixed limit ignores the agent ceiling,
+  // and its restore writes unconditionally, past those guards.
+  restoreScrollbackAll(): void {
+    if (usePerformanceModeStore.getState().performanceMode) return;
     for (const managed of this.instances.values()) {
-      const tier = managed.lastAppliedTier ?? managed.getRefreshTier?.();
-      if (tier === TerminalRefreshTier.BACKGROUND) continue;
       restoreScrollback(managed);
     }
   }

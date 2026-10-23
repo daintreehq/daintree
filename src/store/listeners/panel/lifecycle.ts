@@ -665,10 +665,8 @@ export function setupLifecycleListeners(): DisposableStore {
 
   d.add(
     toDisposable(
-      terminalRegistryController.onReduceScrollback(({ terminalIds, targetLines }) => {
-        for (const id of terminalIds) {
-          terminalInstanceService.reduceScrollback(id, targetLines);
-        }
+      terminalRegistryController.onReduceScrollback(({ targetLines }) => {
+        terminalInstanceService.reduceScrollbackHidden(targetLines);
       })
     )
   );

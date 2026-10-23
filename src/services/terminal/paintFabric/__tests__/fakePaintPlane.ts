@@ -41,6 +41,8 @@ export function makeFakePlane() {
     getScrollbackRestorePendingCount: vi.fn(() => 0),
     getScrollbackRestoreInProgressCount: vi.fn(() => 0),
     getScrollbackRestoreTotalCount: vi.fn(() => 0),
+    reduceScrollbackHidden: vi.fn(),
+    restoreScrollbackAll: vi.fn(),
     subscribeUnseenOutput: vi.fn(() => vi.fn()),
     subscribeHibernation: vi.fn(() => vi.fn()),
     addAgentStateListener: vi.fn(() => vi.fn()),

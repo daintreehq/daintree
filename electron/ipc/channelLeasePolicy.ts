@@ -719,7 +719,6 @@ export const CHANNEL_LEASE_POLICY = {
   "terminal:locate": "free",
   "terminal:reconnect": "free",
   "terminal:reconnect-bulk": "free",
-  "terminal:reduce-scrollback": "free",
   "terminal:release-worker-ingest-port": "free",
   "terminal:replay-history": "free",
   "terminal:request-worker-ingest-port": "free",

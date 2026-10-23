@@ -32,9 +32,10 @@ function retainedScrollback(managed: ManagedTerminal): number {
 
 export interface ReduceScrollbackOptions {
   /**
-   * Bypass the per-terminal cooldown. Used by deliberate bulk memory-pressure
-   * actions (e.g. resource-profile downshift) that need to shrink every
-   * background terminal in lockstep, regardless of recent tab-flip activity.
+   * Bypass the per-terminal cooldown — only the cooldown; the interaction
+   * guards always hold. No production caller passes it: the memory-pressure
+   * reduce (reduceScrollbackHidden) honours the cooldown, and a profile
+   * downshift goes through restoreScrollback.
    */
   force?: boolean;
 }
@@ -80,8 +81,9 @@ export function restoreScrollback(managed: ManagedTerminal): void {
   const { performanceMode } = usePerformanceModeStore.getState();
 
   if (performanceMode) {
-    // Deliberate memory downshift — apply it unconditionally, matching the
-    // `force` path of reduceScrollback used by bulk memory-pressure actions.
+    // Deliberate user downshift — apply it unconditionally, past the guards.
+    // The automatic profile re-derive (restoreScrollbackAll) skips this mode
+    // so it never spreads that to terminals the user didn't toggle.
     writeScrollback(managed, PERFORMANCE_MODE_SCROLLBACK);
     return;
   }

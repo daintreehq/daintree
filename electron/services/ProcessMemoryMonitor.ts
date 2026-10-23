@@ -538,6 +538,13 @@ export interface MemoryPressureActions {
    */
   trimPtyHostState?: () => Promise<TrimStateSummary>;
   /**
+   * Asks the active project views to drop the scrollback of terminals they
+   * aren't showing — the renderer's copy, which is larger than the host's.
+   * Fire-and-forget and unacknowledged, so like the webview push it never
+   * counts as productive work.
+   */
+  trimRendererScrollback?: () => void;
+  /**
    * Optional Blink memory sampler. If wired, called once per poll BEFORE
    * pressure evaluation so renderer samples land alongside the metrics
    * snapshot. Implementations should fan a `window:sample-blink-memory`
@@ -1155,6 +1162,12 @@ export function startAppMetricsMonitor(actions?: MemoryPressureActions): () => v
               tier1TrimFailed = true;
             }
 
+            try {
+              actions.trimRendererScrollback?.();
+            } catch {
+              /* non-critical */
+            }
+
             await new Promise<void>((resolve) => setTimeout(resolve, RECLAIM_SETTLE_MS));
           }
 
@@ -1209,8 +1222,9 @@ export function startAppMetricsMonitor(actions?: MemoryPressureActions): () => v
               beforeMb: Math.round(beforeMb),
               afterMb: Math.round(afterMb),
               // Attributable to the portal-tab teardown only. The scrollback
-              // trim cannot move this inside the settle window whatever it did,
-              // so a zero here is not evidence either lever failed.
+              // trims (host and renderer) cannot move this inside the settle
+              // window whatever they did, so a zero here is not evidence any
+              // lever failed.
               deltaMb: Math.round(deltaMb),
               // Portal tabs are the only part of this lever whose outcome main
               // can observe (the webview push is fire-and-forget), so this is a

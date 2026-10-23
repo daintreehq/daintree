@@ -1180,9 +1180,7 @@ export const terminalClient = {
     return window.electron.terminal.onSpawnResult(callback);
   },
 
-  onReduceScrollback: (
-    callback: (data: { terminalIds: string[]; targetLines: number }) => void
-  ): (() => void) => {
+  onReduceScrollback: (callback: (data: { targetLines: number }) => void): (() => void) => {
     return window.electron.terminal.onReduceScrollback(callback);
   },
 

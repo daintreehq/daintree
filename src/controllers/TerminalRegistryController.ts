@@ -337,7 +337,7 @@ class TerminalRegistryController {
     return terminalClient.onSpawnResult(handler);
   }
 
-  onReduceScrollback(handler: (data: { terminalIds: string[]; targetLines: number }) => void) {
+  onReduceScrollback(handler: (data: { targetLines: number }) => void) {
     return terminalClient.onReduceScrollback(handler);
   }
 

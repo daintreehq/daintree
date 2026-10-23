@@ -441,11 +441,11 @@ export interface ManagedTerminal {
   // threshold — see TerminalWebGLManager for the trade-off.
   webGLHideTimer?: number;
 
-  // Timestamp of the most recent successful reduceScrollback() — gates the
-  // BACKGROUND-tier scrollback shrink path so rapid tab oscillation doesn't
-  // re-allocate the xterm CircularList on every flip. Cleared on tier upgrade
-  // in onTierApplied so restoreScrollback always runs and the next BACKGROUND
-  // transition is not artificially delayed.
+  // Timestamp of the most recent scrollback shrink — a memory-pressure
+  // reduceScrollback(), or a destructive restoreScrollback() or its clamp to
+  // retained history. Shared cooldown so repeated shrinks don't re-allocate the
+  // xterm CircularList back to back. Cleared on tier upgrade in onTierApplied
+  // so the restore that re-derives capacity always runs.
   lastScrollbackReduceAt?: number;
 }
 
