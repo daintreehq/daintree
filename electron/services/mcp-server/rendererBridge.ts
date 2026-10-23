@@ -124,8 +124,10 @@ export class WorkspaceBindingError extends McpRouteBindingError {
  * A `WorkspaceBindingError` with reason `not-found`, because that is exactly
  * what it is to every caller that already handles one: retriable, never routed
  * elsewhere, answered from the base surface at discovery. The tool result is
- * where it differs, reporting `NO_FRONTEND_ATTACHED` so a caller can tell "open
- * a window, or ask for something the host can do alone" from a route it lost.
+ * where it differs, reporting `NO_FRONTEND_ATTACHED` so a caller can tell "ask
+ * for something the host can do alone" from a route it lost. The message is
+ * read by assistants, so it says what runs instead, never what a person should
+ * open (#14122).
  */
 export class NoFrontendAttachedError extends WorkspaceBindingError {
   readonly frontendCode = "NO_FRONTEND_ATTACHED";
@@ -139,9 +141,9 @@ export class NoFrontendAttachedError extends WorkspaceBindingError {
     this.message =
       actionId === undefined
         ? `No Daintree frontend is attached to workspace ${workspaceId}, so it has no live action surface.`
-        : `No Daintree frontend is attached to workspace ${workspaceId}, and the host cannot run ` +
-          `'${actionId}' without one. The action was not run. Open the workspace in Daintree and ` +
-          `retry, or use a tool the host can run on its own.`;
+        : `No Daintree frontend is attached to workspace ${workspaceId}, and '${actionId}' has ` +
+          `no form the host runs on its own, so it was not run. Tools the host runs itself, ` +
+          `such as launching agents and driving terminals, can still run here.`;
   }
 }
 

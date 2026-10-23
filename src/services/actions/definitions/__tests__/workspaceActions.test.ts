@@ -40,8 +40,8 @@ function definition(): AnyActionDefinition {
   return factory() as AnyActionDefinition;
 }
 
-/** The five identity fields the external contract permits, in sorted order. */
-const FIELDS = ["hasLiveView", "kind", "name", "path", "workspaceId"];
+/** The fields the external contract permits, in sorted order. */
+const FIELDS = ["frontendAttached", "hasLiveView", "kind", "name", "path", "workspaceId"];
 
 const ROW = {
   workspaceId: "a".repeat(64),
@@ -49,10 +49,11 @@ const ROW = {
   name: "Alpha",
   kind: "project" as const,
   hasLiveView: true,
+  frontendAttached: true,
 };
 
 describe("workspace.list", () => {
-  it("advertises an object-rooted output schema carrying all five fields", () => {
+  it("advertises an object-rooted output schema carrying every field", () => {
     // `buildToolOutputSchema` drops any schema whose root is not an object, so
     // the array has to be wrapped or the contract silently vanishes.
     const schema = service().get("workspace.list" as ActionId)?.outputSchema as

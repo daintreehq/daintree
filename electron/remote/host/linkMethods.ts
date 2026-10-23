@@ -136,6 +136,8 @@ export const HostProjectListSchema = z
         name: z.string().max(1024),
         path: hostPath,
         emoji: z.string().max(MAX_PROJECT_EMOJI_LENGTH).optional(),
+        /** Absent from a host that predates it (#14122). */
+        frontendAttached: z.boolean().optional(),
       })
       .strip()
   )

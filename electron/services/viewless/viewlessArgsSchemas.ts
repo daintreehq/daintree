@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { BUILT_IN_AGENT_IDS } from "../../../shared/config/agentIds.js";
 import { ForgeListViewSchema } from "../../../shared/utils/forgeListProjection.js";
 
 /**
@@ -76,3 +77,12 @@ export const WorktreeCreateWithRecipeArgsSchema = z.object({
   spawnedBy: z.unknown().optional(),
   focusPolicy: z.unknown().optional(),
 });
+
+/** `slashCommands.list`'s arguments: a project selector, as a view takes it, and a built-in agent. */
+export const SlashCommandsListArgsSchema = z
+  .object({
+    projectId: selector,
+    projectPath: selector,
+    agentId: z.enum(BUILT_IN_AGENT_IDS).optional(),
+  })
+  .optional();

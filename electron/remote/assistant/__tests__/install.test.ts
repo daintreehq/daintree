@@ -89,6 +89,7 @@ vi.mock("../../../window/serviceRefs.js", () => ({
 }));
 vi.mock("../../../window/webContentsRegistry.js", () => ({
   getProjectForWebContents: (id: number) => views.get(id) ?? null,
+  getWebContentsForProject: () => [],
 }));
 vi.mock("../../../services/McpServerService.js", () => ({
   mcpServerService: {

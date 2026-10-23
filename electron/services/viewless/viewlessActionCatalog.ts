@@ -16,7 +16,9 @@ const write = (danger: ActionDanger = "safe"): ViewlessActionEntry => ({ danger,
  * The set is what an orchestrator drives through a whole loop with no window
  * open (#13495): open a terminal or an agent, read and steer it, close it,
  * make and delete worktrees, discover projects and runners, read the forge
- * the runbooks consult (#13501), and find the host's tools (#13493).
+ * the runbooks consult (#13501), find the host's tools (#13493), and list an
+ * agent's slash commands before typing one and the host's workspaces with
+ * whether a frontend is attached to each (#14122).
  * Everything else is a question for a renderer, and is refused as "no
  * frontend attached" rather than guessed at.
  *
@@ -40,6 +42,7 @@ export const VIEWLESS_ACTIONS: Readonly<Record<string, ViewlessActionEntry>> = {
   "terminal.sendKeys": write(),
   "agent.launch": write(),
   "agent.listAvailable": read(),
+  "slashCommands.list": read(),
   "worktree.create": write(),
   "worktree.createWithRecipe": write(),
   "worktree.list": read(),
@@ -47,6 +50,7 @@ export const VIEWLESS_ACTIONS: Readonly<Record<string, ViewlessActionEntry>> = {
   "worktree.delete": write("confirm"),
   "project.getAll": read(),
   "project.detectRunners": read(),
+  "workspace.list": read(),
   "forge.getPR": read(),
   "forge.listPRs": read(),
   "forge.getIssue": read(),

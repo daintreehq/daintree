@@ -1048,6 +1048,59 @@ export const MCP_VIEWLESS_BASE_MANIFEST: readonly ActionManifestEntry[] = [
   },
   {
     band: "reversible",
+    category: "agent",
+    danger: "safe",
+    description:
+      "List the slash commands an agent CLI offers, including project-local ones, before driving the agent with one. An empty list means it has none.",
+    enabled: true,
+    id: "slashCommands.list",
+    inputSchema: {
+      $schema: "https://json-schema.org/draft/2020-12/schema",
+      type: "object",
+      properties: {
+        projectId: {
+          description:
+            "Project id from the project listing. Omit it and the path for the active project; an unknown id is rejected, not retargeted, once open projects are known.",
+          type: "string",
+          minLength: 1,
+        },
+        projectPath: {
+          description: "Absolute project root, instead of the id. The id wins if both.",
+          type: "string",
+          minLength: 1,
+        },
+        agentId: {
+          description: "Agent ID. Defaults to 'claude' when omitted.",
+          type: "string",
+          enum: [
+            "claude",
+            "opencode",
+            "aider",
+            "gemini",
+            "antigravity",
+            "codex",
+            "grok",
+            "cursor",
+            "copilot",
+            "goose",
+            "amp",
+            "crush",
+            "qwen",
+            "kimi",
+            "interpreter",
+            "mistral",
+            "kiro",
+          ],
+        },
+      },
+    },
+    kind: "query",
+    name: "slashCommands.list",
+    requiresArgs: false,
+    title: "List slash commands",
+  },
+  {
+    band: "reversible",
     category: "terminal",
     danger: "safe",
     description:

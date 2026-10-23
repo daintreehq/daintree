@@ -45,7 +45,7 @@ interface OpenedSession {
 
 describe("HostCallRuntime reaching this machine's other projects (#14024)", () => {
   let runs: Map<string, OpenRun>;
-  let projects: Array<{ id: string; name: string; path: string }>;
+  let projects: Array<{ id: string; name: string; path: string; frontendAttached?: boolean }>;
   let relayCall: ReturnType<typeof vi.fn>;
   let opened: OpenedSession[];
   let answer: (session: OpenedSession) => Promise<CallToolResult>;
@@ -103,7 +103,9 @@ describe("HostCallRuntime reaching this machine's other projects (#14024)", () =
       inLocalView: () => true,
       // No switch, here or in the registry, names this machine.
       controlEnabled: (hostId) => hostId === "studio",
-      listHostProjects: async () => [{ id: "host-p", name: "remote repo", path: "/r" }],
+      listHostProjects: async () => [
+        { id: "host-p", name: "remote repo", path: "/r", frontendAttached: true },
+      ],
       queueNotice: (lane, wake) => queued.push({ lane, wake }),
       askApproval: async (question) => {
         asked.push(question);
@@ -139,13 +141,13 @@ describe("HostCallRuntime reaching this machine's other projects (#14024)", () =
         load: null,
         agentsObserved: null,
         projects: [
-          { projectId: "proj-2", name: "website" },
-          { projectId: "proj-3", name: "api" },
+          { projectId: "proj-2", name: "website", frontendAttached: null },
+          { projectId: "proj-3", name: "api", frontendAttached: null },
         ],
         control: true,
       });
       expect(listed.value.hosts[1]?.projects).toEqual([
-        { projectId: "host-p", name: "remote repo" },
+        { projectId: "host-p", name: "remote repo", frontendAttached: true },
       ]);
     });
 

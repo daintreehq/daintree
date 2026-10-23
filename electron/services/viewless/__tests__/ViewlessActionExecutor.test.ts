@@ -49,6 +49,8 @@ describe("viewless actions", () => {
       "forge.getIssue",
       "forge.listIssues",
       "forge.getCIStatus",
+      "slashCommands.list",
+      "workspace.list",
     ]) {
       expect(hasViewlessImplementation(id)).toBe(true);
     }

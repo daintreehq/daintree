@@ -8,6 +8,11 @@ const WorkspaceSummarySchema = z.object({
   name: z.string(),
   kind: z.enum(["project", "scratch"]),
   hasLiveView: z.boolean(),
+  frontendAttached: z
+    .boolean()
+    .describe(
+      "Whether a frontend is attached now: a view on this machine, or a Shell driving it from another. False means only the tools the host runs itself, such as launching agents and driving terminals, run here."
+    ),
 });
 
 export function registerWorkspaceActions(actions: ActionRegistry): void {
