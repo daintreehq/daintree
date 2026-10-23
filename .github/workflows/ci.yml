@@ -215,6 +215,12 @@ jobs:
       - name: Check preload backdoors stripped
         run: npm run check:preload-backdoors
 
+      # A boundary, not a budget: no threshold to churn. Fails if a picker
+      # guest script, resolver, compiler, parser or map decoder lands in a
+      # chunk the renderer loads before anyone opens the Element Picker.
+      - name: Check Element Picker bundles stay lazy
+        run: npm run check:element-picker-bundles
+
       # Performance/size budgets (renderer bundle, first-render chunk, import
       # counts, compiler perf) are intentionally NOT run in CI during pre-1.0
       # development — premature gating just churns thresholds and blocks rapid
