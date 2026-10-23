@@ -49,9 +49,13 @@ function frameworkOwning(file) {
   return FRAMEWORK_PREFIX.exec(path.basename(file))?.[1];
 }
 
-/** What a page script reaches the network or the style engine with. */
+/**
+ * What a page script reaches the network or the style engine with, matched as
+ * a whole word wherever it appears, so an alias, a computed property or an
+ * optional call is caught along with a plain call.
+ */
 const NETWORK_OR_STYLE =
-  /\bfetch\s*\(|XMLHttpRequest|WebSocket|EventSource|sendBeacon|importScripts|\bimport\s*\(|getComputedStyle/g;
+  /\b(fetch|XMLHttpRequest|WebSocket|EventSource|sendBeacon|importScripts|getComputedStyle)\b|\bimport\s*\(/g;
 
 function extractorEntries() {
   return fs
@@ -178,6 +182,17 @@ describe("CORE_PICKER_GUEST_ASSETS", () => {
     // Not a vacuous pass: the pattern finds the bootstrap's selection-time reads.
     expect(reached).toContain("getComputedStyle");
     expect(reached.filter((found) => found !== "getComputedStyle")).toEqual([]);
+    // Nor a narrow one: the spellings a minifier or an author might use.
+    for (const spelling of [
+      "const send = globalThis.fetch; send(url);",
+      "fetch?.(url);",
+      'window["fetch"](url);',
+      "navigator.sendBeacon(url, body);",
+      "import(url);",
+    ]) {
+      expect(spelling.match(NETWORK_OR_STYLE), spelling).not.toBeNull();
+    }
+    expect("prefetchLinks(); state.fetched = true;".match(NETWORK_OR_STYLE)).toBeNull();
   }, 60_000);
 
   it("builds each from a source that exists, as a guest IIFE", () => {

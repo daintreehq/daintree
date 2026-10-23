@@ -285,9 +285,12 @@ class ForkedHost extends EventEmitter implements HostChild {
   /** Null while running; 0 is a host that left on its own, as retirement does. */
   exitCode: number | null = null;
   stderrTail = "";
+  /** Settles once the process's output has drained, which can be after `exit`. */
+  readonly closed: Promise<void>;
 
   constructor(private readonly child: ChildProcess) {
     super();
+    this.closed = new Promise((resolve) => child.once("close", () => resolve()));
     child.on("spawn", () => this.emit("spawn"));
     child.on("message", (message: unknown) => {
       if (this.readyAt === null && (message as { type?: unknown })?.type === "ready") {
@@ -459,7 +462,12 @@ export async function createPickerHost(
           budget: BUDGET,
         } satisfies ResolveRequest);
       } catch (error) {
-        const tail = forks.at(-1)?.stderrTail.trim();
+        const last = forks.at(-1);
+        // A host that failed to boot may still be writing why.
+        if (last?.exited) {
+          await Promise.race([last.closed, new Promise((resolve) => setTimeout(resolve, 1_000))]);
+        }
+        const tail = last?.stderrTail.trim();
         throw new Error(
           `the host failed the selection: ${error instanceof Error ? error.message : String(error)}` +
             (tail ? `\n${tail}` : ""),
