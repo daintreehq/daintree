@@ -352,8 +352,17 @@ describe("installHostControl (#13493)", () => {
       },
     ]);
 
-    // Nor anything that acts on what it neither launched nor was handed.
-    for (const tool of ["project.runCommand", "project.runCheck", "terminal.moveToWorktree"]) {
+    // Nor anything that acts on what it neither launched nor was handed, nor
+    // any tool nobody placed for it.
+    for (const tool of [
+      "project.runCommand",
+      "project.runCheck",
+      "terminal.moveToWorktree",
+      "devPreview.restart",
+      "devPreview.reloadPreview",
+      "plugin.reloadProject",
+      "acme.unplacedTool",
+    ]) {
       const refused = await runtime.call(
         "global",
         { hostId: "local", projectId: "proj-1", tool, args: { terminalId: "t-user" } },

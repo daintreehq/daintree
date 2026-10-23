@@ -320,6 +320,67 @@ describe("TerminalHandOverDialog", () => {
     });
   });
 
+  it("names the global assistant as the holder, since its PTY is no panel (#14161)", async () => {
+    adoptTerminal.mockResolvedValue({
+      status: "refused",
+      reason: "already-handed",
+      heldByPaneId: "t-global",
+    });
+    render(
+      <TerminalHandOverDialog
+        terminalId="terminal-1"
+        orchestratorPaneId="pane-orch"
+        onClose={vi.fn()}
+      />
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Hand over terminal" }));
+
+    await waitFor(() =>
+      expect(document.body.textContent).toContain(
+        "Already handed to Global Assistant. Choose “Take back from Global Assistant” in the terminal menu first."
+      )
+    );
+    expect(document.body.textContent).not.toContain("another pane");
+  });
+
+  it("says the terminal is out of the global assistant's reach, not that it has a project (#14161)", async () => {
+    adoptTerminal.mockResolvedValue({ status: "refused", reason: "other-project" });
+    render(
+      <TerminalHandOverDialog
+        terminalId="terminal-1"
+        orchestratorPaneId={GLOBAL_ASSISTANT_CANDIDATE}
+        onClose={vi.fn()}
+      />
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Hand over terminal" }));
+
+    await waitFor(() =>
+      expect(document.body.textContent).toContain(
+        "This terminal isn't in this window's project, so the Global Assistant can't reach it."
+      )
+    );
+    expect(document.body.textContent).not.toContain("belongs to another project");
+  });
+
+  it("still says a pane belongs to another project when it does", async () => {
+    adoptTerminal.mockResolvedValue({ status: "refused", reason: "other-project" });
+    render(
+      <TerminalHandOverDialog
+        terminalId="terminal-1"
+        orchestratorPaneId="pane-orch"
+        onClose={vi.fn()}
+      />
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Hand over terminal" }));
+
+    await waitFor(() =>
+      expect(document.body.textContent).toContain("Coordinator belongs to another project.")
+    );
+  });
+
   it("reports a failed call instead of throwing it away", async () => {
     adoptTerminal.mockRejectedValue(new Error("ipc down"));
     render(

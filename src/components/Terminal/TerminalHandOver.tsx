@@ -175,7 +175,8 @@ export function TerminalHandOverMenuItems({
 function refusalMessage(
   reason: TerminalAdoptionRefusal,
   orchestratorName: string,
-  holderName: string | null
+  holderName: string | null,
+  toGlobal: boolean
 ): string {
   switch (reason) {
     case "self":
@@ -189,7 +190,10 @@ function refusalMessage(
     case "terminal-gone":
       return "This terminal isn't running anymore.";
     case "other-project":
-      return `${orchestratorName} belongs to another project.`;
+      // The global assistant has no project; the terminal is what's out of reach.
+      return toGlobal
+        ? "This terminal isn't in this window's project, so the Global Assistant can't reach it."
+        : `${orchestratorName} belongs to another project.`;
     case "launched-by-orchestrator":
       return `${orchestratorName} launched this terminal, so it already drives it.`;
     case "launched-by-another":
@@ -197,7 +201,7 @@ function refusalMessage(
     case "already-handed":
       return holderName
         ? `Already handed to ${holderName}. Choose “Take back from ${holderName}” in the terminal menu first.`
-        : "Already handed to another pane. Choose “Take back control” in the terminal menu first.";
+        : "Already handed over. Choose “Take back control” in the terminal menu first.";
   }
 }
 
@@ -229,9 +233,11 @@ export function TerminalHandOverDialog({
     { reason: TerminalAdoptionRefusal; heldByPaneId?: string } | { reason: "failed" } | null
   >(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const holderName = usePaneName(
-    refusal !== null && "heldByPaneId" in refusal ? refusal.heldByPaneId : undefined
-  );
+  const heldByPaneId =
+    refusal !== null && "heldByPaneId" in refusal ? refusal.heldByPaneId : undefined;
+  const heldByPaneName = usePaneName(heldByPaneId);
+  // A holder no panel stands for is the global assistant's own PTY.
+  const holderName = heldByPaneName ?? (heldByPaneId !== undefined ? GLOBAL_ASSISTANT_NAME : null);
 
   const handleConfirm = useCallback(async () => {
     setIsSubmitting(true);
@@ -283,7 +289,7 @@ export function TerminalHandOverDialog({
           <span className="min-w-0 leading-snug" role="status">
             {refusal.reason === "failed"
               ? "Couldn't hand the terminal over. Close this and try again."
-              : refusalMessage(refusal.reason, orchestratorName, holderName)}
+              : refusalMessage(refusal.reason, orchestratorName, holderName, toGlobal)}
           </span>
         ) : undefined
       }
