@@ -13,4 +13,9 @@ import { solidContribution } from "./solidLocator.js";
 
 declare const api: ExtractorHostApi;
 
-installExtractor(api, { extract: (element) => solidContribution(element) });
+// Selection only: the locator is a string to parse, and hover parses nothing.
+// Declared, so a hover's silence is not taken for finding nothing.
+installExtractor(api, {
+  selectionOnly: true,
+  extract: (element, phase) => (phase === "selection" ? solidContribution(element) : null),
+});

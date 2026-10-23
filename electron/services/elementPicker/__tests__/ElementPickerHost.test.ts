@@ -29,6 +29,7 @@ import { revisionOf, type SourceMapProvider } from "../sourceAccess.js";
 import { createSourceMapSymbolicator, symbolicatedResult } from "../worker/symbolication.js";
 import { COORDINATE_CONVENTIONS } from "../../../../shared/elementPicker/coordinates.js";
 import type { SourceCandidate } from "../../../../shared/elementPicker/source.js";
+import type { SelectionObservation } from "../../../../shared/elementPicker/observation.js";
 import type { ResolutionResult } from "../../../../shared/elementPicker/resolution.js";
 import type { SelectionObservation } from "../../../../shared/elementPicker/observation.js";
 import {
@@ -860,6 +861,54 @@ describe("ElementPickerHost", () => {
     await expect(
       host.resolve(request(id, [observation("el-1", [candidate("c-1", "app/src/App.svelte")])]))
     ).rejects.toMatchObject({ code: "RESOLVER_FAILED" });
+  });
+
+  it("answers a selection the page traced to no source without starting the host", async () => {
+    const { host, children } = harness();
+    const id = await workspace(host);
+    // A component the page could name but not place: a chain, and nothing to read.
+    const untraced: SelectionObservation = {
+      ...observation("el-1", []),
+      componentChain: {
+        nearestId: "vue-1",
+        components: [
+          {
+            componentId: "vue-1",
+            framework: "vue",
+            name: null,
+            environment: "client",
+            rootElementIds: ["el-1"],
+            rootsComplete: true,
+            sourceCandidates: [],
+          },
+        ],
+        truncated: false,
+      },
+    };
+    const asked = request(id, [untraced, observation("el-2", [])]);
+
+    expect(await host.resolve(asked)).toEqual({
+      requestId: asked.requestId,
+      documentEpoch: asked.documentEpoch,
+      outcomes: [
+        { elementId: "el-1", results: [] },
+        { elementId: "el-2", results: [] },
+      ],
+    });
+    expect(children).toHaveLength(0);
+    expect(host.running).toBe(false);
+    // Still a request about an open workspace, checked as any other.
+    const released = await workspace(host);
+    host.releaseWorkspace(released);
+    await expect(host.resolve(request(released, [untraced]))).rejects.toMatchObject({
+      code: "UNKNOWN_WORKSPACE",
+    });
+
+    // The first selection with something to read is what starts it.
+    await host.resolve(
+      request(id, [untraced, observation("el-2", [candidate("c-1", "app/src/App.svelte")])])
+    );
+    expect(children).toHaveLength(1);
   });
 
   it("refuses a request whose observations share an element id, before forking", async () => {

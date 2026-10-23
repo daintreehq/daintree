@@ -1,11 +1,21 @@
 // @vitest-environment jsdom
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import { CapabilitiesSchema } from "../../../../../shared/elementPicker/observation.js";
 import { SourceCandidateSchema } from "../../../../../shared/elementPicker/source.js";
+import {
+  EXTRACTOR_REGISTRY_GLOBAL,
+  channelEvent,
+  type ExtractReply,
+} from "../../guestChannel.js";
 import { parseSourceLoc, solidContribution } from "../extractors/solidLocator.js";
 
+const scope = globalThis as Record<string, unknown>;
+
 afterEach(() => {
+  (scope[EXTRACTOR_REGISTRY_GLOBAL] as { dispose(): void } | undefined)?.dispose();
+  delete scope.api;
+  vi.restoreAllMocks();
   document.body.innerHTML = "";
 });
 
@@ -80,5 +90,51 @@ describe("solidContribution", () => {
 
   it("contributes nothing for a malformed value", () => {
     expect(solidContribution(element("src/App.tsx"))).toBeNull();
+  });
+});
+
+describe("the Solid extractor asset", () => {
+  const CHANNEL = "solid-test";
+
+  /** Evaluates the shipped entry as the host does: with its `api` global in scope. */
+  async function installAsset(): Promise<void> {
+    scope.api = { channel: CHANNEL, framework: "solid", installed: false };
+    vi.resetModules();
+    await import("../extractors/solid.js");
+  }
+
+  function ask(target: Element, id: number, phase: "hover" | "selection"): ExtractReply {
+    let reply: ExtractReply | null = null;
+    const controller = new AbortController();
+    document.addEventListener(
+      channelEvent(CHANNEL, "extracted"),
+      (event) => {
+        reply = JSON.parse((event as CustomEvent<string>).detail) as ExtractReply;
+      },
+      { capture: true, signal: controller.signal }
+    );
+    target.dispatchEvent(
+      new CustomEvent(channelEvent(CHANNEL, "extract"), {
+        detail: JSON.stringify({ id, phase }),
+        composed: true,
+      })
+    );
+    controller.abort();
+    if (reply === null) throw new Error("the registry did not answer");
+    return reply;
+  }
+
+  it("reads and parses the locator on a selection, never on a hover", async () => {
+    await installAsset();
+    const stamped = element("src/App.tsx:9:6");
+    const reads = vi.spyOn(Element.prototype, "getAttribute");
+
+    // Not a look at all: a hover says neither what Solid found nor that it found nothing.
+    expect(ask(stamped, 1, "hover")).toEqual({ id: 1, contributions: [], empty: [] });
+    expect(reads.mock.calls.filter(([name]) => name === "data-source-loc")).toEqual([]);
+
+    const selection = ask(stamped, 2, "selection");
+    expect(selection.contributions.map((entry) => entry.framework)).toEqual(["solid"]);
+    expect(reads.mock.calls.filter(([name]) => name === "data-source-loc")).not.toEqual([]);
   });
 });
