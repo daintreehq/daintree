@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import type {
+  ProjectApplicationState,
   ProjectPluginInfo,
   ProjectPluginTrustDecision,
   ProjectPluginTrustPromptEvent,
@@ -41,6 +42,12 @@ export interface ProjectPluginStoreState {
   projectId: string | null;
   plugins: ProjectPluginInfo[];
   trust: ProjectPluginTrustState | null;
+  /**
+   * The project's application (#14097) as main resolved it, or `null` when no
+   * plugin declares one or no snapshot has arrived yet. Anything but an
+   * `active` state means the standard workspace.
+   */
+  application: ProjectApplicationState | null;
   /** The pending consent prompt. Written only by {@link ProjectPluginActions.openPrompt}. */
   prompt: ProjectPluginTrustPromptEvent | null;
   /**
@@ -140,6 +147,7 @@ const INITIAL: ProjectPluginStoreState = {
   projectId: null,
   plugins: [],
   trust: null,
+  application: null,
   prompt: null,
   dismissedPromptProjectId: null,
   deciding: null,
@@ -179,7 +187,13 @@ export const useProjectPluginStore = create<ProjectPluginStoreState & ProjectPlu
         ...(foreign(state.prompt?.projectId) ? { prompt: null } : {}),
         ...(foreign(state.dismissedPromptProjectId) ? { dismissedPromptProjectId: null } : {}),
         ...(foreign(state.projectId)
-          ? { projectId: null, plugins: [], trust: null, visibility: EMPTY_VISIBILITY }
+          ? {
+              projectId: null,
+              plugins: [],
+              trust: null,
+              application: null,
+              visibility: EMPTY_VISIBILITY,
+            }
           : {}),
       });
     },
@@ -191,6 +205,7 @@ export const useProjectPluginStore = create<ProjectPluginStoreState & ProjectPlu
         projectId: event.projectId,
         plugins: event.plugins,
         trust: event.trust,
+        application: event.application ?? null,
         // A snapshot never OPENS the gate — that would make the dialog a
         // function of inventory rather than of consent. It does close one main
         // has since recorded an answer for: the preload buffers the prompt for

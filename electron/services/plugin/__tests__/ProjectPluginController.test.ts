@@ -87,6 +87,8 @@ function makeHarness(): Harness {
       events.push({ projectId, name, payload });
     }),
     isProjectClosed: vi.fn(() => false),
+    isEngineIncompatible: vi.fn((_range: string) => false),
+    getProjectHomeHolder: vi.fn((_projectId: string): string | null => null),
   };
 
   return {
@@ -1425,5 +1427,240 @@ describe("per-plugin mute", () => {
     await h.controller.setMuted(PROJECT_A, "acme.dashboard", false);
 
     expect(h.deps.writeTrust.mock.calls.length).toBe(writes);
+  });
+});
+
+describe("project application (#14097)", () => {
+  const APP = { name: "Ledger", destination: "home" as const };
+
+  function withApplication(name: string): DiscoveredProjectPlugin {
+    const d = discovered(name);
+    return {
+      ...d,
+      manifest: {
+        ...d.manifest!,
+        engines: { daintree: ">=0.1.0" },
+        application: APP,
+        contributes: {
+          ...d.manifest!.contributes,
+          panels: [{ id: "home", name: "Home", iconId: "puzzle", color: "#ffffff" }],
+          views: [{ id: "home", componentPath: "dist/home.js", location: "panel" }],
+          surfaces: { projectHome: { viewId: "home" } },
+        },
+      } as unknown as Readonly<PluginManifest>,
+    };
+  }
+
+  function enable(ids: string[], muted: string[] = []): void {
+    h.trust.set(PROJECT_A, {
+      decision: "enabled",
+      decidedAt: 0,
+      knownPluginIds: ids,
+      stagedPluginIds: [],
+      mutedPluginIds: muted,
+    });
+  }
+
+  function lastApplication(): unknown {
+    const changed = h.events.filter((e) => e.name === "plugin:project-plugins-changed").at(-1);
+    return (changed!.payload as { application: unknown }).application;
+  }
+
+  it("publishes null when no plugin declares an application", async () => {
+    enable(["acme.dashboard"]);
+    h.setDiscovery(ROOT_A, [discovered("acme.dashboard")]);
+    await h.controller.onProjectOpened(PROJECT_A, ROOT_A);
+    expect(lastApplication()).toBeNull();
+  });
+
+  it("publishes the loaded owner's application as active", async () => {
+    enable(["acme.ledger"]);
+    h.setDiscovery(ROOT_A, [withApplication("acme.ledger")]);
+    await h.controller.onProjectOpened(PROJECT_A, ROOT_A);
+    expect(lastApplication()).toEqual({
+      status: "active",
+      ownerId: "acme.ledger",
+      instanceId: makeProjectPluginInstanceKey(PROJECT_A, "acme.ledger"),
+      application: APP,
+      fallback: null,
+    });
+  });
+
+  it("falls back while the project's plugins are untrusted", async () => {
+    h.setDiscovery(ROOT_A, [withApplication("acme.ledger")]);
+    await h.controller.onProjectOpened(PROJECT_A, ROOT_A);
+    expect(h.controller.getProjectApplication(PROJECT_A)).toMatchObject({
+      status: "disabled",
+      reason: "untrusted",
+      fallback: "standard-workspace",
+    });
+  });
+
+  it("falls back when the owner is muted, and returns when it is switched back on", async () => {
+    enable(["acme.ledger"], ["acme.ledger"]);
+    h.setDiscovery(ROOT_A, [withApplication("acme.ledger")]);
+    await h.controller.onProjectOpened(PROJECT_A, ROOT_A);
+    expect(lastApplication()).toMatchObject({ status: "disabled", reason: "muted" });
+
+    await h.controller.setMuted(PROJECT_A, "acme.ledger", false);
+    expect(lastApplication()).toMatchObject({ status: "active" });
+  });
+
+  it("is unavailable when the owner's load is refused", async () => {
+    enable(["acme.ledger"]);
+    h.deps.loadProjectPlugin.mockResolvedValue(false);
+    h.setDiscovery(ROOT_A, [withApplication("acme.ledger")]);
+    await h.controller.onProjectOpened(PROJECT_A, ROOT_A);
+    expect(lastApplication()).toMatchObject({
+      status: "unavailable",
+      reason: "load-failed",
+      fallback: "standard-workspace",
+    });
+  });
+
+  it("does not load an owner outside its engine range, and reports it unavailable", async () => {
+    enable(["acme.ledger", "acme.dashboard"]);
+    h.deps.isEngineIncompatible.mockReturnValue(true);
+    const dashboard = discovered("acme.dashboard");
+    h.setDiscovery(ROOT_A, [
+      withApplication("acme.ledger"),
+      { ...dashboard, manifest: { ...dashboard.manifest!, engines: { daintree: ">=99.0.0" } } },
+    ]);
+    await h.controller.onProjectOpened(PROJECT_A, ROOT_A);
+    expect(h.deps.isEngineIncompatible).toHaveBeenCalledWith(">=0.1.0");
+    // The range stays advisory for a plugin that declares no application.
+    expect(h.controller.loadedManifestIds(PROJECT_A)).toEqual(["acme.dashboard"]);
+    expect(lastApplication()).toMatchObject({
+      status: "unavailable",
+      reason: "engine-incompatible",
+    });
+  });
+
+  it("tells the project's views the application is loading while its owner loads", async () => {
+    enable(["acme.ledger"]);
+    let finish: (ok: boolean) => void = () => {};
+    h.deps.loadProjectPlugin.mockImplementation(
+      () => new Promise<boolean>((resolve) => (finish = resolve))
+    );
+    h.setDiscovery(ROOT_A, [withApplication("acme.ledger")]);
+    const opening = h.controller.onProjectOpened(PROJECT_A, ROOT_A);
+    await vi.waitFor(() => expect(h.deps.loadProjectPlugin).toHaveBeenCalled());
+    expect(lastApplication()).toMatchObject({ status: "loading", fallback: "standard-workspace" });
+
+    finish(true);
+    await opening;
+    expect(lastApplication()).toMatchObject({ status: "active" });
+  });
+
+  it("does not load an incompatible owner when it is turned on from staging", async () => {
+    h.trust.set(PROJECT_A, {
+      decision: "enabled",
+      decidedAt: 0,
+      knownPluginIds: ["acme.ledger"],
+      stagedPluginIds: ["acme.ledger"],
+      mutedPluginIds: [],
+    });
+    h.deps.isEngineIncompatible.mockReturnValue(true);
+    h.setDiscovery(ROOT_A, [withApplication("acme.ledger")]);
+    await h.controller.onProjectOpened(PROJECT_A, ROOT_A);
+    await h.controller.activateStaged(PROJECT_A, "acme.ledger");
+    expect(h.deps.loadProjectPlugin).not.toHaveBeenCalled();
+    expect(lastApplication()).toMatchObject({
+      status: "unavailable",
+      reason: "engine-incompatible",
+    });
+  });
+
+  it("takes down a loaded owner once its range no longer admits this Daintree", async () => {
+    enable(["acme.ledger"]);
+    h.setDiscovery(ROOT_A, [withApplication("acme.ledger")]);
+    await h.controller.onProjectOpened(PROJECT_A, ROOT_A);
+    expect(h.controller.loadedManifestIds(PROJECT_A)).toEqual(["acme.ledger"]);
+
+    h.deps.isEngineIncompatible.mockReturnValue(true);
+    await h.controller.onProjectOpened(PROJECT_A, ROOT_A);
+    expect(h.deps.unloadProjectPlugin).toHaveBeenCalledWith(
+      makeProjectPluginInstanceKey(PROJECT_A, "acme.ledger")
+    );
+    expect(h.controller.loadedManifestIds(PROJECT_A)).toEqual([]);
+  });
+
+  it("reports a retried load as loading, not as the failure it is retrying", async () => {
+    enable(["acme.ledger"]);
+    h.deps.loadProjectPlugin.mockResolvedValueOnce(false);
+    h.setDiscovery(ROOT_A, [withApplication("acme.ledger")]);
+    await h.controller.onProjectOpened(PROJECT_A, ROOT_A);
+    expect(lastApplication()).toMatchObject({ reason: "load-failed" });
+
+    let finish: (ok: boolean) => void = () => {};
+    h.deps.loadProjectPlugin.mockImplementationOnce(
+      () => new Promise<boolean>((resolve) => (finish = resolve))
+    );
+    const retry = h.controller.onProjectOpened(PROJECT_A, ROOT_A);
+    await vi.waitFor(() => expect(h.deps.loadProjectPlugin).toHaveBeenCalledTimes(2));
+    expect(lastApplication()).toMatchObject({ status: "loading" });
+    finish(true);
+    await retry;
+    expect(lastApplication()).toMatchObject({ status: "active" });
+  });
+
+  it("is disabled while the owner waits to be turned on, and active once it is", async () => {
+    h.trust.set(PROJECT_A, {
+      decision: "enabled",
+      decidedAt: 0,
+      knownPluginIds: ["acme.ledger"],
+      stagedPluginIds: ["acme.ledger"],
+      mutedPluginIds: [],
+    });
+    h.setDiscovery(ROOT_A, [withApplication("acme.ledger")]);
+    await h.controller.onProjectOpened(PROJECT_A, ROOT_A);
+    expect(lastApplication()).toMatchObject({ status: "disabled", reason: "staged" });
+
+    await h.controller.activateStaged(PROJECT_A, "acme.ledger");
+    expect(lastApplication()).toMatchObject({ status: "active" });
+  });
+
+  it("treats a load that throws as failed, and clears the failure when a reload succeeds", async () => {
+    enable(["acme.ledger"]);
+    h.deps.loadProjectPlugin.mockRejectedValueOnce(new Error("worker failed to fork"));
+    h.setDiscovery(ROOT_A, [withApplication("acme.ledger")]);
+    await h.controller.onProjectOpened(PROJECT_A, ROOT_A);
+    expect(lastApplication()).toMatchObject({ status: "unavailable", reason: "load-failed" });
+
+    await h.controller.onProjectOpened(PROJECT_A, ROOT_A);
+    expect(lastApplication()).toMatchObject({ status: "active" });
+  });
+
+  it("falls back once trust is revoked", async () => {
+    enable(["acme.ledger"]);
+    h.setDiscovery(ROOT_A, [withApplication("acme.ledger")]);
+    await h.controller.onProjectOpened(PROJECT_A, ROOT_A);
+    await h.controller.setTrust(PROJECT_A, "disabled");
+    const application = lastApplication() as Record<string, unknown>;
+    expect(application).toMatchObject({ status: "disabled", reason: "untrusted" });
+    expect(application.instanceId).toBeUndefined();
+  });
+
+  it("is replaced when another plugin holds the Home it lands on", async () => {
+    enable(["acme.ledger"]);
+    h.deps.getProjectHomeHolder.mockReturnValue("project:other");
+    h.setDiscovery(ROOT_A, [withApplication("acme.ledger")]);
+    await h.controller.onProjectOpened(PROJECT_A, ROOT_A);
+    expect(lastApplication()).toMatchObject({ status: "replaced", heldBy: "project:other" });
+  });
+
+  it("applies neither application when two plugins declare one", async () => {
+    enable(["acme.ledger", "acme.books"]);
+    h.setDiscovery(ROOT_A, [withApplication("acme.ledger"), withApplication("acme.books")]);
+    await h.controller.onProjectOpened(PROJECT_A, ROOT_A);
+    expect(lastApplication()).toMatchObject({
+      status: "unavailable",
+      reason: "owner-ambiguous",
+      candidates: ["acme.books", "acme.ledger"],
+    });
+  });
+
+  it("knows nothing about a project it has not opened", () => {
+    expect(h.controller.getProjectApplication(PROJECT_B)).toBeNull();
   });
 });

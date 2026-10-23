@@ -261,6 +261,48 @@ This is a guardrail against accidental promotion, not a security control — the
 
 Declaring `"scope": "project"` also changes what the manifest may contribute. `contributes.surfaces` and `"project"` [databases](./contribution-points.md#databases--shipped) become available, and six contribution groups become unavailable — `menuItems`, `agents`, `processTools`, `mcpServers`, `themes` and `forgeProviders`, each rejected with an error naming the structural reason it cannot yet be narrowed to one project. `previewTools`, `guestAdapters` and a slot-backed `fileEditors` entry are refused too, as they are for every plugin that is not built in; a view-backed file editor is available, and may also match project-relative `paths`. `agentMcp` stays available, because its credentials are bound to one project. See [Project-local plugins](./project-local.md) and the per-point status in [Contribution points](./contribution-points.md).
 
+### `application`
+
+Names a project plugin as its project's application and points at the parts of it the manifest already contributes. Available to `"scope": "project"` plugins only (`application_project_scope_only`), and it requires `engines.daintree` (`application_engine_required`) so the host can check the running version before putting the application in force. It implements nothing: every field is either the application's identity or the bare id of a contribution the same manifest declares.
+
+```json
+"application": {
+  "name": "Budget",
+  "iconId": "wallet",
+  "destination": "home",
+  "sidebarViewId": "accounts",
+  "settingsViewId": "preferences",
+  "welcomeTour": { "id": "welcome", "version": 1 },
+  "firstWorkflow": "record-transaction",
+  "requiredTools": ["ledger"],
+  "presentation": { "forgeStats": "hidden", "copyTree": "demoted" }
+}
+```
+
+| Field | Required | Must name |
+| --- | --- | --- |
+| `name` | yes | The application's name, 1-64 characters. |
+| `iconId` | no | The same vocabulary as a sidebar view's `iconId`. |
+| `destination` | yes | `"home"` or `"grid"`. `"home"` needs `contributes.surfaces.projectHome` (`application_home_unclaimed`). |
+| `sidebarViewId` | no | A `contributes.views` entry with `location: "sidebar"` (`application_sidebar_view_unknown`). |
+| `settingsViewId` | no | A `contributes.views` entry with `location: "settings"`, the application's settings home (`application_settings_view_unknown`). |
+| `welcomeTour` | no | `id`: a `contributes.tours` entry with no `panelKind` (`application_tour_unknown`, `application_tour_panel_scoped`). `version`: a positive integer, raised when the tour is worth offering again. |
+| `firstWorkflow` | no | The bare id of a `contributes.commands` entry of kind `"command"` (`application_command_unknown`, `application_command_query`). |
+| `requiredTools` | no | `contributes.agentMcp` endpoint ids (`application_tool_unknown`), at most as many as a plugin may declare. Declaring one grants no access. |
+| `presentation` | no | Presentation features and levels the host offers (`application_presentation_unknown`, `application_presentation_level`). |
+
+The object is strict, so nothing undeclared rides along, and it holds no credentials, settings values or customer data.
+
+At most one plugin in a project declares an application. Cooperating plugins contribute their own parts and are listed in [`worksWith`](#workswith); a second declaration makes the application unavailable rather than picking a winner. An owner whose `engines.daintree` range excludes the running Daintree is not loaded at all, unlike a plugin without an application, for which the range only warns. The host resolves the application each time the project's plugins change and sends it to the project's views with their plugin inventory, as one of:
+
+- `loading` — the owner is trusted and has not finished loading.
+- `active` — the owner is loaded and the application is in force.
+- `disabled` — the project's plugins are not trusted, or the owner is muted or waiting to be turned on.
+- `unavailable` — the owner failed to load, its `engines.daintree` range excludes the running Daintree, or a second plugin also declares an application.
+- `replaced` — the owner is loaded, but another plugin holds the project Home it opens on.
+
+Anything but `active` means the standard workspace. The descriptor and its state are a contract for the host's own application features to build on: they change nothing the workspace draws today, where the contributions it names behave exactly as they do without it, and resolving the application writes nothing. Its defaults will never outrank the user: an answer the user gave about Home, a surface or the project's presentation profile stands.
+
 ### `remote`
 
 `"supported"` (the default when omitted) or `"unsupported"`. Plugin main code always runs on the machine the project lives on; this field is about windows attached to that machine from another one.

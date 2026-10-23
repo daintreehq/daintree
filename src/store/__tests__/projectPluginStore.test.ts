@@ -78,6 +78,28 @@ afterEach(() => {
 });
 
 describe("projectPluginStore", () => {
+  it("mirrors the project's application, and drops it when the view moves to another project", () => {
+    const application = {
+      status: "disabled" as const,
+      ownerId: "acme.ledger",
+      application: { name: "Ledger", destination: "home" as const },
+      reason: "muted" as const,
+      fallback: "standard-workspace" as const,
+    };
+    const store = useProjectPluginStore.getState();
+    store.setViewProjectId(PROJECT);
+    store.applySnapshot({ projectId: PROJECT, plugins: [], trust: trust(), application });
+    expect(useProjectPluginStore.getState().application).toEqual(application);
+
+    // A main that predates the field sends no application: no application.
+    store.applySnapshot({ projectId: PROJECT, plugins: [], trust: trust() });
+    expect(useProjectPluginStore.getState().application).toBeNull();
+
+    store.applySnapshot({ projectId: PROJECT, plugins: [], trust: trust(), application });
+    useProjectPluginStore.getState().setViewProjectId(OTHER);
+    expect(useProjectPluginStore.getState().application).toBeNull();
+  });
+
   it("raises the gate only from the trust prompt, never from an inventory snapshot", () => {
     const store = useProjectPluginStore.getState();
     store.applySnapshot({

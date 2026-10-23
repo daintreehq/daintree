@@ -220,6 +220,10 @@ Rules:
 - **Recorded on this machine, never in the repository.** Changing `defaultLayout` later doesn't seed the project again. If two project plugins each declare one, the lower plugin id's is used.
 - The id must name a declared layout (`surface_default_layout_unknown`).
 
+## Application
+
+A project plugin can declare itself the project's application with the top-level [`application`](./manifest.md#application) block: a name and icon, whether it opens on its Home or the grid, and the ids of the sidebar view, settings view, welcome tour, first workflow command and agent endpoints it already contributes. Every reference is checked against the same manifest before the plugin loads. Only one plugin per project may declare one, and while it is loading, switched off, failing or out-ranked for Home, its state says so and names the standard workspace as the fallback.
+
 ## Binding — which project a host call reaches
 
 A project plugin's host object is bound to its project at construction, and every closure reads that binding rather than the focused project view. `host.dispatch` and `host.actions.*` target the bound project's renderer; `showQuickPick` / `showInputBox` / `showConfirm` are delivered into that project's view so the user finds the prompt when they switch to it; `getWorktrees` / `getActiveWorktree` / `getWorktreeStatus` and the worktree change events see only that project's worktrees; `sendToActiveAgent`, `sendToAgent` and `agents.list` reach only agents belonging to it; `host.db` and `host.settings.open` resolve against it; toasts and renderer pushes go to its views.

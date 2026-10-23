@@ -1437,6 +1437,94 @@ export interface SurfaceContributions {
   defaultLayout?: string;
 }
 
+/** Where a project application opens: its claimed Home, or the host's grid. */
+export const PLUGIN_APPLICATION_DESTINATIONS = ["home", "grid"] as const;
+
+export type PluginApplicationDestination = (typeof PLUGIN_APPLICATION_DESTINATIONS)[number];
+
+/** The welcome tour a project application starts from, and which revision of it. */
+export interface PluginApplicationTourRef {
+  /** A `contributes.tours[].id` of this plugin, not scoped to a panel kind. */
+  id: string;
+  /**
+   * The tour's welcome revision, a positive integer. Raised when the tour
+   * changes enough to be worth offering again; the tour itself is unchanged.
+   */
+  version: number;
+}
+
+/**
+ * The top-level `application` block of a project plugin's manifest (#14097).
+ *
+ * Declarative only: it names the application and points at contributions the
+ * same manifest already declares, by their bare ids, and implements none of
+ * them. The owner is the plugin whose manifest carries it. Cooperating plugins
+ * contribute their own parts and are disclosed through `worksWith`; at most one
+ * plugin in a project may declare an application, and a second makes both
+ * unavailable rather than picking a winner.
+ *
+ * Defaults it names (destination, presentation levels) never outrank an
+ * answer the user gave, and while the application is anything but active the
+ * project shows the standard workspace. See {@link ProjectApplicationState}.
+ */
+export interface PluginApplicationDescriptor {
+  /** The application's name, as the host shows it. */
+  name: string;
+  /** Same vocabulary as a sidebar view's `iconId`. */
+  iconId?: string;
+  /** `"home"` requires `contributes.surfaces.projectHome`. */
+  destination: PluginApplicationDestination;
+  /** A `contributes.views[].id` with `location: "sidebar"`. */
+  sidebarViewId?: string;
+  /** A `contributes.views[].id` with `location: "settings"`: the application's settings home. */
+  settingsViewId?: string;
+  welcomeTour?: PluginApplicationTourRef;
+  /** The bare id of a `contributes.commands` entry of kind `"command"`. */
+  firstWorkflow?: string;
+  /** `contributes.agentMcp[].id` endpoints the application's agents need. */
+  requiredTools?: string[];
+  /** Suggested presentation levels, in the host's closed vocabulary. */
+  presentation?: Partial<Record<string, "shown" | "demoted" | "hidden">>;
+}
+
+/**
+ * Where a project's application stands (#14097).
+ *
+ * - `loading` — the owner is trusted and on its way in.
+ * - `active` — the owner is loaded and the application is in force.
+ * - `disabled` — the project's plugins are not trusted, or the owner is muted
+ *   or waiting to be turned on.
+ * - `unavailable` — the owner failed to load, needs another Daintree version,
+ *   or a second plugin also declares an application.
+ * - `replaced` — the owner is loaded, but another plugin holds the project
+ *   Home it lands on.
+ *
+ * Anything but `active` means the standard workspace.
+ */
+export type ProjectApplicationStatus =
+  "loading" | "active" | "disabled" | "unavailable" | "replaced";
+
+export type ProjectApplicationReason =
+  "untrusted" | "muted" | "staged" | "load-failed" | "engine-incompatible" | "owner-ambiguous";
+
+/** One project's application, resolved. `null` where no plugin declares one. */
+export interface ProjectApplicationState {
+  status: ProjectApplicationStatus;
+  /** Manifest id of the declaring plugin; the lowest one when ownership is ambiguous. */
+  ownerId: string;
+  /** The owner's instance key, once it is loaded. */
+  instanceId?: string;
+  application: PluginApplicationDescriptor;
+  /** Why a non-active application is not in force. */
+  reason?: ProjectApplicationReason;
+  /** For `owner-ambiguous`, every declaring manifest id, sorted. */
+  candidates?: string[];
+  /** For `replaced`, the INSTANCE key of the plugin holding the project Home. */
+  heldBy?: string;
+  /** What the project shows instead: always the standard workspace unless active. */
+  fallback: "standard-workspace" | null;
+}
+
 /**
  * A resolved surface claim, as the renderer receives it.
  *
@@ -3042,6 +3130,12 @@ export interface PluginManifest {
    * decision is the project folder, not this field.
    */
   scope?: "project";
+  /**
+   * Names this project plugin as the project's application and points at the
+   * parts of it the plugin already contributes. `scope: "project"` only. See
+   * {@link PluginApplicationDescriptor}.
+   */
+  application?: PluginApplicationDescriptor;
   /**
    * `"unsupported"` for a plugin that only works on the machine the person is
    * sitting at — a view that assumes the renderer's `localhost` is the
@@ -8655,6 +8749,8 @@ export interface ProjectPluginsChangedEvent {
   projectId: string;
   plugins: ProjectPluginInfo[];
   trust: ProjectPluginTrustState;
+  /** The project's application, or `null` when none of its plugins declares one. */
+  application?: ProjectApplicationState | null;
 }
 
 /**

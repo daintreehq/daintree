@@ -107,6 +107,8 @@ function makeHarness(root: string): Harness {
     },
     emitToProject: vi.fn(),
     isProjectClosed: () => false,
+    isEngineIncompatible: () => false,
+    getProjectHomeHolder: () => null,
   };
 
   const controller = new ProjectPluginController(deps);

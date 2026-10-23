@@ -7329,6 +7329,9 @@ export class PluginService {
           return false;
         }
       },
+      isEngineIncompatible: (range) => checkPluginEngineRange(this.appVersion, range) !== null,
+      getProjectHomeHolder: (projectId) =>
+        getProjectSurfaceSlots(projectId).projectHome?.defaultOptionId ?? null,
     };
   }
 
