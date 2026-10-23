@@ -2023,6 +2023,35 @@ interface PluginWorktreeSetupStepContext {
  */
 type PluginWorktreeSetupStepHandler = (context: PluginWorktreeSetupStepContext) => void | Promise<void>;
 /**
+ * One note a plugin adds to a worktree's delete confirmation (#13805). Plain
+ * text, shown attributed to the plugin. Annotation only: a note never cancels
+ * the delete, changes its confirmation tier or alters the typed confirmation.
+ */
+interface PluginWorktreeDeleteNote {
+    severity: "warning" | "info";
+    /** One line. Line breaks become spaces; control and bidi characters are removed. */
+    text: string;
+}
+/** Passed to {@link PluginActivationApi.registerWorktreeDeleteNotesProvider} alongside the impl. */
+interface WorktreeDeleteNotesProviderDescriptor {
+    id: string;
+}
+/**
+ * Runtime contract bound through
+ * {@link PluginActivationApi.registerWorktreeDeleteNotesProvider}. The host
+ * calls {@link provideNotes} each time a delete of a worktree in the plugin's
+ * reach is confirmed, and shows what it returns in that confirmation.
+ */
+interface WorktreeDeleteNotesProviderImpl {
+    /**
+     * Notes for the worktree about to be deleted, at most
+     * {@link PLUGIN_WORKTREE_DELETE_NOTES_MAX}. Return `[]` when there is
+     * nothing to say. An answer that misses the host's deadline, throws, or
+     * breaks the note rules is shown as "<plugin> didn't answer".
+     */
+    provideNotes(worktree: PluginWorktreeSnapshot): Promise<readonly PluginWorktreeDeleteNote[]> | readonly PluginWorktreeDeleteNote[];
+}
+/**
  * A short status a plugin shows on one terminal's header via
  * {@link PluginHostApi.setTerminalStatus} (#13802): the same shape as a
  * worktree card's, drawn as a colourless chip named after the plugin.
@@ -4730,6 +4759,28 @@ interface PluginActivationApi {
      */
     registerContextProvider(descriptor: ContextProviderDescriptor, impl: ContextProviderImpl): Promise<() => void>;
     /**
+     * Bind the check declared in `contributes.worktreeDeleteNotes` (#13805). The
+     * host calls `impl.provideNotes` when the delete of a worktree in this
+     * plugin's reach is confirmed — the delete dialog, bulk remove, an agent's
+     * request over MCP, and the path used when no window is open — and shows
+     * the notes attributed to the plugin. A plugin that isn't running is
+     * activated for the check, so it need not stay loaded to answer.
+     *
+     * The answer has 3 seconds, activation included. A late, failed or invalid
+     * answer is shown as "<plugin> didn't answer"; notes never change the
+     * delete, its confirmation tier or its typed confirmation. The user can turn
+     * a plugin's notes off in its permissions, and the plugin is then not asked.
+     *
+     * The descriptor's `id` must match the manifest entry. Returns a disposer
+     * that unbinds the impl; the binding also goes when the plugin unloads.
+     * Must be called during `activate()`. Calling it again with the same id
+     * replaces the binding, and the older disposer becomes inert.
+     *
+     * @throws {Error} If called after activation resolves or times out, or with
+     *   an id that `contributes.worktreeDeleteNotes` does not declare.
+     */
+    registerWorktreeDeleteNotesProvider(descriptor: WorktreeDeleteNotesProviderDescriptor, impl: WorktreeDeleteNotesProviderImpl): Promise<() => void>;
+    /**
      * Subscribe to active-worktree changes. The callback fires with the new
      * active snapshot (or `null` when none is active). Returns a disposer;
      * calling it more than once is a no-op. All subscriptions are automatically
@@ -5994,6 +6045,10 @@ interface RegisteredWorktreeSetupStepRecord {
     stepId: string;
     handler: PluginWorktreeSetupStepHandler;
 }
+interface RegisteredWorktreeDeleteNotesProviderRecord {
+    descriptor: WorktreeDeleteNotesProviderDescriptor;
+    impl: WorktreeDeleteNotesProviderImpl;
+}
 /**
  * A roster bound through `host.mcp.registerTools`. `tools` is the plugin's own
  * roster, `execute` functions included, so a test can call a tool directly with
@@ -6117,6 +6172,8 @@ interface MockHostState {
     /** Live `host.registerSearchProvider` bindings, one per provider id. */
     readonly registeredSearchProviders: ReadonlyArray<RegisteredSearchProviderRecord>;
     readonly registeredContextProviders: ReadonlyArray<RegisteredContextProviderRecord>;
+    /** Live `host.registerWorktreeDeleteNotesProvider` bindings, one per id. */
+    readonly registeredWorktreeDeleteNotesProviders: ReadonlyArray<RegisteredWorktreeDeleteNotesProviderRecord>;
     /** Live `host.mcp.registerTools` rosters, one per endpoint id. */
     readonly registeredMcpTools: ReadonlyArray<RegisteredMcpToolsRecord>;
     readonly invalidationCalls: ReadonlyArray<InvalidationRecord>;
