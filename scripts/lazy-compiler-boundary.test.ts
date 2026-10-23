@@ -9,7 +9,7 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const MAIN_ENTRY = "plugins/builtin/sveltekit-builder/main/index.ts";
 
 /**
- * The compiler is roughly 862 KiB minified and the source model exists to keep
+ * The parser is roughly 485 KiB minified and the source model exists to keep
  * it behind an `await import()`. Activation has a five-second window, so a
  * single stray top-level import on this entry's graph would cost that window
  * and slow every launch that loads the plugin — with no symptom but the delay.

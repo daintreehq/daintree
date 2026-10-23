@@ -186,7 +186,7 @@ export function scanSyncViolations(files, root, readFile) {
  * the module count says.
  *
  * This is an invariant, not a ratchet: there is no baseline to refresh and no
- * `--update` that clears it. The Svelte compiler is roughly 862 KiB minified
+ * `--update` that clears it. The Svelte parser is roughly 485 KiB minified
  * and the source model exists to keep it behind an `await import()`; a barrel
  * re-export, a moved type-only import that stops being type-only, or a
  * convenience helper added to the wrong file would pull both onto the startup
