@@ -5214,17 +5214,22 @@ describe("HelpSessionService", () => {
       );
     });
 
-    it("rejects a project id that can't key a checkpoint bucket before displacing the prior lane", async () => {
+    it("rejects a project id that can't key a checkpoint bucket before touching the session folders", async () => {
+      const sessionsRoot = path.join(userData, "help-sessions");
       const first = await service.provisionSession(provisionInput());
       if (!first) throw new Error("expected result");
+      const before = await fs.readdir(sessionsRoot);
 
       await expect(
-        service.provisionSession({ ...provisionInput(), projectId: "../escape" })
+        service.provisionSession({
+          ...provisionInput(),
+          projectId: "../escape",
+          projectPath: "/tmp/other-project",
+        })
       ).rejects.toThrow(/run-checkpoint/);
+
+      expect(await fs.readdir(sessionsRoot)).toEqual(before);
       expect(service.getAssistantScratchEnv(first.token)).not.toBeNull();
-      expect(
-        await fs.readdir(path.join(userData, "assistant-run-checkpoints")).catch(() => [])
-      ).not.toContain("escape");
     });
 
     it("fails the provision, and recovers on retry, when the checkpoint bucket can't be created", async () => {

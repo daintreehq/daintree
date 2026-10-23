@@ -521,6 +521,18 @@ describe("cancellation and discard", () => {
     }
   });
 
+  it("creates nothing outside the store when the bucket is a symlink", async () => {
+    const outside = await fs.mkdtemp(path.join(os.tmpdir(), "assistant-run-checkpoint-out-"));
+    try {
+      await fs.mkdir(svc.getRunCheckpointRoot(), { recursive: true });
+      await fs.symlink(outside, svc.getRunCheckpointBucket(PROJECT), "dir");
+      await expect(svc.discardRun(PROJECT, "new-run")).rejects.toThrow();
+      expect(await fs.readdir(outside)).toEqual([]);
+    } finally {
+      await fs.rm(outside, { recursive: true, force: true });
+    }
+  });
+
   it("leaves payloads in place when the tombstone cannot be written", async () => {
     const w = await startRun(PROJECT, "run-1", "w1");
     const runDir = path.dirname(path.dirname(w));

@@ -232,10 +232,15 @@ export async function discardRun(projectKey: string, runId: string): Promise<voi
   const bucket = getRunCheckpointBucket(projectKey);
   const runDir = path.join(bucket, runId);
   await fs.mkdir(bucket, { recursive: true, mode: 0o700 });
+  // Check the bucket before creating anything in it: mkdir through a symlink
+  // would create the run directory outside the store.
+  if (!(await isRealDirectory(bucket))) {
+    throw new Error("Run-checkpoint path is not a plain directory");
+  }
   await fs.mkdir(runDir, { mode: 0o700 }).catch((err) => {
     if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
   });
-  if (!(await isRealDirectory(bucket)) || !(await isRealDirectory(runDir))) {
+  if (!(await isRealDirectory(runDir))) {
     throw new Error("Run-checkpoint path is not a plain directory");
   }
   await resilientAtomicWriteFile(
