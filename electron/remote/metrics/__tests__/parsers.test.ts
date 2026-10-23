@@ -116,6 +116,8 @@ describe("cgroup v2 readers", () => {
     expect(parseCpuSetCount("")).toBeNull();
     expect(parseCpuSetCount("3-1")).toBeNull();
     expect(parseCpuSetCount("a-b")).toBeNull();
+    expect(parseCpuSetCount("9007199254740992")).toBeNull();
+    expect(parseCpuSetCount("0-99999999999999999999")).toBeNull();
     expect(parseCpuSetCount(null)).toBeNull();
   });
 
@@ -179,6 +181,13 @@ describe("thermal zones", () => {
       label: "acpitz (thermal_zone0)",
     });
     expect(pickThermalZone([{ zone: "thermal_zone0", type: "x", celsius: null }])).toBeNull();
+    // Equal temperatures resolve by zone name, whatever order the directory lists them in.
+    const tied = [
+      { zone: "thermal_zone3", type: "cpu-thermal", celsius: 60 },
+      { zone: "thermal_zone1", type: "soc-thermal", celsius: 60 },
+    ];
+    expect(pickThermalZone(tied)?.label).toBe("soc-thermal (thermal_zone1)");
+    expect(pickThermalZone([...tied].reverse())?.label).toBe("soc-thermal (thermal_zone1)");
     expect(pickThermalZone([])).toBeNull();
   });
 });

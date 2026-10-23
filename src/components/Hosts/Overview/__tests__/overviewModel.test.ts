@@ -463,4 +463,25 @@ describe("Linux observations", () => {
     ]);
     expect(suggestedHostId).toBe("calm");
   });
+
+  it("withholds the suggestion when a host's only reading is raw pressure", () => {
+    const { suggestedHostId } = compareHostCapacity([
+      candidate("psi-only", {
+        cpuPercent: null,
+        memoryPressure: null,
+        memoryPressureSomeAvg10: 3,
+      }),
+      candidate("calm", { cpuPercent: 10, memoryUsedBytes: 2 * GB }),
+    ]);
+    expect(suggestedHostId).toBeNull();
+  });
+
+  it("shows a tiny CPU quota as the capacity it is", () => {
+    const summary = makeSummary({
+      cpuPercent: 100,
+      cpuLogicalCoreCount: null,
+      cpuCapacityCores: 0.001,
+    });
+    expect(describeCpu(summary)).toBe("<0.1 of 0.001 cores");
+  });
 });

@@ -70,11 +70,12 @@ describe("link messages", () => {
       temperatureZone: "x86_pkg_temp (thermal_zone0)",
     };
     expect(hostSummary(linux)).toMatchObject(linux);
-    const unknown = { ...linux, metricsScope: null, cpuCapacityCores: null };
-    expect(hostSummary({ ...unknown, memoryPressureSomeAvg10: null })).toMatchObject({
-      metricsScope: null,
-      memoryPressureSomeAvg10: null,
-    });
+    const unknown = Object.fromEntries(Object.keys(linux).map((key) => [key, null]));
+    expect(hostSummary(unknown)).toMatchObject(unknown);
+    const capped = { cpuLogicalCoreCount: null, cpuCapacityCores: 0.5, metricsScope: "cgroup" };
+    expect(hostSummary(capped)).toMatchObject(capped);
+    expect(() => hostSummary({ temperatureCelsius: 251 })).toThrow();
+    expect(() => hostSummary({ temperatureZone: "z".repeat(257) })).toThrow();
     const legacy = hostSummary({});
     for (const key of Object.keys(linux)) expect(legacy).not.toHaveProperty(key);
     expect(() => hostSummary({ metricsScope: "container" })).toThrow();

@@ -116,6 +116,7 @@ export function parseCpuSetCount(text: string | null): number | null {
     if (!match) return null;
     const start = Number(match[1]);
     const end = match[2] === undefined ? start : Number(match[2]);
+    if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end)) return null;
     if (end < start || end - start > 65_536) return null;
     for (let id = start; id <= end; id += 1) ids.add(id);
   }

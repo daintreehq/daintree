@@ -313,6 +313,8 @@ export class HostMetricsSampler {
     machineCores: number
   ): Promise<{ memory: HostMemoryFields; cgroupCpu: CgroupCpu | null }> {
     const s = this.sources;
+    // Stamped before the reads, which take a variable time, so the interval doesn't absorb their delay.
+    const readAt = s.now();
     const [thermal, cgroup] = await Promise.all([
       this.observedTemperature(),
       this.cgroupScope(machineCores),
@@ -378,7 +380,7 @@ export class HostMetricsSampler {
       cgroupCpu: {
         cores,
         logicalCores: cores !== null && Number.isInteger(cores) ? cores : null,
-        percent: this.cgroupCpuPercent(dir, parseCgroupCpuUsageUsec(cpuStat), cores),
+        percent: this.cgroupCpuPercent(dir, parseCgroupCpuUsageUsec(cpuStat), cores, readAt),
       },
     };
   }
@@ -428,9 +430,13 @@ export class HostMetricsSampler {
   }
 
   /** Busy share of the cgroup's cores between two `cpu.stat` readings; null until there are two. */
-  private cgroupCpuPercent(dir: string, usec: number | null, cores: number | null): number | null {
+  private cgroupCpuPercent(
+    dir: string,
+    usec: number | null,
+    cores: number | null,
+    at: number
+  ): number | null {
     const previous = this.previousCgroupCpu;
-    const at = this.sources.now();
     if (usec === null || cores === null) {
       this.previousCgroupCpu = null;
       return null;

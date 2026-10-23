@@ -69,7 +69,9 @@ export function busyCores(summary: HostMetricsSummary): { busy: number; total: n
 export function describeCpu(summary: HostMetricsSummary): string | null {
   const cores = busyCores(summary);
   if (cores) {
-    const total = parseFloat(cores.total.toFixed(2));
+    // Two significant figures keeps a 0.001-core quota from reading as zero.
+    const total =
+      cores.total >= 10 ? Math.round(cores.total) : parseFloat(cores.total.toPrecision(2));
     return `${formatCoreCount(cores.busy)} of ${total} ${pluralNoun(total, "core")}`;
   }
   return summary.cpuPercent === null ? null : `${Math.round(summary.cpuPercent)}%`;

@@ -240,7 +240,10 @@ describe("HostMetricsSampler", () => {
     });
 
     it("scopes to the cgroup for a CPU quota alone, with the machine's RAM as its memory ceiling", async () => {
-      const summary = await cgroupSampler({}, ["/sys/fs/cgroup/system.slice/memory.max"]).sample();
+      const summary = await cgroupSampler({}, [
+        "/sys/fs/cgroup/system.slice/memory.max",
+        `${slice}/memory.swap.max`,
+      ]).sample();
       expect(summary).toMatchObject({
         metricsScope: "cgroup",
         memoryUsedBytes: 536870912,
@@ -277,9 +280,55 @@ describe("HostMetricsSampler", () => {
       });
     });
 
+    it("takes the tightest of several finite limits along the hierarchy", async () => {
+      const summary = await cgroupSampler({
+        "/sys/fs/cgroup/memory.max": "1073741824",
+        [`${slice}/memory.max`]: "8589934592",
+        "/sys/fs/cgroup/cpu.max": "50000 100000",
+      }).sample();
+      expect(summary).toMatchObject({ memoryTotalBytes: 1073741824, cpuCapacityCores: 0.5 });
+    });
+
+    it("resets the CPU baseline when the counter rolls back or the capacity changes", async () => {
+      let now = 0;
+      let usage: string | null = null;
+      let cpuMax = "100000 100000";
+      const sampler = new HostMetricsSampler(
+        sources({
+          cpus: () =>
+            Array.from({ length: 8 }, () => ({ user: 1, nice: 0, sys: 0, idle: 1, irq: 0 })),
+          readText: async (path) =>
+            path === `${slice}/cpu.stat`
+              ? usage
+              : path === "/sys/fs/cgroup/system.slice/cpu.max"
+                ? cpuMax
+                : (files[path] ?? null),
+          now: () => now,
+        })
+      );
+      const step = async (at: number, stat: string | null) => {
+        now = at;
+        usage = stat;
+        return (await sampler.sample()).cpuPercent;
+      };
+      expect(await step(1_000, "usage_usec 1000000\n")).toBeNull();
+      // Half a CPU-second in one second of one core.
+      expect(await step(2_000, "usage_usec 1500000\n")).toBe(50);
+      // A counter that went backwards, then a missing one, are no interval.
+      expect(await step(3_000, "usage_usec 100\n")).toBeNull();
+      expect(await step(4_000, null)).toBeNull();
+      expect(await step(5_000, "usage_usec 2000000\n")).toBeNull();
+      expect(await step(6_000, "usage_usec 3000000\n")).toBe(100);
+      // A changed quota moves the scale, so the next reading starts over.
+      cpuMax = "200000 100000";
+      expect(await step(7_000, "usage_usec 3500000\n")).toBeNull();
+      expect(await step(8_000, "usage_usec 4500000\n")).toBe(50);
+    });
+
     it("reads a v1-only host as the machine", async () => {
       const summary = await cgroupSampler({
         "/proc/self/cgroup": "4:memory:/docker/abc\n3:cpu:/docker/abc\n",
+        "/sys/fs/cgroup/memory.max": "1073741824",
       }).sample();
       expect(summary.metricsScope).toBe("host");
     });
