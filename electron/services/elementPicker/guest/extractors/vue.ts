@@ -1,8 +1,7 @@
 /// <reference lib="dom" />
 /**
- * The Vue extractor asset, for a document's main world once a detection names
- * Vue. Built like the shipped extractors; #13888 adds it to the core catalog
- * alongside the other frameworks of its wave, so until then only tests build it.
+ * The Vue extractor asset: built by `scripts/build-main.mjs` and installed
+ * into a document's main world once a detection names Vue.
  */
 
 import { installExtractor, type ExtractorHostApi } from "../registry.js";

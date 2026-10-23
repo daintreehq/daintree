@@ -221,8 +221,8 @@ export const GUEST_RUNTIME_ASSETS = discoverGuestRuntimeAssets(root);
  * The core Element Picker's guest bundles: a fixed list, not discovered from
  * any manifest, because no plugin owns them. Restates `CORE_GUEST_ASSET_FILES`
  * in `electron/services/elementPicker/guestAssets.ts`, which reads them back at
- * runtime; `electron/services/elementPicker/__tests__/guestAssets.test.ts`
- * pins the two together. Each is evaluated by the host inside a prelude, so
+ * runtime; `scripts/__tests__/core-picker-assets.test.mjs` pins the two
+ * together. Each is evaluated by the host inside a prelude, so
  * each takes the same IIFE build as a plugin guest.
  */
 export const CORE_PICKER_GUEST_ASSETS = [
@@ -250,6 +250,26 @@ export const CORE_PICKER_GUEST_ASSETS = [
     id: "extractor:solid",
     entry: "electron/services/elementPicker/guest/extractors/solid.ts",
     outfile: "dist-electron/element-picker/guest/extractors/solid.js",
+  },
+  {
+    id: "extractor:vue",
+    entry: "electron/services/elementPicker/guest/extractors/vue.ts",
+    outfile: "dist-electron/element-picker/guest/extractors/vue.js",
+  },
+  {
+    id: "extractor:angular",
+    entry: "electron/services/elementPicker/guest/extractors/angular.ts",
+    outfile: "dist-electron/element-picker/guest/extractors/angular.js",
+  },
+  {
+    id: "extractor:astro",
+    entry: "electron/services/elementPicker/guest/extractors/astro.ts",
+    outfile: "dist-electron/element-picker/guest/extractors/astro.js",
+  },
+  {
+    id: "extractor:preact",
+    entry: "electron/services/elementPicker/guest/extractors/preact.ts",
+    outfile: "dist-electron/element-picker/guest/extractors/preact.js",
   },
 ];
 

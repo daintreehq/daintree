@@ -11,6 +11,7 @@ import {
   MAX_CORE_GUEST_ASSET_BYTES,
   createCoreGuestAssetLoader,
   resolveCoreGuestAssetRoot,
+  type CoreGuestAssetId,
 } from "../guestAssets.js";
 
 // The catalog is pinned to the build's own list in
@@ -29,6 +30,7 @@ describe("createCoreGuestAssetLoader", () => {
       cache?: boolean;
       read?: (file: string) => Promise<string>;
       root?: string | null;
+      files?: Readonly<Partial<Record<CoreGuestAssetId, string>>>;
     } = {}
   ) {
     const read = vi.fn(options.read ?? (async (file: string) => `// ${file}`));
@@ -36,12 +38,14 @@ describe("createCoreGuestAssetLoader", () => {
       root: () => (options.root === undefined ? "/assets" : options.root),
       cache: options.cache ?? false,
       read,
+      files: options.files,
     });
     return { load, read };
   }
 
   it("has nothing for a framework the build ships no extractor for", async () => {
-    const { load, read } = loader();
+    // Every framework the enum names ships one now, so a build that lacks one is stood in for.
+    const { load, read } = loader({ files: { bootstrap: "bootstrap.js" } });
     await expect(load("extractor:angular")).resolves.toBeNull();
     expect(read).not.toHaveBeenCalled();
   });

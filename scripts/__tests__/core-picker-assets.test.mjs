@@ -34,12 +34,12 @@ describe("CORE_PICKER_GUEST_ASSETS", () => {
     expect(built).toEqual(read);
   });
 
-  it("bundles every extractor, listed yet or not, from the app's own code alone", async () => {
+  it("ships every extractor there is, each bundled from the app's own code alone", async () => {
     // The bundler's graph is the evidence: an extractor reads a framework's
     // runtime from the page and imports nothing of it, and takes only types
     // from the shared contracts, so nothing it bundles comes from a package.
-    // Entries are found by what they do, so one built ahead of being listed
-    // (Preact's and Astro's wait on #13888) is held to the same rule.
+    // Entries are found by what they do, so one written and never listed fails
+    // here rather than leaving its framework detected and never installed.
     const dir = "electron/services/elementPicker/guest/extractors";
     const entries = fs
       .readdirSync(path.join(repoRoot, dir))
@@ -48,14 +48,11 @@ describe("CORE_PICKER_GUEST_ASSETS", () => {
       .filter((entry) =>
         fs.readFileSync(path.join(repoRoot, entry), "utf8").includes("installExtractor(api,")
       );
-    expect(entries).toEqual(
-      expect.arrayContaining(
-        CORE_PICKER_GUEST_ASSETS.filter((asset) => asset.id.startsWith("extractor:")).map(
-          (asset) => asset.entry
-        )
-      )
+    expect(entries.sort()).toEqual(
+      CORE_PICKER_GUEST_ASSETS.filter((asset) => asset.id.startsWith("extractor:"))
+        .map((asset) => asset.entry)
+        .sort()
     );
-    expect(entries).toContain(`${dir}/preact.ts`);
     for (const entry of entries) {
       const result = await build({
         ...guestRuntimeBuildConfig({ entry, outfile: "out.js" }, { absWorkingDir: repoRoot }),

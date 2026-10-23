@@ -27,7 +27,13 @@ import type {
 } from "../../../../shared/elementPicker/observation.js";
 import { FakeAngular, type ComponentSpec } from "../guest/extractors/__tests__/angularFixture.js";
 import { buildCoreGuestAssets } from "./buildCoreGuestAssets.js";
-import { LIT_CARD_TAG, mountLitPage, mountSolidPage, mountStaticPage } from "./fixtures/pages.js";
+import {
+  LIT_CARD_TAG,
+  defineLitCard,
+  mountLitPage,
+  mountSolidPage,
+  mountStaticPage,
+} from "./fixtures/pages.js";
 
 /**
  * The acceptance tests for detection-gated loading, run through the real
@@ -185,38 +191,14 @@ class FakeWebContents extends EventEmitter {
 let shipped: Record<string, string> = {};
 /** The same, with the contributing fixture standing in for React's extractor. */
 let assets: Record<string, string> = {};
-/** Built as the app would build them, but kept out of the shipped catalog until #13888 lists them. */
-let astroAsset = "";
-/** Likewise Angular's and Vue's, which #13888 lists too. */
-let angularAsset = "";
-let preactAsset = "";
-let vueAsset = "";
 
 beforeAll(() => {
-  const {
-    "extractor:astro": astro,
-    "extractor:angular": angular,
-    "extractor:preact": preact,
-    "extractor:vue": vue,
-    ...built
-  } = buildCoreGuestAssets([
+  shipped = buildCoreGuestAssets([
     {
       id: "fixture:react",
       entry: "electron/services/elementPicker/__tests__/fixtures/contributingExtractor.ts",
     },
-    { id: "extractor:astro", entry: "electron/services/elementPicker/guest/extractors/astro.ts" },
-    {
-      id: "extractor:angular",
-      entry: "electron/services/elementPicker/guest/extractors/angular.ts",
-    },
-    { id: "extractor:preact", entry: "electron/services/elementPicker/guest/extractors/preact.ts" },
-    { id: "extractor:vue", entry: "electron/services/elementPicker/guest/extractors/vue.ts" },
   ]);
-  shipped = built;
-  astroAsset = astro ?? "";
-  angularAsset = angular ?? "";
-  preactAsset = preact ?? "";
-  vueAsset = vue ?? "";
   assets = { ...shipped, "extractor:react": shipped["fixture:react"]! };
 }, 60_000);
 
@@ -283,6 +265,39 @@ function svelteNode(): Element {
   };
   return node;
 }
+
+/**
+ * The least of a page that has each shipped extractor's framework detected:
+ * one marker the framework leaves, and nothing of its runtime.
+ */
+const SHIPPED_DETECTIONS: Array<[string, () => void]> = [
+  ["svelte", () => void svelteNode()],
+  [
+    "react",
+    () => {
+      document.body.innerHTML = '<div id="root"></div>';
+      (document.getElementById("root") as unknown as Record<string, unknown>)[
+        "__reactContainer$fixture"
+      ] = {};
+    },
+  ],
+  ["vue", () => void (document.body.innerHTML = '<div id="app" data-v-app=""></div>')],
+  ["angular", () => void (document.body.innerHTML = '<app-root ng-version="20.0.0"></app-root>')],
+  [
+    "astro",
+    () =>
+      void (document.body.innerHTML =
+        '<main data-astro-source-file="/proj/src/pages/index.astro"></main>'),
+  ],
+  [
+    "preact",
+    () => {
+      document.body.innerHTML = '<div id="app"></div>';
+      (document.getElementById("app") as unknown as Record<string, unknown>).__k = {};
+    },
+  ],
+  ["solid", () => void (document.body.innerHTML = '<div data-hk="0"></div>')],
+];
 
 beforeEach(() => {
   __resetCdpLeasesForTests();
@@ -408,23 +423,33 @@ describe("core Element Picker guest loading", () => {
         (entry) => entry.framework
       )
     ).toEqual(["astro", "react"]);
-    // Astro has no extractor in this build; React's fixture does.
+    // Both are installed, in the order the markup named them.
     expect(h.wc.debugger.evaluates().filter((entry) => entry.kind === "extractor")).toEqual([
+      { kind: "extractor", framework: "astro" },
       { kind: "extractor", framework: "react" },
     ]);
     expect(h.kinds("host-issue")).toHaveLength(0);
 
+    // Described again as each reader arrives, since each changes what it says.
     const selections = h.pickerEvents("selectionChanged");
     expect(selections.map((entry) => (entry.event as { cause: string }).cause)).toEqual([
       "user",
       "reselect",
+      "reselect",
     ]);
-    const described = selections[1]!.event as {
-      observations: Array<{ componentChain: { components: Array<{ name: { value: string } }> } }>;
+    type Described = {
+      observations: Array<{
+        componentChain: { components: Array<{ name: { value: string } }> };
+        frameworkEvidence: Array<{ framework: string }>;
+      }>;
     };
-    expect(described.observations[0]!.componentChain.components[0]!.name.value).toBe(
-      "FixtureButton"
+    const [, withAstro, withReact] = selections.map(
+      (entry) => (entry.event as Described).observations[0]!
     );
+    expect(withAstro!.frameworkEvidence.map((entry) => entry.framework)).toEqual(["astro"]);
+    expect(withAstro!.componentChain.components).toEqual([]);
+    expect(withReact!.componentChain.components[0]!.name.value).toBe("FixtureButton");
+    expect(withReact!.frameworkEvidence.map((entry) => entry.framework)).toEqual(["astro"]);
   });
 
   it("describes Astro, React and Svelte selections side by side on a page of islands", async () => {
@@ -436,7 +461,7 @@ describe("core Element Picker guest loading", () => {
           opts='{"name":"BuyButton","value":true}' props='{"token":[0,"s3cret"]}'><button id="buy">Buy</button></astro-island>
         <astro-island renderer-url="/@id/@astrojs/svelte/client.js" client="visible"><span id="count">0</span></astro-island>
       </main>`;
-    const h = makeHarness({ catalog: { ...assets, "extractor:astro": astroAsset } });
+    const h = makeHarness();
     await h.bind();
     await settle();
     expect(
@@ -541,6 +566,44 @@ describe("core Element Picker guest loading", () => {
     expect(second.channel).not.toBe(first.channel);
     expect(h.kinds("extractor-installed").map((entry) => entry.documentEpoch)).toEqual([0, 1]);
   });
+
+  it("detects a framework for every extractor the app ships", () => {
+    expect(SHIPPED_DETECTIONS.map(([framework]) => `extractor:${framework}`).sort()).toEqual(
+      Object.keys(shipped)
+        .filter((id) => id.startsWith("extractor:"))
+        .sort()
+    );
+  });
+
+  it.each(SHIPPED_DETECTIONS)(
+    "installs the shipped %s extractor again in the document a navigation brings, and retires the old one",
+    async (framework, mount) => {
+      mount();
+      const h = makeHarness({ catalog: shipped });
+      await h.bind();
+      await settle();
+      const first = scope[EXTRACTOR_REGISTRY_GLOBAL] as { has(framework: string): boolean };
+      expect(first.has(framework)).toBe(true);
+
+      h.navigate();
+      await settle();
+      // Detected again in the new document, which must not install it twice.
+      await vi.advanceTimersByTimeAsync(LATE_PROBE_DELAY_MS);
+      await settle();
+
+      expect(first.has(framework)).toBe(false);
+      const second = scope[EXTRACTOR_REGISTRY_GLOBAL] as { has(framework: string): boolean };
+      expect(second).not.toBe(first);
+      expect(second.has(framework)).toBe(true);
+      expect(
+        h.kinds("extractor-installed").map((entry) => [entry.framework, entry.documentEpoch])
+      ).toEqual([
+        [framework, 0],
+        [framework, 1],
+      ]);
+      expect(h.kinds("host-issue")).toHaveLength(0);
+    }
+  );
 
   it("removes the bootstrap and its extractors on detach, and stops probing", async () => {
     svelteNode();
@@ -747,6 +810,54 @@ describe("core Element Picker guest loading", () => {
     }
   });
 
+  it("names the React component that renders a web component when a pick lands in its shadow root", async () => {
+    const actFlag = Object.getOwnPropertyDescriptor(scope, "IS_REACT_ACT_ENVIRONMENT");
+    scope.IS_REACT_ACT_ENVIRONMENT = true;
+    document.body.innerHTML = '<div id="root"></div>';
+    const tag = defineLitCard();
+    const Hero = () =>
+      createElement(tag, { id: "hero" }, createElement("p", { className: "projected" }, "Copy"));
+    const Buy = () => createElement("button", { id: "buy" }, "Buy");
+    const App = () => createElement("main", null, createElement(Hero), createElement(Buy));
+    const root = createRoot(document.getElementById("root")!);
+    try {
+      act(() => root.render(createElement(App)));
+      const h = makeHarness({ catalog: shipped });
+      await h.bind();
+      await settle();
+      expect(h.kinds("extractor-installed")).toEqual([
+        expect.objectContaining({ framework: "react" }),
+      ]);
+      const names = (observation: Observed) =>
+        observation.componentChain.components.map((record) => record.name?.value);
+
+      const host = document.getElementById("hero")!;
+      (host.shadowRoot!.querySelector("button.action") as HTMLElement).click();
+      await settle();
+      const inside = lastObservation(h)!;
+      expect(inside.context?.shadowHosts).toEqual([
+        { elementId: expect.any(String), tagName: tag, label: `${tag}#hero` },
+      ]);
+      expect(names(inside)).toEqual(["Hero", "App"]);
+      // React made the host, not the element inside it, so nothing says where that was written.
+      expect(inside.sourceCandidates).toEqual([]);
+
+      document.getElementById("buy")!.click();
+      await settle();
+      const buy = lastObservation(h)!;
+      expect(names(buy)).toEqual(["Buy", "App"]);
+      expect(buy.sourceCandidates[0]).toMatchObject({
+        framework: "react",
+        kind: "element-creation",
+      });
+      expect(buy.context?.shadowHosts ?? []).toEqual([]);
+    } finally {
+      act(() => root.unmount());
+      if (actFlag) Object.defineProperty(scope, "IS_REACT_ACT_ENVIRONMENT", actFlag);
+      else delete scope.IS_REACT_ACT_ENVIRONMENT;
+    }
+  });
+
   it("describes an Angular selection with the built extractor: host ancestry, declaring owner, file hints and hosts as element ids", async () => {
     document.body.innerHTML = '<div id="root"></div>';
     const angular = new FakeAngular();
@@ -777,7 +888,7 @@ describe("core Element Picker guest loading", () => {
     vi.stubGlobal("ng", angular.ng);
     vi.stubGlobal("ngDevMode", {});
     try {
-      const h = makeHarness({ catalog: { ...shipped, "extractor:angular": angularAsset } });
+      const h = makeHarness({ catalog: shipped });
       await h.bind();
       await settle();
       expect(h.kinds("extractor-installed")).toEqual([
@@ -857,7 +968,7 @@ describe("core Element Picker guest loading", () => {
     const app = vue.createApp(App);
     app.mount("#app");
     try {
-      const h = makeHarness({ catalog: { ...shipped, "extractor:vue": vueAsset } });
+      const h = makeHarness({ catalog: shipped });
       await h.bind();
       await settle();
       expect(h.kinds("extractor-installed")).toEqual([
@@ -1205,7 +1316,7 @@ describe("the Preact extractor as the app builds it", () => {
     const Label = () => preactElement("button", { id: "cta" }, "Go");
     renderPreact(preactElement(Card, null, preactElement(Label, null)), root);
     try {
-      const h = makeHarness({ catalog: { ...shipped, "extractor:preact": preactAsset } });
+      const h = makeHarness({ catalog: shipped });
       const state = await h.bind();
       await settle();
       // Found by the render container's own `__k`; no node Preact drew carries one.
@@ -1248,6 +1359,6 @@ describe("the Preact extractor as the app builds it", () => {
 
   it("carries none of the shared schemas into the page", () => {
     // That it bundles nothing of Preact's is core-picker-assets.test.mjs's to prove, from the bundler's graph.
-    expect(preactAsset).not.toMatch(/ZodError|\$ZodType/);
+    expect(shipped["extractor:preact"]).not.toMatch(/ZodError|\$ZodType/);
   });
 });

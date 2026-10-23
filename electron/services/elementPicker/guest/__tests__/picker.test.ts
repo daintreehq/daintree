@@ -858,7 +858,7 @@ describe("createPicker", () => {
       empty: [],
     }));
     const handle = start();
-    // An Astro page with a Solid island: Astro has no reader in this build.
+    // An Astro page with a Solid island, where Astro's reader is not available.
     handle.setAvailability({
       detection: "settled",
       extractors: { astro: "unavailable", solid: "installed" },
