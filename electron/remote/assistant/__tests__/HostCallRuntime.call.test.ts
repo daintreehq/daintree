@@ -132,6 +132,42 @@ describe("HostCallRuntime host.call (#13493)", () => {
     expect(relayCall.mock.calls[0]![1]).toMatchObject({ callId: "earlier", resend: true });
   });
 
+  it("sends the caller's own newCallId as a first send under that id (#14240)", async () => {
+    const settled = await runtime.call("a", { ...CALL, newCallId: "mine-1" }, { tier: "core" });
+
+    expect(relayCall.mock.calls[0]![1]).toMatchObject({ callId: "mine-1", resend: false });
+    expect(settled).toMatchObject({ ok: true, value: { outcome: "ok", callId: "mine-1" } });
+  });
+
+  it("never lets a newCallId take over a call another session or host has out under it", async () => {
+    let finish!: (answer: McpCallAnswer) => void;
+    relayCall.mockImplementationOnce(
+      () => new Promise<McpCallAnswer>((resolve) => (finish = resolve))
+    );
+    runs.set("b", { ...RUN_A, sessionId: "b", terminalId: "t-b" });
+    lanes.set("b", { projectId: "proj-1", slot: 1 });
+    hosts = [host(), host({ hostId: "lab", name: "lab-01" })];
+    control.add("lab");
+    const first = runtime.call("a", { ...CALL, newCallId: "shared" }, { tier: "core" });
+
+    const otherSession = await runtime.call(
+      "b",
+      { ...CALL, newCallId: "shared" },
+      { tier: "core" }
+    );
+    const otherHost = await runtime.call(
+      "a",
+      { ...CALL, hostId: "lab", newCallId: "shared" },
+      { tier: "core" }
+    );
+    finish(DONE);
+
+    expect(otherSession).toMatchObject({ ok: true, value: { outcome: "conflict", callId: null } });
+    expect(otherHost).toMatchObject({ ok: true, value: { outcome: "conflict", callId: null } });
+    expect(relayCall).toHaveBeenCalledTimes(1);
+    await expect(first).resolves.toMatchObject({ ok: true, value: { outcome: "ok" } });
+  });
+
   it("refuses an unknown host, and one whose control switch is off, sending nothing", async () => {
     await expect(
       runtime.call("a", { ...CALL, hostId: "nowhere" }, { tier: "core" })

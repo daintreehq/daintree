@@ -1001,6 +1001,23 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
     };
   }
 
+  /**
+   * Who a call id already names here, from what is still held of it: a call
+   * out, a notice pin, or a prompt mark, which knows its host alone.
+   */
+  private knownCall(callId: string): { hostId: HostId; helpSessionId: string | null } | null {
+    const out = this.callsInFlight.get(callId);
+    if (out !== undefined) return { hostId: out.hostId, helpSessionId: out.helpSessionId };
+    const pin = this.noticePins.get(callId);
+    if (pin !== undefined) return { hostId: pin.hostId, helpSessionId: pin.run.sessionId };
+    for (const [key, marks] of this.prompted) {
+      if (marks.some((mark) => mark.callId === callId)) {
+        return { hostId: key.slice(0, key.indexOf("\u0000")), helpSessionId: null };
+      }
+    }
+    return null;
+  }
+
   /** Forgets every call and notice; calls on hosts are left as they are. */
   dispose(): void {
     this.disposed = true;
@@ -1018,9 +1035,10 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
    * sender and the caller's help session, at the caller's tier, so it can do
    * no more there than the assistant could here, and less where the host says
    * so. Needs only the person's "assistant control" switch for the host, not
-   * messaging. A first send mints its callId; a callId given back is always a
-   * resend, which the host never runs twice and never starts if it holds no
-   * record of it.
+   * messaging. A first send mints its callId, or takes the caller's own
+   * `newCallId` (#14240) so a call whose whole answer was lost can still be
+   * resent; a callId given back is always a resend, which the host never runs
+   * twice and never starts if it holds no record of it.
    *
    * This machine's own id reaches its other projects (#14024), in process
    * and through those same gates, needing no switch: it is the person's own
@@ -1034,10 +1052,22 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
   ): Promise<HostControlOutcome<HostCallResult>> {
     return this.settle(helpSessionId, async (caller) => {
       const resend = args.callId !== undefined;
-      const callId = args.callId ?? this.newId();
+      const callId = args.callId ?? args.newCallId ?? this.newId();
       const sent = { callId, result: null };
       // A first send refused here sent nothing, so there is no call to follow.
       const unsent = { callId: resend ? callId : null, result: null };
+      // The caller's own id for a first send (#14240) may already name a call
+      // here: another session's or host's is never taken over, and a repeat of
+      // its own is noted no more than a resend is.
+      const chosen = args.newCallId !== undefined;
+      const known = chosen ? this.knownCall(callId) : null;
+      if (
+        known !== null &&
+        (known.hostId !== args.hostId ||
+          (known.helpSessionId !== null && known.helpSessionId !== helpSessionId))
+      ) {
+        return { ...this.outcomeWith("conflict", CALL_CONFLICT_DETAIL), ...unsent };
+      }
       const local = args.hostId === LOCAL_HOST_ID ? this.deps.local : undefined;
       const host = local
         ? undefined
@@ -1071,9 +1101,10 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
         args: toolArgs,
         runMs,
       };
-      const noted = resend
-        ? NOTHING_NOTED
-        : this.noteCall(callId, args.hostId, caller, args.tool, toolArgs);
+      const noted =
+        resend || known !== null
+          ? NOTHING_NOTED
+          : this.noteCall(callId, args.hostId, caller, args.tool, toolArgs);
       this.callsOut.set(args.hostId, (this.callsOut.get(args.hostId) ?? 0) + 1);
       // A resend while its first send is still out is the same call: it shares
       // that record, so an approval the host is asking for still counts.
@@ -1156,7 +1187,7 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
         case "done": {
           noted.ran(answer.result);
           // A resend that got the answer its first send lost: the host has the call.
-          const pin = resend ? this.noticePins.get(callId) : undefined;
+          const pin = resend || known !== null ? this.noticePins.get(callId) : undefined;
           if (pin?.hostId === args.hostId && pin.run.sessionId === helpSessionId) {
             noteAnswered(pin, answer.result);
           }

@@ -401,6 +401,69 @@ describe("HostCallRuntime reaching this machine's other projects (#14024)", () =
       expect(opened[0]!.calls).toHaveLength(1);
     });
 
+    describe("a first send under the caller's own id, its whole answer lost (#14240)", () => {
+      const SEND = {
+        hostId: "local",
+        projectId: "proj-2",
+        tool: "terminal.sendCommandOwned",
+        args: { terminalId: "t-1", command: "npm test" },
+      };
+      let submissions: number;
+
+      beforeEach(() => {
+        submissions = 0;
+        answer = async () => ({
+          content: [],
+          structuredContent: { submissionToken: `token-${++submissions}` },
+        });
+      });
+
+      it("submits once, a resend under that id answering from the first send", async () => {
+        const first = await runtime.call("a", { ...SEND, newCallId: "send-k" }, { tier: "core" });
+        // Nothing of `first` is read: the caller holds only the id it chose.
+        const resent = await runtime.call("a", { ...SEND, callId: "send-k" }, { tier: "core" });
+
+        expect(resent).toEqual(first);
+        expect(resent).toMatchObject({
+          ok: true,
+          value: {
+            outcome: "ok",
+            callId: "send-k",
+            result: { structured: { submissionToken: "token-1" } },
+          },
+        });
+        expect(submissions).toBe(1);
+        expect(opened[0]!.calls.map((call) => call.callId)).toEqual(["send-k"]);
+      });
+
+      it("submits again only under a new id, and refuses the same id for another call", async () => {
+        await runtime.call("a", { ...SEND, newCallId: "send-k" }, { tier: "core" });
+        const repeat = await runtime.call("a", { ...SEND, newCallId: "send-k2" }, { tier: "core" });
+        const reused = await runtime.call(
+          "a",
+          { ...SEND, args: { ...SEND.args, command: "npm run lint" }, callId: "send-k" },
+          { tier: "core" }
+        );
+
+        expect(repeat).toMatchObject({ ok: true, value: { outcome: "ok", callId: "send-k2" } });
+        expect(reused).toMatchObject({
+          ok: true,
+          value: { outcome: "conflict", callId: "send-k" },
+        });
+        expect(submissions).toBe(2);
+      });
+
+      it("never starts a resend under an id the host holds no record of", async () => {
+        const resent = await runtime.call("a", { ...SEND, callId: "never-sent" }, { tier: "core" });
+
+        expect(resent).toMatchObject({
+          ok: true,
+          value: { outcome: "expired", callId: "never-sent" },
+        });
+        expect(submissions).toBe(0);
+      });
+    });
+
     it("is no host at all where this machine's projects can't be reached", async () => {
       const remoteOnly = new HostCallRuntime({
         getSessionLane: () => ({ projectId: "proj-1", slot: 0 }),
