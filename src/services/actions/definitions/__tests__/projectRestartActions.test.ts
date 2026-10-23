@@ -24,6 +24,9 @@ import { useProjectStatsStore } from "@/store/projectStatsStore";
 import type { ActionContext } from "@shared/types/actions";
 import type { ActionCallbacks, ActionRegistry } from "../../actionTypes";
 import { registerProjectActions } from "../projectActions";
+// The run bodies load on first dispatch (#14269). Evaluate them here, as they
+// always were, so the first test's waitFor isn't spent on a cold module load.
+import "../projectActions.impl";
 
 const ctx: ActionContext = {};
 

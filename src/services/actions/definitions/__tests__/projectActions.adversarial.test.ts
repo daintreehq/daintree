@@ -27,6 +27,9 @@ vi.mock("@shared/utils/projectMru", () => projectMruMock);
 vi.mock("@/lib/notify", () => ({ notify: vi.fn() }));
 
 import { registerProjectActions } from "../projectActions";
+// The run bodies load on first dispatch (#14269). Evaluate them here, as they
+// always were, rather than under the window stub a test swaps in before run().
+import "../projectActions.impl";
 
 function setupActions(): {
   run: (id: string, args?: unknown, ctx?: Record<string, unknown>) => Promise<unknown>;
