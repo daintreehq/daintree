@@ -297,6 +297,44 @@ describe("navigateApplication", () => {
     expect(exitMaximize).toHaveBeenCalledTimes(1);
   });
 
+  it("leaves the split as it is, since it already shows Home", async () => {
+    const nav = await load();
+    nav.useProjectHomeStore.getState().showSplit();
+    panels.maximizedId = "terminal-1";
+    expect(
+      nav.navigateApplication(OWNER, { sectionId: "record", params: { recordId: "a" } }).ok
+    ).toBe(true);
+    expect(nav.route()).toBe("split");
+    expect(exitMaximize).not.toHaveBeenCalled();
+  });
+
+  it("leaves a grid-destination application in the split, since the grid shows there", async () => {
+    const nav = await load(
+      application({
+        application: { name: "Ledger", destination: "grid", navigation: NAVIGATION },
+      })
+    );
+    nav.useProjectHomeStore.getState().showSplit();
+    nav.navigateApplication(OWNER, { sectionId: "record", params: { recordId: "a" } });
+    expect(nav.route()).toBe("split");
+  });
+
+  it("reads an unchosen route as the application's beside-grid default", async () => {
+    const nav = await load(
+      application({
+        application: {
+          name: "Ledger",
+          destination: "home",
+          arrangement: "beside-grid",
+          navigation: NAVIGATION,
+        },
+      })
+    );
+    nav.navigateApplication(OWNER, { sectionId: "record", params: { recordId: "a" } });
+    expect(nav.useProjectHomeStore.getState().routeByProject).toEqual({});
+    expect(exitMaximize).not.toHaveBeenCalled();
+  });
+
   it("never brings forward a Home the application does not hold", async () => {
     const nav = await load();
     nav.useProjectHomeStore.getState().showGrid();

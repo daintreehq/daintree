@@ -24,7 +24,11 @@ import {
 } from "@/store/applicationNavigationStore";
 import { useMacroFocusStore } from "@/store/macroFocusStore";
 import { exitPanelMaximize, isPanelMaximized } from "@/store/storeAccessors";
-import { selectProjectMainAreaRoute, useProjectHomeStore } from "@/store/projectHomeStore";
+import {
+  applicationDefaultRoute,
+  selectProjectMainAreaRoute,
+  useProjectHomeStore,
+} from "@/store/projectHomeStore";
 import { useProjectPluginStore } from "@/store/projectPluginStore";
 import { getViewWorkspaceId } from "@/store/viewWorkspaceId";
 import { hasViewUnsavedChanges } from "./pluginPanelLifecycle";
@@ -156,14 +160,22 @@ function isFocusStranded(): boolean {
  * application may send them.
  */
 function pendingReveal(context: ApplicationNavigationContext): "home" | "grid" | null {
-  const onHome = selectProjectMainAreaRoute(useProjectHomeStore.getState()) === "home";
+  // Read the route the way the main area draws it: a project the user never
+  // chose one in sits on its application's default (#14107).
+  const route = selectProjectMainAreaRoute(
+    useProjectHomeStore.getState(),
+    applicationDefaultRoute(useProjectPluginStore.getState().application)
+  );
   if (context.destination === "home") {
     const surface = currentProjectSurface("projectHome");
     if (surface === null || surface.claim.pluginId !== context.instanceId) return null;
-    // A maximized panel draws over Home, so being on it isn't being shown it.
-    return onHome && !isPanelMaximized() ? null : "home";
+    // The split already shows Home beside the grid, and a maximize there
+    // fills only the panels' side, so it is left as the user arranged it.
+    if (route === "split") return null;
+    // A maximized panel draws over a full Home, so being on it isn't being shown it.
+    return route === "home" && !isPanelMaximized() ? null : "home";
   }
-  return onHome ? "grid" : null;
+  return route === "home" ? "grid" : null;
 }
 
 /**
