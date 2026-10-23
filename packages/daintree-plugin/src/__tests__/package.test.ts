@@ -277,6 +277,116 @@ describe("runPackage", () => {
     expect(result.files).toContain("build/index.js");
   });
 
+  describe("tour assets", () => {
+    async function tourManifest(audioUrl: string | null = "tours/welcome/intro.ogg") {
+      await writeFile(
+        "plugin.json",
+        JSON.stringify({
+          name: "acme.welcome-tour",
+          version: "0.1.0",
+          engines: { daintree: ">=0.38.0" },
+          contributes: {
+            tours: [
+              {
+                id: "welcome",
+                title: "Welcome Tour",
+                componentPath: "dist/tour.js",
+                audioHosts: ["cdn.example.com"],
+                chapters: [
+                  { id: "intro", duration: 6, audioUrl, narrationHash: "3fa9c21e" },
+                  {
+                    id: "publish",
+                    duration: 5,
+                    audioUrl: "https://cdn.example.com/tours/welcome/publish.ogg",
+                    narrationHash: "0b7d1c44",
+                  },
+                ],
+              },
+            ],
+          },
+        })
+      );
+    }
+
+    it("refuses a tour whose scene module is missing, naming the path", async () => {
+      await tourManifest();
+
+      await expect(runPackage({ dir: tmpDir, dryRun: true, skipBuild: true })).rejects.toThrow(
+        /dist\/tour\.js/
+      );
+      await expect(runPackage({ dir: tmpDir, skipBuild: true })).rejects.toThrow(/dist\/tour\.js/);
+      const entries = await fs.readdir(tmpDir);
+      expect(entries.some((e) => e.endsWith(".dntr"))).toBe(false);
+    });
+
+    it("packages a tour whose local narration is missing, since playback falls back to silence", async () => {
+      await tourManifest();
+      await writeFile("dist/tour.js", "export default {};");
+
+      const result = await runPackage({ dir: tmpDir, skipBuild: true });
+      expect(result.files).toContain("dist/tour.js");
+      expect((await verifyPluginArchive(result.outputPath!)).valid).toBe(true);
+    });
+
+    it("ships a tour scene module from a gitignored custom output dir", async () => {
+      await tourManifest(null);
+      const manifest = JSON.parse(await fs.readFile(path.join(tmpDir, "plugin.json"), "utf8"));
+      manifest.contributes.tours[0].componentPath = "./build/tour.js";
+      await writeFile("plugin.json", JSON.stringify(manifest));
+      await writeFile("build/tour.js", "export default {};");
+      await writeFile(".gitignore", "build/\n");
+
+      const result = await runPackage({ dir: tmpDir, dryRun: true, skipBuild: true });
+      expect(result.files).toContain("build/tour.js");
+    });
+  });
+
+  it("refuses missing Assistant knowledge, including a skill directory without SKILL.md", async () => {
+    await fixture();
+    const manifest = JSON.parse(await fs.readFile(path.join(tmpDir, "plugin.json"), "utf8"));
+    manifest.contributes = {
+      databases: [{ id: "ledger", location: "local" }],
+      assistantKnowledge: {
+        instructions: "knowledge/instructions.md",
+        skills: [{ id: "deploy", path: "knowledge/skills/deploy" }],
+        references: [{ id: "api", path: "./knowledge/api.md" }],
+      },
+    };
+    await writeFile("plugin.json", JSON.stringify(manifest));
+    await writeFile("knowledge/instructions.md", "# Instructions");
+    await writeFile("knowledge/skills/deploy/notes.md", "# Not the manifest");
+
+    const failure = runPackage({ dir: tmpDir, dryRun: true, skipBuild: true });
+    await expect(failure).rejects.toThrow(/knowledge\/skills\/deploy\/SKILL\.md/);
+    await expect(runPackage({ dir: tmpDir, dryRun: true, skipBuild: true })).rejects.toThrow(
+      /knowledge\/api\.md/
+    );
+
+    await writeFile("knowledge/skills/deploy/SKILL.md", "---\nname: deploy\n---\n");
+    await writeFile("knowledge/api.md", "# API");
+    const result = await runPackage({ dir: tmpDir, skipBuild: true });
+    expect((await verifyPluginArchive(result.outputPath!)).valid).toBe(true);
+  });
+
+  it("refuses a referenced file reached through a symlink that leaves the plugin", async () => {
+    await fixture();
+    const manifest = JSON.parse(await fs.readFile(path.join(tmpDir, "plugin.json"), "utf8"));
+    manifest.contributes = { skills: [{ id: "tdd", name: "TDD", path: "skills/tdd.md" }] };
+    await writeFile("plugin.json", JSON.stringify(manifest));
+    const outside = await fs.mkdtemp(path.join(os.tmpdir(), "daintree-package-outside-"));
+    try {
+      await fs.writeFile(path.join(outside, "tdd.md"), "# tdd", "utf8");
+      await fs.mkdir(path.join(tmpDir, "skills"), { recursive: true });
+      await fs.symlink(path.join(outside, "tdd.md"), path.join(tmpDir, "skills", "tdd.md"));
+
+      await expect(runPackage({ dir: tmpDir, dryRun: true, skipBuild: true })).rejects.toThrow(
+        /outside the plugin directory.*skills\[0\]\.path "skills\/tdd\.md"/
+      );
+    } finally {
+      await fs.rm(outside, { recursive: true, force: true });
+    }
+  });
+
   it("dry run never invokes the Vite build (no vite in fixture)", async () => {
     await fixture();
     // No node_modules/.bin/vite exists; if dry-run tried to build it would throw.

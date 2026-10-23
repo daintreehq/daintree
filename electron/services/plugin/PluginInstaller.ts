@@ -28,6 +28,7 @@ import { getPluginMcpSupervisor } from "../PluginMcpSupervisor.js";
 import { getPluginMcpConsentService, getPluginMcpRateLimiter } from "../plugin-mcp/instances.js";
 import { getPluginCapabilityConsentService } from "../plugin-capability/instances.js";
 import { clearProjectPluginVisibilityForPlugin } from "./projectPluginVisibility.js";
+import { findUnusablePluginAssets } from "./pluginManifestAssetFiles.js";
 import { wipeSettingsFile } from "../PluginSettingsStore.js";
 import type {
   PluginManifest,
@@ -520,6 +521,17 @@ export class PluginInstaller {
         return { status: "failed", errors };
       }
       const manifest = parsed.data;
+
+      // Every file the manifest declares has to be there before anything is
+      // swapped (#14091): a tour scene, view or knowledge file that never
+      // shipped otherwise installs clean and only fails once it is opened.
+      const unusable = await findUnusablePluginAssets(tmpDir, manifest);
+      if (unusable.length > 0) {
+        return {
+          status: "failed",
+          errors: unusable.map((message) => ({ code: "archive_invalid", message })),
+        };
+      }
 
       // A matching digest already proves these are the reviewed bytes; this
       // keeps the destination below from ever being a different installed

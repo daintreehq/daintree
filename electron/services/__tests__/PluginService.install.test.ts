@@ -419,6 +419,57 @@ describe("installPlugin — validation failures (rollback)", () => {
     }
   });
 
+  function tourManifest(name: string): ManifestShape {
+    return {
+      name,
+      version: "1.0.0",
+      contributes: {
+        tours: [
+          {
+            id: "welcome",
+            title: "Welcome Tour",
+            componentPath: "dist/tour.js",
+            chapters: [
+              { id: "intro", duration: 6, audioUrl: "tours/intro.ogg", narrationHash: "3fa9c21e" },
+            ],
+          },
+        ],
+      },
+    };
+  }
+
+  it("refuses an archive missing a declared tour scene module before swapping it in", async () => {
+    const archive = await makeArchive(tourManifest("acme.no-scene"));
+    const service = new PluginService(pluginsRoot, "0.0.0");
+
+    const result = await service.installPlugin(archive);
+
+    expect(result.status).toBe("failed");
+    if (result.status === "failed") {
+      expect(result.errors).toEqual([
+        {
+          code: "archive_invalid",
+          message: 'tours[0].componentPath "dist/tour.js" is missing from the plugin',
+        },
+      ]);
+    }
+    expect(await exists(path.join(pluginsRoot, "acme.no-scene"))).toBe(false);
+
+    service.dispose();
+  });
+
+  it("installs a tour whose local narration is missing, since it plays silently", async () => {
+    const source = await makeSourceDir(tourManifest("acme.silent-tour"), {
+      "dist/tour.js": "export default {};",
+    });
+    const service = new PluginService(pluginsRoot, "0.0.0");
+
+    const result = await service.installPlugin(source);
+
+    expect(result.status).toBe("installed");
+    service.dispose();
+  });
+
   it("returns archive_invalid for a missing source path", async () => {
     const service = new PluginService(pluginsRoot, "0.0.0");
 

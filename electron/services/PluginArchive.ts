@@ -9,6 +9,10 @@ import { MAX_DNTR_BYTES, PROJECT_TEMPLATES_DIR } from "../utils/pluginArchiveCon
 import { stripUtf8Bom } from "../utils/stripUtf8Bom.js";
 import type { PluginManifest } from "../../shared/types/plugin.js";
 import { foldFileName } from "../../shared/utils/fileNameFold.js";
+import {
+  collectPluginManifestAssets,
+  describePluginManifestAsset,
+} from "../../shared/config/pluginManifestAssets.js";
 
 export const ZIP_EPOCH_DATE = new Date("1980-01-01T00:00:00Z");
 // Cap on total zip entries. A plugin is a handful of compiled files plus
@@ -965,26 +969,15 @@ export async function verifyPluginArchive(archivePath: string): Promise<VerifyRe
         return resolve({ valid: false, error: "plugin.json not found in archive" });
       }
 
-      const stripLeading = (p: string) => (p.startsWith("./") ? p.slice(2) : p);
-
-      if (manifest.main) {
-        const mainPath = stripLeading(manifest.main);
-        if (!entryNames.has(mainPath)) {
-          return resolve({
-            valid: false,
-            error: `manifest.main "${manifest.main}" is not present in the archive`,
-          });
-        }
-      }
-
-      for (const view of manifest.contributes.views) {
-        const viewPath = stripLeading(view.componentPath);
-        if (!entryNames.has(viewPath)) {
-          return resolve({
-            valid: false,
-            error: `view componentPath "${view.componentPath}" is not present in the archive`,
-          });
-        }
+      // Excluded entries were refused above, so an asset the packer's filter
+      // would strip is reported here as absent rather than slipping through.
+      for (const asset of collectPluginManifestAssets(manifest)) {
+        if (!asset.required || entryNames.has(asset.path)) continue;
+        const label =
+          asset.field === "main"
+            ? `manifest.main "${asset.ref}"`
+            : describePluginManifestAsset(asset);
+        return resolve({ valid: false, error: `${label} is not present in the archive` });
       }
 
       resolve({ valid: true, manifest, entryCount: entryIndex });

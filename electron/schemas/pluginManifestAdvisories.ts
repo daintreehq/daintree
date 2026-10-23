@@ -5,6 +5,7 @@ import { DEPRECATED_CONTRIBUTION_ALIASES, getPluginManifestSchema } from "./plug
 import { PLUGIN_ICON_IDS, isPluginIconId } from "../../shared/config/pluginIconIds.js";
 import { isBuiltInAgentId } from "../../shared/config/agentIds.js";
 import { isPluginCustomIconRef } from "../../shared/config/pluginCustomIcon.js";
+import { collectPluginManifestAssets } from "../../shared/config/pluginManifestAssets.js";
 
 /**
  * Advisory checks that run *after* a manifest has parsed. Everything here is
@@ -182,13 +183,13 @@ export async function collectManifestAdvisories({
     }
   }
 
-  // Advisory build-target check: warn when `main` or a view's `componentPath`
-  // points at a missing file whose parent dir exists (a typo or stale path). A
-  // missing top-level dir — typically an unbuilt `dist/` — is skipped so
-  // pre-build validation stays quiet.
-  await warnIfTargetMissing(dir, manifest.main, "main", warnings);
-  for (const [index, view] of manifest.contributes.views.entries()) {
-    await warnIfTargetMissing(dir, view.componentPath, `views[${index}].componentPath`, warnings);
+  // Advisory build-target check: warn when a module the manifest names (`main`,
+  // a view, a tour scene) points at a missing file whose parent dir exists (a
+  // typo or stale path). A missing top-level dir — typically an unbuilt
+  // `dist/` — is skipped so pre-build validation stays quiet. Packaging and
+  // doctor enforce the full asset inventory; this only catches typos early.
+  for (const asset of collectPluginManifestAssets(manifest)) {
+    if (asset.module) await warnIfTargetMissing(dir, asset.ref, asset.field, warnings);
   }
 
   return warnings;

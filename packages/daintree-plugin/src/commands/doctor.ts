@@ -7,6 +7,10 @@ import type { LintFinding } from "../lib/lint/index.js";
 import { caretEngineAdvisory } from "../../../../electron/schemas/pluginManifestAdvisories.js";
 import { sendCliRequest, DaintreeUnavailableError } from "../ipc/client.js";
 import { parseJsonText } from "../lib/parseJsonText.js";
+import {
+  collectPluginManifestAssets,
+  describePluginManifestAsset,
+} from "../../../../shared/config/pluginManifestAssets.js";
 
 /**
  * `doctor` is `validate` and `lint` plus the checks that only make sense
@@ -197,24 +201,6 @@ async function readManifest(dir: string): Promise<Record<string, unknown> | null
   }
 }
 
-/** Every relative build target the manifest names: `main` plus each view's component. */
-function buildTargets(manifest: Record<string, unknown> | null): Array<[string, string]> {
-  if (!manifest) return [];
-  const targets: Array<[string, string]> = [];
-  if (typeof manifest.main === "string" && manifest.main.length > 0) {
-    targets.push(["main", manifest.main]);
-  }
-  const contributes = manifest.contributes as { views?: unknown } | undefined;
-  const views = Array.isArray(contributes?.views) ? contributes.views : [];
-  views.forEach((view, index) => {
-    const componentPath = (view as { componentPath?: unknown } | null)?.componentPath;
-    if (typeof componentPath === "string" && componentPath.length > 0) {
-      targets.push([`views[${index}].componentPath`, componentPath]);
-    }
-  });
-  return targets;
-}
-
 interface HostQuery {
   host: DoctorHostReport;
   /** Directory name → the state Daintree computed for it. Empty when unreachable. */
@@ -393,12 +379,25 @@ export async function runDoctor(
     if (caret) warnings.push(caret);
 
     const realDir = await fs.realpath(dir).catch(() => path.resolve(dir));
-    for (const [label, target] of buildTargets(manifest)) {
+    for (const asset of collectPluginManifestAssets(manifest)) {
+      const { field: label, path: target } = asset;
       if (path.isAbsolute(target) || target.includes("\\")) {
-        errors.push(`${label} "${target}" must be a relative path using forward slashes`);
+        errors.push(`${label} "${asset.ref}" must be a relative path using forward slashes`);
         continue;
       }
       const absolute = path.join(dir, target);
+      if (!(await pathExists(absolute))) {
+        if (asset.required) {
+          errors.push(
+            `${describePluginManifestAsset(asset)} doesn't exist — build the plugin or fix the path`
+          );
+        } else {
+          warnings.push(
+            `${describePluginManifestAsset(asset)} doesn't exist — that chapter will play silently`
+          );
+        }
+        continue;
+      }
       // The host resolves entry paths against the plugin directory and refuses
       // anything that climbs out of it, so a `../` target is dead on arrival
       // even though it exists and is committed. Checked after realpath, since a
@@ -407,17 +406,20 @@ export async function runDoctor(
       const relative = path.relative(realDir, realTarget);
       if (relative.startsWith("..") || path.isAbsolute(relative)) {
         errors.push(
-          `${label} "${target}" resolves outside the plugin directory — the host refuses an entry path that climbs out of it, so this cannot load however it is committed`
+          `${describePluginManifestAsset(asset)} resolves outside the plugin directory — the host refuses a path that climbs out of it, so this cannot load however it is committed`
         );
         continue;
       }
-      await checkEsmModule(absolute, label, errors, warnings);
+      if (asset.module) await checkEsmModule(absolute, label, errors, warnings);
       if (repoRoot) {
+        // An optional file a clone lacks degrades the same way a missing one
+        // does, so its git findings are warnings too.
+        const findings = asset.required ? errors : warnings;
         // git speaks forward slashes on every platform; `path.relative` hands
         // back backslashes on Windows, which git reads as part of the filename.
         const relativeToRepo = path.relative(repoRoot, absolute).split(path.sep).join("/");
-        await checkNotIgnored(repoRoot, relativeToRepo, label, errors);
-        await checkTracked(repoRoot, relativeToRepo, label, errors);
+        await checkNotIgnored(repoRoot, relativeToRepo, label, findings);
+        await checkTracked(repoRoot, relativeToRepo, label, findings);
       }
     }
 

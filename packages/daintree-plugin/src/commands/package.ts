@@ -9,7 +9,10 @@ import {
 import { resolveVitePlan, runVitePlanBuild } from "../lib/viteBuild.js";
 import { runValidate } from "./validate.js";
 import { PROJECT_TEMPLATES_DIR } from "../../../../electron/utils/pluginArchiveConstants.js";
-import { isPluginCustomIconRef } from "../../../../shared/config/pluginCustomIcon.js";
+import {
+  collectPluginManifestAssets,
+  describePluginManifestAsset,
+} from "../../../../shared/config/pluginManifestAssets.js";
 import { parseJsonText } from "../lib/parseJsonText.js";
 
 /**
@@ -92,51 +95,6 @@ async function projectTemplateFiles(dir: string, manifest: MinimalManifest): Pro
   return entries.filter((entry) => entry.dirent.isFile()).map((entry) => entry.path);
 }
 
-/**
- * Paths the manifest points at, which the archive is invalid without.
- * `verifyPluginArchive` already rejects a missing `main` or view
- * `componentPath`, but only after the `.dntr` has been written — and a dry run
- * never reaches it at all. Skills and themes aren't verified there either: a
- * dropped one just goes quiet at runtime. Since `.dntrignore` makes excluding these easy for
- * the first time, check them up front instead.
- */
-function requiredManifestPaths(manifest: MinimalManifest): string[] {
-  const refs = new Set<string>();
-  // Normalized exactly the way `verifyPluginArchive` normalizes (strip a
-  // leading `./`, nothing else). Being more lenient here — folding backslashes,
-  // say — would let a reference pass this check and then fail verification
-  // after the archive had already been written, which is the failure mode this
-  // check exists to remove.
-  const add = (ref?: string) => {
-    if (ref) refs.add(ref.startsWith("./") ? ref.slice(2) : ref);
-  };
-  add(manifest.main);
-  for (const view of manifest.contributes?.views ??
-    manifest.contributes?.experimental_views ??
-    []) {
-    add(view.componentPath);
-  }
-  for (const skill of manifest.contributes?.skills ?? []) {
-    add(skill.path);
-  }
-  // A dropped theme file is refused at load, so the theme quietly never appears.
-  for (const theme of manifest.contributes?.themes ?? []) {
-    add(theme.path);
-  }
-  // Custom SVG icons (#13143): a dropped one silently falls back to the generic
-  // glyph at runtime, so catch it while packaging instead.
-  for (const entry of [
-    ...(manifest.contributes?.panels ?? []),
-    ...(manifest.contributes?.toolbarButtons ?? []),
-    ...(manifest.contributes?.launchEntries ?? []),
-    ...(manifest.contributes?.searchProviders ?? []),
-    ...(manifest.contributes?.processTools ?? []),
-  ]) {
-    if (isPluginCustomIconRef(entry.iconId)) add(entry.iconId);
-  }
-  return [...refs];
-}
-
 export interface PackageOptions {
   dir?: string;
   verbose?: boolean;
@@ -155,18 +113,7 @@ export interface PackageResult {
 interface MinimalManifest {
   name: string;
   version: string;
-  main?: string;
   contributes?: {
-    views?: Array<{ componentPath?: string }>;
-    /** @deprecated Renamed to `views` in the 1.0 freeze; still honored here. */
-    experimental_views?: Array<{ componentPath?: string }>;
-    skills?: Array<{ path?: string }>;
-    themes?: Array<{ path?: string }>;
-    panels?: Array<{ iconId?: string }>;
-    toolbarButtons?: Array<{ iconId?: string }>;
-    launchEntries?: Array<{ iconId?: string }>;
-    searchProviders?: Array<{ iconId?: string }>;
-    processTools?: Array<{ iconId?: string }>;
     projectTemplates?: Array<{ id: string }>;
   };
 }
@@ -174,27 +121,63 @@ interface MinimalManifest {
 /**
  * Top-level directories that must be packaged even when `.gitignore` lists them
  * (build output is gitignored by convention but is exactly what ships). Derived
- * from `main` and any view `componentPath`, defaulting to `dist`.
+ * from every module the manifest names — `main`, views and tour scenes —
+ * defaulting to `dist`.
  */
-function protectedDirs(manifest: MinimalManifest): string[] {
+function protectedDirs(manifest: unknown): string[] {
   const dirs = new Set<string>(["dist"]);
-  const add = (ref?: string) => {
-    if (!ref) return;
-    // The leading `./` has to come off before splitting, or the top segment is
-    // "." and a gitignored custom output dir (`main: "./build/index.js"`) never
-    // gets preserved — the manifest is valid and the file exists, but it would
-    // be left out of the archive.
-    const normalized = ref.replace(/\\/g, "/").replace(/^\.\//, "");
-    const top = normalized.split("/")[0];
+  for (const asset of collectPluginManifestAssets(manifest)) {
+    if (!asset.module) continue;
+    const top = asset.path.replace(/\\/g, "/").split("/")[0];
     if (top && top !== "." && top !== "..") dirs.add(top);
-  };
-  add(manifest.main);
-  for (const view of manifest.contributes?.views ??
-    manifest.contributes?.experimental_views ??
-    []) {
-    add(view.componentPath);
   }
   return [...dirs];
+}
+
+/**
+ * Check every manifest-referenced file against what will actually ship, before
+ * the `.dntr` is written — a dry run never reaches `verifyPluginArchive` at
+ * all, and `.dntrignore` makes excluding one of these easy. A required file
+ * that is missing, ignored or stripped by the archive filter fails; so does one
+ * reached through a symlink that leaves the plugin directory, since globby would
+ * otherwise pack whatever the link points at. A missing optional file (local
+ * tour narration) only warns: the chapter plays silently.
+ */
+async function checkManifestAssets(
+  dir: string,
+  manifest: unknown,
+  files: ReadonlySet<string>
+): Promise<void> {
+  const realDir = await fs.realpath(dir);
+  const missing: string[] = [];
+  const escaped: string[] = [];
+  for (const asset of collectPluginManifestAssets(manifest)) {
+    if (!files.has(asset.path)) {
+      if (asset.required) missing.push(describePluginManifestAsset(asset));
+      else
+        console.warn(
+          `${describePluginManifestAsset(asset)} isn't in the archive — that chapter will play silently.`
+        );
+      continue;
+    }
+    const real = await fs.realpath(path.join(dir, asset.path));
+    const relative = path.relative(realDir, real);
+    if (relative.startsWith("..") || path.isAbsolute(relative)) {
+      escaped.push(describePluginManifestAsset(asset));
+    }
+  }
+  if (missing.length > 0) {
+    throw new Error(
+      `Manifest references ${missing.length === 1 ? "a file that isn't" : "files that aren't"} in the archive: ${missing.join(", ")}. ` +
+        `Check .gitignore and ${DNTRIGNORE_FILENAME}, or run the build first.`
+    );
+  }
+  if (escaped.length > 0) {
+    throw new Error(
+      `Manifest references ${escaped.length === 1 ? "a file that resolves" : "files that resolve"} outside the plugin directory through a symlink: ${escaped.join(", ")}. ` +
+        `The host refuses these at load; copy the file into the plugin instead.`
+    );
+  }
 }
 
 /**
@@ -212,9 +195,8 @@ export async function runPackage(opts: PackageOptions = {}): Promise<PackageResu
     throw new Error(`Manifest validation failed:\n  ${validation.errors.join("\n  ")}`);
   }
 
-  const manifest = parseJsonText(
-    await fs.readFile(path.join(dir, "plugin.json"), "utf8")
-  ) as MinimalManifest;
+  const rawManifest = parseJsonText(await fs.readFile(path.join(dir, "plugin.json"), "utf8"));
+  const manifest = rawManifest as MinimalManifest;
 
   // A dry run is a no-side-effects preview — never trigger the Vite build.
   // A plugin with a Node server entry needs both passes, or `dist/server.js`
@@ -233,7 +215,7 @@ export async function runPackage(opts: PackageOptions = {}): Promise<PackageResu
 
   // Build output / manifest-referenced dirs must ship even if gitignored.
   const preserved = await globby(
-    protectedDirs(manifest).map((d) => `${d}/**/*`),
+    protectedDirs(rawManifest).map((d) => `${d}/**/*`),
     { cwd: dir, dot: false, onlyFiles: true }
   );
 
@@ -272,13 +254,7 @@ export async function runPackage(opts: PackageOptions = {}): Promise<PackageResu
     );
   }
 
-  const missing = requiredManifestPaths(manifest).filter((ref) => !files.includes(ref));
-  if (missing.length > 0) {
-    throw new Error(
-      `Manifest references ${missing.length === 1 ? "a file that isn't" : "files that aren't"} in the archive: ${missing.join(", ")}. ` +
-        `Check .gitignore and ${DNTRIGNORE_FILENAME}, or run the build first.`
-    );
-  }
+  await checkManifestAssets(dir, rawManifest, new Set(files));
 
   if (opts.verbose || opts.dryRun) {
     for (const f of files) {
