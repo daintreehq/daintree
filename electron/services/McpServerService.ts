@@ -33,7 +33,7 @@ import {
   relayOwnershipPrincipal,
 } from "./mcp-server/resourceOwnership.js";
 import type { TerminalAdoptionRecord } from "./mcp-server/terminalAdoption.js";
-import { LOCAL_RELAY_SENDER_ID } from "../remote/assistant/localMcpRelay.js";
+import { LOCAL_HOST_ID } from "../../shared/types/remoteHosts.js";
 import { getAgentAvailabilityStore } from "./AgentAvailabilityStore.js";
 import { isGlobalAssistantId } from "../../shared/config/globalAssistant.js";
 import { isTierPermitted } from "./mcp-server/tierAuth.js";
@@ -722,7 +722,10 @@ export class McpServerService {
     }
     const launchGeneration = ptyClient.getLaunchGeneration(terminalId);
     if (launchGeneration === null) return refuse("terminal-gone");
-    const principalId = relayOwnershipPrincipal(LOCAL_RELAY_SENDER_ID, global.sessionId);
+    // This machine's own `host.call` is admitted under its own host id as the
+    // sender (`LOCAL_RELAY_SENDER_ID`), named here without loading the gated
+    // remote module into core.
+    const principalId = relayOwnershipPrincipal(LOCAL_HOST_ID, global.sessionId);
     const creator = this.sessionStore.resourceOwnership.creatorOf("terminal", terminalId);
     if (creator !== undefined) {
       return refuse(
