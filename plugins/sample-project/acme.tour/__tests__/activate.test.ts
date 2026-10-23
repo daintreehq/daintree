@@ -84,6 +84,45 @@ describe("acme.tour — the calling convention it exists to demonstrate", () => 
   });
 });
 
+describe("acme.tour — media through the artifact cache", () => {
+  it("hands the view a metadata-only handle, never bytes or a path", async () => {
+    const { host } = await activated();
+    await host.fs.writeFile("/repo/intro.mp3", "ID3");
+
+    const artifact = await handler(host, "import-media")(makeCtx(), { path: "/repo/intro.mp3" });
+    expect(artifact).toMatchObject({
+      name: "intro.mp3",
+      mimeType: "audio/mpeg",
+      size: 3,
+      origin: "import",
+      projectId: PROJECT_ID,
+    });
+    expect(JSON.stringify(artifact)).not.toContain("/repo");
+  });
+
+  it("reuses a live artifact and re-imports once the host has dropped it", async () => {
+    const { host } = await activated();
+    await host.fs.writeFile("/repo/intro.mp3", "ID3");
+    const importMedia = handler(host, "import-media");
+
+    const first = (await importMedia(makeCtx(), { path: "/repo/intro.mp3" })) as { id: string };
+    const again = (await importMedia(makeCtx(), { path: "/repo/intro.mp3" })) as { id: string };
+    expect(again.id).toBe(first.id);
+    expect(host.artifactRecords.size).toBe(1);
+
+    host.simulateArtifactExpiry(first.id);
+    const fresh = (await importMedia(makeCtx(), { path: "/repo/intro.mp3" })) as { id: string };
+    expect(fresh.id).not.toBe(first.id);
+  });
+
+  it("rejects a missing path", async () => {
+    const { host } = await activated();
+    await expect(handler(host, "import-media")(makeCtx(), {})).rejects.toThrow(
+      "import-media requires a path"
+    );
+  });
+});
+
 describe("acme.tour — runtime ids", () => {
   it("qualifies its own panel kind as project:{projectId}/{manifestId}/{kindId}", async () => {
     const { host } = await activated();

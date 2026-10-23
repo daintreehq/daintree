@@ -4,9 +4,12 @@ import os from "node:os";
 import path from "node:path";
 import * as p from "@clack/prompts";
 import { SCOPED_PLUGIN_NAME_PATTERN } from "../../../../electron/schemas/plugin.js";
+import { loadReferenceAppFiles } from "../scaffold/referenceApp.js";
 import {
+  ALL_TEMPLATE_KINDS,
   buildProjectRecipe,
   buildTemplateFiles,
+  PROJECT_TEMPLATE_KINDS,
   projectPluginRelDir,
   TEMPLATE_KINDS,
   type ScaffoldContext,
@@ -79,6 +82,7 @@ export async function scaffoldPlugin(opts: ScaffoldPluginOptions): Promise<Scaff
 
   const projectRoot = opts.projectRoot;
   const projectLocal = projectRoot !== undefined;
+  assertTemplateAllowedForScope(opts.template, projectLocal);
   // Project-local plugins are keyed by the manifest name, so the directory is
   // named after it. Both name segments are already validated against
   // SEGMENT_PATTERN (lowercase alphanumerics and single hyphens), so the scoped
@@ -104,7 +108,10 @@ export async function scaffoldPlugin(opts: ScaffoldPluginOptions): Promise<Scaff
     template: opts.template,
     projectLocal,
   };
-  const files = buildTemplateFiles(ctx);
+  // Read before anything is written, so a CLI install missing the bundled
+  // reference fails cleanly instead of leaving half a plugin behind.
+  const files: Record<string, string | Uint8Array> =
+    ctx.template === "app" ? await loadReferenceAppFiles(ctx) : buildTemplateFiles(ctx);
   // The tour-authoring skill ships in every installed-plugin scaffold, so an
   // author's Claude Code session can build a tour without a Daintree checkout.
   Object.assign(files, await loadBundledSkill("daintree-tour"));
@@ -131,7 +138,9 @@ export async function scaffoldPlugin(opts: ScaffoldPluginOptions): Promise<Scaff
   for (const [relPath, content] of Object.entries(files)) {
     const fullPath = path.join(dir, relPath);
     await fs.mkdir(path.dirname(fullPath), { recursive: true });
-    await fs.writeFile(fullPath, content, "utf8");
+    // `wx`: everything lands inside the directory just checked to be absent,
+    // so a file already there means something raced us, and is not ours to replace.
+    await fs.writeFile(fullPath, content, { flag: "wx" });
   }
 
   if (recipe && recipePath) {
@@ -204,7 +213,7 @@ function cancelled<T>(value: T | symbol): value is symbol {
 export interface RunNewOptions {
   /** `--publisher`: skips (or, with `--yes`, supplies) the publisher prompt. */
   publisher?: string;
-  /** `--template`: skips (or supplies) the template prompt; validated against `TEMPLATE_KINDS`. */
+  /** `--template`: skips (or supplies) the template prompt; validated against `ALL_TEMPLATE_KINDS`. */
   template?: string;
   /** `--yes`: fully non-interactive — accept defaults, never prompt (CI/scripting). */
   yes?: boolean;
@@ -244,8 +253,10 @@ function titleCaseSegment(segment: string): string {
 }
 
 function parseTemplate(value: string): TemplateKind {
-  if (!(TEMPLATE_KINDS as readonly string[]).includes(value)) {
-    throw new Error(`Unknown template "${value}" — expected one of: ${TEMPLATE_KINDS.join(", ")}`);
+  if (!(ALL_TEMPLATE_KINDS as readonly string[]).includes(value)) {
+    throw new Error(
+      `Unknown template "${value}" — expected one of: ${ALL_TEMPLATE_KINDS.join(", ")}`
+    );
   }
   return value as TemplateKind;
 }
@@ -266,15 +277,29 @@ function assertTemplateAllowedForProject(template: TemplateKind, projectLocal: b
   if (!projectLocal || !PROJECT_INCOMPATIBLE_TEMPLATES.includes(template)) return;
   throw new Error(
     `The "${template}" template contributes an MCP server, which a project-local plugin may not declare — ` +
-      `the host rejects the manifest at load. Use --template command or --template view with --project.`
+      `the host rejects the manifest at load. Use --template app (it serves tools to agents through ` +
+      `contributes.agentMcp instead), command or view with --project.`
   );
+}
+
+/**
+ * `app` is a project application — it declares a Home, a project database and
+ * agent tools bound to one project — so it has no installed-plugin form.
+ */
+function assertTemplateAllowedForScope(template: TemplateKind, projectLocal: boolean): void {
+  if (template === "app" && !projectLocal) {
+    throw new Error(
+      `The "app" template is a project application and needs --project: run it from inside the project it belongs to.`
+    );
+  }
 }
 
 /**
  * Non-interactive `daintree-plugin new` (the `--yes` path). Scaffolds straight
  * from flags with no prompts, for CI and scripting. The plugin name and
  * `--publisher` are required (there is no prompt to fall back on); the display
- * name defaults to the title-cased plugin name and the template to `command`.
+ * name defaults to the title-cased plugin name and the template to `command`,
+ * or to `app` with `--project`.
  */
 async function runNewNonInteractive(name: string | undefined, opts: RunNewOptions): Promise<void> {
   if (!name) {
@@ -285,8 +310,9 @@ async function runNewNonInteractive(name: string | undefined, opts: RunNewOption
   if (!opts.publisher) {
     throw new Error("--yes requires --publisher (there is no interactive prompt to fall back on)");
   }
-  const template = opts.template ? parseTemplate(opts.template) : "command";
+  const template = opts.template ? parseTemplate(opts.template) : defaultTemplate(opts.project);
   assertTemplateAllowedForProject(template, opts.project === true);
+  assertTemplateAllowedForScope(template, opts.project === true);
   const projectRoot = opts.project ? await resolveProjectRootOrThrow() : undefined;
 
   // scaffoldPlugin validates the name/publisher segment grammar and throws a
@@ -380,9 +406,11 @@ export async function runNew(name?: string, opts: RunNewOptions = {}): Promise<v
       return;
     }
   } else {
+    const kinds = opts.project ? PROJECT_TEMPLATE_KINDS : TEMPLATE_KINDS;
     const answer = await p.select({
       message: "Template",
-      options: TEMPLATE_KINDS.map((kind) => ({
+      initialValue: defaultTemplate(opts.project),
+      options: kinds.map((kind) => ({
         value: kind,
         label: kind,
         hint: TEMPLATE_HINTS[kind],
@@ -396,14 +424,15 @@ export async function runNew(name?: string, opts: RunNewOptions = {}): Promise<v
   }
 
   let projectRoot: string | undefined;
-  if (opts.project) {
-    try {
+  try {
+    assertTemplateAllowedForScope(template, opts.project === true);
+    if (opts.project) {
       assertTemplateAllowedForProject(template, true);
       projectRoot = await resolveProjectRootOrThrow();
-    } catch (err) {
-      p.cancel((err as Error).message);
-      return;
     }
+  } catch (err) {
+    p.cancel((err as Error).message);
+    return;
   }
 
   const result = await scaffoldPlugin({
@@ -416,6 +445,14 @@ export async function runNew(name?: string, opts: RunNewOptions = {}): Promise<v
   });
 
   const relDir = path.relative(process.cwd(), result.dir) || ".";
+  if (result.recipePath && template === "app") {
+    p.outro(
+      `Created ${result.scopedName} in ${relDir}, already built\n` +
+        `Open this project in Daintree to use it, and commit ${relDir} — dist/ included.\n` +
+        `To change it: cd ${relDir} && npm install && npm run dev`
+    );
+    return;
+  }
   if (result.recipePath) {
     p.outro(
       `Created ${result.scopedName} in ${relDir}\n` +
@@ -432,9 +469,14 @@ export async function runNew(name?: string, opts: RunNewOptions = {}): Promise<v
   );
 }
 
+function defaultTemplate(project: boolean | undefined): TemplateKind {
+  return project ? "app" : "command";
+}
+
 const TEMPLATE_HINTS: Record<TemplateKind, string> = {
   command: "single command with a handler",
   view: "panel view + React component",
-  mcp: "skeleton MCP server",
-  full: "command + view + MCP example",
+  mcp: "skeleton MCP server Daintree connects to",
+  full: "command + view + an MCP server Daintree connects to",
+  app: "complete, built project application: Home, data, agent tools, operations, tour",
 };

@@ -22,18 +22,28 @@
  */
 
 import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
 
 const root = path.resolve(import.meta.dirname, "../..");
 
-/** Samples whose committed view bundle is regenerated and diffed. */
+/**
+ * Samples whose committed build is regenerated and diffed: one view bundle, or
+ * a whole output directory. The reference application is the second kind — it
+ * is what `daintree-plugin new --project` copies, built, into a user's project,
+ * so a stale `dist/` there ships stale code to every new app.
+ */
 const SAMPLES = [
   {
     name: "file-tree",
     script: "build:sample-file-tree",
     artifact: "plugins/sample/file-tree/view/file-tree-view.js",
+  },
+  {
+    name: "acme.requests",
+    script: "build:sample-reference-app",
+    outDir: "plugins/sample-project/acme.requests/dist",
   },
 ];
 
@@ -101,13 +111,31 @@ function readArtifact(artifact) {
   }
 }
 
+/** Every file under `dir`, by path relative to the repository root. */
+function listFiles(dir) {
+  try {
+    return readdirSync(path.join(root, dir), { recursive: true, withFileTypes: true })
+      .filter((entry) => entry.isFile())
+      .map((entry) => path.relative(root, path.join(entry.parentPath, entry.name)))
+      .sort();
+  } catch {
+    return [];
+  }
+}
+
+/** The sample's committed output: its one bundle, or every file in its outDir. */
+function snapshot(sample) {
+  const files = sample.outDir ? listFiles(sample.outDir) : [sample.artifact];
+  return new Map(files.map((file) => [file, readArtifact(file)]));
+}
+
 for (const sample of SAMPLES) {
   // Captured before the rebuild, and compared after. Deliberately not a `git
   // diff`: that answers "does this differ from HEAD", which is empty for an
   // untracked artifact and noisy in any dirty tree. Comparing the bytes across
   // the rebuild answers the question actually being asked — was the artifact on
   // disk already what its source produces?
-  const before = shouldCheck ? readArtifact(sample.artifact) : null;
+  const before = shouldCheck ? snapshot(sample) : null;
 
   try {
     run("npm", ["run", sample.script]);
@@ -117,19 +145,28 @@ for (const sample of SAMPLES) {
     continue;
   }
 
-  auditExternals(sample.artifact);
+  const after = snapshot(sample);
+  for (const file of after.keys()) {
+    if (file.endsWith(".js")) auditExternals(file);
+  }
 
   if (!shouldCheck) continue;
 
-  const after = readArtifact(sample.artifact);
-  if (before === null) {
-    fail(`${sample.artifact} did not exist before the rebuild — commit the built artifact.`);
-  } else if (before !== after) {
-    fail(
-      `${sample.artifact} was stale. Rebuilding it from \`renderer/\` produced a different file, ` +
-        `so E2E was driving an artifact that no longer matches its source. The rebuilt file is now ` +
-        `on disk — review and commit it.`
-    );
+  for (const [file, content] of after) {
+    const committed = before.get(file);
+    if (committed === undefined || committed === null) {
+      fail(`${file} did not exist before the rebuild — commit the built artifact.`);
+    } else if (committed !== content) {
+      fail(
+        `${file} was stale. Rebuilding ${sample.name} from source produced a different file, ` +
+          `so what ships no longer matches its source. The rebuilt file is now on disk — review and commit it.`
+      );
+    }
+  }
+  for (const file of before.keys()) {
+    if (!after.has(file)) {
+      fail(`${file} is committed but the build no longer produces it — delete it.`);
+    }
   }
 }
 

@@ -1,0 +1,270 @@
+{
+  "$schema": "https://raw.githubusercontent.com/daintreehq/daintree/develop/schemas/plugin.project.schema.json",
+  "name": "acme.requests",
+  "version": "0.1.0",
+  "scope": "project",
+  "displayName": "Request Desk",
+  "mcpName": "requests",
+  "description": "A reference project application: synthetic requests that agents read and change through the app's tools, a report built in the background, and a short tour.",
+  "main": "dist/index.js",
+  "engines": {
+    "daintree": ">=0.46.0"
+  },
+  "capabilities": [
+    "fs:project-read",
+    "fs:project-write",
+    "agent:input",
+    "mcp:expose",
+    "artifact:store"
+  ],
+  "scopes": {
+    "fs": {
+      "allowedPaths": ["${project}"]
+    }
+  },
+  "application": {
+    "name": "Request Desk",
+    "iconId": "inbox",
+    "destination": "home",
+    "arrangement": "beside-grid",
+    "sidebarViewId": "requests",
+    "settingsViewId": "preferences",
+    "welcomeTour": {
+      "id": "welcome",
+      "version": 1
+    },
+    "firstWorkflow": "first-request",
+    "requiredTools": ["requests"],
+    "navigation": {
+      "version": 1,
+      "defaultSectionId": "requests",
+      "sections": [
+        {
+          "id": "requests",
+          "title": "Requests"
+        },
+        {
+          "id": "request",
+          "title": "Request",
+          "params": {
+            "requestId": {
+              "type": "string",
+              "required": true,
+              "persist": true,
+              "maxLength": 64
+            }
+          }
+        },
+        {
+          "id": "reports",
+          "title": "Reports"
+        }
+      ]
+    }
+  },
+  "contributes": {
+    "commands": [
+      {
+        "id": "first-request",
+        "title": "Try Request Desk with an agent",
+        "description": "Choose an agent and put a first Request Desk task in its draft.",
+        "category": "Request Desk",
+        "kind": "command",
+        "danger": "safe",
+        "requires": ["agent:input"]
+      },
+      {
+        "id": "open-connection",
+        "title": "Connect the report provider",
+        "description": "Open the Request Desk connection page in Project settings.",
+        "category": "Request Desk",
+        "kind": "command",
+        "danger": "safe",
+        "requires": []
+      },
+      {
+        "id": "resume-report",
+        "title": "Resume report",
+        "description": "Pick up a report the provider may still be building.",
+        "category": "Request Desk",
+        "kind": "command",
+        "danger": "safe",
+        "requires": []
+      }
+    ],
+    "panels": [
+      {
+        "id": "main",
+        "name": "Request Desk",
+        "iconId": "./icons/requests.svg",
+        "color": "var(--theme-category-orange)"
+      }
+    ],
+    "views": [
+      {
+        "id": "main",
+        "componentPath": "dist/home.js",
+        "location": "panel"
+      },
+      {
+        "id": "requests",
+        "componentPath": "dist/sidebar.js",
+        "location": "sidebar",
+        "name": "Requests",
+        "iconId": "inbox"
+      },
+      {
+        "id": "preferences",
+        "componentPath": "dist/settings.js",
+        "location": "settings",
+        "title": "Report provider",
+        "description": "Connect the synthetic report provider Request Desk builds reports with",
+        "pages": [
+          {
+            "id": "connection",
+            "title": "Connection",
+            "description": "Connect, test or disconnect the report provider"
+          }
+        ]
+      }
+    ],
+    "surfaces": {
+      "projectHome": {
+        "viewId": "main"
+      }
+    },
+    "settings": [
+      {
+        "id": "providerWorkspace",
+        "type": "string",
+        "scope": "local",
+        "label": "Report provider workspace",
+        "description": "The synthetic provider workspace reports are built in. Offline: nothing leaves this machine.",
+        "editor": "view"
+      }
+    ],
+    "setup": [
+      {
+        "id": "connect",
+        "title": "Connect the report provider",
+        "description": "Reports are built by a synthetic provider that needs a workspace.",
+        "done": {
+          "kind": "setting",
+          "key": "providerWorkspace"
+        },
+        "action": {
+          "kind": "settings",
+          "key": "providerWorkspace"
+        }
+      }
+    ],
+    "databases": [
+      {
+        "id": "requests",
+        "description": "Request Desk's requests, reports and provider jobs. Change requests through the Request Desk tools; read anything with database_query.",
+        "location": "project",
+        "schemaVersion": 3
+      },
+      {
+        "id": "operations",
+        "description": "The report operation journal, kept on this machine.",
+        "location": "local"
+      }
+    ],
+    "agentMcp": [
+      {
+        "id": "requests",
+        "name": "Request Desk",
+        "description": "List, add and update this project's requests, and build a report of them.",
+        "mode": "tools"
+      }
+    ],
+    "skills": [
+      {
+        "id": "request-desk",
+        "name": "Request Desk workflow",
+        "path": "skills/request-desk.md",
+        "triggers": ["request desk", "requests", "request report"]
+      }
+    ],
+    "recipes": [
+      {
+        "id": "triage",
+        "name": "Triage requests with an agent",
+        "requiresAgentTools": true,
+        "terminals": [
+          {
+            "type": "plugin-panel",
+            "panelId": "main"
+          },
+          {
+            "type": "claude",
+            "title": "Request triage",
+            "initialPrompt": "Use the Request Desk tools to list the open requests, then move the oldest one to in_progress with a short note saying what you would do first."
+          }
+        ]
+      }
+    ],
+    "tours": [
+      {
+        "id": "welcome",
+        "title": "Welcome to Request Desk",
+        "componentPath": "dist/tour.js",
+        "version": "1",
+        "finish": {
+          "hint": "Connect the report provider to build your first report",
+          "action": {
+            "kind": "settings",
+            "key": "providerWorkspace"
+          }
+        },
+        "chapters": [
+          {
+            "id": "requests",
+            "duration": 12.65,
+            "cues": {
+              "list": 2.624,
+              "tools": 8.366000000000001
+            },
+            "captions": [
+              {
+                "start": 0.3,
+                "end": 5.026000000000001,
+                "text": "Request Desk keeps this project's requests beside your agents."
+              },
+              {
+                "start": 5.026000000000001,
+                "end": 12.65,
+                "text": "Ask an agent to add or move one, and its tools change the list you are looking at."
+              }
+            ],
+            "audioUrl": null,
+            "narrationHash": "5ea93448"
+          },
+          {
+            "id": "reports",
+            "duration": 11.736,
+            "cues": {
+              "report": 3.4520000000000004,
+              "preview": 8.8
+            },
+            "captions": [
+              {
+                "start": 0.3,
+                "end": 4.390000000000001,
+                "text": "Connect the report provider, then build a report."
+              },
+              {
+                "start": 4.390000000000001,
+                "end": 11.736,
+                "text": "It runs in the background, survives a restart, and opens here when it is ready."
+              }
+            ],
+            "audioUrl": null,
+            "narrationHash": "ee9de259"
+          }
+        ]
+      }
+    ]
+  }
+}

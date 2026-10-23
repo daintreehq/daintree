@@ -7,12 +7,26 @@
 
 import { safeRecipeFilename } from "../../../../shared/utils/recipeFilename.js";
 import sdkPackage from "../../../plugin-sdk/package.json" with { type: "json" };
+import tourPackage from "../../../tour/package.json" with { type: "json" };
 import vitePackage from "../../../plugin-vite/package.json" with { type: "json" };
 import { CLI_VERSION } from "../version.js";
 
-export type TemplateKind = "command" | "view" | "mcp" | "full";
+export type TemplateKind = "command" | "view" | "mcp" | "full" | "app";
 
+/** The templates an installed (`new` without `--project`) plugin can use. */
 export const TEMPLATE_KINDS: readonly TemplateKind[] = ["command", "view", "mcp", "full"] as const;
+
+/**
+ * The templates a project plugin (`new --project`) can use, the default first.
+ * `app` exists only here: it is a project application. `mcp` and `full` are
+ * absent because they declare an MCP server Daintree connects to, which a
+ * project plugin may not; `app` serves its tools to agents through
+ * `contributes.agentMcp` instead.
+ */
+export const PROJECT_TEMPLATE_KINDS: readonly TemplateKind[] = ["app", "command", "view"] as const;
+
+/** Every template name `--template` accepts, in either scope. */
+export const ALL_TEMPLATE_KINDS: readonly TemplateKind[] = [...TEMPLATE_KINDS, "app"];
 
 export interface ScaffoldContext {
   /** Full scoped manifest name, e.g. `acme.issue-helper`. */
@@ -55,6 +69,8 @@ export const SCAFFOLD_TOOLCHAIN_RANGES = {
   "@daintreehq/plugin-sdk": `^${sdkPackage.version}`,
   "@daintreehq/plugin-vite": `^${vitePackage.version}`,
   "daintree-plugin": `^${CLI_VERSION}`,
+  // Only the `app` template depends on it, for typing and previewing its tour.
+  "@daintreehq/tour": `^${tourPackage.version}`,
 } as const;
 
 /**
@@ -773,6 +789,10 @@ function templateFiles(ctx: ScaffoldContext): Record<string, string> {
         ...previewFiles(ctx),
       };
     }
+    case "app":
+      // A copy of a maintained, built application rather than strings: see
+      // `loadReferenceAppFiles`, which `scaffoldPlugin` uses for this template.
+      throw new Error('The "app" template is copied from the bundled reference application');
   }
 }
 

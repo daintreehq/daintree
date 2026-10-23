@@ -15,6 +15,10 @@
  *    devDependencies at the tarballs (failing if the scaffold's ranges don't
  *    accept the versions being released), then install, typecheck, build,
  *    validate and package it.
+ * 4. Scaffold the `app` template into a bare project, prove its committed
+ *    build is there and validates before anything is installed, then install
+ *    the tarballs, typecheck, run its tests, and rebuild it: the released
+ *    packages must reproduce the build it shipped with, byte for byte.
  *
  * Needs the registry for third-party dependencies (react, vite, zod, ...) but
  * never publishes and needs no credentials. Expects `npm run packages:build`
@@ -331,6 +335,88 @@ function checkScaffold(root, consumer, tarballs) {
   console.log(`packaged ${packaged[0]}`);
 }
 
+/** Every file under `dir`, keyed by POSIX path relative to it. */
+export function readTree(dir) {
+  const files = new Map();
+  for (const entry of fs.readdirSync(dir, { recursive: true, withFileTypes: true })) {
+    if (!entry.isFile()) continue;
+    const rel = path
+      .relative(dir, path.join(entry.parentPath, entry.name))
+      .split(path.sep)
+      .join("/");
+    files.set(rel, fs.readFileSync(path.join(entry.parentPath, entry.name)));
+  }
+  return files;
+}
+
+/** The files two trees disagree on: missing from either side, or different bytes. */
+export function treeDifferences(expected, actual) {
+  const names = new Set([...expected.keys(), ...actual.keys()]);
+  return [...names]
+    .filter((name) => {
+      const a = expected.get(name);
+      const b = actual.get(name);
+      return a === undefined || b === undefined || !a.equals(b);
+    })
+    .sort();
+}
+
+function checkAppScaffold(root, consumer, tarballs) {
+  // A bare git marker is all `--project` needs to find the project root.
+  const project = path.join(root, "app-project");
+  fs.mkdirSync(path.join(project, ".git"), { recursive: true });
+  run(
+    path.join(consumer, "node_modules/.bin/create-daintree-plugin"),
+    ["orders", "--publisher", "smoke", "--yes", "--project"],
+    project
+  );
+  const plugin = path.join(project, ".daintree", "plugins", "smoke.orders");
+  const shipped = readTree(path.join(plugin, "dist"));
+  if (!shipped.has("index.js")) throw new Error("the app scaffold shipped no built dist/index.js");
+  // npm drops `.gitignore` from a package; the scaffold must still write it,
+  // or a repository that ignores dist/ silently loses the app's build.
+  const gitignore = path.join(plugin, ".gitignore");
+  if (!fs.existsSync(gitignore) || !fs.readFileSync(gitignore, "utf8").includes("!dist/")) {
+    throw new Error("the app scaffold wrote no .gitignore keeping dist/ tracked");
+  }
+  // Before any install: this is what a teammate who opens the project gets.
+  run(path.join(consumer, "node_modules/.bin/daintree-plugin"), ["validate"], plugin);
+
+  const pkgFile = path.join(plugin, "package.json");
+  const pkg = JSON.parse(fs.readFileSync(pkgFile, "utf8"));
+  for (const name of [...SCAFFOLD_TOOLCHAIN, "@daintreehq/tour"]) {
+    const range = pkg.devDependencies?.[name];
+    const { file, version } = tarballs.get(name);
+    if (!range) throw new Error(`the app scaffold no longer depends on ${name}`);
+    if (!semver.satisfies(version, range)) {
+      throw new Error(
+        `the app scaffold pins ${name}@${range}, which does not accept the ${version} being released`
+      );
+    }
+    pkg.devDependencies[name] = `file:${file}`;
+  }
+  // The committed build came from this repository's locked Vite (and the
+  // Rolldown it pins). A byte-for-byte rebuild is only meaningful on that same
+  // toolchain, so pin it; a newer Vite the range allows may chunk differently.
+  pkg.devDependencies.vite = JSON.parse(
+    fs.readFileSync(path.join(repoRoot, "node_modules/vite/package.json"), "utf8")
+  ).version;
+  fs.writeFileSync(pkgFile, JSON.stringify(pkg, null, 2) + "\n");
+
+  run("npm", ["install", "--no-audit", "--no-fund"], plugin);
+  run(path.join(plugin, "node_modules/.bin/tsc"), ["--noEmit", "-p", "."], plugin);
+  run("npm", ["test"], plugin);
+  run("npm", ["run", "build"], plugin);
+  const differences = treeDifferences(shipped, readTree(path.join(plugin, "dist")));
+  if (differences.length > 0) {
+    throw new Error(
+      `rebuilding the app scaffold from the released packages changed dist/: ${differences.join(", ")}. ` +
+        `The reference's committed build is stale, or the packages build it differently.`
+    );
+  }
+  console.log("app scaffold rebuilt identically from the tarballs");
+}
+
 function main() {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "daintree-packages-smoke-")));
   try {
@@ -365,6 +451,7 @@ function main() {
     checkEntryPoints(consumer, tarballs);
     checkBins(consumer, tarballs);
     checkScaffold(root, consumer, tarballs);
+    checkAppScaffold(root, consumer, tarballs);
     console.log("packages consumer smoke ok");
   } finally {
     if (process.env.KEEP_SMOKE_DIR) console.log(`kept ${root}`);

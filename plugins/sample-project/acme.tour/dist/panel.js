@@ -5,91 +5,53 @@
  * Two constraints follow from "verbatim", and both fail silently at runtime
  * rather than at build time, because there is no build:
  *
- * 1. `react` is the only bare specifier that resolves. The host import map
- *    serves exactly five (`react`, `react/jsx-runtime`, `react/jsx-dev-runtime`,
- *    `react-dom`, `react-dom/client`) and nothing else — importing
- *    `@daintreehq/plugin-sdk/react` for `useHostChannel` here would throw at
- *    module load. Those hooks exist for plugins built through
- *    `@daintreehq/plugin-vite`, which bundles them in. A hand-written view talks
- *    to `window.electron.plugin` directly, which is all the hooks wrap.
+ * 1. Bare specifiers resolve only through the host import map, which serves
+ *    React's five public entries, the tour's four, `@daintreehq/plugin-ui` (the
+ *    kit, below) and `@daintreehq/plugin-sdk/react` — nothing else. Any other
+ *    package import throws at module load. The SDK's hooks would do for this
+ *    view; it talks to `window.electron.plugin` directly so the bridge they wrap
+ *    stays visible.
  * 2. No JSX, because nothing transpiles it. `React.createElement`, aliased to
  *    `h` below, is the whole difference.
  */
 
 import React from "react";
+import { MediaPlayer } from "@daintreehq/plugin-ui";
 
 const { createElement: h, useCallback, useEffect, useRef, useState } = React;
 
-/** Same shape the host's own file viewer builds; the protocol wants both, absolute. */
-function daintreeFileUrl(filePath, rootPath) {
-  return `daintree-file://load?path=${encodeURIComponent(filePath)}&root=${encodeURIComponent(rootPath)}`;
-}
-
 /**
- * Media over `daintree-file://` has to be fetched into a Blob first — pointing
- * an `<audio>`/`<video>` `src` straight at the protocol looks like it works and
- * then dies seconds in. Chromium's custom-scheme media loader is single-shot:
- * it cannot serve the follow-up range request, so any file whose index trails
- * its payload (the default mp4 layout most recorders emit) fails in the demuxer
- * once playback passes the buffered head. `fetch` bypasses the media loader and
- * a `blob:` URL is fully seekable in-renderer. Both schemes are already in the
- * host CSP's `media-src`.
- *
- * The object URL is revoked in the effect's cleanup, never straight after the
- * element is assigned — revoking early detaches the blob before the element has
- * finished reading it.
+ * Media never travels as bytes. The worker imports the file into the host's
+ * artifact cache and hands back a metadata-only handle; `MediaPlayer` mints
+ * its own leased source for it and seeks by byte range, so a file of any size
+ * plays without being buffered into the view.
  */
-const MEDIA_MAX_BYTES = 256 * 1024 * 1024;
-
-function useMediaUrl(filePath, rootPath) {
-  const [objectUrl, setObjectUrl] = useState(null);
+function useMediaArtifact(pluginId, filePath) {
+  const [artifact, setArtifact] = useState(null);
   const [mediaError, setMediaError] = useState(null);
 
   useEffect(() => {
-    // Cleared FIRST, on every run. The cleanup below revokes the previous URL,
-    // so leaving it in state would keep a dead `blob:` on screen the moment the
-    // path changes to one that does not fetch — or to nothing at all.
-    setObjectUrl(null);
+    // Cleared first, so a path that fails to import never leaves the previous
+    // file's player on screen.
+    setArtifact(null);
     setMediaError(null);
-    if (!filePath || !rootPath) return;
+    if (!filePath) return;
 
-    const controller = new AbortController();
-    let url = null;
-
-    fetch(daintreeFileUrl(filePath, rootPath), { signal: controller.signal })
-      .then(async (response) => {
-        if (controller.signal.aborted) return;
-        if (!response.ok) throw new Error(`daintree-file responded ${response.status}`);
-        // The protocol serves files of any size, and this buffers the whole
-        // thing into memory — so cap it, and check the declared length before
-        // reading the body rather than after.
-        const declared = Number(response.headers.get("content-length"));
-        if (Number.isFinite(declared) && declared > MEDIA_MAX_BYTES) {
-          // Drop the unread body so the protocol stream closes now.
-          void response.body?.cancel().catch(() => {});
-          throw new Error("File is too large to preview");
-        }
-        const blob = await response.blob();
-        if (controller.signal.aborted) return;
-        if (blob.size > MEDIA_MAX_BYTES) throw new Error("File is too large to preview");
-        url = URL.createObjectURL(blob);
-        setObjectUrl(url);
+    let cancelled = false;
+    window.electron.plugin
+      .invoke(pluginId, "import-media", { path: filePath })
+      .then((handle) => {
+        if (!cancelled) setArtifact(handle);
       })
       .catch((err) => {
-        // An abort is an ordinary cleanup, not a failure worth showing.
-        if (controller.signal.aborted) return;
-        setMediaError(err instanceof Error ? err.message : String(err));
+        if (!cancelled) setMediaError(err instanceof Error ? err.message : String(err));
       });
-
     return () => {
-      controller.abort();
-      // Revoked here, never straight after assignment — revoking early detaches
-      // the blob before the element has finished reading it.
-      if (url) URL.revokeObjectURL(url);
+      cancelled = true;
     };
-  }, [filePath, rootPath]);
+  }, [pluginId, filePath]);
 
-  return { objectUrl, mediaError };
+  return { artifact, mediaError };
 }
 
 /**
@@ -111,7 +73,7 @@ export default function TourPanel({ panelId, pluginId, initialArgs, persistState
   // needs on mount and treats anything arriving here as an update.
   const [panelsOpen, setPanelsOpen] = useState(null);
 
-  const { objectUrl: audioUrl, mediaError } = useMediaUrl(initialArgs?.audioPath ?? "", rootPath);
+  const { artifact: audio, mediaError } = useMediaArtifact(pluginId, initialArgs?.audioPath ?? "");
   const persist = useRef(persistState);
   persist.current = persistState;
 
@@ -229,8 +191,8 @@ export default function TourPanel({ panelId, pluginId, initialArgs, persistState
         ),
     mediaError
       ? h("p", { style: { color: "var(--color-status-error)" } }, mediaError)
-      : audioUrl
-        ? h("audio", { key: audioUrl, src: audioUrl, controls: true })
+      : audio
+        ? h(MediaPlayer, { key: audio.id, source: audio })
         : null
   );
 }

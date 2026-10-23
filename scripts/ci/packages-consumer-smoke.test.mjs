@@ -9,6 +9,7 @@ import {
   isolatedEnv,
   normalizeExports,
   tarballFilename,
+  treeDifferences,
 } from "./packages-consumer-smoke.mjs";
 
 describe("packages-consumer-smoke", () => {
@@ -115,5 +116,20 @@ describe("packages-consumer-smoke", () => {
     expect(env).not.toHaveProperty("npm_config_workspace");
     expect(env).not.toHaveProperty("NPM_CONFIG_WORKSPACES");
     expect(env.npm_config_registry).toBe("https://registry.npmjs.org/");
+  });
+
+  it("names every file a rebuilt tree adds, drops or changes", () => {
+    const shipped = new Map([
+      ["index.js", Buffer.from("a")],
+      ["home.js", Buffer.from("b")],
+      ["gone.js", Buffer.from("c")],
+    ]);
+    const rebuilt = new Map([
+      ["index.js", Buffer.from("a")],
+      ["home.js", Buffer.from("B")],
+      ["new.js", Buffer.from("d")],
+    ]);
+    expect(treeDifferences(shipped, rebuilt)).toEqual(["gone.js", "home.js", "new.js"]);
+    expect(treeDifferences(shipped, new Map(shipped))).toEqual([]);
   });
 });

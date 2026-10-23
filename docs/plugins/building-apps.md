@@ -8,15 +8,13 @@ Five parts, all in the project's repository:
 
 ```
 <project>/
-├── AGENTS.md                      # names the data and points at the contract
-├── CLAUDE.md                      # "@AGENTS.md", so Claude Code reads the same file
 ├── data/budget.db                 # or board/board.json, crm/contacts/*.md, habits/log/*.jsonl
 ├── scripts/budget-report.mjs      # optional: numbers agents shouldn't work out by eye
 └── .daintree/
-    ├── mcp.json                   # turns the plugin's agent tools on for everyone who opens the project
+    ├── mcp.json                   # optional: default agent-tool access for the project's own plugins
     └── plugins/acme.budget/
         ├── plugin.json
-        ├── AGENTS.md              # the data contract
+        ├── AGENTS.md              # the data contract, beside plugin.json
         └── dist/index.mjs, dist/panel.js
 ```
 
@@ -134,7 +132,7 @@ Agents reach a plugin's data three ways, and a good data plugin offers all three
 - **Writes through declared queries or your own tools.** A write one statement can express — `add_transaction`, `move_card` — can be [declared](./contribution-points.md#declared-queries) as a `"write"` query, which the host serves at **Read and write** with its params' constraints (`format`, `pattern`, `minimum`, …) and your schema's constraints and triggers as its rules. Declared queries need Daintree newer than 0.43, which refuses a manifest that has them, so raise `engines.daintree` past 0.43 when you add one. Writes that need code go on an `agentMcp` endpoint with a small roster registered by [`host.mcp.registerTools`](./host-api.md#mcpregistertools), which puts your validation in front of every write: ids you mint, a split that must balance, a category that must exist, a remote API behind the data. Keep the roster small and specific; the host caps it at 16 tools, counting your declared queries.
 - **Direct editing as the fallback.** Files or `sqlite3` under the rules in the plugin's `AGENTS.md`. Every agent has this, including one launched outside Daintree, before the plugin was turned on, or by a CLI Daintree can't hand servers to, so the contract still has to carry the recipes. A `local` database has no such fallback, since it isn't in the project; keep data an agent without tools must edit in a `project` database or in files.
 
-Agents launched in Daintree see all of this as one server, `daintree-budget`, named by the manifest's [`mcpName`](./manifest.md#mcpname). It is off until the user turns the plugin's agent access to **Read only** (the database tools and declared reads) or **Read and write** (declared writes and yours as well) in Project settings → Plugins → Agent tools. Commit `.daintree/mcp.json` so everyone who opens the project, and trusts its plugins, starts with it on:
+Agents launched in Daintree see all of this as one server, `daintree-budget`, named by the manifest's [`mcpName`](./manifest.md#mcpname). These are tools Daintree serves _to_ agents (the manifest's `agentMcp`, capability `mcp:expose`); they have nothing to do with `contributes.mcpServers`, which is an MCP server Daintree itself connects to as a client and which a project plugin cannot declare. The server is off until the user turns the plugin's agent access to **Read only** (the database tools and declared reads) or **Read and write** (declared writes and yours as well) in Project settings → Plugins → Agent tools. A committed `.daintree/mcp.json` sets the default access for the project's own plugins. It is a default only: a user's own choice in settings wins, it never reaches an installed plugin, and it is not the agent CLI's MCP config. Commit one so everyone who opens the project, and trusts its plugins, starts with the tools on:
 
 ```json
 { "plugins": { "acme.budget": "read-write" } }
@@ -156,7 +154,7 @@ Beyond the tools' own descriptions, the agent learns your data only from `AGENTS
 - **How to answer questions**, not just how to make changes. Read-only questions are where agents slip: one asked "who do I follow up with this week?" and silently dropped a contact at the edge of the window. Give the exact query or command for common questions.
 - **What the panel shows**, so an agent knows its change is visible and what a warning in the panel means.
 
-The project's root `AGENTS.md` names the data, points at the contract by path, and repeats the three or four rules that matter most, so an agent that never opens the second file still gets them. A `CLAUDE.md` containing `@AGENTS.md` makes Claude Code read the same file.
+Keep the contract in the plugin's own `AGENTS.md`, beside `plugin.json`, and say in it which three or four rules matter most. Whether the project's root `AGENTS.md` or `CLAUDE.md` points at it is the user's choice: those files belong to the project's people, so suggest the line in your README, and never have a plugin or a generator write them.
 
 **Put the rules in the data where you can.** For SQLite, write column comments inside `CREATE TABLE` — `database_schema` and `sqlite3 data/budget.db .schema` both print them, and one of the two is the first thing an agent runs. Enforce invariants with `CHECK` constraints and triggers that `RAISE(ABORT, '<what to do instead>')`, because the `sqlite3` CLI does not enforce foreign keys and the agent reads the message and corrects itself. Tell agents to leave `PRAGMA journal_mode`, `user_version` and the `_daintree_meta` table alone. More in [Host API → db](./host-api.md#db--host-managed-sqlite).
 
@@ -306,10 +304,10 @@ In both runs, try each agent you expect people to use, since they read tools and
 ## Checklist
 
 - [ ] The store fits the data: files for documents a team diffs, SQLite for queries and totals; `project` for data the team shares, `local` for caches and data that shouldn't travel with the repository.
-- [ ] Agents get tools: a declared database for reads, declared queries for the common reads and one-statement writes, an `agentMcp` endpoint (`mcp:expose`) for writes that need code, a short `mcpName`, and `.daintree/mcp.json` turning the plugin on for the project.
+- [ ] Agents get tools: a declared database for reads, declared queries for the common reads and one-statement writes, an `agentMcp` endpoint (`mcp:expose`) for writes that need code, a short `mcpName`, and, optionally, `.daintree/mcp.json` setting the project's default access.
 - [ ] An installed plugin with per-project data scopes its own tools by `caller.projectId` rather than relying on the database tools.
 - [ ] The plugin's `AGENTS.md` names the tools and when to use them, then covers paths, schema, ids, invariants, safe-editing habits, recipes with non-test values, and how to answer common questions for an agent without them.
-- [ ] The root `AGENTS.md` points at it and repeats the key rules; `CLAUDE.md` imports it.
+- [ ] The contract lives beside `plugin.json` and leads with the key rules; the project's root `AGENTS.md` and `CLAUDE.md` are left to the user.
 - [ ] Arithmetic answers come from a script that shares the panel's code.
 - [ ] The contract says what agents in a linked worktree should do.
 - [ ] For SQLite: rules in `CHECK` constraints and triggers, column comments in `CREATE TABLE`, the database opened lazily, reads outside transactions.
