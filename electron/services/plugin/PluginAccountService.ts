@@ -1253,7 +1253,14 @@ export class PluginAccountService {
         const seq = ++listener.seq;
         void this.stateOf(next).then((state) => {
           // A newer delivery, or another binding change, has spoken since.
-          if (listener.seq !== seq || !sameTarget(this.safeResolve(listener), next)) return;
+          const now = this.safeResolve(listener);
+          if (
+            listener.seq !== seq ||
+            !sameTarget(now, next) ||
+            now?.available !== next?.available
+          ) {
+            return;
+          }
           this.invokeListener(listener, state);
         });
       }

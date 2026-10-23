@@ -76,14 +76,13 @@ export function PluginAccountBindingRow({ plugin }: { plugin: LoadedPluginInfo }
     return () => unsubscribe?.();
   }, [pluginId, refresh]);
 
-  if (loadFailed && !status) {
-    return (
-      <SettingsLoadErrorBanner
-        message="Couldn't read which connection this project uses"
-        onRetry={refresh}
-      />
-    );
-  }
+  const loadError = loadFailed ? (
+    <SettingsLoadErrorBanner
+      message="Couldn't read which connection this project uses"
+      onRetry={refresh}
+    />
+  ) : null;
+  if (loadFailed && !status) return loadError;
 
   const selected = status?.choices.find(
     (choice) => choiceValue(choice) === choiceValue(status.selected)
@@ -109,34 +108,37 @@ export function PluginAccountBindingRow({ plugin }: { plugin: LoadedPluginInfo }
   };
 
   return (
-    <SettingsGroup>
-      <SettingsSelect
-        label="Connection for this project"
-        description={
-          gone
-            ? "The connection this project used is gone, so nothing is used. Choose another"
-            : selected && !selected.connected
-              ? plugin.origin === "project"
-                ? "Not connected yet. Connect it below, or choose another"
-                : "Not connected yet. Connect it in the plugin manager, or choose another"
-              : "Which signed-in connection this project uses. Nothing is written to the repository"
-        }
-        value={gone ? "" : choiceValue(status.selected)}
-        placeholder="Choose a connection"
-        options={status.choices.map((choice) => ({
-          value: choiceValue(choice),
-          label: choiceLabel(choice, plugin),
-        }))}
-        onValueChange={(value) => {
-          const choice = status.choices.find((c) => choiceValue(c) === value);
-          if (choice) void choose({ connectionId: choice.connectionId, source: choice.source });
-        }}
-        isModified={status.binding !== null}
-        onReset={() => void choose(null)}
-        resetAriaLabel="Use the default connection"
-        disabled={saving}
-        error={error ?? undefined}
-      />
-    </SettingsGroup>
+    <>
+      {loadError}
+      <SettingsGroup>
+        <SettingsSelect
+          label="Connection for this project"
+          description={
+            gone
+              ? "The connection this project used is gone, so nothing is used. Choose another"
+              : selected && !selected.connected
+                ? plugin.origin === "project"
+                  ? "Not connected yet. Connect it below, or choose another"
+                  : "Not connected yet. Connect it in the plugin manager, or choose another"
+                : "Which signed-in connection this project uses. Nothing is written to the repository"
+          }
+          value={gone ? "" : choiceValue(status.selected)}
+          placeholder="Choose a connection"
+          options={status.choices.map((choice) => ({
+            value: choiceValue(choice),
+            label: choiceLabel(choice, plugin),
+          }))}
+          onValueChange={(value) => {
+            const choice = status.choices.find((c) => choiceValue(c) === value);
+            if (choice) void choose({ connectionId: choice.connectionId, source: choice.source });
+          }}
+          isModified={status.binding !== null}
+          onReset={() => void choose(null)}
+          resetAriaLabel="Use the default connection"
+          disabled={saving}
+          error={error ?? undefined}
+        />
+      </SettingsGroup>
+    </>
   );
 }
