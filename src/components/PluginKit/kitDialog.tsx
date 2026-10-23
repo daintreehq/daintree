@@ -17,7 +17,6 @@ import {
   PluginStyleScope,
   scopedContent,
 } from "./kitProps";
-import { PluginKitLayerContext, type PluginKitLayer } from "./kitScope";
 
 function readDialogAction(action: PluginDialogAction | undefined): DialogAction | undefined {
   if (typeof action !== "object" || action === null) return undefined;
@@ -49,10 +48,6 @@ export function iconNode(source: unknown): ReactNode {
 
 export function zIndexOf(layer: unknown): "nested" | undefined {
   return layer === "nested" ? "nested" : undefined;
-}
-
-export function layerOf(layer: unknown): PluginKitLayer {
-  return layer === "nested" ? "nested" : "modal";
 }
 
 export function noop() {}
@@ -104,41 +99,37 @@ export function KitDialogFrame({
   const footerHint =
     scopedContent(hint) ?? (custom === undefined ? disabledReasonOf(primaryAction) : undefined);
   return (
-    // Context reaches through the dialog's portal, so kit overlays opened
-    // inside it can stack above a nested dialog.
-    <PluginKitLayerContext.Provider value={layerOf(layer)}>
-      <AppDialog
-        isOpen={open === true}
-        onClose={fn(onClose) ?? noop}
-        size={size}
-        placement={placement}
-        dismissible={dismissible !== false}
-        zIndex={zIndexOf(layer)}
-        data-testid={nonEmpty(testId)}
-      >
-        <AppDialog.Header>
-          <AppDialog.Title icon={iconNode(icon)}>{scopedContent(title)}</AppDialog.Title>
-          <AppDialog.CloseButton />
-        </AppDialog.Header>
-        <AppDialog.Body>
-          <PluginStyleScope block className="space-y-3">
-            {hasContent(description) ? (
-              <AppDialog.Description>{node(description)}</AppDialog.Description>
-            ) : null}
-            {node(children)}
+    <AppDialog
+      isOpen={open === true}
+      onClose={fn(onClose) ?? noop}
+      size={size}
+      placement={placement}
+      dismissible={dismissible !== false}
+      zIndex={zIndexOf(layer)}
+      data-testid={nonEmpty(testId)}
+    >
+      <AppDialog.Header>
+        <AppDialog.Title icon={iconNode(icon)}>{scopedContent(title)}</AppDialog.Title>
+        <AppDialog.CloseButton />
+      </AppDialog.Header>
+      <AppDialog.Body>
+        <PluginStyleScope block className="space-y-3">
+          {hasContent(description) ? (
+            <AppDialog.Description>{node(description)}</AppDialog.Description>
+          ) : null}
+          {node(children)}
+        </PluginStyleScope>
+      </AppDialog.Body>
+      {custom !== undefined ? (
+        <AppDialog.Footer hint={footerHint}>
+          {/* One container: a hint spreads the footer, and loose controls would scatter across it. */}
+          <PluginStyleScope block className="flex shrink-0 items-center gap-3">
+            {custom}
           </PluginStyleScope>
-        </AppDialog.Body>
-        {custom !== undefined ? (
-          <AppDialog.Footer hint={footerHint}>
-            {/* One container: a hint spreads the footer, and loose controls would scatter across it. */}
-            <PluginStyleScope block className="flex shrink-0 items-center gap-3">
-              {custom}
-            </PluginStyleScope>
-          </AppDialog.Footer>
-        ) : primary || secondary ? (
-          <AppDialog.Footer primaryAction={primary} secondaryAction={secondary} hint={footerHint} />
-        ) : null}
-      </AppDialog>
-    </PluginKitLayerContext.Provider>
+        </AppDialog.Footer>
+      ) : primary || secondary ? (
+        <AppDialog.Footer primaryAction={primary} secondaryAction={secondary} hint={footerHint} />
+      ) : null}
+    </AppDialog>
   );
 }

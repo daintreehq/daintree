@@ -1,6 +1,5 @@
 import {
   isValidElement,
-  useContext,
   useDeferredValue,
   useEffect,
   useId,
@@ -65,7 +64,7 @@ import {
   str,
   useKitOwnerAttributes,
 } from "./kitProps";
-import { PluginKitLayerContext, useKitOverlayZClass } from "./kitScope";
+import { useKitLayerNested, useKitOverlayZClass } from "./kitScope";
 import { sizedIcon } from "./PluginKitPatterns";
 
 /**
@@ -349,7 +348,7 @@ function KitCommandPalette({
   const reportQuery = fn(onQueryChange);
   const heading = str(title) ?? "";
   const action = nonEmpty(actionLabel);
-  const layer = useContext(PluginKitLayerContext);
+  const nested = useKitLayerNested();
 
   const [query, setQuery] = useState("");
   const [cursor, setCursor] = useState(0);
@@ -559,7 +558,7 @@ function KitCommandPalette({
     <SearchablePalette<PaletteResult>
       tier="command"
       // Opened from inside a nested kit dialog, it has to stack above it.
-      zIndex={layer === "nested" ? "nested" : undefined}
+      zIndex={nested ? "nested" : undefined}
       isOpen={isOpen}
       query={query}
       results={results}

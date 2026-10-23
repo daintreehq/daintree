@@ -8,6 +8,7 @@ import {
   OVERLAY_MOTION_CLASS,
   OVERLAY_SIDE_OFFSET,
 } from "./overlayMotion";
+import { useDialogOverlayZClass } from "./dialogLayer";
 import { composeHandlers, primeOnEvent, useRadixPrimitives } from "./radix-loader";
 import { useIsDockPopoverChild } from "./DockPopoverChildContext";
 import { menuRowPointerMove } from "./menu-row-hover-focus";
@@ -254,6 +255,7 @@ const SelectContent = React.forwardRef<
     ref
   ) => {
     const radix = useRadixPrimitives();
+    const dialogOverlayZ = useDialogOverlayZClass();
     const isDockPopoverChild = useIsDockPopoverChild();
     if (!radix) return null;
     const Portal = radix.SelectPrimitive.Portal;
@@ -282,6 +284,7 @@ const SelectContent = React.forwardRef<
             // Escapes the toolbar's drag region via the portal — see `.app-no-drag` (#12347).
             "app-no-drag",
             "relative z-[var(--z-popover)] overflow-hidden rounded-[var(--radius-lg)] surface-overlay shadow-overlay text-text-primary",
+            dialogOverlayZ,
             // A popper list hangs off its trigger at the trigger's width, so it
             // drops rather than zooming from a corner; item-aligned sits over the
             // trigger and keeps the shared overlay motion.

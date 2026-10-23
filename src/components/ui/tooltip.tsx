@@ -7,6 +7,7 @@ import {
   TOOLTIP_MOTION_CLASS,
   TOOLTIP_PRESS_DISMISSED_MOTION_CLASS,
 } from "./overlayMotion";
+import { useDialogOverlayZClass } from "./dialogLayer";
 import { primeOnEvent, useRadixPrimitives } from "./radix-loader";
 import { FixedDropdownVisibleContext } from "./fixed-dropdown";
 import { useIsDockPopoverChild } from "./DockPopoverChildContext";
@@ -413,6 +414,7 @@ const TooltipContent = React.forwardRef<
     ref
   ) => {
     const radix = useRadixPrimitives();
+    const dialogOverlayZ = useDialogOverlayZClass();
     const isDockPopoverChild = useIsDockPopoverChild();
     const pressDismiss = React.useContext(TooltipPressDismissContext);
     if (!radix) return null;
@@ -429,6 +431,7 @@ const TooltipContent = React.forwardRef<
           style={{ transformOrigin: "var(--radix-tooltip-content-transform-origin)", ...style }}
           className={cn(
             "z-[var(--z-popover)] max-w-xs overflow-hidden rounded-[var(--radius-md)] surface-overlay shadow-overlay text-xs text-text-primary",
+            dialogOverlayZ,
             TOOLTIP_CARD_PADDING,
             pressDismiss?.dismissedByPress
               ? TOOLTIP_PRESS_DISMISSED_MOTION_CLASS

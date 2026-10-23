@@ -6,6 +6,7 @@ import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { VirtuosoMockContext } from "react-virtuoso";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { registerDockPopoverLayer } from "@/lib/dockPopoverLayer";
 
 vi.mock("@/services/ActionService", () => ({
   actionService: { dispatch: vi.fn(() => Promise.resolve()) },
@@ -15,7 +16,8 @@ vi.mock("@/services/ActionService", () => ({
 import * as kit from "@daintreehq/plugin-ui";
 import { normalizeSelectOptions, pickDomProps } from "@/components/PluginKit/PluginKit";
 import { avatarInitials } from "@/components/PluginKit/PluginKitOverlays";
-import { PluginKitLayerContext, PluginKitOwnerContext } from "@/components/PluginKit/kitScope";
+import { PluginKitOwnerContext } from "@/components/PluginKit/kitScope";
+import { DialogLayerContext } from "@/components/ui/dialogLayer";
 import { compareTreeNames } from "@/components/PluginKit/PluginKitFileTree";
 import { FLEX_COLUMN_MAX_PX, layoutColumns } from "@/components/PluginKit/PluginKitLists";
 import { sparklineRuns } from "@/components/PluginKit/PluginKitData";
@@ -781,7 +783,7 @@ describe("@daintreehq/plugin-ui overlay isolation, layering and ownership", () =
     render(
       withTooltips(
         createElement(
-          PluginKitLayerContext.Provider,
+          DialogLayerContext.Provider,
           { value: "nested" },
           createElement(kit.TruncatedTooltip, {
             content: "/a/very/long/path",
@@ -817,6 +819,101 @@ describe("@daintreehq/plugin-ui overlay isolation, layering and ownership", () =
     );
     const menu = await screen.findByRole("menu", { hidden: true });
     expect(menu.className).toContain(NESTED_OVERLAY_Z);
+  });
+
+  describe("in a Dialog promoted by an open dock preview", () => {
+    let releaseDock: (() => void) | undefined;
+    afterEach(() => {
+      releaseDock?.();
+      releaseDock = undefined;
+    });
+
+    function inDialogOverDock(child: ReturnType<typeof createElement>) {
+      releaseDock = registerDockPopoverLayer();
+      return createElement(kit.Dialog, {
+        open: true,
+        onClose: () => {},
+        title: "App settings",
+        children: child,
+      });
+    }
+
+    it("stacks a Select above the dialog, and its option is selectable", async () => {
+      const onValueChange = vi.fn();
+      render(
+        inDialogOverDock(
+          createElement(kit.Select, {
+            "aria-label": "Pick",
+            value: "a",
+            onValueChange,
+            options: [
+              { value: "a", label: "Alpha" },
+              { value: "b", label: "Beta" },
+            ],
+          })
+        )
+      );
+      const trigger = await screen.findByRole("combobox", { name: "Pick", hidden: true });
+      await act(async () => {
+        fireEvent.keyDown(trigger, { key: "Enter" });
+      });
+      const listbox = await screen.findByRole("listbox", { hidden: true });
+      expect(listbox.closest(`[class*="${NESTED_OVERLAY_Z}"]`)).not.toBeNull();
+
+      const option = screen.getByRole("option", { name: "Beta", hidden: true });
+      await act(async () => {
+        fireEvent.keyDown(option, { key: "Enter" });
+      });
+      await waitFor(() => expect(onValueChange).toHaveBeenCalled());
+      expect(onValueChange.mock.calls[0]?.[0]).toBe("b");
+    });
+
+    it("closes only the Select on Escape and hands focus back to its trigger", async () => {
+      render(inDialogOverDock(overlays.select()));
+      const trigger = await screen.findByRole("combobox", { name: "Pick", hidden: true });
+      await act(async () => {
+        fireEvent.keyDown(trigger, { key: "Enter" });
+      });
+      const listbox = await screen.findByRole("listbox", { hidden: true });
+
+      await act(async () => {
+        fireEvent.keyDown(listbox, { key: "Escape" });
+      });
+
+      await waitFor(() => expect(screen.queryByRole("listbox", { hidden: true })).toBeNull());
+      expect(screen.getByRole("dialog", { hidden: true })).not.toBeNull();
+      await waitFor(() => expect(document.activeElement).toBe(trigger));
+    });
+
+    it("stacks a DropdownMenu above the dialog", async () => {
+      render(inDialogOverDock(overlays.menu()));
+      const menu = await screen.findByRole("menu", { hidden: true });
+      expect(menu.className).toContain(NESTED_OVERLAY_Z);
+    });
+
+    it("stacks a Popover above the dialog", async () => {
+      render(inDialogOverDock(overlays.popover()));
+      const body = await screen.findByTestId("popover-body");
+      const content = body.closest("[data-radix-popper-content-wrapper] > *");
+      expect(content?.className).toContain(NESTED_OVERLAY_Z);
+    });
+
+    it("leaves a Select in a main-pane Dialog at the popover tier", async () => {
+      render(
+        createElement(kit.Dialog, {
+          open: true,
+          onClose: () => {},
+          title: "App settings",
+          children: overlays.select(),
+        })
+      );
+      const trigger = await screen.findByRole("combobox", { name: "Pick", hidden: true });
+      await act(async () => {
+        fireEvent.keyDown(trigger, { key: "Enter" });
+      });
+      const listbox = await screen.findByRole("listbox", { hidden: true });
+      expect(listbox.closest(`[class*="${NESTED_OVERLAY_Z}"]`)).toBeNull();
+    });
   });
 
   it("leaves overlays outside a nested Dialog at the popover tier", async () => {

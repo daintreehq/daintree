@@ -12,6 +12,7 @@ import {
 import { useEscapeStack } from "@/hooks/useEscapeStack";
 import { useUIStore } from "@/store/uiStore";
 import { OVERLAY_SIDE_OFFSET } from "./overlayMotion";
+import { useDialogOverlayZClass } from "./dialogLayer";
 
 // Grace window after the dropdown opens during which overlay-count rises are
 // treated as in-flight modals (e.g. cold-start AgentSetupWizard) rather than
@@ -61,6 +62,7 @@ export function FixedDropdown({
   persistThroughChildOverlays = false,
   keepMounted = false,
 }: FixedDropdownProps) {
+  const dialogOverlayZ = useDialogOverlayZClass();
   const [mounted, setMounted] = useState(false);
   const [position, setPosition] = useState<{
     top: number;
@@ -291,7 +293,7 @@ export function FixedDropdown({
   );
 
   return createPortal(
-    <div className="fixed inset-0 z-[var(--z-popover)] pointer-events-none">
+    <div className={cn("fixed inset-0 z-[var(--z-popover)] pointer-events-none", dialogOverlayZ)}>
       {keepMounted ? (
         <Activity mode={shouldRender ? "visible" : "hidden"}>
           {/* The context carries `open`, NOT `shouldRender`.

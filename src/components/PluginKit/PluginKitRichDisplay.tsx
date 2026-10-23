@@ -75,7 +75,7 @@ import {
   positive,
   str,
 } from "./kitProps";
-import { PluginKitLayerContext, useKitOverlayZClass } from "./kitScope";
+import { useKitOverlayZClass } from "./kitScope";
 import { pluginKitRichCharts } from "./PluginKitRichCharts";
 
 // Rich display: CLI output in the terminal's own colours, the host's hover
@@ -1166,37 +1166,33 @@ function KitImageViewer({
   }
   const heading = hasContent(title) ? node(title) : "Image";
   return (
-    <PluginKitLayerContext.Provider value="modal">
-      <AppDialog
-        isOpen={open === true}
-        onClose={() => notifyOpen?.(false)}
-        size="5xl"
-        maxHeight="max-h-[92vh]"
-      >
-        <AppDialog.Header>
-          <div className="flex min-w-0 items-baseline gap-2">
-            <AppDialog.Title>{heading}</AppDialog.Title>
-            {list.length > 1 ? (
-              <span className="shrink-0 text-xs tabular-nums text-text-secondary">
-                {at + 1} of {list.length}
-              </span>
-            ) : null}
-          </div>
-          <AppDialog.CloseButton />
-        </AppDialog.Header>
-        <AppDialog.Description className="sr-only">
-          {list[at]?.alt ?? "Image"}
-        </AppDialog.Description>
-        <AppDialog.BodyScroll className={cn("flex flex-col", str(className))}>
-          <div
-            {...pickRootProps(rest)}
-            className="flex h-[min(70vh,720px)] min-h-0 flex-col overflow-hidden rounded-[var(--radius-md)] border border-divider"
-          >
-            {stage}
-          </div>
-        </AppDialog.BodyScroll>
-      </AppDialog>
-    </PluginKitLayerContext.Provider>
+    <AppDialog
+      isOpen={open === true}
+      onClose={() => notifyOpen?.(false)}
+      size="5xl"
+      maxHeight="max-h-[92vh]"
+    >
+      <AppDialog.Header>
+        <div className="flex min-w-0 items-baseline gap-2">
+          <AppDialog.Title>{heading}</AppDialog.Title>
+          {list.length > 1 ? (
+            <span className="shrink-0 text-xs tabular-nums text-text-secondary">
+              {at + 1} of {list.length}
+            </span>
+          ) : null}
+        </div>
+        <AppDialog.CloseButton />
+      </AppDialog.Header>
+      <AppDialog.Description className="sr-only">{list[at]?.alt ?? "Image"}</AppDialog.Description>
+      <AppDialog.BodyScroll className={cn("flex flex-col", str(className))}>
+        <div
+          {...pickRootProps(rest)}
+          className="flex h-[min(70vh,720px)] min-h-0 flex-col overflow-hidden rounded-[var(--radius-md)] border border-divider"
+        >
+          {stage}
+        </div>
+      </AppDialog.BodyScroll>
+    </AppDialog>
   );
 }
 

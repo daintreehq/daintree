@@ -39,6 +39,7 @@ import { clearDialogOverlays } from "@/lib/dialogOverlayDismissal";
 import { useAnimatedPresence } from "@/hooks/useAnimatedPresence";
 import { AccessibilityAnnouncer } from "@/components/Accessibility/AccessibilityAnnouncer";
 import { DialogDismissSurface } from "./DialogDismissSurface";
+import { DialogLayerContext } from "./dialogLayer";
 import {
   UI_ENTER_DURATION,
   UI_EXIT_DURATION,
@@ -728,7 +729,11 @@ export function AppDialog({
           }
           onClick={(e) => e.stopPropagation()}
         >
-          {children}
+          {/* The tier this dialog actually painted at, so overlays opened
+              inside it stack above it when a dock popover promoted it. */}
+          <DialogLayerContext.Provider value={effectiveZIndex}>
+            {children}
+          </DialogLayerContext.Provider>
           {/* A click anywhere on this surface dismisses a popover the dialog
               hosts — see `DialogDismissSurface`. Registered on the backdrop so
               the scrim counts too. */}

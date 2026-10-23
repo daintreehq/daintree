@@ -1,4 +1,5 @@
 import { createContext, useContext } from "react";
+import { DialogLayerContext, useDialogOverlayZClass } from "@/components/ui/dialogLayer";
 
 /**
  * The plugin instance whose view is rendering, provided by
@@ -17,23 +18,20 @@ export const KitFocusScopeContext = createContext("");
 
 export const KIT_FOCUS_SCOPE_ATTRIBUTE = "data-kit-focus-scope";
 
-export type PluginKitLayer = "modal" | "nested";
-
-/**
- * The dialog layer kit content sits in. Kit overlays portal to the body at the
- * popover tier, which is below a nested dialog, so one opened from inside a
- * nested dialog has to lift itself above it.
- */
-export const PluginKitLayerContext = createContext<PluginKitLayer>("modal");
-
-/** Above `--z-nested-dialog`, still below toasts. */
-const NESTED_OVERLAY_Z_CLASS = "z-[calc(var(--z-nested-dialog)+1)]";
-
 export function usePluginKitOwner(): string | null {
   return useContext(PluginKitOwnerContext);
 }
 
+/**
+ * Whether kit content sits in a nested dialog: one the plugin asked for with
+ * `layer: "nested"`, or one a dock popover promoted (#14191). The enclosing
+ * host dialog publishes the tier it actually painted at.
+ */
+export function useKitLayerNested(): boolean {
+  return useContext(DialogLayerContext) === "nested";
+}
+
 /** The z-index class a kit overlay's content needs in its current layer, if any. */
 export function useKitOverlayZClass(): string | undefined {
-  return useContext(PluginKitLayerContext) === "nested" ? NESTED_OVERLAY_Z_CLASS : undefined;
+  return useDialogOverlayZClass();
 }

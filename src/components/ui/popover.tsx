@@ -8,6 +8,7 @@ import {
   OVERLAY_SIDE_OFFSET,
 } from "./overlayMotion";
 import { BrandSurfaceReset } from "@/components/icons/BrandSurface";
+import { useDialogOverlayZClass } from "./dialogLayer";
 import { primeOnEvent, useRadixPrimitives } from "./radix-loader";
 import {
   OverlayFocusRestoreContext,
@@ -368,6 +369,7 @@ const PopoverContent = React.forwardRef<
     ref
   ) => {
     const radix = useRadixPrimitives();
+    const dialogOverlayZ = useDialogOverlayZClass();
     const focusTargets = React.useContext(PopoverFocusTargetsContext);
     const [boundary, setBoundary] = React.useState<HTMLElement | null>(null);
     // Floating UI's autoUpdate observes the reference/floating elements but not the
@@ -469,6 +471,7 @@ const PopoverContent = React.forwardRef<
               // Escapes the toolbar's drag region via the portal — see `.app-no-drag` (#12347).
               "app-no-drag",
               "z-[var(--z-popover)] overflow-hidden rounded-[var(--radius-lg)] surface-overlay shadow-overlay text-text-primary",
+              dialogOverlayZ,
               motion === "drop" ? OVERLAY_DROP_MOTION_CLASS : OVERLAY_MOTION_CLASS,
               className
             )}
