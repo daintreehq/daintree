@@ -56,17 +56,29 @@ import {
   runTerminalList,
   runTerminalSendKeys,
 } from "./viewlessTerminals.js";
-import { runAgentLaunch, runAgentListAvailable } from "./viewlessAgents.js";
+import {
+  runAgentLaunch,
+  runAgentListAvailable,
+  runAgentListModels,
+  runAgentListPresets,
+} from "./viewlessAgents.js";
 import { runSlashCommandsList } from "./viewlessSlashCommands.js";
 import {
   previewWorktreeDelete,
   runWorktreeDelete,
   runWorktreeList,
+  runWorktreeWaitForPullRequest,
   runWorktreeWaitUntilReady,
 } from "./viewlessWorktrees.js";
 import { runProjectDetectRunners, runProjectGetAll, runWorkspaceList } from "./viewlessProjects.js";
+import { runRecipeList } from "./viewlessRecipes.js";
 import { runForgeRead } from "./viewlessForge.js";
-import { runActionsGetSchema, runActionsList, runActionsSearch } from "./viewlessIntrospection.js";
+import {
+  runActionsGetContext,
+  runActionsGetSchema,
+  runActionsList,
+  runActionsSearch,
+} from "./viewlessIntrospection.js";
 import { refuseRecipeWithNoView, runWorktreeCreateWithRecipe } from "./viewlessWorktreeCreation.js";
 
 const TERMINAL_SEND_COMMAND_ACTION_ID = "terminal.sendCommand";
@@ -696,8 +708,15 @@ function guardWrites(
   };
 }
 
+/**
+ * Channels the drive lease leaves free that still change a project's files:
+ * the project recipe read reconciles .daintree/recipes on the way (#14139).
+ */
+const CHANGING_FREE_CHANNELS: ReadonlySet<string> = new Set([CHANNELS.PROJECT_GET_RECIPES]);
+
 /** Whether a host channel only reads, by the drive lease's own account of it. */
 function isFreeLeaseChannel(channel: string): boolean {
+  if (CHANGING_FREE_CHANNELS.has(channel)) return false;
   return (CHANNEL_LEASE_POLICY as Readonly<Record<string, string>>)[channel] === "free";
 }
 
@@ -813,6 +832,16 @@ async function runAction(
       return runActionsSearch(request);
     case "actions.getSchema":
       return runActionsGetSchema(request);
+    case "actions.getContext":
+      return runActionsGetContext(request, project, deps);
+    case "agent.listPresets":
+      return runAgentListPresets(request, project, deps);
+    case "agent.listModels":
+      return runAgentListModels(request, project, deps);
+    case "recipe.list":
+      return runRecipeList(request, project, deps);
+    case "worktree.waitForPullRequest":
+      return runWorktreeWaitForPullRequest(request, project, deps);
     default:
       return runForgeRead(request, project, deps);
   }

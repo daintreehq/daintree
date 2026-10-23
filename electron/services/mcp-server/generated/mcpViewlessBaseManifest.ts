@@ -19,6 +19,75 @@ export const MCP_VIEWLESS_BASE_MANIFEST: readonly ActionManifestEntry[] = [
     category: "agent",
     danger: "safe",
     description:
+      "Each agent CLI's current model ids and names, to turn a model the user names into an id. With none named, launch without a model.",
+    enabled: true,
+    examples: [
+      {
+        args: {
+          agentId: "codex",
+        },
+        description: "Find the id of a Codex model the user asked for by name",
+      },
+    ],
+    id: "agent.listModels",
+    inputSchema: {
+      $schema: "https://json-schema.org/draft/2020-12/schema",
+      type: "object",
+      properties: {
+        agentId: {
+          description: "One agent's models; omit for every listed agent.",
+          type: "string",
+          minLength: 1,
+        },
+      },
+    },
+    kind: "query",
+    name: "agent.listModels",
+    outputSchema: {
+      $schema: "https://json-schema.org/draft/2020-12/schema",
+      type: "object",
+      properties: {
+        agents: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              agentId: {
+                type: "string",
+              },
+              models: {
+                type: "array",
+                items: {
+                  type: "object",
+                  properties: {
+                    id: {
+                      type: "string",
+                    },
+                    name: {
+                      type: "string",
+                    },
+                  },
+                  required: ["id", "name"],
+                  additionalProperties: false,
+                },
+              },
+            },
+            required: ["agentId", "models"],
+            additionalProperties: false,
+          },
+        },
+      },
+      required: ["agents"],
+      additionalProperties: false,
+    },
+    requiresArgs: false,
+    title: "List agent models",
+  },
+  {
+    band: "reversible",
+    category: "agent",
+    danger: "safe",
+    description:
       "Read this machine's Codex account quota, as Codex reports it: how much of each rate-limit window is used and when it resets.",
     enabled: true,
     id: "agent.readQuota",

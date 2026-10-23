@@ -2,10 +2,7 @@ import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
 import { defineAction } from "../defineAction";
 import { z } from "zod";
 import type { ActionContext } from "@shared/types/actions";
-import type { TerminalRecipe } from "@shared/types";
-import { isPluginRecipe } from "@shared/types/project";
-import { pluginManifestIdFromInstanceKey } from "@shared/types/plugin";
-import { isInRepoRecipeId } from "@shared/utils/recipeFilename";
+import { summarizeRecipes } from "@shared/utils/recipeListing";
 import { MAX_TERMINALS_PER_RECIPE } from "@shared/utils/recipeSanitizer";
 import { useRecipeStore } from "@/store/recipeStore";
 import { useProjectStore } from "@/store/projectStore";
@@ -113,24 +110,6 @@ const RecipeEditorHandoffResultSchema = z.object({
 });
 
 export function registerRecipeActions(actions: ActionRegistry, _callbacks: ActionCallbacks): void {
-  /**
-   * Normalize a recipe's tier for `recipe.list` (#11860). Plugin provenance is
-   * checked first because a plugin recipe also carries no `projectId` and would
-   * otherwise report as "global" — the same inference bug the persistence
-   * routing has to avoid.
-   */
-  const describeRecipeOrigin = (
-    recipe: TerminalRecipe
-  ): { kind: "global" | "project" | "team" | "plugin"; pluginId: string | null } => {
-    if (isPluginRecipe(recipe)) {
-      // The manifest id, which `plugin.diagnose` takes: a project plugin's
-      // instance key carries a machine-local project id (#12211).
-      return { kind: "plugin", pluginId: pluginManifestIdFromInstanceKey(recipe.origin.pluginId) };
-    }
-    if (isInRepoRecipeId(recipe)) return { kind: "team", pluginId: null };
-    return { kind: recipe.projectId === undefined ? "global" : "project", pluginId: null };
-  };
-
   actions.set("recipe.list", () =>
     defineAction({
       id: "recipe.list",
@@ -174,22 +153,8 @@ export function registerRecipeActions(actions: ActionRegistry, _callbacks: Actio
             .catch(() => undefined);
         }
         const recipeState = useRecipeStore.getState();
-        const recipes = recipeState.recipes;
-
-        // Filter by worktree if specified, otherwise return all recipes
-        const filtered = worktreeId
-          ? recipes.filter((r) => r.worktreeId === worktreeId || r.worktreeId === undefined)
-          : recipes;
-
         return {
-          recipes: filtered.map((r) => ({
-            id: r.id,
-            name: r.name,
-            worktreeId: r.worktreeId ?? null,
-            terminalCount: r.terminals.length,
-            showInEmptyState: r.showInEmptyState ?? false,
-            origin: describeRecipeOrigin(r),
-          })),
+          recipes: summarizeRecipes(recipeState.recipes, worktreeId),
           isLoading: recipeState.isLoading,
         };
       },
