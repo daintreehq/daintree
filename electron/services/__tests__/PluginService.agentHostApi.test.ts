@@ -219,6 +219,12 @@ import {
   _resetPluginCapabilityServicesForTest,
 } from "../plugin-capability/instances.js";
 import { setPtyClientRef } from "../../window/serviceRefs.js";
+import {
+  _resetPluginLaunchesForTests,
+  launchedAgentProject,
+  recordPluginLaunch,
+} from "../plugin/pluginLaunchedAgents.js";
+import type { ActionDispatchResult } from "../../../shared/types/actions.js";
 
 let tmpDir: string;
 
@@ -737,5 +743,52 @@ describe("Plugin agent-input host API (#10558)", () => {
     (service as unknown as { unloadPlugin: (id: string) => void }).unloadPlugin("acme.agent-input");
     await expect(host.sendToActiveAgent("x")).resolves.toBeUndefined();
     expect(fake.stage).not.toHaveBeenCalled();
+  });
+});
+
+describe("Agents a plugin launched, across unload and reload (#14018)", () => {
+  const PLUGIN = "acme.launcher";
+  const LAUNCH: ActionDispatchResult = {
+    ok: true,
+    result: { launched: true, terminalId: "t-launched" },
+  };
+
+  beforeEach(() => {
+    _resetPluginLaunchesForTests();
+    setPtyClientRef({
+      getTerminalProjectId: (id: string) => (id === "t-launched" ? "p1" : null),
+      getLiveGeneration: () => null,
+    } as never);
+  });
+  afterEach(() => {
+    _resetPluginLaunchesForTests();
+    setPtyClientRef(null);
+  });
+
+  async function loadLauncher(): Promise<PluginService> {
+    await writePlugin("launcher", {
+      name: PLUGIN,
+      version: "1.0.0",
+      capabilities: ["agent:input"],
+    });
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+    recordPluginLaunch(PLUGIN, "agent.launch", LAUNCH, null);
+    expect(launchedAgentProject(PLUGIN, "t-launched", null)).toBe("p1");
+    return service;
+  }
+
+  it("ends the plugin's reach when it unloads", async () => {
+    const service = await loadLauncher();
+    (service as unknown as { unloadPlugin: (id: string) => void }).unloadPlugin(PLUGIN);
+    expect(launchedAgentProject(PLUGIN, "t-launched", null)).toBeNull();
+  });
+
+  it("keeps it across a reload, which leaves its agents running", async () => {
+    const service = await loadLauncher();
+    (
+      service as unknown as { unloadPlugin: (id: string, options: { reload: true }) => void }
+    ).unloadPlugin(PLUGIN, { reload: true });
+    expect(launchedAgentProject(PLUGIN, "t-launched", null)).toBe("p1");
   });
 });

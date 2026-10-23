@@ -118,6 +118,9 @@ import type {
   PluginSendToAgentResult,
   PluginRunRecipeResult,
   PluginTerminalScreenResult,
+  PluginAgentInputResult,
+  PluginAgentInterruptResult,
+  PluginAgentKeysResult,
   PluginToolbarButtonRuntimeState,
 } from "../../../shared/types/plugin.js";
 import { withTimeout } from "../../utils/withTimeout.js";
@@ -1970,6 +1973,15 @@ export class PluginDevWorkerHostProxy {
             undefined,
             UNAVAILABLE_PLUGIN_ALL_AGENTS_SNAPSHOT
           ).then(normalizePluginAllAgentsSnapshot),
+        // Ownership, capability, consent and the write all run on the real host
+        // in main. No grace value, as for sendToActiveAgent: a call cut off by
+        // disposal may already have written, so "unavailable" would misreport it.
+        interrupt: (terminalId) =>
+          this.call<PluginAgentInterruptResult>("agents.interrupt", { terminalId }),
+        sendKeys: (terminalId, input) =>
+          this.call<PluginAgentKeysResult>("agents.sendKeys", { terminalId, input }),
+        submit: (terminalId, text) =>
+          this.call<PluginAgentInputResult>("agents.submit", { terminalId, text }),
       },
       // Capability, consent, rate limit and project scope all live on the real
       // host in main; the grace value is the host's own unload answer.

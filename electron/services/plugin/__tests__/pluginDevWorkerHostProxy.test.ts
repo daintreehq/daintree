@@ -29,6 +29,8 @@ const GLOBAL_IDENTITY = {
   projectRoot: null,
 };
 
+type Proxy = PluginDevWorkerHostProxy;
+
 function makeProxy() {
   const sent: any[] = [];
   const post = vi.fn((msg: any) => {
@@ -491,6 +493,36 @@ describe("PluginDevWorkerHostProxy agent handoff", () => {
     });
     expect(Object.isFrozen(result)).toBe(true);
     expect(Object.isFrozen(result.agents[0])).toBe(true);
+  });
+
+  it.each([
+    ["agents.interrupt", (p: Proxy) => p.host.agents.interrupt("t-1"), { terminalId: "t-1" }],
+    [
+      "agents.sendKeys",
+      (p: Proxy) => p.host.agents.sendKeys("t-1", { keys: ["Enter"] }),
+      { terminalId: "t-1", input: { keys: ["Enter"] } },
+    ],
+    [
+      "agents.submit",
+      (p: Proxy) => p.host.agents.submit("t-1", "continue"),
+      { terminalId: "t-1", text: "continue" },
+    ],
+  ] as const)("relays %s to main and resolves its answer", async (method, invoke, params) => {
+    const { proxy, sent } = makeProxy();
+    const promise = invoke(proxy);
+    expect(sent.find((m) => m.type === "host-call" && m.method === method)).toMatchObject({
+      params,
+    });
+    resolveCall(proxy, sent, method, { status: "sent" });
+    await expect(promise).resolves.toEqual({ status: "sent" });
+  });
+
+  it("never reports an input call cut off by disposal as unavailable (#14018)", async () => {
+    const { proxy } = makeProxy();
+    const submit = proxy.host.agents.submit("t-1", "continue");
+    proxy.dispose();
+    // Main may already have written, so the call fails rather than claiming nothing was.
+    await expect(submit).rejects.toThrow();
   });
 
   it("answers an unavailable app-wide list when disposed mid-call", async () => {

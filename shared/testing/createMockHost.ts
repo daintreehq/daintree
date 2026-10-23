@@ -125,6 +125,10 @@ import type {
   PluginRunRecipeOptions,
   PluginRunRecipeResult,
   PluginTerminalScreenResult,
+  PluginAgentInputResult,
+  PluginAgentInterruptResult,
+  PluginAgentKeysInput,
+  PluginAgentKeysResult,
   PluginPanelLifecycleEvent,
   PanelReloadResult,
   WorkerRestartResult,
@@ -233,6 +237,18 @@ export interface RunRecipeRecord {
   recipeId: string;
   options: PluginRunRecipeOptions | undefined;
   result: PluginRunRecipeResult;
+}
+
+/**
+ * Captured `host.agents.interrupt` / `sendKeys` / `submit` calls that got past
+ * validation, with what each resolved.
+ */
+export interface AgentInputRecord {
+  method: "interrupt" | "sendKeys" | "submit";
+  terminalId: string;
+  /** What `sendKeys` pressed, or the text `submit` sent. */
+  input?: PluginAgentKeysInput | string;
+  result: PluginAgentInputResult | PluginAgentInterruptResult | PluginAgentKeysResult;
 }
 
 /** Captured `host.terminals.readScreen(terminalId, options)` calls, with what each resolved. */
@@ -417,6 +433,8 @@ export interface MockHostState {
   readonly runRecipeCalls: ReadonlyArray<RunRecipeRecord>;
   /** Every `host.terminals.readScreen` call that got past validation, in order. */
   readonly readScreenCalls: ReadonlyArray<ReadScreenRecord>;
+  /** Every `host.agents` input call that got past validation, in order. */
+  readonly agentInputCalls: ReadonlyArray<AgentInputRecord>;
   readonly registeredForgeProviders: ReadonlyArray<RegisteredForgeProviderRecord>;
   readonly registeredFileDecorationProviders: ReadonlyArray<RegisteredFileDecorationProviderRecord>;
   /** Live `host.registerWorktreeSetupStep` bindings, one per step id. */
@@ -626,6 +644,12 @@ export interface MockHostState {
   simulateConfirmResponse(result: boolean): void;
   /** Replace the agent panes `agents.list()` reports and `sendToAgent` targets. */
   simulateAgentsChange(agents: PluginAgentPane[]): void;
+  /**
+   * Count `terminalId` as an agent this plugin launched, so the `host.agents`
+   * input methods reach it. A `dispatch("agent.launch")` whose result reports
+   * `launched: true` with a terminal id counts on its own, as in production.
+   */
+  simulateAgentLaunched(terminalId: string): void;
   /**
    * Replace what `agents.listAll()` reports and push it, frozen and reduced to
    * the allowlist like production, to every `onDidChangeAllAgents` subscriber.
@@ -848,6 +872,8 @@ const PLUGIN_ACTION_DANGERS = new Set(["safe", "confirm"]);
  * plain JS rather than pulling the cross-process Zod schemas — and the
  * production definitions remain the source of truth. Mirror any change here.
  */
+/** The key names `host.agents.sendKeys` takes, as production's schema allows them. */
+const MOCK_AGENT_KEY = /^(Up|Down|Left|Right|Enter|Escape|Tab|Space|Backspace|[a-z0-9])$/;
 const MOCK_PANEL_BADGE_LABEL_MAX = 6;
 const MOCK_TOAST_TYPES = new Set(["info", "success", "warning", "error"]);
 const MOCK_BADGE_COLORS = new Set(["default", "success", "warning", "error"]);
@@ -1353,6 +1379,8 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
   const focusedPanelSubs = new Set<(focus: PluginFocusedPanel) => void>();
   let sendToAgentPick: string | null = null;
   const readScreenCalls: ReadScreenRecord[] = [];
+  const agentInputCalls: AgentInputRecord[] = [];
+  const launchedAgents = new Set<string>();
   const terminalScreens = new Map<string, PluginTerminalScreenResult>(
     Object.entries(options.terminalScreens ?? {})
   );
@@ -1825,6 +1853,37 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
       );
     }
   };
+  const assertMockAgentInput = (op: string, terminalId: unknown): void => {
+    if (!capabilities.has("agent:input")) {
+      throw new Error(
+        `PERMISSION_REQUIRED: agents.${op} requires "agent:input", which is not declared in manifest.capabilities`
+      );
+    }
+    // Same bound as production's `SEND_TO_AGENT_MAX_ID_LENGTH`.
+    if (typeof terminalId !== "string" || terminalId.length === 0 || terminalId.length > 512) {
+      throw new Error(
+        `agents.${op}: terminalId must be a non-empty string of at most 512 characters`
+      );
+    }
+  };
+  // The agent this plugin's own `agent.launch` started, as production records it.
+  const recordMockLaunch = (
+    actionId: ActionId,
+    result: ActionDispatchResult
+  ): ActionDispatchResult => {
+    const launch = result.ok
+      ? (result.result as { launched?: unknown; terminalId?: unknown } | null)
+      : null;
+    if (
+      actionId === "agent.launch" &&
+      launch?.launched === true &&
+      typeof launch.terminalId === "string" &&
+      launch.terminalId.length > 0
+    ) {
+      launchedAgents.add(launch.terminalId);
+    }
+    return result;
+  };
 
   let mockDatabaseDir: string | null = options.databases?.directory ?? null;
   const resolveMockDatabase = async (
@@ -2159,6 +2218,53 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
       async listAll() {
         assertMockCanReadAllAgents("agents.listAll");
         return allAgentsSnapshot;
+      },
+      // Same order as production: capability, then argument validation, then
+      // whether this plugin launched the agent. No consent prompt and no PTY —
+      // a valid call on a launched agent records its intent and answers `sent`.
+      async interrupt(terminalId) {
+        assertMockAgentInput("interrupt", terminalId);
+        const result: PluginAgentInterruptResult = launchedAgents.has(terminalId)
+          ? { status: "sent", cancelKey: "advertised" }
+          : { status: "not-found" };
+        agentInputCalls.push({ method: "interrupt", terminalId, result });
+        return result;
+      },
+      async sendKeys(terminalId, input) {
+        assertMockAgentInput("sendKeys", terminalId);
+        const { keys, choose } = (input ?? {}) as { keys?: unknown; choose?: unknown };
+        const validKeys =
+          Array.isArray(keys) &&
+          keys.length >= 1 &&
+          keys.length <= 16 &&
+          keys.every((key) => typeof key === "string" && MOCK_AGENT_KEY.test(key));
+        const validChoose =
+          typeof choose === "string" && choose.length >= 1 && choose.length <= 200;
+        if (keys !== undefined && choose !== undefined) {
+          throw new Error("agents.sendKeys: pass exactly one of keys or choose");
+        }
+        if (!(keys !== undefined ? validKeys : validChoose)) {
+          throw new Error(
+            "agents.sendKeys: pass keys (1 to 16 key names) or choose (1 to 200 characters)"
+          );
+        }
+        // The mock has no screen to plan a `choose` against, so it presses nothing.
+        const result: PluginAgentKeysResult = launchedAgents.has(terminalId)
+          ? { status: "sent", keys: validKeys ? [...(keys as string[])] : [] }
+          : { status: "not-found" };
+        agentInputCalls.push({ method: "sendKeys", terminalId, input, result });
+        return result;
+      },
+      async submit(terminalId, text) {
+        assertMockAgentInput("submit", terminalId);
+        if (typeof text !== "string" || text.trim().length === 0) {
+          throw new Error("agents.submit: text must be a non-empty, non-whitespace string");
+        }
+        const result: PluginAgentInputResult = launchedAgents.has(terminalId)
+          ? { status: "sent" }
+          : { status: "not-found" };
+        agentInputCalls.push({ method: "submit", terminalId, input: text, result });
+        return result;
       },
     },
     terminals: {
@@ -3037,11 +3143,14 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
           : { actionId, args, options: dispatchOptions }
       );
       const override = dispatchOverrides.get(actionId);
-      if (override) return override;
+      if (override) return recordMockLaunch(actionId, override);
       if (options.dispatch) {
-        return dispatchOptions === undefined
-          ? options.dispatch(actionId, args)
-          : options.dispatch(actionId, args, dispatchOptions);
+        return recordMockLaunch(
+          actionId,
+          await (dispatchOptions === undefined
+            ? options.dispatch(actionId, args)
+            : options.dispatch(actionId, args, dispatchOptions))
+        );
       }
       // Match the real host's contract: dispatch ids are always fully
       // namespaced as `{pluginId}.{descriptor.id}`. Looking up by the full
@@ -3645,6 +3754,7 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
     sentToAgentCalls,
     runRecipeCalls,
     readScreenCalls,
+    agentInputCalls,
     registeredForgeProviders,
     registeredFileDecorationProviders,
     registeredWorktreeSetupSteps,
@@ -3816,6 +3926,9 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
     },
     simulateAgentsChange(agents) {
       agentPanes = agents;
+    },
+    simulateAgentLaunched(terminalId) {
+      launchedAgents.add(terminalId);
     },
     simulateAllAgentsChange(snapshot) {
       allAgentsSnapshot = normalizePluginAllAgentsSnapshot(snapshot);

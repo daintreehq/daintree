@@ -70,7 +70,7 @@ export const CAPABILITY_META = {
   },
   "agent:input": {
     label: "Send input to agents",
-    description: "Type and submit text into running agent sessions",
+    description: "Type, press keys and submit text in running agent sessions",
     severity: "warning",
   },
   "terminal:read": {

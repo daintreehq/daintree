@@ -41,6 +41,7 @@ import {
   channelHandlerArityHint,
 } from "./plugin/pluginHandlerHints.js";
 import { PluginPtyTransport } from "./plugin/PluginPtyTransport.js";
+import { forgetPluginLaunches } from "./plugin/pluginLaunchedAgents.js";
 import { PluginPathNotAllowedError } from "./plugin/pluginFsContainment.js";
 import { e2eSideloadPluginDir, isE2EMode } from "../setup/runtimeFlags.js";
 import { whenPluginDirResolverLive } from "../setup/pluginProtocolReadiness.js";
@@ -7873,6 +7874,14 @@ export class PluginService {
       }
       agentMcpEndpointRegistry.unregisterPlugin(pluginId);
     });
+    // The agents it launched stay a reloading plugin's for the same reason
+    // (#14018): they keep running, and a reload that ended their reach would
+    // strand them at the next prompt. The record names the instance, not a
+    // generation, so the code loaded next is held to its own capabilities and
+    // consent on every call. Any other unload ends the reach.
+    if (!options?.reload) {
+      runUnloadStep(pluginId, "forgetPluginLaunches", () => forgetPluginLaunches(pluginId));
+    }
     // Drop activation state so a runtime reload (e.g. dev-mode re-scan) can
     // re-activate from scratch — otherwise the fast-path `activatedPlugins`
     // hit would short-circuit `_doActivate` after the new manifest landed.

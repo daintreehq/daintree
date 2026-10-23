@@ -27,7 +27,14 @@ describe("hostCallDeadlineMs (#13410)", () => {
   it("waits longer for a call that can raise a consent dialog than for a plain read", () => {
     const read = hostCallDeadlineMs("fs.readFile", { path: "a" });
     expect(read).toBeGreaterThan(0);
-    for (const method of ["terminals.readScreen", "fs.writeFile", "process.spawn"] as const) {
+    for (const method of [
+      "terminals.readScreen",
+      "fs.writeFile",
+      "process.spawn",
+      "agents.interrupt",
+      "agents.sendKeys",
+      "agents.submit",
+    ] as const) {
       expect(hostCallDeadlineMs(method, {})).toBeGreaterThan(read);
     }
   });
