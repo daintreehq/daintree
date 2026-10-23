@@ -151,8 +151,11 @@ import type {
   PluginBackgroundUpdateCheckSettings,
   PluginSettingsScope,
   PluginSettingsUiValues,
+  PluginAccountBinding,
+  PluginAccountBindingUiStatus,
   PluginAccountConnectResult,
   PluginAccountUiStatus,
+  PluginAccountVerification,
   PluginRequiredSettingsStatus,
   PluginSetupUiStatus,
   PluginPickPathRequest,
@@ -2312,12 +2315,29 @@ function assertSenderOwnsAccount(ctx: IpcContext, pluginId: unknown): asserts pl
   }
 }
 
+/** A connection id from the renderer: absent, or a string the account service checks. */
+function assertConnectionId(connectionId: unknown): asserts connectionId is string | undefined {
+  if (connectionId !== undefined && typeof connectionId !== "string") {
+    throw new Error("plugin account rejected: invalid connection id");
+  }
+}
+
 async function handleAccountStatus(
   ctx: IpcContext,
-  pluginId: string
+  pluginId: string,
+  connectionId?: string
 ): Promise<PluginAccountUiStatus | null> {
   assertSenderOwnsAccount(ctx, pluginId);
-  return (await getPluginService()).getAccountStatusForUi(pluginId);
+  assertConnectionId(connectionId);
+  return (await getPluginService()).getAccountStatusForUi(pluginId, connectionId);
+}
+
+async function handleAccountList(
+  ctx: IpcContext,
+  pluginId: string
+): Promise<PluginAccountUiStatus[]> {
+  assertSenderOwnsAccount(ctx, pluginId);
+  return (await getPluginService()).listAccountConnectionsForUi(pluginId);
 }
 
 /**
@@ -2335,31 +2355,95 @@ function assertLocalSignIn(ctx: IpcContext): void {
 
 async function handleAccountConnect(
   ctx: IpcContext,
-  pluginId: string
+  pluginId: string,
+  connectionId?: string
 ): Promise<PluginAccountConnectResult> {
   assertSenderOwnsAccount(ctx, pluginId);
+  assertConnectionId(connectionId);
   assertLocalSignIn(ctx);
-  return (await getPluginService()).connectAccountFromUi(pluginId);
+  return (await getPluginService()).connectAccountFromUi(pluginId, connectionId);
 }
 
-async function handleAccountCancelConnect(ctx: IpcContext, pluginId: string): Promise<void> {
+async function handleAccountCancelConnect(
+  ctx: IpcContext,
+  pluginId: string,
+  connectionId?: string
+): Promise<void> {
   assertSenderOwnsAccount(ctx, pluginId);
-  (await getPluginService()).cancelAccountConnectFromUi(pluginId);
+  assertConnectionId(connectionId);
+  (await getPluginService()).cancelAccountConnectFromUi(pluginId, connectionId);
 }
 
 async function handleAccountSetToken(
   ctx: IpcContext,
   pluginId: string,
-  token: string
+  token: string,
+  connectionId?: string
 ): Promise<PluginAccountUiStatus> {
   assertSenderOwnsAccount(ctx, pluginId);
+  assertConnectionId(connectionId);
   assertLocalSignIn(ctx);
-  return (await getPluginService()).setAccountTokenFromUi(pluginId, token);
+  return (await getPluginService()).setAccountTokenFromUi(pluginId, token, connectionId);
 }
 
-async function handleAccountDisconnect(ctx: IpcContext, pluginId: string): Promise<void> {
+async function handleAccountDisconnect(
+  ctx: IpcContext,
+  pluginId: string,
+  connectionId?: string
+): Promise<void> {
   assertSenderOwnsAccount(ctx, pluginId);
-  await (await getPluginService()).disconnectAccountFromUi(pluginId);
+  assertConnectionId(connectionId);
+  await (await getPluginService()).disconnectAccountFromUi(pluginId, connectionId);
+}
+
+async function handleAccountTest(
+  ctx: IpcContext,
+  pluginId: string,
+  connectionId?: string
+): Promise<PluginAccountVerification> {
+  assertSenderOwnsAccount(ctx, pluginId);
+  assertConnectionId(connectionId);
+  return (await getPluginService()).testAccountConnectionFromUi(pluginId, connectionId);
+}
+
+/**
+ * Bindings are always the sender's own project's: no channel names a project,
+ * so a window can neither read nor change another project's choice.
+ */
+function requireSenderProject(ctx: IpcContext): string {
+  if (ctx.projectId === null) {
+    throw new Error("plugin account rejected: open a project to choose its connection");
+  }
+  return ctx.projectId;
+}
+
+async function handleAccountBindingGet(
+  ctx: IpcContext,
+  pluginId: string
+): Promise<PluginAccountBindingUiStatus> {
+  assertSenderOwnsAccount(ctx, pluginId);
+  return (await getPluginService()).getAccountBindingForUi(pluginId, requireSenderProject(ctx));
+}
+
+async function handleAccountBindingSet(
+  ctx: IpcContext,
+  pluginId: string,
+  binding: PluginAccountBinding | null
+): Promise<PluginAccountBindingUiStatus> {
+  assertSenderOwnsAccount(ctx, pluginId);
+  const projectId = requireSenderProject(ctx);
+  if (binding !== null) {
+    if (
+      typeof binding !== "object" ||
+      typeof binding.connectionId !== "string" ||
+      (binding.source !== "own" && binding.source !== "machine")
+    ) {
+      throw new Error("plugin account rejected: invalid binding");
+    }
+  }
+  const next =
+    binding === null ? null : { connectionId: binding.connectionId, source: binding.source };
+  return (await getPluginService()).setAccountBindingFromUi(pluginId, projectId, next);
 }
 
 /**
@@ -2948,6 +3032,18 @@ export const pluginNamespace = defineIpcNamespace({
       withContext: true,
     }),
     disconnectAccount: op(PLUGIN_METHOD_CHANNELS.disconnectAccount, handleAccountDisconnect, {
+      withContext: true,
+    }),
+    listAccountConnections: op(PLUGIN_METHOD_CHANNELS.listAccountConnections, handleAccountList, {
+      withContext: true,
+    }),
+    testAccountConnection: op(PLUGIN_METHOD_CHANNELS.testAccountConnection, handleAccountTest, {
+      withContext: true,
+    }),
+    getAccountBinding: op(PLUGIN_METHOD_CHANNELS.getAccountBinding, handleAccountBindingGet, {
+      withContext: true,
+    }),
+    setAccountBinding: op(PLUGIN_METHOD_CHANNELS.setAccountBinding, handleAccountBindingSet, {
       withContext: true,
     }),
     pickPath: op(PLUGIN_METHOD_CHANNELS.pickPath, handlePickPath, { withContext: true }),

@@ -221,7 +221,10 @@ export type {
   PluginAccountContribution,
   PluginAccountIdentity,
   PluginAccountKind,
+  PluginAccountRef,
   PluginAccountState,
+  PluginAccountTest,
+  PluginConnectionContribution,
 } from "./plugin.js";
 
 // ── Setup checklist (contributes.setup) ─────────────────────────────

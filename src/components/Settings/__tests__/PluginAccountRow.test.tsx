@@ -28,6 +28,7 @@ const pluginApi = {
   cancelAccountConnect: vi.fn(),
   setAccountToken: vi.fn(),
   disconnectAccount: vi.fn(),
+  testAccountConnection: vi.fn(),
   onSettingsChanged: vi.fn((_cb: (payload: { pluginId: string }) => void) => () => {}),
 };
 
@@ -44,6 +45,7 @@ const TOKEN: PluginAccountContribution = { kind: "token", label: "Tracker" };
 
 function status(over: Partial<PluginAccountUiStatus> = {}): PluginAccountUiStatus {
   return {
+    connectionId: "default",
     kind: "oauth2",
     label: "Tracker",
     description: null,
@@ -51,6 +53,8 @@ function status(over: Partial<PluginAccountUiStatus> = {}): PluginAccountUiStatu
     identity: null,
     pending: false,
     secretTier: "keychain",
+    testable: false,
+    verification: { status: "unchecked", checkedAt: null, message: null },
     ...over,
   };
 }
@@ -135,8 +139,8 @@ describe("PluginAccountRow", () => {
 
     fireEvent.click(await enabledButton("Connect"));
 
-    await screen.findByText("Connected as octo");
-    expect(pluginApi.connectAccount).toHaveBeenCalledWith("acme.tracker");
+    await screen.findByText(/^Connected as octo\./);
+    expect(pluginApi.connectAccount).toHaveBeenCalledWith("acme.tracker", "default");
     expect(screen.getByRole("button", { name: "Disconnect" })).toBeTruthy();
   });
 
@@ -147,7 +151,7 @@ describe("PluginAccountRow", () => {
     fireEvent.click(await enabledButton("Connect"));
 
     fireEvent.click(await screen.findByRole("button", { name: "Cancel" }));
-    expect(pluginApi.cancelAccountConnect).toHaveBeenCalledWith("acme.tracker");
+    expect(pluginApi.cancelAccountConnect).toHaveBeenCalledWith("acme.tracker", "default");
     finish({ status: "cancelled" });
     await screen.findByRole("button", { name: "Connect" });
   });
@@ -181,8 +185,8 @@ describe("PluginAccountRow", () => {
     fireEvent.change(input, { target: { value: "pat-123" } });
     fireEvent.click(screen.getByRole("button", { name: "Connect" }));
 
-    await screen.findByText("Connected as octo");
-    expect(pluginApi.setAccountToken).toHaveBeenCalledWith("acme.tracker", "pat-123");
+    await screen.findByText(/^Connected as octo\./);
+    expect(pluginApi.setAccountToken).toHaveBeenCalledWith("acme.tracker", "pat-123", "default");
     expect(screen.queryByPlaceholderText("API token")).toBeNull();
   });
 
@@ -195,7 +199,9 @@ describe("PluginAccountRow", () => {
     pluginApi.getAccountStatus.mockResolvedValue(status());
     fireEvent.click(await screen.findByRole("button", { name: "Disconnect account" }));
 
-    await waitFor(() => expect(pluginApi.disconnectAccount).toHaveBeenCalledWith("acme.tracker"));
+    await waitFor(() =>
+      expect(pluginApi.disconnectAccount).toHaveBeenCalledWith("acme.tracker", "default")
+    );
     await screen.findByRole("button", { name: "Connect" });
   });
 
@@ -209,7 +215,7 @@ describe("PluginAccountRow", () => {
     );
     pluginApi.getAccountStatus.mockResolvedValue(status({ connected: true }));
     render(<PluginAccountRow plugin={plugin(OAUTH)} account={OAUTH} />);
-    await screen.findByText("Connected");
+    await screen.findByText(/^Connected\./);
 
     pluginApi.getAccountStatus.mockResolvedValue(status());
     for (const listener of listeners) listener({ pluginId: "acme.tracker" });
@@ -222,6 +228,84 @@ describe("PluginAccountRow", () => {
 
     await screen.findByText("Finish signing in in your browser…");
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
-    expect(pluginApi.cancelAccountConnect).toHaveBeenCalledWith("acme.tracker");
+    expect(pluginApi.cancelAccountConnect).toHaveBeenCalledWith("acme.tracker", "default");
+  });
+
+  it("says the stored tokens aren't checked until a test passes", async () => {
+    pluginApi.getAccountStatus.mockResolvedValue(
+      status({ connected: true, identity: "octo", testable: true })
+    );
+    pluginApi.testAccountConnection.mockResolvedValue({
+      status: "rejected",
+      checkedAt: 1,
+      message: "The service refused the stored token (HTTP 401)",
+    });
+    render(<PluginAccountRow plugin={plugin(OAUTH)} account={OAUTH} />);
+
+    await screen.findByText(/not checked against the service yet/);
+    fireEvent.click(await enabledButton("Test"));
+    await screen.findByText(/refused the stored token \(HTTP 401\)/);
+    expect(pluginApi.testAccountConnection).toHaveBeenCalledWith("acme.tracker", "default");
+    // A refusal doesn't disconnect: Reconnect and Disconnect stay offered.
+    expect(screen.getByRole("button", { name: "Reconnect" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Disconnect" })).toBeTruthy();
+  });
+
+  it("offers no Test when the manifest declares nothing to ask", async () => {
+    pluginApi.getAccountStatus.mockResolvedValue(status({ connected: true }));
+    render(<PluginAccountRow plugin={plugin(OAUTH)} account={OAUTH} />);
+    await screen.findByRole("button", { name: "Reconnect" });
+    expect(screen.queryByRole("button", { name: "Test" })).toBeNull();
+  });
+
+  it("replaces a pasted token from Reconnect", async () => {
+    pluginApi.getAccountStatus.mockResolvedValue(status({ kind: "token", connected: true }));
+    pluginApi.setAccountToken.mockResolvedValue(status({ kind: "token", connected: true }));
+    render(<PluginAccountRow plugin={plugin(TOKEN)} account={TOKEN} connectionId="work" />);
+
+    fireEvent.click(await enabledButton("Reconnect"));
+    const input = (await screen.findByPlaceholderText("API token")) as HTMLInputElement;
+    fireEvent.change(input, { target: { value: "pat-456" } });
+    fireEvent.click(screen.getByRole("button", { name: "Replace" }));
+
+    await waitFor(() =>
+      expect(pluginApi.setAccountToken).toHaveBeenCalledWith("acme.tracker", "pat-456", "work")
+    );
+    await waitFor(() => expect(screen.queryByPlaceholderText("API token")).toBeNull());
+  });
+
+  it("says why a revoked connection needs connecting again", async () => {
+    pluginApi.getAccountStatus.mockResolvedValue(
+      status({ verification: { status: "revoked", checkedAt: 1, message: null } })
+    );
+    render(<PluginAccountRow plugin={plugin(OAUTH)} account={OAUTH} />);
+    await screen.findByText("The service ended this sign-in. Connect again to use it");
+  });
+
+  it("shows a Reconnect another window started as a sign-in to cancel", async () => {
+    pluginApi.getAccountStatus.mockResolvedValue(status({ connected: true, pending: true }));
+    render(<PluginAccountRow plugin={plugin(OAUTH)} account={OAUTH} />);
+    await screen.findByText("Finish signing in in your browser…");
+    expect(screen.queryByRole("button", { name: "Reconnect" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(pluginApi.cancelAccountConnect).toHaveBeenCalledWith("acme.tracker", "default");
+  });
+
+  it("drops a refused replacement's error when the replacement is cancelled", async () => {
+    pluginApi.getAccountStatus.mockResolvedValue(status({ kind: "token", connected: true }));
+    pluginApi.setAccountToken.mockRejectedValue(new Error("The service didn't accept this token"));
+    render(<PluginAccountRow plugin={plugin(TOKEN)} account={TOKEN} />);
+
+    fireEvent.click(await enabledButton("Reconnect"));
+    fireEvent.change(await screen.findByPlaceholderText("API token"), {
+      target: { value: "bad" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Replace" }));
+    await screen.findByText("The service didn't accept this token");
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    await waitFor(() =>
+      expect(screen.queryByText("The service didn't accept this token")).toBeNull()
+    );
+    expect(screen.getByRole("button", { name: "Reconnect" })).toBeTruthy();
   });
 });

@@ -2229,10 +2229,10 @@ describe("PluginService settings for launch-disabled plugins", () => {
 
     it("keeps the other steps when the account can't be read", async () => {
       seedDisabled(SETUP_MANIFEST);
-      const accounts = (svc as unknown as { accounts: { getUiStatus: () => Promise<unknown> } })
+      const accounts = (svc as unknown as { accounts: { getStateFor: () => Promise<unknown> } })
         .accounts;
       const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
-      vi.spyOn(accounts, "getUiStatus").mockRejectedValueOnce(new Error("bad JSON"));
+      const read = vi.spyOn(accounts, "getStateFor").mockRejectedValueOnce(new Error("bad JSON"));
 
       const status = await svc.getSetupStatusForUi("acme.demo", "proj-a");
       expect(status.steps.map((step) => [step.id, step.check])).toEqual([
@@ -2240,6 +2240,8 @@ describe("PluginService settings for launch-disabled plugins", () => {
         ["connect", { kind: "observed", done: false }],
         ["sync", { kind: "context", when: "acme.demo.synced" }],
       ]);
+      expect(read).toHaveBeenCalledWith("acme.demo", { projectId: "proj-a" });
+      expect(warn).toHaveBeenCalled();
       warn.mockRestore();
     });
 

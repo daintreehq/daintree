@@ -1902,12 +1902,12 @@ At most 10 steps per plugin.
 | `done` | The step is done when |
 | --- | --- |
 | `{ "kind": "setting", "key": "<id>" }` | the declared setting has a stored value. A declared `default` doesn't count, the same rule as `required`. |
-| `{ "kind": "account" }` | the plugin's `contributes.account` is connected. |
+| `{ "kind": "account", "connection"?: "<id>" }` | the named connection is connected; without `connection`, the one the project uses (`contributes.account`'s, for a single account). |
 | `{ "kind": "context", "when": "<clause>" }` | the `when` clause holds over the context keys plugins publish with [`host.setContext`](./host-api.md#setcontext), written `publisher.name.key`. |
 
 **Actions.** `{ "kind": "settings", "key"?: "<id>" }` opens the plugin's settings, at that setting when `key` is given. `{ "kind": "command", "actionId": "<name>.<id>" }` runs one of the plugin's own commands with no arguments, written in your manifest namespace like a toolbar button's `actionId`; a project plugin's is rewritten to its instance for you. Without an `action`, a `setting` step opens its setting, an `account` step opens the plugin's settings, and a `context` step has no button.
 
-**Validation.** A `setting` step's `key` and a `settings` action's `key` must name a declared setting (`setup_setting_unknown`), an `account` step needs `contributes.account` (`setup_account_undeclared`), a `when` clause must parse (`setup_when_invalid`), and a command must be your own (`setup_command_not_own`) and match a declared command when you declare any (`action_id_undeclared_command`).
+**Validation.** A `setting` step's `key` and a `settings` action's `key` must name a declared setting (`setup_setting_unknown`), an `account` step needs `contributes.account` or `contributes.connections` (`setup_account_undeclared`) and its `connection` must name a declared one (`setup_connection_unknown`), a `when` clause must parse (`setup_when_invalid`), and a command must be your own (`setup_command_not_own`) and match a declared command when you declare any (`action_id_undeclared_command`).
 
 **Skip.** Each outstanding step has a **Skip**, remembered per project in Daintree's own settings, never the repository, and undone from the same row. The strip goes away once every step is done or skipped; if a `required` setting is still unset then, its "needs setup" strip takes over. With no project open, the settings checklist shows what the host can see and offers no skip.
 

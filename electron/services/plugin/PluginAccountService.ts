@@ -3,7 +3,13 @@ import { createHash, randomBytes } from "crypto";
 import { net } from "electron";
 import { PluginSettingsStore } from "../PluginSettingsStore.js";
 import { safeStorageCipher, type SecretCipher } from "./secretCipher.js";
-import { isSafePluginInstanceId } from "./projectPluginIdentity.js";
+import {
+  isSafePluginInstanceId,
+  pluginManifestIdFromInstanceKey,
+  projectIdFromPluginInstanceKey,
+} from "./projectPluginIdentity.js";
+import type { PluginAccountBindingStore } from "./pluginAccountBindings.js";
+import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import {
   cancelOAuthLoopback,
   startAuthorizationCodeLoopback,
@@ -14,14 +20,25 @@ import {
   invokeTrackedListener,
   type ListenerFailureState,
 } from "./pluginCallbackUtils.js";
-import type {
-  PluginAccountAccessToken,
-  PluginAccountConnectResult,
-  PluginAccountContribution,
-  PluginAccountState,
-  PluginAccountUiStatus,
-  PluginManifest,
+import {
+  DEFAULT_PLUGIN_CONNECTION_ID,
+  type PluginAccountAccessToken,
+  type PluginAccountBinding,
+  type PluginAccountBindingChoice,
+  type PluginAccountBindingUiStatus,
+  type PluginAccountConnectResult,
+  type PluginAccountContribution,
+  type PluginAccountRef,
+  type PluginAccountState,
+  type PluginAccountUiStatus,
+  type PluginAccountVerification,
+  type PluginConnectionContribution,
+  type PluginManifest,
 } from "../../../shared/types/plugin.js";
+import {
+  declaredPluginConnections,
+  isPluginConnectionId,
+} from "../../../shared/utils/pluginConnections.js";
 
 /** The keychain-encrypted credentials. Never leaves this module except as an access token. */
 interface StoredCredentials {
@@ -32,18 +49,43 @@ interface StoredCredentials {
 
 type OAuthAccount = Extract<PluginAccountContribution, { kind: "oauth2" }>;
 
+interface ConnectionKeys {
+  credentials: string;
+  identity: string;
+  config: string;
+}
+
 /**
- * Store keys. Identity and the configuration fingerprint are plain so the
- * settings row can show the account without a keychain prompt.
+ * Store keys for one connection. Identity and the configuration fingerprint are
+ * plain so the settings row can show the account without a keychain prompt.
+ * The `"default"` connection keeps the keys `contributes.account` always used,
+ * so an account stored before named connections existed is read where it is,
+ * with nothing to move; every other connection has its own prefixed keys in
+ * the same file.
  */
-const CREDENTIALS_KEY = "credentials";
-const IDENTITY_KEY = "identity";
-const CONFIG_KEY = "config";
+function connectionKeys(connectionId: string): ConnectionKeys {
+  if (connectionId === DEFAULT_PLUGIN_CONNECTION_ID) {
+    return { credentials: "credentials", identity: "identity", config: "config" };
+  }
+  const prefix = `connection:${connectionId}:`;
+  return {
+    credentials: `${prefix}credentials`,
+    identity: `${prefix}identity`,
+    config: `${prefix}config`,
+  };
+}
+
+const UNCHECKED: PluginAccountVerification = {
+  status: "unchecked",
+  checkedAt: null,
+  message: null,
+};
 
 /** Refresh this long before the service says the token expires. */
 export const ACCOUNT_REFRESH_SKEW_MS = 60_000;
 const TOKEN_REQUEST_TIMEOUT_MS = 30_000;
 const IDENTITY_REQUEST_TIMEOUT_MS = 15_000;
+const TEST_REQUEST_TIMEOUT_MS = 15_000;
 /** Bounds on what a service may send back; anything larger is not a token response. */
 const MAX_RESPONSE_BYTES = 256 * 1024;
 const MAX_TOKEN_LENGTH = 16 * 1024;
@@ -51,6 +93,8 @@ const MAX_IDENTITY_LENGTH = 200;
 const SESSION_PREFIX = "plugin-account\u0000";
 /** A token read that keeps losing to concurrent sign-ins and sign-outs gives up after this many. */
 const MAX_TOKEN_READ_ATTEMPTS = 3;
+/** A token read whose project binding keeps moving under it gives up after this many. */
+const MAX_BINDING_READ_ATTEMPTS = 3;
 
 /**
  * The error codes RFC 6749 §4.1.2.1 and §5.2 define. Only these are repeated
@@ -90,9 +134,12 @@ interface PluginAccountServiceDeps {
   getManifest: (pluginId: string) => PluginManifest | undefined;
   /**
    * Told after any account connects, disconnects, changes identity, or starts
-   * or ends a browser sign-in. Carries no state: a listener re-reads it.
+   * or ends a browser sign-in, and after a project's binding changes. Carries
+   * no state: a listener re-reads it.
    */
   onAccountChanged?: (pluginId: string) => void;
+  /** Projects' connection choices. Defaults to an in-memory store (tests). */
+  bindings?: PluginAccountBindingStore;
   cipher?: SecretCipher;
   fetch?: FetchLike;
   now?: () => number;
@@ -100,9 +147,72 @@ interface PluginAccountServiceDeps {
   cancelLoopback?: typeof cancelOAuthLoopback;
 }
 
+/** One stored connection: the instance whose account file holds it, and its id there. */
+interface ConnectionTarget {
+  ownerId: string;
+  connectionId: string;
+}
+
+/**
+ * What a consumer's `host.account` call reaches. `available` is false when a
+ * project points at a machine connection the installed plugin no longer
+ * declares the same way: nothing is handed out rather than something else.
+ */
+interface ResolvedConnection extends ConnectionTarget {
+  available: boolean;
+}
+
 interface AccountListener {
+  consumerId: string;
+  ref: PluginAccountRef;
   cb: (state: PluginAccountState) => unknown;
   failures: ListenerFailureState;
+  /** Bumped on every delivery, so a slower read for an earlier binding can't land after it. */
+  seq: number;
+}
+
+interface VerificationEntry {
+  generation: number;
+  revision: number;
+  verification: PluginAccountVerification;
+}
+
+/** The runtime state key. The default connection keeps the bare instance id it always had. */
+function connectionStateKey({ ownerId, connectionId }: ConnectionTarget): string {
+  return connectionId === DEFAULT_PLUGIN_CONNECTION_ID
+    ? ownerId
+    : `${ownerId}\u0000${connectionId}`;
+}
+
+function ownsStateKey(ownerId: string, key: string): boolean {
+  return key === ownerId || key.startsWith(`${ownerId}\u0000`);
+}
+
+function sameTarget(a: ConnectionTarget | null, b: ConnectionTarget | null): boolean {
+  return a?.ownerId === b?.ownerId && a?.connectionId === b?.connectionId;
+}
+
+function memoryBindings(): PluginAccountBindingStore {
+  const byProject = new Map<string, Map<string, PluginAccountBinding>>();
+  return {
+    get: (projectId, pluginId) => byProject.get(projectId)?.get(pluginId) ?? null,
+    set: (projectId, pluginId, binding) => {
+      const current = byProject.get(projectId)?.get(pluginId) ?? null;
+      if (binding === null) {
+        return byProject.get(projectId)?.delete(pluginId) ?? false;
+      }
+      if (current?.connectionId === binding.connectionId && current.source === binding.source) {
+        return false;
+      }
+      let project = byProject.get(projectId);
+      if (!project) {
+        project = new Map();
+        byProject.set(projectId, project);
+      }
+      project.set(pluginId, { ...binding });
+      return true;
+    },
+  };
 }
 
 /**
@@ -181,17 +291,22 @@ function connectFailureMessage(result: AuthorizationCodeLoopbackResult): string 
 }
 
 /**
- * Host-managed accounts for plugins (#13823). The host runs the sign-in, keeps
- * the tokens in the OS keychain, refreshes them, and hands a plugin only its
- * current access token. Accounts are keyed by plugin instance id, so a project
- * plugin's account belongs to its project and an installed plugin has one
- * account on this machine.
+ * Host-managed accounts for plugins (#13823), as named connections (#14102).
+ * The host runs the sign-in, keeps the tokens in the OS keychain, refreshes
+ * them, and hands a plugin only its current access token.
  *
- * Every write or delete of an account runs under that account's lock and
+ * A connection is stored in its owning instance's account file, so a project
+ * plugin's connections belong to its project and an installed plugin's are
+ * this machine's. A project picks which connection a plugin uses through a
+ * binding: one of the instance's own, or — for a project plugin — the
+ * installed plugin's connection of the same id, when it is declared the same
+ * way. A binding is only a reference; tokens are never copied.
+ *
+ * Every write or delete of a connection runs under that connection's lock and
  * bumps its generation. An operation remembers the generation it started
- * under and does nothing once a newer one exists, so a sign-in, a refresh or a
- * failure that finishes late can never undo a disconnect, a newer sign-in or
- * an uninstall.
+ * under and does nothing once a newer one exists, so a sign-in, a refresh, a
+ * test or a failure that finishes late can never undo a disconnect, a newer
+ * sign-in or an uninstall.
  *
  * Tokens are never logged and never returned to a renderer. Requests go only to
  * the manifest's endpoints, refuse redirects, and send no client secret.
@@ -201,41 +316,77 @@ export class PluginAccountService {
   private readonly cipher: SecretCipher;
   private readonly fetchImpl: FetchLike;
   private readonly now: () => number;
+  private readonly bindings: PluginAccountBindingStore;
   private readonly stores = new Map<string, PluginSettingsStore>();
-  private readonly listeners = new Map<string, Set<AccountListener>>();
-  /** One token read (and refresh) per account at a time; concurrent callers share it. */
+  private readonly listeners = new Set<AccountListener>();
+  /** One token read (and refresh) per connection at a time; concurrent callers share it. */
   private readonly tokenReads = new Map<string, Promise<PluginAccountAccessToken | null>>();
   /** Sign-ins in progress, from the click until the tokens are stored. */
   private readonly pending = new Map<string, symbol>();
   private readonly generations = new Map<string, number>();
-  /** Bumped when the plugin unloads: retires every read that began before it. */
+  /** Bumped when the owning plugin unloads: retires every read that began before it. */
   private readonly epochs = new Map<string, number>();
   private readonly locks = new Map<string, Promise<void>>();
+  /** What a test or refresh last saw, for the generation it saw it under. Never stored. */
+  private readonly verifications = new Map<string, VerificationEntry>();
+  /**
+   * Bumped when a refresh replaces the tokens without a new sign-in, so a test
+   * of the old token can't speak for the new one.
+   */
+  private readonly revisions = new Map<string, number>();
 
   constructor(deps: PluginAccountServiceDeps) {
     this.deps = deps;
     this.cipher = deps.cipher ?? safeStorageCipher;
     this.fetchImpl = deps.fetch ?? ((url, init) => net.fetch(url, init));
     this.now = deps.now ?? Date.now;
+    this.bindings = deps.bindings ?? memoryBindings();
   }
 
-  /** The declared account, or `undefined` when the plugin declares none. */
+  /** The plugin's connections in manifest order; `contributes.account` is `"default"`. */
+  declaredConnections(pluginId: string): PluginConnectionContribution[] {
+    return declaredPluginConnections(this.deps.getManifest(pluginId));
+  }
+
+  /** A declared connection: the named one, or the first. `undefined` when there's none. */
+  declaredConnection(
+    pluginId: string,
+    connectionId?: string
+  ): PluginConnectionContribution | undefined {
+    const declared = this.declaredConnections(pluginId);
+    return connectionId === undefined
+      ? declared[0]
+      : declared.find((connection) => connection.id === connectionId);
+  }
+
+  /** The first declared account, or `undefined` when the plugin declares none. */
   declaredAccount(pluginId: string): PluginAccountContribution | undefined {
-    return this.deps.getManifest(pluginId)?.contributes.account;
+    return this.declaredConnection(pluginId);
   }
 
-  private requireAccount(pluginId: string): PluginAccountContribution {
-    const account = this.declaredAccount(pluginId);
-    if (!account) {
-      throw new Error(`Plugin "${pluginId}" declares no contributes.account`);
+  private requireConnection(
+    pluginId: string,
+    connectionId?: string
+  ): PluginConnectionContribution & ConnectionTarget {
+    if (connectionId !== undefined && !isPluginConnectionId(connectionId)) {
+      throw new Error("plugin account: malformed connection id");
     }
-    return account;
+    const connection = this.declaredConnection(pluginId, connectionId);
+    if (!connection) {
+      throw new Error(
+        connectionId === undefined
+          ? `Plugin "${pluginId}" declares no contributes.account`
+          : `Plugin "${pluginId}" declares no connection "${connectionId}"`
+      );
+    }
+    return { ...connection, ownerId: pluginId, connectionId: connection.id };
   }
 
   /**
-   * `<settingsRoot>/accounts/<pluginId>.json`. A project plugin's instance id
-   * names its project, so its file is already per project; nothing here is
-   * under a project root, so nothing can be committed.
+   * `<settingsRoot>/accounts/<pluginId>.json`, holding every connection the
+   * instance owns. A project plugin's instance id names its project, so its
+   * file is already per project; nothing here is under a project root, so
+   * nothing can be committed.
    */
   accountFilePath(pluginId: string): string {
     if (!isSafePluginInstanceId(pluginId)) {
@@ -254,76 +405,133 @@ export class PluginAccountService {
     return store;
   }
 
-  private generation(pluginId: string): number {
-    return this.generations.get(pluginId) ?? 0;
+  private generation(target: ConnectionTarget): number {
+    return this.generations.get(connectionStateKey(target)) ?? 0;
   }
 
-  private epoch(pluginId: string): number {
-    return this.epochs.get(pluginId) ?? 0;
+  private epoch(ownerId: string): number {
+    return this.epochs.get(ownerId) ?? 0;
   }
 
-  private bumpGeneration(pluginId: string): void {
-    this.generations.set(pluginId, this.generation(pluginId) + 1);
+  private bumpGeneration(target: ConnectionTarget): void {
+    this.generations.set(connectionStateKey(target), this.generation(target) + 1);
   }
 
-  /** Run `fn` after every earlier mutation of this account has finished. */
-  private withLock<T>(pluginId: string, fn: () => Promise<T>): Promise<T> {
-    const result = (this.locks.get(pluginId) ?? Promise.resolve()).then(fn);
+  /** Run `fn` after every earlier mutation of this connection has finished. */
+  private withLock<T>(target: ConnectionTarget, fn: () => Promise<T>): Promise<T> {
+    const key = connectionStateKey(target);
+    const result = (this.locks.get(key) ?? Promise.resolve()).then(fn);
     const tail = result.then(
       () => undefined,
       () => undefined
     );
-    this.locks.set(pluginId, tail);
+    this.locks.set(key, tail);
     void tail.then(() => {
-      if (this.locks.get(pluginId) === tail) this.locks.delete(pluginId);
+      if (this.locks.get(key) === tail) this.locks.delete(key);
     });
     return result;
   }
 
-  private async readIdentity(pluginId: string): Promise<string | null> {
-    const identity = await this.store(pluginId).get<unknown>(IDENTITY_KEY);
+  private async readIdentity(target: ConnectionTarget): Promise<string | null> {
+    const keys = connectionKeys(target.connectionId);
+    const identity = await this.store(target.ownerId).get<unknown>(keys.identity);
     return typeof identity === "string" ? identity : null;
   }
 
-  async getState(pluginId: string): Promise<PluginAccountState> {
-    const account = this.requireAccount(pluginId);
-    const connected = await this.hasCurrentCredentials(pluginId, account);
-    return { connected, identity: connected ? await this.readIdentity(pluginId) : null };
+  async getState(pluginId: string, connectionId?: string): Promise<PluginAccountState> {
+    const connection = this.requireConnection(pluginId, connectionId);
+    const connected = await this.hasCurrentCredentials(connection, connection);
+    return { connected, identity: connected ? await this.readIdentity(connection) : null };
   }
 
-  /** Stored credentials issued under the manifest's current account, checked without decrypting. */
+  /** Stored credentials issued under the manifest's current declaration, checked without decrypting. */
   private async hasCurrentCredentials(
-    pluginId: string,
+    target: ConnectionTarget,
     account: PluginAccountContribution
   ): Promise<boolean> {
-    const store = this.store(pluginId);
-    if ((await store.storedSecretTier(CREDENTIALS_KEY)) !== "keychain") return false;
-    return (await store.get<unknown>(CONFIG_KEY)) === accountFingerprint(account);
+    const store = this.store(target.ownerId);
+    const keys = connectionKeys(target.connectionId);
+    if ((await store.storedSecretTier(keys.credentials)) !== "keychain") return false;
+    return (await store.get<unknown>(keys.config)) === accountFingerprint(account);
   }
 
-  async getUiStatus(pluginId: string): Promise<PluginAccountUiStatus | null> {
-    const account = this.declaredAccount(pluginId);
-    if (!account) return null;
-    const state = await this.getState(pluginId);
+  private revision(target: ConnectionTarget): number {
+    return this.revisions.get(connectionStateKey(target)) ?? 0;
+  }
+
+  private verification(target: ConnectionTarget): PluginAccountVerification {
+    const entry = this.verifications.get(connectionStateKey(target));
+    return entry &&
+      entry.generation === this.generation(target) &&
+      entry.revision === this.revision(target)
+      ? { ...entry.verification }
+      : { ...UNCHECKED };
+  }
+
+  /**
+   * Record what was seen, unless the tokens changed since `generation` and
+   * `revision`. A changed answer tells the settings row to re-read.
+   */
+  private recordVerification(
+    target: ConnectionTarget,
+    generation: number,
+    status: PluginAccountVerification["status"],
+    message: string | null = null,
+    revision: number = this.revision(target)
+  ): void {
+    if (this.generation(target) !== generation || this.revision(target) !== revision) return;
+    const previous = this.verification(target);
+    this.verifications.set(connectionStateKey(target), {
+      generation,
+      revision,
+      verification: { status, checkedAt: this.now(), message },
+    });
+    if (previous.status !== status || previous.message !== message) {
+      this.deps.onAccountChanged?.(target.ownerId);
+    }
+  }
+
+  /** The settings row for one connection; the first declared without `connectionId`. */
+  async getUiStatus(
+    pluginId: string,
+    connectionId?: string
+  ): Promise<PluginAccountUiStatus | null> {
+    if (this.declaredConnections(pluginId).length === 0) return null;
+    const connection = this.requireConnection(pluginId, connectionId);
+    const state = await this.getState(pluginId, connection.connectionId);
     return {
-      kind: account.kind,
-      label: account.label,
-      description: account.description ?? null,
+      connectionId: connection.connectionId,
+      kind: connection.kind,
+      label: connection.label,
+      description: connection.description ?? null,
       connected: state.connected,
       identity: state.identity,
-      pending: this.pending.has(pluginId),
+      pending: this.pending.has(connectionStateKey(connection)),
       secretTier: this.cipher.tier(),
+      testable: connection.test !== undefined || connection.identity !== undefined,
+      verification: this.verification(connection),
     };
+  }
+
+  /** Every connection the instance declares, in manifest order. */
+  async listUiStatus(pluginId: string): Promise<PluginAccountUiStatus[]> {
+    const statuses: PluginAccountUiStatus[] = [];
+    for (const connection of this.declaredConnections(pluginId)) {
+      const status = await this.getUiStatus(pluginId, connection.id);
+      if (status) statuses.push(status);
+    }
+    return statuses;
   }
 
   /**
    * Run the declared OAuth sign-in. Called only from the settings row's click.
    * A second click supersedes a sign-in still in progress, and Cancel or
-   * Disconnect ends one at any point until its tokens are stored.
+   * Disconnect ends one at any point until its tokens are stored. Connecting
+   * an already connected account replaces its tokens (Reconnect).
    */
-  async connect(pluginId: string): Promise<PluginAccountConnectResult> {
-    const account = this.requireAccount(pluginId);
-    if (account.kind !== "oauth2") {
+  async connect(pluginId: string, connectionId?: string): Promise<PluginAccountConnectResult> {
+    const connection = this.requireConnection(pluginId, connectionId);
+    if (connection.kind !== "oauth2") {
       throw new Error(`Plugin "${pluginId}" account takes a pasted token, not a sign-in`);
     }
     if (this.cipher.tier() !== "keychain") {
@@ -332,22 +540,23 @@ export class PluginAccountService {
         message: "There's no unlocked OS keychain to keep the account's tokens in",
       };
     }
-    const flow = Symbol(pluginId);
-    this.pending.set(pluginId, flow);
+    const key = connectionStateKey(connection);
+    const flow = Symbol(key);
+    this.pending.set(key, flow);
     this.deps.onAccountChanged?.(pluginId);
-    const current = () => this.pending.get(pluginId) === flow;
+    const current = () => this.pending.get(key) === flow;
     try {
-      return await this.runSignIn(pluginId, account, current);
+      return await this.runSignIn(connection, connection, current);
     } finally {
       if (current()) {
-        this.pending.delete(pluginId);
+        this.pending.delete(key);
         this.deps.onAccountChanged?.(pluginId);
       }
     }
   }
 
   private async runSignIn(
-    pluginId: string,
+    target: ConnectionTarget,
     account: OAuthAccount,
     current: () => boolean
   ): Promise<PluginAccountConnectResult> {
@@ -355,25 +564,29 @@ export class PluginAccountService {
     const challenge = base64Url(createHash("sha256").update(verifier).digest());
     const state = base64Url(randomBytes(32));
     const startLoopback = this.deps.startLoopback ?? startAuthorizationCodeLoopback;
-    const result = await startLoopback(SESSION_PREFIX + pluginId, state, (redirectUri) => {
-      const url = new URL(account.authorizeUrl);
-      url.searchParams.set("response_type", "code");
-      url.searchParams.set("client_id", account.clientId);
-      url.searchParams.set("redirect_uri", redirectUri);
-      if (account.scopes.length > 0) url.searchParams.set("scope", account.scopes.join(" "));
-      url.searchParams.set("state", state);
-      url.searchParams.set("code_challenge", challenge);
-      url.searchParams.set("code_challenge_method", "S256");
-      return url.toString();
-    });
+    const result = await startLoopback(
+      SESSION_PREFIX + connectionStateKey(target),
+      state,
+      (redirectUri) => {
+        const url = new URL(account.authorizeUrl);
+        url.searchParams.set("response_type", "code");
+        url.searchParams.set("client_id", account.clientId);
+        url.searchParams.set("redirect_uri", redirectUri);
+        if (account.scopes.length > 0) url.searchParams.set("scope", account.scopes.join(" "));
+        url.searchParams.set("state", state);
+        url.searchParams.set("code_challenge", challenge);
+        url.searchParams.set("code_challenge_method", "S256");
+        return url.toString();
+      }
+    );
     if (!current()) return { status: "cancelled" };
     if (!result.success) {
       const message = connectFailureMessage(result);
       return message === null ? { status: "cancelled" } : { status: "failed", message };
     }
     // The manifest may have changed while the browser was open; only the
-    // account declared now receives the code.
-    const declared = this.declaredAccount(pluginId);
+    // connection declared now receives the code.
+    const declared = this.declaredConnection(target.ownerId, target.connectionId);
     if (!declared || accountFingerprint(declared) !== accountFingerprint(account)) {
       return { status: "failed", message: "The plugin's account changed during sign-in" };
     }
@@ -387,7 +600,7 @@ export class PluginAccountService {
         code_verifier: verifier,
       });
       if (!current()) return { status: "cancelled" };
-      saved = await this.saveConnected(pluginId, account, credentials, current, {
+      saved = await this.saveConnected(target, account, credentials, current, {
         cancellable: true,
       });
     } catch (err) {
@@ -395,14 +608,20 @@ export class PluginAccountService {
       return { status: "failed", message: this.describeFailure(err, "Couldn't finish signing in") };
     }
     if (!saved) return { status: "cancelled" };
-    const status = await this.getUiStatus(pluginId);
+    const status = await this.getUiStatus(target.ownerId, target.connectionId);
     return status ? { status: "connected", account: status } : { status: "cancelled" };
   }
 
   /** Stop a sign-in that hasn't stored its tokens yet. */
-  cancelConnect(pluginId: string): void {
-    if (!this.pending.delete(pluginId)) return;
-    (this.deps.cancelLoopback ?? cancelOAuthLoopback)(SESSION_PREFIX + pluginId);
+  cancelConnect(pluginId: string, connectionId?: string): void {
+    // Omitted means the first declared connection, as for `connect`.
+    const key = connectionStateKey({
+      ownerId: pluginId,
+      connectionId:
+        connectionId ?? this.declaredConnection(pluginId)?.id ?? DEFAULT_PLUGIN_CONNECTION_ID,
+    });
+    if (!this.pending.delete(key)) return;
+    (this.deps.cancelLoopback ?? cancelOAuthLoopback)(SESSION_PREFIX + key);
     this.deps.onAccountChanged?.(pluginId);
   }
 
@@ -411,9 +630,13 @@ export class PluginAccountService {
    * token is checked against it first: a 401/403 means the service doesn't
    * accept it, and nothing is stored.
    */
-  async setToken(pluginId: string, token: unknown): Promise<PluginAccountUiStatus> {
-    const account = this.requireAccount(pluginId);
-    if (account.kind !== "token") {
+  async setToken(
+    pluginId: string,
+    token: unknown,
+    connectionId?: string
+  ): Promise<PluginAccountUiStatus> {
+    const connection = this.requireConnection(pluginId, connectionId);
+    if (connection.kind !== "token") {
       throw new Error(`Plugin "${pluginId}" account signs in through the browser`);
     }
     if (typeof token !== "string" || token.trim().length === 0) {
@@ -424,59 +647,67 @@ export class PluginAccountService {
     if (trimmed.length > MAX_TOKEN_LENGTH || !/^[\x21-\x7E]+$/.test(trimmed)) {
       throw new Error("That doesn't look like an API token");
     }
-    this.cancelConnect(pluginId);
-    const generation = this.generation(pluginId);
+    this.cancelConnect(pluginId, connection.connectionId);
+    const generation = this.generation(connection);
     const saved = await this.saveConnected(
-      pluginId,
-      account,
+      connection,
+      connection,
       { accessToken: trimmed, refreshToken: null, expiresAt: null },
-      () => this.generation(pluginId) === generation,
+      () => this.generation(connection) === generation,
       { rejectUnauthorized: true }
     );
     if (!saved) throw new Error("The account changed while the token was being checked");
-    const status = await this.getUiStatus(pluginId);
+    const status = await this.getUiStatus(pluginId, connection.connectionId);
     if (!status) throw new Error(`Plugin "${pluginId}" declares no contributes.account`);
     return status;
   }
 
-  /** Forget the account's tokens and end any sign-in in progress. Called from the settings row. */
-  async disconnect(pluginId: string): Promise<void> {
-    this.requireAccount(pluginId);
-    this.cancelConnect(pluginId);
-    await this.clear(pluginId);
+  /**
+   * Forget the connection's tokens and end any sign-in in progress. Called
+   * from the settings row. Projects bound to it keep their binding and read
+   * it as disconnected until it is connected again.
+   */
+  async disconnect(pluginId: string, connectionId?: string): Promise<void> {
+    const connection = this.requireConnection(pluginId, connectionId);
+    this.cancelConnect(pluginId, connection.connectionId);
+    await this.clear(connection);
   }
 
   /**
-   * A current access token for the plugin, refreshing first when it is within
-   * {@link ACCOUNT_REFRESH_SKEW_MS} of expiry. `null` when not connected.
-   * Concurrent callers share one read, so a rotating refresh token is only
-   * ever spent once.
+   * A current access token for the connection, refreshing first when it is
+   * within {@link ACCOUNT_REFRESH_SKEW_MS} of expiry. `null` when not
+   * connected. Concurrent callers share one read, so a rotating refresh token
+   * is only ever spent once — however many projects share the connection.
    */
-  getAccessToken(pluginId: string): Promise<PluginAccountAccessToken | null> {
-    let account: PluginAccountContribution;
+  getAccessToken(
+    pluginId: string,
+    connectionId?: string
+  ): Promise<PluginAccountAccessToken | null> {
+    let connection: PluginConnectionContribution & ConnectionTarget;
     try {
-      account = this.requireAccount(pluginId);
+      connection = this.requireConnection(pluginId, connectionId);
     } catch (err) {
       return Promise.reject(err);
     }
-    const inFlight = this.tokenReads.get(pluginId);
+    const key = connectionStateKey(connection);
+    const inFlight = this.tokenReads.get(key);
     if (inFlight) return inFlight;
-    const read = this.readToken(pluginId, account).finally(() => {
-      if (this.tokenReads.get(pluginId) === read) this.tokenReads.delete(pluginId);
+    const read = this.readToken(connection, connection).finally(() => {
+      if (this.tokenReads.get(key) === read) this.tokenReads.delete(key);
     });
-    this.tokenReads.set(pluginId, read);
+    this.tokenReads.set(key, read);
     return read;
   }
 
   private async readToken(
-    pluginId: string,
+    target: ConnectionTarget,
     account: PluginAccountContribution
   ): Promise<PluginAccountAccessToken | null> {
-    const epoch = this.epoch(pluginId);
+    const epoch = this.epoch(target.ownerId);
     for (let attempt = 0; attempt < MAX_TOKEN_READ_ATTEMPTS; attempt++) {
       // Unloaded since the read began: nothing may act on the account for it.
-      if (this.epoch(pluginId) !== epoch) return null;
-      const outcome = await this.readTokenOnce(pluginId, account, epoch);
+      if (this.epoch(target.ownerId) !== epoch) return null;
+      const outcome = await this.readTokenOnce(target, account, epoch);
       // A read that saw the account replaced or removed under it starts over.
       if (outcome !== "stale") return outcome;
     }
@@ -484,25 +715,25 @@ export class PluginAccountService {
   }
 
   private async readTokenOnce(
-    pluginId: string,
+    target: ConnectionTarget,
     account: PluginAccountContribution,
     epoch: number
   ): Promise<PluginAccountAccessToken | null | "stale"> {
     // Read under the lock, so the credentials and the generation they belong
     // to are one snapshot: no sign-in or disconnect can land between them.
-    const snapshot = await this.withLock(pluginId, async () => {
-      const generation = this.generation(pluginId);
-      const current = await this.hasCurrentCredentials(pluginId, account);
+    const snapshot = await this.withLock(target, async () => {
+      const generation = this.generation(target);
+      const current = await this.hasCurrentCredentials(target, account);
       return {
         generation,
         current,
-        credentials: current ? await this.readCredentials(pluginId) : null,
+        credentials: current ? await this.readCredentials(target) : null,
       };
     });
     const { generation, credentials } = snapshot;
     if (!snapshot.current) {
       // Tokens issued for an earlier account declaration are not handed out.
-      await this.clear(pluginId, generation);
+      await this.clear(target, generation);
       return null;
     }
     if (!credentials) return null;
@@ -511,24 +742,24 @@ export class PluginAccountService {
       return { accessToken: credentials.accessToken, expiresAt: credentials.expiresAt };
     }
     if (account.kind === "oauth2" && credentials.refreshToken !== null) {
-      return this.refresh(pluginId, account, credentials, generation, epoch);
+      return this.refresh(target, account, credentials, generation, epoch);
     }
     // No way to renew it: hand it out until it actually expires, then the
     // account has to be connected again.
     if (credentials.expiresAt > now) {
       return { accessToken: credentials.accessToken, expiresAt: credentials.expiresAt };
     }
-    await this.clear(pluginId, generation);
+    await this.clear(target, generation);
     return null;
   }
 
-  /** Whether an operation that began under `generation` and `epoch` still speaks for the account. */
-  private stillCurrent(pluginId: string, generation: number, epoch: number): boolean {
-    return this.generation(pluginId) === generation && this.epoch(pluginId) === epoch;
+  /** Whether an operation that began under `generation` and `epoch` still speaks for the connection. */
+  private stillCurrent(target: ConnectionTarget, generation: number, epoch: number): boolean {
+    return this.generation(target) === generation && this.epoch(target.ownerId) === epoch;
   }
 
   private async refresh(
-    pluginId: string,
+    target: ConnectionTarget,
     account: OAuthAccount,
     credentials: StoredCredentials,
     generation: number,
@@ -542,32 +773,41 @@ export class PluginAccountService {
         client_id: account.clientId,
       });
     } catch (err) {
-      if (!this.stillCurrent(pluginId, generation, epoch)) return "stale";
+      if (!this.stillCurrent(target, generation, epoch)) return "stale";
       if (err instanceof AccountRequestError && err.oauthError === "invalid_grant") {
         // RFC 6749 §5.2: the grant is revoked or expired. Retrying can't help.
-        await this.clear(pluginId, generation);
+        // Bindings stay; the row says why it needs connecting again.
+        await this.clear(
+          target,
+          generation,
+          "The service refused to renew the sign-in (invalid_grant)"
+        );
         return null;
       }
-      throw new Error(this.describeFailure(err, "Couldn't refresh the account's access token"), {
-        cause: err,
-      });
+      const message = this.describeFailure(err, "Couldn't refresh the account's access token");
+      this.recordVerification(target, generation, "unreachable", message);
+      throw new Error(message, { cause: err });
     }
     // A service that doesn't rotate refresh tokens leaves the old one valid.
     const merged: StoredCredentials = {
       ...next,
       refreshToken: next.refreshToken ?? credentials.refreshToken,
     };
-    const stored = await this.withLock(pluginId, async () => {
-      if (!this.stillCurrent(pluginId, generation, epoch)) return false;
-      await this.store(pluginId).set(CREDENTIALS_KEY, merged, { secret: true });
+    const keys = connectionKeys(target.connectionId);
+    const stored = await this.withLock(target, async () => {
+      if (!this.stillCurrent(target, generation, epoch)) return false;
+      await this.store(target.ownerId).set(keys.credentials, merged, { secret: true });
+      this.revisions.set(connectionStateKey(target), this.revision(target) + 1);
       return true;
     });
     if (!stored) return "stale";
+    this.recordVerification(target, generation, "ok");
     return { accessToken: merged.accessToken, expiresAt: merged.expiresAt };
   }
 
-  private async readCredentials(pluginId: string): Promise<StoredCredentials | null> {
-    const raw = await this.store(pluginId).get<unknown>(CREDENTIALS_KEY, { secret: true });
+  private async readCredentials(target: ConnectionTarget): Promise<StoredCredentials | null> {
+    const keys = connectionKeys(target.connectionId);
+    const raw = await this.store(target.ownerId).get<unknown>(keys.credentials, { secret: true });
     if (raw === undefined) return null;
     let parsed: unknown = raw;
     if (typeof raw === "string") {
@@ -588,7 +828,7 @@ export class PluginAccountService {
    * Resolves whether it was stored.
    */
   private async saveConnected(
-    pluginId: string,
+    target: ConnectionTarget,
     account: PluginAccountContribution,
     credentials: StoredCredentials,
     stillWanted: () => boolean,
@@ -597,50 +837,121 @@ export class PluginAccountService {
     const identity = account.identity
       ? await this.fetchIdentity(account.identity, credentials.accessToken, options)
       : null;
-    const outcome = await this.withLock(pluginId, async () => {
+    const keys = connectionKeys(target.connectionId);
+    const outcome = await this.withLock(target, async () => {
       if (!stillWanted()) return "skipped" as const;
       // Whatever was running against the previous tokens no longer applies.
-      this.bumpGeneration(pluginId);
-      const store = this.store(pluginId);
-      await store.set(CREDENTIALS_KEY, credentials, { secret: true });
-      await store.set(CONFIG_KEY, accountFingerprint(account));
-      if (identity === null) await store.delete(IDENTITY_KEY);
-      else await store.set(IDENTITY_KEY, identity);
+      this.bumpGeneration(target);
+      const store = this.store(target.ownerId);
+      await store.set(keys.credentials, credentials, { secret: true });
+      await store.set(keys.config, accountFingerprint(account));
+      if (identity === null) await store.delete(keys.identity);
+      else await store.set(keys.identity, identity);
       // Only a browser sign-in has a Cancel; a Disconnect waits for this lock.
       if (!options.cancellable || stillWanted()) return "stored" as const;
-      await this.removeStored(pluginId);
+      await this.removeStored(target);
       return "withdrawn" as const;
     });
-    if (outcome === "stored") this.notify(pluginId, { connected: true, identity });
+    if (outcome === "stored") this.notify(target, { connected: true, identity });
     // Whatever the account held before was overwritten, so it is disconnected now.
-    else if (outcome === "withdrawn") this.notify(pluginId, { connected: false, identity: null });
+    else if (outcome === "withdrawn") this.notify(target, { connected: false, identity: null });
     return outcome === "stored";
   }
 
-  /** Delete the stored account under the lock already held. Resolves whether anything was there. */
-  private async removeStored(pluginId: string): Promise<boolean> {
-    const store = this.store(pluginId);
-    const removedCredentials = await store.delete(CREDENTIALS_KEY);
-    const removedIdentity = await store.delete(IDENTITY_KEY);
-    const removedConfig = await store.delete(CONFIG_KEY);
+  /** Delete the stored connection under the lock already held. Resolves whether anything was there. */
+  private async removeStored(target: ConnectionTarget): Promise<boolean> {
+    const store = this.store(target.ownerId);
+    const keys = connectionKeys(target.connectionId);
+    const removedCredentials = await store.delete(keys.credentials);
+    const removedIdentity = await store.delete(keys.identity);
+    const removedConfig = await store.delete(keys.config);
     return removedCredentials || removedIdentity || removedConfig;
   }
 
   /**
-   * Remove the account's stored tokens. With `expected`, this is automatic
-   * cleanup: it runs only while the account is still the one that generation
-   * saw, so a late failure can't remove a newer sign-in, and it retires other
-   * operations only when there was something to remove. Without it (the
-   * user's Disconnect) everything in flight is retired.
+   * Remove the connection's stored tokens. With `expected`, this is automatic
+   * cleanup: it runs only while the connection is still the one that
+   * generation saw, so a late failure can't remove a newer sign-in, and it
+   * retires other operations only when there was something to remove. Without
+   * it (the user's Disconnect) everything in flight is retired. With
+   * `revoked`, the service refused the tokens for good: the row says so until
+   * the connection next changes.
    */
-  private async clear(pluginId: string, expected?: number): Promise<void> {
-    const removed = await this.withLock(pluginId, async () => {
-      if (expected !== undefined && this.generation(pluginId) !== expected) return false;
-      const removedAny = await this.removeStored(pluginId);
-      if (removedAny || expected === undefined) this.bumpGeneration(pluginId);
+  private async clear(
+    target: ConnectionTarget,
+    expected?: number,
+    revoked?: string
+  ): Promise<void> {
+    const removed = await this.withLock(target, async () => {
+      if (expected !== undefined && this.generation(target) !== expected) return false;
+      const removedAny = await this.removeStored(target);
+      if (removedAny || expected === undefined) this.bumpGeneration(target);
+      if (removedAny && revoked !== undefined) {
+        this.recordVerification(target, this.generation(target), "revoked", revoked);
+      }
       return removedAny;
     });
-    if (removed) this.notify(pluginId, { connected: false, identity: null });
+    if (removed) this.notify(target, { connected: false, identity: null });
+  }
+
+  /**
+   * The settings row's Test: use the stored tokens against the manifest's
+   * `test` endpoint (else its `identity` endpoint) and remember what the
+   * service said until the connection next changes. Never disconnects: a
+   * refusal is shown, and the user decides whether to reconnect.
+   */
+  async testConnection(
+    pluginId: string,
+    connectionId?: string
+  ): Promise<PluginAccountVerification> {
+    const connection = this.requireConnection(pluginId, connectionId);
+    const url = connection.test?.url ?? connection.identity?.url;
+    if (!url) throw new Error(`Plugin "${pluginId}" declares no way to test this connection`);
+    const generation = this.generation(connection);
+    let token: PluginAccountAccessToken | null;
+    try {
+      token = await this.getAccessToken(pluginId, connection.connectionId);
+    } catch (err) {
+      const message = formatErrorMessage(err, "Couldn't reach the service");
+      this.recordVerification(connection, generation, "unreachable", message);
+      return this.verification(connection);
+    }
+    // After the read: a refresh it ran is the token tested, a later one isn't.
+    const revision = this.revision(connection);
+    if (!token) {
+      const seen = this.verification(connection);
+      return seen.status === "revoked"
+        ? seen
+        : { status: "unchecked", checkedAt: null, message: "Not connected" };
+    }
+    let status: PluginAccountVerification["status"];
+    let message: string | null = null;
+    try {
+      const response = await this.fetchImpl(url, {
+        method: "GET",
+        headers: { Authorization: `Bearer ${token.accessToken}`, Accept: "application/json" },
+        redirect: "error",
+        signal: AbortSignal.timeout(TEST_REQUEST_TIMEOUT_MS),
+      });
+      void response.body?.cancel().catch(() => undefined);
+      if (response.ok) {
+        status = "ok";
+      } else if (response.status === 401 || response.status === 403) {
+        status = "rejected";
+        message = `The service refused the stored token (HTTP ${response.status})`;
+      } else {
+        status = "unreachable";
+        message = `The service answered HTTP ${response.status}`;
+      }
+    } catch {
+      status = "unreachable";
+      message = "Couldn't reach the service";
+    }
+    // A sign-in or disconnect meanwhile: this result is about tokens that are
+    // gone, so it isn't recorded against the ones there now.
+    this.recordVerification(connection, generation, status, message, revision);
+    this.deps.onAccountChanged?.(pluginId);
+    return this.verification(connection);
   }
 
   /**
@@ -756,50 +1067,311 @@ export class PluginAccountService {
     return err instanceof Error && err.message.length > 0 ? err.message : fallback;
   }
 
+  // ── Projects and bindings ─────────────────────────────────────────────
+
   /**
-   * `host.account.onDidChange` for one plugin. A rejected async callback is
-   * tracked like a thrown one.
+   * The project `ref` speaks for. A project plugin only ever speaks for its own
+   * project; an installed plugin names the project it is acting in, or none.
    */
-  subscribe(pluginId: string, cb: (state: PluginAccountState) => unknown): () => void {
-    const listener: AccountListener = { cb, failures: createListenerFailureState() };
-    let set = this.listeners.get(pluginId);
-    if (!set) {
-      set = new Set();
-      this.listeners.set(pluginId, set);
+  private projectFor(consumerId: string, ref: PluginAccountRef | undefined): string | null {
+    const bound = projectIdFromPluginInstanceKey(consumerId);
+    const asked = ref?.projectId;
+    if (asked !== undefined && (typeof asked !== "string" || asked.length === 0)) {
+      throw new Error("plugin account: projectId must be a project id");
     }
-    set.add(listener);
-    return () => {
-      const current = this.listeners.get(pluginId);
-      current?.delete(listener);
-      if (current?.size === 0) this.listeners.delete(pluginId);
+    if (bound !== null && asked !== undefined && asked !== bound) {
+      throw new Error(`Plugin "${consumerId}" can't use another project's connection`);
+    }
+    return bound ?? asked ?? null;
+  }
+
+  /**
+   * The installed plugin's connection a project plugin may share, when the
+   * installed plugin declares the same connection the same way. Signing in was
+   * done for that declaration, so only an identical one may use its tokens.
+   */
+  private machineTarget(consumerId: string, connectionId: string): ConnectionTarget | null {
+    const ownerId = pluginManifestIdFromInstanceKey(consumerId);
+    if (ownerId === consumerId) return null;
+    const own = this.declaredConnection(consumerId, connectionId);
+    const machine = this.declaredConnection(ownerId, connectionId);
+    if (!own || !machine || accountFingerprint(own) !== accountFingerprint(machine)) return null;
+    return { ownerId, connectionId };
+  }
+
+  /**
+   * Which stored connection a consumer's call reaches: `ref.connection`, else
+   * the project's bound connection, else the first declared. Its owner is the
+   * consumer itself unless the project bound that connection to the machine.
+   * `null` when the plugin declares no connections.
+   */
+  resolve(consumerId: string, ref?: PluginAccountRef): ResolvedConnection | null {
+    const declared = this.declaredConnections(consumerId);
+    if (declared.length === 0) return null;
+    const asked = ref?.connection;
+    if (asked !== undefined && !isPluginConnectionId(asked)) {
+      throw new Error("plugin account: malformed connection id");
+    }
+    if (asked !== undefined && !declared.some((connection) => connection.id === asked)) {
+      throw new Error(`Plugin "${consumerId}" declares no connection "${asked}"`);
+    }
+    const projectId = this.projectFor(consumerId, ref);
+    const stored = projectId === null ? null : this.bindings.get(projectId, consumerId);
+    const binding =
+      stored && declared.some((connection) => connection.id === stored.connectionId)
+        ? stored
+        : null;
+    // The project chose a connection the plugin no longer declares. With
+    // others still declared, quietly using one of them would hand out an
+    // account the user never picked, so nothing is handed out until they
+    // choose again. With one left there is nothing to choose.
+    if (asked === undefined && stored && !binding && declared.length > 1) {
+      return { ownerId: consumerId, connectionId: stored.connectionId, available: false };
+    }
+    const connectionId = asked ?? binding?.connectionId ?? declared[0].id;
+    if (binding?.connectionId !== connectionId || binding.source !== "machine") {
+      return { ownerId: consumerId, connectionId, available: true };
+    }
+    const machine = this.machineTarget(consumerId, connectionId);
+    return machine
+      ? { ...machine, available: true }
+      : {
+          ownerId: pluginManifestIdFromInstanceKey(consumerId),
+          connectionId,
+          available: false,
+        };
+  }
+
+  /** `host.account.getState` for a consumer. */
+  async getStateFor(consumerId: string, ref?: PluginAccountRef): Promise<PluginAccountState> {
+    const target = this.resolve(consumerId, ref);
+    if (!target) throw new Error(`Plugin "${consumerId}" declares no contributes.account`);
+    if (!target.available) return { connected: false, identity: null };
+    return this.getState(target.ownerId, target.connectionId);
+  }
+
+  /**
+   * `host.account.getAccessToken` for a consumer. A token read while the
+   * project's binding moved belongs to the connection it no longer uses, so it
+   * is dropped and the read starts over against the new one.
+   */
+  async getAccessTokenFor(
+    consumerId: string,
+    ref?: PluginAccountRef
+  ): Promise<PluginAccountAccessToken | null> {
+    for (let attempt = 0; attempt < MAX_BINDING_READ_ATTEMPTS; attempt++) {
+      const target = this.resolve(consumerId, ref);
+      if (!target) throw new Error(`Plugin "${consumerId}" declares no contributes.account`);
+      if (!target.available) return null;
+      let token: PluginAccountAccessToken | null = null;
+      let failure: { error: unknown } | null = null;
+      try {
+        token = await this.getAccessToken(target.ownerId, target.connectionId);
+      } catch (error) {
+        failure = { error };
+      }
+      // A failure, like a token, belongs to the connection it was read from.
+      const now = this.resolve(consumerId, ref);
+      if (!now?.available || !sameTarget(now, target)) continue;
+      if (failure) throw failure.error;
+      return token;
+    }
+    return null;
+  }
+
+  /** What a project uses for a plugin, and what it could choose. */
+  async getBindingUiStatus(
+    consumerId: string,
+    projectId: string
+  ): Promise<PluginAccountBindingUiStatus> {
+    const ref = { projectId };
+    this.projectFor(consumerId, ref);
+    const stored = this.bindings.get(projectId, consumerId);
+    const resolved = this.resolve(consumerId, ref);
+    if (!resolved) throw new Error(`Plugin "${consumerId}" declares no contributes.account`);
+    const choices: PluginAccountBindingChoice[] = [];
+    for (const connection of this.declaredConnections(consumerId)) {
+      const own = await this.getState(consumerId, connection.id);
+      choices.push({ connectionId: connection.id, source: "own", label: connection.label, ...own });
+      const machine = this.machineTarget(consumerId, connection.id);
+      if (machine) {
+        const shared = await this.getState(machine.ownerId, machine.connectionId);
+        choices.push({
+          connectionId: connection.id,
+          source: "machine",
+          label: connection.label,
+          ...shared,
+        });
+      }
+    }
+    return {
+      binding: stored,
+      selected:
+        !resolved.available && stored
+          ? stored
+          : {
+              connectionId: resolved.connectionId,
+              source: resolved.ownerId === consumerId ? "own" : "machine",
+            },
+      choices,
     };
   }
 
-  private notify(pluginId: string, state: PluginAccountState): void {
-    for (const listener of [...(this.listeners.get(pluginId) ?? [])]) {
-      invokeTrackedListener(
-        listener.failures,
-        pluginId,
-        "account.onDidChange",
-        () => listener.cb({ ...state }),
-        () => this.listeners.get(pluginId)?.delete(listener)
-      );
+  /**
+   * Choose the connection `projectId` uses for a plugin, or `null` for the
+   * default. Called only from the settings row. Only a project plugin can
+   * point at the machine, and only at a connection declared the same way.
+   */
+  async setBinding(
+    consumerId: string,
+    projectId: string,
+    binding: PluginAccountBinding | null
+  ): Promise<PluginAccountBindingUiStatus> {
+    const ref = { projectId };
+    this.projectFor(consumerId, ref);
+    if (binding !== null) {
+      if (!isPluginConnectionId(binding.connectionId)) {
+        throw new Error("plugin account: malformed connection id");
+      }
+      if (!this.declaredConnection(consumerId, binding.connectionId)) {
+        throw new Error(`Plugin "${consumerId}" declares no connection "${binding.connectionId}"`);
+      }
+      if (binding.source === "machine" && !this.machineTarget(consumerId, binding.connectionId)) {
+        throw new Error("There's no matching connection on this machine to use");
+      }
+      if (binding.source !== "own" && binding.source !== "machine") {
+        throw new Error("plugin account: malformed binding");
+      }
     }
-    this.deps.onAccountChanged?.(pluginId);
+    const before = new Map(
+      [...this.listeners].map((listener) => [listener, this.safeResolve(listener)] as const)
+    );
+    if (this.bindings.set(projectId, consumerId, binding)) {
+      for (const [listener, previous] of before) {
+        const next = this.safeResolve(listener);
+        if (listener.consumerId !== consumerId || sameTarget(previous, next)) continue;
+        const seq = ++listener.seq;
+        void this.stateOf(next).then((state) => {
+          // A newer delivery, or another binding change, has spoken since.
+          const now = this.safeResolve(listener);
+          if (
+            listener.seq !== seq ||
+            !sameTarget(now, next) ||
+            now?.available !== next?.available
+          ) {
+            return;
+          }
+          this.invokeListener(listener, state);
+        });
+      }
+      this.deps.onAccountChanged?.(consumerId);
+    }
+    return this.getBindingUiStatus(consumerId, projectId);
+  }
+
+  // ── Listeners ─────────────────────────────────────────────────────────
+
+  private safeResolve(listener: AccountListener): ResolvedConnection | null {
+    try {
+      return this.resolve(listener.consumerId, listener.ref);
+    } catch {
+      return null;
+    }
+  }
+
+  private async stateOf(target: ResolvedConnection | null): Promise<PluginAccountState> {
+    if (!target?.available) return { connected: false, identity: null };
+    try {
+      return await this.getState(target.ownerId, target.connectionId);
+    } catch {
+      return { connected: false, identity: null };
+    }
   }
 
   /**
-   * Unload: drop the plugin's listeners and cached store, end a sign-in in
+   * `host.account.onDidChange` for one consumer. Hears changes to whichever
+   * connection `ref` resolves to at the time, so a binding change moves it.
+   * A rejected async callback is tracked like a thrown one.
+   */
+  subscribe(
+    consumerId: string,
+    cb: (state: PluginAccountState) => unknown,
+    ref: PluginAccountRef = {}
+  ): () => void {
+    this.projectFor(consumerId, ref);
+    const listener: AccountListener = {
+      consumerId,
+      ref: { ...ref },
+      cb,
+      failures: createListenerFailureState(),
+      seq: 0,
+    };
+    this.listeners.add(listener);
+    return () => {
+      this.listeners.delete(listener);
+    };
+  }
+
+  private invokeListener(listener: AccountListener, state: PluginAccountState): void {
+    if (!this.listeners.has(listener)) return;
+    invokeTrackedListener(
+      listener.failures,
+      listener.consumerId,
+      "account.onDidChange",
+      () => listener.cb({ ...state }),
+      () => this.listeners.delete(listener)
+    );
+  }
+
+  private notify(target: ConnectionTarget, state: PluginAccountState): void {
+    const consumers = new Set<string>();
+    for (const listener of [...this.listeners]) {
+      const resolved = this.safeResolve(listener);
+      if (!resolved?.available || !sameTarget(resolved, target)) continue;
+      consumers.add(listener.consumerId);
+      listener.seq++;
+      this.invokeListener(listener, state);
+    }
+    this.deps.onAccountChanged?.(target.ownerId);
+    // A project plugin sharing the machine's connection hears about it too.
+    for (const consumerId of consumers) {
+      if (consumerId !== target.ownerId) this.deps.onAccountChanged?.(consumerId);
+    }
+  }
+
+  /**
+   * Unload: drop the plugin's listeners and cached store, end its sign-ins in
    * progress, and retire anything still running against its tokens (a refresh
    * in flight must not write after an uninstall wipes the file). The tokens
-   * themselves stay stored.
+   * and every project's binding stay stored.
    */
   clearPluginState(pluginId: string): void {
-    this.listeners.delete(pluginId);
-    this.cancelConnect(pluginId);
-    this.bumpGeneration(pluginId);
+    for (const listener of [...this.listeners]) {
+      if (listener.consumerId === pluginId) this.listeners.delete(listener);
+    }
+    let cancelled = false;
+    for (const key of [...this.pending.keys()]) {
+      if (!ownsStateKey(pluginId, key)) continue;
+      this.pending.delete(key);
+      (this.deps.cancelLoopback ?? cancelOAuthLoopback)(SESSION_PREFIX + key);
+      cancelled = true;
+    }
+    const connectionIds = new Set(this.declaredConnections(pluginId).map((c) => c.id));
+    connectionIds.add(DEFAULT_PLUGIN_CONNECTION_ID);
+    for (const key of this.generations.keys()) {
+      if (!ownsStateKey(pluginId, key)) continue;
+      connectionIds.add(
+        key === pluginId ? DEFAULT_PLUGIN_CONNECTION_ID : key.slice(pluginId.length + 1)
+      );
+    }
+    for (const connectionId of connectionIds) {
+      this.bumpGeneration({ ownerId: pluginId, connectionId });
+    }
     this.epochs.set(pluginId, this.epoch(pluginId) + 1);
-    this.tokenReads.delete(pluginId);
+    for (const key of [...this.tokenReads.keys()]) {
+      if (ownsStateKey(pluginId, key)) this.tokenReads.delete(key);
+    }
+    if (cancelled) this.deps.onAccountChanged?.(pluginId);
     try {
       this.stores.delete(this.accountFilePath(pluginId));
     } catch {

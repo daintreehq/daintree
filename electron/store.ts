@@ -718,6 +718,18 @@ export interface StoreSchema {
   projectPluginSetupSkips?: Record<string, Record<string, string[]>>;
 
   /**
+   * Per-project plugin connection bindings (#14102): project id → plugin
+   * instance id → which connection that project uses. A reference only — the
+   * tokens stay in the owning instance's account file. Read and written only
+   * through `services/plugin/pluginAccountBindings.ts`. Same additive-key
+   * convention as above.
+   */
+  projectPluginAccountBindings?: Record<
+    string,
+    Record<string, { connectionId: string; source: "own" | "machine" }>
+  >;
+
+  /**
    * Plugin instance ids whose toasts and notifications the user silenced
    * (#13818). A project plugin's instance id names its project, so its silence
    * is that project's alone. Read and written only through
@@ -1104,6 +1116,7 @@ const storeOptions = {
     projectLayoutSeeds: {},
     projectHiddenLaunchGroups: {},
     projectPluginSetupSkips: {},
+    projectPluginAccountBindings: {},
     pluginNotificationSilences: [],
     hiddenSearchProviders: [],
     pluginContextProvidersOff: [],

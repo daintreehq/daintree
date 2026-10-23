@@ -14,6 +14,7 @@ import {
   setupHomeOf,
 } from "@/services/plugin/pluginSettingsHome";
 import type { PluginSettingsHome } from "@/store/pluginManagerStore";
+import { declaredPluginConnections } from "@shared/utils/pluginConnections";
 import { useProjectPluginStore } from "@/store/projectPluginStore";
 import { logError } from "@/utils/logger";
 import { SETTINGS_SEARCH_INDEX, type SettingsSearchEntry } from "./settingsSearchIndex";
@@ -55,7 +56,8 @@ export function buildPluginSettingsSearchEntries(
   const entries: SettingsSearchEntry[] = [];
   for (const { plugin, name } of plugins) {
     const { instanceId } = plugin;
-    const account = plugin.manifest.contributes.account;
+    // The account section, found by its first connection's name.
+    const account = declaredPluginConnections(plugin.manifest)[0];
     const setup = plugin.manifest.contributes.setup ?? [];
     const view = settingsViewOf(plugin);
     const viewHomes = settingsViewHomesOf(plugin);

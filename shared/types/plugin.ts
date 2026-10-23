@@ -3420,8 +3420,17 @@ export interface PluginManifest {
      * The host draws the Connect / Disconnect row, runs the flow, stores the
      * tokens in the OS keychain and hands the plugin a current access token
      * through `host.account`. A project plugin's account is per project.
+     * Shorthand for a single connection named `"default"`; a manifest declares
+     * this or `connections`, never both.
      */
     account?: PluginAccountContribution;
+    /**
+     * Named host-managed connections (#14102): one entry per service or per
+     * account of the same service ("work", "personal"). Each is signed in,
+     * refreshed and disconnected on its own; `host.account` picks one by id,
+     * or the one the project is bound to. Same rules as `account` otherwise.
+     */
+    connections?: PluginConnectionContribution[];
     /**
      * A short setup checklist (#13824), shown on the plugin's setup strip and
      * at the top of its settings. The host works out which steps are done from
@@ -3440,12 +3449,15 @@ export interface PluginManifest {
  *
  * - `setting`: the declared setting `key` has a stored value. A declared
  *   `default` doesn't count, the same rule `required` settings follow.
- * - `account`: the plugin's `contributes.account` is connected.
+ * - `account`: the plugin's account is connected — the named `connection`, or
+ *   without one the connection the project uses.
  * - `context`: the `when` clause holds over the context keys plugins publish
  *   with `host.setContext`, written `publisher.name.key`.
  */
 export type PluginSetupStepDone =
-  { kind: "setting"; key: string } | { kind: "account" } | { kind: "context"; when: string };
+  | { kind: "setting"; key: string }
+  | { kind: "account"; connection?: string }
+  | { kind: "context"; when: string };
 
 /**
  * What clicking a setup step does.
@@ -3508,11 +3520,21 @@ export interface PluginAccountIdentity {
   field: string;
 }
 
+/**
+ * A connection test: a bearer GET that answers 2xx while the service still
+ * accepts the token, and 401/403 once it doesn't.
+ */
+export interface PluginAccountTest {
+  url: string;
+}
+
 interface PluginAccountContributionBase {
   /** The service's name, shown on the Connect row ("GitLab", "Linear"). */
   label: string;
   description?: string;
   identity?: PluginAccountIdentity;
+  /** What the settings row's Test runs. Without one, Test asks the `identity` endpoint. */
+  test?: PluginAccountTest;
 }
 
 /**
@@ -3531,6 +3553,51 @@ export type PluginAccountContribution =
   | (PluginAccountContributionBase & { kind: "token" });
 
 export type PluginAccountKind = PluginAccountContribution["kind"];
+
+/** One `contributes.connections` entry: an account declaration with the id it is addressed by. */
+export type PluginConnectionContribution = PluginAccountContribution & { id: string };
+
+/** The connection `contributes.account` declares. */
+export const DEFAULT_PLUGIN_CONNECTION_ID = "default";
+
+/**
+ * Which connection a `host.account` call means. `connection` names a declared
+ * one; without it the project's bound connection, else the first declared.
+ * `projectId` says which project's binding applies: an installed plugin serves
+ * every project and passes it, a project plugin's host already knows its own.
+ */
+export interface PluginAccountRef {
+  connection?: string;
+  projectId?: string;
+}
+
+/**
+ * A project's choice of connection for one plugin, kept in Daintree's own
+ * settings, never the repository. `machine` points a project plugin at the
+ * installed plugin's connection of the same id on this machine instead of its
+ * own private one.
+ */
+export interface PluginAccountBinding {
+  connectionId: string;
+  source: "own" | "machine";
+}
+
+/**
+ * What the host last saw when it used the stored tokens. Never stored: it
+ * starts `unchecked` and resets on every sign-in, so "connected" only ever
+ * means tokens are kept, and this says whether the service took them.
+ *
+ * - `ok`: a test or a refresh succeeded.
+ * - `rejected`: the service answered 401/403 to a test.
+ * - `unreachable`: the test couldn't reach the service or got another error.
+ * - `revoked`: a refresh was refused for good, so the tokens were dropped.
+ */
+export interface PluginAccountVerification {
+  status: "unchecked" | "ok" | "rejected" | "unreachable" | "revoked";
+  /** Epoch ms of the check, `null` while unchecked. */
+  checkedAt: number | null;
+  message: string | null;
+}
 
 /** What a plugin hears about its account. Never carries a token. */
 export interface PluginAccountState {
@@ -3552,7 +3619,7 @@ export interface PluginAccountAccessToken {
  */
 export interface PluginAccountApi {
   /** Whether the account is connected, and as whom. */
-  getState(): Promise<PluginAccountState>;
+  getState(ref?: PluginAccountRef): Promise<PluginAccountState>;
   /**
    * A current access token, refreshed first when it is about to expire, or
    * `null` when the account isn't connected (including after the service
@@ -3560,17 +3627,23 @@ export interface PluginAccountApi {
    * don't keep it. Rejects when the plugin declares no `contributes.account`,
    * or when a refresh fails for a reason that may pass (offline, server error).
    */
-  getAccessToken(): Promise<PluginAccountAccessToken | null>;
+  getAccessToken(ref?: PluginAccountRef): Promise<PluginAccountAccessToken | null>;
   /**
-   * Called when the account connects, disconnects or reports a new identity.
+   * Called when the account connects, disconnects or reports a new identity,
+   * and when the project's binding moves `ref` to another connection.
    * Returns a disposer; every subscription is disposed when the plugin unloads.
    * Without a declared account nothing ever changes, so the callback never runs.
    */
-  onDidChange(callback: (state: PluginAccountState) => void | Promise<void>): () => void;
+  onDidChange(
+    callback: (state: PluginAccountState) => void | Promise<void>,
+    ref?: PluginAccountRef
+  ): () => void;
 }
 
 /** The settings row's view of a plugin account. */
 export interface PluginAccountUiStatus {
+  /** The connection's id; `"default"` for `contributes.account`. */
+  connectionId: string;
   kind: PluginAccountKind;
   label: string;
   description: string | null;
@@ -3580,6 +3653,25 @@ export interface PluginAccountUiStatus {
   pending: boolean;
   /** Whether the OS keychain can store the tokens right now. */
   secretTier: PluginSecretStorageTier;
+  /** Whether the manifest declares something Test can ask (`test`, else `identity`). */
+  testable: boolean;
+  verification: PluginAccountVerification;
+}
+
+/** A connection a project can use for a plugin, as its binding picker lists it. */
+export interface PluginAccountBindingChoice extends PluginAccountBinding {
+  label: string;
+  connected: boolean;
+  identity: string | null;
+}
+
+/** Which connection a project uses for one plugin, and what it could use instead. */
+export interface PluginAccountBindingUiStatus {
+  /** The stored choice, or `null` when the project uses the default. */
+  binding: PluginAccountBinding | null;
+  /** What `host.account` resolves to in this project without a named connection. */
+  selected: PluginAccountBinding;
+  choices: PluginAccountBindingChoice[];
 }
 
 /** How a Connect click ended. `cancelled` covers a superseded or cancelled flow. */

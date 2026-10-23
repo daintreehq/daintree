@@ -1245,6 +1245,14 @@ export const CHANNELS = {
   /** Store a pasted API token for a `kind: "token"` account. */
   PLUGIN_ACCOUNT_SET_TOKEN: "plugin:account-set-token",
   PLUGIN_ACCOUNT_DISCONNECT: "plugin:account-disconnect",
+  /** Every declared connection's settings row status (#14102). Never carries a token. */
+  PLUGIN_ACCOUNT_LIST: "plugin:account-list",
+  /** Run a connection's declared test with its stored tokens; answers what the service said. */
+  PLUGIN_ACCOUNT_TEST: "plugin:account-test",
+  /** Which connection the sender's project uses for a plugin, and its choices. */
+  PLUGIN_ACCOUNT_BINDING_GET: "plugin:account-binding-get",
+  /** Choose the connection the sender's project uses for a plugin. */
+  PLUGIN_ACCOUNT_BINDING_SET: "plugin:account-binding-set",
   /** Cancel an in-flight plugin install by its job id (#11302). */
   PLUGIN_CANCEL_INSTALL: "plugin:cancel-install",
   /** Phase/entry progress for an in-flight install, targeted at the initiating window (#11302). */

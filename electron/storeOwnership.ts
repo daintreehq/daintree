@@ -93,6 +93,7 @@ export const STORE_KEY_OWNERSHIP = {
   projectLayoutSeeds: "host",
   projectHiddenLaunchGroups: "host",
   projectPluginSetupSkips: "host",
+  projectPluginAccountBindings: "host",
   pluginNotificationSilences: "host",
   hiddenSearchProviders: "host",
   pluginContextProvidersOff: "host",

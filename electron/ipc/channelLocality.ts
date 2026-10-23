@@ -726,6 +726,10 @@ export const CHANNEL_LOCALITY = {
   "plugin:setup-step-skipped-set": "host",
   "plugin:account-status": "host",
   "plugin:account-disconnect": "host",
+  "plugin:account-list": "host",
+  "plugin:account-test": "host",
+  "plugin:account-binding-get": "host",
+  "plugin:account-binding-set": "host",
   // Signing in needs the browser and the keychain on the same machine, and a
   // pasted token would cross the link to reach the host's keychain. With no
   // split registered, a remote-bound window is refused.

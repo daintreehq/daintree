@@ -2395,18 +2395,40 @@ export class PluginDevWorkerHostProxy {
         release: (artifactId) =>
           this.call<boolean>("artifacts.release", { artifactId } satisfies ArtifactsIdParams),
       },
+      // The ref crosses as given — an omitted one as `undefined` — so main
+      // alone decides which project and connection it means.
       account: {
-        getState: () => this.call<PluginAccountState>("account.getState", {}),
-        getAccessToken: () =>
-          this.call<PluginAccountAccessToken | null>("account.getAccessToken", {}),
-        onDidChange: (callback) => {
+        getState: (ref) => this.call<PluginAccountState>("account.getState", { ref }),
+        getAccessToken: (ref) =>
+          this.call<PluginAccountAccessToken | null>("account.getAccessToken", { ref }),
+        onDidChange: (callback, ref) => {
           if (typeof callback !== "function") {
             throw new Error(
               `Plugin "${this.pluginId}" account.onDidChange: callback must be a function`
             );
           }
+          const { connection, projectId } = (ref ?? {}) as Record<string, unknown>;
+          if (
+            (ref !== undefined && (ref === null || typeof ref !== "object")) ||
+            (connection !== undefined && typeof connection !== "string") ||
+            (projectId !== undefined && typeof projectId !== "string")
+          ) {
+            throw new Error(
+              `Plugin "${this.pluginId}" account.onDidChange: ref must be { connection?: string; projectId?: string }`
+            );
+          }
           if (this.disposed) return () => {};
-          return this.subscribe("account", (payload) => callback(payload as PluginAccountState));
+          const subscriptionId = `s${this.nextId++}`;
+          return this.openSubscription(
+            {
+              type: "subscribe",
+              subscriptionId,
+              kind: "account",
+              key: connection as string | undefined,
+              projectId: projectId as string | undefined,
+            },
+            (payload) => callback(payload as PluginAccountState)
+          );
         },
       },
       settings: {

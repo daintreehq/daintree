@@ -259,6 +259,7 @@ export const PluginWorkerToHostMessageSchema = z.union([
       scope: SubscriptionScopeSchema.optional(),
       debounceMs: AnyNumber.optional(),
       processId: z.string().optional(),
+      projectId: z.string().optional(),
     }),
     z.object({ type: z.literal("unsubscribe"), subscriptionId: CorrelationId }),
   ]),

@@ -6,6 +6,10 @@ import {
   type ViewContribution,
 } from "@shared/types/plugin";
 import type { PluginSettingsHome, PluginSettingsSection } from "@/store/pluginManagerStore";
+import {
+  declaredPluginConnections,
+  pluginDeclaresConnections,
+} from "@shared/utils/pluginConnections";
 
 export interface PluginSettingsTarget {
   plugin: LoadedPluginInfo;
@@ -77,6 +81,7 @@ export function homeHasSettings(plugin: LoadedPluginInfo, home: PluginSettingsHo
     settingsForHome(plugin, home).length > 0 ||
     settingsViewHomesOf(plugin).includes(home) ||
     accountHomeOf(plugin) === home ||
+    accountBindingHomeOf(plugin) === home ||
     setupHomeOf(plugin) === home
   );
 }
@@ -90,7 +95,7 @@ export function pluginHasSettings(plugin: LoadedPluginInfo): boolean {
   return (
     (plugin.manifest.contributes.settings?.length ?? 0) > 0 ||
     pluginDeclaresSettingsView(plugin) ||
-    plugin.manifest.contributes.account !== undefined ||
+    pluginDeclaresConnections(plugin.manifest) ||
     (plugin.manifest.contributes.setup?.length ?? 0) > 0
   );
 }
@@ -102,8 +107,20 @@ export function pluginHasSettings(plugin: LoadedPluginInfo): boolean {
  * plugin manager.
  */
 export function accountHomeOf(plugin: LoadedPluginInfo): PluginSettingsHome | null {
-  if (plugin.manifest.contributes.account === undefined) return null;
+  if (!pluginDeclaresConnections(plugin.manifest)) return null;
   return plugin.origin === "project" ? "project" : "manager";
+}
+
+/**
+ * Where the open project picks which connection a plugin uses (#14102), or
+ * `null` when there's nothing to pick: always Project settings, and only when
+ * there could be a choice — several declared connections, or a project
+ * plugin that may share the installed plugin's.
+ */
+export function accountBindingHomeOf(plugin: LoadedPluginInfo): PluginSettingsHome | null {
+  const count = declaredPluginConnections(plugin.manifest).length;
+  if (count === 0) return null;
+  return count > 1 || plugin.origin === "project" ? "project" : null;
 }
 
 /**

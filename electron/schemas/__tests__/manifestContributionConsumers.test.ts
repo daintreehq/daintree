@@ -1912,9 +1912,20 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
           file: PLUGIN_SCHEMA,
           symbol: "getPluginManifestSchema superRefine (setup_account_undeclared)",
         },
-        { file: PLUGIN_SERVICE, symbol: "getSetupStatusForUi (accounts.getUiStatus)" },
+        { file: PLUGIN_SERVICE, symbol: "getSetupStatusForUi (accounts.getStateFor)" },
       ],
       note: "Done while the declared contributes.account is connected.",
+    },
+    connection: {
+      mode: "verbatim",
+      consumers: [
+        {
+          file: PLUGIN_SCHEMA,
+          symbol: "getPluginManifestSchema superRefine (setup_connection_unknown)",
+        },
+        { file: PLUGIN_SERVICE, symbol: "getSetupStatusForUi (accounts.getStateFor)" },
+      ],
+      note: "Done while that named connection is connected; without it, the one the project uses.",
     },
   },
   "setup.done.context": {
