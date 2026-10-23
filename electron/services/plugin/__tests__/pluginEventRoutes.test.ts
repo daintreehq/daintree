@@ -589,6 +589,27 @@ describe("createPluginEventRoutes", () => {
       ]);
     });
 
+    it("does not deliver a change heard while failed when the worker recovers before the read", async () => {
+      const h = makeHarness();
+      h.read.ambient = ok(ALPHA, [worktree("main")]);
+      routesFor(h.deps, PLUGIN_ID, UNBOUND_PLUGIN_HOST_BINDING, [route("worktreeAdded")]);
+      await vi.advanceTimersByTimeAsync(2_000);
+      h.workerFailed.value = true;
+      h.read.ambient = ok(ALPHA, [worktree("main"), worktree("missed")]);
+      h.emitWorktree();
+      // Recovered inside the read's coalescing window, before the read runs.
+      await vi.advanceTimersByTimeAsync(20);
+      h.workerFailed.value = false;
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(h.dispatched).toEqual([]);
+      h.read.ambient = ok(ALPHA, [worktree("main"), worktree("missed"), worktree("after")]);
+      h.emitWorktree();
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(h.dispatched.map((d) => d.wake)).toEqual([
+        expect.objectContaining({ change: { added: ["after"], removed: [], changed: [] } }),
+      ]);
+    });
+
     it("never reads an unavailable set as every worktree removed", async () => {
       const h = makeHarness();
       h.read.ambient = ok(ALPHA, [worktree("main"), worktree("feature")]);

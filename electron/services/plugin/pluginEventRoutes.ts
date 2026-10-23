@@ -211,8 +211,10 @@ export function createPluginEventRoutes(
   const disposers: Array<() => void> = [];
   let disposed = false;
 
+  const suspended = (): boolean =>
+    disposed || !scope.isBound() || deps.isWorkerFailed(pluginId);
   const scheduler = createRouteWakeScheduler({
-    suspended: () => disposed || !scope.isBound() || deps.isWorkerFailed(pluginId),
+    suspended,
     run: async (wake) => {
       const actionId = commandFor.get(wake.event);
       if (actionId === undefined || disposed || !scope.isBound()) return;
@@ -297,6 +299,10 @@ export function createPluginEventRoutes(
     const gathered = new Map<WorktreeRouteEvent, GatheredWorktreeChange>();
     let latest: { projectId: string; worktrees: readonly PluginWorktreeSnapshot[] } | null = null;
     let chain: Promise<void> = Promise.resolve();
+    // An event arrived while wakes were suspended. The read it leads to must
+    // still move the baseline on, but may not wake the plugin even if the
+    // worker recovered before that read ran.
+    let heardWhileSuspended = false;
 
     const observe = (
       projectId: string,
@@ -343,6 +349,8 @@ export function createPluginEventRoutes(
 
     const reconcile = async (): Promise<void> => {
       if (disposed || !scope.isBound()) return;
+      const missed = heardWhileSuspended;
+      heardWhileSuspended = false;
       const result = await scope.fetchWorktreeSnapshotsResult();
       if (disposed || !scope.isBound()) return;
       // An unavailable read says nothing about which worktrees exist; treating
@@ -352,6 +360,13 @@ export function createPluginEventRoutes(
       const switched = latest !== null && latest.projectId !== result.projectId;
       latest = { projectId: result.projectId, worktrees };
       const diff = observe(result.projectId, worktrees);
+      if (missed || suspended()) {
+        for (const event of routed) {
+          gathered.delete(event);
+          scheduler.cancel(event);
+        }
+        return;
+      }
       for (const event of routed) {
         // Start over from this read when no wake is waiting (one that was
         // dropped must not come back), when this read only seeded a project,
@@ -384,6 +399,7 @@ export function createPluginEventRoutes(
     const coalescer = createSubscriptionCoalescer(PLUGIN_SUBSCRIPTION_DEFAULT_DEBOUNCE_MS, enqueue);
     const onEvent = (payload?: PluginWorktreeEventPayload): void => {
       if (disposed || !scope.isEventForBoundProject(payload)) return;
+      if (suspended()) heardWhileSuspended = true;
       coalescer.push();
     };
     const detachUpdate = deps.attachWorktreeEvent("worktree-update", onEvent);
