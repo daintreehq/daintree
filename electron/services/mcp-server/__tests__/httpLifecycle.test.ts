@@ -48,6 +48,7 @@ import http from "node:http";
 import { EventEmitter } from "node:events";
 import { createHash } from "node:crypto";
 import { HttpLifecycle, sendToPinnedView, sessionCredentialDigest } from "../httpLifecycle.js";
+import { store } from "../../../store.js";
 import {
   getEndpointRegistry,
   _resetEndpointRegistryForTesting,
@@ -1240,6 +1241,91 @@ describe("HttpLifecycle", () => {
       deps.sessionStore.sessionWebContentsMap.set("s", -7);
       deps.sessionStore.sessionHelpIdMap.set("s", "help-1");
       expect(projectSeenBy(deps, buildDeps(lc, "s"))).toBeNull();
+    });
+  });
+
+  describe("buildSessionServerDeps — assistant confirmations follow the agent (#14141)", () => {
+    const readSkipped = (lc: HttpLifecycle, sessionId: string) =>
+      (
+        lc as unknown as {
+          buildSessionServerDeps: (id: string) => SessionServerDeps;
+        }
+      ).buildSessionServerDeps(sessionId).readAssistantConfirmationsSkipped!();
+
+    const storeWith = (
+      helpAssistant: Record<string, unknown>,
+      agentSettings: Record<string, unknown>
+    ) => {
+      vi.mocked(store.get).mockImplementation(((key: string) =>
+        key === "helpAssistant"
+          ? helpAssistant
+          : key === "agentSettings"
+            ? agentSettings
+            : undefined) as never);
+    };
+
+    afterEach(() => {
+      vi.mocked(store.get).mockReset();
+      vi.mocked(store.get).mockReturnValue({
+        enabled: true,
+        port: 45454,
+        apiKey: "test-api-key",
+      } as never);
+    });
+
+    it("skips under the default when the session's agent is set to skip", () => {
+      const deps = fakeDeps();
+      const lc = new HttpLifecycle(deps);
+      deps.sessionStore.sessionHelpIdMap.set("s", "help-1");
+      lc.setAssistantControl({
+        control: {} as never,
+        sessionProject: () => null,
+        sessionAgent: (id) => (id === "help-1" ? "claude" : null),
+      });
+      storeWith(
+        { agentId: "codex" },
+        { agents: { claude: { dangerousMode: "on" } }, globalSkipPermissions: false }
+      );
+      expect(readSkipped(lc, "s")).toBe(true);
+    });
+
+    it("falls back to the assistant's chosen agent when the session is unknown", () => {
+      const lc = new HttpLifecycle(fakeDeps());
+      storeWith(
+        { agentId: "codex" },
+        { agents: { codex: { dangerousMode: "off" } }, globalSkipPermissions: true }
+      );
+      expect(readSkipped(lc, "s")).toBe(false);
+      storeWith(
+        { agentId: "codex" },
+        { agents: { codex: { dangerousMode: "on" } }, globalSkipPermissions: false }
+      );
+      expect(readSkipped(lc, "s")).toBe(true);
+    });
+
+    it("reads the agent's setting and the preference live on every call", () => {
+      const lc = new HttpLifecycle(fakeDeps());
+      const read = (
+        lc as unknown as { buildSessionServerDeps: (id: string) => SessionServerDeps }
+      ).buildSessionServerDeps("s").readAssistantConfirmationsSkipped!;
+      storeWith({ agentId: "claude" }, { agents: { claude: { dangerousMode: "on" } } });
+      expect(read()).toBe(true);
+      storeWith({ agentId: "claude" }, { agents: { claude: { dangerousMode: "off" } } });
+      expect(read()).toBe(false);
+      storeWith(
+        { agentId: "claude", daintreeConfirmations: "never-ask" },
+        { agents: { claude: { dangerousMode: "off" } } }
+      );
+      expect(read()).toBe(true);
+    });
+
+    it("still asks under always ask whatever the agent says", () => {
+      const lc = new HttpLifecycle(fakeDeps());
+      storeWith(
+        { agentId: "claude", daintreeConfirmations: "always-ask" },
+        { agents: { claude: { dangerousMode: "on" } } }
+      );
+      expect(readSkipped(lc, "s")).toBe(false);
     });
   });
 

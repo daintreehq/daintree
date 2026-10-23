@@ -29,11 +29,29 @@ vi.mock("@/hooks/useOverlayState", async (importOriginal) => ({
   useOverlayState: () => {},
 }));
 
-const agentSettingsState = vi.hoisted(() => ({ globalSkipPermissions: false }));
+const agentSettingsState = vi.hoisted(() => ({
+  globalSkipPermissions: false,
+  agents: {} as Record<string, Record<string, unknown>>,
+}));
 
 vi.mock("@/store/agentSettingsStore", () => ({
   useAgentSettingsStore: (selector: (state: unknown) => unknown) =>
-    selector({ settings: { globalSkipPermissions: agentSettingsState.globalSkipPermissions } }),
+    selector({
+      settings: {
+        globalSkipPermissions: agentSettingsState.globalSkipPermissions,
+        agents: agentSettingsState.agents,
+      },
+    }),
+}));
+
+const helpPanelState = vi.hoisted(() => ({
+  preferredAgentId: null as string | null,
+  activeSlotAgentId: null as string | null,
+}));
+
+vi.mock("@/store/helpPanelStore", () => ({
+  useHelpPanelStore: (selector: (state: unknown) => unknown) => selector(helpPanelState),
+  selectActiveSlot: (state: typeof helpPanelState) => ({ agentId: state.activeSlotAgentId }),
 }));
 
 const loggerMocks = vi.hoisted(() => ({ logError: vi.fn() }));
@@ -163,6 +181,9 @@ describe("McpConfirmDialog", () => {
       })
     );
     agentSettingsState.globalSkipPermissions = false;
+    agentSettingsState.agents = {};
+    helpPanelState.preferredAgentId = null;
+    helpPanelState.activeSlotAgentId = null;
     loggerMocks.logError.mockReset();
     helpAssistantApi.getSettings = vi.fn().mockResolvedValue({ daintreeConfirmations: "inherit" });
     helpAssistantApi.setSettings = vi.fn().mockResolvedValue(undefined);
@@ -1173,15 +1194,41 @@ describe("McpConfirmDialog", () => {
       await renderLoaded();
 
       expect(screen.getByRole("radiogroup", { name: PREFERENCE_GROUP })).toBeTruthy();
-      expect(segment("Follow global setting").getAttribute("aria-checked")).toBe("true");
+      expect(segment("Follow agent setting").getAttribute("aria-checked")).toBe("true");
       const text = document.body.textContent ?? "";
-      expect(text).toContain("Follow global setting · asks");
+      expect(text).toContain("Follow agent setting · asks");
       expect(text).toContain("Follows Settings > Agents > Skip permission prompts (off)");
       expect(text).toContain("even if you cancel");
     });
 
+    it("follows the assistant agent's own skip setting over the global (#14141)", async () => {
+      helpPanelState.preferredAgentId = "claude";
+      agentSettingsState.agents = { claude: { dangerousMode: "on" } };
+      void enqueue({ actionTitle: "Delete worktree", sessionOrigin: "help" });
+      await renderLoaded();
+
+      const text = document.body.textContent ?? "";
+      expect(text).toContain("Follow agent setting · doesn't ask");
+      expect(text).toContain("Follows Claude's skip permission prompts setting (on)");
+    });
+
+    it("follows the agent running in this view over a different chosen agent (#14141)", async () => {
+      helpPanelState.preferredAgentId = "codex";
+      helpPanelState.activeSlotAgentId = "claude";
+      agentSettingsState.agents = {
+        claude: { dangerousMode: "off" },
+        codex: { dangerousMode: "on" },
+      };
+      void enqueue({ actionTitle: "Delete worktree", sessionOrigin: "help" });
+      await renderLoaded();
+
+      const text = document.body.textContent ?? "";
+      expect(text).toContain("Follow agent setting · asks");
+      expect(text).toContain("Follows Claude's skip permission prompts setting (off)");
+    });
+
     it.each([
-      ["inherit", true, "Follow global setting · doesn't ask"],
+      ["inherit", true, "Follow agent setting · doesn't ask"],
       ["always-ask", true, "Always ask · asks"],
       ["never-ask", false, "Never ask · doesn't ask"],
     ] as const)(
@@ -1257,7 +1304,7 @@ describe("McpConfirmDialog", () => {
         await Promise.resolve();
       });
 
-      expect(segment("Follow global setting").getAttribute("aria-checked")).toBe("true");
+      expect(segment("Follow agent setting").getAttribute("aria-checked")).toBe("true");
       expect(document.body.textContent ?? "").toContain("Couldn't save that change");
       expect(loggerMocks.logError).toHaveBeenCalled();
     });
@@ -1268,7 +1315,7 @@ describe("McpConfirmDialog", () => {
       await renderLoaded();
 
       expect(document.body.textContent ?? "").toContain("Couldn't read the current setting");
-      for (const label of ["Follow global setting", "Always ask", "Never ask"]) {
+      for (const label of ["Follow agent setting", "Always ask", "Never ask"]) {
         expect(segment(label).hasAttribute("disabled")).toBe(true);
       }
     });
@@ -1321,7 +1368,7 @@ describe("McpConfirmDialog", () => {
         fireEvent.click(segment("Always ask"));
         await Promise.resolve();
       });
-      expect(segment("Follow global setting").getAttribute("aria-checked")).toBe("true");
+      expect(segment("Follow agent setting").getAttribute("aria-checked")).toBe("true");
 
       await act(async () => {
         resolveFirst?.();

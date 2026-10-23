@@ -448,7 +448,7 @@ describe("DaintreeAssistantSettingsTab", () => {
       useAgentSettingsStore.setState({ settings: null });
     });
 
-    it("names the live global setting in the inherit option", async () => {
+    it("follows the global setting while no assistant agent is chosen", async () => {
       useAgentSettingsStore.setState({
         settings: { ...DEFAULT_AGENT_SETTINGS, globalSkipPermissions: true },
       });
@@ -458,9 +458,57 @@ describe("DaintreeAssistantSettingsTab", () => {
         </SettingsValidationProvider>
       );
       await waitForContent(container, "Daintree confirmations");
-      expect(container.textContent).toContain("Follow global setting");
+      expect(container.textContent).toContain("Follow agent setting");
       expect(container.textContent).toContain(
-        "Settings > Agents > Skip permission prompts, which is on."
+        "With no agent chosen, that's Settings > Agents > Skip permission prompts, which is on."
+      );
+    });
+
+    it("names the assistant agent's own skip setting when it has one (#14141)", async () => {
+      helpPanelState.preferredAgentId = "claude";
+      useAgentSettingsStore.setState({
+        settings: {
+          ...DEFAULT_AGENT_SETTINGS,
+          agents: { ...DEFAULT_AGENT_SETTINGS.agents, claude: { dangerousMode: "on" } },
+          globalSkipPermissions: false,
+        },
+      });
+      const dispatch = vi.spyOn(actionService, "dispatch");
+      const { container } = render(
+        <SettingsValidationProvider>
+          <DaintreeAssistantSettingsTab />
+        </SettingsValidationProvider>
+      );
+      await waitForContent(container, "Daintree confirmations");
+      expect(container.textContent).toContain(
+        "By default it follows Claude Code's skip permission prompts setting, which is on, set on Claude Code."
+      );
+      const link = Array.from(container.querySelectorAll("button")).find(
+        (button) => button.textContent === "Claude Code's skip permission prompts setting"
+      );
+      if (!link) throw new Error("expected the agent settings link");
+      fireEvent.click(link);
+      expect(dispatch).toHaveBeenCalledWith(
+        "app.settings.openTab",
+        { tab: "agents", subtab: "claude" },
+        { source: "user" }
+      );
+      dispatch.mockRestore();
+    });
+
+    it("says the assistant agent inherits the global when it has no setting (#14141)", async () => {
+      helpPanelState.preferredAgentId = "claude";
+      useAgentSettingsStore.setState({
+        settings: { ...DEFAULT_AGENT_SETTINGS, globalSkipPermissions: true },
+      });
+      const { container } = render(
+        <SettingsValidationProvider>
+          <DaintreeAssistantSettingsTab />
+        </SettingsValidationProvider>
+      );
+      await waitForContent(container, "Daintree confirmations");
+      expect(container.textContent).toContain(
+        "Claude Code's skip permission prompts setting, which is on, inherited from Settings > Agents > Skip permission prompts."
       );
     });
 

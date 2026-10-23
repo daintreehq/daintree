@@ -13,7 +13,11 @@ import { store } from "../../store.js";
 import { CHANNELS } from "../../ipc/channels.js";
 import { getEndpointRegistry } from "../../ipc/endpointRegistry.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
-import { assistantSkipsDaintreeConfirmations } from "../../../shared/utils/assistantDaintreeConfirmations.js";
+import {
+  assistantSkipsDaintreeConfirmations,
+  resolveAssistantAgentSkip,
+} from "../../../shared/utils/assistantDaintreeConfirmations.js";
+import { isStorableAssistantAgentId } from "../../../shared/types/ipc/agentDefaults.js";
 import { summarizeMcpArgs, summarizeMcpResult } from "../../../shared/utils/mcpArgsSummary.js";
 import { scrubSecrets } from "../../../shared/utils/secretScrubber.js";
 import { sanitizePath } from "../../utils/pathScrubber.js";
@@ -2848,11 +2852,21 @@ export class HttpLifecycle {
           : null,
       // Live, never snapshotted (#12874): "Always ask" takes effect on the
       // assistant's next call. sessionServer consults it for help sessions only.
-      readAssistantConfirmationsSkipped: () =>
-        assistantSkipsDaintreeConfirmations(
-          store.get("helpAssistant")?.daintreeConfirmations,
-          store.get("agentSettings")?.globalSkipPermissions
-        ),
+      // The default follows the skip setting of the agent this session runs,
+      // else the assistant's chosen agent (#14141).
+      readAssistantConfirmationsSkipped: () => {
+        const helpAssistant = store.get("helpAssistant");
+        const storedAgentId = helpAssistant?.agentId;
+        const chosenAgentId = isStorableAssistantAgentId(storedAgentId) ? storedAgentId : null;
+        const agentId =
+          (helpSessionId !== null
+            ? this.assistantControlBinding?.sessionAgent?.(helpSessionId)
+            : null) ?? chosenAgentId;
+        return assistantSkipsDaintreeConfirmations(
+          helpAssistant?.daintreeConfirmations,
+          resolveAssistantAgentSkip(agentId, store.get("agentSettings")).skips
+        );
+      },
       notifyToolCallStarted,
       notifyToolCallSettled,
       notifyDisplayImage,

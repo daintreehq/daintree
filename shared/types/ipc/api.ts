@@ -2932,8 +2932,9 @@ export type HelpAssistantIdleHibernateMinutes = 0 | 5 | 15 | 30 | 60 | 120;
 
 /**
  * Whether the assistant's confirm-gated Daintree actions ask first (#12874).
- * `inherit` follows the global "Skip permission prompts" setting; `always-ask`
- * keeps Daintree's dialog regardless; `never-ask` skips it whatever the global
+ * `inherit` follows the assistant agent's effective "Skip permission prompts"
+ * setting, its own if it has one, else the global (#14141); `always-ask` keeps
+ * Daintree's dialog regardless; `never-ask` skips it whatever the agent's
  * setting says (#12989).
  */
 export type HelpAssistantDaintreeConfirmations = "inherit" | "always-ask" | "never-ask";
@@ -3000,7 +3001,7 @@ export interface HelpAssistantSettings {
   loadGlobalHooksAndServers: boolean;
   /**
    * Whether help sessions' Daintree confirmations are skipped: always under
-   * `never-ask`, while the global "Skip permission prompts" is on under
+   * `never-ask`, while the assistant agent skips permission prompts under
    * `inherit`. Read per dispatch, not snapshotted at launch. Defaults to
    * `"inherit"`.
    */

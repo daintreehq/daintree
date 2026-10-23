@@ -22,6 +22,7 @@ import type { HelpAssistantDaintreeConfirmations } from "../../shared/types/ipc/
 import {
   assistantSkipsDaintreeConfirmations,
   isHelpAssistantDaintreeConfirmations,
+  resolveAssistantAgentSkip,
 } from "../../shared/utils/assistantDaintreeConfirmations.js";
 import {
   DEFAULT_HELP_ASSISTANT_TIER,
@@ -1710,7 +1711,7 @@ export class HelpSessionService {
           settings.daintreeControl &&
             assistantSkipsDaintreeConfirmations(
               settings.daintreeConfirmations,
-              store.get("agentSettings")?.globalSkipPermissions
+              resolveAssistantAgentSkip(input.agentId, store.get("agentSettings")).skips
             )
         );
         await this.stripMessagingAddendum(sessionPath);
@@ -2092,6 +2093,17 @@ export class HelpSessionService {
     const record = this.sessionsById.get(sessionId);
     if (!record || record.revoked || record.ending) return null;
     return { projectId: record.projectId, slot: record.slot };
+  }
+
+  /**
+   * The agent a session was provisioned for. Still answered while the session
+   * is ending: its bearer works until revocation, and a call made then must not
+   * fall back to some other agent's skip setting (#14141).
+   */
+  getSessionAgent(sessionId: string): string | null {
+    const record = this.sessionsById.get(sessionId);
+    if (!record || record.revoked) return null;
+    return record.agentId;
   }
 
   /**
@@ -3162,6 +3174,7 @@ export class HelpSessionService {
         extractReply,
       }),
       sessionProject: (sessionId) => this.getSessionLane(sessionId)?.projectId ?? null,
+      sessionAgent: (sessionId) => this.getSessionAgent(sessionId),
     });
     this.assistantControlWired = true;
   }
