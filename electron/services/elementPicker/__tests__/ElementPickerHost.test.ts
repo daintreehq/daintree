@@ -362,7 +362,7 @@ describe("ElementPickerHost", () => {
   });
 
   it.each(["vue", "angular", "astro", "preact"] as const)(
-    "resolves a %s selection through the registry, and calls it stale once an edit lands",
+    "resolves a %s selection through the registry, follows it across an edit, and calls a result held from before it stale",
     async (framework) => {
       const changes: SourceChange[] = [];
       const { host, watched } = harness(RESOLVER_LOADERS);
@@ -370,35 +370,44 @@ describe("ElementPickerHost", () => {
       const app = writeFrameworkApp(framework, root);
       const file = path.join(root, app.path);
       const ref = { workspaceId: id, path: app.path };
-
-      const first = results(await host.resolve(request(id, [app.select("el-1", "c-1")])));
-      const read = sha256(file);
-      expect(first).toEqual([
+      const verifiedAt = (revision: string) => [
         expect.objectContaining({
           state: "verified",
           candidateId: "c-1",
           target: expect.objectContaining({ file: ref }),
-          fileRevision: read,
+          fileRevision: revision,
         }),
-      ]);
+      ];
+
+      const before = sha256(file);
+      expect(results(await host.resolve(request(id, [app.select("el-1", "c-1")])))).toEqual(
+        verifiedAt(before)
+      );
 
       fs.appendFileSync(file, app.edit);
       watched.get(path.dirname(file))!(file);
-      await vi.waitFor(() => expect(changes).toEqual([{ file: ref, revision: sha256(file) }]));
+      const after = sha256(file);
+      await vi.waitFor(() => expect(changes).toEqual([{ file: ref, revision: after }]));
 
-      // The view asks again with what it holds, as it does when the change arrives.
-      const again = results(
-        await host.resolve({
-          ...request(id, [app.select("el-1", "c-1")]),
-          knownRevisions: [{ file: ref, revision: read }],
-        })
+      // The view marks what it held stale itself and proves the selection
+      // again, holding nothing over: checked afresh against the edited bytes.
+      expect(results(await host.resolve(request(id, [app.select("el-1", "c-1")])))).toEqual(
+        verifiedAt(after)
       );
-      expect(again).toEqual([
+      // Asked about the earlier read instead, the resolver says it no longer holds.
+      expect(
+        results(
+          await host.resolve({
+            ...request(id, [app.select("el-1", "c-1")]),
+            knownRevisions: [{ file: ref, revision: before }],
+          })
+        )
+      ).toEqual([
         expect.objectContaining({
           state: "stale",
           reason: "file-changed",
           candidateId: "c-1",
-          currentFileRevision: sha256(file),
+          currentFileRevision: after,
         }),
       ]);
     }
