@@ -1,5 +1,5 @@
 import type { FleetBand } from "@/lib/fleetAttention";
-import { openInAssistant } from "@/services/assistantSubject";
+import { openInAssistant, type OpenInAssistantResult } from "@/services/assistantSubject";
 import type { CanopyAssistantItem } from "./canopyAssistants";
 
 /** The band an assistant's glyph wears, from what was observed of it alone. */
@@ -24,12 +24,13 @@ export function canopyAssistantDomId(id: string): string {
   return `canopy-assistant-${encodeURIComponent(id)}`;
 }
 
-const OPEN_REFUSED: Record<"ended" | "unsupported" | "not-attached", string> = {
+const OPEN_REFUSED: Record<Extract<OpenInAssistantResult, { ok: false }>["reason"], string> = {
   ended:
     "This assistant's session has ended. Start or resume one from its project's Assistant panel.",
   unsupported: "The global assistant has no panel in this window to open it in.",
   "not-attached":
     "This assistant runs without a window here. Open its project's Assistant panel to take it over.",
+  "not-switched": "This assistant runs on another host, and this window couldn't move there.",
 };
 
 /**

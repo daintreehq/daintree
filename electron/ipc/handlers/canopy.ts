@@ -1159,7 +1159,8 @@ export const canopyNamespace = defineIpcNamespace({
         ) {
           throw new AppError({ code: "VALIDATION", message: "Invalid project id" });
         }
-        const { getLocalAgentDirectory } = await import("../../services/assistants/localAgentDirectory.js");
+        const { getLocalAgentDirectory } =
+          await import("../../services/assistants/localAgentDirectory.js");
         return getLocalAgentDirectory().read(projectId === undefined ? {} : { projectId });
       },
       { withContext: true }
