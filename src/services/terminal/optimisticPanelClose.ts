@@ -16,7 +16,7 @@
 // from the panel header, keybindings, the command palette and actions, and the
 // cheap optimistic hide must not run every panelStore subscriber selector.
 import { panelStoreApi } from "@/store";
-import { terminalInstanceService } from "@/services/TerminalInstanceService";
+import { peek as peekTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
 import { consultPanelCloseGuards, hasPanelCloseGuard } from "@/services/panelCloseGuard";
 import { logError } from "@/utils/logger";
 
@@ -211,7 +211,7 @@ function advanceFocusPastClosing(hideIds: string[]): void {
       // click elsewhere may have moved focus on, or closed this target too.
       const current = panelStoreApi.getState().focusedId;
       if (current === focusTarget && !closingIds.has(focusTarget)) {
-        terminalInstanceService.focus(focusTarget);
+        peekTerminalService()?.focus(focusTarget);
       }
     });
   }

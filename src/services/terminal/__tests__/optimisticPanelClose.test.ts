@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { setFocusedMock, focusMock } = vi.hoisted(() => ({
   setFocusedMock: vi.fn(),
@@ -46,6 +46,13 @@ import {
   __resetPanelCloseGuardsForTests,
   registerPanelCloseGuard,
 } from "@/services/panelCloseGuard";
+import { load as loadTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
+
+// The service mock never evaluates the real module, so nothing registers it;
+// loading caches the mock for the synchronous peek() call sites.
+beforeAll(async () => {
+  await loadTerminalService();
+});
 
 describe("optimisticPanelClose", () => {
   beforeEach(() => {

@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
-import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from "vitest";
+import { load as loadTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
 
 const appClientMock = {
   hydrate: vi.fn(),
@@ -144,6 +145,12 @@ function makeMockManagedTerminal(id: string) {
     listeners: [] as Array<() => void>,
   };
 }
+
+// The service mock never evaluates the real module, so nothing registers it;
+// loading caches the mock so the GPU flag forwards straight to it.
+beforeAll(async () => {
+  await loadTerminalService();
+});
 
 describe("hydrateAppState", () => {
   const project = { id: "project-1", path: "/project" };

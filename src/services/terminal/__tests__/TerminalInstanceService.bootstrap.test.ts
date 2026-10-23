@@ -29,6 +29,13 @@ describe("TerminalInstanceService bootstrap", () => {
     Reflect.deleteProperty(globalThis, "window");
   });
 
+  it("registers the exported paint plane with the accessor at module eval", async () => {
+    const { terminalInstanceService } = await import("../TerminalInstanceService");
+    const accessor = await import("../terminalInstanceServiceAccessor");
+
+    expect(accessor.peek()).toBe(terminalInstanceService);
+  });
+
   it("does not auto-initialize terminal ingestion without an Electron terminal bridge", async () => {
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});

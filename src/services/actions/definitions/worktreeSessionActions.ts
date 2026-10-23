@@ -1,7 +1,7 @@
 import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
 import { z } from "zod";
 import type { ActionContext } from "@shared/types/actions";
-import { terminalInstanceService } from "@/services/terminal/TerminalInstanceService";
+import { peek as peekTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
 import { nextFrame } from "@/services/terminal/revealUntilStable";
 import { panelKindHasPty } from "@shared/config/panelKindRegistry";
 import { usePanelStore } from "@/store/panelStore";
@@ -164,7 +164,7 @@ export function registerWorktreeSessionActions(
       const sweep = rendererSweepChain.then(async () => {
         for (const [index, id] of targets.entries()) {
           if (index > 0) await nextFrame();
-          terminalInstanceService.resetRenderer(id, { force });
+          peekTerminalService()?.resetRenderer(id, { force });
         }
       });
       rendererSweepChain = sweep.catch(() => undefined);

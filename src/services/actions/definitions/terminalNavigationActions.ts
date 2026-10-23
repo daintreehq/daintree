@@ -3,7 +3,7 @@ import { z } from "zod";
 import type { ActionId } from "@shared/types/actions";
 import { usePanelStore } from "@/store/panelStore";
 import { exitProjectHome } from "@/store/storeAccessors";
-import { terminalInstanceService } from "@/services/terminal/TerminalInstanceService";
+import { peek as peekTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
 export function registerTerminalNavigationActions(
   actions: ActionRegistry,
   callbacks: ActionCallbacks
@@ -212,7 +212,7 @@ export function registerTerminalNavigationActions(
     run: async () => {
       const focusedId = usePanelStore.getState().focusedId;
       if (!focusedId) return;
-      terminalInstanceService.scrollToLastActivity(focusedId);
+      peekTerminalService()?.scrollToLastActivity(focusedId);
     },
   }));
 

@@ -1,4 +1,7 @@
-import { terminalInstanceService } from "@/services/terminal/TerminalInstanceService";
+import {
+  load as loadTerminalService,
+  peek as peekTerminalService,
+} from "@/services/terminal/terminalInstanceServiceAccessor";
 import { isDocumentHidden, revealUntilStable } from "@/services/terminal/revealUntilStable";
 import { useHelpPanelStore, selectActiveSlot, selectSlotTerminalIds } from "@/store/helpPanelStore";
 import { usePanelStore } from "@/store/panelStore";
@@ -49,7 +52,7 @@ export function getSidebarAffectedTerminalIds(): string[] {
 
 export function suppressSidebarResizes(): void {
   const ids = getSidebarAffectedTerminalIds();
-  terminalInstanceService.suppressResizesDuringLayoutTransition(ids, SIDEBAR_TOGGLE_LOCK_MS);
+  peekTerminalService()?.suppressResizesDuringLayoutTransition(ids, SIDEBAR_TOGGLE_LOCK_MS);
   // Block ResizeObserver-driven grid-width re-renders for the same window.
   // PTY suppression alone leaves the visual grid jittering as `<main flex:1>`
   // reflows every frame against the animating sidebar slot (see #6979).
@@ -163,7 +166,7 @@ export function createAssistantRevealCoordinator(): AssistantRevealCoordinator {
         for (let attempt = 0; attempt < ASSISTANT_ATTACH_WAIT_ATTEMPTS; attempt++) {
           if (isStale()) return;
           try {
-            await terminalInstanceService.waitForAttachSettled(id, {
+            await (await loadTerminalService()).waitForAttachSettled(id, {
               timeoutMs: ASSISTANT_ATTACH_SETTLE_TIMEOUT_MS,
             });
             attached = true;
@@ -184,7 +187,7 @@ export function createAssistantRevealCoordinator(): AssistantRevealCoordinator {
         // retrying instead of banking revealTerminal's "gone → settled" true.
         const painted = await revealUntilStable(
           id,
-          (target) => terminalInstanceService.repaintForReveal(target),
+          (target) => peekTerminalService()?.repaintForReveal(target) ?? false,
           () => isStale() || isDocumentHidden(),
           "[assistantReveal]"
         );

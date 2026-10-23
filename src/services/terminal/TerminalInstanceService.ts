@@ -102,6 +102,7 @@ import { usePanelStore } from "@/store/panelStore";
 import { usePerformanceModeStore } from "@/store/performanceModeStore";
 import { useHelpPanelStore, selectSlot, selectSlotForTerminal } from "@/store/helpPanelStore";
 import { logDebug, logWarn, logError } from "@/utils/logger";
+import { register as registerTerminalInstanceService } from "./terminalInstanceServiceAccessor";
 import { getErrorMessage } from "@/utils/errorContext";
 import { PaintFabricCompositor } from "./paintFabric/PaintFabricCompositor";
 import type { PaintSurface } from "./paintFabric/PaintSurfaceRegistry";
@@ -4595,6 +4596,7 @@ function createTerminalPaintPlane(): TerminalPaintPlane {
 }
 
 export const terminalInstanceService: TerminalPaintPlane = createTerminalPaintPlane();
+registerTerminalInstanceService(terminalInstanceService);
 
 // Expose terminal introspection/control bridges for E2E tests (the WebGL
 // renderer has no DOM text, so specs read the buffer through these). Gated on

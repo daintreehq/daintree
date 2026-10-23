@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const suppressMock = vi.hoisted(() => vi.fn());
 const lockResizeMock = vi.hoisted(() => vi.fn());
@@ -71,6 +71,13 @@ vi.mock("../layoutTransitionLock", () => ({
 import { createAssistantRevealCoordinator, suppressSidebarResizes } from "../sidebarToggle";
 import { MAX_REVEAL_FRAMES, REVEAL_CONFIRM_PAINTS } from "@/services/terminal/revealUntilStable";
 import { SIDEBAR_TOGGLE_LOCK_MS } from "../terminalLayout";
+import { load as loadTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
+
+// The service mock never evaluates the real module, so nothing registers it;
+// loading caches the mock for the synchronous peek() call sites.
+beforeAll(async () => {
+  await loadTerminalService();
+});
 
 type PanelFixture = {
   id: string;

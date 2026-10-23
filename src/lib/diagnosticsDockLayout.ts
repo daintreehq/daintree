@@ -1,4 +1,4 @@
-import { terminalInstanceService } from "@/services/terminal/TerminalInstanceService";
+import { peek as peekTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
 import { getSidebarAffectedTerminalIds } from "./sidebarToggle";
 import { DIAGNOSTICS_DOCK_TRANSITION_MS } from "./terminalLayout";
 
@@ -42,7 +42,7 @@ const listeners = new Set<() => void>();
  */
 export function signalDiagnosticsDockLayoutChange(): void {
   const ids = getSidebarAffectedTerminalIds();
-  terminalInstanceService.suppressResizesDuringLayoutTransition(
+  peekTerminalService()?.suppressResizesDuringLayoutTransition(
     ids,
     DIAGNOSTICS_DOCK_TRANSITION_MS
   );

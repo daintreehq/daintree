@@ -45,6 +45,7 @@ import {
 } from "./LaunchNotifications";
 import { McpActivityTracker } from "./McpActivityTracker";
 import { HibernationManager } from "./HibernationManager";
+import { load as loadTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
 
 export type HelpSessionPhase =
   "idle" | "version-checking" | "provisioning" | "launching" | "live" | "hibernating";
@@ -1409,8 +1410,8 @@ export class HelpSessionController {
     });
     // A pane on a running PTY starts with only what it prints next; the screen
     // it already drew comes from the host's snapshot, as for any restored pane.
-    void import("@/services/TerminalInstanceService")
-      .then(({ terminalInstanceService }) => terminalInstanceService.fetchAndRestore(panelId))
+    void loadTerminalService()
+      .then((service) => service.fetchAndRestore(panelId))
       .catch((err: unknown) => logError("Failed to restore the taken-over assistant", err));
     return "bound";
   }
