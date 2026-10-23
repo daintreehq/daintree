@@ -73,7 +73,7 @@ const CONNECTED: HostListEntry["connection"] = {
   },
 };
 
-function summary(hostId: string): HostMetricsSummary {
+function summary(hostId: string, overrides: Partial<HostMetricsSummary> = {}): HostMetricsSummary {
   return {
     hostId,
     sampledAt: 1,
@@ -91,6 +91,7 @@ function summary(hostId: string): HostMetricsSummary {
     worktreeCount: null,
     driver: null,
     agentClis: [],
+    ...overrides,
   };
 }
 
@@ -179,6 +180,35 @@ describe("HostSwitcherPalette", () => {
     expect(text).toContain("Agents: 1 waiting, 2 working (observed)");
     expect(text).toContain("42% CPU");
     expect(text).toContain("normal memory pressure");
+  });
+
+  it("reads a newer host's load as busy cores and memory in use, marking only high pressure", () => {
+    const GB = 1024 ** 3;
+    const capacity = {
+      cpuPercent: 50,
+      cpuLogicalCoreCount: 14,
+      memoryUsedBytes: 20.1 * GB,
+      memoryTotalBytes: 36 * GB,
+    };
+    hostList.value = {
+      hosts: [
+        host("h1", "studio-01", CONNECTED, {
+          summary: summary("h1", { ...capacity, memoryPressure: "normal" }),
+        }),
+        host("h2", "build-east", CONNECTED, {
+          summary: summary("h2", { ...capacity, memoryPressure: "warn" }),
+        }),
+      ],
+      localSummary: null,
+    };
+    openPalette();
+    const calm = row("h1");
+    expect(calm.textContent).toContain("7 of 14 cores busy");
+    expect(calm.textContent).toContain("20.1 / 36 GB memory in use, normal pressure");
+    expect(calm.querySelector("[data-pressure-steps]")).toBeNull();
+    const pressed = row("h2");
+    expect(pressed.textContent).toContain("20.1 / 36 GB memory in use, high pressure");
+    expect(pressed.querySelector("[data-pressure-steps]")).not.toBeNull();
   });
 
   it("says when an unreachable host was last seen and shows no stale load", () => {

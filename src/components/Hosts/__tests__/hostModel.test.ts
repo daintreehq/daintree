@@ -9,7 +9,6 @@ import {
   buildHostMenuRows,
   describeHostAgentClis,
   describeHostMenuState,
-  describeHostRowMetrics,
   describeHostRowStatus,
   hostChipStatus,
   hostChipStatusText,
@@ -198,26 +197,12 @@ describe("describeHostRowStatus", () => {
       entry("h1", "studio-01", { status: "disconnected" }, summary("h1"), { lastSeenAt: null }),
     ]);
     expect(describeHostRowStatus(row!, now)).toBe("Not connected");
-    expect(describeHostRowMetrics(row!)).toBeNull();
   });
 });
 
-describe("describeHostRowMetrics", () => {
-  it("shows CPU and memory pressure when measured", () => {
-    const [, row] = rowsFor([entry("h1", "studio-01", CONNECTED, summary("h1"))]);
-    expect(describeHostRowMetrics(row!)).toBe("CPU 71%  Memory warn");
-  });
-
-  it("shows nothing rather than zeros when the host measured nothing", () => {
-    const blank = summary("h1", { cpuPercent: null, memoryPressure: null });
-    const [, row] = rowsFor([entry("h1", "studio-01", CONNECTED, blank)]);
-    expect(describeHostRowMetrics(row!)).toBeNull();
-  });
-
-  it("shows nothing when no summary has arrived", () => {
-    const [local, remote] = rowsFor([entry("h1", "studio-01")]);
-    expect(describeHostRowMetrics(local!)).toBeNull();
-    expect(describeHostRowMetrics(remote!)).toBeNull();
+describe("describeHostRowStatus without a summary", () => {
+  it("says nothing for this machine before its first report", () => {
+    const [local] = rowsFor([entry("h1", "studio-01")]);
     expect(describeHostRowStatus(local!)).toBeNull();
   });
 });

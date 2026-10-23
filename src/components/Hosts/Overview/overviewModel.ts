@@ -2,7 +2,8 @@ import type { HostDriverObservation, HostId, HostMetricsSummary } from "@shared/
 import type { HostMenuRow } from "../hostModel";
 import { formatHostTime } from "../hostTime";
 import { formatBytes } from "@/lib/formatBytes";
-import { pluralize } from "@/lib/pluralize";
+import { pluralize, pluralNoun } from "@/lib/pluralize";
+import { formatCoreCount } from "@/components/Project/ProjectResourceBadge.utils";
 
 /** A pressure band drawn on the same 0–100 axis as CPU, so both sparklines read alike. */
 const PRESSURE_LEVEL: Record<NonNullable<HostMetricsSummary["memoryPressure"]>, number> = {
@@ -22,6 +23,116 @@ export function pressureSeries(history: readonly HostMetricsSummary[]): Array<nu
     .map((entry) => (entry.memoryPressure === null ? null : PRESSURE_LEVEL[entry.memoryPressure]));
 }
 
+/** Used memory as a share of total, oldest first; a sample missing either stays a gap. */
+export function memoryUsedSeries(history: readonly HostMetricsSummary[]): Array<number | null> {
+  return [...history].reverse().map(memoryUsedPercent);
+}
+
+function memoryUsedPercent(summary: HostMetricsSummary): number | null {
+  const capacity = reportedCapacity(summary);
+  return capacity && Math.min(100, Math.max(0, (capacity.used / capacity.total) * 100));
+}
+
+/**
+ * Used and total memory from a host that counts used as Activity Monitor
+ * does. Older hosts sent used bytes that included the file cache, and they
+ * predate the core count that shipped alongside the fix: a present field,
+ * even null, marks the newer reading.
+ */
+function reportedCapacity(summary: HostMetricsSummary): { used: number; total: number } | null {
+  if (summary.cpuLogicalCoreCount === undefined) return null;
+  const { memoryUsedBytes: used, memoryTotalBytes: total } = summary;
+  if (used === null || !Number.isFinite(used) || used < 0) return null;
+  if (total === null || !Number.isFinite(total) || total <= 0) return null;
+  return { used, total };
+}
+
+/**
+ * Busy cores, from the share of all cores and the count the host says that
+ * share covers. Null for a host that doesn't report the count: never a guess.
+ */
+export function busyCores(summary: HostMetricsSummary): { busy: number; total: number } | null {
+  const cpu = summary.cpuPercent;
+  const total = summary.cpuLogicalCoreCount;
+  if (cpu === null || !Number.isFinite(cpu) || !total || !Number.isFinite(total) || total <= 0) {
+    return null;
+  }
+  return { busy: (cpu / 100) * total, total };
+}
+
+/** "6.4 of 14 cores" where the host reports its core count, "42%" otherwise; null when unmeasured. */
+export function describeCpu(summary: HostMetricsSummary): string | null {
+  const cores = busyCores(summary);
+  if (cores) {
+    return `${formatCoreCount(cores.busy)} of ${cores.total} ${pluralNoun(cores.total, "core")}`;
+  }
+  return summary.cpuPercent === null ? null : `${Math.round(summary.cpuPercent)}%`;
+}
+
+const BYTE_UNITS = ["B", "KB", "MB", "GB", "TB"] as const;
+
+/**
+ * "20.1 / 36 GB": both numbers in the total's unit, so the two read against
+ * each other at a glance. Null when the host didn't report both.
+ */
+export function describeMemoryCapacity(summary: HostMetricsSummary): string | null {
+  const capacity = reportedCapacity(summary);
+  if (!capacity) return null;
+  const { used, total } = capacity;
+  const unit = Math.min(BYTE_UNITS.length - 1, Math.floor(Math.log(total) / Math.log(1024)));
+  const scale = 1024 ** unit;
+  const amount = (bytes: number) => String(parseFloat((bytes / scale).toFixed(1)));
+  return `${amount(used)} / ${amount(total)} ${BYTE_UNITS[unit]}`;
+}
+
+const PRESSURE_WORD: Record<NonNullable<HostMetricsSummary["memoryPressure"]>, string> = {
+  normal: "Normal",
+  warn: "High",
+  critical: "Critical",
+};
+
+export function describeMemoryPressure(summary: HostMetricsSummary): string | null {
+  return summary.memoryPressure === null ? null : PRESSURE_WORD[summary.memoryPressure];
+}
+
+/** The 1 minute load average as the OS reports it; null for a host that doesn't. */
+export function describeLoad(summary: HostMetricsSummary): string | null {
+  const load = summary.cpuLoadAverage1m;
+  return load === null || load === undefined || !Number.isFinite(load) ? null : load.toFixed(2);
+}
+
+/** "Performance 62% · efficiency 18%" on Apple Silicon; null when neither cluster was read. */
+export function describeCoreClusters(summary: HostMetricsSummary): {
+  value: string;
+  detail: string;
+} | null {
+  const clusters = [
+    ["performance", summary.cpuPerformancePercent, summary.cpuPerformanceCoreCount],
+    ["efficiency", summary.cpuEfficiencyPercent, summary.cpuEfficiencyCoreCount],
+  ] as const;
+  const read = clusters.filter(
+    (entry): entry is readonly [string, number, number | null | undefined] =>
+      typeof entry[1] === "number" && Number.isFinite(entry[1])
+  );
+  if (read.length === 0) return null;
+  const value = read.map(([name, percent]) => `${name} ${Math.round(percent)}%`).join(" · ");
+  const detail = read
+    .map(([name, percent, count]) =>
+      count
+        ? `${Math.round(percent)}% of ${count} ${name} cores busy`
+        : `${name} cores ${Math.round(percent)}% busy`
+    )
+    .join(" · ");
+  return { value: value.charAt(0).toUpperCase() + value.slice(1), detail };
+}
+
+/** Linux PSI: the share of the last 10 s some task waited for a CPU. Null off Linux. */
+export function describeCpuPressure(summary: HostMetricsSummary): string | null {
+  const pressure = summary.cpuPressure;
+  if (pressure === null || !Number.isFinite(pressure)) return null;
+  return `${parseFloat(pressure.toFixed(1))}% of the last 10 s stalled`;
+}
+
 /** "3.1 GB of 8 GB" under a Swap label, or null when the host doesn't report swap. */
 export function describeSwap(summary: HostMetricsSummary): string | null {
   if (summary.swapTotalBytes === null) return null;
@@ -32,6 +143,7 @@ export function describeSwap(summary: HostMetricsSummary): string | null {
     : `${formatBytes(used)} of ${formatBytes(summary.swapTotalBytes)}`;
 }
 
+/** "4 GB of 16 GB": an older host's reading, which counts the file cache as used. */
 export function describeMemory(summary: HostMetricsSummary): string | null {
   if (summary.memoryUsedBytes === null || summary.memoryTotalBytes === null) return null;
   return `${formatBytes(summary.memoryUsedBytes)} of ${formatBytes(summary.memoryTotalBytes)}`;

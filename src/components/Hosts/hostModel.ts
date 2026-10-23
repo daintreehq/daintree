@@ -303,16 +303,6 @@ export function hostMenuRowHasTrouble(row: HostMenuRow): boolean {
   return connection.status === "unreachable" || connection.status === "version-mismatch";
 }
 
-/** CPU and memory pressure as last reported; null when the host measured neither. */
-export function describeHostRowMetrics(row: HostMenuRow): string | null {
-  const summary = liveSummary(row);
-  if (!summary) return null;
-  const parts: string[] = [];
-  if (summary.cpuPercent !== null) parts.push(`CPU ${Math.round(summary.cpuPercent)}%`);
-  if (summary.memoryPressure !== null) parts.push(`Memory ${summary.memoryPressure}`);
-  return parts.length > 0 ? parts.join("  ") : null;
-}
-
 /** The host's installed agent CLIs, as its own detection reported them. */
 export function describeHostAgentClis(row: HostMenuRow): string | null {
   const clis = liveSummary(row)?.agentClis ?? [];
