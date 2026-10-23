@@ -8,6 +8,7 @@ import { getPluginManifestSchema } from "../schemas/plugin.js";
 import { MAX_DNTR_BYTES, PROJECT_TEMPLATES_DIR } from "../utils/pluginArchiveConstants.js";
 import { stripUtf8Bom } from "../utils/stripUtf8Bom.js";
 import type { PluginManifest } from "../../shared/types/plugin.js";
+import { foldFileName } from "../../shared/utils/fileNameFold.js";
 
 export const ZIP_EPOCH_DATE = new Date("1980-01-01T00:00:00Z");
 // Cap on total zip entries. A plugin is a handful of compiled files plus
@@ -400,9 +401,10 @@ export async function readArchiveTemplateProjectPlugins(
   await new Promise<void>((resolve, reject) => {
     zipfile.on("entry", (entry: yauzl.Entry) => {
       const segments = normalizePath(entry.fileName).split("/");
-      // Case-insensitive, as macOS and Windows resolve `.DAINTREE/Plugins/`
-      // to the folder discovery reads. The folder name is shown as written.
-      const folded = segments.map((segment) => segment.toLowerCase());
+      // Folded the way macOS and Windows resolve names, as `.DAINTREE/Plugins/`
+      // (or `pluginſ`) is the folder discovery reads there. The plugin's
+      // folder name is shown as written.
+      const folded = segments.map(foldFileName);
       if (
         segments.length > 5 &&
         folded[0] === PROJECT_TEMPLATES_DIR &&

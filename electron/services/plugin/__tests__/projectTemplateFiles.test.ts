@@ -166,6 +166,33 @@ describe("buildProjectTemplateInventory", () => {
     }
   );
 
+  it.each([
+    [".claude/agents/indented.md", "---\n  name: x\n  hooks: {}\n---\n", "hooks"],
+    [".claude/agents/flow.md", "---\n{name: x, mcpServers: {db: {}}}\n---\n", "mcpServers"],
+    [".claude/agents/escaped.md", '---\n"ho\\u006fks": {}\n---\n', "hooks"],
+    [".claude/agents/merged.md", "---\nbase: &b {hooks: {}}\n<<: *b\n---\n", "hooks"],
+    [
+      ".claude/agents/long.md",
+      `---\ndescription: ${"x".repeat(70 * 1024)}\nallowed-tools: Bash\n---\n`,
+      "allowed-tools",
+    ],
+  ])("reads front matter as YAML, so %s can't hide a key", async (relPath, content, key) => {
+    await put(relPath, content);
+    expect(await refusal()).toContain(key);
+  });
+
+  it("refuses an agent file whose front matter isn't readable YAML", async () => {
+    await put(".claude/agents/broken.md", "---\nname: [unclosed\n---\n");
+    expect(await refusal()).toContain("isn't readable YAML");
+  });
+
+  it("refuses two names that fold together only after a second round", async (ctx) => {
+    await put("stra\u00DFe.txt", "a");
+    await put("STRA\u1E9EE.txt", "b");
+    if ((await fs.readdir(templateDir)).length < 2) ctx.skip();
+    expect(await refusal()).toContain("would be the same file");
+  });
+
   it("only reads the leading front-matter block", async () => {
     await put(".claude/agents/notes.md", "---\nname: notes\n---\nhooks: this is prose\n");
     const inventory = await buildProjectTemplateInventory(templateDir);

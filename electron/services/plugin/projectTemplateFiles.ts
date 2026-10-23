@@ -6,7 +6,10 @@ import type {
   ProjectTemplateFileKind,
   ProjectTemplatePreview,
 } from "../../../shared/types/plugin.js";
+import { load as parseYaml } from "js-yaml";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
+import { foldFileName } from "../../../shared/utils/fileNameFold.js";
+import { YAML_MERGE_SCHEMA } from "../../utils/yamlMergeSchema.js";
 import { PROJECT_TEMPLATES_DIR } from "../../utils/pluginArchiveConstants.js";
 import { getPluginProjectTemplatePluginDir } from "./PluginProjectTemplateRegistry.js";
 
@@ -48,16 +51,6 @@ export interface ProjectTemplateInventory {
   files: ProjectTemplateInventoryFile[];
   totalBytes: number;
   digest: string;
-}
-
-/**
- * The key a name is compared under, for the deny-list and for collisions:
- * compatibility-normalized and case-folded by way of upper case, so `ſ` (which
- * APFS folds to `s`), full-width forms and ligatures can't stand in for a
- * refused name. Deliberately over-eager: a false match only refuses a template.
- */
-function foldName(name: string): string {
-  return name.normalize("NFKC").toUpperCase().toLowerCase().normalize("NFC");
 }
 
 const REPOSITORY = "repository metadata";
@@ -170,29 +163,39 @@ const DENIED_FRONT_MATTER_KEYS: ReadonlySet<string> = new Set([
   "permissions",
 ]);
 
-const FRONT_MATTER_KEY = /^["']?([A-Za-z0-9_-]+)["']?\s*:/;
+const FRONT_MATTER_BLOCK = /^---[ \t]*\r?\n(?:([\s\S]*?)\r?\n)?---[ \t]*(?=\r?\n|$)/;
 
 /**
- * The refused front-matter key a Markdown file in an agent's folder declares,
- * or null. Only files inside a dot-folder are read this way — that's where
- * agents look for subagents, skills, commands and rules — and only the leading
- * `---` block, at its top level.
+ * Why a Markdown file in an agent's folder can't be copied, or null: it
+ * declares one of the refused keys at the top of its front matter, or its front
+ * matter isn't YAML this can read — an agent might read it differently, so it
+ * isn't assumed to be harmless. Only files inside a dot-folder are read this
+ * way, since that's where agents look for subagents, skills, commands and
+ * rules. Parsed with the same YAML schema as plugin skills, so indentation,
+ * flow mappings, quoted keys and merge keys can't hide a key.
  */
-function deniedFrontMatterKey(segments: readonly string[], content: Buffer): string | null {
+function frontMatterProblem(segments: readonly string[], content: Buffer): string | null {
   const name = segments[segments.length - 1];
   if (!/\.(md|mdc)$/.test(name)) return null;
   if (!segments.slice(0, -1).some((segment) => segment.startsWith("."))) return null;
-  const lines = content
-    .toString("utf8", 0, Math.min(content.length, 64 * 1024))
-    .replace(/^\uFEFF/, "")
-    .split(/\r?\n/);
-  if (lines[0]?.trim() !== "---") return null;
-  for (const line of lines.slice(1)) {
-    if (line.trim() === "---" || line.trim() === "...") return null;
-    const key = FRONT_MATTER_KEY.exec(line)?.[1];
-    if (key && DENIED_FRONT_MATTER_KEYS.has(foldName(key))) return key;
+  const text = content.toString("utf8").replace(/^\uFEFF/, "");
+  if (!/^---[ \t]*\r?\n/.test(text)) return null;
+  const block = FRONT_MATTER_BLOCK.exec(text);
+  // An unclosed block is no front matter to an agent either: it reads as text.
+  if (!block) return null;
+  let parsed: unknown;
+  try {
+    parsed = parseYaml(block[1] ?? "", { schema: YAML_MERGE_SCHEMA });
+  } catch {
+    return "has front matter that isn't readable YAML, so it can't be checked for agent configuration";
   }
-  return null;
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+  const key = Object.keys(parsed).find((candidate) =>
+    DENIED_FRONT_MATTER_KEYS.has(foldFileName(candidate))
+  );
+  return key === undefined
+    ? null
+    : `sets ${key} in its front matter. That's agent configuration, which a template never copies into a new project`;
 }
 
 const INSTRUCTION_FILES: ReadonlySet<string> = new Set([
@@ -339,7 +342,7 @@ export async function buildProjectTemplateInventory(
       const problem = nameProblem(name);
       if (problem) throw new ProjectTemplateError(`"${relPath}" ${problem}.`);
 
-      const folded = [...foldedDir, foldName(name)];
+      const folded = [...foldedDir, foldFileName(name)];
       const denied = deniedReason(folded);
       if (denied) {
         throw new ProjectTemplateError(
@@ -388,11 +391,9 @@ export async function buildProjectTemplateInventory(
         );
       }
       const content = await readTemplateFile(absPath, relPath);
-      const frontMatterKey = deniedFrontMatterKey(folded, content);
-      if (frontMatterKey) {
-        throw new ProjectTemplateError(
-          `"${relPath}" sets ${frontMatterKey} in its front matter. That's agent configuration, which a template never copies into a new project.`
-        );
+      const frontMatter = frontMatterProblem(folded, content);
+      if (frontMatter) {
+        throw new ProjectTemplateError(`"${relPath}" ${frontMatter}.`);
       }
       totalBytes += content.length;
       if (totalBytes > PROJECT_TEMPLATE_LIMITS.totalBytes) {
@@ -485,11 +486,16 @@ async function removeIfOurs(absPath: string, identity: string, isDir: boolean): 
 /**
  * Write the inventory into `destRoot`, which must be the empty folder the user
  * just created. Every folder and file is created exclusively, so nothing that
- * appeared there in the meantime is overwritten, and each file's folder is
- * checked to still be the one this call made, so a folder swapped for a link
- * mid-copy can't redirect a write. On failure everything this call created is
- * removed again — checked the same way, so nothing else is — and the error is
- * rethrown.
+ * appeared there in the meantime is overwritten, and the folder each is created
+ * in is first checked to still be the one this call recorded, so a folder
+ * swapped for a link mid-copy stops the copy rather than redirecting it. On
+ * failure everything this call created is removed again — checked the same
+ * way, so nothing else is — and the error is rethrown.
+ *
+ * Node has no descriptor-relative `mkdirat`/`openat`/`unlinkat`, so each check
+ * and the step after it are separate calls: a process already running as the
+ * user, racing this one inside the folder it just made, still has a window.
+ * The checks close everything short of that.
  */
 export async function writeProjectTemplate(
   destRoot: string,
@@ -502,6 +508,18 @@ export async function writeProjectTemplate(
       throw new ProjectTemplateError("The new folder isn't empty, so the template wasn't copied.");
     }
     const dirIdentities = new Map<string, string>([["", identityOf(rootStat)]]);
+    // Before anything is created in a folder, that folder must still be the one
+    // this call recorded — the new root or a folder it made.
+    const assertParentUnchanged = async (relPath: string): Promise<void> => {
+      const slash = relPath.lastIndexOf("/");
+      const parent = slash === -1 ? "" : relPath.slice(0, slash);
+      const stat = await fs.lstat(path.join(destRoot, ...parent.split("/")));
+      if (!stat.isDirectory() || identityOf(stat) !== dirIdentities.get(parent)) {
+        throw new ProjectTemplateError(
+          "The new folder changed while the template was being copied, so the copy stopped."
+        );
+      }
+    };
     const dirs = new Set<string>();
     for (const file of inventory.files) {
       const segments = file.path.split("/");
@@ -510,20 +528,14 @@ export async function writeProjectTemplate(
     // A parent sorts before its children because it is their prefix.
     for (const dir of [...dirs].sort()) {
       const absDir = path.join(destRoot, ...dir.split("/"));
+      await assertParentUnchanged(dir);
       await fs.mkdir(absDir);
       const identity = identityOf(await fs.lstat(absDir));
       created.push({ absPath: absDir, identity, isDir: true });
       dirIdentities.set(dir, identity);
     }
     for (const file of inventory.files) {
-      const slash = file.path.lastIndexOf("/");
-      const parent = slash === -1 ? "" : file.path.slice(0, slash);
-      const parentStat = await fs.lstat(path.join(destRoot, ...parent.split("/")));
-      if (!parentStat.isDirectory() || identityOf(parentStat) !== dirIdentities.get(parent)) {
-        throw new ProjectTemplateError(
-          "The new folder changed while the template was being copied, so the copy stopped."
-        );
-      }
+      await assertParentUnchanged(file.path);
       const absFile = path.join(destRoot, ...file.path.split("/"));
       // Recorded once created and before writing, so a write that fails part
       // way (a full disk) still gets its half-written file removed.

@@ -114,11 +114,16 @@ describe("project template payloads in a .dntr (#13825)", () => {
       })
     );
     await write(src, "project-templates/site/.DAINTREE/Plugins/Site-Tools/plugin.json", "{}");
+    // `ſ` folds to `s` on a case-insensitive disk, so this is `plugins` there.
+    await write(src, "project-templates/blog/.daintree/plugin\u017F/blog-tools/plugin.json", "{}");
     const archive = path.join(tmpDir, "acme.dntr");
     await packPluginArchive(src, archive);
 
-    const projectPlugins = await readArchiveTemplateProjectPlugins(archive, ["site"]);
-    expect(projectPlugins.get("site")).toEqual(["Site-Tools"]);
+    const projectPlugins = await readArchiveTemplateProjectPlugins(archive, ["site", "blog"]);
+    expect(Object.fromEntries(projectPlugins)).toEqual({
+      site: ["Site-Tools"],
+      blog: ["blog-tools"],
+    });
   });
 
   it("reads nothing for an archive that declares no templates", async () => {
