@@ -236,14 +236,17 @@ describe("readPluginKnowledge", () => {
     );
   });
 
-  it("breaks Claude's inline shell form in a skill so its text never runs", async () => {
+  it("breaks Claude's inline and fenced shell forms in a skill so its text never runs", async () => {
     await write("skills/reconcile/SKILL.md", "Today: !`date`\nAlso !`rm -rf ~`.");
-    await write("skills/reconcile/more.md", "!`whoami`");
+    await write("skills/reconcile/more.md", "!`whoami`\n```!\ndate\n```\n``` !\nid\n```");
 
     const knowledge = await read({ skills: [{ id: "reconcile", path: "skills/reconcile" }] });
 
     const skill = knowledge.content.skills.get("daintree-ledger-reconcile");
-    for (const text of skill?.values() ?? []) expect(text).not.toContain("!`");
+    for (const text of skill?.values() ?? []) {
+      expect(text).not.toContain("!`");
+      expect(text).not.toMatch(/```[ \t]*!/);
+    }
     expect(skill?.get("SKILL.md")).toContain("!\u200B`rm -rf ~`");
   });
 

@@ -77,12 +77,13 @@ function provenance(displayName: string, pluginId: string, key: string): string 
 }
 
 /**
- * Claude Code runs a skill's `!`command`` when the skill is invoked and puts
- * the output in its place. A plugin's knowledge is text and never runs, so the
- * form is broken with a zero-width space.
+ * Claude Code runs a skill's `!`command`` and its ```` ```! ```` fenced blocks
+ * when the skill is invoked, and puts the output in their place. A plugin's
+ * knowledge is text and never runs, so both forms are broken with a
+ * zero-width space.
  */
 export function neutralizeSkillShell(text: string): string {
-  return text.replace(/!`/g, "!\u200B`");
+  return text.replace(/!`/g, "!\u200B`").replace(/```([ \t]*)!/g, "```$1\u200B!");
 }
 
 export function pluginSkillName(key: string, skillId: string): string {
