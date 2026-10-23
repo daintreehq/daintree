@@ -369,7 +369,8 @@ Dispatch `help.tour.show` with your tour's manifest `id`. From a plugin, `tourId
 
 ```ts
 const shown = await host.dispatch("help.tour.show", { tourId: "welcome" });
-if (shown.ok && shown.result.status === "started") rememberRun(shown.result.runId);
+const start = shown.ok ? (shown.result as { status: string; runId?: string }) : null;
+if (start?.status === "started") rememberRun(start.runId!);
 ```
 
 The result says whether the tour started, not how it ended:
@@ -387,7 +388,7 @@ How a run ends is saved with the tour's progress. Read it with `help.tour.status
 
 | Field | Means |
 | --- | --- |
-| `lastOutcome` | `completed` (played to the end of its last chapter), `dismissed` (closed before that), `superseded` (another tour opened over it), `withdrawn` (your plugin was disabled or reloaded while it was open), `failed`, or `null`. |
+| `lastOutcome` | `completed` (played to the end of its last chapter), `dismissed` (closed before that), `superseded` (another tour opened over it), `withdrawn` (your plugin was disabled or reloaded, or its view closed, while it was open), `failed`, or `null`. |
 | `lastRunId` | The run `lastOutcome` belongs to. Compare it with the `runId` you were given: an outcome from another run, or `completed: true` left by an earlier one, says nothing about yours. |
 | `completed`, `completedCurrentVersion` | Finished under any version, and under the version registered now. |
 | `lastChapterId`, `progressVersion`, `contentVersion` | Where a reopened run resumes, the version that progress was saved under, and your tour's declared version. |

@@ -306,6 +306,7 @@ export const onboardingNamespace = defineIpcNamespace({
         if (update.completed === true) {
           next.completed = true;
           if (isTourToken(update.contentVersion)) next.completedVersion = update.contentVersion;
+          else if (update.contentVersion === null) delete next.completedVersion;
         }
         if (typeof update.lastChapter === "number" && Number.isFinite(update.lastChapter)) {
           next.lastChapter = normalizeCount(update.lastChapter);

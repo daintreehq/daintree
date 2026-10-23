@@ -30,6 +30,9 @@ export const TOUR_REGISTRATION_TIMEOUT_MS = 5_000;
 export const TOUR_ACK_TIMEOUT_MS = 15_000;
 
 let nextRequestId = 0;
+// Bumped by every request, so one still waiting for its tour to register can
+// tell a newer one has come since.
+let requestGeneration = 0;
 let hosts = 0;
 const pending = new Map<number, (result: TourStartResult) => void>();
 
@@ -56,10 +59,15 @@ function firstRegistered(candidates: readonly string[]): string | undefined {
   return candidates.find((id) => getTour(id) !== undefined);
 }
 
+/**
+ * The first candidate to register within `timeoutMs`, `undefined` if none
+ * does, or `null` when any tour is opened meanwhile — the person has moved on,
+ * and a late registration must not open over what they chose.
+ */
 function waitForRegistration(
   candidates: readonly string[],
   timeoutMs: number
-): Promise<string | undefined> {
+): Promise<string | undefined | null> {
   const found = firstRegistered(candidates);
   if (found !== undefined || timeoutMs <= 0) return Promise.resolve(found);
   return new Promise((resolve) => {
@@ -68,10 +76,13 @@ function waitForRegistration(
       if (id === undefined) return;
       finish(id);
     });
+    const onOpen = () => finish(null);
+    window.addEventListener(OPEN_TOUR_EVENT, onOpen);
     const timer = setTimeout(() => finish(undefined), timeoutMs);
-    function finish(id: string | undefined) {
+    function finish(id: string | undefined | null) {
       clearTimeout(timer);
       unsubscribe();
+      window.removeEventListener(OPEN_TOUR_EVENT, onOpen);
       resolve(id);
     }
   });
@@ -87,10 +98,14 @@ export async function requestTour(
   options: { registrationTimeoutMs?: number } = {}
 ): Promise<TourStartResult> {
   const fallbackId = candidates[0] ?? "";
+  const generation = ++requestGeneration;
   const tourId = await waitForRegistration(
     candidates,
     options.registrationTimeoutMs ?? TOUR_REGISTRATION_TIMEOUT_MS
   );
+  if (tourId === null || generation !== requestGeneration) {
+    return { status: "superseded", tourId: tourId ?? fallbackId };
+  }
   if (tourId === undefined) {
     return { status: "unavailable", tourId: fallbackId, reason: "not-registered" };
   }

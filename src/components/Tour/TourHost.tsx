@@ -31,14 +31,30 @@ interface Run {
   version: string | undefined;
   chapterIds: readonly string[];
   completed: boolean;
+  /** Its dialog has mounted, so a request for it can be answered `started` straight away. */
+  mounted: boolean;
 }
 
-function saveOutcome(
-  tourId: string,
-  version: string | undefined,
-  outcome: TourOutcome,
-  runId?: string
-): void {
+/**
+ * Saved progress only decides where the tour resumes, so a read that stalls
+ * starts it from the beginning rather than holding the request past its deadline.
+ */
+const PROGRESS_READ_TIMEOUT_MS = 5_000;
+
+function readProgress(): Promise<Awaited<ReturnType<typeof getOnboardingState>> | null> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<null>((resolve) => {
+    timer = setTimeout(() => resolve(null), PROGRESS_READ_TIMEOUT_MS);
+  });
+  const read = Promise.resolve()
+    .then(() => getOnboardingState())
+    .catch(() => null);
+  return Promise.race([read, deadline]).finally(() => clearTimeout(timer));
+}
+
+// No version stamp: the outcome says nothing about which version the saved
+// chapter belongs to, and relabelling it would let a later version resume there.
+function saveOutcome(tourId: string, outcome: TourOutcome, runId?: string): void {
   window.dispatchEvent(
     new CustomEvent(TOUR_OUTCOME_EVENT, { detail: { tourId, outcome, runId: runId ?? null } })
   );
@@ -46,7 +62,6 @@ function saveOutcome(
     window.electron.onboarding.setTourProgress(tourId, {
       lastOutcome: outcome,
       ...(runId !== undefined ? { lastRunId: runId } : {}),
-      contentVersion: version ?? null,
     }),
     { context: "Saving how the tour ended" }
   );
@@ -101,7 +116,7 @@ export function TourHost() {
           : { status: "superseded", tourId }
       );
       runRef.current = null;
-      saveOutcome(run.tourId, run.version, ended, run.runId);
+      saveOutcome(run.tourId, ended, run.runId);
     },
     [answerStarting]
   );
@@ -115,6 +130,8 @@ export function TourHost() {
   }, []);
 
   useEffect(() => registerTourHost(), []);
+  // A view closing under an open tour withdraws it like a disabled plugin does.
+  useEffect(() => () => endRun("withdrawn"), [endRun]);
 
   useEffect(
     () =>
@@ -157,10 +174,10 @@ export function TourHost() {
         pendingRef.current = null;
         const run = runRef.current;
         if (requestId !== null && run) {
-          if (startingRequestIdsRef.current.length > 0) {
-            startingRequestIdsRef.current.push(requestId);
-          } else {
+          if (run.mounted) {
             settleTourRequest(requestId, { status: "started", tourId, runId: run.runId });
+          } else {
+            startingRequestIdsRef.current.push(requestId);
           }
         }
         return;
@@ -178,9 +195,7 @@ export function TourHost() {
       pendingRef.current = tourId;
       pendingRegistrationRef.current = registration;
       if (requestId !== null) pendingRequestIdsRef.current.push(requestId);
-      const saved = Promise.resolve()
-        .then(() => getOnboardingState())
-        .catch(() => null);
+      const saved = readProgress();
       // Inside the chain, so a loader that throws rather than rejects is still handled.
       const loaded = Promise.resolve().then(() => registration.load());
       void Promise.all([loaded, saved])
@@ -206,6 +221,7 @@ export function TourHost() {
             version: tour.version,
             chapterIds: tour.chapters.map((chapter) => chapter.id),
             completed: false,
+            mounted: false,
           };
           startingRequestIdsRef.current = pendingRequestIdsRef.current;
           pendingRequestIdsRef.current = [];
@@ -229,7 +245,7 @@ export function TourHost() {
             tourId: id,
             reason: formatErrorMessage(error, "The tour couldn't be loaded"),
           }));
-          saveOutcome(tourId, registration.summary.version, "failed");
+          saveOutcome(tourId, "failed");
           // A failed module import is cached for its URL, so retrying can't
           // help until the plugin reloads; say so instead of offering it.
           // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
@@ -263,6 +279,7 @@ export function TourHost() {
 
   const tourId = open?.tour.id;
   const onDialogMounted = useCallback(() => {
+    if (runRef.current) runRef.current.mounted = true;
     answerStarting(({ tourId: id, runId }) => ({ status: "started", tourId: id, runId }));
   }, [answerStarting]);
   const onClose = useCallback(() => {

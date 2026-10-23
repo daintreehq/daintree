@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, render, waitFor } from "@testing-library/react";
+import { act, cleanup, render, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DAINTREE_TOUR_ID, makePluginTourId } from "@shared/utils/tourIds";
 import type { TourDialogProps } from "../TourDialog";
@@ -77,6 +77,8 @@ describe("TourHost", () => {
   });
   let unregister: () => void = () => {};
   afterEach(() => {
+    // Unmount first: a host closing under an open tour saves its outcome through the bridge.
+    cleanup();
     unregister();
     Reflect.deleteProperty(window, "electron");
   });
@@ -321,7 +323,7 @@ describe("TourHost", () => {
     expect(onboarding.setTourProgress).toHaveBeenCalledTimes(1);
     expect(onboarding.setTourProgress.mock.calls[0]).toEqual([
       ACME_TOUR_ID,
-      { lastOutcome: "withdrawn", lastRunId: expect.any(String), contentVersion: null },
+      { lastOutcome: "withdrawn", lastRunId: expect.any(String) },
     ]);
   });
 
@@ -451,7 +453,6 @@ describe("TourHost", () => {
       expect(onboarding.setTourProgress).toHaveBeenLastCalledWith(ACME_TOUR_ID, {
         lastOutcome: "completed",
         lastRunId: result.status === "started" ? result.runId : "",
-        contentVersion: null,
       });
     });
 
@@ -512,6 +513,11 @@ describe("TourHost", () => {
       const result = await request([ACME_TOUR_ID]);
       expect(result).toMatchObject({ status: "failed", tourId: ACME_TOUR_ID });
       expect(outcomes).toEqual([{ tourId: ACME_TOUR_ID, outcome: "failed", runId: null }]);
+      // An outcome never restamps the saved chapter's version, or a failed v2
+      // load would let a repaired v2 resume a chapter saved under v1.
+      expect(onboarding.setTourProgress).toHaveBeenCalledWith(ACME_TOUR_ID, {
+        lastOutcome: "failed",
+      });
     });
 
     it("answers a request whose tour is withdrawn while it loads as unavailable", async () => {
@@ -567,6 +573,33 @@ describe("TourHost", () => {
         registerAcme();
       });
       await waitFor(() => expect(result?.status).toBe("started"));
+    });
+
+    it("answers a request still waiting for its tour as superseded once another tour opens", async () => {
+      render(<TourHost />);
+      let waiting: TourStartResult | undefined;
+      act(() => {
+        void requestTour([ACME_TOUR_ID], { registrationTimeoutMs: 1_000 }).then(
+          (r) => (waiting = r)
+        );
+      });
+      const daintree = await request([DAINTREE_TOUR_ID]);
+      expect(daintree.status).toBe("started");
+      await waitFor(() => expect(waiting).toEqual({ status: "superseded", tourId: ACME_TOUR_ID }));
+      // Registering afterwards must not open the stale request over the newer tour.
+      await act(async () => {
+        registerAcme();
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+      expect(dialogProps.current!.tour.id).toBe(DAINTREE_TOUR_ID);
+    });
+
+    it("records an open run as withdrawn when its view's host unmounts", async () => {
+      registerAcme();
+      const { unmount } = render(<TourHost />);
+      await request([ACME_TOUR_ID]);
+      unmount();
+      expect(outcomes.map((o) => o.outcome)).toEqual(["withdrawn"]);
     });
 
     it("answers unavailable when no tour host is mounted", async () => {

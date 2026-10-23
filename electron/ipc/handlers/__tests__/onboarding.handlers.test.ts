@@ -321,11 +321,7 @@ describe("registerOnboardingHandlers — discovery IPC", () => {
       seedOnboarding();
       const progress = getHandler("onboarding:tour-set-progress");
       progress(null, PLUGIN_TOUR, { lastChapter: 2, lastChapterId: "intro", contentVersion: "2" });
-      progress(null, PLUGIN_TOUR, {
-        lastOutcome: "dismissed",
-        lastRunId: "run-1",
-        contentVersion: "2",
-      });
+      progress(null, PLUGIN_TOUR, { lastOutcome: "dismissed", lastRunId: "run-1" });
       expect(read().tours[PLUGIN_TOUR]).toEqual({
         completed: false,
         dismissed: false,
@@ -350,6 +346,23 @@ describe("registerOnboardingHandlers — discovery IPC", () => {
       progress(null, PLUGIN_TOUR, { lastChapter: 1, lastChapterId: "two", contentVersion: null });
       expect(read().tours[PLUGIN_TOUR]).not.toHaveProperty("contentVersion");
       expect(read().tours[PLUGIN_TOUR]).toMatchObject({ completed: true, completedVersion: "1" });
+      // Finished again with the version dropped: the old version no longer describes it.
+      progress(null, PLUGIN_TOUR, { completed: true, lastChapter: 0, contentVersion: null });
+      expect(read().tours[PLUGIN_TOUR]).not.toHaveProperty("completedVersion");
+    });
+
+    it("leaves the saved chapter's version alone on an outcome-only write", () => {
+      registerOnboardingHandlers();
+      seedOnboarding();
+      const progress = getHandler("onboarding:tour-set-progress");
+      progress(null, PLUGIN_TOUR, { lastChapter: 1, lastChapterId: "setup", contentVersion: "1" });
+      progress(null, PLUGIN_TOUR, { lastOutcome: "failed" });
+      expect(read().tours[PLUGIN_TOUR]).toMatchObject({
+        lastChapterId: "setup",
+        contentVersion: "1",
+        lastOutcome: "failed",
+      });
+      expect(read().tours[PLUGIN_TOUR]).not.toHaveProperty("lastRunId");
     });
 
     it("reads a completion saved before versions and chapter ids were kept as completed", () => {
@@ -413,11 +426,7 @@ describe("registerOnboardingHandlers — discovery IPC", () => {
       dismiss(null, OTHER_PLUGIN_TOUR);
       // A's late chapter write and outcome arrive after B's completion.
       progress(null, PLUGIN_TOUR, { lastChapter: 2, lastChapterId: "three", contentVersion: "1" });
-      progress(null, PLUGIN_TOUR, {
-        lastOutcome: "dismissed",
-        lastRunId: "run-a",
-        contentVersion: "1",
-      });
+      progress(null, PLUGIN_TOUR, { lastOutcome: "dismissed", lastRunId: "run-a" });
       expect(read().tours).toEqual({
         [PLUGIN_TOUR]: {
           completed: true,

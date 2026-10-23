@@ -37,11 +37,15 @@ export interface TourStatus {
   lastRunId: string | null;
 }
 
-/** Saved progress for the first registered candidate, or the first one when none is. */
+/** Saved progress for the first registered candidate, else the first with saved progress, else the first. */
 export async function readTourStatus(candidates: readonly string[]): Promise<TourStatus> {
-  const tourId = candidates.find((id) => getTour(id) !== undefined) ?? candidates[0]!;
-  const registration = getTour(tourId);
   const state = await getOnboardingState();
+  // A withdrawn tour still has its saved progress, under whichever id it was saved.
+  const tourId =
+    candidates.find((id) => getTour(id) !== undefined) ??
+    candidates.find((id) => state.tours !== undefined && Object.hasOwn(state.tours, id)) ??
+    candidates[0]!;
+  const registration = getTour(tourId);
   const progress = tourProgressFor(state.tours, tourId);
   const version = registration?.summary.version;
   const sameVersion = progress.contentVersion === version;

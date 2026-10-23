@@ -82,6 +82,26 @@ describe("readTourStatus", () => {
     });
   });
 
+  it("finds a withdrawn tour's progress under the qualified id a plugin was given", async () => {
+    getOnboardingStateMock.mockResolvedValue({
+      tours: {
+        [TOUR_ID]: {
+          completed: false,
+          dismissed: false,
+          lastChapter: 0,
+          lastOutcome: "withdrawn",
+          lastRunId: "r2",
+        },
+      },
+    });
+    expect(await readTourStatus(tourCandidates(TOUR_ID, "acme.tools"))).toMatchObject({
+      tourId: TOUR_ID,
+      registered: false,
+      lastOutcome: "withdrawn",
+      lastRunId: "r2",
+    });
+  });
+
   it("still reads saved progress for a tour this view hasn't registered", async () => {
     getOnboardingStateMock.mockResolvedValue({
       tours: { [TOUR_ID]: { completed: false, dismissed: true, lastChapter: 0 } },
