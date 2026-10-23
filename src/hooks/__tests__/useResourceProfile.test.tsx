@@ -20,6 +20,7 @@ import {
 import type { ResourceProfilePayload } from "@shared/types/resourceProfile";
 
 const terminalInstanceService = createTerminalPaintPlane();
+registerTerminalService(terminalInstanceService);
 
 vi.mock("@xterm/addon-webgl", () => ({
   WebglAddon: vi.fn(),
