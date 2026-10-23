@@ -1,6 +1,10 @@
 import { z } from "zod";
 import { BUILT_IN_AGENT_IDS } from "../../../shared/config/agentIds.js";
 import { ForgeListViewSchema } from "../../../shared/utils/forgeListProjection.js";
+import {
+  MAX_WAIT_FOR_PR_TARGETS,
+  MAX_WAIT_FOR_PR_TIMEOUT_MS,
+} from "../../../shared/utils/worktreeSummary.js";
 
 /**
  * The arguments of the actions the host parses itself rather than handing to
@@ -86,3 +90,26 @@ export const SlashCommandsListArgsSchema = z
     agentId: z.enum(BUILT_IN_AGENT_IDS).optional(),
   })
   .optional();
+
+/** `recipe.list`'s arguments. */
+export const RecipeListArgsSchema = z.object({ worktreeId: z.string().optional() }).optional();
+
+/**
+ * `agent.listPresets`'s arguments. The id is any non-empty string, as the
+ * renderer's is: a plugin agent's id is not known here.
+ */
+export const AgentListPresetsArgsSchema = z.object({
+  agentId: z.string().min(1),
+  projectId: z.string().min(1).optional(),
+});
+
+/** `agent.listModels`'s arguments. */
+export const AgentListModelsArgsSchema = z
+  .object({ agentId: z.string().min(1).optional() })
+  .optional();
+
+/** `worktree.waitForPullRequest`'s arguments, bounded as its renderer action bounds them. */
+export const WorktreeWaitForPullRequestArgsSchema = z.object({
+  worktreeIds: z.array(z.string().min(1)).min(1).max(MAX_WAIT_FOR_PR_TARGETS),
+  timeoutMs: z.number().int().min(0).max(MAX_WAIT_FOR_PR_TIMEOUT_MS).optional(),
+});

@@ -1,4 +1,6 @@
 import type { ActionDispatchResult, ActionManifestEntry } from "../../../shared/types/actions.js";
+import type { Project } from "../../../shared/types/project.js";
+import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import {
   ActionsGetSchemaArgsSchema,
   ActionsListArgsSchema,
@@ -7,8 +9,11 @@ import {
   searchActionManifest,
 } from "../../../shared/utils/actionIntrospection.js";
 import { getViewlessHelpBaseManifest } from "../mcp-server/baseManifest.js";
-import type { ViewlessActionRequest } from "./ViewlessActionExecutor.js";
+import type { ViewlessActionRequest, ViewlessDeps } from "./ViewlessActionExecutor.js";
+import { countProjectPanels } from "./viewlessTerminals.js";
+import { readProjectWorktreeListing } from "./viewlessWorktrees.js";
 import {
+  viewlessFailure as failure,
   viewlessSuccess as success,
   viewlessValidationFailure as validationFailure,
 } from "./viewlessResult.js";
@@ -60,4 +65,58 @@ export function runActionsGetSchema(request: ViewlessActionRequest): ActionDispa
   }
   // `policy` is main's to fill, as it is for a view's answer.
   return success({ ok: true, entry, policy: null, error: null });
+}
+
+/**
+ * What a view would report as open, with none attached (#14139): the project,
+ * the worktree its saved layout last selected, and the panels a view would
+ * hydrate. Nothing is focused and no portal is open, because nothing draws
+ * them, so those fields are left out rather than guessed.
+ */
+export async function runActionsGetContext(
+  request: ViewlessActionRequest,
+  project: Project,
+  deps: ViewlessDeps
+): Promise<ActionDispatchResult> {
+  const contextWorktreeId =
+    request.context?.projectId === undefined || request.context.projectId === project.id
+      ? request.context?.activeWorktreeId
+      : undefined;
+  try {
+    const [state, listing, terminalCount] = await Promise.all([
+      deps.getProjectState(project.id).catch(() => null),
+      readProjectWorktreeListing(project, deps),
+      countProjectPanels(project, deps),
+    ]);
+    // With no host, or one that answered an empty list before classifying the
+    // folder, the inventory is unknown, which is not none.
+    const worktrees = listing?.worktrees ?? null;
+    if (worktrees === null || (worktrees.length === 0 && listing?.gitBacked === null)) {
+      return failure(
+        "EXECUTION_ERROR",
+        "The workspace host hasn't listed this project's worktrees yet"
+      );
+    }
+    const activeWorktreeId = contextWorktreeId ?? state?.activeWorktreeId;
+    const activeWorktree =
+      activeWorktreeId !== undefined
+        ? worktrees.find((worktree) => worktree.id === activeWorktreeId)
+        : undefined;
+    return success({
+      projectId: project.id,
+      projectName: project.name,
+      projectPath: project.path,
+      activeWorktreeId,
+      activeWorktreeName: activeWorktree?.name,
+      activeWorktreePath: activeWorktree?.path,
+      activeWorktreeBranch: activeWorktree?.branch,
+      activeWorktreeIsMain: activeWorktree?.isMainWorktree,
+      portalOpen: false,
+      portalActiveTabId: null,
+      terminalCount,
+      worktreeCount: worktrees.length,
+    });
+  } catch (err) {
+    return failure("EXECUTION_ERROR", formatErrorMessage(err, "Failed to read the action context"));
+  }
 }

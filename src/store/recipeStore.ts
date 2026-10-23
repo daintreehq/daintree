@@ -60,6 +60,11 @@ import type { AgentCliDetail } from "@shared/types/ipc";
 import type { TerminalSpawnSource, AddPanelFocusPolicy } from "@shared/types/panel";
 import { isInRepoRecipeId, safeRecipeFilename } from "@shared/utils/recipeFilename";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
+import {
+  hydrateInRepoRecipeUsage,
+  mergeRecipes,
+  stripSessionOverridesFromRecipe,
+} from "@shared/utils/recipeListing";
 import { deepEqualIgnoringUndefined } from "@shared/utils/layoutMerge";
 import { notify } from "@/lib/notify";
 import { logError } from "@/utils/logger";
@@ -186,59 +191,6 @@ async function openRecipePluginPanel(
   );
   if (!result.ok) throw new Error(result.error.message);
   return result.result.panelId;
-}
-
-// Recipes read from disk may still contain agentModelId/agentLaunchFlags/location
-// if they were written by an older build before those fields were stripped on
-// persist. Treat them as session-only state and drop them at load time.
-//
-// `origin` is dropped for a different reason: this runs over the three
-// USER-OWNED tiers, whose files a user can hand-edit and whose schema is
-// `.passthrough()`. An `origin` present there is a forgery — only the plugin
-// registry stamps real provenance — and honouring it would route that recipe's
-// writes into the plugin sidecar and make it undeletable (#11860). The fields
-// only a plugin's own recipe carries (#13797) go for the same reason.
-function stripSessionOverridesFromRecipe(recipe: TerminalRecipe): TerminalRecipe {
-  let changed = false;
-  const terminals = recipe.terminals.map((terminal) => {
-    if (
-      terminal.agentModelId === undefined &&
-      terminal.agentLaunchFlags === undefined &&
-      terminal.location === undefined &&
-      terminal.systemPrompt === undefined &&
-      terminal.panelKindId === undefined &&
-      terminal.panelArgs === undefined
-    ) {
-      return terminal;
-    }
-    changed = true;
-    const {
-      agentModelId: _m,
-      agentLaunchFlags: _f,
-      location: _l,
-      systemPrompt: _sp,
-      panelKindId: _pk,
-      panelArgs: _pa,
-      ...rest
-    } = terminal;
-    return rest;
-  });
-  if (
-    recipe.shadowedBy !== undefined ||
-    recipe.origin !== undefined ||
-    recipe.pluginVariables !== undefined ||
-    recipe.requiresAgentTools !== undefined
-  ) {
-    const {
-      shadowedBy: _s,
-      origin: _o,
-      pluginVariables: _pv,
-      requiresAgentTools: _rt,
-      ...rest
-    } = recipe;
-    return { ...rest, ...(changed ? { terminals } : {}) };
-  }
-  return changed ? { ...recipe, terminals } : recipe;
 }
 
 function sanitizeRecipeTerminal(terminal: RecipeTerminal): RecipeTerminal {
@@ -446,51 +398,6 @@ function reuseIfEqual<T>(previous: T, next: T): T {
   return deepEqualIgnoringUndefined(previous, next) ? previous : next;
 }
 
-/**
- * Flatten the four recipe tiers into the list the UI renders.
- *
- * `pluginRecipes` is REQUIRED and deliberately has no default: a default would
- * let any one of the dozen mutation sites silently drop every plugin recipe
- * from the merged view by forgetting to pass it, whereas an omission is now a
- * compile error (#11860).
- */
-function mergeRecipes(
-  globalRecipes: TerminalRecipe[],
-  projectRecipes: TerminalRecipe[],
-  inRepoRecipes: TerminalRecipe[],
-  pluginRecipes: TerminalRecipe[]
-): TerminalRecipe[] {
-  // Project-local recipes that share a name with an in-repo recipe are kept but
-  // marked as shadowed so the UI can surface them dimmed instead of hiding them.
-  // ProjectFileStore also carries a reconciled mirror of each in-repo recipe so
-  // runtime metadata can survive. Do not render those mirrors as project-local
-  // duplicates; use the mirror as the displayed in-repo recipe instead.
-  const inRepoIds = new Set(inRepoRecipes.map((r) => r.id));
-  const inRepoNames = new Set(inRepoRecipes.map((r) => r.name));
-  const inRepoMirrors = new Map(
-    projectRecipes
-      .filter((r) => inRepoIds.has(r.id) && isInRepoRecipeId(r))
-      .map((r) => [r.id, r] as const)
-  );
-  const projectLocalRecipes = projectRecipes.filter(
-    (r) => !(inRepoIds.has(r.id) && isInRepoRecipeId(r))
-  );
-  const projectWithMarkers = projectLocalRecipes.map((r) =>
-    inRepoNames.has(r.name) ? { ...r, shadowedBy: r.name } : r
-  );
-  const inRepoWithMirrors = inRepoRecipes.map((r) => {
-    const mirror = inRepoMirrors.get(r.id);
-    if (!mirror) return r;
-    const { shadowedBy: _shadowedBy, ...displayRecipe } = mirror;
-    return displayRecipe;
-  });
-  // Plugin recipes sit with the other always-available entries and take no part
-  // in name shadowing: their ids are plugin-qualified, so identity is exact and
-  // a user recipe that happens to share a display name is a different recipe,
-  // not an override of one.
-  return [...globalRecipes, ...pluginRecipes, ...projectWithMarkers, ...inRepoWithMirrors];
-}
-
 const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
   recipes: [],
   globalRecipes: [],
@@ -557,14 +464,10 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
       // ProjectFileStore mirror (#11354). RecipeManager renders inRepoRecipes
       // directly, so hydrate those fields from the mirror; otherwise team
       // recipes read "Never used" after every reload despite being persisted.
-      const inRepoMirrorMeta = new Map(
-        projectRecipes.filter((r) => isInRepoRecipeId(r)).map((r) => [r.id, r] as const)
+      const inRepoRecipes = hydrateInRepoRecipeUsage(
+        inRepoRecipesRaw.map(stripSessionOverridesFromRecipe),
+        projectRecipes
       );
-      const inRepoRecipes = inRepoRecipesRaw.map(stripSessionOverridesFromRecipe).map((r) => {
-        const mirror = inRepoMirrorMeta.get(r.id);
-        if (!mirror) return r;
-        return { ...r, lastUsedAt: mirror.lastUsedAt, usageHistory: mirror.usageHistory };
-      });
       // Focus reloads usually read back exactly what is already in memory.
       // Keep the existing array identities when the content is unchanged so
       // every `recipes` subscriber doesn't re-render for a no-op refresh.

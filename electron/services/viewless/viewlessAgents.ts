@@ -3,14 +3,19 @@ import { z } from "zod";
 import { CHANNELS } from "../../ipc/channels.js";
 import type { ActionDispatchResult } from "../../../shared/types/actions.js";
 import type { PanelSnapshot, Project } from "../../../shared/types/project.js";
+import type { ResolvedModelCatalog } from "../../../shared/types/ipc/agentCapabilities.js";
 import { LAUNCH_CONTEXT_AGENT_IDS } from "../../../shared/config/agentLaunchContext.js";
 import {
   getEffectiveAgentConfig,
   getEffectiveRegistry,
+  type AgentPreset,
   getUserRegistry,
   isEffectivelyRegisteredAgent,
 } from "../../../shared/config/agentRegistry.js";
-import { agentClipboardDirectory } from "../../../shared/types/agentSettings.js";
+import {
+  agentClipboardDirectory,
+  type AgentSettings,
+} from "../../../shared/types/agentSettings.js";
 import { NotifyReplyLinesSchema } from "../../../shared/types/terminalNotify.js";
 import { WaitForReplySchema, WaitSecondsSchema } from "../../../shared/types/replyWait.js";
 import { isAgentLaunchable } from "../../../shared/utils/agentAvailability.js";
@@ -23,7 +28,8 @@ import {
   resolveAgentLaunchKind,
   unknownAgentIdMessage,
 } from "../../../shared/utils/agentLaunchValidation.js";
-import { buildAvailableAgentListing } from "../../../shared/utils/agentListing.js";
+import { buildAvailableAgentListing, listedAgentIds } from "../../../shared/utils/agentListing.js";
+import { getMergedPresetIdentities } from "../../../shared/utils/agentPresets.js";
 import {
   hasSystemPromptOverride,
   resolveSystemPromptArgs,
@@ -47,6 +53,7 @@ import type { ViewlessActionRequest, ViewlessDeps } from "./ViewlessActionExecut
 import { recordViewlessTerminal } from "./projectStateAuthoring.js";
 import { countProjectPanels } from "./viewlessTerminals.js";
 import { readProjectWorktrees } from "./viewlessWorktrees.js";
+import { AgentListModelsArgsSchema, AgentListPresetsArgsSchema } from "./viewlessArgsSchemas.js";
 import {
   viewlessFailure as failure,
   viewlessSuccess as success,
@@ -103,6 +110,50 @@ function declined(
     panelLimit,
     reply: null,
   });
+}
+
+/** One agent's bucket of a by-agent preset map, own keys only, so `__proto__` is no agent. */
+function ownBucket(
+  byAgent: Record<string, AgentPreset[]>,
+  agentId: string
+): AgentPreset[] | undefined {
+  if (!Object.hasOwn(byAgent, agentId)) return undefined;
+  const bucket = byAgent[agentId];
+  return Array.isArray(bucket) ? bucket : undefined;
+}
+
+/**
+ * The preset sources a launch with no view resolves a preset id against, read
+ * once for the launch and the listing alike, so `agent.listPresets` names
+ * exactly the presets `agent.launch` accepts (#14139). A source that fails to
+ * read is launched without, and makes the read incomplete.
+ */
+async function readPresetSources(
+  agentId: string,
+  projectPath: string | undefined,
+  deps: ViewlessDeps
+): Promise<{
+  settings: AgentSettings | null;
+  ccrPresets: AgentPreset[] | undefined;
+  projectPresets: AgentPreset[] | undefined;
+  complete: boolean;
+}> {
+  let complete = true;
+  const missing = <T>(fallback: T) => {
+    complete = false;
+    return fallback;
+  };
+  const [settings, ccrPresets, projectPresets] = await Promise.all([
+    deps.agents.getSettings().catch(() => missing(null)),
+    deps.agents.getCcrPresets(agentId).catch(() => missing(undefined)),
+    projectPath === undefined
+      ? Promise.resolve(undefined)
+      : deps.agents
+          .getProjectPresets(projectPath)
+          .then((byAgent) => ownBucket(byAgent, agentId))
+          .catch(() => missing(undefined)),
+  ]);
+  return { settings, ccrPresets, projectPresets, complete };
 }
 
 /**
@@ -254,11 +305,11 @@ export async function runAgentLaunch(
 
   const handbackCode = args.handback === true ? mintHandbackCode() : undefined;
   const agentConfig = getEffectiveAgentConfig(agentId);
-  const settings = await deps.agents.getSettings().catch(() => null);
-  const [ccrPresets, projectPresets] = await Promise.all([
-    deps.agents.getCcrPresets(agentId).catch(() => undefined),
-    deps.agents.getProjectPresets(project.path).catch(() => ({}) as Record<string, never>),
-  ]);
+  const { settings, ccrPresets, projectPresets } = await readPresetSources(
+    agentId,
+    project.path,
+    deps
+  );
   const plan = await buildAgentLaunchPlan({
     agentId,
     agentConfig,
@@ -266,7 +317,7 @@ export async function runAgentLaunch(
     worktreeId,
     settings,
     ccrPresets,
-    projectPresets: projectPresets[agentId],
+    projectPresets,
     options: {
       presetId: args.presetId,
       env: args.env,
@@ -438,11 +489,11 @@ export async function spawnHostAssistant(
   deps: ViewlessDeps
 ): Promise<boolean> {
   const { agentId } = spec;
-  const settings = await deps.agents.getSettings().catch(() => null);
-  const [ccrPresets, projectPresets] = await Promise.all([
-    deps.agents.getCcrPresets(agentId).catch(() => undefined),
-    deps.agents.getProjectPresets(project.path).catch(() => ({}) as Record<string, never>),
-  ]);
+  const { settings, ccrPresets, projectPresets } = await readPresetSources(
+    agentId,
+    project.path,
+    deps
+  );
   const plan = await buildAgentLaunchPlan({
     agentId,
     agentConfig: getEffectiveAgentConfig(agentId),
@@ -450,7 +501,7 @@ export async function spawnHostAssistant(
     worktreeId: null,
     settings,
     ccrPresets,
-    projectPresets: projectPresets[agentId],
+    projectPresets,
     options: {
       env: spec.env,
       prompt: spec.prompt,
@@ -523,5 +574,76 @@ export async function runAgentListAvailable(
     );
   } catch (err) {
     return failure("EXECUTION_ERROR", formatErrorMessage(err, "Failed to list agents"));
+  }
+}
+
+/**
+ * One agent's launchable presets with no view (#14139), from the sources a
+ * launch here resolves against, and none for an agent it would refuse. Another project's repository presets are
+ * left out and the listing marked incomplete, as a view's listing does.
+ */
+export async function runAgentListPresets(
+  request: ViewlessActionRequest,
+  project: Project,
+  deps: ViewlessDeps
+): Promise<ActionDispatchResult> {
+  const parsed = AgentListPresetsArgsSchema.safeParse(request.args ?? {});
+  if (!parsed.success) return validationFailure(request.actionId, parsed.error);
+  const { agentId, projectId } = parsed.data;
+  // A launch here refuses an id the registry doesn't have, so none of the
+  // presets saved under it would launch.
+  if (!isEffectivelyRegisteredAgent(agentId)) {
+    return success({ presetsComplete: true, presets: [] });
+  }
+  const ownProject = projectId === undefined || projectId === project.id;
+  const sources = await readPresetSources(agentId, ownProject ? project.path : undefined, deps);
+  const entry =
+    sources.settings?.agents && Object.hasOwn(sources.settings.agents, agentId)
+      ? sources.settings.agents[agentId]
+      : undefined;
+  return success({
+    presetsComplete: sources.complete && ownProject,
+    presets: getMergedPresetIdentities(
+      agentId,
+      entry?.customPresets,
+      sources.ccrPresets,
+      sources.projectPresets
+    ),
+  });
+}
+
+/** Each listed agent's model ids and names with no view (#14139), from the host's model catalog. */
+export async function runAgentListModels(
+  request: ViewlessActionRequest,
+  project: Project,
+  deps: ViewlessDeps
+): Promise<ActionDispatchResult> {
+  const parsed = AgentListModelsArgsSchema.safeParse(request.args);
+  if (!parsed.success) return validationFailure(request.actionId, parsed.error);
+  const agentId = parsed.data?.agentId;
+  const registry = getEffectiveRegistry();
+  if (agentId !== undefined && !Object.hasOwn(registry, agentId)) {
+    return failure("VALIDATION_ERROR", unknownAgentIdMessage(agentId));
+  }
+  const ids = agentId !== undefined ? [agentId] : listedAgentIds(registry);
+  try {
+    const agents = await Promise.all(
+      ids.map(async (id) => {
+        const catalog = await deps.invoke<ResolvedModelCatalog | null>(
+          project.id,
+          CHANNELS.AGENT_CAPABILITIES_GET_RESOLVED_MODEL_LIST,
+          [id]
+        );
+        // Projected by hand, as a view projects it: the catalog also carries
+        // context windows and upgrade pointers.
+        return {
+          agentId: id,
+          models: (catalog?.models ?? []).map((m) => ({ id: m.id, name: m.name })),
+        };
+      })
+    );
+    return success({ agents });
+  } catch (err) {
+    return failure("EXECUTION_ERROR", formatErrorMessage(err, "Failed to list models"));
   }
 }

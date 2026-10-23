@@ -61,6 +61,44 @@ export const MAX_WAIT_UNTIL_READY_TIMEOUT_MS = 25_000;
  */
 const WAIT_UNTIL_READY_POLL_INTERVAL_MS = 500;
 
+/**
+ * Same ceiling as the readiness wait, and for the same reason. PR detection
+ * polls every 30s focused and every 2 minutes blurred, so several expired
+ * calls in a row are normal.
+ */
+export const MAX_WAIT_FOR_PR_TIMEOUT_MS = 25_000;
+
+export const MAX_WAIT_FOR_PR_TARGETS = 32;
+
+/**
+ * One `worktree.waitForPullRequest` row, read off a worktree the caller holds.
+ *
+ * Absent means not yet arrived, or deleted mid-wait. Neither has a PR to
+ * report, and neither should cost the sibling rows their answer. `linked` is
+ * the source of truth (#8452); the flat pr* fields can outlive a branch switch
+ * that cleared it. `linked: null` is that explicit clear, and it reads as "not
+ * detected" like absence does.
+ */
+export function toPullRequestWaitRow(
+  worktreeId: string,
+  worktree: Pick<Worktree, "linked"> | undefined
+) {
+  const pr = worktree?.linked?.pr;
+  return {
+    worktreeId,
+    prNumber: pr?.ref.number ?? null,
+    prUrl: pr?.url ?? null,
+    prState: pr?.state ?? null,
+  };
+}
+
+/**
+ * The refusal for a waited-on id the host lacks. Static, per the repo-wide
+ * rule: an error message never carries the rejected input back out.
+ */
+export const UNKNOWN_WORKTREE_MESSAGE =
+  "Unknown worktree — the workspace host has no worktree with that id.";
+
 /** States a wait stops on — every state that is not still in progress. */
 const SETTLED_SETUP_STATES = new Set(["ready", "failed", "timed-out", "needs-approval", "unknown"]);
 
@@ -90,10 +128,9 @@ export async function waitForWorktreeSetup(
   for (;;) {
     const status = await readStatus(worktreeId);
     if (status === null) {
-      // Static, per the repo-wide rule: an error message must never carry
-      // the rejected input back out. The id is the caller's own argument,
-      // so naming it adds nothing it does not already have.
-      throw new Error("Unknown worktree — the workspace host has no worktree with that id.");
+      // The id is the caller's own argument, so naming it adds nothing it
+      // does not already have.
+      throw new Error(UNKNOWN_WORKTREE_MESSAGE);
     }
     const state = status?.state ?? "unknown";
     const settled = SETTLED_SETUP_STATES.has(state);
