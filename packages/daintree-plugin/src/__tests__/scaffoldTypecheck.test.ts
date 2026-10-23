@@ -164,6 +164,58 @@ describe("a scaffolded view typechecks", () => {
     expect(typecheck(result.dir, {}, files)).toEqual([]);
   }, 60_000);
 
+  it("app --project: its source, stories, tests and build config all typecheck", async () => {
+    const projectRoot = path.join(tmpDir, "repo");
+    await fs.mkdir(projectRoot, { recursive: true });
+    const result = await scaffoldPlugin({
+      cwd: projectRoot,
+      targetDir: "orders",
+      publisher: "shop",
+      displayName: "Order Desk",
+      template: "app",
+      projectRoot,
+    });
+    await linkDependencies(result.dir);
+    const require = createRequire(import.meta.url);
+    const modules = path.join(result.dir, "node_modules");
+    for (const name of ["@playwright/test", "@types/node", "vitest", "vite"]) {
+      await fs.mkdir(path.dirname(path.join(modules, name)), { recursive: true });
+      await fs.symlink(
+        path.dirname(require.resolve(`${name}/package.json`)),
+        path.join(modules, name)
+      );
+    }
+    const packages = path.resolve(sdkDir, "..");
+    const extra = (await fs.readdir(result.dir, { recursive: true }))
+      .map((file) => file.split(path.sep).join("/"))
+      .filter(
+        (file) => /^(review|__tests__)\/.*\.tsx?$/.test(file) || /^[a-z]+\.config\.ts$/.test(file)
+      );
+    expect(extra).toContain("__tests__/worker.test.ts");
+    const messages = typecheck(
+      result.dir,
+      {
+        paths: {
+          "@daintreehq/plugin-sdk": [path.join(sdkDir, "src/index.ts")],
+          "@daintreehq/plugin-sdk/react": [path.join(sdkDir, "src/react.ts")],
+          "@daintreehq/plugin-sdk/operations": [path.join(sdkDir, "src/operations.ts")],
+          "@daintreehq/plugin-sdk/testing": [path.join(sdkDir, "src/testing.ts")],
+          "@daintreehq/plugin-sdk/testing/preview": [path.join(sdkDir, "src/testing-preview.ts")],
+          "@daintreehq/plugin-sdk/testing/playwright": [
+            path.join(sdkDir, "src/testing-playwright.ts"),
+          ],
+          "@daintreehq/plugin-vite": [path.join(packages, "plugin-vite/src/index.ts")],
+          "@daintreehq/tour": [path.join(packages, "tour/src/index.ts")],
+          "@daintreehq/tour/react": [path.join(packages, "tour/src/react.ts")],
+          "@daintreehq/tour/kit": [path.join(packages, "tour/src/kit.ts")],
+          "@daintreehq/tour/mock-app": [path.join(packages, "tour/src/mock-app.ts")],
+        },
+      },
+      extra
+    );
+    expect(messages).toEqual([]);
+  }, 120_000);
+
   it("fails the same probe without the opt-in, which is what the entries fix", async () => {
     const result = await scaffoldPlugin({
       cwd: tmpDir,

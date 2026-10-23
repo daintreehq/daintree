@@ -182,7 +182,7 @@ createElement(DataTable, {
 
 ## Write the data contract down
 
-An agent edits your data knowing only what it reads. Put the contract in the plugin's own `AGENTS.md` and point to it from the project's root `AGENTS.md` / `CLAUDE.md`:
+An agent edits your data knowing only what it reads. Put the contract in the plugin's own `AGENTS.md`, beside `plugin.json`. Whether the project's root `AGENTS.md` / `CLAUDE.md` points to it is the user's choice, never something a plugin or generator writes:
 
 ```markdown
 ## Budget data (acme.budget)

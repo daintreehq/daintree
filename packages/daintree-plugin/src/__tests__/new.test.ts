@@ -866,11 +866,13 @@ describe("runNew --project", () => {
 
     await runNew("dash", { yes: true, publisher: "acme", project: true });
 
-    const manifest = await readJson(
-      path.join(root, ".daintree", "plugins", "acme.dash", "plugin.json")
-    );
+    const pluginDir = path.join(root, ".daintree", "plugins", "acme.dash");
+    const manifest = await readJson(path.join(pluginDir, "plugin.json"));
     expect(manifest.name).toBe("acme.dash");
     expect(manifest.scope).toBe("project");
+    // With no --template, --project scaffolds the application, already built.
+    expect((manifest.application as { name: string }).name).toBe("Dash");
+    await expect(fs.access(path.join(pluginDir, "dist", "index.js"))).resolves.toBeUndefined();
     await expect(
       fs.access(path.join(root, ".daintree", "recipes", "acme.dash-watch.json"))
     ).resolves.toBeUndefined();

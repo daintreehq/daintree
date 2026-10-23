@@ -1,0 +1,12 @@
+{
+  "chapters": [
+    {
+      "id": "requests",
+      "narration": "Request Desk keeps this project's [[list]] requests beside your agents. Ask an agent to add or move one, and its [[tools]] tools change the list you are looking at."
+    },
+    {
+      "id": "reports",
+      "narration": "Connect the report provider, then build a [[report]] report. It runs in the background, survives a restart, and opens [[preview]] here when it is ready."
+    }
+  ]
+}

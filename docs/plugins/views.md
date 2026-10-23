@@ -734,7 +734,9 @@ An agent can call the `plugin.capturePanel` MCP tool (`full` tier) with a panel'
 
 ## Media and binary files
 
-`host.fs.readFile` returns UTF-8 text and nothing else. For an image, an audio file or anything binary, don't route the bytes through the worker at all: the renderer reads the file itself over Daintree's file protocols, as the file viewer does. Both take the same query — an absolute `path` and an absolute `root` — and realpath-contain `path` under `root`, answering 404 for anything outside it; the project root is the natural `root` for a project plugin.
+`host.fs.readFile` returns UTF-8 text and nothing else. For audio, video or a large file, use [artifacts](./host-api.md#artifacts--large-files-the-host-holds-and-streams), the supported route: the worker calls `host.artifacts.import({ path })` (`artifact:store`, plus the fs read capability for the path's root), returns the metadata-only `PluginArtifact` to the view over a channel, and the view plays it with the kit's [`MediaPlayer`](./ui-kit.md#media) or previews it with `MediaThumbnail`, which mint their own leased sources and seek by byte range. Nothing is buffered into the view, and `plugins/sample-project/acme.tour` does exactly this.
+
+For a small image or a quick in-document preview, the renderer can also read the file itself over Daintree's file protocols, as the file viewer does. Both take the same query — an absolute `path` and an absolute `root` — and realpath-contain `path` under `root`, answering 404 for anything outside it; the project root is the natural `root` for a project plugin.
 
 **Audio and video: point the element at `daintree-media://`.** It is the scheme Daintree's own audio and video previews play from: media only (a file that isn't audio or video is a 404), served in byte ranges, so the element streams and seeks rather than downloading the whole file first.
 
@@ -746,7 +748,7 @@ createElement("video", { src, controls: true });
 
 The scheme has no `fetch()` surface, only element loads, so a failure shows up as the element's `error` event. To check the file first — that it exists, or its size — send a `HEAD` to the same `path` and `root` on `daintree-file://load?…`, which answers with its `Content-Length` without reading it; the file viewer does exactly that before it mounts a player. A file rewritten in place needs a new URL to play its new bytes, since the element keeps what it has buffered; add a query parameter of your own (`&v=2`), which both schemes ignore.
 
-**Any other binary: fetch from `daintree-file://` into a blob.**
+**A small binary you need as bytes: fetch from `daintree-file://` into a blob.** This buffers the whole file in the view, so keep it to small files; anything large belongs in an artifact.
 
 ```js
 const url = `daintree-file://load?path=${encodeURIComponent(absPath)}&root=${encodeURIComponent(projectRoot)}`;
