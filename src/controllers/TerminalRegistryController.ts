@@ -157,7 +157,7 @@ class TerminalRegistryController {
       // Awaited so the instance exists before any sendPtyResize below targets
       // it — prewarmTerminal is async now that the lazy Unicode11 addon is
       // loaded during terminal construction (#10840).
-      const service = await loadTerminalService();
+      const service = peekTerminalService() ?? (await loadTerminalService());
       await service.prewarmTerminal(id, launchAgentId, terminalOptions, {
         offscreen,
         widthPx,
