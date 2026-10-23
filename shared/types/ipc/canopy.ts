@@ -219,6 +219,22 @@ export interface CanopyTerminalView {
   } | null;
 }
 
+/**
+ * Where "Open in Assistant" lands: the exact lane of a project, or the global
+ * session, with the run it was resolved against. A lane is never defaulted and
+ * the global session never names a project.
+ */
+export type AssistantOpenDestination =
+  | {
+      scope: "project";
+      hostId: string;
+      projectId: string;
+      lane: number;
+      terminalId: string;
+      incarnation: number;
+    }
+  | { scope: "global"; hostId: string; terminalId: string; incarnation: number };
+
 /** What a watched terminal's stream carries, in order. */
 export type CanopyTerminalData =
   | {

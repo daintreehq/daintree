@@ -91,6 +91,11 @@ export interface ProjectSwitchOutgoingState {
 export type ProjectFocusOnActivateIntent =
   | { intent: "focus-next-waiting" }
   | { intent: "focus-panel"; panelId: string }
+  /**
+   * "Open in Assistant" on a lane of this project: show that exact lane if it
+   * still runs the same session, and nothing else — never a launch or resume.
+   */
+  | { intent: "open-assistant"; subject: import("../agentDirectory.js").AgentDirectorySubject }
   | {
       /**
        * A plugin's OS banner was clicked (#13505): run its first action, which

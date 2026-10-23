@@ -4,6 +4,17 @@ import type { PtyClient } from "../../services/PtyClient.js";
 import { CHANNELS } from "../channels.js";
 import type { ProjectPushTarget } from "../utils.js";
 
+/**
+ * What ties a watch to a Daintree Assistant rather than a worker: main's own
+ * hold on the run, asked again on every use, and a way to hear it end before
+ * any output says so.
+ */
+export interface AssistantWatchBinding {
+  isBound(): boolean;
+  onEnded(end: () => void): () => void;
+  mayType(webContentsId: number): boolean;
+}
+
 interface GridSize {
   cols: number;
   rows: number;
@@ -42,6 +53,7 @@ interface Watch {
   mayResize: () => boolean;
   /** End the stream, telling the view, with no size to hand back. */
   end: () => void;
+  binding: AssistantWatchBinding | null;
 }
 
 /** At most one terminal per view: the one its canopy panel has selected. */
@@ -105,7 +117,8 @@ export async function watchTerminal(
    * awaited anything; by default, the one running now.
    */
   launchGeneration: number | null = ptyClient.getLiveGeneration(runId),
-  mayResize: () => boolean = () => true
+  mayResize: () => boolean = () => true,
+  binding: AssistantWatchBinding | null = null
 ): Promise<CanopyTerminalView> {
   stopWatch(sender.id);
   const watchId = ++nextWatchId;
@@ -172,6 +185,7 @@ export async function watchTerminal(
     send({ kind: "resize", watchId, runId, cols: applied.cols, rows: applied.rows });
   };
   let releaseMirror: (() => void) | undefined;
+  let releaseBinding: (() => void) | undefined;
   const watch: Watch = {
     watchId,
     runId,
@@ -184,8 +198,11 @@ export async function watchTerminal(
     // otherwise hand the successor's generation to this stream.
     launchGeneration,
     isCurrent: () =>
-      watch.launchGeneration === null || ptyClient.isLiveGeneration(runId, watch.launchGeneration),
+      (watch.launchGeneration === null ||
+        ptyClient.isLiveGeneration(runId, watch.launchGeneration)) &&
+      (binding === null || binding.isBound()),
     mayResize,
+    binding,
     end: () => end(),
     stop: (restore) => {
       const held = holders.get(runId) === sender.id;
@@ -210,6 +227,7 @@ export async function watchTerminal(
       ptyClient.off("exit", onExit);
       ptyClient.off("host-crash", end);
       releaseMirror?.();
+      releaseBinding?.();
     },
   };
   function end() {
@@ -231,6 +249,8 @@ export async function watchTerminal(
     ptyClient.on("exit", onExit);
     ptyClient.on("host-crash", end);
     releaseMirror = ptyClient.acquireIpcDataMirror(runId);
+    // A replacement can be silent: the successor may print nothing for a while.
+    releaseBinding = binding?.onEnded(end);
   } catch (error) {
     stopWatch(sender.id);
     throw error;
@@ -356,14 +376,19 @@ export function stopAllTerminalWatches(): void {
 export function watchedTerminal(
   webContentsId: number,
   watchId: number
-): { runId: string; spawnedAt: number } | null {
+): { runId: string; spawnedAt: number; assistant: boolean; mayType: boolean } | null {
   const watch = watches.get(webContentsId);
   if (!watch || watch.watchId !== watchId) return null;
   if (!watch.isCurrent()) {
     watch.end();
     return null;
   }
-  return { runId: watch.runId, spawnedAt: watch.spawnedAt };
+  return {
+    runId: watch.runId,
+    spawnedAt: watch.spawnedAt,
+    assistant: watch.binding !== null,
+    mayType: watch.binding === null || watch.binding.mayType(webContentsId),
+  };
 }
 
 /** Test seam: what each view is watching. */

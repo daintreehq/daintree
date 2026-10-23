@@ -2,7 +2,8 @@
 import { renderHook, act } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 
-type FocusPayload = { intent: "focus-next-waiting" };
+type FocusPayload =
+  { intent: "focus-next-waiting" } | { intent: "open-assistant"; subject: Record<string, unknown> };
 
 const onFocusOnActivateMock = vi.hoisted(() =>
   vi.fn<(cb: (payload: FocusPayload) => void) => () => void>()
@@ -25,6 +26,9 @@ vi.mock("@/services/ActionService", () => ({
   },
 }));
 
+const activateLaneMock = vi.hoisted(() => vi.fn(async () => ({ ok: true })));
+vi.mock("@/services/assistantSubject", () => ({ activateAssistantLane: activateLaneMock }));
+
 import { useFocusOnActivateIntent } from "../useFocusOnActivateIntent";
 
 describe("useFocusOnActivateIntent", () => {
@@ -39,6 +43,26 @@ describe("useFocusOnActivateIntent", () => {
       lastCallback = cb;
       return unsubscribe as () => void;
     });
+  });
+
+  it("opens the exact assistant lane it was sent, once hydrated, dispatching nothing else", () => {
+    const subject = {
+      hostId: "local",
+      scope: { kind: "project", projectId: "p1" },
+      terminalId: "t1",
+      incarnation: 3,
+      lane: 2,
+    };
+    const { rerender } = renderHook(({ loaded }) => useFocusOnActivateIntent(loaded), {
+      initialProps: { loaded: false },
+    });
+    act(() => {
+      lastCallback?.({ intent: "open-assistant", subject });
+    });
+    expect(activateLaneMock).not.toHaveBeenCalled();
+    rerender({ loaded: true });
+    expect(activateLaneMock).toHaveBeenCalledWith(subject);
+    expect(dispatchMock).not.toHaveBeenCalled();
   });
 
   it("does NOT dispatch when intent arrives before hydration completes", () => {

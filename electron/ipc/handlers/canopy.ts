@@ -12,6 +12,7 @@ import type {
   CanopyTarget,
   CanopyTier,
   CanopyTerminalView,
+  AssistantOpenDestination,
   CanopyRenameRequest,
   CanopyRestoreRequest,
   CanopyTrashRequest,
@@ -61,6 +62,10 @@ import {
 } from "./canopyTerminalWatch.js";
 import { isImageAttachmentPath } from "../../../shared/utils/imageAttachmentInput.js";
 import { AppError } from "../../utils/errorTypes.js";
+import type { AgentDirectorySubject } from "../../../shared/types/agentDirectory.js";
+import { resolveLiveAssistant } from "../../services/assistants/liveAssistantSubject.js";
+import { LOCAL_HOST_ID } from "../../../shared/types/remoteHosts.js";
+import { peekGlobalAssistantService } from "../../services/globalAssistant.js";
 import { answerRunByLabel, isAnswerLabel } from "../../services/terminalAnswer.js";
 import { isCanopyViewerEndpointId } from "../endpoint.js";
 import { terminalAnswerOf } from "../../../shared/utils/terminalSubmission.js";
@@ -452,7 +457,10 @@ async function assertSameIncarnation(runId: string, target: CanopyTarget): Promi
 }
 
 /** The terminal a view's current stream is for, or a refusal naming nothing on screen. */
-function requireWatched(viewId: number, watchId: unknown): { runId: string; spawnedAt: number } {
+function requireWatched(
+  viewId: number,
+  watchId: unknown
+): { runId: string; spawnedAt: number; assistant: boolean; mayType: boolean } {
   if (typeof watchId !== "number" || !Number.isInteger(watchId)) throw new Error("Invalid stream");
   const watched = watchedTerminal(viewId, watchId);
   if (!watched) throw new Error("That agent isn't running any more.");
@@ -839,6 +847,52 @@ function isViewer(ctx: IpcContext): boolean {
   return isCanopyViewerEndpointId(ctx.endpoint.endpointId);
 }
 
+/** Where main holds the assistants a person can view; read at the moment of use. */
+async function liveAssistantSources() {
+  const { helpSessionService } = await import("../../services/HelpSessionService.js");
+  const global = peekGlobalAssistantService();
+  return {
+    hostId: LOCAL_HOST_ID,
+    ptyClient: requirePtyClient(),
+    getRunningLaneSession: (projectId: string, slot: number) =>
+      helpSessionService.getRunningLaneSession(projectId, slot),
+    onSessionEnded: (
+      listener: (event: { projectId: string; slot: number; sessionId: string }) => void
+    ) => helpSessionService.addSessionEndedListener(listener),
+    global: global
+      ? {
+          getState: () => global.getState(),
+          onChange: (listener: () => void) => global.onChange(() => listener()),
+          inputOwnerWebContentsId: () => global.inputOwnerWebContentsId(),
+        }
+      : null,
+  };
+}
+
+/**
+ * Canopy's own gate guards its workers; a person typing to an assistant they
+ * chose isn't using Canopy. The watch says which this is, so a stale or
+ * unknown id still meets the gate first.
+ */
+function requireActivatedUnlessAssistant(viewId: number, watchId: unknown): void {
+  const watched =
+    typeof watchId === "number" && Number.isInteger(watchId)
+      ? watchedTerminal(viewId, watchId)
+      : null;
+  if (!watched?.assistant) requireActivated();
+}
+
+/** An assistant a person watches takes their keystrokes only while they may type to it. */
+function assertMayType(watched: { assistant: boolean; mayType: boolean }): void {
+  if (watched.assistant && !watched.mayType) {
+    throw new AppError({
+      code: "PERMISSION",
+      message: "another view holds the assistant's input",
+      userMessage: "Another window has this assistant's input.",
+    });
+  }
+}
+
 function assertDrivesRun(ctx: IpcContext, runId: string): void {
   if (!drivesRun(ctx, runId)) throw drivenElsewhere(requirePtyClient().getTerminalProjectId(runId));
 }
@@ -927,6 +981,73 @@ export const canopyNamespace = defineIpcNamespace({
         );
       },
       { withContext: true }
+    ),
+
+    /**
+     * Stream a Daintree Assistant's terminal to this view, for the person who
+     * chose it. Admission is main's own hold on the lane (or the global
+     * session) and the exact launch generation the subject names, never the
+     * fleet, and Canopy need not be on: nothing here reads the screen, lists
+     * the run or marks it handled.
+     */
+    watchAssistantTerminal: op(
+      CANOPY_METHOD_CHANNELS.watchAssistantTerminal,
+      async (ctx, subject: AgentDirectorySubject): Promise<CanopyTerminalView> => {
+        checkRateLimit(CANOPY_METHOD_CHANNELS.watchAssistantTerminal, 120, 10_000);
+        if (isViewer(ctx)) {
+          throw new AppError({
+            code: "UNSUPPORTED",
+            message: "Assistants are viewed from the machine they run on.",
+          });
+        }
+        const viewId = ctx.webContentsId;
+        const ticket = beginWatchRequest(viewId);
+        watchView(ctx);
+        const binding = await resolveLiveAssistant(subject, await liveAssistantSources());
+        if (!isCurrentWatchRequest(viewId, ticket)) return { watchId: null, snapshot: null };
+        const ptyClient = requirePtyClient();
+        const { terminalId } = binding.subject;
+        return watchTerminal(
+          ptyClient,
+          viewOf(ctx),
+          terminalId,
+          binding.spawnedAt,
+          ticket,
+          binding.launchGeneration,
+          () => drivesRun(ctx, terminalId),
+          binding
+        );
+      },
+      { withContext: true }
+    ),
+
+    /**
+     * Where "Open in Assistant" goes for this subject, if main still runs it.
+     * Passive: nothing is attached, switched, started or resumed to answer;
+     * null when the session has ended or been replaced.
+     */
+    resolveAssistant: op(
+      CANOPY_METHOD_CHANNELS.resolveAssistant,
+      async (subject: AgentDirectorySubject): Promise<AssistantOpenDestination | null> => {
+        checkRateLimit(CANOPY_METHOD_CHANNELS.resolveAssistant, 60, 10_000);
+        const binding = await resolveLiveAssistant(subject, await liveAssistantSources()).catch(
+          (error: unknown) => {
+            // A malformed subject or another host's is the caller's error, not an ended session.
+            if (
+              error instanceof AppError &&
+              (error.code === "VALIDATION" || error.code === "UNSUPPORTED")
+            ) {
+              throw error;
+            }
+            return null;
+          }
+        );
+        if (!binding) return null;
+        const { hostId, scope, terminalId, incarnation, lane } = binding.subject;
+        return scope.kind === "project" && lane !== undefined
+          ? { scope: "project", hostId, projectId: scope.projectId, lane, terminalId, incarnation }
+          : { scope: "global", hostId, terminalId, incarnation };
+      }
     ),
 
     unwatchTerminal: op(
@@ -1022,15 +1143,16 @@ export const canopyNamespace = defineIpcNamespace({
     terminalInput: op(
       CANOPY_METHOD_CHANNELS.terminalInput,
       async (ctx, watchId: number, data: string): Promise<void> => {
-        requireActivated();
+        requireActivatedUnlessAssistant(ctx.webContentsId, watchId);
         if (typeof data !== "string" || data.length === 0 || data.length > MAX_INPUT_LENGTH) {
           throw new Error("Invalid input");
         }
         const watched = requireWatched(ctx.webContentsId, watchId);
+        assertMayType(watched);
         assertDrivesRun(ctx, watched.runId);
         requirePtyClient().write(watched.runId, data);
         // Return submits a line: the user has answered what the screen showed.
-        if (terminalAnswerOf(data) === "submit") {
+        if (!watched.assistant && terminalAnswerOf(data) === "submit") {
           service?.noteUserSent(watched.runId, watched.spawnedAt);
           service?.markHandled(watched.runId, watched.spawnedAt);
         }
@@ -1045,13 +1167,15 @@ export const canopyNamespace = defineIpcNamespace({
     terminalResize: op(
       CANOPY_METHOD_CHANNELS.terminalResize,
       async (ctx, watchId: number, cols: number, rows: number): Promise<void> => {
-        requireActivated();
+        requireActivatedUnlessAssistant(ctx.webContentsId, watchId);
         checkRateLimit(CANOPY_METHOD_CHANNELS.terminalResize, 60, 10_000);
         if (isViewer(ctx)) return;
         // Ignored rather than refused, as `terminal:resize` ignores one: the
         // panel keeps reading at whatever size the driver's pane gave it.
         const watched = watchedTerminal(ctx.webContentsId, watchId);
         if (watched && !drivesRun(ctx, watched.runId)) return;
+        // Another window's session to size: this one only reads it.
+        if (watched && !watched.mayType) return;
         resizeWatchedTerminal(requirePtyClient(), ctx.webContentsId, watchId, cols, rows);
       },
       { withContext: true }
@@ -1061,14 +1185,15 @@ export const canopyNamespace = defineIpcNamespace({
     terminalSendKey: op(
       CANOPY_METHOD_CHANNELS.terminalSendKey,
       async (ctx, watchId: number, key: string): Promise<void> => {
-        requireActivated();
+        requireActivatedUnlessAssistant(ctx.webContentsId, watchId);
         if (typeof key !== "string" || key.length === 0 || key.length > MAX_KEY_LENGTH) {
           throw new Error("Invalid key");
         }
         const watched = requireWatched(ctx.webContentsId, watchId);
+        assertMayType(watched);
         assertDrivesRun(ctx, watched.runId);
         requirePtyClient().sendKey(watched.runId, key);
-        if (key === "enter") {
+        if (!watched.assistant && key === "enter") {
           service?.noteUserSent(watched.runId, watched.spawnedAt);
           service?.markHandled(watched.runId, watched.spawnedAt);
         }
@@ -1080,7 +1205,7 @@ export const canopyNamespace = defineIpcNamespace({
     terminalSubmit: op(
       CANOPY_METHOD_CHANNELS.terminalSubmit,
       async (ctx, watchId: number, text: string, imagePaths?: string[]): Promise<void> => {
-        requireActivated();
+        requireActivatedUnlessAssistant(ctx.webContentsId, watchId);
         if (typeof text !== "string" || text.length > MAX_SUBMIT_LENGTH) {
           throw new Error("Invalid message");
         }
@@ -1101,19 +1226,23 @@ export const canopyNamespace = defineIpcNamespace({
           });
         }
         const watched = requireWatched(ctx.webContentsId, watchId);
+        assertMayType(watched);
         // The stream ends on exit, but a submit is worth one more look at the
         // host's own record: the message must reach this incarnation or none.
         const record = await requirePtyClient()
           .getTerminalAsync(watched.runId)
           .catch(() => null);
+        const current = watchedTerminal(ctx.webContentsId, watchId);
         if (
           !record ||
           record.spawnedAt !== watched.spawnedAt ||
           record.isExited === true ||
-          watchedTerminal(ctx.webContentsId, watchId) === null
+          current === null
         ) {
           throw new Error("That agent isn't running any more.");
         }
+        // Input may have moved to another window while the host answered.
+        assertMayType(current);
         assertDrivesRun(ctx, watched.runId);
         if (imagePaths !== undefined && imagePaths.length > 0) {
           requirePtyClient().submit(
@@ -1127,8 +1256,10 @@ export const canopyNamespace = defineIpcNamespace({
         } else {
           requirePtyClient().submit(watched.runId, text);
         }
-        service?.noteUserSent(watched.runId, watched.spawnedAt);
-        service?.markHandled(watched.runId, watched.spawnedAt);
+        if (!watched.assistant) {
+          service?.noteUserSent(watched.runId, watched.spawnedAt);
+          service?.markHandled(watched.runId, watched.spawnedAt);
+        }
       },
       { withContext: true }
     ),

@@ -377,6 +377,12 @@ export class GlobalAssistantService {
     this.emit();
   }
 
+  /** The window view whose attachment holds input now, or null when none does. */
+  inputOwnerWebContentsId(): number | null {
+    if (this.inputOwner === null) return null;
+    return this.attachments.get(this.inputOwner)?.webContentsId ?? null;
+  }
+
   /** Whether input from this attachment, stamped with the epoch it held, is accepted. */
   canWrite(attachmentId: string, epoch: number): boolean {
     return this.inputOwner === attachmentId && this.inputEpoch === epoch;

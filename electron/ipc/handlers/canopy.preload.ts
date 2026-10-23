@@ -21,6 +21,8 @@ export const CANOPY_METHOD_CHANNELS = {
   runBranch: "canopy:run-branch",
   searchScreens: "canopy:search-screens",
   watchTerminal: "canopy:watch-terminal",
+  watchAssistantTerminal: "canopy:watch-assistant-terminal",
+  resolveAssistant: "canopy:resolve-assistant",
   unwatchTerminal: "canopy:unwatch-terminal",
   captureBackdrop: "canopy:capture-backdrop",
   setMode: "canopy:set-mode",

@@ -290,6 +290,8 @@ export const CHANNELS = {
   CANOPY_RUN_BRANCH: "canopy:run-branch",
   CANOPY_SEARCH_SCREENS: "canopy:search-screens",
   CANOPY_WATCH_TERMINAL: "canopy:watch-terminal",
+  CANOPY_WATCH_ASSISTANT_TERMINAL: "canopy:watch-assistant-terminal",
+  CANOPY_RESOLVE_ASSISTANT: "canopy:resolve-assistant",
   CANOPY_UNWATCH_TERMINAL: "canopy:unwatch-terminal",
   CANOPY_CAPTURE_BACKDROP: "canopy:capture-backdrop",
   CANOPY_SET_MODE: "canopy:set-mode",

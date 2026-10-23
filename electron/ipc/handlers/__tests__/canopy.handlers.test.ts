@@ -60,6 +60,24 @@ vi.mock("electron", () => ({
   },
 }));
 vi.mock("../../../window/serviceRefs.js", () => ({ getPtyClient: () => ptyClient }));
+/** The lanes main holds an assistant for, and who hears one end. */
+const assistants = vi.hoisted(() => ({
+  lane: null as { sessionId: string; terminalId: string } | null,
+  ended: new Set<(event: { projectId: string; slot: number; sessionId: string }) => void>(),
+}));
+vi.mock("../../../services/HelpSessionService.js", () => ({
+  helpSessionService: {
+    getRunningLaneSession: (projectId: string, slot: number) =>
+      projectId === "project-1" && slot === 1 ? assistants.lane : null,
+    addSessionEndedListener: (
+      listener: (event: { projectId: string; slot: number; sessionId: string }) => void
+    ) => {
+      assistants.ended.add(listener);
+      return () => assistants.ended.delete(listener);
+    },
+  },
+}));
+vi.mock("../../../services/globalAssistant.js", () => ({ peekGlobalAssistantService: () => null }));
 const saved = vi.hoisted(() => ({
   state: null as {
     terminals: Array<{ id: string; title: string; titleMode?: string; location?: string }>;
@@ -1206,6 +1224,140 @@ describe("canopy IPC", () => {
       };
       expect((view.data ?? view).watchId).toBeNull();
       expect(ptyClient.acquireIpcDataMirror).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("a Daintree Assistant a person chose (#14162)", () => {
+    const subject = {
+      hostId: "local",
+      scope: { kind: "project", projectId: "project-1" },
+      terminalId: "assistant-1",
+      incarnation: 1,
+      lane: 1,
+    };
+
+    beforeEach(() => {
+      // The fleet never lists an assistant, and Canopy need not be on to view one.
+      state.runs = [];
+      state.mode = "unset";
+      assistants.lane = { sessionId: "session-1", terminalId: "assistant-1" };
+      assistants.ended.clear();
+    });
+
+    async function openAssistant(sender = fakeSender(4), chosen: unknown = subject) {
+      const view = (await invoke(
+        CANOPY_METHOD_CHANNELS.watchAssistantTerminal,
+        sender,
+        chosen
+      )) as { data?: { watchId: number | null }; watchId?: number | null };
+      return { sender, watchId: (view.data ?? view).watchId ?? null };
+    }
+
+    it("streams and answers the exact lane's run with no fleet row and Canopy off", async () => {
+      const { sender, watchId } = await openAssistant();
+      expect(watchId).not.toBeNull();
+      await invoke(CANOPY_METHOD_CHANNELS.terminalInput, sender, watchId, "y");
+      await invoke(CANOPY_METHOD_CHANNELS.terminalSendKey, sender, watchId, "enter");
+      await invoke(CANOPY_METHOD_CHANNELS.terminalSubmit, sender, watchId, "carry on");
+      expect(state.writes).toEqual(["y"]);
+      expect(ptyClient.sendKey).toHaveBeenCalledWith("assistant-1", "enter");
+      expect(state.submits).toEqual(["carry on"]);
+      // Nothing about viewing an assistant reaches the Canopy reader.
+      expect(fetch).not.toHaveBeenCalled();
+      expect(canopyBackend.classifyWithCanopy).not.toHaveBeenCalled();
+      expect(readPluginTerminalScreen).not.toHaveBeenCalled();
+    });
+
+    it("refuses another lane, another host, or a generation that has moved on", async () => {
+      for (const chosen of [
+        { ...subject, lane: 2 },
+        { ...subject, lane: undefined },
+        { ...subject, hostId: "elsewhere" },
+        { ...subject, incarnation: 2 },
+        { ...subject, terminalId: "assistant-2" },
+      ]) {
+        const result = await outcome(
+          invoke(CANOPY_METHOD_CHANNELS.watchAssistantTerminal, fakeSender(4), chosen)
+        );
+        expect(result.ok).toBe(false);
+      }
+      expect(ptyClient.acquireIpcDataMirror).not.toHaveBeenCalled();
+    });
+
+    it("leaves the worker path closed to assistants", async () => {
+      state.mode = "on";
+      const result = await outcome(
+        invoke(CANOPY_METHOD_CHANNELS.watchTerminal, fakeSender(4), "assistant-1", {
+          spawnedAt: 100,
+        })
+      );
+      expect(result.ok).toBe(false);
+    });
+
+    it("ends the stream when the lane's session ends, refusing what was typed after", async () => {
+      const sent: unknown[] = [];
+      const sender = Object.assign(fakeSender(4), {
+        send: (_channel: string, payload: unknown) => sent.push(payload),
+      });
+      const { watchId } = await openAssistant(sender);
+      // Replaced without a byte of output: the lane now runs another session.
+      assistants.lane = { sessionId: "session-2", terminalId: "assistant-1" };
+      for (const listener of [...assistants.ended]) {
+        listener({ projectId: "project-1", slot: 1, sessionId: "session-1" });
+      }
+      expect(sent).toContainEqual(expect.objectContaining({ kind: "ended", watchId }));
+      expect(assistants.ended.size).toBe(0);
+      const typed = await outcome(
+        invoke(CANOPY_METHOD_CHANNELS.terminalSubmit, sender, watchId, "stale")
+      );
+      expect(typed.ok).toBe(false);
+      expect(state.submits).toEqual([]);
+    });
+
+    it("refuses a submit when the session is replaced while the host is asked", async () => {
+      const { sender, watchId } = await openAssistant();
+      ptyClient.getTerminalAsync.mockImplementationOnce(async () => {
+        assistants.lane = { sessionId: "session-2", terminalId: "assistant-1" };
+        return state.record;
+      });
+      const result = await outcome(
+        invoke(CANOPY_METHOD_CHANNELS.terminalSubmit, sender, watchId, "stale")
+      );
+      expect(result.ok).toBe(false);
+      expect(state.submits).toEqual([]);
+    });
+
+    it("keeps the drive check on a person's reply", async () => {
+      lease.holder = "other";
+      const { sender, watchId } = await openAssistant();
+      const typed = await outcome(
+        invoke(CANOPY_METHOD_CHANNELS.terminalInput, sender, watchId, "y")
+      );
+      expect(typed.ok).toBe(false);
+      expect(state.writes).toEqual([]);
+    });
+
+    it("resolves Open to the exact lane, and to nothing once the session has ended", async () => {
+      const resolved = (await invoke(
+        CANOPY_METHOD_CHANNELS.resolveAssistant,
+        fakeSender(4),
+        subject
+      )) as { data?: unknown };
+      expect(resolved.data ?? resolved).toEqual({
+        scope: "project",
+        hostId: "local",
+        projectId: "project-1",
+        lane: 1,
+        terminalId: "assistant-1",
+        incarnation: 1,
+      });
+      assistants.lane = null;
+      const ended = (await invoke(
+        CANOPY_METHOD_CHANNELS.resolveAssistant,
+        fakeSender(4),
+        subject
+      )) as { data?: unknown } | null;
+      expect(ended?.data ?? ended).toBeNull();
     });
   });
 
