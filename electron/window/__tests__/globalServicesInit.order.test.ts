@@ -1375,6 +1375,22 @@ describe("initGlobalServices task ordering", () => {
     expect(assistantSpy).toHaveBeenCalled();
   });
 
+  it("runs checkpoint retention when its deferred task executes", async () => {
+    const { requestAssistantRunCheckpointRetention } =
+      await import("../../services/AssistantRunCheckpointService.js");
+    const spy = requestAssistantRunCheckpointRetention as ReturnType<typeof vi.fn>;
+    spy.mockClear();
+
+    const fakeRegistry = { all: () => [], size: 0 } as unknown as WindowRegistry;
+    await initGlobalServices(fakeRegistry);
+    expect(spy).not.toHaveBeenCalled();
+
+    const run = registeredTaskRuns.get("assistant-run-checkpoint-retention");
+    expect(run).toBeDefined();
+    await run!();
+    expect(spy).toHaveBeenCalledTimes(1);
+  });
+
   it("defers the agent compile cache sweep rather than running it during init (#11699)", async () => {
     const { initializeAgentCompileCacheCleanup } =
       await import("../../services/AgentCompileCacheCleanupService.js");

@@ -98,6 +98,17 @@ describe("bucket provisioning", () => {
     expect(path.basename(global)).toBe("global");
   });
 
+  it("refuses an existing bucket that is a symlink", async () => {
+    const outside = await fs.mkdtemp(path.join(os.tmpdir(), "assistant-run-checkpoint-out-"));
+    try {
+      await fs.mkdir(svc.getRunCheckpointRoot(), { recursive: true });
+      await fs.symlink(outside, svc.getRunCheckpointBucket(PROJECT), "dir");
+      await expect(svc.provisionRunCheckpointBucket(PROJECT)).rejects.toThrow();
+    } finally {
+      await fs.rm(outside, { recursive: true, force: true });
+    }
+  });
+
   it.each(["", "..", "../x", "a/b", "a\\b", "a".repeat(129), "x\0y"])(
     "rejects unsafe project key %j",
     async (key) => {
@@ -171,7 +182,9 @@ describe("concurrency", () => {
     const b = svc.requestAssistantRunCheckpointRetention();
     expect(a).toBe(b);
     await a;
-    expect(svc.requestAssistantRunCheckpointRetention()).not.toBe(a);
+    const next = svc.requestAssistantRunCheckpointRetention();
+    expect(next).not.toBe(a);
+    await next;
   });
 
   it("gives isolated userData roots isolated stores", async () => {
@@ -225,22 +238,58 @@ describe("classification", () => {
     expect((await svc.discoverRuns(PROJECT))[0].state).toBe("unfinished");
   });
 
-  it("skips symlinked and oddly named entries instead of following them", async () => {
+  it("skips symlinked and oddly named bucket entries instead of following them", async () => {
     const bucket = await svc.provisionRunCheckpointBucket(PROJECT);
     const outside = await fs.mkdtemp(path.join(os.tmpdir(), "assistant-run-checkpoint-out-"));
     try {
       await fs.symlink(outside, path.join(bucket, "linked"), "dir");
       await fs.mkdir(path.join(bucket, "bad name"));
-      const w = await startRun(PROJECT, "run-1", "w1");
-      await fs.symlink(outside, path.join(w, "..", "sneaky"), "dir");
+      await startRun(PROJECT, "run-1", "w1");
       expect((await svc.discoverRuns(PROJECT)).map((r) => [r.runId, r.state])).toEqual([
         ["run-1", "unfinished"],
       ]);
-      await svc.runAssistantRunCheckpointRetention(Date.now() + 365 * DAY);
-      expect(await exists(outside)).toBe(true);
     } finally {
       await fs.rm(outside, { recursive: true, force: true });
     }
+  });
+
+  it("protects a run whose writers/ is a symlink to someone else's finished markers", async () => {
+    const outside = await fs.mkdtemp(path.join(os.tmpdir(), "assistant-run-checkpoint-out-"));
+    try {
+      const foreign = path.join(outside, "w-foreign");
+      await finish(foreign, svc.FINISHED_RUN_MAX_AGE_MS + DAY);
+      const runDir = path.join(svc.getRunCheckpointBucket(PROJECT), "run-1");
+      await fs.mkdir(runDir, { recursive: true });
+      await fs.symlink(outside, path.join(runDir, "writers"), "dir");
+
+      expect((await svc.discoverRuns(PROJECT))[0].state).toBe("unreadable");
+      await svc.runAssistantRunCheckpointRetention();
+      expect(await exists(path.join(foreign, "done.json"))).toBe(true);
+      expect(await exists(runDir)).toBe(true);
+    } finally {
+      await fs.rm(outside, { recursive: true, force: true });
+    }
+  });
+
+  it.each(["a symlink", "a directory"])("does not accept done.json that is %s", async (kind) => {
+    const w = await startRun(PROJECT, "run-1", "w1");
+    if (kind === "a directory") {
+      await fs.mkdir(path.join(w, "done.json"));
+    } else {
+      const real = path.join(tmpDir, "real-done.json");
+      await fs.writeFile(real, JSON.stringify({ schemaVersion: 1, status: "completed" }));
+      await fs.symlink(real, path.join(w, "done.json"));
+    }
+    expect((await svc.discoverRuns(PROJECT))[0].state).toBe("unfinished");
+  });
+
+  it("protects a run with a stray file in writers/", async () => {
+    const w = await startRun(PROJECT, "run-1", "w1");
+    await finish(w, svc.FINISHED_RUN_MAX_AGE_MS + DAY);
+    await fs.writeFile(path.join(w, "..", "stray"), "x");
+    expect((await svc.discoverRuns(PROJECT))[0].state).toBe("unfinished");
+    await svc.runAssistantRunCheckpointRetention();
+    expect(await exists(w)).toBe(true);
   });
 });
 
@@ -268,6 +317,108 @@ describe("retention", () => {
     expect(left).toHaveLength(svc.FINISHED_RUN_MAX_COUNT);
     expect(left).not.toContain("run-0");
     expect(left).toContain(`run-${total - 1}`);
+  });
+
+  it("keeps a tombstone created between classification and removal", async () => {
+    const w = await startRun(PROJECT, "run-1", "w1");
+    await finish(w, svc.FINISHED_RUN_MAX_AGE_MS + DAY);
+    const runDir = path.dirname(path.dirname(w));
+    const realRm = fs.rm.bind(fs);
+    const spy = vi.spyOn(fs, "rm").mockImplementation((async (target: string, opts: object) => {
+      // A cancel lands just before the sweep deletes the payload.
+      await fs.writeFile(path.join(runDir, "cancelled"), "{}");
+      return realRm(target, opts);
+    }) as unknown as typeof fs.rm);
+    try {
+      await svc.runAssistantRunCheckpointRetention();
+    } finally {
+      spy.mockRestore();
+    }
+    expect(await exists(path.join(runDir, "cancelled"))).toBe(true);
+  });
+
+  it("does not remove a run that gained an unfinished writer after it was classified", async () => {
+    const w = await startRun(PROJECT, "run-1", "w1");
+    await finish(w, svc.FINISHED_RUN_MAX_AGE_MS + DAY);
+    const runDir = path.dirname(path.dirname(w));
+    const realReaddir = fs.readdir.bind(fs);
+    let discovered = false;
+    const spy = vi.spyOn(fs, "readdir").mockImplementation((async (
+      target: string,
+      ...rest: unknown[]
+    ) => {
+      const out = await (realReaddir as (...a: unknown[]) => Promise<unknown>)(target, ...rest);
+      if (!discovered && target === path.join(runDir, "writers")) {
+        discovered = true;
+        await startRun(PROJECT, "run-1", "w-new");
+      }
+      return out;
+    }) as unknown as typeof fs.readdir);
+    try {
+      await svc.runAssistantRunCheckpointRetention();
+    } finally {
+      spy.mockRestore();
+    }
+    expect(await exists(path.join(runDir, "writers", "w-new", "checkpoint.json"))).toBe(true);
+  });
+
+  it("orders pruning by the newest terminal marker and counts each bucket separately", async () => {
+    const other = "c".repeat(64);
+    const total = svc.FINISHED_RUN_MAX_COUNT + 2;
+    for (let i = 0; i < total; i++) {
+      const w = await startRun(PROJECT, `run-${i}`, "w1");
+      await finish(w, (total - i) * 1000);
+    }
+    // An old-looking first writer must not make run-5 look old: the newest marker wins.
+    const w2 = await startRun(PROJECT, "run-5", "w2");
+    await finish(w2, 500);
+    const otherWriter = await startRun(other, "only", "w1");
+    await finish(otherWriter, 1000);
+
+    await svc.runAssistantRunCheckpointRetention();
+    const left = (await svc.discoverRuns(PROJECT)).map((r) => r.runId);
+    expect(left).toHaveLength(svc.FINISHED_RUN_MAX_COUNT);
+    expect(left).not.toContain("run-0");
+    expect(left).not.toContain("run-1");
+    expect(left).toContain("run-5");
+    expect((await svc.discoverRuns(other)).map((r) => r.runId)).toEqual(["only"]);
+  });
+
+  it("applies the same rules to the global bucket", async () => {
+    const g = svc.ASSISTANT_GLOBAL_CHECKPOINT_BUCKET;
+    const old = await startRun(g, "old", "w1");
+    await finish(old, svc.FINISHED_RUN_MAX_AGE_MS + DAY);
+    await startRun(g, "live", "w1");
+    await svc.discardRun(g, "gone");
+    await svc.runAssistantRunCheckpointRetention();
+    expect((await svc.discoverRuns(g)).map((r) => [r.runId, r.state]).sort()).toEqual([
+      ["gone", "cancelled"],
+      ["live", "unfinished"],
+    ]);
+  });
+
+  it("logs error codes only, never paths", async () => {
+    await startRun(PROJECT, "secret-run-name", "w1");
+    const bucket = svc.getRunCheckpointBucket(PROJECT);
+    const realReaddir = fs.readdir.bind(fs);
+    const spy = vi
+      .spyOn(fs, "readdir")
+      .mockImplementation(((target: string, ...rest: unknown[]) =>
+        target === bucket
+          ? Promise.reject(Object.assign(new Error(`EACCES: ${bucket}`), { code: "EACCES" }))
+          : (realReaddir as (...a: unknown[]) => unknown)(
+              target,
+              ...rest
+            )) as unknown as typeof fs.readdir);
+    try {
+      await svc.runAssistantRunCheckpointRetention();
+    } finally {
+      spy.mockRestore();
+    }
+    const logged = JSON.stringify(logError.mock.calls);
+    expect(logged).toContain("EACCES");
+    expect(logged).not.toContain(PROJECT);
+    expect(logged).not.toContain(tmpDir);
   });
 
   it("never removes unfinished runs, however old", async () => {
@@ -352,6 +503,30 @@ describe("cancellation and discard", () => {
     await startRun(PROJECT, "run-1", "w1");
     await svc.discardRun(PROJECT, "run-1");
     await expect(svc.discardRun(PROJECT, "run-1")).resolves.toBeUndefined();
+  });
+
+  it("refuses to follow a symlinked run directory out of the bucket", async () => {
+    const outside = await fs.mkdtemp(path.join(os.tmpdir(), "assistant-run-checkpoint-out-"));
+    try {
+      await fs.mkdir(path.join(outside, "writers", "w1"), { recursive: true });
+      await fs.writeFile(path.join(outside, "writers", "w1", "keep.txt"), "x");
+      const bucket = await svc.provisionRunCheckpointBucket(PROJECT);
+      await fs.symlink(outside, path.join(bucket, "run-1"), "dir");
+
+      await expect(svc.discardRun(PROJECT, "run-1")).rejects.toThrow();
+      expect(await exists(path.join(outside, "writers", "w1", "keep.txt"))).toBe(true);
+      expect(await exists(path.join(outside, "cancelled"))).toBe(false);
+    } finally {
+      await fs.rm(outside, { recursive: true, force: true });
+    }
+  });
+
+  it("leaves payloads in place when the tombstone cannot be written", async () => {
+    const w = await startRun(PROJECT, "run-1", "w1");
+    const runDir = path.dirname(path.dirname(w));
+    await fs.mkdir(path.join(runDir, "cancelled")); // a directory blocks the atomic rename
+    await expect(svc.discardRun(PROJECT, "run-1")).rejects.toThrow();
+    expect(await exists(path.join(w, "checkpoint.json"))).toBe(true);
   });
 
   it("rejects unsafe run ids", async () => {

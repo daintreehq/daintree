@@ -120,6 +120,16 @@ describe("PeriodicCleanupService", () => {
     service.dispose();
   });
 
+  it("still runs the later routines when checkpoint retention rejects", async () => {
+    mockRunCheckpointRetention.mockRejectedValue(new Error("boom"));
+    const service = new PeriodicCleanupService();
+    await service.tick();
+
+    expect(mockRequestAgentCompileCacheCleanup).toHaveBeenCalledTimes(1);
+    expect(mockPruneOldLogs).toHaveBeenCalledTimes(1);
+    service.dispose();
+  });
+
   it("skips the tick when the system is not idle", async () => {
     mockPowerMonitor.getSystemIdleTime.mockReturnValue(10);
     const service = new PeriodicCleanupService();

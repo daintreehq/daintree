@@ -5214,6 +5214,30 @@ describe("HelpSessionService", () => {
       );
     });
 
+    it("rejects a project id that can't key a checkpoint bucket before displacing the prior lane", async () => {
+      const first = await service.provisionSession(provisionInput());
+      if (!first) throw new Error("expected result");
+
+      await expect(
+        service.provisionSession({ ...provisionInput(), projectId: "../escape" })
+      ).rejects.toThrow(/run-checkpoint/);
+      expect(service.getAssistantScratchEnv(first.token)).not.toBeNull();
+      expect(
+        await fs.readdir(path.join(userData, "assistant-run-checkpoints")).catch(() => [])
+      ).not.toContain("escape");
+    });
+
+    it("fails the provision, and recovers on retry, when the checkpoint bucket can't be created", async () => {
+      // A file where the checkpoint root should be makes mkdir fail.
+      await fs.writeFile(path.join(userData, "assistant-run-checkpoints"), "x");
+      await expect(service.provisionSession(provisionInput())).rejects.toThrow();
+
+      await fs.rm(path.join(userData, "assistant-run-checkpoints"));
+      const result = await service.provisionSession(provisionInput());
+      if (!result) throw new Error("expected result");
+      expect(service.getAssistantScratchEnv(result.token)).not.toBeNull();
+    });
+
     it("writes one run-checkpoint block naming env vars, not paths, into CLAUDE.md and AGENTS.md", async () => {
       const first = await service.provisionSession(provisionInput());
       if (!first) throw new Error("expected result");

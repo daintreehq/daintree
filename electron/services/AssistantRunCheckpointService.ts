@@ -22,7 +22,7 @@
  *      namespace, so concurrent lanes and app instances can't overwrite each
  *      other. Competing branches of one run are preserved, never merged.
  *   3. **Sweep reads presence, not plans** — a run is prunable only when it has
- *      writers and every one carries a valid terminal marker. Anything
+ *      at least one writer and every writer carries a valid terminal marker. Anything
  *      unreadable, malformed, unknown-version or unfinished is protected, and
  *      a listing error is never reported as an empty store.
  *   4. **Tombstones are permanent** — discard commits `cancelled` before it
@@ -34,7 +34,7 @@
  */
 import fs from "fs/promises";
 import type { FileHandle } from "fs/promises";
-import type { Dirent } from "fs";
+import { constants as fsConstants, type Dirent } from "fs";
 import path from "path";
 import { app } from "electron";
 import { resilientAtomicWriteFile } from "../utils/fs.js";
@@ -82,6 +82,20 @@ export interface RunCheckpointSweepResult {
   failed: number;
 }
 
+/** True only for a real directory; a symlink (even to a directory) is not one. */
+async function isRealDirectory(target: string): Promise<boolean> {
+  try {
+    return (await fs.lstat(target)).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+/** Error code only: raw fs messages embed project and run paths, which logs must not carry. */
+function errCode(err: unknown): string {
+  return (err as NodeJS.ErrnoException)?.code ?? "UNKNOWN";
+}
+
 export function getRunCheckpointRoot(): string {
   return path.join(app.getPath("userData"), CHECKPOINT_DIR_NAME);
 }
@@ -106,7 +120,11 @@ export function getRunCheckpointBucket(projectKey: string): string {
 export async function provisionRunCheckpointBucket(projectKey: string): Promise<string> {
   const bucket = getRunCheckpointBucket(projectKey);
   await fs.mkdir(bucket, { recursive: true, mode: 0o700 });
+  if (!(await isRealDirectory(bucket))) {
+    throw new Error("Run-checkpoint bucket is not a plain directory");
+  }
   await fs.chmod(bucket, 0o700).catch(() => {});
+  await fs.access(bucket, fsConstants.R_OK | fsConstants.W_OK | fsConstants.X_OK);
   return bucket;
 }
 
@@ -146,7 +164,11 @@ async function classifyRun(runDir: string): Promise<{
 
   let writers: Dirent[];
   try {
-    writers = await fs.readdir(path.join(runDir, WRITERS_DIR), { withFileTypes: true });
+    const writersDir = path.join(runDir, WRITERS_DIR);
+    // lstat first: readdir would follow a symlinked writers/ to someone else's markers.
+    if (!(await fs.lstat(writersDir)).isDirectory())
+      return { state: "unreadable", settledAt: null };
+    writers = await fs.readdir(writersDir, { withFileTypes: true });
   } catch (err) {
     // A run with no writers yet is just started; any other error is not "empty".
     return (err as NodeJS.ErrnoException).code === "ENOENT"
@@ -207,8 +229,15 @@ export async function discoverRuns(projectKey: string): Promise<DiscoveredRun[]>
  */
 export async function discardRun(projectKey: string, runId: string): Promise<void> {
   if (!isSafeCheckpointSegment(runId)) throw new Error("Invalid run id");
-  const runDir = path.join(getRunCheckpointBucket(projectKey), runId);
-  await fs.mkdir(runDir, { recursive: true, mode: 0o700 });
+  const bucket = getRunCheckpointBucket(projectKey);
+  const runDir = path.join(bucket, runId);
+  await fs.mkdir(bucket, { recursive: true, mode: 0o700 });
+  await fs.mkdir(runDir, { mode: 0o700 }).catch((err) => {
+    if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
+  });
+  if (!(await isRealDirectory(bucket)) || !(await isRealDirectory(runDir))) {
+    throw new Error("Run-checkpoint path is not a plain directory");
+  }
   await resilientAtomicWriteFile(
     path.join(runDir, TOMBSTONE_FILE),
     JSON.stringify({ schemaVersion: 1, cancelledAt: new Date().toISOString() }),
@@ -225,7 +254,9 @@ function removeTree(target: string): Promise<void> {
 /**
  * Bounded retention. Only finished runs (age or newest-N) and the payloads of
  * cancelled runs are ever removed; unfinished, unreadable and unknown records
- * are left alone, and tombstones are never deleted. Never throws.
+ * are left alone, and tombstones are never deleted (deletion never recurses
+ * over a run directory). Checkpoint bodies are opaque to the app: only the
+ * terminal markers decide whether a run is finished. Never throws.
  */
 export async function runAssistantRunCheckpointRetention(
   now: number = Date.now()
@@ -244,7 +275,7 @@ export async function runAssistantRunCheckpointRetention(
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
       result.failed += 1;
-      logError("[AssistantRunCheckpoints] Failed to read checkpoint root", err);
+      logError(`[AssistantRunCheckpoints] Failed to read checkpoint root (${errCode(err)})`);
     }
     return result;
   }
@@ -256,7 +287,7 @@ export async function runAssistantRunCheckpointRetention(
       runs = await discoverRuns(bucket.name);
     } catch (err) {
       result.failed += 1;
-      logError("[AssistantRunCheckpoints] Failed to read bucket", err);
+      logError(`[AssistantRunCheckpoints] Failed to read bucket (${errCode(err)})`);
       continue;
     }
     result.inspected += runs.length;
@@ -269,32 +300,43 @@ export async function runAssistantRunCheckpointRetention(
     for (const [index, run] of finished.entries()) {
       const tooOld = now - (run.settledAt ?? now) > FINISHED_RUN_MAX_AGE_MS;
       if (!tooOld && index < FINISHED_RUN_MAX_COUNT) continue;
+      const runDir = path.join(bucketDir, run.runId);
       try {
-        await removeTree(path.join(bucketDir, run.runId));
+        // Re-check right before deleting: the classification above can be stale
+        // (another lane or instance may have added a writer since).
+        if ((await classifyRun(runDir)).state !== "finished") continue;
+        await removeTree(path.join(runDir, WRITERS_DIR));
+        // Never recursive: a tombstone created since classification keeps the
+        // directory non-empty, so it survives.
+        await fs.rmdir(runDir).catch((err) => {
+          if (!["ENOTEMPTY", "EEXIST", "ENOENT"].includes(errCode(err))) throw err;
+        });
         result.prunedFinished += 1;
       } catch (err) {
         result.failed += 1;
-        logError("[AssistantRunCheckpoints] Failed to remove finished run", err);
+        logError(`[AssistantRunCheckpoints] Failed to remove finished run (${errCode(err)})`);
       }
     }
 
     for (const run of runs) {
       if (run.state !== "cancelled") continue;
       if (now - (run.settledAt ?? now) <= CANCELLED_PAYLOAD_MAX_AGE_MS) continue;
-      const writers = path.join(bucketDir, run.runId, WRITERS_DIR);
+      const runDir = path.join(bucketDir, run.runId);
+      const writers = path.join(runDir, WRITERS_DIR);
       try {
-        await fs.lstat(writers);
-      } catch (err) {
-        if ((err as NodeJS.ErrnoException).code === "ENOENT") continue;
-        result.failed += 1;
-        continue;
-      }
-      try {
-        await removeTree(writers);
+        // A symlinked writers/ or run dir is unlinked or skipped, never walked into.
+        if (!(await isRealDirectory(runDir))) continue;
+        const st = await fs.lstat(writers);
+        if (st.isSymbolicLink()) {
+          await fs.unlink(writers);
+        } else {
+          await removeTree(writers);
+        }
         result.prunedCancelledPayloads += 1;
       } catch (err) {
+        if (errCode(err) === "ENOENT") continue;
         result.failed += 1;
-        logError("[AssistantRunCheckpoints] Failed to remove cancelled payloads", err);
+        logError(`[AssistantRunCheckpoints] Failed to remove cancelled payloads (${errCode(err)})`);
       }
     }
   }
@@ -314,7 +356,7 @@ let sweepInFlight: Promise<RunCheckpointSweepResult> | null = null;
 export function requestAssistantRunCheckpointRetention(): Promise<RunCheckpointSweepResult> {
   sweepInFlight ??= runAssistantRunCheckpointRetention()
     .catch((err) => {
-      logError("[AssistantRunCheckpoints] sweep threw", err);
+      logError(`[AssistantRunCheckpoints] sweep threw (${errCode(err)})`);
       return { inspected: 0, prunedFinished: 0, prunedCancelledPayloads: 0, failed: 1 };
     })
     .finally(() => {

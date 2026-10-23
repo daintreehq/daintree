@@ -36,6 +36,7 @@ import {
   ASSISTANT_RUN_CHECKPOINT_ENV_VAR,
   ASSISTANT_RUN_CHECKPOINT_WRITER_ENV_VAR,
   buildRunCheckpointAddendum,
+  isSafeCheckpointSegment,
   provisionRunCheckpointBucket,
 } from "./AssistantRunCheckpointService.js";
 import { pluginMcpGrantRegistry } from "./pluginAgentMcp/grantRegistry.js";
@@ -3256,6 +3257,11 @@ export class HelpSessionService {
     }
     if (typeof input.projectPath !== "string" || !input.projectPath.trim()) {
       throw new Error("projectPath is required");
+    }
+    // The checkpoint bucket is keyed by this id, so refuse an unusable one here,
+    // before the prior lane is displaced.
+    if (!isSafeCheckpointSegment(input.projectId)) {
+      throw new Error("projectId is not usable as a run-checkpoint key");
     }
     // Absent means slot 0 (pre-slot callers and fixtures). Present but invalid
     // is a caller bug: clamping it would silently displace whichever lane the
