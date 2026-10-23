@@ -137,7 +137,20 @@ export async function resolveLiveAssistant(
   if (launchGeneration === null || launchGeneration !== subject.incarnation) {
     throw refuse("STALE_GENERATION", GONE, GONE);
   }
-  const record = await sources.ptyClient.getTerminalAsync(subject.terminalId).catch(() => null);
+  // Strict: a live host slow to answer is not an assistant that has ended.
+  let record: Awaited<ReturnType<LiveAssistantSources["ptyClient"]["getTerminalAsync"]>>;
+  try {
+    record = await sources.ptyClient.getTerminalAsync(subject.terminalId, undefined, {
+      strict: true,
+    });
+  } catch (error) {
+    throw new AppError({
+      code: "INTERNAL",
+      message: "The terminal host didn't answer about the assistant.",
+      userMessage: "Couldn't reach that assistant's terminal. Try again in a moment.",
+      cause: error instanceof Error ? error : undefined,
+    });
+  }
   // The host was asked, so main may have moved on while it answered.
   if (
     !record ||

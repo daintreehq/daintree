@@ -1220,6 +1220,24 @@ describe("canopy IPC", () => {
       expect(state.submits).toEqual([]);
     });
 
+    it("starts no worker stream when Canopy is turned off while it is checked", async () => {
+      const sender = fakeSender(6);
+      let release: (value: { spawnedAt: number }) => void = () => {};
+      ptyClient.getTerminalAsync.mockImplementationOnce(
+        () => new Promise((resolve) => (release = resolve))
+      );
+      const pending = outcome(
+        invoke(CANOPY_METHOD_CHANNELS.watchTerminal, sender, "run-1", { spawnedAt: 100 })
+      );
+      await invoke(CANOPY_METHOD_CHANNELS.setMode, fakeSender(9), "unset");
+      release({ spawnedAt: 100 });
+      expect(await pending).toEqual({
+        ok: false,
+        message: expect.stringContaining("isn't turned on"),
+      });
+      expect(ptyClient.acquireIpcDataMirror).not.toHaveBeenCalled();
+    });
+
     it("starts no stream for a request cancelled while it was being checked", async () => {
       const sender = fakeSender(6);
       let release: (value: { spawnedAt: number }) => void = () => {};

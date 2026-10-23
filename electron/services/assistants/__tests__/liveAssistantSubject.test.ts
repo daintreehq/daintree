@@ -114,6 +114,15 @@ describe("resolveLiveAssistant", () => {
     });
   });
 
+  it("says a host that didn't answer as a failure, not an ended session", async () => {
+    const { src } = sources();
+    vi.mocked(src.ptyClient.getTerminalAsync).mockRejectedValueOnce(new Error("timeout"));
+    await expect(resolveLiveAssistant(laneSubject, src)).rejects.toMatchObject({
+      code: "INTERNAL",
+    });
+    expect(src.ptyClient.getTerminalAsync).toHaveBeenCalledWith("t1", undefined, { strict: true });
+  });
+
   it("hears only its own session end, and lets go of the listener", async () => {
     const { src, ended } = sources();
     const binding = await resolveLiveAssistant(laneSubject, src);

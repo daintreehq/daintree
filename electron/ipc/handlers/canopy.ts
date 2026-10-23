@@ -984,6 +984,8 @@ export const canopyNamespace = defineIpcNamespace({
         const generation = ptyClient.getLiveGeneration(runId);
         await assertSameTerminal(runId, target);
         if (!isCurrentWatchRequest(viewId, ticket)) return { watchId: null, snapshot: null };
+        // Turning Canopy off ends worker streams only; one still being checked meets the gate again.
+        requireActivated();
         if (generation !== null && !ptyClient.isLiveGeneration(runId, generation)) {
           throw new Error("That agent isn't running any more.");
         }
