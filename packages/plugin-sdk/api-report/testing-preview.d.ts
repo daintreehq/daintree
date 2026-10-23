@@ -149,6 +149,36 @@ interface PluginSettingsViewContext {
     readonly scope: "user" | "project";
     /** The project the section is shown for; `null` in the `"user"` home. */
     readonly projectId: string | null;
+    /**
+     * The declared settings page (`pages[].id` on the settings view) the user
+     * has open, or `null` on the section's own root. Absent on a host that
+     * predates pages, and for a view that declares none.
+     */
+    readonly page?: string | null;
+    /**
+     * A deep link to one of the settings this view edits (`editor: "view"`),
+     * present until it is answered. Focus that setting's control and call
+     * `acknowledge(true)`; call `acknowledge(false)` when you can't show it. A
+     * view that doesn't answer in time, or answers `false`, gets the host's
+     * landing on the whole section instead, so ignoring this is always safe.
+     */
+    readonly focus?: PluginSettingsViewFocus;
+}
+/**
+ * A request to land on one setting a custom settings view edits, handed to it
+ * as {@link PluginSettingsViewContext.focus}. `key` is always a declared
+ * `contributes.settings` id with `editor: "view"` that lives in this home; the
+ * host checks it before passing it on. `nonce` changes for every request, so a
+ * second link to the same key lands again.
+ */
+interface PluginSettingsViewFocus {
+    readonly key: string;
+    readonly nonce: number;
+    /**
+     * Report whether the view landed on `key`. Only the first answer for a
+     * request counts; one after the host has fallen back does nothing.
+     */
+    readonly acknowledge: (landed: boolean) => void;
 }
 /**
  * Where a plugin view is mounted, handed to it as

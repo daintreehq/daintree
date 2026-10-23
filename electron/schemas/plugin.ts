@@ -725,6 +725,19 @@ const VIEW_DISPLAY_SOURCE: Record<Exclude<ViewContribution["location"], "sidebar
  * `contributes.views` key (the pre-1.0 `experimental_views` name is still
  * accepted as a deprecated alias). See `docs/plugins/architecture.md`.
  */
+const SETTINGS_VIEW_TITLE_MAX_LENGTH = 80;
+const SETTINGS_VIEW_DESCRIPTION_MAX_LENGTH = 200;
+const SETTINGS_VIEW_PAGES_MAX = 20;
+
+/** One page of a settings view's `pages`: navigation inside the plugin's settings home. */
+const SettingsViewPageSchema = z
+  .object({
+    id: z.string().min(1).max(64).regex(SAFE_ID_PATTERN),
+    title: z.string().trim().min(1).max(SETTINGS_VIEW_TITLE_MAX_LENGTH),
+    description: z.string().trim().min(1).max(SETTINGS_VIEW_DESCRIPTION_MAX_LENGTH).optional(),
+  })
+  .strict();
+
 export const ViewContributionSchema = z
   .object({
     id: z.string().min(1).max(64).regex(SAFE_ID_PATTERN),
@@ -757,6 +770,31 @@ export const ViewContributionSchema = z
       .max(SIDEBAR_VIEW_PRIORITY_MAX)
       .optional(),
     when: z.string().min(1).optional(),
+    // Settings views only (the manifest `superRefine` rejects them elsewhere):
+    // what settings search shows for the custom section, and the pages the
+    // host lists under it. Display and navigation only — no storage, scope or
+    // permission rides on a page.
+    title: z.string().trim().min(1).max(SETTINGS_VIEW_TITLE_MAX_LENGTH).optional(),
+    description: z.string().trim().min(1).max(SETTINGS_VIEW_DESCRIPTION_MAX_LENGTH).optional(),
+    pages: z
+      .array(SettingsViewPageSchema)
+      .min(1)
+      .max(SETTINGS_VIEW_PAGES_MAX)
+      .superRefine((pages, ctx) => {
+        const seen = new Set<string>();
+        pages.forEach((page, index) => {
+          if (seen.has(page.id)) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              path: [index, "id"],
+              message: `Settings page id "${page.id}" is declared twice — search and deep links name a page by its id.`,
+              params: { errorCode: "settings_view_page_duplicate" },
+            });
+          }
+          seen.add(page.id);
+        });
+      })
+      .optional(),
   })
   .strict();
 
@@ -5351,6 +5389,19 @@ function buildPluginManifestSchema(origin: PluginOrigin) {
       // view), and a second one has nowhere to go.
       let settingsViewSeen = false;
       manifest.contributes.views.forEach((view, index) => {
+        // What only the settings home reads; a panel or file editor takes its
+        // display from elsewhere and has no pages to list.
+        if (view.location !== "settings") {
+          for (const field of ["title", "description", "pages"] as const) {
+            if (view[field] === undefined) continue;
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              path: ["contributes", "views", index, field],
+              message: `View "${view.id}" sets ${field}, which only a location: "settings" view uses — it describes the plugin's custom settings section, and a ${view.location} view is not one.`,
+              params: { errorCode: "view_settings_field_misplaced" },
+            });
+          }
+        }
         if (view.location === "sidebar") {
           if (view.name === undefined) {
             ctx.addIssue({

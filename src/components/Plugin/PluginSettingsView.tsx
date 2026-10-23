@@ -1,9 +1,10 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
+import { ChevronLeft } from "lucide-react";
 import type { LoadedPluginInfo, PluginSettingsViewContext } from "@shared/types/plugin";
 import { SettingsGroup, SettingsRow } from "@/components/Settings/SettingsGroup";
 import { Button } from "@/components/ui/button";
 import { PluginHostedView } from "@/components/Plugin/PluginHostedView";
-import { pluginDeclaresSettingsView } from "@/services/plugin/pluginSettingsHome";
+import { pluginDeclaresSettingsView, settingsViewOf } from "@/services/plugin/pluginSettingsHome";
 import { selectPluginHostedView, usePluginHostedViewsStore } from "@/store/pluginHostedViewsStore";
 
 /**
@@ -26,16 +27,34 @@ import { selectPluginHostedView, usePluginHostedViewsStore } from "@/store/plugi
  * A plugin that declares a section but can't show it here still gets the
  * section, as one row saying what it needs, rather than leaving the user to
  * guess where it went.
+ *
+ * A view that declares `pages` gets them listed under its root as rows with
+ * an Open button. An open page keeps the same mount — the view just hears the
+ * page id in `settingsContext.page` — under a host-drawn heading with a Back
+ * button that returns focus to the page's Open button.
  */
 export function PluginSettingsView({
   plugin,
   context,
   running = true,
+  page = null,
+  onPageChange,
+  pageHeadingId,
+  focus = null,
+  onFocusAnswered,
 }: {
   plugin: LoadedPluginInfo;
   context: PluginSettingsViewContext;
   /** False while the home knows the plugin is stopped, even if its list is stale. */
   running?: boolean;
+  /** The declared page that is open, or `null` for the section's root. */
+  page?: string | null;
+  onPageChange?: (page: string | null) => void;
+  /** The DOM id the open page's heading takes, where a page deep link lands. */
+  pageHeadingId?: string;
+  /** A deep link to a key the view edits, handed on until it is answered. */
+  focus?: { key: string; nonce: number } | null;
+  onFocusAnswered?: (nonce: number, landed: boolean) => void;
 }) {
   const initHostedViews = usePluginHostedViewsStore((s) => s.init);
   useEffect(() => {
@@ -47,20 +66,120 @@ export function PluginSettingsView({
     selectPluginHostedView(s.views, plugin.instanceId, "settings")
   );
 
+  const pages = settingsViewOf(plugin)?.pages ?? [];
+  const openPage = page === null ? undefined : pages.find((p) => p.id === page);
+  // Back hands focus to the Open button it came from; opening a page moves it
+  // to the page's heading, so a keyboard user is never left on a control that
+  // has just been unmounted.
+  const pagesRef = useRef<HTMLDivElement>(null);
+  const returnToPage = useRef<string | null>(null);
+  const openPageId = openPage?.id ?? null;
+  useEffect(() => {
+    if (openPageId !== null) {
+      // Remembered even before the view has rendered, so Back after a deep
+      // link into a page still knows where to return.
+      returnToPage.current = openPageId;
+      if (pageHeadingId !== undefined) document.getElementById(pageHeadingId)?.focus();
+      return;
+    }
+    const back = returnToPage.current;
+    returnToPage.current = null;
+    const root = pagesRef.current;
+    if (back === null || root === null) return;
+    // Only when focus went down with the page (Back, or the page's controls);
+    // never pulled away from wherever the user has moved on to.
+    const active = document.activeElement;
+    if (active !== null && active !== document.body && !root.contains(active)) return;
+    // The page's own Open button, or — when a reload dropped that page — the
+    // first page left, or the section itself, rather than the document.
+    const trigger =
+      root.querySelector<HTMLElement>(`[data-settings-page-trigger="${CSS.escape(back)}"]`) ??
+      root.querySelector<HTMLElement>("[data-settings-page-trigger]");
+    if (trigger) {
+      trigger.focus({ preventScroll: false });
+      return;
+    }
+    if (!root.hasAttribute("tabindex")) root.setAttribute("tabindex", "-1");
+    root.focus({ preventScroll: true });
+  }, [openPageId, pageHeadingId]);
+
+  const viewFocus =
+    focus !== null && onFocusAnswered !== undefined
+      ? {
+          key: focus.key,
+          nonce: focus.nonce,
+          acknowledge: (landed: boolean) => onFocusAnswered(focus.nonce, landed),
+        }
+      : undefined;
+  const viewContext: PluginSettingsViewContext = {
+    ...context,
+    ...(pages.length > 0 ? { page: openPage?.id ?? null } : {}),
+    ...(viewFocus !== undefined ? { focus: viewFocus } : {}),
+  };
+
   if (!pluginDeclaresSettingsView(plugin)) return null;
   if (running && view !== undefined) {
     return (
-      <SettingsGroup>
-        <PluginHostedView
-          source={{ from: "hosted", view }}
-          host="settings"
-          // Keyed by home: the manager and the project page each hold their own
-          // mount, and a view's per-mount state belongs to one of them.
-          mountId={`settings:${plugin.instanceId}:${context.scope}`}
-          settingsContext={context}
-          testId="plugin-settings-view"
-        />
-      </SettingsGroup>
+      <div ref={pagesRef} className="grid gap-3">
+        {openPage !== undefined && (
+          <div className="flex items-start gap-2">
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => onPageChange?.(null)}
+              aria-label="Back to all settings"
+            >
+              <ChevronLeft aria-hidden="true" />
+              Back
+            </Button>
+            <div className="min-w-0 pt-1">
+              <h4
+                id={pageHeadingId}
+                tabIndex={-1}
+                className="text-sm font-medium text-text-primary"
+              >
+                {openPage.title}
+              </h4>
+              {openPage.description !== undefined && (
+                <p className="text-xs text-text-secondary">{openPage.description}</p>
+              )}
+            </div>
+          </div>
+        )}
+        <SettingsGroup>
+          <PluginHostedView
+            source={{ from: "hosted", view }}
+            host="settings"
+            // Keyed by home: the manager and the project page each hold their own
+            // mount, and a view's per-mount state belongs to one of them.
+            mountId={`settings:${plugin.instanceId}:${context.scope}`}
+            settingsContext={viewContext}
+            testId="plugin-settings-view"
+          />
+        </SettingsGroup>
+        {openPage === undefined && pages.length > 0 && (
+          <SettingsGroup>
+            {pages.map((p) => (
+              <SettingsRow
+                key={p.id}
+                label={p.title}
+                {...(p.description !== undefined ? { description: p.description } : {})}
+                control={
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    data-settings-page-trigger={p.id}
+                    aria-label={`Open ${p.title}`}
+                    onClick={() => onPageChange?.(p.id)}
+                  >
+                    Open
+                  </Button>
+                }
+              />
+            ))}
+          </SettingsGroup>
+        )}
+      </div>
     );
   }
   if (running && !plugin.disabled && !snapshotLoaded) {

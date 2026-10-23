@@ -11,7 +11,11 @@ import { PluginMcpServersSection } from "./PluginMcpServersSection";
 import { PluginLogsSection, usePluginLogs } from "./PluginLogsSection";
 import { PluginPerformanceSection, PluginStylesSection } from "./PluginPerformanceTab";
 import { usePluginPerfSnapshot } from "@/hooks/usePluginPerfSnapshot";
-import { PluginSettingsForm } from "@/components/Settings/PluginSettingsForm";
+import {
+  PluginSettingsForm,
+  settingsFocusRequestOf,
+} from "@/components/Settings/PluginSettingsForm";
+import type { PluginSettingsRequest } from "@/store/pluginManagerStore";
 import { pluginHasSettings } from "@/services/plugin/pluginSettingsHome";
 import { Button } from "@/components/ui/button";
 import { SettingsSwitch } from "@/components/Settings/SettingsSwitch";
@@ -304,9 +308,9 @@ interface PluginDetailPaneProps {
   onCheckForUpdate: () => void;
   /**
    * A pending `plugin.openSettings` for this plugin: switches to the Settings
-   * tab and, with a `key`, lands on that setting. `nonce` distinguishes repeats.
+   * tab and, with a `key` or a `section`, lands there. `nonce` distinguishes repeats.
    */
-  settingsRequest?: { key?: string; nonce: number } | null;
+  settingsRequest?: Omit<PluginSettingsRequest, "pluginId" | "home"> | null;
   /** Told once `settingsRequest` has been applied, so its source can drop it. */
   onSettingsRequestHandled?: (nonce: number) => void;
   /** What is installed here, for the manifest's `worksWith`; see `buildWorksWithPeers`. */
@@ -463,14 +467,15 @@ export function PluginDetailPane({
   // for — leaving it in the manager's search box would put the keyboard user
   // back at the top of a list they never asked to browse.
   const requestNonce = settingsRequest?.nonce;
-  const requestKey = settingsRequest?.key;
+  const focusRequest = settingsFocusRequestOf(settingsRequest);
+  const targeted = focusRequest !== null;
   const paneRef = useRef<HTMLDivElement>(null);
   const [keylessFocusNonce, setKeylessFocusNonce] = useState<number | null>(null);
   useEffect(() => {
     if (requestNonce === undefined || !hasSettings) return;
     setActiveTab("settings");
-    if (requestKey === undefined) setKeylessFocusNonce(requestNonce);
-  }, [requestNonce, requestKey, hasSettings]);
+    if (!targeted) setKeylessFocusNonce(requestNonce);
+  }, [requestNonce, targeted, hasSettings]);
   useEffect(() => {
     if (keylessFocusNonce === null || currentTab !== "settings") return;
     paneRef.current
@@ -762,11 +767,7 @@ export function PluginDetailPane({
           <PluginSettingsForm
             plugin={plugin}
             viewScope="user"
-            focusRequest={
-              requestNonce !== undefined && requestKey !== undefined
-                ? { key: requestKey, nonce: requestNonce }
-                : null
-            }
+            focusRequest={focusRequest}
             onFocusHandled={onSettingsRequestHandled}
           />
         )}

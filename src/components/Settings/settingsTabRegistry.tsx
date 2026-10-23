@@ -1778,8 +1778,11 @@ export const SETTINGS_REGISTRY = [
         section: "Plugins",
         title: "Plugin manager",
         description:
-          "Open the plugin manager to install from a file or URL, enable or disable, uninstall, and check for updates.",
+          "Open the plugin manager to install from a file or URL, enable or disable, uninstall, check for updates, and change a plugin's settings and connected accounts.",
         keywords: [
+          "plugin settings",
+          "connections",
+          "accounts",
           "install",
           "plugin",
           "plugins",

@@ -24,15 +24,53 @@ describe("ViewContributionSchema (issue #10464)", () => {
     expect(result.success).toBe(true);
   });
 
-  // `description` was removed (#10888): the matching panel owns a view's
-  // display metadata, so nothing at runtime read it. Strict validation rejects
-  // it, keeping the frozen contract honest.
-  it("rejects the removed view field description (strict)", () => {
-    expect(ViewContributionSchema.safeParse({ ...base, description: "x" }).success).toBe(false);
-  });
+  // `description` was removed from panel views (#10888): the matching panel
+  // owns a view's display metadata. It came back for settings views only
+  // (#14101), so the manifest `superRefine` rejects it on any other location —
+  // see `pluginManifestIntegrity.test.ts`.
 
   it("accepts location 'settings' — the plugin's custom settings section", () => {
     expect(ViewContributionSchema.safeParse({ ...base, location: "settings" }).success).toBe(true);
+  });
+
+  it("accepts a settings view's search title, description and pages", () => {
+    const result = ViewContributionSchema.safeParse({
+      ...base,
+      location: "settings",
+      title: " Board layout ",
+      description: "Columns and swimlanes",
+      pages: [
+        { id: "columns", title: "Columns" },
+        { id: "lanes", title: "Swimlanes", description: "Group cards by assignee" },
+      ],
+    });
+    expect(result.success).toBe(true);
+    expect(result.data?.title).toBe("Board layout");
+  });
+
+  it.each([
+    ["no pages", { pages: [] }],
+    ["a page with an unsafe id", { pages: [{ id: "a b", title: "A" }] }],
+    ["a page with a blank title", { pages: [{ id: "a", title: "  " }] }],
+    ["a page with an unknown field", { pages: [{ id: "a", title: "A", viewPath: "x.js" }] }],
+    ["a blank title", { title: "  " }],
+  ])("rejects a settings view with %s", (_label, extra) => {
+    expect(
+      ViewContributionSchema.safeParse({ ...base, location: "settings", ...extra }).success
+    ).toBe(false);
+  });
+
+  it("rejects a page id declared twice", () => {
+    const result = ViewContributionSchema.safeParse({
+      ...base,
+      location: "settings",
+      pages: [
+        { id: "columns", title: "Columns" },
+        { id: "columns", title: "Columns again" },
+      ],
+    });
+    expect(result.success).toBe(false);
+    expect(result.error?.issues[0]?.path).toEqual(["pages", 1, "id"]);
   });
 
   it("accepts a sidebar view with its switcher fields", () => {

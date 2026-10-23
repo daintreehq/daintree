@@ -920,6 +920,46 @@ describe("PluginService", () => {
     );
   });
 
+  it("offers settings from the panels and toolbar buttons of an account-only plugin (#14101)", async () => {
+    await writePlugin("account-only", {
+      name: "acme.account-only",
+      version: "1.0.0",
+      // An account calls out over the network, so the manifest has to say so.
+      capabilities: ["network:fetch"],
+      contributes: {
+        panels: [{ id: "board", name: "Board", iconId: "eye", color: "#111" }],
+        views: [{ id: "board", componentPath: "dist/board.js", location: "panel" }],
+        toolbarButtons: [
+          { id: "open", label: "Open", iconId: "puzzle", actionId: "acme.account-only.go" },
+        ],
+        account: { kind: "token", label: "Acme" },
+      },
+    });
+    await writePlugin("bare-toolbar", {
+      name: "acme.bare-toolbar",
+      version: "1.0.0",
+      contributes: {
+        toolbarButtons: [
+          { id: "open", label: "Open", iconId: "puzzle", actionId: "acme.bare-toolbar.go" },
+        ],
+      },
+    });
+
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    const panel = vi
+      .mocked(registerPanelKind)
+      .mock.calls.find((call) => call[0]?.id === "acme.account-only.board")?.[0];
+    expect(panel).toMatchObject({ hasPluginSettings: true });
+    const button = (id: string) =>
+      vi.mocked(registerToolbarButton).mock.calls.find((call) => call[0]?.id === id)?.[0];
+    expect(button("acme.account-only.open")).toMatchObject({ hasPluginSettings: true });
+    expect(
+      Object.prototype.hasOwnProperty.call(button("acme.bare-toolbar.open"), "hasPluginSettings")
+    ).toBe(false);
+  });
+
   it("registers menu items from plugin manifest", async () => {
     await writePlugin("menu-test", {
       name: "acme.menu-test",

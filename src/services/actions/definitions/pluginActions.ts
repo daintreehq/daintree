@@ -452,7 +452,7 @@ export function registerPluginActions(actions: ActionRegistry, callbacks: Action
       id: "plugin.openSettings",
       title: "Open plugin settings",
       description:
-        "Show a plugin's settings in the one place they live: the plugin manager for an installed plugin's own settings, Project settings → Plugins for a project plugin or a project-scoped setting. A declared key is requested for landing; an undeclared one is ignored.",
+        "Show a plugin's settings where they live: the plugin manager for an installed plugin's own settings, Project settings → Plugins for a project plugin or project-scoped setting. Lands on a declared key or section; anything undeclared is ignored.",
       category: "plugins",
       kind: "command",
       danger: "safe",
@@ -476,6 +476,23 @@ export function registerPluginActions(actions: ActionRegistry, callbacks: Action
           .min(1)
           .optional()
           .describe("A setting id from the plugin's contributes.settings to land on."),
+        section: z
+          .enum(["account", "setup", "custom"])
+          .optional()
+          .describe(
+            "Land on the plugin's account row, setup checklist or custom settings section instead of a key. Ignored when key names a declared setting."
+          ),
+        page: z
+          .string()
+          .min(1)
+          .optional()
+          .describe("With section: custom, a page id the plugin's settings view declares."),
+        scope: z
+          .enum(["user", "project"])
+          .optional()
+          .describe(
+            "For an installed plugin's custom section or its settings as a whole, which home to open: the plugin manager (user) or Project settings (project)."
+          ),
       }),
       resultSchema: z.object({
         pluginId: z.string(),
@@ -483,14 +500,21 @@ export function registerPluginActions(actions: ActionRegistry, callbacks: Action
         home: z.enum(["plugin-manager", "project-settings"]),
         /** The declared setting the request asked to land on, or null. */
         requestedKey: z.string().nullable(),
+        /** The section the request asked to land on, when the plugin has it, or null. */
+        requestedSection: z.enum(["account", "setup", "custom"]).nullable(),
       }),
-      run: async ({ pluginId, key }, ctx) => {
+      run: async ({ pluginId, key, section, page, scope }, ctx) => {
         const projectId = ctx?.projectId ?? useProjectStore.getState().currentProject?.id ?? null;
         const resolution = resolvePluginSettingsTarget(
           pluginId,
           key,
           await pluginClient.list(),
-          projectId
+          projectId,
+          {
+            ...(section !== undefined ? { section } : {}),
+            ...(page !== undefined ? { page } : {}),
+            ...(scope !== undefined ? { scope } : {}),
+          }
         );
         if (!resolution.ok) {
           throw new Error(
@@ -507,12 +531,15 @@ export function registerPluginActions(actions: ActionRegistry, callbacks: Action
           pluginId: target.plugin.instanceId,
           home: target.home,
           ...(target.key !== undefined ? { key: target.key } : {}),
+          ...(target.section !== undefined ? { section: target.section } : {}),
+          ...(target.page !== undefined ? { page: target.page } : {}),
         });
         if (target.home === "project") callbacks.onOpenSettingsTab({ tab: "project:plugins" });
         return {
           pluginId,
           home: target.home === "project" ? "project-settings" : "plugin-manager",
           requestedKey: target.key ?? null,
+          requestedSection: target.section ?? null,
         };
       },
     })

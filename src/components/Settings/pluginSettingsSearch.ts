@@ -4,7 +4,15 @@ import {
   type LoadedPluginInfo,
   type ProjectPluginInfo,
 } from "@shared/types/plugin";
-import { settingsForHome } from "@/services/plugin/pluginSettingsHome";
+import {
+  accountHomeOf,
+  forgeOwnsProjectSettings,
+  homeHasSettings,
+  settingsForHome,
+  settingsViewHomesOf,
+  settingsViewOf,
+  setupHomeOf,
+} from "@/services/plugin/pluginSettingsHome";
 import type { PluginSettingsHome } from "@/store/pluginManagerStore";
 import { useProjectPluginStore } from "@/store/projectPluginStore";
 import { logError } from "@/utils/logger";
@@ -23,28 +31,105 @@ const HOME_ENTRY = {
   Pick<SettingsSearchEntry, "tab" | "scope" | "tabLabel">
 >;
 
+/** The `settingsContext.scope` each home mounts a custom section with. */
+const HOME_SCOPE = { manager: "user", project: "project" } as const satisfies Record<
+  PluginSettingsHome,
+  "user" | "project"
+>;
+
 /**
- * One search row per declared setting, filed under the home that shows it.
- * Only labels and descriptions are indexed: defaults, stored values and options
- * stay out, which is what keeps a secret field's contents unsearchable.
+ * The search rows for each plugin, filed under the home that shows each one:
+ * the home itself, its setup steps, its account, every declared setting, and
+ * its custom section with the section's declared pages. A plugin with only an
+ * account, a checklist or a custom section is still found, by its name and by
+ * what the manifest calls those parts.
+ *
+ * Only manifest display text is indexed — names, labels, titles and
+ * descriptions. Defaults, stored values, options, account endpoints and
+ * identities, and what a setup step observed stay out, which is what keeps a
+ * secret field's contents unsearchable.
  */
 export function buildPluginSettingsSearchEntries(
   plugins: readonly SearchablePlugin[]
 ): SettingsSearchEntry[] {
   const entries: SettingsSearchEntry[] = [];
   for (const { plugin, name } of plugins) {
+    const { instanceId } = plugin;
+    const account = plugin.manifest.contributes.account;
+    const setup = plugin.manifest.contributes.setup ?? [];
+    const view = settingsViewOf(plugin);
+    const viewHomes = settingsViewHomesOf(plugin);
     for (const home of ["manager", "project"] as const) {
+      if (!homeHasSettings(plugin, home)) continue;
+      const scope = HOME_SCOPE[home];
+      const row = (
+        id: string,
+        title: string,
+        description: string | undefined,
+        target: Omit<NonNullable<SettingsSearchEntry["plugin"]>, "instanceId">,
+        keywords: readonly string[] = []
+      ): SettingsSearchEntry => ({
+        id: `plugin:${instanceId}:${id}`,
+        ...HOME_ENTRY[home],
+        kind: "section",
+        section: name,
+        title,
+        description: description ?? "",
+        keywords: [name, ...keywords],
+        plugin: { instanceId, ...target },
+      });
+      // A forge plugin that keeps its settings in Code forge shows only a
+      // pointer there: the home is still a result, nothing inside it is.
+      const homeOnly =
+        home === "project" && plugin.origin !== "project" && forgeOwnsProjectSettings(plugin);
+      entries.push(
+        row(
+          `@home:${home}`,
+          name,
+          plugin.manifest.description,
+          // The installed plugin's other home is a scope away; a project
+          // plugin has only the one.
+          plugin.origin === "project" ? {} : { scope },
+          ["plugin", "settings"]
+        )
+      );
+      if (homeOnly) continue;
+      if (setupHomeOf(plugin) === home) {
+        for (const step of setup) {
+          entries.push(
+            row(`@setup:${step.id}`, step.title, step.description, { section: "setup" }, ["setup"])
+          );
+        }
+      }
+      if (account !== undefined && accountHomeOf(plugin) === home) {
+        entries.push(
+          row("@account", account.label, account.description, { section: "account" }, [
+            "account",
+            "connection",
+            "connect",
+            "sign in",
+          ])
+        );
+      }
       for (const def of settingsForHome(plugin, home)) {
-        entries.push({
-          id: `plugin:${plugin.instanceId}:${def.id}`,
-          ...HOME_ENTRY[home],
-          kind: "section",
-          section: name,
-          title: def.label ?? def.id,
-          description: def.description ?? "",
-          keywords: [name],
-          plugin: { instanceId: plugin.instanceId, settingId: def.id },
-        });
+        entries.push(row(def.id, def.label ?? def.id, def.description, { settingId: def.id }));
+      }
+      if (view !== undefined && viewHomes.includes(home)) {
+        entries.push(
+          row(`@custom:${home}`, view.title ?? "More settings", view.description, {
+            section: "custom",
+            scope,
+          })
+        );
+        for (const page of view.pages ?? []) {
+          entries.push(
+            row(`@page:${home}:${page.id}`, page.title, page.description, {
+              section: "custom",
+              page: page.id,
+              scope,
+            })
+          );
+        }
       }
     }
   }

@@ -24,9 +24,10 @@ import { CapabilityRow } from "@/components/Plugin/capabilityMeta";
 import { SettingsSwitch } from "@/components/Settings/SettingsSwitch";
 import {
   PluginSettingsForm,
+  settingsFocusRequestOf,
   type PluginSettingsFocusRequest,
 } from "@/components/Settings/PluginSettingsForm";
-import { pluginHasSettings } from "@/services/plugin/pluginSettingsHome";
+import { forgeOwnsProjectSettings, pluginHasSettings } from "@/services/plugin/pluginSettingsHome";
 import { usePluginManagerStore } from "@/store/pluginManagerStore";
 import { SidebarDefaultViewSection } from "@/components/Settings/SidebarDefaultViewSection";
 import { ProjectAgentToolsSection } from "@/components/Settings/ProjectAgentToolsSection";
@@ -1765,25 +1766,30 @@ export function ProjectPluginsTab() {
     return installedMatch ? `${INSTALLED_OPTION_PREFIX}${installedMatch.instanceId}` : null;
   }, [settingsRequest, installed, projectPlugins, installedOnly]);
   const requestNonce = settingsRequest?.nonce;
-  const requestKey = settingsRequest?.key;
+  const requestFocus = settingsFocusRequestOf(settingsRequest);
+  const requestTargeted = requestFocus !== null;
   // Whether the target pane will render a settings form to land in at all.
   // A stopped project plugin gets the declaration-only section, so it counts as
-  // formless even while the loaded list still carries it.
+  // formless even while the loaded list still carries it — and so does a forge
+  // plugin whose pane points to Code forge in place of its form.
   const requestProjectPlugin =
     settingsRequest === null
       ? undefined
       : projectPlugins.find((p) => p.instanceId === settingsRequest.pluginId);
+  const requestLoaded =
+    settingsRequest === null ? undefined : loadedByInstanceId.get(settingsRequest.pluginId);
   const requestTargetHasForm =
     settingsRequest !== null &&
     (requestProjectPlugin === undefined ||
       isProjectPluginRunning(requestProjectPlugin, folderTrusted)) &&
-    hasPluginSettings(loadedByInstanceId.get(settingsRequest.pluginId));
+    hasPluginSettings(requestLoaded) &&
+    !(requestProjectPlugin === undefined && forgeOwnsProjectSettings(requestLoaded));
   const [headingFocusNonce, setHeadingFocusNonce] = useState<number | null>(null);
   useEffect(() => {
     if (requestTargetId === null || requestNonce === undefined) return;
     setSelectedId(requestTargetId);
-    if (requestKey === undefined || !requestTargetHasForm) setHeadingFocusNonce(requestNonce);
-  }, [requestTargetId, requestNonce, requestKey, requestTargetHasForm]);
+    if (!requestTargeted || !requestTargetHasForm) setHeadingFocusNonce(requestNonce);
+  }, [requestTargetId, requestNonce, requestTargeted, requestTargetHasForm]);
   // With no field to land on, focus goes to the plugin's Settings heading — or
   // its pane, when it has nothing to configure here — once that pane shows and
   // the dialog has switched to this tab.
@@ -1818,9 +1824,11 @@ export function ProjectPluginsTab() {
   // Handed only to the pane the request names, and only once it is the one
   // showing — a pane being replaced must not answer for the one replacing it.
   const paneSettingsFocus: PaneSettingsFocus = {
+    // A formless pane (stopped, or pointing to Code forge) gets nothing to
+    // answer: the heading landing above settles it.
     request:
-      requestNonce !== undefined && requestKey !== undefined && selectedId === requestTargetId
-        ? { key: requestKey, nonce: requestNonce }
+      requestFocus !== null && requestTargetHasForm && selectedId === requestTargetId
+        ? requestFocus
         : null,
     onHandled: consumeSettingsRequest,
   };

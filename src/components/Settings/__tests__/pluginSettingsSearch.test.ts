@@ -7,14 +7,22 @@ import { filterSettings } from "../settingsSearchUtils";
 function plugin(
   instanceId: string,
   settings: SettingDefinition[],
-  origin: "global" | "project" = "global"
+  origin: "global" | "project" = "global",
+  extra: Record<string, unknown> = {}
 ): LoadedPluginInfo {
   return {
     instanceId,
     origin,
-    manifest: { name: instanceId, displayName: `${instanceId} display`, contributes: { settings } },
+    manifest: {
+      name: instanceId,
+      displayName: `${instanceId} display`,
+      contributes: { settings, ...extra },
+    },
   } as unknown as LoadedPluginInfo;
 }
+
+const fieldRows = <T extends { plugin?: { settingId?: string } }>(entries: T[]): T[] =>
+  entries.filter((e) => e.plugin?.settingId !== undefined);
 
 function projectRow(overrides: Partial<ProjectPluginInfo>): ProjectPluginInfo {
   return {
@@ -39,11 +47,19 @@ describe("buildPluginSettingsSearchEntries", () => {
         ] as SettingDefinition[]),
       },
     ]);
-    expect(entries.map((e) => [e.id, e.tab, e.scope, e.title, e.section])).toEqual([
+    expect(fieldRows(entries).map((e) => [e.id, e.tab, e.scope, e.title, e.section])).toEqual([
       ["plugin:acme.linear:apiBase", "plugins", "global", "API base", "Linear"],
       ["plugin:acme.linear:team", "project:plugins", "project", "team", "Linear"],
     ]);
-    expect(entries[0]!.plugin).toEqual({ instanceId: "acme.linear", settingId: "apiBase" });
+    expect(fieldRows(entries)[0]!.plugin).toEqual({
+      instanceId: "acme.linear",
+      settingId: "apiBase",
+    });
+    // Each home the plugin shows something in is a result of its own.
+    expect(entries.filter((e) => e.id.includes("@home")).map((e) => [e.tab, e.plugin])).toEqual([
+      ["plugins", { instanceId: "acme.linear", scope: "user" }],
+      ["project:plugins", { instanceId: "acme.linear", scope: "project" }],
+    ]);
   });
 
   it("never indexes defaults or options", () => {
@@ -87,6 +103,149 @@ describe("buildPluginSettingsSearchEntries", () => {
     ]);
     const ids = filterSettings(index, "zork", { hasProject: false }).map((e) => e.id);
     expect(ids).toEqual(["plugin:acme.p:a"]);
+  });
+
+  it("finds a plugin with only an account, in the manager for an installed plugin", () => {
+    const entries = buildPluginSettingsSearchEntries([
+      {
+        name: "Linear",
+        plugin: plugin("acme.linear", [], "global", {
+          account: { kind: "token", label: "Linear account", description: "Paste an API key" },
+        }),
+      },
+    ]);
+    const account = filterSettings(entries, "linear account")[0];
+    expect(account).toMatchObject({
+      tab: "plugins",
+      scope: "global",
+      plugin: { instanceId: "acme.linear", section: "account" },
+    });
+    expect(filterSettings(entries, "connection").map((e) => e.id)).toContain(
+      "plugin:acme.linear:@account"
+    );
+  });
+
+  it("files a project plugin's account and setup under its project", () => {
+    const entries = buildPluginSettingsSearchEntries([
+      {
+        name: "Mine",
+        plugin: plugin("project__p1__mine", [], "project", {
+          account: { kind: "token", label: "Service" },
+          setup: [
+            {
+              id: "sync",
+              title: "Run the first sync",
+              done: { kind: "context", when: "mine.synced" },
+            },
+          ],
+        }),
+      },
+    ]);
+    expect(entries.map((e) => [e.id, e.tab, e.plugin])).toEqual([
+      [
+        "plugin:project__p1__mine:@home:project",
+        "project:plugins",
+        { instanceId: "project__p1__mine" },
+      ],
+      [
+        "plugin:project__p1__mine:@setup:sync",
+        "project:plugins",
+        { instanceId: "project__p1__mine", section: "setup" },
+      ],
+      [
+        "plugin:project__p1__mine:@account",
+        "project:plugins",
+        { instanceId: "project__p1__mine", section: "account" },
+      ],
+    ]);
+    expect(filterSettings(entries, "first sync", { hasProject: false })).toEqual([]);
+  });
+
+  it("finds an installed plugin's custom section and its pages in both homes", () => {
+    const entries = buildPluginSettingsSearchEntries([
+      {
+        name: "Board",
+        plugin: plugin("acme.board", [], "global", {
+          views: [
+            {
+              id: "prefs",
+              componentPath: "dist/prefs.js",
+              location: "settings",
+              title: "Board layout",
+              pages: [
+                { id: "columns", title: "Column mapping", description: "Statuses to columns" },
+              ],
+            },
+          ],
+        }),
+      },
+    ]);
+    const custom = filterSettings(entries, "board layout").filter((e) => e.id.includes("@custom"));
+    expect(custom.map((e) => [e.tab, e.plugin])).toEqual([
+      ["plugins", { instanceId: "acme.board", section: "custom", scope: "user" }],
+      ["project:plugins", { instanceId: "acme.board", section: "custom", scope: "project" }],
+    ]);
+    expect(filterSettings(entries, "column mapping", { hasProject: false })[0]?.plugin).toEqual({
+      instanceId: "acme.board",
+      section: "custom",
+      page: "columns",
+      scope: "user",
+    });
+  });
+
+  it("offers only the home in Project settings for a forge plugin that keeps its settings in Code forge", () => {
+    const entries = buildPluginSettingsSearchEntries([
+      {
+        name: "GitLab",
+        plugin: plugin(
+          "acme.gitlab",
+          [
+            { id: "host", type: "string", label: "Host" },
+            { id: "group", type: "string", label: "Group", scope: "project" },
+          ] as SettingDefinition[],
+          "global",
+          {
+            forgeProviders: [
+              { id: "gitlab", name: "GitLab", slots: { settingsTab: "gitlab.tab" } },
+            ],
+            views: [{ id: "prefs", componentPath: "dist/prefs.js", location: "settings" }],
+          }
+        ),
+      },
+    ]);
+    expect(entries.filter((e) => e.tab === "project:plugins").map((e) => e.id)).toEqual([
+      "plugin:acme.gitlab:@home:project",
+    ]);
+    expect(entries.some((e) => e.id === "plugin:acme.gitlab:host")).toBe(true);
+  });
+
+  it("indexes no account endpoint, client id or setup check", () => {
+    const entries = buildPluginSettingsSearchEntries([
+      {
+        name: "Vault",
+        plugin: plugin("acme.vault", [], "global", {
+          account: {
+            kind: "oauth2",
+            label: "Vault",
+            authorizeUrl: "https://auth.example/zebra-authorize",
+            tokenUrl: "https://auth.example/zebra-token",
+            clientId: "zebra-client",
+            scopes: ["zebra-scope"],
+            identity: { url: "https://api.example/zebra-me", field: "zebra.login" },
+          },
+          setup: [
+            {
+              id: "key",
+              title: "Add a key",
+              done: { kind: "context", when: "zebra.when" },
+              action: { kind: "command", actionId: "acme.vault.zebraCommand" },
+            },
+          ],
+        }),
+      },
+    ]);
+    expect(entries.length).toBeGreaterThan(0);
+    expect(JSON.stringify(entries)).not.toMatch(/zebra/);
   });
 });
 

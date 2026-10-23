@@ -2562,6 +2562,15 @@ export class PluginService {
         ? `${pluginId}.${actionId.slice(ownPrefix.length)}`
         : actionId;
 
+    // Anything a settings home would show — fields, a custom section, setup
+    // steps or an account — so every piece of the plugin's chrome offers
+    // "Plugin settings…" by the same rule the renderer's homes use.
+    const hasPluginSettings =
+      manifest.contributes.settings.length > 0 ||
+      manifest.contributes.views.some((v) => v.location === "settings") ||
+      (manifest.contributes.setup?.length ?? 0) > 0 ||
+      manifest.contributes.account !== undefined;
+
     for (const btn of manifest.contributes.toolbarButtons) {
       // Canonical `{pluginId}.{id}` form (#9281) — matches `registerPluginAction`
       // and `panelKindRegistry`. The legacy `plugin.{pluginId}.{id}` form lived
@@ -2574,6 +2583,7 @@ export class PluginService {
         iconId: resolveIconId(btn.iconId),
         priority: btn.priority ?? 3,
         pluginId,
+        ...(hasPluginSettings ? { hasPluginSettings: true } : {}),
         ...(btn.when !== undefined ? { when: btn.when } : {}),
         ...(btn.menu !== undefined && btn.menu.length > 0
           ? {
@@ -3079,11 +3089,7 @@ export class PluginService {
     // the config it did before.
     const declaredSettings = manifest.contributes.settings;
     const pluginSettingsKindFlags = {
-      ...(declaredSettings.length > 0 ||
-      manifest.contributes.views.some((v) => v.location === "settings") ||
-      (manifest.contributes.setup?.length ?? 0) > 0
-        ? { hasPluginSettings: true }
-        : {}),
+      ...(hasPluginSettings ? { hasPluginSettings: true } : {}),
       ...(declaredSettings.some((s) => s.required === true) ? { hasRequiredSettings: true } : {}),
       ...((manifest.contributes.setup?.length ?? 0) > 0 ? { hasSetupSteps: true } : {}),
       // "Back up data…" on every panel of a plugin that declares a database;

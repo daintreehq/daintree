@@ -290,6 +290,41 @@ describe("location: sidebar views", () => {
     ]);
   });
 
+  it.each([
+    ["panel", { description: "Rich" }, "description"],
+    ["panel", { title: "Rich" }, "title"],
+    ["sidebar", { pages: [{ id: "a", title: "A" }] }, "pages"],
+    ["fileEditor", { title: "Records" }, "title"],
+  ])("rejects a %s view that sets the settings-only %o", (location, extra, field) => {
+    const base =
+      location === "sidebar"
+        ? sidebarView("board")
+        : { ...view(location === "panel" ? "rich" : "prefs"), location };
+    const result = manifestWith({ panels: [panel("rich")], views: [{ ...base, ...extra }] });
+    expect(result.success).toBe(false);
+    expect(issueWithCode(result, "view_settings_field_misplaced")?.path).toEqual([
+      "contributes",
+      "views",
+      0,
+      field,
+    ]);
+  });
+
+  it("accepts a settings view's title, description and pages", () => {
+    const result = manifestWith({
+      views: [
+        {
+          ...view("prefs"),
+          location: "settings",
+          title: "Board layout",
+          description: "Columns and swimlanes",
+          pages: [{ id: "columns", title: "Columns" }],
+        },
+      ],
+    });
+    expect(result.success).toBe(true);
+  });
+
   it("rejects a project surface that names a sidebar view", () => {
     const result = getPluginManifestSchema("project").safeParse({
       name: "acme.my-plugin",
