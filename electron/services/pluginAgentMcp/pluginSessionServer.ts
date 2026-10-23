@@ -196,7 +196,11 @@ function toolResult(
  * `structuredContent` is dropped because no output schema is advertised for it.
  */
 function forwardedToolResult(value: unknown, maxResultBytes: number): CallToolResult {
-  if (!isPlainObject(value) || !Array.isArray(value.content)) {
+  if (
+    !isPlainObject(value) ||
+    !Array.isArray(value.content) ||
+    (value.isError !== undefined && typeof value.isError !== "boolean")
+  ) {
     return toolError("The MCP server returned a malformed tool result.");
   }
   const content: { type: "text"; text: string }[] = [];

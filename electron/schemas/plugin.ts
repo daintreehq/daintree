@@ -861,7 +861,7 @@ export const AgentMcpServerSourceToolSchema = z
     group: z.string().min(1).max(64).regex(SAFE_ID_PATTERN).optional(),
     description: z
       .string()
-      .min(1)
+      .refine((value) => value.trim().length > 0, { message: "description must not be blank" })
       .refine((value) => utf8Length(value) <= AGENT_MCP_MAX_DESCRIPTION_BYTES, {
         message: `description must be at most ${AGENT_MCP_MAX_DESCRIPTION_BYTES} UTF-8 bytes`,
       })

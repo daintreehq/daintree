@@ -111,6 +111,14 @@ export type SubprocessSpawner = (
  */
 export type ProcessTreeKiller = (pid: number) => void | Promise<void>;
 
+/** Why a server's tools may have changed: it said so, it exited on its own, or the host stopped it. */
+export type ToolsInvalidatedReason = "changed" | "exited" | "stopped";
+export type ToolsInvalidatedListener = (
+  pluginId: string,
+  serverId: string,
+  reason: ToolsInvalidatedReason
+) => void;
+
 interface PendingCall {
   resolve: (value: unknown) => void;
   reject: (reason: Error) => void;
@@ -226,9 +234,7 @@ export class PluginMcpSupervisor {
    * never leaves a timer that would respawn a server the host has dropped.
    */
   private readonly settingChangeTimers = new Map<string, ReturnType<typeof setTimeout>>();
-  private readonly toolsInvalidatedListeners = new Set<
-    (pluginId: string, serverId: string) => void
-  >();
+  private readonly toolsInvalidatedListeners = new Set<ToolsInvalidatedListener>();
 
   constructor(options?: { spawner?: SubprocessSpawner; killTree?: ProcessTreeKiller }) {
     this.spawner = options?.spawner ?? defaultSpawner;
@@ -583,7 +589,7 @@ export class PluginMcpSupervisor {
       // pre-notification tool list (the `.then` identity guard then no-ops). The
       // next enumeration starts a fresh fetch.
       state.toolsListInflight = null;
-      this.emitToolsInvalidated(state);
+      this.emitToolsInvalidated(state, "changed");
       return;
     }
     // Other notifications (no id) are ignored — we don't subscribe to any.
@@ -611,17 +617,17 @@ export class PluginMcpSupervisor {
    * Fires whenever a server's tool list may no longer be what was last read:
    * it exited, crashed, was stopped or restarted, or said its tools changed.
    */
-  onDidInvalidateTools(listener: (pluginId: string, serverId: string) => void): () => void {
+  onDidInvalidateTools(listener: ToolsInvalidatedListener): () => void {
     this.toolsInvalidatedListeners.add(listener);
     return () => {
       this.toolsInvalidatedListeners.delete(listener);
     };
   }
 
-  private emitToolsInvalidated(state: SupervisedServerState): void {
+  private emitToolsInvalidated(state: SupervisedServerState, reason: ToolsInvalidatedReason): void {
     for (const listener of this.toolsInvalidatedListeners) {
       try {
-        listener(state.pluginId, state.serverId);
+        listener(state.pluginId, state.serverId, reason);
       } catch (err) {
         console.error("[PluginMcpSupervisor] tools-invalidated listener threw:", err);
       }
@@ -693,7 +699,7 @@ export class PluginMcpSupervisor {
       state.pendingCalls.delete(id);
       pending.reject(new Error(state.lastError ?? "MCP server exited"));
     }
-    this.emitToolsInvalidated(state);
+    this.emitToolsInvalidated(state, "exited");
   }
 
   /**
@@ -977,7 +983,7 @@ export class PluginMcpSupervisor {
     state.toolsCache = null;
     state.toolsListInflight = null;
     state.surfacedToolCount = 0;
-    this.emitToolsInvalidated(state);
+    this.emitToolsInvalidated(state, "stopped");
     const subprocess = state.subprocess;
     if (!subprocess) return;
     const pid = state.pid;

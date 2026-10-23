@@ -1283,20 +1283,24 @@ describe("PluginMcpSupervisor agent-facing calls (issue #14112)", () => {
   it("tells listeners when a server's tools may have changed: list_changed, exit and shutdown", async () => {
     const { fake, supervisor } = await readyServer();
     const seen: string[] = [];
-    const off = supervisor.onDidInvalidateTools((pluginId, serverId) =>
-      seen.push(`${pluginId}/${serverId}`)
+    const off = supervisor.onDidInvalidateTools((pluginId, serverId, reason) =>
+      seen.push(`${pluginId}/${serverId}:${reason}`)
     );
 
     fake.emitStdout({ jsonrpc: "2.0", method: "notifications/tools/list_changed" });
     await flushMicrotasks();
-    expect(seen).toEqual(["acme.demo/srv"]);
+    expect(seen).toEqual(["acme.demo/srv:changed"]);
 
     fake.closeStdout();
     await flushMicrotasks();
-    expect(seen).toHaveLength(2);
+    expect(seen.at(-1)).toBe("acme.demo/srv:exited");
 
     await supervisor.shutdownAll();
-    expect(seen).toHaveLength(3);
+    expect(seen).toEqual([
+      "acme.demo/srv:changed",
+      "acme.demo/srv:exited",
+      "acme.demo/srv:stopped",
+    ]);
 
     off();
     await supervisor.shutdownAll();

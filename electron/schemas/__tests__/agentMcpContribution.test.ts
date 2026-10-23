@@ -191,6 +191,17 @@ describe("contributes.agentMcp source", () => {
     expect(parse(bridged({ mcpServer: "catalog", tools: "*" })).success).toBe(false);
   });
 
+  it("rejects a blank description override", () => {
+    expect(
+      parse(
+        bridged({
+          mcpServer: "catalog",
+          tools: [{ name: "find", serverTool: "find", description: "   " }],
+        })
+      ).success
+    ).toBe(false);
+  });
+
   it("holds agent names to the agent grammar and rejects duplicates and host names", () => {
     expect(
       parse(bridged({ mcpServer: "catalog", tools: [{ name: "Search-It", serverTool: "s" }] }))

@@ -68,8 +68,8 @@ const supervisors: PluginMcpSupervisor[] = [];
 const closers: Array<() => Promise<void>> = [];
 
 afterEach(async () => {
-  for (const close of closers.splice(0)) await close();
-  for (const supervisor of supervisors.splice(0)) await supervisor.shutdownAll();
+  for (const close of closers.splice(0)) await close().catch(() => {});
+  for (const supervisor of supervisors.splice(0)) await supervisor.shutdownAll().catch(() => {});
 });
 
 function setup(instances: Record<string, Instance>) {
@@ -96,6 +96,7 @@ function setup(instances: Record<string, Instance>) {
     resolveSettings,
     supervisor,
     registry,
+    retryBaseMs: 0,
   });
   closers.push(async () => endpoints.dispose());
   return { supervisor, registry, endpoints, resolveSettings };
@@ -265,10 +266,13 @@ describe("ContributedServerEndpoints", () => {
     });
 
     const before = textOf(await client.callTool({ name: "who", arguments: {} }));
+    // The first registration announces itself; only a later notice is the drop.
+    await waitFor(() => changed > 0, "the registration notice");
+    const changedBeforeCrash = changed;
     const crashed = await client.callTool({ name: "die", arguments: {} });
     expect(crashed.isError).toBe(true);
     await waitFor(() => env.registry.get(INSTANCE_A, ENDPOINT) === undefined, "the roster drop");
-    await waitFor(() => changed > 0, "tools/list_changed");
+    await waitFor(() => changed > changedBeforeCrash, "tools/list_changed for the drop");
 
     const { tools } = await client.listTools();
     expect(tools.some((tool) => tool.name === "who")).toBe(true);
@@ -373,4 +377,142 @@ describe("ContributedServerEndpoints", () => {
     await env.supervisor.shutdown({ pluginId: INSTANCE_A });
     expect(env.registry.get(INSTANCE_A, ENDPOINT)).toBeUndefined();
   }, 20_000);
+});
+
+describe("ContributedServerEndpoints fencing", () => {
+  type Listener = Parameters<PluginMcpSupervisor["onDidInvalidateTools"]>[0];
+
+  function fakeSupervisor(options: { description?: string } = {}) {
+    const listeners = new Set<Listener>();
+    let releaseStart: (() => void) | null = null;
+    const gate = { held: false };
+    const supervisor = {
+      start: vi.fn(async () => {
+        if (!gate.held) return;
+        await new Promise<void>((resolve) => {
+          releaseStart = resolve;
+        });
+      }),
+      getFullSchema: vi.fn(async (_pluginId: string, _serverId: string, toolName: string) => ({
+        found: true as const,
+        tool: {
+          name: toolName,
+          description: options.description ?? "",
+          inputSchema: { type: "object" },
+        },
+      })),
+      callTool: vi.fn(async () => ({ content: [] })),
+      onDidInvalidateTools: vi.fn((listener: Listener) => {
+        listeners.add(listener);
+        return () => {
+          listeners.delete(listener);
+        };
+      }),
+    };
+    return {
+      supervisor,
+      gate,
+      release: () => releaseStart?.(),
+      emit: (pluginId: string, serverId: string, reason: "changed" | "exited" | "stopped") => {
+        for (const listener of listeners) listener(pluginId, serverId, reason);
+      },
+      listenerCount: () => listeners.size,
+    };
+  }
+
+  function adapter(
+    fake: ReturnType<typeof fakeSupervisor>,
+    instance: Partial<Instance> = {},
+    retryBaseMs = 0
+  ) {
+    const registry = new AgentMcpEndpointRegistry();
+    const lookup: AgentMcpServerSourceLookup = {
+      endpointId: ENDPOINT,
+      groups: instance.groups ?? [],
+      source: instance.source ?? {
+        mcpServer: "synthetic",
+        tools: [{ name: "who", serverTool: "whoami" }],
+      },
+      contribution: instance.contribution ?? server(),
+      pluginDir: "/plugins/acme",
+      declaredQueryNames: [],
+    };
+    const endpoints = new ContributedServerEndpoints({
+      findSource: (id) => (id === INSTANCE_A ? lookup : undefined),
+      resolveSettings: async () => "",
+      supervisor: fake.supervisor as never,
+      registry,
+      retryBaseMs,
+    });
+    return { endpoints, registry };
+  }
+
+  it("never registers a bind that was still running when it was disposed", async () => {
+    const fake = fakeSupervisor();
+    fake.gate.held = true;
+    const { endpoints, registry } = adapter(fake);
+
+    const pending = endpoints.ensure(INSTANCE_A);
+    await waitFor(() => fake.supervisor.start.mock.calls.length > 0, "start");
+    endpoints.dispose();
+    fake.release();
+
+    await expect(pending).rejects.toThrow(/disposed/);
+    expect(registry.get(INSTANCE_A, ENDPOINT)).toBeUndefined();
+    expect(fake.listenerCount()).toBe(0);
+    await endpoints.ensure(INSTANCE_A);
+    expect(fake.supervisor.start).toHaveBeenCalledTimes(1);
+  });
+
+  it("fences a bind only on its own server, not on another server of the same plugin", async () => {
+    const fake = fakeSupervisor();
+    fake.gate.held = true;
+    const { endpoints, registry } = adapter(fake);
+
+    const pending = endpoints.ensure(INSTANCE_A);
+    await waitFor(() => fake.supervisor.start.mock.calls.length > 0, "start");
+    fake.emit(INSTANCE_A, "other-server", "exited");
+    fake.release();
+    await pending;
+    expect(registry.get(INSTANCE_A, ENDPOINT)).toBeDefined();
+
+    fake.gate.held = true;
+    fake.emit(INSTANCE_A, "synthetic", "changed");
+    expect(registry.get(INSTANCE_A, ENDPOINT)).toBeUndefined();
+    const again = endpoints.ensure(INSTANCE_A);
+    await waitFor(() => fake.supervisor.start.mock.calls.length > 1, "second start");
+    fake.emit(INSTANCE_A, "synthetic", "changed");
+    fake.release();
+    await expect(again).rejects.toThrow(/changed while its tools were being read/);
+    expect(registry.get(INSTANCE_A, ENDPOINT)).toBeUndefined();
+  });
+
+  it("waits before starting a server that crashed soon after it was served, but not after it changed its tools", async () => {
+    const fake = fakeSupervisor();
+    const { endpoints, registry } = adapter(fake, {}, 60_000);
+
+    await endpoints.ensure(INSTANCE_A);
+    fake.emit(INSTANCE_A, "synthetic", "changed");
+    await endpoints.ensure(INSTANCE_A);
+    expect(registry.get(INSTANCE_A, ENDPOINT)).toBeDefined();
+
+    fake.emit(INSTANCE_A, "synthetic", "exited");
+    await expect(endpoints.ensure(INSTANCE_A)).rejects.toThrow(/failed recently/);
+    expect(fake.supervisor.start).toHaveBeenCalledTimes(2);
+    expect(registry.get(INSTANCE_A, ENDPOINT)).toBeUndefined();
+    endpoints.dispose();
+  });
+
+  it("keeps a fallback description inside the byte budget", async () => {
+    const fake = fakeSupervisor();
+    const { endpoints, registry } = adapter(fake, {
+      contribution: server({ name: "Ünïcödé server ".repeat(40) }),
+    });
+
+    await endpoints.ensure(INSTANCE_A);
+    const [tool] = registry.get(INSTANCE_A, ENDPOINT)!.tools;
+    expect(Buffer.byteLength(tool!.description, "utf8")).toBeLessThanOrEqual(400);
+    expect(tool!.description.startsWith("whoami from Ünïcödé server")).toBe(true);
+    endpoints.dispose();
+  });
 });
