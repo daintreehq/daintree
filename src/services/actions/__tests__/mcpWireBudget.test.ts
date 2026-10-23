@@ -830,7 +830,11 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // `includeAgents` / `projectId` arguments and the typed agent directory each
   // host entry may carry. The external ceiling does not move; `host.list` is
   // an assistant-only tool.
-  const MAX_COHORT_PAYLOAD_BYTES = 137_400;
+  // 137_400 → 137_600 for #14086, measured at 137_581 B: the raw Linux readings
+  // (`memoryPressureSomeAvg10`, `temperatureCelsius` and its zone, `metricsScope`)
+  // on each `host.list` load, which replace the invented bands a Linux host no
+  // longer sends. Optional and output only; no external tool lists hosts.
+  const MAX_COHORT_PAYLOAD_BYTES = 137_600;
 
   const wireBytes = (t: WireTool) => t.descriptionBytes + t.paramsBytes + t.outputBytes;
 
