@@ -179,6 +179,7 @@ export type PluginWorkerSubscriptionKind =
   | "storage"
   | "account"
   | "agent-state"
+  | "terminal-lifecycle"
   | "all-agents"
   | "focused-panel"
   | "project-presence"

@@ -12,6 +12,7 @@ import { getFocusedPanelTracker } from "../services/FocusedPanelTracker.js";
 import { distributePortsToView, releaseAllTerminalWorkerPorts } from "./portDistribution.js";
 import { resolveInitialCanvasBackgroundColor } from "./skeletonCss.js";
 import { PtyClient } from "../services/PtyClient.js";
+import { startTerminalLifecycleObserver } from "../services/pty/TerminalLifecycleObserver.js";
 import type { MainProcessWatchdogClient } from "../services/MainProcessWatchdogClient.js";
 import { CliAvailabilityService } from "../services/CliAvailabilityService.js";
 import { AgentVersionService } from "../services/AgentVersionService.js";
@@ -387,6 +388,10 @@ export function ensureCriticalServices(windowRegistry: WindowRegistry | undefine
     deferStart: true,
   });
   setPtyClientRef(ptyClient);
+  // Main-lifetime, like the client: every spawn from here on is observed, so a
+  // plugin's terminal-lifecycle feed (#13814) can attribute each terminal's
+  // exit, trash and restore to the project it launched in.
+  startTerminalLifecycleObserver(ptyClient);
 
   // Keep the host's fallback-eligible project set current (#12557). The
   // registry spans every window, and `ptyClient` is a process-wide singleton,

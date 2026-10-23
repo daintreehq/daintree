@@ -2809,6 +2809,7 @@ export interface GeneratedIpcInvokeMap {
         id?: string | undefined;
         kind?: string | undefined;
         launchAgentId?: string | undefined;
+        pluginPanelKindId?: string | undefined;
         projectId?: string | undefined;
         cwd?: string | undefined;
         shell?: string | undefined;

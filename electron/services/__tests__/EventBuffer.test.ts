@@ -40,6 +40,24 @@ describe("EventBuffer", () => {
     });
   });
 
+  describe("plugin-scoped feeds", () => {
+    it("never buffers terminal:lifecycle, which plugins could read back unscoped (#13814)", () => {
+      // The inspector's read actions are plugin-dispatchable with no project
+      // filter or `agent:read` gate, so this feed's per-project metadata must
+      // only ever reach plugins through `onDidChangeTerminalLifecycle`.
+      events.emit("terminal:lifecycle", {
+        type: "spawned",
+        terminalId: "term-1",
+        projectId: "project-b",
+        kind: "shell",
+        timestamp: 1,
+      });
+
+      expect(buffer.getFiltered({ types: ["terminal:lifecycle"] })).toEqual([]);
+      expect(buffer.size()).toBe(0);
+    });
+  });
+
   describe("basic operations", () => {
     it("can be stopped and started", () => {
       buffer.stop();

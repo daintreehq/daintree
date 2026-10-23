@@ -82,6 +82,7 @@ import type {
 } from "../../../shared/types/actions.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import { normalizePanelMenuItems } from "../../../shared/utils/pluginPanelMenuItems.js";
+import { toPluginTerminalLifecycleEvent } from "../../../shared/utils/pluginTerminalLifecycle.js";
 import { validatePluginContextEntry } from "../../../shared/utils/pluginContextKeys.js";
 import { validatePluginWorktreeCardStatus } from "../../../shared/utils/pluginWorktreeCardStatus.js";
 import { validatePluginWorktreeReviewChecks } from "../../../shared/utils/pluginWorktreeReviewChecks.js";
@@ -1199,6 +1200,18 @@ export class PluginDevWorkerHostProxy {
           undefined,
           options?.debounceMs
         );
+        return Promise.resolve(dispose);
+      },
+      onDidChangeTerminalLifecycle: (callback) => {
+        this.assertActivationOpen("onDidChangeTerminalLifecycle");
+        // Re-projected on arrival: the port's structured clone hands back a
+        // plain mutable object, and the allowlist is re-applied this side too.
+        // The callback's result is returned so the dispatcher can catch an
+        // async listener's rejection, as it does for every sibling.
+        const dispose = this.subscribe("terminal-lifecycle", (payload) => {
+          const event = toPluginTerminalLifecycleEvent(payload);
+          return event === null ? undefined : callback(event);
+        });
         return Promise.resolve(dispose);
       },
       onDidChangeAllAgents: (callback, options) => {

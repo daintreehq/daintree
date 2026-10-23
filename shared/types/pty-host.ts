@@ -66,6 +66,12 @@ export interface PtyHostSpawnOptions {
    * `docs/architecture/terminal-identity.md`.
    */
   launchAgentId?: AgentId;
+  /**
+   * The plugin kind a PTY-backed plugin panel was opened as (#13213). Rides the
+   * spawn cache so Main's lifecycle observer can tell a plugin's terminal from a
+   * plain shell (#13814); the pty-host ignores it.
+   */
+  pluginPanelKindId?: string;
   title?: string;
   /** Title ownership rung at spawn — lets the backend skip its own default-title rewrites for pinned titles. */
   titleMode?: PanelTitleMode;

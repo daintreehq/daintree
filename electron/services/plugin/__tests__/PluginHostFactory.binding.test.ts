@@ -64,7 +64,11 @@ import { PLUGIN_PUSH_MAX_PAYLOAD_BYTES } from "../../../../shared/config/pluginB
 import { events } from "../../events.js";
 import { AppError } from "../../../utils/errorTypes.js";
 import { UNBOUND_PLUGIN_HOST_BINDING } from "../../../../shared/types/plugin.js";
-import type { PluginHostBinding } from "../../../../shared/types/plugin.js";
+import type {
+  PluginHostBinding,
+  PluginTerminalLifecycleEvent,
+} from "../../../../shared/types/plugin.js";
+import type { TerminalLifecycleObservation } from "../../../../shared/utils/pluginTerminalLifecycle.js";
 import type { WorktreeSnapshot } from "../../../../shared/types/workspace-host.js";
 import type { LoadedPlugin } from "../PluginServiceTypes.js";
 
@@ -1537,6 +1541,151 @@ describe("createHost onDidWake (#12175)", () => {
     revoke();
 
     expect(() => host.onDidWake(vi.fn())).toThrow(/onDidWake/);
+  });
+});
+
+describe("createHost onDidChangeTerminalLifecycle (#13814)", () => {
+  const lifecycle = (
+    overrides: Partial<TerminalLifecycleObservation> = {}
+  ): TerminalLifecycleObservation => ({
+    type: "spawned",
+    terminalId: "term-a",
+    projectId: PROJECT_A,
+    worktreeId: "wt-1",
+    kind: "shell",
+    timestamp: 1,
+    ...overrides,
+  });
+
+  afterEach(() => {
+    events.removeAllListeners();
+    vi.restoreAllMocks();
+  });
+
+  it("delivers every event in order, uncoalesced, as a frozen projection", async () => {
+    const h = makeHarness();
+    const { host } = createHost(h.deps, PLUGIN_ID, BOUND);
+    const received: PluginTerminalLifecycleEvent[] = [];
+    await host.onDidChangeTerminalLifecycle((event) => received.push(event));
+
+    events.emit("terminal:lifecycle", lifecycle());
+    events.emit(
+      "terminal:lifecycle",
+      // The pty-host's own exit carries recent output; nothing like it may cross.
+      lifecycle({
+        type: "exited",
+        exitCode: 1,
+        timestamp: 2,
+        ...({ recentOutput: "secret" } as Partial<TerminalLifecycleObservation>),
+      })
+    );
+
+    // A short-lived terminal keeps its spawn: nothing keys a window by terminal.
+    expect(received.map((e) => e.type)).toEqual(["spawned", "exited"]);
+    expect(received[1]).toEqual({
+      type: "exited",
+      terminalId: "term-a",
+      workspaceId: PROJECT_A,
+      worktreeId: "wt-1",
+      kind: "shell",
+      exitCode: 1,
+      timestamp: 2,
+    });
+    expect(received.every((e) => Object.isFrozen(e))).toBe(true);
+  });
+
+  it("delivers only the bound project's terminals, failing closed on unknown ownership", async () => {
+    const h = makeHarness();
+    const { host } = createHost(h.deps, PLUGIN_ID, BOUND);
+    const callback = vi.fn();
+    await host.onDidChangeTerminalLifecycle(callback);
+
+    events.emit("terminal:lifecycle", lifecycle({ terminalId: "term-b", projectId: "project-b" }));
+    events.emit("terminal:lifecycle", lifecycle({ terminalId: "term-x", projectId: undefined }));
+    expect(callback).not.toHaveBeenCalled();
+
+    events.emit("terminal:lifecycle", lifecycle());
+    expect(callback).toHaveBeenCalledTimes(1);
+  });
+
+  it("tells an unbound host about every workspace's terminals", async () => {
+    const h = makeHarness();
+    const { host } = createHost(h.deps, PLUGIN_ID, UNBOUND_PLUGIN_HOST_BINDING);
+    const received: PluginTerminalLifecycleEvent[] = [];
+    await host.onDidChangeTerminalLifecycle((event) => received.push(event));
+
+    events.emit("terminal:lifecycle", lifecycle({ projectId: "project-b" }));
+    events.emit("terminal:lifecycle", lifecycle({ terminalId: "term-x", projectId: undefined }));
+
+    expect(received.map((e) => [e.terminalId, e.workspaceId])).toEqual([
+      ["term-a", "project-b"],
+      ["term-x", undefined],
+    ]);
+  });
+
+  it("requires agent:read", async () => {
+    const h = makeHarness();
+    h.deps.declaredCapabilities = () => new Set(["agent:input"]);
+    const { host } = createHost(h.deps, PLUGIN_ID, BOUND);
+
+    expect(() => host.onDidChangeTerminalLifecycle(vi.fn())).toThrow(
+      /PERMISSION_REQUIRED.*agent:read/
+    );
+  });
+
+  it("drops a malformed observation rather than delivering it", async () => {
+    const h = makeHarness();
+    const { host } = createHost(h.deps, PLUGIN_ID, BOUND);
+    const callback = vi.fn();
+    await host.onDidChangeTerminalLifecycle(callback);
+
+    events.emit("terminal:lifecycle", lifecycle({ type: "exited" }));
+
+    expect(callback).not.toHaveBeenCalled();
+  });
+
+  it("stops on dispose, falls silent on unload, and tracks its teardown", async () => {
+    const h = makeHarness();
+    const { host } = createHost(h.deps, PLUGIN_ID, BOUND);
+    const disposed = vi.fn();
+    const dispose = await host.onDidChangeTerminalLifecycle(disposed);
+    const unloaded = vi.fn();
+    await host.onDidChangeTerminalLifecycle(unloaded);
+    expect(h.deps.pluginEventCleanups.get(PLUGIN_ID)).toHaveLength(2);
+
+    dispose();
+    dispose();
+    expect(h.deps.pluginEventCleanups.get(PLUGIN_ID)).toHaveLength(1);
+    h.deps.plugins.delete(PLUGIN_ID);
+    events.emit("terminal:lifecycle", lifecycle());
+
+    expect(disposed).not.toHaveBeenCalled();
+    expect(unloaded).not.toHaveBeenCalled();
+  });
+
+  it("quarantines a listener that throws on three consecutive events", async () => {
+    const h = makeHarness();
+    const { host } = createHost(h.deps, PLUGIN_ID, BOUND);
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const callback = vi.fn(() => {
+      throw new Error("plugin boom");
+    });
+    await host.onDidChangeTerminalLifecycle(callback);
+
+    for (let i = 0; i < 4; i++) events.emit("terminal:lifecycle", lifecycle());
+
+    expect(callback).toHaveBeenCalledTimes(3);
+  });
+
+  it("throws once the host is revoked", async () => {
+    const h = makeHarness();
+    const { host, revoke } = createHost(h.deps, PLUGIN_ID, BOUND);
+    revoke();
+
+    expect(() => host.onDidChangeTerminalLifecycle(vi.fn())).toThrow(
+      /onDidChangeTerminalLifecycle/
+    );
   });
 });
 

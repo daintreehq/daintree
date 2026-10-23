@@ -370,6 +370,9 @@ export const TerminalSpawnOptionsSchema = z.object({
   id: z.string().optional(),
   kind: PanelKindSchema.optional(),
   launchAgentId: LaunchAgentIdSchema.optional(),
+  // Listed or zod strips it, and the terminal reads as a plain shell to
+  // lifecycle observers (#13814).
+  pluginPanelKindId: z.string().min(1).max(256).optional(),
   projectId: z.string().optional(),
   cwd: z.string().optional(),
   shell: z.string().optional(),

@@ -61,6 +61,7 @@ function makeHost() {
     onDidChangeActiveWorktree: vi.fn((_cb: any) => vi.fn()),
     onDidChangeWorktrees: vi.fn((_cb: any) => vi.fn()),
     onDidWake: vi.fn((_cb: any) => vi.fn()),
+    onDidChangeTerminalLifecycle: vi.fn((_cb: any) => vi.fn()),
     registerForgeProvider: vi.fn(() => vi.fn()),
     registerFileDecorationProvider: vi.fn(() => vi.fn()),
     registerWorktreeSetupStep: vi.fn((_stepId: string, _handler: any) => vi.fn()),
@@ -873,6 +874,29 @@ describe("PluginDevWorkerMainBridge", () => {
     expect(evt).toMatchObject({
       subscriptionId: "s-wake",
       payload: { sleepDuration: 42_000, timestamp: 1234 },
+    });
+  });
+
+  it("routes a terminal-lifecycle subscription to host.onDidChangeTerminalLifecycle (#13814)", async () => {
+    const { host, workerHost } = makeBridge();
+    let emitLifecycle: ((e: unknown) => void) | undefined;
+    host.onDidChangeTerminalLifecycle.mockImplementation((cb: any) => {
+      emitLifecycle = cb;
+      return vi.fn();
+    });
+    workerHost.emit("worker-message", {
+      type: "subscribe",
+      subscriptionId: "s-term",
+      kind: "terminal-lifecycle",
+    });
+    expect(host.onDidChangeTerminalLifecycle).toHaveBeenCalled();
+    // A discrete stream: no debounce option is passed through.
+    expect(host.onDidChangeTerminalLifecycle.mock.calls[0]).toHaveLength(1);
+    emitLifecycle?.({ type: "spawned", terminalId: "t1", kind: "shell", timestamp: 1 });
+    const evt = workerHost.sent.find((m) => m.type === "subscription-event");
+    expect(evt).toMatchObject({
+      subscriptionId: "s-term",
+      payload: { type: "spawned", terminalId: "t1", kind: "shell", timestamp: 1 },
     });
   });
 

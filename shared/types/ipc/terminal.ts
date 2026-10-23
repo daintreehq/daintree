@@ -24,6 +24,13 @@ export interface TerminalSpawnOptions {
    * `docs/architecture/terminal-identity.md`.
    */
   launchAgentId?: AgentId;
+  /**
+   * The plugin kind a PTY-backed plugin panel was opened as (#13213), which
+   * `kind` no longer names once it collapses to `"terminal"`. Main reads only
+   * its presence, to report the terminal as a plugin's to lifecycle observers
+   * (#13814).
+   */
+  pluginPanelKindId?: string;
   /** Project ID to associate with the terminal (captured at action time to avoid race conditions) */
   projectId?: string;
   /** Working directory for the terminal */

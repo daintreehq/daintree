@@ -4456,6 +4456,95 @@ export interface PluginAgentSnapshot {
 }
 
 /**
+ * How a terminal was started, as {@link PluginTerminalLifecycleEvent.kind}
+ * reports it:
+ *
+ * - `agent` — launched to run an agent CLI.
+ * - `plugin` — opened as a plugin-contributed terminal panel.
+ * - `shell` — anything else: a plain shell, a dev server, a command launch.
+ *
+ * Fixed at launch. A shell the user later starts an agent in stays `shell`, and
+ * an agent pane whose agent has exited back to its prompt stays `agent`.
+ */
+export type PluginTerminalKind = "agent" | "shell" | "plugin";
+
+/**
+ * Which change a {@link PluginTerminalLifecycleEvent} reports:
+ *
+ * - `spawned` — the terminal's process started. Repeats for the same
+ *   `terminalId` when the terminal is restarted or recovered after a
+ *   terminal-host crash, sometimes with no `exited` in between.
+ * - `exited` — the terminal's process ended.
+ * - `trashed` — the user moved the terminal to the trash, where it can still be
+ *   restored.
+ * - `restored` — the terminal came back out of the trash. Reopening a project
+ *   after a restart starts its terminals afresh and reports `spawned`.
+ * - `rate-limit-observed` — the terminal's output showed an agent rate-limit
+ *   banner.
+ */
+export type PluginTerminalLifecycleEventType = PluginTerminalLifecycleEvent["type"];
+
+/** The fields every {@link PluginTerminalLifecycleEvent} carries. */
+export interface PluginTerminalLifecycleEventBase {
+  /**
+   * The terminal's id — the same id {@link PluginAgentPane.terminalId} and
+   * {@link PluginAgentSnapshot.terminalId} report. Not a lasting identity: a
+   * restarted terminal comes back under the same id.
+   */
+  readonly terminalId: string;
+  /**
+   * The workspace (project or scratch) that owns the terminal. Opaque: compare
+   * it, don't parse it. A project plugin only ever sees its own project's id.
+   * Absent for a terminal that belongs to no workspace.
+   */
+  readonly workspaceId?: string;
+  /** The worktree the terminal is filed under, when it has one. An id only. */
+  readonly worktreeId?: string;
+  /** How the terminal was started. */
+  readonly kind: PluginTerminalKind;
+  /**
+   * The agent the terminal was launched to run (`claude`, `codex`, …), when it
+   * was launched for one. A fact about the launch, not about what is running
+   * now: the user can exit the agent and run anything in the same shell. Read
+   * {@link PluginActivationApi.onDidChangeAgentState} for what is running.
+   */
+  readonly agentId?: string;
+  /** Unix timestamp in milliseconds when the host observed the change. */
+  readonly timestamp: number;
+}
+
+/**
+ * One change in a terminal's life, as
+ * {@link PluginActivationApi.onDidChangeTerminalLifecycle} reports it. Frozen.
+ *
+ * Metadata only, and an explicit allowlist: no command line, working
+ * directory, title, environment or output ever rides on it, so it stays safe to
+ * log or send off the machine. Narrow on `type`.
+ */
+export type PluginTerminalLifecycleEvent =
+  | (PluginTerminalLifecycleEventBase & { readonly type: "spawned" })
+  | (PluginTerminalLifecycleEventBase & {
+      readonly type: "exited";
+      /**
+       * The terminal process's exit code. For an agent pane this is the shell
+       * the agent ran in, not the agent itself, which hands back to that shell.
+       */
+      readonly exitCode: number;
+      /** The signal that ended the process, when one did. Never present on Windows. */
+      readonly signal?: number;
+    })
+  | (PluginTerminalLifecycleEventBase & { readonly type: "trashed" })
+  | (PluginTerminalLifecycleEventBase & { readonly type: "restored" })
+  | (PluginTerminalLifecycleEventBase & {
+      readonly type: "rate-limit-observed";
+      /**
+       * When the banner was seen. An observation that an agent hit a limit, not
+       * a reading of how close the account is to one.
+       */
+      readonly observedAt: number;
+    });
+
+/**
  * Why an agent pane will not take a drafted handoff right now. Codes, not copy:
  * the wording belongs to whatever surface shows it.
  *
@@ -6245,6 +6334,35 @@ export interface PluginActivationApi {
   onDidChangeAgentState(
     callback: (snapshot: PluginAgentSnapshot) => void,
     options?: PluginHostSubscriptionOptions
+  ): Promise<() => void>;
+  /**
+   * Subscribe to terminals starting, exiting, being trashed and restored, and to
+   * agent rate-limit banners seen in them, gated on the `agent:read`
+   * capability. Covers every terminal — plain shells as well as agents — in
+   * every workspace for an installed plugin, and in its own project only for a
+   * project plugin. The callback receives one frozen
+   * {@link PluginTerminalLifecycleEvent} per change, in the order the host saw
+   * them; nothing is coalesced, and nothing is replayed on subscribe. There is
+   * no snapshot of the terminals already open — {@link PluginAgentsApi.list}
+   * covers only the project's live agent panes. Resolves to a disposer; calling
+   * it more than once is a no-op. Disposed automatically when the plugin is
+   * unloaded.
+   *
+   * Observation only — there is no companion method to start, stop or restart a
+   * terminal.
+   *
+   * Subscribing is revoke-guarded — call it during `activate()`. The callback
+   * itself fires for the plugin's whole lifetime; only the act of subscribing
+   * is restricted to the activation window.
+   *
+   * @throws {Error} `PERMISSION_REQUIRED:` if the plugin did not declare the
+   *   `agent:read` capability, or if called after activation resolves or times
+   *   out (the host is revoked). In a worker only the revoke check throws: a
+   *   missing `agent:read` resolves to a disposer whose callback never fires,
+   *   and the refusal is logged in main.
+   */
+  onDidChangeTerminalLifecycle(
+    callback: (event: PluginTerminalLifecycleEvent) => void
   ): Promise<() => void>;
   /**
    * Subscribe to changes in the app-wide agent list that
