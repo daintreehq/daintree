@@ -24,6 +24,8 @@ const SCRIPT = String.raw`
   // When the list last stopped coming back, and when each host that had been
   // read stopped being readable; both clear once they answer again.
   let downSince = 0;
+  // When the host list itself last stopped being readable.
+  let hostsDownSince = 0;
   const hostRead = new Set();
   const hostDownSince = new Map();
   try { token = localStorage.getItem(KEY); } catch {}
@@ -33,6 +35,7 @@ const SCRIPT = String.raw`
     if (!value) {
       // Nothing read under the old pairing is offered under the next one.
       downSince = 0;
+      hostsDownSince = 0;
       hostRead.clear();
       hostDownSince.clear();
       $("runs").replaceChildren();
@@ -94,7 +97,7 @@ const SCRIPT = String.raw`
     }
   };
 
-  const render = (runs, reported) => {
+  const render = (runs, reported, unlisted) => {
     const hosts = Array.isArray(reported)
       ? reported.filter((host) => host && typeof host.host === "string")
       : [];
@@ -105,13 +108,19 @@ const SCRIPT = String.raw`
     // Nothing waiting is said outright only when every machine was read.
     const read = hosts.filter((host) => host.status === "ok").map((host) => host.host);
     const covered = ["this computer", ...read];
-    empty.textContent = read.length === hosts.length
+    empty.textContent = !unlisted && read.length === hosts.length
       ? "No agent is waiting."
       : "No agent is waiting on " + (covered.length > 1
         ? covered.slice(0, -1).join(", ") + " or " + covered[covered.length - 1]
         : covered[0]) + ".";
     const notes = $("hosts");
     notes.replaceChildren();
+    if (unlisted) {
+      if (!hostsDownSince) hostsDownSince = Date.now();
+      notes.append(el("div", "", "Couldn't list the connected hosts since " + clock(hostsDownSince) + ", so their agents aren't shown."));
+    } else {
+      hostsDownSince = 0;
+    }
     const listed = new Set(hosts.map((host) => host.hostId || host.host));
     for (const key of [...hostRead]) if (!listed.has(key)) hostRead.delete(key);
     for (const key of [...hostDownSince.keys()]) if (!listed.has(key)) hostDownSince.delete(key);
@@ -206,7 +215,7 @@ const SCRIPT = String.raw`
           if (!busy && seq === answerSeq) {
             downSince = 0;
             $("status").textContent = "";
-            render(r.data.runs, r.data.hosts);
+            render(r.data.runs, r.data.hosts, r.data.hostsUnlisted === true);
           }
         } else if (r.status !== 401) {
           // A failed read still means the cards on screen may be old, answer or not.

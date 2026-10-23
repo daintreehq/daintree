@@ -52,6 +52,8 @@ export interface DeviceWaitingHost {
 export interface DeviceWaitingList {
   runs: DeviceWaitingRun[];
   hosts: DeviceWaitingHost[];
+  /** The host list itself couldn't be read, so hosts may be missing from `hosts`. */
+  hostsUnlisted?: boolean;
 }
 
 export interface DeviceAnswerRunsDeps {

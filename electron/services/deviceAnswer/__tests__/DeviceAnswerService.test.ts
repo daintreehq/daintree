@@ -202,6 +202,14 @@ describe("DeviceAnswerService", () => {
       { hostId: "studio-03", host: "studio-03", status: "ok" },
       { hostId: "mini", host: "Mini", status: "not-connected" },
     ]);
+    expect(waiting.json().hostsUnlisted).toBe(false);
+
+    // A host list that couldn't be read is said so, not sent as no hosts.
+    listWaiting.mockResolvedValueOnce({ runs: [RUN], hosts: [], hostsUnlisted: true });
+    const unlisted = await request(port(), "GET", "/api/waiting?hosts=1", {
+      headers: { ...api, Authorization: `Bearer ${token}` },
+    });
+    expect(unlisted.json()).toEqual({ runs: [RUN], hosts: [], hostsUnlisted: true });
 
     // A page from before hosts were listed would answer theirs as this machine's.
     await request(port(), "GET", "/api/waiting", {

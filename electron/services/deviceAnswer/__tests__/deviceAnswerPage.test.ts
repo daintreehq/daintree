@@ -344,6 +344,41 @@ describe("the paired device's page", () => {
     expect(notes()).toBe("");
   });
 
+  it("says since when a host that was read stopped being connected", async () => {
+    vi.setSystemTime(new Date(2026, 9, 23, 9, 4, 58));
+    const mini = { hostId: "mini", host: "Mini", status: "ok" };
+    await openPage({ runs: [], hosts: [mini] });
+
+    mini.status = "not-connected";
+    await vi.advanceTimersByTimeAsync(3000);
+    const downAt = Date.now();
+    await vi.advanceTimersByTimeAsync(2 * 60_000);
+    expect(document.getElementById("hosts")!.textContent).toBe(
+      "Not connected to Mini since " + hhmm(downAt) + ", so its agents aren't shown."
+    );
+  });
+
+  it("never says nothing is waiting when the host list couldn't be read, and says since when", async () => {
+    vi.setSystemTime(new Date(2026, 9, 23, 9, 4, 58));
+    const waiting: Record<string, unknown> = { runs: [], hosts: [], hostsUnlisted: true };
+    await openPage(waiting);
+    const downAt = Date.now();
+    const notes = () => document.getElementById("hosts")!.textContent;
+    const note =
+      "Couldn't list the connected hosts since " + hhmm(downAt) + ", so their agents aren't shown.";
+    expect(emptyText()).toBe("No agent is waiting on this computer.");
+    expect(notes()).toBe(note);
+
+    // The first failure's time holds for as long as the list stays unreadable.
+    await vi.advanceTimersByTimeAsync(3 * 60_000);
+    expect(notes()).toBe(note);
+
+    waiting.hostsUnlisted = false;
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(notes()).toBe("");
+    expect(emptyText()).toBe("No agent is waiting.");
+  });
+
   it("gives no time for a host that was never read, since it can't know when it went", async () => {
     await openPage({ runs: [], hosts: [{ hostId: "mini", host: "Mini", status: "unreachable" }] });
     expect(document.getElementById("hosts")!.textContent).toBe(
