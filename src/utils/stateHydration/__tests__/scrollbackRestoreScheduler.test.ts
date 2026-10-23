@@ -632,6 +632,13 @@ describe("scheduleScrollbackRestore — terminal service lifecycle", () => {
 
     terminalServiceAccessor.register(terminalServiceMock);
     expect(destroyedListeners.size).toBe(1);
+
+    getMock.mockImplementation(() => fakeManaged("none"));
+    scheduleScrollbackRestore([{ ...t1, terminalId: "t3" }], () => true);
+    expect(destroyedListeners.size).toBe(1);
+
+    resetScrollbackRestoreBatch();
+    expect(destroyedListeners.size).toBe(0);
   });
 
   it("attaches synchronously when the service is already loaded", () => {
