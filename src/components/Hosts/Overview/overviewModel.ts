@@ -110,18 +110,18 @@ export function describeCoreClusters(summary: HostMetricsSummary): {
   value: string;
   detail: string;
 } | null {
-  const clusters = [
+  const read: Array<{ name: string; percent: number; count: number | null | undefined }> = [];
+  for (const [name, percent, count] of [
     ["performance", summary.cpuPerformancePercent, summary.cpuPerformanceCoreCount],
     ["efficiency", summary.cpuEfficiencyPercent, summary.cpuEfficiencyCoreCount],
-  ] as const;
-  const read = clusters.filter(
-    (entry): entry is readonly [string, number, number | null | undefined] =>
-      typeof entry[1] === "number" && Number.isFinite(entry[1])
-  );
+  ] as const) {
+    if (typeof percent === "number" && Number.isFinite(percent))
+      read.push({ name, percent, count });
+  }
   if (read.length === 0) return null;
-  const value = read.map(([name, percent]) => `${name} ${Math.round(percent)}%`).join(" · ");
+  const value = read.map(({ name, percent }) => `${name} ${Math.round(percent)}%`).join(" · ");
   const detail = read
-    .map(([name, percent, count]) =>
+    .map(({ name, percent, count }) =>
       count
         ? `${Math.round(percent)}% of ${count} ${name} cores busy`
         : `${name} cores ${Math.round(percent)}% busy`
