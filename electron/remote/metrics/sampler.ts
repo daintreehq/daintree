@@ -362,13 +362,14 @@ export class HostMetricsSampler {
     if (!cgroup) {
       this.previousCgroupCpu = null;
       const swapReadAt = s.now();
-      const [memPsi, cpuPsi, meminfoText, vmstat, pageSize] = await Promise.all([
+      const [memPsi, cpuPsi, meminfoText, vmstat] = await Promise.all([
         s.readText("/proc/pressure/memory"),
         s.readText("/proc/pressure/cpu"),
         s.readText("/proc/meminfo"),
         s.readText("/proc/vmstat"),
-        this.linuxPageSize(),
       ]);
+      const swapCounters = parseSwapPageCounters(vmstat);
+      const pageSize = await this.pageSizeFor(swapCounters);
       const meminfo = parseMeminfo(meminfoText);
       const swapTotal = meminfo?.swapTotalBytes ?? null;
       const swapFree = meminfo?.swapFreeBytes ?? null;
@@ -382,7 +383,7 @@ export class HostMetricsSampler {
             : null,
           swapTotalBytes: swapTotal,
           swapUsedBytes: swapTotal !== null && swapFree !== null ? swapTotal - swapFree : null,
-          ...this.swapRates("host", parseSwapPageCounters(vmstat), pageSize, swapReadAt),
+          ...this.swapRates("host", swapCounters, pageSize, swapReadAt),
           thermal: null,
           cpuPressure: parsePsi(cpuPsi)?.someAvg10 ?? null,
           memoryPressureSomeAvg10: parsePsi(memPsi)?.someAvg10 ?? null,
@@ -395,7 +396,7 @@ export class HostMetricsSampler {
 
     const { dir } = cgroup;
     const swapReadAt = s.now();
-    const [memCurrent, swapCurrent, memPsi, cpuPsi, cpuStat, meminfoText, memoryStat, pageSize] =
+    const [memCurrent, swapCurrent, memPsi, cpuPsi, cpuStat, meminfoText, memoryStat] =
       await Promise.all([
         s.readText(`${dir}/memory.current`),
         s.readText(`${dir}/memory.swap.current`),
@@ -406,8 +407,9 @@ export class HostMetricsSampler {
         cgroup.memoryLimit === null ? s.readText("/proc/meminfo") : Promise.resolve(null),
         // The cgroup's own counters; the machine-wide /proc/vmstat would count its neighbours' swapping.
         s.readText(`${dir}/memory.stat`),
-        this.linuxPageSize(),
       ]);
+    const swapCounters = parseSwapPageCounters(memoryStat);
+    const pageSize = await this.pageSizeFor(swapCounters);
     const cores = minimum([machineCores > 0 ? machineCores : null, cgroup.cpuQuota, cgroup.cpuSet]);
     return {
       memory: {
@@ -416,7 +418,7 @@ export class HostMetricsSampler {
         memoryUsedBytes: parseCgroupBytes(memCurrent),
         swapTotalBytes: cgroup.swapLimit,
         swapUsedBytes: parseCgroupBytes(swapCurrent),
-        ...this.swapRates(`cgroup:${dir}`, parseSwapPageCounters(memoryStat), pageSize, swapReadAt),
+        ...this.swapRates(`cgroup:${dir}`, swapCounters, pageSize, swapReadAt),
         thermal: null,
         cpuPressure: parsePsi(cpuPsi)?.someAvg10 ?? null,
         memoryPressureSomeAvg10: parsePsi(memPsi)?.someAvg10 ?? null,
@@ -527,8 +529,13 @@ export class HostMetricsSampler {
     };
   }
 
-  /** The kernel's page size, which `/proc/vmstat` and `memory.stat` count swap in. */
-  private async linuxPageSize(): Promise<number | null> {
+  /**
+   * The kernel's page size, which `/proc/vmstat` and `memory.stat` count swap
+   * in. Asked only when there are counters to scale, so a kernel without them
+   * doesn't spend the probes.
+   */
+  private async pageSizeFor(counters: SwapCounters | null): Promise<number | null> {
+    if (counters === null) return null;
     if (this.pageSize !== null) return this.pageSize;
     if (this.pageSizeProbes >= PAGE_SIZE_PROBES) return null;
     this.pageSizeProbes += 1;
