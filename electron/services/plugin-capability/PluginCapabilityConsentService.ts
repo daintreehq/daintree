@@ -39,8 +39,7 @@ export interface PluginCapabilityRestoreRequest {
 }
 
 export type PluginCapabilityConsentRequest =
-  | PluginCapabilityFirstUseRequest
-  | PluginCapabilityRestoreRequest;
+  PluginCapabilityFirstUseRequest | PluginCapabilityRestoreRequest;
 
 /** What a replacing install hands back to {@link PluginCapabilityConsentService.offerRestore}. */
 export interface PluginCapabilityRestoreOffer {
@@ -117,21 +116,14 @@ export class PluginCapabilityConsentService {
 
   /** Every grant a plugin holds, in every scope — read before a replacing install purges them. */
   listGrantsForPlugin(pluginId: string): PluginCapabilityIdentity[] {
-    return this.consentStore.listForPlugin(pluginId).map(({ pluginId: id, capability, site, scopeKey }) => ({
-      pluginId: id,
-      capability,
-      ...(site !== undefined ? { site } : {}),
-      scopeKey,
-    }));
-  }
-
-  /**
-   * Put grants back without asking, for when the code they were approved for
-   * is the code installed again — an upgrade that rolled back. Returns whether
-   * they reached disk.
-   */
-  restoreGrants(grants: readonly PluginCapabilityIdentity[]): boolean {
-    return this.consentStore.grantAll(grants);
+    return this.consentStore
+      .listForPlugin(pluginId)
+      .map(({ pluginId: id, capability, site, scopeKey }) => ({
+        pluginId: id,
+        capability,
+        ...(site !== undefined ? { site } : {}),
+        scopeKey,
+      }));
   }
 
   /**

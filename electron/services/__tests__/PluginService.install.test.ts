@@ -39,7 +39,6 @@ const capConsentMock = vi.hoisted(() => ({
   revokeAllForPlugin: vi.fn(() => true),
   listGrantsForPlugin: vi.fn((): unknown[] => []),
   offerRestore: vi.fn(async () => false),
-  restoreGrants: vi.fn(() => true),
 }));
 const rateLimiterMock = vi.hoisted(() => ({ dropPlugin: vi.fn() }));
 
@@ -1099,9 +1098,22 @@ describe("installPlugin — running agents' credentials across an upgrade", () =
 
 describe("installPlugin — consent reset on upgrade (#10518)", () => {
   afterEach(() => {
-    // clearAllMocks keeps a stubbed implementation; the grants a test seeds must not leak.
+    // clearAllMocks keeps a stubbed implementation; what a test seeds must not leak.
     capConsentMock.listGrantsForPlugin.mockReset();
+    capConsentMock.offerRestore.mockReset();
   });
+
+  /** The single offer-back the installer made, as the consent service received it. */
+  function onlyOffer() {
+    expect(capConsentMock.offerRestore).toHaveBeenCalledTimes(1);
+    return (capConsentMock.offerRestore.mock.calls[0] as unknown[])[0] as {
+      pluginId: string;
+      pluginDisplayName: string;
+      grants: unknown[];
+      declaredCapabilities: string[];
+      isCurrent: () => boolean;
+    };
+  }
 
   it("revokes the plugin's consent pins on upgrade but not on a fresh install", async () => {
     const service = new PluginService(pluginsRoot, "0.0.0");
@@ -1175,14 +1187,7 @@ describe("installPlugin — consent reset on upgrade (#10518)", () => {
     expect((await service.installPlugin(v2)).status).toBe("installed");
 
     expect(capConsentMock.revokeAllForPlugin).toHaveBeenCalledWith(ID);
-    expect(capConsentMock.offerRestore).toHaveBeenCalledTimes(1);
-    const offer = (capConsentMock.offerRestore.mock.calls[0] as unknown[])[0] as {
-      pluginId: string;
-      pluginDisplayName: string;
-      grants: unknown[];
-      declaredCapabilities: string[];
-      isCurrent: () => boolean;
-    };
+    const offer = onlyOffer();
     expect(offer.pluginId).toBe(ID);
     expect(offer.pluginDisplayName).toBe("Offer Back");
     expect(offer.declaredCapabilities).toEqual(["terminal:read", "project:dispatch"]);
@@ -1218,34 +1223,151 @@ describe("installPlugin — consent reset on upgrade (#10518)", () => {
     service.dispose();
   });
 
-  it("puts the purged grants back when the upgrade rolls back to the old version (#14019)", async () => {
+  it("offers the purged grants back to the old version when the upgrade rolls back (#14019)", async () => {
     const service = new PluginService(pluginsRoot, "0.0.0");
     const ID = "acme.rollback-grants";
 
-    const v1 = await makeArchive({ name: ID, version: "1.0.0", capabilities: ["terminal:read"] });
+    const v1 = await makeArchive({
+      name: ID,
+      version: "1.0.0",
+      displayName: "Rollback",
+      capabilities: ["terminal:read"],
+    });
     expect((await service.installPlugin(v1)).status).toBe("installed");
+    const v1Hash = (storeState.get("plugins") as { installed: Record<string, unknown> }).installed[
+      ID
+    ] as { archiveHash: string };
 
-    const held = [{ pluginId: ID, capability: "terminal:read", scopeKey: "global" }];
+    const held = [
+      { pluginId: ID, capability: "terminal:read", scopeKey: "global" },
+      { pluginId: ID, capability: "shell:exec", scopeKey: "global" },
+    ];
     capConsentMock.listGrantsForPlugin.mockReturnValue(held);
 
     // Passes the schema but throws in loadPlugin, so the old version comes back.
     const v2 = await makeArchive({
       name: ID,
       version: "2.0.0",
-      capabilities: ["terminal:read"],
+      capabilities: ["terminal:read", "shell:exec"],
       contributes: {
         menuItems: [{ label: "Run", location: "terminal", actionId: `${ID}.run`, when: "foo &&" }],
       },
     });
     const result = await service.installPlugin(v2);
     expect(result.status).toBe("failed");
-
     expect(capConsentMock.revokeAllForPlugin).toHaveBeenCalledWith(ID);
-    expect(capConsentMock.restoreGrants).toHaveBeenCalledWith(held);
-    // v2 never loaded, so there is nothing to offer its grants to.
-    expect(capConsentMock.offerRestore).not.toHaveBeenCalled();
+
+    // Never restored silently: the old version is offered what it still declares,
+    // and the offer is bound to the old archive's record.
+    const offer = onlyOffer();
+    expect(offer.pluginDisplayName).toBe("Rollback");
+    expect(offer.grants).toEqual([held[0]]);
+    expect(v1Hash.archiveHash).toMatch(/^[a-f0-9]{64}$/);
+    expect(offer.isCurrent()).toBe(true);
 
     service.dispose();
+  });
+
+  it("purges when different bytes carry the same version (#14019)", async () => {
+    const service = new PluginService(pluginsRoot, "0.0.0");
+    const first = await makeArchive({ name: "acme.same-version", version: "1.0.0" });
+    expect((await service.installPlugin(first)).status).toBe("installed");
+
+    capConsentMock.revokeAllForPlugin.mockClear();
+    consentMock.revokeAllForPlugin.mockClear();
+    const rebuilt = await makeArchive(
+      { name: "acme.same-version", version: "1.0.0" },
+      { "README.md": "changed" }
+    );
+    expect((await service.installPlugin(rebuilt)).status).toBe("installed");
+
+    expect(consentMock.revokeAllForPlugin).toHaveBeenCalledWith("acme.same-version");
+    expect(capConsentMock.revokeAllForPlugin).toHaveBeenCalledWith("acme.same-version");
+    service.dispose();
+  });
+
+  it("purges on a directory reinstall, which has no digest to compare (#14019)", async () => {
+    const service = new PluginService(pluginsRoot, "0.0.0");
+    const src = await makeSourceDir({ name: "acme.dir-reinstall", version: "1.0.0" });
+    expect((await service.installPlugin(src)).status).toBe("installed");
+
+    capConsentMock.revokeAllForPlugin.mockClear();
+    expect((await service.installPlugin(src)).status).toBe("installed");
+
+    expect(capConsentMock.revokeAllForPlugin).toHaveBeenCalledWith("acme.dir-reinstall");
+    service.dispose();
+  });
+
+  it("purges a same-archive reinstall over a dev instance, whose code isn't the archive (#14019)", async () => {
+    const service = new PluginService(pluginsRoot, "0.0.0");
+    const v1 = await makeArchive({ name: "acme.dev-over", version: "1.0.0" });
+    expect((await service.installPlugin(v1)).status).toBe("installed");
+    const plugins = storeState.get("plugins") as {
+      installed: Record<string, { devMode?: boolean }>;
+    };
+    plugins.installed["acme.dev-over"].devMode = true;
+
+    capConsentMock.revokeAllForPlugin.mockClear();
+    expect((await service.installPlugin(v1)).status).toBe("installed");
+
+    expect(capConsentMock.revokeAllForPlugin).toHaveBeenCalledWith("acme.dev-over");
+    service.dispose();
+  });
+
+  it("offers grants back when the replaced plugin is disabled and never loads (#14019)", async () => {
+    const ID = "acme.disabled-offer";
+    const service = new PluginService(pluginsRoot, "0.0.0");
+    const v1 = await makeArchive({ name: ID, version: "1.0.0", capabilities: ["terminal:read"] });
+    expect((await service.installPlugin(v1)).status).toBe("installed");
+    const plugins = storeState.get("plugins") as Record<string, unknown>;
+    storeState.set("plugins", { ...plugins, disabled: [ID] });
+    capConsentMock.listGrantsForPlugin.mockReturnValue([
+      { pluginId: ID, capability: "terminal:read", scopeKey: "global" },
+    ]);
+
+    const v2 = await makeArchive({ name: ID, version: "2.0.0", capabilities: ["terminal:read"] });
+    expect(await service.installPlugin(v2)).toEqual({ status: "installed", pluginId: ID });
+
+    expect(onlyOffer().grants).toEqual([
+      { pluginId: ID, capability: "terminal:read", scopeKey: "global" },
+    ]);
+    service.dispose();
+  });
+
+  it("installs regardless when reading or offering back the grants fails (#14019)", async () => {
+    const ID = "acme.offer-fails";
+    const service = new PluginService(pluginsRoot, "0.0.0");
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const v1 = await makeArchive({ name: ID, version: "1.0.0", capabilities: ["terminal:read"] });
+      expect((await service.installPlugin(v1)).status).toBe("installed");
+
+      capConsentMock.listGrantsForPlugin.mockImplementation(() => {
+        throw new Error("store unreadable");
+      });
+      const v2 = await makeArchive({ name: ID, version: "2.0.0", capabilities: ["terminal:read"] });
+      expect((await service.installPlugin(v2)).status).toBe("installed");
+      // The purge still runs: a failed read offers nothing back, it never keeps grants.
+      expect(capConsentMock.revokeAllForPlugin).toHaveBeenCalledWith(ID);
+      expect(capConsentMock.offerRestore).not.toHaveBeenCalled();
+
+      capConsentMock.listGrantsForPlugin.mockReturnValue([
+        { pluginId: ID, capability: "terminal:read", scopeKey: "global" },
+      ]);
+      capConsentMock.offerRestore.mockRejectedValue(new Error("bridge gone"));
+      const v3 = await makeArchive({ name: ID, version: "3.0.0", capabilities: ["terminal:read"] });
+      expect((await service.installPlugin(v3)).status).toBe("installed");
+
+      // An offer nobody ever answers holds neither the install nor the next one.
+      capConsentMock.offerRestore.mockImplementation(() => new Promise<boolean>(() => {}));
+      const v4 = await makeArchive({ name: ID, version: "4.0.0", capabilities: ["terminal:read"] });
+      expect((await service.installPlugin(v4)).status).toBe("installed");
+      const v5 = await makeArchive({ name: ID, version: "5.0.0", capabilities: ["terminal:read"] });
+      expect((await service.installPlugin(v5)).status).toBe("installed");
+    } finally {
+      error.mockRestore();
+      service.dispose();
+    }
   });
 
   it("revokes the plugin's consent pins on uninstall", async () => {

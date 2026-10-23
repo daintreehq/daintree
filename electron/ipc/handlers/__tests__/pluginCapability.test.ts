@@ -660,7 +660,10 @@ describe("pluginCapability consent bridge — offer-back after a replacing insta
     const restored = offerBack();
     const requestId = pushedRequestId(harness!.appWebContents);
 
-    await handleResolveConsent(ctx(harness!.appWebContents.id), { requestId, decision: "rejected" });
+    await handleResolveConsent(ctx(harness!.appWebContents.id), {
+      requestId,
+      decision: "rejected",
+    });
 
     await expect(restored).resolves.toBe(false);
     expect(getPluginCapabilityConsentStore().list()).toEqual([]);
@@ -865,6 +868,33 @@ describe("pluginCapability consent bridge — Host mode routing", () => {
       { timeoutMs: expect.any(Number) }
     );
     expect(harness!.appWebContents.send).not.toHaveBeenCalled();
+    dispose();
+  });
+
+  it("never forwards an offer-back to a remote frontend or holds it for nobody (#14019)", async () => {
+    const offer = () =>
+      getPluginCapabilityConsentService().offerRestore({
+        pluginId: "acme.x",
+        pluginDisplayName: "Acme",
+        grants: [{ pluginId: "acme.x", capability: "project:dispatch", scopeKey: "global" }],
+        declaredCapabilities: ["project:dispatch"],
+        isCurrent: () => true,
+      });
+    // Would approve if asked, so forwarding the offer would show up as a restore.
+    const request = vi.fn(async () => "approved-and-pin");
+    frontend = {
+      kind: "remote",
+      endpoint: { request, isClosed: () => false } as unknown as ClientEndpoint,
+    };
+    const dispose = registerPluginCapabilityHandlers();
+    await expect(offer()).resolves.toBe(false);
+    expect(request).not.toHaveBeenCalled();
+
+    frontend = { kind: "none", reason: "vacant" };
+    await expect(offer()).resolves.toBe(false);
+
+    expect(harness!.appWebContents.send).not.toHaveBeenCalled();
+    expect(getPluginCapabilityConsentStore().list()).toEqual([]);
     dispose();
   });
 

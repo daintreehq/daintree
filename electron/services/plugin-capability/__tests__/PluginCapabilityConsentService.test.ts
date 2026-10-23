@@ -507,9 +507,7 @@ describe("PluginCapabilityConsentService", () => {
       const bridge = vi.fn(async () => "approved-and-pin" as PluginCapabilityConsentDecision);
       service.setConsentBridge(bridge);
       await expect(service.offerRestore({ ...offer(), grants: [] })).resolves.toBe(false);
-      await expect(service.offerRestore({ ...offer(), grants: [GRANTS[3]] })).resolves.toBe(
-        false
-      );
+      await expect(service.offerRestore({ ...offer(), grants: [GRANTS[3]] })).resolves.toBe(false);
       expect(bridge).not.toHaveBeenCalled();
     });
 
@@ -571,9 +569,9 @@ describe("PluginCapabilityConsentService", () => {
       expect(store.list()).toEqual([]);
     });
 
-    it("lists a plugin's grants with their scopes and sites, and restores them silently", () => {
+    it("lists a plugin's grants with their scopes and sites, and nobody else's", () => {
       const { service, store } = makeService();
-      expect(service.restoreGrants(GRANTS)).toBe(true);
+      expect(store.grantAll(GRANTS)).toBe(true);
       store.grant({ pluginId: "acme.y", capability: "shell:exec" });
 
       expect(service.listGrantsForPlugin("acme.x")).toEqual(

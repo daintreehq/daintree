@@ -233,8 +233,7 @@ export interface PluginCapabilityRestoreRequestEvent {
 }
 
 export type PluginCapabilityConsentRequestEvent =
-  | PluginCapabilityFirstUseRequestEvent
-  | PluginCapabilityRestoreRequestEvent;
+  PluginCapabilityFirstUseRequestEvent | PluginCapabilityRestoreRequestEvent;
 
 /**
  * Renderer → main receipt for a `plugin-capability:consent-request` push

@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { PluginCapabilityConsentStore } from "../PluginCapabilityConsentStore.js";
 
 function makeStore(initial: Record<string, unknown> = {}) {
@@ -9,6 +9,11 @@ function makeStore(initial: Record<string, unknown> = {}) {
   const store = new PluginCapabilityConsentStore(saveConfig, () => config);
   return { store, saveConfig, getConfig: () => config };
 }
+
+afterEach(() => {
+  vi.useRealTimers();
+  vi.restoreAllMocks();
+});
 
 describe("PluginCapabilityConsentStore", () => {
   it("reports no grant before one is minted, and a grant after", () => {
@@ -276,17 +281,27 @@ describe("PluginCapabilityConsentStore", () => {
     });
 
     it("rolls the whole batch back when the write fails, keeping what was there before", () => {
-      const { store, saveConfig } = makeStore();
+      vi.useFakeTimers();
+      vi.setSystemTime(1_000);
+      const { store, saveConfig, getConfig } = makeStore();
       store.grant(grants[0]);
+      const before = store.list();
+      const persisted = getConfig();
+      vi.setSystemTime(2_000);
       vi.spyOn(console, "error").mockImplementation(() => {});
       saveConfig.mockImplementation(() => {
         throw new Error("disk full");
       });
 
-      expect(store.grantAll(grants)).toBe(false);
-      expect(store.hasGrant(grants[0])).toBe(true);
-      expect(store.hasGrant(grants[1])).toBe(false);
-      expect(store.hasGrant(grants[2])).toBe(false);
+      // The duplicate must not overwrite the snapshot of what it replaced.
+      expect(store.grantAll([...grants, grants[0]])).toBe(false);
+      expect(store.list()).toEqual(before);
+      expect(
+        new PluginCapabilityConsentStore(
+          () => {},
+          () => persisted
+        ).list()
+      ).toEqual(before);
     });
 
     it("lists one plugin's grants in every scope and nobody else's", () => {

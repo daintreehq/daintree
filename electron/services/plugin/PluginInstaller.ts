@@ -72,12 +72,16 @@ const properLockfile: ProperLockfile = req("proper-lockfile");
 const STALE_PARKED_OLD_RE = /\.old-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
- * Minimal view of a loaded plugin the installer needs — only `isBuiltin` is
- * read (to decide whether the on-disk dir is the installer's to delete). The
- * full {@link LoadedPlugin} stays core-owned in PluginService.
+ * Minimal view of a loaded plugin the installer needs: `isBuiltin` (whether the
+ * on-disk dir is the installer's to delete), `devMode` (whether the code on
+ * disk is still the archive the record names) and the manifest a rolled-back
+ * upgrade offers grants back against. The full {@link LoadedPlugin} stays
+ * core-owned in PluginService.
  */
 interface InstallerPluginInfo {
   isBuiltin: boolean;
+  devMode?: boolean;
+  manifest: Readonly<PluginManifest>;
 }
 
 interface PluginInstallerDeps {
@@ -238,7 +242,8 @@ export class PluginInstaller {
 
   /**
    * The capability grants a replacing install is about to purge (#14019), read
-   * first so they can be offered back, or put back if the upgrade rolls back.
+   * first so they can be offered back, whether the new version loads or the
+   * upgrade rolls back.
    * Best-effort like the purge itself: a failed read offers nothing back and
    * never strands the install.
    */
@@ -262,7 +267,7 @@ export class PluginInstaller {
    */
   private _offerCapabilityGrantsBack(
     pluginId: string,
-    manifest: PluginManifest,
+    manifest: Readonly<PluginManifest>,
     archiveHash: string | null,
     purged: readonly PluginCapabilityIdentity[]
   ): void {
@@ -285,7 +290,10 @@ export class PluginInstaller {
           if (restored) this.deps.broadcastProvenanceChanged();
         })
         .catch((err: unknown) => {
-          console.error(`[PluginService] offering back the permissions of "${pluginId}" threw:`, err);
+          console.error(
+            `[PluginService] offering back the permissions of "${pluginId}" threw:`,
+            err
+          );
         });
     } catch (err) {
       console.error(`[PluginService] offering back the permissions of "${pluginId}" threw:`, err);
@@ -585,6 +593,9 @@ export class PluginInstaller {
       if (!pluginInstallJobs.commit(jobId)) return cancelled;
       pluginInstallJobs.setPhase(jobId, "activating");
 
+      // Read before the unload below drops the running instance.
+      const replacingDevInstance = existing && this.deps.getPlugin(pluginId)?.devMode === true;
+
       if (existing) {
         // A reload rather than a plain unload: agents running against this
         // plugin keep their credentials if the version left loaded declares
@@ -641,14 +652,19 @@ export class PluginInstaller {
       // The one exception is a byte-identical archive (#14019): no code
       // changed, so there is nothing for the approvals to be reset against.
       // Without a prior digest to compare — a directory install, or a record
-      // from before provenance — it counts as new code.
+      // from before provenance — it counts as new code, and so does a dev
+      // instance, whose code on disk is no longer the archive its record names.
       //
       // Capture the prior record first: the new provenance is written before
       // `loadPlugin`, so a post-swap load failure on an upgrade must restore the
       // OLD record alongside the OLD directory — otherwise Settings and
       // `checkForUpdate` would baseline against the version that never loaded.
       const previousRecord = existing ? this.records.getInstalledRecord(pluginId) : undefined;
-      const sameArchive = hash !== null && previousRecord?.archiveHash === hash;
+      const sameArchive =
+        hash !== null &&
+        previousRecord?.archiveHash === hash &&
+        previousRecord.devMode !== true &&
+        !replacingDevInstance;
       let purgedGrants: PluginCapabilityIdentity[] = [];
       if (existing && !sameArchive) {
         purgedGrants = this._readCapabilityGrants(pluginId);
@@ -877,24 +893,6 @@ export class PluginInstaller {
       this.records.writeInstalledRecords(records);
     }
 
-    // The code the purged grants were approved for is the code back in place,
-    // so they come back with it rather than being lost to an upgrade that never
-    // happened (#14019).
-    if (purgedGrants.length > 0) {
-      try {
-        if (!getPluginCapabilityConsentService().restoreGrants(purgedGrants)) {
-          console.error(
-            `[PluginService] restoring the capability grants of "${pluginId}" after a rolled-back upgrade failed to persist`
-          );
-        }
-      } catch (err) {
-        console.error(
-          `[PluginService] restoring the capability grants of "${pluginId}" after a rolled-back upgrade threw:`,
-          err
-        );
-      }
-    }
-
     // The failed new version may have been refused by the blocklist, which
     // reserved its name and recorded a blocked row (#10891). Clear that
     // transient state before reloading the old version — otherwise the restored
@@ -910,7 +908,21 @@ export class PluginInstaller {
         isBuiltin: false,
         disabled: this.records.getDisabledIds(),
       });
-      if (restored) await this.deps.activatePlugin(pluginId);
+      if (restored) {
+        // The old version is running again, but the upgrade already purged its
+        // grants. They are offered back rather than restored: the directory
+        // coming back doesn't prove which code holds the id now (#14019).
+        const manifest = this.deps.getPlugin(pluginId)?.manifest;
+        if (manifest && previousRecord) {
+          this._offerCapabilityGrantsBack(
+            pluginId,
+            manifest,
+            previousRecord.archiveHash,
+            purgedGrants
+          );
+        }
+        await this.deps.activatePlugin(pluginId);
+      }
     } catch (reloadErr) {
       console.error(
         `[PluginService] Failed to restore "${pluginId}" runtime state after a post-swap load failure:`,
@@ -1384,7 +1396,7 @@ export class PluginInstaller {
  * panel kind that reports activity. No manifest declares the sites it opens
  * links to, so a site is never offered back and asks again on first use.
  */
-function stillAsksFor(manifest: PluginManifest, capability: PluginGrantKey): boolean {
+function stillAsksFor(manifest: Readonly<PluginManifest>, capability: PluginGrantKey): boolean {
   if (capability === EXTERNAL_LINK_CONSENT) return false;
   if (capability === PLUGIN_PANEL_ATTENTION_GRANT) {
     return manifest.contributes.panels.some((panel) => panel.reportsActivity === true);

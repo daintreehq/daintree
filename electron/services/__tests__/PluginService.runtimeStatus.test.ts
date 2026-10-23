@@ -36,7 +36,6 @@ const capConsentMock = vi.hoisted(() => ({
   revokeAllForPlugin: vi.fn(() => true),
   listGrantsForPlugin: vi.fn((): unknown[] => []),
   offerRestore: vi.fn(async () => false),
-  restoreGrants: vi.fn(() => true),
 }));
 const rateLimiterMock = vi.hoisted(() => ({ dropPlugin: vi.fn() }));
 

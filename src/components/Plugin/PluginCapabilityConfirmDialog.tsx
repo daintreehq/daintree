@@ -188,7 +188,7 @@ function RestoreRow({ grant }: { grant: PluginRestorableGrant }) {
   if (grant !== PLUGIN_PANEL_ATTENTION_GRANT) return <CapabilityRow capability={grant} />;
   return (
     <li className="flex items-start gap-2">
-      <span className="w-1.5 h-1.5 rounded-full bg-daintree-text/30 shrink-0 mt-[7px]" aria-hidden />
+      <span className="w-1.5 h-1.5 rounded-full bg-text-primary/30 shrink-0 mt-[7px]" aria-hidden />
       <div className="min-w-0">
         <div className="text-xs text-text-primary">Show in attention views</div>
         <div className="text-2xs text-text-secondary">
