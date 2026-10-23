@@ -392,6 +392,19 @@ export const REGISTRY: Record<string, Command> = {
     kind: "diagnostic",
     runner: tsxScript("memory-growth-compare.ts"),
   },
+  "empty-view-memory": playwrightBench({
+    summary:
+      "One project view's renderer footprint, by category, empty and after a terminal session (macOS)",
+    kind: "journey",
+    spec: "e2e/perf/empty-project-view-memory-perf.spec.ts",
+    gate: "RUN_PERF_EMPTY_VIEW",
+    build: "build:e2e",
+  }),
+  "empty-view-memory-compare": {
+    summary: "Compare two sets of empty-view-memory results by per-phase medians",
+    kind: "diagnostic",
+    runner: tsxScript("empty-view-memory-compare.ts"),
+  },
   "memory-compare": {
     summary: "Diff two memory-bench result files into a delta table",
     kind: "diagnostic",
