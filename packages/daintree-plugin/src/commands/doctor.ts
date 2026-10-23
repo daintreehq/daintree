@@ -250,7 +250,11 @@ export function describeHostSurfaceRefusals(
     if (typeof dirName !== "string" || typeof refusal.slot !== "string") continue;
     const holder = byInstance.get(refusal.heldBy ?? "");
     const holderName = holder?.displayName ?? holder?.id ?? refusal.heldBy ?? "another plugin";
-    const what = `surfaces.${refusal.slot} is not showing`;
+    // A file editor slot is a `fileEditors[].default` pattern, not a
+    // `surfaces` key — name the field the author would go and change.
+    const what = refusal.slot.startsWith("fileEditor:")
+      ? `the default editor for "${refusal.slot.slice("fileEditor:".length)}" (fileEditors[].default) is not in force`
+      : `surfaces.${refusal.slot} is not showing`;
     const note =
       refusal.reason === "outranked"
         ? `${what}: ${holderName} also claims it in this project, and only one plugin can — ${holderName} keeps it because its plugin id sorts first`

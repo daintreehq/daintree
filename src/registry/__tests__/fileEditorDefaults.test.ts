@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vitest";
+// @vitest-environment jsdom
+import { afterEach, describe, expect, it } from "vitest";
 import {
   fileEditorSlotKey,
   type FileEditorSlotKey,
@@ -7,7 +8,18 @@ import {
   type ProjectSurfaceSlotKey,
   type ProjectSurfaceSlotState,
 } from "@shared/types/plugin";
-import { resolveFileEditorDefault, type FileEditorDefaultInput } from "../fileEditorDefaults";
+import {
+  currentFileEditorDefault,
+  resolveFileEditorDefault,
+  type FileEditorDefaultInput,
+} from "../fileEditorDefaults";
+import { useProjectStore } from "@/store/projectStore";
+import { usePluginHostedViewsStore } from "@/store/pluginHostedViewsStore";
+import {
+  _resetPluginProjectSurfacesStoreForTest,
+  usePluginProjectSurfacesStore,
+} from "@/store/pluginProjectSurfacesStore";
+import { setWorktreePathIndexAccessor, setWorktreeSelectionAccessor } from "@/store/storeAccessors";
 
 const ROOT = "/repo";
 const ACME = "project__p1__acme.cms";
@@ -129,18 +141,33 @@ describe("resolveFileEditorDefault (#13811)", () => {
     expect(resolveFileEditorDefault(input({ slots: reverse, views }))?.slot).toBe(ABOUT_SLOT);
   });
 
-  it("breaks a specificity tie by pattern, ordinally", () => {
+  it("breaks a specificity tie by pattern, ordinally, whatever order the claims arrived in", () => {
+    // Both carry 14 literal characters and no globstar.
     const a: FileEditorSlotKey = fileEditorSlotKey("content/a*.json");
-    const b: FileEditorSlotKey = fileEditorSlotKey("content/?bout.json");
+    const t: FileEditorSlotKey = fileEditorSlotKey("content/*t.json");
     const views = [
       editorView(ACME, [{ id: "records", paths: ["content/a*.json"] }]),
-      editorView(ZED, [{ id: "page", paths: ["content/?bout.json"] }]),
+      editorView(ZED, [{ id: "page", paths: ["content/*t.json"] }]),
+    ];
+    for (const slots of [
+      { [a]: slot(ACME, "records"), [t]: slot(ZED, "page") },
+      { [t]: slot(ZED, "page"), [a]: slot(ACME, "records") },
+    ]) {
+      // "content/*" sorts before "content/a".
+      expect(resolveFileEditorDefault(input({ slots, views }))?.slot).toBe(t);
+    }
+  });
+
+  it("ranks a pattern without a globstar above one with, whatever its length", () => {
+    const deep: FileEditorSlotKey = fileEditorSlotKey("**/content/about.json");
+    const views = [
+      editorView(ACME, [{ id: "records", paths: ["content/about.json"] }]),
+      editorView(ZED, [{ id: "page", paths: ["**/content/about.json"] }]),
     ];
     const result = resolveFileEditorDefault(
-      input({ slots: { [b]: slot(ZED, "page"), [a]: slot(ACME, "records") }, views })
+      input({ slots: { [deep]: slot(ZED, "page"), [ABOUT_SLOT]: slot(ACME, "records") }, views })
     );
-    // Both have 14 literal characters; "content/?…" sorts before "content/a…".
-    expect(result?.slot).toBe(b);
+    expect(result?.slot).toBe(ABOUT_SLOT);
   });
 
   it("falls through to the next match when the user chose Daintree's own for the narrower one", () => {
@@ -178,5 +205,54 @@ describe("resolveFileEditorDefault (#13811)", () => {
       })
     );
     expect(result).toBeNull();
+  });
+});
+
+describe("currentFileEditorDefault (#13811)", () => {
+  afterEach(() => {
+    _resetPluginProjectSurfacesStoreForTest();
+    usePluginHostedViewsStore.setState({ views: null, loadFailed: false });
+    setWorktreePathIndexAccessor(() => null);
+    setWorktreeSelectionAccessor(() => ({ activeWorktreeId: null, restoreWorktreeId: null }));
+  });
+
+  /** `/repo` is the active worktree, with `/repo/nested` a worktree inside it. */
+  function seed() {
+    usePluginProjectSurfacesStore.setState({
+      slots: { [JSON_SLOT]: slot(ACME, "records") },
+      choices: {},
+      choicesLoaded: true,
+    });
+    usePluginHostedViewsStore.setState({
+      views: [editorView(ACME, [{ id: "records", paths: ["content/*.json"] }])],
+    });
+    setWorktreePathIndexAccessor(
+      () =>
+        new Map([
+          ["main", "/repo"],
+          ["nested", "/repo/nested"],
+        ])
+    );
+    setWorktreeSelectionAccessor(() => ({ activeWorktreeId: "main", restoreWorktreeId: null }));
+  }
+
+  it("matches against the worktree a new panel is bound to, as the pane will", () => {
+    seed();
+    expect(currentFileEditorDefault("/repo/content/about.json")?.choiceId).toBe(`${ACME}/records`);
+    // The pane reads this file through the active worktree, where the path is
+    // `nested/content/a.json` — so the opener must not apply the default either.
+    expect(currentFileEditorDefault("/repo/nested/content/a.json")).toBeNull();
+  });
+
+  it("falls back to the containing worktree, then the project, for a file outside the active one", () => {
+    seed();
+    setWorktreeSelectionAccessor(() => ({ activeWorktreeId: "other", restoreWorktreeId: null }));
+    expect(currentFileEditorDefault("/repo/nested/content/a.json")?.slot).toBe(JSON_SLOT);
+
+    setWorktreePathIndexAccessor(() => null);
+    useProjectStore.setState({
+      currentProject: { id: "p1", path: "/repo", name: "repo", emoji: "", lastOpened: 0 },
+    });
+    expect(currentFileEditorDefault("/repo/content/about.json")?.slot).toBe(JSON_SLOT);
   });
 });

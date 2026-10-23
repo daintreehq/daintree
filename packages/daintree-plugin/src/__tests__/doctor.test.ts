@@ -307,6 +307,21 @@ describe("describeHostSurfaceRefusals", () => {
     expect(notes.get("zeta")?.[0]).toContain("Acme Board also claims it");
   });
 
+  it("names a default editor's pattern and its field rather than a surfaces key (#13811)", () => {
+    const notes = describeHostSurfaceRefusals(plugins, [
+      {
+        slot: "fileEditor:content/*.json",
+        pluginId: "project__p__zeta.board",
+        reason: "outranked",
+        heldBy: "project__p__acme.board",
+      },
+    ]);
+
+    expect(notes.get("zeta")?.[0]).toBe(
+      'the default editor for "content/*.json" (fileEditors[].default) is not in force: Acme Board also claims it in this project, and only one plugin can — Acme Board keeps it because its plugin id sorts first'
+    );
+  });
+
   it("explains a view that registered nothing and skips refusals it can't place", () => {
     const notes = describeHostSurfaceRefusals(plugins, [
       { slot: "emptyCanvas", pluginId: "project__p__acme.board", reason: "unresolved-view" },

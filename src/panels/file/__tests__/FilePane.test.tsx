@@ -4114,7 +4114,21 @@ describe("FilePane edit mode (#12323)", () => {
         expect(await screen.findByTestId("file-editor-mock")).toBeTruthy();
       });
 
-      it("asks about an unanswered default in the pane, and Use Daintree's leaves it for Source", async () => {
+      const owned = {
+        mode: "exclusive" as const,
+        options: [
+          {
+            pluginId: "acme.records",
+            scope: "project" as const,
+            value: { kind: "data" as const, data: { editorId: "main" } },
+          },
+        ],
+        defaultOptionId: "acme.records",
+        refused: [],
+      };
+
+      /** An unanswered default on `docs/*.md`, with main's save answered by `save`. */
+      async function renderAsked(save: (updates: unknown) => Promise<unknown>) {
         seedWorktree();
         fileEditorState.resolved = null;
         fileEditorState.plugin.edit = [candidate("acme.records", "Acme records", "edit")];
@@ -4124,27 +4138,31 @@ describe("FilePane edit mode (#12323)", () => {
           choiceId: "acme.records/main",
           choice: null,
         };
+        Object.defineProperty(window, "electron", {
+          configurable: true,
+          value: { plugin: { setProjectSurfaceChoices: vi.fn(save) } },
+        });
         usePluginProjectSurfacesStore.setState({
-          slots: {
-            [SLOT]: {
-              mode: "exclusive",
-              options: [
-                {
-                  pluginId: "acme.records",
-                  scope: "project",
-                  value: { kind: "data", data: { editorId: "main" } },
-                },
-              ],
-              defaultOptionId: "acme.records",
-              refused: [],
-            },
-          },
+          slots: { [SLOT]: owned },
           choices: {},
           choicesLoaded: true,
         });
         pinnedPanel("edit");
         render(paneElement());
         await act(async () => {});
+      }
+
+      afterEach(() => {
+        Reflect.deleteProperty(window, "electron");
+      });
+
+      it("asks about an unanswered default in the pane, and Use Daintree's leaves it for Source", async () => {
+        await renderAsked(async () => ({
+          projectId: "p1",
+          revision: 1,
+          slots: { [SLOT]: owned },
+          choices: { [SLOT]: { pluginId: "acme.records", choice: "stock", decidedAt: 1 } },
+        }));
 
         expect(
           screen.getByText("acme.records set up this project: Editor for docs/*.md")
@@ -4153,6 +4171,37 @@ describe("FilePane edit mode (#12323)", () => {
           fireEvent.click(screen.getByRole("button", { name: "Use Daintree's" }));
         });
         expect(setFileViewModeMock).toHaveBeenCalledWith("file-1", "source");
+      });
+
+      it("keeps the editor and says so when the answer couldn't be saved", async () => {
+        await renderAsked(() => Promise.reject(new Error("ENOSPC")));
+
+        await act(async () => {
+          fireEvent.click(screen.getByRole("button", { name: "Use Daintree's" }));
+        });
+        expect(setFileViewModeMock).not.toHaveBeenCalled();
+        expect(screen.getByRole("alert").textContent).toContain("Couldn't save the editor choice");
+      });
+
+      it("doesn't ask in a pane where the default's editor isn't on offer", async () => {
+        seedWorktree();
+        fileEditorState.resolved = null;
+        const small = candidate("acme.records", "Acme records", "edit");
+        small.editor.maxBytes = 2;
+        fileEditorState.plugin.edit = [small];
+        fileDefaultState.value = {
+          slot: SLOT,
+          pluginId: "acme.records",
+          choiceId: "acme.records/main",
+          choice: null,
+        };
+        usePluginProjectSurfacesStore.setState({
+          slots: { [SLOT]: owned },
+          choices: {},
+          choicesLoaded: true,
+        });
+        await renderPane({ content: "# a file larger than two bytes\n" });
+        expect(screen.queryByText(/set up this project/)).toBeNull();
       });
 
       it("doesn't ask once the default is answered", async () => {

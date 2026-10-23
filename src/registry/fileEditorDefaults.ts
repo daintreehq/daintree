@@ -13,13 +13,15 @@ import {
 } from "@shared/types/plugin";
 import { matchesFileEditorGlob, relativeFilePath } from "@/registry/fileEditorGlob";
 import { useProjectStore } from "@/store/projectStore";
+import { selectViewProject } from "@/store/viewWorkspace";
+import { getViewWorkspaceId } from "@/store/viewWorkspaceId";
 import { usePluginHostedViewsStore } from "@/store/pluginHostedViewsStore";
 import {
   surfaceSlotChoice,
   usePluginProjectSurfacesStore,
 } from "@/store/pluginProjectSurfacesStore";
 import { usePluginRuntimeStore } from "@/store/pluginRuntimeStore";
-import { getWorktreePathIndex } from "@/store/storeAccessors";
+import { getWorktreePathIndex, getWorktreeSelectionSnapshot } from "@/store/storeAccessors";
 
 /**
  * The editor a project plugin made the default for a file (#13811): which
@@ -51,21 +53,30 @@ export interface FileEditorDefaultInput {
 }
 
 /**
- * How much of a pattern is literal. Of two defaults that both match a file,
- * the one that says more about it wins — `content/about.json` over
- * `content/*.json` — so a narrower claim is never shadowed by a broader one.
+ * How specific a pattern is, as `[globstars, literal characters]`. Of two
+ * defaults that both match a file, the one that says more about it wins, so a
+ * narrower claim is never shadowed by a broader one: fewer `**` segments first
+ * (`content/about.json` over the same path under a leading `**`), then more literal
+ * characters (`content/about.json` over `content/*.json`).
  */
-function literalLength(pattern: string): number {
-  let count = 0;
-  for (const char of pattern) if (char !== "*" && char !== "?") count += 1;
-  return count;
+function specificity(pattern: string): [number, number] {
+  const segments = pattern.split("/");
+  const globstars = segments.filter((segment) => segment === "**").length;
+  let literal = 0;
+  for (const segment of segments) {
+    if (segment === "**") continue;
+    for (const char of segment) if (char !== "*" && char !== "?") literal += 1;
+  }
+  return [globstars, literal];
 }
 
 function compareDefaults(a: FileEditorDefault, b: FileEditorDefault): number {
   const pa = fileEditorSlotPattern(a.slot);
   const pb = fileEditorSlotPattern(b.slot);
-  const bySpecificity = literalLength(pb) - literalLength(pa);
-  if (bySpecificity !== 0) return bySpecificity;
+  const [globsA, literalA] = specificity(pa);
+  const [globsB, literalB] = specificity(pb);
+  if (globsA !== globsB) return globsA - globsB;
+  if (literalA !== literalB) return literalB - literalA;
   return pa < pb ? -1 : pa > pb ? 1 : 0;
 }
 
@@ -95,8 +106,9 @@ function editorOnOffer(
  * one that does, the claimed editor isn't on offer, or the answers or the
  * editors haven't loaded yet. Pure over its inputs.
  *
- * When several defaults match, the most specific pattern wins, then the
- * ordinally first — never the order the claims arrived in.
+ * When several defaults match, the most specific pattern wins (see
+ * {@link specificity}), then the ordinally first — never the order the claims
+ * arrived in.
  */
 export function resolveFileEditorDefault(input: FileEditorDefaultInput): FileEditorDefault | null {
   const { slots, choices, choicesLoaded, views, disabled, rootPath, filePath } = input;
@@ -162,21 +174,30 @@ export function useFileEditorDefault(
 }
 
 /**
- * The root a default's patterns are matched against for an absolute path: the
- * deepest worktree containing it, else the project. Containment, never the
- * caller's say-so, so a root passed in to resolve a relative path cannot make
- * a file look like it is somewhere it is not.
+ * The root a default's patterns are matched against for a file a new panel is
+ * about to show — the one that panel's pane will read it through, so the two
+ * never disagree about whether a pattern matches: the worktree the panel is
+ * bound to (the active one), else the deepest worktree containing the file,
+ * else this view's own project. Containment, never a caller's say-so, so a
+ * root passed in to resolve a relative path cannot move the file.
  */
-function containingRoot(filePath: string): string | null {
-  let best: string | null = null;
-  for (const root of getWorktreePathIndex()?.values() ?? []) {
-    if (relativeFilePath(root, filePath) !== null && (best === null || root.length > best.length)) {
-      best = root;
-    }
+function patternRoot(filePath: string): string | null {
+  const index = getWorktreePathIndex();
+  const activeId = getWorktreeSelectionSnapshot()?.activeWorktreeId ?? null;
+  const panelRoot = activeId === null ? undefined : index?.get(activeId);
+  let deepest: string | undefined;
+  for (const root of index?.values() ?? []) {
+    if (relativeFilePath(root, filePath) === null) continue;
+    if (deepest === undefined || root.length > deepest.length) deepest = root;
   }
-  if (best !== null) return best;
-  const projectPath = useProjectStore.getState().currentProject?.path;
-  return projectPath && relativeFilePath(projectPath, filePath) !== null ? projectPath : null;
+  // The view's own project, not the globally current one another window can
+  // repoint.
+  const project = selectViewProject(getViewWorkspaceId(), useProjectStore.getState())?.path;
+  return (
+    [panelRoot, deepest, project].find(
+      (root): root is string => !!root && relativeFilePath(root, filePath) !== null
+    ) ?? null
+  );
 }
 
 /**
@@ -190,7 +211,7 @@ export function currentFileEditorDefault(filePath: string): FileEditorDefault | 
   surfaces.init();
   const hosted = usePluginHostedViewsStore.getState();
   hosted.init();
-  const rootPath = containingRoot(filePath);
+  const rootPath = patternRoot(filePath);
   if (rootPath === null) return null;
   return resolveFileEditorDefault({
     slots: surfaces.slots,

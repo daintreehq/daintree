@@ -12,19 +12,22 @@ import { registerPanelKind, unregisterPanelKind } from "@shared/config/panelKind
  */
 vi.mock("@shared/types/plugin", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@shared/types/plugin")>();
+  const emptyCanvas = {
+    mode: "exclusive",
+    claim: "view",
+    label: "Project home",
+    stockLabel: "Overview",
+    noun: "home",
+    switchPlacement: "below",
+  } as const;
   return {
     ...actual,
-    PROJECT_SURFACE_SLOT_CATALOGUE: {
-      ...actual.PROJECT_SURFACE_SLOT_CATALOGUE,
-      emptyCanvas: {
-        mode: "exclusive",
-        claim: "view",
-        label: "Project home",
-        stockLabel: "Overview",
-        noun: "home",
-        switchPlacement: "below",
-      },
-    },
+    PROJECT_SURFACE_SLOT_CATALOGUE: { ...actual.PROJECT_SURFACE_SLOT_CATALOGUE, emptyCanvas },
+    // The notice reads a slot's words through the resolver, which closes over
+    // the real catalogue, so the swapped declaration goes through it too.
+    projectSurfaceSlotDescriptor: (
+      slot: Parameters<typeof actual.projectSurfaceSlotDescriptor>[0]
+    ) => (slot === "emptyCanvas" ? emptyCanvas : actual.projectSurfaceSlotDescriptor(slot)),
   };
 });
 

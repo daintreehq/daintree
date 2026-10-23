@@ -1647,9 +1647,14 @@ export function FilePane({
           />
         </FileViewerToolbar.Actions>
       </FileViewerToolbar.Root>
-      {fileDefault !== null && fileDefault.choice === null && (
-        <FileEditorDefaultNotice slot={fileDefault.slot} onAnswered={handleDefaultAnswered} />
-      )}
+      {/* Only where the default's editor is on offer for this file — not one
+          too large for it — so the one question lands in a pane that can show
+          what it asks about. */}
+      {fileDefault !== null &&
+        fileDefault.choice === null &&
+        editOptions.includes(fileDefault.choiceId) && (
+          <FileEditorDefaultNotice slot={fileDefault.slot} onAnswered={handleDefaultAnswered} />
+        )}
       {location !== "dialog" &&
         isInsideGovernedRoot &&
         editLockedBy === null &&
