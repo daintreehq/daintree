@@ -32,7 +32,7 @@ export function registerProjectCrudHandlers(deps: HandlerDependencies): () => vo
     registerProjectCrudCoreHandlers(deps),
     registerProjectSwitchHandlers(deps),
     registerProjectSettingsHandlers(deps),
-    registerGitInitHandlers(),
+    registerGitInitHandlers(deps),
     registerGitCloneHandlers(),
     registerProjectPrefetchHandlers(deps),
   ];
