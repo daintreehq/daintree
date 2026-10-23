@@ -3,11 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import { CapabilitiesSchema } from "../../../../../shared/elementPicker/observation.js";
 import { SourceCandidateSchema } from "../../../../../shared/elementPicker/source.js";
-import {
-  EXTRACTOR_REGISTRY_GLOBAL,
-  channelEvent,
-  type ExtractReply,
-} from "../../guestChannel.js";
+import { EXTRACTOR_REGISTRY_GLOBAL, channelEvent, type ExtractReply } from "../../guestChannel.js";
 import { parseSourceLoc, solidContribution } from "../extractors/solidLocator.js";
 
 const scope = globalThis as Record<string, unknown>;

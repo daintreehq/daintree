@@ -323,7 +323,9 @@ export class ElementPickerHost {
     if (!workspace) throw hostError("UNKNOWN_WORKSPACE", "no open workspace has this id");
     // A selection whose page named no source has nothing for a resolver to read:
     // the answer is the host's empty one, without starting the host for it.
-    if (request.observations.every((observation) => observationCandidates(observation).length === 0)) {
+    if (
+      request.observations.every((observation) => observationCandidates(observation).length === 0)
+    ) {
       return {
         requestId: request.requestId,
         documentEpoch: request.documentEpoch,
