@@ -1209,43 +1209,43 @@ export function PilotView() {
    * highlight off the row they are on.
    */
   const urgentRowId = useMemo(() => {
-    // Scanned whole rather than off each group's first row, which a pointer
-    // hold can leave unsorted: a plugin row may only start the highlight when
-    // no agent anywhere is asking.
+    // Every row, not each group's first: a pointer hold can leave a group
+    // unsorted, and a plugin row may only start the highlight when no agent
+    // anywhere is asking (#13821).
     const agentAsking = visibleGroups.some(
       (group) => group.axis !== "plugin" && group.rows.some((row) => isAttentionBand(row.band))
     );
     let best: { rowId: string; rank: number; since: number } | null = null;
     for (const group of visibleGroups) {
-      // Rows are sorted worst-first within a group, so only the first can win.
-      const row: PilotRow | undefined = group.rows[0];
-      if (row === undefined || !isAttentionBand(row.band)) continue;
-      if (row.run === undefined) {
-        if (agentAsking) continue;
-        const rank = FLEET_BANDS.length + FLEET_BANDS.indexOf(row.band);
-        if (best === null || rank < best.rank) {
-          best = { rowId: pilotRowId(row), rank, since: Number.MAX_SAFE_INTEGER };
+      for (const row of group.rows as readonly PilotRow[]) {
+        if (!isAttentionBand(row.band)) continue;
+        if (row.run === undefined) {
+          if (agentAsking) continue;
+          const rank = FLEET_BANDS.length + FLEET_BANDS.indexOf(row.band);
+          if (best === null || rank < best.rank) {
+            best = { rowId: pilotRowId(row), rank, since: Number.MAX_SAFE_INTEGER };
+          }
+          continue;
         }
-        continue;
-      }
-      const candidate = {
-        rowId: row.run.runId,
-        rank: FLEET_BANDS.indexOf(row.band),
-        // Oldest outstanding first, the same anti-starvation tiebreak the rows
-        // inside a group already use — and off `bandTimestamp`, so it measures
-        // whatever the row's own clock is showing. Reading `since` here instead
-        // ranked two silent runs by how long they had been WORKING while the
-        // column beside them counted the silence, which is the surface picking
-        // one row and pointing at another. An unknown age never outranks a
-        // known one.
-        since: bandTimestamp(row.run, row.band) ?? Number.MAX_SAFE_INTEGER,
-      };
-      if (
-        best === null ||
-        candidate.rank < best.rank ||
-        (candidate.rank === best.rank && candidate.since < best.since)
-      ) {
-        best = candidate;
+        const candidate = {
+          rowId: row.run.runId,
+          rank: FLEET_BANDS.indexOf(row.band),
+          // Oldest outstanding first, the same anti-starvation tiebreak the rows
+          // inside a group already use — and off `bandTimestamp`, so it measures
+          // whatever the row's own clock is showing. Reading `since` here instead
+          // ranked two silent runs by how long they had been WORKING while the
+          // column beside them counted the silence, which is the surface picking
+          // one row and pointing at another. An unknown age never outranks a
+          // known one.
+          since: bandTimestamp(row.run, row.band) ?? Number.MAX_SAFE_INTEGER,
+        };
+        if (
+          best === null ||
+          candidate.rank < best.rank ||
+          (candidate.rank === best.rank && candidate.since < best.since)
+        ) {
+          best = candidate;
+        }
       }
     }
     return best?.rowId ?? null;
