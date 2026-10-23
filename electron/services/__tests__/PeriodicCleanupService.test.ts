@@ -10,6 +10,7 @@ const mockApp = vi.hoisted(() => ({
 
 const mockRunScratchCleanup = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 const mockRunAssistantScratchCleanup = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
+const mockRunCheckpointRetention = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 const mockRequestAgentCompileCacheCleanup = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 const mockPruneOldLogs = vi.hoisted(() => vi.fn());
 const mockPruneHeapSnapshotsAsync = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
@@ -36,6 +37,10 @@ vi.mock("../ScratchCleanupService.js", () => ({
 
 vi.mock("../AssistantScratchService.js", () => ({
   runAssistantScratchCleanup: mockRunAssistantScratchCleanup,
+}));
+
+vi.mock("../AssistantRunCheckpointService.js", () => ({
+  requestAssistantRunCheckpointRetention: mockRunCheckpointRetention,
 }));
 
 vi.mock("../AgentCompileCacheCleanupService.js", () => ({
@@ -73,6 +78,7 @@ describe("PeriodicCleanupService", () => {
     mockApp.getPath.mockImplementation((name: string) => `/fake/${name}`);
     mockRunScratchCleanup.mockResolvedValue(undefined);
     mockRunAssistantScratchCleanup.mockResolvedValue(undefined);
+    mockRunCheckpointRetention.mockResolvedValue(undefined);
     mockRequestAgentCompileCacheCleanup.mockResolvedValue(undefined);
     mockPruneHeapSnapshotsAsync.mockResolvedValue(undefined);
     mockRequestNativeCrashDumpPrune.mockResolvedValue(null);
@@ -87,6 +93,7 @@ describe("PeriodicCleanupService", () => {
   function expectNoRoutinesRan() {
     expect(mockRunScratchCleanup).not.toHaveBeenCalled();
     expect(mockRunAssistantScratchCleanup).not.toHaveBeenCalled();
+    expect(mockRunCheckpointRetention).not.toHaveBeenCalled();
     expect(mockRequestAgentCompileCacheCleanup).not.toHaveBeenCalled();
     expect(mockPruneOldLogs).not.toHaveBeenCalled();
     expect(mockPruneHeapSnapshotsAsync).not.toHaveBeenCalled();
@@ -96,6 +103,7 @@ describe("PeriodicCleanupService", () => {
   function expectAllRoutinesRan() {
     expect(mockRunScratchCleanup).toHaveBeenCalledTimes(1);
     expect(mockRunAssistantScratchCleanup).toHaveBeenCalledTimes(1);
+    expect(mockRunCheckpointRetention).toHaveBeenCalledTimes(1);
     expect(mockRequestAgentCompileCacheCleanup).toHaveBeenCalledTimes(1);
     expect(mockPruneOldLogs).toHaveBeenCalledTimes(1);
     expect(mockPruneHeapSnapshotsAsync).toHaveBeenCalledTimes(1);

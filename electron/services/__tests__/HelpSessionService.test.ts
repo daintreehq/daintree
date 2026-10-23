@@ -215,6 +215,10 @@ function stripManagedAddenda(content: string): string {
       ""
     )
     .replace(
+      /\n*<!-- DAINTREE_ASSISTANT_RUN_CHECKPOINTS_START -->[\s\S]*?<!-- DAINTREE_ASSISTANT_RUN_CHECKPOINTS_END -->\n*/,
+      ""
+    )
+    .replace(
       /\n*<!-- DAINTREE_PROJECT_METADATA_START -->[\s\S]*?<!-- DAINTREE_PROJECT_METADATA_END -->\n*/,
       ""
     )
@@ -5177,6 +5181,53 @@ describe("HelpSessionService", () => {
         // a literal path here would be whichever lane provisioned last.
         expect(content).not.toContain(scratchDir);
         expect(content).toContain("DAINTREE_ASSISTANT_SCRATCH_DIR");
+      }
+    });
+
+    it("keeps run checkpoints in a durable per-project bucket outside the scratch root", async () => {
+      const input = provisionInput();
+      const result = await service.provisionSession(input);
+      if (!result) throw new Error("expected result");
+
+      const env = service.getAssistantScratchEnv(result.token);
+      if (!env) throw new Error("expected env");
+      const bucket = env.DAINTREE_ASSISTANT_RUN_CHECKPOINT_DIR;
+      expect(bucket).toBe(path.join(userData, "assistant-run-checkpoints", input.projectId));
+      expect((await fs.stat(bucket)).isDirectory()).toBe(true);
+      expect(env.DAINTREE_ASSISTANT_RUN_CHECKPOINT_WRITER_ID).toBe(result.sessionId);
+      expect(bucket.startsWith(path.join(userData, "assistant-scratch"))).toBe(false);
+    });
+
+    it("hands the same checkpoint bucket to every provision of a project, with a fresh writer id", async () => {
+      const first = await service.provisionSession(provisionInput());
+      if (!first) throw new Error("expected result");
+      const firstEnv = service.getAssistantScratchEnv(first.token)!;
+      const second = await service.provisionSession(provisionInput());
+      if (!second) throw new Error("expected result");
+      const secondEnv = service.getAssistantScratchEnv(second.token)!;
+
+      expect(secondEnv.DAINTREE_ASSISTANT_RUN_CHECKPOINT_DIR).toBe(
+        firstEnv.DAINTREE_ASSISTANT_RUN_CHECKPOINT_DIR
+      );
+      expect(secondEnv.DAINTREE_ASSISTANT_RUN_CHECKPOINT_WRITER_ID).not.toBe(
+        firstEnv.DAINTREE_ASSISTANT_RUN_CHECKPOINT_WRITER_ID
+      );
+    });
+
+    it("writes one run-checkpoint block naming env vars, not paths, into CLAUDE.md and AGENTS.md", async () => {
+      const first = await service.provisionSession(provisionInput());
+      if (!first) throw new Error("expected result");
+      const result = await service.provisionSession(provisionInput());
+      if (!result) throw new Error("expected result");
+      const env = service.getAssistantScratchEnv(result.token)!;
+
+      for (const name of ["CLAUDE.md", "AGENTS.md"]) {
+        const content = await fs.readFile(path.join(result.sessionPath, name), "utf-8");
+        expect(content.match(/<!-- DAINTREE_ASSISTANT_RUN_CHECKPOINTS_START -->/g)).toHaveLength(1);
+        expect(content).toContain("DAINTREE_ASSISTANT_RUN_CHECKPOINT_DIR");
+        expect(content).toContain("permission to repeat a write");
+        expect(content).not.toContain(env.DAINTREE_ASSISTANT_RUN_CHECKPOINT_DIR);
+        expect(content).not.toContain(env.DAINTREE_ASSISTANT_RUN_CHECKPOINT_WRITER_ID);
       }
     });
 

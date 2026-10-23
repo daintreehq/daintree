@@ -106,6 +106,7 @@ The plugin sub-index links onward to getting-started, the manifest reference, co
 | [sound-design.md](./sound-design.md) | How notification earcons are procedurally synthesized, and how to add new ones. |
 | [voice-input.md](./voice-input.md) | The voice dictation / streaming transcription pipeline across both processes. |
 | [assistant-custom-commands.md](./assistant-custom-commands.md) | User-authored commands/skills for assistant sessions — source folders, per-agent mapping, sync mechanics. |
+| [architecture/assistant-run-checkpoints.md](./architecture/assistant-run-checkpoints.md) | Durable Assistant run checkpoints — layout, launch context, discard and retention rules. |
 
 ## Companion pairs
 

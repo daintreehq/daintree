@@ -22,6 +22,7 @@
 import { app, powerMonitor } from "electron";
 import { runScratchCleanup } from "./ScratchCleanupService.js";
 import { runAssistantScratchCleanup } from "./AssistantScratchService.js";
+import { requestAssistantRunCheckpointRetention } from "./AssistantRunCheckpointService.js";
 import { requestAgentCompileCacheCleanup } from "./AgentCompileCacheCleanupService.js";
 import { requestNativeCrashDumpPrune } from "./CrashDumpRetentionService.js";
 import {
@@ -106,6 +107,11 @@ class PeriodicCleanupService {
       await runAssistantScratchCleanup();
     } catch (err) {
       logError("[PeriodicCleanup] assistant scratch cleanup threw", err);
+    }
+    try {
+      await requestAssistantRunCheckpointRetention();
+    } catch (err) {
+      logError("[PeriodicCleanup] assistant run checkpoint retention threw", err);
     }
     try {
       // Agent compile caches grow only while agents run, so a long session is

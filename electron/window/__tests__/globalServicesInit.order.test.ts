@@ -212,6 +212,10 @@ vi.mock("../../services/AssistantScratchService.js", () => ({
   runAssistantScratchCleanup: vi.fn(async () => {}),
 }));
 
+vi.mock("../../services/AssistantRunCheckpointService.js", () => ({
+  requestAssistantRunCheckpointRetention: vi.fn(async () => ({})),
+}));
+
 vi.mock("../../services/AgentCompileCacheCleanupService.js", () => ({
   initializeAgentCompileCacheCleanup: vi.fn(),
   requestAgentCompileCacheCleanup: vi.fn(async () => {}),
@@ -850,6 +854,7 @@ describe("initGlobalServices task ordering", () => {
       "trashed-pid-cleanup",
       "scratch-cleanup",
       "assistant-scratch-cleanup",
+      "assistant-run-checkpoint-retention",
     ];
 
     const telemetryIdx = registeredTaskNames.indexOf("telemetry");
@@ -1308,6 +1313,7 @@ describe("initGlobalServices task ordering", () => {
     expect(registeredTaskNames).toContain("trashed-pid-cleanup");
     expect(registeredTaskNames).toContain("scratch-cleanup");
     expect(registeredTaskNames).toContain("assistant-scratch-cleanup");
+    expect(registeredTaskNames).toContain("assistant-run-checkpoint-retention");
     expect(registeredTaskNames).toContain("agent-compile-cache-cleanup");
     // GpuCrashMonitor is intentionally NOT a deferred task — it must stay
     // eager in main.ts so the child-process-gone listener installs before
