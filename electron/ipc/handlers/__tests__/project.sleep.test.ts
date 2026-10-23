@@ -5,6 +5,8 @@ vi.mock("electron", () => ({
   ipcMain: {
     handle: vi.fn(),
     removeHandler: vi.fn(),
+    on: vi.fn(),
+    removeListener: vi.fn(),
   },
   app: {
     getPath: vi.fn().mockReturnValue(os.tmpdir()),

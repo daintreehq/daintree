@@ -422,7 +422,11 @@ export function syncPluginPanels(
 
   for (const [panelId, entry] of tracked) {
     if (live.has(panelId) || entry.removed) continue;
-    if (unsavedOwners.delete(panelId)) notifyUnsavedChanged();
+    // Only a panel the store has listed can be removed from it. A view hosted
+    // outside the grid reports its mounts under a synthetic id the store never
+    // lists, and its unsaved flag must outlive every sweep while it is mounted;
+    // its own unmount lowers it (#14095).
+    if (entry.location !== undefined && unsavedOwners.delete(panelId)) notifyUnsavedChanged();
     entry.removed = true;
     entry.lastPhase = "removed";
     enqueue(panelId, entry, "removed");

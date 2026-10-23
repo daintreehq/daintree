@@ -10,10 +10,19 @@ vi.mock("electron", async () => {
 vi.mock("../../utils/logger.js", () => ({ logError: vi.fn() }));
 
 import { CHANNELS } from "../../ipc/channels.js";
-import { readPanelRecoveryHold } from "../panelRecoveryQuery.js";
+import {
+  _resetPanelRecoveryStateForTests,
+  installPanelRecoveryStateListener,
+  isPanelRecoveryHeldReported,
+  onPanelRecoveryHoldReleased,
+  readPanelRecoveryHold,
+} from "../panelRecoveryQuery.js";
 import type { ProjectViewManager } from "../../window/ProjectViewManager.js";
 
+let nextContentsId = 1;
+
 class FakeContents extends EventEmitter {
+  id = nextContentsId++;
   destroyed = false;
   loading = false;
   sent: string[] = [];
@@ -145,5 +154,112 @@ describe("readPanelRecoveryHold", () => {
         throw new Error("boom");
       })
     ).toBe("panel-unknown");
+  });
+});
+
+describe("pushed recovery state", () => {
+  let uninstall: () => void;
+  const push = (wc: FakeContents, holding: unknown) =>
+    ipc.emitter!.emit(CHANNELS.PROJECT_PANEL_RECOVERY_STATE, { sender: wc }, holding);
+  const held = (wc: FakeContents) =>
+    isPanelRecoveryHeldReported(wc as unknown as Electron.WebContents);
+
+  beforeEach(() => {
+    _resetPanelRecoveryStateForTests();
+    uninstall = installPanelRecoveryStateListener();
+  });
+  afterEach(() => {
+    uninstall();
+    expect(ipc.emitter!.listenerCount(CHANNELS.PROJECT_PANEL_RECOVERY_STATE)).toBe(0);
+  });
+
+  it("holds nothing for a view that has said nothing yet", () => {
+    expect(held(new FakeContents(null))).toBe(false);
+  });
+
+  it("reads each view's last answer, apart from every other view's", () => {
+    const a = new FakeContents(null);
+    const b = new FakeContents(null);
+    push(a, true);
+    expect(held(a)).toBe(true);
+    expect(held(b)).toBe(false);
+    push(a, false);
+    expect(held(a)).toBe(false);
+  });
+
+  it("ignores an answer that is not a boolean", () => {
+    const wc = new FakeContents(null);
+    push(wc, true);
+    push(wc, "yes");
+    expect(held(wc)).toBe(true);
+  });
+
+  it.each(["destroyed", "render-process-gone"])("forgets a view on %s", (event) => {
+    const wc = new FakeContents(null);
+    push(wc, true);
+    wc.emit(event);
+    expect(held(wc)).toBe(false);
+    // One teardown listener pair per view, however often it reports.
+    push(wc, true);
+    push(wc, false);
+    push(wc, true);
+    expect(wc.listenerCount("destroyed")).toBe(1);
+    expect(wc.listenerCount("render-process-gone")).toBe(1);
+  });
+
+  it("holds nothing for a destroyed view, whatever it last said", () => {
+    const wc = new FakeContents(null);
+    push(wc, true);
+    wc.destroyed = true;
+    expect(held(wc)).toBe(false);
+  });
+
+  it("drops a document's answer when the view navigates, and keeps listening", () => {
+    const wc = new FakeContents(null);
+    push(wc, true);
+    wc.emit("did-navigate");
+    expect(held(wc)).toBe(false);
+    push(wc, true);
+    expect(held(wc)).toBe(true);
+    expect(wc.listenerCount("did-navigate")).toBe(1);
+  });
+
+  it("drops the answer when a failed load replaces the document, not when one is aborted", () => {
+    const wc = new FakeContents(null);
+    push(wc, true);
+    wc.emit("did-fail-load", {}, -3, "ERR_ABORTED", "app://x", true);
+    expect(held(wc)).toBe(true);
+    wc.emit("did-fail-load", {}, -105, "ERR_NAME_NOT_RESOLVED", "app://x", false);
+    expect(held(wc)).toBe(true);
+    wc.emit("did-fail-load", {}, -102, "ERR_CONNECTION_REFUSED", "app://x", true);
+    expect(held(wc)).toBe(false);
+  });
+
+  it("announces a release only when a held view stops holding", () => {
+    const released = vi.fn();
+    const off = onPanelRecoveryHoldReleased(released);
+    const wc = new FakeContents(null);
+    push(wc, false);
+    push(wc, true);
+    push(wc, true);
+    expect(released).not.toHaveBeenCalled();
+    push(wc, false);
+    expect(released.mock.calls).toEqual([[wc.id]]);
+    push(wc, true);
+    wc.emit("did-navigate");
+    expect(released).toHaveBeenCalledTimes(2);
+    // A destroyed view is gone, not released: there is no cap to restore for it.
+    push(wc, true);
+    wc.emit("destroyed");
+    expect(released).toHaveBeenCalledTimes(2);
+    off();
+  });
+
+  it("stops listening once uninstalled", () => {
+    const wc = new FakeContents(null);
+    uninstall();
+    push(wc, true);
+    expect(held(wc)).toBe(false);
+    uninstall = installPanelRecoveryStateListener();
   });
 });

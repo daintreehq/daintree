@@ -243,6 +243,7 @@ export const CHANNELS = {
   PROJECT_FOCUS_ON_ACTIVATE: "project:focus-on-activate",
   PROJECT_PANEL_RECOVERY_QUERY: "project:panel-recovery-query",
   PROJECT_PANEL_RECOVERY_REPLY: "project:panel-recovery-reply",
+  PROJECT_PANEL_RECOVERY_STATE: "project:panel-recovery-state",
   PROJECT_BACKGROUND_RESIZE: "project:background-resize",
   PROJECT_GET_SETTINGS: "project:get-settings",
   PROJECT_SAVE_SETTINGS: "project:save-settings",

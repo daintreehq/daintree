@@ -264,6 +264,10 @@ import {
   resetKernelPressureForTesting,
 } from "../../services/systemKernelPressure.js";
 import { toHostScopedKey } from "../../../shared/types/remoteHosts.js";
+import {
+  _resetPanelRecoveryStateForTests,
+  recordPanelRecoveryState,
+} from "../../services/panelRecoveryQuery.js";
 
 // The shared snapshot is module-level state; without a reset, a test could be
 // served metrics cached by the previous test's differently-mocked sweep.
@@ -4181,6 +4185,93 @@ describe("ProjectViewManager — MCP bound sessions and dispatch leases (#11790)
       mgr.setCachedViewLimit(1);
 
       expect(mgr.getAllViews().map((v) => v.projectId)).toEqual(["proj-c"]);
+    });
+  });
+
+  describe("views holding unrecoverable work (#14095)", () => {
+    const holdFor = (mgr: ProjectViewManager, projectId: string, holding: boolean) =>
+      recordPanelRecoveryState(
+        mgr.getAllViews().find((v) => v.projectId === projectId)!.view.webContents,
+        holding
+      );
+
+    beforeEach(() => _resetPanelRecoveryStateForTests());
+    afterEach(() => _resetPanelRecoveryStateForTests());
+
+    it("keeps a view with unsaved work out of a cap the user set", async () => {
+      const mgr = makeManager(3);
+      await seedThreeViews(mgr);
+      holdFor(mgr, "proj-a", true);
+
+      mgr.setCachedViewLimit(2);
+
+      expect(mgr.getAllViews().map((v) => v.projectId)).toEqual(["proj-a", "proj-c"]);
+      expect(evictedProjectIds()).toEqual(["proj-b"]);
+    });
+
+    it("reports the hold when it is what keeps the cache over its cap", async () => {
+      const mgr = makeManager(3);
+      await seedThreeViews(mgr);
+      holdFor(mgr, "proj-a", true);
+
+      mgr.setCachedViewLimit(1);
+
+      expect(mgr.getAllViews().map((v) => v.projectId)).toEqual(["proj-a", "proj-c"]);
+      expect(skippedLog()?.recoveryHeldProjectIds).toEqual(["proj-a"]);
+    });
+
+    it("yields to the forced reclaim last of all, and says the work went with it", async () => {
+      const mgr = makeManager(3);
+      mgr.setMemoryPressurePolicy(BAND);
+      setAvailableMb(2500);
+      await seedThreeViews(mgr);
+      holdFor(mgr, "proj-a", true);
+
+      mgr.reclaimCachedViewsUnderPressure();
+
+      // proj-a is the least recently used, so only its tier puts it second.
+      expect(evictedProjectIds()).toEqual(["proj-b", "proj-a"]);
+      expect(evictionLogFor("proj-a")?.recoveryHeld).toBe(true);
+      expect(evictionLogFor("proj-b")).not.toHaveProperty("recoveryHeld");
+      expect(mgr.getAllViews().map((v) => v.projectId)).toEqual(["proj-c"]);
+    });
+
+    it("becomes an ordinary candidate once the work is saved or persisted", async () => {
+      const mgr = makeManager(3);
+      await seedThreeViews(mgr);
+      holdFor(mgr, "proj-a", true);
+      holdFor(mgr, "proj-a", false);
+
+      mgr.setCachedViewLimit(1);
+
+      expect(mgr.getAllViews().map((v) => v.projectId)).toEqual(["proj-c"]);
+    });
+
+    it("brings the cache back under its cap the moment the hold is released", async () => {
+      const mgr = makeManager(3);
+      await seedThreeViews(mgr);
+      holdFor(mgr, "proj-a", true);
+      mgr.setCachedViewLimit(2);
+      expect(mgr.getAllViews().map((v) => v.projectId)).toEqual(["proj-a", "proj-c"]);
+      mgr.setCachedViewLimit(1);
+      expect(mgr.getAllViews().map((v) => v.projectId)).toEqual(["proj-a", "proj-c"]);
+
+      // No limit change, switch or pressure tick: the release alone re-runs the cap.
+      holdFor(mgr, "proj-a", false);
+      await flushImmediates();
+
+      expect(mgr.getAllViews().map((v) => v.projectId)).toEqual(["proj-c"]);
+    });
+
+    it("won't hand a held view to another window", async () => {
+      const mgr = makeManager(3);
+      await seedThreeViews(mgr);
+      holdFor(mgr, "proj-a", true);
+
+      expect(mgr.canReleaseCachedView("proj-a")).toBe(false);
+      expect(mgr.releaseCachedView("proj-a")).toBe(false);
+      expect(mgr.getAllViews().map((v) => v.projectId)).toContain("proj-a");
+      expect(mgr.canReleaseCachedView("proj-b")).toBe(true);
     });
   });
 

@@ -66,6 +66,9 @@ const DEAD_CHANNEL_ALLOWLIST = new Set<string>([
   // `project:panel-recovery-query` event, matched by request id in
   // panelRecoveryQuery.ts.
   "project:panel-recovery-reply",
+  // fire-and-forget — renderer→main `ipcRenderer.send` of the same answer,
+  // pushed whenever it changes so eviction can read it synchronously.
+  "project:panel-recovery-state",
   "mcp:dispatch-action-response",
   "mcp:get-manifest-response",
   "plugin:dispatch-action-response",

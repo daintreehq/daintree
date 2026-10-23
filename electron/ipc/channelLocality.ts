@@ -857,6 +857,7 @@ export const CHANNEL_LOCALITY = {
   "project:open-git-init-dialog": "hybrid",
   "project:panel-recovery-query": "shell",
   "project:panel-recovery-reply": "shell",
+  "project:panel-recovery-state": "shell",
   "project:prefetch-hydrate": "hybrid",
   "project:read-claude-md": "host",
   "project:remove": "host",

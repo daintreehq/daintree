@@ -2231,6 +2231,10 @@ function buildElectronApi(): ElectronAPI {
         ipcRenderer.send(CHANNELS.PROJECT_PANEL_RECOVERY_REPLY, { requestId, holding });
       },
 
+      reportPanelRecoveryState: (holding: boolean) => {
+        ipcRenderer.send(CHANNELS.PROJECT_PANEL_RECOVERY_STATE, holding);
+      },
+
       onBackgroundResize: (callback: (payload: { width: number; height: number }) => void) =>
         _typedOn(CHANNELS.PROJECT_BACKGROUND_RESIZE, callback),
 

@@ -7654,6 +7654,16 @@ interface PanelViewProps {
      * `true` means "accepted and scheduled" — the layout save is debounced, so it
      * is not a promise that bytes have reached disk.
      *
+     * Outside the grid (a Home surface, a sidebar view, a settings section, a
+     * toolbar popover) there is no panel record, so the bag is kept in the host's
+     * durable view-state store instead, under the project, your plugin and the
+     * view. The same cap, merge and version rules apply, the write is committed
+     * without a debounce, so it survives the renderer going away the moment this
+     * returns, and `false` also means storage refused it. A
+     * user-scope settings section's bag follows the user across projects. The
+     * least recently written of these bags are dropped beyond 200, so treat them
+     * as state you can rebuild.
+     *
      * Absent when the host does not support persistence for this panel; call it
      * optionally.
      */
@@ -7698,7 +7708,15 @@ interface PanelViewProps {
      * the attempt that received it: one held past this attempt's teardown does
      * nothing, and a new attempt starts with no unsaved work until it says so.
      *
-     * Absent where the host offers no reload, so call it optionally.
+     * While it is `true`, the host also keeps the project's renderer: automatic
+     * Sleep waits, and cache eviction skips it until memory runs short. Work you
+     * keep in {@link persistState} comes back after either, so prefer persisting
+     * a draft over holding the flag, and keep the flag for work that cannot be
+     * persisted. Offered outside the grid too (a Home surface, a sidebar view, a
+     * settings section, a toolbar popover), where there is no close to confirm.
+     *
+     * Absent where the host offers neither (a file editor, whose document owns
+     * its draft), so call it optionally.
      */
     readonly setHasUnsavedChanges?: (hasUnsavedChanges: boolean) => void;
     /**

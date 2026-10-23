@@ -2,6 +2,7 @@ import { CHANNELS } from "../channels.js";
 import { projectViewManagersFrom } from "../../window/activeProjectIds.js";
 import { sleepProject } from "../../services/projectSleep.js";
 import { loadProjectPluginWorkReader } from "../../services/plugin/projectPluginWork.js";
+import { installPanelRecoveryStateListener } from "../../services/panelRecoveryQuery.js";
 import { defineIpcNamespace, op } from "../define.js";
 import type { HandlerDependencies } from "../types.js";
 import type { ProjectSleepResult } from "../../../shared/types/ipc/project.js";
@@ -51,5 +52,12 @@ export function registerProjectSleepHandlers(deps: HandlerDependencies): () => v
     },
   });
 
-  return namespace.register();
+  // The pushed half of the recovery answer Sleep queries for, read by
+  // eviction (#14095). Installed here so the two always ship together.
+  const uninstallRecoveryState = installPanelRecoveryStateListener();
+  const unregister = namespace.register();
+  return () => {
+    unregister();
+    uninstallRecoveryState();
+  };
 }

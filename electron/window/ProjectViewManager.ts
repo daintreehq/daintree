@@ -51,6 +51,10 @@ import { PERF_MARKS } from "../../shared/perf/marks.js";
 import { toHostScopedKey, type HostId } from "../../shared/types/remoteHosts.js";
 import { markPerformance } from "../utils/performance.js";
 import { collectGuestPids } from "./ProjectViewLifecycleController.js";
+import {
+  isPanelRecoveryHeldReported,
+  onPanelRecoveryHoldReleased,
+} from "../services/panelRecoveryQuery.js";
 import { repaintWindowTheme, visibleProjectIdOf } from "./projectThemeChrome.js";
 
 // Trailing-edge debounce on freeze entry: the lag-pressure path can flip
@@ -480,6 +484,7 @@ export class ProjectViewManager {
     intent: ProjectFocusOnActivateIntent;
   } | null = null;
   disposed = false;
+  private recoveryReleaseCleanup: (() => void) | null = null;
   /** One-shot latch so a persistently broken activity callback can't flood the log. */
   private warnedMcpActivityFailure = false;
   private cachedMemoryTimerCleanup: (() => void) | null = null;
@@ -510,6 +515,21 @@ export class ProjectViewManager {
     this.remoteKeepResident = opts.remoteKeepResident;
     this.mcpViewActivity = opts.mcpViewActivity;
     this.windowRegistry = opts.windowRegistry;
+    // A view kept over the cap by its unsaved work (#14095) is evictable again
+    // once that work is saved or dropped; nothing else would re-run the cap
+    // until the next cold switch or limit change. Deferred so a view is never
+    // torn down inside its own navigation or IPC callback.
+    this.recoveryReleaseCleanup = onPanelRecoveryHoldReleased((webContentsId) => {
+      if (this.disposed) return;
+      const ours = [...this.views.values()].some(
+        (entry) =>
+          !entry.view.webContents.isDestroyed() && entry.view.webContents.id === webContentsId
+      );
+      if (!ours || this.views.size <= this.maxCachedViews) return;
+      setImmediate(() => {
+        if (!this.disposed) EvictionController.evictStaleViews(this, "lru");
+      });
+    });
     if (opts.cachedProjectViews != null) {
       this.maxCachedViews = opts.cachedProjectViews;
     }
@@ -1599,6 +1619,9 @@ export class ProjectViewManager {
     // that can't be read is treated as a dispatch in flight.
     const mcp = this.mcpActivityFor(projectId, wc);
     if (mcp.dispatchLease || mcp.unknown) return false;
+    // Unsaved work the view says nothing would bring back (#14095): moving the
+    // project to another window would destroy it, which a move never means.
+    if (isPanelRecoveryHeldReported(wc)) return false;
     return !EvictionController.hasLiveAssistantBackend(this, projectId, entry);
   }
 
@@ -1649,6 +1672,8 @@ export class ProjectViewManager {
 
   dispose(): void {
     this.disposed = true;
+    this.recoveryReleaseCleanup?.();
+    this.recoveryReleaseCleanup = null;
     // Before any teardown below: an in-flight restore holds a half-built entry
     // and a pending hydration wait, both of which must settle against a live
     // manager rather than be found dead by their own continuations.

@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, render } from "@testing-library/react";
+import { useEffect } from "react";
 import {
   registerPanelKind,
   unregisterPanelKind,
@@ -14,13 +15,19 @@ interface ContentMountProps {
   hostContext?: { kind: string; close?: () => void };
   settingsContext?: unknown;
   offerRequestReload?: boolean;
+  offerUnsavedChanges?: boolean;
   offerToolbar?: boolean;
+  initialArgs?: Record<string, unknown>;
+  stateVersion?: number;
+  persistState?: (patch: Record<string, unknown>) => boolean;
+  readRecoveryState?: () => { state?: Record<string, unknown>; version?: number } | null;
   onRequestClose?: () => void;
   requestCloseLabel?: string;
 }
 
 const h = vi.hoisted(() => ({
   mounts: [] as ContentMountProps[],
+  mountCount: 0,
   configs: [] as Array<Record<string, unknown>>,
 }));
 
@@ -31,10 +38,19 @@ vi.mock("@/components/Plugin/PluginViewContent", () => ({
     h.configs.push(config);
     return (props: ContentMountProps) => {
       h.mounts.push(props);
+      useEffect(() => {
+        h.mountCount++;
+      }, []);
       return <div data-testid="content" />;
     };
   },
   pluginViewHostContext: (kind: string) => ({ kind }),
+}));
+
+vi.mock("@/components/Plugin/PluginViewLoadError", () => ({
+  PluginViewLoadError: ({ message }: { message: string }) => (
+    <div data-testid="load-error">{message}</div>
+  ),
 }));
 
 import {
@@ -281,5 +297,174 @@ describe("PluginHostedView", () => {
     expect(box?.classList.contains("overflow-hidden")).toBe(true);
     expect(box?.classList.contains("h-full")).toBe(true);
     expect(box?.style.contain).toBe("layout paint");
+  });
+
+  describe("durable state outside the grid (#14095)", () => {
+    const win = window as { __DAINTREE_INITIAL_PROJECT__?: { id: string } };
+
+    beforeEach(() => {
+      window.localStorage.clear();
+      win.__DAINTREE_INITIAL_PROJECT__ = { id: "p1" };
+    });
+    afterEach(() => {
+      delete win.__DAINTREE_INITIAL_PROJECT__;
+      window.localStorage.clear();
+    });
+
+    const sidebar = () => (
+      <PluginHostedView source={hosted()} host="sidebar" mountId="sidebar:acme.tools/prefs" />
+    );
+
+    it("brings back what the view persisted on its next mount", () => {
+      const { unmount } = render(sidebar());
+      const first = h.mounts.at(-1)!;
+      expect(first.initialArgs).toBeUndefined();
+      expect(first.offerUnsavedChanges).toBe(true);
+      expect(first.persistState?.({ draft: "half a form", tab: 2 })).toBe(true);
+      unmount();
+
+      render(sidebar());
+      expect(h.mounts.at(-1)?.initialArgs).toEqual({ draft: "half a form", tab: 2 });
+    });
+
+    it("restores the latest bag on a retry, not the one the mount read", () => {
+      render(sidebar());
+      const mount = h.mounts.at(-1)!;
+      mount.persistState?.({ draft: "typed since mount" });
+      expect(mount.readRecoveryState?.()?.state).toEqual({ draft: "typed since mount" });
+    });
+
+    it("keeps one project's bag out of another's", () => {
+      const { unmount } = render(sidebar());
+      h.mounts.at(-1)!.persistState?.({ draft: "p1 work" });
+      unmount();
+
+      win.__DAINTREE_INITIAL_PROJECT__ = { id: "p2" };
+      render(sidebar());
+      expect(h.mounts.at(-1)?.initialArgs).toBeUndefined();
+    });
+
+    it("scopes a settings section to its home, not the window", () => {
+      const settings = (scope: "user" | "project", projectId: string | null) => (
+        <PluginHostedView
+          source={hosted()}
+          host="settings"
+          mountId={`settings:acme.tools:${scope}`}
+          settingsContext={{ scope, projectId }}
+        />
+      );
+      const user = render(settings("user", null));
+      h.mounts.at(-1)!.persistState?.({ tab: "accounts" });
+      user.unmount();
+
+      // The user-scope section follows the user into another project's window.
+      win.__DAINTREE_INITIAL_PROJECT__ = { id: "p2" };
+      const again = render(settings("user", null));
+      expect(h.mounts.at(-1)?.initialArgs).toEqual({ tab: "accounts" });
+      again.unmount();
+
+      const projectA = render(settings("project", "pa"));
+      h.mounts.at(-1)!.persistState?.({ tab: "a" });
+      projectA.unmount();
+      render(settings("project", "pb"));
+      expect(h.mounts.at(-1)?.initialArgs).toBeUndefined();
+    });
+
+    it("remounts the content when the identity changes under it", () => {
+      const settings = (projectId: string) => (
+        <PluginHostedView
+          source={hosted()}
+          host="settings"
+          mountId="settings:acme.tools:project"
+          settingsContext={{ scope: "project", projectId }}
+        />
+      );
+      const first = render(settings("pa"));
+      h.mounts.at(-1)!.persistState?.({ tab: "a" });
+      first.unmount();
+
+      const { rerender } = render(settings("pb"));
+      h.mounts.at(-1)!.persistState?.({ tab: "b" });
+      const before = h.mountCount;
+      rerender(settings("pa"));
+      // A fresh mount read pa's bag, rather than the pb view carrying on.
+      expect(h.mountCount).toBe(before + 1);
+      expect(h.mounts.at(-1)?.initialArgs).toEqual({ tab: "a" });
+    });
+
+    it("versions a surface's bag by its panel kind and keeps a newer build's bag intact", () => {
+      registerPanelKind({ ...panelKind(), stateVersion: 2 });
+      const surface = () => (
+        <PluginHostedView
+          source={{ from: "panel-kind", config: { ...panelKind(), stateVersion: 2 } }}
+          host="surface"
+          mountId={`surface:${KIND_ID}`}
+        />
+      );
+      const first = render(surface());
+      expect(h.mounts.at(-1)?.stateVersion).toBe(2);
+      h.mounts.at(-1)!.persistState?.({ layout: "wide" });
+      first.unmount();
+
+      const second = render(surface());
+      expect(h.mounts.at(-1)?.initialArgs).toEqual({ layout: "wide" });
+      expect(h.mounts.at(-1)?.stateVersion).toBe(2);
+      second.unmount();
+
+      // The same plugin downgraded to state version 1 gets the panel's version
+      // error rather than a view whose every write would be refused.
+      registerPanelKind({ ...panelKind(), stateVersion: 1 });
+      const before = h.mountCount;
+      const downgraded = render(
+        <PluginHostedView
+          source={{ from: "panel-kind", config: { ...panelKind(), stateVersion: 1 } }}
+          host="surface"
+          mountId={`surface:${KIND_ID}`}
+        />
+      );
+      expect(h.mountCount).toBe(before);
+      expect(downgraded.getByTestId("load-error").textContent).toContain("state format 2");
+      downgraded.unmount();
+
+      // The newer build's bag is still there for the newer build.
+      registerPanelKind({ ...panelKind(), stateVersion: 2 });
+      render(surface());
+      expect(h.mounts.at(-1)?.initialArgs).toEqual({ layout: "wide" });
+    });
+
+    it("hands a view with no declared version no stateVersion, as a panel would", () => {
+      const { unmount } = render(sidebar());
+      h.mounts.at(-1)!.persistState?.({ tab: 1 });
+      unmount();
+      render(sidebar());
+      expect(h.mounts.at(-1)?.initialArgs).toEqual({ tab: 1 });
+      expect(h.mounts.at(-1)?.stateVersion).toBeUndefined();
+      // A retry restores the bag under the same rule.
+      expect(h.mounts.at(-1)?.readRecoveryState?.()).toEqual({ state: { tab: 1 } });
+    });
+
+    it("hands a reloaded plugin's new module the latest bag, not the first mount's", () => {
+      const { rerender } = render(sidebar());
+      expect(h.mounts.at(-1)?.initialArgs).toBeUndefined();
+      h.mounts.at(-1)!.persistState?.({ draft: "kept across the reload" });
+
+      const reloaded = hostedView("plugin://acme.tools/__dtv-2/prefs.js");
+      serve([reloaded]);
+      rerender(
+        <PluginHostedView
+          source={hosted(reloaded)}
+          host="sidebar"
+          mountId="sidebar:acme.tools/prefs"
+        />
+      );
+      expect(h.mounts.at(-1)?.initialArgs).toEqual({ draft: "kept across the reload" });
+    });
+
+    it("leaves a file editor's draft to its document", () => {
+      render(<PluginHostedView source={hosted()} host="fileEditor" mountId="file-editor:panel" />);
+      const mount = h.mounts.at(-1)!;
+      expect(mount.persistState).toBeUndefined();
+      expect(mount.offerUnsavedChanges).toBeFalsy();
+    });
   });
 });

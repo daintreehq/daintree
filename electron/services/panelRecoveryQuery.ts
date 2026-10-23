@@ -80,3 +80,108 @@ export async function readPanelRecoveryHold(
   if (answers.includes("unknown")) return "panel-unknown";
   return null;
 }
+
+/**
+ * What each live view last pushed unprompted: the same answer the query gets,
+ * sent whenever it changes, so eviction — which runs synchronously and cannot
+ * wait out a round trip — reads the same definition of unrecoverable work
+ * automatic Sleep asks about. Keyed by `webContents.id` and scoped to the
+ * document that sent it: a new document (a reload, a navigation) starts with
+ * no answer until it pushes its own, and a destroyed or crashed renderer holds
+ * nothing — its recoverable state is in storage and the rest went with it.
+ */
+const reportedHolds = new Map<number, boolean>();
+/** Views whose lifecycle listeners are attached, independent of holding an answer. */
+const watched = new Set<number>();
+const releaseListeners = new Set<(webContentsId: number) => void>();
+/** Chromium's `net::ERR_ABORTED`: the load was cancelled and the old document stays. */
+const ERR_ABORTED = -3;
+
+function setHold(id: number, holding: boolean | null): void {
+  const wasHeld = reportedHolds.get(id) === true;
+  if (holding === null) reportedHolds.delete(id);
+  else reportedHolds.set(id, holding);
+  if (wasHeld && holding !== true) {
+    for (const listener of [...releaseListeners]) listener(id);
+  }
+}
+
+function watch(wc: Electron.WebContents): void {
+  const id = wc.id;
+  if (watched.has(id)) return;
+  watched.add(id);
+  // A new main-frame document has none of the old one's work. Not a release
+  // worth acting on for a destroyed view, which is simply forgotten.
+  const onNavigate = () => setHold(id, null);
+  // A failed main-frame load commits an error page without `did-navigate`, and
+  // that document will never push. An aborted load (-3) leaves the old one up.
+  const onFailLoad = (
+    _event: Electron.Event,
+    errorCode: number,
+    _description: string,
+    _url: string,
+    isMainFrame: boolean
+  ) => {
+    if (isMainFrame && errorCode !== ERR_ABORTED) setHold(id, null);
+  };
+  const forget = () => {
+    watched.delete(id);
+    reportedHolds.delete(id);
+    wc.removeListener("did-navigate", onNavigate);
+    wc.removeListener("did-fail-load", onFailLoad);
+    wc.removeListener("destroyed", forget);
+    wc.removeListener("render-process-gone", forget);
+  };
+  wc.on("did-navigate", onNavigate);
+  wc.on("did-fail-load", onFailLoad);
+  wc.on("destroyed", forget);
+  wc.on("render-process-gone", forget);
+}
+
+/** Record a view's pushed answer. Exported for tests that cannot reach `ipcMain`. */
+export function recordPanelRecoveryState(wc: Electron.WebContents, holding: boolean): void {
+  if (wc.isDestroyed()) return;
+  watch(wc);
+  setHold(wc.id, holding);
+}
+
+/**
+ * Called with a view's `webContents.id` when it stops holding — its work was
+ * saved, persisted or dropped, or its document went away — so a cache the hold
+ * kept over its cap can be brought back under it. Returns the unsubscribe.
+ */
+export function onPanelRecoveryHoldReleased(listener: (webContentsId: number) => void): () => void {
+  releaseListeners.add(listener);
+  return () => {
+    releaseListeners.delete(listener);
+  };
+}
+
+/**
+ * Whether the view last said it holds work its teardown would lose. A view that
+ * has said nothing yet (still loading, or a build without the push) holds
+ * nothing: unlike Sleep's query, eviction has no answer to wait for, and failing
+ * closed here would pin every view that never spoke.
+ */
+export function isPanelRecoveryHeldReported(wc: Electron.WebContents): boolean {
+  if (wc.isDestroyed()) return false;
+  return reportedHolds.get(wc.id) === true;
+}
+
+/** Listen for pushed answers. Returns the teardown. */
+export function installPanelRecoveryStateListener(): () => void {
+  const onState = (event: Electron.IpcMainEvent, holding: unknown) => {
+    if (typeof holding !== "boolean") return;
+    recordPanelRecoveryState(event.sender, holding);
+  };
+  ipcMain.on(CHANNELS.PROJECT_PANEL_RECOVERY_STATE, onState);
+  return () => {
+    ipcMain.removeListener(CHANNELS.PROJECT_PANEL_RECOVERY_STATE, onState);
+  };
+}
+
+/** Test-only: forget every pushed answer. */
+export function _resetPanelRecoveryStateForTests(): void {
+  reportedHolds.clear();
+  watched.clear();
+}
