@@ -140,6 +140,17 @@ export function collectPluginManifestAssets(manifest: unknown): PluginManifestAs
     }
   }
 
+  // An MCP server spawns with the plugin directory as its cwd, so a `./`
+  // command is a shipped file. One built from `${settings:*}` names nothing
+  // until spawn time, and a bare name is looked up on PATH.
+  const mcpKey = Array.isArray(contributes.mcpServers) ? "mcpServers" : "experimental_mcpServers";
+  for (const [index, server] of entries(contributes[mcpKey])) {
+    const command = server.command;
+    if (typeof command === "string" && command.startsWith("./") && !command.includes("${")) {
+      add(`${mcpKey}[${index}].command`, command);
+    }
+  }
+
   for (const [index, theme] of entries(contributes.themes)) {
     add(`themes[${index}].path`, theme.path);
   }

@@ -6,6 +6,7 @@ import {
   isExcludedArchiveEntry,
   verifyPluginArchive,
 } from "../../../../electron/services/PluginArchive.js";
+import { isOutsidePluginDir } from "../../../../electron/services/plugin/pluginManifestAssetFiles.js";
 import { resolveVitePlan, runVitePlanBuild } from "../lib/viteBuild.js";
 import { runValidate } from "./validate.js";
 import { PROJECT_TEMPLATES_DIR } from "../../../../electron/utils/pluginArchiveConstants.js";
@@ -161,8 +162,7 @@ async function checkManifestAssets(
       continue;
     }
     const real = await fs.realpath(path.join(dir, asset.path));
-    const relative = path.relative(realDir, real);
-    if (relative.startsWith("..") || path.isAbsolute(relative)) {
+    if (isOutsidePluginDir(path.relative(realDir, real))) {
       escaped.push(describePluginManifestAsset(asset));
     }
   }

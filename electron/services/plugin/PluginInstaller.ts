@@ -448,7 +448,10 @@ export class PluginInstaller {
           );
         }
         try {
-          await fs.cp(archivePath, tmpDir, { recursive: true });
+          // Verbatim, so a relative link between two files inside the plugin
+          // still resolves inside the staged copy instead of being rewritten to
+          // point back into the source directory.
+          await fs.cp(archivePath, tmpDir, { recursive: true, verbatimSymlinks: true });
         } catch (err) {
           return fail(
             "archive_invalid",

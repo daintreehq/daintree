@@ -7,10 +7,8 @@ import type { LintFinding } from "../lib/lint/index.js";
 import { caretEngineAdvisory } from "../../../../electron/schemas/pluginManifestAdvisories.js";
 import { sendCliRequest, DaintreeUnavailableError } from "../ipc/client.js";
 import { parseJsonText } from "../lib/parseJsonText.js";
-import {
-  collectPluginManifestAssets,
-  describePluginManifestAsset,
-} from "../../../../shared/config/pluginManifestAssets.js";
+import { collectPluginManifestAssets } from "../../../../shared/config/pluginManifestAssets.js";
+import { findPluginAssetProblem } from "../../../../electron/services/plugin/pluginManifestAssetFiles.js";
 
 /**
  * `doctor` is `validate` and `lint` plus the checks that only make sense
@@ -123,7 +121,7 @@ async function checkNotIgnored(
   );
   const rule = detail.stdout.trim().split("\n")[0]?.split("\t")[0] ?? "an ignore rule";
   errors.push(
-    `${label} "${relativePath}" is git-ignored by ${rule} — add "!dist/" and "!dist/**" to the plugin's .gitignore, and relax any ancestor rule that excludes the plugin directory itself, since git never reaches a .gitignore inside an excluded directory`
+    `${label} "${relativePath}" is git-ignored by ${rule} — un-ignore it in the plugin's .gitignore (for build output, "!dist/" and "!dist/**"), and relax any ancestor rule that excludes the plugin directory itself, since git never reaches a .gitignore inside an excluded directory`
   );
 }
 
@@ -386,27 +384,22 @@ export async function runDoctor(
         continue;
       }
       const absolute = path.join(dir, target);
-      if (!(await pathExists(absolute))) {
-        if (asset.required) {
-          errors.push(
-            `${describePluginManifestAsset(asset)} doesn't exist — build the plugin or fix the path`
-          );
-        } else {
-          warnings.push(
-            `${describePluginManifestAsset(asset)} doesn't exist — that chapter will play silently`
-          );
-        }
+      // The host resolves asset paths against the plugin directory and refuses
+      // anything that climbs out of it, so a `../` target is dead on arrival
+      // even though it exists and is committed — and a symlink inside the
+      // directory escapes just as effectively. Same check the installer runs.
+      const problem = await findPluginAssetProblem(realDir, dir, asset);
+      if (problem && !asset.required && problem.kind === "missing") {
+        warnings.push(`${problem.message} — that chapter will play silently`);
         continue;
       }
-      // The host resolves entry paths against the plugin directory and refuses
-      // anything that climbs out of it, so a `../` target is dead on arrival
-      // even though it exists and is committed. Checked after realpath, since a
-      // symlink inside the directory escapes just as effectively as `../`.
-      const realTarget = await fs.realpath(absolute).catch(() => path.resolve(absolute));
-      const relative = path.relative(realDir, realTarget);
-      if (relative.startsWith("..") || path.isAbsolute(relative)) {
+      if (problem) {
         errors.push(
-          `${describePluginManifestAsset(asset)} resolves outside the plugin directory — the host refuses a path that climbs out of it, so this cannot load however it is committed`
+          problem.kind === "missing"
+            ? `${problem.message} — build the plugin or fix the path`
+            : problem.kind === "outside"
+              ? `${problem.message} — the host refuses a path that climbs out of it, so this cannot load however it is committed`
+              : problem.message
         );
         continue;
       }

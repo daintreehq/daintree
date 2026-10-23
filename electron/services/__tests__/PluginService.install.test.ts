@@ -470,6 +470,19 @@ describe("installPlugin — validation failures (rollback)", () => {
     service.dispose();
   });
 
+  it("installs a directory whose scene module is a relative link inside the plugin", async () => {
+    const source = await makeSourceDir(tourManifest("acme.linked-scene"), {
+      "dist/scenes.js": "export default {};",
+    });
+    await fs.symlink("scenes.js", path.join(source, "dist", "tour.js"));
+    const service = new PluginService(pluginsRoot, "0.0.0");
+
+    const result = await service.installPlugin(source);
+
+    expect(result.status).toBe("installed");
+    service.dispose();
+  });
+
   it("returns archive_invalid for a missing source path", async () => {
     const service = new PluginService(pluginsRoot, "0.0.0");
 

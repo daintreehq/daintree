@@ -98,6 +98,21 @@ describe("collectPluginManifestAssets", () => {
     expect(assets.has("agents[1].command")).toBe(false);
   });
 
+  it("requires a plugin-relative MCP server command but not a PATH or settings one", () => {
+    const assets = byField({
+      contributes: {
+        mcpServers: [
+          { command: "./bin/server" },
+          { command: "node", args: ["./dist/server.js"] },
+          { command: "./${settings:serverPath}" },
+        ],
+      },
+    });
+    expect(assets.get("mcpServers[0].command")?.path).toBe("bin/server");
+    expect(assets.has("mcpServers[1].command")).toBe(false);
+    expect(assets.has("mcpServers[2].command")).toBe(false);
+  });
+
   it("reads deprecated experimental_views only when views is absent", () => {
     expect(
       byField({ contributes: { experimental_views: [{ componentPath: "dist/v.js" }] } }).has(
