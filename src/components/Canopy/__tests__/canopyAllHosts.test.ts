@@ -4,7 +4,7 @@ import type { CanopyCard, CanopySnapshot } from "@shared/types/ipc/canopy";
 import type { FleetRunRow, FleetSnapshot } from "@shared/types/ipc/fleet";
 
 const invoke = vi.hoisted(() => vi.fn());
-const onEvent = vi.hoisted(() => vi.fn(() => () => {}));
+const onEvent = vi.hoisted(() => vi.fn((_handler: (event: unknown) => void) => () => {}));
 const ownCalls = vi.hoisted(() => ({
   archive: vi.fn(() => Promise.resolve()),
   setShown: vi.fn(() => Promise.resolve()),
@@ -391,6 +391,39 @@ describe("createAllHostsRoute", () => {
     ]);
     send({ kind: "data", watchId: 5, runId: "t1", data: "later" });
     expect(seen).toHaveLength(2);
+  });
+
+  it("does not release again a stream the panel already let go of", async () => {
+    let answer: (view: unknown) => void = () => {};
+    invoke.mockImplementation(
+      (_host: string, channel: string) =>
+        new Promise((resolve) => {
+          if (channel === "canopy:watch-terminal") answer = resolve;
+          else resolve(undefined);
+        })
+    );
+    const { terminalApi } = createAllHostsRoute("own", ["own", "a"]);
+    const watching = terminalApi.watchTerminal(allHostsKey("a", "t1"), { spawnedAt: 1 });
+    await terminalApi.unwatchTerminal();
+    answer({ watchId: 1, snapshot: null });
+    expect((await watching).watchId).toBeNull();
+    const unwatches = invoke.mock.calls.filter((call) => call[1] === "canopy:unwatch-terminal");
+    expect(unwatches).toHaveLength(1);
+  });
+
+  it("opens the terminal again when its host's link comes back while it was opening", async () => {
+    const handlers: Array<(event: unknown) => void> = [];
+    onEvent.mockImplementationOnce((handler: (event: unknown) => void) => {
+      handlers.push(handler);
+      return () => {};
+    });
+    invoke.mockImplementation(() => new Promise(() => {}));
+    const { terminalApi } = createAllHostsRoute("own", ["own", "a"]);
+    const reopened = vi.fn();
+    terminalApi.onResync(reopened);
+    void terminalApi.watchTerminal(allHostsKey("a", "t1"), { spawnedAt: 1 });
+    handlers.forEach((handler) => handler({ hostId: "a", kind: "resync" }));
+    expect(reopened).toHaveBeenCalledTimes(1);
   });
 
   it("releases every watched host on unwatch", async () => {

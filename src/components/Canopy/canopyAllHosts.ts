@@ -320,7 +320,10 @@ export function createAllHostsRoute(ownHostId: HostId, hostIds: readonly HostId[
   const opening = new Map<HostId, number>();
   // Output a host sent between taking the watch and its answer reaching us.
   const early: Array<{ hostId: HostId; chunk: CanopyTerminalData }> = [];
-  const EARLY_LIMIT = 256;
+  const EARLY_LIMIT = 4096;
+  // Hosts whose early output outgrew the buffer: the stream has a gap only a new snapshot closes.
+  const overflowed = new Set<HostId>();
+  const resyncListeners = new Set<() => void>();
   const forgetEarly = (hostId?: HostId) => {
     for (let i = early.length - 1; i >= 0; i -= 1) {
       if (hostId === undefined || early[i]!.hostId === hostId) early.splice(i, 1);
@@ -350,7 +353,10 @@ export function createAllHostsRoute(ownHostId: HostId, hostIds: readonly HostId[
     }
     if (!opening.has(hostId)) return;
     early.push({ hostId, chunk });
-    if (early.length > EARLY_LIMIT) early.shift();
+    if (early.length > EARLY_LIMIT) {
+      early.shift();
+      overflowed.add(hostId);
+    }
   };
   let stopForwarding: (() => void) | null = null;
 
@@ -365,6 +371,7 @@ export function createAllHostsRoute(ownHostId: HostId, hostIds: readonly HostId[
       // The host replaces its own watch, and may number the next like the last.
       for (const [id, watch] of watches) if (watch.hostId === parsed.hostId) watches.delete(id);
       forgetEarly(parsed.hostId);
+      overflowed.delete(parsed.hostId);
       opening.set(parsed.hostId, (opening.get(parsed.hostId) ?? 0) + 1);
       let view: CanopyTerminalView;
       try {
@@ -377,7 +384,8 @@ export function createAllHostsRoute(ownHostId: HostId, hostIds: readonly HostId[
       if (mineGeneration !== generation) {
         // Overtaken while the host answered: nothing may keep streaming for it.
         if (!opening.has(parsed.hostId)) forgetEarly(parsed.hostId);
-        if (wantedHost !== parsed.hostId) {
+        // A release already sent for this stream stands; only another host's choice leaves it open.
+        if (wantedHost !== null && wantedHost !== parsed.hostId) {
           void terminalFor(parsed.hostId)
             .unwatchTerminal()
             .catch(() => {});
@@ -396,6 +404,10 @@ export function createAllHostsRoute(ownHostId: HostId, hostIds: readonly HostId[
         } else {
           i += 1;
         }
+      }
+      if (overflowed.delete(parsed.hostId)) {
+        // Output was lost before the answer: open again for a snapshot that has it.
+        queueMicrotask(() => resyncListeners.forEach((listener) => listener()));
       }
       return { ...view, watchId: mine };
     },
@@ -443,15 +455,20 @@ export function createAllHostsRoute(ownHostId: HostId, hostIds: readonly HostId[
       };
     },
     onResync: (callback) => {
+      resyncListeners.add(callback);
       const offs = hostIds
         .filter((hostId) => hostId !== ownHostId)
         .map((hostId) =>
           canopyHostClient.onEvent((event) => {
             if (event.hostId !== hostId || event.kind !== "resync") return;
-            if ([...watches.values()].some((watch) => watch.hostId === hostId)) callback();
+            const streaming = [...watches.values()].some((watch) => watch.hostId === hostId);
+            if (streaming || opening.has(hostId)) callback();
           })
         );
-      return () => offs.forEach((off) => off());
+      return () => {
+        resyncListeners.delete(callback);
+        offs.forEach((off) => off());
+      };
     },
   };
   return {
