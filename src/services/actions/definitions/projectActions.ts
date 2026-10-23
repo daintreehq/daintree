@@ -6,6 +6,7 @@ import { pickAgentVisibleProjectSettings } from "@shared/types";
 import { z } from "zod";
 import { PROJECT_LIST_SORT_MODES } from "@shared/types/project";
 import { projectClient, projectGroupsClient } from "@/clients";
+import { terminalClient } from "@/clients/terminalClient";
 import { useProjectStore } from "@/store/projectStore";
 import { useProjectSleepConfirmStore } from "@/store/projectSleepConfirmStore";
 import { useProjectStatsStore } from "@/store/projectStatsStore";
@@ -796,12 +797,25 @@ export function registerProjectActions(actions: ActionRegistry, callbacks: Actio
       const waitingAgentCount = entry?.waitingAgentCount ?? 0;
       // Matches the switcher: confirm when something would be stopped, or when the
       // project is the one on screen; a quiet background project sleeps at once.
-      // No stats entry is unknown rather than quiet, and a hidden assistant shows
-      // up in neither count, so both are asked about.
+      // No stats entry is unknown rather than quiet.
+      let liveTerminalCount = 0;
+      let liveReadFailed = false;
+      if (!isActive && ctx.dispatchSource !== "agent") {
+        // The pushed counts leave out a hidden assistant's terminal, so read the
+        // host's own list; a read that fails is unknown, not quiet.
+        try {
+          liveTerminalCount = (await terminalClient.getAll()).filter(
+            (t) => t.projectId === id && !t.isTrashed && t.hasPty !== false
+          ).length;
+        } catch {
+          liveReadFailed = true;
+        }
+      }
       const mayStopWork =
         isActive ||
         !entry ||
-        entry.assistantState !== undefined ||
+        liveReadFailed ||
+        liveTerminalCount > 0 ||
         terminalCount > 0 ||
         activeAgentCount > 0 ||
         waitingAgentCount > 0;
@@ -817,7 +831,7 @@ export function registerProjectActions(actions: ActionRegistry, callbacks: Actio
               id,
               name: project.name,
               path: project.path,
-              terminalCount,
+              terminalCount: Math.max(terminalCount, liveTerminalCount),
               activeAgentCount,
               waitingAgentCount,
               isActive,

@@ -127,14 +127,6 @@ describe("ProjectSleepConfirmDialog", () => {
     expect(useProjectSleepConfirmStore.getState().pendingConfirm).toBeNull();
   });
 
-  it("settles a pending request when the host unmounts", async () => {
-    const { unmount } = render(<ProjectSleepConfirmDialog />);
-    const answer = open({ kind: "idle", projects: [project("a")] });
-    await dialog();
-    unmount();
-    expect(await answer).toBe(false);
-  });
-
   it("shows the newer request when it supersedes an open one", async () => {
     render(<ProjectSleepConfirmDialog />);
     const first = open({ kind: "project", projects: [project("a")] });

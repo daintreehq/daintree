@@ -179,7 +179,9 @@ async function runBatch(ids: readonly string[]): Promise<number> {
       {
         label: "Try again",
         variant: "primary",
-        onClick: () => sleepProjects(failed.map(({ project }) => project.id)),
+        onClick: async () => {
+          await sleepProjects(failed.map(({ project }) => project.id));
+        },
       },
     ],
     context: { eventKind: "uiFeedback" },

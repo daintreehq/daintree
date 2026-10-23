@@ -1,4 +1,3 @@
-import { useEffect } from "react";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { Callout } from "@/components/ui/Callout";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
@@ -125,9 +124,6 @@ function ProjectSleepConfirmDialogInner() {
  */
 export function ProjectSleepConfirmDialog() {
   const requestSeq = useProjectSleepConfirmStore((s) => s.requestSeq);
-  // A host that goes away takes its dialog with it; settle the request the
-  // action is awaiting rather than leave it to hang.
-  useEffect(() => () => useProjectSleepConfirmStore.getState().resolveConfirmation(false), []);
   return (
     <ErrorBoundary
       variant="component"

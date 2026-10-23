@@ -9,7 +9,12 @@ const storeState = vi.hoisted(() => ({
   sleepProject: (...args: unknown[]): Promise<unknown> => sleepProjectMock(...args),
 }));
 
+const getAllTerminalsMock = vi.hoisted(() => vi.fn());
+
 vi.mock("@/clients", () => ({ projectClient: {} }));
+vi.mock("@/clients/terminalClient", () => ({
+  terminalClient: { getAll: (...args: unknown[]) => getAllTerminalsMock(...args) },
+}));
 vi.mock("@/store/projectStore", () => ({
   useProjectStore: { getState: () => storeState },
 }));
@@ -53,6 +58,7 @@ const pending = () => useProjectSleepConfirmStore.getState().pendingConfirm;
 beforeEach(() => {
   vi.clearAllMocks();
   sleepProjectMock.mockResolvedValue({});
+  getAllTerminalsMock.mockResolvedValue([]);
   storeState.projects = [
     { id: "cur", name: "Current", path: "/repos/cur" },
     { id: "bg", name: "Background", path: "/repos/bg" },
@@ -116,17 +122,32 @@ describe("project.sleep", () => {
     expect(sleepProjectMock).toHaveBeenCalledWith("cur");
   });
 
-  it("asks when the project has no stats entry, or a hidden assistant the counts can't see", async () => {
+  it("asks when the project has no stats entry", async () => {
     useProjectStatsStore.setState({ stats: { cur: stats() } });
-    let run = action("project.sleep").run({ projectId: "bg" }, ctx);
+    const run = action("project.sleep").run({ projectId: "bg" }, ctx);
     await vi.waitFor(() => expect(pending()).not.toBeNull());
     useProjectSleepConfirmStore.getState().resolveConfirmation(false);
     expect(await run).toEqual({ slept: false });
+    expect(sleepProjectMock).not.toHaveBeenCalled();
+  });
 
-    useProjectStatsStore.setState({
-      stats: { cur: stats(), bg: stats({ assistantState: "working" }) },
-    });
-    run = action("project.sleep").run({ projectId: "bg" }, ctx);
+  it("asks when the host lists a terminal the pushed counts leave out, such as a hidden assistant", async () => {
+    getAllTerminalsMock.mockResolvedValue([
+      { id: "t1", projectId: "bg", cwd: "/", spawnedAt: 0 },
+      { id: "t2", projectId: "other", cwd: "/", spawnedAt: 0 },
+      { id: "t3", projectId: "bg", cwd: "/", spawnedAt: 0, isTrashed: true },
+    ]);
+    const run = action("project.sleep").run({ projectId: "bg" }, ctx);
+    await vi.waitFor(() => expect(pending()).not.toBeNull());
+    expect(pending()!.request.projects[0]).toMatchObject({ id: "bg", terminalCount: 1 });
+    useProjectSleepConfirmStore.getState().resolveConfirmation(false);
+    await run;
+    expect(sleepProjectMock).not.toHaveBeenCalled();
+  });
+
+  it("asks when the host's terminal list can't be read", async () => {
+    getAllTerminalsMock.mockRejectedValue(new Error("host stalled"));
+    const run = action("project.sleep").run({ projectId: "bg" }, ctx);
     await vi.waitFor(() => expect(pending()).not.toBeNull());
     useProjectSleepConfirmStore.getState().resolveConfirmation(false);
     await run;
