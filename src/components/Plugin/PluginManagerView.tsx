@@ -112,6 +112,13 @@ interface PluginRowProps {
   innerRef?: (el: HTMLLIElement | null) => void;
 }
 
+/** Where a per-project package runs, for its row's second line. */
+function perProjectLabel(projectCount: number): string {
+  return projectCount === 0
+    ? "Runs per project · not on in any project"
+    : `Runs per project · on in ${pluralize(projectCount, "project")}`;
+}
+
 /**
  * One installed-plugin row in the master list (#9555): icon tile, name, one
  * line of detail, and the enable toggle. Selecting it populates the detail pane
@@ -157,7 +164,12 @@ function PluginRow({ plugin, selected, toggling, onSelect, onToggle, innerRef }:
   // Only the two forge built-ins actually set a tagline, so a row keyed solely
   // on it renders a bare name for almost every third-party plugin. `PluginCard`
   // already falls back to the description; the list agrees with it.
-  const blurb = plugin.manifest.tagline ?? plugin.manifest.description;
+  // A per-project package never runs as itself, so where it runs is what the
+  // row says in place of its blurb; its switch still turns the whole package off.
+  const blurb =
+    plugin.instanceMode === "project"
+      ? perProjectLabel(plugin.enabledInProjects?.length ?? 0)
+      : (plugin.manifest.tagline ?? plugin.manifest.description);
   const signal = pluginSignalFor(plugin);
 
   return (
