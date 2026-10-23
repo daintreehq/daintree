@@ -53,9 +53,8 @@ const output = path.resolve(values.output);
 interface RawMetric {
   type: string;
   name?: string;
-  cpu: { cumulativeCPUUsage?: number };
+  cpu: { cumulativeCPUUsage?: number; idleWakeupsPerSecond?: number };
   memory: { workingSetSize: number };
-  idleWakeupsPerSecond?: number;
 }
 
 function toProcessMetrics(raw: RawMetric[]): ProcessMetric[] {
@@ -64,7 +63,7 @@ function toProcessMetrics(raw: RawMetric[]): ProcessMetric[] {
     name: metric.name,
     cpuCumulativeSeconds: metric.cpu.cumulativeCPUUsage ?? 0,
     workingSetKb: metric.memory.workingSetSize,
-    idleWakeupsPerSecond: metric.idleWakeupsPerSecond ?? 0,
+    idleWakeupsPerSecond: metric.cpu.idleWakeupsPerSecond ?? 0,
   }));
 }
 
@@ -88,6 +87,10 @@ try {
   // The scan has settled once `plugin:list` answers with the built-ins.
   const plugins = await page.evaluate(() => window.electron.plugin.list());
   const livePanelCount = (await getGridPanelIds(page)).length;
+  assert(
+    livePanelCount === panelCount,
+    `opened ${livePanelCount} of ${panelCount} terminals; addPanel refuses past the hardware panel limit (100 needs more than 32 GiB of RAM, see shared/utils/panelLimit.ts)`
+  );
   const problems = vanillaFixtureProblems({
     panelCount,
     livePanelCount,
@@ -99,7 +102,7 @@ try {
   assert.equal(problems.length, 0, `not a vanilla run: ${problems.join("; ")}`);
 
   const read = async (): Promise<ProcessMetric[]> =>
-    toProcessMetrics(await ctx.app.evaluate(({ app }) => app.getAppMetrics() as never));
+    toProcessMetrics(await ctx.app.evaluate(({ app }) => app.getAppMetrics()));
 
   // Let restoration, deferred service init and PTY hydration finish first.
   await delay(10_000);

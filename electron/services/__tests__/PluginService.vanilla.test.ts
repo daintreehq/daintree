@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import fs from "fs/promises";
 import path from "path";
+import { fileURLToPath } from "url";
 import os from "os";
 
 const appMock = vi.hoisted(() => ({
@@ -220,7 +221,7 @@ import { DEFAULT_DISABLED_PLUGIN_IDS } from "../../../shared/config/pluginDefaul
 // project plugins. Real manifests and the real contribution registries run;
 // only the process boundary (worker fork, MCP supervisor) is substituted so
 // the test can count what would have been started.
-const REPO_ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), "../../..");
+const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 const SHIPPED_BUILTINS = path.join(REPO_ROOT, "plugins", "builtin");
 
 let userDir: string;
@@ -240,7 +241,8 @@ afterEach(async () => {
 
 describe("vanilla startup resource contract (#14129)", () => {
   it("loads the shipped built-ins without starting a worker, MCP child or recurring timer", async () => {
-    const setIntervalSpy = vi.spyOn(globalThis, "setInterval");
+    // Faked so chained `setTimeout` samplers count as well as `setInterval`.
+    vi.useFakeTimers({ toFake: ["setTimeout", "setInterval"] });
     const service = new PluginService(userDir, "0.0.0", { builtinPluginsRoot: SHIPPED_BUILTINS });
     try {
       await service.initialize();
@@ -253,13 +255,18 @@ describe("vanilla startup resource contract (#14129)", () => {
       expect(ids.length).toBeGreaterThan(0);
       expect(plugins.every((p) => p.isBuiltin)).toBe(true);
       for (const id of DEFAULT_DISABLED_PLUGIN_IDS) expect(ids).toContain(id);
+      for (const id of ["daintree.github", "daintree.gitlab"]) {
+        const forge = plugins.find((p) => p.manifest.name === id);
+        expect(forge, id).toBeDefined();
+        expect(forge?.loadError).toBeNull();
+      }
 
       expect(devWorkerMock.instances).toHaveLength(0);
       expect(devWorkerMock.bridges).toHaveLength(0);
       expect(mockPluginMcpSupervisor.start).not.toHaveBeenCalled();
-      expect(setIntervalSpy).not.toHaveBeenCalled();
+      expect(vi.getTimerCount()).toBe(0);
     } finally {
-      setIntervalSpy.mockRestore();
+      vi.useRealTimers();
       service.dispose();
     }
   });
