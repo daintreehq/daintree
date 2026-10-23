@@ -56,6 +56,9 @@ describe("isLiveAgentTerminal", () => {
     expect(isLiveAgentTerminal(agent("a", { hasPty: false }))).toBe(false);
     expect(isLiveAgentTerminal(agent("a", { isExited: true }))).toBe(false);
     expect(isLiveAgentTerminal(agent("a", { isAssistantTerminal: true }))).toBe(false);
+    // The agent quit and left its shell: a shell costs little.
+    expect(isLiveAgentTerminal(agent("a", { agentState: "exited" }))).toBe(false);
+    expect(isLiveAgentTerminal(agent("a", { agentState: "idle" }))).toBe(true);
   });
 });
 
@@ -156,6 +159,45 @@ describe("agent launch admission (#14221)", () => {
     expect((await critical.admission.request("a")).holdReason).toBe("kernel-critical");
   });
 
+  it("admits a launch whose terminal another view already started, however full the host", async () => {
+    const h = harness();
+    h.setTerminals([agent("live-1"), agent("adopt-me")]);
+
+    const admission = await h.admission.request("adopt-me");
+
+    expect(admission.holdReason).toBeNull();
+    // Attaching starts nothing, so it holds no place either.
+    expect((await h.admission.observe()).startingAgents).toBe(0);
+  });
+
+  it("judges each read in turn, so an older read never undercounts a launch a newer one saw", async () => {
+    const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
+    const answers: Array<(terminals: AgentCountableTerminal[]) => void> = [];
+    const h = harness({
+      readTerminals: () =>
+        new Promise((resolve) =>
+          answers.push((terminals) => resolve({ terminals, degraded: false }))
+        ),
+    });
+    // Limit two, one running: A takes the last place.
+    const admitA = h.admission.request("a");
+    await flush();
+    answers.shift()!([agent("live-1")]);
+    expect((await admitA).holdReason).toBeNull();
+
+    // B reads before A is live; an observation that sees A live comes after.
+    const requestB = h.admission.request("b");
+    const observed = h.admission.observe();
+    await flush();
+    expect(answers).toHaveLength(1);
+    answers.shift()!([agent("live-1")]);
+    await flush();
+    answers.shift()!([agent("live-1"), agent("a")]);
+    await observed;
+
+    expect((await requestB).holdReason).toBe("agent-capacity");
+  });
+
   it("reserves nothing while it only observes", async () => {
     const h = harness();
     h.setTerminals([agent("live-1")]);
@@ -185,6 +227,18 @@ describe("readEffectiveMemoryTotalBytes", () => {
 
     await expect(readEffectiveMemoryTotalBytes(readText, "linux", () => 64 * GIB)).resolves.toBe(
       16 * GIB
+    );
+  });
+
+  it("reads a container's limit at the cgroup root", async () => {
+    const files: Record<string, string> = {
+      "/proc/self/cgroup": "0::/\n",
+      "/sys/fs/cgroup/memory.max": `${8 * GIB}\n`,
+    };
+    const readText = async (file: string) => files[file] ?? null;
+
+    await expect(readEffectiveMemoryTotalBytes(readText, "linux", () => 64 * GIB)).resolves.toBe(
+      8 * GIB
     );
   });
 

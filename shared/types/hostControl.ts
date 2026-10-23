@@ -138,7 +138,7 @@ export const HostListEntrySchema = z.object({
         .nullable()
         .optional()
         .describe(
-          "Agents this host starts before further launches wait, from its memory; compare with agentsObserved. Absent from older hosts."
+          "Agents this host starts at once before further launches wait, worked out from its memory. The host counts every live agent terminal plus launches still starting, so agentsObserved is only a rough guide to room left. Absent from older hosts."
         ),
     })
     .nullable()

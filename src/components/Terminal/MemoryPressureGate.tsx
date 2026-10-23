@@ -14,18 +14,19 @@ const KERNEL_CRITICAL_COPY =
 function holdDescription(detail: AgentLaunchHoldDetail | undefined): string {
   if (!detail || detail.reason === "kernel-critical") return KERNEL_CRITICAL_COPY;
   const { runningAgents, startingAgents, agentLaunchLimit, memoryTotalBytes } = detail.observation;
-  const running = runningAgents ?? 0;
   const count =
-    startingAgents > 0
-      ? `${pluralize(running + startingAgents, "agent is", "agents are")} running or starting`
-      : `${pluralize(running, "agent is", "agents are")} running`;
+    runningAgents === null
+      ? "This host is at its agent limit."
+      : startingAgents > 0
+        ? `${pluralize(runningAgents + startingAgents, "agent is", "agents are")} running or starting on this host.`
+        : `${pluralize(runningAgents, "agent is", "agents are")} running on this host.`;
   const limit =
     agentLaunchLimit === null
       ? ""
       : memoryTotalBytes === null
-        ? `, its limit of ${agentLaunchLimit}`
-        : `, its limit for ${formatBytes(memoryTotalBytes)} of memory`;
-  return `${count} on this host${limit}. It starts on its own once one exits.`;
+        ? ` It starts up to ${agentLaunchLimit} at once.`
+        : ` With ${formatBytes(memoryTotalBytes)} of memory, it starts up to ${agentLaunchLimit} at once.`;
+  return `${count}${limit} This one starts on its own when there's room.`;
 }
 
 /**

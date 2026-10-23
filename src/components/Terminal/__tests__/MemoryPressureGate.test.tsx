@@ -57,10 +57,27 @@ describe("MemoryPressureGate at the host's agent limit (#14221)", () => {
     );
 
     const status = screen.getByRole("status").textContent ?? "";
-    expect(status).toContain("8 agents are running on this host");
+    expect(status).toContain("8 agents are running on this host.");
+    expect(status).toContain("starts up to 8 at once");
     expect(status).toContain("36 GB of memory");
     expect(status).not.toContain("critical");
     expect(screen.getByRole("button", { name: "Launch anyway" })).toBeTruthy();
+  });
+
+  it("keeps the count and the limit apart when more run than the limit", () => {
+    render(
+      <MemoryPressureGate
+        agentId="claude"
+        detail={{ reason: "agent-capacity", observation: { ...observation, runningAgents: 9 } }}
+        onLaunchAnyway={vi.fn()}
+        onCancel={vi.fn()}
+      />
+    );
+
+    const status = screen.getByRole("status").textContent ?? "";
+    expect(status).toContain("9 agents are running on this host.");
+    expect(status).toContain("starts up to 8 at once");
+    expect(status).not.toContain("once one exits");
   });
 
   it("counts launches the host has started but not yet seen running", () => {

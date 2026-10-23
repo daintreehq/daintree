@@ -28,18 +28,21 @@ export interface AgentCountableTerminal {
   hasPty?: boolean;
   isExited?: boolean;
   isAssistantTerminal?: boolean;
+  agentState?: string;
 }
 
 /**
- * A terminal an agent was launched into, still running. Whatever its agent
- * state says: an idle agent at a prompt still has a session to come back to.
- * The assistant is tooling, not a run the user started.
+ * A terminal an agent was launched into, its agent still there. Whatever else
+ * its state says: an idle agent at a prompt still has a session to come back
+ * to. One whose agent was seen to exit is a shell now, and costs little. The
+ * assistant is tooling, not a run the user started.
  */
 export function isLiveAgentTerminal(terminal: AgentCountableTerminal): boolean {
   return (
     Boolean(terminal.launchAgentId) &&
     terminal.hasPty !== false &&
     terminal.isExited !== true &&
+    terminal.agentState !== "exited" &&
     terminal.isAssistantTerminal !== true
   );
 }
@@ -64,6 +67,14 @@ export function createAgentLaunchAdmission(
 ): AgentLaunchAdmissionController {
   // terminal id -> when its place lapses
   const reservations = new Map<string, number>();
+  // One read-and-judge at a time: a read taken before a launch showed up live
+  // must not be judged after a newer read let that launch's place go.
+  let queue: Promise<unknown> = Promise.resolve();
+  const serially = <T>(task: () => Promise<T>): Promise<T> => {
+    const run = queue.then(task, task);
+    queue = run.catch(() => undefined);
+    return run;
+  };
 
   async function read() {
     const [snapshot, total, critical] = await Promise.all([
@@ -95,6 +106,8 @@ export function createAgentLaunchAdmission(
     // A shard that didn't answer would undercount: no count rather than a low one.
     const runningAgents = snapshot && !snapshot.degraded ? live.size : null;
     const limit = agentLaunchLimit(total);
+    // Already running here (another view started it): attaching starts nothing new.
+    const alreadyLive = requesterId !== null && live.has(requesterId);
     const observation: AgentLaunchObservation = {
       kernelCritical: critical,
       runningAgents,
@@ -103,7 +116,10 @@ export function createAgentLaunchAdmission(
       memoryTotalBytes: total,
     };
     const atCapacity =
-      runningAgents !== null && limit !== null && runningAgents + startingAgents >= limit;
+      !alreadyLive &&
+      runningAgents !== null &&
+      limit !== null &&
+      runningAgents + startingAgents >= limit;
     return {
       holdReason: critical ? "kernel-critical" : atCapacity ? "agent-capacity" : null,
       observation,
@@ -111,17 +127,23 @@ export function createAgentLaunchAdmission(
   }
 
   return {
-    async observe() {
-      return judge(await read(), null).observation;
+    observe() {
+      return serially(async () => judge(await read(), null).observation);
     },
-    async request(terminalId) {
-      const admission = judge(await read(), terminalId);
-      if (admission.holdReason === null) {
-        reservations.set(terminalId, sources.now() + AGENT_LAUNCH_RESERVATION_TTL_MS);
-      } else {
-        reservations.delete(terminalId);
-      }
-      return admission;
+    request(terminalId) {
+      return serially(async () => {
+        const reading = await read();
+        const admission = judge(reading, terminalId);
+        const live = reading.snapshot?.terminals.some(
+          (terminal) => terminal.id === terminalId && isLiveAgentTerminal(terminal)
+        );
+        if (admission.holdReason === null && !live) {
+          reservations.set(terminalId, sources.now() + AGENT_LAUNCH_RESERVATION_TTL_MS);
+        } else {
+          reservations.delete(terminalId);
+        }
+        return admission;
+      });
     },
   };
 }
@@ -140,9 +162,10 @@ export async function readEffectiveMemoryTotalBytes(
   if (platform !== "linux") return total;
   const segments = parseProcSelfCgroup(await readText("/proc/self/cgroup"));
   if (!segments) return total;
+  // The mount root too: a container's own limit sits there when it is all one cgroup.
   const limits = await Promise.all(
-    segments.map((_, index) =>
-      readText(path.posix.join(CGROUP_ROOT, ...segments.slice(0, index + 1), "memory.max"))
+    Array.from({ length: segments.length + 1 }, (_, depth) =>
+      readText(path.posix.join(CGROUP_ROOT, ...segments.slice(0, depth), "memory.max"))
     )
   );
   for (const text of limits) {

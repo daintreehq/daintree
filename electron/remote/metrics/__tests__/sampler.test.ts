@@ -144,8 +144,21 @@ describe("HostMetricsSampler", () => {
     expect(summary.memoryUsedBytes).toBe(1048576);
     expect(summary.memoryTotalBytes).toBe(4194304);
     expect(summary.metricsScope).toBe("cgroup");
-    // The limit follows the memory the cgroup allows.
-    expect(summary.agentLaunchLimit).toBe(agentLaunchLimit(4194304));
+  });
+
+  it("reports the agent launch limit the cgroup's memory allows, not the machine's (#14221)", async () => {
+    const gib = 1024 ** 3;
+    const files: Record<string, string> = {
+      "/proc/meminfo": `MemTotal: ${64 * 1024 * 1024} kB\nMemAvailable: ${60 * 1024 * 1024} kB\n`,
+      "/sys/fs/cgroup/memory.current": `${gib}`,
+      "/sys/fs/cgroup/memory.max": `${16 * gib}`,
+    };
+    const summary = await new HostMetricsSampler(
+      sources({ readText: async (path) => files[path] ?? null })
+    ).sample();
+    expect(summary.memoryTotalBytes).toBe(16 * gib);
+    expect(agentLaunchLimit(16 * gib)).not.toBe(agentLaunchLimit(64 * gib));
+    expect(summary.agentLaunchLimit).toBe(agentLaunchLimit(16 * gib));
   });
 
   describe("cgroup scope", () => {

@@ -188,6 +188,11 @@ async function poll(): Promise<void> {
       let places = openPlaces(observation);
       for (const [key, hold] of waiting) {
         if (holds.get(key) !== hold || hold.isDeferred?.()) continue;
+        // Gone while the host answered: it gives up its place rather than taking one.
+        if (hold.isStale?.()) {
+          take(key);
+          continue;
+        }
         if (hold.panelId === undefined) {
           take(key, true)?.resume(false);
         } else if (places > 0) {
