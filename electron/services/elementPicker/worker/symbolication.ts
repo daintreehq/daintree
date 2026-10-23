@@ -89,8 +89,9 @@ interface DecodedMap {
 }
 
 /**
- * Past these a map is refused rather than decoded. Real dev-server maps are
- * nowhere near them; they bound what a map can make the host build.
+ * Past these a map is refused rather than decoded. They bound what a map can
+ * make the host build; a real dev-server map comes near them only at close to
+ * the most a job may fetch at all.
  */
 export const SOURCE_MAP_LIMITS = {
   sections: 4_096,
