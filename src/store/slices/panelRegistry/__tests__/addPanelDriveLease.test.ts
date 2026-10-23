@@ -291,9 +291,23 @@ describe("launches the drive lease blocks (#13913)", () => {
     await drainMicrotasks();
 
     terminalClient.reconnect.mockResolvedValue({ exists: true, id: "adopt-1", hasPty: true });
+    // The restore opens its live-output hold before its first await, so with the
+    // service loaded it has to start in the same tick the pane turns ready.
+    let seenReady = false;
+    let restoreCallsAfterReady: number | undefined;
+    const unsubscribe = usePanelStore.subscribe(() => {
+      if (seenReady || getPtyPanel("adopt-1")?.spawnStatus !== "ready") return;
+      seenReady = true;
+      queueMicrotask(() => {
+        restoreCallsAfterReady = vi.mocked(terminalInstanceService.fetchAndRestore).mock.calls
+          .length;
+      });
+    });
     setDriveLeaseSnapshot(lease(true));
     await drainMicrotasks();
+    unsubscribe();
 
+    expect(restoreCallsAfterReady).toBe(1);
     expect(terminalClient.reconnect).toHaveBeenCalledWith("adopt-1");
     expect(terminalClient.spawn).not.toHaveBeenCalled();
     expect(getPtyPanel("adopt-1")?.spawnStatus).toBe("ready");
