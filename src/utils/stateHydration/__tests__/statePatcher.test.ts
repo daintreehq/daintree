@@ -4104,14 +4104,15 @@ describe("restore provenance and the plugin hold (#14017)", () => {
     });
 
   it("records a resume with the agent state last observed before the restart", () => {
-    const result = respawn({
+    const saved = {
       ...claudePane,
       agentSessionId: "sess-c",
       // The display pair can hold a guess the host never confirmed.
       agentState: "working",
       lastStateChange: 4_500,
       lastAgentObservation: { agentState: "idle", at: 4_000 },
-    });
+    };
+    const result = respawn(saved);
 
     expect(result.command).toBe("claude --resume sess-c");
     expect(result.restoreProvenance).toEqual({
@@ -4123,26 +4124,23 @@ describe("restore provenance and the plugin hold (#14017)", () => {
     expect(result.lastAgentObservation).toEqual({ agentState: "idle", at: 4_000 });
   });
 
-  it("falls back to the saved state pair for a snapshot from before observations were kept", () => {
-    const result = respawn({
+  it("never reads the saved state pair as seen: it also holds the renderer's guesses", () => {
+    // A pane that never had a host report saves its bootstrap `working`.
+    const noReport = {
       ...claudePane,
       agentSessionId: "sess-c",
-      agentState: "idle",
-      lastStateChange: 4_000,
-    });
-
-    expect(result.restoreProvenance?.lastSeen).toEqual({ agentState: "idle", at: 4_000 });
-  });
-
-  it("never reads a held pane's leftover state pair as an observation", () => {
-    const result = respawn({
-      ...claudePane,
-      restoreRecovery: { reason: "resume-deferred" },
       agentState: "working",
       lastStateChange: 4_000,
-    });
+    };
+    const held = {
+      ...claudePane,
+      restoreRecovery: { reason: "resume-deferred" },
+      agentState: "idle",
+      lastStateChange: 4_000,
+    };
 
-    expect(result.restoreProvenance).toEqual({ at: 5_000, disposition: "held" });
+    expect(respawn(noReport).restoreProvenance).toEqual({ at: 5_000, disposition: "resume" });
+    expect(respawn(held).restoreProvenance).toEqual({ at: 5_000, disposition: "held" });
   });
 
   it("records a resume-latest launch as a resume", () => {
@@ -4155,7 +4153,10 @@ describe("restore provenance and the plugin hold (#14017)", () => {
   });
 
   it("records a launch that lost its conversation as fresh", () => {
-    const result = respawn({ ...claudePane, agentState: "waiting", lastStateChange: 4_000 });
+    const result = respawn({
+      ...claudePane,
+      lastAgentObservation: { agentState: "waiting", at: 4_000 },
+    });
 
     expect(result.sessionLostOnRestore).toBe("no-resume-path");
     expect(result.restoreProvenance).toEqual({
@@ -4167,7 +4168,11 @@ describe("restore provenance and the plugin hold (#14017)", () => {
 
   it("records a hold and keeps what was seen before it", () => {
     const result = respawn(
-      { ...claudePane, agentSessionId: "sess-c", agentState: "idle", lastStateChange: 4_000 },
+      {
+        ...claudePane,
+        agentSessionId: "sess-c",
+        lastAgentObservation: { agentState: "idle", at: 4_000 },
+      },
       { resumeOnRestart: "never" }
     );
 
@@ -4180,10 +4185,14 @@ describe("restore provenance and the plugin hold (#14017)", () => {
 
   it("carries the last state seen through a second restart that holds the pane again", () => {
     const firstRestart = respawn(
-      { ...claudePane, agentSessionId: "sess-c", agentState: "idle", lastStateChange: 4_000 },
+      {
+        ...claudePane,
+        agentSessionId: "sess-c",
+        lastAgentObservation: { agentState: "idle", at: 4_000 },
+      },
       { resumeOnRestart: "never" }
     );
-    // What the held pane saves: no live state, only the provenance record.
+    // What the held pane saves: no live state, but the pane's observation.
     const saved = serializePtyPanel({
       ...claudePane,
       ...firstRestart,
@@ -4191,6 +4200,7 @@ describe("restore provenance and the plugin hold (#14017)", () => {
       rows: 24,
     } as PtyPanelData);
     expect(saved).not.toHaveProperty("agentState");
+    expect(saved.lastAgentObservation).toEqual({ agentState: "idle", at: 4_000 });
 
     const secondRestart = buildArgsForRespawn(
       { ...claudePane, ...saved } as SavedSnapshot,
@@ -4233,12 +4243,11 @@ describe("restore provenance and the plugin hold (#14017)", () => {
   });
 
   it("never reports a renderer-only or unknown state as seen", () => {
-    expect(
-      respawn({ ...claudePane, agentState: "directing" }).restoreProvenance
-    ).not.toHaveProperty("lastSeen");
-    expect(respawn({ ...claudePane, agentState: "bogus" }).restoreProvenance).not.toHaveProperty(
-      "lastSeen"
-    );
+    for (const agentState of ["directing", "bogus"]) {
+      const result = respawn({ ...claudePane, lastAgentObservation: { agentState, at: 4_000 } });
+      expect(result.restoreProvenance).not.toHaveProperty("lastSeen");
+      expect(result.lastAgentObservation).toBeUndefined();
+    }
   });
 
   it("records a plain shell as fresh with nothing seen", () => {

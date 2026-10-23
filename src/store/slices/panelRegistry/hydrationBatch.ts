@@ -25,6 +25,28 @@ let activeBatch: {
 } | null = null;
 
 /**
+ * A save something asked for while the batch held `panelIds` back (#14017).
+ * Kept apart from the batch itself, which a spawn batch can hand on to the next
+ * hydration, so the flag survives that hand-off.
+ */
+let persistDeferred = false;
+
+/**
+ * Ask for a layout save once the active batch closes, instead of now, when a
+ * partial `panelIds` would read the panels still being restored as removed.
+ */
+export function deferPersistToBatchEnd(): void {
+  persistDeferred = true;
+}
+
+/** Whether a save was deferred to the batch that just closed; clears the flag. */
+export function takeDeferredPersist(): boolean {
+  const deferred = persistDeferred;
+  persistDeferred = false;
+  return deferred;
+}
+
+/**
  * Exposed so higher-level `addPanel` wrappers (e.g. the focus-setting wrapper in
  * `panelStore.ts`) can skip their own `set()` calls while a batch is active —
  * otherwise they'd trigger one render per panel and defeat the batching.
@@ -49,6 +71,8 @@ export function collectPanelIdForBatch(id: string): void {
  * its collected panels would be silently dropped.
  */
 export function beginBatch(): HydrationBatchToken {
+  // A discarded hydration's deferred save belongs to the project being left.
+  persistDeferred = false;
   const token: HydrationBatchToken = Symbol("hydration-batch");
   activeBatch = { kind: "hydration", token, pendingIds: [], seenIds: new Set() };
   return token;
@@ -109,4 +133,5 @@ export function consumeActiveSpawnBatch(): string[] | null {
  */
 export function resetBatchState(): void {
   activeBatch = null;
+  persistDeferred = false;
 }

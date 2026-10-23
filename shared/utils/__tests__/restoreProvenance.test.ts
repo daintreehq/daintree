@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
+  newerObservation,
   readLastSeen,
   restoredField,
   sanitizeAgentObservation,
@@ -125,5 +126,23 @@ describe("sanitizeLiveRestoreProvenance", () => {
 
   it("drops a held record, which a running process contradicts", () => {
     expect(sanitizeLiveRestoreProvenance({ at: 2_000, disposition: "held" })).toBeUndefined();
+  });
+});
+
+describe("newerObservation", () => {
+  const idle = { agentState: "idle" as const, at: 8_000 };
+  const working = { agentState: "working" as const, at: 6_000 };
+
+  it("keeps the observation whose state began later, whichever side it is on", () => {
+    expect(newerObservation(working, idle)).toBe(idle);
+    expect(newerObservation(idle, working)).toBe(idle);
+  });
+
+  it("takes whichever exists, and the first on a tie or with no times", () => {
+    expect(newerObservation(undefined, idle)).toBe(idle);
+    expect(newerObservation(idle, undefined)).toBe(idle);
+    expect(newerObservation({ agentState: "waiting" }, { agentState: "idle" })).toEqual({
+      agentState: "waiting",
+    });
   });
 });

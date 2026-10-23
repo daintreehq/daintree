@@ -41,6 +41,18 @@ export function sanitizeAgentObservation(value: unknown): TerminalAgentObservati
 }
 
 /**
+ * The later of two observations of one pane, by when each state began. A read
+ * taken before a live report must not roll the pane back to it. Ties keep `a`.
+ */
+export function newerObservation(
+  a: TerminalAgentObservation | undefined,
+  b: TerminalAgentObservation | undefined
+): TerminalAgentObservation | undefined {
+  if (a === undefined || b === undefined) return a ?? b;
+  return (b.at ?? 0) > (a.at ?? 0) ? b : a;
+}
+
+/**
  * Read an on-disk provenance record (#14017). The snapshot schema passes unknown
  * keys through, so this is the only validation it gets. A record without a
  * usable time or disposition is dropped whole: it would describe a restore no

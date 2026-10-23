@@ -49,6 +49,7 @@ import { useHostConnectionStore, waitForHostConnected } from "@/store/hostConnec
 import { takeHostAgentState } from "@/store/hostTerminalResync";
 import { findSpawnOnHost, isLostSpawnReply, markSpawnUnconfirmed } from "./unconfirmedSpawn";
 import { collectPanelIdForBatch, isHydrationBatchActive } from "./hydrationBatch";
+import { newerObservation, sanitizeLiveRestoreProvenance } from "@shared/utils/restoreProvenance";
 import {
   addToWorktreeIndex,
   panelMatchesWorktreeScope,
@@ -982,9 +983,14 @@ export const createAddPanelActions = (
                 launchedByPluginId:
                   ptyTerminal.launchedByPluginId ?? existingPty?.launchedByPluginId,
                 holdOnRestart: ptyTerminal.holdOnRestart ?? existingPty?.holdOnRestart,
-                restoreProvenance: ptyTerminal.restoreProvenance ?? existingPty?.restoreProvenance,
-                lastAgentObservation:
-                  ptyTerminal.lastAgentObservation ?? existingPty?.lastAgentObservation,
+                // A live PTY has left any hold, whichever side recorded it.
+                restoreProvenance: sanitizeLiveRestoreProvenance(
+                  ptyTerminal.restoreProvenance ?? existingPty?.restoreProvenance
+                ),
+                lastAgentObservation: newerObservation(
+                  ptyTerminal.lastAgentObservation,
+                  existingPty?.lastAgentObservation
+                ),
                 // Prefer the fresh reconnect value if present; otherwise keep an existing
                 // live detection (live IPC event may have landed before reconnect flush).
                 detectedAgentId: ptyTerminal.detectedAgentId ?? existingPty?.detectedAgentId,
@@ -1063,9 +1069,14 @@ export const createAddPanelActions = (
                 launchedByPluginId:
                   ptyTerminal.launchedByPluginId ?? existingPty2?.launchedByPluginId,
                 holdOnRestart: ptyTerminal.holdOnRestart ?? existingPty2?.holdOnRestart,
-                restoreProvenance: ptyTerminal.restoreProvenance ?? existingPty2?.restoreProvenance,
-                lastAgentObservation:
-                  ptyTerminal.lastAgentObservation ?? existingPty2?.lastAgentObservation,
+                // A live PTY has left any hold, whichever side recorded it.
+                restoreProvenance: sanitizeLiveRestoreProvenance(
+                  ptyTerminal.restoreProvenance ?? existingPty2?.restoreProvenance
+                ),
+                lastAgentObservation: newerObservation(
+                  ptyTerminal.lastAgentObservation,
+                  existingPty2?.lastAgentObservation
+                ),
                 // Prefer the fresh reconnect value if present; otherwise keep an existing
                 // live detection (live IPC event may have landed before reconnect flush).
                 detectedAgentId: ptyTerminal.detectedAgentId ?? existingPty2?.detectedAgentId,

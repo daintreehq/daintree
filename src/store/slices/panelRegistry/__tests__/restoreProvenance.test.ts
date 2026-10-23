@@ -212,6 +212,49 @@ describe("updateAgentState", () => {
     expect(saveNormalized).not.toHaveBeenCalled();
   });
 
+  it("records the host confirming what the screen already guessed", () => {
+    seedAgent();
+    // The optimistic `working` the controller writes on Enter: no host time.
+    usePanelStore.getState().updateAgentState("a", "working");
+    const shownSince = ptyPanel("a")?.lastStateChange;
+
+    // Host resync reports the same state, with its time and no trigger.
+    usePanelStore.getState().updateAgentState("a", "working", undefined, 7_000);
+
+    expect(ptyPanel("a")?.lastAgentObservation).toEqual({ agentState: "working", at: 7_000 });
+    // Nothing visible changed, so neither does when the screen says it began.
+    expect(ptyPanel("a")?.lastStateChange).toBe(shownSince);
+    expect(saveNormalized).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps when an observed state began across a repeated report of it", () => {
+    seedAgent();
+    usePanelStore.getState().updateAgentState("a", "idle", undefined, 7_000, "output");
+    vi.mocked(saveNormalized).mockClear();
+
+    usePanelStore.getState().updateAgentState("a", "idle", undefined, 9_000, "heuristic");
+
+    expect(ptyPanel("a")?.lastAgentObservation).toEqual({ agentState: "idle", at: 7_000 });
+    expect(saveNormalized).not.toHaveBeenCalled();
+  });
+
+  it("writes what a batch deferred when it closes, even with no panels to add", () => {
+    seedAgent();
+    const token = usePanelStore.getState().beginHydrationBatch();
+    usePanelStore.getState().updateAgentState("a", "idle", undefined, 7_000, "output");
+    expect(saveNormalized).not.toHaveBeenCalled();
+
+    usePanelStore.getState().flushHydrationBatch(token);
+
+    expect(saveNormalized).toHaveBeenCalledTimes(1);
+    const [byId, ids] = vi.mocked(saveNormalized).mock.calls[0]!;
+    expect(ids).toEqual(["a"]);
+    expect((byId.a as PtyPanelData).lastAgentObservation).toEqual({
+      agentState: "idle",
+      at: 7_000,
+    });
+  });
+
   it("writes nothing for a duplicate event", () => {
     seedAgent();
 
@@ -260,5 +303,42 @@ describe("setHoldOnRestart", () => {
     usePanelStore.getState().setHoldOnRestart("missing", true);
 
     expect(saveNormalized).not.toHaveBeenCalled();
+  });
+});
+
+describe("reconnecting onto a pane the store already holds", () => {
+  it("keeps the newer observation, and drops a hold the live PTY has left", async () => {
+    usePanelStore.setState({
+      panelsById: {
+        a: {
+          id: "a",
+          kind: "terminal",
+          title: "Claude",
+          cwd: "/repo",
+          cols: 80,
+          rows: 24,
+          location: "grid",
+          launchAgentId: "claude",
+          lastAgentObservation: { agentState: "idle", at: 8_000 },
+          restoreProvenance: provenance,
+        } as PtyPanelData,
+      },
+      panelIds: ["a"],
+    });
+
+    // A backend read taken before the live report landed.
+    await usePanelStore.getState().addPanel({
+      kind: "terminal",
+      existingId: "a",
+      launchAgentId: "claude",
+      cwd: "/repo",
+      title: "Claude",
+      lastAgentObservation: { agentState: "working", at: 6_000 },
+      restoreProvenance: provenance,
+      bypassLimits: true,
+    });
+
+    expect(ptyPanel("a")?.lastAgentObservation).toEqual({ agentState: "idle", at: 8_000 });
+    expect(ptyPanel("a")?.restoreProvenance).toBeUndefined();
   });
 });

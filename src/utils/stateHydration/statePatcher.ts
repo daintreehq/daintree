@@ -12,7 +12,6 @@ import type {
   PanelTitleMode,
   RestoreRecoveryReason,
   SessionLostReason,
-  TerminalAgentObservation,
   TerminalRestoreProvenance,
   TerminalSpawnSource,
 } from "@shared/types/panel";
@@ -221,11 +220,9 @@ export interface SavedTerminalData {
   scratchpad?: unknown;
   /**
    * Untrusted on-disk values (#14017), sanitized in `restoreProvenance.ts` and
-   * {@link readLaunchedByPluginId}. The saved agent state pair is read only for
-   * a snapshot written before `lastAgentObservation` was kept.
+   * {@link readLaunchedByPluginId}. The saved `agentState` pair is never read as
+   * an observation: it also carries the renderer's overlays and guesses.
    */
-  agentState?: unknown;
-  lastStateChange?: unknown;
   restoreProvenance?: unknown;
   lastAgentObservation?: unknown;
   launchedByPluginId?: unknown;
@@ -354,22 +351,6 @@ function resolveSavedCwd(savedCwd: string | undefined, projectRoot: string): str
 function normalizePtyKind(kind: PanelKind | undefined): PanelKind {
   if (!kind || kind === "agent") return "terminal";
   return kind;
-}
-
-/**
- * What was last observed for a saved pane (#14017). A snapshot from before
- * observations were kept falls back to its saved state pair — unless the pane
- * was held, since a held pane saves no state and any pair it carries is older
- * than the hold.
- */
-function readSavedObservation(
-  saved: SavedTerminalData,
-  held: boolean
-): TerminalAgentObservation | undefined {
-  if (saved.lastAgentObservation !== undefined) {
-    return sanitizeAgentObservation(saved.lastAgentObservation);
-  }
-  return held ? undefined : readLastSeen(saved.agentState, saved.lastStateChange);
 }
 
 function readLaunchedByPluginId(saved: SavedTerminalData): string | undefined {
@@ -508,7 +489,7 @@ export function buildArgsForBackendTerminal(
     restoreProvenance: sanitizeLiveRestoreProvenance(saved.restoreProvenance),
     lastAgentObservation:
       readLastSeen(backendTerminal.agentState, backendTerminal.lastStateChange) ??
-      readSavedObservation(saved, false),
+      sanitizeAgentObservation(saved.lastAgentObservation),
     ...pluginHoldArgs(saved),
     lastActiveAt: sanitizeLastActiveAt(saved.lastActiveAt),
     scratchpad: sanitizeScratchpad(saved.scratchpad),
@@ -599,7 +580,7 @@ export function buildArgsForReconnectedFallback(
     restoreProvenance: sanitizeLiveRestoreProvenance(saved.restoreProvenance),
     lastAgentObservation:
       readLastSeen(reconnectedTerminal.agentState, reconnectedTerminal.lastStateChange) ??
-      readSavedObservation(saved, false),
+      sanitizeAgentObservation(saved.lastAgentObservation),
     ...pluginHoldArgs(saved),
     lastActiveAt: sanitizeLastActiveAt(saved.lastActiveAt),
     scratchpad: sanitizeScratchpad(saved.scratchpad),
@@ -1041,9 +1022,7 @@ export function buildArgsForRespawn(
   const isDevPreview = kind === "dev-preview";
   const location = (saved.location === "dock" ? "dock" : "grid") as "grid" | "dock";
 
-  const lastSeen = isAgentPanel
-    ? readSavedObservation(saved, savedRecovery !== undefined)
-    : undefined;
+  const lastSeen = isAgentPanel ? sanitizeAgentObservation(saved.lastAgentObservation) : undefined;
   const restoreProvenance: TerminalRestoreProvenance | undefined =
     respawnKind === "terminal"
       ? {
