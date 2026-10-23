@@ -168,11 +168,11 @@ function describeClosedKillShortfall(
  * down the whole list whatever the row kind; a row with no action keeps the
  * action column empty rather than letting its readings slide right.
  */
-const ROW_GRID = "grid grid-cols-[minmax(0,1fr)_3rem_4.5rem_8rem] items-center gap-x-3";
+const ROW_GRID = "grid grid-cols-[minmax(0,1fr)_5rem_4.5rem_8rem] items-center gap-x-3";
 
 function Reading({ label, value }: { label: string; value: string | null }): ReactElement {
   return (
-    <span className="text-right text-xs tabular-nums text-text-secondary">
+    <span className="whitespace-nowrap text-right text-xs tabular-nums text-text-secondary">
       <span className="sr-only">{label} </span>
       {value ?? (
         <>

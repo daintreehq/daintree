@@ -9,6 +9,7 @@ import type {
   ProcessTreeSample,
 } from "@shared/types/processes";
 import { pluralize } from "@/lib/pluralize";
+import { formatCores } from "./ProjectResourceBadge.utils";
 
 export interface TerminalGroup {
   key: string;
@@ -135,9 +136,9 @@ export function formatApproxMemory(memoryKb: number): string {
   return `~${Math.max(1, Math.round(mb))} MB`;
 }
 
-/** The value alone: the column heading names it. */
+/** A process tree's ps %cpu, where 100 is one core. */
 export function formatCpu(cpuPercent: number): string {
-  return `${Math.round(cpuPercent)}%`;
+  return formatCores(cpuPercent / 100);
 }
 
 /**

@@ -26,6 +26,7 @@ import { panelKindHasPty } from "@shared/config/panelKindRegistry";
 import { describeExitStatus } from "./exitStatus";
 import { pluralize } from "@/lib/pluralize";
 import { SEVERITY_VISUAL } from "@/lib/statusSeverity";
+import { formatCores } from "@/components/Project/ProjectResourceBadge.utils";
 
 export interface TerminalHeaderContentProps {
   id: string;
@@ -74,8 +75,8 @@ function formatMemory(kb: number): string {
 
 type ResourceSeverity = "muted" | "amber" | "red";
 
-// CPU is the sum of ps %cpu across the pane's process tree, so a multi-core
-// build reads above 100%; the bands are about one core.
+// CPU is the sum of ps %cpu across the pane's process tree, so 100 is one busy
+// core and a multi-core build reads above it; the bands are about one core.
 function getCpuSeverity(cpuPercent: number): ResourceSeverity {
   if (cpuPercent >= 80) return "red";
   if (cpuPercent >= 50) return "amber";
@@ -219,7 +220,7 @@ function describeResources(
   memory: ResourceSeverity
 ): string {
   const high = [cpu !== "muted" && "CPU", memory !== "muted" && "memory"].filter(Boolean);
-  const reading = `CPU ${Math.round(cpuPercent)}%, memory ${formatMemory(memoryKb)}`;
+  const reading = `CPU ${formatCores(cpuPercent / 100)}, memory ${formatMemory(memoryKb)}`;
   return high.length > 0 ? `${reading}; high ${high.join(" and ")}` : reading;
 }
 
@@ -537,21 +538,21 @@ export function TerminalHeaderContent({
                   SEVERITY_TONE[cpuSeverity]
                 )}
               />
-              {/* One block reserved at the width of "1000% · 10.0G" plus any marks
+              {/* One block reserved at the width of "10.5 cores · 10.0G" plus any marks
                   showing, slack at its trailing end: the line holds still as
                   digits come and go, and the reading stays tight against the
                   line's end dot. */}
               <span
                 className="flex items-center text-text-secondary"
                 style={{
-                  minWidth: `calc(11ch + 0.5rem + ${
+                  minWidth: `calc(16ch + 0.5rem + ${
                     [cpuSeverity, memorySeverity].filter((b) => b !== "muted").length
                   } * ${SEVERITY_MARK_WIDTH})`,
                 }}
                 aria-hidden="true"
               >
                 <SeverityMark severity={cpuSeverity} />
-                <span>{Math.round(resourceState.cpuPercent)}%</span>
+                <span>{formatCores(resourceState.cpuPercent / 100)}</span>
                 <span className="px-1">·</span>
                 <SeverityMark severity={memorySeverity} />
                 <span>{formatMemory(resourceState.memoryKb)}</span>
@@ -561,7 +562,7 @@ export function TerminalHeaderContent({
           <TooltipContent side="bottom" className="max-w-xs">
             <div className="flex flex-col gap-1">
               <div className="font-medium tabular-nums">
-                CPU {resourceState.cpuPercent.toFixed(1)}% · Memory{" "}
+                CPU {formatCores(resourceState.cpuPercent / 100)} · Memory{" "}
                 {formatMemory(resourceState.memoryKb)}
               </div>
               {resourceState.breakdown.length > 0 && (
@@ -579,26 +580,19 @@ export function TerminalHeaderContent({
                       <tr key={p.pid}>
                         <td className="pr-2 text-text-secondary">{p.pid}</td>
                         <td className="pr-3 truncate max-w-[8rem]">{p.comm}</td>
-                        <td className="text-right pr-2">{p.cpuPercent.toFixed(1)}%</td>
+                        <td className="text-right pr-2 whitespace-nowrap">
+                          {formatCores(p.cpuPercent / 100)}
+                        </td>
                         <td className="text-right">{formatMemory(p.memoryKb)}</td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
               )}
-              {(resourceState.cpuPercent > 100 ||
-                (resourceState.processCount ?? 0) > resourceState.breakdown.length) && (
-                <div className="flex flex-col text-text-secondary">
-                  {(resourceState.processCount ?? 0) > resourceState.breakdown.length && (
-                    <span className="tabular-nums">
-                      Showing {resourceState.breakdown.length} of {resourceState.processCount}{" "}
-                      processes
-                    </span>
-                  )}
-                  {resourceState.cpuPercent > 100 && (
-                    <span>CPU is summed across cores; 100% is one full core</span>
-                  )}
-                </div>
+              {(resourceState.processCount ?? 0) > resourceState.breakdown.length && (
+                <span className="tabular-nums text-text-secondary">
+                  Showing {resourceState.breakdown.length} of {resourceState.processCount} processes
+                </span>
               )}
             </div>
           </TooltipContent>

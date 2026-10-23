@@ -632,17 +632,26 @@ describe("TerminalHeaderContent — resource breakdown", () => {
     expect(names).toEqual(["cargo", "tsserver"]);
   });
 
-  it("explains a reading above one core, and only then", () => {
+  it("reads CPU in cores on the badge, the tooltip and each process row", () => {
     mockResourceEnabled = true;
-    mockResourceState = { cpuPercent: 308.9, memoryKb: 2_500_000, cpuHistory: [1, 2], breakdown };
-    const { unmount } = render(<TerminalHeaderContent id="t1" kind="terminal" />);
-    const note = /summed across cores/;
-    expect(screen.getByTestId("tooltip-content").textContent).toMatch(note);
-    unmount();
-
-    mockResourceState = { cpuPercent: 99.5, memoryKb: 2_500_000, cpuHistory: [1, 2], breakdown };
+    mockResourceState = {
+      cpuPercent: 308.9,
+      memoryKb: 2_500_000,
+      cpuHistory: [1, 2],
+      breakdown: [
+        { pid: 1, comm: "cargo", cpuPercent: 300, memoryKb: 2_000_000 },
+        { pid: 2, comm: "zsh", cpuPercent: 0.4, memoryKb: 500_000 },
+      ],
+    };
     render(<TerminalHeaderContent id="t1" kind="terminal" />);
-    expect(screen.getByTestId("tooltip-content").textContent).not.toMatch(note);
+    expect(screen.getByTestId("terminal-resource-badge").textContent).toContain("3.1 cores");
+    const tooltip = screen.getByTestId("tooltip-content");
+    expect(tooltip.textContent).toContain("CPU 3.1 cores");
+    const cells = Array.from(tooltip.querySelectorAll("tbody tr td:nth-child(3)")).map(
+      (td) => td.textContent
+    );
+    expect(cells).toEqual(["3 cores", "<0.1 cores"]);
+    expect(tooltip.textContent).not.toMatch(/%/);
   });
 });
 
@@ -674,7 +683,7 @@ describe("TerminalHeaderContent — per-pane badges silence implicit live region
     expect(badge.getAttribute("aria-live")).toBe("off");
     expect(badge.tabIndex).toBe(0);
     const name = badge.getAttribute("aria-label") ?? "";
-    expect(name).toMatch(/CPU 12%/);
+    expect(name).toMatch(/CPU 0\.1 cores/);
     expect(name).toMatch(/memory 283M/);
   });
 
@@ -737,8 +746,8 @@ describe("TerminalHeaderContent — chip vocabulary and order (#9814)", () => {
       .getAllByTestId("tooltip-content")
       .find((el) => el.textContent?.includes("Input locked"));
     const lock = lockTooltip?.parentElement?.querySelector('[role="status"]');
-    const resource = Array.from(container.querySelectorAll<HTMLElement>('[role="status"]')).find(
-      (el) => /%/.test(el.textContent ?? "")
+    const resource = container.querySelector<HTMLElement>(
+      '[data-testid="terminal-resource-badge"]'
     );
     expect(lock).toBeTruthy();
     expect(resource).toBeTruthy();
@@ -769,12 +778,11 @@ describe("TerminalHeaderContent — chip vocabulary and order (#9814)", () => {
       />
     );
     const allStatuses = Array.from(container.querySelectorAll<HTMLElement>('[role="status"]'));
-    // The resource sparkline (text contains CPU%/memory signature) is NOT the
-    // first status — it trails the pane-local exit badge.
-    const firstStatus = allStatuses[0]!;
-    expect(firstStatus.textContent ?? "").not.toMatch(/%/);
+    // The resource badge is NOT the first status — it trails the pane-local
+    // exit badge.
+    const resource = screen.getByTestId("terminal-resource-badge");
+    expect(allStatuses[0]).not.toBe(resource);
     const hibernated = screen.getByTestId("terminal-hibernated-badge");
-    const resource = allStatuses.find((el) => /%/.test(el.textContent ?? ""));
     expect(resource).toBeTruthy();
     expect(
       hibernated.compareDocumentPosition(resource!) & Node.DOCUMENT_POSITION_FOLLOWING

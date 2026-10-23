@@ -10,6 +10,7 @@ import {
   describeMembers,
   describeTerminalKind,
   formatApproxMemory,
+  formatCpu,
   groupTerminalsByProject,
   pluginProcessTitle,
   terminalTitle,
@@ -187,5 +188,13 @@ describe("closed-terminal processes (#13174)", () => {
       describeCleanupReport({ found: 2, ended: 0, stillRunning: 2, unchecked: 0, lastAt: 1 })
         ?.severity
     ).toBe("warning");
+  });
+});
+
+describe("formatCpu", () => {
+  it("reads a process tree's ps percentage in cores, 100% being one core", () => {
+    expect(formatCpu(0)).toBe("0 cores");
+    expect(formatCpu(100)).toBe("1 core");
+    expect(formatCpu(140)).toBe("1.4 cores");
   });
 });
