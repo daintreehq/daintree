@@ -3,7 +3,11 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { build, type Metafile } from "esbuild";
 import { MAIN_EXTERNAL } from "./main-build-entries.mjs";
-import { scanForbiddenModules, walkEagerGraph } from "./import-budget-lib.mjs";
+import {
+  ELEMENT_PICKER_FRAMEWORK_PATTERNS,
+  scanForbiddenModules,
+  walkEagerGraph,
+} from "./import-budget-lib.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const HOST_DIR = "electron/services/elementPicker/";
@@ -96,6 +100,10 @@ describe("the Element Picker host boundary", () => {
     expect(reachable.filter(isHostProcessCode)).toEqual([]);
     expect(reachable.filter(isSourceMapDecoder)).toEqual([]);
     expect(reachable.filter(isJsParser)).toEqual([]);
+    // Every family the picker brought, guest scripts included: main bundles
+    // none of it even behind an import, since the host and the page load it.
+    expect(scanForbiddenModules(reachable, ELEMENT_PICKER_FRAMEWORK_PATTERNS)).toEqual([]);
+    expect(reachable.filter(isJsxParser)).toEqual([]);
     expect(
       [...walkEagerGraph(metafile, "electron/main.ts")].filter((f) => f.startsWith(HOST_DIR))
     ).toEqual([]);
@@ -170,6 +178,23 @@ describe("the Element Picker host boundary", () => {
     expect(eager.filter(isVueCompiler)).toEqual([]);
     expect(reachable.some(isJsxParser)).toBe(true);
     expect(eager.filter(isJsxParser)).toEqual([]);
+    // What makes main's empty scan above worth anything: the same patterns,
+    // run over what the host can reach, find each family they name for it.
+    expect(
+      new Set(
+        scanForbiddenModules(reachable, ELEMENT_PICKER_FRAMEWORK_PATTERNS).map((m) => m.label)
+      )
+    ).toEqual(
+      new Set([
+        "Element Picker host process",
+        "Svelte compiler",
+        "Svelte runtime",
+        "svelte-source-model",
+        "Vue template compiler",
+        "Babel parser",
+        "source-map decoder",
+      ])
+    );
     // Bytes come from main; nothing the host runs can open a file or a socket itself.
     expect(authorityImports(metafile)).toEqual([]);
     // Project adapters walk directories, which is main's authority, never the host's.

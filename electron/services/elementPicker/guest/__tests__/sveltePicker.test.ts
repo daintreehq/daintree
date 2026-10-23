@@ -20,6 +20,7 @@ import {
 afterEach(() => {
   stop();
   vi.useRealTimers();
+  vi.restoreAllMocks();
 });
 
 const page = { type: "component", file: "src/routes/+page.svelte", line: 1, column: 0 };
@@ -464,6 +465,47 @@ describe("notices about the page's metadata", () => {
     setMeta(document.body.querySelector("p")!, loc(3));
     vi.advanceTimersByTime(AUDIT_DEV_SETTLE_MS * 2);
     expect(ofType(events, "runtimeIssue")).toEqual([]);
+  });
+
+  it("stops sweeping the document once it has said what it found", async () => {
+    vi.useFakeTimers();
+    document.head.innerHTML = '<script src="/@vite/client" type="module"></script>';
+    document.body.innerHTML = "<main><p>static</p></main>";
+    const lookups = vi.spyOn(document, "getElementsByTagName");
+    const sweeps = () => lookups.mock.calls.filter(([name]) => name === "*").length;
+    const { events } = start("browse");
+
+    vi.advanceTimersByTime(AUDIT_DEV_SETTLE_MS + AUDIT_SETTLE_MS * 2);
+    expect(ofType(events, "runtimeIssue")).toHaveLength(1);
+    // Hydration stamps nodes without a mutation to see, so it looks again on
+    // a timer — once per settle interval across the dev window, never after.
+    expect(sweeps()).toBeGreaterThan(1);
+    expect(sweeps()).toBeLessThanOrEqual(Math.ceil(AUDIT_DEV_SETTLE_MS / AUDIT_SETTLE_MS) + 2);
+
+    const atVerdict = sweeps();
+    document.querySelector("main")!.append(document.createElement("section"));
+    await Promise.resolve();
+    vi.advanceTimersByTime(AUDIT_DEV_SETTLE_MS * 4);
+    expect(sweeps()).toBe(atVerdict);
+  });
+
+  it("sweeps a dev build once, not again for every change the page makes", async () => {
+    vi.useFakeTimers();
+    document.body.innerHTML = "<main><p>live</p></main>";
+    setMeta(document.body.querySelector("p")!, loc(3));
+    const lookups = vi.spyOn(document, "getElementsByTagName");
+    const sweeps = () => lookups.mock.calls.filter(([name]) => name === "*").length;
+    start("select");
+    const atStart = sweeps();
+    expect(atStart).toBeGreaterThan(0);
+
+    for (let change = 0; change < 5; change += 1) {
+      document.querySelector("main")!.append(document.createElement("section"));
+      await Promise.resolve();
+      vi.advanceTimersByTime(AUDIT_SETTLE_MS);
+    }
+    vi.advanceTimersByTime(AUDIT_DEV_SETTLE_MS * 2);
+    expect(sweeps()).toBe(atStart);
   });
 
   it("stays quiet when the page is a Svelte dev build", () => {

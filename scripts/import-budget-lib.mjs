@@ -215,6 +215,42 @@ export const FORBIDDEN_EAGER_PATTERNS = [
 ];
 
 /**
+ * What the Element Picker added that only a picker session may load: its guest
+ * scripts, its resolver host, and every compiler, parser and map decoder a
+ * resolver reads source with. None of it belongs to main, which forks the host
+ * for it, or to the renderer, which gets observations as data.
+ *
+ * Lezer is deliberately absent: Preact's resolver parses JSX with it, but the
+ * renderer's CodeMirror editors ship the same grammar for their own use, so a
+ * renderer hit says nothing about the picker. Main checks it on its own.
+ */
+export const ELEMENT_PICKER_FRAMEWORK_PATTERNS = [
+  {
+    label: "Element Picker guest code",
+    test: (file) => file.includes("electron/services/elementPicker/guest/"),
+  },
+  {
+    label: "Element Picker host process",
+    test: (file) =>
+      file.includes("electron/services/elementPicker/worker/") ||
+      /electron\/services\/elementPicker\/host(-bootstrap)?\.ts$/.test(file),
+  },
+  ...FORBIDDEN_EAGER_PATTERNS,
+  {
+    label: "Vue template compiler",
+    test: (file) => /(^|\/)node_modules\/@vue\/compiler-[^/]+\//.test(file),
+  },
+  {
+    label: "Babel parser",
+    test: (file) => /(^|\/)node_modules\/@babel\/parser\//.test(file),
+  },
+  {
+    label: "source-map decoder",
+    test: (file) => /(^|\/)node_modules\/@jridgewell\/(trace-mapping|sourcemap-codec)\//.test(file),
+  },
+];
+
+/**
  * Any eager module matching a forbidden pattern, as `{ file, label }`. Empty is
  * the only passing result. One entry per file — the patterns overlap by design
  * (the compiler lives inside the runtime package) and a file listed twice would
