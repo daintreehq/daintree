@@ -7,6 +7,7 @@ const m = vi.hoisted(() => ({
   failImpl: false,
   remoteBound: false,
   openSettings: vi.fn(),
+  runs: {} as Record<string, ReturnType<typeof vi.fn>>,
 }));
 
 // A getter, so each test sees its own failure mode and lookup count however
@@ -15,7 +16,7 @@ vi.mock("../pluginActions.impl", () => ({
   get pluginActionRuns() {
     m.runLookups++;
     if (m.failImpl) throw new Error("chunk load failed");
-    return { "plugin.openSettings": m.openSettings };
+    return { ...m.runs, "plugin.openSettings": m.openSettings };
   },
 }));
 
@@ -45,6 +46,7 @@ describe("plugin action run bodies (#14275)", () => {
     m.failImpl = false;
     m.remoteBound = false;
     m.openSettings.mockReset().mockResolvedValue({ pluginId: "acme.dashboard" });
+    m.runs = {};
   });
 
   it("registers and materializes every definition without touching the run bodies", async () => {
@@ -88,6 +90,39 @@ describe("plugin action run bodies (#14275)", () => {
     await def.run(args, ctx);
     expect(own.onOpenSettingsTab).toHaveBeenCalledWith({ tab: "project:plugins" });
     expect(callbacks.onOpenSettingsTab).not.toHaveBeenCalled();
+  });
+
+  it("hands every definition's dispatch to its own run body", async () => {
+    const actions = await register();
+    for (const id of actions.keys()) {
+      m.runs[id] = vi.fn().mockResolvedValue({ ran: id });
+    }
+    m.openSettings.mockResolvedValue({ ran: "plugin.openSettings" });
+
+    for (const [id, create] of actions) {
+      await expect(create().run(args, ctx)).resolves.toEqual({ ran: id });
+    }
+    for (const [id, run] of Object.entries(m.runs)) {
+      if (id === "plugin.openSettings") continue;
+      expect(run).toHaveBeenCalledTimes(1);
+      expect(run).toHaveBeenCalledWith(args, ctx, callbacks);
+    }
+  });
+
+  it("keeps each registry's callbacks apart", async () => {
+    const first = makeCallbacks();
+    const second = makeCallbacks();
+    const { registerPluginActions } = await import("../pluginActions");
+    const a: ActionRegistry = new Map();
+    const b: ActionRegistry = new Map();
+    registerPluginActions(a, first);
+    registerPluginActions(b, second);
+
+    await a.get("plugin.openSettings")!().run(args, ctx);
+    await b.get("plugin.openSettings")!().run(args, ctx);
+
+    expect(m.openSettings.mock.calls[0]?.[2]).toBe(first);
+    expect(m.openSettings.mock.calls[1]?.[2]).toBe(second);
   });
 
   it("rejects inside run when the run bodies fail to load", async () => {

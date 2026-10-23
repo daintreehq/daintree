@@ -6,6 +6,7 @@ const m = vi.hoisted(() => ({
   runLookups: 0,
   failImpl: false,
   startWork: vi.fn(),
+  runs: {} as Record<string, ReturnType<typeof vi.fn>>,
 }));
 
 // A getter, so each test sees its own failure mode and lookup count however
@@ -14,7 +15,7 @@ vi.mock("../workflowCreationActions.impl", () => ({
   get workflowCreationActionRuns() {
     m.runLookups++;
     if (m.failImpl) throw new Error("chunk load failed");
-    return { "workflow.startWorkOnIssue": m.startWork };
+    return { ...m.runs, "workflow.startWorkOnIssue": m.startWork };
   },
 }));
 
@@ -41,6 +42,7 @@ describe("workflow-creation action run bodies (#14275)", () => {
     m.runLookups = 0;
     m.failImpl = false;
     m.startWork.mockReset().mockResolvedValue({ worktreeId: "wt-1" });
+    m.runs = {};
   });
 
   it("registers and materializes every definition without touching the run bodies", async () => {
@@ -76,6 +78,36 @@ describe("workflow-creation action run bodies (#14275)", () => {
     await expect(def.run(args, ctx)).resolves.toBeNull();
     expect(own.onLaunchAgent).toHaveBeenCalledWith("claude", {});
     expect(callbacks.onLaunchAgent).not.toHaveBeenCalled();
+  });
+
+  it("hands every definition's dispatch to its own run body", async () => {
+    const actions = await register();
+    for (const id of actions.keys()) {
+      m.runs[id] = vi.fn().mockResolvedValue({ ran: id });
+    }
+    m.startWork.mockResolvedValue({ ran: "workflow.startWorkOnIssue" });
+
+    for (const [id, create] of actions) {
+      await expect(create().run(args, ctx)).resolves.toEqual({ ran: id });
+    }
+    expect(actions.size).toBe(2);
+    expect(m.runs["worktree.createWithRecipe"]).toHaveBeenCalledWith(args, ctx, callbacks);
+  });
+
+  it("keeps each registry's callbacks apart", async () => {
+    const first = makeCallbacks();
+    const second = makeCallbacks();
+    const { registerWorkflowCreationActions } = await import("../workflowCreationActions");
+    const a: ActionRegistry = new Map();
+    const b: ActionRegistry = new Map();
+    registerWorkflowCreationActions(a, first);
+    registerWorkflowCreationActions(b, second);
+
+    await a.get("workflow.startWorkOnIssue")!().run(args, ctx);
+    await b.get("workflow.startWorkOnIssue")!().run(args, ctx);
+
+    expect(m.startWork.mock.calls[0]?.[2]).toBe(first);
+    expect(m.startWork.mock.calls[1]?.[2]).toBe(second);
   });
 
   it("rejects inside run when the run bodies fail to load", async () => {
