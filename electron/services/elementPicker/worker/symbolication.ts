@@ -255,11 +255,14 @@ function isLeaf(value: unknown): value is Leaf {
  * Whether the decoder may build what these leaves describe, totalled over all
  * of them. Each leaf is decoded whole before the sections are joined, so its
  * lines count even where the next section cuts it short, and the joined map
- * has a line for every one up to the furthest a section reaches.
+ * has a line for every one up to the furthest a section reaches. Joining
+ * copies every segment while the decoded sections are still held, so a map
+ * that is joined is charged for both.
  */
 function admit(
   textLength: number,
-  leaves: readonly { line: number; map: Leaf }[]
+  leaves: readonly { line: number; map: Leaf }[],
+  joined: boolean
 ): Unavailable | null {
   let sources = 0;
   let decodedLines = 0;
@@ -274,11 +277,14 @@ function admit(
   }
   if (sources > SOURCE_MAP_LIMITS.sources) return unavailable("map-missing");
   const lines = Math.max(decodedLines, reach);
+  const held = joined
+    ? charge(textLength, decodedLines + reach, segments * 2)
+    : charge(textLength, lines, segments);
   if (
     lines > SOURCE_MAP_LIMITS.lines ||
     segments > SOURCE_MAP_LIMITS.segments ||
-    // The cache would refuse to hold it, and it would be built all the same.
-    charge(textLength, lines, segments) > DECODED_MAP_CACHE_LIMITS.size
+    // More than the cache would hold, and it would be built all the same.
+    held > DECODED_MAP_CACHE_LIMITS.size
   ) {
     return unavailable("budget-exhausted");
   }
@@ -295,13 +301,16 @@ function admit(
  * An index map is taken one level deep, as bundlers write them: each section
  * embeds a regular map. The pinned decoder places a nested section's columns
  * wrongly, and a section that points at a `url` would have the host fetch.
- * No part of a map is decoded until all of it is admitted.
+ * No part of a map is decoded until all of it is admitted, so one too large to
+ * decode is refused as that even where decoding would have shown it naming a
+ * source it does not have.
  */
 function opaque(trace: Decoder, input: unknown, textLength: number): Prepared {
   if (!isRecord(input)) return unavailable("map-missing");
   if (!("sections" in input)) {
     if (!isLeaf(input)) return unavailable("map-missing");
-    const refused = admit(textLength, [{ line: 0, map: input }]);
+    // The decoder keeps a regular map's decoded lines as they are.
+    const refused = admit(textLength, [{ line: 0, map: input }], false);
     if (refused) return refused;
     const sources: MapSource[] = [];
     const map = opaqueLeaf(trace, input, sources);
@@ -320,7 +329,7 @@ function opaque(trace: Decoder, input: unknown, textLength: number): Prepared {
     }
     leaves.push({ line, column, map: section.map });
   }
-  const refused = admit(textLength, leaves);
+  const refused = admit(textLength, leaves, true);
   if (refused) return refused;
   const sources: MapSource[] = [];
   const sections: Record<string, unknown>[] = [];

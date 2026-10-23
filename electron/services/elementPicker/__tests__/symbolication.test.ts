@@ -451,6 +451,8 @@ describe("source map symbolication", () => {
       sectioned([0, dense(segments / 2 + 1)], [1, dense(segments / 2)]),
       // Overlapping sections: each is decoded whole before the next cuts it short.
       sectioned([0, card + ";".repeat(lines / 2)], [1, card + ";".repeat(lines / 2)]),
+      // At the line limit, but joining copies every line while the section is still held.
+      sectioned([0, ";".repeat(lines - 1)]),
       // At both limits at once, which is more than the cache would hold.
       cardMap({ mappings: dense(segments) + ";".repeat(lines - 1) }),
     ]) {
@@ -467,12 +469,19 @@ describe("source map symbolication", () => {
 
   it("decodes a map right up to each limit", async () => {
     const { lines, segments } = SOURCE_MAP_LIMITS;
-    // Generated-only segments after the last mapped one, one column apart.
-    for (const mappings of [
-      cardMap().mappings + ";".repeat(lines - 2),
-      cardMap().mappings + ",C".repeat(segments - 3),
-    ]) {
-      await expect(symbolicate(fake(cardMap({ mappings })))).resolves.toMatchObject({
+    const card = cardMap().mappings;
+    const cases: [map: unknown, at: SourceLocation][] = [
+      [cardMap({ mappings: card + ";".repeat(lines - 2) }), v8(2, 10)],
+      // Generated-only segments after the last mapped one, one column apart.
+      [cardMap({ mappings: card + ",C".repeat(segments - 3) }), v8(2, 10)],
+      // A section whose last line is the last one allowed.
+      [
+        { version: 3, sections: [{ offset: { line: lines - 2, column: 0 }, map: cardMap() }] },
+        v8(lines, 10),
+      ],
+    ];
+    for (const [map, at] of cases) {
+      await expect(symbolicate(fake(map), at)).resolves.toMatchObject({
         ok: true,
         target: { location: authored(2, 9) },
       });
@@ -496,7 +505,14 @@ describe("source map symbolication", () => {
       // A field still continuing at a line's end reads into the next.
       "AAAAg;A",
       "Ag",
+      // Every other digit that continues a field.
+      "0A,9A;+A,/A",
+      "AAAA0,A",
+      "AAA/;AA+",
+      // Characters outside base64, where the decoder reads a terminal zero.
       "é,A;~",
+      String.fromCharCode(0, 44, 127, 59, 128, 0xd800, 0xdfff),
+      "g" + String.fromCharCode(0xd800) + "A,A",
       cardMap().mappings,
     ]) {
       const decoded = decodedMappings(
