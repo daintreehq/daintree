@@ -6,8 +6,7 @@
  * remote host. `bind` and `reselect` drive the preview's page, so they run
  * where the preview is shown; the workspace ops read the project's source, so
  * they run where the worktree is. Lifecycle calls on a binding (detach, mode,
- * clearing the selection or the hover) stay on the site-preview namespace,
- * which serves core and plugin bindings alike.
+ * clearing the selection or the hover) stay on the site-preview namespace.
  *
  * Every op takes its project from the IPC context and nothing else: no
  * project id, subscriber, absolute path or script crosses from the payload.
@@ -133,9 +132,9 @@ function ownerOf(ctx: IpcContext): ElementPickerWorkspaceOwner {
 
 /**
  * Where one core binding's traffic goes: the view that bound it, while it is
- * still a view of the binding's project, and nowhere else. The same addressed
- * delivery as the site-preview push, for the same reason: what a page reports
- * belongs to the view that asked for it, not to every view of the project.
+ * still a view of the binding's project, and nowhere else: what a page
+ * reports belongs to the view that asked for it, not to every view of the
+ * project.
  */
 function addressedSink(
   projectId: string,

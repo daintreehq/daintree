@@ -74,7 +74,7 @@ export interface ElementPickerReselectRequest {
  * events, the page's admitted events, and what the host did about them.
  */
 export type ElementPickerPushPayload =
-  | Exclude<SitePreviewPushPayload, { kind: "guest-event" }>
+  | SitePreviewPushPayload
   | {
       kind: "picker-event";
       sessionId: string;

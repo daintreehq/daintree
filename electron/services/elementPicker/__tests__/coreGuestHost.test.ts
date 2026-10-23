@@ -18,7 +18,6 @@ import { LATE_PROBE_DELAY_MS } from "../coreGuest.js";
 import { BOOTSTRAP_GLOBAL, EXTRACTOR_REGISTRY_GLOBAL } from "../guestChannel.js";
 import { buildPickerReselectSource } from "../guestSources.js";
 import type { ElementPickerPushPayload } from "../types.js";
-import type { SitePreviewPushPayload } from "../../../../shared/types/ipc/sitePreview.js";
 import { ELEMENT_PICKER_PROTOCOL_VERSION } from "../../../../shared/elementPicker/protocol.js";
 import type {
   Capabilities,
@@ -207,13 +206,9 @@ function makeHarness(options: { catalog?: Record<string, string> } = {}) {
   const wc = new FakeWebContents(WEB_CONTENTS_ID);
   const subscriber = new FakeWebContents(SUBSCRIBER_WC_ID);
   const sunk: ElementPickerPushPayload[] = [];
-  const pushed: SitePreviewPushPayload[] = [];
   const extractorLoad: { gate: Promise<void> | null } = { gate: null };
   let sessions = 0;
   const bridge = new SitePreviewBridge({
-    push: (payload) => pushed.push(payload),
-    isPluginEnabled: async () => true,
-    listGuests: () => [],
     getWebContents: (id) => {
       if (id === WEB_CONTENTS_ID) return wc as unknown as Electron.WebContents;
       if (id === SUBSCRIBER_WC_ID) return subscriber as unknown as Electron.WebContents;
@@ -224,9 +219,6 @@ function makeHarness(options: { catalog?: Record<string, string> } = {}) {
     resolveGuestProject: () => PROJECT_ID,
     newSessionId: () => `session-${++sessions}`,
     newBindingName: () => BINDING_NAME,
-    resolveGuestAdapter: (adapterId) =>
-      adapterId === "test.guest" ? { id: adapterId, pluginId: "test.plugin" } : null,
-    loadGuestAdapterSource: async () => "",
     loadCoreGuestAsset: async (id) => {
       if (id.startsWith("extractor:") && extractorLoad.gate) await extractorLoad.gate;
       return catalog[id] ?? null;
@@ -249,7 +241,7 @@ function makeHarness(options: { catalog?: Record<string, string> } = {}) {
       payload.kind === "picker-event" && payload.event.type === type ? [payload] : []
     );
   const navigate = (observed = true) => wc.debugger.navigate(wc, observed);
-  return { bridge, wc, sunk, pushed, extractorLoad, bind, navigate, kinds, pickerEvents };
+  return { bridge, wc, sunk, extractorLoad, bind, navigate, kinds, pickerEvents };
 }
 
 /** Lets the binding queue, binding calls and probes settle. */
@@ -658,21 +650,27 @@ describe("core Element Picker guest loading", () => {
     expect(h.bridge.getState(PROJECT_ID, state.sessionId)?.droppedMessages).toBe(1);
   });
 
-  it("keeps core traffic off the plugin channel and supersedes a plugin binding on the panel", async () => {
+  it("supersedes the panel's previous binding, and keeps each one's traffic on its own sink", async () => {
     const h = makeHarness();
-    await h.bridge.bind({
+    const earlier: ElementPickerPushPayload[] = [];
+    const first = await h.bridge.bindElementPicker({
       projectId: PROJECT_ID,
       panelId: PANEL_ID,
-      adapterId: "test.guest",
       mode: "browse",
       subscriberWebContentsId: SUBSCRIBER_WC_ID,
+      sink: (payload) => earlier.push(payload),
     });
+    await settle();
+    const earlierCount = earlier.length;
     await h.bind();
     await settle();
 
-    expect(h.pushed.map((payload) => payload.kind)).toEqual(["detached"]);
-    expect(h.pushed[0]).toMatchObject({ reason: "rebound" });
+    expect(earlier.slice(earlierCount)).toEqual([
+      expect.objectContaining({ kind: "detached", sessionId: first.sessionId, reason: "rebound" }),
+    ]);
+    expect(h.bridge.getState(PROJECT_ID, first.sessionId)).toBeNull();
     expect(h.pickerEvents("documentReady")).toHaveLength(1);
+    expect(h.sunk.some((payload) => payload.sessionId === first.sessionId)).toBe(false);
   });
 
   it("never evaluates an extractor in a document that replaced its own before the host saw it go", async () => {

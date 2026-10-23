@@ -1965,7 +1965,6 @@ export interface IpcEventMap {
   // Dev Preview events
   "dev-preview:state-changed": DevPreviewStateChangedPayload;
   "dev-preview:all-sessions-changed": DevPreviewAllSessionsPayload;
-  "site-preview:event": import("./sitePreview.js").SitePreviewPushPayload;
   "element-picker:event": import("./elementPicker.js").ElementPickerPushPayload;
   "element-picker:source-changed": import("./elementPicker.js").ElementPickerSourceChangedPush;
 

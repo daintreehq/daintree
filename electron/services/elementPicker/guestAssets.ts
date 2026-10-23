@@ -36,7 +36,7 @@ export const CORE_GUEST_ASSET_FILES: Readonly<Partial<Record<CoreGuestAssetId, s
   "extractor:preact": "extractors/preact.js",
 };
 
-/** Same ceiling as a plugin guest adapter's body. */
+/** A ceiling on what is read and evaluated in the guest, so a bad build cannot balloon it. */
 export const MAX_CORE_GUEST_ASSET_BYTES = 512 * 1024;
 
 export function extractorAssetId(framework: ElementPickerFramework): CoreGuestAssetId {
