@@ -232,7 +232,13 @@ vi.mock("../plugin/PluginDevWorkerMainBridge.js", () => ({
 }));
 
 import { PluginService } from "../PluginService.js";
-import { makeProjectPluginInstanceKey } from "../../../shared/types/plugin.js";
+import {
+  isInstalledProjectInstanceKey,
+  makeInstalledProjectInstanceKey,
+  makeProjectPluginInstanceKey,
+  parseProjectPluginInstanceKey,
+} from "../../../shared/types/plugin.js";
+import { getPluginCapabilityConsentStore } from "../plugin-capability/instances.js";
 
 let tmpDir: string;
 /** Temp roots created outside `tmpDir` (project roots), removed in `afterEach`. */
@@ -270,8 +276,10 @@ afterEach(async () => {
 const PROJECT_A = "a".repeat(64);
 const PROJECT_B = "b".repeat(64);
 const PKG = "acme.ledger";
-const KEY_A = makeProjectPluginInstanceKey(PROJECT_A, PKG);
-const KEY_B = makeProjectPluginInstanceKey(PROJECT_B, PKG);
+const KEY_A = makeInstalledProjectInstanceKey(PROJECT_A, PKG);
+const KEY_B = makeInstalledProjectInstanceKey(PROJECT_B, PKG);
+/** What a repository-local plugin with the same manifest id in project A is keyed. */
+const REPO_KEY_A = makeProjectPluginInstanceKey(PROJECT_A, PKG);
 
 type Seam = {
   plugins: Map<string, unknown>;
@@ -401,11 +409,12 @@ describe("installed package instance mode (#14103)", () => {
 
   it("does not adopt an identity a repository-local plugin already holds", async () => {
     const { service, seam } = await startService();
-    seam.plugins.set(KEY_A, { manifest: { name: PKG } });
+    seam.plugins.set(REPO_KEY_A, { manifest: { name: PKG } });
 
     await service.setProjectInstanceEnabled(PROJECT_A, "/repo/a", PKG, true);
 
     expect(seam.installedInstanceKeys.has(KEY_A)).toBe(false);
+    expect(seam.plugins.has(KEY_A)).toBe(false);
   });
 
   it("forgets enablements on uninstall even when the package was disabled at startup", async () => {
@@ -436,5 +445,131 @@ describe("installed package instance mode (#14103)", () => {
 
     expect(seam.plugins.has("acme.legacy")).toBe(true);
     expect(seam.projectInstancePackages.has("acme.legacy")).toBe(false);
+  });
+});
+
+describe("installed instance identity beside a repository plugin of the same id (#14103)", () => {
+  type IdentitySeam = Seam & {
+    settings: {
+      settingsRoot(): string;
+      resolveSettingsFilePath(id: string, scope: "user" | "local"): string | undefined;
+    };
+    storage: {
+      storageRoot(): string;
+      resolveStorageFilePath(id: string, scope: "user"): Promise<string | undefined>;
+    };
+    projectPluginDeps: { listGlobalPluginIds(): Set<string> };
+  };
+
+  it("never shares a key with the repository plugin, yet reads as bound to the same project", () => {
+    expect(KEY_A).not.toBe(REPO_KEY_A);
+    expect(parseProjectPluginInstanceKey(KEY_A)).toEqual({
+      projectId: PROJECT_A,
+      manifestId: PKG,
+      installed: true,
+    });
+    expect(parseProjectPluginInstanceKey(REPO_KEY_A)).toEqual({
+      projectId: PROJECT_A,
+      manifestId: PKG,
+      installed: false,
+    });
+    expect(isInstalledProjectInstanceKey(KEY_A)).toBe(true);
+    expect(isInstalledProjectInstanceKey(REPO_KEY_A)).toBe(false);
+  });
+
+  it("keeps capability grants apart, and revoking the instance leaves the repository plugin's", async () => {
+    const { service } = await startService();
+    const consent = getPluginCapabilityConsentStore();
+    const repoGrant = {
+      pluginId: REPO_KEY_A,
+      capability: "shell:exec" as const,
+      scopeKey: PROJECT_A,
+    };
+    const instanceGrant = {
+      pluginId: KEY_A,
+      capability: "shell:exec" as const,
+      scopeKey: PROJECT_A,
+    };
+    consent.grant(repoGrant);
+
+    await service.setProjectInstanceEnabled(PROJECT_A, "/repo/a", PKG, true);
+    expect(consent.hasGrant(instanceGrant)).toBe(false);
+
+    consent.grant(instanceGrant);
+    await service.setProjectInstanceEnabled(PROJECT_A, "/repo/a", PKG, false);
+
+    expect(consent.hasGrant(instanceGrant)).toBe(false);
+    expect(consent.hasGrant(repoGrant)).toBe(true);
+    consent.revokeAllForPlugin(REPO_KEY_A);
+  });
+
+  it("resolves separate user-scope settings, local settings and storage files", async () => {
+    const { seam } = await startService();
+    const id = seam as unknown as IdentitySeam;
+
+    expect(id.settings.resolveSettingsFilePath(KEY_A, "user")).not.toBe(
+      id.settings.resolveSettingsFilePath(REPO_KEY_A, "user")
+    );
+    const localInstance = id.settings.resolveSettingsFilePath(KEY_A, "local");
+    expect(localInstance).toBeDefined();
+    expect(localInstance).not.toBe(id.settings.resolveSettingsFilePath(REPO_KEY_A, "local"));
+    expect(await id.storage.resolveStorageFilePath(KEY_A, "user")).not.toBe(
+      await id.storage.resolveStorageFilePath(REPO_KEY_A, "user")
+    );
+  });
+
+  it("an uninstall that deletes settings wipes every instance's files and no repository plugin's", async () => {
+    const { service, seam } = await startService();
+    const id = seam as unknown as IdentitySeam;
+    const files = [
+      id.settings.resolveSettingsFilePath(KEY_A, "user")!,
+      id.settings.resolveSettingsFilePath(KEY_B, "user")!,
+      id.settings.resolveSettingsFilePath(KEY_A, "local")!,
+      path.join(id.settings.settingsRoot(), "accounts", `${KEY_A}.json`),
+      (await id.storage.resolveStorageFilePath(KEY_A, "user"))!,
+    ];
+    const kept = [
+      id.settings.resolveSettingsFilePath(REPO_KEY_A, "user")!,
+      id.settings.resolveSettingsFilePath(REPO_KEY_A, "local")!,
+      (await id.storage.resolveStorageFilePath(REPO_KEY_A, "user"))!,
+    ];
+    for (const file of [...files, ...kept]) {
+      await fs.mkdir(path.dirname(file), { recursive: true });
+      await fs.writeFile(file, "{}");
+    }
+
+    try {
+      await service.uninstallPlugin(PKG, true);
+
+      for (const file of files) {
+        await expect(fs.access(file)).rejects.toThrow();
+      }
+      for (const file of kept) {
+        await expect(fs.access(file)).resolves.toBeUndefined();
+      }
+    } finally {
+      // The settings and storage roots sit beside the plugins root, outside tmpDir.
+      for (const file of [...files, ...kept]) await fs.rm(file, { force: true });
+    }
+  });
+
+  it("tells the plugin manager a repository plugin's id clashes with a catalogued package", async () => {
+    const { seam } = await startService();
+
+    expect((seam as unknown as IdentitySeam).projectPluginDeps.listGlobalPluginIds().has(PKG)).toBe(
+      true
+    );
+  });
+
+  it("forgets a removed project's enablements and unloads its instance", async () => {
+    const { service, seam } = await startService();
+    await service.setProjectInstanceEnabled(PROJECT_A, "/repo/a", PKG, true);
+    await service.setProjectInstanceEnabled(PROJECT_B, "/repo/b", PKG, true);
+
+    service.forgetProjectInstances(PROJECT_A);
+
+    expect(seam.plugins.has(KEY_A)).toBe(false);
+    expect(seam.plugins.has(KEY_B)).toBe(true);
+    expect(service.getProjectInstanceProjects(PKG)).toEqual([PROJECT_B]);
   });
 });

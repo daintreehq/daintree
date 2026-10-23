@@ -111,6 +111,12 @@ interface PluginInstallerDeps {
    * reload, where the recipes are expected back with their frecency intact.
    */
   purgeRecipeMetadata: (pluginId: string) => Promise<void>;
+  /**
+   * Delete the user-scope settings, secrets, accounts and storage of every
+   * per-project instance an `instanceMode: "project"` package ever had. Wired to
+   * the settings-wiping uninstall only, beside the package's own files.
+   */
+  wipeProjectInstanceData?: (pluginId: string) => Promise<void>;
   /** Lookup for the running or skipped-at-launch plugin (only `isBuiltin` is consumed). */
   getPlugin: (pluginId: string) => InstallerPluginInfo | undefined;
   /** Shared launch-time name reservation set — stays PluginService-owned (read by a test cast). */
@@ -1369,6 +1375,16 @@ export class PluginInstaller {
         await wipeSettingsFile(
           path.join(this.deps.getSettingsRoot(), "accounts", `${pluginId}.json`)
         );
+        if (this.deps.wipeProjectInstanceData) {
+          try {
+            await this.deps.wipeProjectInstanceData(pluginId);
+          } catch (err) {
+            console.error(
+              `[PluginService] wiping per-project instance data during uninstall of "${pluginId}" threw:`,
+              err
+            );
+          }
+        }
       }
 
       // Bookkeeping runs only after the filesystem deletion succeeds — if `fs.rm`

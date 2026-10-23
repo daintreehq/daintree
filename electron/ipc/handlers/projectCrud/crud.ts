@@ -3,7 +3,10 @@ import path from "path";
 import { CHANNELS } from "../../channels.js";
 import { getWindowForWebContents } from "../../../window/webContentsRegistry.js";
 import { projectStore } from "../../../services/ProjectStore.js";
-import { notifyProjectPluginsClosed } from "../../../window/projectPluginLifecycle.js";
+import {
+  notifyProjectPluginsClosed,
+  notifyProjectPluginsRemoved,
+} from "../../../window/projectPluginLifecycle.js";
 import {
   collectActiveProjectIds,
   projectViewManagersFrom,
@@ -147,6 +150,7 @@ export async function removeProjectWithCleanup(
   // and after `removeProject` the controller could no longer resolve the
   // project to reconcile it away.
   notifyProjectPluginsClosed(projectId);
+  notifyProjectPluginsRemoved(projectId);
 
   await projectStore.removeProject(projectId);
   if (removedPath) {

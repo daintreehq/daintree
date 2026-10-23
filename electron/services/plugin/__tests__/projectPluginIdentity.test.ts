@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import { makeInstalledProjectInstanceKey } from "../../../../shared/types/plugin.js";
 import {
   isSafePluginInstanceId,
   makeProjectPluginInstanceKey,
@@ -16,6 +17,7 @@ describe("project plugin instance keys", () => {
     expect(parseProjectPluginInstanceKey(key)).toEqual({
       projectId: PROJECT,
       manifestId: "acme.dashboard",
+      installed: false,
     });
     expect(pluginManifestIdFromInstanceKey(key)).toBe("acme.dashboard");
     expect(projectIdFromPluginInstanceKey(key)).toBe(PROJECT);
@@ -46,6 +48,14 @@ describe("isSafePluginInstanceId", () => {
     expect(isSafePluginInstanceId(makeProjectPluginInstanceKey(PROJECT, "acme.dashboard"))).toBe(
       true
     );
+  });
+
+  it("accepts an installed package's instance key and rejects a malformed one", () => {
+    expect(isSafePluginInstanceId(makeInstalledProjectInstanceKey(PROJECT, "acme.dashboard"))).toBe(
+      true
+    );
+    expect(isSafePluginInstanceId(`project__${PROJECT}__installed__../evil`)).toBe(false);
+    expect(isSafePluginInstanceId(`project__${PROJECT}__installed__`)).toBe(false);
   });
 
   it("rejects traversal, separators and malformed halves", () => {

@@ -16,7 +16,8 @@ export {
  *
  * Two shapes are legal and no others: a bare `publisher.name` manifest id (an
  * installed or builtin plugin), or `project__{projectId}__{publisher.name}`
- * with a real project id in the middle. Both are closed alphabets with no
+ * with a real project id in the middle (`__installed__` before the manifest id
+ * for an installed package's per-project instance). Both are closed alphabets with no
  * separators and no `..`, which is what makes them safe to concatenate into
  * `~/.daintree/plugin-settings/{id}.json` and friends.
  *

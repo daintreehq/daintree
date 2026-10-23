@@ -179,10 +179,12 @@ import { isPluginNotificationSilenced } from "./plugin/pluginNotificationSilence
 /** How long a plugin notification waits on a project's mute before going out anyway. */
 const PLUGIN_NOTIFICATION_MUTE_READ_TIMEOUT_MS = 2_000;
 import { store } from "../store.js";
+import { wipeSettingsFile } from "./PluginSettingsStore.js";
 import { isProjectWorkspaceId } from "../../shared/utils/workspaceIds.js";
 import type { EventBusEnvelope } from "../../shared/types/ipc/maps.js";
 import {
   DEFAULT_FILE_EDITOR_MAX_BYTES,
+  makeInstalledProjectInstanceKey,
   makeProjectPluginInstanceKey,
   parseProjectPluginInstanceKey,
   parsePluginHostedViewKindId,
@@ -1655,6 +1657,7 @@ export class PluginService {
       setEnabled: (pluginId, enabled) => this.setEnabled(pluginId, enabled),
       broadcastProvenanceChanged: () => this.broadcaster.broadcastProvenanceChanged(),
       purgeRecipeMetadata: (pluginId) => this.purgePluginRecipeMetadata(pluginId),
+      wipeProjectInstanceData: (pluginId) => this.wipeInstalledInstanceData(pluginId),
       getPlugin: (pluginId) => this.plugins.get(pluginId) ?? this.disabledPlugins.get(pluginId),
       reservedNames: this.reservedNames,
       disabledPlugins: this.disabledPlugins,
@@ -7600,6 +7603,9 @@ export class PluginService {
           ...this.reservedNames,
           ...this.disabledPlugins.keys(),
           ...this.blockedPlugins.keys(),
+          // Catalog-only packages that run per project: a repository plugin with
+          // the same id cannot run beside an enabled instance of one.
+          ...this.projectInstancePackages.keys(),
         ]),
       // The instance's most recent load/activation failure, so a row that
       // loaded but could not run says so instead of reading as clean (#12232).
@@ -8068,7 +8074,7 @@ export class PluginService {
       .filter((id) => this.projectInstancePackages.has(id) && !disabled.has(id));
     if (wanted.length === 0) return;
     const requested = wanted.map((id) => {
-      const key = makeProjectPluginInstanceKey(projectId, id);
+      const key = makeInstalledProjectInstanceKey(projectId, id);
       return { id, key, epoch: this.installedInstanceEpoch(projectId, key) };
     });
     await this.serializeInstalledInstances(projectId, async () => {
@@ -8100,14 +8106,8 @@ export class PluginService {
   ): Promise<boolean> {
     const pkg = this.projectInstancePackages.get(manifestId);
     if (!pkg) return false;
-    const key = makeProjectPluginInstanceKey(projectId, manifestId);
-    if (this.plugins.has(key)) {
-      if (this.installedInstanceKeys.has(key)) return true;
-      console.error(
-        `[PluginService] "${manifestId}" is enabled in project ${projectId} but a repository-local plugin already holds that identity — not loading the installed package`
-      );
-      return false;
-    }
+    const key = makeInstalledProjectInstanceKey(projectId, manifestId);
+    if (this.plugins.has(key)) return this.installedInstanceKeys.has(key);
     const isCurrent = (): boolean =>
       !this.disposed &&
       this.installedInstanceEpoch(projectId, key) === epoch &&
@@ -8183,7 +8183,7 @@ export class PluginService {
     if (opts.purge) {
       for (const projectId of this.projectInstanceStore.listForPackage(manifestId)) {
         getPluginCapabilityConsentService().revokeAllForPlugin(
-          makeProjectPluginInstanceKey(projectId, manifestId)
+          makeInstalledProjectInstanceKey(projectId, manifestId)
         );
       }
     }
@@ -8229,13 +8229,53 @@ export class PluginService {
     if (enabled) {
       await this.reconcileInstalledInstances(projectId, projectRoot);
     } else {
-      const key = makeProjectPluginInstanceKey(projectId, manifestId);
+      const key = makeInstalledProjectInstanceKey(projectId, manifestId);
       this.installedInstanceEpochs.set(key, (this.installedInstanceEpochs.get(key) ?? 0) + 1);
       // Purged even when the project is closed and the instance is not loaded:
       // the approvals are the instance's, not the runtime's.
       this.dropInstalledInstance(key, true);
     }
     this.broadcaster.broadcastProvenanceChanged();
+  }
+
+  /**
+   * Delete every per-project instance's user-scope settings and secrets, local
+   * settings, account tokens and user-scope storage for one package. Found by
+   * filename rather than by the enablement list, which an uninstall has already
+   * cleared and which never held projects the package was enabled in before.
+   */
+  private async wipeInstalledInstanceData(manifestId: string): Promise<void> {
+    if (!SCOPED_PLUGIN_NAME_PATTERN.test(manifestId)) return;
+    const isInstanceFile = (name: string): boolean => {
+      if (!name.endsWith(".json")) return false;
+      const parsed = parseProjectPluginInstanceKey(name.slice(0, -".json".length));
+      return parsed?.installed === true && parsed.manifestId === manifestId;
+    };
+    const listDir = async (dir: string): Promise<string[]> => {
+      try {
+        return await fs.readdir(dir);
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code === "ENOENT") return [];
+        throw err;
+      }
+    };
+    const settingsRoot = this.settings.settingsRoot();
+    const dirs = [settingsRoot, path.join(settingsRoot, "accounts"), this.storage.storageRoot()];
+    const localRoot = path.join(settingsRoot, "local");
+    for (const projectId of await listDir(localRoot)) {
+      if (isProjectWorkspaceId(projectId)) dirs.push(path.join(localRoot, projectId));
+    }
+    for (const dir of dirs) {
+      for (const name of await listDir(dir)) {
+        if (isInstanceFile(name)) await wipeSettingsFile(path.join(dir, name));
+      }
+    }
+  }
+
+  /** Forget every enablement in a project that was removed from Daintree. */
+  forgetProjectInstances(projectId: string): void {
+    this.unloadInstalledInstancesOfProject(projectId);
+    this.projectInstanceStore.removeProject(projectId);
   }
 
   /** Project ids a package is enabled in. */
@@ -8264,7 +8304,23 @@ export class PluginService {
       await this.whenProtocolReady();
       if (this.disposed || args.isCurrent?.() === false) return false;
     }
-    const instanceKey = makeProjectPluginInstanceKey(args.projectId, args.manifest.name);
+    const instanceKey = args.installedInstance
+      ? makeInstalledProjectInstanceKey(args.projectId, args.manifest.name)
+      : makeProjectPluginInstanceKey(args.projectId, args.manifest.name);
+    // A repository plugin and an installed package's instance with the same
+    // manifest id are two identities with separate grants and data, but only one
+    // of them runs in a project: whichever landed first keeps it.
+    const siblingKey = args.installedInstance
+      ? makeProjectPluginInstanceKey(args.projectId, args.manifest.name)
+      : makeInstalledProjectInstanceKey(args.projectId, args.manifest.name);
+    if (this.plugins.has(siblingKey)) {
+      console.error(
+        args.installedInstance
+          ? `[PluginService] "${args.manifest.name}" is enabled in project ${args.projectId} but a repository-local plugin with that id is already running there — not loading the installed package`
+          : `[PluginService] Project ${args.projectId} ships "${args.manifest.name}" but the installed package with that id is already running there — not loading the repository copy`
+      );
+      return false;
+    }
     // Re-derive the parent from the realpath-resolved directory discovery
     // returned, so the load reads through the same resolved path the symlink
     // containment check passed on.
@@ -8299,6 +8355,20 @@ export class PluginService {
     if (args.installedInstance && args.isCurrent?.() === false) {
       this.unloadPlugin(instanceKey);
       return false;
+    }
+    // Both loads passed the check above while the other was still in flight.
+    // The repository copy keeps the project; the installed instance stands down.
+    if (this.plugins.has(siblingKey)) {
+      const installedKey = args.installedInstance ? instanceKey : siblingKey;
+      console.error(
+        `[PluginService] "${args.manifest.name}" loaded from the repository and the installed package at once in project ${args.projectId} — keeping the repository copy`
+      );
+      if (args.installedInstance) {
+        this.unloadPlugin(installedKey);
+        return false;
+      }
+      this.installedInstanceKeys.delete(installedKey);
+      this.unloadPlugin(installedKey);
     }
 
     const activatesOnStartup = this.shouldActivateOnStartup(loaded.manifest);

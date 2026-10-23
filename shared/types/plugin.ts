@@ -8897,9 +8897,36 @@ export const PROJECT_PLUGIN_INSTANCE_PREFIX = "project__";
 
 const PROJECT_PLUGIN_INSTANCE_SEPARATOR = "__";
 
+/**
+ * Marks the manifest half of an installed `instanceMode: "project"` package's
+ * per-project instance: `project__{projectId}__installed__{manifestId}`.
+ *
+ * The instance is project-bound like a repository plugin, so it keeps the
+ * `project__` prefix and every project-ownership check reads it the same way.
+ * It must never share a key with a repository plugin of the same manifest id in
+ * the same project, though: the two have different trust principals, and grants,
+ * user-scope settings, secrets, storage and revocation are all keyed by the
+ * instance key. A manifest id is `[a-z0-9-]` around a dot, so no repository
+ * plugin's key can ever contain this marker.
+ */
+const INSTALLED_PROJECT_INSTANCE_MARKER = `installed${PROJECT_PLUGIN_INSTANCE_SEPARATOR}`;
+
 /** Build the instance key a project-owned plugin loads under. */
 export function makeProjectPluginInstanceKey(projectId: string, manifestId: string): string {
   return `${PROJECT_PLUGIN_INSTANCE_PREFIX}${projectId}${PROJECT_PLUGIN_INSTANCE_SEPARATOR}${manifestId}`;
+}
+
+/** Build the instance key an installed package loads under in one project. */
+export function makeInstalledProjectInstanceKey(projectId: string, manifestId: string): string {
+  return makeProjectPluginInstanceKey(
+    projectId,
+    `${INSTALLED_PROJECT_INSTANCE_MARKER}${manifestId}`
+  );
+}
+
+/** Whether a key names an installed package's per-project instance. */
+export function isInstalledProjectInstanceKey(instanceKey: string): boolean {
+  return parseProjectPluginInstanceKey(instanceKey)?.installed === true;
 }
 
 /**
@@ -8909,15 +8936,17 @@ export function makeProjectPluginInstanceKey(projectId: string, manifestId: stri
  */
 export function parseProjectPluginInstanceKey(
   instanceKey: string
-): { projectId: string; manifestId: string } | null {
+): { projectId: string; manifestId: string; installed: boolean } | null {
   if (!instanceKey.startsWith(PROJECT_PLUGIN_INSTANCE_PREFIX)) return null;
   const rest = instanceKey.slice(PROJECT_PLUGIN_INSTANCE_PREFIX.length);
   const cut = rest.indexOf(PROJECT_PLUGIN_INSTANCE_SEPARATOR);
   if (cut <= 0) return null;
   const projectId = rest.slice(0, cut);
-  const manifestId = rest.slice(cut + PROJECT_PLUGIN_INSTANCE_SEPARATOR.length);
+  let manifestId = rest.slice(cut + PROJECT_PLUGIN_INSTANCE_SEPARATOR.length);
+  const installed = manifestId.startsWith(INSTALLED_PROJECT_INSTANCE_MARKER);
+  if (installed) manifestId = manifestId.slice(INSTALLED_PROJECT_INSTANCE_MARKER.length);
   if (projectId.length === 0 || manifestId.length === 0) return null;
-  return { projectId, manifestId };
+  return { projectId, manifestId, installed };
 }
 
 /**
