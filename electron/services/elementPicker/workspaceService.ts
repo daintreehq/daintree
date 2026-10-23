@@ -305,7 +305,7 @@ export class ElementPickerWorkspaceService {
     request: { workspaceId: string }
   ): Promise<ResolveResponse> {
     const lease = this.require(owner, request.workspaceId);
-    return this.withHost(lease, (host) => host.resolve(request));
+    return this.withHost(lease, (host) => host.resolve(request, { projectId: owner.projectId }));
   }
 
   async describeProject(

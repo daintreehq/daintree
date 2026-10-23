@@ -1,6 +1,6 @@
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import type { SitePreviewDetachReason } from "@shared/types/ipc/sitePreview";
-import type { ElementPickerFramework } from "@shared/elementPicker";
+import type { ElementPickerProviderId } from "@shared/elementPicker";
 import type { StaleReason } from "./inspectorController.js";
 
 /**
@@ -109,7 +109,7 @@ export function mismatchMessage(reported: { tagName: string; file: string; line:
   );
 }
 
-const FRAMEWORK_NAMES: Record<ElementPickerFramework, string> = {
+const FRAMEWORK_NAMES: Readonly<Record<string, string>> = {
   svelte: "Svelte",
   react: "React",
   vue: "Vue",
@@ -122,7 +122,7 @@ const FRAMEWORK_NAMES: Record<ElementPickerFramework, string> = {
 /** The page's own verdict on itself, as the drawer says it; the detail goes under it. */
 export function runtimeIssueMessage(
   code: string,
-  framework: ElementPickerFramework | undefined
+  framework: ElementPickerProviderId | undefined
 ): string | null {
   const name = framework ? FRAMEWORK_NAMES[framework] : null;
   switch (code) {

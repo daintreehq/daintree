@@ -1,8 +1,13 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("electron", () => ({ app: { getAppPath: () => "/app", isPackaged: false } }));
 
+import { ELEMENT_PICKER_PROTOCOL_VERSION } from "../../../../shared/elementPicker/protocol.js";
 import type { FrameworkDetection } from "../../../../shared/elementPicker/observation.js";
+import {
+  registerElementPickerProviders,
+  unregisterElementPickerProviders,
+} from "../../elementPickerProviderRegistry.js";
 import { CoreGuest, type CoreGuestDeps } from "../coreGuest.js";
 import type { CoreGuestAssetId } from "../guestAssets.js";
 import { EXTRACTOR_INSTALL_STATUS } from "../guestChannel.js";
@@ -150,6 +155,62 @@ function harness(
     availabilities,
   };
 }
+
+describe("CoreGuest provider admission", () => {
+  afterEach(() => unregisterElementPickerProviders("acme.qwik"));
+
+  const admission = { sessionId: "s1", documentEpoch: 0, lastSequence: -1 };
+  const runtimeIssue = (framework: string) =>
+    JSON.stringify({
+      protocolVersion: ELEMENT_PICKER_PROTOCOL_VERSION,
+      sessionId: "s1",
+      documentEpoch: 0,
+      sequence: 0,
+      event: {
+        type: "runtimeIssue",
+        code: "extractor-failed",
+        framework,
+        detail: "x",
+      },
+    });
+
+  it("admits a core framework and refuses an unregistered provider id", () => {
+    const { guest } = harness();
+    expect(guest.admit(runtimeIssue("react"), admission).ok).toBe(true);
+    expect(guest.admit(runtimeIssue("acme.qwik.qwik"), admission).ok).toBe(false);
+  });
+
+  it("admits a registered provider, and refuses it again once its plugin unloads", () => {
+    const { guest } = harness();
+    registerElementPickerProviders("acme.qwik", "acme.qwik", [
+      {
+        id: "qwik",
+        name: "Qwik",
+        detection: [{ kind: "global", name: "qwikevents", match: "exact" }],
+        guestEntry: "guest/qwik.js",
+      },
+    ]);
+    expect(guest.admit(runtimeIssue("acme.qwik.qwik"), admission).ok).toBe(true);
+    unregisterElementPickerProviders("acme.qwik");
+    expect(guest.admit(runtimeIssue("acme.qwik.qwik"), admission).ok).toBe(false);
+  });
+
+  it("drops a probed detection naming an unregistered provider but keeps the rest", async () => {
+    const { guest, emitted, install, settle } = harness({
+      probeResult: [
+        { framework: "acme.qwik.qwik", signals: [{ via: "global", name: "qwikevents" }] },
+        ...REACT,
+      ],
+    });
+    await install();
+    guest.onGuestEvent(0, READY);
+    await settle();
+    const probed = emitted.find((payload) => payload.kind === "frameworks-probed");
+    expect(
+      probed?.kind === "frameworks-probed" && probed.detections.map((d) => d.framework)
+    ).toEqual(["react"]);
+  });
+});
 
 describe("CoreGuest", () => {
   it("installs the bootstrap into its own world, with the binding scoped to that world", async () => {

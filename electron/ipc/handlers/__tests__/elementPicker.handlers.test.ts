@@ -270,7 +270,8 @@ describe("elementPicker handlers", () => {
     await expect(all.resolve.handler(opener, request)).resolves.toMatchObject({
       requestId: "r1",
     });
-    expect(host.resolve).toHaveBeenCalledWith(request);
+    // The opener's project rides along so provider ids are checked against what it can see.
+    expect(host.resolve).toHaveBeenCalledWith(request, { projectId: "project-a" });
   });
 
   it("refuses a worktree of another project", async () => {

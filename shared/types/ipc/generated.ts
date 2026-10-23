@@ -690,7 +690,7 @@ export interface GeneratedIpcInvokeMap {
           label: string;
           bounds: { x: number; y: number; width: number; height: number }[];
           detections: {
-            framework: "svelte" | "react" | "vue" | "angular" | "astro" | "preact" | "solid";
+            framework: string;
             signals: {
               via: "global" | "expando" | "attribute" | "document-sample";
               name: string;
@@ -700,7 +700,7 @@ export interface GeneratedIpcInvokeMap {
             nearestId: string | null;
             components: {
               componentId: string;
-              framework: "svelte" | "react" | "vue" | "angular" | "astro" | "preact" | "solid";
+              framework: string;
               name: {
                 value: string;
                 extraction:
@@ -722,8 +722,7 @@ export interface GeneratedIpcInvokeMap {
                       end?: { line: number; column: number } | undefined;
                     };
                     candidateId: string;
-                    framework:
-                      "svelte" | "react" | "vue" | "angular" | "astro" | "preact" | "solid";
+                    framework: string;
                     extraction:
                       | { kind: "runtime-field"; field: string }
                       | { kind: "generated-stack-frame"; field: string; frameIndex: number }
@@ -741,8 +740,7 @@ export interface GeneratedIpcInvokeMap {
                       end?: { line: number; column: number } | undefined;
                     };
                     candidateId: string;
-                    framework:
-                      "svelte" | "react" | "vue" | "angular" | "astro" | "preact" | "solid";
+                    framework: string;
                     extraction:
                       | { kind: "runtime-field"; field: string }
                       | { kind: "generated-stack-frame"; field: string; frameIndex: number }
@@ -760,8 +758,7 @@ export interface GeneratedIpcInvokeMap {
                       end?: { line: number; column: number } | undefined;
                     };
                     candidateId: string;
-                    framework:
-                      "svelte" | "react" | "vue" | "angular" | "astro" | "preact" | "solid";
+                    framework: string;
                     extraction:
                       | { kind: "runtime-field"; field: string }
                       | { kind: "generated-stack-frame"; field: string; frameIndex: number }
@@ -779,8 +776,7 @@ export interface GeneratedIpcInvokeMap {
                       end?: { line: number; column: number } | undefined;
                     } | null;
                     candidateId: string;
-                    framework:
-                      "svelte" | "react" | "vue" | "angular" | "astro" | "preact" | "solid";
+                    framework: string;
                     extraction:
                       | { kind: "runtime-field"; field: string }
                       | { kind: "generated-stack-frame"; field: string; frameIndex: number }
@@ -790,8 +786,7 @@ export interface GeneratedIpcInvokeMap {
                   }
                 | {
                     candidateId: string;
-                    framework:
-                      "svelte" | "react" | "vue" | "angular" | "astro" | "preact" | "solid";
+                    framework: string;
                     extraction:
                       | { kind: "runtime-field"; field: string }
                       | { kind: "generated-stack-frame"; field: string; frameIndex: number }
@@ -816,7 +811,7 @@ export interface GeneratedIpcInvokeMap {
                   end?: { line: number; column: number } | undefined;
                 };
                 candidateId: string;
-                framework: "svelte" | "react" | "vue" | "angular" | "astro" | "preact" | "solid";
+                framework: string;
                 extraction:
                   | { kind: "runtime-field"; field: string }
                   | { kind: "generated-stack-frame"; field: string; frameIndex: number }
@@ -834,7 +829,7 @@ export interface GeneratedIpcInvokeMap {
                   end?: { line: number; column: number } | undefined;
                 };
                 candidateId: string;
-                framework: "svelte" | "react" | "vue" | "angular" | "astro" | "preact" | "solid";
+                framework: string;
                 extraction:
                   | { kind: "runtime-field"; field: string }
                   | { kind: "generated-stack-frame"; field: string; frameIndex: number }
@@ -852,7 +847,7 @@ export interface GeneratedIpcInvokeMap {
                   end?: { line: number; column: number } | undefined;
                 };
                 candidateId: string;
-                framework: "svelte" | "react" | "vue" | "angular" | "astro" | "preact" | "solid";
+                framework: string;
                 extraction:
                   | { kind: "runtime-field"; field: string }
                   | { kind: "generated-stack-frame"; field: string; frameIndex: number }
@@ -870,7 +865,7 @@ export interface GeneratedIpcInvokeMap {
                   end?: { line: number; column: number } | undefined;
                 } | null;
                 candidateId: string;
-                framework: "svelte" | "react" | "vue" | "angular" | "astro" | "preact" | "solid";
+                framework: string;
                 extraction:
                   | { kind: "runtime-field"; field: string }
                   | { kind: "generated-stack-frame"; field: string; frameIndex: number }
@@ -880,7 +875,7 @@ export interface GeneratedIpcInvokeMap {
               }
             | {
                 candidateId: string;
-                framework: "svelte" | "react" | "vue" | "angular" | "astro" | "preact" | "solid";
+                framework: string;
                 extraction:
                   | { kind: "runtime-field"; field: string }
                   | { kind: "generated-stack-frame"; field: string; frameIndex: number }
@@ -951,7 +946,7 @@ export interface GeneratedIpcInvokeMap {
               }
             | {
                 kind: "generic";
-                framework: "svelte" | "react" | "vue" | "angular" | "astro" | "preact" | "solid";
+                framework: string;
                 fields: { name: string; value: string | number | boolean | null }[];
               }
           )[];

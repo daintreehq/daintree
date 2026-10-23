@@ -18,6 +18,28 @@ export const ElementPickerFrameworkSchema = z.enum([
 ]);
 export type ElementPickerFramework = z.infer<typeof ElementPickerFrameworkSchema>;
 
+/**
+ * A plugin-contributed provider id: `{publisher}.{plugin}.{provider}`, the
+ * owning plugin's manifest name followed by the local id the manifest declares.
+ * Shape only. Being well formed grants nothing: main must still find the id in
+ * the provider registry, enabled and visible to the project, before acting on
+ * it. A core name never matches, so the two namespaces cannot collide.
+ */
+export const PLUGIN_PROVIDER_ID_PATTERN =
+  /^[a-z0-9]+(?:-[a-z0-9]+)*\.[a-z0-9]+(?:-[a-z0-9]+)*\.[a-z0-9]+(?:-[a-z0-9]+)*$/;
+export const PluginProviderIdSchema = z.string().max(160).regex(PLUGIN_PROVIDER_ID_PATTERN);
+
+/** What a `framework` field on the wire may carry: a core framework or a plugin provider id. */
+export const ElementPickerProviderIdSchema = z.union([
+  ElementPickerFrameworkSchema,
+  PluginProviderIdSchema,
+]);
+export type ElementPickerProviderId = z.infer<typeof ElementPickerProviderIdSchema>;
+
+export function isCoreFramework(id: string): id is ElementPickerFramework {
+  return ElementPickerFrameworkSchema.safeParse(id).success;
+}
+
 /** Document-local and opaque. Minted by the guest; meaningless outside its session and epoch. */
 export const PickerIdSchema = z.string().min(1).max(128);
 
@@ -71,7 +93,7 @@ export type SourceClaimKind = z.infer<typeof SourceClaimKindSchema>;
 
 const candidateFields = {
   candidateId: PickerIdSchema,
-  framework: ElementPickerFrameworkSchema,
+  framework: ElementPickerProviderIdSchema,
   extraction: ExtractionSchema,
   file: ReportedFileSchema,
 };

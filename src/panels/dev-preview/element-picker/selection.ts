@@ -1,6 +1,6 @@
 import type {
   ComponentRecord,
-  ElementPickerFramework,
+  ElementPickerProviderId,
   FileRevision,
   ProjectContextOutcome,
   ResolutionResult,
@@ -191,7 +191,7 @@ export function chainOf(
 /** One component on the chain, as the trail and the request scopes show it. */
 export interface ComponentView {
   componentId: string;
-  framework: ElementPickerFramework;
+  framework: ElementPickerProviderId;
   /** The name the page gave it; null for one it didn't name. */
   name: string | null;
   /**

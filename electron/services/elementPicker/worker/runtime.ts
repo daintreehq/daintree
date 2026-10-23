@@ -11,9 +11,10 @@ import type {
   ResolutionResult,
   SourceFileRef,
 } from "../../../../shared/elementPicker/resolution.js";
-import type {
-  ElementPickerFramework,
-  SourceCandidate,
+import {
+  isCoreFramework,
+  type ElementPickerFramework,
+  type SourceCandidate,
 } from "../../../../shared/elementPicker/source.js";
 import type { SelectionObservation } from "../../../../shared/elementPicker/observation.js";
 import { formatErrorMessage } from "../../../../shared/utils/errorMessage.js";
@@ -68,7 +69,7 @@ function errorMessage(error: unknown): string {
  * earlier request or document would otherwise pass as this one's.
  */
 function checkAnswer(
-  framework: ElementPickerFramework,
+  framework: string,
   request: ResolveRequest,
   answer: ResolveResponse
 ): ResolveResponse {
@@ -101,7 +102,7 @@ function checkAnswer(
 }
 
 /** The request as one framework's resolver sees it: only the candidates it owns. */
-function requestFor(request: ResolveRequest, framework: ElementPickerFramework): ResolveRequest {
+function requestFor(request: ResolveRequest, framework: string): ResolveRequest {
   const owns = (candidate: SourceCandidate) => candidate.framework === framework;
   const observations: SelectionObservation[] = [];
   for (const observation of request.observations) {
@@ -129,7 +130,9 @@ export function createHostRuntime(
   const loaded = new Map<ElementPickerFramework, Promise<HostSourceResolver>>();
   let nextAccessId = 1;
 
-  function load(framework: ElementPickerFramework): Promise<HostSourceResolver> | null {
+  function load(framework: string): Promise<HostSourceResolver> | null {
+    // A plugin provider has no resolver worker yet: its candidates answer `unsupported`.
+    if (!isCoreFramework(framework)) return null;
     const loader = loaders[framework];
     if (!loader) return null;
     let resolver = loaded.get(framework);
@@ -215,7 +218,7 @@ export function createHostRuntime(
       ),
     ];
     const sourceAccess = access(jobId, job);
-    const answers = new Map<ElementPickerFramework, ResolveResponse | "cancelled" | null>();
+    const answers = new Map<string, ResolveResponse | "cancelled" | null>();
     await Promise.all(
       frameworks.map(async (framework) => {
         const resolver = load(framework);

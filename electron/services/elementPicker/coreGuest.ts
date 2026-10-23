@@ -31,7 +31,11 @@ import {
   OBSERVATION_LIMITS,
   type FrameworkDetection,
 } from "../../../shared/elementPicker/observation.js";
-import type { ElementPickerFramework } from "../../../shared/elementPicker/source.js";
+import { isElementPickerProviderAuthorized } from "../elementPickerProviderRegistry.js";
+import {
+  isCoreFramework,
+  type ElementPickerFramework,
+} from "../../../shared/elementPicker/source.js";
 import type { SitePreviewMode } from "../../../shared/types/ipc/sitePreview.js";
 import type { ElementPickerReselectRequest } from "../../../shared/types/ipc/elementPicker.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
@@ -62,6 +66,24 @@ import type { ElementPickerPushPayload } from "./types.js";
 export const LATE_PROBE_DELAY_MS = 2_500;
 
 const ProbeResultSchema = z.array(FrameworkDetectionSchema).max(OBSERVATION_LIMITS.detections);
+
+/**
+ * Every `framework` value in an event, at any depth. Provider ids appear only
+ * under that key (candidates, components, detections, issues, generic
+ * evidence), and the walk is bounded by the message size admission already
+ * enforced.
+ */
+function providerIdsIn(value: unknown, found: string[] = []): string[] {
+  if (Array.isArray(value)) {
+    for (const item of value) providerIdsIn(item, found);
+  } else if (value !== null && typeof value === "object") {
+    for (const [key, child] of Object.entries(value)) {
+      if (key === "framework" && typeof child === "string") found.push(child);
+      else providerIdsIn(child, found);
+    }
+  }
+  return found;
+}
 
 export interface CoreGuestDeps {
   sessionId: string;
@@ -137,7 +159,16 @@ export class CoreGuest {
   }
 
   admit(payload: unknown, admission: ElementPickerAdmission): ElementPickerVerdict {
-    return admitElementPickerMessage(payload, admission);
+    const verdict = admitElementPickerMessage(payload, admission);
+    if (!verdict.ok) return verdict;
+    // Well formed is not registered: a provider id anywhere in the event must
+    // name a core framework or a provider visible to this project.
+    for (const id of providerIdsIn(verdict.envelope.event)) {
+      if (!isElementPickerProviderAuthorized(id, this.deps.projectId)) {
+        return { ok: false, reason: "malformed" };
+      }
+    }
+    return verdict;
   }
 
   /**
@@ -324,8 +355,13 @@ export class CoreGuest {
     if (!this.isCurrent(epoch) || evaluated?.exceptionDetails) return;
     // Ran in the page's world: the page could have shaped any of it. A result
     // that fails the schema is no evidence the page has no framework either.
-    const parsed = ProbeResultSchema.safeParse(evaluated?.result?.value);
-    if (!parsed.success) return;
+    const probed = ProbeResultSchema.safeParse(evaluated?.result?.value);
+    if (!probed.success) return;
+    const parsed = {
+      data: probed.data.filter((detection) =>
+        isElementPickerProviderAuthorized(detection.framework, this.deps.projectId)
+      ),
+    };
     // Settled by the last look, not the first: an app that mounts after the
     // document reported ready would otherwise read as having no framework
     // until it did. Settled even when empty: a bounded look that found no
@@ -368,6 +404,9 @@ export class CoreGuest {
   private requestExtractors(epoch: number, detections: readonly FrameworkDetection[]): boolean {
     let added = false;
     for (const { framework } of detections) {
+      // Only core frameworks have a bundled extractor; an installed plugin's
+      // provider is declared but not executed yet.
+      if (!isCoreFramework(framework)) continue;
       if (!this.isCurrent(epoch) || this.extractors.has(framework)) continue;
       this.extractors.set(framework, "pending");
       added = true;

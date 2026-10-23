@@ -6,6 +6,10 @@ export {
 } from "./coordinates.js";
 export {
   ElementPickerFrameworkSchema,
+  ElementPickerProviderIdSchema,
+  PLUGIN_PROVIDER_ID_PATTERN,
+  PluginProviderIdSchema,
+  isCoreFramework,
   ExtractionSchema,
   ObservedNameSchema,
   PickerIdSchema,
@@ -13,6 +17,7 @@ export {
   SourceCandidateSchema,
   SourceClaimKindSchema,
   type ElementPickerFramework,
+  type ElementPickerProviderId,
   type Extraction,
   type ObservedName,
   type SourceCandidate,
@@ -136,3 +141,12 @@ export {
   type ProjectRoute,
   type RouteFile,
 } from "./projectContext.js";
+export {
+  ELEMENT_PICKER_DETECTION_KINDS,
+  ELEMENT_PICKER_PROVIDER_LIMITS,
+  makeElementPickerProviderId,
+  type ElementPickerDetectionKind,
+  type ElementPickerDetectionRule,
+  type ElementPickerProviderContribution,
+  type RegisteredElementPickerProvider,
+} from "./providers.js";

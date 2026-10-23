@@ -21,6 +21,7 @@ import { watchShared } from "../FileObservationService.js";
 import { noteTerminationIntent } from "../processTerminationIntent.js";
 import { AdmissionGate } from "./admissionGate.js";
 import { checkResolveResponse, relabelCancelled } from "./checkResponse.js";
+import { isElementPickerProviderAuthorized } from "../elementPickerProviderRegistry.js";
 import { ElementPickerHostError, type ElementPickerHostErrorCode } from "./errors.js";
 import { HostOutboundSchema, type HostInbound } from "./hostProtocol.js";
 import { observationCandidates, unavailableResponse } from "./outcomes.js";
@@ -210,6 +211,20 @@ function hostError(code: ElementPickerHostErrorCode, message: string): ElementPi
  * are, what a job may read and how much, and when it has run out of time. The
  * process is sent bytes, never a path.
  */
+/** Every framework or provider id a request's observations name, wherever the page put one. */
+function requestedProviderIds(request: ResolveRequest): Set<string> {
+  const ids = new Set<string>();
+  for (const observation of request.observations) {
+    for (const candidate of observationCandidates(observation)) ids.add(candidate.framework);
+    for (const record of observation.componentChain.components) ids.add(record.framework);
+    for (const detection of observation.detections) ids.add(detection.framework);
+    for (const evidence of observation.frameworkEvidence) {
+      if (evidence.kind === "generic") ids.add(evidence.framework);
+    }
+  }
+  return ids;
+}
+
 export class ElementPickerHost {
   private readonly workspaces = new WorkspaceRegistry();
   private readonly gate = new AdmissionGate();
@@ -309,11 +324,21 @@ export class ElementPickerHost {
    * `budget-exhausted`. Rejects with {@link ElementPickerHostError} when there
    * is no response to give.
    */
-  async resolve(input: unknown, options: { signal?: AbortSignal } = {}): Promise<ResolveResponse> {
+  async resolve(
+    input: unknown,
+    options: { signal?: AbortSignal; projectId?: string | null } = {}
+  ): Promise<ResolveResponse> {
     if (this.disposed) throw hostError("HOST_DISPOSED", "the source host is shutting down");
     const parsed = ResolveRequestSchema.safeParse(input);
     if (!parsed.success) throw hostError("INVALID_REQUEST", "the request is malformed");
     const request = parsed.data;
+    // Well formed is not registered: the page may name only a core framework or
+    // a provider an enabled plugin declared for this project.
+    for (const id of requestedProviderIds(request)) {
+      if (!isElementPickerProviderAuthorized(id, options.projectId ?? null)) {
+        throw hostError("INVALID_REQUEST", "the request names a provider that isn't registered");
+      }
+    }
     // Results are matched to observations by element id, so one id must name one observation.
     const elementIds = new Set(request.observations.map((observation) => observation.elementId));
     if (elementIds.size !== request.observations.length) {

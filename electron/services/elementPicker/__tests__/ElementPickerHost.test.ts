@@ -12,6 +12,10 @@ vi.mock("../../../utils/logger.js", () => ({
 }));
 
 import {
+  registerElementPickerProviders,
+  unregisterElementPickerProviders,
+} from "../../elementPickerProviderRegistry.js";
+import {
   ElementPickerHost,
   MAX_SOURCE_REVISION_PATHS,
   type ElementPickerHostOptions,
@@ -511,6 +515,57 @@ describe("ElementPickerHost", () => {
       { state: "unavailable", candidateId: "c-2", claim: "file-hint", reason: "unsupported" },
     ]);
     expect(react).not.toHaveBeenCalled();
+  });
+
+  describe("plugin providers", () => {
+    afterEach(() => unregisterElementPickerProviders("acme.qwik"));
+
+    const qwikRequest = (id: string) =>
+      request(id, [
+        observation("el-1", [candidate("c-1", "app/src/App.svelte", "acme.qwik.qwik")]),
+      ]);
+
+    it("refuses a request naming a provider no enabled plugin registered", async () => {
+      const { host } = harness();
+      const id = await workspace(host);
+      expect(await failure(host.resolve(qwikRequest(id), { projectId: "p1" }))).toMatchObject({
+        code: "INVALID_REQUEST",
+      });
+    });
+
+    it("answers a registered provider's candidates as unsupported until a resolver exists", async () => {
+      registerElementPickerProviders("acme.qwik", "acme.qwik", [
+        {
+          id: "qwik",
+          name: "Qwik",
+          detection: [{ kind: "global", name: "qwikevents", match: "exact" }],
+          guestEntry: "guest/qwik.js",
+        },
+      ]);
+      const { host } = harness();
+      const id = await workspace(host);
+      const response = await host.resolve(qwikRequest(id), { projectId: "p1" });
+      expect(results(response)).toEqual([
+        { state: "unavailable", candidateId: "c-1", claim: "file-hint", reason: "unsupported" },
+      ]);
+    });
+
+    it("refuses the provider again once its plugin is unloaded", async () => {
+      registerElementPickerProviders("acme.qwik", "acme.qwik", [
+        {
+          id: "qwik",
+          name: "Qwik",
+          detection: [{ kind: "global", name: "q", match: "exact" }],
+          guestEntry: "g.js",
+        },
+      ]);
+      unregisterElementPickerProviders("acme.qwik");
+      const { host } = harness();
+      const id = await workspace(host);
+      expect(await failure(host.resolve(qwikRequest(id)))).toMatchObject({
+        code: "INVALID_REQUEST",
+      });
+    });
   });
 
   it("retires an idle host and forks a fresh one for the next resolve", async () => {

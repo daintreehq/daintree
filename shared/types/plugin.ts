@@ -41,6 +41,7 @@ import type {
   ContextProviderDescriptor,
   ContextProviderImpl,
 } from "./pluginContextProvider.js";
+import type { ElementPickerProviderContribution } from "../elementPicker/providers.js";
 import type { z } from "zod";
 
 /** Default byte ceiling when a `contributes.fileEditors` entry omits `maxBytes`. */
@@ -1069,6 +1070,11 @@ export const BUILT_IN_PLUGIN_CAPABILITIES = [
   // what reaches the cache is already gated by the fs read capabilities, the
   // person's own selection, or `network:fetch` with a declared URL scope.
   "artifact:store",
+  // Read the DOM and runtime of a previewed page on behalf of a contributed
+  // element picker provider (`contributes.elementPickerProviders`, #14073).
+  // Disclosure-only like `panel:focus-read`: nothing runs until installed guest
+  // execution lands, and the install-time list is where the user is told.
+  "preview:inspect",
 ] as const;
 
 export type BuiltInPluginCapability = (typeof BUILT_IN_PLUGIN_CAPABILITIES)[number];
@@ -3334,6 +3340,11 @@ export interface PluginManifest {
      */
     contextProviders?: ContextProviderContribution[];
     forgeProviders: ForgeProviderContribution[];
+    /**
+     * Element Picker framework providers (#14073). Optional in the type but
+     * always materialized by the manifest schema's `.default([])`.
+     */
+    elementPickerProviders?: ElementPickerProviderContribution[];
     fileDecorationProviders: FileDecorationContribution[];
     /**
      * The plugin's check for worktree delete confirmations (#13805), at most

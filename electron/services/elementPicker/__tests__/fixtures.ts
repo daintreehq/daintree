@@ -7,6 +7,7 @@ import type {
 import type { SelectionObservation } from "../../../../shared/elementPicker/observation.js";
 import type {
   ElementPickerFramework,
+  ElementPickerProviderId,
   SourceCandidate,
 } from "../../../../shared/elementPicker/source.js";
 import type { ResolutionResult } from "../../../../shared/elementPicker/resolution.js";
@@ -20,7 +21,7 @@ const unknown = { state: "unknown" } as const;
 export function candidate(
   candidateId: string,
   file: string,
-  framework: ElementPickerFramework = "svelte"
+  framework: ElementPickerProviderId = "svelte"
 ): SourceCandidate {
   return {
     kind: "file-hint",

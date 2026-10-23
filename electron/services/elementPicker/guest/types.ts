@@ -7,10 +7,7 @@ import type { ComponentChain } from "../../../../shared/elementPicker/component.
 import type { FrameworkEvidence } from "../../../../shared/elementPicker/evidence.js";
 import type { Capabilities } from "../../../../shared/elementPicker/observation.js";
 import type { ElementPickerEvent } from "../../../../shared/elementPicker/protocol.js";
-import type {
-  ElementPickerFramework,
-  SourceCandidate,
-} from "../../../../shared/elementPicker/source.js";
+import type { SourceCandidate } from "../../../../shared/elementPicker/source.js";
 
 export type PickerMode = "browse" | "select";
 
@@ -37,7 +34,7 @@ export type ExtractorAvailability = "pending" | "installed" | "unavailable" | "f
  */
 export interface PickerAvailability {
   detection: "pending" | "settled";
-  extractors: Partial<Record<ElementPickerFramework, ExtractorAvailability>>;
+  extractors: Partial<Record<string, ExtractorAvailability>>;
 }
 
 /**

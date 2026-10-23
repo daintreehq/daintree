@@ -1,6 +1,6 @@
 import { z } from "zod";
 import {
-  ElementPickerFrameworkSchema,
+  ElementPickerProviderIdSchema,
   ObservedNameSchema,
   PickerIdSchema,
   SourceCandidateSchema,
@@ -36,7 +36,7 @@ export type ComponentEnvironment = z.infer<typeof ComponentEnvironmentSchema>;
  */
 export const ComponentRecordSchema = z.strictObject({
   componentId: PickerIdSchema,
-  framework: ElementPickerFrameworkSchema,
+  framework: ElementPickerProviderIdSchema,
   /** Null for an anonymous component, not one whose name was not read. */
   name: ObservedNameSchema.nullable(),
   environment: ComponentEnvironmentSchema,

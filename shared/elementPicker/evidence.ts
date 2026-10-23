@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { MAX_SOURCE_COORDINATE } from "./coordinates.js";
-import { ElementPickerFrameworkSchema } from "./source.js";
+import { ElementPickerProviderIdSchema } from "./source.js";
 
 export const EVIDENCE_LIMITS = {
   /** Several frameworks can own parts of one element's context (an Astro island around a React tree). */
@@ -71,7 +71,7 @@ export type SvelteEvidence = z.infer<typeof SvelteEvidenceSchema>;
  */
 export const GenericEvidenceSchema = z.strictObject({
   kind: z.literal("generic"),
-  framework: ElementPickerFrameworkSchema,
+  framework: ElementPickerProviderIdSchema,
   fields: z
     .array(
       z.strictObject({
