@@ -47,6 +47,29 @@ vi.mock("@/utils/rendererSentry", () => ({
   getRendererSentryConsent: vi.fn(() => ({ level: "off", hasSeenPrompt: false })),
 }));
 
+const viewMock = vi.hoisted(() => {
+  const listeners = new Set<(observable: boolean) => void>();
+  return {
+    listeners,
+    isProjectViewObservable: vi.fn(() => true),
+    subscribeProjectViewObservability: vi.fn((listener: (observable: boolean) => void) => {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    }),
+  };
+});
+vi.mock("@/lib/viewCacheState", () => ({
+  isProjectViewObservable: viewMock.isProjectViewObservable,
+  subscribeProjectViewObservability: viewMock.subscribeProjectViewObservability,
+}));
+
+function setSeen(seen: boolean) {
+  viewMock.isProjectViewObservable.mockReturnValue(seen);
+  act(() => {
+    for (const listener of Array.from(viewMock.listeners)) listener(seen);
+  });
+}
+
 class SilentAudio {
   src: string;
   preload = "";
@@ -87,6 +110,8 @@ function renderDialog(overrides: Partial<TourDialogProps> = {}) {
 
 describe("TourDialog", () => {
   beforeEach(() => {
+    viewMock.isProjectViewObservable.mockReturnValue(true);
+    viewMock.listeners.clear();
     vi.stubGlobal("Audio", SilentAudio);
     vi.stubGlobal(
       "ResizeObserver",
@@ -252,6 +277,119 @@ describe("TourDialog", () => {
     });
   });
 
+  describe("while its project isn't presented", () => {
+    beforeEach(() => {
+      vi.useFakeTimers();
+    });
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    function renderTracked(overrides: Partial<TourDialogProps> = {}) {
+      let player: TourPlayer | null = null;
+      const view = renderDialog({ ...overrides, onPlayer: (p) => (player = p) });
+      return { ...view, player: () => player! };
+    }
+
+    it("stops narration and the timeline when hidden, and picks up where it was when seen", () => {
+      const pause = vi.spyOn(SilentAudio.prototype, "pause");
+      const { player } = renderTracked({ initialChapter: 1 });
+      act(() => {
+        vi.advanceTimersByTime(2500);
+      });
+      expect(player().getState().status).toBe("playing");
+      pause.mockClear();
+
+      setSeen(false);
+      expect(player().getState().status).toBe("paused");
+      expect(pause).toHaveBeenCalled();
+      const at = player().getTime();
+      act(() => {
+        vi.advanceTimersByTime(60_000);
+      });
+      expect(player().getTime()).toBe(at);
+      expect(player().getState().chapterIndex).toBe(1);
+
+      setSeen(true);
+      expect(player().getState().status).toBe("playing");
+      expect(player().getTime()).toBe(at);
+    });
+
+    it("cannot complete the tour unseen", () => {
+      const { player, props } = renderTracked({ initialChapter: TOUR_CHAPTERS.length - 1 });
+      setSeen(false);
+      act(() => {
+        vi.advanceTimersByTime(10 * 60_000);
+      });
+      expect(player().getState().status).toBe("paused");
+      expect(props.onCompleted).not.toHaveBeenCalled();
+    });
+
+    it("waits to be seen before playing a tour opened in the background", () => {
+      const play = vi.spyOn(SilentAudio.prototype, "play");
+      viewMock.isProjectViewObservable.mockReturnValue(false);
+      const { player } = renderTracked({ initialChapter: 1 });
+      act(() => {
+        vi.advanceTimersByTime(60_000);
+      });
+      expect(player().getState().status).toBe("idle");
+      expect(player().getTime()).toBe(0);
+      expect(play).not.toHaveBeenCalled();
+
+      setSeen(true);
+      expect(player().getState().status).toBe("playing");
+      expect(player().getState().chapterIndex).toBe(1);
+    });
+
+    it("doesn't revive a tour closed while it was held unseen", () => {
+      const play = vi.spyOn(SilentAudio.prototype, "play");
+      const { player, rerender, props } = renderTracked({ initialChapter: 1 });
+      setSeen(false);
+      act(() => {
+        rerender(<TourDialog {...props} isOpen={false} />);
+      });
+      play.mockClear();
+      setSeen(true);
+      expect(viewMock.listeners.size).toBe(0);
+      expect(player().getState().status).toBe("paused");
+      expect(play).not.toHaveBeenCalled();
+    });
+
+    it("leaves a tour the user paused paused when seen again", () => {
+      const { player } = renderTracked();
+      act(() => {
+        player().pause();
+      });
+      setSeen(false);
+      setSeen(true);
+      expect(player().getState().status).toBe("paused");
+    });
+
+    it("holds a finished chapter's countdown unseen, and counts down afresh when seen", () => {
+      const { player } = renderTracked({ initialChapter: 1 });
+      act(() => {
+        player().seek(player().timing.duration - 0.05);
+        vi.advanceTimersByTime(2000);
+      });
+      expect(player().getState().status).toBe("ended");
+
+      setSeen(false);
+      act(() => {
+        vi.advanceTimersByTime(60_000);
+      });
+      expect(player().getState().chapterIndex).toBe(1);
+      expect(player().getState().status).toBe("ended");
+
+      setSeen(true);
+      expect(screen.getByRole("status").textContent).toMatch(/starts in 1.5 seconds/);
+      act(() => {
+        vi.advanceTimersByTime(1600);
+      });
+      expect(player().getState().chapterIndex).toBe(2);
+      expect(player().getState().status).toBe("playing");
+    });
+  });
+
   it("starts another chapter from its beginning, wherever its segment is clicked", () => {
     let player: TourPlayer | null = null;
     renderDialog({ onPlayer: (p) => (player = p) });
@@ -371,6 +509,25 @@ describe("TourDialog", () => {
       expect(screen.getByTestId("plain-scene")).toBeTruthy();
       expect(screen.queryByText(/stopped working/)).toBeNull();
       expect(player!.getState().status).toBe("playing");
+    });
+
+    it("doesn't start narrating over a scene that failed while unseen", () => {
+      vi.spyOn(console, "error").mockImplementation(() => {});
+      viewMock.isProjectViewObservable.mockReturnValue(false);
+      let player: TourPlayer | null = null;
+      renderDialog({
+        tour: tourWith({
+          chapters: [
+            { id: "one", title: "First steps", scene: Broken },
+            { id: "two", title: "Next steps", scene: Plain },
+          ],
+        }),
+        onPlayer: (p) => (player = p),
+      });
+      expect(screen.getByText(/First steps stopped working/)).toBeTruthy();
+
+      setSeen(true);
+      expect(player!.getState().status).not.toBe("playing");
     });
   });
 });

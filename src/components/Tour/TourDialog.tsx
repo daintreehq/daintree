@@ -1,5 +1,6 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
 import { AppDialog } from "@/components/ui/AppDialog";
+import { isProjectViewObservable, subscribeProjectViewObservability } from "@/lib/viewCacheState";
 import { TourControls } from "./TourControls";
 import { TourPlayer, type TourAudio } from "@daintreehq/tour";
 import type { TourDefinition } from "./tourDefinition";
@@ -57,10 +58,13 @@ function TourBody({
   onChapterReached,
   onCompleted,
   onMutedChange,
+  onSceneError,
 }: Omit<TourDialogProps, "isOpen" | "initialChapter" | "initialMuted" | "onPlayer" | "keyboard"> & {
   player: TourPlayer;
+  onSceneError: () => void;
 }) {
   const state = useTourPlayerState(player);
+  const seen = useSyncExternalStore(subscribeProjectViewObservability, isProjectViewObservable);
   // Holding stops a finished chapter's countdown; any new chapter or replay starts fresh.
   const [heldAt, setHeldAt] = useState<number | null>(null);
   const bodyRef = useRef<HTMLDivElement>(null);
@@ -169,14 +173,14 @@ function TourBody({
             chapterId={chapter.id}
             chapterTitle={chapter.title}
             Scene={chapter.scene}
-            // A broken scene has nothing to narrate over; the controls stay to move on.
-            onSceneError={() => player.pause()}
+            onSceneError={onSceneError}
             endCard={
               state.status === "ended"
                 ? {
                     nextTitle: chapters[state.chapterIndex + 1]?.title ?? null,
                     nextNumber: isLast ? null : state.chapterIndex + 2,
-                    held,
+                    // Unseen, the countdown stops too; it starts afresh once seen.
+                    held: held || !seen,
                     onHold: () => setHeldAt(state.chapterIndex),
                     onNext: advance,
                     onReplay: () => player.play(),
@@ -234,6 +238,9 @@ export function TourDialog({
   keyboard = currentTourKeyboard(),
 }: TourDialogProps) {
   const [player, setPlayer] = useState<TourPlayer | null>(null);
+  // Set only when the project's view stopped the tour (or kept it from starting),
+  // so being seen again resumes that and never undoes the user's own pause.
+  const resumeWhenSeenRef = useRef(false);
   // The player is built once per opening from these; afterwards chapter and
   // mute are the player's own state, so later prop changes must not rebuild it.
   const openingRef = useRef({ initialChapter, initialMuted, onPlayer });
@@ -246,10 +253,28 @@ export function TourDialog({
     const opening = openingRef.current;
     const next = createBrowserPlayer(tour, opening.initialMuted, keyboard);
     const chapter = Math.min(Math.max(0, opening.initialChapter), tour.chapters.length - 1);
-    next.goTo(chapter, { autoplay: true });
+    // A tour that finishes loading after its project went out of view waits there.
+    const seen = isProjectViewObservable();
+    resumeWhenSeenRef.current = !seen;
+    next.goTo(chapter, { autoplay: seen });
+    // Narration and the timeline only run while someone can see this project.
+    // Cached views keep their React tree alive, so nothing else stops them.
+    const unsubscribe = subscribeProjectViewObservability((observable) => {
+      if (!observable) {
+        if (next.getState().status !== "playing") return;
+        resumeWhenSeenRef.current = true;
+        next.pause();
+        return;
+      }
+      if (!resumeWhenSeenRef.current) return;
+      resumeWhenSeenRef.current = false;
+      next.play();
+    });
     opening.onPlayer?.(next);
     setPlayer(next);
     return () => {
+      unsubscribe();
+      resumeWhenSeenRef.current = false;
       next.dispose();
       setPlayer(null);
     };
@@ -275,6 +300,12 @@ export function TourDialog({
                 onChapterReached={onChapterReached}
                 onCompleted={onCompleted}
                 onMutedChange={onMutedChange}
+                onSceneError={() => {
+                  // A broken scene has nothing to narrate over, now or once seen
+                  // again; the controls stay to move on.
+                  resumeWhenSeenRef.current = false;
+                  player.pause();
+                }}
               />
             </TourShortcutsContext.Provider>
           </TourPlayerContext.Provider>
