@@ -121,9 +121,9 @@ function makeBroadcaster(): PluginContributionBroadcaster {
   return new PluginContributionBroadcaster({
     isDisposed: () => false,
     listPluginActions: () => actions,
-    initPromise: Promise.resolve(),
+    catalogReady: Promise.resolve(),
     listPluginRuntimeStatuses: () => runtimeStatuses,
-    isReplacingPlugin: () => false,
+    isRegistryUnsettled: () => false,
   });
 }
 
@@ -412,9 +412,9 @@ describe("holdBroadcasts", () => {
     const b = new PluginContributionBroadcaster({
       isDisposed: () => disposed,
       listPluginActions: () => actions,
-      initPromise: Promise.resolve(),
+      catalogReady: Promise.resolve(),
       listPluginRuntimeStatuses: () => runtimeStatuses,
-      isReplacingPlugin: () => false,
+      isRegistryUnsettled: () => false,
     });
     const release = b.holdBroadcasts();
     b.schedulePluginActionsBroadcast();
@@ -715,9 +715,9 @@ describe("pushSnapshotTo", () => {
     const disposed = new PluginContributionBroadcaster({
       isDisposed: () => true,
       listPluginActions: () => actions,
-      initPromise: Promise.resolve(),
+      catalogReady: Promise.resolve(),
       listPluginRuntimeStatuses: () => [],
-      isReplacingPlugin: () => false,
+      isRegistryUnsettled: () => false,
     });
     await disposed.pushSnapshotTo(wc as unknown as Electron.WebContents);
     expect(wc.send).not.toHaveBeenCalled();

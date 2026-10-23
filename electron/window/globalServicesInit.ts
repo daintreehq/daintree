@@ -1322,18 +1322,18 @@ export async function initGlobalServices(
 
   // CLI control socket (F32) — lets the `daintree-plugin` CLI install/uninstall
   // into this running instance. Registered after `plugin-service` and gated
-  // internally on `pluginService.waitForInit()`, so the socket only accepts a
-  // `plugin.install` once activation has settled. Skipped under smoke test (no
+  // internally on `pluginService.waitForCatalog()`, so the socket only accepts a
+  // `plugin.install` once the startup scan has settled. Skipped under smoke test (no
   // CLI driving a headless boot) to avoid leaving a socket behind.
   if (!isSmokeTest) {
     registerDeferredTask({
       name: "plugin-cli-server",
       run: async () => {
         // Fire-and-forget: startPluginCliServer() internally awaits
-        // pluginService.waitForInit() (which only settles after startup
-        // activation), so awaiting it here would stall every later deferred
-        // task behind plugin activation. The waitForReady gate guarantees no
-        // CLI request is serviced before init settles, so binding async is safe.
+        // pluginService.waitForCatalog() (which only settles after the startup
+        // scan), so awaiting it here would stall every later deferred task
+        // behind it. The waitForReady gate guarantees no CLI request is
+        // serviced before the scan settles, so binding async is safe.
         const { startPluginCliServer } = await import("../services/PluginCliServer.js");
         void startPluginCliServer()
           .then(() => console.log("[MAIN] Plugin CLI control socket listening"))

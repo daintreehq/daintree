@@ -144,7 +144,7 @@ export async function initPerWindowServices(
       run: async () => {
         try {
           const { pluginService } = await import("../services/PluginService.js");
-          await pluginService.waitForInit();
+          await pluginService.waitForCatalog();
           pluginMenuInitSettled = true;
           if (!win.isDestroyed()) {
             createApplicationMenu(win, cliService);

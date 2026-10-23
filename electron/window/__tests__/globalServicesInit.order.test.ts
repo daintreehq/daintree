@@ -1269,8 +1269,8 @@ describe("initGlobalServices task ordering", () => {
     expect(setPluginDirResolver).toHaveBeenCalledTimes(1);
     expect(activateOpenFileInstaller).toHaveBeenCalledTimes(1);
     // activateStartupFinishedPlugins() must also still run: its `finally` is
-    // what settles waitForInit(), which the renderer-facing plugin/forge IPC
-    // gates await — dropping it would hang those handlers forever.
+    // what settles waitForInit(), the fully-started gate that plugin
+    // diagnostics awaits — dropping it would hang that handler forever.
     expect(pluginActivateStartup).toHaveBeenCalledTimes(1);
   });
 

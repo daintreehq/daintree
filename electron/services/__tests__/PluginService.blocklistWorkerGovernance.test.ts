@@ -256,9 +256,11 @@ describe("PluginService blocklist / kill-switch (#10891)", () => {
     }))
   ) {
     // Route disk cache into the test tmpDir so a real userData path is never touched.
+    // No seed, so startup takes the fetched list as its first enforced one.
     const svc = new PluginBlocklistService({
       fetchImpl,
       cachePath: path.join(tmpDir, "blocklist-cache.json"),
+      seed: null,
     });
     return { svc, fetchImpl };
   }
@@ -378,6 +380,146 @@ describe("PluginService blocklist / kill-switch (#10891)", () => {
 
     // A single fetch backs the whole multi-plugin scan.
     expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  describe("fresh profile with the release-shipped seed (#14127)", () => {
+    function pendingFetch(entries: ParsedPluginBlocklist["entries"], seed?: unknown) {
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      let entered!: () => void;
+      const fetchEntered = new Promise<void>((resolve) => {
+        entered = resolve;
+      });
+      const fetchImpl = vi.fn(async () => {
+        entered();
+        await gate;
+        return { ok: true, status: 200, json: async () => ({ entries }) };
+      });
+      const svc = new PluginBlocklistService({
+        fetchImpl,
+        cachePath: path.join(tmpDir, "blocklist-cache.json"),
+        ...(seed === undefined ? {} : { seed }),
+      });
+      return { svc, release, fetchEntered };
+    }
+
+    const isBlocked = (service: PluginService, name: string) =>
+      service.listPlugins().some((p) => p.manifest.name === name && p.blocklisted);
+
+    it("publishes the built-in catalog while the remote fetch is still pending", async () => {
+      const builtinRoot = await fs.mkdtemp(path.join(os.tmpdir(), "daintree-builtin-test-"));
+      try {
+        const dir = path.join(builtinRoot, "viewer");
+        await fs.mkdir(dir, { recursive: true });
+        await fs.writeFile(
+          path.join(dir, "plugin.json"),
+          JSON.stringify({
+            name: "daintree.viewer",
+            version: "1.0.0",
+            contributes: {
+              panels: [{ id: "viewer", name: "Viewer", iconId: "eye", color: "#ff0000" }],
+            },
+          })
+        );
+        const { svc, release, fetchEntered } = pendingFetch([]);
+        const service = new PluginService(tmpDir, undefined, {
+          blocklistService: svc,
+          builtinPluginsRoot: builtinRoot,
+        });
+
+        await service.initialize();
+        await service.waitForCatalog();
+        await fetchEntered;
+        expect(service.hasPlugin("daintree.viewer")).toBe(true);
+        expect(registerPanelKind).toHaveBeenCalledTimes(1);
+        release();
+        service.dispose();
+      } finally {
+        await fs.rm(builtinRoot, { recursive: true, force: true });
+      }
+    });
+
+    it("enforces the seed's denials before the fetch answers", async () => {
+      await writePlugin("bad", { name: "acme.bad", version: "1.0.0" });
+      await writePlugin("ok", { name: "acme.ok", version: "1.0.0" });
+      const { svc, release, fetchEntered } = pendingFetch([], {
+        entries: [{ name: "acme.bad", ranges: ["*"], reason: "malware" }],
+      });
+
+      const service = new PluginService(tmpDir, undefined, { blocklistService: svc });
+      await service.initialize();
+      await fetchEntered;
+      expect(isBlocked(service, "acme.bad")).toBe(true);
+      expect(service.hasPlugin("acme.ok")).toBe(true);
+      release();
+      service.dispose();
+    });
+
+    it("unloads a plugin loaded against the seed once the fetched list denies it", async () => {
+      await writePlugin("bad", { name: "acme.bad", version: "1.0.0" });
+      await writePlugin("ok", { name: "acme.ok", version: "1.0.0" });
+      const { svc, release } = pendingFetch([
+        { name: "acme.bad", ranges: ["*"], reason: "malware" },
+      ]);
+
+      const service = new PluginService(tmpDir, undefined, { blocklistService: svc });
+      await service.initialize();
+      expect(service.hasPlugin("acme.bad")).toBe(true);
+
+      release();
+      await vi.waitFor(() => expect(isBlocked(service, "acme.bad")).toBe(true));
+      expect(service.hasPlugin("acme.bad")).toBe(false);
+      expect(service.hasPlugin("acme.ok")).toBe(true);
+    });
+
+    it("refuses a plugin discovered after the fetched list denied it", async () => {
+      const { svc, release } = pendingFetch([
+        { name: "acme.late", ranges: ["*"], reason: "malware" },
+      ]);
+      const service = new PluginService(tmpDir, undefined, { blocklistService: svc });
+      await service.initialize();
+      release();
+      await vi.waitFor(() =>
+        expect(
+          (service as unknown as { startupBlocklist: ParsedPluginBlocklist | null })
+            .startupBlocklist?.entries
+        ).toHaveLength(1)
+      );
+
+      await writePlugin("late", { name: "acme.late", version: "1.0.0" });
+      await (
+        service as unknown as {
+          loadFromDir: (root: string, opts: { isBuiltin: boolean }) => Promise<number>;
+        }
+      ).loadFromDir(tmpDir, { isBuiltin: false });
+      expect(service.hasPlugin("acme.late")).toBe(false);
+      expect(isBlocked(service, "acme.late")).toBe(true);
+    });
+
+    it("waits for the fetch when the shipped seed is malformed", async () => {
+      await writePlugin("bad", { name: "acme.bad", version: "1.0.0" });
+      const { svc, release, fetchEntered } = pendingFetch(
+        [{ name: "acme.bad", ranges: ["*"], reason: "malware" }],
+        { entries: "not-a-list" }
+      );
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        const service = new PluginService(tmpDir, undefined, { blocklistService: svc });
+        let initialized = false;
+        const init = service.initialize().then(() => (initialized = true));
+        await fetchEntered;
+        await Promise.resolve();
+        expect(initialized).toBe(false);
+
+        release();
+        await init;
+        expect(isBlocked(service, "acme.bad")).toBe(true);
+      } finally {
+        warn.mockRestore();
+      }
+    });
   });
 
   describe("stale cached list at startup", () => {

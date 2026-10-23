@@ -85,7 +85,7 @@ vi.mock("../../../services/GitServiceCache.js", () => ({
 // activate a lazy provider before the credential impl lookup; stub the
 // singleton so tests never construct the real service.
 const pluginServiceMock = vi.hoisted(() => ({
-  waitForInit: vi.fn(() => Promise.resolve()),
+  waitForCatalog: vi.fn(() => Promise.resolve()),
   activatePluginForForgeProvider: vi.fn(() => Promise.resolve()),
 }));
 
@@ -247,7 +247,7 @@ describe("registerForgeSettingsHandlers", () => {
 
   it("getProviders reads the registry only after plugin init settles", async () => {
     let releaseGate: () => void = () => {};
-    pluginServiceMock.waitForInit.mockReturnValueOnce(
+    pluginServiceMock.waitForCatalog.mockReturnValueOnce(
       new Promise<void>((resolve) => {
         releaseGate = resolve;
       })
@@ -257,7 +257,7 @@ describe("registerForgeSettingsHandlers", () => {
     const inFlight = getProviders(null) as Promise<unknown>;
     // Drain enough microtasks for the lazy-import chain to reach the gate.
     for (let i = 0; i < 10; i++) await Promise.resolve();
-    expect(pluginServiceMock.waitForInit).toHaveBeenCalledTimes(1);
+    expect(pluginServiceMock.waitForCatalog).toHaveBeenCalledTimes(1);
     expect(registryMock.getRegisteredForgeProviders).not.toHaveBeenCalled();
     releaseGate();
     await inFlight;
@@ -266,7 +266,7 @@ describe("registerForgeSettingsHandlers", () => {
 
   it("resolveProvider resolves only after plugin init settles (descriptors register during deferred init)", async () => {
     let releaseGate: () => void = () => {};
-    pluginServiceMock.waitForInit.mockReturnValueOnce(
+    pluginServiceMock.waitForCatalog.mockReturnValueOnce(
       new Promise<void>((resolve) => {
         releaseGate = resolve;
       })
@@ -278,7 +278,7 @@ describe("registerForgeSettingsHandlers", () => {
     // Drain enough microtasks for the lazy-import chain to reach the gate;
     // the gate itself (not import latency) must be what holds the handler.
     for (let i = 0; i < 10; i++) await Promise.resolve();
-    expect(pluginServiceMock.waitForInit).toHaveBeenCalledTimes(1);
+    expect(pluginServiceMock.waitForCatalog).toHaveBeenCalledTimes(1);
     // getProjectById is the first synchronous call after the gate — asserting
     // on it (not just the resolver, which sits behind further awaits) proves
     // the gate is what blocks, so this test fails on the un-gated handler.

@@ -101,11 +101,12 @@ export async function resolveLaunchPluginsReport(
   const pluginService = await getPluginService();
   // PluginService initialises as a deferred task after first-interactive, so
   // panes restored at startup would otherwise see no loaded plugins. Bounded so
-  // a slow init (blocklist fetch, activation) degrades to a launch without
-  // plugin tools instead of a hung pane.
+  // a slow scan degrades to a launch without plugin tools instead of a hung
+  // pane. Not startup activation: the inventory is declarations and grants, and
+  // a tool call activates its own plugin.
   try {
     await withTimeout(
-      pluginService.waitForInit(),
+      pluginService.waitForCatalog(),
       PLUGIN_INIT_WAIT_MS,
       "PluginService init did not settle"
     );

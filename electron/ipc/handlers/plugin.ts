@@ -239,7 +239,7 @@ async function handleList(): Promise<LoadedPluginInfo[]> {
   // populates the maps would cache an empty list — wrong `disabled` gating in
   // the renderer until the next provenance broadcast.
   const pluginService = await getPluginService();
-  await pluginService.waitForInit();
+  await pluginService.waitForCatalog();
   return pluginService.listPlugins();
 }
 
@@ -248,7 +248,7 @@ async function handleSetEnabled(pluginId: string, enabled: boolean): Promise<voi
   // unpopulated, mis-classifies a built-in as a user plugin, and silently
   // takes the persist-only path — no live load, no provenance broadcast.
   const pluginService = await getPluginService();
-  await pluginService.waitForInit();
+  await pluginService.waitForCatalog();
   await pluginService.setEnabled(pluginId, enabled);
 }
 
@@ -334,7 +334,7 @@ async function handleInstall(
   // still unset. It also keeps the #11728 addressability invariant intact, since
   // an install that beat the deferred task here would publish panel kinds while
   // the `plugin://` resolver was still the 404-everything placeholder.
-  await service.waitForInit();
+  await service.waitForCatalog();
   return service.installPlugin(archivePath, opts);
 }
 
@@ -461,7 +461,7 @@ export async function handleInstallFromPath(
   // task finishes (#11280), and `initialize()` assumes no install overlaps it:
   // its startup sweep deletes staging directories and the kill-switch blocklist
   // is still unset. Wait it out — a no-op once init has settled.
-  await service.waitForInit();
+  await service.waitForCatalog();
   // Call through with a single argument when there is no job, so the installer
   // sees exactly the same shape it always did.
   return jobId === undefined ? service.installPlugin(path) : service.installPlugin(path, { jobId });
@@ -681,7 +681,7 @@ export async function handleInstallFromUrl(
 
     const service = await getPluginService();
     // See `handleInstall` — the same init gate, for the same two reasons.
-    await service.waitForInit();
+    await service.waitForCatalog();
     // Awaited, not returned bare: the `finally` below deletes the download, and
     // a bare `return` would run it while the installer is still reading it.
     return await service.installPlugin(tempPath, {
@@ -752,11 +752,12 @@ async function handleGetLatestBackgroundUpdateCheck(): Promise<PluginBackgroundU
 }
 
 async function handleToolbarButtons(ctx: IpcContext): Promise<ToolbarButtonConfig[]> {
-  // Block the renderer's mount-time pull until startup activation has settled,
-  // otherwise a fast renderer can read an empty registry before any plugin's
-  // activate() runs — leaving plugin toolbar buttons missing until the next
-  // mutation pushes a fresh broadcast (#9285).
-  await (await getPluginService()).waitForInit();
+  // Block the renderer's mount-time pull until the startup scan has settled,
+  // otherwise a fast renderer can read an empty registry before any manifest
+  // registers — leaving plugin toolbar buttons missing until the next mutation
+  // pushes a fresh broadcast (#9285). Not startup activation: buttons register
+  // at load, and one slow activate() must not hold them (#14127).
+  await (await getPluginService()).waitForCatalog();
   const buttons = getPluginToolbarButtonIds()
     .map((id) => getToolbarButtonConfig(id))
     .filter((c): c is ToolbarButtonConfig => c !== undefined);
@@ -768,13 +769,13 @@ async function handleToolbarButtons(ctx: IpcContext): Promise<ToolbarButtonConfi
 
 /** The SENDER's project's launch entries (#13788), behind the same init guard as toolbar buttons. */
 async function handleLaunchEntries(ctx: IpcContext): Promise<PluginLaunchEntryConfig[]> {
-  await (await getPluginService()).waitForInit();
+  await (await getPluginService()).waitForCatalog();
   return getPluginLaunchEntriesForProject(ctx.projectId);
 }
 
 /** The SENDER's project's layouts (#13780), behind the same init guard as toolbar buttons. */
 async function handleLayouts(ctx: IpcContext): Promise<PluginLayoutConfig[]> {
-  await (await getPluginService()).waitForInit();
+  await (await getPluginService()).waitForCatalog();
   return getPluginLayoutsForProject(ctx.projectId);
 }
 
@@ -837,7 +838,7 @@ async function handleNotificationSilenceSet(
 /** The quick switcher search providers the SENDER's project can see (#13792), with the user's choices. */
 async function handleSearchProvidersGet(ctx: IpcContext): Promise<PluginSearchProviderInfo[]> {
   const service = await getPluginService();
-  await service.waitForInit();
+  await service.waitForCatalog();
   return service.searchCoordinator.list(ctx.projectId);
 }
 
@@ -897,7 +898,7 @@ async function handleSearchProviderShownSet(
 /** The `@` context providers the sender's project sees, and which of them hold their prefix (#13795). */
 async function handleContextProvidersGet(ctx: IpcContext): Promise<ContextProviderEntry[]> {
   const service = await getPluginService();
-  await service.waitForInit();
+  await service.waitForCatalog();
   return service.getContextProvidersForProject(ctx.projectId);
 }
 
@@ -940,15 +941,15 @@ async function handleContextProvidersEnabledSet(
 }
 
 async function handleKeybindings(ctx: IpcContext) {
-  await (await getPluginService()).waitForInit();
+  await (await getPluginService()).waitForCatalog();
   return selectContributionsForProject(getPluginKeybindings(), (e) => e.pluginId, ctx.projectId);
 }
 
 async function handleContextMenuItems(ctx: IpcContext) {
-  // Same init-race guard as `handleToolbarButtons` — block until startup
-  // activation settles so the renderer's mount-time pull can't observe an empty
+  // Same init-race guard as `handleToolbarButtons` — block until the startup
+  // scan settles so the renderer's mount-time pull can't observe an empty
   // registry before plugins finish registering (#9285).
-  await (await getPluginService()).waitForInit();
+  await (await getPluginService()).waitForCatalog();
   return selectContributionsForProject(
     getPluginContextMenuItems(),
     (e) => e.pluginId,
@@ -999,7 +1000,7 @@ async function handleValidateActionIds(actionIds: string[]): Promise<void> {
 // not and doesn't need it.
 async function handleActionsGet(ctx: IpcContext): Promise<PluginActionDescriptor[]> {
   const pluginService = await getPluginService();
-  await pluginService.waitForInit();
+  await pluginService.waitForCatalog();
   return selectContributionsForProject(
     pluginService.listPluginActions(),
     (a) => a.pluginId,
@@ -1049,7 +1050,7 @@ async function handleActionsUnregister(
 }
 
 async function handlePanelKindsGet(ctx: IpcContext): Promise<PanelKindConfig[]> {
-  await (await getPluginService()).waitForInit();
+  await (await getPluginService()).waitForCatalog();
   return selectContributionsForProject(getPluginPanelKinds(), (c) => c.extensionId, ctx.projectId);
 }
 
@@ -1128,7 +1129,7 @@ async function handleProjectSurfacesGet(ctx: IpcContext): Promise<ProjectSurface
   // deferred initialize() would cache "no surfaces" and leave the project on
   // its stock canvas until the next push.
   const svc = await getPluginService();
-  await svc.waitForInit();
+  await svc.waitForCatalog();
   if (!ctx.projectId) return null;
   return svc.getProjectSurfacesSnapshot(ctx.projectId);
 }
@@ -1155,8 +1156,8 @@ async function handleProjectSurfaceChoiceSet(
     throw new Error("project surfaces: optionId must be a non-empty string");
   }
   const svc = await getPluginService();
-  // The owner comes from the claim registry, which startup activation fills.
-  await svc.waitForInit();
+  // The owner comes from the claim registry, which the startup scan fills.
+  await svc.waitForCatalog();
   return svc.setProjectSurfaceChoice(ctx.projectId, slot, choice, optionId);
 }
 
@@ -1195,8 +1196,8 @@ async function handleProjectSurfaceChoicesSet(
     }
   }
   const svc = await getPluginService();
-  // The owner comes from the claim registry, which startup activation fills.
-  await svc.waitForInit();
+  // The owner comes from the claim registry, which the startup scan fills.
+  await svc.waitForCatalog();
   return svc.setProjectSurfaceChoices(ctx.projectId, updates);
 }
 
@@ -1471,12 +1472,12 @@ async function handleReportPanelInventory(
 async function handleForgeProvidersGet(): Promise<RegisteredForgeProvider[]> {
   // Same init-race guard as the surrounding pull-on-mount handlers (#9285) —
   // forge descriptors register during the deferred initialize().
-  await (await getPluginService()).waitForInit();
+  await (await getPluginService()).waitForCatalog();
   return getRegisteredForgeProviders();
 }
 
 async function handleAgentsGet(): Promise<Record<string, AgentConfig>> {
-  await (await getPluginService()).waitForInit();
+  await (await getPluginService()).waitForCatalog();
   return getPluginAgentRegistry();
 }
 
@@ -1520,13 +1521,13 @@ function parseRecipeMetadataPatch(value: unknown): PluginRecipeMetadataPatch {
 
 async function handleRecipesGet(ctx: IpcContext): Promise<TerminalRecipe[]> {
   const service = await getPluginService();
-  await service.waitForInit();
+  await service.waitForCatalog();
   return selectContributionsForProject(service.getPluginRecipes(), recipeOwner, ctx.projectId);
 }
 
 async function handleToursGet(ctx: IpcContext): Promise<PluginTourDescriptor[]> {
   const service = await getPluginService();
-  await service.waitForInit();
+  await service.waitForCatalog();
   return selectContributionsForProject(
     service.getPluginTours(),
     (tour) => tour.pluginId,
@@ -1540,7 +1541,7 @@ async function handleToursGet(ctx: IpcContext): Promise<PluginTourDescriptor[]> 
  * project, so which plugins the current one shows has no bearing on it.
  */
 async function handleProjectTemplatesGet(): Promise<ProjectTemplateDescriptor[]> {
-  await (await getPluginService()).waitForInit();
+  await (await getPluginService()).waitForCatalog();
   const { getPluginProjectTemplates } =
     await import("../../services/plugin/PluginProjectTemplateRegistry.js");
   return getPluginProjectTemplates();
@@ -1564,7 +1565,7 @@ async function handleProjectTemplatePreview(payload: {
   ) {
     throw new Error("Invalid project template");
   }
-  await (await getPluginService()).waitForInit();
+  await (await getPluginService()).waitForCatalog();
   const { previewProjectTemplate } = await import("../../services/plugin/projectTemplateFiles.js");
   return previewProjectTemplate(payload.pluginId, payload.templateId);
 }
@@ -1576,7 +1577,7 @@ async function handleProjectTemplatePreview(payload: {
  * sender, never an argument.
  */
 async function handleHostedViewsGet(ctx: IpcContext): Promise<PluginHostedViewDescriptor[]> {
-  await (await getPluginService()).waitForInit();
+  await (await getPluginService()).waitForCatalog();
   return getPluginHostedViewsForProject(ctx.projectId);
 }
 
@@ -1585,12 +1586,12 @@ async function handleHostedViewsGet(ctx: IpcContext): Promise<PluginHostedViewDe
  * app theme is one machine-wide selection.
  */
 async function handleThemesGet(): Promise<AppColorScheme[]> {
-  await (await getPluginService()).waitForInit();
+  await (await getPluginService()).waitForCatalog();
   return getPluginThemeSchemes();
 }
 
 async function handleIconsGet(ctx: IpcContext): Promise<PluginCustomIconAsset[]> {
-  await (await getPluginService()).waitForInit();
+  await (await getPluginService()).waitForCatalog();
   return getPluginCustomIconsForProject(ctx.projectId);
 }
 
@@ -1620,7 +1621,7 @@ async function handleRecipeRecordUse(
   timestamp: number
 ): Promise<TerminalRecipe> {
   const service = await getPluginService();
-  await service.waitForInit();
+  await service.waitForCatalog();
   if (!Number.isFinite(timestamp) || timestamp <= 0) {
     throw new Error("timestamp must be a positive finite number");
   }
@@ -1635,7 +1636,7 @@ async function handleRecipeMetadataUpdate(
   updates: PluginRecipeMetadataPatch
 ): Promise<TerminalRecipe> {
   const service = await getPluginService();
-  await service.waitForInit();
+  await service.waitForCatalog();
   const id = assertQualifiedRecipeId(recipeId);
   const patch = parseRecipeMetadataPatch(updates);
   assertRecipeVisibleToSender(service.getPluginRecipes(), id, ctx.projectId);
@@ -1861,9 +1862,9 @@ async function handleWorktreeDeleteNoteSourcesGet(
 ): Promise<WorktreeDeleteNoteSource[]> {
   if (ctx.projectId === null) return [];
   const service = await getPluginService();
-  // Bounded: at startup the dialog would otherwise sit through every other
-  // plugin's activation before it could even say who it is asking.
-  await service.waitForInitWithin(PLUGIN_WORKTREE_DELETE_NOTES_TIMEOUT_MS);
+  // Bounded: at startup the dialog would otherwise sit through the scan before
+  // it could even say who it is asking.
+  await service.waitForCatalogWithin(PLUGIN_WORKTREE_DELETE_NOTES_TIMEOUT_MS);
   return service.listWorktreeDeleteNoteSources(ctx.projectId);
 }
 

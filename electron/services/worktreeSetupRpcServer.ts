@@ -44,7 +44,7 @@ const defaultDeps: WorktreeSetupRpcDeps = {
   },
   async whenPluginsLoaded(projectId) {
     const { pluginService } = await import("./PluginService.js");
-    await pluginService.waitForInit();
+    await pluginService.waitForCatalog();
     // Project plugins load on their own queue from the project switch. A
     // timeout goes ahead with what has loaded, as a terminal launch does.
     if (projectId !== null) {

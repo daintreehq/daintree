@@ -111,7 +111,7 @@ async function loadLiveDeps(): Promise<ViewlessDeps> {
       // One deadline for the whole wait, startup included, since the approval
       // isn't put to anyone until the notes are in.
       const expiresAt = Date.now() + PLUGIN_WORKTREE_DELETE_NOTES_TIMEOUT_MS;
-      await pluginService.waitForInitWithin(PLUGIN_WORKTREE_DELETE_NOTES_TIMEOUT_MS);
+      await pluginService.waitForCatalogWithin(PLUGIN_WORKTREE_DELETE_NOTES_TIMEOUT_MS);
       return pluginService.collectWorktreeDeleteNotes(
         projectId,
         worktreeId,

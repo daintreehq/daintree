@@ -119,7 +119,7 @@ vi.mock("../../services/NotificationService.js", () => ({
 }));
 vi.mock("../../services/ProjectStore.js", () => ({ projectStore: { getProjectById: vi.fn() } }));
 vi.mock("../../services/PluginService.js", () => ({
-  pluginService: { waitForInit: () => pluginInit.promise },
+  pluginService: { waitForCatalog: () => pluginInit.promise },
 }));
 
 import { initPerWindowServices, __resetPerWindowInitForTests } from "../perWindowInit.js";

@@ -1348,7 +1348,7 @@ export class PluginService {
    * Owns the coalesced per-tick contribution broadcasts (actions, panel kinds,
    * toolbar buttons, keybindings, context-menu items) plus the
    * cold-start {@link pushSnapshotTo} replay. Constructed in the constructor
-   * after {@link initPromise} is set, so it can await the init gate.
+   * after {@link catalogPromise} is set, so it can await the catalog gate.
    */
   private readonly broadcaster: PluginContributionBroadcaster;
   /**
@@ -1388,14 +1388,27 @@ export class PluginService {
   private pluginThemeCatalogDirty = false;
   /**
    * Resolves once {@link initialize} and {@link activateStartupFinishedPlugins}
-   * have both settled (or {@link dispose} has run). Renderer pull-on-mount IPC
-   * handlers await this so a fresh `getActions` / `getPanelKinds` /
-   * `toolbarButtons` call can't return `[]` while plugins are still being
-   * loaded and activated. Settled in `finally` so a plugin activation failure
-   * never permanently deadlocks the renderer (#9285).
+   * have both settled (or {@link dispose} has run): the fully-started gate.
+   * Settled in `finally` so a plugin activation failure never permanently
+   * deadlocks a caller (#9285).
    */
   private readonly initPromise: Promise<void>;
   private resolveInit: (() => void) | null = null;
+  /**
+   * Resolves once {@link initialize} has settled (or startup activation or
+   * {@link dispose} has): the manifest catalog gate (#14127). Renderer
+   * pull-on-mount IPC handlers await this so a fresh `getActions` /
+   * `getPanelKinds` / `toolbarButtons` call can't return `[]` while plugins are
+   * still being scanned, without also waiting on any plugin's activation.
+   */
+  private readonly catalogPromise: Promise<void>;
+  private resolveCatalog: (() => void) | null = null;
+  /**
+   * True while {@link initialize} is enumerating the startup roots. The
+   * registries hold a partial catalog then, so no `complete` snapshot may be
+   * published from them — see the broadcaster's `isRegistryUnsettled` dep.
+   */
+  private catalogScanInFlight = false;
   /**
    * Owns the `host.dispatch()` main→renderer round-trip: the active-renderer
    * resolution, the lazy `ipcMain` response listener, and the pending-request
@@ -1470,6 +1483,9 @@ export class PluginService {
     this.initPromise = new Promise<void>((resolve) => {
       this.resolveInit = resolve;
     });
+    this.catalogPromise = new Promise<void>((resolve) => {
+      this.resolveCatalog = resolve;
+    });
 
     this.metrics = new PluginMetricsService({
       host: {
@@ -1488,9 +1504,9 @@ export class PluginService {
     this.broadcaster = new PluginContributionBroadcaster({
       isDisposed: () => this.disposed,
       listPluginActions: () => this.listPluginActions(),
-      initPromise: this.initPromise,
+      catalogReady: this.catalogPromise,
       listPluginRuntimeStatuses: () => this.listPluginRuntimeStatuses(),
-      isReplacingPlugin: () => this.devReplaceDepth > 0,
+      isRegistryUnsettled: () => this.devReplaceDepth > 0 || this.catalogScanInFlight,
     });
 
     // Ownership is resolved against the live kind registry rather than trusted
@@ -1585,11 +1601,12 @@ export class PluginService {
   }
 
   /**
-   * Resolves once startup load + activation has settled. The three pull-on-mount
-   * IPC handlers (`getActions`, `getPanelKinds`, `toolbarButtons`) await this
-   * so a renderer that mounts before plugins activate doesn't observe an empty
-   * registry. Safe to await repeatedly; resolves immediately after the first
-   * settle. {@link dispose} also resolves it to prevent test hangs when a
+   * Resolves once startup load + activation has settled — every
+   * `onStartupFinished` plugin has finished activating or failed to. Only for a
+   * caller that genuinely needs that; one that reads manifest contributions or
+   * the installed set wants {@link waitForCatalog}, and one that needs a single
+   * plugin running awaits that plugin's own activation. Safe to await
+   * repeatedly. {@link dispose} also resolves it to prevent test hangs when a
    * service is torn down without calling {@link activateStartupFinishedPlugins}.
    */
   waitForInit(): Promise<void> {
@@ -1597,14 +1614,26 @@ export class PluginService {
   }
 
   /**
-   * {@link waitForInit}, giving up after `ms`. Startup activation can hold init
-   * for seconds, which a caller on a deadline (a delete confirmation's notes,
-   * #13805) can't spend; whatever has loaded by then is what it gets.
+   * Resolves once the startup scan ({@link initialize}) has settled, so the
+   * loaded, disabled and blocked sets and every manifest contribution
+   * registered at load time are populated (#14127). Independent of the remote
+   * blocklist fetch and of any plugin's activation: one slow `activate()` must
+   * not hold an unrelated catalog read. Also resolved by startup activation and
+   * by {@link dispose}, never rejected.
    */
-  async waitForInitWithin(ms: number): Promise<void> {
+  waitForCatalog(): Promise<void> {
+    return this.catalogPromise;
+  }
+
+  /**
+   * {@link waitForCatalog}, giving up after `ms`, for a caller on a deadline (a
+   * delete confirmation's notes, #13805); whatever has loaded by then is what
+   * it gets.
+   */
+  async waitForCatalogWithin(ms: number): Promise<void> {
     let timer: ReturnType<typeof setTimeout> | undefined;
     await Promise.race([
-      this.initPromise,
+      this.catalogPromise,
       new Promise<void>((resolve) => {
         timer = setTimeout(resolve, ms);
       }),
@@ -1616,8 +1645,9 @@ export class PluginService {
    * Whether the manifest scan phase ({@link initialize}) has settled. Forge
    * provider descriptors register at scan-time, so once this is true a
    * hostname-match miss in `resolveForgeProvider` is a definitive "no
-   * provider matches" rather than a cold-start race (#9997). Distinct from
-   * {@link waitForInit}, which also waits for startup activation.
+   * provider matches" rather than a cold-start race (#9997). The boolean form
+   * of {@link waitForCatalog}; {@link waitForInit} also waits for startup
+   * activation.
    */
   get isPluginScanComplete(): boolean {
     return this.initialized;
@@ -1727,9 +1757,11 @@ export class PluginService {
     this.workspaceClient?.off("worktree-activated", this.onWorktreeActivatedForCache);
     this.workspaceClient?.off("worktree-removed", this.onWorktreeRemovedForCardStatuses);
     this.disposeRegistrySubscriptions();
-    // Settle the init gate so unit tests that tear down the service without
-    // running activateStartupFinishedPlugins() don't hang IPC callers awaiting
-    // waitForInit().
+    // Settle both gates so unit tests that tear down the service without
+    // running initialize() / activateStartupFinishedPlugins() don't hang IPC
+    // callers awaiting them.
+    this.resolveCatalog?.();
+    this.resolveCatalog = null;
     this.resolveInit?.();
     this.resolveInit = null;
     this.dispatcher.dispose();
@@ -1778,7 +1810,22 @@ export class PluginService {
 
   async initialize(): Promise<void> {
     if (this.initialized) return;
+    this.catalogScanInFlight = true;
+    try {
+      await this.scanStartupCatalog();
+    } finally {
+      // Released even when a prerequisite or the scan throws: a failed scan
+      // must not strand every catalog reader.
+      this.catalogScanInFlight = false;
+      this.resolveCatalog?.();
+      this.resolveCatalog = null;
+      // Publish any authoritative snapshot an unload owed while the catalog
+      // was still partial.
+      this.broadcaster.flushDeferredCompleteSnapshots();
+    }
+  }
 
+  private async scanStartupCatalog(): Promise<void> {
     // Reap crash-left staging/parked dirs from the user root BEFORE any
     // user-plugin scan. A parked `<pluginId>.old-<uuid>` dir (no leading dot)
     // can contain a plugin.json, so if it survived into the scan it could be
@@ -1808,10 +1855,11 @@ export class PluginService {
 
     // Resolve the kill-switch blocklist before any scan, so the per-plugin load
     // gate reads one snapshot and the Promise.allSettled fan-out never awaits a
-    // network call (#9428). A cached list is enforced as-is even when stale, so
+    // network call (#9428). A cached list — or, on a fresh profile, the
+    // release-shipped seed (#14127) — is enforced as-is even when stale, so
     // startup never waits on the network while one exists; the revalidated list
-    // is adopted the moment it arrives, unloading anything it newly blocks. With
-    // no cache at all this still waits for the fetch. Fails open: null on any
+    // is adopted the moment it arrives, unloading anything it newly blocks. Only
+    // with neither does this wait for the fetch. Fails open: null on any
     // fetch/parse failure with no cached list.
     const { blocklist, refreshed } = await this.blocklistService.getStartupBlocklist();
     this.startupBlocklist = blocklist;
@@ -4313,7 +4361,9 @@ export class PluginService {
       // waitForInit() forever. `Promise.allSettled` already swallows
       // individual rejections, but `targets.length === 0` short-circuits
       // before the awaited line, so the finally is what guarantees release
-      // in the no-plugins case.
+      // in the no-plugins case. Fully started implies the catalog is too.
+      this.resolveCatalog?.();
+      this.resolveCatalog = null;
       this.resolveInit?.();
       this.resolveInit = null;
     }
@@ -6142,7 +6192,7 @@ export class PluginService {
    * own. Only reads; nothing about either machine changes.
    */
   async getPluginInventory(options: { includeSecrets?: boolean } = {}): Promise<PluginInventory> {
-    await this.waitForInit();
+    await this.waitForCatalog();
     return buildPluginInventory(this, {
       appVersion: this.appVersion,
       platform: process.platform,
@@ -6165,7 +6215,7 @@ export class PluginService {
     archivePath: string,
     expect: { pluginId?: string; update?: boolean; jobId?: string } = {}
   ): Promise<PluginInstallResult> {
-    await this.waitForInit();
+    await this.waitForCatalog();
     let manifest: PluginManifest;
     try {
       manifest = await readArchiveManifest(archivePath);
@@ -6309,7 +6359,7 @@ export class PluginService {
   /**
    * Nesting depth of in-flight plugin replacements. While non-zero the
    * contribution registries are mid-swap, so no snapshot taken from them is
-   * authoritative — see the broadcaster's `isReplacingPlugin` dep.
+   * authoritative — see the broadcaster's `isRegistryUnsettled` dep.
    */
   private devReplaceDepth = 0;
 
@@ -7225,7 +7275,7 @@ export class PluginService {
     // Everything from here to the matching decrement runs against half-swapped
     // contribution registries. Snapshots taken in that window are not
     // authoritative, and the renderer prunes persisted preferences off ones
-    // that claim to be — see the broadcaster's `isReplacingPlugin`.
+    // that claim to be — see the broadcaster's `isRegistryUnsettled`.
     this.devReplaceDepth++;
     const replacing = this.plugins.has(pluginId);
     try {
@@ -9450,8 +9500,9 @@ export class PluginService {
    * freshly-restored WebContentsView (post-LRU eviction or first cold load on
    * project switch) gets a complete plugin state on the same channels its
    * persistent push listeners already consume — no renderer-side changes
-   * needed. Awaits {@link waitForInit} so the snapshot is post-activation, not
-   * the empty pre-init view (#9285).
+   * needed. Awaits {@link waitForCatalog} so the snapshot is the scanned
+   * catalog, not the empty pre-init view (#9285), without waiting on startup
+   * activation (#14127).
    *
    * Toolbar buttons use `complete: false` so the renderer does not stale-prune
    * against this snapshot — replay is authoritative for the target view but

@@ -14,7 +14,7 @@ const mockGetPluginsRoot = vi.fn<() => string>();
 vi.mock("../../../services/PluginService.js", () => ({
   pluginService: {
     getPluginsRoot: () => mockGetPluginsRoot(),
-    waitForInit: vi.fn().mockResolvedValue(undefined),
+    waitForCatalog: vi.fn().mockResolvedValue(undefined),
     listPlugins: vi.fn().mockReturnValue([]),
     listProjectPlugins: vi.fn().mockReturnValue([]),
   },
