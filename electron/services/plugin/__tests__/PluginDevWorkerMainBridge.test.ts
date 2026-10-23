@@ -11,6 +11,17 @@ const { loggerMock } = vi.hoisted(() => ({
 vi.mock("../../../utils/logger.js", () => ({
   createLogger: () => loggerMock,
 }));
+// Every path under /p is in one project, so a drive-lease check traces there.
+vi.mock("../../driveLeaseTargetResolvers.js", () => ({
+  createLeaseTargetResolvers: () => ({
+    projectsForPath: (p: string) => (p.startsWith("/p/") ? ["project-a"] : []),
+    describeTerminal: () => "missing",
+    projectsForOperation: () => [],
+    projectsForDevPreviewPanel: () => [],
+    projectsForHelpSession: () => [],
+    currentProjectId: () => null,
+  }),
+}));
 
 import { PluginDevWorkerMainBridge } from "../PluginDevWorkerMainBridge.js";
 import {
@@ -30,6 +41,12 @@ import {
   setPluginFrontendRouter,
 } from "../pluginFrontendRouting.js";
 import type { ClientEndpoint } from "../../../ipc/endpoint.js";
+import { assertPluginCallerDrives } from "../pluginDriveLease.js";
+import { ENDED_SERVICE_INVOCATION, currentServiceInvocation } from "../pluginServiceInvocation.js";
+import {
+  _resetDriveLeaseServiceForTesting,
+  type DriveLeaseService,
+} from "../../DriveLeaseService.js";
 
 class FakeWorkerHost extends EventEmitter {
   sent: any[] = [];
@@ -3414,7 +3431,8 @@ describe("PluginDevWorkerMainBridge invocation scope", () => {
     await flush();
     expect(seen).toEqual({ "from-b": "b", "from-a": "a", background: null });
 
-    // Once A's invocation settles, a late call naming it belongs to nobody.
+    // Once A's invocation settles, a late call naming it reaches nobody's
+    // frontend; the drive lease still holds it to A's caller (#14251).
     workerHost.emit("worker-message", {
       type: "invoke-result",
       requestId: invokeA.requestId,
@@ -3430,5 +3448,264 @@ describe("PluginDevWorkerMainBridge invocation scope", () => {
     });
     await flush();
     expect(seen["late-a"]).toBeNull();
+  });
+});
+
+describe("PluginDevWorkerMainBridge late host calls and the drive lease (#14251)", () => {
+  const PROJECT = "project-a";
+  const DRIVER = leaseEndpoint("remote:-9", "client-c");
+  const WATCHER = leaseEndpoint("remote:-4", "client-b");
+  const OTHER = leaseEndpoint("remote:-7", "client-d");
+  let holder: ClientEndpoint | null;
+
+  function leaseEndpoint(endpointId: string, clientId: string): ClientEndpoint {
+    return {
+      endpointId,
+      clientId,
+      projectId: PROJECT,
+      kind: "remote-view",
+      handle: -1,
+      send: vi.fn(),
+      request: vi.fn(),
+      onClose: () => ({ dispose: () => {} }),
+      isClosed: () => false,
+    };
+  }
+
+  beforeEach(() => {
+    holder = DRIVER;
+    const service = {
+      projectsDrivenElsewhere: (caller: Pick<ClientEndpoint, "endpointId">) => {
+        const out = new Map<string, unknown>();
+        if (holder && holder.endpointId !== caller.endpointId) {
+          out.set(PROJECT, {
+            leaseId: 1,
+            endpointId: holder.endpointId,
+            clientId: holder.clientId,
+            clientName: "greg-mbp",
+            isHostLocal: false,
+            acquiredAt: 0,
+          });
+        }
+        return out;
+      },
+      dispose: () => undefined,
+    };
+    _resetDriveLeaseServiceForTesting(service as unknown as DriveLeaseService);
+  });
+
+  afterEach(() => {
+    _resetDriveLeaseServiceForTesting(null);
+    _resetPluginFrontendRoutingForTesting();
+  });
+
+  /** A bridge whose db and fs writes are held to the lease as the host's are. */
+  /** `caller` null makes the invoke outside any caller's call. */
+  async function bridgeWithInvoke(caller: ClientEndpoint | null) {
+    setPluginFrontendRouter({ resolve: () => ({ kind: "local" }), onChange: () => () => {} });
+    const { host, workerHost } = makeBridge({ capabilities: [] });
+    const db = { resolve: vi.fn(), open: vi.fn() };
+    databaseWriteAuthorizers.set(db as never, (id: string, p?: string) =>
+      assertPluginCallerDrives("acme.demo", `db write ${id}`, { paths: [p ?? ""] })
+    );
+    (host as unknown as { db: unknown }).db = db;
+    const written: string[] = [];
+    (host.fs.writeFile as any).mockImplementation(async (p: string) => {
+      await assertPluginCallerDrives("acme.demo", "fs.writeFile", { paths: [p] });
+      written.push(p);
+    });
+    workerHost.emit("worker-message", {
+      type: "host-notify",
+      method: "registerHandler",
+      params: { channel: "go", hasSchema: false },
+    });
+    await flush();
+    const wrapper = (host.registerHandler as any).mock.calls[0][1] as (...a: any[]) => unknown;
+    const invokes = () => workerHost.sent.filter((m) => m.type === "invoke");
+    /** Start one invoke per caller, in order, and return their ids. */
+    const invokeAs = async (...callers: Array<ClientEndpoint | null>) => {
+      const before = invokes().length;
+      for (const by of callers) {
+        if (by === null) void wrapper({}, {});
+        else void runInPluginInvocation("acme.demo", by, () => wrapper({}, {}));
+      }
+      await flush();
+      return invokes()
+        .slice(before)
+        .map((m) => m.requestId as string);
+    };
+    const settleIds = (ids: readonly string[]) => {
+      for (const requestId of ids) {
+        workerHost.emit("worker-message", {
+          type: "invoke-result",
+          requestId,
+          ok: true,
+          result: null,
+        });
+      }
+    };
+    const [invocationId] = await invokeAs(caller);
+    const settle = () => settleIds([invocationId]);
+    const answer = (requestId: string) =>
+      workerHost.sent.find((m) => m.type === "host-result" && m.requestId === requestId);
+    const call = async (requestId: string, method: string, params: unknown, id?: string) => {
+      workerHost.emit("worker-message", {
+        type: "host-call",
+        requestId,
+        method,
+        params,
+        ...(id !== undefined && { invocationId: id }),
+      });
+      await vi.waitFor(() => expect(answer(requestId)).toBeDefined(), { timeout: 5000 });
+      return answer(requestId);
+    };
+    let seq = 0;
+    /**
+     * Make the late writes a plugin's timer would, and collect main's answers.
+     * One at a time: the guard's resolvers are a lazily imported mock, and two
+     * calls racing that first import don't both get it.
+     */
+    const lateWrites = async (id: string | undefined) => {
+      const tag = `w${seq++}`;
+      const db = await call(
+        `${tag}-db`,
+        "db.authorizeWrite",
+        { id: "ledger", path: "/p/.daintree/data/x/ledger.db" },
+        id
+      );
+      const fs = await call(
+        `${tag}-fs`,
+        "fs.writeFile",
+        { path: "/p/notes.md", contents: "x" },
+        id
+      );
+      return { db, fs };
+    };
+    return { invocationId, settle, lateWrites, written, invokeAs, settleIds };
+  }
+
+  const refused = { ok: false, errorFields: { code: "DRIVEN_ELSEWHERE" } };
+
+  it("refuses a watching view's writes made after its call returned", async () => {
+    const { invocationId, settle, lateWrites, written } = await bridgeWithInvoke(WATCHER);
+    settle();
+    const late = await lateWrites(invocationId);
+    expect(late.db).toMatchObject(refused);
+    expect(late.fs).toMatchObject(refused);
+    expect(written).toEqual([]);
+  });
+
+  it("holds post-return work to the lease as the call that started it: the driver's goes ahead", async () => {
+    const { invocationId, settle, lateWrites, written } = await bridgeWithInvoke(DRIVER);
+    settle();
+    const late = await lateWrites(invocationId);
+    expect(late.db).toMatchObject({ ok: true });
+    expect(late.fs).toMatchObject({ ok: true });
+    expect(written).toEqual(["/p/notes.md"]);
+  });
+
+  it("judges post-return work against the lease as it stands, so a takeover counts", async () => {
+    const { invocationId, settle, lateWrites, written } = await bridgeWithInvoke(DRIVER);
+    settle();
+    holder = OTHER;
+    const late = await lateWrites(invocationId);
+    expect(late.db).toMatchObject(refused);
+    expect(late.fs).toMatchObject(refused);
+    expect(written).toEqual([]);
+  });
+
+  it("refuses a call naming an invocation the bridge can't place, where someone drives", async () => {
+    const { lateWrites, written } = await bridgeWithInvoke(DRIVER);
+    const late = await lateWrites("i999");
+    expect(late.db).toMatchObject(refused);
+    expect(late.fs).toMatchObject(refused);
+    expect(written).toEqual([]);
+  });
+
+  it("lets a call naming an invocation it can't place write a project nobody drives", async () => {
+    const { lateWrites, written } = await bridgeWithInvoke(DRIVER);
+    holder = null;
+    const late = await lateWrites("i999");
+    expect(late.db).toMatchObject({ ok: true });
+    expect(late.fs).toMatchObject({ ok: true });
+    expect(written).toEqual(["/p/notes.md"]);
+  });
+
+  it("remembers the last 1,024 returned calls, then holds the oldest's work as nobody's", async () => {
+    const { invocationId, settle, lateWrites, invokeAs, settleIds } =
+      await bridgeWithInvoke(DRIVER);
+    settle();
+    settleIds(await invokeAs(...Array<ClientEndpoint>(1023).fill(DRIVER)));
+    expect((await lateWrites(invocationId)).fs).toMatchObject({ ok: true });
+
+    const [next] = await invokeAs(DRIVER);
+    settleIds([next]);
+    const late = await lateWrites(invocationId);
+    expect(late.db).toMatchObject(refused);
+    expect(late.fs).toMatchObject(refused);
+    expect((await lateWrites(next)).fs).toMatchObject({ ok: true });
+  });
+
+  it("holds each returned call's late work to its own caller, interleaved", async () => {
+    const { invocationId, settle, lateWrites, invokeAs, settleIds } =
+      await bridgeWithInvoke(DRIVER);
+    const [watcherId] = await invokeAs(WATCHER);
+    settle();
+    settleIds([watcherId]);
+    expect((await lateWrites(watcherId)).fs).toMatchObject(refused);
+    expect((await lateWrites(invocationId)).fs).toMatchObject({ ok: true });
+    expect((await lateWrites(watcherId)).db).toMatchObject(refused);
+  });
+
+  it("still checks a returned call's work once routing is gone and the lease remains", async () => {
+    const { invocationId, settle, lateWrites, written } = await bridgeWithInvoke(WATCHER);
+    settle();
+    _resetPluginFrontendRoutingForTesting();
+    expect((await lateWrites(invocationId)).fs).toMatchObject(refused);
+    expect((await lateWrites("i999")).fs).toMatchObject(refused);
+    expect(written).toEqual([]);
+  });
+
+  it("keeps work with no invocation id background, even while a watcher's call is open", async () => {
+    const { lateWrites, written } = await bridgeWithInvoke(WATCHER);
+    const late = await lateWrites(undefined);
+    expect(late.db).toMatchObject({ ok: true });
+    expect(late.fs).toMatchObject({ ok: true });
+    expect(written).toEqual(["/p/notes.md"]);
+  });
+
+  it("checks a live call from a watcher as before", async () => {
+    const { invocationId, lateWrites } = await bridgeWithInvoke(WATCHER);
+    const live = await lateWrites(invocationId);
+    expect(live.db).toMatchObject(refused);
+    expect(live.fs).toMatchObject(refused);
+  });
+
+  it("leaves an invocation that had no caller unchecked once it settles, as it was while open", async () => {
+    const { invocationId, settle, lateWrites, written } = await bridgeWithInvoke(null);
+    const live = await lateWrites(invocationId);
+    expect(live.fs).toMatchObject({ ok: true });
+    settle();
+    const late = await lateWrites(invocationId);
+    expect(late.db).toMatchObject({ ok: true });
+    expect(late.fs).toMatchObject({ ok: true });
+    expect(written).toEqual(["/p/notes.md", "/p/notes.md"]);
+  });
+
+  it("keeps an ended service invocation's work inside the ended service call", async () => {
+    const { host, workerHost } = makeBridge({ capabilities: [] });
+    let seen: unknown;
+    (host.showConfirm as any).mockImplementation(async () => {
+      seen = currentServiceInvocation();
+      return true;
+    });
+    workerHost.emit("worker-message", {
+      type: "host-call",
+      requestId: "c-s",
+      method: "showConfirm",
+      params: { options: { title: "late" } },
+      invocationId: "s999",
+    });
+    await vi.waitFor(() => expect(seen).toBe(ENDED_SERVICE_INVOCATION));
   });
 });

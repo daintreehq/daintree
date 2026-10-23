@@ -1,6 +1,25 @@
 import { AppError } from "../../utils/errorTypes.js";
 import type { LeaseTargetResolvers } from "../driveLeaseTargets.js";
-import { getPluginInvokeOrigin } from "./pluginFrontendRouting.js";
+import { getEndedPluginInvocation, getPluginInvokeOrigin } from "./pluginFrontendRouting.js";
+import type { ClientEndpoint } from "../../ipc/endpoint.js";
+
+/** Who made a call the host can no longer place: it holds no lease, so it drives nothing. */
+const UNKNOWN_CALLER: Pick<ClientEndpoint, "endpointId" | "clientId"> = Object.freeze({
+  endpointId: "",
+  clientId: "",
+});
+
+/**
+ * Who the current work answers to: the call it runs in, or the call that
+ * started it if that call has since returned. Null is a plugin's own
+ * background work.
+ */
+function callerOf(pluginId: string): Pick<ClientEndpoint, "endpointId" | "clientId"> | null {
+  const origin = getPluginInvokeOrigin(pluginId);
+  if (origin !== null) return origin.endpoint;
+  const ended = getEndedPluginInvocation(pluginId);
+  return ended === null ? null : (ended.caller ?? UNKNOWN_CALLER);
+}
 
 /** What a plugin's host call is about to change: paths on disk, or a terminal it types into. */
 export type PluginWriteTarget =
@@ -14,7 +33,9 @@ export type PluginWriteTarget =
  * project asks here, naming what it is about to change.
  *
  * Only calls are held to it: a plugin's own background work is nobody's call,
- * and with no lease service (anyone not in Host mode) nothing is checked. A
+ * and with no lease service (anyone not in Host mode) nothing is checked.
+ * Work a call started that runs after it returned is still that call's, held
+ * to the lease as it stands when the work arrives (#14251). A
  * path in no registered project changes none, so a plugin's own data and
  * drafts stay writable from any view. The project is traced through this
  * Host's records, as the dispatcher's gate traces it, and a lookup that fails
@@ -25,13 +46,13 @@ export async function assertPluginCallerDrives(
   op: string,
   target: PluginWriteTarget
 ): Promise<void> {
-  const origin = getPluginInvokeOrigin(pluginId);
-  if (origin === null) return;
-  // Loaded once a call is in hand: calls carry an origin only in Host mode.
+  const caller = callerOf(pluginId);
+  if (caller === null) return;
+  // Loaded once a call is in hand, which outside Host mode is rare.
   const { peekDriveLeaseService, drivenElsewhereError, unmatchedTargetError } =
     await import("../DriveLeaseService.js");
   const lease = peekDriveLeaseService();
-  if (lease === null || lease.projectsDrivenElsewhere(origin.endpoint).size === 0) return;
+  if (lease === null || lease.projectsDrivenElsewhere(caller).size === 0) return;
 
   const what = `plugin "${pluginId}" ${op}`;
   const { createLeaseTargetResolvers } = await import("../driveLeaseTargetResolvers.js");
@@ -45,7 +66,7 @@ export async function assertPluginCallerDrives(
 
   // Judged against the leases as they stand once the lookup answered: a
   // takeover while it ran counts.
-  const elsewhere = lease.projectsDrivenElsewhere(origin.endpoint);
+  const elsewhere = lease.projectsDrivenElsewhere(caller);
   for (const projectId of traced) {
     const holder = elsewhere.get(projectId);
     if (holder) throw forPlugin(drivenElsewhereError(what, projectId, holder));

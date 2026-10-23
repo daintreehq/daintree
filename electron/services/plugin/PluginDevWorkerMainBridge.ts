@@ -157,7 +157,9 @@ import {
 } from "./pluginInternalApprovers.js";
 import {
   currentPluginInvocation,
+  runWithEndedPluginInvocation,
   runWithPluginInvocation,
+  type EndedPluginInvocation,
   type PluginInvocationScope,
 } from "./pluginFrontendRouting.js";
 
@@ -262,6 +264,13 @@ type InvokeTarget =
 /** Request-id prefix of a `service-method` invoke; every other kind uses `i`. */
 const SERVICE_INVOKE_PREFIX = "s";
 
+/**
+ * How many returned calls' callers a bridge remembers for the work they left
+ * running. Work arriving after its call has dropped out is held to the lease
+ * as a caller nobody knows, which drives nothing.
+ */
+const SETTLED_CALLERS_MAX = 1024;
+
 /** A runtime search provider's answer, which the worker sends as one JSON string. */
 function parseWorkerSearchResult(result: unknown): unknown {
   if (typeof result !== "string") {
@@ -363,6 +372,14 @@ export class PluginDevWorkerMainBridge {
   private protocolViolated = false;
   private invokeSeq = 1;
   private readonly pendingInvokes = new Map<string, PendingInvoke>();
+  /**
+   * Who made each returned frontend call, oldest first, for work it started
+   * that reaches the host afterwards; null for a call that belonged to nobody.
+   */
+  private readonly settledCallers = new Map<
+    string,
+    Pick<PluginInvocationScope["endpoint"], "endpointId" | "clientId"> | null
+  >();
 
   /** In-flight main→worker invokes — the governance "action in flight" signal. */
   get pendingInvokeCount(): number {
@@ -507,6 +524,7 @@ export class PluginDevWorkerMainBridge {
       pending.reject(new Error("Plugin dev worker bridge disposed"));
     }
     this.pendingInvokes.clear();
+    this.settledCallers.clear();
     // Nothing can commit an activation after this point; drop the tracking so a
     // registration settling late can't resurrect the drain.
     this.pendingRegistrations.clear();
@@ -647,6 +665,7 @@ export class PluginDevWorkerMainBridge {
       pending.reject(new Error(reason));
     }
     this.pendingInvokes.clear();
+    this.settledCallers.clear();
   }
 
   /**
@@ -681,6 +700,7 @@ export class PluginDevWorkerMainBridge {
       );
       return;
     }
+    this.settledCallers.clear();
     // Nothing left to settle in the ordinary case; anything still here entered
     // during the gap before the process actually went away.
     if (this.pendingInvokes.size === 0 && this.hostCallAborts.size === 0) return;
@@ -880,6 +900,7 @@ export class PluginDevWorkerMainBridge {
         const pending = this.pendingInvokes.get(msg.requestId);
         if (!pending) return;
         this.pendingInvokes.delete(msg.requestId);
+        this.rememberSettledCaller(msg.requestId, pending.scope);
         if (msg.ok) pending.resolve(msg.result);
         else pending.reject(new Error(msg.error));
         return;
@@ -910,7 +931,8 @@ export class PluginDevWorkerMainBridge {
     const generation = this.reloadGeneration;
     try {
       // The call answers the invocation it was made for, while that invocation
-      // is still outstanding; anything else belongs to no caller.
+      // is still outstanding; once it has returned, only the drive lease still
+      // sees whose call it was (`endedInvocation`).
       const pending =
         msg.invocationId !== undefined ? this.pendingInvokes.get(msg.invocationId) : undefined;
       const scope = pending?.scope ?? null;
@@ -920,9 +942,12 @@ export class PluginDevWorkerMainBridge {
       const service =
         pending?.service ??
         (msg.invocationId?.startsWith(SERVICE_INVOKE_PREFIX) ? ENDED_SERVICE_INVOCATION : null);
+      const ended = pending === undefined ? this.endedInvocation(msg.invocationId) : null;
       const result = await runWithPluginInvocation(scope, () =>
-        runWithServiceInvocation(service, () =>
-          this.dispatchHostCall(msg.method, msg.params, controller.signal)
+        runWithEndedPluginInvocation(ended, () =>
+          runWithServiceInvocation(service, () =>
+            this.dispatchHostCall(msg.method, msg.params, controller.signal)
+          )
         )
       );
       if (this.disposed || generation !== this.reloadGeneration) return;
@@ -946,6 +971,31 @@ export class PluginDevWorkerMainBridge {
         this.hostCallAborts.delete(msg.requestId);
       }
     }
+  }
+
+  private rememberSettledCaller(requestId: string, scope: PluginInvocationScope | null): void {
+    if (requestId.startsWith(SERVICE_INVOKE_PREFIX)) return;
+    this.settledCallers.set(
+      requestId,
+      scope && { endpointId: scope.endpoint.endpointId, clientId: scope.endpoint.clientId }
+    );
+    if (this.settledCallers.size > SETTLED_CALLERS_MAX) {
+      const oldest = this.settledCallers.keys().next();
+      if (!oldest.done) this.settledCallers.delete(oldest.value);
+    }
+  }
+
+  /**
+   * The returned frontend call a late host call names (#14251): its work still
+   * answers to the drive lease as that call's caller. A call that belonged to
+   * nobody stays nobody's, and an id this bridge can't place — cancelled,
+   * dropped out of memory, or never issued — is held as a caller nobody knows.
+   */
+  private endedInvocation(invocationId: string | undefined): EndedPluginInvocation | null {
+    if (invocationId === undefined || invocationId.startsWith(SERVICE_INVOKE_PREFIX)) return null;
+    const caller = this.settledCallers.get(invocationId);
+    if (caller === null) return null;
+    return { pluginId: this.pluginId, caller: caller ?? null };
   }
 
   private async dispatchHostCall(

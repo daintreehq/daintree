@@ -41,6 +41,7 @@ import { agentMcpEndpointRegistry } from "../../pluginAgentMcp/endpointRegistry.
 import {
   _resetPluginFrontendRoutingForTesting,
   runInPluginInvocation,
+  runWithEndedPluginInvocation,
   setPluginFrontendRouter,
 } from "../pluginFrontendRouting.js";
 import {
@@ -373,5 +374,19 @@ describe("plugin database writes from a view that doesn't drive the project", ()
     await expect(
       asCaller(WATCHER, () => approvePluginDatabaseWrite(host.db, "cache"))
     ).resolves.toBeUndefined();
+  });
+
+  it("answers the per-write check for work that outlived its call as that call's caller (#14251)", async () => {
+    installLeases(new Map([["p1", HOLDER]]));
+    const host = makeHost();
+    await (await seedLedger(host)).close();
+    const afterReturn = (caller: ClientEndpoint | null) =>
+      runWithEndedPluginInvocation({ pluginId: INSTANCE, caller }, () =>
+        approvePluginDatabaseWrite(host.db, "ledger")
+      );
+
+    await expect(afterReturn(WATCHER)).rejects.toMatchObject({ code: "DRIVEN_ELSEWHERE" });
+    await expect(afterReturn(null)).rejects.toMatchObject({ code: "DRIVEN_ELSEWHERE" });
+    await expect(afterReturn(HOLDER)).resolves.toBeUndefined();
   });
 });
