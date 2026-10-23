@@ -135,6 +135,8 @@ import type {
   PluginActionDescriptor,
   PluginHostedViewDescriptor,
   PluginTourDescriptor,
+  ProjectTemplateDescriptor,
+  ProjectTemplatePreview,
   PluginInstallOptions,
   PluginInstallError,
   PluginInstallExpectation,
@@ -1533,6 +1535,41 @@ async function handleToursGet(ctx: IpcContext): Promise<PluginTourDescriptor[]> 
 }
 
 /**
+ * Every installed plugin's project templates (#13825), for the Create project
+ * dialog. Not narrowed to the sender's project: a template starts a new
+ * project, so which plugins the current one shows has no bearing on it.
+ */
+async function handleProjectTemplatesGet(): Promise<ProjectTemplateDescriptor[]> {
+  await (await getPluginService()).waitForInit();
+  const { getPluginProjectTemplates } =
+    await import("../../services/plugin/PluginProjectTemplateRegistry.js");
+  return getPluginProjectTemplates();
+}
+
+/**
+ * Every file a template would write (#13825), read from the plugin folder main
+ * registered for it — the renderer names the template, never a path. A
+ * template that can't be copied comes back as data with the reason, so the
+ * dialog can say why rather than show a generic failure.
+ */
+async function handleProjectTemplatePreview(payload: {
+  pluginId: string;
+  templateId: string;
+}): Promise<ProjectTemplatePreview> {
+  if (
+    !payload ||
+    typeof payload !== "object" ||
+    typeof payload.pluginId !== "string" ||
+    typeof payload.templateId !== "string"
+  ) {
+    throw new Error("Invalid project template");
+  }
+  await (await getPluginService()).waitForInit();
+  const { previewProjectTemplate } = await import("../../services/plugin/projectTemplateFiles.js");
+  return previewProjectTemplate(payload.pluginId, payload.templateId);
+}
+
+/**
  * Plugin views that mount outside the panel grid (#13770), as the sender's
  * project may see them: a project plugin's only in its own project, an
  * installed plugin's wherever it is visible. The project comes from the
@@ -2740,6 +2777,11 @@ export const pluginNamespace = defineIpcNamespace({
     getAgents: op(PLUGIN_METHOD_CHANNELS.getAgents, handleAgentsGet),
     getRecipes: op(PLUGIN_METHOD_CHANNELS.getRecipes, handleRecipesGet, { withContext: true }),
     getTours: op(PLUGIN_METHOD_CHANNELS.getTours, handleToursGet, { withContext: true }),
+    getProjectTemplates: op(PLUGIN_METHOD_CHANNELS.getProjectTemplates, handleProjectTemplatesGet),
+    previewProjectTemplate: op(
+      PLUGIN_METHOD_CHANNELS.previewProjectTemplate,
+      handleProjectTemplatePreview
+    ),
     getHostedViews: op(PLUGIN_METHOD_CHANNELS.getHostedViews, handleHostedViewsGet, {
       withContext: true,
     }),

@@ -313,7 +313,11 @@ interface ProjectState {
     parentPath: string,
     folderName: string,
     emoji?: string,
-    options?: { disposition?: ProjectOpenDisposition }
+    options?: {
+      disposition?: ProjectOpenDisposition;
+      /** A plugin project template to copy in, as the dialog previewed it (#13825). */
+      template?: import("@shared/types/plugin").ProjectTemplateSelection;
+    }
   ) => Promise<void>;
   switchProject: (
     projectId: string,
@@ -1533,7 +1537,11 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
   },
 
   createProjectFolder: async (parentPath, folderName, emoji, options) => {
-    const newFolderPath = await projectClient.createFolder(parentPath, folderName);
+    const newFolderPath = await projectClient.createFolder(
+      parentPath,
+      folderName,
+      options?.template
+    );
     // A brand-new folder is never a repo, so this always lands in the
     // NOT_A_GIT_REPO branch below and re-emerges in the git-init dialog — the
     // identity and the chosen window ride along so that dialog neither re-asks

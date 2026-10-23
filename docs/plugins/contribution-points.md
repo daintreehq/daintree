@@ -44,6 +44,7 @@ A plugin that declares `"scope": "project"` lives in a project's own repository 
 | `tours` | Allowed — a project plugin's tours are offered only in its own project |
 | `themes` | Rejected — the app theme is one machine-wide selection painted into every window, with no per-project theme to narrow to |
 | `forgeProviders` | Rejected — forge providers need synchronous host methods that cannot cross the plugin worker's message port |
+| `projectTemplates` | Rejected — a template is offered while a new project folder is being created, before any project exists for a project plugin to belong to. Ship the template from an installed plugin |
 | `fileEditors` | Allowed, view-backed only — editors apply only in the plugin's own project and may also match project-relative `paths`, and an Edit editor may be the `default` for them. A `slot` is built-in only |
 | `previewTools` | Rejected — built-in only; the tool's components resolve out of the host bundle, which no other origin's renderer reaches |
 | `guestAdapters` | Rejected — built-in only; the bundle is emitted by Daintree's own build and runs with full DOM access inside the previewed site |
@@ -1593,6 +1594,42 @@ A tour without `panelKind` is a **plugin tour**, offered from Help and the comma
 **Shipping one.** [Tours](./tours.md) is the full guide: the file layout, a minimal tour to copy, writing narration with `[[cue]]` markers, building scenes with `@daintreehq/tour/kit` and the mock Daintree window, the anchor-naming contract, voicing with `daintree-plugin tour voice` or your own recordings with `tour align`, previewing with `tour preview`, and the house style every tour is held to. In short: you write the narration and a scene module that default-exports `{ scenes, chapterTitles?, mockKit? }`, and the CLI writes `chapters` for you. The bundled `daintree-tour` Claude Code skill (`npx daintree-plugin skill add`) walks through the whole path.
 
 A malformed tour is reported with the offending path, like any other malformed contribution: `daintree-plugin validate` and the installer refuse it, and at load Daintree logs the issues and drops only that tour, so the rest of the plugin still loads. Exceeding the cap of 10 tours is still a whole-manifest error. Audio that is missing, refused or blocked leaves the chapter playing silently with its captions. A project plugin's tours are offered only in its own project, and their progress is kept separately from the same plugin's tours in any other project.
+
+## Project templates — _Shipped_
+
+Starting files for a new project, offered in **Create project folder** under **Template**. "Empty folder" stays first and is the default. Choosing a template lists every file it will write, with its size, before anything is written; instruction files (`AGENTS.md`, `CLAUDE.md`, `.claude/` content and the like) and files belonging to a project plugin are marked. Creating copies exactly those files into the new, empty folder. Nothing in the plugin runs, no install or build command runs, and the plugin worker isn't started. A template that needs one ships a recipe in `.daintree/recipes/` that the user runs. When the user then chooses git init, the files land in the initial commit, except any the template's own `.gitignore` ignores.
+
+```json
+{
+  "contributes": {
+    "projectTemplates": [
+      {
+        "id": "static-site",
+        "title": "Static site",
+        "description": "A Vite site with a dev-server recipe and the site-tools project plugin.",
+        "iconId": "globe"
+      }
+    ]
+  }
+}
+```
+
+The files are the plugin folder's `project-templates/<id>/`, written as they are: a template ships `src/main.ts`, `package.json`, `.gitignore` and `.daintree/` like any project does. Both packers keep that folder intact, TypeScript sources, dev files and dotfiles included, and ignore `.gitignore` inside it, though `.dntrignore` still applies. `node_modules`, `.git` and `.DS_Store` are always left out. `daintree-plugin package` refuses a symlink in a template and a declared template with no files.
+
+**Fields:**
+
+| Field | Required | Notes |
+| --- | --- | --- |
+| `id` | yes | Names the payload folder, `project-templates/<id>/`. Lowercase letters, digits and single hyphens, at most 64 characters, unique within `contributes.projectTemplates`. |
+| `title` | yes | The choice in the Template picker and the install confirmation. At most 80 characters. |
+| `description` | yes | Shown under the picker once the template is chosen. At most 300 characters. |
+| `iconId` | no | One of the shared plugin icon IDs in `shared/config/pluginIconIds.ts`, drawn beside the title in the picker. An unrecognized or custom-SVG ID falls back to the default plugin glyph. |
+
+A template is refused, and can't be chosen, if any file in it is something Daintree never writes into a new project: repository metadata (`.git`, `.gitmodules`), installed dependencies (`node_modules`), or agent configuration and hooks (`.claude/settings*.json`, `.claude/hooks/`, `.mcp.json` at any depth, `.vscode/mcp.json`, `.codex/`, `.gemini/`, `.cursor/`, `.opencode/`, `opencode.json` and the other agents' equivalents). It is also refused for a symlink or special file, a name Windows or macOS can't store (reserved names, `:` and other reserved characters, a trailing dot or space), two names that are one file on a case-insensitive disk, more than 1,000 files, a file over 5 MB, more than 20 MB in all, or folders nested more than 16 deep. The dialog says which file and why. A file is never written with its executable bit.
+
+The list the user approves is the list that is written: creating refuses a template whose files changed after they were listed, and a failed copy removes what it wrote. A project plugin inside the template (`.daintree/plugins/<dir>/`) goes through the usual [trust prompt](./project-local.md) when the project first opens; creating from a template never trusts anything. The archive install confirmation names each template and any project plugin inside it.
+
+Installed and builtin plugins only; at most 10 per plugin.
 
 ## Surfaces — _Shipped (project scope only)_
 

@@ -205,6 +205,10 @@ export type {
   PluginSetupStepDone,
 } from "./plugin.js";
 
+// ── Project templates (contributes.projectTemplates) ────────────────
+
+export type { ProjectTemplateContribution } from "./plugin.js";
+
 // ── Storage (host.storage) ──────────────────────────────────────────
 
 export type { StorageApi, PluginStorageScope } from "./plugin.js";

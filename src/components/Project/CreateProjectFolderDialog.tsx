@@ -4,13 +4,29 @@ import { InlineError } from "@/components/ui/field";
 import { join } from "@shared/utils/path";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { FolderPlus } from "lucide-react";
-import { projectClient } from "@/clients";
+import { pluginClient, projectClient } from "@/clients";
+import type { ProjectTemplateDescriptor, ProjectTemplatePreview } from "@shared/types/plugin";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { resolvePluginIcon } from "@/components/icons/pluginIconRegistry";
+import { useDeferredLoading } from "@/hooks/useDeferredLoading";
+import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
+import { ProjectTemplateFileList } from "./ProjectTemplateFileList";
 import { useProjectStore } from "@/store/projectStore";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { validateFolderName } from "@shared/utils/folderName";
 import { suggestProjectEmoji, DEFAULT_PROJECT_EMOJI } from "@shared/utils/projectEmoji";
 import { ProjectEmojiButton } from "./ProjectEmojiButton";
-import { FormGrid, FormRow } from "@/components/Worktree/views/WorktreeFormLayout";
+import {
+  FIELD_CONTROL_SIZE,
+  FormGrid,
+  FormRow,
+} from "@/components/Worktree/views/WorktreeFormLayout";
 import {
   DirectoryPickerField,
   SlottedInputField,
@@ -20,6 +36,17 @@ import {
   type ProjectOpenDestination,
 } from "./projectDialogFields";
 import { isEnterToSubmit } from "@/lib/enterToSubmit";
+
+/**
+ * The template picker's value for no template, which stays first and the
+ * default. Radix refuses an empty-string item value, and a template's key is a
+ * JSON array, so the two can't collide.
+ */
+const EMPTY_FOLDER = "empty-folder";
+
+function templateKey(template: ProjectTemplateDescriptor): string {
+  return JSON.stringify([template.pluginId, template.templateId]);
+}
 
 interface CreateProjectFolderDialogProps {
   isOpen: boolean;
@@ -38,9 +65,19 @@ export function CreateProjectFolderDialog({ isOpen, onClose }: CreateProjectFold
   // itself — so it isn't stated under the name, and the name isn't marked invalid.
   const [failure, setFailure] = useState<string | null>(null);
   const [isCreating, setIsCreating] = useState(false);
+  // Plugin project templates (#13825). The list is read once per opening; the
+  // preview is whatever the current choice's files are, keyed so a slow read
+  // for a choice the user has since left can never be shown or submitted.
+  const [templates, setTemplates] = useState<ProjectTemplateDescriptor[]>([]);
+  const [selectedTemplateKey, setSelectedTemplateKey] = useState(EMPTY_FOLDER);
+  const [templatePreview, setTemplatePreview] = useState<{
+    key: string;
+    preview: ProjectTemplatePreview;
+  } | null>(null);
   const folderNameInputRef = useRef<HTMLInputElement>(null);
   const homeDirFetchedRef = useRef(false);
   const errorId = useId();
+  const templateHintId = useId();
 
   const createProjectFolder = useProjectStore((state) => state.createProjectFolder);
 
@@ -53,9 +90,22 @@ export function CreateProjectFolderDialog({ isOpen, onClose }: CreateProjectFold
       setError(null);
       setFailure(null);
       setIsCreating(false);
+      setTemplates([]);
+      setSelectedTemplateKey(EMPTY_FOLDER);
+      setTemplatePreview(null);
       homeDirFetchedRef.current = false;
       return;
     }
+
+    let cancelled = false;
+    pluginClient
+      .getProjectTemplates()
+      .then((available) => {
+        if (!cancelled) setTemplates(available);
+      })
+      .catch(() => {
+        // No templates is the dialog as it always was; an empty folder still works.
+      });
 
     // Focus the folder name input immediately on open
     requestAnimationFrame(() => {
@@ -76,7 +126,46 @@ export function CreateProjectFolderDialog({ isOpen, onClose }: CreateProjectFold
       .catch(() => {
         // Silently ignore; user can still Browse
       });
+    return () => {
+      cancelled = true;
+    };
   }, [isOpen]);
+
+  const selectedTemplate = useMemo(
+    () =>
+      selectedTemplateKey === EMPTY_FOLDER
+        ? null
+        : (templates.find((template) => templateKey(template) === selectedTemplateKey) ?? null),
+    [templates, selectedTemplateKey]
+  );
+
+  useEffect(() => {
+    if (!selectedTemplate) return;
+    const key = templateKey(selectedTemplate);
+    let cancelled = false;
+    void pluginClient
+      .previewProjectTemplate(selectedTemplate.pluginId, selectedTemplate.templateId)
+      .catch((err: unknown): ProjectTemplatePreview => ({
+        status: "unusable",
+        reason: formatErrorMessage(err, "Couldn't read this template's files"),
+      }))
+      .then((preview) => {
+        if (!cancelled) setTemplatePreview({ key, preview });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedTemplate]);
+
+  const currentPreview =
+    selectedTemplate && templatePreview?.key === templateKey(selectedTemplate)
+      ? templatePreview.preview
+      : null;
+  const templateBlocked = selectedTemplate !== null && currentPreview?.status !== "ready";
+  const showTemplateLoading = useDeferredLoading(
+    selectedTemplate !== null && currentPreview === null,
+    UI_DOHERTY_THRESHOLD
+  );
 
   const handleBrowseParent = useCallback(async () => {
     try {
@@ -109,6 +198,17 @@ export function CreateProjectFolderDialog({ isOpen, onClose }: CreateProjectFold
       setFailure("Please select a parent directory");
       return;
     }
+    // Never falls back to an empty folder: a chosen template is created as
+    // previewed or not at all.
+    if (selectedTemplate && currentPreview?.status !== "ready") return;
+    const template =
+      selectedTemplate && currentPreview?.status === "ready"
+        ? {
+            pluginId: selectedTemplate.pluginId,
+            templateId: selectedTemplate.templateId,
+            digest: currentPreview.digest,
+          }
+        : undefined;
 
     setIsCreating(true);
     setError(null);
@@ -117,6 +217,7 @@ export function CreateProjectFolderDialog({ isOpen, onClose }: CreateProjectFold
     try {
       await createProjectFolder(parentPath, folderName.trim(), effectiveEmoji, {
         disposition: destination,
+        ...(template ? { template } : {}),
       });
       // Close only after the folder is created (but addProjectByPath runs in the background)
       onClose();
@@ -126,7 +227,16 @@ export function CreateProjectFolderDialog({ isOpen, onClose }: CreateProjectFold
     } finally {
       setIsCreating(false);
     }
-  }, [parentPath, folderName, effectiveEmoji, destination, createProjectFolder, onClose]);
+  }, [
+    parentPath,
+    folderName,
+    effectiveEmoji,
+    destination,
+    selectedTemplate,
+    currentPreview,
+    createProjectFolder,
+    onClose,
+  ]);
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
@@ -215,6 +325,54 @@ export function CreateProjectFolderDialog({ isOpen, onClose }: CreateProjectFold
               }
             />
           </FormRow>
+          {templates.length > 0 && (
+            <FormRow
+              label="Template"
+              htmlFor="create-folder-template"
+              hint={
+                selectedTemplate && (
+                  <p id={templateHintId} className="text-xs text-text-secondary">
+                    {selectedTemplate.description}
+                  </p>
+                )
+              }
+            >
+              <Select
+                value={selectedTemplateKey}
+                onValueChange={(value) => {
+                  setSelectedTemplateKey(value);
+                  setFailure(null);
+                }}
+                disabled={isCreating}
+              >
+                <SelectTrigger
+                  id="create-folder-template"
+                  aria-describedby={selectedTemplate ? templateHintId : undefined}
+                  className={FIELD_CONTROL_SIZE}
+                >
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value={EMPTY_FOLDER}>Empty folder</SelectItem>
+                  {templates.map((template) => {
+                    const Icon = resolvePluginIcon(template.iconId);
+                    return (
+                      <SelectItem
+                        key={templateKey(template)}
+                        value={templateKey(template)}
+                        description={template.pluginName}
+                      >
+                        <span className="flex min-w-0 items-center gap-1.5">
+                          <Icon className="h-3.5 w-3.5 shrink-0 text-text-secondary" aria-hidden />
+                          <span className="truncate">{template.title}</span>
+                        </span>
+                      </SelectItem>
+                    );
+                  })}
+                </SelectContent>
+              </Select>
+            </FormRow>
+          )}
           <FormRow label="Open in" selfLabelled>
             <OpenDestinationControl
               value={destination}
@@ -223,6 +381,9 @@ export function CreateProjectFolderDialog({ isOpen, onClose }: CreateProjectFold
             />
           </FormRow>
         </FormGrid>
+        {selectedTemplate && (
+          <ProjectTemplateFileList preview={currentPreview} showLoading={showTemplateLoading} />
+        )}
         {failure && (
           <Callout severity="error" role="alert">
             <p>{failure}</p>
@@ -252,7 +413,7 @@ export function CreateProjectFolderDialog({ isOpen, onClose }: CreateProjectFold
           label: "Create folder",
           onClick: () => void handleCreate(),
           loading: isCreating,
-          disabled: !parentPath || !folderName.trim() || nameError !== null,
+          disabled: !parentPath || !folderName.trim() || nameError !== null || templateBlocked,
         }}
       />
     </AppDialog>

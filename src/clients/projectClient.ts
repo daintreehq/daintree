@@ -15,6 +15,7 @@ import type {
 import type { NotificationSettings } from "@shared/types/ipc/api";
 import type { RelocationPreview, RelocationRequest } from "@shared/types/projectRelocation";
 import type { AgentPreset } from "@shared/config/agentRegistry";
+import type { ProjectTemplateSelection } from "@shared/types/plugin";
 import type {
   ProjectSwitchOutgoingState,
   ProjectSwitchPayload,
@@ -314,8 +315,12 @@ export const projectClient = {
     return window.electron.project.getNotificationOverrides(projectIds);
   },
 
-  createFolder: (parentPath: string, folderName: string): Promise<string> => {
-    return window.electron.project.createFolder(parentPath, folderName);
+  createFolder: (
+    parentPath: string,
+    folderName: string,
+    template?: ProjectTemplateSelection
+  ): Promise<string> => {
+    return window.electron.project.createFolder(parentPath, folderName, template);
   },
 
   initGit: (directoryPath: string): Promise<void> => {

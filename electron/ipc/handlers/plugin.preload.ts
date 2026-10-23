@@ -63,6 +63,8 @@ export const PLUGIN_METHOD_CHANNELS = {
   getAgents: "plugin:agents-get",
   getRecipes: "plugin:recipes-get",
   getTours: "plugin:tours-get",
+  getProjectTemplates: "plugin:project-templates-get",
+  previewProjectTemplate: "plugin:project-template-preview",
   getHostedViews: "plugin:hosted-views-get",
   getThemes: "plugin:themes-get",
   getIcons: "plugin:icons-get",

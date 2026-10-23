@@ -6,10 +6,18 @@ import { render, screen, waitFor, fireEvent, act } from "@testing-library/react"
 import type { ReactNode, ButtonHTMLAttributes } from "react";
 import { suggestProjectEmoji, DEFAULT_PROJECT_EMOJI } from "@shared/utils/projectEmoji";
 
-const { createProjectFolderMock, openDialogMock, getHomeDirMock } = vi.hoisted(() => ({
+const {
+  createProjectFolderMock,
+  openDialogMock,
+  getHomeDirMock,
+  getProjectTemplatesMock,
+  previewProjectTemplateMock,
+} = vi.hoisted(() => ({
   createProjectFolderMock: vi.fn(),
   openDialogMock: vi.fn(),
   getHomeDirMock: vi.fn(),
+  getProjectTemplatesMock: vi.fn(),
+  previewProjectTemplateMock: vi.fn(),
 }));
 
 vi.mock("@/components/ui/tooltip", () => ({
@@ -20,7 +28,51 @@ vi.mock("@/components/ui/tooltip", () => ({
 
 vi.mock("@/clients", () => ({
   projectClient: { openDialog: openDialogMock },
+  pluginClient: {
+    getProjectTemplates: getProjectTemplatesMock,
+    previewProjectTemplate: previewProjectTemplateMock,
+  },
 }));
+
+// A native select stands in for Radix's, so a choice can be driven with a
+// change event; options keep their visible text.
+vi.mock("@/components/ui/select", async () => {
+  const { isValidElement } = await import("react");
+  const textOf = (node: ReactNode): string => {
+    if (typeof node === "string" || typeof node === "number") return String(node);
+    if (Array.isArray(node)) return node.map(textOf).join("");
+    if (isValidElement<{ children?: ReactNode }>(node)) return textOf(node.props.children);
+    return "";
+  };
+  return {
+    Select: ({
+      value,
+      onValueChange,
+      disabled,
+      children,
+    }: {
+      value: string;
+      onValueChange: (value: string) => void;
+      disabled?: boolean;
+      children: ReactNode;
+    }) => (
+      <select
+        aria-label="Template"
+        value={value}
+        disabled={disabled}
+        onChange={(event) => onValueChange(event.target.value)}
+      >
+        {children}
+      </select>
+    ),
+    SelectTrigger: () => null,
+    SelectValue: () => null,
+    SelectContent: ({ children }: { children: ReactNode }) => <>{children}</>,
+    SelectItem: ({ value, children }: { value: string; children: ReactNode }) => (
+      <option value={value}>{textOf(children)}</option>
+    ),
+  };
+});
 
 vi.mock("@/store/projectStore", () => ({
   useProjectStore: (selector: (state: unknown) => unknown) =>
@@ -127,6 +179,10 @@ async function renderDialog() {
   );
   return { onClose, ...result };
 }
+
+beforeEach(() => {
+  getProjectTemplatesMock.mockResolvedValue([]);
+});
 
 describe("CreateProjectFolderDialog validation", () => {
   beforeEach(() => {
@@ -281,6 +337,185 @@ describe("CreateProjectFolderDialog destination (#12594)", () => {
       expect(screen.getByRole("radio", { name: "This window" }).getAttribute("aria-checked")).toBe(
         "true"
       )
+    );
+  });
+});
+
+describe("CreateProjectFolderDialog project templates (#13825)", () => {
+  const SITE = {
+    pluginId: "acme.sites",
+    pluginName: "Acme Sites",
+    templateId: "site",
+    title: "Static site",
+    description: "A site with a build recipe.",
+    iconId: "globe",
+  };
+  const BLOG = { ...SITE, templateId: "blog", title: "Blog", description: "A blog." };
+  const sitePreview = {
+    status: "ready" as const,
+    digest: "site-digest",
+    totalBytes: 2048,
+    files: [
+      { path: ".daintree/plugins/site-tools/plugin.json", size: 512, kind: "project-plugin" },
+      { path: "AGENTS.md", size: 512, kind: "instructions" },
+      { path: "src/main.ts", size: 1024, kind: "file" },
+    ],
+  };
+
+  function templateSelect() {
+    return screen.getByRole<HTMLSelectElement>("combobox", { name: "Template" });
+  }
+
+  function createButton() {
+    return screen.getByRole("button", { name: /^create folder$/i });
+  }
+
+  function chooseTemplate(index: number) {
+    const option = templateSelect().options.item(index);
+    if (!option) throw new Error(`No template option at ${index}`);
+    fireEvent.change(templateSelect(), { target: { value: option.value } });
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    getHomeDirMock.mockResolvedValue("/Users/test");
+    createProjectFolderMock.mockResolvedValue(undefined);
+    getProjectTemplatesMock.mockResolvedValue([SITE, BLOG]);
+    Object.defineProperty(window, "electron", {
+      configurable: true,
+      writable: true,
+      value: { system: { getHomeDir: getHomeDirMock } },
+    });
+  });
+
+  it("offers no template choice when no plugin contributes one", async () => {
+    getProjectTemplatesMock.mockResolvedValue([]);
+    await renderDialog();
+    expect(screen.queryByRole("combobox", { name: "Template" })).toBeNull();
+  });
+
+  it("lists Empty folder first and selected, then each template", async () => {
+    await renderDialog();
+    await waitFor(() => templateSelect());
+
+    const options = Array.from(templateSelect().options, (option) => option.textContent);
+    expect(options).toEqual(["Empty folder", "Static site", "Blog"]);
+    expect(templateSelect().selectedIndex).toBe(0);
+    expect(previewProjectTemplateMock).not.toHaveBeenCalled();
+  });
+
+  it("lists every file a template writes, then creates from exactly that list", async () => {
+    previewProjectTemplateMock.mockResolvedValue(sitePreview);
+    await renderDialog();
+    fireEvent.change(folderInput(), { target: { value: "my-site" } });
+    await waitFor(() => templateSelect());
+
+    chooseTemplate(1);
+
+    const list = await screen.findByTestId("project-template-files");
+    const rows = Array.from(list.querySelectorAll("li"), (li) => li.textContent);
+    expect(rows).toEqual([
+      expect.stringContaining(".daintree/plugins/site-tools/plugin.json"),
+      expect.stringContaining("AGENTS.md"),
+      expect.stringContaining("src/main.ts"),
+    ]);
+    expect(rows[0]).toContain("Project plugin");
+    expect(rows[1]).toContain("Instructions");
+    expect(screen.getByText("A site with a build recipe.")).toBeTruthy();
+    expect(previewProjectTemplateMock).toHaveBeenCalledWith("acme.sites", "site");
+
+    await act(async () => {
+      fireEvent.click(createButton());
+    });
+    expect(createProjectFolderMock).toHaveBeenCalledWith(
+      "/Users/test",
+      "my-site",
+      suggestProjectEmoji("my-site"),
+      {
+        disposition: "current",
+        template: { pluginId: "acme.sites", templateId: "site", digest: "site-digest" },
+      }
+    );
+  });
+
+  it("says why a template can't be used and won't create from it", async () => {
+    previewProjectTemplateMock.mockResolvedValue({
+      status: "unusable",
+      reason:
+        '".mcp.json" is agent configuration, which a template never copies into a new project.',
+    });
+    await renderDialog();
+    fireEvent.change(folderInput(), { target: { value: "my-site" } });
+    await waitFor(() => templateSelect());
+
+    chooseTemplate(1);
+
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain(".mcp.json");
+    expect(createButton().getAttribute("aria-disabled")).toBe("true");
+    await act(async () => {
+      fireEvent.click(createButton());
+    });
+    expect(createProjectFolderMock).not.toHaveBeenCalled();
+  });
+
+  it("never shows or submits a preview for a template the user has moved off", async () => {
+    let resolveSite: (value: unknown) => void = () => {};
+    previewProjectTemplateMock.mockImplementation((_pluginId: string, templateId: string) =>
+      templateId === "site"
+        ? new Promise((resolve) => (resolveSite = resolve))
+        : Promise.resolve({
+            status: "ready",
+            digest: "blog-digest",
+            totalBytes: 10,
+            files: [{ path: "posts/hello.md", size: 10, kind: "file" }],
+          })
+    );
+    await renderDialog();
+    fireEvent.change(folderInput(), { target: { value: "my-blog" } });
+    await waitFor(() => templateSelect());
+
+    chooseTemplate(1);
+    chooseTemplate(2);
+    await screen.findByText("posts/hello.md");
+    await act(async () => {
+      resolveSite(sitePreview);
+    });
+
+    expect(screen.queryByText("src/main.ts")).toBeNull();
+    await act(async () => {
+      fireEvent.click(createButton());
+    });
+    expect(createProjectFolderMock).toHaveBeenCalledWith(
+      "/Users/test",
+      "my-blog",
+      suggestProjectEmoji("my-blog"),
+      {
+        disposition: "current",
+        template: { pluginId: "acme.sites", templateId: "blog", digest: "blog-digest" },
+      }
+    );
+  });
+
+  it("creates an empty folder again after switching back to Empty folder", async () => {
+    previewProjectTemplateMock.mockResolvedValue(sitePreview);
+    await renderDialog();
+    fireEvent.change(folderInput(), { target: { value: "plain" } });
+    await waitFor(() => templateSelect());
+
+    chooseTemplate(1);
+    await screen.findByTestId("project-template-files");
+    chooseTemplate(0);
+
+    expect(screen.queryByTestId("project-template-files")).toBeNull();
+    await act(async () => {
+      fireEvent.click(createButton());
+    });
+    expect(createProjectFolderMock).toHaveBeenCalledWith(
+      "/Users/test",
+      "plain",
+      suggestProjectEmoji("plain"),
+      { disposition: "current" }
     );
   });
 });

@@ -376,6 +376,10 @@ import {
   type PluginTourRemoteAudio,
 } from "./plugin/PluginTourRegistry.js";
 import {
+  registerPluginProjectTemplates,
+  unregisterPluginProjectTemplates,
+} from "./plugin/PluginProjectTemplateRegistry.js";
+import {
   registerPluginHostedViews,
   unregisterPluginHostedViews,
 } from "./plugin/PluginHostedViewRegistry.js";
@@ -3174,6 +3178,19 @@ export class PluginService {
     // never cached. The module itself is imported only when a tour opens.
     // Registered under the instance key, so a project plugin's tours stay with
     // its project and never collide with the same plugin installed globally.
+    // Project templates (#13825) are declarative: the host reads their files
+    // straight from the plugin folder when the Create project dialog asks, so
+    // nothing here runs plugin code. Installed and builtin plugins only — the
+    // manifest schema refuses them for project scope.
+    if (manifest.contributes.projectTemplates.length > 0) {
+      registerPluginProjectTemplates(
+        pluginId,
+        manifest.displayName ?? manifest.name,
+        pluginDir,
+        manifest.contributes.projectTemplates
+      );
+    }
+
     if (manifest.contributes.tours.length > 0) {
       registerPluginTours(pluginId, manifest.contributes.tours, {
         pluginName: manifest.displayName ?? manifest.name,
@@ -8002,6 +8019,9 @@ export class PluginService {
       this.broadcaster.scheduleRecipesBroadcast(true)
     );
     runUnloadStep(pluginId, "unregisterPluginTours", () => unregisterPluginTours(pluginId));
+    runUnloadStep(pluginId, "unregisterPluginProjectTemplates", () =>
+      unregisterPluginProjectTemplates(pluginId)
+    );
     runUnloadStep(pluginId, "scheduleToursBroadcast", () =>
       this.broadcaster.scheduleToursBroadcast()
     );

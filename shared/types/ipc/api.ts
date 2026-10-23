@@ -787,7 +787,11 @@ export interface ElectronAPI extends GeneratedElectronAPI {
       projectIds: string[]
     ): Promise<Record<string, Partial<NotificationSettings>>>;
     onStatsUpdated(callback: (stats: ProjectStatusMap) => void): () => void;
-    createFolder(parentPath: string, folderName: string): Promise<string>;
+    createFolder(
+      parentPath: string,
+      folderName: string,
+      template?: import("../plugin.js").ProjectTemplateSelection
+    ): Promise<string>;
     initGit(directoryPath: string): Promise<void>;
     /** Initialize git repository with progress events */
     initGitGuided(options: GitInitOptions): Promise<GitInitResult>;

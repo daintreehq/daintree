@@ -2283,8 +2283,16 @@ function buildElectronApi(): ElectronAPI {
         callback: (stats: import("../shared/types/ipc/project.js").ProjectStatusMap) => void
       ) => _typedOn(CHANNELS.PROJECT_STATS_UPDATED, callback),
 
-      createFolder: (parentPath: string, folderName: string): Promise<string> =>
-        _unwrappingInvoke(CHANNELS.PROJECT_CREATE_FOLDER, { parentPath, folderName }),
+      createFolder: (
+        parentPath: string,
+        folderName: string,
+        template?: import("../shared/types/plugin.js").ProjectTemplateSelection
+      ): Promise<string> =>
+        _unwrappingInvoke(CHANNELS.PROJECT_CREATE_FOLDER, {
+          parentPath,
+          folderName,
+          ...(template !== undefined ? { template } : {}),
+        }),
 
       initGit: (directoryPath: string) =>
         _unwrappingInvoke(CHANNELS.PROJECT_INIT_GIT, directoryPath),

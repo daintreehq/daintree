@@ -8,6 +8,7 @@ import {
 } from "../../../../electron/services/PluginArchive.js";
 import { resolveVitePlan, runVitePlanBuild } from "../lib/viteBuild.js";
 import { runValidate } from "./validate.js";
+import { PROJECT_TEMPLATES_DIR } from "../../../../electron/utils/pluginArchiveConstants.js";
 import { isPluginCustomIconRef } from "../../../../shared/config/pluginCustomIcon.js";
 import { parseJsonText } from "../lib/parseJsonText.js";
 
@@ -42,10 +43,44 @@ async function dntrignoreKept(dir: string): Promise<Set<string>> {
       cwd: dir,
       ignoreFiles: [DNTRIGNORE_FILENAME],
       ignore: ["node_modules/**", ".git/**"],
-      dot: false,
+      // Dotfiles too, so a project template's `.gitignore` or `.daintree/`
+      // survives the intersection. Harmless for everything else: the other
+      // passes still skip dotfiles, and this set only ever narrows them.
+      dot: true,
       onlyFiles: true,
     })
   );
+}
+
+/**
+ * Every file in each declared project template's `project-templates/<id>/`
+ * folder (#13825). A template is a project's starting files, so this pass
+ * ignores `.gitignore` (a template's own `.gitignore` describes the project it
+ * creates, not this plugin) and keeps dotfiles. A symlink is refused rather
+ * than dropped: the host copies regular files only, and a template quietly
+ * missing a file is worse than a packaging error.
+ */
+async function projectTemplateFiles(dir: string, manifest: MinimalManifest): Promise<string[]> {
+  const ids = (manifest.contributes?.projectTemplates ?? []).map((template) => template.id);
+  if (ids.length === 0) return [];
+  const entries = await globby(
+    ids.map((id) => `${PROJECT_TEMPLATES_DIR}/${id}/**/*`),
+    {
+      cwd: dir,
+      dot: true,
+      onlyFiles: false,
+      followSymbolicLinks: false,
+      objectMode: true,
+      ignore: ["**/node_modules/**", "**/.git/**"],
+    }
+  );
+  const links = entries.filter((entry) => entry.dirent.isSymbolicLink()).map((e) => e.path);
+  if (links.length > 0) {
+    throw new Error(
+      `Project templates may only contain files and folders, not symbolic links: ${links.sort().join(", ")}`
+    );
+  }
+  return entries.filter((entry) => entry.dirent.isFile()).map((entry) => entry.path);
 }
 
 /**
@@ -123,6 +158,7 @@ interface MinimalManifest {
     launchEntries?: Array<{ iconId?: string }>;
     searchProviders?: Array<{ iconId?: string }>;
     processTools?: Array<{ iconId?: string }>;
+    projectTemplates?: Array<{ id: string }>;
   };
 }
 
@@ -197,8 +233,12 @@ export async function runPackage(opts: PackageOptions = {}): Promise<PackageResu
   // above), but `.dntrignore` states shipping policy, so it has to reach stray
   // files living *inside* a protected dir — `dist/docs/**` being the case that
   // motivated it.
+  const templatePayload = await projectTemplateFiles(dir, manifest);
+
   const kept = await dntrignoreKept(dir);
-  const candidates = new Set<string>([...gitignored, ...preserved].filter((f) => kept.has(f)));
+  const candidates = new Set<string>(
+    [...gitignored, ...preserved, ...templatePayload].filter((f) => kept.has(f))
+  );
   // The manifest is the one file no policy may drop.
   candidates.add("plugin.json");
 
@@ -210,6 +250,17 @@ export async function runPackage(opts: PackageOptions = {}): Promise<PackageResu
 
   if (!files.includes("plugin.json")) {
     throw new Error("plugin.json not found in the plugin directory");
+  }
+
+  const emptyTemplates = (manifest.contributes?.projectTemplates ?? [])
+    .map((template) => template.id)
+    .filter((id) => !files.some((f) => f.startsWith(`${PROJECT_TEMPLATES_DIR}/${id}/`)));
+  if (emptyTemplates.length > 0) {
+    throw new Error(
+      `Project ${emptyTemplates.length === 1 ? "template has" : "templates have"} no files to ship: ` +
+        `${emptyTemplates.map((id) => `${PROJECT_TEMPLATES_DIR}/${id}/`).join(", ")}. ` +
+        `Add the template's files there, or check ${DNTRIGNORE_FILENAME}.`
+    );
   }
 
   const missing = requiredManifestPaths(manifest).filter((ref) => !files.includes(ref));

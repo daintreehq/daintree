@@ -2733,6 +2733,61 @@ export interface PluginTourDescriptor {
 }
 
 /**
+ * One `contributes.projectTemplates` entry (#13825): a starting set of files
+ * offered in the Create project dialog. The files are the plugin's
+ * `project-templates/<id>/` folder, copied as they are into the new folder the
+ * user names. Nothing in the plugin runs to produce them.
+ */
+export interface ProjectTemplateContribution {
+  id: string;
+  title: string;
+  description: string;
+  /** A plugin icon id (`shared/config/pluginIconIds.ts`); advisory, with a fallback glyph. */
+  iconId?: string;
+}
+
+/** A loaded plugin's project template as the Create project dialog lists it. */
+export interface ProjectTemplateDescriptor {
+  pluginId: string;
+  /** The plugin's display name, which the dialog attributes the template to. */
+  pluginName: string;
+  templateId: string;
+  title: string;
+  description: string;
+  iconId?: string;
+}
+
+/**
+ * What a template file is to the user reading the list: an instruction file
+ * agents read, part of a project plugin that asks for trust on first open, or
+ * anything else.
+ */
+export type ProjectTemplateFileKind = "file" | "instructions" | "project-plugin";
+
+export interface ProjectTemplateFile {
+  /** Relative to the new project folder, `/`-separated. */
+  path: string;
+  size: number;
+  kind: ProjectTemplateFileKind;
+}
+
+/**
+ * Every file a template would write, or why it can't be used. `digest` names
+ * this exact set of paths and bytes; creating from the template hands it back
+ * and is refused if the files have changed since.
+ */
+export type ProjectTemplatePreview =
+  | { status: "ready"; digest: string; files: ProjectTemplateFile[]; totalBytes: number }
+  | { status: "unusable"; reason: string };
+
+/** The template a new project folder starts from, as the dialog previewed it. */
+export interface ProjectTemplateSelection {
+  pluginId: string;
+  templateId: string;
+  digest: string;
+}
+
+/**
  * Per-capability scope binding that attenuates the compound-capability lattice
  * elevation in `PluginService.validateAndBuildActionDescriptor`. The lattice
  * elevates `effectiveDanger` to `"confirm"` when a plugin pairs a sensitive
@@ -3165,6 +3220,12 @@ export interface PluginManifest {
      * as `agentMcp`.
      */
     tours?: PluginTourContribution[];
+    /**
+     * Project templates offered in the Create project dialog (#13825). Optional
+     * in the type but always materialized by the manifest schema's
+     * `.default([])`, like `agentMcp`. Installed and builtin plugins only.
+     */
+    projectTemplates?: ProjectTemplateContribution[];
     /**
      * Project surfaces this plugin claims (§7.8). Optional in the type but
      * always materialized by the manifest schema's `.default({})`, so a
@@ -4004,6 +4065,15 @@ export interface PluginArchiveManifestPreview {
    * reads.
    */
   recipes: { count: number; names: string[] };
+  /**
+   * Project templates (#13825), by title, each with the project plugins its
+   * files include — named by their `.daintree/plugins/<dir>` folder, read from
+   * the archive's entry names without parsing or loading anything. A template
+   * writes files only after the Create project dialog lists every one, but a
+   * project plugin inside it asks for trust when that project first opens, so
+   * install is where the user first hears about it.
+   */
+  projectTemplates: Array<{ title: string; projectPlugins: string[] }>;
 }
 
 /**

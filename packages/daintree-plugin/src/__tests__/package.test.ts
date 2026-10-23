@@ -284,3 +284,78 @@ describe("runPackage", () => {
     expect(result.outputPath).toBeUndefined();
   });
 });
+
+describe("project templates (#13825)", () => {
+  async function templateFixture(): Promise<void> {
+    await writeFile(
+      "plugin.json",
+      JSON.stringify({
+        name: "acme.packtest",
+        version: "0.2.0",
+        main: "dist/index.js",
+        engines: { daintree: "^0.11.0" },
+        contributes: {
+          projectTemplates: [{ id: "site", title: "Site", description: "A starter site." }],
+        },
+      })
+    );
+    await writeFile("dist/index.js", "export const x = 1;");
+    await writeFile(".gitignore", "dist/\nnode_modules/\n*.log\n");
+    await writeFile("project-templates/site/src/main.ts", "export {};");
+    await writeFile("project-templates/site/.gitignore", "node_modules\n");
+    await writeFile("project-templates/site/.daintree/recipes/dev.json", "{}");
+    await writeFile("project-templates/site/notes.log", "template content");
+    await writeFile("project-templates/site/node_modules/dep/index.js", "");
+  }
+
+  it("ships every template file, sources and dotfiles included, whatever .gitignore says", async () => {
+    await templateFixture();
+    const result = await runPackage({ dir: tmpDir, dryRun: true, skipBuild: true });
+    expect(result.files).toEqual(
+      expect.arrayContaining([
+        "project-templates/site/src/main.ts",
+        "project-templates/site/.gitignore",
+        "project-templates/site/.daintree/recipes/dev.json",
+        "project-templates/site/notes.log",
+      ])
+    );
+    expect(result.files.some((f) => f.includes("node_modules"))).toBe(false);
+  });
+
+  it("still lets .dntrignore leave template files out", async () => {
+    await templateFixture();
+    await writeFile(".dntrignore", "project-templates/site/notes.log\n");
+    const result = await runPackage({ dir: tmpDir, dryRun: true, skipBuild: true });
+    expect(result.files).not.toContain("project-templates/site/notes.log");
+    expect(result.files).toContain("project-templates/site/.gitignore");
+  });
+
+  it("writes an archive that verifies", async () => {
+    await templateFixture();
+    const result = await runPackage({ dir: tmpDir, skipBuild: true });
+    const verify = await verifyPluginArchive(result.outputPath!);
+    expect(verify.valid).toBe(true);
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "refuses a symlink in a template rather than dropping it",
+    async () => {
+      await templateFixture();
+      await fs.symlink(
+        path.join(tmpDir, "dist", "index.js"),
+        path.join(tmpDir, "project-templates", "site", "linked.js")
+      );
+      await expect(runPackage({ dir: tmpDir, dryRun: true, skipBuild: true })).rejects.toThrow(
+        "project-templates/site/linked.js"
+      );
+    }
+  );
+
+  it("refuses a declared template with no files to ship", async () => {
+    await templateFixture();
+    await fs.rm(path.join(tmpDir, "project-templates"), { recursive: true });
+    await expect(runPackage({ dir: tmpDir, dryRun: true, skipBuild: true })).rejects.toThrow(
+      "project-templates/site/"
+    );
+  });
+});

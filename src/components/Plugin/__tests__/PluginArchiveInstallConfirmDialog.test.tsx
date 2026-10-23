@@ -53,6 +53,7 @@ function intent(overrides: Partial<PluginArchiveInstallIntent> = {}): PluginArch
       authors: [{ name: "Ada Lovelace", role: "maintainer" }],
       capabilities: ["fs:project-read", "network:fetch"],
       recipes: { count: 0, names: [] },
+      projectTemplates: [],
     },
     ...overrides,
   };
@@ -145,6 +146,7 @@ describe("PluginArchiveInstallConfirmDialog", () => {
           authors: [],
           capabilities: ["fs:project-read", "shell:exec", "network:fetch"],
           recipes: { count: 0, names: [] },
+          projectTemplates: [],
         },
       })
     );
@@ -173,6 +175,7 @@ describe("PluginArchiveInstallConfirmDialog", () => {
           authors: [],
           capabilities: ["network:fetch", "git:write"],
           recipes: { count: 0, names: [] },
+          projectTemplates: [],
         },
       })
     );
@@ -194,6 +197,7 @@ describe("PluginArchiveInstallConfirmDialog", () => {
           authors: [],
           capabilities: ["fs:project-read", "clipboard:read"],
           recipes: { count: 0, names: [] },
+          projectTemplates: [],
         },
       })
     );
@@ -216,6 +220,7 @@ describe("PluginArchiveInstallConfirmDialog", () => {
           authors: [],
           capabilities: [],
           recipes: { count: 0, names: [] },
+          projectTemplates: [],
         },
       })
     );
@@ -235,6 +240,7 @@ describe("PluginArchiveInstallConfirmDialog", () => {
           authors: [],
           capabilities: [],
           recipes: { count: 0, names: [] },
+          projectTemplates: [],
         },
       })
     );
@@ -254,6 +260,7 @@ describe("PluginArchiveInstallConfirmDialog", () => {
           authors: [],
           capabilities: [],
           recipes: { count: 0, names: [] },
+          projectTemplates: [],
         },
       })
     );
@@ -274,6 +281,7 @@ describe("PluginArchiveInstallConfirmDialog", () => {
           authors: [],
           capabilities: [],
           recipes: { count: 0, names: [] },
+          projectTemplates: [],
         },
       })
     );
@@ -295,6 +303,7 @@ describe("PluginArchiveInstallConfirmDialog", () => {
           authors: [],
           capabilities: [],
           recipes: { count: 0, names: [] },
+          projectTemplates: [],
         } as unknown as PluginArchiveInstallIntent["manifest"],
       })
     );
@@ -313,6 +322,7 @@ describe("PluginArchiveInstallConfirmDialog", () => {
           authors: Array.from({ length: 10 }, (_, i) => ({ name: `Author ${i + 1}` })),
           capabilities: [],
           recipes: { count: 0, names: [] },
+          projectTemplates: [],
         },
       })
     );

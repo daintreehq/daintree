@@ -8,7 +8,12 @@ import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { usePluginArchiveInstallStore } from "@/store/pluginArchiveInstallStore";
 import type { PendingPluginArchiveInstall } from "@/store/pluginArchiveInstallStore";
 import { BUILT_IN_PLUGIN_CAPABILITIES } from "@shared/types/plugin";
-import type { BuiltInPluginCapability, PluginAuthor } from "@shared/types/plugin";
+import type {
+  BuiltInPluginCapability,
+  PluginArchiveManifestPreview,
+  PluginAuthor,
+} from "@shared/types/plugin";
+import { pluralNoun, pluralize } from "@/lib/pluralize";
 import { CAPABILITY_META, CapabilityRow, type CapabilitySeverity } from "./capabilityMeta";
 import { PluginGlyphTile, pluginIconForIdentity } from "./pluginIcons";
 import { SECTION_LABEL_CLASS } from "@/components/ui/sectionLabel";
@@ -165,6 +170,7 @@ export function PluginArchiveInstallConfirmDialog() {
         <ArchiveIdentityCard intent={current} />
         <ArchivePermissions capabilities={current.manifest.capabilities} />
         <ArchiveRecipes recipes={current.manifest.recipes} />
+        <ArchiveProjectTemplates templates={current.manifest.projectTemplates} />
         {error !== null && (
           <Callout severity="error" role="alert">
             <p>{error}</p>
@@ -271,6 +277,66 @@ function ArchiveRecipes({ recipes }: { recipes: { count: number; names: string[]
           ))}
         </ul>
       </ScrollShadow>
+    </div>
+  );
+}
+
+/**
+ * Project templates the archive contributes (#13825). A template writes files
+ * only after the Create project dialog lists every one, so the titles are
+ * enough here — except for a project plugin inside a template, which asks for
+ * trust when that project first opens and so is named before install.
+ */
+function ArchiveProjectTemplates({
+  templates,
+}: {
+  templates: PluginArchiveManifestPreview["projectTemplates"];
+}) {
+  if (templates.length === 0) return null;
+  return (
+    <div className="space-y-2">
+      <h4 className={SECTION_LABEL_CLASS}>Project templates</h4>
+      <p className="text-xs text-text-secondary">
+        Adds {pluralize(templates.length, "template")} to Create project. A template copies its
+        files into a new folder after showing you each one.
+      </p>
+      <ScrollShadow
+        className="max-h-[132px]"
+        scrollClassName="scroll-py-6"
+        tabIndex={0}
+        role="region"
+        aria-label={pluralize(templates.length, "contributed template")}
+        data-testid="archive-template-list"
+      >
+        <ul className="space-y-1">
+          {templates.map((template, index) => (
+            <li
+              key={`${template.title}-${index}`}
+              className="text-xs text-text-secondary break-words min-w-0"
+            >
+              {template.title}
+              {template.projectPlugins.length > 0 && (
+                <span>
+                  {" "}
+                  — includes {pluralNoun(template.projectPlugins.length, "project plugin")}{" "}
+                  {template.projectPlugins.map((name, pluginIndex) => (
+                    <span key={`${name}-${pluginIndex}`}>
+                      {pluginIndex > 0 && ", "}
+                      <span className="font-mono text-text-primary">{name}</span>
+                    </span>
+                  ))}
+                </span>
+              )}
+            </li>
+          ))}
+        </ul>
+      </ScrollShadow>
+      {templates.some((template) => template.projectPlugins.length > 0) && (
+        <p className="text-xs text-text-secondary">
+          A project plugin from a template stays off until you trust it when the new project first
+          opens.
+        </p>
+      )}
     </div>
   );
 }

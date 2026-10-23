@@ -1194,6 +1194,8 @@ export const CHANNELS = {
   PLUGIN_RECIPES_GET: "plugin:recipes-get",
   /** Plugin tours visible in the sender's project (#12773). */
   PLUGIN_TOURS_GET: "plugin:tours-get",
+  PLUGIN_PROJECT_TEMPLATES_GET: "plugin:project-templates-get",
+  PLUGIN_PROJECT_TEMPLATE_PREVIEW: "plugin:project-template-preview",
   /** Plugin views that mount outside the panel grid, visible in the sender's project (#13770). */
   PLUGIN_HOSTED_VIEWS_GET: "plugin:hosted-views-get",
   /** Every theme an installed plugin offers, app-wide (#13832). */
