@@ -405,12 +405,16 @@ class TerminalInstanceService {
             managed.lastHeight = 0;
           }
         } else {
-          // Tier upgrade path: re-derive the configured capacity, which may have
-          // been lowered by a memory-pressure reduce or a profile downshift
-          // while hidden (raising it never brings back dropped lines). Clearing
-          // the cooldown keeps a long-completed reduce from blocking it.
-          managed.lastScrollbackReduceAt = undefined;
-          restoreScrollback(managed);
+          // Tier upgrade path: re-derive the configured capacity, which a
+          // memory-pressure reduce may have lowered while hidden (raising it
+          // never brings back dropped lines). Only for a pane on screen: a
+          // hidden one climbs to BURST on every output chunk, and restoring
+          // there would hand a streaming agent its full buffer back moments
+          // after the reduce. The reveal itself restores it (setVisible).
+          if (managed.isVisible) {
+            managed.lastScrollbackReduceAt = undefined;
+            restoreScrollback(managed);
+          }
 
           void this.ensureDeferredAddons(id, managed);
         }
@@ -1023,8 +1027,21 @@ class TerminalInstanceService {
   }
 
   setVisible(id: string, isVisible: boolean, expectedGeneration?: number): void {
+    const wasVisible = this.instances.get(id)?.isVisible;
     this.revealController.setVisible(id, isVisible, expectedGeneration);
     const managed = this.instances.get(id);
+    // A pane revealed mid-stream can stay at BURST, so the tier-upgrade
+    // restore never fires; give its capacity back here instead. The stamp
+    // marks a pane shrunk while hidden — only those need it.
+    if (
+      managed &&
+      wasVisible === false &&
+      managed.isVisible &&
+      managed.lastScrollbackReduceAt !== undefined
+    ) {
+      managed.lastScrollbackReduceAt = undefined;
+      restoreScrollback(managed);
+    }
     if (
       isVisible &&
       managed?.isVisible &&
@@ -4118,16 +4135,17 @@ class TerminalInstanceService {
 
   // Re-derive the scrollback policy for every live terminal. Called on
   // resource-profile changes after setAgentScrollbackMaxLines so the new agent
-  // ceiling applies to terminals that are already open — background ones
-  // included, since they hold most of the memory. restoreScrollback guards any
-  // shrink that would evict history.
+  // ceiling applies to terminals that are already open — hidden ones included,
+  // since they hold most of the memory. restoreScrollback guards any shrink
+  // that would evict history. Hidden panes only ever shrink here; their reveal
+  // restores capacity.
   //
   // Skipped in performance mode: its fixed limit ignores the agent ceiling,
   // and its restore writes unconditionally, past those guards.
   restoreScrollbackAll(): void {
     if (usePerformanceModeStore.getState().performanceMode) return;
     for (const managed of this.instances.values()) {
-      restoreScrollback(managed);
+      restoreScrollback(managed, { shrinkOnly: !managed.isVisible });
     }
   }
 

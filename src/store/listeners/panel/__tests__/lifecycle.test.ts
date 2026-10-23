@@ -1107,15 +1107,18 @@ describe("memory-pressure scrollback reduce (#14215)", () => {
     const reduceHidden = vi
       .spyOn(terminalInstanceService, "reduceScrollbackHidden")
       .mockImplementation(() => {});
-    reduceScrollbackHandlers.length = 0;
-    setupLifecycleListeners();
-    const handler = reduceScrollbackHandlers.at(-1);
-    if (!handler) throw new Error("onReduceScrollback handler was not registered");
+    try {
+      reduceScrollbackHandlers.length = 0;
+      setupLifecycleListeners();
+      const handler = reduceScrollbackHandlers.at(-1);
+      if (!handler) throw new Error("onReduceScrollback handler was not registered");
 
-    handler({ targetLines: 500 });
+      handler({ targetLines: 500 });
 
-    expect(reduceHidden).toHaveBeenCalledTimes(1);
-    expect(reduceHidden).toHaveBeenCalledWith(500);
-    reduceHidden.mockRestore();
+      expect(reduceHidden).toHaveBeenCalledTimes(1);
+      expect(reduceHidden).toHaveBeenCalledWith(500);
+    } finally {
+      reduceHidden.mockRestore();
+    }
   });
 });

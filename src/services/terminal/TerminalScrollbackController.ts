@@ -76,7 +76,19 @@ export function reduceScrollback(
   }
 }
 
-export function restoreScrollback(managed: ManagedTerminal): void {
+export interface RestoreScrollbackOptions {
+  /**
+   * Only apply the policy where it lowers the limit. For hidden panes in a
+   * bulk re-derive: raising one would undo a memory-pressure reduce while
+   * nobody can see the pane, and its reveal restores capacity anyway.
+   */
+  shrinkOnly?: boolean;
+}
+
+export function restoreScrollback(
+  managed: ManagedTerminal,
+  options: RestoreScrollbackOptions = {}
+): void {
   const { scrollbackLines } = useScrollbackStore.getState();
   const { performanceMode } = usePerformanceModeStore.getState();
 
@@ -107,6 +119,7 @@ export function restoreScrollback(managed: ManagedTerminal): void {
   // so a focused, selecting, or scrolled-back user doesn't lose scrollback to
   // transient flapping. #10911, #11673
   const currentScrollback = readScrollback(managed);
+  if (options.shrinkOnly && targetLines >= currentScrollback) return;
   if (targetLines < currentScrollback) {
     const scrollbackUsed = retainedScrollback(managed);
     const wouldEvict = scrollbackUsed > targetLines;

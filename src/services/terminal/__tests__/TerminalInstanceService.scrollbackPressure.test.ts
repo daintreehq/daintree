@@ -77,6 +77,8 @@ function scrollbackOf(managed: MockManaged): number {
 
 describe("TerminalInstanceService scrollback under memory pressure (#14215)", () => {
   let service: ScrollbackTestService;
+  const initialPerformanceMode = usePerformanceModeStore.getState().performanceMode;
+  const initialScrollbackLines = useScrollbackStore.getState().scrollbackLines;
 
   beforeEach(async () => {
     vi.useFakeTimers();
@@ -92,6 +94,8 @@ describe("TerminalInstanceService scrollback under memory pressure (#14215)", ()
   afterEach(() => {
     service.instances.clear();
     setAgentScrollbackMaxLines(AGENT_SCROLLBACK_MAX_LINES);
+    usePerformanceModeStore.setState({ performanceMode: initialPerformanceMode });
+    useScrollbackStore.setState({ scrollbackLines: initialScrollbackLines });
     vi.useRealTimers();
   });
 
@@ -170,6 +174,23 @@ describe("TerminalInstanceService scrollback under memory pressure (#14215)", ()
       service.restoreScrollbackAll();
 
       expect(scrollbackOf(scrolledBack)).toBe(AGENT_SCROLLBACK_MAX_LINES);
+    });
+
+    it("never raises a hidden terminal's pressure-reduced limit", () => {
+      // Raising it would let a streaming agent refill memory mid-episode; the
+      // reveal gives the capacity back.
+      setAgentScrollbackMaxLines(AGENT_SCROLLBACK_MAX_LINES - 1000);
+      const reduced = makeManaged();
+      const visible = makeManaged({ isVisible: true });
+      reduced.terminal.options.scrollback = SCROLLBACK_BACKGROUND;
+      visible.terminal.options.scrollback = SCROLLBACK_BACKGROUND;
+      service.instances.set("hidden", reduced);
+      service.instances.set("visible", visible);
+
+      service.restoreScrollbackAll();
+
+      expect(scrollbackOf(reduced)).toBe(SCROLLBACK_BACKGROUND);
+      expect(scrollbackOf(visible)).toBe(getScrollbackForType(true, 5000));
     });
 
     it("does nothing in performance mode, whose fixed limit ignores the agent ceiling", () => {
