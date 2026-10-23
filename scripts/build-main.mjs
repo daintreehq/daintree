@@ -58,51 +58,54 @@ function writeBuildInfo() {
   fs.writeFileSync(target, formatBuildInfo(version, buildCommit), "utf8");
 }
 
-const common = {
-  bundle: true,
-  minify: isProd,
-  sourcemap: !isProd,
-  platform: "node",
-  target: "node22",
-  external,
-  logLevel: "info",
-  absWorkingDir: root,
-  pure: isProd ? ["console.log", "console.info", "console.warn", "console.debug"] : [],
-  define: {
-    "process.env.SENTRY_DSN": JSON.stringify(process.env.SENTRY_DSN || ""),
-    __DAINTREE_REMOTE_HOSTS__: JSON.stringify(remoteHostsEnabled),
-    __DAINTREE_REMOTE_HOST_ROLE__: JSON.stringify(remoteHostRoleEnabled),
-    __DAINTREE_BUILD_COMMIT__: JSON.stringify(buildCommit),
-    // Strip E2E test backdoors from production builds (#9148). Replacing these
-    // env-var reads with "" lets esbuild constant-fold the `=== "1"` checks to
-    // false and dead-code-eliminate the `contextBridge.exposeInMainWorld` blocks
-    // in preload.cts (plus the matching main-process test guards). Conditional
-    // spread, not a ternary value — esbuild stringifies a bare `undefined` define
-    // as the literal "undefined", so dev/test builds must omit these keys entirely
-    // to keep the branches intact for the E2E harness.
-    ...(isProd
-      ? {
-          "process.env.DAINTREE_E2E_FAULT_MODE": JSON.stringify(""),
-          "process.env.DAINTREE_E2E_MODE": JSON.stringify(""),
-          "process.env.DAINTREE_E2E_SKIP_FIRST_RUN_DIALOGS": JSON.stringify(""),
-          // The plugin host-contract harness (#9286) reads this to point
-          // PluginService at the compiled sample plugin during e2e. A
-          // non-empty value in prod would silently redirect the user-plugin
-          // root, so it MUST be stripped alongside the other E2E flags.
-          "process.env.DAINTREE_E2E_SIDELOAD_PLUGIN_DIR": JSON.stringify(""),
-          // Remaining main-process E2E flags (#10026). These were read
-          // ungated in main-process code but never stripped, so the names
-          // survived in dist-electron/electron/*.js. Strip them too — the
-          // check-preload-backdoors gate now scans the main bundles and the
-          // STRIPPED_BY_BUILD list there must match these keys.
-          "process.env.DAINTREE_E2E_DISABLE_CACHED_VIEW_CPU_THROTTLE": JSON.stringify(""),
-          "process.env.DAINTREE_E2E_CRASH_DUMPS_DIR": JSON.stringify(""),
-          "process.env.DAINTREE_E2E_DEFER_RENDERER_LOAD": JSON.stringify(""),
-          "process.env.DAINTREE_E2E_WORKSPACE_LOAD_DELAY_MS": JSON.stringify(""),
-        }
-      : {}),
-  },
-};
+/** Options every Node build of main shares, for a production build or not. */
+function commonOptions({ production }) {
+  return {
+    bundle: true,
+    minify: production,
+    sourcemap: !production,
+    platform: "node",
+    target: "node22",
+    external,
+    logLevel: "info",
+    absWorkingDir: root,
+    pure: production ? ["console.log", "console.info", "console.warn", "console.debug"] : [],
+    define: {
+      "process.env.SENTRY_DSN": JSON.stringify(process.env.SENTRY_DSN || ""),
+      __DAINTREE_REMOTE_HOSTS__: JSON.stringify(remoteHostsEnabled),
+      __DAINTREE_REMOTE_HOST_ROLE__: JSON.stringify(remoteHostRoleEnabled),
+      __DAINTREE_BUILD_COMMIT__: JSON.stringify(buildCommit),
+      // Strip E2E test backdoors from production builds (#9148). Replacing these
+      // env-var reads with "" lets esbuild constant-fold the `=== "1"` checks to
+      // false and dead-code-eliminate the `contextBridge.exposeInMainWorld` blocks
+      // in preload.cts (plus the matching main-process test guards). Conditional
+      // spread, not a ternary value — esbuild stringifies a bare `undefined` define
+      // as the literal "undefined", so dev/test builds must omit these keys entirely
+      // to keep the branches intact for the E2E harness.
+      ...(production
+        ? {
+            "process.env.DAINTREE_E2E_FAULT_MODE": JSON.stringify(""),
+            "process.env.DAINTREE_E2E_MODE": JSON.stringify(""),
+            "process.env.DAINTREE_E2E_SKIP_FIRST_RUN_DIALOGS": JSON.stringify(""),
+            // The plugin host-contract harness (#9286) reads this to point
+            // PluginService at the compiled sample plugin during e2e. A
+            // non-empty value in prod would silently redirect the user-plugin
+            // root, so it MUST be stripped alongside the other E2E flags.
+            "process.env.DAINTREE_E2E_SIDELOAD_PLUGIN_DIR": JSON.stringify(""),
+            // Remaining main-process E2E flags (#10026). These were read
+            // ungated in main-process code but never stripped, so the names
+            // survived in dist-electron/electron/*.js. Strip them too — the
+            // check-preload-backdoors gate now scans the main bundles and the
+            // STRIPPED_BY_BUILD list there must match these keys.
+            "process.env.DAINTREE_E2E_DISABLE_CACHED_VIEW_CPU_THROTTLE": JSON.stringify(""),
+            "process.env.DAINTREE_E2E_CRASH_DUMPS_DIR": JSON.stringify(""),
+            "process.env.DAINTREE_E2E_DEFER_RENDERER_LOAD": JSON.stringify(""),
+            "process.env.DAINTREE_E2E_WORKSPACE_LOAD_DELAY_MS": JSON.stringify(""),
+          }
+        : {}),
+    },
+  };
+}
 
 function removeBuildReadyMarker() {
   if (fs.existsSync(buildReadyFile)) {
@@ -718,6 +721,34 @@ function runPluginTypecheck() {
   }
 }
 
+/**
+ * Config for the ESM files: main, its hosts and the built-in plugins.
+ * Built-in plugins are bundled in the same esbuild run so `splitting: true`
+ * dedupes shared modules (e.g. the GitHub service singletons after #8060)
+ * into a single chunk referenced by both the electron main bundle's compat
+ * shims and the plugin entry that `PluginService` loads at runtime.
+ * Exported so `scripts/__tests__/vueProductionCompilerBundle.test.ts` reads
+ * what a production run of this exact config emits.
+ */
+export function mainEsmConfig({ production, watch = false }) {
+  return {
+    ...commonOptions({ production }),
+    entryPoints: mainEsmEntryPoints(root),
+    outdir: "dist-electron",
+    outbase: ".",
+    format: "esm",
+    splitting: true, // Share chunks between main/hosts/plugins
+    chunkNames: "electron/chunks/[name]-[hash]",
+    plugins: [
+      ...mainBundlePlugins({ isProd: production }),
+      ...(watch ? [createReadyMarkerPlugin()] : []),
+    ],
+    banner: {
+      js: `import { createRequire } from 'module'; const require = createRequire(import.meta.url);`,
+    },
+  };
+}
+
 function createReadyMarkerPlugin() {
   return {
     name: "build-ready-marker",
@@ -758,28 +789,11 @@ async function run() {
     }
   }
 
-  // Config for ESM files (Main, Hosts, built-in plugins).
-  // Built-in plugins are bundled in the same esbuild run so `splitting: true`
-  // dedupes shared modules (e.g. the GitHub service singletons after #8060)
-  // into a single chunk referenced by both the electron main bundle's compat
-  // shims and the plugin entry that `PluginService` loads at runtime.
-  const esmConfig = {
-    ...common,
-    entryPoints: mainEsmEntryPoints(root),
-    outdir: "dist-electron",
-    outbase: ".",
-    format: "esm",
-    splitting: true, // Share chunks between main/hosts/plugins
-    chunkNames: "electron/chunks/[name]-[hash]",
-    plugins: [...mainBundlePlugins({ isProd }), ...(isWatch ? [createReadyMarkerPlugin()] : [])],
-    banner: {
-      js: `import { createRequire } from 'module'; const require = createRequire(import.meta.url);`,
-    },
-  };
+  const esmConfig = mainEsmConfig({ production: isProd, watch: isWatch });
 
   // Config for CJS file (Preload)
   const cjsConfig = {
-    ...common,
+    ...commonOptions({ production: isProd }),
     entryPoints: [MAIN_PRELOAD_ENTRY],
     outdir: "dist-electron/electron",
     format: "cjs",

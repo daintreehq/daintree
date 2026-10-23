@@ -1,15 +1,15 @@
 import { describe, it, expect, beforeAll } from "vitest";
 import path from "node:path";
 import { build, type Metafile } from "esbuild";
-import { MAIN_EXTERNAL, mainEsmEntryPoints } from "../main-build-entries.mjs";
-import { mainBundlePlugins } from "../lib/main-bundle.mjs";
+import { mainEsmEntryPoints } from "../main-build-entries.mjs";
+import { mainEsmConfig } from "../build-main.mjs";
 import { collectClosure } from "../first-render-closure-lib.mjs";
 
 // Vue's template compiler picks its development or production build at
 // runtime from `process.env.NODE_ENV`, so a Node bundle ships both unless
-// scripts/lib/main-bundle.mjs folds the switch. This builds every main entry
-// the way a production scripts/build-main.mjs run does, with the same plugins,
-// and reads what it emits: one build of each Vue package, and that and Babel's
+// scripts/lib/main-bundle.mjs folds the switch. This builds the config a
+// production scripts/build-main.mjs run builds, every main entry included, and
+// reads what it emits: one build of each Vue package, and that and Babel's
 // parser still only in chunks a dynamic import reaches.
 const root = path.resolve(__dirname, "../..");
 
@@ -35,30 +35,12 @@ describe("the production main build's Vue compiler", () => {
   let metafile: Metafile;
 
   beforeAll(async () => {
+    // Vitest runs with NODE_ENV=development, so production is named here.
     const result = await build({
-      absWorkingDir: root,
-      bundle: true,
-      minify: true,
-      platform: "node",
-      target: "node22",
-      external: MAIN_EXTERNAL,
+      ...mainEsmConfig({ production: true }),
       write: false,
       metafile: true,
       logLevel: "silent",
-      define: {
-        "process.env.SENTRY_DSN": JSON.stringify(""),
-        __DAINTREE_REMOTE_HOSTS__: "true",
-        __DAINTREE_REMOTE_HOST_ROLE__: "true",
-        __DAINTREE_BUILD_COMMIT__: JSON.stringify("test"),
-      },
-      entryPoints: ENTRY_POINTS,
-      format: "esm",
-      splitting: true,
-      outdir: "dist-electron",
-      outbase: ".",
-      chunkNames: "electron/chunks/[name]-[hash]",
-      // Vitest runs with NODE_ENV=development, so production is named here.
-      plugins: mainBundlePlugins({ isProd: true }),
     });
     metafile = result.metafile;
   }, 180_000);
@@ -128,6 +110,12 @@ describe("the production main build's Vue compiler", () => {
     const eager = reachableOutputs(false);
     expect([...vue.keys()].filter((output) => eager.has(output))).toEqual([]);
     expect([...babel.keys()].filter((output) => eager.has(output))).toEqual([]);
+    // Nor the resolver that asks for them: a static import of it from any entry would load it with that entry.
+    const resolver = outputsCarrying(
+      (file) => file.endsWith(`/${VUE_RESOLVER}`) || file.endsWith(`/${VUE_TEMPLATE}`)
+    );
+    expect(resolver.size).toBeGreaterThan(0);
+    expect([...resolver.keys()].filter((output) => eager.has(output))).toEqual([]);
 
     // Not a vacuous pass: each is still reachable once dynamic imports are followed.
     const everything = reachableOutputs(true);

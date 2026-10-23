@@ -79,15 +79,18 @@ export function mainBundleStubsPlugin() {
 export const VUE_ENV_SWITCH_FILTER =
   /[\\/]node_modules[\\/]@vue[\\/](compiler-dom|compiler-core|shared)[\\/]index\.js$/;
 
+const VUE_PRODUCTION_TEST = /process\.env\.NODE_ENV\s*===\s*(["'])production\1/g;
+
 /**
  * Bundles only the production build of Vue's template compiler.
  *
  * Each of `@vue/compiler-dom`, `@vue/compiler-core` and `@vue/shared` has an
  * `index.js` that requires its `.cjs.prod.js` or `.cjs.js` build by
  * `process.env.NODE_ENV`. A Node bundle leaves that read to runtime, so both
- * builds ship (~120 KB of dead weight in the compiler chunk). This folds the
- * read in those three files alone, so esbuild drops the development require;
- * every other `NODE_ENV` read in main still happens at runtime.
+ * builds ship (~120 KB of dead weight in the compiler chunk), and a packaged
+ * app, which never sets `NODE_ENV`, runs the development one. This folds the
+ * switch in those three files alone, so esbuild drops the development
+ * require; every other `NODE_ENV` read in main still happens at runtime.
  */
 export function vueProductionCompilerPlugin() {
   return {
@@ -95,17 +98,19 @@ export function vueProductionCompilerPlugin() {
     setup(build) {
       build.onLoad({ filter: VUE_ENV_SWITCH_FILTER }, async (args) => {
         const source = await fs.promises.readFile(args.path, "utf8");
-        if (!source.includes("process.env.NODE_ENV")) {
+        const contents = source.replace(VUE_PRODUCTION_TEST, "true");
+        // Loud rather than silently shipping both builds again after a Vue upgrade.
+        if (contents === source) {
           return {
             errors: [
               {
-                text: `${args.path} no longer switches on process.env.NODE_ENV; update vueProductionCompilerPlugin (scripts/lib/main-bundle.mjs)`,
+                text: `${args.path} no longer switches on process.env.NODE_ENV === "production"; update vueProductionCompilerPlugin (scripts/lib/main-bundle.mjs)`,
               },
             ],
           };
         }
         return {
-          contents: source.replaceAll("process.env.NODE_ENV", JSON.stringify("production")),
+          contents,
           loader: "js",
           resolveDir: path.dirname(args.path),
         };
