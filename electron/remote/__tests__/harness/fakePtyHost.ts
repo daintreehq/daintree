@@ -21,7 +21,15 @@ export interface FakeTerminal {
   resizes: Array<{ cols: number; rows: number }>;
   /** Echo every write straight back as output, like a shell in cooked mode. */
   echo: boolean;
+  /** The agent the pane launched, and the conversation it is on, as the pty-host reports them. */
+  launchAgentId?: string;
+  agentSessionId?: string;
 }
+
+export type FakeSpawnOptions = { echo?: boolean } & Pick<
+  FakeTerminal,
+  "launchAgentId" | "agentSessionId"
+>;
 
 interface Connection {
   windowId: number;
@@ -62,11 +70,14 @@ export class FakePtyHost {
     getTerminalProjectId: (id: string) => this.terminals.get(id)?.projectId ?? null,
     getTerminalAsync: async (id: string, _submissionToken?: string, _options?: object) => {
       const terminal = this.terminals.get(id);
-      return terminal ? { id, projectId: terminal.projectId } : null;
+      if (!terminal) return null;
+      const { projectId, launchAgentId, agentSessionId } = terminal;
+      return { id, projectId, kind: "terminal", hasPty: true, launchAgentId, agentSessionId };
     },
     // The host's assistant and agent answers follow spawns, exits and agent
     // state; this fake emits none, so only the reads have to answer.
     hasTerminal: (id: string) => this.terminals.has(id),
+    getSerializedStateAsync: (id: string) => this.getSerializedStateAsync(id),
     getAllTerminalsWithCompletenessAsync: async () => ({
       terminals: [...this.terminals.values()].map(({ id, projectId }) => ({ id, projectId })),
       degraded: false,
@@ -78,7 +89,7 @@ export class FakePtyHost {
     },
   };
 
-  spawn(id: string, projectId: string, options: { echo?: boolean } = {}): FakeTerminal {
+  spawn(id: string, projectId: string, options: FakeSpawnOptions = {}): FakeTerminal {
     const terminal: FakeTerminal = {
       id,
       projectId,
@@ -88,6 +99,8 @@ export class FakePtyHost {
       writes: [],
       resizes: [],
       echo: options.echo ?? false,
+      launchAgentId: options.launchAgentId,
+      agentSessionId: options.agentSessionId,
     };
     this.terminals.set(id, terminal);
     return terminal;
