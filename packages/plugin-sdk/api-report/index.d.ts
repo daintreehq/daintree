@@ -3136,6 +3136,47 @@ interface PluginApplicationTourRef {
     version: number;
 }
 /**
+ * One declared parameter of a section. Values are identifiers, not content:
+ * a string holds only the manifest id vocabulary (`[A-Za-z0-9._-]`), so a
+ * free-text field, a URL or a token can't be expressed. Only a parameter
+ * marked `persist` is written to disk; the rest live as long as the project's renderer.
+ */
+type PluginApplicationNavigationParam = {
+    type: "string";
+    required?: boolean;
+    persist?: boolean;
+    maxLength?: number;
+} | {
+    type: "integer";
+    required?: boolean;
+    persist?: boolean;
+} | {
+    type: "boolean";
+    required?: boolean;
+    persist?: boolean;
+};
+/** A named destination of the application: a section, and the record parameters it takes. */
+interface PluginApplicationSection {
+    id: string;
+    title: string;
+    params?: Record<string, PluginApplicationNavigationParam>;
+}
+/**
+ * `application.navigation` (#14108): the destinations the application's
+ * views navigate between. The host keeps one location and history per project
+ * for them, shared by every view of the application.
+ */
+interface PluginApplicationNavigation {
+    /**
+     * The navigation schema's revision. Raising it drops the saved location and
+     * history, so a renamed parameter never restores with its old meaning.
+     */
+    version: number;
+    /** Where the application starts, and where a location that no longer resolves lands. */
+    defaultSectionId: string;
+    sections: PluginApplicationSection[];
+}
+/**
  * The top-level `application` block of a project plugin's manifest (#14097).
  *
  * Declarative only: it names the application and points at contributions the
@@ -3172,6 +3213,7 @@ interface PluginApplicationDescriptor {
     requiredTools?: string[];
     /** Suggested presentation levels, in the host's closed vocabulary. */
     presentation?: Partial<Record<string, "shown" | "demoted" | "hidden">>;
+    navigation?: PluginApplicationNavigation;
 }
 /**
  * The attribute the host stamps on the element a plugin view renders into, and
@@ -3205,6 +3247,67 @@ declare const PLUGIN_STYLE_ROOT_ATTRIBUTE = "data-daintree-plugin-style-root";
  *   while the plugin host APIs are still live.
  * - `panelRemovedSignal` aborts ONLY when the panel is permanently gone.
  */
+/** A value a navigation parameter holds: an identifier, a safe integer or a flag. */
+type PluginNavigationParamValue = string | number | boolean;
+/** Where an application is: one of its declared sections, with its parameters. */
+interface PluginNavigationLocation {
+    readonly sectionId: string;
+    readonly params: Readonly<Record<string, PluginNavigationParamValue>>;
+}
+/** A request to go to a declared section (#14108). */
+interface PluginNavigationIntent {
+    sectionId: string;
+    /** Only parameters the section declares, each of its declared type. */
+    params?: Record<string, PluginNavigationParamValue>;
+    /** Replace the current history entry instead of adding one. */
+    replace?: boolean;
+    /**
+     * Bring the application's destination forward (its Home, or the grid) as
+     * well as moving the location. Defaults to `true`; `false` changes only the
+     * shared selection.
+     */
+    reveal?: boolean;
+}
+/**
+ * Why a navigation was refused. Nothing moved: not the location, the history,
+ * the main area nor focus.
+ *
+ * - `invalid-intent` — not an intent object.
+ * - `unknown-section` — the application declares no such section.
+ * - `invalid-params` — a parameter is undeclared, missing, or not its declared type or bounds.
+ * - `too-large` — the location is over the size cap.
+ * - `unsaved` — a view of the application reports unsaved work; save or drop it, then retry.
+ * - `no-history` — nothing to go back or forward to.
+ * - `stale` — the call came from a view attempt that is gone, or an application no longer in force.
+ */
+type PluginNavigationRefusal = "invalid-intent" | "unknown-section" | "invalid-params" | "too-large" | "unsaved" | "no-history" | "stale";
+type PluginNavigationResult = {
+    readonly ok: true;
+    readonly location: PluginNavigationLocation;
+} | {
+    readonly ok: false;
+    readonly reason: PluginNavigationRefusal;
+};
+/**
+ * The project application's shared navigation, as one of its views sees it
+ * (#14108). Every view of the application in the project — its sidebar view,
+ * its Home, its panels — holds the same location and re-renders when it moves,
+ * so selection in one is selection in all.
+ */
+interface PluginApplicationNavigationApi {
+    /** The current location. A new object only when the location changes. */
+    readonly location: PluginNavigationLocation;
+    /** The declared sections, in manifest order. */
+    readonly sections: readonly {
+        readonly id: string;
+        readonly title: string;
+    }[];
+    readonly canGoBack: boolean;
+    readonly canGoForward: boolean;
+    navigate(intent: PluginNavigationIntent): PluginNavigationResult;
+    back(): PluginNavigationResult;
+    forward(): PluginNavigationResult;
+}
 interface PanelViewProps {
     readonly panelId: string;
     readonly pluginId: string;
@@ -3533,6 +3636,31 @@ interface PanelViewProps {
      * sensible default rather than switching on it exhaustively.
      */
     readonly hostContext?: PluginViewHostContext;
+    /**
+     * The project application's navigation (#14108): the location its declared
+     * sections share across the application's sidebar view, Home and panels,
+     * with back and forward.
+     *
+     * Handed only to views of the plugin whose `application` is in force in
+     * this project and declares `navigation`; absent otherwise, and absent in a
+     * user-scope settings section, which belongs to no project. Live: the view
+     * re-renders with a new `location` when any view of the application moves
+     * it, without remounting, so it keeps its own state, its `initialArgs` and
+     * its {@link disposeSignal}.
+     *
+     * The location is restored per project after a remount, an evicted renderer
+     * or a restart, but only parameters declared `persist` are written to disk;
+     * the others last as long as the project's renderer, so they survive a
+     * remount but not an evicted or reloaded renderer. A location that no longer
+     * resolves — its section removed, a parameter that no longer validates, a
+     * raised `navigation.version` — restores as the default section.
+     *
+     * Navigation is refused with `unsaved` while any view of the application
+     * reports {@link setHasUnsavedChanges}, so a pending form is never replaced:
+     * persist the draft or drop it, clear the flag, and navigate again. A
+     * callback held past this view attempt refuses with `stale`.
+     */
+    readonly navigation?: PluginApplicationNavigationApi;
 }
 /**
  * What just happened to one plugin panel instance (#11301). The renderer owns
@@ -8936,4 +9064,4 @@ declare function syncedCollectionSnapshotChannel(channel: string): string;
  */
 declare function createSyncedCollection<T>(host: SyncedCollectionHost, channel: string, options: SyncedCollectionOptions<T>): Promise<SyncedCollection<T>>;
 
-export { AGENT_CONTEXT_DRAG_MIME, AGENT_CONTEXT_MAX_SOURCE_LABEL_LENGTH, AGENT_CONTEXT_MAX_TEXT_LENGTH, AGENT_CONTEXT_MAX_TITLE_LENGTH, type ActionDanger, type ActionDispatchError, type ActionDispatchResult, type ActionDispatchSuccess, type ActionError, type ActionErrorCode, type ActionExample, type ActionHandler, type ActionId, type ActionKind, type AgentContextDataTransfer, type AgentContextDragData, type AgentContextDragPayload, type AgentContextReferenceDragPayload, type AgentState, type AnyForgeProviderImpl, type AssistantKnowledgeContribution, type AssistantKnowledgeEntry, type AuthValidation, type AutoMergeCapability, type BuiltInActionId, type BuiltInPluginCapability, type CIStatus, type CheckRun, type CheckRunConclusion, type CheckRunStatus, type ChecksCapability, type ContextMenuContribution, type ContextMenuLocation, type ContextProviderCallOptions, type ContextProviderContent, type ContextProviderContribution, type ContextProviderDescriptor, type ContextProviderImpl, type ContextProviderItem, type CreateIssueInput, type CredentialImportCandidate, type CredentialImportCapability, type CredentialImportExpected, type CredentialImportFailureReason, type CredentialImportPreview, type CredentialImportUnavailable, type Credentials, type DisableAutoMergeResult, type ElementPickerDetectionKind, type ElementPickerDetectionRule, type ElementPickerProviderContribution, type EnableAutoMergeInput, type EnableAutoMergeResult, type FetchOptions, type FileDecoration, type FileDecorationContribution, type FileDecorationProviderDescriptor, type FileDecorationProviderImpl, type FileEditorContribution, type FileEditorMode, type ForgeCodeProviderImpl, type ForgeIssueProviderImpl, type ForgeLabel, type ForgeProviderBaseImpl, type ForgeProviderContribution, type ForgeProviderDescriptor, type ForgeProviderImpl, type ForgeProviderKind, type ForgeProviderRole, type ForgeUser, type Issue, type KeybindingContribution, type ListOptions, type McpServerContribution, type MenuItemContribution, type MenuItemLocation, type NormalizedIssueState, type NormalizedPRState, PLUGIN_PROCESS_STREAM_CHANNEL, PLUGIN_STYLE_ROOT_ATTRIBUTE, type PR, type PRCommitSummary, type PRMergeIntent, type PRMergeMethod, type PRMergeStatus, type Page, type PanelContribution, type PanelMenuItemContribution, type PanelReloadResult, type PanelViewProps, type PluginAccountAccessToken, type PluginAccountApi, type PluginAccountContribution, type PluginAccountIdentity, type PluginAccountKind, type PluginAccountRef, type PluginAccountState, type PluginAccountTest, type PluginActionContribution, type PluginActionManifestEntry, type PluginActionResultSchema, type PluginActivate, type PluginActivationApi, type PluginAgentInputResult, type PluginAgentInterruptResult, type PluginAgentKeysInput, type PluginAgentKeysResult, type PluginAgentMcpContribution, type PluginAgentPane, type PluginAgentRun, type PluginAgentSnapshot, type PluginAgentsApi, type PluginAllAgentsSnapshot, type PluginApplicationDescriptor, type PluginApplicationDestination, type PluginApplicationTourRef, type PluginArtifact, type PluginArtifactApi, type PluginArtifactCreateOptions, type PluginArtifactDownloadOptions, type PluginArtifactDownloadRequest, type PluginArtifactImportSource, type PluginArtifactListOptions, type PluginArtifactProgress, type PluginArtifactSource, type PluginArtifactUploadOptions, type PluginArtifactUploadRequest, type PluginArtifactUploadResult, type PluginAuthor, type PluginCanDispatchResult, type PluginCapability, type PluginChannelSchema, type PluginClipboardApi, type PluginConfirmOptions, type PluginConnectionContribution, type PluginContextValue, type PluginDatabase, type PluginDatabaseApi, type PluginDatabaseBackupResult, type PluginDatabaseChangeEvent, type PluginDatabaseColumn, type PluginDatabaseContribution, type PluginDatabaseLocation, type PluginDatabaseLocationKind, type PluginDatabaseOpenOptions, type PluginDatabaseParams, type PluginDatabaseQueryContribution, type PluginDatabaseQueryParam, type PluginDatabaseQueryParamFormat, type PluginDatabaseQueryParamType, type PluginDatabaseRunResult, type PluginDatabaseStatements, type PluginDispatchOptions, type PluginDocumentsApi, type PluginDuplexProcessHandle, type PluginDuplexProcessSpawnOptions, type PluginEventRoute, type PluginEventRouteEvent, type PluginEventRouteWake, type PluginFileDocument, type PluginFileDocumentChange, type PluginFileDocumentReadResult, type PluginFileDocumentSaveResult, type PluginFocusedPanel, type PluginFocusedPanelKind, type PluginFsApi, type PluginFsDirEntry, type PluginFsReadFilesEncoding, type PluginFsReadFilesEntry, type PluginFsReadFilesErrorCode, type PluginFsReadFilesOptions, type PluginFsReadWithRevisionResult, type PluginFsScope, type PluginFsStat, type PluginFsWalkEntry, type PluginFsWalkOptions, type PluginFsWalkResult, type PluginFsWatchOptions, type PluginGitApi, type PluginGitCommitOptions, type PluginGitCommitResult, type PluginGitStatus, type PluginGitStatusFile, type PluginHandlerOptions, type PluginHostActionsApi, type PluginHostApi, type PluginHostCallOptions, type PluginHostSubscriptionOptions, type PluginIdentity, type PluginInputBoxOptions, type PluginInvokeOrigin, type PluginIpcContext, type PluginIpcHandler, type PluginLocalSocketScope, type PluginLogger, type PluginManifest, type PluginManifestScopes, type PluginMcpApi, type PluginMcpCaller, type PluginMcpJsonSchema, type PluginMcpToolAnnotations, type PluginMcpToolDefinition, type PluginNetworkScope, type PluginNotifyAction, type PluginNotifyOptions, type PluginNotifyResult, type PluginNotifyTarget, type PluginPanelActivity, type PluginPanelActivityState, type PluginPanelBadge, type PluginPanelBadgeColor, type PluginPanelLifecycleEvent, type PluginPanelLifecyclePhase, type PluginPanelToolbarItemState, type PluginPdfMargins, type PluginPdfPageSize, type PluginProcessApi, type PluginProcessDataChunk, type PluginProcessHandle, type PluginProcessMode, type PluginProcessSpawnOptions, type PluginProcessStreamEvent, type PluginProjectPresence, type PluginProjectPresenceState, type PluginPromptCallOptions, type PluginPtyProcessHandle, type PluginPtyProcessSpawnOptions, type PluginQuickPickItem, type PluginQuickPickOptions, type PluginRenderPdfOptions, type PluginRenderPdfResult, type PluginRunRecipeOptions, type PluginRunRecipeRefusalReason, type PluginRunRecipeResult, type PluginSearchContext, type PluginSearchProvider, type PluginSearchProviderContribution, type PluginSearchResult, type PluginSearchResultTarget, type PluginSendToAgentOptions, type PluginSendToAgentRefusalReason, type PluginSendToAgentResult, type PluginSettingsPageContribution, type PluginSettingsScope, type PluginSettingsViewContext, type PluginSettingsViewFocus, type PluginSetupStepAction, type PluginSetupStepContribution, type PluginSetupStepDone, type PluginStorageScope, type PluginSystemApi, type PluginSystemWakeEvent, type PluginTaskApi, type PluginTaskHandle, type PluginTaskProgress, type PluginTaskResult, type PluginTaskStartOptions, type PluginTerminalKind, type PluginTerminalLifecycleEvent, type PluginTerminalLifecycleEventBase, type PluginTerminalLifecycleEventType, type PluginTerminalReadScreenOptions, type PluginTerminalScreenResult, type PluginTerminalStatus, type PluginTerminalsApi, type PluginToastOptions, type PluginToolbarButtonRuntimeState, type PluginTypedIpcHandler, type PluginViewHostContext, type PluginViewHostKind, type PluginWorktreeCardStatus, type PluginWorktreeDeleteNote, type PluginWorktreeFileState, type PluginWorktreeGitOperation, type PluginWorktreeLinked, type PluginWorktreeLinkedIssue, type PluginWorktreeLinkedPR, type PluginWorktreeReviewCheck, type PluginWorktreeSetup, type PluginWorktreeSetupStage, type PluginWorktreeSetupState, type PluginWorktreeSetupStepContext, type PluginWorktreeSetupStepHandler, type PluginWorktreeSnapshot, type PluginWorktreeStatus, type PluginWorktreeStatusFile, type PluginWorktreesChange, type PluginWorktreesResult, type PluginWorktreesUnavailableReason, type ProjectTemplateContribution, type RateLimitInfo, type RepoMergeSettings, type RepoMetadata, type RepoRef, type ResourceRef, type SettingDefinition, type SettingFieldType, type SettingsApi, type StorageApi, type SyncedCollection, type SyncedCollectionDelta, type SyncedCollectionHost, type SyncedCollectionOptions, type SyncedCollectionSnapshot, type TerminalLinkContribution, type TerminalLinkPatternArgs, type TerminalLinkSubject, type TerminalLinkUrlArgs, type TerminalLinkUrlContribution, type ToolbarButtonContribution, type ToolbarButtonPopover, type ViewContribution, type ViewLocation, type WaitingReason, type WorkerRestartResult, type WorktreeDeleteNotesContribution, type WorktreeDeleteNotesProviderDescriptor, type WorktreeDeleteNotesProviderImpl, type WorktreeSetupStepContribution, createSyncedCollection, encodeAgentContextDragPayload, localAuthStubs, setAgentContextDragData, syncedCollectionSnapshotChannel };
+export { AGENT_CONTEXT_DRAG_MIME, AGENT_CONTEXT_MAX_SOURCE_LABEL_LENGTH, AGENT_CONTEXT_MAX_TEXT_LENGTH, AGENT_CONTEXT_MAX_TITLE_LENGTH, type ActionDanger, type ActionDispatchError, type ActionDispatchResult, type ActionDispatchSuccess, type ActionError, type ActionErrorCode, type ActionExample, type ActionHandler, type ActionId, type ActionKind, type AgentContextDataTransfer, type AgentContextDragData, type AgentContextDragPayload, type AgentContextReferenceDragPayload, type AgentState, type AnyForgeProviderImpl, type AssistantKnowledgeContribution, type AssistantKnowledgeEntry, type AuthValidation, type AutoMergeCapability, type BuiltInActionId, type BuiltInPluginCapability, type CIStatus, type CheckRun, type CheckRunConclusion, type CheckRunStatus, type ChecksCapability, type ContextMenuContribution, type ContextMenuLocation, type ContextProviderCallOptions, type ContextProviderContent, type ContextProviderContribution, type ContextProviderDescriptor, type ContextProviderImpl, type ContextProviderItem, type CreateIssueInput, type CredentialImportCandidate, type CredentialImportCapability, type CredentialImportExpected, type CredentialImportFailureReason, type CredentialImportPreview, type CredentialImportUnavailable, type Credentials, type DisableAutoMergeResult, type ElementPickerDetectionKind, type ElementPickerDetectionRule, type ElementPickerProviderContribution, type EnableAutoMergeInput, type EnableAutoMergeResult, type FetchOptions, type FileDecoration, type FileDecorationContribution, type FileDecorationProviderDescriptor, type FileDecorationProviderImpl, type FileEditorContribution, type FileEditorMode, type ForgeCodeProviderImpl, type ForgeIssueProviderImpl, type ForgeLabel, type ForgeProviderBaseImpl, type ForgeProviderContribution, type ForgeProviderDescriptor, type ForgeProviderImpl, type ForgeProviderKind, type ForgeProviderRole, type ForgeUser, type Issue, type KeybindingContribution, type ListOptions, type McpServerContribution, type MenuItemContribution, type MenuItemLocation, type NormalizedIssueState, type NormalizedPRState, PLUGIN_PROCESS_STREAM_CHANNEL, PLUGIN_STYLE_ROOT_ATTRIBUTE, type PR, type PRCommitSummary, type PRMergeIntent, type PRMergeMethod, type PRMergeStatus, type Page, type PanelContribution, type PanelMenuItemContribution, type PanelReloadResult, type PanelViewProps, type PluginAccountAccessToken, type PluginAccountApi, type PluginAccountContribution, type PluginAccountIdentity, type PluginAccountKind, type PluginAccountRef, type PluginAccountState, type PluginAccountTest, type PluginActionContribution, type PluginActionManifestEntry, type PluginActionResultSchema, type PluginActivate, type PluginActivationApi, type PluginAgentInputResult, type PluginAgentInterruptResult, type PluginAgentKeysInput, type PluginAgentKeysResult, type PluginAgentMcpContribution, type PluginAgentPane, type PluginAgentRun, type PluginAgentSnapshot, type PluginAgentsApi, type PluginAllAgentsSnapshot, type PluginApplicationDescriptor, type PluginApplicationDestination, type PluginApplicationNavigation, type PluginApplicationNavigationApi, type PluginApplicationNavigationParam, type PluginApplicationSection, type PluginApplicationTourRef, type PluginArtifact, type PluginArtifactApi, type PluginArtifactCreateOptions, type PluginArtifactDownloadOptions, type PluginArtifactDownloadRequest, type PluginArtifactImportSource, type PluginArtifactListOptions, type PluginArtifactProgress, type PluginArtifactSource, type PluginArtifactUploadOptions, type PluginArtifactUploadRequest, type PluginArtifactUploadResult, type PluginAuthor, type PluginCanDispatchResult, type PluginCapability, type PluginChannelSchema, type PluginClipboardApi, type PluginConfirmOptions, type PluginConnectionContribution, type PluginContextValue, type PluginDatabase, type PluginDatabaseApi, type PluginDatabaseBackupResult, type PluginDatabaseChangeEvent, type PluginDatabaseColumn, type PluginDatabaseContribution, type PluginDatabaseLocation, type PluginDatabaseLocationKind, type PluginDatabaseOpenOptions, type PluginDatabaseParams, type PluginDatabaseQueryContribution, type PluginDatabaseQueryParam, type PluginDatabaseQueryParamFormat, type PluginDatabaseQueryParamType, type PluginDatabaseRunResult, type PluginDatabaseStatements, type PluginDispatchOptions, type PluginDocumentsApi, type PluginDuplexProcessHandle, type PluginDuplexProcessSpawnOptions, type PluginEventRoute, type PluginEventRouteEvent, type PluginEventRouteWake, type PluginFileDocument, type PluginFileDocumentChange, type PluginFileDocumentReadResult, type PluginFileDocumentSaveResult, type PluginFocusedPanel, type PluginFocusedPanelKind, type PluginFsApi, type PluginFsDirEntry, type PluginFsReadFilesEncoding, type PluginFsReadFilesEntry, type PluginFsReadFilesErrorCode, type PluginFsReadFilesOptions, type PluginFsReadWithRevisionResult, type PluginFsScope, type PluginFsStat, type PluginFsWalkEntry, type PluginFsWalkOptions, type PluginFsWalkResult, type PluginFsWatchOptions, type PluginGitApi, type PluginGitCommitOptions, type PluginGitCommitResult, type PluginGitStatus, type PluginGitStatusFile, type PluginHandlerOptions, type PluginHostActionsApi, type PluginHostApi, type PluginHostCallOptions, type PluginHostSubscriptionOptions, type PluginIdentity, type PluginInputBoxOptions, type PluginInvokeOrigin, type PluginIpcContext, type PluginIpcHandler, type PluginLocalSocketScope, type PluginLogger, type PluginManifest, type PluginManifestScopes, type PluginMcpApi, type PluginMcpCaller, type PluginMcpJsonSchema, type PluginMcpToolAnnotations, type PluginMcpToolDefinition, type PluginNavigationIntent, type PluginNavigationLocation, type PluginNavigationParamValue, type PluginNavigationRefusal, type PluginNavigationResult, type PluginNetworkScope, type PluginNotifyAction, type PluginNotifyOptions, type PluginNotifyResult, type PluginNotifyTarget, type PluginPanelActivity, type PluginPanelActivityState, type PluginPanelBadge, type PluginPanelBadgeColor, type PluginPanelLifecycleEvent, type PluginPanelLifecyclePhase, type PluginPanelToolbarItemState, type PluginPdfMargins, type PluginPdfPageSize, type PluginProcessApi, type PluginProcessDataChunk, type PluginProcessHandle, type PluginProcessMode, type PluginProcessSpawnOptions, type PluginProcessStreamEvent, type PluginProjectPresence, type PluginProjectPresenceState, type PluginPromptCallOptions, type PluginPtyProcessHandle, type PluginPtyProcessSpawnOptions, type PluginQuickPickItem, type PluginQuickPickOptions, type PluginRenderPdfOptions, type PluginRenderPdfResult, type PluginRunRecipeOptions, type PluginRunRecipeRefusalReason, type PluginRunRecipeResult, type PluginSearchContext, type PluginSearchProvider, type PluginSearchProviderContribution, type PluginSearchResult, type PluginSearchResultTarget, type PluginSendToAgentOptions, type PluginSendToAgentRefusalReason, type PluginSendToAgentResult, type PluginSettingsPageContribution, type PluginSettingsScope, type PluginSettingsViewContext, type PluginSettingsViewFocus, type PluginSetupStepAction, type PluginSetupStepContribution, type PluginSetupStepDone, type PluginStorageScope, type PluginSystemApi, type PluginSystemWakeEvent, type PluginTaskApi, type PluginTaskHandle, type PluginTaskProgress, type PluginTaskResult, type PluginTaskStartOptions, type PluginTerminalKind, type PluginTerminalLifecycleEvent, type PluginTerminalLifecycleEventBase, type PluginTerminalLifecycleEventType, type PluginTerminalReadScreenOptions, type PluginTerminalScreenResult, type PluginTerminalStatus, type PluginTerminalsApi, type PluginToastOptions, type PluginToolbarButtonRuntimeState, type PluginTypedIpcHandler, type PluginViewHostContext, type PluginViewHostKind, type PluginWorktreeCardStatus, type PluginWorktreeDeleteNote, type PluginWorktreeFileState, type PluginWorktreeGitOperation, type PluginWorktreeLinked, type PluginWorktreeLinkedIssue, type PluginWorktreeLinkedPR, type PluginWorktreeReviewCheck, type PluginWorktreeSetup, type PluginWorktreeSetupStage, type PluginWorktreeSetupState, type PluginWorktreeSetupStepContext, type PluginWorktreeSetupStepHandler, type PluginWorktreeSnapshot, type PluginWorktreeStatus, type PluginWorktreeStatusFile, type PluginWorktreesChange, type PluginWorktreesResult, type PluginWorktreesUnavailableReason, type ProjectTemplateContribution, type RateLimitInfo, type RepoMergeSettings, type RepoMetadata, type RepoRef, type ResourceRef, type SettingDefinition, type SettingFieldType, type SettingsApi, type StorageApi, type SyncedCollection, type SyncedCollectionDelta, type SyncedCollectionHost, type SyncedCollectionOptions, type SyncedCollectionSnapshot, type TerminalLinkContribution, type TerminalLinkPatternArgs, type TerminalLinkSubject, type TerminalLinkUrlArgs, type TerminalLinkUrlContribution, type ToolbarButtonContribution, type ToolbarButtonPopover, type ViewContribution, type ViewLocation, type WaitingReason, type WorkerRestartResult, type WorktreeDeleteNotesContribution, type WorktreeDeleteNotesProviderDescriptor, type WorktreeDeleteNotesProviderImpl, type WorktreeSetupStepContribution, createSyncedCollection, encodeAgentContextDragPayload, localAuthStubs, setAgentContextDragData, syncedCollectionSnapshotChannel };
