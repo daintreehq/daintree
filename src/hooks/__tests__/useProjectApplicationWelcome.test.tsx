@@ -86,6 +86,7 @@ function application(overrides: Partial<ProjectApplicationState> = {}): ProjectA
   return {
     status: "active",
     ownerId: "acme.ledger",
+    version: "1.0.0",
     instanceId: INSTANCE,
     application: {
       name: "Ledger",
