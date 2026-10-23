@@ -9,7 +9,7 @@ import {
   type HostConnection,
   type HostPlatform,
 } from "../../../shared/types/remoteHosts.js";
-import type { DiscoveredHost } from "../../../shared/types/ipc/remoteHosts.js";
+import type { DiscoveredHost, NetbirdPeerStatus } from "../../../shared/types/ipc/remoteHosts.js";
 import type { CommandRunner } from "./commandRunner.js";
 import { sshTargetOf } from "./connection.js";
 import { isValidSshTarget } from "./sshTransport.js";
@@ -55,6 +55,7 @@ export interface DiscoveryCandidate {
   source: "tailscale" | "netbird" | "bonjour";
   platform: HostPlatform | null;
   online: boolean;
+  netbirdStatus?: NetbirdPeerStatus;
   /**
    * Other names the same source vouches for as this machine (a tailnet node's
    * addresses and MagicDNS name, an mDNS record's resolved address). Matching
@@ -131,6 +132,19 @@ function netbirdFqdn(value: unknown): string {
   return typeof value === "string" ? stripDot(value.trim()).toLowerCase() : "";
 }
 
+const NETBIRD_STATUSES: readonly NetbirdPeerStatus[] = [
+  "connected",
+  "connecting",
+  "idle",
+  "disconnected",
+];
+
+function netbirdStatusOf(value: unknown): NetbirdPeerStatus | null {
+  if (typeof value !== "string") return null;
+  const status = value.trim().toLowerCase();
+  return NETBIRD_STATUSES.find((known) => known === status) ?? null;
+}
+
 /** The local address carries its prefix (`100.92.0.1/16`); strip one on a peer too. */
 function netbirdIpOf(value: unknown): string {
   return typeof value === "string" ? (value.split("/")[0] ?? "").trim() : "";
@@ -170,12 +184,14 @@ export function parseNetbirdStatus(text: string): DiscoveryCandidate[] {
     const names = [fqdn, ip].filter((value) => value && isValidSshTarget(value));
     const target = names[0];
     if (!target) continue;
+    const status = netbirdStatusOf(peer.status);
     out.push({
       name: isIpAddress(target) ? target : target.split(".")[0] || target,
       sshTarget: target,
       source: "netbird",
       platform: null,
-      online: typeof peer.status === "string" && peer.status.toLowerCase() === "connected",
+      online: status === "connected",
+      ...(status ? { netbirdStatus: status } : {}),
       aliases: names,
     });
   }
@@ -508,6 +524,7 @@ export async function discoverHosts(deps: DiscoverDeps): Promise<DiscoveredHost[
       source: candidate.source,
       platform: candidate.platform,
       online: candidate.online,
+      ...(candidate.netbirdStatus ? { netbirdStatus: candidate.netbirdStatus } : {}),
       // Only this exact account is added already: another account on the same
       // machine is a host of its own, so the row stays pickable with a warning.
       alreadyAdded: deps.knownConnections.some((known) =>
