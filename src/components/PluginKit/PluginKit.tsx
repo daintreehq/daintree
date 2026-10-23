@@ -106,9 +106,9 @@ import {
   wholeLimit,
   rowCount,
 } from "./kitProps";
-import { PluginKitLayerContext, useKitOverlayZClass } from "./kitScope";
+import { useKitOverlayZClass } from "./kitScope";
 import { renderMenuEntries, stopReactPropagation, type KitMenuParts } from "./kitMenu";
-import { iconNode, KitDialogFrame, layerOf, noop, zIndexOf } from "./kitDialog";
+import { iconNode, KitDialogFrame, noop, zIndexOf } from "./kitDialog";
 import { pluginKitPatterns } from "./PluginKitPatterns";
 import { pluginKitLists } from "./PluginKitLists";
 import { pluginKitVirtualGrid } from "./PluginKitVirtualGrid";
@@ -1240,20 +1240,10 @@ function KitConfirmDialog({
     zIndex: zIndexOf(layer),
   };
   const tone = oneOf(variant, ["default", "destructive", "info"] as const) ?? "default";
-  // Around the whole dialog: the title, description and hint can hold kit
-  // overlays too, not only the children.
-  return (
-    <PluginKitLayerContext.Provider value={layerOf(layer)}>
-      {tone === "destructive" ? (
-        <ConfirmDialog
-          {...common}
-          variant="destructive"
-          typedNameTarget={nonEmpty(typedNameTarget)}
-        />
-      ) : (
-        <ConfirmDialog {...common} variant={tone} />
-      )}
-    </PluginKitLayerContext.Provider>
+  return tone === "destructive" ? (
+    <ConfirmDialog {...common} variant="destructive" typedNameTarget={nonEmpty(typedNameTarget)} />
+  ) : (
+    <ConfirmDialog {...common} variant={tone} />
   );
 }
 

@@ -1,9 +1,17 @@
 // @vitest-environment jsdom
-import { render, screen, act, fireEvent, waitFor } from "@testing-library/react";
+import { cleanup, render, screen, act, fireEvent, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import { AppDialog } from "../AppDialog";
 import { AppPaletteDialog } from "../AppPaletteDialog";
 import { buttonVariants } from "../button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "../dropdown-menu";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../select";
+import { Popover, PopoverContent, PopoverTrigger } from "../popover";
 import { getVisibleTabbableElements } from "@/lib/accessibility";
 import { _resetForTests } from "@/lib/escapeStack";
 import { _resetForTests as _resetBackstopForTests } from "@/lib/dialogEscapeBackstop";
@@ -1641,6 +1649,93 @@ describe("AppDialog layering over a dock popover", () => {
     hide();
 
     expect(renderDialogAt()).not.toBe(promoted);
+  });
+
+  // Overlays portal to the body beside the dialog, so only their own tier
+  // decides whether they paint over it (#14191).
+  const overlays = {
+    menu: {
+      ui: (
+        <DropdownMenu open>
+          <DropdownMenuTrigger>Options</DropdownMenuTrigger>
+          <DropdownMenuContent>
+            <DropdownMenuItem>One</DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      ),
+      find: () => screen.findByRole("menu", { hidden: true }),
+    },
+    select: {
+      ui: (
+        <Select open value="a">
+          <SelectTrigger aria-label="Pick">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="a">Alpha</SelectItem>
+          </SelectContent>
+        </Select>
+      ),
+      find: () => screen.findByRole("listbox", { hidden: true }),
+    },
+    popover: {
+      ui: (
+        <Popover open>
+          <PopoverTrigger>Details</PopoverTrigger>
+          <PopoverContent>
+            <span data-testid="popover-body">Body</span>
+          </PopoverContent>
+        </Popover>
+      ),
+      find: () => screen.findByTestId("popover-body"),
+    },
+  };
+  type OverlayKind = keyof typeof overlays;
+  const overlayKinds: OverlayKind[] = ["menu", "select", "popover"];
+
+  /** The tier of the nearest element at or above the overlay that sets one. */
+  async function overlayTier(kind: OverlayKind, zIndex?: "modal" | "nested" | "none") {
+    const { ui, find } = overlays[kind];
+    render(
+      zIndex === "none" ? (
+        ui
+      ) : (
+        <AppDialog isOpen onClose={() => {}} {...(zIndex ? { zIndex } : {})}>
+          {ui}
+        </AppDialog>
+      )
+    );
+    let el: Element | null = await find();
+    while (el && !tierOf(el)) el = el.parentElement;
+    const tier = el ? tierOf(el) : undefined;
+    cleanup();
+    return tier;
+  }
+
+  it.each(overlayKinds)(
+    "lifts a %s opened in a dialog the popover promoted, as an explicitly nested one does",
+    async (kind) => {
+      const unpromoted = await overlayTier(kind);
+      const nested = await overlayTier(kind, "nested");
+      expect(nested).toBeDefined();
+      expect(nested).not.toBe(unpromoted);
+
+      showPopover();
+
+      expect(await overlayTier(kind)).toBe(nested);
+    }
+  );
+
+  it.each(overlayKinds)("leaves a %s in an unpromoted dialog at the popover tier", async (kind) => {
+    expect(await overlayTier(kind, "modal")).toBe(await overlayTier(kind, "none"));
+  });
+
+  it("leaves a menu outside any dialog at the popover tier while the popover is open", async () => {
+    const before = await overlayTier("menu", "none");
+
+    showPopover();
+
+    expect(await overlayTier("menu", "none")).toBe(before);
   });
 });
 
