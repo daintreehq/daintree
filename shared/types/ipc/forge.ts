@@ -199,6 +199,14 @@ export interface ForgeRepositoryStats {
   rateLimitKind?: ForgeRateLimitKind;
   /** Provider-suggested delay (ms) until the next background stats poll. */
   nextPollIntervalMs?: number;
+  /**
+   * Machine-independent identity of the repository these counts describe
+   * (`forge-host/owner/repo`), so a device visiting several hosts can match one
+   * repo across their different project paths (#14199). Absent when no single
+   * provider reported both counts — no provider resolved, or an issues
+   * provider split the issue count off the code forge's.
+   */
+  repoKey?: string;
 }
 
 /**

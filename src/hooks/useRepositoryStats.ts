@@ -6,6 +6,16 @@ import { projectClient } from "@/clients";
 import { forgeClient } from "@/clients/forgeClient";
 import { isTokenRelatedError } from "@/lib/forgeErrors";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
+import { LOCAL_HOST_ID } from "@shared/types/remoteHosts";
+import { hasRemoteHosts, useHostList } from "@/components/Hosts/hostList";
+import { getViewHostId } from "@/hooks/useHostConnection";
+import {
+  publishSharedObservation,
+  readRepoAlias,
+  readSharedObservation,
+  writeRepoAlias,
+  type SharedRepoObservation,
+} from "@/lib/sharedRepoStats";
 import { buildCacheKey, getCache, markCountStale, setCache } from "@/lib/forgeResourceCache";
 import { useGlobalMinuteTicker } from "@/hooks/useGlobalMinuteTicker";
 import { usePollingLifecycle } from "@/hooks/usePollingLifecycle";
@@ -103,9 +113,52 @@ interface SwitchBackCacheEntry {
 const MAX_SWITCHBACK_CACHE_SIZE = 20;
 const switchBackStatsCache = new Map<string, SwitchBackCacheEntry>();
 
+// The forge account behind this view's counts, per provider and project, for
+// keying cross-host observations (#14199). Looked up once per view lifetime and
+// only while more than one host is in play; a failed or empty lookup is dropped
+// so a later poll can try again.
+const sharedAccountLookups = new Map<string, Promise<string | null>>();
+
+function resolveSharedAccount(projectPath: string, providerId: string): Promise<string | null> {
+  const key = JSON.stringify([providerId, projectPath]);
+  const existing = sharedAccountLookups.get(key);
+  if (existing) return existing;
+  const lookup = forgeClient
+    .getCurrentUser(projectPath)
+    .then((user) => user?.login ?? null)
+    .catch(() => null)
+    .then((login) => {
+      if (login === null) sharedAccountLookups.delete(key);
+      return login;
+    });
+  sharedAccountLookups.set(key, lookup);
+  return lookup;
+}
+
+function publishSharedStats(
+  hostId: string,
+  projectPath: string,
+  providerId: string,
+  repoKey: string,
+  stats: ForgeRepositoryStats,
+  observedAt: number
+): void {
+  writeRepoAlias(hostId, projectPath, { providerId, repoKey });
+  void resolveSharedAccount(projectPath, providerId).then((account) => {
+    if (account === null) return;
+    publishSharedObservation(providerId, account, repoKey, {
+      issueCount: stats.issueCount,
+      prCount: stats.prCount,
+      observedAt,
+      hostId,
+    });
+  });
+}
+
 /** Test-only: clear the module-level switch-back cache between cases. */
 export function _resetSwitchBackCacheForTests(): void {
   switchBackStatsCache.clear();
+  sharedAccountLookups.clear();
 }
 
 /**
@@ -211,6 +264,26 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
 
   const mountedRef = useRef(true);
   const lastErrorRef = useRef<string | null>(null);
+
+  // Cross-host continuity (#14199) runs only when more than one host is in
+  // play: this view is on a remote host, or this machine has paired one. A
+  // local-only install never touches the shared store or the account lookup.
+  // The host list is the one the toolbar's host chip already follows, so
+  // reading it here costs no extra request.
+  const viewHostId = getViewHostId();
+  const observerHostId = viewHostId ?? LOCAL_HOST_ID;
+  const hostList = useHostList();
+  const sharingEnabled = viewHostId !== null || hasRemoteHosts(hostList);
+  const sharingEnabledRef = useRef(sharingEnabled);
+  useEffect(() => {
+    sharingEnabledRef.current = sharingEnabled;
+  }, [sharingEnabled]);
+  // A newer observation of this repo made by another host, holding the issue/PR
+  // pills against this host's older answers until one at least as new lands.
+  // Never a fresh result of this host's own: it never earns the reactivation
+  // skip, never feeds the corrective refetch's `lastUpdated` gate, and is never
+  // republished as this host's observation.
+  const sharedOverlayRef = useRef<SharedRepoObservation | null>(null);
 
   // Local-git-signal trigger state (#11151). Baselines track the main
   // worktree's ahead/behind counts so a genuine *delta* — not a snapshot
@@ -345,7 +418,25 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
             : repoStats.prCount,
       };
 
-      setStats(preservedStats);
+      // An answer older than another host's observation keeps that host's
+      // issue/PR counts on screen (#14199); the first one at least as new
+      // retires the overlay. Undated answers (provider-less snapshots) never
+      // retire it.
+      let displayedStats = preservedStats;
+      const overlay = sharedOverlayRef.current;
+      if (overlay) {
+        if ((repoStats.lastUpdated ?? -Infinity) < overlay.observedAt) {
+          displayedStats = {
+            ...preservedStats,
+            issueCount: overlay.issueCount ?? preservedStats.issueCount,
+            prCount: overlay.prCount ?? preservedStats.prCount,
+          };
+        } else {
+          sharedOverlayRef.current = null;
+        }
+      }
+
+      setStats(displayedStats);
       setIsStale(repoStats.stale ?? false);
       const nextLastUpdated = repoStats.lastUpdated ?? null;
       lastUpdatedRef.current = nextLastUpdated;
@@ -379,11 +470,25 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
           }
           if (oldestKey !== null) switchBackStatsCache.delete(oldestKey);
         }
+        // Without its repo key, so a switch-back replay is never republished
+        // as a fresh cross-host observation.
+        const { repoKey: _repoKey, ...cachedStats } = displayedStats;
         switchBackStatsCache.set(opts.projectPath, {
-          stats: preservedStats,
+          stats: cachedStats,
           lastUpdated: nextLastUpdated,
           providerId: providerIdRef.current,
         });
+
+        if (sharingEnabledRef.current && repoStats.repoKey && providerIdRef.current !== null) {
+          publishSharedStats(
+            observerHostId,
+            opts.projectPath,
+            providerIdRef.current,
+            repoStats.repoKey,
+            repoStats,
+            nextLastUpdated
+          );
+        }
       }
 
       // Carry the probe-derived cadence forward only on successful reads — a
@@ -417,8 +522,31 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
         resetPollFailures();
       }
     },
-    [recordPollFailure, resetPollFailures]
+    [recordPollFailure, resetPollFailures, observerHostId]
   );
+
+  // Paint another host's newer observation over the issue/PR pills (#14199).
+  // Stale by construction, and the host's own commit count stays — that is this
+  // host's local git, not a repo-level fact.
+  const applySharedOverlay = useCallback((observation: SharedRepoObservation) => {
+    if (!mountedRef.current) return;
+    sharedOverlayRef.current = observation;
+    if (observation.issueCount !== null) {
+      lastKnownCountsRef.current.issueCount = observation.issueCount;
+    }
+    if (observation.prCount !== null) lastKnownCountsRef.current.prCount = observation.prCount;
+    if (!hasAppliedResultRef.current) return;
+    setStats((prev) =>
+      prev
+        ? {
+            ...prev,
+            issueCount: observation.issueCount ?? prev.issueCount,
+            prCount: observation.prCount ?? prev.prCount,
+          }
+        : prev
+    );
+    setIsStale(true);
+  }, []);
 
   // Seed the toolbar from the counts persisted on the project record
   // (issue #11078). Applied as `stale: true` so the pills render real numbers —
@@ -578,6 +706,36 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
           }
         }
 
+        // Cross-host continuity (#14199): another host may have observed this
+        // repo more recently than anything this host has. Checked on every
+        // fetch, warm reactivations included, since a host switch can land on
+        // a view that never left memory.
+        const resolvedProviderId = providerIdRef.current;
+        const alias =
+          sharingEnabledRef.current && resolvedProviderId !== null
+            ? readRepoAlias(observerHostId, project.path)
+            : null;
+        if (alias && alias.providerId === resolvedProviderId) {
+          const account = await resolveSharedAccount(project.path, alias.providerId);
+          if (fetchGenerationRef.current !== myGeneration) return;
+          if (isInvalidated()) return;
+          const observation =
+            account === null
+              ? null
+              : readSharedObservation(alias.providerId, account, alias.repoKey);
+          const shownAt = Math.max(
+            lastUpdatedRef.current ?? -Infinity,
+            sharedOverlayRef.current?.observedAt ?? -Infinity
+          );
+          if (
+            observation &&
+            observation.hostId !== observerHostId &&
+            observation.observedAt > shownAt
+          ) {
+            applySharedOverlay(observation);
+          }
+        }
+
         // Skip the network revalidation on a cheap reactivation (tab focus /
         // project switch back) when fresh data is already in hand (issue
         // #10765). Each project runs in its own WebContentsView, so a single
@@ -707,6 +865,7 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
       }
       // Clear preserved counts on project switch to prevent cross-contamination
       lastKnownCountsRef.current = { issueCount: null, prCount: null };
+      sharedOverlayRef.current = null;
       hasAppliedResultRef.current = false;
       statsProjectPathRef.current = null;
 
