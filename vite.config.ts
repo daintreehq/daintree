@@ -1421,10 +1421,10 @@ function chunkModulesPlugin(): Plugin {
 // bytecode memory.
 //
 // Measured in #14238 (docs/performance/2026-10-23-boot-compile-hints.md): the
-// set costs ~5.7 MB of compiled code per idle project view and buys ~70 ms on
-// every new project view and ~40 ms on every warm launch (the code cache only
-// holds what was compiled before it was written). The App hint carries the
-// whole new-view win, so trim App's never-called code rather than its hint.
+// set costs ~5.8 MiB of compiled code per idle project view; dropping it made
+// new project views reveal ~70 ms later and warm launches ~40 ms later (median).
+// Most of the new-view gain rides on the App hint, so cut App's never-called
+// code rather than its hint.
 //
 // Must run in generateBundle (NOT renderChunk, NOT the `banner` option):
 // rolldown's native oxc minifier runs after renderChunk and would strip or

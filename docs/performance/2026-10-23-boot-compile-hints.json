@@ -9,25 +9,13 @@
     "electron": "42.11.18"
   },
   "decision": "keep the full hinted set",
-  "arms": {
-    "all": {
-      "hintedFiles": 38
-    },
-    "no-vendor": {
-      "hintedFiles": 36,
-      "drops": ["vendor-react", "vendor-xterm"]
-    },
-    "no-app": {
-      "hintedFiles": 37,
-      "drops": ["App"]
-    },
-    "none": {
-      "hintedFiles": 0
-    }
+  "units": {
+    "latency": "ms",
+    "memory": "KiB"
   },
   "method": {
-    "launch": "npm run perf launch-ab, interleaved, 20 launches per arm, unpackaged build:e2e arms; cold = fresh profile per launch, warm = --warm persisted profile per arm. Deltas are candidate minus all with bootstrap 95% CI of the median difference.",
-    "projectSwitch": "e2e/perf/project-switch-perf.spec.ts, PERF_SWITCH_COLD_ROUNDS=5, 28 LRU-evicted switches per run, arms ordered A/B/B/A.",
+    "launch": "npm run perf launch-ab, interleaved, 20 launches per arm, unpackaged build:e2e arms (v8CacheOptions \"code\"); cold = fresh profile per launch, warm = --warm persisted profile per arm after one warmup launch. Metric boot -> renderer_first_interactive. Deltas are candidate minus all; ci95 is a bootstrap interval of the median difference (4000 resamples).",
+    "projectSwitch": "e2e/perf/project-switch-perf.spec.ts, PERF_SWITCH_COLD_ROUNDS=5, 28 LRU-evicted switches per run; summary medians are the median of per-run p50s.",
     "idleViewMemory": "one empty project view, 15 s settle, two HeapProfiler.collectGarbage, Runtime.getHeapUsage + heap snapshot; compiled code = summed self_size of code nodes; 3 samples per run."
   },
   "launch": {
@@ -441,5 +429,240 @@
       "compiledCodeMedianKb": 16067.0,
       "jsHeapUsedMedianKb": 38699.0
     }
+  },
+  "raw": {
+    "launch": {
+      "aa-cold": {
+        "all": [
+          635.1, 632.1, 598.6, 615.1, 617.5, 639.8, 644.3, 642.8, 608.9, 643.3, 719.3, 702.2, 815.6,
+          713.8, 611.8, 634.1, 684.1, 749.1, 719.6, 598.5
+        ],
+        "all#b": [
+          583.9, 730.1, 540.3, 585, 634.1, 587.4, 643.5, 647.2, 683, 607.2, 601.3, 682, 703, 652.2,
+          741.2, 640.8, 636.3, 649.3, 686.4, 602.2
+        ]
+      },
+      "none-cold": {
+        "all": [
+          722.2, 626.3, 617.9, 682.8, 632.2, 634.2, 636, 617.8, 576.3, 630.5, 623.7, 617.5, 656.7,
+          653.9, 600, 643.9, 603.2, 584.5, 579.1, 678.6
+        ],
+        "none": [
+          719.8, 605, 684.2, 653.3, 659, 633.7, 647, 624.9, 689.1, 705, 595.9, 685.6, 618.9, 675.8,
+          659.9, 625.4, 661.3, 644.2, 697.5, 618.8
+        ]
+      },
+      "none-warm": {
+        "all": [
+          590.8, 536.9, 526.2, 516, 517.6, 505.1, 505.6, 484.9, 497.1, 499.4, 491.7, 493, 504.9,
+          493.5, 495.6, 574.2, 497, 532.6, 506, 544.8
+        ],
+        "none": [
+          607.6, 588.8, 557.4, 599.1, 547.9, 538.6, 541, 560.5, 532.5, 524.7, 531.8, 523.6, 689.1,
+          533.1, 522.1, 559.9, 526.9, 527.2, 559.8, 584.1
+        ]
+      },
+      "no-vendor-cold": {
+        "all": [
+          640.1, 598.6, 596.9, 606.8, 600.2, 604.5, 605.1, 616.8, 587.1, 574, 604, 584.8, 591.4,
+          659.4, 618.8, 654.1, 636.2, 586.5, 606.8, 619.4
+        ],
+        "no-vendor": [
+          672, 673.9, 686, 651.1, 659.8, 608.9, 614.1, 585.3, 589.7, 688.6, 637, 640.3, 550.4,
+          643.5, 622.8, 621.7, 646.4, 598.4, 592.1, 610.2
+        ]
+      },
+      "no-vendor-warm": {
+        "all": [
+          555.4, 528.6, 508.6, 498.8, 490.6, 509.4, 491.9, 495.9, 503.7, 546.4, 528.4, 538.4, 531.9,
+          581.5, 519, 531, 519.8, 528.7, 493.2, 526.8
+        ],
+        "no-vendor": [
+          575.9, 510.4, 494.4, 510.1, 484.1, 505.8, 487.7, 505.3, 490.5, 516.2, 500.7, 502.7, 537.6,
+          508, 536.9, 535.9, 528.9, 550.4, 527.3, 607.7
+        ]
+      },
+      "no-app-cold": {
+        "all": [
+          593.8, 627.9, 588.5, 590.8, 589.6, 575.5, 615.1, 598.1, 584.8, 552.9, 573, 583.6, 598,
+          596.5, 573.5, 582.4, 597.9, 589.6, 589, 597
+        ],
+        "no-app": [
+          589.1, 621.4, 599.4, 604.6, 615, 597, 606.8, 607.4, 609.8, 576.6, 615.7, 639.3, 629.7,
+          606.8, 606.2, 579.2, 598.9, 583.8, 620.9, 613.4
+        ]
+      },
+      "no-app-warm": {
+        "all": [
+          554, 500.8, 586.3, 503, 492.8, 494.7, 500.9, 500.2, 495, 498.1, 498.6, 498.1, 495.5,
+          507.1, 569.2, 530.6, 530.5, 528.2, 524, 526.3
+        ],
+        "no-app": [
+          572.8, 522, 537.7, 525.1, 523.2, 524.1, 531.7, 525.9, 520, 527.8, 519.5, 522.8, 518.6,
+          530.4, 580.1, 565.6, 573.7, 563.5, 555.7, 559.3
+        ]
+      }
+    },
+    "idleViewMemory": {
+      "mem-1-all": [
+        {
+          "codeKb": 21953,
+          "heapUsedKb": 44804
+        },
+        {
+          "codeKb": 22043,
+          "heapUsedKb": 44905
+        },
+        {
+          "codeKb": 22056,
+          "heapUsedKb": 44919
+        }
+      ],
+      "mem-11-all": [
+        {
+          "codeKb": 21890,
+          "heapUsedKb": 44718
+        },
+        {
+          "codeKb": 21897,
+          "heapUsedKb": 44744
+        },
+        {
+          "codeKb": 21935,
+          "heapUsedKb": 46362
+        }
+      ],
+      "mem-12-no-app": [
+        {
+          "codeKb": 20138,
+          "heapUsedKb": 43020
+        },
+        {
+          "codeKb": 20144,
+          "heapUsedKb": 43033
+        },
+        {
+          "codeKb": 20157,
+          "heapUsedKb": 43050
+        }
+      ],
+      "mem-13-no-app": [
+        {
+          "codeKb": 20114,
+          "heapUsedKb": 42986
+        },
+        {
+          "codeKb": 20121,
+          "heapUsedKb": 43000
+        },
+        {
+          "codeKb": 20132,
+          "heapUsedKb": 43008
+        }
+      ],
+      "mem-14-all": [
+        {
+          "codeKb": 21955,
+          "heapUsedKb": 44792
+        },
+        {
+          "codeKb": 21959,
+          "heapUsedKb": 44806
+        },
+        {
+          "codeKb": 21970,
+          "heapUsedKb": 44810
+        }
+      ],
+      "mem-2-no-vendor": [
+        {
+          "codeKb": 21331,
+          "heapUsedKb": 44130
+        },
+        {
+          "codeKb": 21335,
+          "heapUsedKb": 44144
+        },
+        {
+          "codeKb": 21394,
+          "heapUsedKb": 45700
+        }
+      ],
+      "mem-3-none": [
+        {
+          "codeKb": 16093,
+          "heapUsedKb": 38710
+        },
+        {
+          "codeKb": 16185,
+          "heapUsedKb": 38826
+        },
+        {
+          "codeKb": 16199,
+          "heapUsedKb": 38835
+        }
+      ],
+      "mem-4-none": [
+        {
+          "codeKb": 16021,
+          "heapUsedKb": 38665
+        },
+        {
+          "codeKb": 16028,
+          "heapUsedKb": 38679
+        },
+        {
+          "codeKb": 16041,
+          "heapUsedKb": 38688
+        }
+      ],
+      "mem-5-no-vendor": [
+        {
+          "codeKb": 21393,
+          "heapUsedKb": 44201
+        },
+        {
+          "codeKb": 21481,
+          "heapUsedKb": 44301
+        },
+        {
+          "codeKb": 21495,
+          "heapUsedKb": 44314
+        }
+      ],
+      "mem-6-all": [
+        {
+          "codeKb": 22015,
+          "heapUsedKb": 44854
+        },
+        {
+          "codeKb": 22103,
+          "heapUsedKb": 44953
+        },
+        {
+          "codeKb": 22118,
+          "heapUsedKb": 45005
+        }
+      ]
+    }
+  },
+  "chunks": {
+    "all": {
+      "hintedFiles": 38,
+      "hintedBytes": 5003685
+    },
+    "no-vendor": {
+      "hintedFiles": 36,
+      "hintedBytes": 4421365
+    },
+    "no-app": {
+      "hintedFiles": 37,
+      "hintedBytes": 3150441
+    },
+    "none": {
+      "hintedFiles": 0,
+      "hintedBytes": 0
+    },
+    "appChunkBytes": 1853276
   }
 }
