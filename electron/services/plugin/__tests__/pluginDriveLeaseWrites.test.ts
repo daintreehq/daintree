@@ -42,6 +42,7 @@ import type { PluginHostFactoryDeps } from "../PluginHostFactory.js";
 import {
   _resetPluginFrontendRoutingForTesting,
   runInPluginInvocation,
+  runWithEndedPluginInvocation,
   setPluginFrontendRouter,
 } from "../pluginFrontendRouting.js";
 import {
@@ -309,5 +310,53 @@ describe("assertPluginCallerDrives", () => {
     };
 
     await expect(check(WATCHER, "t1")).resolves.toBeUndefined();
+  });
+});
+
+describe("plugin work that outlived the call that started it (#14251)", () => {
+  const write = () => assertPluginCallerDrives(PLUGIN_ID, "fs.writeFile", { paths: ["/repo/a"] });
+  const asEnded = (caller: ClientEndpoint | null, fn: () => Promise<void>) =>
+    runWithEndedPluginInvocation({ pluginId: PLUGIN_ID, caller }, fn);
+
+  beforeEach(() => {
+    owners.projectsForPath = (p) => (p.startsWith("/repo/") ? ["p1"] : []);
+  });
+
+  afterEach(() => _resetDriveLeaseServiceForTesting(null));
+
+  it("is held to the lease as the caller who made the call", async () => {
+    installLeases(new Map([["p1", HOLDER]]));
+    await expect(asEnded(WATCHER, write)).rejects.toMatchObject({ code: "DRIVEN_ELSEWHERE" });
+    await expect(asEnded(HOLDER, write)).resolves.toBeUndefined();
+  });
+
+  it("drives nothing when the host can't say who made the call", async () => {
+    installLeases(new Map([["p1", HOLDER]]));
+    await expect(asEnded(null, write)).rejects.toMatchObject({ code: "DRIVEN_ELSEWHERE" });
+    installLeases(new Map());
+    await expect(asEnded(null, write)).resolves.toBeUndefined();
+  });
+
+  it("checks nothing without a lease service", async () => {
+    await expect(asEnded(null, write)).resolves.toBeUndefined();
+  });
+
+  it("belongs only to the plugin whose call it was", async () => {
+    installLeases(new Map([["p1", HOLDER]]));
+    await expect(
+      runWithEndedPluginInvocation({ pluginId: "another.plugin", caller: null }, write)
+    ).resolves.toBeUndefined();
+  });
+
+  it("yields to a live call it runs inside", async () => {
+    installLeases(new Map([["p1", HOLDER]]));
+    setPluginFrontendRouter({ resolve: () => ({ kind: "local" }), onChange: () => () => {} });
+    try {
+      await expect(
+        asEnded(WATCHER, () => runInPluginInvocation(PLUGIN_ID, HOLDER, write))
+      ).resolves.toBeUndefined();
+    } finally {
+      _resetPluginFrontendRoutingForTesting();
+    }
   });
 });

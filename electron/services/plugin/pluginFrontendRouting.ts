@@ -154,6 +154,38 @@ export function getPluginInvokeOrigin(pluginId: string): PluginInvocationScope |
   return scope;
 }
 
+/**
+ * Work a plugin's call started that reached the host after the call returned:
+ * a timer or continuation that still carries the call's id (#14251). It is
+ * still that call's work, so it answers to the drive lease as the caller who
+ * made it, never as background. `caller` is null when the host can't say who
+ * that was, and a caller nobody knows drives nothing.
+ *
+ * Kept apart from the invocation scope: a prompt or clipboard call made after
+ * the call returned has nobody to reach, and still reaches nobody.
+ */
+export interface EndedPluginInvocation {
+  readonly pluginId: string;
+  readonly caller: Pick<ClientEndpoint, "endpointId" | "clientId"> | null;
+}
+
+const endedInvocationScope = new AsyncLocalStorage<EndedPluginInvocation>();
+
+/** Run `fn` as work of an ended call, or as no ended call's work for `null`. */
+export function runWithEndedPluginInvocation<T>(
+  ended: EndedPluginInvocation | null,
+  fn: () => T
+): T {
+  return ended === null ? endedInvocationScope.exit(fn) : endedInvocationScope.run(ended, fn);
+}
+
+/** The ended call of `pluginId` the current work belongs to, if any. */
+export function getEndedPluginInvocation(pluginId: string): EndedPluginInvocation | null {
+  const ended = endedInvocationScope.getStore();
+  if (!ended || ended.pluginId !== pluginId) return null;
+  return ended;
+}
+
 /** Message prefix a plugin can match without importing anything. */
 export const NO_FRONTEND_ATTACHED_PREFIX = "NO_FRONTEND_ATTACHED";
 
