@@ -318,9 +318,9 @@ describe("core reads with no frontend", () => {
       await expect(
         executeViewlessAction({ ...request("recipe.list", undefined), checkWrite }, deps)
       ).rejects.toBe(refusal);
-      expect(invoke.mock.calls.some(([, channel]) => channel === CHANNELS.PROJECT_GET_RECIPES)).toBe(
-        false
-      );
+      expect(
+        invoke.mock.calls.some(([, channel]) => channel === CHANNELS.PROJECT_GET_RECIPES)
+      ).toBe(false);
     });
   });
 
@@ -382,7 +382,10 @@ describe("core reads with no frontend", () => {
 
       for (const presetId of [...ids, "not-a-preset"]) {
         const { deps: launch, invoke } = presetDeps();
-        await executeViewlessAction(request("agent.launch", { agentId: "claude", presetId }), launch);
+        await executeViewlessAction(
+          request("agent.launch", { agentId: "claude", presetId }),
+          launch
+        );
         const call = invoke.mock.calls.find(([, channel]) => channel === CHANNELS.TERMINAL_SPAWN);
         const spawned = call?.[2][0] as { agentPresetId?: string } | undefined;
         expect(spawned?.agentPresetId).toBe(presetId === "not-a-preset" ? undefined : presetId);
@@ -565,10 +568,7 @@ describe("core reads with no frontend", () => {
     });
 
     it("times out without a PR as a result, not a failure", async () => {
-      const { deps } = makeDeps(
-        { getWorkspaceHosts: () => makeHosts() },
-        { worktrees: [FEATURE] }
-      );
+      const { deps } = makeDeps({ getWorkspaceHosts: () => makeHosts() }, { worktrees: [FEATURE] });
 
       const result = await executeViewlessAction(
         request("worktree.waitForPullRequest", { worktreeIds: [FEATURE.id], timeoutMs: 0 }),

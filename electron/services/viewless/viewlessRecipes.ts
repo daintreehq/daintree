@@ -1,6 +1,10 @@
 import { CHANNELS } from "../../ipc/channels.js";
 import type { ActionDispatchResult } from "../../../shared/types/actions.js";
-import type { Project, RecipeNameCollision, TerminalRecipe } from "../../../shared/types/project.js";
+import type {
+  Project,
+  RecipeNameCollision,
+  TerminalRecipe,
+} from "../../../shared/types/project.js";
 import {
   hydrateInRepoRecipeUsage,
   mergeRecipes,

@@ -92,7 +92,10 @@ export async function runActionsGetContext(
     // folder, the inventory is unknown, which is not none.
     const worktrees = listing?.worktrees ?? null;
     if (worktrees === null || (worktrees.length === 0 && listing?.gitBacked === null)) {
-      return failure("EXECUTION_ERROR", "The workspace host hasn't listed this project's worktrees yet");
+      return failure(
+        "EXECUTION_ERROR",
+        "The workspace host hasn't listed this project's worktrees yet"
+      );
     }
     const activeWorktreeId = contextWorktreeId ?? state?.activeWorktreeId;
     const activeWorktree =
