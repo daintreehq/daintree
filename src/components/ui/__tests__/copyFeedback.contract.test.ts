@@ -50,7 +50,7 @@ const DIRECT_WRITERS: Record<string, string> = {
   "src/components/Worktree/WorktreeCard/notifyAttachmentFailure.ts": "toast action",
   // Actions are the MCP surface too; the UI that dispatches them confirms.
   "src/services/actions/definitions/browserActions.ts": "action",
-  "src/services/actions/definitions/gitActions.ts": "action",
+  "src/services/actions/definitions/gitActions.impl.ts": "action",
   "src/services/actions/definitions/portalTabActions.ts": "action",
   "src/services/actions/definitions/terminalInputActions.ts": "action",
   "src/services/actions/definitions/worktreeLifecycleActions.ts": "action",
