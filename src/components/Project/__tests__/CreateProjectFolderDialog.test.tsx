@@ -497,6 +497,90 @@ describe("CreateProjectFolderDialog project templates (#13825)", () => {
     );
   });
 
+  it("reads a template's files again when it is chosen again, never reusing the old list", async () => {
+    let resolveSecond: (value: unknown) => void = () => {};
+    previewProjectTemplateMock
+      .mockResolvedValueOnce(sitePreview)
+      .mockImplementationOnce(() => new Promise((resolve) => (resolveSecond = resolve)));
+    await renderDialog();
+    fireEvent.change(folderInput(), { target: { value: "my-site" } });
+    await waitFor(() => templateSelect());
+
+    chooseTemplate(1);
+    await screen.findByTestId("project-template-files");
+    chooseTemplate(0);
+    chooseTemplate(1);
+
+    expect(screen.queryByTestId("project-template-files")).toBeNull();
+    expect(createButton().getAttribute("aria-disabled")).toBe("true");
+    await act(async () => {
+      resolveSecond({ ...sitePreview, digest: "fresh-digest" });
+    });
+    await act(async () => {
+      fireEvent.click(createButton());
+    });
+    expect(createProjectFolderMock).toHaveBeenCalledWith(
+      "/Users/test",
+      "my-site",
+      suggestProjectEmoji("my-site"),
+      {
+        disposition: "current",
+        template: { pluginId: "acme.sites", templateId: "site", digest: "fresh-digest" },
+      }
+    );
+  });
+
+  it("reads the files again after a create from the template fails", async () => {
+    previewProjectTemplateMock
+      .mockResolvedValueOnce(sitePreview)
+      .mockResolvedValueOnce({ ...sitePreview, digest: "changed-digest" });
+    createProjectFolderMock.mockRejectedValueOnce(
+      new Error("The template's files changed after they were listed.")
+    );
+    await renderDialog();
+    fireEvent.change(folderInput(), { target: { value: "my-site" } });
+    await waitFor(() => templateSelect());
+    chooseTemplate(1);
+    await screen.findByTestId("project-template-files");
+
+    await act(async () => {
+      fireEvent.click(createButton());
+    });
+
+    expect(screen.getByRole("alert").textContent).toContain("changed after they were listed");
+    await waitFor(() => expect(previewProjectTemplateMock).toHaveBeenCalledTimes(2));
+    await screen.findByTestId("project-template-files");
+    await act(async () => {
+      fireEvent.click(createButton());
+    });
+    expect(createProjectFolderMock).toHaveBeenLastCalledWith(
+      "/Users/test",
+      "my-site",
+      suggestProjectEmoji("my-site"),
+      {
+        disposition: "current",
+        template: { pluginId: "acme.sites", templateId: "site", digest: "changed-digest" },
+      }
+    );
+  });
+
+  it.each([
+    ["while its files are still being read", () => new Promise(() => {})],
+    ["when it can't be used", () => Promise.resolve({ status: "unusable", reason: "Nope." })],
+  ])("ignores Enter on the name %s", async (_label, preview) => {
+    previewProjectTemplateMock.mockImplementation(preview);
+    await renderDialog();
+    fireEvent.change(folderInput(), { target: { value: "my-site" } });
+    await waitFor(() => templateSelect());
+    chooseTemplate(1);
+    await act(async () => {});
+
+    await act(async () => {
+      fireEvent.keyDown(folderInput(), { key: "Enter" });
+    });
+    expect(createProjectFolderMock).not.toHaveBeenCalled();
+  });
+
   it("creates an empty folder again after switching back to Empty folder", async () => {
     previewProjectTemplateMock.mockResolvedValue(sitePreview);
     await renderDialog();

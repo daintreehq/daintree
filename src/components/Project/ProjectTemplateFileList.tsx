@@ -2,6 +2,7 @@ import type { ProjectTemplatePreview } from "@shared/types/plugin";
 import { Badge } from "@/components/ui/badge";
 import { Callout } from "@/components/ui/Callout";
 import { ScrollShadow } from "@/components/ui/ScrollShadow";
+import { Skeleton, SkeletonHint, SkeletonText } from "@/components/ui/Skeleton";
 import { SECTION_LABEL_CLASS } from "@/components/ui/sectionLabel";
 import { formatBytes } from "@/lib/formatBytes";
 import { pluralize } from "@/lib/pluralize";
@@ -27,10 +28,14 @@ const KIND_LABEL = {
  */
 export function ProjectTemplateFileList({ preview, showLoading }: ProjectTemplateFileListProps) {
   if (preview === null) {
+    // `immediate`: the caller's gate has already held this back past 400ms.
     return showLoading ? (
-      <p className="text-xs text-text-secondary" role="status">
-        Reading the template's files…
-      </p>
+      <div className="space-y-2">
+        <Skeleton label="Reading the template's files">
+          <SkeletonText lines={3} lineHeightClassName="h-3" immediate />
+        </Skeleton>
+        <SkeletonHint firstThreshold={5_000} className="text-xs text-text-secondary" />
+      </div>
     ) : null;
   }
 

@@ -85,6 +85,18 @@ describe("PluginProjectTemplateRegistry (#13825)", () => {
     expect(getPluginProjectTemplatePluginDir("acme.sites", "site")).toBeUndefined();
   });
 
+  it("strips direction-changing characters from the author's text", () => {
+    registerPluginProjectTemplates("acme.sites", "Acme\u202E Sites", "/plugins/acme", [
+      { id: "site", title: "Site\u202Egnp", description: "A\u200B site." },
+    ]);
+    const [descriptor] = getPluginProjectTemplates();
+    expect(descriptor).toMatchObject({
+      pluginName: "Acme Sites",
+      title: "Sitegnp",
+      description: "A site.",
+    });
+  });
+
   it("hands out copies, so a caller can't edit what the registry holds", () => {
     registerPluginProjectTemplates("acme.sites", "Acme", "/plugins/acme", [
       template("site", "Site"),

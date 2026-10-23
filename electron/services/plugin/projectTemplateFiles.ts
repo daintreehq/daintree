@@ -50,62 +50,149 @@ export interface ProjectTemplateInventory {
   digest: string;
 }
 
-/** Names that are never copied, at any depth, compared case-insensitively. */
-const DENIED_SEGMENTS: ReadonlyMap<string, string> = new Map([
-  // `git~1` is the 8.3 short name NTFS can give `.git`.
-  [".git", "repository metadata"],
-  ["git~1", "repository metadata"],
-  [".gitmodules", "repository metadata"],
-  ["node_modules", "installed dependencies"],
-  // Agent configuration: settings, permissions, hooks and MCP servers for the
-  // agent CLIs Daintree runs. Instruction files stay allowed (below).
-  [".mcp.json", "agent configuration"],
-  [".codex", "agent configuration"],
-  [".gemini", "agent configuration"],
-  [".cursor", "agent configuration"],
-  [".opencode", "agent configuration"],
-  ["opencode.json", "agent configuration"],
-  ["opencode.jsonc", "agent configuration"],
-  [".crush", "agent configuration"],
-  ["crush.json", "agent configuration"],
-  [".crush.json", "agent configuration"],
-  [".aider.conf.yml", "agent configuration"],
-  [".amp", "agent configuration"],
-  [".copilot", "agent configuration"],
-  [".goose", "agent configuration"],
-  [".grok", "agent configuration"],
-  [".kimi", "agent configuration"],
-  [".kiro", "agent configuration"],
-  [".qwen", "agent configuration"],
-  [".vibe", "agent configuration"],
+/**
+ * The key a name is compared under, for the deny-list and for collisions:
+ * compatibility-normalized and case-folded by way of upper case, so `ſ` (which
+ * APFS folds to `s`), full-width forms and ligatures can't stand in for a
+ * refused name. Deliberately over-eager: a false match only refuses a template.
+ */
+function foldName(name: string): string {
+  return name.normalize("NFKC").toUpperCase().toLowerCase().normalize("NFC");
+}
+
+const REPOSITORY = "repository metadata";
+const DEPENDENCIES = "installed dependencies";
+const AGENT_CONFIG = "agent configuration";
+
+/** Names refused at any depth, as a file or a folder. */
+const DENIED_NAMES: ReadonlyMap<string, string> = new Map([
+  [".git", REPOSITORY],
+  [".gitmodules", REPOSITORY],
+  ["node_modules", DEPENDENCIES],
+  [".mcp.json", AGENT_CONFIG],
+  ["opencode.json", AGENT_CONFIG],
+  ["opencode.jsonc", AGENT_CONFIG],
+  ["crush.json", AGENT_CONFIG],
+  [".crush.json", AGENT_CONFIG],
+  [".aider.conf.yml", AGENT_CONFIG],
+  [".aider.model.settings.yml", AGENT_CONFIG],
+  [".aider.model.metadata.json", AGENT_CONFIG],
+]);
+
+/** NTFS 8.3 short names `.git` can be given (`GIT~1`, `GIT~2`, …). */
+const GIT_SHORT_NAME = /^git~\d+$/;
+
+/**
+ * Folders an agent reads its settings, permissions, hooks or MCP servers from,
+ * refused whole — except for the subfolders that only hold instructions.
+ */
+const AGENT_CONFIG_DIRS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
+  [".codex", new Set<string>()],
+  [".gemini", new Set<string>()],
+  [".cursor", new Set(["rules"])],
+  [".opencode", new Set<string>()],
+  [".crush", new Set<string>()],
+  [".amp", new Set<string>()],
+  [".copilot", new Set<string>()],
+  [".goose", new Set<string>()],
+  [".grok", new Set<string>()],
+  [".kimi", new Set<string>()],
+  [".kiro", new Set(["steering"])],
+  [".qwen", new Set<string>()],
+  [".vibe", new Set<string>()],
 ]);
 
 /**
- * Agent configuration that lives beside instruction content in the same
- * folder: `.claude/` also holds commands, agents and skills, which are allowed,
- * and `.vscode/` holds editor settings.
+ * Configuration that sits beside instructions in a folder agents also read
+ * instructions from: the entry directly inside `parent`, matched by name or,
+ * ending in `*`, by prefix.
  */
-function deniedNested(segments: readonly string[]): string | null {
-  for (let i = 0; i < segments.length - 1; i++) {
-    const next = segments[i + 1];
-    if (segments[i] === ".claude") {
-      if (next === "hooks") return "agent configuration";
-      if (i + 1 === segments.length - 1 && next.startsWith("settings")) {
-        return "agent configuration";
+const AGENT_CONFIG_ENTRIES: ReadonlyArray<{ parent: readonly string[]; entry: string }> = [
+  { parent: [".claude"], entry: "settings*" },
+  { parent: [".claude"], entry: "hooks" },
+  { parent: [".vscode"], entry: "mcp.json" },
+  { parent: [".github"], entry: "hooks" },
+  { parent: [".github", "copilot"], entry: "settings*" },
+  { parent: [".windsurf"], entry: "hooks.json" },
+  { parent: [".devin"], entry: "hooks.json" },
+  { parent: [".amazonq"], entry: "mcp.json" },
+  { parent: [".amazonq"], entry: "default.json" },
+  { parent: [".continue"], entry: "mcpservers" },
+  { parent: [".roo"], entry: "mcp.json" },
+  { parent: [".cline"], entry: "hooks" },
+  { parent: [".clinerules"], entry: "hooks" },
+];
+
+function entryMatches(pattern: string, segment: string): boolean {
+  return pattern.endsWith("*") ? segment.startsWith(pattern.slice(0, -1)) : segment === pattern;
+}
+
+/** Why `segments` (already folded) is never copied, or null. */
+function deniedReason(segments: readonly string[]): string | null {
+  for (let i = 0; i < segments.length; i++) {
+    const segment = segments[i];
+    const named = DENIED_NAMES.get(segment) ?? (GIT_SHORT_NAME.test(segment) ? REPOSITORY : null);
+    if (named) return named;
+    // The folder itself may be entered; what is inside it is refused unless it
+    // is one of its instruction subfolders.
+    const instructionDirs = AGENT_CONFIG_DIRS.get(segment);
+    const child = segments[i + 1];
+    if (instructionDirs && child !== undefined && !instructionDirs.has(child)) return AGENT_CONFIG;
+    for (const { parent, entry } of AGENT_CONFIG_ENTRIES) {
+      const at = i + parent.length;
+      if (
+        at < segments.length &&
+        parent.every((name, offset) => segments[i + offset] === name) &&
+        entryMatches(entry, segments[at])
+      ) {
+        return AGENT_CONFIG;
       }
     }
-    if (segments[i] === ".vscode" && next === "mcp.json") return "agent configuration";
   }
   return null;
 }
 
-function deniedReason(relPath: string): string | null {
-  const segments = relPath.toLowerCase().split("/");
-  for (const segment of segments) {
-    const reason = DENIED_SEGMENTS.get(segment);
-    if (reason) return reason;
+/**
+ * Front-matter keys that make an instruction file configuration: hooks, MCP
+ * servers and pre-approved tools or permissions declared in a subagent, skill,
+ * command or prompt file. Folded like names, so case doesn't matter.
+ */
+const DENIED_FRONT_MATTER_KEYS: ReadonlySet<string> = new Set([
+  "hooks",
+  "mcpservers",
+  "mcp-servers",
+  "mcp_servers",
+  "allowed-tools",
+  "allowed_tools",
+  "allowedtools",
+  "permissionmode",
+  "permission-mode",
+  "permissions",
+]);
+
+const FRONT_MATTER_KEY = /^["']?([A-Za-z0-9_-]+)["']?\s*:/;
+
+/**
+ * The refused front-matter key a Markdown file in an agent's folder declares,
+ * or null. Only files inside a dot-folder are read this way — that's where
+ * agents look for subagents, skills, commands and rules — and only the leading
+ * `---` block, at its top level.
+ */
+function deniedFrontMatterKey(segments: readonly string[], content: Buffer): string | null {
+  const name = segments[segments.length - 1];
+  if (!/\.(md|mdc)$/.test(name)) return null;
+  if (!segments.slice(0, -1).some((segment) => segment.startsWith("."))) return null;
+  const lines = content
+    .toString("utf8", 0, Math.min(content.length, 64 * 1024))
+    .replace(/^\uFEFF/, "")
+    .split(/\r?\n/);
+  if (lines[0]?.trim() !== "---") return null;
+  for (const line of lines.slice(1)) {
+    if (line.trim() === "---" || line.trim() === "...") return null;
+    const key = FRONT_MATTER_KEY.exec(line)?.[1];
+    if (key && DENIED_FRONT_MATTER_KEYS.has(foldName(key))) return key;
   }
-  return deniedNested(segments);
+  return null;
 }
 
 const INSTRUCTION_FILES: ReadonlySet<string> = new Set([
@@ -119,11 +206,13 @@ const INSTRUCTION_FILES: ReadonlySet<string> = new Set([
   ".goosehints",
 ]);
 
-function classify(relPath: string): ProjectTemplateFileKind {
-  const lower = relPath.toLowerCase();
-  if (lower.startsWith(".daintree/plugins/")) return "project-plugin";
-  const segments = lower.split("/");
-  if (INSTRUCTION_FILES.has(segments[segments.length - 1]) || segments.includes(".claude")) {
+function classify(segments: readonly string[]): ProjectTemplateFileKind {
+  if (segments[0] === ".daintree" && segments[1] === "plugins") return "project-plugin";
+  if (
+    INSTRUCTION_FILES.has(segments[segments.length - 1]) ||
+    segments.includes(".claude") ||
+    segments.some((segment, i) => AGENT_CONFIG_DIRS.get(segment)?.has(segments[i + 1] ?? ""))
+  ) {
     return "instructions";
   }
   return "file";
@@ -131,18 +220,24 @@ function classify(relPath: string): ProjectTemplateFileKind {
 
 const WINDOWS_RESERVED_NAME = /^(con|prn|aux|nul|com[0-9¹²³]|lpt[0-9¹²³])(\..*)?$/i;
 const NON_PORTABLE_CHARACTER = /[\\/:*?"<>|]/;
+/**
+ * Controls, and the formatting characters that are invisible or reorder the
+ * text around them. A name holding one can read as a different name in the
+ * dialog's list, and HFS+ ignores some of them outright, so `.g\u200Cit` is
+ * `.git` on disk.
+ */
+const HIDDEN_CHARACTER =
+  // eslint-disable-next-line no-control-regex -- refusing control characters is the point
+  /[\u0000-\u001f\u007f-\u009f\u00ad\u061c\u180e\u200b-\u200f\u202a-\u202e\u2060-\u206f\ufeff]/;
 
 /**
  * Why a file or folder name can't be written on every platform Daintree runs
- * on, or null. Held to the strictest of the three so a template behaves the
- * same wherever it is used.
+ * on, or shown as it is, or null. Held to the strictest of the three platforms
+ * so a template behaves the same wherever it is used.
  */
 function nameProblem(name: string): string | null {
   if (name === "" || name === "." || name === "..") return "isn't a usable name";
-  for (let i = 0; i < name.length; i++) {
-    const code = name.charCodeAt(i);
-    if (code < 0x20 || code === 0x7f) return "has a control character in its name";
-  }
+  if (HIDDEN_CHARACTER.test(name)) return "has an invisible or control character in its name";
   if (NON_PORTABLE_CHARACTER.test(name)) return "has a character Windows can't store in a name";
   if (/[. ]$/.test(name)) return "ends with a dot or a space, which Windows drops";
   if (WINDOWS_RESERVED_NAME.test(name)) return "is a reserved name on Windows";
@@ -232,21 +327,27 @@ export async function buildProjectTemplateInventory(
   let entries = 0;
   let totalBytes = 0;
 
-  const walk = async (absDir: string, relDir: string, depth: number): Promise<void> => {
+  const walk = async (
+    absDir: string,
+    relDir: string,
+    foldedDir: readonly string[],
+    depth: number
+  ): Promise<void> => {
     const names = (await fs.readdir(absDir)).sort();
     for (const name of names) {
       const relPath = relDir ? `${relDir}/${name}` : name;
       const problem = nameProblem(name);
       if (problem) throw new ProjectTemplateError(`"${relPath}" ${problem}.`);
 
-      const denied = deniedReason(relPath);
+      const folded = [...foldedDir, foldName(name)];
+      const denied = deniedReason(folded);
       if (denied) {
         throw new ProjectTemplateError(
           `"${relPath}" is ${denied}, which a template never copies into a new project.`
         );
       }
 
-      const key = relPath.normalize("NFC").toLowerCase();
+      const key = folded.join("/");
       const clash = seen.get(key);
       if (clash !== undefined) {
         throw new ProjectTemplateError(
@@ -275,7 +376,7 @@ export async function buildProjectTemplateInventory(
             `"${relPath}" is nested more than ${PROJECT_TEMPLATE_LIMITS.depth} folders deep.`
           );
         }
-        await walk(absPath, relPath, depth + 1);
+        await walk(absPath, relPath, folded, depth + 1);
         continue;
       }
       if (!stat.isFile()) {
@@ -287,17 +388,23 @@ export async function buildProjectTemplateInventory(
         );
       }
       const content = await readTemplateFile(absPath, relPath);
+      const frontMatterKey = deniedFrontMatterKey(folded, content);
+      if (frontMatterKey) {
+        throw new ProjectTemplateError(
+          `"${relPath}" sets ${frontMatterKey} in its front matter. That's agent configuration, which a template never copies into a new project.`
+        );
+      }
       totalBytes += content.length;
       if (totalBytes > PROJECT_TEMPLATE_LIMITS.totalBytes) {
         throw new ProjectTemplateError(
           `The template's files add up to more than ${formatMegabytes(PROJECT_TEMPLATE_LIMITS.totalBytes)}.`
         );
       }
-      files.push({ path: relPath, size: content.length, kind: classify(relPath), content });
+      files.push({ path: relPath, size: content.length, kind: classify(folded), content });
     }
   };
 
-  await walk(templateDir, "", 0);
+  await walk(templateDir, "", [], 0);
   if (files.length === 0) {
     throw new ProjectTemplateError("The template has no files.");
   }
@@ -360,23 +467,41 @@ export function toProjectTemplatePreview(
   };
 }
 
+/** What a path on disk is, so it can be told apart from something put in its place. */
+function identityOf(stat: { dev: number; ino: number }): string {
+  return `${stat.dev}:${stat.ino}`;
+}
+
+/**
+ * Remove `absPath` only if it is still the entry this call created. Something
+ * else swapped into its place — a link, another file — is left alone.
+ */
+async function removeIfOurs(absPath: string, identity: string, isDir: boolean): Promise<void> {
+  const stat = await fs.lstat(absPath).catch(() => null);
+  if (!stat || stat.isSymbolicLink() || identityOf(stat) !== identity) return;
+  await (isDir ? fs.rmdir(absPath) : fs.unlink(absPath)).catch(() => {});
+}
+
 /**
  * Write the inventory into `destRoot`, which must be the empty folder the user
  * just created. Every folder and file is created exclusively, so nothing that
- * appeared there in the meantime is overwritten; on failure everything this
- * call created is removed again — and nothing else — before the error is
+ * appeared there in the meantime is overwritten, and each file's folder is
+ * checked to still be the one this call made, so a folder swapped for a link
+ * mid-copy can't redirect a write. On failure everything this call created is
+ * removed again — checked the same way, so nothing else is — and the error is
  * rethrown.
  */
 export async function writeProjectTemplate(
   destRoot: string,
   inventory: ProjectTemplateInventory
 ): Promise<void> {
-  const createdDirs: string[] = [];
-  const createdFiles: string[] = [];
+  const created: Array<{ absPath: string; identity: string; isDir: boolean }> = [];
   try {
-    if ((await fs.readdir(destRoot)).length > 0) {
+    const rootStat = await fs.lstat(destRoot);
+    if (!rootStat.isDirectory() || (await fs.readdir(destRoot)).length > 0) {
       throw new ProjectTemplateError("The new folder isn't empty, so the template wasn't copied.");
     }
+    const dirIdentities = new Map<string, string>([["", identityOf(rootStat)]]);
     const dirs = new Set<string>();
     for (const file of inventory.files) {
       const segments = file.path.split("/");
@@ -386,26 +511,33 @@ export async function writeProjectTemplate(
     for (const dir of [...dirs].sort()) {
       const absDir = path.join(destRoot, ...dir.split("/"));
       await fs.mkdir(absDir);
-      createdDirs.push(absDir);
+      const identity = identityOf(await fs.lstat(absDir));
+      created.push({ absPath: absDir, identity, isDir: true });
+      dirIdentities.set(dir, identity);
     }
     for (const file of inventory.files) {
+      const slash = file.path.lastIndexOf("/");
+      const parent = slash === -1 ? "" : file.path.slice(0, slash);
+      const parentStat = await fs.lstat(path.join(destRoot, ...parent.split("/")));
+      if (!parentStat.isDirectory() || identityOf(parentStat) !== dirIdentities.get(parent)) {
+        throw new ProjectTemplateError(
+          "The new folder changed while the template was being copied, so the copy stopped."
+        );
+      }
       const absFile = path.join(destRoot, ...file.path.split("/"));
       // Recorded once created and before writing, so a write that fails part
       // way (a full disk) still gets its half-written file removed.
       const handle = await fs.open(absFile, "wx", 0o644);
-      createdFiles.push(absFile);
       try {
+        created.push({ absPath: absFile, identity: identityOf(await handle.stat()), isDir: false });
         await handle.writeFile(file.content);
       } finally {
         await handle.close();
       }
     }
   } catch (err) {
-    for (const absFile of createdFiles.reverse()) {
-      await fs.unlink(absFile).catch(() => {});
-    }
-    for (const absDir of createdDirs.reverse()) {
-      await fs.rmdir(absDir).catch(() => {});
+    for (const entry of created.reverse()) {
+      await removeIfOurs(entry.absPath, entry.identity, entry.isDir);
     }
     throw err;
   }

@@ -63,6 +63,15 @@ async function dntrignoreKept(dir: string): Promise<Set<string>> {
 async function projectTemplateFiles(dir: string, manifest: MinimalManifest): Promise<string[]> {
   const ids = (manifest.contributes?.projectTemplates ?? []).map((template) => template.id);
   if (ids.length === 0) return [];
+  // The glob starts inside each template folder, so a link at the folder
+  // itself (or at `project-templates/`) would be followed without ever being
+  // listed. Check those two levels directly.
+  for (const rel of [PROJECT_TEMPLATES_DIR, ...ids.map((id) => `${PROJECT_TEMPLATES_DIR}/${id}`)]) {
+    const stat = await fs.lstat(path.join(dir, rel)).catch(() => null);
+    if (stat?.isSymbolicLink()) {
+      throw new Error(`${rel} is a symbolic link. Project templates must be real folders.`);
+    }
+  }
   const entries = await globby(
     ids.map((id) => `${PROJECT_TEMPLATES_DIR}/${id}/**/*`),
     {

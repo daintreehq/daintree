@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   PROJECT_TEMPLATE_LIMITS,
   ProjectTemplateError,
@@ -107,11 +107,77 @@ describe("buildProjectTemplateInventory", () => {
     [".cursor/mcp.json", "agent configuration"],
     [".vscode/mcp.json", "agent configuration"],
     ["opencode.json", "agent configuration"],
+    [".github/hooks/pre-tool.json", "agent configuration"],
+    [".github/copilot/settings.json", "agent configuration"],
+    [".aider.model.settings.yml", "agent configuration"],
+    [".windsurf/hooks.json", "agent configuration"],
+    [".amazonq/mcp.json", "agent configuration"],
+    [".continue/mcpServers/db.yaml", "agent configuration"],
+    [".roo/mcp.json", "agent configuration"],
+    [".cline/hooks/pre.sh", "agent configuration"],
+    ["GIT~2", "repository metadata"],
+    // Spellings a case-insensitive disk resolves to a refused name: `ſ` folds
+    // to `s` on APFS, and a full-width letter is its ASCII form after NFKC.
+    [".claude/\u017Fettings.json", "agent configuration"],
+    [".cur\u017For/mcp.json", "agent configuration"],
+    [".\uFF47it/HEAD", "repository metadata"],
   ])("refuses the whole template when it includes %s", async (relPath, what) => {
     await put("README.md");
     await put(relPath);
     const message = await refusal();
     expect(message).toContain(what);
+  });
+
+  it("allows the instruction folders inside agent folders, and marks them", async () => {
+    await put(".cursor/rules/style.mdc", "Use tabs.\n");
+    await put(".kiro/steering/architecture.md", "# Architecture\n");
+    await put(
+      ".claude/agents/reviewer.md",
+      "---\nname: reviewer\ndescription: Reviews.\n---\nBe kind.\n"
+    );
+    // Front matter outside an agent's folder is just a document.
+    await put("docs/post.md", "---\nhooks: yes\n---\n");
+
+    const inventory = await buildProjectTemplateInventory(templateDir);
+    expect(inventory.files.map(({ path: p, kind }) => [p, kind])).toEqual([
+      [".claude/agents/reviewer.md", "instructions"],
+      [".cursor/rules/style.mdc", "instructions"],
+      [".kiro/steering/architecture.md", "instructions"],
+      ["docs/post.md", "file"],
+    ]);
+  });
+
+  it.each([
+    [".claude/agents/reviewer.md", "---\nname: reviewer\nhooks:\n  PreToolUse: []\n---\n", "hooks"],
+    [".claude/agents/db.md", "\uFEFF---\r\nmcpServers:\r\n  db: {}\r\n---\r\n", "mcpServers"],
+    [
+      ".claude/commands/ship.md",
+      "---\nallowed-tools: Bash(git push:*)\n---\nShip it.\n",
+      "allowed-tools",
+    ],
+    [".cursor/rules/run.mdc", '---\n"Permissions": all\n---\n', "Permissions"],
+  ])(
+    "refuses an agent file whose front matter configures the agent: %s",
+    async (relPath, content, key) => {
+      await put(relPath, content);
+      const message = await refusal();
+      expect(message).toContain(key);
+      expect(message).toContain("agent configuration");
+    }
+  );
+
+  it("only reads the leading front-matter block", async () => {
+    await put(".claude/agents/notes.md", "---\nname: notes\n---\nhooks: this is prose\n");
+    const inventory = await buildProjectTemplateInventory(templateDir);
+    expect(inventory.files.map((file) => file.path)).toEqual([".claude/agents/notes.md"]);
+  });
+
+  it.each([
+    ["a zero-width character", ".g\u200Cit"],
+    ["a bidi override", "photo\u202Egnp.js"],
+  ])("refuses a name with %s, which can read as another name", async (_label, name) => {
+    await put(name);
+    expect(await refusal()).toContain("invisible or control character");
   });
 
   it("is case-insensitive about what it refuses", async () => {
@@ -288,18 +354,47 @@ describe("writeProjectTemplate", () => {
     expect(await listTree(dest)).toEqual(["mine.txt"]);
   });
 
-  it("removes everything it wrote when a write fails part way", async () => {
-    // A file whose path is also a folder for another file: the folder is
-    // created first, so writing the file fails after other work has landed.
+  it("removes the files and folders it wrote when a write fails part way", async () => {
+    // The third entry repeats the second, so its exclusive create fails after
+    // two files and their folder have landed.
+    const file = (filePath: string) => ({
+      path: filePath,
+      size: 1,
+      kind: "file" as const,
+      content: Buffer.from("1"),
+    });
     const inventory: ProjectTemplateInventory = {
       digest: "d",
-      totalBytes: 2,
-      files: [
-        { path: "a/b.txt", size: 1, kind: "file", content: Buffer.from("1") },
-        { path: "a/b.txt/c.txt", size: 1, kind: "file", content: Buffer.from("2") },
-      ],
+      totalBytes: 3,
+      files: [file("a/x.txt"), file("a/y.txt"), file("a/y.txt")],
     };
     await expect(writeProjectTemplate(dest, inventory)).rejects.toThrow();
     expect(await listTree(dest)).toEqual([]);
+  });
+
+  it("stops, and leaves the swapped-in folder alone, when a folder it made is replaced mid-copy", async () => {
+    const inventory: ProjectTemplateInventory = {
+      digest: "d",
+      totalBytes: 1,
+      files: [{ path: "a/x.txt", size: 1, kind: "file", content: Buffer.from("1") }],
+    };
+    // The copy looks at `a` twice: once to record what it made, then before
+    // writing into it. Between the two, `a` is moved aside and replaced.
+    const swapped = path.join(dest, "a");
+    const realLstat = fs.lstat.bind(fs);
+    let looks = 0;
+    const spy = vi.spyOn(fs, "lstat").mockImplementation((async (target: string) => {
+      if (target === swapped && ++looks === 2) {
+        await fs.rename(swapped, path.join(dest, "a-moved"));
+        await fs.mkdir(swapped);
+      }
+      return realLstat(target);
+    }) as typeof fs.lstat);
+    try {
+      await expect(writeProjectTemplate(dest, inventory)).rejects.toThrow("changed while");
+    } finally {
+      spy.mockRestore();
+    }
+    expect(await listTree(dest)).toEqual(["a-moved/", "a/"]);
   });
 });

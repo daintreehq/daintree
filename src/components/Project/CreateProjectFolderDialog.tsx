@@ -74,6 +74,9 @@ export function CreateProjectFolderDialog({ isOpen, onClose }: CreateProjectFold
     key: string;
     preview: ProjectTemplatePreview;
   } | null>(null);
+  // Bumped to read the chosen template's files again, after a create that
+  // failed — most often because they changed since the list was shown.
+  const [previewGeneration, setPreviewGeneration] = useState(0);
   const folderNameInputRef = useRef<HTMLInputElement>(null);
   const homeDirFetchedRef = useRef(false);
   const errorId = useId();
@@ -155,7 +158,7 @@ export function CreateProjectFolderDialog({ isOpen, onClose }: CreateProjectFold
     return () => {
       cancelled = true;
     };
-  }, [selectedTemplate]);
+  }, [selectedTemplate, previewGeneration]);
 
   const currentPreview =
     selectedTemplate && templatePreview?.key === templateKey(selectedTemplate)
@@ -224,6 +227,12 @@ export function CreateProjectFolderDialog({ isOpen, onClose }: CreateProjectFold
     } catch (err) {
       // Show error inline — keep dialog open so user can retry or correct input
       setFailure(formatErrorMessage(err, "Failed to create folder"));
+      if (template) {
+        // The list on screen may no longer be what would be written; read it
+        // again so a retry is never made against a list the user didn't see.
+        setTemplatePreview(null);
+        setPreviewGeneration((generation) => generation + 1);
+      }
     } finally {
       setIsCreating(false);
     }
@@ -341,6 +350,9 @@ export function CreateProjectFolderDialog({ isOpen, onClose }: CreateProjectFold
                 value={selectedTemplateKey}
                 onValueChange={(value) => {
                   setSelectedTemplateKey(value);
+                  // A list read for an earlier choice of this same template
+                  // may be out of date; it is read again on every choice.
+                  setTemplatePreview(null);
                   setFailure(null);
                 }}
                 disabled={isCreating}

@@ -100,6 +100,27 @@ describe("project template payloads in a .dntr (#13825)", () => {
     expect(names.some((name) => name.includes("node_modules"))).toBe(false);
   });
 
+  it("finds a project plugin whatever case its folders are written in", async () => {
+    const src = path.join(tmpDir, "plugin");
+    await write(
+      src,
+      "plugin.json",
+      JSON.stringify({
+        name: "acme.sites",
+        version: "1.0.0",
+        contributes: {
+          projectTemplates: [{ id: "site", title: "Site", description: "A site." }],
+        },
+      })
+    );
+    await write(src, "project-templates/site/.DAINTREE/Plugins/Site-Tools/plugin.json", "{}");
+    const archive = path.join(tmpDir, "acme.dntr");
+    await packPluginArchive(src, archive);
+
+    const projectPlugins = await readArchiveTemplateProjectPlugins(archive, ["site"]);
+    expect(projectPlugins.get("site")).toEqual(["Site-Tools"]);
+  });
+
   it("reads nothing for an archive that declares no templates", async () => {
     expect((await readArchiveTemplateProjectPlugins(path.join(tmpDir, "x.dntr"), [])).size).toBe(0);
   });

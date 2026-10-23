@@ -400,14 +400,17 @@ export async function readArchiveTemplateProjectPlugins(
   await new Promise<void>((resolve, reject) => {
     zipfile.on("entry", (entry: yauzl.Entry) => {
       const segments = normalizePath(entry.fileName).split("/");
+      // Case-insensitive, as macOS and Windows resolve `.DAINTREE/Plugins/`
+      // to the folder discovery reads. The folder name is shown as written.
+      const folded = segments.map((segment) => segment.toLowerCase());
       if (
         segments.length > 5 &&
-        segments[0] === PROJECT_TEMPLATES_DIR &&
-        segments[2] === ".daintree" &&
-        segments[3] === "plugins" &&
+        folded[0] === PROJECT_TEMPLATES_DIR &&
+        folded[2] === ".daintree" &&
+        folded[3] === "plugins" &&
         segments[4] !== ""
       ) {
-        found.get(segments[1])?.add(segments[4]);
+        found.get(folded[1])?.add(segments[4]);
       }
       zipfile.readEntry();
     });

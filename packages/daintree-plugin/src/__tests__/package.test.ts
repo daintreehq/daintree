@@ -351,6 +351,25 @@ describe("project templates (#13825)", () => {
     }
   );
 
+  it.skipIf(process.platform === "win32")(
+    "refuses a template folder that is itself a symlink",
+    async () => {
+      await templateFixture();
+      const outside = path.join(tmpDir, "..", `outside-${path.basename(tmpDir)}`);
+      await fs.mkdir(outside, { recursive: true });
+      try {
+        await fs.writeFile(path.join(outside, ".env"), "SECRET=1");
+        await fs.rm(path.join(tmpDir, "project-templates", "site"), { recursive: true });
+        await fs.symlink(outside, path.join(tmpDir, "project-templates", "site"));
+        await expect(runPackage({ dir: tmpDir, dryRun: true, skipBuild: true })).rejects.toThrow(
+          "project-templates/site is a symbolic link"
+        );
+      } finally {
+        await fs.rm(outside, { recursive: true, force: true });
+      }
+    }
+  );
+
   it("refuses a declared template with no files to ship", async () => {
     await templateFixture();
     await fs.rm(path.join(tmpDir, "project-templates"), { recursive: true });

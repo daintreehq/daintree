@@ -2,6 +2,7 @@ import type {
   ProjectTemplateContribution,
   ProjectTemplateDescriptor,
 } from "../../../shared/types/plugin.js";
+import { displaySafeText } from "../../../shared/utils/displaySafeText.js";
 
 /**
  * Main-process registry for plugin project templates (#13825).
@@ -22,7 +23,11 @@ interface RegisteredPluginTemplates {
 
 const templatesByPlugin = new Map<string, RegisteredPluginTemplates>();
 
-/** Register a plugin's templates, replacing any it registered before. */
+/**
+ * Register a plugin's templates, replacing any it registered before. The
+ * author's text is made display-safe here, once, so a bidi override in a title
+ * can't reorder the dialog's own copy around it.
+ */
 export function registerPluginProjectTemplates(
   pluginId: string,
   pluginName: string,
@@ -37,10 +42,10 @@ export function registerPluginProjectTemplates(
     pluginDir,
     descriptors: templates.map((template) => ({
       pluginId,
-      pluginName,
+      pluginName: displaySafeText(pluginName),
       templateId: template.id,
-      title: template.title,
-      description: template.description,
+      title: displaySafeText(template.title),
+      description: displaySafeText(template.description),
       ...(template.iconId !== undefined ? { iconId: template.iconId } : {}),
     })),
   });
