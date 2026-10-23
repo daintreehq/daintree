@@ -86,13 +86,16 @@ export async function preflightProjectApplication(args: {
 }
 
 /**
- * Everything {@link preflightProjectApplication} reads from a manifest, as one
- * comparable string. The loader re-reads `plugin.json` after the check, so a
- * rewrite landing in between would otherwise run a payload nobody checked;
+ * Everything checked about an application before it loads — whether it is one,
+ * its engine range, and what {@link preflightProjectApplication} reads — as
+ * one comparable string. The loader re-reads `plugin.json` after the check, so
+ * a rewrite landing in between would otherwise run a payload nobody checked;
  * two manifests with the same key were checked by the same pass.
  */
 export function applicationPreflightKey(manifest: Readonly<PluginManifest>): string {
   return JSON.stringify([
+    manifest.application !== undefined,
+    manifest.engines?.daintree ?? null,
     manifest.version,
     collectPluginManifestAssets(manifest).map((asset) => [asset.path, asset.required]),
     (manifest.contributes.databases ?? []).map((d) => [

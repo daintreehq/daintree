@@ -2276,6 +2276,12 @@ export class PluginService {
       instanceKey?: string;
       /** The project this instance is bound to. Absent means app-global. */
       binding?: PluginHostBinding;
+      /**
+       * The manifest discovery read, which an application's preflight checked
+       * (#14113). This load reads `plugin.json` again, and refuses before it
+       * registers anything when what it reads is not what was checked.
+       */
+      checkedManifest?: Readonly<PluginManifest>;
     }
   ): Promise<LoadedPlugin | null> {
     // Every load path funnels through here — startup scans, a background-
@@ -2385,6 +2391,21 @@ export class PluginService {
         );
         return null;
       }
+    }
+    // The same second read, for an application: a payload its preflight never
+    // saw does not register, so nothing of it is published to be taken back.
+    // Either side declaring one counts, so a rewrite that adds `application`
+    // is caught as well as one that changes it.
+    const checked = opts.checkedManifest;
+    if (
+      checked !== undefined &&
+      (checked.application !== undefined || manifest.application !== undefined) &&
+      applicationPreflightKey(manifest) !== applicationPreflightKey(checked)
+    ) {
+      console.warn(
+        `[PluginService] Project application in ${dirName} changed on disk while it was being checked (${checked.version} checked, ${manifest.version} found) — not loading it`
+      );
+      return null;
     }
     // Manifest-immutability invariant: the parsed manifest is stored on
     // LoadedPlugin.manifest and read across the whole PluginService lifecycle
@@ -7932,6 +7953,7 @@ export class PluginService {
       origin: "project",
       instanceKey,
       binding: { projectId: args.projectId, projectRoot: args.projectRoot },
+      checkedManifest: args.manifest,
     });
     if (!loaded) {
       this.writePluginFileLog(
@@ -7944,26 +7966,6 @@ export class PluginService {
       // Never registered, so no unload will come to drain its window.
       const suppressed = this.fileLogLimiter.drain(instanceKey);
       if (suppressed) this.writePluginFileLogSummary(instanceKey, suppressed);
-      return false;
-    }
-
-    // An application's payload was checked against the manifest discovery read
-    // (#14113), and `loadPlugin` reads `plugin.json` again. A rewrite landing in
-    // between is a payload nobody checked, so it never activates. The next
-    // reconcile checks it: the watcher's, when one was already watching, or a
-    // project switch or Reload from folder.
-    if (
-      args.manifest.application !== undefined &&
-      applicationPreflightKey(loaded.manifest) !== applicationPreflightKey(args.manifest)
-    ) {
-      this.writePluginFileLog(
-        instanceKey,
-        "lifecycle",
-        "Project application changed on disk while it was being checked",
-        { checked: args.manifest.version, found: loaded.manifest.version },
-        "warn"
-      );
-      this.unloadPlugin(instanceKey);
       return false;
     }
 

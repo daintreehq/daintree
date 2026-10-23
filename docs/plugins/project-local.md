@@ -313,11 +313,11 @@ Every time an application's owner is about to load — a project open, a hot rel
 
 - **The engine range.** `engines.daintree` must admit this Daintree (`engine-incompatible`).
 - **Every file the manifest needs.** The same inventory packaging, installation and `daintree-plugin doctor` use: `main`, view components, tour scenes, skills, knowledge files and custom icons (`assets-missing`).
-- **Every database that declares a `schemaVersion`.** An existing file whose `user_version` is past it was written by a newer copy of the application (`schema-too-new`). A file that does not exist yet passes: the first open creates it. A file the host cannot read as a database is logged and passed over rather than refused; `db.open` still refuses a newer file when your code opens it.
+- **Every database that declares a `schemaVersion`.** An existing file whose `user_version` is past it was written by a newer copy of the application (`schema-too-new`). A file that does not exist yet passes: the first open creates it. A file the host cannot read as a database, or one with a `-wal` or `-journal` beside it that a writer may still be using, is logged and passed over rather than refused; `db.open` still refuses a newer file when your code opens it.
 
 A payload that fails is not loaded. The project's application state reads `unavailable` with the reason and, in `problems`, what was found; the project shows the standard workspace, and the plugin manager's row shows the same lines. Nothing is created, migrated or deleted, and no command runs.
 
-The previous version does not keep running meanwhile. Its files are the ones that changed, and old code running against a folder of new files is the mixed state the check exists to prevent. A `plugin.json` rewritten while the check ran is not loaded either, since it is not what was checked.
+The previous version does not keep running meanwhile. Its files are the ones that changed, and old code running against a folder of new files is the mixed state the check exists to prevent. A `plugin.json` rewritten while the check ran, in anything the check depends on, is not loaded either: it is not what was checked.
 
 The retry is the next reconcile: the watcher's next settle once `plugin.json` or `dist/` changes, a project switch, or **Reload from folder** — the one to use when the file you fixed is outside `dist/`, which the watcher does not watch. A running application is checked again only when it next loads: a hot reload, or reopening the project. Deleting a file outside `dist/` from under one that is running is not noticed until then.
 

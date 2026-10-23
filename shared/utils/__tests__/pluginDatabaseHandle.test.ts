@@ -152,7 +152,7 @@ describe("openPluginDatabase", () => {
     expect(readPluginDatabaseSchemaVersion(location)).toBe(2);
   });
 
-  it("reads a WAL file's committed version, adding no sidecar the file did not already have", () => {
+  it("reads a WAL file's version off its header, and declines while a writer holds a journal", () => {
     location = { ...location, path: path.join(fs.realpathSync(dir), "ledger.db") };
     const writer = new DatabaseSync(location.path);
     writer.exec("PRAGMA journal_mode = WAL; CREATE TABLE t (x); PRAGMA user_version = 3");
@@ -163,12 +163,17 @@ describe("openPluginDatabase", () => {
     expect(readPluginDatabaseSchemaVersion(location)).toBe(3);
     expect(files()).toEqual(before);
 
-    // A live writer's commit sits in the -wal, past a header that still says 3.
+    // A live writer's commit sits in the -wal, past a header that still says 3:
+    // the header is not the answer, so there is none rather than a stale one.
     const live = new DatabaseSync(location.path);
     try {
       live.exec("PRAGMA wal_autocheckpoint = 0; PRAGMA user_version = 5");
       expect(fs.existsSync(`${location.path}-wal`)).toBe(true);
-      expect(readPluginDatabaseSchemaVersion(location)).toBe(5);
+      const during = files();
+      expect(() => readPluginDatabaseSchemaVersion(location)).toThrow(
+        expect.objectContaining({ code: "DB_LOCKED" })
+      );
+      expect(files()).toEqual(during);
     } finally {
       live.close();
     }

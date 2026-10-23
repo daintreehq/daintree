@@ -420,47 +420,46 @@ const HEADER_USER_VERSION_OFFSET = 60;
 const SQLITE_HEADER_MAGIC = "SQLite format 3\0";
 
 /**
- * The `user_version` an existing database is at, read without running any
- * migration, definition or journal-mode change, so the host can compare a file
- * against a payload before that payload's code runs (#14113). Rejects
- * `DB_NOT_FOUND` when the file does not exist.
+ * The `user_version` an existing database is at, read straight off its header
+ * so the host can compare a file against a payload before that payload's code
+ * runs (#14113). No SQLite connection is opened: even a readonly one may
+ * create `-wal` and `-shm` beside a WAL-mode file — in the repository, for a
+ * project database — and a check that only reads must never write.
  *
- * With no `-wal` or `-journal` beside the file, the main file holds every
- * committed page, so the header is read straight off disk. Opening a
- * connection there could create `-wal` and `-shm` beside a WAL-mode file —
- * in the repository, for a project database — which a check that only reads
- * must never do. With a sidecar present, only a connection reads what is
- * committed in it, and it adds no file that is not already there.
+ * The header is every committed page's word only while no `-wal` or `-journal`
+ * sits beside the file. With one there, a writer has pages the header does not
+ * show, so this rejects `DB_LOCKED` rather than guess, and looks again after
+ * reading in case a writer started meanwhile. A writer that spills page 1 and
+ * rolls back entirely between the two looks is the one case this cannot see.
+ * Rejects `DB_NOT_FOUND` when the file does not exist.
  */
 export function readPluginDatabaseSchemaVersion(location: PluginDatabaseLocation): number {
   assertAgentOpenable(location);
-  const sidecar = ["-wal", "-journal"].some((suffix) => fs.existsSync(location.path + suffix));
-  if (!sidecar) {
-    const header = Buffer.alloc(100);
-    const fd = fs.openSync(location.path, "r");
-    let read: number;
-    try {
-      read = fs.readSync(fd, header, 0, header.length, 0);
-    } finally {
-      fs.closeSync(fd);
+  const assertQuiet = (): void => {
+    if (["-wal", "-journal"].some((suffix) => fs.existsSync(location.path + suffix))) {
+      throw databaseError(
+        "DB_LOCKED",
+        `database "${location.id}" has a journal beside it, so its schema version can't be read without SQLite`
+      );
     }
-    // A zero-length file is an empty database SQLite would open as version 0.
-    if (read === 0) return 0;
-    if (read < header.length || header.toString("latin1", 0, 16) !== SQLITE_HEADER_MAGIC) {
-      throw databaseError("DB_UNSUPPORTED", `database "${location.id}" is not a SQLite file`);
-    }
-    // Signed, as `PRAGMA user_version` reads it.
-    return header.readInt32BE(HEADER_USER_VERSION_OFFSET);
-  }
-  const sqlite = loadSqlite();
-  const connection = new sqlite.DatabaseSync(location.path, { readOnly: true });
+  };
+  assertQuiet();
+  const header = Buffer.alloc(100);
+  const fd = fs.openSync(location.path, "r");
+  let read: number;
   try {
-    const row = connection.prepare("PRAGMA user_version").get() as
-      { user_version?: number | bigint } | undefined;
-    return Number(row?.user_version ?? 0);
+    read = fs.readSync(fd, header, 0, header.length, 0);
   } finally {
-    connection.close();
+    fs.closeSync(fd);
   }
+  assertQuiet();
+  // A zero-length file is an empty database SQLite would open as version 0.
+  if (read === 0) return 0;
+  if (read < header.length || header.toString("latin1", 0, 16) !== SQLITE_HEADER_MAGIC) {
+    throw databaseError("DB_UNSUPPORTED", `database "${location.id}" is not a SQLite file`);
+  }
+  // Signed, as `PRAGMA user_version` reads it.
+  return header.readInt32BE(HEADER_USER_VERSION_OFFSET);
 }
 
 /**

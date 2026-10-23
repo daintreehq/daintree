@@ -123,6 +123,14 @@ describe("preflightProjectApplication", () => {
     expect(await run(manifest([{ id: "ledger", schemaVersion: 1 }]))).toBeNull();
   });
 
+  it("passes over a database a writer holds a journal for, and adds no file beside it", async () => {
+    const file = writeDatabase(".daintree/data/acme.ledger/ledger.db", 9);
+    fs.writeFileSync(`${file}-journal`, "");
+    const before = fs.readdirSync(path.dirname(file)).sort();
+    expect(await run(manifest([{ id: "ledger", schemaVersion: 1 }]))).toBeNull();
+    expect(fs.readdirSync(path.dirname(file)).sort()).toEqual(before);
+  });
+
   it("reports missing files before looking at data", async () => {
     writeDatabase(".daintree/data/acme.ledger/ledger.db", 9);
     const result = await run(
@@ -139,6 +147,8 @@ describe("applicationPreflightKey", () => {
   interface Editable {
     version: string;
     displayName?: string;
+    application?: unknown;
+    engines?: { daintree?: string };
     contributes: {
       views: Array<{ componentPath: string }>;
       databases: Array<{ schemaVersion?: number; path?: string }>;
@@ -158,6 +168,8 @@ describe("applicationPreflightKey", () => {
 
   it.each([
     ["version", (m: Editable) => (m.version = "0.4.0")],
+    ["the engine range", (m: Editable) => (m.engines = { daintree: ">=99.0.0" })],
+    ["whether it declares an application", (m: Editable) => delete m.application],
     ["a required file", (m: Editable) => (m.contributes.views[0]!.componentPath = "dist/v2.js")],
     ["a schemaVersion", (m: Editable) => (m.contributes.databases[0]!.schemaVersion = 3)],
     ["a database path", (m: Editable) => (m.contributes.databases[0]!.path = "data/x.db")],

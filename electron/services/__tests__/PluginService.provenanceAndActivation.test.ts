@@ -1425,28 +1425,28 @@ describe("project plugin load errors", () => {
     expect(service.getPluginRootByAuthority(INSTANCE_KEY)).toBeUndefined();
   });
 
-  it("never loads an application payload rewritten after its preflight (#14113)", async () => {
-    async function openApplication(rewriteAtGate: boolean): Promise<PluginService> {
+  describe("an application payload rewritten after its preflight (#14113)", () => {
+    type Rewrite = (manifest: Record<string, unknown>) => Record<string, unknown>;
+    const asApplication: Rewrite = (m) => ({
+      ...m,
+      engines: { daintree: ">=0.0.0" },
+      application: { name: "Boom", destination: "grid" },
+    });
+
+    async function openRewritten(first: Rewrite, atGate: Rewrite | null): Promise<PluginService> {
       const projectRoot = await writeProjectPlugin("export function activate() {}");
       const manifestPath = path.join(projectRoot, ".daintree", "plugins", PLUGIN_ID, "plugin.json");
       const written = JSON.parse(await fs.readFile(manifestPath, "utf-8")) as Record<
         string,
         unknown
       >;
-      const asApplication = (version: string) =>
-        JSON.stringify({
-          ...written,
-          version,
-          engines: { daintree: ">=0.0.0" },
-          application: { name: "Boom", destination: "grid" },
-        });
-      await fs.writeFile(manifestPath, asApplication("1.0.0"));
+      await fs.writeFile(manifestPath, JSON.stringify(first(written)));
       const { service, reached, release } = gatedService();
       const opening = service.onProjectOpened(PROJECT_ID, projectRoot);
       try {
-        // The preflight has passed 1.0.0 and the load is parked at the gate.
+        // Discovery has read the first manifest and the load is parked at the gate.
         await reached;
-        if (rewriteAtGate) await fs.writeFile(manifestPath, asApplication("2.0.0"));
+        if (atGate) await fs.writeFile(manifestPath, JSON.stringify(atGate(written)));
         release();
         await opening;
       } finally {
@@ -1456,14 +1456,30 @@ describe("project plugin load errors", () => {
       return service;
     }
 
-    // The same payload left as it was checked loads: the refusal below is the rewrite's.
-    const unchanged = await openApplication(false);
-    expect(unchanged.hasPlugin(INSTANCE_KEY)).toBe(true);
-    unchanged.dispose();
+    afterEach(() => {
+      vi.mocked(registerPanelKind).mockReset();
+    });
 
-    const rewritten = await openApplication(true);
-    expect(rewritten.hasPlugin(INSTANCE_KEY)).toBe(false);
-    expect(rewritten.listProjectPlugins(PROJECT_ID)[0]).toMatchObject({ state: "blocked" });
+    it("loads one left as it was checked", async () => {
+      const service = await openRewritten(asApplication, null);
+      expect(service.hasPlugin(INSTANCE_KEY)).toBe(true);
+      expect(vi.mocked(registerPanelKind)).toHaveBeenCalled();
+    });
+
+    it.each<[string, Rewrite, Rewrite]>([
+      ["a new version", asApplication, (m) => ({ ...asApplication(m), version: "2.0.0" })],
+      [
+        "an engine range this Daintree is outside",
+        asApplication,
+        (m) => ({ ...asApplication(m), engines: { daintree: ">=99.0.0" } }),
+      ],
+      ["an application added to a plain plugin", (m) => m, asApplication],
+    ])("registers nothing for %s", async (_label, first, atGate) => {
+      const service = await openRewritten(first, atGate);
+      expect(service.hasPlugin(INSTANCE_KEY)).toBe(false);
+      expect(vi.mocked(registerPanelKind)).not.toHaveBeenCalled();
+      expect(service.listProjectPlugins(PROJECT_ID)[0]).toMatchObject({ state: "blocked" });
+    });
   });
 
   it("returns the real cause from activatePluginForView instead of a clean result", async () => {
