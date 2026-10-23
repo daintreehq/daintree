@@ -1009,7 +1009,10 @@ describe("PluginDevWorkerHostProxy terminal lifecycle (#13814)", () => {
     await Promise.resolve();
     await Promise.resolve();
 
-    expect(errors).toHaveBeenCalledWith(expect.stringContaining("subscription callback"), rejection);
+    expect(errors).toHaveBeenCalledWith(
+      expect.stringContaining("subscription callback"),
+      rejection
+    );
   });
 
   it("drops a payload that is not a well-formed event", async () => {

@@ -65,9 +65,9 @@ describe("toPluginTerminalLifecycleEvent", () => {
 
   it("takes the workspace from the context, never a payload-supplied one", () => {
     const spoofed = { ...base, workspaceId: "spoofed" };
-    expect(
-      toPluginTerminalLifecycleEvent(spoofed, { workspaceId: "project-1" })?.workspaceId
-    ).toBe("project-1");
+    expect(toPluginTerminalLifecycleEvent(spoofed, { workspaceId: "project-1" })?.workspaceId).toBe(
+      "project-1"
+    );
     expect("workspaceId" in toPluginTerminalLifecycleEvent(spoofed, { workspaceId: null })!).toBe(
       false
     );

@@ -4,6 +4,7 @@ import type { PluginTerminalKind } from "../../../shared/types/plugin.js";
 import type { TerminalLifecycleObservation } from "../../../shared/utils/pluginTerminalLifecycle.js";
 import { events } from "../events.js";
 import { createLogger } from "../../utils/logger.js";
+import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 
 const logger = createLogger("main:TerminalLifecycleObserver");
 
@@ -269,7 +270,7 @@ export class TerminalLifecycleObserver {
       logger.warn("terminal:lifecycle subscriber threw", {
         type,
         terminalId,
-        error: error instanceof Error ? error.message : String(error),
+        error: formatErrorMessage(error, "unknown subscriber error"),
       });
     }
   }

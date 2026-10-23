@@ -823,7 +823,9 @@ Observe terminals coming and going — plain shells as well as agents — in the
 export async function activate(host: PluginHostApi) {
   await host.onDidChangeTerminalLifecycle((event) => {
     if (event.type === "exited" && event.kind === "agent" && event.exitCode !== 0) {
-      void host.showToast({ message: `A ${event.agentId ?? "agent"} pane exited with ${event.exitCode}` });
+      void host.showToast({
+        message: `A ${event.agentId ?? "agent"} pane exited with ${event.exitCode}`,
+      });
     }
   });
 }
