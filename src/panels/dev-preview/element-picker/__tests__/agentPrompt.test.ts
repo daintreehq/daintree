@@ -137,6 +137,26 @@ describe("how the prompt says a source claim was established", () => {
     expect(prompt).not.toContain("pass@");
   });
 
+  it("says a map read from the dev server's build output came from there, and names no path for it", () => {
+    const prompt = promptFor(FRAME, {
+      state: "mapped",
+      candidateId: "frame-0",
+      claim: "element-creation",
+      target: SAVE_BUTTON,
+      fileRevision: null,
+      sourceMap: {
+        mapUrl: "file:///repo/.next/dev/server/chunks/ssr/page.js.map",
+        mapRevision: MAP_REVISION,
+        sourceCheck: "unchecked",
+      },
+    });
+
+    expect(sourceLines(prompt)[0]).toContain(
+      "mapped through a source map in the dev server's build output, not checked against the file"
+    );
+    expect(prompt).not.toContain("about:unavailable");
+  });
+
   it("says an inline map is inline", () => {
     const prompt = promptFor(FRAME, {
       state: "mapped",
@@ -573,6 +593,20 @@ describe("what the prompt carries", () => {
       const prompt = promptWithChain([record("a", "A", "b"), record("b", "B", "a")], "a");
 
       expect(chainLines(prompt)).toHaveLength(2);
+    });
+
+    it("says a server component is one, with no DOM of its own on the page", () => {
+      const page: ComponentRecord = {
+        ...record("page", "Page", "shell"),
+        name: { value: "Page", extraction: { kind: "runtime-field", field: "_debugInfo[0].name" } },
+        environment: "server",
+      };
+      const prompt = promptWithChain([page, record("shell", "ClientShell", null)], "page");
+
+      expect(chainLines(prompt)).toEqual([
+        '    - "Page" (named in runtime field "_debugInfo[0].name"), a server component, with no DOM of its own on the page',
+        '    - "ClientShell" (named in runtime field "type.displayName")',
+      ]);
     });
 
     it("cites each component's own claims with how they were read", () => {

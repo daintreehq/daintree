@@ -21,15 +21,17 @@ import { ElementPickerHostError, type ElementPickerHostErrorCode } from "./error
 import { HostOutboundSchema, type HostInbound } from "./hostProtocol.js";
 import { unavailableResponse } from "./outcomes.js";
 import { isStrictlyInside } from "./containment.js";
+import { nextDevServer } from "./nextDevServer.js";
 import { ProjectContextService } from "./projectAdapters/projectContext.js";
 import type { ProjectAdapterRegistration } from "./projectAdapters/types.js";
 import {
   JobSourceAccess,
   readSourceRevision,
+  type NextSourceMapProvider,
   type SourceMapProvider,
   type SourceRoots,
 } from "./sourceAccess.js";
-import { createSourceMapProvider } from "./sourceMapFetcher.js";
+import { createNextSourceMapProvider, createSourceMapProvider } from "./sourceMapFetcher.js";
 import { SourceTracker, type SourceChange, type SourceTrackerOptions } from "./sourceTracker.js";
 import { WorkspaceRegistry, type PickerWorkspace } from "./workspaceRegistry.js";
 
@@ -83,6 +85,7 @@ export interface ElementPickerHostOptions {
   kill?: (pid: number) => void;
   watch?: SourceTrackerOptions["watch"];
   sourceMaps?: SourceMapProvider;
+  nextSourceMaps?: NextSourceMapProvider;
   idleMs?: number;
   startTimeoutMs?: number;
   cancelGraceMs?: number;
@@ -201,6 +204,7 @@ export class ElementPickerHost {
   private readonly kill: (pid: number) => void;
   private readonly watch: SourceTrackerOptions["watch"];
   private readonly sourceMaps: SourceMapProvider;
+  private readonly nextSourceMaps: NextSourceMapProvider;
   private readonly idleMs: number;
   private readonly startTimeoutMs: number;
   private readonly cancelGraceMs: number;
@@ -219,6 +223,7 @@ export class ElementPickerHost {
     this.kill = options.kill ?? defaultKill;
     this.watch = options.watch ?? ((directory, onChange) => watchShared(directory, onChange));
     this.sourceMaps = options.sourceMaps ?? createSourceMapProvider();
+    this.nextSourceMaps = options.nextSourceMaps ?? createNextSourceMapProvider();
     this.idleMs = options.idleMs ?? HOST_IDLE_MS;
     this.startTimeoutMs = options.startTimeoutMs ?? HOST_START_TIMEOUT_MS;
     this.cancelGraceMs = options.cancelGraceMs ?? HOST_CANCEL_GRACE_MS;
@@ -413,6 +418,9 @@ export class ElementPickerHost {
           expired,
           previewOrigin: workspace.previewOrigin,
           sourceMaps: this.sourceMaps,
+          // The page's word for which release it runs; at most it decides a fixed route is asked.
+          next: nextDevServer(request.observations),
+          nextSourceMaps: this.nextSourceMaps,
           onRead: (absolute, file, revision) => workspace.tracker.observe(absolute, file, revision),
         }),
         generation: null,

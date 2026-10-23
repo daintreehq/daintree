@@ -119,3 +119,56 @@ describe("locateMapSource", () => {
     expect(locate("/src/Card%00.tsx")).toEqual(refused("unsupported"));
   });
 });
+
+describe("locateMapSource on a Next.js page", () => {
+  const next: MapSourceContext = { ...posix, nextjs: true };
+
+  it("reads a Webpack module identity as a file in the app, as Next.js's overlay does", () => {
+    expect(locate("webpack://_N_E/./app/page.tsx?7c1e", null, next)).toEqual(
+      at("apps/web/app/page.tsx")
+    );
+    expect(locate("webpack-internal:///(rsc)/./app/page.tsx", null, next)).toEqual(
+      at("apps/web/app/page.tsx")
+    );
+    expect(locate("webpack://_N_E/../../../etc/passwd", null, next)).toEqual(
+      refused("outside-workspace")
+    );
+  });
+
+  it("reads Turbopack's project root as the worktree when that lands in the app, and as the app otherwise", () => {
+    // A monorepo's lockfile at the top makes the repository Turbopack's project.
+    expect(locate("turbopack:///[project]/apps/web/app/page.tsx", null, next)).toEqual(
+      at("apps/web/app/page.tsx")
+    );
+    // An app with a lockfile of its own is its own project.
+    expect(locate("[project]/app/page.tsx", null, next)).toEqual(at("apps/web/app/page.tsx"));
+    expect(locate("turbopack:///[project]/../secret.txt", null, next)).toEqual(
+      refused("outside-workspace")
+    );
+  });
+
+  it("still names no file for a module that is not one", () => {
+    expect(locate("turbopack:///[turbopack]/runtime.ts", null, next)).toEqual(
+      refused("unsupported")
+    );
+    expect(locate("virtual:routes", null, next)).toEqual(refused("unsupported"));
+  });
+});
+
+describe("locateMapSource for a map read from disk", () => {
+  const disk: MapSourceContext = {
+    ...posix,
+    base: "file:///work/tree/apps/web/.next/dev/server/chunks/ssr/%5Bpage%5D.js.map",
+  };
+
+  it("reads a relative source from where the map lies", () => {
+    expect(locate("../../../../../app/page.tsx", null, disk)).toEqual(at("apps/web/app/page.tsx"));
+    expect(locate("../../../../../../../outside.ts", null, disk)).toEqual(
+      refused("outside-workspace")
+    );
+  });
+
+  it("names nothing on the network from a map that was never there", () => {
+    expect(locate("//cdn.example.com/a.ts", null, disk)).toEqual(refused("unsupported"));
+  });
+});

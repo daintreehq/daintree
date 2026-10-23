@@ -5,6 +5,7 @@ import {
 } from "../../../../../../shared/elementPicker/resolution.js";
 import type { SourceLocation } from "../../../../../../shared/elementPicker/coordinates.js";
 import type { SourceCandidate } from "../../../../../../shared/elementPicker/source.js";
+import { serverFrameFile, webpackModulePath } from "../../../nextDevServer.js";
 import { unavailableResult } from "../../../outcomes.js";
 import { symbolicatedResult, type Symbolication } from "../../symbolication.js";
 import {
@@ -53,10 +54,11 @@ function pathOf(reported: string): string {
  * Code nobody in the app wrote, by the URL the page ran it from: a dependency,
  * pre-bundled or not, or the dev server's own client and refresh runtime.
  * Known without fetching anything, which keeps a selection's few map fetches
- * for frames that could be the user's.
+ * for frames that could be the user's. A server frame is judged by the file
+ * the server ran, not the wrapper the page's stack names it by.
  */
 export function isLibraryUrl(reported: string): boolean {
-  const path = pathOf(reported);
+  const path = pathOf(serverFrameFile(reported) ?? reported);
   return (
     /(^|[\\/])node_modules[\\/]/.test(path) || (path.startsWith("/@") && !path.startsWith("/@fs/"))
   );
@@ -134,6 +136,31 @@ async function unmappedResult(
   return read.source.revision === known
     ? unavailableResult(candidate, unmapped.reason)
     : pinnedStaleResult(candidate, file, known, read.source.revision, "file-changed");
+}
+
+/**
+ * A frame no map placed, in a Webpack module whose identity names its file:
+ * that file and nothing finer, since the module's code is Webpack's transform
+ * of the file and its positions are not the file's lines. Null for any other
+ * frame, or a file outside the app.
+ */
+async function moduleFileResult(
+  job: ReactJob,
+  candidate: StackFrameCandidate,
+  unmapped: Extract<Symbolication, { ok: false }>
+): Promise<ResolutionResult | null> {
+  if (unmapped.file !== undefined || unmapped.reason === "cancelled") return null;
+  const path = webpackModulePath(serverFrameFile(candidate.file) ?? candidate.file);
+  if (path === null) return null;
+  const located = await job.locate(path);
+  if (!located.ok) return null;
+  return {
+    state: "observed",
+    candidateId: candidate.candidateId,
+    claim: candidate.kind,
+    target: { file: located.value, location: null },
+    fileRevision: null,
+  };
 }
 
 type Checked =
@@ -234,7 +261,11 @@ export async function resolveFrames(
     }
     const mapped = await job.symbolicate(candidate);
     if (!mapped.ok) {
-      answers.set(candidate.candidateId, await unmappedResult(job, candidate, mapped));
+      answers.set(
+        candidate.candidateId,
+        (await moduleFileResult(job, candidate, mapped)) ??
+          (await unmappedResult(job, candidate, mapped))
+      );
       // Code outside the workspace is nobody's here to edit, so it is passed over like a library.
       if (mapped.reason !== "outside-workspace") settled = true;
       continue;
@@ -322,7 +353,12 @@ export async function resolveDefinition(
   if (job.cancelled) return unavailableResult(candidate, "cancelled");
   if (isLibraryUrl(candidate.file)) return unavailableResult(candidate, "unsupported");
   const mapped = await job.symbolicate(candidate);
-  if (!mapped.ok) return unmappedResult(job, candidate, mapped);
+  if (!mapped.ok) {
+    return (
+      (await moduleFileResult(job, candidate, mapped)) ??
+      (await unmappedResult(job, candidate, mapped))
+    );
+  }
   if (isLibrary(mapped)) return unavailableResult(candidate, "unsupported");
   const checked = await checkMapped(job, candidate, mapped);
   if (!checked.ok) return checked.result;

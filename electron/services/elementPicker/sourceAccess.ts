@@ -1,5 +1,6 @@
 import path from "node:path";
 import { createHash } from "node:crypto";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import fs, { type FileHandle } from "node:fs/promises";
 import { constants as fsConstants } from "node:fs";
 import { readBoundedFromHandle } from "../../utils/boundedRead.js";
@@ -16,12 +17,24 @@ import type {
   SourceAccessResult,
 } from "../../../shared/elementPicker/resolver.js";
 import { hasControlCharacter, isStrictlyInside } from "./containment.js";
+import {
+  isAbsolutePath,
+  isFileUrl,
+  isWebpackModule,
+  serverFrameFile,
+  type NextDevServer,
+} from "./nextDevServer.js";
 import { locateMapSource } from "./sourceLocator.js";
+import { decodeDataUrl, sourceMappingReference } from "./sourceMapReference.js";
 
 /**
  * Main's half of `ResolverSourceAccess`: everything the host process may read
  * goes through here, contained and counted, and comes back as bytes.
  */
+
+const textDecoder = new TextDecoder();
+/** `SourceMapProvenance.mapUrl`'s bound. */
+const MAX_MAP_URL_CHARS = 2048;
 
 export function revisionOf(bytes: Uint8Array): FileRevision {
   return `sha256:${createHash("sha256").update(bytes).digest("hex")}`;
@@ -180,6 +193,38 @@ export type SourceMapProvider = (
   signal: AbortSignal
 ) => Promise<SourceAccessResult<ServedSourceMap>>;
 
+/** The file a generated module's name puts on this machine's disk, if it names one. */
+function localPath(name: string): string | null {
+  if (isAbsolutePath(name)) return hasControlCharacter(name) ? null : path.resolve(name);
+  if (!isFileUrl(name)) return null;
+  try {
+    const parsed = new URL(name);
+    parsed.search = "";
+    parsed.hash = "";
+    return fileURLToPath(parsed);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * A server file as the route is asked about it: what React handed Next.js's
+ * own client, which is the path for a file Flight wrote as a URL.
+ */
+function routeFilename(file: string): string {
+  return isFileUrl(file) ? (localPath(file) ?? file) : file;
+}
+
+/**
+ * Asks a Next.js dev server's own route for the map of a module only it
+ * holds. Main-only, like the provider above, and asked only for a page whose
+ * reported release the route was written against.
+ */
+export type NextSourceMapProvider = (
+  request: { previewOrigin: string; filename: string; allowance: NetworkAllowance },
+  signal: AbortSignal
+) => Promise<SourceAccessResult<ServedSourceMap>>;
+
 export interface JobSourceAccessOptions {
   workspaceId: string;
   roots: SourceRoots;
@@ -191,6 +236,10 @@ export interface JobSourceAccessOptions {
   /** Where the workspace's preview is served from; null refuses every fetch. */
   previewOrigin: string | null;
   sourceMaps: SourceMapProvider;
+  /** What the page said of a Next.js dev server under it; null or absent for any other page. */
+  next?: NextDevServer | null;
+  /** Absent, nothing asks a Next.js route. */
+  nextSourceMaps?: NextSourceMapProvider;
   /** A file this job read, for the workspace's tracker. */
   onRead: (absolute: string, file: SourceFileRef, revision: FileRevision) => void;
 }
@@ -210,6 +259,8 @@ export class JobSourceAccess {
   private readonly servedMaps = new Set<string>();
   private networkRequests = 0;
   private networkBytes = 0;
+  /** Generated modules and maps read from disk, which share `maxFiles` with source reads. */
+  private generatedReads = 0;
   /** One fetch at a time, so each starts with what the ones before it left of the allowance. */
   private fetching: Promise<unknown> = Promise.resolve();
   private readonly allowance: NetworkAllowance = {
@@ -254,7 +305,7 @@ export class JobSourceAccess {
     const ref = parsed.data;
     const existing = this.reads.get(ref.path);
     if (existing) return existing;
-    if (this.reads.size >= this.options.budget.maxFiles) {
+    if (this.reads.size + this.generatedReads >= this.options.budget.maxFiles) {
       return Promise.resolve({ ok: false, reason: "budget-exhausted" });
     }
     const read = this.read(ref);
@@ -303,12 +354,58 @@ export class JobSourceAccess {
       roots: this.options.roots,
       previewOrigin,
       base: fetched.value.base,
+      nextjs: this.options.next != null,
     });
   }
 
+  /**
+   * Where a module's map comes from depends on where the module ran. One the
+   * preview served is fetched from it, map and all. A server module a React
+   * stack named, or a Webpack module that lives only in a compilation, is
+   * one only a Next.js dev server's own route can answer for, asked only of
+   * a release the route was written against. A file in the app is read from
+   * disk with the map it names: the plain way to a server chunk's map, for
+   * when the route is not asked or has none.
+   */
   private async fetch(generatedUrl: string): Promise<SourceAccessResult<ServedSourceMap>> {
     const stopped = this.stopped();
     if (stopped) return stopped;
+    let result: SourceAccessResult<ServedSourceMap>;
+    try {
+      result = await this.dispatch(generatedUrl);
+    } catch {
+      return this.stopped() ?? { ok: false, reason: "map-missing" };
+    }
+    const late = this.stopped();
+    if (late) return late;
+    if (result.ok) this.servedMaps.add(mapKey(result.value.url, result.value.revision));
+    return result;
+  }
+
+  private dispatch(generatedUrl: string): Promise<SourceAccessResult<ServedSourceMap>> {
+    const { next, nextSourceMaps, signal, workspaceId } = this.options;
+    const serverFile = serverFrameFile(generatedUrl);
+    if (serverFile !== null || isWebpackModule(generatedUrl)) {
+      if (!next?.routes || nextSourceMaps === undefined) {
+        return Promise.resolve({ ok: false, reason: "unsupported" });
+      }
+      const filename = serverFile === null ? generatedUrl : routeFilename(serverFile);
+      return this.network((previewOrigin) =>
+        nextSourceMaps({ previewOrigin, filename, allowance: this.allowance }, signal)
+      );
+    }
+    if (isFileUrl(generatedUrl) || isAbsolutePath(generatedUrl)) return this.diskMap(generatedUrl);
+    return this.network((previewOrigin) =>
+      this.options.sourceMaps(
+        { workspaceId, previewOrigin, generatedUrl, allowance: this.allowance },
+        signal
+      )
+    );
+  }
+
+  private async network(
+    ask: (previewOrigin: string) => Promise<SourceAccessResult<ServedSourceMap>>
+  ): Promise<SourceAccessResult<ServedSourceMap>> {
     const { budget, previewOrigin } = this.options;
     if (previewOrigin === null) return { ok: false, reason: "unsupported" };
     if (
@@ -317,24 +414,84 @@ export class JobSourceAccess {
     ) {
       return { ok: false, reason: "budget-exhausted" };
     }
-    let result: SourceAccessResult<ServedSourceMap>;
-    try {
-      result = await this.options.sourceMaps(
-        {
-          workspaceId: this.options.workspaceId,
-          previewOrigin,
-          generatedUrl,
-          allowance: this.allowance,
+    return ask(previewOrigin);
+  }
+
+  /**
+   * A module in the app's own build output and the map it names, both read
+   * from disk under the job's file allowance. Neither is source: neither is
+   * tracked for changes, and a result may cite one only as the map a
+   * position was mapped through. A module that names a map anywhere but on
+   * disk inside the app is not followed there.
+   */
+  private async diskMap(generatedUrl: string): Promise<SourceAccessResult<ServedSourceMap>> {
+    const module = await this.readGenerated(generatedUrl);
+    if (!module.ok) return module;
+    const reference = sourceMappingReference(textDecoder.decode(module.bytes));
+    if (!reference) return { ok: false, reason: "map-missing" };
+    if (/^data:/i.test(reference)) {
+      const bytes = decodeDataUrl(reference);
+      if (!bytes) return { ok: false, reason: "map-missing" };
+      return {
+        ok: true,
+        value: {
+          url: null,
+          base: module.url,
+          revision: revisionOf(bytes),
+          text: textDecoder.decode(bytes),
         },
-        this.options.signal
-      );
+      };
+    }
+    let mapUrl: string;
+    try {
+      mapUrl = new URL(reference, module.url).href;
     } catch {
-      return this.stopped() ?? { ok: false, reason: "map-missing" };
+      return { ok: false, reason: "map-missing" };
+    }
+    const map = await this.readGenerated(mapUrl);
+    if (!map.ok) return map;
+    // The provenance a result carries is bounded; a longer map URL could never be named.
+    if (map.url.length > MAX_MAP_URL_CHARS) return { ok: false, reason: "map-missing" };
+    return {
+      ok: true,
+      value: {
+        url: map.url,
+        base: map.url,
+        revision: revisionOf(map.bytes),
+        text: textDecoder.decode(map.bytes),
+      },
+    };
+  }
+
+  private async readGenerated(
+    url: string
+  ): Promise<
+    { ok: true; url: string; bytes: Uint8Array } | { ok: false; reason: UnavailableReason }
+  > {
+    const { budget, roots, signal, workspaceId } = this.options;
+    const absolute = localPath(url);
+    if (absolute === null) return { ok: false, reason: "map-missing" };
+    const ref = locateReportedFile(workspaceId, roots, absolute);
+    if (ref === null) return { ok: false, reason: "outside-workspace" };
+    if (this.reads.size + this.generatedReads >= budget.maxFiles) {
+      return { ok: false, reason: "budget-exhausted" };
+    }
+    this.generatedReads += 1;
+    const contained = await containSourcePath(roots, ref.path);
+    const afterContain = this.stopped();
+    if (afterContain) return afterContain;
+    if (!contained.ok) return contained;
+    let read: BoundedRead;
+    try {
+      read = await readBoundedSource(contained.absolute, budget.maxFileBytes, signal);
+    } catch {
+      return this.stopped() ?? { ok: false, reason: "file-missing" };
     }
     const late = this.stopped();
     if (late) return late;
-    if (result.ok) this.servedMaps.add(mapKey(result.value.url, result.value.revision));
-    return result;
+    if (read.status === "missing") return { ok: false, reason: "file-missing" };
+    if (read.status === "too-large") return { ok: false, reason: "budget-exhausted" };
+    return { ok: true, url: pathToFileURL(contained.absolute).href, bytes: read.bytes };
   }
 
   private async read(ref: SourceFileRef): Promise<SourceAccessResult<RevisionedSource>> {

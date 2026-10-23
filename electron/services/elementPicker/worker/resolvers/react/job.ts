@@ -7,6 +7,7 @@ import type {
 import type {
   ResolveRequest,
   ResolverSourceAccess,
+  SourceAccessResult,
 } from "../../../../../../shared/elementPicker/resolver.js";
 import type { SourceCandidate } from "../../../../../../shared/elementPicker/source.js";
 import {
@@ -14,6 +15,7 @@ import {
   type FrameSymbolicator,
   type Symbolication,
 } from "../../symbolication.js";
+import { frameMapNames } from "../../../nextDevServer.js";
 import { parseSource, type ParsedSource } from "./source.js";
 
 /**
@@ -74,9 +76,14 @@ export class ReactJob {
 
   symbolicate(candidate: StackFrameCandidate): Promise<Symbolication> {
     return this.symbolicator.symbolicate(
-      { url: candidate.file, location: candidate.location },
+      { ...frameMapNames(candidate.file), location: candidate.location },
       this.signal
     );
+  }
+
+  /** The workspace file a path the page reported names, located, not read. */
+  locate(reported: string): Promise<SourceAccessResult<SourceFileRef>> {
+    return this.access.locateFile(reported, this.signal);
   }
 
   read(file: SourceFileRef): Promise<Read> {

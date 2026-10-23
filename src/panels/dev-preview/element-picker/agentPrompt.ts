@@ -178,9 +178,10 @@ function claimed(kind: SourceCandidate["kind"], positioned: boolean): string {
 }
 
 function throughMap(map: SourceMapProvenance): string {
-  return map.mapUrl === null
-    ? "an inline source map"
-    : `source map ${pageData(redactUrl(map.mapUrl))}`;
+  if (map.mapUrl === null) return "an inline source map";
+  // Read beside a server chunk in the app's build output, which is no address to cite.
+  if (/^file:/i.test(map.mapUrl)) return "a source map in the dev server's build output";
+  return `source map ${pageData(redactUrl(map.mapUrl))}`;
 }
 
 function staleBecause(reason: StaleReason): string {
@@ -316,6 +317,17 @@ function componentName(record: ComponentRecord): string {
     : `${pageData(record.name.value)} (named in ${readFrom(record.name.extraction)})`;
 }
 
+/**
+ * A server component rendered on the server and left nothing of its own in
+ * the page, so it is said to be one wherever it is named: the DOM inside it
+ * is what the components below it rendered.
+ */
+function environmentText(record: ComponentRecord): string[] {
+  return record.environment === "server"
+    ? ["a server component, with no DOM of its own on the page"]
+    : [];
+}
+
 function targetName(record: ComponentRecord | null): string {
   return record?.name
     ? `the ${pageData(record.name.value)} component (named in ${readFrom(record.name.extraction)})`
@@ -375,7 +387,7 @@ function chainLines(element: PromptElement): string[] {
     const claims = record.sourceCandidates.map((candidate) =>
       claimText(candidate, resultFor(element, candidate))
     );
-    return `    - ${[componentName(record), ...claims].join(", ")}`;
+    return `    - ${[componentName(record), ...environmentText(record), ...claims].join(", ")}`;
   });
   if (observation.componentChain.truncated) {
     lines.push("    - The page stopped reading the chain here; there may be more further out");
