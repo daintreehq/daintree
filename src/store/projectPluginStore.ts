@@ -103,7 +103,6 @@ export type ProjectPluginFailedAction =
   | { action: "visibility"; pluginId: string; visible: boolean | null }
   | { action: "visibilityDefault"; pluginId: string; hidden: boolean }
   | { action: "instanceEnabled"; pluginId: string; enabled: boolean }
-  | { action: "loadInstances" }
   | { action: "reload" }
   | { action: "loadVisibility" };
 
@@ -162,8 +161,12 @@ const EMPTY_ACTIVATING: ReadonlySet<string> = new Set<string>();
  * back or clear state that now belongs to another project.
  */
 let instanceGeneration = 0;
-/** Orders projection pulls: only the newest reply may land. */
+/**
+ * Orders projection pulls. A reply lands only if no later pull has landed, and
+ * a settling toggle raises the floor so a read taken before it cannot undo it.
+ */
 let instancePullSeq = 0;
+let instanceCommittedSeq = 0;
 
 /** This project's on/off state for every per-project package in `list`. */
 function instanceProjection(
@@ -439,7 +442,8 @@ export const useProjectPluginStore = create<ProjectPluginStoreState & ProjectPlu
       const generation = instanceGeneration;
       try {
         const list = await window.electron.plugin.list();
-        if (seq !== instancePullSeq || generation !== instanceGeneration) return;
+        if (seq <= instanceCommittedSeq || generation !== instanceGeneration) return;
+        instanceCommittedSeq = seq;
         const state = get();
         const projectId = state.viewProjectId ?? state.projectId;
         if (projectId === null) return;
@@ -448,14 +452,11 @@ export const useProjectPluginStore = create<ProjectPluginStoreState & ProjectPlu
           const pending = state.instanceEnabled[pluginId];
           if (pending !== undefined && pluginId in next) next[pluginId] = pending;
         }
-        set(
-          state.errorSource?.action === "loadInstances"
-            ? { instanceEnabled: next, error: null, errorSource: null }
-            : { instanceEnabled: next }
-        );
+        set({ instanceEnabled: next });
       } catch (err) {
-        if (seq !== instancePullSeq || generation !== instanceGeneration) return;
-        set(failure(err, "Couldn't read this project's plugins", { action: "loadInstances" }));
+        // A background read: the last good state stays, and so does any error
+        // a user action left, which this would otherwise replace.
+        console.warn("[projectPluginStore] Couldn't read per-project packages:", err);
       }
     },
 
@@ -484,10 +485,14 @@ export const useProjectPluginStore = create<ProjectPluginStoreState & ProjectPlu
       // The view moved on or was reset while this call was out: what it would
       // roll back or clear now belongs to another project.
       if (generation !== instanceGeneration) return;
+      // Any read still out was taken before this settled, so none may land;
+      // a fresh one follows below.
+      instanceCommittedSeq = instancePullSeq;
       const toggling = new Set(get().instanceToggling);
       toggling.delete(pluginId);
       if (ok) {
         set({ instanceToggling: toggling });
+        void get().loadInstanceProjection();
         return;
       }
       const instanceEnabled = { ...get().instanceEnabled };
@@ -504,6 +509,7 @@ export const useProjectPluginStore = create<ProjectPluginStoreState & ProjectPlu
           { action: "instanceEnabled", pluginId, enabled }
         ),
       });
+      void get().loadInstanceProjection();
     },
 
     reload: async () => {

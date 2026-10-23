@@ -554,8 +554,10 @@ describe("projectPluginStore mute and visibility", () => {
     const pending = useProjectPluginStore.getState().setInstanceEnabled("acme.ledger", true);
     expect(useProjectPluginStore.getState().instanceEnabled).toEqual({ "acme.ledger": true });
     expect(useProjectPluginStore.getState().instanceToggling.has("acme.ledger")).toBe(true);
+    list.mockResolvedValue([packageRow("acme.ledger", [PROJECT])]);
     resolve();
     await pending;
+    await vi.waitFor(() => expect(list).toHaveBeenCalled());
 
     expect(setProjectInstanceEnabled).toHaveBeenCalledWith("acme.ledger", true);
     expect(useProjectPluginStore.getState().instanceEnabled).toEqual({ "acme.ledger": true });
@@ -564,7 +566,8 @@ describe("projectPluginStore mute and visibility", () => {
 
   it("rolls a failed per-project enable back to the choice it replaced", async () => {
     useProjectPluginStore.getState().setViewProjectId(PROJECT);
-    await useProjectPluginStore.getState().setInstanceEnabled("acme.ledger", true);
+    list.mockResolvedValue([packageRow("acme.ledger", [PROJECT])]);
+    await useProjectPluginStore.getState().loadInstanceProjection();
     setProjectInstanceEnabled.mockRejectedValue(new Error("main said no"));
 
     await useProjectPluginStore.getState().setInstanceEnabled("acme.ledger", false);
@@ -635,6 +638,45 @@ describe("projectPluginStore mute and visibility", () => {
     expect(useProjectPluginStore.getState().instanceEnabled).toEqual({ "acme.ledger": false });
   });
 
+  it("drops a read taken before a toggle settled, and reads again after it", async () => {
+    useProjectPluginStore.getState().setViewProjectId(PROJECT);
+    let resolveToggle!: () => void;
+    setProjectInstanceEnabled.mockReturnValue(new Promise<void>((r) => (resolveToggle = r)));
+    const toggle = useProjectPluginStore.getState().setInstanceEnabled("acme.ledger", true);
+    let resolveStale!: (rows: unknown[]) => void;
+    list.mockReturnValueOnce(new Promise((r) => (resolveStale = r)));
+    const stale = useProjectPluginStore.getState().loadInstanceProjection();
+
+    list.mockResolvedValue([packageRow("acme.ledger", [PROJECT])]);
+    resolveToggle();
+    await toggle;
+    resolveStale([packageRow("acme.ledger", [])]);
+    await stale;
+    await vi.waitFor(() => expect(list).toHaveBeenCalledTimes(2));
+
+    expect(useProjectPluginStore.getState().instanceEnabled).toEqual({ "acme.ledger": true });
+  });
+
+  it("keeps an older good read when a newer one fails, and leaves an action's error alone", async () => {
+    useProjectPluginStore.getState().setViewProjectId(PROJECT);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    setProjectPluginMuted.mockRejectedValue(new Error("mute failed"));
+    await useProjectPluginStore.getState().setMuted("acme.dash", true);
+    let resolveOlder!: (rows: unknown[]) => void;
+    list.mockReturnValueOnce(new Promise((r) => (resolveOlder = r)));
+    const older = useProjectPluginStore.getState().loadInstanceProjection();
+    list.mockRejectedValueOnce(new Error("list failed"));
+    await useProjectPluginStore.getState().loadInstanceProjection();
+
+    resolveOlder([packageRow("acme.ledger", [PROJECT])]);
+    await older;
+
+    const state = useProjectPluginStore.getState();
+    expect(state.instanceEnabled).toEqual({ "acme.ledger": true });
+    expect(state.error).toBe("mute failed");
+    warn.mockRestore();
+  });
+
   it("drops a projection read that an older pull answers last", async () => {
     useProjectPluginStore.getState().setViewProjectId(PROJECT);
     let resolveOld!: (rows: unknown[]) => void;
@@ -651,6 +693,7 @@ describe("projectPluginStore mute and visibility", () => {
 
   it("lets a call that settles after the view moved on leave the new project alone", async () => {
     useProjectPluginStore.getState().setViewProjectId(PROJECT);
+    list.mockResolvedValue([packageRow("acme.ledger", [])]);
     let reject!: (err: Error) => void;
     setProjectInstanceEnabled.mockReturnValueOnce(new Promise<void>((_, r) => (reject = r)));
     const pending = useProjectPluginStore.getState().setInstanceEnabled("acme.ledger", true);
