@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-08-31T13:07:07.983Z",
+  "generatedAt": "2026-10-23T03:57:19.433Z",
   "mode": "smoke",
   "scenarios": {
     "PERF-001": {
@@ -1213,6 +1213,33 @@
       "measuredAt": "2026-08-31T13:07:07.983Z",
       "machine": {
         "machineLabel": "host-a8e78f39-darwin-arm64",
+        "platform": "darwin",
+        "arch": "arm64"
+      }
+    },
+    "PERF-410": {
+      "p95Ms": 280.584,
+      "measuredAt": "2026-10-23T03:57:14.406Z",
+      "machine": {
+        "machineLabel": "host-4d881d2a-darwin-arm64",
+        "platform": "darwin",
+        "arch": "arm64"
+      }
+    },
+    "PERF-411": {
+      "p95Ms": 6.784,
+      "measuredAt": "2026-10-23T03:57:16.486Z",
+      "machine": {
+        "machineLabel": "host-4d881d2a-darwin-arm64",
+        "platform": "darwin",
+        "arch": "arm64"
+      }
+    },
+    "PERF-412": {
+      "p95Ms": 433.856,
+      "measuredAt": "2026-10-23T03:57:19.433Z",
+      "machine": {
+        "machineLabel": "host-4d881d2a-darwin-arm64",
         "platform": "darwin",
         "arch": "arm64"
       }

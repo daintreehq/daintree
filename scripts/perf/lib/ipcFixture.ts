@@ -44,6 +44,13 @@ const CHILD_HOST_ENV = "DAINTREE_PERF_UTILITY_HOST";
 
 const SELF_PATH = fileURLToPath(import.meta.url);
 
+/**
+ * The child half below, for a fixture whose host speaks its own protocol:
+ * fork this entry under tsx with `env` naming the host, and the host runs
+ * behind the same `parentPort` stand-in.
+ */
+export const UTILITY_HOST_CHILD = { entry: SELF_PATH, hostEnv: CHILD_HOST_ENV } as const;
+
 export type UtilityHostKind = "workspace" | "pty";
 
 const HOST_ENTRY: Record<UtilityHostKind, string> = {
