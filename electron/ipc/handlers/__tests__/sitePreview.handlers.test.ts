@@ -103,17 +103,15 @@ describe("sitePreview handlers", () => {
 
   it("rejects payloads carrying fields the contract does not define", async () => {
     const all = await ops();
-    expect(
-      all.detach.schema.safeParse({ sessionId: "s1", projectId: "project-b" }).success
-    ).toBe(false);
+    expect(all.detach.schema.safeParse({ sessionId: "s1", projectId: "project-b" }).success).toBe(
+      false
+    );
     expect(
       all.setMode.schema.safeParse({ sessionId: "s1", mode: "select", script: "x" }).success
     ).toBe(false);
     expect(all.setMode.schema.safeParse({ sessionId: "s1", mode: "inspect" }).success).toBe(false);
     expect(all.clearHover.schema.safeParse({ sessionId: "" }).success).toBe(false);
-    expect(all.clearSelection.schema.safeParse({ sessionId: "x".repeat(200) }).success).toBe(
-      false
-    );
+    expect(all.clearSelection.schema.safeParse({ sessionId: "x".repeat(200) }).success).toBe(false);
   });
 
   it("creates the bridge on registration and disposes and resets it on teardown", async () => {
