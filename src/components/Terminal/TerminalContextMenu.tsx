@@ -60,7 +60,7 @@ import {
   isPtyPanel,
   isReviewPanel,
 } from "@shared/types/panel";
-import { terminalInstanceService } from "@/services/TerminalInstanceService";
+import { peek as peekTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
 import { reportFileLinkFailure } from "@/services/terminal/FileLinksAddon";
 import { systemClient } from "@/clients/systemClient";
 import { resolveSelectedFilePath } from "@/services/terminal/filePathDetection";
@@ -723,7 +723,7 @@ function TerminalContextMenuBody({
       }
       setLiveRecentVoiceTargets(resolved);
 
-      const managed = terminalInstanceService.get(terminalId);
+      const managed = peekTerminalService()?.get(terminalId) ?? null;
       if (!managed?.terminal) {
         setHasSelection(false);
         setHoveredUrl(null);
@@ -739,10 +739,10 @@ function TerminalContextMenuBody({
       setHasSelection(!!selection);
       setSelectedText(selection || null);
       setHomeDir(systemClient.getCachedHomeDir());
-      setHoveredUrl(terminalInstanceService.getHoveredLinkText(terminalId));
-      setHoveredUrlPluginName(terminalInstanceService.getHoveredLinkPluginName(terminalId));
-      setHoveredFilePath(terminalInstanceService.getHoveredFilePath(terminalId));
-      setHoveredFileKind(terminalInstanceService.getHoveredFileKind(terminalId));
+      setHoveredUrl(peekTerminalService()?.getHoveredLinkText(terminalId) ?? null);
+      setHoveredUrlPluginName(peekTerminalService()?.getHoveredLinkPluginName(terminalId) ?? null);
+      setHoveredFilePath(peekTerminalService()?.getHoveredFilePath(terminalId) ?? null);
+      setHoveredFileKind(peekTerminalService()?.getHoveredFileKind(terminalId) ?? null);
     },
     [handleTriggerContextMenu, terminalId, recentVoiceTargets]
   );
@@ -793,19 +793,19 @@ function TerminalContextMenuBody({
       if (!terminal) return;
 
       if (actionId === "open-link") {
-        void terminalInstanceService.openHoveredLink(terminalId);
+        void peekTerminalService()?.openHoveredLink(terminalId);
         return;
       }
 
       // The URL was captured when the menu opened; the hover itself ends as
       // soon as the pointer moves onto the menu.
       if (actionId.startsWith("open-link-claimed:")) {
-        terminalInstanceService.openLink(terminalId, actionId.slice("open-link-claimed:".length));
+        peekTerminalService()?.openLink(terminalId, actionId.slice("open-link-claimed:".length));
         return;
       }
 
       if (actionId.startsWith("open-link-external:")) {
-        terminalInstanceService.openLink(terminalId, actionId.slice("open-link-external:".length), {
+        peekTerminalService()?.openLink(terminalId, actionId.slice("open-link-external:".length), {
           external: true,
         });
         return;

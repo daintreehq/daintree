@@ -11,7 +11,11 @@ import {
 } from "@/lib/animationUtils";
 import { isMac } from "@/lib/platform";
 import { TerminalRefreshTier } from "@/types";
-import { terminalInstanceService } from "@/services/TerminalInstanceService";
+import {
+  load as loadTerminalService,
+  peek as peekTerminalService,
+  with as withTerminalService,
+} from "@/services/terminal/terminalInstanceServiceAccessor";
 import { writeTerminalInputOrFleet } from "@/services/terminal/fleetInputRouter";
 import { isOptimisticallyClosing } from "@/services/terminal/optimisticPanelClose";
 import { useTerminalAppearance } from "@/hooks/useTerminalAppearance";
@@ -197,8 +201,8 @@ export function XtermAdapter({
   // Alt buffer state for TUI applications (OpenCode, vim, htop, etc.)
   // When in alt buffer, we remove padding and let the TUI fill the entire space
   // Initialize from service to avoid flash of wrong padding on mount
-  const [isAltBuffer, setIsAltBuffer] = useState(() =>
-    terminalInstanceService.getAltBufferState(terminalId)
+  const [isAltBuffer, setIsAltBuffer] = useState(
+    () => peekTerminalService()?.getAltBufferState(terminalId) ?? false
   );
 
   // App-painted edge colours (#13160): a normal-buffer TUI that paints its own
@@ -230,7 +234,7 @@ export function XtermAdapter({
   const showFileDropOverlay = isDragOverFiles && !isInputLocked;
 
   const hasVisibleBufferContent = useCallback(() => {
-    const managed = terminalInstanceService.get(terminalId);
+    const managed = peekTerminalService()?.get(terminalId) ?? null;
     if (!managed) return false;
 
     const buffer = managed.terminal.buffer.active;
@@ -274,7 +278,7 @@ export function XtermAdapter({
   // Push-based resize handler using ResizeObserver dimensions directly
   const handleResizeEntry = useCallback(
     (entry: ResizeObserverEntry) => {
-      const instance = terminalInstanceService.get(terminalId);
+      const instance = peekTerminalService()?.get(terminalId);
       if (instance?.isAttaching) {
         return;
       }
@@ -292,7 +296,7 @@ export function XtermAdapter({
         return;
       }
 
-      const dims = terminalInstanceService.resize(terminalId, width, height);
+      const dims = peekTerminalService()?.resize(terminalId, width, height);
 
       if (dims) {
         prevDimensionsRef.current = dims;
@@ -328,7 +332,7 @@ export function XtermAdapter({
 
     if (width < MIN_CONTAINER_SIZE || height < MIN_CONTAINER_SIZE) return;
 
-    const dims = terminalInstanceService.resize(terminalId, width, height, {
+    const dims = peekTerminalService()?.resize(terminalId, width, height, {
       immediate: true,
     });
     if (dims) {
@@ -350,12 +354,15 @@ export function XtermAdapter({
     // detach()/setVisible() both tolerate the never-attached state.
     let attachGen: number | undefined;
 
-    // getOrCreate is async because the lazy Unicode11 addon (#10840) is awaited
-    // during terminal construction. Run the attach sequence in an IIFE and guard
-    // every post-await step with `disposed` so a fast unmount during the addon
-    // load can't attach a terminal whose cleanup has already run.
+    // The service may still be loading, and getOrCreate is async because the
+    // lazy Unicode11 addon (#10840) is awaited during terminal construction.
+    // Run the attach sequence in an IIFE and guard every post-await step with
+    // `disposed` so a fast unmount during either wait can't attach a terminal
+    // whose cleanup has already run.
     void (async () => {
-      const managed = await terminalInstanceService.getOrCreate(
+      const service = await loadTerminalService();
+      if (disposed) return;
+      const managed = await service.getOrCreate(
         terminalId,
         launchAgentId,
         terminalOptionsRef.current,
@@ -373,11 +380,11 @@ export function XtermAdapter({
       const hasSavedTargetDims = !!(managed.targetCols && managed.targetRows);
       managed.isAttaching = true;
 
-      terminalInstanceService.attach(terminalId, container);
-      attachGen = terminalInstanceService.getAttachGeneration(terminalId);
+      service.attach(terminalId, container);
+      attachGen = service.getAttachGeneration(terminalId);
       // Force visibility immediately on mount - don't wait for IntersectionObserver.
       // This prevents data from being dropped during the brief window before the observer fires.
-      terminalInstanceService.setVisible(terminalId, true);
+      service.setVisible(terminalId, true);
       // Announce the generation this attach produced. The pane's visibility
       // observer captured one before this async setup resumed, and only the
       // service flag was forced above — the store field it owns would otherwise
@@ -394,7 +401,7 @@ export function XtermAdapter({
             // input tracking is replicated here (#8255). The payload stays empty
             // on purpose: a cursor jump composes no text, and a non-empty one
             // would count toward the agent's composition total.
-            terminalInstanceService.notifyUserInput(terminalId);
+            service.notifyUserInput(terminalId);
             stableOnInput(sequence);
           }
           return false;
@@ -489,7 +496,7 @@ export function XtermAdapter({
           // the alt buffer we leave the key alone rather than handing the app a
           // Meta+B/F it never asked for.
           const wordJumpSequence =
-            isMac() && !terminalInstanceService.getAltBufferState(terminalId)
+            isMac() && !service.getAltBufferState(terminalId)
               ? getOptionWordJumpSequence(event)
               : null;
 
@@ -556,7 +563,7 @@ export function XtermAdapter({
                   if (outcome !== "empty" || managed.isInputLocked) return;
                   const literalNext = "\x16";
                   writeTerminalInputOrFleet(terminalId, literalNext);
-                  terminalInstanceService.notifyUserInput(terminalId);
+                  service.notifyUserInput(terminalId);
                   stableOnInput(literalNext);
                 });
               }
@@ -584,7 +591,7 @@ export function XtermAdapter({
                   }
                   const literalNext = "\x16";
                   writeTerminalInputOrFleet(terminalId, literalNext);
-                  terminalInstanceService.notifyUserInput(terminalId);
+                  service.notifyUserInput(terminalId);
                   stableOnInput(literalNext);
                 });
             }
@@ -712,7 +719,7 @@ export function XtermAdapter({
                 detectedAgentIdRef.current ?? launchAgentIdRef.current
               );
               writeTerminalInputOrFleet(terminalId, softNewline);
-              terminalInstanceService.notifyUserInput(terminalId);
+              service.notifyUserInput(terminalId);
               stableOnInput(softNewline);
             }
             return false;
@@ -730,7 +737,7 @@ export function XtermAdapter({
             if (event.type === "keydown" && !managed.isInputLocked) {
               const submit = "\r";
               writeTerminalInputOrFleet(terminalId, submit);
-              terminalInstanceService.notifyUserInput(terminalId);
+              service.notifyUserInput(terminalId);
               // Typed here by the user: what it sets going is their own doing.
               reportCanopySent(terminalId);
               stableOnInput(submit);
@@ -738,7 +745,7 @@ export function XtermAdapter({
               // before xterm's onKey/onData fire, so the listener-installed
               // onEnterPressed path is bypassed — call it explicitly to close
               // the `directing` synthetic state. No-op when not in directing.
-              terminalInstanceService.notifyEnterPressed(terminalId);
+              service.notifyEnterPressed(terminalId);
             }
             return false;
           }
@@ -756,13 +763,10 @@ export function XtermAdapter({
         managed.keyHandlerInstalled = true;
       }
 
-      exitUnsubRef.current = terminalInstanceService.addExitListener(terminalId, (code) => {
+      exitUnsubRef.current = service.addExitListener(terminalId, (code) => {
         onExitRef.current?.(code);
       });
-      paddingPaintUnsubRef.current = terminalInstanceService.addPaddingPaintListener(
-        terminalId,
-        setPaddingPaint
-      );
+      paddingPaintUnsubRef.current = service.addPaddingPaintListener(terminalId, setPaddingPaint);
 
       if (!wasDetachedForSwitch || !hasSavedTargetDims) {
         performFit();
@@ -773,7 +777,7 @@ export function XtermAdapter({
         !(wasDetachedForSwitch && hasSavedTargetDims) &&
         !hasVisibleBufferContent()
       ) {
-        void terminalInstanceService
+        void service
           .fetchAndRestore(terminalId)
           .then((restored) => {
             if (disposed) return;
@@ -795,7 +799,7 @@ export function XtermAdapter({
       disposed = true;
       // Pass the captured generation so stale dock→grid unmount cleanup
       // doesn't background a terminal that has already been re-attached elsewhere.
-      terminalInstanceService.setVisible(terminalId, false, attachGen);
+      peekTerminalService()?.setVisible(terminalId, false, attachGen);
 
       // Settle pending resizes before unmount. For a panel the user just
       // optimistically closed, *cancel* the pending resize rather than flush
@@ -803,12 +807,12 @@ export function XtermAdapter({
       // synchronously inside the close click. Cancelling still clears the
       // job/debounce so no stale resize fires after teardown or on undo.
       if (isOptimisticallyClosing(terminalId)) {
-        terminalInstanceService.cancelPendingResize(terminalId);
+        peekTerminalService()?.cancelPendingResize(terminalId);
       } else {
-        terminalInstanceService.flushResize(terminalId);
+        peekTerminalService()?.flushResize(terminalId);
       }
 
-      terminalInstanceService.detach(terminalId, container);
+      peekTerminalService()?.detach(terminalId, container);
 
       if (exitUnsubRef.current) {
         exitUnsubRef.current();
@@ -861,11 +865,11 @@ export function XtermAdapter({
     }
     if (Object.keys(delta).length === 0) return;
 
-    terminalInstanceService.updateOptions(terminalId, delta);
+    peekTerminalService()?.updateOptions(terminalId, delta);
   }, [terminalId, terminalOptions]);
 
   useLayoutEffect(() => {
-    terminalInstanceService.setInputLocked(terminalId, !!isInputLocked);
+    peekTerminalService()?.setInputLocked(terminalId, !!isInputLocked);
   }, [terminalId, isInputLocked]);
 
   // Resolve current tier on every render. The provider identity is intentionally
@@ -876,8 +880,8 @@ export function XtermAdapter({
 
   useLayoutEffect(() => {
     // Use the stable proxy to avoid stale closures in the service
-    terminalInstanceService.updateRefreshTierProvider(terminalId, stableRefreshTierProvider);
-    terminalInstanceService.applyRendererPolicy(terminalId, currentTier);
+    peekTerminalService()?.updateRefreshTierProvider(terminalId, stableRefreshTierProvider);
+    withTerminalService((service) => service.applyRendererPolicy(terminalId, currentTier));
   }, [terminalId, stableRefreshTierProvider, currentTier]);
 
   // Refit terminal when window becomes visible again after being hidden.
@@ -907,7 +911,7 @@ export function XtermAdapter({
   // When in alt buffer, we need to sync the container styling
   // Use useLayoutEffect to avoid flash before first paint
   useLayoutEffect(() => {
-    const unsubscribe = terminalInstanceService.addAltBufferListener(terminalId, (altBuffer) => {
+    const unsubscribe = peekTerminalService()?.addAltBufferListener(terminalId, (altBuffer) => {
       setIsAltBuffer(altBuffer);
     });
     return unsubscribe;
@@ -948,12 +952,12 @@ export function XtermAdapter({
       // performFit — the 50ms debounce would delay the fit past first paint.
       if (!initialFitDoneRef.current) {
         for (const entry of entries) {
-          const instance = terminalInstanceService.get(terminalId);
+          const instance = peekTerminalService()?.get(terminalId);
           if (instance?.isAttaching) continue;
 
           const rect = entry.contentRect;
           if (rect.width >= MIN_CONTAINER_SIZE && rect.height >= MIN_CONTAINER_SIZE) {
-            const dims = terminalInstanceService.resize(terminalId, rect.width, rect.height, {
+            const dims = peekTerminalService()?.resize(terminalId, rect.width, rect.height, {
               immediate: true,
             });
             if (dims) {

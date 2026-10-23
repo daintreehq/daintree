@@ -11,7 +11,10 @@ import { cn } from "@/lib/utils";
 import { usePanelStore } from "@/store/panelStore";
 import { flushPanelPersistence } from "@/store/slices";
 import { isPtyPanel } from "@shared/types/panel";
-import { terminalInstanceService } from "@/services/TerminalInstanceService";
+import {
+  peek as peekTerminalService,
+  with as withTerminalService,
+} from "@/services/terminal/terminalInstanceServiceAccessor";
 import {
   SCRATCHPAD_DEFAULT_WIDTH,
   SCRATCHPAD_MAX_CHARS,
@@ -66,7 +69,7 @@ export function TerminalScratchpad({ terminalId }: TerminalScratchpadProps) {
     let rafId = 0;
     const rearm = () => {
       if (!gestureActiveRef.current) return;
-      terminalInstanceService.lockResize(terminalId, true);
+      peekTerminalService()?.lockResize(terminalId, true);
       rafId = requestAnimationFrame(rearm);
     };
     rafId = requestAnimationFrame(rearm);
@@ -133,8 +136,8 @@ export function TerminalScratchpad({ terminalId }: TerminalScratchpadProps) {
       gestureActiveRef.current = false;
       if (commit) setScratchpadWidth(owner, latest);
       setDragWidth(null);
-      terminalInstanceService.lockResize(owner, false);
-      terminalInstanceService.runResizePass([owner]);
+      withTerminalService((service) => service.lockResize(owner, false));
+      withTerminalService((service) => service.runResizePass([owner]));
     };
     // The column sits on the right, so dragging its left edge leftwards widens it.
     const handleMouseMove = (ev: MouseEvent) => {
@@ -147,7 +150,7 @@ export function TerminalScratchpad({ terminalId }: TerminalScratchpadProps) {
         moved = true;
         gestureActiveRef.current = true;
         // Before the first width write, so no frame publishes mid-gesture geometry.
-        terminalInstanceService.lockResize(owner, true);
+        withTerminalService((service) => service.lockResize(owner, true));
         document.body.style.cursor = "col-resize";
         document.body.style.userSelect = "none";
       }

@@ -112,6 +112,7 @@ vi.mock("../TerminalHandOver", () => ({
 import { primeRadix } from "@/components/ui/radix-loader";
 import { useFleetSnapshotStore } from "@/store/fleetSnapshotStore";
 import { TerminalContextMenu } from "../TerminalContextMenu";
+import { load as loadTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
 
 const MENU_COUNT = 4;
 // Radix schedules its focus return on a zero-delay timer after the content unmounts.
@@ -204,6 +205,12 @@ beforeEach(() => {
 afterEach(async () => {
   cleanup();
   await act(() => new Promise((resolve) => setTimeout(resolve, RADIX_TICK_MS)));
+});
+
+// The service mock never evaluates the real module, so nothing registers it;
+// loading caches the mock for the synchronous peek() call sites.
+beforeAll(async () => {
+  await loadTerminalService();
 });
 
 describe("TerminalContextMenu while closed", () => {

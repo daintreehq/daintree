@@ -10,7 +10,7 @@
  * picker itself is stubbed down to its props; the handoff through the real
  * overlays lives in `TerminalContextMenu.moveToWorktree.overlays.test.tsx`.
  */
-import { describe, it, expect, vi, afterEach, beforeEach } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { render, renderHook, screen, cleanup, fireEvent, act } from "@testing-library/react";
 import type React from "react";
 import type { WorktreeState } from "@/types";
@@ -208,6 +208,7 @@ import { TerminalContextMenu } from "../TerminalContextMenu";
 import { PanelContextMenuTrigger } from "../PanelContextMenuTrigger";
 import { getWorktreeHeadline } from "@/lib/worktreeHeadline";
 import { useSidebarWorktreeOrder } from "@/hooks/useSidebarWorktreeOrder";
+import { load as loadTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
 
 const T = 1_700_000_000_000;
 
@@ -293,6 +294,12 @@ function moveRows(): HTMLButtonElement[] {
 }
 
 const labels = (rows: HTMLButtonElement[]) => rows.map((row) => row.textContent);
+
+// The service mock never evaluates the real module, so nothing registers it;
+// loading caches the mock for the synchronous peek() call sites.
+beforeAll(async () => {
+  await loadTerminalService();
+});
 
 describe("TerminalContextMenu — Move to worktree (#12445)", () => {
   beforeEach(() => {

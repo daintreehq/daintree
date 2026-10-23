@@ -6,7 +6,7 @@
  * on a hovered path (#11483), and the fleet's Park/Unpark (#13236) and Snooze
  * (#11783) items.
  */
-import { describe, it, expect, vi, afterEach, beforeEach } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen, cleanup, fireEvent, act } from "@testing-library/react";
 import type React from "react";
 
@@ -151,6 +151,7 @@ vi.mock("@/store", () => {
 
 import { TerminalContextMenu } from "../TerminalContextMenu";
 import { AGENT_SNOOZE_LABEL } from "@shared/utils/agentSnoozeDurations";
+import { load as loadTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
 
 const agentPanel = {
   id: "panel-1",
@@ -193,6 +194,12 @@ const terminal = {
   worktreeId: "wt-1",
   hasPty: true,
 };
+
+// The service mock never evaluates the real module, so nothing registers it;
+// loading caches the mock for the synchronous peek() call sites.
+beforeAll(async () => {
+  await loadTerminalService();
+});
 
 describe("TerminalContextMenu — a backgrounded panel", () => {
   beforeEach(() => {

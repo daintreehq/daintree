@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, expect, it, vi, beforeEach } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
 
 let mockHasUnseenOutput = false;
@@ -28,6 +28,13 @@ vi.mock("@/services/TerminalInstanceService", () => ({
 
 import { TerminalScrollIndicator } from "../TerminalScrollIndicator";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
+import { load as loadTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
+
+// The service mock never evaluates the real module, so nothing registers it;
+// loading caches the mock for the synchronous peek() call sites.
+beforeAll(async () => {
+  await loadTerminalService();
+});
 
 describe("TerminalScrollIndicator", () => {
   beforeEach(() => {
