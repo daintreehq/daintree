@@ -81,6 +81,8 @@ export interface ActionCallbacks {
       removeOnExit?: boolean;
       agentLaunchFlags?: string[];
       spawnedBy?: TerminalSpawnSource;
+      /** The plugin behind a plugin dispatch, from `ActionContext.callerPluginId` only. */
+      launchedByPluginId?: string;
       focusPolicy?: AddPanelFocusPolicy;
       requestedId?: string;
       force?: boolean;

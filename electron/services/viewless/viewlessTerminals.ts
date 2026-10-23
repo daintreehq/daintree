@@ -9,6 +9,7 @@ import { panelKindHasPty } from "../../../shared/config/panelKindRegistry.js";
 import { readTailSnapshot, tailCapturedOutput } from "../../../shared/utils/artifactParser.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import { readClientMetadata } from "../../../shared/utils/mcpClientMetadata.js";
+import { restoredField } from "../../../shared/utils/restoreProvenance.js";
 import {
   buildPanelLimitSnapshot,
   computeHardwareDefaults,
@@ -246,6 +247,14 @@ export async function runTerminalList(
                 ? readClientMetadata(panel.snapshot?.extensionState)
                 : null,
             }
+          : {}),
+        // Off the saved layout, and only while it still describes the pane: the
+        // live process restore last rebuilt, or a hold that is still on (#14017).
+        // Anything else is rebuilt afresh when a view next opens the project.
+        ...(isPty &&
+        panel.snapshot !== undefined &&
+        (panel.record !== undefined || panel.snapshot.restoreRecovery !== undefined)
+          ? restoredField(panel.snapshot)
           : {}),
       },
     };

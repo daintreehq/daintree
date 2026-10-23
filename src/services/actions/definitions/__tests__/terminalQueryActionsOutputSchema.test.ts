@@ -854,3 +854,75 @@ describe("terminal.waitUntilIdle action definition", () => {
     );
   });
 });
+
+describe("terminal.list restore metadata (#14017)", () => {
+  const lastSeen = { agentState: "idle", at: 4_000 };
+
+  beforeEach(() => {
+    panelStoreMock.getState.mockReturnValue({
+      focusedId: null,
+      panelIds: ["resumed", "held", "never", "browser"],
+      panelsById: {
+        resumed: {
+          id: "resumed",
+          kind: "terminal",
+          location: "grid",
+          launchAgentId: "claude",
+          agentState: "working",
+          restoreProvenance: { at: 5_000, disposition: "resume", lastSeen },
+        },
+        held: {
+          id: "held",
+          kind: "terminal",
+          location: "grid",
+          launchAgentId: "claude",
+          restoreRecovery: { reason: "resume-deferred", sessionId: "sess-c" },
+          restoreProvenance: { at: 5_000, disposition: "held", lastSeen },
+        },
+        never: { id: "never", kind: "terminal", location: "grid", launchAgentId: "claude" },
+        browser: {
+          id: "browser",
+          kind: "browser",
+          location: "grid",
+          restoreProvenance: { at: 5_000, disposition: "fresh" },
+        },
+      },
+    });
+  });
+
+  it("reports how restore brought each terminal back, and nothing for the rest", async () => {
+    const rows = (await callList(registerDefinitions())) as unknown as Array<
+      Record<string, unknown>
+    >;
+    const byId = Object.fromEntries(rows.map((row) => [row.id, row]));
+
+    expect(byId.resumed?.restored).toEqual({ at: 5_000, disposition: "resume", lastSeen });
+    // Live state stays its own field: restore metadata never rewrites it.
+    expect(byId.resumed?.agentState).toBe("working");
+    expect(byId.held?.restored).toEqual({
+      at: 5_000,
+      disposition: "held",
+      heldReason: "resume-deferred",
+      lastSeen,
+    });
+    expect(byId.held?.agentState).toBeNull();
+    expect(JSON.stringify(byId.held)).not.toContain("sess-c");
+    expect(byId.never).not.toHaveProperty("restored");
+    expect(byId.browser).not.toHaveProperty("restored");
+  });
+
+  it("survives dispatch's result parsing and validates against the advertised schema", async () => {
+    const service = registerAll();
+    const result = await service.dispatch("terminal.list" as ActionId, {}, { source: "agent" });
+    if (!result.ok) throw new Error(result.error.message);
+
+    const validate = new Ajv2020({ strict: false }).compile(
+      outputSchema(service, "terminal.list")!
+    );
+    expect(validate(result.result)).toBe(true);
+    const rows = (result.result as { terminals: Array<Record<string, unknown>> }).terminals;
+    expect(rows.find((row) => row.id === "held")?.restored).toMatchObject({
+      disposition: "held",
+    });
+  });
+});

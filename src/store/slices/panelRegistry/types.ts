@@ -264,6 +264,12 @@ export interface PanelRegistrySlice {
   setInputLocked: (id: string, locked: boolean) => void;
   toggleInputLocked: (id: string) => void;
   /**
+   * Set or clear the launching plugin's request that restore hold this pane
+   * (#14017). Takes effect from the next restore; a pane already held stays
+   * held either way. Ownership is the caller's to check.
+   */
+  setHoldOnRestart: (id: string, hold: boolean) => void;
+  /**
    * Kill the current PTY and respawn it in the same panel slot using a
    * different preset. Fires as part of the fallback chain when a preset's
    * provider is unavailable. No session resume (fresh spawn), since the

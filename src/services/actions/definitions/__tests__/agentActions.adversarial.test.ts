@@ -2541,3 +2541,47 @@ describe("agent.listPresets", () => {
     expect(JSON.stringify(parsed)).not.toContain("secret");
   });
 });
+
+describe("agent.launch records the plugin that launched it (#14017)", () => {
+  it("stamps the host-attested plugin behind a plugin dispatch", async () => {
+    const callbacks = makeCallbacks();
+    const actions = setupActions(callbacks);
+
+    await callAction(
+      actions,
+      "agent.launch",
+      { agentId: "claude" },
+      { dispatchSource: "plugin", callerPluginId: "acme.orchestrator" }
+    );
+
+    expect(callbacks.onLaunchAgent).toHaveBeenCalledWith(
+      "claude",
+      expect.objectContaining({ launchedByPluginId: "acme.orchestrator" })
+    );
+  });
+
+  it.each([
+    { dispatchSource: "agent", callerPluginId: "acme.orchestrator" },
+    { dispatchSource: "user" },
+    {},
+  ] as Partial<ActionContext>[])("stamps no plugin for any other dispatch (%o)", async (ctx) => {
+    const callbacks = makeCallbacks();
+    const actions = setupActions(callbacks);
+
+    await callAction(actions, "agent.launch", { agentId: "claude" }, ctx);
+
+    expect(callbacks.onLaunchAgent.mock.calls[0]?.[1]?.launchedByPluginId).toBeUndefined();
+  });
+
+  it("takes no owner from the arguments", async () => {
+    const callbacks = makeCallbacks();
+    const actions = setupActions(callbacks);
+
+    await callAction(actions, "agent.launch", {
+      agentId: "claude",
+      launchedByPluginId: "acme.orchestrator",
+    });
+
+    expect(callbacks.onLaunchAgent.mock.calls[0]?.[1]?.launchedByPluginId).toBeUndefined();
+  });
+});

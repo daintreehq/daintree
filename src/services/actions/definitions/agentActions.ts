@@ -499,7 +499,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
       reply: AwaitedReplySchema.nullable(),
     }),
     mcpOutputSchema: true,
-    run: async (args: unknown) => {
+    run: async (args: unknown, ctx) => {
       const {
         agentId,
         location,
@@ -637,6 +637,9 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
         removeOnExit,
         agentLaunchFlags,
         spawnedBy,
+        // Host-stamped, never an argument: it is what lets the plugin hold this
+        // pane on restart later, and only this plugin (#14017).
+        launchedByPluginId: ctx?.dispatchSource === "plugin" ? ctx.callerPluginId : undefined,
         focusPolicy,
         requestedId,
         force,

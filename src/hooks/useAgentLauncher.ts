@@ -208,6 +208,11 @@ export interface LaunchAgentOptions {
    */
   spawnedBy?: TerminalSpawnSource;
   /**
+   * The plugin whose dispatch launched this agent (#14017), stamped as the
+   * pane's `launchedByPluginId`. Only ever `ActionContext.callerPluginId`.
+   */
+  launchedByPluginId?: string;
+  /**
    * Focus policy for the new panel. `"preserve"` keeps focus where it is
    * (background/MCP spawns). Omitted defaults to the resolved policy from
    * `panelStore.addPanel` (respects `mcpSpawnFocusSuppression` depth).
@@ -536,6 +541,7 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
               excludeFromPersistence: launchOptions?.excludeFromPersistence,
               removeOnExit: launchOptions?.removeOnExit,
               spawnedBy,
+              launchedByPluginId: launchOptions?.launchedByPluginId,
               focusPolicy,
               requestedId: launchOptions?.requestedId,
             }

@@ -902,6 +902,9 @@ export const createAddPanelActions = (
       // `hasPty: false` is what keeps fleet broadcast, interrupt and the other
       // live-process consumers off a pane that has nothing to write to.
       ...(isRecoveryHold && { restoreRecovery: options.restoreRecovery, hasPty: false }),
+      ...(options.restoreProvenance && { restoreProvenance: options.restoreProvenance }),
+      ...(options.launchedByPluginId && { launchedByPluginId: options.launchedByPluginId }),
+      ...(options.holdOnRestart === true && { holdOnRestart: true as const }),
       ...(options.scratchpad && { scratchpad: options.scratchpad }),
       extensionState: options.extensionState,
       extensionStateVersion: ptyExtensionStateVersion,
@@ -973,6 +976,12 @@ export const createAddPanelActions = (
                 // partial reconnect payload carries none, so keep what we have
                 // rather than letting the spread blank it (#12419).
                 spawnedBy: ptyTerminal.spawnedBy ?? existingPty?.spawnedBy,
+                // Same for the plugin hold and its owner, and for how restore
+                // last rebuilt the pane (#14017).
+                launchedByPluginId:
+                  ptyTerminal.launchedByPluginId ?? existingPty?.launchedByPluginId,
+                holdOnRestart: ptyTerminal.holdOnRestart ?? existingPty?.holdOnRestart,
+                restoreProvenance: ptyTerminal.restoreProvenance ?? existingPty?.restoreProvenance,
                 // Prefer the fresh reconnect value if present; otherwise keep an existing
                 // live detection (live IPC event may have landed before reconnect flush).
                 detectedAgentId: ptyTerminal.detectedAgentId ?? existingPty?.detectedAgentId,
@@ -1046,6 +1055,12 @@ export const createAddPanelActions = (
                 // partial reconnect payload carries none, so keep what we have
                 // rather than letting the spread blank it (#12419).
                 spawnedBy: ptyTerminal.spawnedBy ?? existingPty2?.spawnedBy,
+                // Same for the plugin hold and its owner, and for how restore
+                // last rebuilt the pane (#14017).
+                launchedByPluginId:
+                  ptyTerminal.launchedByPluginId ?? existingPty2?.launchedByPluginId,
+                holdOnRestart: ptyTerminal.holdOnRestart ?? existingPty2?.holdOnRestart,
+                restoreProvenance: ptyTerminal.restoreProvenance ?? existingPty2?.restoreProvenance,
                 // Prefer the fresh reconnect value if present; otherwise keep an existing
                 // live detection (live IPC event may have landed before reconnect flush).
                 detectedAgentId: ptyTerminal.detectedAgentId ?? existingPty2?.detectedAgentId,

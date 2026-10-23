@@ -181,6 +181,48 @@ describe("buildRestoreRecoveryLaunchOptions (#12434)", () => {
   });
 });
 
+describe("buildRestoreRecoveryLaunchOptions — restore provenance and the plugin hold (#14017)", () => {
+  const provenance = {
+    at: 5_000,
+    disposition: "held" as const,
+    lastSeen: { agentState: "idle" as const, at: 4_000 },
+  };
+  const pane = () =>
+    heldPane({
+      restoreProvenance: provenance,
+      launchedByPluginId: "acme.orchestrator",
+      holdOnRestart: true,
+    });
+
+  it("leaves the hold as a resume, keeping when restore ran and what it saw", () => {
+    const options = buildRestoreRecoveryLaunchOptions(
+      pane(),
+      { kind: "resume", sessionId: "sess-1" },
+      NO_INPUTS
+    );
+
+    expect(options?.restoreProvenance).toEqual({ ...provenance, disposition: "resume" });
+  });
+
+  it("leaves the hold as a fresh start", () => {
+    const options = buildRestoreRecoveryLaunchOptions(pane(), { kind: "fresh" }, NO_INPUTS);
+
+    expect(options?.restoreProvenance).toEqual({ ...provenance, disposition: "fresh" });
+  });
+
+  it("keeps the plugin's standing hold and its owner", () => {
+    const options = buildRestoreRecoveryLaunchOptions(pane(), { kind: "fresh" }, NO_INPUTS);
+
+    expect(options).toMatchObject({ launchedByPluginId: "acme.orchestrator", holdOnRestart: true });
+  });
+
+  it("invents no provenance for a pane that carried none", () => {
+    const options = buildRestoreRecoveryLaunchOptions(heldPane(), { kind: "fresh" }, NO_INPUTS);
+
+    expect(options?.restoreProvenance).toBeUndefined();
+  });
+});
+
 describe("siblingHeldSessionIds", () => {
   it("collects other panes' conversations for the same agent only", () => {
     const held = siblingHeldSessionIds(

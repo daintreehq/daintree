@@ -465,6 +465,23 @@ export const PanelLimitSnapshotSchema = z.object({
   tier: z.enum(["ok", "soft", "confirm", "hard"]),
 });
 
+/**
+ * How restore brought a terminal back (#14017), absent on a pane it never
+ * rebuilt. Strings, not enums, for the reason and state: they come off
+ * persisted panel data, where a stale spelling should degrade one field rather
+ * than fail the whole read.
+ */
+export const TerminalRestoredSchema = z
+  .object({
+    at: z.number(),
+    disposition: z.enum(["resume", "fresh", "held"]),
+    heldReason: z.string().optional(),
+    lastSeen: z.object({ agentState: z.string(), at: z.number().optional() }).optional(),
+  })
+  .describe(
+    "Set when restore rebuilt the pane (`at`, epoch ms). lastSeen: agent state saved before then, not proof a run ended."
+  );
+
 export const TerminalSummarySchema = z.object({
   id: z.string(),
   kind: z.string(),
@@ -493,6 +510,7 @@ export const TerminalSummarySchema = z.object({
   // client running AJV with `removeAdditional` would strip every key out of an
   // empty object schema — dropping the very payload the field exists to carry.
   clientMetadata: z.record(z.string(), z.unknown()).nullable().optional(),
+  restored: TerminalRestoredSchema.optional(),
 });
 
 /**

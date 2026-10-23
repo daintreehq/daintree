@@ -4083,3 +4083,214 @@ describe("buildArgsForNonPtyRecreation with a parked panel (#13661)", () => {
     expect(args.location).toBe("grid");
   });
 });
+
+describe("restore provenance and the plugin hold (#14017)", () => {
+  const claudePane = {
+    id: "t1",
+    kind: "terminal" as const,
+    launchAgentId: "claude",
+    cwd: "/repo",
+    location: "grid" as const,
+    title: "Claude",
+  };
+  const settings = { agents: { claude: {} } };
+  const respawn = (
+    snapshot: SavedSnapshot,
+    options?: Parameters<typeof buildArgsForRespawn>[7]
+  ): AddTerminalArgs =>
+    buildArgsForRespawn(snapshot, "terminal", "/repo", settings, false, "/tmp", undefined, {
+      restoredAt: 5_000,
+      ...options,
+    });
+
+  it("records a resume with the agent state saved before the restart", () => {
+    const result = respawn({
+      ...claudePane,
+      agentSessionId: "sess-c",
+      agentState: "idle",
+      lastStateChange: 4_000,
+    });
+
+    expect(result.command).toBe("claude --resume sess-c");
+    expect(result.restoreProvenance).toEqual({
+      at: 5_000,
+      disposition: "resume",
+      lastSeen: { agentState: "idle", at: 4_000 },
+    });
+  });
+
+  it("records a resume-latest launch as a resume", () => {
+    buildResumeLatestCommandMock.mockReturnValue("claude --continue");
+
+    const result = respawn(claudePane);
+
+    expect(result.command).toBe("claude --continue");
+    expect(result.restoreProvenance?.disposition).toBe("resume");
+  });
+
+  it("records a launch that lost its conversation as fresh", () => {
+    const result = respawn({ ...claudePane, agentState: "waiting", lastStateChange: 4_000 });
+
+    expect(result.sessionLostOnRestore).toBe("no-resume-path");
+    expect(result.restoreProvenance).toEqual({
+      at: 5_000,
+      disposition: "fresh",
+      lastSeen: { agentState: "waiting", at: 4_000 },
+    });
+  });
+
+  it("records a hold and keeps what was seen before it", () => {
+    const result = respawn(
+      { ...claudePane, agentSessionId: "sess-c", agentState: "idle", lastStateChange: 4_000 },
+      { resumeOnRestart: "never" }
+    );
+
+    expect(result.restoreProvenance).toEqual({
+      at: 5_000,
+      disposition: "held",
+      lastSeen: { agentState: "idle", at: 4_000 },
+    });
+  });
+
+  it("carries the last state seen through a second restart that holds the pane again", () => {
+    const firstRestart = respawn(
+      { ...claudePane, agentSessionId: "sess-c", agentState: "idle", lastStateChange: 4_000 },
+      { resumeOnRestart: "never" }
+    );
+    // What the held pane saves: no live state, only the provenance record.
+    const saved = serializePtyPanel({
+      ...claudePane,
+      ...firstRestart,
+      cols: 80,
+      rows: 24,
+    } as PtyPanelData);
+    expect(saved).not.toHaveProperty("agentState");
+
+    const secondRestart = buildArgsForRespawn(
+      { ...claudePane, ...saved } as SavedSnapshot,
+      "terminal",
+      "/repo",
+      settings,
+      false,
+      "/tmp",
+      undefined,
+      { restoredAt: 9_000, resumeOnRestart: "never" }
+    );
+
+    expect(secondRestart.restoreProvenance).toEqual({
+      at: 9_000,
+      disposition: "held",
+      lastSeen: { agentState: "idle", at: 4_000 },
+    });
+  });
+
+  it("takes the newer saved state once a resumed pane has run again", () => {
+    const result = respawn({
+      ...claudePane,
+      agentSessionId: "sess-c",
+      agentState: "working",
+      lastStateChange: 8_000,
+      restoreProvenance: {
+        at: 5_000,
+        disposition: "resume",
+        lastSeen: { agentState: "idle", at: 4_000 },
+      },
+    });
+
+    expect(result.restoreProvenance?.lastSeen).toEqual({ agentState: "working", at: 8_000 });
+  });
+
+  it("never reports a renderer-only or unknown state as seen", () => {
+    expect(
+      respawn({ ...claudePane, agentState: "directing" }).restoreProvenance
+    ).not.toHaveProperty("lastSeen");
+    expect(respawn({ ...claudePane, agentState: "bogus" }).restoreProvenance).not.toHaveProperty(
+      "lastSeen"
+    );
+  });
+
+  it("records a plain shell as fresh with nothing seen", () => {
+    const result = buildArgsForRespawn(
+      { id: "t2", kind: "terminal", cwd: "/repo", location: "grid", command: "npm run dev" },
+      "terminal",
+      "/repo",
+      settings,
+      false,
+      "/tmp",
+      undefined,
+      { restoredAt: 5_000 }
+    );
+
+    expect(result.restoreProvenance).toEqual({ at: 5_000, disposition: "fresh" });
+  });
+
+  it("holds a pane its plugin asked to hold, even under always", () => {
+    const result = respawn(
+      {
+        ...claudePane,
+        agentSessionId: "sess-c",
+        launchedByPluginId: "acme.orchestrator",
+        holdOnRestart: true,
+      },
+      { resumeOnRestart: "always" }
+    );
+
+    expect(result.restoreRecovery).toEqual({ reason: "held-by-plugin", sessionId: "sess-c" });
+    expect(result.command).not.toContain("--resume");
+    expect(result.agentSessionId).toBeUndefined();
+    expect(result.restoreProvenance?.disposition).toBe("held");
+    expect(result.launchedByPluginId).toBe("acme.orchestrator");
+    expect(result.holdOnRestart).toBe(true);
+  });
+
+  it("names the plugin's hold over the setting's", () => {
+    const result = respawn(
+      { ...claudePane, agentSessionId: "sess-c", holdOnRestart: true },
+      { resumeOnRestart: "never" }
+    );
+
+    expect(result.restoreRecovery?.reason).toBe("held-by-plugin");
+  });
+
+  it("ignores a malformed plugin hold or owner", () => {
+    const result = respawn({
+      ...claudePane,
+      agentSessionId: "sess-c",
+      launchedByPluginId: 42,
+      holdOnRestart: "yes",
+    });
+
+    expect(result.restoreRecovery).toBeUndefined();
+    expect(result.launchedByPluginId).toBeUndefined();
+    expect(result.holdOnRestart).toBeUndefined();
+  });
+
+  it("keeps a surviving PTY's provenance as it was rather than restamping it", () => {
+    const provenance = {
+      at: 5_000,
+      disposition: "resume" as const,
+      lastSeen: { agentState: "idle" as const, at: 4_000 },
+    };
+    const saved = {
+      id: "t1",
+      kind: "terminal" as const,
+      cwd: "/repo",
+      restoreProvenance: provenance,
+      launchedByPluginId: "acme.orchestrator",
+      holdOnRestart: true,
+    };
+    const backend = { id: "t1", cwd: "/repo", kind: "terminal" as const };
+
+    for (const args of [
+      buildArgsForBackendTerminal(backend, saved, "/repo"),
+      buildArgsForReconnectedFallback(backend, saved, "/repo"),
+    ]) {
+      expect(args.restoreProvenance).toEqual(provenance);
+      expect(args.launchedByPluginId).toBe("acme.orchestrator");
+      expect(args.holdOnRestart).toBe(true);
+    }
+    expect(buildArgsForBackendTerminal(backend, { id: "t1" }, "/repo").restoreProvenance).toBe(
+      undefined
+    );
+  });
+});

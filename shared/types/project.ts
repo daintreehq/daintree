@@ -14,6 +14,7 @@ import type {
   FileBrowserTreeSnapshot,
   TerminalSpawnSource,
   PanelRestoreRecovery,
+  TerminalRestoreProvenance,
   TerminalScratchpad,
 } from "./panel.js";
 import type { PersistedPanelKindRef } from "../config/panelKindRegistry.js";
@@ -383,6 +384,12 @@ export interface PanelSnapshot {
    * restore holds it again instead of starting a fresh conversation.
    */
   restoreRecovery?: PanelRestoreRecovery;
+  /** How restore last rebuilt the pane (#14017). Untrusted on read — sanitized at restore. */
+  restoreProvenance?: TerminalRestoreProvenance;
+  /** The plugin whose `agent.launch` created the pane (#14017). */
+  launchedByPluginId?: string;
+  /** The launching plugin asked restore to hold the pane (#14017). */
+  holdOnRestart?: true;
   /** The terminal's Scratchpad notes (#12835). Untrusted on read — sanitized at restore. */
   scratchpad?: TerminalScratchpad;
   /** Last known agent state for crash recovery display */

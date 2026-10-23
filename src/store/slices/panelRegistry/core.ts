@@ -395,7 +395,7 @@ export const createCorePanelActions = (
         return state;
       }
 
-      return {
+      const next = {
         panelsById: {
           ...state.panelsById,
           [id]: {
@@ -421,6 +421,11 @@ export const createCorePanelActions = (
           },
         },
       };
+      // The saved state pair is what the next restore reports as last seen
+      // (#14017), so it is written as it changes rather than whenever some
+      // other edit happens to save the layout.
+      saveNormalized(next.panelsById, state.panelIds);
+      return next;
     });
   },
 

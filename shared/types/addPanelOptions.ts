@@ -11,6 +11,7 @@ import type {
   FileBrowserTreeSnapshot,
   SessionLostReason,
   PanelRestoreRecovery,
+  TerminalRestoreProvenance,
   TerminalScratchpad,
 } from "./panel.js";
 import type { GitStatus, DiffChangeSetEntry } from "./git.js";
@@ -230,6 +231,12 @@ export interface AddPanelOptionsBase {
    * resurrect a pane or start a second process in it.
    */
   replacesRestoreRecovery?: boolean;
+  /** PTY-only. See `PtyPanelData.restoreProvenance`. */
+  restoreProvenance?: TerminalRestoreProvenance;
+  /** PTY-only. See `PtyPanelData.launchedByPluginId`. */
+  launchedByPluginId?: string;
+  /** PTY-only. See `PtyPanelData.holdOnRestart`. */
+  holdOnRestart?: true;
   /**
    * PTY-only. The terminal's Scratchpad (#12835), carried by restore. A live
    * panel's own notes outrank this when the call lands on an existing record.

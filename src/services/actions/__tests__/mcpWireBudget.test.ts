@@ -559,7 +559,12 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // 54_700 → 55_500 for #13662's `terminal.placeOwned`: one owned tool for
   // parking a panel and bringing it back, with the three-field receipt its
   // output schema advertises so a caller can tell a move from a no-op.
-  const MAX_EXTERNAL_PAYLOAD_BYTES = 55_500;
+  // 55_500 → 56_010 for #14017, measured at 56_005 B: the optional `restored`
+  // object on each `terminal.list` row, saying when restore rebuilt the pane,
+  // whether it resumed, restarted or held it, and the agent state saved before
+  // the restart, so an orchestrator can tell a finished, restored session from
+  // live work. Output only; its description trimmed before measuring.
+  const MAX_EXTERNAL_PAYLOAD_BYTES = 56_010;
   // 190_000 → 192_700 for the same 2_048 B the external half above pays for.
   // Every byte #11909 spends sits on an externally advertised tool, so both
   // totals moved by the identical amount. Only this one needed the ratchet
@@ -802,7 +807,10 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // list in `worktree.reviewReadiness`'s output, a separate attributed array
   // so the closed item id set stays closed. Output only, so the external
   // ceiling does not move.
-  const MAX_COHORT_PAYLOAD_BYTES = 130_130;
+  // 130_130 → 130_630 for #14017, measured at 130_623 B: the same `restored`
+  // object the external ceiling above pays for. The plugin-only hold action it
+  // ships with is hidden from MCP and costs nothing here.
+  const MAX_COHORT_PAYLOAD_BYTES = 130_630;
 
   const wireBytes = (t: WireTool) => t.descriptionBytes + t.paramsBytes + t.outputBytes;
 

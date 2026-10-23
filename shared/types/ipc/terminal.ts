@@ -3,6 +3,7 @@ import type {
   PanelLocation,
   PanelRestoreRecovery,
   PanelTitleMode,
+  TerminalRestoreProvenance,
   TerminalSpawnSource,
 } from "../panel.js";
 import type { AgentId } from "../agent.js";
@@ -172,6 +173,12 @@ export interface TerminalState {
   conversationCwd?: string;
   /** Held for recovery instead of launched (#12434). Untrusted until sanitized. */
   restoreRecovery?: PanelRestoreRecovery;
+  /** How restore last rebuilt the pane (#14017). Untrusted until sanitized. */
+  restoreProvenance?: TerminalRestoreProvenance;
+  /** The plugin whose `agent.launch` created the pane (#14017). Untrusted until sanitized. */
+  launchedByPluginId?: string;
+  /** The launching plugin asked restore to hold the pane (#14017). Untrusted until sanitized. */
+  holdOnRestart?: true;
   /**
    * Extension ID of the plugin that registered this panel's kind, if applicable.
    * Preserved across save/restore so the placeholder can name the missing plugin

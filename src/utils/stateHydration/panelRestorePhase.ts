@@ -818,6 +818,8 @@ export async function restorePanelsPhase(
     }
 
     const resumeOnRestart = resolveResumeOnRestart(agentSettings);
+    // One time for every pane this pass rebuilds (#14017).
+    const restoredAt = Date.now();
 
     // Decide which panes may resume what, before any restore task runs. At most
     // one pane per (agent, cwd) may use the agent's resume-latest fallback, none
@@ -1134,6 +1136,7 @@ export async function restorePanelsPhase(
                     resolvedResumeLatestSessionId,
                     coldLaunch,
                     resumeOnRestart,
+                    restoredAt,
                   }
                 );
 

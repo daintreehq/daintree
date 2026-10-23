@@ -676,3 +676,55 @@ describe("terminal.sendKeys with no frontend", () => {
     expect(send).not.toHaveBeenCalled();
   });
 });
+
+describe("terminal.list restore metadata with no frontend (#14017)", () => {
+  it("reports it while the saved record still describes the pane, and only then", async () => {
+    const lastSeen = { agentState: "idle" as const, at: 4_000 };
+    const pty = makePty({ "t-live": { kind: "terminal", agentState: "working" } });
+    const { deps } = makeDeps(
+      { getPtyReader: () => pty },
+      {
+        state: savedState([
+          // The process restore rebuilt is still running.
+          {
+            id: "t-live",
+            kind: "terminal",
+            title: "Claude",
+            location: "grid",
+            restoreProvenance: { at: 5_000, disposition: "resume", lastSeen },
+          },
+          // Still held: no process, and the hold is on.
+          {
+            id: "t-held",
+            kind: "terminal",
+            title: "Claude",
+            location: "grid",
+            restoreRecovery: { reason: "held-by-plugin" },
+            restoreProvenance: { at: 5_000, disposition: "held", lastSeen },
+          },
+          // Neither running nor held: the next view rebuilds it afresh.
+          {
+            id: "t-gone",
+            kind: "terminal",
+            title: "Claude",
+            location: "grid",
+            restoreProvenance: { at: 5_000, disposition: "resume", lastSeen },
+          },
+        ]),
+      }
+    );
+
+    const result = await executeViewlessAction(request("terminal.list", {}), deps);
+
+    const { terminals } = (result as { result: ListResult }).result;
+    const byId = Object.fromEntries(terminals.map((t) => [t.id, t]));
+    expect(byId["t-live"]?.restored).toEqual({ at: 5_000, disposition: "resume", lastSeen });
+    expect(byId["t-held"]?.restored).toEqual({
+      at: 5_000,
+      disposition: "held",
+      heldReason: "held-by-plugin",
+      lastSeen,
+    });
+    expect(byId["t-gone"]).not.toHaveProperty("restored");
+  });
+});
