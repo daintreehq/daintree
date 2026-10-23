@@ -114,6 +114,26 @@ describe("runHostControlTool (#13493)", () => {
     expect(missing).toMatchObject({ ok: false, code: "INVALID_ARGS" });
   });
 
+  it("hands host.call the caller's own first-send id, and refuses one sent beside a callId (#14240)", async () => {
+    const runtime = fakeRuntime();
+    const uninstall = setHostControlRuntime(runtime);
+    const access = bindHostControl(() => "hub");
+    const args = { hostId: "h", projectId: "p", tool: "terminal.list", newCallId: "mine-1" };
+
+    await runHostControlTool("host.call", args, access, { tier: "core" });
+    const both = await runHostControlTool("host.call", { ...args, callId: "mine-1" }, access, {
+      tier: "core",
+    });
+    const empty = await runHostControlTool("host.call", { ...args, newCallId: "" }, access, {
+      tier: "core",
+    });
+    uninstall();
+    expect(runtime.call).toHaveBeenCalledTimes(1);
+    expect(runtime.call).toHaveBeenCalledWith("hub", args, { tier: "core" });
+    expect(both).toMatchObject({ ok: false, code: "INVALID_ARGS" });
+    expect(empty).toMatchObject({ ok: false, code: "INVALID_ARGS" });
+  });
+
   it("hands host.ensureProject its parsed arguments, and refuses ones that don't parse", async () => {
     const runtime = fakeRuntime();
     const uninstall = setHostControlRuntime(runtime);

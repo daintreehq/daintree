@@ -848,7 +848,11 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // each live assistant `host.list` names, so the global assistant reads the
   // same decisions Canopy shows. Output only, and the notice delivery is its
   // status alone; no external tool lists hosts.
-  const MAX_COHORT_PAYLOAD_BYTES = 142_200;
+  // 142_200 → 142_350 for #14240, measured at 142_318 B (+127): `host.call`'s
+  // optional `newCallId`, the caller's own id for a first send, so a write
+  // whose whole answer was lost can still be resent under it. Assistant-only,
+  // so the external ceiling does not move.
+  const MAX_COHORT_PAYLOAD_BYTES = 142_350;
 
   const wireBytes = (t: WireTool) => t.descriptionBytes + t.paramsBytes + t.outputBytes;
 

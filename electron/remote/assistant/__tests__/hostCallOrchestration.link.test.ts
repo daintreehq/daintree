@@ -418,7 +418,12 @@ function installHost(): void {
 function call(
   tool: string,
   args: Record<string, unknown>,
-  extra: { callId?: string; helpSessionId?: string; runtime?: HostCallRuntime } = {}
+  extra: {
+    callId?: string;
+    newCallId?: string;
+    helpSessionId?: string;
+    runtime?: HostCallRuntime;
+  } = {}
 ) {
   return (extra.runtime ?? shell.runtime).call(
     extra.helpSessionId ?? "help-a",
@@ -428,6 +433,7 @@ function call(
       tool,
       args,
       ...(extra.callId !== undefined ? { callId: extra.callId } : {}),
+      ...(extra.newCallId !== undefined ? { newCallId: extra.newCallId } : {}),
     },
     { tier: "full" }
   );
@@ -587,13 +593,45 @@ describe("host.call when an answer is lost (#14169)", () => {
       expect(guessed).toMatchObject({ outcome: "expired", result: null });
       expect(destination.submissions.get("w-1")).toHaveLength(1);
 
-      // Missing receipt primitive, reproduced: nothing the caller can present
-      // tells this send from the lost one, so it is a second submission.
+      // Sent with no id of its own, nothing the caller can present tells this
+      // send from the lost one, so it is a second submission. #14240's
+      // newCallId is the receipt; the test below sends with it.
       const again = await settled(call("terminal.sendCommandOwned", SEND));
       expect(again.outcome).toBe("ok");
       expect(destination.submissions.get("w-1")).toHaveLength(2);
       expect(new Set(destination.submissions.get("w-1")).size).toBe(2);
     });
+  });
+});
+
+describe("a send under the caller's own newCallId, its whole answer lost (#14240)", () => {
+  it("submits once when resent by that id, never after a restart, and again only under a new one", async () => {
+    await launchWorker();
+    loseNextAnswer.value = true;
+    // None of this answer is read: the caller holds only the id it chose.
+    await call("terminal.sendCommandOwned", SEND, { newCallId: "send-1" });
+    expect(destination.submissions.get("w-1")).toHaveLength(1);
+
+    const resent = await settled(call("terminal.sendCommandOwned", SEND, { callId: "send-1" }));
+    expect(resent).toMatchObject({ outcome: "ok", callId: "send-1" });
+    expect(JSON.stringify(resent.result)).toContain(destination.submissions.get("w-1")![0]);
+    expect(destination.submissions.get("w-1")).toHaveLength(1);
+
+    // The same id sent as new again is still that send: this Shell resends it.
+    const repeated = await settled(
+      call("terminal.sendCommandOwned", SEND, { newCallId: "send-1" })
+    );
+    expect(repeated).toEqual(resent);
+    expect(destination.submissions.get("w-1")).toHaveLength(1);
+
+    await restartHost();
+    const forgotten = await settled(call("terminal.sendCommandOwned", SEND, { callId: "send-1" }));
+    expect(forgotten).toMatchObject({ outcome: "expired", callId: "send-1", result: null });
+    expect(destination.submissions.get("w-1")).toHaveLength(1);
+
+    const another = await settled(call("terminal.sendCommandOwned", SEND, { newCallId: "send-2" }));
+    expect(another).toMatchObject({ outcome: "ok", callId: "send-2" });
+    expect(destination.submissions.get("w-1")).toHaveLength(2);
   });
 });
 

@@ -358,6 +358,7 @@ function projectHostCallArgs(args: unknown): Record<string, unknown> {
     projectId: auditId(record?.projectId),
     tool,
     callId: auditId(record?.callId),
+    newCallId: auditId(record?.newCallId),
   };
   for (const [key, value] of Object.entries(withoutWrittenText(projected ?? {}))) {
     out[`args.${key}`] = value;

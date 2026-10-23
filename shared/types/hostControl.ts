@@ -164,19 +164,27 @@ export type HostListEntry = z.infer<typeof HostListEntrySchema>;
 export const HostListResultSchema = z.object({ hosts: z.array(HostListEntrySchema) });
 export type HostListResult = z.infer<typeof HostListResultSchema>;
 
-export const HostCallArgsSchema = z.object({
-  hostId: hostIdSchema,
-  projectId: idSchema.describe("A projectId from the host list. The call runs there."),
-  tool: z
-    .string()
-    .min(1)
-    .max(128)
-    .describe("A Daintree tool on the host, by id. Search the host's own tools through this."),
-  args: z.record(z.string(), z.unknown()).optional().describe("The tool's own arguments."),
-  callId: idSchema
-    .optional()
-    .describe("Resend an ambiguous call under its callId. It never runs twice."),
-});
+export const HostCallArgsSchema = z
+  .object({
+    hostId: hostIdSchema,
+    projectId: idSchema.describe("A projectId from the host list. The call runs there."),
+    tool: z
+      .string()
+      .min(1)
+      .max(128)
+      .describe("A Daintree tool on the host, by id. Search the host's own tools through this."),
+    args: z.record(z.string(), z.unknown()).optional().describe("The tool's own arguments."),
+    callId: idSchema
+      .optional()
+      .describe("Resend an ambiguous call under its callId. It never runs twice."),
+    newCallId: idSchema
+      .optional()
+      .describe(
+        "Your own fresh UUID for a write; with no answer back, resend under it as callId. Never both."
+      ),
+  })
+  // A caller-chosen id names a first send, a callId a resend: one call is never both (#14240).
+  .refine((args) => args.callId === undefined || args.newCallId === undefined);
 export type HostCallArgs = z.infer<typeof HostCallArgsSchema>;
 
 /** A host tool's answer, as its own MCP result: structured when it has a schema, else its text. */
