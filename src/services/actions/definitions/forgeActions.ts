@@ -17,14 +17,6 @@ import {
 import {
   FORGE_GET_PRS_MAX,
   FORGE_GET_PRS_MIN,
-  ForgeAssigneesResultSchema,
-  ForgeCommentResultSchema,
-  ForgeDisableAutoMergeResultSchema,
-  ForgeEnableAutoMergeResultSchema,
-  ForgeMergePRResultSchema,
-  ForgePRDraftStateResultSchema,
-  ForgeRequestedReviewersResultSchema,
-  ForgeReviewResultSchema,
   ForgeListOptionsSchema,
   ForgePRListOptionsSchema,
   addIssueCommentArgsSchema,
@@ -65,6 +57,16 @@ import {
   unassignIssueArgsSchema,
   validateTokenArgsSchema,
 } from "./forgeActionArgs";
+import {
+  ForgeAssigneesResultSchema,
+  ForgeCommentResultSchema,
+  ForgeDisableAutoMergeResultSchema,
+  ForgeEnableAutoMergeResultSchema,
+  ForgeMergePRResultSchema,
+  ForgePRDraftStateResultSchema,
+  ForgeRequestedReviewersResultSchema,
+  ForgeReviewResultSchema,
+} from "./forgeActionResultSchemas";
 import type { ForgeActionRunId } from "./forgeActions.impl";
 
 /**

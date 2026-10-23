@@ -24,12 +24,14 @@ import {
   ForgeCommentResultSchema,
   ForgeDisableAutoMergeResultSchema,
   ForgeEnableAutoMergeResultSchema,
-  ForgeListOptionsSchema,
   ForgeMergePRResultSchema,
   ForgePRDraftStateResultSchema,
-  ForgePRListOptionsSchema,
   ForgeRequestedReviewersResultSchema,
   ForgeReviewResultSchema,
+} from "./forgeActionResultSchemas";
+import type {
+  ForgeListOptionsSchema,
+  ForgePRListOptionsSchema,
   addIssueCommentArgsSchema,
   addIssueLabelArgsSchema,
   approvePRArgsSchema,
@@ -73,11 +75,12 @@ import {
  * Read an action's validated args as its schema's output type.
  *
  * `run` receives `unknown`, but ActionService has already parsed `argsSchema`
- * and hands over the parsed value, so the schema passed here — the same one
+ * and hands over the parsed value, so the schema named here — the same one
  * forgeActions.ts registers — is the type the args actually have. The cast is
- * written once here rather than at each body.
+ * written once here rather than at each body, and takes the schema as a type so
+ * this chunk never imports the args schemas at runtime.
  */
-function argsOf<S extends z.ZodType>(_schema: S, args: unknown): z.output<S> {
+function argsOf<S extends z.ZodType>(args: unknown): z.output<S> {
   // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- ActionService validated `argsSchema` before run()
   return args as z.output<S>;
 }
@@ -136,7 +139,7 @@ function syncAssigneeCache(
 // electron/ipc/handlers/forge.ts.
 export const forgeActionRuns = {
   "forge.openIssues": async (rawArgs: unknown, ctx: ActionContext) => {
-    const args = argsOf(openIssuesArgsSchema, rawArgs);
+    const args = argsOf<typeof openIssuesArgsSchema>(rawArgs);
     // An explicit selector is resolved (or rejected) by the resolver, so this
     // fallback only applies when the caller named no project at all.
     const path =
@@ -149,7 +152,7 @@ export const forgeActionRuns = {
   },
 
   "forge.openPRs": async (rawArgs: unknown, ctx: ActionContext) => {
-    const args = argsOf(openPRsArgsSchema, rawArgs);
+    const args = argsOf<typeof openPRsArgsSchema>(rawArgs);
     // An explicit selector is resolved (or rejected) by the resolver, so this
     // fallback only applies when the caller named no project at all.
     const path =
@@ -162,7 +165,7 @@ export const forgeActionRuns = {
   },
 
   "forge.openCommits": async (rawArgs: unknown, ctx: ActionContext) => {
-    const args = argsOf(openCommitsArgsSchema, rawArgs);
+    const args = argsOf<typeof openCommitsArgsSchema>(rawArgs);
     // An explicit selector is resolved (or rejected) by the resolver, so this
     // fallback only applies when the caller named no project at all.
     const path =
@@ -175,7 +178,7 @@ export const forgeActionRuns = {
   },
 
   "forge.openRepo": async (rawArgs: unknown, ctx: ActionContext) => {
-    const args = argsOf(openRepoArgsSchema, rawArgs);
+    const args = argsOf<typeof openRepoArgsSchema>(rawArgs);
     // An explicit selector is resolved (or rejected) by the resolver, so this
     // fallback only applies when the caller named no project at all.
     const path =
@@ -188,19 +191,19 @@ export const forgeActionRuns = {
   },
 
   "forge.openIssue": async (rawArgs: unknown, ctx: ActionContext) => {
-    const { issueNumber, ...location } = argsOf(openIssueArgsSchema, rawArgs);
+    const { issueNumber, ...location } = argsOf<typeof openIssueArgsSchema>(rawArgs);
     const resolvedCwd = requireWorktreePath(location, ctx);
     await forgeClient.openIssue(resolvedCwd, issueNumber);
   },
 
   "forge.openPR": async (rawArgs: unknown, ctx: ActionContext) => {
-    const { prNumber, ...location } = argsOf(openPRArgsSchema, rawArgs);
+    const { prNumber, ...location } = argsOf<typeof openPRArgsSchema>(rawArgs);
     const resolvedCwd = requireWorktreePath(location, ctx);
     await forgeClient.openPR(resolvedCwd, prNumber);
   },
 
   "forge.assignIssue": async (rawArgs: unknown, ctx: ActionContext) => {
-    const { issueNumber, username, ...location } = argsOf(assignIssueArgsSchema, rawArgs);
+    const { issueNumber, username, ...location } = argsOf<typeof assignIssueArgsSchema>(rawArgs);
     const resolvedCwd = requireWorktreePath(location, ctx);
     const assignees = await forgeClient.assignIssue(resolvedCwd, issueNumber, username);
     const result = ForgeAssigneesResultSchema.parse({ issueNumber, assignees });
@@ -214,7 +217,7 @@ export const forgeActionRuns = {
   },
 
   "forge.unassignIssue": async (rawArgs: unknown, ctx: ActionContext) => {
-    const { issueNumber, username, ...location } = argsOf(unassignIssueArgsSchema, rawArgs);
+    const { issueNumber, username, ...location } = argsOf<typeof unassignIssueArgsSchema>(rawArgs);
     const resolvedCwd = requireWorktreePath(location, ctx);
     const assignees = await forgeClient.unassignIssue(resolvedCwd, issueNumber, username);
     const result = ForgeAssigneesResultSchema.parse({ issueNumber, assignees });
@@ -228,13 +231,13 @@ export const forgeActionRuns = {
   },
 
   "forge.approvePR": async (rawArgs: unknown, ctx: ActionContext) => {
-    const { prNumber, body, ...location } = argsOf(approvePRArgsSchema, rawArgs);
+    const { prNumber, body, ...location } = argsOf<typeof approvePRArgsSchema>(rawArgs);
     const resolvedCwd = requireWorktreePath(location, ctx);
     return ForgeReviewResultSchema.parse(await forgeClient.approvePR(resolvedCwd, prNumber, body));
   },
 
   "forge.requestChanges": async (rawArgs: unknown, ctx: ActionContext) => {
-    const { prNumber, body, ...location } = argsOf(requestChangesArgsSchema, rawArgs);
+    const { prNumber, body, ...location } = argsOf<typeof requestChangesArgsSchema>(rawArgs);
     const resolvedCwd = requireWorktreePath(location, ctx);
     return ForgeReviewResultSchema.parse(
       await forgeClient.requestChanges(resolvedCwd, prNumber, body)
@@ -242,7 +245,8 @@ export const forgeActionRuns = {
   },
 
   "forge.dismissReview": async (rawArgs: unknown, ctx: ActionContext) => {
-    const { prNumber, reviewId, message, ...location } = argsOf(dismissReviewArgsSchema, rawArgs);
+    const { prNumber, reviewId, message, ...location } =
+      argsOf<typeof dismissReviewArgsSchema>(rawArgs);
     const resolvedCwd = requireWorktreePath(location, ctx);
     return ForgeReviewResultSchema.parse(
       await forgeClient.dismissReview(resolvedCwd, prNumber, reviewId, message)
@@ -250,7 +254,8 @@ export const forgeActionRuns = {
   },
 
   "forge.requestReviewers": async (rawArgs: unknown, ctx: ActionContext) => {
-    const { prNumber, users, teams, ...location } = argsOf(requestReviewersArgsSchema, rawArgs);
+    const { prNumber, users, teams, ...location } =
+      argsOf<typeof requestReviewersArgsSchema>(rawArgs);
     const resolvedCwd = requireWorktreePath(location, ctx);
     return ForgeRequestedReviewersResultSchema.parse(
       await forgeClient.requestReviewers(resolvedCwd, prNumber, { users, teams })
@@ -258,19 +263,19 @@ export const forgeActionRuns = {
   },
 
   "forge.validateToken": async (rawArgs: unknown) => {
-    const { providerId, token } = argsOf(validateTokenArgsSchema, rawArgs);
+    const { providerId, token } = argsOf<typeof validateTokenArgsSchema>(rawArgs);
     return await forgeClient.validateToken(providerId, token);
   },
 
   "forge.getRepoStats": async (rawArgs: unknown, ctx: ActionContext) => {
-    const { bypassCache, ...location } = argsOf(getRepoStatsArgsSchema, rawArgs);
+    const { bypassCache, ...location } = argsOf<typeof getRepoStatsArgsSchema>(rawArgs);
     const resolvedCwd = requireWorktreePath(location, ctx);
     return await forgeClient.getRepoStats(resolvedCwd, bypassCache);
   },
 
   "forge.listIssues": async (rawArgs: unknown, ctx: ActionContext) => {
     const { search, state, cursor, perPage, sort, direction, bypassCache, view, ...location } =
-      argsOf(ForgeListOptionsSchema, rawArgs);
+      argsOf<typeof ForgeListOptionsSchema>(rawArgs);
     const resolvedCwd = requireWorktreePath(location, ctx);
     const page = await forgeClient.listIssues(resolvedCwd, {
       search,
@@ -288,7 +293,7 @@ export const forgeActionRuns = {
 
   "forge.listPRs": async (rawArgs: unknown, ctx: ActionContext) => {
     const { search, state, cursor, perPage, sort, direction, bypassCache, view, ...location } =
-      argsOf(ForgePRListOptionsSchema, rawArgs);
+      argsOf<typeof ForgePRListOptionsSchema>(rawArgs);
     const resolvedCwd = requireWorktreePath(location, ctx);
     const page = await forgeClient.listPRs(resolvedCwd, {
       search,
@@ -303,59 +308,58 @@ export const forgeActionRuns = {
   },
 
   "forge.getIssue": async (rawArgs: unknown, ctx: ActionContext) => {
-    const { issueNumber, ...location } = argsOf(getIssueArgsSchema, rawArgs);
+    const { issueNumber, ...location } = argsOf<typeof getIssueArgsSchema>(rawArgs);
     const resolvedCwd = requireWorktreePath(location, ctx);
     return await forgeClient.getIssue(resolvedCwd, issueNumber);
   },
 
   "forge.listIssueComments": async (rawArgs: unknown, ctx: ActionContext) => {
-    const { issueNumber, cursor, perPage, ...location } = argsOf(
-      listIssueCommentsArgsSchema,
-      rawArgs
-    );
+    const { issueNumber, cursor, perPage, ...location } =
+      argsOf<typeof listIssueCommentsArgsSchema>(rawArgs);
     const resolvedCwd = requireWorktreePath(location, ctx);
     return await forgeClient.listIssueComments(resolvedCwd, issueNumber, { cursor, perPage });
   },
 
   "forge.getPR": async (rawArgs: unknown, ctx: ActionContext) => {
-    const { prNumber, ...location } = argsOf(getPRArgsSchema, rawArgs);
+    const { prNumber, ...location } = argsOf<typeof getPRArgsSchema>(rawArgs);
     const resolvedCwd = requireWorktreePath(location, ctx);
     return { pr: await forgeClient.getPR(resolvedCwd, prNumber) };
   },
 
   "forge.getPRs": async (rawArgs: unknown, ctx: ActionContext) => {
-    const { prNumbers, ...location } = argsOf(getPRsArgsSchema, rawArgs);
+    const { prNumbers, ...location } = argsOf<typeof getPRsArgsSchema>(rawArgs);
     const resolvedCwd = requireWorktreePath(location, ctx);
     return { results: await forgeClient.getPRsByNumbersDetailed(resolvedCwd, prNumbers) };
   },
 
   "forge.getCIStatus": async (rawArgs: unknown, ctx: ActionContext) => {
-    const { prNumber, ...location } = argsOf(getCIStatusArgsSchema, rawArgs);
+    const { prNumber, ...location } = argsOf<typeof getCIStatusArgsSchema>(rawArgs);
     const resolvedCwd = requireWorktreePath(location, ctx);
     return { ciStatus: await forgeClient.getCIStatus(resolvedCwd, prNumber) };
   },
 
   "forge.getChecks": async (rawArgs: unknown, ctx: ActionContext) => {
-    const { prNumber, ...location } = argsOf(getChecksArgsSchema, rawArgs);
+    const { prNumber, ...location } = argsOf<typeof getChecksArgsSchema>(rawArgs);
     const resolvedCwd = requireWorktreePath(location, ctx);
     const result = await forgeClient.getChecks(resolvedCwd, prNumber);
     return { checks: result === null ? null : result.checks };
   },
 
   "forge.createPR": async (rawArgs: unknown, ctx: ActionContext) => {
-    const { head, base, title, body, draft, ...location } = argsOf(createPRArgsSchema, rawArgs);
+    const { head, base, title, body, draft, ...location } =
+      argsOf<typeof createPRArgsSchema>(rawArgs);
     const resolvedCwd = requireWorktreePath(location, ctx);
     return await forgeClient.createPR(resolvedCwd, { head, base, title, body, draft });
   },
 
   "forge.closePR": async (rawArgs: unknown, ctx: ActionContext) => {
-    const { prNumber, ...location } = argsOf(closePRArgsSchema, rawArgs);
+    const { prNumber, ...location } = argsOf<typeof closePRArgsSchema>(rawArgs);
     const resolvedCwd = requireWorktreePath(location, ctx);
     return ForgePRResultSchema.parse(await forgeClient.closePR(resolvedCwd, prNumber));
   },
 
   "forge.reopenPR": async (rawArgs: unknown, ctx: ActionContext) => {
-    const { prNumber, ...location } = argsOf(reopenPRArgsSchema, rawArgs);
+    const { prNumber, ...location } = argsOf<typeof reopenPRArgsSchema>(rawArgs);
     const resolvedCwd = requireWorktreePath(location, ctx);
     return ForgePRResultSchema.parse(await forgeClient.reopenPR(resolvedCwd, prNumber));
   },
@@ -369,7 +373,7 @@ export const forgeActionRuns = {
       expectedHeadSha,
       expectedBaseRef,
       ...location
-    } = argsOf(mergePRArgsSchema, rawArgs);
+    } = argsOf<typeof mergePRArgsSchema>(rawArgs);
     const resolvedCwd = requireWorktreePath(location, ctx);
     return ForgeMergePRResultSchema.parse(
       await forgeClient.mergePR(resolvedCwd, prNumber, {
@@ -383,10 +387,8 @@ export const forgeActionRuns = {
   },
 
   "forge.enableAutoMerge": async (rawArgs: unknown, ctx: ActionContext) => {
-    const { prNumber, mergeMethod, expectedHeadSha, expectedBaseRef, ...location } = argsOf(
-      enableAutoMergeArgsSchema,
-      rawArgs
-    );
+    const { prNumber, mergeMethod, expectedHeadSha, expectedBaseRef, ...location } =
+      argsOf<typeof enableAutoMergeArgsSchema>(rawArgs);
     const resolvedCwd = requireWorktreePath(location, ctx);
     return ForgeEnableAutoMergeResultSchema.parse(
       await forgeClient.enableAutoMerge(resolvedCwd, prNumber, {
@@ -398,7 +400,7 @@ export const forgeActionRuns = {
   },
 
   "forge.disableAutoMerge": async (rawArgs: unknown, ctx: ActionContext) => {
-    const { prNumber, ...location } = argsOf(disableAutoMergeArgsSchema, rawArgs);
+    const { prNumber, ...location } = argsOf<typeof disableAutoMergeArgsSchema>(rawArgs);
     const resolvedCwd = requireWorktreePath(location, ctx);
     return ForgeDisableAutoMergeResultSchema.parse(
       await forgeClient.disableAutoMerge(resolvedCwd, prNumber)
@@ -406,13 +408,13 @@ export const forgeActionRuns = {
   },
 
   "forge.createIssue": async (rawArgs: unknown, ctx: ActionContext) => {
-    const { title, body, labels, ...location } = argsOf(createIssueArgsSchema, rawArgs);
+    const { title, body, labels, ...location } = argsOf<typeof createIssueArgsSchema>(rawArgs);
     const resolvedCwd = requireWorktreePath(location, ctx);
     return await forgeClient.createIssue(resolvedCwd, { title, body, labels });
   },
 
   "forge.convertPRToDraft": async (rawArgs: unknown, ctx: ActionContext) => {
-    const { prNumber, ...location } = argsOf(convertPRToDraftArgsSchema, rawArgs);
+    const { prNumber, ...location } = argsOf<typeof convertPRToDraftArgsSchema>(rawArgs);
     const resolvedCwd = requireWorktreePath(location, ctx);
     return ForgePRDraftStateResultSchema.parse(
       await forgeClient.convertPRToDraft(resolvedCwd, prNumber)
@@ -420,13 +422,13 @@ export const forgeActionRuns = {
   },
 
   "forge.closeIssue": async (rawArgs: unknown, ctx: ActionContext) => {
-    const { issueNumber, stateReason, ...location } = argsOf(closeIssueArgsSchema, rawArgs);
+    const { issueNumber, stateReason, ...location } = argsOf<typeof closeIssueArgsSchema>(rawArgs);
     const resolvedCwd = requireWorktreePath(location, ctx);
     return await forgeClient.closeIssue(resolvedCwd, issueNumber, stateReason);
   },
 
   "forge.markPRReadyForReview": async (rawArgs: unknown, ctx: ActionContext) => {
-    const { prNumber, ...location } = argsOf(markPRReadyForReviewArgsSchema, rawArgs);
+    const { prNumber, ...location } = argsOf<typeof markPRReadyForReviewArgsSchema>(rawArgs);
     const resolvedCwd = requireWorktreePath(location, ctx);
     return ForgePRDraftStateResultSchema.parse(
       await forgeClient.markPRReadyForReview(resolvedCwd, prNumber)
@@ -434,13 +436,13 @@ export const forgeActionRuns = {
   },
 
   "forge.reopenIssue": async (rawArgs: unknown, ctx: ActionContext) => {
-    const { issueNumber, ...location } = argsOf(reopenIssueArgsSchema, rawArgs);
+    const { issueNumber, ...location } = argsOf<typeof reopenIssueArgsSchema>(rawArgs);
     const resolvedCwd = requireWorktreePath(location, ctx);
     return await forgeClient.reopenIssue(resolvedCwd, issueNumber);
   },
 
   "forge.commentOnPR": async (rawArgs: unknown, ctx: ActionContext) => {
-    const { prNumber, body, ...location } = argsOf(commentOnPRArgsSchema, rawArgs);
+    const { prNumber, body, ...location } = argsOf<typeof commentOnPRArgsSchema>(rawArgs);
     const resolvedCwd = requireWorktreePath(location, ctx);
     return ForgeCommentResultSchema.parse(
       await forgeClient.commentOnPR(resolvedCwd, prNumber, body)
@@ -448,31 +450,31 @@ export const forgeActionRuns = {
   },
 
   "forge.editPR": async (rawArgs: unknown, ctx: ActionContext) => {
-    const { prNumber, title, body, ...location } = argsOf(editPRArgsSchema, rawArgs);
+    const { prNumber, title, body, ...location } = argsOf<typeof editPRArgsSchema>(rawArgs);
     const resolvedCwd = requireWorktreePath(location, ctx);
     return await forgeClient.editPR(resolvedCwd, prNumber, { title, body });
   },
 
   "forge.editIssue": async (rawArgs: unknown, ctx: ActionContext) => {
-    const { issueNumber, title, body, ...location } = argsOf(editIssueArgsSchema, rawArgs);
+    const { issueNumber, title, body, ...location } = argsOf<typeof editIssueArgsSchema>(rawArgs);
     const resolvedCwd = requireWorktreePath(location, ctx);
     return await forgeClient.editIssue(resolvedCwd, issueNumber, { title, body });
   },
 
   "forge.addIssueComment": async (rawArgs: unknown, ctx: ActionContext) => {
-    const { issueNumber, body, ...location } = argsOf(addIssueCommentArgsSchema, rawArgs);
+    const { issueNumber, body, ...location } = argsOf<typeof addIssueCommentArgsSchema>(rawArgs);
     const resolvedCwd = requireWorktreePath(location, ctx);
     return await forgeClient.addIssueComment(resolvedCwd, issueNumber, body);
   },
 
   "forge.addIssueLabel": async (rawArgs: unknown, ctx: ActionContext) => {
-    const { issueNumber, label, ...location } = argsOf(addIssueLabelArgsSchema, rawArgs);
+    const { issueNumber, label, ...location } = argsOf<typeof addIssueLabelArgsSchema>(rawArgs);
     const resolvedCwd = requireWorktreePath(location, ctx);
     return await forgeClient.addIssueLabel(resolvedCwd, issueNumber, label);
   },
 
   "forge.removeIssueLabel": async (rawArgs: unknown, ctx: ActionContext) => {
-    const { issueNumber, label, ...location } = argsOf(removeIssueLabelArgsSchema, rawArgs);
+    const { issueNumber, label, ...location } = argsOf<typeof removeIssueLabelArgsSchema>(rawArgs);
     const resolvedCwd = requireWorktreePath(location, ctx);
     return await forgeClient.removeIssueLabel(resolvedCwd, issueNumber, label);
   },
