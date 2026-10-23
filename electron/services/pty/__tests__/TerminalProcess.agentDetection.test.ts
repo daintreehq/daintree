@@ -505,6 +505,11 @@ describe("TerminalProcess.handleAgentDetection — runtime promotion scrollback"
     ).terminalInfo.headlessTerminal?.options.scrollback;
   }
 
+  function getDetectedAgentId(terminal: TerminalProcess): string | undefined {
+    return (terminal as unknown as { terminalInfo: { detectedAgentId?: string } }).terminalInfo
+      .detectedAgentId;
+  }
+
   it("agent-launched terminal starts at DEFAULT_SCROLLBACK", () => {
     const terminal = createAgentTerminal();
     try {
@@ -592,7 +597,26 @@ describe("TerminalProcess.handleAgentDetection — runtime promotion scrollback"
       );
       callHandleAgentDetection(terminal, makeNoAgentResult({}), getSpawnedAt(terminal));
 
+      expect(getDetectedAgentId(terminal)).toBeUndefined();
       expect(getScrollback(terminal)).toBe(DEFAULT_SCROLLBACK);
+    } finally {
+      terminal.dispose();
+    }
+  });
+
+  it("re-promotion after demotion and a trim grows again", () => {
+    const terminal = createPlainTerminal();
+    try {
+      const agent = makeAgentResult({ agentType: "claude" as const, processIconId: "claude" });
+      callHandleAgentDetection(terminal, agent, getSpawnedAt(terminal));
+      callHandleAgentDetection(terminal, makeNoAgentResult({}), getSpawnedAt(terminal));
+      expect(getDetectedAgentId(terminal)).toBeUndefined();
+      terminal.trimScrollback(100);
+
+      callHandleAgentDetection(terminal, agent, getSpawnedAt(terminal));
+
+      expect(getScrollback(terminal)).toBe(DEFAULT_SCROLLBACK);
+      expect(getHeadlessScrollback(terminal)).toBe(DEFAULT_SCROLLBACK);
     } finally {
       terminal.dispose();
     }
@@ -601,7 +625,11 @@ describe("TerminalProcess.handleAgentDetection — runtime promotion scrollback"
   it("non-agent process detection leaves a plain terminal at the shell size", () => {
     const terminal = createPlainTerminal();
     try {
-      callHandleAgentDetection(terminal, makeNoAgentResult({}), getSpawnedAt(terminal));
+      callHandleAgentDetection(
+        terminal,
+        makeAgentResult({ processIconId: "npm", processName: "npm" }),
+        getSpawnedAt(terminal)
+      );
 
       expect(getScrollback(terminal)).toBe(PLAIN_SHELL_SCROLLBACK_MAX);
     } finally {
