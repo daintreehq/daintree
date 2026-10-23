@@ -740,12 +740,12 @@ export const CHANNEL_LOCALITY = {
   "plugin:account-test": "host",
   "plugin:account-binding-get": "host",
   "plugin:account-binding-set": "host",
-  // Signing in needs the browser and the keychain on the same machine, and a
-  // pasted token would cross the link to reach the host's keychain. With no
-  // split registered, a remote-bound window is refused.
+  // The sign-in and the keychain are the host's; the browser is the Shell's.
+  // The split lets the host ask the calling Shell to open it.
   "plugin:account-connect": "hybrid",
-  "plugin:account-cancel-connect": "hybrid",
-  "plugin:account-set-token": "hybrid",
+  "plugin:account-cancel-connect": "host",
+  // A pasted token crosses the link once, to be kept in the host's keychain.
+  "plugin:account-set-token": "host",
   "plugin:toolbar-buttons": "host",
   "plugin:launch-entries": "host",
   "plugin:layouts": "host",

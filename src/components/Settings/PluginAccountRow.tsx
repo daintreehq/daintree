@@ -52,7 +52,8 @@ function verificationText(verification: PluginAccountVerification): string {
  * The Connect / Disconnect row for one of a plugin's connections (#13823,
  * #14102). The host runs the sign-in and keeps the tokens; this row only ever
  * sees whether the connection is stored, what the service last said about it,
- * and the name the service reported.
+ * and the name the service reported. In a window on another machine the
+ * browser opens here and the host still keeps the tokens (#14111).
  */
 export function PluginAccountRow({
   plugin,
@@ -177,13 +178,13 @@ export function PluginAccountRow({
   const signingIn = waitingForBrowser || status?.pending === true;
   const secretHost = remoteHostId === null ? null : { name: hostName ?? remoteHostId, platform };
   const disabledReason =
-    remoteHostId !== null && !connected
-      ? `Connect from a window on ${hostName ?? remoteHostId} — signing in uses that machine's browser and keychain`
-      : status?.secretTier === "unavailable" && !connected
-        ? unavailableSecretStorageText(secretHost)
-        : status?.secretTier === "locked" && !connected
-          ? lockedSecretStorageText(secretHost, platform)
-          : null;
+    status?.secretTier === "unavailable" && !connected
+      ? unavailableSecretStorageText(secretHost)
+      : status?.secretTier === "locked" && !connected
+        ? lockedSecretStorageText(secretHost, platform)
+        : null;
+  // Who keeps the secret: a remote window's account lives on its host.
+  const keeper = secretHost ? `${secretHost.name} keeps` : "Daintree keeps";
   const disabled = status === null || disabledReason !== null;
 
   const verification = status?.verification;
@@ -200,8 +201,8 @@ export function PluginAccountRow({
           ? "The service ended this sign-in. Connect again to use it"
           : (account.description ??
             (account.kind === "oauth2"
-              ? "Sign in through your browser. Daintree keeps the tokens in the OS keychain"
-              : "Paste an API token. Daintree keeps it in the OS keychain"));
+              ? `Sign in through your browser. ${keeper} the tokens in the OS keychain`
+              : `Paste an API token. ${keeper} it in the OS keychain`));
 
   const tokenField = account.kind === "token" && (!connected || replacingToken);
 
@@ -241,7 +242,7 @@ export function PluginAccountRow({
                 <Button
                   variant="outline"
                   size="sm"
-                  disabled={busy || testing || remoteHostId !== null}
+                  disabled={busy || testing}
                   onClick={() =>
                     account.kind === "token" ? setReplacingToken(true) : void connect()
                   }

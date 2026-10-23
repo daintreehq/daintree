@@ -10,6 +10,7 @@ const electron = vi.hoisted(() => ({
   },
 }));
 vi.mock("electron", () => ({
+  app: undefined,
   dialog: { showMessageBox: electron.showMessageBox },
   webContents: { fromId: () => ({ isDestroyed: () => false }) },
 }));

@@ -166,11 +166,57 @@ describe("PluginAccountRow", () => {
     await screen.findByText("Sign-in was declined in the browser");
   });
 
-  it("can't connect from a window attached to another machine", async () => {
+  it("signs in from a window attached to another machine, whose host keeps the tokens", async () => {
     remote.hostId = "host-1";
+    pluginApi.connectAccount.mockResolvedValue({
+      status: "connected",
+      account: status({ connected: true, identity: "octo" }),
+    });
     render(<PluginAccountRow plugin={plugin(OAUTH)} account={OAUTH} />);
-    await screen.findByText(/Connect from a window on studio-01/);
-    expect(screen.getByRole("button", { name: "Connect" }).hasAttribute("disabled")).toBe(true);
+    await screen.findByText(
+      "Sign in through your browser. studio-01 keeps the tokens in the OS keychain"
+    );
+    fireEvent.click(await enabledButton("Connect"));
+    await screen.findByText(/^Connected as octo/);
+    expect(pluginApi.connectAccount).toHaveBeenCalledWith("acme.tracker", "default");
+  });
+
+  it("reconnects from a window attached to another machine", async () => {
+    remote.hostId = "host-1";
+    pluginApi.getAccountStatus.mockResolvedValue(status({ connected: true, identity: "octo" }));
+    pluginApi.connectAccount.mockResolvedValue({
+      status: "connected",
+      account: status({ connected: true, identity: "octo-2" }),
+    });
+    render(<PluginAccountRow plugin={plugin(OAUTH)} account={OAUTH} />);
+    fireEvent.click(await enabledButton("Reconnect"));
+    await screen.findByText(/^Connected as octo-2/);
+  });
+
+  it("pastes a token from another machine for its host to keep", async () => {
+    remote.hostId = "host-1";
+    pluginApi.getAccountStatus.mockResolvedValue(status({ kind: "token" }));
+    pluginApi.setAccountToken.mockResolvedValue(
+      status({ kind: "token", connected: true, identity: "octo" })
+    );
+    render(<PluginAccountRow plugin={plugin(TOKEN)} account={TOKEN} />);
+    await screen.findByText("Paste an API token. studio-01 keeps it in the OS keychain");
+    const input = (await screen.findByPlaceholderText("API token")) as HTMLInputElement;
+    await waitFor(() => expect(input.disabled).toBe(false));
+    fireEvent.change(input, { target: { value: "pat-123" } });
+    fireEvent.click(screen.getByRole("button", { name: "Connect" }));
+    await screen.findByText(/^Connected as octo\./);
+    expect(pluginApi.setAccountToken).toHaveBeenCalledWith("acme.tracker", "pat-123", "default");
+  });
+
+  it("still names the host's locked keychain from another machine", async () => {
+    remote.hostId = "host-1";
+    pluginApi.getAccountStatus.mockResolvedValue(status({ secretTier: "locked" }));
+    render(<PluginAccountRow plugin={plugin(OAUTH)} account={OAUTH} />);
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Connect" }).hasAttribute("disabled")).toBe(true)
+    );
+    expect(screen.getByText(/Keychain on studio-01 not available/)).toBeTruthy();
   });
 
   it("stores a pasted token and clears the field", async () => {

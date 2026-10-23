@@ -147,6 +147,28 @@ interface PluginAccountServiceDeps {
   cancelLoopback?: typeof cancelOAuthLoopback;
 }
 
+/**
+ * Where a sign-in's browser runs and its redirect lands. The default is this
+ * machine's own loopback; a window on another machine supplies one that runs
+ * there (`remoteAccountSignIn`). `buildAuthUrl` takes the loopback redirect,
+ * or null for a URL without one that the broker completes itself. Whatever
+ * the broker, the PKCE verifier and the tokens stay here.
+ */
+export interface AccountSignInBroker {
+  start(
+    sessionKey: string,
+    state: string,
+    buildAuthUrl: (redirectUri: string | null) => string
+  ): Promise<AuthorizationCodeLoopbackResult>;
+  cancel(sessionKey: string): void;
+}
+
+/** A sign-in in progress: its identity for the stale check, and how to stop its broker. */
+interface PendingSignIn {
+  flow: symbol;
+  cancel: () => void;
+}
+
 /** One stored connection: the instance whose account file holds it, and its id there. */
 interface ConnectionTarget {
   ownerId: string;
@@ -285,6 +307,8 @@ function connectFailureMessage(result: AuthorizationCodeLoopbackResult): string 
       return "Sign-in timed out before the browser came back to Daintree";
     case "open-external-failed":
       return "Couldn't open the browser to sign in";
+    case "disconnected":
+      return "The window signing in lost its connection to this machine";
     default:
       return "Couldn't start the sign-in";
   }
@@ -322,7 +346,7 @@ export class PluginAccountService {
   /** One token read (and refresh) per connection at a time; concurrent callers share it. */
   private readonly tokenReads = new Map<string, Promise<PluginAccountAccessToken | null>>();
   /** Sign-ins in progress, from the click until the tokens are stored. */
-  private readonly pending = new Map<string, symbol>();
+  private readonly pending = new Map<string, PendingSignIn>();
   private readonly generations = new Map<string, number>();
   /** Bumped when the owning plugin unloads: retires every read that began before it. */
   private readonly epochs = new Map<string, number>();
@@ -527,9 +551,14 @@ export class PluginAccountService {
    * Run the declared OAuth sign-in. Called only from the settings row's click.
    * A second click supersedes a sign-in still in progress, and Cancel or
    * Disconnect ends one at any point until its tokens are stored. Connecting
-   * an already connected account replaces its tokens (Reconnect).
+   * an already connected account replaces its tokens (Reconnect). `broker`
+   * runs the browser half elsewhere: a window on another machine passes one.
    */
-  async connect(pluginId: string, connectionId?: string): Promise<PluginAccountConnectResult> {
+  async connect(
+    pluginId: string,
+    connectionId?: string,
+    broker?: AccountSignInBroker
+  ): Promise<PluginAccountConnectResult> {
     const connection = this.requireConnection(pluginId, connectionId);
     if (connection.kind !== "oauth2") {
       throw new Error(`Plugin "${pluginId}" account takes a pasted token, not a sign-in`);
@@ -541,12 +570,17 @@ export class PluginAccountService {
       };
     }
     const key = connectionStateKey(connection);
+    const sessionKey = SESSION_PREFIX + key;
+    const signIn = broker ?? this.localBroker();
     const flow = Symbol(key);
-    this.pending.set(key, flow);
+    // The sign-in this one supersedes may be brokered by another window,
+    // whose browser half nothing else here would stop.
+    this.pending.get(key)?.cancel();
+    this.pending.set(key, { flow, cancel: () => signIn.cancel(sessionKey) });
     this.deps.onAccountChanged?.(pluginId);
-    const current = () => this.pending.get(key) === flow;
+    const current = () => this.pending.get(key)?.flow === flow;
     try {
-      return await this.runSignIn(connection, connection, current);
+      return await this.runSignIn(connection, connection, current, signIn);
     } finally {
       if (current()) {
         this.pending.delete(key);
@@ -555,23 +589,31 @@ export class PluginAccountService {
     }
   }
 
+  private localBroker(): AccountSignInBroker {
+    return {
+      start: this.deps.startLoopback ?? startAuthorizationCodeLoopback,
+      cancel: this.deps.cancelLoopback ?? cancelOAuthLoopback,
+    };
+  }
+
   private async runSignIn(
     target: ConnectionTarget,
     account: OAuthAccount,
-    current: () => boolean
+    current: () => boolean,
+    broker: AccountSignInBroker
   ): Promise<PluginAccountConnectResult> {
     const verifier = base64Url(randomBytes(32));
     const challenge = base64Url(createHash("sha256").update(verifier).digest());
     const state = base64Url(randomBytes(32));
-    const startLoopback = this.deps.startLoopback ?? startAuthorizationCodeLoopback;
-    const result = await startLoopback(
+    const result = await broker.start(
       SESSION_PREFIX + connectionStateKey(target),
       state,
       (redirectUri) => {
         const url = new URL(account.authorizeUrl);
         url.searchParams.set("response_type", "code");
         url.searchParams.set("client_id", account.clientId);
-        url.searchParams.set("redirect_uri", redirectUri);
+        if (redirectUri === null) url.searchParams.delete("redirect_uri");
+        else url.searchParams.set("redirect_uri", redirectUri);
         if (account.scopes.length > 0) url.searchParams.set("scope", account.scopes.join(" "));
         url.searchParams.set("state", state);
         url.searchParams.set("code_challenge", challenge);
@@ -620,8 +662,10 @@ export class PluginAccountService {
       connectionId:
         connectionId ?? this.declaredConnection(pluginId)?.id ?? DEFAULT_PLUGIN_CONNECTION_ID,
     });
-    if (!this.pending.delete(key)) return;
-    (this.deps.cancelLoopback ?? cancelOAuthLoopback)(SESSION_PREFIX + key);
+    const signIn = this.pending.get(key);
+    if (!signIn) return;
+    this.pending.delete(key);
+    signIn.cancel();
     this.deps.onAccountChanged?.(pluginId);
   }
 
@@ -1350,10 +1394,10 @@ export class PluginAccountService {
       if (listener.consumerId === pluginId) this.listeners.delete(listener);
     }
     let cancelled = false;
-    for (const key of [...this.pending.keys()]) {
+    for (const [key, signIn] of [...this.pending]) {
       if (!ownsStateKey(pluginId, key)) continue;
       this.pending.delete(key);
-      (this.deps.cancelLoopback ?? cancelOAuthLoopback)(SESSION_PREFIX + key);
+      signIn.cancel();
       cancelled = true;
     }
     const connectionIds = new Set(this.declaredConnections(pluginId).map((c) => c.id));

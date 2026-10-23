@@ -59,6 +59,7 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("electron", () => ({
+  app: undefined,
   shell: {
     openExternal: mocks.openExternal,
     showItemInFolder: mocks.showItemInFolder,
@@ -114,6 +115,11 @@ import { CHANNELS } from "../../../ipc/channels.js";
 import { IpcDispatcherImpl } from "../../../ipc/dispatcher.js";
 import type { HybridSplit, RemoteRouter } from "../../../ipc/endpoint.js";
 import { buildRemoteEditorUrl, HYBRID_HOST_LEGS, HYBRID_SPLITS } from "../splits.js";
+import { installAccountSignInRequests } from "../../plugins/accountSignIn.js";
+import {
+  _resetReverseRequestMethodsForTesting,
+  answerReverseRequest,
+} from "../../client/reverseRequests.js";
 import { STORE_KEY_OWNERSHIP } from "../../../storeOwnership.js";
 
 type MergedHydrate = Record<string, unknown> & { appState: Record<string, unknown> };
@@ -934,5 +940,80 @@ describe("opening host files", () => {
     for (const sshTarget of ["-oProxyCommand=x", "host:22", "a b", ""]) {
       expect(buildRemoteEditorUrl({ editorId: "vscode", sshTarget, path: "/a" })).toBeNull();
     }
+  });
+});
+
+describe("plugin account sign-in from a remote window (#14111)", () => {
+  const AUTH_URL =
+    "https://auth.example.com/oauth/authorize?response_type=code&client_id=daintree" +
+    "&state=synthetic-state&code_challenge=synthetic-challenge&code_challenge_method=S256";
+  let loopback: { start: ReturnType<typeof vi.fn>; cancel: ReturnType<typeof vi.fn> };
+  let dispose: () => void;
+
+  beforeEach(() => {
+    _resetReverseRequestMethodsForTesting();
+    loopback = { start: vi.fn(() => new Promise(() => {})), cancel: vi.fn() };
+    dispose = installAccountSignInRequests({ loopback: loopback as never });
+  });
+
+  afterEach(() => {
+    dispose();
+    _resetReverseRequestMethodsForTesting();
+  });
+
+  const hostAsks = () =>
+    answerReverseRequest({
+      hostId: "studio",
+      webContentsId: REMOTE_SENDER,
+      method: "plugin.account-sign-in",
+      payload: { pluginId: "acme.tracker", connectionId: "work", authUrl: AUTH_URL },
+    });
+
+  function connect(remote: () => Promise<unknown>) {
+    return (HYBRID_SPLITS[CHANNELS.PLUGIN_ACCOUNT_CONNECT] as HybridSplit)({
+      hostId: "studio",
+      webContentsId: REMOTE_SENDER,
+      args: ["acme.tracker", "work"],
+      local: vi.fn(),
+      remote,
+    });
+  }
+
+  it("runs Connect on the host, never this machine's own handler", async () => {
+    const forward = vi.fn(() => ({ status: "cancelled" }));
+    const { invoke, listener } = setup(forward, () => undefined);
+    await expect(
+      invoke(CHANNELS.PLUGIN_ACCOUNT_CONNECT, ["acme.tracker", "work"])
+    ).resolves.toEqual({ status: "cancelled" });
+    expect(forward).toHaveBeenCalledWith(CHANNELS.PLUGIN_ACCOUNT_CONNECT, ["acme.tracker", "work"]);
+    expect(listener).not.toHaveBeenCalled();
+    expect(HYBRID_HOST_LEGS).toContain(CHANNELS.PLUGIN_ACCOUNT_CONNECT);
+  });
+
+  it("opens the browser here only while the window's Connect is in flight", async () => {
+    await expect(hostAsks()).rejects.toMatchObject({ code: "PERMISSION" });
+
+    let finish!: (value: unknown) => void;
+    const connecting = connect(() => new Promise((resolve) => (finish = resolve)));
+    void hostAsks();
+    expect(loopback.start).toHaveBeenCalledTimes(1);
+    const sessionKey = loopback.start.mock.calls[0]![0];
+
+    finish({ status: "connected" });
+    await expect(connecting).resolves.toEqual({ status: "connected" });
+    expect(loopback.cancel).toHaveBeenCalledWith(sessionKey);
+    await expect(hostAsks()).rejects.toMatchObject({ code: "PERMISSION" });
+  });
+
+  it("takes the loopback down when the link drops under the call", async () => {
+    let fail!: (error: Error) => void;
+    const connecting = connect(() => new Promise((_resolve, reject) => (fail = reject)));
+    void hostAsks();
+    const sessionKey = loopback.start.mock.calls[0]![0];
+
+    fail(Object.assign(new Error("link closed"), { code: "OUTCOME_UNKNOWN" }));
+    await expect(connecting).rejects.toThrow("link closed");
+    expect(loopback.cancel).toHaveBeenCalledWith(sessionKey);
+    await expect(hostAsks()).rejects.toMatchObject({ code: "PERMISSION" });
   });
 });

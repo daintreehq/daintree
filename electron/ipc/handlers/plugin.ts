@@ -223,6 +223,7 @@ import {
 import { observeIpcEnvelopeRejections } from "../envelopeRejections.js";
 import { getIpcDispatcher } from "../dispatcher.js";
 import { isRemoteEndpointHandle } from "../endpoint.js";
+import { remoteAccountSignIn } from "../../services/plugin/remoteAccountSignIn.js";
 import { panelLifecycleSourceFor } from "./pluginPanelLifecycleSource.js";
 import { getLocalEndpoint } from "../localEndpoint.js";
 import { LOCAL_HOST_ID } from "../../../shared/types/remoteHosts.js";
@@ -2440,18 +2441,10 @@ async function handleAccountList(
 }
 
 /**
- * Signing in needs the browser and the keychain on one machine. The channels
- * are hybrid with no split, so the dispatcher already refuses a remote-bound
- * window; this holds for a link call that reaches the handler anyway.
+ * The sign-in runs here and the tokens are kept here. A window on another
+ * machine signs in with that machine's browser: its own Shell catches the
+ * redirect and hands back only the code.
  */
-function assertLocalSignIn(ctx: IpcContext): void {
-  if (isRemoteCaller(ctx)) {
-    throw new Error(
-      "Connect this account from a Daintree window on the machine the plugin runs on"
-    );
-  }
-}
-
 async function handleAccountConnect(
   ctx: IpcContext,
   pluginId: string,
@@ -2459,8 +2452,10 @@ async function handleAccountConnect(
 ): Promise<PluginAccountConnectResult> {
   assertSenderOwnsAccount(ctx, pluginId);
   assertConnectionId(connectionId);
-  assertLocalSignIn(ctx);
-  return (await getPluginService()).connectAccountFromUi(pluginId, connectionId);
+  const broker = isRemoteCaller(ctx)
+    ? remoteAccountSignIn(ctx.endpoint, pluginId, connectionId)
+    : undefined;
+  return (await getPluginService()).connectAccountFromUi(pluginId, connectionId, broker);
 }
 
 async function handleAccountCancelConnect(
@@ -2481,7 +2476,6 @@ async function handleAccountSetToken(
 ): Promise<PluginAccountUiStatus> {
   assertSenderOwnsAccount(ctx, pluginId);
   assertConnectionId(connectionId);
-  assertLocalSignIn(ctx);
   return (await getPluginService()).setAccountTokenFromUi(pluginId, token, connectionId);
 }
 
