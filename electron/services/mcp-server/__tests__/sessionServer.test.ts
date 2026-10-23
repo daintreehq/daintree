@@ -27,7 +27,7 @@ import type { SessionStore } from "../sessionStore.js";
 import type { McpSessionOrigin } from "../../../../shared/types/ipc/mcpServer.js";
 import { SessionStore as RealSessionStore } from "../sessionStore.js";
 import { GrantCache } from "../grantCache.js";
-import { ResourceOwnershipLedger } from "../resourceOwnership.js";
+import { ResourceOwnershipLedger, relayOwnershipPrincipal } from "../resourceOwnership.js";
 import {
   AssistantTargetError,
   type AssistantCaller,
@@ -4494,7 +4494,7 @@ describe("help.displayImage short-circuit (#9828)", () => {
     expect(store.nextFigureNumber("help-nv")).toBe(1);
   });
 
-  it("refuses every tool for the global assistant, whichever handler would answer (#14159)", async () => {
+  it("refuses the global assistant every tool but its root ones, whichever handler would answer (#14159)", async () => {
     const dispatchAction = vi.fn();
     const store = helpSessionStore("sess-global", "help-global");
     store.sessionViewlessHelpMap.set("sess-global", GLOBAL_ASSISTANT_ID);
@@ -4608,6 +4608,35 @@ describe("host control tools (#13493)", () => {
     expect(result.isError).toBeFalsy();
     expect(result.structuredContent).toEqual(LISTED);
     expect(access.run).toHaveBeenCalledWith("host.list", {});
+    expect(deps.dispatchAction).not.toHaveBeenCalled();
+  });
+
+  it("lists and runs only host.list and host.call for the global assistant (#14161)", async () => {
+    const { deps, access } = hubDeps({ reachable: true, tier: "full" });
+    deps.sessionStore.sessionViewlessHelpMap.set("sess", GLOBAL_ASSISTANT_ID);
+    vi.mocked(deps.requestManifest).mockResolvedValue([
+      makeManifestEntry("host.list"),
+      makeManifestEntry("host.call"),
+      makeManifestEntry("host.ensureProject"),
+      makeManifestEntry("terminal.list"),
+      makeManifestEntry("terminal.sendCommandOwned"),
+    ]);
+    const server = createSessionServer("sess", deps);
+    await server.connect(makeMockTransport());
+
+    expect((await listTools(server)).tools.map((t) => t.name).sort()).toEqual([
+      "host.call",
+      "host.list",
+    ]);
+    const listed = await callTool(server, { name: "host.list", arguments: {} });
+    expect(listed.isError).toBeFalsy();
+    expect(access.run).toHaveBeenCalledWith("host.list", {});
+    for (const name of ["host.ensureProject", "terminal.list", "terminal.sendCommandOwned"]) {
+      const refused = await callTool(server, { name, arguments: { terminalId: "t-1" } });
+      expect(refused.isError).toBe(true);
+      expect(toolErrorPayload(refused).code).toBe("NO_FRONTEND_ATTACHED");
+    }
+    expect(access.run).toHaveBeenCalledTimes(1);
     expect(deps.dispatchAction).not.toHaveBeenCalled();
   });
 
@@ -10638,6 +10667,51 @@ describe("session-scoped resource ownership (#11909)", () => {
 
       expect(result.isError).toBe(true);
       expect(errorText(result)).toContain("RESOURCE_NOT_OWNED");
+      expect(dispatchAction).not.toHaveBeenCalledWith(
+        "terminal.close",
+        expect.anything(),
+        expect.anything()
+      );
+    });
+
+    // #14161 — the global assistant's host.call session in a project is bound
+    // to its local relay principal, which is what its hand-over is held by:
+    // input, interrupt and reading, never the close.
+    it("gives the global assistant's session in a project only the non-destructive standing", async () => {
+      const store = makeStore();
+      const dispatchAction = listingDispatch();
+      const principal = relayOwnershipPrincipal("local", "help-global");
+      const server = orchestratorSession(store, "s-global-relay", dispatchAction, principal);
+      handOver(store, "terminal-handed", principal);
+      const otherRun = orchestratorSession(
+        store,
+        "s-other-relay",
+        dispatchAction,
+        relayOwnershipPrincipal("local", "help-global-2")
+      );
+
+      const sent = await callTool(server, {
+        name: "terminal.sendCommandOwned",
+        arguments: { terminalId: "terminal-handed", command: "go" },
+      });
+      const interrupted = await callTool(server, {
+        name: "terminal.interruptOwned",
+        arguments: { terminalId: "terminal-handed" },
+      });
+      const closed = await callTool(server, {
+        name: "terminal.closeOwned",
+        arguments: { terminalId: "terminal-handed" },
+      });
+      const replacement = await callTool(otherRun, {
+        name: "terminal.sendCommandOwned",
+        arguments: { terminalId: "terminal-handed", command: "go" },
+      });
+
+      expect(sent.isError).toBeUndefined();
+      expect(interrupted.isError).toBeUndefined();
+      expect(errorText(closed)).toContain("RESOURCE_NOT_OWNED");
+      expect(errorText(replacement)).toContain("RESOURCE_NOT_OWNED");
+      expect(dispatchAction).toHaveBeenCalledTimes(2);
       expect(dispatchAction).not.toHaveBeenCalledWith(
         "terminal.close",
         expect.anything(),

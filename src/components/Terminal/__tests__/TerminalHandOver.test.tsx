@@ -44,6 +44,7 @@ vi.mock("@/store", () => ({
 }));
 
 import {
+  GLOBAL_ASSISTANT_CANDIDATE,
   TerminalDrivenByBadge,
   TerminalHandOverDialog,
   TerminalHandOverMenuItems,
@@ -115,6 +116,37 @@ describe("TerminalHandOverMenuItems", () => {
     expect(screen.getByText("Coordinator")).toBeTruthy();
   });
 
+  it("names the global assistant as a candidate and as the driver it was handed to (#14161)", () => {
+    const onRequestHandOver = vi.fn();
+    const { unmount } = render(
+      <TerminalHandOverMenuItems
+        terminalId="terminal-1"
+        candidateIds={[GLOBAL_ASSISTANT_CANDIDATE]}
+        onRequestHandOver={onRequestHandOver}
+      />
+    );
+    fireEvent.click(screen.getByText("Global Assistant"));
+    expect(onRequestHandOver).toHaveBeenCalledWith(GLOBAL_ASSISTANT_CANDIDATE);
+    unmount();
+
+    useTerminalAdoptionStore.getState().applyAdoptions([
+      {
+        terminalId: "terminal-1",
+        orchestratorPaneId: "terminal-global",
+        recipient: "global-assistant",
+        adoptedAt: 1,
+      },
+    ]);
+    render(
+      <TerminalHandOverMenuItems
+        terminalId="terminal-1"
+        candidateIds={[]}
+        onRequestHandOver={vi.fn()}
+      />
+    );
+    expect(screen.getByText("Take back from Global Assistant")).toBeTruthy();
+  });
+
   it("offers only the take-back while the terminal is handed over", () => {
     handTo("pane-orch");
     render(
@@ -145,6 +177,29 @@ describe("useOrchestratorCandidates", () => {
 
     act(() => result.current.refresh());
 
+    await waitFor(() => expect(result.current.candidateIds).toEqual(["pane-orch"]));
+  });
+
+  it("offers the global assistant after the panes, only while it runs (#14161)", async () => {
+    listOrchestratorPanes.mockResolvedValue(["pane-orch"]);
+    const getGlobalAssistantState = vi.fn().mockResolvedValue({ phase: "running" });
+    Object.defineProperty(window, "electron", {
+      value: {
+        mcpServer: { adoptTerminal, releaseTerminalAdoption, listOrchestratorPanes },
+        help: { getGlobalAssistantState },
+      },
+      writable: true,
+      configurable: true,
+    });
+    const { result } = renderHook(() => useOrchestratorCandidates("terminal-1"));
+
+    act(() => result.current.refresh());
+    await waitFor(() =>
+      expect(result.current.candidateIds).toEqual(["pane-orch", GLOBAL_ASSISTANT_CANDIDATE])
+    );
+
+    getGlobalAssistantState.mockResolvedValue({ phase: "absent" });
+    act(() => result.current.refresh());
     await waitFor(() => expect(result.current.candidateIds).toEqual(["pane-orch"]));
   });
 
@@ -240,6 +295,29 @@ describe("TerminalHandOverDialog", () => {
     expect(confirm.getAttribute("aria-disabled")).toBe("true");
     fireEvent.click(confirm);
     expect(adoptTerminal).toHaveBeenCalledTimes(1);
+  });
+
+  it("hands over to the global assistant by recipient, never by a pane id (#14161)", async () => {
+    adoptTerminal.mockResolvedValue({ status: "refused", reason: "not-orchestrator" });
+    render(
+      <TerminalHandOverDialog
+        terminalId="terminal-1"
+        orchestratorPaneId={GLOBAL_ASSISTANT_CANDIDATE}
+        onClose={vi.fn()}
+      />
+    );
+    expect(document.body.textContent).toContain("Hand over Worker to Global Assistant?");
+    expect(document.body.textContent).toContain("can't close the terminal");
+
+    fireEvent.click(screen.getByRole("button", { name: "Hand over terminal" }));
+
+    await waitFor(() =>
+      expect(document.body.textContent).toContain("The Global Assistant isn't running anymore")
+    );
+    expect(adoptTerminal).toHaveBeenCalledWith({
+      terminalId: "terminal-1",
+      recipient: "global-assistant",
+    });
   });
 
   it("reports a failed call instead of throwing it away", async () => {

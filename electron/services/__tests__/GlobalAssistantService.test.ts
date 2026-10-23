@@ -310,6 +310,29 @@ describe("GlobalAssistantService", () => {
       expect(deps.revoke).not.toHaveBeenCalled();
     });
 
+    it("asks questions in the view holding input, else the latest reader, and nowhere once none is left (#14161)", async () => {
+      const service = new GlobalAssistantService(makeDeps().deps);
+      service.attach(10, 1);
+      expect(service.presenterWebContentsId()).toBeNull();
+      await service.ensureSession();
+      const b = service.attach(20, 2);
+      service.attach(30, 3);
+      expect(service.presenterWebContentsId()).toBe(10);
+      service.claimInput(b, 20);
+      expect(service.presenterWebContentsId()).toBe(20);
+      service.releaseInput(b, 20);
+      expect(service.presenterWebContentsId()).toBe(30);
+      service.detachWebContents(30);
+      service.detachWebContents(20);
+      service.detachWebContents(10);
+      expect(service.presenterWebContentsId()).toBeNull();
+
+      const running = service.getRunningSession();
+      expect(running?.terminalId).toBe(service.getState().terminalId);
+      await service.discard();
+      expect(service.getRunningSession()).toBeNull();
+    });
+
     it("a view eviction or window close drops readers and leaves the session running", async () => {
       const { deps } = makeDeps();
       const service = new GlobalAssistantService(deps);

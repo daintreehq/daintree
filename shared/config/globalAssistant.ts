@@ -1,3 +1,5 @@
+import { HOST_CALL_TOOL, HOST_LIST_TOOL } from "../types/hostControl.js";
+
 /**
  * The one Daintree Assistant an installation may run outside any project
  * (#14159). It is not a project lane: it has no project, no view and no slot
@@ -16,3 +18,15 @@ export const GLOBAL_ASSISTANT_DIR_NAME = "global-assistant";
 export function isGlobalAssistantId(projectId: string): boolean {
   return projectId === GLOBAL_ASSISTANT_ID;
 }
+
+/**
+ * Everything the global assistant may call directly (#14161). It names no
+ * project, so every project tool reaches it only through `host.call`, where
+ * the target host admits it as it would another machine's assistant: the owned
+ * tools alone act, on what it launched there or was handed. `host.ensureProject`
+ * acts on the caller's own project, which it has none of.
+ */
+export const GLOBAL_ASSISTANT_TOOL_IDS: ReadonlySet<string> = new Set([
+  HOST_LIST_TOOL,
+  HOST_CALL_TOOL,
+]);

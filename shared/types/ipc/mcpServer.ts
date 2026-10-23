@@ -612,6 +612,8 @@ export interface McpRevokeNativeGrantResult {
 export interface TerminalAdoptionEntry {
   terminalId: string;
   orchestratorPaneId: string;
+  /** Handed to this machine's global assistant (#14161); `orchestratorPaneId` is then its PTY. */
+  recipient?: "global-assistant";
   adoptedAt: number;
 }
 
@@ -625,9 +627,12 @@ export interface TerminalAdoptionEntry {
  * - `launched-by-orchestrator` — the chosen pane launched the terminal and already drives it.
  * - `launched-by-another` — another client launched the terminal and already drives it.
  * - `already-handed` — the terminal is already handed to another pane.
+ * - `assistant-terminal` — the terminal is a Daintree Assistant, reached only
+ *   through the assistant tools (#14161).
  */
 export type TerminalAdoptionRefusal =
   | "self"
+  | "assistant-terminal"
   | "not-orchestrator"
   | "terminal-gone"
   | "other-project"

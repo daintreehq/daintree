@@ -42,6 +42,12 @@ export interface TerminalAdoptionRecord {
    * process, and ends the hand-over; one for this launch does not.
    */
   launchGeneration?: number;
+  /**
+   * Set when the terminal went to this machine's global assistant (#14161)
+   * rather than a pane: `orchestratorPaneId` is then the assistant's own PTY,
+   * which no view shows as a panel.
+   */
+  recipient?: "global-assistant";
   adoptedAt: number;
 }
 
@@ -67,6 +73,7 @@ export class TerminalAdoptionLedger {
     principalId: string;
     workspaceId?: string;
     launchGeneration?: number;
+    recipient?: "global-assistant";
     now?: number;
   }): TerminalAdoptionOutcome {
     const owner = principalOwnerKey(params.principalId);
@@ -82,6 +89,7 @@ export class TerminalAdoptionLedger {
       ...(params.launchGeneration !== undefined
         ? { launchGeneration: params.launchGeneration }
         : {}),
+      ...(params.recipient !== undefined ? { recipient: params.recipient } : {}),
       adoptedAt: params.now ?? Date.now(),
     };
     this.byTerminal.set(params.terminalId, { record, owner });

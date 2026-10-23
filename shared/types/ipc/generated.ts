@@ -1976,7 +1976,11 @@ export interface GeneratedIpcInvokeMap {
     result: void;
   };
   "mcp-server:adopt-terminal": {
-    args: [payload: { terminalId: string; orchestratorPaneId: string }];
+    args: [
+      payload:
+        | { terminalId: string; orchestratorPaneId: string }
+        | { terminalId: string; recipient: "global-assistant" },
+    ];
     result: import("./mcpServer.js").TerminalAdoptionResult;
   };
   "mcp-server:clear-audit-log": {

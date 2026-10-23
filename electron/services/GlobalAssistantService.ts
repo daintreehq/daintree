@@ -124,6 +124,25 @@ export class GlobalAssistantService {
     };
   }
 
+  /** The live run's session and PTY, or null while none is confirmed running. */
+  getRunningSession(): { sessionId: string; terminalId: string } | null {
+    return this.run ? { sessionId: this.run.sessionId, terminalId: this.run.terminalId } : null;
+  }
+
+  /**
+   * The view a question for the running assistant is put to the person in
+   * (#14161): the one that holds its input, else the latest to attach. Null
+   * while no view shows it, so nothing is asked in a window that doesn't.
+   */
+  presenterWebContentsId(): number | null {
+    if (!this.run) return null;
+    const owner = this.inputOwner !== null ? this.attachments.get(this.inputOwner) : undefined;
+    if (owner) return owner.webContentsId;
+    let latest: Attachment | undefined;
+    for (const attachment of this.attachments.values()) latest = attachment;
+    return latest?.webContentsId ?? null;
+  }
+
   onChange(listener: (state: GlobalAssistantState) => void): () => void {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
