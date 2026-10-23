@@ -696,7 +696,10 @@ describe("pluginCapability attention views switch (#13821)", () => {
     vi
       .mocked(broadcastToRenderer)
       .mock.calls.filter(
-        ([, payload]) => (payload as { name?: string })?.name === "plugin:provenance-changed"
+        ([channel, payload]) =>
+          channel === "events:push" &&
+          JSON.stringify(payload) ===
+            JSON.stringify({ name: "plugin:provenance-changed", payload: {} })
       ).length;
 
   beforeEach(() => vi.mocked(broadcastToRenderer).mockClear());

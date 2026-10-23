@@ -209,4 +209,55 @@ describe("PilotView plugin panel rows (#13821)", () => {
 
     expect(screen.queryByTestId("pilot-plugin-row")).toBeNull();
   });
+
+  it("stays open when the panel could not take focus", async () => {
+    seed([]);
+    pluginRows.current = [pluginRow()];
+    openPanelMock.mockResolvedValueOnce(false);
+    render(<PilotView />);
+
+    fireEvent.keyDown(screen.getByTestId("pilot-search"), { key: "Enter" });
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(openPanelMock).toHaveBeenCalledWith("board-1");
+    expect(usePilotStore.getState().isOpen).toBe(true);
+  });
+
+  it("keeps plugin panels last when an agent group arrives during a pointer hold", () => {
+    seed([run({ runId: "a", workspaceId: "p1", agentState: "working", since: NOW - 60_000 })]);
+    pluginRows.current = [pluginRow()];
+    render(<PilotView />);
+
+    // Aim the pointer at the plugin row: the order is now held.
+    fireEvent.pointerMove(screen.getByTestId("pilot-plugin-row"));
+    act(() =>
+      seed([
+        run({ runId: "a", workspaceId: "p1", agentState: "working", since: NOW - 60_000 }),
+        run({
+          runId: "b",
+          workspaceId: "p2",
+          agentState: "waiting",
+          waitingReason: "approval",
+          since: NOW - 60_000,
+        }),
+      ])
+    );
+
+    const labels = screen.getAllByRole("group").map((group) => group.getAttribute("aria-label"));
+    expect(labels[labels.length - 1]).toMatch(/^Plugin panels/);
+    expect(labels.some((label) => label?.startsWith("spike"))).toBe(true);
+  });
+
+  it("names plugin panels apart in the state segments, and hues them by their band", () => {
+    seed([
+      run({ runId: "a", agentState: "waiting", waitingReason: "approval", since: NOW - 60_000 }),
+    ]);
+    pluginRows.current = [pluginRow({ band: "blocked", shown: "failed" })];
+    render(<PilotView />);
+
+    const attention = screen.getByRole("radio", { name: /^Attention, / });
+    expect(attention.getAttribute("aria-label")).toContain("1 agent, 1 plugin panel");
+  });
 });

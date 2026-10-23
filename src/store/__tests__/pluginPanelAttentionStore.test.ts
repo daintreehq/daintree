@@ -105,33 +105,47 @@ describe("pluginPanelAttentionStore grants", () => {
     expect(store().grantedPluginIds.has("acme")).toBe(true);
   });
 
-  it("drops a revoked plugin's parks and snoozes with its grant", () => {
-    store().setGranted("acme", true);
-    store().setGranted("other", true);
+  it("drops a revoked plugin's parks and snoozes with its grant", async () => {
+    listPanelAttention.mockResolvedValueOnce(["acme", "other"]).mockResolvedValueOnce(["other"]);
+    store().init();
+    await flush();
     store().park("p1", "acme", 3);
     store().park("p2", "other", 4);
 
-    store().setGranted("acme", false);
+    onProvenance!();
+    await flush();
 
     expect(store().shelfByPanelId.p1).toBeUndefined();
     expect(store().shelfByPanelId.p2).toMatchObject({ kind: "parked", pluginId: "other" });
   });
 
-  it("holds a switch saved here against an older pull still in flight", async () => {
-    let resolveOld: (ids: string[]) => void = () => {};
-    listPanelAttention.mockReturnValueOnce(new Promise((resolve) => (resolveOld = resolve)));
+  it("retries a failed first pull when the window takes focus", async () => {
+    listPanelAttention.mockRejectedValueOnce(new Error("down")).mockResolvedValueOnce(["acme"]);
     store().init();
+    await flush();
+    expect(store().grantedPluginIds.size).toBe(0);
 
-    store().setGranted("acme", true);
-    resolveOld([]);
+    window.dispatchEvent(new Event("focus"));
     await flush();
 
     expect(store().grantedPluginIds.has("acme")).toBe(true);
+    expect(listPanelAttention).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not pull again on focus once a pull has succeeded", async () => {
+    listPanelAttention.mockResolvedValue(["acme"]);
+    store().init();
+    await flush();
+
+    window.dispatchEvent(new Event("focus"));
+    await flush();
+
+    expect(listPanelAttention).toHaveBeenCalledTimes(1);
   });
 });
 
 describe("pluginPanelAttentionStore shelves", () => {
-  beforeEach(() => store().setGranted("acme", true));
+  beforeEach(() => usePluginPanelAttentionStore.setState({ grantedPluginIds: new Set(["acme"]) }));
 
   it("parks a report by revision and lifts it on release", () => {
     store().park("p1", "acme", 7);
@@ -160,6 +174,22 @@ describe("pluginPanelAttentionStore shelves", () => {
 
     vi.advanceTimersByTime(15 * 60_000);
     expect(store().shelfByPanelId.p2).toBeUndefined();
+  });
+
+  it("wakes a snooze that ran out while the machine slept, on the next focus", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_700_000_000_000);
+    listPanelAttention.mockResolvedValue(["acme"]);
+    store().init();
+    await flush();
+    store().snooze("p1", "acme", "15m");
+
+    // Wall clock moves on, timers do not: what a sleeping machine looks like.
+    vi.setSystemTime(1_700_000_000_000 + 60 * 60_000);
+    expect(store().shelfByPanelId.p1?.kind).toBe("snoozed");
+    window.dispatchEvent(new Event("focus"));
+
+    expect(store().shelfByPanelId.p1).toBeUndefined();
   });
 
   it("drops a closed panel's shelf", () => {

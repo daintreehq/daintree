@@ -149,8 +149,20 @@ function segmentQualifier(
 const SEGMENTS: readonly PilotBandFilter[] = ["all", ...PILOT_BAND_FILTERS];
 
 /** A segment's spoken name, carrying whatever its glyph choice encodes. */
-function segmentName(label: string, count: number, qualifier: string | null): string {
-  const base = `${label}, ${pluralize(count, "agent")}`;
+function segmentName(
+  label: string,
+  count: number,
+  qualifier: string | null,
+  pluginCount: number
+): string {
+  // A plugin panel is never counted as an agent (#13821).
+  const subject =
+    pluginCount === 0
+      ? pluralize(count, "agent")
+      : count === pluginCount
+        ? pluralize(pluginCount, "plugin panel")
+        : `${pluralize(count - pluginCount, "agent")}, ${pluralize(pluginCount, "plugin panel")}`;
+  const base = `${label}, ${subject}`;
   return qualifier === null ? base : `${base}, ${qualifier}`;
 }
 
@@ -158,6 +170,8 @@ export interface PilotFilterBarProps {
   value: PilotBandFilter;
   /** Rows per segment in the query-filtered fleet, so a count matches the list. */
   counts: Readonly<PilotBandFilterCounts>;
+  /** How many of `counts` are plugin panel rows, so a segment's name can say so. */
+  pluginCounts?: Readonly<PilotBandFilterCounts>;
   /**
    * Per-band counts over the same population, which is what decides whether a
    * mixed segment has earned its hue. A count alone can't: "Finished" holding
@@ -197,6 +211,7 @@ export interface PilotFilterBarProps {
 export function PilotFilterBar({
   value,
   counts,
+  pluginCounts,
   bands,
   onChange,
   onFocusChange,
@@ -291,7 +306,7 @@ export function PilotFilterBar({
             // segment that escalates to the danger mark and then announces a
             // flat "Needs you, 2 agents" has put the worse half of what it
             // holds into a channel a screen reader cannot reach.
-            aria-label={segmentName(label, count, qualifier)}
+            aria-label={segmentName(label, count, qualifier, pluginCounts?.[segment] ?? 0)}
             ref={(el) => {
               refs.current.set(segment, el);
             }}

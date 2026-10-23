@@ -487,7 +487,10 @@ describe("ProjectPluginDetailPane attention views switch (#13821)", () => {
       configurable: true,
       value: {
         plugin: { activateStagedProjectPlugin, setProjectPluginTrust, reloadProjectPlugins },
-        pluginCapability: { getPanelAttention, setPanelAttention: vi.fn() },
+        pluginCapability: {
+          getPanelAttention,
+          setPanelAttention: vi.fn((input: { enabled: boolean }) => Promise.resolve(input.enabled)),
+        },
       },
     });
   });

@@ -202,7 +202,9 @@ export function pluginAttentionByWorktree(
   const out = new Map<string, PluginWorktreeAttention>();
   for (const row of rows) {
     if (row.worktreeId === null) continue;
-    const working = row.band === "running";
+    // Read off the report, not the band: a park or snooze shelves a plugin's
+    // demands, not its work, exactly as it does an agent's.
+    const working = row.shown === "working";
     const attention = ATTENTION_FILTER_BANDS.has(row.band);
     const finished = FINISHED_FILTER_BANDS.has(row.band);
     if (!working && !attention && !finished) continue;

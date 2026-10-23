@@ -198,17 +198,28 @@ describe("plugin row predicates and worktree facts", () => {
     });
   });
 
-  it("contributes nothing for a parked or snoozed row", () => {
-    const panels = new Map([["a", panel("a")]]);
+  it("drops a shelved row's demand but keeps its work", () => {
+    const panels = new Map([
+      ["a", panel("a", { worktreeId: "wt-1" })],
+      ["b", panel("b", { worktreeId: "wt-2" })],
+    ]);
     const rows = derivePluginAttentionRows(
       inputs({
         panels,
         reporterFor: () => "acme",
-        activityByPanelId: { a: { acme: report("waiting", 7) } },
-        shelfByPanelId: { a: { kind: "parked", pluginId: "acme", revision: 7, at: NOW } },
+        activityByPanelId: {
+          a: { acme: report("waiting", 7) },
+          b: { acme: report("working", 8) },
+        },
+        shelfByPanelId: {
+          a: { kind: "parked", pluginId: "acme", revision: 7, at: NOW },
+          b: { kind: "snoozed", pluginId: "acme", until: NOW + 60_000, at: NOW },
+        },
       })
     );
-    expect(rows[0]?.band).toBe("parked");
-    expect(pluginAttentionByWorktree(rows).size).toBe(0);
+    expect(rows.map((row) => row.band)).toEqual(["parked", "snoozed"]);
+    const byWorktree = pluginAttentionByWorktree(rows);
+    expect(byWorktree.has("wt-1")).toBe(false);
+    expect(byWorktree.get("wt-2")).toMatchObject({ working: true, attention: false });
   });
 });

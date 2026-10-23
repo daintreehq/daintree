@@ -49,7 +49,6 @@ import {
   ContextMenu,
   ContextMenuContent,
   ContextMenuItem,
-  ContextMenuSeparator,
   ContextMenuSub,
   ContextMenuSubContent,
   ContextMenuSubTrigger,
@@ -836,9 +835,9 @@ function PluginAttentionItem({ kind, row, worktreeName, onActivate }: PluginAtte
           </div>
         </div>
       </ContextMenuTrigger>
+      {/* No "Open panel" entry: the row itself opens it, and opening from here
+          would race the menu's focus restore against the panel taking focus. */}
       <ContextMenuContent>
-        <ContextMenuItem onSelect={() => onActivate(row)}>Open panel</ContextMenuItem>
-        <ContextMenuSeparator />
         <ContextMenuSub>
           <ContextMenuSubTrigger>
             <Clock className={MENU_ICON_CLASS} aria-hidden="true" />

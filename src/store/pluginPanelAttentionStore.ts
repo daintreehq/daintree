@@ -25,7 +25,8 @@ export const PLUGIN_ATTENTION_SNOOZE_OPTIONS: readonly PluginAttentionSnoozeOpti
  * - `grantedPluginIds`: plugin instances the user switched on in the Plugin
  *   Manager. Pulled from main, and pulled again on every provenance change, which
  *   is what the switch announces. Empty until known and empty on a failed pull:
- *   a plugin only reaches these surfaces on a grant positively in force.
+ *   a plugin only reaches these surfaces on a grant positively in force. A
+ *   failed pull is retried the next time the window takes focus.
  * - `shelfByPanelId`: the user's parks and snoozes on plugin rows. This view's
  *   own and never persisted, like the reports they shelve; they never touch an
  *   agent's park or snooze, which main owns.
@@ -35,11 +36,6 @@ interface PluginPanelAttentionState {
   shelfByPanelId: Readonly<Record<string, PluginAttentionShelf>>;
   /** Idempotent: pulls the granted set and follows changes to it. */
   init: () => void;
-  /**
-   * Record a switch this view just saved, ahead of the broadcast that tells every
-   * view. A revoke also drops the plugin's shelves.
-   */
-  setGranted: (pluginId: string, enabled: boolean) => void;
   /** Park the report at `revision` until the plugin reports something new. */
   park: (panelId: string, pluginId: string, revision: number) => void;
   snooze: (panelId: string, pluginId: string, option: PluginAttentionSnoozeOption) => void;
@@ -56,6 +52,7 @@ let unsubscribe: (() => void) | null = null;
 // Only the newest pull may land, so a slow older response cannot bring back a
 // grant a later one saw revoked.
 let pullSeq = 0;
+let lastPullFailed = false;
 let expiryTimer: ReturnType<typeof setTimeout> | null = null;
 
 function sameSet(a: ReadonlySet<string>, b: ReadonlySet<string>): boolean {
@@ -104,13 +101,16 @@ export const usePluginPanelAttentionStore = create<PluginPanelAttentionState>((s
   const pullGrants = async () => {
     const seq = ++pullSeq;
     let granted: ReadonlySet<string> = EMPTY_GRANTS;
+    let failed = false;
     try {
       const ids = await window.electron.pluginCapability.listPanelAttention();
       granted = new Set(ids);
     } catch (err) {
+      failed = true;
       logError("Failed to load plugin attention grants", err);
     }
     if (seq !== pullSeq) return;
+    lastPullFailed = failed;
     const current = get();
     if (sameSet(granted, current.grantedPluginIds)) return;
     set({
@@ -136,25 +136,16 @@ export const usePluginPanelAttentionStore = create<PluginPanelAttentionState>((s
       }
       initialized = true;
       const offProvenance = plugin.onProvenanceChanged(() => void pullGrants());
-      window.addEventListener("focus", prune);
+      const onFocus = () => {
+        prune();
+        if (lastPullFailed) void pullGrants();
+      };
+      window.addEventListener("focus", onFocus);
       unsubscribe = () => {
         offProvenance();
-        window.removeEventListener("focus", prune);
+        window.removeEventListener("focus", onFocus);
       };
       void pullGrants();
-    },
-    setGranted: (pluginId, enabled) => {
-      const current = get();
-      if (current.grantedPluginIds.has(pluginId) === enabled) return;
-      const granted = new Set(current.grantedPluginIds);
-      if (enabled) granted.add(pluginId);
-      else granted.delete(pluginId);
-      // A newer pull supersedes this, and an older one in flight must not undo it.
-      pullSeq++;
-      set({
-        grantedPluginIds: granted,
-        shelfByPanelId: liveShelves(current.shelfByPanelId, granted, Date.now()),
-      });
     },
     park: (panelId, pluginId, revision) => {
       set((state) => ({
@@ -195,6 +186,7 @@ export function _resetPluginPanelAttentionStoreForTest(): void {
   unsubscribe = null;
   initialized = false;
   pullSeq = 0;
+  lastPullFailed = false;
   if (expiryTimer !== null) clearTimeout(expiryTimer);
   expiryTimer = null;
   usePluginPanelAttentionStore.setState({ grantedPluginIds: EMPTY_GRANTS, shelfByPanelId: {} });

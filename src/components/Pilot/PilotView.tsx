@@ -120,8 +120,12 @@ function applyPilotOrder<T extends PilotGroupCore>(groups: readonly T[], order: 
   const rankOf = (index: Map<string, number>, id: string) =>
     index.get(id) ?? Number.MAX_SAFE_INTEGER;
 
+  // Plugin panels trail every agent group whatever the capture saw: an agent
+  // group that arrives during the hold would otherwise land below them (#13821).
+  const pluginLast = (group: PilotGroupCore) => (group.axis === "plugin" ? 1 : 0);
   const ordered = [...groups].sort(
-    (a, b) => rankOf(groupIndex, a.groupId) - rankOf(groupIndex, b.groupId)
+    (a, b) =>
+      pluginLast(a) - pluginLast(b) || rankOf(groupIndex, a.groupId) - rankOf(groupIndex, b.groupId)
   );
 
   return ordered.map((group) => {
@@ -221,9 +225,6 @@ function quietPhrase(count: number): string {
  * second row of its own.
  */
 const ROW_TONE = "text-text-secondary";
-
-/** An unselected row's title, a step above the row's resting tone. */
-const TITLE_TONE = "text-daintree-text/85";
 
 /**
  * A project, as a heading — never a row, and never a control.
@@ -362,9 +363,6 @@ function GroupHeader({
   );
 }
 
-/** The glyph tile a non-project heading wears: a worktree's, or the plugin panels'. */
-const HEADER_TILE_CLASS = cn(TILE_BASE, "bg-tint/[0.04] text-muted-foreground");
-
 /**
  * A worktree, as a heading — the same structure a project is, on the other axis.
  *
@@ -383,7 +381,7 @@ function WorktreeGroupHeader({ group }: { group: PilotWorktreeGroup }) {
       data-testid="pilot-worktree-header"
       className="flex w-full items-center gap-2 py-1 pr-3 pl-3 select-none"
     >
-      <div className={HEADER_TILE_CLASS}>
+      <div className={cn(TILE_BASE, "bg-tint/[0.04] text-muted-foreground")}>
         <FolderGit2 className="h-2.5 w-2.5" aria-hidden="true" />
       </div>
 
@@ -410,7 +408,7 @@ function PluginGroupHeader({ group }: { group: PilotPluginGroup }) {
       data-testid="pilot-plugin-header"
       className="flex w-full items-center gap-2 py-1 pr-3 pl-3 select-none"
     >
-      <div className={HEADER_TILE_CLASS}>
+      <div className={cn(TILE_BASE, "bg-overlay-subtle text-text-secondary")}>
         <Package className="h-2.5 w-2.5" aria-hidden="true" />
       </div>
       <div aria-hidden="true" className="flex min-w-0 flex-1 items-center gap-1.5">
@@ -522,7 +520,7 @@ function RunRow({
       <span
         className={cn(
           "min-w-0 flex-1 truncate text-sm leading-tight",
-          isSelected ? "text-text-primary" : TITLE_TONE
+          isSelected ? "text-text-primary" : "text-daintree-text/85"
         )}
       >
         {row.title}
@@ -663,12 +661,7 @@ function PluginPanelRow({
       <span className="flex size-4 shrink-0 items-center justify-center">
         <TerminalIcon chrome={row.chrome} className="h-4 w-4" brandColor={row.chrome.color} />
       </span>
-      <span
-        className={cn(
-          "min-w-0 flex-1 truncate text-sm leading-tight",
-          isSelected ? "text-text-primary" : TITLE_TONE
-        )}
-      >
+      <span className="min-w-0 flex-1 truncate text-sm leading-tight text-text-primary">
         {row.title}
       </span>
       <span
@@ -1216,14 +1209,19 @@ export function PilotView() {
    * highlight off the row they are on.
    */
   const urgentRowId = useMemo(() => {
+    // Scanned whole rather than off each group's first row, which a pointer
+    // hold can leave unsorted: a plugin row may only start the highlight when
+    // no agent anywhere is asking.
+    const agentAsking = visibleGroups.some(
+      (group) => group.axis !== "plugin" && group.rows.some((row) => isAttentionBand(row.band))
+    );
     let best: { rowId: string; rank: number; since: number } | null = null;
     for (const group of visibleGroups) {
       // Rows are sorted worst-first within a group, so only the first can win.
       const row: PilotRow | undefined = group.rows[0];
       if (row === undefined || !isAttentionBand(row.band)) continue;
-      // A plugin row ranks below every band an agent can be in: it is where the
-      // highlight starts only when no agent is asking for anything.
       if (row.run === undefined) {
+        if (agentAsking) continue;
         const rank = FLEET_BANDS.length + FLEET_BANDS.indexOf(row.band);
         if (best === null || rank < best.rank) {
           best = { rowId: pilotRowId(row), rank, since: Number.MAX_SAFE_INTEGER };
@@ -1684,11 +1682,20 @@ export function PilotView() {
    * has to deliver what it advertises: counted over the whole fleet it would
    * promise five agents and reveal the two that also match the query.
    */
-  const fleet = useMemo(
-    // Agents only: every sentence below names agents, and a plugin panel is
-    // never counted as one. Its demand is named apart in the one sentence a
-    // plugin row can reach.
+  const fleet = useMemo(() => summarizePilotGroups(queryGroups), [queryGroups]);
+
+  /**
+   * The same, agents only. Every sentence below names agents, and a plugin
+   * panel is never counted as one: its demand is named apart in the one
+   * sentence a plugin row can reach (#13821). The filter bar keeps the whole
+   * population, since its segments reveal plugin rows too.
+   */
+  const agentFleet = useMemo(
     () => summarizePilotGroups(queryGroups.filter((group) => group.axis !== "plugin")),
+    [queryGroups]
+  );
+  const pluginFilterCounts = useMemo(
+    () => countPilotBands(queryGroups.filter((group) => group.axis === "plugin")),
     [queryGroups]
   );
 
@@ -1704,13 +1711,13 @@ export function PilotView() {
   const needsYou = filterCounts["needs-you"];
   // The segment counts plugin rows too, so the sentence names them apart and
   // still adds up to exactly what pressing it reveals.
-  const agentNeedsYou = fleet.bands.blocked + fleet.bands["needs-you"];
-  const quiet = fleet.bands.quiet;
-  const review = fleet.bands.review;
+  const agentNeedsYou = agentFleet.bands.blocked + agentFleet.bands["needs-you"];
+  const quiet = agentFleet.bands.quiet;
+  const review = agentFleet.bands.review;
 
   // Counted by band, never off the raw row total: a fleet holding two working
   // agents and six exited ones is not "8 agents running".
-  const live = fleet.bands.running;
+  const live = agentFleet.bands.running;
 
   /**
    * The one thing the footer says, and which segment reproduces it exactly.
@@ -1740,8 +1747,8 @@ export function PilotView() {
                   phrase: `Nothing needs you · ${pluralize(live, "agent")} working`,
                   filter: null,
                 }
-              : fleet.total > 0
-                ? { phrase: `Nothing needs you · ${agentCount(fleet.total)}`, filter: null }
+              : agentFleet.total > 0
+                ? { phrase: `Nothing needs you · ${agentCount(agentFleet.total)}`, filter: null }
                 : { phrase: "", filter: null };
   const fleetPhrase = fleetSummary.phrase;
 
@@ -1978,6 +1985,7 @@ export function PilotView() {
                 <PilotFilterBar
                   value={bandFilter}
                   counts={filterCounts}
+                  pluginCounts={pluginFilterCounts}
                   bands={fleet.bands}
                   onChange={setBandFilter}
                   onFocusChange={setIsFilterFocused}

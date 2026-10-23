@@ -44,6 +44,10 @@ function seedPanels(panels: Record<string, Record<string, unknown>>): void {
   });
 }
 
+function grant(...pluginIds: string[]): void {
+  usePluginPanelAttentionStore.setState({ grantedPluginIds: new Set(pluginIds) });
+}
+
 beforeEach(() => {
   registerKind("acme.board", "acme");
   registerKind("acme.shell", "acme", true);
@@ -70,7 +74,7 @@ describe("usePluginPanelAttentionRows (#13821)", () => {
     const { result } = renderHook(() => usePluginPanelAttentionRows());
     expect(result.current).toEqual([]);
 
-    act(() => usePluginPanelAttentionStore.getState().setGranted("acme", true));
+    act(() => grant("acme"));
     expect(result.current).toHaveLength(1);
     expect(result.current[0]).toMatchObject({
       panelId: "p1",
@@ -82,7 +86,7 @@ describe("usePluginPanelAttentionRows (#13821)", () => {
   });
 
   it("reads a PTY-backed plugin panel's reporter off its plugin kind", () => {
-    usePluginPanelAttentionStore.getState().setGranted("acme", true);
+    grant("acme");
     seedPanels({ t1: { title: "Shell", kind: "terminal", pluginPanelKindId: "acme.shell" } });
     usePluginPanelActivityStore.setState({
       activityByPanelId: { t1: { acme: { state: "failed", revision: 2 } } },
@@ -92,7 +96,7 @@ describe("usePluginPanelAttentionRows (#13821)", () => {
   });
 
   it("splits rows between the Waiting and Unread pills and feeds the worktree buckets", () => {
-    usePluginPanelAttentionStore.getState().setGranted("acme", true);
+    grant("acme");
     seedPanels({
       a: { title: "A", kind: "acme.board", worktreeId: "wt-1" },
       b: { title: "B", kind: "acme.board", worktreeId: "wt-2" },
@@ -114,7 +118,7 @@ describe("usePluginPanelAttentionRows (#13821)", () => {
   });
 
   it("keeps its result across a panel store write that touches no reported panel", () => {
-    usePluginPanelAttentionStore.getState().setGranted("acme", true);
+    grant("acme");
     seedPanels({ p1: { title: "Board", kind: "acme.board" } });
     usePluginPanelActivityStore.setState({
       activityByPanelId: { p1: { acme: { state: "working", revision: 1 } } },
@@ -129,5 +133,82 @@ describe("usePluginPanelAttentionRows (#13821)", () => {
       })
     );
     expect(result.current).toBe(first);
+  });
+
+  it("follows a kind that registers after its panel and report arrived", () => {
+    grant("late");
+    seedPanels({ p1: { title: "Late", kind: "late.board" } });
+    usePluginPanelActivityStore.setState({
+      activityByPanelId: { p1: { late: { state: "waiting", revision: 1 } } },
+    });
+    const { result } = renderHook(() => usePluginPanelAttentionRows());
+    expect(result.current).toEqual([]);
+
+    act(() => registerKind("late.board", "late"));
+    try {
+      expect(result.current.map((row) => row.panelId)).toEqual(["p1"]);
+    } finally {
+      unregisterPanelKind("late.board");
+    }
+  });
+
+  it("parks a report until the plugin reports something new, and drops rows on revoke", () => {
+    grant("acme");
+    seedPanels({ p1: { title: "Board", kind: "acme.board", worktreeId: "wt-1" } });
+    usePluginPanelActivityStore.setState({
+      activityByPanelId: { p1: { acme: { state: "waiting", revision: 4 } } },
+    });
+    const { result } = renderHook(() => usePluginPanelAttentionRows());
+
+    act(() => usePluginPanelAttentionStore.getState().park("p1", "acme", 4));
+    expect(result.current[0]?.band).toBe("parked");
+
+    act(() =>
+      usePluginPanelActivityStore.setState({
+        activityByPanelId: { p1: { acme: { state: "waiting", revision: 5 } } },
+      })
+    );
+    expect(result.current[0]?.band).toBe("needs-you");
+
+    act(() => grant());
+    expect(result.current).toEqual([]);
+  });
+
+  it("survives a title carrying any character", () => {
+    grant("acme");
+    const title = 'Odd \u0000 "title" \u0001 ]';
+    seedPanels({ p1: { title, kind: "acme.board" } });
+    usePluginPanelActivityStore.setState({
+      activityByPanelId: { p1: { acme: { state: "working", revision: 1 } } },
+    });
+    const { result } = renderHook(() => usePluginPanelAttentionRows());
+    expect(result.current[0]).toMatchObject({ panelId: "p1", title });
+  });
+
+  it("keeps each project's instance of a plugin to its own grant", () => {
+    const projectA = "project__proj-a__acme.board";
+    const projectB = "project__proj-b__acme.board";
+    registerKind("project:proj-a/acme.board/board", projectA);
+    registerKind("project:proj-b/acme.board/board", projectB);
+    try {
+      grant(projectA);
+      seedPanels({
+        a: { title: "A", kind: "project:proj-a/acme.board/board" },
+        b: { title: "B", kind: "project:proj-b/acme.board/board" },
+      });
+      usePluginPanelActivityStore.setState({
+        activityByPanelId: {
+          a: { [projectA]: { state: "waiting", revision: 1 } },
+          b: { [projectB]: { state: "waiting", revision: 2 } },
+        },
+      });
+      const { result } = renderHook(() => usePluginPanelAttentionRows());
+      expect(result.current.map((row) => row.panelId)).toEqual(["a"]);
+      // Named by its manifest id, never the machine-local instance key.
+      expect(result.current[0]?.pluginName).toBe("acme.board");
+    } finally {
+      unregisterPanelKind("project:proj-a/acme.board/board");
+      unregisterPanelKind("project:proj-b/acme.board/board");
+    }
   });
 });
