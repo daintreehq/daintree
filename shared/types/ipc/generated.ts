@@ -3542,6 +3542,10 @@ export interface GeneratedIpcInvokeMap {
     args: [];
     result: boolean;
   };
+  "system:observe-agent-launch-admission": {
+    args: [];
+    result: import("../agentLaunchAdmission.js").AgentLaunchObservation;
+  };
   "system:report-terminal-renderer-diagnostics": {
     args: [
       payload: {
@@ -3563,6 +3567,10 @@ export interface GeneratedIpcInvokeMap {
       },
     ];
     result: void;
+  };
+  "system:request-agent-launch-admission": {
+    args: [terminalId: string];
+    result: import("../agentLaunchAdmission.js").AgentLaunchAdmission;
   };
   "system:show-item-in-folder": {
     args: [payload: { path: string }];

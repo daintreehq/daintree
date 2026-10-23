@@ -157,6 +157,8 @@ export const CHANNELS = {
   SYSTEM_GET_WHY_SLOW_SNAPSHOT: "system:get-why-slow-snapshot",
   SYSTEM_GET_MEMORY_SNAPSHOT: "system:get-memory-snapshot",
   SYSTEM_IS_MEMORY_PRESSURE_CRITICAL: "system:is-memory-pressure-critical",
+  SYSTEM_REQUEST_AGENT_LAUNCH_ADMISSION: "system:request-agent-launch-admission",
+  SYSTEM_OBSERVE_AGENT_LAUNCH_ADMISSION: "system:observe-agent-launch-admission",
   SYSTEM_REPORT_TERMINAL_RENDERER_DIAGNOSTICS: "system:report-terminal-renderer-diagnostics",
   DIAGNOSTICS_GET_PROCESS_METRICS: "diagnostics:get-process-metrics",
   DIAGNOSTICS_GET_HEAP_STATS: "diagnostics:get-heap-stats",

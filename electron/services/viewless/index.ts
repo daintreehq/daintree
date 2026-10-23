@@ -105,6 +105,10 @@ async function loadLiveDeps(): Promise<ViewlessDeps> {
       tmpDir: os.tmpdir(),
       totalMemoryBytes: os.totalmem(),
     },
+    admitAgentLaunch: async (terminalId) => {
+      const { getAgentLaunchAdmission } = await import("../agentLaunchAdmission.js");
+      return getAgentLaunchAdmission().request(terminalId);
+    },
     sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
     collectWorktreeDeleteNotes: async (projectId, worktreeId) => {
       const { pluginService } = await import("../PluginService.js");

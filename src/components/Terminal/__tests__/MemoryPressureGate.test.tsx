@@ -36,3 +36,81 @@ describe("MemoryPressureGate", () => {
     expect(onCancel).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("MemoryPressureGate at the host's agent limit (#14221)", () => {
+  const observation = {
+    kernelCritical: false,
+    runningAgents: 8,
+    startingAgents: 0,
+    agentLaunchLimit: 8,
+    memoryTotalBytes: 36 * 1024 ** 3,
+  };
+
+  it("states the host's count and the memory its limit comes from", () => {
+    render(
+      <MemoryPressureGate
+        agentId="claude"
+        detail={{ reason: "agent-capacity", observation }}
+        onLaunchAnyway={vi.fn()}
+        onCancel={vi.fn()}
+      />
+    );
+
+    const status = screen.getByRole("status").textContent ?? "";
+    expect(status).toContain("8 agents are running on this host.");
+    expect(status).toContain("starts up to 8 at once");
+    expect(status).toContain("36 GB of memory");
+    expect(status).not.toContain("critical");
+    expect(screen.getByRole("button", { name: "Launch anyway" })).toBeTruthy();
+  });
+
+  it("keeps the count and the limit apart when more run than the limit", () => {
+    render(
+      <MemoryPressureGate
+        agentId="claude"
+        detail={{ reason: "agent-capacity", observation: { ...observation, runningAgents: 9 } }}
+        onLaunchAnyway={vi.fn()}
+        onCancel={vi.fn()}
+      />
+    );
+
+    const status = screen.getByRole("status").textContent ?? "";
+    expect(status).toContain("9 agents are running on this host.");
+    expect(status).toContain("starts up to 8 at once");
+    expect(status).not.toContain("once one exits");
+  });
+
+  it("counts launches the host has started but not yet seen running", () => {
+    render(
+      <MemoryPressureGate
+        agentId="claude"
+        detail={{
+          reason: "agent-capacity",
+          observation: { ...observation, runningAgents: 7, startingAgents: 1 },
+        }}
+        onLaunchAnyway={vi.fn()}
+        onCancel={vi.fn()}
+      />
+    );
+
+    expect(screen.getByRole("status").textContent).toContain(
+      "8 agents are running or starting on this host"
+    );
+  });
+
+  it("states the kernel reading for a pressure hold", () => {
+    render(
+      <MemoryPressureGate
+        agentId="claude"
+        detail={{
+          reason: "kernel-critical",
+          observation: { ...observation, kernelCritical: true },
+        }}
+        onLaunchAnyway={vi.fn()}
+        onCancel={vi.fn()}
+      />
+    );
+
+    expect(screen.getByRole("status").textContent).toContain("critical level");
+  });
+});
