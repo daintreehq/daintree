@@ -979,6 +979,16 @@ function runAgentMcpTool(
  * time. An unbound binding (`projectId: null`) is the app-global default for
  * installed and builtin plugins and leaves every surface exactly as it was.
  */
+/**
+ * Per plugin registry, the newest instance a host was made for under each id —
+ * kept past that instance's unload, so a host from an older generation stays
+ * retired from settings writes (#14092).
+ */
+const newestHostedInstances = new WeakMap<
+  PluginHostFactoryDeps["plugins"],
+  Map<string, LoadedPlugin>
+>();
+
 export function createHost(
   deps: PluginHostFactoryDeps,
   pluginId: string,
@@ -1208,9 +1218,22 @@ export function createHost(
   // A host made before its instance was registered has no frozen manifest and
   // falls back to the live one (`undefined` takes the lookup's default).
   const declaring = boundPlugin?.manifest;
+  let newestHosted = newestHostedInstances.get(deps.plugins);
+  if (!newestHosted) {
+    newestHosted = new Map();
+    newestHostedInstances.set(deps.plugins, newestHosted);
+  }
+  if (boundPlugin !== undefined) newestHosted.set(pluginId, boundPlugin);
+  const hostedInstances = newestHosted;
   const assertSettingsInstanceCurrent = (method: string): void => {
+    if (boundPlugin === undefined) return;
     const current = deps.plugins.get(pluginId);
-    if (boundPlugin !== undefined && current !== undefined && current !== boundPlugin) {
+    // A successor that has since unloaded still retires this instance: its
+    // own settings, perhaps a secret this instance declared ordinary, stay on disk.
+    const superseded =
+      (current !== undefined && current !== boundPlugin) ||
+      hostedInstances.get(pluginId) !== boundPlugin;
+    if (superseded) {
       throw new Error(
         `PLUGIN_UNLOADED: plugin "${pluginId}" settings.${method}: this instance was replaced by a reload; only the running instance can change its settings`
       );
