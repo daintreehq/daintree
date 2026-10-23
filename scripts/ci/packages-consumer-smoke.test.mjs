@@ -5,6 +5,7 @@ import {
   PUBLISH_WORKSPACES,
   classifySubpath,
   exportTargets,
+  isInside,
   isolatedEnv,
   normalizeExports,
   tarballFilename,
@@ -85,6 +86,14 @@ describe("packages-consumer-smoke", () => {
       "daintreehq-plugin-sdk-0.2.0.tgz"
     );
     expect(tarballFilename("daintree-plugin", "0.2.0")).toBe("daintree-plugin-0.2.0.tgz");
+  });
+
+  it("tells a child named like a parent reference from a real parent", () => {
+    const root = path.resolve("/repo");
+    expect(isInside(path.join(root, "..smoke"), root)).toBe(true);
+    expect(isInside(root, root)).toBe(true);
+    expect(isInside(path.resolve("/repo-other"), root)).toBe(false);
+    expect(isInside(path.resolve("/"), root)).toBe(false);
   });
 
   it("keeps the repository's tools and workspace selection out of the consumer", () => {

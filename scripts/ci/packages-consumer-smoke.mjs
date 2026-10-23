@@ -83,7 +83,7 @@ const KNOWN_CONDITIONS = new Set(["types", "import", "default"]);
 
 export function isInside(child, parent) {
   const rel = path.relative(parent, path.resolve(child));
-  return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
+  return rel === "" || (rel.split(path.sep)[0] !== ".." && !path.isAbsolute(rel));
 }
 
 /**
