@@ -1103,6 +1103,11 @@ describe("installPlugin — consent reset on upgrade (#10518)", () => {
     capConsentMock.offerRestore.mockReset();
   });
 
+  /** The live plugin registry, to stand in for a reload swapping the running instance. */
+  function registry(service: PluginService): Map<string, Record<string, unknown>> {
+    return (service as unknown as { plugins: Map<string, Record<string, unknown>> }).plugins;
+  }
+
   /** The single offer-back the installer made, as the consent service received it. */
   function onlyOffer() {
     expect(capConsentMock.offerRestore).toHaveBeenCalledTimes(1);
@@ -1194,7 +1199,13 @@ describe("installPlugin — consent reset on upgrade (#10518)", () => {
     // shell:exec is no longer declared, no panel reports activity, and a site is never offered.
     expect(offer.grants).toEqual([held[0], held[1]]);
 
-    // The answer only counts while v2 is what is installed.
+    // The answer only counts while v2 is what is installed, and only while the
+    // instance it was offered to is the one running: any reload voids it.
+    expect(offer.isCurrent()).toBe(true);
+    const running = registry(service).get(ID)!;
+    registry(service).set(ID, { ...running });
+    expect(offer.isCurrent()).toBe(false);
+    registry(service).set(ID, running);
     expect(offer.isCurrent()).toBe(true);
     const v3 = await makeArchive({ name: ID, version: "3.0.0" });
     expect((await service.installPlugin(v3)).status).toBe("installed");
@@ -1234,9 +1245,10 @@ describe("installPlugin — consent reset on upgrade (#10518)", () => {
       capabilities: ["terminal:read"],
     });
     expect((await service.installPlugin(v1)).status).toBe("installed");
-    const v1Hash = (storeState.get("plugins") as { installed: Record<string, unknown> }).installed[
-      ID
-    ] as { archiveHash: string };
+    const installed = () =>
+      (storeState.get("plugins") as { installed: Record<string, { archiveHash: string | null }> })
+        .installed[ID];
+    const v1Hash = installed().archiveHash;
 
     const held = [
       { pluginId: ID, capability: "terminal:read", scopeKey: "global" },
@@ -1262,8 +1274,10 @@ describe("installPlugin — consent reset on upgrade (#10518)", () => {
     const offer = onlyOffer();
     expect(offer.pluginDisplayName).toBe("Rollback");
     expect(offer.grants).toEqual([held[0]]);
-    expect(v1Hash.archiveHash).toMatch(/^[a-f0-9]{64}$/);
+    expect(installed().archiveHash).toBe(v1Hash);
     expect(offer.isCurrent()).toBe(true);
+    installed().archiveHash = "f".repeat(64);
+    expect(offer.isCurrent()).toBe(false);
 
     service.dispose();
   });
@@ -1314,23 +1328,46 @@ describe("installPlugin — consent reset on upgrade (#10518)", () => {
     service.dispose();
   });
 
+  it("purges a same-archive reinstall over a running dev instance with a clean record (#14019)", async () => {
+    const service = new PluginService(pluginsRoot, "0.0.0");
+    const v1 = await makeArchive({ name: "acme.dev-running", version: "1.0.0" });
+    expect((await service.installPlugin(v1)).status).toBe("installed");
+    // Only the running instance knows: the flag must be read before the reinstall unloads it.
+    registry(service).get("acme.dev-running")!.devMode = true;
+
+    capConsentMock.revokeAllForPlugin.mockClear();
+    expect((await service.installPlugin(v1)).status).toBe("installed");
+
+    expect(capConsentMock.revokeAllForPlugin).toHaveBeenCalledWith("acme.dev-running");
+    service.dispose();
+  });
+
   it("offers grants back when the replaced plugin is disabled and never loads (#14019)", async () => {
     const ID = "acme.disabled-offer";
     const service = new PluginService(pluginsRoot, "0.0.0");
     const v1 = await makeArchive({ name: ID, version: "1.0.0", capabilities: ["terminal:read"] });
     expect((await service.installPlugin(v1)).status).toBe("installed");
-    const plugins = storeState.get("plugins") as Record<string, unknown>;
-    storeState.set("plugins", { ...plugins, disabled: [ID] });
+    await service.setEnabled(ID, false);
+    expect(registry(service).has(ID)).toBe(false);
     capConsentMock.listGrantsForPlugin.mockReturnValue([
       { pluginId: ID, capability: "terminal:read", scopeKey: "global" },
     ]);
+    const load = vi.spyOn(
+      service as unknown as { loadPlugin: (...args: unknown[]) => Promise<unknown> },
+      "loadPlugin"
+    );
 
     const v2 = await makeArchive({ name: ID, version: "2.0.0", capabilities: ["terminal:read"] });
     expect(await service.installPlugin(v2)).toEqual({ status: "installed", pluginId: ID });
 
-    expect(onlyOffer().grants).toEqual([
+    expect(load).not.toHaveBeenCalled();
+    const offer = onlyOffer();
+    expect(offer.grants).toEqual([
       { pluginId: ID, capability: "terminal:read", scopeKey: "global" },
     ]);
+    // Nothing loaded, so the offer is bound to the archive alone.
+    expect(offer.isCurrent()).toBe(true);
+    load.mockRestore();
     service.dispose();
   });
 

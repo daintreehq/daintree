@@ -286,7 +286,6 @@ describe("PluginCapabilityConsentStore", () => {
       const { store, saveConfig, getConfig } = makeStore();
       store.grant(grants[0]);
       const before = store.list();
-      const persisted = getConfig();
       vi.setSystemTime(2_000);
       vi.spyOn(console, "error").mockImplementation(() => {});
       saveConfig.mockImplementation(() => {
@@ -299,7 +298,7 @@ describe("PluginCapabilityConsentStore", () => {
       expect(
         new PluginCapabilityConsentStore(
           () => {},
-          () => persisted
+          () => getConfig()
         ).list()
       ).toEqual(before);
     });

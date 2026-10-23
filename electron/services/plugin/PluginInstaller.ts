@@ -263,13 +263,16 @@ export class PluginInstaller {
    * Offer back the purged grants the new version still asks for, in one
    * approval (#14019). Not awaited by the install: the answer can take minutes
    * and must not hold `install.lock`. The offer only counts while this archive
-   * is still what is installed, which the service checks again on the answer.
+   * is still what is installed and, when a version was loaded, while that
+   * exact instance is the one running — a reload of any kind voids it. The
+   * service checks both again on the answer.
    */
   private _offerCapabilityGrantsBack(
     pluginId: string,
     manifest: Readonly<PluginManifest>,
     archiveHash: string | null,
-    purged: readonly PluginCapabilityIdentity[]
+    purged: readonly PluginCapabilityIdentity[],
+    instance?: unknown
   ): void {
     const grants = purged.filter((grant) => stillAsksFor(manifest, grant.capability));
     if (grants.length === 0) return;
@@ -282,7 +285,8 @@ export class PluginInstaller {
           declaredCapabilities: manifest.capabilities ?? [],
           isCurrent: () => {
             const record = this.records.getInstalledRecord(pluginId);
-            return record !== undefined && record.archiveHash === archiveHash;
+            if (record === undefined || record.archiveHash !== archiveHash) return false;
+            return instance === undefined || this.deps.getPlugin(pluginId) === instance;
           },
         })
         // The Plugin Manager's switches read these grants; tell it they are back.
@@ -770,7 +774,7 @@ export class PluginInstaller {
       if (hash) this.deps.setPluginArchiveHash(pluginId, hash);
       // Offered before activation so the dialog queues ahead of any first-use
       // prompt the new version raises while it starts.
-      this._offerCapabilityGrantsBack(pluginId, manifest, hash, purgedGrants);
+      this._offerCapabilityGrantsBack(pluginId, manifest, hash, purgedGrants, loaded);
       await this.deps.activatePlugin(pluginId);
 
       this.deps.broadcastProvenanceChanged();
@@ -911,14 +915,16 @@ export class PluginInstaller {
       if (restored) {
         // The old version is running again, but the upgrade already purged its
         // grants. They are offered back rather than restored: the directory
-        // coming back doesn't prove which code holds the id now (#14019).
-        const manifest = this.deps.getPlugin(pluginId)?.manifest;
-        if (manifest && previousRecord) {
+        // coming back doesn't prove which code holds the id now (#14019). Only
+        // when the instance registered is the one just reloaded, and bound to it.
+        const current = this.deps.getPlugin(pluginId);
+        if (current !== undefined && current === restored && previousRecord) {
           this._offerCapabilityGrantsBack(
             pluginId,
-            manifest,
+            current.manifest,
             previousRecord.archiveHash,
-            purgedGrants
+            purgedGrants,
+            current
           );
         }
         await this.deps.activatePlugin(pluginId);
