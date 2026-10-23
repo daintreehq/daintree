@@ -1,9 +1,12 @@
 import type { HostDriverObservation, HostId, HostMetricsSummary } from "@shared/types/remoteHosts";
+import { busyCores, reportedCapacity, reportsMemoryCapacity } from "@shared/utils/hostCapacity";
 import type { HostMenuRow } from "../hostModel";
 import { formatHostTime } from "../hostTime";
 import { formatBytes } from "@/lib/formatBytes";
 import { pluralize, pluralNoun } from "@/lib/pluralize";
 import { formatCoreCount } from "@/components/Project/ProjectResourceBadge.utils";
+
+export { busyCores, reportsMemoryCapacity };
 
 /** A pressure band drawn on the same 0–100 axis as CPU, so both sparklines read alike. */
 const PRESSURE_LEVEL: Record<NonNullable<HostMetricsSummary["memoryPressure"]>, number> = {
@@ -31,38 +34,6 @@ export function memoryUsedSeries(history: readonly HostMetricsSummary[]): Array<
 function memoryUsedPercent(summary: HostMetricsSummary): number | null {
   const capacity = reportedCapacity(summary);
   return capacity && Math.min(100, Math.max(0, (capacity.used / capacity.total) * 100));
-}
-
-/**
- * Whether the host counts used memory as Activity Monitor does. Older hosts
- * sent used bytes that included the file cache, and they predate the core
- * count that shipped alongside the fix: a present field, even null, marks the
- * newer reading.
- */
-export function reportsMemoryCapacity(summary: HostMetricsSummary): boolean {
-  return summary.cpuLogicalCoreCount !== undefined;
-}
-
-function reportedCapacity(summary: HostMetricsSummary): { used: number; total: number } | null {
-  if (!reportsMemoryCapacity(summary)) return null;
-  const { memoryUsedBytes: used, memoryTotalBytes: total } = summary;
-  if (used === null || !Number.isFinite(used) || used < 0) return null;
-  if (total === null || !Number.isFinite(total) || total <= 0) return null;
-  return { used, total };
-}
-
-/**
- * Busy cores, from the share of all cores and the count the host says that
- * share covers. Null for a host that doesn't report the count: never a guess.
- */
-export function busyCores(summary: HostMetricsSummary): { busy: number; total: number } | null {
-  const cpu = summary.cpuPercent;
-  // A quota makes the capacity fractional, which the integer core count can't say.
-  const total = summary.cpuCapacityCores ?? summary.cpuLogicalCoreCount;
-  if (cpu === null || !Number.isFinite(cpu) || !total || !Number.isFinite(total) || total <= 0) {
-    return null;
-  }
-  return { busy: (cpu / 100) * total, total };
 }
 
 /** "6.4 of 14 cores" where the host reports its core count, "42%" otherwise; null when unmeasured. */

@@ -1,5 +1,6 @@
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { HostMetricsSummary } from "../../../../shared/types/remoteHosts.js";
 import type { LaneWake } from "../../../services/mcp-server/terminalNotify.js";
 import { AGENT_DIRECTORY_BYTES_MAX } from "../../../../shared/types/agentDirectory.js";
 import {
@@ -58,9 +59,11 @@ describe("HostCallRuntime reaching this machine's other projects (#14024)", () =
   let retired: Array<[string, string]>;
   let ids: number;
   let local: LocalMcpRelay;
+  let latestSummary: (() => HostMetricsSummary | null) | undefined;
   let runtime: HostCallRuntime;
 
   beforeEach(() => {
+    latestSummary = undefined;
     runs = new Map([["a", { ...RUN_A }]]);
     projects = [
       { id: "proj-1", name: "daintree", path: "/repos/daintree" },
@@ -115,8 +118,10 @@ describe("HostCallRuntime reaching this machine's other projects (#14024)", () =
       local: {
         name: () => "greg-mbp",
         projects: async () => projects,
+        latestSummary: () => latestSummary?.() ?? null,
         relayCall: (payload) => local.relayCall(payload),
       },
+      now: () => 1000,
       newId: () => `00000000-0000-4000-8000-00000000000${++ids}`,
     });
   });
@@ -259,6 +264,35 @@ describe("HostCallRuntime reaching this machine's other projects (#14024)", () =
       if (!listed.ok) throw new Error("refused");
       expect(listed.value.hosts[0]?.agents).toMatchObject({ coverage: "unreachable", entries: [] });
       broken.dispose();
+    });
+
+    it("gives this machine's load from the sample it holds, and null where it holds none", async () => {
+      let listed = await runtime.list("a");
+      if (!listed.ok) throw new Error("refused");
+      expect(listed.value.hosts[0]?.load).toBeNull();
+
+      latestSummary = () =>
+        ({
+          sampledAt: 995,
+          platform: "darwin",
+          cpuPercent: 25,
+          cpuLogicalCoreCount: 12,
+          memoryPressure: "normal",
+          memoryUsedBytes: 10e9,
+          memoryTotalBytes: 36e9,
+          thermal: null,
+        }) as HostMetricsSummary;
+      listed = await runtime.list("a");
+      if (!listed.ok) throw new Error("refused");
+      expect(HostListResultSchema.safeParse(listed.value).success).toBe(true);
+      expect(listed.value.hosts[0]?.load).toMatchObject({
+        stale: false,
+        ageMs: 5,
+        cpuBusyCores: 3,
+        cpuIdleCores: 9,
+        memoryAvailableBytes: 26e9,
+        thermal: null,
+      });
     });
 
     it("caps the projects it names, and names none when they can't be read", async () => {

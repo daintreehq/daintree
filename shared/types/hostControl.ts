@@ -96,7 +96,26 @@ export const HostListEntrySchema = z.object({
   load: z
     .object({
       sampledAt: z.number(),
+      ageMs: z.number(),
+      stale: z
+        .boolean()
+        .describe("Too old to trust: the live figures below are null. Not a zero reading."),
+      platform: z.enum(["darwin", "linux"]),
       cpuPercent: z.number().nullable(),
+      cpuLogicalCores: z.number().nullable(),
+      cpuBusyCores: z
+        .number()
+        .nullable()
+        .describe(
+          "cpuPercent of the cores it is a share of: all logical cores, or a cgroup quota."
+        ),
+      cpuIdleCores: z.number().nullable(),
+      memoryTotalBytes: z.number().nullable(),
+      memoryUsedBytes: z.number().nullable(),
+      memoryAvailableBytes: z.number().nullable().describe("Total minus used, as the host counts."),
+      memoryCapacityReported: z
+        .boolean()
+        .describe("False: an older host whose used memory includes file cache, so none is given."),
       memoryPressure: z.enum(["normal", "warn", "critical"]).nullable(),
       thermal: z.enum(["nominal", "fair", "serious", "critical"]).nullable(),
       metricsScope: z.enum(["host", "cgroup"]).nullable().optional(),
@@ -104,7 +123,8 @@ export const HostListEntrySchema = z.object({
       temperatureCelsius: z.number().nullable().optional(),
       temperatureZone: z.string().nullable().optional(),
     })
-    .nullable(),
+    .nullable()
+    .describe("Null: no sample. Any null field inside is unknown, never zero or unlimited."),
   agentsObserved: z
     .object({ working: z.number(), waiting: z.number(), idle: z.number() })
     .nullable(),

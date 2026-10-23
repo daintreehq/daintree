@@ -16,6 +16,7 @@ import { machineDisplayName } from "../../utils/machineName.js";
 import { getPtyClient } from "../../window/serviceRefs.js";
 import { getProjectForWebContents } from "../../window/webContentsRegistry.js";
 import type { LinkSession } from "../link/session.js";
+import { getLocalSummaryLoop } from "../metrics/localLoop.js";
 import { getRemoteService, registerRemoteService } from "../runtime.js";
 import { HostCallRuntime, type ObservedHost, type OpenRun } from "./HostCallRuntime.js";
 import { HostControlLinkClient } from "./HostControlLinkClient.js";
@@ -252,6 +253,9 @@ export function installHostControl(deps: HostControlInstallDeps): () => void {
           frontendAttached: isProjectFrontendAttached(project.id),
         }));
       },
+      // The sampler reads macOS and treats everything else as Linux, so a
+      // Windows machine has no measurement to offer rather than a borrowed one.
+      latestSummary: () => (process.platform === "win32" ? null : getLocalSummaryLoop().latest()),
       relayCall: (payload) => local.relayCall(payload),
       agents: (options) => agentDirectory.read(options),
     },

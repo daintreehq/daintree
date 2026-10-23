@@ -834,7 +834,10 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // (`memoryPressureSomeAvg10`, `temperatureCelsius` and its zone, `metricsScope`)
   // on each `host.list` load, which replace the invented bands a Linux host no
   // longer sends. Optional and output only; no external tool lists hosts.
-  const MAX_COHORT_PAYLOAD_BYTES = 137_600;
+  // 137_600 → 138_700 for #14168, measured at 138_586 B (+1_005): the capacity
+  // facts `host.list` now carries per host (cores, memory, age, platform), each
+  // flat and null when unmeasured, in place of a composite score.
+  const MAX_COHORT_PAYLOAD_BYTES = 138_700;
 
   const wireBytes = (t: WireTool) => t.descriptionBytes + t.paramsBytes + t.outputBytes;
 

@@ -38,6 +38,7 @@ import {
   type LaneWakeCheck,
 } from "../../services/mcp-server/terminalNotify.js";
 import { sanitizeNotifyNote } from "../../../shared/types/terminalNotify.js";
+import { projectHostLoad } from "./hostLoad.js";
 import type { HostControlLinkClient } from "./HostControlLinkClient.js";
 import type { AssistantEnsureRequest } from "../projects/HostSwitchService.js";
 import {
@@ -79,6 +80,11 @@ export interface LocalHostReach {
   name(): string;
   /** Its projects, most used first. */
   projects(): Promise<readonly HostProjectSummary[]>;
+  /**
+   * The latest sample of this machine, or null where none is held or the
+   * platform can't be measured. Reading it never starts sampling.
+   */
+  latestSummary?(): HostMetricsSummary | null;
   relayCall(payload: McpCallPayload): Promise<McpCallAnswer>;
   /** Its workers and assistants, as `host.list` shows them with `includeAgents` (#14160). */
   agents?(options: { projectId?: string }): Promise<AgentDirectory>;
@@ -1111,26 +1117,7 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
             connection: observedConnection(host.connection),
             rttMs: host.connection.status === "connected" ? host.connection.rttMs : null,
             lastSeenAt: host.lastSeenAt,
-            load: summary
-              ? {
-                  sampledAt: summary.sampledAt,
-                  cpuPercent: summary.cpuPercent,
-                  memoryPressure: summary.memoryPressure,
-                  thermal: summary.thermal,
-                  ...(summary.metricsScope !== undefined
-                    ? { metricsScope: summary.metricsScope }
-                    : {}),
-                  ...(summary.memoryPressureSomeAvg10 !== undefined
-                    ? { memoryPressureSomeAvg10: summary.memoryPressureSomeAvg10 }
-                    : {}),
-                  ...(summary.temperatureCelsius !== undefined
-                    ? {
-                        temperatureCelsius: summary.temperatureCelsius,
-                        temperatureZone: summary.temperatureZone ?? null,
-                      }
-                    : {}),
-                }
-              : null,
+            load: summary ? projectHostLoad(summary, this.now()) : null,
             // A tally from before the link dropped is history, not what is running now.
             agentsObserved:
               connected && summary?.agentsObserved ? { ...summary.agentsObserved } : null,
@@ -1150,13 +1137,14 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
   /**
    * This machine, first (#14024): the projects of its own a call under
    * `local` reaches, which are all but the caller's own, or null when they
-   * couldn't be read in time. Nothing about it is sampled or tallied here.
+   * couldn't be read in time. Nothing about it is sampled or tallied here; its load is the sample already held.
    */
   private async localEntry(
     local: LocalHostReach,
     caller: OpenRun,
     agentsOf: { projectId?: string } | null
   ): Promise<HostListEntry> {
+    const summary = local.latestSummary?.() ?? null;
     const projects = await withinMs(
       Promise.resolve()
         .then(() => local.projects())
@@ -1170,7 +1158,7 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
       connection: "connected",
       rttMs: null,
       lastSeenAt: null,
-      load: null,
+      load: summary ? projectHostLoad(summary, this.now()) : null,
       agentsObserved: null,
       projects:
         projects === null
