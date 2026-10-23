@@ -135,7 +135,9 @@ export function admitTransferHeaders(
       !HEADER_NAME.test(name) ||
       typeof value !== "string" ||
       value.length > PLUGIN_ARTIFACT_HEADER_VALUE_MAX_LENGTH ||
-      /[\r\n\0]/.test(value)
+      // What an HTTP/1.1 field value may hold, and Node's http will send:
+      // tab, visible ASCII and Latin-1, never a control character.
+      /[^\t\x20-\x7e\x80-\xff]/.test(value)
     ) {
       throw artifactError(
         "VALIDATION",

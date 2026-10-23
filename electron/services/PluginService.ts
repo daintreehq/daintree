@@ -5162,6 +5162,17 @@ export class PluginService {
     const pins: Array<() => void> = [];
     const refuse = (filePath: string, why: string) =>
       new Error(`INVALID_PATH: "${path.basename(filePath)}" ${why}`);
+    // A project close between two files has no transfer to abort: the batch
+    // notices it itself, before each file and once done.
+    const closesAtStart = projectId === null ? 0 : service.projectCloseCount(projectId);
+    const requireProjectOpen = () => {
+      if (projectId !== null && service.projectCloseCount(projectId) !== closesAtStart) {
+        throw Object.assign(new Error("ABORT_ERR: the project closed during the import"), {
+          name: "AbortError",
+          code: "ABORT_ERR",
+        });
+      }
+    };
     try {
       for (const filePath of paths) {
         const leaf = await fs.lstat(filePath, { bigint: true });
@@ -5176,9 +5187,10 @@ export class PluginService {
           if (stat.dev !== leaf.dev || stat.ino !== leaf.ino) {
             throw refuse(filePath, "changed while it was being opened");
           }
-          // Synchronously before the transfer registers, so an unload during
-          // the opens leaves nothing running.
+          // Synchronously before the transfer registers, so an unload or a
+          // project close during the opens leaves nothing running.
           this.requireArtifactAccess(pluginId, "importSelection");
+          requireProjectOpen();
           const artifact = await service.importFromHandle({
             pluginId,
             projectId,
@@ -5193,6 +5205,7 @@ export class PluginService {
           await handle.close().catch(() => {});
         }
       }
+      requireProjectOpen();
     } catch (error) {
       for (const artifact of imported) service.store.release(pluginId, artifact.id);
       throw error;

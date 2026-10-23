@@ -1632,6 +1632,17 @@ describe("PluginDevWorkerHostProxy host.system / clipboard.writeImage (#11299)",
     expect(onProgress).toHaveBeenCalledTimes(1);
   });
 
+  it("codes a worker-side cancel ABORT_ERR whatever reason it was aborted with", async () => {
+    const { proxy } = makeProxy();
+    const controller = new AbortController();
+    const promise = proxy.host.artifacts.import(
+      { path: "/data/a.mp4" },
+      { signal: controller.signal }
+    );
+    controller.abort(new Error("changed my mind"));
+    await expect(promise).rejects.toMatchObject({ code: "ABORT_ERR", name: "AbortError" });
+  });
+
   it("rejects a malformed artifact call before it crosses the port", async () => {
     const { proxy, sent } = makeProxy();
     await expect(

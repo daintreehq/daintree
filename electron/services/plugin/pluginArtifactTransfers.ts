@@ -443,7 +443,25 @@ export async function uploadFromFile(options: {
 
   return new Promise<PluginArtifactUploadResult>((resolve, reject) => {
     let settled = false;
-    // Declared before the request so `finish` can always tear it down.
+    let req: ReturnType<HttpsRequest>;
+    try {
+      req = request(options.url, {
+        method: options.method,
+        headers,
+        lookup: publicOnlyLookup,
+        timeout: idleMs,
+      });
+    } catch (error) {
+      // A request Node refuses to build (a header it won't send) opens nothing.
+      reject(
+        artifactError(
+          "ARTIFACT_TRANSFER_FAILED",
+          `upload failed: ${formatErrorMessage(error, "the request could not be built")}`
+        )
+      );
+      return;
+    }
+    // Opened only once the request exists, so `finish` can always tear both down.
     const body = createReadStream(options.filePath);
     // Settling stops everything: the file stream, the request, its socket. A
     // provider that answers early (a 413 mid-body) must not keep reading the
@@ -458,12 +476,6 @@ export async function uploadFromFile(options: {
       if (error) reject(options.signal.aborted ? transferAbortError(options.signal) : error);
       else resolve(result!);
     };
-    const req = request(options.url, {
-      method: options.method,
-      headers,
-      lookup: publicOnlyLookup,
-      timeout: idleMs,
-    });
     const onAbort = () => finish(transferAbortError(options.signal));
     options.signal.addEventListener("abort", onAbort, { once: true });
     req.on("timeout", () =>

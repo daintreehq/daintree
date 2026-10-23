@@ -54,6 +54,13 @@ describe("transfer headers", () => {
     expect(headersForHop(origin, new URL("https://cdn.example.com/b"), headers)).toEqual({});
   });
 
+  it("refuses a value Node's http would refuse to send", () => {
+    expect(() => admitTransferHeaders("p", "upload", { "x-note": "snow ☃" })).toThrow(/VALIDATION/);
+    expect(admitTransferHeaders("p", "upload", { "x-note": "café\tok" })).toEqual({
+      "x-note": "café\tok",
+    });
+  });
+
   it.each([
     ["Host"],
     ["cookie"],

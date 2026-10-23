@@ -124,6 +124,8 @@ export class PluginArtifactService {
     Map<AbortController, { projectId: string | null }>
   >();
   private activeTotal = 0;
+  /** Bumped on every close of a project, so work that spans several awaits can tell it happened. */
+  private readonly projectCloses = new Map<string, number>();
   private readonly sweepTimer: ReturnType<typeof setInterval> | null;
   private disposed = false;
 
@@ -310,12 +312,18 @@ export class PluginArtifactService {
    * transfers that would have created one for it.
    */
   forgetProject(projectId: string): void {
+    this.projectCloses.set(projectId, this.projectCloseCount(projectId) + 1);
     for (const byController of this.transfers.values()) {
       for (const [controller, owner] of byController) {
         if (owner.projectId === projectId) controller.abort(transferAbortError());
       }
     }
     this.store.releaseWhere((owner) => owner.projectId === projectId);
+  }
+
+  /** How often `projectId` has closed in this session; compare two readings to see a close between them. */
+  projectCloseCount(projectId: string): number {
+    return this.projectCloses.get(projectId) ?? 0;
   }
 
   async dispose(): Promise<void> {

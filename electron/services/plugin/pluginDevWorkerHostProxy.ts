@@ -904,8 +904,9 @@ export class PluginDevWorkerHostProxy {
       },
       (error: unknown) => {
         done();
-        // A cancel settled here carries the same code as one main settled.
-        if ((error as { name?: unknown } | null)?.name === "AbortError") {
+        // A cancel settled here carries the same code as one main settled,
+        // whatever reason the caller aborted with.
+        if (signal?.aborted || (error as { name?: unknown } | null)?.name === "AbortError") {
           throw Object.assign(new Error("ABORT_ERR: the transfer was cancelled"), {
             name: "AbortError",
             code: "ABORT_ERR",
