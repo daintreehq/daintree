@@ -3241,6 +3241,13 @@ describe("GitHubResourceList — the keyboard cursor across a refresh", () => {
     mockListIssues.mockResolvedValue(makeResponse([makeIssue(11), makeIssue(10)]));
     fireEvent.click(screen.getByRole("button", { name: /^Refresh issues/ }));
 
+    // The cursor already names #11, so wait for the reorder itself first.
+    await waitFor(() =>
+      expect(screen.getAllByTestId(/^item-\d+$/).map((row) => row.dataset.testid)).toEqual([
+        "item-11",
+        "item-10",
+      ])
+    );
     await waitFor(() => expect(activeDescendant()).toBe("github-issue-option-11"));
   });
 
@@ -3725,11 +3732,14 @@ describe("GitHubResourceList — every row lands once (#14067)", () => {
       await act(async () => releaseStalePage(page([3, 4], null)));
       expect(renderedNumbers()).toEqual([2, 3]);
 
-      // The next page continues from the refreshed list, not the dropped one.
+      // The next page continues from the refreshed list, not the dropped one,
+      // and skips the backend's per-cursor page cache on the way.
       fetcher.mockResolvedValueOnce(page([4], null));
       act(() => screen.getByRole("button", { name: /load more/i }).click());
       await waitFor(() => expect(renderedNumbers()).toEqual([2, 3, 4]));
-      expect(fetcher).toHaveBeenLastCalledWith(expect.objectContaining({ cursor: "after-3" }));
+      expect(fetcher).toHaveBeenLastCalledWith(
+        expect.objectContaining({ cursor: "after-3", bypassCache: true })
+      );
     }
   );
 
@@ -3769,6 +3779,130 @@ describe("GitHubResourceList — every row lands once (#14067)", () => {
     act(() => screen.getByRole("button", { name: /load more/i }).click());
 
     await waitFor(() => expect(renderedNumbers()).toEqual([1, 2, 3]));
+  });
+
+  it("drops a page a wake refresh overtook, and keeps that page's failure quiet", async () => {
+    mockListIssues.mockResolvedValueOnce(page([1, 2], "after-2"));
+
+    render(<GitHubResourceList type="issue" projectPath="/test/proj" />);
+    await screen.findByRole("button", { name: /load more/i });
+
+    let releaseWake!: (page: Page<Issue>) => void;
+    mockListIssues.mockImplementationOnce(
+      () =>
+        new Promise<Page<Issue>>((resolve) => {
+          releaseWake = resolve;
+        })
+    );
+    await act(async () => {
+      useSystemWakeStore.setState((s) => ({ wakeEpoch: s.wakeEpoch + 1 }));
+    });
+    await waitFor(() => expect(mockListIssues).toHaveBeenCalledTimes(2));
+
+    // This page starts after the refresh did, still on the old list's cursor.
+    let failStalePage!: (error: Error) => void;
+    mockListIssues.mockImplementationOnce(
+      () =>
+        new Promise<Page<Issue>>((_, reject) => {
+          failStalePage = reject;
+        })
+    );
+    act(() => screen.getByRole("button", { name: /load more/i }).click());
+    await waitFor(() => expect(mockListIssues).toHaveBeenCalledTimes(3));
+
+    await act(async () => releaseWake(page([2, 3], "after-3")));
+    await act(async () => failStalePage(new Error("Page fetch failed")));
+
+    expect(renderedNumbers()).toEqual([2, 3]);
+    expect(screen.queryByText(/Page fetch failed/)).toBeNull();
+    const loadMore = screen.getByRole("button", { name: /load more/i }) as HTMLButtonElement;
+    expect(loadMore.disabled).toBe(false);
+  });
+
+  it("drops a refresh still out when the filter changes under it", async () => {
+    mockListIssues.mockResolvedValueOnce(page([1, 2], null));
+
+    render(<GitHubResourceList type="issue" projectPath="/test/proj" />);
+    await waitFor(() => expect(renderedNumbers()).toEqual([1, 2]));
+
+    let releaseRefresh!: (page: Page<Issue>) => void;
+    mockListIssues.mockImplementationOnce(
+      () =>
+        new Promise<Page<Issue>>((resolve) => {
+          releaseRefresh = resolve;
+        })
+    );
+    fireEvent.click(screen.getByRole("button", { name: /^Refresh issues/ }));
+    await waitFor(() => expect(mockListIssues).toHaveBeenCalledTimes(2));
+
+    mockListIssues.mockResolvedValueOnce(page([50], null));
+    act(() => {
+      useGitHubFilterStore.getState().setIssueFilter("closed");
+    });
+    await waitFor(() => expect(renderedNumbers()).toEqual([50]));
+
+    await act(async () => releaseRefresh(page([1, 2, 3], null)));
+    expect(renderedNumbers()).toEqual([50]);
+  });
+
+  it("re-arms Load more when a filter switch drops the page that was out", async () => {
+    // Warm and just fetched, so the switch to it starts no fetch of its own —
+    // nothing else is left to release the page the switch aborts.
+    setCache(buildCacheKey("/test/proj", "issue", "closed", "created"), {
+      items: [makeIssue(60), makeIssue(61)],
+      nextCursor: "closed-2",
+      hasMore: true,
+      timestamp: Date.now(),
+      freshBypassAt: Date.now(),
+    });
+    mockListIssues.mockResolvedValueOnce(page([1, 2], "after-2"));
+
+    render(<GitHubResourceList type="issue" projectPath="/test/proj" />);
+    const loadMore = await screen.findByRole("button", { name: /load more/i });
+
+    let releaseStalePage!: (page: Page<Issue>) => void;
+    mockListIssues.mockImplementationOnce(
+      () =>
+        new Promise<Page<Issue>>((resolve) => {
+          releaseStalePage = resolve;
+        })
+    );
+    act(() => loadMore.click());
+    await waitFor(() => expect((loadMore as HTMLButtonElement).disabled).toBe(true));
+
+    act(() => {
+      useGitHubFilterStore.getState().setIssueFilter("closed");
+    });
+    await waitFor(() => expect(renderedNumbers()).toEqual([60, 61]));
+    const rearmed = screen.getByRole("button", { name: /load more/i }) as HTMLButtonElement;
+    expect(rearmed.disabled).toBe(false);
+
+    mockListIssues.mockResolvedValueOnce(page([62], null));
+    act(() => rearmed.click());
+    await waitFor(() => expect(renderedNumbers()).toEqual([60, 61, 62]));
+    expect(mockListIssues).toHaveBeenLastCalledWith(
+      expect.objectContaining({ cursor: "closed-2", state: "closed" })
+    );
+
+    await act(async () => releaseStalePage(page([3], null)));
+    expect(renderedNumbers()).toEqual([60, 61, 62]);
+  });
+
+  it("clears a failed page's error once a refresh replaces the list", async () => {
+    mockListIssues.mockResolvedValueOnce(page([1, 2], "after-2"));
+
+    render(<GitHubResourceList type="issue" projectPath="/test/proj" />);
+    const loadMore = await screen.findByRole("button", { name: /load more/i });
+
+    mockListIssues.mockRejectedValueOnce(new Error("Page fetch failed"));
+    act(() => loadMore.click());
+    await waitFor(() => expect(screen.getByText(/Page fetch failed/)).toBeTruthy());
+
+    mockListIssues.mockResolvedValueOnce(page([1, 2], "after-2"));
+    fireEvent.click(screen.getByRole("button", { name: /^Refresh issues/ }));
+
+    await waitFor(() => expect(screen.queryByText(/Page fetch failed/)).toBeNull());
+    expect(screen.getByRole("button", { name: /load more/i })).toBeTruthy();
   });
 });
 
@@ -3826,5 +3960,33 @@ describe("GitHubResourceList — only a cursor move scrolls the list (#14067)", 
 
     fireEvent.keyDown(input, { key: "ArrowUp" });
     expect(revealedIndexes()).toEqual([0, 1, 1]);
+  });
+
+  it("still brings the cursor back into view when the panel reopens", async () => {
+    setCache(buildCacheKey("/test/proj", "issue", "open", "created"), {
+      items: [makeIssue(10), makeIssue(11)],
+      nextCursor: null,
+      hasMore: false,
+      timestamp: Date.now(),
+      freshBypassAt: Date.now(),
+      countAtWrite: 2,
+    });
+
+    function Harness({ mode }: { mode: "visible" | "hidden" }) {
+      return (
+        <Activity mode={mode}>
+          <GitHubResourceList type="issue" projectPath="/test/proj" />
+        </Activity>
+      );
+    }
+
+    const { rerender } = render(<Harness mode="visible" />);
+    fireEvent.keyDown(screen.getByRole("combobox"), { key: "ArrowDown" });
+    expect(revealedIndexes()).toEqual([0]);
+
+    rerender(<Harness mode="hidden" />);
+    rerender(<Harness mode="visible" />);
+
+    expect(revealedIndexes()).toEqual([0, 0]);
   });
 });

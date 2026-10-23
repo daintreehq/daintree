@@ -97,12 +97,17 @@ function planWarmRevalidate(
  */
 function appendUnseen<T extends { number: number }>(rows: T[], page: T[]): T[] {
   const seen = new Set(rows.map((row) => row.number));
-  const unseen = page.filter((row) => {
-    if (seen.has(row.number)) return false;
-    seen.add(row.number);
-    return true;
-  });
-  return unseen.length === 0 ? rows : [...rows, ...unseen];
+  // Always a new array, even when every row repeats: the list remaps its
+  // cursor on data identity, and a cursor parked on Load more has to come off
+  // it once the page that removes the footer lands.
+  return [
+    ...rows,
+    ...page.filter((row) => {
+      if (seen.has(row.number)) return false;
+      seen.add(row.number);
+      return true;
+    }),
+  ];
 }
 
 function abortableDelay(ms: number, signal?: AbortSignal): Promise<void> {
@@ -370,7 +375,10 @@ export function useGitHubResourceListSWR({
               // at the commit rather than when this fetch starts: a page that
               // lands first appends to the old list, which this then replaces,
               // and a refresh that fails leaves it nothing to be stale against.
+              // A failed page's error goes too: the pages it was about are gone.
               loadMoreAbortRef.current?.abort();
+              setLoadingMore(false);
+              setLoadMoreError(null);
               setData(result.items);
               setError(null);
             }
@@ -489,10 +497,17 @@ export function useGitHubResourceListSWR({
           }
         }
       } finally {
+        // Each fetch releases only its own flag: a page finishing must not
+        // stop a refresh's spinner, and a refresh failing must not re-arm
+        // Load more under a page that is still out. Whoever aborts a fetch
+        // clears what that fetch would have.
         if (!abortSignal?.aborted) {
-          setLoading(false);
-          setRefreshing(false);
-          setLoadingMore(false);
+          if (append) {
+            setLoadingMore(false);
+          } else {
+            setLoading(false);
+            setRefreshing(false);
+          }
         }
       }
     },
@@ -541,8 +556,13 @@ export function useGitHubResourceListSWR({
     setExactNumberNotFound(null);
 
     const abortController = new AbortController();
+    // Neither aborted fetch will run its cleanup, and a path below can start
+    // no fetch at all (a skip plan, a rate-limit pause), so release their
+    // flags here; a fetch that does start sets its own again.
     loadMoreAbortRef.current?.abort();
     userFetchAbortRef.current?.abort();
+    setLoadingMore(false);
+    setRefreshing(false);
     const gen = nextGeneration(cacheKey);
     const isFirstMount = !mountedRef.current;
     // The cacheKey doesn't include `debouncedSearch` (search results aren't
@@ -581,11 +601,9 @@ export function useGitHubResourceListSWR({
           // flags here. An Activity hide aborts an in-flight revalidate,
           // whose aborted `finally` deliberately skips `setRefreshing(false)`;
           // without this, a skip on reveal would leave the header spinner
-          // stuck forever. The page this effect just aborted is in the same
-          // position, and a stuck `loadingMore` stops the list paging at all.
+          // stuck forever.
           setLoading(false);
           setRefreshing(false);
-          setLoadingMore(false);
         } else {
           fetchData(null, false, abortController.signal, {
             revalidating: true,
@@ -640,7 +658,6 @@ export function useGitHubResourceListSWR({
         if (plan === "skip") {
           // Same activity-flag cleanup as the mount/reveal skip above.
           setRefreshing(false);
-          setLoadingMore(false);
         } else {
           fetchData(null, false, abortController.signal, {
             revalidating: true,
@@ -750,6 +767,11 @@ export function useGitHubResourceListSWR({
     if (numberQuery === null) {
       return;
     }
+    // Before the guards: a list page or refresh still out belongs to the
+    // text view, and a paused lookup must not let it land in this one.
+    exactNumberAbortRef.current?.abort();
+    loadMoreAbortRef.current?.abort();
+    userFetchAbortRef.current?.abort();
     // Skip numeric fetches when no token is configured — the empty state
     // takes over the UI and any leftover store search would otherwise
     // produce a token error.
@@ -762,9 +784,6 @@ export function useGitHubResourceListSWR({
       return;
     }
 
-    exactNumberAbortRef.current?.abort();
-    loadMoreAbortRef.current?.abort();
-    userFetchAbortRef.current?.abort();
     const abortController = new AbortController();
     exactNumberAbortRef.current = abortController;
 
