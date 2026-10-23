@@ -101,6 +101,7 @@ describe("formatCores", () => {
     [0.003, "<0.1 cores"],
     [0.1, "0.1 cores"],
     [0.124, "0.1 cores"],
+    [0.95, "1 core"],
     [1, "1 core"],
     [1.06, "1.1 cores"],
     [1.4, "1.4 cores"],
@@ -113,6 +114,7 @@ describe("formatCores", () => {
   it("refuses to print a reading that cannot be real", () => {
     expect(formatCores(Number.NaN)).toBe("—");
     expect(formatCores(-1)).toBe("—");
+    expect(formatCores(Number.POSITIVE_INFINITY)).toBe("—");
   });
 });
 
