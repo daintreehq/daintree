@@ -278,7 +278,7 @@ describe("Toolbar shortcut tooltips — issue #3443", () => {
       // definition here is what makes this an agreement check rather than a
       // restatement of either side.
       const definitionSource = await fs.readFile(COPY_TREE_ACTION_PATH, "utf-8");
-      const copyTreeAction = definitionSource.match(/id: "worktree\.copyTree"[\s\S]*?run: async/);
+      const copyTreeAction = definitionSource.match(/id: "worktree\.copyTree"[\s\S]*?run:/);
       expect(copyTreeAction).not.toBeNull();
       if (!copyTreeAction![0].includes("suppressShortcutHint: true")) return;
 
