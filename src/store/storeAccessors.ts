@@ -217,7 +217,8 @@ export function setProjectHomeExitAccessor(callback: () => void): void {
 }
 
 /**
- * Put this project's main area back on the grid. Called wherever a grid panel
+ * Put this project's main area back on the grid when Home alone is hiding it;
+ * a split already shows the grid and is left as it is. Called wherever a grid panel
  * is revealed on purpose — focused, spawned, moved or restored into the grid —
  * the same places that leave a maximize (#11060), because a panel landing
  * behind Home is just as invisible as one behind a maximized cell. Never from

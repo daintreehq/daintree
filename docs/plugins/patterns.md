@@ -623,7 +623,7 @@ A project plugin can replace what the grid shows when no panels are open, so the
 
 That surface is visible only while the grid is empty. The moment a terminal opens it gives way. Above it the host draws a thin strip of its own, outside your view's box: a switch between your panel and the stock launcher and, while your surface shows, an icon button for the launcher's search. You never need to reserve space for it, so a top-right toolbar is fine. The first time the surface shows in a project, the user is asked whether to keep it, and the answer is remembered for that project. For a navigation that stays put, the same panel kind is dockable by default; a docked instance survives everything the grid does. Give the user both: the canvas for the cold open, the dock for the working session.
 
-For a main screen that outlasts the cold open, claim `projectHome` too. The main area gains a Home/Grid switch, and your view stays one click away however many panels are open; focusing or spawning a grid panel returns to the grid. Details under [Surfaces](./project-local.md#surfaces).
+For a main screen that outlasts the cold open, claim `projectHome` too. The main area gains a Home/Split/Grid switch, and your view stays one click away however many panels are open. On Home alone, focusing or spawning a grid panel returns to the grid; in Split your view stays beside the panels while agents are launched and focused, and `application.arrangement: "beside-grid"` makes Split the project's default. Details under [Surfaces](./project-local.md#surfaces).
 
 ## Open your own panel from a command
 

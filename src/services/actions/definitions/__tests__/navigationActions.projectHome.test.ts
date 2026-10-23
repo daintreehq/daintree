@@ -53,7 +53,7 @@ const callbacks: ActionCallbacks = {
   }),
 };
 
-type HomeActionId = "nav.showProjectHome" | "nav.showGrid";
+type HomeActionId = "nav.showProjectHome" | "nav.showProjectSplit" | "nav.showGrid";
 
 function definition(id: HomeActionId): AnyActionDefinition {
   const actions: ActionRegistry = new Map();
@@ -76,7 +76,7 @@ beforeAll(() => {
 
 beforeEach(() => {
   harness.homeSurface = null;
-  useProjectHomeStore.setState({ homeByProject: {} });
+  useProjectHomeStore.setState({ routeByProject: {} });
 });
 
 afterEach(() => {
@@ -84,7 +84,7 @@ afterEach(() => {
 });
 
 describe("project Home navigation actions", () => {
-  it.each<HomeActionId>(["nav.showProjectHome", "nav.showGrid"])(
+  it.each<HomeActionId>(["nav.showProjectHome", "nav.showProjectSplit", "nav.showGrid"])(
     "%s is hidden and refused in a project without a Home",
     (id) => {
       const def = definition(id);
@@ -95,7 +95,7 @@ describe("project Home navigation actions", () => {
     }
   );
 
-  it.each<HomeActionId>(["nav.showProjectHome", "nav.showGrid"])(
+  it.each<HomeActionId>(["nav.showProjectHome", "nav.showProjectSplit", "nav.showGrid"])(
     "%s is offered once a project plugin's Home can show",
     (id) => {
       harness.homeSurface = { config: { id: "project:p1/acme.dash/home" } };
@@ -113,6 +113,17 @@ describe("project Home navigation actions", () => {
     await definition("nav.showProjectHome").run(undefined, ctx);
     expect(route()).toBe("home");
     expect(harness.exitMaximize).toHaveBeenCalledTimes(1);
+
+    await definition("nav.showGrid").run(undefined, ctx);
+    expect(route()).toBe("grid");
+  });
+
+  it("puts Home beside the grid and keeps a maximize, which fills only the panels' side", async () => {
+    harness.homeSurface = { config: { id: "project:p1/acme.dash/home" } };
+
+    await definition("nav.showProjectSplit").run(undefined, ctx);
+    expect(route()).toBe("split");
+    expect(harness.exitMaximize).not.toHaveBeenCalled();
 
     await definition("nav.showGrid").run(undefined, ctx);
     expect(route()).toBe("grid");

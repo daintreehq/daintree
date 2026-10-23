@@ -102,4 +102,47 @@ describe("ContentGridProjectHome", () => {
       screen.getByRole("region", { name: "Project home" })
     );
   });
+
+  describe("beside the grid (#14107)", () => {
+    it("leaves the banners, the focus region and the focused panel to the grid", () => {
+      const bindGridRegion = vi.fn();
+      render(
+        <ContentGridProjectHome
+          config={config}
+          beside
+          isMacroFocused
+          bindGridRegion={bindGridRegion}
+        />
+      );
+
+      const region = screen.getByRole("region", { name: "Project home" });
+      const order = Array.from(region.querySelectorAll("[data-testid]")).map((node) =>
+        node.getAttribute("data-testid")
+      );
+      expect(order).toEqual(["frame", "home-view"]);
+      expect(bindGridRegion).not.toHaveBeenCalledWith(region);
+      expect(region.getAttribute("data-macro-focus")).toBeNull();
+      expect(useProjectHomeStore.getState().presented).toBe(false);
+    });
+
+    it("keeps the plugin's view mounted, and stops covering the grid, when Home moves beside it", () => {
+      const { rerender } = render(
+        <ContentGridProjectHome config={config} isMacroFocused={false} bindGridRegion={() => {}} />
+      );
+      const view = screen.getByTestId("home-view");
+      expect(useProjectHomeStore.getState().presented).toBe(true);
+
+      rerender(
+        <ContentGridProjectHome
+          config={config}
+          beside
+          isMacroFocused={false}
+          bindGridRegion={() => {}}
+        />
+      );
+
+      expect(screen.getByTestId("home-view")).toBe(view);
+      expect(useProjectHomeStore.getState().presented).toBe(false);
+    });
+  });
 });

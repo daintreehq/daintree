@@ -115,6 +115,24 @@ describe("manifest application descriptor (#14097)", () => {
     ]);
   });
 
+  it.each(["full", "beside-grid"])("accepts a Home arranged %s (#14107)", (arrangement) => {
+    const result = parse(withApplication({ arrangement }));
+    expect(issues(result)).toEqual([]);
+    expect(result.success && result.data.application?.arrangement).toBe(arrangement);
+  });
+
+  it("rejects an arrangement outside the host's vocabulary", () => {
+    expect(issues(parse(withApplication({ arrangement: "tabs" })))).toEqual([
+      { code: "invalid_value", path: "application.arrangement" },
+    ]);
+  });
+
+  it("rejects an arrangement on a grid destination, which has no Home to arrange", () => {
+    expect(
+      issues(parse(withApplication({ destination: "grid", arrangement: "beside-grid" })))
+    ).toEqual([{ code: "application_arrangement_needs_home", path: "application.arrangement" }]);
+  });
+
   it("is available to project plugins only", () => {
     const { scope: _scope, ...installed } = manifest({ name: "Ledger", destination: "grid" });
     void _scope;

@@ -285,6 +285,7 @@ Names a project plugin as its project's application and points at the parts of i
 | `name` | yes | The application's name, 1-64 characters. |
 | `iconId` | no | The same vocabulary as a sidebar view's `iconId`. |
 | `destination` | yes | `"home"` or `"grid"`. `"home"` needs `contributes.surfaces.projectHome` (`application_home_unclaimed`). |
+| `arrangement` | no | `"full"` (the default) or `"beside-grid"`, for a `"home"` destination only (`application_arrangement_needs_home`). `"beside-grid"` opens the project in Split: your Home beside the host's grid, so agents launched and focused there never hide it. The destination and arrangement are a default; the user's own Home, Split or Grid choice always wins. |
 | `sidebarViewId` | no | A `contributes.views` entry with `location: "sidebar"` (`application_sidebar_view_unknown`). |
 | `settingsViewId` | no | A `contributes.views` entry with `location: "settings"`, the application's settings home (`application_settings_view_unknown`). |
 | `welcomeTour` | no | `id`: a `contributes.tours` entry with no `panelKind` (`application_tour_unknown`, `application_tour_panel_scoped`). `version`: a positive integer, raised when the tour is worth offering again. |

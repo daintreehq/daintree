@@ -482,6 +482,7 @@ export const CONTEXT_GATED_ACTION_IDS: ReadonlySet<string> = new Set([
   "project.openOnHost",
   "host.forwardPort",
   "nav.showProjectHome",
+  "nav.showProjectSplit",
   "nav.showGrid",
 ]);
 
