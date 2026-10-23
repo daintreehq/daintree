@@ -314,6 +314,8 @@ function noticeTargets(tool: string, args: Record<string, unknown>): string[] {
 interface PromptMark {
   at: number;
   callId: string;
+  /** The help session whose call it was. */
+  sessionId: string;
   ran: boolean;
 }
 
@@ -487,6 +489,8 @@ const CALL_UNKNOWN_DETAIL =
   "The host no longer holds a record of this callId, so it may or may not have run. Check what it would have changed before running it again as a new call.";
 const CALL_CONFLICT_DETAIL =
   "That callId was already used for a different call. Resend only the exact call it named, or make a new call.";
+const CALL_ID_TAKEN_DETAIL =
+  "That newCallId already names another call here. Nothing was sent; pick a fresh one.";
 const CALL_TOO_LARGE_DETAIL = "The call's arguments are too large to send. Nothing was sent.";
 const CALL_SENDER_REFUSED_DETAIL =
   "The host refused this Shell's identity on the current connection. Try again shortly.";
@@ -953,7 +957,7 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
     const keys: string[] = [];
     for (const terminalId of new Set(promptTargets(tool, args))) {
       const key = `${hostId}\u0000${terminalId}`;
-      const mark: PromptMark = { at: this.now(), callId, ran: false };
+      const mark: PromptMark = { at: this.now(), callId, sessionId: run.sessionId, ran: false };
       remember(
         this.prompted,
         key,
@@ -1001,18 +1005,16 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
     };
   }
 
-  /**
-   * Who a call id already names here, from what is still held of it: a call
-   * out, a notice pin, or a prompt mark, which knows its host alone.
-   */
-  private knownCall(callId: string): { hostId: HostId; helpSessionId: string | null } | null {
+  /** Who a call id already names here, from what is still held of it. */
+  private knownCall(callId: string): { hostId: HostId; helpSessionId: string } | null {
     const out = this.callsInFlight.get(callId);
     if (out !== undefined) return { hostId: out.hostId, helpSessionId: out.helpSessionId };
     const pin = this.noticePins.get(callId);
     if (pin !== undefined) return { hostId: pin.hostId, helpSessionId: pin.run.sessionId };
     for (const [key, marks] of this.prompted) {
-      if (marks.some((mark) => mark.callId === callId)) {
-        return { hostId: key.slice(0, key.indexOf("\u0000")), helpSessionId: null };
+      const mark = marks.find((candidate) => candidate.callId === callId);
+      if (mark !== undefined) {
+        return { hostId: key.slice(0, key.indexOf("\u0000")), helpSessionId: mark.sessionId };
       }
     }
     return null;
@@ -1051,23 +1053,25 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
     context: { tier: "core" | "full" }
   ): Promise<HostControlOutcome<HostCallResult>> {
     return this.settle(helpSessionId, async (caller) => {
-      const resend = args.callId !== undefined;
       const callId = args.callId ?? args.newCallId ?? this.newId();
+      // The caller's own id for a first send (#14240) may already name a call
+      // here: another session's or host's is never taken over, and one of its
+      // own is only ever resent, since the host may have forgotten it by now.
+      const known = args.newCallId !== undefined ? this.knownCall(callId) : null;
+      if (
+        known !== null &&
+        (known.hostId !== args.hostId || known.helpSessionId !== helpSessionId)
+      ) {
+        return {
+          ...this.outcomeWith("conflict", CALL_ID_TAKEN_DETAIL),
+          callId: null,
+          result: null,
+        };
+      }
+      const resend = args.callId !== undefined || known !== null;
       const sent = { callId, result: null };
       // A first send refused here sent nothing, so there is no call to follow.
       const unsent = { callId: resend ? callId : null, result: null };
-      // The caller's own id for a first send (#14240) may already name a call
-      // here: another session's or host's is never taken over, and a repeat of
-      // its own is noted no more than a resend is.
-      const chosen = args.newCallId !== undefined;
-      const known = chosen ? this.knownCall(callId) : null;
-      if (
-        known !== null &&
-        (known.hostId !== args.hostId ||
-          (known.helpSessionId !== null && known.helpSessionId !== helpSessionId))
-      ) {
-        return { ...this.outcomeWith("conflict", CALL_CONFLICT_DETAIL), ...unsent };
-      }
       const local = args.hostId === LOCAL_HOST_ID ? this.deps.local : undefined;
       const host = local
         ? undefined
@@ -1101,10 +1105,9 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
         args: toolArgs,
         runMs,
       };
-      const noted =
-        resend || known !== null
-          ? NOTHING_NOTED
-          : this.noteCall(callId, args.hostId, caller, args.tool, toolArgs);
+      const noted = resend
+        ? NOTHING_NOTED
+        : this.noteCall(callId, args.hostId, caller, args.tool, toolArgs);
       this.callsOut.set(args.hostId, (this.callsOut.get(args.hostId) ?? 0) + 1);
       // A resend while its first send is still out is the same call: it shares
       // that record, so an approval the host is asking for still counts.
@@ -1187,7 +1190,7 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
         case "done": {
           noted.ran(answer.result);
           // A resend that got the answer its first send lost: the host has the call.
-          const pin = resend || known !== null ? this.noticePins.get(callId) : undefined;
+          const pin = resend ? this.noticePins.get(callId) : undefined;
           if (pin?.hostId === args.hostId && pin.run.sessionId === helpSessionId) {
             noteAnswered(pin, answer.result);
           }

@@ -179,7 +179,9 @@ export const HostCallArgsSchema = z
       .describe("Resend an ambiguous call under its callId. It never runs twice."),
     newCallId: idSchema
       .optional()
-      .describe("Your own fresh UUID for a write; with no answer back, resend under it as callId."),
+      .describe(
+        "Your own fresh UUID for a write; with no answer back, resend under it as callId. Never both."
+      ),
   })
   // A caller-chosen id names a first send, a callId a resend: one call is never both (#14240).
   .refine((args) => args.callId === undefined || args.newCallId === undefined);

@@ -326,11 +326,23 @@ describe("host.call audit projection (#13493)", () => {
       projectId: null,
       tool: "agent.launch",
       callId: CALL_ID,
+      newCallId: null,
       "args.agentId": "claude",
       "args.prompt": "<string: 10 chars>",
       "args.notify": false,
     });
     expect(summarizeMcpArgs(projected)).not.toContain("rm -rf");
+  });
+
+  it("keeps the caller's own id for a first send, so its resend reads as the same call (#14240)", () => {
+    const projected = projectAuditArgs("host.call", {
+      hostId: "studio-01",
+      tool: "terminal.sendCommandOwned",
+      newCallId: CALL_ID,
+      args: {},
+    }) as Record<string, unknown>;
+
+    expect(projected).toMatchObject({ callId: null, newCallId: CALL_ID });
   });
 
   it("applies the relayed tool's own projection, and keeps what it names to its length", () => {
@@ -353,14 +365,20 @@ describe("host.call audit projection (#13493)", () => {
         tool: "say hello to the team",
         args: { prompt: "x" },
       })
-    ).toEqual({ hostId: "studio-01", projectId: null, tool: null, callId: null });
+    ).toEqual({ hostId: "studio-01", projectId: null, tool: null, callId: null, newCallId: null });
     expect(
       projectAuditArgs("host.call", {
         hostId: "studio-01",
         tool: "host.call",
         args: { tool: "agent.launch", args: { prompt: "nested" } },
       })
-    ).toEqual({ hostId: "studio-01", projectId: null, tool: "host.call", callId: null });
+    ).toEqual({
+      hostId: "studio-01",
+      projectId: null,
+      tool: "host.call",
+      callId: null,
+      newCallId: null,
+    });
   });
 
   it("keeps nothing anyone wrote when the host audits a call relayed to it, however short", () => {

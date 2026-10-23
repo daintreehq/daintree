@@ -168,6 +168,36 @@ describe("HostCallRuntime host.call (#13493)", () => {
     await expect(first).resolves.toMatchObject({ ok: true, value: { outcome: "ok" } });
   });
 
+  it("resends a newCallId this Shell already sent, so a forgotten one never starts again", async () => {
+    const SEND = {
+      ...CALL,
+      tool: "terminal.sendCommandOwned",
+      args: { terminalId: "t-1", command: "x" },
+    };
+    await runtime.call("a", { ...SEND, newCallId: "mine-1" }, { tier: "core" });
+    relayCall.mockResolvedValueOnce({ status: "unknown" });
+    const repeat = await runtime.call("a", { ...SEND, newCallId: "mine-1" }, { tier: "core" });
+
+    expect(relayCall.mock.calls[1]![1]).toMatchObject({ callId: "mine-1", resend: true });
+    expect(repeat).toMatchObject({ ok: true, value: { outcome: "expired", callId: "mine-1" } });
+  });
+
+  it("keeps a settled prompt's newCallId to the session that sent it", async () => {
+    const SEND = {
+      ...CALL,
+      tool: "terminal.sendCommandOwned",
+      args: { terminalId: "t-1", command: "x" },
+    };
+    runs.set("b", { ...RUN_A, sessionId: "b", terminalId: "t-b" });
+    lanes.set("b", { projectId: "proj-1", slot: 1 });
+    await runtime.call("a", { ...SEND, newCallId: "mine-1" }, { tier: "core" });
+
+    const other = await runtime.call("b", { ...SEND, newCallId: "mine-1" }, { tier: "core" });
+
+    expect(other).toMatchObject({ ok: true, value: { outcome: "conflict", callId: null } });
+    expect(relayCall).toHaveBeenCalledTimes(1);
+  });
+
   it("refuses an unknown host, and one whose control switch is off, sending nothing", async () => {
     await expect(
       runtime.call("a", { ...CALL, hostId: "nowhere" }, { tier: "core" })
