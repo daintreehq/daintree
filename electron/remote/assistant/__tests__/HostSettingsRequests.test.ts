@@ -73,7 +73,7 @@ function fakeHosts(names: Record<string, string>) {
         return {
           ...base,
           outcome: "conflict",
-          confirmedBy: null,
+          confirmedBy: "reply",
           instanceId: host.instanceId,
           settings: leaves(payload.hostId, keys),
         };
@@ -468,5 +468,42 @@ describe("host.settings (#14167)", () => {
     }
     expect((await t.run({ operation: "apply", ticket: mine[0]! })).outcome).toBe("expired");
     expect((await t.run({ operation: "apply", ticket: other.ticket! }, "s2")).outcome).toBe("ok");
+  });
+
+  it("doesn't claim nothing changed when the answer was lost, nor repeat values it can't vouch for", async () => {
+    const t = setup({ a: "Alpha" });
+    const { ticket } = await t.run({
+      operation: "preview",
+      hostIds: ["a"],
+      patch: { canopyMode: "on", "idleTerminalNotify.enabled": true },
+    });
+    const lost = (outcome: "conflict" | "unconfirmed"): HostSettingsUpdateResult => ({
+      hostId: "a",
+      hostName: "Alpha",
+      scope: "host",
+      outcome,
+      confirmedBy: outcome === "conflict" ? "readback" : null,
+      instanceId: outcome === "conflict" ? "a-launch" : null,
+      settings:
+        outcome === "conflict"
+          ? [
+              { key: "canopyMode", value: "unset", revision: "2" },
+              { key: "idleTerminalNotify.enabled", value: true, revision: "v:true" },
+            ]
+          : [],
+    });
+    t.client.update.mockResolvedValueOnce(lost("conflict"));
+    const seen = await t.run({ operation: "apply", ticket: ticket! });
+    expect(seen.hosts[0]).toMatchObject({ outcome: "ambiguous" });
+    expect(seen.hosts[0]!.detail).not.toMatch(/Nothing was changed/);
+
+    const again = await t.run({
+      operation: "preview",
+      hostIds: ["a"],
+      patch: { canopyMode: "on", "idleTerminalNotify.enabled": true },
+    });
+    t.client.update.mockResolvedValueOnce(lost("unconfirmed"));
+    const unknown = await t.run({ operation: "apply", ticket: again.ticket! });
+    expect(unknown.hosts[0]).toMatchObject({ outcome: "ambiguous", settings: [] });
   });
 });

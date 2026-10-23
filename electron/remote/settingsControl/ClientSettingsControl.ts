@@ -239,7 +239,7 @@ export class ClientSettingsControl {
       return {
         ...base,
         outcome: reply.data.outcome,
-        confirmedBy: reply.data.outcome === "applied" ? "reply" : null,
+        confirmedBy: "reply",
         instanceId: reply.data.instanceId,
         settings: reply.data.settings,
       };
@@ -262,7 +262,7 @@ export class ClientSettingsControl {
     }
     const result = (outcome: HostSettingsUpdateResult["outcome"], settings: HostSettingLeaf[]) => ({
       outcome,
-      confirmedBy: outcome === "applied" ? ("readback" as const) : null,
+      confirmedBy: "readback" as const,
       instanceId: now.instanceId,
       settings,
     });

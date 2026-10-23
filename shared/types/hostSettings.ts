@@ -162,6 +162,11 @@ export interface HostSettingsUpdateResult {
   hostName: string;
   scope: "host";
   outcome: "applied" | "conflict" | "not-applied" | "unconfirmed";
+  /**
+   * How the outcome is known: the host's own answer, or what a readback after
+   * a lost answer showed. Only the host's own `conflict` says nothing was
+   * written; one seen in a readback may follow this change having landed.
+   */
   confirmedBy: "reply" | "readback" | null;
   instanceId: string | null;
   settings: HostSettingLeaf[];

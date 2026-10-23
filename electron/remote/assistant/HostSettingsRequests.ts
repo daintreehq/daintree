@@ -81,6 +81,8 @@ const CONFLICT_DETAIL =
   "The setting changed there since the preview, or the host restarted. Nothing was changed; preview again.";
 const UNCONFIRMED_DETAIL =
   "The host didn't answer and couldn't be read back. Read it before trying again.";
+const READBACK_CONFLICT_DETAIL =
+  "The host didn't answer, and what it holds now isn't what was asked: it changed there meanwhile, maybe after this change landed. Read it before trying again.";
 const ALREADY_DETAIL = "Already set that way. Nothing was changed there.";
 const PARTIAL_PREFIX = "Canopy was shown there, but not turned on. ";
 const PARTIAL_CONFLICT_DETAIL = `${PARTIAL_PREFIX}It changed there meanwhile; preview again.`;
@@ -461,10 +463,16 @@ export class HostSettingsRequests {
         case "applied":
           landed = true;
           return null;
-        case "conflict":
         case "not-applied":
           return row("conflict", landed ? PARTIAL_CONFLICT_DETAIL : CONFLICT_DETAIL);
+        case "conflict":
+          if (result.confirmedBy === "reply") {
+            return row("conflict", landed ? PARTIAL_CONFLICT_DETAIL : CONFLICT_DETAIL);
+          }
+          return row("ambiguous", READBACK_CONFLICT_DETAIL);
         case "unconfirmed":
+          // What the preview read is no longer known to stand: left out, not repeated.
+          for (const key of Object.keys(patch) as HostSettingKey[]) settings.delete(key);
           return row("ambiguous", UNCONFIRMED_DETAIL);
       }
     };
