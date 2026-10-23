@@ -60,6 +60,7 @@ vi.mock("../../../services/pty/projectSessionJournal.js", () => teardownMock);
 // deleting the notify from the remove path left this whole file green (#12231).
 const pluginLifecycleMock = vi.hoisted(() => ({
   notifyProjectPluginsClosed: vi.fn<(projectId: string) => void>(),
+  notifyProjectPluginsRemoved: vi.fn<(projectId: string) => void>(),
 }));
 vi.mock("../../../window/projectPluginLifecycle.js", () => pluginLifecycleMock);
 
@@ -173,6 +174,8 @@ describe("project:remove handler", () => {
     expect(
       pluginLifecycleMock.notifyProjectPluginsClosed.mock.invocationCallOrder[0]!
     ).toBeLessThan(removeOrder);
+    // Removed, not just closed: its per-project package enablements go too.
+    expect(pluginLifecycleMock.notifyProjectPluginsRemoved).toHaveBeenCalledWith("proj-1");
   });
 
   it("fails closed: does NOT remove the project when the teardown is unconfirmed", async () => {
@@ -205,6 +208,7 @@ describe("project:remove handler", () => {
     expect(refreshProjectMenuStateMock).not.toHaveBeenCalled();
     // The row survives with its agents still running, so its plugins do too.
     expect(pluginLifecycleMock.notifyProjectPluginsClosed).not.toHaveBeenCalled();
+    expect(pluginLifecycleMock.notifyProjectPluginsRemoved).not.toHaveBeenCalled();
   });
 
   it("fails closed when the teardown throws: the old swallow-and-remove is gone", async () => {

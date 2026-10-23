@@ -656,6 +656,15 @@ export interface StoreSchema {
   projectPluginTrust?: Record<string, ProjectPluginTrustRecord>;
 
   /**
+   * Which projects an installed `instanceMode: "project"` package is enabled in:
+   * `projectId → manifest ids`. Kept apart from `plugins.installed` because that
+   * record is the package's provenance and a project id is machine-local state.
+   * Absent or empty means no instance anywhere, and the host runs nothing for it.
+   * Additive key with no numbered migration, like `projectPluginTrust`.
+   */
+  pluginProjectInstances?: Record<string, string[]>;
+
+  /**
    * Per-project visibility for INSTALLED (global) plugins: which manifest ids
    * are hidden by default, plus each project's explicit answers, which win in
    * either direction. Absence everywhere means visible.

@@ -1,5 +1,6 @@
 import * as semver from "semver";
 import {
+  makeInstalledProjectInstanceKey,
   makeProjectPluginInstanceKey,
   pluginManifestIdFromInstanceKey,
   projectIdFromPluginInstanceKey,
@@ -141,7 +142,8 @@ function payloadFailure(err: unknown): PluginServiceResult<never> {
  * it hasn't run, and owns every call until it settles exactly once.
  *
  * Resolution never consults focus or a renderer. A project-bound consumer gets
- * its own project's instance of the provider first, then the app-global one if
+ * its own project's instance of the provider first (the repository copy, or
+ * else an installed package's per-project instance), then the app-global one if
  * it is switched on for that project; an app-global consumer only ever reaches
  * app-global providers. Service names carry their provider's manifest id (the
  * manifest gate enforces it), so a name picks one plugin and only the instance
@@ -437,7 +439,11 @@ export class PluginServiceBroker {
       consumer.projectId === null
         ? [providerManifestId]
         : [
+            // The repository copy and an installed package's per-project
+            // instance never run in one project together; whichever is loaded
+            // is the project's own.
             makeProjectPluginInstanceKey(consumer.projectId, providerManifestId),
+            makeInstalledProjectInstanceKey(consumer.projectId, providerManifestId),
             providerManifestId,
           ];
     const offered: string[] = [];

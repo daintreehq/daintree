@@ -62,6 +62,7 @@ vi.mock("../../../services/pty/terminalSessionPersistence.js", () => persistence
 // PluginService module graph, which this handler test has no business loading.
 const pluginLifecycleMock = vi.hoisted(() => ({
   notifyProjectPluginsClosed: vi.fn<(projectId: string) => void>(),
+  notifyProjectPluginsRemoved: vi.fn<(projectId: string) => void>(),
 }));
 vi.mock("../../../window/projectPluginLifecycle.js", () => pluginLifecycleMock);
 

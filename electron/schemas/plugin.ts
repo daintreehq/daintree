@@ -3587,6 +3587,11 @@ function buildPluginManifestSchema(origin: PluginOrigin) {
       // here — whether it is required, optional-but-rejected, or absent is a
       // function of the discovering `origin`, enforced in `superRefine`.
       scope: z.literal("project").optional(),
+      // Opt-in for an INSTALLED package to run as independently bound project
+      // instances instead of one app-wide singleton. Absent means singleton, so
+      // every existing manifest parses and loads exactly as before. Whether the
+      // origin may declare it is enforced in `superRefine`.
+      instanceMode: z.literal("project").optional(),
       // Project plugins only; its references are resolved in `superRefine`.
       application: PluginApplicationSchema.optional(),
       // Whether a window attached from another machine may use the plugin.
@@ -3820,6 +3825,29 @@ function buildPluginManifestSchema(origin: PluginOrigin) {
         });
       }
 
+      if (manifest.instanceMode === "project") {
+        if (origin !== "user") {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ["instanceMode"],
+            message:
+              '"instanceMode": "project" opts an installed package into per-project instances; a builtin or project-local plugin has no installed package to instance.',
+            params: { errorCode: "instance_mode_installed_only" },
+          });
+        } else if (manifest.scope === "project") {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ["instanceMode"],
+            message:
+              '"instanceMode": "project" and "scope": "project" are mutually exclusive — scope marks a plugin that lives in one repository, instanceMode marks an installed package that runs once per selected project.',
+            params: { errorCode: "instance_mode_scope_conflict" },
+          });
+        }
+      }
+      // An instanced installed package runs under the same project binding as a
+      // project-local plugin, so it takes the same contribution restrictions.
+      const projectRuntime = manifest.scope === "project" || manifest.instanceMode === "project";
+
       const selfIndex = manifest.worksWith?.indexOf(manifest.name) ?? -1;
       if (selfIndex !== -1) {
         ctx.addIssue({
@@ -3868,7 +3896,7 @@ function buildPluginManifestSchema(origin: PluginOrigin) {
       // widening the rule would reject plugins that install today, which is its
       // own decision with its own migration. Project scope is new surface, so
       // it starts closed.
-      if (manifest.scope === "project" && manifest.contributes.forgeProviders.length > 0) {
+      if (projectRuntime && manifest.contributes.forgeProviders.length > 0) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
           path: ["contributes", "forgeProviders"],
@@ -3892,7 +3920,7 @@ function buildPluginManifestSchema(origin: PluginOrigin) {
       // structural obstacle so a later phase knows what it has to build first.
       // Installed and builtin plugins are unaffected — they ARE app-wide, which
       // is what the absent `scope` means.
-      if (manifest.scope === "project") {
+      if (projectRuntime) {
         for (const [group, reason] of PROJECT_SCOPE_UNSCOPED_CONTRIBUTIONS) {
           if (manifest.contributes[group].length === 0) continue;
           ctx.addIssue({
@@ -3921,12 +3949,12 @@ function buildPluginManifestSchema(origin: PluginOrigin) {
       // resolve against, which an installed plugin does not have.
       manifest.contributes.databases.forEach((database, index) => {
         if (database.location === "project") {
-          if (manifest.scope !== "project") {
+          if (!projectRuntime) {
             ctx.addIssue({
               code: z.ZodIssueCode.custom,
               path: ["contributes", "databases", index, "location"],
               message:
-                'a "project" database is available only to a "scope": "project" plugin — an installed plugin is bound to no project to put the file in. Use "location": "local".',
+                'a "project" database is available only to a "scope": "project" plugin or an "instanceMode": "project" package — a singleton installed plugin is bound to no project to put the file in. Use "location": "local".',
               params: { errorCode: "database_project_scope_only" },
             });
           } else if (!manifest.capabilities.includes("fs:project-write")) {

@@ -58,6 +58,7 @@ vi.mock("../../../projectMenuState.js", () => ({
 // needs a baseline of its own (#12231).
 const pluginLifecycleMock = vi.hoisted(() => ({
   notifyProjectPluginsClosed: vi.fn<(projectId: string) => void>(),
+  notifyProjectPluginsRemoved: vi.fn<(projectId: string) => void>(),
 }));
 vi.mock("../../../window/projectPluginLifecycle.js", () => pluginLifecycleMock);
 

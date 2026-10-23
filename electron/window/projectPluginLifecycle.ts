@@ -45,3 +45,17 @@ export function notifyProjectPluginsClosed(projectId: string): void {
       console.error("[projectPluginLifecycle] onProjectClosed failed:", err);
     });
 }
+
+/**
+ * This project was removed from Daintree, not just closed: forget which
+ * installed packages it had enabled per project, so nothing reloads into a
+ * project id that no longer exists. Sent after {@link notifyProjectPluginsClosed}.
+ */
+export function notifyProjectPluginsRemoved(projectId: string): void {
+  if (!projectId) return;
+  void import("../services/PluginService.js")
+    .then(({ pluginService }) => pluginService.forgetProjectInstances(projectId))
+    .catch((err: unknown) => {
+      console.error("[projectPluginLifecycle] forgetProjectInstances failed:", err);
+    });
+}

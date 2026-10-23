@@ -4638,6 +4638,15 @@ interface PluginManifest {
      */
     scope?: "project";
     /**
+     * Opts an installed package into running as one independently bound instance
+     * per selected project, instead of a single app-wide singleton. Absent means
+     * singleton. Installed packages only, and mutually exclusive with `scope`.
+     * An instance runs under the project-plugin binding contract: its settings,
+     * storage, databases and connections are pinned to the project it was enabled
+     * in, never to whichever project is focused.
+     */
+    instanceMode?: "project";
+    /**
      * Names this project plugin as the project's application and points at the
      * parts of it the plugin already contributes. `scope: "project"` only. See
      * {@link PluginApplicationDescriptor}.

@@ -8,7 +8,10 @@ import type {
   PluginServiceResult,
   PluginServicesContribution,
 } from "../../../../shared/types/pluginServices.js";
-import { makeProjectPluginInstanceKey } from "../../../../shared/types/plugin.js";
+import {
+  makeInstalledProjectInstanceKey,
+  makeProjectPluginInstanceKey,
+} from "../../../../shared/types/plugin.js";
 import {
   PLUGIN_SERVICE_MAX_ARGS_BYTES,
   PLUGIN_SERVICE_MAX_CONCURRENT_CALLS,
@@ -311,6 +314,98 @@ describe("PluginServiceBroker", () => {
         "unavailable"
       );
       expect(t.activatePlugin).not.toHaveBeenCalled();
+    });
+
+    describe("an installed package's per-project instance", () => {
+      const installedProviderId = makeInstalledProjectInstanceKey(PROJECT, "acme.jira");
+      const installedConsumerId = makeInstalledProjectInstanceKey(PROJECT, "acme.app");
+
+      it("serves consumers in its own project, under its bare manifest id", async () => {
+        const t = setup();
+        t.loadConsumer(projectConsumerId, consumerOf());
+        t.loadConsumer(installedConsumerId, consumerOf());
+        let seen: PluginServiceCallContext["caller"] | null = null;
+        t.load(installedProviderId, providerOf(), () =>
+          t.broker.bind(
+            installedProviderId,
+            t.plugins.get(installedProviderId)!,
+            ISSUES,
+            (_method, _args, ctx) => {
+              seen = ctx.caller;
+              return installedProviderId;
+            }
+          )
+        );
+
+        expect(
+          await t.broker.call(t.consumer(projectConsumerId, PROJECT), ISSUES, "lookup", {})
+        ).toEqual({ ok: true, value: installedProviderId });
+        expect(
+          await t.broker.call(t.consumer(installedConsumerId, PROJECT), ISSUES, "lookup", {})
+        ).toEqual({ ok: true, value: installedProviderId });
+        expect(seen).toEqual({ pluginId: "acme.app", projectId: PROJECT });
+        expect(t.broker.status(t.consumer(installedConsumerId, PROJECT), ISSUES)).toMatchObject({
+          available: true,
+          provider: { pluginId: "acme.jira", projectId: PROJECT },
+        });
+      });
+
+      it("is never reached from another project or an app-global caller", async () => {
+        const t = setup();
+        t.loadConsumer("acme.app", consumerOf());
+        const otherConsumerId = makeInstalledProjectInstanceKey(OTHER_PROJECT, "acme.app");
+        t.loadConsumer(otherConsumerId, consumerOf());
+        t.load(installedProviderId, providerOf(), () => bindAnswering(t, installedProviderId));
+
+        expectFailure(await t.broker.call(t.consumer(), ISSUES, "lookup", {}), "unavailable");
+        expectFailure(
+          await t.broker.call(t.consumer(otherConsumerId, OTHER_PROJECT), ISSUES, "lookup", {}),
+          "unavailable"
+        );
+        expect(t.activatePlugin).not.toHaveBeenCalled();
+      });
+
+      it("yields to the repository copy when that is the one loaded in the project", async () => {
+        const t = setup();
+        t.loadConsumer(projectConsumerId, consumerOf());
+        t.load(projectProviderId, providerOf(), () => bindAnswering(t, projectProviderId));
+        t.load(installedProviderId, providerOf(), () => bindAnswering(t, installedProviderId));
+        t.load("acme.jira", providerOf(), () => bindAnswering(t, "acme.jira"));
+
+        expect(
+          await t.broker.call(t.consumer(projectConsumerId, PROJECT), ISSUES, "lookup", {})
+        ).toEqual({ ok: true, value: projectProviderId });
+      });
+
+      it("is preferred over the app-global provider", async () => {
+        const t = setup();
+        t.loadConsumer(projectConsumerId, consumerOf());
+        t.load(installedProviderId, providerOf(), () => bindAnswering(t, installedProviderId));
+        t.load("acme.jira", providerOf(), () => bindAnswering(t, "acme.jira"));
+
+        expect(
+          await t.broker.call(t.consumer(projectConsumerId, PROJECT), ISSUES, "lookup", {})
+        ).toEqual({ ok: true, value: installedProviderId });
+      });
+
+      it("settles its in-flight calls as unavailable when it unloads", async () => {
+        const t = setup();
+        t.loadConsumer(projectConsumerId, consumerOf());
+        const answer = deferred();
+        t.load(installedProviderId, providerOf(), () =>
+          t.broker.bind(
+            installedProviderId,
+            t.plugins.get(installedProviderId)!,
+            ISSUES,
+            () => answer.promise
+          )
+        );
+        const pending = t.broker.call(t.consumer(projectConsumerId, PROJECT), ISSUES, "lookup", {});
+        await flush();
+        t.plugins.delete(installedProviderId);
+        t.broker.retireInstance(installedProviderId);
+        expectFailure(await pending, "unavailable");
+      });
     });
 
     it("discloses the provider's capabilities and whether it is running", async () => {
