@@ -71,6 +71,14 @@ describe("resolveLiveAssistant", () => {
     ["another terminal", { ...laneSubject, terminalId: "t9" }, "NOT_FOUND"],
     ["an older generation", { ...laneSubject, incarnation: 2 }, "STALE_GENERATION"],
     ["a malformed subject", { terminalId: "t1" }, "VALIDATION"],
+    [
+      "the global session named as a project lane",
+      {
+        ...laneSubject,
+        scope: { kind: "project" as const, projectId: "daintree:global-assistant" },
+      },
+      "VALIDATION",
+    ],
   ])("refuses %s", async (_name, subject, code) => {
     const { src } = sources();
     await expect(resolveLiveAssistant(subject, src)).rejects.toMatchObject({ code });

@@ -13,16 +13,35 @@ const canopy = vi.hoisted(() => ({
   onTerminalData: vi.fn(() => () => {}),
 }));
 const view = vi.hoisted(() => ({ workspaceId: "p1" as string | null }));
-const panel = vi.hoisted(() => ({
-  ensureSlot: vi.fn(),
-  setActiveSlot: vi.fn(),
-  setOpen: vi.fn(),
-  requestFocus: vi.fn(),
-}));
+const panel = vi.hoisted(() => {
+  const listeners = new Set<(state: unknown) => void>();
+  const store = {
+    sessions: {} as Record<number, { terminalId: string | null }>,
+    ensureSlot: vi.fn(),
+    setActiveSlot: vi.fn(),
+    setOpen: vi.fn(),
+    requestFocus: vi.fn(),
+    listeners,
+    /** The view takes a lane over, as its own adoption does. */
+    bind(lane: number, terminalId: string) {
+      store.sessions = { ...store.sessions, [lane]: { terminalId } };
+      for (const listener of [...listeners]) listener(store);
+    },
+  };
+  return store;
+});
 const switchProject = vi.hoisted(() => vi.fn(async () => {}));
 
 vi.mock("@/store/viewWorkspaceId", () => ({ getViewWorkspaceId: () => view.workspaceId }));
-vi.mock("@/store/helpPanelStore", () => ({ useHelpPanelStore: { getState: () => panel } }));
+vi.mock("@/store/helpPanelStore", () => ({
+  useHelpPanelStore: {
+    getState: () => panel,
+    subscribe: (listener: (state: unknown) => void) => {
+      panel.listeners.add(listener);
+      return () => panel.listeners.delete(listener);
+    },
+  },
+}));
 vi.mock("@/store/projectStore", () => ({
   useProjectStore: { getState: () => ({ switchProject }) },
 }));
@@ -48,7 +67,10 @@ const destination = {
 describe("assistant subject adapter", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.useRealTimers();
     view.workspaceId = "p1";
+    panel.sessions = {};
+    panel.listeners.clear();
     Object.assign(window, { electron: { canopy } });
   });
 
@@ -70,14 +92,52 @@ describe("assistant subject adapter", () => {
     expect(panel.setActiveSlot).not.toHaveBeenCalled();
   });
 
-  it("activates the exact lane in place when its project is this view's", async () => {
+  it("activates the exact lane in place when this view shows its terminal", async () => {
     view.workspaceId = "p2";
+    panel.sessions = { 0: { terminalId: "t0" }, 2: { terminalId: "t1" } };
     canopy.resolveAssistant.mockResolvedValue(destination);
     expect(await openInAssistant(subject)).toEqual({ ok: true });
     expect(switchProject).not.toHaveBeenCalled();
-    expect(panel.ensureSlot).toHaveBeenCalledWith(2);
     expect(panel.setActiveSlot).toHaveBeenCalledWith(2);
     expect(panel.setOpen).toHaveBeenCalledWith(true);
+    expect(panel.ensureSlot).not.toHaveBeenCalled();
+  });
+
+  it("waits for the arriving view to take the lane over, then shows it", async () => {
+    view.workspaceId = "p2";
+    canopy.resolveAssistant.mockResolvedValue(destination);
+    const pending = activateAssistantLane(subject);
+    await vi.waitFor(() => expect(panel.listeners.size).toBe(1));
+    expect(panel.setOpen).not.toHaveBeenCalled();
+    panel.bind(2, "t1");
+    expect(await pending).toEqual({ ok: true });
+    expect(panel.setActiveSlot).toHaveBeenCalledWith(2);
+    expect(panel.listeners.size).toBe(0);
+  });
+
+  it("never opens an empty lane, where the panel could launch another session", async () => {
+    vi.useFakeTimers();
+    view.workspaceId = "p2";
+    // Another terminal in the lane is a different session, not the one chosen.
+    panel.sessions = { 2: { terminalId: "t-successor" } };
+    canopy.resolveAssistant.mockResolvedValue(destination);
+    const pending = activateAssistantLane(subject);
+    await vi.advanceTimersByTimeAsync(6_000);
+    expect(await pending).toEqual({ ok: false, reason: "not-attached" });
+    expect(panel.ensureSlot).not.toHaveBeenCalled();
+    expect(panel.setActiveSlot).not.toHaveBeenCalled();
+    expect(panel.setOpen).not.toHaveBeenCalled();
+    expect(panel.listeners.size).toBe(0);
+  });
+
+  it("refuses a session that ended while the view was taking the lane over", async () => {
+    view.workspaceId = "p2";
+    canopy.resolveAssistant.mockResolvedValueOnce(destination).mockResolvedValueOnce(null);
+    const pending = activateAssistantLane(subject);
+    await vi.waitFor(() => expect(panel.listeners.size).toBe(1));
+    panel.bind(2, "t1");
+    expect(await pending).toEqual({ ok: false, reason: "ended" });
+    expect(panel.setOpen).not.toHaveBeenCalled();
   });
 
   it("opens nothing for an ended session, before or after the switch", async () => {

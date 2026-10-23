@@ -64,6 +64,8 @@ vi.mock("../../../window/serviceRefs.js", () => ({ getPtyClient: () => ptyClient
 const assistants = vi.hoisted(() => ({
   lane: null as { sessionId: string; terminalId: string } | null,
   ended: new Set<(event: { projectId: string; slot: number; sessionId: string }) => void>(),
+  /** The global session, when one runs, and the view holding its input. */
+  global: null as null | { terminalId: string; generation: number; owner: number | null },
 }));
 vi.mock("../../../services/HelpSessionService.js", () => ({
   helpSessionService: {
@@ -77,7 +79,18 @@ vi.mock("../../../services/HelpSessionService.js", () => ({
     },
   },
 }));
-vi.mock("../../../services/globalAssistant.js", () => ({ peekGlobalAssistantService: () => null }));
+vi.mock("../../../services/globalAssistant.js", () => ({
+  peekGlobalAssistantService: () =>
+    assistants.global && {
+      getState: () => ({
+        phase: "running",
+        generation: assistants.global?.generation ?? 0,
+        terminalId: assistants.global?.terminalId ?? null,
+      }),
+      onChange: () => () => {},
+      inputOwnerWebContentsId: () => assistants.global?.owner ?? null,
+    },
+}));
 const saved = vi.hoisted(() => ({
   state: null as {
     terminals: Array<{ id: string; title: string; titleMode?: string; location?: string }>;
@@ -1242,7 +1255,20 @@ describe("canopy IPC", () => {
       state.mode = "unset";
       assistants.lane = { sessionId: "session-1", terminalId: "assistant-1" };
       assistants.ended.clear();
+      assistants.global = null;
     });
+
+    afterEach(() => {
+      getIpcDispatcher().setRemoteRouter(null);
+    });
+
+    function capturingSender(id = 4) {
+      const sent: Array<{ channel: string; payload: unknown }> = [];
+      const sender = Object.assign(fakeSender(id), {
+        send: (channel: string, payload: unknown) => sent.push({ channel, payload }),
+      });
+      return { sender, sent };
+    }
 
     async function openAssistant(sender = fakeSender(4), chosen: unknown = subject) {
       const view = (await invoke(
@@ -1254,8 +1280,17 @@ describe("canopy IPC", () => {
     }
 
     it("streams and answers the exact lane's run with no fleet row and Canopy off", async () => {
-      const { sender, watchId } = await openAssistant();
+      const capture = capturingSender();
+      const { sender, watchId } = await openAssistant(capture.sender);
       expect(watchId).not.toBeNull();
+      const forward = ptyClient.on.mock.calls.find(([event]) => event === "data-mirror")?.[1] as (
+        ...args: unknown[]
+      ) => void;
+      forward("assistant-1", "hello", 7);
+      expect(capture.sent).toContainEqual({
+        channel: CHANNELS.CANOPY_TERMINAL_DATA,
+        payload: { kind: "data", watchId, runId: "assistant-1", data: "hello", streamEnd: 7 },
+      });
       await invoke(CANOPY_METHOD_CHANNELS.terminalInput, sender, watchId, "y");
       await invoke(CANOPY_METHOD_CHANNELS.terminalSendKey, sender, watchId, "enter");
       await invoke(CANOPY_METHOD_CHANNELS.terminalSubmit, sender, watchId, "carry on");
@@ -1282,6 +1317,80 @@ describe("canopy IPC", () => {
         expect(result.ok).toBe(false);
       }
       expect(ptyClient.acquireIpcDataMirror).not.toHaveBeenCalled();
+    });
+
+    it("refuses a window bound to another host, whose input goes there", async () => {
+      getIpcDispatcher().setRemoteRouter({
+        hostForSender: () => "remote-1",
+      } as unknown as Parameters<ReturnType<typeof getIpcDispatcher>["setRemoteRouter"]>[0]);
+      const result = await outcome(
+        invoke(CANOPY_METHOD_CHANNELS.watchAssistantTerminal, fakeSender(4), subject)
+      );
+      expect(result).toEqual({
+        ok: false,
+        message: expect.stringContaining("machine they run on"),
+      });
+      expect(ptyClient.acquireIpcDataMirror).not.toHaveBeenCalled();
+    });
+
+    it("keeps an assistant's stream when Canopy is turned off", async () => {
+      state.mode = "on";
+      const { sender, watchId } = await openAssistant();
+      const off = await outcome(invoke(CANOPY_METHOD_CHANNELS.setMode, sender, "unset"));
+      expect(off.ok).toBe(true);
+      await invoke(CANOPY_METHOD_CHANNELS.terminalInput, sender, watchId, "y");
+      expect(state.writes).toEqual(["y"]);
+    });
+
+    it("takes the global session's input only from the window holding it", async () => {
+      assistants.global = { terminalId: "global-1", generation: 5, owner: 7 };
+      const globalSubject = {
+        hostId: "local",
+        scope: { kind: "global" },
+        terminalId: "global-1",
+        incarnation: 1,
+      };
+      const reader = await openAssistant(fakeSender(4), globalSubject);
+      const owner = await openAssistant(fakeSender(7), globalSubject);
+      for (const [channel, args] of [
+        [CANOPY_METHOD_CHANNELS.terminalInput, ["y"]],
+        [CANOPY_METHOD_CHANNELS.terminalSendKey, ["enter"]],
+        [CANOPY_METHOD_CHANNELS.terminalSubmit, ["hi"]],
+      ] as const) {
+        const refused = await outcome(invoke(channel, reader.sender, reader.watchId, ...args));
+        expect(refused).toEqual({
+          ok: false,
+          message: expect.stringContaining("another view holds"),
+        });
+      }
+      expect(state.writes).toEqual([]);
+      expect(ptyClient.sendKey).not.toHaveBeenCalled();
+      expect(state.submits).toEqual([]);
+      await invoke(CANOPY_METHOD_CHANNELS.terminalInput, owner.sender, owner.watchId, "y");
+      expect(state.writes).toEqual(["y"]);
+
+      // Input moves to another window while a submit waits on the host.
+      ptyClient.getTerminalAsync.mockImplementationOnce(async () => {
+        if (assistants.global) assistants.global.owner = 4;
+        return state.record;
+      });
+      const moved = await outcome(
+        invoke(CANOPY_METHOD_CHANNELS.terminalSubmit, owner.sender, owner.watchId, "late")
+      );
+      expect(moved.ok).toBe(false);
+      expect(state.submits).toEqual([]);
+    });
+
+    it("refuses the global session named as a project lane", async () => {
+      assistants.global = { terminalId: "global-1", generation: 5, owner: 7 };
+      const result = await outcome(
+        invoke(CANOPY_METHOD_CHANNELS.watchAssistantTerminal, fakeSender(4), {
+          ...subject,
+          scope: { kind: "project", projectId: "daintree:global-assistant" },
+          lane: 0,
+        })
+      );
+      expect(result.ok).toBe(false);
     });
 
     it("leaves the worker path closed to assistants", async () => {

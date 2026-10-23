@@ -50,11 +50,13 @@ import { peekDriveLeaseService } from "../../services/DriveLeaseService.js";
 import { onWebContentsDestroyed } from "../../window/webContentsDestroyed.js";
 import { CHANNELS } from "../channels.js";
 import { defineIpcNamespace, op } from "../define.js";
+import { getIpcDispatcher } from "../dispatcher.js";
 import { CANOPY_METHOD_CHANNELS } from "./canopy.preload.js";
 import {
   beginWatchRequest,
   isCurrentWatchRequest,
   stopAllTerminalWatches,
+  stopWorkerTerminalWatches,
   resizeWatchedTerminal,
   stopTerminalWatch,
   watchTerminal,
@@ -847,6 +849,21 @@ function isViewer(ctx: IpcContext): boolean {
   return isCanopyViewerEndpointId(ctx.endpoint.endpointId);
 }
 
+/**
+ * An assistant is watched from a window of the machine it runs on. A window
+ * bound to another host forwards its terminal input there, so a stream opened
+ * here would take keystrokes meant for that host's terminal of the same id.
+ */
+function assertViewsThisMachine(ctx: IpcContext): void {
+  if (isViewer(ctx) || getIpcDispatcher().hostForSender(ctx.webContentsId) !== null) {
+    throw new AppError({
+      code: "UNSUPPORTED",
+      message: "Assistants are viewed from the machine they run on.",
+      userMessage: "Open this assistant from a window on its own machine.",
+    });
+  }
+}
+
 /** Where main holds the assistants a person can view; read at the moment of use. */
 async function liveAssistantSources() {
   const { helpSessionService } = await import("../../services/HelpSessionService.js");
@@ -994,12 +1011,7 @@ export const canopyNamespace = defineIpcNamespace({
       CANOPY_METHOD_CHANNELS.watchAssistantTerminal,
       async (ctx, subject: AgentDirectorySubject): Promise<CanopyTerminalView> => {
         checkRateLimit(CANOPY_METHOD_CHANNELS.watchAssistantTerminal, 120, 10_000);
-        if (isViewer(ctx)) {
-          throw new AppError({
-            code: "UNSUPPORTED",
-            message: "Assistants are viewed from the machine they run on.",
-          });
-        }
+        assertViewsThisMachine(ctx);
         const viewId = ctx.webContentsId;
         const ticket = beginWatchRequest(viewId);
         watchView(ctx);
@@ -1014,7 +1026,8 @@ export const canopyNamespace = defineIpcNamespace({
           binding.spawnedAt,
           ticket,
           binding.launchGeneration,
-          () => drivesRun(ctx, terminalId),
+          // Resize authority follows input: a global session's other windows only read it.
+          () => drivesRun(ctx, terminalId) && binding.mayType(viewId),
           binding
         );
       },
@@ -1028,18 +1041,20 @@ export const canopyNamespace = defineIpcNamespace({
      */
     resolveAssistant: op(
       CANOPY_METHOD_CHANNELS.resolveAssistant,
-      async (subject: AgentDirectorySubject): Promise<AssistantOpenDestination | null> => {
+      async (ctx, subject: AgentDirectorySubject): Promise<AssistantOpenDestination | null> => {
         checkRateLimit(CANOPY_METHOD_CHANNELS.resolveAssistant, 60, 10_000);
+        assertViewsThisMachine(ctx);
         const binding = await resolveLiveAssistant(subject, await liveAssistantSources()).catch(
           (error: unknown) => {
-            // A malformed subject or another host's is the caller's error, not an ended session.
+            // Only a session that has ended or been replaced answers "nothing to open";
+            // a bad subject, another host or a failure is said as itself.
             if (
               error instanceof AppError &&
-              (error.code === "VALIDATION" || error.code === "UNSUPPORTED")
+              (error.code === "NOT_FOUND" || error.code === "STALE_GENERATION")
             ) {
-              throw error;
+              return null;
             }
-            return null;
+            throw error;
           }
         );
         if (!binding) return null;
@@ -1047,7 +1062,8 @@ export const canopyNamespace = defineIpcNamespace({
         return scope.kind === "project" && lane !== undefined
           ? { scope: "project", hostId, projectId: scope.projectId, lane, terminalId, incarnation }
           : { scope: "global", hostId, terminalId, incarnation };
-      }
+      },
+      { withContext: true }
     ),
 
     unwatchTerminal: op(
@@ -1105,7 +1121,7 @@ export const canopyNamespace = defineIpcNamespace({
         }
         if (mode !== was) modeRevision++;
         store.set("canopyMode", mode);
-        if (mode !== "on") stopAllTerminalWatches();
+        if (mode !== "on") stopWorkerTerminalWatches();
         // Nothing was started, and nothing is wanted: no service to tell, but
         // every view still hears the change, as a service would have told them.
         if (!service && mode !== "on") {

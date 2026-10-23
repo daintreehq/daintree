@@ -8,6 +8,7 @@ import {
   resizeWatchedTerminal,
   stopAllTerminalWatches,
   stopTerminalWatch,
+  stopWorkerTerminalWatches,
   watchTerminal,
   watchedTerminal,
 } from "../canopyTerminalWatch.js";
@@ -424,6 +425,37 @@ describe("an assistant's watch", () => {
     expect(releases[0]).toHaveBeenCalledTimes(1);
     // A replaced run gets no size handed back from this view.
     expect(vi.mocked(pty.resize)).not.toHaveBeenCalled();
+  });
+
+  it("ends on a same-id respawn that prints nothing", async () => {
+    const { pty, emitter, generation } = fakePty();
+    const { sender, sent } = fakeSender();
+    const view = await openAssistant(pty, sender, binding());
+    generation.current = 2;
+    emitter.emit("spawn-result", "other", { success: true });
+    expect(sent).toEqual([]);
+    emitter.emit("spawn-result", "assistant-1", { success: true });
+    expect(sent).toEqual([{ kind: "ended", watchId: view.watchId, runId: "assistant-1" }]);
+  });
+
+  it("keeps a refused duplicate spawn's original running stream open", async () => {
+    const { pty, emitter } = fakePty();
+    const { sender, sent } = fakeSender();
+    const view = await openAssistant(pty, sender, binding());
+    emitter.emit("spawn-result", "assistant-1", { success: false });
+    expect(sent).toEqual([]);
+    expect(watchedTerminal(1, view.watchId!)).not.toBeNull();
+  });
+
+  it("outlives Canopy's worker streams being stopped", async () => {
+    const { pty } = fakePty();
+    const assistantView = fakeSender(1);
+    const workerView = fakeSender(2);
+    const assistant = await openAssistant(pty, assistantView.sender, binding());
+    const worker = await open(pty, workerView.sender, "run-1");
+    stopWorkerTerminalWatches();
+    expect(watchedTerminal(1, assistant.watchId!)).not.toBeNull();
+    expect(watchedTerminal(2, worker.watchId!)).toBeNull();
   });
 
   it("refuses input once the session is no longer the one bound, before any event", async () => {

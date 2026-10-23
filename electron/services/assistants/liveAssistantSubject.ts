@@ -5,6 +5,7 @@ import {
 } from "../../../shared/types/agentDirectory.js";
 import type { GlobalAssistantState } from "../../../shared/types/ipc/help.js";
 import type { PtyClient } from "../PtyClient.js";
+import { GLOBAL_ASSISTANT_ID } from "../../../shared/config/globalAssistant.js";
 
 /**
  * Where main looks to say which terminal an assistant subject names right now.
@@ -86,6 +87,11 @@ export async function resolveLiveAssistant(
     const { projectId } = subject.scope;
     const lane = subject.lane;
     if (lane === undefined) throw refuse("VALIDATION", "A project assistant names its lane");
+    // The global session is held as a lane of its reserved id; named that way it
+    // would skip the global session's one input owner.
+    if (projectId === GLOBAL_ASSISTANT_ID) {
+      throw refuse("VALIDATION", "The global assistant is named by its own scope");
+    }
     const session = sources.getRunningLaneSession(projectId, lane);
     if (!session || session.terminalId !== subject.terminalId) {
       throw refuse("NOT_FOUND", GONE, GONE);

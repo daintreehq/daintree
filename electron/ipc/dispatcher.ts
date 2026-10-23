@@ -157,6 +157,11 @@ export class IpcDispatcherImpl implements IpcDispatcher<IpcContext> {
     this.router = router;
   }
 
+  /** The remote host a window view is bound to, whose host channels it forwards there; null for this one. */
+  hostForSender(webContentsId: number): ReturnType<RemoteRouter["hostForSender"]> {
+    return this.router?.hostForSender(webContentsId) ?? null;
+  }
+
   /** Install the drive-lease gate; the disposer removes it if it is still the one installed. */
   setLeaseGate(gate: LeaseGate | null): () => void {
     this.leaseGate = gate;

@@ -226,6 +226,7 @@ export async function watchTerminal(
       ptyClient.off("resize-result", onResize);
       ptyClient.off("exit", onExit);
       ptyClient.off("host-crash", end);
+      if (binding) ptyClient.off("spawn-result", onSpawnResult);
       releaseMirror?.();
       releaseBinding?.();
     },
@@ -239,6 +240,11 @@ export async function watchTerminal(
   function onExit(id: string) {
     if (id === runId) end();
   }
+  // A duplicate spawn settling is when a successor under the id takes over; an
+  // assistant's may print nothing for a while, so its stream ends here instead.
+  function onSpawnResult(id: string) {
+    if (id === runId && !watch.isCurrent()) end();
+  }
 
   // Registered before anything is wired, so a throw part-way still unwinds.
   watches.set(sender.id, watch);
@@ -248,6 +254,7 @@ export async function watchTerminal(
     ptyClient.on("resize-result", onResize);
     ptyClient.on("exit", onExit);
     ptyClient.on("host-crash", end);
+    if (binding) ptyClient.on("spawn-result", onSpawnResult);
     releaseMirror = ptyClient.acquireIpcDataMirror(runId);
     // A replacement can be silent: the successor may print nothing for a while.
     releaseBinding = binding?.onEnded(end);
@@ -367,6 +374,17 @@ export function stopTerminalWatch(webContentsId: number): void {
 export function stopAllTerminalWatches(): void {
   requests.clear();
   for (const id of [...watches.keys()]) stopWatch(id);
+}
+
+/**
+ * End every worker stream Canopy opened, leaving the assistants people chose
+ * to watch, which never needed Canopy on. A request still in flight is
+ * cancelled either way: it is checked again on arrival.
+ */
+export function stopWorkerTerminalWatches(): void {
+  for (const [id, watch] of [...watches]) {
+    if (watch.binding === null) stopWatch(id);
+  }
 }
 
 /**
