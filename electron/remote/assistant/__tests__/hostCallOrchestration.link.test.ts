@@ -134,7 +134,7 @@ class Destination {
   readonly submissions = new Map<string, string[]>();
   accepts = true;
   /** Set to hold the next change until released, as a slow host would. */
-  gate: { reached: () => void; release: Promise<void> } | null = null;
+  gate: { reached: (callId: string) => void; release: Promise<void> } | null = null;
   private next = 0;
   private readonly sessions: Client[] = [];
 
@@ -219,12 +219,17 @@ class Destination {
         lines: ["Deletes the worktree and its branch."],
         callId,
       } as never);
-      if (asked.decision !== "approved") return failed("USER_REJECTED", "Not approved");
+      // As the viewless executor reads the answer: a Shell's refusal is nobody approving.
+      if (asked.decision === "rejected") return failed("USER_REJECTED", "Rejected");
+      if (asked.decision === "timeout") return failed("CONFIRMATION_TIMEOUT", "Timed out");
+      if (asked.decision !== "approved") {
+        return failed("CONFIRMATION_REQUIRED", "No one could approve this here");
+      }
     }
     if (this.gate) {
       const { reached, release } = this.gate;
       this.gate = null;
-      reached();
+      reached(callId);
       await release;
     }
     this.effects.push({ actionId, args });
@@ -362,7 +367,27 @@ let loseNextAnswer: { value: boolean };
 let asked: string[];
 let shell: ReturnType<typeof startShell>;
 
-function hostSource(session: LinkSession) {
+/** Relayed calls as they arrive on the host, before its ledger or anything else sees them. */
+const arrivals = { mcpCalls: 0 };
+
+function hostSource(link: LinkSession) {
+  const session = new Proxy(link, {
+    get(target, property) {
+      if (property === "registerCallHandler") {
+        return (method: string, schema: unknown, handler: (payload: unknown) => unknown) =>
+          target.registerCallHandler(
+            method as never,
+            schema as never,
+            ((payload: unknown) => {
+              if (method === AssistantLinkMethod.MCP_CALL) arrivals.mcpCalls++;
+              return handler(payload);
+            }) as never
+          );
+      }
+      const value = Reflect.get(target, property, target) as unknown;
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
   const ctx = {
     session,
     sessionId: "link-1",
@@ -605,39 +630,44 @@ describe("an assistant run replaced while its write is pending (#14169)", () => 
     // The person approves, but only once the run that asked has been replaced.
     const asking = shell.runtime;
     const originalAsk = asking.receiveApproval.bind(asking);
+    const answers: unknown[] = [];
     vi.spyOn(asking, "receiveApproval").mockImplementation(async (hostId, payload) => {
       const pending = originalAsk(hostId, payload);
       runs.set("help-a", { ...RUN_A, launchGeneration: 2 });
-      return pending;
+      answers.push(await pending);
+      return answers.at(-1) as never;
     });
 
     const deleted = await settled(call("worktree.deleteOwned", { worktreeId: "/wt/feature" }));
 
     expect(asked).toEqual(["worktree.delete"]);
+    expect(answers).toEqual([expect.objectContaining({ decision: "refused" })]);
     expect(deleted.result).toMatchObject({ isError: true });
+    expect(JSON.stringify(deleted.result)).toContain("CONFIRMATION_REQUIRED");
     expect(destination.count("worktree.delete")).toBe(0);
     expect(destination.worktrees.has("/wt/feature")).toBe(true);
   });
 
-  it("answers the successor's resend of a call still running from the record, never again", async () => {
+  it("joins the successor's resend of a call still running on the host, running it once", async () => {
     await launchWorker();
     const gate = deferred();
-    const reached = deferred();
+    const reached = deferred<string>();
     destination.gate = { reached: reached.resolve, release: gate.promise };
     const first = call("terminal.sendCommandOwned", SEND);
-    await reached.promise;
+    // The callId as the host received it: what a successor would have to present.
+    const callId = await reached.promise;
 
     // Replaced mid-call: the old run's submission is still being made on the host.
     runs.set("help-a", { ...RUN_A, launchGeneration: 2 });
+    const before = arrivals.mcpCalls;
+    const resent = call("terminal.sendCommandOwned", SEND, { callId });
+    await vi.waitFor(() => expect(arrivals.mcpCalls).toBe(before + 1));
     gate.resolve();
-    const answered = await settled(first);
-    expect(destination.submissions.get("w-1")).toHaveLength(1);
 
-    const resent = await settled(
-      call("terminal.sendCommandOwned", SEND, { callId: answered.callId! })
-    );
-    expect(resent.outcome).toBe("ok");
-    expect(resent.result).toEqual(answered.result);
+    const [answered, joined] = await Promise.all([settled(first), settled(resent)]);
+    expect(answered).toMatchObject({ outcome: "ok", callId });
+    expect(joined).toMatchObject({ outcome: "ok", callId });
+    expect(joined.result).toEqual(answered.result);
     expect(destination.submissions.get("w-1")).toHaveLength(1);
   });
 });
@@ -725,8 +755,12 @@ describe("restarting the coordinating Shell mid-workload (#14169)", () => {
             { callId: unit.launchCallId, helpSessionId: "help-b" }
           )
         );
-        // The old help session's call isn't the new one's to read back.
-        expect(resent.outcome).not.toBe("ok");
+        // The old help session's call isn't the new one's to read back, and isn't run again.
+        expect(resent).toMatchObject({
+          outcome: "conflict",
+          callId: unit.launchCallId,
+          result: null,
+        });
         const fresh = await settled(
           call(
             "agent.launch",

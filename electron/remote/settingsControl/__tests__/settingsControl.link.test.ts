@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import {
   hostSettingRefusal,
   type HostSettingKey,
@@ -374,6 +374,10 @@ describe("host settings over a link, with no project or window on the host", () 
     it("keeps another Shell's change to a sibling key when this one's reply is lost (#14169)", async () => {
       // A second Shell on its own link to the same host.
       const other = await openSessionPair(dir);
+      onTestFinished(() => {
+        other.host.close("test");
+        other.client.close("test");
+      });
       new HostSettingsControl({
         load: async () => state.leaves(),
         runWrite: (write) => write(),
@@ -434,8 +438,6 @@ describe("host settings over a link, with no project or window on the host", () 
         canopyMode: "unset",
         "agentDefaults.defaultAgent": "claude",
       });
-      other.host.close("test");
-      other.client.close("test");
     });
 
     it("is unconfirmed when the link is gone too, and nothing is resent", async () => {
