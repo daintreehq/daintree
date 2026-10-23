@@ -381,7 +381,7 @@ class TerminalInstanceService {
       fetchAndRestore: (id) => this.restoreController.fetchAndRestore(id),
       isViewObservable: isProjectViewObservable,
       isWorkerIngestEnabled: isPaintFabricWorkerIngestEnabled,
-      applyStdinGate: (managed) => this.applyStdinGate(managed),
+      applyInputLock: (managed) => this.applyInputLock(managed),
     });
 
     this.writeController = new TerminalWriteController({
@@ -4511,13 +4511,16 @@ class TerminalInstanceService {
     const managed = this.instances.get(id);
     if (!managed) return;
 
-    managed.isInputLocked = locked;
-    this.applyStdinGate(managed);
+    managed.inputLockedByUser = locked;
+    this.applyInputLock(managed);
   }
 
-  private applyStdinGate(managed: ManagedTerminal): void {
-    managed.terminal.options.disableStdin =
-      managed.isInputLocked === true || managed.historyRefilling === true;
+  // Every input route checks `isInputLocked`, so a history refill holds typing
+  // through it. Only the user's lock reaches xterm's stdin gate: that gate
+  // also swallows the replies a program's queries need while it replays.
+  private applyInputLock(managed: ManagedTerminal): void {
+    managed.isInputLocked = managed.inputLockedByUser === true || managed.historyRefilling === true;
+    managed.terminal.options.disableStdin = managed.inputLockedByUser === true;
   }
 
   /**

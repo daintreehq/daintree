@@ -67,7 +67,7 @@ describe("TerminalHistoryReleaseController (#14220)", () => {
   let observable: boolean;
   let workerIngest: boolean;
   let fetchAndRestore: ReturnType<typeof vi.fn<(id: string) => Promise<boolean>>>;
-  let stdinHeldDuringFetch: boolean[];
+  let inputHeldDuringFetch: boolean[];
   let controller: TerminalHistoryReleaseController;
 
   beforeEach(() => {
@@ -81,9 +81,9 @@ describe("TerminalHistoryReleaseController (#14220)", () => {
     observable = true;
     workerIngest = false;
     mockPerformanceModeStore.performanceMode = false;
-    stdinHeldDuringFetch = [];
+    inputHeldDuringFetch = [];
     fetchAndRestore = vi.fn(async (id: string) => {
-      stdinHeldDuringFetch.push(instances.get(id)?.terminal.options.disableStdin === true);
+      inputHeldDuringFetch.push(instances.get(id)?.isInputLocked === true);
       return true;
     });
     controller = new TerminalHistoryReleaseController({
@@ -91,9 +91,9 @@ describe("TerminalHistoryReleaseController (#14220)", () => {
       fetchAndRestore,
       isViewObservable: () => observable,
       isWorkerIngestEnabled: () => workerIngest,
-      applyStdinGate: (managed) => {
-        managed.terminal.options.disableStdin =
-          managed.isInputLocked === true || managed.historyRefilling === true;
+      applyInputLock: (managed) => {
+        managed.isInputLocked =
+          managed.inputLockedByUser === true || managed.historyRefilling === true;
       },
     });
   });
@@ -277,33 +277,62 @@ describe("TerminalHistoryReleaseController (#14220)", () => {
 
     await reveal("t1");
 
-    expect(stdinHeldDuringFetch).toEqual([true]);
-    expect(managed.terminal.options.disableStdin).toBe(false);
+    expect(inputHeldDuringFetch).toEqual([true]);
+    expect(managed.isInputLocked).toBe(false);
     expect(renderSuspension.suspendXtermRender).toHaveBeenCalledTimes(1);
-    expect(renderSuspension.resumeXtermRender).toHaveBeenCalledTimes(1);
+    const [, owner] = renderSuspension.suspendXtermRender.mock.calls[0] as unknown[];
+    expect(owner).not.toBe("view");
+    expect(renderSuspension.resumeXtermRender).toHaveBeenCalledWith(managed.terminal, owner);
+  });
+
+  it("paints the live frame before the replay starts", async () => {
+    releaseHidden("t1", makeManaged({ isOpened: true }));
+    const managed = instances.get("t1")!;
+    managed.isVisible = true;
+    controller.sync("t1");
+
+    await vi.advanceTimersByTimeAsync(16);
+    expect(fetchAndRestore).not.toHaveBeenCalled();
+    expect(renderSuspension.suspendXtermRender).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(100);
+    expect(fetchAndRestore).toHaveBeenCalledTimes(1);
   });
 
   it("leaves a user's input lock in place after the replay", async () => {
     const managed = releaseHidden("t1");
+    managed.inputLockedByUser = true;
     managed.isInputLocked = true;
 
     await reveal("t1");
 
-    expect(stdinHeldDuringFetch).toEqual([true]);
-    expect(managed.terminal.options.disableStdin).toBe(true);
+    expect(inputHeldDuringFetch).toEqual([true]);
+    expect(managed.isInputLocked).toBe(true);
   });
 
-  it("does not resume painting for a view cached during the replay", async () => {
+  it("keeps the paint hold through a hide and reveal in the middle of the replay", async () => {
     releaseHidden("t1", makeManaged({ isOpened: true }));
-    fetchAndRestore.mockImplementationOnce(async () => {
-      observable = false;
-      return true;
-    });
+    let finish!: (restored: boolean) => void;
+    fetchAndRestore.mockImplementationOnce(
+      () => new Promise<boolean>((resolve) => (finish = resolve))
+    );
 
     await reveal("t1");
+    const managed = instances.get("t1")!;
+    managed.isVisible = false;
+    controller.sync("t1");
+    managed.isVisible = true;
+    controller.sync("t1");
+    await vi.advanceTimersByTimeAsync(100);
 
-    expect(renderSuspension.suspendXtermRender).toHaveBeenCalledTimes(1);
+    expect(fetchAndRestore).toHaveBeenCalledTimes(1);
     expect(renderSuspension.resumeXtermRender).not.toHaveBeenCalled();
+    expect(managed.isInputLocked).toBe(true);
+
+    finish(true);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(renderSuspension.resumeXtermRender).toHaveBeenCalledTimes(1);
+    expect(managed.isInputLocked).toBe(false);
   });
 
   it("retries a failed refill on the next reveal", async () => {

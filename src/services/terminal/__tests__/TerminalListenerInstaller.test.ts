@@ -528,6 +528,34 @@ describe("installTerminalBoundListeners", () => {
     expect(writeTerminalInputOrFleetMock).toHaveBeenCalledWith("t1", "z");
   });
 
+  it("holds typing but answers the program's queries while history refills (#14220)", () => {
+    const captured: CapturedCallbacks = { onTitleChangeHandlers: [] };
+    const terminal = makeMockTerminal(captured);
+    const managed = makeMockManaged();
+    const deps = makeDeps();
+
+    managed.terminal = terminal as unknown as ManagedTerminal["terminal"];
+    installTerminalBoundListeners(
+      terminal as unknown as Parameters<typeof installTerminalBoundListeners>[0],
+      managed,
+      "t1",
+      deps
+    );
+
+    managed.historyRefilling = true;
+    managed.isInputLocked = true;
+    captured.onData!("ls\r");
+    captured.onData!("\x1b[12;4R");
+    expect(writeTerminalInputOrFleetMock).not.toHaveBeenCalled();
+    expect(deps.noteUserInput).not.toHaveBeenCalled();
+    expect(writeReplyMock.mock.calls).toEqual([["t1", "\x1b[12;4R"]]);
+
+    // A user's own lock holds the replies too, as it always has.
+    managed.historyRefilling = false;
+    captured.onData!("\x1b[3;1R");
+    expect(writeReplyMock).toHaveBeenCalledTimes(1);
+  });
+
   it("clears directing state on escape but not on regular input", () => {
     const captured: CapturedCallbacks = { onTitleChangeHandlers: [] };
     const terminal = makeMockTerminal(captured);

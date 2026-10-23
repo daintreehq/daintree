@@ -10,13 +10,16 @@ export interface TerminalHistoryReleaseControllerDeps {
   /** Whether this project view is active and its window can be seen. */
   isViewObservable: () => boolean;
   isWorkerIngestEnabled: () => boolean;
-  /** Re-derive xterm's stdin gate after the refill's input hold changes. */
-  applyStdinGate: (managed: ManagedTerminal) => void;
+  /** Re-derive the pane's input lock after the refill's hold changes. */
+  applyInputLock: (managed: ManagedTerminal) => void;
 }
 
 // A zero-length write still runs its callback in order; an empty string would
 // end xterm's sync drain and drop what is queued behind it (see streamFence).
 const WRITE_BARRIER = new Uint8Array(0);
+
+// Paint-hold owner, distinct from a cached view's, so neither lifts the other.
+const REFILL_PAINT_HOLD = "history-refill";
 
 function nextFrame(): Promise<void> {
   return new Promise((resolve) => requestAnimationFrame(() => resolve()));
@@ -154,8 +157,10 @@ export class TerminalHistoryReleaseController {
    * snapshot underneath — a large one replays in chunks across several frames
    * — and typing is held with it, so nothing is sent against a buffer that is
    * mid-replay (bracketed paste is off until the snapshot's tail turns it back
-   * on). Output arriving meanwhile is held by the restore window and replayed
-   * after the snapshot, as on a cold project switch.
+   * on); the program's own queries are still answered. Output arriving
+   * meanwhile is held by the restore window and replayed after the snapshot,
+   * as on a cold project switch. The paint hold covers the whole refill, so a
+   * pane hidden and shown again mid-replay never sees it either.
    */
   private async runRefill(id: string, managed: ManagedTerminal): Promise<void> {
     if (managed.isVisible) {
@@ -166,33 +171,33 @@ export class TerminalHistoryReleaseController {
     }
     if (this.deps.getInstance(id) !== managed) return;
 
-    const holdPaint = managed.isVisible && managed.isOpened;
-    if (holdPaint) suspendXtermRender(managed.terminal);
+    const holdPaint = managed.isOpened;
+    if (holdPaint) suspendXtermRender(managed.terminal, REFILL_PAINT_HOLD);
     managed.historyRefilling = true;
-    this.deps.applyStdinGate(managed);
+    this.deps.applyInputLock(managed);
     try {
       const restored = await this.deps.fetchAndRestore(id);
-      // A small snapshot's restore resolves once queued; its window closes in
-      // the write callback. Wait for that before letting the pane paint.
-      await this.settleWrites(managed);
+      // A small snapshot's restore resolves once queued. Its write callback
+      // closes the window in a microtask and hands the held output to xterm;
+      // the second barrier lands behind that output, so the modes it sets are
+      // in force before typing resumes.
+      await this.writeBarrier(managed, true);
+      await this.writeBarrier(managed, false);
       // Nothing more will ever come for an exited session.
       if (restored || managed.ptyExited) managed.historyRefillPending = false;
     } finally {
       managed.historyRefilling = false;
-      if (this.deps.getInstance(id) === managed) {
-        this.deps.applyStdinGate(managed);
-        // A cached view stays suspended; its reactivation resumes it.
-        if (holdPaint && this.deps.isViewObservable()) resumeXtermRender(managed.terminal);
-      }
+      if (this.deps.getInstance(id) === managed) this.deps.applyInputLock(managed);
+      if (holdPaint) resumeXtermRender(managed.terminal, REFILL_PAINT_HOLD);
     }
   }
 
-  private settleWrites(managed: ManagedTerminal): Promise<void> {
+  private writeBarrier(managed: ManagedTerminal, afterMicrotasks: boolean): Promise<void> {
     return new Promise((resolve) => {
       try {
-        // The restore's own callback queues its window close as a microtask;
-        // queuing ours from the barrier's callback lands after it.
-        managed.terminal.write(WRITE_BARRIER, () => queueMicrotask(resolve));
+        managed.terminal.write(WRITE_BARRIER, () =>
+          afterMicrotasks ? queueMicrotask(resolve) : resolve()
+        );
       } catch {
         resolve();
       }

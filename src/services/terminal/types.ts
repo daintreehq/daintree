@@ -462,8 +462,10 @@ export interface ManagedTerminal {
   // refill lands, so a failed one is retried on the next reveal.
   historyRefillPending?: boolean;
   historyRefill?: Promise<void>;
-  // While the refill replays, typing is held (see setInputLocked).
+  // While the refill replays, typing is held: `isInputLocked` is the
+  // effective lock, `inputLockedByUser` the pane's own setting under it.
   historyRefilling?: boolean;
+  inputLockedByUser?: boolean;
   // Holders reading history a release would drop (an open search).
   historyPins?: number;
   ptyExited?: boolean;
