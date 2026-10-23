@@ -74,7 +74,10 @@ describe("HostSettingsSection (#14167)", () => {
     expect(api.update).toHaveBeenCalledWith({
       hostId: "studio-01",
       patch: { "idleTerminalNotify.enabled": true },
-      expect: { instanceId: "launch-1", revisions: { "idleTerminalNotify.enabled": "r-idle-false" } },
+      expect: {
+        instanceId: "launch-1",
+        revisions: { "idleTerminalNotify.enabled": "r-idle-false" },
+      },
     });
     expect(switchNamed("Alert about idle terminals").getAttribute("aria-checked")).toBe("true");
   });
