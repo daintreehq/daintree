@@ -20,7 +20,7 @@ import { hasRemoteHosts, useHostList } from "../hostList";
 import { buildHostMenuRows, clientPlatform, type HostMenuRow } from "../hostModel";
 import { isNewWindowClick } from "../hostSwitching";
 import { startHostMetricsFeed } from "./hostMetricsFeed";
-import { isLive, rankPlacement, type PlacementChoice } from "./overviewModel";
+import { compareHostCapacity, isLive, type PlacementComparison } from "./overviewModel";
 
 /** The new-worktree form as the dialog validated it; `path` is this host's absolute path. */
 export interface PlacementDraft extends Omit<PlacedWorktree, "relativePath"> {
@@ -43,8 +43,8 @@ interface WorktreePlacementRowProps {
 export function suggestPlacement(
   rows: readonly HostMenuRow[],
   history: HostMetricsHistory
-): PlacementChoice[] {
-  return rankPlacement(
+): PlacementComparison {
+  return compareHostCapacity(
     rows.map((row) => ({
       hostId: row.hostId,
       name: row.name,
@@ -82,8 +82,9 @@ export function toPlacedWorktree(draft: PlacementDraft, rootPath: string): Place
 
 /**
  * Where the new worktree goes. The window's host is preselected, so nothing
- * changes unless the user picks another; the least-loaded host is always
- * named beside it. Picking another host creates the worktree there instead:
+ * changes unless the user picks another; each host's reported facts sit
+ * beside it, and the one with the most free cores and memory is named when
+ * there is one. Picking another host creates the worktree there instead:
  * the project goes through the open-on-host flow (matched or cloned there),
  * and the dialog on that host creates this form's branch, path and recipe.
  * This dialog stays open until that has happened. Shown only once a host
@@ -118,8 +119,10 @@ export function WorktreePlacementRow({
     currentHostId: windowHostId,
     localSummary: history.get(LOCAL_HOST_ID)?.[0] ?? hostList.localSummary,
   });
-  const ranked = suggestPlacement(rows, history);
-  const best = ranked[0] ?? null;
+  const comparison = suggestPlacement(rows, history);
+  const best = rows.find((row) => row.hostId === comparison.suggestedHostId) ?? null;
+  const factsOf = (hostId: HostId) =>
+    comparison.options.find((option) => option.hostId === hostId)?.facts;
   const chosenRow = rows.find((row) => row.hostId === chosen) ?? rows[0]!;
 
   // The dialog stays open until the worktree exists on the host: closing
@@ -176,9 +179,8 @@ export function WorktreePlacementRow({
           </span>
         ) : (
           <span className="text-xs text-text-secondary" data-testid="worktree-placement-suggestion">
-            {best
-              ? `Least loaded: ${best.name} · ${best.reason}`
-              : "No host has reported its load yet"}
+            {best ? `${best.name} reports more free cores and memory than the others. ` : ""}
+            {`${chosenRow.name}: ${factsOf(chosenRow.hostId) ?? "No measurements reported"}`}
           </span>
         )
       }
@@ -201,10 +203,15 @@ export function WorktreePlacementRow({
           </SelectTrigger>
           <SelectContent>
             {rows.map((row) => (
-              <SelectItem key={row.hostId} value={row.hostId} disabled={!isLive(row)}>
+              <SelectItem
+                key={row.hostId}
+                value={row.hostId}
+                disabled={!isLive(row)}
+                description={factsOf(row.hostId)}
+              >
                 {row.name}
                 {row.hostId === windowHostId ? " (this window)" : ""}
-                {best?.hostId === row.hostId ? " · least loaded" : ""}
+                {best?.hostId === row.hostId ? " · most free" : ""}
               </SelectItem>
             ))}
           </SelectContent>

@@ -2,7 +2,7 @@
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { HostListEntry } from "@shared/types/remoteHosts";
-import { HANDSHAKE, makeSummary } from "./fixtures";
+import { HANDSHAKE, makeCapacitySummary } from "./fixtures";
 
 const { hostList, dispatch } = vi.hoisted(() => ({
   hostList: { hosts: [] as HostListEntry[], localSummary: null as unknown },
@@ -67,7 +67,9 @@ async function openOnHostLikeTheAction(
   return { ok: true, result: { requestId } };
 }
 
-function entry(id: string, cpuPercent: number, connected = true): HostListEntry {
+const GB = 1024 ** 3;
+
+function entry(id: string, cpuPercent: number, usedGb: number, connected = true): HostListEntry {
   return {
     descriptor: {
       id,
@@ -84,9 +86,10 @@ function entry(id: string, cpuPercent: number, connected = true): HostListEntry 
     connection: connected
       ? { status: "connected", rttMs: 5, handshake: HANDSHAKE }
       : { status: "disconnected" },
-    summary: makeSummary({
+    summary: makeCapacitySummary({
       hostId: id,
       cpuPercent,
+      memoryUsedBytes: usedGb * GB,
       agentsObserved: { working: 0, waiting: 0, idle: 0 },
     }),
   };
@@ -98,18 +101,23 @@ beforeEach(() => {
   _resetHostSwitchRequestsForTesting();
   registerHostSwitchDialogHost();
   useHostMetricsStore.getState().reset();
-  hostList.hosts = [entry("studio-01", 70), entry("studio-02", 5), entry("away", 0, false)];
+  hostList.hosts = [
+    entry("studio-01", 70, 12),
+    entry("studio-02", 5, 2),
+    entry("away", 0, 0, false),
+  ];
   useHostMetricsStore.getState().apply(
-    makeSummary({
+    makeCapacitySummary({
       hostId: "local",
       cpuPercent: 40,
+      memoryUsedBytes: 8 * GB,
       agentsObserved: { working: 0, waiting: 0, idle: 0 },
     })
   );
 });
 
 describe("WorktreePlacementRow", () => {
-  it("always names the least-loaded reachable host while keeping this window's host chosen", () => {
+  it("names the host with the most free cores and memory, with the chosen host's facts, keeping this window's host chosen", () => {
     const onElsewhereChange = vi.fn();
     render(
       <WorktreePlacementRow
@@ -120,11 +128,29 @@ describe("WorktreePlacementRow", () => {
         onElsewhereChange={onElsewhereChange}
       />
     );
-    expect(screen.getByTestId("worktree-placement-suggestion").textContent).toBe(
-      "Least loaded: studio-02 · CPU 5% · memory normal · 0 working (observed)"
+    const hint = screen.getByTestId("worktree-placement-suggestion").textContent ?? "";
+    expect(hint.startsWith("studio-02 reports more free cores and memory than the others. ")).toBe(
+      true
+    );
+    expect(hint.endsWith(": CPU 3.2 of 8 cores · Memory 8 / 16 GB · Memory pressure Normal")).toBe(
+      true
     );
     expect(screen.queryByTestId("worktree-placement-continue")).toBeNull();
     expect(onElsewhereChange).toHaveBeenLastCalledWith(false);
+  });
+
+  it("shows the facts without a pick when no host leads on both", () => {
+    hostList.hosts = [entry("studio-01", 70, 1), entry("studio-02", 5, 14)];
+    render(
+      <WorktreePlacementRow projectId="p1" rootPath={ROOT} getDraft={getDraft} onLeave={() => {}} />
+    );
+    expect(screen.getByTestId("worktree-placement-suggestion").textContent).toContain(
+      "CPU 3.2 of 8 cores"
+    );
+    expect(screen.getByTestId("worktree-placement-suggestion").textContent).not.toContain(
+      "reports more"
+    );
+    expect(screen.queryByRole("button", { name: /^Use / })).toBeNull();
   });
 
   it("creates the form's worktree on the chosen host, closing only once it exists there", async () => {

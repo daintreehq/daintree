@@ -23,6 +23,13 @@ export function makeSummary(overrides: Partial<HostMetricsSummary> = {}): HostMe
   };
 }
 
+/** A host new enough to report its core count, so its memory reads as capacity. */
+export function makeCapacitySummary(
+  overrides: Partial<HostMetricsSummary> = {}
+): HostMetricsSummary {
+  return makeSummary({ cpuLogicalCoreCount: 8, ...overrides });
+}
+
 export const HANDSHAKE = {
   version: "0.38.0",
   commit: "abc",

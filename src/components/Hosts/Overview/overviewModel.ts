@@ -281,78 +281,101 @@ export interface PlacementCandidate {
   reachable: boolean;
 }
 
-export interface PlacementChoice {
+export interface PlacementOption {
   hostId: HostId;
   name: string;
-  score: number;
-  /** Why it ranks where it does, from the numbers it reported. */
-  reason: string;
+  /** What the host reported, worded as its card words it; never an interpretation. */
+  facts: string;
 }
 
-const PRESSURE_PENALTY: Record<NonNullable<HostMetricsSummary["memoryPressure"]>, number> = {
-  normal: 0,
-  warn: 40,
-  critical: 100,
-};
-const WORKING_AGENT_PENALTY = 15;
-/**
- * What a measurement the host didn't report costs: as much as the worst it
- * could have been. A host with less evidence must never outrank one that
- * measured a light load.
- */
-const UNMEASURED_PENALTY = 100;
+export interface PlacementComparison {
+  /** Every candidate, in the order given: there is no ranking to sort by. */
+  options: PlacementOption[];
+  /** The one host with strictly more free cores and available memory than every other; else null. */
+  suggestedHostId: HostId | null;
+}
+
+/** Cores whose difference is under the card's one-decimal display are the same count. */
+const CORE_TIE = 0.05;
+/** A difference of exactly the tie, as float arithmetic lands it, is still a tie. */
+const FLOAT_SLACK = 1e-9;
+
+interface FreeCapacity {
+  hostId: HostId;
+  freeCores: number;
+  availableBytes: number;
+  pressure: NonNullable<HostMetricsSummary["memoryPressure"]>;
+}
+
+function freeCapacity(candidate: PlacementCandidate, summary: HostMetricsSummary) {
+  const cores = busyCores(summary);
+  const memory = reportedCapacity(summary);
+  const pressure = summary.memoryPressure;
+  if (!cores || !memory || pressure === null) return null;
+  return {
+    hostId: candidate.hostId,
+    freeCores: Math.max(0, cores.total - cores.busy),
+    availableBytes: Math.max(0, memory.total - memory.used),
+    pressure,
+  } satisfies FreeCapacity;
+}
+
+function describePlacementFacts(candidate: PlacementCandidate): string {
+  if (!candidate.reachable) return "Not connected";
+  const summary = candidate.summary;
+  if (!summary) return "No measurements reported";
+  const memory = reportsMemoryCapacity(summary)
+    ? describeMemoryCapacity(summary)
+    : describeMemory(summary);
+  const load = describeLoad(summary);
+  return [
+    `CPU ${describeCpu(summary) ?? "not measured"}`,
+    `Memory ${memory ?? "not measured"}`,
+    `Memory pressure ${describeMemoryPressure(summary) ?? "not measured"}`,
+    ...(load ? [`Load (1 min) ${load}`] : []),
+  ].join(" · ");
+}
 
 /**
- * Least-loaded first, from what each reachable host last reported: its CPU,
- * memory pressure and observed working agents. A host that reported neither
- * CPU nor pressure can't be compared and is left out, as is one that can't
- * be reached. A missing measurement counts as the worst case, so partial data
- * sinks below full data; ties go to the host that reported more, then by name.
- * The result is a suggestion; the user always picks.
+ * What each host has free, side by side. A host is suggested only when every
+ * reachable host with a reading reported free cores, available memory and a
+ * pressure band, and one of them has strictly more free cores and more
+ * available memory than each of the others without a worse pressure band.
+ * Otherwise the facts stand alone and the user picks. Nothing is blended into
+ * a score, and observed agent activity is never a capacity claim. A host from
+ * before the core count (see {@link reportsMemoryCapacity}) can't be compared,
+ * so its presence withholds the suggestion.
  */
-export function rankPlacement(candidates: readonly PlacementCandidate[]): PlacementChoice[] {
-  const ranked: Array<PlacementChoice & { missing: number }> = [];
+export function compareHostCapacity(
+  candidates: readonly PlacementCandidate[]
+): PlacementComparison {
+  const options = candidates.map(({ hostId, name, ...rest }) => ({
+    hostId,
+    name,
+    facts: describePlacementFacts({ hostId, name, ...rest }),
+  }));
+  const compared: FreeCapacity[] = [];
   for (const candidate of candidates) {
-    const summary = candidate.summary;
-    if (!candidate.reachable || !summary) continue;
-    if (summary.cpuPercent === null && summary.memoryPressure === null) continue;
-    const working = summary.agentsObserved?.working ?? null;
-    let score = 0;
-    let missing = 0;
-    const parts: string[] = [];
-    if (summary.cpuPercent !== null) {
-      score += summary.cpuPercent;
-      parts.push(`CPU ${Math.round(summary.cpuPercent)}%`);
-    } else {
-      score += UNMEASURED_PENALTY;
-      missing += 1;
-      parts.push("CPU not reported");
-    }
-    if (summary.memoryPressure !== null) {
-      score += PRESSURE_PENALTY[summary.memoryPressure];
-      parts.push(`memory ${summary.memoryPressure}`);
-    } else {
-      score += UNMEASURED_PENALTY;
-      missing += 1;
-      parts.push("memory not reported");
-    }
-    if (working !== null) {
-      score += working * WORKING_AGENT_PENALTY;
-      parts.push(`${working} working (observed)`);
-    } else {
-      score += UNMEASURED_PENALTY;
-      missing += 1;
-      parts.push("agents unknown");
-    }
-    ranked.push({
-      hostId: candidate.hostId,
-      name: candidate.name,
-      score,
-      reason: parts.join(" · "),
-      missing,
-    });
+    if (!candidate.reachable || !candidate.summary) continue;
+    const capacity = freeCapacity(candidate, candidate.summary);
+    if (!capacity) return { options, suggestedHostId: null };
+    compared.push(capacity);
   }
-  return ranked
-    .sort((a, b) => a.score - b.score || a.missing - b.missing || a.name.localeCompare(b.name))
-    .map(({ missing: _missing, ...choice }) => choice);
+  const leader = compared.find((host) =>
+    compared.every(
+      (peer) =>
+        peer === host ||
+        (host.freeCores - peer.freeCores > CORE_TIE + FLOAT_SLACK &&
+          host.availableBytes > peer.availableBytes &&
+          PRESSURE_RANK[host.pressure] <= PRESSURE_RANK[peer.pressure])
+    )
+  );
+  const suggested = leader && leader.pressure !== "critical" && compared.length > 1 ? leader : null;
+  return { options, suggestedHostId: suggested?.hostId ?? null };
 }
+
+const PRESSURE_RANK: Record<NonNullable<HostMetricsSummary["memoryPressure"]>, number> = {
+  normal: 0,
+  warn: 1,
+  critical: 2,
+};
