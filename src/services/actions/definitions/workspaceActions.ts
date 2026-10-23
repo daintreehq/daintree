@@ -10,8 +10,9 @@ const WorkspaceSummarySchema = z.object({
   hasLiveView: z.boolean(),
   frontendAttached: z
     .boolean()
+    .nullable()
     .describe(
-      "Whether a frontend is attached now: a view on this machine, or a Shell driving it from another. False means only the tools the host runs itself, such as launching agents and driving terminals, run here."
+      "A frontend is attached: a view here or a driving Shell. If false, only tools the host runs itself run. Null: unknown."
     ),
 });
 
@@ -28,7 +29,14 @@ export function registerWorkspaceActions(actions: ActionRegistry): void {
     resultSchema: z.object({ workspaces: z.array(WorkspaceSummarySchema) }),
     mcpOutputSchema: true,
     run: async () => {
-      return { workspaces: await workspaceClient.list() };
+      const workspaces = await workspaceClient.list();
+      // A remote host that predates the field (#14122) doesn't say, which is not "no".
+      return {
+        workspaces: workspaces.map((entry) => ({
+          ...entry,
+          frontendAttached: entry.frontendAttached ?? null,
+        })),
+      };
     },
   }));
 }

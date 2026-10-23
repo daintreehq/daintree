@@ -194,9 +194,10 @@ export function installHostControl(deps: HostControlInstallDeps): () => void {
           import("../../services/ProjectStore.js"),
           import("../../services/mcp-server/frontendAttachment.js"),
         ]);
-        return projectStore
-          .getProjectSummaries()
-          .map((project) => ({ ...project, frontendAttached: isProjectFrontendAttached(project.id) }));
+        return projectStore.getProjectSummaries().map((project) => ({
+          ...project,
+          frontendAttached: isProjectFrontendAttached(project.id),
+        }));
       },
       relayCall: (payload) => local.relayCall(payload),
     },

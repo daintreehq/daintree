@@ -89,7 +89,7 @@ export const HostListEntrySchema = z.object({
           .boolean()
           .nullable()
           .describe(
-            "Whether a frontend is attached to it now. False means only the tools the host runs itself, such as launching agents and driving terminals, run there. Null when the host didn't say."
+            "A frontend is attached: a view there or a driving Shell. If false, only tools the host runs itself run. Null: unknown."
           ),
       })
     )

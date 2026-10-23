@@ -42,7 +42,7 @@ export interface WorkspaceListEntry {
    * nobody drives it. Where `hasLiveView` sees only this machine's windows,
    * this says whether a tool only a frontend can run would answer
    * `NO_FRONTEND_ATTACHED`. False is not closed: the tools the host runs
-   * itself still run.
+   * itself still run. Absent from a remote host that predates it.
    */
-  frontendAttached: boolean;
+  frontendAttached?: boolean;
 }

@@ -9,7 +9,9 @@ const OTHER: Project = { ...PROJECT, id: "proj-2", path: "/other", name: "Other"
 const COMMANDS = [{ id: "/usage", label: "/usage", description: "Usage", scope: "built-in" }];
 
 function depsAnswering() {
-  const made = makeDeps({ getProject: (id) => ({ [PROJECT.id]: PROJECT, [OTHER.id]: OTHER })[id] ?? null });
+  const made = makeDeps({
+    getProject: (id) => ({ [PROJECT.id]: PROJECT, [OTHER.id]: OTHER })[id] ?? null,
+  });
   made.invoke.mockImplementation(async (_projectId, channel) =>
     channel === CHANNELS.SLASH_COMMANDS_LIST ? COMMANDS : undefined
   );
@@ -40,6 +42,19 @@ describe("viewless slashCommands.list", () => {
     expect(result).toMatchObject({ ok: true });
     expect(invoke).toHaveBeenCalledWith(PROJECT.id, CHANNELS.SLASH_COMMANDS_LIST, [
       { agentId: "codex", projectPath: OTHER.path },
+    ]);
+  });
+
+  it("reads the bound project by its own id, ignoring a path beside it", async () => {
+    const { deps, invoke } = depsAnswering();
+
+    await executeViewlessAction(
+      request("slashCommands.list", { projectId: PROJECT.id, projectPath: "/x" }),
+      deps
+    );
+
+    expect(invoke).toHaveBeenCalledWith(PROJECT.id, CHANNELS.SLASH_COMMANDS_LIST, [
+      { agentId: "claude", projectPath: PROJECT.path },
     ]);
   });
 

@@ -1083,11 +1083,7 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
       PROJECTS_READ_MS,
       null
     );
-    return projects === null
-      ? null
-      : projects
-          .slice(0, HOST_LIST_PROJECTS_MAX)
-          .map(listedProject);
+    return projects === null ? null : projects.slice(0, HOST_LIST_PROJECTS_MAX).map(listedProject);
   }
 
   private ok(): { outcome: "ok"; detail: null; retryAfterMs: null } {

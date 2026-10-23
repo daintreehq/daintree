@@ -103,6 +103,18 @@ describe("workspace.list", () => {
     expect(outcome).toMatchObject({ ok: true, result: { workspaces: [ROW] } });
   });
 
+  it("reports readiness as unknown for a row from a host that predates it (#14122)", async () => {
+    const { frontendAttached: _omitted, ...legacy } = ROW;
+    workspaceClientMock.list.mockResolvedValue([legacy]);
+
+    const outcome = await service().dispatch("workspace.list" as ActionId, {}, {} as ActionContext);
+
+    expect(outcome).toMatchObject({
+      ok: true,
+      result: { workspaces: [{ ...legacy, frontendAttached: null }] },
+    });
+  });
+
   it("passes an empty catalog through rather than failing", async () => {
     workspaceClientMock.list.mockResolvedValue([]);
 

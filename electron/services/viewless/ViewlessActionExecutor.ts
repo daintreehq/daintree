@@ -64,11 +64,7 @@ import {
   runWorktreeList,
   runWorktreeWaitUntilReady,
 } from "./viewlessWorktrees.js";
-import {
-  runProjectDetectRunners,
-  runProjectGetAll,
-  runWorkspaceList,
-} from "./viewlessProjects.js";
+import { runProjectDetectRunners, runProjectGetAll, runWorkspaceList } from "./viewlessProjects.js";
 import { runForgeRead } from "./viewlessForge.js";
 import { runActionsGetSchema, runActionsList, runActionsSearch } from "./viewlessIntrospection.js";
 import { refuseRecipeWithNoView, runWorktreeCreateWithRecipe } from "./viewlessWorktreeCreation.js";
