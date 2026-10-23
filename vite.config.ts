@@ -31,6 +31,7 @@ import { computeFirstRenderPreloadFiles } from "./scripts/first-render-closure-l
 // same bytes the app does — a plain `?raw` import would not, because Vitest
 // stubs every `.css` specifier (including `?raw`) to an empty string.
 import { pluginStyleContract } from "./scripts/lib/plugin-style-contract.mjs";
+import { asciiOnlyChunksPlugin } from "./scripts/lib/ascii-only-chunks.mjs";
 
 const devServerConfig = getDevServerConfig();
 
@@ -1699,6 +1700,9 @@ export default defineConfig(({ command, mode }) => {
       latin400FontPreloadPlugin(),
       firstRenderModulePreloadPlugin(),
       chunkModulesPlugin(),
+      // Before compileHintsPlugin: both are post-order generateBundle hooks, and
+      // the re-print would drop the line-1 compile hint it prepends.
+      asciiOnlyChunksPlugin(),
       compileHintsPlugin(),
       xtermMinifyIdentifiersGuardPlugin(),
       ...(process.env.ANALYZE === "true"
