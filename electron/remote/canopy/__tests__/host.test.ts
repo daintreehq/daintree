@@ -268,7 +268,7 @@ describe("installCanopyHostWith: assistant viewers (#14163)", () => {
     const answer = (await h.link.shellCalls(CanopyLinkMethod.ASSISTANTS, {
       projectId: "p",
     })) as { version: number; directory: { entries: Array<{ subject: { terminalId: string } }> } };
-    expect(readAgents).toHaveBeenCalledWith({ projectId: "p" });
+    expect(readAgents).toHaveBeenCalledWith({ projectId: "p", assistantsOnly: true });
     expect(answer.version).toBe(1);
     expect(answer.directory.entries.map((entry) => entry.subject.terminalId)).toEqual(["a"]);
   });

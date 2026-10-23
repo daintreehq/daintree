@@ -37,7 +37,10 @@ export interface CanopySessionSource {
 
 export interface CanopyHostOptions {
   /** This host's agent directory, read when a Shell's picker asks; absent, none is read. */
-  readAgents?: (options: { projectId?: string }) => Promise<AgentDirectory>;
+  readAgents?: (options: {
+    projectId?: string;
+    assistantsOnly?: boolean;
+  }) => Promise<AgentDirectory>;
 }
 
 /**
@@ -171,9 +174,10 @@ export function installCanopyHostWith(
       async ({ projectId }): Promise<CanopyAssistantsAnswer> => {
         const read = options.readAgents;
         const directory = read
-          ? await read(projectId === undefined ? {} : { projectId }).catch(() =>
-              unreadAgentDirectory("unreachable")
-            )
+          ? await read({
+              ...(projectId === undefined ? {} : { projectId }),
+              assistantsOnly: true,
+            }).catch(() => unreadAgentDirectory("unreachable"))
           : unreadAgentDirectory("unsupported");
         return { version: ASSISTANT_VIEWER_VERSION, directory: assistantsOf(directory) };
       }

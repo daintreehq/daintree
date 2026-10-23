@@ -81,6 +81,26 @@ function sources(overrides: Partial<AgentDirectorySources> = {}): AgentDirectory
 }
 
 describe("collectAgentDirectory (#14160)", () => {
+  it("reads assistants alone for a picker, so workers never crowd them out of the cap", async () => {
+    const workers = Array.from({ length: 300 }, (_, i) =>
+      terminal({ id: `w${i}`, projectId: "p1", detectedAgentId: "claude" })
+    );
+    const directory = await collectAgentDirectory(
+      sources({
+        listRunningLanes: () => [],
+        getLiveGeneration: () => 1,
+        readTerminals: async () => ({ terminals: workers, degraded: false }),
+        resumableLanes: async () => ({
+          lanes: [{ projectId: "p1", slot: 0, agentId: "claude", capturedAt: 5 }],
+          complete: true,
+        }),
+      }),
+      { assistantsOnly: true }
+    );
+    expect(directory.omitted).toBe(0);
+    expect(directory.entries).toEqual([expect.objectContaining({ state: "resumable", lane: 0 })]);
+  });
+
   it("names the global session by its own scope, as a viewer resolves it (#14163)", async () => {
     const directory = await collectAgentDirectory(
       sources({

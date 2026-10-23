@@ -516,23 +516,31 @@ describe("CanopyHostsClient: assistant viewers (#14163)", () => {
     expect(s.inUse("studio")).toBe(false);
   });
 
-  it("releases the consumer's viewer on the host, and moves it when the assistant is elsewhere", async () => {
+  it("keeps a consumer on the one run it shows, and releases its viewer on the host", async () => {
     const s = setup();
     answering(s, "studio", () => wrapSuccess({ watchId: 1, snapshot: null }));
     answering(s, "attic", () => wrapSuccess({ watchId: 1, snapshot: null }));
     await s.client.watchAssistant(VIEW, "pick", subject);
-    await s.client.watchAssistant(VIEW, "pick", { ...subject, hostId: "attic" });
+    // Both hosts number their watches alike: typing meant for the first run must
+    // never reach another, so the consumer can't be moved to it.
+    for (const other of [
+      { ...subject, hostId: "attic" },
+      { ...subject, incarnation: 5 },
+    ]) {
+      await expect(s.client.watchAssistant(VIEW, "pick", other)).rejects.toMatchObject({
+        code: "VALIDATION",
+      });
+    }
+    expect(s.connections.get("attic")!.calls).toEqual([]);
+    s.client.releaseAssistant(VIEW, "pick");
     expect(s.connections.get("studio")!.calls.at(-1)).toEqual([
       CanopyLinkMethod.RELEASE,
       { viewerId: "v1" },
     ]);
-    s.client.releaseAssistant(VIEW, "pick");
-    expect(s.connections.get("attic")!.calls.at(-1)).toEqual([
-      CanopyLinkMethod.RELEASE,
-      { viewerId: "v2" },
-    ]);
     expect(s.inUse("studio")).toBe(false);
-    expect(s.inUse("attic")).toBe(false);
+    // Released, a new consumer reads the other host afresh.
+    await s.client.watchAssistant(VIEW, "pick-2", { ...subject, hostId: "attic" });
+    expect(s.inUse("attic")).toBe(true);
   });
 
   it("tells only the assistant's consumer to read again, and drops it with its host", async () => {

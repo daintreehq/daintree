@@ -70,7 +70,10 @@ export interface CanopyHostsClientOptions {
   /** Told once when the view reloads or goes away, which ends every panel it showed. */
   watchView(webContentsId: number, onGone: () => void): () => void;
   /** This machine's agent directory, for a picker listing This Mac; absent, it reads none. */
-  readLocalAgents?: (options: { projectId?: string }) => Promise<AgentDirectory>;
+  readLocalAgents?: (options: {
+    projectId?: string;
+    assistantsOnly?: boolean;
+  }) => Promise<AgentDirectory>;
   newViewerId?: () => string;
 }
 
@@ -80,6 +83,8 @@ interface Subscription {
   viewerId: string;
   /** The assistant viewer's consumer in its view; null for the view's Canopy panel. */
   consumer: string | null;
+  /** The exact run an assistant viewer shows, for as long as it lives. */
+  subjectKey: string | null;
 }
 
 interface ViewRecord {
@@ -296,7 +301,9 @@ export class CanopyHostsClient {
     if (isLocalHostId(target)) {
       const read = this.options.readLocalAgents;
       const directory = read
-        ? await read(options).catch(() => unreadAgentDirectory("unreachable"))
+        ? await read({ ...options, assistantsOnly: true }).catch(() =>
+            unreadAgentDirectory("unreachable")
+          )
         : unreadAgentDirectory("unsupported");
       return {
         hostId: LOCAL_HOST_ID,
@@ -342,7 +349,7 @@ export class CanopyHostsClient {
     rawSubject: unknown
   ): Promise<CanopyTerminalView> {
     const { target, subject } = this.assistantSubjectOf(webContentsId, rawSubject);
-    const sub = this.subscribeAssistant(webContentsId, consumerOf(consumer), target);
+    const sub = this.subscribeAssistant(webContentsId, consumerOf(consumer), target, subject);
     const view = (await this.callAssistant(sub, "canopy:watch-assistant-terminal", [
       subject,
     ])) as CanopyTerminalView;
@@ -358,7 +365,7 @@ export class CanopyHostsClient {
     rawSubject: unknown
   ): Promise<AssistantOpenDestination | null> {
     const { target, subject } = this.assistantSubjectOf(webContentsId, rawSubject);
-    const sub = this.subscribeAssistant(webContentsId, consumerOf(consumer), target);
+    const sub = this.subscribeAssistant(webContentsId, consumerOf(consumer), target, subject);
     const destination = (await this.callAssistant(sub, "canopy:resolve-assistant", [
       subject,
     ])) as AssistantOpenDestination | null;
@@ -467,18 +474,32 @@ export class CanopyHostsClient {
     return { target, subject: { ...parsed.data, hostId: LOCAL_HOST_ID } };
   }
 
+  /**
+   * The consumer's viewer, for the one run it shows. A watch id is only its
+   * host's, so a consumer is never moved to another run: input still in flight
+   * for the old one would carry an id the new one could also hold.
+   */
   private subscribeAssistant(
     webContentsId: number,
     consumer: string,
-    hostId: HostId
+    hostId: HostId,
+    subject: AgentDirectorySubject
   ): Subscription {
+    const subjectKey = JSON.stringify([
+      hostId,
+      subject.scope,
+      subject.terminalId,
+      subject.incarnation,
+      subject.lane ?? null,
+    ]);
     const record = this.recordOf(webContentsId);
     const existing = record.assistants.get(consumer);
-    if (existing?.hostId === hostId) return existing;
-    // Moving to an assistant on another host: the one it showed goes first.
-    if (existing) this.drop(existing);
+    if (existing) {
+      if (existing.subjectKey === subjectKey) return existing;
+      throw invalid("A consumer shows one assistant; release it before showing another");
+    }
     const viewerId = this.options.newViewerId?.() ?? randomUUID();
-    const sub: Subscription = { webContentsId, hostId, viewerId, consumer };
+    const sub: Subscription = { webContentsId, hostId, viewerId, consumer, subjectKey };
     record.assistants.set(consumer, sub);
     this.byViewer.set(viewerId, sub);
     return sub;
@@ -585,7 +606,7 @@ export class CanopyHostsClient {
     let sub = record.hosts.get(hostId);
     if (!sub) {
       const viewerId = this.options.newViewerId?.() ?? randomUUID();
-      sub = { webContentsId, hostId, viewerId, consumer: null };
+      sub = { webContentsId, hostId, viewerId, consumer: null, subjectKey: null };
       record.hosts.set(hostId, sub);
       this.byViewer.set(viewerId, sub);
     }
