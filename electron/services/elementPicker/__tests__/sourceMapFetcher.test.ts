@@ -1,5 +1,7 @@
 import http from "node:http";
 import type { AddressInfo } from "node:net";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { NetworkAllowance } from "../sourceAccess.js";
 import { revisionOf } from "../sourceAccess.js";
@@ -328,7 +330,9 @@ describe("Next.js source map route", () => {
       asked = new URL(request.url ?? "", preview.origin).searchParams.get("filename");
       response.writeHead(200, { "content-type": "application/json" }).end(MAP);
     });
-    const chunk = "/work/app/.next/dev/server/chunks/ssr/[root-of-the-server]__page._.js";
+    const chunk = path.resolve(
+      "/work/app/.next/dev/server/chunks/ssr/[root-of-the-server]__page._.js"
+    );
     const result = await ask(chunk);
     expect(asked).toBe(chunk);
     expect(result).toMatchObject({
@@ -336,12 +340,13 @@ describe("Next.js source map route", () => {
       value: {
         url: expect.stringMatching(/^http:\/\/127\.0\.0\.1:\d+\/__nextjs_source-map\?filename=/),
         // A chunk's relative sources are beside the chunk, not under the route.
-        base: "file:///work/app/.next/dev/server/chunks/ssr/%5Broot-of-the-server%5D__page._.js",
+        base: pathToFileURL(chunk).href,
         revision: revisionOf(new TextEncoder().encode(MAP)),
         text: MAP,
       },
     });
     const module = await ask("webpack-internal:///(rsc)/./app/page.tsx");
+    expect(module.ok).toBe(true);
     expect(module.ok && module.value.base).toBe(module.ok && module.value.url);
   });
 

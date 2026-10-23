@@ -1,5 +1,13 @@
 // @vitest-environment jsdom
-import { Suspense, act, createElement, type ReactElement, type ReactNode } from "react";
+import {
+  Fragment,
+  Suspense,
+  act,
+  createElement,
+  useState,
+  type ReactElement,
+  type ReactNode,
+} from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ComponentRecord } from "../../../../../../shared/elementPicker/component.js";
@@ -104,6 +112,18 @@ function hover(selector: string) {
   for (const callback of frames.splice(0)) callback(0);
   const last = events.filter((event) => event.type === "hoverChanged").at(-1);
   return last?.type === "hoverChanged" ? last.observation : null;
+}
+
+function fiberOf(selector: string): Record<string, unknown> {
+  const node = query(selector) as unknown as Record<string, Record<string, unknown>>;
+  return node[Object.keys(node).find((key) => key.startsWith("__reactFiber$"))!]!;
+}
+
+/** Click through React itself, with the picker out of the way of the page's click. */
+function press(selector: string): void {
+  picker!.setMode("browse");
+  act(() => (query(selector) as HTMLElement).click());
+  picker!.setMode("select");
 }
 
 function chain(observation: SelectionObservation): Array<[string | null, string]> {
@@ -411,6 +431,108 @@ describe("the React extractor on server components", () => {
     expect(chain(pick("p.hostile"))).toEqual([["ClientShell", "client"]]);
   });
 
+  it("reads no more of a debug info list than an array could hold, and runs none of its code", () => {
+    mount(
+      createElement(
+        ClientShell,
+        null,
+        serverChunk(serverElement("p", { className: "proxied" }), [])
+      )
+    );
+    const fiber = fiberOf("p.proxied");
+    let coerced = false;
+    const lengths: unknown[] = [
+      2 ** 58,
+      -1,
+      1.5,
+      {
+        valueOf: () => {
+          coerced = true;
+          return 3;
+        },
+      },
+    ];
+    for (const length of lengths) {
+      const list = new Proxy([serverInfo("Page")], {
+        get: (target, key) => (key === "length" ? length : Reflect.get(target, key)),
+      });
+      Object.defineProperty(fiber, "_debugInfo", { configurable: true, value: list });
+      expect(chain(pick("p.proxied")), String(length)).toEqual([["ClientShell", "client"]]);
+    }
+    expect(coerced).toBe(false);
+  });
+
+  it("reads the debug info of the render that committed, whichever half the node names", () => {
+    const before = serverInfo("Before");
+    const after = serverInfo("After");
+    function Swap() {
+      const [info, setInfo] = useState(before);
+      return createElement(
+        Fragment,
+        null,
+        createElement("button", { className: "swap", onClick: () => setInfo(after) }),
+        serverChunk(serverElement("p", { className: "swapped" }, { owner: info }), [info])
+      );
+    }
+    mount(createElement(ClientShell, null, createElement(Swap)));
+    expect(chain(pick("p.swapped"))[0]).toEqual(["Before", "server"]);
+
+    press("button.swap");
+    // The node still names the half React retired, which holds the first render's list.
+    expect((fiberOf("p.swapped")._debugInfo as ServerInfo[])[0]?.name).toBe("Before");
+    const observation = pick("p.swapped");
+    expect(chain(observation)).toEqual([
+      ["After", "server"],
+      ["Swap", "client"],
+      ["ClientShell", "client"],
+    ]);
+    expect(hover("p.swapped")?.componentChain.components[0]?.name?.value).toBe("After");
+  });
+
+  it("names nothing past a debug info list it could not read to its start", () => {
+    const outer = serverInfo("Outer");
+    const inner = serverInfo("Inner");
+    const timings = Array.from({ length: 300 }, (_, time) => ({ time }));
+    mount(
+      createElement(
+        ClientShell,
+        null,
+        serverChunk(serverElement("p", { className: "long" }, { owner: inner }), [
+          outer,
+          ...timings,
+          inner,
+        ]),
+        serverChunk(serverElement("p", { className: "lost" }, { owner: outer }), [
+          outer,
+          ...timings,
+        ])
+      )
+    );
+    const long = pick("p.long");
+    // Whatever the read left out may sit between Inner and the shell.
+    expect(chain(long).slice(0, 1)).toEqual([["Inner", "server"]]);
+    expect(record(long, "Inner")).not.toHaveProperty("renderParentId");
+    expect(long.componentChain.truncated).toBe(true);
+    const lost = pick("p.lost");
+    expect(lost.componentChain.nearestId).toBeNull();
+    expect(lost.componentChain.truncated).toBe(true);
+    expect(hover("p.lost")?.componentChain.components).toEqual([]);
+  });
+
+  it("reads a definition V8 printed under the name a method was called by", () => {
+    const page = serverInfo("Page", {
+      definedAt: { name: "Object.Page [as default]", file: TURBOPACK_PAGE, line: 5, column: 3 },
+    });
+    mount(
+      createElement(
+        ClientShell,
+        null,
+        serverChunk(serverElement("p", { className: "aliased" }, { owner: page }), [page])
+      )
+    );
+    expect(claims(record(pick("p.aliased"), "Page"), "component-definition")).toHaveLength(1);
+  });
+
   it("reads debug info that streamed in after the content mounted, at each pick", async () => {
     const reviews = serverInfo("Reviews");
     const late: unknown[] = [];
@@ -458,6 +580,19 @@ describe("the React extractor on server components", () => {
     expect(claims(record(heading, "Page"), "component-definition")[0]?.file).toContain(
       encodeURI(WEBPACK_PAGE)
     );
+  });
+
+  it("takes neither an element named __NEXT_DATA__ nor a revoked proxy for the Pages Router's data", () => {
+    const named = document.createElement("script");
+    named.id = "__NEXT_DATA__";
+    // What a window's named access hands back for an element with that id.
+    scope.__NEXT_DATA__ = named;
+    mount(createElement(ClientShell, null, createElement(ClientCard, { title: "Save" })));
+    expect(evidence(pick("button.card-action"))).not.toHaveProperty("nextRouter");
+    const revocable = Proxy.revocable({ buildId: "development" }, {});
+    revocable.revoke();
+    scope.__NEXT_DATA__ = revocable.proxy;
+    expect(evidence(pick("button.card-action"))).not.toHaveProperty("nextRouter");
   });
 
   it("leaves a version that is not one out of the evidence", () => {

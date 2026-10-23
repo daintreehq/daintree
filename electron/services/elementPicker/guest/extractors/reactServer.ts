@@ -17,8 +17,14 @@ import { field, type Fiber } from "./reactFiber.js";
 
 export type ServerInfo = Record<string, unknown>;
 
-/** Entries read off one fiber's list; a real page nests a handful of server components per hop. */
-const MAX_ENTRIES = 64;
+/**
+ * Entries read off one fiber's list. A real page nests a handful of server
+ * components per hop, but every `await` above a fiber adds an async entry, so
+ * the bound leaves room for those.
+ */
+const MAX_ENTRIES = 256;
+/** The longest array a JavaScript engine can hold; a `length` past it is no array's. */
+const MAX_ARRAY_LENGTH = 2 ** 32 - 1;
 const MAX_NAME_CHARS = 256;
 
 export interface ServerEntry {
@@ -53,11 +59,19 @@ export function isServerInfo(value: unknown): value is ServerInfo {
 
 export function serverEntries(fiber: Fiber): ServerEntries {
   const list = field(fiber, "_debugInfo");
-  let length: number;
   try {
     if (!Array.isArray(list)) return NONE;
-    length = list.length;
   } catch {
+    return NONE;
+  }
+  // A proxy can claim any length, or one that runs page code when read as a number.
+  const length = field(list, "length");
+  if (
+    typeof length !== "number" ||
+    !Number.isInteger(length) ||
+    length < 0 ||
+    length > MAX_ARRAY_LENGTH
+  ) {
     return NONE;
   }
   const start = Math.max(0, length - MAX_ENTRIES);

@@ -330,8 +330,9 @@ export function createSourceMapSymbolicator(access: ResolverSourceAccess): Frame
   /**
    * The first of a module's names that gives a map, with the name it answered
    * to, which is what its sources are located from. A name that gives nothing
-   * usable is no reason not to ask the next; out of budget or cancelled, there
-   * is no next.
+   * usable is no reason not to ask the next, nor is one out of budget: a route
+   * spends the job's requests and a file on disk its reads, and main holds
+   * each to its own. Cancelled, there is no next.
    */
   async function loadFirst(
     urls: readonly string[],
@@ -346,7 +347,7 @@ export function createSourceMapSymbolicator(access: ResolverSourceAccess): Frame
       }
       answer = { url, loaded: await map };
       const { loaded } = answer;
-      if (loaded.ok || loaded.reason === "budget-exhausted" || loaded.reason === "cancelled") break;
+      if (loaded.ok || loaded.reason === "cancelled") break;
     }
     return answer!;
   }

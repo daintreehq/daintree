@@ -512,6 +512,22 @@ describe("JobSourceAccess for a server component's modules", () => {
     });
   });
 
+  it("reads no chunk or map a symlink inside the app leads out of it to", async () => {
+    fs.mkdirSync(path.dirname(chunk()), { recursive: true });
+    fs.symlinkSync(path.join(root, "outside", "secret.txt"), chunk());
+    await expect(access().access.fetchSourceMap(pathToFileURL(chunk()).href)).resolves.toEqual({
+      ok: false,
+      reason: "outside-workspace",
+    });
+    fs.rmSync(chunk());
+    fs.writeFileSync(chunk(), "export const page = 1;\n//# sourceMappingURL=chunk.js.map\n");
+    fs.symlinkSync(path.join(root, "outside", "secret.txt"), `${chunk()}.map`);
+    await expect(access().access.fetchSourceMap(pathToFileURL(chunk()).href)).resolves.toEqual({
+      ok: false,
+      reason: "outside-workspace",
+    });
+  });
+
   it("decodes a map the chunk carries inline", async () => {
     writeChunk(
       `//# sourceMappingURL=data:application/json;base64,${Buffer.from(MAP).toString("base64")}`,

@@ -144,16 +144,19 @@ function position(location: SourceLocation): string {
   return `${location.line - location.lineBase + 1}:${location.column - location.columnBase + 1}`;
 }
 
-function readFrom(extraction: Extraction): string {
+/** A frame React's Flight client made for code the server ran, named by its `about://React/` wrapper. */
+const SERVER_FRAME = /^(?:about|rsc):\/\/React\//;
+
+function readFrom(extraction: Extraction, file?: string): string {
   switch (extraction.kind) {
     case "runtime-field":
       return `runtime field ${pageData(extraction.field)}`;
     case "attribute":
       return `attribute ${pageData(extraction.attribute)}`;
     case "generated-stack-frame":
-      // Until a map names an authored line, this is a place in what the dev
-      // server sent, and saying so keeps it from being read as the source.
-      return `frame ${extraction.frameIndex} of ${pageData(extraction.field)}, a position in the code the dev server sent`;
+      // Until a map names an authored line, this is a place in generated
+      // code, and saying so keeps it from being read as the source.
+      return `frame ${extraction.frameIndex} of ${pageData(extraction.field)}, a position in the code ${file !== undefined && SERVER_FRAME.test(file) ? "the server ran" : "the dev server sent"}`;
   }
 }
 
@@ -179,8 +182,8 @@ function claimed(kind: SourceCandidate["kind"], positioned: boolean): string {
 
 function throughMap(map: SourceMapProvenance): string {
   if (map.mapUrl === null) return "an inline source map";
-  // Read beside a server chunk in the app's build output, which is no address to cite.
-  if (/^file:/i.test(map.mapUrl)) return "a source map in the dev server's build output";
+  // Read from the app's own disk, which is no address to cite.
+  if (/^file:/i.test(map.mapUrl)) return "a source map read from disk";
   return `source map ${pageData(redactUrl(map.mapUrl))}`;
 }
 
@@ -251,7 +254,7 @@ function claimText(candidate: SourceCandidate, result: ResolutionResult | undefi
       ? hostPath(file.path)
       : hostLocation(file.path, position(location));
   };
-  const where = `${readFrom(candidate.extraction)}${unpositioned ? " with no line or column" : ""}`;
+  const where = `${readFrom(candidate.extraction, candidate.file)}${unpositioned ? " with no line or column" : ""}`;
   const from = `${fileOnly ? "a file without a line, " : ""}reported by the page in ${where}`;
   const verb = claimed(candidate.kind, stamp !== null);
   if (result === undefined) return `${verb} ${reported} (${from}; not checked)`;
@@ -318,13 +321,12 @@ function componentName(record: ComponentRecord): string {
 }
 
 /**
- * A server component rendered on the server and left nothing of its own in
- * the page, so it is said to be one wherever it is named: the DOM inside it
- * is what the components below it rendered.
+ * A server component leaves no instance in the page, so the page lists no
+ * elements as its own, which is not to say it rendered none.
  */
 function environmentText(record: ComponentRecord): string[] {
   return record.environment === "server"
-    ? ["a server component, with no DOM of its own on the page"]
+    ? ["a server component the page lists no elements of its own for"]
     : [];
 }
 

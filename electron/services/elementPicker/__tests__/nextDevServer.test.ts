@@ -41,6 +41,10 @@ describe("serverFrameFile", () => {
     const two = serverFrameFile(`rsc://React/Prerender/${encodeURI(CHUNK)}?2`)!;
     expect(serverMapKey(one)).toBe(serverMapKey(two));
     expect(serverFrameFile(serverMapKey(one))).toBe(CHUNK);
+    // A numeric query of the file's own survives the round trip through main.
+    const queried = "webpack-internal:///(rsc)/./app/page.tsx?123";
+    expect(serverFrameFile(`about://React/Server/${queried}?7`)).toBe(queried);
+    expect(serverFrameFile(serverMapKey(queried))).toBe(queried);
   });
 });
 

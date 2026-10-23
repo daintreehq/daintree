@@ -548,12 +548,17 @@ describe("a module asked for by more than one name", () => {
     }
   });
 
-  it("asks no further once the job is out of budget or cancelled", async () => {
-    for (const reason of ["budget-exhausted", "cancelled"] as const) {
-      const subject = trying({ ok: false, reason });
-      await expect(symbolicateFrom(subject)).resolves.toEqual({ ok: false, reason });
-      expect(subject.fetchSourceMap).toHaveBeenCalledTimes(1);
-    }
+  it("asks the next name when one ran out of budget, which main holds each kind of read to", async () => {
+    const subject = trying({ ok: false, reason: "budget-exhausted" });
+    const result = await symbolicateFrom(subject);
+    expect(result.ok && result.target.location).toEqual(authored(2, 9));
+    expect(subject.fetchSourceMap.mock.calls.map(([url]) => url)).toEqual([SERVER, DISK]);
+  });
+
+  it("asks no further once the job is cancelled", async () => {
+    const subject = trying({ ok: false, reason: "cancelled" });
+    await expect(symbolicateFrom(subject)).resolves.toEqual({ ok: false, reason: "cancelled" });
+    expect(subject.fetchSourceMap).toHaveBeenCalledTimes(1);
   });
 
   it("reports the last name's reason when none gives a map", async () => {

@@ -50,11 +50,12 @@ export function serverFrameFile(url: string): string | null {
 
 /**
  * The one name every frame in a server file is asked for its map by: the
- * wrapper without its counter, so one file costs one request however many
- * frames it has.
+ * wrapper with one fixed counter, so one file costs one request however many
+ * frames it has, and a numeric query of the file's own is never read as the
+ * counter when main unwraps it again.
  */
 export function serverMapKey(file: string): string {
-  return `about://React/Server/${encodeURI(file)}`;
+  return `about://React/Server/${encodeURI(file)}?0`;
 }
 
 export function isWebpackModule(url: string): boolean {

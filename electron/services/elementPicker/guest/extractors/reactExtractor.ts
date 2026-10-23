@@ -157,6 +157,19 @@ function serverRecordFor(info: ServerInfo, id: string, path: string): ComponentR
   };
 }
 
+/**
+ * The half of `fiber`'s pair whose `_debugInfo` the last commit wrote. React
+ * sets it on the half a render works on, so where the halves disagree the one
+ * a DOM node or a return pointer names may hold an earlier render's list.
+ */
+function debugInfoHolder(fiber: Fiber, budget: Budget): Fiber {
+  const alternate = field(fiber, "alternate");
+  if (!isFiber(alternate) || field(alternate, "_debugInfo") === field(fiber, "_debugInfo")) {
+    return fiber;
+  }
+  return committedFiber(fiber, budget);
+}
+
 function ownerPath(path: string): string | null {
   const next = `${path}.owner`;
   return next.length <= MAX_PATH_CHARS ? next : null;
@@ -260,7 +273,9 @@ class CandidateWriter {
     const name = serverName(info);
     const frame = componentFrame(field(info, "debugLocation"));
     if (frame === null || name === null) return [];
-    if (frame.name !== name && !(frame.name?.endsWith(`.${name}`) ?? false)) return [];
+    // V8 prints a method called by another name as `Object.Page [as default]`.
+    const ran = frame.name?.replace(/ \[as [^\]]*\]$/, "") ?? null;
+    if (ran !== name && !(ran?.endsWith(`.${name}`) ?? false)) return [];
     const candidate = this.candidate("component-definition", frame, `${path}.debugLocation`);
     return candidate === null ? [] : [candidate];
   }
@@ -306,16 +321,29 @@ function nextFields(): GenericEvidence["fields"] {
   if (typeof version === "string" && NEXT_VERSION.test(version)) {
     fields.push({ name: "nextVersion", value: version });
   }
-  const data = field(scope, "__NEXT_DATA__");
   let router: string | null = null;
   try {
     if (Array.isArray(field(scope, "__next_f"))) router = "app";
-    else if (typeof data === "object" && data !== null) router = "pages";
+    else if (isNextData(field(scope, "__NEXT_DATA__"))) router = "pages";
   } catch {
     // A revoked proxy throws on `Array.isArray`; that is no router either way.
   }
   if (router !== null) fields.push({ name: "nextRouter", value: router });
   return fields;
+}
+
+/**
+ * The Pages Router's data object, which always names its build. An element
+ * with that id reaches the window by name too, and is not it.
+ */
+function isNextData(value: unknown): boolean {
+  if (typeof value !== "object" || value === null) return false;
+  try {
+    if (typeof Node !== "undefined" && value instanceof Node) return false;
+  } catch {
+    return false;
+  }
+  return typeof field(value, "buildId") === "string";
 }
 
 /**
@@ -330,10 +358,13 @@ function nearestOf(host: Fiber, budget: Budget): Origin | null {
       if (tagOf(at) === FIBER_TAGS.hostRoot) return null;
       if (isComponentFiber(at)) return { kind: "client", fiber: canonicalFiber(at) };
     }
-    const innermost = serverEntries(at).entries.at(-1);
+    const { entries, cut } = serverEntries(debugInfoHolder(at, budget));
+    const innermost = entries.at(-1);
     if (innermost !== undefined) {
       return { kind: "server", info: innermost.info, path: `_debugInfo[${innermost.index}]` };
     }
+    // What the read left out may be nearer than anything further out.
+    if (cut) return null;
   }
   return null;
 }
@@ -405,8 +436,7 @@ function selectionOf(
    * walk has to stop.
    */
   const climb = (fiber: Fiber): boolean => {
-    const { entries, cut } = serverEntries(fiber);
-    if (cut) truncated = true;
+    const { entries, cut } = serverEntries(debugInfoHolder(fiber, commitBudget));
     for (let at = entries.length - 1; at >= 0; at -= 1) {
       const { info, index } = entries[at]!;
       // One already in the chain would make the render edges loop.
@@ -415,7 +445,10 @@ function selectionOf(
         return false;
       }
     }
-    return true;
+    // The entries left out may hold a server component, so nothing further
+    // out can be named this one's render parent.
+    if (cut) truncated = true;
+    return !cut;
   };
 
   // Render ancestry, innermost first. Each record's render parent is the next.
