@@ -3175,11 +3175,6 @@ export class PluginService {
       );
     }
 
-    // Tours (#12773) resolve their scene module and bundled audio under this
-    // load's authority and generation, so a reload hands renderers URLs V8 has
-    // never cached. The module itself is imported only when a tour opens.
-    // Registered under the instance key, so a project plugin's tours stay with
-    // its project and never collide with the same plugin installed globally.
     // Project templates (#13825) are declarative: the host reads their files
     // straight from the plugin folder when the Create project dialog asks, so
     // nothing here runs plugin code. Installed and builtin plugins only — the
@@ -3193,6 +3188,11 @@ export class PluginService {
       );
     }
 
+    // Tours (#12773) resolve their scene module and bundled audio under this
+    // load's authority and generation, so a reload hands renderers URLs V8 has
+    // never cached. The module itself is imported only when a tour opens.
+    // Registered under the instance key, so a project plugin's tours stay with
+    // its project and never collide with the same plugin installed globally.
     if (manifest.contributes.tours.length > 0) {
       registerPluginTours(pluginId, manifest.contributes.tours, {
         pluginName: manifest.displayName ?? manifest.name,
