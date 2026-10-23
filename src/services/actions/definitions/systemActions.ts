@@ -390,7 +390,7 @@ export function registerSystemActions(actions: ActionRegistry, _callbacks: Actio
       // root when there is no worktree, and throws with no workspace at all.
       // Disable-with-reason in the palette rather than letting the pick produce
       // an error toast. Palette picks dispatch with source "user", so the
-      // agent-only explicit-target guard below never applies to them and this
+      // agent-only explicit-target guard in its run never applies to them and this
       // fallback stays intact.
       palette: {
         mode: "requireContext",

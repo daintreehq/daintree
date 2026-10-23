@@ -107,7 +107,7 @@ const reviewReadinessResultSchema = z.object({
 
 /**
  * A palette gate rather than `isEnabled`, for the same reason
- * `worktree.openChanges` above spells out: `isEnabled` never sees args, so on
+ * `worktree.openChanges` spells out: `isEnabled` never sees args, so on
  * an explicit `worktreeId` it would answer for the focused worktree instead.
  * Readiness is broader than a worktree now — a scratch or worktree-less
  * project can open its own root (#11482).

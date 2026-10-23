@@ -59,10 +59,20 @@ import type { FileBrowserArgs, FileBrowserPanelArgs } from "./worktreeContextAct
 
 type WorktreeIdArgs = { worktreeId?: string } | undefined;
 
+type CopyTreeFormat = "xml" | "json" | "markdown" | "tree" | "ndjson" | "sarif";
+
+type CopyContextArgs =
+  | {
+      worktreeId?: string;
+      format?: CopyTreeFormat;
+      modified?: boolean;
+    }
+  | undefined;
+
 type CopyTreeArgs =
   | {
       worktreeId?: string;
-      format?: "xml" | "json" | "markdown" | "tree" | "ndjson" | "sarif";
+      format?: CopyTreeFormat;
       modified?: boolean;
       includePaths?: string[];
       scopePaths?: string[];
@@ -244,7 +254,7 @@ async function resolveFileBrowserReveal(
  */
 interface WorktreeContextActionRunArgsTable {
   "worktree.copyTree": CopyTreeArgs;
-  "worktree.copyContext": unknown;
+  "worktree.copyContext": CopyContextArgs;
   "worktree.inject": WorktreeIdArgs;
   "worktree.setLabelColor": { worktreeId: string; color: WorktreeLabelColorName | null };
   "worktree.setCustomTitle": { worktreeId: string; title: string | null };
@@ -472,7 +482,7 @@ export const worktreeContextActionRuns: {
     const firstChange = diffChangeSet[0];
     if (!firstChange) return;
 
-    // Lazily imported for the same reason as the review hub below.
+    // Lazily imported for the same reason as the review hub above.
     const { usePanelDialogStore } = await import("@/store/panelDialogStore");
 
     await usePanelDialogStore.getState().openPanelDialog({

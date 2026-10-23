@@ -3,20 +3,25 @@ import type { ActionContext } from "@shared/types/actions";
 import type { ActionCallbacks, ActionRegistry } from "../../actionTypes";
 
 const m = vi.hoisted(() => ({
+  implEvaluations: 0,
   runLookups: 0,
   failImpl: false,
   inject: vi.fn(),
 }));
 
-// A getter, so each test sees its own failure mode and lookup count however
-// vitest caches the mocked module.
-vi.mock("../worktreeContextActions.impl", () => ({
-  get worktreeContextActionRuns() {
-    m.runLookups++;
-    if (m.failImpl) throw new Error("chunk load failed");
-    return { "worktree.inject": m.inject };
-  },
-}));
+// The factory counts evaluations, so an eager import of the run bodies shows
+// up at registration; the getter counts lookups and fails like a chunk load
+// would, however vitest caches the mocked module.
+vi.mock("../worktreeContextActions.impl", () => {
+  m.implEvaluations++;
+  return {
+    get worktreeContextActionRuns() {
+      m.runLookups++;
+      if (m.failImpl) throw new Error("chunk load failed");
+      return { "worktree.inject": m.inject };
+    },
+  };
+});
 
 // Identity is what's asserted: the run must receive the registrar's own
 // callbacks, not a copy or a stand-in.
@@ -39,9 +44,11 @@ describe("worktree context action run bodies (#14274)", () => {
   });
 
   it("registers and materializes every definition without touching the run bodies", async () => {
+    const evaluationsBefore = m.implEvaluations;
     const actions = await register();
     for (const create of actions.values()) create();
     expect(actions.size).toBeGreaterThan(0);
+    expect(m.implEvaluations).toBe(evaluationsBefore);
     expect(m.runLookups).toBe(0);
   });
 
@@ -50,16 +57,22 @@ describe("worktree context action run bodies (#14274)", () => {
     const args = { worktreeId: "wt-1" };
 
     await expect(def.run(args, ctx)).resolves.toEqual({ injected: true });
-    await def.run(args, ctx);
+    expect(m.runLookups).toBe(1);
+    const [forwardedArgs, forwardedCtx, forwardedCallbacks] = m.inject.mock.calls[0]!;
+    expect(forwardedArgs).toBe(args);
+    expect(forwardedCtx).toBe(ctx);
+    expect(forwardedCallbacks).toBe(callbacks);
 
+    await def.run(args, ctx);
     expect(m.runLookups).toBe(2);
     expect(m.inject).toHaveBeenCalledTimes(2);
-    expect(m.inject).toHaveBeenCalledWith(args, ctx, callbacks);
   });
 
   it("rejects inside run when the run bodies fail to load", async () => {
     m.failImpl = true;
-    const def = (await register()).get("worktree.inject")!();
+    const actions = await register();
+    for (const create of actions.values()) create();
+    const def = actions.get("worktree.inject")!();
     await expect(def.run({ worktreeId: "wt-1" }, ctx)).rejects.toThrow("chunk load failed");
     expect(m.inject).not.toHaveBeenCalled();
   });
