@@ -134,6 +134,11 @@ vi.mock("@/lib/notify", () => ({
 }));
 
 const { hydrateAppState } = await import("../stateHydration");
+// The service mock never evaluates the real module, so nothing registers it;
+// loading caches the mock so restore reaches it through the accessor.
+const { load: loadTerminalService } =
+  await import("@/services/terminal/terminalInstanceServiceAccessor");
+await loadTerminalService();
 
 function makeMockManagedTerminal(id: string) {
   const hostElement = document.createElement("div");

@@ -1,4 +1,4 @@
-import { terminalInstanceService } from "@/services/TerminalInstanceService";
+import { with as withTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
 import { getPanelKindConfig, panelKindHasPty } from "@shared/config/panelKindRegistry";
 import { isSmokeTestTerminalId } from "@shared/utils/smokeTestTerminals";
 import { logWarn } from "@/utils/logger";
@@ -990,9 +990,9 @@ export async function restorePanelsPhase(
             restoredIdsByIndex.set(capturedIndex, restoredTerminalId);
 
             if (backendTerminal.activityTier) {
-              terminalInstanceService.initializeBackendTier(
-                restoredTerminalId,
-                backendTerminal.activityTier
+              const tier = backendTerminal.activityTier;
+              withTerminalService((service) =>
+                service.initializeBackendTier(restoredTerminalId, tier)
               );
             }
 
@@ -1055,9 +1055,9 @@ export async function restorePanelsPhase(
                 restoredIdsByIndex.set(capturedIndex, restoredTerminalId);
 
                 if (reconnectedTerminal.activityTier) {
-                  terminalInstanceService.initializeBackendTier(
-                    restoredTerminalId,
-                    reconnectedTerminal.activityTier
+                  const tier = reconnectedTerminal.activityTier;
+                  withTerminalService((service) =>
+                    service.initializeBackendTier(restoredTerminalId, tier)
                   );
                 }
 
@@ -1413,7 +1413,8 @@ export async function restorePanelsPhase(
         const restoredTerminalId = await addPanel(orphanArgs);
 
         if (terminal.activityTier) {
-          terminalInstanceService.initializeBackendTier(restoredTerminalId, terminal.activityTier);
+          const tier = terminal.activityTier;
+          withTerminalService((service) => service.initializeBackendTier(restoredTerminalId, tier));
         }
 
         restoreTasks.push({

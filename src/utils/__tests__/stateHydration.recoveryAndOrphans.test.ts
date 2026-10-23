@@ -1,6 +1,10 @@
 // @vitest-environment jsdom
 import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from "vitest";
-import { load as loadTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
+import {
+  __testing as terminalServiceAccessorTesting,
+  load as loadTerminalService,
+  register as registerTerminalService,
+} from "@/services/terminal/terminalInstanceServiceAccessor";
 
 const appClientMock = {
   hydrate: vi.fn(),
@@ -745,6 +749,36 @@ describe("hydrateAppState", () => {
 
     expect(setGPUHardwareAvailableMock).toHaveBeenCalledTimes(1);
     expect(setGPUHardwareAvailableMock).toHaveBeenCalledWith(true);
+  });
+
+  it("replays the GPU flag to a terminal service that loads after hydration", async () => {
+    const { terminalInstanceService } = await import("@/services/TerminalInstanceService");
+    terminalServiceAccessorTesting.reset();
+    appClientMock.hydrate.mockResolvedValue({
+      appState: {
+        terminals: [],
+        sidebarWidth: 350,
+      },
+      terminalConfig,
+      project,
+      agentSettings,
+      gpuWebGLHardware: false,
+    });
+
+    try {
+      await hydrateAppState({
+        addPanel: vi.fn().mockResolvedValue("terminal-id"),
+        setActiveWorktree: vi.fn(),
+        loadRecipes: vi.fn().mockResolvedValue(undefined),
+        openDiagnosticsDock: vi.fn(),
+      });
+      expect(setGPUHardwareAvailableMock).not.toHaveBeenCalled();
+    } finally {
+      registerTerminalService(terminalInstanceService);
+    }
+
+    expect(setGPUHardwareAvailableMock).toHaveBeenCalledTimes(1);
+    expect(setGPUHardwareAvailableMock).toHaveBeenCalledWith(false);
   });
 
   describe("settings recovery notifications", () => {

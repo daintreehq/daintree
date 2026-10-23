@@ -1,6 +1,10 @@
-import { terminalInstanceService } from "@/services/TerminalInstanceService";
+import {
+  onReady as onTerminalServiceReady,
+  peek as peekTerminalService,
+} from "@/services/terminal/terminalInstanceServiceAccessor";
 import { usePanelStore } from "@/store";
 import { logWarn } from "@/utils/logger";
+import type { TerminalPaintPlane } from "@/services/terminal/TerminalInstanceService";
 import type { TerminalScrollbackRestoreError } from "@shared/types/panel";
 import { type TerminalRestoreTask, scheduleBackgroundFetchAndRestore } from "./batchScheduler";
 
@@ -23,16 +27,32 @@ const lastBatchTaskMap = new Map<string, TerminalRestoreTask>();
 
 // A retry task is only actionable while its terminal exists; drop it when the
 // instance is destroyed so failed restores for closed panels don't accumulate.
-let unsubDestroyed: (() => void) | null = null;
+let disposeDestroyedListener: (() => void) | null = null;
 function ensureDestroyedListener(): void {
-  if (unsubDestroyed) return;
-  unsubDestroyed = terminalInstanceService.addInstanceDestroyedListener((id) => {
-    lastBatchTaskMap.delete(id);
+  if (disposeDestroyedListener) return;
+  const attach = (service: TerminalPaintPlane) =>
+    service.addInstanceDestroyedListener((id) => {
+      lastBatchTaskMap.delete(id);
+    });
+  // Attach synchronously when the service is loaded: onReady defers by a
+  // microtask, and a destroy in that gap would strand the retry task.
+  const loaded = peekTerminalService();
+  if (loaded) {
+    disposeDestroyedListener = attach(loaded);
+    return;
+  }
+  let unsubscribe: (() => void) | null = null;
+  const cancelReady = onTerminalServiceReady((service) => {
+    unsubscribe = attach(service);
   });
+  disposeDestroyedListener = () => {
+    cancelReady();
+    unsubscribe?.();
+  };
 }
 
 function notifyRestoreListeners(): void {
-  terminalInstanceService.notifyScrollbackRestoreListeners();
+  peekTerminalService()?.notifyScrollbackRestoreListeners();
 }
 
 // Snapshot fetches (and the chunked replays they start) are bounded and run
@@ -72,7 +92,7 @@ function syncFocusSubscription(): void {
 // instance's own isFocused flag can outlive the pane that set it.
 function restorePriority(terminalId: string, focusedId: string | null): number {
   if (terminalId === focusedId) return 0;
-  if (terminalInstanceService.get(terminalId)?.isVisible) return 1;
+  if (peekTerminalService()?.get(terminalId)?.isVisible) return 1;
   return 2;
 }
 
@@ -116,9 +136,13 @@ export function scheduleScrollbackRestore(
   tasks: TerminalRestoreTask[],
   isCurrent: () => boolean
 ): void {
+  const loadedService = peekTerminalService();
+  // Nothing is registered before the service loads, so every task skips below;
+  // arm the listener now so it is in place once terminals exist.
+  if (!loadedService && tasks.length > 0) ensureDestroyedListener();
   let scheduledAny = false;
   for (const task of tasks) {
-    const managed = terminalInstanceService.get(task.terminalId);
+    const managed = loadedService?.get(task.terminalId);
     if (!managed || managed.scrollbackRestoreState !== "none") continue;
 
     ensureDestroyedListener();
@@ -137,7 +161,7 @@ export function scheduleScrollbackRestore(
           // Bailed before starting. The restore outcome is no longer relevant
           // to this terminal, so unblock any fully-settle waiters that gated
           // on it.
-          terminalInstanceService.notifyRestoreSettledWaiters(task.terminalId);
+          peekTerminalService()?.notifyRestoreSettledWaiters(task.terminalId);
           notifyRestoreListeners();
         }
       };
@@ -146,8 +170,9 @@ export function scheduleScrollbackRestore(
         resetIfStillQueued();
         return;
       }
-      const current = terminalInstanceService.get(task.terminalId);
-      if (!current || current !== managed) {
+      const service = peekTerminalService();
+      const current = service?.get(task.terminalId);
+      if (!service || !current || current !== managed) {
         resetIfStillQueued();
         return;
       }
@@ -158,7 +183,7 @@ export function scheduleScrollbackRestore(
       managed.scrollbackRestoreState = "in-progress";
       notifyRestoreListeners();
       try {
-        await terminalInstanceService.fetchAndRestore(task.terminalId);
+        await service.fetchAndRestore(task.terminalId);
 
         // fetchAndRestore swallows write-timeout / parse errors internally
         // and returns false; the controller stashes the classified error on
@@ -179,7 +204,7 @@ export function scheduleScrollbackRestore(
           // the map only retains entries for failed restores.
           lastBatchTaskMap.delete(task.terminalId);
         }
-        terminalInstanceService.notifyRestoreSettledWaiters(task.terminalId);
+        service.notifyRestoreSettledWaiters(task.terminalId);
         notifyRestoreListeners();
       } catch (error) {
         // IPC-level failure from terminalClient.getSerializedState (the
@@ -193,7 +218,7 @@ export function scheduleScrollbackRestore(
             .setScrollbackRestoreError(task.terminalId, classifySchedulerError(error));
         }
         logWarn(`Scrollback restore failed for ${task.label}`, { error });
-        terminalInstanceService.notifyRestoreSettledWaiters(task.terminalId);
+        service.notifyRestoreSettledWaiters(task.terminalId);
         notifyRestoreListeners();
       }
     };
@@ -234,6 +259,8 @@ export function retryFailedScrollbackRestoreBatch(failedTerminalIds: string[]): 
 /** Clear the captured retry tasks and the restore queue. Exported for test isolation and teardown. */
 export function resetScrollbackRestoreBatch(): void {
   lastBatchTaskMap.clear();
+  disposeDestroyedListener?.();
+  disposeDestroyedListener = null;
   restoreQueue.length = 0;
   activeRestores = 0;
   queueGeneration++;
