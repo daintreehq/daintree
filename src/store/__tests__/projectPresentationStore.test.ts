@@ -22,6 +22,7 @@ const snapshot = (
   promotedPluginButtons: [],
   launcherGroupOrder: [],
   featuredLaunchEntry: null,
+  webProject: null,
   revision: 0,
   ...overrides,
 });
@@ -90,6 +91,27 @@ afterEach(() => {
 });
 
 describe("projectPresentationStore", () => {
+  it("follows what main read from the project's files, which a push can change at the same revision", async () => {
+    const bridge = installBridge({
+      get: () => Promise.resolve(snapshot({}, { webProject: false })),
+    });
+    state().init();
+    await flush();
+    expect(state().webProject).toBe(false);
+
+    bridge.listeners.forEach((cb) => cb(snapshot({}, { webProject: true })));
+    expect(state().webProject).toBe(true);
+  });
+
+  it("reads a snapshot from a main that predates web-project detection as unknown", async () => {
+    const older = snapshot({}, { webProject: false });
+    Reflect.deleteProperty(older, "webProject");
+    installBridge({ get: () => Promise.resolve(older) });
+    state().init();
+    await flush();
+    expect(state()).toMatchObject({ loaded: true, webProject: null });
+  });
+
   it("pulls the sender project's profile once, without naming a project", async () => {
     const bridge = installBridge({
       get: () => Promise.resolve(snapshot({ forgeStats: "hidden" })),

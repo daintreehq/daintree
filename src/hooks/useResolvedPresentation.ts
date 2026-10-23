@@ -1,6 +1,7 @@
 import { useEffect, useMemo } from "react";
 import { isGitBackedProject, type Project } from "@shared/types/project";
 import {
+  defaultPresentationLevel,
   hasProjectToolbarOverrides,
   isProjectToolbarActive,
   resolvePresentation,
@@ -13,6 +14,7 @@ import {
 } from "@shared/config/launcherArrangement";
 import { useProjectStore } from "@/store/projectStore";
 import { useProjectPresentationStore } from "@/store/projectPresentationStore";
+import { useDevPreviewOfferStore } from "@/store/devPreviewOfferStore";
 import { getViewWorkspaceId } from "@/store/viewWorkspaceId";
 import { selectViewProject } from "@/store/viewWorkspace";
 
@@ -36,10 +38,14 @@ interface ProfileForView {
  * once main has answered for this same project; until then — and for a view
  * with no project row, such as a scratch workspace — every feature draws its
  * default, which is exactly what it drew before profiles existed.
+ *
+ * `devPreviewOffered` is this view's answer from `devPreviewOfferStore`
+ * (#14069); absent, the dev preview keeps today's default.
  */
 export function resolvePresentationFor(
   project: Pick<Project, "id" | "gitBacked"> | null | undefined,
-  profile: ProfileForView
+  profile: ProfileForView,
+  devPreviewOffered?: boolean
 ): ResolvedPresentation {
   // Not `isGitBackedProject(null)`: that answers true, and a view with no
   // project row has no repository to report on.
@@ -47,7 +53,7 @@ export function resolvePresentationFor(
   const applies = profileAppliesTo(project, profile);
   return resolvePresentation(
     applies ? profile.levels : NO_LEVELS,
-    { gitBacked },
+    { gitBacked, devPreviewOffered },
     { toolbar: applies && isProjectToolbarActive(withToolbarDefaults(profile)) }
   );
 }
@@ -109,7 +115,8 @@ export function projectToolbarOverlayFor(
 export function getResolvedPresentation(): ResolvedPresentation {
   return resolvePresentationFor(
     selectViewProject(getViewWorkspaceId(), useProjectStore.getState()),
-    useProjectPresentationStore.getState()
+    useProjectPresentationStore.getState(),
+    useDevPreviewOfferStore.getState().reason !== null
   );
 }
 
@@ -131,17 +138,22 @@ export function useResolvedPresentation(): ResolvedPresentation {
   const profileProjectId = useProjectPresentationStore((s) => s.projectId);
   const useProjectToolbar = useProjectPresentationStore((s) => s.useProjectToolbar);
   const promotedPluginButtons = useProjectPresentationStore((s) => s.promotedPluginButtons);
+  const devPreviewOffered = useDevPreviewOfferStore((s) => s.reason !== null);
   useFollowPresentationProfile(projectId);
 
   return useMemo(
     () =>
-      resolvePresentationFor(projectId === undefined ? null : { id: projectId, gitBacked }, {
-        levels,
-        loaded,
-        projectId: profileProjectId,
-        useProjectToolbar,
-        promotedPluginButtons,
-      }),
+      resolvePresentationFor(
+        projectId === undefined ? null : { id: projectId, gitBacked },
+        {
+          levels,
+          loaded,
+          projectId: profileProjectId,
+          useProjectToolbar,
+          promotedPluginButtons,
+        },
+        devPreviewOffered
+      ),
     [
       projectId,
       gitBacked,
@@ -150,8 +162,33 @@ export function useResolvedPresentation(): ResolvedPresentation {
       profileProjectId,
       useProjectToolbar,
       promotedPluginButtons,
+      devPreviewOffered,
     ]
   );
+}
+
+/**
+ * Whether this view's project hides the dev preview (#14069). The one answer
+ * surfaces that stay mounted for the life of the view need, read through
+ * primitives so a profile change that leaves it alone re-renders nothing.
+ */
+export function useDevPreviewHidden(): boolean {
+  const viewWorkspaceId = getViewWorkspaceId();
+  const projectId = useProjectStore((s) => selectViewProject(viewWorkspaceId, s)?.id);
+  const gitBacked = useProjectStore((s) => selectViewProject(viewWorkspaceId, s)?.gitBacked);
+  const level = useProjectPresentationStore((s) =>
+    projectId !== undefined && s.loaded && s.projectId === projectId
+      ? s.levels.devServer
+      : undefined
+  );
+  const devPreviewOffered = useDevPreviewOfferStore((s) => s.reason !== null);
+  useFollowPresentationProfile(projectId);
+  if (projectId === undefined) return false;
+  const fallback = defaultPresentationLevel("devServer", {
+    gitBacked: isGitBackedProject({ gitBacked }),
+    devPreviewOffered,
+  });
+  return (level ?? fallback) === "hidden";
 }
 
 function useFollowPresentationProfile(projectId: string | undefined): void {

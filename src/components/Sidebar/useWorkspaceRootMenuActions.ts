@@ -1,6 +1,7 @@
 import { useRef, useState } from "react";
 import type { WorkspaceRoot } from "@/hooks/useWorkspaceRoot";
 import { useWorktreeActions } from "@/hooks/useWorktreeActions";
+import { useDevPreviewHidden } from "@/hooks/useResolvedPresentation";
 import { getAgentConfig, getAgentIds } from "@/config/agents";
 import { getAgentSettingsEntry } from "@/types";
 import { isAgentLaunchable } from "@shared/utils/agentAvailability";
@@ -32,6 +33,7 @@ export function useWorkspaceRootMenuActions(workspace: WorkspaceRoot): WorktreeM
   const allRecipes = useRecipeStore((state) => state.recipes);
   const runRecipeWithResults = useRecipeStore((state) => state.runRecipeWithResults);
   const { handleCopyTree } = useWorktreeActions();
+  const hideDevPreview = useDevPreviewHidden();
 
   const [runningRecipeId, setRunningRecipeId] = useState<string | null>(null);
   // State alone can't stop a double press: both clicks land before the first
@@ -123,5 +125,6 @@ export function useWorkspaceRootMenuActions(workspace: WorkspaceRoot): WorktreeM
       copyWithToast("Path", workspace.path);
     },
     onRunRecipe: handleRunRecipe,
+    hideDevPreview,
   };
 }

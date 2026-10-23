@@ -13,6 +13,7 @@ import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 import type { WorktreeSnapshot } from "@shared/types";
 import { useProjectStore } from "@/store/projectStore";
 import { usePaletteStore } from "@/store/paletteStore";
+import { useDevPreviewHidden } from "@/hooks/useResolvedPresentation";
 import { useSearchablePalette, type UseSearchablePaletteReturn } from "./useSearchablePalette";
 import { keybindingService } from "@/services/KeybindingService";
 import { buildResumeSessionItems } from "@/services/resumeSessionItems";
@@ -109,6 +110,9 @@ export function usePanelPalette(): UsePanelPaletteReturn {
     subscribeToPluginAgentRegistry,
     getPluginAgentRegistrySnapshot
   );
+  // A project that hides the dev preview leaves it out of this list too
+  // (#14069); the action palette and its keybinding still open it.
+  const devPreviewHidden = useDevPreviewHidden();
 
   useEffect(() => {
     return keybindingService.subscribe(() => setKeybindingVersion((v) => v + 1));
@@ -118,16 +122,18 @@ export function usePanelPalette(): UsePanelPaletteReturn {
     // Referenced so this memo re-derives when plugins load/unload mid-session;
     // getEffectiveAgentIds/Config below read the merged (incl. plugin) registry (#9879).
     void pluginAgentRegistry;
-    const panelKinds = getSpawnablePanelKinds().map((config) => ({
-      id: config.id,
-      name: config.name,
-      iconId: config.iconId,
-      color: config.color,
-      description: config.shortcut,
-      searchAliases: config.searchAliases,
-      category: "tool" as const,
-      origin: getPanelKindOrigin(config),
-    }));
+    const panelKinds = getSpawnablePanelKinds()
+      .filter((config) => !(devPreviewHidden && config.id === "dev-preview"))
+      .map((config) => ({
+        id: config.id,
+        name: config.name,
+        iconId: config.iconId,
+        color: config.color,
+        description: config.shortcut,
+        searchAliases: config.searchAliases,
+        category: "tool" as const,
+        origin: getPanelKindOrigin(config),
+      }));
 
     const isAgentHidden = (agentId: string): boolean => {
       if (!isAvailabilityInitialized) return false;
@@ -220,6 +226,7 @@ export function usePanelPalette(): UsePanelPaletteReturn {
     availability,
     isAvailabilityInitialized,
     pluginAgentRegistry,
+    devPreviewHidden,
   ]);
 
   const { results, selectedIndex, close, isOpen, matchesById, ...paletteRest } =

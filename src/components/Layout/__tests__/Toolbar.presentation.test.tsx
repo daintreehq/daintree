@@ -20,6 +20,7 @@ import {
   useProjectPresentationStore,
 } from "@/store/projectPresentationStore";
 import { initBuiltInPanelKinds } from "@/panels/registry";
+import { useDevPreviewOfferStore, type DevPreviewOfferReason } from "@/store/devPreviewOfferStore";
 import { PREVIEW_PROJECT } from "../__preview__/toolbarShims";
 import { Toolbar } from "../Toolbar";
 import { useProjectSwitcherPalette } from "@/hooks/useProjectSwitcherPalette";
@@ -196,6 +197,76 @@ describe("Toolbar items under the project's toolbar (#13783)", () => {
 
     await applyProfile({ resumeSessions: "shown" }, false);
     expect(resumeSlot()).toBeNull();
+  });
+});
+
+describe("Toolbar dev preview under the project's choice (#14069)", () => {
+  // Whether the row holds the button at all. Where on the row it lands, or
+  // whether the width budget folds it into `…`, is the overflow engine's
+  // business and is pinned by its own suites.
+  const devSlot = () => document.querySelector('[data-toolbar-button-id="dev-server"]');
+
+  async function offer(reason: DevPreviewOfferReason): Promise<void> {
+    act(() => {
+      useDevPreviewOfferStore.setState({ reason });
+    });
+    await settle();
+  }
+
+  // A profile from before #11667 still carries the button with no pin entry.
+  function grandfatheredLayout(pinned?: boolean): void {
+    act(() => {
+      useToolbarPreferencesStore.setState((state) => ({
+        layout: {
+          ...state.layout,
+          leftButtons: [...state.layout.leftButtons, "dev-server"],
+          pinnedButtons:
+            pinned === undefined
+              ? state.layout.pinnedButtons
+              : { ...state.layout.pinnedButtons, "dev-server": pinned },
+        },
+      }));
+    });
+  }
+
+  afterEach(() => {
+    useDevPreviewOfferStore.setState({ reason: "unknown" });
+  });
+
+  it("takes a leftover button away where nothing offers the dev preview, writing nothing", async () => {
+    grandfatheredLayout();
+    await applyProfile({});
+    expect(devSlot()).not.toBeNull();
+    const layoutBefore = useToolbarPreferencesStore.getState().layout;
+
+    await offer(null);
+    expect(devSlot()).toBeNull();
+    expect(useToolbarPreferencesStore.getState().layout).toBe(layoutBefore);
+
+    await offer("web-project");
+    expect(devSlot()).not.toBeNull();
+  });
+
+  it("never adds the button for a detected web project alone", async () => {
+    await offer("web-project");
+    await applyProfile({});
+    expect(devSlot()).toBeNull();
+  });
+
+  it("explicitly shown: puts it on this project's toolbar with no app-wide slot, whatever the toggle", async () => {
+    await offer(null);
+    const layoutBefore = useToolbarPreferencesStore.getState().layout;
+
+    await applyProfile({ devServer: "shown" }, false);
+
+    expect(devSlot()).not.toBeNull();
+    expect(useToolbarPreferencesStore.getState().layout).toBe(layoutBefore);
+  });
+
+  it("explicitly hidden: drops even a button the user pinned", async () => {
+    grandfatheredLayout(true);
+    await applyProfile({ devServer: "hidden" });
+    expect(devSlot()).toBeNull();
   });
 });
 

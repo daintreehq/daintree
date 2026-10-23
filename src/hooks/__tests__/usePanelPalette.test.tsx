@@ -12,6 +12,7 @@ const {
   cliAvailabilityState,
   worktreeState,
   projectState,
+  devPreview,
 } = vi.hoisted(() => ({
   getPanelKindIdsMock: vi.fn(),
   getPanelKindConfigMock: vi.fn(),
@@ -30,6 +31,11 @@ const {
   },
   worktreeState: { worktrees: new Map<string, { id: string; name: string; branch?: string }>() },
   projectState: { currentProject: { id: "proj-1" } as { id: string } | null },
+  devPreview: { hidden: false },
+}));
+
+vi.mock("@/hooks/useResolvedPresentation", () => ({
+  useDevPreviewHidden: () => devPreview.hidden,
 }));
 
 vi.mock("@shared/config/panelKindRegistry", async (importOriginal) => ({
@@ -147,6 +153,7 @@ describe("usePanelPalette", () => {
 
     worktreeState.worktrees = new Map();
     projectState.currentProject = { id: "proj-1" };
+    devPreview.hidden = false;
 
     getEffectiveAgentIdsMock.mockReturnValue(["claude", "claude"]);
     getEffectiveAgentConfigMock.mockReturnValue({
@@ -162,6 +169,35 @@ describe("usePanelPalette", () => {
 
     const claudeEntries = result.current.results.filter((item) => item.id === "agent:claude");
     expect(claudeEntries).toHaveLength(1);
+  });
+
+  it("leaves the dev preview out where the project hides it (#14069)", () => {
+    const devPreviewConfig = {
+      id: "dev-preview",
+      name: "Dev preview",
+      iconId: "monitor-play",
+      color: "#aaa",
+      showInPalette: true,
+      hasPty: false,
+      canRestart: false,
+      canConvert: false,
+    };
+    const configs = new Map<string, unknown>([
+      ["browser", getPanelKindConfigMock("browser")],
+      ["dev-preview", devPreviewConfig],
+    ]);
+    getPanelKindIdsMock.mockReturnValue([...configs.keys()]);
+    getPanelKindConfigMock.mockImplementation((id: string) => configs.get(id));
+    getPanelKindDefinitionMock.mockImplementation((kind: string) => ({
+      id: kind,
+      component: () => null,
+    }));
+    const ids = () => renderHook(() => usePanelPalette()).result.current.results.map((i) => i.id);
+
+    expect(ids()).toContain("dev-preview");
+    devPreview.hidden = true;
+    expect(ids()).not.toContain("dev-preview");
+    expect(ids()).toContain("browser");
   });
 
   it("assigns category 'tool' to panel kind items", () => {

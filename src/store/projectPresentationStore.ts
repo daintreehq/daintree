@@ -18,9 +18,10 @@ import { logWarn } from "@/utils/logger";
  * project from the sender's own view registration. Renderer state is per
  * project view, so this module-level store is already scoped to one project.
  *
- * Holds only what the user set and the repository's suggestion. Resolving a
- * feature's level needs its git-aware default, which lives with the project
- * row — read it through `useResolvedPresentation` / `getResolvedPresentation`.
+ * Holds only what the user set, the repository's suggestion and what main read
+ * from the project's files. Resolving a feature's level needs its git-aware
+ * default, which lives with the project row — read it through
+ * `useResolvedPresentation` / `getResolvedPresentation`.
  */
 export type PresentationFailedSave =
   | { kind: "level"; feature: PresentationFeatureId; level: PresentationLevel | null }
@@ -43,6 +44,12 @@ interface ProjectPresentationState {
   launcherGroupOrder: string[];
   /** The project plugin entry the launcher preselects (#13791), or `null`. */
   featuredLaunchEntry: string | null;
+  /**
+   * Whether main found the project's files look like a web project (#14069),
+   * `null` until it has said or when it couldn't read them. A fact about the
+   * files, never a setting: the dev preview's default is resolved from it.
+   */
+  webProject: boolean | null;
   /** Main's write count for the profile held here; an older snapshot is dropped. */
   revision: number;
   /**
@@ -156,6 +163,8 @@ export const useProjectPresentationStore = create<ProjectPresentationState>((set
       // Nor does one from before #13791 carry these.
       launcherGroupOrder: snapshot.launcherGroupOrder ?? NO_ORDER,
       featuredLaunchEntry: snapshot.featuredLaunchEntry ?? null,
+      // Nor does one from before #14069 carry this; unknown keeps the default.
+      webProject: snapshot.webProject ?? null,
       revision: snapshot.revision,
       projectId: snapshot.projectId,
       loaded: true,
@@ -246,6 +255,7 @@ export const useProjectPresentationStore = create<ProjectPresentationState>((set
     promotedPluginButtons: NO_PROMOTED,
     launcherGroupOrder: NO_ORDER,
     featuredLaunchEntry: null,
+    webProject: null,
     revision: 0,
     loaded: false,
     loadFailed: false,
@@ -378,6 +388,7 @@ export function _resetProjectPresentationStoreForTest(): void {
     promotedPluginButtons: NO_PROMOTED,
     launcherGroupOrder: NO_ORDER,
     featuredLaunchEntry: null,
+    webProject: null,
     revision: 0,
     loaded: false,
     loadFailed: false,

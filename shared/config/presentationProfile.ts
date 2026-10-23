@@ -15,7 +15,9 @@ import type { ToolbarButtonId } from "../types/toolbar.js";
  * launcher's collapsed More group, and search still finds every entry in it.
  *
  * Toolbar features (#13783) only ever demote: a demoted button moves into the
- * toolbar's `…` overflow, where it still launches what it always did. The
+ * toolbar's `…` overflow, where it still launches what it always did. The dev
+ * preview is the exception (#14069): it is offered from more than the toolbar,
+ * and a project that serves no web app hides every one of those places. The
  * toolbar buttons that carry state or reach the rest of the app — the app
  * menu, sidebar, assistant and portal toggles, memory pause, voice recording,
  * problems, notifications, Canopy, settings, the launcher, the plugin tray and
@@ -35,6 +37,12 @@ export type PresentationLevel = (typeof PRESENTATION_LEVELS)[number];
 export interface PresentationDefaultsContext {
   /** `isGitBackedProject` for the project, so a non-git folder keeps today's behaviour as its defaults. */
   gitBacked: boolean;
+  /**
+   * Whether anything says this project wants the dev preview (#14069): it looks
+   * like a web project, or it is already in use, configured or asked for
+   * everywhere. Absent while nobody knows, which keeps it offered.
+   */
+  devPreviewOffered?: boolean;
 }
 
 export interface PresentationFeatureDefinition {
@@ -74,6 +82,13 @@ export interface PresentationFeatureDefinition {
   toolbar?: ToolbarButtonId | true;
   /** The launcher group this feature places (#13791). */
   launcherGroup?: "agents" | "panels";
+  /**
+   * The feature places its toolbar button and more besides, so its level is the
+   * project's rather than its toolbar's (#14069): it applies whether or not
+   * "Use this project's toolbar" is on, choosing it never turns that on, and
+   * resetting the toolbar leaves it.
+   */
+  projectWide?: boolean;
 }
 
 const DEMOTABLE: readonly PresentationLevel[] = ["shown", "demoted"];
@@ -137,13 +152,17 @@ export const PRESENTATION_FEATURES = {
     toolbar: "browser",
   },
   devServer: {
-    label: "Dev server button",
-    noun: "the dev server button",
-    description: "The toolbar button that starts the dev server",
-    levels: DEMOTABLE,
+    label: "Dev preview",
+    noun: "the dev preview",
+    description:
+      "The dev preview's toolbar button and its rows in the launcher, the panel palette and worktree menus",
+    levels: PRESENTATION_LEVELS,
     contextKey: "presentationDevServer",
-    defaultLevel: shownByDefault,
+    // Hidden only once nothing says the project wants it: a folder that serves
+    // no web app has nothing to preview, and the launcher's search still finds it.
+    defaultLevel: ({ devPreviewOffered }) => (devPreviewOffered === false ? "hidden" : "shown"),
     toolbar: "dev-server",
+    projectWide: true,
   },
   branchChip: {
     label: "Branch chip",
@@ -251,10 +270,20 @@ export function isPresentationFeatureAvailable(
   return context.gitBacked || definition.requiresRepository !== true;
 }
 
-/** Whether `feature` places something on the toolbar, and so follows "Use this project's toolbar". */
+/**
+ * Whether `feature` places something on the toolbar, and so follows "Use this
+ * project's toolbar". A project-wide feature places a button too, but its level
+ * holds whatever that toggle says.
+ */
 export function isToolbarPresentationFeature(feature: PresentationFeatureId): boolean {
   const definition: PresentationFeatureDefinition = PRESENTATION_FEATURES[feature];
-  return definition.toolbar !== undefined;
+  return definition.toolbar !== undefined && definition.projectWide !== true;
+}
+
+/** Whether `feature`'s level is the project's whatever its toolbar says (#14069). */
+export function isProjectWidePresentationFeature(feature: PresentationFeatureId): boolean {
+  const definition: PresentationFeatureDefinition = PRESENTATION_FEATURES[feature];
+  return definition.projectWide === true;
 }
 
 /** Whether `feature` places a launcher group (#13791). */

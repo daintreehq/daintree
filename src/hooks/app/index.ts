@@ -38,5 +38,6 @@ export { usePluginDeepLink } from "./usePluginDeepLink";
 export type { PluginDeepLinkState } from "./usePluginDeepLink";
 export { useNotificationHistoryPruning } from "./useNotificationHistoryPruning";
 export { useRecipeFocusReload } from "./useRecipeFocusReload";
+export { useDevPreviewOfferSync } from "./useDevPreviewOfferSync";
 export { useWorktreeDevServerStateSync } from "./useWorktreeDevServerStateSync";
 export { useWorktreeDevServerSession } from "./useWorktreeDevServerSession";

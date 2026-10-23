@@ -207,6 +207,25 @@ describe("WorktreeMenuItems — Launch", () => {
     expect(labels.slice(2)).toEqual(["Terminal", "Browser", "Dev preview"]);
   });
 
+  it("drops the dev preview's launch row where the project hides it, keeping its server controls", () => {
+    const { container } = renderWorktreeMenu({
+      onLaunchAgent: vi.fn(),
+      hideDevPreview: true,
+      devServerState: "running",
+      onStopDevServer: vi.fn(),
+      onRestartDevServer: vi.fn(),
+    });
+
+    const launchSub = Array.from(container.querySelectorAll("[data-menu-sub]")).find(
+      (sub) => sub.firstElementChild?.textContent?.trim() === "Launch"
+    );
+    const labels = Array.from(launchSub?.querySelectorAll("[data-menu-item]") ?? []).map(
+      (el) => el.textContent
+    );
+    expect(labels).toEqual(["Terminal", "Browser"]);
+    expect(container.textContent).toMatch(/Stop dev server/);
+  });
+
   it("explains an unavailable agent instead of leaving a bare disabled row", () => {
     renderWorktreeMenu({
       launchAgents: [{ id: "codex", name: "Codex", isEnabled: false }],

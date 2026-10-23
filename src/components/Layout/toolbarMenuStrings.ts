@@ -7,6 +7,9 @@ import { PanelTop, type LucideIcon } from "lucide-react";
 export const TOOLBAR_UNPIN_LABEL = "Unpin from toolbar";
 export const TOOLBAR_PIN_LABEL = "Pin to toolbar";
 export const TOOLBAR_CUSTOMIZE_LABEL = "Customize toolbar…";
+// Takes the dev preview out of this project only (#14069): its button, launcher
+// row and menu entries. Project settings → Features brings it back.
+export const TOOLBAR_HIDE_IN_PROJECT_LABEL = "Hide in this project";
 
 // Customize toolbar opens the Toolbar settings tab, so it carries that tab's
 // glyph — the strip along the top of the window. Not a gear: Settings2 is

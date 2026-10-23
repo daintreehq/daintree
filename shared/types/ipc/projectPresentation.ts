@@ -55,6 +55,12 @@ export interface ProjectPresentationSnapshot {
    */
   featuredLaunchEntry: string | null;
   /**
+   * Whether the project's files look like a web project (#14069), read on the
+   * host each time this is built and never stored: `null` when they could not
+   * be read. Only a default for the dev preview, which the user's level beats.
+   */
+  webProject: boolean | null;
+  /**
    * The stored profile's write count, which only grows. A view drops a
    * snapshot older than the one it holds: a push and an invoke reply can
    * arrive out of order, and either could otherwise roll it back.

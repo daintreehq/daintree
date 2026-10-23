@@ -1236,8 +1236,8 @@ export function ToolbarSettingsTab() {
       <SettingsSection id="toolbar-launcher" title="Launcher palette" badge={ownerMarker("device")}>
         <SettingsGroup>
           <SettingsSwitchCard
-            title="Always show dev server in launcher"
-            subtitle="Show dev server option even if no command is configured in project settings"
+            title="Always show dev preview"
+            subtitle="Offer the dev preview in every project, even ones that don't look like web apps, unless a project hides it itself"
             isEnabled={launcher.alwaysShowDevServer}
             onChange={() => setAlwaysShowDevServer(!launcher.alwaysShowDevServer)}
             isModified={launcher.alwaysShowDevServer}

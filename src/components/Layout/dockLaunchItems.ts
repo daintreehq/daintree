@@ -44,7 +44,7 @@ import {
   launcherPluginGroupId,
   type LauncherArrangement,
 } from "@shared/config/launcherArrangement";
-import { useLauncherArrangement } from "@/hooks/useResolvedPresentation";
+import { useDevPreviewHidden, useLauncherArrangement } from "@/hooks/useResolvedPresentation";
 import type { ActionSource, AgentAvailabilityState, TerminalRecipe } from "@shared/types";
 import type { PluginLaunchEntryConfig, PluginLaunchEntryTarget } from "@shared/types/plugin";
 import type { WhenClauseContext } from "@shared/utils/whenClause";
@@ -513,6 +513,12 @@ export interface BuildDockLaunchModelOptions extends DockLaunchPreconditions {
   isAgentRegistered?: (agentId: string) => boolean;
   /** How the project arranges its launcher (#13791). Absent: stock. */
   arrangement?: LauncherArrangement;
+  /**
+   * Panel kinds this project keeps out of the launcher's rows and menus — the
+   * dev preview where it hides it (#14069). Search still finds them, so a
+   * project that guessed wrong is never more than a typed word from one.
+   */
+  hiddenPanelKinds?: ReadonlySet<string>;
 }
 
 /**
@@ -761,6 +767,7 @@ export function buildDockLaunchModel({
   whenContext,
   isAgentRegistered,
   arrangement = STOCK_LAUNCHER_ARRANGEMENT,
+  hiddenPanelKinds,
 }: BuildDockLaunchModelOptions): DockLaunchModel {
   const preconditions: DockLaunchPreconditions = { hasWorkspace, hasProject };
 
@@ -785,8 +792,12 @@ export function buildDockLaunchModel({
     panelItems.push(toPanelItem(config, surface, preconditions));
   }
 
-  const dockPanels = panelItems.filter((item) => item.location === "dock");
-  const gridPanels = panelItems.filter((item) => item.location === "grid");
+  const browsablePanels =
+    hiddenPanelKinds === undefined || hiddenPanelKinds.size === 0
+      ? panelItems
+      : panelItems.filter((item) => !hiddenPanelKinds.has(item.kindId));
+  const dockPanels = browsablePanels.filter((item) => item.location === "dock");
+  const gridPanels = browsablePanels.filter((item) => item.location === "grid");
   const pluginGroups = buildPluginGroups(launchEntries, {
     surface,
     hiddenPluginIds,
@@ -1048,6 +1059,8 @@ export function spliceRecentRows(
   return [...rows.slice(0, at), ...recentRows, ...rows.slice(at).filter(keep)];
 }
 
+const DEV_PREVIEW_HIDDEN: ReadonlySet<string> = new Set(["dev-preview"]);
+
 /**
  * Store-connected wrapper around {@link buildDockLaunchModel}. Both launcher
  * surfaces call it; the menu is only mounted while open, so `getSpawnablePanelKinds`
@@ -1123,6 +1136,7 @@ export function useDockLaunchModel(options: {
   const initLaunchEntries = usePluginLaunchEntriesStore((s) => s.init);
   const whenContext = useChromeWhenContext();
   const arrangement = useLauncherArrangement();
+  const hiddenPanelKinds = useDevPreviewHidden() ? DEV_PREVIEW_HIDDEN : undefined;
   useEffect(() => {
     initLaunchEntries();
   }, [initLaunchEntries]);
@@ -1154,6 +1168,7 @@ export function useDockLaunchModel(options: {
         whenContext,
         isAgentRegistered,
         arrangement,
+        hiddenPanelKinds,
         mruEntries: [],
       }),
     // The two registry snapshots are read for invalidation only — the builder
@@ -1172,6 +1187,7 @@ export function useDockLaunchModel(options: {
       whenContext,
       isAgentRegistered,
       arrangement,
+      hiddenPanelKinds,
       kindRegistry,
       definitionRegistry,
     ]

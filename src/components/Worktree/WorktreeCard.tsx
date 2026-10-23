@@ -299,7 +299,9 @@ export function WorktreeCard({
   const pluginItems = usePluginContextMenuItems("worktree", pluginMenuContext);
   // Only an explicit quiet: a folder without a repository resolves to hidden,
   // and its cards already have no git detail to move.
-  const quietGit = useResolvedPresentation().gitDetail === "demoted";
+  const presentation = useResolvedPresentation();
+  const quietGit = presentation.gitDetail === "demoted";
+  const hideDevPreview = presentation.devServer === "hidden";
 
   // Border accent flash — fires once when the dominant *execution* state for
   // this card meaningfully changes. `directing` is excluded because it's
@@ -1105,6 +1107,7 @@ export function WorktreeCard({
     onRestartDevServer: handleRestartDevServer,
     pluginItems,
     quietGit,
+    hideDevPreview,
   };
 
   const ariaStatusParts: string[] = [spineState];

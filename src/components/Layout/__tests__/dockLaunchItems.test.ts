@@ -637,6 +637,33 @@ describe("buildDockLaunchModel — agent bands", () => {
   });
 });
 
+describe("buildDockLaunchModel — a project hiding the dev preview (#14069)", () => {
+  const hidden = new Set(["dev-preview"]);
+
+  it("leaves it out of the rows and the context menus", () => {
+    const model = build({ hiddenPanelKinds: hidden });
+    const offered = [...model.dockPanels, ...model.gridPanels].map((p) => p.kindId);
+    expect(offered).not.toContain("dev-preview");
+    expect(offered).toContain("browser");
+    const rowKeys = [...model.browseRows, ...model.moreRows].map(
+      (row) => getDockLaunchRowItem(row)?.key
+    );
+    expect(rowKeys).not.toContain("panel:dev-preview");
+    expect(rowKeys).toContain("panel:browser");
+  });
+
+  it("keeps it in search, so it is never more than a typed word away", () => {
+    const model = build({ hiddenPanelKinds: hidden });
+    expect(model.searchItems.map((item) => item.key)).toContain("panel:dev-preview");
+  });
+
+  it("changes nothing while no kind is hidden", () => {
+    const keys = (model: ReturnType<typeof build>) =>
+      [...model.dockPanels, ...model.gridPanels].map((p) => p.kindId);
+    expect(keys(build({ hiddenPanelKinds: new Set() }))).toEqual(keys(build()));
+  });
+});
+
 describe("buildDockLaunchModel — panel preconditions", () => {
   it("marks the workspace- and project-gated panels with a reason", () => {
     const model = build({ hasWorkspace: false, hasProject: false });

@@ -324,7 +324,10 @@ export interface ToolbarLayout {
 
 /** Launcher palette default behaviors */
 export interface LauncherDefaults {
-  /** Always show dev server option in palette, even if devServerCommand not configured */
+  /**
+   * Offer the dev preview in every project, whether or not it looks like a web
+   * project (#14069). A project's own level still beats it.
+   */
   alwaysShowDevServer: boolean;
   /** Default panel type to highlight when palette opens */
   defaultSelection?: "terminal" | BuiltInAgentId | "browser" | "dev-server";

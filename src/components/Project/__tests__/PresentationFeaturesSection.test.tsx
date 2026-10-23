@@ -7,6 +7,7 @@ import type { ProjectPresentationSnapshot } from "@shared/types/ipc/projectPrese
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { useProjectStore } from "@/store/projectStore";
 import { _resetProjectPresentationStoreForTest } from "@/store/projectPresentationStore";
+import { useDevPreviewOfferStore } from "@/store/devPreviewOfferStore";
 import { PresentationFeaturesSection } from "../PresentationFeaturesSection";
 
 const PROJECT = "a".repeat(64);
@@ -20,6 +21,7 @@ const snapshot = (levels: PresentationLevels): ProjectPresentationSnapshot => ({
   promotedPluginButtons: [],
   launcherGroupOrder: [],
   featuredLaunchEntry: null,
+  webProject: null,
   revision: 0,
 });
 
@@ -253,5 +255,50 @@ describe("PresentationFeaturesSection", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe("PresentationFeaturesSection — the dev preview (#14069)", () => {
+  afterEach(() => {
+    useDevPreviewOfferStore.setState({ reason: "unknown" });
+  });
+
+  it("offers Auto beside the levels and says where Auto lands and why", async () => {
+    useDevPreviewOfferStore.setState({ reason: null });
+    await renderSection();
+    const row = featureRow("devServer");
+
+    expect(row.getAllByRole("radio").map((el) => el.textContent?.trim())).toEqual([
+      "Auto",
+      "Shown",
+      "Demoted",
+      "Hidden",
+    ]);
+    expect(row.getByRole("radio", { name: "Auto" }).getAttribute("aria-checked")).toBe("true");
+    expect(row.getByText(/Auto: Hidden, this doesn't look like a web project/)).not.toBeNull();
+  });
+
+  it("stores Shown even where Auto already shows it", async () => {
+    useDevPreviewOfferStore.setState({ reason: "web-project" });
+    await renderSection();
+    const row = featureRow("devServer");
+    expect(row.getByText(/Auto: Shown, this looks like a web project/)).not.toBeNull();
+
+    await act(async () => {
+      fireEvent.click(row.getByRole("radio", { name: "Shown" }));
+    });
+    // Stored, so the choice holds if the project stops looking like a web project.
+    expect(setLevel).toHaveBeenLastCalledWith("devServer", "shown");
+  });
+
+  it("returns a chosen level to Auto by clearing it", async () => {
+    await renderSection({ devServer: "hidden" });
+    const row = featureRow("devServer");
+    expect(row.getByRole("radio", { name: "Hidden" }).getAttribute("aria-checked")).toBe("true");
+
+    await act(async () => {
+      fireEvent.click(row.getByRole("radio", { name: "Auto" }));
+    });
+    expect(setLevel).toHaveBeenLastCalledWith("devServer", null);
   });
 });

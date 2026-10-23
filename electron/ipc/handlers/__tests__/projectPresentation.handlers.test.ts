@@ -30,6 +30,7 @@ const projectStoreMock = vi.hoisted(() => ({
 }));
 
 const readSuggestionMock = vi.hoisted(() => vi.fn<(root: unknown) => Promise<unknown>>());
+const detectWebProjectMock = vi.hoisted(() => vi.fn<(root: unknown) => Promise<boolean | null>>());
 
 vi.mock("electron", () => ({
   ipcMain: ipcMainMock,
@@ -52,6 +53,9 @@ vi.mock("../../../services/projectPresentation/repoSuggestion.js", async (import
     >();
   return { ...actual, readPresentationSuggestion: readSuggestionMock };
 });
+vi.mock("../../../services/projectPresentation/webProjectDetection.js", () => ({
+  detectWebProject: detectWebProjectMock,
+}));
 
 import { CHANNELS } from "../../channels.js";
 import {
@@ -66,6 +70,8 @@ import {
 import { registerProjectPresentationHandlers } from "../projectPresentation.js";
 import { hashPresentationLevels } from "../../../services/projectPresentation/repoSuggestion.js";
 import type { ProjectPresentationSnapshot } from "../../../../shared/types/ipc/projectPresentation.js";
+import { events } from "../../../services/events.js";
+import type { WorktreeSnapshot } from "../../../../shared/types/workspace-host.js";
 
 const PROJECT_A = "a".repeat(64);
 
@@ -92,6 +98,7 @@ beforeEach(() => {
   registryMock.getProjectForWebContents.mockReturnValue(PROJECT_A);
   projectStoreMock.getProjectById.mockReturnValue({ path: "/repo" });
   readSuggestionMock.mockResolvedValue({ levels: HIDDEN, hash: hashPresentationLevels(HIDDEN) });
+  detectWebProjectMock.mockResolvedValue(true);
   cleanup = registerProjectPresentationHandlers();
 });
 
@@ -105,6 +112,7 @@ describe("project-presentation:get", () => {
     const snapshot = (await invoke("project-presentation:get")) as ProjectPresentationSnapshot;
 
     expect(readSuggestionMock).toHaveBeenCalledWith("/repo");
+    expect(detectWebProjectMock).toHaveBeenCalledWith("/repo");
     expect(snapshot).toEqual({
       projectId: PROJECT_A,
       levels: {},
@@ -114,6 +122,7 @@ describe("project-presentation:get", () => {
       promotedPluginButtons: [],
       launcherGroupOrder: [],
       featuredLaunchEntry: null,
+      webProject: true,
       revision: 0,
     });
   });
@@ -354,5 +363,76 @@ describe("launcher ops (#13791)", () => {
     await expect(
       invoke("project-presentation:set-launcher-group-order", "recipes")
     ).rejects.toThrow();
+  });
+});
+
+describe("web project detection (#14069)", () => {
+  function changeUnder(path: string): void {
+    events.emit("sys:worktree:update", { id: path, path } as unknown as WorktreeSnapshot);
+  }
+
+  async function settle(): Promise<void> {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+
+  it("carries what it read without storing it", async () => {
+    detectWebProjectMock.mockResolvedValue(false);
+    const snapshot = (await invoke("project-presentation:get")) as ProjectPresentationSnapshot;
+    expect(snapshot.webProject).toBe(false);
+    expect(storeMock.set).not.toHaveBeenCalled();
+  });
+
+  it("tells the project's views when a change under its root flips the answer", async () => {
+    detectWebProjectMock.mockResolvedValue(false);
+    await invoke("project-presentation:get");
+    detectWebProjectMock.mockResolvedValue(true);
+
+    changeUnder("/repo");
+
+    await vi.waitFor(() => expect(broadcastMock).toHaveBeenCalledTimes(1));
+    expect(broadcastMock).toHaveBeenCalledWith(
+      PROJECT_A,
+      CHANNELS.PROJECT_PRESENTATION_CHANGED,
+      expect.objectContaining({ projectId: PROJECT_A, webProject: true })
+    );
+  });
+
+  it("stays quiet when the answer holds or the change is outside the root", async () => {
+    await invoke("project-presentation:get");
+
+    changeUnder("/repo");
+    changeUnder("/repo-worktrees/feature");
+
+    await vi.waitFor(() => expect(detectWebProjectMock).toHaveBeenCalledTimes(2));
+    await settle();
+    expect(broadcastMock).not.toHaveBeenCalled();
+  });
+
+  it("reads nothing for a project no view has asked about", async () => {
+    changeUnder("/repo");
+    await settle();
+    expect(detectWebProjectMock).not.toHaveBeenCalled();
+  });
+
+  it("stops listening once the handlers are gone", async () => {
+    await invoke("project-presentation:get");
+    cleanup?.();
+    cleanup = null;
+
+    changeUnder("/repo");
+    await settle();
+
+    expect(detectWebProjectMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("lets a project hide its dev preview without touching its toolbar toggle", async () => {
+    await invoke("project-presentation:set-toolbar-enabled", false);
+    const snapshot = (await invoke(
+      "project-presentation:set-level",
+      "devServer",
+      "hidden"
+    )) as ProjectPresentationSnapshot;
+    expect(snapshot.levels).toEqual({ devServer: "hidden" });
+    expect(snapshot.useProjectToolbar).toBe(false);
   });
 });
