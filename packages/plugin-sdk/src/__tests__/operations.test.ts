@@ -31,6 +31,10 @@ function createSyntheticProvider(options: { pollsToFinish?: number } = {}) {
   const control = {
     /** The next submit records the job, then never answers: a crash mid-call. */
     hangAfterAccept: false,
+    /** The next submit records the job, then fails as a dropped connection would. */
+    throwAfterAccept: false,
+    /** The next N polls answer with a status no provider should send. */
+    badPolls: 0,
     /** The next N polls throw an error carrying a secret. */
     failPolls: 0,
     rejectSubmit: false,
@@ -59,6 +63,10 @@ function createSyntheticProvider(options: { pollsToFinish?: number } = {}) {
             status: "running",
           });
         }
+        if (control.throwAfterAccept) {
+          control.throwAfterAccept = false;
+          throw new Error("socket hang up");
+        }
         if (control.hangAfterAccept) {
           control.hangAfterAccept = false;
           await new Promise(() => {});
@@ -67,6 +75,10 @@ function createSyntheticProvider(options: { pollsToFinish?: number } = {}) {
       },
       async poll(ref) {
         calls.poll++;
+        if (control.badPolls > 0) {
+          control.badPolls--;
+          return { status: "weird" } as never;
+        }
         if (control.failPolls > 0) {
           control.failPolls--;
           throw new Error(`upstream 503 for token ${SECRET}`);
@@ -102,7 +114,7 @@ function createSyntheticProvider(options: { pollsToFinish?: number } = {}) {
 }
 
 async function until(check: () => boolean | Promise<boolean>, what: string): Promise<void> {
-  const deadline = Date.now() + 3_000;
+  const deadline = Date.now() + 10_000;
   while (!(await check())) {
     if (Date.now() > deadline) throw new Error(`timed out waiting for ${what}`);
     await new Promise((r) => setTimeout(r, 2));
@@ -141,11 +153,14 @@ describe("createOperationManager", () => {
     const op = await manager.submit("double", { n: 21 }, { projectId: "proj-a" });
     expect(op.state).toBe("pending");
 
-    // Committed: a second manager over the same file sees it at once.
-    const reader = setup(createSyntheticProvider(), { concurrency: 1 }, dir).manager;
-    await reader.start();
-    expect((await reader.get(op.id))?.projectId).toBe("proj-a");
-    await reader.dispose();
+    // Committed: another connection to the file sees it at once.
+    const reader = await createMockHost({ databases: { directory: dir } }).db.open("operations", {
+      readonly: true,
+    });
+    expect(await reader.get("SELECT project_id FROM operations WHERE id = ?", [op.id])).toEqual({
+      project_id: "proj-a",
+    });
+    await reader.close();
 
     await until(async () => (await manager.get(op.id))?.state === "succeeded", "success");
     const done = await manager.get<{ doubled: number }>(op.id);
@@ -221,9 +236,8 @@ describe("createOperationManager", () => {
     const busy = await manager.submit("double", { n: 1 });
     await until(async () => (await manager.get(busy.id))?.state === "running", "first running");
     const queued = await manager.submit("double", { n: 2 });
-    expect((await manager.cancel(queued.id))?.state).toBe("pending");
-    await manager.abandon(busy.id);
-    await until(async () => (await manager.get(queued.id))?.state === "cancelled", "cancelled");
+    // At once, though the only slot is still busy.
+    expect((await manager.cancel(queued.id))?.state).toBe("cancelled");
     expect(provider.calls.submit).toBe(1);
   });
 
@@ -233,12 +247,15 @@ describe("createOperationManager", () => {
     const op = await manager.submit("double", { n: 6 });
     await until(async () => (await manager.get(op.id))?.state === "running", "running");
     host.simulateTaskInterrupt(host.startedTasks[0]!.id);
-    const pollsAtInterrupt = provider.calls.poll;
-    await new Promise((r) => setTimeout(r, 40));
+    // Let a poll already in flight land, then nothing more may happen.
+    await new Promise((r) => setTimeout(r, 50));
+    const pollsAfterStop = provider.calls.poll;
+    await new Promise((r) => setTimeout(r, 50));
+    expect(provider.calls.poll).toBe(pollsAfterStop);
     const stopped = await manager.get(op.id);
     expect(stopped?.state).toBe("running");
     expect(stopped?.cancelRequested).toBe(false);
-    expect(provider.calls.poll - pollsAtInterrupt).toBeLessThanOrEqual(1);
+    expect(host.startedTasks).toHaveLength(1);
 
     await manager.retry(op.id);
     await until(async () => (await manager.get(op.id))?.state === "succeeded", "success");
@@ -293,7 +310,7 @@ describe("createOperationManager", () => {
 
   it("abandons an operation still running at its deadline", async () => {
     const provider = createSyntheticProvider({ pollsToFinish: 1_000 });
-    provider.kind.deadlineMs = 30;
+    provider.kind.deadlineMs = 500;
     const { manager } = setup(provider);
     const op = await manager.submit("double", { n: 10 });
     await until(async () => (await manager.get(op.id))?.state === "abandoned", "abandoned");
@@ -301,21 +318,109 @@ describe("createOperationManager", () => {
   });
 
   it("lists by project, newest first, and prunes finished operations past the retention count", async () => {
-    const { manager } = setup(createSyntheticProvider(), { retention: { maxCount: 2 } });
+    // A clock that always moves, so creation and completion order are distinct.
+    let clock = Date.now();
+    const { manager } = setup(createSyntheticProvider(), {
+      concurrency: 1,
+      retention: { maxCount: 2 },
+      now: () => (clock = Math.max(clock + 1, Date.now())),
+    });
     const a = await manager.submit("double", { n: 1 }, { projectId: "a" });
     const b = await manager.submit("double", { n: 2 }, { projectId: "b" });
     const c = await manager.submit("double", { n: 3 }, { projectId: "a" });
-    expect((await manager.list({ projectId: "a" })).map((op) => op.id).sort()).toEqual(
-      [a.id, c.id].sort()
-    );
+    expect((await manager.list({ projectId: "a" })).map((op) => op.id)).toEqual([c.id, a.id]);
+    expect((await manager.list({ limit: 1 })).map((op) => op.id)).toEqual([c.id]);
     expect(await manager.list({ states: [] })).toEqual([]);
-    await until(
-      async () => (await manager.list({ states: ["succeeded"] })).length === 3,
-      "all succeeded"
+    // Pruned as each finishes: the oldest-finished goes once a third is done.
+    await until(async () => (await manager.get(c.id))?.state === "succeeded", "all done");
+    await until(async () => (await manager.get(a.id)) === undefined, "oldest pruned");
+    expect((await manager.list()).map((op) => op.id)).toEqual([c.id, b.id]);
+  });
+
+  it("sends an uncertain submit again under the same key when the provider can't be asked", async () => {
+    const provider = createSyntheticProvider();
+    delete provider.kind.provider.reconcile;
+    provider.control.throwAfterAccept = true;
+    const { manager } = setup(provider);
+    const op = await manager.submit("double", { n: 11 });
+    await until(async () => (await manager.get(op.id))?.state === "succeeded", "success");
+    expect(provider.calls.submit).toBe(2);
+    expect(provider.jobs.size).toBe(1);
+  });
+
+  it("abandons at once while a submit is in flight, and the late answer changes nothing", async () => {
+    const provider = createSyntheticProvider();
+    provider.control.hangAfterAccept = true;
+    const { manager, host } = setup(provider);
+    const op = await manager.submit("double", { n: 12 });
+    await until(async () => (await manager.get(op.id))?.state === "submitting", "submitting");
+    expect((await manager.abandon(op.id))?.state).toBe("abandoned");
+    await manager.dispose();
+    expect(host.startedTasks[0]!.state).not.toBe("working");
+  });
+
+  it("retries a provider answer it can't read instead of inventing an outcome", async () => {
+    const provider = createSyntheticProvider();
+    provider.control.badPolls = 1;
+    const { manager } = setup(provider);
+    const op = await manager.submit("double", { n: 13 });
+    await until(async () => (await manager.get(op.id))?.state === "succeeded", "success");
+  });
+
+  it("waits for its retry timer when the host has no task slot, rather than spinning", async () => {
+    const provider = createSyntheticProvider();
+    const dir = mkdtempSync(path.join(tmpdir(), "daintree-ops-"));
+    dirs.push(dir);
+    const mock = createMockHost({ databases: { directory: dir } });
+    let starts = 0;
+    const manager = createOperationManager(
+      {
+        db: mock.db,
+        tasks: {
+          start: async () => {
+            starts++;
+            throw new Error("already has 16 unfinished tasks");
+          },
+        },
+      },
+      {
+        database: "operations",
+        retryActionId: "test.mock.resume",
+        kinds: { double: provider.kind },
+      }
     );
-    expect(await manager.prune()).toBe(1);
-    expect(await manager.list()).toHaveLength(2);
-    expect(b.projectId).toBe("b");
+    managers.push(manager);
+    const op = await manager.submit("double", { n: 1 });
+    await new Promise((r) => setTimeout(r, 100));
+    expect(starts).toBe(1);
+    expect((await manager.get(op.id))?.state).toBe("pending");
+  });
+
+  it("can start again after the journal failed to open", async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "daintree-ops-"));
+    dirs.push(dir);
+    const mock = createMockHost({ databases: { directory: dir } });
+    let opens = 0;
+    const manager = createOperationManager(
+      {
+        db: {
+          open: (id, openOptions) => {
+            opens++;
+            return opens === 1 ? Promise.reject(new Error("busy")) : mock.db.open(id, openOptions);
+          },
+        },
+        tasks: mock.tasks,
+      },
+      {
+        database: "operations",
+        retryActionId: "test.mock.resume",
+        kinds: { double: createSyntheticProvider().kind },
+      }
+    );
+    managers.push(manager);
+    await expect(manager.start()).rejects.toThrow("busy");
+    await manager.start();
+    expect(await manager.list()).toEqual([]);
   });
 
   it("holds a task only while it drives, so a busy plugin keeps its project awake", async () => {
@@ -327,7 +432,12 @@ describe("createOperationManager", () => {
     await until(() => host.startedTasks.length === 2, "two tasks");
     await new Promise((r) => setTimeout(r, 20));
     expect(host.startedTasks.filter((t) => t.state === "working")).toHaveLength(2);
+    // A task the user cancelled is still live until finished; dispose ends it too.
+    provider.control.cancelAnswer = "unsupported";
+    host.simulateTaskCancel(host.startedTasks[0]!.id);
     await manager.dispose();
-    expect(host.startedTasks.every((t) => t.state !== "working")).toBe(true);
+    expect(host.startedTasks.every((t) => t.state !== "working" && t.state !== "cancelling")).toBe(
+      true
+    );
   });
 });

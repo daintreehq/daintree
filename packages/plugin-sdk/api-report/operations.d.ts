@@ -516,7 +516,7 @@ interface OperationManager {
      * Open the journal, mark submits a previous run left in flight uncertain,
      * prune, and resume unfinished operations in the background. Call it from
      * `activate`; it returns without waiting for any provider. Repeat calls
-     * share the first.
+     * share the first successful open, and resume driving after an interruption.
      */
     start(): Promise<void>;
     /** Journal an operation and return once it is committed, before the provider hears of it. */
@@ -552,7 +552,7 @@ interface OperationManager {
  * Every operation being driven holds a host task, which is what the user sees
  * and what keeps a project-scoped plugin's project awake. The task's Cancel
  * records a cancel request; an interruption (the plugin unloading) records
- * nothing and leaves the operation to resume.
+ * nothing and suspends driving until the next `start`, `submit` or `retry`.
  */
 declare function createOperationManager(host: OperationManagerHost, options: OperationManagerOptions): OperationManager;
 

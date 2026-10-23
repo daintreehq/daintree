@@ -7,6 +7,7 @@ import {
   type PluginDatabaseStatements,
   type PluginTaskApi,
   type PluginTaskHandle,
+  type PluginTaskResult,
 } from "../../../../shared/types/plugin.js";
 import type { ActionId } from "../../../../shared/types/actions.js";
 
@@ -268,7 +269,7 @@ export interface OperationManager {
    * Open the journal, mark submits a previous run left in flight uncertain,
    * prune, and resume unfinished operations in the background. Call it from
    * `activate`; it returns without waiting for any provider. Repeat calls
-   * share the first.
+   * share the first successful open, and resume driving after an interruption.
    */
   start(): Promise<void>;
   /** Journal an operation and return once it is committed, before the provider hears of it. */
@@ -308,6 +309,8 @@ interface OperationRow {
   title: string;
   input: string;
   state: OperationState;
+  /** Bumped by `abandon` and `retry`, so a provider answer from before either is dropped. */
+  generation: number;
   provider_id: string | null;
   checkpoint: string | null;
   progress: string | null;
@@ -317,13 +320,17 @@ interface OperationRow {
   attempt: number;
   next_attempt_at: number;
   deadline_at: number;
+  /** When a submit was first sent: from then on the provider may have it. */
+  submitted_at: number | null;
   cancel_requested_at: number | null;
   cancel_sent_at: number | null;
   created_at: number;
   updated_at: number;
 }
 
-type RowPatch = Partial<Omit<OperationRow, "id" | "kind" | "idempotency_key" | "request_hash">>;
+type RowPatch = Partial<
+  Omit<OperationRow, "id" | "kind" | "idempotency_key" | "request_hash" | "generation">
+>;
 
 const MIGRATIONS = [
   `CREATE TABLE operations (
@@ -335,6 +342,7 @@ const MIGRATIONS = [
     title TEXT NOT NULL,
     input TEXT NOT NULL,
     state TEXT NOT NULL,
+    generation INTEGER NOT NULL DEFAULT 0,
     provider_id TEXT,
     checkpoint TEXT,
     progress TEXT,
@@ -344,17 +352,19 @@ const MIGRATIONS = [
     attempt INTEGER NOT NULL DEFAULT 0,
     next_attempt_at INTEGER NOT NULL,
     deadline_at INTEGER NOT NULL,
+    submitted_at INTEGER,
     cancel_requested_at INTEGER,
     cancel_sent_at INTEGER,
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL
   );
   CREATE INDEX operations_by_state ON operations (state, next_attempt_at);
-  CREATE INDEX operations_by_project ON operations (project_id, updated_at);`,
+  CREATE INDEX operations_by_project ON operations (project_id, created_at);`,
 ];
 
 const TERMINAL = new Set<OperationState>(OPERATION_TERMINAL_STATES);
 const TERMINAL_SQL = OPERATION_TERMINAL_STATES.map((s) => `'${s}'`).join(", ");
+const POLL_STATUSES = new Set(["running", "succeeded", "failed", "cancelled"]);
 
 const DEFAULT_RETRY: OperationRetryPolicy = {
   initialIntervalMs: 1_000,
@@ -370,14 +380,32 @@ const TASK_START_RETRY_MS = 5_000;
 class StoppedError extends Error {}
 class CallTimeoutError extends Error {}
 
+const invalidResponse = (what: string) =>
+  new OperationError("INVALID_RESPONSE", `The provider adapter returned an invalid ${what}`);
+
 interface Drive {
   readonly stop: AbortController;
   task: PluginTaskHandle | null;
+  /** The task was finished, by this manager, exactly once. */
+  released: boolean;
+  /** The drive threw: the next admission waits for the retry timer. */
+  failed: boolean;
   wake: () => void;
 }
 
 function truncate(text: string, max: number): string {
   return text.length <= max ? text : `${text.slice(0, max - 1)}…`;
+}
+
+/** One line of text, as the host's task fields require, never empty. */
+function oneLine(text: string, max: number, fallback: string): string {
+  // eslint-disable-next-line no-control-regex
+  const line = text.replace(/[\s\u0000-\u001f\u007f]+/g, " ").trim();
+  return truncate(line.length > 0 ? line : fallback, max);
+}
+
+function positiveNumber(value: number | undefined, fallback: number): number {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : fallback;
 }
 
 /** JSON with object keys sorted, so equal requests hash equally. */
@@ -409,16 +437,33 @@ function encodeJson(value: unknown, max: number, what: string): string {
   return text;
 }
 
+/** A checkpoint as stored, or `undefined` when it is too large or not JSON. */
+function encodeCheckpoint(value: OperationJson): string | undefined {
+  try {
+    return encodeJson(value, OPERATION_CHECKPOINT_MAX_CHARS, "checkpoint");
+  } catch {
+    return undefined;
+  }
+}
+
 function parseJson<T>(text: string | null): T | undefined {
   return text === null ? undefined : (JSON.parse(text) as T);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function validProviderId(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0 && value.length <= 1024;
 }
 
 /** What the journal keeps of a failed call: never a raw message, which may carry secrets. */
 function describeFailure(error: unknown): { code: string; message: string } {
   if (error instanceof OperationError) {
     return {
-      code: truncate(error.code, 64),
-      message: truncate(error.message, OPERATION_ERROR_MESSAGE_MAX),
+      code: oneLine(String(error.code), 64, "OPERATION_ERROR"),
+      message: oneLine(String(error.message), OPERATION_ERROR_MESSAGE_MAX, "The operation failed"),
     };
   }
   if (error instanceof CallTimeoutError) {
@@ -460,7 +505,7 @@ function toSnapshot(row: OperationRow): OperationSnapshot {
  * Every operation being driven holds a host task, which is what the user sees
  * and what keeps a project-scoped plugin's project awake. The task's Cancel
  * records a cancel request; an interruption (the plugin unloading) records
- * nothing and leaves the operation to resume.
+ * nothing and suspends driving until the next `start`, `submit` or `retry`.
  */
 export function createOperationManager(
   host: OperationManagerHost,
@@ -470,30 +515,43 @@ export function createOperationManager(
   const random = options.random ?? Math.random;
   const concurrency = Math.min(
     PLUGIN_TASK_MAX_LIVE,
-    Math.max(1, Math.floor(options.concurrency ?? 4))
+    Math.max(1, Math.floor(positiveNumber(options.concurrency, 4)))
   );
-  const maxUnfinished = options.maxUnfinished ?? 200;
-  const retentionAgeMs = options.retention?.maxAgeMs ?? 7 * 24 * 60 * 60 * 1000;
-  const retentionCount = options.retention?.maxCount ?? 500;
+  const maxUnfinished = Math.floor(positiveNumber(options.maxUnfinished, 200));
+  const retentionAgeMs = positiveNumber(options.retention?.maxAgeMs, 7 * 24 * 60 * 60 * 1000);
+  const retentionCount = Math.floor(positiveNumber(options.retention?.maxCount, 500));
 
   let db: PluginDatabase | null = null;
   let starting: Promise<void> | null = null;
   let disposed = false;
+  // Set when the host interrupts a task: the plugin is stopping, so nothing
+  // more is admitted until something asks for work again.
+  let suspended = false;
   const driving = new Map<string, Drive>();
   const runs = new Set<Promise<void>>();
+  // A flag rather than the run's promise: a pass that ends before its first
+  // await settles before the assignment, and would read as running forever.
   let pumping = false;
+  let pumpRun: Promise<void> = Promise.resolve();
   let pumpAgain = false;
   let pumpTimer: ReturnType<typeof setTimeout> | null = null;
 
   const kindOf = (kind: string): OperationKind<unknown, unknown> => {
-    const def = options.kinds[kind];
+    const def = Object.prototype.hasOwnProperty.call(options.kinds, kind)
+      ? options.kinds[kind]
+      : undefined;
     if (!def) throw new TypeError(`unknown operation kind "${kind}"`);
     return def;
   };
-  const retryPolicy = (kind: string): OperationRetryPolicy => ({
-    ...DEFAULT_RETRY,
-    ...kindOf(kind).retry,
-  });
+  const retryPolicy = (kind: string): OperationRetryPolicy => {
+    const p = { ...DEFAULT_RETRY, ...kindOf(kind).retry };
+    return {
+      initialIntervalMs: positiveNumber(p.initialIntervalMs, DEFAULT_RETRY.initialIntervalMs),
+      backoffCoefficient: positiveNumber(p.backoffCoefficient, DEFAULT_RETRY.backoffCoefficient),
+      maximumIntervalMs: positiveNumber(p.maximumIntervalMs, DEFAULT_RETRY.maximumIntervalMs),
+      maximumAttempts: Math.floor(positiveNumber(p.maximumAttempts, DEFAULT_RETRY.maximumAttempts)),
+    };
+  };
   const backoff = (kind: string, failures: number): number => {
     const p = retryPolicy(kind);
     const cap = Math.min(
@@ -502,6 +560,10 @@ export function createOperationManager(
     );
     return Math.floor(random() * cap);
   };
+  const pollInterval = (kind: string) =>
+    positiveNumber(kindOf(kind).pollIntervalMs, DEFAULT_POLL_INTERVAL_MS);
+  const deadlineFor = (kind: string) =>
+    positiveNumber(kindOf(kind).deadlineMs, DEFAULT_DEADLINE_MS);
 
   // Not gated on `disposed`: a call that lands while dispose waits for the
   // drives still records what the provider said.
@@ -510,32 +572,25 @@ export function createOperationManager(
     return db;
   };
 
-  /** A checkpoint as stored, or `undefined` when it is too large or not JSON. */
-  const encodeCheckpoint = (value: OperationJson): string | undefined => {
-    try {
-      return encodeJson(value, OPERATION_CHECKPOINT_MAX_CHARS, "checkpoint");
-    } catch {
-      return undefined;
-    }
-  };
-
   const load = async (id: string, from: PluginDatabaseStatements = requireDb()) =>
     from.get<OperationRow>("SELECT * FROM operations WHERE id = ?", [id]);
 
   /**
-   * Apply `patch` if the row is still in `expected`. A row someone else moved
-   * on (an abandon, a retry) is left alone, and the caller re-reads it.
+   * Apply `patch` if the row is still as `row` read it — same state, same
+   * generation. A row someone else moved on (a cancel of an unsent submit, an
+   * abandon, a retry) is left alone, and the drive re-reads it.
    */
-  const transition = async (
-    id: string,
-    expected: OperationState,
-    patch: RowPatch
-  ): Promise<boolean> => {
+  const transition = async (row: OperationRow, patch: RowPatch): Promise<boolean> => {
     const entries = Object.entries({ ...patch, updated_at: now() });
     const sets = entries.map(([column]) => `${column} = ?`).join(", ");
     const result = await requireDb().run(
-      `UPDATE operations SET ${sets} WHERE id = ? AND state = ?`,
-      [...entries.map(([, value]) => value as string | number | null), id, expected]
+      `UPDATE operations SET ${sets} WHERE id = ? AND state = ? AND generation = ?`,
+      [
+        ...entries.map(([, value]) => value as string | number | null),
+        row.id,
+        row.state,
+        row.generation,
+      ]
     );
     return result.changes > 0;
   };
@@ -563,37 +618,57 @@ export function createOperationManager(
     };
   };
 
-  /** One provider call, bounded by the kind's timeout and the drive's stop. */
+  const checkpointRejected = (providerId: string): RowPatch => ({
+    state: "abandoned",
+    provider_id: providerId,
+    error_code: "CHECKPOINT_REJECTED",
+    error_message:
+      "The adapter's checkpoint was too large or not JSON; the provider's outcome is unknown",
+  });
+
+  /**
+   * One provider call, bounded by the kind's timeout, the operation's deadline
+   * and the drive's stop. The manager's own reason settles the race before the
+   * provider's signal aborts, so a provider rejecting on abort can't pass an
+   * interruption off as a failed call.
+   */
   const call = async <T>(
     row: OperationRow,
     drive: Drive,
     fn: (ctx: OperationCallContext) => Promise<T>
   ): Promise<T> => {
+    if (drive.stop.signal.aborted) throw new StoppedError();
     const controller = new AbortController();
-    const timeoutMs = kindOf(row.kind).callTimeoutMs ?? DEFAULT_CALL_TIMEOUT_MS;
+    const timeoutMs = Math.max(
+      1,
+      Math.min(
+        positiveNumber(kindOf(row.kind).callTimeoutMs, DEFAULT_CALL_TIMEOUT_MS),
+        row.deadline_at - now()
+      )
+    );
     let onStop: () => void = () => {};
     let timer: ReturnType<typeof setTimeout> | undefined;
-    const aborted = new Promise<never>((_, reject) => {
+    const ended = new Promise<never>((_, reject) => {
       timer = setTimeout(() => {
-        controller.abort();
         reject(new CallTimeoutError());
+        controller.abort();
       }, timeoutMs);
       onStop = () => {
-        controller.abort();
         reject(new StoppedError());
+        controller.abort();
       };
-      if (drive.stop.signal.aborted) onStop();
-      else drive.stop.signal.addEventListener("abort", onStop, { once: true });
+      drive.stop.signal.addEventListener("abort", onStop, { once: true });
     });
+    ended.catch(() => {});
     try {
-      return await Promise.race([
-        fn({ operationId: row.id, idempotencyKey: row.idempotency_key, signal: controller.signal }),
-        aborted,
-      ]);
+      const answer = Promise.resolve().then(() =>
+        fn({ operationId: row.id, idempotencyKey: row.idempotency_key, signal: controller.signal })
+      );
+      answer.catch(() => {});
+      return await Promise.race([ended, answer]);
     } finally {
       clearTimeout(timer);
       drive.stop.signal.removeEventListener("abort", onStop);
-      aborted.catch(() => {});
     }
   };
 
@@ -616,7 +691,7 @@ export function createOperationManager(
       drive.stop.signal.addEventListener("abort", done, { once: true });
     });
 
-  /** One step for a row that is due. Returns after at most one provider call. */
+  /** One step for a row that is due. Makes at most one provider call. */
   const step = async (row: OperationRow, drive: Drive): Promise<void> => {
     const kind = kindOf(row.kind);
     const provider = kind.provider;
@@ -626,11 +701,24 @@ export function createOperationManager(
     switch (row.state) {
       case "pending": {
         if (cancelRequested) {
-          await transition(row.id, "pending", { state: "cancelled" });
+          // Sent before, with no way to look it up: it may exist remotely.
+          await transition(
+            row,
+            row.submitted_at === null
+              ? { state: "cancelled" }
+              : {
+                  state: "abandoned",
+                  error_code: "CANCEL_UNCONFIRMED",
+                  error_message:
+                    "Cancelled before the provider confirmed the submit; whether it received it is unknown",
+                }
+          );
           return;
         }
-        if (!(await transition(row.id, "pending", { state: "submitting" }))) return;
-        let accepted: { providerId: string; checkpoint?: OperationJson };
+        const sending: RowPatch = { state: "submitting", submitted_at: row.submitted_at ?? now() };
+        if (!(await transition(row, sending))) return;
+        const submitting: OperationRow = { ...row, ...sending } as OperationRow;
+        let accepted: unknown;
         try {
           accepted = await call(row, drive, (ctx) => provider.submit(input(), ctx));
         } catch (error) {
@@ -638,174 +726,190 @@ export function createOperationManager(
           if (error instanceof StoppedError) return;
           if (error instanceof OperationError && !error.retryable) {
             const failure = describeFailure(error);
-            await transition(row.id, "submitting", {
+            await transition(submitting, {
               state: "failed",
               error_code: failure.code,
               error_message: failure.message,
             });
             return;
           }
-          await transition(row.id, "submitting", failurePatch(row, error, "uncertain"));
+          await transition(submitting, failurePatch(submitting, error, "uncertain"));
           return;
         }
-        // The provider's id is what matters; a checkpoint it can't keep is dropped.
-        await transition(row.id, "submitting", {
-          state: "running",
-          provider_id: String(accepted.providerId),
-          checkpoint:
-            accepted.checkpoint === undefined
-              ? null
-              : (encodeCheckpoint(accepted.checkpoint) ?? null),
-          attempt: 0,
-          error_code: null,
-          error_message: null,
-          next_attempt_at: now() + (kind.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS),
-        });
+        if (!isRecord(accepted) || !validProviderId(accepted.providerId)) {
+          await transition(
+            submitting,
+            failurePatch(submitting, invalidResponse("submit answer"), "uncertain")
+          );
+          return;
+        }
+        const checkpoint =
+          accepted.checkpoint === undefined
+            ? null
+            : encodeCheckpoint(accepted.checkpoint as OperationJson);
+        await transition(
+          submitting,
+          checkpoint === undefined
+            ? checkpointRejected(accepted.providerId)
+            : {
+                state: "running",
+                provider_id: accepted.providerId,
+                checkpoint,
+                attempt: 0,
+                error_code: null,
+                error_message: null,
+                next_attempt_at: now() + pollInterval(row.kind),
+              }
+        );
         return;
       }
       case "submitting": {
-        await transition(row.id, "submitting", { state: "uncertain" });
+        await transition(row, { state: "uncertain" });
         return;
       }
       case "uncertain": {
         const reconcile = provider.reconcile?.bind(provider);
         if (!reconcile) {
-          if (cancelRequested) {
-            await transition(row.id, "uncertain", {
-              state: "abandoned",
-              error_code: "CANCEL_UNCONFIRMED",
-              error_message:
-                "Cancelled before the provider confirmed the submit; whether it received it is unknown",
-            });
-            return;
-          }
           // The provider deduplicates on the key, so sending it again is safe.
-          await transition(row.id, "uncertain", { state: "pending" });
+          await transition(row, { state: "pending" });
           return;
         }
+        let found: unknown;
         try {
-          const found = await call(row, drive, (ctx) => reconcile(input(), ctx));
-          if (found.status === "found") {
-            await transition(row.id, "uncertain", {
-              state: "running",
-              provider_id: String(found.providerId),
-              checkpoint:
-                found.checkpoint === undefined
-                  ? row.checkpoint
-                  : (encodeCheckpoint(found.checkpoint) ?? row.checkpoint),
-              attempt: 0,
-              error_code: null,
-              error_message: null,
-              next_attempt_at: now(),
-            });
-          } else if (found.status === "not-found") {
-            await transition(
-              row.id,
-              "uncertain",
-              cancelRequested
-                ? { state: "cancelled" }
-                : { state: "pending", next_attempt_at: now() }
-            );
-          } else {
-            await transition(
-              row.id,
-              "uncertain",
-              failurePatch(
-                row,
-                new OperationError(
-                  "UNRECONCILED",
-                  "The provider could not say whether it received the submit"
-                ),
-                "uncertain"
-              )
-            );
-          }
+          found = await call(row, drive, (ctx) => reconcile(input(), ctx));
         } catch (error) {
           if (error instanceof StoppedError) return;
-          await transition(row.id, "uncertain", failurePatch(row, error, "uncertain"));
+          await transition(row, failurePatch(row, error, "uncertain"));
+          return;
+        }
+        const status = isRecord(found) ? found.status : undefined;
+        if (status === "found" && isRecord(found) && validProviderId(found.providerId)) {
+          const checkpoint =
+            found.checkpoint === undefined
+              ? row.checkpoint
+              : encodeCheckpoint(found.checkpoint as OperationJson);
+          await transition(
+            row,
+            checkpoint === undefined
+              ? checkpointRejected(found.providerId)
+              : {
+                  state: "running",
+                  provider_id: found.providerId,
+                  checkpoint,
+                  attempt: 0,
+                  error_code: null,
+                  error_message: null,
+                  next_attempt_at: now(),
+                }
+          );
+        } else if (status === "not-found") {
+          // Proven never received: nothing exists remotely to cancel or duplicate.
+          await transition(
+            row,
+            cancelRequested
+              ? { state: "cancelled" }
+              : { state: "pending", submitted_at: null, next_attempt_at: now() }
+          );
+        } else {
+          await transition(
+            row,
+            failurePatch(
+              row,
+              status === "unknown"
+                ? new OperationError(
+                    "UNRECONCILED",
+                    "The provider could not say whether it received the submit"
+                  )
+                : invalidResponse("reconcile answer"),
+              "uncertain"
+            )
+          );
         }
         return;
       }
       case "running": {
         const cancel = provider.cancel?.bind(provider);
         if (cancelRequested && row.cancel_sent_at === null) {
-          let answer: "cancelled" | "requested" | "unsupported" = "unsupported";
+          let answer: unknown = "unsupported";
           if (cancel) {
             try {
               answer = await call(row, drive, (ctx) => cancel(ref(row), ctx));
             } catch (error) {
               if (error instanceof StoppedError) return;
-              // Asked and not answered: polling still tells how it ended.
-              answer = "requested";
+              // Delivery unknown: ask again after a backoff.
+              await transition(row, failurePatch(row, error, "running"));
+              return;
             }
           }
           await transition(
-            row.id,
-            "running",
+            row,
             answer === "cancelled"
               ? { state: "cancelled", cancel_sent_at: now() }
-              : { cancel_sent_at: now() }
+              : { cancel_sent_at: now(), attempt: 0 }
           );
           return;
         }
-        let polled: OperationPollResult<unknown>;
+        let polled: unknown;
         try {
           polled = await call(row, drive, (ctx) => provider.poll(ref(row), ctx));
         } catch (error) {
           if (error instanceof StoppedError) return;
           if (error instanceof OperationError && !error.retryable) {
             const failure = describeFailure(error);
-            await transition(row.id, "running", {
+            await transition(row, {
               state: "failed",
               error_code: failure.code,
               error_message: failure.message,
             });
             return;
           }
-          await transition(row.id, "running", failurePatch(row, error, "running"));
+          await transition(row, failurePatch(row, error, "running"));
           return;
         }
-        if (polled.status === "running") {
+        if (!isRecord(polled) || !POLL_STATUSES.has(polled.status as string)) {
+          await transition(row, failurePatch(row, invalidResponse("poll answer"), "running"));
+          return;
+        }
+        const answer = polled as OperationPollResult<unknown>;
+        if (answer.status === "running") {
           const checkpoint =
-            polled.checkpoint === undefined ? row.checkpoint : encodeCheckpoint(polled.checkpoint);
+            answer.checkpoint === undefined ? row.checkpoint : encodeCheckpoint(answer.checkpoint);
           if (checkpoint === undefined) {
             // An adapter bug, not a provider failure: resuming would lose its place.
-            await transition(row.id, "running", {
-              state: "abandoned",
-              error_code: "CHECKPOINT_REJECTED",
-              error_message: "The adapter's checkpoint was too large or not JSON",
-            });
+            await transition(row, checkpointRejected(row.provider_id ?? ""));
             return;
           }
-          const fraction = polled.progress?.fraction;
-          const progress =
-            polled.progress === undefined
-              ? row.progress
-              : JSON.stringify({
-                  fraction:
-                    typeof fraction === "number" && Number.isFinite(fraction)
-                      ? Math.min(1, Math.max(0, fraction))
-                      : null,
-                  ...(polled.progress.detail
-                    ? { detail: truncate(String(polled.progress.detail), 200) }
-                    : {}),
-                });
-          await transition(row.id, "running", {
+          const progress = isRecord(answer.progress) ? answer.progress : undefined;
+          const fraction = progress?.fraction;
+          await transition(row, {
             checkpoint,
-            progress,
+            progress:
+              progress === undefined
+                ? row.progress
+                : JSON.stringify({
+                    fraction:
+                      typeof fraction === "number" && Number.isFinite(fraction)
+                        ? Math.min(1, Math.max(0, fraction))
+                        : null,
+                    ...(typeof progress.detail === "string" && progress.detail.trim()
+                      ? { detail: oneLine(progress.detail, 200, "") }
+                      : {}),
+                  }),
             attempt: 0,
             error_code: null,
             error_message: null,
             next_attempt_at:
               now() +
-              Math.max(0, polled.nextPollMs ?? kind.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS),
+              (typeof answer.nextPollMs === "number" && Number.isFinite(answer.nextPollMs)
+                ? Math.max(0, answer.nextPollMs)
+                : pollInterval(row.kind)),
           });
-        } else if (polled.status === "succeeded") {
+        } else if (answer.status === "succeeded") {
           let result: string | null = null;
           let error: { code: string; message: string } | null = null;
-          if (polled.result !== undefined) {
+          if (answer.result !== undefined) {
             try {
-              result = encodeJson(polled.result, OPERATION_RESULT_MAX_CHARS, "result");
+              result = encodeJson(answer.result, OPERATION_RESULT_MAX_CHARS, "result");
             } catch {
               error = {
                 code: "RESULT_NOT_STORED",
@@ -813,21 +917,25 @@ export function createOperationManager(
               };
             }
           }
-          await transition(row.id, "running", {
+          await transition(row, {
             state: "succeeded",
             result,
             progress: JSON.stringify({ fraction: 1 }),
             error_code: error?.code ?? null,
             error_message: error?.message ?? null,
           });
-        } else if (polled.status === "failed") {
-          await transition(row.id, "running", {
+        } else if (answer.status === "failed") {
+          await transition(row, {
             state: "failed",
-            error_code: truncate(String(polled.code ?? "PROVIDER_FAILED"), 64),
-            error_message: truncate(String(polled.message), OPERATION_ERROR_MESSAGE_MAX),
+            error_code: oneLine(String(answer.code ?? "PROVIDER_FAILED"), 64, "PROVIDER_FAILED"),
+            error_message: oneLine(
+              String(answer.message ?? ""),
+              OPERATION_ERROR_MESSAGE_MAX,
+              "The provider reported a failure"
+            ),
           });
         } else {
-          await transition(row.id, "running", { state: "cancelled" });
+          await transition(row, { state: "cancelled" });
         }
         return;
       }
@@ -838,41 +946,57 @@ export function createOperationManager(
 
   const reportProgress = (task: PluginTaskHandle, row: OperationRow): void => {
     const progress = parseJson<{ fraction: number | null; detail?: string }>(row.progress);
-    const cancelling =
-      row.cancel_requested_at !== null ? "Cancel requested; waiting for the provider" : undefined;
-    task.report({
-      fraction: progress?.fraction ?? null,
-      detail: cancelling ?? progress?.detail ?? "",
-    });
-  };
-
-  const finishTask = async (task: PluginTaskHandle, row: OperationRow): Promise<void> => {
-    if (row.state === "succeeded") await task.finish({ outcome: "succeeded" });
-    else if (row.state === "cancelled") await task.finish({ outcome: "cancelled" });
-    else {
-      await task.finish({
-        outcome: "failed",
-        message: truncate(
-          row.error_message ?? (row.state === "abandoned" ? "Stopped tracking" : "Failed"),
-          PLUGIN_TASK_MESSAGE_MAX
-        ),
-      });
+    const detail =
+      row.cancel_requested_at !== null
+        ? "Cancel requested; waiting for the provider"
+        : (progress?.detail ?? "");
+    try {
+      task.report({ fraction: progress?.fraction ?? null, detail });
+    } catch {
+      // Progress is presentation; a report the host refuses changes nothing durable.
     }
   };
 
-  const drive = async (id: string, drive: Drive): Promise<void> => {
+  const release = async (drive: Drive, result: PluginTaskResult): Promise<void> => {
+    if (drive.released || !drive.task) return;
+    drive.released = true;
+    await drive.task.finish(result).catch(() => {});
+  };
+
+  const finishTask = (drive: Drive, row: OperationRow): Promise<void> => {
+    if (row.state === "succeeded") return release(drive, { outcome: "succeeded" });
+    if (row.state === "cancelled") return release(drive, { outcome: "cancelled" });
+    return release(drive, {
+      outcome: "failed",
+      message: oneLine(
+        row.error_message ?? "",
+        PLUGIN_TASK_MESSAGE_MAX,
+        row.state === "abandoned" ? "Stopped tracking the operation" : "The operation failed"
+      ),
+    });
+  };
+
+  const isInterrupted = (task: PluginTaskHandle): boolean =>
+    task.signal.aborted &&
+    (task.signal.reason as { cause?: unknown } | undefined)?.cause !== "cancelled";
+
+  const driveOperation = async (id: string, drive: Drive): Promise<void> => {
     let row = await load(id);
-    if (!row || TERMINAL.has(row.state)) return;
+    if (!row || TERMINAL.has(row.state) || drive.stop.signal.aborted) return;
     const task = await host.tasks.start({
-      title: truncate(row.title, PLUGIN_TASK_TITLE_MAX),
+      title: oneLine(row.title, PLUGIN_TASK_TITLE_MAX, "Operation"),
       cancellable: true,
       retry: { actionId: options.retryActionId, args: { operationId: id } },
     });
     drive.task = task;
     const onAbort = () => {
-      const cause = (task.signal.reason as { cause?: unknown } | undefined)?.cause;
-      if (cause === "cancelled") void manager.cancel(id).catch(() => {});
-      else drive.stop.abort();
+      if (!isInterrupted(task)) {
+        void manager.cancel(id).catch(() => {});
+        return;
+      }
+      // The host is stopping the plugin: leave the journal as it is.
+      suspended = true;
+      for (const entry of driving.values()) entry.stop.abort();
     };
     if (task.signal.aborted) onAbort();
     else task.signal.addEventListener("abort", onAbort, { once: true });
@@ -881,15 +1005,15 @@ export function createOperationManager(
         row = await load(id);
         if (!row) return;
         if (TERMINAL.has(row.state)) {
-          await finishTask(task, row);
+          await finishTask(drive, row);
+          void prune().catch(() => {});
           return;
         }
         reportProgress(task, row);
         if (now() >= row.deadline_at) {
           await transition(
-            row.id,
-            row.state,
-            row.state === "pending"
+            row,
+            row.state === "pending" && row.submitted_at === null
               ? {
                   state: "failed",
                   error_code: "DEADLINE_EXCEEDED",
@@ -904,7 +1028,13 @@ export function createOperationManager(
           );
           continue;
         }
-        const due = row.next_attempt_at - now();
+        // A fresh cancel request goes to the provider now, not at the next poll.
+        const cancelNow =
+          row.state === "running" &&
+          row.cancel_requested_at !== null &&
+          row.cancel_sent_at === null &&
+          row.attempt === 0;
+        const due = cancelNow ? 0 : row.next_attempt_at - now();
         if (due > 0) {
           await waitFor(Math.min(due, row.deadline_at - now()), drive);
           continue;
@@ -913,6 +1043,9 @@ export function createOperationManager(
       }
     } finally {
       task.signal.removeEventListener("abort", onAbort);
+      // Any other way out — dispose, a pruned row, an error — must not leave
+      // a live task holding the project awake. An interrupted one is the host's.
+      if (!isInterrupted(task)) await release(drive, { outcome: "cancelled" });
     }
   };
 
@@ -926,48 +1059,59 @@ export function createOperationManager(
 
   /** Admit due work up to `concurrency`, oldest-due first. */
   const pump = (): void => {
-    if (disposed || !db) return;
+    if (disposed || suspended || !db) return;
     if (pumping) {
       pumpAgain = true;
       return;
     }
     pumping = true;
-    void (async () => {
+    pumpRun = (async () => {
       try {
         do {
           pumpAgain = false;
-          const free = concurrency - driving.size;
-          if (free <= 0) break;
+          if (concurrency - driving.size <= 0) break;
           const rows = await requireDb().query<{ id: string }>(
             `SELECT id FROM operations WHERE state NOT IN (${TERMINAL_SQL})
              ORDER BY next_attempt_at, created_at LIMIT ?`,
             [concurrency + driving.size]
           );
           for (const { id } of rows) {
-            if (driving.size >= concurrency) break;
+            if (disposed || suspended || driving.size >= concurrency) break;
             if (driving.has(id)) continue;
-            const entry: Drive = { stop: new AbortController(), task: null, wake: () => {} };
+            const entry: Drive = {
+              stop: new AbortController(),
+              task: null,
+              released: false,
+              failed: false,
+              wake: () => {},
+            };
             driving.set(id, entry);
-            const run = drive(id, entry)
+            const run: Promise<void> = driveOperation(id, entry)
               .catch(() => {
                 // Out of task slots, or the journal briefly unavailable: the
-                // operation stays journaled and a later pump picks it up.
-                if (!disposed) schedulePump(TASK_START_RETRY_MS);
+                // operation stays journaled and the retry timer picks it up.
+                entry.failed = true;
+                schedulePump(TASK_START_RETRY_MS);
               })
               .finally(() => {
                 driving.delete(id);
                 runs.delete(run);
-                if (!disposed && !entry.stop.signal.aborted) pump();
+                if (!entry.failed && !entry.stop.signal.aborted) pump();
               });
             runs.add(run);
           }
-        } while (pumpAgain && !disposed);
+        } while (pumpAgain && !disposed && !suspended);
       } catch {
-        if (!disposed) schedulePump(TASK_START_RETRY_MS);
+        schedulePump(TASK_START_RETRY_MS);
       } finally {
         pumping = false;
       }
     })();
+  };
+
+  const resume = (): void => {
+    suspended = false;
+    pump();
   };
 
   const prune = async (): Promise<number> => {
@@ -986,11 +1130,11 @@ export function createOperationManager(
     return byAge.changes + byCount.changes;
   };
 
-  const manager: OperationManager = {
-    start() {
-      if (disposed) return Promise.reject(new Error("operation manager is disposed"));
-      starting ??= (async () => {
-        if (disposed) throw new Error("operation manager is disposed");
+  /** The journal open and recovered. Unlike `start`, it doesn't lift a suspension. */
+  const ready = (): Promise<void> => {
+    if (disposed) return Promise.reject(new Error("operation manager is disposed"));
+    if (!starting) {
+      const attempt = (async () => {
         const opened = await host.db.open(options.database, { migrations: MIGRATIONS });
         if (disposed) {
           await opened.close();
@@ -1003,13 +1147,26 @@ export function createOperationManager(
           [now()]
         );
         await prune();
-        pump();
       })();
-      return starting;
+      starting = attempt.catch(async (error: unknown) => {
+        // A failed start can be tried again.
+        starting = null;
+        const handle = db;
+        db = null;
+        await handle?.close().catch(() => {});
+        throw error;
+      });
+    }
+    return starting;
+  };
+
+  const manager: OperationManager = {
+    start() {
+      return ready().then(resume);
     },
 
     async submit<Result>(kind: string, input: unknown, submitOptions: OperationSubmitOptions = {}) {
-      await manager.start();
+      await ready();
       const def = kindOf(kind);
       const inputJson = encodeJson(input, OPERATION_INPUT_MAX_CHARS, "operation input");
       const key = submitOptions.idempotencyKey ?? globalThis.crypto.randomUUID();
@@ -1023,7 +1180,7 @@ export function createOperationManager(
         );
       }
       const hash = await sha256Hex(`${kind}\n${canonicalJson(JSON.parse(inputJson))}`);
-      const title = truncate(String(def.title(JSON.parse(inputJson))), PLUGIN_TASK_TITLE_MAX);
+      const title = oneLine(String(def.title(JSON.parse(inputJson))), PLUGIN_TASK_TITLE_MAX, kind);
       const createdAt = now();
       const row = await requireDb().transaction(async (tx) => {
         const existing = await tx.get<OperationRow>(
@@ -1054,25 +1211,25 @@ export function createOperationManager(
             title,
             inputJson,
             createdAt,
-            createdAt + (def.deadlineMs ?? DEFAULT_DEADLINE_MS),
+            createdAt + deadlineFor(kind),
             createdAt,
             createdAt,
           ]
         );
         return (await load(id, tx))!;
       });
-      pump();
+      resume();
       return toSnapshot(row) as OperationSnapshot<Result>;
     },
 
     async get<Result>(id: string) {
-      await manager.start();
+      await ready();
       const row = await load(id);
       return row ? (toSnapshot(row) as OperationSnapshot<Result>) : undefined;
     },
 
     async list(filter: OperationListFilter = {}) {
-      await manager.start();
+      await ready();
       const where: string[] = [];
       const params: Array<string | number | null> = [];
       if (filter.projectId === null) where.push("project_id IS NULL");
@@ -1087,7 +1244,7 @@ export function createOperationManager(
       }
       const limit = Math.min(
         OPERATION_LIST_MAX,
-        Math.max(1, Math.floor(filter.limit ?? OPERATION_LIST_MAX))
+        Math.max(1, Math.floor(positiveNumber(filter.limit, OPERATION_LIST_MAX)))
       );
       const rows = await requireDb().query<OperationRow>(
         `SELECT * FROM operations ${where.length ? `WHERE ${where.join(" AND ")}` : ""}
@@ -1098,62 +1255,71 @@ export function createOperationManager(
     },
 
     async cancel(id: string) {
-      await manager.start();
-      await requireDb().run(
+      await ready();
+      const handle = requireDb();
+      const at = now();
+      // Never sent: nothing exists remotely, so the cancel is complete now.
+      await handle.run(
+        `UPDATE operations SET state = 'cancelled', cancel_requested_at = ?, updated_at = ?
+         WHERE id = ? AND state = 'pending' AND submitted_at IS NULL`,
+        [at, at, id]
+      );
+      await handle.run(
         `UPDATE operations SET cancel_requested_at = ?, updated_at = ?
          WHERE id = ? AND cancel_requested_at IS NULL AND state NOT IN (${TERMINAL_SQL})`,
-        [now(), now(), id]
+        [at, at, id]
       );
-      const entry = driving.get(id);
-      if (entry) entry.wake();
-      else pump();
-      return manager.get(id);
-    },
-
-    async retry(id: string) {
-      await manager.start();
-      const row = await load(id);
-      if (!row) return undefined;
-      if (row.state === "abandoned") {
-        const fresh = now();
-        await transition(id, "abandoned", {
-          state: row.provider_id !== null ? "running" : "uncertain",
-          attempt: 0,
-          next_attempt_at: fresh,
-          deadline_at: fresh + (kindOf(row.kind).deadlineMs ?? DEFAULT_DEADLINE_MS),
-          cancel_requested_at: null,
-          cancel_sent_at: null,
-          error_code: null,
-          error_message: null,
-        });
-      } else if (!TERMINAL.has(row.state)) {
-        await requireDb().run("UPDATE operations SET next_attempt_at = ? WHERE id = ?", [
-          now(),
-          id,
-        ]);
-        driving.get(id)?.wake();
-      }
+      driving.get(id)?.wake();
       pump();
       return manager.get(id);
     },
 
-    async abandon(id: string) {
-      await manager.start();
+    async retry(id: string) {
+      await ready();
       const row = await load(id);
       if (!row) return undefined;
-      if (!TERMINAL.has(row.state)) {
-        await transition(id, row.state, {
-          state: "abandoned",
-          error_code: "ABANDONED",
-          error_message: "Stopped tracking on request; the provider's outcome is unknown",
-        });
+      const at = now();
+      if (row.state === "abandoned") {
+        const state: OperationState =
+          row.provider_id !== null
+            ? "running"
+            : row.submitted_at !== null
+              ? "uncertain"
+              : "pending";
+        await requireDb().run(
+          `UPDATE operations SET state = ?, generation = generation + 1, attempt = 0,
+             next_attempt_at = ?, deadline_at = ?, cancel_requested_at = NULL,
+             cancel_sent_at = NULL, error_code = NULL, error_message = NULL, updated_at = ?
+           WHERE id = ? AND state = 'abandoned'`,
+          [state, at, at + deadlineFor(row.kind), at, id]
+        );
+      } else if (!TERMINAL.has(row.state)) {
+        await requireDb().run(
+          "UPDATE operations SET next_attempt_at = ?, updated_at = ? WHERE id = ? AND next_attempt_at > ?",
+          [at, at, id, at]
+        );
         driving.get(id)?.wake();
       }
+      resume();
+      return manager.get(id);
+    },
+
+    async abandon(id: string) {
+      await ready();
+      await requireDb().run(
+        `UPDATE operations SET state = 'abandoned', generation = generation + 1,
+           error_code = 'ABANDONED',
+           error_message = 'Stopped tracking on request; the provider''s outcome is unknown',
+           updated_at = ?
+         WHERE id = ? AND state NOT IN (${TERMINAL_SQL})`,
+        [now(), id]
+      );
+      driving.get(id)?.wake();
       return manager.get(id);
     },
 
     async prune() {
-      await manager.start();
+      await ready();
       return prune();
     },
 
@@ -1162,14 +1328,11 @@ export function createOperationManager(
       disposed = true;
       if (pumpTimer) clearTimeout(pumpTimer);
       pumpTimer = null;
-      for (const entry of driving.values()) {
-        entry.stop.abort();
-        // Left running, the task would hold its project awake for nothing;
-        // the work resumes, with a new task, on the next start.
-        if (entry.task && !entry.task.signal.aborted) {
-          void entry.task.finish({ outcome: "cancelled" }).catch(() => {});
-        }
-      }
+      for (const entry of driving.values()) entry.stop.abort();
+      // The pump checks `disposed` after every await, so once it settles no
+      // drive is added and `runs` is complete.
+      await pumpRun;
+      for (const entry of driving.values()) entry.stop.abort();
       await Promise.allSettled([...runs]);
       await starting?.catch(() => {});
       const handle = db;

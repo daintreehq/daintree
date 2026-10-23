@@ -94,29 +94,31 @@ return { operationId: op.id, state: op.state };
 
 **Retry and backoff.** A failed provider call waits a random time up to `min(maximumIntervalMs, initialIntervalMs × backoffCoefficient^(n−1))` (defaults 1 s, ×2, 60 s) and, after `maximumAttempts` (10) consecutive failures, the operation is abandoned. A poll that says "still running" is not a failure. An `OperationError` with `retryable: false` is final: from `submit` it means the provider refused and nothing happened (`failed`), from `poll` that the job failed.
 
-**Timeouts.** Each provider call gets `callTimeoutMs` (30 s) and a `signal` that aborts at the limit. A timed-out call is a failure to retry, never evidence the provider cancelled or failed. Each operation has a `deadlineMs` (24 h) after submission: one never sent fails, one already sent is abandoned.
+**Timeouts.** Each provider call gets `callTimeoutMs` (30 s), cut short by the operation's deadline, and a `signal` that aborts at the limit. A timed-out call is a failure to retry, never evidence the provider cancelled or failed. Each operation has a `deadlineMs` (24 h) after submission: one never sent fails, one that may have been sent is abandoned.
 
-**Cancel.** `cancel(id)` — or the user pressing Cancel on its task — records the request. An operation never sent is `cancelled` at once. Otherwise the provider's `cancel` is asked: `"cancelled"` ends it, `"requested"` keeps polling until the provider reports how it ended, and `"unsupported"` (or no `cancel` at all) keeps tracking it to its real end. A success can win the race. `cancelRequested` on the snapshot says a cancel was asked; only `state` says what happened.
+**Malformed answers.** An adapter answer the manager can't read — no provider id, an unknown poll status — counts as a failed call and is retried; it never becomes an outcome.
 
-**Resume.** `retry(id)` drives an unfinished operation again, and gives an abandoned one a fresh deadline and retry budget, polling it if the provider id is known or reconciling it if not. It never starts a second provider job. A failed operation stays failed; submit a new one.
+**Cancel.** `cancel(id)` — or the user pressing Cancel on its task — records the request. An operation never sent is `cancelled` at once, even while it waits for a slot. Otherwise the request goes to the provider's `cancel` straight away, not at the next poll: `"cancelled"` ends it, `"requested"` keeps polling until the provider reports how it ended, and `"unsupported"` (or no `cancel` at all) keeps tracking it to its real end. A `cancel` call that throws is asked again after a backoff. A success can win the race. `cancelRequested` on the snapshot says a cancel was asked; only `state` says what happened.
+
+**Resume.** `retry(id)` drives an unfinished operation again at once, and gives an abandoned one a fresh deadline and retry budget, polling it if the provider id is known or reconciling it if not. It never starts a second provider job. A failed operation stays failed; submit a new one.
 
 ## Tasks and sleep
 
 Every operation being driven holds one [task](./host-api.md#tasks--long-running-work), at most `concurrency` (4, at most 16) at once, including while it waits out a poll interval or backoff. That task is what the user sees, and for a project-scoped plugin it is what keeps the project awake. Operations beyond `concurrency` wait in the journal without a task, so they don't hold the project; a sleeping project resumes them when it wakes.
 
-The task's Cancel records a cancel request. An interruption (the plugin unloading, restarting or crashing) records nothing: the signal's `reason.cause` is `"interrupted"`, so the operation stays as it was and resumes with a new task on the next `start`. `dispose` stops driving, finishes the tasks it held, and closes the journal.
+The task's Cancel records a cancel request. An interruption (the plugin unloading, restarting or crashing) records nothing: the signal's `reason.cause` is `"interrupted"`, so the operation stays as it was. The manager stops driving everything, since the plugin is going, until `start`, `submit` or `retry` asks for work again. `dispose` stops driving, finishes the tasks it held, and closes the journal. A task is never left running by any other exit, so a failure can't keep a project awake.
 
 Recovery runs in the plugin's worker, not in a view: `start` from `activate` resumes work whether or not any panel is open. A project plugin's journal is its own, and resumes when that project opens again. An app-wide plugin's journal serves every project, so pass `projectId` to `submit` and filter `list({ projectId })` to show a project its own operations.
 
 ## Status and retention
 
-`get(id)` and `list({ projectId, states, limit })` return snapshots: state, provider id, the last progress, the result once succeeded, a bounded error, and timestamps. `list` returns at most 100, newest first. Finished operations are pruned on `start` and by `prune()`: older than `retention.maxAgeMs` (7 days) or beyond the newest `retention.maxCount` (500). An idempotency key stops deduplicating once its operation is pruned, so keep retention at least as long as the provider honours its keys. Unfinished operations are never pruned.
+`get(id)` and `list({ projectId, states, limit })` return snapshots: state, provider id, the last progress, the result once succeeded, a bounded error, and timestamps. `list` returns at most 100, newest first. Finished operations are pruned on `start`, whenever one finishes, and by `prune()`: older than `retention.maxAgeMs` (7 days) or beyond the newest `retention.maxCount` (500). An idempotency key stops deduplicating once its operation is pruned, so keep retention at least as long as the provider honours its keys. Unfinished operations are never pruned.
 
 ## Secrets
 
 The journal holds the input, the provider id, checkpoints, progress, results and errors, all as plain JSON in a file under the plugin's data directory. Keep credentials out of all of them: the adapter fetches its token at call time. Only an `OperationError`'s `code` and `message` are stored; any other error is stored as a generic `PROVIDER_ERROR` or `TIMEOUT`, never by its message, so a provider error that echoes a token never reaches the journal or a notification. A `failed` poll's `message` is stored as written, so write it for the user.
 
-Sizes are capped: input 32 KB of JSON, a checkpoint 16 KB, a result 64 KB. An oversized result is dropped with `RESULT_NOT_STORED` on an otherwise succeeded operation; an oversized checkpoint abandons the operation, since resuming without it would lose its place.
+Sizes are capped: input 32 KB of JSON, a checkpoint 16 KB, a result 64 KB. An oversized result is dropped with `RESULT_NOT_STORED` on an otherwise succeeded operation; an oversized checkpoint, from `submit`, `reconcile` or `poll`, abandons the operation (keeping its provider id), since resuming without it would lose its place.
 
 ## Testing
 
