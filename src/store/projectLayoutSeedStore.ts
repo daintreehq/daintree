@@ -1,8 +1,5 @@
 import { create } from "zustand";
-import type {
-  ProjectLayoutSeedOutcome,
-  ProjectLayoutSeedStatus,
-} from "@shared/types/plugin";
+import type { ProjectLayoutSeedOutcome, ProjectLayoutSeedStatus } from "@shared/types/plugin";
 import { logWarn } from "@/utils/logger";
 
 /** Recipes a seeded layout left for the user to start, in entry order. */

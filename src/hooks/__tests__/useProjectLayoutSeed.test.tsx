@@ -1,7 +1,6 @@
 // @vitest-environment jsdom
 import { act, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { StoreApi } from "zustand";
 import type {
   PluginLayoutConfig,
   ProjectLayoutSeedOutcome,
@@ -9,19 +8,23 @@ import type {
   ProjectLayoutSeedStatus,
 } from "@shared/types/plugin";
 
-const { projectRef, seedPluginLayout } = vi.hoisted(() => ({
-  projectRef: { current: { id: "p1", gitBacked: true } as Record<string, unknown> | null },
-  seedPluginLayout: vi.fn(),
-}));
+const { panelStore, worktreeStore, projectRef, seedPluginLayout } = await vi.hoisted(async () => {
+  const { create } = await import("zustand");
+  return {
+    panelStore: create<{
+      panelIds: string[];
+      panelsById: Record<string, { location?: string }>;
+    }>(() => ({ panelIds: [], panelsById: {} })),
+    worktreeStore: create<{ activeWorktreeId: string | null }>(() => ({
+      activeWorktreeId: "wt-1",
+    })),
+    projectRef: { current: { id: "p1", gitBacked: true } as Record<string, unknown> | null },
+    seedPluginLayout: vi.fn(),
+  };
+});
 
-vi.mock("@/store/panelStore", async () => {
-  const { create } = await import("zustand");
-  return { usePanelStore: create(() => ({ panelIds: [], panelsById: {} })) };
-});
-vi.mock("@/store/worktreeStore", async () => {
-  const { create } = await import("zustand");
-  return { useWorktreeSelectionStore: create(() => ({ activeWorktreeId: "wt-1" })) };
-});
+vi.mock("@/store/panelStore", () => ({ usePanelStore: panelStore }));
+vi.mock("@/store/worktreeStore", () => ({ useWorktreeSelectionStore: worktreeStore }));
 vi.mock("@/store/projectStore", () => ({
   useProjectStore: { getState: () => ({ currentProject: projectRef.current }) },
 }));
@@ -40,20 +43,10 @@ import {
   useProjectLayoutSeed,
 } from "../useProjectLayoutSeed";
 import { usePluginLayoutsStore } from "@/store/pluginLayoutsStore";
-import { usePanelStore } from "@/store/panelStore";
-import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import {
   _resetProjectLayoutSeedStoreForTest,
   useProjectLayoutSeedStore,
 } from "@/store/projectLayoutSeedStore";
-
-const panelStore = usePanelStore as unknown as StoreApi<{
-  panelIds: string[];
-  panelsById: Record<string, { location?: string }>;
-}>;
-const worktreeStore = useWorktreeSelectionStore as unknown as StoreApi<{
-  activeWorktreeId: string | null;
-}>;
 
 /** Main's record, with its compare-and-set, as the IPC handlers expose it. */
 let record: ProjectLayoutSeedRecord | null;
@@ -114,13 +107,15 @@ describe("useProjectLayoutSeed (#13782)", () => {
     projectRef.current = { id: "p1", gitBacked: true };
     usePluginLayoutsStore.setState({ layouts: [] });
     _resetProjectLayoutSeedStoreForTest();
-    (window as unknown as { electron: unknown }).electron = {
-      plugin: { getProjectLayoutSeed, advanceProjectLayoutSeed },
-    };
+    Object.defineProperty(window, "electron", {
+      value: { plugin: { getProjectLayoutSeed, advanceProjectLayoutSeed } },
+      writable: true,
+      configurable: true,
+    });
   });
 
   afterEach(() => {
-    delete (window as unknown as { electron?: unknown }).electron;
+    Reflect.deleteProperty(window, "electron");
   });
 
   it("applies a default layout that arrives after trust, while the grid is empty", async () => {

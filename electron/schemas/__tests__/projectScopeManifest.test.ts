@@ -488,7 +488,10 @@ describe("contributes.surfaces", () => {
     });
 
     it("rejects an id matching no declared layout", () => {
-      const result = parse("project", withSurface({ defaultLayout: "nope" }, { layouts: [layout] }));
+      const result = parse(
+        "project",
+        withSurface({ defaultLayout: "nope" }, { layouts: [layout] })
+      );
       expect(result.success).toBe(false);
       expect(errorCodes(result)).toContain("surface_default_layout_unknown");
       expect(messageForCode(result, "surface_default_layout_unknown")).toContain(
@@ -508,7 +511,11 @@ describe("contributes.surfaces", () => {
       const result = getPluginManifestSchema("user").safeParse({
         name: "acme.installed",
         version: "1.0.0",
-        contributes: { panels: [panel], layouts: [layout], surfaces: { defaultLayout: "workbench" } },
+        contributes: {
+          panels: [panel],
+          layouts: [layout],
+          surfaces: { defaultLayout: "workbench" },
+        },
       });
       expect(result.success).toBe(false);
       expect(errorCodes(result)).toContain("surfaces_project_scope_only");
