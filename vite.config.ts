@@ -1358,8 +1358,15 @@ function firstRenderSeedsPlugin(): Plugin {
 // observable. scripts/check-renderer-import-budget.mjs reads it to gate silent
 // module migration between the critical T0 vendor chunks (#8890) — a module can
 // hop chunks while both the eager chunk count and aggregate gzip stay in budget.
+//
+// Names are not unique (dozens of chunks are called `boot` or `dist`), so a
+// name-keyed entry can silently stand for the last of several chunks. The
+// second sidecar, dist/chunk-modules-by-file.json, keys the same lists by
+// emitted file, which is what scripts/ci/check-element-picker-bundles.mjs
+// needs to see every chunk the manifest walks to.
 function chunkModulesPlugin(): Plugin {
   const outPath = path.join(process.cwd(), "dist", "chunk-modules.json");
+  const byFilePath = path.join(process.cwd(), "dist", "chunk-modules-by-file.json");
   const root = process.cwd();
 
   return {
@@ -1367,6 +1374,7 @@ function chunkModulesPlugin(): Plugin {
     apply: "build",
     writeBundle(_options, bundle) {
       const chunkModules: Record<string, string[]> = {};
+      const byFile: Record<string, string[]> = {};
       for (const output of Object.values(bundle)) {
         if (output.type !== "chunk") continue;
         const name = output.name || output.fileName;
@@ -1375,11 +1383,15 @@ function chunkModulesPlugin(): Plugin {
         // Drop Rolldown virtual modules ("\0"-prefixed, e.g. the modulepreload
         // polyfill) — they normalize to machine-dependent "../" paths and would
         // produce spurious module-set diffs.
-        chunkModules[name] = (output.moduleIds ?? [])
+        const modules = (output.moduleIds ?? [])
           .filter((id) => !id.startsWith("\0"))
           .map((id) => path.relative(root, id).split(path.sep).join("/"))
           .sort();
+        chunkModules[name] = modules;
+        byFile[output.fileName] = modules;
       }
+      mkdirSync(path.dirname(byFilePath), { recursive: true });
+      writeFileSync(byFilePath, JSON.stringify(byFile) + "\n");
 
       const sorted = Object.keys(chunkModules)
         .sort()

@@ -117,6 +117,7 @@ function baseFiles() {
     // Build-report sidecars read only by the budget scripts. `dist/importmap-meta.json`
     // is NOT one of these — protocols.ts reads it at runtime.
     "!dist/chunk-modules.json",
+    "!dist/chunk-modules-by-file.json",
     "!dist/renderer-bundle-size-report.json",
     "!dist/*.md",
     "!dist-electron/eager-import-meta.json",

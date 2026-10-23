@@ -132,6 +132,8 @@ afterEach(() => {
   picker = null;
   delete (globalThis as Record<string, unknown>)[EXTRACTOR_REGISTRY_GLOBAL];
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
+  vi.useRealTimers();
   document.body.innerHTML = "";
 });
 
@@ -178,6 +180,93 @@ describe("createPicker", () => {
     pointAt(document.getElementById("second")!);
     runFrames();
     expect(ofType("hoverChanged")).toHaveLength(1);
+  });
+
+  it("asks the extractors once per frame, and only about where the pointer ended", () => {
+    const asked: Array<{ phase: unknown; target: EventTarget | undefined }> = [];
+    document.addEventListener(
+      channelEvent(CHANNEL, "extract"),
+      (event) => {
+        const { phase } = JSON.parse((event as CustomEvent<string>).detail) as { phase: unknown };
+        asked.push({ phase, target: event.composedPath()[0] });
+      },
+      { capture: true, signal: testListeners.signal }
+    );
+    start();
+    for (const id of ["first", "list", "main", "first", "second"]) {
+      pointAt(document.getElementById(id)!);
+    }
+    expect(asked).toEqual([]);
+
+    runFrames();
+    expect(asked).toEqual([{ phase: "hover", target: document.getElementById("second") }]);
+
+    pointAt(document.getElementById("second")!);
+    pointAt(document.getElementById("second")!);
+    runFrames();
+    expect(asked).toHaveLength(1);
+  });
+
+  it("reads no computed style and fetches nothing on hover, where a selection does read styles", () => {
+    const styles = vi.spyOn(window, "getComputedStyle");
+    const fetches = vi.fn();
+    vi.stubGlobal("fetch", fetches);
+    const requests = vi.spyOn(XMLHttpRequest.prototype, "open");
+    start();
+    for (const id of ["first", "list", "second", "field", "main"]) {
+      pointAt(document.getElementById(id)!);
+      runFrames();
+    }
+    expect(ofType("hoverChanged")).toHaveLength(5);
+    expect(styles).not.toHaveBeenCalled();
+    expect(fetches).not.toHaveBeenCalled();
+    expect(requests).not.toHaveBeenCalled();
+
+    // Not a vacuous pass: the spy sees the reads a selection's context makes.
+    document.getElementById("second")!.click();
+    expect(ofType("selectionChanged")).toHaveLength(1);
+    expect(styles).toHaveBeenCalled();
+    expect(fetches).not.toHaveBeenCalled();
+  });
+
+  it("does no work while the page and the pointer are idle", async () => {
+    // Before the picker starts, so a timer it sets up then is one it is seen to own.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
+    const flush = async () => {
+      for (let tick = 0; tick < 5; tick += 1) await Promise.resolve();
+    };
+    const settle = async (rounds: number) => {
+      for (let round = 0; round < rounds; round += 1) {
+        runFrames();
+        // Mutation records arrive as microtasks; a frame that set off its own
+        // records would schedule the next one here.
+        await flush();
+      }
+    };
+    start();
+    await settle(5);
+    expect(frames.size).toBe(0);
+    expect(vi.getTimerCount()).toBe(0);
+
+    const posted = events.length;
+    const sweeps = [
+      vi.spyOn(document, "querySelectorAll"),
+      vi.spyOn(document, "getElementsByTagName"),
+      vi.spyOn(document, "createTreeWalker"),
+    ];
+    vi.advanceTimersByTime(60_000);
+    await settle(10);
+    expect(frames.size).toBe(0);
+    expect(events).toHaveLength(posted);
+    for (const sweep of sweeps) expect(sweep).not.toHaveBeenCalled();
+
+    // Not a vacuous pass: the same picker answers the pointer, then goes quiet again.
+    pointAt(document.getElementById("first")!);
+    expect(frames.size).toBe(1);
+    await settle(5);
+    expect(ofType("hoverChanged")).toHaveLength(1);
+    expect(frames.size).toBe(0);
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it("keeps one element id per element for the life of the document", () => {

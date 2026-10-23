@@ -3,7 +3,11 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
-import { scanForbiddenModules, walkEagerGraph } from "./import-budget-lib.mjs";
+import {
+  ELEMENT_PICKER_FRAMEWORK_PATTERNS,
+  scanForbiddenModules,
+  walkEagerGraph,
+} from "./import-budget-lib.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const MAIN_ENTRY = "plugins/builtin/sveltekit-builder/main/index.ts";
@@ -188,6 +192,9 @@ describe.each(MODES)("the Element Picker's eager renderer entry (%s)", (mode) =>
     // of the picker, lazy or not, means a module landed on the wrong side.
     const reachable = Object.keys(metafile.inputs);
     expect(scanForbiddenModules(reachable)).toEqual([]);
+    // Nor any parser or map decoder a resolver reads source with: the renderer
+    // shows what the host concluded and never reads source itself.
+    expect(scanForbiddenModules(reachable, ELEMENT_PICKER_FRAMEWORK_PATTERNS)).toEqual([]);
     // Nor the picker host's project adapters, which read the user's tree with
     // main's file authority: the renderer gets the route matcher from shared/.
     expect(reachable.filter((file) => file.startsWith("electron/services/elementPicker/"))).toEqual(

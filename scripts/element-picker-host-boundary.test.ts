@@ -3,7 +3,11 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { build, type Metafile } from "esbuild";
 import { MAIN_EXTERNAL } from "./main-build-entries.mjs";
-import { scanForbiddenModules, walkEagerGraph } from "./import-budget-lib.mjs";
+import {
+  ELEMENT_PICKER_FRAMEWORK_PATTERNS,
+  scanForbiddenModules,
+  walkEagerGraph,
+} from "./import-budget-lib.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const HOST_DIR = "electron/services/elementPicker/";
@@ -89,16 +93,24 @@ const isVueCompiler = (file: string) => file.includes("node_modules/@vue/compile
 
 describe("the Element Picker host boundary", () => {
   it("keeps the host process's code out of main, eagerly or lazily", async () => {
-    const metafile = await metafileOf("electron/main.ts", MAIN_EXTERNAL);
+    // The app's real entry: it runs boot migrations, then imports `main.ts`.
+    const metafile = await metafileOf("electron/bootstrap.ts", MAIN_EXTERNAL);
     // Without splitting every dynamic import is inlined, so this is everything
-    // main can ever evaluate.
+    // main can ever evaluate, from the first module it loads.
     const reachable = Object.keys(metafile.inputs);
+    expect(reachable).toContain("electron/main.ts");
     expect(reachable.filter(isHostProcessCode)).toEqual([]);
     expect(reachable.filter(isSourceMapDecoder)).toEqual([]);
     expect(reachable.filter(isJsParser)).toEqual([]);
-    expect(
-      [...walkEagerGraph(metafile, "electron/main.ts")].filter((f) => f.startsWith(HOST_DIR))
-    ).toEqual([]);
+    // Every family the picker brought, guest scripts included: main bundles
+    // none of it even behind an import, since the host and the page load it.
+    expect(scanForbiddenModules(reachable, ELEMENT_PICKER_FRAMEWORK_PATTERNS)).toEqual([]);
+    expect(reachable.filter(isJsxParser)).toEqual([]);
+    for (const entry of ["electron/bootstrap.ts", "electron/main.ts"]) {
+      expect([...walkEagerGraph(metafile, entry)].filter((f) => f.startsWith(HOST_DIR))).toEqual(
+        []
+      );
+    }
 
     // Not a vacuous pass: main does reach the service, behind its shutdown
     // hook's dynamic import.
@@ -170,6 +182,23 @@ describe("the Element Picker host boundary", () => {
     expect(eager.filter(isVueCompiler)).toEqual([]);
     expect(reachable.some(isJsxParser)).toBe(true);
     expect(eager.filter(isJsxParser)).toEqual([]);
+    // What makes main's empty scan above worth anything: the same patterns,
+    // run over what the host can reach, find each family they name for it.
+    expect(
+      new Set(
+        scanForbiddenModules(reachable, ELEMENT_PICKER_FRAMEWORK_PATTERNS).map((m) => m.label)
+      )
+    ).toEqual(
+      new Set([
+        "Element Picker host process",
+        "Svelte compiler",
+        "Svelte runtime",
+        "svelte-source-model",
+        "Vue template compiler",
+        "JS parser",
+        "source-map decoder",
+      ])
+    );
     // Bytes come from main; nothing the host runs can open a file or a socket itself.
     expect(authorityImports(metafile)).toEqual([]);
     // Project adapters walk directories, which is main's authority, never the host's.

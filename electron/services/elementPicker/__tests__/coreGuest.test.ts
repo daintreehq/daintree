@@ -13,6 +13,9 @@ const CONTEXT_ID = 5;
 const SVELTE: FrameworkDetection[] = [
   { framework: "svelte", signals: [{ via: "expando", name: "__svelte_meta" }] },
 ];
+const REACT: FrameworkDetection[] = [
+  { framework: "react", signals: [{ via: "expando", name: "__reactFiber" }] },
+];
 const READY = {
   type: "documentReady",
   url: "http://localhost/",
@@ -48,10 +51,12 @@ function harness(
   const main = { uniqueId: "main-1" as string | null, generation: 3 };
   let queue: Promise<void> = Promise.resolve();
   const timers: Array<() => void> = [];
+  const loaded: CoreGuestAssetId[] = [];
   const assets: Partial<Record<CoreGuestAssetId, string | Error>> = {
     bootstrap: "/* bootstrap */",
     probe: "/* probe */",
     "extractor:svelte": "/* svelte */",
+    "extractor:react": "/* react */",
     ...overrides.assets,
   };
 
@@ -92,6 +97,7 @@ function harness(
       return next;
     },
     async loadAsset(id) {
+      loaded.push(id);
       if (id.startsWith("extractor:") && overrides.assetGate) await overrides.assetGate;
       const asset = assets[id];
       if (asset instanceof Error) throw asset;
@@ -126,6 +132,8 @@ function harness(
       const match = /api\.setAvailability\((.*)\);/.exec(String(call.params.expression ?? ""));
       return match === null ? [] : [JSON.parse(match[1]!) as PickerAvailability];
     });
+  /** The extractor assets read, in the order they were asked for. */
+  const extractorsLoaded = () => loaded.filter((id) => id.startsWith("extractor:"));
   return {
     guest,
     deps,
@@ -134,9 +142,11 @@ function harness(
     state,
     main,
     timers,
+    loaded,
     install,
     settle,
     extractorEvaluates,
+    extractorsLoaded,
     availabilities,
   };
 }
@@ -375,6 +385,67 @@ describe("CoreGuest", () => {
     await h.settle();
     expect(h.extractorEvaluates()).toHaveLength(0);
     expect(h.emitted).toEqual([]);
+  });
+
+  it("reads no extractor before the page says which frameworks it uses, nor after it says none", async () => {
+    const h = harness({ probeResult: [] });
+    await h.install();
+    expect(h.loaded).toEqual(["bootstrap"]);
+    h.guest.onGuestEvent(0, READY);
+    await h.settle();
+    h.timers[0]!();
+    await h.settle();
+    // Both looks ran and settled the document as a plain page.
+    expect(h.loaded.filter((id) => id === "probe")).toHaveLength(2);
+    expect(h.availabilities().at(-1)).toEqual({ detection: "settled", extractors: {} });
+    expect(h.extractorsLoaded()).toEqual([]);
+    expect(h.extractorEvaluates()).toHaveLength(0);
+  });
+
+  it("gives a React page React's extractor and nothing else", async () => {
+    const h = harness({ probeResult: REACT });
+    await h.install();
+    h.guest.onGuestEvent(0, READY);
+    await h.settle();
+    h.timers[0]!();
+    await h.settle();
+    expect(h.extractorsLoaded()).toEqual(["extractor:react"]);
+    const evaluated = h.extractorEvaluates().map((call) => call.params.expression as string);
+    expect(evaluated).toHaveLength(1);
+    expect(evaluated[0]).toContain("/* react */");
+    expect(evaluated[0]).not.toContain("/* svelte */");
+    expect(h.availabilities().at(-1)).toEqual({
+      detection: "settled",
+      extractors: { react: "installed" },
+    });
+  });
+
+  it("gives a mixed page each framework it uses once, and a later one only its own", async () => {
+    const h = harness({
+      probeResult: [...REACT, ...SVELTE],
+      assets: { "extractor:solid": "/* solid */" },
+    });
+    await h.install();
+    h.guest.onGuestEvent(0, READY);
+    await h.settle();
+    // The late look and a selection's markup name the same frameworks again.
+    h.timers[0]!();
+    h.guest.onGuestEvent(0, { type: "frameworksDetected", detections: [...SVELTE, ...REACT] });
+    await h.settle();
+    expect([...h.extractorsLoaded()].sort()).toEqual(["extractor:react", "extractor:svelte"]);
+    expect(h.extractorEvaluates()).toHaveLength(2);
+
+    h.guest.onGuestEvent(0, {
+      type: "frameworksDetected",
+      detections: [{ framework: "solid", signals: [{ via: "global", name: "Solid$$" }] }],
+    });
+    await h.settle();
+    expect(h.extractorsLoaded().slice(2)).toEqual(["extractor:solid"]);
+    expect(h.availabilities().at(-1)?.extractors).toEqual({
+      react: "installed",
+      svelte: "installed",
+      solid: "installed",
+    });
   });
 
   it.each([

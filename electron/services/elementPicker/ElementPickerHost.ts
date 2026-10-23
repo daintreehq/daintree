@@ -23,7 +23,7 @@ import { AdmissionGate } from "./admissionGate.js";
 import { checkResolveResponse, relabelCancelled } from "./checkResponse.js";
 import { ElementPickerHostError, type ElementPickerHostErrorCode } from "./errors.js";
 import { HostOutboundSchema, type HostInbound } from "./hostProtocol.js";
-import { unavailableResponse } from "./outcomes.js";
+import { observationCandidates, unavailableResponse } from "./outcomes.js";
 import { isStrictlyInside } from "./containment.js";
 import { nextDevServer } from "./nextDevServer.js";
 import { ProjectContextService } from "./projectAdapters/projectContext.js";
@@ -321,6 +321,17 @@ export class ElementPickerHost {
     }
     const workspace = this.workspaces.get(request.workspaceId);
     if (!workspace) throw hostError("UNKNOWN_WORKSPACE", "no open workspace has this id");
+    // A selection whose page named no source has nothing for a resolver to read:
+    // the answer is the host's empty one, without starting the host for it.
+    if (
+      request.observations.every((observation) => observationCandidates(observation).length === 0)
+    ) {
+      return {
+        requestId: request.requestId,
+        documentEpoch: request.documentEpoch,
+        outcomes: request.observations.map(({ elementId }) => ({ elementId, results: [] })),
+      };
+    }
 
     // The deadline runs from admission: queueing and a cold start spend it too.
     const controller = new AbortController();
