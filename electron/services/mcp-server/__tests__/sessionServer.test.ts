@@ -2929,6 +2929,31 @@ describe("CallTool live activity notifications (#9759)", () => {
     expect(started).toHaveBeenCalledWith(expect.objectContaining({ danger: true }));
   });
 
+  it("settles a call with its started event's own startedAt, so the two pair exactly (#14165)", async () => {
+    const started = vi.fn();
+    const settled = vi.fn();
+    const requestManifest = vi
+      .fn()
+      .mockResolvedValue([
+        { id: "worktree.list", title: "List", description: "d", danger: "confirm" },
+      ]);
+    const deps = fakeDeps({
+      notifyToolCallStarted: started,
+      notifyToolCallSettled: settled,
+      requestManifest,
+      dispatchAction: vi.fn().mockResolvedValue({ result: { ok: true, result: null } }),
+    });
+    const server = createSessionServer("session-P", deps);
+    await server.connect(makeMockTransport());
+
+    await callTool(server, { name: "worktree.list", arguments: {} });
+
+    const startedAt = (started.mock.calls[0]?.[0] as { startedAt: number }).startedAt;
+    expect(settled).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionId: "session-P", toolId: "worktree.list", startedAt })
+    );
+  });
+
   it("emits started (danger:false) + settled for the waitUntilIdle short-circuit", async () => {
     const started = vi.fn();
     const settled = vi.fn();

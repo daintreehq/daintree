@@ -81,6 +81,7 @@ import {
 import { createSessionServer, cleanupResourceSubscriptions } from "./sessionServer.js";
 import { bindHostControl } from "./hostControlTools.js";
 import type { AssistantCaller } from "../assistants/AssistantTerminalControl.js";
+import { getAssistantConfirmations } from "../assistants/assistantConfirmations.js";
 import type { SessionStore } from "./sessionStore.js";
 import type { AuditService } from "./auditLog.js";
 import { classifyMcpDispatchResult } from "./auditLog.js";
@@ -111,6 +112,7 @@ import {
   MCP_WORKSPACE_ID_QUERY_PARAM,
   MCP_HANDSHAKE_REJECTED_CODE,
   RELAY_CALL_ID_META_KEY,
+  MCP_DISPATCH_TIMEOUT_MS,
   minimumPermittingTier,
 } from "./shared.js";
 import { createLogger } from "../../utils/logger.js";
@@ -318,6 +320,11 @@ export interface HttpLifecycleDeps {
  * send one — fall back to a neutral label so the settings row never shows a
  * blank.
  */
+/** One call of one session, as its started and settled notices both name it. */
+function confirmationCallKey(sessionId: string, toolId: string, startedAt: number): string {
+  return JSON.stringify([sessionId, toolId, startedAt]);
+}
+
 function resolveUserAgent(req: http.IncomingMessage): string {
   const ua = req.headers["user-agent"];
   return typeof ua === "string" && ua.trim().length > 0 ? ua : "Unknown client";
@@ -2575,6 +2582,25 @@ export class HttpLifecycle {
         // live activity event, even if a different project view is focused. A
         // third-party client's calls do not belong in that strip.
         if (!isRendererOwned(payload.sessionId)) return;
+        // A call that waits on the person is also an observation of its
+        // assistant's (#14165), for Canopy and `host.list` to read; the dialog
+        // stays the one place it is answered.
+        const helpSessionId = this.deps.sessionStore.sessionHelpIdMap.get(payload.sessionId);
+        const helpTerminalId =
+          helpSessionId !== undefined
+            ? (this.helpSessionTerminalResolver?.(helpSessionId) ?? null)
+            : null;
+        if (payload.danger && helpSessionId !== undefined && helpTerminalId !== null) {
+          getAssistantConfirmations().begin(
+            confirmationCallKey(payload.sessionId, payload.toolId, payload.startedAt),
+            { helpSessionId, terminalId: helpTerminalId },
+            {
+              actionId: payload.toolId,
+              since: payload.startedAt,
+              expiresAt: payload.startedAt + MCP_DISPATCH_TIMEOUT_MS,
+            }
+          );
+        }
         const id = this.deps.sessionStore.sessionWebContentsMap.get(payload.sessionId);
         if (id === undefined) return;
         // Redact args with the same pipeline the audit record uses so the strip
@@ -2605,6 +2631,9 @@ export class HttpLifecycle {
     const notifyToolCallSettled: import("./sessionServer.js").SessionServerDeps["notifyToolCallSettled"] =
       (payload) => {
         if (!isRendererOwned(payload.sessionId)) return;
+        getAssistantConfirmations().settle(
+          confirmationCallKey(payload.sessionId, payload.toolId, payload.startedAt)
+        );
         const id = this.deps.sessionStore.sessionWebContentsMap.get(payload.sessionId);
         if (id === undefined) return;
         // Derive result/errorCode/severity from the same classifier the audit

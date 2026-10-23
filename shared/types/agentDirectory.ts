@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { MAX_ASSISTANT_SLOTS } from "../config/assistantSlots.js";
+import { TERMINAL_NOTIFY_DELIVERY_STATUSES } from "./terminalNotify.js";
 
 /**
  * The agent directory (#14160): one typed, passive list of a host's workers and
@@ -61,6 +62,40 @@ export type AgentDirectorySubject = z.infer<typeof AgentDirectorySubjectSchema>;
 const agentStateSchema = z.enum(["idle", "working", "waiting", "directing", "completed", "exited"]);
 const waitingReasonSchema = z.enum(["prompt", "question", "approval", "error"]);
 
+/** Most pending confirmations one assistant's entry names; the rest are counted. */
+export const AGENT_DIRECTORY_CONFIRMATIONS_MAX = 4;
+
+/**
+ * A Daintree confirmation an assistant's own call is waiting on (#14165): the
+ * dialog the person answers in the view the assistant's session is pinned to.
+ * Naming it grants nothing — it is answered there or nowhere, and only while
+ * that very call waits. Its arguments are not directory data.
+ */
+export const AgentDirectoryConfirmationSchema = z.object({
+  /** The action the call asked to run. */
+  actionId: z.string().min(1).max(128),
+  /** Epoch ms the call started waiting on the person. */
+  since: z.number(),
+  /** Epoch ms past which the call fails unanswered and the dialog stops offering approval. */
+  expiresAt: z.number(),
+});
+export type AgentDirectoryConfirmation = z.infer<typeof AgentDirectoryConfirmationSchema>;
+
+/**
+ * The terminal notices an assistant asked for, as main holds them for it. A
+ * zero `pending` says only that it watches nothing now: not that it stopped
+ * working, or failed to.
+ */
+export const AgentDirectoryNoticesSchema = z.object({
+  /** Terminals it is waiting to hear about. */
+  pending: z.number().int().nonnegative(),
+  /** Notices that fired and have not reached its prompt yet. */
+  ready: z.number().int().nonnegative(),
+  /** Where its next delivery stands. */
+  delivery: z.enum(TERMINAL_NOTIFY_DELIVERY_STATUSES),
+});
+export type AgentDirectoryNotices = z.infer<typeof AgentDirectoryNoticesSchema>;
+
 export const AgentDirectoryLiveEntrySchema = z.object({
   state: z.literal("live"),
   role: z.enum(["worker", "assistant"]),
@@ -77,6 +112,19 @@ export const AgentDirectoryLiveEntrySchema = z.object({
   attached: z.boolean().nullable(),
   /** When the run last reported a handback marker, without its text; null if never observed. */
   handback: z.object({ observedAt: z.number() }).nullable(),
+  /**
+   * An assistant's Daintree confirmations still waiting, oldest first; absent
+   * for a worker, and from a host that doesn't report them.
+   */
+  confirmations: z
+    .object({
+      waiting: z.array(AgentDirectoryConfirmationSchema).max(AGENT_DIRECTORY_CONFIRMATIONS_MAX),
+      /** Waiting ones left out for the cap. */
+      omitted: z.number().int().nonnegative(),
+    })
+    .optional(),
+  /** An assistant's terminal notices; null when it holds none, absent where not reported. */
+  notices: AgentDirectoryNoticesSchema.nullable().optional(),
 });
 export type AgentDirectoryLiveEntry = z.infer<typeof AgentDirectoryLiveEntrySchema>;
 

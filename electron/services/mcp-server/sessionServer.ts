@@ -1361,6 +1361,8 @@ export interface SessionServerDeps extends OwnedMainExecutors {
   notifyToolCallSettled?: (payload: {
     sessionId: string;
     toolId: string;
+    /** The started event's own `startedAt`, so the two pair up exactly. */
+    startedAt: number;
     durationMs: number;
     outcome: AuditOutcome;
     /** Turn id snapshotted at dispatch start (#10067); matches the started event's value. */
@@ -4646,6 +4648,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
             notifyToolCallSettled({
               sessionId,
               toolId: actionId,
+              startedAt,
               durationMs,
               outcome: settledOutcome,
               capturedTurnId,

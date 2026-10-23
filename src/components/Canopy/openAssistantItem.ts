@@ -7,6 +7,7 @@ export function assistantBand(item: CanopyAssistantItem): FleetBand {
   switch (item.ask) {
     case "error":
       return "blocked";
+    case "confirm":
     case "approval":
     case "question":
       return "needs-you";

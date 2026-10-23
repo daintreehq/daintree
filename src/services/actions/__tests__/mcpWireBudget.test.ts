@@ -843,7 +843,12 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // asked for), and an output schema of the shared outcome fields, the ticket,
   // and each host's outcome with the values read and proposed. Offered to this
   // machine's assistant only, so the external ceiling does not move.
-  const MAX_COHORT_PAYLOAD_BYTES = 141_400;
+  // 141_400 → 142_200 for #14165, measured at 142_191 B (+821): the Daintree
+  // confirmations an assistant's calls wait on and its terminal notices, on
+  // each live assistant `host.list` names, so the global assistant reads the
+  // same decisions Canopy shows. Output only, and the notice delivery is its
+  // status alone; no external tool lists hosts.
+  const MAX_COHORT_PAYLOAD_BYTES = 142_200;
 
   const wireBytes = (t: WireTool) => t.descriptionBytes + t.paramsBytes + t.outputBytes;
 

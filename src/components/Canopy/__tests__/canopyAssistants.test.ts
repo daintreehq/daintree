@@ -6,7 +6,9 @@ import type {
 } from "@shared/types/agentDirectory";
 import {
   assistantAsk,
+  assistantCoverageNote,
   assistantMatches,
+  assistantNoticeSummary,
   assistantStatus,
   buildAssistantItems,
   canopyAssistantId,
@@ -186,6 +188,105 @@ describe("assistantStatus and assistantMatches", () => {
     expect(assistantMatches(item!, ["claude"])).toBe(true);
     expect(assistantMatches(item!, ["refactor"])).toBe(true);
     expect(assistantMatches(item!, ["beta"])).toBe(false);
+  });
+});
+
+describe("decisions and supervision (#14165)", () => {
+  const waiting = (actionId: string, since = 50, expiresAt = 30_050) => ({
+    actionId,
+    since,
+    expiresAt,
+  });
+
+  it("tells a native confirmation, a terminal approval, a question and prompt rest apart", () => {
+    const items = buildAssistantItems(
+      directory([
+        live(0, { confirmations: { waiting: [waiting("worktree.delete")], omitted: 0 } }),
+        live(1, { waitingReason: "approval" }),
+        live(2, { waitingReason: "question" }),
+        live(3),
+      ]),
+      options
+    );
+    expect(items.map((item) => [item.ask, assistantStatus(item)])).toEqual([
+      ["confirm", "Waiting on your confirmation: worktree.delete"],
+      ["approval", "Wants approval"],
+      ["question", "Asking you"],
+      [null, "At its prompt"],
+    ]);
+  });
+
+  it("holds a confirmation over whatever the assistant's terminal shows meanwhile", () => {
+    const [item] = buildAssistantItems(
+      directory([
+        live(0, {
+          agentState: "working",
+          waitingReason: null,
+          confirmations: { waiting: [waiting("a.one"), waiting("a.two", 60)], omitted: 1 },
+        }),
+      ]),
+      options
+    );
+    expect(item!.ask).toBe("confirm");
+    expect(item!.confirmation?.actionId).toBe("a.one");
+    expect(assistantStatus(item!)).toBe("Waiting on your confirmation: a.one and 2 more");
+  });
+
+  it("drops a confirmation past its deadline, so a stale one is never offered", () => {
+    const entry = live(0, {
+      confirmations: { waiting: [waiting("worktree.delete", 50, 1_000)], omitted: 0 },
+    });
+    const [expired] = buildAssistantItems(directory([entry]), { ...options, now: 1_000 });
+    expect(expired!.ask).toBeNull();
+    expect(expired!.confirmation).toBeNull();
+    const [current] = buildAssistantItems(directory([entry]), { ...options, now: 999 });
+    expect(current!.ask).toBe("confirm");
+  });
+
+  it("offers no confirmation from a read that wasn't current, and says the read wasn't", () => {
+    const entry = live(0, { confirmations: { waiting: [waiting("worktree.delete")], omitted: 0 } });
+    const [item] = buildAssistantItems(
+      { ...directory([entry]), coverage: "stale", complete: false },
+      options
+    );
+    expect(item!.ask).toBeNull();
+    expect(item!.coverage).toBe("stale");
+    expect(assistantCoverageNote(item!)).toMatch(/didn't answer/);
+    const [current] = buildAssistantItems(directory([entry]), options);
+    expect(assistantCoverageNote(current!)).toBeNull();
+  });
+
+  it("keeps one lane's confirmation off the other lanes of the same project", () => {
+    const items = buildAssistantItems(
+      directory([
+        live(0),
+        live(1, { confirmations: { waiting: [waiting("worktree.delete")], omitted: 0 } }),
+      ]),
+      options
+    );
+    const byLane = new Map(items.map((item) => [item.subject.lane, item.ask]));
+    expect(byLane.get(1)).toBe("confirm");
+    expect(byLane.get(0)).toBeNull();
+  });
+
+  it("says nothing of notices when it watches nothing, and never calls that a fault", () => {
+    expect(assistantNoticeSummary(null)).toBeNull();
+    expect(assistantNoticeSummary({ pending: 0, ready: 0, delivery: "idle" })).toBeNull();
+    const [resting] = buildAssistantItems(directory([live(0, { notices: null })]), options);
+    expect(resting!.ask).toBeNull();
+  });
+
+  it("describes watched terminals and undelivered notices as held for it", () => {
+    expect(
+      assistantNoticeSummary({
+        pending: 2,
+        ready: 1,
+        delivery: "blocked",
+      })
+    ).toBe("Watching 2 terminals, 1 notice not delivered (held while it waits on you)");
+    expect(assistantNoticeSummary({ pending: 1, ready: 0, delivery: "idle" })).toBe(
+      "Watching 1 terminal"
+    );
   });
 });
 
