@@ -27,9 +27,16 @@ const FRAMEWORK_PREFIX = /^(react|vue|angular|solid|svelte|preact|astro)/;
 
 /** Picker machinery every page gets: the overlay, the registry, the detectors, the channel. */
 const NEUTRAL_GUEST_MODULES = new Set([
-  ...["bootstrap", "probe", "picker", "elementContext", "detectors", "registry"].map(
-    (name) => `${GUEST_DIR}/${name}.ts`
-  ),
+  ...[
+    "bootstrap",
+    "probe",
+    "picker",
+    "elementContext",
+    "detectors",
+    "providerDetection",
+    "pluginRuntime",
+    "registry",
+  ].map((name) => `${GUEST_DIR}/${name}.ts`),
   "electron/services/elementPicker/guestChannel.ts",
 ]);
 

@@ -27,7 +27,13 @@ import {
   MAX_ELEMENT_PICKER_MESSAGE_BYTES,
 } from "../../../shared/elementPicker/protocol.js";
 import { buildOriginGuardSource, type GuestOriginPolicy } from "../sitePreview/originPolicy.js";
-import { BOOTSTRAP_GLOBAL, EXTRACTOR_INSTALL_STATUS, channelEvent } from "./guestChannel.js";
+import {
+  BOOTSTRAP_GLOBAL,
+  EXTRACTOR_INSTALL_STATUS,
+  EXTRACTOR_REGISTRY_GLOBAL,
+  channelEvent,
+} from "./guestChannel.js";
+import type { ProviderProbe } from "./guest/providerDetection.js";
 import type { PickerAvailability } from "./guest/types.js";
 
 /**
@@ -146,10 +152,15 @@ function handshakeSource(channel: string, absent: string): string {
 }
 
 /** Evaluates, by value, to the probe's detections — or null when this install's bootstrap is not in the document. */
-export function buildProbeSource(params: { channel: string; body: string }): string {
+export function buildProbeSource(params: {
+  channel: string;
+  body: string;
+  /** Registered plugin providers' ids and declared rules; data the probe compares names against. */
+  providers?: readonly ProviderProbe[];
+}): string {
   return `(() => {
   ${handshakeSource(params.channel, "null")}
-  const api = { result: null };
+  const api = { result: null, providers: ${JSON.stringify(params.providers ?? [])} };
   try {
 ${params.body}
   } catch { return null; }
@@ -171,6 +182,59 @@ export function buildExtractorSource(params: {
 ${params.body}
   } catch { return ${JSON.stringify(status.threw)}; }
   return api.installed === true ? ${JSON.stringify(status.installed)} : ${JSON.stringify(status.unregistered)};
+})()`;
+}
+
+/**
+ * An installed plugin's extractor. `runtime` is the host's own registration
+ * asset (it defines `api.register`); `body` is the plugin's standalone entry,
+ * run in a function of its own so its bindings stay out of the prelude. The
+ * entry's default export is a factory the host calls with the provider id; the
+ * id was read from the registry and goes in through `JSON.stringify`, so it
+ * cannot close the literal. Evaluates to one of {@link EXTRACTOR_INSTALL_STATUS}.
+ */
+export function buildPluginExtractorSource(params: {
+  channel: string;
+  providerId: ElementPickerProviderId;
+  runtime: string;
+  body: string;
+}): string {
+  const status = EXTRACTOR_INSTALL_STATUS;
+  const providerId = JSON.stringify(params.providerId);
+  return `(() => {
+  ${handshakeSource(params.channel, JSON.stringify(status.absent))}
+  const api = { channel: ${JSON.stringify(params.channel)}, framework: ${providerId}, installed: false };
+  try {
+${params.runtime}
+    const entry = (() => {
+${params.body}
+      return typeof __daintreeExtractor === "undefined" ? undefined : __daintreeExtractor;
+    })();
+    const make = typeof entry === "function" ? entry : entry && entry.default;
+    if (typeof make === "function") {
+      const extractor = make(${providerId});
+      if (extractor && typeof extractor.extract === "function") api.register(extractor);
+    }
+  } catch { return ${JSON.stringify(status.threw)}; }
+  return api.installed === true ? ${JSON.stringify(status.installed)} : ${JSON.stringify(status.unregistered)};
+})()`;
+}
+
+/**
+ * Takes one provider's extractor out of the document's registry, running its
+ * cleanup; the others keep answering. Matched on the channel, so it can only
+ * reach the registry this install made.
+ */
+export function buildExtractorRemoveSource(
+  channel: string,
+  providerId: ElementPickerProviderId
+): string {
+  return `(() => {
+  ${handshakeSource(channel, "false")}
+  const registry = globalThis[${JSON.stringify(EXTRACTOR_REGISTRY_GLOBAL)}];
+  if (!registry || registry.channel !== ${JSON.stringify(channel)} || typeof registry.unregister !== "function") return false;
+  try { registry.unregister(${JSON.stringify(providerId)}); } catch { return false; }
+  return true;
 })()`;
 }
 

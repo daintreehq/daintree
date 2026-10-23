@@ -47,6 +47,11 @@
       "import": "./dist/operations.js",
       "default": "./dist/operations.js"
     },
+    "./element-picker": {
+      "types": "./dist/element-picker.d.ts",
+      "import": "./dist/element-picker.js",
+      "default": "./dist/element-picker.js"
+    },
     "./testing": {
       "types": "./dist/testing.d.ts",
       "import": "./dist/testing.js",

@@ -84,7 +84,7 @@ function harness(
         if (typeof reselect !== "function") throw reselect.error;
         return reselect();
       }
-      if (expression.includes("const api = { result: null }")) {
+      if (expression.includes("const api = { result: null,")) {
         const next = overrides.probeResults?.shift();
         return { result: { value: next ?? overrides.probeResult ?? null } };
       }
@@ -311,7 +311,7 @@ describe("CoreGuest", () => {
     const h = harness({ probeResult: [] });
     const probes = () =>
       h.calls.filter((call) =>
-        String(call.params.expression).includes("const api = { result: null }")
+        String(call.params.expression).includes("const api = { result: null,")
       ).length;
     await h.install();
     h.guest.onGuestEvent(0, READY);

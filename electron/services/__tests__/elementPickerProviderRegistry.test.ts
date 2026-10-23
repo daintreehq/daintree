@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   getElementPickerProvider,
+  getElementPickerProviderPluginDir,
+  isElementPickerProviderCurrent,
   isElementPickerProviderAuthorized,
   listElementPickerProviders,
   matchElementPickerProviders,
@@ -99,5 +101,24 @@ describe("elementPickerProviderRegistry", () => {
     const found = getElementPickerProvider("acme.qwik.qwik", null)!;
     expect(Object.isFrozen(found)).toBe(true);
     expect(Object.isFrozen(found.detection)).toBe(true);
+  });
+
+  it("keeps the plugin directory off the declaration and tracks which registration is live", () => {
+    registerElementPickerProviders("acme.qwik", "acme.qwik", [qwik], "/plugins/acme.qwik");
+    const first = getElementPickerProvider("acme.qwik.qwik", null)!;
+    expect(getElementPickerProviderPluginDir(first)).toBe("/plugins/acme.qwik");
+    expect(JSON.stringify(first)).not.toContain("/plugins/acme.qwik");
+    expect(isElementPickerProviderCurrent(first)).toBe(true);
+
+    // A reload replaces the registration; the old object is no longer the live one.
+    registerElementPickerProviders("acme.qwik", "acme.qwik", [qwik], "/plugins/acme.qwik");
+    expect(isElementPickerProviderCurrent(first)).toBe(false);
+    expect(isElementPickerProviderCurrent(getElementPickerProvider("acme.qwik.qwik", null)!)).toBe(
+      true
+    );
+
+    const second = getElementPickerProvider("acme.qwik.qwik", null)!;
+    unregisterElementPickerProviders("acme.qwik");
+    expect(isElementPickerProviderCurrent(second)).toBe(false);
   });
 });

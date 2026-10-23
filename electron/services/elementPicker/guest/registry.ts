@@ -104,6 +104,8 @@ interface Registry {
   channel: string;
   has(framework: string): boolean;
   register(framework: string, extractor: ElementPickerExtractor): void;
+  /** Drops one extractor and runs its cleanup; the rest keep answering. */
+  unregister(framework: string): void;
   dispose(): void;
 }
 
@@ -113,6 +115,7 @@ function isRegistry(value: unknown): value is Registry {
     value !== null &&
     typeof (value as Registry).channel === "string" &&
     typeof (value as Registry).register === "function" &&
+    typeof (value as Registry).unregister === "function" &&
     typeof (value as Registry).dispose === "function"
   );
 }
@@ -363,6 +366,16 @@ function createRegistry(channel: string): Registry {
         extractor.start?.(notifier(framework));
       } catch {
         // An extractor whose page watch failed to start still answers requests.
+      }
+    },
+    unregister(framework) {
+      const extractor = extractors.get(framework);
+      if (extractor === undefined) return;
+      extractors.delete(framework);
+      try {
+        extractor.dispose?.();
+      } catch {
+        // The registration is gone whether or not its cleanup ran.
       }
     },
     dispose() {

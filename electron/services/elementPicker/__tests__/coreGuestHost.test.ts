@@ -165,8 +165,8 @@ class FakeDebugger extends EventEmitter {
       .map(({ params }) => {
         const expression = params.expression as string;
         if (params.contextId === ISOLATED_CONTEXT_ID) return { kind: "isolated" as const };
-        if (expression.includes("const api = { result: null }")) return { kind: "probe" as const };
-        const framework = /framework: "([a-z]+)", installed: false/.exec(expression)?.[1];
+        if (expression.includes("const api = { result: null,")) return { kind: "probe" as const };
+        const framework = /framework: "([a-z0-9.-]+)", installed: false/.exec(expression)?.[1];
         if (framework !== undefined) return { kind: "extractor" as const, framework };
         return { kind: "other" as const };
       });

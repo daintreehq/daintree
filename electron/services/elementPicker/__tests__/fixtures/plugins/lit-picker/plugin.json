@@ -1,0 +1,21 @@
+{
+  "name": "fixture.lit-picker",
+  "version": "1.0.0",
+  "displayName": "Lit Element Picker (fixture)",
+  "description": "Test fixture: a framework outside the built-in enum, loaded on detection.",
+  "main": "dist/worker.js",
+  "capabilities": ["preview:inspect"],
+  "contributes": {
+    "elementPickerProviders": [
+      {
+        "id": "lit",
+        "name": "Lit",
+        "detection": [
+          { "kind": "global", "name": "litElementVersions", "match": "exact" },
+          { "kind": "tag", "name": "fixture-lit-", "match": "prefix" }
+        ],
+        "guestEntry": "dist/picker/lit.js"
+      }
+    ]
+  }
+}

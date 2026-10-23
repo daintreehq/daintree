@@ -115,4 +115,26 @@ describe("collectPluginManifestAssets", () => {
     expect(both.has("views[0].componentPath")).toBe(true);
     expect(both.has("experimental_views[0].componentPath")).toBe(false);
   });
+
+  it("lists an element picker provider's guest and resolver entries as built scripts", () => {
+    const assets = byField({
+      contributes: {
+        elementPickerProviders: [
+          { guestEntry: "./dist/picker/lit.js", resolverEntry: "dist/resolver/lit.js" },
+          { guestEntry: "dist/picker/other.js" },
+        ],
+      },
+    });
+    expect(assets.get("elementPickerProviders[0].guestEntry")).toMatchObject({
+      path: "dist/picker/lit.js",
+      required: true,
+      module: false,
+      built: true,
+    });
+    expect(assets.get("elementPickerProviders[0].resolverEntry")?.path).toBe(
+      "dist/resolver/lit.js"
+    );
+    expect(assets.get("elementPickerProviders[1].guestEntry")?.path).toBe("dist/picker/other.js");
+    expect(assets.has("elementPickerProviders[1].resolverEntry")).toBe(false);
+  });
 });

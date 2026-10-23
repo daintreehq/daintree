@@ -39,6 +39,8 @@ export interface PluginManifestAsset {
   required: boolean;
   /** An ES module the host imports, as opposed to a file it reads. */
   module: boolean;
+  /** Build output the host reads and evaluates as a script, so its directory must survive `.gitignore`. */
+  built?: boolean;
 }
 
 /** Matches `URL_SCHEME_PREFIX` in the manifest schema's tour audio check. */
@@ -75,7 +77,7 @@ export function collectPluginManifestAssets(manifest: unknown): PluginManifestAs
   const add = (
     field: string,
     ref: unknown,
-    opts: { required?: boolean; module?: boolean } = {}
+    opts: { required?: boolean; module?: boolean; built?: boolean } = {}
   ) => {
     if (!nonEmptyString(ref)) return;
     assets.push({
@@ -84,6 +86,7 @@ export function collectPluginManifestAssets(manifest: unknown): PluginManifestAs
       path: normalizePluginAssetRef(ref),
       required: opts.required ?? true,
       module: opts.module ?? false,
+      ...(opts.built ? { built: true } : {}),
     });
   };
   const addIcon = (field: string, iconId: unknown) => {
@@ -134,6 +137,13 @@ export function collectPluginManifestAssets(manifest: unknown): PluginManifestAs
     for (const [index, reference] of entries(knowledge.references)) {
       add(`assistantKnowledge.references[${index}].path`, reference.path);
     }
+  }
+
+  // Element picker guest entries are scripts the host evaluates in a preview
+  // page, not modules it imports; a resolver is declared now and loaded later.
+  for (const [index, provider] of entries(contributes.elementPickerProviders)) {
+    add(`elementPickerProviders[${index}].guestEntry`, provider.guestEntry, { built: true });
+    add(`elementPickerProviders[${index}].resolverEntry`, provider.resolverEntry, { built: true });
   }
 
   for (const [index, theme] of entries(contributes.themes)) {

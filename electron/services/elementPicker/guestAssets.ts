@@ -19,11 +19,17 @@ import { AppError } from "../../utils/errorTypes.js";
 /** Under `dist-electron/`. */
 export const CORE_GUEST_ASSET_DIR = "element-picker/guest";
 
-export type CoreGuestAssetId = "bootstrap" | "probe" | `extractor:${ElementPickerFramework}`;
+/** `plugin-runtime` is the registration half a plugin's guest entry is evaluated beside. */
+export type CoreGuestAssetId =
+  | "bootstrap"
+  | "probe"
+  | "plugin-runtime"
+  | `extractor:${ElementPickerFramework}`;
 
 export const CORE_GUEST_ASSET_FILES: Readonly<Partial<Record<CoreGuestAssetId, string>>> = {
   bootstrap: "bootstrap.js",
   probe: "probe.js",
+  "plugin-runtime": "pluginRuntime.js",
   "extractor:svelte": "extractors/svelte.js",
   "extractor:react": "extractors/react.js",
   "extractor:solid": "extractors/solid.js",
