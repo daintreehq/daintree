@@ -135,7 +135,9 @@ export class PluginCapabilityConsentService {
   }
 
   private async ensureSubjectAllowed(
-    identity: PluginCapabilityIdentity,
+    // Only what a prompt can ask about: a user switch with no token of its own
+    // is never asked for (#13821).
+    identity: PluginCapabilityIdentity & { capability: PluginConsentSubject },
     pluginDisplayName: string,
     declaredCapabilities: readonly BuiltInPluginCapability[]
   ): Promise<void> {
