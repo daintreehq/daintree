@@ -223,6 +223,7 @@ function RequestDetail(props) {
 		...patch
 	});
 	const save = async (base = shown.baseRevision) => {
+		if (saving) return;
 		setSaving(true);
 		setError(null);
 		try {
@@ -260,11 +261,13 @@ function RequestDetail(props) {
 					children: [/* @__PURE__ */ jsx(Button, {
 						size: "xs",
 						variant: "outline",
+						disabled: saving,
 						onClick: () => void save(request.revision),
 						children: "Keep my edit"
 					}), /* @__PURE__ */ jsx(Button, {
 						size: "xs",
 						variant: "ghost",
+						disabled: saving,
 						onClick: () => onDraft(null),
 						children: "Use theirs"
 					})]

@@ -140,6 +140,21 @@ describe("Request Desk worker", () => {
     ]);
   });
 
+  it("keeps a full page of the longest notes inside the host's result limit", async () => {
+    const { callTool } = await start();
+    const notes = "é".repeat(2000);
+    for (let i = 0; i < 100; i++) {
+      await callTool("add_request", { title: `Request ${i}`, notes, id: `bulk-${i}` });
+    }
+    const page = await callTool<{ requests: Array<RequestRecord & { notesTruncated?: boolean }> }>(
+      "list_requests",
+      {}
+    );
+    expect(page.requests).toHaveLength(100);
+    expect(page.requests[0]!.notesTruncated).toBe(true);
+    expect(Buffer.byteLength(JSON.stringify(page))).toBeLessThan(256 * 1024);
+  });
+
   it("refuses an update from a stale revision and hands back the current request", async () => {
     const { callTool } = await start();
     const moved = await callTool<{ ok: boolean; request: RequestRecord }>("update_request", {

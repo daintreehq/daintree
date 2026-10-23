@@ -235,6 +235,9 @@ function RequestDetail(props: {
   const edit = (patch: Partial<RequestDraft>) => onDraft({ ...shown, ...patch });
 
   const save = async (base = shown.baseRevision) => {
+    // One save at a time: a second response landing after the first cleared
+    // the draft would put the older edit back over newer typing.
+    if (saving) return;
     setSaving(true);
     setError(null);
     try {
@@ -270,10 +273,15 @@ function RequestDetail(props: {
           title="Changed while you were editing"
           action={
             <span className="flex gap-1.5">
-              <Button size="xs" variant="outline" onClick={() => void save(request.revision)}>
+              <Button
+                size="xs"
+                variant="outline"
+                disabled={saving}
+                onClick={() => void save(request.revision)}
+              >
                 Keep my edit
               </Button>
-              <Button size="xs" variant="ghost" onClick={() => onDraft(null)}>
+              <Button size="xs" variant="ghost" disabled={saving} onClick={() => onDraft(null)}>
                 Use theirs
               </Button>
             </span>

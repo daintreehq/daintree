@@ -20,6 +20,7 @@ import { createStoreOpener, isRequestStatus, RequestInputError } from "./store";
 /** The `contributes.agentMcp` endpoint the tools below are served on. */
 const ENDPOINT_ID = "requests";
 const WORKSPACE_SETTING = "providerWorkspace";
+const LISTED_NOTES_CHARS = 280;
 
 /**
  * Request Desk's worker. Everything durable lives here rather than in a view:
@@ -198,7 +199,7 @@ export async function activate(host: PluginHostApi): Promise<() => void> {
   const tools: Record<string, PluginMcpToolDefinition> = {
     list_requests: {
       description:
-        "List this project's Request Desk requests, most recently changed first, up to 100 at a time (pass offset for the next page). Each has an id, title, status, notes and a revision to pass to update_request.",
+        "List this project's Request Desk requests, most recently changed first, up to 100 at a time (pass offset for the next page). Each has an id, title, status, notes (cut at 280 characters, with notesTruncated set; read the full text with database_query) and a revision to pass to update_request.",
       inputSchema: {
         type: "object",
         properties: {
@@ -212,7 +213,20 @@ export async function activate(host: PluginHostApi): Promise<() => void> {
         const status = isRequestStatus(args.status) ? args.status : undefined;
         const limit = typeof args.limit === "number" ? args.limit : undefined;
         const offset = typeof args.offset === "number" ? args.offset : undefined;
-        return { requests: await (await openStore()).list({ status, limit, offset }) };
+        const requests = await (await openStore()).list({ status, limit, offset });
+        // A full page of the longest notes would pass the host's 256 KiB
+        // result limit and fail the whole call; clipped, a page stays well under.
+        return {
+          requests: requests.map((request) =>
+            request.notes.length > LISTED_NOTES_CHARS
+              ? {
+                  ...request,
+                  notes: request.notes.slice(0, LISTED_NOTES_CHARS),
+                  notesTruncated: true,
+                }
+              : request
+          ),
+        };
       },
     },
     add_request: {

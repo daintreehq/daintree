@@ -1117,6 +1117,7 @@ function createStore(db, now = () => /* @__PURE__ */ new Date()) {
 /** The `contributes.agentMcp` endpoint the tools below are served on. */
 var ENDPOINT_ID = "requests";
 var WORKSPACE_SETTING = "providerWorkspace";
+var LISTED_NOTES_CHARS = 280;
 /**
 * Request Desk's worker. Everything durable lives here rather than in a view:
 * the store, the report operations and the artifact handles. Views come and go
@@ -1261,7 +1262,7 @@ async function activate(host) {
 	disposers.push(await host.settings.onDidChange(WORKSPACE_SETTING, () => push(EVENTS.connectionChanged)));
 	const tools = {
 		list_requests: {
-			description: "List this project's Request Desk requests, most recently changed first, up to 100 at a time (pass offset for the next page). Each has an id, title, status, notes and a revision to pass to update_request.",
+			description: "List this project's Request Desk requests, most recently changed first, up to 100 at a time (pass offset for the next page). Each has an id, title, status, notes (cut at 280 characters, with notesTruncated set; read the full text with database_query) and a revision to pass to update_request.",
 			inputSchema: {
 				type: "object",
 				properties: {
@@ -1286,11 +1287,15 @@ async function activate(host) {
 				const status = isRequestStatus(args.status) ? args.status : void 0;
 				const limit = typeof args.limit === "number" ? args.limit : void 0;
 				const offset = typeof args.offset === "number" ? args.offset : void 0;
-				return { requests: await (await openStore()).list({
+				return { requests: (await (await openStore()).list({
 					status,
 					limit,
 					offset
-				}) };
+				})).map((request) => request.notes.length > LISTED_NOTES_CHARS ? {
+					...request,
+					notes: request.notes.slice(0, LISTED_NOTES_CHARS),
+					notesTruncated: true
+				} : request) };
 			}
 		},
 		add_request: {
