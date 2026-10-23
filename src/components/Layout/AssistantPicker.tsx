@@ -113,8 +113,7 @@ export function AssistantPicker({ open, onClose }: { open: boolean; onClose: () 
           aria-activedescendant={active ? `picker-${canopyAssistantDomId(active.id)}` : undefined}
           tabIndex={0}
           onKeyDown={onKeyDown}
-          // eslint-disable-next-line component-contract/no-unpaired-outline-suppression -- focus is shown on the active option (aria-activedescendant), which always carries the highlight
-          className="flex max-h-80 flex-col overflow-y-auto pb-1.5 outline-hidden"
+          className="flex max-h-80 flex-col overflow-y-auto pb-1.5 outline-hidden focus-visible:outline-solid focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-selection-outline"
         >
           {items.map((item, index) => (
             <div
