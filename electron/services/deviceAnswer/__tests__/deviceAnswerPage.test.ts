@@ -186,6 +186,8 @@ describe("the paired device's page", () => {
     });
     expect(emptyText()).toBeNull();
     expect(document.getElementById("hosts")!.textContent).toContain("Not connected to Mini");
+    // A host this Shell knows of, connected or not, is one to tell its runs from.
+    expect(document.querySelector(".run .host")!.textContent).toBe("greg-studio");
   });
 
   it("never says nothing was pressed when the reply to an answer was lost", async () => {
