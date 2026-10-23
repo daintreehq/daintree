@@ -23,6 +23,7 @@ export const CANOPY_METHOD_CHANNELS = {
   watchTerminal: "canopy:watch-terminal",
   watchAssistantTerminal: "canopy:watch-assistant-terminal",
   resolveAssistant: "canopy:resolve-assistant",
+  readAgentDirectory: "canopy:read-agent-directory",
   unwatchTerminal: "canopy:unwatch-terminal",
   captureBackdrop: "canopy:capture-backdrop",
   setMode: "canopy:set-mode",

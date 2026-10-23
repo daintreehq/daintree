@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -6,8 +6,12 @@ import {
   ContextMenu,
   ContextMenuContent,
   ContextMenuItem,
+  ContextMenuSeparator,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
+import { Popover, PopoverAnchor, PopoverContent } from "@/components/ui/popover";
+import { AssistantPicker } from "./AssistantPicker";
+import { isProjectViewCached, subscribeProjectViewLifecycle } from "@/lib/viewCacheState";
 import { NewSessionWithAgentLabel } from "@/components/HelpPanel/NewSessionWithAgentLabel";
 import { createTooltipContent } from "@/lib/tooltipShortcut";
 import { useAriaKeyshortcuts, useEffectiveCombo, useShortcutHintHover } from "@/hooks";
@@ -179,10 +183,24 @@ export function ToolbarAssistantButton({
     }
   }, [toggle, isOpen]);
 
-  // A right-click starts one session on a chosen agent (#13442). Only when
-  // there is a choice to make; the plain click above is untouched either way.
+  // A right-click finds an assistant already running (#14164), and starts one
+  // on a chosen agent (#13442) when there is a choice to make; the plain click
+  // above is untouched either way.
   const agentChoices = useAssistantAgentChoices();
   const hasAgentChoice = agentChoices.length > 1;
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const pickerHandoffRef = useRef(false);
+  // A view put in the background lists nothing for anyone: the picker goes with it.
+  useEffect(() => {
+    if (!pickerOpen) return;
+    if (isProjectViewCached()) {
+      setPickerOpen(false);
+      return;
+    }
+    return subscribeProjectViewLifecycle((phase) => {
+      if (phase === "cached") setPickerOpen(false);
+    });
+  }, [pickerOpen]);
   const projectId = useProjectStore((s) => s.currentProject?.id ?? null);
   const scratchId = useScratchStore((s) => s.currentScratch?.id ?? null);
   const workspaceId = projectId ?? scratchId;
@@ -206,64 +224,89 @@ export function ToolbarAssistantButton({
       : "Daintree Assistant";
 
   return (
-    <ContextMenu>
-      <ContextMenuTrigger asChild disabled={!hasAgentChoice}>
-        <span className="inline-flex">
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                {...hintHover}
-                type="button"
-                variant="ghost"
-                size="icon"
-                data-toolbar-item={dataToolbarItem}
-                onClick={handleClick}
-                className={toolbarIconButtonClass}
-                aria-label={label}
-                aria-pressed={isVisible}
-                aria-keyshortcuts={ariaShortcut}
-              >
-                <div className="relative">
-                  <DaintreeIcon />
-                  {/* One always-in-DOM pip; data-visible drives the @starting-style
+    <Popover open={pickerOpen} onOpenChange={setPickerOpen}>
+      <ContextMenu>
+        <ContextMenuTrigger asChild>
+          <span className="inline-flex">
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <PopoverAnchor asChild restoreFocus>
+                  <Button
+                    {...hintHover}
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    data-toolbar-item={dataToolbarItem}
+                    onClick={handleClick}
+                    className={toolbarIconButtonClass}
+                    aria-label={label}
+                    aria-pressed={isVisible}
+                    aria-keyshortcuts={ariaShortcut}
+                  >
+                    <div className="relative">
+                      <DaintreeIcon />
+                      {/* One always-in-DOM pip; data-visible drives the @starting-style
                       enter/exit on .toolbar-badge. Precedence (MCP pip > agent pip)
                       stays in component logic — the className resolves to the winning
                       pip's color, with the pulse only on the delayed MCP state. */}
-                  <span
-                    aria-hidden="true"
-                    data-testid="assistant-working-pip"
-                    data-agent-state={agentState ?? ""}
-                    data-visible={pip !== null || showAgentPip}
-                    className={cn(
-                      "toolbar-pip toolbar-badge",
-                      pip?.className ?? (showAgentPip ? agentPip?.className : undefined),
-                      pip?.delayed && "animate-pulse-delayed"
-                    )}
-                  />
-                </div>
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent side="bottom">{createTooltipContent(label, shortcut)}</TooltipContent>
-          </Tooltip>
-        </span>
-      </ContextMenuTrigger>
-      <ContextMenuContent>
-        {agentChoices.map((agentId) => (
+                      <span
+                        aria-hidden="true"
+                        data-testid="assistant-working-pip"
+                        data-agent-state={agentState ?? ""}
+                        data-visible={pip !== null || showAgentPip}
+                        className={cn(
+                          "toolbar-pip toolbar-badge",
+                          pip?.className ?? (showAgentPip ? agentPip?.className : undefined),
+                          pip?.delayed && "animate-pulse-delayed"
+                        )}
+                      />
+                    </div>
+                  </Button>
+                </PopoverAnchor>
+              </TooltipTrigger>
+              <TooltipContent side="bottom">{createTooltipContent(label, shortcut)}</TooltipContent>
+            </Tooltip>
+          </span>
+        </ContextMenuTrigger>
+        <ContextMenuContent
+          onCloseAutoFocus={(event) => {
+            // The picker takes the keyboard: the menu closing hands it nowhere else,
+            // or focus leaving the picker would dismiss it as it opens.
+            if (!pickerHandoffRef.current) return;
+            pickerHandoffRef.current = false;
+            event.preventDefault();
+          }}
+        >
           <ContextMenuItem
-            key={agentId}
-            disabled={!canOpenSession}
             onSelect={() => {
-              void actionService.dispatch(
-                "help.newSessionWithAgent",
-                { agentId },
-                { source: "user" }
-              );
+              pickerHandoffRef.current = true;
+              setPickerOpen(true);
             }}
           >
-            <NewSessionWithAgentLabel agentId={agentId} />
+            Find an assistant…
           </ContextMenuItem>
-        ))}
-      </ContextMenuContent>
-    </ContextMenu>
+          {hasAgentChoice && <ContextMenuSeparator />}
+          {hasAgentChoice &&
+            agentChoices.map((agentId) => (
+              <ContextMenuItem
+                key={agentId}
+                disabled={!canOpenSession}
+                onSelect={() => {
+                  void actionService.dispatch(
+                    "help.newSessionWithAgent",
+                    { agentId },
+                    { source: "user" }
+                  );
+                }}
+              >
+                <NewSessionWithAgentLabel agentId={agentId} />
+              </ContextMenuItem>
+            ))}
+        </ContextMenuContent>
+      </ContextMenu>
+      <PopoverContent side="bottom" align="end" className="p-0">
+        <AssistantPicker open={pickerOpen} onClose={() => setPickerOpen(false)} />
+      </PopoverContent>
+    </Popover>
   );
 }

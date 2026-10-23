@@ -224,6 +224,14 @@ function installElectron() {
     refresh: vi.fn(async () => {}),
     setMode: vi.fn(async () => canopySnapshot()),
     captureBackdrop: vi.fn(async () => null),
+    // No assistants: a full, empty directory of this machine.
+    readAgentDirectory: vi.fn(async () => ({
+      coverage: "ok" as const,
+      observedAt: 1,
+      complete: true,
+      omitted: 0,
+      entries: [],
+    })),
   };
   Object.defineProperty(window, "electron", {
     value: {

@@ -105,6 +105,18 @@ const projectStore = vi.hoisted(() => ({
   ),
 }));
 vi.mock("../../../services/ProjectStore.js", () => ({ projectStore }));
+const directoryRead = vi.hoisted(() =>
+  vi.fn(async (_options: { projectId?: string }) => ({
+    coverage: "ok" as const,
+    observedAt: 1,
+    complete: true,
+    omitted: 0,
+    entries: [],
+  }))
+);
+vi.mock("../../../services/assistants/localAgentDirectory.js", () => ({
+  getLocalAgentDirectory: () => ({ read: directoryRead }),
+}));
 vi.mock("../projectCrud/index.js", () => ({
   getFleetSnapshotService: () => ({
     getLastBroadcast: () => ({ runs: state.runs, degraded: false, changedAt: 0 }),
@@ -1485,6 +1497,57 @@ describe("canopy IPC", () => {
         subject
       )) as { data?: unknown } | null;
       expect(ended?.data ?? ended).toBeNull();
+    });
+  });
+
+  describe("the agent directory", () => {
+    afterEach(() => {
+      getIpcDispatcher().setRemoteRouter(null);
+    });
+
+    it("lists this machine's agents with Canopy off, reading no screen to do it", async () => {
+      state.mode = "unset";
+      const listed = (await invoke(CANOPY_METHOD_CHANNELS.readAgentDirectory, fakeSender(4))) as {
+        data?: unknown;
+      };
+      expect((listed.data ?? listed) as { coverage: string }).toMatchObject({ coverage: "ok" });
+      expect(directoryRead).toHaveBeenCalledWith({});
+      expect(canopyBackend.classifyWithCanopy).not.toHaveBeenCalled();
+      expect(readPluginTerminalScreen).not.toHaveBeenCalled();
+      expect(ptyClient.acquireIpcDataMirror).not.toHaveBeenCalled();
+    });
+
+    it("keeps to one project when asked, and refuses an id that isn't one", async () => {
+      await invoke(CANOPY_METHOD_CHANNELS.readAgentDirectory, fakeSender(4), {
+        projectId: "project-1",
+      });
+      expect(directoryRead).toHaveBeenLastCalledWith({ projectId: "project-1" });
+      directoryRead.mockClear();
+      for (const options of [
+        { projectId: "" },
+        { projectId: 7 },
+        { projectId: "x".repeat(257) },
+        [],
+        null,
+        "project-1",
+      ]) {
+        const result = await outcome(
+          invoke(CANOPY_METHOD_CHANNELS.readAgentDirectory, fakeSender(4), options)
+        );
+        expect(result.ok).toBe(false);
+      }
+      expect(directoryRead).not.toHaveBeenCalled();
+    });
+
+    it("refuses a window bound to another host, whose agents aren't these", async () => {
+      getIpcDispatcher().setRemoteRouter({
+        hostForSender: () => "remote-1",
+      } as unknown as Parameters<ReturnType<typeof getIpcDispatcher>["setRemoteRouter"]>[0]);
+      const result = await outcome(
+        invoke(CANOPY_METHOD_CHANNELS.readAgentDirectory, fakeSender(4))
+      );
+      expect(result.ok).toBe(false);
+      expect(directoryRead).not.toHaveBeenCalled();
     });
   });
 

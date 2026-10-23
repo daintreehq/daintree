@@ -123,6 +123,7 @@ export const CHANNEL_LOCALITY = {
   "canopy:mark-all-read": "host",
   "canopy:mark-seen": "host",
   "canopy:note-sent": "host",
+  "canopy:read-agent-directory": "shell",
   "canopy:refresh": "host",
   "canopy:rename": "host",
   "canopy:rename-requested": "host",

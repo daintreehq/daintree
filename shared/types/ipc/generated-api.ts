@@ -71,6 +71,9 @@ export interface GeneratedElectronAPI {
     noteSent(
       ...args: IpcInvokeMap["canopy:note-sent"]["args"]
     ): Promise<IpcInvokeMap["canopy:note-sent"]["result"]>;
+    readAgentDirectory(
+      ...args: IpcInvokeMap["canopy:read-agent-directory"]["args"]
+    ): Promise<IpcInvokeMap["canopy:read-agent-directory"]["result"]>;
     refresh(
       ...args: IpcInvokeMap["canopy:refresh"]["args"]
     ): Promise<IpcInvokeMap["canopy:refresh"]["result"]>;

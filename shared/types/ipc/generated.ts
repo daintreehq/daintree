@@ -265,6 +265,45 @@ export interface GeneratedIpcInvokeMap {
     args: [runId: string];
     result: void;
   };
+  "canopy:read-agent-directory": {
+    args: [options?: { projectId?: string | undefined } | undefined];
+    result: {
+      coverage: "ok" | "stale" | "unreachable" | "unsupported";
+      observedAt: number | null;
+      complete: boolean;
+      omitted: number;
+      entries: (
+        | {
+            state: "live";
+            role: "worker" | "assistant";
+            subject: {
+              hostId: string;
+              scope: { kind: "project"; projectId: string } | { kind: "global" };
+              terminalId: string;
+              incarnation: number;
+              lane?: number | undefined;
+            };
+            agentId: string | null;
+            agentState:
+              "completed" | "waiting" | "idle" | "working" | "directing" | "exited" | null;
+            waitingReason: "error" | "prompt" | "question" | "approval" | null;
+            since: number | null;
+            label: string | null;
+            attached: boolean | null;
+            handback: { observedAt: number } | null;
+          }
+        | {
+            state: "resumable";
+            role: "assistant";
+            hostId: string;
+            scope: { kind: "project"; projectId: string };
+            lane: number;
+            agentId: string | null;
+            capturedAt: number;
+          }
+      )[];
+    };
+  };
   "canopy:refresh": {
     args: [];
     result: void;

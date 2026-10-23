@@ -153,6 +153,14 @@ function installElectron(
         [] as string[]
     ),
     captureBackdrop: vi.fn(async () => null),
+    // No assistants: a full, empty directory of this machine.
+    readAgentDirectory: vi.fn(async () => ({
+      coverage: "ok" as const,
+      observedAt: 1,
+      complete: true,
+      omitted: 0,
+      entries: [],
+    })),
     rename: vi.fn(async (_runId: string, _target: { spawnedAt: number }, _title: string) => {}),
     setMode: vi.fn(async (mode: CanopySnapshot["mode"], _expectRevision?: number) => ({
       ...snapshot,
