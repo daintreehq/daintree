@@ -38,3 +38,12 @@ export function canopySendsFrom(hostName: string): string {
 export function canopyStopOn(hostName: string): string {
   return `Stop at any time from Settings > Canopy on ${hostName}.`;
 }
+
+/** The same consent said once for several hosts, each of which does its own reading. */
+export function canopySendsFromHosts(hostNames: readonly string[]): string {
+  const names = hostNames.join(", ");
+  return `To read them, Canopy on each of these hosts (${names}) sends its own agents' terminal output to Daintree's servers: what's on screen, recent scrollback with the requests typed there, each terminal's title and state, and notes Canopy kept from earlier readings. Each does this for agents in every project on that host, and while Canopy is closed too, so it can tell you when an agent is asking for you.`;
+}
+
+/** How to take any of those hosts' consent back. */
+export const CANOPY_STOP_ON_EACH = "Stop at any time from Settings > Canopy on each host.";

@@ -355,6 +355,11 @@ export interface CanopyPlan {
    * one hide can tell a later hide from its own.
    */
   modeRevision?: number;
+  /**
+   * Names the host process `modeRevision` counts in: the counter starts over
+   * when the host restarts, so a revision means nothing without it.
+   */
+  hostEpoch?: string;
   /** The user turned Canopy on, agreeing to send screens off the machine to be read: `mode` is `on`. */
   activated: boolean;
   tier: CanopyTier;
@@ -389,6 +394,8 @@ export interface CanopySnapshot {
   mode: CanopyMode;
   /** The plan's mode revision: see `CanopyPlan.modeRevision`. */
   modeRevision?: number;
+  /** The plan's host epoch: see `CanopyPlan.hostEpoch`. */
+  hostEpoch?: string;
   /** The user turned Canopy on; nothing is read until they do. */
   activated: boolean;
   tier: CanopyTier;

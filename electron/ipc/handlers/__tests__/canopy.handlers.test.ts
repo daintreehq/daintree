@@ -446,6 +446,46 @@ describe("canopy IPC", () => {
     expect(state.mode).toBe("unset");
   });
 
+  it("changes nothing for a change made against another host process's epoch", async () => {
+    const sender = fakeSender(5);
+    const snapshotOf = (result: unknown) => {
+      const envelope = result as { data?: Record<string, unknown> };
+      return (envelope.data ?? result) as { mode: string; modeRevision: number; hostEpoch: string };
+    };
+    const start = snapshotOf(await invoke(CANOPY_METHOD_CHANNELS.setMode, sender, "unset"));
+    expect(typeof start.hostEpoch).toBe("string");
+
+    // The revision matches by coincidence, as it can after a restart; the epoch does not.
+    const stale = snapshotOf(
+      await invoke(
+        CANOPY_METHOD_CHANNELS.setMode,
+        sender,
+        "hidden",
+        start.modeRevision,
+        "other-launch"
+      )
+    );
+    expect(stale).toMatchObject({ mode: "unset", modeRevision: start.modeRevision });
+    expect(state.mode).toBe("unset");
+
+    const landed = snapshotOf(
+      await invoke(
+        CANOPY_METHOD_CHANNELS.setMode,
+        sender,
+        "hidden",
+        start.modeRevision,
+        start.hostEpoch
+      )
+    );
+    expect(landed).toMatchObject({ mode: "hidden", hostEpoch: start.hostEpoch });
+    expect(landed.modeRevision).toBe(start.modeRevision + 1);
+
+    const noRevision = await outcome(
+      invoke(CANOPY_METHOD_CHANNELS.setMode, sender, "unset", undefined, start.hostEpoch)
+    );
+    expect(noRevision.ok).toBe(false);
+  });
+
   describe("rename", () => {
     function renameView() {
       const sent: Array<{ channel: string; payload: unknown }> = [];

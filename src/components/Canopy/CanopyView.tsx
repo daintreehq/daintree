@@ -84,7 +84,10 @@ import { CANOPY_BETA_TERMS, CANOPY_TITLE, CANOPY_WAITLIST_URL } from "./canopyTe
 import { useListReorderMotion } from "./useListReorderMotion";
 import { CanopyHeaderCenter, CanopyHostPicker, useCanopyHostRows } from "./CanopyHostPicker";
 import { CanopyHostOffer } from "./CanopyHostOffer";
+import { CanopyBulkEnableDialog } from "./CanopyBulkEnableDialog";
+import type { BulkTarget } from "./bulkEnable";
 import {
+  canopyBulkTransport,
   ownCanopyApi,
   ownCanopyTerminalApi,
   remoteCanopyApi,
@@ -254,6 +257,35 @@ async function hideCanopy(): Promise<void> {
  * population, with the words and the controls to act without leaving the panel.
  */
 export function CanopyView() {
+  const [bulkTargets, setBulkTargets] = useState<readonly BulkTarget[] | null>(null);
+  // Frozen when the person opens it: hosts listed later are not in this run.
+  const openBulk = useCallback((rows: readonly HostMenuRow[]) => {
+    setBulkTargets(rows.map((row) => ({ hostId: row.hostId, name: row.name })));
+  }, []);
+  const transportFor = useCallback(
+    (target: BulkTarget) =>
+      canopyBulkTransport(target.hostId, {
+        own: target.hostId === canopyOwnHostId(),
+        keepOpen: target.hostId === useCanopyStore.getState().hostId,
+      }),
+    []
+  );
+  return (
+    <>
+      <CanopyPanel onEnableAll={openBulk} />
+      <CanopyBulkEnableDialog
+        isOpen={bulkTargets !== null}
+        onClose={() => setBulkTargets(null)}
+        targets={bulkTargets ?? NO_BULK_TARGETS}
+        deps={{ transportFor }}
+      />
+    </>
+  );
+}
+
+const NO_BULK_TARGETS: readonly BulkTarget[] = [];
+
+function CanopyPanel({ onEnableAll }: { onEnableAll: (rows: readonly HostMenuRow[]) => void }) {
   const isOpen = useCanopyStore((s) => s.isOpen);
   const close = useCanopyStore((s) => s.close);
   const activated = useCanopyStore((s) => s.snapshot?.activated ?? null);
@@ -262,7 +294,13 @@ export function CanopyView() {
   const hostId = useCanopyStore((s) => s.hostId);
   const setHostId = useCanopyStore((s) => s.setHostId);
   const hostRows = useCanopyHostRows(hostId ?? canopyOwnHostId());
-  const hostPicker = hostRows ? <CanopyHostPicker rows={hostRows} onPick={setHostId} /> : null;
+  const hostPicker = hostRows ? (
+    <CanopyHostPicker
+      rows={hostRows}
+      onPick={setHostId}
+      onEnableAll={() => onEnableAll(hostRows)}
+    />
+  ) : null;
   // The host shown was removed, or hosts can't be shown here at all: the panel
   // goes back to the window's own host, and the picker says so.
   const hostListed = hostId === null || (hostRows?.some((row) => row.hostId === hostId) ?? false);

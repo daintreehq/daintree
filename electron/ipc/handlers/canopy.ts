@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { app } from "electron";
 import type {
   CanopyLookPlace,
@@ -114,10 +115,12 @@ function backgroundPollOverride(): number | undefined {
 
 /** Changes of mode since launch; see `CanopyPlan.modeRevision`. */
 let modeRevision = 0;
+/** Names this launch, which `modeRevision` counts in; see `CanopyPlan.hostEpoch`. */
+const hostEpoch = randomUUID();
 
 function currentPlan(): CanopyPlan {
   const mode = readCanopyMode();
-  return { mode, modeRevision, activated: mode === "on", tier: currentTier() };
+  return { mode, modeRevision, hostEpoch, activated: mode === "on", tier: currentTier() };
 }
 
 /**
@@ -943,17 +946,32 @@ export const canopyNamespace = defineIpcNamespace({
      *
      * `expectRevision` is the mode revision the change was made against — an
      * Undo's — so one made after Canopy moved on since, in any view, changes
-     * nothing and answers how Canopy stands now.
+     * nothing and answers how Canopy stands now. `expectHostEpoch` is the same
+     * guard for the host process: a revision counted before a restart is not
+     * this one's.
      */
     setMode: op(
       CANOPY_METHOD_CHANNELS.setMode,
-      async (mode: CanopyMode, expectRevision?: number): Promise<CanopySnapshot> => {
+      async (
+        mode: CanopyMode,
+        expectRevision?: number,
+        expectHostEpoch?: string
+      ): Promise<CanopySnapshot> => {
         if (!isCanopyMode(mode)) throw new Error("Invalid Canopy mode");
         if (expectRevision !== undefined && !Number.isSafeInteger(expectRevision)) {
           throw new Error("Invalid Canopy mode revision");
         }
+        if (expectHostEpoch !== undefined) {
+          if (typeof expectHostEpoch !== "string" || expectHostEpoch.length > 64) {
+            throw new Error("Invalid Canopy host epoch");
+          }
+          if (expectRevision === undefined) throw new Error("A host epoch needs a revision");
+        }
         checkRateLimit(CANOPY_METHOD_CHANNELS.setMode, 10, 10_000);
-        if (expectRevision !== undefined && expectRevision !== modeRevision) {
+        if (
+          (expectRevision !== undefined && expectRevision !== modeRevision) ||
+          (expectHostEpoch !== undefined && expectHostEpoch !== hostEpoch)
+        ) {
           return service ? service.getSnapshot() : hiddenOrIdleSnapshot();
         }
         const was = readCanopyMode();

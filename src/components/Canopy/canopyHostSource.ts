@@ -1,11 +1,13 @@
 import { useEffect, useRef, useState } from "react";
 import { canopyHostClient } from "@/clients/canopyHostClient";
+import { remoteHostsClient } from "@/clients/remoteHostsClient";
+import type { BulkTransport } from "./bulkEnable";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import type { CanopyHostChannel } from "@shared/types/ipc/canopyHost";
 import type { CanopySnapshot } from "@shared/types/ipc/canopy";
 import type { FleetSnapshot } from "@shared/types/ipc/fleet";
 import type { IpcInvokeMap } from "@shared/types/ipc/maps";
-import type { HostId } from "@shared/types/remoteHosts";
+import { LOCAL_HOST_ID, type HostId } from "@shared/types/remoteHosts";
 
 type ElectronCanopy = Window["electron"]["canopy"];
 
@@ -75,6 +77,56 @@ export function remoteCanopyApi(hostId: HostId): CanopyApi {
     rename: on("canopy:rename"),
     trash: on("canopy:trash"),
     untrash: on("canopy:untrash"),
+  };
+}
+
+/** How long a bulk run waits on a saved host it had to dial. */
+const BULK_CONNECT_MS = 20_000;
+
+/**
+ * What a bulk enable asks of one host: its snapshot and its guarded mode
+ * change, and the release of the viewer the call opened there. `own` is the
+ * window's own host, read through `window.electron.canopy`; `keepOpen` is a
+ * host the panel is reading, whose viewer is the panel's to release.
+ */
+export function canopyBulkTransport(
+  hostId: HostId,
+  { own, keepOpen }: { own: boolean; keepOpen: boolean }
+): BulkTransport {
+  if (own) {
+    return {
+      getSnapshot: () => window.electron.canopy.getSnapshot(),
+      setMode: (mode, expectRevision, expectHostEpoch) =>
+        window.electron.canopy.setMode(mode, expectRevision, expectHostEpoch),
+      release: () => {},
+    };
+  }
+  let opened = false;
+  return {
+    getSnapshot: () => {
+      opened = true;
+      return canopyHostClient.invoke(hostId, "canopy:get-snapshot");
+    },
+    setMode: (mode, expectRevision, expectHostEpoch) => {
+      opened = true;
+      return canopyHostClient.invoke(
+        hostId,
+        "canopy:set-mode",
+        mode,
+        expectRevision,
+        expectHostEpoch
+      );
+    },
+    ...(hostId === LOCAL_HOST_ID
+      ? {}
+      : {
+          connect: async () =>
+            (await remoteHostsClient.connectAndSettle(hostId, { timeoutMs: BULK_CONNECT_MS }))
+              .status === "connected",
+        }),
+    release: () => {
+      if (opened && !keepOpen) void canopyHostClient.release(hostId).catch(() => {});
+    },
   };
 }
 

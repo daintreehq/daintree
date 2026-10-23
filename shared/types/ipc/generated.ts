@@ -242,7 +242,11 @@ export interface GeneratedIpcInvokeMap {
     result: import("./canopy.js").CanopySnapshot;
   };
   "canopy:set-mode": {
-    args: [mode: import("./canopy.js").CanopyMode, expectRevision?: number | undefined];
+    args: [
+      mode: import("./canopy.js").CanopyMode,
+      expectRevision?: number | undefined,
+      expectHostEpoch?: string | undefined,
+    ];
     result: import("./canopy.js").CanopySnapshot;
   };
   "canopy:set-read": {

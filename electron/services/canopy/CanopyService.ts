@@ -675,6 +675,7 @@ export class CanopyService {
       sequence: ++this.sequence,
       mode: this.plan.mode,
       modeRevision: this.plan.modeRevision ?? 0,
+      ...(this.plan.hostEpoch === undefined ? {} : { hostEpoch: this.plan.hostEpoch }),
       activated: this.plan.activated,
       tier: this.plan.tier,
       dispositions,
