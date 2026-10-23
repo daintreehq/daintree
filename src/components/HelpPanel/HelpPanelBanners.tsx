@@ -106,7 +106,7 @@ const LAUNCH_ERROR_BODY: Record<LaunchErrorKind, string> = {
   "skills-sync-failed":
     "Daintree couldn't load this project's assistant folder, so the session didn't start. Retry, or check the logs if it keeps failing.",
   "spawn-failed": "The agent didn't start. Try again.",
-  // Same wording as the command/MCP path in `helpActions.ts` — one refusal,
+  // Same wording as the command/MCP path in `helpActions.impl.ts` — one refusal,
   // one sentence, whichever surface the user hit it from.
   "mixed-agent-lanes":
     "Another session in this project is running a different agent. Sessions of one project share a folder and use one agent, so stop that session first or open this one with the same agent.",

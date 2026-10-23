@@ -111,6 +111,7 @@ vi.mock("@/controllers/helpSessionControllerRegistry", () => ({
 }));
 
 import { registerHelpActions } from "../helpActions";
+import "../helpActions.impl";
 import {
   markHelpPanelRuntimeMounted,
   onHelpPanelRuntimeRequested,
@@ -543,13 +544,21 @@ describe("help.launchAgent", () => {
     mockDispatch.mockResolvedValue({ ok: true, result: { terminalId: "term-1" } });
 
     const runPromise = action.run(undefined, stubCtx);
-    // Focus drifts while getFolderPath is still pending.
+    // Focus and the workspace drift while the run body's chunk and
+    // getFolderPath are still pending.
     mockGetContext.mockReturnValue({ focusedWorktreeId: "wt-drifted" });
+    mockGetProjectState.mockReturnValue({
+      currentProject: { id: "proj-drifted", path: "/drifted" },
+    });
     resolveFolder("/mock/help");
     await runPromise;
 
     expect(window.electron.help.provisionSession).toHaveBeenCalledWith(
-      expect.objectContaining({ context: { focusedWorktreeId: "wt-at-launch" } })
+      expect.objectContaining({
+        projectId: "proj-1",
+        projectPath: "/repo",
+        context: { focusedWorktreeId: "wt-at-launch" },
+      })
     );
   });
 
