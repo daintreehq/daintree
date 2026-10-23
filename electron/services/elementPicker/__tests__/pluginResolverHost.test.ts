@@ -655,6 +655,64 @@ describe("plugin source resolvers", () => {
     expect(plugin[0]!.child.posted.filter((type) => type === "provider")).toHaveLength(2);
   });
 
+  it("checks each of a plugin's providers on its own, keeping a sibling's answer when one forges a revision", async () => {
+    const dir = tempDir("picker-plugin-install-");
+    for (const name of ["good", "forge"]) {
+      fs.mkdirSync(path.join(dir, name), { recursive: true });
+      fs.writeFileSync(path.join(dir, name, "resolver.mjs"), "export {}");
+    }
+    registerElementPickerProviders(
+      "acme.forger",
+      "acme.forger",
+      ["good", "forge"].map((name) => ({
+        id: name,
+        name,
+        detection: [{ kind: "global" as const, name, match: "exact" as const }],
+        guestEntry: "guest.js",
+        resolverEntry: `${name}/resolver.mjs`,
+      })),
+      dir
+    );
+    plugins.push("acme.forger");
+    const forged = moduleOf(async (request) => ({
+      requestId: request.requestId,
+      documentEpoch: request.documentEpoch,
+      outcomes: request.observations.map((entry) => ({
+        elementId: entry.elementId,
+        results: observationCandidates(entry).map((source) => ({
+          state: "verified" as const,
+          candidateId: source.candidateId,
+          claim: source.kind,
+          target: {
+            file: { workspaceId: request.workspaceId, path: "app/src/App.svelte" },
+            location: null,
+          },
+          fileRevision: `sha256:${"0".repeat(64)}`,
+        })),
+      })),
+    }));
+    const { host } = harness(
+      new Map<string, unknown>([
+        [pathToFileURL(path.join(dir, "good", "resolver.mjs")).href, markerModule()],
+        [pathToFileURL(path.join(dir, "forge", "resolver.mjs")).href, forged],
+      ])
+    );
+    const id = await workspace(host);
+    const response = await host.resolve(
+      request(id, [
+        observation("el-1", [
+          candidate("c-good", "app/src/App.svelte", "acme.forger.good"),
+          candidate("c-forge", "app/src/App.svelte", "acme.forger.forge"),
+        ]),
+      ]),
+      { projectId: "p1" }
+    );
+    expect(results(response)).toEqual([
+      expect.objectContaining({ candidateId: "c-good", state: "verified" }),
+      { state: "unavailable", candidateId: "c-forge", claim: "file-hint", reason: "unsupported" },
+    ]);
+  });
+
   it("retires a plugin host that ignores a cancel, leaving core's answer standing", async () => {
     const { url, providerId } = installPlugin("acme.hung", "export {}");
     const hung = moduleOf(() => new Promise<ResolveResponse>(() => {}));
@@ -669,7 +727,8 @@ describe("plugin source resolvers", () => {
             candidate("c-hung", "app/src/App.svelte", providerId),
           ]),
         ],
-        { deadlineMs: 150 }
+        // Long enough that real file I/O is done well before it; the cancel grace is what's under test.
+        { deadlineMs: 1_500 }
       ),
       { projectId: "p1" }
     );
@@ -705,7 +764,7 @@ describe("plugin source resolvers", () => {
             candidate("c-fails", "app/src/App.svelte", providerId),
           ]),
         ],
-        { deadlineMs: 100 }
+        { deadlineMs: 1_000 }
       ),
       { projectId: "p1" }
     );

@@ -21,7 +21,11 @@ import { minimalSpawnEnv } from "../../utils/minimalSpawnEnv.js";
 import { watchShared } from "../FileObservationService.js";
 import { noteTerminationIntent } from "../processTerminationIntent.js";
 import { AdmissionGate, MAX_CONCURRENT_RESOLVES } from "./admissionGate.js";
-import { checkResolveResponse, relabelCancelled } from "./checkResponse.js";
+import {
+  checkResolveResponse,
+  checkResolveResponseByProvider,
+  relabelCancelled,
+} from "./checkResponse.js";
 import {
   getElementPickerProvider,
   isElementPickerProviderAuthorized,
@@ -213,7 +217,11 @@ type DispatchAnswer = ResolveResponse | "failed" | "withdrawn";
 
 /** `work`'s result, or null as soon as `signal` aborts; a late result is dropped. */
 function untilAborted<T>(work: Promise<T>, signal: AbortSignal): Promise<T | null> {
-  if (signal.aborted) return Promise.resolve(null);
+  if (signal.aborted) {
+    // Nobody waits on it now, so its failure must not surface as unhandled.
+    work.catch(() => {});
+    return Promise.resolve(null);
+  }
   return new Promise((resolve, reject) => {
     const onAbort = () => resolve(null);
     signal.addEventListener("abort", onAbort, { once: true });
@@ -625,10 +633,21 @@ export class ElementPickerHost {
       const located = await untilAborted(this.locateEntries(target), signal);
       if (signal.aborted) return "withdrawn";
       if (located === null) return "failed";
-      return await this.runJob(slice, workspace, signal, expired, located, usage);
+      // Only the providers whose entries were located run; a warm host may
+      // still hold a loader for one that has since lost its entry.
+      const runnable = new Set(located.providers.map(({ provider }) => provider.id));
+      return await this.runJob(
+        requestFor(slice, (candidate) => runnable.has(candidate.framework)),
+        workspace,
+        signal,
+        expired,
+        located,
+        usage
+      );
     } catch (error) {
       if (target.kind === "core") throw error;
-      if (signal.aborted) return "withdrawn";
+      // A job that rejects has failed, whatever aborted after it: a withdrawn
+      // one settles with an answer instead.
       logWarn(`${P} A plugin's resolver failed; its candidates answer unsupported`, {
         plugin: target.pluginId,
         error: formatErrorMessage(error, "resolver failed"),
@@ -1120,11 +1139,16 @@ export class ElementPickerHost {
       case "resolved": {
         const job = generation.jobs.get(message.jobId);
         if (!job) return;
-        const response = checkResolveResponse(job.request, message.response, {
+        const authority = {
           roots: job.roots,
-          servedRevision: (file) => job.access.servedRevision(file),
-          servedMap: (mapUrl, revision) => job.access.servedMap(mapUrl, revision),
-        });
+          servedRevision: (file: string) => job.access.servedRevision(file),
+          servedMap: (mapUrl: string | null, revision: FileRevision) =>
+            job.access.servedMap(mapUrl, revision),
+        };
+        const response =
+          job.target.kind === "plugin"
+            ? checkResolveResponseByProvider(job.request, message.response, authority)
+            : checkResolveResponse(job.request, message.response, authority);
         job.settle(
           response
             ? { ok: true, response: job.expired() ? relabelCancelled(response) : response }

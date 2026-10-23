@@ -11,7 +11,7 @@ import type {
   SourceMapProvenance,
 } from "../../../shared/elementPicker/resolution.js";
 import type { SourceClaimKind } from "../../../shared/elementPicker/source.js";
-import { observationCandidates } from "./outcomes.js";
+import { mergeAnswers, observationCandidates, requestFor, unavailableResult } from "./outcomes.js";
 import { lexicalSourcePath, type SourceRoots } from "./sourceAccess.js";
 
 /** What main knows about the job the response answers. */
@@ -126,6 +126,61 @@ export function checkResolveResponse(
     }
   }
   return response;
+}
+
+/**
+ * A plugin host's answer, checked one provider at a time: a provider whose
+ * part fails the checks above answers its candidates `unsupported` and leaves
+ * its siblings' answers standing. A plugin's providers share a process, not a
+ * verdict. The answer as a whole must still be for this request and epoch.
+ */
+export function checkResolveResponseByProvider(
+  request: ResolveRequest,
+  raw: unknown,
+  authority: ResponseAuthority
+): ResolveResponse | null {
+  const parsed = ResolveResponseSchema.safeParse(raw);
+  if (!parsed.success) return null;
+  const response = parsed.data;
+  if (response.requestId !== request.requestId) return null;
+  if (response.documentEpoch !== request.documentEpoch) return null;
+
+  const providers = new Set(
+    request.observations.flatMap((observation) =>
+      observationCandidates(observation).map((candidate) => candidate.framework)
+    )
+  );
+  const checked = new Map<string, ResolveResponse>();
+  for (const provider of providers) {
+    const own = requestFor(request, (candidate) => candidate.framework === provider);
+    const owned = new Map(
+      own.observations.map((observation) => [
+        observation.elementId,
+        new Set(observationCandidates(observation).map((candidate) => candidate.candidateId)),
+      ])
+    );
+    const part = checkResolveResponse(
+      own,
+      {
+        ...response,
+        outcomes: response.outcomes
+          .filter((outcome) => owned.has(outcome.elementId))
+          .map((outcome) => ({
+            ...outcome,
+            results: outcome.results.filter((result) =>
+              owned.get(outcome.elementId)!.has(result.candidateId)
+            ),
+          })),
+      },
+      authority
+    );
+    if (part) checked.set(provider, part);
+  }
+  return mergeAnswers(
+    request,
+    (candidate) => checked.get(candidate.framework) ?? null,
+    (candidate) => unavailableResult(candidate, "unsupported")
+  );
 }
 
 /**
