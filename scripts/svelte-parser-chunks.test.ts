@@ -14,7 +14,9 @@ const BUILDER_ENTRY = "plugins/builtin/sveltekit-builder/main/index.ts";
 
 /** Wherever the install resolves from: a worktree's node_modules can be a link to another checkout's. */
 const COMPILER = "node_modules/svelte/src/compiler/";
-const isCompiler = (file: string) => file.includes(COMPILER);
+/** What `require("svelte/compiler")` gets: one prebuilt file, which nothing can tree-shake. */
+const PREBUILT_COMPILER = "node_modules/svelte/compiler/";
+const isCompiler = (file: string) => file.includes(COMPILER) || file.includes(PREBUILT_COMPILER);
 const PARSER = `${COMPILER}phases/1-parse/index.js`;
 
 /**
@@ -64,23 +66,38 @@ const PRODUCTION: BuildOptions = {
   logLevel: "silent",
 };
 
-let production: Promise<Metafile> | null = null;
+/**
+ * Production ships Remote Hosts everywhere and the host role everywhere but
+ * Windows, so both role builds are checked. Nothing that production leaves
+ * live is defined away here: a flag folded to `false` drops whatever it gates,
+ * compiler imports included. `SENTRY_DSN` is left as the runtime read it is in
+ * a release with a DSN, rather than an empty string that folds its paths away.
+ */
+const HOST_ROLES = [
+  { platforms: "macOS and Linux", hostRole: true },
+  { platforms: "Windows", hostRole: false },
+];
 
-function buildProduction(): Promise<Metafile> {
-  production ??= build({
-    ...PRODUCTION,
-    entryPoints: mainEsmEntryPoints(ROOT),
-    external: MAIN_EXTERNAL,
-    plugins: [mainBundleStubsPlugin()],
-    alias: { "@daintreehq/svelte-source-model": "./packages/svelte-source-model/dist/index.js" },
-    define: {
-      "process.env.SENTRY_DSN": JSON.stringify(""),
-      __DAINTREE_REMOTE_HOSTS__: "false",
-      __DAINTREE_REMOTE_HOST_ROLE__: "false",
-      __DAINTREE_BUILD_COMMIT__: JSON.stringify("test"),
-    },
-  }).then((result) => result.metafile);
-  return production;
+const builds = new Map<boolean, Promise<Metafile>>();
+
+function buildProduction(hostRole: boolean): Promise<Metafile> {
+  let started = builds.get(hostRole);
+  if (!started) {
+    started = build({
+      ...PRODUCTION,
+      entryPoints: mainEsmEntryPoints(ROOT),
+      external: MAIN_EXTERNAL,
+      plugins: [mainBundleStubsPlugin()],
+      alias: { "@daintreehq/svelte-source-model": "./packages/svelte-source-model/dist/index.js" },
+      define: {
+        __DAINTREE_REMOTE_HOSTS__: "true",
+        __DAINTREE_REMOTE_HOST_ROLE__: JSON.stringify(hostRole),
+        __DAINTREE_BUILD_COMMIT__: JSON.stringify("test"),
+      },
+    }).then((result) => result.metafile);
+    builds.set(hostRole, started);
+  }
+  return started;
 }
 
 function emitted(metafile: Metafile, test: (file: string) => boolean): string[] {
@@ -105,7 +122,11 @@ function outputClosure(metafile: Metafile, from: string, dynamic: boolean): Set<
     const file = pending.pop()!;
     if (seen.has(file)) continue;
     seen.add(file);
-    for (const edge of metafile.outputs[file]?.imports ?? []) {
+    const output = metafile.outputs[file];
+    // An edge to a file the metafile does not list would end the walk early and
+    // make "not in the closure" true for the wrong reason.
+    if (!output) throw new Error(`no output named ${file}`);
+    for (const edge of output.imports) {
       if (edge.external) continue;
       if (edge.kind === "dynamic-import" && !dynamic) continue;
       pending.push(edge.path);
@@ -114,55 +135,63 @@ function outputClosure(metafile: Metafile, from: string, dynamic: boolean): Set<
   return seen;
 }
 
-describe("the Svelte parser in the production main build", () => {
-  it("ships once, in one chunk under the parser's ceiling", async () => {
-    const metafile = await buildProduction();
+describe.each(HOST_ROLES)(
+  "the Svelte parser in the production main build ($platforms)",
+  ({ hostRole }) => {
+    it("ships once, in one chunk under the parser's ceiling", async () => {
+      const metafile = await buildProduction(hostRole);
 
-    // One output holds every emitted byte of the compiler: a second would mean
-    // a consumer reached a different copy, or a shared chunk split it.
-    const chunks = emitted(metafile, isCompiler);
-    expect(chunks).toHaveLength(1);
-    // Not a vacuous pass: that chunk is the parser.
-    expect(emitted(metafile, (file) => file.endsWith(PARSER))).toEqual(chunks);
-    expect(metafile.outputs[chunks[0]].bytes).toBeLessThan(PARSER_CHUNK_CEILING);
-  }, 120_000);
+      // One output holds every emitted byte of the compiler: a second would mean
+      // a consumer reached a different copy, or a shared chunk split it.
+      const chunks = emitted(metafile, isCompiler);
+      expect(chunks).toHaveLength(1);
+      // Not a vacuous pass: that chunk is the parser.
+      expect(emitted(metafile, (file) => file.endsWith(PARSER))).toEqual(chunks);
+      expect(metafile.outputs[chunks[0]].bytes).toBeLessThan(PARSER_CHUNK_CEILING);
+      // Named apart from the count above: a `require()` would bring the whole
+      // prebuilt compiler, and in the parser's own chunk the count cannot see it.
+      expect(emitted(metafile, (file) => file.includes(PREBUILT_COMPILER))).toEqual([]);
+    }, 120_000);
 
-  it("leaves out the compile, migrate, print and preprocess passes", async () => {
-    const metafile = await buildProduction();
+    it("leaves out the compile, migrate, print and preprocess passes", async () => {
+      const metafile = await buildProduction(hostRole);
 
-    // Still in the input graph, because `svelte/compiler`'s index imports them
-    // all. Were one renamed, the check below would go blind; this fails first.
-    const inputs = Object.keys(metafile.inputs);
-    for (const pass of UNUSED_PASSES) {
+      // Still in the input graph, because `svelte/compiler`'s index imports them
+      // all. Were one renamed, the check below would go blind; this fails first.
+      const inputs = Object.keys(metafile.inputs);
+      for (const pass of UNUSED_PASSES) {
+        expect(
+          inputs.filter((file) => file.endsWith(pass)),
+          pass
+        ).toHaveLength(1);
+      }
       expect(
-        inputs.filter((file) => file.endsWith(pass)),
-        pass
-      ).toHaveLength(1);
-    }
-    expect(emitted(metafile, (file) => UNUSED_PASSES.some((pass) => file.endsWith(pass)))).toEqual(
-      []
-    );
-  }, 120_000);
+        emitted(metafile, (file) => UNUSED_PASSES.some((pass) => file.endsWith(pass)))
+      ).toEqual([]);
+    }, 120_000);
 
-  it("loads only behind a dynamic import, from one chunk both consumers share", async () => {
-    const metafile = await buildProduction();
-    const [chunk] = emitted(metafile, isCompiler);
+    it("loads only behind a dynamic import, from one chunk both consumers share", async () => {
+      const metafile = await buildProduction(hostRole);
+      const [chunk] = emitted(metafile, isCompiler);
 
-    // Over the emitted chunk graph, not the module graph: splitting can hoist a
-    // module into a shared chunk an entry imports statically.
-    for (const entry of mainEsmEntryPoints(ROOT)) {
-      expect(outputClosure(metafile, entryOutput(metafile, entry), false), entry).not.toContain(
-        chunk
+      // Over the emitted chunk graph, not the module graph: splitting can hoist a
+      // module into a shared chunk an entry imports statically.
+      for (const entry of mainEsmEntryPoints(ROOT)) {
+        expect(outputClosure(metafile, entryOutput(metafile, entry), false), entry).not.toContain(
+          chunk
+        );
+      }
+
+      const fromPicker = PICKER_HOST_ENTRIES.some((entry) =>
+        outputClosure(metafile, entryOutput(metafile, entry), true).has(chunk)
       );
-    }
+      expect(fromPicker).toBe(true);
+      expect(outputClosure(metafile, entryOutput(metafile, BUILDER_ENTRY), true)).toContain(chunk);
+    }, 120_000);
+  }
+);
 
-    const fromPicker = PICKER_HOST_ENTRIES.some((entry) =>
-      outputClosure(metafile, entryOutput(metafile, entry), true).has(chunk)
-    );
-    expect(fromPicker).toBe(true);
-    expect(outputClosure(metafile, entryOutput(metafile, BUILDER_ENTRY), true)).toContain(chunk);
-  }, 120_000);
-
+describe("the parser chunk check", () => {
   it("would see the passes return under a namespace import", async () => {
     // The regression this guards against, built on purpose: `import()` of the
     // whole compiler keeps every export, so each pass emits code here.

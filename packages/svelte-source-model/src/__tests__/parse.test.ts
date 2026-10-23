@@ -6,8 +6,14 @@ interface Compiler {
   calls: Parameters<SvelteParse>[];
 }
 
-/** The real parser behind the thin entry, counting its calls, or a load that fails. */
-function mockCompiler(compiler: Compiler): void {
+/**
+ * A fresh `parse.ts`, so each test starts with nothing loaded and nothing
+ * cached, over the real parser counting its calls — or a load that fails while
+ * `fails` is set. Vitest reruns a factory that threw, so a retry reaches it again.
+ */
+async function freshLoadParse(fails = false) {
+  vi.resetModules();
+  const compiler: Compiler = { fails, calls: [] };
   vi.doMock("../compiler-parse.js", async (importOriginal) => {
     if (compiler.fails) throw new Error("compiler unavailable");
     const real = (await importOriginal<typeof import("../compiler-parse.js")>())
@@ -18,13 +24,6 @@ function mockCompiler(compiler: Compiler): void {
     };
     return { parse };
   });
-}
-
-/** A fresh `parse.ts`, so each test starts with nothing loaded and nothing cached. */
-async function freshLoadParse(fails = false) {
-  vi.resetModules();
-  const compiler: Compiler = { fails, calls: [] };
-  mockCompiler(compiler);
   const { loadParse } = await import("../parse.js");
   return { loadParse, compiler };
 }
@@ -82,7 +81,6 @@ describe("loadParse", () => {
     await expect(loadParse()).rejects.toThrow();
 
     compiler.fails = false;
-    mockCompiler(compiler);
     const parse = await loadParse();
     expect(parse("<p>ok</p>", OPTIONS).fragment.type).toBe("Fragment");
     expect(compiler.calls).toHaveLength(1);

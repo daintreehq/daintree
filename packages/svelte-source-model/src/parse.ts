@@ -14,8 +14,8 @@ import type { SvelteParse } from "./types.js";
  * roughly 485 KiB minified, plugin activation has a five-second window, and
  * nothing on a startup path may pull it in. `svelte/compiler` appears only in
  * `compiler-parse.ts`, whose sole export is `parse`, so the barrel cannot drag
- * it in and the compiler's compile and migrate passes never ship at all
- * (`scripts/svelte-parser-chunks.test.ts`).
+ * it in and a consumer's bundler can leave the compile and migrate passes out;
+ * Daintree's main build does (`scripts/svelte-parser-chunks.test.ts`).
  */
 let compiler: Promise<SvelteParse> | null = null;
 
