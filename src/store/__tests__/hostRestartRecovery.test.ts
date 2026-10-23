@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PanelRestoreContext } from "@/utils/stateHydration/panelRestorePhase";
 
 const { restorePanelsPhase, addPanel, getAllWithStatus, panelsById } = vi.hoisted(() => ({
-  restorePanelsPhase: vi.fn(async (_saved: unknown[], _ctx: PanelRestoreContext) => ({
+  restorePanelsPhase: vi.fn(async (_saved: Array<{ id: string }>, _ctx: PanelRestoreContext) => ({
     restoreTasks: [],
     savedIdToRestoredId: new Map(),
     ghostedWorktreeIds: new Set(),
@@ -36,6 +36,7 @@ const hydrate = vi.fn();
 const reconnectBulk = vi.fn(async (ids: string[]): Promise<Record<string, unknown>> =>
   Object.fromEntries(ids.map((id) => [id, { exists: false }]))
 );
+const getForProject = vi.fn(async (_projectId: string): Promise<unknown[]> => []);
 
 function savedState(workspaceId = "proj-1") {
   return {
@@ -67,7 +68,7 @@ beforeEach(() => {
   for (const id of Object.keys(panelsById)) delete panelsById[id];
   hydrate.mockResolvedValue(savedState());
   Object.defineProperty(window, "electron", {
-    value: { app: { hydrate }, terminal: { reconnectBulk } },
+    value: { app: { hydrate }, terminal: { reconnectBulk, getForProject } },
     writable: true,
     configurable: true,
   });
@@ -205,6 +206,62 @@ describe("relaunchTerminalsLostToHostRestart", () => {
       2,
       expect.objectContaining({ requestedId: "t-shell", location: "grid", title: "Terminal" })
     );
+  });
+
+  it("lets a saved pane the host runs again claim its conversation, and launches nothing in it", async () => {
+    hydrate.mockResolvedValueOnce({
+      ...savedState(),
+      appState: {
+        activeWorktreeId: "wt-main",
+        terminals: [
+          { id: "t-agent", kind: "terminal", launchAgentId: "claude", agentSessionId: "s-1" },
+          { id: "t-live", kind: "terminal", launchAgentId: "claude", agentSessionId: "s-1" },
+        ],
+      },
+    });
+    getForProject.mockResolvedValueOnce([
+      {
+        id: "t-live",
+        hasPty: true,
+        launchAgentId: "claude",
+        agentSessionId: "s-1",
+        cwd: "/repo",
+        activityTier: "active",
+      },
+      // Not in the save: nothing for the restore to do with it.
+      { id: "t-unsaved", hasPty: true, cwd: "/repo" },
+    ]);
+    restorePanelsPhase.mockImplementationOnce(async (_saved, ctx) => {
+      await ctx.addPanel({ kind: "terminal", existingId: "t-live", cwd: "/repo" });
+      return { restoreTasks: [], savedIdToRestoredId: new Map(), ghostedWorktreeIds: new Set() };
+    });
+
+    await relaunchTerminalsLostToHostRestart("proj-1", new Map([["t-agent", 0]]), {
+      isCurrent: () => true,
+      drives: () => true,
+    });
+
+    const [saved, ctx] = restorePanelsPhase.mock.calls[0]!;
+    expect(saved.map((entry) => entry.id)).toEqual(["t-agent", "t-live"]);
+    expect([...ctx.backendTerminalMap.keys()]).toEqual(["t-live"]);
+    // The restore sets no tier on a pane it never adds.
+    expect(ctx.backendTerminalMap.get("t-live")?.activityTier).toBeUndefined();
+    expect(addPanel).not.toHaveBeenCalled();
+  });
+
+  it("hands back what it had to leave once the view stopped driving on the way", async () => {
+    restorePanelsPhase.mockImplementationOnce(async (_saved, ctx) => {
+      await ctx.addPanel({ kind: "terminal", requestedId: "t-agent", cwd: "/repo" });
+      return { restoreTasks: [], savedIdToRestoredId: new Map(), ghostedWorktreeIds: new Set() };
+    });
+
+    const left = await relaunchTerminalsLostToHostRestart("proj-1", lost, {
+      isCurrent: () => true,
+      drives: () => false,
+    });
+
+    expect([...left]).toEqual([["t-agent", 2]]);
+    expect(addPanel).not.toHaveBeenCalled();
   });
 
   it("launches nothing once the view no longer drives the project", async () => {

@@ -38,7 +38,7 @@ const {
       _projectId: string,
       _lost: ReadonlyMap<string, number>,
       _options: { isCurrent: () => boolean; drives: () => boolean }
-    ) => undefined
+    ): Promise<ReadonlyMap<string, number>> => new Map()
   ),
   panels: {} as Record<string, unknown>,
 }));
@@ -102,6 +102,7 @@ vi.mock("@/store/slices/panelRegistry/helpers", () => ({
 import {
   _reloadHostConnectionSyncForTesting,
   _resetHostConnectionSyncForTesting,
+  _restartLossesForTesting,
   drivenElsewhereBy,
   resyncFromHost,
   runHostOperation,
@@ -1971,6 +1972,8 @@ describe("host restart", () => {
     hostHasNone(electron);
 
     emitHost({ type: "resync-required", hostId: "studio-01", reason: "host-restarted" });
+    // What it showed were the driver's: there is nothing of its own to bring back.
+    expect(_restartLossesForTesting()).toBeNull();
 
     await vi.waitFor(() => expect(reportLost).toHaveBeenCalledWith("t-agent", expect.any(String)), {
       timeout: 5_000,
@@ -2016,6 +2019,52 @@ describe("host restart", () => {
 
     await vi.waitFor(() => expect(relaunchLost).toHaveBeenCalledTimes(1), { timeout: 5_000 });
     expect([...relaunchLost.mock.calls[0]![1]]).toEqual([["t-agent", 2]]);
+    stop();
+  });
+
+  it("gives the panes up once the host says another screen drives, even while still finding them", async () => {
+    const { electron, emitHost, emitLease, stop } = await drivingView();
+    runningAgent("t-agent");
+    hostHasNone(electron);
+    let answer!: (infos: unknown[]) => void;
+    electron.terminal.getForProject.mockImplementationOnce(
+      () => new Promise<unknown[]>((resolve) => (answer = resolve))
+    );
+
+    emitHost({ type: "resync-required", hostId: "studio-01", reason: "host-restarted" });
+    await vi.waitFor(() => expect(answer).toBeDefined());
+    expect(_restartLossesForTesting()).not.toBeNull();
+    // Another screen drives: the restart's panes are its to bring back.
+    emitLease({ type: "changed", state: leaseView(holder(), false) });
+    expect(_restartLossesForTesting()).toBeNull();
+
+    // Taking the project over afterwards gives them nothing to come back to.
+    emitLease({ type: "changed", state: leaseView(holder({ endpointId: "me" }), true) });
+    answer([]);
+    await vi.waitFor(() => expect(setRuntimeStatus).toHaveBeenCalledWith("t-agent", "exited"), {
+      timeout: 5_000,
+    });
+    for (let i = 0; i < 5; i += 1) await flush();
+    expect(_restartLossesForTesting()).toBeNull();
+    expect(relaunchLost).not.toHaveBeenCalled();
+    stop();
+  });
+
+  it("holds what the relaunch had to leave for the host's next word", async () => {
+    const { electron, emitHost, emitLease, stop } = await drivingView();
+    runningAgent("t-agent");
+    hostHasNone(electron);
+    // The view stopped driving on the way, so the pane was left.
+    relaunchLost.mockResolvedValueOnce(new Map([["t-agent", 2]]));
+
+    emitHost({ type: "resync-required", hostId: "studio-01", reason: "host-restarted" });
+    await vi.waitFor(() => expect(relaunchLost).toHaveBeenCalledTimes(1), { timeout: 5_000 });
+    for (let i = 0; i < 5; i += 1) await flush();
+
+    emitLease({ type: "changed", state: leaseView(null, true) });
+
+    await vi.waitFor(() => expect(relaunchLost).toHaveBeenCalledTimes(2));
+    expect([...relaunchLost.mock.calls[1]![1]]).toEqual([["t-agent", 2]]);
     stop();
   });
 

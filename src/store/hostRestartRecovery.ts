@@ -1,7 +1,7 @@
 import { isGitBackedProject } from "@shared/types";
 import { agentClipboardDirectory } from "@shared/types/agentSettings";
 import type { HydrateResult } from "@shared/types/ipc/app";
-import type { TerminalReconnectResult } from "@shared/types/ipc/terminal";
+import type { BackendTerminalInfo } from "@shared/types/ipc/terminal";
 import { worktreeClient } from "@/clients";
 import { isRemoteWindow } from "@/hooks/useHostPlatform";
 import { getWorktreeSelectionSnapshot } from "@/store/storeAccessors";
@@ -23,37 +23,56 @@ export interface HostRestartRecoveryOptions {
  * place, keeping its spot and its tab, and only while it still shows what the
  * restart left: once it has been restarted or closed, it is the user's.
  *
- * `lost` maps each pane to the restart key it was lost under.
+ * `lost` maps each pane to the restart key it was lost under. Resolves with
+ * those it left for later because this view stopped driving on the way.
  */
 export async function relaunchTerminalsLostToHostRestart(
   projectId: string,
   lost: ReadonlyMap<string, number>,
   options: HostRestartRecoveryOptions
-): Promise<void> {
+): Promise<ReadonlyMap<string, number>> {
+  const deferred = new Map<string, number>();
   const hydrate: HydrateResult = await window.electron.app.hydrate();
-  if (!options.isCurrent()) return;
-  if ((hydrate.workspaceId ?? hydrate.project?.id ?? null) !== projectId) return;
-  const candidates = (hydrate.appState?.terminals ?? []).filter(
+  if (!options.isCurrent()) return deferred;
+  if ((hydrate.workspaceId ?? hydrate.project?.id ?? null) !== projectId) return deferred;
+  const entries = (hydrate.appState?.terminals ?? []).filter(
     (entry) =>
       entry !== undefined &&
       entry !== null &&
       typeof entry.id === "string" &&
       entry.id.trim() !== "" &&
-      lost.has(entry.id) &&
       entry.location !== "trash"
   );
-  if (candidates.length === 0) return;
+  const candidates = entries.filter((entry) => lost.has(entry.id)).slice(0, 256);
+  if (candidates.length === 0) return deferred;
   // Asked again just before launching: one the host runs under that id after
   // all (another screen brought it back meanwhile) must not start twice, and
   // one it can't say about is left alone.
-  const answers: Record<string, TerminalReconnectResult> =
-    await window.electron.terminal.reconnectBulk(candidates.slice(0, 256).map((entry) => entry.id));
-  if (!options.isCurrent()) return;
-  const saved = candidates.filter((entry) => {
-    const answer = answers[entry.id];
-    return answer !== undefined && !answer.exists && !answer.conflict;
-  });
-  if (saved.length === 0) return;
+  const [answers, running] = await Promise.all([
+    window.electron.terminal.reconnectBulk(candidates.map((entry) => entry.id)),
+    window.electron.terminal.getForProject(projectId),
+  ]);
+  if (!options.isCurrent()) return deferred;
+  const gone = new Set(
+    candidates
+      .filter((entry) => {
+        const answer = answers[entry.id];
+        return answer !== undefined && !answer.exists && !answer.conflict;
+      })
+      .map((entry) => entry.id)
+  );
+  if (gone.size === 0) return deferred;
+  // What the host runs again under a saved id takes part in who resumes which
+  // conversation, as it does on a cold launch, and launches nothing: its
+  // reconnect is the resync's. Without its activity tier, the restore has
+  // nothing to set on a pane it never adds.
+  const savedIds = new Set(entries.map((entry) => entry.id));
+  const live = new Map<string, BackendTerminalInfo>();
+  for (const info of running) {
+    if (info.hasPty === false || info.isTrashed || lost.has(info.id)) continue;
+    if (savedIds.has(info.id)) live.set(info.id, { ...info, activityTier: undefined });
+  }
+  const saved = entries.filter((entry) => gone.has(entry.id) || live.has(entry.id));
 
   const [{ restorePanelsPhase }, { usePanelStore }, { useResourceProfileStore }] =
     await Promise.all([
@@ -61,25 +80,32 @@ export async function relaunchTerminalsLostToHostRestart(
       import("@/store/panelStore"),
       import("@/store/resourceProfileStore"),
     ]);
-  if (!options.isCurrent() || !options.drives()) return;
+  if (!options.isCurrent()) return deferred;
 
   const addPanel: PanelRestoreContext["addPanel"] = async (args) => {
     const id = args.requestedId;
-    const restartKey = id === undefined ? undefined : lost.get(id);
+    const restartKey = id === undefined || !gone.has(id) ? undefined : lost.get(id);
     // Only a pane this restart ended, under its own id, is this relaunch's to make.
-    if (id === undefined || restartKey === undefined) return id ?? "";
+    if (id === undefined || restartKey === undefined) return "";
     // Plain and agent terminals, the kinds the resync itself adopts; a pane
     // of any other kind stays as the resync left it.
-    if ((args.kind ?? "terminal") !== "terminal") return id;
-    if (!options.isCurrent() || !options.drives()) return id;
+    if ((args.kind ?? "terminal") !== "terminal") return "";
+    if (!options.isCurrent()) return "";
+    if (!options.drives()) {
+      deferred.set(id, restartKey);
+      return "";
+    }
     // What the view shows now outranks the host's save, which a rename or a
     // move made while the link was down never reached.
-    const live = usePanelStore.getState().panelsById[id];
+    const shownNow = usePanelStore.getState().panelsById[id];
     const shown =
-      live && (live.location === "grid" || live.location === "dock")
+      shownNow && (shownNow.location === "grid" || shownNow.location === "dock")
         ? {
-            location: live.location,
-            ...(live.titleMode === "user" && { title: live.title, titleMode: live.titleMode }),
+            location: shownNow.location,
+            ...(shownNow.titleMode === "user" && {
+              title: shownNow.title,
+              titleMode: shownNow.titleMode,
+            }),
           }
         : {};
     const launched = await usePanelStore.getState().addPanel({
@@ -91,7 +117,7 @@ export async function relaunchTerminalsLostToHostRestart(
       bypassLimits: true,
       focusPolicy: "preserve",
     });
-    return launched ?? id;
+    return launched ?? "";
   };
 
   const project = hydrate.project;
@@ -100,13 +126,13 @@ export async function relaunchTerminalsLostToHostRestart(
 
   logInfo("[HostRestart] Relaunching the terminals a host restart ended", {
     projectId,
-    count: saved.length,
+    count: gone.size,
   });
   await restorePanelsPhase(saved, {
     addPanel,
     withHydrationBatch: (run) => run(),
-    // Nothing the host runs now is appended: this restores only what the restart ended.
-    backendTerminalMap: new Map(),
+    // Only saved ids are here, so the restore appends nothing the host runs as an orphan.
+    backendTerminalMap: live,
     prefetchedReconnectResults: answers,
     terminalSizes: hydrate.terminalSizes ?? {},
     activeWorktreeId:
@@ -127,4 +153,5 @@ export async function relaunchTerminalsLostToHostRestart(
     resourceProfile: useResourceProfileStore.getState().profile,
     logHydrationInfo: (message, context) => logDebug(`[HostRestart] ${message}`, context),
   });
+  return deferred;
 }

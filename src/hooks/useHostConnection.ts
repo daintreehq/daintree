@@ -84,13 +84,15 @@ let resyncProjectStateOwed = false;
 /**
  * The panes a host restart ended, by the restart key each was lost under,
  * held until the host says whether this view drives: it relaunches them, or
- * leaves them to the driver. `gathering` while the resync after the restart
- * is still finding them. Null when no restart is owed that.
+ * leaves them to the driver. `gathering` until the first resync after the
+ * restart has looked: what later ones find gone ended since, not with the
+ * restart. Null when no restart is owed that.
  */
 let restartRecovery: { lost: Map<string, number>; gathering: boolean } | null = null;
 /**
- * Bumped by teardown alone: a relaunch under way outlives the resyncs after
- * it, which only re-read what the host shows, but not the view's sync.
+ * Bumped by teardown and when this view gives a restart's panes up: a
+ * relaunch under way outlives the resyncs after it, which only re-read what
+ * the host shows, but neither of those.
  */
 let restartRecoveryGeneration = 0;
 /**
@@ -124,10 +126,7 @@ export interface ResyncFromHostOptions {
 export function resyncFromHost(options: ResyncFromHostOptions = {}): Promise<void> {
   resyncGeneration += 1;
   if (options.freshSession) resyncProjectStateOwed = true;
-  if (options.hostRestarted) {
-    restartRecovery ??= { lost: new Map(), gathering: true };
-    restartRecovery.gathering = true;
-  }
+  if (options.hostRestarted) armRestartRecovery();
   if (resyncRunning) {
     resyncAgain = true;
     return resyncRunning;
@@ -195,9 +194,9 @@ async function runResyncPass(projectState: boolean): Promise<void> {
     steps.push([
       "terminals a host restart ended",
       async () => {
-        const [read] = await Promise.allSettled([terminals, lease]);
-        // A newer pass, or the next one after a failed read, carries on gathering.
-        if (!isCurrent() || restartRecovery !== recovery || read.status === "rejected") return;
+        await Promise.allSettled([terminals, lease]);
+        // A newer pass gathers in this one's place.
+        if (!isCurrent() || restartRecovery !== recovery) return;
         recovery.gathering = false;
         settleRestartRecovery();
       },
@@ -213,20 +212,34 @@ async function runResyncPass(projectState: boolean): Promise<void> {
 }
 
 /**
+ * The host restarted under this view. One that watched the project then has
+ * nothing of its own to bring back: what it showed were the driver's.
+ */
+function armRestartRecovery(): void {
+  const projectId = getViewWorkspaceId();
+  const before = leaseBeforeGap ?? getDriveLeaseSnapshot();
+  if (projectId && before?.projectId === projectId && !before.drivingHere) return;
+  restartRecovery ??= { lost: new Map(), gathering: true };
+  restartRecovery.gathering = true;
+}
+
+/**
  * Settle what a host restart ended once the host has said who drives: a view
  * that drives, over the state it drove before, brings those panes back the
- * way a cold launch does; one that watches leaves them to the driver, now and
- * after any later takeover. While the answer is still owed (lost on its way,
- * or a read-back of the host's state under way) they wait for it.
+ * way a cold launch does; one that watches gives them up to the driver at
+ * once, for good, whatever it is still finding or relaunching. While the
+ * answer is still owed (lost on its way, or a read-back of the host's state
+ * under way) they wait for it.
  */
 function settleRestartRecovery(): void {
   const recovery = restartRecovery;
   const projectId = getViewWorkspaceId();
-  if (!recovery || recovery.gathering || !projectId) return;
+  if (!recovery || !projectId) return;
   const lease = getDriveLeaseSnapshot();
   if (lease?.projectId !== projectId || leaseBeforeGap !== undefined) return;
   if (!lease.drivingHere) {
     restartRecovery = null;
+    restartRecoveryGeneration += 1;
     if (recovery.lost.size > 0) {
       logInfo("[HostConnection] Left the terminals a host restart ended to the project's driver", {
         projectId,
@@ -235,7 +248,7 @@ function settleRestartRecovery(): void {
     }
     return;
   }
-  if (readBackOwed) return;
+  if (recovery.gathering || readBackOwed) return;
   restartRecovery = null;
   if (recovery.lost.size === 0) return;
   const generation = restartRecoveryGeneration;
@@ -243,22 +256,24 @@ function settleRestartRecovery(): void {
     generation === restartRecoveryGeneration && getViewWorkspaceId() === projectId;
   safeFireAndForget(
     (async () => {
+      // All of them, should the relaunch not get as far as saying.
+      let left: ReadonlyMap<string, number> = recovery.lost;
       try {
         const { relaunchTerminalsLostToHostRestart } = await import("@/store/hostRestartRecovery");
-        await relaunchTerminalsLostToHostRestart(projectId, recovery.lost, {
+        left = await relaunchTerminalsLostToHostRestart(projectId, recovery.lost, {
           isCurrent,
           drives: () => drivesSinceGap(projectId),
         });
-      } catch (error) {
-        // Cut short, most likely by the link: the host's next word tries again.
-        // A pane relaunched meanwhile no longer shows its loss and is skipped.
-        if (isCurrent()) {
+      } finally {
+        // Cut short by the link, or this view stopped driving on the way: the
+        // host's next word settles what is left. One relaunched meanwhile no
+        // longer shows its loss and is skipped then.
+        if (left.size > 0 && isCurrent()) {
           const pending = (restartRecovery ??= { lost: new Map(), gathering: false });
-          for (const [id, restartKey] of recovery.lost) {
+          for (const [id, restartKey] of left) {
             if (!pending.lost.has(id)) pending.lost.set(id, restartKey);
           }
         }
-        throw error;
       }
     })(),
     { context: "Relaunching the terminals a host restart ended" }
@@ -1333,6 +1348,11 @@ export function _reloadHostConnectionSyncForTesting(): void {
   readBacksStarted = 0;
   cancelLeaseRecheck();
   Object.assign(openClaim, { projectId: null, done: false, inFlight: false, owed: false });
+}
+
+/** The panes a host restart ended that this view still holds to relaunch, or null. */
+export function _restartLossesForTesting(): ReadonlyMap<string, number> | null {
+  return restartRecovery?.lost ?? null;
 }
 
 export function _resetHostConnectionSyncForTesting(): void {
