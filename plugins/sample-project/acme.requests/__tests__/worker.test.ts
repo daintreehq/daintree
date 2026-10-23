@@ -113,6 +113,33 @@ describe("Request Desk worker", () => {
     expect(listed.requests.filter((r) => r.id === "onboarding")).toHaveLength(1);
   });
 
+  it("makes one request when two retries with the same id arrive together", async () => {
+    const { callTool } = await start();
+    const args = { title: "Archive old invoices", id: "archive" };
+    const [a, b] = await Promise.all([
+      callTool<{ request: RequestRecord }>("add_request", args),
+      callTool<{ request: RequestRecord }>("add_request", args),
+    ]);
+    expect(a.request).toEqual(b.request);
+    const listed = await callTool<{ requests: RequestRecord[] }>("list_requests", {});
+    expect(listed.requests.filter((r) => r.id === "archive")).toHaveLength(1);
+  });
+
+  it("pages past the first page instead of hiding older requests", async () => {
+    const { callTool } = await start();
+    const first = await callTool<{ requests: RequestRecord[] }>("list_requests", { limit: 2 });
+    const rest = await callTool<{ requests: RequestRecord[] }>("list_requests", {
+      limit: 2,
+      offset: 2,
+    });
+    expect(first.requests).toHaveLength(2);
+    expect([...first.requests, ...rest.requests].map((r) => r.id).sort()).toEqual([
+      "demo-1",
+      "demo-2",
+      "demo-3",
+    ]);
+  });
+
   it("refuses an update from a stale revision and hands back the current request", async () => {
     const { callTool } = await start();
     const moved = await callTool<{ ok: boolean; request: RequestRecord }>("update_request", {

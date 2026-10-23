@@ -33,8 +33,6 @@ interface JobRow {
   report_id: string | null;
 }
 
-const REPORT_REQUEST_LIMIT = 500;
-
 /**
  * A stand-in for a remote report API, shaped like a real one: it accepts a
  * job, answers polls until the job is done, can be asked whether it already
@@ -105,23 +103,25 @@ export function syntheticReportKind(
             progress: { fraction: Math.min(0.95, (at - job.submitted_at) / span) },
           };
         }
-        const requests = await store.snapshot(REPORT_REQUEST_LIMIT);
-        const reportId = `report-${job.provider_id.slice(4, 12)}`;
+        // Counted in SQL over every request, however many there are.
+        const counts = await store.counts();
+        const requestCount = Object.values(counts).reduce((sum, n) => sum + n, 0);
+        const reportId = `report-${job.provider_id.slice("job-".length)}`;
         const path = await deps.writeReport(
           reportId,
-          renderReportSvg(requests, new Date(job.ready_at).toISOString())
+          renderReportSvg(counts, new Date(job.ready_at).toISOString())
         );
         await store.db.transaction(async (tx) => {
           await tx.run(
             "INSERT OR REPLACE INTO reports (id, path, request_count, created_at) VALUES (?, ?, ?, ?)",
-            [reportId, path, requests.length, new Date(at).toISOString()]
+            [reportId, path, requestCount, new Date(at).toISOString()]
           );
           await tx.run("UPDATE provider_jobs SET report_id = ? WHERE provider_id = ?", [
             reportId,
             providerId,
           ]);
         });
-        return { status: "succeeded", result: { reportId, requestCount: requests.length } };
+        return { status: "succeeded", result: { reportId, requestCount } };
       },
 
       async reconcile(_input, { idempotencyKey }) {

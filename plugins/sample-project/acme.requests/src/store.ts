@@ -11,7 +11,8 @@ import {
 
 export const DATABASE_ID = "requests";
 
-const MAX_PAGE = 100;
+export const MAX_PAGE = 100;
+const MAX_OFFSET = 100_000;
 
 /**
  * Append only: the host runs migration n when the file's `user_version` is n,
@@ -103,11 +104,17 @@ function cleanNotes(value: unknown): string {
 }
 
 export interface RequestStore {
-  list(filter?: { status?: RequestStatus; limit?: number }): Promise<RequestRecord[]>;
+  /** Most recently changed first, a page at a time. */
+  list(filter?: {
+    status?: RequestStatus;
+    limit?: number;
+    offset?: number;
+  }): Promise<RequestRecord[]>;
   get(id: string): Promise<RequestRecord | null>;
   add(input: { title: unknown; notes?: unknown; id?: string }): Promise<RequestRecord>;
   update(args: UpdateRequestArgs): Promise<UpdateRequestResult>;
-  snapshot(limit: number): Promise<RequestRecord[]>;
+  /** How many requests are in each status, across the whole table. */
+  counts(): Promise<Record<RequestStatus, number>>;
   readonly db: PluginDatabase;
 }
 
@@ -149,14 +156,16 @@ export function createStore(db: PluginDatabase, now: () => Date = () => new Date
     db,
     get,
     async list(filter = {}) {
-      const limit = Math.min(Math.max(1, Math.trunc(filter.limit ?? 50)), MAX_PAGE);
+      const limit = Math.min(Math.max(1, Math.trunc(filter.limit ?? MAX_PAGE)), MAX_PAGE);
+      const offset = Math.min(Math.max(0, Math.trunc(filter.offset ?? 0)), MAX_OFFSET);
       const rows = (filter.status
         ? await db.query(
-            "SELECT * FROM requests WHERE status = ? ORDER BY updated_at DESC, id LIMIT ?",
-            [filter.status, limit]
+            "SELECT * FROM requests WHERE status = ? ORDER BY updated_at DESC, id LIMIT ? OFFSET ?",
+            [filter.status, limit, offset]
           )
-        : await db.query("SELECT * FROM requests ORDER BY updated_at DESC, id LIMIT ?", [
+        : await db.query("SELECT * FROM requests ORDER BY updated_at DESC, id LIMIT ? OFFSET ?", [
             limit,
+            offset,
           ])) as unknown as RequestRow[];
       return rows.map(toRecord);
     },
@@ -166,11 +175,11 @@ export function createStore(db: PluginDatabase, now: () => Date = () => new Date
       const id = input.id ?? `req-${crypto.randomUUID().slice(0, 8)}`;
       const at = stamp();
       // An agent that retries a timed-out call with the same id gets the row it
-      // already made instead of a duplicate.
-      const existing = await get(id);
-      if (existing) return existing;
+      // already made instead of a duplicate. One statement, so two retries in
+      // flight at once can't both decide the row is missing.
       await db.run(
-        "INSERT INTO requests (id, title, notes, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+        `INSERT INTO requests (id, title, notes, created_at, updated_at) VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT (id) DO NOTHING`,
         [id, title, notes, at, at]
       );
       return (await get(id))!;
@@ -196,12 +205,16 @@ export function createStore(db: PluginDatabase, now: () => Date = () => new Date
       if (changes === 0) return { ok: false, reason: "conflict", current: after };
       return { ok: true, request: after };
     },
-    async snapshot(limit) {
+    async counts() {
       const rows = (await db.query(
-        "SELECT * FROM requests ORDER BY status, updated_at DESC, id LIMIT ?",
-        [limit]
-      )) as unknown as RequestRow[];
-      return rows.map(toRecord);
+        "SELECT status, count(*) AS n FROM requests GROUP BY status"
+      )) as unknown as Array<{ status: string; n: number }>;
+      const counts = Object.fromEntries(REQUEST_STATUSES.map((status) => [status, 0])) as Record<
+        RequestStatus,
+        number
+      >;
+      for (const row of rows) if (isRequestStatus(row.status)) counts[row.status] = row.n;
+      return counts;
     },
   };
 }

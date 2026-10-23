@@ -832,15 +832,16 @@ function escapeXml(text) {
 	return text.replace(/[<>&"']/g, (ch) => `&#${ch.charCodeAt(0)};`);
 }
 /**
-* The report the synthetic provider "builds": a small SVG summary of the
-* requests it was given. Deterministic, so a reconciled job that rebuilds it
-* writes the same bytes.
+* The report the synthetic provider "builds": a small SVG summary of how many
+* requests are in each status. Deterministic, so a reconciled job that
+* rebuilds it writes the same bytes.
 */
-function renderReportSvg(requests, generatedAt) {
+function renderReportSvg(byStatus, generatedAt) {
 	const counts = REQUEST_STATUSES.map((status) => ({
 		status,
-		count: requests.filter((request) => request.status === status).length
+		count: byStatus[status]
 	}));
+	const total = counts.reduce((sum, entry) => sum + entry.count, 0);
 	const max = Math.max(1, ...counts.map((entry) => entry.count));
 	const bars = counts.map((entry, index) => {
 		const y = 56 + index * 36;
@@ -852,12 +853,11 @@ function renderReportSvg(requests, generatedAt) {
 	return `<svg xmlns="http://www.w3.org/2000/svg" width="400" height="190" viewBox="0 0 400 190" font-family="system-ui, sans-serif" fill="#1f2328">
   <rect width="400" height="190" fill="#ffffff" />
   <text x="16" y="30" font-size="16" font-weight="600">Request Desk report</text>
-  <text x="16" y="46" font-size="11" fill="#57606a">${escapeXml(`${requests.length} requests · ${generatedAt}`)}</text>
+  <text x="16" y="46" font-size="11" fill="#57606a">${escapeXml(`${total} requests · ${generatedAt}`)}</text>
   ${bars}
 </svg>
 `;
 }
-var REPORT_REQUEST_LIMIT = 500;
 /**
 * A stand-in for a remote report API, shaped like a real one: it accepts a
 * job, answers polls until the job is done, can be asked whether it already
@@ -917,14 +917,15 @@ function syntheticReportKind(deps) {
 						progress: { fraction: Math.min(.95, (at - job.submitted_at) / span) }
 					};
 				}
-				const requests = await store.snapshot(REPORT_REQUEST_LIMIT);
-				const reportId = `report-${job.provider_id.slice(4, 12)}`;
-				const path = await deps.writeReport(reportId, renderReportSvg(requests, new Date(job.ready_at).toISOString()));
+				const counts = await store.counts();
+				const requestCount = Object.values(counts).reduce((sum, n) => sum + n, 0);
+				const reportId = `report-${job.provider_id.slice(4)}`;
+				const path = await deps.writeReport(reportId, renderReportSvg(counts, new Date(job.ready_at).toISOString()));
 				await store.db.transaction(async (tx) => {
 					await tx.run("INSERT OR REPLACE INTO reports (id, path, request_count, created_at) VALUES (?, ?, ?, ?)", [
 						reportId,
 						path,
-						requests.length,
+						requestCount,
 						new Date(at).toISOString()
 					]);
 					await tx.run("UPDATE provider_jobs SET report_id = ? WHERE provider_id = ?", [reportId, providerId]);
@@ -933,7 +934,7 @@ function syntheticReportKind(deps) {
 					status: "succeeded",
 					result: {
 						reportId,
-						requestCount: requests.length
+						requestCount
 					}
 				};
 			},
@@ -952,7 +953,7 @@ function syntheticReportKind(deps) {
 	};
 }
 var DATABASE_ID = "requests";
-var MAX_PAGE = 100;
+var MAX_OFFSET = 1e5;
 /**
 * Append only: the host runs migration n when the file's `user_version` is n,
 * and `plugin.json` declares `schemaVersion` as this list's length. The demo
@@ -1044,17 +1045,21 @@ function createStore(db, now = () => /* @__PURE__ */ new Date()) {
 		db,
 		get,
 		async list(filter = {}) {
-			const limit = Math.min(Math.max(1, Math.trunc(filter.limit ?? 50)), MAX_PAGE);
-			return (filter.status ? await db.query("SELECT * FROM requests WHERE status = ? ORDER BY updated_at DESC, id LIMIT ?", [filter.status, limit]) : await db.query("SELECT * FROM requests ORDER BY updated_at DESC, id LIMIT ?", [limit])).map(toRecord);
+			const limit = Math.min(Math.max(1, Math.trunc(filter.limit ?? 100)), 100);
+			const offset = Math.min(Math.max(0, Math.trunc(filter.offset ?? 0)), MAX_OFFSET);
+			return (filter.status ? await db.query("SELECT * FROM requests WHERE status = ? ORDER BY updated_at DESC, id LIMIT ? OFFSET ?", [
+				filter.status,
+				limit,
+				offset
+			]) : await db.query("SELECT * FROM requests ORDER BY updated_at DESC, id LIMIT ? OFFSET ?", [limit, offset])).map(toRecord);
 		},
 		async add(input) {
 			const title = cleanTitle(input.title);
 			const notes = cleanNotes(input.notes);
 			const id = input.id ?? `req-${crypto.randomUUID().slice(0, 8)}`;
 			const at = stamp();
-			const existing = await get(id);
-			if (existing) return existing;
-			await db.run("INSERT INTO requests (id, title, notes, created_at, updated_at) VALUES (?, ?, ?, ?, ?)", [
+			await db.run(`INSERT INTO requests (id, title, notes, created_at, updated_at) VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT (id) DO NOTHING`, [
 				id,
 				title,
 				notes,
@@ -1101,8 +1106,11 @@ function createStore(db, now = () => /* @__PURE__ */ new Date()) {
 				request: after
 			};
 		},
-		async snapshot(limit) {
-			return (await db.query("SELECT * FROM requests ORDER BY status, updated_at DESC, id LIMIT ?", [limit])).map(toRecord);
+		async counts() {
+			const rows = await db.query("SELECT status, count(*) AS n FROM requests GROUP BY status");
+			const counts = Object.fromEntries(REQUEST_STATUSES.map((status) => [status, 0]));
+			for (const row of rows) if (isRequestStatus(row.status)) counts[row.status] = row.n;
+			return counts;
 		}
 	};
 }
@@ -1253,7 +1261,7 @@ async function activate(host) {
 	disposers.push(await host.settings.onDidChange(WORKSPACE_SETTING, () => push(EVENTS.connectionChanged)));
 	const tools = {
 		list_requests: {
-			description: "List this project's Request Desk requests, most recently changed first. Each has an id, title, status, notes and a revision to pass to update_request.",
+			description: "List this project's Request Desk requests, most recently changed first, up to 100 at a time (pass offset for the next page). Each has an id, title, status, notes and a revision to pass to update_request.",
 			inputSchema: {
 				type: "object",
 				properties: {
@@ -1265,6 +1273,11 @@ async function activate(host) {
 						type: "integer",
 						minimum: 1,
 						maximum: 100
+					},
+					offset: {
+						type: "integer",
+						minimum: 0,
+						maximum: 1e5
 					}
 				},
 				additionalProperties: false
@@ -1272,9 +1285,11 @@ async function activate(host) {
 			async execute(args) {
 				const status = isRequestStatus(args.status) ? args.status : void 0;
 				const limit = typeof args.limit === "number" ? args.limit : void 0;
+				const offset = typeof args.offset === "number" ? args.offset : void 0;
 				return { requests: await (await openStore()).list({
 					status,
-					limit
+					limit,
+					offset
 				}) };
 			}
 		},

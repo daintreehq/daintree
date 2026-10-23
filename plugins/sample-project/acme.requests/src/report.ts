@@ -1,4 +1,4 @@
-import { REQUEST_STATUSES, type RequestRecord } from "./contracts";
+import { REQUEST_STATUSES, type RequestStatus } from "./contracts";
 
 const STATUS_LABELS: Record<(typeof REQUEST_STATUSES)[number], string> = {
   open: "Open",
@@ -11,15 +11,16 @@ function escapeXml(text: string): string {
 }
 
 /**
- * The report the synthetic provider "builds": a small SVG summary of the
- * requests it was given. Deterministic, so a reconciled job that rebuilds it
- * writes the same bytes.
+ * The report the synthetic provider "builds": a small SVG summary of how many
+ * requests are in each status. Deterministic, so a reconciled job that
+ * rebuilds it writes the same bytes.
  */
-export function renderReportSvg(requests: readonly RequestRecord[], generatedAt: string): string {
-  const counts = REQUEST_STATUSES.map((status) => ({
-    status,
-    count: requests.filter((request) => request.status === status).length,
-  }));
+export function renderReportSvg(
+  byStatus: Readonly<Record<RequestStatus, number>>,
+  generatedAt: string
+): string {
+  const counts = REQUEST_STATUSES.map((status) => ({ status, count: byStatus[status] }));
+  const total = counts.reduce((sum, entry) => sum + entry.count, 0);
   const max = Math.max(1, ...counts.map((entry) => entry.count));
   const bars = counts
     .map((entry, index) => {
@@ -33,7 +34,7 @@ export function renderReportSvg(requests: readonly RequestRecord[], generatedAt:
   return `<svg xmlns="http://www.w3.org/2000/svg" width="400" height="190" viewBox="0 0 400 190" font-family="system-ui, sans-serif" fill="#1f2328">
   <rect width="400" height="190" fill="#ffffff" />
   <text x="16" y="30" font-size="16" font-weight="600">Request Desk report</text>
-  <text x="16" y="46" font-size="11" fill="#57606a">${escapeXml(`${requests.length} requests · ${generatedAt}`)}</text>
+  <text x="16" y="46" font-size="11" fill="#57606a">${escapeXml(`${total} requests · ${generatedAt}`)}</text>
   ${bars}
 </svg>
 `;

@@ -27,7 +27,15 @@ const REFERENCE_MCP_NAME = "requests";
  * the directory stay behind.
  */
 const REFERENCE_APP_DIRS = ["src", "dist", "review", "__tests__", "skills", "tours", "icons"];
+/**
+ * npm never packs a file named `.gitignore`, so the CLI build stages it under
+ * this name and a scaffold writes it back. Losing it would lose the rule that
+ * keeps `dist/` tracked in a repository that ignores `dist/` at its root.
+ */
+const STAGED_GITIGNORE = "_gitignore";
+
 const REFERENCE_APP_FILES = [
+  STAGED_GITIGNORE,
   "plugin.json",
   "package.json",
   "tsconfig.json",
@@ -91,8 +99,14 @@ export async function listReferenceAppFiles(root: string): Promise<string[]> {
       .catch(() => false);
     if (present) files.push(...(await walk(root, dir)));
   }
-  if (!files.includes("plugin.json") || !files.some((file) => file.startsWith("dist/"))) {
-    throw new Error(`The reference application in ${root} has no plugin.json or no dist/`);
+  if (
+    !files.includes("plugin.json") ||
+    !files.some((file) => file.startsWith("dist/")) ||
+    !(files.includes(".gitignore") || files.includes(STAGED_GITIGNORE))
+  ) {
+    throw new Error(
+      `The reference application in ${root} is missing plugin.json, dist/ or its .gitignore`
+    );
   }
   return files.sort();
 }
@@ -104,7 +118,7 @@ export async function listReferenceAppFiles(root: string): Promise<string[]> {
 export async function stageReferenceApp(from: string, to: string): Promise<void> {
   await fs.rm(to, { recursive: true, force: true });
   for (const rel of await listReferenceAppFiles(from)) {
-    const target = path.join(to, rel);
+    const target = path.join(to, rel === ".gitignore" ? STAGED_GITIGNORE : rel);
     await fs.mkdir(path.dirname(target), { recursive: true });
     await fs.copyFile(path.join(from, rel), target);
   }
@@ -170,20 +184,29 @@ export async function loadReferenceAppFiles(
 ): Promise<Record<string, string | Uint8Array>> {
   const from = root ?? (await referenceAppRoot());
   const mcpName = referenceMcpName(ctx.pluginName);
+  // One pass over the original text, so a new name that happens to contain
+  // the other token (a publisher named `daintree-requests`) is never rewritten.
+  const renames: Record<string, string> = {
+    [REFERENCE_APP_NAME]: ctx.scopedName,
+    [`daintree-${REFERENCE_MCP_NAME}`]: `daintree-${mcpName}`,
+  };
+  const pattern = new RegExp(
+    Object.keys(renames)
+      .map((token) => token.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+      .join("|"),
+    "g"
+  );
   const out: Record<string, string | Uint8Array> = {};
   for (const rel of await listReferenceAppFiles(from)) {
     const bytes = await fs.readFile(path.join(from, rel));
-    if (rel === "plugin.json") {
+    if (rel === STAGED_GITIGNORE) {
+      out[".gitignore"] = new Uint8Array(bytes);
+    } else if (rel === "plugin.json") {
       out[rel] = customizeManifest(bytes.toString("utf8"), ctx);
     } else if (rel === "package.json") {
       out[rel] = customizePackageJson(bytes.toString("utf8"), ctx);
     } else if (!rel.startsWith("dist/") && RENAMED_TEXT.test(rel)) {
-      out[rel] = bytes
-        .toString("utf8")
-        .split(REFERENCE_APP_NAME)
-        .join(ctx.scopedName)
-        .split(`daintree-${REFERENCE_MCP_NAME}`)
-        .join(`daintree-${mcpName}`);
+      out[rel] = bytes.toString("utf8").replace(pattern, (token) => renames[token]!);
     } else {
       out[rel] = new Uint8Array(bytes);
     }

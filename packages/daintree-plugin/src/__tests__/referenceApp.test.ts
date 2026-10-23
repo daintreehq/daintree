@@ -6,6 +6,7 @@ import { runNew, scaffoldPlugin } from "../commands/new.js";
 import { runValidate } from "../commands/validate.js";
 import {
   listReferenceAppFiles,
+  loadReferenceAppFiles,
   referenceAppRoot,
   referenceMcpName,
   REFERENCE_APP_NAME,
@@ -97,6 +98,21 @@ describe("the app template", () => {
     }
     const agents = await fs.readFile(path.join(result.dir, "AGENTS.md"), "utf8");
     expect(agents).toContain(".daintree/data/shop.orders/");
+    const skill = await fs.readFile(path.join(result.dir, "skills/request-desk.md"), "utf8");
+    expect(skill).toContain("daintree-orders");
+  });
+
+  it("renames each token once, even when the new name contains the other one", async () => {
+    const result = await scaffoldPlugin({
+      cwd: tmpDir,
+      targetDir: "orders",
+      publisher: "daintree-requests",
+      displayName: "Order Desk",
+      template: "app",
+      projectRoot,
+    });
+    const agents = await fs.readFile(path.join(result.dir, "AGENTS.md"), "utf8");
+    expect(agents).toContain(".daintree/data/daintree-requests.orders/");
     const skill = await fs.readFile(path.join(result.dir, "skills/request-desk.md"), "utf8");
     expect(skill).toContain("daintree-orders");
   });
@@ -197,6 +213,7 @@ describe("stageReferenceApp", () => {
   it("stages only what a scaffold receives", async () => {
     const from = path.join(tmpDir, "ref");
     const files: Record<string, string> = {
+      ".gitignore": "!dist/\n",
       "plugin.json": "{}",
       "dist/index.js": "export {}",
       "src/index.ts": "export {}",
@@ -211,10 +228,30 @@ describe("stageReferenceApp", () => {
     }
     const to = path.join(tmpDir, "staged");
     await stageReferenceApp(from, to);
+    // `.gitignore` under a name npm will pack.
     expect(await listReferenceAppFiles(to)).toEqual([
+      "_gitignore",
       "dist/index.js",
       "plugin.json",
       "src/index.ts",
     ]);
+  });
+
+  it("restores the .gitignore a published CLI had to stage under another name", async () => {
+    const staged = path.join(tmpDir, "staged");
+    await stageReferenceApp(await referenceAppRoot(), staged);
+    const files = await loadReferenceAppFiles(
+      {
+        scopedName: "shop.orders",
+        publisher: "shop",
+        pluginName: "orders",
+        displayName: "Order Desk",
+        template: "app",
+        projectLocal: true,
+      },
+      staged
+    );
+    expect(Object.keys(files)).not.toContain("_gitignore");
+    expect(new TextDecoder().decode(files[".gitignore"] as Uint8Array)).toContain("!dist/");
   });
 });

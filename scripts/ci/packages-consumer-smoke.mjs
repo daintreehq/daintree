@@ -373,6 +373,12 @@ function checkAppScaffold(root, consumer, tarballs) {
   const plugin = path.join(project, ".daintree", "plugins", "smoke.orders");
   const shipped = readTree(path.join(plugin, "dist"));
   if (!shipped.has("index.js")) throw new Error("the app scaffold shipped no built dist/index.js");
+  // npm drops `.gitignore` from a package; the scaffold must still write it,
+  // or a repository that ignores dist/ silently loses the app's build.
+  const gitignore = path.join(plugin, ".gitignore");
+  if (!fs.existsSync(gitignore) || !fs.readFileSync(gitignore, "utf8").includes("!dist/")) {
+    throw new Error("the app scaffold wrote no .gitignore keeping dist/ tracked");
+  }
   // Before any install: this is what a teammate who opens the project gets.
   run(path.join(consumer, "node_modules/.bin/daintree-plugin"), ["validate"], plugin);
 
@@ -389,6 +395,12 @@ function checkAppScaffold(root, consumer, tarballs) {
     }
     pkg.devDependencies[name] = `file:${file}`;
   }
+  // The committed build came from this repository's locked Vite (and the
+  // Rolldown it pins). A byte-for-byte rebuild is only meaningful on that same
+  // toolchain, so pin it; a newer Vite the range allows may chunk differently.
+  pkg.devDependencies.vite = JSON.parse(
+    fs.readFileSync(path.join(repoRoot, "node_modules/vite/package.json"), "utf8")
+  ).version;
   fs.writeFileSync(pkgFile, JSON.stringify(pkg, null, 2) + "\n");
 
   run("npm", ["install", "--no-audit", "--no-fund"], plugin);

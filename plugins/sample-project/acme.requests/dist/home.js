@@ -67,11 +67,15 @@ function Home(props) {
 	const setDraft = (next) => {
 		setDraftState(next);
 		persistState?.(encodeDraft(next));
-		if (next === null) setBlocked(false);
+		if (next === null) {
+			setBlocked(false);
+			setHasUnsavedChanges?.(false);
+		}
 	};
-	const select = (id) => {
+	const editingId = draft?.requestId ?? selectedId;
+	const select = (id, { dropped = false } = {}) => {
 		if (!navigation) {
-			if (draft && draft.requestId !== id) {
+			if (!dropped && draft && draft.requestId !== id) {
 				setBlocked(true);
 				return;
 			}
@@ -133,18 +137,26 @@ function Home(props) {
 						children: "Add"
 					})]
 				}),
-				/* @__PURE__ */ jsx("div", {
+				/* @__PURE__ */ jsxs("div", {
 					className: "min-h-0 flex-1 overflow-y-auto",
-					children: requests.data.length === 0 ? /* @__PURE__ */ jsx(EmptyState, {
+					children: [requests.data.length >= 100 ? /* @__PURE__ */ jsxs(Text, {
+						tone: "muted",
+						size: "xs",
+						children: [
+							"The ",
+							100,
+							" most recently changed. Ask an agent for older ones."
+						]
+					}) : null, requests.data.length === 0 ? /* @__PURE__ */ jsx(EmptyState, {
 						scale: "sidebar",
 						title: "No requests yet",
 						description: "Add one here, or ask an agent to."
 					}) : requests.data.map((request) => /* @__PURE__ */ jsx(ListRow, {
 						title: request.title,
 						meta: /* @__PURE__ */ jsx(StatusBadge, { status: request.status }),
-						selected: request.id === selectedId,
+						selected: request.id === editingId,
 						onSelect: () => select(request.id)
-					}, request.id))
+					}, request.id))]
 				})
 			]
 		}), /* @__PURE__ */ jsxs("main", {
@@ -162,26 +174,20 @@ function Home(props) {
 				draft && draft.requestId !== selectedId ? /* @__PURE__ */ jsxs(Callout, {
 					severity: "info",
 					title: "You have an unsaved edit",
-					action: /* @__PURE__ */ jsx(Button, {
-						size: "xs",
-						variant: "outline",
-						onClick: () => setDraft(null),
-						children: "Discard"
-					}),
 					children: [
-						"“",
+						"Finish or discard your edit to “",
 						draft.title,
-						"” was being edited when Request Desk last closed."
+						"” below, then the request you picked opens."
 					]
 				}) : null,
-				selectedId ? /* @__PURE__ */ jsx(RequestDetail, {
+				editingId ? /* @__PURE__ */ jsx(RequestDetail, {
 					pluginId,
-					requestId: selectedId,
-					draft: draft?.requestId === selectedId ? draft : null,
+					requestId: editingId,
+					draft,
 					onDraft: setDraft,
-					onGone: () => select(null)
+					onGone: () => select(null, { dropped: true })
 				}) : null,
-				showReports || !selectedId ? /* @__PURE__ */ jsx(Reports, { pluginId }) : null
+				showReports || !editingId ? /* @__PURE__ */ jsx(Reports, { pluginId }) : null
 			]
 		})]
 	});
@@ -268,7 +274,8 @@ function RequestDetail(props) {
 			/* @__PURE__ */ jsx(Input, {
 				value: shown.title,
 				onValueChange: (title) => edit({ title }),
-				"aria-label": "Title"
+				"aria-label": "Title",
+				disabled: saving
 			}),
 			/* @__PURE__ */ jsx(Select, {
 				"aria-label": "Status",
@@ -277,14 +284,16 @@ function RequestDetail(props) {
 					value: status,
 					label: STATUS_LABELS[status]
 				})),
-				onValueChange: (status) => edit({ status })
+				onValueChange: (status) => edit({ status }),
+				disabled: saving
 			}),
 			/* @__PURE__ */ jsx(Textarea, {
 				value: shown.notes,
 				onValueChange: (notes) => edit({ notes }),
 				rows: 5,
 				"aria-label": "Notes",
-				placeholder: "Notes"
+				placeholder: "Notes",
+				disabled: saving
 			}),
 			error ? /* @__PURE__ */ jsx(Text, {
 				tone: "danger",
@@ -299,7 +308,7 @@ function RequestDetail(props) {
 					children: "Save"
 				}), /* @__PURE__ */ jsx(Button, {
 					variant: "ghost",
-					disabled: !draft,
+					disabled: !draft || saving,
 					onClick: () => onDraft(null),
 					children: "Discard"
 				})]
@@ -398,7 +407,7 @@ function ReportRow({ pluginId, report }) {
 * the view never holds a path, a URL or the bytes.
 */
 function ReportPreview({ pluginId, reportId }) {
-	const artifact = useCachedHostChannel(pluginId, CHANNELS.reportArtifact, { reportId });
+	const artifact = useCachedHostChannel(pluginId, CHANNELS.reportArtifact, { reportId }, { invalidateOn: EVENTS.reportsChanged });
 	if (!artifact.data) return null;
 	return /* @__PURE__ */ jsx(MediaThumbnail, {
 		source: artifact.data,

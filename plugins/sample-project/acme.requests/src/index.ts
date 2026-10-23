@@ -198,19 +198,21 @@ export async function activate(host: PluginHostApi): Promise<() => void> {
   const tools: Record<string, PluginMcpToolDefinition> = {
     list_requests: {
       description:
-        "List this project's Request Desk requests, most recently changed first. Each has an id, title, status, notes and a revision to pass to update_request.",
+        "List this project's Request Desk requests, most recently changed first, up to 100 at a time (pass offset for the next page). Each has an id, title, status, notes and a revision to pass to update_request.",
       inputSchema: {
         type: "object",
         properties: {
           status: { type: "string", enum: [...REQUEST_STATUSES] },
           limit: { type: "integer", minimum: 1, maximum: 100 },
+          offset: { type: "integer", minimum: 0, maximum: 100000 },
         },
         additionalProperties: false,
       },
       async execute(args) {
         const status = isRequestStatus(args.status) ? args.status : undefined;
         const limit = typeof args.limit === "number" ? args.limit : undefined;
-        return { requests: await (await openStore()).list({ status, limit }) };
+        const offset = typeof args.offset === "number" ? args.offset : undefined;
+        return { requests: await (await openStore()).list({ status, limit, offset }) };
       },
     },
     add_request: {

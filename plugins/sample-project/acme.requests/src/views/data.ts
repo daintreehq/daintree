@@ -7,6 +7,9 @@ import {
   type RequestRecord,
 } from "../contracts";
 
+/** The list channel's page: the worker answers with at most this many, newest first. */
+export const MAX_LISTED = 100;
+
 /**
  * Reads the views share. Each is cached across mounts and refetched only when
  * the worker pushes the matching event, so switching between Home, the

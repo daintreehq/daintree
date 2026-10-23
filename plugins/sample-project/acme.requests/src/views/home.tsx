@@ -23,7 +23,7 @@ import {
   type RequestStatus,
   type UpdateRequestResult,
 } from "../contracts";
-import { call, useConnection, useReports, useRequests } from "./data";
+import { call, MAX_LISTED, useConnection, useReports, useRequests } from "./data";
 import { StatusBadge, STATUS_LABELS } from "./status";
 import { draftFrom, draftStanding, encodeDraft, readDraft, type RequestDraft } from "./draft";
 
@@ -61,12 +61,22 @@ export default function Home(props: PanelViewProps): ReactElement {
   const setDraft = (next: RequestDraft | null) => {
     setDraftState(next);
     persistState?.(encodeDraft(next));
-    if (next === null) setBlocked(false);
+    if (next === null) {
+      setBlocked(false);
+      // At once, not only from the effect: a navigation in the same click
+      // (Back to requests) would otherwise still be refused as unsaved.
+      setHasUnsavedChanges?.(false);
+    }
   };
 
-  const select = (id: string | null) => {
+  // The editor follows the draft while there is one: a draft restored for a
+  // request other than the selected one can't be reached by navigating (the
+  // host refuses while it is unsaved), so it is shown until saved or dropped.
+  const editingId = draft?.requestId ?? selectedId;
+
+  const select = (id: string | null, { dropped = false } = {}) => {
     if (!navigation) {
-      if (draft && draft.requestId !== id) {
+      if (!dropped && draft && draft.requestId !== id) {
         setBlocked(true);
         return;
       }
@@ -125,6 +135,11 @@ export default function Home(props: PanelViewProps): ReactElement {
           </Button>
         </form>
         <div className="min-h-0 flex-1 overflow-y-auto">
+          {requests.data.length >= MAX_LISTED ? (
+            <Text tone="muted" size="xs">
+              The {MAX_LISTED} most recently changed. Ask an agent for older ones.
+            </Text>
+          ) : null}
           {requests.data.length === 0 ? (
             <EmptyState
               scale="sidebar"
@@ -137,7 +152,7 @@ export default function Home(props: PanelViewProps): ReactElement {
                 key={request.id}
                 title={request.title}
                 meta={<StatusBadge status={request.status} />}
-                selected={request.id === selectedId}
+                selected={request.id === editingId}
                 onSelect={() => select(request.id)}
               />
             ))
@@ -151,28 +166,20 @@ export default function Home(props: PanelViewProps): ReactElement {
           </Callout>
         ) : null}
         {draft && draft.requestId !== selectedId ? (
-          <Callout
-            severity="info"
-            title="You have an unsaved edit"
-            action={
-              <Button size="xs" variant="outline" onClick={() => setDraft(null)}>
-                Discard
-              </Button>
-            }
-          >
-            “{draft.title}” was being edited when Request Desk last closed.
+          <Callout severity="info" title="You have an unsaved edit">
+            Finish or discard your edit to “{draft.title}” below, then the request you picked opens.
           </Callout>
         ) : null}
-        {selectedId ? (
+        {editingId ? (
           <RequestDetail
             pluginId={pluginId}
-            requestId={selectedId}
-            draft={draft?.requestId === selectedId ? draft : null}
+            requestId={editingId}
+            draft={draft}
             onDraft={setDraft}
-            onGone={() => select(null)}
+            onGone={() => select(null, { dropped: true })}
           />
         ) : null}
-        {showReports || !selectedId ? <Reports pluginId={pluginId} /> : null}
+        {showReports || !editingId ? <Reports pluginId={pluginId} /> : null}
       </main>
     </div>
   );
@@ -275,7 +282,12 @@ function RequestDetail(props: {
           Someone saved a newer version. Keeping yours replaces it.
         </Callout>
       ) : null}
-      <Input value={shown.title} onValueChange={(title) => edit({ title })} aria-label="Title" />
+      <Input
+        value={shown.title}
+        onValueChange={(title) => edit({ title })}
+        aria-label="Title"
+        disabled={saving}
+      />
       <Select
         aria-label="Status"
         value={shown.status}
@@ -284,6 +296,7 @@ function RequestDetail(props: {
           label: STATUS_LABELS[status],
         }))}
         onValueChange={(status) => edit({ status: status as RequestStatus })}
+        disabled={saving}
       />
       <Textarea
         value={shown.notes}
@@ -291,13 +304,14 @@ function RequestDetail(props: {
         rows={5}
         aria-label="Notes"
         placeholder="Notes"
+        disabled={saving}
       />
       {error ? <Text tone="danger">{error}</Text> : null}
       <div className="flex gap-2">
         <Button loading={saving} disabled={standing !== "pending"} onClick={() => void save()}>
           Save
         </Button>
-        <Button variant="ghost" disabled={!draft} onClick={() => onDraft(null)}>
+        <Button variant="ghost" disabled={!draft || saving} onClick={() => onDraft(null)}>
           Discard
         </Button>
       </div>
@@ -413,7 +427,9 @@ function ReportPreview({
   const artifact = useCachedHostChannel<{ reportId: string }, PluginArtifact | null>(
     pluginId,
     CHANNELS.reportArtifact,
-    { reportId }
+    { reportId },
+    // Revalidating asks the worker, which re-imports a handle the session dropped.
+    { invalidateOn: EVENTS.reportsChanged }
   );
   if (!artifact.data) return null;
   return <MediaThumbnail source={artifact.data} size="lg" alt="Report preview" />;
