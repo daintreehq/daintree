@@ -337,7 +337,12 @@ function HostedViewMount({
   const readRecoveryState = useCallback(() => {
     if (!identity) return null;
     const decoded = readPluginViewState(identity, declaredVersion);
-    return decoded?.ok ? { state: decoded.state, version: decoded.version } : null;
+    if (!decoded?.ok) return null;
+    // The mount's rule: no declared version, no `stateVersion`.
+    return {
+      state: decoded.state,
+      version: declaredVersion === undefined ? undefined : decoded.version,
+    };
   }, [identity, declaredVersion]);
 
   if (mountState && !mountState.ok) {

@@ -224,6 +224,17 @@ describe("pushed recovery state", () => {
     expect(wc.listenerCount("did-navigate")).toBe(1);
   });
 
+  it("drops the answer when a failed load replaces the document, not when one is aborted", () => {
+    const wc = new FakeContents(null);
+    push(wc, true);
+    wc.emit("did-fail-load", {}, -3, "ERR_ABORTED", "app://x", true);
+    expect(held(wc)).toBe(true);
+    wc.emit("did-fail-load", {}, -105, "ERR_NAME_NOT_RESOLVED", "app://x", false);
+    expect(held(wc)).toBe(true);
+    wc.emit("did-fail-load", {}, -102, "ERR_CONNECTION_REFUSED", "app://x", true);
+    expect(held(wc)).toBe(false);
+  });
+
   it("announces a release only when a held view stops holding", () => {
     const released = vi.fn();
     const off = onPanelRecoveryHoldReleased(released);

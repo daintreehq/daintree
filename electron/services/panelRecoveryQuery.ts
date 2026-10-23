@@ -94,6 +94,8 @@ const reportedHolds = new Map<number, boolean>();
 /** Views whose lifecycle listeners are attached, independent of holding an answer. */
 const watched = new Set<number>();
 const releaseListeners = new Set<(webContentsId: number) => void>();
+/** Chromium's `net::ERR_ABORTED`: the load was cancelled and the old document stays. */
+const ERR_ABORTED = -3;
 
 function setHold(id: number, holding: boolean | null): void {
   const wasHeld = reportedHolds.get(id) === true;
@@ -111,14 +113,27 @@ function watch(wc: Electron.WebContents): void {
   // A new main-frame document has none of the old one's work. Not a release
   // worth acting on for a destroyed view, which is simply forgotten.
   const onNavigate = () => setHold(id, null);
+  // A failed main-frame load commits an error page without `did-navigate`, and
+  // that document will never push. An aborted load (-3) leaves the old one up.
+  const onFailLoad = (
+    _event: Electron.Event,
+    errorCode: number,
+    _description: string,
+    _url: string,
+    isMainFrame: boolean
+  ) => {
+    if (isMainFrame && errorCode !== ERR_ABORTED) setHold(id, null);
+  };
   const forget = () => {
     watched.delete(id);
     reportedHolds.delete(id);
     wc.removeListener("did-navigate", onNavigate);
+    wc.removeListener("did-fail-load", onFailLoad);
     wc.removeListener("destroyed", forget);
     wc.removeListener("render-process-gone", forget);
   };
   wc.on("did-navigate", onNavigate);
+  wc.on("did-fail-load", onFailLoad);
   wc.on("destroyed", forget);
   wc.on("render-process-gone", forget);
 }

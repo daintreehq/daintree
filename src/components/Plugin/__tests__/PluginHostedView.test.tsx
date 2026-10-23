@@ -439,6 +439,8 @@ describe("PluginHostedView", () => {
       render(sidebar());
       expect(h.mounts.at(-1)?.initialArgs).toEqual({ tab: 1 });
       expect(h.mounts.at(-1)?.stateVersion).toBeUndefined();
+      // A retry restores the bag under the same rule.
+      expect(h.mounts.at(-1)?.readRecoveryState?.()).toEqual({ state: { tab: 1 } });
     });
 
     it("hands a reloaded plugin's new module the latest bag, not the first mount's", () => {
