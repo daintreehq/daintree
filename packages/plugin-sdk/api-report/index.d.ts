@@ -6159,6 +6159,11 @@ interface PluginTaskHandle {
      * Aborts when the user cancels the task or the host interrupts it (the
      * plugin unloading). The plugin still calls {@link finish} with
      * `"cancelled"` once it has stopped.
+     *
+     * `signal.reason` is an `AbortError` whose `cause` says which:
+     * {@link PluginTaskAbortCause}. Work that outlives the plugin — a durable
+     * operation — records a user's cancel, but treats an interruption as the
+     * plugin stopping, to be resumed when it runs again.
      */
     readonly signal: AbortSignal;
     /**

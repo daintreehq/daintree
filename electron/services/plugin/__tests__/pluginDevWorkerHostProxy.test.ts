@@ -3129,9 +3129,21 @@ describe("PluginDevWorkerHostProxy tasks (#13819)", () => {
     proxy.handleMessage({
       type: "subscription-event",
       subscriptionId: call.params.subscriptionId,
-      payload: null,
+      payload: { cause: "cancelled" },
     });
     expect(task.signal.aborted).toBe(true);
+    expect(task.signal.reason).toMatchObject({ name: "AbortError", cause: "cancelled" });
+  });
+
+  it("reads an abort without a cause as an interruption, never a cancel", async () => {
+    const { proxy, sent } = makeProxy();
+    const { task, call } = await startTask(proxy, sent);
+    proxy.handleMessage({
+      type: "subscription-event",
+      subscriptionId: call.params.subscriptionId,
+      payload: null,
+    });
+    expect(task.signal.reason).toMatchObject({ name: "AbortError", cause: "interrupted" });
   });
 
   it("sends one report per window per task, the latest fields winning", async () => {

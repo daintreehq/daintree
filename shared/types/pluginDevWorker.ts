@@ -39,6 +39,7 @@ import type {
   PluginPanelActivity,
   PluginTaskProgress,
   PluginTaskResult,
+  PluginTaskAbortCause,
   PluginTaskStartOptions,
   PanelMenuItemContribution,
   BuiltInPluginCapability,
@@ -988,6 +989,14 @@ export interface ProcessSpawnResult {
 export interface TaskStartParams {
   subscriptionId: string;
   options: PluginTaskStartOptions;
+}
+
+/**
+ * The `subscription-event` payload that aborts a worker-side task signal:
+ * whether the user cancelled or the host interrupted.
+ */
+export interface TaskAbortEvent {
+  cause: PluginTaskAbortCause;
 }
 
 /** Result of `tasks.start` (`host-call`): the host-assigned task id. */

@@ -1978,9 +1978,11 @@ When the user presses Cancel, the task shows "Cancelling…" and `signal` aborts
 
 A task still running when your plugin unloads, or when its worker exits or restarts, is marked interrupted: its `signal` aborts, the popover keeps a row saying so until the user dismisses it, and nothing your old code does to the handle changes anything. At most 16 interrupted tasks are kept per plugin, the oldest going first.
 
+`signal.reason` tells the two apart: an `AbortError` whose `cause` is `"cancelled"` for the user's Cancel and `"interrupted"` when the host stops the task. Work that outlives the plugin should record a cancel but treat an interruption as something to resume; [durable operations](./operations.md) do exactly that.
+
 `retry.actionId` is one of your own actions written `{manifest name}.{id}`, as in `contributes.menu`, and is checked when the task starts, so a bad one rejects there rather than when a failure needs it. Its `args` must serialize to JSON within 4 KB and are copied at start. `start` also rejects invalid options and a 17th unfinished task (`PLUGIN_TASK_MAX_LIVE` is 16; interrupted tasks don't count). `title` is one line of up to 120 characters, `detail` up to 200 and a finish `message` up to 2000. A project plugin's tasks show only in its project's windows.
 
-No capability is required, and `tasks.start` is not revoke-guarded. Once your plugin is unloaded it resolves with a handle whose `signal` is already aborted and whose methods do nothing. `createMockHost` applies the same validation, records every task in `startedTasks` with its reports and result, puts the failure and success notifications in `notifications` as the host raises them, and presses Cancel with `simulateTaskCancel(taskId)`.
+No capability is required, and `tasks.start` is not revoke-guarded. Once your plugin is unloaded it resolves with a handle whose `signal` is already aborted and whose methods do nothing. `createMockHost` applies the same validation, records every task in `startedTasks` with its reports and result, puts the failure and success notifications in `notifications` as the host raises them, presses Cancel with `simulateTaskCancel(taskId)`, and interrupts a task as an unload would with `simulateTaskInterrupt(taskId)`.
 
 ## User prompts — `showQuickPick`, `showInputBox`, `showConfirm`
 

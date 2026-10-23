@@ -2870,10 +2870,24 @@ describe("createMockHost tasks (#13819)", () => {
 
     host.simulateTaskCancel(task.id);
     expect(task.signal.aborted).toBe(true);
+    expect(task.signal.reason).toMatchObject({ cause: "cancelled" });
     expect(host.startedTasks[0]?.state).toBe("cancelling");
     await task.finish({ outcome: "failed", message: "Stopped" });
     expect(host.notifications).toEqual([]);
     expect(() => host.simulateTaskCancel(task.id)).toThrow(/not a running cancellable task/);
+  });
+
+  it("simulates an interruption, after which nothing the plugin does lands", async () => {
+    const host = createMockHost({ pluginId: "acme.demo" });
+    const task = await host.tasks.start({ title: "Sync", retry });
+
+    host.simulateTaskInterrupt(task.id);
+    expect(task.signal.reason).toMatchObject({ cause: "interrupted" });
+    task.report({ fraction: 0.5 });
+    await task.finish({ outcome: "failed", message: "Stopped" });
+    expect(host.startedTasks[0]).toMatchObject({ state: "interrupted", reports: [] });
+    expect(host.notifications).toEqual([]);
+    expect(() => host.simulateTaskInterrupt(task.id)).toThrow(/not a running task/);
   });
 
   it("refuses what the real host refuses", async () => {

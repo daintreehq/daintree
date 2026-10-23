@@ -18,6 +18,7 @@ export const HOST_SERVED_SDK_ENTRIES: Readonly<Record<string, string>> = {
   [SDK_PACKAGE]: "index.js",
   [`${SDK_PACKAGE}/files`]: "files.js",
   [`${SDK_PACKAGE}/data`]: "data.js",
+  [`${SDK_PACKAGE}/operations`]: "operations.js",
 };
 
 const REFUSED_SDK_ENTRIES: Readonly<Record<string, string>> = {

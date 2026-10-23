@@ -6,6 +6,7 @@ import {
   type PluginTaskProgress,
   type PluginTaskSnapshot,
 } from "../../../shared/types/plugin.js";
+import { pluginTaskAbortReason } from "../../../shared/utils/pluginTasks.js";
 
 /**
  * One task main holds. The record object is the task's identity: a handle
@@ -29,7 +30,7 @@ export interface PluginTaskRecord {
  * real signal isn't kept alive by a row waiting to be dismissed.
  */
 const STOPPED = new AbortController();
-STOPPED.abort();
+STOPPED.abort(pluginTaskAbortReason("interrupted"));
 
 export interface PluginTaskStartInput {
   pluginName: string;
@@ -167,7 +168,7 @@ export class PluginTaskRegistry {
     }
     record.snapshot.state = "cancelling";
     this.publishNow(pluginId);
-    record.controller.abort();
+    record.controller.abort(pluginTaskAbortReason("cancelled"));
     return true;
   }
 
@@ -195,7 +196,7 @@ export class PluginTaskRegistry {
       byId.delete(record.snapshot.id);
     }
     this.publishNow(pluginId);
-    for (const controller of stopping) controller.abort();
+    for (const controller of stopping) controller.abort(pluginTaskAbortReason("interrupted"));
   }
 
   /** The user's Dismiss. Only an interrupted task can be dismissed. */
@@ -226,7 +227,9 @@ export class PluginTaskRegistry {
     for (const timer of this.timers.values()) clearTimeout(timer);
     this.timers.clear();
     for (const byId of this.tasks.values()) {
-      for (const record of byId.values()) record.controller.abort();
+      for (const record of byId.values()) {
+        record.controller.abort(pluginTaskAbortReason("interrupted"));
+      }
     }
     this.tasks.clear();
   }

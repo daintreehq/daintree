@@ -5779,6 +5779,13 @@ export type PluginTaskResult =
   | { outcome: "failed"; message: string }
   | { outcome: "cancelled" };
 
+/**
+ * Why a task's signal aborted, carried as `signal.reason.cause`: the user's
+ * Cancel, or the host interrupting the task because the plugin is unloading,
+ * restarting or crashed.
+ */
+export type PluginTaskAbortCause = "cancelled" | "interrupted";
+
 /** A running task started with {@link PluginTaskApi.start}. */
 export interface PluginTaskHandle {
   /** Host-assigned, unique for the session. */
@@ -5787,6 +5794,11 @@ export interface PluginTaskHandle {
    * Aborts when the user cancels the task or the host interrupts it (the
    * plugin unloading). The plugin still calls {@link finish} with
    * `"cancelled"` once it has stopped.
+   *
+   * `signal.reason` is an `AbortError` whose `cause` says which:
+   * {@link PluginTaskAbortCause}. Work that outlives the plugin — a durable
+   * operation — records a user's cancel, but treats an interruption as the
+   * plugin stopping, to be resumed when it runs again.
    */
   readonly signal: AbortSignal;
   /**

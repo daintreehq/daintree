@@ -109,6 +109,8 @@ import {
 import {
   inertPluginTaskHandle,
   mergePluginTaskProgress,
+  pluginTaskAbortCause,
+  pluginTaskAbortReason,
   validatePluginTaskProgress,
   validatePluginTaskResult,
   validatePluginTaskStart,
@@ -154,6 +156,7 @@ import type {
   PluginWorkerToHostMessage,
   RegisterMcpToolsParams,
   PluginWorkerWorktreesEvent,
+  TaskAbortEvent,
   TaskFinishParams,
   TaskReportParams,
   TaskStartParams,
@@ -2148,7 +2151,11 @@ export class PluginDevWorkerHostProxy {
           const controller = new AbortController();
           // Registered before the call so a cancel can't race ahead of the
           // handle; dropped again if the start doesn't produce one.
-          this.subscriptions.set(subscriptionId, () => controller.abort());
+          this.subscriptions.set(subscriptionId, (payload) =>
+            controller.abort(
+              pluginTaskAbortReason(pluginTaskAbortCause(payload as TaskAbortEvent | null))
+            )
+          );
           const params: TaskStartParams = { subscriptionId, options: vetted.value };
           return this.callWithGrace<TaskStartResult>("tasks.start", params, {
             id: "",

@@ -3,6 +3,7 @@ import {
   PLUGIN_TASK_MESSAGE_MAX,
   PLUGIN_TASK_RETRY_ARGS_MAX_BYTES,
   PLUGIN_TASK_TITLE_MAX,
+  type PluginTaskAbortCause,
   type PluginTaskHandle,
   type PluginTaskProgress,
   type PluginTaskResult,
@@ -234,6 +235,35 @@ export function mergePluginTaskProgress(
   return older === undefined ? { ...newer } : { ...older, ...newer };
 }
 
+const ABORT_MESSAGES: Record<PluginTaskAbortCause, string> = {
+  cancelled: "The user cancelled the task",
+  interrupted: "The plugin stopped before the task finished",
+};
+
+/**
+ * The `reason` a task's signal aborts with: an `AbortError`, as a bare
+ * `abort()` gives, whose `cause` says whether the user cancelled or the host
+ * interrupted.
+ */
+export function pluginTaskAbortReason(cause: PluginTaskAbortCause): DOMException {
+  const reason = new DOMException(ABORT_MESSAGES[cause], "AbortError");
+  Object.defineProperty(reason, "cause", { value: cause, enumerable: false });
+  return reason;
+}
+
+/**
+ * The cause a task signal's reason carries. Anything else — a relay that lost
+ * it, a bare `abort()` — reads as `"interrupted"`, the one that writes nothing
+ * durable.
+ */
+export function pluginTaskAbortCause(reason: unknown): PluginTaskAbortCause {
+  return typeof reason === "object" &&
+    reason !== null &&
+    (reason as { cause?: unknown }).cause === "cancelled"
+    ? "cancelled"
+    : "interrupted";
+}
+
 const inertHandles = new WeakSet<PluginTaskHandle>();
 
 /**
@@ -243,7 +273,7 @@ const inertHandles = new WeakSet<PluginTaskHandle>();
  */
 export function inertPluginTaskHandle(): PluginTaskHandle {
   const controller = new AbortController();
-  controller.abort();
+  controller.abort(pluginTaskAbortReason("interrupted"));
   const handle: PluginTaskHandle = {
     id: globalThis.crypto.randomUUID(),
     signal: controller.signal,

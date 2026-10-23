@@ -21,7 +21,7 @@ const shared = {
   esbuildPlugins: [pluginStyleContractEsbuild()],
 } satisfies Options;
 
-// One JS build for all seven entries, but the `testing` and `data` declarations
+// One JS build for all eight entries, but the `testing` and `data` declarations
 // each come from their own dts-only pass. When either shares a dts bundle with
 // `index` (`data` does through `editFile`'s `PluginFsApi`), tsup's dts bundler hoists their common `shared/types/plugin` declarations
 // into a chunk file and `dist/index.d.ts` collapses to a handful of re-export
@@ -43,6 +43,7 @@ export default defineConfig((override) => {
       react: "src/react.ts",
       files: "src/files.ts",
       data: "src/data.ts",
+      operations: "src/operations.ts",
       testing: "src/testing.ts",
       "testing-preview": "src/testing-preview.ts",
       "testing-playwright": "src/testing-playwright.ts",
@@ -74,6 +75,13 @@ export default defineConfig((override) => {
     {
       ...shared,
       entry: { data: "src/data.ts" },
+      dts: { ...shared.dts, only: true },
+    },
+    {
+      ...shared,
+      // `operations` reaches `shared/types/plugin.ts` for the host's task and
+      // database types, so it gets its own pass like `data`.
+      entry: { operations: "src/operations.ts" },
       dts: { ...shared.dts, only: true },
     },
     {

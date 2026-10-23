@@ -9,6 +9,8 @@ import {
   inertPluginTaskHandle,
   isInertPluginTaskHandle,
   mergePluginTaskProgress,
+  pluginTaskAbortCause,
+  pluginTaskAbortReason,
   validatePluginTaskProgress,
   validatePluginTaskResult,
   validatePluginTaskStart,
@@ -187,5 +189,19 @@ describe("inertPluginTaskHandle", () => {
     ).toBe(false);
     expect(() => handle.report({ fraction: 2 })).not.toThrow();
     await expect(handle.finish({ outcome: "succeeded" })).resolves.toBeUndefined();
+  });
+});
+
+describe("pluginTaskAbortReason", () => {
+  it("is an AbortError whose cause round-trips, and anything else reads as interrupted", () => {
+    const cancelled = pluginTaskAbortReason("cancelled");
+    expect(cancelled).toBeInstanceOf(DOMException);
+    expect(cancelled.name).toBe("AbortError");
+    expect(pluginTaskAbortCause(cancelled)).toBe("cancelled");
+    expect(pluginTaskAbortCause(pluginTaskAbortReason("interrupted"))).toBe("interrupted");
+    expect(pluginTaskAbortCause({ cause: "cancelled" })).toBe("cancelled");
+    expect(pluginTaskAbortCause(new DOMException("x", "AbortError"))).toBe("interrupted");
+    expect(pluginTaskAbortCause(null)).toBe("interrupted");
+    expect(pluginTaskAbortCause(inertPluginTaskHandle().signal.reason)).toBe("interrupted");
   });
 });

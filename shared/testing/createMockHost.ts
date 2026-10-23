@@ -22,6 +22,7 @@ import { lstatSync, mkdirSync, mkdtempSync, realpathSync } from "node:fs";
 import { validateRenderPdfOptions } from "../utils/pluginPdfOptions.js";
 import { parsePluginExternalUrl } from "../utils/pluginExternalUrl.js";
 import {
+  pluginTaskAbortReason,
   validatePluginTaskProgress,
   validatePluginTaskResult,
   validatePluginTaskStart,
@@ -190,12 +191,14 @@ export interface NotificationRecord {
  * One task started through `host.tasks.start` (#13819), kept up to date as the
  * plugin reports and finishes it. `state` is where the host would show it:
  * `"cancelling"` once {@link MockHostState.simulateTaskCancel} asked, then the
- * outcome the plugin finished with.
+ * outcome the plugin finished with — or `"interrupted"` once
+ * {@link MockHostState.simulateTaskInterrupt} stopped it, after which nothing
+ * the plugin does changes it.
  */
 export interface MockTaskRecord {
   readonly id: string;
   readonly options: VettedPluginTaskStart;
-  state: "working" | "cancelling" | "succeeded" | "failed" | "cancelled";
+  state: "working" | "cancelling" | "succeeded" | "failed" | "cancelled" | "interrupted";
   fraction: number | null;
   detail: string | undefined;
   /** Every accepted `report()`, in order. The mock applies each at once; the host coalesces. */
@@ -593,6 +596,14 @@ export interface MockHostState {
    * never offer.
    */
   simulateTaskCancel(taskId: string): void;
+
+  /**
+   * Interrupt a running task as the host does when the plugin unloads,
+   * restarts or crashes: the task turns `"interrupted"` and its `signal`
+   * aborts with the `"interrupted"` cause. A later `report` or `finish` is
+   * ignored. Throws for a task that isn't running.
+   */
+  simulateTaskInterrupt(taskId: string): void;
 
   /**
    * Set what `host.hasListeners(channel)` answers and, when that changes it,
@@ -4013,7 +4024,17 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
         throw new Error(`simulateTaskCancel: "${taskId}" is not a running cancellable task`);
       }
       record.state = "cancelling";
-      taskControllers.get(taskId)?.abort();
+      taskControllers.get(taskId)?.abort(pluginTaskAbortReason("cancelled"));
+    },
+    simulateTaskInterrupt(taskId) {
+      const record = tasks.find((t) => t.id === taskId);
+      if (!record || (record.state !== "working" && record.state !== "cancelling")) {
+        throw new Error(`simulateTaskInterrupt: "${taskId}" is not a running task`);
+      }
+      record.state = "interrupted";
+      const controller = taskControllers.get(taskId);
+      taskControllers.delete(taskId);
+      controller?.abort(pluginTaskAbortReason("interrupted"));
     },
     simulateSystemWake(event) {
       // Frozen like production delivery, for the same reason.
