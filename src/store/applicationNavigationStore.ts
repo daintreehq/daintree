@@ -36,9 +36,10 @@ interface ApplicationNavigationState {
    */
   byProject: Record<string, ApplicationNavigationRecord>;
   /**
-   * The same history with every parameter, for this window's session. Never
+   * The same history with every parameter, for the life of this project's
+   * renderer. Never
    * persisted, so a session-only parameter (a search, a transient selection)
-   * comes back after a remount within the window but not after a restart.
+   * comes back after a remount but not after an evicted renderer or a restart.
    */
   sessions: Record<string, ApplicationNavigationRecord>;
   commit: (
@@ -168,7 +169,7 @@ export const useApplicationNavigationStore = create<ApplicationNavigationState>(
 );
 
 /**
- * The record a project's application should start from: this window's session
+ * The record a project's application should start from: this renderer's session
  * when it is the same application at the same version, else what is on disk
  * under the same stamp, else nothing.
  */

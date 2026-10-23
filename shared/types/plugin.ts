@@ -1526,7 +1526,7 @@ export const PLUGIN_APPLICATION_NAVIGATION_LIMITS = Object.freeze({
  * One declared parameter of a section. Values are identifiers, not content:
  * a string holds only the manifest id vocabulary (`[A-Za-z0-9._-]`), so a
  * free-text field, a URL or a token can't be expressed. Only a parameter
- * marked `persist` is written to disk; the rest live for the window's session.
+ * marked `persist` is written to disk; the rest live as long as the project's renderer.
  */
 export type PluginApplicationNavigationParam =
   | { type: "string"; required?: boolean; persist?: boolean; maxLength?: number }
@@ -2386,7 +2386,8 @@ export interface PanelViewProps {
    *
    * The location is restored per project after a remount, an evicted renderer
    * or a restart, but only parameters declared `persist` are written to disk;
-   * the others last for the window's session. A location that no longer
+   * the others last as long as the project's renderer, so they survive a
+   * remount but not an evicted or reloaded renderer. A location that no longer
    * resolves — its section removed, a parameter that no longer validates, a
    * raised `navigation.version` — restores as the default section.
    *

@@ -225,6 +225,14 @@ describe("restoreNavigationHistory", () => {
     expect(restored.index).toBe(1);
   });
 
+  it("never hands out a stored entry a view could mutate", () => {
+    const entry = { sectionId: "record", params: { recordId: "a" } };
+    const restored = restoreNavigationHistory(NAVIGATION, [entry], 0);
+    expect(restored.entries[0]).not.toBe(entry);
+    expect(restored.entries[0]).toEqual(entry);
+    expect(Object.isFrozen(restored.entries[0]?.params)).toBe(true);
+  });
+
   it("keeps the identity of an entry that resolves unchanged", () => {
     const entry: PluginNavigationLocation = at("record", { recordId: "a" });
     const restored = restoreNavigationHistory(NAVIGATION, [entry], 0);

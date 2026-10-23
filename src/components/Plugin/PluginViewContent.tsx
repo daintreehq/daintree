@@ -1779,8 +1779,13 @@ export function makePluginViewContent(
     // The project application's shared location (#14108), bound to this
     // attempt and its teardown like the setters above. A user-scope settings
     // section follows the user across projects, so it has no project to move.
+    // An attempt whose dispose signal aborted — a kind removed under a mounted
+    // view — is gone even before a retry bumps the counter.
     const isNavigationAttemptCurrent = useCallback(
-      (attempt: number): boolean => !toolbarClosedRef.current && attempt === attemptRef.current,
+      (attempt: number): boolean =>
+        !toolbarClosedRef.current &&
+        attempt === attemptRef.current &&
+        !controllerRef.current.signal.aborted,
       []
     );
     const navigation = useApplicationNavigation({

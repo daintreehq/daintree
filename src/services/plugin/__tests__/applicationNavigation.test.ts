@@ -244,6 +244,25 @@ describe("navigateApplication", () => {
     unregister();
   });
 
+  it("refuses to switch the main area for unsaved work even when the location stays", async () => {
+    const nav = await load();
+    const owner = {};
+    const unregister = nav.registerApplicationNavigationView(OWNER, "panel:form");
+    nav.useProjectHomeStore.getState().showGrid();
+    nav.lifecycle.setViewUnsavedChanges("panel:form", owner, true);
+
+    expect(nav.navigateApplication(OWNER, { sectionId: "overview" })).toEqual({
+      ok: false,
+      reason: "unsaved",
+    });
+    expect(nav.route()).toBe("grid");
+    // Nothing to switch: the same location without a reveal is not a move.
+    expect(nav.navigateApplication(OWNER, { sectionId: "overview", reveal: false }).ok).toBe(true);
+
+    nav.lifecycle.setViewUnsavedChanges("panel:form", owner, false);
+    unregister();
+  });
+
   it("ignores unsaved work in a view that was never handed navigation", async () => {
     const nav = await load();
     nav.lifecycle.setViewUnsavedChanges("panel:elsewhere", {}, true);

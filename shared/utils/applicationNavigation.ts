@@ -127,12 +127,16 @@ export function navigationLocationsEqual(
   );
 }
 
-/** Whether a stored entry is already exactly the location it decodes to, and nothing more. */
+/** Whether a stored entry is already exactly the frozen location it decodes to, and nothing more. */
 function isSameLocation(
   entry: Record<string, unknown>,
   location: PluginNavigationLocation
 ): entry is Record<string, unknown> & PluginNavigationLocation {
+  // Only a frozen entry — one this module made — is handed out again: a view
+  // holding a mutable one could rewrite the host's history through it.
   return (
+    Object.isFrozen(entry) &&
+    Object.isFrozen(entry.params) &&
     Object.keys(entry).length === 2 &&
     isPlainRecord(entry.params) &&
     navigationLocationsEqual(entry as unknown as PluginNavigationLocation, location)

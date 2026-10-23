@@ -24,7 +24,7 @@ import {
 } from "@/store/applicationNavigationStore";
 import { useMacroFocusStore } from "@/store/macroFocusStore";
 import { usePanelStore } from "@/store/panelStore";
-import { useProjectHomeStore } from "@/store/projectHomeStore";
+import { selectProjectMainAreaRoute, useProjectHomeStore } from "@/store/projectHomeStore";
 import { useProjectPluginStore } from "@/store/projectPluginStore";
 import { getViewWorkspaceId } from "@/store/viewWorkspaceId";
 import { hasViewUnsavedChanges } from "./pluginPanelLifecycle";
@@ -141,18 +141,32 @@ function isFocusStranded(): boolean {
 }
 
 /**
- * Bring the application's destination forward. Switching the main area
- * unmounts whatever held focus there, so focus that is left with nowhere to be
- * after the switch lands on the main area; focus anywhere else — the sidebar
- * view the user clicked in, an overlay — is left where it is.
+ * What bringing the application's destination forward would do: `"home"` or
+ * `"grid"` when the main area would switch, `null` when it is already there
+ * or there is nowhere to switch to. Only the application's own Home counts:
+ * one the user turned off, or another plugin's, is not a place this
+ * application may send them.
  */
-function reveal(context: ApplicationNavigationContext): void {
-  const home = useProjectHomeStore.getState();
+function pendingReveal(context: ApplicationNavigationContext): "home" | "grid" | null {
+  const onHome = selectProjectMainAreaRoute(useProjectHomeStore.getState()) === "home";
   if (context.destination === "home") {
     const surface = currentProjectSurface("projectHome");
-    // Only the application's own Home: one the user turned off, or another
-    // plugin's, is not a place this application may send them.
-    if (surface === null || surface.claim.pluginId !== context.instanceId) return;
+    if (surface === null || surface.claim.pluginId !== context.instanceId) return null;
+    return onHome ? null : "home";
+  }
+  return onHome ? "grid" : null;
+}
+
+/**
+ * Switch the main area. That unmounts whatever held focus there, so focus
+ * left with nowhere to be after the switch lands on the main area; focus
+ * anywhere else — the sidebar view the user clicked in, an overlay — is left
+ * where it is. Fleet scope draws over both places and is the user's to leave,
+ * so it keeps drawing.
+ */
+function reveal(target: "home" | "grid"): void {
+  const home = useProjectHomeStore.getState();
+  if (target === "home") {
     usePanelStore.getState().exitMaximize();
     home.showHome();
   } else {
@@ -171,7 +185,7 @@ function reveal(context: ApplicationNavigationContext): void {
 function commit(
   context: ApplicationNavigationContext,
   history: NavigationHistory,
-  revealDestination: boolean
+  target: "home" | "grid" | null
 ): PluginNavigationResult {
   useApplicationNavigationStore
     .getState()
@@ -181,7 +195,7 @@ function commit(
       history,
       persistableNavigationHistory(context.navigation, history)
     );
-  if (revealDestination) reveal(context);
+  if (target !== null) reveal(target);
   const location = history.entries[history.index];
   return location === undefined ? refuse("stale") : { ok: true, location };
 }
@@ -216,12 +230,17 @@ export function navigateApplication(pluginId: string, intent: unknown): PluginNa
   if (!decoded.ok) return refuse(decoded.reason);
   const history = readHistory(context);
   const next = pushNavigationHistory(history, decoded.location, replace === true);
+  const target = revealOption === false ? null : pendingReveal(context);
+  // Switching the main area unmounts views as surely as a new location
+  // replaces their content, so either one waits for unsaved work.
+  if ((next !== history || target !== null) && holdsUnsavedWork(pluginId)) {
+    return refuse("unsaved");
+  }
   if (next === history) {
-    if (revealOption !== false) reveal(context);
+    if (target !== null) reveal(target);
     return { ok: true, location: history.entries[history.index] ?? decoded.location };
   }
-  if (holdsUnsavedWork(pluginId)) return refuse("unsaved");
-  return commit(context, next, revealOption !== false);
+  return commit(context, next, target);
 }
 
 function step(pluginId: string, delta: -1 | 1): PluginNavigationResult {
@@ -231,7 +250,7 @@ function step(pluginId: string, delta: -1 | 1): PluginNavigationResult {
   const index = history.index + delta;
   if (index < 0 || index >= history.entries.length) return refuse("no-history");
   if (holdsUnsavedWork(pluginId)) return refuse("unsaved");
-  return commit(context, { entries: history.entries, index }, true);
+  return commit(context, { entries: history.entries, index }, pendingReveal(context));
 }
 
 export function navigateApplicationBack(pluginId: string): PluginNavigationResult {

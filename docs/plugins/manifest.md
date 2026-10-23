@@ -334,7 +334,7 @@ The sections the application's views navigate between. The host keeps one locati
 | `sections` | yes | 1-24 sections with unique ids (`application_navigation_section_duplicate`). `title` is 1-64 characters. |
 | `sections[].params` | no | At most 8 parameters. `type` is `"string"`, `"integer"` (a safe integer) or `"boolean"`; `maxLength` (strings only, default 64, at most 128); `required` and `persist` default to `false`. |
 
-Parameters are identifiers, not content. A string holds only `A-Z a-z 0-9 . _ -`, so free text, URLs and tokens can't be expressed, and a location carrying anything undeclared is refused. Only parameters marked `persist` are written to disk; the rest last for the window's session, and an entry whose required parameter isn't persisted restores as the default section. Navigation is local to the project's window: there is no `daintree://` route to a section and it runs no action.
+Parameters are identifiers, not content. A string holds only `A-Z a-z 0-9 . _ -`, so free text, URLs and tokens can't be expressed, and a location carrying anything undeclared is refused. Only parameters marked `persist` are written to disk; the rest last as long as the project's renderer (a remount keeps them, an evicted renderer or a restart doesn't), and an entry whose required parameter isn't persisted restores as the default section. Navigation is local to the project's window: there is no `daintree://` route to a section and it runs no action.
 
 ### `remote`
 
