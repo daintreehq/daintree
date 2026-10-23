@@ -2,7 +2,6 @@
 // `runProjectAction` in projectActions.ts, which keeps the metadata every view
 // registers at boot (#14269). Nothing here may import projectActions.ts at runtime.
 import type { ActionCallbacks } from "../actionTypes";
-import { beginSwitchTrace } from "@/utils/switchTrace";
 import type { ActionContext } from "@shared/types/actions";
 import type { ProjectSettings } from "@shared/types";
 import { pickAgentVisibleProjectSettings } from "@shared/types";
@@ -338,10 +337,7 @@ export const projectActionRuns = {
     }
   },
 
-  "project.mruCycleOlder": async () => {
-    beginSwitchTrace("mru-shortcut");
-    return switchToLastWorkspace();
-  },
+  "project.mruCycleOlder": async () => switchToLastWorkspace(),
 
   "project.add": async (args: unknown) => {
     const { path, destination } =

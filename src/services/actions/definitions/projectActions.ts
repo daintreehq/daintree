@@ -1,5 +1,6 @@
 import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
 import type { ActionContext } from "@shared/types/actions";
+import { beginSwitchTrace } from "@/utils/switchTrace";
 import type { AgentVisibleProjectSettingsKey } from "@shared/types";
 import { z } from "zod";
 import { PROJECT_LIST_SORT_MODES } from "@shared/types/project";
@@ -159,8 +160,12 @@ export function registerProjectActions(actions: ActionRegistry, callbacks: Actio
     kind: "command",
     danger: "safe",
     scope: "renderer",
-    run: (args: unknown, ctx: ActionContext) =>
-      runProjectAction("project.mruCycleOlder", args, ctx, callbacks),
+    run: (args: unknown, ctx: ActionContext) => {
+      // Stamped before the run bodies load, so the trace's keydown is the
+      // gesture's and a cold first load counts toward the switch it delays.
+      beginSwitchTrace("mru-shortcut");
+      return runProjectAction("project.mruCycleOlder", args, ctx, callbacks);
+    },
   }));
 
   actions.set("project.add", () => ({

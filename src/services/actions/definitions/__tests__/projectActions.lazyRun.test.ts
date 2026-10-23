@@ -3,6 +3,7 @@ import type { ActionContext } from "@shared/types/actions";
 import type { ActionCallbacks, ActionRegistry } from "../../actionTypes";
 
 const m = vi.hoisted(() => ({
+  evaluations: 0,
   runLookups: 0,
   failImpl: false,
   close: vi.fn(),
@@ -10,13 +11,18 @@ const m = vi.hoisted(() => ({
 
 // A getter, so each test sees its own failure mode and lookup count however
 // vitest caches the mocked module.
-vi.mock("../projectActions.impl", () => ({
-  get projectActionRuns() {
-    m.runLookups++;
-    if (m.failImpl) throw new Error("chunk load failed");
-    return { "project.close": m.close };
-  },
-}));
+// The factory runs when the module is first evaluated, so a static import of
+// the run bodies from the metadata file would count here at registration.
+vi.mock("../projectActions.impl", () => {
+  m.evaluations++;
+  return {
+    get projectActionRuns() {
+      m.runLookups++;
+      if (m.failImpl) throw new Error("chunk load failed");
+      return { "project.close": m.close };
+    },
+  };
+});
 
 // Forwarded by identity, never called here.
 const callbacks: ActionCallbacks = Object.create(null);
@@ -32,6 +38,7 @@ async function register(): Promise<ActionRegistry> {
 describe("project action run bodies (#14269)", () => {
   beforeEach(() => {
     vi.resetModules();
+    m.evaluations = 0;
     m.runLookups = 0;
     m.failImpl = false;
     m.close.mockReset().mockResolvedValue({ closed: true });
@@ -41,6 +48,7 @@ describe("project action run bodies (#14269)", () => {
     const actions = await register();
     for (const create of actions.values()) create();
     expect(actions.size).toBeGreaterThan(0);
+    expect(m.evaluations).toBe(0);
     expect(m.runLookups).toBe(0);
   });
 
@@ -54,6 +62,8 @@ describe("project action run bodies (#14269)", () => {
     expect(m.runLookups).toBe(2);
     expect(m.close).toHaveBeenCalledTimes(2);
     expect(m.close).toHaveBeenCalledWith(args, ctx, callbacks);
+    expect(m.close.mock.calls[0]?.[0]).toBe(args);
+    expect(m.close.mock.calls[0]?.[1]).toBe(ctx);
     expect(m.close.mock.calls[0]?.[2]).toBe(callbacks);
   });
 
