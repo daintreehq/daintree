@@ -1204,6 +1204,18 @@ export function createHost(
       );
     }
   };
+
+  // A host made before its instance was registered has no frozen manifest and
+  // falls back to the live one (`undefined` takes the lookup's default).
+  const declaring = boundPlugin?.manifest;
+  const assertSettingsInstanceCurrent = (method: string): void => {
+    const current = deps.plugins.get(pluginId);
+    if (boundPlugin !== undefined && current !== undefined && current !== boundPlugin) {
+      throw new Error(
+        `PLUGIN_UNLOADED: plugin "${pluginId}" settings.${method}: this instance was replaced by a reload; only the running instance can change its settings`
+      );
+    }
+  };
   // Last agent-state snapshot observed for this host since it subscribed via
   // onDidChangeAgentState. The host keeps no pre-subscription history, so
   // getAgentState() returns null until the first transition is observed.
@@ -4072,6 +4084,13 @@ export function createHost(
     // NOT revoke-guarded: plugins read/write settings throughout their
     // lifetime (IPC handlers, timers), long after activate() resolves. The
     // store is the source of truth, so a late call is harmless.
+    //
+    // Every settings call classifies its key from `declaring` — the frozen
+    // manifest of the instance this host was made for — never the live one, so
+    // an unload mid-call can't turn a secret into plaintext or move a key into
+    // another scope (#14092). An unloaded instance's writes still land (a
+    // deactivate() saving state); a replaced one's never commit, since the
+    // instance now running may declare the key differently.
     settings: {
       get: async <T = unknown>(
         key: string,
@@ -4081,7 +4100,7 @@ export function createHost(
         // Resolve the manifest-declared scope so a read targets the same scope
         // the write path enforces — otherwise a `scope: "project"` key read
         // with no scope arg silently reads the wrong ("user") store (#10586).
-        const declaredScope = deps.settings.getDeclaredScope(pluginId, key);
+        const declaredScope = deps.settings.getDeclaredScope(pluginId, key, declaring);
         if (scope !== undefined && declaredScope !== undefined && declaredScope !== scope) {
           throw new Error(
             `Plugin "${pluginId}" settings.get: key "${key}" is declared in "${declaredScope}" scope, not "${scope}"`
@@ -4092,18 +4111,19 @@ export function createHost(
           pluginId,
           key,
           effectiveScope,
-          boundScopeRoot
+          boundScopeRoot,
+          declaring
         );
         // Project scope with no active project reads as unset rather than
         // throwing; unset reads as the declared default, if there is one.
         const stored = filePath
           ? await deps.settings
               .getOrCreateSettingsStore(pluginId, filePath)
-              .get<T>(key, { secret: deps.settings.isSecretKey(pluginId, key) })
+              .get<T>(key, { secret: deps.settings.isSecretKey(pluginId, key, declaring) })
           : undefined;
         return stored !== undefined
           ? stored
-          : (deps.settings.getDeclaredDefault(pluginId, key) as T | undefined);
+          : (deps.settings.getDeclaredDefault(pluginId, key, declaring) as T | undefined);
       },
       set: async <T = unknown>(
         key: string,
@@ -4111,21 +4131,25 @@ export function createHost(
         requestedScope?: PluginSettingsScope
       ): Promise<void> => {
         assertSettingsKey(pluginId, "set", key);
+        assertSettingsInstanceCurrent("set");
         // Omitted, the declared scope is the target, as it is for `get`; a
         // conflicting explicit scope still throws in assertSettingDeclared.
-        const scope = requestedScope ?? deps.settings.getDeclaredScope(pluginId, key) ?? "user";
+        const scope =
+          requestedScope ?? deps.settings.getDeclaredScope(pluginId, key, declaring) ?? "user";
         if (value === undefined) {
           throw new Error(
             `Plugin "${pluginId}" settings.set: value for "${key}" is undefined — settings cannot store undefined`
           );
         }
         deps.settings.assertSettingSerializable(pluginId, key, value);
-        deps.settings.assertSettingDeclared(pluginId, key, scope);
+        deps.settings.assertSettingDeclared(pluginId, key, scope, declaring);
+        const secret = deps.settings.isSecretKey(pluginId, key, declaring);
         const filePath = deps.settings.resolveSettingsFilePathForKey(
           pluginId,
           key,
           scope,
-          boundScopeRoot
+          boundScopeRoot,
+          declaring
         );
         if (!filePath) {
           throw new Error(
@@ -4135,17 +4159,17 @@ export function createHost(
         // Project settings live in the repository's `.daintree`; user and local
         // files, outside every project, change none.
         await assertPluginCallerDrives(pluginId, "settings.set", { paths: [filePath] });
+        assertSettingsInstanceCurrent("set");
         const store = deps.settings.getOrCreateSettingsStore(pluginId, filePath);
-        const changed = await store.set(key, value, {
-          secret: deps.settings.isSecretKey(pluginId, key),
-        });
+        const changed = await store.set(key, value, { secret });
         if (changed) deps.settings.notifySettingsSubscribers(pluginId, scope, key, value);
       },
       unset: async (key: string, requestedScope?: PluginSettingsScope): Promise<void> => {
         assertSettingsKey(pluginId, "unset", key);
+        assertSettingsInstanceCurrent("unset");
         // Unlike `set`, only a declared key can be cleared: the scope it lives in
         // is the manifest's, so nothing here guesses a file to delete from.
-        const declaredScope = deps.settings.getDeclaredScope(pluginId, key);
+        const declaredScope = deps.settings.getDeclaredScope(pluginId, key, declaring);
         if (declaredScope === undefined) {
           throw new Error(
             `Plugin "${pluginId}" settings.unset: key "${key}" is not declared in contributes.settings`
@@ -4160,12 +4184,14 @@ export function createHost(
           pluginId,
           key,
           declaredScope,
-          boundScopeRoot
+          boundScopeRoot,
+          declaring
         );
         // No active project means nothing is stored there to clear.
         if (!filePath) return;
         // Same guard as `set`: project settings live in the repository's `.daintree`.
         await assertPluginCallerDrives(pluginId, "settings.unset", { paths: [filePath] });
+        assertSettingsInstanceCurrent("unset");
         const store = deps.settings.getOrCreateSettingsStore(pluginId, filePath);
         // A secret is an encrypted envelope in the same file, so deleting the
         // key clears it without decrypting anything.
