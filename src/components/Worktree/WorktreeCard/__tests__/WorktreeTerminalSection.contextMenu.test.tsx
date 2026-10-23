@@ -80,6 +80,7 @@ vi.mock("@/store", () => {
 });
 
 import { WorktreeTerminalSection } from "../WorktreeTerminalSection";
+import { load as loadTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
 
 const CARD_ITEM = "Worktree card item";
 
@@ -138,6 +139,12 @@ beforeAll(async () => {
 afterEach(() => {
   cleanup();
   dispatch.mockReset();
+});
+
+// The service mock never evaluates the real module, so nothing registers it;
+// loading caches the mock for the synchronous peek() call sites.
+beforeAll(async () => {
+  await loadTerminalService();
 });
 
 describe("WorktreeTerminalSection — a session row owns its menu", () => {

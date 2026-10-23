@@ -118,6 +118,7 @@ vi.mock("../TerminalHandOver", () => ({
 
 import { TerminalContextMenu } from "../TerminalContextMenu";
 import { getGenericPanelMenuGroups } from "@/components/Panel/genericPanelMenu";
+import { load as loadTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
 
 // Radix schedules its focus return on a zero-delay timer after the content
 // unmounts, and arms outside-press listeners a tick after mounting.
@@ -171,6 +172,12 @@ afterEach(async () => {
   cleanup();
   await settle();
   orderEnabled.current = [];
+});
+
+// The service mock never evaluates the real module, so nothing registers it;
+// loading caches the mock for the synchronous peek() call sites.
+beforeAll(async () => {
+  await loadTerminalService();
 });
 
 describe("TerminalContextMenu worktree list, through the real menu", () => {

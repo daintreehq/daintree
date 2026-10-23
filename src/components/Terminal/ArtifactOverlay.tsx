@@ -24,7 +24,7 @@ import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { FileStack } from "@/components/icons";
 import { orderPatchesForApply, useArtifacts, type SaveArtifactOutcome } from "@/hooks/useArtifacts";
 import { useUnseenOutput } from "@/hooks/useUnseenOutput";
-import { terminalInstanceService } from "@/services/TerminalInstanceService";
+import { peek as peekTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
 import type { Artifact } from "@shared/types";
 import { pluralize } from "@/lib/pluralize";
 
@@ -906,7 +906,7 @@ export function ArtifactOverlay({ terminalId, worktreeId, cwd, className }: Arti
     setIsExpanded(false);
     clearArtifacts();
     // The overlay unmounts with its last artifact, so focus goes back to the terminal it sat on.
-    terminalInstanceService.focus(terminalId);
+    peekTerminalService()?.focus(terminalId);
   }, [clearArtifacts, terminalId]);
 
   const codeArtifactCount = artifacts.filter((a) => a.type === "code").length;

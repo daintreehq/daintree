@@ -3,12 +3,17 @@
  */
 import React, { Suspense } from "react";
 import { act, render, waitFor, cleanup } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { TerminalRefreshTier } from "@/types";
 import { actionService } from "@/services/ActionService";
 import { keybindingService } from "@/services/KeybindingService";
 import type { KeybindingResolutionResult } from "@/services/keybindingUtils";
 import type { TerminalPaddingPaint } from "@/services/terminal/terminalPaddingPaint";
+import {
+  __testing as terminalServiceTesting,
+  load as loadTerminalService,
+  peek as peekTerminalService,
+} from "@/services/terminal/terminalInstanceServiceAccessor";
 import { XtermAdapter } from "../XtermAdapter";
 import {
   _resetCtrlVImagePasteForTests,
@@ -190,6 +195,12 @@ vi.mock("@/services/ActionService", () => ({
 vi.mock("@/utils/logger", () => ({
   logError: vi.fn(),
 }));
+
+// The service mock never evaluates the real module, so nothing registers it;
+// loading caches the mock for the synchronous peek() call sites.
+beforeAll(async () => {
+  await loadTerminalService();
+});
 
 /** The element `renderAdapter` mounts, so `rerender` can rebuild it verbatim. */
 function adapterElement(props: Partial<React.ComponentProps<typeof XtermAdapter>> = {}) {
@@ -1211,5 +1222,66 @@ describe("XtermAdapter lifecycle", () => {
       view.unmount();
       expect(unsubscribe).toHaveBeenCalledTimes(1);
     });
+  });
+});
+
+describe("XtermAdapter with the terminal service unloaded", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.resetRuntime();
+    terminalServiceTesting.reset();
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        observe = vi.fn();
+        disconnect = vi.fn();
+        unobserve = vi.fn();
+      }
+    );
+  });
+
+  afterEach(async () => {
+    cleanup();
+    vi.unstubAllGlobals();
+    await loadTerminalService();
+  });
+
+  it("loads the service before creating the terminal", async () => {
+    const serviceAtCreate: unknown[] = [];
+    mocks.terminalInstanceService.getOrCreate.mockImplementationOnce(() => {
+      serviceAtCreate.push(peekTerminalService());
+      return mocks.managed;
+    });
+
+    expect(peekTerminalService()).toBeNull();
+    renderAdapter();
+    expect(mocks.terminalInstanceService.getOrCreate).not.toHaveBeenCalled();
+
+    await waitFor(() => expect(mocks.terminalInstanceService.attach).toHaveBeenCalled());
+    expect(serviceAtCreate).toEqual([mocks.terminalInstanceService]);
+  });
+
+  it("creates synchronously within the mount once the service is loaded", async () => {
+    await loadTerminalService();
+
+    renderAdapter();
+
+    // Later layout effects (renderer policy) must find the terminal already
+    // placed, so a loaded service may not add a microtask before creation.
+    expect(mocks.terminalInstanceService.getOrCreate).toHaveBeenCalledTimes(1);
+    expect(mocks.terminalInstanceService.getOrCreate.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.terminalInstanceService.applyRendererPolicy.mock.invocationCallOrder[0]!
+    );
+  });
+
+  it("does not create the terminal when it unmounts while the service loads", async () => {
+    const view = renderAdapter();
+    view.unmount();
+
+    await loadTerminalService();
+    await act(async () => {});
+
+    expect(mocks.terminalInstanceService.getOrCreate).not.toHaveBeenCalled();
+    expect(mocks.terminalInstanceService.attach).not.toHaveBeenCalled();
   });
 });

@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import { terminalInstanceService } from "@/services/TerminalInstanceService";
+import { peek as peekTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
 
 /**
  * Marks the panel hidden in the store when the pane unmounts — guarded by the
@@ -37,12 +37,12 @@ export function useUnmountVisibilityCleanup(
   const ownedGenerationRef = useRef(0);
 
   useEffect(() => {
-    ownedGenerationRef.current = terminalInstanceService.getAttachGeneration(id);
+    ownedGenerationRef.current = peekTerminalService()?.getAttachGeneration(id) ?? 0;
   }, [id, restartKey, attachEpoch]);
 
   useEffect(() => {
     return () => {
-      if (terminalInstanceService.getAttachGeneration(id) === ownedGenerationRef.current) {
+      if ((peekTerminalService()?.getAttachGeneration(id) ?? 0) === ownedGenerationRef.current) {
         updateVisibility(id, false);
       }
     };

@@ -1,7 +1,10 @@
 import { useEffect, useLayoutEffect, useRef } from "react";
 import type { AgentState } from "@shared/types/agent";
 import { terminalClient } from "@/clients";
-import { terminalInstanceService } from "@/services/TerminalInstanceService";
+import {
+  peek as peekTerminalService,
+  with as withTerminalService,
+} from "@/services/terminal/terminalInstanceServiceAccessor";
 import { deriveTerminalChrome } from "@/utils/terminalChrome";
 import { quoteLaunchArgOptional } from "@shared/utils/shellEscape.js";
 import { hostShellDialect } from "@/hooks/useHostPlatform";
@@ -382,7 +385,7 @@ export function useTerminalFileTransfer(
       return {
         isAgent,
         agentId,
-        inputEpoch: terminalInstanceService.getUserInputEpoch(terminalId),
+        inputEpoch: peekTerminalService()?.getUserInputEpoch(terminalId) ?? 0,
         hasPanel: panel !== undefined,
         worktreeId: panel?.worktreeId ?? undefined,
         restartKey: panel && isPtyPanel(panel) ? (panel.restartKey ?? 0) : 0,
@@ -417,7 +420,7 @@ export function useTerminalFileTransfer(
     const handOffFocus = () => {
       usePanelStore.getState().setPreferredTerminalFocusTarget("xterm");
       onDropSelectRef.current?.();
-      terminalInstanceService.focus(terminalId);
+      peekTerminalService()?.focus(terminalId);
     };
 
     // The OS hands drop and clipboard-save an absolute path, so the agent
@@ -440,7 +443,7 @@ export function useTerminalFileTransfer(
      * that never enabled it would render the delimiters as literal input.
      */
     const writeToTerminal = (text: string, isAgent: boolean, automatic: boolean) => {
-      const managed = terminalInstanceService.get(terminalId);
+      const managed = peekTerminalService()?.get(terminalId) ?? null;
       const useBracketedPaste = managed ? managed.terminal.modes.bracketedPasteMode : isAgent;
       // The unwrapped branch writes at the parser directly, so it needs the
       // neutralisation the wrapper performs for the other one. Paths carrying
@@ -452,7 +455,7 @@ export function useTerminalFileTransfer(
         : neutralizeControlCharacters(text);
 
       terminalClient.write(terminalId, payload);
-      terminalInstanceService.notifyUserInput(terminalId, "", { automatic });
+      withTerminalService((service) => service.notifyUserInput(terminalId, "", { automatic }));
       // The unwrapped text — bracket markers must not reach input tracking.
       onInput?.(text);
     };
@@ -475,7 +478,7 @@ export function useTerminalFileTransfer(
       if (getEffectiveAgentConfig(agentId)?.capabilities?.imageInput !== "bracketed-path") {
         return false;
       }
-      return terminalInstanceService.get(terminalId)?.terminal.modes.bracketedPasteMode === true;
+      return peekTerminalService()?.get(terminalId)?.terminal.modes.bracketedPasteMode === true;
     };
 
     const joinText = (segments: readonly ImageInputSegment[]): string =>
@@ -578,7 +581,9 @@ export function useTerminalFileTransfer(
             const segment = segments[index]!;
             const text = segment.kind === "image" ? segment.path : segment.text;
             terminalClient.write(terminalId, formatWithBracketedPaste(text));
-            terminalInstanceService.notifyUserInput(terminalId, "", { automatic });
+            withTerminalService((service) =>
+              service.notifyUserInput(terminalId, "", { automatic })
+            );
             onInput?.(text);
           }
         })
@@ -873,7 +878,7 @@ export function useTerminalFileTransfer(
     // a focused Cancel button there is not the terminal taking the keyboard.
     const unregisterPaneDropTarget = registerPaneDropTarget(terminalId, "xterm", {
       ownsFocus: () =>
-        terminalInstanceService.get(terminalId)?.hostElement.contains(document.activeElement) ??
+        peekTerminalService()?.get(terminalId)?.hostElement.contains(document.activeElement) ??
         false,
       canTake: canInsert,
       take: (sources) => {

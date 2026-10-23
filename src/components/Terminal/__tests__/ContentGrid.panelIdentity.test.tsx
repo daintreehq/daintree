@@ -1,11 +1,12 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { render, cleanup, fireEvent } from "@testing-library/react";
 import { DndContext } from "@dnd-kit/core";
 import type { PanelInstance, TabGroup } from "@shared/types/panel";
 import type { ContentGridContext } from "../useContentGridContext";
 import { ContentGrid } from "../ContentGrid";
 import { DIVIDER_WIDTH_PX } from "../TwoPaneSplitDivider";
+import { load as loadTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
 
 // #12476: closing one grid panel must leave every other panel mounted — a
 // remount restarts media playback and drops scroll and viewer state that
@@ -271,6 +272,12 @@ function fractionOf(track: string | undefined): number {
 function isSplitGrid(container: HTMLElement): boolean {
   return gridNode(container).getAttribute("data-split-mode") === "true";
 }
+
+// The service mock never evaluates the real module, so nothing registers it;
+// loading caches the mock for the synchronous peek() call sites.
+beforeAll(async () => {
+  await loadTerminalService();
+});
 
 describe("ContentGrid panel identity across layout changes (#12476)", () => {
   beforeEach(() => {

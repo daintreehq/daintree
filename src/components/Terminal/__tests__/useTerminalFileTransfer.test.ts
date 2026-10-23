@@ -1,7 +1,7 @@
 /**
  * @vitest-environment jsdom
  */
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { renderHook, act, cleanup } from "@testing-library/react";
 import { useRef } from "react";
 
@@ -110,6 +110,7 @@ import { _resetCtrlVImagePasteForTests, getClipboardImagePaster } from "../uploa
 import type { MaterializeResult, MaterializeSource } from "@shared/types/remoteHosts";
 import type { TransferSource } from "@/lib/transferSources";
 import { useTerminalInputStore } from "@/store/terminalInputStore";
+import { load as loadTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
 
 /** What `clipboard.saveImage` resolves to, taken from the IPC surface itself. */
 type SavedImage = Awaited<ReturnType<typeof window.electron.clipboard.saveImage>>;
@@ -122,6 +123,12 @@ function lastWrittenPayload(): string {
 
 /** A worktree root the fixture paths below sit inside. */
 const CWD = "/Users/test/proj";
+
+// The service mock never evaluates the real module, so nothing registers it;
+// loading caches the mock for the synchronous peek() call sites.
+beforeAll(async () => {
+  await loadTerminalService();
+});
 
 describe("IMAGE_EXTENSIONS", () => {
   it("matches common image formats", () => {

@@ -1,5 +1,5 @@
 import { useEffect, useRef, type RefObject } from "react";
-import { terminalInstanceService } from "@/services/TerminalInstanceService";
+import { peek as peekTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
 import { isStaleHiddenReading } from "./visibilityReadingGuard";
 import { COMFORTABLE_PANEL_HEIGHT_PX } from "@/lib/terminalLayout";
 
@@ -55,7 +55,7 @@ export function useTerminalVisibilityObserver({
   useEffect(() => {
     if (!containerRef.current) return;
 
-    const gen = terminalInstanceService.getAttachGeneration(id);
+    const gen = peekTerminalService()?.getAttachGeneration(id) ?? 0;
 
     const observer = new IntersectionObserver(
       (entries) => {
@@ -74,7 +74,7 @@ export function useTerminalVisibilityObserver({
         // adopting the newer generation here, so a superseded observer's
         // retained callback keeps failing this check. Checked before the
         // geometry reads below so a superseded callback costs no layout.
-        if (terminalInstanceService.getAttachGeneration(id) !== gen) return;
+        if ((peekTerminalService()?.getAttachGeneration(id) ?? 0) !== gen) return;
 
         // Stale `false` readings would freeze a visible terminal at the
         // BACKGROUND tier (#9780). Confirm against fresh element and root
@@ -108,12 +108,12 @@ export function useTerminalVisibilityObserver({
           // it ever consults isVisible and the reconciliation watchdog only
           // repairs at BACKGROUND (#11445).
           updateVisibility(id, true);
-          terminalInstanceService.setVisible(id, true, gen);
+          peekTerminalService()?.setVisible(id, true, gen);
           return;
         }
 
         updateVisibility(id, entry.isIntersecting);
-        terminalInstanceService.setVisible(id, entry.isIntersecting, gen);
+        peekTerminalService()?.setVisible(id, entry.isIntersecting, gen);
       },
       {
         // Grid-scoped root: when mounted inside the grid, the pre-warm margin

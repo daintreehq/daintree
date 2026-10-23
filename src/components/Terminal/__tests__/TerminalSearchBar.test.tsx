@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen, fireEvent, act } from "@testing-library/react";
 
 vi.mock("@/services/TerminalInstanceService", () => ({
@@ -20,6 +20,7 @@ vi.mock("@/components/ui/tooltip", () => ({
 import { TerminalSearchBar } from "../TerminalSearchBar";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { useTerminalSearchHistoryStore } from "@/store/terminalSearchHistoryStore";
+import { load as loadTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
 
 type ResultsListener = (event: { resultIndex: number; resultCount: number }) => void;
 
@@ -46,6 +47,12 @@ function createMockManaged(findNextResult = true) {
     _resultsListeners: resultsListeners,
   };
 }
+
+// The service mock never evaluates the real module, so nothing registers it;
+// loading caches the mock for the synchronous peek() call sites.
+beforeAll(async () => {
+  await loadTerminalService();
+});
 
 describe("TerminalSearchBar", () => {
   const unpinHistory = vi.fn();

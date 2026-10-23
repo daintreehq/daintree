@@ -88,7 +88,10 @@ import { useIsHibernated } from "@/hooks/useIsHibernated";
 import { errorsClient } from "@/clients";
 import type { AgentState } from "@/types";
 import { isBuiltInAgentId, type BuiltInAgentId } from "@shared/config/agentIds";
-import { terminalInstanceService } from "@/services/TerminalInstanceService";
+import {
+  peek as peekTerminalService,
+  with as withTerminalService,
+} from "@/services/terminal/terminalInstanceServiceAccessor";
 import { notifyWorktreeTerminalAttached } from "@/services/terminal/worktreeRevealCoordinator";
 import { actionService } from "@/services/ActionService";
 import {
@@ -146,7 +149,7 @@ function readXtermSelectionState(id: string): {
   hasSelection: boolean;
   xtermOwnsDomFocus: boolean;
 } {
-  const managed = terminalInstanceService.get(id);
+  const managed = peekTerminalService()?.get(id) ?? null;
   if (!managed) return { hasSelection: false, xtermOwnsDomFocus: false };
   return {
     hasSelection: managed.terminal.hasSelection(),
@@ -857,7 +860,7 @@ function TerminalPaneComponent({
 
       for (const result of results) {
         if (result.isClear) {
-          const managed = terminalInstanceService.get(id);
+          const managed = peekTerminalService()?.get(id) ?? null;
           if (managed?.terminal) {
             try {
               managed.terminal.clear();
@@ -899,7 +902,7 @@ function TerminalPaneComponent({
     // This is needed because agent terminals focus the hybrid input bar, so
     // xterm's built-in copy handler never receives the copy event.
     if (e.metaKey && e.key === "c") {
-      const managed = terminalInstanceService.get(id);
+      const managed = peekTerminalService()?.get(id) ?? null;
       if (managed?.terminal.hasSelection()) {
         const nativeSelection = window.getSelection()?.toString() ?? "";
         if (nativeSelection.length === 0) {
@@ -936,7 +939,7 @@ function TerminalPaneComponent({
   const handleClick = (e?: React.MouseEvent) => {
     const target = e?.target as HTMLElement | null;
     const isBufferClick = !!target?.closest(".xterm");
-    const managed = terminalInstanceService.get(id);
+    const managed = peekTerminalService()?.get(id) ?? null;
     if (isBufferClick && managed?.terminal.hasSelection()) {
       // Prevent ContentPanel from calling onFocus() which triggers parent
       // re-renders. Don't call setFocused() either — it triggers a
@@ -1135,13 +1138,13 @@ function TerminalPaneComponent({
   const isRebuildingDisplay = retryingAttachId === id;
   const handleRetryAttach = useCallback(() => {
     setRetryingAttachId(id);
-    void terminalInstanceService
-      .recoverPoisonedTerminal(id, { manual: true })
-      .finally(() => setRetryingAttachId((current) => (current === id ? null : current)));
+    void (
+      peekTerminalService()?.recoverPoisonedTerminal(id, { manual: true }) ?? Promise.resolve()
+    ).finally(() => setRetryingAttachId((current) => (current === id ? null : current)));
   }, [id]);
 
   useEffect(() => {
-    terminalInstanceService.setFocused(id, isFocused);
+    peekTerminalService()?.setFocused(id, isFocused);
 
     // Selection alone never pulls focus into a held pane — restore selects a
     // pane on boot, and a recovery surface grabbing the keyboard there is a
@@ -1183,7 +1186,7 @@ function TerminalPaneComponent({
 
     const rafId = requestAnimationFrame(() => {
       if (isScratchpadElement(document.activeElement, id)) return;
-      terminalInstanceService.focus(id);
+      peekTerminalService()?.focus(id);
     });
     return () => cancelAnimationFrame(rafId);
   }, [
@@ -1232,14 +1235,14 @@ function TerminalPaneComponent({
       // liveness — an instance is registered before its xterm opens, and the
       // flag stays true after a detach — so the only trustworthy signal is
       // whether focus actually landed inside this pane.
-      terminalInstanceService.focus(id);
+      peekTerminalService()?.focus(id);
       return containerRef.current?.contains(document.activeElement) ?? false;
     });
   }, [id, isHeldPane, showHybridInputBar, isHybridInputDisabledForFocus, hybridInputEnabled]);
 
   // Sync agent state to terminal service for scroll management
   useEffect(() => {
-    terminalInstanceService.setAgentState(id, agentState ?? "idle");
+    peekTerminalService()?.setAgentState(id, agentState ?? "idle");
   }, [id, agentState]);
 
   // Per-pane dismiss state resets when the agent leaves the completed phase —
@@ -1325,14 +1328,14 @@ function TerminalPaneComponent({
   const handleSendToAssistant = useCallback(() => {
     const helpTid = selectActiveSlot(useHelpPanelStore.getState()).terminalId;
     if (!helpTid || helpTid === id) return;
-    const state = terminalInstanceService.getAgentState(helpTid);
+    const state = peekTerminalService()?.getAgentState(helpTid);
     if (state !== "idle" && state !== "waiting") return;
     const _helpPanel = usePanelStore.getState().panelsById[helpTid];
     if (_helpPanel && isPtyPanel(_helpPanel) && _helpPanel.isInputLocked === true) return;
-    const text = terminalInstanceService.captureBufferText(id, 20000);
+    const text = peekTerminalService()?.captureBufferText(id, 20000) ?? "";
     if (!text) return;
 
-    const managed = terminalInstanceService.get(helpTid);
+    const managed = peekTerminalService()?.get(helpTid) ?? null;
     // Buffer text is whatever the agent printed, escape sequences included, so
     // it can't reach the parser as it stands. No managed instance means no mode
     // to read, and wrapped is the safe reading of text we cannot ask about.
@@ -1342,14 +1345,14 @@ function TerminalPaneComponent({
         bracketedPasteMode: managed ? managed.terminal.modes.bracketedPasteMode : true,
       })
     );
-    terminalInstanceService.notifyUserInput(helpTid);
+    withTerminalService((service) => service.notifyUserInput(helpTid));
     const help = useHelpPanelStore.getState();
     help.setOpen(true);
     help.requestFocus();
   }, [id]);
 
   const handleSendToAgent = useCallback(() => {
-    const text = terminalInstanceService.captureBufferText(id, 20000);
+    const text = peekTerminalService()?.captureBufferText(id, 20000) ?? "";
     if (!text) return;
     openSendToAgentPaletteWithText(text, id);
   }, [id]);
@@ -1776,7 +1779,7 @@ function TerminalPaneComponent({
                           if (focusTarget === "hybridInput") {
                             inputBarRef.current?.focusWithCursorAtEnd();
                           } else {
-                            terminalInstanceService.focus(id);
+                            peekTerminalService()?.focus(id);
                           }
                         });
                       }}
@@ -1819,7 +1822,7 @@ function TerminalPaneComponent({
                     onActivate={handleClick}
                     onSend={({ trackerData, text, imagePaths }) => {
                       if (!isInputLocked && !isRestarting) {
-                        terminalInstanceService.notifyUserInput(id);
+                        withTerminalService((service) => service.notifyUserInput(id));
                         reportCanopySent(id);
                         // submit now rejects when the PTY is gone (#8706); the
                         // single-pane path has no recovery UI for that, so
@@ -1838,9 +1841,11 @@ function TerminalPaneComponent({
                     onSendKey={(key) => {
                       if (!isInputLocked && !isRestarting) {
                         if (key === "escape") {
-                          terminalInstanceService.clearDirectingState(id, "escape-key");
+                          withTerminalService((service) =>
+                            service.clearDirectingState(id, "escape-key")
+                          );
                         } else {
-                          terminalInstanceService.notifyUserInput(id);
+                          withTerminalService((service) => service.notifyUserInput(id));
                         }
                         if (key === "enter") reportCanopySent(id);
                         terminalClient.sendKey(id, key);

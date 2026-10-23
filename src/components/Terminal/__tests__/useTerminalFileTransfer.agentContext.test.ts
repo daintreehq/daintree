@@ -1,7 +1,7 @@
 /**
  * @vitest-environment jsdom
  */
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, renderHook } from "@testing-library/react";
 import { useRef } from "react";
 import type { PluginSendToAgentRefusalReason } from "@shared/types/plugin";
@@ -30,8 +30,15 @@ import {
   AGENT_CONTEXT_DRAG_MIME,
   encodeAgentContextDragPayload,
 } from "@shared/utils/agentContextDrag";
+import { load as loadTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
 
 const TERMINAL_ID = "term-1";
+
+// The service mock never evaluates the real module, so nothing registers it;
+// loading caches the mock for the synchronous peek() call sites.
+beforeAll(async () => {
+  await loadTerminalService();
+});
 
 describe("useTerminalFileTransfer — agent context on the xterm surface", () => {
   let container: HTMLDivElement;
