@@ -122,7 +122,9 @@ export interface RemoteHarness {
    * Restart the host's Daintree under the Shell: the listener goes and comes
    * back, and the drive lease service is made again from its reservations
    * file, as a relaunched host's is. Its terminals are the test's to keep or
-   * lose (`whileDown`), as the pty-host's are.
+   * lose (`whileDown`), as the pty-host's are. Handlers a test registered stay
+   * registered, and any that subscribed to the old lease service (help's
+   * assistant adoption) keep it: register those again, as a relaunched host would.
    */
   restartHost(whileDown?: () => void | Promise<void>): Promise<void>;
   dispose(): Promise<void>;
@@ -254,7 +256,7 @@ async function buildHarness(
   const location: HostSocketLocation =
     options.hostLocation ??
     hostSocketLocation({ platform: "darwin", userDataDir: path.join(dir, "host") });
-  const sockets: net.Socket[] = [];
+  const sockets = new Set<net.Socket>();
   let allowConnect = true;
   const direct = createDirectTransport({ discoveryPath: location.discoveryPath });
   const clientDir = path.join(harnessState.userDataDir, "rh");
@@ -262,7 +264,9 @@ async function buildHarness(
     async open(signal) {
       if (!allowConnect) throw new Error("host unreachable");
       const connection = await direct.open(signal);
-      sockets.push(connection.socket as net.Socket);
+      const socket = connection.socket as net.Socket;
+      sockets.add(socket);
+      socket.once("close", () => sockets.delete(socket));
       return connection;
     },
   };
@@ -344,7 +348,7 @@ async function buildHarness(
     streamsFlowing,
     async dropLink() {
       allowConnect = false;
-      for (const socket of sockets.splice(0)) socket.destroy();
+      for (const socket of [...sockets]) socket.destroy();
       await waitUntil(
         () =>
           harness.server().sessions.length === 0 &&
@@ -383,7 +387,7 @@ async function buildHarness(
       if (how === "crash") {
         if (options.createTransport) throw new Error("a crash needs the harness's own transport");
         allowConnect = false;
-        for (const socket of sockets.splice(0)) socket.destroy();
+        for (const socket of [...sockets]) socket.destroy();
         await waitUntil(() => !hostSessionOf(sessionId), "the host to park the crashed Shell");
       }
       await _stopRemoteShellForTesting();
@@ -413,8 +417,10 @@ async function buildHarness(
       const hostMode = requireRemoteService("hostMode");
       await hostMode.stopListening();
       if (launch) await waitUntil(() => !isConnected(), "the Shell to see the host go");
-      _resetDriveLeaseServiceForTesting(leaseService());
+      _resetDriveLeaseServiceForTesting(null);
       await whileDown?.();
+      // Made as the host comes back, so restored reservations' graces start then.
+      _resetDriveLeaseServiceForTesting(leaseService());
       await hostMode.startListening();
       connection()?.retryNow();
     },

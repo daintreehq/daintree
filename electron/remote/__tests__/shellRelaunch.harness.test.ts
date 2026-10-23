@@ -93,6 +93,10 @@ const assistants = vi.hoisted(() => {
     detachedFrom: [] as number[],
     adopted: [] as Array<{ sessionId: string; handle: number }>,
     onDetached: new Set<() => void>(),
+    /** Each lane's saved conversation, as a restarted host reads it back from disk. */
+    saved: new Map<string, { agentId: string; agentSessionId: string; cwd: string }>(),
+    peeks: [] as Array<{ projectId: string; slot: number; viewHandle: number | undefined }>,
+    claims: [] as Array<{ projectId: string; slot: number; owner: number; claimId: string }>,
   };
   const refsFor = (handle: number) =>
     state.lanes
@@ -166,6 +170,18 @@ const assistants = vi.hoisted(() => {
       state.lanes
         .filter((lane) => lane.handle === null && lane.projectId === projectId)
         .map((lane) => lane.slot),
+    peekPendingHibernation(projectId: string, slot: number, options?: { viewHandle?: number }) {
+      state.peeks.push({ projectId, slot, viewHandle: options?.viewHandle });
+      const saved = state.saved.get(`${projectId}:${slot}`);
+      return saved ? { ...saved, panelWasOpen: false } : null;
+    },
+    async takePendingHibernation(projectId: string, slot: number, owner: number) {
+      const saved = state.saved.get(`${projectId}:${slot}`);
+      if (!saved || state.claims.some((claim) => claim.projectId === projectId)) return null;
+      const claimId = `claim-${state.claims.length + 1}`;
+      state.claims.push({ projectId, slot, owner, claimId });
+      return { ...saved, claimId };
+    },
     addLaneDetachedListener(listener: () => void) {
       state.onDetached.add(listener);
       return () => state.onDetached.delete(listener);
@@ -185,6 +201,9 @@ const assistants = vi.hoisted(() => {
       state.detachedFrom.length = 0;
       state.adopted.length = 0;
       state.onDetached.clear();
+      state.saved.clear();
+      state.peeks.length = 0;
+      state.claims.length = 0;
     },
   };
 });
@@ -328,6 +347,7 @@ import type { TerminalSnapshot } from "../../types/index.js";
 import { CHANNELS } from "../../ipc/channels.js";
 import { getEndpointRegistry } from "../../ipc/endpointRegistry.js";
 import { registerHelpHandlers } from "../../ipc/handlers/help.js";
+import { HELP_METHOD_CHANNELS } from "../../ipc/handlers/help.preload.js";
 import { registerTerminalSnapshotHandlers } from "../../ipc/handlers/terminal/snapshots.js";
 import { registerTerminalLayoutHandlers } from "../../ipc/handlers/terminalLayout.js";
 import { TERMINAL_LAYOUT_METHOD_CHANNELS } from "../../ipc/handlers/terminalLayout.preload.js";
@@ -335,6 +355,7 @@ import type { HandlerDependencies, IpcContext } from "../../ipc/types.js";
 import { typedHandleWithContext } from "../../ipc/utils.js";
 import {
   DEFAULT_DRIVE_LEASE_RELEASE_GRACE_MS,
+  DEFAULT_RESTORED_RESERVATION_GRACE_MS,
   getDriveLeaseService,
 } from "../../services/DriveLeaseService.js";
 import type { PtyClient } from "../../services/PtyClient.js";
@@ -360,9 +381,8 @@ import { waitUntil } from "./harness/poll.js";
 import { HOST_ID, startRemoteHarness, type RemoteHarness } from "./harness/remoteHarness.js";
 
 const TEST_TIMEOUT_MS = 60_000;
-/** Drive lease graces short enough to wait out, where a test needs one to run out. */
-const GRACE_MS = 1_500;
-const RESTORED_GRACE_MS = 3_000;
+/** A drive lease grace short enough to wait out, where a test needs one to run out. */
+const GRACE_MS = 3_000;
 const LAPTOP = "Greg’s MacBook Air";
 
 let h: RemoteHarness | null = null;
@@ -514,6 +534,9 @@ async function otherInstall(r: RemoteHarness) {
         body: { endpointId, projectId },
       });
     },
+    call(endpointId: string, channel: string, ...args: unknown[]): Promise<IpcEnvelope> {
+      return session.invoke(endpointId, channel, args);
+    },
     spawn(endpointId: string, request: SpawnRequest): Promise<IpcEnvelope> {
       return session.invoke(endpointId, CHANNELS.TERMINAL_SPAWN, [request]);
     },
@@ -547,6 +570,8 @@ describe("a relaunch of the Shell against a host that stays up (integration harn
       let previous = r.shellIdentity();
 
       for (const launch of [2, 3]) {
+        // Before the quit, so the grace it leaves can't have run out by any check below.
+        const quitAt = Date.now();
         await quitShell(r);
         expect(expired).toContainEqual({ sessionId: previous.sessionId, cause: "goodbye" });
         // Held for the launch that left, inside its grace.
@@ -556,12 +581,16 @@ describe("a relaunch of the Shell against a host that stays up (integration harn
         });
         expect(getEndpointRegistry().getRemote()).toEqual([]);
         r.pty.emit("t1", `while-away-${launch};`);
-        const quitAt = Date.now();
 
         await r.startShell();
         const restored = await restoreWindow("proj-1");
         const view = restored.shown;
         const identity = r.shellIdentity();
+        // Still the last launch's until the restored view's first call opens its endpoint.
+        expect(getDriveLeaseService().getDriveTarget("proj-1")).toMatchObject({
+          kind: "reserved",
+          holder: { clientId: previous.client.clientId },
+        });
         expect(identity.client.clientId).not.toBe(previous.client.clientId);
         expect(identity.client.deviceId).toBe(install.deviceId);
         expect(identity.sessionId).not.toBe(previous.sessionId);
@@ -589,7 +618,8 @@ describe("a relaunch of the Shell against a host that stays up (integration harn
           "input after relaunch"
         );
 
-        // Its first change goes through at once, inside the grace the last launch left.
+        // Its first change goes through, inside the grace the last launch left:
+        // taken back as the same install's, not handed over when the grace ran out.
         const spawned = await r.invoke(
           CHANNELS.TERMINAL_SPAWN,
           view,
@@ -669,11 +699,17 @@ describe("a relaunch of the Shell against a host that stays up (integration harn
           )
         );
       }
+      const quitAt = Date.now();
+      const before = r.shellIdentity().client;
       await quitShell(r);
 
       await r.startShell();
       const restored = await restoreWindow("proj-1", ["proj-2"]);
       expect(restored.views.getActiveProjectId()).toBe(toHostScopedKey(HOST_ID, "proj-1"));
+      expect(getDriveLeaseService().getDriveTarget("proj-2")).toMatchObject({
+        kind: "reserved",
+        holder: { clientId: before.clientId },
+      });
       const background = restored.view("proj-2");
       expect(background).toBeDefined();
       expect(background!.id).not.toBe(first.view("proj-2")!.id);
@@ -697,6 +733,7 @@ describe("a relaunch of the Shell against a host that stays up (integration harn
         spawnRequest(r, "t-proj-2-again", "proj-2")
       );
       expect(refusal(spawned)).toBeNull();
+      expect(Date.now() - quitAt).toBeLessThan(DEFAULT_DRIVE_LEASE_RELEASE_GRACE_MS);
       expect(getDriveLeaseService().getHolder("proj-2")).toMatchObject({
         clientId: r.shellIdentity().client.clientId,
       });
@@ -713,15 +750,16 @@ describe("a relaunched Shell's restore while another install has the project (in
       const first = await restoreWindow("proj-1");
       await r.openStreams(first.shown);
       data(await r.invoke(CHANNELS.TERMINAL_SPAWN, first.shown, spawnRequest(r, "t1")));
+      // The laptop takes control while the Shell drives.
       const laptop = await otherInstall(r);
       laptop.open("laptop-view", "proj-1");
-
-      // The Shell quits; its grace runs out with nothing of its own back, and
-      // the laptop's view is next.
-      await quitShell(r);
-      await waitUntil(() => holderName("proj-1") === LAPTOP, "the laptop to drive", GRACE_MS * 4);
+      data(
+        await laptop.call("laptop-view", CHANNELS.DRIVE_LEASE_TAKE_OVER, { projectId: "proj-1" })
+      );
+      expect(holderName("proj-1")).toBe(LAPTOP);
       data(await laptop.spawn("laptop-view", spawnRequest(r, "laptop-1")));
 
+      await quitShell(r);
       await r.startShell();
       const restored = await restoreWindow("proj-1");
       const view = restored.shown;
@@ -738,6 +776,7 @@ describe("a relaunched Shell's restore while another install has the project (in
       ).toMatchObject(refused);
 
       // The laptop quits: its project stays reserved for it through its grace.
+      const quitAt = Date.now();
       await laptop.quit();
       await waitUntil(
         () => getDriveLeaseService().getDriveTarget("proj-1").kind === "reserved",
@@ -747,13 +786,14 @@ describe("a relaunched Shell's restore while another install has the project (in
       expect(
         refusal(await r.invoke(CHANNELS.TERMINAL_SPAWN, view, spawnRequest(r, "t3")))
       ).toMatchObject(refused);
+      expect(Date.now() - quitAt).toBeLessThan(GRACE_MS);
 
       // Once it is out, the lease passes to the restored view on its own.
       const shell = r.shellIdentity().client.clientId;
       await waitUntil(
         () => getDriveLeaseService().getHolder("proj-1")?.clientId === shell,
         "the lease to pass to the restored view",
-        GRACE_MS * 4
+        GRACE_MS * 3
       );
       expect(
         refusal(await r.invoke(CHANNELS.TERMINAL_SPAWN, view, spawnRequest(r, "t4")))
@@ -764,44 +804,38 @@ describe("a relaunched Shell's restore while another install has the project (in
   );
 
   it(
-    "host restart: the relaunched install takes its restored reservation back at once; another install waits the restored grace out",
+    "host restart: the relaunched install takes its restored reservation back at once, while another install is refused it",
     async () => {
-      const { r } = await harness({ lease: { restoredReservationGraceMs: RESTORED_GRACE_MS } });
-      const first = await restoreWindow("proj-1", ["proj-2"]);
-      for (const projectId of ["proj-1", "proj-2"]) {
-        const view = first.view(projectId)!;
-        await r.openStreams(view);
-        data(
-          await r.invoke(
-            CHANNELS.TERMINAL_SPAWN,
-            view,
-            spawnRequest(r, `t-${projectId}`, projectId)
-          )
-        );
-      }
+      const { r } = await harness();
+      const first = await restoreWindow("proj-1");
+      await r.openStreams(first.shown);
+      data(await r.invoke(CHANNELS.TERMINAL_SPAWN, first.shown, spawnRequest(r, "t1")));
       const before = r.shellIdentity().client;
       await quitShell(r);
+      // Before the restart, so the restored grace can't have run out by any check below.
+      const restartAt = Date.now();
       await r.restartHost(() => r.pty.terminals.clear());
-      const restartedAt = Date.now();
-      // The restarted host holds both for the install that drove them.
-      for (const projectId of ["proj-1", "proj-2"]) {
-        expect(getDriveLeaseService().getDriveTarget(projectId)).toMatchObject({
-          kind: "reserved",
-          holder: { clientId: before.clientId },
-        });
-      }
+      expect(getDriveLeaseService().getDriveTarget("proj-1")).toMatchObject({
+        kind: "reserved",
+        holder: { clientId: before.clientId },
+      });
 
       const laptop = await otherInstall(r);
-      laptop.open("laptop-view", "proj-2");
-      expect(
-        refusal(await laptop.spawn("laptop-view", spawnRequest(r, "laptop-1", "proj-2")))
-      ).toMatchObject({
+      laptop.open("laptop-view", "proj-1");
+      const refusedForShell = {
         code: "DRIVEN_ELSEWHERE",
         userMessage: expect.stringContaining(before.clientName),
-      });
+      };
+      expect(refusal(await laptop.spawn("laptop-view", spawnRequest(r, "laptop-1")))).toMatchObject(
+        refusedForShell
+      );
 
       await r.startShell();
       const restored = await restoreWindow("proj-1");
+      expect(getDriveLeaseService().getDriveTarget("proj-1")).toMatchObject({
+        kind: "reserved",
+        holder: { clientId: before.clientId },
+      });
       await r.openStreams(restored.shown);
       const spawned = await r.invoke(
         CHANNELS.TERMINAL_SPAWN,
@@ -809,20 +843,41 @@ describe("a relaunched Shell's restore while another install has the project (in
         spawnRequest(r, "t-relaunched")
       );
       expect(refusal(spawned)).toBeNull();
-      expect(Date.now() - restartedAt).toBeLessThan(RESTORED_GRACE_MS);
+      expect(Date.now() - restartAt).toBeLessThan(DEFAULT_RESTORED_RESERVATION_GRACE_MS);
       expect(getDriveLeaseService().getHolder("proj-1")).toMatchObject({
         clientId: r.shellIdentity().client.clientId,
       });
-
-      // Nobody came back for proj-2: once its restored grace is out, the laptop drives it.
-      await waitUntil(
-        () => holderName("proj-2") === LAPTOP,
-        "the laptop to get proj-2",
-        RESTORED_GRACE_MS * 3
+      expect(refusal(await laptop.spawn("laptop-view", spawnRequest(r, "laptop-2")))).toMatchObject(
+        refusedForShell
       );
-      expect(
-        refusal(await laptop.spawn("laptop-view", spawnRequest(r, "laptop-2", "proj-2")))
-      ).toBeNull();
+    },
+    TEST_TIMEOUT_MS
+  );
+
+  it(
+    "host restart: a restored reservation nobody comes back for passes to another install once its grace is out",
+    async () => {
+      const { r } = await harness({ lease: { restoredReservationGraceMs: GRACE_MS } });
+      const first = await restoreWindow("proj-1");
+      await r.openStreams(first.shown);
+      data(await r.invoke(CHANNELS.TERMINAL_SPAWN, first.shown, spawnRequest(r, "t1")));
+      const before = r.shellIdentity().client;
+      await quitShell(r);
+      const restartAt = Date.now();
+      await r.restartHost(() => r.pty.terminals.clear());
+
+      const laptop = await otherInstall(r);
+      laptop.open("laptop-view", "proj-1");
+      expect(refusal(await laptop.spawn("laptop-view", spawnRequest(r, "laptop-1")))).toMatchObject(
+        {
+          code: "DRIVEN_ELSEWHERE",
+          userMessage: expect.stringContaining(before.clientName),
+        }
+      );
+      expect(Date.now() - restartAt).toBeLessThan(GRACE_MS);
+
+      await waitUntil(() => holderName("proj-1") === LAPTOP, "the laptop to drive", GRACE_MS * 3);
+      expect(refusal(await laptop.spawn("laptop-view", spawnRequest(r, "laptop-2")))).toBeNull();
     },
     TEST_TIMEOUT_MS
   );
@@ -830,9 +885,9 @@ describe("a relaunched Shell's restore while another install has the project (in
 
 describe("agent and assistant panes across a restart (integration harness)", () => {
   it(
-    "Shell relaunch: a running agent's pane finds its terminal still on the host, on the same conversation, and nothing respawns",
+    "Shell relaunch: a running agent's pane finds its terminal still on the host, on the same conversation",
     async () => {
-      const { r, spawns } = await harness();
+      const { r } = await harness();
       const agent = r.pty.spawn("agent-1", "proj-1", {
         launchAgentId: "claude",
         agentSessionId: "sess-claude",
@@ -865,7 +920,6 @@ describe("agent and assistant panes across a restart (integration harness)", () 
         "the agent's live output"
       );
       expect(r.pty.terminals.get("agent-1")).toBe(agent);
-      expect(spawns).toEqual([]);
     },
     TEST_TIMEOUT_MS
   );
@@ -989,6 +1043,78 @@ describe("agent and assistant panes across a restart (integration harness)", () 
       expect(assistants.state.adopted).toEqual([{ sessionId: "help-1", handle: after.handle }]);
       expect(after.handle).not.toBe(before!.handle);
       expect(assistants.state.provisioned).toHaveLength(1);
+    },
+    TEST_TIMEOUT_MS
+  );
+
+  it(
+    "host restart: the assistant's saved conversation is offered to the relaunched window's view for its own project, and only the view that drives may claim it",
+    async () => {
+      const { r } = await harness();
+      const offHelp = registerHelpHandlers();
+      const first = await restoreWindow("proj-1");
+      await r.openStreams(first.shown);
+      data(
+        await r.invoke(CHANNELS.HELP_PROVISION_SESSION, first.shown, {
+          projectId: "proj-1",
+          projectPath: r.projects.get("proj-1")!.path,
+          agentId: "claude",
+        })
+      );
+      await quitShell(r);
+
+      await r.restartHost(() => {
+        // The assistant went with the host's app; what comes back is its
+        // conversation, saved for the lane, and handlers registered afresh.
+        offHelp();
+        assistants.state.lanes = [];
+        assistants.state.saved.set("proj-1:0", {
+          agentId: "claude",
+          agentSessionId: "conv-claude",
+          cwd: "/host/userData/help-sessions/abc",
+        });
+      });
+      cleanups.push(registerHelpHandlers());
+      // Another install watching the project can't take the conversation.
+      const laptop = await otherInstall(r);
+      laptop.open("laptop-view", "proj-1");
+      expect(
+        refusal(
+          await laptop.call("laptop-view", HELP_METHOD_CHANNELS.takePendingHibernation, "proj-1", 0)
+        )
+      ).toMatchObject({ code: "DRIVEN_ELSEWHERE" });
+
+      await r.startShell();
+      const restored = await restoreWindow("proj-1");
+      const view = restored.shown;
+      await r.openStreams(view);
+      const endpoint = getEndpointRegistry()
+        .getRemote()
+        .find((candidate) => candidate.linkSessionId === r.shellIdentity().sessionId)!;
+      expect(
+        data(await r.invoke(HELP_METHOD_CHANNELS.peekPendingHibernation, view, "proj-1", 0))
+      ).toEqual({
+        agentId: "claude",
+        agentSessionId: "conv-claude",
+        cwd: "/host/userData/help-sessions/abc",
+        panelWasOpen: false,
+      });
+      // Another project's is never read for this view.
+      expect(
+        data(await r.invoke(HELP_METHOD_CHANNELS.peekPendingHibernation, view, "proj-2", 0))
+      ).toBeNull();
+      expect(assistants.state.peeks).toEqual([
+        { projectId: "proj-1", slot: 0, viewHandle: endpoint.handle },
+      ]);
+
+      expect(
+        data(await r.invoke(HELP_METHOD_CHANNELS.takePendingHibernation, view, "proj-1", 0))
+      ).toMatchObject({ agentSessionId: "conv-claude", claimId: "claim-1" });
+      expect(assistants.state.claims).toEqual([
+        { projectId: "proj-1", slot: 0, owner: endpoint.handle, claimId: "claim-1" },
+      ]);
+      // Nothing was running to take over: the conversation is resumed, not adopted.
+      expect(assistants.state.adopted).toEqual([]);
     },
     TEST_TIMEOUT_MS
   );
