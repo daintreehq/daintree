@@ -638,8 +638,7 @@ describe("createHost (plugin activation API)", () => {
     const sentEvents = (name: string) =>
       broadcastToRendererMock.mock.calls
         .filter(
-          (call) =>
-            call[0] === CHANNELS.EVENTS_PUSH && (call[1] as { name: string }).name === name
+          (call) => call[0] === CHANNELS.EVENTS_PUSH && (call[1] as { name: string }).name === name
         )
         .map((call) => (call[1] as { payload: unknown }).payload);
 
@@ -752,9 +751,11 @@ describe("createHost (plugin activation API)", () => {
     // The three accepted changes go out as one complete map.
     flushPushes();
     expect(broadcastToRendererMock).toHaveBeenCalledTimes(1);
-    const { badges } = (broadcastToRendererMock.mock.calls[0]![1] as {
-      payload: { badges: Record<string, { color?: string }> };
-    }).payload;
+    const { badges } = (
+      broadcastToRendererMock.mock.calls[0]![1] as {
+        payload: { badges: Record<string, { color?: string }> };
+      }
+    ).payload;
     expect(Object.keys(badges)).toHaveLength(cap);
     expect(badges["panel-0"]?.color).toBe("warning");
     expect(badges["panel-1"]).toBeUndefined();

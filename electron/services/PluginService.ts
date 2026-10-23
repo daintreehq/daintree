@@ -8235,10 +8235,7 @@ export class PluginService {
       runUnloadStep(pluginId, "clearToolbarStates", () => this.emitToolbarStates(pluginId));
     }
 
-    if (
-      this.pluginPanelActivity.delete(pluginId) ||
-      discarded.has(PLUGIN_STATE_PANEL_ACTIVITY)
-    ) {
+    if (this.pluginPanelActivity.delete(pluginId) || discarded.has(PLUGIN_STATE_PANEL_ACTIVITY)) {
       runUnloadStep(pluginId, "clearPanelActivity", () => this.emitPanelActivity(pluginId));
     }
 
