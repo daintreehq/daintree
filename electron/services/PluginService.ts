@@ -9196,7 +9196,7 @@ export class PluginService {
   findAgentMcpServerSource(pluginInstanceId: string): AgentMcpServerSourceLookup | undefined {
     const plugin = this.plugins.get(pluginInstanceId);
     if (!plugin || !plugin.manifest.capabilities?.includes("mcp:expose")) return undefined;
-    const endpoint = plugin.manifest.contributes.agentMcp.find((entry) => entry.source);
+    const endpoint = (plugin.manifest.contributes.agentMcp ?? []).find((entry) => entry.source);
     const source = endpoint?.source;
     if (!endpoint || !source) return undefined;
     const contribution = plugin.manifest.contributes.mcpServers.find(
@@ -9209,7 +9209,7 @@ export class PluginService {
       source,
       contribution,
       pluginDir: plugin.dir,
-      declaredQueryNames: plugin.manifest.contributes.databases.flatMap((database) =>
+      declaredQueryNames: (plugin.manifest.contributes.databases ?? []).flatMap((database) =>
         (database.queries ?? []).map((query) => query.name)
       ),
     };
