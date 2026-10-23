@@ -205,29 +205,43 @@ vi.mock("../components/GitHubDropdownSkeletons", async () => {
   };
 });
 
-vi.mock("react-virtuoso", () => ({
-  Virtuoso: ({
-    data,
-    itemContent,
-    components,
-    context,
-  }: {
-    data: unknown[];
-    itemContent: (index: number, item: unknown) => ReactNode;
-    components?: { Footer?: (props: { context?: unknown }) => ReactNode };
-    context?: unknown;
-  }) => {
-    const Footer = components?.Footer;
-    return (
-      <div data-testid="virtuoso-mock">
-        {data.map((item, index) => (
-          <div key={index}>{itemContent(index, item)}</div>
-        ))}
-        {Footer ? <Footer context={context} /> : null}
-      </div>
-    );
-  },
-}));
+const { virtuosoScrollIntoView } = vi.hoisted(() => ({ virtuosoScrollIntoView: vi.fn() }));
+
+vi.mock("react-virtuoso", async () => {
+  const { useImperativeHandle } = await vi.importActual<typeof import("react")>("react");
+  return {
+    Virtuoso: ({
+      ref,
+      data,
+      itemContent,
+      computeItemKey,
+      components,
+      context,
+    }: {
+      ref?: React.Ref<unknown>;
+      data: unknown[];
+      itemContent: (index: number, item: unknown) => ReactNode;
+      computeItemKey?: (index: number, item: unknown) => React.Key;
+      components?: { Footer?: (props: { context?: unknown }) => ReactNode };
+      context?: unknown;
+    }) => {
+      // The list reveals its cursor through the handle, so the handle has to
+      // exist for a test to see a reveal happen (or not).
+      useImperativeHandle(ref, () => ({ scrollIntoView: virtuosoScrollIntoView }));
+      const Footer = components?.Footer;
+      return (
+        <div data-testid="virtuoso-mock">
+          {data.map((item, index) => (
+            <div key={computeItemKey ? computeItemKey(index, item) : index}>
+              {itemContent(index, item)}
+            </div>
+          ))}
+          {Footer ? <Footer context={context} /> : null}
+        </div>
+      );
+    },
+  };
+});
 
 const { LiveTimeAgoMock } = vi.hoisted(() => {
   const LiveTimeAgoMock = vi.fn();
@@ -314,6 +328,7 @@ beforeEach(() => {
   filterStore.setPrSortOrder("created");
   worktreeMap.clear();
   rowProps.clear();
+  virtuosoScrollIntoView.mockClear();
 });
 
 afterEach(() => {
@@ -3664,4 +3679,152 @@ describe("GitHubResourceList — the search field (#12752)", () => {
       expect(document.activeElement).toBe(input);
     }
   );
+});
+
+describe("GitHubResourceList — every row lands once (#14067)", () => {
+  const page = (numbers: number[], nextCursor: string | null): Page<Issue> => ({
+    items: numbers.map(makeIssue),
+    nextCursor,
+    hasMore: nextCursor !== null,
+  });
+
+  const renderedNumbers = () =>
+    screen.getAllByTestId(/^item-\d+$/).map((row) => Number(row.dataset.testid!.slice(5)));
+
+  it.each(["issue", "pr"] as const)(
+    "drops a %s page fetched against a list a refresh has since replaced",
+    async (type) => {
+      const fetcher = type === "issue" ? mockListIssues : mockListPRs;
+      fetcher.mockResolvedValueOnce(page([1, 2], "after-2"));
+
+      render(<GitHubResourceList type={type} projectPath="/test/proj" />);
+      const loadMore = await screen.findByRole("button", { name: /load more/i });
+
+      let releaseStalePage!: (page: Page<Issue>) => void;
+      fetcher.mockImplementationOnce(
+        () =>
+          new Promise<Page<Issue>>((resolve) => {
+            releaseStalePage = resolve;
+          })
+      );
+      act(() => loadMore.click());
+      await waitFor(() =>
+        expect(fetcher).toHaveBeenLastCalledWith(expect.objectContaining({ cursor: "after-2" }))
+      );
+
+      // #1 closes while that page is out, so the refresh pulls #3 up into the
+      // first page — and the page still in flight starts with #3 as well.
+      fetcher.mockResolvedValueOnce(page([2, 3], "after-3"));
+      fireEvent.click(
+        screen.getByRole("button", {
+          name: new RegExp(`^Refresh ${type === "issue" ? "issues" : "pull requests"}`),
+        })
+      );
+      await waitFor(() => expect(renderedNumbers()).toEqual([2, 3]));
+
+      await act(async () => releaseStalePage(page([3, 4], null)));
+      expect(renderedNumbers()).toEqual([2, 3]);
+
+      // The next page continues from the refreshed list, not the dropped one.
+      fetcher.mockResolvedValueOnce(page([4], null));
+      act(() => screen.getByRole("button", { name: /load more/i }).click());
+      await waitFor(() => expect(renderedNumbers()).toEqual([2, 3, 4]));
+      expect(fetcher).toHaveBeenLastCalledWith(expect.objectContaining({ cursor: "after-3" }));
+    }
+  );
+
+  it("skips rows a page repeats from the one before it", async () => {
+    // Search pages by offset, and an updated sort lets a row climb between
+    // requests — either way a page can open with a row the list already has.
+    mockListIssues.mockResolvedValueOnce(page([1, 2], "cursor:2"));
+
+    render(<GitHubResourceList type="issue" projectPath="/test/proj" />);
+    const loadMore = await screen.findByRole("button", { name: /load more/i });
+
+    mockListIssues.mockResolvedValueOnce(page([2, 3], null));
+    act(() => loadMore.click());
+
+    await waitFor(() => expect(renderedNumbers()).toEqual([1, 2, 3]));
+  });
+
+  it("keeps the page cursor when a retry fails, so the next page is not the first again", async () => {
+    setCache(buildCacheKey("/test/proj", "issue", "open", "created"), {
+      items: [makeIssue(1), makeIssue(2)],
+      nextCursor: "after-2",
+      hasMore: true,
+      timestamp: Date.now() - 60_000,
+    });
+    mockListIssues.mockRejectedValue(new Error("Server exploded"));
+
+    render(<GitHubResourceList type="issue" projectPath="/test/proj" />);
+    await waitFor(() => expect(screen.getByText(/Server exploded/)).toBeTruthy());
+
+    fireEvent.click(screen.getByRole("button", { name: /retry/i }));
+    await waitFor(() => expect(mockListIssues).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(screen.getByText(/Server exploded/)).toBeTruthy());
+
+    mockListIssues.mockImplementation((opts: ListOptions) =>
+      Promise.resolve(opts.cursor === "after-2" ? page([3], null) : page([1, 2], "after-2"))
+    );
+    act(() => screen.getByRole("button", { name: /load more/i }).click());
+
+    await waitFor(() => expect(renderedNumbers()).toEqual([1, 2, 3]));
+  });
+});
+
+describe("GitHubResourceList — only a cursor move scrolls the list (#14067)", () => {
+  const revealedIndexes = () =>
+    virtuosoScrollIntoView.mock.calls.map(([location]) => (location as { index: number }).index);
+
+  it("does not scroll back to the cursor when a page is appended", async () => {
+    mockListIssues.mockResolvedValueOnce({
+      items: [makeIssue(1), makeIssue(2)],
+      nextCursor: "after-2",
+      hasMore: true,
+    });
+
+    render(<GitHubResourceList type="issue" projectPath="/test/proj" />);
+    const loadMore = await screen.findByRole("button", { name: /load more/i });
+
+    fireEvent.keyDown(screen.getByRole("combobox"), { key: "ArrowDown" });
+    expect(revealedIndexes()).toEqual([0]);
+
+    mockListIssues.mockResolvedValueOnce({
+      items: [makeIssue(3), makeIssue(4)],
+      nextCursor: null,
+      hasMore: false,
+    });
+    act(() => loadMore.click());
+    await waitFor(() => expect(screen.getByTestId("item-4")).toBeTruthy());
+
+    expect(revealedIndexes()).toEqual([0]);
+  });
+
+  it("does not scroll when a refresh moves the cursor's row, and still reveals the next key", async () => {
+    setCache(buildCacheKey("/test/proj", "issue", "open", "created"), {
+      items: [makeIssue(10), makeIssue(11)],
+      nextCursor: null,
+      hasMore: false,
+      timestamp: Date.now(),
+      freshBypassAt: Date.now(),
+      countAtWrite: 2,
+    });
+
+    render(<GitHubResourceList type="issue" projectPath="/test/proj" />);
+    const input = screen.getByRole("combobox");
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+    expect(revealedIndexes()).toEqual([0, 1]);
+
+    mockListIssues.mockResolvedValue(makeResponse([makeIssue(9), makeIssue(10), makeIssue(11)]));
+    fireEvent.click(screen.getByRole("button", { name: /^Refresh issues/ }));
+    await waitFor(() => expect(screen.getByTestId("item-9")).toBeTruthy());
+    await waitFor(() =>
+      expect(input.getAttribute("aria-activedescendant")).toBe("github-issue-option-11")
+    );
+    expect(revealedIndexes()).toEqual([0, 1]);
+
+    fireEvent.keyDown(input, { key: "ArrowUp" });
+    expect(revealedIndexes()).toEqual([0, 1, 1]);
+  });
 });
