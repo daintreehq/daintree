@@ -586,4 +586,221 @@ describe("HostMetricsSampler", () => {
       agentClis: [{ agentId: "claude", version: "2.1.0" }],
     });
   });
+
+  describe("swap activity", () => {
+    const vmstat = (pswpin: number, pswpout: number) =>
+      `pgpgin 1\npswpin ${pswpin}\npswpout ${pswpout}\n`;
+
+    function linuxSampler(
+      files: () => Record<string, string>,
+      clock: () => number,
+      pageSize = "4096\n"
+    ) {
+      const reads: string[] = [];
+      const runs: string[] = [];
+      const sampler = new HostMetricsSampler(
+        sources({
+          readText: async (path) => {
+            reads.push(path);
+            return files()[path] ?? null;
+          },
+          run: async (command) => {
+            runs.push(command);
+            return command === "/usr/bin/getconf" ? pageSize : null;
+          },
+          now: clock,
+        })
+      );
+      return { sampler, reads, runs };
+    }
+
+    it("measures bytes per second between two readings of the machine's counters", async () => {
+      let now = 1_000;
+      let counters = vmstat(100, 50);
+      const { sampler, runs } = linuxSampler(
+        () => ({ "/proc/vmstat": counters }),
+        () => now
+      );
+      expect(await sampler.sample()).toMatchObject({
+        swapInBytesPerSec: null,
+        swapOutBytesPerSec: null,
+      });
+      now = 6_000;
+      counters = vmstat(110, 50);
+      // 10 pages of 4 KiB over five seconds; nothing went out.
+      expect(await sampler.sample()).toMatchObject({
+        metricsScope: "host",
+        swapInBytesPerSec: 8192,
+        swapOutBytesPerSec: 0,
+      });
+      expect(runs.filter((c) => c === "/usr/bin/getconf")).toHaveLength(1);
+    });
+
+    it("drops a direction whose counter went backwards, and both across a long gap", async () => {
+      let now = 1_000;
+      let counters = vmstat(100, 50);
+      const { sampler } = linuxSampler(
+        () => ({ "/proc/vmstat": counters }),
+        () => now
+      );
+      await sampler.sample();
+      now = 6_000;
+      counters = vmstat(5, 60);
+      expect(await sampler.sample()).toMatchObject({
+        swapInBytesPerSec: null,
+        swapOutBytesPerSec: 8192,
+      });
+      now = 60_000;
+      counters = vmstat(10, 70);
+      expect(await sampler.sample()).toMatchObject({
+        swapInBytesPerSec: null,
+        swapOutBytesPerSec: null,
+      });
+      now = 65_000;
+      counters = vmstat(10, 70);
+      expect(await sampler.sample()).toMatchObject({
+        swapInBytesPerSec: 0,
+        swapOutBytesPerSec: 0,
+      });
+    });
+
+    it("stays unknown without a page size, and stops asking after a few tries", async () => {
+      let now = 1_000;
+      const { sampler, runs } = linuxSampler(
+        () => ({ "/proc/vmstat": vmstat(100, 50) }),
+        () => now,
+        "garbage"
+      );
+      for (let i = 0; i < 5; i += 1) {
+        expect(await sampler.sample()).toMatchObject({
+          swapInBytesPerSec: null,
+          swapOutBytesPerSec: null,
+        });
+        now += 5_000;
+      }
+      expect(runs.filter((c) => c === "/usr/bin/getconf")).toHaveLength(3);
+    });
+
+    it("measures a cgroup by its own memory.stat, never the machine's counters", async () => {
+      const slice = "/sys/fs/cgroup/daintree";
+      let now = 1_000;
+      let stat = "anon 1\npswpin 0\npswpout 0\n";
+      const { sampler, reads } = linuxSampler(
+        () => ({
+          "/proc/self/cgroup": "0::/daintree\n",
+          [`${slice}/memory.max`]: "1073741824",
+          [`${slice}/memory.stat`]: stat,
+          "/proc/vmstat": vmstat(now * 1000, now * 1000),
+        }),
+        () => now,
+        "65536\n"
+      );
+      await sampler.sample();
+      now = 6_000;
+      stat = "anon 1\npswpin 0\npswpout 5\n";
+      expect(await sampler.sample()).toMatchObject({
+        metricsScope: "cgroup",
+        swapInBytesPerSec: 0,
+        swapOutBytesPerSec: 65536,
+      });
+      expect(reads).not.toContain("/proc/vmstat");
+    });
+
+    it("leaves a cgroup's activity unknown where its kernel doesn't count swap per cgroup", async () => {
+      const slice = "/sys/fs/cgroup/daintree";
+      let now = 1_000;
+      const { sampler } = linuxSampler(
+        () => ({
+          "/proc/self/cgroup": "0::/daintree\n",
+          [`${slice}/memory.max`]: "1073741824",
+          [`${slice}/memory.stat`]: "anon 1\nfile 2\n",
+          "/proc/vmstat": vmstat(now, now),
+        }),
+        () => now
+      );
+      await sampler.sample();
+      now = 6_000;
+      expect(await sampler.sample()).toMatchObject({
+        metricsScope: "cgroup",
+        swapInBytesPerSec: null,
+        swapOutBytesPerSec: null,
+      });
+    });
+
+    it("starts over when the scope changes, rather than measuring across two counters", async () => {
+      const slice = "/sys/fs/cgroup/daintree";
+      let now = 1_000;
+      let capped = false;
+      const { sampler } = linuxSampler(
+        () => ({
+          "/proc/vmstat": vmstat(100, 100),
+          ...(capped
+            ? {
+                "/proc/self/cgroup": "0::/daintree\n",
+                [`${slice}/memory.max`]: "1073741824",
+                [`${slice}/memory.stat`]: "pswpin 1\npswpout 1\n",
+              }
+            : {}),
+        }),
+        () => now
+      );
+      await sampler.sample();
+      now = 6_000;
+      capped = true;
+      expect(await sampler.sample()).toMatchObject({
+        metricsScope: "cgroup",
+        swapInBytesPerSec: null,
+        swapOutBytesPerSec: null,
+      });
+    });
+
+    it("forgets its baseline when a reading fails outright", async () => {
+      let now = 1_000;
+      let fail = false;
+      const sampler = new HostMetricsSampler(
+        sources({
+          readText: async (path) => {
+            if (fail && path === "/proc/self/cgroup") throw new Error("EIO");
+            return path === "/proc/vmstat" ? vmstat(now, now) : null;
+          },
+          run: async () => "4096\n",
+          now: () => now,
+        })
+      );
+      await sampler.sample();
+      now = 6_000;
+      fail = true;
+      expect(await sampler.sample()).toMatchObject({ swapInBytesPerSec: null });
+      now = 11_000;
+      fail = false;
+      expect(await sampler.sample()).toMatchObject({ swapInBytesPerSec: null });
+      now = 16_000;
+      expect((await sampler.sample()).swapInBytesPerSec).toBeCloseTo((5_000 * 4096) / 5);
+    });
+
+    it("measures macOS swap from vm_stat in the page size it reports", async () => {
+      let now = 1_000;
+      let swapins = 4000;
+      const sampler = new HostMetricsSampler(
+        sources({
+          platform: "darwin",
+          run: async (command) =>
+            command === "/usr/bin/vm_stat"
+              ? `Mach Virtual Memory Statistics: (page size of 16384 bytes)\nSwapins: ${swapins}.\nSwapouts: 9.\n`
+              : null,
+          now: () => now,
+        })
+      );
+      expect(await sampler.sample()).toMatchObject({
+        swapInBytesPerSec: null,
+        swapOutBytesPerSec: null,
+      });
+      now = 6_000;
+      swapins = 4010;
+      expect(await sampler.sample()).toMatchObject({
+        swapInBytesPerSec: 32768,
+        swapOutBytesPerSec: 0,
+      });
+    });
+  });
 });

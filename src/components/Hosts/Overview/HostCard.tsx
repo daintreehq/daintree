@@ -25,6 +25,7 @@ import {
   describeProjects,
   describeRtt,
   describeSwap,
+  describeSwapActivity,
   describeThermal,
   isLive,
   memoryUsedSeries,
@@ -314,6 +315,7 @@ export function HostCard({
         {clusters && <Fact label="Core clusters" value={clusters.value} detail={clusters.detail} />}
         {summary && <Fact label="CPU pressure" value={describeCpuPressure(summary)} />}
         {summary && <Fact label="Swap" value={describeSwap(summary)} />}
+        {summary && <Fact label="Swap activity" value={describeSwapActivity(summary)} />}
         {summary && <Fact label="Thermal" value={describeThermal(summary)} />}
         {summary && (
           <Fact

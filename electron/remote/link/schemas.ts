@@ -129,6 +129,8 @@ const HostSummarySchema = z.object({
   memoryTotalBytes: nullableCount,
   swapUsedBytes: nullableCount,
   swapTotalBytes: nullableCount,
+  swapInBytesPerSec: nullableCount.optional(),
+  swapOutBytesPerSec: nullableCount.optional(),
   thermal: z.enum(["nominal", "fair", "serious", "critical"]).nullable(),
   cpuPressure: z.number().finite().nullable(),
   agentsObserved: z.object({ working: count, waiting: count, idle: count }).nullable(),

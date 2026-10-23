@@ -154,6 +154,52 @@ export function parseDarwinSwapUsage(
   return { totalBytes: Math.round(totalBytes), usedBytes: Math.round(usedBytes) };
 }
 
+/** Pages swapped in and out since boot; either is null when its counter isn't there. */
+export interface SwapCounters {
+  inPages: number | null;
+  outPages: number | null;
+}
+
+function pageCount(text: string, pattern: RegExp): number | null {
+  const match = pattern.exec(text);
+  if (!match) return null;
+  const value = Number(match[1]);
+  return Number.isSafeInteger(value) ? value : null;
+}
+
+function swapCounters(text: string | null, inKey: RegExp, outKey: RegExp): SwapCounters | null {
+  if (text === null) return null;
+  const inPages = pageCount(text, inKey);
+  const outPages = pageCount(text, outKey);
+  return inPages === null && outPages === null ? null : { inPages, outPages };
+}
+
+/** `/proc/vmstat` or a cgroup's `memory.stat`: `pswpin 123` and `pswpout 456`, in pages. */
+export function parseSwapPageCounters(text: string | null): SwapCounters | null {
+  return swapCounters(text, /^pswpin\s+(\d+)\s*$/m, /^pswpout\s+(\d+)\s*$/m);
+}
+
+/** `vm_stat`'s `Swapins:` and `Swapouts:` lines, in pages of the size its header names. */
+export function parseVmStatSwapCounters(text: string | null): SwapCounters | null {
+  return swapCounters(text, /^Swapins:\s+(\d+)\.?\s*$/m, /^Swapouts:\s+(\d+)\.?\s*$/m);
+}
+
+/** `vm_stat`'s header: `Mach Virtual Memory Statistics: (page size of 16384 bytes)`. */
+export function parseVmStatPageSize(text: string | null): number | null {
+  if (text === null) return null;
+  const size = pageCount(text, /\(page size of (\d+) bytes\)/);
+  return size !== null && size > 0 ? size : null;
+}
+
+/** `getconf PAGESIZE`: the kernel's page size in bytes. */
+export function parsePageSize(text: string | null): number | null {
+  if (text === null) return null;
+  const trimmed = text.trim();
+  if (!/^\d+$/.test(trimmed)) return null;
+  const size = Number(trimmed);
+  return Number.isSafeInteger(size) && size > 0 ? size : null;
+}
+
 /** `/sys/class/thermal/thermal_zone*\/temp`, in millidegrees Celsius. */
 export function parseThermalZoneTemp(text: string | null): number | null {
   if (text === null) return null;

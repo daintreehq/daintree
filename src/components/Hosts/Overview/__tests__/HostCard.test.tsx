@@ -149,6 +149,28 @@ describe("HostCard", () => {
     expect(fact(card, "CPU pressure")).toBeNull();
   });
 
+  it("shows swap activity beside swap in use, and no row where it wasn't measured", () => {
+    const measured = makeSummary({
+      swapTotalBytes: 8 * 1024 ** 3,
+      swapUsedBytes: 3 * 1024 ** 3,
+      swapInBytesPerSec: 12 * 1024,
+      swapOutBytesPerSec: 0,
+    });
+    const { unmount } = render(
+      <HostCard row={makeRow({ summary: measured })} history={[measured]} onSwitch={() => {}} />
+    );
+    let card = screen.getByTestId("host-overview-card");
+    expect(fact(card, "Swap")).toBe("3 GB of 8 GB");
+    expect(fact(card, "Swap activity")).toBe("In 12 KB/s · out 0 B/s");
+    unmount();
+
+    const legacy = makeSummary({ swapTotalBytes: 8 * 1024 ** 3, swapUsedBytes: 3 * 1024 ** 3 });
+    render(<HostCard row={makeRow({ summary: legacy })} history={[legacy]} onSwitch={() => {}} />);
+    card = screen.getByTestId("host-overview-card");
+    expect(fact(card, "Swap")).toBe("3 GB of 8 GB");
+    expect(fact(card, "Swap activity")).toBeNull();
+  });
+
   it("draws no trend until it has a few samples", () => {
     const summary = makeSummary();
     render(<HostCard row={makeRow({ summary })} history={[summary]} onSwitch={() => {}} />);

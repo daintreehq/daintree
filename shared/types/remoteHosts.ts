@@ -447,6 +447,14 @@ export interface HostMetricsSummary {
   memoryTotalBytes: number | null;
   swapUsedBytes: number | null;
   swapTotalBytes: number | null;
+  /**
+   * Bytes swapped in per second over the last interval, in the same scope as
+   * the swap figures. Absent from older hosts; null on the first reading, after
+   * a counter reset or gap, or where the counter isn't exposed.
+   */
+  swapInBytesPerSec?: number | null;
+  /** Bytes swapped out per second; null under the same rules. */
+  swapOutBytesPerSec?: number | null;
   /** macOS thermal state; null elsewhere, where Linux reports `temperatureCelsius`. */
   thermal: "nominal" | "fair" | "serious" | "critical" | null;
   /** Linux PSI cpu `some avg10`; null elsewhere. */

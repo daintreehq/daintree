@@ -84,6 +84,18 @@ describe("link messages", () => {
     expect(() => hostSummary({ memoryPressureSomeAvg10: 101 })).toThrow();
   });
 
+  it("carries swap activity in bytes per second, and none from a host that sends none", () => {
+    const activity = { swapInBytesPerSec: 1638.4, swapOutBytesPerSec: 0 };
+    expect(hostSummary(activity)).toMatchObject(activity);
+    const unknown = { swapInBytesPerSec: null, swapOutBytesPerSec: null };
+    expect(hostSummary(unknown)).toMatchObject(unknown);
+    const legacy = hostSummary({});
+    expect(legacy).not.toHaveProperty("swapInBytesPerSec");
+    expect(legacy).not.toHaveProperty("swapOutBytesPerSec");
+    expect(() => hostSummary({ swapInBytesPerSec: -1 })).toThrow();
+    expect(() => hostSummary({ swapOutBytesPerSec: Number.POSITIVE_INFINITY })).toThrow();
+  });
+
   it("carries a summary's drivers, and one from a host that sends none, within its bound", () => {
     const summary = (extra: object) =>
       parseInboundFrame(
