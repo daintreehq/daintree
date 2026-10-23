@@ -32,7 +32,7 @@ describe("fleet action run bodies (#14272)", () => {
     vi.resetModules();
     m.runLookups = 0;
     m.failImpl = false;
-    m.kill.mockReset().mockResolvedValue({ killed: 2 });
+    m.kill.mockReset();
   });
 
   it("registers and materializes every definition without touching the run bodies", async () => {
@@ -45,9 +45,13 @@ describe("fleet action run bodies (#14272)", () => {
   it("loads the run bodies on first dispatch and forwards args, context and result", async () => {
     const def = (await register()).get("fleet.kill")!();
     const args = { confirmed: true };
+    const result = { killed: 2 };
+    m.kill.mockResolvedValue(result);
 
-    await expect(def.run(args, ctx)).resolves.toEqual({ killed: 2 });
+    await expect(def.run(args, ctx)).resolves.toBe(result);
     await def.run(args, ctx);
+    expect(m.kill.mock.calls[0]?.[0]).toBe(args);
+    expect(m.kill.mock.calls[0]?.[1]).toBe(ctx);
 
     expect(m.runLookups).toBe(2);
     expect(m.kill).toHaveBeenCalledTimes(2);
