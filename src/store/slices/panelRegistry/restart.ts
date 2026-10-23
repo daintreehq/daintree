@@ -75,6 +75,7 @@ import {
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { isClientAppError } from "@/utils/clientAppError";
 import { requiredPluginToolsSpawnError } from "@/utils/requiredPluginToolsSpawnError";
+import type { SpawnError } from "@shared/types/pty-host";
 import { transferBetweenWorktreeIndex } from "./worktreeIndex";
 import { getViewWorkspaceId } from "@/store/viewWorkspaceId";
 import { useMemoryPressureWaitStore } from "@/store/memoryPressureWaitStore";
@@ -189,6 +190,21 @@ function updateTerminal(
 }
 
 /** {@link updateTerminal}, then persisted, for writes a reload must not undo. */
+/**
+ * A relaunch main refused for missing plugin tools (#14096): shown as the
+ * spawn banner with its choices, and the agent marked exited, since no process
+ * started that could ever report it stopped.
+ */
+function refusedForPluginTools(t: PtyPanelData, spawnError: SpawnError): PtyPanelData {
+  return {
+    ...t,
+    spawnStatus: "failed",
+    spawnError,
+    runtimeStatus: "error",
+    ...(t.launchAgentId ? { agentState: "exited" as const, lastStateChange: Date.now() } : {}),
+  };
+}
+
 function updateAndSaveTerminal(
   set: Set,
   id: string,
@@ -1110,16 +1126,20 @@ export const createRestartActions = (
       if (toolsError !== null) {
         terminalInstanceService.setInputLocked(id, false);
         unmarkTerminalRestarting(id);
-        set((state) =>
-          updateTerminal(state, id, (t) => ({
-            ...t,
-            isRestarting: false,
-            restartError: undefined,
-            spawnStatus: "failed" as const,
-            spawnError: toolsError,
-            runtimeStatus: "error" as const,
-            ...(consumedSessionId ? { agentSessionId: consumedSessionId } : {}),
-          }))
+        // Persisted, and the agent marked exited as a refused first launch is:
+        // nothing started, so nothing will ever report it stopped.
+        updateAndSaveTerminal(set, id, (t) =>
+          isPtyPanel(t)
+            ? refusedForPluginTools(
+                {
+                  ...t,
+                  isRestarting: false,
+                  restartError: undefined,
+                  ...(consumedSessionId ? { agentSessionId: consumedSessionId } : {}),
+                },
+                toolsError
+              )
+            : t
         );
         return;
       }
@@ -1829,35 +1849,46 @@ async function respawnAgentOnPreset(
     const appError = isClientAppError(error) ? error : null;
     const errorMessage =
       appError?.userMessage ?? formatErrorMessage(error, "Failed to restart terminal");
+    // The same refusal a first launch gets, with its choices, on the preset
+    // the pane rolls back to.
+    const toolsError = requiredPluginToolsSpawnError(error);
     unmarkTerminalRestarting(id);
     // Persisted: the respawn already saved the destination, and a reload
     // must not bring the pane back on a preset it never started on.
-    updateAndSaveTerminal(set, id, (t) => ({
-      ...t,
-      isRestarting: false,
-      // Restore pre-mutation fields so fallbackChainIndex and presetId
-      // accurately reflect "we are NOT running the next preset". Without
-      // rollback, any subsequent fallback trigger would jump past this
-      // preset even though the PTY never started.
-      ...priorSnapshot,
-      // Only the stamp this switch wrote: a rename since then, even one that
-      // happens to spell the same title, now belongs to the user.
-      ...(switchedTitle &&
-      t.title === switchedTitle.title &&
-      t.titleMode === switchedTitle.titleMode
-        ? { title: terminal.title, titleMode: terminal.titleMode }
-        : {}),
-      restartError: {
-        message: errorMessage,
-        timestamp: Date.now(),
-        recoverable: false,
-        context: {
-          failedCwd: terminal.cwd,
-          phase: mode.kind === "fallback" ? "fallback-activation" : "preset-switch",
-          nextPresetId,
+    updateAndSaveTerminal(set, id, (t) => {
+      const rolledBack = {
+        ...t,
+        isRestarting: false,
+        // Restore pre-mutation fields so fallbackChainIndex and presetId
+        // accurately reflect "we are NOT running the next preset". Without
+        // rollback, any subsequent fallback trigger would jump past this
+        // preset even though the PTY never started.
+        ...priorSnapshot,
+        // Only the stamp this switch wrote: a rename since then, even one that
+        // happens to spell the same title, now belongs to the user.
+        ...(switchedTitle &&
+        t.title === switchedTitle.title &&
+        t.titleMode === switchedTitle.titleMode
+          ? { title: terminal.title, titleMode: terminal.titleMode }
+          : {}),
+      };
+      if (toolsError !== null && isPtyPanel(rolledBack)) {
+        return refusedForPluginTools({ ...rolledBack, restartError: undefined }, toolsError);
+      }
+      return {
+        ...rolledBack,
+        restartError: {
+          message: errorMessage,
+          timestamp: Date.now(),
+          recoverable: false,
+          context: {
+            failedCwd: terminal.cwd,
+            phase: mode.kind === "fallback" ? "fallback-activation" : "preset-switch",
+            nextPresetId,
+          },
         },
-      },
-    }));
+      };
+    });
     logError(
       mode.kind === "fallback"
         ? "[TerminalStore] Failed to activate fallback preset"

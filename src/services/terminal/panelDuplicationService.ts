@@ -292,6 +292,8 @@ export function buildPanelSnapshotOptions(panel: PanelInstance): AddPanelOptions
       fallbackChainIndex: panel.fallbackChainIndex,
       agentLaunchFlags: panel.agentLaunchFlags ? [...panel.agentLaunchFlags] : undefined,
       callerLaunchFlags: panel.callerLaunchFlags ? [...panel.callerLaunchFlags] : undefined,
+      // A reopened recipe agent is still held to its plugin's tools (#14096).
+      requiredPluginTools: panel.requiredPluginTools ? [...panel.requiredPluginTools] : undefined,
     };
   }
 
@@ -336,6 +338,7 @@ export function buildPanelSnapshotOptions(panel: PanelInstance): AddPanelOptions
       agentPresetColor: panel.agentPresetColor,
       agentLaunchFlags: panel.agentLaunchFlags ? [...panel.agentLaunchFlags] : undefined,
       callerLaunchFlags: panel.callerLaunchFlags ? [...panel.callerLaunchFlags] : undefined,
+      requiredPluginTools: panel.requiredPluginTools ? [...panel.requiredPluginTools] : undefined,
       // Same one-shot rule as the agent branch above (#11782).
       command: panel.command
         ? stripAssignedSessionIdArgs(panel.command, panel.launchAgentId)
@@ -421,6 +424,9 @@ export async function buildPanelDuplicateOptions(
       callerLaunchFlags,
       agentSessionId,
       env,
+      requiredPluginTools: sourcePanel.requiredPluginTools
+        ? [...sourcePanel.requiredPluginTools]
+        : undefined,
     };
   }
 
@@ -469,6 +475,9 @@ export async function buildPanelDuplicateOptions(
       agentPresetColor: sourcePanel.agentPresetColor,
       agentLaunchFlags: sourcePanel.agentLaunchFlags,
       callerLaunchFlags: sourcePanel.callerLaunchFlags,
+      requiredPluginTools: sourcePanel.requiredPluginTools
+        ? [...sourcePanel.requiredPluginTools]
+        : undefined,
       env,
       command,
     };

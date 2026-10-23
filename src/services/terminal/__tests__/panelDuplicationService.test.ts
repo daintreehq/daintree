@@ -197,6 +197,16 @@ describe("buildPanelSnapshotOptions", () => {
       agentLaunchFlags: ["--verbose"],
     });
   });
+
+  it("keeps a recipe agent's required plugin tools on the reopened pane (#14096)", () => {
+    const panel = makePanel({
+      kind: "terminal",
+      launchAgentId: "claude",
+      command: "claude",
+      requiredPluginTools: ["acme.tools"],
+    });
+    expect(buildPanelSnapshotOptions(panel)?.requiredPluginTools).toEqual(["acme.tools"]);
+  });
 });
 
 describe("panelDuplicationService", () => {
@@ -252,6 +262,17 @@ describe("panelDuplicationService", () => {
     const result = await buildPanelDuplicateOptions(panel, "grid");
 
     expect(result.command).toBe("generated-claude-command");
+  });
+
+  it("holds a duplicated recipe agent to the same required plugin tools (#14096)", async () => {
+    const panel = makePanel({
+      kind: "terminal",
+      launchAgentId: "claude",
+      command: "old-cmd",
+      requiredPluginTools: ["acme.tools"],
+    });
+    const result = await buildPanelDuplicateOptions(panel, "grid");
+    expect(result.requiredPluginTools).toEqual(["acme.tools"]);
   });
 
   // #13046: settings rebuild the duplicate's flags, but the caller's own flags

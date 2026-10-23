@@ -275,6 +275,26 @@ function requiredPluginToolsAll(
   }));
 }
 
+/**
+ * Settle the statuses still reading ready once preparation produced nothing:
+ * a plugin the live eligibility check no longer passes lost its access or went
+ * away mid-launch; any other met a failure preparing the configuration itself.
+ */
+function failUnpreparedPluginTools(
+  statuses: RequiredPluginToolStatus[],
+  servers: readonly PanePluginServer[],
+  projectId: string
+): RequiredPluginToolStatus[] {
+  const stillEligible = isPluginMcpServerStillEligible(projectId);
+  return statuses.map((status) => {
+    if (status.state !== "ready") return status;
+    const server = servers.find(
+      (candidate) => candidate.pluginInstanceId === status.pluginInstanceId
+    );
+    return { ...status, state: server && stillEligible(server) ? "config-failed" : "revoked" };
+  });
+}
+
 /** Downgrade the statuses still reading ready to `state`: the launch failed past the point that confirms them. */
 function failReadyPluginTools(
   statuses: RequiredPluginToolStatus[],
@@ -712,6 +732,9 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
         ? (validatedOptions.requiredPluginTools ?? [])
         : [];
     let requiredPluginToolStatuses: RequiredPluginToolStatus[] = [];
+    // Recorded only as the PTY is dispatched, so a launch that fails before
+    // then leaves no agent behind to be offered a relaunch.
+    let pluginToolsLaunchProjectId: string | null = null;
 
     if (isHelpLaunch && launchAgentId) {
       const dangerous = DEFAULT_DANGEROUS_ARGS[launchAgentId];
@@ -928,6 +951,7 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
       // PluginService load, server readiness — happens before
       // `preparePaneConfig` mints anything, per the binding rule above.
       let preparedForThisLaunch = false;
+      let launchPluginServers: PanePluginServer[] = [];
       // The sender is the launch view only when it is a view of this pane's
       // workspace. `ctx.projectId` was resolved from the sender before any
       // await, off the cross-window registry, never the global current project.
@@ -978,6 +1002,7 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
               getPluginService
             );
         const pluginServers = pluginReport ? toPanePluginServers(pluginReport.plugins) : [];
+        launchPluginServers = pluginServers;
         if (pluginReport && requiredPluginTools.length > 0) {
           requiredPluginToolStatuses = classifyRequiredPluginTools(
             pluginReport,
@@ -986,7 +1011,16 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
         }
         if (tier !== "off" || pluginServers.length > 0) {
           const mcpServerService = await getMcpServerService();
-          const ready = mcpServerService.isRunning || (await mcpServerService.ensureReady());
+          let ready: boolean;
+          try {
+            ready = mcpServerService.isRunning || (await mcpServerService.ensureReady());
+          } catch (listenerErr) {
+            requiredPluginToolStatuses = failReadyPluginTools(
+              requiredPluginToolStatuses,
+              "listener-failed"
+            );
+            throw listenerErr;
+          }
           if (!ready) {
             console.warn(
               "[TerminalSpawn] Daintree MCP requested for agent launch, but the MCP server is not ready; continuing without MCP injection"
@@ -1017,18 +1051,11 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
                 : {}),
             });
             if (!prepared) {
-              // Nothing prepared: a required plugin the eligibility recheck
-              // dropped lost its access or went away mid-launch; any other
-              // reached a failure in preparing the configuration itself.
-              const stillEligible = isPluginMcpServerStillEligible(resolvedProject.id);
-              requiredPluginToolStatuses = requiredPluginToolStatuses.map((status) => {
-                if (status.state !== "ready") return status;
-                const server = pluginServers.find(
-                  (candidate) => candidate.pluginInstanceId === status.pluginInstanceId
-                );
-                const state = server && stillEligible(server) ? "config-failed" : "revoked";
-                return { ...status, state };
-              });
+              requiredPluginToolStatuses = failUnpreparedPluginTools(
+                requiredPluginToolStatuses,
+                pluginServers,
+                resolvedProject.id
+              );
             }
             if (prepared) {
               preparedForThisLaunch = true;
@@ -1082,9 +1109,19 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
           "[TerminalSpawn] Failed to prepare Daintree MCP config; continuing without MCP injection:",
           mcpErr
         );
-        requiredPluginToolStatuses = failReadyPluginTools(
+        requiredPluginToolStatuses = failUnpreparedPluginTools(
           requiredPluginToolStatuses,
-          "config-failed"
+          launchPluginServers,
+          resolvedProject.id
+        );
+      }
+      // A requirement nothing above could classify — resolution itself threw,
+      // or a restarted Assistant pane, which is never handed plugin servers —
+      // is still a requirement that wasn't met.
+      if (requiredPluginTools.length > 0 && requiredPluginToolStatuses.length === 0) {
+        requiredPluginToolStatuses = requiredPluginToolsAll(
+          requiredPluginTools,
+          helpSessionService.isHelpTerminal(id) ? "unavailable" : "config-failed"
         );
       }
       if (requiredPluginToolStatuses.length > 0) {
@@ -1105,7 +1142,7 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
           await mcpPaneConfigService.revokePaneConfig(id).catch(() => {});
         }
       } else if (!helpSessionService.isHelpTerminal(id)) {
-        recordPluginToolsLaunch(id, resolvedProject.id);
+        pluginToolsLaunchProjectId = resolvedProject.id;
       }
     } else if (requiredPluginTools.length > 0) {
       requiredPluginToolStatuses = requiredPluginToolsAll(
@@ -1207,6 +1244,9 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
       const postSpawnInput =
         safeCommand.length > 0 && !commandLaunchShell ? `${safeCommand}\r` : undefined;
 
+      if (pluginToolsLaunchProjectId !== null) {
+        recordPluginToolsLaunch(id, pluginToolsLaunchProjectId);
+      }
       armSpawnConfirmation(id);
       // Every terminal is an interactive shell. Agent launches inject their
       // command after the shell's first prompt renders — never `exec`'d over

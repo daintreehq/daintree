@@ -215,6 +215,48 @@ describe("restartTerminal agent-exited demotion (#5764)", () => {
     expect(payload.agentLaunchFlags).toEqual(["--persisted-flag"]);
   });
 
+  it("holds a restart to the pane's required plugin tools, and shows a refusal as the spawn banner (#14096)", async () => {
+    const { ClientAppError } = await import("@/utils/clientAppError");
+    const tools = [
+      { pluginInstanceId: "acme.tools", pluginDisplayName: "Acme", state: "pending-load" as const },
+    ];
+    mockSpawn.mockRejectedValueOnce(
+      new ClientAppError("REQUIRED_PLUGIN_TOOLS_UNAVAILABLE", "refused", "Not ready.", {
+        code: "REQUIRED_PLUGIN_TOOLS_UNAVAILABLE",
+        tools,
+      })
+    );
+    const active = {
+      ...agentPanelBase,
+      agentState: "working" as const,
+      requiredPluginTools: ["acme.tools"],
+    };
+    usePanelStore.setState({ panelsById: { [active.id]: active }, panelIds: [active.id] });
+
+    await usePanelStore.getState().restartTerminal("test-1");
+
+    expect(mockSpawn.mock.calls[0]![0].requiredPluginTools).toEqual(["acme.tools"]);
+    expect(mockSpawn.mock.calls[0]![0].allowMissingPluginTools).toBeUndefined();
+    const panel = usePanelStore.getState().panelsById["test-1"];
+    if (!panel || !isPtyPanel(panel)) throw new Error("expected the PTY panel to remain");
+    expect(panel.restartError).toBeUndefined();
+    expect(panel.isRestarting).toBe(false);
+    expect(panel.spawnStatus).toBe("failed");
+    expect(panel.agentState).toBe("exited");
+    expect(panel.spawnError).toEqual({
+      code: "REQUIRED_PLUGIN_TOOLS",
+      message: "Not ready.",
+      pluginTools: tools,
+    });
+
+    // Starting without them is the user's choice for that one launch only.
+    await usePanelStore.getState().restartTerminal("test-1", { allowMissingPluginTools: true });
+    expect(mockSpawn.mock.calls[1]![0].allowMissingPluginTools).toBe(true);
+    expect(mockSpawn.mock.calls[1]![0].requiredPluginTools).toEqual(["acme.tools"]);
+    await usePanelStore.getState().restartTerminal("test-1");
+    expect(mockSpawn.mock.calls[2]![0].allowMissingPluginTools).toBeUndefined();
+  });
+
   it("carries a launch context into a Claude restart, since the fresh bearer binds to it (#12486)", async () => {
     const active = { ...agentPanelBase, agentState: "working" as const };
     usePanelStore.setState({
