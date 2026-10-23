@@ -174,7 +174,7 @@ What each framework's stock dev build exposes, as the extractor reads it and the
 | Solid 1.9 | None: the stock dev build erases component boundaries | `data-source-loc`, only when the user turned on solid-devtools' locator, quoted as the element's own JSX site with the attribute it came from | Component names, chain and definitions. `SolidDevtools$$` is the debugger's API, not data, and is never touched |
 | No framework | None | None | Everything but the element context above: selector, redacted markup, styles, screenshot |
 
-**Shipping status.** The shipped guest catalog holds the Svelte, React and Solid extractors, and the host resolves Svelte and React. Solid has no resolver, so a locator stamp stays the page's report and is never checked. The Vue, Angular, Astro and Preact extractors and resolvers are built and tested but not yet registered in the catalogs (#13888), so those pages are detected and get the element context until they are.
+**Shipping status.** The shipped guest catalog holds the Svelte, React, Solid, Vue, Angular, Astro and Preact extractors (`CORE_GUEST_ASSET_FILES`), and the host resolves Svelte, React, Vue, Angular, Astro and Preact (`worker/resolverRegistry.ts`). Solid has no resolver, so a locator stamp stays the page's report and is never checked.
 
 ## Svelte
 
