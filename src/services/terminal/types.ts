@@ -469,6 +469,9 @@ export interface ManagedTerminal {
   // Holders reading history a release would drop (an open search).
   historyPins?: number;
   ptyExited?: boolean;
+  // The exit marker, kept so a refill that replays over it can write it again.
+  exitLine?: string;
+  exitLineShown?: boolean;
 }
 
 export const TIER_DOWNGRADE_HYSTERESIS_MS = 500;

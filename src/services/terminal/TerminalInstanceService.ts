@@ -382,6 +382,7 @@ class TerminalInstanceService {
       isViewObservable: isProjectViewObservable,
       isWorkerIngestEnabled: isPaintFabricWorkerIngestEnabled,
       applyInputLock: (managed) => this.applyInputLock(managed),
+      writeLocal,
     });
 
     this.writeController = new TerminalWriteController({
@@ -1714,10 +1715,10 @@ class TerminalInstanceService {
       if (this.shouldSuppressExit(id)) {
         return;
       }
-      this.historyRelease.noteExit(id);
-      if (current) {
-        writeLocal(current, `\r\n\x1b[90m[Process exited with code ${exitCode}]\x1b[0m\r\n`);
-      }
+      this.historyRelease.noteExit(
+        id,
+        `\r\n\x1b[90m[Process exited with code ${exitCode}]\x1b[0m\r\n`
+      );
       exitSubscribers.forEach((cb) => cb(exitCode));
     };
     this.ensureExitSubscription();

@@ -1,7 +1,10 @@
 // @vitest-environment jsdom
 import { Terminal } from "@xterm/headless";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { TerminalHistoryReleaseController } from "../TerminalHistoryReleaseController";
+import {
+  HISTORY_LOST_NOTICE,
+  TerminalHistoryReleaseController,
+} from "../TerminalHistoryReleaseController";
 import { restoreScrollback } from "../TerminalScrollbackController";
 import {
   HISTORY_RELEASE_DWELL_MS,
@@ -38,6 +41,7 @@ const renderSuspension = vi.hoisted(() => ({
 vi.mock("../xtermRenderSuspension", () => renderSuspension);
 
 const AGENT_CEILING = getScrollbackForType(true, mockScrollbackStore.scrollbackLines);
+const EXIT_LINE = "\r\n[Process exited with code 1]\r\n";
 
 function makeManaged(overrides: Record<string, unknown> = {}): ManagedTerminal {
   const buffer = { length: 3000 };
@@ -68,6 +72,7 @@ describe("TerminalHistoryReleaseController (#14220)", () => {
   let workerIngest: boolean;
   let fetchAndRestore: ReturnType<typeof vi.fn<(id: string) => Promise<boolean>>>;
   let inputHeldDuringFetch: boolean[];
+  let localWrites: string[];
   let controller: TerminalHistoryReleaseController;
 
   beforeEach(() => {
@@ -82,6 +87,7 @@ describe("TerminalHistoryReleaseController (#14220)", () => {
     workerIngest = false;
     mockPerformanceModeStore.performanceMode = false;
     inputHeldDuringFetch = [];
+    localWrites = [];
     fetchAndRestore = vi.fn(async (id: string) => {
       inputHeldDuringFetch.push(instances.get(id)?.isInputLocked === true);
       return true;
@@ -95,6 +101,7 @@ describe("TerminalHistoryReleaseController (#14220)", () => {
         managed.isInputLocked =
           managed.inputLockedByUser === true || managed.historyRefilling === true;
       },
+      writeLocal: (_managed, data) => localWrites.push(data),
     });
   });
 
@@ -354,7 +361,7 @@ describe("TerminalHistoryReleaseController (#14220)", () => {
     const managed = releaseHidden("t1");
     fetchAndRestore.mockResolvedValueOnce(false);
 
-    controller.noteExit("t1");
+    controller.noteExit("t1", EXIT_LINE);
     await vi.advanceTimersByTimeAsync(0);
 
     expect(fetchAndRestore).toHaveBeenCalledTimes(1);
@@ -367,11 +374,68 @@ describe("TerminalHistoryReleaseController (#14220)", () => {
     const managed = releaseHidden("t1");
     managed.scrollbackPressureCapped = true;
 
-    controller.noteExit("t1");
+    controller.noteExit("t1", EXIT_LINE);
     await vi.advanceTimersByTimeAsync(0);
 
     expect(fetchAndRestore).toHaveBeenCalledTimes(1);
     expect(managed.terminal.options.scrollback).toBe(RELEASED_SCROLLBACK_LINES);
+  });
+
+  it("refills a capped exit-time refill again at full capacity on reveal", async () => {
+    const managed = releaseHidden("t1");
+    managed.scrollbackPressureCapped = true;
+
+    controller.noteExit("t1", EXIT_LINE);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(managed.historyRefillPending).toBe(true);
+
+    await reveal("t1");
+
+    expect(fetchAndRestore).toHaveBeenCalledTimes(2);
+    expect(managed.terminal.options.scrollback).toBe(AGENT_CEILING);
+    expect(managed.historyRefillPending).toBe(false);
+    // Each restore replays over the marker, so each one writes it back.
+    expect(localWrites).toEqual([EXIT_LINE, EXIT_LINE]);
+  });
+
+  it("writes the exit line only after the exit-time refill lands", async () => {
+    releaseHidden("t1");
+    let finish!: (restored: boolean) => void;
+    fetchAndRestore.mockImplementationOnce(
+      () => new Promise<boolean>((resolve) => (finish = resolve))
+    );
+
+    controller.noteExit("t1", EXIT_LINE);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(fetchAndRestore).toHaveBeenCalledTimes(1);
+    expect(localWrites).toEqual([]);
+
+    finish(true);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(localWrites).toEqual([EXIT_LINE]);
+  });
+
+  it("says the earlier output is gone when a released session's refill comes back empty", async () => {
+    releaseHidden("t1");
+    fetchAndRestore.mockResolvedValueOnce(false);
+
+    controller.noteExit("t1", EXIT_LINE);
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(localWrites).toEqual([HISTORY_LOST_NOTICE, EXIT_LINE]);
+    expect(HISTORY_LOST_NOTICE).toContain(
+      "[Earlier output was released while this terminal was hidden and can't be restored]"
+    );
+  });
+
+  it("writes the exit line at once, with no notice, for a pane that kept its history", () => {
+    const managed = makeManaged();
+    hide("t1", managed);
+
+    controller.noteExit("t1", EXIT_LINE);
+
+    expect(fetchAndRestore).not.toHaveBeenCalled();
+    expect(localWrites).toEqual([EXIT_LINE]);
   });
 
   it("never refills a pane whose history was not released", async () => {

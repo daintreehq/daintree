@@ -12,6 +12,8 @@ export interface TerminalHistoryReleaseControllerDeps {
   isWorkerIngestEnabled: () => boolean;
   /** Re-derive the pane's input lock after the refill's hold changes. */
   applyInputLock: (managed: ManagedTerminal) => void;
+  /** Write Daintree's own text into the pane, outside the PTY stream. */
+  writeLocal: (managed: ManagedTerminal, data: string) => void;
 }
 
 // A zero-length write still runs its callback in order; an empty string would
@@ -20,6 +22,9 @@ const WRITE_BARRIER = new Uint8Array(0);
 
 // Paint-hold owner, distinct from a cached view's, so neither lifts the other.
 const REFILL_PAINT_HOLD = "history-refill";
+
+export const HISTORY_LOST_NOTICE =
+  "\r\n\x1b[90m[Earlier output was released while this terminal was hidden and can't be restored]\x1b[0m\r\n";
 
 function nextFrame(): Promise<void> {
   return new Promise((resolve) => requestAnimationFrame(() => resolve()));
@@ -55,16 +60,24 @@ export class TerminalHistoryReleaseController {
   }
 
   /**
-   * The PTY exited. A failed session's host mirror is disposed with it, so
-   * a released pane gets one last try at its history while the host may still
-   * hold it, and nothing that has exited is released again.
+   * The PTY exited, and `exitLine` is the pane's exit marker. A session that
+   * exits cleanly keeps its host snapshot, so a released pane refills from it
+   * now. A failed session's mirror is disposed on the host before this runs,
+   * so that refill comes back empty and the pane says its earlier output is
+   * gone. Nothing that has exited is released again.
+   *
+   * A refill resets the terminal and replays a snapshot that never held the
+   * marker, so the marker is written after it lands, and again after any later
+   * refill that replays over it.
    */
-  noteExit(id: string): void {
+  noteExit(id: string, exitLine: string): void {
     const managed = this.deps.getInstance(id);
     if (!managed) return;
     managed.ptyExited = true;
+    managed.exitLine = exitLine;
     this.cancel(managed);
     if (managed.historyReleased) this.refill(id, managed);
+    if (!managed.historyRefill) this.writeExitLine(managed);
   }
 
   cancel(managed: ManagedTerminal): void {
@@ -141,18 +154,43 @@ export class TerminalHistoryReleaseController {
     managed.historyReleased = false;
     managed.historyRefillPending = true;
     // A hidden pane under a memory-pressure cap (an exit-time refill) keeps
-    // the cap; its reveal lifts it.
-    restoreScrollback(managed, {
-      shrinkOnly: managed.scrollbackPressureCapped === true && !managed.isVisible,
-    });
+    // the cap; its reveal lifts it and refills again at full capacity.
+    const capped = managed.scrollbackPressureCapped === true && !managed.isVisible;
+    restoreScrollback(managed, { shrinkOnly: capped });
     logDebug(`Restoring released history for ${id}`);
-    managed.historyRefill = this.runRefill(id, managed)
+    managed.historyRefill = this.runRefill(id, managed, capped)
       .catch((error: unknown) => {
         logWarn("Could not restore released terminal history", { id, error });
+        return false;
       })
-      .finally(() => {
+      .then((restored) => {
         managed.historyRefill = undefined;
+        if (this.deps.getInstance(id) === managed) this.settleExited(managed, restored);
       });
+  }
+
+  private settleExited(managed: ManagedTerminal, restored: boolean): void {
+    if (!managed.ptyExited) return;
+    // The last attempt came back empty: what the release dropped is gone.
+    if (!restored && !managed.historyRefillPending) {
+      this.write(managed, HISTORY_LOST_NOTICE);
+    }
+    // A restore replays over the marker; a refill that never reset leaves it.
+    if (restored || !managed.exitLineShown) this.writeExitLine(managed);
+  }
+
+  private writeExitLine(managed: ManagedTerminal): void {
+    if (managed.exitLine === undefined) return;
+    managed.exitLineShown = true;
+    this.write(managed, managed.exitLine);
+  }
+
+  private write(managed: ManagedTerminal, data: string): void {
+    try {
+      this.deps.writeLocal(managed, data);
+    } catch (error) {
+      logWarn("Could not write terminal notice", { error });
+    }
   }
 
   /**
@@ -166,14 +204,14 @@ export class TerminalHistoryReleaseController {
    * as on a cold project switch. The paint hold covers the whole refill, so a
    * pane hidden and shown again mid-replay never sees it either.
    */
-  private async runRefill(id: string, managed: ManagedTerminal): Promise<void> {
+  private async runRefill(id: string, managed: ManagedTerminal, capped: boolean): Promise<boolean> {
     if (managed.isVisible) {
       // One frame for xterm to schedule its paint of the revealed pane, one
       // for that paint to land.
       await nextFrame();
       await nextFrame();
     }
-    if (this.deps.getInstance(id) !== managed) return;
+    if (this.deps.getInstance(id) !== managed) return false;
 
     const holdPaint = managed.isOpened;
     if (holdPaint) suspendXtermRender(managed.terminal, REFILL_PAINT_HOLD);
@@ -187,8 +225,10 @@ export class TerminalHistoryReleaseController {
       // in force before typing resumes.
       await this.writeBarrier(managed, true);
       await this.writeBarrier(managed, false);
-      // Nothing more will ever come for an exited session.
-      if (restored || managed.ptyExited) managed.historyRefillPending = false;
+      // A capped restore still owes the rest of the snapshot to the reveal;
+      // a failed one is final for an exited session, whose mirror is gone.
+      if (restored ? !capped : managed.ptyExited) managed.historyRefillPending = false;
+      return restored;
     } finally {
       managed.historyRefilling = false;
       if (this.deps.getInstance(id) === managed) this.deps.applyInputLock(managed);
