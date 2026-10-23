@@ -1,5 +1,8 @@
 import type { HostId } from "../../../shared/types/remoteHosts.js";
-import type { WaitingRunView } from "../../services/deviceAnswer/deviceAnswerRuns.js";
+import type {
+  DeviceWaitingHostStatus,
+  WaitingRunView,
+} from "../../services/deviceAnswer/deviceAnswerRuns.js";
 import { answerRefused } from "../../services/terminalAnswer.js";
 import type { AppError } from "../../utils/errorTypes.js";
 import { DeviceAnswerLinkMethod, DeviceAnswerListResultSchema } from "./linkMethods.js";
@@ -27,7 +30,7 @@ export interface DeviceAnswerHostsClientDeps {
 export interface HostWaitingRuns {
   hostId: HostId;
   host: string;
-  status: "ok" | "unreachable" | "needs-update";
+  status: DeviceWaitingHostStatus;
   runs: WaitingRunView[];
 }
 
@@ -38,7 +41,8 @@ function errorCode(error: unknown): unknown {
 /**
  * Shell side of answering, from a device paired here, the agents waiting on
  * the hosts this Shell is connected to. Only hosts already connected are
- * read; a device polling never dials one. Each host lists and answers its
+ * read; a device polling never dials one, and is told of the rest as not
+ * connected. Each host lists and answers its
  * own runs under its own drive lease, and this side trusts nothing it sends
  * back until it has been read against the schema.
  */
@@ -50,14 +54,13 @@ export class DeviceAnswerHostsClient {
     return entry ? entry.name || hostId : null;
   }
 
-  /** Every connected host's waiting runs, read together: a slow or older host holds up none of the rest. */
+  /** Every host's waiting runs, read together: a slow or older host holds up none of the rest. */
   listWaiting(): Promise<HostWaitingRuns[]> {
-    const connected = this.deps.hosts().flatMap(({ hostId, name }) => {
-      const session = this.deps.sessionFor(hostId);
-      return session?.isOpen ? [{ hostId, host: name || hostId, session }] : [];
-    });
     return Promise.all(
-      connected.map(async ({ hostId, host, session }): Promise<HostWaitingRuns> => {
+      this.deps.hosts().map(async ({ hostId, name }): Promise<HostWaitingRuns> => {
+        const host = name || hostId;
+        const session = this.deps.sessionFor(hostId);
+        if (!session?.isOpen) return { hostId, host, status: "not-connected", runs: [] };
         try {
           // A device watching a host's agents is using it: the idle release starts counting again.
           this.deps.touch(hostId);

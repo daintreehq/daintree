@@ -80,7 +80,10 @@ async function setup(overrides: Partial<DeviceAnswerSettings> = {}) {
     ...overrides,
   };
   const answer = vi.fn<DeviceAnswerServiceDeps["answer"]>(async () => {});
-  const hosts: DeviceWaitingHost[] = [{ hostId: "studio-03", host: "studio-03", status: "ok" }];
+  const hosts: DeviceWaitingHost[] = [
+    { hostId: "studio-03", host: "studio-03", status: "ok" },
+    { hostId: "mini", host: "Mini", status: "not-connected" },
+  ];
   const listWaiting = vi.fn(async (_options: { hosts: boolean }) => ({ runs: [RUN], hosts }));
   const onStatusChanged = vi.fn();
   const service = new DeviceAnswerService({
@@ -197,6 +200,7 @@ describe("DeviceAnswerService", () => {
     expect(waiting.json().runs).toEqual([RUN]);
     expect(waiting.json().hosts).toEqual([
       { hostId: "studio-03", host: "studio-03", status: "ok" },
+      { hostId: "mini", host: "Mini", status: "not-connected" },
     ]);
 
     // A page from before hosts were listed would answer theirs as this machine's.

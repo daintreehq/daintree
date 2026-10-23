@@ -39,11 +39,14 @@ export interface DeviceWaitingRun extends WaitingRunView {
   host: string;
 }
 
-/** How reading one connected host's runs went. */
+/** How reading one host's runs went; a host with no link is `not-connected`, never dialled to find out. */
+export type DeviceWaitingHostStatus = "ok" | "not-connected" | "unreachable" | "needs-update";
+
+/** How reading one host in the host list went. */
 export interface DeviceWaitingHost {
   hostId: string;
   host: string;
-  status: "ok" | "unreachable" | "needs-update";
+  status: DeviceWaitingHostStatus;
 }
 
 export interface DeviceWaitingList {

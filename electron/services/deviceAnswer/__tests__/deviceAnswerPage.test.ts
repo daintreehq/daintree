@@ -118,6 +118,78 @@ describe("the paired device's page", () => {
     expect(document.getElementById("status")!.textContent).toBe("");
   });
 
+  const emptyText = () => {
+    const empty = document.getElementById("empty")!;
+    return empty.hidden ? null : empty.textContent;
+  };
+
+  it("says no agent is waiting only when every host was read", async () => {
+    await openPage({
+      runs: [],
+      hosts: [{ hostId: "studio-03", host: "Studio", status: "ok" }],
+    });
+    expect(emptyText()).toBe("No agent is waiting.");
+    expect(document.getElementById("hosts")!.textContent).toBe("");
+  });
+
+  it("says no agent is waiting when it's told of no hosts, as an older Daintree sends it", async () => {
+    await openPage({ runs: [] });
+    expect(emptyText()).toBe("No agent is waiting.");
+  });
+
+  it.each([
+    ["not-connected", "Not connected to Mini, so its agents aren't shown."],
+    ["unreachable", "Couldn't read the waiting agents on Mini."],
+    ["needs-update", "Mini needs a newer Daintree to show its waiting agents here."],
+  ])("names only the machines it read when a host is %s", async (status, note) => {
+    await openPage({
+      runs: [],
+      hosts: [
+        { hostId: "studio-03", host: "Studio", status: "ok" },
+        { hostId: "mini", host: "Mini", status },
+      ],
+    });
+    expect(emptyText()).toBe("No agent is waiting on this computer or Studio.");
+    expect(document.getElementById("hosts")!.textContent).toBe(note);
+  });
+
+  it("names only this computer when no host could be read", async () => {
+    await openPage({
+      runs: [],
+      hosts: [
+        { hostId: "mini", host: "Mini", status: "not-connected" },
+        { hostId: "studio-04", host: "studio-04", status: "unreachable" },
+      ],
+    });
+    expect(emptyText()).toBe("No agent is waiting on this computer.");
+    const notes = document.getElementById("hosts")!.textContent;
+    expect(notes).toContain("Not connected to Mini");
+    expect(notes).toContain("studio-04");
+  });
+
+  it("lists every machine it read", async () => {
+    await openPage({
+      runs: [],
+      hosts: [
+        { hostId: "a", host: "Studio", status: "ok" },
+        { hostId: "b", host: "Laptop", status: "ok" },
+        { hostId: "mini", host: "Mini", status: "not-connected" },
+      ],
+    });
+    expect(emptyText()).toBe("No agent is waiting on this computer, Studio or Laptop.");
+  });
+
+  it("hides the empty state but keeps the notes while runs are listed", async () => {
+    await openPage({
+      runs: [run({ hostId: "local", host: "greg-studio" })],
+      hosts: [{ hostId: "mini", host: "Mini", status: "not-connected" }],
+    });
+    expect(emptyText()).toBeNull();
+    expect(document.getElementById("hosts")!.textContent).toContain("Not connected to Mini");
+    // A host this Shell knows of, connected or not, is one to tell its runs from.
+    expect(document.querySelector(".run .host")!.textContent).toBe("greg-studio");
+  });
+
   it("never says nothing was pressed when the reply to an answer was lost", async () => {
     await openPage({ runs: [run({ hostId: "studio-03", host: "studio-03" })], hosts: [] }, () =>
       Promise.reject(new Error("network"))

@@ -69,14 +69,25 @@ const SCRIPT = String.raw`
       : [];
     const list = $("runs");
     list.replaceChildren();
-    $("empty").hidden = runs.length > 0;
+    const empty = $("empty");
+    empty.hidden = runs.length > 0;
+    // Nothing waiting is said outright only when every machine was read.
+    const read = hosts.filter((host) => host.status === "ok").map((host) => host.host);
+    const covered = ["this computer", ...read];
+    empty.textContent = read.length === hosts.length
+      ? "No agent is waiting."
+      : "No agent is waiting on " + (covered.length > 1
+        ? covered.slice(0, -1).join(", ") + " or " + covered[covered.length - 1]
+        : covered[0]) + ".";
     const notes = $("hosts");
     notes.replaceChildren();
     for (const host of hosts) {
       if (host.status === "ok") continue;
       notes.append(el("div", "", host.status === "needs-update"
         ? host.host + " needs a newer Daintree to show its waiting agents here."
-        : "Couldn't read the waiting agents on " + host.host + "."));
+        : host.status === "not-connected"
+          ? "Not connected to " + host.host + ", so its agents aren't shown."
+          : "Couldn't read the waiting agents on " + host.host + "."));
     }
     // Machines are named once there is more than one to tell apart.
     const named = hosts.length > 0;
