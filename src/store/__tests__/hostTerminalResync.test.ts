@@ -178,7 +178,10 @@ describe("resyncHostTerminals", () => {
     });
     const lost = new Map<string, number>();
 
-    await resyncHostTerminals("proj-1", { ...current, lost });
+    await resyncHostTerminals("proj-1", {
+      ...current,
+      onLost: (id, restartKey) => lost.set(id, restartKey),
+    });
 
     expect([...lost]).toEqual([
       ["t-agent", 3],

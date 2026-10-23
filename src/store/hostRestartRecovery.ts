@@ -53,25 +53,27 @@ export async function relaunchTerminalsLostToHostRestart(
     window.electron.terminal.getForProject(projectId),
   ]);
   if (!options.isCurrent()) return deferred;
+  // What the host runs under a saved id, including a pane restarted since it
+  // was lost, takes part in who resumes which conversation, as it does on a
+  // cold launch, and launches nothing: its reconnect is the resync's. Without
+  // its activity tier, the restore has nothing to set on a pane it never adds.
+  const savedIds = new Set(entries.map((entry) => entry.id));
+  const live = new Map<string, BackendTerminalInfo>();
+  for (const info of running) {
+    if (info.hasPty === false || info.isTrashed || !savedIds.has(info.id)) continue;
+    live.set(info.id, { ...info, activityTier: undefined });
+  }
+  // Gone by its own answer and off the host's list: either one saying it
+  // runs is enough to leave it alone.
   const gone = new Set(
     candidates
       .filter((entry) => {
         const answer = answers[entry.id];
-        return answer !== undefined && !answer.exists && !answer.conflict;
+        return answer !== undefined && !answer.exists && !answer.conflict && !live.has(entry.id);
       })
       .map((entry) => entry.id)
   );
   if (gone.size === 0) return deferred;
-  // What the host runs again under a saved id takes part in who resumes which
-  // conversation, as it does on a cold launch, and launches nothing: its
-  // reconnect is the resync's. Without its activity tier, the restore has
-  // nothing to set on a pane it never adds.
-  const savedIds = new Set(entries.map((entry) => entry.id));
-  const live = new Map<string, BackendTerminalInfo>();
-  for (const info of running) {
-    if (info.hasPty === false || info.isTrashed || lost.has(info.id)) continue;
-    if (savedIds.has(info.id)) live.set(info.id, { ...info, activityTier: undefined });
-  }
   const saved = entries.filter((entry) => gone.has(entry.id) || live.has(entry.id));
 
   const [{ restorePanelsPhase }, { usePanelStore }, { useResourceProfileStore }] =

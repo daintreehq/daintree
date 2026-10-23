@@ -152,7 +152,10 @@ async function runResyncPass(projectState: boolean): Promise<void> {
   const lease = refreshLease();
   const recovery = restartRecovery?.gathering ? restartRecovery : null;
   const terminals = projectId
-    ? resyncHostTerminals(projectId, { isCurrent, lost: recovery?.lost })
+    ? resyncHostTerminals(projectId, {
+        isCurrent,
+        onLost: recovery ? recordRestartLoss : undefined,
+      })
     : Promise.resolve();
   const worktrees = window.electron.worktree.refresh();
   const steps: Array<[string, () => Promise<unknown>]> = [
@@ -212,6 +215,15 @@ async function runResyncPass(projectState: boolean): Promise<void> {
 }
 
 /**
+ * A pane the resync after a host restart found gone. Only while that resync
+ * is still looking: a read still under way once it has looked reports what
+ * ended since.
+ */
+function recordRestartLoss(id: string, restartKey: number): void {
+  if (restartRecovery?.gathering) restartRecovery.lost.set(id, restartKey);
+}
+
+/**
  * The host restarted under this view. One that watched the project then has
  * nothing of its own to bring back: what it showed were the driver's.
  */
@@ -232,15 +244,16 @@ function armRestartRecovery(): void {
  * under way) they wait for it.
  */
 function settleRestartRecovery(): void {
-  const recovery = restartRecovery;
   const projectId = getViewWorkspaceId();
-  if (!recovery || !projectId) return;
+  if (!projectId) return;
   const lease = getDriveLeaseSnapshot();
   if (lease?.projectId !== projectId || leaseBeforeGap !== undefined) return;
+  const recovery = restartRecovery;
   if (!lease.drivingHere) {
-    restartRecovery = null;
+    // A relaunch already on its way stops too, and what it leaves stays left.
     restartRecoveryGeneration += 1;
-    if (recovery.lost.size > 0) {
+    restartRecovery = null;
+    if (recovery && recovery.lost.size > 0) {
       logInfo("[HostConnection] Left the terminals a host restart ended to the project's driver", {
         projectId,
         count: recovery.lost.size,
@@ -248,7 +261,7 @@ function settleRestartRecovery(): void {
     }
     return;
   }
-  if (recovery.gathering || readBackOwed) return;
+  if (!recovery || recovery.gathering || readBackOwed) return;
   restartRecovery = null;
   if (recovery.lost.size === 0) return;
   const generation = restartRecoveryGeneration;
@@ -872,7 +885,7 @@ function readBackAsDriver(
         isCurrent,
         follow: true,
         // Read back after a host restart, the panes it finds gone are what the restart ended.
-        lost: restartRecovery?.gathering ? restartRecovery.lost : undefined,
+        onLost: recordRestartLoss,
       });
       terminalsRead = true;
     } catch (error) {

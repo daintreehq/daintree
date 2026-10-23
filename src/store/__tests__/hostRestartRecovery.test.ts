@@ -249,6 +249,49 @@ describe("relaunchTerminalsLostToHostRestart", () => {
     expect(addPanel).not.toHaveBeenCalled();
   });
 
+  it("never launches over a pane the host runs, and lets one restarted since its loss claim its conversation", async () => {
+    hydrate.mockResolvedValueOnce({
+      ...savedState(),
+      appState: {
+        activeWorktreeId: "wt-main",
+        terminals: [
+          { id: "t-agent", kind: "terminal", launchAgentId: "claude", agentSessionId: "s-1" },
+          { id: "t-back", kind: "terminal", launchAgentId: "claude", agentSessionId: "s-1" },
+          { id: "t-listed", kind: "terminal", launchAgentId: "claude" },
+        ],
+      },
+    });
+    // t-back was restarted after it was lost; t-listed's own answer says gone, but the list has it.
+    reconnectBulk.mockResolvedValueOnce({
+      "t-agent": { exists: false },
+      "t-back": { exists: true, hasPty: true },
+      "t-listed": { exists: false },
+    });
+    getForProject.mockResolvedValueOnce([
+      { id: "t-back", hasPty: true, launchAgentId: "claude", agentSessionId: "s-1", cwd: "/repo" },
+      { id: "t-listed", hasPty: true, launchAgentId: "claude", cwd: "/repo" },
+    ]);
+    restorePanelsPhase.mockImplementationOnce(async (_saved, ctx) => {
+      await ctx.addPanel({ kind: "terminal", requestedId: "t-listed", cwd: "/repo" });
+      return { restoreTasks: [], savedIdToRestoredId: new Map(), ghostedWorktreeIds: new Set() };
+    });
+
+    await relaunchTerminalsLostToHostRestart(
+      "proj-1",
+      new Map([
+        ["t-agent", 0],
+        ["t-back", 0],
+        ["t-listed", 0],
+      ]),
+      { isCurrent: () => true, drives: () => true }
+    );
+
+    const [saved, ctx] = restorePanelsPhase.mock.calls[0]!;
+    expect(saved.map((entry) => entry.id)).toEqual(["t-agent", "t-back", "t-listed"]);
+    expect([...ctx.backendTerminalMap.keys()]).toEqual(["t-back", "t-listed"]);
+    expect(addPanel).not.toHaveBeenCalled();
+  });
+
   it("hands back what it had to leave once the view stopped driving on the way", async () => {
     restorePanelsPhase.mockImplementationOnce(async (_saved, ctx) => {
       await ctx.addPanel({ kind: "terminal", requestedId: "t-agent", cwd: "/repo" });

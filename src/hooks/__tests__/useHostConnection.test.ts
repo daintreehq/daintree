@@ -2050,6 +2050,33 @@ describe("host restart", () => {
     stop();
   });
 
+  it("stops a relaunch under way once the host says another screen drives, and keeps nothing for later", async () => {
+    const { electron, emitHost, emitLease, stop } = await drivingView();
+    runningAgent("t-agent");
+    hostHasNone(electron);
+    let fail!: (error: Error) => void;
+    relaunchLost.mockImplementationOnce(
+      () => new Promise<ReadonlyMap<string, number>>((_resolve, reject) => (fail = reject))
+    );
+
+    emitHost({ type: "resync-required", hostId: "studio-01", reason: "host-restarted" });
+    await vi.waitFor(() => expect(relaunchLost).toHaveBeenCalledTimes(1), { timeout: 5_000 });
+    const options = relaunchLost.mock.calls[0]![2];
+    expect(options.isCurrent()).toBe(true);
+
+    emitLease({ type: "changed", state: leaseView(holder(), false) });
+    expect(options.isCurrent()).toBe(false);
+    fail(new Error("[AppError|HOST_DISCONNECTED] down"));
+    for (let i = 0; i < 5; i += 1) await flush();
+    expect(_restartLossesForTesting()).toBeNull();
+
+    // Taken over later, the view has nothing of the restart's to relaunch.
+    emitLease({ type: "changed", state: leaseView(holder({ endpointId: "me" }), true) });
+    for (let i = 0; i < 5; i += 1) await flush();
+    expect(relaunchLost).toHaveBeenCalledTimes(1);
+    stop();
+  });
+
   it("holds what the relaunch had to leave for the host's next word", async () => {
     const { electron, emitHost, emitLease, stop } = await drivingView();
     runningAgent("t-agent");
