@@ -80,10 +80,18 @@ export function formatMemory(mb: number): string {
  * of them. A trace too small to round up reads "<0.1" rather than claiming zero.
  */
 export function formatCores(cores: number): string {
+  const count = formatCoreCount(cores);
+  if (count === "—") return count;
+  // "<0.1" isn't a number, and a trace is still "cores".
+  return `${count} ${pluralNoun(count === "1" ? 1 : 2, "core")}`;
+}
+
+/** The number half of {@link formatCores}: "1.4", "<0.1", or "—" for a reading that can't be one. */
+export function formatCoreCount(cores: number): string {
   if (!Number.isFinite(cores) || cores < 0) return "—";
   const rounded = Math.round(cores * 10) / 10;
-  if (rounded === 0 && cores > 0) return "<0.1 cores";
-  return `${rounded} ${pluralNoun(rounded, "core")}`;
+  if (rounded === 0 && cores > 0) return "<0.1";
+  return String(rounded);
 }
 
 /**

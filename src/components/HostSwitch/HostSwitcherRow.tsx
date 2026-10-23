@@ -3,7 +3,6 @@ import type { HostMetricsSummary } from "@shared/types/remoteHosts";
 import { cn } from "@/lib/utils";
 import { pluralize } from "@/lib/pluralize";
 import { formatRelativeTime } from "@/lib/formatRelativeTime";
-import { formatBytes } from "@/lib/formatBytes";
 import { PALETTE_ROW_CLASS } from "@/components/ui/paletteRowStyles";
 import { AgentCounts, MetricDash } from "@/components/Hosts/AgentCounts";
 import { PlatformGlyph } from "@/components/Hosts/PlatformGlyph";
@@ -12,7 +11,12 @@ import { HostNameText } from "@/components/Hosts/HostNameText";
 import { isNewWindowClick } from "@/components/Hosts/hostSwitching";
 import { LazyHostSparkline } from "@/components/Hosts/Overview/LazyHostOverviewParts";
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
-import { cpuSeries } from "@/components/Hosts/Overview/overviewModel";
+import {
+  busyCores,
+  cpuSeries,
+  describeCpu,
+  describeMemoryCapacity,
+} from "@/components/Hosts/Overview/overviewModel";
 import { describeBuildMismatch } from "@/components/Settings/Hosts/hostLabels";
 import {
   describeHostMenuState,
@@ -27,7 +31,7 @@ import {
  * host, observed agents, CPU, memory, link.
  */
 export const HOST_SWITCHER_GRID =
-  "grid grid-cols-[minmax(0,1fr)_76px_96px_76px_56px] items-center gap-x-3";
+  "grid grid-cols-[minmax(0,1fr)_64px_140px_108px_44px] items-center gap-x-3";
 
 /** Five minutes at the host's 5 s cadence: long enough to show a trend, short enough to be now. */
 const SPARK_SAMPLES = 60;
@@ -76,6 +80,7 @@ function CpuCell({
   const series = cpuSeries(history.slice(0, SPARK_SAMPLES));
   const measured = series.filter((value) => value !== null).length;
   const hot = cpu >= CPU_HOT;
+  const cores = busyCores(summary);
   return (
     <span className="flex items-center gap-1.5">
       {measured >= MIN_SPARK_SAMPLES ? (
@@ -84,18 +89,19 @@ function CpuCell({
           windowSize={SPARK_SAMPLES}
           label="CPU over the last 5 minutes"
           fit
-          className="h-4 w-12 shrink-0 text-text-secondary"
+          className="h-4 w-8 shrink-0 text-text-secondary"
         />
       ) : (
-        <span className="w-12 shrink-0" aria-hidden="true" />
+        <span className="w-8 shrink-0" aria-hidden="true" />
       )}
       <span
         className={cn(
-          "w-[4ch] text-right text-xs tabular-nums",
+          "min-w-[4ch] whitespace-nowrap text-right text-xs tabular-nums",
           hot ? "text-status-warning" : "text-text-primary"
         )}
       >
-        {Math.round(cpu)}%<span className="sr-only"> CPU</span>
+        {describeCpu(summary)}
+        <span className="sr-only">{cores ? " busy" : " CPU"}</span>
       </span>
     </span>
   );
@@ -107,35 +113,54 @@ const PRESSURE = {
   critical: { word: "critical", lit: 3, tone: "text-status-error", fill: "bg-status-error" },
 } as const;
 
+function PressureSteps({ level }: { level: (typeof PRESSURE)[keyof typeof PRESSURE] }) {
+  return (
+    <span aria-hidden="true" data-pressure-steps className="flex shrink-0 items-end gap-px">
+      {[0, 1, 2].map((step) => (
+        <span
+          key={step}
+          className={cn(
+            "w-1 rounded-xs",
+            step === 0 ? "h-1.5" : step === 1 ? "h-2" : "h-2.5",
+            step < level.lit ? level.fill : "bg-border-strong"
+          )}
+        />
+      ))}
+    </span>
+  );
+}
+
 /**
- * Memory pressure, the reading that says whether the machine is short: used
- * bytes alone run high on any Mac that caches. The steps lit carry the level
- * as well as the colour; capacity is in the tooltip.
+ * Memory in use of total, as Activity Monitor counts it. Pressure follows as
+ * a mark only once it is high or critical; its steps carry the level as well
+ * as the colour. A host that reports only pressure keeps the band alone.
  */
 function MemoryCell({ summary }: { summary: HostMetricsSummary }) {
   const pressure = summary.memoryPressure;
-  if (pressure === null) return <MetricDash label="Memory pressure not measured" />;
-  const level = PRESSURE[pressure];
-  const { memoryUsedBytes: used, memoryTotalBytes: total } = summary;
-  const capacity =
-    used !== null && total ? `${formatBytes(used)} of ${formatBytes(total)} in use` : undefined;
-  return (
-    <span className="flex items-center gap-1.5" title={capacity}>
-      <span aria-hidden="true" className="flex shrink-0 items-end gap-px">
-        {[0, 1, 2].map((step) => (
-          <span
-            key={step}
-            className={cn(
-              "w-1 rounded-xs",
-              step === 0 ? "h-1.5" : step === 1 ? "h-2" : "h-2.5",
-              step < level.lit ? level.fill : "bg-border-strong"
-            )}
-          />
-        ))}
+  const level = pressure === null ? null : PRESSURE[pressure];
+  const capacity = describeMemoryCapacity(summary);
+  if (capacity) {
+    const spoken = `${capacity} memory in use${level ? `, ${level.word} pressure` : ""}`;
+    return (
+      <span
+        className="flex items-center gap-1.5"
+        title={level ? `Memory pressure ${level.word}` : undefined}
+      >
+        <span className="whitespace-nowrap text-xs tabular-nums text-text-primary">
+          <span aria-hidden="true">{capacity}</span>
+          <span className="sr-only">{spoken}</span>
+        </span>
+        {level && pressure !== "normal" && <PressureSteps level={level} />}
       </span>
+    );
+  }
+  if (level === null) return <MetricDash label="Memory not measured" />;
+  return (
+    <span className="flex items-center gap-1.5">
+      <PressureSteps level={level} />
       <span className={cn("text-xs", level.tone)}>
         {level.word}
-        <span className="sr-only"> memory pressure{capacity ? `, ${capacity}` : ""}</span>
+        <span className="sr-only"> memory pressure</span>
       </span>
     </span>
   );

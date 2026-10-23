@@ -36,7 +36,9 @@ describe("HostCard", () => {
     );
     const card = screen.getByTestId("host-overview-card");
     expect(card.textContent).toContain("CPU 20%");
+    // An older host's used bytes count the file cache: it keeps the pressure chart.
     expect(card.textContent).toContain("Memory pressure normal");
+    expect(fact(card, "Memory")).toBe("4 GB of 16 GB");
     expect(card.textContent).toContain("1 working · 2 waiting · 3 idle (observed)");
     expect(fact(card, "Link")).toBe("12 ms");
     expect(fact(card, "Driving")).toBe("Driven from greg-mbp");
@@ -75,6 +77,76 @@ describe("HostCard", () => {
     expect(fact(screen.getByTestId("host-overview-card"), "Driving")).toBe(
       "Driven from studio-02 and greg-mbp (away)"
     );
+  });
+
+  it("reads CPU in cores and adds load, cluster and stall facts where the host reports them", () => {
+    const summary = makeSummary({
+      platform: "darwin",
+      cpuPercent: 50,
+      cpuLogicalCoreCount: 14,
+      cpuLoadAverage1m: 6.214,
+      cpuPerformanceCoreCount: 10,
+      cpuEfficiencyCoreCount: 4,
+      cpuPerformancePercent: 61.6,
+      cpuEfficiencyPercent: 18.2,
+      cpuPressure: 3.25,
+      memoryPressure: "warn",
+      memoryUsedBytes: 20.1 * 1024 ** 3,
+      memoryTotalBytes: 36 * 1024 ** 3,
+    });
+    render(<HostCard row={makeRow({ summary })} history={[summary]} onSwitch={() => {}} />);
+    const card = screen.getByTestId("host-overview-card");
+    expect(card.textContent).toContain("CPU 7 of 14 cores");
+    expect(card.textContent).toContain("Memory 20.1 / 36 GB");
+    expect(fact(card, "Memory pressure")).toBe("High");
+    expect(fact(card, "Load (1 min)")).toBe("6.21");
+    expect(fact(card, "Core clusters")).toBe("Performance 62% · efficiency 18%");
+    expect(fact(card, "CPU pressure")).toBe("3.3% of the last 10 s stalled");
+  });
+
+  it("charts memory in use for a host on the newer memory reading", () => {
+    const GB = 1024 ** 3;
+    // Pressure stays normal while use climbs: a pressure chart would be flat.
+    const history = [12, 8, 4].map((used) =>
+      makeSummary({ cpuLogicalCoreCount: null, memoryUsedBytes: used * GB })
+    );
+    render(
+      <HostCard row={makeRow({ summary: history[0] })} history={history} onSwitch={() => {}} />
+    );
+    const card = screen.getByTestId("host-overview-card");
+    expect(card.textContent).toContain("CPU 20%");
+    expect(card.textContent).toContain("Memory 12 / 16 GB");
+    expect(fact(card, "Memory pressure")).toBe("Normal");
+    expect(fact(card, "Memory")).toBeNull();
+    const chart = screen.getByLabelText(/Memory in use over the last/);
+    const heights = (chart.querySelector("polyline")?.getAttribute("points") ?? "")
+      .split(" ")
+      .map((point) => Number(point.split(",")[1]));
+    expect(heights).toHaveLength(3);
+    // Oldest first, rising use draws lower y values.
+    expect(heights[0]).toBeGreaterThan(heights[1]!);
+    expect(heights[1]).toBeGreaterThan(heights[2]!);
+  });
+
+  it("keeps the capacity chart through a missed memory read", () => {
+    const newer = { cpuLogicalCoreCount: 8, memoryPressure: "warn" as const };
+    const history = [
+      makeSummary({ ...newer, memoryUsedBytes: null }),
+      makeSummary(newer),
+      makeSummary(newer),
+      makeSummary(newer),
+    ];
+    render(
+      <HostCard row={makeRow({ summary: history[0] })} history={history} onSwitch={() => {}} />
+    );
+    const card = screen.getByTestId("host-overview-card");
+    expect(card.textContent).toContain("Memory not measured");
+    expect(card.textContent).not.toContain("Memory pressure warn");
+    expect(fact(card, "Memory pressure")).toBe("High");
+    expect(screen.getByLabelText(/Memory in use over the last/)).toBeTruthy();
+    expect(fact(card, "Load (1 min)")).toBeNull();
+    expect(fact(card, "Core clusters")).toBeNull();
+    expect(fact(card, "CPU pressure")).toBeNull();
   });
 
   it("draws no trend until it has a few samples", () => {
