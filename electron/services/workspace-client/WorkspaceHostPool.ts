@@ -279,7 +279,8 @@ export class WorkspaceHostPool {
 
     const existingEntry = this.entries.get(normalizedPath);
     if (existingEntry) {
-      const isReadyFailed = await existingEntry.currentReadyPromise.then(
+      const awaitedReady = existingEntry.currentReadyPromise;
+      const isReadyFailed = await awaitedReady.then(
         () => false,
         () => true
       );
@@ -290,7 +291,12 @@ export class WorkspaceHostPool {
       // No reference is held across that wait, so the entry was still dormant
       // and a reclaim, the warm cap or the grace timer may have disposed it.
       // Re-inserting it would attach the window to a dead host; start over.
-      if (this.entries.get(normalizedPath) !== existingEntry) {
+      // Likewise when the entry's host was replaced or restarted in place during
+      // the wait: the readiness just awaited belongs to the previous process.
+      if (
+        this.entries.get(normalizedPath) !== existingEntry ||
+        existingEntry.currentReadyPromise !== awaitedReady
+      ) {
         return this.loadProject(rootPath, windowId);
       }
       if (isReadyFailed) {

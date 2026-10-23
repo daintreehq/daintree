@@ -10,8 +10,15 @@ vi.mock("../../utils/parcelWatcherBackend.js", () => ({
   subscribeParcelWatcher: vi.fn(() => Promise.resolve({ unsubscribe: vi.fn() })),
 }));
 
+// Inherited selectors would point the fixture's git at some other repository.
+const {
+  GIT_DIR: _gitDir,
+  GIT_WORK_TREE: _gitWorkTree,
+  GIT_INDEX_FILE: _gitIndexFile,
+  ...inheritedEnv
+} = process.env;
 const GIT_ENV = {
-  ...process.env,
+  ...inheritedEnv,
   GIT_AUTHOR_NAME: "Test",
   GIT_AUTHOR_EMAIL: "test@example.test",
   GIT_COMMITTER_NAME: "Test",
@@ -83,5 +90,15 @@ describe("WorkspaceService enumeration across git init (#14178)", () => {
     expect(gitBacked).toBe(true);
     expect(states).toHaveLength(1);
     expect(states[0]).toMatchObject({ path: root, isMainWorktree: true, branch: "main" });
+  });
+
+  it("enumerates the main worktree of a repository initialized without a commit", async () => {
+    // A guided init with the commit unticked, or skipped for a missing identity.
+    git(root, "init", "-q", "-b", "main");
+
+    const { states, gitBacked } = (await loadedService()).states();
+    expect(gitBacked).toBe(true);
+    expect(states).toHaveLength(1);
+    expect(states[0]).toMatchObject({ path: root, isMainWorktree: true });
   });
 });

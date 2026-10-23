@@ -14,15 +14,24 @@ const { hosts, MockWorkspaceHostProcess } = vi.hoisted(() => {
     /** What the next host spawned for a path will answer, set by the test. */
     static nextVerdict: boolean | null = false;
     static failNextLoad = false;
+    static holdNextLoad = false;
     gitBacked: boolean | null = null;
     disposed = false;
     private failLoad: boolean;
+    private heldLoad: Promise<void> | null = null;
+    releaseLoad: () => void = () => undefined;
 
     constructor(projectPath: string) {
       super();
       this.projectPath = projectPath;
       this.failLoad = MockWorkspaceHostProcess.failNextLoad;
       MockWorkspaceHostProcess.failNextLoad = false;
+      if (MockWorkspaceHostProcess.holdNextLoad) {
+        this.heldLoad = new Promise((resolve) => {
+          this.releaseLoad = resolve;
+        });
+        MockWorkspaceHostProcess.holdNextLoad = false;
+      }
       hosts.push(this);
     }
 
@@ -42,6 +51,7 @@ const { hosts, MockWorkspaceHostProcess } = vi.hoisted(() => {
     // the process ever runs.
     sendWithResponse = vi.fn(async (request: Request) => {
       if (request.type === "load-project") {
+        if (this.heldLoad) await this.heldLoad;
         if (this.failLoad) throw new Error("load failed");
         this.gitBacked = MockWorkspaceHostProcess.nextVerdict;
         return {};
@@ -94,6 +104,7 @@ describe("WorkspaceClient.refreshProjectAfterGitInit (#14178)", () => {
     hosts.length = 0;
     MockWorkspaceHostProcess.nextVerdict = false;
     MockWorkspaceHostProcess.failNextLoad = false;
+    MockWorkspaceHostProcess.holdNextLoad = false;
     client = new WorkspaceClient({});
   });
 
@@ -208,14 +219,39 @@ describe("WorkspaceClient.refreshProjectAfterGitInit (#14178)", () => {
     await client.refreshProjectAfterGitInit(PROJECT);
     await entry().currentReadyPromise;
     const crash = vi.fn();
+    const restarted = vi.fn();
     client.on("host-crash", crash);
+    client.on("host-restarted", restarted);
 
     hosts[0].emit("host-crash", 1);
     hosts[0].emit("restarted");
     await tick();
 
     expect(crash).not.toHaveBeenCalled();
-    expect(hosts[0].loads()).toBe(1);
+    // An unguarded "restarted" would reload the entry's current host — the replacement.
+    expect(hosts[1].loads()).toBe(1);
+    expect(restarted).not.toHaveBeenCalled();
+  });
+
+  it("holds a load that was waiting across the swap until the replacement has loaded", async () => {
+    await client.loadProject(PROJECT, WINDOW_A);
+    MockWorkspaceHostProcess.nextVerdict = true;
+    MockWorkspaceHostProcess.holdNextLoad = true;
+
+    let settled = false;
+    const loadB = client.loadProject(PROJECT, WINDOW_B).then((kind) => {
+      settled = true;
+      return kind;
+    });
+    // The swap lands while B is still awaiting the old host's readiness.
+    void client["pool"].replaceHost(entry(), "git-initialized");
+    await tick();
+    expect(settled).toBe(false);
+
+    hosts[1].releaseLoad();
+    await expect(loadB).resolves.toBe("warm");
+    expect(hosts[1].gitBacked).toBe(true);
+    expect(entry().windowIds).toEqual(new Set([WINDOW_A, WINDOW_B]));
   });
 
   it("leaves a replacement that failed to load for the next load to respawn", async () => {
