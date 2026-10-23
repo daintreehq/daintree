@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
+import os from "node:os";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
 
@@ -14,6 +15,7 @@ import ts from "typescript";
 const TEST_DIR = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(TEST_DIR, "../../../..");
 const SRC_ROOT = path.join(REPO_ROOT, "src");
+const SHARED_ROOT = path.join(REPO_ROOT, "shared");
 const DEFINITIONS_DIR = path.join(SRC_ROOT, "services/actions/definitions");
 
 const IMPL_FILE = /\.impl\.tsx?$/;
@@ -39,19 +41,25 @@ function sourceFiles(dir: string, found: string[] = []): string[] {
 }
 
 /** Each `.impl` module's absolute path without its extension. */
-function implTargets(): Set<string> {
+function implTargets(dir = DEFINITIONS_DIR): Set<string> {
   return new Set(
     fs
-      .readdirSync(DEFINITIONS_DIR)
+      .readdirSync(dir)
       .filter((name) => IMPL_FILE.test(name))
-      .map((name) => path.join(DEFINITIONS_DIR, name).replace(STRIPPED_EXTENSION, ""))
+      .map((name) => path.join(dir, name).replace(STRIPPED_EXTENSION, ""))
   );
 }
 
-function resolveSpecifier(fromFile: string, specifier: string): string | null {
+// Covers the forms Vite resolves into src/: relative, the `@/` and `@shared/`
+// aliases, and root-absolute `/src/...`, with any `?query` suffix dropped.
+function resolveSpecifier(fromFile: string, rawSpecifier: string): string | null {
+  const specifier = rawSpecifier.replace(/[?#].*$/, "");
   let resolved: string;
   if (specifier.startsWith(".")) resolved = path.resolve(path.dirname(fromFile), specifier);
-  else if (specifier.startsWith("@/")) resolved = path.join(SRC_ROOT, specifier.slice(2));
+  else if (specifier.startsWith("@/")) resolved = path.resolve(SRC_ROOT, specifier.slice(2));
+  else if (specifier.startsWith("@shared/")) {
+    resolved = path.resolve(SHARED_ROOT, specifier.slice("@shared/".length));
+  } else if (specifier.startsWith("/")) resolved = path.resolve(REPO_ROOT, specifier.slice(1));
   else return null;
   return resolved.replace(STRIPPED_EXTENSION, "");
 }
@@ -77,15 +85,17 @@ function isTypeOnlyExport(node: ts.ExportDeclaration): boolean {
 }
 
 type Violation = { file: string; line: number; specifier: string };
+type ScanResult = { violations: Violation[]; lazyLoads: string[] };
 
-function findStaticImplImports(
+function scanImplImports(
   fileName: string,
   sourceText: string,
   targets: ReadonlySet<string>
-): Violation[] {
+): ScanResult {
   const kind = fileName.endsWith(".tsx") ? ts.ScriptKind.TSX : ts.ScriptKind.TS;
   const sf = ts.createSourceFile(fileName, sourceText, ts.ScriptTarget.Latest, true, kind);
   const violations: Violation[] = [];
+  const lazyLoads: string[] = [];
 
   const check = (node: ts.Node, moduleSpecifier: ts.Expression, typeOnly: boolean) => {
     if (typeOnly || !ts.isStringLiteral(moduleSpecifier)) return;
@@ -110,7 +120,22 @@ function findStaticImplImports(
       check(statement, statement.moduleReference.expression, statement.isTypeOnly);
     }
   }
-  return violations;
+
+  const visit = (node: ts.Node): void => {
+    if (
+      ts.isCallExpression(node) &&
+      node.expression.kind === ts.SyntaxKind.ImportKeyword &&
+      node.arguments[0] &&
+      ts.isStringLiteral(node.arguments[0])
+    ) {
+      const resolved = resolveSpecifier(fileName, node.arguments[0].text);
+      if (resolved !== null && targets.has(resolved)) lazyLoads.push(resolved);
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sf);
+
+  return { violations, lazyLoads };
 }
 
 describe("lazy action .impl modules", () => {
@@ -141,17 +166,19 @@ describe("lazy action .impl modules", () => {
     expect(files.some((f) => f.includes(`${path.sep}__tests__${path.sep}`))).toBe(false);
 
     const violations: Violation[] = [];
-    let typeOnlyReferences = 0;
+    const lazyLoaded = new Set<string>();
     for (const file of files) {
       const text = fs.readFileSync(file, "utf8");
       if (!text.includes(".impl")) continue;
-      violations.push(...findStaticImplImports(file, text, targets));
-      if (/import type [^;]*\.impl"/.test(text)) typeOnlyReferences++;
+      const result = scanImplImports(file, text, targets);
+      violations.push(...result.violations);
+      for (const target of result.lazyLoads) lazyLoaded.add(target);
     }
 
-    // The metadata modules reference their run bodies by type, so the scan
-    // must reach them for the guard to mean anything.
-    expect(typeOnlyReferences).toBeGreaterThan(0);
+    // Every run-body module is loaded by some metadata module through
+    // `import()`. Seeing each of those proves the walk reached the files that
+    // would carry a regression.
+    expect([...targets].filter((t) => !lazyLoaded.has(t))).toEqual([]);
     expect(
       violations.map((v) => `${v.file}:${v.line} imports "${v.specifier}"`),
       "Load .impl modules with `await import()`, or import them with `import type`"
@@ -162,7 +189,7 @@ describe("lazy action .impl modules", () => {
     const fromFile = path.join(DEFINITIONS_DIR, "fixtureActions.ts");
     const fixtureTargets = new Set([path.join(DEFINITIONS_DIR, "gitActions.impl")]);
     const flagged = (source: string, file = fromFile) =>
-      findStaticImplImports(file, source, fixtureTargets).map((v) => v.specifier);
+      scanImplImports(file, source, fixtureTargets).violations.map((v) => v.specifier);
 
     it.each([
       ["named value import", 'import { gitActionRuns } from "./gitActions.impl";'],
@@ -184,6 +211,15 @@ describe("lazy action .impl modules", () => {
         "@/ alias",
         'import { gitActionRuns } from "@/services/actions/definitions/gitActions.impl";',
       ],
+      [
+        "@shared/ alias reaching into src",
+        'import { gitActionRuns } from "@shared/../src/services/actions/definitions/gitActions.impl";',
+      ],
+      [
+        "root-absolute path",
+        'import { gitActionRuns } from "/src/services/actions/definitions/gitActions.impl";',
+      ],
+      ["query suffix", 'import { gitActionRuns } from "./gitActions.impl.ts?inline";'],
       [
         "multiline import",
         'import {\n  gitActionRuns,\n  // a comment\n} from "./gitActions.impl";',
@@ -220,11 +256,31 @@ describe("lazy action .impl modules", () => {
       expect(flagged(source)).toEqual([]);
     });
 
-    it("matches every discovered .impl module, not a fixed list", () => {
-      const futureTargets = new Set([...targets, path.join(DEFINITIONS_DIR, "futureActions.impl")]);
-      const source = 'import { futureActionRuns } from "./futureActions.impl";';
-      expect(findStaticImplImports(fromFile, source, futureTargets)).toHaveLength(1);
-      expect(findStaticImplImports(fromFile, source, targets)).toEqual([]);
+    it("records dynamic imports of .impl modules as lazy loads", () => {
+      const source =
+        'export const load = () => import("./gitActions.impl");\nexport const other = () => import("./gitActions");';
+      expect(scanImplImports(fromFile, source, fixtureTargets).lazyLoads).toEqual([
+        path.join(DEFINITIONS_DIR, "gitActions.impl"),
+      ]);
+    });
+
+    it("discovers .impl modules by file name, so new ones are guarded unedited", () => {
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), "lazy-impl-"));
+      try {
+        for (const name of ["futureActions.impl.ts", "panelActions.impl.tsx", "futureActions.ts"]) {
+          fs.writeFileSync(path.join(dir, name), "");
+        }
+        const discovered = implTargets(dir);
+        expect([...discovered].sort()).toEqual([
+          path.join(dir, "futureActions.impl"),
+          path.join(dir, "panelActions.impl"),
+        ]);
+        const source = 'import { futureActionRuns } from "./futureActions.impl";';
+        const fixture = path.join(dir, "futureActions.ts");
+        expect(scanImplImports(fixture, source, discovered).violations).toHaveLength(1);
+      } finally {
+        fs.rmSync(dir, { recursive: true, force: true });
+      }
     });
 
     it("exempts test files from the source walk", () => {
