@@ -26,7 +26,9 @@ const run = (overrides: Record<string, unknown>) => ({
 
 let sent: Sent[];
 // How the next list reads go: answered, unreachable, or refused as unpaired.
-let waitingReply: "ok" | "unreachable" | "error" | 401;
+let waitingReply: "ok" | "unreachable" | "error" | "pending" | 401;
+// Settles a list read left pending, as answered or unreachable.
+let settlePending: (outcome: "ok" | "unreachable") => void;
 
 /** Load the page as a paired device would, its own script and all, served `waiting` and `answer`. */
 async function openPage(
@@ -48,6 +50,14 @@ async function openPage(
       });
       if (path.startsWith("/api/waiting")) {
         if (waitingReply === "unreachable") throw new TypeError("Failed to fetch");
+        if (waitingReply === "pending") {
+          return new Promise((resolve, reject) => {
+            settlePending = (outcome) =>
+              outcome === "ok"
+                ? resolve({ ok: true, status: 200, json: async () => waiting })
+                : reject(new TypeError("Failed to fetch"));
+          });
+        }
         if (waitingReply === "error") {
           return { ok: false, status: 503, json: async () => ({ error: "Daintree is busy." }) };
         }
@@ -259,6 +269,35 @@ describe("the paired device's page", () => {
     waitingReply = "unreachable";
     await vi.advanceTimersByTimeAsync(3000);
     expect(status()).toContain("since " + hhmm(Date.now()));
+  });
+
+  it("stops offering the other cards when a read in flight during an answer fails", async () => {
+    await openPage({ runs: [run({}), run({ runId: "run-2" })], hosts: [] });
+    waitingReply = "pending";
+    await vi.advanceTimersByTimeAsync(3000);
+    const [first, second] = [...document.querySelectorAll(".run")];
+    button(first!, "Yes").click();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(first!.querySelector(".result")!.textContent).toBe("Picked “Yes”.");
+
+    settlePending("unreachable");
+    await vi.advanceTimersByTimeAsync(0);
+    expect(status()).toContain("Couldn't reach Daintree since");
+    expect([...second!.querySelectorAll("button")].every((b) => b.disabled)).toBe(true);
+    expect(first!.querySelector(".result")!.textContent).toBe("Picked “Yes”.");
+  });
+
+  it("shows nothing from a read that comes back after unpairing", async () => {
+    await openPage({ runs: [run({})], hosts: [] });
+    waitingReply = "pending";
+    await vi.advanceTimersByTimeAsync(3000);
+    document.getElementById("forget")!.click();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(document.querySelectorAll(".run")).toHaveLength(0);
+
+    settlePending("ok");
+    await vi.advanceTimersByTimeAsync(0);
+    expect(document.querySelectorAll(".run")).toHaveLength(0);
   });
 
   it("stops offering the cards when Daintree answers but can't give the list", async () => {

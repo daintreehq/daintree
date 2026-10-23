@@ -31,9 +31,13 @@ const SCRIPT = String.raw`
   const save = (value) => {
     token = value;
     if (!value) {
+      // Nothing read under the old pairing is offered under the next one.
       downSince = 0;
       hostRead.clear();
       hostDownSince.clear();
+      $("runs").replaceChildren();
+      $("hosts").replaceChildren();
+      $("status").textContent = "";
     }
     try { value ? localStorage.setItem(KEY, value) : localStorage.removeItem(KEY); } catch {}
   };
@@ -192,20 +196,25 @@ const SCRIPT = String.raw`
     if (!busy) {
       polling = true;
       const seq = answerSeq;
+      const session = token;
       try {
         const r = await call("GET", "/api/waiting?hosts=1");
-        if (busy || seq !== answerSeq) {
-          // An answer began while this was in flight; the next read shows its result.
+        if (token !== session) {
+          // Unpaired while this was in flight; it belongs to the old pairing.
         } else if (r.ok && r.data) {
-          downSince = 0;
-          $("status").textContent = "";
-          render(r.data.runs, r.data.hosts);
+          // An answer that began while this was in flight shows in the next read.
+          if (!busy && seq === answerSeq) {
+            downSince = 0;
+            $("status").textContent = "";
+            render(r.data.runs, r.data.hosts);
+          }
         } else if (r.status !== 401) {
+          // A failed read still means the cards on screen may be old, answer or not.
           $("status").textContent = (r.data && r.data.error) || "Couldn't read the waiting agents.";
           markStale();
         }
       } catch {
-        if (token && !busy && seq === answerSeq) {
+        if (token === session) {
           if (!downSince) downSince = Date.now();
           $("status").textContent = "Couldn't reach Daintree since " + clock(downSince) + " (" + minutes(downSince) + ").";
           markStale();
