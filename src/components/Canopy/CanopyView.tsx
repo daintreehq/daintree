@@ -2814,8 +2814,12 @@ function CanopyInbox({
                       variant="outline"
                       size="xs"
                       onClick={(event) => {
-                        // The button leaves with the banner: the keyboard stays in the panel.
-                        searchRef.current?.focus({
+                        // The button leaves with the banner: the keyboard stays in the
+                        // panel, on the search unless the whole list leaves with it.
+                        const listStays =
+                          items.length > 0 ||
+                          (assistantsShown && (assistantItems.length > 0 || !workersShown));
+                        (listStays ? searchRef : refreshRef).current?.focus({
                           preventScroll: true,
                           focusVisible: event.detail === 0,
                         });
