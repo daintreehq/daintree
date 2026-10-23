@@ -136,6 +136,19 @@ describe("terminalInstanceServiceAccessor", () => {
       expect(cb).toHaveBeenCalledExactlyOnceWith(service);
     });
 
+    it("skips a listener disposed by an earlier one during dispatch", () => {
+      let disposeSecond = (): void => {};
+      const first = vi.fn(() => disposeSecond());
+      const second = vi.fn();
+      accessor.onReady(first);
+      disposeSecond = accessor.onReady(second);
+
+      accessor.register(fakeService());
+
+      expect(first).toHaveBeenCalledOnce();
+      expect(second).not.toHaveBeenCalled();
+    });
+
     it("never fires after its disposer runs", async () => {
       const beforeReady = vi.fn();
       accessor.onReady(beforeReady)();
@@ -146,6 +159,27 @@ describe("terminalInstanceServiceAccessor", () => {
       accessor.onReady(afterReady)();
       await Promise.resolve();
       expect(afterReady).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("__testing.reset", () => {
+    it("drops a load and a ready delivery still in flight", async () => {
+      accessor.register(fakeService());
+      const staleReady = vi.fn();
+      accessor.onReady(staleReady);
+      accessor.__testing.reset();
+
+      const staleLoad = accessor.load();
+      accessor.__testing.reset();
+      const queued = vi.fn();
+      accessor.with(queued);
+
+      await staleLoad;
+      await Promise.resolve();
+
+      expect(accessor.peek()).toBeNull();
+      expect(queued).not.toHaveBeenCalled();
+      expect(staleReady).not.toHaveBeenCalled();
     });
   });
 

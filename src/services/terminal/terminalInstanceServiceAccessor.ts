@@ -19,6 +19,9 @@ let loadPromise: Promise<TerminalPaintPlane> | null = null;
 let queuedCalls: ServiceCall[] = [];
 const readyListeners = new Set<ServiceCall>();
 let pendingGpuHardwareAvailable: boolean | null = null;
+// Bumped by __testing.reset() so a load or onReady delivery still in flight
+// from before the reset cannot leak into the next test.
+let generation = 0;
 
 function runSafely(fn: ServiceCall, service: TerminalPaintPlane): void {
   try {
@@ -38,9 +41,11 @@ function becomeReady(service: TerminalPaintPlane): void {
   const calls = queuedCalls;
   queuedCalls = [];
   for (const fn of calls) runSafely(fn, service);
-  const listeners = [...readyListeners];
-  readyListeners.clear();
-  for (const cb of listeners) runSafely(cb, service);
+  // Delete-then-run rather than clear-then-run, so a listener disposed by an
+  // earlier one during this dispatch is skipped.
+  for (const cb of [...readyListeners]) {
+    if (readyListeners.delete(cb)) runSafely(cb, service);
+  }
 }
 
 export function register(service: TerminalPaintPlane): void {
@@ -54,13 +59,14 @@ export function peek(): TerminalPaintPlane | null {
 export function load(): Promise<TerminalPaintPlane> {
   if (instance) return Promise.resolve(instance);
   if (loadPromise) return loadPromise;
+  const loadGeneration = generation;
   loadPromise = import("@/services/TerminalInstanceService")
     .then(({ terminalInstanceService }) => {
-      becomeReady(terminalInstanceService);
+      if (loadGeneration === generation) becomeReady(terminalInstanceService);
       return instance ?? terminalInstanceService;
     })
     .catch((err: unknown) => {
-      loadPromise = null;
+      if (loadGeneration === generation) loadPromise = null;
       throw err;
     });
   return loadPromise;
@@ -81,9 +87,10 @@ export { withService as with };
 export function onReady(cb: ServiceCall): () => void {
   if (instance) {
     const service = instance;
+    const readyGeneration = generation;
     let disposed = false;
     queueMicrotask(() => {
-      if (!disposed) runSafely(cb, service);
+      if (!disposed && readyGeneration === generation) runSafely(cb, service);
     });
     return () => {
       disposed = true;
@@ -105,6 +112,7 @@ export function setGpuHardwareAvailable(value: boolean): void {
 
 export const __testing = {
   reset(): void {
+    generation += 1;
     instance = null;
     loadPromise = null;
     queuedCalls = [];
