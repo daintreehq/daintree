@@ -892,13 +892,24 @@ describe("rendererBridge — this machine's assistant in another of its projects
     expect(viewless.runViewlessAction).not.toHaveBeenCalled();
   });
 
-  it("runs a change through the local view the lease names", async () => {
-    const view = localView(2, { ok: true, result: "driver" });
+  it("runs a change through the local view the lease names, and refuses to guess between two", async () => {
+    const other = localView(1, { ok: true, result: "other" });
+    const driver = localView(2, { ok: true, result: "driver" });
+    mockProjectViews.set(WORKSPACE, [other, driver]);
+
+    const err = await bridge
+      .dispatchActionForWorkspace(WORKSPACE, "terminal.new", {}, false, "external", write)
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(WorkspaceBindingError);
+    expect((err as WorkspaceBindingError).reason).toBe("ambiguous");
+    expect(other.send).not.toHaveBeenCalled();
+    expect(driver.send).not.toHaveBeenCalled();
+    expect(viewless.runViewlessAction).not.toHaveBeenCalled();
+
     setMcpDriveTargetResolver(() => ({
       state: "live",
       endpoint: { ...makeRemoteEndpoint(async () => null), kind: "local-view", handle: 2 },
     }));
-
     const envelope = await bridge.dispatchActionForWorkspace(
       WORKSPACE,
       "terminal.new",
@@ -909,7 +920,8 @@ describe("rendererBridge — this machine's assistant in another of its projects
     );
 
     expect(envelope.result).toEqual({ ok: true, result: "driver" });
-    expect(view.send).toHaveBeenCalledTimes(1);
+    expect(driver.send).toHaveBeenCalledTimes(1);
+    expect(other.send).not.toHaveBeenCalled();
   });
 
   it("refuses a change another machine drives, naming it, whatever its link session is called", async () => {

@@ -24,6 +24,7 @@ import {
   type McpDriveTarget,
 } from "../driveTarget.js";
 import type { ClientEndpoint } from "../../../ipc/endpoint.js";
+import { WorkspaceBindingError } from "../rendererBridge.js";
 
 function entry(id: string, kind: "query" | "command", readOnlyHint?: boolean): ActionManifestEntry {
   return {
@@ -407,6 +408,108 @@ describe("HttpLifecycle.openRelaySession (#13493)", () => {
       const unreachable = await check({ state: "unavailable", reason: "reserved" });
       expect(unreachable.result.isError).toBe(true);
       expect(unreachable.handleProjectRunCheck).not.toHaveBeenCalled();
+    });
+  });
+  describe("this machine's own assistant in another of its projects (#14024)", () => {
+    afterEach(() => _resetMcpDriveTargetResolverForTesting());
+
+    const LOCAL_CALLER = {
+      linkSessionId: "local",
+      senderId: "local",
+      helpSessionId: "help-1",
+      shellName: "greg-mbp",
+      local: true as const,
+    };
+    const noView = () => ({
+      requestManifestForWorkspace: vi
+        .fn()
+        .mockRejectedValue(new WorkspaceBindingError("project-1", "not-found")),
+      getCachedManifestForWorkspace: vi.fn(() => null),
+    });
+
+    it("dispatches a call in a project no view shows, marked local, from the host's own catalog", async () => {
+      const { lc, dispatchActionForWorkspace } = await startedLifecycle(noView());
+      const session = (await lc.openRelaySession({
+        tier: "core",
+        workspaceId: "project-1",
+        caller: LOCAL_CALLER,
+      }))!;
+
+      const result = await session.callTool(
+        "terminal.list",
+        {},
+        { timeoutMs: 5_000, callId: "c1" }
+      );
+
+      expect(result.isError).not.toBe(true);
+      expect(dispatchActionForWorkspace).toHaveBeenCalledTimes(1);
+      expect(dispatchActionForWorkspace.mock.calls[0]?.[5]?.relay).toMatchObject({
+        linkSessionId: "local",
+        local: true,
+      });
+      session.close();
+    });
+
+    it("leaves another machine's relay to a project nothing here shows a lost route", async () => {
+      const { lc, dispatchActionForWorkspace } = await startedLifecycle(noView());
+      const session = (await lc.openRelaySession({
+        tier: "core",
+        workspaceId: "project-1",
+        caller: CALLER,
+      }))!;
+
+      const result = await session.callTool(
+        "terminal.list",
+        {},
+        { timeoutMs: 5_000, callId: "c1" }
+      );
+
+      expect(result.isError).toBe(true);
+      expect(JSON.stringify(result.content)).toContain("SESSION_BINDING_GONE");
+      expect(dispatchActionForWorkspace).not.toHaveBeenCalled();
+      session.close();
+    });
+
+    it("runs a check main runs itself with Host-mode routing off, never while another machine drives", async () => {
+      const run = async () => {
+        const handleProjectRunCheck = vi.fn().mockResolvedValue({ passed: true });
+        const { lc } = await startedLifecycle({ handleProjectRunCheck } as never);
+        const session = (await lc.openRelaySession({
+          tier: "full",
+          workspaceId: "project-1",
+          caller: LOCAL_CALLER,
+        }))!;
+        const result = await session.callTool(
+          "project.runCheck",
+          { projectId: "project-1", runnerId: "test" },
+          { timeoutMs: 5_000, callId: "check-1" }
+        );
+        session.close();
+        return { result, handleProjectRunCheck };
+      };
+
+      expect((await run()).handleProjectRunCheck).toHaveBeenCalledTimes(1);
+
+      setMcpDriveTargetResolver(() => ({
+        state: "live",
+        endpoint: {
+          endpointId: "remote:local:view-1",
+          clientId: "client-1",
+          projectId: "project-1",
+          kind: "remote-view",
+          handle: -5,
+          linkSessionId: "local",
+          send: vi.fn(),
+          request: vi.fn(),
+          onClose: vi.fn(() => ({ dispose: () => {} })),
+          isClosed: () => false,
+        },
+        holderName: "studio-02",
+      }));
+      const refused = await run();
+      expect(refused.result.isError).toBe(true);
+      expect(JSON.stringify(refused.result.content)).toContain("studio-02 has control");
+      expect(refused.handleProjectRunCheck).not.toHaveBeenCalled();
     });
   });
 });

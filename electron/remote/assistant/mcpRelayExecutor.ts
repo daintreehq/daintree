@@ -115,6 +115,8 @@ const RELAY_PRINCIPAL_RETENTION_MS = 24 * 60 * 60_000;
 const RELAY_PRINCIPALS_PER_SENDER = 64;
 /** Ended links remembered, for calls still being admitted when theirs went. */
 const MAX_EXPIRED_LINKS = 256;
+/** Ended callers remembered, for calls still being admitted or run when theirs went. */
+const MAX_ENDED_PRINCIPALS = 256;
 /**
  * How long a call that asked for notices is remembered past the window its
  * Shell takes them for, so clocks a little apart never read it as forgotten.
@@ -225,6 +227,11 @@ export function createMcpRelayExecutor(deps: McpRelayExecutorDeps): McpRelayExec
   const sessions = new Map<string, CachedSession>();
   // Links that can't resume, for a call that was still being admitted when its link went.
   const expiredLinks = new Set<string>();
+  // Callers that will make no more calls, by sender and help session: a call of
+  // theirs still being admitted or run finishes, then its session and hold go.
+  const endedPrincipals = new Set<string>();
+  const principalKey = (senderId: string, helpSessionId: string): string =>
+    `${senderId}\0${helpSessionId}`;
   // Each relay principal this host admitted, by sender then help session, least recent
   // first: when it last ran a call, and how many it runs now.
   const principals = new Map<string, Map<string, { usedAt: number; running: number }>>();
@@ -280,6 +287,13 @@ export function createMcpRelayExecutor(deps: McpRelayExecutorDeps): McpRelayExec
     return () => {
       record.running -= 1;
       record.usedAt = now();
+      if (
+        endedPrincipals.has(principalKey(senderId, helpSessionId)) &&
+        principals.get(senderId)?.get(helpSessionId) === record &&
+        !principalInUse(senderId, helpSessionId)
+      ) {
+        retire(senderId, helpSessionId);
+      }
     };
   };
 
@@ -352,8 +366,11 @@ export function createMcpRelayExecutor(deps: McpRelayExecutorDeps): McpRelayExec
     const opened = await cached.opening.catch(() => null);
     if (opened === null || !opened.isOpen()) return null;
     if (cached.session === null && sessions.get(key) === cached) cached.session = opened;
-    // Its link ended while this was being admitted: serve this call, then close.
-    if (expiredLinks.has(spec.linkSessionId)) {
+    // Its link or caller ended while this was being admitted: serve this call, then close.
+    if (
+      expiredLinks.has(spec.linkSessionId) ||
+      endedPrincipals.has(principalKey(spec.senderId, spec.helpSessionId))
+    ) {
       if (sessions.get(key) === cached) sessions.delete(key);
       cached.retired = true;
     }
@@ -545,10 +562,14 @@ export function createMcpRelayExecutor(deps: McpRelayExecutorDeps): McpRelayExec
       closeSessions((cached) => cached.linkSessionId === linkSessionId);
     },
     endPrincipal: (senderId, helpSessionId) => {
+      endedPrincipals.add(principalKey(senderId, helpSessionId));
+      if (endedPrincipals.size > MAX_ENDED_PRINCIPALS) {
+        endedPrincipals.delete(endedPrincipals.values().next().value!);
+      }
       closeSessions(
         (cached) => cached.senderId === senderId && cached.helpSessionId === helpSessionId
       );
-      // One still running a call keeps its hold until the sweep finds it unused.
+      // One still running a call keeps its hold until that call settles.
       if (
         principals.get(senderId)?.has(helpSessionId) &&
         !principalInUse(senderId, helpSessionId)
@@ -566,6 +587,7 @@ export function createMcpRelayExecutor(deps: McpRelayExecutorDeps): McpRelayExec
       }
       ledger.clear();
       noticeCalls.clear();
+      endedPrincipals.clear();
     },
   };
 }
