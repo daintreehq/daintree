@@ -184,7 +184,15 @@ export function advanceProjectLayoutSeed(
     ...(kept !== undefined ? { outcome: kept } : {}),
     at: now,
   };
-  write(projectId, record);
+  try {
+    write(projectId, record);
+  } catch (error) {
+    // The claimant tried to finish and storage refused: holding the claim
+    // would read as applying forever, so it lapses and the seed reads as
+    // failed, for a Retry once storage recovers.
+    if (from === "applying") claims.delete(projectId);
+    throw error;
+  }
   if (from === "applying") claims.delete(projectId);
   if (to === "applying" && claimant !== undefined) claims.set(projectId, claimant);
   return { advanced: true, record };

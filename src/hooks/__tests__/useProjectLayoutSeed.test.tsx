@@ -99,7 +99,7 @@ describe("useProjectLayoutSeed (#13782)", () => {
   beforeEach(() => {
     record = { status: "pending", at: 0 };
     advanceProjectLayoutSeed.mockClear();
-    getProjectLayoutSeed.mockClear();
+    getProjectLayoutSeed.mockReset().mockImplementation(async () => record);
     seedPluginLayout.mockReset().mockResolvedValue({
       panelIds: ["new-1"],
       failures: [],
@@ -326,6 +326,37 @@ describe("useProjectLayoutSeed (#13782)", () => {
       expect(advanceProjectLayoutSeed.mock.lastCall?.slice(0, 2)).toEqual(["applying", "failed"]);
       expect(record?.status).toBe("failed");
       expect(useProjectLayoutSeedStore.getState().waiting).toBeNull();
+    });
+
+    it("reads the seed again on focus after a failed first read, and applies it", async () => {
+      getProjectLayoutSeed.mockRejectedValue(new Error("EACCES"));
+      mount();
+      arrive([layout()]);
+      await flush();
+      expect(useProjectLayoutSeedStore.getState().status).toBeUndefined();
+      expect(seedPluginLayout).not.toHaveBeenCalled();
+
+      // Storage readable again.
+      getProjectLayoutSeed.mockImplementation(async () => record);
+      act(() => {
+        window.dispatchEvent(new Event("focus"));
+      });
+      await flush();
+      expect(seedPluginLayout).toHaveBeenCalledTimes(1);
+    });
+
+    it("picks up a layout offer another window answered, on focus", async () => {
+      record = { status: "offered", at: 0 };
+      mount();
+      await flush();
+      expect(useProjectLayoutSeedStore.getState().status).toBe("offered");
+
+      record = { status: "settled", outcome: "dismissed", at: 2 };
+      act(() => {
+        window.dispatchEvent(new Event("focus"));
+      });
+      await flush();
+      expect(useProjectLayoutSeedStore.getState().status).toBe("settled");
     });
 
     it("settles a failed seed the user dismisses", async () => {

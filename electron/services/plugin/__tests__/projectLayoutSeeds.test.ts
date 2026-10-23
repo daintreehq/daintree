@@ -166,6 +166,22 @@ describe("projectLayoutSeeds (#13782)", () => {
       ).toEqual({ advanced: true, record: { status: "settled", outcome: "dismissed", at: 5 } });
     });
 
+    it("lets the claim go when storage refuses the claimant's finish", () => {
+      captureProjectLayoutSeed(PROJECT_A, true, 1);
+      advanceProjectLayoutSeed(PROJECT_A, "pending", "applying", "applied", VIEW_1);
+      storeMock.set.mockImplementationOnce(() => {
+        throw new Error("ENOSPC");
+      });
+      expect(() =>
+        advanceProjectLayoutSeed(PROJECT_A, "applying", "settled", undefined, VIEW_1)
+      ).toThrow(/ENOSPC/);
+      // Not applying forever: failed, and retryable once storage recovers.
+      expect(getProjectLayoutSeed(PROJECT_A)?.status).toBe("failed");
+      expect(
+        advanceProjectLayoutSeed(PROJECT_A, "failed", "applying", undefined, VIEW_1).advanced
+      ).toBe(true);
+    });
+
     it("needs a claimant to enter or leave applying", () => {
       captureProjectLayoutSeed(PROJECT_A, true, 1);
       expect(() => advanceProjectLayoutSeed(PROJECT_A, "pending", "applying")).toThrow(

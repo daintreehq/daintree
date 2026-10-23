@@ -1175,7 +1175,14 @@ async function handleProjectLayoutSeedAdvance(
   if (outcome !== undefined && !isProjectLayoutSeedOutcome(outcome)) {
     throw new AppError({ code: "VALIDATION", message: "layout seed: unknown outcome" });
   }
-  const result = advanceProjectLayoutSeed(ctx.projectId, from, to, outcome, ctx.webContentsId);
+  let result: ProjectLayoutSeedAdvance;
+  try {
+    result = advanceProjectLayoutSeed(ctx.projectId, from, to, outcome, ctx.webContentsId);
+  } catch (error) {
+    // A finish storage refused has already let the claim go.
+    if (from === "applying") seedClaimWatches.get(ctx.projectId)?.();
+    throw error;
+  }
   if (result.advanced) {
     if (from === "applying") seedClaimWatches.get(ctx.projectId)?.();
     if (to === "applying") watchSeedClaim(ctx, ctx.projectId);

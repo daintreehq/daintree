@@ -190,9 +190,14 @@ export function useProjectLayoutSeed(enabled: boolean): void {
         });
     };
 
+    // Unread (a failed first read) and offered count too: either may have
+    // moved on elsewhere, and both hold the application's welcome back.
     const reloadUnfinished = (): void => {
       const status = seed().status;
-      if (status === "applying" || status === "failed") void seed().load();
+      if (status === "settled" || status === null) return;
+      void seed()
+        .load()
+        .then(() => evaluate());
     };
 
     const unsubscribers = [
