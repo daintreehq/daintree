@@ -697,6 +697,12 @@ export class InspectorController implements DevPreviewToolSession {
     if (workspace.status === "ready" && workspace.appPath === appPath) return;
     // A request on its way cites the old app's files; it must not land after the switch.
     cancelAgentRequests(this.panelId);
+    // So does a click still waiting for the old app's source: it is not the
+    // other app's to resolve.
+    if (this.held !== null) {
+      this.held = null;
+      this.selectionRequest++;
+    }
     this.closeWorkspace();
     void this.openWorkspace(appPath);
   }

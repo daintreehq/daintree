@@ -218,6 +218,12 @@ export class ElementPickerWorkspaceService {
   private readonly leases = new Map<string, LeaseRecord>();
   private readonly endpoints = new Map<string, EndpointRecord>();
   private readonly discoveries = new Map<string, Promise<AppDiscovery>>();
+  /**
+   * One registration at a time per view: making room in its own leases and
+   * registering the replacement are one step, or two opens from one view could
+   * both find room and overfill the host's shared registry together.
+   */
+  private readonly registering = new Map<string, Promise<void>>();
   private readonly gate = new AdmissionGate(DISCOVERY_LIMITS);
   /** Aborted on dispose: ends every app search, including ones several opens share. */
   private readonly lifetime = new AbortController();
@@ -272,7 +278,7 @@ export class ElementPickerWorkspaceService {
       };
     }
 
-    const lease = await this.register(owner, request, worktreeRoot, choice);
+    const lease = await this.registerInTurn(owner, request, worktreeRoot, choice);
     return {
       status: "ready",
       workspaceId: lease.workspaceId,
@@ -434,6 +440,28 @@ export class ElementPickerWorkspaceService {
       if (dir === worktreeRoot) break;
     }
     return null;
+  }
+
+  private async registerInTurn(
+    owner: ElementPickerWorkspaceOwner,
+    request: ElementPickerWorkspaceOpenRequest,
+    worktreeRoot: string,
+    appRoot: string
+  ): Promise<LeaseRecord> {
+    const endpointId = owner.endpoint.endpointId;
+    const previous = this.registering.get(endpointId) ?? Promise.resolve();
+    let finish!: () => void;
+    const released = new Promise<void>((resolve) => (finish = resolve));
+    const turn = previous.then(() => released);
+    this.registering.set(endpointId, turn);
+    await previous;
+    try {
+      this.assertLive(owner);
+      return await this.register(owner, request, worktreeRoot, appRoot);
+    } finally {
+      finish();
+      if (this.registering.get(endpointId) === turn) this.registering.delete(endpointId);
+    }
   }
 
   private async register(

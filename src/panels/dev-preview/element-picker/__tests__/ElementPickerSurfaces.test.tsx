@@ -482,6 +482,30 @@ describe("preview binding", () => {
     await screen.findByRole("combobox", { name: "Site source app" });
   });
 
+  it("lets a click held for one app's source go when the user switches to another", async () => {
+    const answers: Array<(result: ElementPickerWorkspaceOpenResult) => void> = [];
+    host.openWith = () => new Promise((resolve) => answers.push(resolve));
+    await mountBound();
+    await act(async () => host.select(0));
+    expect(session().getSnapshot().selection.status).toBe("resolving");
+
+    await act(async () => session().switchApp("apps/docs"));
+    await waitFor(() => expect(answers.length).toBeGreaterThan(1));
+    await act(async () =>
+      answers.at(-1)?.({
+        status: "ready",
+        workspaceId: "ws-docs",
+        appPath: "apps/docs",
+        appPaths: [".", "apps/docs"],
+        scanComplete: true,
+      })
+    );
+    // The click was made against the other app: it is never resolved against this one.
+    await waitFor(() => expect(session().getSnapshot().workspace.status).toBe("ready"));
+    expect(host.calls("resolve")).toEqual([]);
+    expect(session().getSnapshot().selection.status).toBe("none");
+  });
+
   it("won't trace a preview whose dev server runs from another worktree", async () => {
     usePanelStore.setState({
       panelsById: {

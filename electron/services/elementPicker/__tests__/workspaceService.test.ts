@@ -490,6 +490,29 @@ describe("ElementPickerWorkspaceService leases", () => {
     expect(released).toBeLessThan(lastRegistered);
   });
 
+  it("never holds more for one view than its share, however many opens it races", async () => {
+    const { svc, host, registered } = service();
+    const owner = { projectId: PROJECT, endpoint: new FakeEndpoint(1) };
+    for (let index = 0; index < MAX_LEASES_PER_ENDPOINT; index += 1) {
+      await svc.open(owner, openRequest({ worktreeId: "wt-single" }));
+    }
+    // The host's registry is shared: what matters is the most it ever held,
+    // since one past its bound evicts some other view's workspace.
+    let most = registered.size;
+    const register = host.registerWorkspace.getMockImplementation()!;
+    host.registerWorkspace.mockImplementation(async (options) => {
+      const id = await register(options);
+      most = Math.max(most, registered.size);
+      return id;
+    });
+    // Two at once from a full view: each must make its own room first.
+    await Promise.all([
+      svc.open(owner, openRequest({ worktreeId: "wt-single" })),
+      svc.open(owner, openRequest({ worktreeId: "wt-single" })),
+    ]);
+    expect(most).toBe(MAX_LEASES_PER_ENDPOINT);
+  });
+
   it("says a workspace released while its resolve was out is closed, not cancelled", async () => {
     const { svc, host, owner, workspaceId } = await opened();
     let answer: ((value: unknown) => void) | undefined;
