@@ -454,6 +454,40 @@ describe("web project detection (#14069)", () => {
     expect(detectWebProjectMock).toHaveBeenCalledTimes(1);
   });
 
+  it("counts a write's broadcast as told, so the same answer isn't sent again", async () => {
+    detectWebProjectMock.mockResolvedValue(false);
+    await invoke("project-presentation:get");
+    detectWebProjectMock.mockResolvedValue(true);
+    await invoke("project-presentation:set-level", "forgeStats", "demoted");
+    expect(broadcastMock).toHaveBeenCalledTimes(1);
+
+    changeUnder("/repo");
+    await vi.waitFor(() => expect(detectWebProjectMock).toHaveBeenCalledTimes(3));
+    await settle();
+
+    expect(broadcastMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("publishes nothing from a read still out when the handlers go", async () => {
+    detectWebProjectMock.mockResolvedValue(false);
+    await invoke("project-presentation:get");
+    let finish: (value: boolean) => void = () => {};
+    detectWebProjectMock.mockReturnValue(
+      new Promise<boolean>((resolve) => {
+        finish = resolve;
+      })
+    );
+    changeUnder("/repo");
+    await vi.waitFor(() => expect(detectWebProjectMock).toHaveBeenCalledTimes(2));
+
+    cleanup?.();
+    cleanup = null;
+    finish(true);
+    await settle();
+
+    expect(broadcastMock).not.toHaveBeenCalled();
+  });
+
   it("lets a project hide its dev preview without touching its toolbar toggle", async () => {
     await invoke("project-presentation:set-toolbar-enabled", false);
     const snapshot = (await invoke(

@@ -115,6 +115,10 @@ let failedAtRevision = 0;
 const RETRY_DELAYS_MS = [250, 1000, 3000] as const;
 let retries = 0;
 let retryTimer: ReturnType<typeof setTimeout> | null = null;
+// A read whose look at the files lost to a snapshot that landed during it,
+// and disagreed with it (#14069): one more read, nothing overtaking it, says
+// which was the later look.
+let recheckTimer: ReturnType<typeof setTimeout> | null = null;
 
 function cancelRetry(): void {
   if (retryTimer !== null) clearTimeout(retryTimer);
@@ -144,11 +148,18 @@ export const useProjectPresentationStore = create<ProjectPresentationState>((set
     ) {
       return;
     }
-    // A read another snapshot landed during (#14069): what it says about the
-    // files is older than what that one said, which the revision can't show,
-    // since it only orders what is stored.
+    // A read another snapshot landed during (#14069). Arriving first doesn't
+    // make that snapshot's look at the files the later one, and the revision
+    // only orders what is stored, so the held answer stands until a read that
+    // nothing overtakes settles it.
     const superseded =
       !authoritative && !acknowledgesWrites && held.loaded && held.projectId === snapshot.projectId;
+    if (superseded && (snapshot.webProject ?? null) !== held.webProject && recheckTimer === null) {
+      recheckTimer = setTimeout(() => {
+        recheckTimer = null;
+        pull();
+      }, 0);
+    }
     ++adoptions;
     cancelRetry();
     retries = 0;
@@ -385,6 +396,8 @@ export function _resetProjectPresentationStoreForTest(): void {
   failedAtRevision = 0;
   retries = 0;
   cancelRetry();
+  if (recheckTimer !== null) clearTimeout(recheckTimer);
+  recheckTimer = null;
   useProjectPresentationStore.setState({
     levels: {},
     suggestion: null,
