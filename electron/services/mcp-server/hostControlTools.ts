@@ -1,14 +1,18 @@
 import type { ActionErrorCode } from "../../../shared/types/actions.js";
 import {
   HOST_CALL_TOOL,
+  HOST_ENSURE_PROJECT_TOOL,
   HOST_LIST_TOOL,
   HostCallArgsSchema,
+  HostEnsureProjectArgsSchema,
   HostListArgsSchema,
   type HostCallArgs,
   type HostCallResult,
   type HostControlOutcome,
   type HostControlRefusalCode,
   type HostControlToolResult,
+  type HostEnsureProjectArgs,
+  type HostEnsureProjectResult,
   type HostListResult,
 } from "../../../shared/types/hostControl.js";
 
@@ -29,6 +33,11 @@ export interface HostControlRuntimeHandle {
     args: HostCallArgs,
     context: HostCallContext
   ): Promise<HostControlOutcome<HostCallResult>>;
+  /** Puts the calling assistant's own project on a host, with no window (#14140). */
+  ensureProject(
+    helpSessionId: string,
+    args: HostEnsureProjectArgs
+  ): Promise<HostControlOutcome<HostEnsureProjectResult>>;
 }
 
 /** What a `host.call` carries from the calling session beyond its arguments. */
@@ -89,6 +98,10 @@ async function dispatch(
       if (context === undefined) return notEligible();
       const parsed = HostCallArgsSchema.safeParse(raw);
       return parsed.success ? runtime.call(helpSessionId, parsed.data, context) : invalidArgs();
+    }
+    case HOST_ENSURE_PROJECT_TOOL: {
+      const parsed = HostEnsureProjectArgsSchema.safeParse(raw);
+      return parsed.success ? runtime.ensureProject(helpSessionId, parsed.data) : invalidArgs();
     }
     case HOST_LIST_TOOL: {
       if (!HostListArgsSchema.safeParse(raw).success) return invalidArgs();

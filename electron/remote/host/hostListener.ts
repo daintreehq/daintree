@@ -244,7 +244,10 @@ async function buildHostListener(
   teardowns.push(() => uploads.dispose());
   // Port forwards and project moves are per session, not per endpoint.
   teardowns.push(installHostPortService(server));
-  teardowns.push(installProjectsHost(server));
+  // A Shell's assistant bringing a project here asks under the same setting (#14140).
+  teardowns.push(
+    installProjectsHost(server, undefined, () => getHelpAssistantSettings().acceptRemoteControl)
+  );
   // Plugin inventory for attached Shells, and installs one sends on request.
   teardowns.push(installPluginParityHost(server));
   // Settings an attached Shell copies here, previewed and applied on request.

@@ -17,6 +17,7 @@ import { HostControlLinkClient } from "./HostControlLinkClient.js";
 import { createLocalMcpRelay } from "./localMcpRelay.js";
 import { forgetRetiredSends, readRetiredSends } from "./retiredSends.js";
 import { AssistantSenderCredentials } from "./senderCredentials.js";
+import { AppError } from "../../utils/errorTypes.js";
 import { createLogger } from "../../utils/logger.js";
 
 const logger = createLogger("main:install");
@@ -187,6 +188,16 @@ export function installHostControl(deps: HostControlInstallDeps): () => void {
     },
     // A host's notice rides its run's own notice line (#13500).
     queueNotice: queueOnNoticeLine,
+    // Through the Shell's switch service, with no window (#14140).
+    ensureProject: (request) => {
+      const service = getRemoteService("hostSwitchService");
+      if (!service) {
+        return Promise.reject(
+          new AppError({ code: "UNSUPPORTED", message: "No host switch service" })
+        );
+      }
+      return service.ensureForAssistant(request);
+    },
     local: {
       name: machineName,
       projects: async () => {

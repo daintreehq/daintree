@@ -14,6 +14,9 @@ function fakeRuntime() {
     call: vi.fn(() =>
       ok({ outcome: "ok" as const, detail: null, retryAfterMs: null, callId: "c", result: null })
     ),
+    ensureProject: vi.fn(() =>
+      ok({ outcome: "ok" as const, detail: null, retryAfterMs: null, hostId: "h", answer: null })
+    ),
   } satisfies HostControlRuntimeHandle;
 }
 
@@ -100,6 +103,24 @@ describe("runHostControlTool (#13493)", () => {
     expect(runtime.call).toHaveBeenCalledWith("hub", args, { tier: "full" });
     expect(untiered).toMatchObject({ ok: false, code: "NOT_ELIGIBLE" });
     expect(missing).toMatchObject({ ok: false, code: "INVALID_ARGS" });
+  });
+
+  it("hands host.ensureProject its parsed arguments, and refuses ones that don't parse", async () => {
+    const runtime = fakeRuntime();
+    const uninstall = setHostControlRuntime(runtime);
+    const access = bindHostControl(() => "hub");
+    const args = { hostId: "h", worktree: true, accept: ["unpushed"] };
+
+    await runHostControlTool("host.ensureProject", args, access);
+    const bad = await runHostControlTool(
+      "host.ensureProject",
+      { hostId: "h", accept: ["push"] },
+      access
+    );
+    uninstall();
+    expect(runtime.ensureProject).toHaveBeenCalledTimes(1);
+    expect(runtime.ensureProject).toHaveBeenCalledWith("hub", args);
+    expect(bad).toMatchObject({ ok: false, code: "INVALID_ARGS" });
   });
 
   it("refuses with no access at all", async () => {

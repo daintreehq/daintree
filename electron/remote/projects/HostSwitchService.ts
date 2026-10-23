@@ -17,6 +17,8 @@ import type { HostDirectoryListing, HostPickerRoots } from "../../../shared/type
 import type {
   CloneAndOpenOutcome,
   DestinationCheck,
+  ProjectMatchCandidate,
+  SourceProjectDescription,
   HostBranchTarget,
   HostCloneOptions,
   HostProjectOpened,
@@ -29,6 +31,12 @@ import {
   type HostId,
   type OperationOutcome,
 } from "../../../shared/types/remoteHosts.js";
+import {
+  HOST_ENSURE_NEW_COPY,
+  type HostEnsureAcceptable,
+  type HostEnsureAnswer,
+  type HostEnsureQuestion,
+} from "../../../shared/types/hostControl.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import {
   isSupportedCloneUrl,
@@ -36,6 +44,7 @@ import {
   stripGitRemoteCredentials,
   stripRemoteListCredentials,
 } from "../../../shared/utils/gitRemoteUrl.js";
+import { randomUUID } from "node:crypto";
 import type { IpcContext } from "../../ipc/types.js";
 import { normalizeOperationId } from "../../services/operations/OperationRegistry.js";
 import type { ProjectAcrossHostsService } from "../../services/projectAcrossHosts/index.js";
@@ -48,7 +57,12 @@ import {
   type HostGateway,
   type SessionResolver,
 } from "./gateways.js";
-import { BUNDLE_SINK_PREFIX, CloneOutcomeSchema, ProjectLinkMethod } from "./linkMethods.js";
+import {
+  BUNDLE_SINK_PREFIX,
+  CloneOutcomeSchema,
+  ProjectLinkMethod,
+  type AssistantStepMark,
+} from "./linkMethods.js";
 import { plainFolderName } from "../../services/projectAcrossHosts/destination.js";
 
 export interface HostSwitchServiceOptions {
@@ -84,6 +98,80 @@ const MAX_TRACKED = 100;
 const MAX_UNKNOWN_POLLS = 5;
 /** A menu asks about the hosts it lists; more than this is not a menu. */
 const MAX_LOCATE_HOSTS = 32;
+/** How long an assistant's ensure is waited on before it answers "working" (#14140). */
+const DEFAULT_ENSURE_WAIT_MS = 45_000;
+
+/** One of this machine's projects, to be made sure of on a host for an assistant (#14140). */
+export interface AssistantEnsureRequest {
+  toHostId: HostId;
+  /** The assistant's own project, on this machine. */
+  projectId: string;
+  worktreePath: string | null;
+  /** Also make the branch's worktree there. */
+  worktree: boolean;
+  /** The person's choice of copy: a candidate's path, or "new". */
+  copy: string | null;
+  accept: readonly HostEnsureAcceptable[];
+}
+
+function question(
+  reason: HostEnsureQuestion["reason"],
+  detail: string,
+  extra: Partial<Pick<HostEnsureQuestion, "accept" | "copies">> = {}
+): HostEnsureQuestion {
+  return { reason, detail, accept: extra.accept ?? null, copies: extra.copies ?? null };
+}
+
+function copiesOf(candidates: readonly ProjectMatchCandidate[]): HostEnsureQuestion["copies"] {
+  return candidates.map((c) => ({
+    path: c.path,
+    name: c.name,
+    registered: c.projectId !== null,
+    matchedBy: c.matchedBy,
+  }));
+}
+
+/**
+ * What about this machine's branch needs the person before its worktree is
+ * made on a host: commits only here, or a branch with nothing to make it from.
+ */
+function branchQuestion(
+  source: SourceProjectDescription,
+  accept: readonly HostEnsureAcceptable[]
+): HostEnsureQuestion | null {
+  const check = source.branchCheck;
+  if (source.branch === null || check === null || check.kind === "detached") {
+    return question(
+      "detached",
+      "This project isn't on a branch here, so there is no branch to continue on the host."
+    );
+  }
+  switch (check.kind) {
+    case "same-tip":
+    case "behind":
+      return null;
+    case "ahead":
+    case "diverged": {
+      if (accept.includes("unpushed")) return null;
+      const count = source.unpushedCommitCount;
+      return question(
+        "unpushed",
+        `${source.branch} has ${count === 1 ? "a commit" : `${count} commits`} here that aren't on ${check.remote}${check.kind === "diverged" ? ", and the remote has moved on too" : ""}. Nothing is pushed: the person can push first, or accept that the host's worktree starts at the remote's commit and these stay here.`,
+        { accept: "unpushed" }
+      );
+    }
+    case "not-on-remote":
+      return question(
+        "branch_not_on_remote",
+        `${source.branch} isn't on a remote, so the host can't get it. Nothing is pushed: the person can push it first, or bring the project without its worktree.`
+      );
+    case "remote-unreachable":
+      return question(
+        "remote_unreachable",
+        "This machine couldn't reach the branch's remote, so whether the host would get the same commits isn't known. Try again once it is reachable."
+      );
+  }
+}
 
 interface Tracked {
   /** The request itself, so a reused opId can't be answered with another request's result. */
@@ -293,6 +381,306 @@ export class HostSwitchService {
         }
       })
     );
+  }
+
+  private readonly assistantEnsures = new Map<string, Promise<HostEnsureAnswer>>();
+
+  /**
+   * Makes sure one of this machine's projects is on a host for its assistant
+   * (#14140), with no window: the host's one copy sharing a remote with it,
+   * else a clone by the host from that remote into its default folder, and
+   * the branch's worktree there when asked. Nothing is pushed or sent, no
+   * setup recipe is run, and nothing on the host is changed in a project
+   * another window holds; whatever needs the person comes back as questions.
+   * The same request while one runs joins it, and one still running past
+   * `waitMs` answers "working".
+   */
+  async ensureForAssistant(
+    request: AssistantEnsureRequest,
+    waitMs = DEFAULT_ENSURE_WAIT_MS
+  ): Promise<HostEnsureAnswer> {
+    if (isLocalHostId(request.toHostId)) throw invalid("The project is already on this machine");
+    const to = this.gateway(request.toHostId);
+    const key = JSON.stringify({ ...request, accept: [...new Set(request.accept)].sort() });
+    let running = this.assistantEnsures.get(key);
+    if (!running) {
+      const release = this.options.holdHost?.(to.hostId) ?? (() => {});
+      running = this.runEnsure(to, request).finally(() => {
+        release();
+        this.assistantEnsures.delete(key);
+      });
+      this.assistantEnsures.set(key, running);
+      // Followed by whoever calls next; a failure nobody waited for is theirs to read.
+      running.catch(() => {});
+    }
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const waited = new Promise<HostEnsureAnswer>((resolve) => {
+      timer = setTimeout(() => resolve({ status: "working" }), waitMs);
+    });
+    try {
+      return await Promise.race([running, waited]);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  private async runEnsure(
+    to: HostGateway,
+    request: AssistantEnsureRequest
+  ): Promise<HostEnsureAnswer> {
+    if (!(await to.assistantAccess())) {
+      throw new AppError({
+        code: "PERMISSION",
+        message: "The host doesn't let other machines' assistants work there",
+      });
+    }
+    const from = new LocalHostGateway(LOCAL_HOST_ID, this.options.local);
+    const described = await from.describeSource({
+      projectId: request.projectId,
+      worktreePath: request.worktreePath,
+      ...(request.worktree ? {} : { skipBranch: true }),
+    });
+    const source: SourceProjectDescription = {
+      ...described,
+      remotes: stripRemoteListCredentials(described.remotes),
+      cloneUrl: described.cloneUrl === null ? null : stripGitRemoteCredentials(described.cloneUrl),
+      repoName: plainFolderName(described.repoName),
+    };
+    const remoteUrls = source.remotes.map((remote) => remote.url);
+    if (!source.isGitRepository || source.isUnborn || remoteUrls.length === 0) {
+      return {
+        status: "question",
+        questions: [
+          question(
+            "no_remote",
+            "This project has no remote the host could get it from. Nothing is sent from this machine: the person can add a remote and push, or move it themselves."
+          ),
+        ],
+      };
+    }
+
+    const questions: HostEnsureQuestion[] = [];
+    if (request.worktree) {
+      const asked = branchQuestion(source, request.accept);
+      if (asked) questions.push(asked);
+    }
+    const [found, environment] = await Promise.all([
+      to.match({ remoteUrls, committedProjectId: source.committedProjectId }),
+      to.environment(),
+    ]);
+    const candidates = found.map((c) => ({ ...c, remotes: stripRemoteListCredentials(c.remotes) }));
+    const chosen = this.chooseCopy(candidates, request.copy, questions);
+    if (chosen === undefined) return { status: "question", questions };
+    // Files only arrive with a checkout: a clone, or a worktree in a copy already there.
+    if (
+      (chosen === null || request.worktree) &&
+      source.usesLfs &&
+      !environment.gitLfsAvailable &&
+      !request.accept.includes("lfs_missing")
+    ) {
+      questions.push(
+        question(
+          "lfs_missing",
+          "This repository uses Git LFS, and git lfs isn't installed on the host. Files kept in LFS would arrive as pointer files: the person can install it there first, or accept that.",
+          { accept: "lfs_missing" }
+        )
+      );
+    }
+    if (questions.length > 0) return { status: "question", questions };
+
+    const branch =
+      request.worktree && source.branch !== null
+        ? { name: source.branch, remoteBranch: source.remoteBranch ?? source.branch }
+        : null;
+    const check = source.branchCheck;
+    const remoteName = check && "remote" in check ? check.remote : null;
+    const branchRemoteUrl =
+      source.remotes.find((r) => r.name === remoteName)?.url ?? source.cloneUrl ?? null;
+    const leftHere = {
+      uncommittedChanges: source.uncommittedChangeCount,
+      unpushedCommits: request.worktree ? source.unpushedCommitCount : null,
+    };
+    const setupRecipes = source.recipes.map((recipe) => recipe.name);
+
+    let target = chosen;
+    if (target === null) {
+      const destination = await to.suggestDestination({
+        homeRelativePath: source.homeRelativePath,
+        repoName: source.repoName,
+        remoteUrls,
+      });
+      if (destination.status === "same-repository") {
+        // A copy registered there is named by its id, so the host checks who holds it.
+        const known = candidates.find((c) => c.path === destination.path);
+        target = { projectId: known?.projectId ?? null, path: destination.path };
+      } else if (destination.status !== "free" || source.cloneUrl === null) {
+        return {
+          status: "question",
+          questions: [
+            question(
+              "destination_taken",
+              `The host's default folder for it, ${destination.path}, can't take a clone${destination.detail ? `: ${destination.detail}` : "."} The person can move what's there or bring it themselves.`
+            ),
+          ],
+        };
+      } else {
+        const opId = randomUUID();
+        const cloned = await this.clone(
+          from,
+          to,
+          opId,
+          {
+            kind: "clone",
+            opId,
+            fromHostId: LOCAL_HOST_ID,
+            toHostId: to.hostId,
+            projectId: source.projectId,
+            source: { kind: "remote", url: source.cloneUrl },
+            destination: destination.path,
+            branch,
+            options: { submodules: source.hasSubmodules, depth: "full" },
+            // Never a setup recipe: one existing is only said.
+            setupRecipeId: null,
+          },
+          this.untracked(opId),
+          { assistant: true }
+        );
+        return this.readyFrom(cloned, "cloned", leftHere, setupRecipes);
+      }
+    }
+
+    if (target.projectId !== null && branch === null) {
+      const existing = candidates.find((c) => c.path === target!.path);
+      return {
+        status: "ready",
+        project: {
+          projectId: target.projectId,
+          name: existing?.name ?? source.projectName,
+          path: target.path,
+          worktreePath: null,
+          how: "existing",
+          leftHere,
+          setupRecipes,
+          note: null,
+        },
+      };
+    }
+    let opened;
+    try {
+      opened = await to.open({
+        projectId: target.projectId,
+        path: target.path,
+        remoteUrls,
+        branch,
+        branchRemoteUrl: branch ? branchRemoteUrl : null,
+        // Registering a copy as it is fetches nothing into it.
+        ...(branch ? {} : { navigateOnly: true }),
+        assistant: true,
+      });
+    } catch (error) {
+      if ((error as { code?: unknown } | null)?.code === "DRIVEN_ELSEWHERE") {
+        return { status: "question", questions: [drivenElsewhereQuestion()] };
+      }
+      throw error;
+    }
+    if (opened.canCheckOutBranch) {
+      return { status: "question", questions: [drivenElsewhereQuestion()] };
+    }
+    return this.readyFrom(
+      { kind: "opened", hostId: to.hostId, ...opened },
+      target.projectId === null ? "registered" : "existing",
+      leftHere,
+      setupRecipes
+    );
+  }
+
+  /**
+   * The copy on the host to use: the person's choice, else the one sharing a
+   * remote with this project. Null clones a fresh one; undefined asks first,
+   * with the question pushed onto `questions`. A committed id alone never
+   * picks a copy: a fork inherits it.
+   */
+  private chooseCopy(
+    candidates: ProjectMatchCandidate[],
+    copy: string | null,
+    questions: HostEnsureQuestion[]
+  ): { projectId: string | null; path: string } | null | undefined {
+    if (copy === HOST_ENSURE_NEW_COPY) return null;
+    if (copy !== null) {
+      const picked = candidates.find((c) => c.path === copy);
+      if (picked) return { projectId: picked.projectId, path: picked.path };
+    }
+    const byRemote = candidates.filter((c) => c.matchedBy === "remote-url");
+    if (copy === null && byRemote.length === 1) {
+      return { projectId: byRemote[0]!.projectId, path: byRemote[0]!.path };
+    }
+    if (copy === null && candidates.length === 0) return null;
+    if (byRemote.length > 1 || (copy !== null && byRemote.length > 0)) {
+      questions.push(
+        question(
+          "multiple_copies",
+          copy !== null
+            ? "That isn't one of the host's copies of this repository. The person can pick one of these, or a new clone."
+            : "The host has more than one copy of this repository. The person can pick which one, or a new clone.",
+          { copies: copiesOf(candidates) }
+        )
+      );
+      return undefined;
+    }
+    questions.push(
+      question(
+        "committed_id_only",
+        "The host has a copy that carries this project's id but shares no remote with it, which a fork would too. The person can say whether it's the same project, or choose a new clone.",
+        { copies: copiesOf(candidates) }
+      )
+    );
+    return undefined;
+  }
+
+  /** A step's record no renderer reads: the assistant follows the ensure, not its steps. */
+  private untracked(opId: string): Tracked {
+    return {
+      fingerprint: "",
+      status: { opId, state: "running", stage: null, message: null, fraction: null },
+      settledAt: null,
+      cancel: null,
+      promise: Promise.resolve(null as unknown as HostSwitchExecuteResult),
+    };
+  }
+
+  private readyFrom(
+    result: HostSwitchExecuteResult,
+    how: "existing" | "registered" | "cloned",
+    leftHere: { uncommittedChanges: number; unpushedCommits: number | null },
+    setupRecipes: string[]
+  ): HostEnsureAnswer {
+    if (result.kind === "git-failed") return { status: "failed", note: result.message };
+    if (result.kind !== "opened")
+      throw new AppError({ code: "INTERNAL", message: "Unexpected step result" });
+    if (how !== "cloned" && result.worktreePath === null && result.branchNote !== null) {
+      return {
+        status: "question",
+        questions: [
+          question(
+            "branch_not_placed",
+            `The host made no worktree for the branch: ${result.branchNote} The person can sort it out there.`
+          ),
+        ],
+      };
+    }
+    return {
+      status: "ready",
+      project: {
+        projectId: result.projectId,
+        name: result.projectName,
+        path: result.projectPath,
+        worktreePath: result.worktreePath,
+        how,
+        leftHere,
+        setupRecipes,
+        note: result.worktreePath === null ? result.branchNote : null,
+      },
+    };
   }
 
   /** Where a clone of `url` would go on the host, checked there. */
@@ -610,7 +998,8 @@ export class HostSwitchService {
     to: HostGateway,
     opId: string,
     payload: Extract<HostSwitchExecutePayload, { kind: "clone" }>,
-    track: Tracked
+    track: Tracked,
+    mark: AssistantStepMark = {}
   ): Promise<HostSwitchExecuteResult> {
     let cancelled = false;
     let cloneStarted = false;
@@ -650,6 +1039,7 @@ export class HostSwitchService {
         branch: payload.branch as HostBranchTarget | null,
         options: payload.options as HostCloneOptions,
         setupRecipeId: payload.setupRecipeId,
+        ...mark,
       };
       await this.startResiliently(to, opId, track, () => to.startClone(start), "clone");
       unclaimedTargetBundle = null;
@@ -946,6 +1336,13 @@ export class HostSwitchService {
       release();
     }
   }
+}
+
+function drivenElsewhereQuestion(): HostEnsureQuestion {
+  return question(
+    "driven_elsewhere",
+    "Another window on the host has this project, so nothing was changed in it. The person can close it there or take control, then ask again."
+  );
 }
 
 function requireCloneUrl(value: unknown): string {

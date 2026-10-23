@@ -1,4 +1,7 @@
-import { HOST_CONTROL_OUTCOMES } from "../../../shared/types/hostControl.js";
+import {
+  HOST_CONTROL_OUTCOMES,
+  HOST_ENSURE_ACCEPTABLE,
+} from "../../../shared/types/hostControl.js";
 import {
   AGENT_LAST_MESSAGE_UNAVAILABLE_REASONS,
   type AgentLastMessageUnavailableReason,
@@ -123,6 +126,7 @@ function finiteNumber(value: unknown): number | null {
 
 const HOST_ID_PATTERN = /^[\w.-]{1,64}$/;
 const HOST_OUTCOMES: ReadonlySet<string> = new Set(HOST_CONTROL_OUTCOMES);
+const ENSURE_ACCEPTABLE: ReadonlySet<string> = new Set(HOST_ENSURE_ACCEPTABLE);
 
 function auditHostId(value: unknown): string | null {
   return typeof value === "string" && HOST_ID_PATTERN.test(value) ? value : null;
@@ -199,6 +203,28 @@ const AUDIT_RESULT_PROJECTIONS: ReadonlyMap<string, (result: unknown) => unknown
       };
     },
   ],
+  [
+    "host.ensureProject",
+    // Where it stands, never the paths or questions' words (#14140).
+    (result) => {
+      const record = asRecord(result);
+      if (record === null) return { status: "unrecognized" };
+      const answer = asRecord(record.answer);
+      const project = asRecord(answer?.project);
+      return {
+        outcome: fromSet(record.outcome, HOST_OUTCOMES),
+        hostId: auditHostId(record.hostId),
+        status: typeof answer?.status === "string" ? answer.status : null,
+        projectId: auditId(project?.projectId),
+        how: typeof project?.how === "string" ? project.how : null,
+        questions: Array.isArray(answer?.questions)
+          ? answer.questions
+              .map((q) => asRecord(q)?.reason)
+              .filter((reason): reason is string => typeof reason === "string")
+          : null,
+      };
+    },
+  ],
   ["plugin.capturePanel", projectPanelCapture],
   ["project.runCommand", projectCommandRun],
 ]);
@@ -218,6 +244,28 @@ const AUDIT_ARGS_PROJECTIONS: ReadonlyMap<string, (args: unknown) => unknown> = 
   string,
   (args: unknown) => unknown
 >([
+  [
+    "host.ensureProject",
+    // A host folder is the host's to keep: only whether one was named.
+    (args) => {
+      const record = asRecord(args);
+      const copy = record?.copy;
+      return {
+        hostId: auditHostId(record?.hostId),
+        worktree: typeof record?.worktree === "boolean" ? record.worktree : null,
+        worktreePath: typeof record?.worktreePath === "string" ? "<path>" : null,
+        copy: copy === "new" ? "new" : typeof copy === "string" ? "<path>" : null,
+        // A malformed call is audited too: only the answers the schema names.
+        accept: Array.isArray(record?.accept)
+          ? record.accept
+              .filter(
+                (item): item is string => typeof item === "string" && ENSURE_ACCEPTABLE.has(item)
+              )
+              .join(",")
+          : null,
+      };
+    },
+  ],
   [
     "project.runCommand",
     (args) => {

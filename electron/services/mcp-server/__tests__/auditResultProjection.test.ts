@@ -401,3 +401,62 @@ describe("host.call audit projection (#13493)", () => {
     expect(projectAuditResult("host.call", "nope")).toEqual({ status: "unrecognized" });
   });
 });
+
+describe("host.ensureProject audit (#14140)", () => {
+  it("records where it stands, never a host's paths or the questions' words", () => {
+    const result = projectAuditResult("host.ensureProject", {
+      outcome: "ok",
+      detail: null,
+      retryAfterMs: null,
+      hostId: "studio-01",
+      answer: {
+        status: "question",
+        questions: [
+          {
+            reason: "multiple_copies",
+            detail: "PROSE-SENTINEL",
+            accept: null,
+            copies: [
+              { path: "/PATH-SENTINEL", name: "app", registered: true, matchedBy: "remote-url" },
+            ],
+          },
+        ],
+      },
+    });
+    const args = projectAuditArgs("host.ensureProject", {
+      hostId: "studio-01",
+      worktree: true,
+      worktreePath: "/PATH-SENTINEL/wt",
+      copy: "/PATH-SENTINEL",
+      accept: ["unpushed"],
+    });
+
+    expect(result).toEqual({
+      outcome: "ok",
+      hostId: "studio-01",
+      status: "question",
+      projectId: null,
+      how: null,
+      questions: ["multiple_copies"],
+    });
+    expect(args).toEqual({
+      hostId: "studio-01",
+      worktree: true,
+      worktreePath: "<path>",
+      copy: "<path>",
+      accept: "unpushed",
+    });
+    const audited = JSON.stringify([summarizeMcpResult(result), summarizeMcpArgs(args)]);
+    expect(audited).not.toContain("SENTINEL");
+    expect(projectAuditArgs("host.ensureProject", { hostId: "h", copy: "new" })).toMatchObject({
+      copy: "new",
+    });
+    // A call refused for its arguments is audited too, keeping only answers the schema names.
+    expect(
+      projectAuditArgs("host.ensureProject", {
+        hostId: "h",
+        accept: ["unpushed", "/srv/PATH-SENTINEL", 3],
+      })
+    ).toMatchObject({ accept: "unpushed" });
+  });
+});

@@ -7,6 +7,9 @@ import {
   type HostCallResult,
   type HostControlOutcome,
   type HostControlOutcomeCode,
+  type HostEnsureAnswer,
+  type HostEnsureProjectArgs,
+  type HostEnsureProjectResult,
   type HostListEntry,
   type HostListResult,
 } from "../../../shared/types/hostControl.js";
@@ -29,6 +32,7 @@ import {
 } from "../../services/mcp-server/terminalNotify.js";
 import { sanitizeNotifyNote } from "../../../shared/types/terminalNotify.js";
 import type { HostControlLinkClient } from "./HostControlLinkClient.js";
+import type { AssistantEnsureRequest } from "../projects/HostSwitchService.js";
 import {
   MAX_RELAY_ARGS_BYTES,
   MAX_RELAY_RUN_MS,
@@ -128,6 +132,11 @@ export interface HostCallRuntimeDeps {
    * is ever answered.
    */
   askApproval?(ask: RelayApprovalQuestion): Promise<McpConfirmationDecision | null>;
+  /**
+   * Makes sure one of this machine's projects is on a host, with no window
+   * (#14140): the Shell's switch service. Absent, no project is ever brought.
+   */
+  ensureProject?(request: AssistantEnsureRequest): Promise<HostEnsureAnswer>;
   now?: () => number;
   newId?: () => string;
 }
@@ -341,6 +350,17 @@ const CALL_TOO_LARGE_DETAIL = "The call's arguments are too large to send. Nothi
 const CALL_SENDER_REFUSED_DETAIL =
   "The host refused this Shell's identity on the current connection. Try again shortly.";
 const CALL_RATE_LIMITED_DETAIL = "Too many calls in a short time. Retry after retryAfterMs.";
+const ENSURE_LOCAL_DETAIL =
+  "The project is already on this machine. Name a host from the host list to bring it to.";
+const ENSURE_UNAVAILABLE_DETAIL = "This Shell can't bring projects to its hosts right now.";
+const ENSURE_HOST_REFUSED_DETAIL =
+  "The host refuses work for other machines' assistants: its own setting is off. Nothing was changed there.";
+const ENSURE_DISCONNECTED_DETAIL =
+  "The host can't be reached right now. Call again once it is back; what was already made is found, not made twice.";
+const ENSURE_AMBIGUOUS_DETAIL =
+  "No clear answer came back. Call again with the same arguments: what was made is found, never made twice.";
+const ENSURE_REFUSED_DETAIL =
+  "A step was refused: worktreePath must be one of this project's worktrees, and the host's folder must still be free. Nothing more was done.";
 const RELAY_REFUSAL_DETAILS: Record<
   RelayRefusal,
   { code: Exclude<HostControlOutcomeCode, "ok">; detail: string }
@@ -981,6 +1001,65 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
             (local ? LOCAL_REFUSAL_DETAILS[answer.reason] : undefined) ??
             RELAY_REFUSAL_DETAILS[answer.reason];
           return { ...this.outcomeWith(code, detail), ...sent };
+        }
+      }
+    });
+  }
+
+  /**
+   * Makes sure the calling assistant's own project is on a host (#14140),
+   * with nobody clicking: found there, or cloned there by the host, with the
+   * branch's worktree when asked. Needs the person's control switch for the
+   * host here, and the host's own consent there. Questions for the person
+   * come back in the answer; nothing is pushed, sent or opened.
+   */
+  ensureProject(
+    helpSessionId: string,
+    args: HostEnsureProjectArgs
+  ): Promise<HostControlOutcome<HostEnsureProjectResult>> {
+    return this.settle(helpSessionId, async (caller) => {
+      const none = { hostId: args.hostId, answer: null };
+      if (args.hostId === LOCAL_HOST_ID) {
+        return { ...this.outcomeWith("policy_rejected", ENSURE_LOCAL_DETAIL), ...none };
+      }
+      const host = this.deps.hosts().find((candidate) => candidate.hostId === args.hostId);
+      if (!host) return { ...this.outcomeWith("not_found", CALL_NO_HOST_DETAIL), ...none };
+      if (this.deps.controlEnabled?.(args.hostId) !== true) {
+        return { ...this.outcomeWith("opted_out", CONTROL_OFF_DETAIL), ...none };
+      }
+      const ensure = this.deps.ensureProject;
+      if (!ensure)
+        return { ...this.outcomeWith("unsupported", ENSURE_UNAVAILABLE_DETAIL), ...none };
+      try {
+        const answer = await ensure({
+          toHostId: args.hostId,
+          projectId: caller.projectId,
+          worktreePath: args.worktreePath ?? null,
+          worktree: args.worktree === true,
+          copy: args.copy ?? null,
+          accept: args.accept ?? [],
+        });
+        return { ...this.ok(), hostId: args.hostId, answer };
+      } catch (error) {
+        switch (codeOf(error)) {
+          case "UNSUPPORTED":
+            return { ...this.outcomeWith("unsupported", unsupportedCallDetail(host)), ...none };
+          case "PERMISSION":
+            return { ...this.outcomeWith("policy_rejected", ENSURE_HOST_REFUSED_DETAIL), ...none };
+          case "HOST_DISCONNECTED":
+          case "HOST_VERSION_MISMATCH":
+          case "HOST_MODE_OFF":
+          case "HOST_SSH_ACCESS_DENIED":
+            return { ...this.outcomeWith("disconnected", ENSURE_DISCONNECTED_DETAIL), ...none };
+          case "VALIDATION":
+          case "NOT_FOUND":
+            return { ...this.outcomeWith("conflict", ENSURE_REFUSED_DETAIL), ...none };
+          default:
+            // Its code only: an error's message can name a folder on either machine.
+            logger.warn("Bringing a project to a host ended without a known outcome", {
+              code: codeOf(error),
+            });
+            return { ...this.outcomeWith("ambiguous", ENSURE_AMBIGUOUS_DETAIL), ...none };
         }
       }
     });

@@ -152,6 +152,8 @@ export const CORE_TIER_TOOLS = [
   // per-host switch decides what it reaches.
   "host.list",
   "host.call",
+  // Bringing this machine's project to one of those hosts, with no window (#14140).
+  "host.ensureProject",
   // Logs meant for someone else go through the review the user trims and saves
   // themselves, not an archive the assistant builds from the raw log folder
   // (#12882). Reserved to the assistant below; off the external list.
@@ -297,6 +299,7 @@ export const RENDERER_OWNED_ORIGIN_ONLY_TOOLS = [
   // So is the Shell's reach into its hosts (#13493).
   "host.list",
   "host.call",
+  "host.ensureProject",
   // A shell command is the assistant's to run, never a worker pane's (#13495).
   "project.runCommand",
 ] as const satisfies readonly BuiltInActionId[];
