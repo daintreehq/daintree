@@ -472,8 +472,54 @@ describe("contributes.surfaces", () => {
   it("rejects an unknown surface slot", () => {
     // The slot catalogue is a closed set: a typo (or a slot from a later
     // phase) must fail loudly rather than validate and never render.
-    const result = parse("project", withSurface({ defaultLayout: { viewId: "overview" } }));
+    const result = parse("project", withSurface({ sidebarDefault: { viewId: "overview" } }));
     expect(result.success).toBe(false);
+  });
+
+  describe("defaultLayout", () => {
+    const layout = { id: "workbench", name: "Workbench", entries: [{ panel: "overview" }] };
+
+    it("accepts the id of one of the plugin's own layouts", () => {
+      const result = parse(
+        "project",
+        withSurface({ defaultLayout: "workbench" }, { layouts: [layout] })
+      );
+      expect(result.success).toBe(true);
+    });
+
+    it("rejects an id matching no declared layout", () => {
+      const result = parse(
+        "project",
+        withSurface({ defaultLayout: "nope" }, { layouts: [layout] })
+      );
+      expect(result.success).toBe(false);
+      expect(errorCodes(result)).toContain("surface_default_layout_unknown");
+      expect(messageForCode(result, "surface_default_layout_unknown")).toContain(
+        "contributes.layouts"
+      );
+    });
+
+    it("rejects a view-slot shape: it names a layout, not a view", () => {
+      const result = parse(
+        "project",
+        withSurface({ defaultLayout: { viewId: "overview" } }, { layouts: [layout] })
+      );
+      expect(result.success).toBe(false);
+    });
+
+    it("rejects one from an installed plugin", () => {
+      const result = getPluginManifestSchema("user").safeParse({
+        name: "acme.installed",
+        version: "1.0.0",
+        contributes: {
+          panels: [panel],
+          layouts: [layout],
+          surfaces: { defaultLayout: "workbench" },
+        },
+      });
+      expect(result.success).toBe(false);
+      expect(errorCodes(result)).toContain("surfaces_project_scope_only");
+    });
   });
 
   it("rejects a claim on a PTY panel", () => {

@@ -2664,18 +2664,20 @@ export const SurfaceViewSlotSchema = z
  * `emptyCanvas` stands in for the launcher while the grid is empty;
  * `projectHome` is a persistent Home the main area can switch to beside the
  * grid, which stays one click away; `worktreeCreate` opens a view as the New
- * worktree dialog, with the stock dialog one click away. The spec also describes `defaultLayout`
- * (the arrangement opened on a cold first open with no restorable session). It
- * is not declared here, because it has no consumer: a recipe is launched
- * against a worktree, not against a project cold open. Accepting it now would
- * put a field in a frozen public contract that nothing reads, which is the
- * drift `manifestContributionConsumers.test.ts` exists to stop.
+ * worktree dialog, with the stock dialog one click away.
+ *
+ * `defaultLayout` (#13782) is not a slot: it replaces nothing the host draws.
+ * It names one of this manifest's own `contributes.layouts`, which the host
+ * opens once, on the project's first open on this machine, while the grid and
+ * dock are still empty — and offers instead once the user has opened anything.
+ * Its recipes never start on their own; they wait as click-to-start entries.
  */
 export const SurfaceContributionsSchema = z
   .object({
     emptyCanvas: SurfaceViewSlotSchema.optional(),
     projectHome: SurfaceViewSlotSchema.optional(),
     worktreeCreate: SurfaceViewSlotSchema.optional(),
+    defaultLayout: z.string().min(1).max(64).regex(SAFE_ID_PATTERN).optional(),
   })
   .strict();
 
@@ -4086,6 +4088,21 @@ function buildPluginManifestSchema(origin: PluginOrigin) {
             params: { errorCode: "surface_view_ref_pty" },
           });
         }
+      }
+
+      // `surfaces.defaultLayout` → a declared layout. A dangling id would leave
+      // the project's first open blank with nothing to say why.
+      const defaultLayout = manifest.contributes.surfaces.defaultLayout;
+      if (
+        defaultLayout !== undefined &&
+        !manifest.contributes.layouts.some((layout) => layout.id === defaultLayout)
+      ) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["contributes", "surfaces", "defaultLayout"],
+          message: `surfaces.defaultLayout "${defaultLayout}" matches no contributes.layouts[].id.`,
+          params: { errorCode: "surface_default_layout_unknown" },
+        });
       }
 
       // A toolbar button does one thing on click. With neither it is a dead

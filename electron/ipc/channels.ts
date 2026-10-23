@@ -1125,6 +1125,10 @@ export const CHANNELS = {
   PLUGIN_PROJECT_SURFACE_CHOICE_SET: "plugin:project-surface-choice-set",
   /** Remember an answer about several slots in one write, all or none, for the SENDER's project. */
   PLUGIN_PROJECT_SURFACE_CHOICES_SET: "plugin:project-surface-choices-set",
+  /** The SENDER project's first-open layout seed (#13782). */
+  PLUGIN_PROJECT_LAYOUT_SEED_GET: "plugin:project-layout-seed-get",
+  /** Compare-and-set the SENDER project's layout seed, so only one view ever consumes it. */
+  PLUGIN_PROJECT_LAYOUT_SEED_ADVANCE: "plugin:project-layout-seed-advance",
   /** Project-local plugins: the sender project's rows, valid and invalid alike. */
   PLUGIN_PROJECT_LIST: "plugin:project-list",
   /** Project-local plugins: record the trust decision for the SENDER's project. */

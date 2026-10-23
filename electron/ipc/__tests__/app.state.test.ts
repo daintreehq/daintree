@@ -102,6 +102,7 @@ vi.mock("../../services/ProjectStore.js", () => ({
     getAllProjects: vi.fn(() => []),
     getProjectById: vi.fn(() => null),
     getProjectStateWithRecovery: vi.fn(),
+    wasStateUnreadableThisSession: vi.fn(() => false),
     saveProjectState: vi.fn(),
     enqueueProjectStateUpdate: vi.fn(async () => undefined),
     readInRepoPresets: vi.fn(async () => ({})),
@@ -172,6 +173,13 @@ vi.mock("../../services/prefetchHydrateCache.js", () => ({
   consumePrefetchedHydrateResult: vi.fn(() => null),
 }));
 
+// Decided by default, the steady state of every project past its first open,
+// so the cache tests below are not also first-hydrate tests (#13782).
+vi.mock("../../services/plugin/projectLayoutSeeds.js", () => ({
+  getProjectLayoutSeed: vi.fn(() => ({ status: "settled", at: 0 })),
+  captureProjectLayoutSeed: vi.fn(),
+}));
+
 vi.mock("../../window/webContentsRegistry.js", () => ({
   getWindowForWebContents: vi.fn(() => null),
   getAppWebContents: vi.fn(() => null),
@@ -189,6 +197,10 @@ vi.mock("../../ipc/utils.js", async (importOriginal) => {
 
 import { registerAppStateHandlers } from "../handlers/app/state.js";
 import { consumePrefetchedHydrateResult } from "../../services/prefetchHydrateCache.js";
+import {
+  captureProjectLayoutSeed,
+  getProjectLayoutSeed,
+} from "../../services/plugin/projectLayoutSeeds.js";
 import { projectStore } from "../../services/ProjectStore.js";
 import { getWindowForWebContents } from "../../window/webContentsRegistry.js";
 import { markPerformance } from "../../utils/performance.js";
@@ -256,6 +268,8 @@ describe("app:boot handler", () => {
       state: null,
       quarantinedPath: undefined,
     });
+    vi.mocked(projectStore.wasStateUnreadableThisSession).mockReturnValue(false);
+    vi.mocked(getProjectLayoutSeed).mockReturnValue({ status: "settled", at: 0 });
   });
 
   it("boots with the effective cached-view count when none is stored, as terminalConfig.get reports it", async () => {
@@ -1514,6 +1528,128 @@ describe("app:boot handler", () => {
       expect(calls[0]![1]).toEqual({ hit: false, projectId: "p1", reason: "panel-filter" });
       expect(consumePrefetchedHydrateResult).not.toHaveBeenCalled();
     });
+
+    it("skips the cache for a project whose first-open layout seed is undecided", async () => {
+      // The prefetch skips the state read the seed is decided from (#13782).
+      setCurrentProject();
+      vi.mocked(getProjectLayoutSeed).mockReturnValue(null);
+
+      await invokeBoot();
+
+      const calls = prefetchMarkCalls();
+      expect(calls[0]![1]).toEqual({
+        hit: false,
+        projectId: "p1",
+        reason: "layout-seed-undecided",
+      });
+      expect(consumePrefetchedHydrateResult).not.toHaveBeenCalled();
+      expect(captureProjectLayoutSeed).toHaveBeenCalledWith("p1", true);
+    });
+
+    it("still uses the cache when the seed record can't be read", async () => {
+      setCurrentProject();
+      vi.mocked(getProjectLayoutSeed).mockImplementationOnce(() => {
+        throw new Error("EACCES");
+      });
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+      await invokeBoot();
+
+      expect(prefetchMarkCalls()[0]![1]).toEqual({ hit: false, projectId: "p1", reason: "miss" });
+      warn.mockRestore();
+    });
+  });
+
+  describe("first-open layout seed (#13782)", () => {
+    const setCurrentProject = () => {
+      vi.mocked(projectStore.getCurrentProject).mockReturnValue({
+        id: "p1",
+        name: "P",
+        path: "/p",
+      } as unknown as ReturnType<typeof projectStore.getCurrentProject>);
+      legacyOwnerRef.current = "p1";
+    };
+
+    it("records a project with no saved state as a first open", async () => {
+      setCurrentProject();
+      await invokeBoot();
+      expect(captureProjectLayoutSeed).toHaveBeenCalledWith("p1", true);
+    });
+
+    it("records a project with saved state, even an empty one, as not a first open", async () => {
+      setCurrentProject();
+      vi.mocked(projectStore.getProjectStateWithRecovery).mockResolvedValue({
+        state: { projectId: "p1", sidebarWidth: 350, terminals: [] },
+      } as unknown as Awaited<ReturnType<typeof projectStore.getProjectStateWithRecovery>>);
+      await invokeBoot();
+      expect(captureProjectLayoutSeed).toHaveBeenCalledWith("p1", false);
+    });
+
+    it("does not count a state file that was quarantined as missing", async () => {
+      setCurrentProject();
+      vi.mocked(projectStore.getProjectStateWithRecovery).mockResolvedValue({
+        state: null,
+        quarantinedPath: "/p/state.json.corrupted.1",
+      });
+      await invokeBoot();
+      expect(captureProjectLayoutSeed).toHaveBeenCalledWith("p1", false);
+    });
+
+    it("does not count a state file that was unreadable this session as missing", async () => {
+      // Quarantine can fail to rename, leaving no recovery path to report.
+      setCurrentProject();
+      vi.mocked(projectStore.wasStateUnreadableThisSession).mockReturnValue(true);
+      await invokeBoot();
+      expect(captureProjectLayoutSeed).toHaveBeenCalledWith("p1", false);
+    });
+
+    it("does not count a safe-mode boot as a first open", async () => {
+      setCurrentProject();
+      crashGuard.isSafeMode.mockReturnValue(true);
+      await invokeBoot();
+      expect(captureProjectLayoutSeed).toHaveBeenCalledWith("p1", false);
+    });
+
+    it("does not count the heir of legacy global terminals as a first open", async () => {
+      setCurrentProject();
+      globalAppStateRef.current = {
+        ...DEFAULT_GLOBAL_APP_STATE,
+        terminals: [{ id: "t1", type: "terminal", title: "Shell", cwd: "/p", location: "grid" }],
+      };
+      await invokeBoot();
+      expect(captureProjectLayoutSeed).toHaveBeenCalledWith("p1", false);
+    });
+
+    it("still counts a project as new when another project owns the legacy terminals", async () => {
+      vi.mocked(projectStore.getCurrentProject).mockReturnValue({
+        id: "p1",
+        name: "P",
+        path: "/p",
+      } as unknown as ReturnType<typeof projectStore.getCurrentProject>);
+      globalAppStateRef.current = {
+        ...DEFAULT_GLOBAL_APP_STATE,
+        terminals: [{ id: "t1", type: "terminal", title: "Shell", cwd: "/p", location: "grid" }],
+      };
+      legacyOwnerRef.current = "p-other";
+      await invokeBoot();
+      expect(captureProjectLayoutSeed).toHaveBeenCalledWith("p1", true);
+    });
+
+    it("records nothing for a view with no project row", async () => {
+      await invokeBoot();
+      expect(captureProjectLayoutSeed).not.toHaveBeenCalled();
+    });
+
+    it("hydrates normally when the seed can't be recorded", async () => {
+      setCurrentProject();
+      vi.mocked(captureProjectLayoutSeed).mockImplementationOnce(() => {
+        throw new Error("EACCES");
+      });
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const result = await invokeBoot();
+      expect(result.workspaceId).toBe("p1");
+      warn.mockRestore();
+    });
   });
 
   it("does not hydrate a closed URL project before the project view binding is ready", async () => {
@@ -1795,6 +1931,95 @@ describe("app:hydrate host fields", () => {
       "legacyWorkspaceStateOwnerId",
       expect.anything()
     );
+  });
+
+  it("records a remote Shell view's first open of a host project as one (#13782)", async () => {
+    // The fresh state this hydrate writes is the host's, so a later local open
+    // would find it and could never count as first.
+    const { getIpcDispatcher, _resetIpcDispatcherForTesting } = await import("../dispatcher.js");
+    const { wrapSuccess } = await import("../../../shared/utils/ipcErrorSerialization.js");
+    vi.mocked(projectStore.getProjectById).mockReturnValueOnce({
+      id: "p-remote",
+      name: "R",
+      path: "/r",
+    } as never);
+    vi.mocked(projectStore.getProjectStateWithRecovery).mockResolvedValueOnce({
+      state: null,
+    } as never);
+    _resetIpcDispatcherForTesting();
+    const dispatcher = getIpcDispatcher();
+    dispatcher.setInvokeEnveloper(async (_c, _a, call) => wrapSuccess(await call()));
+    const release = dispatcher.allowHybridOverLink("app:hydrate");
+    const cleanup = registerAppStateHandlers();
+    const endpoint = {
+      endpointId: "s1:view-3",
+      clientId: "client-1",
+      projectId: "p-remote",
+      kind: "remote-view" as const,
+      handle: -6,
+      send: vi.fn(),
+      request: vi.fn(),
+      onClose: vi.fn(() => ({ dispose: () => undefined })),
+      isClosed: () => false,
+    };
+
+    await dispatcher.invokeForEndpoint(
+      { endpoint, client: { clientId: "client-1", kind: "remote" } as never },
+      "app:hydrate",
+      []
+    );
+
+    cleanup();
+    release();
+    _resetIpcDispatcherForTesting();
+    expect(captureProjectLayoutSeed).toHaveBeenCalledWith("p-remote", true);
+  });
+
+  it("does not count a remote first open as one while unclaimed legacy terminals could be its own", async () => {
+    // A remote view never claims the legacy record, so it stays unowned here
+    // and could still be this project's history (#13782).
+    const { getIpcDispatcher, _resetIpcDispatcherForTesting } = await import("../dispatcher.js");
+    const { wrapSuccess } = await import("../../../shared/utils/ipcErrorSerialization.js");
+    globalAppStateRef.current = {
+      ...DEFAULT_GLOBAL_APP_STATE,
+      terminals: [{ id: "t1", type: "terminal", title: "Shell", cwd: "/r", location: "grid" }],
+    };
+    vi.mocked(projectStore.getProjectById).mockReturnValueOnce({
+      id: "p-remote",
+      name: "R",
+      path: "/r",
+    } as never);
+    vi.mocked(projectStore.getProjectStateWithRecovery).mockResolvedValueOnce({
+      state: null,
+    } as never);
+    _resetIpcDispatcherForTesting();
+    const dispatcher = getIpcDispatcher();
+    dispatcher.setInvokeEnveloper(async (_c, _a, call) => wrapSuccess(await call()));
+    const release = dispatcher.allowHybridOverLink("app:hydrate");
+    const cleanup = registerAppStateHandlers();
+    const endpoint = {
+      endpointId: "s1:view-4",
+      clientId: "client-1",
+      projectId: "p-remote",
+      kind: "remote-view" as const,
+      handle: -7,
+      send: vi.fn(),
+      request: vi.fn(),
+      onClose: vi.fn(() => ({ dispose: () => undefined })),
+      isClosed: () => false,
+    };
+
+    await dispatcher.invokeForEndpoint(
+      { endpoint, client: { clientId: "client-1", kind: "remote" } as never },
+      "app:hydrate",
+      []
+    );
+
+    cleanup();
+    release();
+    _resetIpcDispatcherForTesting();
+    expect(legacyOwnerRef.current).toBeUndefined();
+    expect(captureProjectLayoutSeed).toHaveBeenCalledWith("p-remote", false);
   });
 });
 

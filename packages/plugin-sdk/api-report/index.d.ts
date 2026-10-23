@@ -2883,6 +2883,12 @@ interface SurfaceContributions {
     emptyCanvas?: SurfaceViewSlot;
     projectHome?: SurfaceViewSlot;
     worktreeCreate?: SurfaceViewSlot;
+    /**
+     * A `contributes.layouts[].id` of this plugin, opened once on the project's
+     * first open on this machine while the grid and dock are still empty. Its
+     * recipes wait as click-to-start entries rather than starting.
+     */
+    defaultLayout?: string;
 }
 /**
  * The attribute the host stamps on the element a plugin view renders into, and

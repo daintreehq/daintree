@@ -40,7 +40,7 @@ vi.mock("@shared/config/panelKindRegistry", () => ({
 }));
 vi.mock("@/lib/notify", () => ({ notify }));
 
-import { applyPluginLayout } from "../applyPluginLayout";
+import { applyPluginLayout, seedPluginLayout, startPluginLayoutRecipe } from "../applyPluginLayout";
 import { usePluginLayoutsStore } from "@/store/pluginLayoutsStore";
 import {
   cancelLayoutApplyConfirmations,
@@ -541,6 +541,162 @@ describe("applyPluginLayout", () => {
       getRecipeById.mockReturnValue({ ...pairRecipe, id: "team-pair", origin: undefined });
       await expect(applyPluginLayout("acme.workspace", userCtx)).rejects.toThrow(/isn't available/);
       expect(useLayoutApplyConfirmStore.getState().current).toBeNull();
+    });
+
+    it("seeds the layout's panels without asking and leaves its recipe unstarted (#13782)", async () => {
+      const result = await seedPluginLayout("acme.workspace");
+
+      expect(useLayoutApplyConfirmStore.getState().current).toBeNull();
+      expect(dispatch).not.toHaveBeenCalled();
+      expect(addPanel).toHaveBeenCalledWith(
+        expect.objectContaining({ kind: "acme.records", location: "grid" })
+      );
+      expect(result.panelIds).toEqual(["new-1"]);
+      expect(result.deferred).toEqual([
+        { target: { type: "recipe", recipeId: "acme.pair" }, location: "dock" },
+      ]);
+      // Undoable like any other apply.
+      expect(pushLayoutSnapshot).toHaveBeenCalledTimes(1);
+    });
+
+    it("starts one waiting recipe through the layout's confirmation, and only it", async () => {
+      const pending = startPluginLayoutRecipe("acme.workspace", "acme.pair", userCtx);
+      await Promise.resolve();
+      expect(useLayoutApplyConfirmStore.getState().current?.previewLines.join("\n")).toContain(
+        "npm test"
+      );
+      expect(dispatch).not.toHaveBeenCalled();
+
+      useLayoutApplyConfirmStore.getState().resolveCurrent(true);
+      const result = await pending;
+
+      expect(dispatch).toHaveBeenCalledTimes(1);
+      expect(dispatch).toHaveBeenCalledWith(
+        "recipe.run",
+        expect.objectContaining({ recipeId: "acme.pair" }),
+        { source: "user" }
+      );
+      // The seeded panel isn't opened again.
+      expect(addPanel).not.toHaveBeenCalled();
+      expect(result).toEqual({ status: "applied", panelIds: ["t1", "t2"], failures: [] });
+      expect(panels.t1?.location).toBe("dock");
+    });
+
+    describe("sharing a tab group with seeded entries", () => {
+      beforeEach(() => {
+        usePluginLayoutsStore.setState({
+          layouts: [
+            layout({
+              entries: [
+                {
+                  target: { type: "browser", url: "http://localhost:3000/" },
+                  location: "grid",
+                  tabGroup: "main",
+                },
+                {
+                  target: { type: "panel", panelKindId: "acme.records" },
+                  location: "grid",
+                  tabGroup: "side",
+                },
+                {
+                  target: { type: "recipe", recipeId: "acme.pair" },
+                  location: "grid",
+                  tabGroup: "main",
+                },
+              ],
+            }),
+          ],
+        });
+      });
+
+      async function startApproved() {
+        const pending = startPluginLayoutRecipe("acme.workspace", "acme.pair", userCtx);
+        await Promise.resolve();
+        useLayoutApplyConfirmStore.getState().resolveCurrent(true);
+        return pending;
+      }
+
+      it("joins the seeded page's tab group, leaving other entries alone", async () => {
+        seed([
+          {
+            id: "page",
+            kind: "browser",
+            location: "grid",
+            worktreeId: "wt-1",
+            browserUrl: "http://localhost:3000/",
+          },
+          { id: "t1", kind: "terminal", location: "dock", worktreeId: "wt-1" },
+          { id: "t2", kind: "terminal", location: "dock", worktreeId: "wt-1" },
+        ]);
+        panelIds = ["page"];
+
+        await startApproved();
+
+        expect(addPanel).not.toHaveBeenCalled();
+        expect(createTabGroup).toHaveBeenCalledWith("grid", "wt-1", ["page", "t1", "t2"], "page");
+      });
+
+      it("leaves a maximized seeded page alone when the recipe starts nothing", async () => {
+        usePluginLayoutsStore.setState({
+          layouts: [
+            layout({
+              entries: [
+                {
+                  target: { type: "browser", url: "http://localhost:3000/" },
+                  location: "grid",
+                  tabGroup: "main",
+                  maximized: true,
+                },
+                {
+                  target: { type: "recipe", recipeId: "acme.pair" },
+                  location: "grid",
+                  tabGroup: "main",
+                },
+              ],
+            }),
+          ],
+        });
+        seed([
+          {
+            id: "page",
+            kind: "browser",
+            location: "dock",
+            worktreeId: "wt-1",
+            browserUrl: "http://localhost:3000/",
+          },
+        ]);
+        dispatch.mockResolvedValue({ ok: false, error: { message: "Recipe launch failed" } });
+
+        const result = await startApproved();
+
+        expect(result.status === "applied" && result.failures).toEqual(["Recipe launch failed"]);
+        expect(placeTerminal).not.toHaveBeenCalled();
+        expect(panels.page?.location).toBe("dock");
+        expect(toggleMaximize).not.toHaveBeenCalled();
+        expect(createTabGroup).not.toHaveBeenCalled();
+      });
+
+      it("never reopens a seeded page the user has closed", async () => {
+        seed([
+          { id: "t1", kind: "terminal", location: "dock", worktreeId: "wt-1" },
+          { id: "t2", kind: "terminal", location: "dock", worktreeId: "wt-1" },
+        ]);
+        panelIds = [];
+
+        const result = await startApproved();
+
+        expect(addPanel).not.toHaveBeenCalled();
+        expect(result).toEqual({ status: "applied", panelIds: ["t1", "t2"], failures: [] });
+        expect(createTabGroup).toHaveBeenCalledWith("grid", "wt-1", ["t1", "t2"], "t1");
+      });
+    });
+
+    it("starts nothing when the user declines a waiting recipe", async () => {
+      const pending = startPluginLayoutRecipe("acme.workspace", "acme.pair", userCtx);
+      await Promise.resolve();
+      useLayoutApplyConfirmStore.getState().resolveCurrent(false);
+      expect(await pending).toEqual({ status: "cancelled" });
+      expect(dispatch).not.toHaveBeenCalled();
     });
   });
 

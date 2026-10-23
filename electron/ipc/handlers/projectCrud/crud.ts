@@ -22,6 +22,7 @@ import { pruneWindowStateForPath } from "../../../windowState.js";
 import { gracefulTeardownAndJournalProject } from "../../../services/pty/projectSessionJournal.js";
 import { helpSessionService } from "../../../services/HelpSessionService.js";
 import { logError } from "../../../utils/logger.js";
+import { captureProjectLayoutSeed } from "../../../services/plugin/projectLayoutSeeds.js";
 
 /**
  * Rejection copy for a destructive teardown (close+kill / remove) the pty-host
@@ -372,6 +373,14 @@ export function registerProjectCrudCoreHandlers(deps: HandlerDependencies): () =
           });
         }
 
+        // A project not opened since layout seeds existed has no seed record
+        // yet, and with its state gone its next open would pass for a first
+        // one (#13782). One that has a record keeps it.
+        try {
+          captureProjectLayoutSeed(projectId, false);
+        } catch (seedError) {
+          logError("project-close-layout-seed-failed", seedError, { projectId });
+        }
         await projectStore.clearProjectState(projectId);
 
         // Read the pointer fresh, not from a snapshot taken before the awaits

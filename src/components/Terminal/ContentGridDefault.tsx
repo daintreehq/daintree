@@ -1,6 +1,7 @@
 import { ProjectPluginTrustBanner } from "@/components/Plugin/ProjectPluginTrustBanner";
 import { ProjectPresentationNotice } from "@/components/Project/ProjectPresentationNotice";
 import { ProjectThemeNotice } from "@/components/Project/ProjectThemeNotice";
+import { ProjectLayoutSeedNotice } from "@/components/Plugin/ProjectLayoutSeedNotice";
 import React, { useCallback, useRef, useState } from "react";
 import {
   SortableContext,
@@ -194,6 +195,7 @@ export function ContentGridDefault({
         <ProjectPluginTrustBanner />
         <ProjectPresentationNotice />
         <ProjectThemeNotice />
+        <ProjectLayoutSeedNotice />
         <TerminalCountWarning className="mx-1 mt-1 shrink-0" />
         <BatchScrollbackRestoreBar className="mx-1 mt-1 shrink-0" />
         <div className="relative flex-1 min-h-0">

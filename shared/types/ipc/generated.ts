@@ -1843,6 +1843,18 @@ export interface GeneratedIpcInvokeMap {
     args: [pluginId: string];
     result: void;
   };
+  "plugin:project-layout-seed-advance": {
+    args: [
+      from: import("../plugin.js").ProjectLayoutSeedStatus,
+      to: import("../plugin.js").ProjectLayoutSeedStatus,
+      outcome?: import("../plugin.js").ProjectLayoutSeedOutcome | undefined,
+    ];
+    result: import("../plugin.js").ProjectLayoutSeedAdvance;
+  };
+  "plugin:project-layout-seed-get": {
+    args: [];
+    result: import("../plugin.js").ProjectLayoutSeedRecord | null;
+  };
   "plugin:project-list": {
     args: [];
     result: import("../plugin.js").ProjectPluginInfo[];

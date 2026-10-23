@@ -2778,6 +2778,10 @@ export class PluginService {
         pluginName: manifest.displayName ?? manifest.name,
         name: layout.name,
         entries,
+        // The project's first open picks it up from the broadcast (#13782).
+        ...(isProject && manifest.contributes.surfaces?.defaultLayout === layout.id
+          ? { projectDefault: true as const }
+          : {}),
       });
     }
     if (layouts.length > 0) {

@@ -15,6 +15,7 @@ import { usePluginArchiveInstallIntent } from "./usePluginArchiveInstallIntent";
 import { useNotificationHistoryPruning } from "./useNotificationHistoryPruning";
 import { useMissingPrerequisiteWarning } from "./useMissingPrerequisiteWarning";
 import { useUpdateListener } from "@/hooks/useUpdateListener";
+import { useProjectLayoutSeed } from "@/hooks/useProjectLayoutSeed";
 import { removeStartupSkeleton } from "@/utils/removeStartupSkeleton";
 import { useNotificationSettingsStore, usePluginManagerStore } from "@/store";
 import { preloadNewWorktreeDialog } from "@/components/Layout/ProjectDialogHost";
@@ -132,6 +133,9 @@ export function useAppBootstrap() {
   const gettingStarted = useGettingStartedChecklist(isStateLoaded);
   useUpdateListener(gettingStarted.visible);
   useAgentWaitingNudge(isStateLoaded);
+  // After hydration, so restored panels count before a project's first-open
+  // layout is applied or offered (#13782).
+  useProjectLayoutSeed(isStateLoaded);
   useForgeEnableRecommendation(isStateLoaded && idleHousekeepingReady);
   useNotificationHistoryPruning();
   // Gated on the idle flag so the prerequisite probe — which spawns
