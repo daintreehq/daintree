@@ -377,6 +377,32 @@ describe("PluginService built-in plugin loading", () => {
     expect(service.listPlugins()[0].disabled).toBe(false);
   });
 
+  it("starts cleanly past a removed built-in still named in plugins.enabled and plugins.disabled", async () => {
+    // A user who toggled the deleted SvelteKit builder keeps its id in both
+    // lists; with no manifest on disk it must stay invisible and untouched.
+    const removed = "daintree.sveltekit-builder";
+    const plugins = { enabled: [removed], disabled: [removed], installed: {} };
+    storeMock._state.set("plugins", plugins);
+    await writeBuiltinPlugin("helper", { name: "daintree.helper", version: "1.0.0" });
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const service = new PluginService(tmpDir, "0.0.0", { builtinPluginsRoot: builtinDir });
+      await service.initialize();
+
+      expect(service.listPlugins().map((p) => [p.manifest.name, p.disabled])).toEqual([
+        ["daintree.helper", false],
+      ]);
+      expect(errorSpy).not.toHaveBeenCalled();
+      expect(storeMock._state.get("plugins")).toEqual({
+        enabled: [removed],
+        disabled: [removed],
+        installed: {},
+      });
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
+
   it("a disabled name collision keeps the built-in entry (loaded first) for the toggle", async () => {
     storeMock._state.set("plugins", { disabled: ["daintree.github"] });
     await writeBuiltinPlugin("github", {

@@ -42,13 +42,12 @@ A built-in plugin is Daintree code that happens to use the plugin contract. It d
 
 Five built-ins ship today, one directory each under `plugins/builtin/`:
 
-| Plugin                       | Contributes                                 | Default |
-| ---------------------------- | ------------------------------------------- | ------- |
-| `daintree.github`            | `forgeProviders`, `fileDecorationProviders` | On      |
-| `daintree.gitlab`            | `forgeProviders`, `settings`                | On      |
-| `daintree.linear`            | `forgeProviders`, `settings`                | Off     |
-| `daintree.markdown-editor`   | `fileEditors`, `commands`                   | Off     |
-| `daintree.sveltekit-builder` | `previewTools`, `guestAdapters`, `commands` | Off     |
+| Plugin                     | Contributes                                 | Default |
+| -------------------------- | ------------------------------------------- | ------- |
+| `daintree.github`          | `forgeProviders`, `fileDecorationProviders` | On      |
+| `daintree.gitlab`          | `forgeProviders`, `settings`                | On      |
+| `daintree.linear`          | `forgeProviders`, `settings`                | Off     |
+| `daintree.markdown-editor` | `fileEditors`, `commands`                   | Off     |
 
 ### Manifest validation
 

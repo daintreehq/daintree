@@ -2753,6 +2753,5 @@ The worker host implements the same `PluginHostApi`, but some checks run in main
 - **`host.db`** resolves the location and approves a backup destination in main, but opens `node:sqlite` in the worker, so queries, `transaction`, `onDidChange` and the backup's snapshot never cross the port.
 - **`host.fs.watch`** runs the watcher in main and delivers events over the port.
 - **`registerForgeProvider`** is a no-op that logs a warning (above).
-- **Built-in only:** `fsForWorkspace` and `fs.readFileBounded` exist on the built-in host type and never in a worker.
 
 The worker runs with a 256 MB heap, a minimal allowlisted environment rather than Daintree's own, and its working directory set to the plugin's directory.

@@ -449,36 +449,20 @@ describe("findMissingGuestAssets", () => {
 });
 
 describe("guest runtime assets", () => {
+  const SAMPLE_GUEST_ASSET = {
+    adapterId: "acme.alpha.guest",
+    entry: "plugins/builtin/alpha/renderer/guest/entry.ts",
+    outfile: "dist-electron/plugins/builtin/alpha/guest/guest.js",
+  };
+
   it("is discovered from the built-in manifests rather than hand-listed", () => {
-    // The whole point of the phase: a second built-in guest runtime is a
-    // manifest edit, not an edit to this build script.
+    // A built-in guest runtime is a manifest edit, not an edit to this build
+    // script. No built-in declares one today, so the list is legitimately empty.
     expect(GUEST_RUNTIME_ASSETS).toEqual(discoverGuestRuntimeAssets(repoRoot));
-    expect(GUEST_RUNTIME_ASSETS.map((a) => a.adapterId)).toContain(
-      "daintree.sveltekit-builder.guest"
-    );
-  });
-
-  it("keeps the builder's runtime first, which its own asset tests index by position", () => {
-    // `plugins/builtin/sveltekit-builder/shared/__tests__/buildGuestAsset.ts`
-    // builds `GUEST_RUNTIME_ASSETS[0]`. Discovery is directory order, so a
-    // built-in plugin sorting before `sveltekit-builder` — or a second adapter
-    // declared ahead of its guest — would silently point those suites at the
-    // wrong runtime. This is the loud failure that says to select by adapterId
-    // there instead.
-    expect(GUEST_RUNTIME_ASSETS[0]?.adapterId).toBe("daintree.sveltekit-builder.guest");
-  });
-
-  it("names entries that exist and land inside their plugin's dist directory", () => {
-    expect(GUEST_RUNTIME_ASSETS.length).toBeGreaterThan(0);
-    for (const asset of GUEST_RUNTIME_ASSETS) {
-      expect(fs.existsSync(path.join(repoRoot, asset.entry))).toBe(true);
-      const plugin = asset.entry.split("/")[2];
-      expect(asset.outfile.startsWith(`dist-electron/plugins/builtin/${plugin}/`)).toBe(true);
-    }
   });
 
   it("emits a browser IIFE, never a module or a named-function transform", () => {
-    const config = guestRuntimeBuildConfig(GUEST_RUNTIME_ASSETS[0]);
+    const config = guestRuntimeBuildConfig(SAMPLE_GUEST_ASSET);
 
     expect(config.format).toBe("iife");
     expect(config.platform).toBe("browser");
@@ -494,15 +478,7 @@ describe("guest runtime assets", () => {
   });
 
   it("minifies only when the caller asks, so a dev build stays readable", () => {
-    expect(guestRuntimeBuildConfig(GUEST_RUNTIME_ASSETS[0]).minify).toBe(false);
-    expect(guestRuntimeBuildConfig(GUEST_RUNTIME_ASSETS[0], { minify: true }).minify).toBe(true);
-  });
-
-  it("is not a directory the plugin asset copy would also mirror", () => {
-    // The entry lives under `renderer/`, which the copy step skips — otherwise
-    // the TypeScript source would ship beside the built asset.
-    for (const asset of GUEST_RUNTIME_ASSETS) {
-      expect(PLUGIN_EXTRA_ASSET_SKIP_DIRS.has(asset.entry.split("/")[3])).toBe(true);
-    }
+    expect(guestRuntimeBuildConfig(SAMPLE_GUEST_ASSET).minify).toBe(false);
+    expect(guestRuntimeBuildConfig(SAMPLE_GUEST_ASSET, { minify: true }).minify).toBe(true);
   });
 });

@@ -7,14 +7,9 @@
  * acts on (`documentReady`, which flips a binding's readiness). Every other
  * event is opaque here: a `type` the host can route and count, and a body it
  * forwards without interpreting. The adapter that installed the guest runtime
- * validates that body against its own schema before using it — for the
- * SvelteKit builder, `GuestEventSchema` in
- * `plugins/builtin/sveltekit-builder/shared/protocol.ts`, parsed in its
- * renderer controller. So a React or CSS inspector adds no member here, which
- * is the point: `electron/` may not import from `plugins/`, and the old mirror
- * of the plugin's payload union made core carry Svelte-shaped types it could
- * not maintain. `SitePreviewBridgeProtocolDrift.test.ts` pins what still has to
- * agree across the split.
+ * validates that body against its own schema before using it, so a new adapter
+ * adds no member here: `electron/` may not import from `plugins/`, and core
+ * cannot maintain an adapter's payload types.
  *
  * Everything below describes traffic from an untrusted page. A dev preview runs
  * whatever the user is building, and a same-origin compromise can forge any

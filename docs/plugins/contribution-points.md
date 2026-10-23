@@ -1966,7 +1966,7 @@ The host offers editors inside the file browser’s existing content area (built
 
 ## Preview tools — _Shipped (built-in only)_
 
-Declares a tool the dev-preview panel offers in its toolbar: a toggle, a strip under the toolbar and a drawer beside the page, with the host owning the chrome and the session lifecycle. SvelteKit Tools (`plugins/builtin/sveltekit-builder/`) is the one contributor.
+Declares a tool the dev-preview panel offers in its toolbar: a toggle, a strip under the toolbar and a drawer beside the page, with the host owning the chrome and the session lifecycle. No built-in contributes one today; the dev preview's own Element Picker is core, not a plugin tool.
 
 The components stay a renderer-side registration — `registerDevPreviewTool` in the plugin's renderer entry, because they are compiled into the host bundle and nothing else can supply them. This declaration is what makes the tool **admissible**: `src/registry/devPreviewToolRegistry.ts` hides a registered tool whose plugin's manifest does not name its id, so a module side effect alone can no longer put a tool in the preview toolbar. [Views → Dev preview tools](./views.md#dev-preview-tools) is the lifecycle.
 
@@ -1975,10 +1975,10 @@ The components stay a renderer-side registration — `registerDevPreviewTool` in
   "contributes": {
     "previewTools": [
       {
-        "id": "daintree.sveltekit-builder.builder",
-        "title": "SvelteKit Tools",
+        "id": "daintree.site-tools.inspector",
+        "title": "Site Tools",
         "iconId": "square-dashed-mouse-pointer",
-        "guestAdapter": "daintree.sveltekit-builder.guest"
+        "guestAdapter": "daintree.site-tools.guest"
       }
     ]
   }
@@ -1989,7 +1989,7 @@ The components stay a renderer-side registration — `registerDevPreviewTool` in
 
 | Field | Required | Notes |
 | --- | --- | --- |
-| `id` | yes | **Not** namespaced by the host — the renderer entry registers with this same literal, so the manifest declares the qualified form: the plugin's own name plus exactly one more segment (`daintree.sveltekit-builder.builder`), at most 200 characters. |
+| `id` | yes | **Not** namespaced by the host — the renderer entry registers with this same literal, so the manifest declares the qualified form: the plugin's own name plus exactly one more segment (`daintree.site-tools.inspector`), at most 200 characters. |
 | `title` | yes | The tool's name, trimmed, 1–64 characters. The registration supplies the rendered label; this states what the plugin ships. |
 | `iconId` | no | At most 64 characters. Advisory, like `views[].iconId` — the tool's own `Button` owns the rendered glyph. |
 | `guestAdapter` | no | A [guest adapter](#guest-adapters--shipped-built-in-only) id **this same manifest** declares. A tool naming an adapter nothing declares is a manifest error. |
@@ -2005,7 +2005,7 @@ Declares a browser bundle the host reads back as text and installs into a previe
   "contributes": {
     "guestAdapters": [
       {
-        "id": "daintree.sveltekit-builder.guest",
+        "id": "daintree.site-tools.guest",
         "entry": "renderer/guest/entry.ts"
       }
     ]
@@ -2026,7 +2026,7 @@ Declares a browser bundle the host reads back as text and installs into a previe
 
 ### The preview-extension boundary is deliberate
 
-Preview tools, guest adapters and the workspace-scoped `fsForWorkspace` handle (`BuiltinPluginHostApi` in `shared/types/plugin.ts`, handed out only by the in-process built-in loader) are first-party by design, not a third-party surface left half-built. What makes them safe for a built-in is that its code ships with the app: its renderer half is compiled into the host bundle — which is also why a built-in's renderer may import host store modules directly, rather than only the shared React the import map provides — and its guest body is bundled by Daintree's own build. An installed plugin has neither, and the pieces that would replace them do not exist: no build that produces a browser bundle the host is willing to inject, no API narrow enough to hand a third party a page the user is developing under their own session, and no consent vocabulary that would let the user judge the request. `contributes.previewTools` and `contributes.guestAdapters` are therefore refused by the manifest schema outside a built-in discovery root, and none of these capabilities is advertised to installed plugins until that build, API and trust model exists.
+Preview tools and guest adapters are first-party by design, not a third-party surface left half-built. What makes them safe for a built-in is that its code ships with the app: its renderer half is compiled into the host bundle — which is also why a built-in's renderer may import host store modules directly, rather than only the shared React the import map provides — and its guest body is bundled by Daintree's own build. An installed plugin has neither, and the pieces that would replace them do not exist: no build that produces a browser bundle the host is willing to inject, no API narrow enough to hand a third party a page the user is developing under their own session, and no consent vocabulary that would let the user judge the request. `contributes.previewTools` and `contributes.guestAdapters` are therefore refused by the manifest schema outside a built-in discovery root, and none of these capabilities is advertised to installed plugins until that build, API and trust model exists.
 
 ## Agents — _Shipped (minimal tier)_
 

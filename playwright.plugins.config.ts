@@ -11,7 +11,6 @@ import { defineConfig } from "@playwright/test";
  * network on a cold npm cache and take minutes. Run on request:
  *
  *   npm run build:e2e && npm run test:e2e:plugins
- *   npm run build:e2e && npx playwright test --config=playwright.plugins.config.ts e2e/plugins/sveltekit-builder.spec.ts
  *   npm run build:e2e && npx playwright test --config=playwright.plugins.config.ts e2e/plugins/element-picker/react-vite.spec.ts
  */
 export default defineConfig({
