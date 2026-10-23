@@ -30,6 +30,7 @@ import type { ProjectAcrossHostsService } from "../../services/projectAcrossHost
 import { AppError } from "../../utils/errorTypes.js";
 import type { LinkSession } from "../link/session.js";
 import {
+  AssistantAccessSchema,
   BundleCreatedSchema,
   BundleExpectedSchema,
   CandidatesSchema,
@@ -45,6 +46,7 @@ import {
   PushOutcomeSchema,
   PushStatusSchema,
   SourceDescriptionSchema,
+  type AssistantStepMark,
   type LinkPushBranchPayload,
   type LinkStartClonePayload,
 } from "./linkMethods.js";
@@ -68,10 +70,15 @@ export interface HostGateway {
   checkDestination(payload: CheckDestinationPayload): Promise<DestinationCheck>;
   suggestDestination(payload: SuggestDestinationPayload): Promise<DestinationCheck>;
   /** Starts the clone-and-open operation; follow it with {@link operationStatus}. */
-  startClone(payload: CloneAndOpenPayload): Promise<void>;
+  startClone(payload: CloneAndOpenPayload & AssistantStepMark): Promise<void>;
   operationStatus(opId: string): Promise<OperationOutcome>;
   cancelOperation(opId: string): Promise<boolean>;
-  open(payload: OpenOnHostPayload): Promise<HostProjectOpened>;
+  open(payload: OpenOnHostPayload & AssistantStepMark): Promise<HostProjectOpened>;
+  /**
+   * Whether the host lets other machines' assistants work there (#14140).
+   * Rejects with UNSUPPORTED from a host too old to check its own setting.
+   */
+  assistantAccess(): Promise<boolean>;
   /** A git repository the person chose on the host, opened as a project there. */
   openFolder(path: string): Promise<HostProjectOpened>;
   checkOut(payload: CheckOutBranchPayload): Promise<HostProjectOpened>;
@@ -119,7 +126,7 @@ export class LocalHostGateway implements HostGateway {
   suggestDestination(payload: SuggestDestinationPayload) {
     return this.service.suggestDestination(payload);
   }
-  async startClone(payload: CloneAndOpenPayload): Promise<void> {
+  async startClone(payload: CloneAndOpenPayload & AssistantStepMark): Promise<void> {
     void this.service.cloneAndOpen(payload).catch(() => {});
   }
   async operationStatus(opId: string) {
@@ -138,6 +145,10 @@ export class LocalHostGateway implements HostGateway {
   }
   openFolder(folder: string) {
     return this.service.openFolder(folder);
+  }
+  /** This machine's own assistants need no consent here. */
+  async assistantAccess(): Promise<boolean> {
+    return true;
   }
   checkOut(payload: CheckOutBranchPayload) {
     return this.service.checkOut(payload);
@@ -303,8 +314,12 @@ export class RemoteHostGateway implements HostGateway {
     const session = await this.session();
     return (await session.call(ProjectLinkMethod.OPERATION_CANCEL, { opId })) === true;
   }
-  open(payload: OpenOnHostPayload) {
+  open(payload: OpenOnHostPayload & AssistantStepMark) {
     return this.call(ProjectLinkMethod.OPEN, payload, OpenedSchema, 0);
+  }
+  async assistantAccess(): Promise<boolean> {
+    return (await this.call(ProjectLinkMethod.ASSISTANT_ACCESS, null, AssistantAccessSchema))
+      .accepts;
   }
   openFolder(folder: string) {
     // Bounded, unlike a clone: registering a folder that's there is quick, and a stalled disk shouldn't hold the dialog.

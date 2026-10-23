@@ -199,6 +199,28 @@ const AUDIT_RESULT_PROJECTIONS: ReadonlyMap<string, (result: unknown) => unknown
       };
     },
   ],
+  [
+    "host.ensureProject",
+    // Where it stands, never the paths or questions' words (#14140).
+    (result) => {
+      const record = asRecord(result);
+      if (record === null) return { status: "unrecognized" };
+      const answer = asRecord(record.answer);
+      const project = asRecord(answer?.project);
+      return {
+        outcome: fromSet(record.outcome, HOST_OUTCOMES),
+        hostId: auditHostId(record.hostId),
+        status: typeof answer?.status === "string" ? answer.status : null,
+        projectId: auditId(project?.projectId),
+        how: typeof project?.how === "string" ? project.how : null,
+        questions: Array.isArray(answer?.questions)
+          ? answer.questions
+              .map((q) => asRecord(q)?.reason)
+              .filter((reason): reason is string => typeof reason === "string")
+          : null,
+      };
+    },
+  ],
   ["plugin.capturePanel", projectPanelCapture],
   ["project.runCommand", projectCommandRun],
 ]);
@@ -218,6 +240,23 @@ const AUDIT_ARGS_PROJECTIONS: ReadonlyMap<string, (args: unknown) => unknown> = 
   string,
   (args: unknown) => unknown
 >([
+  [
+    "host.ensureProject",
+    // A host folder is the host's to keep: only whether one was named.
+    (args) => {
+      const record = asRecord(args);
+      const copy = record?.copy;
+      return {
+        hostId: auditHostId(record?.hostId),
+        worktree: typeof record?.worktree === "boolean" ? record.worktree : null,
+        worktreePath: typeof record?.worktreePath === "string" ? "<path>" : null,
+        copy: copy === "new" ? "new" : typeof copy === "string" ? "<path>" : null,
+        accept: Array.isArray(record?.accept)
+          ? record.accept.filter((item): item is string => typeof item === "string").join(",")
+          : null,
+      };
+    },
+  ],
   [
     "project.runCommand",
     (args) => {

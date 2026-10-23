@@ -20,6 +20,8 @@ const WITHHELD_FROM_HOSTS: Record<string, string> = {
   // that Shell could reach every machine the Shell reaches.
   "host.call":
     "runs only for this machine's own assistants, never one a Shell's window runs on a host",
+  "host.ensureProject":
+    "brings this machine's own project for its own assistants, never one a Shell's window runs on a host",
 };
 
 const DEFAULT_SURFACE = [

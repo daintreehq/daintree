@@ -25,8 +25,20 @@ export const HOST_LIST_TOOL = "host.list";
  * client that reads its tool list once never learns of a host added later.
  */
 export const HOST_CALL_TOOL = "host.call";
+/**
+ * Makes sure the calling assistant's project is on a host (#14140), with
+ * nobody clicking: the host's own copy found, else cloned there by the host,
+ * and the branch's worktree made when asked. Nothing opens or switches in a
+ * window, nothing is pushed or sent, no setup recipe runs and no lease is
+ * taken; anything that needs the person comes back as a question.
+ */
+export const HOST_ENSURE_PROJECT_TOOL = "host.ensureProject";
 
-export const HOST_CONTROL_TOOL_IDS: ReadonlySet<string> = new Set([HOST_LIST_TOOL, HOST_CALL_TOOL]);
+export const HOST_CONTROL_TOOL_IDS: ReadonlySet<string> = new Set([
+  HOST_LIST_TOOL,
+  HOST_CALL_TOOL,
+  HOST_ENSURE_PROJECT_TOOL,
+]);
 
 /** Most projects `host.list` names for one host. */
 export const HOST_LIST_PROJECTS_MAX = 50;
@@ -132,10 +144,114 @@ export const HostCallResultSchema = z.object({
 });
 export type HostCallResult = z.infer<typeof HostCallResultSchema>;
 
+/** What the person may agree to go past, by the question that asked. */
+export const HOST_ENSURE_ACCEPTABLE = ["unpushed", "lfs_missing"] as const;
+export type HostEnsureAcceptable = (typeof HOST_ENSURE_ACCEPTABLE)[number];
+
+/** Answers `copy` takes besides a candidate's path: clone a fresh copy. */
+export const HOST_ENSURE_NEW_COPY = "new";
+
+export const HostEnsureProjectArgsSchema = z.object({
+  hostId: hostIdSchema,
+  worktree: z
+    .boolean()
+    .optional()
+    .describe("Also make the branch's worktree there, at the remote's commit."),
+  worktreePath: z
+    .string()
+    .min(1)
+    .max(4096)
+    .optional()
+    .describe("Which of this project's worktrees has the branch. Default: the project folder."),
+  copy: z
+    .string()
+    .min(1)
+    .max(4096)
+    .optional()
+    .describe('The person\'s answer to a copies question: a path it named, or "new" to clone.'),
+  accept: z
+    .array(z.enum(HOST_ENSURE_ACCEPTABLE))
+    .max(HOST_ENSURE_ACCEPTABLE.length)
+    .optional()
+    .describe("Questions the person agreed to go past, up to 2."),
+});
+export type HostEnsureProjectArgs = z.infer<typeof HostEnsureProjectArgsSchema>;
+
+export const HOST_ENSURE_QUESTIONS = [
+  "unpushed",
+  "branch_not_on_remote",
+  "detached",
+  "remote_unreachable",
+  "lfs_missing",
+  "no_remote",
+  "multiple_copies",
+  "committed_id_only",
+  "destination_taken",
+  "driven_elsewhere",
+  "branch_not_placed",
+] as const;
+export type HostEnsureQuestionReason = (typeof HOST_ENSURE_QUESTIONS)[number];
+
+const hostEnsureQuestionSchema = z.object({
+  reason: z.enum(HOST_ENSURE_QUESTIONS),
+  /** What to put to the person, in plain words. */
+  detail: z.string(),
+  /** Pass this in `accept` once the person agrees; null when only they can resolve it. */
+  accept: z.enum(HOST_ENSURE_ACCEPTABLE).nullable(),
+  /** The copies the person chooses between, by path for `copy`. */
+  copies: z
+    .array(
+      z.object({
+        path: z.string(),
+        name: z.string(),
+        registered: z.boolean(),
+        matchedBy: z.enum(["remote-url", "committed-id"]),
+      })
+    )
+    .nullable(),
+});
+export type HostEnsureQuestion = z.infer<typeof hostEnsureQuestionSchema>;
+
+const hostEnsureReadySchema = z.object({
+  projectId: z.string(),
+  name: z.string(),
+  path: z.string(),
+  /** The branch's worktree on the host, when one was asked for and made or found. */
+  worktreePath: z.string().nullable(),
+  how: z.enum(["existing", "registered", "cloned"]),
+  /** Changes on this machine that stayed here: nothing is pushed or sent. */
+  leftHere: z.object({
+    uncommittedChanges: z.number(),
+    unpushedCommits: z.number().nullable(),
+  }),
+  /** Setup recipes the project carries. None was run. */
+  setupRecipes: z.array(z.string()),
+  /** What the host said about the branch, when it made no worktree. */
+  note: z.string().nullable(),
+});
+
+/** Where an ensure stands, as the Shell's switch service answers it. */
+export const HostEnsureAnswerSchema = z.discriminatedUnion("status", [
+  z.object({ status: z.literal("ready"), project: hostEnsureReadySchema }),
+  z.object({ status: z.literal("question"), questions: z.array(hostEnsureQuestionSchema) }),
+  /** Still cloning: call again with the same arguments, which joins it. */
+  z.object({ status: z.literal("working") }),
+  /** A git step failed on the host; `note` is git's own words there. */
+  z.object({ status: z.literal("failed"), note: z.string() }),
+]);
+export type HostEnsureAnswer = z.infer<typeof HostEnsureAnswerSchema>;
+
+export const HostEnsureProjectResultSchema = z.object({
+  ...outcomeFields,
+  hostId: z.string(),
+  answer: HostEnsureAnswerSchema.nullable(),
+});
+export type HostEnsureProjectResult = z.infer<typeof HostEnsureProjectResultSchema>;
+
 /** Why a host tool refused outright: the caller isn't this machine's assistant, or its arguments don't parse. */
 export type HostControlRefusalCode = "NOT_ELIGIBLE" | "INVALID_ARGS" | "UNAVAILABLE";
 
-export type HostControlToolResult = HostListResult | HostCallResult;
+export type HostControlToolResult = HostListResult | HostCallResult | HostEnsureProjectResult;
 
 export type HostControlOutcome<T> =
   { ok: true; value: T } | { ok: false; code: HostControlRefusalCode; message: string };

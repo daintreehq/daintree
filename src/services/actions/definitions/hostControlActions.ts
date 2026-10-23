@@ -2,6 +2,8 @@ import type { ActionRegistry } from "../actionTypes";
 import {
   HostCallArgsSchema,
   HostCallResultSchema,
+  HostEnsureProjectArgsSchema,
+  HostEnsureProjectResultSchema,
   HostListArgsSchema,
   HostListResultSchema,
 } from "@shared/types/hostControl";
@@ -73,5 +75,30 @@ export function registerHostControlActions(actions: ActionRegistry): void {
       openWorldHint: true,
     },
     run: mainProcessOnly("host.call"),
+  }));
+
+  actions.set("host.ensureProject", () => ({
+    id: "host.ensureProject",
+    title: "Bring this project to a host",
+    description:
+      "Make sure this project is on a host: its copy found, else cloned there, plus the branch's worktree when asked. Returns the host's projectId to run its tools in. Never pushes, opens a window or runs setup; choices for the person come back as questions. working: call again the same way.",
+    category: "help",
+    kind: "command",
+    danger: "safe",
+    denyPluginDispatch: true,
+    scope: "renderer",
+    keywords: ["host", "remote", "clone", "project", "worktree", "bring"],
+    palette: { mode: "hidden" },
+    argsSchema: HostEnsureProjectArgsSchema,
+    resultSchema: HostEnsureProjectResultSchema,
+    mcpOutputSchema: true,
+    mcpAnnotations: {
+      readOnlyHint: false,
+      // A repeat finds what the first made.
+      idempotentHint: true,
+      destructiveHint: false,
+      openWorldHint: true,
+    },
+    run: mainProcessOnly("host.ensureProject"),
   }));
 }

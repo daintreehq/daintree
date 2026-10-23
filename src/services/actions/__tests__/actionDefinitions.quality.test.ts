@@ -524,7 +524,13 @@ describe("LLM-facing tool descriptions (#11542)", () => {
   // external surface.
   // 21_300 → 21_400 for #13662's `terminal.placeOwned`, measured at 21_399 B:
   // the same description the external ceiling pays for, on both surfaces.
-  const MAX_COHORT_TOTAL_BYTES = 21_400;
+  // 21_400 → 21_700 for `host.ensureProject` (#14140), measured at 21_681 B.
+  // What the prose has to carry is that the project's copy is found before one
+  // is cloned, that the result names the host's projectId to run tools in, that
+  // nothing is pushed, opened or set up, that choices come back as questions,
+  // and that "working" is answered by calling again. In-app only, off the
+  // external surface.
+  const MAX_COHORT_TOTAL_BYTES = 21_700;
 
   const ARG_SECTION = /\b(?:args?|arguments?|parameters?)\s*(?:\([^)]*\))?\s*:|\btakes no args\b/i;
 
@@ -1522,6 +1528,7 @@ describe("plugin-dispatch injection guard (#10558)", () => {
       "agent.readQuota": {},
       "host.list": {},
       "host.call": { hostId: "h-placeholder", projectId: "p-placeholder", tool: "terminal.list" },
+      "host.ensureProject": { hostId: "h-placeholder" },
     };
 
     const failures: string[] = [];

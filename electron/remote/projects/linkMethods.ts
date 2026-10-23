@@ -62,6 +62,12 @@ export const ProjectLinkMethod = {
   /** The host's own folder listing, for Daintree's picker browsing it from another host's window. */
   LIST_DIRECTORY: "projects.list-directory",
   PICKER_ROOTS: "projects.picker-roots",
+  /**
+   * Whether this host lets other machines' assistants work here (#14140): its
+   * own setting, read live. A host from before it refuses the method, so a
+   * Shell's assistant never reaches one that wouldn't check the setting.
+   */
+  ASSISTANT_ACCESS: "projects.assistant-access",
 } as const;
 
 /**
@@ -71,7 +77,15 @@ export const ProjectLinkMethod = {
  */
 export type LinkCheckDestinationPayload = CheckDestinationPayload & { mintGrant?: boolean };
 export type LinkDestinationCheck = DestinationCheck & { grant?: string | null };
-export type LinkStartClonePayload = CloneAndOpenPayload & { destinationGrant?: string | null };
+/**
+ * Marks a step one of a Shell's assistants asked for (#14140): the host
+ * refuses it while its "Let other machines' assistants work here" is off.
+ */
+export interface AssistantStepMark {
+  assistant?: true;
+}
+export type LinkStartClonePayload = CloneAndOpenPayload &
+  AssistantStepMark & { destinationGrant?: string | null };
 export type LinkPushBranchPayload = PushBranchPayload & { opId?: string };
 
 /** Transfer destinations for bundles, each followed by the receiver's token. */
@@ -131,6 +145,7 @@ export const StartCloneSchema = z.object({
     depth: z.enum(["full", "shallow", "partial"]),
   }),
   setupRecipeId: z.string().min(1).max(256).nullable(),
+  assistant: z.literal(true).optional(),
   destinationGrant: token.nullable().optional(),
 });
 export const OpIdSchema = z.object({ opId });
@@ -141,6 +156,7 @@ export const OpenSchema = z.object({
   branch: branchTarget.nullable(),
   branchRemoteUrl: z.string().max(4096).nullable(),
   navigateOnly: z.boolean().optional(),
+  assistant: z.literal(true).optional(),
 });
 export const OpenFolderSchema = z.object({ path: hostPath });
 export const CheckOutSchema = z.object({
@@ -239,6 +255,8 @@ export const PushObservationSchema: z.ZodType<PushObservation> = z.object({
   remoteSha: sha.nullable(),
   remoteReachable: z.boolean(),
 });
+
+export const AssistantAccessSchema = z.object({ accepts: z.boolean() });
 
 export const EnvironmentSchema: z.ZodType<HostCloneEnvironment> = z.object({
   homeDir: hostPath,

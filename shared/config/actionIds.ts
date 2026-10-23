@@ -572,6 +572,7 @@ export const BUILT_IN_ACTION_IDS = [
   // -- hostControlActions (registered only where Remote Hosts is supported) --
   "host.list",
   "host.call",
+  "host.ensureProject",
 
   // -- uiActions --
   "ui.sidebar.resetWidth",
@@ -680,6 +681,7 @@ export const DENY_PLUGIN_DISPATCH_ACTION_IDS = [
   // Main-process only, for one of this machine's own assistants (#13493).
   "host.list",
   "host.call",
+  "host.ensureProject",
   // Replays the user's last action as a keybinding, which would carry a plugin
   // past every other entry in this list (#13494).
   "action.repeatLast",

@@ -818,7 +818,15 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // 130_630 → 131_000 for #14122, measured at 130_990 B: the same
   // `workspace.list` field the external ceiling above pays for, and its twin on
   // each project `host.list` names, null when a host doesn't say.
-  const MAX_COHORT_PAYLOAD_BYTES = 131_000;
+  // 131_000 → 134_500 for `host.ensureProject` (#14140), measured at
+  // 134_486 B: its description, the host, worktree, worktreePath, copy and
+  // accept arguments, and an output schema of the shared outcome fields beside
+  // one answer: the project made ready (its ids, path, worktree, how it got
+  // there, what stayed on this machine and which recipes weren't run), the
+  // questions for the person with the copies they choose between, or that it
+  // is still working. Offered to this machine's assistant only, so the
+  // external ceiling does not move.
+  const MAX_COHORT_PAYLOAD_BYTES = 134_500;
 
   const wireBytes = (t: WireTool) => t.descriptionBytes + t.paramsBytes + t.outputBytes;
 
