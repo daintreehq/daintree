@@ -371,6 +371,73 @@ describe("host settings over a link, with no project or window on the host", () 
       expect(result.outcome).toBe("conflict");
     });
 
+    it("keeps another Shell's change to a sibling key when this one's reply is lost (#14169)", async () => {
+      // A second Shell on its own link to the same host.
+      const other = await openSessionPair(dir);
+      new HostSettingsControl({
+        load: async () => state.leaves(),
+        runWrite: (write) => write(),
+        reconcile,
+      }).attach(other.host);
+      const otherClient = clientOver(() => other.client);
+      const updates = vi.fn();
+      const lossy = clientOver(() => ({
+        get isOpen() {
+          return sessions.client.isOpen;
+        },
+        call: async (method, payload, options) => {
+          const answer = await sessions.client.call(method, payload, options);
+          if (method === SettingsControlLinkMethod.UPDATE) {
+            updates();
+            throw new AppError({ code: "INTERNAL", message: "No reply" });
+          }
+          return answer;
+        },
+      }));
+
+      const seen = await lossy.read({
+        hostId: HOST,
+        keys: ["idleTerminalNotify.thresholdMinutes"],
+      });
+      const theirs = await otherClient.read({ hostId: HOST, keys: ["idleTerminalNotify.enabled"] });
+      await expect(
+        otherClient.update({
+          hostId: HOST,
+          patch: { "idleTerminalNotify.enabled": true },
+          expect: {
+            instanceId: theirs.instanceId,
+            revisions: { "idleTerminalNotify.enabled": theirs.settings[0]!.revision },
+          },
+        })
+      ).resolves.toMatchObject({ outcome: "applied", confirmedBy: "reply" });
+      const writes = state.box.writes;
+
+      const mine = await lossy.update({
+        hostId: HOST,
+        patch: { "idleTerminalNotify.thresholdMinutes": 120 },
+        expect: {
+          instanceId: seen.instanceId,
+          revisions: { "idleTerminalNotify.thresholdMinutes": seen.settings[0]!.revision },
+        },
+      });
+
+      expect(mine).toMatchObject({ outcome: "applied", confirmedBy: "readback" });
+      expect(updates).toHaveBeenCalledTimes(1);
+      expect(state.box.writes).toBe(writes + 1);
+      // The final values, read from the host by a third look: both changes stand.
+      const final = await otherClient.read({ hostId: HOST });
+      expect(
+        Object.fromEntries(final.settings.map(({ key, value }) => [key, value]))
+      ).toMatchObject({
+        "idleTerminalNotify.enabled": true,
+        "idleTerminalNotify.thresholdMinutes": 120,
+        canopyMode: "unset",
+        "agentDefaults.defaultAgent": "claude",
+      });
+      other.host.close("test");
+      other.client.close("test");
+    });
+
     it("is unconfirmed when the link is gone too, and nothing is resent", async () => {
       const call = vi.fn(async (_method: string, _payload: unknown): Promise<unknown> => {
         throw new AppError({ code: "HOST_DISCONNECTED", message: "gone" });

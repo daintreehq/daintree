@@ -49,6 +49,7 @@ import {
 } from "../../link/__tests__/linkTestUtils.js";
 import {
   enableCanopyOnHosts,
+  isRetryable,
   type BulkTransport,
 } from "../../../../shared/utils/canopyBulkEnable.js";
 import type { CanopyMode } from "../../../../shared/types/ipc/canopy.js";
@@ -463,6 +464,108 @@ describe("Canopy on a host the view isn't bound to", () => {
       });
       expect(result).toMatchObject({ outcome: "conflicted" });
       expect(on.state.mode).toBe("unset");
+    });
+
+    /**
+     * Another host's Canopy in memory, guarded by revision and epoch as the
+     * real handler is. `lose` names how a write's answer goes missing.
+     */
+    function memoryModeHost(
+      initial: CanopyMode,
+      options: { reachable?: boolean; lose?: "reply" | "reply-and-readback" } = {}
+    ) {
+      const state = { mode: initial, revision: 0, sets: [] as CanopyMode[], unreadable: false };
+      const snapshot = () =>
+        ({
+          mode: state.mode,
+          modeRevision: state.revision,
+          hostEpoch: "boot-1",
+          activated: state.mode === "on",
+        }) as never;
+      const unreachable = () => new AppError({ code: "HOST_DISCONNECTED", message: "gone" });
+      const transport: BulkTransport = {
+        getSnapshot: async () => {
+          if (options.reachable === false || state.unreadable) throw unreachable();
+          return snapshot();
+        },
+        setMode: async (mode, revision, epoch) => {
+          if (revision !== state.revision || epoch !== "boot-1") return snapshot();
+          if (mode !== state.mode) state.revision += 1;
+          state.mode = mode;
+          state.sets.push(mode);
+          if (options.lose) {
+            if (options.lose === "reply-and-readback") state.unreadable = true;
+            throw new AppError({ code: "OUTCOME_UNKNOWN", message: "No reply" });
+          }
+          return snapshot();
+        },
+        connect: async () => options.reachable !== false,
+        release: () => {},
+      };
+      return { state, transport };
+    }
+
+    it("accounts for every host in one run, and a retry never overwrites a newer change (#14169)", async () => {
+      const hidden = registerModeHost("hidden");
+      const h = await startHost();
+      const shell = shellClient(h, () => null);
+      const hosts = {
+        on: memoryModeHost("on"),
+        off: memoryModeHost("unset"),
+        down: memoryModeHost("unset", { reachable: false }),
+        lost: memoryModeHost("unset", { lose: "reply" }),
+        dark: memoryModeHost("unset", { lose: "reply-and-readback" }),
+      };
+      const targets = [
+        { hostId: h.hostId, name: "hidden" },
+        ...Object.keys(hosts).map((name) => ({ hostId: name, name })),
+      ];
+      const transportFor = (target: { hostId: string }) =>
+        target.hostId === h.hostId
+          ? bulkTransport(h, shell)
+          : hosts[target.hostId as keyof typeof hosts].transport;
+
+      const results = await enableCanopyOnHosts(targets, { transportFor, concurrency: 6 });
+
+      expect(Object.fromEntries(results.map((r) => [r.name, r.outcome]))).toEqual({
+        hidden: "enabled",
+        on: "already-enabled",
+        off: "enabled",
+        down: "inaccessible",
+        // Landed with its answer lost: the host's own readback confirms it.
+        lost: "enabled",
+        // Landed, but nothing could be read back: never called on, never called off.
+        dark: "uncertain",
+      });
+      // What each host was actually asked to do, one change per step.
+      expect(hidden.state.sets).toEqual([
+        ["unset", 0, "boot-1"],
+        ["on", 1, "boot-1"],
+      ]);
+      expect(hosts.on.state.sets).toEqual([]);
+      expect(hosts.off.state.sets).toEqual(["on"]);
+      expect(hosts.down.state.sets).toEqual([]);
+      expect(hosts.lost.state.sets).toEqual(["on"]);
+      expect(hosts.dark.state.sets).toEqual(["on"]);
+
+      // Before the person retries, someone turns the unconfirmed host back off there.
+      hosts.dark.state.unreadable = false;
+      hosts.dark.state.mode = "unset";
+      hosts.dark.state.revision += 1;
+      const retry = results.filter(isRetryable);
+      expect(retry.map((r) => r.name)).toEqual(["down", "dark"]);
+      const again = await enableCanopyOnHosts(
+        retry.map(({ hostId, name }) => ({ hostId, name })),
+        { transportFor },
+        new Map(retry.map((r) => [r.hostId, r.seen]))
+      );
+
+      expect(Object.fromEntries(again.map((r) => [r.name, r.outcome]))).toEqual({
+        down: "inaccessible",
+        dark: "conflicted",
+      });
+      expect(hosts.dark.state.sets).toEqual(["on"]);
+      expect(hosts.dark.state.mode).toBe("unset");
     });
   });
 });
