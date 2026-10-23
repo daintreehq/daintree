@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { Callout } from "@/components/ui/Callout";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
@@ -10,7 +11,7 @@ import {
 /** Rounded, because the reading is an estimate and a precise figure would claim otherwise. */
 export function formatEstimatedMemory(memoryMB: number): string {
   if (memoryMB >= 1024) return `${(memoryMB / 1024).toFixed(1)} GB`;
-  return `${Math.max(1, Math.round(memoryMB))} MB`;
+  return `${Math.round(memoryMB)} MB`;
 }
 
 function ProjectRow({
@@ -56,6 +57,7 @@ function ProjectSleepConfirmDialogInner() {
     p.terminalMemoryMB === undefined ? [] : [p.terminalMemoryMB]
   );
   const totalMB = readings.reduce((sum, mb) => sum + mb, 0);
+  const unmeasured = projects.length - readings.length;
 
   return (
     <ConfirmDialog
@@ -96,8 +98,10 @@ function ProjectSleepConfirmDialogInner() {
         )}
         {showMemory && readings.length > 0 && (
           <div data-sleep-memory-total="" className="text-xs text-text-secondary">
-            Up to {formatEstimatedMemory(totalMB)} of terminal memory, estimated. Processes share
-            pages, so the memory actually freed is lower.
+            {unmeasured === 0
+              ? `Up to ${formatEstimatedMemory(totalMB)} of terminal memory, estimated.`
+              : `About ${formatEstimatedMemory(totalMB)} across the ${pluralize(readings.length, "project")} measured, estimated.`}{" "}
+            Processes share pages, so the memory actually freed is lower.
           </div>
         )}
         {projects.some((p) => p.isActive) && (
@@ -121,11 +125,15 @@ function ProjectSleepConfirmDialogInner() {
  */
 export function ProjectSleepConfirmDialog() {
   const requestSeq = useProjectSleepConfirmStore((s) => s.requestSeq);
+  // A host that goes away takes its dialog with it; settle the request the
+  // action is awaiting rather than leave it to hang.
+  useEffect(() => () => useProjectSleepConfirmStore.getState().resolveConfirmation(false), []);
   return (
     <ErrorBoundary
       variant="component"
       componentName="ProjectSleepConfirmDialog"
       resetKeys={[requestSeq]}
+      onError={() => useProjectSleepConfirmStore.getState().resolveConfirmation(false)}
     >
       <ProjectSleepConfirmDialogInner />
     </ErrorBoundary>

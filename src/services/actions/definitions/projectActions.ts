@@ -782,7 +782,7 @@ export function registerProjectActions(actions: ActionRegistry, callbacks: Actio
     nonRepeatable: true,
     scope: "renderer",
     argsSchema: z.object({ projectId: z.string().optional() }),
-    run: async (args: unknown) => {
+    run: async (args: unknown, ctx: ActionContext) => {
       const { projectId } = (args ?? {}) as { projectId?: string };
       const id = resolveProjectId(projectId);
       const store = useProjectStore.getState();
@@ -796,7 +796,20 @@ export function registerProjectActions(actions: ActionRegistry, callbacks: Actio
       const waitingAgentCount = entry?.waitingAgentCount ?? 0;
       // Matches the switcher: confirm when something would be stopped, or when the
       // project is the one on screen; a quiet background project sleeps at once.
-      if (isActive || terminalCount > 0 || activeAgentCount > 0 || waitingAgentCount > 0) {
+      // No stats entry is unknown rather than quiet, and a hidden assistant shows
+      // up in neither count, so both are asked about.
+      const mayStopWork =
+        isActive ||
+        !entry ||
+        entry.assistantState !== undefined ||
+        terminalCount > 0 ||
+        activeAgentCount > 0 ||
+        waitingAgentCount > 0;
+      // An agent dispatch has already cleared the MCP bridge's own confirm, which
+      // names this project through its args; this store resolves only from a
+      // renderer dialog a headless client can't click, so asking again would
+      // hang past the dispatch deadline and could still fire afterwards (#11538).
+      if (mayStopWork && ctx.dispatchSource !== "agent") {
         const ok = await useProjectSleepConfirmStore.getState().requestConfirmation({
           kind: "project",
           projects: [
@@ -830,9 +843,13 @@ export function registerProjectActions(actions: ActionRegistry, callbacks: Actio
       "Stops the terminals of every previewed project. Layout and sessions are kept for the reopen, but anything running in them is lost.",
     nonRepeatable: true,
     scope: "renderer",
-    run: async () => {
-      const slept = await sleepIdleProjectsWithConfirm();
-      return { slept };
+    run: async (_args: unknown, ctx: ActionContext) => {
+      // Targets are resolved here, from live state, so an agent's approval can't
+      // name them; the same candidate rules and per-project re-checks still apply.
+      const slept = await sleepIdleProjectsWithConfirm({
+        alreadyApproved: ctx.dispatchSource === "agent",
+      });
+      return { slept: slept > 0, count: slept };
     },
   }));
 

@@ -116,6 +116,33 @@ describe("project.sleep", () => {
     expect(sleepProjectMock).toHaveBeenCalledWith("cur");
   });
 
+  it("asks when the project has no stats entry, or a hidden assistant the counts can't see", async () => {
+    useProjectStatsStore.setState({ stats: { cur: stats() } });
+    let run = action("project.sleep").run({ projectId: "bg" }, ctx);
+    await vi.waitFor(() => expect(pending()).not.toBeNull());
+    useProjectSleepConfirmStore.getState().resolveConfirmation(false);
+    expect(await run).toEqual({ slept: false });
+
+    useProjectStatsStore.setState({
+      stats: { cur: stats(), bg: stats({ assistantState: "working" }) },
+    });
+    run = action("project.sleep").run({ projectId: "bg" }, ctx);
+    await vi.waitFor(() => expect(pending()).not.toBeNull());
+    useProjectSleepConfirmStore.getState().resolveConfirmation(false);
+    await run;
+    expect(sleepProjectMock).not.toHaveBeenCalled();
+  });
+
+  it("does not open a second dialog for a dispatch the MCP bridge already cleared", async () => {
+    useProjectStatsStore.setState({ stats: { cur: stats(), bg: stats({ processCount: 3 }) } });
+    const result = await action("project.sleep").run({ projectId: "bg" }, {
+      dispatchSource: "agent",
+    } as never);
+    expect(pending()).toBeNull();
+    expect(sleepProjectMock).toHaveBeenCalledWith("bg");
+    expect(result).toEqual({ slept: true });
+  });
+
   it("sleeps nothing when the user cancels", async () => {
     const run = action("project.sleep").run({}, ctx);
     await vi.waitFor(() => expect(pending()).not.toBeNull());
@@ -149,8 +176,22 @@ describe("project.sleepIdle", () => {
     expect(a.danger).toBe("confirm");
     expect(a.dangerRationale).toBeTruthy();
     expect(a.nonRepeatable).toBe(true);
-    sleepIdleMock.mockResolvedValue(true);
-    expect(await a.run(undefined, ctx)).toEqual({ slept: true });
-    expect(sleepIdleMock).toHaveBeenCalledTimes(1);
+    sleepIdleMock.mockResolvedValue(2);
+    expect(await a.run(undefined, ctx)).toEqual({ slept: true, count: 2 });
+    expect(sleepIdleMock).toHaveBeenCalledWith({ alreadyApproved: false });
+  });
+
+  it("reports nothing slept when no project actually went down", async () => {
+    sleepIdleMock.mockResolvedValue(0);
+    expect(await action("project.sleepIdle").run(undefined, ctx)).toEqual({
+      slept: false,
+      count: 0,
+    });
+  });
+
+  it("skips its own dialog for an agent dispatch the MCP bridge already cleared", async () => {
+    sleepIdleMock.mockResolvedValue(1);
+    await action("project.sleepIdle").run(undefined, { dispatchSource: "agent" } as never);
+    expect(sleepIdleMock).toHaveBeenCalledWith({ alreadyApproved: true });
   });
 });

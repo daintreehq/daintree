@@ -19,7 +19,11 @@ import { projectClient } from "@/clients/projectClient";
 import { useProjectSleepConfirmStore } from "@/store/projectSleepConfirmStore";
 import { useProjectStatsStore } from "@/store/projectStatsStore";
 import { useProjectStore } from "@/store/projectStore";
-import { selectIdleProjects, useSleepIdleProjects } from "../useSleepIdleProjects";
+import {
+  selectIdleProjects,
+  sleepIdleProjectsWithConfirm,
+  useSleepIdleProjects,
+} from "../useSleepIdleProjects";
 
 function project(id: string, status: Project["status"] = "background"): Project {
   return { id, name: `Project ${id}`, path: `/repos/${id}`, emoji: "🌲", lastOpened: 0, status };
@@ -205,6 +209,29 @@ describe("useSleepIdleProjects", () => {
     terminals = [terminal("b", "waiting", { waitingReason: "approval" })];
     await confirm(flow);
     expect(sleptIds()).toEqual(["a", "c"]);
+  });
+
+  it("resolves with how many actually slept, not how many were previewed", async () => {
+    sleepProject.mockImplementation(async (id) => {
+      if (id === "b") throw new Error("host did not acknowledge");
+      return SLEPT;
+    });
+    const flow = sleepIdleProjectsWithConfirm();
+    await vi.waitFor(() => expect(pending()).not.toBeNull());
+    useProjectSleepConfirmStore.getState().resolveConfirmation(true);
+    expect(await flow).toBe(2);
+  });
+
+  it("resolves 0 when the user cancels, and sleeps without asking when already approved", async () => {
+    const cancelled = sleepIdleProjectsWithConfirm();
+    await vi.waitFor(() => expect(pending()).not.toBeNull());
+    useProjectSleepConfirmStore.getState().resolveConfirmation(false);
+    expect(await cancelled).toBe(0);
+    expect(sleptIds()).toEqual([]);
+
+    expect(await sleepIdleProjectsWithConfirm({ alreadyApproved: true })).toBe(3);
+    expect(pending()).toBeNull();
+    expect(sleptIds()).toEqual(["a", "b", "c"]);
   });
 
   it("sleeps nothing when the confirmation is cancelled", async () => {

@@ -237,8 +237,9 @@ describe("SidebarMemoryNotice", () => {
       "Project aAbout 512 MB/repos/a",
       "Project bMemory unavailable/repos/b",
     ]);
-    // A figure for only some projects is still a lower bound, so it says "up to".
-    expect(dialog.textContent).toContain("Up to 512 MB of terminal memory, estimated");
+    // One reading of two says so, rather than passing for a bound on the batch.
+    expect(dialog.textContent).toContain("About 512 MB across the 1 project measured, estimated");
+
     expect(dialog.textContent).toContain("Their terminals will be stopped");
     expect(dialog.textContent).toContain("4 waiting agents");
     expect(sleepProject).not.toHaveBeenCalled();

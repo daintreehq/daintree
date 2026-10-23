@@ -130,9 +130,12 @@ async function confirmStillIdle(ids: readonly string[]): Promise<IdleProject[]> 
  */
 let batchQueue: Promise<void> = Promise.resolve();
 
-export function sleepProjects(ids: readonly string[]): Promise<void> {
+export function sleepProjects(ids: readonly string[]): Promise<number> {
   const run = batchQueue.then(() => runBatch(ids));
-  batchQueue = run;
+  batchQueue = run.then(
+    () => undefined,
+    () => undefined
+  );
   return run;
 }
 
@@ -141,20 +144,23 @@ export function sleepProjects(ids: readonly string[]): Promise<void> {
  * switcher's ordered teardown. Each is re-checked right before its own sleep —
  * an earlier one in the batch can take a while, and nothing in main refuses a
  * project that started work since the preview. A failure doesn't stop the
- * rest; the failures are reported together, once. Never rejects.
+ * rest; the failures are reported together, once. Resolves with how many actually
+ * slept, and never rejects.
  */
-async function runBatch(ids: readonly string[]): Promise<void> {
+async function runBatch(ids: readonly string[]): Promise<number> {
   const failed: Array<{ project: IdleProject; error: unknown }> = [];
+  let slept = 0;
   for (const id of ids) {
     const [project] = await confirmStillIdle([id]);
     if (!project) continue;
     try {
       await useProjectStore.getState().sleepProject(project.id);
+      slept++;
     } catch (error) {
       failed.push({ project, error });
     }
   }
-  if (failed.length === 0) return;
+  if (failed.length === 0) return slept;
 
   const message =
     failed.length === 1
@@ -178,6 +184,7 @@ async function runBatch(ids: readonly string[]): Promise<void> {
     ],
     context: { eventKind: "uiFeedback" },
   });
+  return slept;
 }
 
 /**
@@ -203,9 +210,13 @@ async function readTerminalMemory(ids: readonly string[]): Promise<Map<string, n
  * Previews, confirms and sleeps every idle background project, however it was
  * reached: the memory notice, the palette, a keybinding or MCP. The checked set
  * is frozen when the preview opens and the batch only ever narrows it. Resolves
- * false when there was nothing to offer or the user cancelled.
+ * with how many projects actually slept: 0 when there was nothing to offer, the
+ * user cancelled, or every one dropped out or failed. `alreadyApproved` skips
+ * the dialog for a dispatch the MCP bridge's own confirm has cleared.
  */
-export async function sleepIdleProjectsWithConfirm(): Promise<boolean> {
+export async function sleepIdleProjectsWithConfirm(
+  options: { alreadyApproved?: boolean } = {}
+): Promise<number> {
   const candidates = currentCandidates();
   const checked = await confirmStillIdle(candidates.map((project) => project.id));
   if (checked.length === 0) {
@@ -217,8 +228,9 @@ export async function sleepIdleProjectsWithConfirm(): Promise<boolean> {
         "Every background project has an agent working or waiting on you, or is open in a window.",
       context: { eventKind: "uiFeedback" },
     });
-    return false;
+    return 0;
   }
+  if (options.alreadyApproved) return sleepProjects(checked.map((project) => project.id));
   const memory = await readTerminalMemory(checked.map((project) => project.id));
   const ok = await useProjectSleepConfirmStore.getState().requestConfirmation({
     kind: "idle",
@@ -233,9 +245,8 @@ export async function sleepIdleProjectsWithConfirm(): Promise<boolean> {
       terminalMemoryMB: memory.get(project.id),
     })),
   });
-  if (!ok) return false;
-  await sleepProjects(checked.map((project) => project.id));
-  return true;
+  if (!ok) return 0;
+  return sleepProjects(checked.map((project) => project.id));
 }
 
 export interface SleepIdleProjects {
