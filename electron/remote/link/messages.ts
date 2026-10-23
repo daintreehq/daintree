@@ -100,6 +100,13 @@ export interface WelcomeMessage {
   resumed: boolean;
   /** What a later HELLO must present to resume this session; new on every WELCOME. */
   resumeSecret?: string;
+  /**
+   * Names the host's process, the same on every session it serves: a Shell
+   * that sees it change knows the host restarted and took its terminals with
+   * it, which a session that merely expired never does. Absent from hosts
+   * before it.
+   */
+  hostLaunchId?: string;
 }
 
 export type RejectReason =

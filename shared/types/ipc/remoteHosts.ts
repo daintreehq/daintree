@@ -459,11 +459,13 @@ export type RemoteHostsEvent =
    * link fell behind, or it was away), or the link came back on a fresh
    * session that knows nothing of the old one, so what it shows may be stale.
    * Refetch state rather than trusting what has been applied.
+   * `host-restarted` is a fresh session from a host whose process restarted,
+   * so the terminals it no longer has ended with it.
    */
   | {
       type: "resync-required";
       hostId: HostId;
-      reason: "overflow" | "reattached" | "reconnected";
+      reason: "overflow" | "reattached" | "reconnected" | "host-restarted";
     }
   /**
    * Sent to the view of a new window opened onto a host that had no project

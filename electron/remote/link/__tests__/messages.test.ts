@@ -9,6 +9,7 @@ import {
   messageToFrame,
 } from "../messages.js";
 import { parseInboundFrame } from "../schemas.js";
+import { TEST_HANDSHAKE } from "./linkTestUtils.js";
 import {
   MAX_HOST_SUMMARY_DRIVERS,
   type HostMetricsSummary,
@@ -178,6 +179,26 @@ describe("link messages", () => {
       endpointId: "view-1",
       projectId: null,
     });
+  });
+
+  it("carries the host process a WELCOME names, and takes one from a host that names none", () => {
+    const welcome = (extra: object) =>
+      parseInboundFrame(
+        messageToFrame({
+          lane: Lane.CONTROL,
+          kind: ControlKind.WELCOME,
+          body: {
+            handshake: TEST_HANDSHAKE,
+            hostName: "h",
+            sessionId: "s1",
+            resumed: false,
+            ...extra,
+          },
+        } as never)
+      ).body as { hostLaunchId?: string };
+    expect(welcome({ hostLaunchId: "launch-a" }).hostLaunchId).toBe("launch-a");
+    expect(welcome({})).not.toHaveProperty("hostLaunchId");
+    expect(() => welcome({ hostLaunchId: "" })).toThrow();
   });
 
   it("lets a host that reads opens without openId take one that names it", () => {

@@ -87,6 +87,12 @@ export interface LinkSessionEstablished {
   hostName: string;
   /** True when the host resumed the previous session rather than starting a new one. */
   resumed: boolean;
+  /**
+   * The host's process is not the one that served this link's previous
+   * session: it restarted, and nothing it ran before is still running. False
+   * whenever either WELCOME didn't say, as an older host's doesn't.
+   */
+  hostRestarted: boolean;
 }
 
 export interface LinkClientOptions {
@@ -152,6 +158,8 @@ export class LinkClient {
   private sessionId: string | null = null;
   /** The secret the last WELCOME carried, presented with `sessionId` to resume. */
   private resumeSecret: string | null = null;
+  /** The host process the last WELCOME named, if it named one. */
+  private hostLaunchId: string | null = null;
   private lastSeenAt: number | null = null;
   /** The last dial found no Host mode there while that still read as a restart. */
   private restartSeen = false;
@@ -406,6 +414,11 @@ export class LinkClient {
       return;
     }
     const previousSessionId = this.sessionId;
+    const hostRestarted =
+      !welcome.resumed &&
+      this.hostLaunchId !== null &&
+      welcome.hostLaunchId !== undefined &&
+      welcome.hostLaunchId !== this.hostLaunchId;
     const link = { hostId: this.options.hostId ?? null, sessionId: welcome.sessionId };
     const accepted = {
       ...link,
@@ -415,6 +428,12 @@ export class LinkClient {
     };
     if (welcome.resumed) {
       logger.info("Remote host link resumed", accepted);
+    } else if (hostRestarted) {
+      // Its terminals went with the process that ran them.
+      logger.info("Remote host restarted; the previous session ended with it", {
+        ...accepted,
+        previousSessionId,
+      });
     } else if (previousSessionId !== null) {
       // The host gave up the session this Shell asked for: everything open on it is gone.
       logger.info("Remote host started a new session; the previous one was not resumed", {
@@ -429,6 +448,8 @@ export class LinkClient {
     this.current = session;
     this.sessionId = welcome.sessionId;
     this.resumeSecret = welcome.resumeSecret ?? null;
+    // A WELCOME that names no process leaves nothing to compare the next one with.
+    this.hostLaunchId = welcome.hostLaunchId ?? null;
     this.failures = 0;
     this.attempt = 0;
     this.lastSeenAt = this.now();
@@ -506,6 +527,7 @@ export class LinkClient {
       sessionId: welcome.sessionId,
       hostName: welcome.hostName,
       resumed: welcome.resumed,
+      hostRestarted,
     };
     for (const listener of this.sessionListeners) {
       try {

@@ -161,6 +161,35 @@ describe("resyncHostTerminals", () => {
     expect(store.removePanel).toHaveBeenCalledWith("t-trashed", { backendAlreadyClosed: true });
   });
 
+  it("names each pane it reports gone, under its restart key, for a host restart to relaunch (#14184)", async () => {
+    panel("t-agent", { launchAgentId: "claude", restartKey: 3 });
+    panel("t-shell");
+    // The shell the agent ran in was still up, but the agent had already quit.
+    panel("t-quit", { launchAgentId: "claude", agentState: "exited" });
+    panel("t-trashed", { location: "trash" });
+    panel("t-unsure");
+    getForProject.mockResolvedValue([]);
+    reconnectBulk.mockResolvedValue({
+      "t-agent": { exists: false },
+      "t-shell": { exists: false },
+      "t-quit": { exists: false },
+      "t-trashed": { exists: false },
+      "t-unsure": { exists: false, conflict: true },
+    });
+    const lost = new Map<string, number>();
+
+    await resyncHostTerminals("proj-1", {
+      ...current,
+      onLost: (id, restartKey) => lost.set(id, restartKey),
+    });
+
+    expect([...lost]).toEqual([
+      ["t-agent", 3],
+      ["t-shell", 0],
+    ]);
+    expect(store.setRuntimeStatus).toHaveBeenCalledWith("t-quit", "exited");
+  });
+
   it("never calls a pane that is still starting gone: its own spawn settles it (#13915)", async () => {
     panel("t-starting", { spawnStatus: "spawning" });
     getForProject.mockResolvedValue([]);

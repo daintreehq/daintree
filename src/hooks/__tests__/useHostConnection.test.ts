@@ -12,6 +12,9 @@ const {
   pluginRefresh,
   updateAgentState,
   setAgentState,
+  setRuntimeStatus,
+  reportLost,
+  relaunchLost,
   panels,
   rehydrate,
   applyNavigation,
@@ -28,6 +31,15 @@ const {
   pluginRefresh: vi.fn(),
   updateAgentState: vi.fn(),
   setAgentState: vi.fn(),
+  setRuntimeStatus: vi.fn(),
+  reportLost: vi.fn(),
+  relaunchLost: vi.fn(
+    async (
+      _projectId: string,
+      _lost: ReadonlyMap<string, number>,
+      _options: { isCurrent: () => boolean; drives: () => boolean }
+    ): Promise<ReadonlyMap<string, number>> => new Map()
+  ),
   panels: {} as Record<string, unknown>,
 }));
 
@@ -46,10 +58,21 @@ vi.mock("@/store/pluginRuntimeStore", () => ({
   usePluginRuntimeStore: { getState: () => ({ refresh: pluginRefresh }) },
 }));
 vi.mock("@/store/panelStore", () => ({
-  usePanelStore: { getState: () => ({ panelsById: panels, updateAgentState }) },
+  usePanelStore: {
+    getState: () => ({
+      panelsById: panels,
+      panelIds: Object.keys(panels),
+      watchedPanels: new Set<string>(),
+      updateAgentState,
+      setRuntimeStatus,
+    }),
+  },
 }));
 vi.mock("@/services/TerminalInstanceService", () => ({
-  terminalInstanceService: { setAgentState },
+  terminalInstanceService: { setAgentState, reportLost },
+}));
+vi.mock("@/store/hostRestartRecovery", () => ({
+  relaunchTerminalsLostToHostRestart: relaunchLost,
 }));
 const refreshDrafts = vi.hoisted(() =>
   vi.fn(async (_projectId: string, _options: { isCurrent: () => boolean }) => undefined)
@@ -79,6 +102,7 @@ vi.mock("@/store/slices/panelRegistry/helpers", () => ({
 import {
   _reloadHostConnectionSyncForTesting,
   _resetHostConnectionSyncForTesting,
+  _restartLossesForTesting,
   drivenElsewhereBy,
   resyncFromHost,
   runHostOperation,
@@ -169,7 +193,10 @@ function installElectron(
     },
     worktree: { refresh: vi.fn(async () => undefined) },
     worktreePort: { request: vi.fn(async () => undefined) },
-    terminal: { getForProject: vi.fn(async (): Promise<unknown[]> => []) },
+    terminal: {
+      getForProject: vi.fn(async (): Promise<unknown[]> => []),
+      reconnectBulk: vi.fn(async (_ids: string[]): Promise<Record<string, unknown>> => ({})),
+    },
   };
   Object.defineProperty(window, "electron", {
     value: electron,
@@ -216,6 +243,9 @@ beforeEach(() => {
   pluginRefresh.mockClear();
   updateAgentState.mockClear();
   setAgentState.mockClear();
+  setRuntimeStatus.mockClear();
+  reportLost.mockClear();
+  relaunchLost.mockClear();
   rehydrate.mockClear();
   refreshDrafts.mockClear();
   applyNavigation.mockClear();
@@ -1863,6 +1893,222 @@ describe("following the driver's navigation (#13281)", () => {
     await vi.waitFor(() => expect(applyNavigation).toHaveBeenCalledTimes(1));
     expect(applyNavigation.mock.calls[0]![0]).toEqual(navigation("wt-2"));
     await vi.waitFor(() => expect(reporter.reportNow).toHaveBeenCalled());
+    stop();
+  });
+});
+
+describe("host restart", () => {
+  /** A view that opened its project and drives it, its open read-back done. */
+  async function drivingView() {
+    const host = installElectron();
+    bindView("studio-01");
+    const stop = startHostConnectionSync();
+    await vi.waitFor(() => expect(rehydrate).toHaveBeenCalled());
+    return { ...host, stop };
+  }
+
+  function runningAgent(id: string, extra: Record<string, unknown> = {}) {
+    panels[id] = {
+      id,
+      kind: "terminal",
+      location: "grid",
+      launchAgentId: "claude",
+      runtimeStatus: "running",
+      restartKey: 2,
+      ...extra,
+    };
+  }
+
+  /** The host lists none of this view's terminals and confirms each one gone. */
+  function hostHasNone(electron: ReturnType<typeof installElectron>["electron"]) {
+    electron.terminal.getForProject.mockResolvedValue([]);
+    electron.terminal.reconnectBulk.mockImplementation(async (ids) =>
+      Object.fromEntries(ids.map((id) => [id, { exists: false }]))
+    );
+  }
+
+  it("relaunches the panes a host restart took with it, and only those", async () => {
+    const { electron, emitHost, stop } = await drivingView();
+    runningAgent("t-agent");
+    runningAgent("t-done", { exitCode: 0, runtimeStatus: "exited" });
+    // Its agent had quit, leaving the shell it ran in: that agent stays quit.
+    runningAgent("t-quit", { agentState: "exited" });
+    hostHasNone(electron);
+
+    emitHost({ type: "resync-required", hostId: "studio-01", reason: "host-restarted" });
+
+    await vi.waitFor(() => expect(relaunchLost).toHaveBeenCalledTimes(1), { timeout: 5_000 });
+    const [projectId, lost, options] = relaunchLost.mock.calls[0]!;
+    expect(projectId).toBe("proj-1");
+    expect([...lost]).toEqual([["t-agent", 2]]);
+    expect(options.drives()).toBe(true);
+    expect(setRuntimeStatus).toHaveBeenCalledWith("t-quit", "exited");
+    expect(setRuntimeStatus).not.toHaveBeenCalledWith("t-done", "exited");
+    stop();
+  });
+
+  it("relaunches nothing when the session only expired and the host stayed up", async () => {
+    const { electron, emitHost, stop } = await drivingView();
+    runningAgent("t-agent");
+    hostHasNone(electron);
+
+    emitHost({ type: "resync-required", hostId: "studio-01", reason: "reconnected" });
+
+    await vi.waitFor(() => expect(reportLost).toHaveBeenCalledWith("t-agent", expect.any(String)));
+    await vi.waitFor(() => expect(rehydrate).toHaveBeenCalledTimes(2));
+    for (let i = 0; i < 5; i += 1) await flush();
+    expect(relaunchLost).not.toHaveBeenCalled();
+    stop();
+  });
+
+  it("leaves the driver's agents to the driver in a view that watches", async () => {
+    const { electron, emitHost, emitLease } = installElectron();
+    electron.driveLease.get.mockResolvedValue(leaseView(holder(), false));
+    electron.driveLease.takeOver.mockResolvedValue(leaseView(holder(), false));
+    bindView("studio-01");
+    const stop = startHostConnectionSync();
+    await vi.waitFor(() => expect(getTerminalInputBlock()?.kind).toBe("driven-elsewhere"));
+    runningAgent("t-agent");
+    hostHasNone(electron);
+
+    emitHost({ type: "resync-required", hostId: "studio-01", reason: "host-restarted" });
+    // What it showed were the driver's: there is nothing of its own to bring back.
+    expect(_restartLossesForTesting()).toBeNull();
+
+    await vi.waitFor(() => expect(reportLost).toHaveBeenCalledWith("t-agent", expect.any(String)), {
+      timeout: 5_000,
+    });
+    for (let i = 0; i < 5; i += 1) await flush();
+    expect(relaunchLost).not.toHaveBeenCalled();
+
+    // Taking the project over later brings back none of the driver's agents.
+    emitLease({ type: "changed", state: leaseView(holder({ endpointId: "me" }), true) });
+    for (let i = 0; i < 5; i += 1) await flush();
+    expect(relaunchLost).not.toHaveBeenCalled();
+    stop();
+  });
+
+  it("waits for the host to say who drives, and relaunches once it says this view does", async () => {
+    const { electron, emitHost, emitLease, stop } = await drivingView();
+    runningAgent("t-agent");
+    hostHasNone(electron);
+    emitHost({
+      type: "connection-changed",
+      hostId: "studio-01",
+      connection: { status: "connecting", attempt: 1 },
+    });
+    // Back up, but the host's answer about the lease is lost on its way.
+    electron.driveLease.get.mockRejectedValue(new Error("[AppError|HOST_DISCONNECTED] down"));
+    emitHost({
+      type: "connection-changed",
+      hostId: "studio-01",
+      connection: { status: "connected", rttMs: 5, handshake: HANDSHAKE },
+    });
+    emitHost({ type: "resync-required", hostId: "studio-01", reason: "host-restarted" });
+
+    await vi.waitFor(() => expect(reportLost).toHaveBeenCalledWith("t-agent", expect.any(String)), {
+      timeout: 5_000,
+    });
+    for (let i = 0; i < 5; i += 1) await flush();
+    expect(relaunchLost).not.toHaveBeenCalled();
+
+    // It says this view drives, under a lease it has to read the host's state back for first.
+    const granted = leaseView(holder({ endpointId: "me", tenureId: "tenure-2" }), true);
+    electron.driveLease.get.mockResolvedValue(granted);
+    emitLease({ type: "changed", state: granted });
+
+    await vi.waitFor(() => expect(relaunchLost).toHaveBeenCalledTimes(1), { timeout: 5_000 });
+    expect([...relaunchLost.mock.calls[0]![1]]).toEqual([["t-agent", 2]]);
+    stop();
+  });
+
+  it("gives the panes up once the host says another screen drives, even while still finding them", async () => {
+    const { electron, emitHost, emitLease, stop } = await drivingView();
+    runningAgent("t-agent");
+    hostHasNone(electron);
+    let answer!: (infos: unknown[]) => void;
+    electron.terminal.getForProject.mockImplementationOnce(
+      () => new Promise<unknown[]>((resolve) => (answer = resolve))
+    );
+
+    emitHost({ type: "resync-required", hostId: "studio-01", reason: "host-restarted" });
+    await vi.waitFor(() => expect(answer).toBeDefined());
+    expect(_restartLossesForTesting()).not.toBeNull();
+    // Another screen drives: the restart's panes are its to bring back.
+    emitLease({ type: "changed", state: leaseView(holder(), false) });
+    expect(_restartLossesForTesting()).toBeNull();
+
+    // Taking the project over afterwards gives them nothing to come back to.
+    emitLease({ type: "changed", state: leaseView(holder({ endpointId: "me" }), true) });
+    answer([]);
+    await vi.waitFor(() => expect(setRuntimeStatus).toHaveBeenCalledWith("t-agent", "exited"), {
+      timeout: 5_000,
+    });
+    for (let i = 0; i < 5; i += 1) await flush();
+    expect(_restartLossesForTesting()).toBeNull();
+    expect(relaunchLost).not.toHaveBeenCalled();
+    stop();
+  });
+
+  it("stops a relaunch under way once the host says another screen drives, and keeps nothing for later", async () => {
+    const { electron, emitHost, emitLease, stop } = await drivingView();
+    runningAgent("t-agent");
+    hostHasNone(electron);
+    let fail!: (error: Error) => void;
+    relaunchLost.mockImplementationOnce(
+      () => new Promise<ReadonlyMap<string, number>>((_resolve, reject) => (fail = reject))
+    );
+
+    emitHost({ type: "resync-required", hostId: "studio-01", reason: "host-restarted" });
+    await vi.waitFor(() => expect(relaunchLost).toHaveBeenCalledTimes(1), { timeout: 5_000 });
+    const options = relaunchLost.mock.calls[0]![2];
+    expect(options.isCurrent()).toBe(true);
+
+    emitLease({ type: "changed", state: leaseView(holder(), false) });
+    expect(options.isCurrent()).toBe(false);
+    fail(new Error("[AppError|HOST_DISCONNECTED] down"));
+    for (let i = 0; i < 5; i += 1) await flush();
+    expect(_restartLossesForTesting()).toBeNull();
+
+    // Taken over later, the view has nothing of the restart's to relaunch.
+    emitLease({ type: "changed", state: leaseView(holder({ endpointId: "me" }), true) });
+    for (let i = 0; i < 5; i += 1) await flush();
+    expect(relaunchLost).toHaveBeenCalledTimes(1);
+    stop();
+  });
+
+  it("holds what the relaunch had to leave for the host's next word", async () => {
+    const { electron, emitHost, emitLease, stop } = await drivingView();
+    runningAgent("t-agent");
+    hostHasNone(electron);
+    // The view stopped driving on the way, so the pane was left.
+    relaunchLost.mockResolvedValueOnce(new Map([["t-agent", 2]]));
+
+    emitHost({ type: "resync-required", hostId: "studio-01", reason: "host-restarted" });
+    await vi.waitFor(() => expect(relaunchLost).toHaveBeenCalledTimes(1), { timeout: 5_000 });
+    for (let i = 0; i < 5; i += 1) await flush();
+
+    emitLease({ type: "changed", state: leaseView(null, true) });
+
+    await vi.waitFor(() => expect(relaunchLost).toHaveBeenCalledTimes(2));
+    expect([...relaunchLost.mock.calls[1]![1]]).toEqual([["t-agent", 2]]);
+    stop();
+  });
+
+  it("tries again on the host's next word when the relaunch was cut short", async () => {
+    const { electron, emitHost, emitLease, stop } = await drivingView();
+    runningAgent("t-agent");
+    hostHasNone(electron);
+    relaunchLost.mockRejectedValueOnce(new Error("[AppError|HOST_DISCONNECTED] down"));
+
+    emitHost({ type: "resync-required", hostId: "studio-01", reason: "host-restarted" });
+    await vi.waitFor(() => expect(relaunchLost).toHaveBeenCalledTimes(1), { timeout: 5_000 });
+    for (let i = 0; i < 5; i += 1) await flush();
+
+    emitLease({ type: "changed", state: leaseView(null, true) });
+
+    await vi.waitFor(() => expect(relaunchLost).toHaveBeenCalledTimes(2));
+    expect([...relaunchLost.mock.calls[1]![1]]).toEqual([["t-agent", 2]]);
     stop();
   });
 });

@@ -532,6 +532,71 @@ describe("LinkClient session loss", () => {
   });
 });
 
+describe("LinkClient host process (#14184)", () => {
+  it("says the host restarted only when two WELCOMEs in a row name different processes", async () => {
+    const dir = await makeTempDir();
+    const socketPath = path.join(dir, "p.sock");
+    // Each session's WELCOME, in order: a session that expired on the same
+    // process, a restart, a host that names no process, then one that does.
+    const launches: Array<string | undefined> = [
+      "launch-a",
+      "launch-a",
+      "launch-b",
+      undefined,
+      "launch-c",
+    ];
+    let served = 0;
+    let peer: net.Socket | null = null;
+    const server = net.createServer((socket) => {
+      peer = socket;
+      const decoder = new FrameDecoder();
+      socket.on("data", (chunk: Buffer) => {
+        for (const frame of decoder.push(chunk)) {
+          if (frame.kind !== ControlKind.HELLO) continue;
+          const hostLaunchId = launches[served];
+          served += 1;
+          const welcome: LinkMessage = {
+            lane: Lane.CONTROL,
+            kind: ControlKind.WELCOME,
+            body: {
+              handshake: TEST_HANDSHAKE,
+              hostName: "h",
+              sessionId: `s${served}`,
+              resumed: false,
+              ...(hostLaunchId !== undefined && { hostLaunchId }),
+            },
+          };
+          socket.write(Buffer.from(encodeFrame(messageToFrame(welcome))));
+        }
+      });
+    });
+    await new Promise<void>((resolve) => server.listen(socketPath, resolve));
+    try {
+      client = new LinkClient({
+        transport: createDirectTransport({ socketPath, token: "t" }),
+        handshake: TEST_HANDSHAKE,
+        client: { clientId: "c", clientName: "n", platform: "linux" },
+        session: { pingIntervalMs: 0, idleTimeoutMs: 0 },
+        backoff: { initialMs: 1, maxMs: 1, jitter: 0 },
+        random: () => 0,
+      });
+      const restarted: boolean[] = [];
+      client.onSession(({ hostRestarted }) => restarted.push(hostRestarted));
+      client.start();
+      for (let session = 1; session <= launches.length; session += 1) {
+        await waitFor(() => restarted.length === session);
+        if (session < launches.length) peer!.destroy();
+      }
+
+      expect(restarted).toEqual([false, false, true, false, false]);
+    } finally {
+      await client?.stop();
+      server.close();
+      await removeTempDir(dir);
+    }
+  });
+});
+
 describe("LinkClient host restart (#13392)", () => {
   it("keeps dialling a host it was just connected to while it restarts, and only parks once it's been gone a while", async () => {
     const dir = await makeTempDir();

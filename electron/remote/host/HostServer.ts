@@ -77,6 +77,8 @@ export interface HostServerOptions {
   observeWorkingAgents?: () => Promise<number | null>;
   /** The argv that runs this build, published so a Shell can start `--attach-stdio` here. */
   launchCommand?: string[];
+  /** Names this host's process in every WELCOME; defaults to the one this process minted. */
+  launchId?: string;
 }
 
 /**
@@ -97,6 +99,12 @@ interface Resumable {
 }
 
 const DEFAULT_RESUME_GRACE_MS = 10 * 60 * 1000;
+
+/**
+ * One per process, not per server: turning Host mode off and on makes a new
+ * server, but the terminals this process runs carry on through it.
+ */
+const PROCESS_LAUNCH_ID = crypto.randomUUID();
 
 /**
  * Sockets that may sit before HELLO at once. Each costs a session and a
@@ -562,6 +570,7 @@ export class HostServer {
         sessionId: id,
         resumed,
         resumeSecret,
+        hostLaunchId: this.options.launchId ?? PROCESS_LAUNCH_ID,
       },
     });
     this.live.set(id, ctx);
