@@ -68,12 +68,19 @@ export function checkElementPickerBundles({ manifest, modulesByFile, seeds }) {
     });
     const modules = [];
     for (const key of chunks) {
+      // The closure walk skips an edge it cannot follow; here that is a gap.
+      for (const dependency of manifest[key].imports ?? []) {
+        if (!manifest[dependency]) {
+          problems.push(`${label}: ${key} imports ${dependency}, which the manifest lacks`);
+        }
+      }
       const members = modulesByFile[manifest[key].file];
       if (!Array.isArray(members)) {
         problems.push(`${label}: no module list for ${manifest[key].file}`);
         continue;
       }
-      modules.push(...members);
+      // `?raw`, `?url` and the like name the same file.
+      modules.push(...members.map((id) => id.replace(/[?#].*$/, "")));
     }
     for (const source of owners) {
       if (manifest[source] && !modules.includes(source)) {

@@ -613,9 +613,12 @@ describe("scanForbiddenModules", () => {
       ["Svelte compiler", "node_modules/svelte/src/compiler/index.js"],
       ["svelte-source-model", "packages/svelte-source-model/src/resolve.ts"],
       ["Vue template compiler", "node_modules/@vue/compiler-dom/dist/compiler-dom.cjs.js"],
-      ["Babel parser", "../daintree/node_modules/@babel/parser/lib/index.js"],
+      ["JS parser", "../daintree/node_modules/@babel/parser/lib/index.js"],
+      ["JS parser", "node_modules/acorn/dist/acorn.mjs"],
+      ["JS parser", "node_modules/@sveltejs/acorn-typescript/index.js"],
       ["source-map decoder", "node_modules/@jridgewell/trace-mapping/dist/trace-mapping.mjs"],
       ["source-map decoder", "node_modules/@jridgewell/sourcemap-codec/dist/sourcemap-codec.mjs"],
+      ["source-map decoder", "node_modules/source-map-js/lib/source-map-consumer.js"],
     ] as const;
     for (const [label, file] of families) {
       expect(scanForbiddenModules([file], ELEMENT_PICKER_FRAMEWORK_PATTERNS), file).toEqual([
@@ -637,6 +640,8 @@ describe("scanForbiddenModules", () => {
           "node_modules/@lezer/javascript/dist/index.js",
           "node_modules/@codemirror/lang-vue/dist/index.js",
           "node_modules/@jridgewell/gen-mapping/dist/gen-mapping.mjs",
+          "node_modules/@babel/runtime/helpers/esm/extends.js",
+          "node_modules/acorn-walk/dist/walk.mjs",
         ],
         ELEMENT_PICKER_FRAMEWORK_PATTERNS
       )

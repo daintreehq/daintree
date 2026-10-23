@@ -133,6 +133,7 @@ afterEach(() => {
   delete (globalThis as Record<string, unknown>)[EXTRACTOR_REGISTRY_GLOBAL];
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
+  vi.useRealTimers();
   document.body.innerHTML = "";
 });
 
@@ -229,6 +230,8 @@ describe("createPicker", () => {
   });
 
   it("does no work while the page and the pointer are idle", async () => {
+    // Before the picker starts, so a timer it sets up then is one it is seen to own.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
     const flush = async () => {
       for (let tick = 0; tick < 5; tick += 1) await Promise.resolve();
     };
@@ -243,15 +246,19 @@ describe("createPicker", () => {
     start();
     await settle(5);
     expect(frames.size).toBe(0);
+    expect(vi.getTimerCount()).toBe(0);
 
     const posted = events.length;
-    const timeouts = vi.spyOn(globalThis, "setTimeout");
-    const intervals = vi.spyOn(globalThis, "setInterval");
+    const sweeps = [
+      vi.spyOn(document, "querySelectorAll"),
+      vi.spyOn(document, "getElementsByTagName"),
+      vi.spyOn(document, "createTreeWalker"),
+    ];
+    vi.advanceTimersByTime(60_000);
     await settle(10);
     expect(frames.size).toBe(0);
     expect(events).toHaveLength(posted);
-    expect(timeouts).not.toHaveBeenCalled();
-    expect(intervals).not.toHaveBeenCalled();
+    for (const sweep of sweeps) expect(sweep).not.toHaveBeenCalled();
 
     // Not a vacuous pass: the same picker answers the pointer, then goes quiet again.
     pointAt(document.getElementById("first")!);
@@ -259,6 +266,7 @@ describe("createPicker", () => {
     await settle(5);
     expect(ofType("hoverChanged")).toHaveLength(1);
     expect(frames.size).toBe(0);
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it("keeps one element id per element for the life of the document", () => {

@@ -80,11 +80,28 @@ describe("checkElementPickerBundles", () => {
     ]);
   });
 
-  it("fails closed on a walked chunk it has no module list for", () => {
+  it("reads a module imported with a query as the file it names", () => {
+    const shipped = build();
+    shipped.modulesByFile["assets/vendor-b.js"].push(
+      "electron/services/elementPicker/host.ts?raw",
+      `${TOOL}?worker`
+    );
+    expect(checkElementPickerBundles(shipped)).toEqual([
+      "the renderer's eager graph: Element Picker host process — electron/services/elementPicker/host.ts",
+      "the first-render graph: Element Picker host process — electron/services/elementPicker/host.ts",
+    ]);
+  });
+
+  it("fails closed on a walked chunk it has no module list for, or an edge it cannot follow", () => {
     const shipped = build();
     delete shipped.modulesByFile["assets/boot-d.js"];
     expect(checkElementPickerBundles(shipped)).toEqual([
       "the first-render graph: no module list for assets/boot-d.js",
+    ]);
+    const dangling = build();
+    dangling.manifest["src/App.tsx"].imports.push("_gone-z.js");
+    expect(checkElementPickerBundles(dangling)).toEqual([
+      "the first-render graph: src/App.tsx imports _gone-z.js, which the manifest lacks",
     ]);
   });
 

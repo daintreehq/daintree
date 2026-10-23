@@ -241,12 +241,18 @@ export const ELEMENT_PICKER_FRAMEWORK_PATTERNS = [
     test: (file) => /(^|\/)node_modules\/@vue\/compiler-[^/]+\//.test(file),
   },
   {
-    label: "Babel parser",
-    test: (file) => /(^|\/)node_modules\/@babel\/parser\//.test(file),
+    // React's resolver parses with Babel; the Svelte compiler with Acorn.
+    label: "JS parser",
+    test: (file) =>
+      /(^|\/)node_modules\/(@babel\/parser|acorn|@sveltejs\/acorn-typescript)\//.test(file),
   },
   {
+    // Vue's compiler maps through source-map-js; the host decodes with trace-mapping.
     label: "source-map decoder",
-    test: (file) => /(^|\/)node_modules\/@jridgewell\/(trace-mapping|sourcemap-codec)\//.test(file),
+    test: (file) =>
+      /(^|\/)node_modules\/(@jridgewell\/(trace-mapping|sourcemap-codec)|source-map-js)\//.test(
+        file
+      ),
   },
 ];
 

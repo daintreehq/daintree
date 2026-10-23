@@ -25,19 +25,33 @@ const GUEST_DIR = "electron/services/elementPicker/guest";
 const EXTRACTORS_DIR = `${GUEST_DIR}/extractors`;
 const FRAMEWORK_PREFIX = /^(react|vue|angular|solid|svelte|preact|astro)/;
 
+/** Picker machinery every page gets: the overlay, the registry, the detectors, the channel. */
+const NEUTRAL_GUEST_MODULES = new Set([
+  ...["bootstrap", "probe", "picker", "elementContext", "detectors", "registry"].map(
+    (name) => `${GUEST_DIR}/${name}.ts`
+  ),
+  "electron/services/elementPicker/guestChannel.ts",
+]);
+
 /**
  * The framework a guest module reads, by where it lives: an extractor file is
  * named for its framework, and Svelte's and Preact's readers have their own
- * directories. Neutral picker code — the registry, the detectors, the overlay —
- * names every framework in strings, so ownership is never read from content.
+ * directories. Neutral picker code names every framework in strings, so
+ * ownership is never read from content. Anything else is `undefined`, which
+ * the tests refuse: a new reader has to be placed before it can ship.
  */
 function frameworkOwning(file) {
+  if (NEUTRAL_GUEST_MODULES.has(file)) return null;
   if (file.startsWith(`${GUEST_DIR}/svelte/`)) return "svelte";
   if (file.startsWith(`${GUEST_DIR}/preact/`)) return "preact";
   if (file === `${GUEST_DIR}/astroExtractor.ts`) return "astro";
-  if (!file.startsWith(`${EXTRACTORS_DIR}/`)) return null;
-  return FRAMEWORK_PREFIX.exec(path.basename(file))?.[1] ?? null;
+  if (!file.startsWith(`${EXTRACTORS_DIR}/`)) return undefined;
+  return FRAMEWORK_PREFIX.exec(path.basename(file))?.[1];
 }
+
+/** What a page script reaches the network or the style engine with. */
+const NETWORK_OR_STYLE =
+  /\bfetch\s*\(|XMLHttpRequest|WebSocket|EventSource|sendBeacon|importScripts|\bimport\s*\(|getComputedStyle/g;
 
 function extractorEntries() {
   return fs
@@ -51,8 +65,8 @@ function extractorEntries() {
 
 const guestBuilds = new Map();
 
-/** Everything one guest asset bundles, built exactly as `build-main.mjs` builds it. */
-function guestInputs(entry) {
+/** One guest asset, built exactly as `build-main.mjs` builds it: what it bundles and what it emits. */
+function guestBuild(entry) {
   let pending = guestBuilds.get(entry);
   if (pending === undefined) {
     pending = build({
@@ -60,10 +74,17 @@ function guestInputs(entry) {
       write: false,
       metafile: true,
       logLevel: "silent",
-    }).then((result) => Object.keys(result.metafile.inputs));
+    }).then((result) => ({
+      inputs: Object.keys(result.metafile.inputs),
+      text: result.outputFiles[0].text,
+    }));
     guestBuilds.set(entry, pending);
   }
   return pending;
+}
+
+async function guestInputs(entry) {
+  return (await guestBuild(entry)).inputs;
 }
 
 describe("CORE_PICKER_GUEST_ASSETS", () => {
@@ -119,12 +140,44 @@ describe("CORE_PICKER_GUEST_ASSETS", () => {
     // bytes: each asset is one framework's, so loading it costs no other's.
     for (const entry of extractorEntries()) {
       const own = frameworkOwning(entry);
-      expect(own, entry).not.toBeNull();
-      const owners = new Set(
-        (await guestInputs(entry)).map(frameworkOwning).filter((owner) => owner !== null)
-      );
-      expect([...owners], entry).toEqual([own]);
+      expect(own, entry).toEqual(expect.any(String));
+      const inputs = await guestInputs(entry);
+      expect(
+        inputs.filter((file) => frameworkOwning(file) === undefined),
+        `${entry} bundles modules no rule places`
+      ).toEqual([]);
+      const owned = inputs.filter((file) => frameworkOwning(file) === own);
+      // The reader itself, not only the few lines that install it.
+      expect(owned.filter((file) => file !== entry).length, entry).toBeGreaterThan(0);
+      expect(
+        [...new Set(inputs.map(frameworkOwning).filter((owner) => owner !== null))],
+        entry
+      ).toEqual([own]);
     }
+  }, 60_000);
+
+  it("ships readers that never touch the network or the style engine", async () => {
+    // Hover runs the readers on every element the pointer crosses, so this is
+    // the hover budget for all of them at once; maps are the host's to fetch.
+    // The bootstrap reads styles only into a selection's context, which
+    // `guest/__tests__/picker.test.ts` holds off the hover path.
+    const assets = [
+      ...CORE_PICKER_GUEST_ASSETS.filter((asset) => asset.id !== "bootstrap").map((a) => a.entry),
+      ...extractorEntries(),
+    ];
+    for (const entry of new Set(assets)) {
+      expect(
+        [...(await guestBuild(entry)).text.matchAll(NETWORK_OR_STYLE)].map((m) => m[0]),
+        entry
+      ).toEqual([]);
+    }
+    const bootstrap = await guestBuild(
+      CORE_PICKER_GUEST_ASSETS.find((asset) => asset.id === "bootstrap").entry
+    );
+    const reached = [...bootstrap.text.matchAll(NETWORK_OR_STYLE)].map((m) => m[0]);
+    // Not a vacuous pass: the pattern finds the bootstrap's selection-time reads.
+    expect(reached).toContain("getComputedStyle");
+    expect(reached.filter((found) => found !== "getComputedStyle")).toEqual([]);
   }, 60_000);
 
   it("builds each from a source that exists, as a guest IIFE", () => {

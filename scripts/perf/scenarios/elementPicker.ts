@@ -21,14 +21,23 @@ import {
 const ARMS: readonly PickerArm[] = ["svelte", "react"];
 const OPEN_CLOSE_CYCLES = 20;
 const MIB = 1024 * 1024;
-/** Short enough to watch the host retire inside one iteration. */
-const IDLE_MS = 250;
+/**
+ * Short enough to watch the host retire inside one iteration, long enough
+ * that a loaded machine pausing between two back-to-back cycles does not
+ * retire it mid-run and read as a second host.
+ */
+const IDLE_MS = 2_000;
 
-/** Disposes the host and waits for its process to go, then counts what is still running. */
+/**
+ * Disposes the host and waits for its process to go, counts what is still
+ * running, then kills it so a stuck host cannot weigh on the next iteration.
+ */
 async function teardown(harness: PickerHostHarness): Promise<number> {
   await harness.dispose();
   await harness.settle();
-  return harness.liveForks();
+  const live = harness.liveForks();
+  harness.reap();
+  return live;
 }
 
 async function runCold(): Promise<ScenarioSample> {
@@ -89,7 +98,12 @@ async function runWarm(): Promise<ScenarioSample> {
 
 async function runOpenClose(): Promise<ScenarioSample> {
   const harness = await createPickerHost({ idleMs: IDLE_MS });
-  const metrics: Record<string, number> = { cycleMisses: 0, leftoverWatchMisses: 0, cycleCount: 0 };
+  const metrics: Record<string, number> = {
+    cycleMisses: 0,
+    watchMisses: 0,
+    leftoverWatchMisses: 0,
+    cycleCount: 0,
+  };
   let total = 0;
   let baseline = 0;
   try {
@@ -97,6 +111,9 @@ async function runOpenClose(): Promise<ScenarioSample> {
       const begin = performance.now();
       const workspace = await harness.open();
       metrics.cycleMisses += await harness.resolve(workspace, ARMS);
+      // A selection's reads are watched while the picker is open; without
+      // this, giving every watch back below would be true of none taken.
+      if (harness.activeWatches() === 0) metrics.watchMisses += 1;
       harness.close(workspace);
       total += performance.now() - begin;
       metrics.cycleCount += 1;
@@ -109,8 +126,9 @@ async function runOpenClose(): Promise<ScenarioSample> {
     metrics.leftoverWatchMisses = harness.activeWatches();
     // Back-to-back opens keep one host; left alone, it retires.
     metrics.forkMisses = Math.abs(harness.forks.length - 1);
-    await harness.settle(IDLE_MS * 20);
-    metrics.idleRetireMisses = harness.liveForks();
+    await harness.settle(IDLE_MS * 5);
+    // Retired, not crashed or killed: a host told to go exits cleanly.
+    metrics.idleRetireMisses = harness.forks.filter((child) => child.exitCode !== 0).length;
   } finally {
     metrics.leftoverHostMisses = await teardown(harness);
   }
@@ -147,13 +165,14 @@ export const elementPickerScenarios: PerfScenario[] = [
     id: "PERF-412",
     name: "Element Picker Open/Close Memory",
     description:
-      "Twenty back-to-back cycles of opening the picker on a worktree, selecting one Svelte and one React element, and closing it again, on one ElementPickerHost. Reports main's retained heap growth after the first cycle and the mean cycle time; every closed workspace releasing its watches, the cycles sharing one host process, and that process retiring once left idle are predicates. Main's heap only: the host process's memory goes with it when it retires.",
+      "Twenty back-to-back cycles of opening the picker on a worktree, selecting one Svelte and one React element, and closing it again, on one ElementPickerHost. Reports main's retained heap growth after the first cycle and the mean cycle time; every open workspace watching what it read and giving the watches back on close, the cycles sharing one host process, and that process retiring cleanly once left idle are predicates. Main's heap only: the host process's memory goes with it when it retires.",
     tier: "fast",
     modes: ["smoke", "ci", "nightly"],
     iterations: { smoke: 3, ci: 6, nightly: 10 },
     warmups: 1,
     correctness: [
       "cycleMisses",
+      "watchMisses",
       "leftoverWatchMisses",
       "forkMisses",
       "idleRetireMisses",

@@ -93,10 +93,12 @@ const isVueCompiler = (file: string) => file.includes("node_modules/@vue/compile
 
 describe("the Element Picker host boundary", () => {
   it("keeps the host process's code out of main, eagerly or lazily", async () => {
-    const metafile = await metafileOf("electron/main.ts", MAIN_EXTERNAL);
+    // The app's real entry: it runs boot migrations, then imports `main.ts`.
+    const metafile = await metafileOf("electron/bootstrap.ts", MAIN_EXTERNAL);
     // Without splitting every dynamic import is inlined, so this is everything
-    // main can ever evaluate.
+    // main can ever evaluate, from the first module it loads.
     const reachable = Object.keys(metafile.inputs);
+    expect(reachable).toContain("electron/main.ts");
     expect(reachable.filter(isHostProcessCode)).toEqual([]);
     expect(reachable.filter(isSourceMapDecoder)).toEqual([]);
     expect(reachable.filter(isJsParser)).toEqual([]);
@@ -104,9 +106,11 @@ describe("the Element Picker host boundary", () => {
     // none of it even behind an import, since the host and the page load it.
     expect(scanForbiddenModules(reachable, ELEMENT_PICKER_FRAMEWORK_PATTERNS)).toEqual([]);
     expect(reachable.filter(isJsxParser)).toEqual([]);
-    expect(
-      [...walkEagerGraph(metafile, "electron/main.ts")].filter((f) => f.startsWith(HOST_DIR))
-    ).toEqual([]);
+    for (const entry of ["electron/bootstrap.ts", "electron/main.ts"]) {
+      expect([...walkEagerGraph(metafile, entry)].filter((f) => f.startsWith(HOST_DIR))).toEqual(
+        []
+      );
+    }
 
     // Not a vacuous pass: main does reach the service, behind its shutdown
     // hook's dynamic import.
@@ -191,7 +195,7 @@ describe("the Element Picker host boundary", () => {
         "Svelte runtime",
         "svelte-source-model",
         "Vue template compiler",
-        "Babel parser",
+        "JS parser",
         "source-map decoder",
       ])
     );

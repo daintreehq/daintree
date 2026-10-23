@@ -275,11 +275,16 @@ function isCorrect(arm: PickerArm, data: Corpus, result: ResolutionResult | unde
 
 // --- the host -------------------------------------------------------------------
 
+/** Bounded stderr tail kept per host, so a boot failure can say why. */
+const STDERR_TAIL_LIMIT = 1500;
+
 /** A forked host process, in the shape `ElementPickerHost` drives a utility process. */
 class ForkedHost extends EventEmitter implements HostChild {
   readonly forkedAt = performance.now();
   readyAt: number | null = null;
-  exited = false;
+  /** Null while running; 0 is a host that left on its own, as retirement does. */
+  exitCode: number | null = null;
+  stderrTail = "";
 
   constructor(private readonly child: ChildProcess) {
     super();
@@ -290,12 +295,18 @@ class ForkedHost extends EventEmitter implements HostChild {
       }
       this.emit("message", message);
     });
-    child.on("exit", (code, signal) => {
-      this.exited = true;
-      liveChildren.delete(child);
-      this.emit("exit", code ?? (signal === null ? 0 : 1));
+    child.stderr?.setEncoding("utf8");
+    child.stderr?.on("data", (chunk: string) => {
+      this.stderrTail = (this.stderrTail + chunk).slice(-STDERR_TAIL_LIMIT);
     });
+    child.on("exit", (code, signal) => this.end(code ?? (signal === null ? 0 : 1)));
+    // A process that never started emits `error` and `close` with no `exit`.
+    child.on("close", (code) => this.end(code ?? 1));
     child.on("error", (error) => this.emit("error", error));
+  }
+
+  get exited(): boolean {
+    return this.exitCode !== null;
   }
 
   get pid(): number | undefined {
@@ -305,18 +316,37 @@ class ForkedHost extends EventEmitter implements HostChild {
   postMessage(message: unknown): void {
     this.child.send(message as object);
   }
+
+  kill(): void {
+    if (!this.exited) this.child.kill("SIGKILL");
+  }
+
+  private end(code: number): void {
+    if (this.exitCode !== null) return;
+    this.exitCode = code;
+    liveChildren.delete(this.child);
+    this.emit("exit", code);
+  }
 }
 
 const liveChildren = new Set<ChildProcess>();
 let reaperInstalled = false;
 
-/** A host stranded by a throw must not outlive the run that forked it. */
+/** A host stranded by a throw or a signal must not outlive the run that forked it. */
 function installReaper(): void {
   if (reaperInstalled) return;
   reaperInstalled = true;
-  process.on("exit", () => {
+  const reap = () => {
     for (const child of liveChildren) child.kill("SIGKILL");
-  });
+    liveChildren.clear();
+  };
+  process.on("exit", reap);
+  for (const signal of ["SIGINT", "SIGTERM"] as const) {
+    process.on(signal, () => {
+      reap();
+      process.exit(1);
+    });
+  }
 }
 
 function forkHost(): ForkedHost {
@@ -325,7 +355,7 @@ function forkHost(): ForkedHost {
     execArgv: ["--import", "tsx"],
     // Structured clone, as Electron's MessagePort carries the host protocol.
     serialization: "advanced",
-    stdio: ["ignore", "ignore", "ignore", "ipc"],
+    stdio: ["ignore", "ignore", "pipe", "ipc"],
     env: { ...process.env, [UTILITY_HOST_CHILD.hostEnv]: HOST_BOOTSTRAP },
   });
   liveChildren.add(child);
@@ -348,6 +378,8 @@ export interface PickerHostHarness {
   /** Waits for every forked process to exit, up to `timeoutMs`. */
   settle(timeoutMs?: number): Promise<void>;
   dispose(): Promise<void>;
+  /** Kills whatever is still running; for after a reading, never before one. */
+  reap(): void;
 }
 
 let modules: Promise<
@@ -415,15 +447,25 @@ export async function createPickerHost(
     },
     async resolve(workspaceId, arms) {
       nextRequest += 1;
-      const response = await host.resolve({
-        requestId: `perf-picker-${nextRequest}`,
-        sessionId: "perf-picker",
-        documentEpoch: 1,
-        workspaceId,
-        observations: arms.map((arm) => observationFor(arm, data)),
-        knownRevisions: [],
-        budget: BUDGET,
-      } satisfies ResolveRequest);
+      let response: Awaited<ReturnType<ElementPickerHost["resolve"]>>;
+      try {
+        response = await host.resolve({
+          requestId: `perf-picker-${nextRequest}`,
+          sessionId: "perf-picker",
+          documentEpoch: 1,
+          workspaceId,
+          observations: arms.map((arm) => observationFor(arm, data)),
+          knownRevisions: [],
+          budget: BUDGET,
+        } satisfies ResolveRequest);
+      } catch (error) {
+        const tail = forks.at(-1)?.stderrTail.trim();
+        throw new Error(
+          `the host failed the selection: ${error instanceof Error ? error.message : String(error)}` +
+            (tail ? `\n${tail}` : ""),
+          { cause: error }
+        );
+      }
       return arms.filter(
         (arm, index) => !isCorrect(arm, data, response.outcomes[index]?.results[0])
       ).length;
@@ -436,6 +478,9 @@ export async function createPickerHost(
     },
     async dispose() {
       await host.dispose();
+    },
+    reap() {
+      for (const child of forks) child.kill();
     },
   };
 }

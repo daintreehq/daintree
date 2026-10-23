@@ -421,7 +421,10 @@ describe("CoreGuest", () => {
   });
 
   it("gives a mixed page each framework it uses once, and a later one only its own", async () => {
-    const h = harness({ probeResult: [...REACT, ...SVELTE] });
+    const h = harness({
+      probeResult: [...REACT, ...SVELTE],
+      assets: { "extractor:solid": "/* solid */" },
+    });
     await h.install();
     h.guest.onGuestEvent(0, READY);
     await h.settle();
@@ -438,6 +441,11 @@ describe("CoreGuest", () => {
     });
     await h.settle();
     expect(h.extractorsLoaded().slice(2)).toEqual(["extractor:solid"]);
+    expect(h.availabilities().at(-1)?.extractors).toEqual({
+      react: "installed",
+      svelte: "installed",
+      solid: "installed",
+    });
   });
 
   it.each([
