@@ -1,9 +1,7 @@
 {
   "entryKey": "index.html",
   "seeds": {
-    "resolved": [
-      "src/App.tsx"
-    ],
+    "resolved": ["src/App.tsx"],
     "missing": []
   },
   "chunkCount": 170,
