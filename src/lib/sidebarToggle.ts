@@ -166,7 +166,9 @@ export function createAssistantRevealCoordinator(): AssistantRevealCoordinator {
         for (let attempt = 0; attempt < ASSISTANT_ATTACH_WAIT_ATTEMPTS; attempt++) {
           if (isStale()) return;
           try {
-            await (await loadTerminalService()).waitForAttachSettled(id, {
+            await (
+              await loadTerminalService()
+            ).waitForAttachSettled(id, {
               timeoutMs: ASSISTANT_ATTACH_SETTLE_TIMEOUT_MS,
             });
             attached = true;

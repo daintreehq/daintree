@@ -42,10 +42,7 @@ const listeners = new Set<() => void>();
  */
 export function signalDiagnosticsDockLayoutChange(): void {
   const ids = getSidebarAffectedTerminalIds();
-  peekTerminalService()?.suppressResizesDuringLayoutTransition(
-    ids,
-    DIAGNOSTICS_DOCK_TRANSITION_MS
-  );
+  peekTerminalService()?.suppressResizesDuringLayoutTransition(ids, DIAGNOSTICS_DOCK_TRANSITION_MS);
   // Snapshot — a callback may unsubscribe during iteration.
   for (const listener of Array.from(listeners)) {
     try {

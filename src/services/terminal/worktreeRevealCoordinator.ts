@@ -114,7 +114,9 @@ export function createWorktreeRevealCoordinator(): WorktreeRevealCoordinator {
         for (let attempt = 0; attempt < ATTACH_WAIT_ATTEMPTS; attempt++) {
           if (isStale()) return;
           try {
-            await (await loadTerminalService()).waitForAttachSettled(obligation.id, {
+            await (
+              await loadTerminalService()
+            ).waitForAttachSettled(obligation.id, {
               timeoutMs: ATTACH_SETTLE_TIMEOUT_MS,
             });
             attached = true;
