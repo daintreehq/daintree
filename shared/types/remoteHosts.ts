@@ -406,6 +406,25 @@ export interface HostMetricsSummary {
   platform: HostPlatform;
   /** Busy CPU as a percentage of all cores over the last interval; null when unmeasured. */
   cpuPercent: number | null;
+  /**
+   * Logical cores the CPU reading covers: the scale `cpuPercent` is a share of.
+   * Absent from a host that doesn't report it; null when unmeasured.
+   */
+  cpuLogicalCoreCount?: number | null;
+  /** The 1 minute load average, as the OS reports it. Absent from older hosts; null when unmeasured. */
+  cpuLoadAverage1m?: number | null;
+  /** Apple Silicon performance cluster size. Absent from older hosts; null elsewhere or unknown. */
+  cpuPerformanceCoreCount?: number | null;
+  /** Apple Silicon efficiency cluster size. Absent from older hosts; null elsewhere or unknown. */
+  cpuEfficiencyCoreCount?: number | null;
+  /**
+   * Busy share of the performance cluster's own cores over the last interval.
+   * Absent from older hosts; null elsewhere, on the first reading, or when the
+   * cores can't be matched to their cluster.
+   */
+  cpuPerformancePercent?: number | null;
+  /** Busy share of the efficiency cluster's own cores; null under the same rules. */
+  cpuEfficiencyPercent?: number | null;
   /** macOS memorystatus level or Linux PSI mapped to three bands; null when unavailable. */
   memoryPressure: "normal" | "warn" | "critical" | null;
   memoryUsedBytes: number | null;

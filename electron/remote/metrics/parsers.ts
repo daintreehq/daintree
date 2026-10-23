@@ -193,3 +193,56 @@ export function cpuPercentBetween(
   if (total <= 0) return null;
   return Math.min(100, Math.max(0, (busy / total) * 100));
 }
+
+function parseCoreCount(text: string | undefined): number | null {
+  if (!text || !/^\d+$/.test(text)) return null;
+  const value = Number(text);
+  return Number.isSafeInteger(value) && value > 0 ? value : null;
+}
+
+/**
+ * Apple Silicon cluster sizes from `sysctl -n hw.perflevel0.name
+ * hw.perflevel0.logicalcpu hw.perflevel1.name hw.perflevel1.logicalcpu`.
+ * Only the Performance + Efficiency layout counts: other chips name their
+ * levels differently (M5 Pro/Max report Super and Performance), and Intel Macs
+ * have no perflevels at all, so anything else is null rather than relabelled.
+ */
+export function parseDarwinCpuClusters(
+  text: string | null
+): { performance: number; efficiency: number } | null {
+  if (text === null) return null;
+  const lines = text
+    .trim()
+    .split(/\r?\n/)
+    .map((line) => line.trim());
+  if (lines.length !== 4 || lines[0] !== "Performance" || lines[2] !== "Efficiency") return null;
+  const performance = parseCoreCount(lines[1]);
+  const efficiency = parseCoreCount(lines[3]);
+  return performance !== null && efficiency !== null ? { performance, efficiency } : null;
+}
+
+/**
+ * Busy share of each Apple Silicon cluster between two `os.cpus()` readings.
+ * libuv lists cores in kernel logical-cpu-id order, which on Apple Silicon puts
+ * the efficiency cluster first (`ioreg -p IODeviceTree` reports `cluster-type`
+ * E for the lowest ids). That holds only while the cluster sizes account for
+ * every core, so any mismatch leaves both shares null rather than guessing.
+ */
+export function clusterCpuPercentBetween(
+  previous: readonly CpuTimes[] | null,
+  next: readonly CpuTimes[],
+  efficiencyCores: number | null,
+  performanceCores: number | null
+): { efficiency: number | null; performance: number | null } {
+  const unknown = { efficiency: null, performance: null };
+  if (!efficiencyCores || !performanceCores) return unknown;
+  if (efficiencyCores + performanceCores !== next.length) return unknown;
+  if (!previous || previous.length !== next.length) return unknown;
+  return {
+    efficiency: cpuPercentBetween(
+      previous.slice(0, efficiencyCores),
+      next.slice(0, efficiencyCores)
+    ),
+    performance: cpuPercentBetween(previous.slice(efficiencyCores), next.slice(efficiencyCores)),
+  };
+}

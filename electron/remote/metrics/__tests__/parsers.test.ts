@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
+  clusterCpuPercentBetween,
   cpuPercentBetween,
+  parseDarwinCpuClusters,
   parseCgroupMemory,
   parseDarwinPressureLevel,
   parseDarwinSwapUsage,
@@ -164,5 +166,55 @@ describe("cpuPercentBetween", () => {
 
   it("is null when counters went backwards", () => {
     expect(cpuPercentBetween([core(100, 100)], [core(50, 200)])).toBeNull();
+  });
+});
+
+describe("parseDarwinCpuClusters", () => {
+  it("reads the performance and efficiency cluster sizes", () => {
+    expect(parseDarwinCpuClusters("Performance\n10\nEfficiency\n4\n")).toEqual({
+      performance: 10,
+      efficiency: 4,
+    });
+  });
+
+  it("is null for any other layout rather than relabelling it", () => {
+    for (const text of [
+      null,
+      "",
+      // M5 Pro/Max: no efficiency cluster; their performance cores are level 1.
+      "Super\n6\nPerformance\n12\n",
+      // A chip or VM reporting one level, or a failed second read.
+      "Performance\n8\n",
+      "Performance\n0\nEfficiency\n4\n",
+      "Performance\n4.5\nEfficiency\n4\n",
+    ]) {
+      expect(parseDarwinCpuClusters(text)).toBeNull();
+    }
+  });
+});
+
+describe("clusterCpuPercentBetween", () => {
+  const core = (user: number, idle: number) => ({ user, nice: 0, sys: 0, idle, irq: 0 });
+  // Two efficiency cores barely busy, then three performance cores mostly busy.
+  const before = [core(0, 0), core(0, 0), core(0, 0), core(0, 0), core(0, 0)];
+  const after = [core(10, 90), core(10, 90), core(80, 20), core(60, 40), core(70, 30)];
+
+  it("splits the busy share with the efficiency cluster first", () => {
+    const split = clusterCpuPercentBetween(before, after, 2, 3);
+    expect(split.efficiency).toBeCloseTo(10);
+    expect(split.performance).toBeCloseTo(70);
+  });
+
+  it("leaves both shares unknown when the clusters don't account for every core", () => {
+    const unknown = { efficiency: null, performance: null };
+    expect(clusterCpuPercentBetween(before, after, 2, 2)).toEqual(unknown);
+    expect(clusterCpuPercentBetween(before, after, null, 3)).toEqual(unknown);
+    expect(clusterCpuPercentBetween(before, after, 2, null)).toEqual(unknown);
+  });
+
+  it("is unknown on the first reading or a changed core count", () => {
+    const unknown = { efficiency: null, performance: null };
+    expect(clusterCpuPercentBetween(null, after, 2, 3)).toEqual(unknown);
+    expect(clusterCpuPercentBetween(before.slice(1), after, 2, 3)).toEqual(unknown);
   });
 });
