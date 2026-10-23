@@ -567,6 +567,9 @@ export interface GeneratedElectronAPI {
     listWorktrees(
       ...args: IpcInvokeMap["host-metrics:list-worktrees"]["args"]
     ): Promise<IpcInvokeMap["host-metrics:list-worktrees"]["result"]>;
+    processInventory(
+      ...args: IpcInvokeMap["host-metrics:process-inventory"]["args"]
+    ): Promise<IpcInvokeMap["host-metrics:process-inventory"]["result"]>;
     submitFleet(
       ...args: IpcInvokeMap["host-metrics:submit-fleet"]["args"]
     ): Promise<IpcInvokeMap["host-metrics:submit-fleet"]["result"]>;

@@ -81,6 +81,13 @@ export function installHostMetricsClient(options: InstallHostMetricsClientOption
       listFleetTargets: listLocalFleetTargets,
       submitFleet: submitLocalFleet,
       listWorktrees: listLocalWorktrees,
+      processInventory: async () => {
+        const [{ readLocalProcessInventory }, { getPtyClient }] = await Promise.all([
+          import("../../services/localProcessInventory.js"),
+          import("../../window/serviceRefs.js"),
+        ]);
+        return readLocalProcessInventory(getPtyClient);
+      },
       onWorktreesMaybeChanged: onLocalWorktreesMaybeChanged,
     },
   });

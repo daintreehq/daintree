@@ -8,25 +8,7 @@ import type {
   ClosedProcessKillTarget,
   ProcessInventorySnapshot,
 } from "../../../shared/types/processes.js";
-import type * as PluginServiceModule from "../../services/PluginService.js";
-import { collectProcessInventory } from "../../services/processInventory.js";
-import { getLineageReapReport } from "../../services/TerminalLineageLedger.js";
-import { projectStore } from "../../services/ProjectStore.js";
-import { scratchStore } from "../../services/ScratchStore.js";
-import { getAppMetricsSnapshot } from "../../utils/appMetricsSnapshot.js";
-
-type PluginServiceSingleton = typeof PluginServiceModule.pluginService;
-
-// Lazy (mirrors pluginProcess.ts): a static import would put PluginService on
-// the eager startup path.
-let cachedPluginService: PluginServiceSingleton | null = null;
-async function getPluginService(): Promise<PluginServiceSingleton> {
-  if (!cachedPluginService) {
-    const mod = await import("../../services/PluginService.js");
-    cachedPluginService = mod.pluginService;
-  }
-  return cachedPluginService;
-}
+import { readLocalProcessInventory } from "../../services/localProcessInventory.js";
 
 /**
  * A closed terminal's leftovers still belong to the project the ledger
@@ -87,25 +69,7 @@ export function createProcessesNamespace(deps: Pick<HandlerDependencies, "ptyCli
       getSnapshot: op(
         PROCESSES_METHOD_CHANNELS.getSnapshot,
         async (): Promise<ProcessInventorySnapshot> =>
-          collectProcessInventory({
-            getHostInventory: async (extraPids) =>
-              deps.ptyClient
-                ? deps.ptyClient.getProcessInventory(extraPids)
-                : { inventories: [], shardsTotal: 1, shardsFailed: 1 },
-            getWorkspaceNames: () => [
-              ...projectStore.getAllProjectIdentities(),
-              ...scratchStore.getAllScratches(),
-            ],
-            getPluginProcesses: async () => {
-              const pluginService = await getPluginService();
-              return {
-                children: pluginService.listManagedProcesses(),
-                workers: pluginService.getWorkerGovernanceSnapshots(),
-              };
-            },
-            getAppMetrics: () => getAppMetricsSnapshot(),
-            getCleanupReport: () => getLineageReapReport(),
-          })
+          readLocalProcessInventory(() => deps.ptyClient)
       ),
       killClosedTerminalProcesses: op(
         PROCESSES_METHOD_CHANNELS.killClosedTerminalProcesses,

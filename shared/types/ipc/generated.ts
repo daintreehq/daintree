@@ -1838,6 +1838,10 @@ export interface GeneratedIpcInvokeMap {
     args: [payload: { hostId: string }];
     result: import("./hostMetrics.js").HostWorktreeEntry[];
   };
+  "host-metrics:process-inventory": {
+    args: [payload: { hostId: string }];
+    result: import("./hostMetrics.js").HostProcessInventoryResult;
+  };
   "host-metrics:submit-fleet": {
     args: [payload: import("./hostMetrics.js").HostFleetSubmitPayload];
     result: void;

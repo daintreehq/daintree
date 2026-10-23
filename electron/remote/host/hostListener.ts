@@ -36,7 +36,11 @@ import { HostServer } from "./HostServer.js";
 import { hostLaunchCommand, hostLocation } from "./hostLocation.js";
 import type { HostSocketLocation } from "./hostSocketPath.js";
 import { initRemoteHostsHost } from "./initHost.js";
-import { installHostMetricsHost, installLinkActivityHost } from "../metrics/hostMetricsHost.js";
+import {
+  installHostMetricsHost,
+  installLinkActivityHost,
+  installProcessInventoryHost,
+} from "../metrics/hostMetricsHost.js";
 import { composeLinkActivity } from "./linkActivity.js";
 import { installCanopyHost } from "../canopy/hostInstall.js";
 import { installDeviceAnswerHost } from "../deviceAnswer/hostInstall.js";
@@ -390,6 +394,17 @@ async function buildHostListener(
           connectedAt: connectedAtBySession.get(ctx.sessionId) ?? now(),
         })),
       });
+    })
+  );
+
+  // What a Shell's Processes view of this host lists, read only when it asks.
+  teardowns.push(
+    installProcessInventoryHost(server, async () => {
+      const [{ readLocalProcessInventory }, { getPtyClient }] = await Promise.all([
+        import("../../services/localProcessInventory.js"),
+        import("../../window/serviceRefs.js"),
+      ]);
+      return readLocalProcessInventory(getPtyClient);
     })
   );
 

@@ -2,7 +2,9 @@ import type {
   HostFleetTargetList,
   HostLinkActivity,
   HostWorktreeEntry,
+  RemoteProcessInventory,
 } from "../../../shared/types/ipc/hostMetrics.js";
+import type { ProcessInventorySnapshot } from "../../../shared/types/processes.js";
 import type { NotificationSettings } from "../../../shared/types/ipc/api.js";
 import type { HostRestartImpact } from "../../../shared/types/ipc/remoteHosts.js";
 import type { HostMetricsSummary } from "../../../shared/types/remoteHosts.js";
@@ -13,6 +15,7 @@ import type { LinkSession } from "../link/session.js";
 import { EmptyPayloadSchema } from "../host/linkMethods.js";
 import type { FleetCaller } from "./hostOps.js";
 import { WorktreeChangeWatch } from "./worktreeChanges.js";
+import { boundProcessInventory } from "./processInventoryWire.js";
 import {
   MAX_RESTART_SHELLS,
   MetricsLinkMethod,
@@ -275,6 +278,29 @@ export function installLinkActivityHost(
     if (wired.has(session)) return;
     wired.add(session);
     session.registerCallHandler(MetricsLinkMethod.LINK_ACTIVITY, EmptyPayloadSchema, read);
+  };
+  for (const ctx of server.sessions) wire(ctx);
+  return server.onSession(wire);
+}
+
+/**
+ * Answer every attached Shell's `PROCESS_INVENTORY` with this host's
+ * processes, read afresh for each call and bounded for the link. A summary-only
+ * session gets it too: no view needs to be bound. Nothing here ends a process.
+ */
+export function installProcessInventoryHost(
+  server: MetricsSessionSource,
+  read: () => Promise<ProcessInventorySnapshot>
+): () => void {
+  const wired = new WeakSet<LinkSession>();
+  const wire = ({ session }: MetricsSessionContext): void => {
+    if (wired.has(session)) return;
+    wired.add(session);
+    session.registerCallHandler(
+      MetricsLinkMethod.PROCESS_INVENTORY,
+      EmptyPayloadSchema,
+      async (): Promise<RemoteProcessInventory> => boundProcessInventory(await read())
+    );
   };
   for (const ctx of server.sessions) wire(ctx);
   return server.onSession(wire);

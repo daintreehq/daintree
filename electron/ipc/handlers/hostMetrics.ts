@@ -6,6 +6,7 @@ import type {
   HostFleetTargetList,
   HostLinkActivityResult,
   HostMetricsSnapshot,
+  HostProcessInventoryResult,
   HostWorktreeEntry,
 } from "../../../shared/types/ipc/hostMetrics.js";
 
@@ -36,6 +37,11 @@ export const hostMetricsNamespace = defineIpcNamespace({
       HOST_METRICS_METHOD_CHANNELS.linkActivity,
       async (payload: { hostId: string }): Promise<HostLinkActivityResult> =>
         requireRemoteService("hostMetrics").linkActivity(payload)
+    ),
+    processInventory: op(
+      HOST_METRICS_METHOD_CHANNELS.processInventory,
+      async (payload: { hostId: string }): Promise<HostProcessInventoryResult> =>
+        requireRemoteService("hostMetrics").processInventory(payload)
     ),
   },
 });
