@@ -47,6 +47,7 @@ describe("createMcpRelayExecutor ending a caller (#14024)", () => {
 
   function harness(hooks: {
     hasProject?: () => Promise<boolean>;
+    opened?: Promise<void>;
     answer?: () => Promise<CallToolResult>;
   }) {
     const sessions: Array<{ closed: boolean }> = [];
@@ -57,9 +58,13 @@ describe("createMcpRelayExecutor ending a caller (#14024)", () => {
       openSession: async () => {
         const session = { closed: false };
         sessions.push(session);
+        await hooks.opened;
         return {
           isOpen: () => !session.closed,
-          callTool: () => (hooks.answer ?? (async () => ANSWER))(),
+          callTool: async () => {
+            if (session.closed) throw new Error("called on a closed session");
+            return (hooks.answer ?? (async () => ANSWER))();
+          },
           close: () => {
             session.closed = true;
           },
@@ -97,6 +102,40 @@ describe("createMcpRelayExecutor ending a caller (#14024)", () => {
     await expect(call).resolves.toMatchObject({ status: "done" });
     expect(sessions).toHaveLength(1);
     expect(sessions[0]!.closed).toBe(true);
+    expect(retired).toEqual([["local", "help-1"]]);
+  });
+
+  it("serves a call whose session was still opening when its caller ended, then closes it", async () => {
+    const opened = deferred<void>();
+    const { executor, sessions, retired } = harness({ opened: opened.promise });
+    const call = executor.call(SPEC, PAYLOAD);
+    await vi.waitFor(() => expect(sessions).toHaveLength(1));
+
+    executor.endPrincipal("local", "help-1");
+    expect(retired).toEqual([]);
+    opened.resolve();
+
+    await expect(call).resolves.toMatchObject({ status: "done", result: { isError: false } });
+    expect(sessions[0]!.closed).toBe(true);
+    expect(retired).toEqual([["local", "help-1"]]);
+  });
+
+  it("ends the hold once the last of several running calls settles", async () => {
+    const first = deferred<CallToolResult>();
+    const second = deferred<CallToolResult>();
+    const answers = [first.promise, second.promise];
+    const { executor, retired } = harness({ answer: () => answers.shift()! });
+    const one = executor.call(SPEC, PAYLOAD);
+    const two = executor.call(SPEC, { ...PAYLOAD, callId: "call-2" });
+    await vi.waitFor(() => expect(answers).toHaveLength(0));
+
+    executor.endPrincipal("local", "help-1");
+    first.resolve(ANSWER);
+    await one;
+    expect(retired).toEqual([]);
+
+    second.resolve(ANSWER);
+    await two;
     expect(retired).toEqual([["local", "help-1"]]);
   });
 
