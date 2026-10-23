@@ -232,6 +232,7 @@ import {
 import {
   createHost as createPluginHost,
   buildScopedFsApi,
+  noteNewestPluginInstance,
   type PluginHostFactoryDeps,
   type PluginWorktreeEventPayload,
   type PluginWorktreeSnapshotFetchResult,
@@ -2880,6 +2881,7 @@ export class PluginService {
     // authority is resolvable the instant the plugin is addressable.
     const authority = this.mintPluginAuthority(pluginId, plugin.dir);
     this.plugins.set(pluginId, plugin);
+    noteNewestPluginInstance(this.plugins, pluginId, plugin);
     this.claimProjectContextNamespace(pluginId);
     if (customIconAssets.length > 0) {
       registerPluginCustomIcons(pluginId, customIconAssets);
@@ -5110,6 +5112,7 @@ export class PluginService {
     // Without it a test cannot reproduce the shape the registry actually holds
     // for a project plugin, which is where the two diverge (#12214).
     this.plugins.set(instanceKey ?? plugin.manifest.name, plugin);
+    noteNewestPluginInstance(this.plugins, instanceKey ?? plugin.manifest.name, plugin);
   }
 
   _unregisterFakePluginForTests(pluginId: string): void {

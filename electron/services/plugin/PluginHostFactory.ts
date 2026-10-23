@@ -980,14 +980,29 @@ function runAgentMcpTool(
  * installed and builtin plugins and leaves every surface exactly as it was.
  */
 /**
- * Per plugin registry, the newest instance a host was made for under each id —
+ * Per plugin registry, the newest instance registered or hosted under each id —
  * kept past that instance's unload, so a host from an older generation stays
  * retired from settings writes (#14092).
  */
-const newestHostedInstances = new WeakMap<
-  PluginHostFactoryDeps["plugins"],
-  Map<string, LoadedPlugin>
->();
+const newestInstances = new WeakMap<PluginHostFactoryDeps["plugins"], Map<string, LoadedPlugin>>();
+
+/**
+ * Record `plugin` as the newest instance under `pluginId`. Called as it enters
+ * the registry, so a successor that never makes a host (a lazy plugin whose
+ * secret was saved from the settings form) still retires its predecessor's hosts.
+ */
+export function noteNewestPluginInstance(
+  plugins: PluginHostFactoryDeps["plugins"],
+  pluginId: string,
+  plugin: LoadedPlugin
+): void {
+  let byId = newestInstances.get(plugins);
+  if (!byId) {
+    byId = new Map();
+    newestInstances.set(plugins, byId);
+  }
+  byId.set(pluginId, plugin);
+}
 
 export function createHost(
   deps: PluginHostFactoryDeps,
@@ -1218,13 +1233,7 @@ export function createHost(
   // A host made before its instance was registered has no frozen manifest and
   // falls back to the live one (`undefined` takes the lookup's default).
   const declaring = boundPlugin?.manifest;
-  let newestHosted = newestHostedInstances.get(deps.plugins);
-  if (!newestHosted) {
-    newestHosted = new Map();
-    newestHostedInstances.set(deps.plugins, newestHosted);
-  }
-  if (boundPlugin !== undefined) newestHosted.set(pluginId, boundPlugin);
-  const hostedInstances = newestHosted;
+  if (boundPlugin !== undefined) noteNewestPluginInstance(deps.plugins, pluginId, boundPlugin);
   const assertSettingsInstanceCurrent = (method: string): void => {
     if (boundPlugin === undefined) return;
     const current = deps.plugins.get(pluginId);
@@ -1232,7 +1241,7 @@ export function createHost(
     // own settings, perhaps a secret this instance declared ordinary, stay on disk.
     const superseded =
       (current !== undefined && current !== boundPlugin) ||
-      hostedInstances.get(pluginId) !== boundPlugin;
+      newestInstances.get(deps.plugins)?.get(pluginId) !== boundPlugin;
     if (superseded) {
       throw new Error(
         `PLUGIN_UNLOADED: plugin "${pluginId}" settings.${method}: this instance was replaced by a reload; only the running instance can change its settings`

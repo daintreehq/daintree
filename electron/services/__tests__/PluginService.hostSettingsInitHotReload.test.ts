@@ -842,31 +842,45 @@ describe("createHost — settings", () => {
     // The successor unloading doesn't hand authority back to the instance it
     // replaced: that instance declared the key ordinary, so its write would
     // overwrite the successor's encrypted value with plaintext.
-    it("keeps a replaced instance retired after its successor unloads", async () => {
-      safeStorageMock.state.available = true;
-      const pluginId = "acme.bound-successor-gone";
-      const { service, settingsRoot } = await setupSettingsService(pluginId, [
-        { id: "token", type: "string" },
-      ]);
-      const { host: retired } = createSettingsHost(service, pluginId);
-      replacePlugin(service, pluginId, [{ id: "token", type: "secret" }]);
-      const { host: successor } = createSettingsHost(service, pluginId);
-      await successor.settings.set("token", "synthetic-secret-value");
-      service.unloadPlugin(pluginId);
+    // A successor that never made a host (a lazy plugin whose secret was saved
+    // from the settings form) retires its predecessor just the same.
+    it.each(["made a host", "never made a host"])(
+      "keeps a replaced instance retired after a successor that %s unloads",
+      async (successorShape) => {
+        safeStorageMock.state.available = true;
+        const pluginId = `acme.bound-successor-${successorShape === "made a host" ? "hosted" : "hostless"}`;
+        const { service, settingsRoot } = await setupSettingsService(pluginId, [
+          { id: "token", type: "string" },
+        ]);
+        const { host: retired } = createSettingsHost(service, pluginId);
+        replacePlugin(service, pluginId, [{ id: "token", type: "secret" }]);
+        if (successorShape === "made a host") {
+          const { host: successor } = createSettingsHost(service, pluginId);
+          await successor.settings.set("token", "synthetic-secret-value");
+        } else {
+          const settings = (service as unknown as ServiceWithSettingsManager).settings;
+          const file = settings.resolveSettingsFilePath(pluginId, "user")!;
+          const store = settings.getOrCreateSettingsStore(pluginId, file) as unknown as {
+            set: (key: string, value: unknown, opts: { secret: boolean }) => Promise<boolean>;
+          };
+          await store.set("token", "synthetic-secret-value", { secret: true });
+        }
+        service.unloadPlugin(pluginId);
 
-      await expect(retired.settings.set("token", "synthetic-plain-value")).rejects.toThrow(
-        /^PLUGIN_UNLOADED: .*was replaced/
-      );
-      await expect(retired.settings.unset("token")).rejects.toThrow(
-        /^PLUGIN_UNLOADED: .*was replaced/
-      );
+        await expect(retired.settings.set("token", "synthetic-plain-value")).rejects.toThrow(
+          /^PLUGIN_UNLOADED: .*was replaced/
+        );
+        await expect(retired.settings.unset("token")).rejects.toThrow(
+          /^PLUGIN_UNLOADED: .*was replaced/
+        );
 
-      const raw = await fs.readFile(path.join(settingsRoot, `${pluginId}.json`), "utf-8");
-      expect(raw).not.toContain("synthetic-plain-value");
-      expect((JSON.parse(raw) as Record<string, unknown>).token).toMatchObject({
-        __daintreeSecret: "daintree:secret:v1",
-      });
-    });
+        const raw = await fs.readFile(path.join(settingsRoot, `${pluginId}.json`), "utf-8");
+        expect(raw).not.toContain("synthetic-plain-value");
+        expect((JSON.parse(raw) as Record<string, unknown>).token).toMatchObject({
+          __daintreeSecret: "daintree:secret:v1",
+        });
+      }
+    );
   });
 
   // #10586: get must honor a key's manifest-declared scope rather than silently
