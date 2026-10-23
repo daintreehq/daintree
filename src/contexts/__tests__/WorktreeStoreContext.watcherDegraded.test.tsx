@@ -307,6 +307,8 @@ describe("WorktreeStoreProvider — confirmed forge-auth escalation", () => {
       emit("fetch-auth-failure-confirmed", {
         type: "fetch-auth-failure-confirmed",
         reason: "auth-failed",
+        repoName: "acme-app",
+        remote: "upstream",
       });
     });
 
@@ -315,24 +317,34 @@ describe("WorktreeStoreProvider — confirmed forge-auth escalation", () => {
       type?: string;
       priority?: string;
       title?: string;
-      action?: { label?: string };
+      message?: string;
+      action?: { label?: string; actionId?: string };
       supersedeKey?: string;
     };
     expect(payload.type).toBe("error");
+    // Names what failed and says the forge token isn't the fix (#14208).
+    expect(payload.message).toContain("acme-app");
+    expect(payload.message).toContain("upstream");
+    expect(payload.message).toMatch(/separate from Daintree's forge token/);
     // An error toast must never be low-priority (silently dropped — lint-banned).
     expect(payload.priority).not.toBe("low");
     expect(payload.title).toBeTruthy();
     expect(payload.action?.label).toBeTruthy();
+    // The inbox keeps only actions carrying an id, so this is what keeps the
+    // retry reachable after the toast times out.
+    expect(payload.action?.actionId).toBe("git.retryAuthFetch");
     expect(payload.supersedeKey).toBeTruthy();
   });
 
-  it("dispatches the forge settings action when the recovery button fires", async () => {
+  it("retries the suspended fetch instead of opening forge settings when the recovery button fires", async () => {
     await renderProvider();
 
     act(() => {
       emit("fetch-auth-failure-confirmed", {
         type: "fetch-auth-failure-confirmed",
         reason: "auth-failed",
+        repoName: "acme-app",
+        remote: "upstream",
       });
     });
 
@@ -341,10 +353,13 @@ describe("WorktreeStoreProvider — confirmed forge-auth escalation", () => {
       payload.action?.onClick?.();
     });
 
-    expect(dispatchMock).toHaveBeenCalledWith(
+    expect(dispatchMock).toHaveBeenCalledWith("git.retryAuthFetch", undefined, {
+      source: "user",
+    });
+    expect(dispatchMock).not.toHaveBeenCalledWith(
       "app.settings.openTab",
-      expect.objectContaining({ tab: "code-forge" }),
-      expect.objectContaining({ source: "user" })
+      expect.anything(),
+      expect.anything()
     );
   });
 
@@ -356,6 +371,8 @@ describe("WorktreeStoreProvider — confirmed forge-auth escalation", () => {
       emit("fetch-auth-failure-confirmed", {
         type: "fetch-auth-failure-confirmed",
         reason: "auth-failed",
+        repoName: "acme-app",
+        remote: "upstream",
       });
     });
 

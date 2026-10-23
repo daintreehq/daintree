@@ -13,7 +13,6 @@ interface MainWorktreeSecondaryRowProps {
   isActive: boolean;
   isMuted?: boolean;
   hasAuthFailedSignIn: boolean;
-  authProviderId?: string | null;
   aheadCount: number | undefined;
   behindCount: number | undefined;
   isFetchInFlight: boolean;
@@ -33,7 +32,6 @@ export function MainWorktreeSecondaryRow({
   isActive,
   isMuted,
   hasAuthFailedSignIn,
-  authProviderId,
   aheadCount,
   behindCount,
   isFetchInFlight,
@@ -70,7 +68,6 @@ export function MainWorktreeSecondaryRow({
           fetchAuthFailed={fetchAuthFailed}
           fetchNetworkFailed={fetchNetworkFailed}
           hasAuthFailedSignIn={hasAuthFailedSignIn}
-          authProviderId={authProviderId}
           containerGapClass="gap-1"
         />
       )}

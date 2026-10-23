@@ -1202,6 +1202,20 @@ export function registerGitActions(actions: ActionRegistry, _callbacks: ActionCa
     },
   }));
 
+  actions.set("git.retryAuthFetch", () => ({
+    id: "git.retryAuthFetch",
+    title: "Retry suspended fetches",
+    description:
+      "Lift the pause on background fetches that Git rejected for authentication and fetch every worktree again. Use after fixing the SSH key or Git credential helper.",
+    category: "git",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    run: async () => {
+      await window.electron.worktree.retryAuthFetch();
+    },
+  }));
+
   actions.set("git.getStagingStatus", () => ({
     id: "git.getStagingStatus",
     title: "Get staging status",

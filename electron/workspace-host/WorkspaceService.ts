@@ -4,7 +4,7 @@ import { randomUUID } from "node:crypto";
 import PQueue from "p-queue";
 import { existsSync } from "fs";
 import { stat, readFile, readdir, access, mkdir, realpath } from "fs/promises";
-import { resolve as pathResolve, isAbsolute, dirname } from "path";
+import { resolve as pathResolve, isAbsolute, dirname, basename } from "path";
 import { validateBranchName } from "../../shared/utils/pathPattern.js";
 import {
   findNestedWorktreePaths,
@@ -202,6 +202,18 @@ function dependsOnRemote(monitor: WorktreeMonitor): string {
     baseRemote: monitor.baseRemote,
     availableRemotes: monitor.availableRemotes,
   }).primaryRemote;
+}
+
+/**
+ * A repo's folder name from its common dir: `/x/repo/.git` → `repo`, and a bare
+ * `/x/repo.git` → `repo`. Lets the auth toast name the repo without the path.
+ */
+export function repoNameFromCommonDir(commonDir: string): string {
+  const trimmed = commonDir.replace(/[\\/]+$/, "");
+  const leaf = basename(trimmed);
+  const name =
+    leaf.toLowerCase() === ".git" ? basename(dirname(trimmed)) : leaf.replace(/\.git$/i, "");
+  return name || "this repository";
 }
 import { waitForPathExists } from "../utils/fs.js";
 import { markHostPerformance } from "../utils/hostPerformance.js";
@@ -858,8 +870,8 @@ export class WorkspaceService {
         // not surface as an unhandled rejection.
         void this.refreshStatusForFetchSiblings(worktreeId).catch(() => {});
       },
-      onAuthFailureConfirmed: (commonDir, _remote, reason) =>
-        this.handleAuthFailureConfirmed(commonDir, reason),
+      onAuthFailureConfirmed: (commonDir, remote, reason) =>
+        this.handleAuthFailureConfirmed(commonDir, remote, reason),
       readRemotes: createRemoteInventoryReader(async (worktreePath) => {
         try {
           const { availableRemotes, succeeded } = await readRemotesWithStatus(
@@ -2996,16 +3008,22 @@ export class WorkspaceService {
    * session (the renderer turns it into one toast). The per-commondir guard
    * dedups the fan-out across sibling worktrees; it's reset by
    * `retryAuthFetch()` / credential rotation so a re-confirmation re-notifies.
-   * The raw commondir path never leaves the host — only the classified reason
-   * crosses the IPC boundary.
+   * The raw commondir path never leaves the host — only the repo's folder
+   * name, the remote name and the classified reason cross the IPC boundary.
    */
   private handleAuthFailureConfirmed(
     commonDir: string,
+    remote: string,
     reason: import("../../shared/types/ipc/errors.js").GitOperationReason
   ): void {
     if (this.authFailureConfirmedNotified.has(commonDir)) return;
     this.authFailureConfirmedNotified.add(commonDir);
-    this.sendEvent({ type: "fetch-auth-failure-confirmed", reason });
+    this.sendEvent({
+      type: "fetch-auth-failure-confirmed",
+      reason,
+      repoName: repoNameFromCommonDir(commonDir),
+      remote,
+    });
   }
 
   /**

@@ -213,6 +213,7 @@ export const BUILT_IN_ACTION_IDS = [
   "git.continueRepositoryOperation",
   "git.forcePushWithLease",
   "git.markSafeDirectory",
+  "git.retryAuthFetch",
   "git.getStagingStatus",
 
   // -- preferencesActions --

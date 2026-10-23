@@ -492,7 +492,6 @@ export function WorktreeHeader({
           isActive={isActive}
           isMuted={isMuted}
           hasAuthFailedSignIn={hasAuthFailedSignIn}
-          authProviderId={worktree.matchedForgeProviderId ?? worktree.linked?.providerId ?? null}
           aheadCount={worktree.aheadCount}
           behindCount={worktree.behindCount}
           isFetchInFlight={Boolean(worktree.isFetchInFlight)}

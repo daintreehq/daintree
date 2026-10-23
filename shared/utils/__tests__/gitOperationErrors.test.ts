@@ -45,10 +45,6 @@ describe("classifyGitError — table-driven", () => {
     ["repository-not-found", "remote: ERROR: Repository not found."],
     ["repository-not-found", "fatal: repository 'https://github.com/foo/bar.git/' not found"],
     [
-      "repository-not-found",
-      "fatal: Could not read from remote repository.\nPlease make sure you have the correct access rights",
-    ],
-    [
       "network-unavailable",
       "fatal: unable to access 'https://github.com/foo.git/': Could not resolve host: github.com",
     ],
@@ -176,6 +172,120 @@ describe("classifyGitError — ordering and normalization", () => {
     expect(classifyGitError(" ! [Rejected]        main -> main (Non-Fast-Forward)")).toBe(
       "push-rejected-outdated"
     );
+  });
+
+  // #14208: git's die_initial_contact prints the "Could not read from remote
+  // repository" footer after every SSH transport failure, so these must land on
+  // network-unavailable — never repository-not-found, which the fetch
+  // coordinator escalates to a confirmed auth failure after a prior success.
+  it.each([
+    "ssh: Could not resolve hostname github.com: nodename nor servname provided, or not known",
+    "ssh: Could not resolve hostname github.com: Temporary failure in name resolution",
+    "ssh: Could not resolve hostname github.com: Name or service not known",
+    "ssh: connect to host github.com port 22: Connection timed out",
+    "ssh: connect to host github.com port 22: Operation timed out",
+    "ssh: connect to host github.com port 22: Connection refused",
+    "ssh: connect to host ssh.github.com port 443: Network is unreachable",
+    "ssh: connect to host github.com port 22: No route to host",
+    "Connection reset by 140.82.112.3 port 22",
+    "Connection closed by 140.82.112.3 port 22",
+    "kex_exchange_identification: read: Connection reset by peer",
+    "kex_exchange_identification: Connection closed by remote host",
+    "client_loop: send disconnect: Broken pipe",
+    "ssh_exchange_identification: read: Connection reset by peer",
+    "ssh_dispatch_run_fatal: Connection to 140.82.112.3 port 22: Operation timed out",
+    "Connection timed out during banner exchange",
+    "Read from remote host github.com: Connection reset by peer",
+  ])("classifies SSH transport failure %j as network-unavailable", (line) => {
+    const msg = `${line}\nfatal: Could not read from remote repository.\n\nPlease make sure you have the correct access rights\nand the repository exists.`;
+    expect(classifyGitError(msg)).toBe("network-unavailable");
+  });
+
+  it.each([
+    "fatal: unable to access 'https://github.com/foo.git/': Failed to connect to github.com port 443 after 75003 ms: Couldn't connect to server",
+    "fatal: unable to access 'https://github.com/foo.git/': Failed to connect to github.com port 443 after 21045 ms: Connection timed out",
+    "fatal: unable to access 'https://github.com/foo.git/': Failed to connect to github.com port 443 after 75001 ms: Operation timed out",
+    "fatal: unable to access 'https://github.com/foo.git/': Failed to connect to github.com port 443: Couldn't connect to server",
+    "fatal: unable to access 'https://github.com/foo.git/': Connection timed out after 300000 milliseconds",
+    "fatal: unable to access 'https://github.com/foo.git/': Operation timed out after 300000 milliseconds with 0 out of 0 bytes received",
+    "fatal: unable to access 'https://github.com/foo.git/': Recv failure: Connection reset by peer",
+    "fatal: unable to access 'https://github.com/foo.git/': SSL connection timeout",
+  ])("classifies HTTPS transport failure %j as network-unavailable", (msg) => {
+    expect(classifyGitError(msg)).toBe("network-unavailable");
+  });
+
+  it("does not treat the bare 'Could not read from remote repository' footer as a missing repo", () => {
+    const msg =
+      "fatal: Could not read from remote repository.\n\nPlease make sure you have the correct access rights\nand the repository exists.";
+    expect(classifyGitError(msg)).toBe("unknown");
+  });
+
+  it.each([
+    "ERROR: Repository not found.",
+    "ERROR: The project you were looking for could not be found or you don't have permission to view it.",
+    "fatal: '/srv/git/repo.git' does not appear to be a git repository",
+  ])("keeps an SSH missing-repo line as repository-not-found: %j", (line) => {
+    const msg = `${line}\nfatal: Could not read from remote repository.\n\nPlease make sure you have the correct access rights\nand the repository exists.`;
+    expect(classifyGitError(msg)).toBe("repository-not-found");
+  });
+
+  it("keeps an SSH timeout with git's footer as network-unavailable", () => {
+    const msg =
+      "ssh: connect to host gitlab.com port 22: Connection timed out\nfatal: Could not read from remote repository.\n\nPlease make sure you have the correct access rights\nand the repository exists.";
+    expect(classifyGitError(msg)).toBe("network-unavailable");
+  });
+
+  it.each([
+    "git@git.example.com: Permission denied (gssapi-keyex,gssapi-with-mic,publickey).",
+    "git@git.example.com: Permission denied (gssapi-with-mic,password).",
+    "git@git.example.com: Permission denied (keyboard-interactive).",
+    "git@git.example.com: Permission denied (hostbased,publickey).",
+  ])("classifies SSH denial %j as auth-failed whatever the method order", (line) => {
+    const msg = `${line}\nfatal: Could not read from remote repository.`;
+    expect(classifyGitError(msg)).toBe("auth-failed");
+  });
+
+  it.each<[GitOperationReason, string]>([
+    ["auth-failed", "fatal: Authentication failed for 'https://github.com/org/repo.git/'"],
+    [
+      "auth-failed",
+      "fatal: unable to access 'https://github.com/org/repo.git/': The requested URL returned error: 401",
+    ],
+    [
+      "auth-failed",
+      "fatal: unable to access 'https://github.com/org/repo.git/': The requested URL returned error: 403",
+    ],
+  ])("keeps HTTPS auth failure as %s: %j", (expected, msg) => {
+    expect(classifyGitError(msg)).toBe(expected);
+  });
+
+  // OpenSSH prints the "Connection closed by <ip> port N" teardown line after
+  // failures that have nothing to do with connectivity; the specific diagnosis
+  // must win over it.
+  it.each<[GitOperationReason, string]>([
+    ["auth-failed", "git@github.com: Permission denied (publickey)."],
+    ["auth-failed", "git@git.example.com: Permission denied (publickey,password)."],
+    ["auth-failed", "git@git.example.com: Permission denied (password)."],
+    ["repository-not-found", "ERROR: Repository not found."],
+    ["unknown", "Host key verification failed."],
+  ])("classifies %s ahead of a trailing connection close: %j", (expected, line) => {
+    const msg = `${line}\nConnection closed by 140.82.112.3 port 22\nfatal: Could not read from remote repository.`;
+    expect(classifyGitError(msg)).toBe(expected);
+  });
+
+  it.each([
+    "remote: Connection closed by 10.0.0.5 port 22",
+    "remote: deploy@deploy.internal: Permission denied (password).",
+    "remote: Read from remote host deploy.internal: Connection reset by peer",
+  ])("keeps a hook rejection ahead of SSH output the hook relayed: %j", (line) => {
+    const msg = `${line}\n ! [remote rejected] main -> main (pre-receive hook declined)`;
+    expect(classifyGitError(msg)).toBe("hook-rejected");
+  });
+
+  it("classifies an SSH password-method denial with only git's footer as auth-failed", () => {
+    const msg =
+      "git@git.example.com: Permission denied (publickey,password).\nfatal: Could not read from remote repository.";
+    expect(classifyGitError(msg)).toBe("auth-failed");
   });
 
   it("prefers network-unavailable over repository-not-found when both signals appear", () => {

@@ -79,7 +79,6 @@ export function QuietGitDetails({
         fetchAuthFailed={Boolean(worktree.fetchAuthFailed)}
         fetchNetworkFailed={Boolean(worktree.fetchNetworkFailed)}
         hasAuthFailedSignIn={hasAuthFailedSignIn}
-        authProviderId={worktree.matchedForgeProviderId ?? worktree.linked?.providerId ?? null}
         containerGapClass="gap-1.5"
         baseBranchName={isDetached ? undefined : worktree.baseBranchName}
         baseAheadCount={worktree.baseAheadCount}
