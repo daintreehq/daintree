@@ -75,12 +75,20 @@ function currentContext(): ApplicationNavigationContext | null {
   );
 }
 
-/** The project's history, resolved against the live declaration. */
+/**
+ * The project's history, resolved against the live declaration. A record read
+ * from disk is held to the declaration's `persist` flags as they are now, so a
+ * parameter that has since become session-only is not restored from disk.
+ */
 export function resolveApplicationNavigationHistory(
   context: ApplicationNavigationContext,
   record: ApplicationNavigationRecord | null
 ): NavigationHistory {
-  return restoreNavigationHistory(context.navigation, record?.entries, record?.index);
+  const history = restoreNavigationHistory(context.navigation, record?.entries, record?.index);
+  const session = useApplicationNavigationStore.getState().sessions[context.key];
+  return record !== null && record === session
+    ? history
+    : persistableNavigationHistory(context.navigation, history);
 }
 
 function readHistory(context: ApplicationNavigationContext): NavigationHistory {
@@ -152,7 +160,8 @@ function pendingReveal(context: ApplicationNavigationContext): "home" | "grid" |
   if (context.destination === "home") {
     const surface = currentProjectSurface("projectHome");
     if (surface === null || surface.claim.pluginId !== context.instanceId) return null;
-    return onHome ? null : "home";
+    // A maximized panel draws over Home, so being on it isn't being shown it.
+    return onHome && usePanelStore.getState().maximizedId === null ? null : "home";
   }
   return onHome ? "grid" : null;
 }

@@ -631,7 +631,8 @@ interface PanelViewProps {
      *
      * The location is restored per project after a remount, an evicted renderer
      * or a restart, but only parameters declared `persist` are written to disk;
-     * the others last for the window's session. A location that no longer
+     * the others last as long as the project's renderer, so they survive a
+     * remount but not an evicted or reloaded renderer. A location that no longer
      * resolves — its section removed, a parameter that no longer validates, a
      * raised `navigation.version` — restores as the default section.
      *

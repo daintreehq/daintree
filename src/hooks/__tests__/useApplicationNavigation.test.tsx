@@ -6,7 +6,7 @@ import type { ProjectApplicationState } from "@shared/types/plugin";
 vi.mock("@/hooks/useHostPlatform", () => ({ hostScopedKey: (id: string) => `local:${id}` }));
 vi.mock("@/hooks/useRenderableSurfaceClaim", () => ({ currentProjectSurface: () => null }));
 vi.mock("@/store/panelStore", () => ({
-  usePanelStore: { getState: () => ({ exitMaximize: () => {} }) },
+  usePanelStore: { getState: () => ({ exitMaximize: () => {}, maximizedId: null }) },
 }));
 vi.mock("@/store/projectPluginStore", async () => {
   const { create } = await import("zustand");

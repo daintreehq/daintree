@@ -6,13 +6,14 @@ const surface = vi.hoisted(() => ({
   current: null as null | { claim: { pluginId: string; panelKindId: string } },
 }));
 const exitMaximize = vi.hoisted(() => vi.fn());
+const panels = vi.hoisted(() => ({ maximizedId: null as string | null }));
 
 vi.mock("@/hooks/useHostPlatform", () => ({ hostScopedKey: (id: string) => `local:${id}` }));
 vi.mock("@/hooks/useRenderableSurfaceClaim", () => ({
   currentProjectSurface: () => surface.current,
 }));
 vi.mock("@/store/panelStore", () => ({
-  usePanelStore: { getState: () => ({ exitMaximize }) },
+  usePanelStore: { getState: () => ({ exitMaximize, maximizedId: panels.maximizedId }) },
 }));
 vi.mock("@/store/projectPluginStore", async () => {
   const { create } = await import("zustand");
@@ -122,6 +123,7 @@ beforeEach(() => {
   });
   surface.current = { claim: { pluginId: OWNER, panelKindId: "kind" } };
   exitMaximize.mockReset();
+  panels.maximizedId = null;
 });
 
 afterEach(() => {
@@ -285,6 +287,14 @@ describe("navigateApplication", () => {
     expect(exitMaximize).toHaveBeenCalledTimes(1);
   });
 
+  it("brings Home out from behind a maximized panel when the route is already Home", async () => {
+    const nav = await load();
+    nav.useProjectHomeStore.getState().showHome();
+    panels.maximizedId = "terminal-1";
+    nav.navigateApplication(OWNER, { sectionId: "record", params: { recordId: "a" } });
+    expect(exitMaximize).toHaveBeenCalledTimes(1);
+  });
+
   it("never brings forward a Home the application does not hold", async () => {
     const nav = await load();
     nav.useProjectHomeStore.getState().showGrid();
@@ -356,6 +366,29 @@ describe("restoring the location", () => {
       location: { sectionId: "overview" },
       canGoBack: false,
     });
+  });
+
+  it("does not restore from disk a parameter that has since become session-only", async () => {
+    const record = NAVIGATION.sections[1];
+    const nav = await navigateThenReload(
+      application(
+        {},
+        {
+          ...NAVIGATION,
+          sections: [
+            { id: "overview", title: "Overview" },
+            {
+              ...record!,
+              params: {
+                recordId: { type: "string", required: true },
+                draftTab: { type: "integer" },
+              },
+            },
+          ],
+        }
+      )
+    );
+    expect(nav.current()).toMatchObject({ location: { sectionId: "overview" } });
   });
 
   it("starts over when the application raises its navigation version", async () => {
