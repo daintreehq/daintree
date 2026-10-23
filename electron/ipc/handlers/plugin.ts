@@ -224,6 +224,7 @@ import { observeIpcEnvelopeRejections } from "../envelopeRejections.js";
 import { getIpcDispatcher } from "../dispatcher.js";
 import { isRemoteEndpointHandle } from "../endpoint.js";
 import { remoteAccountSignIn } from "../../services/plugin/remoteAccountSignIn.js";
+import type { AccountSignInBroker } from "../../services/plugin/PluginAccountService.js";
 import { panelLifecycleSourceFor } from "./pluginPanelLifecycleSource.js";
 import { getLocalEndpoint } from "../localEndpoint.js";
 import { LOCAL_HOST_ID } from "../../../shared/types/remoteHosts.js";
@@ -2443,18 +2444,25 @@ async function handleAccountList(
 /**
  * The sign-in runs here and the tokens are kept here. A window on another
  * machine signs in with that machine's browser: its own Shell catches the
- * redirect and hands back only the code.
+ * redirect and hands back only the code. That Shell names the click
+ * (`signInId`) so its browser opens for this sign-in and no other; a local
+ * window has no use for one.
  */
 async function handleAccountConnect(
   ctx: IpcContext,
   pluginId: string,
-  connectionId?: string
+  connectionId?: string,
+  signInId?: string
 ): Promise<PluginAccountConnectResult> {
   assertSenderOwnsAccount(ctx, pluginId);
   assertConnectionId(connectionId);
-  const broker = isRemoteCaller(ctx)
-    ? remoteAccountSignIn(ctx.endpoint, pluginId, connectionId)
-    : undefined;
+  let broker: AccountSignInBroker | undefined;
+  if (isRemoteCaller(ctx)) {
+    if (typeof signInId !== "string" || signInId.length === 0 || signInId.length > 128) {
+      throw new Error("plugin account rejected: the window named no sign-in");
+    }
+    broker = remoteAccountSignIn(ctx.endpoint, pluginId, connectionId, signInId);
+  }
   return (await getPluginService()).connectAccountFromUi(pluginId, connectionId, broker);
 }
 

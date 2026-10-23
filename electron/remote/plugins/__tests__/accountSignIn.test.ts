@@ -15,13 +15,14 @@ import { expectAccountSignIn, installAccountSignInRequests } from "../accountSig
 const PLUGIN = "acme.tracker";
 const VIEW = 11;
 const LOOPBACK = "http://127.0.0.1:50001/oauth/callback";
+const CHALLENGE = "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM";
 
 function authUrl(edit: (params: URLSearchParams) => void = () => {}): string {
   const url = new URL("https://auth.example.com/oauth/authorize?prompt=consent");
   url.searchParams.set("response_type", "code");
   url.searchParams.set("client_id", "daintree-client");
   url.searchParams.set("state", "synthetic-state");
-  url.searchParams.set("code_challenge", "synthetic-challenge");
+  url.searchParams.set("code_challenge", CHALLENGE);
   url.searchParams.set("code_challenge_method", "S256");
   edit(url.searchParams);
   return url.toString();
@@ -64,10 +65,15 @@ function ask(
   });
 }
 
-function signIn(
-  over: Partial<{ pluginId: string; connectionId: string | null; authUrl: string }> = {}
-) {
-  return { pluginId: PLUGIN, connectionId: null, authUrl: authUrl(), ...over };
+type SignInPayload = {
+  signInId: string;
+  pluginId: string;
+  connectionId: string | null;
+  authUrl: string;
+};
+
+function signIn(signInId: string, over: Partial<SignInPayload> = {}): SignInPayload {
+  return { signInId, pluginId: PLUGIN, connectionId: null, authUrl: authUrl(), ...over };
 }
 
 let loopback: ReturnType<typeof fakeLoopback>;
@@ -86,13 +92,13 @@ afterEach(() => {
 
 describe("account sign-ins a host asks this Shell to open (#14111)", () => {
   it("opens nothing for a sign-in no view here started", async () => {
-    await expect(ask(signIn())).rejects.toMatchObject({ code: "PERMISSION" });
+    await expect(ask(signIn("made-up"))).rejects.toMatchObject({ code: "PERMISSION" });
     expect(loopback.start).not.toHaveBeenCalled();
   });
 
   it("runs the browser half on this machine's loopback for the view that clicked Connect", async () => {
-    const release = expectAccountSignIn("studio", VIEW, PLUGIN, null);
-    const answer = ask(signIn());
+    const { signInId, release } = expectAccountSignIn("studio", VIEW, PLUGIN, null);
+    const answer = ask(signIn(signInId));
 
     const session = loopback.only();
     expect(session.state).toBe("synthetic-state");
@@ -100,7 +106,7 @@ describe("account sign-ins a host asks this Shell to open (#14111)", () => {
     expect(opened.origin + opened.pathname).toBe("https://auth.example.com/oauth/authorize");
     expect(opened.searchParams.get("redirect_uri")).toBe(LOOPBACK);
     expect(opened.searchParams.get("prompt")).toBe("consent");
-    expect(opened.searchParams.get("code_challenge")).toBe("synthetic-challenge");
+    expect(opened.searchParams.get("code_challenge")).toBe(CHALLENGE);
 
     session.settle({ success: true, code: "synthetic-code", redirectUri: LOOPBACK });
     await expect(answer).resolves.toEqual({
@@ -111,8 +117,16 @@ describe("account sign-ins a host asks this Shell to open (#14111)", () => {
     release();
   });
 
+  it("gives every click its own id", () => {
+    const first = expectAccountSignIn("studio", VIEW, PLUGIN, null);
+    const second = expectAccountSignIn("studio", VIEW, PLUGIN, "work");
+    expect(first.signInId).not.toBe(second.signInId);
+    first.release();
+    second.release();
+  });
+
   const elsewhere: Array<
-    [string, { hostId?: string; webContentsId?: number }, Parameters<typeof signIn>[0]]
+    [string, { hostId?: string; webContentsId?: number }, Partial<SignInPayload>]
   > = [
     ["another host", { hostId: "build-box" }, {}],
     ["another view", { webContentsId: VIEW + 1 }, {}],
@@ -121,18 +135,25 @@ describe("account sign-ins a host asks this Shell to open (#14111)", () => {
     ["no connection", {}, { connectionId: null }],
   ];
   it.each(elsewhere)("refuses a request for %s", async (_name, where, over) => {
-    const release = expectAccountSignIn("studio", VIEW, PLUGIN, "work");
-    await expect(ask(signIn({ connectionId: "work", ...over }), where)).rejects.toMatchObject({
-      code: "PERMISSION",
-    });
+    const { signInId, release } = expectAccountSignIn("studio", VIEW, PLUGIN, "work");
+    await expect(
+      ask(signIn(signInId, { connectionId: "work", ...over }), where)
+    ).rejects.toMatchObject({ code: "PERMISSION" });
+    expect(loopback.start).not.toHaveBeenCalled();
+    release();
+  });
+
+  it("refuses a request that names another click", async () => {
+    const { release } = expectAccountSignIn("studio", VIEW, PLUGIN, null);
+    await expect(ask(signIn("someone-elses-click"))).rejects.toMatchObject({ code: "PERMISSION" });
     expect(loopback.start).not.toHaveBeenCalled();
     release();
   });
 
   it("opens a sign-in's browser once, however often the host asks", async () => {
-    const release = expectAccountSignIn("studio", VIEW, PLUGIN, null);
-    void ask(signIn());
-    await expect(ask(signIn())).rejects.toMatchObject({ code: "PERMISSION" });
+    const { signInId, release } = expectAccountSignIn("studio", VIEW, PLUGIN, null);
+    void ask(signIn(signInId));
+    await expect(ask(signIn(signInId))).rejects.toMatchObject({ code: "PERMISSION" });
     expect(loopback.start).toHaveBeenCalledTimes(1);
     release();
   });
@@ -143,27 +164,36 @@ describe("account sign-ins a host asks this Shell to open (#14111)", () => {
       "a redirect of the host's own",
       authUrl((p) => p.set("redirect_uri", "https://evil.example.com/cb")),
     ],
+    ["a loopback address", authUrl().replace("auth.example.com", "127.0.0.1")],
+    ["an IPv6 loopback address", authUrl().replace("auth.example.com", "[::1]")],
+    ["a private address", authUrl().replace("auth.example.com", "192.168.1.20")],
+    ["localhost", authUrl().replace("auth.example.com", "localhost")],
+    ["a single-label name", authUrl().replace("auth.example.com", "intranet")],
     ["no state", authUrl((p) => p.delete("state"))],
     ["an empty state", authUrl((p) => p.set("state", ""))],
     ["two states", authUrl((p) => p.append("state", "other"))],
     ["no PKCE challenge", authUrl((p) => p.delete("code_challenge"))],
+    ["an empty PKCE challenge", authUrl((p) => p.set("code_challenge", ""))],
+    ["a PKCE challenge that isn't a digest", authUrl((p) => p.set("code_challenge", "abc"))],
     ["a plain PKCE challenge", authUrl((p) => p.set("code_challenge_method", "plain"))],
     ["an implicit grant", authUrl((p) => p.set("response_type", "token"))],
     ["credentials in the URL", authUrl().replace("https://", "https://user:pw@")],
     ["a fragment", `${authUrl()}#frag`],
     ["something that isn't a URL", "not a url"],
   ])("refuses to open %s", async (_name, url) => {
-    const release = expectAccountSignIn("studio", VIEW, PLUGIN, null);
-    await expect(ask(signIn({ authUrl: url }))).rejects.toMatchObject({ code: "VALIDATION" });
+    const { signInId, release } = expectAccountSignIn("studio", VIEW, PLUGIN, null);
+    await expect(ask(signIn(signInId, { authUrl: url }))).rejects.toMatchObject({
+      code: "VALIDATION",
+    });
     expect(loopback.start).not.toHaveBeenCalled();
     // A refused request doesn't use up the sign-in.
-    void ask(signIn());
+    void ask(signIn(signInId));
     expect(loopback.start).toHaveBeenCalledTimes(1);
     release();
   });
 
   it("refuses a malformed request", async () => {
-    const release = expectAccountSignIn("studio", VIEW, PLUGIN, null);
+    const { release } = expectAccountSignIn("studio", VIEW, PLUGIN, null);
     await expect(ask({ pluginId: PLUGIN })).rejects.toMatchObject({ code: "VALIDATION" });
     await expect(ask(null)).rejects.toMatchObject({ code: "VALIDATION" });
     expect(loopback.start).not.toHaveBeenCalled();
@@ -171,52 +201,71 @@ describe("account sign-ins a host asks this Shell to open (#14111)", () => {
   });
 
   it("takes the loopback down when the call settles, and opens nothing after", async () => {
-    const release = expectAccountSignIn("studio", VIEW, PLUGIN, null);
-    const answer = ask(signIn());
+    const { signInId, release } = expectAccountSignIn("studio", VIEW, PLUGIN, null);
+    const answer = ask(signIn(signInId));
     expect(loopback.open.size).toBe(1);
 
     release();
     expect(loopback.open.size).toBe(0);
     await expect(answer).resolves.toEqual({ success: false, cause: "cancelled" });
-    await expect(ask(signIn())).rejects.toMatchObject({ code: "PERMISSION" });
+    await expect(ask(signIn(signInId))).rejects.toMatchObject({ code: "PERMISSION" });
   });
 
   it("lets a newer click in the same view supersede the older one's loopback", async () => {
-    const releaseOld = expectAccountSignIn("studio", VIEW, PLUGIN, null);
-    const oldAnswer = ask(signIn());
-    const releaseNew = expectAccountSignIn("studio", VIEW, PLUGIN, null);
+    const older = expectAccountSignIn("studio", VIEW, PLUGIN, null);
+    const oldAnswer = ask(signIn(older.signInId));
+    const newer = expectAccountSignIn("studio", VIEW, PLUGIN, null);
     await expect(oldAnswer).resolves.toEqual({ success: false, cause: "cancelled" });
 
-    const newAnswer = ask(signIn());
+    const newAnswer = ask(signIn(newer.signInId));
     // The older call settling late leaves the newer sign-in alone.
-    releaseOld();
+    older.release();
     loopback.only().settle({ success: true, code: "synthetic-new", redirectUri: LOOPBACK });
     await expect(newAnswer).resolves.toMatchObject({ success: true, code: "synthetic-new" });
-    releaseNew();
+    newer.release();
+  });
+
+  it("won't let a superseded click's late request claim the newer sign-in", async () => {
+    const older = expectAccountSignIn("studio", VIEW, PLUGIN, null);
+    const newer = expectAccountSignIn("studio", VIEW, PLUGIN, null);
+
+    // The host sent the older request before it saw the newer click.
+    await expect(ask(signIn(older.signInId))).rejects.toMatchObject({ code: "PERMISSION" });
+    expect(loopback.start).not.toHaveBeenCalled();
+
+    const answer = ask(signIn(newer.signInId));
+    loopback.only().settle({ success: true, code: "synthetic-new", redirectUri: LOOPBACK });
+    await expect(answer).resolves.toMatchObject({ success: true, code: "synthetic-new" });
+    older.release();
+    newer.release();
   });
 
   it("keeps two hosts' sign-ins in the same view apart", async () => {
-    const releaseStudio = expectAccountSignIn("studio", VIEW, PLUGIN, null);
-    const releaseBuild = expectAccountSignIn("build-box", VIEW, PLUGIN, null);
-    const studio = ask(signIn(), { hostId: "studio" });
-    const build = ask(signIn(), { hostId: "build-box" });
+    const studio = expectAccountSignIn("studio", VIEW, PLUGIN, null);
+    const build = expectAccountSignIn("build-box", VIEW, PLUGIN, null);
+    // Each host can only name its own click.
+    await expect(ask(signIn(build.signInId), { hostId: "studio" })).rejects.toMatchObject({
+      code: "PERMISSION",
+    });
+    const studioAnswer = ask(signIn(studio.signInId), { hostId: "studio" });
+    const buildAnswer = ask(signIn(build.signInId), { hostId: "build-box" });
     expect(loopback.open.size).toBe(2);
     const [, buildKey] = [...loopback.open.keys()];
 
-    releaseStudio();
-    await expect(studio).resolves.toEqual({ success: false, cause: "cancelled" });
+    studio.release();
+    await expect(studioAnswer).resolves.toEqual({ success: false, cause: "cancelled" });
     expect([...loopback.open.keys()]).toEqual([buildKey]);
     loopback.only().settle({ success: true, code: "synthetic-build", redirectUri: LOOPBACK });
-    await expect(build).resolves.toMatchObject({ code: "synthetic-build" });
-    releaseBuild();
+    await expect(buildAnswer).resolves.toMatchObject({ code: "synthetic-build" });
+    build.release();
   });
 
   it("takes every loopback down on teardown and stops answering", async () => {
-    expectAccountSignIn("studio", VIEW, PLUGIN, null);
-    const answer = ask(signIn());
+    const { signInId } = expectAccountSignIn("studio", VIEW, PLUGIN, null);
+    const answer = ask(signIn(signInId));
     dispose();
     await expect(answer).resolves.toEqual({ success: false, cause: "cancelled" });
-    await expect(ask(signIn())).rejects.toMatchObject({ code: "UNSUPPORTED" });
+    await expect(ask(signIn(signInId))).rejects.toMatchObject({ code: "UNSUPPORTED" });
     dispose = () => {};
   });
 });

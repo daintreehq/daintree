@@ -213,10 +213,25 @@ describe("PluginAccountRow", () => {
     remote.hostId = "host-1";
     pluginApi.getAccountStatus.mockResolvedValue(status({ secretTier: "locked" }));
     render(<PluginAccountRow plugin={plugin(OAUTH)} account={OAUTH} />);
-    await waitFor(() =>
-      expect(screen.getByRole("button", { name: "Connect" }).hasAttribute("disabled")).toBe(true)
-    );
-    expect(screen.getByText(/Keychain on studio-01 not available/)).toBeTruthy();
+    await screen.findByText(/Keychain on studio-01 not available/);
+    expect(screen.getByRole("button", { name: "Connect" }).hasAttribute("disabled")).toBe(true);
+  });
+
+  it("doesn't send a remote window to its own browser for a sign-in another window started", async () => {
+    remote.hostId = "host-1";
+    pluginApi.getAccountStatus.mockResolvedValue(status({ pending: true }));
+    render(<PluginAccountRow plugin={plugin(OAUTH)} account={OAUTH} />);
+    await screen.findByText("A sign-in started in another window is waiting for its browser…");
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(pluginApi.cancelAccountConnect).toHaveBeenCalledWith("acme.tracker", "default");
+  });
+
+  it("sends a remote window to its own browser for the sign-in it started", async () => {
+    remote.hostId = "host-1";
+    pluginApi.connectAccount.mockReturnValue(new Promise(() => {}));
+    render(<PluginAccountRow plugin={plugin(OAUTH)} account={OAUTH} />);
+    fireEvent.click(await enabledButton("Connect"));
+    await screen.findByText("Finish signing in in your browser…");
   });
 
   it("stores a pasted token and clears the field", async () => {

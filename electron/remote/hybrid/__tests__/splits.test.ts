@@ -946,7 +946,8 @@ describe("opening host files", () => {
 describe("plugin account sign-in from a remote window (#14111)", () => {
   const AUTH_URL =
     "https://auth.example.com/oauth/authorize?response_type=code&client_id=daintree" +
-    "&state=synthetic-state&code_challenge=synthetic-challenge&code_challenge_method=S256";
+    "&state=synthetic-state&code_challenge=E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM" +
+    "&code_challenge_method=S256";
   let loopback: { start: ReturnType<typeof vi.fn>; cancel: ReturnType<typeof vi.fn> };
   let dispose: () => void;
 
@@ -961,59 +962,78 @@ describe("plugin account sign-in from a remote window (#14111)", () => {
     _resetReverseRequestMethodsForTesting();
   });
 
-  const hostAsks = () =>
+  const hostAsks = (signInId: unknown) =>
     answerReverseRequest({
       hostId: "studio",
       webContentsId: REMOTE_SENDER,
       method: "plugin.account-sign-in",
-      payload: { pluginId: "acme.tracker", connectionId: "work", authUrl: AUTH_URL },
+      payload: { signInId, pluginId: "acme.tracker", connectionId: "work", authUrl: AUTH_URL },
     });
 
-  function connect(remote: () => Promise<unknown>) {
-    return (HYBRID_SPLITS[CHANNELS.PLUGIN_ACCOUNT_CONNECT] as HybridSplit)({
+  /** Connect through the split; `forwarded` holds the args it sent the host. */
+  function connect(hostLeg: Promise<unknown>) {
+    const forwarded: unknown[][] = [];
+    const call = (HYBRID_SPLITS[CHANNELS.PLUGIN_ACCOUNT_CONNECT] as HybridSplit)({
       hostId: "studio",
       webContentsId: REMOTE_SENDER,
       args: ["acme.tracker", "work"],
       local: vi.fn(),
-      remote,
+      remote: (_channel, args) => {
+        forwarded.push(args ?? []);
+        return hostLeg;
+      },
     });
+    return { call, forwarded };
   }
 
-  it("runs Connect on the host, never this machine's own handler", async () => {
+  it("runs Connect on the host with the click's id, never this machine's own handler", async () => {
     const forward = vi.fn(() => ({ status: "cancelled" }));
     const { invoke, listener } = setup(forward, () => undefined);
     await expect(
       invoke(CHANNELS.PLUGIN_ACCOUNT_CONNECT, ["acme.tracker", "work"])
     ).resolves.toEqual({ status: "cancelled" });
-    expect(forward).toHaveBeenCalledWith(CHANNELS.PLUGIN_ACCOUNT_CONNECT, ["acme.tracker", "work"]);
+    expect(forward).toHaveBeenCalledWith(CHANNELS.PLUGIN_ACCOUNT_CONNECT, [
+      "acme.tracker",
+      "work",
+      expect.any(String),
+    ]);
     expect(listener).not.toHaveBeenCalled();
     expect(HYBRID_HOST_LEGS).toContain(CHANNELS.PLUGIN_ACCOUNT_CONNECT);
   });
 
   it("opens the browser here only while the window's Connect is in flight", async () => {
-    await expect(hostAsks()).rejects.toMatchObject({ code: "PERMISSION" });
-
     let finish!: (value: unknown) => void;
-    const connecting = connect(() => new Promise((resolve) => (finish = resolve)));
-    void hostAsks();
+    const { call, forwarded } = connect(new Promise((resolve) => (finish = resolve)));
+    const signInId = forwarded[0]![2];
+    void hostAsks(signInId);
     expect(loopback.start).toHaveBeenCalledTimes(1);
     const sessionKey = loopback.start.mock.calls[0]![0];
 
     finish({ status: "connected" });
-    await expect(connecting).resolves.toEqual({ status: "connected" });
+    await expect(call).resolves.toEqual({ status: "connected" });
     expect(loopback.cancel).toHaveBeenCalledWith(sessionKey);
-    await expect(hostAsks()).rejects.toMatchObject({ code: "PERMISSION" });
+    await expect(hostAsks(signInId)).rejects.toMatchObject({ code: "PERMISSION" });
   });
 
   it("takes the loopback down when the link drops under the call", async () => {
     let fail!: (error: Error) => void;
-    const connecting = connect(() => new Promise((_resolve, reject) => (fail = reject)));
-    void hostAsks();
+    const { call, forwarded } = connect(new Promise((_resolve, reject) => (fail = reject)));
+    const signInId = forwarded[0]![2];
+    void hostAsks(signInId);
     const sessionKey = loopback.start.mock.calls[0]![0];
 
     fail(Object.assign(new Error("link closed"), { code: "OUTCOME_UNKNOWN" }));
-    await expect(connecting).rejects.toThrow("link closed");
+    await expect(call).rejects.toThrow("link closed");
     expect(loopback.cancel).toHaveBeenCalledWith(sessionKey);
-    await expect(hostAsks()).rejects.toMatchObject({ code: "PERMISSION" });
+    await expect(hostAsks(signInId)).rejects.toMatchObject({ code: "PERMISSION" });
+  });
+
+  it("names each click afresh, so a host can't replay an earlier one", async () => {
+    const first = connect(Promise.resolve({ status: "cancelled" }));
+    await first.call;
+    const second = connect(new Promise(() => {}));
+    expect(second.forwarded[0]![2]).not.toBe(first.forwarded[0]![2]);
+    await expect(hostAsks(first.forwarded[0]![2])).rejects.toMatchObject({ code: "PERMISSION" });
+    expect(loopback.start).not.toHaveBeenCalled();
   });
 });

@@ -266,12 +266,14 @@ export const PluginClipboardPayloadSchema = z.discriminatedUnion("op", [
 export type PluginClipboardPayload = z.infer<typeof PluginClipboardPayloadSchema>;
 
 /**
- * A sign-in the host runs for a remote window. `connectionId` is the one the
- * window asked for (null when it named none), so the Shell can match it to the
+ * A sign-in the host runs for a remote window. `signInId` is the id the
+ * window's Shell gave this click, and `connectionId` the connection it asked
+ * for (null when it named none), so the Shell can match the request to the
  * click it is answering. The URL carries no `redirect_uri`: the Shell adds its
  * own loopback.
  */
 export const PluginAccountSignInPayloadSchema = z.object({
+  signInId: z.string().min(1).max(128),
   pluginId,
   connectionId: z.string().min(1).max(256).nullable(),
   authUrl: z.string().min(1).max(8192),

@@ -20,24 +20,27 @@ export function isShellLoopbackRedirect(uri: string): boolean {
   return match !== null && Number(match[1]) <= 65_535;
 }
 
+/** The error's code, when it looks like one: the window's answer is not trusted text. */
 function errorCode(error: unknown): string | null {
   const code = (error as { code?: unknown } | null)?.code;
-  return typeof code === "string" ? code : null;
+  return typeof code === "string" && /^[A-Z_]{1,64}$/.test(code) ? code : null;
 }
 
 /**
  * The browser half of a sign-in that a window on another machine started,
  * asked of that window's own Shell: it opens the URL in its browser, catches
  * the redirect on its loopback and answers with the one-use code. The PKCE
- * verifier and the tokens never leave this host. `connectionId` is the one
- * the window asked for, so its Shell can match the request to its own click.
- * The endpoint is the caller's, never the project's driver: a window that
- * takes control meanwhile doesn't receive someone else's sign-in.
+ * verifier and the tokens never leave this host. `signInId` is the window's
+ * own name for the click, and `connectionId` the connection it asked for, so
+ * its Shell can match the request to that click and no other. The endpoint
+ * is the caller's, never the project's driver: a window that takes control
+ * meanwhile doesn't receive someone else's sign-in.
  */
 export function remoteAccountSignIn(
   endpoint: ClientEndpoint,
   pluginId: string,
-  connectionId: string | undefined
+  connectionId: string | undefined,
+  signInId: string
 ): AccountSignInBroker {
   const controller = new AbortController();
   return {
@@ -52,7 +55,7 @@ export function remoteAccountSignIn(
       try {
         answer = await endpoint.request(
           PluginFrontendMethod.ACCOUNT_SIGN_IN,
-          { pluginId, connectionId: connectionId ?? null, authUrl },
+          { signInId, pluginId, connectionId: connectionId ?? null, authUrl },
           { timeoutMs: REMOTE_ACCOUNT_SIGN_IN_TIMEOUT_MS, signal: controller.signal }
         );
       } catch (error) {

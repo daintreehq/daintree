@@ -10,6 +10,7 @@ import type {
 } from "../../../../shared/types/plugin.js";
 import type { ClientEndpoint, EndpointRequestOptions } from "../../../ipc/endpoint.js";
 import type { SecretCipher } from "../secretCipher.js";
+import type { AuthorizationCodeLoopbackResult } from "../../OAuthLoopbackService.js";
 
 vi.mock("electron", () => ({
   app: undefined,
@@ -99,6 +100,7 @@ function host(
 ) {
   const fetch = vi.fn<(url: string, init: RequestInit) => Promise<Response>>();
   const localLoopback = vi.fn();
+  const cancelLoopback = vi.fn();
   const service = new PluginAccountService({
     getSettingsRoot: () => path.join(tmpDir, name, "plugin-settings"),
     getManifest: (id) => (id === PLUGIN_ID ? manifest(contributes) : undefined),
@@ -106,7 +108,7 @@ function host(
     fetch,
     now: () => 1_000_000,
     startLoopback: localLoopback as never,
-    cancelLoopback: vi.fn(),
+    cancelLoopback,
   });
   /** The token endpoint issues `accessToken` for the next exchange. */
   const issue = (accessToken: string) =>
@@ -117,12 +119,12 @@ function host(
         expires_in: 3600,
       })
     );
-  return { service, fetch, localLoopback, issue };
+  return { service, fetch, localLoopback, cancelLoopback, issue };
 }
 
 interface SignInRequest {
   method: string;
-  payload: { pluginId: string; connectionId: string | null; authUrl: string };
+  payload: { signInId: string; pluginId: string; connectionId: string | null; authUrl: string };
   options: EndpointRequestOptions | undefined;
   answer: (value: unknown) => void;
   fail: (code: string) => void;
@@ -180,12 +182,13 @@ describe("PluginAccountService sign-in from a window on another machine (#14111)
     const connecting = h.service.connect(
       PLUGIN_ID,
       undefined,
-      remoteAccountSignIn(win.endpoint, PLUGIN_ID, undefined)
+      remoteAccountSignIn(win.endpoint, PLUGIN_ID, undefined, "click-1")
     );
 
     const asked = await win.asked();
     expect(asked.method).toBe("plugin.account-sign-in");
     expect(asked.options?.timeoutMs).toBe(REMOTE_ACCOUNT_SIGN_IN_TIMEOUT_MS);
+    expect(asked.payload.signInId).toBe("click-1");
     expect(asked.payload.pluginId).toBe(PLUGIN_ID);
     expect(asked.payload.connectionId).toBeNull();
     const authUrl = new URL(asked.payload.authUrl);
@@ -229,7 +232,7 @@ describe("PluginAccountService sign-in from a window on another machine (#14111)
     const connecting = h.service.connect(
       PLUGIN_ID,
       undefined,
-      remoteAccountSignIn(win.endpoint, PLUGIN_ID, undefined)
+      remoteAccountSignIn(win.endpoint, PLUGIN_ID, undefined, "click-1")
     );
     (await win.asked()).answer(caught("synthetic-code-1", redirectUri));
 
@@ -244,7 +247,7 @@ describe("PluginAccountService sign-in from a window on another machine (#14111)
     const connecting = h.service.connect(
       PLUGIN_ID,
       undefined,
-      remoteAccountSignIn(win.endpoint, PLUGIN_ID, undefined)
+      remoteAccountSignIn(win.endpoint, PLUGIN_ID, undefined, "click-1")
     );
     (await win.asked()).answer({ success: true, code: "", redirectUri: SHELL_REDIRECT });
 
@@ -258,7 +261,7 @@ describe("PluginAccountService sign-in from a window on another machine (#14111)
     const connecting = h.service.connect(
       PLUGIN_ID,
       undefined,
-      remoteAccountSignIn(win.endpoint, PLUGIN_ID, undefined)
+      remoteAccountSignIn(win.endpoint, PLUGIN_ID, undefined, "click-1")
     );
     (await win.asked()).answer({ success: false, cause: "denied", error: "access_denied" });
 
@@ -275,7 +278,7 @@ describe("PluginAccountService sign-in from a window on another machine (#14111)
     const firstConnect = h.service.connect(
       PLUGIN_ID,
       undefined,
-      remoteAccountSignIn(first.endpoint, PLUGIN_ID, undefined)
+      remoteAccountSignIn(first.endpoint, PLUGIN_ID, undefined, "click-first")
     );
     const firstAsked = await first.asked();
 
@@ -283,7 +286,7 @@ describe("PluginAccountService sign-in from a window on another machine (#14111)
     const secondConnect = h.service.connect(
       PLUGIN_ID,
       undefined,
-      remoteAccountSignIn(second.endpoint, PLUGIN_ID, undefined)
+      remoteAccountSignIn(second.endpoint, PLUGIN_ID, undefined, "click-second")
     );
     // The first window's browser half is stopped, not left to finish.
     expect(firstAsked.options?.signal?.aborted).toBe(true);
@@ -307,12 +310,12 @@ describe("PluginAccountService sign-in from a window on another machine (#14111)
     const work = h.service.connect(
       PLUGIN_ID,
       "work",
-      remoteAccountSignIn(laptop.endpoint, PLUGIN_ID, "work")
+      remoteAccountSignIn(laptop.endpoint, PLUGIN_ID, "work", "click-work")
     );
     const personal = h.service.connect(
       PLUGIN_ID,
       "personal",
-      remoteAccountSignIn(desktop.endpoint, PLUGIN_ID, "personal")
+      remoteAccountSignIn(desktop.endpoint, PLUGIN_ID, "personal", "click-personal")
     );
     const workAsked = await laptop.asked();
     const personalAsked = await desktop.asked();
@@ -343,7 +346,7 @@ describe("PluginAccountService sign-in from a window on another machine (#14111)
     const connecting = h.service.connect(
       PLUGIN_ID,
       undefined,
-      remoteAccountSignIn(win.endpoint, PLUGIN_ID, undefined)
+      remoteAccountSignIn(win.endpoint, PLUGIN_ID, undefined, "click-1")
     );
     const asked = await win.asked();
     expect((await h.service.getUiStatus(PLUGIN_ID))?.pending).toBe(true);
@@ -363,7 +366,7 @@ describe("PluginAccountService sign-in from a window on another machine (#14111)
     const connecting = h.service.connect(
       PLUGIN_ID,
       undefined,
-      remoteAccountSignIn(win.endpoint, PLUGIN_ID, undefined)
+      remoteAccountSignIn(win.endpoint, PLUGIN_ID, undefined, "click-1")
     );
     const asked = await win.asked();
 
@@ -380,7 +383,7 @@ describe("PluginAccountService sign-in from a window on another machine (#14111)
     const connecting = h.service.connect(
       PLUGIN_ID,
       undefined,
-      remoteAccountSignIn(win.endpoint, PLUGIN_ID, undefined)
+      remoteAccountSignIn(win.endpoint, PLUGIN_ID, undefined, "click-1")
     );
     const asked = await win.asked();
 
@@ -396,7 +399,7 @@ describe("PluginAccountService sign-in from a window on another machine (#14111)
     const connecting = h.service.connect(
       PLUGIN_ID,
       undefined,
-      remoteAccountSignIn(win.endpoint, PLUGIN_ID, undefined)
+      remoteAccountSignIn(win.endpoint, PLUGIN_ID, undefined, "click-1")
     );
     (await win.asked()).fail("HOST_DISCONNECTED");
 
@@ -414,7 +417,7 @@ describe("PluginAccountService sign-in from a window on another machine (#14111)
     const connecting = h.service.connect(
       PLUGIN_ID,
       undefined,
-      remoteAccountSignIn(win.endpoint, PLUGIN_ID, undefined)
+      remoteAccountSignIn(win.endpoint, PLUGIN_ID, undefined, "click-1")
     );
     (await win.asked()).fail("STALE_GENERATION");
 
@@ -428,7 +431,7 @@ describe("PluginAccountService sign-in from a window on another machine (#14111)
     const connecting = h.service.connect(
       PLUGIN_ID,
       undefined,
-      remoteAccountSignIn(win.endpoint, PLUGIN_ID, undefined)
+      remoteAccountSignIn(win.endpoint, PLUGIN_ID, undefined, "click-1")
     );
     (await win.asked()).fail("PERMISSION");
 
@@ -441,7 +444,7 @@ describe("PluginAccountService sign-in from a window on another machine (#14111)
     const connecting = h.service.connect(
       PLUGIN_ID,
       undefined,
-      remoteAccountSignIn(win.endpoint, PLUGIN_ID, undefined)
+      remoteAccountSignIn(win.endpoint, PLUGIN_ID, undefined, "click-1")
     );
     (await win.asked()).fail("OUTCOME_UNKNOWN");
 
@@ -458,7 +461,7 @@ describe("PluginAccountService sign-in from a window on another machine (#14111)
     const first = h.service.connect(
       PLUGIN_ID,
       undefined,
-      remoteAccountSignIn(win.endpoint, PLUGIN_ID, undefined)
+      remoteAccountSignIn(win.endpoint, PLUGIN_ID, undefined, "click-1")
     );
     (await win.asked(1)).answer(caught("synthetic-code-1"));
     expect((await first).status).toBe("connected");
@@ -467,7 +470,7 @@ describe("PluginAccountService sign-in from a window on another machine (#14111)
     const second = h.service.connect(
       PLUGIN_ID,
       undefined,
-      remoteAccountSignIn(win.endpoint, PLUGIN_ID, undefined)
+      remoteAccountSignIn(win.endpoint, PLUGIN_ID, undefined, "click-1")
     );
     (await win.asked(2)).answer(caught("synthetic-code-2"));
     expect((await second).status).toBe("connected");
@@ -479,20 +482,22 @@ describe("PluginAccountService sign-in from a window on another machine (#14111)
   it("keeps each host's connection on that host", async () => {
     const studio = host({ account: OAUTH }, "studio");
     const build = host({ account: OAUTH }, "build");
-    const win = remoteWindow();
+    const studioWindow = remoteWindow();
+    const buildWindow = remoteWindow();
     studio.issue("synthetic-at-studio");
     build.issue("synthetic-at-build");
     const onStudio = studio.service.connect(
       PLUGIN_ID,
       undefined,
-      remoteAccountSignIn(win.endpoint, PLUGIN_ID, undefined)
+      remoteAccountSignIn(studioWindow.endpoint, PLUGIN_ID, undefined, "click-studio")
     );
     const onBuild = build.service.connect(
       PLUGIN_ID,
       undefined,
-      remoteAccountSignIn(win.endpoint, PLUGIN_ID, undefined)
+      remoteAccountSignIn(buildWindow.endpoint, PLUGIN_ID, undefined, "click-build")
     );
-    const [studioAsked, buildAsked] = [await win.asked(1), await win.asked(2)];
+    const studioAsked = await studioWindow.asked();
+    const buildAsked = await buildWindow.asked();
     buildAsked.answer(caught("synthetic-code-build"));
     studioAsked.answer(caught("synthetic-code-studio"));
     expect((await onStudio).status).toBe("connected");
@@ -504,5 +509,110 @@ describe("PluginAccountService sign-in from a window on another machine (#14111)
       "synthetic-at-studio"
     );
     expect((await build.service.getAccessToken(PLUGIN_ID))?.accessToken).toBe("synthetic-at-build");
+  });
+});
+
+/**
+ * A browser half that ignores being stopped and comes back with a code
+ * anyway: what reaches the host from a window that answered after its
+ * sign-in was ended. Only the host's own stale check stands in the way.
+ */
+function stubbornBroker() {
+  let finish: ((code: string) => void) | null = null;
+  let markStarted!: () => void;
+  const started = new Promise<void>((resolve) => (markStarted = resolve));
+  const broker = {
+    start: vi.fn(
+      () =>
+        new Promise<AuthorizationCodeLoopbackResult>((resolve) => {
+          finish = (code) => resolve({ success: true, code, redirectUri: SHELL_REDIRECT });
+          markStarted();
+        })
+    ),
+    cancel: vi.fn(),
+  };
+  return { broker, started, finish: (code: string) => finish?.(code) };
+}
+
+type Host = ReturnType<typeof host>;
+
+describe("PluginAccountService against a window that answers after it was stopped (#14111)", () => {
+  const stops: Array<[string, (h: Host) => unknown]> = [
+    ["Cancel", (h) => h.service.cancelConnect(PLUGIN_ID)],
+    ["Disconnect", (h) => h.service.disconnect(PLUGIN_ID)],
+    ["the plugin unloading", (h) => h.service.clearPluginState(PLUGIN_ID)],
+  ];
+  it.each(stops)("never exchanges a code that comes back after %s", async (_name, stop) => {
+    const h = host({ account: OAUTH });
+    const late = stubbornBroker();
+    const connecting = h.service.connect(PLUGIN_ID, undefined, late.broker);
+    await late.started;
+
+    const stopping = stop(h);
+    expect(late.broker.cancel).toHaveBeenCalled();
+    late.finish("synthetic-code-late");
+    await stopping;
+
+    expect(await connecting).toEqual({ status: "cancelled" });
+    expect(h.fetch).not.toHaveBeenCalled();
+    expect((await h.service.getState(PLUGIN_ID)).connected).toBe(false);
+  });
+
+  it("lets a sign-in on this machine supersede one another window is running", async () => {
+    const h = host({ account: OAUTH });
+    const late = stubbornBroker();
+    const remote = h.service.connect(PLUGIN_ID, undefined, late.broker);
+    await late.started;
+    h.localLoopback.mockImplementation(
+      async (_key: string, _state: string, build: (uri: string) => string) => {
+        build("http://127.0.0.1:43123/oauth/callback");
+        return {
+          success: true,
+          code: "synthetic-code-local",
+          redirectUri: "http://127.0.0.1:43123/oauth/callback",
+        };
+      }
+    );
+
+    h.issue("synthetic-at-local");
+    const local = h.service.connect(PLUGIN_ID);
+    expect(late.broker.cancel).toHaveBeenCalled();
+    late.finish("synthetic-code-remote");
+
+    expect(await remote).toEqual({ status: "cancelled" });
+    expect((await local).status).toBe("connected");
+    expect(h.fetch).toHaveBeenCalledTimes(1);
+    expect(tokenRequest(h.fetch).get("code")).toBe("synthetic-code-local");
+  });
+
+  it("lets another window supersede a sign-in running on this machine", async () => {
+    const h = host({ account: OAUTH });
+    let finishLocal!: (result: AuthorizationCodeLoopbackResult) => void;
+    h.localLoopback.mockImplementation(
+      () => new Promise<AuthorizationCodeLoopbackResult>((resolve) => (finishLocal = resolve))
+    );
+    const local = h.service.connect(PLUGIN_ID);
+    await vi.waitFor(() => expect(h.localLoopback).toHaveBeenCalled());
+
+    const win = remoteWindow();
+    h.issue("synthetic-at-remote");
+    const remote = h.service.connect(
+      PLUGIN_ID,
+      undefined,
+      remoteAccountSignIn(win.endpoint, PLUGIN_ID, undefined, "click-1")
+    );
+    // This machine's loopback comes down; the code it catches anyway goes nowhere.
+    expect(h.cancelLoopback).toHaveBeenCalledWith(h.localLoopback.mock.calls[0]![0]);
+    finishLocal({
+      success: true,
+      code: "synthetic-code-local",
+      redirectUri: "http://127.0.0.1:43123/oauth/callback",
+    });
+    (await win.asked()).answer(caught("synthetic-code-remote"));
+
+    expect(await local).toEqual({ status: "cancelled" });
+    expect((await remote).status).toBe("connected");
+    expect(h.fetch).toHaveBeenCalledTimes(1);
+    expect(tokenRequest(h.fetch).get("code")).toBe("synthetic-code-remote");
   });
 });

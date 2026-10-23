@@ -95,9 +95,15 @@ const pluginAccountConnect: HybridSplit = async ({ hostId, webContentsId, args, 
     // The host refuses it; nothing here is waited on.
     return remote();
   }
-  const release = expectAccountSignIn(hostId, webContentsId, pluginId, connectionId ?? null);
+  const { signInId, release } = expectAccountSignIn(
+    hostId,
+    webContentsId,
+    pluginId,
+    connectionId ?? null
+  );
   try {
-    return await remote();
+    // The id rides along so the host's request names this click and no other.
+    return await remote(undefined, [pluginId, connectionId, signInId]);
   } finally {
     release();
   }

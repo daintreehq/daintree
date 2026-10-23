@@ -192,7 +192,10 @@ export function PluginAccountRow({
   const description = loadFailed
     ? "Couldn't read this account's status"
     : signingIn
-      ? "Finish signing in in your browser…"
+      ? // A host's sign-in started from another window may be in another machine's browser.
+        waitingForBrowser || remoteHostId === null
+        ? "Finish signing in in your browser…"
+        : "A sign-in started in another window is waiting for its browser…"
       : connected
         ? verification
           ? `${connectedText}. ${verificationText(verification)}`

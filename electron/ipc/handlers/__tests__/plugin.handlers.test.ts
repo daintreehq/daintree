@@ -4081,7 +4081,7 @@ describe("plugin account sign-in from a window on another machine (#14111)", () 
     const envelope = await getIpcDispatcher().invokeForEndpoint(
       { endpoint, client },
       "plugin:account-connect",
-      ["acme.tracker", "work"]
+      ["acme.tracker", "work", "click-1"]
     );
 
     expect(envelope).toMatchObject({ ok: true, data: { status: "cancelled" } });
@@ -4093,6 +4093,7 @@ describe("plugin account sign-in from a window on another machine (#14111)", () 
     expect(endpoint.request).toHaveBeenCalledWith(
       "plugin.account-sign-in",
       {
+        signInId: "click-1",
         pluginId: "acme.tracker",
         connectionId: "work",
         authUrl: "https://auth.example.com/authorize?state=synthetic-state",
@@ -4102,6 +4103,26 @@ describe("plugin account sign-in from a window on another machine (#14111)", () 
     expect(caught).toEqual({ success: true, code: "synthetic-code", redirectUri: SHELL_REDIRECT });
   });
 
+  it("refuses a sign-in from another machine that names no click", async () => {
+    registerPluginHandlers();
+    getIpcDispatcher().allowHybridOverLink("plugin:account-connect");
+    const endpoint = remoteEndpoint();
+    for (const args of [
+      ["acme.tracker", "work"],
+      ["acme.tracker", "work", ""],
+      ["acme.tracker", "work", 7],
+    ]) {
+      const envelope = await getIpcDispatcher().invokeForEndpoint(
+        { endpoint, client },
+        "plugin:account-connect",
+        args
+      );
+      expect(envelope.ok).toBe(false);
+    }
+    expect(mockConnectAccountFromUi).not.toHaveBeenCalled();
+    expect(endpoint.request).not.toHaveBeenCalled();
+  });
+
   it("refuses another project's plugin by the window's own binding", async () => {
     registerPluginHandlers();
     getIpcDispatcher().allowHybridOverLink("plugin:account-connect");
@@ -4109,7 +4130,7 @@ describe("plugin account sign-in from a window on another machine (#14111)", () 
     const envelope = await getIpcDispatcher().invokeForEndpoint(
       { endpoint, client },
       "plugin:account-connect",
-      [`project__${"d".repeat(64)}__acme.tracker`]
+      [`project__${"d".repeat(64)}__acme.tracker`, undefined, "click-1"]
     );
     expect(envelope.ok).toBe(false);
     expect(mockConnectAccountFromUi).not.toHaveBeenCalled();
