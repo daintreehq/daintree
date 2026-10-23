@@ -1143,6 +1143,10 @@ export const CHANNELS = {
   PLUGIN_PROJECT_LAYOUT_SEED_GET: "plugin:project-layout-seed-get",
   /** Compare-and-set the SENDER project's layout seed, so only one view ever consumes it. */
   PLUGIN_PROJECT_LAYOUT_SEED_ADVANCE: "plugin:project-layout-seed-advance",
+  /** The SENDER project's answer to its application's welcome tour (#14106). */
+  PLUGIN_PROJECT_WELCOME_GET: "plugin:project-welcome-get",
+  /** Record that the user skipped or finished the SENDER project's application welcome. */
+  PLUGIN_PROJECT_WELCOME_SET: "plugin:project-welcome-set",
   /** Project-local plugins: the sender project's rows, valid and invalid alike. */
   PLUGIN_PROJECT_LIST: "plugin:project-list",
   /** Project-local plugins: record the trust decision for the SENDER's project. */

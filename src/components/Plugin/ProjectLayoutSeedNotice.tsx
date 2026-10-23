@@ -3,14 +3,17 @@ import { LayoutTemplate } from "lucide-react";
 import { InlineStatusBanner, type BannerAction } from "@/components/Terminal/InlineStatusBanner";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import {
+  dismissFailedLayoutSeed,
   dismissLayoutOffer,
   openOfferedLayout,
+  retryLayoutSeed,
   selectProjectDefaultLayout,
 } from "@/hooks/useProjectLayoutSeed";
 import { startPluginLayoutRecipe } from "@/services/layout/applyPluginLayout";
 import { usePluginLayoutsStore } from "@/store/pluginLayoutsStore";
 import { useProjectLayoutSeedStore } from "@/store/projectLayoutSeedStore";
 import { useProjectStore } from "@/store/projectStore";
+import { ProjectWelcomeNotice } from "./ProjectWelcomeNotice";
 import { notify } from "@/lib/notify";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { logWarn } from "@/utils/logger";
@@ -24,12 +27,13 @@ const BANNER_CLASS =
  * A project plugin's first-open layout (#13782), at the top of the panel grid
  * beside the plugin trust strip that usually comes just before it.
  *
- * Two states, one strip. When the user had already opened something by the
+ * Three states, one strip. When the user had already opened something by the
  * time the plugin's layout arrived, it offers "Open <plugin>'s layout"; × turns
- * the offer down for good, since the layout stays in the command palette. Once
- * a layout has been opened, the recipes it left unstarted wait here as Start
- * buttons, each through the layout's own confirmation — a layout never starts
- * a terminal on open.
+ * the offer down for good, since the layout stays in the command palette. When
+ * opening it failed or was cut short (#14106), it offers Retry, which opens
+ * only what is still missing. Once a layout has been opened, the recipes it
+ * left unstarted wait here as Start buttons, each through the layout's own
+ * confirmation — a layout never starts a terminal on open.
  */
 export function ProjectLayoutSeedNotice() {
   const projectId = useProjectStore((s) => s.currentProject?.id ?? null);
@@ -40,6 +44,9 @@ export function ProjectLayoutSeedNotice() {
       resetKeys={[projectId ?? "null"]}
     >
       <NoticeBody />
+      {/* The application's welcome waits on the layout, so the two strips
+          take turns in the same place rather than stacking (#14106). */}
+      <ProjectWelcomeNotice />
     </ErrorBoundary>
   );
 }
@@ -87,6 +94,34 @@ function NoticeBody() {
         ]}
         className={BANNER_CLASS}
         onClose={() => run("dismiss", dismissLayoutOffer)}
+        closeDisabled={busy !== null}
+        closeAriaLabel="Dismiss"
+        closeTitle="Dismiss — the layout stays in the command palette"
+      />
+    );
+  }
+
+  const failed = status === "failed" ? selectProjectDefaultLayout(layouts) : null;
+  if (failed !== null) {
+    return (
+      <InlineStatusBanner
+        layout="strip"
+        title={`Couldn't finish opening ${failed.pluginName}'s layout`}
+        description="Retry opens only what's still missing."
+        severity="warning"
+        role="status"
+        actions={[
+          {
+            id: "retry",
+            label: "Retry",
+            variant: "primary",
+            onClick: () => run("retry", () => retryLayoutSeed(failed)),
+            loading: busy === "retry",
+            disabled: busy !== null && busy !== "retry",
+          },
+        ]}
+        className={BANNER_CLASS}
+        onClose={() => run("dismiss", dismissFailedLayoutSeed)}
         closeDisabled={busy !== null}
         closeAriaLabel="Dismiss"
         closeTitle="Dismiss — the layout stays in the command palette"

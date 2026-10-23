@@ -941,6 +941,9 @@ export interface GeneratedElectronAPI {
     getProjectTemplates(
       ...args: IpcInvokeMap["plugin:project-templates-get"]["args"]
     ): Promise<IpcInvokeMap["plugin:project-templates-get"]["result"]>;
+    getProjectWelcome(
+      ...args: IpcInvokeMap["plugin:project-welcome-get"]["args"]
+    ): Promise<IpcInvokeMap["plugin:project-welcome-get"]["result"]>;
     getRecipes(
       ...args: IpcInvokeMap["plugin:recipes-get"]["args"]
     ): Promise<IpcInvokeMap["plugin:recipes-get"]["result"]>;
@@ -1094,6 +1097,9 @@ export interface GeneratedElectronAPI {
     setProjectSurfaceChoices(
       ...args: IpcInvokeMap["plugin:project-surface-choices-set"]["args"]
     ): Promise<IpcInvokeMap["plugin:project-surface-choices-set"]["result"]>;
+    setProjectWelcome(
+      ...args: IpcInvokeMap["plugin:project-welcome-set"]["args"]
+    ): Promise<IpcInvokeMap["plugin:project-welcome-set"]["result"]>;
     setSearchProviderShown(
       ...args: IpcInvokeMap["plugin:search-provider-shown-set"]["args"]
     ): Promise<IpcInvokeMap["plugin:search-provider-shown-set"]["result"]>;

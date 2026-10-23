@@ -177,6 +177,7 @@ const PROJECT_APPLICATION = "shared/utils/projectApplication.ts";
 const PROJECT_PLUGIN_CONTROLLER = "electron/services/plugin/ProjectPluginController.ts";
 const PROJECT_PLUGIN_STORE = "src/store/projectPluginStore.ts";
 const PROJECT_HOME_STORE = "src/store/projectHomeStore.ts";
+const PROJECT_APPLICATION_WELCOME = "src/hooks/useProjectApplicationWelcome.ts";
 
 /**
  * The schemas swept for field coverage. The first block matches the fourteen
@@ -2814,8 +2815,9 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
         { file: PROJECT_PLUGIN_CONTROLLER, symbol: "getProjectApplication" },
         { file: PROJECT_APPLICATION, symbol: "resolveProjectApplication (application)" },
         { file: PROJECT_PLUGIN_STORE, symbol: "applySnapshot (application)" },
+        { file: PROJECT_APPLICATION_WELCOME, symbol: "declaredWelcome (appName)" },
       ],
-      note: "Carried in the resolved state the project's views receive; nothing draws it yet, so it has no runtime authority of its own.",
+      note: "Carried in the resolved state the project's views receive; names the application on its welcome strip, with no runtime authority of its own.",
     },
     iconId: {
       mode: "intentional-metadata",
@@ -2866,24 +2868,26 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
       note: "Must name the plugin's own settings view, which its settings home already mounts.",
     },
     welcomeTour: {
-      mode: "cross-reference",
+      mode: "verbatim",
       consumers: [
         {
           file: PLUGIN_SCHEMA,
           symbol: "getPluginManifestSchema superRefine (application_tour_unknown)",
         },
+        { file: PROJECT_APPLICATION_WELCOME, symbol: "useProjectApplicationWelcome" },
       ],
-      note: "Must name one of the plugin's own tours that is not scoped to a panel.",
+      note: "Must name one of the plugin's own tours that is not scoped to a panel; offered once per project and revision on the active application's first run, never played unasked (#14106).",
     },
     firstWorkflow: {
-      mode: "cross-reference",
+      mode: "verbatim",
       consumers: [
         {
           file: PLUGIN_SCHEMA,
           symbol: "getPluginManifestSchema superRefine (application_command_unknown)",
         },
+        { file: PROJECT_APPLICATION_WELCOME, symbol: "syncHandoff" },
       ],
-      note: "Must name one of the plugin's own commands of kind command; the application runs nothing itself.",
+      note: "Must name one of the plugin's own commands of kind command; offered as a button once the welcome is answered, and run only on the user's click.",
     },
     requiredTools: {
       mode: "cross-reference",
@@ -2918,9 +2922,15 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
       note: "A contributes.tours[].id of this plugin, not scoped to a panel kind.",
     },
     version: {
-      mode: "intentional-metadata",
-      consumers: [{ file: PLUGIN_SCHEMA, symbol: "PluginApplicationTourRefSchema" }],
-      note: "The welcome revision, carried in the resolved state; the tour's own playback and progress are unchanged.",
+      mode: "verbatim",
+      consumers: [
+        { file: PLUGIN_SCHEMA, symbol: "PluginApplicationTourRefSchema" },
+        {
+          file: PROJECT_APPLICATION_WELCOME,
+          symbol: "useProjectApplicationWelcome (record.version)",
+        },
+      ],
+      note: "The welcome revision: an answer recorded under a lower one offers the welcome again. The tour's own playback and progress are unchanged.",
     },
   },
 } satisfies FieldConsumerCoverage;

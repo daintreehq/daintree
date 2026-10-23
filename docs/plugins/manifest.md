@@ -302,7 +302,9 @@ At most one plugin in a project declares an application. Cooperating plugins con
 - `unavailable` — the owner failed to load, its `engines.daintree` range excludes the running Daintree, or a second plugin also declares an application.
 - `replaced` — the owner is loaded, but another plugin holds the project Home it opens on.
 
-Anything but `active` means the standard workspace. The descriptor and its state are a contract for the host's own application features to build on: they change nothing the workspace draws today, where the contributions it names behave exactly as they do without it, and resolving the application writes nothing. Its defaults will never outrank the user: an answer the user gave about Home, a surface or the project's presentation profile stands.
+Anything but `active` means the standard workspace. The descriptor and its state are a contract for the host's own application features to build on, and resolving the application writes nothing. Its defaults will never outrank the user: an answer the user gave about Home, a surface or the project's presentation profile stands.
+
+While the application is `active`, its `welcomeTour` is offered once per project on each machine: a strip on the project's Home or grid with Start and Skip, shown in the view on screen once the project's first-open layout is done with and no dialog is open. It never plays on its own. Skipping or finishing it is remembered against the declaring plugin, the tour and its `version`, so raising `version` offers it again; the tour stays in Help to replay any time. Once it is answered, `firstWorkflow` is offered as a button on the same strip, and runs only when the user presses it. Nothing in this flow starts an agent, a recipe, an install or any external work.
 
 ### `remote`
 

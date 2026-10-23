@@ -3,18 +3,27 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import type { PluginLayoutConfig } from "@shared/types/plugin";
 
-const { openOfferedLayout, dismissLayoutOffer, startPluginLayoutRecipe, notify } = vi.hoisted(
-  () => ({
-    openOfferedLayout: vi.fn(async () => {}),
-    dismissLayoutOffer: vi.fn(async () => {}),
-    startPluginLayoutRecipe: vi.fn(),
-    notify: vi.fn(),
-  })
-);
+const {
+  openOfferedLayout,
+  dismissLayoutOffer,
+  retryLayoutSeed,
+  dismissFailedLayoutSeed,
+  startPluginLayoutRecipe,
+  notify,
+} = vi.hoisted(() => ({
+  openOfferedLayout: vi.fn(async () => {}),
+  dismissLayoutOffer: vi.fn(async () => {}),
+  retryLayoutSeed: vi.fn(async () => {}),
+  dismissFailedLayoutSeed: vi.fn(async () => {}),
+  startPluginLayoutRecipe: vi.fn(),
+  notify: vi.fn(),
+}));
 
 vi.mock("@/hooks/useProjectLayoutSeed", () => ({
   openOfferedLayout,
   dismissLayoutOffer,
+  retryLayoutSeed,
+  dismissFailedLayoutSeed,
   selectProjectDefaultLayout: (layouts: readonly PluginLayoutConfig[]) =>
     layouts.find((layout) => layout.projectDefault === true) ?? null,
 }));
@@ -70,6 +79,27 @@ describe("ProjectLayoutSeedNotice (#13782)", () => {
   });
 
   afterEach(() => cleanup());
+
+  it("offers Retry for a layout that failed or was cut short (#14106)", async () => {
+    useProjectLayoutSeedStore.setState({ status: "failed" });
+    renderNotice();
+
+    expect(screen.getByText("Couldn't finish opening Acme's layout")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    await settle();
+    expect(retryLayoutSeed).toHaveBeenCalledWith(LAYOUT);
+
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+    await settle();
+    expect(dismissFailedLayoutSeed).toHaveBeenCalledTimes(1);
+  });
+
+  it("offers no Retry once the plugin no longer offers the layout", () => {
+    useProjectLayoutSeedStore.setState({ status: "failed" });
+    usePluginLayoutsStore.setState({ layouts: [] });
+    renderNotice();
+    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+  });
 
   it("offers the plugin's layout once the user has opened something", async () => {
     useProjectLayoutSeedStore.setState({ status: "offered" });

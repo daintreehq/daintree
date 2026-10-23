@@ -35,6 +35,7 @@ import type {
   ProjectPluginTrustRecord,
   ProjectSurfaceChoices,
   ProjectLayoutSeedRecord,
+  ProjectWelcomeRecord,
 } from "../shared/types/plugin.js";
 import { PLUGIN_MCP_DEFAULT_MAX_TOOLS_PER_SESSION } from "../shared/types/ipc/pluginMcp.js";
 import type { ForgeAuditRecord } from "../shared/types/ipc/forge.js";
@@ -700,6 +701,14 @@ export interface StoreSchema {
   projectLayoutSeeds?: Record<string, ProjectLayoutSeedRecord>;
 
   /**
+   * Per-project application welcomes the user skipped or finished (#14106):
+   * project id → declaring plugin's manifest id → welcome tour id → record.
+   * See `services/plugin/projectApplicationWelcomes.ts`. Same additive-key
+   * convention as above.
+   */
+  projectApplicationWelcomes?: Record<string, Record<string, Record<string, ProjectWelcomeRecord>>>;
+
+  /**
    * Per-project launcher groups the user hid (#13788): plugin instance ids
    * whose launch entries this project's launcher leaves out. Keyed by project
    * id. Daintree's own settings, never the repository, and separate from
@@ -1114,6 +1123,7 @@ const storeOptions = {
     projectSurfaceChoices: {},
     projectFileEditorChoices: {},
     projectLayoutSeeds: {},
+    projectApplicationWelcomes: {},
     projectHiddenLaunchGroups: {},
     projectPluginSetupSkips: {},
     projectPluginAccountBindings: {},

@@ -38,7 +38,9 @@ vi.mock("@/store/recipeStore", () => ({
 vi.mock("@/services/layout/applyPluginLayout", () => ({ seedPluginLayout }));
 
 import {
+  dismissFailedLayoutSeed,
   openOfferedLayout,
+  retryLayoutSeed,
   selectProjectDefaultLayout,
   useProjectLayoutSeed,
 } from "../useProjectLayoutSeed";
@@ -57,7 +59,8 @@ const advanceProjectLayoutSeed = vi.fn(
     outcome?: ProjectLayoutSeedOutcome
   ) => {
     if (record?.status !== from) return { advanced: false, record };
-    record = { status: to, ...(outcome ? { outcome } : {}), at: 1 };
+    const kept = outcome ?? record.outcome;
+    record = { status: to, ...(kept ? { outcome: kept } : {}), at: 1 };
     return { advanced: true, record };
   }
 );
@@ -96,7 +99,7 @@ describe("useProjectLayoutSeed (#13782)", () => {
   beforeEach(() => {
     record = { status: "pending", at: 0 };
     advanceProjectLayoutSeed.mockClear();
-    getProjectLayoutSeed.mockClear();
+    getProjectLayoutSeed.mockReset().mockImplementation(async () => record);
     seedPluginLayout.mockReset().mockResolvedValue({
       panelIds: ["new-1"],
       failures: [],
@@ -126,12 +129,14 @@ describe("useProjectLayoutSeed (#13782)", () => {
     arrive([layout()]);
     await flush();
 
-    // Consumed before anything opened, so it can never be applied twice.
-    expect(advanceProjectLayoutSeed).toHaveBeenCalledWith("pending", "settled", "applied");
+    // Claimed before anything opened, so no other view applies it meanwhile,
+    // and settled only once everything did.
+    expect(advanceProjectLayoutSeed).toHaveBeenCalledWith("pending", "applying", "applied");
     expect(advanceProjectLayoutSeed.mock.invocationCallOrder[0]).toBeLessThan(
       seedPluginLayout.mock.invocationCallOrder[0]!
     );
     expect(seedPluginLayout).toHaveBeenCalledWith("project__p1__acme.workbench");
+    expect(record).toEqual({ status: "settled", outcome: "applied", at: 1 });
     expect(useProjectLayoutSeedStore.getState().waiting).toEqual({
       layoutId: "project__p1__acme.workbench",
       layoutName: "Workbench",
@@ -252,6 +257,113 @@ describe("useProjectLayoutSeed (#13782)", () => {
 
     expect(seedPluginLayout).toHaveBeenCalledTimes(1);
     expect(record).toEqual({ status: "settled", outcome: "opened", at: 1 });
+  });
+
+  describe("recovery (#14106)", () => {
+    it("fails the seed, rather than settling it, when the apply throws", async () => {
+      seedPluginLayout.mockRejectedValueOnce(new Error("plugin view didn't load"));
+      mount();
+      arrive([layout()]);
+      await flush();
+      expect(record).toEqual({ status: "failed", outcome: "applied", at: 1 });
+      expect(useProjectLayoutSeedStore.getState().status).toBe("failed");
+      expect(useProjectLayoutSeedStore.getState().waiting).toBeNull();
+    });
+
+    it("fails the seed when an entry was left unopened", async () => {
+      seedPluginLayout.mockResolvedValueOnce({
+        panelIds: [],
+        failures: ["acme.records is not registered"],
+        deferred: [],
+      });
+      mount();
+      arrive([layout()]);
+      await flush();
+      expect(record?.status).toBe("failed");
+    });
+
+    it("retries once on the user's click, settles with the original outcome, and starts no recipe", async () => {
+      record = { status: "failed", outcome: "opened", at: 0 };
+      useProjectLayoutSeedStore.setState({ status: "failed" });
+
+      await Promise.all([retryLayoutSeed(layout()), retryLayoutSeed(layout())]);
+
+      expect(seedPluginLayout).toHaveBeenCalledTimes(1);
+      expect(record).toEqual({ status: "settled", outcome: "opened", at: 1 });
+      // The recipe is left waiting for the user, never run by the retry.
+      expect(useProjectLayoutSeedStore.getState().waiting?.recipes).toEqual([
+        { id: "acme.dev", name: "Dev server" },
+      ]);
+    });
+
+    it("doesn't retry an apply another view is still running", async () => {
+      record = { status: "applying", outcome: "applied", at: 0 };
+      await retryLayoutSeed(layout());
+      expect(seedPluginLayout).not.toHaveBeenCalled();
+    });
+
+    it("never applies on its own after a restart finds the apply cut short", async () => {
+      // Main reads an `applying` with no live claim as failed.
+      record = { status: "failed", outcome: "applied", at: 0 };
+      mount();
+      arrive([layout()]);
+      await flush();
+      expect(seedPluginLayout).not.toHaveBeenCalled();
+      expect(useProjectLayoutSeedStore.getState().status).toBe("failed");
+    });
+
+    it("fails the seed, and leaves no recipe waiting, when the settle doesn't land", async () => {
+      record = { status: "failed", outcome: "applied", at: 0 };
+      advanceProjectLayoutSeed.mockImplementationOnce(async () => {
+        record = { status: "applying", outcome: "applied", at: 1 };
+        return { advanced: true, record };
+      });
+      // Storage refuses the settle.
+      advanceProjectLayoutSeed.mockImplementationOnce(async () => ({ advanced: false, record }));
+
+      await retryLayoutSeed(layout());
+
+      expect(advanceProjectLayoutSeed.mock.lastCall?.slice(0, 2)).toEqual(["applying", "failed"]);
+      expect(record?.status).toBe("failed");
+      expect(useProjectLayoutSeedStore.getState().waiting).toBeNull();
+    });
+
+    it("reads the seed again on focus after a failed first read, and applies it", async () => {
+      getProjectLayoutSeed.mockRejectedValue(new Error("EACCES"));
+      mount();
+      arrive([layout()]);
+      await flush();
+      expect(useProjectLayoutSeedStore.getState().status).toBeUndefined();
+      expect(seedPluginLayout).not.toHaveBeenCalled();
+
+      // Storage readable again.
+      getProjectLayoutSeed.mockImplementation(async () => record);
+      act(() => {
+        window.dispatchEvent(new Event("focus"));
+      });
+      await flush();
+      expect(seedPluginLayout).toHaveBeenCalledTimes(1);
+    });
+
+    it("picks up a layout offer another window answered, on focus", async () => {
+      record = { status: "offered", at: 0 };
+      mount();
+      await flush();
+      expect(useProjectLayoutSeedStore.getState().status).toBe("offered");
+
+      record = { status: "settled", outcome: "dismissed", at: 2 };
+      act(() => {
+        window.dispatchEvent(new Event("focus"));
+      });
+      await flush();
+      expect(useProjectLayoutSeedStore.getState().status).toBe("settled");
+    });
+
+    it("settles a failed seed the user dismisses", async () => {
+      record = { status: "failed", outcome: "applied", at: 0 };
+      await dismissFailedLayoutSeed();
+      expect(record).toEqual({ status: "settled", outcome: "dismissed", at: 1 });
+    });
   });
 });
 

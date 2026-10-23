@@ -91,6 +91,7 @@ export const STORE_KEY_OWNERSHIP = {
   projectSurfaceChoices: "host",
   projectFileEditorChoices: "host",
   projectLayoutSeeds: "host",
+  projectApplicationWelcomes: "host",
   projectHiddenLaunchGroups: "host",
   projectPluginSetupSkips: "host",
   projectPluginAccountBindings: "host",

@@ -14,9 +14,11 @@ const storeMock = vi.hoisted(() => {
 vi.mock("../../../store.js", () => ({ store: storeMock }));
 
 import {
+  _resetProjectLayoutSeedClaimsForTest,
   advanceProjectLayoutSeed,
   captureProjectLayoutSeed,
   getProjectLayoutSeed,
+  releaseProjectLayoutSeedClaim,
 } from "../projectLayoutSeeds.js";
 
 const PROJECT_A = "a".repeat(64);
@@ -27,6 +29,7 @@ describe("projectLayoutSeeds (#13782)", () => {
     storeMock.data.clear();
     storeMock.get.mockImplementation((key: string) => storeMock.data.get(key));
     storeMock.set.mockClear();
+    _resetProjectLayoutSeedClaimsForTest();
   });
 
   it("has no record before a project's first hydrate", () => {
@@ -59,8 +62,22 @@ describe("projectLayoutSeeds (#13782)", () => {
   it("advances only from the status the caller saw", () => {
     captureProjectLayoutSeed(PROJECT_A, true, 1);
 
-    const first = advanceProjectLayoutSeed(PROJECT_A, "pending", "settled", "applied", 2);
-    const second = advanceProjectLayoutSeed(PROJECT_A, "pending", "settled", "applied", 3);
+    const first = advanceProjectLayoutSeed(
+      PROJECT_A,
+      "pending",
+      "settled",
+      "applied",
+      undefined,
+      2
+    );
+    const second = advanceProjectLayoutSeed(
+      PROJECT_A,
+      "pending",
+      "settled",
+      "applied",
+      undefined,
+      3
+    );
 
     // Two views racing for the same seed: exactly one consumes it.
     expect(first).toEqual({
@@ -84,6 +101,104 @@ describe("projectLayoutSeeds (#13782)", () => {
     expect(() => advanceProjectLayoutSeed(PROJECT_A, "offered", "pending")).toThrow();
   });
 
+  describe("applying (#14106)", () => {
+    const VIEW_1 = 11;
+    const VIEW_2 = 22;
+
+    it("claims before anything opens and settles with the outcome the claim recorded", () => {
+      captureProjectLayoutSeed(PROJECT_A, true, 1);
+      expect(
+        advanceProjectLayoutSeed(PROJECT_A, "pending", "applying", "applied", VIEW_1, 2)
+      ).toEqual({ advanced: true, record: { status: "applying", outcome: "applied", at: 2 } });
+      expect(getProjectLayoutSeed(PROJECT_A)?.status).toBe("applying");
+      expect(
+        advanceProjectLayoutSeed(PROJECT_A, "applying", "settled", undefined, VIEW_1, 3)
+      ).toEqual({ advanced: true, record: { status: "settled", outcome: "applied", at: 3 } });
+    });
+
+    it("lets one of two windows claim, and only the claimant settle or fail it", () => {
+      captureProjectLayoutSeed(PROJECT_A, true, 1);
+      expect(
+        advanceProjectLayoutSeed(PROJECT_A, "pending", "applying", "applied", VIEW_1).advanced
+      ).toBe(true);
+      expect(
+        advanceProjectLayoutSeed(PROJECT_A, "pending", "applying", "applied", VIEW_2).advanced
+      ).toBe(false);
+      // A live claim elsewhere is still applying, not a failure to retry.
+      expect(advanceProjectLayoutSeed(PROJECT_A, "failed", "applying", undefined, VIEW_2)).toEqual(
+        expect.objectContaining({ advanced: false })
+      );
+      expect(
+        advanceProjectLayoutSeed(PROJECT_A, "applying", "settled", undefined, VIEW_2).advanced
+      ).toBe(false);
+      expect(
+        advanceProjectLayoutSeed(PROJECT_A, "applying", "failed", undefined, VIEW_1).advanced
+      ).toBe(true);
+    });
+
+    it("reads an apply whose view went away as failed, for another view to retry", () => {
+      captureProjectLayoutSeed(PROJECT_A, true, 1);
+      advanceProjectLayoutSeed(PROJECT_A, "pending", "applying", "applied", VIEW_1);
+      releaseProjectLayoutSeedClaim(PROJECT_A, VIEW_2);
+      expect(getProjectLayoutSeed(PROJECT_A)?.status).toBe("applying");
+      releaseProjectLayoutSeedClaim(PROJECT_A, VIEW_1);
+      expect(getProjectLayoutSeed(PROJECT_A)).toEqual(
+        expect.objectContaining({ status: "failed", outcome: "applied" })
+      );
+      // The crashed view can't settle what it no longer holds.
+      expect(
+        advanceProjectLayoutSeed(PROJECT_A, "applying", "settled", undefined, VIEW_1).advanced
+      ).toBe(false);
+      expect(
+        advanceProjectLayoutSeed(PROJECT_A, "failed", "applying", undefined, VIEW_2).advanced
+      ).toBe(true);
+      expect(
+        advanceProjectLayoutSeed(PROJECT_A, "applying", "settled", undefined, VIEW_2).record
+      ).toEqual(expect.objectContaining({ status: "settled", outcome: "applied" }));
+    });
+
+    it("reads an apply cut short by a restart as failed", () => {
+      // What a quit mid-apply leaves on disk: `applying`, with no claim in
+      // the new process.
+      storeMock.data.set("projectLayoutSeeds", {
+        [PROJECT_A]: { status: "applying", outcome: "opened", at: 4 },
+      });
+      expect(getProjectLayoutSeed(PROJECT_A)).toEqual({
+        status: "failed",
+        outcome: "opened",
+        at: 4,
+      });
+      expect(
+        advanceProjectLayoutSeed(PROJECT_A, "failed", "settled", "dismissed", undefined, 5)
+      ).toEqual({ advanced: true, record: { status: "settled", outcome: "dismissed", at: 5 } });
+    });
+
+    it("lets the claim go when storage refuses the claimant's finish", () => {
+      captureProjectLayoutSeed(PROJECT_A, true, 1);
+      advanceProjectLayoutSeed(PROJECT_A, "pending", "applying", "applied", VIEW_1);
+      storeMock.set.mockImplementationOnce(() => {
+        throw new Error("ENOSPC");
+      });
+      expect(() =>
+        advanceProjectLayoutSeed(PROJECT_A, "applying", "settled", undefined, VIEW_1)
+      ).toThrow(/ENOSPC/);
+      // Not applying forever: failed, and retryable once storage recovers.
+      expect(getProjectLayoutSeed(PROJECT_A)?.status).toBe("failed");
+      expect(
+        advanceProjectLayoutSeed(PROJECT_A, "failed", "applying", undefined, VIEW_1).advanced
+      ).toBe(true);
+    });
+
+    it("needs a claimant to enter or leave applying", () => {
+      captureProjectLayoutSeed(PROJECT_A, true, 1);
+      expect(() => advanceProjectLayoutSeed(PROJECT_A, "pending", "applying")).toThrow(/claimant/);
+      expect(() => advanceProjectLayoutSeed(PROJECT_A, "applying", "settled")).toThrow(/claimant/);
+      expect(() =>
+        advanceProjectLayoutSeed(PROJECT_A, "applying", "pending", undefined, VIEW_1)
+      ).toThrow(/cannot move from applying to pending/);
+    });
+  });
+
   it("does not advance a project it has never seen", () => {
     expect(advanceProjectLayoutSeed(PROJECT_A, "pending", "settled")).toEqual({
       advanced: false,
@@ -95,7 +210,7 @@ describe("projectLayoutSeeds (#13782)", () => {
   it("keeps other projects' records when writing one", () => {
     captureProjectLayoutSeed(PROJECT_A, true, 1);
     captureProjectLayoutSeed(PROJECT_B, true, 2);
-    advanceProjectLayoutSeed(PROJECT_A, "pending", "offered", undefined, 3);
+    advanceProjectLayoutSeed(PROJECT_A, "pending", "offered", undefined, undefined, 3);
     expect(getProjectLayoutSeed(PROJECT_B)).toEqual({ status: "pending", at: 2 });
   });
 

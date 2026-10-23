@@ -18,12 +18,20 @@ import type {
  * whose first hydrate was not a first open is recorded as settled, so a state
  * file cleared or quarantined later can never make it look new.
  *
- * No in-memory copy, as in `projectSurfaceChoices.ts`: reads happen once per
- * view and writes once per project.
+ * No in-memory copy of the records, as in `projectSurfaceChoices.ts`: reads
+ * happen once per view and writes once per project. The one thing held in
+ * memory is who is applying a seed right now, which is exactly what must not
+ * outlive this process.
  */
 const STORE_KEY = "projectLayoutSeeds";
 
-const STATUSES: readonly ProjectLayoutSeedStatus[] = ["pending", "offered", "settled"];
+const STATUSES: readonly ProjectLayoutSeedStatus[] = [
+  "pending",
+  "offered",
+  "applying",
+  "failed",
+  "settled",
+];
 const OUTCOMES: readonly ProjectLayoutSeedOutcome[] = [
   "applied",
   "opened",
@@ -31,12 +39,25 @@ const OUTCOMES: readonly ProjectLayoutSeedOutcome[] = [
   "ineligible",
 ];
 
-/** The only moves a seed makes; each is one-way, so nothing ever runs twice. */
+/**
+ * The only moves a seed makes. Only `failed → applying` goes back, and only on
+ * the user's Retry: an apply reuses what is already open, so a retry opens
+ * just what the failed attempt didn't.
+ */
 const NEXT: Record<ProjectLayoutSeedStatus, readonly ProjectLayoutSeedStatus[]> = {
-  pending: ["offered", "settled"],
-  offered: ["settled"],
+  pending: ["offered", "applying", "settled"],
+  offered: ["applying", "settled"],
+  applying: ["failed", "settled"],
+  failed: ["applying", "settled"],
   settled: [],
 };
+
+/**
+ * project id → the webContents applying its seed. A stored `applying` with no
+ * live claim here was cut short — this process quit, or the view crashed or
+ * reloaded — so it reads as `failed`, never as still running.
+ */
+const claims = new Map<string, number>();
 
 export function isProjectLayoutSeedStatus(value: unknown): value is ProjectLayoutSeedStatus {
   return STATUSES.some((status) => status === value);
@@ -87,7 +108,24 @@ function write(projectId: string, record: ProjectLayoutSeedRecord): void {
 /** The project's seed, or `null` when its first hydrate has not been seen yet. */
 export function getProjectLayoutSeed(projectId: string): ProjectLayoutSeedRecord | null {
   const all = readAll();
-  return Object.hasOwn(all, projectId) ? parseRecord(all[projectId]) : null;
+  if (!Object.hasOwn(all, projectId)) return null;
+  const record = parseRecord(all[projectId]);
+  return record.status === "applying" && !claims.has(projectId)
+    ? { ...record, status: "failed" }
+    : record;
+}
+
+/**
+ * The view applying `projectId`'s seed went away: a crash, a reload, or its
+ * window closing. Its claim lapses, so the seed reads as `failed` and another
+ * view may retry it. A claim since taken by a different view is left alone.
+ */
+export function releaseProjectLayoutSeedClaim(projectId: string, claimant: number): void {
+  if (claims.get(projectId) === claimant) claims.delete(projectId);
+}
+
+export function _resetProjectLayoutSeedClaimsForTest(): void {
+  claims.clear();
 }
 
 /**
@@ -115,27 +153,47 @@ export function captureProjectLayoutSeed(
  *
  * The compare and the write run in one synchronous turn of main's event loop,
  * so of two views racing for the same project exactly one advances it. The
- * renderer consumes a seed this way BEFORE applying anything: an apply that is
- * interrupted is never replayed, which is what "never runs twice" costs.
+ * renderer claims a seed this way (`→ applying`) BEFORE opening anything, and
+ * `claimant` — the claiming webContents — is the only caller that may then
+ * settle or fail it. Settling without an outcome keeps the one the claim
+ * recorded.
  */
 export function advanceProjectLayoutSeed(
   projectId: string,
   from: ProjectLayoutSeedStatus,
   to: ProjectLayoutSeedStatus,
   outcome?: ProjectLayoutSeedOutcome,
+  claimant?: number,
   now: number = Date.now()
 ): ProjectLayoutSeedAdvance {
   requireProjectId(projectId);
   if (!NEXT[from].includes(to)) {
     throw new Error(`layout seed: cannot move from ${from} to ${to}`);
   }
+  if ((to === "applying" || from === "applying") && claimant === undefined) {
+    throw new Error("layout seed: applying needs a claimant");
+  }
   const current = getProjectLayoutSeed(projectId);
   if (current?.status !== from) return { advanced: false, record: current };
+  if (from === "applying" && claims.get(projectId) !== claimant) {
+    return { advanced: false, record: current };
+  }
+  const kept = outcome ?? current.outcome;
   const record: ProjectLayoutSeedRecord = {
     status: to,
-    ...(outcome !== undefined ? { outcome } : {}),
+    ...(kept !== undefined ? { outcome: kept } : {}),
     at: now,
   };
-  write(projectId, record);
+  try {
+    write(projectId, record);
+  } catch (error) {
+    // The claimant tried to finish and storage refused: holding the claim
+    // would read as applying forever, so it lapses and the seed reads as
+    // failed, for a Retry once storage recovers.
+    if (from === "applying") claims.delete(projectId);
+    throw error;
+  }
+  if (from === "applying") claims.delete(projectId);
+  if (to === "applying" && claimant !== undefined) claims.set(projectId, claimant);
   return { advanced: true, record };
 }
