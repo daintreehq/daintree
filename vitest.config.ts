@@ -93,6 +93,9 @@ export default defineConfig({
     exclude: [
       "node_modules",
       "dist",
+      // Package build output: the CLI's dist/ carries a staged copy of the
+      // reference app, tests and preview specs included, that must not run twice.
+      "packages/*/dist/**",
       "dist-electron",
       "build",
       "release",
