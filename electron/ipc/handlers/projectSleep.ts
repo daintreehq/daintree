@@ -1,6 +1,7 @@
 import { CHANNELS } from "../channels.js";
 import { projectViewManagersFrom } from "../../window/activeProjectIds.js";
 import { sleepProject } from "../../services/projectSleep.js";
+import { loadProjectPluginWorkReader } from "../../services/plugin/projectPluginWork.js";
 import { defineIpcNamespace, op } from "../define.js";
 import type { HandlerDependencies } from "../types.js";
 import type { ProjectSleepResult } from "../../../shared/types/ipc/project.js";
@@ -21,10 +22,7 @@ export function registerProjectSleepHandlers(deps: HandlerDependencies): () => v
       sleepProject: op(
         CHANNELS.PROJECT_SLEEP,
         async (projectId: string): Promise<ProjectSleepResult> => {
-          // Resolved before the sleep starts: it is read synchronously at the
-          // commit, and PluginService stays off the handler's static graph.
-          const { pluginService } = await import("../../services/PluginService.js");
-          const pluginWork = (id: string) => pluginService.getProjectPluginWork(id);
+          const pluginWork = await loadProjectPluginWorkReader();
           const outcome = await sleepProject(
             projectId,
             { initiator: "user" },

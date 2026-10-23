@@ -223,6 +223,7 @@ describe("project:sleep", () => {
       expect(result.pluginWorkStopped).toEqual({
         tasks: [{ pluginName: "Sync", title: "Uploading assets" }],
         processes: 2,
+        calls: 0,
       });
       expect(pluginServiceMock.getProjectPluginWork).toHaveBeenCalledWith("proj-1");
     });

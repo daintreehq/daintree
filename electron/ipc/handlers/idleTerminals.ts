@@ -1,5 +1,6 @@
 import type { IdleTerminalNotificationService } from "../../services/IdleTerminalNotificationService.js";
 import type { IdleTerminalNotifyConfig } from "../../../shared/types/ipc/idleTerminals.js";
+import type { PluginWorkStopped } from "../../../shared/types/ipc/project.js";
 import type { HandlerDependencies } from "../types.js";
 import { defineIpcNamespace, op } from "../define.js";
 import { IDLE_TERMINAL_METHOD_CHANNELS } from "./idleTerminals.preload.js";
@@ -50,12 +51,13 @@ export const idleTerminalsNamespace = defineIpcNamespace({
     ),
     closeProject: op(
       IDLE_TERMINAL_METHOD_CHANNELS.closeProject,
-      async (projectId: string): Promise<void> => {
+      async (projectId: string): Promise<PluginWorkStopped | null> => {
         if (typeof projectId !== "string" || projectId.trim() === "") {
           throw new Error("projectId must be a non-empty string");
         }
         const service = await getService();
-        await service.closeProject(projectId);
+        const { pluginWorkStopped } = await service.closeProject(projectId);
+        return pluginWorkStopped;
       }
     ),
     dismissProject: op(

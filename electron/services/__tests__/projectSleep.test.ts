@@ -360,7 +360,11 @@ describe("sleepProject", () => {
 
       expect(outcome).toMatchObject({
         status: "slept",
-        pluginWorkStopped: { tasks: [{ pluginName: "Sync", title: "Uploading" }], processes: 1 },
+        pluginWorkStopped: {
+          tasks: [{ pluginName: "Sync", title: "Uploading" }],
+          processes: 1,
+          calls: 1,
+        },
       });
       expect(order).toEqual(["kill", "read", "unload"]);
     });

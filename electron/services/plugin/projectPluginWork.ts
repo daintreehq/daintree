@@ -43,6 +43,19 @@ export function summarizePluginWorkStopped(
     entry.liveTasks.map(({ pluginName, title }) => ({ pluginName, title }))
   );
   const processes = work.reduce((sum, entry) => sum + entry.runningProcesses, 0);
-  if (tasks.length === 0 && processes === 0) return null;
-  return { tasks, processes };
+  const calls = work.reduce((sum, entry) => sum + entry.pendingCalls, 0);
+  if (tasks.length === 0 && processes === 0 && calls === 0) return null;
+  return { tasks, processes, calls };
+}
+
+/**
+ * The live reader a user Sleep hands `sleepProject`. Resolved before the sleep
+ * starts, since it is read synchronously at the commit, and loaded lazily so
+ * PluginService stays off its callers' static graph.
+ */
+export async function loadProjectPluginWorkReader(): Promise<
+  (projectId: string) => ProjectPluginWork[]
+> {
+  const { pluginService } = await import("../PluginService.js");
+  return (projectId) => pluginService.getProjectPluginWork(projectId);
 }

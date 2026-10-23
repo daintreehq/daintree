@@ -201,9 +201,21 @@ export class IdleBackgroundAutoCloseService {
     }
   }
 
+  /**
+   * Plugin work holding a project past the sweep's own screen, logged by name:
+   * the sleep that backs off for it reports only that it was ineligible.
+   */
+  private latePluginWorkHold(projectId: string): string | null {
+    const hold = this.pluginWorkHold(projectId);
+    if (hold !== null) {
+      logInfo("idle-background-auto-close-plugin-work-hold", { projectId, hold });
+    }
+    return hold;
+  }
+
   /** Neither coordination nor plugin work holds the project. */
   private isUnheld(projectId: string): boolean {
-    return this.coordinationHold(projectId) === null && this.pluginWorkHold(projectId) === null;
+    return this.coordinationHold(projectId) === null && this.latePluginWorkHold(projectId) === null;
   }
 
   /**
@@ -938,7 +950,7 @@ export class IdleBackgroundAutoCloseService {
     if (this.coordinationHold(projectId) !== null) {
       return { status: "skipped", reason: "coordination-hold" };
     }
-    if (this.pluginWorkHold(projectId) !== null) {
+    if (this.latePluginWorkHold(projectId) !== null) {
       return { status: "skipped", reason: "plugin-work" };
     }
     const vetted = evaluateShellTerminals(
@@ -1071,7 +1083,11 @@ export class IdleBackgroundAutoCloseService {
     if (!liveTerminals) return null;
     const project = this.readEligibleProject(projectId, now, thresholdMs);
     if (!project) return null;
-    if (this.blockingReason(projectId, liveTerminals)) return null;
+    const blocked = this.blockingReason(projectId, liveTerminals);
+    if (blocked) {
+      if (blocked === "plugin-work") this.latePluginWorkHold(projectId);
+      return null;
+    }
 
     // From here Sleep owns the order. Its capture-revoke settles whatever
     // non-live session records the project has left — the gate above floors a

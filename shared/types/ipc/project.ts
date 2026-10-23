@@ -215,6 +215,8 @@ export interface PluginWorkStopped {
   tasks: Array<{ pluginName: string; title: string }>;
   /** Managed processes with a live OS child. */
   processes: number;
+  /** Plugin calls still in flight, which end without an answer. */
+  calls: number;
 }
 
 /** Project resource statistics */

@@ -15,6 +15,14 @@ import { getSystemSleepService } from "./SystemSleepService.js";
 import { logInfo, logError } from "../utils/logger.js";
 import { broadcastToRenderer } from "../ipc/utils.js";
 import { CHANNELS } from "../ipc/channels.js";
+import { loadProjectPluginWorkReader } from "./plugin/projectPluginWork.js";
+import type { PluginWorkStopped } from "../../shared/types/ipc/project.js";
+
+/** What the reminder's Sleep did: terminals it killed, plugin work it stopped. */
+export interface IdleTerminalSleepResult {
+  terminalsKilled: number;
+  pluginWorkStopped: PluginWorkStopped | null;
+}
 
 const DEFAULT_CONFIG: IdleTerminalNotifyConfig = {
   enabled: true,
@@ -284,11 +292,14 @@ export class IdleTerminalNotificationService {
    * user-initiated, because the user pressed it, even though the reminder
    * that offered it was automatic.
    */
-  async closeProject(projectId: string): Promise<number> {
-    if (!projectId) return 0;
+  async closeProject(projectId: string): Promise<IdleTerminalSleepResult> {
+    if (!projectId) return { terminalsKilled: 0, pluginWorkStopped: null };
 
     try {
-      const { sleepProject } = await import("./projectSleep.js");
+      const [{ sleepProject }, pluginWork] = await Promise.all([
+        import("./projectSleep.js"),
+        loadProjectPluginWorkReader(),
+      ]);
       const outcome = await sleepProject(
         projectId,
         { initiator: "user" },
@@ -296,9 +307,12 @@ export class IdleTerminalNotificationService {
           ptyClient: this.ptyClient ?? getPtyClient(),
           workspaceClient: getWorkspaceClientRef(),
           projectViewManagers: this.projectViewManagersProvider ?? (() => []),
+          pluginWork,
         }
       );
       const terminalsKilled = outcome.status === "slept" ? outcome.terminalsKilled : 0;
+      const pluginWorkStopped =
+        outcome.status === "slept" ? (outcome.pluginWorkStopped ?? null) : null;
 
       // Only burn a cooldown slot if we actually acted on something — otherwise
       // an empty project would silently suppress future legitimate notifications.
@@ -310,7 +324,7 @@ export class IdleTerminalNotificationService {
         projectId,
         terminalsKilled,
       });
-      return terminalsKilled;
+      return { terminalsKilled, pluginWorkStopped };
     } catch (error) {
       logError("idle-terminal-notify-close-failed", error, { projectId });
       throw error;

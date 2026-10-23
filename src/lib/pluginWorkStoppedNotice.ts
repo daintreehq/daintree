@@ -3,21 +3,25 @@ import { pluralize } from "@/lib/pluralize";
 import type { PluginWorkStopped } from "@shared/types/ipc/project";
 
 /**
- * The record a user Sleep leaves when it stopped plugin tasks (#14093). The
- * project's view went with the sleep, so nothing else on screen says the work
- * ended; managed processes alone are expected to stop and leave no record.
+ * The record a user Sleep leaves when it interrupted plugin work (#14093): an
+ * unfinished task or a call still in flight. The project's view went with the
+ * sleep, so nothing else on screen says that work ended. Managed processes
+ * alone are expected to stop with their project and leave no record.
  */
 export function describePluginWorkStopped(
   projectName: string,
-  stopped: PluginWorkStopped | undefined
+  stopped: PluginWorkStopped | null | undefined
 ): string | null {
   const tasks = stopped?.tasks ?? [];
-  if (tasks.length === 0) return null;
-  const first = tasks[0]!;
+  const calls = stopped?.calls ?? 0;
+  if (tasks.length === 0 && calls === 0) return null;
+  const first = tasks[0];
   const what =
-    tasks.length === 1
+    tasks.length === 1 && first
       ? `${first.pluginName}'s "${first.title}"`
-      : pluralize(tasks.length, "plugin task");
+      : tasks.length > 1
+        ? pluralize(tasks.length, "plugin task")
+        : pluralize(calls, "plugin call");
   const processes = stopped?.processes ?? 0;
   const alongside =
     processes > 0
@@ -28,7 +32,7 @@ export function describePluginWorkStopped(
 
 export function notifyPluginWorkStopped(
   projectName: string,
-  stopped: PluginWorkStopped | undefined
+  stopped: PluginWorkStopped | null | undefined
 ): void {
   const message = describePluginWorkStopped(projectName, stopped);
   if (!message) return;

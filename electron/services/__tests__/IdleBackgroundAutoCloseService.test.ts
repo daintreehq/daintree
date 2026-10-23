@@ -566,19 +566,29 @@ describe("IdleBackgroundAutoCloseService", () => {
       });
     });
 
-    it("stops the teardown when plugin work starts after the sweep's own read (#14093)", async () => {
+    it("stops the teardown when plugin work starts during sleep's own awaits (#14093)", async () => {
       enable();
       projectStoreMock.getAllProjects.mockReturnValue([makeIdleProject("proj-1")]);
       const service = makeService();
-      let reads = 0;
+      // The work starts while Sleep awaits the assistant revoke, past every
+      // read the sweep and the close made before handing over to it.
+      let started = false;
+      helpSessionServiceMock.revokeByProjectId.mockImplementationOnce(async () => {
+        started = true;
+      });
       service.setPluginWorkProvider(() =>
-        ++reads > 2 ? "plugin-operation:project__proj-1__acme.sync" : null
+        started ? "plugin-operation:project__proj-1__acme.sync" : null
       );
       await runCheck(service);
 
+      expect(helpSessionServiceMock.revokeByProjectId).toHaveBeenCalledWith("proj-1");
       expect(ptyClientMock.gracefulKillByProject).not.toHaveBeenCalled();
       expect(pluginLifecycleMock.notifyProjectPluginsClosed).not.toHaveBeenCalled();
       expect(projectStoreMock.updateProjectStatus).not.toHaveBeenCalled();
+      expect(logInfoMock).toHaveBeenCalledWith("idle-background-auto-close-plugin-work-hold", {
+        projectId: "proj-1",
+        hold: "plugin-operation:project__proj-1__acme.sync",
+      });
     });
 
     it("holds the project when the plugin work provider throws (#14093)", async () => {

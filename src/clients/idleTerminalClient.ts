@@ -1,4 +1,5 @@
 import type { IdleTerminalNotifyConfig, IdleTerminalNotifyPayload } from "@shared/types";
+import type { PluginWorkStopped } from "@shared/types/ipc/project";
 
 export const idleTerminalClient = {
   getConfig: (): Promise<IdleTerminalNotifyConfig> => {
@@ -9,7 +10,8 @@ export const idleTerminalClient = {
     return window.electron.idleTerminals.updateConfig(config);
   },
 
-  closeProject: (projectId: string): Promise<void> => {
+  /** Resolves to the plugin work the sleep stopped, or null when it stopped none. */
+  closeProject: (projectId: string): Promise<PluginWorkStopped | null> => {
     return window.electron.idleTerminals.closeProject(projectId);
   },
 

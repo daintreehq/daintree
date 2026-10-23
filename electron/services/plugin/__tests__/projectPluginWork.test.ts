@@ -58,12 +58,17 @@ describe("summarizePluginWorkStopped (#14093)", () => {
         { pluginName: "Lint", title: "Linting" },
       ],
       processes: 3,
+      calls: 0,
     });
   });
 
-  it("reports nothing when only calls were in flight", () => {
+  it("reports calls that were still in flight", () => {
     expect(
       summarizePluginWorkStopped([work({ pluginId: "project__p__a.calls", pendingCalls: 4 })])
-    ).toBeNull();
+    ).toEqual({ tasks: [], processes: 0, calls: 4 });
+  });
+
+  it("reports nothing for a project whose plugins were doing nothing", () => {
+    expect(summarizePluginWorkStopped([])).toBeNull();
   });
 });
