@@ -13,6 +13,7 @@ export type {
   SentToAgentRecord,
   RunRecipeRecord,
   ReadScreenRecord,
+  AgentInputRecord,
   RegisteredForgeProviderRecord,
   RegisteredFileDecorationProviderRecord,
   RegisteredWorktreeSetupStepRecord,

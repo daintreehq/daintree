@@ -52,6 +52,9 @@ import type {
   SendToAgentParams,
   RunRecipeParams,
   TerminalsReadScreenParams,
+  AgentsInterruptParams,
+  AgentsSendKeysParams,
+  AgentsSubmitParams,
   InvalidateFileDecorationsParams,
   LoggerParams,
   PluginWorkerToHostMessage,
@@ -984,6 +987,18 @@ export class PluginDevWorkerMainBridge {
         return this.host.agents.list();
       case "agents.listAll":
         return this.host.agents.listAll();
+      case "agents.interrupt": {
+        const p = params as AgentsInterruptParams;
+        return this.host.agents.interrupt(p.terminalId);
+      }
+      case "agents.sendKeys": {
+        const p = params as AgentsSendKeysParams;
+        return this.host.agents.sendKeys(p.terminalId, p.input);
+      }
+      case "agents.submit": {
+        const p = params as AgentsSubmitParams;
+        return this.host.agents.submit(p.terminalId, p.text);
+      }
       case "terminals.readScreen": {
         const p = params as TerminalsReadScreenParams;
         return this.host.terminals.readScreen(p.terminalId, p.options);

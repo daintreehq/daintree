@@ -291,6 +291,10 @@ export type {
 // constants and the helper are value exports.
 
 export type {
+  PluginAgentInputResult,
+  PluginAgentInterruptResult,
+  PluginAgentKeysInput,
+  PluginAgentKeysResult,
   PluginAgentPane,
   PluginAgentRun,
   PluginAgentsApi,

@@ -14,7 +14,7 @@ This page is the reference: every member, its gates and its failure modes. For a
 - Registration: [`registerAction`](#registeraction) · [`registerHandler` and `broadcastToRenderer`](#registerhandler-and-broadcasttorenderer) · [Deadlines and size limits](#deadlines-and-size-limits) · [`postToPanel`](#posttopanel) · [Push delivery](#push-delivery) · [Listener hints](#listener-hints--haslisteners-ondidchangelisteners) · [`registerForgeProvider`](#registerforgeprovider) · [File decorations](#registerfiledecorationprovider-and-invalidatefiledecorations) · [Worktree delete notes](#registerworktreedeletenotesprovider) · [Worktree setup steps](#worktree-setup-steps) · [`mcp.registerTools`](#mcpregistertools)
 - Observation: [Worktrees](#worktree-observation) · [Agent state](#agent-observation) · [Terminal lifecycle](#ondidchangeterminallifecycle) · [Focused panel](#ondidchangefocusedpanel) · [Panel lifecycle](#ondidchangepanellifecycle) · [`onDidWake`](#ondidwake)
 - Panels and actions: [`reloadPanel`](#reloadpanel) · [`restartWorker`](#restartworker) · [`setPanelBadge`](#setpanelbadge) · [`setToolbarButtonBadge`](#settoolbarbuttonbadge) · [`setToolbarButtonState`](#settoolbarbuttonstate) · [`setContext`](#setcontext) · [`setWorktreeCardStatus`](#setworktreecardstatus) · [`setWorktreeReviewChecks`](#setworktreereviewchecks) · [`setPanelMenuItems`](#setpanelmenuitems) · [`dispatch`](#dispatch) · [`actions`](#actions--built-in-action-catalog)
-- Agents: [`sendToActiveAgent`](#sendtoactiveagent--inject-text-into-the-active-agent) · [`sendToAgent`](#sendtoagent--hand-work-to-an-agents-draft) · [`runRecipe`](#runrecipe--offer-to-run-one-of-your-recipes) · [`agents.list`](#agentslist--the-projects-agent-panes) · [`agents.listAll`](#agentslistall--every-agent-in-every-open-project) · [`terminals.readScreen`](#terminalsreadscreen--what-a-terminal-shows)
+- Agents: [`sendToActiveAgent`](#sendtoactiveagent--inject-text-into-the-active-agent) · [`sendToAgent`](#sendtoagent--hand-work-to-an-agents-draft) · [`runRecipe`](#runrecipe--offer-to-run-one-of-your-recipes) · [`agents.list`](#agentslist--the-projects-agent-panes) · [`agents.listAll`](#agentslistall--every-agent-in-every-open-project) · [Driving agents you launched](#agentsinterrupt-sendkeys-submit--driving-agents-you-launched) · [`terminals.readScreen`](#terminalsreadscreen--what-a-terminal-shows)
 - State: [`settings`](#settings) · [`storage`](#storage--private-keyvalue-storage) · [`db`](#db--host-managed-sqlite)
 - UI: [`logger`](#logger) · [`showToast`](#showtoast) · [`notify`](#notify) · [`tasks`](#tasks--long-running-work) · [User prompts](#user-prompts--showquickpick-showinputbox-showconfirm)
 - System: [`process`](#process--managed-child-processes) · [`fs`](#fs--host-mediated-scope-contained-filesystem) · [`git`](#git--host-mediated-git-scoped-to-a-worktree) · [`clipboard`](#clipboard--host-mediated-os-clipboard) · [`system`](#system--open-and-reveal-files-in-your-own-scope) · [`documents`](#documents--render-html-to-pdf)
@@ -269,7 +269,8 @@ interface PluginHostApi {
     options?: PluginRunRecipeOptions,
     callOptions?: PluginHostCallOptions
   ): Promise<PluginRunRecipeResult>;
-  // The project's agent panes — gated on `agent:read`
+  // The project's agent panes — gated on `agent:read`; input to the agents
+  // this plugin launched — gated on `agent:input`
   readonly agents: PluginAgentsApi;
   // What a terminal's screen shows, as plain text — gated on `terminal:read`
   readonly terminals: PluginTerminalsApi;
@@ -414,7 +415,7 @@ A capability is declared in `manifest.capabilities` and checked on every call �
 | --- | --- | --- |
 | `agent:read` | `getAgentState`, `onDidChangeAgentState`, `onDidChangeTerminalLifecycle`, `agents.list`, `agents.listAll`, `onDidChangeAllAgents` (the last two refused to a project plugin) | — |
 | `agent:register` | `contributes.agents` — required by the manifest check | — |
-| `agent:input` | `sendToActiveAgent`, `sendToAgent` | First use |
+| `agent:input` | `sendToActiveAgent`, `sendToAgent`, `agents.interrupt`, `agents.sendKeys`, `agents.submit` | First use |
 | `terminal:read` | `terminals.readScreen` | First use. Not granted by `agent:read`. |
 | `fs:project-read`, `fs:user-data-read` | `fs` reads, `readdir`, `stat`, `watch`; `renderPdf`'s `htmlPath`; `system.*` (read or write of the root class) | — |
 | `fs:project-write`, `fs:user-data-write` | `fs.writeFile`, `appendFile`, `mkdir`; `renderPdf`'s output; `db` handle `backup` destination | First write. The prompt is keyed on the strongest write capability you declare (`fs:project-write` when declared, else `fs:user-data-write`), not on the target's root class, so one grant covers writes to every root, your data directory included. |
@@ -1632,6 +1633,37 @@ An empty list only means "no agents" when `degraded` is `false`. `degraded: true
 Gated on `agent:read`, and only for installed and built-in plugins. A project plugin is scoped to its own project everywhere else, so both calls throw `PERMISSION_REQUIRED:` for one — in a worker, `listAll` rejects with it, while a refused `onDidChangeAllAgents` is logged by main and resolves a disposer that never fires, like every worker subscription. `listAll` is NOT revoke-guarded; subscribing is.
 
 `onDidChangeAllAgents` fires with the whole new snapshot, frozen, when a run is added or removed or one's state, title or worktree changes, and when the host loses or regains sight of the fleet. There is no initial callback. A callback can repeat the previous snapshot, when something the plugin cannot see changed. Coalesced to the latest snapshot by default ([`PluginHostSubscriptionOptions`](#pluginhostapi)). In process it throws `FLEET_UNAVAILABLE:` if the host is not tracking agents at all.
+
+## `agents.interrupt`, `sendKeys`, `submit` — driving agents you launched
+
+```ts
+const launch = await host.dispatch("agent.launch", {
+  agentId: "claude",
+  prompt: "Fix the flaky test",
+});
+const started = launch.ok
+  ? (launch.result as { launched?: boolean; terminalId?: string | null })
+  : null;
+if (started?.launched && started.terminalId) {
+  const terminalId = started.terminalId;
+  // Later, when the agent stops at its CLI's own permission prompt:
+  await host.agents.sendKeys(terminalId, { choose: "Yes" });
+  // Stop the turn it is running, keeping the pane and conversation:
+  await host.agents.interrupt(terminalId);
+  // Type a follow-up, one submission with one Enter:
+  await host.agents.submit(terminalId, "/compact");
+}
+```
+
+Input to the agents this plugin started with its own `host.dispatch("agent.launch")`, and nothing else. Main records a launch from its result — `launched: true` with a `terminalId` — never from anything the plugin says, so an agent the user, an MCP client or another plugin started answers `not-found`, as does one outside a project plugin's own project. A launch that passes its own `requestedId` is not recorded: the id has to be the launcher's choice. The record lasts while the plugin stays loaded, across a reload that brings it back, and follows the pane through a restart; the `terminal.*Owned` actions stay closed to `dispatch`.
+
+- `interrupt(terminalId)` sends the agent's cancel keystrokes. An idle agent, or one whose CLI binds a different cancel key, is refused rather than reported stopped. `cancelKey` is `advertised` when the CLI's screen shows the key it was sent, `unverified` when it is only that agent's known convention.
+- `sendKeys(terminalId, { keys } | { choose })` presses up to 16 named keys (`Up`, `Down`, `Left`, `Right`, `Enter`, `Escape`, `Tab`, `Space`, `Backspace`, a lowercase letter or digit), or moves to the option whose label the screen shows and presses Enter. The result lists the keys pressed; it carries no screen text — read that with [`terminals.readScreen`](#terminalsreadscreen--what-a-terminal-shows), which needs `terminal:read`.
+- `submit(terminalId, text)` queues `text` as one submission: the agent's next prompt, or a slash command. It resolves once queued, not once the agent reads it.
+
+Each resolves `{ status: "sent", … }`, `{ status: "refused", reason }` when nothing was written (not worth retrying unchanged), `{ status: "not-found" }`, or `{ status: "unavailable" }` when the terminal host didn't answer or the plugin is unloaded. `sent` means written, not acted on: watch the agent's state or read its screen for the effect. They run in main against the terminal host's own record, so an agent in a project whose view is not loaded is reached too. In a worker, a call still in flight when the worker stops rejects rather than answering `unavailable`, since the input may already have gone out.
+
+Gated on `agent:input`, with the same first-use consent prompt as `sendToActiveAgent`; a call that would answer `not-found` never raises it. They throw `PERMISSION_REQUIRED:` if the capability is missing or the user denies consent, `DRIVEN_ELSEWHERE:` when the call came from a view that doesn't drive the agent's project, and on a malformed id, key list or blank text before the prompt. NOT revoke-guarded.
 
 ## `terminals.readScreen` — what a terminal shows
 

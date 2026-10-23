@@ -1876,6 +1876,79 @@ describe("createMockHost production-parity validation (#10617)", () => {
     expect(host.sentToActiveAgentCalls).toEqual([{ text: "run it", submit: true }]);
   });
 
+  describe("input to launched agents (#14018)", () => {
+    it("reaches an agent the plugin's own agent.launch started, and nothing else", async () => {
+      const host = createMockHost({
+        dispatch: async () => ({ ok: true, result: { launched: true, terminalId: "t-mine" } }),
+      });
+      await host.dispatch("agent.launch", { agentId: "claude" });
+
+      await expect(host.agents.submit("t-mine", "/compact")).resolves.toEqual({
+        status: "sent",
+      });
+      await expect(host.agents.sendKeys("t-mine", { keys: ["Down", "Enter"] })).resolves.toEqual({
+        status: "sent",
+        keys: ["Down", "Enter"],
+      });
+      await expect(host.agents.interrupt("t-users")).resolves.toEqual({ status: "not-found" });
+      expect(host.agentInputCalls.map((c) => [c.method, c.terminalId, c.result.status])).toEqual([
+        ["submit", "t-mine", "sent"],
+        ["sendKeys", "t-mine", "sent"],
+        ["interrupt", "t-users", "not-found"],
+      ]);
+    });
+
+    it("counts no launch that started no agent", async () => {
+      const host = createMockHost({
+        dispatch: async () => ({ ok: true, result: { launched: false, terminalId: "gate" } }),
+      });
+      await host.dispatch("agent.launch", { agentId: "claude" });
+      await expect(host.agents.interrupt("gate")).resolves.toEqual({ status: "not-found" });
+    });
+
+    it("counts no launch that named its own panel id, as production", async () => {
+      const host = createMockHost({
+        dispatch: async () => ({ ok: true, result: { launched: true, terminalId: "chosen" } }),
+      });
+      await host.dispatch("agent.launch", { agentId: "claude", requestedId: "chosen" });
+      await expect(host.agents.interrupt("chosen")).resolves.toEqual({ status: "not-found" });
+    });
+
+    it("rejects a sparse key list, as production", async () => {
+      const host = createMockHost();
+      host.simulateAgentLaunched("t-1");
+      await expect(host.agents.sendKeys("t-1", { keys: new Array<string>(1) })).rejects.toThrow(
+        /agents\.sendKeys/
+      );
+    });
+
+    it("lets a test mark an agent as launched", async () => {
+      const host = createMockHost();
+      host.simulateAgentLaunched("t-1");
+      await expect(host.agents.interrupt("t-1")).resolves.toEqual({
+        status: "sent",
+        cancelKey: "advertised",
+      });
+    });
+
+    it("gates on agent:input and validates like production", async () => {
+      const denied = createMockHost({ capabilities: ["agent:read"] });
+      await expect(denied.agents.interrupt("t-1")).rejects.toThrow(/PERMISSION_REQUIRED/);
+
+      const host = createMockHost();
+      host.simulateAgentLaunched("t-1");
+      await expect(host.agents.submit("t-1", "  ")).rejects.toThrow(/non-empty/);
+      await expect(host.agents.sendKeys("t-1", { keys: ["Ctrl+C"] })).rejects.toThrow(
+        /agents\.sendKeys/
+      );
+      await expect(
+        host.agents.sendKeys("t-1", { keys: ["Enter"], choose: "Yes" } as never)
+      ).rejects.toThrow(/exactly one/);
+      await expect(host.agents.interrupt("")).rejects.toThrow(/terminalId/);
+      expect(host.agentInputCalls).toEqual([]);
+    });
+  });
+
   describe("agent handoff", () => {
     const panes = [
       {

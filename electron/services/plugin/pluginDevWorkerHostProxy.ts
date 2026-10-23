@@ -118,6 +118,9 @@ import type {
   PluginSendToAgentResult,
   PluginRunRecipeResult,
   PluginTerminalScreenResult,
+  PluginAgentInputResult,
+  PluginAgentInterruptResult,
+  PluginAgentKeysResult,
   PluginToolbarButtonRuntimeState,
 } from "../../../shared/types/plugin.js";
 import { withTimeout } from "../../utils/withTimeout.js";
@@ -829,6 +832,19 @@ export class PluginDevWorkerHostProxy {
    * imperative UI prompts (#10522): their host contract resolves the dismiss
    * value (undefined / false) on unload rather than throwing.
    */
+  /**
+   * A `host.agents` input call (#14018). One made after disposal sent nothing,
+   * so it answers the host's own unload result; one cut off in flight rejects,
+   * because main may already have written and "unavailable" would deny it.
+   */
+  private callAgentInput<T>(
+    method: PluginHostCallMethod,
+    params: unknown
+  ): Promise<T | { readonly status: "unavailable" }> {
+    if (this.disposed) return Promise.resolve({ status: "unavailable" });
+    return this.call<T>(method, params);
+  }
+
   private callWithGrace<T>(
     method: PluginHostCallMethod,
     params: unknown,
@@ -1970,6 +1986,14 @@ export class PluginDevWorkerHostProxy {
             undefined,
             UNAVAILABLE_PLUGIN_ALL_AGENTS_SNAPSHOT
           ).then(normalizePluginAllAgentsSnapshot),
+        // Ownership, capability, consent and the write all run on the real host
+        // in main.
+        interrupt: (terminalId) =>
+          this.callAgentInput<PluginAgentInterruptResult>("agents.interrupt", { terminalId }),
+        sendKeys: (terminalId, input) =>
+          this.callAgentInput<PluginAgentKeysResult>("agents.sendKeys", { terminalId, input }),
+        submit: (terminalId, text) =>
+          this.callAgentInput<PluginAgentInputResult>("agents.submit", { terminalId, text }),
       },
       // Capability, consent, rate limit and project scope all live on the real
       // host in main; the grace value is the host's own unload answer.

@@ -41,6 +41,7 @@ import {
   channelHandlerArityHint,
 } from "./plugin/pluginHandlerHints.js";
 import { PluginPtyTransport } from "./plugin/PluginPtyTransport.js";
+import { forgetPluginLaunches, forgetPluginLaunchesWhere } from "./plugin/pluginLaunchedAgents.js";
 import { PluginPathNotAllowedError } from "./plugin/pluginFsContainment.js";
 import { e2eSideloadPluginDir, isE2EMode } from "../setup/runtimeFlags.js";
 import { whenPluginDirResolverLive } from "../setup/pluginProtocolReadiness.js";
@@ -1688,6 +1689,7 @@ export class PluginService {
     // map the sweep below walks; its held credentials go now rather than
     // whenever that filesystem work settles.
     pluginMcpGrantRegistry.revokeHeld(() => true);
+    forgetPluginLaunchesWhere(() => true);
     for (const waiters of this.projectOpenWaiters.values()) {
       for (const wake of waiters) wake();
     }
@@ -3173,11 +3175,6 @@ export class PluginService {
       );
     }
 
-    // Tours (#12773) resolve their scene module and bundled audio under this
-    // load's authority and generation, so a reload hands renderers URLs V8 has
-    // never cached. The module itself is imported only when a tour opens.
-    // Registered under the instance key, so a project plugin's tours stay with
-    // its project and never collide with the same plugin installed globally.
     // Project templates (#13825) are declarative: the host reads their files
     // straight from the plugin folder when the Create project dialog asks, so
     // nothing here runs plugin code. Installed and builtin plugins only — the
@@ -3191,6 +3188,11 @@ export class PluginService {
       );
     }
 
+    // Tours (#12773) resolve their scene module and bundled audio under this
+    // load's authority and generation, so a reload hands renderers URLs V8 has
+    // never cached. The module itself is imported only when a tour opens.
+    // Registered under the instance key, so a project plugin's tours stay with
+    // its project and never collide with the same plugin installed globally.
     if (manifest.contributes.tours.length > 0) {
       registerPluginTours(pluginId, manifest.contributes.tours, {
         pluginName: manifest.displayName ?? manifest.name,
@@ -7283,6 +7285,8 @@ export class PluginService {
           instanceKey,
           current ? agentMcpSurfaceOf(current.manifest) : null
         );
+        // Nothing came back, so nothing is left to drive the agents it launched.
+        if (!current) forgetPluginLaunches(instanceKey);
       },
       // Grants are held per plugin instance and an instance key names its
       // project, so revoking by instance key purges exactly this project's
@@ -7407,6 +7411,9 @@ export class PluginService {
     // the close queues behind it; its held credentials must not outlive the
     // close by however long that takes.
     pluginMcpGrantRegistry.revokeHeld(
+      (instanceId) => projectIdFromPluginInstanceKey(instanceId) === projectId
+    );
+    forgetPluginLaunchesWhere(
       (instanceId) => projectIdFromPluginInstanceKey(instanceId) === projectId
     );
     // Every plugin's statuses on the closed project's cards, app-global ones
@@ -7815,6 +7822,7 @@ export class PluginService {
       pluginId,
       current ? agentMcpSurfaceOf(current.manifest) : null
     );
+    if (!current) forgetPluginLaunches(pluginId);
   }
 
   /**
@@ -7873,6 +7881,14 @@ export class PluginService {
       }
       agentMcpEndpointRegistry.unregisterPlugin(pluginId);
     });
+    // The agents it launched stay a reloading plugin's for the same reason
+    // (#14018): they keep running, and a reload that ended their reach would
+    // strand them at the next prompt. The record names the instance, not a
+    // generation, so the code loaded next is held to its own capabilities and
+    // consent on every call. Any other unload ends the reach.
+    if (!options?.reload) {
+      runUnloadStep(pluginId, "forgetPluginLaunches", () => forgetPluginLaunches(pluginId));
+    }
     // Drop activation state so a runtime reload (e.g. dev-mode re-scan) can
     // re-activate from scratch — otherwise the fast-path `activatedPlugins`
     // hit would short-circuit `_doActivate` after the new manifest landed.

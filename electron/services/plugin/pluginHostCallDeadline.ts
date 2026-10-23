@@ -32,6 +32,10 @@ const HOST_CALL_DEADLINES = {
   sendToActiveAgent: INTERACTIVE,
   "agents.list": DEFAULT,
   "agents.listAll": DEFAULT,
+  // A consent prompt can stand in front of the first, like sendToActiveAgent.
+  "agents.interrupt": INTERACTIVE,
+  "agents.sendKeys": INTERACTIVE,
+  "agents.submit": INTERACTIVE,
   "terminals.readScreen": INTERACTIVE,
   // Without a target the host opens a picker and waits on the person; with one
   // it is a consent check followed by an immediate draft.

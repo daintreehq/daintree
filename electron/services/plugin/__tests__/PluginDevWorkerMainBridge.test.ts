@@ -89,6 +89,9 @@ function makeHost() {
     agents: {
       list: vi.fn(async () => [{ terminalId: "t-1", canDraft: true }]),
       listAll: vi.fn(async () => ({ agents: [], degraded: false, lastSuccessfulAt: 1 })),
+      interrupt: vi.fn(async () => ({ status: "sent", cancelKey: "advertised" })),
+      sendKeys: vi.fn(async () => ({ status: "sent", keys: ["Enter"] })),
+      submit: vi.fn(async () => ({ status: "not-found" })),
     },
     terminals: {
       readScreen: vi.fn(async (): Promise<unknown> => ({
@@ -2998,6 +3001,47 @@ describe("PluginDevWorkerMainBridge handler invoke deadline", () => {
       requestId: invoke.requestId,
       ok: true,
       result: "late",
+    });
+  });
+});
+
+describe("PluginDevWorkerMainBridge input to launched agents (#14018)", () => {
+  it.each([
+    [
+      "agents.interrupt",
+      { terminalId: "t-1" },
+      "interrupt",
+      ["t-1"],
+      { status: "sent", cancelKey: "advertised" },
+    ],
+    [
+      "agents.sendKeys",
+      { terminalId: "t-1", input: { choose: "Yes" } },
+      "sendKeys",
+      ["t-1", { choose: "Yes" }],
+      { status: "sent", keys: ["Enter"] },
+    ],
+    [
+      "agents.submit",
+      { terminalId: "t-1", text: "/compact" },
+      "submit",
+      ["t-1", "/compact"],
+      { status: "not-found" },
+    ],
+  ] as const)("routes %s to the real host", async (method, params, hostMethod, args, result) => {
+    const { host, workerHost } = makeBridge();
+    workerHost.emit("worker-message", {
+      type: "host-call",
+      requestId: `in-${hostMethod}`,
+      method,
+      params,
+    });
+    await flush();
+
+    expect(host.agents[hostMethod]).toHaveBeenCalledWith(...args);
+    expect(workerHost.sent.find((m) => m.requestId === `in-${hostMethod}`)).toMatchObject({
+      ok: true,
+      result,
     });
   });
 });

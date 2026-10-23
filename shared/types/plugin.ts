@@ -5200,6 +5200,51 @@ export type PluginEventRouteWake =
     }
   | { readonly event: "projectForeground"; readonly presence: PluginProjectPresence };
 
+/**
+ * What {@link PluginAgentsApi.sendKeys} presses: up to 16 named keys (`Up`,
+ * `Down`, `Left`, `Right`, `Enter`, `Escape`, `Tab`, `Space`, `Backspace`, or
+ * one lowercase letter or digit), or the option whose label the agent's screen
+ * shows — the host moves to it and presses Enter. Prefer `choose` for a
+ * dialog's options.
+ */
+export type PluginAgentKeysInput =
+  | { readonly keys: readonly string[]; readonly choose?: never }
+  | { readonly choose: string; readonly keys?: never };
+
+/**
+ * What an input call on an agent this plugin launched did.
+ *
+ * - `sent`: the input was written. Delivery is not acknowledged and the effect
+ *   is not observed; read the screen or watch the agent's state for that.
+ * - `refused`: nothing was written, and `reason` says why — an interrupt to an
+ *   idle agent, a label the screen doesn't show, a trashed pane. Not worth
+ *   retrying unchanged.
+ * - `not-found`: no running agent this plugin launched has that id. One answer
+ *   for an unknown id, an agent the user, an MCP client or another plugin
+ *   started, and one outside a project plugin's own project.
+ * - `unavailable`: the terminal host did not answer, or the plugin is
+ *   unloaded. Worth retrying later.
+ */
+export type PluginAgentInputResult =
+  | { readonly status: "sent" }
+  | { readonly status: "refused"; readonly reason: string }
+  | { readonly status: "not-found" }
+  | { readonly status: "unavailable" };
+
+/**
+ * What {@link PluginAgentsApi.interrupt} did. `cancelKey` is `advertised` when
+ * the agent's CLI shows the cancel key it was sent, and `unverified` when it is
+ * that agent's known convention but not one its screen confirms.
+ */
+export type PluginAgentInterruptResult =
+  | { readonly status: "sent"; readonly cancelKey: "advertised" | "unverified" }
+  | Exclude<PluginAgentInputResult, { readonly status: "sent" }>;
+
+/** What {@link PluginAgentsApi.sendKeys} did; `keys` are the keys pressed, in order. */
+export type PluginAgentKeysResult =
+  | { readonly status: "sent"; readonly keys: readonly string[] }
+  | Exclude<PluginAgentInputResult, { readonly status: "sent" }>;
+
 /** `host.agents` — the agent panes in the plugin's project. */
 export interface PluginAgentsApi {
   /**
@@ -5230,6 +5275,55 @@ export interface PluginAgentsApi {
    *   `agent:read`, or is a project plugin.
    */
   listAll(): Promise<PluginAllAgentsSnapshot>;
+  /**
+   * Stop the turn an agent this plugin launched is running, keeping its pane
+   * and conversation. Sends the agent's cancel keystrokes, not text. An idle
+   * agent, or one whose CLI binds a different cancel key, is refused rather
+   * than reported stopped.
+   *
+   * Only agents this plugin started with its own `host.dispatch("agent.launch")`
+   * are reachable, for as long as the plugin stays loaded — an agent the user,
+   * an MCP client or another plugin started answers `not-found`, and so does
+   * one outside a project plugin's own project. A launch that passes its own
+   * `requestedId` is not counted: the launcher must choose the id. The three
+   * input methods are gated on `agent:input` with the same first-use consent
+   * prompt as {@link PluginHostApi.sendToActiveAgent}; a call that would answer
+   * `not-found` never raises it. Answered by the host's main process, so an
+   * agent in a project whose view is not loaded is reached too. In a plugin
+   * worker, a call still in flight when the worker stops rejects, since the
+   * input may already have been written.
+   *
+   * @throws {Error} `PERMISSION_REQUIRED:` if the plugin did not declare
+   *   `agent:input`, or the user denies the consent prompt.
+   * @throws {Error} `DRIVEN_ELSEWHERE:` when the call came from a view that
+   *   doesn't drive the agent's project.
+   * @throws {Error} If `terminalId` is not a non-empty string of at most 512
+   *   characters.
+   */
+  interrupt(terminalId: string): Promise<PluginAgentInterruptResult>;
+  /**
+   * Press keys in an agent this plugin launched — most often to answer its
+   * CLI's own dialog (a trust or permission prompt, a list). Keys go one at a
+   * time, spaced out so a TUI reads each on its own. Reach, capability and
+   * consent are as for {@link interrupt}.
+   *
+   * @throws {Error} `PERMISSION_REQUIRED:` / `DRIVEN_ELSEWHERE:` as for
+   *   {@link interrupt}.
+   * @throws {Error} If `input` does not hold exactly one of `keys` (1 to 16
+   *   names) or `choose` (1 to 200 characters).
+   */
+  sendKeys(terminalId: string, input: PluginAgentKeysInput): Promise<PluginAgentKeysResult>;
+  /**
+   * Submit `text` to an agent this plugin launched, as one submission with one
+   * Enter: the agent takes it as its next prompt, or a slash command such as
+   * `/compact`. Resolves once it is queued, not once the agent reads it. Reach,
+   * capability and consent are as for {@link interrupt}.
+   *
+   * @throws {Error} `PERMISSION_REQUIRED:` / `DRIVEN_ELSEWHERE:` as for
+   *   {@link interrupt}.
+   * @throws {Error} If `text` is blank.
+   */
+  submit(terminalId: string, text: string): Promise<PluginAgentInputResult>;
 }
 
 /** Options for {@link PluginTerminalsApi.readScreen}. */
@@ -7430,8 +7524,9 @@ export interface PluginHostApi extends PluginActivationApi {
    */
   sendToActiveAgent(text: string, options?: { submit?: boolean }): Promise<void>;
   /**
-   * The agent panes in this plugin's project, for choosing where to hand work.
-   * Gated on `agent:read`. See {@link PluginAgentsApi}.
+   * The agent panes in this plugin's project, for choosing where to hand work,
+   * gated on `agent:read`; and input to the agents this plugin launched, gated
+   * on `agent:input`. See {@link PluginAgentsApi}.
    */
   readonly agents: PluginAgentsApi;
   /**

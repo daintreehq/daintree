@@ -57,6 +57,16 @@ import {
 } from "./pluginFrontendRouting.js";
 import { assertPluginCallerDrives } from "./pluginDriveLease.js";
 import {
+  interruptLaunchedAgent,
+  launchedAgentProject,
+  type LaunchedAgentPty,
+  recordPluginLaunch,
+  sendKeysToLaunchedAgent,
+  submitToLaunchedAgent,
+  validateLaunchedAgentId,
+  validateSendKeysCall,
+} from "./pluginLaunchedAgents.js";
+import {
   PluginFrontendMethod,
   REMOTE_CLIPBOARD_IMAGE_MAX_BYTES,
   REMOTE_CLIPBOARD_TIMEOUT_MS,
@@ -255,6 +265,7 @@ import type {
   BuiltInPluginCapability,
   PluginSettingsScope,
   PluginStorageScope,
+  PluginAgentInputResult,
   PluginAgentSnapshot,
   PluginAllAgentsSnapshot,
   PluginFocusedPanel,
@@ -1212,6 +1223,63 @@ export function createHost(
       );
     }
   };
+  const assertDeclaresAgentInput = (op: string): void => {
+    if (!deps.declaredCapabilities(pluginId).has("agent:input")) {
+      throw new Error(
+        `PERMISSION_REQUIRED: plugin "${pluginId}" agents.${op} requires "agent:input", which is not declared in manifest.capabilities`
+      );
+    }
+  };
+  /**
+   * Run one `host.agents` input call against an agent this plugin launched
+   * (#14018), in `sendToActiveAgent`'s order: the caller has checked liveness,
+   * the declared capability and its arguments. A call that would answer
+   * `not-found` raises no consent prompt, and the record is read again after
+   * the prompt and before every write, since the plugin can unload or the
+   * terminal move while the user decides or a key sequence is paced out.
+   */
+  const withLaunchedAgent = async <T extends { readonly status: string }>(
+    op: string,
+    terminalId: string,
+    run: (pty: LaunchedAgentPty, admitWrite: () => Promise<boolean>) => Promise<T>
+  ): Promise<T | Exclude<PluginAgentInputResult, { readonly status: "sent" }>> => {
+    const owns = (): boolean => {
+      const pty = getPtyClient();
+      return (
+        pty !== null && launchedAgentProject(pty, pluginId, terminalId, boundProjectId) !== null
+      );
+    };
+    if (getPtyClient() === null) return { status: "unavailable" };
+    if (!owns()) return { status: "not-found" };
+    await ensureCapabilityConsent(deps, pluginId, "agent:input");
+    if (!isBound()) return { status: "unavailable" };
+    const pty = getPtyClient();
+    if (pty === null) return { status: "unavailable" };
+    if (!owns()) return { status: "not-found" };
+    return run(pty, async () => {
+      if (!isBound() || !owns()) return false;
+      // Typing into an agent is held to the lease its terminal's input is, and
+      // asked again before every write, so a takeover while the call waited on
+      // a read or between paced keys stops it.
+      await assertPluginCallerDrives(pluginId, `agents.${op}`, { terminalId });
+      return isBound() && owns();
+    });
+  };
+  /**
+   * A dispatch of this plugin's, recording the agent an `agent.launch` of its
+   * own started (#14018) before the plugin sees the result. `projectId` is
+   * where the dispatch was sent: the bound project, an explicit target, or null
+   * for an installed plugin's ambient dispatch.
+   */
+  const dispatchAsPlugin = async (
+    actionId: string,
+    args: unknown,
+    projectId: string | null
+  ): Promise<ActionDispatchResult> => {
+    const result = await dispatcher.sendDispatchToRenderer(actionId, args, projectId, pluginId);
+    if (isBound()) recordPluginLaunch(pluginId, actionId, args, result, projectId);
+    return result;
+  };
   /**
    * The availability- and scope-aware worktree read behind
    * {@link PluginHostApi.getWorktreesResult}, and the single source the
@@ -1847,6 +1915,41 @@ export function createHost(
         if (!isBound()) return UNAVAILABLE_PLUGIN_ALL_AGENTS_SNAPSHOT;
         assertCanReadAllAgents("agents.listAll");
         return toPluginAllAgentsSnapshot(deps.getFleetSnapshotService()?.getLastBroadcast());
+      },
+      // Input to the agents this plugin launched (#14018), and nothing else.
+      // NOT revoke-guarded: a plugin answers its agent's dialogs from event
+      // callbacks long after activation.
+      interrupt: async (terminalId) => {
+        if (!isBound()) return { status: "unavailable" };
+        assertDeclaresAgentInput("interrupt");
+        const id = validateLaunchedAgentId(pluginId, "interrupt", terminalId);
+        return withLaunchedAgent("interrupt", id, (pty, admitWrite) =>
+          interruptLaunchedAgent(pty, id, admitWrite)
+        );
+      },
+      sendKeys: async (terminalId, input) => {
+        if (!isBound()) return { status: "unavailable" };
+        assertDeclaresAgentInput("sendKeys");
+        const id = validateLaunchedAgentId(pluginId, "sendKeys", terminalId);
+        const keys = validateSendKeysCall(pluginId, id, input);
+        return withLaunchedAgent("sendKeys", id, (pty, admitWrite) =>
+          sendKeysToLaunchedAgent(pty, id, keys, admitWrite)
+        );
+      },
+      submit: async (terminalId, text) => {
+        if (!isBound()) return { status: "unavailable" };
+        assertDeclaresAgentInput("submit");
+        const id = validateLaunchedAgentId(pluginId, "submit", terminalId);
+        // Whitespace alone would submit to nothing but still press Enter on
+        // whatever the agent's input already holds.
+        if (typeof text !== "string" || text.trim().length === 0) {
+          throw new Error(
+            `Plugin "${pluginId}" agents.submit: text must be a non-empty, non-whitespace string`
+          );
+        }
+        return withLaunchedAgent("submit", id, (pty, admitWrite) =>
+          submitToLaunchedAgent(pty, id, text, admitWrite)
+        );
       },
     },
     // NOT revoke-guarded: grid plugins poll screens from timers long after
@@ -3733,7 +3836,7 @@ export function createHost(
         // wherever the user is looking. In Host mode it goes to the view that
         // drives the project, which may be on another machine, and answers
         // NO_FRONTEND_ATTACHED when nobody does.
-        return dispatcher.sendDispatchToRenderer(actionId, args, boundProjectId, pluginId);
+        return dispatchAsPlugin(actionId, args, boundProjectId);
       }
       if (boundProjectId !== null) {
         // The confused-deputy guard: a project-bound plugin may restate its own
@@ -3743,7 +3846,7 @@ export function createHost(
             `PERMISSION_REQUIRED: plugin "${pluginId}" is bound to its own project and cannot dispatch to project "${requestedProjectId}"`
           );
         }
-        return dispatcher.sendDispatchToRenderer(actionId, args, boundProjectId, pluginId);
+        return dispatchAsPlugin(actionId, args, boundProjectId);
       }
       // Unbound with an explicit target (#13119): only after the user turned
       // the switch on. No JIT prompt and no built-in bypass — the switch is the
@@ -3773,9 +3876,9 @@ export function createHost(
         });
       };
       try {
-        const result = await dispatcher
-          .sendDispatchToRenderer(actionId, args, requestedProjectId, pluginId)
-          .catch((err: unknown) => closeWithNoView(err, actionId, args, requestedProjectId));
+        const result = await dispatchAsPlugin(actionId, args, requestedProjectId).catch(
+          (err: unknown) => closeWithNoView(err, actionId, args, requestedProjectId)
+        );
         if (result.ok) audit("success", "");
         else audit("error", result.error.code);
         return result;
