@@ -3,9 +3,10 @@
  * Issue #1861: Ensure tabGroups are cleared on project switch
  */
 
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { TabGroup } from "@/types";
 import type { PtyPanelData } from "@shared/types/panel";
+import { load as loadTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
 
 vi.mock("@/clients", () => ({
   terminalClient: {
@@ -56,6 +57,12 @@ function setTerminals(terminals: MockTerminal[]) {
     panelIds: terminals.map((t) => t.id),
   });
 }
+
+// The service mock never evaluates the real module, so nothing registers it;
+// loading caches the mock for the synchronous peek() call sites.
+beforeAll(async () => {
+  await loadTerminalService();
+});
 
 describe("resetWithoutKilling", () => {
   beforeEach(async () => {

@@ -1,4 +1,7 @@
-import { terminalInstanceService } from "@/services/TerminalInstanceService";
+import {
+  peek as peekTerminalService,
+  with as withTerminalService,
+} from "@/services/terminal/terminalInstanceServiceAccessor";
 import { isDocumentHidden, revealUntilStable } from "@/services/terminal/revealUntilStable";
 import { useHelpPanelStore, selectSlotTerminalIds } from "@/store/helpPanelStore";
 import { usePanelStore } from "@/store/panelStore";
@@ -106,7 +109,7 @@ function prioritizeFocusedFirst(targets: string[]): void {
   let focusedIndex = -1;
   for (let i = 0; i < targets.length; i++) {
     const id = targets[i];
-    if (id && terminalInstanceService.isFocused(id)) {
+    if (id && peekTerminalService()?.isFocused(id)) {
       focusedIndex = i;
       break;
     }
@@ -128,7 +131,7 @@ function prioritizeFocusedFirst(targets: string[]): void {
 function reassertFocusedWebGLPin(targets: string[]): void {
   const focusedId = usePanelStore.getState().focusedId;
   if (!focusedId || !targets.includes(focusedId)) return;
-  terminalInstanceService.setFocused(focusedId, true);
+  withTerminalService((service) => service.setFocused(focusedId, true));
 }
 
 async function wakeActiveWorktreeTerminalsInner(): Promise<void> {
@@ -143,7 +146,7 @@ async function wakeActiveWorktreeTerminalsInner(): Promise<void> {
 
   const wakeOne = async (id: string): Promise<void> => {
     try {
-      await terminalInstanceService.fullWakeForVisibilityRestore(id);
+      await peekTerminalService()?.fullWakeForVisibilityRestore(id);
       if (id === focusedTarget) {
         markSwitch(PERF_MARKS.PROJECT_SWITCH_FOCUSED_PANE_WOKEN, { paneId: id });
       }
@@ -259,7 +262,7 @@ function restoreTerminalFocusOnRevealInner(): FocusRestoreOutcome {
       }
     }
   }
-  terminalInstanceService.focus(targetId);
+  peekTerminalService()?.focus(targetId);
   return "moved";
 }
 
@@ -333,7 +336,7 @@ export async function repaintActiveWorktreeTerminals(): Promise<void> {
         if (id) {
           await revealUntilStable(
             id,
-            (target) => terminalInstanceService.revealTerminal(target),
+            (target) => peekTerminalService()?.revealTerminal(target) ?? true,
             () => aborted,
             "[repaintActiveWorktreeTerminals]"
           );

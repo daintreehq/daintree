@@ -52,7 +52,7 @@ import { flushPendingPerfMarks } from "@/utils/performance";
 import { beginSwitchTrace, consumeSwitchTrace, markSwitch } from "@/utils/switchTrace";
 import { getNarrowPanel } from "@/store/slices/panelRegistry/selectors";
 import { isEphemeralPanel } from "./slices/panelRegistry/panelCount";
-import { terminalInstanceService } from "@/services/TerminalInstanceService";
+import { peek as peekTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
 import { isUsableTerminalGeometry } from "@shared/types/terminal";
 
 type CarrierPanel = Parameters<typeof getNarrowPanel>[0][string];
@@ -93,7 +93,7 @@ function collectTerminalSizes(
 ): Record<string, { cols: number; rows: number }> {
   const sizes: Record<string, { cols: number; rows: number }> = {};
   for (const panel of panels) {
-    const managed = terminalInstanceService.get(panel.id);
+    const managed = peekTerminalService()?.get(panel.id);
     if (!managed) continue;
     // Mid serialized restore, `terminal.cols` is deliberately the SNAPSHOT's
     // capture grid — a snapshot only decodes at the width it was captured on —

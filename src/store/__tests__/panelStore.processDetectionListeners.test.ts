@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 type AgentStateHandler = (data: {
   terminalId: string;
@@ -236,10 +236,17 @@ vi.mock("@/services/TerminalInstanceService", () => ({
 const { usePanelStore, setupTerminalStoreListeners, cleanupTerminalStoreListeners } =
   await import("../panelStore");
 import type { PtyPanelData } from "@shared/types/panel";
+import { load as loadTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
 
 function getPtyPanel(id: string): PtyPanelData | undefined {
   return usePanelStore.getState().panelsById[id] as PtyPanelData | undefined;
 }
+
+// The service mock never evaluates the real module, so nothing registers it;
+// loading caches the mock for the synchronous peek() call sites.
+beforeAll(async () => {
+  await loadTerminalService();
+});
 
 describe("terminalStore process detection listeners", () => {
   beforeEach(() => {

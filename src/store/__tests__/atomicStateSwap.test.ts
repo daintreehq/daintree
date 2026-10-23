@@ -7,7 +7,8 @@
  * - resetAllStoresForProjectSwitch({ skipTerminalStateReset: true }) preserves terminal state
  */
 
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { load as loadTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
 
 vi.mock("@/clients", () => ({
   terminalClient: {
@@ -87,6 +88,12 @@ function seedTerminals() {
     ],
   });
 }
+
+// The service mock never evaluates the real module, so nothing registers it;
+// loading caches the mock for the synchronous peek() call sites.
+beforeAll(async () => {
+  await loadTerminalService();
+});
 
 describe("detachTerminalsForProjectSwitch", () => {
   beforeEach(() => {

@@ -1,7 +1,8 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { TerminalRefreshTier } from "@/types";
 import type { PtyPanelData } from "@shared/types/panel";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
+import { load as loadTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
 
 vi.mock("@/clients", () => ({
   terminalClient: {
@@ -59,6 +60,12 @@ function createMockTerminal(
     isVisible: location === "grid",
   };
 }
+
+// The service mock never evaluates the real module, so nothing registers it;
+// loading caches the mock for the synchronous peek() call sites.
+beforeAll(async () => {
+  await loadTerminalService();
+});
 
 describe("moveTerminalToWorktree", () => {
   beforeEach(() => {

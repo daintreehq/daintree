@@ -1,4 +1,5 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { beforeAll, describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { load as loadTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
 
 const mockProjectClient = {
   getTerminals: vi.fn().mockResolvedValue([]),
@@ -72,6 +73,12 @@ function makeTrashedInfo(id: string, overrides: Record<string, unknown> = {}) {
     ...overrides,
   };
 }
+
+// The service mock never evaluates the real module, so nothing registers it;
+// loading caches the mock for the synchronous peek() call sites.
+beforeAll(async () => {
+  await loadTerminalService();
+});
 
 describe("emptyTrash", () => {
   beforeEach(async () => {

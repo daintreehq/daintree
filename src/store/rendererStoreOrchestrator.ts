@@ -57,7 +57,7 @@ import { logDebug, logInfo, logWarn } from "@/utils/logger";
 import { isPtyPanel } from "@shared/types/panel";
 import { isQuickSwitchablePanel } from "@/utils/quickSwitcher";
 import { terminalClient } from "@/clients";
-import { terminalInstanceService } from "@/services/TerminalInstanceService";
+import { peek as peekTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
 import { createFocusFollowBreaker } from "./focusFollowBreaker";
 import { subscribeFocusedPanelReporter } from "./focusedPanelReporter";
 import { initAgentDefaultsSync } from "@/services/agentDefaultsSync";
@@ -95,7 +95,7 @@ export function initStoreOrchestrator(): () => void {
     if (options?.destroyInstances) {
       for (const id of state.panelIds) {
         try {
-          terminalInstanceService.destroy(id);
+          peekTerminalService()?.destroy(id);
         } catch (error) {
           logWarn(`Failed to destroy terminal instance ${id}`, { error });
         }

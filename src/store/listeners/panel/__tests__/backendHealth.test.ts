@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, expect, it, vi, beforeEach } from "vitest";
+import { beforeAll, describe, expect, it, vi, beforeEach } from "vitest";
 import { usePanelStore } from "@/store/panelStore";
 import { isPtyPanel } from "@shared/types/panel";
 import { enqueueFlowStatusUpdate, flushPanelStatusBuffer } from "@/store/panelStatusBuffer";
@@ -39,6 +39,7 @@ vi.mock("@/controllers", () => {
 });
 
 import { setupBackendHealthListeners } from "../backendHealth";
+import { load as loadTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
 
 function getBackendReadyHandler(): () => void {
   backendReadyHandlers.length = 0;
@@ -75,6 +76,12 @@ beforeEach(() => {
   usePanelStore.setState({ panelsById: {}, panelIds: [] });
   vi.clearAllMocks();
   vi.useFakeTimers();
+});
+
+// The service mock never evaluates the real module, so nothing registers it;
+// loading caches the mock for the synchronous peek() call sites.
+beforeAll(async () => {
+  await loadTerminalService();
 });
 
 describe("onBackendCrashed — stale PTY geometry echoes dropped (#11641)", () => {

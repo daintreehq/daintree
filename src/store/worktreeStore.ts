@@ -1,5 +1,8 @@
 import { create, type StateCreator } from "zustand";
-import { terminalInstanceService } from "@/services/TerminalInstanceService";
+import {
+  peek as peekTerminalService,
+  with as withTerminalService,
+} from "@/services/terminal/terminalInstanceServiceAccessor";
 import {
   clearWorktreeRevealObligations,
   replaceWorktreeRevealObligations,
@@ -1656,7 +1659,7 @@ function applyWorktreeTerminalPolicy(
     // BACKGROUND->active transition. It returns early on same-tier VISIBLE,
     // so pair active grid promotion with an explicit wake to pull any bytes
     // that arrived while the renderer was hidden or not yet mounted.
-    terminalInstanceService.applyRendererPolicy(terminal.id, targetTier);
+    withTerminalService((service) => service.applyRendererPolicy(terminal.id, targetTier));
     if (
       targetTier !== TerminalRefreshTier.BACKGROUND &&
       (!isPtyPanel(terminal) || terminal.hasPty !== false) &&
@@ -1672,7 +1675,7 @@ function applyWorktreeTerminalPolicy(
       // would arm the coordinator across every suite that stubs the service.
       let wakeVerdict: boolean | undefined;
       try {
-        wakeVerdict = terminalInstanceService.wake(terminal.id);
+        wakeVerdict = peekTerminalService()?.wake(terminal.id);
       } catch (error) {
         wakeVerdict = false;
         logErrorWithContext(error, {
