@@ -347,6 +347,7 @@
     "react-virtuoso": "^4.18.19",
     "refractor": "^5.0.0",
     "remark-gfm": "^4.0.1",
+    "rolldown": "1.2.9",
     "rollup-plugin-visualizer": "^7.1.1",
     "safe-regex2": "^5.1.2",
     "semver": "^7.8.5",

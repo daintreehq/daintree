@@ -1,0 +1,593 @@
+{
+  "schema": 1,
+  "issue": 14219,
+  "date": "2026-10-23",
+  "harness": "e2e/perf/empty-project-view-memory-perf.spec.ts",
+  "note": "Run under Playwright, whose Emulation.setFocusEmulationEnabled keeps every attached page visible. cc tile memory and GPU-process figures are pinned-visible readings, not the packaged app: there a cached view goes hidden and its cc tile memory drops from 62.5 MB to 25.0 MB (#14237).",
+  "versions": {
+    "electron": "42.11.18",
+    "chrome": "148.0.7778.280",
+    "v8": "14.8.178.38-electron.0"
+  },
+  "machine": {
+    "platform": "darwin",
+    "release": "24.6.0",
+    "cpus": "Apple M4 Max"
+  },
+  "config": {
+    "settleMs": 15000,
+    "footprintReadings": 5,
+    "terminals": 2,
+    "outputLinesPerTerminal": 5500,
+    "memoryInfra": true,
+    "heapSnapshots": false,
+    "windowSize": {
+      "width": 1600,
+      "height": 1000
+    },
+    "webgl": true
+  },
+  "arms": {
+    "before": {
+      "description": "develop at d81e81ac1a",
+      "runs": 3,
+      "gitHead": "d81e81ac1a770a107b993aba8cfc61717cea1c85",
+      "phases": {
+        "empty": {
+          "rendererFootprintMb": {
+            "median": 166,
+            "readings": [166, 167, 165]
+          },
+          "gpuProcessFootprintMb": 742,
+          "jsHeapUsedMb": 43.5,
+          "domNodes": 1169,
+          "jsEventListeners": 477,
+          "visibilityState": null,
+          "memoryInfraMb": {
+            "blink_gc": 13.2,
+            "blink_objects": 5,
+            "cc": 68.8,
+            "gpu": 2.4,
+            "malloc": 75.5,
+            "partition_alloc": 42.3,
+            "shared_memory": 3.6,
+            "v8": 47.8,
+            "web_cache": 31.8
+          },
+          "vmmapDirtyMb": {
+            "Memory Tag 253": 100.4,
+            "Memory Tag 255": 58.5,
+            "libraries": 3.1,
+            "malloc": 0.7,
+            "page table in kernel": 1,
+            "shared memory": 0.7,
+            "stacks": 1.4
+          }
+        },
+        "cached": {
+          "rendererFootprintMb": {
+            "median": 183,
+            "readings": [179, 187, 183]
+          },
+          "gpuProcessFootprintMb": 1076,
+          "jsHeapUsedMb": 49.9,
+          "domNodes": 1382,
+          "jsEventListeners": 707,
+          "visibilityState": null,
+          "memoryInfraMb": {
+            "blink_gc": 15,
+            "blink_objects": 5.7,
+            "canvas": 1,
+            "cc": 99.9,
+            "gpu": 5.8,
+            "malloc": 75.4,
+            "partition_alloc": 45.2,
+            "shared_memory": 10.9,
+            "v8": 54.4,
+            "web_cache": 32.5
+          },
+          "vmmapDirtyMb": {
+            "Memory Tag 253": 105.4,
+            "Memory Tag 255": 66.4,
+            "libraries": 3.2,
+            "malloc": 0.9,
+            "page table in kernel": 1.1,
+            "shared memory": 1.8,
+            "stacks": 1.1
+          }
+        },
+        "afterSession": {
+          "rendererFootprintMb": {
+            "median": 167,
+            "readings": [166, 169, 167]
+          },
+          "gpuProcessFootprintMb": 543,
+          "jsHeapUsedMb": 42.4,
+          "domNodes": 1237,
+          "jsEventListeners": 570,
+          "visibilityState": null,
+          "memoryInfraMb": {
+            "blink_gc": 14.9,
+            "blink_objects": 5.2,
+            "cc": 59.3,
+            "gpu": 3.4,
+            "malloc": 56,
+            "partition_alloc": 43.2,
+            "shared_memory": 8.5,
+            "v8": 46.3,
+            "web_cache": 32.5
+          },
+          "vmmapDirtyMb": {
+            "Memory Tag 253": 99.2,
+            "Memory Tag 255": 54.9,
+            "libraries": 3.2,
+            "malloc": 0.9,
+            "page table in kernel": 1.1,
+            "shared memory": 5.8,
+            "stacks": 1.1
+          }
+        }
+      }
+    },
+    "ascii": {
+      "description": "+ ASCII-escaped renderer chunks",
+      "runs": 3,
+      "gitHead": "d81e81ac1a770a107b993aba8cfc61717cea1c85",
+      "phases": {
+        "empty": {
+          "rendererFootprintMb": {
+            "median": 157,
+            "readings": [157, 157, 157]
+          },
+          "gpuProcessFootprintMb": 742,
+          "jsHeapUsedMb": 43.5,
+          "domNodes": 1169,
+          "jsEventListeners": 477,
+          "visibilityState": "visible",
+          "memoryInfraMb": {
+            "blink_gc": 12.9,
+            "blink_objects": 5,
+            "cc": 68.8,
+            "gpu": 2.4,
+            "malloc": 70.3,
+            "partition_alloc": 35.9,
+            "shared_memory": 3.6,
+            "v8": 47.5,
+            "web_cache": 25
+          },
+          "vmmapDirtyMb": {
+            "Memory Tag 253": 91.3,
+            "Memory Tag 255": 58.3,
+            "libraries": 3.1,
+            "malloc": 0.8,
+            "page table in kernel": 1,
+            "shared memory": 0.7,
+            "stacks": 1.2
+          }
+        },
+        "cached": {
+          "rendererFootprintMb": {
+            "median": 174,
+            "readings": [172, 175, 174]
+          },
+          "gpuProcessFootprintMb": 1078,
+          "jsHeapUsedMb": 49.9,
+          "domNodes": 1546,
+          "jsEventListeners": 708,
+          "visibilityState": "visible",
+          "memoryInfraMb": {
+            "blink_gc": 15,
+            "blink_objects": 6.3,
+            "canvas": 1,
+            "cc": 109.3,
+            "gpu": 5.7,
+            "malloc": 72.4,
+            "partition_alloc": 36.5,
+            "shared_memory": 10.9,
+            "v8": 54.3,
+            "web_cache": 25.3
+          },
+          "vmmapDirtyMb": {
+            "Memory Tag 253": 95.9,
+            "Memory Tag 255": 66.6,
+            "libraries": 3.2,
+            "malloc": 0.9,
+            "page table in kernel": 1.1,
+            "shared memory": 1.7,
+            "stacks": 1.1
+          }
+        },
+        "afterSession": {
+          "rendererFootprintMb": {
+            "median": 160,
+            "readings": [149, 163, 160]
+          },
+          "gpuProcessFootprintMb": 542,
+          "jsHeapUsedMb": 42.5,
+          "domNodes": 1394,
+          "jsEventListeners": 575,
+          "visibilityState": "visible",
+          "memoryInfraMb": {
+            "blink_gc": 15.4,
+            "blink_objects": 5.4,
+            "cc": 59.3,
+            "gpu": 3.2,
+            "malloc": 52.5,
+            "partition_alloc": 36.3,
+            "shared_memory": 8.4,
+            "v8": 46.7,
+            "web_cache": 25.3
+          },
+          "vmmapDirtyMb": {
+            "Memory Tag 253": 91.1,
+            "Memory Tag 255": 56.2,
+            "libraries": 3.2,
+            "malloc": 0.9,
+            "page table in kernel": 1.1,
+            "shared memory": 5.7,
+            "stacks": 1.1
+          }
+        }
+      }
+    },
+    "final": {
+      "description": "+ ASCII-escaped chunks + Blink memory cache cleared 2 s after a view is cached",
+      "runs": 3,
+      "gitHead": "5dfd19d2be8eb2aa3af98f672883550986dbbfa4",
+      "phases": {
+        "empty": {
+          "rendererFootprintMb": {
+            "median": 158,
+            "readings": [159, 156, 158]
+          },
+          "gpuProcessFootprintMb": 735,
+          "jsHeapUsedMb": 43.5,
+          "domNodes": 1169,
+          "jsEventListeners": 477,
+          "visibilityState": "visible",
+          "memoryInfraMb": {
+            "blink_gc": 13,
+            "blink_objects": 5,
+            "cc": 68.8,
+            "gpu": 2.2,
+            "malloc": 70.2,
+            "partition_alloc": 35.9,
+            "shared_memory": 3.4,
+            "v8": 47.8,
+            "web_cache": 24.9
+          },
+          "vmmapDirtyMb": {
+            "Memory Tag 253": 92.4,
+            "Memory Tag 255": 58.2,
+            "libraries": 3.1,
+            "malloc": 0.7,
+            "page table in kernel": 1,
+            "shared memory": 0.5,
+            "stacks": 1.2
+          }
+        },
+        "cached": {
+          "rendererFootprintMb": {
+            "median": 138,
+            "readings": [138, 136, 139]
+          },
+          "gpuProcessFootprintMb": 1067,
+          "jsHeapUsedMb": 44.1,
+          "domNodes": 1382,
+          "jsEventListeners": 710,
+          "visibilityState": "visible",
+          "memoryInfraMb": {
+            "blink_gc": 14.7,
+            "blink_objects": 4.6,
+            "canvas": 1,
+            "cc": 105.4,
+            "gpu": 5.4,
+            "malloc": 51.5,
+            "partition_alloc": 21.1,
+            "shared_memory": 10.6,
+            "v8": 48.4
+          },
+          "vmmapDirtyMb": {
+            "Memory Tag 253": 68.6,
+            "Memory Tag 255": 59.5,
+            "libraries": 3.2,
+            "malloc": 0.9,
+            "page table in kernel": 1.1,
+            "shared memory": 1.7,
+            "stacks": 1.1
+          }
+        },
+        "afterSession": {
+          "rendererFootprintMb": {
+            "median": 139,
+            "readings": [141, 131, 139]
+          },
+          "gpuProcessFootprintMb": 550,
+          "jsHeapUsedMb": 41.7,
+          "domNodes": 1233,
+          "jsEventListeners": 566,
+          "visibilityState": "visible",
+          "memoryInfraMb": {
+            "blink_gc": 14.2,
+            "blink_objects": 4.3,
+            "cc": 59.2,
+            "gpu": 3.2,
+            "malloc": 49.8,
+            "partition_alloc": 20.5,
+            "shared_memory": 8.4,
+            "v8": 46.2
+          },
+          "vmmapDirtyMb": {
+            "Memory Tag 253": 71.1,
+            "Memory Tag 255": 55.3,
+            "libraries": 3.2,
+            "malloc": 0.9,
+            "page table in kernel": 1.1,
+            "shared memory": 5.8,
+            "stacks": 1.1
+          }
+        }
+      }
+    }
+  },
+  "experiments": {
+    "heapSnapshotWithCompileHints": {
+      "empty": {
+        "rendererFootprintMb": 157,
+        "jsHeapUsedMb": 43.5,
+        "snapshotSelfSizeMb": 52.7,
+        "byTypeMb": {
+          "code": 21.2,
+          "native": 9.1,
+          "object": 5.1,
+          "array": 5,
+          "closure": 4.3,
+          "string": 3.2,
+          "object shape": 2.4,
+          "hidden": 2.2,
+          "concatenated string": 0.3
+        },
+        "topGroups": [
+          {
+            "type": "code",
+            "name": "",
+            "count": 322723,
+            "selfSizeKb": 21740.7
+          },
+          {
+            "type": "native",
+            "name": "system / ExternalStringData",
+            "count": 2286,
+            "selfSizeKb": 8915.1
+          },
+          {
+            "type": "array",
+            "name": "",
+            "count": 96214,
+            "selfSizeKb": 5092.3
+          },
+          {
+            "type": "string",
+            "name": "",
+            "count": 135729,
+            "selfSizeKb": 3246.9
+          },
+          {
+            "type": "object",
+            "name": "Object",
+            "count": 93570,
+            "selfSizeKb": 2466.7
+          },
+          {
+            "type": "object shape",
+            "name": "",
+            "count": 48760,
+            "selfSizeKb": 2429.8
+          },
+          {
+            "type": "hidden",
+            "name": "",
+            "count": 96114,
+            "selfSizeKb": 2206.5
+          },
+          {
+            "type": "closure",
+            "name": "",
+            "count": 74364,
+            "selfSizeKb": 2051.9
+          },
+          {
+            "type": "closure",
+            "name": "native_bind",
+            "count": 47216,
+            "selfSizeKb": 1106.6
+          },
+          {
+            "type": "object",
+            "name": "system / Context",
+            "count": 35917,
+            "selfSizeKb": 988.3
+          },
+          {
+            "type": "object",
+            "name": "Ui",
+            "count": 5404,
+            "selfSizeKb": 548.8
+          },
+          {
+            "type": "object",
+            "name": "Array",
+            "count": 31742,
+            "selfSizeKb": 496.6
+          },
+          {
+            "type": "object",
+            "name": "a",
+            "count": 5810,
+            "selfSizeKb": 282.8
+          },
+          {
+            "type": "concatenated string",
+            "name": "",
+            "count": 13431,
+            "selfSizeKb": 262.3
+          },
+          {
+            "type": "object",
+            "name": "Set",
+            "count": 8030,
+            "selfSizeKb": 125.5
+          }
+        ]
+      },
+      "cachedCodeMb": 18.1
+    },
+    "heapSnapshotWithoutCompileHints": {
+      "empty": {
+        "rendererFootprintMb": 144,
+        "jsHeapUsedMb": 37.8,
+        "snapshotSelfSizeMb": 47,
+        "byTypeMb": {
+          "code": 15.8,
+          "native": 9.1,
+          "object": 5.1,
+          "array": 4.9,
+          "closure": 4.3,
+          "string": 2.8,
+          "object shape": 2.4,
+          "hidden": 2.2,
+          "concatenated string": 0.4
+        },
+        "topGroups": [
+          {
+            "type": "code",
+            "name": "",
+            "count": 223988,
+            "selfSizeKb": 16138.3
+          },
+          {
+            "type": "native",
+            "name": "system / ExternalStringData",
+            "count": 2273,
+            "selfSizeKb": 8913.5
+          },
+          {
+            "type": "array",
+            "name": "",
+            "count": 95926,
+            "selfSizeKb": 5048.5
+          },
+          {
+            "type": "string",
+            "name": "",
+            "count": 118709,
+            "selfSizeKb": 2853
+          },
+          {
+            "type": "object",
+            "name": "Object",
+            "count": 93030,
+            "selfSizeKb": 2455.5
+          },
+          {
+            "type": "object shape",
+            "name": "",
+            "count": 48618,
+            "selfSizeKb": 2424.2
+          },
+          {
+            "type": "hidden",
+            "name": "",
+            "count": 95857,
+            "selfSizeKb": 2228.7
+          },
+          {
+            "type": "closure",
+            "name": "",
+            "count": 74362,
+            "selfSizeKb": 2051.9
+          },
+          {
+            "type": "closure",
+            "name": "native_bind",
+            "count": 47216,
+            "selfSizeKb": 1106.6
+          },
+          {
+            "type": "object",
+            "name": "system / Context",
+            "count": 35766,
+            "selfSizeKb": 984.8
+          },
+          {
+            "type": "object",
+            "name": "Ui",
+            "count": 5404,
+            "selfSizeKb": 548.8
+          },
+          {
+            "type": "object",
+            "name": "Array",
+            "count": 31753,
+            "selfSizeKb": 496.8
+          },
+          {
+            "type": "concatenated string",
+            "name": "",
+            "count": 22419,
+            "selfSizeKb": 437.9
+          },
+          {
+            "type": "object",
+            "name": "a",
+            "count": 5810,
+            "selfSizeKb": 282.8
+          },
+          {
+            "type": "object",
+            "name": "Set",
+            "count": 8030,
+            "selfSizeKb": 125.5
+          }
+        ]
+      },
+      "cachedCodeMb": 17.3
+    },
+    "hideBeforeDetach": {
+      "runs": 1,
+      "note": "setVisible(false) before removeChildView, under Playwright: the view stays visible because focus emulation pins it, so this experiment says nothing about the shipped app (#14237).",
+      "cached": {
+        "rendererFootprintMb": {
+          "median": 181,
+          "readings": [181]
+        },
+        "gpuProcessFootprintMb": 1072,
+        "jsHeapUsedMb": 50,
+        "domNodes": 1382,
+        "jsEventListeners": 710,
+        "visibilityState": "visible",
+        "memoryInfraMb": {
+          "blink_gc": 14.8,
+          "blink_objects": 5.7,
+          "canvas": 1,
+          "cc": 99.8,
+          "gpu": 5.4,
+          "malloc": 73.3,
+          "partition_alloc": 44.4,
+          "shared_memory": 10.5,
+          "v8": 55,
+          "web_cache": 32.5
+        },
+        "vmmapDirtyMb": {
+          "Memory Tag 253": 103.5,
+          "Memory Tag 255": 66.6,
+          "libraries": 3.2,
+          "malloc": 0.9,
+          "page table in kernel": 1.2,
+          "shared memory": 1.8,
+          "stacks": 1.1
+        }
+      }
+    }
+  }
+}

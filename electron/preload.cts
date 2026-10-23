@@ -937,8 +937,28 @@ function _typedOn<K extends Extract<keyof IpcEventMap, string>>(
  * terminal work this issue exists to stop.
  */
 let _viewCached = false;
+// Blink's memory cache keeps every script the view has loaded, about 25 MB of
+// source per view, and nothing re-reads it: loaded modules live in the module
+// map. Dropping it saves ~30 MB per cached view, and the view stays smaller
+// after it returns (#14219). Live images and fonts are held by their elements.
+// clearCache() also raises critical memory pressure in this renderer, so it
+// waits out a quick switch back and never runs once the view is active again,
+// including when a freeze held the cached signal until the next activation.
+// A view the efficiency profile freezes inside the delay keeps its cache.
+const CACHED_VIEW_CACHE_CLEAR_DELAY_MS = 2_000;
+let _cacheClearTimer: ReturnType<typeof setTimeout> | null = null;
 ipcRenderer.on(CHANNELS.APP_VIEW_CACHED, () => {
   _viewCached = true;
+  if (_cacheClearTimer !== null) clearTimeout(_cacheClearTimer);
+  _cacheClearTimer = setTimeout(() => {
+    _cacheClearTimer = null;
+    if (!_viewCached) return;
+    try {
+      webFrame.clearCache();
+    } catch {
+      // Best-effort reclaim; a renderer mid-teardown has nothing to free.
+    }
+  }, CACHED_VIEW_CACHE_CLEAR_DELAY_MS);
 });
 // Warm activation — not reveal — owns the clear: main only sends
 // APP_VIEW_REVEALED while the view is still the active project, so a superseded
