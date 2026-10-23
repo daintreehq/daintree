@@ -2456,6 +2456,30 @@ export interface SkillContribution {
   triggers?: string[];
 }
 
+/** One skill or reference file in `contributes.assistantKnowledge`. */
+export interface AssistantKnowledgeEntry {
+  /** Lowercase letters, digits and single hyphens; unique within its list. */
+  id: string;
+  /** Plugin-relative path: a skill directory holding `SKILL.md`, or a `.md` reference file. */
+  path: string;
+}
+
+/**
+ * `contributes.assistantKnowledge` (#13828): Markdown the Daintree Assistant is
+ * given about this plugin's tools. Delivered only while the user has given the
+ * Assistant everything the plugin declares (its databases, their writes and its
+ * own `agentMcp` endpoint) in the project, and framed to the model as the plugin
+ * author's notes on those tools, never as the user speaking.
+ */
+export interface AssistantKnowledgeContribution {
+  /** Plugin-relative `.md` file of short notes, inlined up to 4 KiB and otherwise handed over as a file. */
+  instructions?: string;
+  /** Skill directories (Agent Skills layout); only their `.md` files are mirrored, never `scripts/`. */
+  skills?: AssistantKnowledgeEntry[];
+  /** `.md` files the Assistant can read when a question needs them. */
+  references?: AssistantKnowledgeEntry[];
+}
+
 /**
  * One `contributes.themes` entry (#13832). `path` is a plugin-relative JSON file
  * holding `{ palette, tokens?, extensions? }`, the palette in the same shape
@@ -3032,6 +3056,11 @@ export interface PluginManifest {
      * Empty unless the plugin ships skills.
      */
     skills: SkillContribution[];
+    /**
+     * Markdown for the Daintree Assistant about this plugin's tools (#13828).
+     * Not materialized by the schema: absent unless the plugin declares it.
+     */
+    assistantKnowledge?: AssistantKnowledgeContribution;
     /**
      * Plugin-contributed themes (#13832). Optional in the type but always
      * materialized by the manifest schema's `.default([])`, for the same reason

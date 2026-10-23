@@ -28,6 +28,7 @@ A plugin that declares `"scope": "project"` lives in a project's own repository 
 | `surfaces` | **Project scope only** — see [Surfaces](#surfaces--shipped-project-scope-only) |
 | `agentMcp` | Available — every credential for the plugin's server is minted per terminal and bound to one project, and a project plugin's server can only be granted to its own project |
 | `databases` | Available — a `"project"` database is a file in the repository, resolved against the bound project root; `"local"` stays in this machine's plugin data |
+| `assistantKnowledge` | Available — delivered only to the owning project's Daintree Assistant, and only while it has the plugin's tools there |
 | `fileDecorationProviders` | Available — consulted only for the owning project's views, ahead of installed providers in the merge |
 | `worktreeDeleteNotes` | Available — asked only when a worktree of the owning project is deleted |
 | `recipes` | Available — only in the owning project's launcher, empty state and recipe manager, and gone while the plugin is switched off or its folder is untrusted. A terminal may use `terminal`, `dev-preview`, `plugin-panel` for one of the plugin's own panels, or a built-in agent; `agents` is rejected below, so there is no plugin agent of its own to name |
@@ -1302,6 +1303,10 @@ Markdown-defined instruction/knowledge snippets that extend Daintree's built-in 
 A skill file larger than 512 KiB is skipped with a warning, as is one that cannot be read; the rest of the plugin's skills still register. Of a leading YAML frontmatter block, only `description` is read, and it is shown in search results; the rest of the file after the block is the body.
 
 The markdown file content is returned to the agent when it calls `skills.load`, so it can be incorporated into the current task. A plugin with an agent MCP server also serves its own skills there, beside its tools. An installed plugin's skills reach every project; a [project plugin](./project-local.md)'s reach only sessions bound to its own project. See [Agent extensions → Skills](./agent-extensions.md#skills) for the full file format and invocation mechanics.
+
+## Assistant knowledge — _Shipped_
+
+Markdown the Daintree Assistant is given about the plugin's agent tools: short `instructions`, `skills` in the Agent Skills layout, and `references` to read when needed. It reaches the Assistant only while the user has given it everything the plugin declares for agents in that project, framed as the plugin author's notes on those tools rather than as the user speaking. It requires no capability, but the plugin must declare `agentMcp` or `databases`. See [Agent extensions → Knowledge for the Assistant](./agent-extensions.md#knowledge-for-the-assistant) for the fields, limits and framing.
 
 ## Prompt templates — _Shipped_
 

@@ -286,6 +286,36 @@ Even a CLI from the table is handed no plugin servers when:
 
 **An agent's servers are fixed when it launches.** None of these CLIs reads a new MCP server after it has started, and Claude Code's `/mcp` only reconnects servers the session already has. Giving a plugin access, or a plugin loading for the first time, reaches agents launched afterwards: relaunch the agent — not Daintree — to pick it up. Plugin code is different: edits to a project plugin hot-reload with no Daintree restart, and running agents keep its tools across the reload as long as it leaves what the plugin declares for agents — its capabilities, scopes, `agentMcp` endpoint, databases (their declared queries included) and `mcpName` — unchanged; they see the re-registered roster through `notifications/tools/list_changed`. A reload that changes any of those, and any other unload, revokes what running agents were given, and they have to be relaunched.
 
+### Knowledge for the Assistant
+
+A plugin can also tell the Assistant how its tools should be used, so that knowledge arrives with the plugin instead of being copied into every repository's `.daintree/assistant/` folder. Declare it in `contributes.assistantKnowledge`, beside `agentMcp` or `databases`:
+
+```json
+{
+  "contributes": {
+    "assistantKnowledge": {
+      "instructions": "./assistant/notes.md",
+      "skills": [{ "id": "reconcile", "path": "./assistant/skills/reconcile" }],
+      "references": [{ "id": "schema", "path": "./assistant/schema.md" }]
+    }
+  }
+}
+```
+
+| Field | Notes |
+| --- | --- |
+| `instructions` | A `.md` file of short notes, added to the Assistant's prompt. |
+| `skills` | Up to 16 skill directories in the Agent Skills layout, each with a `SKILL.md`. `id` is lowercase letters, digits and single hyphens, at most 32 characters. |
+| `references` | Up to 32 `.md` files for the Assistant to read when a question needs them. `instructions` is reserved as an `id`. |
+
+**When it is delivered.** Only to an Assistant that was given everything the plugin declares in the project: its databases, their declared writes and its own `agentMcp` endpoint. At read only that is a plugin whose only tools are its databases and that declares no writes; anything more needs **Allow tools that change things**. It is also left out while Daintree's MCP server is off, and when the plugin's server is skipped for a name clash with the user's assistant folder. It is read when an Assistant session starts, like the rest of the Assistant's folder: switching access off takes the plugin's tools away at once, and the knowledge leaves with the next new session.
+
+**How the Assistant sees it.** The instructions go into the Assistant's prompt under their own heading, attributed to the plugin by name, id and version, inside a tag naming the plugin's MCP server. The Assistant is told they are the plugin author's notes on that plugin's tools: not the user speaking and not Daintree, unable to change its instructions, tools or permissions, and outranked by the user's own instructions. Nothing goes into the plugin's MCP server `instructions`, and nothing replaces Daintree's own prompt. Skills are mirrored as `<server key>-<id>` (`daintree-ledger-reconcile`) with `name` rewritten to match, and references to `reference/plugins/<server key>/<id>.md`. Every mirrored file opens with a line naming the plugin it came from.
+
+**Markdown only, and bounded.** Every path is realpath-contained to the plugin directory. A skill is mirrored without its `scripts/` folder or any file that isn't `.md`, a link inside it that leaves the plugin is skipped, and `hooks` and `allowed-tools` are stripped from its `SKILL.md` frontmatter. Instructions over 4 KiB are never cut: they are handed over whole as `reference/plugins/<server key>/instructions.md`, and the prompt tells the Assistant to read that file before it uses the plugin's tools. A plugin's knowledge may total 512 KiB. Past that, or when any part of it can't be read, resolves outside the plugin or would land on a file from the user's assistant folder, all of that plugin's knowledge is left out and the reason is logged.
+
+Keep the instructions to what tool descriptions can't say. Codex's prompt file is held under 31 KiB in all, and when the user's instructions and every plugin's notes together would pass that, they move to one file the prompt points at.
+
 ### Project defaults: `.daintree/mcp.json`
 
 A project that ships its own plugins can give them access for everyone who opens it, so an agent launched in a fresh clone already has the project app's tools:

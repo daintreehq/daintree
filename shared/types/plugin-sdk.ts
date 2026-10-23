@@ -79,7 +79,12 @@ export type { PluginSystemWakeEvent } from "./plugin.js";
 
 // ── Manifest root ───────────────────────────────────────────────────
 
-export type { PluginManifest, PluginAuthor } from "./plugin.js";
+export type {
+  PluginManifest,
+  PluginAuthor,
+  AssistantKnowledgeContribution,
+  AssistantKnowledgeEntry,
+} from "./plugin.js";
 
 // ── Activation contract ─────────────────────────────────────────────
 
