@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ActionContext } from "@shared/types/actions";
 import type { ActionCallbacks, ActionRegistry } from "../../actionTypes";
 
@@ -65,7 +65,8 @@ describe("terminal lifecycle action run bodies (#14273)", () => {
     expect(m.implLoads).toBe(1);
     expect(m.runLookups).toBe(2);
     expect(m.kill).toHaveBeenCalledTimes(2);
-    expect(m.kill).toHaveBeenCalledWith(args, ctx);
+    // Nothing is focused in this view, so the dispatch-time fallback is null.
+    expect(m.kill).toHaveBeenCalledWith(args, ctx, null);
   });
 
   // Their targets are read at the keystroke, so they must not wait on a load.
@@ -91,5 +92,63 @@ describe("terminal lifecycle action run bodies (#14273)", () => {
     await expect(def.run({ terminalId: "t1" }, ctx)).rejects.toThrow();
     expect(m.implLoads).toBe(1);
     expect(m.kill).not.toHaveBeenCalled();
+  });
+});
+
+// A view's first dispatch waits on the chunk load. Focus that moves during it
+// must not redirect a keybound kill or restart: both are read at the keystroke.
+describe("terminal lifecycle focus fallback across the first load (#14273)", () => {
+  const focus = { id: "A" as string | null };
+  const removePanel = vi.fn();
+  const restartTerminal = vi.fn();
+  let releaseImpl: () => void = () => {};
+
+  beforeEach(() => {
+    vi.resetModules();
+    focus.id = "A";
+    removePanel.mockReset();
+    restartTerminal.mockReset();
+    const implGate = new Promise<void>((resolve) => {
+      releaseImpl = resolve;
+    });
+    vi.doMock("@/store/panelStore", () => ({
+      usePanelStore: {
+        getState: () => ({
+          focusedId: focus.id,
+          panelsById: {
+            A: { id: "A", kind: "terminal", location: "grid" },
+            B: { id: "B", kind: "terminal", location: "grid" },
+          },
+          removePanel,
+          restartTerminal,
+        }),
+      },
+    }));
+    vi.doMock("../terminalLifecycleActions.impl", async () => {
+      await implGate;
+      return vi.importActual("../terminalLifecycleActions.impl");
+    });
+  });
+
+  afterEach(() => {
+    vi.doUnmock("@/store/panelStore");
+    vi.doUnmock("../terminalLifecycleActions.impl");
+  });
+
+  const keybinding: ActionContext = { dispatchSource: "keybinding" };
+
+  it.each([
+    ["terminal.kill", removePanel],
+    ["terminal.restart", restartTerminal],
+  ] as const)("%s targets the terminal focused at dispatch", async (id, effect) => {
+    const def = (await register()).get(id)!();
+
+    const result = def.run({}, keybinding);
+    focus.id = "B";
+    releaseImpl();
+    await result;
+
+    expect(effect).toHaveBeenCalledTimes(1);
+    expect(effect).toHaveBeenCalledWith("A");
   });
 });

@@ -105,8 +105,11 @@ async function runTerminalLifecycleAction(
   args: unknown,
   ctx: ActionContext
 ): Promise<unknown> {
+  // The focus fallback is read at the keystroke, before the load: focus can
+  // move while the chunk resolves, and a kill must not land on the new pane.
+  const focusedAtDispatch = usePanelStore.getState().focusedId;
   const { terminalLifecycleActionRuns } = await import("./terminalLifecycleActions.impl");
-  return terminalLifecycleActionRuns[id](args, ctx);
+  return terminalLifecycleActionRuns[id](args, ctx, focusedAtDispatch);
 }
 
 export function registerTerminalLifecycleActions(

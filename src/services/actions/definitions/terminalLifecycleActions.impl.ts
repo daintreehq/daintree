@@ -96,11 +96,11 @@ function clearPendingIf(kind: TerminalPendingDestructiveActionKind): void {
 }
 
 export const terminalLifecycleActionRuns = {
-  "terminal.trash": async (args: unknown, ctx: ActionContext) => {
+  "terminal.trash": async (args: unknown, ctx: ActionContext, focusedAtDispatch: string | null) => {
     const { terminalId } = args as { terminalId?: string };
     requireExplicitTerminalIdForAgentDispatch("terminal.trash", terminalId, ctx);
     const state = usePanelStore.getState();
-    const targetId = terminalId ?? state.focusedId;
+    const targetId = terminalId ?? focusedAtDispatch;
     if (targetId) {
       const target = state.panelsById[targetId];
       if (target?.location === "grid" || target?.location === undefined) {
@@ -117,7 +117,11 @@ export const terminalLifecycleActionRuns = {
       }
     }
   },
-  "terminal.background": async (args: unknown, ctx: ActionContext) => {
+  "terminal.background": async (
+    args: unknown,
+    ctx: ActionContext,
+    focusedAtDispatch: string | null
+  ) => {
     const { terminalId } = (args as { terminalId?: string } | undefined) ?? {};
     requireExplicitTerminalIdForAgentDispatch("terminal.background", terminalId, ctx);
     const state = usePanelStore.getState();
@@ -127,7 +131,11 @@ export const terminalLifecycleActionRuns = {
     if (terminalId !== undefined && !Object.hasOwn(state.panelsById, terminalId)) {
       return throwTerminalMiss("terminal.background", terminalId);
     }
-    const targetId = resolvePlacementTarget(terminalId, state);
+    const targetId = resolvePlacementTarget(terminalId, {
+      focusedId: focusedAtDispatch,
+      panelsById: state.panelsById,
+      getPanelGroup: state.getPanelGroup,
+    });
     if (!targetId) return { location: null };
     if (assertPlacementAllowed("terminal.background", targetId, "background", state)) {
       return { location: "background" as const };
@@ -144,14 +152,14 @@ export const terminalLifecycleActionRuns = {
       usePanelStore.getState().panelsById[targetId]
     );
   },
-  "terminal.kill": async (args: unknown, ctx: ActionContext) => {
+  "terminal.kill": async (args: unknown, ctx: ActionContext, focusedAtDispatch: string | null) => {
     const { terminalId } = args as { terminalId?: string };
     // Ahead of the pending-destructive request below: an unbound agent call
     // must not stage a confirm dialog asking the user to approve killing
     // whatever they happen to be looking at.
     requireExplicitTerminalIdForAgentDispatch("terminal.kill", terminalId, ctx);
     const state = usePanelStore.getState();
-    const targetId = terminalId ?? state.focusedId;
+    const targetId = terminalId ?? focusedAtDispatch;
     if (!targetId) return;
     const terminal = state.panelsById[targetId];
     // Bare PTY stays D0 — only confirm when an agent session would lose
@@ -249,12 +257,16 @@ export const terminalLifecycleActionRuns = {
 
     return { killedIds, excludedIds, notFoundIds, skippedIds, failedIds };
   },
-  "terminal.restart": async (args: unknown, ctx: ActionContext) => {
+  "terminal.restart": async (
+    args: unknown,
+    ctx: ActionContext,
+    focusedAtDispatch: string | null
+  ) => {
     const { terminalId } = args as { terminalId?: string };
     // See terminal.kill: guard before the confirm request is staged.
     requireExplicitTerminalIdForAgentDispatch("terminal.restart", terminalId, ctx);
     const state = usePanelStore.getState();
-    const targetId = terminalId ?? state.focusedId;
+    const targetId = terminalId ?? focusedAtDispatch;
     if (!targetId) return;
     const terminal = state.panelsById[targetId];
     if (!isConfirmed(args, ctx) && terminalHasRunningAgentSession(terminal)) {
@@ -273,7 +285,11 @@ export const terminalLifecycleActionRuns = {
     clearPendingIf("restart");
     state.restartTerminal(targetId);
   },
-  "terminal.restartOnPreset": async (args: unknown, ctx: ActionContext) => {
+  "terminal.restartOnPreset": async (
+    args: unknown,
+    ctx: ActionContext,
+    focusedAtDispatch: string | null
+  ) => {
     const { terminalId, presetId } = RestartOnPresetArgsSchema.parse(args);
     requireExplicitTerminalIdForAgentDispatch("terminal.restartOnPreset", terminalId, ctx);
     // Unlike terminal.restart, this asks whatever the agent is doing: the
@@ -283,7 +299,7 @@ export const terminalLifecycleActionRuns = {
       throw new Error("Restarting on another preset ends the conversation; pass confirmed: true");
     }
     const state = usePanelStore.getState();
-    const targetId = terminalId ?? state.focusedId;
+    const targetId = terminalId ?? focusedAtDispatch;
     if (!targetId) return;
     const observedBefore = useRateLimitObservationStore.getState().observedAtByTerminalId[targetId];
     const result = await state.restartTerminalOnPreset(targetId, presetId);
@@ -296,11 +312,14 @@ export const terminalLifecycleActionRuns = {
       useRateLimitObservationStore.getState().clearObservation(targetId, observedBefore);
     }
   },
-  "terminal.redraw": async (args: unknown, ctx: ActionContext) => {
+  "terminal.redraw": async (
+    args: unknown,
+    ctx: ActionContext,
+    focusedAtDispatch: string | null
+  ) => {
     const { terminalId } = (args as { terminalId?: string } | undefined) ?? {};
     requireExplicitTerminalIdForAgentDispatch("terminal.redraw", terminalId, ctx);
-    const state = usePanelStore.getState();
-    const targetId = terminalId ?? state.focusedId;
+    const targetId = terminalId ?? focusedAtDispatch;
     if (targetId) {
       // Only a PERSON gets the bypass (#11638). #10863's write-quiescence
       // deferral exists to stop an automatic out-of-band re-wrap landing
@@ -315,7 +334,11 @@ export const terminalLifecycleActionRuns = {
       });
     }
   },
-  "terminal.rename": async (args: unknown, ctx: ActionContext) => {
+  "terminal.rename": async (
+    args: unknown,
+    ctx: ActionContext,
+    focusedAtDispatch: string | null
+  ) => {
     const { terminalId, name } = args as { terminalId?: string; name?: string };
     requireExplicitTerminalIdForAgentDispatch("terminal.rename", terminalId, ctx);
     // Second, independent requirement: without a `name` this action defers to
@@ -328,7 +351,7 @@ export const terminalLifecycleActionRuns = {
         "terminal.rename requires an explicit `name` when dispatched by an agent or MCP client — a headless caller cannot answer the rename dialog. Pass the new title in `name`, or an empty string to restore the default."
       );
     }
-    const targetId = terminalId ?? usePanelStore.getState().focusedId;
+    const targetId = terminalId ?? focusedAtDispatch;
     if (!targetId) return undefined;
 
     if (name !== undefined) {
@@ -356,33 +379,45 @@ export const terminalLifecycleActionRuns = {
       return undefined;
     }
   },
-  "terminal.viewInfo": async (args: unknown, ctx: ActionContext) => {
+  "terminal.viewInfo": async (
+    args: unknown,
+    ctx: ActionContext,
+    focusedAtDispatch: string | null
+  ) => {
     const { terminalId } = args as { terminalId?: string };
     requireExplicitTerminalIdForAgentDispatch("terminal.viewInfo", terminalId, ctx);
-    const targetId = terminalId ?? usePanelStore.getState().focusedId;
+    const targetId = terminalId ?? focusedAtDispatch;
     if (targetId) {
       window.dispatchEvent(
         new CustomEvent("daintree:open-terminal-info", { detail: { id: targetId } })
       );
     }
   },
-  "terminal.info.open": async (args: unknown, ctx: ActionContext) => {
+  "terminal.info.open": async (
+    args: unknown,
+    ctx: ActionContext,
+    focusedAtDispatch: string | null
+  ) => {
     const { terminalId } = args as { terminalId?: string };
     requireExplicitTerminalIdForAgentDispatch("terminal.info.open", terminalId, ctx);
-    const targetId = terminalId ?? usePanelStore.getState().focusedId;
+    const targetId = terminalId ?? focusedAtDispatch;
     if (targetId) {
       window.dispatchEvent(
         new CustomEvent("daintree:open-terminal-info", { detail: { id: targetId } })
       );
     }
   },
-  "terminal.info.get": async (args: unknown, ctx: ActionContext) => {
+  "terminal.info.get": async (
+    args: unknown,
+    ctx: ActionContext,
+    focusedAtDispatch: string | null
+  ) => {
     const { terminalId } = (args as { terminalId?: string } | undefined) ?? {};
     // Supersedes the "No terminal selected" throw below for agent dispatch:
     // that one only fires when nothing is focused either, so an agent would
     // otherwise get a silent read of the wrong terminal whenever focus exists.
     requireExplicitTerminalIdForAgentDispatch("terminal.info.get", terminalId, ctx);
-    const targetId = terminalId ?? usePanelStore.getState().focusedId;
+    const targetId = terminalId ?? focusedAtDispatch;
     if (!targetId) {
       throw new Error("No terminal selected");
     }
@@ -412,19 +447,27 @@ export const terminalLifecycleActionRuns = {
     usePanelStore.getState().setHoldOnRestart(terminalId, hold);
     return { terminalId, holdOnRestart: hold };
   },
-  "terminal.toggleInputLock": async (args: unknown, ctx: ActionContext) => {
+  "terminal.toggleInputLock": async (
+    args: unknown,
+    ctx: ActionContext,
+    focusedAtDispatch: string | null
+  ) => {
     const { terminalId } = args as { terminalId?: string };
     requireExplicitTerminalIdForAgentDispatch("terminal.toggleInputLock", terminalId, ctx);
     const state = usePanelStore.getState();
-    const targetId = terminalId ?? state.focusedId;
+    const targetId = terminalId ?? focusedAtDispatch;
     if (targetId) {
       state.toggleInputLocked(targetId);
     }
   },
-  "terminal.forceResume": async (args: unknown, ctx: ActionContext) => {
+  "terminal.forceResume": async (
+    args: unknown,
+    ctx: ActionContext,
+    focusedAtDispatch: string | null
+  ) => {
     const { terminalId } = args as { terminalId?: string };
     requireExplicitTerminalIdForAgentDispatch("terminal.forceResume", terminalId, ctx);
-    const targetId = terminalId ?? usePanelStore.getState().focusedId;
+    const targetId = terminalId ?? focusedAtDispatch;
     if (targetId) {
       await terminalClient.forceResume(targetId);
     }
@@ -490,7 +533,7 @@ export const terminalLifecycleActionRuns = {
   "terminal.restartService": async () => {
     await terminalClient.restartService();
   },
-  "terminal.watch": async (args: unknown, ctx: ActionContext) => {
+  "terminal.watch": async (args: unknown, ctx: ActionContext, focusedAtDispatch: string | null) => {
     const { terminalId } = (args as { terminalId?: string } | undefined) ?? {};
     // Binds on the argument, not `ctx.focusedTerminalId`. A pinned help
     // session's context snapshot is ambient state captured at provision time,
@@ -498,7 +541,7 @@ export const terminalLifecycleActionRuns = {
     // snapshot at all — it falls straight through to live focus.
     requireExplicitTerminalIdForAgentDispatch("terminal.watch", terminalId, ctx);
     const state = usePanelStore.getState();
-    const targetId = terminalId ?? ctx.focusedTerminalId ?? state.focusedId;
+    const targetId = terminalId ?? ctx.focusedTerminalId ?? focusedAtDispatch;
     if (!targetId) return;
 
     if (state.watchedPanels.has(targetId)) {
@@ -513,6 +556,9 @@ export const terminalLifecycleActionRuns = {
       }
     }
   },
-} satisfies Record<string, (args: unknown, ctx: ActionContext) => Promise<unknown>>;
+} satisfies Record<
+  string,
+  (args: unknown, ctx: ActionContext, focusedAtDispatch: string | null) => Promise<unknown>
+>;
 
 export type TerminalLifecycleActionRunId = keyof typeof terminalLifecycleActionRuns;
