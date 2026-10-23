@@ -96,6 +96,10 @@ Daintree reads the manifest eagerly at startup. Contribution points declared her
   // boot. Contributions are registered eagerly either way.
   "activationEvents": ["onStartupFinished"],
 
+  // Events that wake the plugin and run one of its own commands. Optional.
+  // Each event at most once; "agentWaiting" needs the "agent:read" capability.
+  "eventRoutes": [{ "event": "worktreeAdded", "command": "onWorktreeAdded" }],
+
   // The plugin's UI and functional contributions. Every key is optional.
   "contributes": {
     "commands": [/* palette actions */],
@@ -339,6 +343,42 @@ Plugins are lazy by default. Omitting `activationEvents` (or passing an empty ar
 Some user actions activate a plugin at once whatever it declares: installing or updating it, re-enabling it, and linking it with `daintree-plugin dev`.
 
 List `"onStartupFinished"` to opt a plugin into eager activation when it genuinely needs to run at boot. Either way, contributions (commands, panels, keybindings, …) are registered eagerly from the manifest at startup — only the `main` import and `activate()` call are governed by activation, so a lazy plugin's commands and panels still appear in the palette before any of its code runs.
+
+A plugin that only needs to react to something happening should use [`eventRoutes`](#eventroutes) instead of activating at startup to subscribe.
+
+### `eventRoutes`
+
+Events that wake the plugin and run one of its own commands. The host listens on the plugin's behalf: when an event happens it activates the plugin if it is not running and runs the command with the event's payload. A route is not a live subscription, so a plugin that reacts only through routes stays eligible for [idle disposal](./architecture.md#worker-crashes-and-idle-disposal) and is woken again by its next event.
+
+```json
+"eventRoutes": [
+  { "event": "agentWaiting", "command": "onAgentWaiting" },
+  { "event": "worktreeAdded", "command": "onWorktreeChange" },
+  { "event": "worktreeRemoved", "command": "onWorktreeChange" }
+]
+```
+
+`command` is the bare `id` of a `contributes.commands` entry in the same manifest; a route cannot name an imperative `host.registerAction` action, which would not exist once the worker is disposed, or a command declared `danger: "confirm"`, since nobody is there to confirm it. Each event may be routed once, and several events may share a command.
+
+The events are a closed list. Each fires on the transition only, and its payload is what the matching live subscription delivers, under the same capability and project rules:
+
+| `event` | Fires when | The command's argument | Needs |
+| --- | --- | --- | --- |
+| `agentWaiting` | an agent moves into `waiting` | `{ event, agent }`, `agent` as `onDidChangeAgentState` delivers it | `agent:read` |
+| `worktreeAdded` | the worktree set gains a worktree | `{ event, worktrees, change }`, as `onDidChangeWorktrees` delivers them | — |
+| `worktreeRemoved` | the worktree set loses a worktree | `{ event, worktrees, change }` | — |
+| `projectForeground` | a project comes to the foreground | `{ event, presence }`, as `onDidChangeProjectPresence` delivers it | — |
+
+The argument's type is `PluginEventRouteWake` in `@daintreehq/plugin-sdk`; narrow it on `event`. A worktree route's `change` is what changed since the read before, or the net of every read while the wake waited its turn. A project plugin hears about its own project only, as its subscriptions do.
+
+Wakes are best effort, not a log:
+
+- Nothing is replayed when the plugin loads: an agent already waiting or a project already in front does not wake it.
+- A burst coalesces to the latest value per terminal, per project or per worktree route, and a plugin is woken at most about once a second. Wakes waiting their turn are held, not queued without bound.
+- A transition that reverses before its wake runs cancels it: an agent that stopped waiting, a project sent back, a worktree removed again.
+- Nothing is delivered while the plugin's worker has failed, including its crash loop, and events missed meanwhile are not replayed. Routes resume once the plugin is restarted or used again.
+- The command runs with no view behind it: `when` and `enablement` clauses are not consulted, and a declared `inputSchema` must accept the wake object.
+- A failed wake is not retried, whether the command threw or the wake was too large to send (the 4 MiB argument cap of any invoke). The failure is logged and audited.
 
 ### `contributes`
 

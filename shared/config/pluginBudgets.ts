@@ -57,6 +57,31 @@ export const PLUGIN_SUBSCRIPTION_DEFAULT_DEBOUNCE_MS = 100;
  */
 export const PLUGIN_FOCUSED_PANEL_DEFAULT_DEBOUNCE_MS = 250;
 
+/**
+ * How long a manifest event route (#13816) collects a burst before its first
+ * wake, measured from the first event: a stream of events cannot postpone it.
+ */
+export const PLUGIN_EVENT_ROUTE_COALESCE_MS = 100;
+
+/**
+ * Least time between two routed command runs for one plugin instance. Wakes
+ * that arrive faster wait, coalesced, rather than queue.
+ */
+export const PLUGIN_EVENT_ROUTE_MIN_INTERVAL_MS = 1_000;
+
+/**
+ * Distinct wakes (terminals, projects, worktree routes) one instance may have
+ * waiting. Past it the oldest is dropped: routes are best effort, never a log.
+ */
+export const PLUGIN_EVENT_ROUTE_MAX_PENDING = 32;
+
+/**
+ * Projects whose worktree set a worktree route remembers. An installed
+ * plugin's worktrees follow the focused project, so each project keeps its own
+ * baseline; the least recently seen is forgotten past the cap.
+ */
+export const PLUGIN_EVENT_ROUTE_MAX_WORKTREE_PROJECTS = 8;
+
 /** Lines `host.terminals.readScreen` returns when the caller names none. */
 export const PLUGIN_TERMINAL_SCREEN_DEFAULT_LINES = 20;
 

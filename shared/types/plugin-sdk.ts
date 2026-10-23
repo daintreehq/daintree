@@ -77,6 +77,10 @@ export type { PluginProjectPresence, PluginProjectPresenceState } from "./plugin
 
 export type { PluginSystemWakeEvent } from "./plugin.js";
 
+// ── Event routes (manifest + worker-facing) ─────────────────────────
+
+export type { PluginEventRoute, PluginEventRouteEvent, PluginEventRouteWake } from "./plugin.js";
+
 // ── Manifest root ───────────────────────────────────────────────────
 
 export type {

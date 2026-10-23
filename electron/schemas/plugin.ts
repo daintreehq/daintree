@@ -15,6 +15,7 @@ import {
   PANEL_MENU_MAX_ITEMS,
   PANEL_TOOLBAR_MAX_ITEMS,
   PLUGIN_CATEGORY_IDS,
+  PLUGIN_EVENT_ROUTE_EVENTS,
   PLUGIN_NOTIFY_MAX_ACTIONS,
   PLUGIN_PANEL_BADGE_LABEL_MAX,
   PLUGIN_TOOLBAR_BUTTON_STATE_TEXT_MAX,
@@ -3174,6 +3175,17 @@ export function describeManifestIssues(
 // pattern itself, not a refinement, so the generated JSON Schema rejects them too.
 const PLUGIN_MCP_NAME_PATTERN = /^(?!(?:docs|runbooks)$)[a-z0-9][a-z0-9-]{0,15}$/;
 
+/**
+ * One manifest `eventRoutes` entry (#13816): an event from the host's closed
+ * list and the bare id of one of the plugin's own `contributes.commands`. The
+ * manifest-level `superRefine` resolves the command and checks the event's
+ * capability, since both depend on other fields.
+ */
+export const EventRouteSchema = z.strictObject({
+  event: z.enum(PLUGIN_EVENT_ROUTE_EVENTS),
+  command: z.string().min(1).max(64).regex(SAFE_ID_PATTERN),
+});
+
 function buildPluginManifestSchema(origin: PluginOrigin) {
   return z
     .strictObject({
@@ -3249,6 +3261,9 @@ function buildPluginManifestSchema(origin: PluginOrigin) {
       capabilities: z.array(PluginCapabilitySchema).default([]),
       scopes: PluginManifestScopesSchema.optional(),
       activationEvents: z.array(z.literal("onStartupFinished")).default([]),
+      // One route per event at most, so the cap is the size of the closed list.
+      // Cross-checks against `commands` and `capabilities` live in `superRefine`.
+      eventRoutes: z.array(EventRouteSchema).max(PLUGIN_EVENT_ROUTE_EVENTS.length).default([]),
       contributes: z.preprocess(
         (raw, ctx) => {
           reportReservedTourCueNames(raw, ctx);
@@ -3801,6 +3816,49 @@ function buildPluginManifestSchema(origin: PluginOrigin) {
           message: `contributes.previewTools[].guestAdapter must name a guest adapter this manifest declares — "${tool.guestAdapter}" is not in contributes.guestAdapters.`,
           params: { errorCode: "preview_tool_guest_adapter_undeclared" },
         });
+      });
+
+      // A route runs one of the plugin's own manifest commands with nobody
+      // present: the target must be declared (an imperative action dies with
+      // the worker a route exists to outlive), must not ask for confirmation
+      // no one is there to give, and an event must carry the same capability
+      // its live subscription requires (#13816).
+      const routedEvents = new Set<string>();
+      manifest.eventRoutes.forEach((route, index) => {
+        if (routedEvents.has(route.event)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ["eventRoutes", index, "event"],
+            message: `eventRoutes already routes "${route.event}"; each event may be routed once.`,
+            params: { errorCode: "event_route_duplicate_event" },
+          });
+        }
+        routedEvents.add(route.event);
+        const command = manifest.contributes.commands.find((cmd) => cmd.id === route.command);
+        if (!command) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ["eventRoutes", index, "command"],
+            message: `eventRoutes command "${route.command}" matches no entry in contributes.commands.`,
+            params: { errorCode: "event_route_unknown_command" },
+          });
+        } else if (command.danger === "confirm") {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ["eventRoutes", index, "command"],
+            message: `eventRoutes command "${route.command}" is declared danger "confirm", and a routed command runs without anyone to confirm it.`,
+            params: { errorCode: "event_route_confirm_command" },
+          });
+        }
+        if (route.event === "agentWaiting" && !manifest.capabilities.includes("agent:read")) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ["eventRoutes", index, "event"],
+            message:
+              'eventRoutes "agentWaiting" requires the "agent:read" capability to be declared in capabilities.',
+            params: { errorCode: "event_route_capability_required" },
+          });
+        }
       });
 
       // `contributes.agents` registers a launchable agent CLI — gate it behind

@@ -193,14 +193,8 @@ import {
 } from "../../../shared/utils/pluginPanelActivity.js";
 import { makeForgeProviderId } from "../../../shared/utils/forgeProviderIds.js";
 import { forgeProviderRoles } from "../../../shared/utils/forgeProviderRoles.js";
-import {
-  toPluginWorktreeSnapshot,
-  toPluginWorktreeStatus,
-} from "../../../shared/utils/pluginWorktreeSnapshot.js";
-import {
-  toPluginAgentSnapshot,
-  type AgentStateChangePayload,
-} from "../../../shared/utils/pluginAgentSnapshot.js";
+import { toPluginWorktreeStatus } from "../../../shared/utils/pluginWorktreeSnapshot.js";
+import type { AgentStateChangePayload } from "../../../shared/utils/pluginAgentSnapshot.js";
 import {
   toPluginTerminalLifecycleEvent,
   type TerminalLifecycleObservation,
@@ -216,7 +210,11 @@ import {
 import { PLUGIN_FOCUSED_PANEL_DEFAULT_DEBOUNCE_MS } from "../../../shared/config/pluginBudgets.js";
 import { getFocusedPanelTracker, type FocusedPanelState } from "../FocusedPanelTracker.js";
 import { getProjectPresenceTracker } from "../ProjectPresenceTracker.js";
-import { isProjectWorkspaceId } from "../../../shared/utils/workspaceIds.js";
+import {
+  createPluginEventScope,
+  type PluginWorktreeEventPayload,
+  type PluginWorktreeSnapshotFetchResult,
+} from "./pluginEventScope.js";
 import type { FleetSnapshotService } from "../FleetSnapshotService.js";
 import type { WorktreeSnapshot } from "../../../shared/types/workspace-host.js";
 import {
@@ -242,7 +240,6 @@ import type {
   PluginHostApi,
   PluginIdentity,
   PluginWorktreesResult,
-  PluginWorktreesUnavailableReason,
   PluginActionContribution,
   PluginActionDescriptor,
   PluginChannelSchema,
@@ -355,26 +352,6 @@ function samePanelBadge(a: PluginPanelBadge, b: PluginPanelBadge): boolean {
  * "immediately"; a minute is already far past any useful coalescing window.
  */
 const MAX_PLUGIN_FS_WATCH_DEBOUNCE_MS = 60_000;
-
-/**
- * The slice of a `WorkspaceClient` worktree event a plugin subscription reads.
- * Only the owning project's path matters here — it is what lets a project-bound
- * host drop another project's worktree churn instead of waking on all of it.
- */
-export interface PluginWorktreeEventPayload {
-  projectPath?: string;
-}
-
-/**
- * Compare two project paths the way the workspace-host pool keys them
- * (`path.resolve`, plus win32's case-insensitive filesystem) so a binding's
- * realpath-resolved root matches the path an event carries.
- */
-function isSameProjectPath(a: string, b: string): boolean {
-  const left = path.resolve(a);
-  const right = path.resolve(b);
-  return process.platform === "win32" ? left.toLowerCase() === right.toLowerCase() : left === right;
-}
 
 /**
  * Is this the frozen `PROJECT_VIEW_UNAVAILABLE` rejection a bound renderer
@@ -696,21 +673,7 @@ function sanitizeConfirmOptions(options: PluginConfirmOptions): PluginConfirmOpt
   };
 }
 
-/**
- * A worktree read the factory's dependencies performed, keeping the reason it
- * came back with nothing (#12174).
- *
- * The internal twin of {@link PluginWorktreesResult}: same discriminant, but
- * carrying raw `WorktreeSnapshot`s, which the factory projects through
- * `toPluginWorktreeSnapshot` before a plugin ever sees them. `plugin-unloaded`
- * is excluded because only the factory can observe it.
- */
-export type PluginWorktreeSnapshotFetchResult =
-  | { status: "ok"; projectId: string; snapshots: WorktreeSnapshot[] }
-  | {
-      status: "unavailable";
-      reason: Exclude<PluginWorktreesUnavailableReason, "plugin-unloaded">;
-    };
+export type { PluginWorktreeEventPayload, PluginWorktreeSnapshotFetchResult };
 
 /**
  * Live collaborators and shared registries `createHost` and the fs/git/process/
@@ -1012,37 +975,20 @@ export function createHost(
 ): { host: PluginHostApi; revoke: () => void } {
   let revoked = false;
   const { projectId: boundProjectId, projectRoot: boundProjectRoot } = binding;
-
-  /**
-   * The worktree set this host may see, with the reason it may see none.
-   *
-   * Unbound stays ambient on purpose: an app-global plugin has no project of
-   * its own, so the focused window's worktrees are the only set its
-   * argument-less getters can mean — which is exactly why the result names the
-   * project it landed on, so a plugin can notice when focus moved under it.
-   */
-  const fetchWorktreeSnapshotsResult = async (): Promise<PluginWorktreeSnapshotFetchResult> => {
-    if (boundProjectId === null) return deps.fetchWorktreeSnapshotsResult();
-    // Bound with no root is a malformed binding. Fail closed rather than fall
-    // back to the ambient read, which would hand this plugin whichever project
-    // happens to be focused — the confused-deputy bug the binding exists for.
-    if (boundProjectRoot === null) {
-      return { status: "unavailable", reason: "project-unavailable" };
-    }
-    const result = await deps.fetchWorktreeSnapshotsForProjectResult(
-      boundProjectId,
-      boundProjectRoot
-    );
-    // Belt and braces on the binding, enforced here rather than in one getter so
-    // every surface downstream of this read inherits it: a dependency answering
-    // for another project would be the confused deputy (#11297) wearing the new
-    // shape, and it must not reach `getWorktreeStatus`, the worktree
-    // subscriptions or the default spawn cwd either.
-    if (result.status === "ok" && result.projectId !== boundProjectId) {
-      return { status: "unavailable", reason: "project-unavailable" };
-    }
-    return result;
-  };
+  // Which project's events and worktrees this host sees, and what each payload
+  // holds — shared with the manifest event routes held for the same instance,
+  // so the two can never disagree (#13816).
+  const {
+    boundPlugin,
+    isBound,
+    fetchWorktreeSnapshotsResult,
+    pluginProjectionFor,
+    isEventForBoundProject,
+    isAgentEventForBoundProject,
+    projectAgentTransition,
+    canObserveAgents,
+    seesProjectPresence,
+  } = createPluginEventScope(deps, pluginId, binding);
 
   /**
    * The array-shaped read the pre-#12174 surfaces still use. Every unavailable
@@ -1060,22 +1006,6 @@ export function createHost(
   const fetchWorktreeSnapshots = async (): Promise<WorktreeSnapshot[]> => {
     const result = await fetchWorktreeSnapshotsResult();
     return result.status === "ok" ? result.snapshots : [];
-  };
-
-  /**
-   * The plugin projection for one successful read, carrying each worktree's
-   * custom title. Titles are keyed by the project the read landed on, which for
-   * an unbound host is the focused window's — the project these worktrees are.
-   */
-  const pluginProjectionFor = (
-    result: Extract<PluginWorktreeSnapshotFetchResult, { status: "ok" }>
-  ) => {
-    const titles = deps.getWorktreeCustomTitles(result.projectId);
-    return (snapshot: WorktreeSnapshot) =>
-      toPluginWorktreeSnapshot(
-        snapshot,
-        Object.hasOwn(titles, snapshot.id) ? (titles[snapshot.id] ?? null) : null
-      );
   };
 
   /**
@@ -1246,25 +1176,6 @@ export function createHost(
   };
 
   /**
-   * Does a worktree event belong to the bound project? Unbound hosts see every
-   * project's events by design. Fails open when the payload carries no project
-   * path: the snapshots the callback then delivers are already project-scoped,
-   * so an unrecognised payload costs a redundant callback, never another
-   * project's data.
-   *
-   * A bound-but-rootless binding is malformed and drops every event, matching
-   * `fetchWorktreeSnapshots` — waking the plugin app-wide to hand it the empty
-   * list that path already returns would be pure noise.
-   */
-  const isEventForBoundProject = (payload?: PluginWorktreeEventPayload): boolean => {
-    if (boundProjectId !== null && boundProjectRoot === null) return false;
-    if (boundProjectRoot === null) return true;
-    const projectPath = payload?.projectPath;
-    if (typeof projectPath !== "string" || projectPath.length === 0) return true;
-    return isSameProjectPath(projectPath, boundProjectRoot);
-  };
-
-  /**
    * The project root a `"project"`-scoped settings or storage call targets.
    *
    * Unbound stays `null`, which both managers read as "use the app-global
@@ -1275,31 +1186,6 @@ export function createHost(
    */
   const boundScopeRoot: string | null = boundProjectId === null ? null : (boundProjectRoot ?? "");
 
-  const resolveAgentEventWorkspace = (terminalId: string | undefined): string | null =>
-    terminalId === undefined ? null : (getPtyClient()?.getTerminalProjectId(terminalId) ?? null);
-
-  /**
-   * Does an agent transition belong to the bound project? Unbound hosts observe
-   * every agent by design — that is what `agent:read` has always meant.
-   *
-   * Fails CLOSED, unlike the worktree predicate: the event carries no
-   * project-scoped payload for the callback to re-derive, so delivering one we
-   * cannot attribute would hand a bound plugin another project's agent state
-   * outright. The workspace is resolved from the raw event's terminal id, which
-   * the plugin-facing projection also carries (see `toPluginAgentSnapshot`).
-   */
-  const isAgentEventForBoundProject = (workspaceId: string | null): boolean =>
-    boundProjectId === null || (workspaceId !== null && workspaceId === boundProjectId);
-  // The LoadedPlugin this host is bound to. recordPluginLog compares against
-  // the live instance so a stale host (post-unload, or after a same-id
-  // reload) can't write into the current session's log buffer.
-  const boundPlugin = deps.plugins.get(pluginId);
-  // Liveness for the non-revoke-guarded runtime methods: the plugin must still
-  // be loaded AND be the same instance this host was bound to. Identity (not
-  // just id membership) so a stale timer from a pre-reload instance can't emit
-  // into the current same-id instance's panels or read its worktrees.
-  const isBound = (): boolean =>
-    boundPlugin !== undefined && deps.plugins.get(pluginId) === boundPlugin;
   const assertAccountHostLoaded = (method: string): void => {
     if (!isBound()) {
       throw new Error(
@@ -2195,7 +2081,7 @@ export function createHost(
           `Plugin "${pluginId}" host revoked: onDidChangeAgentState called after activate() returned or timed out`
         );
       }
-      if (!deps.declaredCapabilities(pluginId).has("agent:read")) {
+      if (!canObserveAgents()) {
         throw new Error(
           `PERMISSION_REQUIRED: plugin "${pluginId}" onDidChangeAgentState requires "agent:read", which is not declared in manifest.capabilities`
         );
@@ -2232,24 +2118,11 @@ export function createHost(
         }
       );
       const handler = (payload: AgentStateChangePayload): void => {
-        const rawTerminalId: unknown = payload.terminalId;
-        const terminalId =
-          typeof rawTerminalId === "string" && rawTerminalId.length > 0 ? rawTerminalId : undefined;
-        // Resolved once, at arrival: the PTY record is gone by the time a
-        // debounced window flushes for a terminal that was just killed.
-        const workspaceId = resolveAgentEventWorkspace(terminalId);
-        if (!isAgentEventForBoundProject(workspaceId)) return;
+        const transition = projectAgentTransition(payload);
+        if (transition === null) return;
         if (!isBound()) return;
-        const snapshot = toPluginAgentSnapshot(payload, { workspaceId });
+        const { snapshot, key } = transition;
         lastAgentSnapshot = snapshot;
-        // An event with neither id shares one bucket, so it still ends on its
-        // latest value.
-        const key =
-          terminalId !== undefined
-            ? `t:${terminalId}`
-            : payload.agentId !== undefined
-              ? `a:${payload.agentId}`
-              : "unkeyed";
         pending.delete(key);
         pending.set(key, snapshot);
         coalescer.push();
@@ -2417,8 +2290,7 @@ export function createHost(
       // project's worktrees. A project plugin hears about its own project only;
       // an installed one about every project, but never a scratch.
       const tracker = getProjectPresenceTracker();
-      const sees = (projectId: string): boolean =>
-        boundProjectId === null ? isProjectWorkspaceId(projectId) : projectId === boundProjectId;
+      const sees = seesProjectPresence;
       const failures = createListenerFailureState();
       // Latest state per project: a burst across several projects must not
       // lose one project's change behind another's.
