@@ -17,12 +17,17 @@ import {
   parseDarwinPressureLevel,
   parseDarwinSwapUsage,
   parseMeminfo,
+  parsePageSize,
   parseProcSelfCgroup,
   parsePsi,
+  parseSwapPageCounters,
+  parseVmStatPageSize,
+  parseVmStatSwapCounters,
   parseDarwinCpuClusters,
   parseThermalZoneTemp,
   pickThermalZone,
   type CpuTimes,
+  type SwapCounters,
   type ThermalState,
 } from "./parsers.js";
 
@@ -79,6 +84,10 @@ const MAX_CGROUP_DEPTH = 32;
 
 /** Reads of the cluster layout before an unknown answer is taken as final: Intel Macs never have one. */
 const CPU_CLUSTER_PROBES = 3;
+/** Reads of the Linux page size before an unknown answer is taken as final. */
+const PAGE_SIZE_PROBES = 3;
+/** Longer than this between swap readings (a sleep, a stalled loop) and the average says little. */
+const MAX_SWAP_RATE_GAP_MS = 3 * HOST_METRICS_INTERVAL_MS;
 
 interface CpuClusters {
   performance: number | null;
@@ -94,6 +103,8 @@ type HostMemoryFields = Pick<
   | "memoryTotalBytes"
   | "swapUsedBytes"
   | "swapTotalBytes"
+  | "swapInBytesPerSec"
+  | "swapOutBytesPerSec"
   | "thermal"
   | "cpuPressure"
   | "metricsScope"
@@ -108,9 +119,13 @@ const NO_MEMORY: HostMemoryFields = {
   memoryTotalBytes: null,
   swapUsedBytes: null,
   swapTotalBytes: null,
+  swapInBytesPerSec: null,
+  swapOutBytesPerSec: null,
   thermal: null,
   cpuPressure: null,
 };
+
+const NO_SWAP_RATES = { swapInBytesPerSec: null, swapOutBytesPerSec: null };
 
 interface CgroupCpu {
   /** Cores the percentage is a share of, fractional under a quota. */
@@ -148,6 +163,15 @@ export class HostMetricsSampler {
   private clusterProbes = 0;
   /** The cgroup's CPU counter at the last sample, which its busy share is measured between. */
   private previousCgroupCpu: { dir: string; usec: number; at: number; cores: number } | null = null;
+  /** The swap counters at the last sample, which swap activity is measured between. */
+  private previousSwap: {
+    scope: string;
+    pageSize: number;
+    at: number;
+    counters: SwapCounters;
+  } | null = null;
+  private pageSize: number | null = null;
+  private pageSizeProbes = 0;
 
   constructor(private readonly sources: HostSampleSources) {}
 
@@ -161,13 +185,17 @@ export class HostMetricsSampler {
 
     const [clusters, resources, agents, projects, agentClis, forges] = await Promise.all([
       this.cpuClusters(),
-      settle<{ memory: HostMemoryFields; cgroupCpu?: CgroupCpu | null }>(
+      settle<{ memory: HostMemoryFields; cgroupCpu?: CgroupCpu | null } | null>(
         async () =>
           s.platform === "darwin"
             ? { memory: await this.darwinMemory() }
             : this.linuxResources(cpus.length),
-        { memory: NO_MEMORY }
-      ),
+        null
+      ).then((read) => {
+        // A failed reading must not leave a baseline the next one is measured across.
+        if (read === null) this.previousSwap = null;
+        return read ?? { memory: NO_MEMORY };
+      }),
       // A failed read is unknown, not zero: zero working agents lets an update restart the host.
       settle<ObservedAgents | null>(() => readers.agents(), null),
       settle<{ projectCount: number | null; worktreeCount: number | null }>(
@@ -240,9 +268,11 @@ export class HostMetricsSampler {
 
   private async darwinMemory() {
     const s = this.sources;
-    const [level, swap] = await Promise.all([
+    const readAt = s.now();
+    const [level, swap, vmStat] = await Promise.all([
       s.run("/usr/sbin/sysctl", ["-n", "kern.memorystatus_vm_pressure_level"]),
       s.run("/usr/sbin/sysctl", ["-n", "vm.swapusage"]),
+      settle(() => s.run("/usr/bin/vm_stat", []), null),
     ]);
     const total = s.totalmem();
     const swapUsage = parseDarwinSwapUsage(swap);
@@ -252,6 +282,12 @@ export class HostMetricsSampler {
       memoryUsedBytes: total > 0 ? this.darwinUsedBytes(total) : null,
       swapUsedBytes: swapUsage?.usedBytes ?? null,
       swapTotalBytes: swapUsage?.totalBytes ?? null,
+      ...this.swapRates(
+        "darwin",
+        parseVmStatSwapCounters(vmStat),
+        parseVmStatPageSize(vmStat),
+        readAt
+      ),
       thermal: s.thermalState(),
       cpuPressure: null,
     };
@@ -325,11 +361,15 @@ export class HostMetricsSampler {
     };
     if (!cgroup) {
       this.previousCgroupCpu = null;
-      const [memPsi, cpuPsi, meminfoText] = await Promise.all([
+      const swapReadAt = s.now();
+      const [memPsi, cpuPsi, meminfoText, vmstat] = await Promise.all([
         s.readText("/proc/pressure/memory"),
         s.readText("/proc/pressure/cpu"),
         s.readText("/proc/meminfo"),
+        s.readText("/proc/vmstat"),
       ]);
+      const swapCounters = parseSwapPageCounters(vmstat);
+      const pageSize = await this.pageSizeFor(swapCounters);
       const meminfo = parseMeminfo(meminfoText);
       const swapTotal = meminfo?.swapTotalBytes ?? null;
       const swapFree = meminfo?.swapFreeBytes ?? null;
@@ -343,6 +383,7 @@ export class HostMetricsSampler {
             : null,
           swapTotalBytes: swapTotal,
           swapUsedBytes: swapTotal !== null && swapFree !== null ? swapTotal - swapFree : null,
+          ...this.swapRates("host", swapCounters, pageSize, swapReadAt),
           thermal: null,
           cpuPressure: parsePsi(cpuPsi)?.someAvg10 ?? null,
           memoryPressureSomeAvg10: parsePsi(memPsi)?.someAvg10 ?? null,
@@ -354,15 +395,21 @@ export class HostMetricsSampler {
     }
 
     const { dir } = cgroup;
-    const [memCurrent, swapCurrent, memPsi, cpuPsi, cpuStat, meminfoText] = await Promise.all([
-      s.readText(`${dir}/memory.current`),
-      s.readText(`${dir}/memory.swap.current`),
-      s.readText(`${dir}/memory.pressure`),
-      s.readText(`${dir}/cpu.pressure`),
-      s.readText(`${dir}/cpu.stat`),
-      // Only the machine's RAM size, the ceiling of a cgroup with no memory limit of its own.
-      cgroup.memoryLimit === null ? s.readText("/proc/meminfo") : Promise.resolve(null),
-    ]);
+    const swapReadAt = s.now();
+    const [memCurrent, swapCurrent, memPsi, cpuPsi, cpuStat, meminfoText, memoryStat] =
+      await Promise.all([
+        s.readText(`${dir}/memory.current`),
+        s.readText(`${dir}/memory.swap.current`),
+        s.readText(`${dir}/memory.pressure`),
+        s.readText(`${dir}/cpu.pressure`),
+        s.readText(`${dir}/cpu.stat`),
+        // Only the machine's RAM size, the ceiling of a cgroup with no memory limit of its own.
+        cgroup.memoryLimit === null ? s.readText("/proc/meminfo") : Promise.resolve(null),
+        // The cgroup's own counters; the machine-wide /proc/vmstat would count its neighbours' swapping.
+        s.readText(`${dir}/memory.stat`),
+      ]);
+    const swapCounters = parseSwapPageCounters(memoryStat);
+    const pageSize = await this.pageSizeFor(swapCounters);
     const cores = minimum([machineCores > 0 ? machineCores : null, cgroup.cpuQuota, cgroup.cpuSet]);
     return {
       memory: {
@@ -371,6 +418,7 @@ export class HostMetricsSampler {
         memoryUsedBytes: parseCgroupBytes(memCurrent),
         swapTotalBytes: cgroup.swapLimit,
         swapUsedBytes: parseCgroupBytes(swapCurrent),
+        ...this.swapRates(`cgroup:${dir}`, swapCounters, pageSize, swapReadAt),
         thermal: null,
         cpuPressure: parsePsi(cpuPsi)?.someAvg10 ?? null,
         memoryPressureSomeAvg10: parsePsi(memPsi)?.someAvg10 ?? null,
@@ -447,6 +495,54 @@ export class HostMetricsSampler {
     const used = usec - previous.usec;
     if (elapsedUsec <= 0 || used < 0) return null;
     return Math.min(100, Math.max(0, (used / (elapsedUsec * cores)) * 100));
+  }
+
+  /**
+   * Bytes per second swapped in and out between this reading and the last.
+   * Null until there are two of the same scope and page size close enough
+   * together, and for a direction whose counter is missing or went backwards.
+   */
+  private swapRates(
+    scope: string,
+    counters: SwapCounters | null,
+    pageSize: number | null,
+    at: number
+  ): Pick<HostMemoryFields, "swapInBytesPerSec" | "swapOutBytesPerSec"> {
+    const previous = this.previousSwap;
+    if (counters === null || pageSize === null) {
+      this.previousSwap = null;
+      return NO_SWAP_RATES;
+    }
+    this.previousSwap = { scope, pageSize, at, counters };
+    if (!previous || previous.scope !== scope || previous.pageSize !== pageSize) {
+      return NO_SWAP_RATES;
+    }
+    const elapsedMs = at - previous.at;
+    if (elapsedMs <= 0 || elapsedMs > MAX_SWAP_RATE_GAP_MS) return NO_SWAP_RATES;
+    const rate = (now: number | null, before: number | null): number | null =>
+      now === null || before === null || now < before
+        ? null
+        : ((now - before) * pageSize * 1000) / elapsedMs;
+    return {
+      swapInBytesPerSec: rate(counters.inPages, previous.counters.inPages),
+      swapOutBytesPerSec: rate(counters.outPages, previous.counters.outPages),
+    };
+  }
+
+  /**
+   * The kernel's page size, which `/proc/vmstat` and `memory.stat` count swap
+   * in. Asked only when there are counters to scale, so a kernel without them
+   * doesn't spend the probes.
+   */
+  private async pageSizeFor(counters: SwapCounters | null): Promise<number | null> {
+    if (counters === null) return null;
+    if (this.pageSize !== null) return this.pageSize;
+    if (this.pageSizeProbes >= PAGE_SIZE_PROBES) return null;
+    this.pageSizeProbes += 1;
+    this.pageSize = parsePageSize(
+      await settle(() => this.sources.run("/usr/bin/getconf", ["PAGESIZE"]), null)
+    );
+    return this.pageSize;
   }
 
   private async observedTemperature() {

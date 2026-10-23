@@ -131,6 +131,27 @@ export function describeSwap(summary: HostMetricsSummary): string | null {
     : `${formatBytes(used)} of ${formatBytes(summary.swapTotalBytes)}`;
 }
 
+/**
+ * "In 12 KB/s · out 0 B/s": swap moving now, which the used figure can't tell
+ * from swap left over from last week. Null when neither direction was measured,
+ * and when there's no swap and nothing moved.
+ */
+export function describeSwapActivity(summary: HostMetricsSummary): string | null {
+  const read: string[] = [];
+  let moved = false;
+  for (const [name, rate] of [
+    ["in", summary.swapInBytesPerSec],
+    ["out", summary.swapOutBytesPerSec],
+  ] as const) {
+    if (!isFiniteReading(rate)) continue;
+    read.push(`${name} ${formatBytes(rate)}/s`);
+    if (rate > 0) moved = true;
+  }
+  if (read.length === 0 || (summary.swapTotalBytes === 0 && !moved)) return null;
+  const value = read.join(" · ");
+  return value.charAt(0).toUpperCase() + value.slice(1);
+}
+
 /** "4 GB of 16 GB": an older host's reading, which counts the file cache as used. */
 export function describeMemory(summary: HostMetricsSummary): string | null {
   if (summary.memoryUsedBytes === null || summary.memoryTotalBytes === null) return null;

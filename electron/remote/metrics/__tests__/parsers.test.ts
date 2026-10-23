@@ -13,7 +13,11 @@ import {
   parseDarwinSwapUsage,
   parseIoregGpuUtilization,
   parseMeminfo,
+  parsePageSize,
   parsePsi,
+  parseSwapPageCounters,
+  parseVmStatPageSize,
+  parseVmStatSwapCounters,
   parseThermalZoneTemp,
 } from "../parsers.js";
 
@@ -279,5 +283,50 @@ describe("clusterCpuPercentBetween", () => {
     const unknown = { efficiency: null, performance: null };
     expect(clusterCpuPercentBetween(null, after, 2, 3)).toEqual(unknown);
     expect(clusterCpuPercentBetween(before.slice(1), after, 2, 3)).toEqual(unknown);
+  });
+});
+
+describe("swap counters", () => {
+  const vmStat = [
+    "Mach Virtual Memory Statistics: (page size of 16384 bytes)",
+    "Pages free:                               12345.",
+    "Swapins:                                  4021.",
+    "Swapouts:                                 77003.",
+    "",
+  ].join("\n");
+
+  it("reads vm_stat's swap counters and the page size its header names", () => {
+    expect(parseVmStatSwapCounters(vmStat)).toEqual({ inPages: 4021, outPages: 77003 });
+    expect(parseVmStatPageSize(vmStat)).toBe(16384);
+    expect(parseVmStatPageSize(vmStat.replace("16384", "4096"))).toBe(4096);
+  });
+
+  it("reads pswpin and pswpout in any order among the other counters", () => {
+    const text = "nr_free_pages 100\npswpout 900\npgpgin 5\npswpin 12\n";
+    expect(parseSwapPageCounters(text)).toEqual({ inPages: 12, outPages: 900 });
+    // pswpin_zero and the like are other counters, not these.
+    expect(parseSwapPageCounters("pswpin_zero 3\npswpout 0\n")).toEqual({
+      inPages: null,
+      outPages: 0,
+    });
+  });
+
+  it("is unknown, never zero, when a counter or the page size isn't there", () => {
+    expect(parseSwapPageCounters(null)).toBeNull();
+    expect(parseSwapPageCounters("anon 4096\nfile 8192\n")).toBeNull();
+    expect(parseVmStatSwapCounters("Pages free: 1.\n")).toBeNull();
+    expect(parseVmStatPageSize("Pages free: 1.\n")).toBeNull();
+    expect(parseVmStatPageSize(null)).toBeNull();
+    expect(parseSwapPageCounters(`pswpin ${"9".repeat(20)}\npswpout 1\n`)).toEqual({
+      inPages: null,
+      outPages: 1,
+    });
+  });
+
+  it("reads getconf's page size, and nothing that isn't one", () => {
+    expect(parsePageSize("65536\n")).toBe(65536);
+    expect(parsePageSize("0")).toBeNull();
+    expect(parsePageSize("undefined\n")).toBeNull();
+    expect(parsePageSize(null)).toBeNull();
   });
 });

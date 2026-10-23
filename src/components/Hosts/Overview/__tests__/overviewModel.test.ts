@@ -15,6 +15,7 @@ import {
   describeProjects,
   describeMemoryPressure,
   describeSwap,
+  describeSwapActivity,
   describeThermal,
   memoryUsedSeries,
   pressureSeries,
@@ -231,6 +232,43 @@ describe("series", () => {
   it("says nothing about swap a host doesn't report", () => {
     expect(describeSwap(makeSummary({ swapTotalBytes: null, swapUsedBytes: null }))).toBeNull();
     expect(describeSwap(makeSummary({ swapTotalBytes: 0 }))).toBe("No swap");
+  });
+
+  it("says how fast swap is moving, a measured zero included", () => {
+    const swap = { swapTotalBytes: 8 * GB, swapUsedBytes: 3 * GB };
+    expect(
+      describeSwapActivity(
+        makeSummary({ ...swap, swapInBytesPerSec: 12 * 1024, swapOutBytesPerSec: 0 })
+      )
+    ).toBe("In 12 KB/s · out 0 B/s");
+    expect(
+      describeSwapActivity(
+        makeSummary({ ...swap, swapInBytesPerSec: null, swapOutBytesPerSec: 1.5 * 1024 ** 2 })
+      )
+    ).toBe("Out 1.5 MB/s");
+    // Known activity still shows where the host couldn't read its swap size.
+    expect(
+      describeSwapActivity(
+        makeSummary({ swapTotalBytes: null, swapInBytesPerSec: 4096, swapOutBytesPerSec: 0 })
+      )
+    ).toBe("In 4 KB/s · out 0 B/s");
+  });
+
+  it("says nothing about swap activity nobody measured, or on a host with no swap and nothing moving", () => {
+    expect(describeSwapActivity(makeSummary({ swapTotalBytes: 8 * GB }))).toBeNull();
+    expect(
+      describeSwapActivity(makeSummary({ swapInBytesPerSec: null, swapOutBytesPerSec: Number.NaN }))
+    ).toBeNull();
+    expect(
+      describeSwapActivity(
+        makeSummary({ swapTotalBytes: 0, swapInBytesPerSec: 0, swapOutBytesPerSec: 0 })
+      )
+    ).toBeNull();
+    expect(
+      describeSwapActivity(
+        makeSummary({ swapTotalBytes: 0, swapInBytesPerSec: 2048, swapOutBytesPerSec: 0 })
+      )
+    ).toBe("In 2 KB/s · out 0 B/s");
   });
 });
 
