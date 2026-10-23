@@ -1,6 +1,8 @@
+import { EventEmitter } from "node:events";
 import { describe, expect, it, vi } from "vitest";
 
-vi.mock("../../window/serviceRefs.js", () => ({ getPtyClient: () => null }));
+const { getPtyClient } = vi.hoisted(() => ({ getPtyClient: vi.fn() }));
+vi.mock("../../window/serviceRefs.js", () => ({ getPtyClient }));
 vi.mock("../SystemMemoryPressureMonitor.js", () => ({
   checkKernelPressureCritical: vi.fn().mockResolvedValue(false),
 }));
@@ -8,6 +10,7 @@ vi.mock("../SystemMemoryPressureMonitor.js", () => ({
 import {
   AGENT_LAUNCH_RESERVATION_TTL_MS,
   createAgentLaunchAdmission,
+  getAgentLaunchAdmission,
   isLiveAgentTerminal,
   readEffectiveMemoryTotalBytes,
   type AgentCountableTerminal,
@@ -66,6 +69,26 @@ describe("isLiveAgentTerminal", () => {
 });
 
 describe("agent launch admission (#14221)", () => {
+  it("releases a launch that exits before any admission snapshot sees it live", async () => {
+    const pty = Object.assign(new EventEmitter(), {
+      getAllTerminalsWithCompletenessAsync: vi.fn().mockResolvedValue({
+        terminals: [],
+        degraded: false,
+      }),
+    });
+    getPtyClient.mockReturnValue(pty);
+    try {
+      const admission = getAgentLaunchAdmission();
+      await admission.request("short-lived");
+      pty.emit("exit", "short-lived", 0);
+
+      expect((await admission.observe()).startingAgents).toBe(0);
+    } finally {
+      getPtyClient.mockReset();
+      getAgentLaunchAdmission();
+    }
+  });
+
   it("admits launches up to the host's limit and holds the next, counting every project", async () => {
     const h = harness();
     h.setTerminals([agent("live-1"), { id: "shell" }, agent("gone", { isExited: true })]);
@@ -82,6 +105,53 @@ describe("agent launch admission (#14221)", () => {
       agentLaunchLimit: 2,
       memoryTotalBytes: TWO_AGENT_TOTAL,
     });
+  });
+
+  it("rebinds exit cleanup when the PTY client changes without adding duplicate listeners", async () => {
+    const makePty = () =>
+      Object.assign(new EventEmitter(), {
+        getAllTerminalsWithCompletenessAsync: vi.fn().mockResolvedValue({
+          terminals: [],
+          degraded: false,
+        }),
+      });
+    const oldPty = makePty();
+    const newPty = makePty();
+    getPtyClient.mockReturnValue(oldPty);
+    try {
+      getAgentLaunchAdmission();
+      getPtyClient.mockReturnValue(newPty);
+      const admission = getAgentLaunchAdmission();
+      getAgentLaunchAdmission();
+      expect(oldPty.listenerCount("exit")).toBe(0);
+      expect(newPty.listenerCount("exit")).toBe(1);
+      await admission.request("reused-id");
+      oldPty.emit("exit", "reused-id", 0);
+      expect((await admission.observe()).startingAgents).toBe(1);
+      newPty.emit("exit", "reused-id", 0);
+      expect((await admission.observe()).startingAgents).toBe(0);
+    } finally {
+      getPtyClient.mockReset();
+      getAgentLaunchAdmission();
+    }
+  });
+
+  it("releases an exit queued while its admission read is still in flight", async () => {
+    let answer!: (snapshot: { terminals: AgentCountableTerminal[]; degraded: boolean }) => void;
+    const h = harness({
+      readTerminals: () => new Promise((resolve) => (answer = resolve)),
+    });
+    const request = h.admission.request("fast-exit");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const release = h.admission.release("fast-exit");
+    answer({ terminals: [], degraded: false });
+    expect((await request).holdReason).toBeNull();
+    await release;
+
+    const observation = h.admission.observe();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    answer({ terminals: [], degraded: false });
+    expect((await observation).startingAgents).toBe(0);
   });
 
   it("lets only one of two launches racing for the last place through", async () => {

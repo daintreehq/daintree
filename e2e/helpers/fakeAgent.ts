@@ -40,6 +40,14 @@ export const FAKE_AGENT_STREAM_OFF = "__DAINTREE_FAKE_CLAUDE_STREAM_OFF__";
 export const FAKE_AGENT_MARK_OUTPUT = "FAKE_CLAUDE_MARK_";
 export const FAKE_AGENT_DEFAULT_VERSION = "9.9.9";
 
+/** Explicitly admit tiny fixture CLIs on CI hosts whose real-agent budget is smaller. */
+export async function launchHeldFakeAgents(page: Page): Promise<void> {
+  const buttons = page.getByRole("button", { name: "Launch anyway", exact: true });
+  for (const button of await buttons.all()) {
+    if (await button.isVisible()) await button.click({ timeout: T_MEDIUM });
+  }
+}
+
 export type FakeAgentCommand =
   "work" | "idle" | "stream-on" | "stream-off" | "mark" | "query" | "handback";
 

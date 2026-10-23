@@ -4,14 +4,17 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { createOperationManager, type OperationManager } from "@daintreehq/plugin-sdk/operations";
 import { createMockHost } from "@daintreehq/plugin-sdk/testing";
+import type { PluginDatabase } from "@daintreehq/plugin-sdk";
 import { syntheticReportKind } from "../src/provider";
-import { createStore, MIGRATIONS } from "../src/store";
+import { createStoreOpener } from "../src/store";
 
 const dirs: string[] = [];
 const managers: OperationManager[] = [];
+const databases: PluginDatabase[] = [];
 
 afterEach(async () => {
   await Promise.all(managers.splice(0).map((manager) => manager.dispose()));
+  await Promise.all(databases.splice(0).map((db) => db.close()));
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
@@ -37,8 +40,7 @@ function boot(dir: string, clock: { now: number }) {
     projectRoot: "/work/request-desk",
     databases: { directory: dir, declared: ["requests", "operations"] },
   });
-  const openStore = async () =>
-    createStore(await host.db.open("requests", { migrations: MIGRATIONS }));
+  const openStore = createStoreOpener(host, (store) => databases.push(store.db));
   const written: string[] = [];
   const kind = syntheticReportKind({
     openStore,

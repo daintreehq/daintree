@@ -148,6 +148,44 @@ function setup(
 }
 
 describe("createOperationManager", () => {
+  it("yields to consumers when journal writes take longer than the polling interval", async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "daintree-ops-"));
+    dirs.push(dir);
+    const host = createMockHost({ databases: { directory: dir, declared: ["operations"] } });
+    const provider = createSyntheticProvider({ pollsToFinish: 20 });
+    provider.kind.pollIntervalMs = 1;
+    const pause = new Int32Array(new SharedArrayBuffer(4));
+    const manager = createOperationManager(
+      {
+        ...host,
+        db: {
+          ...host.db,
+          async open(id, options) {
+            const db = await host.db.open(id, options);
+            const run: typeof db.run = async (sql, params) => {
+              const result = await db.run(sql, params);
+              // Model a synchronous SQLite commit slower than the next poll.
+              Atomics.wait(pause, 0, 0, 3);
+              return result;
+            };
+            return { ...db, run };
+          },
+        },
+      },
+      {
+        database: "operations",
+        retryActionId: "test.mock.resumeOperation",
+        kinds: { double: provider.kind },
+      }
+    );
+    managers.push(manager);
+    const operation = await manager.submit("double", { n: 1 });
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect((await manager.get(operation.id))?.state).toBe("running");
+  });
+
   it("journals before acknowledging, then drives the operation to its result through a task", async () => {
     const { manager, host, dir } = setup();
     const op = await manager.submit("double", { n: 21 }, { projectId: "proj-a" });

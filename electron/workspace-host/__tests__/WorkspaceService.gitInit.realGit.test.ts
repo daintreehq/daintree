@@ -65,7 +65,9 @@ describe("WorkspaceService enumeration across git init (#14178)", () => {
   }
 
   beforeEach(() => {
-    root = realpathSync(mkdtempSync(path.join(realpathSync(os.tmpdir()), "git-init-enum-")));
+    root = realpathSync.native(
+      mkdtempSync(path.join(realpathSync.native(os.tmpdir()), "git-init-enum-"))
+    );
     writeFileSync(path.join(root, "README.md"), "hello\n");
   });
 

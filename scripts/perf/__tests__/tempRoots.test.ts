@@ -73,10 +73,10 @@ describe("perf temp-root owner", () => {
     expect(resolve(dirname(nested))).toBe(resolve(parent));
   });
 
-  it("canonicalises when asked, which is what macOS /var vs /private/var needs", () => {
+  it("canonicalises native paths, including macOS symlinks and Windows short names", () => {
     const root = createPerfTempRoot("daintree-perf-temproots-test-", { canonical: true });
 
-    expect(root).toBe(realpathSync(root));
+    expect(root).toBe(realpathSync.native(root));
   });
 
   it("adopts a directory it did not create", () => {

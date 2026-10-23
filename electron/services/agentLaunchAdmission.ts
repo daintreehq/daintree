@@ -59,6 +59,8 @@ export interface AgentLaunchAdmissionController {
   observe(): Promise<AgentLaunchObservation>;
   /** Admit one launch, keeping its place until its terminal shows up live. */
   request(terminalId: string): Promise<AgentLaunchAdmission>;
+  /** A terminal can exit before any snapshot observes it live. */
+  release(terminalId: string): Promise<void>;
 }
 
 export function createAgentLaunchAdmission(
@@ -130,6 +132,11 @@ export function createAgentLaunchAdmission(
   }
 
   return {
+    release(terminalId) {
+      return serially(async () => {
+        reservations.delete(terminalId);
+      });
+    },
     observe() {
       return serially(async () => judge(await read(), null).observation);
     },
@@ -230,6 +237,10 @@ async function cachedMemoryTotalBytes(): Promise<number | null> {
 }
 
 let admission: AgentLaunchAdmissionController | null = null;
+let observedPty: ReturnType<typeof getPtyClient> = null;
+const releaseExitedLaunch = (terminalId: string) => {
+  void admission?.release(terminalId);
+};
 
 /** This host's admission, shared by every project view that launches on it. */
 export function getAgentLaunchAdmission(): AgentLaunchAdmissionController {
@@ -242,5 +253,11 @@ export function getAgentLaunchAdmission(): AgentLaunchAdmissionController {
     isKernelCritical: () => checkKernelPressureCritical(),
     now: Date.now,
   });
+  const pty = getPtyClient();
+  if (pty !== observedPty) {
+    observedPty?.off("exit", releaseExitedLaunch);
+    observedPty = pty;
+    observedPty?.on("exit", releaseExitedLaunch);
+  }
   return admission;
 }

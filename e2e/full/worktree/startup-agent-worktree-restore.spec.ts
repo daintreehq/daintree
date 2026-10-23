@@ -14,12 +14,16 @@ import { createFixtureRepo, removePathSync } from "../../helpers/fixtures";
 import { openAndOnboardProject } from "../../helpers/project";
 import {
   getTerminalTextById,
+  getTerminalText,
   typeTerminalCommand,
-  waitForTerminalText,
   waitForTerminalTextIgnoringLineBreaks,
 } from "../../helpers/terminal";
 import { dispatchAction } from "../../helpers/actions";
-import { readFakeAgentLaunchLog, type FakeAgentLaunchRecord } from "../../helpers/fakeAgent";
+import {
+  launchHeldFakeAgents,
+  readFakeAgentLaunchLog,
+  type FakeAgentLaunchRecord,
+} from "../../helpers/fakeAgent";
 import { getGridPanelIds, getPanelById } from "../../helpers/panels";
 import { spawnTerminalAndVerify } from "../../helpers/workflows";
 import { getDescendantPids } from "../../helpers/stress";
@@ -208,7 +212,15 @@ async function expectVisibleAgents(
   expect(ids).toHaveLength(count);
   for (const id of ids) {
     const panel = getPanelById(page, id);
-    await waitForTerminalText(panel, READY_TOKEN, T_LONG * 2);
+    await expect
+      .poll(
+        async () => {
+          await launchHeldFakeAgents(page);
+          return getTerminalText(panel);
+        },
+        { timeout: T_LONG * 2, intervals: [200, 500, 1000] }
+      )
+      .toContain(READY_TOKEN);
     await waitForTerminalTextIgnoringLineBreaks(panel, `AGENT_CWD=${cwdBasename}`, T_LONG);
   }
 }

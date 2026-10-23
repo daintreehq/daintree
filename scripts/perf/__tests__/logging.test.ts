@@ -313,7 +313,8 @@ describe("the real emit path", () => {
     async () => {
       const harness = await loadLoggingHarness();
       expect(harness.logDir()).toContain("daintree-perf-logging-");
-      expect(harness.logDir().startsWith(realpathSync(tmpdir()))).toBe(true);
+      expect(harness.logDir().startsWith(realpathSync.native(tmpdir()))).toBe(true);
+      expect(() => assertInsideTempRoot(harness.logDir())).not.toThrow();
       // The guard is the thing that keeps a rotation round off a real profile,
       // so it must actually refuse rather than warn.
       expect(() => assertInsideTempRoot("/Users/someone/Library/Daintree/logs")).toThrow(

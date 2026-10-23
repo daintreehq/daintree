@@ -1058,12 +1058,20 @@ export function createOperationManager(
           continue;
         }
         await step(row, drive);
+        // Slow journal commits can consume the poll interval. Still let timers,
+        // cancellation, and other consumers run before driving the next step.
+        await waitFor(1, drive);
       }
     } finally {
       task.signal.removeEventListener("abort", onAbort);
       // Any other way out — dispose, a pruned row, an error — must not leave
       // a live task holding the project awake. An interrupted one is the host's.
-      if (!isInterrupted(task)) await release(drive, { outcome: "cancelled" });
+      if (!drive.released && !isInterrupted(task)) {
+        // Shutdown may interrupt the driver just after its terminal row committed.
+        const latest = await load(id).catch(() => null);
+        if (latest && TERMINAL.has(latest.state)) await finishTask(drive, latest);
+        else await release(drive, { outcome: "cancelled" });
+      }
     }
   };
 

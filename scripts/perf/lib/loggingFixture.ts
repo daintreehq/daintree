@@ -669,9 +669,10 @@ export function assertInsideTempRoot(dir: string): void {
   // realpath both sides: on macOS `tmpdir()` answers `/var/folders/…` while the
   // directory this fixture minted resolves to `/private/var/folders/…`, and a
   // string prefix test between the two fails on a path that IS inside the root.
+  // Use the same native form as createPerfTempRoot on Windows (no 8.3 aliases).
   let root: string;
   try {
-    root = realpathSync(tmpdir());
+    root = realpathSync.native(tmpdir());
   } catch {
     root = resolvePath(tmpdir());
   }

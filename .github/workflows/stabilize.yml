@@ -166,15 +166,15 @@ jobs:
             *)             echo 'matrix={"include":[{"os":"ubuntu-22.04","name":"Linux"},{"os":"macos-15","name":"macOS"},{"os":"windows-2022","name":"Windows"}]}' >> "$GITHUB_OUTPUT" ;;
           esac
 
-      # Windows can exceed the job limit while the full unit suite is still
-      # passing. Partition its files as regular CI does; keep other OSes whole.
+      # The full unit suite can exceed the job limit while still passing.
+      # Partition every OS; a focused file re-run needs only one job.
       - id: unit
         env:
           PLATFORM_MATRIX: ${{ steps.set.outputs.matrix }}
           TEST_FILES: ${{ inputs.test_files }}
         run: |
           MATRIX=$(jq -c --arg files "$TEST_FILES" '{include: [.include[] | . as $platform |
-            (if .os == "windows-2022" and $files == "" then 4 else 1 end) as $count |
+            (if $files == "" then 4 else 1 end) as $count |
             range(1; $count + 1) as $shard |
             $platform + {shard: $shard, shards: $count}]}' <<< "$PLATFORM_MATRIX")
           echo "matrix=$MATRIX" >> "$GITHUB_OUTPUT"
@@ -258,12 +258,8 @@ jobs:
         if: matrix.os != 'windows-2022'
         run: node scripts/ci/npm-ci-retry.mjs
 
-      - name: Test
-        if: matrix.os != 'windows-2022' && inputs.test_files == ''
-        run: npm run test
-
-      - name: Test (Windows shard)
-        if: matrix.os == 'windows-2022' && inputs.test_files == ''
+      - name: Test (shard)
+        if: inputs.test_files == ''
         run: npm run test -- --shard=${{ matrix.shard }}/${{ matrix.shards }}
 
       - name: Test focused files

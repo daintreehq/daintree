@@ -91,7 +91,7 @@ export interface PerfTempRootOptions {
 export function createPerfTempRoot(prefix: string, options: PerfTempRootOptions = {}): string {
   installHooks();
   const created = mkdtempSync(join(options.parent ?? tmpdir(), prefix));
-  const root = options.canonical === true ? realpathSync(created) : created;
+  const root = options.canonical === true ? realpathSync.native(created) : created;
   roots.add(root);
   return root;
 }

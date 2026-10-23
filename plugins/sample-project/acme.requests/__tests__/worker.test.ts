@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { createMockHost } from "@daintreehq/plugin-sdk/testing";
+import type { PluginDatabase } from "@daintreehq/plugin-sdk";
 import { CHANNELS, EVENTS, type RequestRecord } from "../src/contracts";
 import { activate } from "../src/index";
 import { MIGRATIONS } from "../src/store";
@@ -13,12 +14,23 @@ const PROJECT_ROOT = "/work/request-desk";
 
 const dirs: string[] = [];
 const disposers: Array<() => void> = [];
+const databases: PluginDatabase[] = [];
+
+function mockHost(options: Parameters<typeof createMockHost>[0]) {
+  const host = createMockHost(options);
+  const open = host.db.open.bind(host.db);
+  host.db.open = async (id, openOptions) => {
+    const db = await open(id, openOptions);
+    databases.push(db);
+    return db;
+  };
+  return host;
+}
 
 afterEach(async () => {
-  for (const dispose of disposers.splice(0)) dispose();
-  // Disposal closes the journal asynchronously; let it finish before the
-  // directory goes.
-  await new Promise((resolve) => setTimeout(resolve, 20));
+  await Promise.all(disposers.splice(0).map((dispose) => dispose()));
+  // A real worker's shutdown closes every host-owned database handle.
+  await Promise.all(databases.splice(0).map((db) => db.close()));
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
@@ -33,7 +45,7 @@ async function until(check: () => boolean | Promise<boolean>, what: string): Pro
 async function start(settings: Record<string, unknown> = {}) {
   const dir = mkdtempSync(path.join(tmpdir(), "request-desk-"));
   dirs.push(dir);
-  const host = createMockHost({
+  const host = mockHost({
     pluginId: PLUGIN_ID,
     projectRoot: PROJECT_ROOT,
     databases: {
@@ -84,7 +96,7 @@ describe("Request Desk worker", () => {
     // A second activation over the same file: the seed is a migration, so it
     // never runs again.
     const dir = dirs[0]!;
-    const again = createMockHost({
+    const again = mockHost({
       pluginId: PLUGIN_ID,
       projectRoot: PROJECT_ROOT,
       databases: { directory: dir, declared: ["requests", "operations"] },

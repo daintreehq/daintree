@@ -587,10 +587,15 @@ function createOperationManager(host, options) {
 					continue;
 				}
 				await step(row, drive);
+				await waitFor(1, drive);
 			}
 		} finally {
 			task.signal.removeEventListener("abort", onAbort);
-			if (!isInterrupted(task)) await release(drive, { outcome: "cancelled" });
+			if (!drive.released && !isInterrupted(task)) {
+				const latest = await load(id).catch(() => null);
+				if (latest && TERMINAL.has(latest.state)) await finishTask(drive, latest);
+				else await release(drive, { outcome: "cancelled" });
+			}
 		}
 	};
 	const schedulePump = (delayMs) => {

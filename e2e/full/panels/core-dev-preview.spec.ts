@@ -196,11 +196,8 @@ test.describe.serial("Core: Dev Preview", () => {
     ctx = await launchApp();
     ctx.window = await openAndOnboardProject(ctx.app, ctx.window, fixtureRepoPath, PROJECT_NAME);
 
-    // Fail fast if the dev preview entry point is missing — it is reachable for
-    // any onboarded project, so its absence is a real regression, not a
-    // launch-state quirk to silently skip past. Reachability rather than direct
-    // visibility since #11667: `dev-server` is no longer a default toolbar
-    // button, so on a fresh profile it lives in the panel tray.
+    // Dev preview remains searchable even when this non-web fixture hides it
+    // from launcher browsing. A missing search entry is a real regression.
     await expectToolbarButtonReachable(ctx.window, SEL.toolbar.openDevPreview, T_LONG);
 
     const page = ctx.window;

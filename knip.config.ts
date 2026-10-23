@@ -27,9 +27,11 @@ const baseConfig: KnipConfig = {
     "electron/services/elementPicker/plugin-resolver-bootstrap.ts",
     "electron/services/elementPicker/guest/bootstrap.ts",
     "electron/services/elementPicker/guest/probe.ts",
+    "electron/services/elementPicker/guest/pluginRuntime.ts",
     "electron/services/elementPicker/guest/extractors/{angular,astro,preact,react,solid,svelte,vue}.ts",
     // The guest-host contract test builds this fixture by its filesystem path.
     "electron/services/elementPicker/__tests__/fixtures/contributingExtractor.ts",
+    "electron/services/elementPicker/__tests__/fixtures/plugins/lit-picker/src/lit.ts",
 
     // Web workers instantiated via `new Worker(new URL(...))`. Static analysis
     // can't follow those URLs, so workers read as unreachable without
@@ -51,6 +53,8 @@ const baseConfig: KnipConfig = {
     "scripts/perf/launch-ab.ts",
     "scripts/perf/memory-bench-compare.ts",
     "scripts/perf/memory-growth-compare.ts",
+    "scripts/perf/empty-view-memory-compare.ts",
+    "scripts/perf/vanilla-plugins.ts",
     "scripts/perf/project-switch-rotation-compare.ts",
     "scripts/perf/foreground-terminal.ts",
     "scripts/perf/lib/foregroundAgent.cjs",
@@ -135,6 +139,8 @@ const baseConfig: KnipConfig = {
     "scripts/codegen/__tests__/fixtures-renderer/*.ts",
     // FixtureReader reads these route modules as source text, never imports them.
     "electron/services/elementPicker/projectAdapters/sveltekit/__fixtures__/**",
+    // resolve.test.ts reads these compiler inputs as source text by filename.
+    "packages/svelte-source-model/src/__tests__/__fixtures__/*.svelte",
 
     // why: public plugin SDK API snapshots are loaded by
     // scripts/ci/check-api-surface.mjs via readFileSync rather than static
@@ -185,6 +191,7 @@ const baseConfig: KnipConfig = {
     "sips",
     "taskkill.exe",
     "top",
+    "vmmap",
     "where",
     "wsl.exe",
     "xdg-open",
