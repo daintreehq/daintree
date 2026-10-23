@@ -10,15 +10,17 @@ import type { SvelteParse } from "./types.js";
  * in the tree, could have changed which compiler it got or failed outright. The
  * importer now owns the dependency it imports.
  *
- * Still dynamic, and that matters as much as the ownership: the compiler is
- * several megabytes of parser, plugin activation has a five-second window, and
- * nothing on a startup path may pull it in. `svelte/compiler` appears in this
- * file and nowhere else in the package, so the barrel cannot drag it in either.
+ * Still dynamic, and that matters as much as the ownership: the parser alone is
+ * roughly 485 KiB minified, plugin activation has a five-second window, and
+ * nothing on a startup path may pull it in. `svelte/compiler` appears only in
+ * `compiler-parse.ts`, whose sole export is `parse`, so the barrel cannot drag
+ * it in and a consumer's bundler can leave the compile and migrate passes out;
+ * Daintree's main build does (`scripts/svelte-parser-chunks.test.ts`).
  */
 let compiler: Promise<SvelteParse> | null = null;
 
 export function loadParse(): Promise<SvelteParse> {
-  compiler ??= import("svelte/compiler").then(
+  compiler ??= import("./compiler-parse.js").then(
     // The package declares its own structural AST subset; the compiler's
     // richer types are assignable in practice but not nominally.
     (module) => {
