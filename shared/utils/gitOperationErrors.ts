@@ -81,10 +81,10 @@ const PATTERNS: ReadonlyArray<readonly [GitOperationReason, RegExp]> = [
     // fetches run with `GIT_TERMINAL_PROMPT=0`, so a credential-helper hiccup
     // surfaces that message transiently. Leaving it to fall through to `unknown`
     // (a short transient retry) avoids suspending the repo on a recoverable blip.
-    // The SSH denial lists whichever methods the server offered —
-    // `(publickey)`, `(publickey,password)`, `(password)` — so match the list,
-    // not one spelling of it.
-    /Authentication failed|Permission denied \((?:publickey|password|keyboard-interactive)[^)]*\)|unable to access.*: The requested URL returned error: 40[137]/i,
+    // The SSH denial lists whichever methods the server offered, in its own
+    // order — `(publickey)`, `(password)`, `(gssapi-keyex,gssapi-with-mic,publickey)`
+    // — so accept an auth method anywhere in the list.
+    /Authentication failed|Permission denied \((?:[\w-]+,)*(?:publickey|password|keyboard-interactive|hostbased|gssapi[\w-]*)[\w,-]*\)|unable to access.*: The requested URL returned error: 40[137]/i,
   ],
   [
     // The first three alternatives are curl's (HTTPS); the rest are OpenSSH's
@@ -94,16 +94,18 @@ const PATTERNS: ReadonlyArray<readonly [GitOperationReason, RegExp]> = [
     // prints it after auth denials, host-key refusals and remote rejections too,
     // so it lives in its own entry at the end of this table.
     "network-unavailable",
-    /Could not resolve host:|Failed to connect to.*port.*: (?:Connection refused|Couldn't connect to server)|unable to access.*: (?:The requested URL returned error: 5\d\d|(?:Connection|Operation) timed out after|Recv failure: Connection reset by peer|SSL connection timeout|GnuTLS recv error)|ssh: Could not resolve hostname|ssh: connect to host \S+ port \d+: (?:Connection timed out|Operation timed out|Connection refused|Network is unreachable|No route to host|Bad file number|Unknown error)|(?:kex|ssh)_exchange_identification: (?:read: Connection reset by peer|Connection closed by remote host)|ssh_dispatch_run_fatal: Connection to \S+ port \d+: (?:Operation timed out|Connection timed out|Connection reset by peer|Broken pipe)|Connection timed out during banner exchange|Read from remote host \S+: (?:Connection reset by peer|Operation timed out|Connection timed out)|client_loop: send disconnect: Broken pipe/i,
+    /Could not resolve host:|Failed to connect to.*port.*: (?:Connection refused|Couldn't connect to server|Connection timed out|Operation timed out)|unable to access.*: (?:The requested URL returned error: 5\d\d|(?:Connection|Operation) timed out after|Recv failure: Connection reset by peer|SSL connection timeout|GnuTLS recv error)|ssh: Could not resolve hostname|ssh: connect to host \S+ port \d+: (?:Connection timed out|Operation timed out|Connection refused|Network is unreachable|No route to host|Bad file number|Unknown error)|(?:kex|ssh)_exchange_identification: (?:read: Connection reset by peer|Connection closed by remote host)|ssh_dispatch_run_fatal: Connection to \S+ port \d+: (?:Operation timed out|Connection timed out|Connection reset by peer|Broken pipe)|Connection timed out during banner exchange|Read from remote host \S+: (?:Connection reset by peer|Operation timed out|Connection timed out)|client_loop: send disconnect: Broken pipe/i,
   ],
   [
     // Not the bare "Could not read from remote repository" line: git's
     // die_initial_contact prints it after every SSH transport failure (DNS,
     // timeout, reset), so it says nothing about the repo existing. A real missing
     // repo carries its own line — GitHub over SSH prints "ERROR: Repository not
-    // found." — and an unattributed footer falls through to unknown (#14208).
+    // found.", GitLab "The project you were looking for could not be found…", a
+    // plain SSH server "'<path>' does not appear to be a git repository" — and an
+    // unattributed footer falls through to unknown (#14208).
     "repository-not-found",
-    /Repository not found|fatal: repository '.*' not found/i,
+    /Repository not found|fatal: repository '.*' not found|The project you were looking for could not be found|does not appear to be a git repository/i,
   ],
   [
     "push-rejected-policy",
