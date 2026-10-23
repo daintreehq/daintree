@@ -552,6 +552,27 @@ describe("host.agents input on agents the plugin launched (#14018)", () => {
       expect(pty.write).toHaveBeenCalledTimes(1);
     });
 
+    it("stops between keys when another screen takes control", async () => {
+      const h = makeHarness();
+      await launch(h);
+      leaseMock.assertPluginCallerDrives
+        .mockResolvedValueOnce(undefined)
+        .mockRejectedValueOnce(new Error("DRIVEN_ELSEWHERE: another screen drives this project"));
+      await expect(hostFor(h).agents.sendKeys("t-1", { keys: ["Down", "Enter"] })).rejects.toThrow(
+        /DRIVEN_ELSEWHERE/
+      );
+      expect(pty.write).toHaveBeenCalledTimes(1);
+    });
+
+    it("refuses a trashed pane, whose prompt no one can see answered", async () => {
+      const h = makeHarness();
+      await launch(h, { terminal: agent({ isTrashed: true, screen: PERMISSION_PROMPT }) });
+      const result = await hostFor(h).agents.sendKeys("t-1", { choose: "Yes" });
+      expect(result.status).toBe("refused");
+      expect(pty.write).not.toHaveBeenCalled();
+      expect(pty.getSerializedStateAsync).not.toHaveBeenCalled();
+    });
+
     it("refuses an agent with no running process", async () => {
       const h = makeHarness();
       await launch(h, { terminal: agent({ isExited: true }) });

@@ -1241,7 +1241,7 @@ export function createHost(
   const withLaunchedAgent = async <T extends { readonly status: string }>(
     op: string,
     terminalId: string,
-    run: (pty: LaunchedAgentPty, stillAllowed: () => boolean) => Promise<T>
+    run: (pty: LaunchedAgentPty, admitWrite: () => Promise<boolean>) => Promise<T>
   ): Promise<T | Exclude<PluginAgentInputResult, { readonly status: "sent" }>> => {
     const owns = (): boolean => {
       const pty = getPtyClient();
@@ -1253,12 +1253,17 @@ export function createHost(
     if (!owns()) return { status: "not-found" };
     await ensureCapabilityConsent(deps, pluginId, "agent:input");
     if (!isBound()) return { status: "unavailable" };
-    if (!owns()) return { status: "not-found" };
-    // Typing into an agent is held to the lease its terminal's input is.
-    await assertPluginCallerDrives(pluginId, `agents.${op}`, { terminalId });
     const pty = getPtyClient();
-    if (!isBound() || pty === null) return { status: "unavailable" };
-    return run(pty, () => isBound() && owns());
+    if (pty === null) return { status: "unavailable" };
+    if (!owns()) return { status: "not-found" };
+    return run(pty, async () => {
+      if (!isBound() || !owns()) return false;
+      // Typing into an agent is held to the lease its terminal's input is, and
+      // asked again before every write, so a takeover while the call waited on
+      // a read or between paced keys stops it.
+      await assertPluginCallerDrives(pluginId, `agents.${op}`, { terminalId });
+      return isBound() && owns();
+    });
   };
   /**
    * A dispatch of this plugin's, recording the agent an `agent.launch` of its
@@ -1918,8 +1923,8 @@ export function createHost(
         if (!isBound()) return { status: "unavailable" };
         assertDeclaresAgentInput("interrupt");
         const id = validateLaunchedAgentId(pluginId, "interrupt", terminalId);
-        return withLaunchedAgent("interrupt", id, (pty, stillAllowed) =>
-          interruptLaunchedAgent(pty, id, stillAllowed)
+        return withLaunchedAgent("interrupt", id, (pty, admitWrite) =>
+          interruptLaunchedAgent(pty, id, admitWrite)
         );
       },
       sendKeys: async (terminalId, input) => {
@@ -1927,8 +1932,8 @@ export function createHost(
         assertDeclaresAgentInput("sendKeys");
         const id = validateLaunchedAgentId(pluginId, "sendKeys", terminalId);
         const keys = validateSendKeysCall(pluginId, id, input);
-        return withLaunchedAgent("sendKeys", id, (pty, stillAllowed) =>
-          sendKeysToLaunchedAgent(pty, id, keys, stillAllowed)
+        return withLaunchedAgent("sendKeys", id, (pty, admitWrite) =>
+          sendKeysToLaunchedAgent(pty, id, keys, admitWrite)
         );
       },
       submit: async (terminalId, text) => {
@@ -1942,8 +1947,8 @@ export function createHost(
             `Plugin "${pluginId}" agents.submit: text must be a non-empty, non-whitespace string`
           );
         }
-        return withLaunchedAgent("submit", id, (pty, stillAllowed) =>
-          submitToLaunchedAgent(pty, id, text, stillAllowed)
+        return withLaunchedAgent("submit", id, (pty, admitWrite) =>
+          submitToLaunchedAgent(pty, id, text, admitWrite)
         );
       },
     },

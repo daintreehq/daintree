@@ -150,9 +150,9 @@ export function validateSendKeysCall(
  * against the host's own record, as `sendToActiveAgent` does, rather than
  * through the terminal IPC handlers: those hold a write to the view that sent
  * it, and a host-side call has none, so in Host mode they would drop it while a
- * Shell drives the project. The plugin's call was held to the drive lease
- * before it got here. The eligibility rules are the shipped actions', from the
- * same shared helpers.
+ * Shell drives the project, so each write is held to the plugin's own drive
+ * lease through {@link AdmitWrite} instead. The eligibility rules are the
+ * shipped actions', from the same shared helpers.
  */
 export type LaunchedAgentPty = Pick<
   PtyClient,
@@ -160,11 +160,12 @@ export type LaunchedAgentPty = Pick<
 >;
 
 /**
- * Whether the call may still write. Asked right before each write, after every
- * await, so an unload or a lost record stops a call partway rather than letting
- * a paced key sequence finish for a plugin that is gone.
+ * Whether the call may still write, asked right before each write and after
+ * every await: an unload, a lost record or another screen taking control
+ * stops a call partway rather than letting a paced key sequence finish.
+ * Rejects `DRIVEN_ELSEWHERE` for a takeover; resolves false for the rest.
  */
-export type StillAllowed = () => boolean;
+export type AdmitWrite = () => Promise<boolean>;
 
 type TerminalRecord = NonNullable<Awaited<ReturnType<LaunchedAgentPty["getTerminalAsync"]>>>;
 
@@ -188,7 +189,7 @@ function hasLiveProcess(record: TerminalRecord): boolean {
 export async function interruptLaunchedAgent(
   pty: LaunchedAgentPty,
   terminalId: string,
-  stillAllowed: StillAllowed
+  admitWrite: AdmitWrite
 ): Promise<PluginAgentInterruptResult> {
   // Null for a terminal main still tracks means the host did not answer.
   const record = await pty.getTerminalAsync(terminalId);
@@ -206,7 +207,7 @@ export async function interruptLaunchedAgent(
     terminalId
   );
   if (!assessment.eligible) return refused(assessment.reason);
-  if (!stillAllowed()) return UNAVAILABLE;
+  if (!(await admitWrite())) return UNAVAILABLE;
   pty.batchDoubleEscape([terminalId]);
   return { status: "sent", cancelKey: assessment.support };
 }
@@ -215,11 +216,16 @@ export async function sendKeysToLaunchedAgent(
   pty: LaunchedAgentPty,
   terminalId: string,
   input: LaunchedAgentKeys,
-  stillAllowed: StillAllowed,
+  admitWrite: AdmitWrite,
   sleep: (ms: number) => Promise<void> = (ms) => new Promise((r) => setTimeout(r, ms))
 ): Promise<PluginAgentKeysResult> {
   const record = await pty.getTerminalAsync(terminalId);
   if (record === null) return UNAVAILABLE;
+  // A closed pane's process lives on through the trash's recovery grace, still
+  // showing whatever prompt it stopped at, where no one can see it answered.
+  if (record.isTrashed === true) {
+    return refused(`Terminal ${terminalId} is in the trash. Nothing was pressed.`);
+  }
   if (!hasLiveProcess(record)) {
     return refused(`Terminal ${terminalId} has no running process. Nothing was pressed.`);
   }
@@ -243,7 +249,7 @@ export async function sendKeysToLaunchedAgent(
   // an arrow and an Enter as a single unknown sequence.
   for (const [index, key] of keys.entries()) {
     if (index > 0) await sleep(SEND_KEYS_GAP_MS);
-    if (!stillAllowed()) {
+    if (!(await admitWrite())) {
       return index === 0 ? UNAVAILABLE : { status: "sent", keys: keys.slice(0, index) };
     }
     pty.write(terminalId, keySequence(key));
@@ -257,7 +263,7 @@ export async function submitToLaunchedAgent(
   pty: LaunchedAgentPty,
   terminalId: string,
   text: string,
-  stillAllowed: StillAllowed
+  admitWrite: AdmitWrite
 ): Promise<PluginAgentInputResult> {
   const record = await pty.getTerminalAsync(terminalId);
   if (record === null) return UNAVAILABLE;
@@ -267,7 +273,7 @@ export async function submitToLaunchedAgent(
   if (!hasLiveProcess(record)) {
     return refused(`Terminal ${terminalId} has no running process. Nothing was sent.`);
   }
-  if (!stillAllowed()) return UNAVAILABLE;
+  if (!(await admitWrite())) return UNAVAILABLE;
   pty.submit(terminalId, text);
   return { status: "sent" };
 }
