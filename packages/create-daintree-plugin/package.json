@@ -1,6 +1,6 @@
 {
   "name": "create-daintree-plugin",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Scaffold a new Daintree plugin. Shim for `npm create daintree-plugin`.",
   "license": "Apache-2.0",
   "repository": {
@@ -37,7 +37,7 @@
     "prepare": "tsup"
   },
   "dependencies": {
-    "daintree-plugin": "^0.1.0"
+    "daintree-plugin": "^0.2.0"
   },
   "devDependencies": {
     "tsup": "^8.5.1"

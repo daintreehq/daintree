@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { scaffoldPlugin, runNew, findProjectRoot } from "../commands/new.js";
 import { runNewFromArgv } from "../commands/newCommand.js";
 import { runValidate } from "../commands/validate.js";
@@ -26,6 +27,21 @@ beforeEach(async () => {
 afterEach(async () => {
   await fs.rm(tmpDir, { recursive: true, force: true });
 });
+
+const packagesDir = fileURLToPath(new URL("../../../", import.meta.url));
+
+// What the scaffold must pin: the workspace versions it ships beside, so a
+// minor bump of any of them can never leave new plugins on the previous minor.
+const toolchain = {
+  sdk: await readVersion("plugin-sdk"),
+  vite: await readVersion("plugin-vite"),
+  cli: await readVersion("daintree-plugin"),
+};
+
+async function readVersion(dir: string): Promise<string> {
+  const raw = await fs.readFile(path.join(packagesDir, dir, "package.json"), "utf8");
+  return (JSON.parse(raw) as { version: string }).version;
+}
 
 async function readJson(file: string): Promise<Record<string, unknown>> {
   return JSON.parse(await fs.readFile(file, "utf8"));
@@ -270,8 +286,8 @@ describe("scaffoldPlugin", () => {
     });
   }
 
-  // #10513: the scaffold's engine range must satisfy host versions past 0.11.
-  // `^0.11.0` resolves to `>=0.11.0 <0.12.0` and would be rejected by the host.
+  // #10513: the scaffold's engine range must be open-ended; a 0.x caret range
+  // excludes every later minor and would draw the host's compatibility warning.
   for (const template of TEMPLATE_KINDS) {
     it(`"${template}" template pins an open-ended engine range satisfying recent hosts`, async () => {
       const result = await scaffoldPlugin({
@@ -286,9 +302,12 @@ describe("scaffoldPlugin", () => {
       expect(range).toBeDefined();
       const semver = await import("semver");
       // A current host version must satisfy the scaffolded range — the bug was a
-      // caret range that excluded everything past 0.11.x.
-      expect(semver.satisfies("0.19.1", range!)).toBe(true);
+      // caret range that excluded every later minor. A host older than the
+      // features a scaffold emits must not.
+      expect(semver.satisfies("0.41.0", range!)).toBe(true);
+      expect(semver.satisfies("0.46.3", range!)).toBe(true);
       expect(semver.satisfies("1.0.0", range!)).toBe(true);
+      expect(semver.satisfies("0.40.9", range!)).toBe(false);
     });
   }
 
@@ -311,7 +330,9 @@ describe("scaffoldPlugin", () => {
         // Every scaffold emits a script that shells out to the CLI, so a clone
         // without a global install would fail at `npm run validate`.
         expect(scripts.validate).toBe("daintree-plugin validate");
-        expect(dev["daintree-plugin"]).toBe("^0.1.0");
+        expect(dev["daintree-plugin"]).toBe(`^${toolchain.cli}`);
+        expect(dev["@daintreehq/plugin-sdk"]).toBe(`^${toolchain.sdk}`);
+        expect(dev["@daintreehq/plugin-vite"]).toBe(`^${toolchain.vite}`);
         // Tracks the host's TypeScript major; every template typechecks on 6.
         expect(dev.typescript).toBe("^6.0.0");
       }

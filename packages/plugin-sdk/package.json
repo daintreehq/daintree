@@ -1,6 +1,6 @@
 {
   "name": "@daintreehq/plugin-sdk",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Public surface for Daintree plugins \u2014 manifest, host API, activation contract, React hooks, file helpers, data helpers, and the in-memory mock host for tests.",
   "license": "Apache-2.0",
   "repository": {
