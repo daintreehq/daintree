@@ -80,6 +80,7 @@ Commands are callable actions that appear in the command palette and can be boun
 | `danger` | yes | `"safe"` or `"confirm"`. `"restricted"` is rejected — plugins cannot self-register restricted actions. The host raises `"safe"` to `"confirm"` automatically when the plugin holds a high-risk capability. |
 | `keywords` | no | Extra search terms for the palette. |
 | `inputSchema` | no | JSON schema validated against the dispatched `args` payload. |
+| `resultSchema` | no | JSON schema, rooted at `type: "object"`, that every result is checked against in its JSON form, which is then what the caller receives; a mismatch fails the dispatch with `RESULT_VALIDATION_ERROR`. Published as the action's `outputSchema`. Rules are under [`registerAction`](./host-api.md#registeraction). |
 | `when` | no | A `when` clause over your plugin's context keys. While it is false the command is left out of the palette. |
 | `enablement` | no | Same grammar. While it is false the command stays in the palette, greyed out with a reason, and Enter does nothing. |
 | `requires` | no | The capabilities _this command_ actually uses — see below. |

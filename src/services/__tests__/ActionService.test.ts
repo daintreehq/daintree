@@ -319,6 +319,80 @@ describe("ActionService", () => {
       expect(mockRun).not.toHaveBeenCalled();
     });
 
+    describe("plugin actions with a result contract (#13817)", () => {
+      const PLUGIN_ACTION = "acme.tool.report" as ActionId;
+      const outputSchema = { type: "object", properties: { total: { type: "integer" } } };
+      const register = (
+        id: ActionId,
+        danger: "safe" | "confirm",
+        run: ActionDefinition["run"],
+        plugin?: Record<string, unknown>
+      ) =>
+        service.register({
+          id,
+          title: "Report",
+          description: "Report action",
+          category: "test",
+          kind: "query",
+          danger,
+          scope: "renderer",
+          run,
+          ...plugin,
+        } as ActionDefinition);
+      const registerPluginAction = (danger: "safe" | "confirm", run: ActionDefinition["run"]) =>
+        register(PLUGIN_ACTION, danger, run, {
+          pluginId: "acme.tool",
+          pluginName: "Tool",
+          rawOutputSchema: structuredClone(outputSchema),
+          mcpOutputSchema: true,
+        });
+      const resultRejection = () =>
+        new Error(
+          `[AppError|RESULT_VALIDATION_ERROR] Plugin action "${PLUGIN_ACTION}" returned a result that does not match its declared resultSchema`
+        );
+
+      it("still refuses plugin dispatch of a confirm-tier action, confirmed or not", async () => {
+        const run = vi.fn().mockResolvedValue({ total: 1 });
+        registerPluginAction("confirm", run);
+
+        for (const confirmed of [undefined, true]) {
+          const result = await service.dispatch(PLUGIN_ACTION, undefined, {
+            source: "plugin",
+            confirmed,
+          });
+          expect(result).toMatchObject({ ok: false, error: { code: "CONFIRMATION_REQUIRED" } });
+        }
+        expect(run).not.toHaveBeenCalled();
+        expect(service.get(PLUGIN_ACTION)).toMatchObject({
+          outputSchema,
+          pluginId: "acme.tool",
+          pluginName: "Tool",
+        });
+      });
+
+      it("reports a result main refused with the code a built-in's rejected result gets", async () => {
+        registerPluginAction("safe", vi.fn().mockRejectedValue(resultRejection()));
+
+        const result = await service.dispatch(PLUGIN_ACTION, undefined, { source: "plugin" });
+
+        expect(result).toMatchObject({
+          ok: false,
+          error: {
+            code: "RESULT_VALIDATION_ERROR",
+            message: `Plugin action "${PLUGIN_ACTION}" returned a result that does not match its declared resultSchema`,
+          },
+        });
+      });
+
+      it("leaves the same throw from a built-in an execution error", async () => {
+        register("actions.list" as ActionId, "safe", vi.fn().mockRejectedValue(resultRejection()));
+
+        const result = await service.dispatch("actions.list", undefined, { source: "user" });
+
+        expect(result).toMatchObject({ ok: false, error: { code: "EXECUTION_ERROR" } });
+      });
+    });
+
     it("gates a statically-safe action when an agent dispatch carries a recipeId (#11860)", async () => {
       // The composite worktree actions are legitimately `safe` on their own but
       // spawn a recipe's terminals when the args name one, which is the gap

@@ -848,16 +848,22 @@ export class ActionService {
         // `TerminalInOtherProjectError` gets its own code (#13120) and, unlike
         // the others, plain `details`: its fields are the point, and custom
         // `Error` properties are dropped by the structured clone to plugins.
+        // A plugin action's result is checked in main, against the JSON Schema
+        // only main holds, and comes back as a decoded AppError: it is the same
+        // failure the `resultSchema` gate above reports for a built-in, so it
+        // takes the same code rather than reading as a retriable execution error.
         code:
-          err instanceof ConfirmationStagedError
-            ? "CONFIRMATION_REQUIRED"
-            : err instanceof PartialSuccessError
-              ? "PARTIAL_SUCCESS"
-              : err instanceof UnactionableTargetError
-                ? "VALIDATION_ERROR"
-                : err instanceof TerminalInOtherProjectError
-                  ? "TERMINAL_IN_OTHER_PROJECT"
-                  : "EXECUTION_ERROR",
+          definition.pluginId && isClientAppError(err) && err.code === "RESULT_VALIDATION_ERROR"
+            ? "RESULT_VALIDATION_ERROR"
+            : err instanceof ConfirmationStagedError
+              ? "CONFIRMATION_REQUIRED"
+              : err instanceof PartialSuccessError
+                ? "PARTIAL_SUCCESS"
+                : err instanceof UnactionableTargetError
+                  ? "VALIDATION_ERROR"
+                  : err instanceof TerminalInOtherProjectError
+                    ? "TERMINAL_IN_OTHER_PROJECT"
+                    : "EXECUTION_ERROR",
         message,
         details: err instanceof TerminalInOtherProjectError ? err.toDetails() : err,
       };
@@ -1011,6 +1017,7 @@ export class ActionService {
     if (definition.mcpVisibility) entry.mcpVisibility = definition.mcpVisibility;
     if (definition.deprecated) entry.deprecated = { ...definition.deprecated };
     if (definition.pluginId) entry.pluginId = definition.pluginId;
+    if (definition.pluginId && definition.pluginName) entry.pluginName = definition.pluginName;
     if (definition.examples) entry.examples = structuredClone(definition.examples);
     if (definition.dangerRationale) entry.dangerRationale = definition.dangerRationale;
     if (paletteHidden) entry.paletteHidden = true;

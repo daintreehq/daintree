@@ -1430,6 +1430,28 @@ describe("PluginDevWorkerHostProxy host.system / clipboard.writeImage (#11299)",
     const notify = sent.find((m) => m.type === "host-notify" && m.method === "registerAction");
     expect(notify.params.descriptor.requires).toBeUndefined();
   });
+
+  it("carries an action's resultSchema across the port for main to enforce", async () => {
+    // Dropped here, a worker plugin's results would go unchecked and its
+    // catalog entry would publish no contract, with nothing failing to say so.
+    const resultSchema = { type: "object", properties: { total: { type: "integer" } } };
+    const { proxy, sent } = makeProxy();
+    proxy.host.registerAction(
+      {
+        id: "summary",
+        title: "Summary",
+        description: "Summarises",
+        category: "Test",
+        kind: "query",
+        danger: "safe",
+        resultSchema,
+      } as any,
+      async () => ({ total: 1 })
+    );
+
+    const notify = sent.find((m) => m.type === "host-notify" && m.method === "registerAction");
+    expect(notify.params.descriptor.resultSchema).toEqual(resultSchema);
+  });
 });
 
 describe("PluginDevWorkerHostProxy manifest commands (#12274)", () => {

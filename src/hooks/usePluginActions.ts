@@ -8,6 +8,7 @@ import { summarizeMcpArgs } from "@shared/utils/mcpArgsSummary";
 import { logWarn } from "@/utils/logger";
 import { notify } from "@/lib/notify";
 import { resolvePluginAttribution } from "@/hooks/usePluginAttribution";
+import { clientErrorCode } from "@/utils/clientAppError";
 import { publishRegisteredPluginActions } from "@/services/plugin/registeredPluginActions";
 import { publishPluginPaletteGates } from "@/services/plugin/pluginPaletteGating";
 
@@ -119,6 +120,7 @@ export function usePluginActions(): void {
 function descriptorsEqual(a: PluginActionDescriptor, b: PluginActionDescriptor): boolean {
   return (
     a.pluginId === b.pluginId &&
+    a.pluginName === b.pluginName &&
     a.id === b.id &&
     a.title === b.title &&
     a.description === b.description &&
@@ -130,6 +132,7 @@ function descriptorsEqual(a: PluginActionDescriptor, b: PluginActionDescriptor):
     a.effectiveDanger === b.effectiveDanger &&
     JSON.stringify(a.keywords ?? null) === JSON.stringify(b.keywords ?? null) &&
     JSON.stringify(a.inputSchema ?? null) === JSON.stringify(b.inputSchema ?? null) &&
+    JSON.stringify(a.resultSchema ?? null) === JSON.stringify(b.resultSchema ?? null) &&
     // `requires` is compared so a re-registration that only changes capability
     // intent still counts as a change. It feeds `effectiveDanger` on main, so
     // the two usually move together — but a narrowing that happens not to flip
@@ -143,7 +146,18 @@ function toSyntheticDefinition(
   inFlightConfirms: Set<string>,
   isDisposed: () => boolean
 ): AnyActionDefinition {
-  const { pluginId, id, title, description, category, kind, keywords, inputSchema } = descriptor;
+  const {
+    pluginId,
+    pluginName,
+    id,
+    title,
+    description,
+    category,
+    kind,
+    keywords,
+    inputSchema,
+    resultSchema,
+  } = descriptor;
 
   // Read the host-authoritative classification, never the plugin's advisory
   // `danger`. Fail safe to "confirm" if `effectiveDanger` is absent — e.g. a
@@ -215,11 +229,17 @@ function toSyntheticDefinition(
         // command palette suppresses its own generic failure toast for plugin
         // actions (see `useActionPalette`) so the rethrow can't double-toast.
         if (!isDisposed()) {
+          // Main refused the result rather than the handler throwing, and the
+          // author needs to know which of the two to look for.
+          const outcome =
+            clientErrorCode(err) === "RESULT_VALIDATION_ERROR"
+              ? "returned a result that doesn't match its declared schema"
+              : "threw an error";
           // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
           notify({
             type: "error",
             title: "Plugin action failed",
-            message: `"${title ?? id}" from the ${resolvePluginAttribution(pluginId).label} threw an error.`,
+            message: `"${title ?? id}" from the ${resolvePluginAttribution(pluginId).label} ${outcome}.`,
           });
         }
         logWarn(`[PluginActions] Plugin action "${id}" threw`, { error: err });
@@ -230,6 +250,13 @@ function toSyntheticDefinition(
 
   const synthetic = definition as AnyActionDefinition;
   synthetic.pluginId = pluginId;
+  if (pluginName) synthetic.pluginName = pluginName;
   if (inputSchema) synthetic.rawInputSchema = { ...inputSchema };
+  // Main already holds every result to this schema, so publishing it promises
+  // nothing the dispatch doesn't keep.
+  if (resultSchema) {
+    synthetic.rawOutputSchema = { ...resultSchema };
+    synthetic.mcpOutputSchema = true;
+  }
   return synthetic;
 }

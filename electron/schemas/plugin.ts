@@ -629,6 +629,10 @@ export const CommandContributionSchema = z
     when: z.string().min(1).optional(),
     enablement: z.string().min(1).optional(),
     inputSchema: z.record(z.string(), z.unknown()).optional(),
+    // Only the root is checked here. The full compile (dialect, local refs,
+    // formats) runs when the descriptor is built, which runtime registrations
+    // reach without passing through this schema.
+    resultSchema: z.looseObject({ type: z.literal("object") }).optional(),
     // Per-action capability intent (#11299). Deliberately NOT `.min(1)`: an
     // empty array is the meaningful "this command exercises no capability"
     // declaration that keeps it one-click in an otherwise high-authority
@@ -2730,6 +2734,12 @@ export const MANIFEST_CONTRIBUTION_CAPS = {
 export const MANIFEST_AUTHORS_CAP = 10;
 
 /**
+ * Upper bound on the top-level `worksWith` array. It names plugins to disclose
+ * beside this one, never ones the host loads, so a short list is all it needs.
+ */
+export const MANIFEST_WORKS_WITH_CAP = 16;
+
+/**
  * Deprecated `contributes` keys promoted to stable names in the 1.0 freeze.
  * Old manifests are still accepted (the value is migrated to the canonical key);
  * `PluginService` surfaces a deprecation warning when an alias is encountered.
@@ -3062,6 +3072,15 @@ function buildPluginManifestSchema(origin: PluginOrigin) {
       description: z.string().optional(),
       tagline: z.string().trim().min(1).max(120).optional(),
       authors: z.array(PluginAuthorSchema).max(MANIFEST_AUTHORS_CAP).optional(),
+      // Other plugins this one works with, by manifest id. Disclosure only:
+      // nothing is installed, loaded or ordered from it.
+      worksWith: z
+        .array(z.string().min(1).max(64).regex(SCOPED_PLUGIN_NAME_PATTERN))
+        .max(MANIFEST_WORKS_WITH_CAP)
+        .refine((list) => new Set(list).size === list.length, {
+          message: "worksWith must not repeat an entry",
+        })
+        .optional(),
       category: z.enum(PLUGIN_CATEGORY_IDS).optional(),
       main: z.string().optional(),
       engines: z
@@ -3284,6 +3303,16 @@ function buildPluginManifestSchema(origin: PluginOrigin) {
           path: ["scope"],
           message: `"scope": "project" declares a plugin that is only ever loaded from a project's .daintree/plugins/, but this manifest was discovered under the ${origin} plugins root.`,
           params: { errorCode: "project_scope_not_allowed" },
+        });
+      }
+
+      const selfIndex = manifest.worksWith?.indexOf(manifest.name) ?? -1;
+      if (selfIndex !== -1) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["worksWith", selfIndex],
+          message: "worksWith names other plugins; a plugin can't list itself",
+          params: { errorCode: "works_with_self" },
         });
       }
 

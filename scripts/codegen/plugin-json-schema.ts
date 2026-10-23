@@ -63,6 +63,8 @@ const UNENCODED_RULES = [
   "A command id may not collide with a built-in action id, and some built-in ids refuse plugin dispatch outright.",
   "An agent's session-id resume must use {sessionId} exactly once across its args, and nowhere else; a project-scoped resume's args may not contain it. A sessionIdPattern must compile as a JavaScript regular expression with exactly one capture group.",
   "A tour's panelKind must name a declared panel; its chapter ids must be unique; every cue and caption must fall inside its chapter's duration; and a remote chapter audioUrl must be https on a host listed in that tour's audioHosts.",
+  "A command's resultSchema must compile as JSON Schema 2020-12 (or draft-07, when its $schema says so) with every reference resolving inside it and no $async; the command is refused when it registers otherwise.",
+  "worksWith may not repeat an entry or name the plugin itself.",
 ];
 
 function build({ file, origin, title, intro }: Target): string {

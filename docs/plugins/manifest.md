@@ -190,6 +190,14 @@ Optional attribution credits, surfaced as a "Contributors" block in the plugin d
 ]
 ```
 
+### `worksWith`
+
+Other plugins this one works with, by manifest id (`publisher.name`), built-ins included. Optional, at most 16 entries, none repeated, and never the plugin's own name. The plugin manager lists them in the detail pane with whether each is installed, installed but turned off, or not installed. It is disclosure and an install hint only: nothing is installed, activated or loaded in any order because of it, and a listed plugin that is missing changes nothing about how this one runs. To work with another plugin at runtime, discover its actions with `host.actions.list()`, which names each one's provider, and call them with `host.dispatch`.
+
+```jsonc
+"worksWith": ["acme.linear", "daintree.github"]
+```
+
 ### `category`
 
 Catalog category for grouping in the plugin manager. Optional enum: `"forge"`, `"ai"`, `"workspace"`, or `"other"`. When omitted, Daintree derives one from what the plugin contributes — forge providers map to `"forge"`; agents, MCP servers, skills or an `agentMcp` endpoint to `"ai"`; panels or views to `"workspace"`; and anything else to `"other"`, checked in that order. Declare it explicitly when a multi-contribution plugin would otherwise be misclassified by derivation.

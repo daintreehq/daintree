@@ -791,3 +791,71 @@ describe("panel contribution scope (#13778)", () => {
     expect(parsePanel({ scope: "worktree", dockable: false }).success).toBe(true);
   });
 });
+
+describe("PluginManifestSchema worksWith (#13817)", () => {
+  const parse = (worksWith: unknown) =>
+    getPluginManifestSchema("user").safeParse({
+      name: "acme.reporter",
+      version: "1.0.0",
+      worksWith,
+    });
+  const issuePaths = (worksWith: unknown) => {
+    const result = parse(worksWith);
+    return result.success ? null : result.error.issues.map((issue) => issue.path.join("."));
+  };
+
+  it("accepts other plugins by manifest id, built-ins included", () => {
+    const result = parse(["acme.linear", "daintree.github"]);
+    expect(result.success && result.data.worksWith).toEqual(["acme.linear", "daintree.github"]);
+  });
+
+  it("refuses a plugin listing itself, at that entry", () => {
+    expect(issuePaths(["acme.linear", "acme.reporter"])).toEqual(["worksWith.1"]);
+  });
+
+  it("refuses a repeated entry, a malformed id and an oversized list", () => {
+    expect(parse(["acme.linear", "acme.linear"]).success).toBe(false);
+    expect(parse(["Linear"]).success).toBe(false);
+    expect(parse(Array.from({ length: 17 }, (_, i) => `acme.peer-${i}`)).success).toBe(false);
+  });
+});
+
+describe("PluginManifestSchema command resultSchema (#13817)", () => {
+  const parse = (resultSchema: unknown) =>
+    getPluginManifestSchema("user").safeParse({
+      name: "acme.reporter",
+      version: "1.0.0",
+      contributes: {
+        commands: [
+          {
+            id: "summary",
+            title: "Summary",
+            description: "",
+            category: "Reports",
+            kind: "query",
+            danger: "safe",
+            resultSchema,
+          },
+        ],
+      },
+    });
+
+  it("keeps an object-rooted schema whole", () => {
+    const resultSchema = {
+      type: "object",
+      properties: { total: { type: "integer" } },
+      required: ["total"],
+    };
+    const result = parse(resultSchema);
+    expect(result.success && result.data.contributes.commands[0]?.resultSchema).toEqual(
+      resultSchema
+    );
+  });
+
+  it.each([[{ type: "array" }], [{ properties: {} }], [[]], ["object"]])(
+    "refuses %j, which has no object root",
+    (resultSchema) => {
+      expect(parse(resultSchema).success).toBe(false);
+    }
+  );
+});

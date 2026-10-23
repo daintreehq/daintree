@@ -65,6 +65,9 @@ export type AppErrorCode =
   // the details travel as `AppErrorDetails`.
   | "PLUGIN_NOT_ON_HOST"
   | "PLUGIN_INCOMPATIBLE"
+  // A plugin action returned a result its own `resultSchema` rejects. Crosses
+  // to the renderer so the dispatch reports it as the built-in code does.
+  | "RESULT_VALIDATION_ERROR"
   // The link to the window's host is down. For a mutation this is an unknown
   // outcome, not a failure: resolve it through the operation id.
   | "HOST_DISCONNECTED"

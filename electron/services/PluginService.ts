@@ -374,6 +374,11 @@ import type { ClientEndpoint } from "../ipc/endpoint.js";
 import { getEndpointRegistry } from "../ipc/endpointRegistry.js";
 import { PLUGIN_INVOKE_MAX_RESULT_BYTES } from "../../shared/config/pluginBudgets.js";
 import { assertPayloadWithinLimit, estimatePayloadBytes } from "./plugin/pluginPayloadLimits.js";
+import {
+  compilePluginActionResultSchema,
+  enforcePluginActionResult,
+  type PluginActionResultCheck,
+} from "./plugin/pluginActionResultSchema.js";
 import { getPluginPushBatcher, routePluginPush } from "./plugin/pluginPushBatcher.js";
 import {
   PluginMetricsService,
@@ -1001,6 +1006,14 @@ export class PluginService {
   private pluginActions = new Map<string, PluginActionDescriptor>();
   private pluginActionOwners = new Map<string, Set<string>>();
   private actionValidators = new Map<string, ValidateFn>();
+  /**
+   * Compiled `resultSchema` checks, keyed by the descriptor they were built
+   * with rather than by action id. Every registration path stores the very
+   * descriptor `validateAndBuildActionDescriptor` returned, so replacing or
+   * removing an action replaces or drops its check with nothing to evict, and
+   * a dispatch already running keeps the contract it started under.
+   */
+  private actionResultChecks = new WeakMap<PluginActionDescriptor, PluginActionResultCheck>();
   /**
    * Main-side action handler closures keyed by the same namespaced action id
    * (`{pluginId}.{actionId}`) used by {@link pluginActions}. Populated only via
@@ -5517,6 +5530,10 @@ export class PluginService {
     // already guarantees this, and the guard mirrors the input-schema check.
     let actionHandler =
       descriptor?.pluginId === pluginId ? this.pluginActionHandlers.get(channel) : undefined;
+    // Read now, before any await: a re-registration while this call runs must
+    // not hold its result to a contract it didn't start under.
+    const resultCheck =
+      descriptor?.pluginId === pluginId ? this.actionResultChecks.get(descriptor) : undefined;
     const handler = this.channels.getHandler(key);
     // Manifest-declared command (#9281): descriptor registered at load time,
     // handler module deferred until first dispatch. Lazy-load now, then fall
@@ -5607,6 +5624,14 @@ export class PluginService {
       assertPayloadWithinLimit(
         pluginId,
         `result of "${channel}"`,
+        actionResult,
+        PLUGIN_INVOKE_MAX_RESULT_BYTES
+      );
+      // Like the size check, a failed dispatch the outer catch records.
+      actionResult = enforcePluginActionResult(
+        pluginId,
+        channel,
+        resultCheck,
         actionResult,
         PLUGIN_INVOKE_MAX_RESULT_BYTES
       );
@@ -5716,6 +5741,15 @@ export class PluginService {
     assertPayloadWithinLimit(
       pluginId,
       `result of "${channel}"`,
+      finalResult,
+      PLUGIN_INVOKE_MAX_RESULT_BYTES
+    );
+    // A channel handler registered under an action's id is that action's
+    // implementation, so its result answers to the action's contract too.
+    finalResult = enforcePluginActionResult(
+      pluginId,
+      channel,
+      resultCheck,
       finalResult,
       PLUGIN_INVOKE_MAX_RESULT_BYTES
     );
@@ -8558,6 +8592,14 @@ export class PluginService {
     // that folds `[]` back into the omitted case and silently re-elevates
     // every opted-in action; `??` would be equivalent to this ternary, since
     // validateActionRequires rejects a null.
+    // Compiled before anything is returned, so a contract the host can't
+    // enforce refuses the registration rather than publishing a schema that
+    // nothing checks.
+    const compiledResult =
+      contribution.resultSchema === undefined
+        ? undefined
+        : compilePluginActionResultSchema(id, contribution.resultSchema);
+
     const dangerCapabilities = requires === undefined ? manifestCapabilities : requires;
     const hasHighRiskCapability = dangerCapabilities.some((p) =>
       CONFIRM_TRIGGERING_CAPABILITIES.has(p)
@@ -8566,8 +8608,10 @@ export class PluginService {
     const effectiveDanger: "safe" | "confirm" =
       danger === "confirm" || hasHighRiskCapability || hasCompoundElevation ? "confirm" : "safe";
 
-    return {
+    const descriptor: PluginActionDescriptor = {
       pluginId,
+      // From the manifest, never the contribution: a plugin names itself once.
+      pluginName: manifest?.displayName?.trim() || manifest?.name,
       id,
       title,
       description,
@@ -8582,8 +8626,11 @@ export class PluginService {
         contribution.inputSchema && typeof contribution.inputSchema === "object"
           ? { ...contribution.inputSchema }
           : undefined,
+      resultSchema: compiledResult?.schema,
       requires,
     };
+    if (compiledResult) this.actionResultChecks.set(descriptor, compiledResult.check);
+    return descriptor;
   }
 
   /**

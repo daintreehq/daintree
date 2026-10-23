@@ -883,3 +883,35 @@ describe("PluginDetailPane performance and styles tabs", () => {
     expect(screen.queryByRole("tab", { name: "Styles" })).toBeNull();
   });
 });
+
+describe("PluginDetailPane works with (#13817)", () => {
+  function withWorksWith(worksWith: string[]): LoadedPluginInfo {
+    const base = makePlugin();
+    return { ...base, manifest: { ...base.manifest, worksWith } };
+  }
+
+  it("leaves the section out when the manifest lists no plugins", () => {
+    renderOverview(withWorksWith([]));
+    expect(screen.queryByText("Works with")).toBeNull();
+  });
+
+  it("says, for each listed plugin, whether it is here", () => {
+    render(
+      <TooltipProvider>
+        <PluginDetailPane
+          plugin={withWorksWith(["acme.linear", "acme.missing"])}
+          checkingUpdate={false}
+          upToDate={false}
+          onUninstall={vi.fn()}
+          onCheckForUpdate={vi.fn()}
+          worksWithPeers={new Map([["acme.linear", { name: "Linear", turnedOff: false }]])}
+        />
+      </TooltipProvider>
+    );
+
+    const rows = within(screen.getByText("Works with").parentElement!)
+      .getAllByRole("listitem")
+      .map((row) => row.textContent);
+    expect(rows).toEqual(["Linearacme.linearInstalled", "acme.missingNot installed"]);
+  });
+});

@@ -32,6 +32,7 @@ export type {
   PluginCapability,
   BuiltInPluginCapability,
   PluginActionContribution,
+  PluginActionResultSchema,
   KeybindingContribution,
   ContextMenuContribution,
   ContextMenuLocation,
