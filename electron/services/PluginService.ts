@@ -1626,8 +1626,15 @@ export class PluginService {
       getPluginsRoot: () => this.pluginsRoot,
       records: this.records,
       getSettingsRoot: () => this.settings.settingsRoot(),
-      loadPlugin: async (root, pluginId, opts) =>
-        (await this.loadPlugin(root, pluginId, opts)) ?? this.projectInstancePackages.get(pluginId),
+      loadPlugin: async (root, pluginId, opts) => {
+        const before = this.projectInstancePackages.get(pluginId);
+        const loaded = await this.loadPlugin(root, pluginId, opts);
+        if (loaded) return loaded;
+        // A catalog entry counts as this load's result only if this load wrote it:
+        // a replacement that was refused must not be masked by the old entry.
+        const after = this.projectInstancePackages.get(pluginId);
+        return after !== before ? after : null;
+      },
       unloadPlugin: (pluginId, options) => {
         this.unloadPackageInstances(pluginId, { uninstall: options?.reload !== true });
         this.unloadPlugin(pluginId, options);
@@ -7635,6 +7642,10 @@ export class PluginService {
     if (this.disposed) return;
     this.openProjectRoots.set(projectId, projectRoot);
     const opening = this.projectPlugins.onProjectOpened(projectId, projectRoot);
+    // Queued now, not after the repository scan: the epoch is read at request
+    // time, so a close that lands during the scan makes this a no-op, and
+    // `waitForProjectPlugins` can see the queue.
+    const installed = this.reconcileInstalledInstances(projectId, projectRoot);
     // The open is queued now, so a launch that was waiting for it can wait on
     // the queue instead.
     const waiters = this.projectOpenWaiters.get(projectId);
@@ -7642,10 +7653,8 @@ export class PluginService {
       this.projectOpenWaiters.delete(projectId);
       for (const wake of waiters) wake();
     }
-    await opening;
+    await Promise.all([opening, installed]);
     // Disposed meanwhile: the watcher sync below would build a fresh controller.
-    if (this.disposed) return;
-    await this.reconcileInstalledInstances(projectId, projectRoot);
     if (this.disposed) return;
     await this.pushSnapshotToProject(projectId);
     await this.syncProjectPluginWatcher(projectId, projectRoot);
@@ -7683,6 +7692,7 @@ export class PluginService {
       // Woken by dispose: the getter would build a fresh controller.
       if (this.disposed) return false;
       await this.projectPlugins.whenSettled(projectId);
+      await this.installedInstanceChains.get(projectId)?.catch(() => {});
       return !this.disposed;
     })();
     try {
@@ -8062,6 +8072,7 @@ export class PluginService {
   private async reconcileInstalledInstancesForOpenProjects(): Promise<void> {
     if (this.projectInstancePackages.size === 0) return;
     for (const [projectId, projectRoot] of [...this.openProjectRoots]) {
+      if (this.openProjectRoots.get(projectId) !== projectRoot) continue;
       try {
         await this.reconcileInstalledInstances(projectId, projectRoot);
       } catch (err) {
@@ -8079,7 +8090,13 @@ export class PluginService {
     const pkg = this.projectInstancePackages.get(manifestId);
     if (!pkg) return false;
     const key = makeProjectPluginInstanceKey(projectId, manifestId);
-    if (this.plugins.has(key)) return true;
+    if (this.plugins.has(key)) {
+      if (this.installedInstanceKeys.has(key)) return true;
+      console.error(
+        `[PluginService] "${manifestId}" is enabled in project ${projectId} but a repository-local plugin already holds that identity — not loading the installed package`
+      );
+      return false;
+    }
     const isCurrent = (): boolean =>
       !this.disposed &&
       this.installedInstanceEpoch(projectId, key) === epoch &&
@@ -8139,13 +8156,20 @@ export class PluginService {
    * package was enabled. A plain disable keeps both.
    */
   private unloadPackageInstances(manifestId: string, opts: { uninstall: boolean }): void {
-    const catalogued = this.projectInstancePackages.has(manifestId);
     for (const key of [...this.installedInstanceKeys]) {
       if (pluginManifestIdFromInstanceKey(key) !== manifestId) continue;
       this.installedInstanceEpochs.set(key, (this.installedInstanceEpochs.get(key) ?? 0) + 1);
       this.dropInstalledInstance(key, true);
     }
-    if (!catalogued) return;
+    // Instances of a closed project are unloaded but keep their approvals; the
+    // code behind them is about to change or go, so those are purged too.
+    if (this.projectInstancePackages.has(manifestId) || opts.uninstall) {
+      for (const projectId of this.projectInstanceStore.listForPackage(manifestId)) {
+        getPluginCapabilityConsentService().revokeAllForPlugin(
+          makeProjectPluginInstanceKey(projectId, manifestId)
+        );
+      }
+    }
     if (opts.uninstall) {
       this.projectInstanceStore.removePackage(manifestId);
       this.projectInstancePackages.delete(manifestId);
@@ -8248,6 +8272,13 @@ export class PluginService {
       // Never registered, so no unload will come to drain its window.
       const suppressed = this.fileLogLimiter.drain(instanceKey);
       if (suppressed) this.writePluginFileLogSummary(instanceKey, suppressed);
+      return false;
+    }
+
+    // The registrations above are already published, so a load that was
+    // overtaken while `loadPlugin` ran is taken back down before it can activate.
+    if (args.installedInstance && args.isCurrent?.() === false) {
+      this.unloadPlugin(instanceKey);
       return false;
     }
 
@@ -9291,7 +9322,13 @@ export class PluginService {
     // to transition live; an unknown id stays persist-only (its intent is
     // recorded for the next scan). Guarding here also keeps the isBuiltin choice
     // where it belongs — inside `_applyEnabledToggle`, derived from the map entry.
-    if (!this.plugins.has(pluginId) && !this.disabledPlugins.has(pluginId)) return;
+    if (
+      !this.plugins.has(pluginId) &&
+      !this.disabledPlugins.has(pluginId) &&
+      !this.projectInstancePackages.has(pluginId)
+    ) {
+      return;
+    }
 
     // Serialise live transitions per id so concurrent toggles can't interleave
     // their unload/load map mutations. Swallow the prior chain's rejection —

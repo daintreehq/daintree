@@ -378,6 +378,58 @@ describe("installed package instance mode (#14103)", () => {
     expect(service.getProjectInstanceProjects(PKG)).toEqual([]);
   });
 
+  it("disabling the package unloads its instances and enabling it brings back the enabled ones", async () => {
+    projectStoreMock.getProjectById.mockImplementation((id: string) => ({
+      path: id === PROJECT_A ? "/repo/a" : "/repo/b",
+      status: "active",
+    }));
+    const { service, seam } = await startService();
+    await service.setProjectInstanceEnabled(PROJECT_A, "/repo/a", PKG, true);
+    await service.setProjectInstanceEnabled(PROJECT_B, "/repo/b", PKG, true);
+
+    await service.setEnabled(PKG, false);
+    expect(seam.plugins.has(KEY_A)).toBe(false);
+    expect(seam.plugins.has(KEY_B)).toBe(false);
+    expect(service.getProjectInstanceProjects(PKG).sort()).toEqual([PROJECT_A, PROJECT_B]);
+
+    await service.setEnabled(PKG, true);
+    await vi.waitFor(() => {
+      expect(seam.plugins.has(KEY_A)).toBe(true);
+      expect(seam.plugins.has(KEY_B)).toBe(true);
+    });
+  });
+
+  it("does not adopt an identity a repository-local plugin already holds", async () => {
+    const { service, seam } = await startService();
+    seam.plugins.set(KEY_A, { manifest: { name: PKG } });
+
+    await service.setProjectInstanceEnabled(PROJECT_A, "/repo/a", PKG, true);
+
+    expect(seam.installedInstanceKeys.has(KEY_A)).toBe(false);
+  });
+
+  it("forgets enablements on uninstall even when the package was disabled at startup", async () => {
+    const { service } = await startService();
+    await service.setProjectInstanceEnabled(PROJECT_A, "/repo/a", PKG, true);
+    await service.setEnabled(PKG, false);
+
+    await service.uninstallPlugin(PKG);
+
+    expect(service.getProjectInstanceProjects(PKG)).toEqual([]);
+  });
+
+  it("a close during the repository scan stops the same open from loading instances", async () => {
+    const { service, seam } = await startService();
+    await service.setProjectInstanceEnabled(PROJECT_A, "/repo/a", PKG, true);
+    await service.onProjectClosed(PROJECT_A);
+
+    const opening = service.onProjectOpened(PROJECT_A, "/repo/a");
+    const closing = service.onProjectClosed(PROJECT_A);
+    await Promise.all([opening, closing]);
+
+    expect(seam.plugins.has(KEY_A)).toBe(false);
+  });
+
   it("leaves legacy singleton plugins loading under their bare id", async () => {
     await writePlugin("acme.legacy", { name: "acme.legacy", version: "1.0.0" });
     const { seam } = await startService();
