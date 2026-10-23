@@ -171,10 +171,12 @@ export class PluginSettingsManager {
     pluginId: string,
     key: string,
     scope: PluginSettingsScope,
-    projectRoot?: string | null
+    projectRoot?: string | null,
+    manifest: Readonly<PluginManifest> | undefined = this.deps.getManifest(pluginId)
   ): string | undefined {
     const scopeFile = this.resolveSettingsFilePath(pluginId, scope, projectRoot);
-    if (!scopeFile || !this.isSecretKeptOffProjectRoot(pluginId, key, scope)) return scopeFile;
+    if (!scopeFile || !this.isSecretKeptOffProjectRoot(pluginId, key, scope, manifest))
+      return scopeFile;
     const projectId =
       projectIdFromPluginInstanceKey(pluginId) ??
       (projectRoot == null ? projectStore.getCurrentProject()?.id : undefined);
@@ -190,9 +192,10 @@ export class PluginSettingsManager {
   private isSecretKeptOffProjectRoot(
     pluginId: string,
     key: string,
-    scope: PluginSettingsScope
+    scope: PluginSettingsScope,
+    manifest: Readonly<PluginManifest> | undefined = this.deps.getManifest(pluginId)
   ): boolean {
-    return scope === "project" && this.isSecretKey(pluginId, key);
+    return scope === "project" && this.isSecretKey(pluginId, key, manifest);
   }
 
   /**
@@ -246,8 +249,13 @@ export class PluginSettingsManager {
    * apply, so a `user`-scoped key can't be written under `project` (or
    * vice-versa) via the host API or the settings-UI bridge.
    */
-  assertSettingDeclared(pluginId: string, key: string, scope: PluginSettingsScope): void {
-    const declared = this.deps.getManifest(pluginId)?.contributes.settings;
+  assertSettingDeclared(
+    pluginId: string,
+    key: string,
+    scope: PluginSettingsScope,
+    manifest: Readonly<PluginManifest> | undefined = this.deps.getManifest(pluginId)
+  ): void {
+    const declared = manifest?.contributes.settings;
     if (!declared || declared.length === 0) return;
     const def = declared.find((s) => s.id === key);
     if (!def) {
@@ -310,8 +318,12 @@ export class PluginSettingsManager {
    * the same permissive fallback the write/secret guards take, so reads of undeclared
    * keys keep working against the caller-supplied (or `"user"`) scope.
    */
-  getDeclaredScope(pluginId: string, key: string): PluginSettingsScope | undefined {
-    const def = this.deps.getManifest(pluginId)?.contributes.settings?.find((s) => s.id === key);
+  getDeclaredScope(
+    pluginId: string,
+    key: string,
+    manifest: Readonly<PluginManifest> | undefined = this.deps.getManifest(pluginId)
+  ): PluginSettingsScope | undefined {
+    const def = manifest?.contributes.settings?.find((s) => s.id === key);
     return def ? (def.scope ?? "user") : undefined;
   }
 
@@ -319,8 +331,12 @@ export class PluginSettingsManager {
    * The manifest `default` for a declared key, as a detached copy — what
    * `settings.get` answers, and `onDidChange` delivers, while nothing is stored.
    */
-  getDeclaredDefault(pluginId: string, key: string): unknown {
-    const def = this.deps.getManifest(pluginId)?.contributes.settings?.find((s) => s.id === key);
+  getDeclaredDefault(
+    pluginId: string,
+    key: string,
+    manifest: Readonly<PluginManifest> | undefined = this.deps.getManifest(pluginId)
+  ): unknown {
+    const def = manifest?.contributes.settings?.find((s) => s.id === key);
     if (def?.default === undefined) return undefined;
     return JSON.parse(JSON.stringify(def.default)) as unknown;
   }
@@ -553,8 +569,12 @@ export class PluginSettingsManager {
    * {@link assertSettingDeclared} takes, so the host `settings` API used before a
    * plugin declares its settings keeps working as plaintext.
    */
-  isSecretKey(pluginId: string, key: string): boolean {
-    const def = this.deps.getManifest(pluginId)?.contributes.settings?.find((s) => s.id === key);
+  isSecretKey(
+    pluginId: string,
+    key: string,
+    manifest: Readonly<PluginManifest> | undefined = this.deps.getManifest(pluginId)
+  ): boolean {
+    const def = manifest?.contributes.settings?.find((s) => s.id === key);
     return def ? this.isSecretSetting(def) : false;
   }
 

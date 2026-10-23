@@ -71,6 +71,26 @@ const storeMock = vi.hoisted(() => {
   };
 });
 
+// Holds a settings write inside its drive-lease check, so a test can unload or
+// replace the plugin while the write is awaiting authorization.
+const driveLeaseGate = vi.hoisted(() => ({
+  hold: null as Promise<void> | null,
+  entered: vi.fn(),
+}));
+vi.mock("../plugin/pluginDriveLease.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../plugin/pluginDriveLease.js")>();
+  return {
+    ...actual,
+    assertPluginCallerDrives: async (
+      ...args: Parameters<typeof actual.assertPluginCallerDrives>
+    ) => {
+      driveLeaseGate.entered();
+      if (driveLeaseGate.hold) await driveLeaseGate.hold;
+      return actual.assertPluginCallerDrives(...args);
+    },
+  };
+});
+
 vi.mock("electron", () => ({
   app: appMock,
   ipcMain: ipcMainMock,
@@ -271,6 +291,7 @@ beforeEach(async () => {
   vi.clearAllMocks();
   storeMock._state.clear();
   safeStorageMock.state.available = false;
+  driveLeaseGate.hold = null;
   // The real cipher remembers a keychain that gave no key for the process;
   // each test here is a fresh run.
   _resetSecretStorageSessionForTests();
@@ -280,7 +301,7 @@ afterEach(async () => {
   await fs.rm(tmpDir, { recursive: true, force: true });
 });
 
-type SettingsScope = "user" | "project";
+type SettingsScope = "user" | "project" | "local";
 type SettingsHostShape = (
   pluginId: string,
   binding?: { projectId: string | null; projectRoot: string | null }
@@ -323,7 +344,7 @@ async function setupSettingsService(
   pluginId: string,
   settings?: Array<{
     id: string;
-    type: string;
+    type?: string;
     scope?: SettingsScope;
     default?: unknown;
     required?: boolean;
@@ -631,6 +652,235 @@ describe("createHost — settings", () => {
     expect(() => host.settings.onDidChange("token", () => {})).toThrow(/host revoked/);
     await expect(host.settings.set("token", "still-works")).resolves.toBeUndefined();
     expect(await host.settings.get<string>("token")).toBe("still-works");
+  });
+
+  // #14092: a write classifies its key from the instance that declared it, so
+  // an unload — before the write or while it awaits authorization — can't
+  // downgrade a secret to plaintext or move it under the project root, and a
+  // write from a replaced instance never commits.
+  describe("writes stay bound to the declaring instance (#14092)", () => {
+    const projectId = "c".repeat(64);
+    type Timing = "before the write" | "while awaiting authorization";
+    const timings: Timing[] = ["before the write", "while awaiting authorization"];
+
+    /** Run `write` with `retire` landing at `timing`. */
+    async function writeAround(
+      timing: Timing,
+      write: () => Promise<void>,
+      retire: () => void
+    ): Promise<void> {
+      driveLeaseGate.entered.mockClear();
+      if (timing === "before the write") {
+        retire();
+        return write();
+      }
+      let release!: () => void;
+      driveLeaseGate.hold = new Promise<void>((resolve) => (release = resolve));
+      const pending = write();
+      expect(driveLeaseGate.entered).toHaveBeenCalled();
+      retire();
+      release();
+      return pending;
+    }
+
+    function replacePlugin(
+      service: PluginService,
+      pluginId: string,
+      settings: SettingDefinition[] | undefined
+    ): void {
+      const seam = service as unknown as {
+        plugins: Map<string, { manifest: PluginManifest }>;
+        _registerFakePluginForTests: (plugin: unknown) => void;
+      };
+      const current = seam.plugins.get(pluginId)!;
+      seam._registerFakePluginForTests({
+        ...current,
+        manifest: {
+          ...current.manifest,
+          contributes: { ...current.manifest.contributes, settings: settings ?? [] },
+        },
+      });
+    }
+
+    const secretScopes: Array<{
+      scope: "user" | "project" | "local";
+      file: (settingsRoot: string, pluginId: string) => string;
+    }> = [
+      { scope: "user", file: (root, id) => path.join(root, `${id}.json`) },
+      { scope: "project", file: (root, id) => path.join(root, "local", projectId, `${id}.json`) },
+      { scope: "local", file: (root, id) => path.join(root, "local", projectId, `${id}.json`) },
+    ];
+
+    describe.each(timings)("unloaded %s", (timing) => {
+      it.each(secretScopes)(
+        "keeps a $scope-scoped secret encrypted in its own file",
+        async ({ scope, file }) => {
+          safeStorageMock.state.available = true;
+          const projectDir = path.join(tmpDir, `proj-${scope}`);
+          projectStoreMock.getCurrentProject.mockReturnValue({ id: projectId, path: projectDir });
+          const pluginId = `acme.bound-secret-${scope}`;
+          const { service, settingsRoot } = await setupSettingsService(pluginId, [
+            { id: "token", type: "secret", scope },
+          ]);
+          const { host } = createSettingsHost(service, pluginId);
+
+          await writeAround(
+            timing,
+            () => host.settings.set("token", "synthetic-secret-value", scope),
+            () => service.unloadPlugin(pluginId)
+          );
+
+          const raw = await fs.readFile(file(settingsRoot, pluginId), "utf-8");
+          expect(raw).not.toContain("synthetic-secret-value");
+          expect((JSON.parse(raw) as Record<string, unknown>).token).toMatchObject({
+            __daintreeSecret: "daintree:secret:v1",
+          });
+          await expect(fs.access(path.join(projectDir, ".daintree"))).rejects.toThrow();
+        }
+      );
+
+      // Cleanup-time writes of ordinary settings (a deactivate() saving state)
+      // keep landing, in the scope the instance declared.
+      it("still persists an ordinary declared setting in its declared scope", async () => {
+        const projectDir = path.join(tmpDir, "proj-ordinary");
+        projectStoreMock.getCurrentProject.mockReturnValue({ id: projectId, path: projectDir });
+        const pluginId = "acme.bound-ordinary";
+        const { service } = await setupSettingsService(pluginId, [
+          { id: "channel", type: "string", scope: "project" },
+        ]);
+        const { host } = createSettingsHost(service, pluginId);
+
+        await writeAround(
+          timing,
+          () => host.settings.set("channel", "after-unload"),
+          () => service.unloadPlugin(pluginId)
+        );
+
+        const file = path.join(projectDir, ".daintree", "plugin-settings", `${pluginId}.json`);
+        expect(JSON.parse(await fs.readFile(file, "utf-8"))).toEqual({ channel: "after-unload" });
+      });
+
+      it.each(secretScopes)(
+        "still clears a $scope-scoped secret from its own file",
+        async ({ scope, file }) => {
+          safeStorageMock.state.available = true;
+          const projectDir = path.join(tmpDir, `proj-unset-${scope}`);
+          projectStoreMock.getCurrentProject.mockReturnValue({ id: projectId, path: projectDir });
+          const pluginId = `acme.bound-unset-${scope}`;
+          const { service, settingsRoot } = await setupSettingsService(pluginId, [
+            { id: "token", type: "secret", scope },
+            { id: "keep", type: "string", scope },
+          ]);
+          const { host } = createSettingsHost(service, pluginId);
+          await host.settings.set("token", "synthetic-secret-value");
+          await host.settings.set("keep", "kept");
+
+          await writeAround(
+            timing,
+            () => host.settings.unset("token"),
+            () => service.unloadPlugin(pluginId)
+          );
+
+          const secretFile = JSON.parse(
+            await fs.readFile(file(settingsRoot, pluginId), "utf-8")
+          ) as Record<string, unknown>;
+          expect(secretFile).not.toHaveProperty("token");
+        }
+      );
+    });
+
+    describe.each(timings)("replaced %s", (timing) => {
+      it.each([
+        {
+          change: "a secret the new instance no longer declares",
+          before: [{ id: "token", type: "secret" }],
+          after: undefined,
+        },
+        {
+          change: "an ordinary key the new instance declares secret",
+          before: [{ id: "token", type: "string" }],
+          after: [{ id: "token", type: "secret" }] as SettingDefinition[],
+        },
+      ])("rejects a write of $change and stores nothing", async ({ before, after }) => {
+        safeStorageMock.state.available = true;
+        const pluginId = "acme.bound-replaced";
+        const { service, settingsRoot } = await setupSettingsService(pluginId, before);
+        const { host } = createSettingsHost(service, pluginId);
+
+        await expect(
+          writeAround(
+            timing,
+            () => host.settings.set("token", "synthetic-secret-value"),
+            () => replacePlugin(service, pluginId, after)
+          )
+        ).rejects.toThrow(/^PLUGIN_UNLOADED: .*was replaced/);
+
+        if (timing === "before the write") expect(driveLeaseGate.entered).not.toHaveBeenCalled();
+        await expect(fs.access(path.join(settingsRoot, `${pluginId}.json`))).rejects.toThrow();
+      });
+
+      it("rejects an unset from the replaced instance", async () => {
+        const pluginId = "acme.bound-replaced-unset";
+        const declared: SettingDefinition[] = [{ id: "channel", type: "string" }];
+        const { service, settingsRoot } = await setupSettingsService(pluginId, declared);
+        const { host } = createSettingsHost(service, pluginId);
+        await host.settings.set("channel", "stored");
+
+        await expect(
+          writeAround(
+            timing,
+            () => host.settings.unset("channel"),
+            () => replacePlugin(service, pluginId, declared)
+          )
+        ).rejects.toThrow(/^PLUGIN_UNLOADED: .*was replaced/);
+
+        const file = path.join(settingsRoot, `${pluginId}.json`);
+        expect(JSON.parse(await fs.readFile(file, "utf-8"))).toEqual({ channel: "stored" });
+      });
+    });
+
+    // The successor unloading doesn't hand authority back to the instance it
+    // replaced: that instance declared the key ordinary, so its write would
+    // overwrite the successor's encrypted value with plaintext.
+    // A successor that never made a host (a lazy plugin whose secret was saved
+    // from the settings form) retires its predecessor just the same.
+    it.each(["made a host", "never made a host"])(
+      "keeps a replaced instance retired after a successor that %s unloads",
+      async (successorShape) => {
+        safeStorageMock.state.available = true;
+        const pluginId = `acme.bound-successor-${successorShape === "made a host" ? "hosted" : "hostless"}`;
+        const { service, settingsRoot } = await setupSettingsService(pluginId, [
+          { id: "token", type: "string" },
+        ]);
+        const { host: retired } = createSettingsHost(service, pluginId);
+        replacePlugin(service, pluginId, [{ id: "token", type: "secret" }]);
+        if (successorShape === "made a host") {
+          const { host: successor } = createSettingsHost(service, pluginId);
+          await successor.settings.set("token", "synthetic-secret-value");
+        } else {
+          const settings = (service as unknown as ServiceWithSettingsManager).settings;
+          const file = settings.resolveSettingsFilePath(pluginId, "user")!;
+          const store = settings.getOrCreateSettingsStore(pluginId, file) as unknown as {
+            set: (key: string, value: unknown, opts: { secret: boolean }) => Promise<boolean>;
+          };
+          await store.set("token", "synthetic-secret-value", { secret: true });
+        }
+        service.unloadPlugin(pluginId);
+
+        await expect(retired.settings.set("token", "synthetic-plain-value")).rejects.toThrow(
+          /^PLUGIN_UNLOADED: .*was replaced/
+        );
+        await expect(retired.settings.unset("token")).rejects.toThrow(
+          /^PLUGIN_UNLOADED: .*was replaced/
+        );
+
+        const raw = await fs.readFile(path.join(settingsRoot, `${pluginId}.json`), "utf-8");
+        expect(raw).not.toContain("synthetic-plain-value");
+        expect((JSON.parse(raw) as Record<string, unknown>).token).toMatchObject({
+          __daintreeSecret: "daintree:secret:v1",
+        });
+      }
+    );
   });
 
   // #10586: get must honor a key's manifest-declared scope rather than silently
