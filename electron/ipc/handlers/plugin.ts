@@ -1220,7 +1220,10 @@ async function handleProjectWelcomeSet(
     throw new AppError({ code: "VALIDATION", message: "welcome: sender has no project" });
   }
   if (!isWelcomeVersion(version)) {
-    throw new AppError({ code: "VALIDATION", message: "welcome: version must be a positive integer" });
+    throw new AppError({
+      code: "VALIDATION",
+      message: "welcome: version must be a positive integer",
+    });
   }
   if (!isProjectWelcomeStatus(status)) {
     throw new AppError({ code: "VALIDATION", message: "welcome: unknown status" });

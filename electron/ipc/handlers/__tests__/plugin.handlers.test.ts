@@ -3321,20 +3321,20 @@ describe("project-local plugin handlers", () => {
     );
 
     mockSetProjectWelcome.mockClear();
-    await expect(set({ sender: { id: 1 } }, "acme.ledger", "welcome", 0, "completed")).rejects.toThrow(
-      /positive integer/
-    );
-    await expect(set({ sender: { id: 1 } }, "acme.ledger", "welcome", 1, "started")).rejects.toThrow(
-      /unknown status/
-    );
+    await expect(
+      set({ sender: { id: 1 } }, "acme.ledger", "welcome", 0, "completed")
+    ).rejects.toThrow(/positive integer/);
+    await expect(
+      set({ sender: { id: 1 } }, "acme.ledger", "welcome", 1, "started")
+    ).rejects.toThrow(/unknown status/);
     await expect(set({ sender: { id: 1 } }, 3, "welcome", 1, "skipped")).rejects.toThrow(
       /must be strings/
     );
     mockGetProjectForWebContents.mockReturnValue(null);
     expect(await get({ sender: { id: 1 } }, "acme.ledger", "welcome")).toBeNull();
-    await expect(set({ sender: { id: 1 } }, "acme.ledger", "welcome", 1, "skipped")).rejects.toThrow(
-      /no project/
-    );
+    await expect(
+      set({ sender: { id: 1 } }, "acme.ledger", "welcome", 1, "skipped")
+    ).rejects.toThrow(/no project/);
     expect(mockSetProjectWelcome).not.toHaveBeenCalled();
   });
 

@@ -2827,7 +2827,7 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
           file: PLUGIN_SCHEMA,
           symbol: "getPluginManifestSchema superRefine (application_command_unknown)",
         },
-        { file: PROJECT_APPLICATION_WELCOME, symbol: "handOff" },
+        { file: PROJECT_APPLICATION_WELCOME, symbol: "syncHandoff" },
       ],
       note: "Must name one of the plugin's own commands of kind command; offered as a button once the welcome is answered, and run only on the user's click.",
     },
@@ -2867,7 +2867,10 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
       mode: "verbatim",
       consumers: [
         { file: PLUGIN_SCHEMA, symbol: "PluginApplicationTourRefSchema" },
-        { file: PROJECT_APPLICATION_WELCOME, symbol: "useProjectApplicationWelcome (record.version)" },
+        {
+          file: PROJECT_APPLICATION_WELCOME,
+          symbol: "useProjectApplicationWelcome (record.version)",
+        },
       ],
       note: "The welcome revision: an answer recorded under a lower one offers the welcome again. The tour's own playback and progress are unchanged.",
     },

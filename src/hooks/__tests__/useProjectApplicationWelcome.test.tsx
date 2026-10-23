@@ -59,7 +59,10 @@ import {
   useProjectLayoutSeedStore,
 } from "@/store/projectLayoutSeedStore";
 import { useProjectPluginStore } from "@/store/projectPluginStore";
-import { _resetProjectWelcomeStoreForTest, useProjectWelcomeStore } from "@/store/projectWelcomeStore";
+import {
+  _resetProjectWelcomeStoreForTest,
+  useProjectWelcomeStore,
+} from "@/store/projectWelcomeStore";
 import { useUIStore } from "@/store/uiStore";
 
 const INSTANCE = "project__p1__acme.ledger";
@@ -68,7 +71,12 @@ const TOUR_ID = `${INSTANCE}.welcome`;
 let stored: ProjectWelcomeRecord | null;
 const getProjectWelcome = vi.fn(async () => stored);
 const setProjectWelcome = vi.fn(
-  async (_owner: string, _tour: string, version: number, status: ProjectWelcomeRecord["status"]) => {
+  async (
+    _owner: string,
+    _tour: string,
+    version: number,
+    status: ProjectWelcomeRecord["status"]
+  ) => {
     stored = { version, status, at: 1 };
     return stored;
   }
@@ -87,6 +95,17 @@ function application(overrides: Partial<ProjectApplicationState> = {}): ProjectA
     },
     fallback: null,
     ...overrides,
+  };
+}
+
+function defaultLayout(): PluginLayoutConfig {
+  return {
+    id: `${INSTANCE}.workbench`,
+    pluginId: INSTANCE,
+    pluginName: "Ledger",
+    name: "Workbench",
+    entries: [],
+    projectDefault: true,
   };
 }
 
@@ -153,7 +172,11 @@ describe("useProjectApplicationWelcome (#14106)", () => {
   it("offers the welcome once the application is active, and only then", async () => {
     // Delayed trust: the application is disabled until the user trusts it.
     useProjectPluginStore.setState({
-      application: application({ status: "disabled", reason: "untrusted", fallback: "standard-workspace" }),
+      application: application({
+        status: "disabled",
+        reason: "untrusted",
+        fallback: "standard-workspace",
+      }),
     });
     renderHook(() => useProjectApplicationWelcome(true));
     await flush();
@@ -193,7 +216,7 @@ describe("useProjectApplicationWelcome (#14106)", () => {
   });
 
   it("waits for the first-open layout to be applied, or for its failure to be dealt with", async () => {
-    const layout = { id: "l", pluginId: INSTANCE, projectDefault: true } as PluginLayoutConfig;
+    const layout = defaultLayout();
     usePluginLayoutsStore.setState({ layouts: [layout] });
     useProjectLayoutSeedStore.setState({ status: "pending" });
     await mountActive();
@@ -212,7 +235,7 @@ describe("useProjectApplicationWelcome (#14106)", () => {
     expect(offer()?.tourId).toBe(TOUR_ID);
 
     // The plugin's default layout registers after its application went active.
-    const layout = { id: "l", pluginId: INSTANCE, projectDefault: true } as PluginLayoutConfig;
+    const layout = defaultLayout();
     act(() => {
       useProjectLayoutSeedStore.setState({ status: "offered" });
       usePluginLayoutsStore.setState({ layouts: [layout] });
@@ -243,7 +266,11 @@ describe("useProjectApplicationWelcome (#14106)", () => {
 
   it("offers nothing for an unavailable application, or until its tour registers", async () => {
     useProjectPluginStore.setState({
-      application: application({ status: "unavailable", reason: "load-failed", fallback: "standard-workspace" }),
+      application: application({
+        status: "unavailable",
+        reason: "load-failed",
+        fallback: "standard-workspace",
+      }),
     });
     renderHook(() => useProjectApplicationWelcome(true));
     await flush();
@@ -368,7 +395,11 @@ describe("useProjectApplicationWelcome (#14106)", () => {
 
   it("keeps the welcome on offer and says so when it can't start", async () => {
     await mountActive();
-    requestTour.mockResolvedValueOnce({ status: "unavailable", tourId: TOUR_ID, reason: "no-host" });
+    requestTour.mockResolvedValueOnce({
+      status: "unavailable",
+      tourId: TOUR_ID,
+      reason: "no-host",
+    });
     await act(() => startProjectWelcome());
 
     expect(requestTour).toHaveBeenCalledWith([TOUR_ID]);
@@ -392,7 +423,11 @@ describe("useProjectApplicationWelcome (#14106)", () => {
     await act(() => skipProjectWelcome());
     act(() =>
       useProjectPluginStore.setState({
-        application: application({ status: "replaced", heldBy: "x", fallback: "standard-workspace" }),
+        application: application({
+          status: "replaced",
+          heldBy: "x",
+          fallback: "standard-workspace",
+        }),
       })
     );
     expect(useProjectWelcomeStore.getState().handoff).toBeNull();

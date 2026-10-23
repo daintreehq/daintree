@@ -62,7 +62,14 @@ describe("projectLayoutSeeds (#13782)", () => {
   it("advances only from the status the caller saw", () => {
     captureProjectLayoutSeed(PROJECT_A, true, 1);
 
-    const first = advanceProjectLayoutSeed(PROJECT_A, "pending", "settled", "applied", undefined, 2);
+    const first = advanceProjectLayoutSeed(
+      PROJECT_A,
+      "pending",
+      "settled",
+      "applied",
+      undefined,
+      2
+    );
     const second = advanceProjectLayoutSeed(
       PROJECT_A,
       "pending",
@@ -184,12 +191,8 @@ describe("projectLayoutSeeds (#13782)", () => {
 
     it("needs a claimant to enter or leave applying", () => {
       captureProjectLayoutSeed(PROJECT_A, true, 1);
-      expect(() => advanceProjectLayoutSeed(PROJECT_A, "pending", "applying")).toThrow(
-        /claimant/
-      );
-      expect(() => advanceProjectLayoutSeed(PROJECT_A, "applying", "settled")).toThrow(
-        /claimant/
-      );
+      expect(() => advanceProjectLayoutSeed(PROJECT_A, "pending", "applying")).toThrow(/claimant/);
+      expect(() => advanceProjectLayoutSeed(PROJECT_A, "applying", "settled")).toThrow(/claimant/);
       expect(() =>
         advanceProjectLayoutSeed(PROJECT_A, "applying", "pending", undefined, VIEW_1)
       ).toThrow(/cannot move from applying to pending/);

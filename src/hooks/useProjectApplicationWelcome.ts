@@ -17,6 +17,7 @@ import { useProjectPluginStore } from "@/store/projectPluginStore";
 import { useProjectWelcomeStore, type ProjectWelcomeHandoff } from "@/store/projectWelcomeStore";
 import { useUIStore } from "@/store/uiStore";
 import { logWarn } from "@/utils/logger";
+import { safeFireAndForget } from "@/utils/safeFireAndForget";
 
 /** The active application's welcome, as the descriptor declares it. */
 interface DeclaredWelcome {
@@ -206,23 +207,28 @@ export function useProjectApplicationWelcome(enabled: boolean): void {
         tracked?.identity !== identity ||
         tracked.read !== read ||
         tracked.record === "answered";
-      void Promise.resolve()
-        .then(() => window.electron.plugin.getProjectWelcome(welcome.ownerId, welcome.localTourId))
-        .then(
-          (record) => {
-            if (stale() || tracked === null) return;
-            tracked.record =
-              record !== null && record.version >= welcome.version ? "answered" : "open";
-            evaluate();
-          },
-          (error: unknown) => {
-            // Unread is not unanswered: offering a welcome the user may have
-            // turned down is worse than not offering it this time. The next
-            // time the view comes on screen reads again.
-            if (!stale() && tracked !== null) tracked.record = "unread";
-            logWarn("[ProjectWelcome] Couldn't read the welcome record", { error });
-          }
-        );
+      safeFireAndForget(
+        Promise.resolve()
+          .then(() =>
+            window.electron.plugin.getProjectWelcome(welcome.ownerId, welcome.localTourId)
+          )
+          .then(
+            (record) => {
+              if (stale() || tracked === null) return;
+              tracked.record =
+                record !== null && record.version >= welcome.version ? "answered" : "open";
+              evaluate();
+            },
+            (error: unknown) => {
+              // Unread is not unanswered: offering a welcome the user may have
+              // turned down is worse than not offering it this time. The next
+              // time the view comes on screen reads again.
+              if (!stale() && tracked !== null) tracked.record = "unread";
+              logWarn("[ProjectWelcome] Couldn't read the welcome record", { error });
+            }
+          ),
+        { context: "Reading the project application's welcome record" }
+      );
     };
 
     /**
