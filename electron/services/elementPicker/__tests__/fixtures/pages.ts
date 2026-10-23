@@ -100,11 +100,10 @@ const LIT_CARD = "fixture-lit-card";
 
 /**
  * A Lit 3 element as it renders: an open shadow root with Lit's part markers
- * and a slot, the light-DOM content it projects, and the version arrays Lit's
- * packages push onto `globalThis`. The class is anonymous on purpose — a
+ * and a slot for its light-DOM content. The class is anonymous on purpose — a
  * minified build renames it, so nothing about it may reach an observation.
  */
-export function mountLitPage(): MountedPage {
+export function defineLitCard(): string {
   if (customElements.get(LIT_CARD) === undefined) {
     customElements.define(
       LIT_CARD,
@@ -119,6 +118,15 @@ export function mountLitPage(): MountedPage {
       }
     );
   }
+  return LIT_CARD;
+}
+
+/**
+ * The Lit element on a page of its own, with the content it projects and the
+ * version arrays Lit's packages push onto `globalThis`.
+ */
+export function mountLitPage(): MountedPage {
+  defineLitCard();
   document.body.innerHTML = `
     <main id="app">
       <${LIT_CARD} id="hero"><p class="projected">Slotted copy</p></${LIT_CARD}>

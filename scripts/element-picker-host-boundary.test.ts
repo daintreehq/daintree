@@ -162,6 +162,14 @@ describe("the Element Picker host boundary", () => {
     expect(reachable).toContain(`${RESOLVERS_DIR}react.ts`);
     expect(reachable.some(isJsParser)).toBe(true);
     expect(eager.filter(isJsParser)).toEqual([]);
+    // And every other framework the registry lists, each with what it parses with.
+    for (const framework of ["vue", "angular", "astro", "preact"]) {
+      expect(reachable).toContain(`${RESOLVERS_DIR}${framework}.ts`);
+    }
+    expect(reachable.some(isVueCompiler)).toBe(true);
+    expect(eager.filter(isVueCompiler)).toEqual([]);
+    expect(reachable.some(isJsxParser)).toBe(true);
+    expect(eager.filter(isJsxParser)).toEqual([]);
     // Bytes come from main; nothing the host runs can open a file or a socket itself.
     expect(authorityImports(metafile)).toEqual([]);
     // Project adapters walk directories, which is main's authority, never the host's.
@@ -173,7 +181,7 @@ describe("the Element Picker host boundary", () => {
   }, 60_000);
 
   it("keeps Vue's template parser behind the Vue resolver's first template check", async () => {
-    // Not in the registry until #13888 registers it, so held to the rule on its own graph.
+    // A step further than the registry's own: the resolver loads without it.
     const entry = `${RESOLVERS_DIR}vue.ts`;
     const metafile = await metafileOf(entry, NATIVE_EXTERNAL);
     const reachable = Object.keys(metafile.inputs);
@@ -203,7 +211,7 @@ describe("the Element Picker host boundary", () => {
     ).toEqual([]);
   }, 60_000);
 
-  it("holds Angular's resolver, which also waits on #13888, to the same rule", async () => {
+  it("brings nothing of Svelte's with Angular's resolver, nor any file or network access", async () => {
     const metafile = await metafileOf(`${RESOLVERS_DIR}angular.ts`, NATIVE_EXTERNAL);
     const reachable = Object.keys(metafile.inputs);
     expect(scanForbiddenModules(reachable)).toEqual([]);
@@ -213,8 +221,8 @@ describe("the Element Picker host boundary", () => {
     ).toEqual([]);
   }, 60_000);
 
-  it("holds a resolver the registry does not list yet to the same rule", async () => {
-    // Astro's waits for #13888 to register it, so the walk above cannot reach it.
+  it("brings nothing of Svelte's with Astro's resolver, nor any file or network access", async () => {
+    // The registry walk shares one graph between every resolver; this one's own shows what Astro's brings.
     const entry = `${RESOLVERS_DIR}astro.ts`;
     const metafile = await metafileOf(entry, NATIVE_EXTERNAL);
     const reachable = Object.keys(metafile.inputs);
@@ -226,8 +234,8 @@ describe("the Element Picker host boundary", () => {
     ).toEqual([]);
   }, 60_000);
 
-  it("holds Preact's resolver, which the registry does not list yet either, to the same rule", async () => {
-    // Its parser comes with it, to load when the registry first asks for it once #13888 lists it.
+  it("brings nothing of Svelte's with Preact's resolver, nor any file or network access", async () => {
+    // Its parser comes with it, loaded when the registry first asks for Preact.
     const entry = `${RESOLVERS_DIR}preact.ts`;
     const metafile = await metafileOf(entry, NATIVE_EXTERNAL);
     const reachable = Object.keys(metafile.inputs);

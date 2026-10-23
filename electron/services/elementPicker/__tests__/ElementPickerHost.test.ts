@@ -22,14 +22,15 @@ import {
   type ResolveResponse,
 } from "../../../../shared/elementPicker/resolver.js";
 import type { ResolverLoaders } from "../worker/runtime.js";
+import { RESOLVER_LOADERS } from "../worker/resolverRegistry.js";
 import type { ProjectAdapter, ProjectAdapterRegistration } from "../projectAdapters/types.js";
-import { astroResolver } from "../worker/resolvers/astro.js";
 import type { SourceChange } from "../sourceTracker.js";
 import { revisionOf, type SourceMapProvider } from "../sourceAccess.js";
 import { createSourceMapSymbolicator, symbolicatedResult } from "../worker/symbolication.js";
 import { COORDINATE_CONVENTIONS } from "../../../../shared/elementPicker/coordinates.js";
 import type { SourceCandidate } from "../../../../shared/elementPicker/source.js";
 import type { ResolutionResult } from "../../../../shared/elementPicker/resolution.js";
+import type { SelectionObservation } from "../../../../shared/elementPicker/observation.js";
 import {
   RuntimeChild,
   STUB_MARKER,
@@ -120,6 +121,154 @@ function results(response: ResolveResponse) {
   return response.outcomes.flatMap((outcome) => outcome.results);
 }
 
+/** Where `marker` starts in `source`: 1-based line and column, as each stamp below counts them. */
+function positionOf(source: string, marker: string) {
+  const offset = source.indexOf(marker);
+  if (offset < 0) throw new Error(`marker ${marker} not found`);
+  const before = source.slice(0, offset);
+  return {
+    columnUnit: "utf16" as const,
+    line: before.split("\n").length,
+    column: offset - before.lastIndexOf("\n"),
+  };
+}
+
+interface FrameworkApp {
+  /** Worktree-relative, as a result names it. */
+  path: string;
+  /** A change the dev server would hot-reload, leaving every claim where it was. */
+  edit: string;
+  select(elementId: string, candidateId: string): SelectionObservation;
+}
+
+/**
+ * An app for one of the frameworks the registry lists beyond Svelte and React:
+ * a file under `<worktree>/app`, and a selection shaped as that framework's
+ * extractor reports it, which the file bears out.
+ */
+function writeFrameworkApp(
+  framework: "vue" | "angular" | "astro" | "preact",
+  worktree: string
+): FrameworkApp {
+  const write = (appRelative: string, contents: string) => {
+    const file = path.join(worktree, "app", ...appRelative.split("/"));
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, contents);
+    return file;
+  };
+  switch (framework) {
+    case "vue": {
+      const source =
+        '<template>\n  <main>\n    <button class="cta">Go</button>\n  </main>\n</template>\n';
+      write("src/App.vue", source);
+      return {
+        path: "app/src/App.vue",
+        edit: "\n<style>\n.cta { color: red; }\n</style>\n",
+        select: (elementId, candidateId) => ({
+          ...observation(elementId, [
+            {
+              kind: "template-location",
+              candidateId,
+              framework,
+              extraction: { kind: "attribute", attribute: "data-v-inspector" },
+              file: "src/App.vue",
+              location: {
+                ...COORDINATE_CONVENTIONS.vueInspector,
+                ...positionOf(source, '<button class="cta"'),
+              },
+            },
+          ]),
+          tagName: "button",
+        }),
+      };
+    }
+    case "angular": {
+      write(
+        "src/app/button.component.ts",
+        'import { Component } from "@angular/core";\n\n@Component({ selector: "app-button", template: "<button>Go</button>" })\nexport class ButtonComponent {}\n'
+      );
+      return {
+        path: "app/src/app/button.component.ts",
+        edit: "\nexport const edited = true;\n",
+        select: (elementId, candidateId) => {
+          const selected = {
+            ...observation(
+              elementId,
+              [],
+              [
+                {
+                  kind: "file-hint",
+                  candidateId,
+                  framework,
+                  extraction: {
+                    kind: "runtime-field",
+                    field: "constructor.ɵcmp.debugInfo.filePath",
+                  },
+                  file: "src/app/button.component.ts",
+                },
+              ]
+            ),
+            tagName: "button",
+          };
+          // The compiled name is what the file is held to.
+          selected.componentChain.components[0]!.name = {
+            value: "ButtonComponent",
+            extraction: { kind: "runtime-field", field: "constructor.ɵcmp.debugInfo.className" },
+          };
+          return selected;
+        },
+      };
+    }
+    case "astro": {
+      const source = "<main>\n  <h1>Shop</h1>\n</main>\n";
+      const file = write("src/pages/index.astro", source);
+      return {
+        path: "app/src/pages/index.astro",
+        edit: "\n<style>\n  h1 { color: red; }\n</style>\n",
+        select: (elementId, candidateId) => ({
+          ...observation(elementId, [
+            {
+              kind: "template-location",
+              candidateId,
+              framework,
+              extraction: { kind: "attribute", attribute: "data-astro-source-loc" },
+              file,
+              // The compiler stamps an element with children at its first child.
+              location: { ...COORDINATE_CONVENTIONS.astroSourceLoc, ...positionOf(source, "Shop") },
+            },
+          ]),
+          tagName: "h1",
+        }),
+      };
+    }
+    case "preact": {
+      const source = 'export function Card() {\n  return <section class="card">Hi</section>;\n}\n';
+      const file = write("src/Card.tsx", source);
+      return {
+        path: "app/src/Card.tsx",
+        edit: "\nexport const edited = true;\n",
+        select: (elementId, candidateId) => ({
+          ...observation(elementId, [
+            {
+              kind: "element-creation",
+              candidateId,
+              framework,
+              extraction: { kind: "runtime-field", field: "__source" },
+              file,
+              location: {
+                lineBase: 1,
+                columnBase: 1,
+                ...positionOf(source, '<section class="card"'),
+              },
+            },
+          ]),
+          tagName: "section",
+        }),
+      };
+    }
+  }
+}
+
 describe("ElementPickerHost", () => {
   it("round-trips a stub resolver through the host, which reads the bytes main served", async () => {
     const { host, children } = harness();
@@ -170,7 +319,7 @@ describe("ElementPickerHost", () => {
         file,
         location: { lineBase: 1, columnBase: 1, columnUnit: "utf16", line, column },
       }) satisfies SourceCandidate;
-    const { host } = harness({ astro: async () => astroResolver });
+    const { host } = harness(RESOLVER_LOADERS);
     const id = await workspace(host);
     const ref = { workspaceId: id, path: "app/src/index.astro" };
 
@@ -209,6 +358,124 @@ describe("ElementPickerHost", () => {
         claim: "template-location",
         reason: "outside-workspace",
       },
+    ]);
+  });
+
+  it.each(["vue", "angular", "astro", "preact"] as const)(
+    "resolves a %s selection through the registry, follows it across an edit, and calls a result held from before it stale",
+    async (framework) => {
+      const changes: SourceChange[] = [];
+      const { host, watched } = harness(RESOLVER_LOADERS);
+      const id = await workspace(host, (change) => changes.push(change));
+      const app = writeFrameworkApp(framework, root);
+      const file = path.join(root, app.path);
+      const ref = { workspaceId: id, path: app.path };
+      const verifiedAt = (revision: string) => [
+        expect.objectContaining({
+          state: "verified",
+          candidateId: "c-1",
+          target: expect.objectContaining({ file: ref }),
+          fileRevision: revision,
+        }),
+      ];
+
+      const before = sha256(file);
+      expect(results(await host.resolve(request(id, [app.select("el-1", "c-1")])))).toEqual(
+        verifiedAt(before)
+      );
+
+      fs.appendFileSync(file, app.edit);
+      watched.get(path.dirname(file))!(file);
+      const after = sha256(file);
+      await vi.waitFor(() => expect(changes).toEqual([{ file: ref, revision: after }]));
+
+      // The view marks what it held stale itself and proves the selection
+      // again, holding nothing over: checked afresh against the edited bytes.
+      expect(results(await host.resolve(request(id, [app.select("el-1", "c-1")])))).toEqual(
+        verifiedAt(after)
+      );
+      // Asked about the earlier read instead, the resolver says it no longer holds.
+      expect(
+        results(
+          await host.resolve({
+            ...request(id, [app.select("el-1", "c-1")]),
+            knownRevisions: [{ file: ref, revision: before }],
+          })
+        )
+      ).toEqual([
+        expect.objectContaining({
+          state: "stale",
+          reason: "file-changed",
+          candidateId: "c-1",
+          currentFileRevision: after,
+        }),
+      ]);
+    }
+  );
+
+  it("resolves an Astro page and its Vue and Preact islands in one request, each by its own resolver", async () => {
+    const { host, children } = harness(RESOLVER_LOADERS);
+    const id = await workspace(host);
+    const page = writeFrameworkApp("astro", root);
+    const vue = writeFrameworkApp("vue", root);
+    const preact = writeFrameworkApp("preact", root);
+
+    const response = await host.resolve(
+      request(id, [
+        page.select("el-page", "c-page"),
+        vue.select("el-vue", "c-vue"),
+        preact.select("el-preact", "c-preact"),
+      ])
+    );
+
+    expect(children).toHaveLength(1);
+    expect(
+      results(response).map((result) => [
+        result.candidateId,
+        result.state,
+        result.state === "verified" ? result.target.file.path : null,
+      ])
+    ).toEqual([
+      ["c-page", "verified", page.path],
+      ["c-vue", "verified", vue.path],
+      ["c-preact", "verified", preact.path],
+    ]);
+  });
+
+  it("serves several worktrees at once from one host, each on its own framework and held to its own files", async () => {
+    const { host, children } = harness(RESOLVER_LOADERS);
+    const trees: Array<{ worktree: string; app: FrameworkApp; id: string }> = [];
+    for (const framework of ["vue", "astro", "preact"] as const) {
+      const worktree = path.join(root, `tree-${framework}`);
+      const app = writeFrameworkApp(framework, worktree);
+      const id = await host.registerWorkspace({
+        worktreePath: worktree,
+        appRoot: path.join(worktree, "app"),
+        onSourceChanged: () => {},
+      });
+      trees.push({ worktree, app, id });
+    }
+
+    const responses = await Promise.all(
+      trees.map(({ app, id }) => host.resolve(request(id, [app.select("el-1", "c-1")])))
+    );
+
+    expect(children).toHaveLength(1);
+    expect(responses.map(results)).toEqual(
+      trees.map(({ worktree, app, id }) => [
+        expect.objectContaining({
+          state: "verified",
+          target: expect.objectContaining({ file: { workspaceId: id, path: app.path } }),
+          fileRevision: sha256(path.join(worktree, app.path)),
+        }),
+      ])
+    );
+
+    // One tree's selection naming another tree's file reads nothing of it.
+    const [vue, astro] = trees;
+    const crossed = await host.resolve(request(vue!.id, [astro!.app.select("el-2", "c-2")]));
+    expect(results(crossed)).toEqual([
+      expect.objectContaining({ state: "unavailable", reason: "outside-workspace" }),
     ]);
   });
 

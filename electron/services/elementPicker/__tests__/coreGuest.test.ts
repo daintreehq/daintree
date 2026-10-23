@@ -265,7 +265,7 @@ describe("CoreGuest", () => {
   });
 
   it.each([
-    ["the build ships no reader for it", { framework: "angular" }, "unavailable"],
+    ["the catalog lists no reader for it", { framework: "angular" }, "unavailable"],
     ["its reader fails to install", { extractorStatus: EXTRACTOR_INSTALL_STATUS.threw }, "failed"],
   ] as const)("tells the picker when %s", async (_label, overrides, expected) => {
     const framework = "framework" in overrides ? overrides.framework : "svelte";
@@ -365,7 +365,7 @@ describe("CoreGuest", () => {
     expect(h.emitted).toEqual([]);
   });
 
-  it("leaves a framework the build ships no extractor for detected and uninstalled, silently", async () => {
+  it("leaves a framework the catalog lists no extractor for detected and uninstalled, silently", async () => {
     const h = harness();
     await h.install();
     h.guest.onGuestEvent(0, {

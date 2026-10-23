@@ -1,7 +1,7 @@
 /// <reference lib="dom" />
 /**
- * The Astro extractor asset. Not in the shipped catalog yet: #13888 lists it
- * with the other wave-three frameworks, and until then only tests build it.
+ * The Astro extractor asset: built by `scripts/build-main.mjs` and installed
+ * into a document's main world once a detection names Astro.
  */
 
 import { astroExtractor } from "../astroExtractor.js";

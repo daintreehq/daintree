@@ -4,7 +4,7 @@
  *
  * `scripts/build-main.mjs` bundles each entry to `dist-electron/<CORE_GUEST_ASSET_DIR>/<file>`
  * (its `CORE_PICKER_GUEST_ASSETS` restates this list, and
- * `__tests__/guestAssets.test.ts` pins the two together), and the loader below
+ * `scripts/__tests__/core-picker-assets.test.mjs` pins the two together), and the loader below
  * reads them back on demand. A page can only name a framework from the shared
  * enum; whether that unlocks anything is this table's answer, so a framework
  * the app has no extractor for yet stays detected and uninstalled.
@@ -27,6 +27,10 @@ export const CORE_GUEST_ASSET_FILES: Readonly<Partial<Record<CoreGuestAssetId, s
   "extractor:svelte": "extractors/svelte.js",
   "extractor:react": "extractors/react.js",
   "extractor:solid": "extractors/solid.js",
+  "extractor:vue": "extractors/vue.js",
+  "extractor:angular": "extractors/angular.js",
+  "extractor:astro": "extractors/astro.js",
+  "extractor:preact": "extractors/preact.js",
 };
 
 /** Same ceiling as a plugin guest adapter's body. */
