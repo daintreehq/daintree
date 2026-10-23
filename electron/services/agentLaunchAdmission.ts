@@ -6,7 +6,6 @@ import type {
   AgentLaunchAdmission,
   AgentLaunchObservation,
 } from "../../shared/types/agentLaunchAdmission.js";
-import { parseCgroupBytes, parseProcSelfCgroup } from "../remote/metrics/parsers.js";
 import { getPtyClient } from "../window/serviceRefs.js";
 import { checkKernelPressureCritical } from "./SystemMemoryPressureMonitor.js";
 
@@ -164,7 +163,7 @@ export async function readEffectiveMemoryTotalBytes(
   const machine = totalmem();
   let total = Number.isFinite(machine) && machine > 0 ? machine : null;
   if (platform !== "linux") return total;
-  const segments = parseProcSelfCgroup(await readText("/proc/self/cgroup"));
+  const segments = cgroupV2Segments(await readText("/proc/self/cgroup"));
   if (!segments) return total;
   // The mount root too: a container's own limit sits there when it is all one cgroup.
   const limits = await Promise.all(
@@ -173,10 +172,37 @@ export async function readEffectiveMemoryTotalBytes(
     )
   );
   for (const text of limits) {
-    const limit = parseCgroupBytes(text);
+    const limit = cgroupMemoryLimit(text);
     if (limit !== null && limit > 0 && (total === null || limit < total)) total = limit;
   }
   return total;
+}
+
+/**
+ * The cgroup v2 path in `/proc/self/cgroup` as its segments, empty for the
+ * mount root; null without a v2 entry, or for a path we won't follow. Kept
+ * here rather than shared with the remote metrics, which a build without
+ * Remote Hosts leaves out.
+ */
+function cgroupV2Segments(text: string | null): string[] | null {
+  if (text === null) return null;
+  for (const line of text.split("\n")) {
+    if (!line.startsWith("0::")) continue;
+    const cgroupPath = line.slice(3).replace(/ \(deleted\)$/, "");
+    if (!cgroupPath.startsWith("/")) return null;
+    const segments = cgroupPath.split("/").filter((segment) => segment.length > 0);
+    if (segments.some((segment) => segment === "." || segment === "..")) return null;
+    return segments;
+  }
+  return null;
+}
+
+/** A cgroup v2 `memory.max`: null for "max" (no limit) or anything unreadable. */
+function cgroupMemoryLimit(text: string | null): number | null {
+  const trimmed = text?.trim() ?? "";
+  if (!/^\d+$/.test(trimmed)) return null;
+  const value = Number(trimmed);
+  return Number.isFinite(value) ? value : null;
 }
 
 async function readTextOrNull(file: string): Promise<string | null> {
