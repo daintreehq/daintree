@@ -1106,7 +1106,15 @@ export function sampleCachedViewMemory(host: ProjectViewManager): void {
 export function maybeEvictUnderPressure(host: ProjectViewManager): void {
   const scope = cacheScope(host);
   const leader = scope.find((pvm) => pvm.memoryPressurePolicy != null) ?? host;
-  if (leader !== host) return;
+  if (leader !== host) {
+    // Only the leader holds an episode. A window that led earlier would
+    // otherwise resume one it never saw recover, latch included.
+    host.pressureSampleStreak = 0;
+    host.lastPressureOverrideLog = null;
+    host.lastEvictionSkippedLog = null;
+    clearSoftPressureBackoff(host);
+    return;
+  }
   // Whether any window holds a view beyond the one it shows — the leader's own
   // cache may be down to its current view while another window's is not.
   const hasCachedViews = scope.some((pvm) => pvm.views.size > 1);

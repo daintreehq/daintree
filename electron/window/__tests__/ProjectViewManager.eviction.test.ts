@@ -5403,6 +5403,24 @@ describe("ProjectViewManager — cap across windows (#14218)", () => {
     expect(ids(b)).toEqual(["b2"]);
   });
 
+  it("drops a demoted leader's pressure episode, backoff included", async () => {
+    stubSystemMemoryInfo({ free: 1100 * 1024, purgeable: 0, total: 8 * 1024 * 1024 });
+    const a = await openWindow("a1");
+    const b = await openWindow("b1");
+    await show(b, "b2");
+    b.setMemoryPressurePolicy({ criticalMb: 1024, warningMb: 3072 });
+    b.pressureSampleStreak = 1;
+    b.softPressureUnproductivePasses = 2;
+    b.softPressureBackoffLatched = true;
+
+    a.setMemoryPressurePolicy({ criticalMb: 1024, warningMb: 3072 });
+    b.maybeEvictUnderPressure();
+
+    expect(b.pressureSampleStreak).toBe(0);
+    expect(b.softPressureUnproductivePasses).toBe(0);
+    expect(b.softPressureBackoffLatched).toBe(false);
+  });
+
   it("hands pressure leadership to the next window when the leader closes", async () => {
     // Just inside the soft band, where its target is the current view alone.
     stubSystemMemoryInfo({ free: 1100 * 1024, purgeable: 0, total: 8 * 1024 * 1024 });
