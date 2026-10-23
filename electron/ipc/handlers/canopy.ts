@@ -67,7 +67,6 @@ import { AppError } from "../../utils/errorTypes.js";
 import type { AgentDirectorySubject } from "../../../shared/types/agentDirectory.js";
 import { resolveLiveAssistant } from "../../services/assistants/liveAssistantSubject.js";
 import { LOCAL_HOST_ID } from "../../../shared/types/remoteHosts.js";
-import { peekGlobalAssistantService } from "../../services/globalAssistant.js";
 import { answerRunByLabel, isAnswerLabel } from "../../services/terminalAnswer.js";
 import { isCanopyViewerEndpointId } from "../endpoint.js";
 import { terminalAnswerOf } from "../../../shared/utils/terminalSubmission.js";
@@ -866,7 +865,10 @@ function assertViewsThisMachine(ctx: IpcContext): void {
 
 /** Where main holds the assistants a person can view; read at the moment of use. */
 async function liveAssistantSources() {
-  const { helpSessionService } = await import("../../services/HelpSessionService.js");
+  const [{ helpSessionService }, { peekGlobalAssistantService }] = await Promise.all([
+    import("../../services/HelpSessionService.js"),
+    import("../../services/globalAssistant.js"),
+  ]);
   const global = peekGlobalAssistantService();
   return {
     hostId: LOCAL_HOST_ID,
