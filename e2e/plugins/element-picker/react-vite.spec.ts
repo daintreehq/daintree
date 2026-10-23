@@ -10,6 +10,7 @@ import {
 } from "../helpers/frameworks/reactVite";
 import {
   expectComponentSelected,
+  expectComponentsNamed,
   expectNotTraced,
   registerFixtureProject,
   registerPickerSession,
@@ -63,6 +64,9 @@ test.describe.serial("Element Picker on a React + Vite dev server without source
   test("a heading is selected but not traced to source", async () => {
     const ctx = session();
     await selectInPreview(ctx, "h1", "h1");
+    // React read the element — its components are named — before the verdict
+    // counts: a pick ahead of the extractor is untraced for want of asking.
+    await expectComponentsNamed(ctx.window, "App");
     await expectNotTraced(ctx.window, APP_FILE);
     // A dev build that lost its maps is not a production build.
     await expect(selectedElement(ctx.window)).not.toContainText("production build");
@@ -83,6 +87,8 @@ test.describe.serial("Element Picker on a React + Vite production build", () => 
   test("a heading is selected but not traced to source", async () => {
     const ctx = session();
     await selectInPreview(ctx, "h1", "h1");
+    // A production build still names its components, minified.
+    await expectComponentsNamed(ctx.window);
     await expectNotTraced(ctx.window, APP_FILE);
   });
 });

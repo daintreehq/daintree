@@ -113,8 +113,11 @@ export function registerPickerSession(options: PickerSessionOptions) {
 
 /**
  * The picker said it couldn't place the selected element and named no file in
- * its place. The identity block renders only once the host has answered, so
- * this reads a settled verdict, never one still being worked out.
+ * its place. A pick the page traced shows its identity block only once the host
+ * has answered, but one the page reported nothing about is shown untraced at
+ * once — including a pick that landed before the framework's extractor was
+ * installed — so where the framework names components, prove it reported
+ * first with `expectComponentsNamed`.
  */
 export async function expectNotTraced(page: Page, sourceFile: string): Promise<void> {
   const identity = selectedElement(page);
@@ -122,6 +125,17 @@ export async function expectNotTraced(page: Page, sourceFile: string): Promise<v
   await expect(identity.getByRole("button", { name: "Copy path" })).toHaveCount(0);
   await expect(identity.getByRole("button", { name: "Open in editor" })).toHaveCount(0);
   await expect(identity).not.toContainText(sourceFile);
+}
+
+/**
+ * The page's framework reported on the selection: the trail names the
+ * components around it. The extractor installing re-sends the selection, so
+ * this waits for that answer rather than taking the first one.
+ */
+export async function expectComponentsNamed(page: Page, name?: string): Promise<void> {
+  const trail = selectedElement(page).getByRole("navigation", { name: "Breadcrumb" });
+  await expect(trail).toBeVisible({ timeout: 30_000 });
+  if (name) await expect(trail).toContainText(name);
 }
 
 /** The strip's state once a component, not an element, is the selection. */
