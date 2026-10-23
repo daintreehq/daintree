@@ -16,6 +16,7 @@ import {
 import { persistedPluginViewConsent } from "./pluginViewConsent.js";
 import { PluginViewGate, type PluginViewQuestion } from "./pluginViewGate.js";
 import { defaultHostName, installPluginShellRequests } from "./shellRequests.js";
+import { installAccountSignInRequests } from "./accountSignIn.js";
 
 declare module "../runtime.js" {
   interface RemoteServices {
@@ -84,8 +85,9 @@ export function revokePluginViewDecisions(hostId: HostId, pluginId?: string): vo
 
 /**
  * Shell side: answer host plugins' prompts, consent and clipboard requests for
- * the views that drive their projects, and load their view bundles from the
- * host. Returns a teardown.
+ * the views that drive their projects, run the browser half of the account
+ * sign-ins views here start, and load their view bundles from the host.
+ * Returns a teardown.
  */
 export function installPluginClient(
   feed: PluginEndpointFeed,
@@ -100,6 +102,7 @@ export function installPluginClient(
       onEndpointOpened: feed.onEndpointOpened,
       onEndpointClosed: feed.onEndpointClosed,
     }),
+    installAccountSignInRequests(),
     feed.onEndpointOpened((hostId, info) => assets.noteEndpointOpened(hostId, info)),
     feed.onEndpointClosed((hostId, info) => assets.noteEndpointClosed(hostId, info)),
     setRemotePluginAssetProxy(assets.proxy),

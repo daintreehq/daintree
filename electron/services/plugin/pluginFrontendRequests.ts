@@ -47,6 +47,12 @@ export const PluginFrontendMethod = {
   AGENTS_LIST: "plugin.agents-list",
   /** `host.reloadPanel()`: reload one plugin panel in the driving view; answers a result or a rejection. */
   PANEL_RELOAD: "plugin.panel-reload",
+  /**
+   * An account sign-in a remote window started: open the authorization URL in
+   * that machine's browser and catch the redirect on its loopback. Asked of
+   * the view that clicked Connect, never the project's driver.
+   */
+  ACCOUNT_SIGN_IN: "plugin.account-sign-in",
 } as const;
 
 /** A remote clipboard image must fit one link frame with room to spare. */
@@ -258,6 +264,35 @@ export const PluginClipboardPayloadSchema = z.discriminatedUnion("op", [
   z.object({ op: z.literal("readText"), pluginId }),
 ]);
 export type PluginClipboardPayload = z.infer<typeof PluginClipboardPayloadSchema>;
+
+/**
+ * A sign-in the host runs for a remote window. `signInId` is the id the
+ * window's Shell gave this click, and `connectionId` the connection it asked
+ * for (null when it named none), so the Shell can match the request to the
+ * click it is answering. The URL carries no `redirect_uri`: the Shell adds its
+ * own loopback.
+ */
+export const PluginAccountSignInPayloadSchema = z.object({
+  signInId: z.string().min(1).max(128),
+  pluginId,
+  connectionId: z.string().min(1).max(256).nullable(),
+  authUrl: z.string().min(1).max(8192),
+});
+export type PluginAccountSignInPayload = z.infer<typeof PluginAccountSignInPayloadSchema>;
+
+/** How the Shell's loopback ended. The code is the provider's one-use authorization code. */
+export const PluginAccountSignInAnswerSchema = z.discriminatedUnion("success", [
+  z.object({
+    success: z.literal(true),
+    code: z.string().min(1).max(4096),
+    redirectUri: z.string().min(1).max(256),
+  }),
+  z.object({
+    success: z.literal(false),
+    cause: z.enum(["cancelled", "timed-out", "server-error", "open-external-failed", "denied"]),
+    error: z.string().max(256).optional(),
+  }),
+]);
 
 /**
  * The value a Shell answered a prompt with, re-derived from what the host

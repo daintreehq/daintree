@@ -204,7 +204,7 @@ import { PluginRendererDispatcher } from "./plugin/PluginRendererDispatcher.js";
 import { PluginPanelReloadDispatcher } from "./plugin/PluginPanelReloadDispatcher.js";
 import { PluginUIPromptDispatcher } from "./plugin/PluginUIPromptDispatcher.js";
 import { PluginSettingsManager } from "./plugin/PluginSettingsManager.js";
-import { PluginAccountService } from "./plugin/PluginAccountService.js";
+import { PluginAccountService, type AccountSignInBroker } from "./plugin/PluginAccountService.js";
 import { pluginAccountBindings } from "./plugin/pluginAccountBindings.js";
 import { pluginDeclaresConnections } from "../../shared/utils/pluginConnections.js";
 import { PluginStorageManager } from "./plugin/PluginStorageManager.js";
@@ -9586,9 +9586,10 @@ export class PluginService {
 
   connectAccountFromUi(
     pluginId: string,
-    connectionId?: string
+    connectionId?: string,
+    broker?: AccountSignInBroker
   ): Promise<PluginAccountConnectResult> {
-    return this.accounts.connect(pluginId, connectionId);
+    return this.accounts.connect(pluginId, connectionId, broker);
   }
 
   cancelAccountConnectFromUi(pluginId: string, connectionId?: string): void {

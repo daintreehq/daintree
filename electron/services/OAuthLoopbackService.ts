@@ -12,10 +12,10 @@ import { canOpenExternalUrl, openExternalUrl } from "../utils/openExternal.js";
 
 export { looksLikeOAuthUrl } from "../../shared/utils/urlUtils.js";
 export type { OAuthLoopbackResult } from "../../shared/types/oauth.js";
-import type { OAuthLoopbackResult } from "../../shared/types/oauth.js";
+import { OAUTH_LOOPBACK_TIMEOUT_MS, type OAuthLoopbackResult } from "../../shared/types/oauth.js";
 
 const CALLBACK_PATH = "/oauth/callback";
-const TIMEOUT_MS = 300_000; // 5 minutes
+const TIMEOUT_MS = OAUTH_LOOPBACK_TIMEOUT_MS;
 const LOOPBACK_BASE = "http://127.0.0.1";
 
 function escapeHtml(str: string): string {
@@ -289,7 +289,9 @@ export function startOAuthLoopback(authUrl: string, panelId: string): Promise<OA
 export type AuthorizationCodeLoopbackResult =
   | { success: true; code: string; redirectUri: string }
   | { success: false; cause: "denied"; error: string }
-  | { success: false; cause: OAuthLoopbackFailureCause };
+  | { success: false; cause: OAuthLoopbackFailureCause }
+  /** The window on another machine that was catching the redirect went away. */
+  | { success: false; cause: "disconnected" };
 
 type OAuthLoopbackFailureCause = Extract<OAuthLoopbackResult, { success: false }>["cause"];
 

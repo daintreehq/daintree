@@ -43,6 +43,9 @@ const mockDismissPluginTask = vi.fn((_pluginId: string, _taskId: string) => true
 const mockListPluginRuntimeStatuses = vi.fn();
 const mockGetDataBackupSource = vi.fn();
 const mockIsRemoteUnsupported = vi.fn<(pluginId: string) => boolean>();
+const mockConnectAccountFromUi = vi.fn();
+const mockSetAccountTokenFromUi = vi.fn();
+const mockCancelAccountConnectFromUi = vi.fn();
 const mockResolveActiveWorktreeIdForProject =
   vi.fn<(projectId: string) => Promise<string | null>>();
 
@@ -193,6 +196,9 @@ vi.mock("../../../services/PluginService.js", () => ({
     getDataBackupSource: (...args: unknown[]) => mockGetDataBackupSource(...args),
     metrics: { recordInvoke: (...args: unknown[]) => mockMetricsRecordInvoke(...args) },
     isRemoteUnsupported: (pluginId: string) => mockIsRemoteUnsupported(pluginId),
+    connectAccountFromUi: (...args: unknown[]) => mockConnectAccountFromUi(...args),
+    setAccountTokenFromUi: (...args: unknown[]) => mockSetAccountTokenFromUi(...args),
+    cancelAccountConnectFromUi: (...args: unknown[]) => mockCancelAccountConnectFromUi(...args),
     getPluginDisplayName: (pluginId: string) =>
       pluginId === "acme.tools" ? "Acme Tools" : pluginId.split("__").at(-1),
   },
@@ -3999,6 +4005,173 @@ describe("plugin:invoke over the link", () => {
       pluginId: "acme.local-only",
       reason: { kind: "remote-unsupported" },
     });
+  });
+});
+
+describe("plugin account sign-in from a window on another machine (#14111)", () => {
+  const PROJECT = "c".repeat(64);
+  const SHELL_REDIRECT = "http://127.0.0.1:50001/oauth/callback";
+  const client = {
+    clientId: "client-greg-mbp",
+    clientName: "greg-mbp",
+    platform: "darwin" as const,
+    kind: "remote" as const,
+  };
+
+  function remoteEndpoint() {
+    return {
+      endpointId: "s1:ep-1",
+      clientId: client.clientId,
+      projectId: PROJECT,
+      kind: "remote-view" as const,
+      handle: -7,
+      send: vi.fn(),
+      request: vi.fn(),
+      onClose: () => ({ dispose: () => {} }),
+      isClosed: () => false,
+    };
+  }
+
+  type Broker = {
+    start: (
+      key: string,
+      state: string,
+      build: (redirectUri: string | null) => string
+    ) => Promise<unknown>;
+  };
+
+  beforeEach(() => {
+    _resetIpcDispatcherForTesting();
+    getIpcDispatcher().setInvokeEnveloper(async (_channel, _args, call) => {
+      try {
+        return wrapSuccess(await call());
+      } catch (error) {
+        return wrapError(error);
+      }
+    });
+    mockConnectAccountFromUi.mockReset();
+    mockSetAccountTokenFromUi.mockReset();
+  });
+
+  afterEach(() => {
+    _resetIpcDispatcherForTesting();
+  });
+
+  it("asks the calling window's own Shell to run the browser, and signs in here", async () => {
+    registerPluginHandlers();
+    getIpcDispatcher().allowHybridOverLink("plugin:account-connect");
+    const endpoint = remoteEndpoint();
+    endpoint.request.mockResolvedValue({
+      success: true,
+      code: "synthetic-code",
+      redirectUri: SHELL_REDIRECT,
+    });
+    let caught: unknown;
+    mockConnectAccountFromUi.mockImplementation(
+      async (_pluginId: string, _connectionId: string, broker: Broker) => {
+        caught = await broker.start("session", "synthetic-state", (redirectUri) =>
+          redirectUri === null
+            ? "https://auth.example.com/authorize?state=synthetic-state"
+            : "unexpected"
+        );
+        return { status: "cancelled" };
+      }
+    );
+
+    const envelope = await getIpcDispatcher().invokeForEndpoint(
+      { endpoint, client },
+      "plugin:account-connect",
+      ["acme.tracker", "work", "click-1"]
+    );
+
+    expect(envelope).toMatchObject({ ok: true, data: { status: "cancelled" } });
+    expect(mockConnectAccountFromUi).toHaveBeenCalledWith(
+      "acme.tracker",
+      "work",
+      expect.objectContaining({ start: expect.any(Function), cancel: expect.any(Function) })
+    );
+    expect(endpoint.request).toHaveBeenCalledWith(
+      "plugin.account-sign-in",
+      {
+        signInId: "click-1",
+        pluginId: "acme.tracker",
+        connectionId: "work",
+        authUrl: "https://auth.example.com/authorize?state=synthetic-state",
+      },
+      expect.objectContaining({ timeoutMs: expect.any(Number), signal: expect.anything() })
+    );
+    expect(caught).toEqual({ success: true, code: "synthetic-code", redirectUri: SHELL_REDIRECT });
+  });
+
+  it("refuses a sign-in from another machine that names no click", async () => {
+    registerPluginHandlers();
+    getIpcDispatcher().allowHybridOverLink("plugin:account-connect");
+    const endpoint = remoteEndpoint();
+    for (const args of [
+      ["acme.tracker", "work"],
+      ["acme.tracker", "work", ""],
+      ["acme.tracker", "work", 7],
+    ]) {
+      const envelope = await getIpcDispatcher().invokeForEndpoint(
+        { endpoint, client },
+        "plugin:account-connect",
+        args
+      );
+      expect(envelope.ok).toBe(false);
+    }
+    expect(mockConnectAccountFromUi).not.toHaveBeenCalled();
+    expect(endpoint.request).not.toHaveBeenCalled();
+  });
+
+  it("refuses another project's plugin by the window's own binding", async () => {
+    registerPluginHandlers();
+    getIpcDispatcher().allowHybridOverLink("plugin:account-connect");
+    const endpoint = remoteEndpoint();
+    const envelope = await getIpcDispatcher().invokeForEndpoint(
+      { endpoint, client },
+      "plugin:account-connect",
+      [`project__${"d".repeat(64)}__acme.tracker`, undefined, "click-1"]
+    );
+    expect(envelope.ok).toBe(false);
+    expect(mockConnectAccountFromUi).not.toHaveBeenCalled();
+    expect(endpoint.request).not.toHaveBeenCalled();
+  });
+
+  it("keeps a token pasted on another machine in this host's keychain", async () => {
+    registerPluginHandlers();
+    mockSetAccountTokenFromUi.mockResolvedValue({ connected: true });
+    const envelope = await getIpcDispatcher().invokeForEndpoint(
+      { endpoint: remoteEndpoint(), client },
+      "plugin:account-set-token",
+      ["acme.tracker", "synthetic-token", "work"]
+    );
+    expect(envelope).toMatchObject({ ok: true, data: { connected: true } });
+    expect(mockSetAccountTokenFromUi).toHaveBeenCalledWith(
+      "acme.tracker",
+      "synthetic-token",
+      "work"
+    );
+  });
+
+  it("lets a window on another machine cancel its sign-in on the host", async () => {
+    registerPluginHandlers();
+    const envelope = await getIpcDispatcher().invokeForEndpoint(
+      { endpoint: remoteEndpoint(), client },
+      "plugin:account-cancel-connect",
+      ["acme.tracker", "work"]
+    );
+    expect(envelope.ok).toBe(true);
+    expect(mockCancelAccountConnectFromUi).toHaveBeenCalledWith("acme.tracker", "work");
+  });
+
+  it("signs a window on this machine in with this machine's own loopback", async () => {
+    registerPluginHandlers();
+    mockConnectAccountFromUi.mockResolvedValue({ status: "cancelled" });
+    const connect = mockIpcMainHandle.mock.calls.find(
+      (c: unknown[]) => c[0] === "plugin:account-connect"
+    )![1] as (...args: unknown[]) => Promise<unknown>;
+    await connect({ sender: { id: 1 } }, "acme.tracker");
+    expect(mockConnectAccountFromUi).toHaveBeenCalledWith("acme.tracker", undefined, undefined);
   });
 });
 

@@ -44,6 +44,7 @@ import { getRemoteService } from "../runtime.js";
 import { mergeByOwnership, splitByOwnership } from "./fieldOwnership.js";
 import { notificationSettingsGet, notificationSettingsSet } from "./notificationSettings.js";
 import { sshTargetOf } from "../client/connection.js";
+import { expectAccountSignIn } from "../plugins/accountSignIn.js";
 import { wslUncPath } from "../../../shared/utils/wslPath.js";
 
 type SplitCall = Parameters<HybridSplit>[0];
@@ -77,6 +78,36 @@ function refuse(userMessage: (host: string) => string): HybridSplit {
 
 const localOnly: HybridSplit = ({ local }) => local();
 const remoteOnly: HybridSplit = ({ remote }) => remote();
+
+/**
+ * A plugin account sign-in from a remote window runs on the host, which asks
+ * this Shell to open the browser here and catch the redirect on this
+ * machine's loopback. That request is answered only while this call is in
+ * flight, and its loopback comes down when the call settles however it ends:
+ * signed in, cancelled, superseded or a dropped link.
+ */
+const pluginAccountConnect: HybridSplit = async ({ hostId, webContentsId, args, remote }) => {
+  const [pluginId, connectionId] = args;
+  if (
+    typeof pluginId !== "string" ||
+    (connectionId !== undefined && typeof connectionId !== "string")
+  ) {
+    // The host refuses it; nothing here is waited on.
+    return remote();
+  }
+  const { signInId, release } = expectAccountSignIn(
+    hostId,
+    webContentsId,
+    pluginId,
+    connectionId ?? null
+  );
+  try {
+    // The id rides along so the host's request names this click and no other.
+    return await remote(undefined, [pluginId, connectionId, signInId]);
+  } finally {
+    release();
+  }
+};
 
 /** The Shell half of a hydrate merged over the host's answer. */
 function mergeHydrate(host: HydrateResult): HydrateResult {
@@ -504,6 +535,7 @@ export const HYBRID_SPLITS: Readonly<Record<string, HybridSplit>> = {
   [CHANNELS.FORGE_AUDIT_EXPORT_LOG]: localOnly,
   [CHANNELS.PLUGIN_EXPORT_AUDIT_LOG]: localOnly,
   [CHANNELS.ARTIFACT_SAVE_TO_FILE]: artifactSaveToFile,
+  [CHANNELS.PLUGIN_ACCOUNT_CONNECT]: pluginAccountConnect,
   [CHANNELS.FORGE_OPEN_PR]: openForgePage,
   [CHANNELS.FORGE_OPEN_PRS]: openForgePage,
   [CHANNELS.FORGE_OPEN_ISSUE]: openForgePage,
@@ -572,6 +604,8 @@ export const HYBRID_HOST_LEGS: readonly string[] = [
   CHANNELS.NOTIFICATION_SETTINGS_SET,
   CHANNELS.NOTIFICATION_SYNC_WATCHED,
   CHANNELS.NOTIFICATION_SESSION_MUTE_SET,
+  // The sign-in runs on the host; its browser half is asked back of the calling Shell.
+  CHANNELS.PLUGIN_ACCOUNT_CONNECT,
   // Answer a remote caller with the page's URL, for its Shell to open.
   CHANNELS.FORGE_OPEN_PR,
   CHANNELS.FORGE_OPEN_PRS,

@@ -2352,7 +2352,7 @@ export interface GeneratedIpcInvokeMap {
     result: void;
   };
   "plugin:account-connect": {
-    args: [pluginId: string, connectionId?: string | undefined];
+    args: [pluginId: string, connectionId?: string | undefined, signInId?: string | undefined];
     result: import("../plugin.js").PluginAccountConnectResult;
   };
   "plugin:account-disconnect": {
