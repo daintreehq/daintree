@@ -324,6 +324,8 @@ interface OperationRow {
   submitted_at: number | null;
   cancel_requested_at: number | null;
   cancel_sent_at: number | null;
+  /** The last cancel call failed: the next one waits out its backoff. */
+  cancel_failed_at: number | null;
   created_at: number;
   updated_at: number;
 }
@@ -355,6 +357,7 @@ const MIGRATIONS = [
     submitted_at INTEGER,
     cancel_requested_at INTEGER,
     cancel_sent_at INTEGER,
+    cancel_failed_at INTEGER,
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL
   );
@@ -378,6 +381,8 @@ const DEFAULT_CALL_TIMEOUT_MS = 30_000;
 const TASK_START_RETRY_MS = 5_000;
 
 class StoppedError extends Error {}
+/** The operation's deadline passed before the call could be made. */
+class DeadlineError extends Error {}
 class CallTimeoutError extends Error {}
 
 const invalidResponse = (what: string) =>
@@ -638,13 +643,12 @@ export function createOperationManager(
     fn: (ctx: OperationCallContext) => Promise<T>
   ): Promise<T> => {
     if (drive.stop.signal.aborted) throw new StoppedError();
+    const remaining = row.deadline_at - now();
+    if (remaining <= 0) throw new DeadlineError();
     const controller = new AbortController();
-    const timeoutMs = Math.max(
-      1,
-      Math.min(
-        positiveNumber(kindOf(row.kind).callTimeoutMs, DEFAULT_CALL_TIMEOUT_MS),
-        row.deadline_at - now()
-      )
+    const timeoutMs = Math.min(
+      positiveNumber(kindOf(row.kind).callTimeoutMs, DEFAULT_CALL_TIMEOUT_MS),
+      remaining
     );
     let onStop: () => void = () => {};
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -723,7 +727,12 @@ export function createOperationManager(
           accepted = await call(row, drive, (ctx) => provider.submit(input(), ctx));
         } catch (error) {
           // Stopped mid-call: left `submitting`, which the next start makes uncertain.
-          if (error instanceof StoppedError) return;
+          if (error instanceof StoppedError || error instanceof DeadlineError) return;
+          // Never sent: back to as it was, for the deadline check to settle.
+          if (error instanceof DeadlineError) {
+            await transition(submitting, { state: "pending", submitted_at: row.submitted_at });
+            return;
+          }
           if (error instanceof OperationError && !error.retryable) {
             const failure = describeFailure(error);
             await transition(submitting, {
@@ -778,7 +787,7 @@ export function createOperationManager(
         try {
           found = await call(row, drive, (ctx) => reconcile(input(), ctx));
         } catch (error) {
-          if (error instanceof StoppedError) return;
+          if (error instanceof StoppedError || error instanceof DeadlineError) return;
           await transition(row, failurePatch(row, error, "uncertain"));
           return;
         }
@@ -835,11 +844,21 @@ export function createOperationManager(
             try {
               answer = await call(row, drive, (ctx) => cancel(ref(row), ctx));
             } catch (error) {
-              if (error instanceof StoppedError) return;
+              if (error instanceof StoppedError || error instanceof DeadlineError) return;
               // Delivery unknown: ask again after a backoff.
-              await transition(row, failurePatch(row, error, "running"));
+              await transition(row, {
+                ...failurePatch(row, error, "running"),
+                cancel_failed_at: now(),
+              });
               return;
             }
+          }
+          if (answer !== "cancelled" && answer !== "requested" && answer !== "unsupported") {
+            await transition(row, {
+              ...failurePatch(row, invalidResponse("cancel answer"), "running"),
+              cancel_failed_at: now(),
+            });
+            return;
           }
           await transition(
             row,
@@ -853,7 +872,7 @@ export function createOperationManager(
         try {
           polled = await call(row, drive, (ctx) => provider.poll(ref(row), ctx));
         } catch (error) {
-          if (error instanceof StoppedError) return;
+          if (error instanceof StoppedError || error instanceof DeadlineError) return;
           if (error instanceof OperationError && !error.retryable) {
             const failure = describeFailure(error);
             await transition(row, {
@@ -1033,7 +1052,7 @@ export function createOperationManager(
           row.state === "running" &&
           row.cancel_requested_at !== null &&
           row.cancel_sent_at === null &&
-          row.attempt === 0;
+          row.cancel_failed_at === null;
         const due = cancelNow ? 0 : row.next_attempt_at - now();
         if (due > 0) {
           await waitFor(Math.min(due, row.deadline_at - now()), drive);
@@ -1096,7 +1115,9 @@ export function createOperationManager(
               .finally(() => {
                 driving.delete(id);
                 runs.delete(run);
-                if (!entry.failed && !entry.stop.signal.aborted) pump();
+                // Gated on `suspended` inside: a drive the host stopped
+                // admits nothing, but one stopped after a resume does.
+                if (!entry.failed) pump();
               });
             runs.add(run);
           }
@@ -1259,7 +1280,7 @@ export function createOperationManager(
       const handle = requireDb();
       const at = now();
       // Never sent: nothing exists remotely, so the cancel is complete now.
-      await handle.run(
+      const cancelled = await handle.run(
         `UPDATE operations SET state = 'cancelled', cancel_requested_at = ?, updated_at = ?
          WHERE id = ? AND state = 'pending' AND submitted_at IS NULL`,
         [at, at, id]
@@ -1269,6 +1290,7 @@ export function createOperationManager(
          WHERE id = ? AND cancel_requested_at IS NULL AND state NOT IN (${TERMINAL_SQL})`,
         [at, at, id]
       );
+      if (cancelled.changes > 0) void prune().catch(() => {});
       driving.get(id)?.wake();
       pump();
       return manager.get(id);
@@ -1289,7 +1311,8 @@ export function createOperationManager(
         await requireDb().run(
           `UPDATE operations SET state = ?, generation = generation + 1, attempt = 0,
              next_attempt_at = ?, deadline_at = ?, cancel_requested_at = NULL,
-             cancel_sent_at = NULL, error_code = NULL, error_message = NULL, updated_at = ?
+             cancel_sent_at = NULL, cancel_failed_at = NULL, error_code = NULL,
+             error_message = NULL, updated_at = ?
            WHERE id = ? AND state = 'abandoned'`,
           [state, at, at + deadlineFor(row.kind), at, id]
         );
@@ -1306,7 +1329,7 @@ export function createOperationManager(
 
     async abandon(id: string) {
       await ready();
-      await requireDb().run(
+      const abandoned = await requireDb().run(
         `UPDATE operations SET state = 'abandoned', generation = generation + 1,
            error_code = 'ABANDONED',
            error_message = 'Stopped tracking on request; the provider''s outcome is unknown',
@@ -1314,6 +1337,7 @@ export function createOperationManager(
          WHERE id = ? AND state NOT IN (${TERMINAL_SQL})`,
         [now(), id]
       );
+      if (abandoned.changes > 0) void prune().catch(() => {});
       driving.get(id)?.wake();
       return manager.get(id);
     },

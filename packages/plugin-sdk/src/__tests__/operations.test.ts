@@ -310,11 +310,33 @@ describe("createOperationManager", () => {
 
   it("abandons an operation still running at its deadline", async () => {
     const provider = createSyntheticProvider({ pollsToFinish: 1_000 });
-    provider.kind.deadlineMs = 500;
-    const { manager } = setup(provider);
+    provider.kind.deadlineMs = 60_000;
+    let skew = 0;
+    const { manager } = setup(provider, { now: () => Date.now() + skew });
     const op = await manager.submit("double", { n: 10 });
+    await until(async () => (await manager.get(op.id))?.state === "running", "running");
+    skew = 120_000;
+    await manager.retry(op.id);
     await until(async () => (await manager.get(op.id))?.state === "abandoned", "abandoned");
     expect((await manager.get(op.id))?.error?.code).toBe("DEADLINE_EXCEEDED");
+  });
+
+  it("asks the provider again when a cancel call fails or answers nonsense", async () => {
+    const provider = createSyntheticProvider({ pollsToFinish: 1_000 });
+    const realCancel = provider.kind.provider.cancel!;
+    let answers = 0;
+    provider.kind.provider.cancel = async (ref, ctx) => {
+      answers++;
+      if (answers === 1) throw new Error("connection reset");
+      if (answers === 2) return null as never;
+      return realCancel(ref, ctx);
+    };
+    const { manager } = setup(provider);
+    const op = await manager.submit("double", { n: 14 });
+    await until(async () => (await manager.get(op.id))?.state === "running", "running");
+    await manager.cancel(op.id);
+    await until(async () => (await manager.get(op.id))?.state === "cancelled", "cancelled");
+    expect(answers).toBe(3);
   });
 
   it("lists by project, newest first, and prunes finished operations past the retention count", async () => {
