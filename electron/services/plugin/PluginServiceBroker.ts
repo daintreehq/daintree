@@ -360,7 +360,10 @@ export class PluginServiceBroker {
       // Even with the service bound: a provider binds during activate() and
       // may still be setting up, so no call runs until it has finished.
       if (!this.deps.isActivated(providerId)) {
-        await this.deps.activatePlugin(providerId);
+        // Outside the caller's scope: an in-process activate() keeps whatever
+        // scope it starts in for any work it leaves running, and that work
+        // must not be refused once the call that happened to start it ends.
+        await runWithServiceInvocation(null, () => this.deps.activatePlugin(providerId));
         if (!this.pending.has(call)) return;
       }
       // Identity, not presence: the id may have been unloaded and loaded

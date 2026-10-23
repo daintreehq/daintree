@@ -633,6 +633,51 @@ describe("PluginServiceBroker", () => {
       expect(betaRun).not.toHaveBeenCalled();
     });
 
+    it("starts a provider outside the call that reached it, so its background calls outlive that call", async () => {
+      const t = setup();
+      t.loadConsumer("acme.app", consumerOf());
+      const B = "acme.beta.svc";
+      const C = "acme.gamma.svc";
+      const later = deferred();
+      const background = deferred<PluginServiceResult>();
+      t.load(
+        "acme.jira",
+        plugin("acme.jira", {
+          provides: [{ name: ISSUES, version: "1.0.0", methods: ["lookup"] }],
+          requires: [{ name: B, range: "^1.0.0" }],
+        }),
+        () =>
+          t.broker.bind("acme.jira", t.plugins.get("acme.jira")!, ISSUES, () =>
+            t.broker.call(t.consumer("acme.jira"), B, "run", {})
+          )
+      );
+      t.load(
+        "acme.beta",
+        plugin("acme.beta", {
+          provides: [{ name: B, version: "1.0.0", methods: ["run"] }],
+          requires: [{ name: C, range: "^1.0.0" }],
+        }),
+        () => {
+          // Work activate() leaves running, started inside the nested call.
+          void later.promise.then(() =>
+            t.broker.call(t.consumer("acme.beta"), C, "ping", {}).then(background.resolve)
+          );
+          t.broker.bind("acme.beta", t.plugins.get("acme.beta")!, B, () => "beta");
+        }
+      );
+      t.load(
+        "acme.gamma",
+        plugin("acme.gamma", { provides: [{ name: C, version: "1.0.0", methods: ["ping"] }] }),
+        () => t.broker.bind("acme.gamma", t.plugins.get("acme.gamma")!, C, () => "pong")
+      );
+      await t.activatePlugin("acme.jira");
+
+      const outer = await t.broker.call(t.consumer(), ISSUES, "lookup", {});
+      expect(outer).toEqual({ ok: true, value: { ok: true, value: "beta" } });
+      later.resolve(undefined);
+      expect(await background.promise).toEqual({ ok: true, value: "pong" });
+    });
+
     it("refuses a nested call once the outer call's deadline has passed", async () => {
       const t = setup();
       t.loadConsumer("acme.app", consumerOf());
