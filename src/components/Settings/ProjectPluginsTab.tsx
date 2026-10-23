@@ -1629,6 +1629,115 @@ function InstalledPluginPane({
 }
 
 /**
+ * Whether a per-project package is on in this project: the store's answer, which
+ * holds an in-flight toggle's value, or the list's own record until it has one.
+ */
+function isInstanceOn(
+  plugin: LoadedPluginInfo,
+  instanceEnabled: Readonly<Record<string, boolean>>,
+  projectId: string | null
+): boolean {
+  return (
+    instanceEnabled[plugin.instanceId] ??
+    (projectId !== null && (plugin.enabledInProjects ?? []).includes(projectId))
+  );
+}
+
+/**
+ * Detail for an installed package that runs one instance per project. Its switch
+ * starts or stops this project's own copy; the visibility overlay doesn't apply,
+ * since a project that hasn't turned it on has nothing of it to show or hide.
+ */
+function ProjectInstancePackagePane({ plugin }: { plugin: LoadedPluginInfo }) {
+  const pluginId = plugin.instanceId;
+  const on = useProjectPluginStore((s) =>
+    isInstanceOn(plugin, s.instanceEnabled, s.viewProjectId ?? s.projectId)
+  );
+  const toggling = useProjectPluginStore((s) => s.instanceToggling.has(pluginId));
+  const setInstanceEnabled = useProjectPluginStore((s) => s.setInstanceEnabled);
+  const failure = useStoreFailure("instanceEnabled", pluginId);
+  const name = plugin.manifest.displayName ?? pluginId;
+
+  const badges = (
+    <>
+      <Badge size="xs">Per project</Badge>
+      {plugin.manifest.version && <Badge size="xs">v{plugin.manifest.version}</Badge>}
+    </>
+  );
+
+  return (
+    <div className="space-y-8" data-testid="installed-plugin-detail">
+      <SettingsSection
+        title={name}
+        description={
+          <PluginIdentityDescription
+            description={plugin.manifest.description}
+            id={pluginId}
+            title={name}
+          />
+        }
+      >
+        <SettingsGroup>
+          {plugin.disabled || plugin.blocklisted ? (
+            // Main refuses a per-project switch for a package that can't run anywhere,
+            // so the row says why and where that's decided instead.
+            <SettingsRow
+              label={plugin.blocklisted ? "Blocked everywhere" : "Turned off everywhere"}
+              accessory={badges}
+              description={
+                plugin.blocklisted
+                  ? (plugin.blocklistReason ?? "It can't run in any project")
+                  : "It can't run in any project until it's turned back on"
+              }
+              control={
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() =>
+                    void actionService.dispatch("app.pluginManager", undefined, { source: "user" })
+                  }
+                >
+                  Open plugin manager
+                </Button>
+              }
+            />
+          ) : (
+            <SettingsRow
+              label="Run in this project"
+              accessory={badges}
+              description="Starts a copy of it for this project only. Other projects keep their own answer."
+              error={
+                failure ? (
+                  <RowFailure
+                    summary={
+                      failure.source.enabled
+                        ? `Couldn't turn on ${name} in this project`
+                        : `Couldn't turn off ${name} in this project`
+                    }
+                    detail={failure.detail}
+                    onRetry={() => void setInstanceEnabled(pluginId, failure.source.enabled)}
+                  />
+                ) : undefined
+              }
+              control={({ descriptionId, disabled }) => (
+                <SettingsSwitch
+                  checked={on}
+                  disabled={disabled || toggling}
+                  onCheckedChange={(next) => void setInstanceEnabled(pluginId, next)}
+                  aria-label={`Run ${name} in this project`}
+                  aria-describedby={descriptionId}
+                  data-testid="installed-plugin-instance-switch"
+                />
+              )}
+            />
+          )}
+        </SettingsGroup>
+      </SettingsSection>
+    </div>
+  );
+}
+
+/**
  * Project → Plugins.
  *
  * One place for every plugin question that is about *this* project: the plugins
@@ -1645,6 +1754,8 @@ export function ProjectPluginsTab() {
   const projectPlugins = useProjectPluginStore((s) => s.plugins);
   const clearError = useProjectPluginStore((s) => s.clearError);
   const visibility = useProjectPluginStore((s) => s.visibility);
+  const instanceEnabled = useProjectPluginStore((s) => s.instanceEnabled);
+  const instanceProjectId = useProjectPluginStore((s) => s.viewProjectId ?? s.projectId);
   const errorSource = useProjectPluginStore((s) => s.errorSource);
   const folderTrusted = useProjectPluginStore((s) => s.trust?.enabled === true);
   const projectPath = useProjectStore((s) => s.currentProject?.path);
@@ -1689,14 +1800,10 @@ export function ProjectPluginsTab() {
   // alongside the installed ones. Split on `instanceId`, NOT on `manifest.name`
   // — the manifest is left untouched for a project plugin, so its name is the
   // bare id and indistinguishable from an installed plugin's.
+  // A per-project package lists once, by its package row: its running instance
+  // carries a `project__` key too, so it never reads as a second installed plugin.
   const installedOnly = useMemo(
-    () =>
-      (installed ?? []).filter(
-        // A per-project package is turned on here by its own control, not the
-        // visibility switch these rows carry.
-        (p) =>
-          !p.instanceId.startsWith(PROJECT_PLUGIN_INSTANCE_PREFIX) && p.instanceMode !== "project"
-      ),
+    () => (installed ?? []).filter((p) => !p.instanceId.startsWith(PROJECT_PLUGIN_INSTANCE_PREFIX)),
     [installed]
   );
   const loadedByInstanceId = useMemo(
@@ -1718,6 +1825,18 @@ export function ProjectPluginsTab() {
       active: folderTrusted && !p.muted && p.state === "active",
     }));
     const installedOptions = installedOnly.map((p) => {
+      if (p.instanceMode === "project") {
+        const on =
+          !p.disabled && !p.blocklisted && isInstanceOn(p, instanceEnabled, instanceProjectId);
+        return {
+          id: `${INSTALLED_OPTION_PREFIX}${p.instanceId}`,
+          pluginId: p.instanceId,
+          name: p.manifest.displayName ?? p.instanceId,
+          origin: "installed" as const,
+          status: on ? "On" : "Off",
+          active: on,
+        };
+      }
       // What this project shows, not only where it came from: a plugin hidden
       // here reads "Hidden", so the list agrees with its pane's switch.
       const shown =
@@ -1733,7 +1852,14 @@ export function ProjectPluginsTab() {
       };
     });
     return [...project.sort(byName), ...installedOptions.sort(byName)];
-  }, [projectPlugins, installedOnly, folderTrusted, visibility]);
+  }, [
+    projectPlugins,
+    installedOnly,
+    folderTrusted,
+    visibility,
+    instanceEnabled,
+    instanceProjectId,
+  ]);
 
   // A failure is stated on the row that caused it. One plugin's failed switch
   // leaves with its pane rather than waiting to be read as news about the next
@@ -1885,7 +2011,11 @@ export function ProjectPluginsTab() {
         />
       )}
 
-      {selectedInstalled && (
+      {selectedInstalled?.instanceMode === "project" && (
+        <ProjectInstancePackagePane key={selectedInstalled.instanceId} plugin={selectedInstalled} />
+      )}
+
+      {selectedInstalled && selectedInstalled.instanceMode !== "project" && (
         <InstalledPluginPane
           key={selectedInstalled.instanceId}
           plugin={selectedInstalled}

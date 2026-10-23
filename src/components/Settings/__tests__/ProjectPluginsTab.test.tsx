@@ -158,6 +158,7 @@ const pluginApi = {
   setProjectPluginMuted: vi.fn().mockResolvedValue(undefined),
   setProjectPluginVisibility: vi.fn().mockResolvedValue(undefined),
   setPluginVisibilityDefault: vi.fn().mockResolvedValue(undefined),
+  setProjectInstanceEnabled: vi.fn().mockResolvedValue(undefined),
   setProjectPluginTrust: vi.fn().mockResolvedValue(undefined),
   // Main records the answer against the slot's owner and returns the new set.
   setProjectSurfaceChoices: vi.fn((updates: ProjectSurfaceChoiceUpdate[]) => {
@@ -1422,5 +1423,103 @@ describe("ProjectPluginsTab failures and state honesty", () => {
     fireEvent.click(within(fresh).getByRole("button", { name: "Review" }));
     const pane = await screen.findByTestId("project-plugin-detail");
     expect(within(pane).getByRole("button", { name: "Activate plugin" })).toBeTruthy();
+  });
+});
+
+describe("ProjectPluginsTab per-project packages", () => {
+  const INSTANCE_KEY = `project__${PROJECT_ID}__installed__acme.tools`;
+
+  function packageRow(enabledInProjects: string[] = []): LoadedPluginInfo {
+    return installed({ instanceMode: "project", enabledInProjects });
+  }
+
+  /** The package's running instance as `list()` reports it: a project-keyed row. */
+  function instanceRow(): LoadedPluginInfo {
+    return installed({ instanceId: INSTANCE_KEY, origin: "project", projectId: PROJECT_ID });
+  }
+
+  async function openPicker() {
+    fireEvent.click(screen.getByTestId("project-plugin-selector-trigger"));
+    return screen.findByRole("listbox", { name: "Plugins" });
+  }
+
+  it("lists the package once, even while this project's instance is running", async () => {
+    pluginApi.list.mockResolvedValue([packageRow([PROJECT_ID]), instanceRow()]);
+    seed([]);
+    render(<ProjectPluginsTab />);
+    await waitFor(() => expect(pluginApi.list).toHaveBeenCalled());
+
+    const list = await openPicker();
+    expect(within(list).getAllByText("Acme Tools")).toHaveLength(1);
+    expect(within(list).queryByText("Installed")).toBeNull();
+    expect(within(list).getByText("On")).toBeTruthy();
+  });
+
+  it("reads Off for a package this project hasn't turned on", async () => {
+    pluginApi.list.mockResolvedValue([packageRow(["other-project"])]);
+    seed([]);
+    render(<ProjectPluginsTab />);
+    await waitFor(() => expect(pluginApi.list).toHaveBeenCalled());
+    await select("Acme Tools");
+
+    expect(screen.getByTestId("project-plugin-selector-status").textContent).toBe("Off");
+    const toggle = screen.getByTestId("installed-plugin-instance-switch");
+    expect(toggle.getAttribute("aria-checked")).toBe("false");
+    // The visibility overlay belongs to plugins that run everywhere.
+    expect(screen.queryByTestId("installed-plugin-visibility-switch")).toBeNull();
+  });
+
+  it("turns the instance on for the current project only", async () => {
+    pluginApi.list.mockResolvedValue([packageRow()]);
+    seed([]);
+    render(<ProjectPluginsTab />);
+    await waitFor(() => expect(pluginApi.list).toHaveBeenCalled());
+    await select("Acme Tools");
+
+    fireEvent.click(screen.getByTestId("installed-plugin-instance-switch"));
+
+    await waitFor(() =>
+      expect(pluginApi.setProjectInstanceEnabled).toHaveBeenCalledWith("acme.tools", true)
+    );
+    expect(pluginApi.setProjectInstanceEnabled).toHaveBeenCalledTimes(1);
+    expect(pluginApi.setProjectPluginVisibility).not.toHaveBeenCalled();
+  });
+
+  it("states a failed toggle on its row and retries the same write", async () => {
+    pluginApi.list.mockResolvedValue([packageRow()]);
+    pluginApi.setProjectInstanceEnabled.mockRejectedValueOnce(new Error("EACCES"));
+    seed([]);
+    render(<ProjectPluginsTab />);
+    await waitFor(() => expect(pluginApi.list).toHaveBeenCalled());
+    await select("Acme Tools");
+
+    const toggle = screen.getByTestId("installed-plugin-instance-switch");
+    fireEvent.click(toggle);
+
+    const alert = await screen.findByRole("alert");
+    const row = alert.closest<HTMLElement>("[data-settings-row]");
+    expect(row!.contains(toggle)).toBe(true);
+    expect(alert.textContent).toContain("Couldn't turn on Acme Tools in this project");
+    expect(alert.textContent).toContain("EACCES");
+    expect(toggle.getAttribute("aria-checked")).toBe("false");
+
+    fireEvent.click(within(alert).getByRole("button", { name: "Retry" }));
+    await waitFor(() => expect(pluginApi.setProjectInstanceEnabled).toHaveBeenCalledTimes(2));
+    expect(pluginApi.setProjectInstanceEnabled.mock.calls[1]).toEqual(["acme.tools", true]);
+    await waitFor(() => expect(screen.queryAllByRole("alert")).toHaveLength(0));
+  });
+
+  it("sends a globally disabled package to the plugin manager rather than offering a switch", async () => {
+    pluginApi.list.mockResolvedValue([
+      installed({ instanceMode: "project", enabledInProjects: [PROJECT_ID], disabled: true }),
+    ]);
+    seed([]);
+    render(<ProjectPluginsTab />);
+    await waitFor(() => expect(pluginApi.list).toHaveBeenCalled());
+    await select("Acme Tools");
+
+    expect(screen.getByTestId("project-plugin-selector-status").textContent).toBe("Off");
+    expect(screen.getByText("Turned off everywhere")).toBeTruthy();
+    expect(screen.queryByTestId("installed-plugin-instance-switch")).toBeNull();
   });
 });

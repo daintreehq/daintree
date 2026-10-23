@@ -306,6 +306,39 @@ describe("PluginManagerView", () => {
     expect(screen.queryByRole("switch", { name: "Enable Project Copy" })).toBeNull();
   });
 
+  it("labels a per-project package by where it runs and lists it once while an instance runs", async () => {
+    vi.mocked(window.electron.plugin.list).mockResolvedValue([
+      makePlugin({ instanceMode: "project", enabledInProjects: ["p1", "p2"], loadedAt: 0 }),
+      makePlugin({
+        instanceId: "project__p1__installed__acme.demo",
+        origin: "project",
+        projectId: "p1",
+      }),
+    ]);
+    renderDialog();
+    await screen.findByText("Runs per project · on in 2 projects");
+    expect(screen.getAllByRole("switch", { name: "Enable Acme Demo" })).toHaveLength(1);
+    const rows = screen.getAllByTestId("plugin-row-badges");
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.textContent).not.toContain("A demo plugin");
+  });
+
+  it("says a per-project package isn't on anywhere yet, in the singular when on in one", async () => {
+    vi.mocked(window.electron.plugin.list).mockResolvedValue([
+      makePlugin({ instanceMode: "project", enabledInProjects: [], loadedAt: 0 }),
+      makePlugin({
+        instanceId: "acme.other",
+        manifest: { ...makePlugin().manifest, name: "acme.other", displayName: "Acme Other" },
+        instanceMode: "project",
+        enabledInProjects: ["p1"],
+        loadedAt: 0,
+      }),
+    ]);
+    renderDialog();
+    await screen.findByText("Runs per project · not on in any project");
+    expect(screen.getByText("Runs per project · on in 1 project")).toBeTruthy();
+  });
+
   it("renders a disabled plugin with the switch off", async () => {
     (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue([
       makePlugin({ disabled: true }),
