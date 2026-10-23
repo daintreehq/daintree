@@ -38,6 +38,7 @@ import {
 } from "../../shared/elementPicker/providers.js";
 import { isCoreFramework } from "../../shared/elementPicker/source.js";
 import { LAUNCH_MCP_FORMATS } from "../../shared/config/launchMcp.js";
+import { PLUGIN_SERVICE_MAX_METHODS } from "../../shared/config/pluginBudgets.js";
 import {
   PLUGIN_CONNECTION_ID_PATTERN,
   declaredPluginConnections,
@@ -2130,6 +2131,95 @@ export const PluginConnectionContributionSchema = z.discriminatedUnion("kind", [
   PluginAccountContributionSchema.options[1].extend({ id: PluginConnectionIdSchema }),
 ]);
 
+/**
+ * `{manifest id}.{local name}`: a service is named under the id of the plugin
+ * that provides it, so an import names exactly one plugin (#14105).
+ */
+const PLUGIN_SERVICE_NAME_PATTERN =
+  /^[a-z0-9]+(?:-[a-z0-9]+)*\.[a-z0-9]+(?:-[a-z0-9]+)*\.[a-z0-9]+(?:-[a-z0-9]+)*$/;
+const PLUGIN_SERVICE_METHOD_PATTERN = /^[A-Za-z][A-Za-z0-9_]*$/;
+
+/** Upper bounds for `contributes.services`, which is an object and so has no MANIFEST_CONTRIBUTION_CAPS entry. */
+export const MANIFEST_SERVICE_PROVIDES_CAP = 16;
+export const MANIFEST_SERVICE_REQUIRES_CAP = 16;
+export const MANIFEST_SERVICE_METHODS_CAP = PLUGIN_SERVICE_MAX_METHODS;
+
+const PluginServiceNameSchema = z.string().max(96).regex(PLUGIN_SERVICE_NAME_PATTERN, {
+  message: 'service names are "{plugin id}.{name}", e.g. "acme.jira.issues"',
+});
+
+function isCanonicalSemver(value: string): boolean {
+  const parsed = semver.parse(value);
+  if (!parsed) return false;
+  const build = parsed.build.length > 0 ? `+${parsed.build.join(".")}` : "";
+  return value === `${parsed.version}${build}`;
+}
+
+const uniqueBy =
+  <T>(key: (item: T) => string) =>
+  (list: T[]): boolean =>
+    new Set(list.map(key)).size === list.length;
+
+export const PluginServiceProvideContributionSchema = z
+  .object({
+    name: PluginServiceNameSchema,
+    // Canonical spelling only: `semver.parse` also accepts a leading "v" and
+    // surrounding space, which would let two spellings of one version through.
+    version: z.string().refine(isCanonicalSemver, {
+      message: "version must be a semver version such as 1.0.0",
+    }),
+    methods: z
+      .array(
+        z.string().max(64).regex(PLUGIN_SERVICE_METHOD_PATTERN, {
+          message: "method names start with a letter and use only letters, digits and _",
+        })
+      )
+      .min(1)
+      .max(MANIFEST_SERVICE_METHODS_CAP)
+      .refine(
+        uniqueBy<string>((method) => method),
+        { message: "methods must not repeat an entry" }
+      ),
+  })
+  .strict();
+
+export const PluginServiceRequireContributionSchema = z
+  .object({
+    name: PluginServiceNameSchema,
+    range: z
+      .string()
+      .trim()
+      .min(1)
+      .max(64)
+      .refine((value) => semver.validRange(value) !== null, {
+        message: "range must be a valid semver range, e.g. ^1.0.0",
+      }),
+    optional: z.boolean().optional(),
+  })
+  .strict();
+
+/** `contributes.services` (#14105). Whose names a plugin may use is checked in `superRefine`. */
+export const PluginServicesContributionSchema = z
+  .object({
+    provides: z
+      .array(PluginServiceProvideContributionSchema)
+      .max(MANIFEST_SERVICE_PROVIDES_CAP)
+      .refine(
+        uniqueBy<{ name: string }>((entry) => entry.name),
+        { message: "services.provides must not repeat a name" }
+      )
+      .default([]),
+    requires: z
+      .array(PluginServiceRequireContributionSchema)
+      .max(MANIFEST_SERVICE_REQUIRES_CAP)
+      .refine(
+        uniqueBy<{ name: string }>((entry) => entry.name),
+        { message: "services.requires must not repeat a name" }
+      )
+      .default([]),
+  })
+  .strict();
+
 /** Setting ids carry no length cap of their own, so a reference to one takes none either. */
 const SetupSettingKeySchema = z.string().min(1).regex(SAFE_ID_PATTERN);
 
@@ -3659,6 +3749,11 @@ function buildPluginManifestSchema(origin: PluginOrigin) {
               .array(PluginConnectionContributionSchema)
               .max(MANIFEST_CONTRIBUTION_CAPS.connections)
               .optional(),
+            // An object of two capped arrays, so no MANIFEST_CONTRIBUTION_CAPS entry.
+            services: PluginServicesContributionSchema.default(() => ({
+              provides: [],
+              requires: [],
+            })),
           })
           // A factory, not a literal: zod only shallow-clones a default value,
           // so a literal's arrays would be shared by every parse of the cached
@@ -3696,6 +3791,7 @@ function buildPluginManifestSchema(origin: PluginOrigin) {
             worktreeSetupSteps: [],
             setup: [],
             surfaces: {},
+            services: { provides: [], requires: [] },
           }))
       ),
     })
@@ -3733,6 +3829,28 @@ function buildPluginManifestSchema(origin: PluginOrigin) {
           params: { errorCode: "works_with_self" },
         });
       }
+
+      // A service is named under its provider's id, so no plugin can answer
+      // calls meant for another; importing one's own service is meaningless.
+      const ownServicePrefix = `${manifest.name}.`;
+      manifest.contributes.services.provides.forEach((entry, index) => {
+        if (entry.name.startsWith(ownServicePrefix)) return;
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["contributes", "services", "provides", index, "name"],
+          message: `a plugin provides services under its own id: "${entry.name}" must start with "${ownServicePrefix}"`,
+          params: { errorCode: "service_name_foreign" },
+        });
+      });
+      manifest.contributes.services.requires.forEach((entry, index) => {
+        if (!entry.name.startsWith(ownServicePrefix)) return;
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["contributes", "services", "requires", index, "name"],
+          message: "services.requires names other plugins' services; a plugin can't import its own",
+          params: { errorCode: "service_requires_self" },
+        });
+      });
 
       // A project-local plugin runs out-of-process in the plugin worker, and
       // `host.registerForgeProvider` is unavailable there: forge providers

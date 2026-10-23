@@ -89,6 +89,12 @@ import {
 } from "./pluginFrontendRequests.js";
 import { assertSettingsKey, type PluginSettingsManager } from "./PluginSettingsManager.js";
 import type { PluginAccountService } from "./PluginAccountService.js";
+import type { PluginServiceBroker } from "./PluginServiceBroker.js";
+import type {
+  PluginServiceCallContext,
+  PluginServiceProvideContribution,
+  PluginServicesApi,
+} from "../../../shared/types/pluginServices.js";
 import {
   assertStorageKey,
   type ExplicitStorageTarget,
@@ -807,6 +813,8 @@ export interface PluginHostFactoryDeps {
   promptDispatcher: PluginUIPromptDispatcher;
   settings: PluginSettingsManager;
   accounts: PluginAccountService;
+  /** Services between plugins (#14105): bindings and every `host.services` call. */
+  services: Pick<PluginServiceBroker, "bind" | "call" | "status">;
   storage: PluginStorageManager;
   /** Live read of the mutable `hostGitFactory` field — reassignable via `_setHostGitFactoryForTests`. */
   getHostGitFactory: () => HostGitFactory | undefined;
@@ -915,6 +923,38 @@ export interface PluginHostFactoryDeps {
    * the plugin nothing.
    */
   pluginNotificationsBlocked: (pluginId: string, projectId: string | null) => Promise<boolean>;
+}
+
+/**
+ * The functions `host.registerService` binds, by method. `handlers` must be a
+ * plain object with exactly the declared methods as its own keys — the same
+ * rule a worker's proxy applies, so a plugin behaves alike in either.
+ */
+function serviceMethodTable(
+  pluginId: string,
+  provided: PluginServiceProvideContribution,
+  handlers: unknown
+): Map<string, (args: unknown, ctx: PluginServiceCallContext) => unknown> {
+  const prefix = `Plugin "${pluginId}" registerService("${provided.name}")`;
+  if (!handlers || typeof handlers !== "object") {
+    throw new Error(`${prefix}: handlers must be an object with one function per declared method`);
+  }
+  const declared = new Set(provided.methods);
+  const extra = Object.keys(handlers).find((key) => !declared.has(key));
+  if (extra !== undefined) {
+    throw new Error(`${prefix}: "${extra}" is not one of the declared methods`);
+  }
+  const table = new Map<string, (args: unknown, ctx: PluginServiceCallContext) => unknown>();
+  for (const method of provided.methods) {
+    const fn = Object.hasOwn(handlers, method)
+      ? (handlers as Record<string, unknown>)[method]
+      : undefined;
+    if (typeof fn !== "function") {
+      throw new Error(`${prefix}: declared method "${method}" has no function`);
+    }
+    table.set(method, fn as (args: unknown, ctx: PluginServiceCallContext) => unknown);
+  }
+  return table;
 }
 
 /**
@@ -2952,6 +2992,38 @@ export function createHost(
         unregisterContextProviderImpl(pluginId, providerId, impl)
       );
     },
+    // Async so every refusal arrives as a rejection, as it does from a worker;
+    // the binding itself happens synchronously. A worker's handlers arrive
+    // here as proxies, so both paths are held to the same declaration.
+    registerService: (async (name: unknown, handlers: unknown) => {
+      if (revoked) {
+        throw new Error(
+          `Plugin "${pluginId}" host revoked: registerService called after activate() returned or timed out`
+        );
+      }
+      // This host's own load: an activation that outlived an unload or reload
+      // must not bind its handlers for the instance loaded since.
+      const plugin = boundPlugin;
+      if (!plugin || !isBound()) {
+        throw new Error(`Plugin "${pluginId}" registerService: the plugin is no longer loaded`);
+      }
+      const provided =
+        typeof name === "string"
+          ? plugin.manifest.contributes.services?.provides.find((p) => p.name === name)
+          : undefined;
+      if (!provided) {
+        throw new Error(
+          `Plugin "${pluginId}" registerService: "${String(name)}" is not declared in contributes.services.provides`
+        );
+      }
+      const methods = serviceMethodTable(pluginId, provided, handlers);
+      const unbind = deps.services.bind(pluginId, plugin, provided.name, (method, args, ctx) => {
+        const fn = methods.get(method);
+        if (!fn) throw new Error(`"${provided.name}" has no method "${method}"`);
+        return fn.call(handlers, args, ctx);
+      });
+      return trackPluginDisposer(deps.pluginEventCleanups, pluginId, unbind);
+    }) as PluginHostApi["registerService"],
     mcp: {
       registerTools: (endpointId, tools) => {
         if (revoked) {
@@ -4227,6 +4299,35 @@ export function createHost(
           target
         );
         return trackPluginDisposer(deps.pluginEventCleanups, pluginId, unsubscribe);
+      },
+    },
+    // NOT revoke-guarded: calls come from handlers and timers long after
+    // activate(). The caller is this instance as captured here — nothing the
+    // plugin passes can name another — and the provider runs under its own
+    // host, so its account and capabilities never become the caller's.
+    services: {
+      call: (async (name: unknown, method: unknown, args: unknown, options?: unknown) => {
+        if (!isBound()) {
+          return { ok: false, reason: "unavailable", message: `Plugin "${pluginId}" is unloaded` };
+        }
+        return deps.services.call(
+          { instanceId: pluginId, projectId: boundProjectId },
+          name,
+          method,
+          args,
+          options
+        );
+      }) as PluginServicesApi["call"],
+      status: async (name) => {
+        if (!isBound()) {
+          return {
+            available: false,
+            required: false,
+            reason: "unavailable",
+            message: `Plugin "${pluginId}" is unloaded`,
+          };
+        }
+        return deps.services.status({ instanceId: pluginId, projectId: boundProjectId }, name);
       },
     },
     // NOT revoke-guarded: plugins read/write settings throughout their

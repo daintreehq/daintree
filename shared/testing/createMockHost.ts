@@ -21,6 +21,7 @@ import {
 import { createHash } from "node:crypto";
 import { lstatSync, mkdirSync, mkdtempSync, realpathSync } from "node:fs";
 import { validateRenderPdfOptions } from "../utils/pluginPdfOptions.js";
+import { formatErrorMessage } from "../utils/errorMessage.js";
 import { parsePluginExternalUrl } from "../utils/pluginExternalUrl.js";
 import {
   pluginTaskAbortReason,
@@ -69,6 +70,12 @@ import type {
   ContextProviderDescriptor,
   ContextProviderImpl,
 } from "../types/pluginContextProvider.js";
+import type {
+  PluginServiceCallContext,
+  PluginServiceResult,
+  PluginServiceStatus,
+  PluginServicesApi,
+} from "../types/pluginServices.js";
 import type { NotificationType } from "../types/notification.js";
 import type {
   ActionHandler,
@@ -279,6 +286,28 @@ export interface RegisteredSearchProviderRecord {
   provider: PluginSearchProvider;
 }
 
+/** A service bound through `host.registerService`; call its `handlers` directly to test them. */
+export interface RegisteredServiceRecord {
+  name: string;
+  handlers: Record<string, unknown>;
+}
+
+/** One `host.services.call` the plugin made, in order. */
+export interface ServiceCallRecord {
+  name: string;
+  method: string;
+  args: unknown;
+}
+
+/** Another plugin's service, as `CreateMockHostOptions.services` stands it in. */
+export interface MockServiceProvider {
+  /** What `services.status` reports. Defaults to `"1.0.0"`. */
+  version?: string;
+  capabilities?: string[];
+  /** Run for `host.services.call`, with this plugin as the caller. */
+  methods: Record<string, (args: unknown, ctx: PluginServiceCallContext) => unknown>;
+}
+
 /** A provider bound through `host.registerContextProvider`; call `impl` directly to test it. */
 export interface RegisteredContextProviderRecord {
   descriptor: ContextProviderDescriptor;
@@ -447,6 +476,10 @@ export interface MockHostState {
   /** Live `host.registerSearchProvider` bindings, one per provider id. */
   readonly registeredSearchProviders: ReadonlyArray<RegisteredSearchProviderRecord>;
   readonly registeredContextProviders: ReadonlyArray<RegisteredContextProviderRecord>;
+  /** Live `host.registerService` bindings, one per service name. */
+  readonly registeredServices: ReadonlyArray<RegisteredServiceRecord>;
+  /** Every `host.services.call`, in order, whatever it answered. */
+  readonly serviceCalls: ReadonlyArray<ServiceCallRecord>;
   /** Live `host.registerWorktreeDeleteNotesProvider` bindings, one per id. */
   readonly registeredWorktreeDeleteNotesProviders: ReadonlyArray<RegisteredWorktreeDeleteNotesProviderRecord>;
   /** Live `host.mcp.registerTools` rosters, one per endpoint id. */
@@ -723,6 +756,13 @@ export interface MockHostState {
 
 export interface CreateMockHostOptions {
   pluginId?: string;
+  /**
+   * Other plugins' services, by full name, that `host.services.call` and
+   * `status` reach. A name not listed answers `unavailable`, as a provider that
+   * isn't installed does. The mock has no manifest model, so it never answers
+   * `not-declared` or `incompatible`.
+   */
+  services?: Record<string, MockServiceProvider>;
   /**
    * Bodies `host.artifacts.download` answers with, by exact URL. A URL not
    * listed rejects with `ARTIFACT_TRANSFER_FAILED`, as an unreachable provider
@@ -1449,6 +1489,8 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
   const registeredWorktreeSetupSteps: RegisteredWorktreeSetupStepRecord[] = [];
   const registeredSearchProviders: RegisteredSearchProviderRecord[] = [];
   const registeredContextProviders: RegisteredContextProviderRecord[] = [];
+  const registeredServices: RegisteredServiceRecord[] = [];
+  const serviceCalls: ServiceCallRecord[] = [];
   const registeredWorktreeDeleteNotesProviders: RegisteredWorktreeDeleteNotesProviderRecord[] = [];
   const registeredMcpTools: RegisteredMcpToolsRecord[] = [];
   const invalidationCalls: InvalidationRecord[] = [];
@@ -2846,6 +2888,31 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
         if (i >= 0) registeredContextProviders.splice(i, 1);
       };
     },
+    registerService: (async (name: unknown, handlers: unknown) => {
+      // Structural checks only; the declared-name and declared-method checks
+      // are skipped because the mock has no manifest model (#9878).
+      if (typeof name !== "string" || name.length === 0) {
+        throw new Error("registerService: name must be a non-empty string");
+      }
+      if (!handlers || typeof handlers !== "object") {
+        throw new Error("registerService: handlers must be an object of functions");
+      }
+      const record: RegisteredServiceRecord = {
+        name,
+        handlers: handlers as Record<string, unknown>,
+      };
+      const bad = Object.keys(record.handlers).find(
+        (method) => typeof record.handlers[method] !== "function"
+      );
+      if (bad !== undefined) throw new Error(`registerService: "${bad}" must be a function`);
+      const existing = registeredServices.findIndex((r) => r.name === name);
+      if (existing >= 0) registeredServices[existing] = record;
+      else registeredServices.push(record);
+      return () => {
+        const i = registeredServices.indexOf(record);
+        if (i >= 0) registeredServices.splice(i, 1);
+      };
+    }) as PluginHostApi["registerService"],
     registerWorktreeDeleteNotesProvider(descriptor, impl) {
       // Structural checks in production's order. The manifest-declared-id
       // check is skipped: the mock has no manifest model (#9878). Re-registering
@@ -3848,6 +3915,94 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
         };
       },
     },
+    services: {
+      call: (async (
+        name: string,
+        method: string,
+        args: unknown,
+        callOptions?: { signal?: AbortSignal }
+      ) => {
+        serviceCalls.push({ name, method, args });
+        const fail = (
+          reason: Extract<PluginServiceResult, { ok: false }>["reason"],
+          message: string
+        ): PluginServiceResult => ({ ok: false, reason, message });
+        const provider = options.services?.[name];
+        if (!provider) return fail("unavailable", `no enabled plugin provides "${name}"`);
+        const fn = Object.hasOwn(provider.methods, method) ? provider.methods[method] : undefined;
+        if (typeof fn !== "function") return fail("invalid", `"${name}" has no method "${method}"`);
+        const signal = callOptions?.signal;
+        if (signal?.aborted) return fail("cancelled", "the call was cancelled");
+        let copied: unknown;
+        try {
+          copied = structuredClone(args);
+        } catch (err) {
+          return fail("invalid", formatErrorMessage(err, "the arguments can't be copied"));
+        }
+        // As in production, the caller is settled the moment it cancels; the
+        // provider sees the abort on its own signal.
+        const controller = new AbortController();
+        const ctx: PluginServiceCallContext = {
+          signal: controller.signal,
+          caller: {
+            pluginId: pluginManifestIdFromInstanceKey(pluginId),
+            projectId: projectIdFromPluginInstanceKey(pluginId),
+          },
+        };
+        let onAbort: (() => void) | undefined;
+        const cancelled = new Promise<PluginServiceResult>((resolve) => {
+          onAbort = () => {
+            controller.abort();
+            resolve(fail("cancelled", "the call was cancelled"));
+          };
+          signal?.addEventListener("abort", onAbort, { once: true });
+        });
+        const answered = (async (): Promise<PluginServiceResult> => {
+          let value: unknown;
+          try {
+            value = await fn(copied, ctx);
+          } catch (err) {
+            // Cancelled first, even when the provider threw after the abort.
+            if (signal?.aborted) return fail("cancelled", "the call was cancelled");
+            return fail("provider-error", formatErrorMessage(err, "the provider failed"));
+          }
+          if (signal?.aborted) return fail("cancelled", "the call was cancelled");
+          try {
+            return { ok: true, value: structuredClone(value) };
+          } catch (err) {
+            return fail("invalid", formatErrorMessage(err, "the result can't be copied"));
+          }
+        })();
+        try {
+          return await Promise.race([answered, cancelled]);
+        } finally {
+          if (onAbort) signal?.removeEventListener("abort", onAbort);
+        }
+      }) as PluginServicesApi["call"],
+      status: async (name): Promise<PluginServiceStatus> => {
+        const provider = options.services?.[name];
+        if (!provider) {
+          return {
+            available: false,
+            required: true,
+            reason: "unavailable",
+            message: `no enabled plugin provides "${name}"`,
+          };
+        }
+        return {
+          available: true,
+          required: true,
+          running: true,
+          provider: {
+            pluginId: name.slice(0, name.lastIndexOf(".")),
+            projectId: null,
+            version: provider.version ?? "1.0.0",
+            methods: Object.keys(provider.methods),
+            capabilities: [...(provider.capabilities ?? [])],
+          },
+        };
+      },
+    },
     account: {
       getState: async (ref) => accountStateOf(accountConnectionOf(ref)),
       getAccessToken: async (ref) => {
@@ -3950,6 +4105,8 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
     registeredWorktreeSetupSteps,
     registeredSearchProviders,
     registeredContextProviders,
+    registeredServices,
+    serviceCalls,
     registeredWorktreeDeleteNotesProviders,
     registeredMcpTools,
     invalidationCalls,

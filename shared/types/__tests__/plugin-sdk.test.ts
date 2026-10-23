@@ -51,6 +51,7 @@ import type {
   PluginIpcContext,
   PluginIpcHandler,
   PluginProcessApi,
+  PluginServiceFailureReason,
   PluginProcessHandle,
   PluginDuplexProcessHandle,
   PluginDuplexProcessSpawnOptions,
@@ -523,6 +524,29 @@ describe("plugin-sdk boundary", () => {
         _storage,
         _process,
       ]).toHaveLength(11);
+    });
+
+    it("binds services on the activation slice and calls them from the full host (#14105)", () => {
+      const activation = {} as PluginActivationApi;
+      expectTypeOf(activation.registerService).returns.toEqualTypeOf<Promise<() => void>>();
+      // @ts-expect-error — calling services is post-activation-safe, not on the slice
+      const _services = activation.services;
+      void _services;
+      // One shared contract types both ends. Never invoked: compile-time only.
+      type Issues = { lookup: { args: { key: string }; result: { title: string } } };
+      const assertTypes = async (host: PluginHostApi): Promise<void> => {
+        await host.registerService<Issues>("acme.jira.issues", {
+          lookup: async ({ key }) => ({ title: key }),
+        });
+        const result = await host.services.call<Issues, "lookup">("acme.jira.issues", "lookup", {
+          key: "A-1",
+        });
+        if (result.ok) expectTypeOf(result.value).toEqualTypeOf<{ title: string }>();
+        else expectTypeOf(result.reason).toEqualTypeOf<PluginServiceFailureReason>();
+        // @ts-expect-error — arguments must match the contract
+        await host.services.call<Issues, "lookup">("acme.jira.issues", "lookup", { id: 1 });
+      };
+      void assertTypes;
     });
 
     it("PluginProcessHandle carries the lifecycle controls", () => {

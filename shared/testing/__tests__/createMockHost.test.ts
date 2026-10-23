@@ -2991,3 +2991,96 @@ describe("createMockHost account connections (#14102)", () => {
     expect((await host.account.getState()).connected).toBe(true);
   });
 });
+
+describe("services (#14105)", () => {
+  it("records a registered service, replaces it by name, and ignores a stale disposer", async () => {
+    const host = createMockHost();
+    const first = { lookup: () => "first" };
+    const disposeFirst = await host.registerService("acme.jira.issues", first);
+    const second = { lookup: () => "second" };
+    await host.registerService("acme.jira.issues", second);
+    disposeFirst();
+    expect(host.registeredServices).toEqual([{ name: "acme.jira.issues", handlers: second }]);
+    await expect(host.registerService("acme.jira.issues", { lookup: 1 } as never)).rejects.toThrow(
+      '"lookup" must be a function'
+    );
+  });
+
+  it("calls a stood-in provider as this plugin, on copies, and records the call", async () => {
+    const host = createMockHost({
+      pluginId: "acme.app",
+      services: {
+        "acme.jira.issues": {
+          version: "1.4.0",
+          methods: {
+            lookup: (args, ctx) => ({ args, caller: ctx.caller }),
+            fail: () => {
+              throw new Error("Jira said no");
+            },
+          },
+        },
+      },
+    });
+    const args = { key: "A-1" };
+    const result = await host.services.call("acme.jira.issues", "lookup", args);
+    expect(result).toEqual({
+      ok: true,
+      value: { args, caller: { pluginId: "acme.app", projectId: null } },
+    });
+    expect(result.ok && (result.value as { args: unknown }).args).not.toBe(args);
+    expect(host.serviceCalls).toEqual([{ name: "acme.jira.issues", method: "lookup", args }]);
+
+    await expect(host.services.call("acme.jira.issues", "fail", {})).resolves.toMatchObject({
+      ok: false,
+      reason: "provider-error",
+      message: "Jira said no",
+    });
+    await expect(host.services.status("acme.jira.issues")).resolves.toMatchObject({
+      available: true,
+      provider: { pluginId: "acme.jira", version: "1.4.0", methods: ["lookup", "fail"] },
+    });
+  });
+
+  it("settles a cancelled call at once and aborts the provider's signal", async () => {
+    let providerSignal: AbortSignal | undefined;
+    const host = createMockHost({
+      services: {
+        "acme.jira.issues": {
+          methods: {
+            lookup: (_args, ctx) => {
+              providerSignal = ctx.signal;
+              return new Promise(() => {});
+            },
+          },
+        },
+      },
+    });
+    const controller = new AbortController();
+    const result = host.services.call(
+      "acme.jira.issues",
+      "lookup",
+      {},
+      {
+        signal: controller.signal,
+      }
+    );
+    controller.abort();
+    await expect(result).resolves.toMatchObject({ ok: false, reason: "cancelled" });
+    expect(providerSignal?.aborted).toBe(true);
+    await expect(
+      host.services.call("acme.jira.issues", "lookup", { fn: () => 1 })
+    ).resolves.toMatchObject({ ok: false, reason: "invalid" });
+  });
+
+  it("answers unavailable for a service nobody stands in for", async () => {
+    const host = createMockHost();
+    await expect(host.services.call("acme.jira.issues", "lookup", {})).resolves.toMatchObject({
+      ok: false,
+      reason: "unavailable",
+    });
+    await expect(host.services.status("acme.jira.issues")).resolves.toMatchObject({
+      available: false,
+      reason: "unavailable",
+    });
+  });
+});

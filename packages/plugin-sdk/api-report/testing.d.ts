@@ -2004,6 +2004,104 @@ interface ContextProviderImpl {
     resolve(itemId: string, options: ContextProviderCallOptions): Promise<ContextProviderContent | null>;
 }
 
+/** Who made a service call, as the host saw it. Nothing in it comes from the caller. */
+interface PluginServiceCaller {
+    /** The calling plugin's manifest id. */
+    pluginId: string;
+    /** The project the calling instance is bound to, or `null` for an app-global plugin. */
+    projectId: string | null;
+}
+/** Handed to a provider's method beside the arguments. */
+interface PluginServiceCallContext {
+    /** Aborted when the caller cancels, the deadline passes, or either plugin unloads. */
+    signal: AbortSignal;
+    caller: PluginServiceCaller;
+}
+/**
+ * Method name → argument and result types. Share one between the provider and
+ * its consumers as a TypeScript type to type both ends of a call.
+ */
+type PluginServiceContract = Record<string, {
+    args: unknown;
+    result: unknown;
+}>;
+/** The implementation `host.registerService` binds: one function per declared method. */
+type PluginServiceHandlers<TContract extends PluginServiceContract = PluginServiceContract> = {
+    [M in keyof TContract]: (args: TContract[M]["args"], ctx: PluginServiceCallContext) => TContract[M]["result"] | Promise<TContract[M]["result"]>;
+};
+interface PluginServiceCallOptions {
+    /** Cancels the call. The provider's `ctx.signal` aborts with it. */
+    signal?: AbortSignal;
+    /**
+     * The call's deadline in milliseconds, starting the provider included.
+     * Defaults to 30 seconds; at most 120 seconds. A call made inside another
+     * service call never outlives the outer call's deadline.
+     */
+    timeoutMs?: number;
+}
+/**
+ * Why a service call failed:
+ * - `not-declared` — the caller's manifest doesn't list the service in `contributes.services.requires`.
+ * - `unavailable` — no provider is installed, enabled and visible to the caller, it didn't bind the service or is still starting again after a crash, it unloaded or crashed mid-call, it is at its concurrent-call limit, or the caller is still inside `activate()`.
+ * - `incompatible` — the provider is there, but its version is outside the declared range.
+ * - `cycle` — the call would re-enter a service already waiting on this one.
+ * - `timeout` / `cancelled` — the deadline passed, or the caller's signal aborted.
+ * - `invalid` — an unknown method, a bad option, or arguments or a result that can't be copied between processes.
+ * - `payload-too-large` — the arguments or the result are over the size limit.
+ * - `provider-error` — the provider's method threw; `message` carries its error.
+ */
+type PluginServiceFailureReason = "not-declared" | "unavailable" | "incompatible" | "cycle" | "timeout" | "cancelled" | "invalid" | "payload-too-large" | "provider-error";
+/** A service call's outcome. Expected failures resolve; they never reject. */
+type PluginServiceResult<T = unknown> = {
+    ok: true;
+    value: T;
+} | {
+    ok: false;
+    reason: PluginServiceFailureReason;
+    message: string;
+};
+/** The provider a service resolves to. */
+interface PluginServiceProviderInfo {
+    /** The provider's manifest id. */
+    pluginId: string;
+    /** The project the provider instance belongs to, or `null` for an app-global one. */
+    projectId: string | null;
+    /** The version the provider declares for the service. */
+    version: string;
+    methods: string[];
+    /**
+     * The provider's declared capabilities: what it can do with what it is sent.
+     * Disclosure only — calling it grants the caller none of them.
+     */
+    capabilities: string[];
+}
+/** Whether a declared import can be called now, from `host.services.status`. */
+type PluginServiceStatus = {
+    available: true;
+    /** Whether the caller declared the import required. */
+    required: boolean;
+    provider: PluginServiceProviderInfo;
+    /** The provider has bound the service. When false, the first call starts it. */
+    running: boolean;
+} | {
+    available: false;
+    required: boolean;
+    reason: "not-declared" | "unavailable" | "incompatible";
+    message: string;
+};
+/** `host.services`: calls into other plugins' services. */
+interface PluginServicesApi {
+    /**
+     * Call `method` on a service declared in `contributes.services.requires`.
+     * Resolves to `{ ok: true, value }` or `{ ok: false, reason, message }` and
+     * never rejects for an expected failure. Calls made before this plugin's
+     * `activate()` has returned resolve as `unavailable`.
+     */
+    call<TContract extends PluginServiceContract, M extends keyof TContract & string>(name: string, method: M, args: TContract[M]["args"], options?: PluginServiceCallOptions): Promise<PluginServiceResult<TContract[M]["result"]>>;
+    /** Where a declared import would resolve now, without starting the provider. */
+    status(name: string): Promise<PluginServiceStatus>;
+}
+
 /** One entry of a panel's `menu`. */
 interface PanelMenuItemContribution {
     /**
@@ -5112,6 +5210,22 @@ interface PluginActivationApi {
      */
     registerContextProvider(descriptor: ContextProviderDescriptor, impl: ContextProviderImpl): Promise<() => void>;
     /**
+     * Bind the methods of a service declared in `contributes.services.provides`
+     * (#14105). `handlers` must have a function for exactly the declared
+     * methods. Other plugins reach it through `host.services.call`; the host
+     * starts this plugin for the first call, so it need not stay loaded. Each
+     * method gets the arguments and a context with the caller's identity and a
+     * signal aborted when the caller stops waiting. Returns a disposer; every
+     * binding is removed when the plugin unloads, and calls still running then
+     * resolve as `unavailable`. Registering the same name again replaces the
+     * prior binding and leaves the older disposer inert. Must be called during
+     * `activate()`.
+     *
+     * @throws {Error} If called after activation resolves or times out — the host
+     *   is revoked and registration is rejected.
+     */
+    registerService<TContract extends PluginServiceContract = PluginServiceContract>(name: string, handlers: PluginServiceHandlers<TContract>): Promise<() => void>;
+    /**
      * Bind the check declared in `contributes.worktreeDeleteNotes` (#13805). The
      * host calls `impl.provideNotes` when the delete of a worktree in this
      * plugin's reach is confirmed — the delete dialog, bulk remove, an agent's
@@ -6116,6 +6230,12 @@ interface PluginHostApi extends PluginActivationApi {
      */
     readonly account: PluginAccountApi;
     /**
+     * Calls into services other plugins provide (#14105). See
+     * {@link PluginServicesApi}. NOT revoke-guarded; calls made before
+     * `activate()` returns resolve as `unavailable`.
+     */
+    readonly services: PluginServicesApi;
+    /**
      * Private, plugin-scoped key/value storage — the machine-owned counterpart to
      * {@link settings}. Values never surface in the settings UI and are not gated
      * by `contributes.settings` declarations. Plaintext JSON, three scopes
@@ -6446,6 +6566,25 @@ interface RegisteredSearchProviderRecord {
     id: string;
     provider: PluginSearchProvider;
 }
+/** A service bound through `host.registerService`; call its `handlers` directly to test them. */
+interface RegisteredServiceRecord {
+    name: string;
+    handlers: Record<string, unknown>;
+}
+/** One `host.services.call` the plugin made, in order. */
+interface ServiceCallRecord {
+    name: string;
+    method: string;
+    args: unknown;
+}
+/** Another plugin's service, as `CreateMockHostOptions.services` stands it in. */
+interface MockServiceProvider {
+    /** What `services.status` reports. Defaults to `"1.0.0"`. */
+    version?: string;
+    capabilities?: string[];
+    /** Run for `host.services.call`, with this plugin as the caller. */
+    methods: Record<string, (args: unknown, ctx: PluginServiceCallContext) => unknown>;
+}
 /** A provider bound through `host.registerContextProvider`; call `impl` directly to test it. */
 interface RegisteredContextProviderRecord {
     descriptor: ContextProviderDescriptor;
@@ -6588,6 +6727,10 @@ interface MockHostState {
     /** Live `host.registerSearchProvider` bindings, one per provider id. */
     readonly registeredSearchProviders: ReadonlyArray<RegisteredSearchProviderRecord>;
     readonly registeredContextProviders: ReadonlyArray<RegisteredContextProviderRecord>;
+    /** Live `host.registerService` bindings, one per service name. */
+    readonly registeredServices: ReadonlyArray<RegisteredServiceRecord>;
+    /** Every `host.services.call`, in order, whatever it answered. */
+    readonly serviceCalls: ReadonlyArray<ServiceCallRecord>;
     /** Live `host.registerWorktreeDeleteNotesProvider` bindings, one per id. */
     readonly registeredWorktreeDeleteNotesProviders: ReadonlyArray<RegisteredWorktreeDeleteNotesProviderRecord>;
     /** Live `host.mcp.registerTools` rosters, one per endpoint id. */
@@ -6849,6 +6992,13 @@ interface MockHostState {
 }
 interface CreateMockHostOptions {
     pluginId?: string;
+    /**
+     * Other plugins' services, by full name, that `host.services.call` and
+     * `status` reach. A name not listed answers `unavailable`, as a provider that
+     * isn't installed does. The mock has no manifest model, so it never answers
+     * `not-declared` or `incompatible`.
+     */
+    services?: Record<string, MockServiceProvider>;
     /**
      * Bodies `host.artifacts.download` answers with, by exact URL. A URL not
      * listed rejects with `ARTIFACT_TRANSFER_FAILED`, as an unreachable provider

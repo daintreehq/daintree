@@ -42,6 +42,12 @@ import type {
   ContextProviderImpl,
 } from "./pluginContextProvider.js";
 import type { ElementPickerProviderContribution } from "../elementPicker/providers.js";
+import type {
+  PluginServiceHandlers,
+  PluginServiceContract,
+  PluginServicesApi,
+  PluginServicesContribution,
+} from "./pluginServices.js";
 import type { z } from "zod";
 
 /** Default byte ceiling when a `contributes.fileEditors` entry omits `maxBytes`. */
@@ -3675,6 +3681,12 @@ export interface PluginManifest {
      * or the one the project is bound to. Same rules as `account` otherwise.
      */
     connections?: PluginConnectionContribution[];
+    /**
+     * Services this plugin exports to other plugins and imports from them
+     * (#14105). Optional in the type but always materialized by the manifest
+     * schema's default, like `surfaces`. See {@link PluginServicesContribution}.
+     */
+    services?: PluginServicesContribution;
     /**
      * A short setup checklist (#13824), shown on the plugin's setup strip and
      * at the top of its settings. The host works out which steps are done from
@@ -7483,6 +7495,25 @@ export interface PluginActivationApi {
     impl: ContextProviderImpl
   ): Promise<() => void>;
   /**
+   * Bind the methods of a service declared in `contributes.services.provides`
+   * (#14105). `handlers` must have a function for exactly the declared
+   * methods. Other plugins reach it through `host.services.call`; the host
+   * starts this plugin for the first call, so it need not stay loaded. Each
+   * method gets the arguments and a context with the caller's identity and a
+   * signal aborted when the caller stops waiting. Returns a disposer; every
+   * binding is removed when the plugin unloads, and calls still running then
+   * resolve as `unavailable`. Registering the same name again replaces the
+   * prior binding and leaves the older disposer inert. Must be called during
+   * `activate()`.
+   *
+   * @throws {Error} If called after activation resolves or times out — the host
+   *   is revoked and registration is rejected.
+   */
+  registerService<TContract extends PluginServiceContract = PluginServiceContract>(
+    name: string,
+    handlers: PluginServiceHandlers<TContract>
+  ): Promise<() => void>;
+  /**
    * Bind the check declared in `contributes.worktreeDeleteNotes` (#13805). The
    * host calls `impl.provideNotes` when the delete of a worktree in this
    * plugin's reach is confirmed — the delete dialog, bulk remove, an agent's
@@ -8548,6 +8579,12 @@ export interface PluginHostApi extends PluginActivationApi {
    * manifest declares no account, and once the plugin is unloaded.
    */
   readonly account: PluginAccountApi;
+  /**
+   * Calls into services other plugins provide (#14105). See
+   * {@link PluginServicesApi}. NOT revoke-guarded; calls made before
+   * `activate()` returns resolve as `unavailable`.
+   */
+  readonly services: PluginServicesApi;
   /**
    * Private, plugin-scoped key/value storage — the machine-owned counterpart to
    * {@link settings}. Values never surface in the settings UI and are not gated
