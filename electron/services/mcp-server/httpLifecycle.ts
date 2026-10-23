@@ -2593,7 +2593,7 @@ export class HttpLifecycle {
           helpSessionId !== undefined
             ? (this.helpSessionTerminalResolver?.(helpSessionId) ?? null)
             : null;
-        if (payload.danger && helpSessionId !== undefined && helpTerminalId !== null) {
+        if (payload.asks && helpSessionId !== undefined && helpTerminalId !== null) {
           // Announced just before it asks: the dialog's own deadline runs from
           // about now, not from the call's start, and a wait shown a moment
           // late is safer than a live decision hidden early.
@@ -2638,7 +2638,7 @@ export class HttpLifecycle {
     const notifyToolCallSettled: import("./sessionServer.js").SessionServerDeps["notifyToolCallSettled"] =
       (payload) => {
         // Before the origin check: a session torn down mid-call still settles its wait.
-        if (payload.danger) {
+        if (payload.asks) {
           getAssistantConfirmations().settle(
             confirmationCallKey(payload.sessionId, payload.toolId, payload.startedAt)
           );

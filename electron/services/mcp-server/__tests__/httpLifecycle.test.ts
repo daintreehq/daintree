@@ -3873,6 +3873,7 @@ describe("HttpLifecycle", () => {
               args: {},
               startedAt: Date.now(),
               danger: false,
+              asks: false,
               capturedTurnId: null,
             });
           } else {
