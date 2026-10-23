@@ -32,7 +32,6 @@ interface Bound {
   readonly serverKey: string;
   readonly registration: AgentMcpEndpointRegistration;
   readonly dispose: () => void;
-  readonly boundAt: number;
 }
 
 /** First wait before starting a server that just failed; doubles per failure. */
@@ -77,8 +76,10 @@ export class ContributedServerEndpoints {
   private readonly inflight = new Map<string, Promise<void>>();
   /** Per server, bumped on each invalidation, so a read that raced one never registers. */
   private readonly epochs = new Map<string, number>();
-  /** Per server, recent failures to start or stay up, which space out the next start. */
+  /** Per server, recent exits before it ran stably, which space out the next start. */
   private readonly failures = new Map<string, { count: number; at: number }>();
+  /** Per server, when it was first served since it last started; kept across roster refreshes. */
+  private readonly servedSince = new Map<string, number>();
   private offInvalidate: (() => void) | null = null;
   private disposed = false;
 
@@ -102,25 +103,9 @@ export class ContributedServerEndpoints {
       return Promise.resolve();
     const existing = this.inflight.get(key);
     if (existing) return existing;
-    // A server that fails to start, or crashes soon after, is not started
-    // again on every request: each agent relists when told its tools changed.
     const serverKey = `${pluginInstanceId}\x00${lookup.contribution.id}`;
-    const failure = this.failures.get(serverKey);
-    if (failure) {
-      const wait = failure.at + this.backoffMs(failure.count) - Date.now();
-      if (wait > 0) {
-        return Promise.reject(
-          new Error(
-            `MCP server "${lookup.contribution.id}" failed recently; it can start again in ${Math.ceil(wait / 1000)}s`
-          )
-        );
-      }
-    }
-    const run = this.bind(pluginInstanceId, key, serverKey, lookup)
-      .catch((err: unknown) => {
-        this.recordFailure(serverKey);
-        throw err;
-      })
+    const run = this.waitOutBackoff(serverKey)
+      .then(() => this.bind(pluginInstanceId, key, serverKey, lookup))
       .finally(() => {
         if (this.inflight.get(key) === run) this.inflight.delete(key);
       });
@@ -132,9 +117,21 @@ export class ContributedServerEndpoints {
     return Math.min(MAX_RETRY_MS, this.retryBaseMs * 2 ** Math.max(0, count - 1));
   }
 
-  private recordFailure(serverKey: string): void {
-    const count = (this.failures.get(serverKey)?.count ?? 0) + 1;
-    this.failures.set(serverKey, { count, at: Date.now() });
+  /**
+   * A server that keeps exiting before it runs stably is not started again
+   * the moment it goes: every agent relists when told its tools changed, and
+   * each relist would spawn it. The demand waits instead of failing, so the
+   * relist that follows a crash still ends with the server's tools.
+   */
+  private async waitOutBackoff(serverKey: string): Promise<void> {
+    const failure = this.failures.get(serverKey);
+    if (!failure) return;
+    const wait = failure.at + this.backoffMs(failure.count) - Date.now();
+    if (wait <= 0) return;
+    await new Promise<void>((resolve) => {
+      const timer = setTimeout(resolve, wait);
+      timer.unref?.();
+    });
   }
 
   private async bind(
@@ -143,6 +140,7 @@ export class ContributedServerEndpoints {
     serverKey: string,
     lookup: AgentMcpServerSourceLookup
   ): Promise<void> {
+    if (this.disposed) throw new Error("Contributed server endpoints were disposed");
     this.listen();
     const { contribution, source } = lookup;
     const serverId = contribution.id;
@@ -219,6 +217,7 @@ export class ContributedServerEndpoints {
         timeoutMs: AGENT_MCP_CALL_TIMEOUT_MS,
       });
     };
+    if (!this.servedSince.has(serverKey)) this.servedSince.set(serverKey, Date.now());
     const registration: AgentMcpEndpointRegistration = {
       pluginInstanceId,
       endpointId: lookup.endpointId,
@@ -227,7 +226,7 @@ export class ContributedServerEndpoints {
       resultFormat: "mcp",
     };
     const dispose = this.registry.register(registration);
-    this.bound.set(key, { serverKey, registration, dispose, boundAt: Date.now() });
+    this.bound.set(key, { serverKey, registration, dispose });
   }
 
   private listen(): void {
@@ -239,10 +238,21 @@ export class ContributedServerEndpoints {
         if (entry.serverKey !== serverKey) continue;
         this.bound.delete(key);
         entry.dispose();
-        if (reason !== "exited") continue;
-        if (Date.now() - entry.boundAt < STABLE_RUN_MS) this.recordFailure(serverKey);
-        else this.failures.delete(serverKey);
       }
+      if (reason === "changed") return;
+      const servedSince = this.servedSince.get(serverKey);
+      this.servedSince.delete(serverKey);
+      // A deliberate stop (restart, unload) is no failure, and a server that
+      // ran stably before exiting has recovered from any earlier ones.
+      if (
+        reason === "stopped" ||
+        (servedSince !== undefined && Date.now() - servedSince >= STABLE_RUN_MS)
+      ) {
+        this.failures.delete(serverKey);
+        return;
+      }
+      const count = (this.failures.get(serverKey)?.count ?? 0) + 1;
+      this.failures.set(serverKey, { count, at: Date.now() });
     });
   }
 
@@ -256,5 +266,6 @@ export class ContributedServerEndpoints {
     this.inflight.clear();
     this.epochs.clear();
     this.failures.clear();
+    this.servedSince.clear();
   }
 }

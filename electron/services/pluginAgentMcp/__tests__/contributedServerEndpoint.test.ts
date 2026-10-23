@@ -487,20 +487,43 @@ describe("ContributedServerEndpoints fencing", () => {
     expect(registry.get(INSTANCE_A, ENDPOINT)).toBeUndefined();
   });
 
-  it("waits before starting a server that crashed soon after it was served, but not after it changed its tools", async () => {
-    const fake = fakeSupervisor();
-    const { endpoints, registry } = adapter(fake, {}, 60_000);
+  it("waits out a backoff after a crash instead of failing, and only exits count", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "Date"] });
+    try {
+      const fake = fakeSupervisor();
+      const { endpoints, registry } = adapter(fake, {}, 5_000);
 
-    await endpoints.ensure(INSTANCE_A);
-    fake.emit(INSTANCE_A, "synthetic", "changed");
-    await endpoints.ensure(INSTANCE_A);
-    expect(registry.get(INSTANCE_A, ENDPOINT)).toBeDefined();
+      await endpoints.ensure(INSTANCE_A);
+      // A tools change and a deliberate stop rebind at once.
+      fake.emit(INSTANCE_A, "synthetic", "changed");
+      await endpoints.ensure(INSTANCE_A);
+      fake.emit(INSTANCE_A, "synthetic", "stopped");
+      await endpoints.ensure(INSTANCE_A);
+      expect(fake.supervisor.start).toHaveBeenCalledTimes(3);
 
-    fake.emit(INSTANCE_A, "synthetic", "exited");
-    await expect(endpoints.ensure(INSTANCE_A)).rejects.toThrow(/failed recently/);
-    expect(fake.supervisor.start).toHaveBeenCalledTimes(2);
-    expect(registry.get(INSTANCE_A, ENDPOINT)).toBeUndefined();
-    endpoints.dispose();
+      // An exit before a stable run delays the next start; the demand waits.
+      fake.emit(INSTANCE_A, "synthetic", "exited");
+      let settled = false;
+      const pending = endpoints.ensure(INSTANCE_A).then(() => {
+        settled = true;
+      });
+      await vi.advanceTimersByTimeAsync(4_000);
+      expect(settled).toBe(false);
+      expect(fake.supervisor.start).toHaveBeenCalledTimes(3);
+      await vi.advanceTimersByTimeAsync(1_000);
+      await pending;
+      expect(registry.get(INSTANCE_A, ENDPOINT)).toBeDefined();
+      expect(fake.supervisor.start).toHaveBeenCalledTimes(4);
+
+      // A run that stays up past the stable window clears the history.
+      await vi.advanceTimersByTimeAsync(10_000);
+      fake.emit(INSTANCE_A, "synthetic", "exited");
+      await endpoints.ensure(INSTANCE_A);
+      expect(fake.supervisor.start).toHaveBeenCalledTimes(5);
+      endpoints.dispose();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("keeps a fallback description inside the byte budget", async () => {
