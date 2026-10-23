@@ -595,18 +595,13 @@ export const CHANNELS = {
   DEV_PREVIEW_STATE_CHANGED: "dev-preview:state-changed",
   DEV_PREVIEW_ALL_SESSIONS_CHANGED: "dev-preview:all-sessions-changed",
 
-  // Site-preview bridge — binding a caller to a dev-preview guest and receiving
-  // validated observations back from the runtime installed inside it. There is
-  // deliberately no "evaluate in guest" channel; see handlers/sitePreview.ts.
-  SITE_PREVIEW_LIST_CANDIDATES: "site-preview:list-candidates",
-  SITE_PREVIEW_BIND: "site-preview:bind",
+  // Site-preview bridge — the lifecycle commands for an Element Picker binding
+  // on a dev-preview guest. There is deliberately no "evaluate in guest"
+  // channel; see handlers/sitePreview.ts.
   SITE_PREVIEW_DETACH: "site-preview:detach",
   SITE_PREVIEW_SET_MODE: "site-preview:set-mode",
-  SITE_PREVIEW_RESELECT: "site-preview:reselect",
   SITE_PREVIEW_CLEAR_SELECTION: "site-preview:clear-selection",
   SITE_PREVIEW_CLEAR_HOVER: "site-preview:clear-hover",
-  SITE_PREVIEW_GET_STATE: "site-preview:get-state",
-  SITE_PREVIEW_EVENT: "site-preview:event",
 
   // Core Element Picker — the dev preview's own picker. Binding and the page's
   // traffic stay on the machine showing the preview; the source workspace and

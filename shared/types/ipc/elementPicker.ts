@@ -8,8 +8,7 @@
  * project's source belongs to the machine holding the worktree (the
  * workspace, `resolve`, `describeProject`, `sourceRevisions` and the
  * `source-changed` push). Lifecycle calls on a binding (detach, mode, clearing
- * the selection or the hover) are the site-preview bridge's, which serves core
- * and plugin bindings alike.
+ * the selection or the hover) are the site-preview bridge's.
  *
  * Structural only, and free of any `electron/` import: the schemas that
  * validate what crosses live with the handlers.
@@ -74,7 +73,7 @@ export interface ElementPickerReselectRequest {
  * events, the page's admitted events, and what the host did about them.
  */
 export type ElementPickerPushPayload =
-  | Exclude<SitePreviewPushPayload, { kind: "guest-event" }>
+  | SitePreviewPushPayload
   | {
       kind: "picker-event";
       sessionId: string;

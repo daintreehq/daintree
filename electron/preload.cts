@@ -204,7 +204,6 @@ import type {
   DevPreviewStateChangedPayload,
   DevPreviewAllSessionsPayload,
 } from "../shared/types/ipc.js";
-import type { SitePreviewPushPayload } from "../shared/types/ipc/sitePreview.js";
 import type {
   ElementPickerPushPayload,
   ElementPickerSourceChangedPush,
@@ -2571,14 +2570,9 @@ function buildElectronApi(): ElectronAPI {
         _typedOn(CHANNELS.DEV_PREVIEW_ALL_SESSIONS_CHANGED, callback),
     },
 
-    // Site Preview bridge API. No `evaluate` method by design — the guest
-    // runtime is supplied once at bind time and nothing else runs in the page.
-    sitePreview: {
-      ...buildSitePreviewPreloadBindings(_unwrappingInvoke),
-
-      onEvent: (callback: (payload: SitePreviewPushPayload) => void) =>
-        _typedOn(CHANNELS.SITE_PREVIEW_EVENT, callback),
-    },
+    // Site Preview bridge API: the lifecycle commands for an Element Picker
+    // binding. No `evaluate` method by design.
+    sitePreview: buildSitePreviewPreloadBindings(_unwrappingInvoke),
 
     // Core Element Picker. Like the bridge, no way to choose what runs in the
     // page; a workspace names a worktree of the sender's project, never a path.

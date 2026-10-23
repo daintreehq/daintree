@@ -1090,13 +1090,7 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     onStateChanged(callback: (data: DevPreviewStateChangedPayload) => void): () => void;
     onAllSessionsChanged(callback: (data: DevPreviewAllSessionsPayload) => void): () => void;
   };
-  // bind / detach / setMode / getState come from GeneratedElectronAPI; onEvent
-  // is the renderer-only push subscription for validated guest observations.
-  sitePreview: GeneratedElectronAPI["sitePreview"] & {
-    onEvent(
-      callback: (data: import("./sitePreview.js").SitePreviewPushPayload) => void
-    ): () => void;
-  };
+  sitePreview: GeneratedElectronAPI["sitePreview"];
   // The invoke methods come from GeneratedElectronAPI; these are the two
   // pushes: a core binding's traffic, and a workspace's source changes.
   elementPicker: GeneratedElectronAPI["elementPicker"] & {

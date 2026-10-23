@@ -76,7 +76,7 @@ export interface ElementPickerApi {
   onSourceChanged(callback: (payload: ElementPickerSourceChangedPush) => void): () => void;
 }
 
-/** The site-preview bridge's binding lifecycle, which serves the core picker's bindings too. */
+/** The site-preview bridge's binding lifecycle for the picker's bindings. */
 export interface PreviewSessionApi {
   detach(request: { sessionId: string }): Promise<void>;
   setMode(request: { sessionId: string; mode: SitePreviewMode }): Promise<SitePreviewBindingState>;

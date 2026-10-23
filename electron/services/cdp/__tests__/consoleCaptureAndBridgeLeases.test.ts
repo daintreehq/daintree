@@ -19,14 +19,13 @@ const ipcMainMock = vi.hoisted(() => ({
 const WEB_CONTENTS_ID = 42;
 const MAIN_FRAME_ID = "frame-main";
 const MAIN_CONTEXT_ID = 7;
+const ISOLATED_CONTEXT_ID = 31;
 const PANEL_ID = "panel-1";
-const ADAPTER_ID = "test.guest";
 const PROJECT_ID = "project-1";
 
 class FakeDebugger extends EventEmitter {
   readonly commands: Array<{ method: string; params?: Record<string, unknown> }> = [];
   attached = false;
-  scriptCounter = 0;
   /** The guest's console buffer, re-delivered by `Runtime.enable` as CDP does. */
   readonly buffer: string[] = [];
 
@@ -50,9 +49,8 @@ class FakeDebugger extends EventEmitter {
     if (method === "Page.getFrameTree") {
       return { frameTree: { frame: { id: MAIN_FRAME_ID } } };
     }
-    if (method === "Page.addScriptToEvaluateOnNewDocument") {
-      this.scriptCounter += 1;
-      return { identifier: `script-${this.scriptCounter}` };
+    if (method === "Page.createIsolatedWorld") {
+      return { executionContextId: ISOLATED_CONTEXT_ID };
     }
     return {};
   }
@@ -116,9 +114,9 @@ vi.mock("../../../ipc/utils.js", () => ({
 
 import { registerWebviewHandlers } from "../../../ipc/handlers/webview.js";
 import { SitePreviewBridge } from "../../SitePreviewBridge.js";
-import { GUEST_PROTOCOL_VERSION } from "../../sitePreview/guestProtocol.js";
 import { __resetCdpLeasesForTests, isCdpDomainEnabled } from "../WebContentsCdpService.js";
-import type { SitePreviewPushPayload } from "../../../../shared/types/ipc/sitePreview.js";
+import { ELEMENT_PICKER_PROTOCOL_VERSION } from "../../../../shared/elementPicker/protocol.js";
+import type { ElementPickerPushPayload } from "../../../../shared/types/ipc/elementPicker.js";
 import type { HandlerDependencies } from "../../../ipc/types.js";
 
 function getHandler(channel: string) {
@@ -128,22 +126,26 @@ function getHandler(channel: string) {
   return call[1] as (...args: any[]) => Promise<any>;
 }
 
-function makeBridge(pushed: SitePreviewPushPayload[]): SitePreviewBridge {
+function makeBridge(): SitePreviewBridge {
   return new SitePreviewBridge({
-    push: (payload) => pushed.push(payload),
-    isPluginEnabled: async () => true,
-    listGuests: () => [
-      { webContentsId: WEB_CONTENTS_ID, panelId: PANEL_ID, projectId: PROJECT_ID, url: null },
-    ],
     getWebContents: () => guest as unknown as Electron.WebContents,
     resolveWebContentsId: () => WEB_CONTENTS_ID,
     getPanelKind: () => "dev-preview",
     resolveGuestProject: () => PROJECT_ID,
     newSessionId: () => "session-1",
     newBindingName: () => "__binding",
-    // The host resolves the runtime; this stands in for its adapter registry.
-    resolveGuestAdapter: (adapterId) => ({ id: adapterId, pluginId: "test.plugin" }),
-    loadGuestAdapterSource: async () => "",
+    // A bootstrap that does nothing: what is under test is the leases, not the picker.
+    loadCoreGuestAsset: async () => "void 0",
+  });
+}
+
+function bind(bridge: SitePreviewBridge, sunk: ElementPickerPushPayload[]) {
+  return bridge.bindElementPicker({
+    projectId: PROJECT_ID,
+    panelId: PANEL_ID,
+    mode: "browse",
+    subscriberWebContentsId: WEB_CONTENTS_ID,
+    sink: (payload) => sunk.push(payload),
   });
 }
 
@@ -154,13 +156,13 @@ function emit(method: string, params: unknown): void {
 function callBinding(sequence: number): void {
   emit("Runtime.bindingCalled", {
     name: "__binding",
-    executionContextId: MAIN_CONTEXT_ID,
+    executionContextId: ISOLATED_CONTEXT_ID,
     payload: JSON.stringify({
-      protocolVersion: GUEST_PROTOCOL_VERSION,
+      protocolVersion: ELEMENT_PICKER_PROTOCOL_VERSION,
       sessionId: "session-1",
       documentEpoch: 0,
       sequence,
-      event: { type: "mappingRevisionSeen", revision: `rev-${sequence}` },
+      event: { type: "hoverChanged", observation: null },
     }),
   });
 }
@@ -195,15 +197,9 @@ describe("console capture and the site preview bridge on one guest", () => {
   });
 
   it("keeps the binding's Runtime stream alive across a console pane's stop", async () => {
-    const pushed: SitePreviewPushPayload[] = [];
-    const bridge = makeBridge(pushed);
-    await bridge.bind({
-      projectId: PROJECT_ID,
-      panelId: PANEL_ID,
-      adapterId: ADAPTER_ID,
-      mode: "browse",
-      subscriberWebContentsId: WEB_CONTENTS_ID,
-    });
+    const sunk: ElementPickerPushPayload[] = [];
+    const bridge = makeBridge();
+    await bind(bridge, sunk);
     emit("Runtime.executionContextCreated", {
       context: { id: MAIN_CONTEXT_ID, auxData: { isDefault: true, frameId: MAIN_FRAME_ID } },
     });
@@ -216,9 +212,9 @@ describe("console capture and the site preview bridge on one guest", () => {
     expect(guest.debugger.methods()).not.toContain("Runtime.disable");
     expect(isCdpDomainEnabled(WEB_CONTENTS_ID, "Runtime")).toBe(true);
 
-    pushed.length = 0;
+    sunk.length = 0;
     callBinding(0);
-    expect(pushed.filter((p) => p.kind === "guest-event")).toHaveLength(1);
+    expect(sunk.filter((p) => p.kind === "picker-event")).toHaveLength(1);
 
     // Log was only ever the console capture's, so that one does come off.
     expect(guest.debugger.methods()).toContain("Log.disable");
@@ -228,18 +224,12 @@ describe("console capture and the site preview bridge on one guest", () => {
   });
 
   it("enables Runtime once for both consumers and never replays twice", async () => {
-    const pushed: SitePreviewPushPayload[] = [];
-    const bridge = makeBridge(pushed);
+    const sunk: ElementPickerPushPayload[] = [];
+    const bridge = makeBridge();
 
     await getHandler("webview:start-console-capture")(null, WEB_CONTENTS_ID, "pane-1");
     logLine("before the bind");
-    await bridge.bind({
-      projectId: PROJECT_ID,
-      panelId: PANEL_ID,
-      adapterId: ADAPTER_ID,
-      mode: "browse",
-      subscriberWebContentsId: WEB_CONTENTS_ID,
-    });
+    await bind(bridge, sunk);
 
     // One enable, so one replay: the bridge's old disable/enable cycle would
     // have re-delivered every buffered row for the console pane to reconcile.
@@ -255,15 +245,9 @@ describe("console capture and the site preview bridge on one guest", () => {
     // seen while no pane was capturing still has to count. If it did not, the
     // replay that a genuine `Runtime.enable` triggers would resume one event
     // short and duplicate a row the renderer still displays.
-    const pushed: SitePreviewPushPayload[] = [];
-    const bridge = makeBridge(pushed);
-    await bridge.bind({
-      projectId: PROJECT_ID,
-      panelId: PANEL_ID,
-      adapterId: ADAPTER_ID,
-      mode: "browse",
-      subscriberWebContentsId: WEB_CONTENTS_ID,
-    });
+    const sunk: ElementPickerPushPayload[] = [];
+    const bridge = makeBridge();
+    await bind(bridge, sunk);
 
     await getHandler("webview:start-console-capture")(null, WEB_CONTENTS_ID, "pane-1");
     logLine("shown first");
@@ -284,15 +268,9 @@ describe("console capture and the site preview bridge on one guest", () => {
   });
 
   it("counts but does not emit console traffic that arrives while no pane is capturing", async () => {
-    const pushed: SitePreviewPushPayload[] = [];
-    const bridge = makeBridge(pushed);
-    await bridge.bind({
-      projectId: PROJECT_ID,
-      panelId: PANEL_ID,
-      adapterId: ADAPTER_ID,
-      mode: "browse",
-      subscriberWebContentsId: WEB_CONTENTS_ID,
-    });
+    const sunk: ElementPickerPushPayload[] = [];
+    const bridge = makeBridge();
+    await bind(bridge, sunk);
 
     await getHandler("webview:start-console-capture")(null, WEB_CONTENTS_ID, "pane-1");
     logLine("while capturing");

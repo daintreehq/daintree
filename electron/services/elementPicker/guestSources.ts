@@ -57,8 +57,8 @@ export interface BootstrapSourceParams {
 
 /**
  * Bookkeeping, not a boundary, for everything except one thing: this runs in
- * a world page script cannot reach, so unlike the plugin runtime's prelude the
- * page cannot replace `post`, read the binding or advance the sequence. What
+ * a world page script cannot reach, so the page cannot replace `post`, read
+ * the binding or advance the sequence. What
  * the bootstrap reports about the page is still the page's to shape, which is
  * why the host validates every envelope as untrusted.
  */

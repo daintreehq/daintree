@@ -3,7 +3,6 @@ import { vi } from "vitest";
 
 import { SitePreviewBridge } from "../../../SitePreviewBridge.js";
 import type { ElementPickerPushPayload } from "../../types.js";
-import type { SitePreviewPushPayload } from "../../../../../shared/types/ipc/sitePreview.js";
 
 /**
  * A fake debugger that evaluates every expression in this jsdom realm, so the
@@ -151,12 +150,8 @@ export function makeHarness(catalog: Record<string, string>) {
   const wc = new FakeWebContents(WEB_CONTENTS_ID);
   const subscriber = new FakeWebContents(SUBSCRIBER_WC_ID);
   const sunk: ElementPickerPushPayload[] = [];
-  const pushed: SitePreviewPushPayload[] = [];
   let sessions = 0;
   const bridge = new SitePreviewBridge({
-    push: (payload) => pushed.push(payload),
-    isPluginEnabled: async () => true,
-    listGuests: () => [],
     getWebContents: (id) => {
       if (id === WEB_CONTENTS_ID) return wc as unknown as Electron.WebContents;
       if (id === SUBSCRIBER_WC_ID) return subscriber as unknown as Electron.WebContents;
@@ -167,8 +162,6 @@ export function makeHarness(catalog: Record<string, string>) {
     resolveGuestProject: () => PROJECT_ID,
     newSessionId: () => `session-${++sessions}`,
     newBindingName: () => BINDING_NAME,
-    resolveGuestAdapter: () => null,
-    loadGuestAdapterSource: async () => "",
     loadCoreGuestAsset: async (id) => catalog[id] ?? null,
   });
   const bind = () =>
@@ -188,7 +181,7 @@ export function makeHarness(catalog: Record<string, string>) {
       payload.kind === "picker-event" && payload.event.type === type ? [payload] : []
     );
   const navigate = (observed = true) => wc.debugger.navigate(wc, observed);
-  return { bridge, wc, sunk, pushed, bind, navigate, kinds, pickerEvents };
+  return { bridge, wc, sunk, bind, navigate, kinds, pickerEvents };
 }
 
 /** Lets the binding queue, binding calls and probes settle. */

@@ -1601,9 +1601,6 @@ export interface GeneratedElectronAPI {
     ): Promise<IpcInvokeMap["shortcut-hints:set-hinted-hover"]["result"]>;
   };
   sitePreview: {
-    bind(
-      ...args: IpcInvokeMap["site-preview:bind"]["args"]
-    ): Promise<IpcInvokeMap["site-preview:bind"]["result"]>;
     clearHover(
       ...args: IpcInvokeMap["site-preview:clear-hover"]["args"]
     ): Promise<IpcInvokeMap["site-preview:clear-hover"]["result"]>;
@@ -1613,15 +1610,6 @@ export interface GeneratedElectronAPI {
     detach(
       ...args: IpcInvokeMap["site-preview:detach"]["args"]
     ): Promise<IpcInvokeMap["site-preview:detach"]["result"]>;
-    getState(
-      ...args: IpcInvokeMap["site-preview:get-state"]["args"]
-    ): Promise<IpcInvokeMap["site-preview:get-state"]["result"]>;
-    listCandidates(
-      ...args: IpcInvokeMap["site-preview:list-candidates"]["args"]
-    ): Promise<IpcInvokeMap["site-preview:list-candidates"]["result"]>;
-    reselect(
-      ...args: IpcInvokeMap["site-preview:reselect"]["args"]
-    ): Promise<IpcInvokeMap["site-preview:reselect"]["result"]>;
     setMode(
       ...args: IpcInvokeMap["site-preview:set-mode"]["args"]
     ): Promise<IpcInvokeMap["site-preview:set-mode"]["result"]>;
