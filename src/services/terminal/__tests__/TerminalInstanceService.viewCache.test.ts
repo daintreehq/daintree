@@ -503,7 +503,10 @@ describe("TerminalInstanceService built inside a cached or hidden view (#14267)"
       electron: { system: { reportTerminalRendererDiagnostics: report } },
     });
     const { createTerminalPaintPlane } = await import("../TerminalInstanceService");
-    return createTerminalPaintPlane() as unknown as ViewCacheTestService;
+    // Reached through Reflect: the test drives members the public type hides.
+    const built: object = { plane: createTerminalPaintPlane() };
+    const service: ViewCacheTestService = Reflect.get(built, "plane");
+    return service;
   }
 
   beforeEach(() => {

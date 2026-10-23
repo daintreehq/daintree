@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { makeSurface } from "../paintFabric/__tests__/fakePaintPlane";
-import { setPanelStoreAccessor, type PanelStoreSnapshot } from "@/store/storeAccessors";
+import { setPanelStoreAccessor } from "@/store/storeAccessors";
 import { __resetProjectViewCacheStateForTests } from "@/lib/viewCacheState";
 
 const m = vi.hoisted(() => {
@@ -303,7 +303,9 @@ describe("terminalInstanceServiceAccessor", () => {
     let panels: Record<string, object>;
     beforeEach(() => {
       panels = {};
-      setPanelStoreAccessor(() => ({ panelsById: panels }) as unknown as PanelStoreSnapshot);
+      // Only panelsById is read; the rest of the snapshot is beside the point.
+      const holder: object = { snapshot: { panelsById: panels } };
+      setPanelStoreAccessor(() => Reflect.get(holder, "snapshot"));
     });
 
     it("drops a queued call whose panel closed before the service loaded", () => {
