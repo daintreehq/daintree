@@ -1620,6 +1620,21 @@ describe("app:boot handler", () => {
       expect(captureProjectLayoutSeed).toHaveBeenCalledWith("p1", false);
     });
 
+    it("still counts a project as new when another project owns the legacy terminals", async () => {
+      vi.mocked(projectStore.getCurrentProject).mockReturnValue({
+        id: "p1",
+        name: "P",
+        path: "/p",
+      } as unknown as ReturnType<typeof projectStore.getCurrentProject>);
+      globalAppStateRef.current = {
+        ...DEFAULT_GLOBAL_APP_STATE,
+        terminals: [{ id: "t1", type: "terminal", title: "Shell", cwd: "/p", location: "grid" }],
+      };
+      legacyOwnerRef.current = "p-other";
+      await invokeBoot();
+      expect(captureProjectLayoutSeed).toHaveBeenCalledWith("p1", true);
+    });
+
     it("records nothing for a view with no project row", async () => {
       await invokeBoot();
       expect(captureProjectLayoutSeed).not.toHaveBeenCalled();
@@ -1958,6 +1973,53 @@ describe("app:hydrate host fields", () => {
     release();
     _resetIpcDispatcherForTesting();
     expect(captureProjectLayoutSeed).toHaveBeenCalledWith("p-remote", true);
+  });
+
+  it("does not count a remote first open as one while unclaimed legacy terminals could be its own", async () => {
+    // A remote view never claims the legacy record, so it stays unowned here
+    // and could still be this project's history (#13782).
+    const { getIpcDispatcher, _resetIpcDispatcherForTesting } = await import("../dispatcher.js");
+    const { wrapSuccess } = await import("../../../shared/utils/ipcErrorSerialization.js");
+    globalAppStateRef.current = {
+      ...DEFAULT_GLOBAL_APP_STATE,
+      terminals: [{ id: "t1", type: "terminal", title: "Shell", cwd: "/r", location: "grid" }],
+    };
+    vi.mocked(projectStore.getProjectById).mockReturnValueOnce({
+      id: "p-remote",
+      name: "R",
+      path: "/r",
+    } as never);
+    vi.mocked(projectStore.getProjectStateWithRecovery).mockResolvedValueOnce({
+      state: null,
+    } as never);
+    _resetIpcDispatcherForTesting();
+    const dispatcher = getIpcDispatcher();
+    dispatcher.setInvokeEnveloper(async (_c, _a, call) => wrapSuccess(await call()));
+    const release = dispatcher.allowHybridOverLink("app:hydrate");
+    const cleanup = registerAppStateHandlers();
+    const endpoint = {
+      endpointId: "s1:view-4",
+      clientId: "client-1",
+      projectId: "p-remote",
+      kind: "remote-view" as const,
+      handle: -7,
+      send: vi.fn(),
+      request: vi.fn(),
+      onClose: vi.fn(() => ({ dispose: () => undefined })),
+      isClosed: () => false,
+    };
+
+    await dispatcher.invokeForEndpoint(
+      { endpoint, client: { clientId: "client-1", kind: "remote" } as never },
+      "app:hydrate",
+      []
+    );
+
+    cleanup();
+    release();
+    _resetIpcDispatcherForTesting();
+    expect(legacyOwnerRef.current).toBeUndefined();
+    expect(captureProjectLayoutSeed).toHaveBeenCalledWith("p-remote", false);
   });
 });
 

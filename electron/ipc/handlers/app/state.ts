@@ -495,8 +495,11 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
         // project inheriting legacy or crash-restored terminals all have a
         // history, so none of them is a first open. A remote Shell's view
         // counts too: the state it starts is this host's, written below.
+        // An unclaimed legacy list may be this project's own history, which a
+        // remote view never claims; it is only ruled out once another project
+        // owns it.
         const inheritsLegacyTerminals =
-          canInheritLegacyWorkspaceState &&
+          (canInheritLegacyWorkspaceState || legacyWorkspaceStateOwnerId === undefined) &&
           Array.isArray(globalAppState.terminals) &&
           globalAppState.terminals.length > 0;
         recordLayoutSeed(

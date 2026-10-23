@@ -332,7 +332,13 @@ async function applyResolved(
       if (!(error instanceof ReportedRecipeFailure)) unreported.push(reason);
     }
   }
-  arrange(placed);
+  // Panels found only to keep a tab group whole move with what they group:
+  // when nothing else opened — a recipe that started nothing — they stay
+  // where the user left them, maximize and all.
+  const arranged = placed.some(({ entry, ids }) => !reuseOnly(entry) && ids.length > 0)
+    ? placed
+    : placed.filter(({ entry }) => !reuseOnly(entry));
+  arrange(arranged);
 
   if (unreported.length > 0) {
     notify({
@@ -350,7 +356,7 @@ async function applyResolved(
       },
     });
   }
-  return { status: "applied", panelIds: placed.flatMap(({ ids }) => ids), failures };
+  return { status: "applied", panelIds: arranged.flatMap(({ ids }) => ids), failures };
 }
 
 /**

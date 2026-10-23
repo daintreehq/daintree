@@ -636,6 +636,46 @@ describe("applyPluginLayout", () => {
         expect(createTabGroup).toHaveBeenCalledWith("grid", "wt-1", ["page", "t1", "t2"], "page");
       });
 
+      it("leaves a maximized seeded page alone when the recipe starts nothing", async () => {
+        usePluginLayoutsStore.setState({
+          layouts: [
+            layout({
+              entries: [
+                {
+                  target: { type: "browser", url: "http://localhost:3000/" },
+                  location: "grid",
+                  tabGroup: "main",
+                  maximized: true,
+                },
+                {
+                  target: { type: "recipe", recipeId: "acme.pair" },
+                  location: "grid",
+                  tabGroup: "main",
+                },
+              ],
+            }),
+          ],
+        });
+        seed([
+          {
+            id: "page",
+            kind: "browser",
+            location: "dock",
+            worktreeId: "wt-1",
+            browserUrl: "http://localhost:3000/",
+          },
+        ]);
+        dispatch.mockResolvedValue({ ok: false, error: { message: "Recipe launch failed" } });
+
+        const result = await startApproved();
+
+        expect(result.status === "applied" && result.failures).toEqual(["Recipe launch failed"]);
+        expect(placeTerminal).not.toHaveBeenCalled();
+        expect(panels.page?.location).toBe("dock");
+        expect(toggleMaximize).not.toHaveBeenCalled();
+        expect(createTabGroup).not.toHaveBeenCalled();
+      });
+
       it("never reopens a seeded page the user has closed", async () => {
         seed([
           { id: "t1", kind: "terminal", location: "dock", worktreeId: "wt-1" },
