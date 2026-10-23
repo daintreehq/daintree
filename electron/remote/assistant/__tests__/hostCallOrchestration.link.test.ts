@@ -18,7 +18,6 @@ vi.mock("electron", () => ({
 }));
 
 import type { ActionId, ActionManifestEntry } from "../../../../shared/types/actions.js";
-import type { DispatchEnvelope } from "../../../services/mcp-server/rendererBridge.js";
 import {
   principalOwnerKey,
   relayOwnershipPrincipal,
@@ -28,7 +27,10 @@ import {
   type SessionServerDeps,
 } from "../../../services/mcp-server/sessionServer.js";
 import { SessionStore } from "../../../services/mcp-server/sessionStore.js";
-import { RELAY_CALL_ID_META_KEY } from "../../../services/mcp-server/shared.js";
+import {
+  RELAY_CALL_ID_META_KEY,
+  type DispatchEnvelope,
+} from "../../../services/mcp-server/shared.js";
 import {
   discoverRuns,
   getRunCheckpointBucket,
