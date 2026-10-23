@@ -121,7 +121,8 @@ describe("vueProductionCompilerPlugin", () => {
       process.env.NODE_ENV = "read-at-runtime";
       expect(mod.env()).toBe("read-at-runtime");
     } finally {
-      process.env.NODE_ENV = previous;
+      if (previous === undefined) delete process.env.NODE_ENV;
+      else process.env.NODE_ENV = previous;
     }
   });
 
