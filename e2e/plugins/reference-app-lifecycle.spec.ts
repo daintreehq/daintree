@@ -73,7 +73,6 @@ interface InventoryEntry {
 let ctx: AppContext;
 let binDir = "";
 const projects: DeskProject[] = [];
-const servers = new Map<string, LaunchedServer>();
 
 async function dispatch<T = unknown>(page: Page, actionId: string, args?: unknown): Promise<T> {
   const result = await page.evaluate(
@@ -215,9 +214,17 @@ async function trustAndResolve(page: Page, pending: DeskProject): Promise<DeskPr
   return project;
 }
 
-async function launchClaude(page: Page): Promise<LaunchedServer> {
+interface LaunchedAgent {
+  terminalId: string;
+  server: LaunchedServer;
+}
+
+async function launchClaude(page: Page): Promise<LaunchedAgent> {
   const before = readRecordedLaunches(binDir, "claude").length;
-  await dispatch(page, "agent.launch", { agentId: "claude", location: "grid" });
+  const { terminalId } = await dispatch<{ terminalId: string }>(page, "agent.launch", {
+    agentId: "claude",
+    location: "grid",
+  });
   let server: LaunchedServer | undefined;
   await expect
     .poll(
@@ -229,7 +236,22 @@ async function launchClaude(page: Page): Promise<LaunchedServer> {
       { timeout: APP_TIMEOUT, message: "claude never started with the Request Desk server" }
     )
     .toBe(true);
-  return server!;
+  return { terminalId, server: server! };
+}
+
+/**
+ * A live agent ranks its project's view after every clean one for eviction,
+ * so the recorders are stopped before anything here asserts what was evicted.
+ */
+async function stopAgents(page: Page, agents: readonly LaunchedAgent[]): Promise<void> {
+  for (const { terminalId } of agents) {
+    await page.evaluate(([id]) => window.electron.terminal.kill(id), [terminalId] as const);
+  }
+}
+
+async function viewGeneration(page: Page, project: DeskProject): Promise<number | null> {
+  const statuses = await page.evaluate(() => window.electron.plugin.getRuntimeStatuses());
+  return statuses.find((s) => s.pluginId === project.instanceId)?.viewGeneration ?? null;
 }
 
 /** The draft and the request it edits, as Home shows them. */
@@ -339,9 +361,8 @@ test.describe.serial("Reference app: lifecycle across switching and recovery", (
       )
       .toBeTruthy();
 
-    const server = await launchClaude(ctx.window);
-    servers.set(project.projectId, server);
-    const agent = new McpHttpClient(server.url, server.bearer);
+    const launched = await launchClaude(ctx.window);
+    const agent = new McpHttpClient(launched.server.url, launched.server.bearer);
     await agent.initialize();
     expect(await agent.listTools()).toEqual(expect.arrayContaining(APP_TOOLS));
 
@@ -370,6 +391,7 @@ test.describe.serial("Reference app: lifecycle across switching and recovery", (
         { timeout: REPORT_TIMEOUT }
       )
       .toBe("succeeded");
+    await stopAgents(ctx.window, [launched]);
   });
 
   test("six projects keep their own data through rotations past a two-view cache", async () => {
@@ -426,16 +448,19 @@ test.describe.serial("Reference app: lifecycle across switching and recovery", (
 
   test("one project's agent credential is refused by another project", async () => {
     const [first, second] = projects;
-    const own = servers.get(first.projectId)!;
-    // Still live: the refusal below is about the project, not an expired grant.
-    expect(await mcpEndpointStatus(own.url, own.bearer)).toBe(200);
-
+    await switchTo(first);
+    const firstAgent = await launchClaude(ctx.window);
     await switchTo(second);
-    const server = await launchClaude(ctx.window);
-    servers.set(second.projectId, server);
-    expect(await mcpEndpointStatus(server.url, server.bearer)).toBe(200);
-    expect(await mcpEndpointStatus(server.url, own.bearer)).toBe(403);
+    const secondAgent = await launchClaude(ctx.window);
+    const own = firstAgent.server;
+    const other = secondAgent.server;
+
+    // Both live: the refusal below is about the project, not an expired grant.
+    expect(await mcpEndpointStatus(own.url, own.bearer)).toBe(200);
+    expect(await mcpEndpointStatus(other.url, other.bearer)).toBe(200);
+    expect(await mcpEndpointStatus(other.url, own.bearer)).toBe(403);
     expect(await requestTitles(ctx.window, second)).not.toContain(first.sentinel);
+    await stopAgents(ctx.window, [firstAgent, secondAgent]);
   });
 
   test("a draft and its request survive cache pressure, reclaim and a plugin reload", async () => {
@@ -466,31 +491,21 @@ test.describe.serial("Reference app: lifecycle across switching and recovery", (
     await expectDraft(ctx.window, first);
 
     // A compatible reload: the same build rewritten, as a `dist/` rebuild does.
-    // The watcher unloads the app and loads it again; the draft is the view's.
-    await ctx.window.evaluate(() => {
-      const w = window as unknown as Record<string, unknown>;
-      w.__deskPluginChanges = 0;
-      w.__deskPluginChangesOff = window.electron.events.on("plugin:project-plugins-changed", () => {
-        w.__deskPluginChanges = (w.__deskPluginChanges as number) + 1;
-      });
-    });
+    // The watcher unloads the app and loads it again under a new view
+    // generation; the draft is the view's and has to survive the remount.
+    const generation = await viewGeneration(ctx.window, first);
+    expect(generation).not.toBeNull();
     appendFileSync(
       path.join(first.dir, ".daintree", "plugins", REFERENCE_APP_ID, "dist", "index.js"),
       "\n// rebuilt\n"
     );
     await expect
-      .poll(
-        () =>
-          ctx.window.evaluate(
-            () => (window as unknown as Record<string, unknown>).__deskPluginChanges as number
-          ),
-        { timeout: APP_TIMEOUT, message: "the rebuilt app was never reloaded" }
-      )
-      .toBeGreaterThan(0);
-    await ctx.window.evaluate(() => {
-      const off = (window as unknown as Record<string, unknown>).__deskPluginChangesOff;
-      if (typeof off === "function") off();
-    });
+      .poll(() => viewGeneration(ctx.window, first), {
+        timeout: APP_TIMEOUT,
+        message: "the rebuilt app was never reloaded",
+      })
+      .not.toBe(generation);
+    await expect.poll(() => viewGeneration(ctx.window, first)).not.toBeNull();
     await waitForApp(ctx.window, first);
     await expectDraft(ctx.window, first);
   });
