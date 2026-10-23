@@ -75,19 +75,27 @@ export function PluginSettingsView({
   const returnToPage = useRef<string | null>(null);
   const openPageId = openPage?.id ?? null;
   useEffect(() => {
-    const root = pagesRef.current;
-    if (root === null) return;
     if (openPageId !== null) {
+      // Remembered even before the view has rendered, so Back after a deep
+      // link into a page still knows where to return.
       returnToPage.current = openPageId;
       if (pageHeadingId !== undefined) document.getElementById(pageHeadingId)?.focus();
       return;
     }
     const back = returnToPage.current;
     returnToPage.current = null;
-    if (back === null) return;
-    root
-      .querySelector<HTMLElement>(`[data-settings-page-trigger="${CSS.escape(back)}"]`)
-      ?.focus({ preventScroll: false });
+    const root = pagesRef.current;
+    if (back === null || root === null) return;
+    // Only when focus went down with the page (Back, or the page's controls);
+    // never pulled away from wherever the user has moved on to.
+    const active = document.activeElement;
+    if (active !== null && active !== document.body && !root.contains(active)) return;
+    // The page's own Open button, or — when a reload dropped that page — the
+    // first page left, rather than letting focus fall to the document.
+    const trigger =
+      root.querySelector<HTMLElement>(`[data-settings-page-trigger="${CSS.escape(back)}"]`) ??
+      root.querySelector<HTMLElement>("[data-settings-page-trigger]");
+    trigger?.focus({ preventScroll: false });
   }, [openPageId, pageHeadingId]);
 
   const viewFocus =

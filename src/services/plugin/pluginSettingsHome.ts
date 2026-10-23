@@ -43,6 +43,17 @@ export function pluginDeclaresSettingsView(plugin: LoadedPluginInfo): boolean {
   return (plugin.manifest.contributes.views ?? []).some((view) => view.location === "settings");
 }
 
+/**
+ * Whether a forge provider of the plugin ships its own Code forge settings tab.
+ * Project settings then shows an installed plugin as a pointer there in place
+ * of its form, so nothing in that form is a place to land.
+ */
+export function forgeOwnsProjectSettings(plugin: LoadedPluginInfo): boolean {
+  return (plugin.manifest.contributes.forgeProviders ?? []).some(
+    (provider) => provider.slots?.settingsTab
+  );
+}
+
 /** The plugin's `location: "settings"` view, when it declares one. */
 export function settingsViewOf(plugin: LoadedPluginInfo): ViewContribution | undefined {
   return (plugin.manifest.contributes.views ?? []).find((view) => view.location === "settings");

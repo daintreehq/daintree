@@ -189,6 +189,30 @@ describe("buildPluginSettingsSearchEntries", () => {
     });
   });
 
+  it("offers only the home in Project settings for a forge plugin that keeps its settings in Code forge", () => {
+    const entries = buildPluginSettingsSearchEntries([
+      {
+        name: "GitLab",
+        plugin: plugin(
+          "acme.gitlab",
+          [
+            { id: "host", type: "string", label: "Host" },
+            { id: "group", type: "string", label: "Group", scope: "project" },
+          ] as SettingDefinition[],
+          "global",
+          {
+            forgeProviders: [{ id: "gitlab", name: "GitLab", slots: { settingsTab: true } }],
+            views: [{ id: "prefs", componentPath: "dist/prefs.js", location: "settings" }],
+          } as unknown as Partial<LoadedPluginInfo["manifest"]["contributes"]>
+        ),
+      },
+    ]);
+    expect(entries.filter((e) => e.tab === "project:plugins").map((e) => e.id)).toEqual([
+      "plugin:acme.gitlab:@home:project",
+    ]);
+    expect(entries.some((e) => e.id === "plugin:acme.gitlab:host")).toBe(true);
+  });
+
   it("indexes no account endpoint, client id or setup check", () => {
     const entries = buildPluginSettingsSearchEntries([
       {

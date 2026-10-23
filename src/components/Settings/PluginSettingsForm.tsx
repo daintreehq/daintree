@@ -990,6 +990,11 @@ export function PluginSettingsForm({
   const [openPage, setOpenPage] = useState<string | null>(null);
   const activePage =
     openPage !== null && declaredPages?.some((p) => p.id === openPage) ? openPage : null;
+  // A reload that drops the open page closes it for good, rather than reopening
+  // it should a later reload declare that id again.
+  useEffect(() => {
+    if (openPage !== null && activePage === null) setOpenPage(null);
+  }, [openPage, activePage]);
   // A deep link to a key the custom section edits, handed to the view until it
   // answers or the host stops waiting.
   const [viewFocus, setViewFocus] = useState<{ key: string; nonce: number } | null>(null);
@@ -1031,7 +1036,8 @@ export function PluginSettingsForm({
   const deliverToView = focusInView && viewRunning;
   useEffect(() => {
     if (focusNonce === undefined || focusTargetId === null || !focusReady) return;
-    if (focusPageDeclared) setOpenPage(focusPage!);
+    // A link to the section opens the page it names, or the section's root.
+    if (focusSection === "custom") setOpenPage(focusPageDeclared ? focusPage! : null);
     let attempts = 0;
     let timer: ReturnType<typeof setTimeout> | undefined;
     let settled = false;
@@ -1041,27 +1047,35 @@ export function PluginSettingsForm({
     };
     const attempt = () => {
       const target = document.getElementById(focusTargetId);
-      // A page lands once it is the one showing, on its own heading.
-      const pageHeading = focusPageDeclared
-        ? document.getElementById(pluginSettingsPageHeadingId(pluginId))
-        : null;
+      // A page lands once it is the one showing, on its own heading; the
+      // section's root once no page is.
+      const shownHeading = document.getElementById(pluginSettingsPageHeadingId(pluginId));
+      const pageHeading = focusPageDeclared ? shownHeading : null;
+      const pageSettled = focusPageDeclared
+        ? pageHeading !== null
+        : focusSection !== "custom" || shownHeading === null;
       // An empty target is a section still loading (the checklist's status, the
       // view's snapshot): there is nothing to focus yet.
       const ready =
         target !== null &&
         target.firstElementChild !== null &&
         isOnScreen(target) &&
-        (!focusPageDeclared || pageHeading !== null);
+        pageSettled;
       if (!ready) {
         if (target && attempts++ < LANDING_ATTEMPTS) {
           timer = setTimeout(attempt, LANDING_RETRY_MS);
           return;
         }
+        // A page the section can't show right now (the plugin is stopped, its
+        // view isn't served here) still lands on the section saying why.
+        if (target && target.firstElementChild !== null && isOnScreen(target)) {
+          landOnSection(target);
+        }
         finish();
         return;
       }
       if (!deliverToView || focusKey === undefined) {
-        landOnSettingsElement(target);
+        landOnSection(target);
         pageHeading?.focus({ preventScroll: true });
         finish();
         return;
@@ -1077,7 +1091,7 @@ export function PluginSettingsForm({
           if (timer !== undefined) clearTimeout(timer);
           viewAckRef.current = null;
           setViewFocus(null);
-          if (!landed) landOnSettingsElement(target);
+          if (!landed) landOnSection(target);
           finish();
         },
       };
@@ -1100,6 +1114,7 @@ export function PluginSettingsForm({
     focusReady,
     focusPageDeclared,
     focusPage,
+    focusSection,
     deliverToView,
     pluginId,
     onFocusHandled,
@@ -1202,6 +1217,18 @@ export function PluginSettingsForm({
       )}
     </div>
   );
+}
+
+/**
+ * The shared settings landing, plus focus on the section itself when it has no
+ * control of its own — a section that only says why it isn't available — so a
+ * keyboard user still ends up where the link pointed.
+ */
+function landOnSection(el: HTMLElement): void {
+  landOnSettingsElement(el);
+  if (el.contains(document.activeElement)) return;
+  if (!el.hasAttribute("tabindex")) el.setAttribute("tabindex", "-1");
+  el.focus({ preventScroll: true });
 }
 
 /** How many times a deep link retries a row that is in the DOM but not yet shown. */

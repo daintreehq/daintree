@@ -1380,9 +1380,10 @@ describe("PluginSettingsForm settings edited by the plugin's own section", () =>
     await waitFor(() => expect(lastSettingsContext.current?.focus?.key).toBe("cadence"));
     expect(onFocusHandled).not.toHaveBeenCalled();
     const control = screen.getByTestId("fake-cadence");
+    const acknowledge = lastSettingsContext.current!.focus!.acknowledge;
     act(() => {
       control.focus();
-      lastSettingsContext.current!.focus!.acknowledge(true);
+      acknowledge(true);
     });
 
     expect(onFocusHandled).toHaveBeenCalledWith(4);
@@ -1391,10 +1392,9 @@ describe("PluginSettingsForm settings edited by the plugin's own section", () =>
     expect(document.querySelector(".settings-highlight")).toBeNull();
     await waitFor(() => expect(lastSettingsContext.current?.focus).toBeUndefined());
     // A second answer for the same request does nothing.
-    act(() => {
-      lastSettingsContext.current?.focus?.acknowledge(false);
-    });
+    act(() => acknowledge(false));
     expect(onFocusHandled).toHaveBeenCalledTimes(1);
+    expect(document.querySelector(".settings-highlight")).toBeNull();
   });
 
   it("falls back to landing on the section when the view can't show the key", async () => {
@@ -1487,6 +1487,67 @@ describe("PluginSettingsForm custom section pages (#14101)", () => {
     await waitFor(() => expect(onFocusHandled).toHaveBeenCalledWith(12));
     expect(document.activeElement).toBe(screen.getByRole("heading", { name: "Column mapping" }));
     expect(screen.getByTestId("fake-settings-view").getAttribute("data-page")).toBe("columns");
+  });
+});
+
+describe("PluginSettingsForm custom section links (#14101 review)", () => {
+  function withPages(plugin: LoadedPluginInfo): LoadedPluginInfo {
+    return {
+      ...plugin,
+      manifest: {
+        ...plugin.manifest,
+        contributes: {
+          ...plugin.manifest.contributes,
+          views: [
+            {
+              id: "prefs",
+              componentPath: "dist/prefs.js",
+              location: "settings",
+              pages: [{ id: "columns", title: "Column mapping" }],
+            },
+          ],
+        },
+      },
+    } as LoadedPluginInfo;
+  }
+
+  it("goes back to the section's root for a link that names no page", async () => {
+    const plugin = withPages(makeViewPlugin([], "plugin://a/settings.js"));
+    const onFocusHandled = vi.fn();
+    const { rerender } = render(<PluginSettingsForm plugin={plugin} viewScope="user" />);
+    fireEvent.click(screen.getByRole("button", { name: "Open Column mapping" }));
+    await screen.findByRole("heading", { name: "Column mapping" });
+
+    rerender(
+      <PluginSettingsForm
+        plugin={plugin}
+        viewScope="user"
+        focusRequest={{ section: "custom", nonce: 21 }}
+        onFocusHandled={onFocusHandled}
+      />
+    );
+
+    await waitFor(() => expect(onFocusHandled).toHaveBeenCalledWith(21));
+    expect(screen.queryByRole("heading", { name: "Column mapping" })).toBeNull();
+    expect(screen.getByTestId("fake-settings-view").getAttribute("data-page")).toBe("");
+  });
+
+  it("lands a page link on the section, with focus, when the plugin can't show it", async () => {
+    serveHostedViews([]);
+    const onFocusHandled = vi.fn();
+    render(
+      <PluginSettingsForm
+        plugin={withPages(makeViewPlugin([], undefined, { declaresView: true, disabled: true }))}
+        viewScope="user"
+        focusRequest={{ section: "custom", page: "columns", nonce: 22 }}
+        onFocusHandled={onFocusHandled}
+      />
+    );
+
+    await waitFor(() => expect(onFocusHandled).toHaveBeenCalledWith(22), { timeout: 3000 });
+    const section = document.getElementById("plugin-settings-view-acme.test")!;
+    expect(section.classList.contains("settings-highlight")).toBe(true);
+    expect(document.activeElement).toBe(section);
   });
 });
 

@@ -6,6 +6,7 @@ import {
 } from "@shared/types/plugin";
 import {
   accountHomeOf,
+  forgeOwnsProjectSettings,
   homeHasSettings,
   settingsForHome,
   settingsViewHomesOf,
@@ -77,6 +78,10 @@ export function buildPluginSettingsSearchEntries(
         keywords: [name, ...keywords],
         plugin: { instanceId, ...target },
       });
+      // A forge plugin that keeps its settings in Code forge shows only a
+      // pointer there: the home is still a result, nothing inside it is.
+      const homeOnly =
+        home === "project" && plugin.origin !== "project" && forgeOwnsProjectSettings(plugin);
       entries.push(
         row(
           `@home:${home}`,
@@ -88,6 +93,7 @@ export function buildPluginSettingsSearchEntries(
           ["plugin", "settings"]
         )
       );
+      if (homeOnly) continue;
       if (setupHomeOf(plugin) === home) {
         for (const step of setup) {
           entries.push(

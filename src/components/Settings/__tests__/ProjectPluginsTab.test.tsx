@@ -736,6 +736,45 @@ describe("ProjectPluginsTab", () => {
     window.removeEventListener("daintree:open-settings-tab", opened);
   });
 
+  it("lands a section link to a forge plugin on its Code forge pointer, not a form it doesn't show", async () => {
+    pluginApi.list.mockResolvedValue([
+      installed({
+        manifest: {
+          name: "acme.forge",
+          version: "1.0.0",
+          displayName: "Acme Forge",
+          contributes: {
+            ...EMPTY_CONTRIBUTES,
+            views: [{ id: "prefs", componentPath: "dist/prefs.js", location: "settings" }],
+            forgeProviders: [
+              {
+                id: "acme",
+                name: "Acme",
+                matches: ["acme.test"],
+                slots: { settingsTab: "acme.settingsTab" },
+              },
+            ],
+          },
+        } as LoadedPluginInfo["manifest"],
+        instanceId: "acme.forge",
+      }),
+    ]);
+    seed([]);
+    act(() =>
+      usePluginManagerStore
+        .getState()
+        .requestSettings({ pluginId: "acme.forge", section: "custom", home: "project" })
+    );
+    render(<ProjectPluginsTab />);
+
+    await waitFor(() =>
+      expect(document.activeElement?.hasAttribute("data-settings-section-title")).toBe(true)
+    );
+    expect(screen.getByRole("button", { name: "Open Code forge" })).toBeTruthy();
+    expect(usePluginManagerStore.getState().settingsRequest).toBeNull();
+    usePluginManagerStore.setState({ settingsRequest: null });
+  });
+
   it("clears the override rather than storing an explicit allow when re-enabling", async () => {
     pluginApi.list.mockResolvedValue([installed()]);
     seed([]);
