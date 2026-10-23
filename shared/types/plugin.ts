@@ -6357,7 +6357,9 @@ export interface PluginActivationApi {
    *
    * @throws {Error} `PERMISSION_REQUIRED:` if the plugin did not declare the
    *   `agent:read` capability, or if called after activation resolves or times
-   *   out (the host is revoked).
+   *   out (the host is revoked). In a worker only the revoke check throws: a
+   *   missing `agent:read` resolves to a disposer whose callback never fires,
+   *   and the refusal is logged in main.
    */
   onDidChangeTerminalLifecycle(
     callback: (event: PluginTerminalLifecycleEvent) => void
