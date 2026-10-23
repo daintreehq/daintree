@@ -473,7 +473,7 @@ export function registerFileActions(actions: ActionRegistry, callbacks: ActionCa
       // confined call so it is the flag being rejected, not the reveal — a
       // plugin dispatching `{ path }` keeps today's contained behavior. Plain
       // `Error` rather than an AppError, mirroring the recipe-terminal gate in
-      // `workflowCreationActions.ts`.
+      // `workflowCreationActions.impl.ts`.
       if (allowOutsideRoots && ctx?.dispatchSource === "plugin") {
         throw new Error(
           "Plugins cannot reveal paths outside your project roots. Dispatch file.showItemInFolder without `allowOutsideRoots`."
