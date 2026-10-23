@@ -34,8 +34,10 @@ describe("HostCallRuntime (#13493, #13496)", () => {
     typeof vi.fn<(hostId: string) => Promise<Array<{ id: string; name: string; path: string }>>>
   >;
   let runtime: HostCallRuntime;
+  let clock: number;
 
   beforeEach(() => {
+    clock = 1000;
     hosts = [host()];
     runs = new Map([["a", RUN_A]]);
     control = new Set(["studio"]);
@@ -48,7 +50,7 @@ describe("HostCallRuntime (#13493, #13496)", () => {
       callerRun: (id) => runs.get(id) ?? null,
       client: () => null,
       hosts: () => hosts,
-      now: () => 1000,
+      now: () => clock,
       inLocalView: () => true,
       controlEnabled: (hostId) => control.has(hostId),
       listHostProjects,
@@ -216,6 +218,23 @@ describe("HostCallRuntime (#13493, #13496)", () => {
           memoryUsedBytes: null,
           memoryAvailableBytes: null,
           memoryTotalBytes: 16e9,
+        });
+      });
+
+      it("ages a sample by the time the whole answer took, not the time it was read", async () => {
+        hosts = [
+          host({ connection: CONNECTED, summary: { ...fresh, sampledAt: 1000 - 14_000 } as never }),
+        ];
+        listHostProjects.mockImplementation(async () => {
+          clock += 5000;
+          return [];
+        });
+        const listed = await runtime.list("a");
+        if (!listed.ok) throw new Error("refused");
+        expect(listed.value.hosts[0]?.load).toMatchObject({
+          stale: true,
+          ageMs: 19_000,
+          cpuPercent: null,
         });
       });
 
