@@ -184,10 +184,10 @@ export interface GeneratedIpcInvokeMap {
       | number
       | void
       | string[]
+      | import("./canopy.js").CanopyTerminalView
       | import("./canopy.js").CanopyReadMark
       | import("./canopy.js").CanopySnapshot
       | import("./canopy.js").CanopyReadMark[]
-      | import("./canopy.js").CanopyTerminalView
       | import("./fleet.js").FleetSnapshot
       | null;
   };
