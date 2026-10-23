@@ -1,5 +1,6 @@
 import { useState, type KeyboardEvent } from "react";
 import { cn } from "@/lib/utils";
+import { LOCAL_HOST_ID } from "@shared/types/remoteHosts";
 import { Button } from "@/components/ui/button";
 import { Callout } from "@/components/ui/Callout";
 import { DaintreeIcon } from "@/components/icons/DaintreeIcon";
@@ -7,7 +8,12 @@ import { PilotRunState } from "@/components/Pilot/PilotRunState";
 import { assistantTerminalApi } from "@/services/assistantSubject";
 import { assistantBand, canopyAssistantDomId } from "./openAssistantItem";
 import { CanopyTerminal } from "./CanopyTerminal";
-import { assistantStatus, type CanopyAssistantItem } from "./canopyAssistants";
+import {
+  assistantCoverageNote,
+  assistantNoticeSummary,
+  assistantStatus,
+  type CanopyAssistantItem,
+} from "./canopyAssistants";
 
 /**
  * One Daintree Assistant in the list. Its role leads, the agent it runs on
@@ -32,7 +38,16 @@ export function CanopyAssistantRow({
   const domId = canopyAssistantDomId(item.id);
   const status = assistantStatus(item);
   const name = ["Daintree Assistant", item.scopeLabel].join(", ");
-  const meta = [status, item.agentName, item.label, item.attached ? null : "no window here"]
+  const supervision = [assistantNoticeSummary(item.notices), assistantCoverageNote(item)]
+    .filter((part): part is string => !!part)
+    .join(" · ");
+  const meta = [
+    status,
+    item.agentName,
+    item.label,
+    item.attached ? null : "no window here",
+    supervision || null,
+  ]
     .filter((part): part is string => !!part)
     .join(", ");
   return (
@@ -84,6 +99,14 @@ export function CanopyAssistantRow({
             .filter(Boolean)
             .join(" · ")}
         </span>
+        {supervision && (
+          <span
+            data-canopy-assistant-supervision=""
+            className="min-w-0 truncate text-xs leading-4 text-text-secondary"
+          >
+            {supervision}
+          </span>
+        )}
       </span>
     </div>
   );
@@ -120,6 +143,13 @@ export function CanopyAssistantPane({
           </Button>
         )}
       </div>
+      {item.ask === "confirm" && item.confirmation && (
+        <div className="shrink-0 pb-2" data-canopy-assistant-confirmation="">
+          <Callout severity="warning" size="compact" title="Waiting on your confirmation">
+            {confirmationRoute(item)}
+          </Callout>
+        </div>
+      )}
       {refusal !== null && (
         <div className="shrink-0 pb-2">
           <Callout severity="warning" size="compact" title="Couldn't open this assistant">
@@ -138,4 +168,18 @@ export function CanopyAssistantPane({
       </div>
     </div>
   );
+}
+
+/**
+ * Where the confirmation is answered: in the dialog its session raised, and
+ * nowhere else. Canopy only says where that is; it can't answer one.
+ */
+function confirmationRoute(item: CanopyAssistantItem): string {
+  const action = item.confirmation?.actionId ?? "an action";
+  if (item.subject.hostId === LOCAL_HOST_ID && item.subject.scope.kind === "project") {
+    return item.attached
+      ? `Its call to ${action} waits on a dialog in its project's window. Open in Assistant to answer it there.`
+      : `Its call to ${action} waits on a dialog, but no window here shows this assistant. Unanswered, the call fails when it times out.`;
+  }
+  return `Its call to ${action} waits on a dialog in the Daintree window this assistant runs through. Answer it there; it can't be answered from Canopy.`;
 }

@@ -336,6 +336,56 @@ describe("CanopyView role filter", () => {
     expect(useCanopyStore.getState().isOpen).toBe(false);
   });
 
+  it("shows a lane's waiting confirmation and routes to it, with no way to answer it here (#14165)", async () => {
+    directory.entries = [
+      assistant(0, { waitingReason: "question" }),
+      assistant(1, {
+        agentState: "working",
+        waitingReason: null,
+        confirmations: {
+          waiting: [{ actionId: "worktree.delete", since: NOW - 1_000, expiresAt: NOW + 29_000 }],
+          omitted: 0,
+        },
+        notices: { pending: 2, ready: 0, delivery: "idle" },
+      }),
+    ];
+    useCanopyStore.setState({ roleFilter: "assistants" });
+    render(<CanopyView />);
+    await settle();
+
+    const rows = assistantRows();
+    // Both ask, so each keeps its lane's place; only the lane that waits says so.
+    expect(rows.map((row) => row.getAttribute("data-ask"))).toEqual(["question", "confirm"]);
+    const confirming = rows[1]!;
+    await act(async () => fireEvent.click(confirming));
+    const meta = document.getElementById(confirming.getAttribute("aria-describedby")!)!;
+    expect(meta.textContent).toContain("Waiting on your confirmation: worktree.delete");
+    expect(meta.textContent).toContain("Watching 2 terminals");
+
+    const callout = document.querySelector("[data-canopy-assistant-confirmation]")!;
+    expect(callout.textContent).toContain("worktree.delete");
+    const buttons = [...document.querySelectorAll("button")].map((button) => button.textContent);
+    expect(buttons.some((label) => /approve|allow|confirm|deny|reject/i.test(label ?? ""))).toBe(
+      false
+    );
+
+    const open = [...document.querySelectorAll("button")].find(
+      (button) => button.textContent === "Open in Assistant"
+    )!;
+    await act(async () => fireEvent.click(open));
+    expect(openInAssistantMock).toHaveBeenCalledWith(assistant(1).subject);
+    expect(dispatchMock).not.toHaveBeenCalled();
+  });
+
+  it("says nothing of supervision for an assistant that watches nothing", async () => {
+    directory.entries = [assistant(0, { notices: null })];
+    useCanopyStore.setState({ roleFilter: "assistants" });
+    render(<CanopyView />);
+    await settle();
+    expect(document.querySelector("[data-canopy-assistant-supervision]")).toBeNull();
+    expect(assistantRows()[0]!.getAttribute("data-ask")).toBeNull();
+  });
+
   it("says why a lane couldn't be opened, and starts nothing in its place", async () => {
     openInAssistantMock.mockResolvedValueOnce({ ok: false, reason: "ended" });
     useCanopyStore.setState({ roleFilter: "assistants" });

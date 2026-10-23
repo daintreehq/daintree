@@ -1,9 +1,13 @@
 import type {
   AgentDirectory,
+  AgentDirectoryConfirmation,
+  AgentDirectoryCoverage,
   AgentDirectoryLiveEntry,
+  AgentDirectoryNotices,
   AgentDirectorySubject,
 } from "@shared/types/agentDirectory";
 import { getAgentDisplayTitle } from "@shared/config/agentRegistry";
+import { pluralize } from "@/lib/pluralize";
 
 /** Which runs Canopy lists: its workers, the Daintree Assistants, or both. */
 export type CanopyRoleFilter = "all" | "workers" | "assistants";
@@ -20,12 +24,14 @@ export function isCanopyRoleFilter(value: unknown): value is CanopyRoleFilter {
 
 /**
  * What an assistant's own run shows that asks for the person, as observed: a
- * question, an approval or an error it stopped on, or a handback not yet seen.
- * A wait at its ordinary prompt is no ask at all.
+ * Daintree confirmation one of its calls waits on, a question, an approval or
+ * an error its terminal stopped on, or a handback not yet seen. A wait at its
+ * ordinary prompt is no ask at all.
  */
-export type CanopyAssistantAsk = "approval" | "question" | "error" | "handback";
+export type CanopyAssistantAsk = "confirm" | "approval" | "question" | "error" | "handback";
 
 export const ASSISTANT_ASK_LABEL: Record<CanopyAssistantAsk, string> = {
+  confirm: "Waiting on your confirmation",
   approval: "Wants approval",
   question: "Asking you",
   error: "Stopped on an error",
@@ -49,6 +55,16 @@ export interface CanopyAssistantItem {
   attached: boolean;
   handbackAt: number | null;
   ask: CanopyAssistantAsk | null;
+  /** The oldest Daintree confirmation its calls wait on, unexpired; null when none. */
+  confirmation: AgentDirectoryConfirmation | null;
+  /** How many wait in all, the one above included. */
+  confirmationCount: number;
+  /** Its terminal notices as main holds them; null when none, or not reported. */
+  notices: AgentDirectoryNotices | null;
+  /** The read it came from, when that wasn't a current one; null when it was. */
+  coverage: Exclude<AgentDirectoryCoverage, "ok"> | null;
+  /** When that read observed it. */
+  observedAt: number | null;
 }
 
 /** The handbacks the person has had in front of them, by assistant id. */
@@ -77,8 +93,11 @@ export function assistantSessionLabel(lane: number | undefined): string | null {
  */
 export function assistantAsk(
   entry: Pick<AgentDirectoryLiveEntry, "agentState" | "waitingReason" | "handback">,
-  seenHandbackAt: number | undefined
+  seenHandbackAt: number | undefined,
+  confirming = false
 ): CanopyAssistantAsk | null {
+  // Its call is held on the dialog, whatever its terminal shows meanwhile.
+  if (confirming) return "confirm";
   if (entry.agentState === "waiting") {
     const reason = entry.waitingReason;
     if (reason === "approval" || reason === "question" || reason === "error") return reason;
@@ -102,9 +121,15 @@ export function buildAssistantItems(
     seen: AssistantHandbacksSeen;
     /** Only this project's, when the panel shows one project. */
     projectId?: string | null;
+    /** Epoch ms to hold confirmations against; the read's own time when not given. */
+    now?: number;
   }
 ): CanopyAssistantItem[] {
   if (!directory) return [];
+  const coverage = directory.coverage === "ok" ? null : directory.coverage;
+  // A confirmation lives for seconds: one from a read that wasn't current, or
+  // past its deadline, may already be answered or gone, and isn't offered.
+  const now = options.now ?? directory.observedAt ?? Number.POSITIVE_INFINITY;
   const items: CanopyAssistantItem[] = [];
   for (const entry of directory.entries) {
     if (entry.state !== "live" || entry.role !== "assistant") continue;
@@ -119,6 +144,12 @@ export function buildAssistantItems(
         : [options.projectName(projectId) ?? "Unknown project", session]
             .filter((part) => part !== null)
             .join(" · ");
+    const confirmations =
+      coverage === null
+        ? (entry.confirmations?.waiting ?? []).filter(
+            (confirmation) => confirmation.expiresAt > now
+          )
+        : [];
     items.push({
       id,
       subject,
@@ -131,7 +162,13 @@ export function buildAssistantItems(
       since: entry.since,
       attached: entry.attached !== false,
       handbackAt: entry.handback?.observedAt ?? null,
-      ask: assistantAsk(entry, options.seen[id]),
+      ask: assistantAsk(entry, options.seen[id], confirmations.length > 0),
+      confirmation: confirmations[0] ?? null,
+      confirmationCount:
+        confirmations.length + (confirmations.length > 0 ? (entry.confirmations?.omitted ?? 0) : 0),
+      notices: entry.notices ?? null,
+      coverage,
+      observedAt: directory.observedAt,
     });
   }
   // Asks first, then by where they run: the directory's own order within each.
@@ -141,8 +178,54 @@ export function buildAssistantItems(
     .map(({ item }) => item);
 }
 
+/**
+ * The notices it asked for, as held for it: how many terminals it watches and
+ * what waits to reach its prompt. Nothing when it watches nothing — that is
+ * no claim it stopped working.
+ */
+export function assistantNoticeSummary(notices: AgentDirectoryNotices | null): string | null {
+  if (!notices) return null;
+  const parts: string[] = [];
+  if (notices.pending > 0) {
+    parts.push(`Watching ${pluralize(notices.pending, "terminal")}`);
+  }
+  if (notices.ready > 0) {
+    const waiting = `${pluralize(notices.ready, "notice")} not delivered`;
+    const why = NOTICE_DELIVERY_NOTE[notices.delivery];
+    parts.push(why ? `${waiting} (${why})` : waiting);
+  }
+  return parts.length > 0 ? parts.join(", ") : null;
+}
+
+/** Where delivery stands, by its mechanics alone: the reason isn't in the directory. */
+const NOTICE_DELIVERY_NOTE: Partial<Record<AgentDirectoryNotices["delivery"], string>> = {
+  scheduled: "due shortly",
+  held: "held for now",
+  blocked: "held until it's back at its prompt",
+  outstanding: "the last one's turn hasn't ended",
+  failed: "last delivery unconfirmed",
+};
+
+/** A read that wasn't current, in words; null for a current one. */
+export function assistantCoverageNote(item: CanopyAssistantItem): string | null {
+  switch (item.coverage) {
+    case "stale":
+      return "Last known; the latest read failed";
+    case "unreachable":
+      return "This host can't be reached";
+    case "unsupported":
+      return "This host doesn't report its assistants";
+    default:
+      return null;
+  }
+}
+
 /** What the row says it is doing, from what was observed. */
 export function assistantStatus(item: CanopyAssistantItem): string {
+  if (item.ask === "confirm" && item.confirmation) {
+    const more = item.confirmationCount > 1 ? ` and ${item.confirmationCount - 1} more` : "";
+    return `${ASSISTANT_ASK_LABEL.confirm}: ${item.confirmation.actionId}${more}`;
+  }
   if (item.ask) return ASSISTANT_ASK_LABEL[item.ask];
   switch (item.agentState) {
     case "working":
@@ -170,6 +253,7 @@ export function assistantMatches(item: CanopyAssistantItem, terms: readonly stri
     item.label ?? "",
     item.agentName ?? "",
     assistantStatus(item),
+    assistantNoticeSummary(item.notices) ?? "",
   ]
     .join(" ")
     .toLowerCase();

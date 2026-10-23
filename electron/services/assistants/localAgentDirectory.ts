@@ -6,8 +6,12 @@ import { getAgentAvailabilityStore } from "../AgentAvailabilityStore.js";
 import { getPendingHelpHibernationStore } from "../PendingHelpHibernationStore.js";
 import { helpSessionService } from "../HelpSessionService.js";
 import { getPtyClient } from "../../window/serviceRefs.js";
+import { getAssistantConfirmations } from "./assistantConfirmations.js";
 
 let directory: LocalAgentDirectory | null = null;
+// Loaded on a read, never at import: this module is reached from install paths
+// that keep the MCP server lazy.
+let mcpServer: typeof import("../McpServerService.js") | null = null;
 
 /**
  * This machine's agent directory, made on first read: `host.list`'s optional
@@ -24,11 +28,15 @@ export function getLocalAgentDirectory(): LocalAgentDirectory {
     getLiveGeneration: (terminalId) => getPtyClient()?.getLiveGeneration(terminalId) ?? null,
     // Read fresh: a cached inventory can describe a run that has since been replaced.
     readTerminals: async () => {
+      mcpServer ??= await import("../McpServerService.js").catch(() => null);
       const pty = getPtyClient();
       if (!pty) throw new Error("No pty client");
       return pty.getAllTerminalsWithCompletenessAsync();
     },
     isHelpTerminal: (terminalId) => getAgentAvailabilityStore().isHelpTerminal(terminalId),
+    pendingConfirmations: (owner, now) => getAssistantConfirmations().read(owner, now),
+    paneNotices: (terminalId) =>
+      mcpServer ? mcpServer.mcpServerService.getPaneNotifyState(terminalId) : undefined,
     resumableLanes: async (projectId) => {
       const { projectStore } = await import("../ProjectStore.js");
       const store = getPendingHelpHibernationStore();

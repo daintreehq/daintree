@@ -568,6 +568,11 @@ const AGENT_NAMING_LAUNCH_TOOLS: ReadonlySet<string> = new Set([
   "workflow.startWorkOnIssue",
 ]);
 
+function isForceDelete(args: unknown): boolean {
+  if (typeof args !== "object" || args === null || Array.isArray(args)) return false;
+  return (args as Record<string, unknown>).force === true;
+}
+
 function readStringArg(args: unknown, key: string): string | undefined {
   if (typeof args !== "object" || args === null || Array.isArray(args)) return undefined;
   const value = (args as Record<string, unknown>)[key];
@@ -1349,6 +1354,12 @@ export interface SessionServerDeps extends OwnedMainExecutors {
     startedAt: number;
     /** True when the resolved manifest entry is `danger: "confirm"`. */
     danger: boolean;
+    /**
+     * True only when this call will put a dialog in front of the person. A
+     * confirm-gated call a grant, the pane's skip setting or an earlier
+     * approval already authorized is `danger` without asking anyone (#14165).
+     */
+    asks: boolean;
     /** Turn id snapshotted at dispatch start (#10067); see {@link SessionServerDeps.getCurrentTurnId}. */
     capturedTurnId: string | null;
   }) => void;
@@ -1361,6 +1372,12 @@ export interface SessionServerDeps extends OwnedMainExecutors {
   notifyToolCallSettled?: (payload: {
     sessionId: string;
     toolId: string;
+    /** The started event's own `startedAt`, so the two pair up exactly. */
+    startedAt: number;
+    /** The started event's own `danger`. */
+    danger: boolean;
+    /** The started event's own `asks`: whether this call announced a wait on the person. */
+    asks: boolean;
     durationMs: number;
     outcome: AuditOutcome;
     /** Turn id snapshotted at dispatch start (#10067); matches the started event's value. */
@@ -2843,7 +2860,9 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     // activity strip is actually showing (#9759). Pre-dispatch rejections never
     // reach the IIFE, so they never set this — and never settle the strip.
     let toolCallStartedEmitted = false;
-    const emitToolCallStarted = (danger: boolean): void => {
+    let toolCallStartedDanger = false;
+    let toolCallStartedAsks = false;
+    const emitToolCallStarted = (danger: boolean, asks: boolean): void => {
       if (!notifyToolCallStarted) return;
       try {
         notifyToolCallStarted({
@@ -2852,9 +2871,12 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           args,
           startedAt,
           danger,
+          asks,
           capturedTurnId,
         });
         toolCallStartedEmitted = true;
+        toolCallStartedDanger = danger;
+        toolCallStartedAsks = asks;
       } catch (err) {
         console.error("[MCP] Failed to notify tool-call-started:", err);
       }
@@ -3113,7 +3135,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           assistantIds.length > 0 &&
           assistantCaller !== null
         ) {
-          emitToolCallStarted(false);
+          emitToolCallStarted(false, false);
           try {
             const result = await handleTerminalGetStatusViewless(
               args,
@@ -3256,7 +3278,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
             } else {
               // Announced before the wait, so the strip shows the call awaiting
               // the user rather than nothing at all until they answer.
-              emitToolCallStarted(true);
+              emitToolCallStarted(true, true);
               const asked = await askToClose([terminalId]);
               if ("refusal" in asked) return asked.refusal;
               if (!asked.approved.has(terminalId)) {
@@ -3287,7 +3309,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
             };
             return buildToolError({ code: "VALIDATION_ERROR", message: read.message });
           }
-          emitToolCallStarted(false);
+          emitToolCallStarted(false, false);
           try {
             const result = await deps[ownedResource.handler](
               ownedResourceId,
@@ -3398,7 +3420,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
             dispatchConfirmed = true;
           }
           const closeNeedsAsking = closeWouldAsk && !confirmationsSkipped;
-          emitToolCallStarted(closeNeedsAsking);
+          emitToolCallStarted(closeNeedsAsking, closeNeedsAsking);
           if (closeNeedsAsking) {
             const asked = await askToClose(closeIds);
             if ("refusal" in asked) return asked.refusal;
@@ -3614,7 +3636,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
         if (actionId === TERMINAL_WAIT_UNTIL_IDLE_TOOL) {
           // waitUntilIdle is never `danger: "confirm"` — it's a passive wait,
           // so the strip shows a plain in-flight row (no "awaiting confirmation").
-          emitToolCallStarted(false);
+          emitToolCallStarted(false, false);
           try {
             // Interactive help sessions (core/full tiers) have a
             // human waiting on the conversation — a tool call held open blocks
@@ -3670,7 +3692,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
         // waitUntilIdle (watch N terminals, resolve on first/all idle). Same
         // main-process rationale and tier clamp; same grant-refresh-on-long-wait.
         if (actionId === TERMINAL_WAIT_UNTIL_IDLE_BATCH_TOOL) {
-          emitToolCallStarted(false);
+          emitToolCallStarted(false, false);
           try {
             const maxTimeoutMs =
               tier === "external"
@@ -3720,7 +3742,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
         // Read-only and never `danger: "confirm"` — the strip shows a plain
         // in-flight row. Audit and strip-settle unify via the shared `finally`.
         if (viewlessStatusWorkspaceId !== undefined) {
-          emitToolCallStarted(false);
+          emitToolCallStarted(false, false);
           try {
             const result = await handleTerminalGetStatusViewless(args, viewlessStatusWorkspaceId);
             outcome = { kind: "result", value: { ok: true, result } };
@@ -3743,7 +3765,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
         // nothing, and the line it may later cause goes only to the caller's
         // own prompt. Audit + strip-settle unify via the shared `finally`.
         if (actionId === TERMINAL_NOTIFY_WHEN_IDLE_TOOL) {
-          emitToolCallStarted(false);
+          emitToolCallStarted(false, false);
           const refuse = (code: string, message: string) => {
             outcome = {
               kind: "result",
@@ -3784,7 +3806,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
         // ambiguous, ...) are results; refusals are fixed text, and the audit
         // projections keep results out of the log.
         if (HOST_CONTROL_TOOL_IDS.has(actionId)) {
-          emitToolCallStarted(false);
+          emitToolCallStarted(false, false);
           try {
             // `host.call` carries the tier it was admitted at here: all it may have on the host.
             const callContext =
@@ -3832,7 +3854,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
         // whatever admitted it above. A start is a change this process makes
         // itself, so a relayed one answers to the drive rule as a check does.
         if (ASSISTANT_CONTROL_TOOL_IDS.has(actionId)) {
-          emitToolCallStarted(false);
+          emitToolCallStarted(false, false);
           const refuseAssistant = (code: string, message: string) => {
             outcome = {
               kind: "result",
@@ -3891,7 +3913,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
         // in-memory reads; never `danger: "confirm"`. Audit + strip-settle
         // unify via the shared `finally`.
         if (actionId === SKILLS_SEARCH_TOOL || actionId === SKILLS_LOAD_TOOL) {
-          emitToolCallStarted(false);
+          emitToolCallStarted(false, false);
           try {
             const result =
               actionId === SKILLS_SEARCH_TOOL ? handleSkillsSearch(args) : handleSkillsLoad(args);
@@ -3923,7 +3945,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
         // Read-only and never `danger: "confirm"` — it reports what this session
         // was already told, so the strip shows a plain in-flight row.
         if (actionId === MCP_SURFACE_TOOL_ID) {
-          emitToolCallStarted(false);
+          emitToolCallStarted(false, false);
           try {
             const manifest = await resolveManifest(MCP_SURFACE_TOOL_ID);
             // Build against the tier captured at dispatch start — the one the
@@ -3988,7 +4010,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
         if (actionId === PROJECT_RUN_CHECK_TOOL) {
           // Never `danger: "confirm"` — the runner is one the project already
           // declares, so the strip shows a plain in-flight row.
-          emitToolCallStarted(false);
+          emitToolCallStarted(false, false);
           // A relayed check runs only where its session is bound, and only while
           // the requesting Shell drives it there (#13493): asked now, and again
           // right before the spawn, since the checks between can take a while.
@@ -4057,7 +4079,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
         // IPC channel's lease policy covers it: asked now, and again right
         // before the spawn.
         if (actionId === PROJECT_RUN_COMMAND_TOOL) {
-          emitToolCallStarted(false);
+          emitToolCallStarted(false, false);
           const relay = deps.relay;
           const refuseWrite = relay
             ? (projectId: string | undefined) => relay.refuseWrite(projectId)
@@ -4123,7 +4145,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
         // `notifyDisplayImage`. Audit + strip-settle unify via the shared
         // `finally`. Never `danger: "confirm"` — it's a passive display.
         if (actionId === HELP_DISPLAY_IMAGE_TOOL) {
-          emitToolCallStarted(false);
+          emitToolCallStarted(false, false);
           try {
             // Help-session bearers only. A pane-token session can also resolve
             // to the core tier and clear the static allowlist gate above,
@@ -4280,10 +4302,17 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
         }
         // A protected close already announced itself before asking (#12881);
         // an agent's close-all is confirm-gated by the effective danger.
-        // A call under the skip preference never waits. A native grant's still
-        // can: the renderer demotes a D3 force delete back to the dialog.
+        // A call under the skip preference never waits. Any other
+        // preconfirmed call asks no one, except a force delete: the renderer
+        // demotes one whose live tier is D3 back to the typed-name dialog
+        // (#12115), and only it can read that tier, so the wait is announced.
         if (!toolCallStartedEmitted) {
-          emitToolCallStarted(confirmGated && dispatchAuthorization !== "skip-preference");
+          const danger = confirmGated && dispatchAuthorization !== "skip-preference";
+          const mayDemoteToDialog =
+            dispatchAuthorization !== "skip-preference" &&
+            actionId === "worktree.delete" &&
+            isForceDelete(args);
+          emitToolCallStarted(danger, confirmGated && (!dispatchConfirmed || mayDemoteToDialog));
         }
 
         // The workspace the dispatch actually landed on, resolved renderer-side
@@ -4646,6 +4675,9 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
             notifyToolCallSettled({
               sessionId,
               toolId: actionId,
+              startedAt,
+              danger: toolCallStartedDanger,
+              asks: toolCallStartedAsks,
               durationMs,
               outcome: settledOutcome,
               capturedTurnId,

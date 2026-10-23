@@ -81,6 +81,7 @@ import {
 import { createSessionServer, cleanupResourceSubscriptions } from "./sessionServer.js";
 import { bindHostControl } from "./hostControlTools.js";
 import type { AssistantCaller } from "../assistants/AssistantTerminalControl.js";
+import { getAssistantConfirmations } from "../assistants/assistantConfirmations.js";
 import type { SessionStore } from "./sessionStore.js";
 import type { AuditService } from "./auditLog.js";
 import { classifyMcpDispatchResult } from "./auditLog.js";
@@ -111,6 +112,7 @@ import {
   MCP_WORKSPACE_ID_QUERY_PARAM,
   MCP_HANDSHAKE_REJECTED_CODE,
   RELAY_CALL_ID_META_KEY,
+  MCP_DISPATCH_TIMEOUT_MS,
   minimumPermittingTier,
 } from "./shared.js";
 import { createLogger } from "../../utils/logger.js";
@@ -318,6 +320,14 @@ export interface HttpLifecycleDeps {
  * send one — fall back to a neutral label so the settings row never shows a
  * blank.
  */
+/** Time past the dispatch deadline a confirmation is still shown, for the hop to the dialog. */
+const CONFIRMATION_DEADLINE_GRACE_MS = 2_000;
+
+/** One call of one session, as its started and settled notices both name it. */
+function confirmationCallKey(sessionId: string, toolId: string, startedAt: number): string {
+  return JSON.stringify([sessionId, toolId, startedAt]);
+}
+
 function resolveUserAgent(req: http.IncomingMessage): string {
   const ua = req.headers["user-agent"];
   return typeof ua === "string" && ua.trim().length > 0 ? ua : "Unknown client";
@@ -2575,6 +2585,29 @@ export class HttpLifecycle {
         // live activity event, even if a different project view is focused. A
         // third-party client's calls do not belong in that strip.
         if (!isRendererOwned(payload.sessionId)) return;
+        // A call that waits on the person is also an observation of its
+        // assistant's (#14165), for Canopy and `host.list` to read; the dialog
+        // stays the one place it is answered.
+        const helpSessionId = this.deps.sessionStore.sessionHelpIdMap.get(payload.sessionId);
+        const helpTerminalId =
+          helpSessionId !== undefined
+            ? (this.helpSessionTerminalResolver?.(helpSessionId) ?? null)
+            : null;
+        if (payload.asks && helpSessionId !== undefined && helpTerminalId !== null) {
+          // Announced just before it asks: the dialog's own deadline runs from
+          // about now, not from the call's start, and a wait shown a moment
+          // late is safer than a live decision hidden early.
+          const waitingSince = Date.now();
+          getAssistantConfirmations().begin(
+            confirmationCallKey(payload.sessionId, payload.toolId, payload.startedAt),
+            { helpSessionId, terminalId: helpTerminalId },
+            {
+              actionId: payload.toolId,
+              since: waitingSince,
+              expiresAt: waitingSince + MCP_DISPATCH_TIMEOUT_MS + CONFIRMATION_DEADLINE_GRACE_MS,
+            }
+          );
+        }
         const id = this.deps.sessionStore.sessionWebContentsMap.get(payload.sessionId);
         if (id === undefined) return;
         // Redact args with the same pipeline the audit record uses so the strip
@@ -2604,6 +2637,12 @@ export class HttpLifecycle {
 
     const notifyToolCallSettled: import("./sessionServer.js").SessionServerDeps["notifyToolCallSettled"] =
       (payload) => {
+        // Before the origin check: a session torn down mid-call still settles its wait.
+        if (payload.asks) {
+          getAssistantConfirmations().settle(
+            confirmationCallKey(payload.sessionId, payload.toolId, payload.startedAt)
+          );
+        }
         if (!isRendererOwned(payload.sessionId)) return;
         const id = this.deps.sessionStore.sessionWebContentsMap.get(payload.sessionId);
         if (id === undefined) return;

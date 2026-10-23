@@ -2,7 +2,9 @@ import { describe, expect, it, vi } from "vitest";
 import {
   AgentDirectorySchema,
   isFullAgentDirectory,
+  type AgentDirectory,
 } from "../../../shared/types/agentDirectory.js";
+import type { PaneNotifyState } from "../../../shared/types/terminalNotify.js";
 import {
   LocalAgentDirectory,
   collectAgentDirectory,
@@ -315,6 +317,97 @@ describe("collectAgentDirectory (#14160)", () => {
     const getRunningLaneSession = vi.fn(sources().getRunningLaneSession);
     await collectAgentDirectory(sources({ getRunningLaneSession }));
     expect(getRunningLaneSession).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("collectAgentDirectory decisions and supervision (#14165)", () => {
+  const notices = (terminalId: string, fields: Partial<PaneNotifyState> = {}): PaneNotifyState => ({
+    terminalId,
+    pendingCount: 0,
+    readyCount: 0,
+    delivery: { status: "idle" },
+    revision: 1,
+    ...fields,
+  });
+
+  function liveAssistant(directory: AgentDirectory, terminalId: string) {
+    const entry = directory.entries.find(
+      (candidate) => candidate.state === "live" && candidate.subject.terminalId === terminalId
+    );
+    if (entry?.state !== "live") throw new Error(`no live ${terminalId}`);
+    return entry;
+  }
+
+  it("puts each lane's own confirmations and notices on its own entry, never a neighbour's", async () => {
+    const pendingConfirmations = vi.fn((owner: { helpSessionId: string; terminalId: string }) =>
+      owner.helpSessionId === "s1" && owner.terminalId === "a1"
+        ? {
+            waiting: [{ actionId: "worktree.delete", since: 8_000, expiresAt: 38_000 }],
+            omitted: 0,
+          }
+        : { waiting: [], omitted: 0 }
+    );
+    const directory = await collectAgentDirectory(
+      sources({
+        pendingConfirmations,
+        paneNotices: (terminalId) =>
+          terminalId === "a0"
+            ? notices("a0", {
+                pendingCount: 2,
+                readyCount: 1,
+                delivery: { status: "held", reason: "working" },
+              })
+            : notices(terminalId),
+      })
+    );
+
+    expect(AgentDirectorySchema.safeParse(directory).success).toBe(true);
+    expect(pendingConfirmations).toHaveBeenCalledWith(
+      { helpSessionId: "s1", terminalId: "a1" },
+      9000
+    );
+    expect(liveAssistant(directory, "a1")).toMatchObject({
+      confirmations: { waiting: [{ actionId: "worktree.delete" }], omitted: 0 },
+      // Watching nothing is said as nothing, not as a fault.
+      notices: null,
+    });
+    expect(liveAssistant(directory, "a0")).toMatchObject({
+      confirmations: { waiting: [], omitted: 0 },
+      notices: { pending: 2, ready: 1, delivery: "held" },
+    });
+    // A worker is no assistant's session: it carries neither.
+    const worker = liveAssistant(directory, "w1");
+    expect("confirmations" in worker || "notices" in worker).toBe(false);
+  });
+
+  it("leaves notices unsaid, not empty, when they can't be read", async () => {
+    const directory = await collectAgentDirectory(sources({ paneNotices: () => undefined }));
+    expect("notices" in liveAssistant(directory, "a0")).toBe(false);
+  });
+
+  it("gives a run replaced mid-read none of the old session's waits or notices", async () => {
+    let generation = 7;
+    const directory = await collectAgentDirectory(
+      sources({
+        getLiveGeneration: (id) =>
+          id === "a0"
+            ? generation
+            : (({ w1: 3, w2: 4, a1: 8 } as Record<string, number>)[id] ?? null),
+        readTerminals: async () => {
+          generation = 8;
+          return { terminals: [], degraded: false };
+        },
+        pendingConfirmations: () => ({
+          waiting: [{ actionId: "worktree.delete", since: 1, expiresAt: 99_999 }],
+          omitted: 0,
+        }),
+        paneNotices: (terminalId) => notices(terminalId, { readyCount: 3 }),
+      })
+    );
+
+    const replaced = liveAssistant(directory, "a0");
+    expect(replaced.subject.incarnation).toBe(8);
+    expect("confirmations" in replaced || "notices" in replaced).toBe(false);
   });
 });
 

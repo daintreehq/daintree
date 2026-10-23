@@ -5,10 +5,12 @@ import {
   cutAgentLabel,
   unreadAgentDirectory,
   type AgentDirectory,
+  type AgentDirectoryConfirmation,
   type AgentDirectoryEntry,
   type AgentDirectoryLiveEntry,
   type AgentDirectoryResumableEntry,
 } from "../../shared/types/agentDirectory.js";
+import type { PaneNotifyState } from "../../shared/types/terminalNotify.js";
 import type { PtyClient } from "./PtyClient.js";
 import type { RunningLane, RunningLaneSession } from "./HelpSessionService.js";
 import { classifyRun } from "./projectAgentCounts.js";
@@ -39,6 +41,13 @@ export interface AgentDirectorySources {
   getLiveGeneration(terminalId: string): number | null;
   readTerminals(): Promise<{ terminals: readonly PtyTerminal[]; degraded: boolean }>;
   isHelpTerminal(terminalId: string): boolean;
+  /** The Daintree confirmations an assistant session's calls wait on (#14165). */
+  pendingConfirmations?(
+    owner: { helpSessionId: string; terminalId: string },
+    now: number
+  ): { waiting: AgentDirectoryConfirmation[]; omitted: number };
+  /** The terminal notices a pane holds; null when it holds none, undefined when unknown. */
+  paneNotices?(terminalId: string): PaneNotifyState | null | undefined;
   /**
    * Stored resume pointers, read without claiming or clearing any. `complete`
    * is false when the projects looked in were fewer than the ones that exist.
@@ -92,21 +101,44 @@ export async function collectAgentDirectory(
     const replaced = incarnation !== generation;
     if (replaced) complete = false;
     const terminal = replaced ? undefined : byId.get(running.terminalId);
-    live.push(
-      liveEntry({
-        role: "assistant",
-        hostId: sources.hostId,
-        projectId: lane.projectId,
-        terminalId: running.terminalId,
-        incarnation,
-        // The global session is held as a lane of its reserved id, but is named
-        // by its own scope: a viewer resolving it as a project lane is refused.
-        ...(isGlobalAssistantId(lane.projectId) ? { global: true } : { lane: lane.slot }),
-        agentId: terminal?.detectedAgentId ?? terminal?.launchAgentId ?? lane.agentId,
-        attached: lane.attached !== false,
-        terminal,
-      })
-    );
+    const entry = liveEntry({
+      role: "assistant",
+      hostId: sources.hostId,
+      projectId: lane.projectId,
+      terminalId: running.terminalId,
+      incarnation,
+      // The global session is held as a lane of its reserved id, but is named
+      // by its own scope: a viewer resolving it as a project lane is refused.
+      ...(isGlobalAssistantId(lane.projectId) ? { global: true } : { lane: lane.slot }),
+      agentId: terminal?.detectedAgentId ?? terminal?.launchAgentId ?? lane.agentId,
+      attached: lane.attached !== false,
+      terminal,
+    });
+    // Read for this session only: a replaced run is a new session, so the
+    // old one's waits and notices never attach to it.
+    if (!replaced) {
+      if (sources.pendingConfirmations) {
+        entry.confirmations = sources.pendingConfirmations(
+          { helpSessionId: running.sessionId, terminalId: running.terminalId },
+          sources.now()
+        );
+      }
+      if (sources.paneNotices) {
+        const pane = sources.paneNotices(running.terminalId);
+        if (pane !== undefined) {
+          entry.notices =
+            pane &&
+            (pane.pendingCount > 0 || pane.readyCount > 0 || pane.delivery.status !== "idle")
+              ? {
+                  pending: pane.pendingCount,
+                  ready: pane.readyCount,
+                  delivery: pane.delivery.status,
+                }
+              : null;
+        }
+      }
+    }
+    live.push(entry);
   }
 
   const workers: AgentDirectoryLiveEntry[] = [];

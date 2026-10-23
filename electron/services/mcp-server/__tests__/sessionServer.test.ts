@@ -1,5 +1,5 @@
 import { GLOBAL_ASSISTANT_ID } from "../../../../shared/config/globalAssistant.js";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { McpError, ErrorCode } from "@modelcontextprotocol/sdk/types.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
@@ -2926,7 +2926,47 @@ describe("CallTool live activity notifications (#9759)", () => {
 
     await callTool(server, { name: "worktree.list", arguments: {} });
 
-    expect(started).toHaveBeenCalledWith(expect.objectContaining({ danger: true }));
+    expect(started).toHaveBeenCalledWith(expect.objectContaining({ danger: true, asks: true }));
+  });
+
+  it("settles a call with its started event's own startedAt, so the two pair exactly (#14165)", async () => {
+    const started = vi.fn();
+    const settled = vi.fn();
+    const requestManifest = vi
+      .fn()
+      .mockResolvedValue([
+        { id: "worktree.list", title: "List", description: "d", danger: "confirm" },
+      ]);
+    // The clock moves on while the dispatch is out, so a settle that read the
+    // clock again could not land on the start's own time.
+    let clock = 1_000_000;
+    const now = vi.spyOn(Date, "now").mockImplementation(() => clock);
+    onTestFinished(() => now.mockRestore());
+    const deps = fakeDeps({
+      notifyToolCallStarted: started,
+      notifyToolCallSettled: settled,
+      requestManifest,
+      dispatchAction: vi.fn(async () => {
+        clock += 5_000;
+        return { result: { ok: true as const, result: null } };
+      }),
+    });
+    const server = createSessionServer("session-P", deps);
+    await server.connect(makeMockTransport());
+
+    await callTool(server, { name: "worktree.list", arguments: {} });
+
+    const startedAt = (started.mock.calls[0]?.[0] as { startedAt: number }).startedAt;
+    expect(clock).not.toBe(startedAt);
+    expect(settled).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId: "session-P",
+        toolId: "worktree.list",
+        startedAt,
+        danger: true,
+        asks: true,
+      })
+    );
   });
 
   it("emits started (danger:false) + settled for the waitUntilIdle short-circuit", async () => {
@@ -11525,6 +11565,79 @@ describe("agent-pane approval (#12692)", () => {
     pane.sessionStore.grantCache.dispose();
   });
 
+  const teardownConfirmEntry: ActionManifestEntry = {
+    ...makeManifestEntry("worktree.resource.teardown"),
+    kind: "command",
+    danger: "confirm",
+  };
+
+  // #14165: only a call that puts a dialog up is a wait on the person. A
+  // session approval covers the next call, so that one is confirm-gated
+  // without asking anyone, and must not read as waiting on a confirmation.
+  it("announces a wait for the call that asks, not the one its session approval covers", async () => {
+    const dispatchAction = vi
+      .fn()
+      .mockResolvedValueOnce({
+        result: { ok: true, result: { ok: 1 } },
+        confirmationDecision: "approved",
+        approvalScope: "session",
+      })
+      .mockResolvedValue({ result: { ok: true, result: { ok: 1 } } });
+    const notifyToolCallStarted = vi.fn();
+    const notifyToolCallSettled = vi.fn();
+    const pane = paneServer("full", {
+      dispatchAction,
+      notifyToolCallStarted,
+      notifyToolCallSettled,
+      getCachedManifest: vi.fn(() => [teardownConfirmEntry]),
+    });
+    await pane.server.connect(makeMockTransport());
+
+    await callTool(pane.server, {
+      name: "worktree.resource.teardown",
+      arguments: { worktreeId: "wt-1" },
+    });
+    await callTool(pane.server, {
+      name: "worktree.resource.teardown",
+      arguments: { worktreeId: "wt-2" },
+    });
+
+    expect(lastAudit(pane.appendAuditRecord)).toMatchObject({ authorization: "session-grant" });
+    expect(notifyToolCallStarted.mock.calls.map((c) => c[0])).toEqual([
+      expect.objectContaining({ danger: true, asks: true }),
+      expect.objectContaining({ danger: true, asks: false }),
+    ]);
+    expect(notifyToolCallSettled.mock.calls.map((c) => c[0])).toEqual([
+      expect.objectContaining({ danger: true, asks: true }),
+      expect.objectContaining({ danger: true, asks: false }),
+    ]);
+    pane.sessionStore.grantCache.dispose();
+  });
+
+  it("announces no wait for a call the pane's skip-confirmations setting preconfirms", async () => {
+    const notifyToolCallStarted = vi.fn();
+    const notifyToolCallSettled = vi.fn();
+    const pane = paneServer("full", {
+      paneSkipConfirmations: true,
+      notifyToolCallStarted,
+      notifyToolCallSettled,
+      getCachedManifest: vi.fn(() => [teardownConfirmEntry]),
+    });
+    await pane.server.connect(makeMockTransport());
+
+    await callTool(pane.server, {
+      name: "worktree.resource.teardown",
+      arguments: { worktreeId: "wt-1" },
+    });
+
+    expect(lastAudit(pane.appendAuditRecord).authorization).toBe("project-setting");
+    expect(notifyToolCallStarted).toHaveBeenCalledWith(
+      expect.objectContaining({ danger: true, asks: false })
+    );
+    expect(notifyToolCallSettled).toHaveBeenCalledWith(expect.objectContaining({ asks: false }));
+    pane.sessionStore.grantCache.dispose();
+  });
+
   it("neither runs nor remembers an approval for a session that ended while the user decided", async () => {
     type Envelope = Awaited<ReturnType<NonNullable<SessionServerDeps["requestApproval"]>>>;
     let approve!: (envelope: Envelope) => void;
@@ -12180,7 +12293,7 @@ describe("assistant skip preference (#12874)", () => {
     expect(call[3]).toBeUndefined();
     expect(lastAudit(help.appendAuditRecord).authorization).toBeUndefined();
     expect(help.notifyToolCallStarted).toHaveBeenCalledWith(
-      expect.objectContaining({ toolId: "worktree.delete", danger: true })
+      expect.objectContaining({ toolId: "worktree.delete", danger: true, asks: true })
     );
     help.sessionStore.grantCache.dispose();
   });
@@ -12263,6 +12376,32 @@ describe("assistant skip preference (#12874)", () => {
     expect(help.dispatchAction.mock.calls.at(-1)?.slice(2)).toEqual([true]);
     expect(help.notifyToolCallStarted).toHaveBeenCalledWith(
       expect.objectContaining({ toolId: "worktree.delete", danger: true })
+    );
+    help.sessionStore.grantCache.dispose();
+  });
+
+  // #14165: a granted plain delete never reaches a dialog, so it is no wait on
+  // the person; a granted force delete may still be demoted to the typed-name
+  // one, which only the renderer can decide, so it announces the wait.
+  it.each([
+    [{ worktreeId: "wt-1" }, false],
+    [{ worktreeId: "wt-1", force: true }, true],
+  ])("announces a native-granted delete with %o as asking: %s", async (args, asks) => {
+    const help = skipServer({ origin: "help", skipped: false });
+    help.sessionStore.grantCache.issueNativeGrant({
+      sessionId: "s",
+      actorId: "help-1",
+      actorType: "help-session",
+      allowedTools: ["worktree.delete"],
+      maxUses: 2,
+    });
+    await help.server.connect(makeMockTransport());
+
+    await callTool(help.server, { name: "worktree.delete", arguments: args });
+
+    expect(help.dispatchAction.mock.calls.at(-1)?.[2]).toBe(true);
+    expect(help.notifyToolCallStarted).toHaveBeenCalledWith(
+      expect.objectContaining({ toolId: "worktree.delete", danger: true, asks })
     );
     help.sessionStore.grantCache.dispose();
   });
