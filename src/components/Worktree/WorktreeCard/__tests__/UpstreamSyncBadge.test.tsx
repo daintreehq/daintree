@@ -60,24 +60,21 @@ describe("UpstreamSyncBadge — auth-failed sign-in branch (issue #9982)", () =>
     vi.mocked(actionService.dispatch).mockClear();
   });
 
-  it("renders a real <button> with the auth-failed aria-label and clicking it fires retry + dispatch", () => {
+  it("renders a real <button> with the auth-failed aria-label and clicking it retries without opening forge settings", () => {
     renderBadge({
       aheadCount: 0,
       behindCount: 0,
       fetchAuthFailed: true,
       hasAuthFailedSignIn: true,
-      authProviderId: "daintree.github.github",
     });
-    const button = screen.getByRole("button", { name: /Forge authentication failed/ });
+    const button = screen.getByRole("button", { name: /Git authentication failed/ });
     expect(button.getAttribute("data-fetch-auth-failed")).toBe("true");
-    expect(button.textContent).toContain("Reconnect");
+    expect(button.textContent).toContain("Retry");
     fireEvent.click(button);
     expect(mockRetryAuthFetch).toHaveBeenCalledTimes(1);
-    expect(actionService.dispatch).toHaveBeenCalledWith(
-      "app.settings.openTab",
-      { tab: "code-forge", subtab: "daintree.github.github" },
-      { source: "user" }
-    );
+    // `git fetch` never uses the forge token, so the forge settings tab is no
+    // way out of a fetch auth failure (#14208).
+    expect(actionService.dispatch).not.toHaveBeenCalled();
   });
 
   it("keeps the auth failure visible when there is no reconnect to offer", () => {
@@ -362,7 +359,7 @@ describe("UpstreamSyncBadge — resting base relationship", () => {
       hasAuthFailedSignIn: true,
       hasNoUpstream: true,
     });
-    const button = screen.getByRole("button", { name: /Forge authentication failed/ });
+    const button = screen.getByRole("button", { name: /Git authentication failed/ });
     expect(button.textContent).toContain("develop");
     expect(button.textContent).not.toContain("—");
     expect(screen.queryByTestId("upstream-sync-unpushed")).not.toBeNull();
@@ -448,7 +445,7 @@ describe("UpstreamSyncBadge — a base branch longer than the card (#12074)", ()
       fetchAuthFailed: true,
       hasAuthFailedSignIn: true,
     });
-    assertOnlyTheNameYields("Δ", ["↑12", "↓3", "↑7", "↓5", "· local", "[auth]", "Reconnect"]);
+    assertOnlyTheNameYields("Δ", ["↑12", "↓3", "↑7", "↓5", "· local", "[auth]", "Retry"]);
   });
 
   it("yields a long name on the resting line too, where there are no base counts", () => {

@@ -32,6 +32,7 @@ import { flushPendingPerfMarks } from "@/utils/performance";
 import { markSwitch, setActiveSwitchTrace } from "@/utils/switchTrace";
 import { scheduleRevealTextReraster } from "@/utils/revealTextReraster";
 import { notify } from "@/lib/notify";
+import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { actionService } from "@/services/ActionService";
 import { attachSwitchStatusTimingStore } from "@/services/projectSwitchStatusTiming";
 import { logDebug } from "@/utils/logger";
@@ -76,6 +77,12 @@ interface WorktreeTickEvent {
   tick: WorktreeTick;
   epoch: string;
   seq: number;
+}
+
+interface FetchAuthFailureConfirmedEvent {
+  type: "fetch-auth-failure-confirmed";
+  repoName: string;
+  remote: string;
 }
 
 interface WorktreeRemovedEvent {
@@ -967,28 +974,27 @@ export function WorktreeStoreProvider({ children }: { children: ReactNode }) {
       })
     );
 
-    // Confirmed forge-auth failure — a background fetch's credential is
-    // genuinely broken (it survived several auto-retries). The host emits this
+    // Confirmed fetch-auth failure — a repo's background fetch kept failing on
+    // an auth-class error through several auto-retries. The host emits this
     // once per repo instead of flagging every worktree card, so we raise a
-    // single escalation toast pointing at the forge settings. Transient blips
-    // during the retry window never reach here (they show the softer
-    // per-card "couldn't reach origin" tooltip instead).
+    // single escalation toast. `git fetch` authenticates with the SSH key or
+    // Git's credential helper, never the forge API token in Daintree settings,
+    // so the recovery is a retry after fixing Git access, not a token rotation
+    // (#14208). Transient blips during the retry window never reach here (they
+    // show the softer per-card "couldn't reach origin" tooltip instead).
     cleanups.push(
-      worktreePort.onEvent("fetch-auth-failure-confirmed", () => {
+      worktreePort.onEvent("fetch-auth-failure-confirmed", (data) => {
+        const event = data as FetchAuthFailureConfirmedEvent;
         notify({
           type: "error",
-          title: "Forge authentication failed",
-          message:
-            "Background fetches are paused because your code forge credentials were rejected. Sign in again to resume.",
+          title: "Git authentication failed",
+          message: `Git keeps rejecting fetches of ${event.repoName} from ${event.remote} — check your SSH key or Git credential helper, then retry. Daintree's forge token isn't used for fetching.`,
           action: {
-            label: "Open settings",
-            actionId: "app.settings.openTab",
+            label: "Retry fetch",
             onClick: () => {
-              void actionService.dispatch(
-                "app.settings.openTab",
-                { tab: "code-forge" },
-                { source: "user" }
-              );
+              safeFireAndForget(window.electron.worktree.retryAuthFetch(), {
+                context: "Retry auth-suspended fetch from toast",
+              });
             },
           },
           supersedeKey: "forge-auth-failure-confirmed",

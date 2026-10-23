@@ -1083,7 +1083,14 @@ export type WorkspaceHostEvent =
   // surfaces a single escalation toast instead of the per-card auth stripe.
   // Re-armed by `retry-auth-fetch` / credential rotation so a later
   // re-confirmation can re-signal.
-  | { type: "fetch-auth-failure-confirmed"; reason: import("./ipc/errors.js").GitOperationReason }
+  | {
+      type: "fetch-auth-failure-confirmed";
+      reason: import("./ipc/errors.js").GitOperationReason;
+      /** Folder name of the repo, never its path. */
+      repoName: string;
+      /** The remote whose fetch kept failing, e.g. `origin`. */
+      remote: string;
+    }
   // A switched-to view's report that its worktree statuses landed (or that its
   // deadline passed first), relayed by the host with its own load marks
   // attached. Main folds it into the switch's `projectswitch.status-timing`

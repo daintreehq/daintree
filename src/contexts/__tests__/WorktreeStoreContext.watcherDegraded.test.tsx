@@ -13,6 +13,7 @@ vi.mock("@/lib/notify", () => ({
 }));
 
 const dispatchMock = vi.fn();
+const retryAuthFetchMock = vi.fn(() => Promise.resolve());
 vi.mock("@/services/ActionService", () => ({
   actionService: {
     dispatch: (...args: unknown[]) => dispatchMock(...args),
@@ -57,6 +58,7 @@ beforeEach(() => {
   initialTopologyWatcherDark = false;
   notifyMock.mockClear();
   dispatchMock.mockClear();
+  retryAuthFetchMock.mockClear();
   setCurrentProject("/repo/proj");
 
   (globalThis as unknown as { window: Window }).window.electron = {
@@ -84,6 +86,7 @@ beforeEach(() => {
     worktree: {
       getAllIssueAssociations: () => Promise.resolve({}),
       getPRStatus: () => Promise.resolve(null),
+      retryAuthFetch: retryAuthFetchMock,
     },
   } as unknown as typeof window.electron;
 });
@@ -307,6 +310,8 @@ describe("WorktreeStoreProvider — confirmed forge-auth escalation", () => {
       emit("fetch-auth-failure-confirmed", {
         type: "fetch-auth-failure-confirmed",
         reason: "auth-failed",
+        repoName: "acme-app",
+        remote: "upstream",
       });
     });
 
@@ -315,10 +320,15 @@ describe("WorktreeStoreProvider — confirmed forge-auth escalation", () => {
       type?: string;
       priority?: string;
       title?: string;
+      message?: string;
       action?: { label?: string };
       supersedeKey?: string;
     };
     expect(payload.type).toBe("error");
+    // Names what failed and says the forge token isn't the fix (#14208).
+    expect(payload.message).toContain("acme-app");
+    expect(payload.message).toContain("upstream");
+    expect(payload.message).toMatch(/forge token isn't used/);
     // An error toast must never be low-priority (silently dropped — lint-banned).
     expect(payload.priority).not.toBe("low");
     expect(payload.title).toBeTruthy();
@@ -326,13 +336,15 @@ describe("WorktreeStoreProvider — confirmed forge-auth escalation", () => {
     expect(payload.supersedeKey).toBeTruthy();
   });
 
-  it("dispatches the forge settings action when the recovery button fires", async () => {
+  it("retries the suspended fetch instead of opening forge settings when the recovery button fires", async () => {
     await renderProvider();
 
     act(() => {
       emit("fetch-auth-failure-confirmed", {
         type: "fetch-auth-failure-confirmed",
         reason: "auth-failed",
+        repoName: "acme-app",
+        remote: "upstream",
       });
     });
 
@@ -341,11 +353,8 @@ describe("WorktreeStoreProvider — confirmed forge-auth escalation", () => {
       payload.action?.onClick?.();
     });
 
-    expect(dispatchMock).toHaveBeenCalledWith(
-      "app.settings.openTab",
-      expect.objectContaining({ tab: "code-forge" }),
-      expect.objectContaining({ source: "user" })
-    );
+    expect(retryAuthFetchMock).toHaveBeenCalledTimes(1);
+    expect(dispatchMock).not.toHaveBeenCalled();
   });
 
   it("stops notifying after the provider unmounts", async () => {
@@ -356,6 +365,8 @@ describe("WorktreeStoreProvider — confirmed forge-auth escalation", () => {
       emit("fetch-auth-failure-confirmed", {
         type: "fetch-auth-failure-confirmed",
         reason: "auth-failed",
+        repoName: "acme-app",
+        remote: "upstream",
       });
     });
 

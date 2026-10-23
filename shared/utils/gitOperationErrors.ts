@@ -76,15 +76,21 @@ const PATTERNS: ReadonlyArray<readonly [GitOperationReason, RegExp]> = [
     /Authentication failed|Permission denied \(publickey\)|unable to access.*: The requested URL returned error: 40[137]/i,
   ],
   [
-    // Run BEFORE repository-not-found: when both signals appear (network failure plus
-    // the generic "Could not read from remote repository" follow-up), the network
-    // classification is the more actionable root cause.
+    // Run AFTER auth-failed: OpenSSH also prints "Connection closed by <ip> port 22"
+    // after a publickey denial, and that must stay an auth failure.
+    // The first three alternatives are curl's (HTTPS); the rest are OpenSSH's DNS,
+    // connect, handshake and session-drop lines (#14208).
     "network-unavailable",
-    /Could not resolve host:|Failed to connect to.*port.*: Connection refused|unable to access.*: The requested URL returned error: 5\d\d/i,
+    /Could not resolve host:|Failed to connect to.*port.*: (?:Connection refused|Couldn't connect to server)|unable to access.*: (?:The requested URL returned error: 5\d\d|(?:Connection|Operation) timed out after|Recv failure: Connection reset by peer|SSL connection timeout|GnuTLS recv error)|ssh: Could not resolve hostname|ssh: connect to host \S+ port \d+: (?:Connection timed out|Operation timed out|Connection refused|Network is unreachable|No route to host|Bad file number|Unknown error)|kex_exchange_identification: (?:read: Connection reset by peer|Connection closed by remote host)|Connection (?:reset|closed) by \S+ port \d+|client_loop: send disconnect: Broken pipe/i,
   ],
   [
+    // Not the bare "Could not read from remote repository" line: git's
+    // die_initial_contact prints it after every SSH transport failure (DNS,
+    // timeout, reset), so it says nothing about the repo existing. A real missing
+    // repo carries its own line — GitHub over SSH prints "ERROR: Repository not
+    // found." — and an unattributed footer falls through to unknown (#14208).
     "repository-not-found",
-    /Repository not found|fatal: repository '.*' not found|Could not read from remote repository/i,
+    /Repository not found|fatal: repository '.*' not found/i,
   ],
   [
     "hook-rejected",

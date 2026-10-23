@@ -824,6 +824,45 @@ describe("RepoFetchCoordinator", () => {
     expect(coord.hasFailureFor("/repo/.git")).toBe(false);
   });
 
+  it("keeps SSH transport failures AFTER a prior success off the auth path (#14208)", async () => {
+    mockGetGitCommonDir.mockReturnValue("/repo/.git");
+    let attempt = 0;
+    mockCreateBackgroundFetchGit.mockReturnValue(
+      makeMockGit(() => {
+        attempt++;
+        if (attempt === 1) return Promise.resolve();
+        return Promise.reject(
+          new Error(
+            "ssh: connect to host github.com port 22: Connection timed out\n" +
+              "fatal: Could not read from remote repository.\n\n" +
+              "Please make sure you have the correct access rights\nand the repository exists."
+          )
+        );
+      })
+    );
+
+    const onAuthFailureConfirmed = vi.fn();
+    const coord = new RepoFetchCoordinator({ onAuthFailureConfirmed });
+    await coord.fetchForWorktree({ worktreeId: "wt1", worktreePath: "/repo" });
+    expect(coord.getLastSuccessfulFetch("/repo/.git")).not.toBeNull();
+
+    // Every later round fails the same way, across the windows that would
+    // confirm an auth failure.
+    for (let round = 0; round < 4; round++) {
+      vi.advanceTimersByTime(60 * 60_000);
+      const result = await coord.fetchForWorktree({ worktreeId: "wt1", worktreePath: "/repo" });
+      expect(result.status).toBe("failed");
+      expect(result.reason).toBe("network-unavailable");
+      expect(result.authFailed).toBe(false);
+      expect(result.networkFailed).toBe(true);
+    }
+    expect(onAuthFailureConfirmed).not.toHaveBeenCalled();
+
+    // A network entry is dropped on reconnect, unlike an auth suspension.
+    coord.clearNetworkFailures();
+    expect(coord.hasFailureFor("/repo/.git")).toBe(false);
+  });
+
   it("treats first-fetch repo-not-found as a short retry window (typo / race)", async () => {
     mockGetGitCommonDir.mockReturnValue("/repo/.git");
     mockCreateBackgroundFetchGit.mockReturnValue(

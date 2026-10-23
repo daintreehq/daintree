@@ -45,10 +45,6 @@ describe("classifyGitError — table-driven", () => {
     ["repository-not-found", "remote: ERROR: Repository not found."],
     ["repository-not-found", "fatal: repository 'https://github.com/foo/bar.git/' not found"],
     [
-      "repository-not-found",
-      "fatal: Could not read from remote repository.\nPlease make sure you have the correct access rights",
-    ],
-    [
       "network-unavailable",
       "fatal: unable to access 'https://github.com/foo.git/': Could not resolve host: github.com",
     ],
@@ -176,6 +172,59 @@ describe("classifyGitError — ordering and normalization", () => {
     expect(classifyGitError(" ! [Rejected]        main -> main (Non-Fast-Forward)")).toBe(
       "push-rejected-outdated"
     );
+  });
+
+  // #14208: git's die_initial_contact prints the "Could not read from remote
+  // repository" footer after every SSH transport failure, so these must land on
+  // network-unavailable — never repository-not-found, which the fetch
+  // coordinator escalates to a confirmed auth failure after a prior success.
+  it.each([
+    "ssh: Could not resolve hostname github.com: nodename nor servname provided, or not known",
+    "ssh: Could not resolve hostname github.com: Temporary failure in name resolution",
+    "ssh: Could not resolve hostname github.com: Name or service not known",
+    "ssh: connect to host github.com port 22: Connection timed out",
+    "ssh: connect to host github.com port 22: Operation timed out",
+    "ssh: connect to host github.com port 22: Connection refused",
+    "ssh: connect to host ssh.github.com port 443: Network is unreachable",
+    "ssh: connect to host github.com port 22: No route to host",
+    "Connection reset by 140.82.112.3 port 22",
+    "Connection closed by 140.82.112.3 port 22",
+    "kex_exchange_identification: read: Connection reset by peer",
+    "kex_exchange_identification: Connection closed by remote host",
+    "client_loop: send disconnect: Broken pipe",
+  ])("classifies SSH transport failure %j as network-unavailable", (line) => {
+    const msg = `${line}\nfatal: Could not read from remote repository.\n\nPlease make sure you have the correct access rights\nand the repository exists.`;
+    expect(classifyGitError(msg)).toBe("network-unavailable");
+  });
+
+  it.each([
+    "fatal: unable to access 'https://github.com/foo.git/': Failed to connect to github.com port 443 after 75003 ms: Couldn't connect to server",
+    "fatal: unable to access 'https://github.com/foo.git/': Connection timed out after 300000 milliseconds",
+    "fatal: unable to access 'https://github.com/foo.git/': Operation timed out after 300000 milliseconds with 0 out of 0 bytes received",
+    "fatal: unable to access 'https://github.com/foo.git/': Recv failure: Connection reset by peer",
+    "fatal: unable to access 'https://github.com/foo.git/': SSL connection timeout",
+  ])("classifies HTTPS transport failure %j as network-unavailable", (msg) => {
+    expect(classifyGitError(msg)).toBe("network-unavailable");
+  });
+
+  it("does not treat the bare 'Could not read from remote repository' footer as a missing repo", () => {
+    const msg =
+      "fatal: Could not read from remote repository.\n\nPlease make sure you have the correct access rights\nand the repository exists.";
+    expect(classifyGitError(msg)).toBe("unknown");
+  });
+
+  it("keeps GitHub's SSH missing-repo banner as repository-not-found", () => {
+    const msg =
+      "ERROR: Repository not found.\nfatal: Could not read from remote repository.\n\nPlease make sure you have the correct access rights\nand the repository exists.";
+    expect(classifyGitError(msg)).toBe("repository-not-found");
+  });
+
+  it("prefers auth-failed when a publickey denial is followed by a connection close", () => {
+    const msg =
+      "git@github.com: Permission denied (publickey).\n" +
+      "Connection closed by 140.82.112.3 port 22\n" +
+      "fatal: Could not read from remote repository.";
+    expect(classifyGitError(msg)).toBe("auth-failed");
   });
 
   it("prefers network-unavailable over repository-not-found when both signals appear", () => {
