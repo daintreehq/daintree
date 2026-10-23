@@ -10,7 +10,6 @@ const PICKER_HOST_ENTRIES = [
   "electron/services/elementPicker/host-bootstrap.ts",
   "electron/services/elementPicker/host.ts",
 ];
-const BUILDER_ENTRY = "plugins/builtin/sveltekit-builder/main/index.ts";
 
 /** Wherever the install resolves from: a worktree's node_modules can be a link to another checkout's. */
 const COMPILER = "node_modules/svelte/src/compiler/";
@@ -38,8 +37,8 @@ const UNUSED_PASSES = [
 const PARSER_CHUNK_CEILING = 600_000;
 
 /**
- * Both the Element Picker host and the SvelteKit builder parse Svelte through
- * the source model's `loadParse()`, and all they ever call is `parse`. The
+ * The Element Picker host parses Svelte through the source model's
+ * `loadParse()`, and all it ever calls is `parse`. The
  * graph tests beside this one prove the compiler stays behind a dynamic import;
  * they cannot see how much of it ships, because a module tree-shaken to
  * nothing still appears in the input graph. That is decided by the emitted
@@ -170,7 +169,7 @@ describe.each(HOST_ROLES)(
       ).toEqual([]);
     }, 120_000);
 
-    it("loads only behind a dynamic import, from one chunk both consumers share", async () => {
+    it("loads only behind a dynamic import, from the Element Picker host", async () => {
       const metafile = await buildProduction(hostRole);
       const [chunk] = emitted(metafile, isCompiler);
 
@@ -186,7 +185,6 @@ describe.each(HOST_ROLES)(
         outputClosure(metafile, entryOutput(metafile, entry), true).has(chunk)
       );
       expect(fromPicker).toBe(true);
-      expect(outputClosure(metafile, entryOutput(metafile, BUILDER_ENTRY), true)).toContain(chunk);
     }, 120_000);
   }
 );

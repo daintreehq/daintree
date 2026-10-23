@@ -2910,28 +2910,6 @@ function normalizeDeprecatedContributionAliases(raw: unknown): unknown {
 }
 
 /**
- * Contribution points removed with nothing to migrate to (#13891). The
- * sveltekit-builder manifest still declares `guestAdapters` until that plugin
- * is deleted (#13890), and `contributes` is strict, so a built-in manifest has
- * them dropped rather than refused. Installed and project plugins could never
- * declare either, so they stay refused there.
- */
-const RETIRED_BUILTIN_CONTRIBUTIONS = ["previewTools", "guestAdapters"] as const;
-
-function dropRetiredBuiltinContributions(raw: unknown): unknown {
-  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
-    return raw;
-  }
-  const obj = raw as Record<string, unknown>;
-  if (!RETIRED_BUILTIN_CONTRIBUTIONS.some((key) => key in obj)) {
-    return obj;
-  }
-  const next = { ...obj };
-  for (const key of RETIRED_BUILTIN_CONTRIBUTIONS) delete next[key];
-  return next;
-}
-
-/**
  * `z.record` skips an own `__proto__` key before validating it, so a cue named
  * that would vanish from `contributes.tours[].chapters[].cues` without a word.
  * Refuse it while the raw JSON still carries it. This runs in the `contributes`
@@ -3344,8 +3322,7 @@ function buildPluginManifestSchema(origin: PluginOrigin) {
       contributes: z.preprocess(
         (raw, ctx) => {
           reportReservedTourCueNames(raw, ctx);
-          const normalized = normalizeDeprecatedContributionAliases(raw);
-          return origin === "builtin" ? dropRetiredBuiltinContributions(normalized) : normalized;
+          return normalizeDeprecatedContributionAliases(raw);
         },
         z
           .strictObject({
@@ -3730,19 +3707,6 @@ function buildPluginManifestSchema(origin: PluginOrigin) {
         });
       }
 
-      // Preview tools and guest adapters are built-in only, and unlike
-      // `fileEditors` the refusal lives here rather than at load: the origin IS
-      // known to this schema (it is built per discovery root), and the build's
-      // own manifest validation runs through the same schema, so a declaration
-      // in a sample or project manifest fails `check:plugin-manifests` instead
-      // of only at runtime.
-      //
-      // A preview tool's components resolve out of the host bundle, which an
-      // installed plugin's renderer never reaches — the `fileEditors` reason. A
-      // guest adapter is more than that: its body is bundled by the app's own
-      // build and then executed with full DOM access inside whatever site the
-      // user is previewing, and the site-preview bridge exists precisely so that
-      // only main, from an asset it shipped, chooses that code.
       // A slot-backed file editor resolves through the builtin view registry
       // compiled into the host bundle, so only a built-in plugin can back one.
       // A view-backed editor mounts one of the plugin's own views and is open to

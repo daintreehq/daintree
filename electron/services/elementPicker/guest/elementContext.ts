@@ -4,9 +4,6 @@
  * its markup and the computed styles that say something about it — read on
  * selection only, never on hover. This is what every page gets whatever its
  * framework tells us, and all a page with no framework to read gets at all.
- *
- * Ported from the sveltekit-builder plugin's guest, which keeps its own copy
- * until the plugin goes (#13890): a renderer plugin cannot import from here.
  */
 
 import type { ElementContext } from "../../../../shared/elementPicker/observation.js";

@@ -36,7 +36,7 @@ vi.mock("../../driveLeaseTargetResolvers.js", () => ({
   }),
 }));
 
-import { buildScopedFsApi } from "../PluginHostFactory.js";
+import { buildFsApi } from "../PluginHostFactory.js";
 import { assertPluginCallerDrives } from "../pluginDriveLease.js";
 import type { PluginHostFactoryDeps } from "../PluginHostFactory.js";
 import {
@@ -58,7 +58,6 @@ import type { DriveLeaseHolder } from "../../../../shared/types/remoteHosts.js";
  * it (#13920).
  */
 const PLUGIN_ID = "lease-fs-test";
-const SCOPE = { projectId: "p1", worktreeId: "w1" };
 
 function endpoint(endpointId: string, clientId: string): ClientEndpoint {
   return {
@@ -141,7 +140,7 @@ describe("plugin writes from a view that doesn't drive the project", () => {
     await fs.rm(dataDir, { recursive: true, force: true });
   });
 
-  const api = () => buildScopedFsApi(depsFor(projectRoot, dataDir), PLUGIN_ID, SCOPE);
+  const api = () => buildFsApi(depsFor(projectRoot, dataDir), PLUGIN_ID);
   const asCaller = <T>(caller: ClientEndpoint, fn: () => Promise<T>) =>
     runInPluginInvocation(PLUGIN_ID, caller, fn);
 

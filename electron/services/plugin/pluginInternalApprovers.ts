@@ -4,14 +4,14 @@
 // objects is not. Kept free of heavy imports so the worker bridge can use it.
 
 import type {
-  BuiltinPluginFsApi,
   PluginDatabaseApi,
+  PluginFsApi,
   PluginHostApi,
 } from "../../../shared/types/plugin.js";
 
 /** Approves a file another host component writes, through `host.fs`'s write gate. */
 export const fsWriteApprovers = new WeakMap<
-  BuiltinPluginFsApi,
+  PluginFsApi,
   (op: string, targetPath: string) => Promise<string>
 >();
 

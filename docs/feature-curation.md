@@ -63,7 +63,7 @@ These are knockouts, not scores. A proposal that crosses any one of them is reje
 Core is managing agent terminals and panels, and what they need to be supervised: worktrees, attention, context, review, the control surface. Everything else should be a plugin, and the work goes into making the plugin surface good enough to carry it.
 
 - **Default to plugin** for anything that isn't about agents, terminals, panels or worktrees. Being rejected from core is not being rejected: time tracking (#5538) and a notes app (#5616) are both fine as plugins. Project plugins may be complete applications — a CRM, a kanban board, a finance tracker — with their own data and agent tools (#12842).
-- **Ship as a built-in plugin** when Daintree should have it out of the box but it isn't orchestration: forge providers, the Markdown editor, SvelteKit Tools. A built-in plugin still has to pass this rubric.
+- **Ship as a built-in plugin** when Daintree should have it out of the box but it isn't orchestration: forge providers, the Markdown editor. A built-in plugin still has to pass this rubric.
 - **This rubric decides core and built-in plugins.** A third-party or project plugin answers to the plugin trust model and capability consent (`docs/plugins/trust-model.md`), not to these tests.
 - **Go to core** when a plugin can't do it because there is no hook — and then ask whether the hook belongs in the plugin surface instead. A first-class WSL execution layer had to be core (#12830) and became part of Remote Hosts.
 - **Distribution is curated, not a marketplace** — no ratings, no comments, no third-party uploads (#9305).

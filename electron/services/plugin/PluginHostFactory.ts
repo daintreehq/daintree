@@ -307,8 +307,7 @@ import type {
   PluginDuplexProcessSpawnOptions,
   PluginPtyProcessHandle,
   PluginPtyProcessSpawnOptions,
-  BuiltinPluginFsApi,
-  PluginWorkspaceScope,
+  PluginFsApi,
   PluginFsDirEntry,
   PluginFsWriteErrorCode,
   PluginFsStat,
@@ -867,17 +866,9 @@ export interface PluginHostFactoryDeps {
   isPathUnder: (root: string, candidate: string) => boolean;
   /** The session's artifact cache behind `host.artifacts`; null once the service has shut down. */
   artifactService: () => PluginArtifactService | null;
-  /**
-   * `scope` pins the `${project}` / `${worktree}` tokens to one named project
-   * and worktree instead of resolving them from the plugin's binding (or, for
-   * an unbound plugin, the focused window) — the expansion behind
-   * a built-in host's `fsForWorkspace`. It only ever replaces the
-   * token resolution: a scope naming a project or worktree that is not live
-   * contributes no token root, so containment denies.
-   */
   expandAllowedPathEntries: (
     pluginId: string,
-    options: { includeDataDir: boolean; scope?: PluginWorkspaceScope }
+    options: { includeDataDir: boolean }
   ) => Promise<ExpandedFsPath[]>;
   subscribeWorktreeEvent: (
     pluginId: string,
@@ -5132,11 +5123,6 @@ async function appendToContainedFile(
  * (traversal/symlink-escape rejected), and reads/writes are capability-gated
  * (`fs:*-read` / `fs:*-write`). This is the first runtime enforcement of
  * `scopes.fs.allowedPaths` — formerly advisory-only. Writes are audited.
- *
- * `workspaceScope`, when given, pins the `${project}` / `${worktree}` roots to
- * one named project and worktree for the life of the returned handle — see
- * {@link buildScopedFsApi}. Nothing else about the surface changes: it is the
- * same closures, the same gates, and the same watcher registry.
  */
 /** How often an `allowMissing` watch checks whether its paths exist. */
 const PLUGIN_FS_WATCH_PRESENCE_POLL_MS = 1000;
@@ -5150,11 +5136,7 @@ const PLUGIN_FS_WATCH_PRESENCE_BACKSTOP_TICKS = 10;
 /** How long after attaching, or after its watcher last fired, a target is re-checked every tick. */
 const PLUGIN_FS_WATCH_PRESENCE_HOT_MS = 3000;
 
-function buildFsApi(
-  deps: PluginHostFactoryDeps,
-  pluginId: string,
-  workspaceScope?: PluginWorkspaceScope
-): BuiltinPluginFsApi {
+export function buildFsApi(deps: PluginHostFactoryDeps, pluginId: string): PluginFsApi {
   const requireLoaded = (op: string): void => {
     if (!deps.plugins.has(pluginId)) {
       throw new Error(`PLUGIN_UNLOADED: plugin "${pluginId}" fs.${op}: plugin is no longer loaded`);
@@ -5205,7 +5187,7 @@ function buildFsApi(
     }
   };
   const containWithClass = (targetPath: string) =>
-    containToDeclaredRoots(deps, pluginId, targetPath, workspaceScope);
+    containToDeclaredRoots(deps, pluginId, targetPath);
   // A write a call makes into a project is held to the lease of the view that
   // made the call; one into no project (the plugin's own data) passes.
   const requireCallerDrives = async (op: string, resolved: string): Promise<void> => {
@@ -5350,7 +5332,7 @@ function buildFsApi(
     return resolved;
   };
 
-  const api: BuiltinPluginFsApi = {
+  const api: PluginFsApi = {
     readFile: async (filePath, options) => {
       options?.signal?.throwIfAborted();
       requireLoaded("readFile");
@@ -5419,8 +5401,10 @@ function buildFsApi(
         requireLoaded("readFiles");
         requireReadCapForClass("readFiles", rootClass);
         call.signal?.throwIfAborted();
-        // O_NONBLOCK, as in readFileBounded: a FIFO standing at the path must
-        // not leave the open pending with the rest of the batch behind it.
+        // O_NONBLOCK (undefined on Windows): a FIFO standing at the path must
+        // not leave the open pending with the rest of the batch behind it. The
+        // regular-file check is on the opened descriptor, not on a path that
+        // could since have become something else.
         return withVerifiedReadHandle(
           pluginId,
           "readFiles",
@@ -5438,56 +5422,7 @@ function buildFsApi(
           }
         );
       });
-    }) as NonNullable<BuiltinPluginFsApi["readFiles"]>,
-    readFileBounded: async (filePath, options) => {
-      options?.signal?.throwIfAborted();
-      requireLoaded("readFileBounded");
-      requireAnyReadCap("readFileBounded");
-      const limit = options?.limitBytes;
-      if (typeof limit !== "number" || !Number.isInteger(limit) || limit < 0) {
-        throw new Error(
-          `VALIDATION: plugin "${pluginId}" fs.readFileBounded requires an integer limitBytes`
-        );
-      }
-      const { resolved, rootClass } = await containWithClass(filePath);
-      requireLoaded("readFileBounded");
-      requireReadCapForClass("readFileBounded", rootClass);
-      options?.signal?.throwIfAborted();
-      // O_NONBLOCK (undefined on Windows) so a FIFO standing where a regular
-      // file was cannot leave the open pending with no writer. The
-      // regular-file check below is on the descriptor this open returned, not
-      // on a path that could since have become something else — a path stat
-      // is evidence about a name, not about an fd.
-      //
-      // What this does not close, and neither does any other read here: the
-      // open is still by pathname, so an ANCESTOR directory swapped for a
-      // symlink between containment and this line resolves somewhere else.
-      // Closing that needs the whole walk opened directory by directory,
-      // which is a change to containment rather than to one read.
-      return withVerifiedReadHandle(
-        pluginId,
-        "readFileBounded",
-        resolved,
-        fs.constants.O_NONBLOCK ?? 0,
-        async (handle, opened) => {
-          if (!opened.isFile()) return { status: "not-a-file" as const };
-          // limit + 1: the extra byte is how an oversized file is recognised
-          // without ever holding more than the cap plus one byte of it.
-          const buffer = Buffer.allocUnsafe(limit + 1);
-          let filled = 0;
-          while (filled <= limit) {
-            options?.signal?.throwIfAborted();
-            const { bytesRead } = await handle.read(buffer, filled, buffer.length - filled, null);
-            if (bytesRead === 0) break;
-            filled += bytesRead;
-          }
-          if (filled > limit) return { status: "too-large" as const };
-          // Copied out of the pooled allocator for the same reason
-          // `readFileBytes` copies: the pool's backing store holds other reads.
-          return { status: "ok" as const, bytes: new Uint8Array(buffer.subarray(0, filled)) };
-        }
-      );
-    },
+    }) as NonNullable<PluginFsApi["readFiles"]>,
     writeFile: async (filePath, contents, options) => {
       requireLoaded("writeFile");
       const writeCap = requireWriteCap("writeFile");
@@ -6167,33 +6102,6 @@ function buildGitApi(deps: PluginHostFactoryDeps, pluginId: string): PluginGitAp
 }
 
 /**
- * A `host.fs` for one named project and worktree — the implementation behind a
- * built-in host's `fsForWorkspace` (`shared/types/plugin.ts`).
- *
- * Built-ins are app-global, so their token roots otherwise track the focused
- * window; a built-in holding long-lived state about a worktree needs roots that
- * do not move when the user looks elsewhere. It repoints the tokens rather than
- * relaxing anything: the declared `allowedPaths`, capability classes, realpath
- * containment and write audit are untouched, and the roots it names are ones
- * the same manifest already reaches when that project is focused — reaching
- * them while it is NOT focused is the point, and is why the caller must
- * validate the scope against its own invocation context. A project that is not
- * open expands to no token root at all, and an unresolvable worktree drops
- * `${worktree}` alone, both following #9492's fail-closed posture.
- *
- * Whether the caller may name this scope is the CALLER's check, made against
- * the invoking renderer's `PluginIpcContext` before it asks — nothing about a
- * scope object is authenticated here.
- */
-export function buildScopedFsApi(
-  deps: PluginHostFactoryDeps,
-  pluginId: string,
-  scope: PluginWorkspaceScope
-): BuiltinPluginFsApi {
-  return buildFsApi(deps, pluginId, scope);
-}
-
-/**
  * Contain a plugin-supplied path against the plugin's call-time-expanded
  * allowed roots and report which root class matched.
  *
@@ -6210,13 +6118,9 @@ export function buildScopedFsApi(
 async function containToDeclaredRoots(
   deps: PluginHostFactoryDeps,
   pluginId: string,
-  targetPath: string,
-  scope?: PluginWorkspaceScope
+  targetPath: string
 ): Promise<{ resolved: string; rootClass: FsRootClass; root: string }> {
-  const entries = await deps.expandAllowedPathEntries(pluginId, {
-    includeDataDir: true,
-    scope,
-  });
+  const entries = await deps.expandAllowedPathEntries(pluginId, { includeDataDir: true });
   let lastErr: unknown;
   for (const entry of entries) {
     try {

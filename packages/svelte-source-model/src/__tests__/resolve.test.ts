@@ -21,10 +21,7 @@ import type {
 const parse: SvelteParse = (source, options) =>
   svelteParse(source, options) as unknown as SvelteAstRoot;
 
-const FIXTURE_DIR = path.resolve(
-  path.dirname(fileURLToPath(import.meta.url)),
-  "../../../../plugins/builtin/sveltekit-builder/__fixtures__/svelte"
-);
+const FIXTURE_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "__fixtures__");
 
 const fixtureNames = fs
   .readdirSync(FIXTURE_DIR)

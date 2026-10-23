@@ -2,5 +2,4 @@
 export const DEFAULT_DISABLED_PLUGIN_IDS: readonly string[] = [
   "daintree.linear",
   "daintree.markdown-editor",
-  "daintree.sveltekit-builder",
 ];

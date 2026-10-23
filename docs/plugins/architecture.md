@@ -42,13 +42,12 @@ A built-in plugin is Daintree code that happens to use the plugin contract. It d
 
 Five built-ins ship today, one directory each under `plugins/builtin/`:
 
-| Plugin                       | Contributes                                 | Default |
-| ---------------------------- | ------------------------------------------- | ------- |
-| `daintree.github`            | `forgeProviders`, `fileDecorationProviders` | On      |
-| `daintree.gitlab`            | `forgeProviders`, `settings`                | On      |
-| `daintree.linear`            | `forgeProviders`, `settings`                | Off     |
-| `daintree.markdown-editor`   | `fileEditors`, `commands`                   | Off     |
-| `daintree.sveltekit-builder` | `previewTools`, `guestAdapters`, `commands` | Off     |
+| Plugin                     | Contributes                                 | Default |
+| -------------------------- | ------------------------------------------- | ------- |
+| `daintree.github`          | `forgeProviders`, `fileDecorationProviders` | On      |
+| `daintree.gitlab`          | `forgeProviders`, `settings`                | On      |
+| `daintree.linear`          | `forgeProviders`, `settings`                | Off     |
+| `daintree.markdown-editor` | `fileEditors`, `commands`                   | Off     |
 
 ### Manifest validation
 
@@ -67,7 +66,7 @@ The `engines.daintree` semver range is validated and compared against the runnin
 
 ### Registration
 
-The manifest `contributes` object's contribution points (`electron/schemas/plugin.ts`) are arrays — `panels`, `toolbarButtons`, `menuItems`, `keybindings`, `contextMenus`, `commands`, `views`, `mcpServers`, `agentMcp`, `databases`, `tours`, `skills`, `forgeProviders`, `fileDecorationProviders`, `agents`, `processTools`, `settings`, `recipes`, plus the built-in-only `fileEditors`, `previewTools` and `guestAdapters` — each with a per-array cap in `MANIFEST_CONTRIBUTION_CAPS`, plus the non-array `surfaces` object. Most register eagerly at plugin-load time so the UI reflects them immediately — the command palette, toolbars, menus, keybindings, and context menus populate before any plugin code runs:
+The manifest `contributes` object's contribution points (`electron/schemas/plugin.ts`) are arrays — `panels`, `toolbarButtons`, `menuItems`, `keybindings`, `contextMenus`, `commands`, `views`, `mcpServers`, `agentMcp`, `databases`, `tours`, `skills`, `forgeProviders`, `fileDecorationProviders`, `agents`, `processTools`, `settings`, `recipes`, plus `fileEditors` (slot-backed entries are built-in only) — each with a per-array cap in `MANIFEST_CONTRIBUTION_CAPS`, plus the non-array `surfaces` object. Most register eagerly at plugin-load time so the UI reflects them immediately — the command palette, toolbars, menus, keybindings, and context menus populate before any plugin code runs:
 
 - `panels` → `registerPanelKind()` in `shared/config/panelKindRegistry.ts`
 - `toolbarButtons` → `registerToolbarButton()` in `shared/config/toolbarButtonRegistry.ts`
@@ -230,7 +229,7 @@ Panel kinds are the subtle one, because `PanelKindConfig.id` is persisted inside
 
 Every registration is tagged with a scope and filtered at broadcast and query time (`PluginContributionBroadcaster`). Global mutations broadcast as before; project-scoped mutations go to that project's renderers only, and the cold-start replay (`pushSnapshotTo`) takes the target view's `projectId` and pushes `global ∪ that project`. Getting that replay wrong is invisible until a project view is recreated after LRU eviction and suddenly sees another project's panels, which is why it takes the project explicitly rather than inferring one.
 
-Panels, commands/actions, toolbar buttons, keybindings, context menus, recipes, settings and `fileDecorationProviders` scope cleanly (a decoration request is routed by the sender's project, so a project plugin is consulted only for its own project's files). The groups that register into a registry with no project axis at all — `menuItems`, `agents`, `processTools`, `mcpServers`, `themes` — are rejected at manifest validation for `scope: "project"`, each with an error (`<group>_project_scope_forbidden`) naming its structural obstacle, rather than accepted and silently over-published. A view-backed `fileEditors` entry is allowed: the editor rides the plugin's hosted view, which the broadcaster already narrows to the owning project. A slot-backed one is built-in only under every scope (`fileEditors_slot_builtin_only`). `previewTools` and `guestAdapters` never reach this check: they are built-in-only under every scope (`<group>_builtin_only`). `forgeProviders` is rejected for a different reason (`forge_provider_project_scope_forbidden`): its host methods are synchronous and cannot cross the worker's message port. `PROJECT_SCOPE_UNSCOPED_CONTRIBUTIONS` in `electron/schemas/plugin.ts` is the enumerated set of five, so a group that later grows a project axis is removed in one place — as `skills` was once each registered skill recorded its owning project. `agentMcp` is allowed: its credentials are minted per terminal launch and bound to one project, and the grant registry refuses to pair a project plugin's instance with any project but its own.
+Panels, commands/actions, toolbar buttons, keybindings, context menus, recipes, settings and `fileDecorationProviders` scope cleanly (a decoration request is routed by the sender's project, so a project plugin is consulted only for its own project's files). The groups that register into a registry with no project axis at all — `menuItems`, `agents`, `processTools`, `mcpServers`, `themes` — are rejected at manifest validation for `scope: "project"`, each with an error (`<group>_project_scope_forbidden`) naming its structural obstacle, rather than accepted and silently over-published. A view-backed `fileEditors` entry is allowed: the editor rides the plugin's hosted view, which the broadcaster already narrows to the owning project. A slot-backed one is built-in only under every scope (`fileEditors_slot_builtin_only`). `forgeProviders` is rejected for a different reason (`forge_provider_project_scope_forbidden`): its host methods are synchronous and cannot cross the worker's message port. `PROJECT_SCOPE_UNSCOPED_CONTRIBUTIONS` in `electron/schemas/plugin.ts` is the enumerated set of five, so a group that later grows a project axis is removed in one place — as `skills` was once each registered skill recorded its owning project. `agentMcp` is allowed: its credentials are minted per terminal launch and bound to one project, and the grant registry refuses to pair a project plugin's instance with any project but its own.
 
 ### Host binding
 

@@ -19,25 +19,12 @@ function parse(contributes: Record<string, unknown>, origin: PluginOrigin) {
 }
 
 describe("retired previewTools / guestAdapters contribution points (#13891)", () => {
-  it("drops them from a built-in manifest without touching the input", () => {
-    const contributes = { ...RETIRED };
-    const result = parse(contributes, "builtin");
-    expect(result.success).toBe(true);
-    expect(result.data?.contributes).not.toHaveProperty("previewTools");
-    expect(result.data?.contributes).not.toHaveProperty("guestAdapters");
-    expect(contributes).toEqual(RETIRED);
-  });
-
-  it.each(["user", "project"] as const)("refuses them from a %s plugin", (origin) => {
+  it.each(["builtin", "user", "project"] as const)("refuses them from a %s plugin", (origin) => {
     for (const [key, value] of Object.entries(RETIRED)) {
       const result = parse({ [key]: value }, origin);
       expect(result.success).toBe(false);
       expect(result.error?.issues.some((issue) => issue.code === "unrecognized_keys")).toBe(true);
     }
-  });
-
-  it("still refuses an unknown contribution key on a built-in", () => {
-    expect(parse({ ...RETIRED, notAContribution: [] }, "builtin").success).toBe(false);
   });
 
   it("leaves both out of the published manifest schema", () => {

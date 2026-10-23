@@ -493,7 +493,7 @@ export class TerminalInputController {
     } else if (useBracketedPaste && supportsBracketedPaste(terminal)) {
       // See `stage`: an unsanitised body could close the paste itself, and
       // whatever follows would reach the agent as keystrokes, submits included.
-      // Page-derived text (DOM ids, labels) reaches here from SvelteKit Tools.
+      // Page-derived text (DOM ids, labels) reaches here from the Element Picker.
       const payload = formatWithBracketedPaste(body.replace(/\n/g, "\r"));
       bodyWritten = this.writeStrict(payload);
     } else if (body.includes("\n") && !supportsBracketedPaste(terminal)) {

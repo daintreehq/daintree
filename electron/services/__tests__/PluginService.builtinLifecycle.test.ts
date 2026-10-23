@@ -377,6 +377,48 @@ describe("PluginService built-in plugin loading", () => {
     expect(service.listPlugins()[0].disabled).toBe(false);
   });
 
+  // The deleted SvelteKit builder's id stays in whichever list the user last
+  // toggled it into; with no manifest on disk it must stay invisible and untouched.
+  it.each([
+    { label: "plugins.enabled", enabled: ["daintree.sveltekit-builder"], disabled: [] },
+    { label: "plugins.disabled", enabled: [], disabled: ["daintree.sveltekit-builder"] },
+    {
+      label: "both lists",
+      enabled: ["daintree.sveltekit-builder"],
+      disabled: ["daintree.sveltekit-builder"],
+    },
+  ])("starts cleanly past a removed built-in still named in $label", async (lists) => {
+    const removed = "daintree.sveltekit-builder";
+    storeMock._state.set("plugins", {
+      enabled: [...lists.enabled],
+      disabled: [...lists.disabled],
+      installed: {},
+    });
+    await writeBuiltinPlugin("helper", { name: "daintree.helper", version: "1.0.0" });
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const service = new PluginService(tmpDir, "0.0.0", { builtinPluginsRoot: builtinDir });
+      await service.initialize();
+
+      expect(service.listPlugins().map((p) => [p.manifest.name, p.disabled])).toEqual([
+        ["daintree.helper", false],
+      ]);
+      expect(errorSpy).not.toHaveBeenCalled();
+      const toasts = broadcastToRendererMock.mock.calls.filter(
+        ([channel]) => channel === CHANNELS.NOTIFICATION_SHOW_TOAST
+      );
+      expect(toasts.filter((call) => JSON.stringify(call).includes(removed))).toEqual([]);
+      expect(storeMock.set.mock.calls.filter(([key]) => key === "plugins")).toEqual([]);
+      expect(storeMock._state.get("plugins")).toEqual({
+        enabled: lists.enabled,
+        disabled: lists.disabled,
+        installed: {},
+      });
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
+
   it("a disabled name collision keeps the built-in entry (loaded first) for the toggle", async () => {
     storeMock._state.set("plugins", { disabled: ["daintree.github"] });
     await writeBuiltinPlugin("github", {

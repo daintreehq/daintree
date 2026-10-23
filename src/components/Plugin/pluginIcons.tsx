@@ -1,12 +1,5 @@
 import type { ComponentType, SVGProps } from "react";
-import {
-  GitHubIcon,
-  GitPullRequest,
-  LayoutPanelTop,
-  MarkdownIcon,
-  Plug,
-  SquareDashedMousePointer,
-} from "@/components/icons";
+import { GitHubIcon, GitPullRequest, LayoutPanelTop, MarkdownIcon, Plug } from "@/components/icons";
 import { DEFAULT_PLUGIN_ICON } from "@/components/icons/pluginIconRegistry";
 import { isPluginCategoryId, resolvePluginCategory } from "@shared/config/pluginCategoryRegistry";
 import type { PluginCategoryId, PluginManifest } from "@shared/types/plugin";
@@ -16,8 +9,7 @@ type IconComponent = ComponentType<SVGProps<SVGSVGElement>>;
 
 /**
  * First-party plugins with a recognizable third-party mark render it (brand
- * icons live in `src/components/icons/brands/`), and a framework-agnostic one
- * wears the glyph its own toolbar button does; everything else falls back to
+ * icons live in `src/components/icons/brands/`); everything else falls back to
  * its category's Lucide icon so no two adjacent categories read identically.
  * Keyed by manifest name — provenance-independent, so a dev-mode load of the
  * same plugin keeps its mark.
@@ -25,7 +17,6 @@ type IconComponent = ComponentType<SVGProps<SVGSVGElement>>;
 const BRAND_PLUGIN_ICONS: Record<string, IconComponent> = {
   "daintree.github": GitHubIcon,
   "daintree.markdown-editor": MarkdownIcon,
-  "daintree.sveltekit-builder": SquareDashedMousePointer,
 };
 
 const CATEGORY_FALLBACK_ICONS: Record<PluginCategoryId, IconComponent> = {
