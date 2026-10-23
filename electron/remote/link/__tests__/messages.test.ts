@@ -61,6 +61,28 @@ describe("link messages", () => {
     expect(() => hostSummary({ cpuLoadAverage1m: -1 })).toThrow();
   });
 
+  it("carries a Linux host's raw observations, and one from a host that sends none", () => {
+    const linux = {
+      metricsScope: "cgroup",
+      cpuCapacityCores: 1.5,
+      memoryPressureSomeAvg10: 2.5,
+      temperatureCelsius: 55,
+      temperatureZone: "x86_pkg_temp (thermal_zone0)",
+    };
+    expect(hostSummary(linux)).toMatchObject(linux);
+    const unknown = Object.fromEntries(Object.keys(linux).map((key) => [key, null]));
+    expect(hostSummary(unknown)).toMatchObject(unknown);
+    const capped = { cpuLogicalCoreCount: null, cpuCapacityCores: 0.5, metricsScope: "cgroup" };
+    expect(hostSummary(capped)).toMatchObject(capped);
+    expect(() => hostSummary({ temperatureCelsius: 251 })).toThrow();
+    expect(() => hostSummary({ temperatureZone: "z".repeat(257) })).toThrow();
+    const legacy = hostSummary({});
+    for (const key of Object.keys(linux)) expect(legacy).not.toHaveProperty(key);
+    expect(() => hostSummary({ metricsScope: "container" })).toThrow();
+    expect(() => hostSummary({ cpuCapacityCores: 0 })).toThrow();
+    expect(() => hostSummary({ memoryPressureSomeAvg10: 101 })).toThrow();
+  });
+
   it("carries a summary's drivers, and one from a host that sends none, within its bound", () => {
     const summary = (extra: object) =>
       parseInboundFrame(

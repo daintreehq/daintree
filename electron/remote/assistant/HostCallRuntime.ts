@@ -1117,6 +1117,18 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
                   cpuPercent: summary.cpuPercent,
                   memoryPressure: summary.memoryPressure,
                   thermal: summary.thermal,
+                  ...(summary.metricsScope !== undefined
+                    ? { metricsScope: summary.metricsScope }
+                    : {}),
+                  ...(summary.memoryPressureSomeAvg10 !== undefined
+                    ? { memoryPressureSomeAvg10: summary.memoryPressureSomeAvg10 }
+                    : {}),
+                  ...(summary.temperatureCelsius !== undefined
+                    ? {
+                        temperatureCelsius: summary.temperatureCelsius,
+                        temperatureZone: summary.temperatureZone ?? null,
+                      }
+                    : {}),
                 }
               : null,
             // A tally from before the link dropped is history, not what is running now.

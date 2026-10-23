@@ -57,7 +57,8 @@ function reportedCapacity(summary: HostMetricsSummary): { used: number; total: n
  */
 export function busyCores(summary: HostMetricsSummary): { busy: number; total: number } | null {
   const cpu = summary.cpuPercent;
-  const total = summary.cpuLogicalCoreCount;
+  // A quota makes the capacity fractional, which the integer core count can't say.
+  const total = summary.cpuCapacityCores ?? summary.cpuLogicalCoreCount;
   if (cpu === null || !Number.isFinite(cpu) || !total || !Number.isFinite(total) || total <= 0) {
     return null;
   }
@@ -68,7 +69,10 @@ export function busyCores(summary: HostMetricsSummary): { busy: number; total: n
 export function describeCpu(summary: HostMetricsSummary): string | null {
   const cores = busyCores(summary);
   if (cores) {
-    return `${formatCoreCount(cores.busy)} of ${cores.total} ${pluralNoun(cores.total, "core")}`;
+    // Two significant figures keeps a 0.001-core quota from reading as zero.
+    const total =
+      cores.total >= 10 ? Math.round(cores.total) : parseFloat(cores.total.toPrecision(2));
+    return `${formatCoreCount(cores.busy)} of ${total} ${pluralNoun(total, "core")}`;
   }
   return summary.cpuPercent === null ? null : `${Math.round(summary.cpuPercent)}%`;
 }
@@ -95,8 +99,19 @@ const PRESSURE_WORD: Record<NonNullable<HostMetricsSummary["memoryPressure"]>, s
   critical: "Critical",
 };
 
+/** The OS's pressure word on macOS; on Linux the kernel's own PSI reading, with no band put on it. */
 export function describeMemoryPressure(summary: HostMetricsSummary): string | null {
-  return summary.memoryPressure === null ? null : PRESSURE_WORD[summary.memoryPressure];
+  if (summary.memoryPressure !== null) return PRESSURE_WORD[summary.memoryPressure];
+  return describeStall(summary.memoryPressureSomeAvg10);
+}
+
+function isFiniteReading(value: number | null | undefined): value is number {
+  return typeof value === "number" && Number.isFinite(value);
+}
+
+function describeStall(pressure: number | null | undefined): string | null {
+  if (!isFiniteReading(pressure)) return null;
+  return `${parseFloat(pressure.toFixed(1))}% of the last 10 s stalled`;
 }
 
 /** The 1 minute load average as the OS reports it; null for a host that doesn't. */
@@ -132,9 +147,7 @@ export function describeCoreClusters(summary: HostMetricsSummary): {
 
 /** Linux PSI: the share of the last 10 s some task waited for a CPU. Null off Linux. */
 export function describeCpuPressure(summary: HostMetricsSummary): string | null {
-  const pressure = summary.cpuPressure;
-  if (pressure === null || !Number.isFinite(pressure)) return null;
-  return `${parseFloat(pressure.toFixed(1))}% of the last 10 s stalled`;
+  return describeStall(summary.cpuPressure);
 }
 
 /** "3.1 GB of 8 GB" under a Swap label, or null when the host doesn't report swap. */
@@ -153,9 +166,14 @@ export function describeMemory(summary: HostMetricsSummary): string | null {
   return `${formatBytes(summary.memoryUsedBytes)} of ${formatBytes(summary.memoryTotalBytes)}`;
 }
 
+/** The OS's thermal word on macOS; on Linux the sensor's temperature and which sensor it was. */
 export function describeThermal(summary: HostMetricsSummary): string | null {
   const thermal = summary.thermal;
-  return thermal === null ? null : thermal.charAt(0).toUpperCase() + thermal.slice(1);
+  if (thermal !== null) return thermal.charAt(0).toUpperCase() + thermal.slice(1);
+  const celsius = summary.temperatureCelsius;
+  if (celsius === null || celsius === undefined || !Number.isFinite(celsius)) return null;
+  const reading = `${parseFloat(celsius.toFixed(1))}°C`;
+  return summary.temperatureZone ? `${reading} · ${summary.temperatureZone}` : reading;
 }
 
 /** Observed agent counts, always labelled as observations; a failed read says so, never 0. */
@@ -304,14 +322,16 @@ interface FreeCapacity {
   hostId: HostId;
   freeCores: number;
   availableBytes: number;
-  pressure: NonNullable<HostMetricsSummary["memoryPressure"]>;
+  /** Null for a Linux host, whose raw PSI has no band to rank by: shown, not scored. */
+  pressure: HostMetricsSummary["memoryPressure"];
 }
 
 function freeCapacity(candidate: PlacementCandidate, summary: HostMetricsSummary) {
   const cores = busyCores(summary);
   const memory = reportedCapacity(summary);
   const pressure = summary.memoryPressure;
-  if (!cores || !memory || pressure === null) return null;
+  if (!cores || !memory) return null;
+  if (pressure === null && !isFiniteReading(summary.memoryPressureSomeAvg10)) return null;
   return {
     hostId: candidate.hostId,
     freeCores: Math.max(0, cores.total - cores.busy),
@@ -339,8 +359,10 @@ function describePlacementFacts(candidate: PlacementCandidate): string {
 /**
  * What each host has free, side by side. A host is suggested only when every
  * reachable host with a reading reported free cores, available memory and a
- * pressure band, and one of them has strictly more free cores and more
- * available memory than each of the others without a worse pressure band.
+ * memory pressure reading, and one of them has strictly more free cores and
+ * more available memory than each of the others without a worse pressure band.
+ * Linux reports raw PSI with no band, so a pair where either side has only PSI
+ * is compared on cores and memory alone; the PSI is shown, never scored.
  * Otherwise the facts stand alone and the user picks. Nothing is blended into
  * a score, and observed agent activity is never a capacity claim. A host from
  * before the core count (see {@link reportsMemoryCapacity}) can't be compared,
@@ -367,7 +389,9 @@ export function compareHostCapacity(
         peer === host ||
         (host.freeCores - peer.freeCores > CORE_TIE + FLOAT_SLACK &&
           host.availableBytes > peer.availableBytes &&
-          PRESSURE_RANK[host.pressure] <= PRESSURE_RANK[peer.pressure])
+          (host.pressure === null ||
+            peer.pressure === null ||
+            PRESSURE_RANK[host.pressure] <= PRESSURE_RANK[peer.pressure]))
     )
   );
   const suggested = leader && leader.pressure !== "critical" && compared.length > 1 ? leader : null;

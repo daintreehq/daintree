@@ -10,15 +10,18 @@ import { LOCAL_HOST_ID, MAX_HOST_SUMMARY_DRIVERS } from "../../../shared/types/r
 import {
   clusterCpuPercentBetween,
   cpuPercentBetween,
-  parseCgroupMemory,
+  parseCgroupBytes,
+  parseCgroupCpuUsageUsec,
+  parseCpuMax,
+  parseCpuSetCount,
   parseDarwinPressureLevel,
   parseDarwinSwapUsage,
   parseMeminfo,
+  parseProcSelfCgroup,
   parsePsi,
   parseDarwinCpuClusters,
   parseThermalZoneTemp,
-  psiToMemoryPressure,
-  thermalFromCelsius,
+  pickThermalZone,
   type CpuTimes,
   type ThermalState,
 } from "./parsers.js";
@@ -70,6 +73,9 @@ export interface HostSampleSources {
 export type SampleReaders = Pick<HostSampleSources, "agents" | "projects" | "driver" | "drivers">;
 
 const LINUX_THERMAL_DIR = "/sys/class/thermal";
+const CGROUP_ROOT = "/sys/fs/cgroup";
+/** Deeper than any real hierarchy; past it the path is not followed. */
+const MAX_CGROUP_DEPTH = 32;
 
 /** Reads of the cluster layout before an unknown answer is taken as final: Intel Macs never have one. */
 const CPU_CLUSTER_PROBES = 3;
@@ -80,6 +86,47 @@ interface CpuClusters {
 }
 
 const NO_CLUSTERS: CpuClusters = { performance: null, efficiency: null };
+
+type HostMemoryFields = Pick<
+  HostMetricsSummary,
+  | "memoryPressure"
+  | "memoryUsedBytes"
+  | "memoryTotalBytes"
+  | "swapUsedBytes"
+  | "swapTotalBytes"
+  | "thermal"
+  | "cpuPressure"
+  | "metricsScope"
+  | "memoryPressureSomeAvg10"
+  | "temperatureCelsius"
+  | "temperatureZone"
+>;
+
+const NO_MEMORY: HostMemoryFields = {
+  memoryPressure: null,
+  memoryUsedBytes: null,
+  memoryTotalBytes: null,
+  swapUsedBytes: null,
+  swapTotalBytes: null,
+  thermal: null,
+  cpuPressure: null,
+};
+
+interface CgroupCpu {
+  /** Cores the percentage is a share of, fractional under a quota. */
+  cores: number | null;
+  /** The same when whole: what a Shell that predates `cpuCapacityCores` reads. */
+  logicalCores: number | null;
+  percent: number | null;
+}
+
+function minimum(values: Array<number | null>): number | null {
+  let lowest: number | null = null;
+  for (const value of values) {
+    if (value !== null && (lowest === null || value < lowest)) lowest = value;
+  }
+  return lowest;
+}
 
 async function settle<T>(read: () => Promise<T>, fallback: T): Promise<T> {
   try {
@@ -99,6 +146,8 @@ export class HostMetricsSampler {
   /** Cluster sizes are hardware: kept once read, so only an unknown answer is asked again. */
   private clusters: CpuClusters | null = null;
   private clusterProbes = 0;
+  /** The cgroup's CPU counter at the last sample, which its busy share is measured between. */
+  private previousCgroupCpu: { dir: string; usec: number; at: number; cores: number } | null = null;
 
   constructor(private readonly sources: HostSampleSources) {}
 
@@ -110,17 +159,15 @@ export class HostMetricsSampler {
     this.previousCpus = cpus;
     const readers: SampleReaders = s.beginSample?.() ?? s;
 
-    const [clusters, memory, agents, projects, agentClis, forges] = await Promise.all([
+    const [clusters, resources, agents, projects, agentClis, forges] = await Promise.all([
       this.cpuClusters(),
-      settle(() => (s.platform === "darwin" ? this.darwinMemory() : this.linuxMemory()), {
-        memoryPressure: null,
-        memoryUsedBytes: null,
-        memoryTotalBytes: null,
-        swapUsedBytes: null,
-        swapTotalBytes: null,
-        thermal: null,
-        cpuPressure: null,
-      }),
+      settle<{ memory: HostMemoryFields; cgroupCpu?: CgroupCpu | null }>(
+        async () =>
+          s.platform === "darwin"
+            ? { memory: await this.darwinMemory() }
+            : this.linuxResources(cpus.length),
+        { memory: NO_MEMORY }
+      ),
       // A failed read is unknown, not zero: zero working agents lets an update restart the host.
       settle<ObservedAgents | null>(() => readers.agents(), null),
       settle<{ projectCount: number | null; worktreeCount: number | null }>(
@@ -159,18 +206,28 @@ export class HostMetricsSampler {
       clusters.performance
     );
 
+    // A cgroup's work is measured by its own counters: the machine-wide core times and load average
+    // describe everything else running beside it.
+    const cgroupCpu = resources.cgroupCpu;
     return {
       hostId: LOCAL_HOST_ID,
       sampledAt: s.now(),
       platform: s.platform,
-      cpuPercent,
-      cpuLogicalCoreCount: cpus.length > 0 ? cpus.length : null,
-      cpuLoadAverage1m: this.loadAverage1m(),
+      cpuPercent: cgroupCpu ? cgroupCpu.percent : cpuPercent,
+      cpuLogicalCoreCount: cgroupCpu
+        ? cgroupCpu.logicalCores
+        : cpus.length > 0
+          ? cpus.length
+          : null,
+      ...(cgroupCpu !== undefined
+        ? { cpuCapacityCores: cgroupCpu ? cgroupCpu.cores : cpus.length > 0 ? cpus.length : null }
+        : {}),
+      cpuLoadAverage1m: cgroupCpu ? null : this.loadAverage1m(),
       cpuPerformanceCoreCount: clusters.performance,
       cpuEfficiencyCoreCount: clusters.efficiency,
       cpuPerformancePercent: clusterPercent.performance,
       cpuEfficiencyPercent: clusterPercent.efficiency,
-      ...memory,
+      ...resources.memory,
       agentsObserved: agents,
       projectCount: projects.projectCount,
       worktreeCount: projects.worktreeCount,
@@ -246,56 +303,171 @@ export class HostMetricsSampler {
     return this.clusters ?? NO_CLUSTERS;
   }
 
-  private async linuxMemory() {
+  /**
+   * One scope per summary. Where the Host's cgroup (or one of its ancestors)
+   * caps memory, swap or CPUs, every figure comes from that cgroup and one
+   * that can't be read is null, never the machine's. Otherwise all of it is
+   * the machine's.
+   */
+  private async linuxResources(
+    machineCores: number
+  ): Promise<{ memory: HostMemoryFields; cgroupCpu: CgroupCpu | null }> {
     const s = this.sources;
-    const [memPsi, cpuPsi, meminfoText, cgCurrent, cgMax, hottest] = await Promise.all([
-      s.readText("/proc/pressure/memory"),
-      s.readText("/proc/pressure/cpu"),
-      s.readText("/proc/meminfo"),
-      s.readText("/sys/fs/cgroup/memory.current"),
-      s.readText("/sys/fs/cgroup/memory.max"),
-      this.hottestThermalZone(),
+    // Stamped before the reads, which take a variable time, so the interval doesn't absorb their delay.
+    const readAt = s.now();
+    const [thermal, cgroup] = await Promise.all([
+      this.observedTemperature(),
+      this.cgroupScope(machineCores),
     ]);
-    const meminfo = parseMeminfo(meminfoText);
-    const cgroup = parseCgroupMemory(cgCurrent, cgMax);
-    let memoryTotalBytes: number | null = null;
-    let memoryUsedBytes: number | null = null;
-    if (cgroup) {
-      // In a container the cgroup's limit is what the host's work actually has.
-      memoryTotalBytes = cgroup.limitBytes;
-      memoryUsedBytes = cgroup.usedBytes;
-    } else if (meminfo?.totalBytes != null && meminfo.availableBytes != null) {
-      memoryTotalBytes = meminfo.totalBytes;
-      memoryUsedBytes = Math.max(0, meminfo.totalBytes - meminfo.availableBytes);
+    const temperature = {
+      temperatureCelsius: thermal?.celsius ?? null,
+      temperatureZone: thermal?.label ?? null,
+    };
+    if (!cgroup) {
+      this.previousCgroupCpu = null;
+      const [memPsi, cpuPsi, meminfoText] = await Promise.all([
+        s.readText("/proc/pressure/memory"),
+        s.readText("/proc/pressure/cpu"),
+        s.readText("/proc/meminfo"),
+      ]);
+      const meminfo = parseMeminfo(meminfoText);
+      const swapTotal = meminfo?.swapTotalBytes ?? null;
+      const swapFree = meminfo?.swapFreeBytes ?? null;
+      const hasMemory = meminfo?.totalBytes != null && meminfo.availableBytes != null;
+      return {
+        memory: {
+          memoryPressure: null,
+          memoryTotalBytes: hasMemory ? meminfo!.totalBytes : null,
+          memoryUsedBytes: hasMemory
+            ? Math.max(0, meminfo!.totalBytes! - meminfo!.availableBytes!)
+            : null,
+          swapTotalBytes: swapTotal,
+          swapUsedBytes: swapTotal !== null && swapFree !== null ? swapTotal - swapFree : null,
+          thermal: null,
+          cpuPressure: parsePsi(cpuPsi)?.someAvg10 ?? null,
+          memoryPressureSomeAvg10: parsePsi(memPsi)?.someAvg10 ?? null,
+          metricsScope: "host",
+          ...temperature,
+        },
+        cgroupCpu: null,
+      };
     }
-    const swapTotal = meminfo?.swapTotalBytes ?? null;
-    const swapFree = meminfo?.swapFreeBytes ?? null;
+
+    const { dir } = cgroup;
+    const [memCurrent, swapCurrent, memPsi, cpuPsi, cpuStat, meminfoText] = await Promise.all([
+      s.readText(`${dir}/memory.current`),
+      s.readText(`${dir}/memory.swap.current`),
+      s.readText(`${dir}/memory.pressure`),
+      s.readText(`${dir}/cpu.pressure`),
+      s.readText(`${dir}/cpu.stat`),
+      // Only the machine's RAM size, the ceiling of a cgroup with no memory limit of its own.
+      cgroup.memoryLimit === null ? s.readText("/proc/meminfo") : Promise.resolve(null),
+    ]);
+    const cores = minimum([machineCores > 0 ? machineCores : null, cgroup.cpuQuota, cgroup.cpuSet]);
     return {
-      memoryPressure: psiToMemoryPressure(parsePsi(memPsi)),
-      memoryTotalBytes,
-      memoryUsedBytes,
-      swapTotalBytes: swapTotal,
-      swapUsedBytes: swapTotal !== null && swapFree !== null ? swapTotal - swapFree : null,
-      thermal: thermalFromCelsius(hottest),
-      cpuPressure: parsePsi(cpuPsi)?.someAvg10 ?? null,
+      memory: {
+        memoryPressure: null,
+        memoryTotalBytes: cgroup.memoryLimit ?? parseMeminfo(meminfoText)?.totalBytes ?? null,
+        memoryUsedBytes: parseCgroupBytes(memCurrent),
+        swapTotalBytes: cgroup.swapLimit,
+        swapUsedBytes: parseCgroupBytes(swapCurrent),
+        thermal: null,
+        cpuPressure: parsePsi(cpuPsi)?.someAvg10 ?? null,
+        memoryPressureSomeAvg10: parsePsi(memPsi)?.someAvg10 ?? null,
+        metricsScope: "cgroup",
+        ...temperature,
+      },
+      cgroupCpu: {
+        cores,
+        logicalCores: cores !== null && Number.isInteger(cores) ? cores : null,
+        percent: this.cgroupCpuPercent(dir, parseCgroupCpuUsageUsec(cpuStat), cores, readAt),
+      },
     };
   }
 
-  private async hottestThermalZone(): Promise<number | null> {
+  /**
+   * The cgroup the Host runs in and the limits that bind it, or null when
+   * nothing caps it. A limit can sit on any ancestor while the Host's own
+   * cgroup says "max", so each limit is the tightest along the way up.
+   */
+  private async cgroupScope(machineCores: number): Promise<{
+    dir: string;
+    memoryLimit: number | null;
+    swapLimit: number | null;
+    cpuQuota: number | null;
+    cpuSet: number | null;
+  } | null> {
+    const s = this.sources;
+    const self = await s.readText("/proc/self/cgroup");
+    // No membership file reads the mount root, which is where a container's own view starts.
+    const segments = self === null ? [] : parseProcSelfCgroup(self);
+    if (segments === null || segments.length > MAX_CGROUP_DEPTH) return null;
+    const dirs: string[] = [];
+    for (let depth = segments.length; depth >= 0; depth -= 1) {
+      dirs.push([CGROUP_ROOT, ...segments.slice(0, depth)].join("/"));
+    }
+    const dir = dirs[0]!;
+    const [limits, cpuSetText] = await Promise.all([
+      Promise.all(
+        dirs.map(async (d) => ({
+          memory: parseCgroupBytes(await s.readText(`${d}/memory.max`)),
+          swap: parseCgroupBytes(await s.readText(`${d}/memory.swap.max`)),
+          cpu: parseCpuMax(await s.readText(`${d}/cpu.max`)),
+        }))
+      ),
+      s.readText(`${dir}/cpuset.cpus.effective`),
+    ]);
+    const memoryLimit = minimum(limits.map((l) => l.memory));
+    const swapLimit = minimum(limits.map((l) => l.swap));
+    const cpuQuota = minimum(limits.map((l) => l.cpu));
+    const cpuSetCount = parseCpuSetCount(cpuSetText);
+    // A cpuset naming every core isn't a constraint; only a narrower one is.
+    const cpuSet = cpuSetCount !== null && cpuSetCount < machineCores ? cpuSetCount : null;
+    if (memoryLimit === null && swapLimit === null && cpuQuota === null && cpuSet === null) {
+      return null;
+    }
+    return { dir, memoryLimit, swapLimit, cpuQuota, cpuSet };
+  }
+
+  /** Busy share of the cgroup's cores between two `cpu.stat` readings; null until there are two. */
+  private cgroupCpuPercent(
+    dir: string,
+    usec: number | null,
+    cores: number | null,
+    at: number
+  ): number | null {
+    const previous = this.previousCgroupCpu;
+    if (usec === null || cores === null) {
+      this.previousCgroupCpu = null;
+      return null;
+    }
+    this.previousCgroupCpu = { dir, usec, at, cores };
+    if (!previous || previous.dir !== dir || previous.cores !== cores) return null;
+    const elapsedUsec = (at - previous.at) * 1000;
+    const used = usec - previous.usec;
+    if (elapsedUsec <= 0 || used < 0) return null;
+    return Math.min(100, Math.max(0, (used / (elapsedUsec * cores)) * 100));
+  }
+
+  private async observedTemperature() {
     const s = this.sources;
     const zones = (await s.listDir(LINUX_THERMAL_DIR)).filter((name) =>
       /^thermal_zone\d+$/.test(name)
     );
     if (zones.length === 0) return null;
-    const temps = await Promise.all(
-      zones.map(async (zone) =>
-        parseThermalZoneTemp(await s.readText(`${LINUX_THERMAL_DIR}/${zone}/temp`))
-      )
+    const readings = await Promise.all(
+      zones.map(async (zone) => {
+        const [type, temp] = await Promise.all([
+          s.readText(`${LINUX_THERMAL_DIR}/${zone}/type`),
+          s.readText(`${LINUX_THERMAL_DIR}/${zone}/temp`),
+        ]);
+        return {
+          zone,
+          type: type?.trim() || null,
+          celsius: parseThermalZoneTemp(temp),
+        };
+      })
     );
-    let hottest: number | null = null;
-    for (const temp of temps) {
-      if (temp !== null) hottest = hottest === null ? temp : Math.max(hottest, temp);
-    }
-    return hottest;
+    return pickThermalZone(readings);
   }
 }

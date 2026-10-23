@@ -129,6 +129,37 @@ describe("HostCallRuntime (#13493, #13496)", () => {
       expect(listHostProjects).toHaveBeenCalledTimes(1);
     });
 
+    it("lists a Linux host's raw readings and the scope they describe, with no invented bands", async () => {
+      hosts = [
+        host({
+          connection: CONNECTED,
+          summary: {
+            sampledAt: 5,
+            cpuPercent: 12,
+            memoryPressure: null,
+            thermal: null,
+            metricsScope: "cgroup",
+            memoryPressureSomeAvg10: 2.5,
+            temperatureCelsius: 55,
+            temperatureZone: "x86_pkg_temp (thermal_zone0)",
+          } as never,
+        }),
+      ];
+      const listed = await runtime.list("a");
+      if (!listed.ok) throw new Error("refused");
+      expect(HostListResultSchema.parse(listed.value)).toEqual(listed.value);
+      expect(listed.value.hosts[0]!.load).toEqual({
+        sampledAt: 5,
+        cpuPercent: 12,
+        memoryPressure: null,
+        thermal: null,
+        metricsScope: "cgroup",
+        memoryPressureSomeAvg10: 2.5,
+        temperatureCelsius: 55,
+        temperatureZone: "x86_pkg_temp (thermal_zone0)",
+      });
+    });
+
     it("drops a disconnected host's agent tally and reads none of its projects", async () => {
       hosts = [host({ summary: { sampledAt: 1, agentsObserved: { working: 3 } } as never })];
       const listed = await runtime.list("a");

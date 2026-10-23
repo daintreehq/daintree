@@ -425,12 +425,29 @@ export interface HostMetricsSummary {
   cpuPerformancePercent?: number | null;
   /** Busy share of the efficiency cluster's own cores; null under the same rules. */
   cpuEfficiencyPercent?: number | null;
-  /** macOS memorystatus level or Linux PSI mapped to three bands; null when unavailable. */
+  /**
+   * What the figures below describe: the whole machine, or the cgroup the Host
+   * runs in when that carries a limit. Absent from a host that doesn't report it.
+   */
+  metricsScope?: "host" | "cgroup" | null;
+  /**
+   * Cores the CPU reading is a share of, fractional under a CPU quota: the
+   * scale `cpuPercent` is a share of. Absent from a host that doesn't report it.
+   */
+  cpuCapacityCores?: number | null;
+  /** Linux PSI memory `some avg10`, as the kernel reports it. Absent from older hosts; null off Linux. */
+  memoryPressureSomeAvg10?: number | null;
+  /** Hottest CPU-like sensor in °C, as read. Machine-wide even when the rest is a cgroup's. */
+  temperatureCelsius?: number | null;
+  /** The sensor `temperatureCelsius` came from, such as "x86_pkg_temp (thermal_zone0)". */
+  temperatureZone?: string | null;
+  /** macOS memorystatus level; null elsewhere, where Linux reports `memoryPressureSomeAvg10`. */
   memoryPressure: "normal" | "warn" | "critical" | null;
   memoryUsedBytes: number | null;
   memoryTotalBytes: number | null;
   swapUsedBytes: number | null;
   swapTotalBytes: number | null;
+  /** macOS thermal state; null elsewhere, where Linux reports `temperatureCelsius`. */
   thermal: "nominal" | "fair" | "serious" | "critical" | null;
   /** Linux PSI cpu `some avg10`; null elsewhere. */
   cpuPressure: number | null;

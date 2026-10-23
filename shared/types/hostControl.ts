@@ -99,6 +99,10 @@ export const HostListEntrySchema = z.object({
       cpuPercent: z.number().nullable(),
       memoryPressure: z.enum(["normal", "warn", "critical"]).nullable(),
       thermal: z.enum(["nominal", "fair", "serious", "critical"]).nullable(),
+      metricsScope: z.enum(["host", "cgroup"]).nullable().optional(),
+      memoryPressureSomeAvg10: z.number().nullable().optional(),
+      temperatureCelsius: z.number().nullable().optional(),
+      temperatureZone: z.string().nullable().optional(),
     })
     .nullable(),
   agentsObserved: z

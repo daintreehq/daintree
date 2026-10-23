@@ -13,7 +13,9 @@ import {
   describeDriverDetail,
   describeObservedAgents,
   describeProjects,
+  describeMemoryPressure,
   describeSwap,
+  describeThermal,
   memoryUsedSeries,
   pressureSeries,
   compareHostCapacity,
@@ -377,5 +379,109 @@ describe("capacity", () => {
     expect(describeCpuPressure(makeSummary({ cpuPressure: 0 }))).toBe(
       "0% of the last 10 s stalled"
     );
+  });
+});
+
+describe("Linux observations", () => {
+  it("shows the kernel's pressure and the sensor's temperature as read, with no band", () => {
+    const summary = makeSummary({
+      memoryPressure: null,
+      memoryPressureSomeAvg10: 42.46,
+      thermal: null,
+      temperatureCelsius: 88.04,
+      temperatureZone: "x86_pkg_temp (thermal_zone0)",
+    });
+    expect(describeMemoryPressure(summary)).toBe("42.5% of the last 10 s stalled");
+    expect(describeThermal(summary)).toBe("88°C · x86_pkg_temp (thermal_zone0)");
+    const bare = makeSummary({ memoryPressure: null, thermal: null });
+    expect(describeMemoryPressure(bare)).toBeNull();
+    expect(describeThermal(bare)).toBeNull();
+  });
+
+  it("keeps macOS's own words", () => {
+    const summary = makeSummary({ memoryPressure: "warn", thermal: "serious" });
+    expect(describeMemoryPressure(summary)).toBe("High");
+    expect(describeThermal(summary)).toBe("Serious");
+  });
+
+  it("reads busy cores against a fractional capacity", () => {
+    const summary = makeSummary({
+      cpuPercent: 50,
+      cpuLogicalCoreCount: null,
+      cpuCapacityCores: 1.5,
+    });
+    expect(busyCores(summary)).toEqual({ busy: 0.75, total: 1.5 });
+    expect(describeCpu(summary)).toBe("0.8 of 1.5 cores");
+  });
+
+  it("compares a raw-PSI host on free cores and memory alone, never scoring the PSI", () => {
+    const raw = { memoryPressure: null, cpuPercent: 10, memoryUsedBytes: 2 * GB };
+    const { suggestedHostId, options } = compareHostCapacity([
+      candidate("stalled", { ...raw, memoryPressureSomeAvg10: 90 }),
+      candidate("banded", { memoryPressure: "warn", cpuPercent: 80, memoryUsedBytes: 12 * GB }),
+    ]);
+    expect(suggestedHostId).toBe("stalled");
+    expect(options[0]!.facts).toContain("Memory pressure 90% of the last 10 s stalled");
+  });
+
+  it("lets a banded host lead a raw-PSI host whatever the PSI says", () => {
+    const { suggestedHostId } = compareHostCapacity([
+      candidate("calm-psi", {
+        memoryPressure: null,
+        memoryPressureSomeAvg10: 0,
+        cpuPercent: 80,
+        memoryUsedBytes: 12 * GB,
+      }),
+      candidate("banded", { memoryPressure: "warn", cpuPercent: 10, memoryUsedBytes: 2 * GB }),
+    ]);
+    expect(suggestedHostId).toBe("banded");
+  });
+
+  it("suggests nothing when a host reports neither a pressure band nor PSI", () => {
+    const { suggestedHostId } = compareHostCapacity([
+      candidate("silent", { memoryPressure: null, cpuPercent: 80, memoryUsedBytes: 12 * GB }),
+      candidate("calm", { cpuPercent: 10, memoryUsedBytes: 2 * GB }),
+    ]);
+    expect(suggestedHostId).toBeNull();
+  });
+
+  it("compares an all-raw-PSI fleet on free cores and memory", () => {
+    const raw = { memoryPressure: null };
+    const { suggestedHostId } = compareHostCapacity([
+      candidate("busy", {
+        ...raw,
+        memoryPressureSomeAvg10: 0,
+        cpuPercent: 80,
+        memoryUsedBytes: 12 * GB,
+      }),
+      candidate("calm", {
+        ...raw,
+        memoryPressureSomeAvg10: 95,
+        cpuPercent: 10,
+        memoryUsedBytes: 2 * GB,
+      }),
+    ]);
+    expect(suggestedHostId).toBe("calm");
+  });
+
+  it("withholds the suggestion when a host's only reading is raw pressure", () => {
+    const { suggestedHostId } = compareHostCapacity([
+      candidate("psi-only", {
+        cpuPercent: null,
+        memoryPressure: null,
+        memoryPressureSomeAvg10: 3,
+      }),
+      candidate("calm", { cpuPercent: 10, memoryUsedBytes: 2 * GB }),
+    ]);
+    expect(suggestedHostId).toBeNull();
+  });
+
+  it("shows a tiny CPU quota as the capacity it is", () => {
+    const summary = makeSummary({
+      cpuPercent: 100,
+      cpuLogicalCoreCount: null,
+      cpuCapacityCores: 0.001,
+    });
+    expect(describeCpu(summary)).toBe("<0.1 of 0.001 cores");
   });
 });
