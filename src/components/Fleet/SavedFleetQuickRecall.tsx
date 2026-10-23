@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 import { useTruncationDetection } from "@/hooks/useTruncationDetection";
 import { actionService } from "@/services/ActionService";
-import { resolveSavedScopeIds } from "@/services/actions/definitions/fleetActions";
+import { resolveSavedScopeIds } from "@/services/actions/definitions/fleetSavedScope";
 import { useFleetArmingStore } from "@/store/fleetArmingStore";
 import { useSavedFleets } from "./useSavedFleets";
 import { formatSavedFleetCount, savedFleetAccessibleName } from "./savedFleetMeta";

@@ -11,7 +11,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { actionService } from "@/services/ActionService";
-import { computeSavedScopePaneCount } from "@/services/actions/definitions/fleetActions";
+import { computeSavedScopePaneCount } from "@/services/actions/definitions/fleetSavedScope";
 import { useProjectSettingsStore } from "@/store/projectSettingsStore";
 import { usePanelStore } from "@/store/panelStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
