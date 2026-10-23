@@ -189,6 +189,37 @@ function toolResult(
 }
 
 /**
+ * A contributed server's own `tools/call` result, forwarded rather than
+ * serialized as a value: its text and its `isError`, which is the server's
+ * account of a tool failure. Only text is forwarded; anything else is refused
+ * whole, so an agent never sees part of an answer as if it were all of it.
+ * `structuredContent` is dropped because no output schema is advertised for it.
+ */
+function forwardedToolResult(value: unknown, maxResultBytes: number): CallToolResult {
+  if (!isPlainObject(value) || !Array.isArray(value.content)) {
+    return toolError("The MCP server returned a malformed tool result.");
+  }
+  const content: { type: "text"; text: string }[] = [];
+  for (const item of value.content as unknown[]) {
+    if (!isPlainObject(item) || item.type !== "text" || typeof item.text !== "string") {
+      const type = isPlainObject(item) && typeof item.type === "string" ? item.type : "unknown";
+      return toolError(
+        `The MCP server returned ${type} content, which plugin agent tools do not forward; only text is supported.`
+      );
+    }
+    content.push({ type: "text", text: item.text });
+  }
+  const result: CallToolResult = { content, ...(value.isError === true ? { isError: true } : {}) };
+  const bytes = Buffer.byteLength(JSON.stringify(result), "utf8");
+  if (bytes > maxResultBytes) {
+    return toolError(
+      `The tool result is ${bytes} bytes, over the ${maxResultBytes}-byte limit for plugin tool results.`
+    );
+  }
+  return result;
+}
+
+/**
  * The MCP server behind one plugin session: the host's read-only tools for the
  * plugin's databases and the plugin's own tools, each as the grant's scope
  * allows, and the host's tools for the plugin's skills on any grant, on one
@@ -553,7 +584,9 @@ export function createPluginSessionServer(options: PluginSessionServerOptions): 
       // longer exists and is discarded.
       if (controller.signal.aborted) return abortedResult();
 
-      return toolResult(descriptor, value, maxResultBytes);
+      return registration.resultFormat === "mcp"
+        ? forwardedToolResult(value, maxResultBytes)
+        : toolResult(descriptor, value, maxResultBytes);
     } finally {
       inFlight -= 1;
       clearTimeout(timer);

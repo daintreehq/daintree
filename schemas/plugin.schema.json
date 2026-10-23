@@ -2574,6 +2574,55 @@
                   ],
                   "additionalProperties": false
                 }
+              },
+              "source": {
+                "type": "object",
+                "properties": {
+                  "mcpServer": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 64,
+                    "pattern": "^[a-zA-Z0-9._-]+$"
+                  },
+                  "tools": {
+                    "minItems": 1,
+                    "maxItems": 16,
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "name": {
+                          "type": "string",
+                          "pattern": "^[a-z][a-z0-9_]{0,31}$"
+                        },
+                        "serverTool": {
+                          "type": "string",
+                          "pattern": "^[A-Za-z0-9_.-]{1,128}$"
+                        },
+                        "group": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 64,
+                          "pattern": "^[a-zA-Z0-9._-]+$"
+                        },
+                        "description": {
+                          "type": "string",
+                          "minLength": 1
+                        }
+                      },
+                      "required": [
+                        "name",
+                        "serverTool"
+                      ],
+                      "additionalProperties": false
+                    }
+                  }
+                },
+                "required": [
+                  "mcpServer",
+                  "tools"
+                ],
+                "additionalProperties": false
               }
             },
             "required": [

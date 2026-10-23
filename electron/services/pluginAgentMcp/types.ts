@@ -1,5 +1,7 @@
 import type http from "node:http";
 import type {
+  McpServerContribution,
+  PluginAgentMcpServerSource,
   PluginAgentMcpToolGroupAccess,
   PluginMcpCaller,
   PluginMcpJsonSchema,
@@ -121,6 +123,21 @@ export interface AgentMcpEndpointRegistration {
   readonly endpointId: string;
   readonly tools: readonly AgentMcpRegisteredTool[];
   readonly invoke: AgentMcpToolInvoker;
+  /**
+   * `"mcp"`: the invoker answers with a `tools/call` result from a contributed
+   * MCP server, forwarded as such rather than serialized as a JSON value.
+   */
+  readonly resultFormat?: "mcp";
+}
+
+/** An endpoint whose tools come from the instance's own contributed server, as the host found it loaded. */
+export interface AgentMcpServerSourceLookup {
+  readonly endpointId: string;
+  readonly groups: readonly AgentMcpToolGroupRef[];
+  readonly source: Readonly<PluginAgentMcpServerSource>;
+  readonly contribution: Readonly<McpServerContribution>;
+  readonly pluginDir: string;
+  readonly declaredQueryNames: readonly string[];
 }
 
 /**

@@ -233,6 +233,7 @@ import { agentMcpEndpointRegistry } from "./pluginAgentMcp/endpointRegistry.js";
 import { registerPluginDatabaseEndpoint } from "./pluginAgentMcp/databaseEndpoint.js";
 import { pluginMcpGrantRegistry } from "./pluginAgentMcp/grantRegistry.js";
 import { agentMcpSurfaceOf } from "./pluginAgentMcp/declaredEndpoints.js";
+import type { AgentMcpServerSourceLookup } from "./pluginAgentMcp/types.js";
 import {
   buildPluginPermissionExecArgv,
   classifyPluginPermissionPaths,
@@ -9183,6 +9184,35 @@ export class PluginService {
     const contribution = plugin.manifest.contributes.mcpServers.find((c) => c.id === serverId);
     if (!contribution) return undefined;
     return { contribution, pluginDir: plugin.dir };
+  }
+
+  /**
+   * The loaded instance's `agentMcp` endpoint that serves tools from one of its
+   * own `mcpServers`, with that server's entry and the instance's directory —
+   * everything the host needs to start the server on this backend and serve
+   * the chosen tools. `undefined` for an instance with no such endpoint, or one
+   * without `mcp:expose`, which the agent route never serves.
+   */
+  findAgentMcpServerSource(pluginInstanceId: string): AgentMcpServerSourceLookup | undefined {
+    const plugin = this.plugins.get(pluginInstanceId);
+    if (!plugin || !plugin.manifest.capabilities?.includes("mcp:expose")) return undefined;
+    const endpoint = plugin.manifest.contributes.agentMcp.find((entry) => entry.source);
+    const source = endpoint?.source;
+    if (!endpoint || !source) return undefined;
+    const contribution = plugin.manifest.contributes.mcpServers.find(
+      (server) => server.id === source.mcpServer
+    );
+    if (!contribution) return undefined;
+    return {
+      endpointId: endpoint.id,
+      groups: (endpoint.groups ?? []).map((group) => ({ id: group.id, access: group.access })),
+      source,
+      contribution,
+      pluginDir: plugin.dir,
+      declaredQueryNames: plugin.manifest.contributes.databases.flatMap((database) =>
+        (database.queries ?? []).map((query) => query.name)
+      ),
+    };
   }
 
   /**

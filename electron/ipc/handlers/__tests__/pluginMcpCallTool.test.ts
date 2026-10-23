@@ -79,6 +79,7 @@ import {
 import { PLUGIN_MCP_CONSENT_TIMEOUT_MS } from "../../../../shared/types/pluginMcpConsent.js";
 import type { IpcContext } from "../../types.js";
 import type { PluginMcpCallToolInput } from "../../../../shared/types/ipc/pluginMcp.js";
+import { makeProjectPluginInstanceKey } from "../../../../shared/types/plugin.js";
 
 /** Flush the awaited resolution chain (dynamic imports + mocked async) so the
  * consent-request push fires under fake timers without relying on wall-clock. */
@@ -400,6 +401,18 @@ describe("handleCallTool pipeline", () => {
     if (result.kind === "error") {
       expect(result.errorCode).toBe("TOOL_NOT_FOUND");
     }
+    expect(h.supervisor.callTool).not.toHaveBeenCalled();
+  });
+});
+
+describe("handleCallTool and project plugin servers", () => {
+  it("never starts or calls a project plugin's bridged server from the host-client path", async () => {
+    const projectKey = makeProjectPluginInstanceKey("a".repeat(64), "acme.catalog");
+
+    const result = await handleCallTool(ctx, { ...input, pluginId: projectKey });
+
+    expect(result).toMatchObject({ kind: "error" });
+    expect(h.supervisor.start).not.toHaveBeenCalled();
     expect(h.supervisor.callTool).not.toHaveBeenCalled();
   });
 });

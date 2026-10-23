@@ -49,7 +49,7 @@ What `--project` changes relative to an installed scaffold:
 - no `.dntrignore` — that file only shapes a `.dntr` archive
 - a watcher recipe lands in `<projectRoot>/.daintree/recipes/`, so Daintree can start the build alongside the rest of the project environment
 
-Use the `command` or `view` template with `--project`. The `mcp` and `full` templates scaffold `contributes.mcpServers`, which a project-scoped manifest may not declare (see [What a project plugin may contribute](#what-a-project-plugin-may-contribute)), so the scaffold refuses those two combinations rather than writing a manifest the host would decline to load.
+Use the `command` or `view` template with `--project`. The `mcp` and `full` templates scaffold a `contributes.mcpServers` entry no endpoint bridges, which a project-scoped manifest may not declare (see [What a project plugin may contribute](#what-a-project-plugin-may-contribute)), so the scaffold refuses those two combinations rather than writing a manifest the host would decline to load. To serve a stdio server's tools to the project's agents, add it by hand together with an `agentMcp` endpoint whose `source` names its tools.
 
 Run `npx daintree-plugin validate` in the plugin directory to check the manifest before committing. It reads your declared `scope` and validates under the matching origin, so a `"scope": "project"` manifest is checked against the project rules.
 
@@ -170,7 +170,7 @@ Forbidden under `scope: "project"`, each rejected at manifest validation with an
 | `menuItems` | The application menu is one OS-level menu shared by every window, with no per-project projection — the item would stay on the menu bar while another project is focused, and dispatch into it |
 | `agents` | The plugin agent roster is one app-wide registry mirrored into the shared pty-host, and an agent's launch identity is persisted into terminals and sessions that outlive the project binding |
 | `processTools` | Process-tool detections are mirrored into the shared pty-host as one detection table for every terminal in the app |
-| `mcpServers` | Daintree is the client of a contributed server, and the plugin-MCP IPC surface that reaches it is app-global: servers are addressed by plugin and server id alone, so a call through it carries no project to check the contribution against. (These tools never reach terminal agents at all — for that, use `agentMcp`.) |
+| `mcpServers` (unless bridged) | Daintree is the client of a contributed server, and the plugin-MCP IPC surface that reaches it is app-global: servers are addressed by plugin and server id alone, so a call through it carries no project to check the contribution against. A server that an `agentMcp` endpoint's `source` bridges is allowed: it is reached only through that endpoint's project-bound grants, and the host-client IPC never lists or calls a project plugin's servers. See [Agent extensions → Serving a contributed server's tools](./agent-extensions.md#serving-a-contributed-servers-tools). |
 | `themes` | The app theme is one machine-wide selection painted into every window and every project's view, so there is no per-project theme for the contribution to narrow to |
 | `forgeProviders` | Forge providers need synchronous host methods (`parseRemote`, the URL builders) that cannot cross the plugin worker's async message port, so the descriptor could never be given an implementation |
 

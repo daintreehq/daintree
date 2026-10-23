@@ -316,3 +316,54 @@ describe("PluginService agent MCP teardown", () => {
     });
   });
 });
+
+describe("PluginService bridged agentMcp endpoint", () => {
+  function bridgedPlugin(capabilities: string[]): LoadedPlugin {
+    const plugin = fakePlugin();
+    const contributes = plugin.manifest.contributes as unknown as Record<string, unknown>;
+    contributes.mcpServers = [{ id: "catalog", name: "Catalog", command: "node" }];
+    contributes.databases = [];
+    contributes.agentMcp = [
+      {
+        id: "data",
+        name: "Ledger data",
+        mode: "tools",
+        source: { mcpServer: "catalog", tools: [{ name: "find", serverTool: "find" }] },
+      },
+    ];
+    (plugin.manifest as { capabilities: string[] }).capabilities = capabilities;
+    return plugin;
+  }
+
+  it("finds the bridged server on the instance's own backend, only with mcp:expose", () => {
+    const service = new PluginService("/tmp/daintree-agent-mcp-unload-root", "0.0.0");
+    service._registerFakePluginForTests(bridgedPlugin(["mcp:expose"]), KEY_A);
+    service._registerFakePluginForTests(bridgedPlugin([]), KEY_B);
+
+    expect(service.findAgentMcpServerSource(KEY_A)).toMatchObject({
+      endpointId: "data",
+      contribution: { id: "catalog" },
+      pluginDir: "/tmp/acme.ledger",
+      source: { mcpServer: "catalog" },
+    });
+    expect(service.findAgentMcpServerSource(KEY_B)).toBeUndefined();
+    expect(service.findAgentMcpServerSource("acme.missing")).toBeUndefined();
+  });
+
+  it("refuses registerTools for an endpoint the host serves from a contributed server", async () => {
+    const service = new PluginService("/tmp/daintree-agent-mcp-unload-root", "0.0.0");
+    service._registerFakePluginForTests(bridgedPlugin(["mcp:expose"]), KEY_A);
+    const host = service._createHostForTests(KEY_A);
+
+    expect(() =>
+      host.mcp.registerTools("data", {
+        list_rows: {
+          description: "Lists rows.",
+          inputSchema: { type: "object" },
+          execute: () => [],
+        },
+      })
+    ).toThrow(/serves tools from contributes.mcpServers "catalog"/);
+    expect(agentMcpEndpointRegistry.get(KEY_A, "data")).toBeUndefined();
+  });
+});

@@ -207,6 +207,11 @@ export interface AgentMcpRosterContext {
    * the host checks membership on what arrives.
    */
   readonly groups?: readonly AgentMcpToolGroupRef[];
+  /**
+   * The host dispatches the roster itself, as for a contributed server's tools,
+   * so its entries carry no `execute`.
+   */
+  readonly hostDispatched?: true;
 }
 
 const GROUP_ID_PATTERN = /^[a-zA-Z0-9._-]{1,64}$/;
@@ -299,7 +304,7 @@ export function validateAgentMcpTools(
     if (!isPlainObject(definition)) {
       throw new Error(`tool "${name}" must be an object`);
     }
-    if (typeof definition.execute !== "function") {
+    if (context.hostDispatched !== true && typeof definition.execute !== "function") {
       throw new Error(`tool "${name}" must provide an execute() function`);
     }
     const { description } = definition;
