@@ -228,14 +228,15 @@ describe("plugin database writes from a view that doesn't drive the project", ()
     const host = makeHost();
     const db = await seedLedger(host);
 
-    for (const write of [
+    const writes: Array<() => Promise<unknown>> = [
       () => db.run("INSERT INTO t VALUES (2)"),
       () => db.exec("INSERT INTO t VALUES (3)"),
       () => db.transaction((tx) => tx.run("INSERT INTO t VALUES (4)")),
       // A writable handle's query can write (`RETURNING`), so it is held too.
       () => db.query("INSERT INTO t VALUES (5) RETURNING x"),
       () => db.get("INSERT INTO t VALUES (6) RETURNING x"),
-    ]) {
+    ];
+    for (const write of writes) {
       await expect(asCaller(WATCHER, write)).rejects.toMatchObject({ code: "DRIVEN_ELSEWHERE" });
     }
 
@@ -281,6 +282,35 @@ describe("plugin database writes from a view that doesn't drive the project", ()
       asCaller(WATCHER, () => host.db.open("vendored", { migrations: ["CREATE TABLE t (x)"] }))
     ).rejects.toMatchObject({ code: "DRIVEN_ELSEWHERE" });
     expect(fs.existsSync(nested)).toBe(false);
+  });
+
+  it("refuses the open when another screen takes control while the consent prompt waits", async () => {
+    const leases = new Map<string, ClientEndpoint>([["p1", WATCHER]]);
+    installLeases(leases);
+    consentMock.ensureAllowed.mockImplementation(async () => {
+      leases.set("p1", HOLDER);
+    });
+    const host = makeHost();
+
+    await expect(
+      asCaller(WATCHER, () => host.db.open("ledger", { migrations: ["CREATE TABLE t (x)"] }))
+    ).rejects.toMatchObject({ code: "DRIVEN_ELSEWHERE" });
+    expect(consentMock.ensureAllowed).toHaveBeenCalled();
+    expect(fs.existsSync(path.dirname(dbFile))).toBe(false);
+  });
+
+  it("stops a transaction's statements working once its callback settles", async () => {
+    installLeases(new Map([["p1", HOLDER]]));
+    const host = makeHost();
+    const db = await seedLedger(host);
+
+    const kept = await asCaller(HOLDER, () => db.transaction((tx) => tx));
+
+    await expect(
+      asCaller(WATCHER, () => kept.run("INSERT INTO t VALUES (2)"))
+    ).rejects.toMatchObject({ code: "DB_CLOSED" });
+    expect(await rows(db)).toEqual([1]);
+    await db.close();
   });
 
   it("lets a watcher write the plugin's local database, which is in no project", async () => {

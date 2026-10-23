@@ -2146,7 +2146,7 @@ export class PluginDevWorkerHostProxy {
               if (location.location !== "project" || this.invocation.getStore() === undefined) {
                 return;
               }
-              await this.call<void>("db.authorizeWrite", { id });
+              await this.call<void>("db.authorizeWrite", { id, path: location.path });
             },
             prepareBackup: (destPath) => this.call<string>("db.prepareBackup", { id, destPath }),
             onClosed: () => this.databases.delete(database),

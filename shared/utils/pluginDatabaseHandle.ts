@@ -1127,11 +1127,32 @@ export async function openPluginDatabase(
       run(async (t) => {
         assertWritable("transaction");
         db.exec("BEGIN IMMEDIATE");
+        // A `tx` kept past its callback would run outside the queue and the
+        // write check, so it stops working when the callback settles.
+        let open = true;
+        const inner = statements(t.markWrite);
+        const guard =
+          <A extends unknown[], R>(method: (...args: A) => Promise<R>) =>
+          (...args: A): Promise<R> =>
+            open
+              ? method(...args)
+              : Promise.reject(
+                  databaseError("DB_CLOSED", `database "${location.id}" transaction has ended`)
+                );
+        const tx: PluginDatabaseStatements = {
+          query: guard(inner.query) as PluginDatabaseStatements["query"],
+          get: guard(inner.get) as PluginDatabaseStatements["get"],
+          run: guard(inner.run),
+          exec: guard(inner.exec),
+          columns: guard(inner.columns),
+        };
         try {
-          const result = await fn(statements(t.markWrite));
+          const result = await fn(tx);
+          open = false;
           db.exec("COMMIT");
           return result;
         } catch (error) {
+          open = false;
           rollbackQuietly(db);
           t.markRolledBack();
           throw error;

@@ -1465,16 +1465,21 @@ export function createHost(
   // under. A local database is in no project and passes. The file's own path,
   // not the bound root, since it may sit in a nested project; worked out as
   // the resolver will, so it can be asked before anything is created.
+  // A held handle also names the file it resolved, since a link on the way
+  // may have moved since.
   const requireCallerDrivesDatabase = async (
     declaration: PluginDatabaseContribution,
-    op: string
+    op: string,
+    openedPath?: string
   ): Promise<void> => {
     if (declaration.location !== "project" || boundProjectRoot === null) return;
     const target = path.resolve(
       boundProjectRoot,
       declaration.path ?? `.daintree/data/${manifestId}/${declaration.id}.db`
     );
-    await assertPluginCallerDrives(pluginId, `db.${op}`, { paths: [target] });
+    const paths =
+      openedPath !== undefined && openedPath !== target ? [target, openedPath] : [target];
+    await assertPluginCallerDrives(pluginId, `db.${op}`, { paths });
     requireBoundForDb(`db.${op}`);
   };
 
@@ -1491,6 +1496,8 @@ export function createHost(
     if (declaration.location === "project" && !readonly) {
       await ensureCapabilityConsent(deps, pluginId, "fs:project-write");
       requireBoundForDb("db");
+      // Control may have moved while the prompt waited.
+      await requireCallerDrivesDatabase(declaration, "open");
     }
     const location = await resolvePluginDatabaseLocation({
       declaration,
@@ -1503,8 +1510,15 @@ export function createHost(
     return location;
   };
 
-  const authorizeDatabaseWrite = (id: string): Promise<void> =>
-    requireCallerDrivesDatabase(declaredDatabase(id), "write");
+  const authorizeDatabaseWrite = (id: string, openedPath?: string): Promise<void> => {
+    if (
+      openedPath !== undefined &&
+      (typeof openedPath !== "string" || !path.isAbsolute(openedPath))
+    ) {
+      return Promise.reject(new Error(`Plugin "${pluginId}" db: path must be an absolute path`));
+    }
+    return requireCallerDrivesDatabase(declaredDatabase(id), "write", openedPath);
+  };
 
   const dbApi: PluginDatabaseApi = {
     resolve: (id: string, options?: { readonly?: boolean }) => resolveDatabase(id, options),
@@ -1519,7 +1533,7 @@ export function createHost(
         ...options,
         ...schema,
         revalidate: () => resolveDatabase(id, mode),
-        authorizeWrite: () => authorizeDatabaseWrite(id),
+        authorizeWrite: () => authorizeDatabaseWrite(id, location.path),
         prepareBackup: (destPath) => prepareDatabaseBackup(id, destPath),
         onClosed: () => untrack?.(),
       });

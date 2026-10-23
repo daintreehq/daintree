@@ -804,7 +804,10 @@ describe("PluginDevWorkerHostProxy host.db write authority", () => {
       });
       await flush();
       const ask = sent.find((m) => m.type === "host-call" && m.method === "db.authorizeWrite");
-      expect(ask).toMatchObject({ params: { id: "ledger" }, invocationId: "i-save" });
+      expect(ask).toMatchObject({
+        params: { id: "ledger", path: join(dir, "ledger.db") },
+        invocationId: "i-save",
+      });
       proxy.handleMessage({
         type: "host-result",
         requestId: ask.requestId,

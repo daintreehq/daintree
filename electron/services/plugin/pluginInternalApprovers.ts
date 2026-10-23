@@ -38,14 +38,21 @@ export function approvePluginDatabaseBackup(
  */
 export const databaseWriteAuthorizers = new WeakMap<
   PluginDatabaseApi,
-  (id: string) => Promise<void>
+  (id: string, openedPath?: string) => Promise<void>
 >();
 
-/** Ask whether the current call may write a plugin's database. Used by the worker bridge. */
-export function approvePluginDatabaseWrite(db: PluginDatabaseApi, id: string): Promise<void> {
+/**
+ * Ask whether the current call may write a plugin's database, opened at
+ * `openedPath`. Used by the worker bridge.
+ */
+export function approvePluginDatabaseWrite(
+  db: PluginDatabaseApi,
+  id: string,
+  openedPath?: string
+): Promise<void> {
   const authorize = databaseWriteAuthorizers.get(db);
   if (!authorize) return Promise.reject(new Error("db writes are not available on this host"));
-  return authorize(id);
+  return authorize(id, openedPath);
 }
 
 /**

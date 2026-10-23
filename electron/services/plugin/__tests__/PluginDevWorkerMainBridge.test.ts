@@ -368,7 +368,7 @@ describe("PluginDevWorkerMainBridge", () => {
   it("answers db.authorizeWrite from the host's internal authorizer, in the worker's call", async () => {
     const { host, workerHost } = makeBridge();
     const db = { resolve: vi.fn(), open: vi.fn() };
-    const authorize = vi.fn(async (_id: string) => {
+    const authorize = vi.fn(async (_id: string, _path?: string) => {
       throw Object.assign(new Error("DRIVEN_ELSEWHERE: someone else drives"), {
         code: "DRIVEN_ELSEWHERE",
       });
@@ -379,10 +379,10 @@ describe("PluginDevWorkerMainBridge", () => {
       type: "host-call",
       requestId: "c-aw",
       method: "db.authorizeWrite",
-      params: { id: "ledger" },
+      params: { id: "ledger", path: "/p/.daintree/data/x/ledger.db" },
     });
     await flush();
-    expect(authorize).toHaveBeenCalledWith("ledger");
+    expect(authorize).toHaveBeenCalledWith("ledger", "/p/.daintree/data/x/ledger.db");
     expect(workerHost.sent.find((m) => m.requestId === "c-aw")).toMatchObject({
       ok: false,
       errorFields: { code: "DRIVEN_ELSEWHERE" },
