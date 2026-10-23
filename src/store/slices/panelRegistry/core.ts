@@ -7,6 +7,7 @@ import { TerminalRefreshTier } from "@/types";
 import { panelKindHasPty, panelKindIsDockable } from "@shared/config/panelKindRegistry";
 import { isDevPreviewPanel } from "@shared/types/panel";
 import { saveNormalized, saveTabGroups } from "./persistence";
+import { isHydrationBatchActive } from "./hydrationBatch";
 import { optimizeForDock } from "./layout";
 import { cancelReconnectErrorDebounce } from "./browser";
 import {
@@ -395,6 +396,14 @@ export const createCorePanelActions = (
         return state;
       }
 
+      // Only the host's own reports carry its timestamp: the input controller's
+      // `directing`, its optimistic `working` and the exit fallback pass none,
+      // and none of those is something the host saw (#14017).
+      const observation =
+        lastStateChange !== undefined && agentState !== "directing"
+          ? { agentState, at: lastStateChange }
+          : undefined;
+
       const next = {
         panelsById: {
           ...state.panelsById,
@@ -403,6 +412,7 @@ export const createCorePanelActions = (
             agentState,
             error,
             lastStateChange: lastStateChange ?? Date.now(),
+            ...(observation && { lastAgentObservation: observation }),
             stateChangeTrigger: trigger,
             stateChangeConfidence: confidence,
             waitingReason: nextWaitingReason,
@@ -421,10 +431,13 @@ export const createCorePanelActions = (
           },
         },
       };
-      // The saved state pair is what the next restore reports as last seen
-      // (#14017), so it is written as it changes rather than whenever some
-      // other edit happens to save the layout.
-      saveNormalized(next.panelsById, state.panelIds);
+      // Written as it is observed, since nothing else saves while an agent works
+      // and the next restore reports it as last seen (#14017). Never mid-batch:
+      // `panelIds` is partial then, and a save would read the panels still being
+      // restored as removed. The batch's own save, or the next report, writes it.
+      if (observation && !isHydrationBatchActive()) {
+        saveNormalized(next.panelsById, state.panelIds);
+      }
       return next;
     });
   },

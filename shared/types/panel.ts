@@ -447,6 +447,17 @@ export type RestoreRecoveryReason =
 export type TerminalRestoreDisposition = "resume" | "fresh" | "held";
 
 /**
+ * An agent state Daintree's detector reported for a pane, and when that state
+ * began (#14017). Only what the host observed: never the renderer's
+ * `directing` overlay or an optimistic guess made before the host confirmed.
+ */
+export interface TerminalAgentObservation {
+  agentState: AgentState;
+  /** Epoch ms; absent only on a snapshot saved before observations were kept. */
+  at?: number;
+}
+
+/**
  * How the pane's current process, or its hold, came from restore (#14017).
  * Absent on a pane restore never rebuilt, and cleared once the pane is
  * restarted. Persisted, so a pane held across several restarts keeps the
@@ -457,11 +468,10 @@ export interface TerminalRestoreProvenance {
   at: number;
   disposition: TerminalRestoreDisposition;
   /**
-   * The agent state saved for the pane before this restore, and when that state
-   * began. What the screen last showed, never a verdict on whether the run had
-   * finished.
+   * The last agent state observed for the pane before this restore. What the
+   * screen last showed, never a verdict on whether the run had finished.
    */
-  lastSeen?: { agentState: AgentState; at?: number };
+  lastSeen?: TerminalAgentObservation;
 }
 
 /**
@@ -782,6 +792,13 @@ export interface PtyPanelData extends BasePanelData {
   /** See {@link TerminalRestoreProvenance}. Persisted. */
   restoreProvenance?: TerminalRestoreProvenance;
   /**
+   * The last agent state the host reported for this pane (#14017), kept apart
+   * from `agentState`, which also carries renderer overlays. The next restore
+   * reports it as last seen. Persisted, held panes included: it describes the
+   * pane, not a process the hold would start.
+   */
+  lastAgentObservation?: TerminalAgentObservation;
+  /**
    * The plugin whose `agent.launch` created this pane (#14017), taken from the
    * host-stamped dispatch context, never from arguments. Only that plugin may
    * change {@link holdOnRestart}. Persisted.
@@ -789,7 +806,8 @@ export interface PtyPanelData extends BasePanelData {
   launchedByPluginId?: string;
   /**
    * The launching plugin asked restore to hold this pane rather than start it,
-   * whatever "Resume agents after restart" says (#14017). Persisted.
+   * whatever "Resume agents after restart" says (#14017). Cleared when the user
+   * starts the pane from a hold. Persisted.
    */
   holdOnRestart?: true;
   /** Notes column beside the terminal (#12835). Persisted. */

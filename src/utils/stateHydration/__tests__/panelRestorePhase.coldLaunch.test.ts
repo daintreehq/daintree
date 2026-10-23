@@ -5,7 +5,7 @@
  * with a stubbed builder; this is what those decisions turn into.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { TerminalState } from "@shared/types/ipc/terminal";
+import type { BackendTerminalInfo, TerminalState } from "@shared/types/ipc/terminal";
 import type { WorktreeState } from "@shared/types";
 import type { PtyPanelData } from "@shared/types/panel";
 
@@ -455,5 +455,86 @@ describe("cold restore of agents that resume by history alone (#13847)", () => {
     ]);
 
     expect(byId.get("a")?.command).toMatch(/^aider --no-auto-commits .*--restore-chat-history$/);
+  });
+});
+
+describe("restore provenance through restore (#14017)", () => {
+  const claudePane = (name: string, overrides: Partial<TerminalState> = {}): TerminalState => ({
+    id: name,
+    title: `Claude ${name}`,
+    kind: "terminal",
+    launchAgentId: "claude",
+    cwd: "/repo",
+    worktreeId: "/repo",
+    location: "grid",
+    ...overrides,
+  });
+
+  it("stamps every pane one pass rebuilds with that pass's time and its own route", async () => {
+    let now = 50_000;
+    const clock = vi.spyOn(Date, "now").mockImplementation(() => now++);
+    try {
+      const byId = await restore(
+        [
+          claudePane("a", {
+            agentSessionId: "sess-a",
+            lastAgentObservation: { agentState: "idle", at: 40_000 },
+          }),
+          claudePane("b", {
+            agentSessionId: "sess-b",
+            launchedByPluginId: "acme.orchestrator",
+            holdOnRestart: true,
+          }),
+        ],
+        { agentSettings: { agents: { claude: {} } } }
+      );
+
+      const a = byId.get("a")?.restoreProvenance;
+      const b = byId.get("b")?.restoreProvenance;
+      expect(a).toEqual({
+        at: a?.at,
+        disposition: "resume",
+        lastSeen: { agentState: "idle", at: 40_000 },
+      });
+      expect(b?.disposition).toBe("held");
+      expect(b?.at).toBe(a?.at);
+      expect(byId.get("b")?.restoreRecovery).toEqual({
+        reason: "held-by-plugin",
+        sessionId: "sess-b",
+      });
+      expect(byId.get("b")).toMatchObject({
+        launchedByPluginId: "acme.orchestrator",
+        holdOnRestart: true,
+      });
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  it("keeps a surviving PTY's provenance and invents none for one restore never rebuilt", async () => {
+    const provenance = { at: 30_000, disposition: "resume" as const };
+    const live = (id: string): BackendTerminalInfo => ({
+      id,
+      cwd: "/repo",
+      kind: "terminal",
+      launchAgentId: "claude",
+      spawnedAt: 0,
+      hasPty: true,
+    });
+
+    const byId = await restore(
+      [claudePane("rebuilt", { restoreProvenance: provenance }), claudePane("never")],
+      {
+        agentSettings: { agents: { claude: {} } },
+        backendTerminalMap: new Map([
+          ["rebuilt", live("rebuilt")],
+          ["never", live("never")],
+        ]),
+      }
+    );
+
+    expect(byId.get("rebuilt")?.existingId).toBe("rebuilt");
+    expect(byId.get("rebuilt")?.restoreProvenance).toEqual(provenance);
+    expect(byId.get("never")?.restoreProvenance).toBeUndefined();
   });
 });

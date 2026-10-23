@@ -680,7 +680,10 @@ describe("terminal.sendKeys with no frontend", () => {
 describe("terminal.list restore metadata with no frontend (#14017)", () => {
   it("reports it while the saved record still describes the pane, and only then", async () => {
     const lastSeen = { agentState: "idle" as const, at: 4_000 };
-    const pty = makePty({ "t-live": { kind: "terminal", agentState: "working" } });
+    const pty = makePty({
+      "t-live": { kind: "terminal", agentState: "working" },
+      "t-left-hold": { kind: "terminal", agentState: "working" },
+    });
     const { deps } = makeDeps(
       { getPtyReader: () => pty },
       {
@@ -700,6 +703,16 @@ describe("terminal.list restore metadata with no frontend (#14017)", () => {
             title: "Claude",
             location: "grid",
             restoreRecovery: { reason: "held-by-plugin" },
+            restoreProvenance: { at: 5_000, disposition: "held", lastSeen },
+          },
+          // Running, though the layout still records the hold it left before
+          // the window saved the launch: running wins, and nothing is reported.
+          {
+            id: "t-left-hold",
+            kind: "terminal",
+            title: "Claude",
+            location: "grid",
+            restoreRecovery: { reason: "resume-deferred" },
             restoreProvenance: { at: 5_000, disposition: "held", lastSeen },
           },
           // Neither running nor held: the next view rebuilds it afresh.
@@ -725,6 +738,7 @@ describe("terminal.list restore metadata with no frontend (#14017)", () => {
       heldReason: "held-by-plugin",
       lastSeen,
     });
+    expect(byId["t-left-hold"]).not.toHaveProperty("restored");
     expect(byId["t-gone"]).not.toHaveProperty("restored");
   });
 });

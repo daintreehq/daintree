@@ -870,7 +870,7 @@ export function registerTerminalLifecycleActions(
       id: "terminal.setHoldOnRestart",
       title: "Hold agent on restart",
       description:
-        "Plugins only: hold or release one of this plugin's own agent terminals on restart. A held terminal comes back without starting, whatever the resume setting, until the user resumes it or starts anew.",
+        "Plugins only: hold or release one of this plugin's own agent terminals on restart. A held terminal comes back without starting, whatever the resume setting; the user starting it clears the hold.",
       category: "terminal",
       kind: "command",
       danger: "safe",
@@ -895,7 +895,12 @@ export function registerTerminalLifecycleActions(
           );
         }
         const panel = usePanelStore.getState().panelsById[terminalId];
-        if (!panel || !isPtyPanel(panel) || panel.launchedByPluginId !== caller) {
+        if (
+          !panel ||
+          !isPtyPanel(panel) ||
+          !panel.launchAgentId ||
+          panel.launchedByPluginId !== caller
+        ) {
           throw new UnactionableTargetError(
             `No agent terminal '${terminalId}' launched by this plugin in this project.`
           );

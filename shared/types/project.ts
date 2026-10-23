@@ -14,6 +14,7 @@ import type {
   FileBrowserTreeSnapshot,
   TerminalSpawnSource,
   PanelRestoreRecovery,
+  TerminalAgentObservation,
   TerminalRestoreProvenance,
   TerminalScratchpad,
 } from "./panel.js";
@@ -386,6 +387,8 @@ export interface PanelSnapshot {
   restoreRecovery?: PanelRestoreRecovery;
   /** How restore last rebuilt the pane (#14017). Untrusted on read — sanitized at restore. */
   restoreProvenance?: TerminalRestoreProvenance;
+  /** The last agent state the host reported for the pane (#14017). Untrusted on read. */
+  lastAgentObservation?: TerminalAgentObservation;
   /** The plugin whose `agent.launch` created the pane (#14017). */
   launchedByPluginId?: string;
   /** The launching plugin asked restore to hold the pane (#14017). */

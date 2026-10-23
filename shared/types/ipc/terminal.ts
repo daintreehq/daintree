@@ -3,6 +3,7 @@ import type {
   PanelLocation,
   PanelRestoreRecovery,
   PanelTitleMode,
+  TerminalAgentObservation,
   TerminalRestoreProvenance,
   TerminalSpawnSource,
 } from "../panel.js";
@@ -175,6 +176,8 @@ export interface TerminalState {
   restoreRecovery?: PanelRestoreRecovery;
   /** How restore last rebuilt the pane (#14017). Untrusted until sanitized. */
   restoreProvenance?: TerminalRestoreProvenance;
+  /** The last agent state the host reported for the pane (#14017). Untrusted until sanitized. */
+  lastAgentObservation?: TerminalAgentObservation;
   /** The plugin whose `agent.launch` created the pane (#14017). Untrusted until sanitized. */
   launchedByPluginId?: string;
   /** The launching plugin asked restore to hold the pane (#14017). Untrusted until sanitized. */

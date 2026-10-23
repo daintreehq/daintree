@@ -85,6 +85,7 @@ beforeEach(() => {
 const { usePanelStore } = await import("../../../panelStore");
 const { usePanelLimitStore } = await import("@/store/panelLimitStore");
 const { saveNormalized } = await import("../persistence");
+const { beginBatch, consumeBatch } = await import("../hydrationBatch");
 
 function ptyPanel(id: string): PtyPanelData | undefined {
   const panel = usePanelStore.getState().panelsById[id];
@@ -166,15 +167,49 @@ describe("updateAgentState", () => {
     });
   }
 
-  it("saves the layout when the state changes, so the next restore sees it", () => {
+  it("records what the host reported and saves it, so the next restore sees it", () => {
     seedAgent();
 
-    usePanelStore.getState().updateAgentState("a", "idle", undefined, 7_000);
+    usePanelStore.getState().updateAgentState("a", "idle", undefined, 7_000, "output");
 
-    expect(ptyPanel("a")).toMatchObject({ agentState: "idle", lastStateChange: 7_000 });
+    expect(ptyPanel("a")).toMatchObject({
+      agentState: "idle",
+      lastStateChange: 7_000,
+      lastAgentObservation: { agentState: "idle", at: 7_000 },
+    });
     expect(saveNormalized).toHaveBeenCalledTimes(1);
     const [byId] = vi.mocked(saveNormalized).mock.calls[0]!;
-    expect((byId.a as PtyPanelData).agentState).toBe("idle");
+    expect((byId.a as PtyPanelData).lastAgentObservation).toEqual({
+      agentState: "idle",
+      at: 7_000,
+    });
+  });
+
+  it("neither records nor saves the renderer's own overlays and guesses", () => {
+    seedAgent();
+    usePanelStore.getState().updateAgentState("a", "idle", undefined, 7_000, "output");
+    vi.mocked(saveNormalized).mockClear();
+
+    // The input controller's directing, then its optimistic working: no host time.
+    usePanelStore.getState().updateAgentState("a", "directing");
+    usePanelStore.getState().updateAgentState("a", "working");
+
+    expect(ptyPanel("a")?.agentState).toBe("working");
+    expect(ptyPanel("a")?.lastAgentObservation).toEqual({ agentState: "idle", at: 7_000 });
+    expect(saveNormalized).not.toHaveBeenCalled();
+  });
+
+  it("records but doesn't save while a hydration batch has panels still to add", () => {
+    seedAgent();
+    const token = beginBatch();
+    try {
+      usePanelStore.getState().updateAgentState("a", "idle", undefined, 7_000, "output");
+    } finally {
+      consumeBatch(token);
+    }
+
+    expect(ptyPanel("a")?.lastAgentObservation).toEqual({ agentState: "idle", at: 7_000 });
+    expect(saveNormalized).not.toHaveBeenCalled();
   });
 
   it("writes nothing for a duplicate event", () => {

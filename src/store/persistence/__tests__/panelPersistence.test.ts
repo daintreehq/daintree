@@ -435,6 +435,20 @@ describe("PanelPersistence", () => {
       expect(fieldEdits).toEqual([{ id: "a", fields: ["agentSessionId"] }]);
     });
 
+    it("claims a plugin hold it cleared, so a sibling's stale copy can't outvote it (#14017)", async () => {
+      const client = createMockProjectClient();
+      const persistence = new PanelPersistence(client, { debounceMs: 100 });
+
+      const held = Object.assign(createMockTerminal({ id: "a" }), { holdOnRestart: true as const });
+      persistence.primeProject(projectId, hydratedBaseline(held));
+
+      persistence.save([createMockTerminal({ id: "a" })], projectId);
+      await vi.advanceTimersByTimeAsync(100);
+
+      const [, , , , fieldEdits] = client.setTerminals.mock.calls[0]!;
+      expect(fieldEdits).toEqual([{ id: "a", fields: ["holdOnRestart"] }]);
+    });
+
     it("carries the same tombstone through the project-switch delta (#11461)", async () => {
       const client = createMockProjectClient();
       const persistence = new PanelPersistence(client, { debounceMs: 100 });

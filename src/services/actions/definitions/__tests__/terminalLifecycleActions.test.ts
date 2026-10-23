@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ActionCallbacks, ActionRegistry, AnyActionDefinition } from "../../actionTypes";
+import type { ActionId } from "@shared/types/actions";
 
 const panelStoreMock = vi.hoisted(() => ({ getState: vi.fn() }));
 const terminalInstanceServiceMock = vi.hoisted(() => ({
@@ -37,6 +38,17 @@ const pendingDestructiveStoreMock = vi.hoisted(() => {
 });
 
 vi.mock("@/store/panelStore", () => ({ usePanelStore: panelStoreMock }));
+// ActionService is imported by the end-to-end plugin dispatch case; these are
+// what it reaches at module load.
+vi.mock("../../../../store/shortcutHintStore", () => ({
+  shortcutHintStore: {
+    getState: vi.fn(() => ({ counts: {}, show: vi.fn(), incrementCount: vi.fn() })),
+  },
+}));
+vi.mock("../../../KeybindingService", () => ({
+  keybindingService: { getEffectiveCombo: vi.fn(() => null), getDisplayCombo: vi.fn(() => "") },
+}));
+vi.mock("@/lib/notify", () => ({ notify: vi.fn() }));
 vi.mock("@/services/terminal/TerminalInstanceService", () => ({
   terminalInstanceService: terminalInstanceServiceMock,
 }));
@@ -1845,7 +1857,11 @@ describe("restored panes and the plugin hold (#14017)", () => {
       });
       expect(info).not.toHaveProperty("spawnedAt");
       expect(JSON.stringify(info)).not.toContain("sess-c");
-      expect(def.resultSchema?.safeParse(info).success).toBe(true);
+      // What dispatch delivers is the parse, which strips anything undeclared.
+      expect(def.resultSchema?.parse(info)).toMatchObject({
+        hasPty: false,
+        restored: { at: 5_000, disposition: "held", heldReason: "resume-deferred", lastSeen },
+      });
     });
 
     it("adds how restore brought a live pane back to the host's record", async () => {
@@ -1880,7 +1896,9 @@ describe("restored panes and the plugin hold (#14017)", () => {
         hasPty: true,
         restored: { at: 5_000, disposition: "resume", lastSeen },
       });
-      expect(def.resultSchema?.safeParse(info).success).toBe(true);
+      expect(def.resultSchema?.parse(info)).toMatchObject({
+        restored: { at: 5_000, disposition: "resume", lastSeen },
+      });
     });
 
     it("reports no restore for a pane restore never rebuilt", async () => {
@@ -1914,6 +1932,13 @@ describe("restored panes and the plugin hold (#14017)", () => {
           launchedByPluginId: "other.plugin",
         },
         user: { id: "user", kind: "terminal", location: "grid", launchAgentId: "claude" },
+        // A plain shell restore never holds, so no receipt may claim it will.
+        shell: {
+          id: "shell",
+          kind: "terminal",
+          location: "grid",
+          launchedByPluginId: "acme.orchestrator",
+        },
       });
     });
 
@@ -1931,7 +1956,7 @@ describe("restored panes and the plugin hold (#14017)", () => {
       ]);
     });
 
-    it.each(["foreign", "user", "missing"])(
+    it.each(["foreign", "user", "shell", "missing"])(
       "refuses the %s pane, which this plugin did not launch",
       async (terminalId) => {
         await expect(
@@ -1955,6 +1980,33 @@ describe("restored panes and the plugin hold (#14017)", () => {
         definition("terminal.setHoldOnRestart").run({ terminalId: "own", hold: true }, ctx as never)
       ).rejects.toThrow(/Only the plugin that launched/);
       expect(setHoldOnRestart).not.toHaveBeenCalled();
+    });
+
+    it("reaches the action only as the plugin the host says is calling", async () => {
+      const { ActionService } = await import("../../../ActionService");
+      const service = new ActionService();
+      service.register(definition("terminal.setHoldOnRestart"));
+      const id = "terminal.setHoldOnRestart" as ActionId;
+      const args = { terminalId: "own", hold: true };
+
+      const own = await service.dispatch(id, args, {
+        source: "plugin",
+        callerPluginId: "acme.orchestrator",
+      });
+      const foreign = await service.dispatch(id, args, {
+        source: "plugin",
+        callerPluginId: "other.plugin",
+      });
+      // A context override can't name the plugin; only the bridge's own option can.
+      const forged = await service.dispatch(id, args, {
+        source: "agent",
+        contextOverride: { dispatchSource: "plugin", callerPluginId: "acme.orchestrator" },
+      });
+
+      expect(own).toMatchObject({ ok: true, result: { terminalId: "own", holdOnRestart: true } });
+      expect(foreign.ok).toBe(false);
+      expect(forged.ok).toBe(false);
+      expect(setHoldOnRestart.mock.calls).toEqual([["own", true]]);
     });
 
     it("stays out of the palette and off MCP", () => {

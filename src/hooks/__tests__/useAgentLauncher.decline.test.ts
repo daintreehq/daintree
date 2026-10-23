@@ -42,6 +42,7 @@ vi.mock("@/hooks/app/useHomeDir", () => ({ useHomeDir: () => ({ homeDir: "/home/
 vi.mock("@/store/cliAvailabilityStore", () => {
   const state = {
     availability: {},
+    details: {},
     isLoading: false,
     isRefreshing: false,
     initialize: vi.fn().mockResolvedValue(undefined),
@@ -236,5 +237,44 @@ describe("useAgentLauncher — declined launches name their reason (#13382)", ()
 
     expect(launched).toMatchObject({ terminalId: "browser-1", location: "grid" });
     expect(onDecline).not.toHaveBeenCalled();
+  });
+});
+
+describe("useAgentLauncher — the launching plugin (#14017)", () => {
+  beforeEach(() => {
+    addPanel.mockReset();
+    addPanel.mockResolvedValue("terminal-1");
+    setElectron(true);
+  });
+
+  afterEach(() => {
+    setElectron(false);
+  });
+
+  it("stamps it on an agent pane, so only that plugin may hold the pane later", async () => {
+    const { result } = renderHook(() => useAgentLauncher());
+
+    await act(async () => {
+      await result.current.launchAgent("claude", {
+        force: true,
+        launchedByPluginId: "acme.orchestrator",
+      });
+    });
+
+    expect(addPanel).toHaveBeenCalledWith(
+      expect.objectContaining({ launchAgentId: "claude", launchedByPluginId: "acme.orchestrator" }),
+      expect.anything()
+    );
+  });
+
+  it("leaves a plain shell unowned, since restore never holds one", async () => {
+    const { result } = renderHook(() => useAgentLauncher());
+
+    await act(async () => {
+      await result.current.launchAgent("terminal", { launchedByPluginId: "acme.orchestrator" });
+    });
+
+    expect(addPanel).toHaveBeenCalledOnce();
+    expect(addPanel.mock.calls[0]?.[0]).not.toHaveProperty("launchedByPluginId");
   });
 });

@@ -2,6 +2,8 @@ import { describe, it, expect } from "vitest";
 import {
   readLastSeen,
   restoredField,
+  sanitizeAgentObservation,
+  sanitizeLiveRestoreProvenance,
   sanitizeRestoreProvenance,
   summarizeRestoreProvenance,
 } from "../restoreProvenance.js";
@@ -15,12 +17,26 @@ describe("readLastSeen", () => {
     expect(readLastSeen("waiting", "soon")).toEqual({ agentState: "waiting" });
     expect(readLastSeen("waiting", Number.NaN)).toEqual({ agentState: "waiting" });
     expect(readLastSeen("waiting", 0)).toEqual({ agentState: "waiting" });
+    expect(readLastSeen("waiting", -5)).toEqual({ agentState: "waiting" });
+    // Past the latest instant a Date can hold.
+    expect(readLastSeen("waiting", 1e100)).toEqual({ agentState: "waiting" });
   });
 
   it("reports nothing for an unknown state or the renderer-only directing overlay", () => {
     expect(readLastSeen("finished", 1_000)).toBeUndefined();
     expect(readLastSeen(undefined, 1_000)).toBeUndefined();
     expect(readLastSeen("directing", 1_000)).toBeUndefined();
+  });
+});
+
+describe("sanitizeAgentObservation", () => {
+  it("reads a saved observation and rejects anything else", () => {
+    expect(sanitizeAgentObservation({ agentState: "idle", at: 1_000 })).toEqual({
+      agentState: "idle",
+      at: 1_000,
+    });
+    expect(sanitizeAgentObservation("idle")).toBeUndefined();
+    expect(sanitizeAgentObservation({ agentState: "directing", at: 1_000 })).toBeUndefined();
   });
 });
 
@@ -39,6 +55,11 @@ describe("sanitizeRestoreProvenance", () => {
     expect(sanitizeRestoreProvenance([])).toBeUndefined();
     expect(sanitizeRestoreProvenance({ disposition: "resume" })).toBeUndefined();
     expect(sanitizeRestoreProvenance({ at: 2_000, disposition: "finished" })).toBeUndefined();
+  });
+
+  it("drops a record whose time no Date can hold", () => {
+    expect(sanitizeRestoreProvenance({ at: 1e100, disposition: "resume" })).toBeUndefined();
+    expect(sanitizeRestoreProvenance({ at: -1, disposition: "resume" })).toBeUndefined();
   });
 
   it("drops only a malformed last-seen observation", () => {
@@ -91,5 +112,18 @@ describe("summarizeRestoreProvenance", () => {
       restoreRecovery: { reason: "resume-deferred", sessionId: "sess-c" },
     });
     expect(JSON.stringify(summary)).not.toContain("sess-c");
+  });
+});
+
+describe("sanitizeLiveRestoreProvenance", () => {
+  it("keeps a resume or fresh record for a running pane", () => {
+    expect(sanitizeLiveRestoreProvenance({ at: 2_000, disposition: "fresh" })).toEqual({
+      at: 2_000,
+      disposition: "fresh",
+    });
+  });
+
+  it("drops a held record, which a running process contradicts", () => {
+    expect(sanitizeLiveRestoreProvenance({ at: 2_000, disposition: "held" })).toBeUndefined();
   });
 });

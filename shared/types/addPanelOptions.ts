@@ -11,6 +11,7 @@ import type {
   FileBrowserTreeSnapshot,
   SessionLostReason,
   PanelRestoreRecovery,
+  TerminalAgentObservation,
   TerminalRestoreProvenance,
   TerminalScratchpad,
 } from "./panel.js";
@@ -233,6 +234,8 @@ export interface AddPanelOptionsBase {
   replacesRestoreRecovery?: boolean;
   /** PTY-only. See `PtyPanelData.restoreProvenance`. */
   restoreProvenance?: TerminalRestoreProvenance;
+  /** PTY-only. See `PtyPanelData.lastAgentObservation`. */
+  lastAgentObservation?: TerminalAgentObservation;
   /** PTY-only. See `PtyPanelData.launchedByPluginId`. */
   launchedByPluginId?: string;
   /** PTY-only. See `PtyPanelData.holdOnRestart`. */

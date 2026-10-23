@@ -42,12 +42,14 @@ export function sanitizeTerminals(terminals: unknown[], context: string): Termin
 }
 
 /**
- * Fields on a terminal snapshot that Main itself can author, so a renderer only
- * moves them when it says it changed them (#11461). Kept to the minimum: just the
- * graceful-shutdown session capture.
+ * Fields on a terminal snapshot a renderer only moves when it says it changed
+ * them (#11461). Kept to the minimum: the graceful-shutdown session capture,
+ * which Main itself authors, and a plugin's hold (#14017), which one window must
+ * not erase just because a sibling window's save carries a copy from before it.
  */
 export const TERMINAL_FIELD_LEVEL_MERGE = [
   "agentSessionId",
+  "holdOnRestart",
 ] as const satisfies readonly (keyof TerminalSnapshot)[];
 
 const TERMINAL_TRACKED_FIELD_SET: ReadonlySet<string> = new Set(TERMINAL_FIELD_LEVEL_MERGE);

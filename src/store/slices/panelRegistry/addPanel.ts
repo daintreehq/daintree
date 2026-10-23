@@ -903,6 +903,7 @@ export const createAddPanelActions = (
       // live-process consumers off a pane that has nothing to write to.
       ...(isRecoveryHold && { restoreRecovery: options.restoreRecovery, hasPty: false }),
       ...(options.restoreProvenance && { restoreProvenance: options.restoreProvenance }),
+      ...(options.lastAgentObservation && { lastAgentObservation: options.lastAgentObservation }),
       ...(options.launchedByPluginId && { launchedByPluginId: options.launchedByPluginId }),
       ...(options.holdOnRestart === true && { holdOnRestart: true as const }),
       ...(options.scratchpad && { scratchpad: options.scratchpad }),
@@ -982,6 +983,8 @@ export const createAddPanelActions = (
                   ptyTerminal.launchedByPluginId ?? existingPty?.launchedByPluginId,
                 holdOnRestart: ptyTerminal.holdOnRestart ?? existingPty?.holdOnRestart,
                 restoreProvenance: ptyTerminal.restoreProvenance ?? existingPty?.restoreProvenance,
+                lastAgentObservation:
+                  ptyTerminal.lastAgentObservation ?? existingPty?.lastAgentObservation,
                 // Prefer the fresh reconnect value if present; otherwise keep an existing
                 // live detection (live IPC event may have landed before reconnect flush).
                 detectedAgentId: ptyTerminal.detectedAgentId ?? existingPty?.detectedAgentId,
@@ -1061,6 +1064,8 @@ export const createAddPanelActions = (
                   ptyTerminal.launchedByPluginId ?? existingPty2?.launchedByPluginId,
                 holdOnRestart: ptyTerminal.holdOnRestart ?? existingPty2?.holdOnRestart,
                 restoreProvenance: ptyTerminal.restoreProvenance ?? existingPty2?.restoreProvenance,
+                lastAgentObservation:
+                  ptyTerminal.lastAgentObservation ?? existingPty2?.lastAgentObservation,
                 // Prefer the fresh reconnect value if present; otherwise keep an existing
                 // live detection (live IPC event may have landed before reconnect flush).
                 detectedAgentId: ptyTerminal.detectedAgentId ?? existingPty2?.detectedAgentId,

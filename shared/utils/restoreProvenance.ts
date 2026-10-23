@@ -1,5 +1,9 @@
 import { coerceAgentState } from "../types/agent.js";
-import type { TerminalRestoreDisposition, TerminalRestoreProvenance } from "../types/panel.js";
+import type {
+  TerminalAgentObservation,
+  TerminalRestoreDisposition,
+  TerminalRestoreProvenance,
+} from "../types/panel.js";
 
 const DISPOSITIONS: ReadonlySet<string> = new Set<TerminalRestoreDisposition>([
   "resume",
@@ -11,20 +15,29 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
+/** The latest instant a `Date` can hold; anything past it is no time at all. */
+const MAX_DATE_MS = 8.64e15;
+
 function isTimestamp(value: unknown): value is number {
-  return typeof value === "number" && Number.isFinite(value) && value > 0;
+  return typeof value === "number" && Number.isFinite(value) && value > 0 && value <= MAX_DATE_MS;
 }
 
-type LastSeen = NonNullable<TerminalRestoreProvenance["lastSeen"]>;
-
 /**
- * A saved agent state and the time it began, as one observation. "directing" is
- * a renderer-only overlay the serializer never writes, so it is no observation.
+ * An agent state and the time it began, as one observation. "directing" is a
+ * renderer-only overlay, never something the host reported, so it is none.
  */
-export function readLastSeen(agentState: unknown, at: unknown): LastSeen | undefined {
+export function readLastSeen(
+  agentState: unknown,
+  at: unknown
+): TerminalAgentObservation | undefined {
   const state = coerceAgentState(agentState);
   if (state === undefined || state === "directing") return undefined;
   return { agentState: state, ...(isTimestamp(at) && { at }) };
+}
+
+/** Read an on-disk observation (#14017); untrusted, like the rest of the snapshot. */
+export function sanitizeAgentObservation(value: unknown): TerminalAgentObservation | undefined {
+  return isPlainObject(value) ? readLastSeen(value.agentState, value.at) : undefined;
 }
 
 /**
@@ -39,14 +52,25 @@ export function sanitizeRestoreProvenance(value: unknown): TerminalRestoreProven
   if (typeof value.disposition !== "string" || !DISPOSITIONS.has(value.disposition)) {
     return undefined;
   }
-  const lastSeen = isPlainObject(value.lastSeen)
-    ? readLastSeen(value.lastSeen.agentState, value.lastSeen.at)
-    : undefined;
+  const lastSeen = sanitizeAgentObservation(value.lastSeen);
   return {
     at: value.at,
     disposition: value.disposition as TerminalRestoreDisposition,
     ...(lastSeen !== undefined && { lastSeen }),
   };
+}
+
+/**
+ * Provenance for a pane whose process is running right now. A record saying the
+ * pane is held contradicts that — it left the hold by a route nobody recorded,
+ * as when the window closed before saving the launch — so it is dropped rather
+ * than reported.
+ */
+export function sanitizeLiveRestoreProvenance(
+  value: unknown
+): TerminalRestoreProvenance | undefined {
+  const provenance = sanitizeRestoreProvenance(value);
+  return provenance?.disposition === "held" ? undefined : provenance;
 }
 
 /**
@@ -58,7 +82,7 @@ export interface RestoredSummary {
   at: number;
   disposition: TerminalRestoreDisposition;
   heldReason?: string;
-  lastSeen?: LastSeen;
+  lastSeen?: TerminalAgentObservation;
 }
 
 export function summarizeRestoreProvenance(panel: {

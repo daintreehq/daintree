@@ -12,6 +12,7 @@ import type {
   PanelTitleMode,
   RestoreRecoveryReason,
   SessionLostReason,
+  TerminalAgentObservation,
   TerminalRestoreProvenance,
   TerminalSpawnSource,
 } from "@shared/types/panel";
@@ -66,7 +67,11 @@ import { getDeserializer } from "@/config/panelKindSerialisers";
 import { useCcrPresetsStore } from "@/store/ccrPresetsStore";
 import { resolveAgentRuntimeSettings } from "@/utils/agentRuntimeSettings";
 import { sanitizeConversationCwd, sanitizeRestoreRecovery } from "@/utils/restoreRecovery";
-import { readLastSeen, sanitizeRestoreProvenance } from "@shared/utils/restoreProvenance";
+import {
+  readLastSeen,
+  sanitizeAgentObservation,
+  sanitizeLiveRestoreProvenance,
+} from "@shared/utils/restoreProvenance";
 import { sanitizeScratchpad } from "@/lib/terminalScratchpad";
 
 /**
@@ -215,13 +220,14 @@ export interface SavedTerminalData {
   /** Untrusted on-disk value (#12835) — sanitized via `sanitizeScratchpad`. */
   scratchpad?: unknown;
   /**
-   * Untrusted on-disk values (#14017). The saved agent state pair becomes the
-   * respawned pane's `restoreProvenance.lastSeen`; the rest are sanitized in
-   * `restoreProvenance.ts` and {@link readLaunchedByPluginId}.
+   * Untrusted on-disk values (#14017), sanitized in `restoreProvenance.ts` and
+   * {@link readLaunchedByPluginId}. The saved agent state pair is read only for
+   * a snapshot written before `lastAgentObservation` was kept.
    */
   agentState?: unknown;
   lastStateChange?: unknown;
   restoreProvenance?: unknown;
+  lastAgentObservation?: unknown;
   launchedByPluginId?: unknown;
   holdOnRestart?: unknown;
   /** @deprecated pre-#5459 legacy key; read-only fallback, never written. */
@@ -348,6 +354,22 @@ function resolveSavedCwd(savedCwd: string | undefined, projectRoot: string): str
 function normalizePtyKind(kind: PanelKind | undefined): PanelKind {
   if (!kind || kind === "agent") return "terminal";
   return kind;
+}
+
+/**
+ * What was last observed for a saved pane (#14017). A snapshot from before
+ * observations were kept falls back to its saved state pair — unless the pane
+ * was held, since a held pane saves no state and any pair it carries is older
+ * than the hold.
+ */
+function readSavedObservation(
+  saved: SavedTerminalData,
+  held: boolean
+): TerminalAgentObservation | undefined {
+  if (saved.lastAgentObservation !== undefined) {
+    return sanitizeAgentObservation(saved.lastAgentObservation);
+  }
+  return held ? undefined : readLastSeen(saved.agentState, saved.lastStateChange);
 }
 
 function readLaunchedByPluginId(saved: SavedTerminalData): string | undefined {
@@ -483,7 +505,10 @@ export function buildArgsForBackendTerminal(
     pluginId: saved.pluginId,
     // The PTY outlived the view, so this is the same process restore last
     // rebuilt, if it rebuilt it at all — kept as it was, never restamped.
-    restoreProvenance: sanitizeRestoreProvenance(saved.restoreProvenance),
+    restoreProvenance: sanitizeLiveRestoreProvenance(saved.restoreProvenance),
+    lastAgentObservation:
+      readLastSeen(backendTerminal.agentState, backendTerminal.lastStateChange) ??
+      readSavedObservation(saved, false),
     ...pluginHoldArgs(saved),
     lastActiveAt: sanitizeLastActiveAt(saved.lastActiveAt),
     scratchpad: sanitizeScratchpad(saved.scratchpad),
@@ -571,7 +596,10 @@ export function buildArgsForReconnectedFallback(
     extensionState: saved.extensionState,
     extensionStateVersion: restoredExtensionStateVersion(saved),
     pluginId: saved.pluginId,
-    restoreProvenance: sanitizeRestoreProvenance(saved.restoreProvenance),
+    restoreProvenance: sanitizeLiveRestoreProvenance(saved.restoreProvenance),
+    lastAgentObservation:
+      readLastSeen(reconnectedTerminal.agentState, reconnectedTerminal.lastStateChange) ??
+      readSavedObservation(saved, false),
     ...pluginHoldArgs(saved),
     lastActiveAt: sanitizeLastActiveAt(saved.lastActiveAt),
     scratchpad: sanitizeScratchpad(saved.scratchpad),
@@ -1013,13 +1041,8 @@ export function buildArgsForRespawn(
   const isDevPreview = kind === "dev-preview";
   const location = (saved.location === "dock" ? "dock" : "grid") as "grid" | "dock";
 
-  // A held pane has had no process since the restore that held it, so the last
-  // state anyone saw is still the one that restore recorded (#14017).
   const lastSeen = isAgentPanel
-    ? savedRecovery
-      ? (sanitizeRestoreProvenance(saved.restoreProvenance)?.lastSeen ??
-        readLastSeen(saved.agentState, saved.lastStateChange))
-      : readLastSeen(saved.agentState, saved.lastStateChange)
+    ? readSavedObservation(saved, savedRecovery !== undefined)
     : undefined;
   const restoreProvenance: TerminalRestoreProvenance | undefined =
     respawnKind === "terminal"
@@ -1100,6 +1123,9 @@ export function buildArgsForRespawn(
       : sanitizeConversationCwd(saved.conversationCwd),
     restoreRecovery,
     restoreProvenance,
+    // Carried as the pane's own until its new process reports something, so a
+    // pane held again, or resumed and closed before reporting, keeps it (#14017).
+    lastAgentObservation: lastSeen,
     ...pluginHoldArgs(saved),
     // Prefer the launch env captured in the snapshot (#10922) so the restored
     // session replays the same provider environment (e.g. a Z.AI/GLM preset or a

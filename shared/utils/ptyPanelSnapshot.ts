@@ -37,6 +37,7 @@ export type PtySnapshotSource = Pick<
   | "conversationCwd"
   | "restoreRecovery"
   | "restoreProvenance"
+  | "lastAgentObservation"
   | "launchedByPluginId"
   | "holdOnRestart"
   | "scratchpad"
@@ -78,9 +79,10 @@ export function serializePtyPanel(t: PtySnapshotSource): Partial<PanelSnapshot> 
     ...(typeof t.fallbackChainIndex === "number" && { fallbackChainIndex: t.fallbackChainIndex }),
     ...(t.conversationCwd && { conversationCwd: t.conversationCwd }),
     ...(held && { restoreRecovery: t.restoreRecovery }),
-    // Written for a held pane too: it carries the last state seen before the
-    // restore that held it, which the omitted live state below no longer can.
+    // Both written for a held pane too: they describe the pane, and the last
+    // state observed for it, never a process the hold would start.
     ...(t.restoreProvenance && { restoreProvenance: t.restoreProvenance }),
+    ...(t.lastAgentObservation && { lastAgentObservation: t.lastAgentObservation }),
     ...(t.launchedByPluginId && { launchedByPluginId: t.launchedByPluginId }),
     ...(t.holdOnRestart === true && { holdOnRestart: true as const }),
     // Written for a held pane too: the notes belong to the pane, not its process.

@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, render, screen, waitFor, fireEvent, within } from "@testing-library/react";
+import { render, screen, waitFor, fireEvent, within } from "@testing-library/react";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { TerminalInfoDialog } from "../TerminalInfoDialog";
 import type { TerminalInfoPayload } from "@/types/electron";
@@ -626,11 +626,13 @@ describe("TerminalInfoDialog", () => {
           result: { id: "test-id", kind: "terminal", cwd: "/home/user", hasPty: false },
         });
         renderDialog();
-        await screen.findByTestId("terminal-info-body");
+        expect(await screen.findByText("/home/user")).toBeTruthy();
 
-        await act(async () => {
-          await new Promise((resolve) => setTimeout(resolve, 2500));
-        });
+        // The pane moves while the dialog is open; only a refresh can show it.
+        mockPanelsById = {
+          "test-id": { ...(mockPanelsById["test-id"] as object), cwd: "/worktrees/moved" },
+        };
+        expect(await screen.findByText("/worktrees/moved", {}, { timeout: 4000 })).toBeTruthy();
 
         expect(getInfo).not.toHaveBeenCalled();
         expect(screen.queryByTestId("terminal-info-error")).toBeNull();

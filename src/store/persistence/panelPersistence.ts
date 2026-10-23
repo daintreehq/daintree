@@ -55,15 +55,18 @@ const BASE_PANEL_FIELDS = [
 ] as const satisfies readonly (keyof PanelSnapshot)[];
 const BASE_PANEL_FIELD_SET: ReadonlySet<string> = new Set(BASE_PANEL_FIELDS);
 
-// Fields Main can author out-of-band, so the delta states which of them this
-// renderer actually changed rather than letting the serialized value speak for
-// itself (#11461). `agentSessionId` is captured by the graceful-shutdown path
-// straight into project state and never pushed back into the live store: an
-// ordinary post-exit save omits a value it never had (which must not erase what
-// Main just wrote), and a stale sibling window carries one it no longer owns
-// (which must not resurrect a session another window consumed).
+// Fields the delta states this renderer actually changed rather than letting the
+// serialized value speak for itself (#11461). `agentSessionId` is captured by the
+// graceful-shutdown path straight into project state and never pushed back into
+// the live store: an ordinary post-exit save omits a value it never had (which
+// must not erase what Main just wrote), and a stale sibling window carries one it
+// no longer owns (which must not resurrect a session another window consumed).
+// `holdOnRestart` (#14017) is set in one window, and a sibling's agent-state save
+// carries the copy from before, which must not erase the plugin's hold.
+// Mirrors Main's `TERMINAL_FIELD_LEVEL_MERGE`.
 const TERMINAL_TRACKED_FIELDS = [
   "agentSessionId",
+  "holdOnRestart",
 ] as const satisfies readonly (keyof PanelSnapshot)[];
 
 export function panelToSnapshot(

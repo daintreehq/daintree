@@ -83,6 +83,7 @@ const PTY_FIELD_CLASSIFICATION = {
   // How restore last rebuilt the pane and the plugin hold (#14017) — a pane
   // held across restarts keeps the state last seen before the first of them.
   restoreProvenance: true,
+  lastAgentObservation: true,
   launchedByPluginId: true,
   holdOnRestart: true,
   // The terminal's own notes (#12835) — persisted so they outlive a restart.
@@ -459,6 +460,7 @@ const terminalFixture: PtySerializeInput = {
     disposition: "resume",
     lastSeen: { agentState: "idle", at: 1_699_999_999_000 },
   },
+  lastAgentObservation: { agentState: "idle", at: 1_700_000_000_003 },
   launchedByPluginId: "acme.orchestrator",
   holdOnRestart: true,
   scratchpad: { content: "- check CI", collapsed: true, width: 320 },
@@ -651,8 +653,9 @@ describe("panel serializer field coverage", () => {
     >;
     expect(output.restoreRecovery).toEqual({ reason: "sibling-owns-resume-latest-slot" });
     expect(output.conversationCwd).toBe("/home/origin");
-    // The last state seen before the hold rides the provenance record (#14017).
+    // What was last observed for the pane outlives its process (#14017).
     expect(output.restoreProvenance).toEqual(terminalFixture.restoreProvenance);
+    expect(output.lastAgentObservation).toEqual(terminalFixture.lastAgentObservation);
     expect(output).not.toHaveProperty("agentSessionId");
     expect(output).not.toHaveProperty("agentState");
     expect(output).not.toHaveProperty("lastStateChange");

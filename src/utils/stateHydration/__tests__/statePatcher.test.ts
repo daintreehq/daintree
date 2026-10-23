@@ -4103,12 +4103,14 @@ describe("restore provenance and the plugin hold (#14017)", () => {
       ...options,
     });
 
-  it("records a resume with the agent state saved before the restart", () => {
+  it("records a resume with the agent state last observed before the restart", () => {
     const result = respawn({
       ...claudePane,
       agentSessionId: "sess-c",
-      agentState: "idle",
-      lastStateChange: 4_000,
+      // The display pair can hold a guess the host never confirmed.
+      agentState: "working",
+      lastStateChange: 4_500,
+      lastAgentObservation: { agentState: "idle", at: 4_000 },
     });
 
     expect(result.command).toBe("claude --resume sess-c");
@@ -4117,6 +4119,30 @@ describe("restore provenance and the plugin hold (#14017)", () => {
       disposition: "resume",
       lastSeen: { agentState: "idle", at: 4_000 },
     });
+    // The pane keeps it as its own until its new process reports something.
+    expect(result.lastAgentObservation).toEqual({ agentState: "idle", at: 4_000 });
+  });
+
+  it("falls back to the saved state pair for a snapshot from before observations were kept", () => {
+    const result = respawn({
+      ...claudePane,
+      agentSessionId: "sess-c",
+      agentState: "idle",
+      lastStateChange: 4_000,
+    });
+
+    expect(result.restoreProvenance?.lastSeen).toEqual({ agentState: "idle", at: 4_000 });
+  });
+
+  it("never reads a held pane's leftover state pair as an observation", () => {
+    const result = respawn({
+      ...claudePane,
+      restoreRecovery: { reason: "resume-deferred" },
+      agentState: "working",
+      lastStateChange: 4_000,
+    });
+
+    expect(result.restoreProvenance).toEqual({ at: 5_000, disposition: "held" });
   });
 
   it("records a resume-latest launch as a resume", () => {
@@ -4184,20 +4210,26 @@ describe("restore provenance and the plugin hold (#14017)", () => {
     });
   });
 
-  it("takes the newer saved state once a resumed pane has run again", () => {
-    const result = respawn({
-      ...claudePane,
-      agentSessionId: "sess-c",
-      agentState: "working",
-      lastStateChange: 8_000,
-      restoreProvenance: {
-        at: 5_000,
-        disposition: "resume",
-        lastSeen: { agentState: "idle", at: 4_000 },
+  it("takes the newer observation once a resumed pane has run again", () => {
+    const result = respawn(
+      {
+        ...claudePane,
+        agentSessionId: "sess-c",
+        lastAgentObservation: { agentState: "working", at: 8_000 },
+        restoreProvenance: {
+          at: 5_000,
+          disposition: "resume",
+          lastSeen: { agentState: "idle", at: 4_000 },
+        },
       },
-    });
+      { restoredAt: 9_000 }
+    );
 
-    expect(result.restoreProvenance?.lastSeen).toEqual({ agentState: "working", at: 8_000 });
+    expect(result.restoreProvenance).toEqual({
+      at: 9_000,
+      disposition: "resume",
+      lastSeen: { agentState: "working", at: 8_000 },
+    });
   });
 
   it("never reports a renderer-only or unknown state as seen", () => {
@@ -4263,6 +4295,35 @@ describe("restore provenance and the plugin hold (#14017)", () => {
     expect(result.restoreRecovery).toBeUndefined();
     expect(result.launchedByPluginId).toBeUndefined();
     expect(result.holdOnRestart).toBeUndefined();
+  });
+
+  it("drops held provenance for a PTY that is running, and takes the host's observation", () => {
+    const saved = {
+      id: "t1",
+      kind: "terminal" as const,
+      cwd: "/repo",
+      restoreProvenance: { at: 5_000, disposition: "held" as const },
+      lastAgentObservation: { agentState: "idle" as const, at: 4_000 },
+    };
+    const backend = {
+      id: "t1",
+      cwd: "/repo",
+      kind: "terminal" as const,
+      agentState: "working" as const,
+      lastStateChange: 6_000,
+    };
+
+    for (const args of [
+      buildArgsForBackendTerminal(backend, saved, "/repo"),
+      buildArgsForReconnectedFallback(backend, saved, "/repo"),
+    ]) {
+      expect(args.restoreProvenance).toBeUndefined();
+      expect(args.lastAgentObservation).toEqual({ agentState: "working", at: 6_000 });
+    }
+    // A record with no state of its own keeps what was saved.
+    expect(
+      buildArgsForBackendTerminal({ id: "t1", cwd: "/repo" }, saved, "/repo").lastAgentObservation
+    ).toEqual({ agentState: "idle", at: 4_000 });
   });
 
   it("keeps a surviving PTY's provenance as it was rather than restamping it", () => {
