@@ -3,6 +3,7 @@
 // metadata every view registers at boot (#14275). Nothing here may import
 // workflowCreationActions.ts at runtime.
 import type { ActionCallbacks } from "../actionTypes";
+import type { z } from "zod";
 import type { ActionContext } from "@shared/types/actions";
 import type { WorktreeBranchCollisionPolicy } from "@shared/types/git";
 import { worktreeClient, copyTreeClient, forgeClient } from "@/clients";
@@ -23,7 +24,7 @@ import { resolveAgentLaunchKind } from "@/utils/agentLaunchValidation";
 // this), but `@/config/agents` pulls the React icon map into the action module
 // graph, which action registration has no business importing.
 import { isEffectivelyRegisteredAgent } from "@shared/config/agentRegistry";
-import {
+import type {
   CreateWithRecipeArgsSchema,
   StartWorkOnIssueArgsSchema,
 } from "./workflowCreationActionArgs";
@@ -37,9 +38,24 @@ import {
  */
 const NON_TERMINAL_PANEL_IDS = new Set(["browser", "dev-preview"]);
 
+/**
+ * Read an action's validated args as its schema's output type.
+ *
+ * `run` receives `unknown`, but ActionService has already parsed `argsSchema`
+ * and hands over the parsed value, so the schema named here — the same one
+ * workflowCreationActions.ts registers — is the type the args actually have. The cast is
+ * written once here rather than at each body, and takes the schema as a type so
+ * this chunk never imports the args schemas at runtime.
+ */
+function argsOf<S extends z.ZodType>(args: unknown): z.output<S> {
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- ActionService validated `argsSchema` before run()
+  return args as z.output<S>;
+}
+
 export const workflowCreationActionRuns = {
   "worktree.createWithRecipe": async (args: unknown, ctx: ActionContext) => {
-    const { source, recipeId, spawnedBy, focusPolicy } = CreateWithRecipeArgsSchema.parse(args);
+    const { source, recipeId, spawnedBy, focusPolicy } =
+      argsOf<typeof CreateWithRecipeArgsSchema>(args);
     // Read off the arm rather than the top level. A `.refine()` cannot
     // express this on the wire — Zod does not emit refinements — so the old
     // top-level `issueNumber` advertised itself as valid beside a
@@ -320,7 +336,7 @@ export const workflowCreationActionRuns = {
       injectContext,
       spawnedBy,
       focusPolicy,
-    } = StartWorkOnIssueArgsSchema.parse(args);
+    } = argsOf<typeof StartWorkOnIssueArgsSchema>(args);
     const currentProject = useProjectStore.getState().currentProject;
     if (!currentProject) {
       throw new Error("No active project");

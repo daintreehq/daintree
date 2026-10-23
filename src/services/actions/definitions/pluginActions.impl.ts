@@ -2,6 +2,7 @@
 // in pluginActions.ts, which keeps the metadata every view registers at boot
 // (#14275). Nothing here may import pluginActions.ts at runtime.
 import type { ActionCallbacks } from "../actionTypes";
+import type { z } from "zod";
 import type { ActionContext } from "@shared/types/actions";
 import { pluginClient } from "@/clients/pluginClient";
 import { parseProjectPluginInstanceKey } from "@shared/types/plugin";
@@ -33,21 +34,35 @@ import { pluginSilenceScope } from "@/lib/notificationSourceLabel";
 import { systemClient } from "@/clients/systemClient";
 import { revealCopy } from "@/components/FileViewer/revealCopy";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
-import {
+import type {
   BackupDatabasesArgsSchema,
   CapturePanelArgsSchema,
-  DIAGNOSTICS_LOG_LIMIT_DEFAULT,
   DiagnosticsArgsSchema,
   OpenSettingsArgsSchema,
   ReloadPanelArgsSchema,
   SetNotificationsSilencedArgsSchema,
   ValidateArgsSchema,
 } from "./pluginActionArgs";
+import { DIAGNOSTICS_LOG_LIMIT_DEFAULT } from "./pluginDiagnosticsLimits";
 
 /** The folder part of a path main returned, kept in the platform's own separators. */
 function dirnameOf(filePath: string): string {
   const cut = Math.max(filePath.lastIndexOf("/"), filePath.lastIndexOf("\\"));
   return cut > 0 ? filePath.slice(0, cut) : filePath;
+}
+
+/**
+ * Read an action's validated args as its schema's output type.
+ *
+ * `run` receives `unknown`, but ActionService has already parsed `argsSchema`
+ * and hands over the parsed value, so the schema named here — the same one
+ * pluginActions.ts registers — is the type the args actually have. The cast is
+ * written once here rather than at each body, and takes the schema as a type so
+ * this chunk never imports the args schemas at runtime.
+ */
+function argsOf<S extends z.ZodType>(args: unknown): z.output<S> {
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- ActionService validated `argsSchema` before run()
+  return args as z.output<S>;
 }
 
 export const pluginActionRuns = {
@@ -59,7 +74,7 @@ export const pluginActionRuns = {
     }
   },
   "plugin.reloadPanel": async (args: unknown) => {
-    const { panelId } = ReloadPanelArgsSchema.parse(args);
+    const { panelId } = argsOf<typeof ReloadPanelArgsSchema>(args);
     const confirm = usePluginPanelReloadConfirmStore.getState();
     const approved = confirm.consumeApproval(panelId);
     const panel = usePanelStore.getState().panelsById[panelId];
@@ -78,7 +93,7 @@ export const pluginActionRuns = {
     return { panelId, outcome };
   },
   "plugin.capturePanel": async (args: unknown) => {
-    const { panelId } = CapturePanelArgsSchema.parse(args);
+    const { panelId } = argsOf<typeof CapturePanelArgsSchema>(args);
     const panel = usePanelStore.getState().panelsById[panelId];
     // Refusals of the target itself: a retry with the same id cannot work.
     if (!panel) throw new UnactionableTargetError(`No panel with id "${panelId}"`);
@@ -124,9 +139,9 @@ export const pluginActionRuns = {
     };
   },
   "plugin.validate": async (args: unknown) =>
-    pluginClient.validateManifest(ValidateArgsSchema.parse(args).path),
+    pluginClient.validateManifest(argsOf<typeof ValidateArgsSchema>(args).path),
   "plugin.diagnostics": async (rawArgs: unknown, ctx: ActionContext) => {
-    const args = DiagnosticsArgsSchema.parse(rawArgs);
+    const args = argsOf<typeof DiagnosticsArgsSchema>(rawArgs);
     const limit = args.logLimit ?? DIAGNOSTICS_LOG_LIMIT_DEFAULT;
     const snapshot = await pluginClient.getDiagnosticsSnapshot();
 
@@ -219,7 +234,7 @@ export const pluginActionRuns = {
     );
   },
   "plugin.openSettings": async (args: unknown, ctx: ActionContext, callbacks: ActionCallbacks) => {
-    const { pluginId, key, section, page, scope } = OpenSettingsArgsSchema.parse(args);
+    const { pluginId, key, section, page, scope } = argsOf<typeof OpenSettingsArgsSchema>(args);
     const projectId = ctx?.projectId ?? useProjectStore.getState().currentProject?.id ?? null;
     const resolution = resolvePluginSettingsTarget(
       pluginId,
@@ -259,7 +274,7 @@ export const pluginActionRuns = {
     };
   },
   "plugin.backupDatabases": async (args: unknown) => {
-    const { pluginId } = BackupDatabasesArgsSchema.parse(args);
+    const { pluginId } = argsOf<typeof BackupDatabasesArgsSchema>(args);
     const retry = () =>
       void actionService.dispatch("plugin.backupDatabases", { pluginId }, { source: "user" });
     let outcome;
@@ -308,7 +323,7 @@ export const pluginActionRuns = {
     return outcome;
   },
   "plugin.setNotificationsSilenced": async (args: unknown) => {
-    const { pluginId, silenced } = SetNotificationsSilencedArgsSchema.parse(args);
+    const { pluginId, silenced } = argsOf<typeof SetNotificationsSilencedArgsSchema>(args);
     const retry = () =>
       void actionService.dispatch(
         "plugin.setNotificationsSilenced",

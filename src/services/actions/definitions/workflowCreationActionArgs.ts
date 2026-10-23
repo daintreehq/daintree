@@ -1,9 +1,9 @@
 import { z } from "zod";
 import { TerminalSpawnSourceSchema, AddPanelFocusPolicySchema } from "./schemas";
 
-// Shared by the workflow-creation actions' metadata in workflowCreationActions.ts
-// and their runs in workflowCreationActions.impl.ts, which parse their args with
-// these rather than cast them.
+// The workflow-creation actions' input schemas, registered by
+// workflowCreationActions.ts. Their runs in workflowCreationActions.impl.ts
+// import them as types only, so this module stays out of the run bodies' chunk.
 
 /**
  * Where the managed creator's branch comes from, as a discriminated union.

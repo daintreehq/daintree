@@ -1,11 +1,12 @@
 import { z } from "zod";
+import {
+  DIAGNOSTICS_LOG_LIMIT_DEFAULT,
+  DIAGNOSTICS_LOG_LIMIT_MAX,
+} from "./pluginDiagnosticsLimits";
 
-// Shared by the plugin actions' metadata in pluginActions.ts and their runs in
-// pluginActions.impl.ts, which parse their args with these rather than cast them.
-
-/** Bounds the log tail so one call can't ship a whole 500-line ring buffer. */
-export const DIAGNOSTICS_LOG_LIMIT_DEFAULT = 50;
-const DIAGNOSTICS_LOG_LIMIT_MAX = 500;
+// The plugin actions' input schemas, registered by pluginActions.ts. Their runs
+// in pluginActions.impl.ts import them as types only, so this module stays out
+// of the run bodies' chunk.
 
 export const ReloadPanelArgsSchema = z.object({
   panelId: z.string().min(1).describe("The plugin panel to reload; focus is never assumed."),
