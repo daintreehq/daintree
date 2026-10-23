@@ -104,16 +104,38 @@ vi.mock("../../../services/plugin/pluginNotificationSilences.js", () => ({
   },
 }));
 const mockMetricsRecordInvoke = vi.hoisted(() => vi.fn());
-const { mockGetProjectLayoutSeed, mockAdvanceProjectLayoutSeed } = vi.hoisted(() => ({
+const {
+  mockGetProjectLayoutSeed,
+  mockAdvanceProjectLayoutSeed,
+  mockReleaseProjectLayoutSeedClaim,
+  mockGetProjectWelcome,
+  mockSetProjectWelcome,
+} = vi.hoisted(() => ({
   mockGetProjectLayoutSeed: vi.fn(),
   mockAdvanceProjectLayoutSeed: vi.fn(),
+  mockReleaseProjectLayoutSeedClaim: vi.fn(),
+  mockGetProjectWelcome: vi.fn(),
+  mockSetProjectWelcome: vi.fn(),
+}));
+
+vi.mock("../../../services/plugin/projectApplicationWelcomes.js", () => ({
+  getProjectWelcome: mockGetProjectWelcome,
+  setProjectWelcome: mockSetProjectWelcome,
+  isProjectWelcomeStatus: (value: unknown) => value === "skipped" || value === "completed",
+  isWelcomeVersion: (value: unknown) =>
+    typeof value === "number" && Number.isSafeInteger(value) && value > 0,
 }));
 
 vi.mock("../../../services/plugin/projectLayoutSeeds.js", () => ({
   getProjectLayoutSeed: mockGetProjectLayoutSeed,
   advanceProjectLayoutSeed: mockAdvanceProjectLayoutSeed,
+  releaseProjectLayoutSeedClaim: mockReleaseProjectLayoutSeedClaim,
   isProjectLayoutSeedStatus: (value: unknown) =>
-    value === "pending" || value === "offered" || value === "settled",
+    value === "pending" ||
+    value === "offered" ||
+    value === "applying" ||
+    value === "failed" ||
+    value === "settled",
   isProjectLayoutSeedOutcome: (value: unknown) =>
     value === "applied" || value === "opened" || value === "dismissed" || value === "ineligible",
 }));
@@ -3218,7 +3240,8 @@ describe("project-local plugin handlers", () => {
       PROJECT,
       "pending",
       "settled",
-      "applied"
+      "applied",
+      1
     );
 
     mockAdvanceProjectLayoutSeed.mockClear();
@@ -3233,6 +3256,86 @@ describe("project-local plugin handlers", () => {
       /no project/
     );
     expect(mockAdvanceProjectLayoutSeed).not.toHaveBeenCalled();
+  });
+
+  it("lets a claim on the seed lapse with the view that holds it (#14106)", async () => {
+    const { EventEmitter } = await import("node:events");
+    mockGetProjectForWebContents.mockReturnValue(PROJECT);
+    const advance = getHandler("plugin:project-layout-seed-advance");
+    const view = Object.assign(new EventEmitter(), { id: 7, isDestroyed: () => false });
+
+    mockAdvanceProjectLayoutSeed.mockReturnValue({
+      advanced: true,
+      record: { status: "applying", outcome: "applied", at: 1 },
+    });
+    await advance({ sender: view }, "pending", "applying", "applied");
+    expect(mockAdvanceProjectLayoutSeed).toHaveBeenLastCalledWith(
+      PROJECT,
+      "pending",
+      "applying",
+      "applied",
+      7
+    );
+    // A reload replaces the renderer that was applying.
+    view.emit("did-navigate");
+    expect(mockReleaseProjectLayoutSeedClaim).toHaveBeenCalledWith(PROJECT, 7);
+    expect(view.listenerCount("render-process-gone")).toBe(0);
+
+    // A claim that ends normally stops watching its view.
+    mockReleaseProjectLayoutSeedClaim.mockClear();
+    await advance({ sender: view }, "failed", "applying");
+    mockAdvanceProjectLayoutSeed.mockReturnValue({
+      advanced: true,
+      record: { status: "settled", outcome: "applied", at: 2 },
+    });
+    await advance({ sender: view }, "applying", "settled");
+    expect(view.listenerCount("did-navigate")).toBe(0);
+    view.emit("render-process-gone");
+    expect(mockReleaseProjectLayoutSeedClaim).not.toHaveBeenCalled();
+  });
+
+  it("reads and records the SENDER project's application welcome (#14106)", async () => {
+    mockGetProjectForWebContents.mockReturnValue(PROJECT);
+    const get = getHandler("plugin:project-welcome-get");
+    const set = getHandler("plugin:project-welcome-set");
+    mockGetProjectWelcome.mockReturnValue({ version: 1, status: "skipped", at: 1 });
+    mockSetProjectWelcome.mockReturnValue({ version: 2, status: "completed", at: 2 });
+
+    expect(await get({ sender: { id: 1 } }, "acme.ledger", "welcome")).toEqual({
+      version: 1,
+      status: "skipped",
+      at: 1,
+    });
+    expect(mockGetProjectWelcome).toHaveBeenCalledWith(PROJECT, "acme.ledger", "welcome");
+    expect(await set({ sender: { id: 1 } }, "acme.ledger", "welcome", 2, "completed")).toEqual({
+      version: 2,
+      status: "completed",
+      at: 2,
+    });
+    expect(mockSetProjectWelcome).toHaveBeenCalledWith(
+      PROJECT,
+      "acme.ledger",
+      "welcome",
+      2,
+      "completed"
+    );
+
+    mockSetProjectWelcome.mockClear();
+    await expect(set({ sender: { id: 1 } }, "acme.ledger", "welcome", 0, "completed")).rejects.toThrow(
+      /positive integer/
+    );
+    await expect(set({ sender: { id: 1 } }, "acme.ledger", "welcome", 1, "started")).rejects.toThrow(
+      /unknown status/
+    );
+    await expect(set({ sender: { id: 1 } }, 3, "welcome", 1, "skipped")).rejects.toThrow(
+      /must be strings/
+    );
+    mockGetProjectForWebContents.mockReturnValue(null);
+    expect(await get({ sender: { id: 1 } }, "acme.ledger", "welcome")).toBeNull();
+    await expect(set({ sender: { id: 1 } }, "acme.ledger", "welcome", 1, "skipped")).rejects.toThrow(
+      /no project/
+    );
+    expect(mockSetProjectWelcome).not.toHaveBeenCalled();
   });
 
   it("sets the visibility default and validates its arguments", async () => {

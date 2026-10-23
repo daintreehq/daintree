@@ -2604,6 +2604,19 @@ export interface GeneratedIpcInvokeMap {
     args: [pluginId: string, visible: boolean | null];
     result: void;
   };
+  "plugin:project-welcome-get": {
+    args: [ownerId: string, tourId: string];
+    result: import("../plugin.js").ProjectWelcomeRecord | null;
+  };
+  "plugin:project-welcome-set": {
+    args: [
+      ownerId: string,
+      tourId: string,
+      version: number,
+      status: import("../plugin.js").ProjectWelcomeStatus,
+    ];
+    result: import("../plugin.js").ProjectWelcomeRecord;
+  };
   "plugin:recipe-metadata-update": {
     args: [recipeId: string, updates: import("../project.js").PluginRecipeMetadataPatch];
     result: import("../project.js").TerminalRecipe;

@@ -554,17 +554,41 @@ export interface PluginLayoutConfig {
  *   arrives while the grid and dock are empty is applied.
  * - `offered` — the user opened something first, so a default layout is only
  *   ever offered, never applied on its own.
+ * - `applying` — one view claimed the seed and is opening the layout now.
+ *   Written before anything opens (#14106), so an apply cut short is seen.
+ * - `failed` — the apply threw, left entries unopened, or its view went away
+ *   mid-apply (a crash, a reload, a quit). Waits for the user's Retry, which
+ *   reuses whatever the earlier attempt already opened, or their dismissal.
  * - `settled` — used, declined, or never eligible. Nothing more happens.
  */
-export type ProjectLayoutSeedStatus = "pending" | "offered" | "settled";
+export type ProjectLayoutSeedStatus = "pending" | "offered" | "applying" | "failed" | "settled";
 
 /** Why a seed settled, kept for diagnostics. */
 export type ProjectLayoutSeedOutcome = "applied" | "opened" | "dismissed" | "ineligible";
 
 export interface ProjectLayoutSeedRecord {
   status: ProjectLayoutSeedStatus;
+  /**
+   * Why a seed settled. While `applying` or `failed`, how the apply began —
+   * `applied` on its own or `opened` from the offer — which it settles with.
+   */
   outcome?: ProjectLayoutSeedOutcome;
   /** Epoch ms of the last change. */
+  at: number;
+}
+
+/**
+ * What the user did with a project application's welcome (#14106): skipped
+ * it, or played it to the end. Either way it is not offered again until the
+ * application declares a higher welcome revision.
+ */
+export type ProjectWelcomeStatus = "skipped" | "completed";
+
+export interface ProjectWelcomeRecord {
+  /** The `application.welcomeTour.version` the decision was made under. */
+  version: number;
+  status: ProjectWelcomeStatus;
+  /** Epoch ms of the decision. */
   at: number;
 }
 

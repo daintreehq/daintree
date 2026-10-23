@@ -43,6 +43,8 @@ export const PLUGIN_METHOD_CHANNELS = {
   setProjectSurfaceChoices: "plugin:project-surface-choices-set",
   getProjectLayoutSeed: "plugin:project-layout-seed-get",
   advanceProjectLayoutSeed: "plugin:project-layout-seed-advance",
+  getProjectWelcome: "plugin:project-welcome-get",
+  setProjectWelcome: "plugin:project-welcome-set",
   getFileEditorChoices: "plugin:file-editor-choices-get",
   setFileEditorChoice: "plugin:file-editor-choice-set",
   getProjectPlugins: "plugin:project-list",

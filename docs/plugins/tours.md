@@ -17,7 +17,7 @@ Tours need Daintree 0.39.0 or later: `contributes.tours` and the `@daintreehq/to
 | Length | As many chapters as the story needs, up to 32 | A couple of chapters |
 | Wiring in your code | None | None — the menu item appears once the tour registers and disappears when it is withdrawn |
 
-Both are the same contribution, validated and played the same way. If two tours name the same panel, the first wins. A project plugin may declare tours too; they are offered only in that project, and never play on their own when the project opens.
+Both are the same contribution, validated and played the same way. If two tours name the same panel, the first wins. A project plugin may declare tours too; they are offered only in that project, and never play on their own when the project opens. The one tour a project shows unasked is its application's welcome — the tour a plugin names as [`application.welcomeTour`](./manifest.md#application) — and even that is only offered, as a strip with Start and Skip, never started: once per project and welcome `version`, in the project view on screen, after the plugin is trusted and the project's first-open layout is done with.
 
 ## The standard
 
