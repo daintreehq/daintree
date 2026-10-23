@@ -17,7 +17,10 @@ import {
   createRouteWakeScheduler,
   type PluginEventRouteDeps,
 } from "../pluginEventRoutes.js";
-import type { PluginWorktreeEventPayload, PluginWorktreeSnapshotFetchResult } from "../pluginEventScope.js";
+import type {
+  PluginWorktreeEventPayload,
+  PluginWorktreeSnapshotFetchResult,
+} from "../pluginEventScope.js";
 import { events } from "../../events.js";
 import {
   ProjectPresenceTracker,
@@ -52,7 +55,10 @@ function worktree(id: string, root = ROOT_A): WorktreeSnapshot {
   } as unknown as WorktreeSnapshot;
 }
 
-const ok = (projectId: string, snapshots: WorktreeSnapshot[]): PluginWorktreeSnapshotFetchResult => ({
+const ok = (
+  projectId: string,
+  snapshots: WorktreeSnapshot[]
+): PluginWorktreeSnapshotFetchResult => ({
   status: "ok",
   projectId,
   snapshots,

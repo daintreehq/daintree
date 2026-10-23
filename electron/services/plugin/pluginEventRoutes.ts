@@ -20,7 +20,10 @@ import {
   type PluginEventScopeDeps,
   type PluginWorktreeEventPayload,
 } from "./pluginEventScope.js";
-import { createSubscriptionCoalescer, WorktreeChangeTracker } from "./pluginSubscriptionCoalescing.js";
+import {
+  createSubscriptionCoalescer,
+  WorktreeChangeTracker,
+} from "./pluginSubscriptionCoalescing.js";
 
 /** Builds a wake when its turn comes, or says there is nothing left to deliver. */
 type TakeWake = () => PluginEventRouteWake | null;
@@ -150,10 +153,7 @@ function emptyGatheredChange(): GatheredWorktreeChange {
  * Fold one read's diff into a gathered change so it stays the net change
  * across both: added then removed is nothing, removed then added is a change.
  */
-function gatherWorktreeChange(
-  into: GatheredWorktreeChange,
-  diff: PluginWorktreesChange
-): void {
+function gatherWorktreeChange(into: GatheredWorktreeChange, diff: PluginWorktreesChange): void {
   for (const id of diff.added) {
     if (into.removed.delete(id)) into.changed.add(id);
     else into.added.add(id);
@@ -211,8 +211,7 @@ export function createPluginEventRoutes(
   const disposers: Array<() => void> = [];
   let disposed = false;
 
-  const suspended = (): boolean =>
-    disposed || !scope.isBound() || deps.isWorkerFailed(pluginId);
+  const suspended = (): boolean => disposed || !scope.isBound() || deps.isWorkerFailed(pluginId);
   const scheduler = createRouteWakeScheduler({
     suspended,
     run: async (wake) => {
@@ -239,7 +238,9 @@ export function createPluginEventRoutes(
         return;
       }
       if (snapshot.previousState === "waiting") return;
-      scheduler.offer(slot, () => Object.freeze({ event: "agentWaiting" as const, agent: snapshot }));
+      scheduler.offer(slot, () =>
+        Object.freeze({ event: "agentWaiting" as const, agent: snapshot })
+      );
     };
     // The bus is a plain EventEmitter: a throw here would stop every listener
     // registered after this one from hearing the transition.
@@ -265,7 +266,9 @@ export function createPluginEventRoutes(
           scheduler.cancel(slot);
           continue;
         }
-        scheduler.offer(slot, () => Object.freeze({ event: "projectForeground" as const, presence }));
+        scheduler.offer(slot, () =>
+          Object.freeze({ event: "projectForeground" as const, presence })
+        );
       }
     });
     disposers.push(unsubscribe);

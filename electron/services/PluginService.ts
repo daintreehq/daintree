@@ -3390,7 +3390,8 @@ export class PluginService {
             attachWorktreeEvent: (event, handler) =>
               this.attachWorktreeEvent(pluginId, event, handler),
             isWorkerFailed: (id) => this.workerStatuses.get(id)?.state === "failed",
-            dispatch: (actionId, wake) => this.dispatchEventRouteWake(pluginId, plugin, actionId, wake),
+            dispatch: (actionId, wake) =>
+              this.dispatchEventRouteWake(pluginId, plugin, actionId, wake),
           },
           pluginId,
           plugin.binding ?? UNBOUND_PLUGIN_HOST_BINDING,

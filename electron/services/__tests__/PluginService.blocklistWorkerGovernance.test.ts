@@ -833,8 +833,7 @@ describe("Manifest event routes (#13816)", () => {
     await service.activatePlugin("acme.looping");
     const host = devWorkerMock.instances[base.hosts];
     const onCrashLoop = host.on.mock.calls.find(([event]) => event === "crash-loop")?.[1] as
-      | ((code: number) => void)
-      | undefined;
+      ((code: number) => void) | undefined;
     expect(onCrashLoop).toBeTypeOf("function");
     onCrashLoop?.(1);
 

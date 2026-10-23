@@ -3263,10 +3263,7 @@ function buildPluginManifestSchema(origin: PluginOrigin) {
       activationEvents: z.array(z.literal("onStartupFinished")).default([]),
       // One route per event at most, so the cap is the size of the closed list.
       // Cross-checks against `commands` and `capabilities` live in `superRefine`.
-      eventRoutes: z
-        .array(EventRouteSchema)
-        .max(PLUGIN_EVENT_ROUTE_EVENTS.length)
-        .default([]),
+      eventRoutes: z.array(EventRouteSchema).max(PLUGIN_EVENT_ROUTE_EVENTS.length).default([]),
       contributes: z.preprocess(
         (raw, ctx) => {
           reportReservedTourCueNames(raw, ctx);
