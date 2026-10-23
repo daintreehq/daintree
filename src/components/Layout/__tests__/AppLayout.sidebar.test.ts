@@ -371,7 +371,9 @@ describe("AppLayout drag-resize terminal lock — full-screen TUI SIGWINCH storm
     // must be wired into both drag-start handlers.
     expect(source).toMatch(/handleSidebarResizeStart[\s\S]{0,200}lockResizeForLayoutDrag\(\)/);
     expect(source).toMatch(/handleAssistantResizeStart[\s\S]{0,200}lockResizeForLayoutDrag\(\)/);
-    expect(source).toContain("terminalInstanceService.lockResize(id, true)");
+    expect(source).toMatch(
+      /withTerminalService\(\(service\) => \{\s*for \(const id of ids\) service\.lockResize\(id, true\)/
+    );
   });
 
   it("unlocks and runs a corrective resize pass at drag end", () => {
@@ -380,7 +382,7 @@ describe("AppLayout drag-resize terminal lock — full-screen TUI SIGWINCH storm
     // final geometry once instead of N times mid-drag.
     expect(source).toMatch(/handleSidebarResizeEnd[\s\S]{0,200}unlockResizeForLayoutDrag\(\)/);
     expect(source).toMatch(/handleAssistantResizeEnd[\s\S]{0,200}unlockResizeForLayoutDrag\(\)/);
-    expect(source).toContain("terminalInstanceService.runResizePass(ids)");
+    expect(source).toContain("service.runResizePass(ids)");
     // Ordering invariant: runResizePass skips ids that are still locked, so the
     // unlock must precede the corrective pass.
     expect(source).toMatch(/lockResize\(id, false\)[\s\S]{0,140}runResizePass\(ids\)/);

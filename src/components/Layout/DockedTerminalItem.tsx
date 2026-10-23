@@ -23,7 +23,10 @@ import {
 } from "@/components/Worktree/terminalStateConfig";
 import { useSessionPresentation } from "@/hooks/useRunHandBackState";
 import { TerminalRefreshTier } from "@/types";
-import { terminalInstanceService } from "@/services/TerminalInstanceService";
+import {
+  peek as peekTerminalService,
+  with as withTerminalService,
+} from "@/services/terminal/terminalInstanceServiceAccessor";
 import { DockActivityCue } from "./DockActivityCue";
 import {
   PluginPanelActivityDockCue,
@@ -138,7 +141,9 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
   useEffect(() => {
     if (!isOpen) {
       try {
-        terminalInstanceService.applyRendererPolicy(terminal.id, TerminalRefreshTier.BACKGROUND);
+        withTerminalService((service) =>
+          service.applyRendererPolicy(terminal.id, TerminalRefreshTier.BACKGROUND)
+        );
       } catch (error) {
         console.warn(`Failed to apply dock state for terminal ${terminal.id}:`, error);
       }
@@ -149,9 +154,9 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
 
     const rafId = requestAnimationFrame(() => {
       try {
-        const dims = terminalInstanceService.fit(terminal.id);
+        const dims = peekTerminalService()?.fit(terminal.id);
         if (!dims) return;
-        terminalInstanceService.applyRendererPolicy(terminal.id, TerminalRefreshTier.VISIBLE);
+        peekTerminalService()?.applyRendererPolicy(terminal.id, TerminalRefreshTier.VISIBLE);
       } catch (error) {
         console.warn(`Failed to apply dock state for terminal ${terminal.id}:`, error);
       }
@@ -307,7 +312,7 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
     });
     if (focusTarget === "hybridInput") return;
 
-    terminalInstanceService.focus(terminal.id);
+    peekTerminalService()?.focus(terminal.id);
   }, [
     isOpen,
     portalContainer,
@@ -363,7 +368,7 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
   } = useDockPopoverResize(() => {
     requestAnimationFrame(() => {
       try {
-        terminalInstanceService.fit(terminal.id);
+        peekTerminalService()?.fit(terminal.id);
       } catch {
         // fit() guards zero-dimension cases internally; ignore transient throws.
       }

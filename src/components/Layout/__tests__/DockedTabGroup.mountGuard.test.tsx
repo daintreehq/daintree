@@ -8,7 +8,7 @@
  * focuses the active tab once its stable wrapper has been moved in — a
  * synchronous step, no MutationObserver.
  */
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { beforeAll, describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { act, fireEvent, render } from "@testing-library/react";
 import type { PtyPanelData } from "@shared/types/panel";
 import type { TabGroup } from "@/types";
@@ -95,6 +95,14 @@ vi.mock("@/services/TerminalInstanceService", () => ({
     focus: vi.fn(),
   },
 }));
+
+import { load as loadTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
+
+// The service mock never evaluates the real module, so nothing registers it;
+// loading caches the mock for the synchronous peek() call sites.
+beforeAll(async () => {
+  await loadTerminalService();
+});
 
 // The badge hook reads the real panel and plugin stores; these suites stub the store layer.
 vi.mock("../DockChipBadge", () => ({

@@ -8,7 +8,7 @@
  * render harness (no source-string assertions) and verify the store wiring: the
  * dock popover only closes when moveTerminalToGrid succeeds.
  */
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { beforeAll, describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import type { PtyPanelData } from "@shared/types/panel";
 import { UI_TRANSIENT_HINT_DWELL_MS } from "@/lib/animationUtils";
@@ -75,6 +75,14 @@ vi.mock("@/services/TerminalInstanceService", () => ({
     focus: vi.fn(),
   },
 }));
+
+import { load as loadTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
+
+// The service mock never evaluates the real module, so nothing registers it;
+// loading caches the mock for the synchronous peek() call sites.
+beforeAll(async () => {
+  await loadTerminalService();
+});
 
 // The badge hook reads the real panel and plugin stores; these suites stub the store layer.
 vi.mock("../DockChipBadge", () => ({

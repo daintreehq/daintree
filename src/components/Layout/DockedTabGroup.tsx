@@ -56,7 +56,10 @@ import {
   SESSION_LABELS,
 } from "@/components/Worktree/terminalStateConfig";
 import { TerminalRefreshTier } from "@/types";
-import { terminalInstanceService } from "@/services/TerminalInstanceService";
+import {
+  peek as peekTerminalService,
+  with as withTerminalService,
+} from "@/services/terminal/terminalInstanceServiceAccessor";
 import { DockActivityCue } from "./DockActivityCue";
 import {
   PluginPanelActivityDockCue,
@@ -241,7 +244,9 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
 
     if (!isOpen) {
       try {
-        terminalInstanceService.applyRendererPolicy(activePanelId, TerminalRefreshTier.BACKGROUND);
+        withTerminalService((service) =>
+          service.applyRendererPolicy(activePanelId, TerminalRefreshTier.BACKGROUND)
+        );
       } catch (error) {
         console.warn(`Failed to apply dock state for panel ${activePanelId}:`, error);
       }
@@ -253,7 +258,9 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
     // The policy's downgrade hysteresis absorbs rapid tab-flips (t1→t2→t1).
     if (prevId && prevId !== activePanelId) {
       try {
-        terminalInstanceService.applyRendererPolicy(prevId, TerminalRefreshTier.BACKGROUND);
+        withTerminalService((service) =>
+          service.applyRendererPolicy(prevId, TerminalRefreshTier.BACKGROUND)
+        );
       } catch (error) {
         console.warn(`Failed to background previous dock panel ${prevId}:`, error);
       }
@@ -263,9 +270,9 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
 
     const rafId = requestAnimationFrame(() => {
       try {
-        const dims = terminalInstanceService.fit(activePanelId);
+        const dims = peekTerminalService()?.fit(activePanelId);
         if (!dims) return;
-        terminalInstanceService.applyRendererPolicy(activePanelId, TerminalRefreshTier.VISIBLE);
+        peekTerminalService()?.applyRendererPolicy(activePanelId, TerminalRefreshTier.VISIBLE);
       } catch (error) {
         console.warn(`Failed to apply dock state for panel ${activePanelId}:`, error);
       }
@@ -326,7 +333,7 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
     });
     if (focusTarget === "hybridInput") return;
 
-    terminalInstanceService.focus(activePanelId);
+    peekTerminalService()?.focus(activePanelId);
   }, [
     isOpen,
     portalContainer,
@@ -659,7 +666,7 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
     if (!activePanelId) return;
     requestAnimationFrame(() => {
       try {
-        terminalInstanceService.fit(activePanelId);
+        peekTerminalService()?.fit(activePanelId);
       } catch {
         // fit() guards zero-dimension cases internally; ignore transient throws.
       }

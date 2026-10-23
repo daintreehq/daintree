@@ -66,7 +66,10 @@ import {
   suppressSidebarResizes,
   getSidebarAffectedTerminalIds,
 } from "@/lib/sidebarToggle";
-import { terminalInstanceService } from "@/services/terminal/TerminalInstanceService";
+import {
+  peek as peekTerminalService,
+  with as withTerminalService,
+} from "@/services/terminal/terminalInstanceServiceAccessor";
 import { unlockSidebarHydration } from "@/lib/layoutTransitionLock";
 import { logError } from "@/utils/logger";
 import { FileDocumentCloseGuardHost } from "@/panels/file/FileDocumentCloseGuardHost";
@@ -844,19 +847,17 @@ export function AppLayout({
   const lockResizeForLayoutDrag = useCallback(() => {
     const ids = getSidebarAffectedTerminalIds();
     dragLockedIdsRef.current = ids;
-    for (const id of ids) {
-      terminalInstanceService.lockResize(id, true);
-    }
+    withTerminalService((service) => {
+      for (const id of ids) service.lockResize(id, true);
+    });
   }, []);
   const unlockResizeForLayoutDrag = useCallback(() => {
     const ids = dragLockedIdsRef.current;
     dragLockedIdsRef.current = [];
-    for (const id of ids) {
-      terminalInstanceService.lockResize(id, false);
-    }
-    if (ids.length > 0) {
-      terminalInstanceService.runResizePass(ids);
-    }
+    withTerminalService((service) => {
+      for (const id of ids) service.lockResize(id, false);
+      if (ids.length > 0) service.runResizePass(ids);
+    });
   }, []);
 
   // Self-heal the drag lock every frame while a divider is being dragged.
@@ -872,8 +873,9 @@ export function AppLayout({
     if (!isSidebarResizing && !isAssistantResizing) return;
     let rafId = 0;
     const rearm = () => {
-      for (const id of dragLockedIdsRef.current) {
-        terminalInstanceService.lockResize(id, true);
+      const service = peekTerminalService();
+      if (service) {
+        for (const id of dragLockedIdsRef.current) service.lockResize(id, true);
       }
       rafId = requestAnimationFrame(rearm);
     };
