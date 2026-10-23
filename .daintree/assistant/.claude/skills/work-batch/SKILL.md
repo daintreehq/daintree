@@ -28,7 +28,20 @@ Note in the checkpoint which ones apply, so a resumed run reads them again.
 
 ## Runbooks and the user's decisions
 
-The runbook that owns this work is `daintree.orchestration.work-in-waves` (merge-gated rounds, drains included; this skill runs them as a flow), with `daintree.foundation` for the mechanics (dialogs, ownership, delivery, proving a finish). Make this request's one runbook search with `"Work batches of issues in parallel worktrees, merge their pull requests, then start the next batch"` and follow what it selects, as the runbook rule says. If `work-in-waves` isn't among them, take the flow from this skill and the mechanics from the foundation that came back, and never claim a runbook you didn't load. The user wrote this skill, and it records their decisions where those runbooks leave room or assume otherwise:
+The runbook that owns this work is `daintree.orchestration.work-in-waves` (merge-gated rounds, drains included; this skill runs them as a flow), with `daintree.foundation` for the mechanics (dialogs, ownership, delivery, proving a finish). With worker hosts (`workers.md`), the owner is `daintree.hosts.drain-issue-backlog` instead. Make this request's one runbook search with `"Work batches of issues in parallel worktrees, merge their pull requests, then start the next batch"`, or with worker hosts `"Drain an issue backlog across several remote hosts, picking and merging on this machine"`, exactly as written, and follow what it selects, as the runbook rule says. If the owner isn't among them, take the flow from this skill and the mechanics from the foundation that came back, and never claim a runbook you didn't load.
+
+**Runbooks by stage.** You can't open a runbook file: every runbook comes from the runbook backend, `get_runbook` with its id when you know it (the ids below), else `search_runbooks` with a sentence describing the situation. Fetch one when its stage first arrives, not up front; one delivery per session is enough, since its text stays in your context (re-fetch after a compaction). When the user asks you to load or follow a runbook, fetch it the same way and say which one came back.
+
+- Syncing instances before a create: `daintree.hosts.sync-with-origin`.
+- Choosing models (`choosing-models.md`): `daintree.agents.choose-agent-model`.
+- Reading a host's or account's allowance, or a usage threshold the user set: `daintree.agents.check-usage-limits` (a pane launched with no `prompt`, then the usage command at its idle prompt).
+- Agents stopped on a usage limit that names its reset: `daintree.agents.resume-after-usage-limit`.
+- A worker under memory pressure, or one to take fewer agents: `daintree.hosts.rebalance-load`.
+- A worker's Daintree restarted and its agents died: `daintree.hosts.recover-and-clean-up`.
+- A pane that is hung, failed to start or lost its notice: `daintree.agents.recover-agent`; one asking a question the user must answer: `daintree.agents.answer-waiting-agent`.
+- The user pausing, resuming or handing the run to another session: `daintree.orchestration.status-and-resume` (with workers, `daintree.hosts.park-swarm`).
+
+The user wrote this skill, and it records their decisions where those runbooks leave room or assume otherwise:
 
 - **The batch and its overlap policy are `/next-batch`'s.** It allows ordinary overlap and leaves it to `/prs:merge`, excluding only structural clashes: the user's policy, looser than a disjointness gate. Report its verdict as the gate's result; don't re-split, serialize or drop issues.
 - **The cap is the batch size**, already approved.
@@ -151,7 +164,7 @@ A unit's marker is a last reply ending with the line `WORK_COMPLETE`. Then `gh p
 
 ## 4. Merge
 
-Launch `/prs:merge` whenever none is running and at least one finished unit's PR is waiting for a merge (still open, not deferred or reverted by a completed merge, and not left for the user after a failed one), whatever else is still working. Record the unit PRs open as it starts. Only one at a time: while one runs, newly finished PRs ride it, because it rescans about every 10 minutes and takes in PRs opened while it runs. That rescan can also take a PR whose agent is still watching CI; if an agent reports a rejected push, or a force-push over the merge's rebase, tell the user.
+Launch `/prs:merge` whenever none is running and at least one finished unit's PR is waiting for a merge (still open, not deferred or reverted by a completed merge, and not left for the user after a failed one), whatever else is still working. Record the unit PRs open as it starts. Only one at a time: while one runs, newly finished PRs ride it, because it rescans about every 10 minutes and takes in PRs opened while it runs. That rescan can also take a PR whose agent is still watching CI, and two writers on one branch collide: send the merge pane the PRs of units still working as off-limits until each finishes (`notify: true`). If it takes one anyway and pushes to it, tell that unit's agent to fetch before any push and never force-push over the merge's work; if an agent reports a rejected push, or a force-push over the merge's rebase, tell the user.
 
 `/prs:merge` keeps the main checkout on the base and fast-forwards it, so first require `git -C <main path> status --porcelain` to print nothing and the branch to be the base. If not, report it and wait; never switch or clean the checkout yourself. Then launch `/prs:merge` in the main worktree per Every launch (name `Batch <k> · merge`, where `<k>` is the latest batch, no `handback`).
 
