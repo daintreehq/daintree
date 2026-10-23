@@ -488,6 +488,8 @@ export const CHANNEL_LEASE_POLICY = {
   "plugin:settings-reveal-secret": "free",
   "plugin:settings-set-value": "free",
   "plugin:settings-required-status": "free",
+  "plugin:task-cancel": "driver",
+  "plugin:task-dismiss": "free",
   "plugin:account-status": "free",
   "plugin:account-connect": "free",
   "plugin:account-cancel-connect": "free",
@@ -909,6 +911,10 @@ export const CHANNEL_LEASE_TARGETS = {
   "plugin:project-set-trust": CALLER,
   "plugin:file-editor-choice-set": CALLER,
   "plugin:launch-group-hidden-set": CALLER,
+  // Stopping a task stops work done for whoever drives the project. A project
+  // plugin's task is always the caller's project's; an app-wide one's, the
+  // caller's too.
+  "plugin:task-cancel": CALLER,
   "plugin:search-provider-shown-set": CALLER,
   "plugin:context-providers-enabled-set": CALLER,
   "plugin:project-surface-choice-set": CALLER,

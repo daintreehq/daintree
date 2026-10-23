@@ -15,6 +15,7 @@
 
 import { createLogger } from "../../utils/logger.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
+import { isInertPluginTaskHandle } from "../../../shared/utils/pluginTasks.js";
 import { AGENT_MCP_MAX_RESULT_BYTES } from "../../../shared/types/plugin.js";
 import type {
   PluginHostApi,
@@ -22,6 +23,7 @@ import type {
   PluginMcpCaller,
   PluginMcpToolDefinition,
   PluginProcessHandle,
+  PluginTaskHandle,
   PluginDuplexProcessHandle,
   PluginPtyProcessHandle,
   PluginProcessSpawnOptions,
@@ -103,6 +105,10 @@ import type {
   DocumentsRenderPdfParams,
   ProcessSpawnParams,
   ProcessHandleRefParams,
+  TaskFinishParams,
+  TaskReportParams,
+  TaskStartParams,
+  TaskStartResult,
   ProcessWriteParams,
   ProcessResizeParams,
   SearchProviderRegistrationParams,
@@ -356,6 +362,14 @@ export class PluginDevWorkerMainBridge {
    * retired and on dispose (the next generation re-spawns from its fresh module
    * realm). */
   private readonly processHandles = new Map<string, PluginProcessHandle>();
+  /** Live handles for tasks the worker started via `host.tasks.start` (#13819),
+   * keyed by task id, each with the detach for the listener that relays the
+   * user's Cancel to the worker. Forgotten when a generation is retired: main's
+   * registry marks the tasks themselves interrupted. */
+  private readonly taskHandles = new Map<
+    string,
+    { handle: PluginTaskHandle; detach: () => void }
+  >();
 
   /**
    * Required registrations still awaiting main-side deep validation (#12282).
@@ -438,6 +452,7 @@ export class PluginDevWorkerMainBridge {
     this.subscriptionDisposers.clear();
     this.disposeProviders();
     this.disposeProcessHandles();
+    this.disposeTaskHandles();
     this.abortAllHostCalls();
     for (const pending of this.pendingInvokes.values()) {
       pending.reject(new Error("Plugin dev worker bridge disposed"));
@@ -513,6 +528,12 @@ export class PluginDevWorkerMainBridge {
     this.processHandles.clear();
   }
 
+  /** Stop relaying cancels for the worker's tasks and forget their handles. */
+  private disposeTaskHandles(): void {
+    for (const { detach } of this.taskHandles.values()) detach();
+    this.taskHandles.clear();
+  }
+
   /** The crash-respawned child booted — everything from here belongs to it. */
   private onWorkerReady = (): void => {
     this.awaitingReplacement = false;
@@ -572,6 +593,7 @@ export class PluginDevWorkerMainBridge {
     this.subscriptionDisposers.clear();
     this.disposeProviders();
     this.disposeProcessHandles();
+    this.disposeTaskHandles();
     for (const pending of this.pendingInvokes.values()) {
       pending.reject(new Error(reason));
     }
@@ -1177,6 +1199,51 @@ export class PluginDevWorkerMainBridge {
         this.processHandles.set(handle.id, handle);
         return { id: handle.id, mode };
       }
+      case "tasks.start": {
+        const p = params as TaskStartParams;
+        const generation = this.reloadGeneration;
+        const handle = await this.host.tasks.start(p.options);
+        // The plugin had unloaded: there is no task to relay or finish.
+        if (isInertPluginTaskHandle(handle)) {
+          return { id: handle.id, inert: true } satisfies TaskStartResult;
+        }
+        // Disposed or reloaded while starting, or the worker gave up on the call
+        // (a cancel or its deadline) and will never learn this id: nobody can
+        // finish the task, so it ends here, quietly.
+        if (this.disposed || generation !== this.reloadGeneration || signal.aborted) {
+          void handle.finish({ outcome: "cancelled" }).catch(() => {});
+          return { id: handle.id } satisfies TaskStartResult;
+        }
+        const relayCancel = (): void => {
+          if (this.disposed || generation !== this.reloadGeneration) return;
+          this.workerHost.send({
+            type: "subscription-event",
+            subscriptionId: p.subscriptionId,
+            payload: null,
+          });
+        };
+        // Cancelled before start even answered: the worker registered its
+        // subscription before the call, so the event still lands first.
+        if (handle.signal.aborted) relayCancel();
+        else handle.signal.addEventListener("abort", relayCancel, { once: true });
+        this.taskHandles.set(handle.id, {
+          handle,
+          detach: () => handle.signal.removeEventListener("abort", relayCancel),
+        });
+        return { id: handle.id } satisfies TaskStartResult;
+      }
+      case "tasks.finish": {
+        const p = params as TaskFinishParams;
+        const entry = this.taskHandles.get(p.taskId);
+        // Retired with its generation, or never this worker's: already ended.
+        if (!entry) return undefined;
+        await entry.handle.finish(p.result);
+        if (this.taskHandles.get(p.taskId) === entry) {
+          this.taskHandles.delete(p.taskId);
+          entry.detach();
+        }
+        return undefined;
+      }
       case "process.restart": {
         const p = params as ProcessHandleRefParams;
         const handle = this.processHandles.get(p.processId);
@@ -1723,6 +1790,27 @@ export class PluginDevWorkerMainBridge {
         const level = method.split(".")[1] as "info" | "warn" | "error";
         // Logger stays synchronous fire-and-forget (the #10519 carve-out).
         this.host.logger[level](p.message, p.fields);
+        return;
+      }
+      case "tasks.report": {
+        // One coalescing window's latest report per task. Fire-and-forget, so a
+        // report the host refuses is logged rather than answered.
+        const { reports } = params as TaskReportParams;
+        if (!Array.isArray(reports)) return;
+        for (const report of reports as unknown[]) {
+          if (typeof report !== "object" || report === null) continue;
+          const { taskId, progress } = report as { taskId?: unknown; progress?: unknown };
+          if (typeof taskId !== "string") continue;
+          const entry = this.taskHandles.get(taskId);
+          if (!entry) continue;
+          try {
+            entry.handle.report(progress as TaskReportParams["reports"][number]["progress"]);
+          } catch (err) {
+            logger.warn(
+              `[${this.pluginId}] tasks.report refused: ${formatErrorMessage(err, "invalid progress")}`
+            );
+          }
+        }
         return;
       }
       case "process.kill": {

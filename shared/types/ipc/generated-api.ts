@@ -807,6 +807,9 @@ export interface GeneratedElectronAPI {
     cancelSearchProviders(
       ...args: IpcInvokeMap["plugin:search-providers-cancel"]["args"]
     ): Promise<IpcInvokeMap["plugin:search-providers-cancel"]["result"]>;
+    cancelTask(
+      ...args: IpcInvokeMap["plugin:task-cancel"]["args"]
+    ): Promise<IpcInvokeMap["plugin:task-cancel"]["result"]>;
     capturePanel(
       ...args: IpcInvokeMap["plugin:capture-panel"]["args"]
     ): Promise<IpcInvokeMap["plugin:capture-panel"]["result"]>;
@@ -828,6 +831,9 @@ export interface GeneratedElectronAPI {
     disconnectAccount(
       ...args: IpcInvokeMap["plugin:account-disconnect"]["args"]
     ): Promise<IpcInvokeMap["plugin:account-disconnect"]["result"]>;
+    dismissTask(
+      ...args: IpcInvokeMap["plugin:task-dismiss"]["args"]
+    ): Promise<IpcInvokeMap["plugin:task-dismiss"]["result"]>;
     exportAuditLog(
       ...args: IpcInvokeMap["plugin:export-audit-log"]["args"]
     ): Promise<IpcInvokeMap["plugin:export-audit-log"]["result"]>;

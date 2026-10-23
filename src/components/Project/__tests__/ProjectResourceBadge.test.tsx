@@ -81,6 +81,7 @@ import { projectClient, systemClient } from "@/clients";
 import { __resetProjectViewCacheStateForTests } from "@/lib/viewCacheState";
 import type { Project } from "@shared/types";
 import { ProjectResourceBadge } from "../ProjectResourceBadge";
+import { _resetPluginTaskStoreForTest, usePluginTaskStore } from "@/store/pluginTaskStore";
 
 const mockGetAll = vi.mocked(projectClient.getAll);
 const mockGetAppMetrics = vi.mocked(systemClient.getAppMetrics);
@@ -693,6 +694,42 @@ describe("ProjectResourceBadge — visibility- and cache-aware polling", () => {
     expect(mark?.getAttribute("data-working")).toBe("false");
     // ...and the count is still reported, because it is a separate fact.
     expect(container.querySelector("[data-status-readout]")?.textContent).toBe("1 project active");
+  });
+
+  it("reads a running plugin task as work, and an interrupted one as not (#13819)", async () => {
+    mockGetAll.mockResolvedValue([]);
+    statsStoreState.stats = {};
+    const task = {
+      id: "t-1",
+      pluginId: "acme",
+      pluginName: "Acme",
+      title: "Importing records",
+      fraction: null,
+      cancellable: false,
+      state: "working" as const,
+      startedAt: 1,
+    };
+    usePluginTaskStore.setState({ tasks: [task], tasksByPluginId: { acme: [task] } });
+    try {
+      const { container, unmount } = render(<ProjectResourceBadge />);
+      await flush();
+      expect(container.querySelector(".status-mark")?.getAttribute("data-working")).toBe("true");
+      expect(container.querySelector("[data-status-readout]")?.textContent).toBe("Working");
+      unmount();
+
+      const interrupted = { ...task, state: "interrupted" as const };
+      usePluginTaskStore.setState({
+        tasks: [interrupted],
+        tasksByPluginId: { acme: [interrupted] },
+      });
+      const second = render(<ProjectResourceBadge />);
+      await flush();
+      expect(second.container.querySelector(".status-mark")?.getAttribute("data-working")).toBe(
+        "false"
+      );
+    } finally {
+      _resetPluginTaskStoreForTest();
+    }
   });
 
   it("spells the working state out for assistive technology", async () => {

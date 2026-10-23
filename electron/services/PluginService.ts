@@ -234,6 +234,7 @@ import {
   type PluginWorktreeEventPayload,
   type PluginWorktreeSnapshotFetchResult,
 } from "./plugin/PluginHostFactory.js";
+import { PluginTaskRegistry } from "./plugin/PluginTaskRegistry.js";
 import type {
   LoadedPlugin,
   ValidateFn,
@@ -883,6 +884,12 @@ export class PluginService {
   private pluginPanelActivity = new Map<string, Map<string, PluginPanelActivityReport>>();
   /** Last revision handed to an accepted activity report; never reset. */
   private panelActivityRevision = 0;
+  /**
+   * Tasks started via `host.tasks.start` (#13819). Scoped like
+   * {@link pluginToolbarBadges}: a project plugin's tasks show only in that
+   * project's views. Interrupted tasks outlive their plugin's unload.
+   */
+  private pluginTasks = new PluginTaskRegistry((pluginId) => this.emitPluginTasks(pluginId));
   /**
    * Live toolbar-button state set via `host.setToolbarButtonState`, keyed
    * `pluginId → buttonId → state` (#13785). Held, scoped, cleared and replayed
@@ -1687,6 +1694,7 @@ export class PluginService {
     // unload cascade above left running.
     this.pluginPtyTransport?.dispose();
     this.pluginPtyTransport = null;
+    this.pluginTasks.dispose();
   }
 
   /**
@@ -3788,6 +3796,8 @@ export class PluginService {
         // What the retiring backend said it was doing is not what the next one
         // is doing; it reports afresh (#13820).
         if (this.pluginPanelActivity.delete(pluginId)) this.emitPanelActivity(pluginId);
+        // Work the retiring backend was doing stopped with it (#13819).
+        this.pluginTasks.interrupt(pluginId);
         this.resetPluginContextKeys(pluginId);
         this.clearPluginWorktreeCardStatuses(pluginId);
         this.clearPluginWorktreeReviewChecks(pluginId);
@@ -4642,6 +4652,7 @@ export class PluginService {
       pluginPanelActivity: this.pluginPanelActivity,
       emitPanelActivity: (pluginId) => this.emitPanelActivity(pluginId),
       nextPanelActivityRevision: () => ++this.panelActivityRevision,
+      pluginTasks: this.pluginTasks,
       pluginToolbarStates: this.pluginToolbarStates,
       emitToolbarStates: (pluginId) => this.emitToolbarStates(pluginId),
       pluginContextKeys: this.pluginContextKeys,
@@ -6484,6 +6495,34 @@ export class PluginService {
     broadcastToProjectRenderers(owningProjectId, CHANNELS.EVENTS_PUSH, event);
   }
 
+  /**
+   * Publish one plugin's complete task list, scoped like
+   * {@link emitPanelActivity}. An empty list clears its tasks (#13819).
+   */
+  private emitPluginTasks(pluginId: string): void {
+    if (this.disposed) return;
+    const event = {
+      name: "plugin:tasks-changed" as const,
+      payload: { pluginId, tasks: this.pluginTasks.snapshot(pluginId) },
+    };
+    const owningProjectId = projectIdFromPluginInstanceKey(pluginId);
+    if (owningProjectId === null) {
+      broadcastToRenderer(CHANNELS.EVENTS_PUSH, event);
+      return;
+    }
+    broadcastToProjectRenderers(owningProjectId, CHANNELS.EVENTS_PUSH, event);
+  }
+
+  /** The user's Cancel on a plugin task. False when it isn't running or can't be cancelled. */
+  cancelPluginTask(pluginId: string, taskId: string): boolean {
+    return this.pluginTasks.requestCancel(pluginId, taskId);
+  }
+
+  /** The user's Dismiss on an interrupted plugin task. */
+  dismissPluginTask(pluginId: string, taskId: string): boolean {
+    return this.pluginTasks.dismiss(pluginId, taskId);
+  }
+
   private serializePluginPanelActivity(
     pluginId: string
   ): Record<string, PluginPanelActivityReport> {
@@ -7881,6 +7920,10 @@ export class PluginService {
       runUnloadStep(pluginId, "clearPanelActivity", () => this.emitPanelActivity(pluginId));
     }
 
+    // After the plugin left `plugins`, so an abort listener that starts again
+    // gets an inert handle instead of a task nothing will ever finish.
+    runUnloadStep(pluginId, "interruptTasks", () => this.pluginTasks.interrupt(pluginId));
+
     if (this.pluginContextKeys.delete(pluginId)) {
       runUnloadStep(pluginId, "clearContextKeys", () => this.emitContextKeys(pluginId));
     }
@@ -8056,6 +8099,7 @@ export class PluginService {
       pendingHostCallCount: entry.bridge.pendingHostCallCount,
       managedProcessCount: this.processManager?.runningCount(pluginId) ?? 0,
       fsWatcherCount: this.pluginFsWatchers.get(pluginId)?.size ?? 0,
+      liveTaskCount: this.pluginTasks.liveCount(pluginId),
       lastActivityAt: this.pluginWorkerActivity.get(pluginId) ?? null,
       now: opts?.now ?? Date.now(),
       idleDisposeMs: opts?.idleDisposeMs,
@@ -9138,6 +9182,27 @@ export class PluginService {
       };
       // A local view bound to a remote host shows that host's panels, never
       // this machine's same-named plugin's reports.
+      if (
+        projectId === undefined &&
+        isWithheldFromView(webContents.id, CHANNELS.EVENTS_PUSH, [envelope])
+      ) {
+        continue;
+      }
+      try {
+        webContents.send(CHANNELS.EVENTS_PUSH, envelope);
+      } catch {
+        // Silently ignore send failures during window initialization/disposal.
+      }
+    }
+    for (const pluginId of this.pluginTasks.pluginIds()) {
+      const owningProjectId = projectIdFromPluginInstanceKey(pluginId);
+      if (owningProjectId !== null && !inView(owningProjectId)) continue;
+      const envelope = {
+        name: "plugin:tasks-changed",
+        payload: { pluginId, tasks: this.pluginTasks.snapshot(pluginId) },
+      };
+      // A local view bound to a remote host shows that host's work, never
+      // this machine's same-named plugin's tasks.
       if (
         projectId === undefined &&
         isWithheldFromView(webContents.id, CHANNELS.EVENTS_PUSH, [envelope])

@@ -1225,6 +1225,48 @@ function isRemoteCaller(ctx: IpcContext): boolean {
 }
 
 /**
+ * Hold the user's Cancel or Dismiss on a plugin task (#13819) to the ownership
+ * rule a worker restart follows: a renderer reaches an app-wide plugin's tasks,
+ * or its own project's plugin's, never another project's.
+ */
+function checkTaskTarget(ctx: IpcContext, pluginId: unknown, taskId: unknown, what: string): void {
+  // `op` performs no runtime argument validation.
+  if (typeof pluginId !== "string" || !isSafePluginInstanceId(pluginId)) {
+    throw new Error(`plugin task ${what}: malformed plugin id`);
+  }
+  if (typeof taskId !== "string" || taskId.length === 0 || taskId.length > 64) {
+    throw new Error(`plugin task ${what}: malformed task id`);
+  }
+  const owningProjectId = projectIdFromPluginInstanceKey(pluginId);
+  if (owningProjectId === null && pluginId.startsWith(PROJECT_PLUGIN_INSTANCE_PREFIX)) {
+    throw new Error(`plugin task ${what}: malformed project instance key`);
+  }
+  if (owningProjectId !== null && owningProjectId !== ctx.projectId) {
+    throw new Error(`plugin task ${what}: sender belongs to a different project`);
+  }
+}
+
+/** Ask a plugin to stop a task. False when it isn't running or can't be cancelled. */
+async function handleTaskCancel(
+  ctx: IpcContext,
+  pluginId: string,
+  taskId: string
+): Promise<boolean> {
+  checkTaskTarget(ctx, pluginId, taskId, "cancel");
+  return (await getPluginService()).cancelPluginTask(pluginId, taskId);
+}
+
+/** Clear an interrupted task from the list. False for any task that isn't interrupted. */
+async function handleTaskDismiss(
+  ctx: IpcContext,
+  pluginId: string,
+  taskId: string
+): Promise<boolean> {
+  checkTaskTarget(ctx, pluginId, taskId, "dismiss");
+  return (await getPluginService()).dismissPluginTask(pluginId, taskId);
+}
+
+/**
  * The plugin declared `"remote": "unsupported"`. `hostId` is this host from
  * its own point of view; the window that shows the placeholder names the host
  * the way its person knows it.
@@ -2659,6 +2701,8 @@ export const pluginNamespace = defineIpcNamespace({
     restartWorker: op(PLUGIN_METHOD_CHANNELS.restartWorker, handleRestartWorker, {
       withContext: true,
     }),
+    cancelTask: op(PLUGIN_METHOD_CHANNELS.cancelTask, handleTaskCancel, { withContext: true }),
+    dismissTask: op(PLUGIN_METHOD_CHANNELS.dismissTask, handleTaskDismiss, { withContext: true }),
     getAgents: op(PLUGIN_METHOD_CHANNELS.getAgents, handleAgentsGet),
     getRecipes: op(PLUGIN_METHOD_CHANNELS.getRecipes, handleRecipesGet, { withContext: true }),
     getTours: op(PLUGIN_METHOD_CHANNELS.getTours, handleToursGet, { withContext: true }),

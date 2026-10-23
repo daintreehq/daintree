@@ -2003,6 +2003,14 @@ export interface GeneratedIpcInvokeMap {
     ];
     result: void;
   };
+  "plugin:task-cancel": {
+    args: [pluginId: string, taskId: string];
+    result: boolean;
+  };
+  "plugin:task-dismiss": {
+    args: [pluginId: string, taskId: string];
+    result: boolean;
+  };
   "plugin:themes-get": {
     args: [];
     result: import("../../theme/types.js").AppColorScheme[];

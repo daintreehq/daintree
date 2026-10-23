@@ -8,6 +8,7 @@ export type {
   BroadcastRecord,
   ShownToastRecord,
   NotificationRecord,
+  MockTaskRecord,
   DispatchedActionRecord,
   SentToAgentRecord,
   RunRecipeRecord,

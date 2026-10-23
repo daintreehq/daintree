@@ -13,6 +13,7 @@ vi.mock("../../../utils/logger.js", () => ({
 }));
 
 import { PluginDevWorkerMainBridge } from "../PluginDevWorkerMainBridge.js";
+import { inertPluginTaskHandle } from "../../../../shared/utils/pluginTasks.js";
 import { PluginDevWorkerHostProxy } from "../pluginDevWorkerHostProxy.js";
 import { PluginInvokeTimeoutError, runWithInvokeDeadline } from "../pluginInvokeDeadline.js";
 import type { PluginIpcContext } from "../../../../shared/types/plugin.js";
@@ -76,6 +77,11 @@ function makeHost() {
     setWorktreeReviewChecks: vi.fn(async () => {}),
     setPanelActivity: vi.fn(async () => {}),
     setPanelMenuItems: vi.fn(async () => {}),
+    tasks: {
+      start: vi.fn(async (_options: unknown): Promise<unknown> => {
+        throw new Error("no task");
+      }),
+    },
     showToast: vi.fn(async () => {}),
     notify: vi.fn(async (_options: unknown) => ({ id: "n-1" })),
     showQuickPick: vi.fn(async (): Promise<unknown> => undefined),
@@ -480,6 +486,133 @@ describe("PluginDevWorkerMainBridge", () => {
     expect(
       workerHost.sent.find((m) => m.type === "host-result" && m.requestId === "c-pa-foreign")
     ).toMatchObject({ ok: false, error: expect.stringMatching(/belongs to another plugin/) });
+  });
+
+  describe("tasks (#13819)", () => {
+    function fakeTask(id = "t-1") {
+      const controller = new AbortController();
+      return {
+        controller,
+        handle: {
+          id,
+          signal: controller.signal,
+          report: vi.fn(),
+          finish: vi.fn(async (_result: unknown) => {}),
+        },
+      };
+    }
+
+    async function start(workerHost: FakeWorkerHost, requestId = "c-ts") {
+      workerHost.emit("worker-message", {
+        type: "host-call",
+        requestId,
+        method: "tasks.start",
+        params: {
+          subscriptionId: "s-cancel",
+          options: { title: "Import", cancellable: true, retry: { actionId: "acme.demo.go" } },
+        },
+      });
+      await flush();
+      return workerHost.sent.find((m) => m.type === "host-result" && m.requestId === requestId);
+    }
+
+    const cancelEvents = (workerHost: FakeWorkerHost) =>
+      workerHost.sent.filter(
+        (m) => m.type === "subscription-event" && m.subscriptionId === "s-cancel"
+      );
+
+    it("starts on the host, relays the user's cancel, routes reports and finishes", async () => {
+      const { host, workerHost } = makeBridge();
+      const { controller, handle } = fakeTask();
+      host.tasks.start.mockResolvedValueOnce(handle);
+
+      expect(await start(workerHost)).toMatchObject({ ok: true, result: { id: "t-1" } });
+      expect(host.tasks.start).toHaveBeenCalledWith({
+        title: "Import",
+        cancellable: true,
+        retry: { actionId: "acme.demo.go" },
+      });
+
+      workerHost.emit("worker-message", {
+        type: "host-notify",
+        method: "tasks.report",
+        params: {
+          reports: [
+            { taskId: "t-1", progress: { fraction: 0.5 } },
+            { taskId: "someone-else", progress: { fraction: 1 } },
+          ],
+        },
+      });
+      await flush();
+      expect(handle.report).toHaveBeenCalledTimes(1);
+      expect(handle.report).toHaveBeenCalledWith({ fraction: 0.5 });
+
+      controller.abort();
+      expect(cancelEvents(workerHost)).toHaveLength(1);
+
+      workerHost.emit("worker-message", {
+        type: "host-call",
+        requestId: "c-tf",
+        method: "tasks.finish",
+        params: { taskId: "t-1", result: { outcome: "cancelled" } },
+      });
+      await flush();
+      expect(handle.finish).toHaveBeenCalledWith({ outcome: "cancelled" });
+      workerHost.emit("worker-message", {
+        type: "host-notify",
+        method: "tasks.report",
+        params: { reports: [{ taskId: "t-1", progress: { fraction: 0.9 } }] },
+      });
+      await flush();
+      expect(handle.report).toHaveBeenCalledTimes(1);
+    });
+
+    it("says so when the host handed back an inert handle", async () => {
+      const { host, workerHost } = makeBridge();
+      const handle = inertPluginTaskHandle();
+      host.tasks.start.mockResolvedValueOnce(handle);
+      expect(await start(workerHost)).toMatchObject({
+        ok: true,
+        result: { id: handle.id, inert: true },
+      });
+      expect(cancelEvents(workerHost)).toEqual([]);
+    });
+
+    it("keeps a real task cancelled before start answered, and tells the worker first", async () => {
+      const { host, workerHost } = makeBridge();
+      const { controller, handle } = fakeTask();
+      controller.abort();
+      host.tasks.start.mockResolvedValueOnce(handle);
+
+      const result = await start(workerHost);
+      expect(result).toMatchObject({ ok: true, result: { id: "t-1" } });
+      expect(result.result).not.toHaveProperty("inert");
+      const cancelAt = workerHost.sent.findIndex(
+        (m) => m.type === "subscription-event" && m.subscriptionId === "s-cancel"
+      );
+      expect(cancelAt).toBeGreaterThanOrEqual(0);
+      expect(cancelAt).toBeLessThan(workerHost.sent.indexOf(result));
+
+      workerHost.emit("worker-message", {
+        type: "host-call",
+        requestId: "c-tf",
+        method: "tasks.finish",
+        params: { taskId: "t-1", result: { outcome: "cancelled" } },
+      });
+      await flush();
+      expect(handle.finish).toHaveBeenCalledWith({ outcome: "cancelled" });
+    });
+
+    it("stops relaying cancels once the worker generation is retired", async () => {
+      const { host, workerHost } = makeBridge();
+      const { controller, handle } = fakeTask();
+      host.tasks.start.mockResolvedValueOnce(handle);
+      await start(workerHost);
+
+      workerHost.emit("exit", 139, false);
+      controller.abort();
+      expect(cancelEvents(workerHost)).toEqual([]);
+    });
   });
 
   it("relays setWorktreeReviewChecks as a call and returns the host's rejection (#13806)", async () => {

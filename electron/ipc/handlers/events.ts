@@ -103,6 +103,7 @@ const EVENT_BUS_BRIDGED_MANIFEST = {
   "plugin:panel-badges-changed": "external",
   "plugin:panel-badges-cleared": "external",
   "plugin:panel-activity-changed": "external",
+  "plugin:tasks-changed": "external",
   "plugin:panel-menus-changed": "external",
   "plugin:provenance-changed": "external",
   // PluginService sends this itself, scoped like runtime status below.

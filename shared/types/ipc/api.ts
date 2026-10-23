@@ -2505,6 +2505,17 @@ export interface ElectronAPI extends GeneratedElectronAPI {
       }) => void
     ): () => void;
     /**
+     * Subscribe to plugin tasks (#13819). The callback fires with one plugin's
+     * COMPLETE current list, oldest first; an empty list clears that plugin's
+     * tasks. Returns a cleanup.
+     */
+    onTasksChanged(
+      callback: (payload: {
+        pluginId: string;
+        tasks: import("../plugin.js").PluginTaskSnapshot[];
+      }) => void
+    ): () => void;
+    /**
      * Subscribe to plugin toolbar-button badges (#13503). The callback fires with
      * one plugin's COMPLETE current map (manifest button id → badge); an empty
      * map clears that plugin's badges, as on unload. Returns a cleanup.

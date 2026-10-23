@@ -702,6 +702,8 @@ export const CHANNEL_LOCALITY = {
   "plugin:settings-reveal-secret": "host",
   "plugin:settings-set-value": "host",
   "plugin:settings-required-status": "host",
+  "plugin:task-cancel": "host",
+  "plugin:task-dismiss": "host",
   "plugin:account-status": "host",
   "plugin:account-disconnect": "host",
   // Signing in needs the browser and the keychain on the same machine, and a
@@ -1203,6 +1205,7 @@ export const EVENT_LOCALITY: Readonly<Record<string, ChannelLocality>> = {
   "plugin:panel-badges-changed": "host",
   "plugin:panel-badges-cleared": "host",
   "plugin:panel-activity-changed": "host",
+  "plugin:tasks-changed": "host",
   "plugin:panel-kinds-changed": "host",
   "plugin:panel-menus-changed": "host",
   "plugin:project-plugin-staged": "host",

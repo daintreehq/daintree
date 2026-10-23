@@ -60,6 +60,7 @@ import type {
 } from "@shared/types/memoryAccounting";
 import type { ProcessMetricEntry } from "@shared/types/ipc/system";
 import { ProjectResourceBadge } from "../ProjectResourceBadge";
+import { _resetPluginTaskStoreForTest, usePluginTaskStore } from "@/store/pluginTaskStore";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { primeRadix } from "@/components/ui/radix-loader";
 
@@ -587,5 +588,50 @@ describe("ProjectResourceBadge — process ownership", () => {
     expect(container.querySelectorAll("[title]")).toHaveLength(0);
     const found = await findProcessRowLabel(container, 400);
     expect(found?.tooltip).toBe("2 views · Cedar Forge, RuinWeave (400)");
+  });
+});
+
+describe("ProjectResourceBadge — plugin tasks (#13819)", () => {
+  beforeEach(setupDefaultMocks);
+
+  afterEach(() => {
+    _resetPluginTaskStoreForTest();
+    restoreTimersAndMocks();
+  });
+
+  it("lists running plugin tasks under their own heading, before memory", async () => {
+    const task = {
+      id: "t-1",
+      pluginId: "acme",
+      pluginName: "Acme",
+      title: "Importing records",
+      fraction: 0.5,
+      cancellable: true,
+      state: "working" as const,
+      startedAt: 1,
+    };
+    usePluginTaskStore.setState({ tasks: [task], tasksByPluginId: { acme: [task] } });
+    const container = await renderOpenBadge();
+
+    // The popover is named by both headings (aria-labelledby on the real
+    // content, which this suite stubs), so both must exist.
+    const heading = container.querySelector("#plugin-tasks-title");
+    const memory = container.querySelector("#resource-usage-title");
+    expect(heading?.textContent).toBe("Plugin tasks");
+    expect(memory?.textContent).toBe("Memory");
+    expect(
+      heading!.compareDocumentPosition(memory!) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
+    const list = screen.getByRole("list", { name: "Plugin tasks" });
+    expect(list.textContent).toContain("Importing records");
+    expect(list.textContent).toContain("Acme");
+    expect(screen.getByRole("button", { name: "Cancel Importing records" })).toBeTruthy();
+  });
+
+  it("leaves the section out entirely while no plugin has a task", async () => {
+    const container = await renderOpenBadge();
+
+    expect(container.querySelector("#plugin-tasks-title")).toBeNull();
+    expect(screen.queryByRole("list", { name: "Plugin tasks" })).toBeNull();
   });
 });

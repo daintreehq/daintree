@@ -2951,3 +2951,168 @@ describe("PluginDevWorkerHostProxy worktree setup steps (#13807)", () => {
     expect(() => proxy.host.registerWorktreeSetupStep("db", vi.fn())).toThrow(/revoked/);
   });
 });
+
+describe("PluginDevWorkerHostProxy tasks (#13819)", () => {
+  afterEach(() => vi.useRealTimers());
+
+  const RETRY = { actionId: "acme.demo.import" };
+
+  async function startTask(proxy: PluginDevWorkerHostProxy, sent: any[], cancellable = true) {
+    const started = proxy.host.tasks.start({ title: " Importing ", cancellable, retry: RETRY });
+    const call = sent.find((m) => m.type === "host-call" && m.method === "tasks.start");
+    proxy.handleMessage({
+      type: "host-result",
+      requestId: call.requestId,
+      ok: true,
+      result: { id: "t-1" },
+    });
+    return { task: await started, call };
+  }
+
+  it("relays the vetted options with a cancel subscription that aborts the plugin's signal", async () => {
+    const { proxy, sent } = makeProxy();
+    const { task, call } = await startTask(proxy, sent);
+
+    expect(call.params).toEqual({
+      subscriptionId: expect.any(String),
+      options: { title: "Importing", cancellable: true, fraction: null, retry: RETRY },
+    });
+    expect(task.id).toBe("t-1");
+    expect(task.signal.aborted).toBe(false);
+    proxy.handleMessage({
+      type: "subscription-event",
+      subscriptionId: call.params.subscriptionId,
+      payload: null,
+    });
+    expect(task.signal.aborted).toBe(true);
+  });
+
+  it("sends one report per window per task, the latest fields winning", async () => {
+    vi.useFakeTimers();
+    const { proxy, sent } = makeProxy();
+    const { task } = await startTask(proxy, sent);
+
+    task.report({ fraction: 0.1, detail: "1 of 10" });
+    task.report({ fraction: 0.2 });
+    task.report({ fraction: 0.3 });
+    expect(sent.filter((m) => m.method === "tasks.report")).toEqual([]);
+    vi.advanceTimersByTime(150);
+
+    expect(sent.filter((m) => m.method === "tasks.report")).toEqual([
+      {
+        type: "host-notify",
+        method: "tasks.report",
+        params: { reports: [{ taskId: "t-1", progress: { fraction: 0.3, detail: "1 of 10" } }] },
+      },
+    ]);
+  });
+
+  it("finishes without the progress still waiting, and ignores everything after", async () => {
+    vi.useFakeTimers();
+    const { proxy, sent } = makeProxy();
+    const { task, call } = await startTask(proxy, sent);
+
+    task.report({ fraction: 0.5 });
+    const finished = task.finish({ outcome: "failed", message: "Offline" });
+    const finishCall = sent.find((m) => m.type === "host-call" && m.method === "tasks.finish");
+    expect(finishCall.params).toEqual({
+      taskId: "t-1",
+      result: { outcome: "failed", message: "Offline" },
+    });
+    proxy.handleMessage({
+      type: "host-result",
+      requestId: finishCall.requestId,
+      ok: true,
+      result: undefined,
+    });
+    await finished;
+
+    task.report({ fraction: 0.9 });
+    await task.finish({ outcome: "succeeded" });
+    vi.advanceTimersByTime(300);
+    expect(sent.filter((m) => m.method === "tasks.report")).toEqual([]);
+    expect(sent.filter((m) => m.method === "tasks.finish")).toHaveLength(1);
+    // The cancel subscription went with the task.
+    proxy.handleMessage({
+      type: "subscription-event",
+      subscriptionId: call.params.subscriptionId,
+      payload: null,
+    });
+    expect(task.signal.aborted).toBe(false);
+  });
+
+  it("rejects bad options and throws on bad progress without crossing the port", async () => {
+    const { proxy, sent } = makeProxy();
+    await expect(proxy.host.tasks.start({ title: "", retry: RETRY })).rejects.toThrow(
+      /tasks\.start: title must not be empty/
+    );
+    expect(sent.find((m) => m.type === "host-call")).toBeUndefined();
+
+    const { task } = await startTask(proxy, sent);
+    expect(() => task.report({ fraction: -1 })).toThrow(/task\.report: progress\.fraction/);
+    await expect(task.finish({ outcome: "nope" } as never)).rejects.toThrow(/task\.finish/);
+  });
+
+  it("hands back an inert handle when main says the plugin unloaded, or after dispose", async () => {
+    const { proxy, sent } = makeProxy();
+    const started = proxy.host.tasks.start({ title: "T", retry: RETRY });
+    const call = sent.find((m) => m.type === "host-call" && m.method === "tasks.start");
+    proxy.handleMessage({
+      type: "host-result",
+      requestId: call.requestId,
+      ok: true,
+      result: { id: "t-x", inert: true },
+    });
+    expect((await started).signal.aborted).toBe(true);
+
+    proxy.dispose();
+    const late = await proxy.host.tasks.start({ title: "T", retry: RETRY });
+    expect(late.signal.aborted).toBe(true);
+  });
+
+  it("drops the cancel subscription when the start is refused", async () => {
+    const { proxy, sent } = makeProxy();
+    const started = proxy.host.tasks.start({ title: "T", retry: RETRY });
+    const call = sent.find((m) => m.type === "host-call" && m.method === "tasks.start");
+    proxy.handleMessage({
+      type: "host-result",
+      requestId: call.requestId,
+      ok: false,
+      error: 'Plugin "acme.demo" tasks.start: already has 16 unfinished tasks',
+    });
+    await expect(started).rejects.toThrow(/unfinished tasks/);
+    const subscriptions = Reflect.get(proxy, "subscriptions") as Map<string, unknown>;
+    expect(subscriptions.has(call.params.subscriptionId)).toBe(false);
+  });
+
+  it("ends a task whose start answered only after the worker gave up on it", async () => {
+    vi.useFakeTimers();
+    const { proxy, sent } = makeProxy();
+    const started = proxy.host.tasks.start({ title: "T", retry: RETRY });
+    const rejected = expect(started).rejects.toMatchObject({ code: "TIMEOUT" });
+    const call = sent.find((m) => m.type === "host-call" && m.method === "tasks.start");
+
+    await vi.advanceTimersByTimeAsync(PLUGIN_HOST_CALL_TIMEOUT_MS);
+    await rejected;
+    proxy.handleMessage({
+      type: "host-result",
+      requestId: call.requestId,
+      ok: true,
+      result: { id: "orphan" },
+    });
+
+    expect(
+      sent.filter((m) => m.type === "host-call" && m.method === "tasks.finish").map((m) => m.params)
+    ).toEqual([{ taskId: "orphan", result: { outcome: "cancelled" } }]);
+  });
+
+  it("posts messages the main-side schema accepts", async () => {
+    vi.useFakeTimers();
+    const { proxy, sent } = makeProxy();
+    const { task } = await startTask(proxy, sent);
+    task.report({ detail: "halfway" });
+    vi.advanceTimersByTime(150);
+    void task.finish({ outcome: "cancelled" });
+    for (const message of sent) expect(parseWorkerToHostMessage(message).ok).toBe(true);
+  });
+});
