@@ -341,6 +341,26 @@ describe("installed package instance mode (#14103)", () => {
     expect(seam.plugins.has(KEY_A)).toBe(true);
   });
 
+  it("resolves each instance's authority to that instance, though they share a dir (#14257)", async () => {
+    const { service } = await startService();
+    await service.setProjectInstanceEnabled(PROJECT_A, "/repo/a", PKG, true);
+    await service.setProjectInstanceEnabled(PROJECT_B, "/repo/b", PKG, true);
+    const authorities = (service as unknown as { pluginAuthorities: Map<string, string> })
+      .pluginAuthorities;
+    const authorityA = authorities.get(KEY_A)!;
+    const authorityB = authorities.get(KEY_B)!;
+    const dir = service.resolvePluginAuthority(authorityA)!.dir;
+
+    expect(service.resolvePluginAuthority(authorityA)).toEqual({ dir, pluginId: KEY_A });
+    expect(service.resolvePluginAuthority(KEY_A)).toEqual({ dir, pluginId: KEY_A });
+    expect(service.resolvePluginAuthority(authorityB)).toEqual({ dir, pluginId: KEY_B });
+    expect(service.resolvePluginAuthority(KEY_B)).toEqual({ dir, pluginId: KEY_B });
+
+    await service.setProjectInstanceEnabled(PROJECT_A, "/repo/a", PKG, false);
+    expect(service.resolvePluginAuthority(authorityA)).toBeUndefined();
+    expect(service.resolvePluginAuthority(authorityB)).toEqual({ dir, pluginId: KEY_B });
+  });
+
   it("does not load a project's instance that it never enabled", async () => {
     const { service, seam } = await startService();
     await service.setProjectInstanceEnabled(PROJECT_A, "/repo/a", PKG, true);

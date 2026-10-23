@@ -12,6 +12,7 @@ import {
   HostPluginAssetService,
   type HostPluginAssetEndpoint,
   type HostPluginAssetPlugin,
+  type HostPluginAssetServiceOptions,
 } from "./HostPluginAssetService.js";
 import { persistedPluginViewConsent } from "./pluginViewConsent.js";
 import { PluginViewGate, type PluginViewQuestion } from "./pluginViewGate.js";
@@ -186,12 +187,15 @@ async function loadedPlugins(): Promise<HostPluginAssetPlugin[]> {
  */
 export function installPluginHost(): () => void {
   const lease = getDriveLeaseService();
-  let rootForAuthority: (authority: string) => string | undefined = () => undefined;
+  let resolveAuthority: HostPluginAssetServiceOptions["resolveAuthority"] = () => undefined;
   void import("../../services/PluginService.js").then(({ pluginService }) => {
-    rootForAuthority = (authority) => pluginService.getPluginRootByAuthority(authority);
+    resolveAuthority = (authority) => {
+      const owner = pluginService.resolvePluginAuthority(authority);
+      return owner ? { root: owner.dir, instanceId: owner.pluginId } : undefined;
+    };
   });
   const service = new HostPluginAssetService({
-    rootForAuthority: (authority) => rootForAuthority(authority),
+    resolveAuthority: (authority) => resolveAuthority(authority),
     loadedPlugins,
     isDriving: (projectId, endpoint) => lease.isDriving(projectId, endpoint),
     fetchAsset: (request) => fetchLocalPluginAsset(request),

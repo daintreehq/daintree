@@ -33,8 +33,8 @@ export interface HostPluginAssetPlugin {
 }
 
 export interface HostPluginAssetServiceOptions {
-  /** Plugin root a `plugin://` authority serves, or undefined. */
-  rootForAuthority(authority: string): string | undefined;
+  /** The root a `plugin://` authority serves and the instance that owns it, or undefined. */
+  resolveAuthority(authority: string): { root: string; instanceId: string } | undefined;
   /** The plugins loaded on this host right now. */
   loadedPlugins(): Promise<HostPluginAssetPlugin[]>;
   isDriving(projectId: string, endpoint: HostPluginAssetEndpoint): boolean;
@@ -202,9 +202,10 @@ export class HostPluginAssetService {
     payload: PluginAssetRequest
   ): Promise<PluginAssetResponse> {
     if (this.disposed) return answer(503);
-    const root = this.options.rootForAuthority(payload.authority);
-    if (!root) return answer(404);
-    const plugin = await this.admit(endpoints, payload.endpointIds, root);
+    const owner = this.options.resolveAuthority(payload.authority);
+    if (!owner) return answer(404);
+    const { root } = owner;
+    const plugin = await this.admit(endpoints, payload.endpointIds, owner);
     if (plugin === "driven-elsewhere") return answer(403);
     if (!plugin) return answer(404);
     const size = await (this.options.assetSize ?? containedAssetSize)(root, payload.path);
@@ -247,9 +248,10 @@ export class HostPluginAssetService {
       files: null,
     });
     if (this.disposed) return refuse(503);
-    const root = this.options.rootForAuthority(payload.authority);
-    if (!root) return refuse(404);
-    const plugin = await this.admit(endpoints, payload.endpointIds, root);
+    const owner = this.options.resolveAuthority(payload.authority);
+    if (!owner) return refuse(404);
+    const { root } = owner;
+    const plugin = await this.admit(endpoints, payload.endpointIds, owner);
     if (plugin === "driven-elsewhere") return refuse(403);
     if (!plugin) return refuse(404);
     let files: Array<{ path: string; sha256: string }> | null;
@@ -262,29 +264,37 @@ export class HostPluginAssetService {
     return { status: 200, pluginId: plugin.instanceId, files };
   }
 
+  /**
+   * The instance that owns the authority, judged on its own: per-project
+   * instances of one installed package share a root, so a sibling's consent or
+   * project never stands in for the owner's (#14257).
+   */
   private async admit(
     endpoints: Map<string, HostPluginAssetEndpoint>,
     endpointIds: readonly string[],
-    root: string
+    owner: { root: string; instanceId: string }
   ): Promise<HostPluginAssetPlugin | "driven-elsewhere" | null> {
-    const normalizedRoot = path.resolve(root);
-    const candidates = (await this.options.loadedPlugins()).filter(
-      (plugin) => path.resolve(plugin.dir) === normalizedRoot && !plugin.remoteUnsupported
+    const normalizedRoot = path.resolve(owner.root);
+    const plugin = (await this.options.loadedPlugins()).find(
+      (candidate) =>
+        candidate.instanceId === owner.instanceId &&
+        path.resolve(candidate.dir) === normalizedRoot &&
+        !candidate.remoteUnsupported
     );
-    if (candidates.length === 0) return null;
+    if (!plugin) return null;
     let drivenElsewhere = false;
     for (const id of endpointIds) {
       const endpoint = endpoints.get(id);
       const projectId = endpoint?.projectId ?? null;
       if (!endpoint || endpoint.isClosed() || projectId === null) continue;
+      // Checked before the drive lease, so another project's plugin is a plain
+      // 404 rather than a 403 that admits it exists.
+      if (plugin.projectId !== null && plugin.projectId !== projectId) continue;
       if (!this.options.isDriving(projectId, endpoint)) {
         drivenElsewhere = true;
         continue;
       }
-      const visible = candidates.find(
-        (plugin) => plugin.projectId === null || plugin.projectId === projectId
-      );
-      if (visible) return visible;
+      return plugin;
     }
     return drivenElsewhere ? "driven-elsewhere" : null;
   }

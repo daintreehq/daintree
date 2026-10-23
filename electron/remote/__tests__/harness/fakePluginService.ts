@@ -14,6 +14,7 @@ export const remoteUnsupported = new Set<string>();
 export const fakePluginService = {
   listPlugins: () => [],
   getPluginRootByAuthority: () => undefined,
+  resolvePluginAuthority: () => undefined,
   isRemoteUnsupported: (pluginId: string) => remoteUnsupported.has(pluginId),
   getActiveWorktreeIdForWindow: async () => null,
   async dispatchHandler(pluginId: string, channel: string, ctx: PluginIpcContext, args: unknown[]) {
