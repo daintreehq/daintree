@@ -104,7 +104,7 @@ export const DriverObservationSchema = z.object({
 
 const nullableCount = z.number().finite().min(0).nullable();
 const count = z.number().int().min(0);
-const coreCount = z.number().int().min(1).max(4096);
+const coreCount = z.number().int().min(1);
 const percent = z.number().finite().min(0).max(100);
 
 const HostSummarySchema = z.object({

@@ -15,7 +15,7 @@ import {
   parseDarwinSwapUsage,
   parseMeminfo,
   parsePsi,
-  parseSysctlCoreCount,
+  parseDarwinCpuClusters,
   parseThermalZoneTemp,
   psiToMemoryPressure,
   thermalFromCelsius,
@@ -71,10 +71,15 @@ export type SampleReaders = Pick<HostSampleSources, "agents" | "projects" | "dri
 
 const LINUX_THERMAL_DIR = "/sys/class/thermal";
 
+/** Reads of the cluster layout before an unknown answer is taken as final: Intel Macs never have one. */
+const CPU_CLUSTER_PROBES = 3;
+
 interface CpuClusters {
   performance: number | null;
   efficiency: number | null;
 }
+
+const NO_CLUSTERS: CpuClusters = { performance: null, efficiency: null };
 
 async function settle<T>(read: () => Promise<T>, fallback: T): Promise<T> {
   try {
@@ -91,8 +96,9 @@ async function settle<T>(read: () => Promise<T>, fallback: T): Promise<T> {
  */
 export class HostMetricsSampler {
   private previousCpus: CpuTimes[] | null = null;
-  /** Cluster sizes are hardware: read once, an unknown answer included. */
-  private clusters: Promise<CpuClusters> | null = null;
+  /** Cluster sizes are hardware: kept once read, so only an unknown answer is asked again. */
+  private clusters: CpuClusters | null = null;
+  private clusterProbes = 0;
 
   constructor(private readonly sources: HostSampleSources) {}
 
@@ -219,19 +225,25 @@ export class HostMetricsSampler {
     }
   }
 
-  private cpuClusters(): Promise<CpuClusters> {
-    if (this.sources.platform !== "darwin") {
-      return Promise.resolve({ performance: null, efficiency: null });
-    }
-    // perflevel0 is the performance cluster, perflevel1 efficiency; Intel Macs have neither.
-    this.clusters ??= Promise.all([
-      settle(() => this.sources.run("/usr/sbin/sysctl", ["-n", "hw.perflevel0.logicalcpu"]), null),
-      settle(() => this.sources.run("/usr/sbin/sysctl", ["-n", "hw.perflevel1.logicalcpu"]), null),
-    ]).then(([performance, efficiency]) => ({
-      performance: parseSysctlCoreCount(performance),
-      efficiency: parseSysctlCoreCount(efficiency),
-    }));
-    return this.clusters;
+  private async cpuClusters(): Promise<CpuClusters> {
+    if (this.sources.platform !== "darwin") return NO_CLUSTERS;
+    if (this.clusters) return this.clusters;
+    // A timed-out read under load isn't the hardware's answer, so a few samples ask again.
+    if (this.clusterProbes >= CPU_CLUSTER_PROBES) return NO_CLUSTERS;
+    this.clusterProbes += 1;
+    const text = await settle(
+      () =>
+        this.sources.run("/usr/sbin/sysctl", [
+          "-n",
+          "hw.perflevel0.name",
+          "hw.perflevel0.logicalcpu",
+          "hw.perflevel1.name",
+          "hw.perflevel1.logicalcpu",
+        ]),
+      null
+    );
+    this.clusters = parseDarwinCpuClusters(text);
+    return this.clusters ?? NO_CLUSTERS;
   }
 
   private async linuxMemory() {

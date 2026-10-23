@@ -194,12 +194,31 @@ export function cpuPercentBetween(
   return Math.min(100, Math.max(0, (busy / total) * 100));
 }
 
-/** A `sysctl -n` core count: a whole positive number and nothing else, or null. */
-export function parseSysctlCoreCount(text: string | null): number | null {
-  const trimmed = text?.trim();
-  if (!trimmed || !/^\d+$/.test(trimmed)) return null;
-  const value = Number(trimmed);
+function parseCoreCount(text: string | undefined): number | null {
+  if (!text || !/^\d+$/.test(text)) return null;
+  const value = Number(text);
   return Number.isSafeInteger(value) && value > 0 ? value : null;
+}
+
+/**
+ * Apple Silicon cluster sizes from `sysctl -n hw.perflevel0.name
+ * hw.perflevel0.logicalcpu hw.perflevel1.name hw.perflevel1.logicalcpu`.
+ * Only the Performance + Efficiency layout counts: other chips name their
+ * levels differently (M5 Pro/Max report Super and Performance), and Intel Macs
+ * have no perflevels at all, so anything else is null rather than relabelled.
+ */
+export function parseDarwinCpuClusters(
+  text: string | null
+): { performance: number; efficiency: number } | null {
+  if (text === null) return null;
+  const lines = text
+    .trim()
+    .split(/\r?\n/)
+    .map((line) => line.trim());
+  if (lines.length !== 4 || lines[0] !== "Performance" || lines[2] !== "Efficiency") return null;
+  const performance = parseCoreCount(lines[1]);
+  const efficiency = parseCoreCount(lines[3]);
+  return performance !== null && efficiency !== null ? { performance, efficiency } : null;
 }
 
 /**

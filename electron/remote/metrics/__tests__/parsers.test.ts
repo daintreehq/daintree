@@ -2,13 +2,13 @@ import { describe, expect, it } from "vitest";
 import {
   clusterCpuPercentBetween,
   cpuPercentBetween,
+  parseDarwinCpuClusters,
   parseCgroupMemory,
   parseDarwinPressureLevel,
   parseDarwinSwapUsage,
   parseIoregGpuUtilization,
   parseMeminfo,
   parsePsi,
-  parseSysctlCoreCount,
   parseThermalZoneTemp,
   psiToMemoryPressure,
   thermalFromCelsius,
@@ -169,14 +169,26 @@ describe("cpuPercentBetween", () => {
   });
 });
 
-describe("parseSysctlCoreCount", () => {
-  it("reads a whole positive count", () => {
-    expect(parseSysctlCoreCount("10\n")).toBe(10);
+describe("parseDarwinCpuClusters", () => {
+  it("reads the performance and efficiency cluster sizes", () => {
+    expect(parseDarwinCpuClusters("Performance\n10\nEfficiency\n4\n")).toEqual({
+      performance: 10,
+      efficiency: 4,
+    });
   });
 
-  it("is null for a missing sysctl or anything but a positive whole number", () => {
-    for (const text of [null, "", "0", "-4", "4.5", "4 cores", "abc"]) {
-      expect(parseSysctlCoreCount(text)).toBeNull();
+  it("is null for any other layout rather than relabelling it", () => {
+    for (const text of [
+      null,
+      "",
+      // M5 Pro/Max: no efficiency cluster; their performance cores are level 1.
+      "Super\n6\nPerformance\n12\n",
+      // A chip or VM reporting one level, or a failed second read.
+      "Performance\n8\n",
+      "Performance\n0\nEfficiency\n4\n",
+      "Performance\n4.5\nEfficiency\n4\n",
+    ]) {
+      expect(parseDarwinCpuClusters(text)).toBeNull();
     }
   });
 });

@@ -223,9 +223,9 @@ describe("HostMetricsSampler", () => {
           ];
         },
         run: async (_command, args) => {
-          if (args.includes("hw.perflevel0.logicalcpu")) return ((probes += 1), "2\n");
-          if (args.includes("hw.perflevel1.logicalcpu")) return ((probes += 1), "1\n");
-          return null;
+          if (!args.includes("hw.perflevel0.name")) return null;
+          probes += 1;
+          return "Performance\n2\nEfficiency\n1\n";
         },
       })
     );
@@ -240,7 +240,8 @@ describe("HostMetricsSampler", () => {
     const second = await sampler.sample();
     expect(second.cpuPerformancePercent).toBeCloseTo(60);
     expect(second.cpuEfficiencyPercent).toBeCloseTo(10);
-    expect(probes).toBe(2);
+    await sampler.sample();
+    expect(probes).toBe(1);
   });
 
   it("reports cluster sizes without a split when they don't match the cores read", async () => {
@@ -248,11 +249,7 @@ describe("HostMetricsSampler", () => {
       sources({
         platform: "darwin",
         run: async (_command, args) =>
-          args.includes("hw.perflevel0.logicalcpu")
-            ? "10"
-            : args.includes("hw.perflevel1.logicalcpu")
-              ? "4"
-              : null,
+          args.includes("hw.perflevel0.name") ? "Performance\n10\nEfficiency\n4\n" : null,
       })
     );
     await sampler.sample();
@@ -265,9 +262,28 @@ describe("HostMetricsSampler", () => {
     });
   });
 
-  it("reports no clusters on Linux or a Mac without performance levels, and never probes Linux", async () => {
+  it("asks again after a failed cluster read, then takes no answer as final", async () => {
+    const answers: Array<string | null> = [null, "Performance\n10\nEfficiency\n4\n"];
+    let probes = 0;
+    const run = async (_command: string, args: string[]) =>
+      args.includes("hw.perflevel0.name") ? (answers[probes++] ?? null) : null;
+    const sampler = new HostMetricsSampler(sources({ platform: "darwin", run }));
+    expect((await sampler.sample()).cpuPerformanceCoreCount).toBeNull();
+    expect((await sampler.sample()).cpuPerformanceCoreCount).toBe(10);
+
+    probes = 0;
+    answers.length = 0;
+    const intel = new HostMetricsSampler(sources({ platform: "darwin", run }));
+    for (let i = 0; i < 6; i += 1) await intel.sample();
+    expect(probes).toBe(3);
+  });
+
+  it("reports no clusters on Linux or a chip without a performance and efficiency pair", async () => {
     const probed: string[][] = [];
-    const run = async (_command: string, args: string[]) => (probed.push(args), null);
+    const run = async (_command: string, args: string[]) => {
+      probed.push(args);
+      return args.includes("hw.perflevel0.name") ? "Super\n6\nPerformance\n12\n" : null;
+    };
     for (const platform of ["linux", "darwin"] as const) {
       const sampler = new HostMetricsSampler(sources({ platform, run }));
       await sampler.sample();
@@ -278,9 +294,8 @@ describe("HostMetricsSampler", () => {
         cpuEfficiencyPercent: null,
       });
     }
-    expect(
-      probed.filter((args) => args.some((arg) => arg.startsWith("hw.perflevel")))
-    ).toHaveLength(2);
+    // Linux never asks; the Mac asks once per sample until it gives up.
+    expect(probed.filter((args) => args.includes("hw.perflevel0.name"))).toHaveLength(2);
   });
 
   it("keeps sampling when one source throws", async () => {
