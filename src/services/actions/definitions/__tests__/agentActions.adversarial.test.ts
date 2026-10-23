@@ -1635,7 +1635,8 @@ describe("agent.listAvailable", () => {
         // The deadline must be the only timer in flight, so advancing to "next"
         // provably lands on it rather than on something scheduled nearby. It
         // arms once the lazily loaded run body starts, not synchronously.
-        await vi.waitFor(() => expect(vi.getTimerCount()).toBe(1));
+        await vi.dynamicImportSettled();
+        expect(vi.getTimerCount()).toBe(1);
 
         await vi.advanceTimersToNextTimerAsync();
         await rejects;

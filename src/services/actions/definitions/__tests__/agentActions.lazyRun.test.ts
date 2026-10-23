@@ -67,9 +67,13 @@ describe("agent action run bodies (#14268)", () => {
   it("loads the run bodies on first dispatch and forwards args, context, callbacks and result", async () => {
     const def = (await register()).get("agent.launch")!();
     const args = { agentId: "claude" };
+    const result = { launched: true };
+    m.launch.mockResolvedValue(result);
 
-    await expect(def.run(args, ctx)).resolves.toEqual({ launched: true });
+    await expect(def.run(args, ctx)).resolves.toBe(result);
     await def.run(args, ctx);
+    expect(m.launch.mock.calls[0]?.[0]).toBe(args);
+    expect(m.launch.mock.calls[0]?.[1]).toBe(ctx);
 
     expect(m.runLookups).toBe(2);
     expect(m.launch).toHaveBeenCalledTimes(2);
