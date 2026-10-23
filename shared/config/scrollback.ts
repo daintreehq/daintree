@@ -3,6 +3,12 @@ export const SCROLLBACK_MAX = 10000;
 export const SCROLLBACK_DEFAULT = 1000;
 export const SCROLLBACK_BACKGROUND = 500;
 
+// Lines each pty-host headless mirror keeps. Restores (cold switch, view
+// eviction, app restart, poisoned-terminal rebuild) replay from this mirror, so
+// it is also the most history a renderer terminal can ever get back — the
+// renderer's agent ceiling is pinned to it rather than sized independently.
+export const PTY_MIRROR_SCROLLBACK = 5000;
+
 export function normalizeScrollbackLines(value: unknown): number {
   const coerced =
     typeof value === "string" && value.trim() !== "" ? Number(value) : (value as number);

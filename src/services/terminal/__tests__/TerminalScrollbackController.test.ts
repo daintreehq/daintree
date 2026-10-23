@@ -1,7 +1,12 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { reduceScrollback, restoreScrollback } from "../TerminalScrollbackController";
 import { type ManagedTerminal, SCROLLBACK_REDUCE_COOLDOWN_MS } from "../types";
-import { getScrollbackForType, setAgentScrollbackMaxLines } from "@/utils/scrollbackConfig";
+import {
+  AGENT_SCROLLBACK_MAX_LINES,
+  getAgentScrollbackMaxLines,
+  getScrollbackForType,
+  setAgentScrollbackMaxLines,
+} from "@/utils/scrollbackConfig";
 import { logInfo } from "@/utils/logger";
 import { TerminalRefreshTier } from "@shared/types/panel";
 
@@ -266,8 +271,9 @@ describe("TerminalScrollbackController", () => {
       managed.terminal.options.scrollback = 100;
 
       restoreScrollback(managed);
-      // getScrollbackForType(true, 5000) = min(10000, floor(5000*10)) = 10000
-      expect(managed.terminal.options.scrollback).toBe(10000);
+      // The app-level base of 5000 saturates the agent policy at the mirror cap;
+      // the project's 2000 would give the same cap, so this pins the shape.
+      expect(managed.terminal.options.scrollback).toBe(AGENT_SCROLLBACK_MAX_LINES);
     });
 
     // #10911 — a demotion flap (agent→plain) calls restoreScrollback with a
@@ -525,14 +531,17 @@ describe("TerminalScrollbackController", () => {
     // #11673's reported scenario end to end: the Efficiency profile lowers the
     // agent ceiling under a grid of panes where only one holds focus.
     describe("efficiency-profile agent downshift (#11673)", () => {
-      const balancedCeiling = 10_000;
+      // Balanced's own ceiling sits above the mirror cap, so the cap is what a
+      // balanced agent pane actually keeps.
+      const balancedCeiling = AGENT_SCROLLBACK_MAX_LINES;
       const efficiencyCeiling = 4_000;
+      const originalAgentMax = getAgentScrollbackMaxLines();
 
       function makeAgentPane(overrides: Record<string, unknown> = {}): ManagedTerminal {
         const managed = makeMockManaged({ runtimeAgentId: "claude", ...overrides });
         managed.terminal.options.scrollback = balancedCeiling;
-        // A long-running agent that has filled most of the balanced ceiling.
-        setBufferLength(managed, 9_000 + managed.terminal.rows);
+        // A long-running agent holding more history than the efficiency ceiling.
+        setBufferLength(managed, 4_500 + managed.terminal.rows);
         return managed;
       }
 
@@ -541,7 +550,7 @@ describe("TerminalScrollbackController", () => {
       });
 
       afterEach(() => {
-        setAgentScrollbackMaxLines(balancedCeiling);
+        setAgentScrollbackMaxLines(originalAgentMax);
       });
 
       it("keeps every line of a visible unfocused agent pane", () => {
@@ -567,7 +576,7 @@ describe("TerminalScrollbackController", () => {
         restoreScrollback(managed);
         const clamped = managed.terminal.options.scrollback;
 
-        setAgentScrollbackMaxLines(balancedCeiling);
+        setAgentScrollbackMaxLines(originalAgentMax);
         restoreScrollback(managed);
 
         // Growth is unguarded, so the pane recovers its headroom.
@@ -699,7 +708,7 @@ describe("TerminalScrollbackController adversarial", () => {
     restoreScrollback(agentManaged);
 
     expect(terminalManaged.terminal.options.scrollback).toBe(2000);
-    expect(agentManaged.terminal.options.scrollback).toBe(10000);
+    expect(agentManaged.terminal.options.scrollback).toBe(AGENT_SCROLLBACK_MAX_LINES);
   });
 
   it("NEGATIVE_SCROLLBACK_USED_NO_WARN", () => {
