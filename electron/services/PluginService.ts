@@ -56,7 +56,8 @@ import {
   PLUGIN_WORKER_SELF_RESTART_COOLDOWN_MS,
   PROJECT_SURFACE_SLOTS,
   UNBOUND_PLUGIN_HOST_BINDING,
-  type ProjectSurfaceSlot,
+  fileEditorSlotKey,
+  type ProjectSurfaceSlotKey,
   type WorkerRestartResult,
 } from "../../shared/types/plugin.js";
 import type {
@@ -140,6 +141,7 @@ import {
   getProjectSurfaceSlots,
   refuseProjectSurface,
   releasePluginSurfaces,
+  type SurfaceClaimResult,
 } from "./plugin/PluginSurfaceRegistry.js";
 import {
   getProjectSurfaceChoices as readProjectSurfaceChoices,
@@ -3224,6 +3226,21 @@ export class PluginService {
       const surfaceProjectId = binding.projectId;
       const surfaces = manifest.contributes.surfaces ?? {};
       let surfacesChanged = false;
+      // Never a silent winner: which claim the user sees follows a fixed rank,
+      // and BOTH plugins are named, because the fix is to change one of the two
+      // manifests and the author cannot do that without knowing the other. The
+      // same refusal reaches project plugin settings and `daintree-plugin doctor`.
+      const reportConflict = (claimed: string, result: SurfaceClaimResult) => {
+        if (!result.ok && result.reason === "outranked" && result.heldBy !== undefined) {
+          console.warn(
+            `[PluginService] Project surface conflict: "${manifest.name}" claims ${claimed}, which "${pluginManifestIdFromInstanceKey(result.heldBy)}" holds in this project. Only one plugin may claim it; the lower manifest id keeps it.`
+          );
+        } else if (result.ok && result.displaced !== undefined) {
+          console.warn(
+            `[PluginService] Project surface conflict: "${manifest.name}" takes ${claimed} from "${pluginManifestIdFromInstanceKey(result.displaced)}" in this project. Only one plugin may claim it; the lower manifest id keeps it.`
+          );
+        }
+      };
       for (const slot of PROJECT_SURFACE_SLOTS) {
         const claim = surfaces[slot];
         if (claim === undefined) continue;
@@ -3253,19 +3270,23 @@ export class PluginService {
           scope: "project",
           value: { kind: "view", viewId: claim.viewId, panelKindId },
         });
-        // Never a silent winner: which surface the user sees follows a fixed
-        // rank, and BOTH plugins are named, because the fix is to change one of
-        // the two manifests and the author cannot do that without knowing the
-        // other. The same refusal reaches project plugin settings and
-        // `daintree-plugin doctor`.
-        if (!result.ok && result.reason === "outranked" && result.heldBy !== undefined) {
-          console.warn(
-            `[PluginService] Project surface conflict: "${manifest.name}" claims surfaces.${slot}, which "${pluginManifestIdFromInstanceKey(result.heldBy)}" holds in this project. Only one plugin may claim it; the lower manifest id keeps it.`
-          );
-        } else if (result.ok && result.displaced !== undefined) {
-          console.warn(
-            `[PluginService] Project surface conflict: "${manifest.name}" takes surfaces.${slot} from "${pluginManifestIdFromInstanceKey(result.displaced)}" in this project. Only one plugin may claim it; the lower manifest id keeps it.`
-          );
+        reportConflict(`surfaces.${slot}`, result);
+      }
+      // File editor defaults (#13811): each pattern of a `default` editor claims
+      // that pattern's slot, with the editor's bare id as the claim. The schema
+      // confines the flag to a view-backed Edit editor with paths, and the
+      // hosted views above already carry that editor, so the renderer resolves
+      // the claim against the same snapshot it offers the editor from.
+      for (const entry of manifest.contributes.fileEditors) {
+        if (entry.default !== true || entry.mode !== "edit" || entry.view === undefined) continue;
+        for (const pattern of entry.paths ?? []) {
+          surfacesChanged = true;
+          const result = claimProjectSurface(surfaceProjectId, fileEditorSlotKey(pattern), {
+            pluginId,
+            scope: "project",
+            value: { kind: "data", data: { editorId: entry.id } },
+          });
+          reportConflict(`the default editor for "${pattern}"`, result);
         }
       }
       if (surfacesChanged) this.publishProjectSurfaces([surfaceProjectId]);
@@ -7169,7 +7190,7 @@ export class PluginService {
    */
   setProjectSurfaceChoice(
     projectId: string,
-    slot: ProjectSurfaceSlot,
+    slot: ProjectSurfaceSlotKey,
     choice: ProjectSurfaceChoice | null,
     optionId?: string
   ): ProjectSurfacesSnapshot {

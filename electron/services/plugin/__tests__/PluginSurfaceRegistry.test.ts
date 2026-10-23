@@ -1,5 +1,8 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import type { ProjectSurfaceSlotClaim } from "../../../../shared/types/plugin.js";
+import {
+  fileEditorSlotKey,
+  type ProjectSurfaceSlotClaim,
+} from "../../../../shared/types/plugin.js";
 import {
   arbitrateProjectSurfaceSlot,
   bumpProjectSurfaceRevision,
@@ -325,5 +328,53 @@ describe("arbitrateProjectSurfaceSlot", () => {
       defaultOptionId: null,
       refused: [],
     });
+  });
+});
+
+describe("file editor slots (#13811)", () => {
+  function editor(pluginId: string, editorId: string): ProjectSurfaceSlotClaim {
+    return { pluginId, scope: "project", value: { kind: "data", data: { editorId } } };
+  }
+  const json = fileEditorSlotKey("content/*.json");
+  const about = fileEditorSlotKey("content/about.json");
+
+  it("arbitrates each pattern on its own, so overlapping patterns keep separate owners", () => {
+    claimProjectSurface("p1", json, editor("project__p1__acme.cms", "records"));
+    claimProjectSurface("p1", about, editor("project__p1__zed.pages", "page"));
+
+    const slots = getProjectSurfaceSlots("p1");
+    expect(slots[json]?.defaultOptionId).toBe("project__p1__acme.cms");
+    expect(slots[about]?.defaultOptionId).toBe("project__p1__zed.pages");
+  });
+
+  it("gives one pattern to the lower manifest id and remembers the loser for when it leaves", () => {
+    claimProjectSurface("p1", json, editor("project__p1__zed.pages", "page"));
+    expect(claimProjectSurface("p1", json, editor("project__p1__acme.cms", "records"))).toEqual({
+      ok: true,
+      displaced: "project__p1__zed.pages",
+    });
+    expect(getProjectSurfaceRefusals("p1")).toEqual([
+      {
+        slot: json,
+        pluginId: "project__p1__zed.pages",
+        reason: "outranked",
+        heldBy: "project__p1__acme.cms",
+      },
+    ]);
+
+    expect(releasePluginSurfaces("project__p1__acme.cms")).toEqual(["p1"]);
+    expect(getProjectSurfaceSlots("p1")[json]?.defaultOptionId).toBe("project__p1__zed.pages");
+  });
+
+  it("refuses a view claim on a file editor slot, which takes data", () => {
+    expect(claimProjectSurface("p1", json, acme)).toEqual({ ok: false, reason: "claim-kind" });
+    expect(getProjectSurfaceSlots("p1")[json]?.defaultOptionId).toBeNull();
+  });
+
+  it("releases every pattern a plugin claimed when it unloads", () => {
+    claimProjectSurface("p1", json, editor("project__p1__acme.cms", "records"));
+    claimProjectSurface("p1", about, editor("project__p1__acme.cms", "records"));
+    releasePluginSurfaces("project__p1__acme.cms");
+    expect(getProjectSurfaceSlots("p1")).toEqual({});
   });
 });

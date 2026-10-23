@@ -362,6 +362,8 @@ export interface FilePanelOptions extends AddPanelOptionsBase {
   initialLine?: number;
   /** Explicit containment root for every read of the file; see `FilePanelData`. Never persisted. */
   fileContainmentRoot?: string;
+  /** The editor Edit mode opens with; see `FilePanelData`. Never persisted. */
+  fileEditorChoice?: string;
 }
 
 /**

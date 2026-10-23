@@ -1,12 +1,13 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type {
-  ProjectSurfaceChoice,
-  ProjectSurfaceChoiceUpdate,
-  ProjectSurfaceChoices,
-  ProjectSurfaceSlotState,
-  ProjectSurfacesChangedEvent,
-  ProjectSurfacesSnapshot,
+import {
+  fileEditorSlotKey,
+  type ProjectSurfaceChoice,
+  type ProjectSurfaceChoiceUpdate,
+  type ProjectSurfaceChoices,
+  type ProjectSurfaceSlotState,
+  type ProjectSurfacesChangedEvent,
+  type ProjectSurfacesSnapshot,
 } from "@shared/types/plugin";
 import {
   _resetPluginProjectSurfacesStoreForTest,
@@ -903,6 +904,32 @@ describe("shared slot answers", () => {
     );
     // Another plugin's frame never asks this plugin's question.
     expect(consentHostSlot(claimed, "project__p1__other", new Set(["sidebar", "home"]))).toBeNull();
+  });
+
+  it("lists a plugin's default editors after its catalogue slots, by pattern (#13811)", () => {
+    const editorSlot = (pluginId: string): ProjectSurfaceSlotState => ({
+      mode: "exclusive",
+      options: [{ pluginId, scope: "project", value: { kind: "data", data: { editorId: "e" } } }],
+      defaultOptionId: pluginId,
+      refused: [],
+    });
+    const pages = fileEditorSlotKey("pages/*.json");
+    const content = fileEditorSlotKey("content/*.json");
+    // Inserted out of order: the list must not follow arrival.
+    const slots = {
+      [pages]: editorSlot(claim.pluginId),
+      ...ownedBy(),
+      [content]: editorSlot(claim.pluginId),
+    };
+
+    expect(claimedSurfaceSlots(slots, { [pages]: record("acme.dash", "stock") })).toEqual([
+      { slot: "emptyCanvas", pluginId: claim.pluginId, choice: null },
+      { slot: content, pluginId: claim.pluginId, choice: null },
+      { slot: pages, pluginId: claim.pluginId, choice: "stock" },
+    ]);
+    expect(
+      surfaceAnswerUpdates([{ slot: content, pluginId: claim.pluginId, choice: null }], "surface")
+    ).toEqual([{ slot: content, choice: "surface", ownerId: claim.pluginId }]);
   });
 
   it("records an exclusive answer without naming an option", () => {

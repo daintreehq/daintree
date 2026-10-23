@@ -39,9 +39,10 @@ const panelsById: Record<string, unknown> = {};
 
 // Stable across selector calls so a test can assert which mode a toggle asked
 // for — a fresh vi.fn() per call records nothing observable.
-const { setFileViewModeMock, setFilePanelPathMock } = vi.hoisted(() => ({
+const { setFileViewModeMock, setFilePanelPathMock, setFileEditorChoiceMock } = vi.hoisted(() => ({
   setFileViewModeMock: vi.fn(),
   setFilePanelPathMock: vi.fn(),
+  setFileEditorChoiceMock: vi.fn(),
 }));
 // Mutable so a dock test can make this panel the active dock panel (or not) —
 // the pane defers its reveal refresh while parked offscreen (#11588).
@@ -52,6 +53,7 @@ vi.mock("@/store/panelStore", () => ({
       panelsById,
       setFileViewMode: setFileViewModeMock,
       setFilePanelPath: setFilePanelPathMock,
+      setFileEditorChoice: setFileEditorChoiceMock,
       activeDockTerminalId: dockState.activeDockTerminalId,
     }),
 }));
@@ -295,6 +297,13 @@ const fileEditorState = vi.hoisted(() => ({
   plugin: { edit: [], view: [] } as Record<"edit" | "view", unknown[]>,
   pluginHostProps: [] as Array<Record<string, unknown>>,
 }));
+// #13811: which project default covers the file is the resolver's business,
+// so the pane is handed one directly.
+const fileDefaultState = vi.hoisted(() => ({ value: null as unknown }));
+vi.mock("@/registry/fileEditorDefaults", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/registry/fileEditorDefaults")>()),
+  useFileEditorDefault: () => fileDefaultState.value,
+}));
 vi.mock("../PluginFileEditorHost", () => ({
   default: (props: Record<string, unknown>) => {
     fileEditorState.pluginHostProps.push(props);
@@ -336,6 +345,11 @@ function FileEditorMock(props: Record<string, unknown>) {
 import { FilePane } from "../FilePane";
 import { useFileDocumentStore } from "@/store/fileDocumentStore";
 import { useFileEditorChoicesStore } from "@/store/fileEditorChoicesStore";
+import {
+  _resetPluginProjectSurfacesStoreForTest,
+  usePluginProjectSurfacesStore,
+} from "@/store/pluginProjectSurfacesStore";
+import { fileEditorSlotKey } from "@shared/types/plugin";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { FILE_READ_ERROR_MESSAGES } from "@/components/FileViewer/fileReadErrors";
 import { revealCopy } from "@/components/FileViewer/revealCopy";
@@ -4059,6 +4073,166 @@ describe("FilePane edit mode (#12323)", () => {
       fileEditorState.plugin.edit = [candidate("acme.records", "Acme records", "edit")];
       await renderPane({ location: "dialog" });
       expect(radioLabels()).toEqual(["Source", "Rendered"]);
+    });
+
+    describe("a project plugin's default editor (#13811)", () => {
+      const SLOT = fileEditorSlotKey("docs/*.md");
+
+      function pinnedPanel(fileViewMode: string) {
+        panelsById["file-1"] = {
+          id: "file-1",
+          kind: "file",
+          filePath: "/repo/docs/spec.md",
+          worktreeId: WORKTREE_ID,
+          fileViewMode,
+          fileEditorChoice: "acme.records/main",
+        };
+      }
+
+      afterEach(() => {
+        fileDefaultState.value = null;
+        _resetPluginProjectSurfacesStoreForTest();
+      });
+
+      it("opens the editor pinned to the panel ahead of the built-in", async () => {
+        seedWorktree();
+        fileEditorState.plugin.edit = [candidate("acme.records", "Acme records", "edit")];
+        pinnedPanel("edit");
+        render(paneElement());
+        await act(async () => {});
+        expect(radioLabels()).toEqual(["Source", "Rendered", "Edit · Acme records"]);
+        expect(await screen.findByTestId("plugin-file-editor-mock")).toBeTruthy();
+        expect(screen.queryByTestId("file-editor-mock")).toBeNull();
+      });
+
+      it("falls back to the usual pick when the pinned editor isn't on offer", async () => {
+        seedWorktree();
+        pinnedPanel("edit");
+        render(paneElement());
+        await act(async () => {});
+        expect(radioLabels()).toEqual(["Source", "Rendered", "Edit"]);
+        expect(await screen.findByTestId("file-editor-mock")).toBeTruthy();
+      });
+
+      const owned = {
+        mode: "exclusive" as const,
+        options: [
+          {
+            pluginId: "acme.records",
+            scope: "project" as const,
+            value: { kind: "data" as const, data: { editorId: "main" } },
+          },
+        ],
+        defaultOptionId: "acme.records",
+        refused: [],
+      };
+
+      /** An unanswered default on `docs/*.md`, with main's save answered by `save`. */
+      async function renderAsked(save: (updates: unknown) => Promise<unknown>) {
+        seedWorktree();
+        fileEditorState.resolved = null;
+        fileEditorState.plugin.edit = [candidate("acme.records", "Acme records", "edit")];
+        fileDefaultState.value = {
+          slot: SLOT,
+          pluginId: "acme.records",
+          choiceId: "acme.records/main",
+          choice: null,
+        };
+        Object.defineProperty(window, "electron", {
+          configurable: true,
+          value: { plugin: { setProjectSurfaceChoices: vi.fn(save) } },
+        });
+        usePluginProjectSurfacesStore.setState({
+          slots: { [SLOT]: owned },
+          choices: {},
+          choicesLoaded: true,
+        });
+        pinnedPanel("edit");
+        render(paneElement());
+        await act(async () => {});
+      }
+
+      afterEach(() => {
+        Reflect.deleteProperty(window, "electron");
+      });
+
+      it("asks about an unanswered default in the pane, and Use Daintree's leaves it for Source", async () => {
+        await renderAsked(async () => ({
+          projectId: "p1",
+          revision: 1,
+          slots: { [SLOT]: owned },
+          choices: { [SLOT]: { pluginId: "acme.records", choice: "stock", decidedAt: 1 } },
+        }));
+
+        expect(
+          screen.getByText("acme.records set up this project: Editor for docs/*.md")
+        ).toBeTruthy();
+        await act(async () => {
+          fireEvent.click(screen.getByRole("button", { name: "Use Daintree's" }));
+        });
+        expect(setFileViewModeMock).toHaveBeenCalledWith("file-1", "source");
+      });
+
+      it("keeps the editor and says so when the answer couldn't be saved", async () => {
+        await renderAsked(() => Promise.reject(new Error("ENOSPC")));
+
+        await act(async () => {
+          fireEvent.click(screen.getByRole("button", { name: "Use Daintree's" }));
+        });
+        expect(setFileViewModeMock).not.toHaveBeenCalled();
+        expect(screen.getByRole("alert").textContent).toContain("Couldn't save the editor choice");
+      });
+
+      it("leaves the pane alone when main ends up holding a different answer", async () => {
+        // Another view kept the plugin's editor while this answer was in flight.
+        await renderAsked(async () => ({
+          projectId: "p1",
+          revision: 1,
+          slots: { [SLOT]: owned },
+          choices: { [SLOT]: { pluginId: "acme.records", choice: "surface", decidedAt: 2 } },
+        }));
+
+        await act(async () => {
+          fireEvent.click(screen.getByRole("button", { name: "Use Daintree's" }));
+        });
+        expect(setFileViewModeMock).not.toHaveBeenCalled();
+      });
+
+      it("doesn't ask in a pane where the default's editor isn't on offer", async () => {
+        seedWorktree();
+        fileEditorState.resolved = null;
+        const small = candidate("acme.records", "Acme records", "edit");
+        small.editor.maxBytes = 2;
+        fileEditorState.plugin.edit = [small];
+        fileDefaultState.value = {
+          slot: SLOT,
+          pluginId: "acme.records",
+          choiceId: "acme.records/main",
+          choice: null,
+        };
+        usePluginProjectSurfacesStore.setState({
+          slots: { [SLOT]: owned },
+          choices: {},
+          choicesLoaded: true,
+        });
+        await renderPane({ content: "# a file larger than two bytes\n" });
+        expect(screen.queryByText(/set up this project/)).toBeNull();
+      });
+
+      it("doesn't ask once the default is answered", async () => {
+        seedWorktree();
+        fileEditorState.plugin.edit = [candidate("acme.records", "Acme records", "edit")];
+        fileDefaultState.value = {
+          slot: SLOT,
+          pluginId: "acme.records",
+          choiceId: "acme.records/main",
+          choice: "surface",
+        };
+        pinnedPanel("edit");
+        render(paneElement());
+        await act(async () => {});
+        expect(screen.queryByText(/set up this project/)).toBeNull();
+      });
     });
 
     it("does not open a plugin editor before the remembered answers have loaded", async () => {

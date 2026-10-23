@@ -503,6 +503,60 @@ describe("contributes.fileEditors (#12323, #13809)", () => {
     expect(issueWithCode(installed, "fileEditors_paths_project_only")).toBeDefined();
   });
 
+  it("accepts a default only on a project plugin's view-backed Edit editor with paths (#13811)", () => {
+    const paths = ["content/*.json"];
+    expect(
+      projectWith({ views: [editorView], fileEditors: [viewEditor({ paths, default: true })] })
+        .success
+    ).toBe(true);
+
+    const installed = manifestWith({
+      views: [editorView],
+      fileEditors: [viewEditor({ default: true })],
+    });
+    expect(issueWithCode(installed, "fileEditors_default_project_only")?.path).toEqual([
+      "contributes",
+      "fileEditors",
+      0,
+      "default",
+    ]);
+
+    for (const entry of [
+      // By extension only: a default would reach every file of the type.
+      viewEditor({ default: true }),
+      viewEditor({ paths, mode: "view", default: true }),
+    ]) {
+      const result = projectWith({ views: [editorView], fileEditors: [entry] });
+      expect(issueWithCode(result, "fileEditors_default_invalid")).toBeDefined();
+    }
+  });
+
+  it("refuses one plugin making two editors the default for the same pattern", () => {
+    const result = projectWith({
+      views: [editorView],
+      fileEditors: [
+        viewEditor({ paths: ["content/*.json"], default: true }),
+        viewEditor({ id: "pages", paths: ["pages/*.json", "content/*.json"], default: true }),
+      ],
+    });
+    expect(issueWithCode(result, "fileEditors_default_duplicate")?.path).toEqual([
+      "contributes",
+      "fileEditors",
+      1,
+      "paths",
+    ]);
+    // Without the flag, sharing a pattern only adds a choice.
+    expect(
+      projectWith({
+        views: [editorView],
+        fileEditors: [
+          viewEditor({ paths: ["content/*.json"], default: true }),
+          viewEditor({ id: "pages", paths: ["content/*.json"] }),
+        ],
+      }).success
+    ).toBe(true);
+  });
+
   it("refuses paths that reach outside the project or negate", () => {
     for (const pattern of [
       "/etc/*.json",

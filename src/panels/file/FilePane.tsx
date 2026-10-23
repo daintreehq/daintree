@@ -101,8 +101,11 @@ import {
   usePluginFileEditorCandidates,
   type PluginFileEditorCandidate,
 } from "@/registry/fileEditorRegistry";
+import { useFileEditorDefault } from "@/registry/fileEditorDefaults";
 import { useFileEditorChoicesStore } from "@/store/fileEditorChoicesStore";
 import { usePluginRuntimeStore } from "@/store/pluginRuntimeStore";
+import { FileEditorDefaultNotice } from "@/components/Plugin/FileEditorDefaultNotice";
+import type { ProjectSurfaceChoice } from "@shared/types/plugin";
 import { FileEditorPicker, type FileEditorPickerOption } from "./FileEditorPicker";
 import { FileEditorBanner } from "@/components/FileViewer/FileEditorBanner";
 import { useFileEditLock } from "@/hooks/useFileEditLock";
@@ -323,6 +326,7 @@ export function FilePane({
   );
   const setFileViewMode = usePanelStore((state) => state.setFileViewMode);
   const setFilePanelPath = usePanelStore((state) => state.setFilePanelPath);
+  const setFileEditorChoice = usePanelStore((state) => state.setFileEditorChoice);
   const markdownWrapLines = usePreferencesStore((state) => state.markdownWrapLines);
   const setMarkdownWrapLines = usePreferencesStore((state) => state.setMarkdownWrapLines);
   // Global, like wrap: a reading size that reset per panel or per file would
@@ -523,6 +527,9 @@ export function FilePane({
     "view",
     pluginEditorsAllowed && !isRenderable
   );
+  // The default editor a project plugin set for this file (#13811). Opening
+  // with it is `file.openPanel`'s call; the pane asks the user about it.
+  const fileDefault = useFileEditorDefault(filePath, effectiveRootPath, pluginEditorsAllowed);
   const initEditorChoices = useFileEditorChoicesStore((s) => s.init);
   useEffect(() => {
     initEditorChoices();
@@ -565,14 +572,20 @@ export function FilePane({
     ],
     [editor, draftOwner, pluginEditCandidates, loadedBytes]
   );
+  // An editor pinned to the panel — the one a default opened it with, or the
+  // one last picked in it — wins while it is on offer, ahead of the answer for
+  // the file's type: a default is about these paths, not every file like them.
+  const pinnedEditor = panel?.fileEditorChoice;
   const editChoice =
     filePath === undefined
       ? null
-      : editorChoicesLoaded
-        ? pickFileEditorChoice(editOptions, editorChoices, fileEditorChoiceKey("edit", filePath))
-        : editOptions.includes(HOST_FILE_EDITOR_CHOICE)
-          ? HOST_FILE_EDITOR_CHOICE
-          : null;
+      : pinnedEditor !== undefined && editOptions.includes(pinnedEditor)
+        ? pinnedEditor
+        : editorChoicesLoaded
+          ? pickFileEditorChoice(editOptions, editorChoices, fileEditorChoiceKey("edit", filePath))
+          : editOptions.includes(HOST_FILE_EDITOR_CHOICE)
+            ? HOST_FILE_EDITOR_CHOICE
+            : null;
   const builtinEditor = editChoice === HOST_FILE_EDITOR_CHOICE ? editor : null;
   const pluginEditor =
     pluginEditCandidates.find((candidate) => candidate.choiceId === editChoice) ?? null;
@@ -1389,6 +1402,27 @@ export function FilePane({
     wasEditModeRef.current = viewMode === "edit";
   }, [viewMode]);
 
+  // Answering about a default is about this file too: "Use Daintree's" leaves
+  // the default's editor for Source here, not only in panels opened next, and
+  // the effect above then hands focus to the toggle. Either way the notice is
+  // gone, so focus that fell with it lands on the toggle.
+  const handleDefaultAnswered = (choice: ProjectSurfaceChoice) => {
+    if (
+      choice === "stock" &&
+      viewMode === "edit" &&
+      fileDefault !== null &&
+      pluginEditor?.choiceId === fileDefault.choiceId
+    ) {
+      handleViewModeChange("source");
+      return;
+    }
+    if (document.activeElement === null || document.activeElement === document.body) {
+      modeToggleRef.current
+        ?.querySelector<HTMLButtonElement>('[role="radio"][aria-checked="true"]')
+        ?.focus({ preventScroll: true });
+    }
+  };
+
   // The dirty mark in the panel chrome, shown in every mode while a draft
   // exists. A conflict is the same dot with a different name: it says the
   // draft is standing on a file that moved, which is the one fact the chrome
@@ -1430,7 +1464,14 @@ export function FilePane({
             label={editorPicker.label}
             options={editorPicker.options}
             value={editorPicker.value}
-            onChange={(choice) => void setEditorChoice(editorPicker.choiceKey, choice)}
+            onChange={(choice) => {
+              // A pinned panel follows its own pick; the answer for the type
+              // is remembered either way.
+              if (viewMode === "edit" && pinnedEditor !== undefined) {
+                setFileEditorChoice(id, choice);
+              }
+              void setEditorChoice(editorPicker.choiceKey, choice);
+            }}
           />
         )}
         <FileViewerToolbar.Path
@@ -1606,6 +1647,14 @@ export function FilePane({
           />
         </FileViewerToolbar.Actions>
       </FileViewerToolbar.Root>
+      {/* Only where the default's editor is on offer for this file — not one
+          too large for it — so the one question lands in a pane that can show
+          what it asks about. */}
+      {fileDefault !== null &&
+        fileDefault.choice === null &&
+        editOptions.includes(fileDefault.choiceId) && (
+          <FileEditorDefaultNotice slot={fileDefault.slot} onAnswered={handleDefaultAnswered} />
+        )}
       {location !== "dialog" &&
         isInsideGovernedRoot &&
         editLockedBy === null &&

@@ -1,8 +1,8 @@
 import { Puzzle } from "lucide-react";
 import {
-  PROJECT_SURFACE_SLOT_CATALOGUE,
+  projectSurfaceSlotDescriptor,
   type ProjectSurfaceChoice,
-  type ProjectSurfaceSlot,
+  type ProjectSurfaceSlotKey,
 } from "@shared/types/plugin";
 import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
 import { useFramedSurfaceSlots } from "@/components/Plugin/framedSurfaceSlots";
@@ -39,11 +39,11 @@ export function ProjectSurfaceConsentNotice({
   frameId,
   onAnswered,
 }: {
-  slot: ProjectSurfaceSlot;
+  slot: ProjectSurfaceSlotKey;
   /** The frame drawing this, as it registered with `frameSurfaceSlot`. */
   frameId: string;
   /** After the answer is recorded: the notice is gone, so focus needs a new home. */
-  onAnswered: () => void;
+  onAnswered: (choice: ProjectSurfaceChoice) => void;
 }) {
   const slots = usePluginProjectSurfacesStore((s) => s.slots);
   const choices = usePluginProjectSurfacesStore((s) => s.choices);
@@ -64,12 +64,12 @@ export function ProjectSurfaceConsentNotice({
   }
 
   const undecided = claimed.filter((entry) => entry.pluginId === pluginId && entry.choice === null);
-  const labels = undecided.map((entry) => PROJECT_SURFACE_SLOT_CATALOGUE[entry.slot].label);
+  const labels = undecided.map((entry) => projectSurfaceSlotDescriptor(entry.slot).label);
   const answer = async (choice: ProjectSurfaceChoice) => {
     // Only the unanswered slots: keeping a plugin's new slot is not turning
     // an old one the user switched off back on.
     await setSurfaceChoices(surfaceAnswerUpdates(undecided, choice));
-    onAnswered();
+    onAnswered(choice);
   };
 
   return (

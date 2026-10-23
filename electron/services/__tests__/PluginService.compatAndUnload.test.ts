@@ -673,6 +673,85 @@ describe("Project surface claims", () => {
     }
   });
 
+  it("claims a slot per default pattern of a file editor, and releases them on unload (#13811)", async () => {
+    const instance = "project__proj-a__acme.cms";
+    const projectRoot = path.join(tmpDir, "project-a");
+    const pluginsParent = path.join(projectRoot, ".daintree", "plugins");
+    const dir = path.join(pluginsParent, "acme.cms");
+    await fs.mkdir(path.join(dir, "dist"), { recursive: true });
+    await fs.writeFile(path.join(dir, "dist", "editor.js"), "export default () => null;\n");
+    await fs.writeFile(
+      path.join(dir, "plugin.json"),
+      JSON.stringify({
+        name: "acme.cms",
+        version: "1.0.0",
+        scope: "project",
+        engines: { daintree: ">=0.1.0" },
+        contributes: {
+          views: [
+            { id: "records-editor", componentPath: "dist/editor.js", location: "fileEditor" },
+          ],
+          fileEditors: [
+            {
+              id: "records",
+              view: "records-editor",
+              mode: "edit",
+              extensions: ["json"],
+              paths: ["content/*.json", "data/**/*.json"],
+              default: true,
+            },
+            // Not a default: it only adds a choice, and claims nothing.
+            { id: "pages", view: "records-editor", mode: "edit", paths: ["pages/*.json"] },
+          ],
+        },
+      })
+    );
+    const service = new PluginService(path.join(tmpDir, "installed"), "1.0.0");
+    const seam = service as unknown as {
+      loadPlugin(
+        root: string,
+        dirName: string,
+        opts: {
+          isBuiltin: boolean;
+          disabled: Set<string>;
+          origin: "project";
+          instanceKey: string;
+          binding: { projectId: string; projectRoot: string };
+        }
+      ): Promise<unknown>;
+    };
+    try {
+      expect(
+        await seam.loadPlugin(pluginsParent, "acme.cms", {
+          isBuiltin: false,
+          disabled: new Set(),
+          origin: "project",
+          instanceKey: instance,
+          binding: { projectId: PROJECT, projectRoot },
+        })
+      ).not.toBeNull();
+
+      const slots = getProjectSurfaceSlots(PROJECT);
+      expect(Object.keys(slots).sort()).toEqual([
+        "fileEditor:content/*.json",
+        "fileEditor:data/**/*.json",
+      ]);
+      expect(slots["fileEditor:content/*.json"]?.options).toEqual([
+        {
+          pluginId: instance,
+          scope: "project",
+          value: { kind: "data", data: { editorId: "records" } },
+        },
+      ]);
+      expect(surfacePushes().map(([projectId]) => projectId)).toEqual([PROJECT]);
+
+      service.unloadPlugin(instance);
+      expect(getProjectSurfaceSlots(PROJECT)).toEqual({});
+    } finally {
+      service.dispose();
+    }
+  });
+
   it("records a claim whose view registered nothing mountable as a refusal", async () => {
     const service = new PluginService(path.join(tmpDir, "installed"), "1.0.0");
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});

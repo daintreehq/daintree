@@ -61,13 +61,14 @@ import { formatErrorMessage } from "@shared/utils/errorMessage";
 import {
   BUILT_IN_PLUGIN_CAPABILITIES,
   PROJECT_PLUGIN_INSTANCE_PREFIX,
-  PROJECT_SURFACE_SLOT_CATALOGUE,
-  PROJECT_SURFACE_SLOTS,
+  isFileEditorSlotKey,
+  orderedProjectSurfaceSlots,
   projectSurfaceClaimFromState,
+  projectSurfaceSlotDescriptor,
   type LoadedPluginInfo,
   type ProjectPluginInfo,
   type ProjectPluginState,
-  type ProjectSurfaceSlot,
+  type ProjectSurfaceSlotKey,
   type PluginSearchProviderInfo,
 } from "@shared/types/plugin";
 import { PathSegments } from "@/components/ui/PathSegments";
@@ -181,6 +182,14 @@ const SURFACE_SLOT_STATUS = {
   stock: "You chose Daintree's own, so it's hidden.",
 } as const;
 
+// A default editor hides nothing either way — every editor stays in the file
+// panel's mode toggle — so its status says what a matching file opens in.
+const FILE_EDITOR_SLOT_STATUS = {
+  none: "You haven't chosen yet, so matching files open in it.",
+  surface: "You chose to keep it, so matching files open in it.",
+  stock: "You chose Daintree's own, so matching files open in Source.",
+} as const;
+
 /**
  * Every place in Daintree a plugin set up for this project — which plugin, the
  * user's remembered answer about it, and any plugin whose claim on it isn't
@@ -229,11 +238,11 @@ function ProjectSurfacesSection() {
     );
   }
   if (!choicesLoaded) return null;
-  const listed = PROJECT_SURFACE_SLOTS.filter((slot) => {
+  const listed = orderedProjectSurfaceSlots(slots).filter((slot) => {
     const state = slots[slot];
     if (state === undefined) return false;
     if (state.defaultOptionId === null) return state.refused.length > 0;
-    const { mode, claim } = PROJECT_SURFACE_SLOT_CATALOGUE[slot];
+    const { mode, claim } = projectSurfaceSlotDescriptor(slot);
     if (mode !== "exclusive" || claim !== "view") return true;
     return renderableSurfaceClaim(projectSurfaceClaimFromState(state), registry) !== null;
   });
@@ -260,8 +269,9 @@ function ProjectSurfacesSection() {
  * way back to Daintree's own; the reset forgets the answer, so the plugin's
  * version shows again and the slot is asked about the next time it appears.
  */
-function ProjectSurfaceRow({ slot }: { slot: ProjectSurfaceSlot }) {
-  const { label, noun } = PROJECT_SURFACE_SLOT_CATALOGUE[slot];
+function ProjectSurfaceRow({ slot }: { slot: ProjectSurfaceSlotKey }) {
+  const { label, noun } = projectSurfaceSlotDescriptor(slot);
+  const status = isFileEditorSlotKey(slot) ? FILE_EDITOR_SLOT_STATUS : SURFACE_SLOT_STATUS;
   const state = usePluginProjectSurfacesStore((s) => s.slots[slot]);
   const choice = usePluginProjectSurfacesStore((s) => selectSurfaceChoice(s, slot));
   const failedSave = usePluginProjectSurfacesStore((s) => selectFailedSave(s, slot));
@@ -284,7 +294,7 @@ function ProjectSurfaceRow({ slot }: { slot: ProjectSurfaceSlot }) {
           <span className="block">
             {ownerName === null
               ? "Daintree's own is showing."
-              : `Set up by ${ownerName}. ${SURFACE_SLOT_STATUS[choice ?? "none"]}`}
+              : `Set up by ${ownerName}. ${status[choice ?? "none"]}`}
           </span>
           {state?.refused.map((refusal) => (
             <span key={`${refusal.pluginId}:${refusal.reason}`} className="block">

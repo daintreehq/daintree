@@ -2191,6 +2191,13 @@ interface FileEditorContribution {
     extensions?: string[];
     /** Project-relative globs, such as `content/entries/*.json`. Project plugins only. */
     paths?: string[];
+    /**
+     * Make this editor what a file matching one of `paths` opens in (#13811):
+     * each pattern becomes a file editor slot in the project, arbitrated, asked
+     * about and reset like any other slot. A project plugin's `mode: "edit"`
+     * editor only, and never by extension — Source stays in the mode toggle.
+     */
+    default?: boolean;
     /** Largest file the editor accepts, in bytes. Absent means the host's default cap. */
     maxBytes?: number;
 }

@@ -7,5 +7,6 @@ export function createFileDefaults(options: FilePanelOptions): Partial<FilePanel
     fileViewMode: options.fileViewMode ?? "source",
     ...(options.initialLine != null && { initialLine: options.initialLine }),
     ...(options.fileContainmentRoot && { fileContainmentRoot: options.fileContainmentRoot }),
+    ...(options.fileEditorChoice && { fileEditorChoice: options.fileEditorChoice }),
   };
 }

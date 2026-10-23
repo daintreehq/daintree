@@ -1,9 +1,9 @@
 import {
-  PROJECT_SURFACE_SLOT_CATALOGUE,
   pluginManifestIdFromInstanceKey,
+  projectSurfaceSlotDescriptor,
   type ProjectSurfaceRefusal,
   type ProjectSurfaceRefusalReason,
-  type ProjectSurfaceSlot,
+  type ProjectSurfaceSlotKey,
   type ProjectSurfaceSlotClaim,
   type ProjectSurfaceSlotMode,
   type ProjectSurfaceSlotState,
@@ -15,7 +15,8 @@ import {
  * A slot claim is the one plugin contribution that *replaces* something the
  * host already draws, so it needs an arbiter the other contribution points do
  * not: two panels of the same name coexist, two empty canvases cannot. This is
- * that arbiter, for every slot in `PROJECT_SURFACE_SLOT_CATALOGUE`.
+ * that arbiter, for every slot in `PROJECT_SURFACE_SLOT_CATALOGUE` and every
+ * file editor slot, which is keyed by the pattern it is about.
  *
  * Arbitration is a pure function of the claims present, never of the order
  * they arrived in. A claim is stored against its plugin, with no queue
@@ -39,7 +40,7 @@ import {
  * project scope exists to prevent.
  */
 type ByPlugin<T> = Map<string, T>;
-type BySlot<T> = Map<ProjectSurfaceSlot, ByPlugin<T>>;
+type BySlot<T> = Map<ProjectSurfaceSlotKey, ByPlugin<T>>;
 
 /** `projectId → slot → pluginId → claim`. */
 const CLAIMS = new Map<string, BySlot<ProjectSurfaceSlotClaim>>();
@@ -48,7 +49,10 @@ const CLAIMS = new Map<string, BySlot<ProjectSurfaceSlotClaim>>();
 const REJECTED = new Map<string, BySlot<ProjectSurfaceRefusal>>();
 
 /** Reverse index so an unload can release a plugin's entries without a scan. */
-const ENTRIES_BY_PLUGIN = new Map<string, Array<{ projectId: string; slot: ProjectSurfaceSlot }>>();
+const ENTRIES_BY_PLUGIN = new Map<
+  string,
+  Array<{ projectId: string; slot: ProjectSurfaceSlotKey }>
+>();
 
 /**
  * Per-project revision, bumped on every change. Drawn from one app-wide counter
@@ -96,7 +100,7 @@ function compareIds(a: string, b: string): number {
  * once.
  */
 export function arbitrateProjectSurfaceSlot(
-  slot: ProjectSurfaceSlot,
+  slot: ProjectSurfaceSlotKey,
   mode: ProjectSurfaceSlotMode,
   claims: Iterable<ProjectSurfaceSlotClaim>
 ): ProjectSurfaceSlotState {
@@ -132,7 +136,7 @@ function bump(projectId: string): void {
   REVISIONS.set(projectId, lastRevision);
 }
 
-function track(pluginId: string, projectId: string, slot: ProjectSurfaceSlot): void {
+function track(pluginId: string, projectId: string, slot: ProjectSurfaceSlotKey): void {
   const entries = ENTRIES_BY_PLUGIN.get(pluginId) ?? [];
   if (!entries.some((entry) => entry.projectId === projectId && entry.slot === slot)) {
     entries.push({ projectId, slot });
@@ -143,7 +147,7 @@ function track(pluginId: string, projectId: string, slot: ProjectSurfaceSlot): v
 function slotMap<T>(
   table: Map<string, BySlot<T>>,
   projectId: string,
-  slot: ProjectSurfaceSlot
+  slot: ProjectSurfaceSlotKey
 ): ByPlugin<T> {
   const slots = table.get(projectId) ?? (new Map() as BySlot<T>);
   table.set(projectId, slots);
@@ -155,7 +159,7 @@ function slotMap<T>(
 function deleteEntry<T>(
   table: Map<string, BySlot<T>>,
   projectId: string,
-  slot: ProjectSurfaceSlot,
+  slot: ProjectSurfaceSlotKey,
   pluginId: string
 ): void {
   const slots = table.get(projectId);
@@ -172,13 +176,13 @@ function requireProjectId(projectId: string, caller: string): void {
   }
 }
 
-function slotState(projectId: string, slot: ProjectSurfaceSlot): ProjectSurfaceSlotState | null {
+function slotState(projectId: string, slot: ProjectSurfaceSlotKey): ProjectSurfaceSlotState | null {
   const claims = CLAIMS.get(projectId)?.get(slot);
   const rejected = REJECTED.get(projectId)?.get(slot);
   if (claims === undefined && rejected === undefined) return null;
   const state = arbitrateProjectSurfaceSlot(
     slot,
-    PROJECT_SURFACE_SLOT_CATALOGUE[slot].mode,
+    projectSurfaceSlotDescriptor(slot).mode,
     claims?.values() ?? []
   );
   if (rejected !== undefined) {
@@ -201,7 +205,7 @@ function slotState(projectId: string, slot: ProjectSurfaceSlot): ProjectSurfaceS
  */
 export function claimProjectSurface(
   projectId: string,
-  slot: ProjectSurfaceSlot,
+  slot: ProjectSurfaceSlotKey,
   claim: ProjectSurfaceSlotClaim
 ): SurfaceClaimResult {
   requireProjectId(projectId, "claimProjectSurface");
@@ -209,7 +213,7 @@ export function claimProjectSurface(
   track(claim.pluginId, projectId, slot);
   bump(projectId);
 
-  if (claim.value.kind !== PROJECT_SURFACE_SLOT_CATALOGUE[slot].claim) {
+  if (claim.value.kind !== projectSurfaceSlotDescriptor(slot).claim) {
     deleteEntry(CLAIMS, projectId, slot, claim.pluginId);
     slotMap(REJECTED, projectId, slot).set(claim.pluginId, {
       slot,
@@ -240,7 +244,7 @@ export function claimProjectSurface(
  */
 export function refuseProjectSurface(
   projectId: string,
-  slot: ProjectSurfaceSlot,
+  slot: ProjectSurfaceSlotKey,
   pluginId: string,
   reason: Exclude<ProjectSurfaceRefusalReason, "outranked" | "installed-exclusive">
 ): void {
@@ -259,13 +263,13 @@ export function refuseProjectSurface(
  */
 export function getProjectSurfaceSlots(
   projectId: string | null | undefined
-): Partial<Record<ProjectSurfaceSlot, ProjectSurfaceSlotState>> {
+): Partial<Record<ProjectSurfaceSlotKey, ProjectSurfaceSlotState>> {
   if (projectId === null || projectId === undefined || projectId.length === 0) return {};
-  const slots = new Set<ProjectSurfaceSlot>([
+  const slots = new Set<ProjectSurfaceSlotKey>([
     ...(CLAIMS.get(projectId)?.keys() ?? []),
     ...(REJECTED.get(projectId)?.keys() ?? []),
   ]);
-  const snapshot: Partial<Record<ProjectSurfaceSlot, ProjectSurfaceSlotState>> = {};
+  const snapshot: Partial<Record<ProjectSurfaceSlotKey, ProjectSurfaceSlotState>> = {};
   for (const slot of slots) {
     const state = slotState(projectId, slot);
     if (state !== null) snapshot[slot] = structuredClone(state);
@@ -277,7 +281,7 @@ export function getProjectSurfaceSlots(
 export function getProjectSurfaceRefusals(
   projectId: string | null | undefined
 ): ProjectSurfaceRefusal[] {
-  return Object.values(getProjectSurfaceSlots(projectId)).flatMap((state) => state.refused);
+  return Object.values(getProjectSurfaceSlots(projectId)).flatMap((state) => state?.refused ?? []);
 }
 
 /** The project's current revision; `0` before anything has touched it. */

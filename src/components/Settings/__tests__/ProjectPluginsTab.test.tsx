@@ -19,6 +19,7 @@ import {
   usePluginLaunchEntriesStore,
 } from "@/store/pluginLaunchEntriesStore";
 import { registerPanelKind, unregisterPanelKind } from "@shared/config/panelKindRegistry";
+import { fileEditorSlotKey } from "@shared/types/plugin";
 import type {
   LoadedPluginInfo,
   PluginManifest,
@@ -324,6 +325,53 @@ describe("ProjectPluginsTab", () => {
     await waitFor(() => expect(row.textContent).toContain("You haven't chosen yet, so it shows."));
     // Nothing is remembered now, so there is nothing left to reset.
     expect(within(row).queryByRole("button", { name: "Ask again about the canvas" })).toBeNull();
+  });
+
+  it("lists a plugin's default editor by pattern, says what matching files open in, and resets it (#13811)", async () => {
+    const slot = fileEditorSlotKey("content/*.json");
+    const editorSlot: ProjectSurfaceSlotState = {
+      mode: "exclusive",
+      options: [
+        {
+          pluginId: CANVAS_OWNER,
+          scope: "project",
+          value: { kind: "data", data: { editorId: "e" } },
+        },
+      ],
+      defaultOptionId: CANVAS_OWNER,
+      refused: [],
+    };
+    seed([projectPlugin()]);
+    act(() => {
+      usePluginProjectSurfacesStore.setState({
+        slots: { [slot]: editorSlot },
+        choices: { [slot]: { pluginId: "acme.dashboard", choice: "stock", decidedAt: 1 } },
+        choicesLoaded: true,
+      });
+    });
+    pluginApi.setProjectSurfaceChoices.mockImplementationOnce(() =>
+      Promise.resolve({
+        projectId: PROJECT_ID,
+        revision: 3,
+        slots: { [slot]: editorSlot },
+        choices: {},
+      })
+    );
+    render(<ProjectPluginsTab />);
+    await waitFor(() => expect(pluginApi.list).toHaveBeenCalled());
+
+    const row = screen.getByTestId(`project-surface-row-${slot}`);
+    expect(row.textContent).toContain("Editor for content/*.json");
+    expect(row.textContent).toContain("Set up by Acme Dashboard.");
+    expect(row.textContent).toContain("so matching files open in Source.");
+
+    fireEvent.click(within(row).getByRole("button", { name: "Ask again about the editor" }));
+    await waitFor(() =>
+      expect(pluginApi.setProjectSurfaceChoices).toHaveBeenCalledWith([{ slot, choice: null }])
+    );
+    await waitFor(() =>
+      expect(row.textContent).toContain("You haven't chosen yet, so matching files open in it.")
+    );
   });
 
   it("lists a launcher group the project hid and shows it again from its reset (#13788)", async () => {
