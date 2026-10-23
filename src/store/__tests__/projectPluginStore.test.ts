@@ -82,6 +82,7 @@ describe("projectPluginStore", () => {
     const application = {
       status: "disabled" as const,
       ownerId: "acme.ledger",
+      version: "1.0.0",
       application: { name: "Ledger", destination: "home" as const },
       reason: "muted" as const,
       fallback: "standard-workspace" as const,

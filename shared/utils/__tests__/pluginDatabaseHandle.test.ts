@@ -7,6 +7,7 @@ import {
   fileAccessAuthorizer,
   openPluginDatabase,
   readPluginDatabaseRows,
+  readPluginDatabaseSchemaVersion,
   runPluginDatabaseWrite,
   writableOpenUri,
 } from "../pluginDatabaseHandle.js";
@@ -94,6 +95,61 @@ describe("openPluginDatabase", () => {
     ).rejects.toMatchObject({ code: "DB_MIGRATION_FAILED" });
     const db = await open({ migrations: ["CREATE TABLE ok (x)"] });
     expect(await db.get("PRAGMA user_version")).toEqual({ user_version: 1 });
+  });
+
+  it("resumes an interrupted migration run from the last committed step, never repeating one", async () => {
+    // Step 1 commits; step 2 fails part way and is rolled back whole.
+    const step1 =
+      "CREATE TABLE tx (id INTEGER PRIMARY KEY, cents INTEGER); INSERT INTO tx (cents) VALUES (100)";
+    await expect(
+      open({
+        migrations: [step1, "ALTER TABLE tx ADD COLUMN memo TEXT; INSERT INTO nowhere VALUES (1)"],
+      })
+    ).rejects.toMatchObject({
+      code: "DB_MIGRATION_FAILED",
+      message: expect.stringContaining("migration 2 failed"),
+    });
+    const probe = new DatabaseSync(location.path, { readOnly: true });
+    expect(probe.prepare("PRAGMA user_version").get()).toEqual({ user_version: 1 });
+    expect(probe.prepare("SELECT name FROM pragma_table_info('tx')").all()).toEqual([
+      { name: "id" },
+      { name: "cents" },
+    ]);
+    probe.close();
+
+    // The retry is a reopen with the fixed step: only step 2 runs.
+    const db = await open({ migrations: [step1, "ALTER TABLE tx ADD COLUMN memo TEXT"] });
+    expect(await db.get("PRAGMA user_version")).toEqual({ user_version: 2 });
+    expect(await db.query("SELECT cents, memo FROM tx")).toEqual([{ cents: 100, memo: null }]);
+  });
+
+  it("refuses a writable open whose migrations disagree with the declared schemaVersion", async () => {
+    location = { ...location, schemaVersion: 2 };
+    await expect(open({ migrations: ["CREATE TABLE a (x)"] })).rejects.toMatchObject({
+      code: "VALIDATION",
+      message: expect.stringContaining("declares schemaVersion 2, but this open passes 1"),
+    });
+    expect(fs.existsSync(location.path)).toBe(false);
+
+    const db = await open({ migrations: ["CREATE TABLE a (x)", "CREATE TABLE b (x)"] });
+    expect(await db.get("PRAGMA user_version")).toEqual({ user_version: 2 });
+    await db.close();
+    // A readonly open, or one that passes no migrations, makes no schema claim.
+    const reader = await open({ readonly: true });
+    expect(await reader.get("PRAGMA user_version")).toEqual({ user_version: 2 });
+  });
+
+  it("reads an existing file's schema version without migrating or creating anything", async () => {
+    // A resolved location is canonical, as the host's always is.
+    location = { ...location, path: path.join(fs.realpathSync(dir), "ledger.db") };
+    expect(() => readPluginDatabaseSchemaVersion(location)).toThrow(
+      expect.objectContaining({ code: "DB_NOT_FOUND" })
+    );
+    expect(fs.existsSync(location.path)).toBe(false);
+
+    const db = await open({ migrations: ["CREATE TABLE a (x)", "CREATE TABLE b (x)"] });
+    await db.close();
+    expect(readPluginDatabaseSchemaVersion(location)).toBe(2);
   });
 
   it("re-applies definitions on every open so a view can change without a migration", async () => {

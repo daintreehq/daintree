@@ -156,6 +156,7 @@ const WORKTREE_SETUP_RPC = "electron/services/worktreeSetupRpcServer.ts";
 const LIFECYCLE_COMMAND_TRUST = "electron/workspace-host/lifecycleCommandTrust.ts";
 const PLUGIN_DATABASE = "electron/services/plugin/pluginDatabase.ts";
 const PLUGIN_DATABASE_HANDLE = "shared/utils/pluginDatabaseHandle.ts";
+const PROJECT_APPLICATION_PREFLIGHT = "electron/services/plugin/projectApplicationPreflight.ts";
 const PLUGIN_HOST_FACTORY = "electron/services/plugin/PluginHostFactory.ts";
 const PLUGIN_DATABASES_SECTION = "src/components/Plugin/PluginDatabasesSection.tsx";
 const DATABASE_ENDPOINT = "electron/services/pluginAgentMcp/databaseEndpoint.ts";
@@ -2081,6 +2082,14 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
       mode: "verbatim",
       consumers: [{ file: PLUGIN_DATABASE_HANDLE, symbol: "openPluginDatabase connect" }],
       note: "Re-applied as PRAGMA journal_mode on every open.",
+    },
+    schemaVersion: {
+      mode: "verbatim",
+      consumers: [
+        { file: PROJECT_APPLICATION_PREFLIGHT, symbol: "preflightProjectApplication" },
+        { file: PLUGIN_DATABASE_HANDLE, symbol: "openPluginDatabase" },
+      ],
+      note: "Compared against an existing file before an application loads, and held against the migrations a writable open passes.",
     },
     queries: {
       mode: "derived-input",

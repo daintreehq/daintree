@@ -2814,6 +2814,11 @@
                   "wal"
                 ]
               },
+              "schemaVersion": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 100000
+              },
               "queries": {
                 "type": "array",
                 "items": {

@@ -416,6 +416,25 @@ function assertAgentOpenable(location: PluginDatabaseLocation): void {
 }
 
 /**
+ * The `user_version` an existing database is at, read on a readonly
+ * connection that runs no migration, definition or journal-mode change, so the
+ * host can compare a file against a payload before that payload's code runs
+ * (#14113). Rejects `DB_NOT_FOUND` when the file does not exist; creates nothing.
+ */
+export function readPluginDatabaseSchemaVersion(location: PluginDatabaseLocation): number {
+  const sqlite = loadSqlite();
+  assertAgentOpenable(location);
+  const connection = new sqlite.DatabaseSync(location.path, { readOnly: true });
+  try {
+    const row = connection.prepare("PRAGMA user_version").get() as
+      { user_version?: number | bigint } | undefined;
+    return Number(row?.user_version ?? 0);
+  } finally {
+    connection.close();
+  }
+}
+
+/**
  * Run one row-returning statement on a fresh readonly connection and hand each
  * row to `onRow` as an array aligned with the returned column names, until the
  * rows run out or `onRow` returns false. Rows are streamed rather than
@@ -670,6 +689,20 @@ export async function openPluginDatabase(
     location.id,
     options
   );
+  // The declared count is what the host's preflight compares a file against
+  // before the plugin runs, so code that migrates further (or less far) than
+  // its manifest says must fail here, not leave the two disagreeing.
+  if (
+    !readonly &&
+    options.migrations !== undefined &&
+    location.schemaVersion !== undefined &&
+    migrations.length !== location.schemaVersion
+  ) {
+    throw databaseError(
+      "VALIDATION",
+      `database "${location.id}" declares schemaVersion ${location.schemaVersion}, but this open passes ${migrations.length} migration(s)`
+    );
+  }
   const sqlite = loadSqlite();
   const DatabaseSync = sqlite.DatabaseSync;
   const authorizer = sqlite.constants ? fileAccessAuthorizer(sqlite.constants) : null;

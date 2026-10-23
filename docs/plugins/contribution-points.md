@@ -1192,6 +1192,7 @@ Declares a SQLite database the plugin opens with [`host.db`](./host-api.md#db--h
 | `location` | no | `"project"` (default) or `"local"`. |
 | `path` | no | `"project"` only. Relative to the project root (no leading `/`, backslash, `..` segment or URL syntax), at most 512 characters, ending in `.db`, `.sqlite` or `.sqlite3`, never inside `.git`. Defaults to `.daintree/data/<manifestId>/<id>.db`. |
 | `journalMode` | no | `"delete"` (default) or `"wal"`. |
+| `schemaVersion` | no | A whole number, 0 or more: how many migrations this version of the plugin applies. |
 | `queries` | no | Named read or write statements the host serves to agents as tools of their own. See [Declared queries](#declared-queries) below. |
 
 **`"project"`** puts the file in the repository. That is the location for data agents edit: an agent in the project's terminal can open the same file with the `sqlite3` CLI, the file travels with a clone, and the committed data contract (your plugin's `AGENTS.md`) can name it by its project-relative path. It needs `scope: "project"` (`database_project_scope_only`) and the `fs:project-write` capability (`database_project_write_required`), because it writes into the repository. Whether the file itself is committed is the project's decision; gitignore it to keep the data out of history.
@@ -1201,6 +1202,8 @@ Declares a SQLite database the plugin opens with [`host.db`](./host-api.md#db--h
 **Where the file lands.** The host resolves the declaration, never your code: `host.db.open` creates the file and its directory on first open, contained to the project root (or data directory) on the real path, so a symlinked directory cannot carry it outside, and it refuses a path that resolves inside `.git` or a database file that is itself a symlink. `host.db.resolve(id)` returns the location without opening it, for handing to an agent. See [Host API → `db`](./host-api.md#db--host-managed-sqlite).
 
 **`journalMode`.** The default, `"delete"`, keeps the database one self-contained file between writes, so git, a backup, or a sync folder never sees committed data stranded in a `-wal` sidecar. The host re-applies the declared mode on every open, so an agent that ran `PRAGMA journal_mode=WAL` cannot silently switch it. Choose `"wal"` only for a local, write-heavy database nothing else copies.
+
+**`schemaVersion`.** The schema this version leaves the file at: the length of the `migrations` array your code passes to `host.db.open`. A writable open that passes a different number fails `VALIDATION`, so the declaration cannot drift from the code. For a project's application, the host also compares it with an existing file before the owner loads, and keeps a payload off a file a newer copy already migrated ([Project-local plugins → Updating an application](./project-local.md#updating-an-application)). Raise it with every migration you ship.
 
 At most 16 databases per plugin; entries are strict, so a `url` or `driver` field is refused rather than read as a backend the host does not have.
 

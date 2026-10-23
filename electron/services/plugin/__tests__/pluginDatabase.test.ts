@@ -36,6 +36,16 @@ describe("resolvePluginDatabaseLocation", () => {
     expect(fs.statSync(path.dirname(location.path)).isDirectory()).toBe(true);
   });
 
+  it("carries a declared schemaVersion on the location, so the open can hold the code to it", async () => {
+    const location = await resolve({
+      id: "ledger",
+      location: "project",
+      journalMode: "delete",
+      schemaVersion: 3,
+    });
+    expect(location.schemaVersion).toBe(3);
+  });
+
   it("honours a declared project path", async () => {
     const location = await resolve({
       id: "ledger",

@@ -12,6 +12,7 @@ import type {
   ProjectPluginTrustRecord,
 } from "../../../../shared/types/plugin.js";
 import { makeProjectPluginInstanceKey } from "../../../../shared/types/plugin.js";
+import type { ProjectApplicationPreflightFailure } from "../projectApplicationPreflight.js";
 
 const PROJECT_A = "a".repeat(64);
 const PROJECT_B = "b".repeat(64);
@@ -89,6 +90,9 @@ function makeHarness(): Harness {
     isProjectClosed: vi.fn(() => false),
     isEngineIncompatible: vi.fn((_range: string) => false),
     getProjectHomeHolder: vi.fn((_projectId: string): string | null => null),
+    preflightApplication: vi.fn(
+      async (_args: unknown): Promise<ProjectApplicationPreflightFailure | null> => null
+    ),
   };
 
   return {
@@ -1480,6 +1484,7 @@ describe("project application (#14097)", () => {
     expect(lastApplication()).toEqual({
       status: "active",
       ownerId: "acme.ledger",
+      version: "1.0.0",
       instanceId: makeProjectPluginInstanceKey(PROJECT_A, "acme.ledger"),
       application: APP,
       fallback: null,
@@ -1662,5 +1667,159 @@ describe("project application (#14097)", () => {
 
   it("knows nothing about a project it has not opened", () => {
     expect(h.controller.getProjectApplication(PROJECT_B)).toBeNull();
+  });
+
+  describe("payload preflight (#14113)", () => {
+    const MISSING = {
+      reason: "assets-missing" as const,
+      problems: ['views[0].componentPath "dist/home.js" is missing from the plugin'],
+    };
+    const instanceKey = makeProjectPluginInstanceKey(PROJECT_A, "acme.ledger");
+
+    it("checks an owner's payload before loading it, and only an owner's", async () => {
+      enable(["acme.ledger", "acme.dashboard"]);
+      h.setDiscovery(ROOT_A, [withApplication("acme.ledger"), discovered("acme.dashboard")]);
+      await h.controller.onProjectOpened(PROJECT_A, ROOT_A);
+
+      expect(h.deps.preflightApplication).toHaveBeenCalledExactlyOnceWith({
+        projectId: PROJECT_A,
+        projectRoot: ROOT_A,
+        dir: "/tmp/plugins/ledger",
+        manifest: expect.objectContaining({ name: "acme.ledger" }),
+      });
+      expect(h.deps.preflightApplication.mock.invocationCallOrder[0]).toBeLessThan(
+        h.deps.loadProjectPlugin.mock.invocationCallOrder[0]!
+      );
+    });
+
+    it("does not load a payload that fails, and says what it found", async () => {
+      enable(["acme.ledger"]);
+      h.deps.preflightApplication.mockResolvedValue(MISSING);
+      h.setDiscovery(ROOT_A, [withApplication("acme.ledger")]);
+      await h.controller.onProjectOpened(PROJECT_A, ROOT_A);
+
+      expect(h.deps.loadProjectPlugin).not.toHaveBeenCalled();
+      expect(lastApplication()).toEqual({
+        status: "unavailable",
+        ownerId: "acme.ledger",
+        version: "1.0.0",
+        application: APP,
+        reason: "assets-missing",
+        problems: MISSING.problems,
+        fallback: "standard-workspace",
+      });
+      const row = h.controller.listProjectPlugins(PROJECT_A)[0]!;
+      expect(row.state).toBe("blocked");
+      expect(row.loadError?.message).toBe(MISSING.problems[0]);
+    });
+
+    it("reports a database written by a newer copy as schema-too-new", async () => {
+      enable(["acme.ledger"]);
+      const problems = ['database "ledger" is at schema version 4, but version 1.0.0 declares 3'];
+      h.deps.preflightApplication.mockResolvedValue({ reason: "schema-too-new", problems });
+      h.setDiscovery(ROOT_A, [withApplication("acme.ledger")]);
+      await h.controller.onProjectOpened(PROJECT_A, ROOT_A);
+
+      expect(h.deps.loadProjectPlugin).not.toHaveBeenCalled();
+      expect(lastApplication()).toMatchObject({
+        status: "unavailable",
+        reason: "schema-too-new",
+        problems,
+      });
+    });
+
+    it("retries on the next reconcile, and clears the finding once the payload passes", async () => {
+      enable(["acme.ledger"]);
+      h.deps.preflightApplication.mockResolvedValueOnce(MISSING);
+      h.setDiscovery(ROOT_A, [withApplication("acme.ledger")]);
+      await h.controller.onProjectOpened(PROJECT_A, ROOT_A);
+      expect(lastApplication()).toMatchObject({ reason: "assets-missing" });
+
+      // The watcher's rescan after the missing file lands: nothing was loaded,
+      // so it names no ids and the open pass is what retries.
+      await h.controller.reloadChanged(PROJECT_A, ROOT_A, []);
+
+      expect(h.deps.preflightApplication).toHaveBeenCalledTimes(2);
+      expect(h.controller.loadedManifestIds(PROJECT_A)).toEqual(["acme.ledger"]);
+      const application = lastApplication() as Record<string, unknown>;
+      expect(application).toMatchObject({ status: "active" });
+      expect(application.problems).toBeUndefined();
+      expect(h.controller.listProjectPlugins(PROJECT_A)[0]!.loadError).toBeUndefined();
+    });
+
+    it("takes a running owner down when its update fails, and settles its reload as not kept", async () => {
+      enable(["acme.ledger"]);
+      h.setDiscovery(ROOT_A, [withApplication("acme.ledger")]);
+      await h.controller.onProjectOpened(PROJECT_A, ROOT_A);
+      expect(h.controller.loadedManifestIds(PROJECT_A)).toEqual(["acme.ledger"]);
+
+      h.deps.preflightApplication.mockResolvedValueOnce(MISSING);
+      await h.controller.reloadChanged(PROJECT_A, ROOT_A, ["acme.ledger"]);
+
+      expect(h.deps.unloadProjectPlugin).toHaveBeenCalledWith(instanceKey, { reload: true });
+      expect(h.deps.loadProjectPlugin).toHaveBeenCalledTimes(1);
+      expect(h.controller.loadedManifestIds(PROJECT_A)).toEqual([]);
+      expect(h.deps.settleProjectPluginReload).toHaveBeenCalledExactlyOnceWith(instanceKey, false);
+      expect(lastApplication()).toMatchObject({ status: "unavailable", reason: "assets-missing" });
+    });
+
+    it("loads nothing when a close overtakes the check, whatever the check found", async () => {
+      for (const found of [null, MISSING]) {
+        h = makeHarness();
+        enable(["acme.ledger"]);
+        let finish!: (result: typeof found) => void;
+        h.deps.preflightApplication.mockImplementationOnce(
+          () => new Promise((resolve) => (finish = resolve))
+        );
+        h.setDiscovery(ROOT_A, [withApplication("acme.ledger")]);
+        const opening = h.controller.onProjectOpened(PROJECT_A, ROOT_A);
+        await vi.waitFor(() => expect(h.deps.preflightApplication).toHaveBeenCalled());
+        const closing = h.controller.onProjectClosed(PROJECT_A);
+        finish(found);
+        await opening;
+        await closing;
+
+        expect(h.deps.loadProjectPlugin).not.toHaveBeenCalled();
+        expect(h.controller.loadedManifestIds(PROJECT_A)).toEqual([]);
+      }
+    });
+
+    it("forgets the finding with the project, so a reopen checks the files again", async () => {
+      enable(["acme.ledger"]);
+      h.deps.preflightApplication.mockResolvedValueOnce(MISSING);
+      h.setDiscovery(ROOT_A, [withApplication("acme.ledger")]);
+      await h.controller.onProjectOpened(PROJECT_A, ROOT_A);
+      await h.controller.onProjectClosed(PROJECT_A);
+
+      await h.controller.onProjectOpened(PROJECT_A, ROOT_A);
+
+      expect(h.deps.preflightApplication).toHaveBeenCalledTimes(2);
+      expect(lastApplication()).toMatchObject({ status: "active" });
+    });
+
+    it("loads as before when the check itself throws", async () => {
+      enable(["acme.ledger"]);
+      h.deps.preflightApplication.mockRejectedValueOnce(new Error("disk went away"));
+      h.setDiscovery(ROOT_A, [withApplication("acme.ledger")]);
+      await h.controller.onProjectOpened(PROJECT_A, ROOT_A);
+
+      expect(h.controller.loadedManifestIds(PROJECT_A)).toEqual(["acme.ledger"]);
+      expect(lastApplication()).toMatchObject({ status: "active" });
+    });
+
+    it("leaves a muted owner's row clean, and checks again when it is switched back on", async () => {
+      enable(["acme.ledger"]);
+      h.deps.preflightApplication.mockResolvedValueOnce(MISSING);
+      h.setDiscovery(ROOT_A, [withApplication("acme.ledger")]);
+      await h.controller.onProjectOpened(PROJECT_A, ROOT_A);
+      await h.controller.setMuted(PROJECT_A, "acme.ledger", true);
+
+      expect(h.controller.listProjectPlugins(PROJECT_A)[0]!.loadError).toBeUndefined();
+      expect(lastApplication()).toMatchObject({ status: "disabled", reason: "muted" });
+
+      await h.controller.setMuted(PROJECT_A, "acme.ledger", false);
+      expect(h.deps.preflightApplication).toHaveBeenCalledTimes(2);
+      expect(lastApplication()).toMatchObject({ status: "active" });
+    });
   });
 });

@@ -224,7 +224,7 @@ Rules:
 
 ## Application
 
-A project plugin can declare itself the project's application with the top-level [`application`](./manifest.md#application) block: a name and icon, whether it opens on its Home or the grid, and the ids of the sidebar view, settings view, welcome tour, first workflow command and agent endpoints it already contributes. Every reference is checked against the same manifest before the plugin loads. Only one plugin per project may declare one, and while it is loading, switched off, failing or out-ranked for Home, its state says so and names the standard workspace as the fallback.
+A project plugin can declare itself the project's application with the top-level [`application`](./manifest.md#application) block: a name and icon, whether it opens on its Home or the grid, and the ids of the sidebar view, settings view, welcome tour, first workflow command and agent endpoints it already contributes. Every reference is checked against the same manifest before the plugin loads. Only one plugin per project may declare one, and while it is loading, switched off, failing or out-ranked for Home, its state says so and names the standard workspace as the fallback. Its state also carries the owner's manifest `version`; how a new version is checked and switched in, and what it keeps, is [Updating an application](#updating-an-application).
 
 ## Binding — which project a host call reaches
 
@@ -283,6 +283,53 @@ Three behaviours are worth knowing while you iterate:
 What survives a reload: your `settings` values and everything in `host.storage`, because both are files keyed by identity rather than by process — and any panel state written with `PanelViewProps.persistState`, which is stored on the panel record alongside the layout rather than in the plugin process, so it outlives the worker entirely. What does not: module-scope state in your worker, and React state in your views. Design for a remount, exactly as for an installed plugin. [patterns.md](./patterns.md#what-survives-what) has the full matrix.
 
 Each reload mints a fresh view-module generation so the renderer actually re-imports your bundle rather than returning the module already in its cache. Each generation is a permanent module record in that renderer (Chromium has no eviction API), so a very long authoring session in one project accumulates them; closing and reopening the project view clears it. Re-running your module body against browser globals that outlive it has consequences of its own — see [Views → Global registration survives reload](./views.md#global-registration-survives-reload).
+
+## Updating an application
+
+An [application](#application) project updates by its files changing: a pull, a branch switch, a rebuilt `dist/`. There is no installer for it, and the host keeps no copy of a previous version. What it guarantees is the order — the new payload is checked before any of its code runs — and that loading a payload never writes over data the project or the user owns.
+
+### What an update replaces and what it keeps
+
+| What | Where | Belongs to | Across an update |
+| --- | --- | --- | --- |
+| The payload: `plugin.json`, `dist/` and every file the manifest names | `.daintree/plugins/<dir>/` | The application | Replaced, as whatever changed the folder left it |
+| Project settings | `.daintree/plugin-settings/<manifestId>.json` | The project | Kept; read through `host.settings`, never rewritten by a load |
+| `host.storage`, `project` and `worktree` scopes | `.daintree/plugin-storage/<manifestId>.json` | The project | Kept |
+| Project databases | `.daintree/data/<manifestId>/<id>.db`, or the declared `path` | The project | Kept; changed only by your migrations, when your code opens the file |
+| Local and user settings, `user` storage, local databases | under `~/.daintree/`, by instance key | The user, on this machine | Kept |
+| Secrets | the `local` settings file, encrypted through the OS keychain | The user, on this machine | Kept; never under the project root |
+| Panel state and drafts | `persistState` on the panel record; the [view-state store](./views.md#state-outside-the-grid) for Home, sidebar, settings and popover views | The user | Kept; state newer than the view's `stateVersion` is refused, not deleted |
+| Operations | the [journal](./operations.md) in its own `host.db` database | The application's data | Kept with that database; a job left `submitting` is reconciled as `uncertain` on the next start |
+| Agent configuration | `~/.claude/`, `~/.codex/` and the like | The user | Never modified |
+
+Keep everything the application writes outside its plugin folder: a file under `.daintree/plugins/<dir>/` is payload, and the next checkout can replace it. The host keeps these through its own reloads, but it cannot keep a tracked file the pull or checkout itself rewrote — a committed project database comes back as the branch holds it. Decide deliberately whether a project database is committed ([Settings and storage](#settings-and-storage)).
+
+What a switch does not keep is memory: module state in your worker and React state in your views. An unload aborts your tasks with `cause: "interrupted"`, which the [operations manager](./operations.md) records as nothing rather than as a cancellation, so a job in flight resumes on the next start.
+
+### The preflight
+
+Before an application's owner loads — on a project open, a hot reload, or **Reload from folder** — the host checks the payload on disk. It only reads:
+
+- **The engine range.** `engines.daintree` must admit this Daintree (`engine-incompatible`).
+- **Every file the manifest needs.** The same inventory packaging, installation and `daintree-plugin doctor` use: `main`, view components, tour scenes, skills, knowledge files and custom icons (`assets-missing`).
+- **Every database that declares a `schemaVersion`.** An existing file whose `user_version` is past it was written by a newer copy of the application (`schema-too-new`). A file that does not exist yet passes: the first open creates it.
+
+A payload that fails is not loaded. The project's application state reads `unavailable` with the reason and, in `problems`, what was found; the project shows the standard workspace, and the plugin manager's row shows the same lines. Nothing is created, migrated or deleted, and no command runs.
+
+The previous version does not keep running meanwhile. Its files are the ones that changed, and old code running against a folder of new files is the mixed state the check exists to prevent. The retry is the next reconcile: the watcher's next settle once `plugin.json` or `dist/` changes, a project switch, or **Reload from folder** for a file outside `dist/`.
+
+### Migrations
+
+Declare [`schemaVersion`](./contribution-points.md#databases--shipped) on each database: how many migrations this version applies. A writable `db.open` that passes a different number fails `VALIDATION`, so the comparison the preflight makes is the one your code will.
+
+Migrations run when your code opens the database, not when the payload loads. Each runs in its own transaction and advances `user_version` with it, so a run that stops part way — a crash, a quit, a step that throws — leaves the file at the last step that committed, and the next writable open carries on from there without repeating one. That is what makes a run safe to retry: the version counter, not the SQL. A failed step is rolled back whole and rejects `DB_MIGRATION_FAILED` naming it. A step that does anything besides SQL against its own file, such as writing another file or calling a service, is outside that guarantee.
+
+### Rollback, backup and restore
+
+- **Code rolls back; a schema does not.** Rolling back the code is a checkout of the previous commit. A database a newer version already migrated stays migrated, and older code refuses it — at the preflight, and again at `db.open` (`DB_SCHEMA_TOO_NEW`) — rather than guessing at a schema it has never seen. There are no down-migrations, and nothing undoes a step that dropped or rewrote data.
+- **Design for a way back.** Keep a release's migrations additive (add the new column and keep reading the old one), and remove what is no longer used in a later release, once no older version needs it.
+- **Back up before a destructive release.** Nothing is snapshotted automatically. **Back up data…** on the application's panel menus, or `db.backup(destPath)` from your code, writes a consistent copy; take one before a release whose migrations drop or rewrite data.
+- **Restoring is manual.** Close the project so nothing holds the file open, keep a copy of the current file, put the backup in its place, delete any `-wal` and `-shm` files beside it, and reopen with a version whose `schemaVersion` is at or past the backup's. Restoring local data does not undo anything the application already sent elsewhere.
 
 ## Layouts and missing plugins
 

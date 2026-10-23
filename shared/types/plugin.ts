@@ -1628,7 +1628,9 @@ export interface PluginApplicationDescriptor {
  * - `disabled` — the project's plugins are not trusted, or the owner is muted
  *   or waiting to be turned on.
  * - `unavailable` — the owner failed to load, needs another Daintree version,
- *   or a second plugin also declares an application.
+ *   failed its preflight (a required file is missing, or a database it
+ *   declares was written by a newer copy), or a second plugin also declares
+ *   an application.
  * - `replaced` — the owner is loaded, but another plugin holds the project
  *   Home it lands on.
  *
@@ -1638,18 +1640,35 @@ export type ProjectApplicationStatus =
   "loading" | "active" | "disabled" | "unavailable" | "replaced";
 
 export type ProjectApplicationReason =
-  "untrusted" | "muted" | "staged" | "load-failed" | "engine-incompatible" | "owner-ambiguous";
+  | "untrusted"
+  | "muted"
+  | "staged"
+  | "load-failed"
+  | "engine-incompatible"
+  | "assets-missing"
+  | "schema-too-new"
+  | "owner-ambiguous";
+
+/** The preflight reasons: checked on disk before the owner's code is loaded (#14113). */
+export type ProjectApplicationPreflightReason = Extract<
+  ProjectApplicationReason,
+  "assets-missing" | "schema-too-new"
+>;
 
 /** One project's application, resolved. `null` where no plugin declares one. */
 export interface ProjectApplicationState {
   status: ProjectApplicationStatus;
   /** Manifest id of the declaring plugin; the lowest one when ownership is ambiguous. */
   ownerId: string;
+  /** The owner's manifest `version`: the payload this state describes. */
+  version: string;
   /** The owner's instance key, once it is loaded. */
   instanceId?: string;
   application: PluginApplicationDescriptor;
   /** Why a non-active application is not in force. */
   reason?: ProjectApplicationReason;
+  /** For a preflight reason, what was found on disk, one line each. */
+  problems?: string[];
   /** For `owner-ambiguous`, every declaring manifest id, sorted. */
   candidates?: string[];
   /** For `replaced`, the INSTANCE key of the plugin holding the project Home. */
@@ -2600,6 +2619,13 @@ export interface PluginDatabaseContribution {
   location: PluginDatabaseLocationKind;
   path?: string;
   journalMode: "delete" | "wal";
+  /**
+   * How many migrations this version of the plugin applies: the schema it
+   * leaves the file at. Lets the host refuse an application whose file was
+   * written by a newer copy before any of its code runs, and makes a writable
+   * `db.open` with a different number of migrations fail rather than drift.
+   */
+  schemaVersion?: number;
   /** Named statements the host serves to agents as tools of their own. */
   queries?: PluginDatabaseQueryContribution[];
 }
@@ -4289,6 +4315,8 @@ export interface PluginDatabaseLocation {
   /** For a `"project"` database, the path relative to the project root. */
   readonly projectRelativePath: string | null;
   readonly journalMode: "delete" | "wal";
+  /** The declaration's `schemaVersion`, when it has one. */
+  readonly schemaVersion?: number;
 }
 
 /** Positional (`?`) or named (`:name`, `$name`, `@name`) statement parameters. */

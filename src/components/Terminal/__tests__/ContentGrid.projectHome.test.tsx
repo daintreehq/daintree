@@ -99,6 +99,7 @@ function activeApplication(
   return {
     status: "active",
     ownerId: "acme.dash",
+    version: "1.0.0",
     instanceId: "project:p1/acme.dash",
     application: { name: "Dash", destination: "home", ...patch },
     fallback: null,

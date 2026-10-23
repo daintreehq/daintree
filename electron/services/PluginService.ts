@@ -157,6 +157,7 @@ import {
   ProjectPluginController,
   type ProjectPluginControllerDeps,
 } from "./plugin/ProjectPluginController.js";
+import { preflightProjectApplication } from "./plugin/projectApplicationPreflight.js";
 import { discoverProjectPlugins } from "./plugin/projectPluginDiscovery.js";
 import { ProjectPluginWatcher } from "./plugin/ProjectPluginWatcher.js";
 import { PluginDevArtifactWatcher } from "./plugin/PluginDevArtifactWatcher.js";
@@ -7502,6 +7503,13 @@ export class PluginService {
       isEngineIncompatible: (range) => checkPluginEngineRange(this.appVersion, range) !== null,
       getProjectHomeHolder: (projectId) =>
         getProjectSurfaceSlots(projectId).projectHome?.defaultOptionId ?? null,
+      preflightApplication: ({ projectId, projectRoot, dir, manifest }) =>
+        preflightProjectApplication({
+          dir,
+          manifest,
+          projectRoot,
+          dataDir: this.pluginDataDir(makeProjectPluginInstanceKey(projectId, manifest.name)),
+        }),
     };
   }
 

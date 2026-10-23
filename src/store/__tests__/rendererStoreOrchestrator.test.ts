@@ -183,6 +183,7 @@ describe("rendererStoreOrchestrator", () => {
         application: {
           status: "active",
           ownerId: "acme.dash",
+          version: "1.0.0",
           application: { name: "Dash", destination: "home" },
           fallback: null,
         },
@@ -199,6 +200,7 @@ describe("rendererStoreOrchestrator", () => {
         application: {
           status: "active",
           ownerId: "acme.dash",
+          version: "1.0.0",
           application: { name: "Dash", destination: "home", arrangement: "beside-grid" },
           fallback: null,
         },
