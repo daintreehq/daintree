@@ -148,3 +148,27 @@ describe("plugin settings destinations beyond a key (#14101)", () => {
     expect(homeHasSettings(accountOnly, "project")).toBe(true);
   });
 });
+
+describe("plugin settings for a per-project package (#14255)", () => {
+  it("resolves the package id to this project's instance, never the package row", () => {
+    const settings = { settings: [{ id: "team", type: "string" as const }] };
+    const catalog: LoadedPluginInfo = {
+      ...plugin("global", settings),
+      instanceMode: "project",
+      enabledInProjects: ["proj-1"],
+    };
+    const instance: LoadedPluginInfo = {
+      ...plugin("project", settings),
+      instanceId: "project__proj-1__installed__acme.t",
+    };
+
+    const resolved = resolvePluginSettingsTarget(
+      "acme.t",
+      undefined,
+      [catalog, instance],
+      "proj-1"
+    );
+
+    expect(resolved).toEqual({ ok: true, target: expect.objectContaining({ plugin: instance }) });
+  });
+});

@@ -262,6 +262,12 @@ describe("selectSearchablePlugins", () => {
     ]);
   });
 
+  it("leaves out a per-project package's own row, whose settings belong to its instances", () => {
+    const catalog = { ...plugin("acme.ledger", []), instanceMode: "project" } as LoadedPluginInfo;
+    const result = selectSearchablePlugins([installed, catalog], [], true);
+    expect(result.map((r) => r.plugin.instanceId)).toEqual(["acme.installed"]);
+  });
+
   it.each([
     ["untrusted folder", projectRow({}), false],
     ["muted", projectRow({ muted: true }), true],

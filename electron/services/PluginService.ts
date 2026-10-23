@@ -8307,7 +8307,10 @@ export class PluginService {
   getInstalledPackageMode(
     manifestId: string
   ): "project" | "project-unavailable" | "singleton" | null {
-    if (this.projectInstancePackages.has(manifestId)) return "project";
+    if (this.projectInstancePackages.has(manifestId)) {
+      // A disable is persisted before its transition leaves the catalog.
+      return this.records.getDisabledIds().has(manifestId) ? "project-unavailable" : "project";
+    }
     const parked = this.disabledPlugins.get(manifestId) ?? this.blockedPlugins.get(manifestId);
     if (parked) {
       return parked.manifest.instanceMode === "project" && !parked.isBuiltin

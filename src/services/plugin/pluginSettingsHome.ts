@@ -170,7 +170,11 @@ function findPlugin(
   if (parseProjectPluginInstanceKey(requested) !== null) {
     return plugins.find((p) => p.instanceId === requested && ownProject(p));
   }
-  const installed = plugins.find((p) => p.origin === "global" && p.instanceId === requested);
+  // A per-project package's row is not a plugin with settings of its own; its
+  // id resolves to this project's instance below.
+  const installed = plugins.find(
+    (p) => p.origin === "global" && p.instanceId === requested && p.instanceMode !== "project"
+  );
   if (installed) return installed;
   const byManifest = plugins.filter((p) => ownProject(p) && p.manifest.name === requested);
   if (byManifest.length > 1) return "ambiguous";
