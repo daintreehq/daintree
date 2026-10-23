@@ -381,6 +381,7 @@ class TerminalInstanceService {
       fetchAndRestore: (id) => this.restoreController.fetchAndRestore(id),
       isViewObservable: isProjectViewObservable,
       isWorkerIngestEnabled: isPaintFabricWorkerIngestEnabled,
+      applyStdinGate: (managed) => this.applyStdinGate(managed),
     });
 
     this.writeController = new TerminalWriteController({
@@ -1713,6 +1714,7 @@ class TerminalInstanceService {
       if (this.shouldSuppressExit(id)) {
         return;
       }
+      this.historyRelease.noteExit(id);
       if (current) {
         writeLocal(current, `\r\n\x1b[90m[Process exited with code ${exitCode}]\x1b[0m\r\n`);
       }
@@ -1818,6 +1820,10 @@ class TerminalInstanceService {
     this.settleWaiters.notifyReadinessWaiters(id);
 
     this.scheduleWhySlowReport();
+
+    // A pane created hidden and never shown gets no visibility edge to start
+    // its dwell from.
+    this.historyRelease.sync(id);
 
     return managed;
   }
@@ -4506,7 +4512,28 @@ class TerminalInstanceService {
     if (!managed) return;
 
     managed.isInputLocked = locked;
-    managed.terminal.options.disableStdin = locked;
+    this.applyStdinGate(managed);
+  }
+
+  private applyStdinGate(managed: ManagedTerminal): void {
+    managed.terminal.options.disableStdin =
+      managed.isInputLocked === true || managed.historyRefilling === true;
+  }
+
+  /**
+   * Keep this terminal's history resident while the returned release is held
+   * — for readers of lines a long-hidden release would drop (#14220).
+   */
+  pinHistory(id: string): () => void {
+    const managed = this.instances.get(id);
+    if (!managed) return () => {};
+    managed.historyPins = (managed.historyPins ?? 0) + 1;
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      managed.historyPins = Math.max(0, (managed.historyPins ?? 0) - 1);
+    };
   }
 }
 

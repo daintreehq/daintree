@@ -1,5 +1,6 @@
 import { type ManagedTerminal, HISTORY_RELEASE_DWELL_MS, RELEASED_SCROLLBACK_LINES } from "./types";
 import { restoreScrollback } from "./TerminalScrollbackController";
+import { resumeXtermRender, suspendXtermRender } from "./xtermRenderSuspension";
 import { usePerformanceModeStore } from "@/store/performanceModeStore";
 import { logDebug, logInfo, logWarn } from "@/utils/logger";
 
@@ -9,6 +10,16 @@ export interface TerminalHistoryReleaseControllerDeps {
   /** Whether this project view is active and its window can be seen. */
   isViewObservable: () => boolean;
   isWorkerIngestEnabled: () => boolean;
+  /** Re-derive xterm's stdin gate after the refill's input hold changes. */
+  applyStdinGate: (managed: ManagedTerminal) => void;
+}
+
+// A zero-length write still runs its callback in order; an empty string would
+// end xterm's sync drain and drop what is queued behind it (see streamFence).
+const WRITE_BARRIER = new Uint8Array(0);
+
+function nextFrame(): Promise<void> {
+  return new Promise((resolve) => requestAnimationFrame(() => resolve()));
 }
 
 /**
@@ -31,13 +42,26 @@ export class TerminalHistoryReleaseController {
   sync(id: string): void {
     const managed = this.deps.getInstance(id);
     if (!managed) return;
-    if (managed.isVisible || managed.isFocused) {
+    if (this.isShown(managed)) {
       this.cancel(managed);
-      if (managed.historyReleased) this.reveal(id, managed);
+      if (managed.historyReleased || managed.historyRefillPending) this.refill(id, managed);
       return;
     }
     if (managed.historyReleased || managed.historyReleaseTimer !== undefined) return;
     this.arm(id, managed);
+  }
+
+  /**
+   * The PTY exited. A failed session's host mirror is disposed with it, so
+   * a released pane gets one last try at its history while the host may still
+   * hold it, and nothing that has exited is released again.
+   */
+  noteExit(id: string): void {
+    const managed = this.deps.getInstance(id);
+    if (!managed) return;
+    managed.ptyExited = true;
+    this.cancel(managed);
+    if (managed.historyReleased) this.refill(id, managed);
   }
 
   cancel(managed: ManagedTerminal): void {
@@ -46,20 +70,29 @@ export class TerminalHistoryReleaseController {
     managed.historyReleaseTimer = undefined;
   }
 
+  // Visibility is authoritative for being on screen. Focus is read from the
+  // DOM rather than `isFocused`, which a pane can leave set when it unmounts
+  // while focused; real focus is also what an IME composition needs.
+  private isShown(managed: ManagedTerminal): boolean {
+    if (managed.isVisible) return true;
+    const textarea = managed.terminal.textarea;
+    return textarea !== undefined && textarea.ownerDocument.activeElement === textarea;
+  }
+
   private arm(id: string, managed: ManagedTerminal): void {
-    managed.historyReleaseTimer = window.setTimeout(() => {
+    managed.historyReleaseTimer = setTimeout(() => {
       // A restart replaces the instance under the same id; a timer armed for
       // the old one has nothing to release.
       if (this.deps.getInstance(id) !== managed) return;
       managed.historyReleaseTimer = undefined;
-      if (managed.isVisible || managed.isFocused || managed.historyReleased) return;
+      if (this.isShown(managed) || managed.historyReleased) return;
       if (this.canRelease(managed)) {
         this.release(managed);
         return;
       }
       // Blocked by something transient (a selection, a scrolled-back reader,
       // a hidden window); look again after another dwell.
-      this.arm(id, managed);
+      if (!managed.ptyExited) this.arm(id, managed);
     }, HISTORY_RELEASE_DWELL_MS);
   }
 
@@ -69,11 +102,14 @@ export class TerminalHistoryReleaseController {
     // performance mode already keeps almost nothing to release.
     if (this.deps.isWorkerIngestEnabled()) return false;
     if (usePerformanceModeStore.getState().performanceMode) return false;
+    // An exited session may have no host mirror left to refill from.
+    if (managed.ptyExited) return false;
     if (managed.isAttaching || managed.attachRecoveryInFlight) return false;
-    if (managed.isSerializedRestoreInProgress) return false;
+    if (managed.isSerializedRestoreInProgress || managed.historyRefill) return false;
     if (managed.isUserScrolledBack || managed.isAltBuffer) return false;
-    // Reads from a buffer marker to the end, which a trim would dispose.
-    if (managed.postCompleteHook) return false;
+    // Search results and a post-complete hook's marker live in the history a
+    // trim would drop.
+    if ((managed.historyPins ?? 0) > 0 || managed.postCompleteHook) return false;
     const terminal = managed.terminal;
     if (terminal.hasSelection()) return false;
     return terminal.buffer.normal.length - terminal.rows > RELEASED_SCROLLBACK_LINES;
@@ -97,15 +133,69 @@ export class TerminalHistoryReleaseController {
     });
   }
 
-  private reveal(id: string, managed: ManagedTerminal): void {
+  private refill(id: string, managed: ManagedTerminal): void {
+    if (managed.historyRefill) return;
     managed.historyReleased = false;
+    managed.historyRefillPending = true;
     restoreScrollback(managed);
     logDebug(`Restoring released history for ${id}`);
-    // The live screen is already current; this only brings the history back.
-    // Output arriving meanwhile is held by the restore window and replayed
-    // after the snapshot, as on a cold project switch.
-    void this.deps.fetchAndRestore(id).catch((error: unknown) => {
-      logWarn("Could not restore released terminal history", { id, error });
+    managed.historyRefill = this.runRefill(id, managed)
+      .catch((error: unknown) => {
+        logWarn("Could not restore released terminal history", { id, error });
+      })
+      .finally(() => {
+        managed.historyRefill = undefined;
+      });
+  }
+
+  /**
+   * The live screen is already current, so the pane paints that first. Then
+   * painting is held on that frame while the restore resets and replays the
+   * snapshot underneath — a large one replays in chunks across several frames
+   * — and typing is held with it, so nothing is sent against a buffer that is
+   * mid-replay (bracketed paste is off until the snapshot's tail turns it back
+   * on). Output arriving meanwhile is held by the restore window and replayed
+   * after the snapshot, as on a cold project switch.
+   */
+  private async runRefill(id: string, managed: ManagedTerminal): Promise<void> {
+    if (managed.isVisible) {
+      // One frame for xterm to schedule its paint of the revealed pane, one
+      // for that paint to land.
+      await nextFrame();
+      await nextFrame();
+    }
+    if (this.deps.getInstance(id) !== managed) return;
+
+    const holdPaint = managed.isVisible && managed.isOpened;
+    if (holdPaint) suspendXtermRender(managed.terminal);
+    managed.historyRefilling = true;
+    this.deps.applyStdinGate(managed);
+    try {
+      const restored = await this.deps.fetchAndRestore(id);
+      // A small snapshot's restore resolves once queued; its window closes in
+      // the write callback. Wait for that before letting the pane paint.
+      await this.settleWrites(managed);
+      // Nothing more will ever come for an exited session.
+      if (restored || managed.ptyExited) managed.historyRefillPending = false;
+    } finally {
+      managed.historyRefilling = false;
+      if (this.deps.getInstance(id) === managed) {
+        this.deps.applyStdinGate(managed);
+        // A cached view stays suspended; its reactivation resumes it.
+        if (holdPaint && this.deps.isViewObservable()) resumeXtermRender(managed.terminal);
+      }
+    }
+  }
+
+  private settleWrites(managed: ManagedTerminal): Promise<void> {
+    return new Promise((resolve) => {
+      try {
+        // The restore's own callback queues its window close as a microtask;
+        // queuing ours from the barrier's callback lands after it.
+        managed.terminal.write(WRITE_BARRIER, () => queueMicrotask(resolve));
+      } catch {
+        resolve();
+      }
     });
   }
 }

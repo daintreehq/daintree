@@ -457,7 +457,16 @@ export interface ManagedTerminal {
   // pane is shown again, which restores the ceiling and refills history from
   // the host mirror.
   historyReleased?: boolean;
-  historyReleaseTimer?: number;
+  historyReleaseTimer?: ReturnType<typeof setTimeout>;
+  // Released history still owed to the pane: set on reveal, cleared once a
+  // refill lands, so a failed one is retried on the next reveal.
+  historyRefillPending?: boolean;
+  historyRefill?: Promise<void>;
+  // While the refill replays, typing is held (see setInputLocked).
+  historyRefilling?: boolean;
+  // Holders reading history a release would drop (an open search).
+  historyPins?: number;
+  ptyExited?: boolean;
 }
 
 export const TIER_DOWNGRADE_HYSTERESIS_MS = 500;

@@ -65,6 +65,9 @@ export function TerminalSearchBar({ terminalId, onClose, className }: TerminalSe
     inputRef.current?.select();
   }, []);
 
+  // A parked dock pane keeps its bar open; its results live in the history.
+  useEffect(() => terminalInstanceService.pinHistory(terminalId), [terminalId]);
+
   useEffect(() => {
     let disposed = false;
     let resultSubscription: { dispose: () => void } | null = null;
