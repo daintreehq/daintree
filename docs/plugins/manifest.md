@@ -130,7 +130,6 @@ Daintree reads the manifest eagerly at startup. Contribution points declared her
     "fileDecorationProviders": [/* ... */],
     "surfaces": {/* project-scope only; see "contributes.surfaces" below */},
     "fileEditors": [/* view-backed; a "slot" is built-in only */],
-    // Built-in plugins only: "previewTools", "guestAdapters".
   },
 }
 ```
@@ -260,7 +259,7 @@ The manifest gate enforces it in both directions, against the root the manifest 
 
 This is a guardrail against accidental promotion, not a security control — the trust decision is the project folder, not this field. What it prevents is a plugin loading under assumptions its author never made: a project plugin copied into the user directory would go app-wide with project-shaped expectations about its settings tier and its bound project, and a user plugin dropped into `.daintree/plugins/` would load with none of the project-local guarantees. Neither failure is visible at runtime, so both are refused at the gate.
 
-Declaring `"scope": "project"` also changes what the manifest may contribute. `contributes.surfaces` and `"project"` [databases](./contribution-points.md#databases--shipped) become available, and six contribution groups become unavailable — `menuItems`, `agents`, `processTools`, `mcpServers`, `themes` and `forgeProviders`, each rejected with an error naming the structural reason it cannot yet be narrowed to one project. `previewTools`, `guestAdapters` and a slot-backed `fileEditors` entry are refused too, as they are for every plugin that is not built in; a view-backed file editor is available, and may also match project-relative `paths`. `agentMcp` stays available, because its credentials are bound to one project. See [Project-local plugins](./project-local.md) and the per-point status in [Contribution points](./contribution-points.md).
+Declaring `"scope": "project"` also changes what the manifest may contribute. `contributes.surfaces` and `"project"` [databases](./contribution-points.md#databases--shipped) become available, and six contribution groups become unavailable — `menuItems`, `agents`, `processTools`, `mcpServers`, `themes` and `forgeProviders`, each rejected with an error naming the structural reason it cannot yet be narrowed to one project. A slot-backed `fileEditors` entry is refused too, as it is for every plugin that is not built in; a view-backed file editor is available, and may also match project-relative `paths`. `agentMcp` stays available, because its credentials are bound to one project. See [Project-local plugins](./project-local.md) and the per-point status in [Contribution points](./contribution-points.md).
 
 ### `application`
 
@@ -429,7 +428,7 @@ Wakes are best effort, not a log:
 
 ### `contributes`
 
-Object containing an array per contribution type (`panels`, `toolbarButtons`, `menuItems`, `keybindings`, `contextMenus`, `commands`, `views`, `mcpServers`, `agentMcp`, `databases`, `tours`, `skills`, `forgeProviders`, `fileDecorationProviders`, `worktreeDeleteNotes`, `agents`, `processTools`, `settings`, `recipes`, `promptTemplates`, `worktreeSetupSteps`, `setup`, `terminalLinks`, `contextProviders`, and the built-in-only `fileEditors`, `previewTools`, `guestAdapters`) — plus the non-array `surfaces`, `account` and `assistantKnowledge` objects. All are optional; unlisted types default to empty. Each array has an upper bound (`MANIFEST_CONTRIBUTION_CAPS` in `electron/schemas/plugin.ts`) generous for any real plugin and there to reject pathological manifests:
+Object containing an array per contribution type (`panels`, `toolbarButtons`, `menuItems`, `keybindings`, `contextMenus`, `commands`, `views`, `mcpServers`, `agentMcp`, `databases`, `tours`, `skills`, `forgeProviders`, `fileDecorationProviders`, `worktreeDeleteNotes`, `agents`, `processTools`, `settings`, `recipes`, `promptTemplates`, `worktreeSetupSteps`, `setup`, `terminalLinks`, `contextProviders`, and `fileEditors`, whose slot-backed entries are built-in only) — plus the non-array `surfaces`, `account` and `assistantKnowledge` objects. All are optional; unlisted types default to empty. Each array has an upper bound (`MANIFEST_CONTRIBUTION_CAPS` in `electron/schemas/plugin.ts`) generous for any real plugin and there to reject pathological manifests:
 
 | Contribution              | Max entries                               |
 | ------------------------- | ----------------------------------------- |
@@ -458,8 +457,6 @@ Object containing an array per contribution type (`panels`, `toolbarButtons`, `m
 | `processTools`            | 100                                       |
 | `settings`                | 200                                       |
 | `fileEditors`             | 10                                        |
-| `previewTools`            | 10                                        |
-| `guestAdapters`           | 10                                        |
 
 Validation is structural as well as per-field: duplicate ids within one array are rejected (`duplicate_contribution_id`), and cross-references have to resolve — a panel view's `id` must name a declared panel (a settings view must not), a panel `menu` or `toolbar` entry, toolbar button, menu item, keybinding or context menu naming an action in your own namespace must match a declared command when you declare any, a tour's `panelKind` must name a declared panel, a forge provider's `settingsScopeRef` / `viewRefs` must name declared settings / views, a `surfaces` slot's `viewId` must name a declared panel view, and a `${settings:…}` token in an MCP server's `command` / `args` / `env` must name a declared setting. Capability rules are checked too: `agents` needs `agent:register`, `agentMcp` needs `mcp:expose`, and a `"project"` database needs `scope: "project"` and `fs:project-write`.
 

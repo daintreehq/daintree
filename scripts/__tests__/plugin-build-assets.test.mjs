@@ -7,8 +7,6 @@ import { fileURLToPath } from "node:url";
 import {
   PLUGIN_EXTRA_ASSET_SKIP_DIRS,
   copyPluginExtraAssets,
-  discoverGuestRuntimeAssets,
-  findMissingGuestAssets,
   findMissingPluginAssets,
   findTypeScriptCommandHandlers,
   guestRuntimeBuildConfig,
@@ -352,106 +350,11 @@ function writeManifest(dir, manifest) {
   writeFile(path.join(dir, "plugin.json"), JSON.stringify(manifest));
 }
 
-describe("discoverGuestRuntimeAssets", () => {
-  it("derives an esbuild entry and outfile per declared adapter", () => {
-    writeManifest(path.join(workDir, "plugins/builtin/alpha"), {
-      name: "acme.alpha",
-      contributes: {
-        guestAdapters: [
-          { id: "acme.alpha.guest", entry: "renderer/guest/entry.ts" },
-          { id: "acme.alpha.probe", entry: "renderer/probe.ts" },
-        ],
-      },
-    });
-
-    expect(discoverGuestRuntimeAssets(workDir)).toEqual([
-      {
-        adapterId: "acme.alpha.guest",
-        entry: "plugins/builtin/alpha/renderer/guest/entry.ts",
-        outfile: "dist-electron/plugins/builtin/alpha/guest/guest.js",
-      },
-      {
-        adapterId: "acme.alpha.probe",
-        entry: "plugins/builtin/alpha/renderer/probe.ts",
-        outfile: "dist-electron/plugins/builtin/alpha/guest/probe.js",
-      },
-    ]);
-  });
-
-  it("ignores a plugin that declares none, an unreadable manifest and a missing root", () => {
-    writeManifest(path.join(workDir, "plugins/builtin/plain"), {
-      name: "acme.plain",
-      contributes: { commands: [] },
-    });
-    writeFile(path.join(workDir, "plugins/builtin/bad/plugin.json"), "{ not json");
-    expect(discoverGuestRuntimeAssets(workDir)).toEqual([]);
-    expect(discoverGuestRuntimeAssets(path.join(workDir, "nope"))).toEqual([]);
-  });
-
-  it("drops a declaration whose entry or id would reach outside the plugin", () => {
-    writeManifest(path.join(workDir, "plugins/builtin/hostile"), {
-      name: "acme.hostile",
-      contributes: {
-        guestAdapters: [
-          { id: "acme.hostile.a", entry: "../other/entry.ts" },
-          { id: "other.plugin.b", entry: "renderer/b.ts" },
-          { id: "acme.hostile.ok", entry: "renderer/ok.ts" },
-          // The bundler's own output dir — a source file there would be copied
-          // over the compiled asset (PLUGIN_EXTRA_ASSET_SKIP_DIRS skips it).
-          { id: "acme.hostile.reserved", entry: "guest/entry.ts" },
-        ],
-      },
-    });
-    expect(discoverGuestRuntimeAssets(workDir).map((a) => a.adapterId)).toEqual([
-      "acme.hostile.ok",
-    ]);
-  });
-});
-
-describe("findMissingGuestAssets", () => {
-  function declareOne() {
-    writeManifest(path.join(workDir, "plugins/builtin/alpha"), {
-      name: "acme.alpha",
-      contributes: { guestAdapters: [{ id: "acme.alpha.guest", entry: "renderer/entry.ts" }] },
-    });
-    return path.join(workDir, "dist-electron/plugins");
-  }
-
-  it("reports a declared adapter whose bundle never landed", () => {
-    const dist = declareOne();
-    expect(findMissingGuestAssets(workDir, dist)).toEqual([
-      'acme.alpha.guest: "dist-electron/plugins/builtin/alpha/guest/guest.js" not found in built output',
-    ]);
-  });
-
-  it("is silent once the bundle exists", () => {
-    const dist = declareOne();
-    writeFile(path.join(dist, "builtin/alpha/guest/guest.js"), "(() => {})();\n");
-    expect(findMissingGuestAssets(workDir, dist)).toEqual([]);
-  });
-
-  it("is silent when nothing declares an adapter", () => {
-    expect(findMissingGuestAssets(workDir, path.join(workDir, "dist-electron/plugins"))).toEqual(
-      []
-    );
-  });
-
-  it("finds the asset the real build emits for every shipped declaration", () => {
-    // The manifests the build copied into the output tree, against that same
-    // tree: what shipped must be complete. Reading the source manifests instead
-    // would fail on any checkout whose last build predates a new declaration.
-    // Skipped on a cold checkout where `dist-electron/` has never been built.
-    const dist = path.join(repoRoot, "dist-electron/plugins");
-    if (!fs.existsSync(dist)) return;
-    expect(findMissingGuestAssets(path.join(repoRoot, "dist-electron"), dist)).toEqual([]);
-  });
-});
-
 describe("guest runtime assets", () => {
   const SAMPLE_GUEST_ASSET = {
-    adapterId: "acme.alpha.guest",
-    entry: "plugins/builtin/alpha/renderer/guest/entry.ts",
-    outfile: "dist-electron/plugins/builtin/alpha/guest/guest.js",
+    id: "sample",
+    entry: "electron/services/elementPicker/guest/sample.ts",
+    outfile: "dist-electron/element-picker/guest/sample.js",
   };
 
   it("emits a browser IIFE, never a module or a named-function transform", () => {

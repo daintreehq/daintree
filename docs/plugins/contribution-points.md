@@ -46,8 +46,6 @@ A plugin that declares `"scope": "project"` lives in a project's own repository 
 | `forgeProviders` | Rejected — forge providers need synchronous host methods that cannot cross the plugin worker's message port |
 | `projectTemplates` | Rejected — a template is offered while a new project folder is being created, before any project exists for a project plugin to belong to. Ship the template from an installed plugin |
 | `fileEditors` | Allowed, view-backed only — editors apply only in the plugin's own project and may also match project-relative `paths`, and an Edit editor may be the `default` for them. A `slot` is built-in only |
-| `previewTools` | Rejected — built-in only; the tool's components resolve out of the host bundle, which no other origin's renderer reaches |
-| `guestAdapters` | Rejected — built-in only; the bundle is emitted by Daintree's own build and runs with full DOM access inside the previewed site |
 
 Each rejection is a manifest error naming the obstacle, not a silent drop, and each is deferred rather than closed — the reason says what has to be built before the rule can go.
 
@@ -157,7 +155,7 @@ If a manifest-declared command has no matching `src/{id}.{ext}` file and no impe
 
 **Collision rule:** a command whose resolved `{pluginId}.{id}` matches a built-in Daintree action id is rejected at load with a provenance `loadError` — the command does not register. Pick a different id.
 
-**Duplicate ids within an array** are rejected at manifest validation (`duplicate_contribution_id`). The bare `id` is the registry key for every contribution array that has one — `panels`, `toolbarButtons`, `commands`, `views`, `mcpServers`, `agentMcp`, `databases`, `skills`, `recipes`, `tours`, `forgeProviders`, `fileDecorationProviders`, `fileEditors`, `previewTools`, `guestAdapters`, `agents`, `worktreeSetupSteps`, and `settings` — so two entries with the same id in the same array would silently first-win at load. The check is per-array: ids in different arrays are namespaced independently and never collide.
+**Duplicate ids within an array** are rejected at manifest validation (`duplicate_contribution_id`). The bare `id` is the registry key for every contribution array that has one — `panels`, `toolbarButtons`, `commands`, `views`, `mcpServers`, `agentMcp`, `databases`, `skills`, `recipes`, `tours`, `forgeProviders`, `fileDecorationProviders`, `fileEditors`, `agents`, `worktreeSetupSteps`, and `settings` — so two entries with the same id in the same array would silently first-win at load. The check is per-array: ids in different arrays are namespaced independently and never collide.
 
 ## Panels — _Shipped_
 
@@ -1963,70 +1961,6 @@ A **slot-backed** editor names a builtin view the plugin's renderer registers wi
 **The host-owned document.** A view-backed editor's view receives `PanelViewProps.fileDocument` (`PluginFileDocument` in the SDK): `read()` returns the text and an opaque revision; `save(text, { expectedRevision })` writes only if the file is still at that revision, checked in the main process at write time, and otherwise returns `conflict` without writing; `setDraft(text | null)` reports unsaved text, and `setConflict` raises a conflict the editor detected itself; `onDidChange` reports a disk change, a save made by the host, or a discard. The host keeps the draft, so it survives a switch to Source and back, and the dirty mark, the draft-aware Rendered preview and the Save / Discard / Cancel prompt on close apply exactly as for the built-in editor. Text is UTF-8 with lines joined by `\n`; a save keeps the file's BOM, dominant line ending and mode.
 
 The host offers editors inside the file browser’s existing content area (built-in editors only) and in standalone file panels (the standalone file viewer dialog stays read-only), only inside a project or worktree root. Plugin editors load only when chosen, so they never weigh on the file panel's first render.
-
-## Preview tools — _Shipped (built-in only)_
-
-Declares a tool the dev-preview panel offers in its toolbar: a toggle, a strip under the toolbar and a drawer beside the page, with the host owning the chrome and the session lifecycle. No built-in contributes one today; the dev preview's own Element Picker is core, not a plugin tool.
-
-The components stay a renderer-side registration — `registerDevPreviewTool` in the plugin's renderer entry, because they are compiled into the host bundle and nothing else can supply them. This declaration is what makes the tool **admissible**: `src/registry/devPreviewToolRegistry.ts` hides a registered tool whose plugin's manifest does not name its id, so a module side effect alone can no longer put a tool in the preview toolbar. [Views → Dev preview tools](./views.md#dev-preview-tools) is the lifecycle.
-
-```json
-{
-  "contributes": {
-    "previewTools": [
-      {
-        "id": "daintree.site-tools.inspector",
-        "title": "Site Tools",
-        "iconId": "square-dashed-mouse-pointer",
-        "guestAdapter": "daintree.site-tools.guest"
-      }
-    ]
-  }
-}
-```
-
-**Fields:**
-
-| Field | Required | Notes |
-| --- | --- | --- |
-| `id` | yes | **Not** namespaced by the host — the renderer entry registers with this same literal, so the manifest declares the qualified form: the plugin's own name plus exactly one more segment (`daintree.site-tools.inspector`), at most 200 characters. |
-| `title` | yes | The tool's name, trimmed, 1–64 characters. The registration supplies the rendered label; this states what the plugin ships. |
-| `iconId` | no | At most 64 characters. Advisory, like `views[].iconId` — the tool's own `Button` owns the rendered glyph. |
-| `guestAdapter` | no | A [guest adapter](#guest-adapters--shipped-built-in-only) id **this same manifest** declares. A tool naming an adapter nothing declares is a manifest error. |
-
-**Built-in only.** The toolbar button, drawer and session all resolve out of the host bundle, which an installed plugin's renderer cannot register into — the same obstacle as [file editors](#file-editors--shipped-built-in-only). Unlike that one the refusal is in the manifest schema rather than at load, because the schema is built per discovery root, so a sample or project manifest fails `npm run check:plugin-manifests` instead of only at runtime. [The preview-extension boundary is deliberate](#the-preview-extension-boundary-is-deliberate) says why it stands.
-
-## Guest adapters — _Shipped (built-in only)_
-
-Declares a browser bundle the host reads back as text and installs into a previewed page through the site-preview bridge. A binding names an adapter id and the host loads that adapter's body itself; there is no way for a caller to put source on the wire (`electron/services/sitePreview/guestAdapters.ts`).
-
-```json
-{
-  "contributes": {
-    "guestAdapters": [
-      {
-        "id": "daintree.site-tools.guest",
-        "entry": "renderer/guest/entry.ts"
-      }
-    ]
-  }
-}
-```
-
-**Fields:**
-
-| Field | Required | Notes |
-| --- | --- | --- |
-| `id` | yes | The literal the page runtime binds with, so it is not namespaced by the host — the plugin's own name plus exactly one more segment, at most 200 characters. That segment also names the built asset (below). |
-| `entry` | yes | Plugin-relative POSIX path to the bundle's source, at most 256 characters, ending in `.ts`, `.tsx`, `.js` or `.mjs`. No absolute path, backslash, NUL or `:`; no empty, `.` or `..` segment; and it may not start with `guest/` in any case, the directory the build writes the bundle into. |
-
-**The built asset's path is derived, never declared.** `guestAdapterAssetPath` (`electron/services/sitePreview/guestAdapterAssets.ts`) turns the adapter id into `guest/<id suffix>.js` under the plugin's output dir. `scripts/build-main.mjs` bundles `entry` to exactly that path — as a standalone browser IIFE, not a main entry and not part of the renderer bundle — and `registerBuiltinGuestAdapters` reads it back from the same place at startup, so there is no second path for the two to disagree about. A declared adapter whose bundle did not land fails the build.
-
-**Built-in only.** The body is emitted by Daintree's own build and then runs with full DOM access inside whatever site the user is previewing. The registry exists precisely so that only main, from an asset it shipped, chooses that code.
-
-### The preview-extension boundary is deliberate
-
-Preview tools and guest adapters are first-party by design, not a third-party surface left half-built. What makes them safe for a built-in is that its code ships with the app: its renderer half is compiled into the host bundle — which is also why a built-in's renderer may import host store modules directly, rather than only the shared React the import map provides — and its guest body is bundled by Daintree's own build. An installed plugin has neither, and the pieces that would replace them do not exist: no build that produces a browser bundle the host is willing to inject, no API narrow enough to hand a third party a page the user is developing under their own session, and no consent vocabulary that would let the user judge the request. `contributes.previewTools` and `contributes.guestAdapters` are therefore refused by the manifest schema outside a built-in discovery root, and none of these capabilities is advertised to installed plugins until that build, API and trust model exists.
 
 ## Agents — _Shipped (minimal tier)_
 
