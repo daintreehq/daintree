@@ -1,4 +1,5 @@
 import type { ActionDispatchResult } from "../../../shared/types/actions.js";
+import { PLUGIN_WORKTREE_DELETE_NOTES_TIMEOUT_MS } from "../../../shared/config/pluginBudgets.js";
 import {
   executeViewlessAction,
   hasViewlessImplementation,
@@ -107,7 +108,17 @@ async function loadLiveDeps(): Promise<ViewlessDeps> {
     sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
     collectWorktreeDeleteNotes: async (projectId, worktreeId) => {
       const { pluginService } = await import("../PluginService.js");
-      await pluginService.waitForInit();
+      // Startup activation can hold init for seconds. The wait for it is
+      // bounded by the notes deadline too, so startup adds at most one more
+      // deadline to the approval; whatever has loaded by then is asked.
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      await Promise.race([
+        pluginService.waitForInit(),
+        new Promise<void>((resolve) => {
+          timer = setTimeout(resolve, PLUGIN_WORKTREE_DELETE_NOTES_TIMEOUT_MS);
+        }),
+      ]);
+      clearTimeout(timer);
       return pluginService.collectWorktreeDeleteNotes(projectId, worktreeId);
     },
   };

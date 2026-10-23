@@ -746,6 +746,9 @@ export class ProjectPluginController {
         ...(d.manifest.contributes.views?.some((v) => v.location === "settings")
           ? { declaresSettingsView: true }
           : {}),
+        ...(d.manifest.contributes.worktreeDeleteNotes?.length
+          ? { declaresWorktreeDeleteNotes: true }
+          : {}),
         dirName: d.dirName,
         state,
         muted,

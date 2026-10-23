@@ -4330,6 +4330,7 @@ export class PluginService {
     return {
       plugins: this.plugins,
       activatePlugin: (pluginId) => this.activatePlugin(pluginId),
+      isActivated: (pluginId) => this.activatedPlugins.has(pluginId),
       readWorktree: (projectId, worktreeId) =>
         this.readWorktreeForDeleteNotes(projectId, worktreeId),
       isMuted: isWorktreeDeleteNotesMuted,

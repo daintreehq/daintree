@@ -44,6 +44,7 @@ function makeHost(overrides: Partial<WorktreeDeleteNotesHost> = {}) {
   const host: WorktreeDeleteNotesHost = {
     plugins,
     activatePlugin,
+    isActivated: () => true,
     readWorktree,
     isMuted: (id) => muted.has(id),
     timeoutMs: 1000,
@@ -134,6 +135,41 @@ describe("getWorktreeDeleteNotes", () => {
 
   it("reads as no answer when activation leaves nothing bound", async () => {
     const { host } = makeHost();
+    await expect(getWorktreeDeleteNotes(host, "p1", "acme.sync", "/repo/wt")).resolves.toEqual({
+      status: "no-answer",
+    });
+  });
+
+  it("reads as no answer from a plugin whose activation failed, even with a binding left behind", async () => {
+    const { host } = makeHost({ isActivated: () => false });
+    const provideNotes = vi.fn(async () => [{ severity: "info" as const, text: "partial" }]);
+    bind("acme.sync", provideNotes);
+    await expect(getWorktreeDeleteNotes(host, "p1", "acme.sync", "/repo/wt")).resolves.toEqual({
+      status: "no-answer",
+    });
+    expect(provideNotes).not.toHaveBeenCalled();
+  });
+
+  it("is null for a worktree that isn't the project's, without waiting on a slow activation", async () => {
+    vi.useFakeTimers();
+    const { host } = makeHost({
+      activatePlugin: () => new Promise<void>(() => {}),
+      readWorktree: async () => ({ status: "missing" }),
+    });
+    bind("acme.sync", async () => []);
+    const pending = getWorktreeDeleteNotes(host, "p1", "acme.sync", "/other");
+    await vi.advanceTimersByTimeAsync(0);
+    await expect(pending).resolves.toBeNull();
+  });
+
+  it("drops an answer that arrives after the deadline passed but before its timer ran", async () => {
+    const { host } = makeHost();
+    const now = vi.spyOn(Date, "now");
+    now.mockReturnValue(1_000);
+    bind("acme.sync", async () => {
+      now.mockReturnValue(1_000 + 5_000);
+      return [{ severity: "info" as const, text: "late" }];
+    });
     await expect(getWorktreeDeleteNotes(host, "p1", "acme.sync", "/repo/wt")).resolves.toEqual({
       status: "no-answer",
     });

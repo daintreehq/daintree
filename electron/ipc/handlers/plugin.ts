@@ -1801,8 +1801,10 @@ async function handleWorktreeDeleteNotesGet(
   if (typeof pluginId !== "string" || pluginId.length === 0) {
     throw new Error("pluginId must be a non-empty string");
   }
+  // No init wait: the sources list this view asked first already waited, and
+  // waiting again would keep the row pending through every other plugin's
+  // startup activation.
   const service = await getPluginService();
-  await service.waitForInit();
   return service.getWorktreeDeleteNotes(ctx.projectId, pluginId, worktreeId);
 }
 

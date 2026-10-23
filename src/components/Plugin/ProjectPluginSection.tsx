@@ -12,6 +12,7 @@ import { useTruncationDetection } from "@/hooks/useTruncationDetection";
 import { PluginGlyphTile } from "@/components/Plugin/pluginIcons";
 import { PluginDatabasesSection } from "@/components/Plugin/PluginDatabasesSection";
 import { PluginWorksWith, type WorksWithPeer } from "@/components/Plugin/PluginWorksWith";
+import { GrantSwitch } from "@/components/Plugin/PluginDetailPane";
 import {
   PluginPerformanceSection,
   PluginStylesSection,
@@ -342,6 +343,12 @@ export function ProjectPluginDetailPane({
             ))}
           </ul>
         </div>
+      )}
+
+      {/* A real control, unlike the capability list above: it decides whether
+          the host asks this plugin at all, per project instance (#13805). */}
+      {plugin.declaresWorktreeDeleteNotes === true && plugin.instanceId && (
+        <GrantSwitch pluginId={plugin.instanceId} grant="worktree-delete-notes" />
       )}
 
       {plugin.databases && plugin.databases.length > 0 && (

@@ -17,13 +17,19 @@ const LINE_BREAKS = /[\t\r\n\u0085\u2028\u2029]+/g;
 // eslint-disable-next-line no-control-regex -- stripping controls is the point
 const INVISIBLE = /[\u0000-\u001f\u007f-\u009f\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/g;
 
+// Past this a note can't fit however much of it is whitespace or invisible, so
+// it is refused before any of the work below is spent on it.
+const RAW_TEXT_MAX = PLUGIN_WORKTREE_DELETE_NOTE_TEXT_MAX * 8;
+
+// Normalized last: stripping a control can leave two halves of a composed
+// character next to each other.
 function cleanText(text: string): string {
   return text
-    .normalize("NFC")
     .replace(LINE_BREAKS, " ")
     .replace(INVISIBLE, "")
     .replace(/\s+/g, " ")
-    .trim();
+    .trim()
+    .normalize("NFC");
 }
 
 /**
@@ -56,6 +62,12 @@ export function validatePluginWorktreeDeleteNotes(value: unknown): PluginWorktre
       return { ok: false, error: `${at}.severity must be "warning" or "info"` };
     }
     if (typeof text !== "string") return { ok: false, error: `${at}.text must be a string` };
+    if (text.length > RAW_TEXT_MAX) {
+      return {
+        ok: false,
+        error: `${at}.text must be at most ${PLUGIN_WORKTREE_DELETE_NOTE_TEXT_MAX} characters`,
+      };
+    }
     const cleaned = cleanText(text);
     if (cleaned.length === 0) return { ok: false, error: `${at}.text must not be empty` };
     if ([...cleaned].length > PLUGIN_WORKTREE_DELETE_NOTE_TEXT_MAX) {

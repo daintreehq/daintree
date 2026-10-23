@@ -8010,6 +8010,8 @@ export interface ProjectPluginInfo {
   settings?: SettingDefinition[];
   /** The manifest declares a `location: "settings"` view. */
   declaresSettingsView?: boolean;
+  /** The manifest declares `contributes.worktreeDeleteNotes`, so the manager offers its mute (#13805). */
+  declaresWorktreeDeleteNotes?: boolean;
   /** Directory name under `.daintree/plugins/`. Not required to equal `id`. */
   dirName: string;
   state: ProjectPluginState;

@@ -177,7 +177,7 @@ const GRANT_SWITCHES = {
  * behind it. "Show notes when deleting a worktree" (#13805) shares the row but
  * starts on.
  */
-function GrantSwitch({
+export function GrantSwitch({
   pluginId,
   grant,
 }: {

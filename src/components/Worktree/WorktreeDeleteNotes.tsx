@@ -6,6 +6,8 @@ import type {
 } from "@shared/types/plugin";
 import { pluginClient } from "@/clients/pluginClient";
 import { SECTION_LABEL_CLASS } from "@/components/ui/sectionLabel";
+import { useLiveRegionReady } from "@/components/ui/Skeleton";
+import { UI_INLINE_LOADING_GATE_MS } from "@/lib/animationUtils";
 import { SEVERITY_GLYPH } from "@/lib/statusSeverity";
 import { cn } from "@/lib/utils";
 
@@ -21,14 +23,20 @@ export interface WorktreeDeleteNoteRow {
  * Late answers for a worktree the caller has moved off, or after unmount, are
  * dropped; main bounds each ask by its own deadline, so there is nothing to
  * cancel there.
+ *
+ * A plugin still being asked has a row only past the inline loading gate, so
+ * one that answers at once never flashes "Checking with…".
  */
 export function useWorktreeDeleteNotes(worktreeId: string | null): WorktreeDeleteNoteRow[] {
   const [rows, setRows] = useState<WorktreeDeleteNoteRow[]>([]);
+  const [pendingShown, setPendingShown] = useState(false);
 
   useEffect(() => {
     setRows([]);
+    setPendingShown(false);
     if (worktreeId === null) return;
     let cancelled = false;
+    const gate = setTimeout(() => setPendingShown(true), UI_INLINE_LOADING_GATE_MS);
     const settle = (pluginId: string, answer: WorktreeDeleteNotesAnswer | null) => {
       if (cancelled) return;
       setRows((current) =>
@@ -55,10 +63,11 @@ export function useWorktreeDeleteNotes(worktreeId: string | null): WorktreeDelet
       .catch(() => {});
     return () => {
       cancelled = true;
+      clearTimeout(gate);
     };
   }, [worktreeId]);
 
-  return rows;
+  return pendingShown ? rows : rows.filter((row) => row.answer !== "pending");
 }
 
 // `secondary`, not `muted`, for the reason the readiness checks give: the glyph
@@ -116,12 +125,27 @@ export function WorktreeDeleteNotes({
   heading?: string;
   className?: string;
 }) {
-  const headingId = useId();
   // A plugin that answered with nothing to say takes no row.
   const rows = useWorktreeDeleteNotes(worktreeId).filter(
     ({ answer }) => answer === "pending" || answer.status === "no-answer" || answer.notes.length > 0
   );
   if (rows.length === 0) return null;
+  return <NotesSection rows={rows} heading={heading} className={className} />;
+}
+
+function NotesSection({
+  rows,
+  heading,
+  className,
+}: {
+  rows: WorktreeDeleteNoteRow[];
+  heading?: string;
+  className?: string;
+}) {
+  const headingId = useId();
+  // The live region mounts empty and is filled a commit later, or its first
+  // rows would arrive with it and go unannounced.
+  const ready = useLiveRegionReady();
   return (
     <div className={className} data-testid="worktree-delete-notes">
       {heading !== undefined && (
@@ -140,7 +164,7 @@ export function WorktreeDeleteNotes({
           heading !== undefined ? "mt-2 text-sm" : "text-xs"
         )}
       >
-        {rows.map(({ source, answer }) => {
+        {(ready ? rows : []).map(({ source, answer }) => {
           if (answer === "pending") {
             return (
               <StatusItem key={source.pluginId} testId="worktree-delete-note-pending">

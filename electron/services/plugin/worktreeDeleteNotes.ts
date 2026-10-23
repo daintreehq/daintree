@@ -25,6 +25,8 @@ export interface WorktreeDeleteNotesHost {
   readonly plugins: ReadonlyMap<string, { readonly manifest: PluginManifest }>;
   /** Idempotent and never rejects, like `PluginService.activatePlugin`. */
   activatePlugin(pluginId: string): Promise<void>;
+  /** Whether the plugin's activation succeeded and still stands. */
+  isActivated(pluginId: string): boolean;
   readWorktree(projectId: string, worktreeId: string): Promise<WorktreeDeleteNotesTarget>;
   isMuted(pluginId: string): boolean;
   timeoutMs?: number;
@@ -77,6 +79,10 @@ export async function getWorktreeDeleteNotes(
   const current = () => host.plugins.get(pluginId) === plugin && isAsked();
 
   const timeoutMs = host.timeoutMs ?? PLUGIN_WORKTREE_DELETE_NOTES_TIMEOUT_MS;
+  // Checked as well as timed: a busy main thread can run the work after the
+  // deadline has passed but before the timer gets its turn.
+  const expiresAt = Date.now() + timeoutMs;
+  const late = () => Date.now() >= expiresAt;
   const deadline = new AbortController();
   let timer: ReturnType<typeof setTimeout> | undefined;
   const expired = new Promise<"expired">((resolve) => {
@@ -87,18 +93,22 @@ export async function getWorktreeDeleteNotes(
   });
 
   const ask = async (): Promise<WorktreeDeleteNotesAnswer | null> => {
-    const [target] = await Promise.all([
-      host.readWorktree(projectId, worktreeId),
-      host.activatePlugin(pluginId),
-    ]);
-    if (deadline.signal.aborted) return NO_ANSWER;
-    if (target.status === "missing" || !current()) return null;
+    // Side by side, but a worktree that isn't the project's ends the ask
+    // without waiting on activation.
+    const activation = host.activatePlugin(pluginId);
+    const target = await host.readWorktree(projectId, worktreeId);
+    if (target.status === "missing") return null;
+    await activation;
+    if (!current()) return null;
+    if (deadline.signal.aborted || late()) return NO_ANSWER;
     if (target.status === "unavailable") throw new Error("the worktree couldn't be read");
-    // Activation resolving is not proof it worked: a failed one resolves too,
-    // and leaves no binding behind.
+    // Activation resolves whether or not it worked, and a failed one can leave
+    // a binding it made before it threw.
+    if (!host.isActivated(pluginId)) throw new Error("the plugin didn't activate");
     const binding = getWorktreeDeleteNotesBinding(pluginId);
     if (!binding) throw new Error("no worktree delete notes provider bound after activation");
     const answer = await binding.provideNotes(target.worktree, deadline.signal);
+    if (late()) return current() ? NO_ANSWER : null;
     const vetted = validatePluginWorktreeDeleteNotes(answer);
     if (!vetted.ok) throw new Error(vetted.error);
     return current() ? { status: "answered", notes: vetted.notes } : null;

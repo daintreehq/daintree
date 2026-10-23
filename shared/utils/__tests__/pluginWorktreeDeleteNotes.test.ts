@@ -53,6 +53,21 @@ describe("validatePluginWorktreeDeleteNotes", () => {
     expect(result.ok && result.notes[0]!.text).toBe(`Caf${char(0xe9)}`);
   });
 
+  it("composes what stripping a control left apart", () => {
+    const result = validatePluginWorktreeDeleteNotes([
+      { severity: "info", text: `Caf${"e"}${char(0x00)}${char(0x0301)}` },
+    ]);
+    expect(result.ok && result.notes[0]!.text).toBe(`Caf${char(0xe9)}`);
+  });
+
+  it("refuses an enormous text before doing any work on it", () => {
+    const huge = " ".repeat(10_000) + "x";
+    expect(validatePluginWorktreeDeleteNotes([{ severity: "info", text: huge }])).toEqual({
+      ok: false,
+      error: `notes[0].text must be at most ${PLUGIN_WORKTREE_DELETE_NOTE_TEXT_MAX} characters`,
+    });
+  });
+
   it("measures length in code points, so an astral character counts once", () => {
     const atLimit = char(0x1f600).repeat(PLUGIN_WORKTREE_DELETE_NOTE_TEXT_MAX);
     expect(validatePluginWorktreeDeleteNotes([{ severity: "info", text: atLimit }]).ok).toBe(true);

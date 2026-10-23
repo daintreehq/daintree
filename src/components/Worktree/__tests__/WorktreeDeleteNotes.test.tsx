@@ -2,6 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, render, screen } from "@testing-library/react";
 import type { WorktreeDeleteNotesAnswer } from "@shared/types/plugin";
+import { UI_INLINE_LOADING_GATE_MS } from "@/lib/animationUtils";
 
 const pluginClientMock = vi.hoisted(() => ({
   getWorktreeDeleteNoteSources: vi.fn(),
@@ -35,6 +36,7 @@ const SOURCES = [
 let answers: Map<string, Deferred<WorktreeDeleteNotesAnswer | null>>;
 
 beforeEach(() => {
+  vi.useFakeTimers();
   answers = new Map(SOURCES.map((s) => [s.pluginId, deferred()]));
   pluginClientMock.getWorktreeDeleteNoteSources.mockResolvedValue(SOURCES);
   pluginClientMock.getWorktreeDeleteNotes.mockImplementation(
@@ -45,15 +47,23 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   vi.clearAllMocks();
+  vi.useRealTimers();
 });
 
 const flush = () => act(async () => {});
+const passGate = () =>
+  act(async () => {
+    await vi.advanceTimersByTimeAsync(UI_INLINE_LOADING_GATE_MS);
+  });
 
 describe("WorktreeDeleteNotes", () => {
   it("shows each plugin as it is asked, then fills its row in as it answers", async () => {
     render(<WorktreeDeleteNotes worktreeId="/repo/wt" heading="Notes from plugins" />);
     await flush();
     expect(pluginClientMock.getWorktreeDeleteNotes).toHaveBeenCalledWith("/repo/wt", "acme.sync");
+    // Inside the inline loading gate nothing reads as pending yet.
+    expect(screen.queryByTestId("worktree-delete-notes")).toBeNull();
+    await passGate();
     expect(screen.getAllByTestId("worktree-delete-note-pending").map((r) => r.textContent)).toEqual(
       ["Checking with Acme Sync…", "Checking with Acme Deploy…"]
     );
@@ -76,6 +86,21 @@ describe("WorktreeDeleteNotes", () => {
       "Acme Sync didn't answer"
     );
     expect(screen.queryByTestId("worktree-delete-note-pending")).toBeNull();
+  });
+
+  it("never flashes a pending row for a plugin that answers inside the gate", async () => {
+    render(<WorktreeDeleteNotes worktreeId="/repo/wt" />);
+    await flush();
+    await act(async () => {
+      answers.get("acme.sync")!.resolve({
+        status: "answered",
+        notes: [{ severity: "info", text: "quick" }],
+      });
+    });
+    expect(screen.getByTestId("worktree-delete-note").textContent).toContain("quick");
+    expect(screen.queryByTestId("worktree-delete-note-pending")).toBeNull();
+    await passGate();
+    expect(screen.getAllByTestId("worktree-delete-note-pending")).toHaveLength(1);
   });
 
   it("names a plugin whose ask failed as not answering", async () => {
@@ -119,6 +144,7 @@ describe("WorktreeDeleteNotes", () => {
     answers = new Map(SOURCES.map((s) => [s.pluginId, deferred()]));
     rerender(<WorktreeDeleteNotes worktreeId="/repo/b" />);
     await flush();
+    await passGate();
     await act(async () => {
       first.resolve({ status: "answered", notes: [{ severity: "info", text: "about a" }] });
     });
