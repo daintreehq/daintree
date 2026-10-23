@@ -229,7 +229,7 @@ import {
   registerPluginHostedViews,
 } from "../../../services/plugin/PluginHostedViewRegistry.js";
 import type { PluginHostedViewDescriptor } from "../../../../shared/types/plugin.js";
-import { PROJECT_SURFACE_SLOTS } from "../../../../shared/types/plugin.js";
+import { MAX_PROJECT_SURFACE_UPDATES } from "../../../../shared/types/plugin.js";
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -2938,6 +2938,9 @@ describe("project-local plugin handlers", () => {
     await expect(set({ sender: { id: 1 } }, "defaultLayout", "stock")).rejects.toThrow(
       /unknown surface slot/
     );
+    await expect(set({ sender: { id: 1 } }, "fileEditor:", "stock")).rejects.toThrow(
+      /unknown surface slot/
+    );
     await expect(set({ sender: { id: 1 } }, "emptyCanvas", "hidden")).rejects.toThrow(
       /choice must be/
     );
@@ -2989,7 +2992,7 @@ describe("project-local plugin handlers", () => {
 
     await expect(set({ sender: { id: 1 } }, [])).rejects.toThrow(/at least one slot/);
     await expect(set({ sender: { id: 1 } }, "emptyCanvas")).rejects.toThrow(/at least one slot/);
-    const oneTooMany = Array.from({ length: PROJECT_SURFACE_SLOTS.length + 1 }, () => ok);
+    const oneTooMany = Array.from({ length: MAX_PROJECT_SURFACE_UPDATES + 1 }, () => ok);
     await expect(set({ sender: { id: 1 } }, oneTooMany)).rejects.toThrow(/more updates than/);
     await expect(set({ sender: { id: 1 } }, [null])).rejects.toThrow(/must be an object/);
     await expect(

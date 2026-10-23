@@ -63,6 +63,13 @@ export interface FileEditorContribution {
   extensions?: string[];
   /** Project-relative globs, such as `content/entries/*.json`. Project plugins only. */
   paths?: string[];
+  /**
+   * Make this editor what a file matching one of `paths` opens in (#13811):
+   * each pattern becomes a file editor slot in the project, arbitrated, asked
+   * about and reset like any other slot. A project plugin's `mode: "edit"`
+   * editor only, and never by extension — Source stays in the mode toggle.
+   */
+  default?: boolean;
   /** Largest file the editor accepts, in bytes. Absent means the host's default cap. */
   maxBytes?: number;
 }
@@ -1348,6 +1355,101 @@ export function isProjectSurfaceSlot(value: unknown): value is ProjectSurfaceSlo
 }
 
 /**
+ * A file editor slot (#13811): which editor files matching one path pattern
+ * open in, in one project. A project plugin claims one per pattern of a
+ * `contributes.fileEditors` entry marked `default`.
+ *
+ * Keyed by the exact pattern string, never a normalised or expanded form, so
+ * two plugins naming the same pattern contend for one slot and overlapping
+ * patterns each keep their own owner and their own answer.
+ */
+export type FileEditorSlotKey = `fileEditor:${string}`;
+
+/** Every slot the registry arbitrates: one from the catalogue, or a file editor slot. */
+export type ProjectSurfaceSlotKey = ProjectSurfaceSlot | FileEditorSlotKey;
+
+const FILE_EDITOR_SLOT_PREFIX = "fileEditor:";
+
+/** Longest pattern a file editor slot carries — the manifest's own ceiling. */
+const FILE_EDITOR_SLOT_PATTERN_MAX = 256;
+
+export function fileEditorSlotKey(pattern: string): FileEditorSlotKey {
+  return `${FILE_EDITOR_SLOT_PREFIX}${pattern}`;
+}
+
+export function isFileEditorSlotKey(value: unknown): value is FileEditorSlotKey {
+  if (typeof value !== "string" || !value.startsWith(FILE_EDITOR_SLOT_PREFIX)) return false;
+  const pattern = value.slice(FILE_EDITOR_SLOT_PREFIX.length);
+  return (
+    pattern.length > 0 && pattern.length <= FILE_EDITOR_SLOT_PATTERN_MAX && !pattern.includes("\0")
+  );
+}
+
+/** The pattern a file editor slot is about. */
+export function fileEditorSlotPattern(slot: FileEditorSlotKey): string {
+  return slot.slice(FILE_EDITOR_SLOT_PREFIX.length);
+}
+
+export function isProjectSurfaceSlotKey(value: unknown): value is ProjectSurfaceSlotKey {
+  return isProjectSurfaceSlot(value) || isFileEditorSlotKey(value);
+}
+
+/**
+ * Most slots one answer can name. A consent notice answers for every slot one
+ * plugin set up: the catalogue's, plus a file editor slot per default pattern
+ * (ten editors of twenty patterns at most), with room to spare.
+ */
+export const MAX_PROJECT_SURFACE_UPDATES = 256;
+
+/**
+ * The descriptor of any slot. A catalogue slot's is its declaration; a file
+ * editor slot's is the family's, worded with its pattern. Exclusive, because a
+ * pattern opens in one editor; a data claim, because nothing is framed — the
+ * file panel applies it.
+ */
+export function projectSurfaceSlotDescriptor(
+  slot: ProjectSurfaceSlotKey
+): ProjectSurfaceSlotDescriptor {
+  if (!isFileEditorSlotKey(slot)) return PROJECT_SURFACE_SLOT_CATALOGUE[slot];
+  return {
+    mode: "exclusive",
+    claim: "data",
+    label: `Editor for ${fileEditorSlotPattern(slot)}`,
+    stockLabel: "Source",
+    noun: "editor",
+    switchPlacement: "above",
+  };
+}
+
+/**
+ * The slots in `slots`, in one fixed order: the catalogue's in catalogue order,
+ * then file editor slots by pattern, ordinally — so every list of them reads
+ * the same whatever order the claims arrived in.
+ */
+export function orderedProjectSurfaceSlots(
+  slots: Partial<Record<ProjectSurfaceSlotKey, unknown>>
+): ProjectSurfaceSlotKey[] {
+  const fileEditorSlots = Object.keys(slots)
+    .filter(isFileEditorSlotKey)
+    .sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+  return [...PROJECT_SURFACE_SLOTS.filter((slot) => slots[slot] !== undefined), ...fileEditorSlots];
+}
+
+/** What a file editor slot's claim carries: the bare id of the claiming `fileEditors` entry. */
+export interface FileEditorSlotClaimData {
+  editorId: string;
+}
+
+/** The editor a file editor slot's claim names, or `null` for anything else. */
+export function fileEditorSlotClaimData(
+  value: ProjectSurfaceClaimValue
+): FileEditorSlotClaimData | null {
+  if (value.kind !== "data" || !value.data || typeof value.data !== "object") return null;
+  const { editorId } = value.data as Record<string, unknown>;
+  return typeof editorId === "string" && editorId.length > 0 ? { editorId } : null;
+}
+
+/**
  * What one claim carries, in the shape its slot declares.
  *
  * A view claim names the manifest view; `panelKindId` is set when the view
@@ -1381,7 +1483,7 @@ export type ProjectSurfaceRefusalReason =
 
 /** A claim the host did not apply, attributed so the user and author can see why. */
 export interface ProjectSurfaceRefusal {
-  slot: ProjectSurfaceSlot;
+  slot: ProjectSurfaceSlotKey;
   /** The refused plugin's INSTANCE key. */
   pluginId: string;
   reason: ProjectSurfaceRefusalReason;
@@ -1417,7 +1519,7 @@ export interface ProjectSurfaceSlotState {
 export interface ProjectSurfacesSnapshot {
   projectId: string;
   revision: number;
-  slots: Partial<Record<ProjectSurfaceSlot, ProjectSurfaceSlotState>>;
+  slots: Partial<Record<ProjectSurfaceSlotKey, ProjectSurfaceSlotState>>;
   /**
    * The project's remembered answers, or `null` when main could not read them.
    * Unreadable is not the same as unanswered: read as empty, it would show a
@@ -1487,14 +1589,16 @@ export interface ProjectSurfaceChoiceRecord {
 }
 
 /** Every remembered surface answer in one project, keyed by slot. */
-export type ProjectSurfaceChoices = Partial<Record<ProjectSurfaceSlot, ProjectSurfaceChoiceRecord>>;
+export type ProjectSurfaceChoices = Partial<
+  Record<ProjectSurfaceSlotKey, ProjectSurfaceChoiceRecord>
+>;
 
 /**
  * One slot's part of an answer, as the renderer sends it: `null` forgets the
  * answer. Names no plugin — main records it against what the slot offers now.
  */
 export interface ProjectSurfaceChoiceUpdate {
-  slot: ProjectSurfaceSlot;
+  slot: ProjectSurfaceSlotKey;
   choice: ProjectSurfaceChoice | null;
   /** For a selectable slot's `"surface"`, the INSTANCE key of the option picked. */
   optionId?: string;

@@ -1,7 +1,7 @@
 import { useEffect } from "react";
 import {
-  PROJECT_SURFACE_SLOT_CATALOGUE,
   pluginManifestIdFromInstanceKey,
+  projectSurfaceSlotDescriptor,
   type ProjectSurfaceRefusal,
 } from "@shared/types/plugin";
 import {
@@ -24,7 +24,7 @@ export function describeSurfaceRefusal(
   refusal: ProjectSurfaceRefusal,
   nameOf: (pluginId: string) => string
 ): SurfaceRefusalCopy {
-  const { label, claim } = PROJECT_SURFACE_SLOT_CATALOGUE[refusal.slot];
+  const { label, claim } = projectSurfaceSlotDescriptor(refusal.slot);
   const title = `${label} not shown`;
   switch (refusal.reason) {
     case "outranked": {

@@ -8,6 +8,7 @@ import { isFilePanel, type FileViewMode } from "@shared/types/panel";
 import { isMarkdownFilePath } from "@/components/Markdown/isMarkdownFile";
 import { isHtmlFilePath } from "@/components/Html/isHtmlFile";
 import { primeHostPreviewCapability } from "@/components/FileViewer/filePreviewKinds";
+import { currentFileEditorDefault } from "@/registry/fileEditorDefaults";
 import {
   isAbsolute,
   isPathInside,
@@ -96,7 +97,7 @@ const openPanelArgsSchema = z.object({
     .enum(["rendered", "source"])
     .optional()
     .describe(
-      'Initial view mode. Defaults to "source". "rendered" applies to Markdown and HTML files.'
+      'Defaults to "source", or a project plugin\'s default editor. "rendered": Markdown/HTML.'
     ),
 });
 
@@ -344,10 +345,16 @@ export function registerFileActions(actions: ActionRegistry, callbacks: ActionCa
       // (#11506). Agent/plugin dispatches omit focusPolicy entirely and keep
       // the store's "auto" vs "preserve" resolution, so a background open still
       // never steals focus from a typing user.
+      // A project plugin's default editor for the file (#13811), for a new
+      // panel the caller named no mode for — so a double-click, a terminal link
+      // and an agent all open it the same way. A reused panel above keeps the
+      // mode and editor it was left in, and an explicit mode always wins.
+      const fileDefault = viewMode === undefined ? currentFileEditorDefault(absolutePath) : null;
       const panelId = await store.addPanel({
         kind: "file",
         filePath: absolutePath,
-        fileViewMode: effectiveViewMode,
+        fileViewMode: fileDefault !== null ? "edit" : effectiveViewMode,
+        ...(fileDefault !== null && { fileEditorChoice: fileDefault.choiceId }),
         worktreeId: callbacks.getActiveWorktreeId(),
         location: "grid",
         ...(isForegroundDispatch(ctx?.dispatchSource) && { focusPolicy: "take" as const }),

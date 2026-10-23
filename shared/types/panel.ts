@@ -884,6 +884,14 @@ export interface FilePanelData extends BasePanelData {
    * `serializeFile`, and dropped when the panel moves to another file.
    */
   fileContainmentRoot?: string;
+  /**
+   * The editor Edit mode opens with, as an "Edit with…" answer
+   * (`{pluginInstanceKey}/{editorId}`), ahead of the answer remembered for the
+   * file's type. Set when a project plugin's default editor opened the panel
+   * (#13811), and by picking another editor in it. Open-time only, like
+   * `fileContainmentRoot` — a restored panel opens in Source anyway.
+   */
+  fileEditorChoice?: string;
 }
 
 /**

@@ -1,15 +1,15 @@
 import { store } from "../../store.js";
 import { isProjectWorkspaceId } from "../../../shared/utils/workspaceIds.js";
 import {
-  PROJECT_SURFACE_SLOT_CATALOGUE,
   isProjectSurfaceChoice,
-  isProjectSurfaceSlot,
+  isProjectSurfaceSlotKey,
   pluginManifestIdFromInstanceKey,
+  projectSurfaceSlotDescriptor,
   type ProjectSurfaceChoice,
   type ProjectSurfaceChoiceRecord,
   type ProjectSurfaceChoiceUpdate,
   type ProjectSurfaceChoices,
-  type ProjectSurfaceSlot,
+  type ProjectSurfaceSlotKey,
   type ProjectSurfaceSlotMode,
   type ProjectSurfaceSlotState,
 } from "../../../shared/types/plugin.js";
@@ -62,8 +62,8 @@ function parseChoices(value: unknown): ProjectSurfaceChoices {
   const choices: ProjectSurfaceChoices = {};
   if (!value || typeof value !== "object") return choices;
   for (const [slot, raw] of Object.entries(value as Record<string, unknown>)) {
-    if (!isProjectSurfaceSlot(slot)) continue;
-    const record = parseProjectSurfaceChoiceRecord(raw, PROJECT_SURFACE_SLOT_CATALOGUE[slot].mode);
+    if (!isProjectSurfaceSlotKey(slot)) continue;
+    const record = parseProjectSurfaceChoiceRecord(raw, projectSurfaceSlotDescriptor(slot).mode);
     if (record !== undefined) choices[slot] = record;
   }
   return choices;
@@ -79,7 +79,7 @@ function parseChoices(value: unknown): ProjectSurfaceChoices {
  */
 export function buildProjectSurfaceChoiceRecord(
   mode: ProjectSurfaceSlotMode,
-  slot: ProjectSurfaceSlot,
+  slot: ProjectSurfaceSlotKey,
   state: ProjectSurfaceSlotState | undefined,
   choice: ProjectSurfaceChoice,
   optionId: string | undefined,
@@ -134,7 +134,7 @@ export function getProjectSurfaceChoices(projectId: string): ProjectSurfaceChoic
  */
 export function setProjectSurfaceChoice(
   projectId: string,
-  slot: ProjectSurfaceSlot,
+  slot: ProjectSurfaceSlotKey,
   choice: ProjectSurfaceChoice | null,
   optionId?: string,
   now: number = Date.now()
@@ -173,7 +173,7 @@ export function setProjectSurfaceChoices(
   const slots = getProjectSurfaceSlots(projectId);
   // Every record is built before the store is touched, so one bad update
   // rejects the whole answer rather than half of it.
-  const records = new Map<ProjectSurfaceSlot, ProjectSurfaceChoiceRecord | undefined>();
+  const records = new Map<ProjectSurfaceSlotKey, ProjectSurfaceChoiceRecord | undefined>();
   for (const update of updates) {
     const { slot, choice, optionId, ownerId } = parseProjectSurfaceChoiceUpdate(update);
     if (records.has(slot)) throw new Error(`project surfaces: ${slot} is answered twice`);
@@ -185,7 +185,7 @@ export function setProjectSurfaceChoices(
       choice === null
         ? undefined
         : buildProjectSurfaceChoiceRecord(
-            PROJECT_SURFACE_SLOT_CATALOGUE[slot].mode,
+            projectSurfaceSlotDescriptor(slot).mode,
             slot,
             slots[slot],
             choice,
@@ -233,7 +233,7 @@ export function parseProjectSurfaceChoiceUpdate(value: unknown): ProjectSurfaceC
     throw new Error("project surfaces: an update must be an object");
   }
   const { slot, choice, optionId, ownerId } = value as Record<string, unknown>;
-  if (!isProjectSurfaceSlot(slot)) {
+  if (!isProjectSurfaceSlotKey(slot)) {
     throw new Error("project surfaces: unknown surface slot");
   }
   if (choice !== null && !isProjectSurfaceChoice(choice)) {

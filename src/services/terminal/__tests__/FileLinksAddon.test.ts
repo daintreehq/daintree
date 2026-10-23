@@ -26,6 +26,11 @@ vi.mock("@/clients", () => ({
 vi.mock("@/clients/fileBrowserClient", () => ({ fileBrowserClient: { statPaths: vi.fn() } }));
 vi.mock("@/store/createWorktreeStore", () => ({ getCurrentViewStoreOrNull: vi.fn() }));
 
+const fileEditorDefaultMock = vi.hoisted(() => vi.fn<(filePath: string) => unknown>(() => null));
+vi.mock("@/registry/fileEditorDefaults", () => ({
+  currentFileEditorDefault: fileEditorDefaultMock,
+}));
+
 const { PROJECT_ID } = vi.hoisted(() => ({ PROJECT_ID: "proj-terminal-1" }));
 
 // The addon lazily imports the project store (a static import would close the
@@ -560,6 +565,42 @@ describe("FileLinksAddon", () => {
         });
         await activateUrlLink({});
         await vi.waitFor(() => expect(systemClient.openPath).toHaveBeenCalledWith(DECODED));
+      });
+
+      it("opens a panel instead when a project plugin made its editor the default (#13811)", async () => {
+        fileEditorDefaultMock.mockReturnValueOnce({ slot: "fileEditor:**/*.png" });
+        await activateUrlLink({});
+        expect(fileEditorDefaultMock).toHaveBeenCalledWith(DECODED);
+        expect(actionService.dispatch).toHaveBeenCalledWith(
+          "file.openPanel",
+          { path: DECODED },
+          { source: "user" }
+        );
+        expect(actionService.dispatch).not.toHaveBeenCalledWith(
+          "file.view",
+          expect.anything(),
+          expect.anything()
+        );
+      });
+
+      it("falls back to the viewer when the default's panel can't open", async () => {
+        fileEditorDefaultMock.mockReturnValueOnce({ slot: "fileEditor:**/*.png" });
+        type DispatchResult = Awaited<ReturnType<typeof actionService.dispatch>>;
+        let settlePanel: (result: DispatchResult) => void = () => {};
+        vi.mocked(actionService.dispatch).mockReturnValueOnce(
+          new Promise<DispatchResult>((resolve) => {
+            settlePanel = resolve;
+          })
+        );
+        await activateUrlLink({});
+        settlePanel({ ok: false, error: { code: "EXECUTION_ERROR", message: "limit" } });
+
+        await vi.waitFor(() => expect(actionService.dispatch).toHaveBeenCalledTimes(2));
+        expect(vi.mocked(actionService.dispatch).mock.calls.map(([id]) => id)).toEqual([
+          "file.openPanel",
+          "file.view",
+        ]);
+        expect(systemClient.openPath).not.toHaveBeenCalled();
       });
 
       it("sends the decoded path to the external editor on a modified click", async () => {

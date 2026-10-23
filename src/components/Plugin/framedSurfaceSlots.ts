@@ -1,5 +1,5 @@
 import { useSyncExternalStore } from "react";
-import type { ProjectSurfaceSlot } from "@shared/types/plugin";
+import type { ProjectSurfaceSlotKey } from "@shared/types/plugin";
 
 /**
  * The slots whose host frame is on screen in this project view, and which of a
@@ -9,13 +9,17 @@ import type { ProjectSurfaceSlot } from "@shared/types/plugin";
  *
  * Kept per frame rather than per slot, so a second frame of the same slot never
  * asks the question twice, and the first one unmounting hands it to the next.
+ *
+ * A frame need not draw the slot's content: a file panel showing a file that a
+ * plugin's default editor covers frames that file editor slot, so the question
+ * is asked where the default shows.
  */
-const frames = new Map<ProjectSurfaceSlot, string[]>();
-let snapshot: ReadonlyMap<ProjectSurfaceSlot, string> = new Map();
+const frames = new Map<ProjectSurfaceSlotKey, string[]>();
+let snapshot: ReadonlyMap<ProjectSurfaceSlotKey, string> = new Map();
 const listeners = new Set<() => void>();
 
 function publish(): void {
-  const next = new Map<ProjectSurfaceSlot, string>();
+  const next = new Map<ProjectSurfaceSlotKey, string>();
   for (const [slot, ids] of frames) {
     if (ids[0] !== undefined) next.set(slot, ids[0]);
   }
@@ -27,7 +31,7 @@ function publish(): void {
  * Register frame `frameId` for `slot`; returns its unregister. Call from an
  * effect.
  */
-export function frameSurfaceSlot(slot: ProjectSurfaceSlot, frameId: string): () => void {
+export function frameSurfaceSlot(slot: ProjectSurfaceSlotKey, frameId: string): () => void {
   frames.set(slot, [...(frames.get(slot) ?? []), frameId]);
   publish();
   let released = false;
@@ -51,6 +55,6 @@ function subscribe(listener: () => void): () => void {
 const getSnapshot = () => snapshot;
 
 /** Each framed slot, mapped to the frame that hosts its questions. */
-export function useFramedSurfaceSlots(): ReadonlyMap<ProjectSurfaceSlot, string> {
+export function useFramedSurfaceSlots(): ReadonlyMap<ProjectSurfaceSlotKey, string> {
   return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
 }

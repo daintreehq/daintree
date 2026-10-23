@@ -1495,6 +1495,14 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
       consumers: [{ file: "src/registry/fileEditorGlob.ts", symbol: "matchesFileEditorGlob" }],
       note: "Project plugins only: globs matched against the file's path relative to the project or worktree root.",
     },
+    default: {
+      mode: "verbatim",
+      consumers: [
+        { file: PLUGIN_SERVICE, symbol: "loadPlugin (fileEditors default → claimProjectSurface)" },
+        { file: "src/registry/fileEditorDefaults.ts", symbol: "resolveFileEditorDefault" },
+      ],
+      note: "Project plugins only: each of the entry's paths claims a file editor slot, which decides what a matching file opens in.",
+    },
     maxBytes: {
       mode: "verbatim",
       consumers: [{ file: "src/panels/file/FilePane.tsx", symbol: "availableModes (edit gate)" }],

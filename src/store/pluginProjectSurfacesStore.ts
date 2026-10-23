@@ -1,16 +1,16 @@
 import { create } from "zustand";
 import {
-  PROJECT_SURFACE_SLOT_CATALOGUE,
   PROJECT_SURFACE_SLOTS,
+  orderedProjectSurfaceSlots,
   pluginManifestIdFromInstanceKey,
   projectSurfaceClaimFromState,
+  projectSurfaceSlotDescriptor,
   type ProjectSurfaceChoice,
   type ProjectSurfaceChoiceRecord,
   type ProjectSurfaceChoiceUpdate,
   type ProjectSurfaceChoices,
   type ProjectSurfaceRefusal,
-  type ProjectSurfaceSlot,
-  type ProjectSurfaceSlotDescriptor,
+  type ProjectSurfaceSlotKey,
   type ProjectSurfaceSlotState,
   type ProjectSurfaceSnapshot,
   type ProjectSurfacesSnapshot,
@@ -43,8 +43,8 @@ import { safeFireAndForget } from "@/utils/safeFireAndForget";
  * own round trip.
  */
 interface PluginProjectSurfacesState {
-  /** Every slot claimed in this project, arbitrated. */
-  slots: Partial<Record<ProjectSurfaceSlot, ProjectSurfaceSlotState>>;
+  /** Every slot claimed in this project, arbitrated — file editor slots included. */
+  slots: Partial<Record<ProjectSurfaceSlotKey, ProjectSurfaceSlotState>>;
   /**
    * Each exclusive slot's owner, in the panel-backed shape the canvas mounts.
    * Derived from {@link slots}.
@@ -84,7 +84,7 @@ interface PluginProjectSurfacesState {
   readFailure: string | null;
   /** Answer for whichever plugin owns `slot` now, or forget the answer with `null`. */
   setSurfaceChoice: (
-    slot: ProjectSurfaceSlot,
+    slot: ProjectSurfaceSlotKey,
     choice: ProjectSurfaceChoice | null
   ) => Promise<void>;
   /**
@@ -106,7 +106,7 @@ export interface FailedSurfaceSave {
    * changed hands, and the retry would answer for a plugin nobody was asked
    * about.
    */
-  owners: Partial<Record<ProjectSurfaceSlot, string | null>>;
+  owners: Partial<Record<ProjectSurfaceSlotKey, string | null>>;
 }
 
 let initialized = false;
@@ -136,8 +136,8 @@ let adoptedRevision = -1;
 const announcedRevisions = new Map<string, number>();
 
 function sameRecord(
-  a: ProjectSurfaceChoices[ProjectSurfaceSlot],
-  b: ProjectSurfaceChoices[ProjectSurfaceSlot]
+  a: ProjectSurfaceChoices[ProjectSurfaceSlotKey],
+  b: ProjectSurfaceChoices[ProjectSurfaceSlotKey]
 ): boolean {
   if (a === undefined || b === undefined) return a === b;
   return (
@@ -149,7 +149,7 @@ function sameRecord(
 }
 
 function projectSurfaces(
-  slots: Partial<Record<ProjectSurfaceSlot, ProjectSurfaceSlotState>>
+  slots: Partial<Record<ProjectSurfaceSlotKey, ProjectSurfaceSlotState>>
 ): ProjectSurfaceSnapshot {
   const surfaces: ProjectSurfaceSnapshot = {};
   for (const slot of PROJECT_SURFACE_SLOTS) {
@@ -189,7 +189,7 @@ export function surfaceSlotChoice(
 /** The remembered answer for `slot`, read through {@link surfaceSlotChoice}. */
 export function selectSurfaceChoice(
   state: Pick<PluginProjectSurfacesState, "slots" | "choices">,
-  slot: ProjectSurfaceSlot
+  slot: ProjectSurfaceSlotKey
 ): ProjectSurfaceChoice | null {
   return surfaceSlotChoice(state.slots[slot], state.choices[slot]);
 }
@@ -202,7 +202,7 @@ export function selectSurfaceChoice(
  */
 export function selectFailedSave(
   state: Pick<PluginProjectSurfacesState, "slots" | "failedSave">,
-  slot: ProjectSurfaceSlot
+  slot: ProjectSurfaceSlotKey
 ): FailedSurfaceSave | null {
   const failed = state.failedSave;
   if (failed === null || !failed.updates.some((update) => update.slot === slot)) return null;
@@ -215,24 +215,25 @@ export function selectFailedSave(
 
 /** A slot a plugin set up in this project, and the user's answer about it. */
 export interface ClaimedSurfaceSlot {
-  slot: ProjectSurfaceSlot;
+  slot: ProjectSurfaceSlotKey;
   /** INSTANCE key of the plugin whose claim the slot shows unless told otherwise. */
   pluginId: string;
   choice: ProjectSurfaceChoice | null;
 }
 
 /**
- * Every slot a plugin set up in this project, in catalogue order: an exclusive
- * slot's owner, or a selectable slot's default. An installed plugin's
- * selectable option is offered rather than applied, so it sets nothing up and
- * is never asked about. Pure over `slots` and `choices`, so a component selects
- * those and derives this rather than selecting a fresh array.
+ * Every slot a plugin set up in this project, catalogue slots in catalogue
+ * order and then file editor slots by pattern: an exclusive slot's owner, or a
+ * selectable slot's default. An installed plugin's selectable option is
+ * offered rather than applied, so it sets nothing up and is never asked about.
+ * Pure over `slots` and `choices`, so a component selects those and derives
+ * this rather than selecting a fresh array.
  */
 export function claimedSurfaceSlots(
-  slots: Partial<Record<ProjectSurfaceSlot, ProjectSurfaceSlotState>>,
+  slots: Partial<Record<ProjectSurfaceSlotKey, ProjectSurfaceSlotState>>,
   choices: ProjectSurfaceChoices
 ): ClaimedSurfaceSlot[] {
-  return PROJECT_SURFACE_SLOTS.flatMap((slot) => {
+  return orderedProjectSurfaceSlots(slots).flatMap((slot) => {
     const state = slots[slot];
     const pluginId = state?.defaultOptionId ?? null;
     if (pluginId === null) return [];
@@ -242,11 +243,12 @@ export function claimedSurfaceSlots(
 
 /**
  * The slot whose frame asks `pluginId`'s consent question: the first of the
- * plugin's unanswered slots, in catalogue order, that has a frame on screen.
+ * plugin's unanswered slots, in {@link claimedSurfaceSlots} order, that has a
+ * frame on screen.
  * One plugin, one question, however many of its slots are framed; `null` while
  * none is answerable here, and nothing is recorded meanwhile.
  */
-export function consentHostSlot<Slot extends string = ProjectSurfaceSlot>(
+export function consentHostSlot<Slot extends string = ProjectSurfaceSlotKey>(
   claimed: readonly (Omit<ClaimedSurfaceSlot, "slot"> & { slot: Slot })[],
   pluginId: string,
   framed: { has(slot: Slot): boolean }
@@ -269,9 +271,7 @@ export function surfaceAnswerUpdates(
   choice: ProjectSurfaceChoice
 ): ProjectSurfaceChoiceUpdate[] {
   return claimed.map(({ slot, pluginId }) => {
-    // Read through the descriptor type: the catalogue's literal types know only
-    // the slots declared today, and this is written for every mode.
-    const descriptor: ProjectSurfaceSlotDescriptor = PROJECT_SURFACE_SLOT_CATALOGUE[slot];
+    const descriptor = projectSurfaceSlotDescriptor(slot);
     return choice === "surface" && descriptor.mode === "selectable"
       ? { slot, choice, optionId: pluginId, ownerId: pluginId }
       : { slot, choice, ownerId: pluginId };
@@ -284,11 +284,11 @@ export function surfaceAnswerUpdates(
  * rather than selecting a fresh array on every store read.
  */
 export function selectSurfaceRefusals(
-  slots: Partial<Record<ProjectSurfaceSlot, ProjectSurfaceSlotState>>,
+  slots: Partial<Record<ProjectSurfaceSlotKey, ProjectSurfaceSlotState>>,
   pluginId: string | undefined
 ): ProjectSurfaceRefusal[] {
   if (pluginId === undefined) return [];
-  return PROJECT_SURFACE_SLOTS.flatMap(
+  return orderedProjectSurfaceSlots(slots).flatMap(
     (slot) => slots[slot]?.refused.filter((refusal) => refusal.pluginId === pluginId) ?? []
   );
 }

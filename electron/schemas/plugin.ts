@@ -1471,8 +1471,9 @@ export const FILE_EDITOR_MAX_BYTES_CEILING = 64 * 1024 * 1024;
  *
  * `extensions` are bare lower-case suffixes; `paths` are project-relative
  * globs, accepted from project plugins only (checked in the manifest
- * refinement). Strict so a misspelt field is a manifest error, not a silently
- * missing mode.
+ * refinement). `default` makes a project plugin's Edit editor what its `paths`
+ * open in (#13811), also checked there. Strict so a misspelt field is a
+ * manifest error, not a silently missing mode.
  */
 export const FileEditorContributionSchema = z
   .object({
@@ -1486,6 +1487,7 @@ export const FileEditorContributionSchema = z
       .min(1)
       .max(FILE_EDITOR_MAX_PATH_PATTERNS)
       .optional(),
+    default: z.boolean().optional(),
     maxBytes: z.number().int().positive().max(FILE_EDITOR_MAX_BYTES_CEILING).optional(),
   })
   .strict();
@@ -3557,6 +3559,50 @@ function buildPluginManifestSchema(origin: PluginOrigin) {
               'contributes.fileEditors[].paths is only available to a "scope": "project" plugin — the patterns are relative to the project it belongs to. Match by "extensions" instead.',
             params: { errorCode: "fileEditors_paths_project_only" },
           });
+        }
+        // A default reshapes how a project opens its own files, so it is a
+        // project plugin's alone (#13811), and only ever by pattern: an
+        // extension default would reach every file of that type.
+        if (entry.default === true) {
+          if (manifest.scope !== "project") {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              path: at("default"),
+              message:
+                'contributes.fileEditors[].default is only available to a "scope": "project" plugin — an installed plugin adds an editor, it never decides what a project\'s files open in.',
+              params: { errorCode: "fileEditors_default_project_only" },
+            });
+          } else if (
+            entry.view === undefined ||
+            entry.mode !== "edit" ||
+            entry.paths === undefined
+          ) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              path: at("default"),
+              message:
+                'A default file editor is a view-backed "mode": "edit" editor with "paths" — the patterns it becomes the default for.',
+              params: { errorCode: "fileEditors_default_invalid" },
+            });
+          }
+        }
+      });
+
+      // One plugin, one editor per default pattern: two entries naming the same
+      // pattern would claim one slot twice, and whichever loaded last would win.
+      const defaultPatterns = new Set<string>();
+      manifest.contributes.fileEditors.forEach((entry, index) => {
+        if (entry.default !== true) return;
+        for (const pattern of entry.paths ?? []) {
+          if (defaultPatterns.has(pattern)) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              path: ["contributes", "fileEditors", index, "paths"],
+              message: `"${pattern}" is already the default for another of this plugin's file editors — a pattern opens in one editor.`,
+              params: { errorCode: "fileEditors_default_duplicate" },
+            });
+          }
+          defaultPatterns.add(pattern);
         }
       });
 

@@ -146,7 +146,7 @@ import type {
   PluginRuntimeStatus,
   ProjectSurfaceChoice,
   ProjectSurfaceChoiceUpdate,
-  ProjectSurfaceSlot,
+  ProjectSurfaceSlotKey,
   ProjectSurfacesSnapshot,
   FileEditorChoice,
   FileEditorChoiceKey,
@@ -158,11 +158,11 @@ import type {
   PluginSearchQueryResponse,
 } from "../../../shared/types/plugin.js";
 import {
-  PROJECT_SURFACE_SLOTS,
+  MAX_PROJECT_SURFACE_UPDATES,
   isFileEditorChoice,
   isFileEditorChoiceKey,
   isProjectSurfaceChoice,
-  isProjectSurfaceSlot,
+  isProjectSurfaceSlotKey,
   parsePluginHostedViewKindId,
 } from "../../../shared/types/plugin.js";
 import type { IpcContext } from "../types.js";
@@ -1092,12 +1092,12 @@ async function handleProjectSurfacesGet(ctx: IpcContext): Promise<ProjectSurface
  */
 async function handleProjectSurfaceChoiceSet(
   ctx: IpcContext,
-  slot: ProjectSurfaceSlot,
+  slot: ProjectSurfaceSlotKey,
   choice: ProjectSurfaceChoice | null,
   optionId?: string
 ): Promise<ProjectSurfacesSnapshot> {
   if (!ctx.projectId) throw new Error("project surfaces: sender has no project");
-  if (!isProjectSurfaceSlot(slot)) throw new Error("project surfaces: unknown surface slot");
+  if (!isProjectSurfaceSlotKey(slot)) throw new Error("project surfaces: unknown surface slot");
   if (choice !== null && !isProjectSurfaceChoice(choice)) {
     throw new Error('project surfaces: choice must be "surface", "stock" or null');
   }
@@ -1125,15 +1125,15 @@ async function handleProjectSurfaceChoicesSet(
   if (!Array.isArray(updates) || updates.length === 0) {
     throw new Error("project surfaces: an answer needs at least one slot");
   }
-  if (updates.length > PROJECT_SURFACE_SLOTS.length) {
-    throw new Error("project surfaces: more updates than there are slots");
+  if (updates.length > MAX_PROJECT_SURFACE_UPDATES) {
+    throw new Error("project surfaces: more updates than one answer can name");
   }
   for (const update of updates as unknown[]) {
     if (!update || typeof update !== "object" || Array.isArray(update)) {
       throw new Error("project surfaces: an update must be an object");
     }
     const { slot, choice, optionId, ownerId } = update as Record<string, unknown>;
-    if (!isProjectSurfaceSlot(slot)) throw new Error("project surfaces: unknown surface slot");
+    if (!isProjectSurfaceSlotKey(slot)) throw new Error("project surfaces: unknown surface slot");
     if (choice !== null && !isProjectSurfaceChoice(choice)) {
       throw new Error('project surfaces: choice must be "surface", "stock" or null');
     }

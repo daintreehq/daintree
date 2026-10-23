@@ -14,6 +14,7 @@ const panelStoreMock = vi.hoisted(() => ({ getState: vi.fn() }));
 const openPanelDialogMock = vi.hoisted(() => vi.fn<(options: unknown) => Promise<string | null>>());
 const primePreviewCapabilityMock = vi.hoisted(() => vi.fn<() => Promise<string | null>>());
 const readMock = vi.hoisted(() => vi.fn());
+const fileEditorDefaultMock = vi.hoisted(() => vi.fn<(filePath: string) => unknown>());
 
 vi.mock("@/clients", () => ({
   systemClient: systemClientMock,
@@ -28,6 +29,9 @@ vi.mock("@/store/panelDialogStore", () => ({
 
 vi.mock("@/components/FileViewer/filePreviewKinds", () => ({
   primeHostPreviewCapability: primePreviewCapabilityMock,
+}));
+vi.mock("@/registry/fileEditorDefaults", () => ({
+  currentFileEditorDefault: fileEditorDefaultMock,
 }));
 
 import { registerFileActions } from "../fileActions";
@@ -62,6 +66,7 @@ beforeEach(() => {
   ];
   openPanelDialogMock.mockReset().mockResolvedValue("file-panel-1");
   primePreviewCapabilityMock.mockReset().mockResolvedValue(null);
+  fileEditorDefaultMock.mockReset().mockReturnValue(null);
   // `mockReset`, not `clearAllMocks` alone: the latter drains call records but
   // NOT queued `...Once` implementations, so a test that aborts before consuming
   // its rejection would hand it to the next one.
@@ -721,6 +726,66 @@ describe("file.openPanel", () => {
     await expect(run("file.openPanel", { path: "/repo/docs/spec.md" })).rejects.toThrow(
       /panel limit/
     );
+  });
+
+  describe("a project plugin's default editor (#13811)", () => {
+    const DEFAULT = {
+      slot: "fileEditor:content/*.json",
+      pluginId: "project__p1__acme.cms",
+      choiceId: "project__p1__acme.cms/records",
+      choice: null,
+    };
+
+    it("opens a new panel in Edit with the default's editor when no mode was asked for", async () => {
+      fileEditorDefaultMock.mockReturnValue(DEFAULT);
+      const run = setupOpenPanel();
+      await run("file.openPanel", { path: "content/about.json" }, "agent");
+
+      expect(fileEditorDefaultMock).toHaveBeenCalledWith("/repo/content/about.json");
+      expect(addPanelSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          filePath: "/repo/content/about.json",
+          fileViewMode: "edit",
+          fileEditorChoice: DEFAULT.choiceId,
+        })
+      );
+    });
+
+    it("leaves an explicit mode alone", async () => {
+      fileEditorDefaultMock.mockReturnValue(DEFAULT);
+      const run = setupOpenPanel();
+      await run("file.openPanel", { path: "content/about.json", viewMode: "source" });
+
+      expect(addPanelSpy.mock.calls[0]?.[0]).toMatchObject({ fileViewMode: "source" });
+      expect(addPanelSpy.mock.calls[0]?.[0]).not.toHaveProperty("fileEditorChoice");
+    });
+
+    it("leaves a panel already showing the file in the mode it was left in", async () => {
+      fileEditorDefaultMock.mockReturnValue(DEFAULT);
+      setPanelState({
+        "file-1": {
+          id: "file-1",
+          kind: "file",
+          location: "grid",
+          filePath: "/repo/content/about.json",
+          fileViewMode: "source",
+        },
+      });
+      const run = setupOpenPanel();
+      await run("file.openPanel", { path: "/repo/content/about.json" });
+
+      expect(addPanelSpy).not.toHaveBeenCalled();
+      expect(setFileViewModeSpy).not.toHaveBeenCalled();
+      expect(activateTerminalSpy).toHaveBeenCalledWith("file-1");
+    });
+
+    it("opens in Source as before when no default covers the file", async () => {
+      const run = setupOpenPanel();
+      await run("file.openPanel", { path: "/repo/docs/spec.md" });
+
+      expect(addPanelSpy.mock.calls[0]?.[0]).toMatchObject({ fileViewMode: undefined });
+      expect(addPanelSpy.mock.calls[0]?.[0]).not.toHaveProperty("fileEditorChoice");
+    });
   });
 });
 

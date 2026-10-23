@@ -281,6 +281,9 @@ const FILE_FIELD_CLASSIFICATION = {
   // Open-time containment root pinned by a link from untrusted Markdown; a
   // restored panel infers its root again rather than reviving a stale pin.
   fileContainmentRoot: false,
+  // Open-time editor pick (#13811); a restored panel opens in Source, where
+  // the pick has nothing to choose.
+  fileEditorChoice: false,
 } as const satisfies Record<keyof FilePanelData, boolean>;
 
 // ── Diff field classification ────────────────────────────────────────

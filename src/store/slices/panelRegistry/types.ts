@@ -315,6 +315,8 @@ export interface PanelRegistrySlice {
   ) => void;
   setFilePanelPath: (id: string, filePath: string) => void;
   setFileViewMode: (id: string, viewMode: import("@shared/types/panel.js").FileViewMode) => void;
+  /** Pin the editor a file panel's Edit mode opens with, as an "Edit with…" answer. */
+  setFileEditorChoice: (id: string, choice: string) => void;
   /**
    * Merge a patch into a plugin panel's `extensionState` — the write half of
    * the bag its view reads as `PanelViewProps.initialArgs`. No-op for a
