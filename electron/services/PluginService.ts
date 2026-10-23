@@ -8096,7 +8096,10 @@ export class PluginService {
         installedInstance: true,
       });
     } catch (err) {
-      console.error(`[PluginService] Loading "${manifestId}" into project ${projectId} threw:`, err);
+      console.error(
+        `[PluginService] Loading "${manifestId}" into project ${projectId} threw:`,
+        err
+      );
     }
     if (!ok) return false;
     this.installedInstanceKeys.add(key);
