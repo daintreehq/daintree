@@ -140,7 +140,11 @@ export class TerminalHistoryReleaseController {
     if (managed.historyRefill) return;
     managed.historyReleased = false;
     managed.historyRefillPending = true;
-    restoreScrollback(managed);
+    // A hidden pane under a memory-pressure cap (an exit-time refill) keeps
+    // the cap; its reveal lifts it.
+    restoreScrollback(managed, {
+      shrinkOnly: managed.scrollbackPressureCapped === true && !managed.isVisible,
+    });
     logDebug(`Restoring released history for ${id}`);
     managed.historyRefill = this.runRefill(id, managed)
       .catch((error: unknown) => {

@@ -363,6 +363,17 @@ describe("TerminalHistoryReleaseController (#14220)", () => {
     expect(fetchAndRestore).toHaveBeenCalledTimes(1);
   });
 
+  it("keeps a memory-pressure cap through an exit-time refill of a hidden pane", async () => {
+    const managed = releaseHidden("t1");
+    managed.scrollbackPressureCapped = true;
+
+    controller.noteExit("t1");
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(fetchAndRestore).toHaveBeenCalledTimes(1);
+    expect(managed.terminal.options.scrollback).toBe(RELEASED_SCROLLBACK_LINES);
+  });
+
   it("never refills a pane whose history was not released", async () => {
     const managed = makeManaged({ isVisible: true });
     instances.set("t1", managed);
