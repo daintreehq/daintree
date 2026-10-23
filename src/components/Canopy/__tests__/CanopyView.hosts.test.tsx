@@ -62,7 +62,8 @@ vi.mock("@/lib/notify", () => ({ notify: vi.fn() }));
 
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { CanopyView } from "../CanopyView";
-import { useCanopyStore } from "@/store/canopyStore";
+import { ALL_HOSTS_ID, useCanopyStore } from "@/store/canopyStore";
+import { allHostsKey } from "../canopyAllHosts";
 import { notify } from "@/lib/notify";
 import { useFleetSnapshotStore } from "@/store/fleetSnapshotStore";
 import { useProjectStore } from "@/store/projectStore";
@@ -328,7 +329,10 @@ describe("the Canopy host picker", () => {
     expect(picker.getAttribute("data-host-id")).toBe("local");
     fireEvent.keyDown(picker, { key: "Enter" });
     const menu = await screen.findByRole("menu");
-    const rows = [...menu.querySelectorAll<HTMLElement>("[data-host-id]")];
+    const [allHosts, ...rows] = [...menu.querySelectorAll<HTMLElement>("[data-host-id]")];
+    // All hosts leads the list; it is a scope, not a host.
+    expect(allHosts!.getAttribute("data-host-id")).toBe("*");
+    expect(allHosts!.getAttribute("aria-current")).toBeNull();
     expect(rows.map((row) => row.getAttribute("data-host-id"))).toEqual(["local", "studio"]);
     expect(rows[0]!.getAttribute("aria-current")).toBe("true");
     // Waiting first, then working, as the host switcher draws them.
@@ -710,5 +714,82 @@ describe("the Canopy host picker", () => {
     await settle();
     expect(document.body.textContent).toContain("Connecting to studio-01…");
     expect(document.body.textContent).not.toContain("Can't reach studio-01");
+  });
+});
+
+describe("All hosts", () => {
+  const cardOf = (hostId: string, runId: string) =>
+    document.getElementById(`canopy-card-${allHostsKey(hostId, runId)}`);
+
+  beforeEach(() => {
+    remoteFleet = fleet(["shared-run"]);
+    useFleetSnapshotStore.setState({ snapshot: fleet(["shared-run"]) });
+    useCanopyStore.setState({ hostId: ALL_HOSTS_ID });
+  });
+
+  it("lists the runs of every host together, with the same run id on two hosts kept apart", async () => {
+    installElectron();
+    render(<CanopyView />);
+    await settle();
+    expect(cardOf("local", "shared-run")).not.toBeNull();
+    expect(cardOf("studio", "shared-run")).not.toBeNull();
+    // The project and the host, on the row.
+    expect(cardOf("local", "shared-run")!.textContent).toContain("local-app · ");
+    expect(cardOf("studio", "shared-run")!.textContent).toContain("server-app · studio-01");
+    expect(screen.getByTestId("canopy-host-picker").getAttribute("data-host-id")).toBe("*");
+    // A read scope: no "This project" switch.
+    expect(screen.queryByRole("radiogroup", { name: "Agents to show" })).toBeNull();
+  });
+
+  it("asks each host about its own terminals, by the id it knows", async () => {
+    const own = installElectron();
+    render(<CanopyView />);
+    await settle();
+    const input = document.querySelector<HTMLInputElement>("input[role=combobox]")!;
+    await act(async () => {
+      fireEvent.change(input, { target: { value: "segfault" } });
+    });
+    await screenSearchSettled();
+    const asked = state.invoke.mock.calls.filter((call) => call[1] === "canopy:search-screens");
+    expect(asked).toHaveLength(1);
+    expect(asked[0]![0]).toBe("studio");
+    expect(asked[0]![2]).toEqual([
+      expect.objectContaining({ runId: "shared-run", terms: ["segfault"] }),
+    ]);
+    expect(own.searchScreens).toHaveBeenCalledWith([
+      expect.objectContaining({ runId: "shared-run", terms: ["segfault"] }),
+    ]);
+  });
+
+  it("turns Canopy on nowhere, and says which host is off", async () => {
+    const own = installElectron();
+    remoteCanopy = canopySnapshot({ activated: false, mode: "unset", cards: [] });
+    render(<CanopyView />);
+    await settle();
+    expect(document.body.textContent).toContain("Canopy is off on studio-01");
+    expect(channelsCalled()).not.toContain("studio canopy:set-mode");
+    expect(own.setMode).not.toHaveBeenCalled();
+    // What the host that is off adds is what Daintree observes of its runs.
+    expect(cardOf("studio", "shared-run")).not.toBeNull();
+  });
+
+  it("names a host that can't be reached and keeps the others", async () => {
+    installElectron();
+    state.invoke.mockRejectedValue(new Error("offline"));
+    render(<CanopyView />);
+    await settle();
+    expect(document.body.textContent).toContain("Can't reach studio-01");
+    expect(cardOf("local", "shared-run")).not.toBeNull();
+    expect(cardOf("studio", "shared-run")).toBeNull();
+  });
+
+  it("releases every host it opened when the panel closes", async () => {
+    installElectron();
+    render(<CanopyView />);
+    await settle();
+    expect(channelsCalled()).toContain("studio canopy:set-active");
+    act(() => useCanopyStore.getState().close());
+    await settle();
+    expect(state.release).toHaveBeenCalledWith("studio");
   });
 });

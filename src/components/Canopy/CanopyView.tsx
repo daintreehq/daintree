@@ -133,6 +133,13 @@ function placeOf(
   };
 }
 
+interface HostIssue {
+  hostId: HostId;
+  text: string;
+  action: string | null;
+  act: (() => void) | null;
+}
+
 /** No other host's projects to list: one array, so the lookup's key stays put. */
 const NO_HOSTS: readonly HostId[] = [];
 
@@ -340,6 +347,7 @@ function CanopyPanel({ onEnableAll }: { onEnableAll: (rows: readonly HostMenuRow
   // Another host the panel shows, or null for the window's own.
   const hostId = useCanopyStore((s) => s.hostId);
   const setHostId = useCanopyStore((s) => s.setHostId);
+  const allHosts = hostId === ALL_HOSTS_ID;
   const hostRows = useCanopyHostRows(hostId ?? canopyOwnHostId());
   const hostPicker = hostRows ? (
     <CanopyHostPicker
@@ -352,7 +360,6 @@ function CanopyPanel({ onEnableAll }: { onEnableAll: (rows: readonly HostMenuRow
   ) : null;
   // The host shown was removed, or hosts can't be shown here at all: the panel
   // goes back to the window's own host, and the picker says so.
-  const allHosts = hostId === ALL_HOSTS_ID;
   const hostListed =
     hostId === null || allHosts || (hostRows?.some((row) => row.hostId === hostId) ?? false);
   useEffect(() => {
@@ -747,11 +754,11 @@ function CanopyInbox({
       retryHostProjects(hostId);
       return;
     }
-    for (const id of remoteIds) {
-      if ((remotes.states.get(id)?.epoch ?? 0) > 0) retryHostProjects(id);
-    }
     // Said again for exactly the hosts whose link came back.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    for (const entry of hostEpochs.split(" ")) {
+      const cut = entry.lastIndexOf(":");
+      if (cut > 0 && Number(entry.slice(cut + 1)) > 0) retryHostProjects(entry.slice(0, cut));
+    }
   }, [hostId, everyHost, recoveries, hostEpochs]);
 
   // Main reads only the screens in scope, so the agents a project view hides
@@ -2186,11 +2193,11 @@ function CanopyInbox({
               .join(" · ");
 
   // Each host in All hosts says for itself why it can't be read; the list says so too.
-  const hostIssues = useMemo(() => {
+  const hostIssues = useMemo((): HostIssue[] => {
     if (!everyHost) return [];
     const nameOf = (id: HostId) =>
       (hostRows ?? []).find((row) => row.hostId === id)?.name ?? "This Mac";
-    return readings.flatMap((reading) => {
+    return readings.flatMap((reading): HostIssue[] => {
       const name = nameOf(reading.hostId);
       const remoteHost = reading.hostId !== ownHostId;
       if (reading.error !== null && remoteHost) {

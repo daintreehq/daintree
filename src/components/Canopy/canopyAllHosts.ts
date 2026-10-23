@@ -186,15 +186,14 @@ export function createAllHostsRoute(ownHostId: HostId, hostIds: readonly HostId[
   const known = new Set(hostIds);
   const unknownRun = () => Promise.reject(new Error("That run isn't on a host shown here."));
 
-  const onRun = <K extends "setRead" | "archive" | "unarchive" | "reread" | "runBranch" | "rename">(
-    method: K
-  ): CanopyApi[K] =>
-    ((key: string, ...rest: unknown[]) => {
-      const parsed = parseAllHostsKey(key);
-      if (!parsed || !known.has(parsed.hostId)) return unknownRun();
-      const call = apiFor(parsed.hostId)[method] as (...args: unknown[]) => Promise<unknown>;
-      return call(parsed.id, ...rest);
-    }) as CanopyApi[K];
+  const routed = <R>(
+    key: string,
+    call: (host: CanopyApi, id: string) => Promise<R>
+  ): Promise<R> => {
+    const parsed = parseAllHostsKey(key);
+    if (!parsed || !known.has(parsed.hostId)) return unknownRun();
+    return call(apiFor(parsed.hostId), parsed.id);
+  };
 
   let receipt = 0;
   const trashed = new Map<number, { hostId: HostId; receipt: number }>();
@@ -212,12 +211,12 @@ export function createAllHostsRoute(ownHostId: HostId, hostIds: readonly HostId[
         )
       );
     },
-    setRead: onRun("setRead"),
-    archive: onRun("archive"),
-    unarchive: onRun("unarchive"),
-    reread: onRun("reread"),
-    runBranch: onRun("runBranch"),
-    rename: onRun("rename"),
+    setRead: (key, ...rest) => routed(key, (host, id) => host.setRead(id, ...rest)),
+    archive: (key, ...rest) => routed(key, (host, id) => host.archive(id, ...rest)),
+    unarchive: (key, ...rest) => routed(key, (host, id) => host.unarchive(id, ...rest)),
+    reread: (key, ...rest) => routed(key, (host, id) => host.reread(id, ...rest)),
+    runBranch: (key, ...rest) => routed(key, (host, id) => host.runBranch(id, ...rest)),
+    rename: (key, ...rest) => routed(key, (host, id) => host.rename(id, ...rest)),
     markAllRead: async (targets) => {
       const groups = groupByHost(targets, (target) => target.runId);
       const settled = await mapLimited([...groups], SEARCH_CONCURRENCY, ([hostId, group]) =>
