@@ -281,4 +281,31 @@ describe("PluginAccountRow", () => {
     render(<PluginAccountRow plugin={plugin(OAUTH)} account={OAUTH} />);
     await screen.findByText("The service ended this sign-in. Connect again to use it");
   });
+
+  it("shows a Reconnect another window started as a sign-in to cancel", async () => {
+    pluginApi.getAccountStatus.mockResolvedValue(status({ connected: true, pending: true }));
+    render(<PluginAccountRow plugin={plugin(OAUTH)} account={OAUTH} />);
+    await screen.findByText("Finish signing in in your browser…");
+    expect(screen.queryByRole("button", { name: "Reconnect" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(pluginApi.cancelAccountConnect).toHaveBeenCalledWith("acme.tracker", "default");
+  });
+
+  it("drops a refused replacement's error when the replacement is cancelled", async () => {
+    pluginApi.getAccountStatus.mockResolvedValue(status({ kind: "token", connected: true }));
+    pluginApi.setAccountToken.mockRejectedValue(new Error("The service didn't accept this token"));
+    render(<PluginAccountRow plugin={plugin(TOKEN)} account={TOKEN} />);
+
+    fireEvent.click(await enabledButton("Reconnect"));
+    fireEvent.change(await screen.findByPlaceholderText("API token"), {
+      target: { value: "bad" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Replace" }));
+    await screen.findByText("The service didn't accept this token");
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    await waitFor(() =>
+      expect(screen.queryByText("The service didn't accept this token")).toBeNull()
+    );
+    expect(screen.getByRole("button", { name: "Reconnect" })).toBeTruthy();
+  });
 });

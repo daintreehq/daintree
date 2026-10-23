@@ -172,8 +172,9 @@ export function PluginAccountRow({
 
   const connected = status?.connected === true;
   // A sign-in started from another window, or before this row was opened, is
-  // still this account's: show it and let it be cancelled here.
-  const signingIn = waitingForBrowser || (status?.pending === true && !connected);
+  // still this account's — a Reconnect of a connected one included: show it
+  // and let it be cancelled here rather than started again.
+  const signingIn = waitingForBrowser || status?.pending === true;
   const secretHost = remoteHostId === null ? null : { name: hostName ?? remoteHostId, platform };
   const disabledReason =
     remoteHostId !== null && !connected
@@ -294,6 +295,7 @@ export function PluginAccountRow({
                     onClick={() => {
                       setReplacingToken(false);
                       setToken("");
+                      setError(null);
                     }}
                   >
                     Cancel

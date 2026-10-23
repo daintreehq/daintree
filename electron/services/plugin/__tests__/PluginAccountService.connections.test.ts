@@ -360,11 +360,14 @@ describe("PluginAccountService named connections (#14102)", () => {
       "synthetic-personal"
     );
 
-    // Connecting again clears the mark.
-    await h.service.setToken(PLUGIN_ID, "synthetic-personal-2", "personal");
-    expect((await h.service.getUiStatus(PLUGIN_ID, "personal"))?.verification.status).toBe(
-      "unchecked"
+    // Connecting the revoked one again clears its mark.
+    h.fetch.mockImplementation(async () =>
+      jsonResponse({ access_token: "synthetic-2", refresh_token: "r2", expires_in: 3600 })
     );
+    expect((await h.service.connect(PLUGIN_ID, "work")).status).toBe("connected");
+    const reconnected = await h.service.getUiStatus(PLUGIN_ID, "work");
+    expect(reconnected?.connected).toBe(true);
+    expect(reconnected?.verification.status).toBe("unchecked");
   });
 
   it("never writes a refresh that finishes after the connection was disconnected", async () => {
@@ -376,6 +379,7 @@ describe("PluginAccountService named connections (#14102)", () => {
     await h.service.connect(PLUGIN_ID, "work");
     h.setNow(1_000_000 + 3_600_000);
     const refresh = deferred<Response>();
+    h.fetch.mockClear();
     h.fetch.mockImplementation(() => refresh.promise);
 
     const read = h.service.getAccessToken(PLUGIN_ID, "work");
@@ -476,5 +480,138 @@ describe("PluginAccountService named connections (#14102)", () => {
     expect(machine).toEqual([]);
     expect(project).toEqual([{ connected: true, identity: null }]);
     expect(h.changes).toContain(PROJECT_PLUGIN_A);
+  });
+
+  it("hands out nothing once the project's bound connection is no longer declared", async () => {
+    const h = harness({ [PLUGIN_ID]: manifest({ connections: [WORK, PERSONAL] }) });
+    await h.service.setToken(PLUGIN_ID, "synthetic-work", "work");
+    await h.service.setBinding(PLUGIN_ID, PROJECT_A, { connectionId: "personal", source: "own" });
+
+    const third: PluginConnectionContribution = { ...TOKEN_BASE, id: "third", label: "Third" };
+    h.manifests[PLUGIN_ID] = manifest({ connections: [WORK, third] });
+    expect(await h.service.getAccessTokenFor(PLUGIN_ID, { projectId: PROJECT_A })).toBeNull();
+    const status = await h.service.getBindingUiStatus(PLUGIN_ID, PROJECT_A);
+    expect(status.selected).toEqual({ connectionId: "personal", source: "own" });
+    expect(status.choices.map((c) => c.connectionId)).toEqual(["work", "third"]);
+
+    // With one connection left there is nothing to choose between.
+    h.manifests[PLUGIN_ID] = manifest({ connections: [WORK] });
+    expect(
+      (await h.service.getAccessTokenFor(PLUGIN_ID, { projectId: PROJECT_A }))?.accessToken
+    ).toBe("synthetic-work");
+  });
+
+  it("retries a failed read against the connection the project moved to", async () => {
+    const work = { ...OAUTH_BASE, id: "work", label: "Work" } as PluginConnectionContribution;
+    const h = harness({ [PLUGIN_ID]: manifest({ connections: [work, PERSONAL] }) });
+    h.fetch.mockImplementation(async () =>
+      jsonResponse({ access_token: "synthetic-work", refresh_token: "r1", expires_in: 3600 })
+    );
+    await h.service.connect(PLUGIN_ID, "work");
+    await h.service.setToken(PLUGIN_ID, "synthetic-personal", "personal");
+    h.setNow(1_000_000 + 3_600_000);
+    const refresh = deferred<Response>();
+    h.fetch.mockClear();
+    h.fetch.mockImplementation(() => refresh.promise);
+
+    const read = h.service.getAccessTokenFor(PLUGIN_ID, { projectId: PROJECT_A });
+    await vi.waitFor(() => expect(h.fetch).toHaveBeenCalled());
+    await h.service.setBinding(PLUGIN_ID, PROJECT_A, { connectionId: "personal", source: "own" });
+    refresh.resolve(jsonResponse({ error: "server_error" }, 503));
+
+    expect((await read)?.accessToken).toBe("synthetic-personal");
+  });
+
+  it("doesn't let a test of the old token speak for a refreshed one", async () => {
+    const work = {
+      ...OAUTH_BASE,
+      id: "work",
+      label: "Work",
+      test: { url: TEST_URL },
+    } as PluginConnectionContribution;
+    const h = harness({ [PLUGIN_ID]: manifest({ connections: [work] }) });
+    h.fetch.mockImplementation(async () =>
+      jsonResponse({ access_token: "synthetic-1", refresh_token: "r1", expires_in: 3600 })
+    );
+    await h.service.connect(PLUGIN_ID, "work");
+
+    const answer = deferred<Response>();
+    h.fetch.mockClear();
+    h.fetch.mockImplementation((url) =>
+      url === TEST_URL
+        ? answer.promise
+        : Promise.resolve(
+            jsonResponse({ access_token: "synthetic-2", refresh_token: "r2", expires_in: 3600 })
+          )
+    );
+    const testing = h.service.testConnection(PLUGIN_ID, "work");
+    await vi.waitFor(() => expect(h.fetch).toHaveBeenCalledWith(TEST_URL, expect.anything()));
+    h.setNow(1_000_000 + 3_600_000);
+    expect((await h.service.getAccessToken(PLUGIN_ID, "work"))?.accessToken).toBe("synthetic-2");
+    answer.resolve(new Response(null, { status: 401 }));
+
+    await testing;
+    expect((await h.service.getUiStatus(PLUGIN_ID, "work"))?.verification.status).toBe("ok");
+  });
+
+  it("cancels the sign-in Connect started when neither names a connection", async () => {
+    const work = { ...OAUTH_BASE, id: "work", label: "Work" } as PluginConnectionContribution;
+    const h = harness({ [PLUGIN_ID]: manifest({ connections: [work] }) });
+    const browser = deferred<never>();
+    const service = new PluginAccountService({
+      getSettingsRoot: () => path.join(tmpDir, "plugin-settings"),
+      getManifest: (id) => h.manifests[id],
+      cipher: fakeCipher(),
+      fetch: h.fetch,
+      startLoopback: (() => browser.promise) as never,
+      cancelLoopback: vi.fn(),
+    });
+    const connecting = service.connect(PLUGIN_ID);
+    await vi.waitFor(async () =>
+      expect((await service.getUiStatus(PLUGIN_ID))?.pending).toBe(true)
+    );
+    service.cancelConnect(PLUGIN_ID);
+    expect((await service.getUiStatus(PLUGIN_ID, "work"))?.pending).toBe(false);
+    void connecting.catch(() => undefined);
+  });
+
+  it("delivers only the newest binding's state when reads finish out of order", async () => {
+    const h = harness({ [PLUGIN_ID]: manifest({ connections: [WORK, PERSONAL] }) });
+    await h.service.setToken(PLUGIN_ID, "synthetic-work", "work");
+    const heard: PluginAccountState[] = [];
+    h.service.subscribe(PLUGIN_ID, (state) => void heard.push(state), { projectId: PROJECT_A });
+
+    const reads: Array<{
+      id: string;
+      settled: boolean;
+      done: ReturnType<typeof deferred<PluginAccountState>>;
+    }> = [];
+    vi.spyOn(h.service, "getState").mockImplementation((_owner, connectionId) => {
+      const done = deferred<PluginAccountState>();
+      reads.push({ id: connectionId ?? "", settled: false, done });
+      return done.promise;
+    });
+    const settle = async (id: string, state: PluginAccountState) => {
+      for (let round = 0; round < 5; round++) {
+        for (const read of reads.filter((r) => r.id === id && !r.settled)) {
+          read.settled = true;
+          read.done.resolve(state);
+        }
+        await new Promise((r) => setTimeout(r, 0));
+      }
+    };
+    void h.service
+      .setBinding(PLUGIN_ID, PROJECT_A, { connectionId: "personal", source: "own" })
+      .catch(() => undefined);
+    void h.service
+      .setBinding(PLUGIN_ID, PROJECT_A, { connectionId: "work", source: "own" })
+      .catch(() => undefined);
+
+    // The newer binding's read finishes first; the older one's lands late.
+    await settle("work", { connected: true, identity: "work-user" });
+    await settle("personal", { connected: false, identity: "personal-user" });
+    await settle("work", { connected: true, identity: "work-user" });
+    expect(heard).toEqual([{ connected: true, identity: "work-user" }]);
+    expect(heard.some((state) => state.identity === "personal-user")).toBe(false);
   });
 });

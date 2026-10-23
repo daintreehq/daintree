@@ -1539,7 +1539,17 @@ export class PluginService {
       getManifest: (pluginId) =>
         (this.plugins.get(pluginId) ?? this.disabledPlugins.get(pluginId))?.manifest,
       // The settings row listens for the same event to re-read its status.
-      onAccountChanged: (pluginId) => this.emitSettingsChanged(pluginId),
+      // An installed plugin's connection can back its project instances'
+      // bindings, so their setup strips and pickers re-read too.
+      onAccountChanged: (pluginId) => {
+        this.emitSettingsChanged(pluginId);
+        if (projectIdFromPluginInstanceKey(pluginId) !== null) return;
+        for (const instanceId of this.plugins.keys()) {
+          if (instanceId !== pluginId && pluginManifestIdFromInstanceKey(instanceId) === pluginId) {
+            this.emitSettingsChanged(instanceId);
+          }
+        }
+      },
       bindings: pluginAccountBindings,
     });
 

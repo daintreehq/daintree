@@ -9,6 +9,7 @@ import {
   projectIdFromPluginInstanceKey,
 } from "./projectPluginIdentity.js";
 import type { PluginAccountBindingStore } from "./pluginAccountBindings.js";
+import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import {
   cancelOAuthLoopback,
   startAuthorizationCodeLoopback,
@@ -166,10 +167,13 @@ interface AccountListener {
   ref: PluginAccountRef;
   cb: (state: PluginAccountState) => unknown;
   failures: ListenerFailureState;
+  /** Bumped on every delivery, so a slower read for an earlier binding can't land after it. */
+  seq: number;
 }
 
 interface VerificationEntry {
   generation: number;
+  revision: number;
   verification: PluginAccountVerification;
 }
 
@@ -325,6 +329,11 @@ export class PluginAccountService {
   private readonly locks = new Map<string, Promise<void>>();
   /** What a test or refresh last saw, for the generation it saw it under. Never stored. */
   private readonly verifications = new Map<string, VerificationEntry>();
+  /**
+   * Bumped when a refresh replaces the tokens without a new sign-in, so a test
+   * of the old token can't speak for the new one.
+   */
+  private readonly revisions = new Map<string, number>();
 
   constructor(deps: PluginAccountServiceDeps) {
     this.deps = deps;
@@ -446,26 +455,40 @@ export class PluginAccountService {
     return (await store.get<unknown>(keys.config)) === accountFingerprint(account);
   }
 
+  private revision(target: ConnectionTarget): number {
+    return this.revisions.get(connectionStateKey(target)) ?? 0;
+  }
+
   private verification(target: ConnectionTarget): PluginAccountVerification {
     const entry = this.verifications.get(connectionStateKey(target));
-    return entry && entry.generation === this.generation(target)
+    return entry &&
+      entry.generation === this.generation(target) &&
+      entry.revision === this.revision(target)
       ? { ...entry.verification }
       : { ...UNCHECKED };
   }
 
-  /** Record what was seen, unless the connection changed since `generation`. */
+  /**
+   * Record what was seen, unless the tokens changed since `generation` and
+   * `revision`. A changed answer tells the settings row to re-read.
+   */
   private recordVerification(
     target: ConnectionTarget,
     generation: number,
     status: PluginAccountVerification["status"],
-    message: string | null = null
-  ): boolean {
-    if (this.generation(target) !== generation) return false;
+    message: string | null = null,
+    revision: number = this.revision(target)
+  ): void {
+    if (this.generation(target) !== generation || this.revision(target) !== revision) return;
+    const previous = this.verification(target);
     this.verifications.set(connectionStateKey(target), {
       generation,
+      revision,
       verification: { status, checkedAt: this.now(), message },
     });
-    return true;
+    if (previous.status !== status || previous.message !== message) {
+      this.deps.onAccountChanged?.(target.ownerId);
+    }
   }
 
   /** The settings row for one connection; the first declared without `connectionId`. */
@@ -590,8 +613,13 @@ export class PluginAccountService {
   }
 
   /** Stop a sign-in that hasn't stored its tokens yet. */
-  cancelConnect(pluginId: string, connectionId: string = DEFAULT_PLUGIN_CONNECTION_ID): void {
-    const key = connectionStateKey({ ownerId: pluginId, connectionId });
+  cancelConnect(pluginId: string, connectionId?: string): void {
+    // Omitted means the first declared connection, as for `connect`.
+    const key = connectionStateKey({
+      ownerId: pluginId,
+      connectionId:
+        connectionId ?? this.declaredConnection(pluginId)?.id ?? DEFAULT_PLUGIN_CONNECTION_ID,
+    });
     if (!this.pending.delete(key)) return;
     (this.deps.cancelLoopback ?? cancelOAuthLoopback)(SESSION_PREFIX + key);
     this.deps.onAccountChanged?.(pluginId);
@@ -769,6 +797,7 @@ export class PluginAccountService {
     const stored = await this.withLock(target, async () => {
       if (!this.stillCurrent(target, generation, epoch)) return false;
       await this.store(target.ownerId).set(keys.credentials, merged, { secret: true });
+      this.revisions.set(connectionStateKey(target), this.revision(target) + 1);
       return true;
     });
     if (!stored) return "stale";
@@ -883,10 +912,12 @@ export class PluginAccountService {
     try {
       token = await this.getAccessToken(pluginId, connection.connectionId);
     } catch (err) {
-      const message = err instanceof Error ? err.message : "Couldn't reach the service";
+      const message = formatErrorMessage(err, "Couldn't reach the service");
       this.recordVerification(connection, generation, "unreachable", message);
       return this.verification(connection);
     }
+    // After the read: a refresh it ran is the token tested, a later one isn't.
+    const revision = this.revision(connection);
     if (!token) {
       const seen = this.verification(connection);
       return seen.status === "revoked"
@@ -918,7 +949,7 @@ export class PluginAccountService {
     }
     // A sign-in or disconnect meanwhile: this result is about tokens that are
     // gone, so it isn't recorded against the ones there now.
-    this.recordVerification(connection, generation, status, message);
+    this.recordVerification(connection, generation, status, message, revision);
     this.deps.onAccountChanged?.(pluginId);
     return this.verification(connection);
   }
@@ -1068,14 +1099,6 @@ export class PluginAccountService {
     return { ownerId, connectionId };
   }
 
-  /** A stored binding that still names a declared connection, else `null`. */
-  private usableBinding(consumerId: string, projectId: string | null): PluginAccountBinding | null {
-    if (projectId === null) return null;
-    const binding = this.bindings.get(projectId, consumerId);
-    if (!binding || !this.declaredConnection(consumerId, binding.connectionId)) return null;
-    return binding;
-  }
-
   /**
    * Which stored connection a consumer's call reaches: `ref.connection`, else
    * the project's bound connection, else the first declared. Its owner is the
@@ -1092,7 +1115,19 @@ export class PluginAccountService {
     if (asked !== undefined && !declared.some((connection) => connection.id === asked)) {
       throw new Error(`Plugin "${consumerId}" declares no connection "${asked}"`);
     }
-    const binding = this.usableBinding(consumerId, this.projectFor(consumerId, ref));
+    const projectId = this.projectFor(consumerId, ref);
+    const stored = projectId === null ? null : this.bindings.get(projectId, consumerId);
+    const binding =
+      stored && declared.some((connection) => connection.id === stored.connectionId)
+        ? stored
+        : null;
+    // The project chose a connection the plugin no longer declares. With
+    // others still declared, quietly using one of them would hand out an
+    // account the user never picked, so nothing is handed out until they
+    // choose again. With one left there is nothing to choose.
+    if (asked === undefined && stored && !binding && declared.length > 1) {
+      return { ownerId: consumerId, connectionId: stored.connectionId, available: false };
+    }
     const connectionId = asked ?? binding?.connectionId ?? declared[0].id;
     if (binding?.connectionId !== connectionId || binding.source !== "machine") {
       return { ownerId: consumerId, connectionId, available: true };
@@ -1128,9 +1163,18 @@ export class PluginAccountService {
       const target = this.resolve(consumerId, ref);
       if (!target) throw new Error(`Plugin "${consumerId}" declares no contributes.account`);
       if (!target.available) return null;
-      const token = await this.getAccessToken(target.ownerId, target.connectionId);
+      let token: PluginAccountAccessToken | null = null;
+      let failure: { error: unknown } | null = null;
+      try {
+        token = await this.getAccessToken(target.ownerId, target.connectionId);
+      } catch (error) {
+        failure = { error };
+      }
+      // A failure, like a token, belongs to the connection it was read from.
       const now = this.resolve(consumerId, ref);
-      if (now?.available && sameTarget(now, target)) return token;
+      if (!now?.available || !sameTarget(now, target)) continue;
+      if (failure) throw failure.error;
+      return token;
     }
     return null;
   }
@@ -1162,10 +1206,13 @@ export class PluginAccountService {
     }
     return {
       binding: stored,
-      selected: {
-        connectionId: resolved.connectionId,
-        source: resolved.ownerId === consumerId ? "own" : "machine",
-      },
+      selected:
+        !resolved.available && stored
+          ? stored
+          : {
+              connectionId: resolved.connectionId,
+              source: resolved.ownerId === consumerId ? "own" : "machine",
+            },
       choices,
     };
   }
@@ -1203,7 +1250,12 @@ export class PluginAccountService {
       for (const [listener, previous] of before) {
         const next = this.safeResolve(listener);
         if (listener.consumerId !== consumerId || sameTarget(previous, next)) continue;
-        void this.stateOf(next).then((state) => this.invokeListener(listener, state));
+        const seq = ++listener.seq;
+        void this.stateOf(next).then((state) => {
+          // A newer delivery, or another binding change, has spoken since.
+          if (listener.seq !== seq || !sameTarget(this.safeResolve(listener), next)) return;
+          this.invokeListener(listener, state);
+        });
       }
       this.deps.onAccountChanged?.(consumerId);
     }
@@ -1245,6 +1297,7 @@ export class PluginAccountService {
       ref: { ...ref },
       cb,
       failures: createListenerFailureState(),
+      seq: 0,
     };
     this.listeners.add(listener);
     return () => {
@@ -1269,6 +1322,7 @@ export class PluginAccountService {
       const resolved = this.safeResolve(listener);
       if (!resolved?.available || !sameTarget(resolved, target)) continue;
       consumers.add(listener.consumerId);
+      listener.seq++;
       this.invokeListener(listener, state);
     }
     this.deps.onAccountChanged?.(target.ownerId);

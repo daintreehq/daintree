@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { SettingsGroup } from "@/components/Settings/SettingsGroup";
 import { SettingsSelect } from "@/components/Settings/SettingsSelect";
+import { SettingsLoadErrorBanner } from "@/components/Settings/SettingsLoadErrorBanner";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { logError } from "@/utils/logger";
 import {
@@ -35,21 +36,30 @@ function choiceLabel(choice: PluginAccountBindingChoice, plugin: LoadedPluginInf
 export function PluginAccountBindingRow({ plugin }: { plugin: LoadedPluginInfo }) {
   const pluginId = plugin.instanceId;
   const [status, setStatus] = useState<PluginAccountBindingUiStatus | null>(null);
+  const [loadFailed, setLoadFailed] = useState(false);
   const [reloadKey, setReloadKey] = useState(0);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Reads and saves share one counter: only the newest answer is shown, so a
+  // save that lands after another window's change can't put the old one back.
+  const latest = useRef(0);
 
   const refresh = useCallback(() => setReloadKey((k) => k + 1), []);
 
   useEffect(() => {
+    const request = ++latest.current;
     let cancelled = false;
     window.electron.plugin
       .getAccountBinding(pluginId)
       .then((next) => {
-        if (!cancelled) setStatus(next);
+        if (cancelled || request !== latest.current) return;
+        setStatus(next);
+        setLoadFailed(false);
       })
       .catch((err: unknown) => {
-        if (!cancelled) logError(`Failed to load the connection choice for ${pluginId}`, err);
+        if (cancelled || request !== latest.current) return;
+        setLoadFailed(true);
+        logError(`Failed to load the connection choice for ${pluginId}`, err);
       });
     return () => {
       cancelled = true;
@@ -66,36 +76,53 @@ export function PluginAccountBindingRow({ plugin }: { plugin: LoadedPluginInfo }
     return () => unsubscribe?.();
   }, [pluginId, refresh]);
 
-  if (!status || status.choices.length < 2) return null;
+  if (loadFailed && !status) {
+    return (
+      <SettingsLoadErrorBanner
+        message="Couldn't read which connection this project uses"
+        onRetry={refresh}
+      />
+    );
+  }
+
+  const selected = status?.choices.find(
+    (choice) => choiceValue(choice) === choiceValue(status.selected)
+  );
+  // A choice the plugin no longer declares stays shown, so it can be replaced.
+  const gone = status !== null && selected === undefined;
+  if (!status || (status.choices.length < 2 && !gone)) return null;
 
   const choose = async (binding: PluginAccountBinding | null) => {
+    const request = ++latest.current;
     setError(null);
     setSaving(true);
     try {
-      setStatus(await window.electron.plugin.setAccountBinding(pluginId, binding));
+      const next = await window.electron.plugin.setAccountBinding(pluginId, binding);
+      if (request === latest.current) setStatus(next);
     } catch (err) {
-      setError(formatErrorMessage(err, "Couldn't change the connection"));
+      if (request === latest.current) {
+        setError(formatErrorMessage(err, "Couldn't change the connection"));
+      }
     } finally {
       setSaving(false);
     }
   };
-
-  const selected = status.choices.find(
-    (choice) => choiceValue(choice) === choiceValue(status.selected)
-  );
 
   return (
     <SettingsGroup>
       <SettingsSelect
         label="Connection for this project"
         description={
-          selected && !selected.connected
-            ? plugin.origin === "project"
-              ? "Not connected yet. Connect it below, or choose another"
-              : "Not connected yet. Connect it in the plugin manager, or choose another"
-            : "Which signed-in connection this project uses. Nothing is written to the repository"
+          gone
+            ? "The connection this project used is gone, so nothing is used. Choose another"
+            : selected && !selected.connected
+              ? plugin.origin === "project"
+                ? "Not connected yet. Connect it below, or choose another"
+                : "Not connected yet. Connect it in the plugin manager, or choose another"
+              : "Which signed-in connection this project uses. Nothing is written to the repository"
         }
-        value={choiceValue(status.selected)}
+        value={gone ? "" : choiceValue(status.selected)}
+        placeholder="Choose a connection"
         options={status.choices.map((choice) => ({
           value: choiceValue(choice),
           label: choiceLabel(choice, plugin),
