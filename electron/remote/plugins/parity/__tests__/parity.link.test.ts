@@ -230,6 +230,19 @@ describe("plugin parity over a link", () => {
     expect(`${error.userMessage} ${error.message}`).not.toMatch(/\/home|EACCES/);
   });
 
+  it("tells the person to uninstall on the host when the update changes how the plugin runs", async () => {
+    localInventory.plugins = [entry("acme.md")];
+    hostPlugins.installPluginFromAnotherMachine.mockResolvedValueOnce({
+      status: "failed",
+      errors: [{ code: "instance_mode_changed", message: "mode changed" }],
+    });
+    const error = (await client
+      .installOnHost({ hostId: HOST, pluginId: "acme.md" })
+      .catch((err: unknown) => err)) as { userMessage: string };
+    expect(error.userMessage).toMatch(/Markdown Preview/);
+    expect(error.userMessage).toMatch(/Uninstall it on studio-01 first/);
+  });
+
   it("restates a host's own error text by its code", async () => {
     localInventory.plugins = [entry("acme.md")];
     hostPlugins.installPluginFromAnotherMachine.mockRejectedValueOnce(
