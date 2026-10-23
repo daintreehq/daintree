@@ -38,6 +38,12 @@ import type {
   PluginCheckUpdateResult,
   InstalledPluginRecord,
 } from "../../../shared/types/plugin.js";
+import {
+  EXTERNAL_LINK_CONSENT,
+  PLUGIN_PANEL_ATTENTION_GRANT,
+  type PluginCapabilityIdentity,
+  type PluginGrantKey,
+} from "../../../shared/types/pluginCapabilityConsent.js";
 import type { PluginInstalledRecordsStore } from "./PluginInstalledRecordsStore.js";
 
 // proper-lockfile is CJS-only and ships no bundled types. Require it via the
@@ -66,12 +72,16 @@ const properLockfile: ProperLockfile = req("proper-lockfile");
 const STALE_PARKED_OLD_RE = /\.old-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
- * Minimal view of a loaded plugin the installer needs — only `isBuiltin` is
- * read (to decide whether the on-disk dir is the installer's to delete). The
- * full {@link LoadedPlugin} stays core-owned in PluginService.
+ * Minimal view of a loaded plugin the installer needs: `isBuiltin` (whether the
+ * on-disk dir is the installer's to delete), `devMode` (whether the code on
+ * disk is still the archive the record names) and the manifest a rolled-back
+ * upgrade offers grants back against. The full {@link LoadedPlugin} stays
+ * core-owned in PluginService.
  */
 interface InstallerPluginInfo {
   isBuiltin: boolean;
+  devMode?: boolean;
+  manifest: Readonly<PluginManifest>;
 }
 
 interface PluginInstallerDeps {
@@ -227,6 +237,70 @@ export class PluginInstaller {
         `[PluginService] capability consent purge during ${context} of "${pluginId}" threw:`,
         err
       );
+    }
+  }
+
+  /**
+   * The capability grants a replacing install is about to purge (#14019), read
+   * first so they can be offered back, whether the new version loads or the
+   * upgrade rolls back.
+   * Best-effort like the purge itself: a failed read offers nothing back and
+   * never strands the install.
+   */
+  private _readCapabilityGrants(pluginId: string): PluginCapabilityIdentity[] {
+    try {
+      return getPluginCapabilityConsentService().listGrantsForPlugin(pluginId);
+    } catch (err) {
+      console.error(
+        `[PluginService] reading the capability grants of "${pluginId}" before its upgrade threw:`,
+        err
+      );
+      return [];
+    }
+  }
+
+  /**
+   * Offer back the purged grants the new version still asks for, in one
+   * approval (#14019). Not awaited by the install: the answer can take minutes
+   * and must not hold `install.lock`. The offer only counts while this archive
+   * is still what is installed and, when a version was loaded, while that
+   * exact instance is the one running — a reload of any kind voids it. The
+   * service checks both again on the answer.
+   */
+  private _offerCapabilityGrantsBack(
+    pluginId: string,
+    manifest: Readonly<PluginManifest>,
+    archiveHash: string | null,
+    purged: readonly PluginCapabilityIdentity[],
+    instance?: unknown
+  ): void {
+    const grants = purged.filter((grant) => stillAsksFor(manifest, grant.capability));
+    if (grants.length === 0) return;
+    try {
+      void getPluginCapabilityConsentService()
+        .offerRestore({
+          pluginId,
+          pluginDisplayName: manifest.displayName ?? manifest.name,
+          grants,
+          declaredCapabilities: manifest.capabilities ?? [],
+          isCurrent: () => {
+            const record = this.records.getInstalledRecord(pluginId);
+            if (record === undefined || record.archiveHash !== archiveHash) return false;
+            return instance === undefined || this.deps.getPlugin(pluginId) === instance;
+          },
+        })
+        // The Plugin Manager's switches read these grants; tell it they are back.
+        .then((restored) => {
+          if (restored) this.deps.broadcastProvenanceChanged();
+        })
+        .catch((err: unknown) => {
+          console.error(
+            `[PluginService] offering back the permissions of "${pluginId}" threw:`,
+            err
+          );
+        });
+    } catch (err) {
+      console.error(`[PluginService] offering back the permissions of "${pluginId}" threw:`, err);
     }
   }
 
@@ -523,6 +597,9 @@ export class PluginInstaller {
       if (!pluginInstallJobs.commit(jobId)) return cancelled;
       pluginInstallJobs.setPhase(jobId, "activating");
 
+      // Read before the unload below drops the running instance.
+      const replacingDevInstance = existing && this.deps.getPlugin(pluginId)?.devMode === true;
+
       if (existing) {
         // A reload rather than a plain unload: agents running against this
         // plugin keep their credentials if the version left loaded declares
@@ -575,7 +652,26 @@ export class PluginInstaller {
       // it can't use a stale pin. Best-effort + durable: a failed persist is
       // logged loudly but never strands the install (worst case is a skipped
       // re-prompt the user can revoke manually).
-      if (existing) {
+      //
+      // The one exception is a byte-identical archive (#14019): no code
+      // changed, so there is nothing for the approvals to be reset against.
+      // Without a prior digest to compare — a directory install, or a record
+      // from before provenance — it counts as new code, and so does a dev
+      // instance, whose code on disk is no longer the archive its record names.
+      //
+      // Capture the prior record first: the new provenance is written before
+      // `loadPlugin`, so a post-swap load failure on an upgrade must restore the
+      // OLD record alongside the OLD directory — otherwise Settings and
+      // `checkForUpdate` would baseline against the version that never loaded.
+      const previousRecord = existing ? this.records.getInstalledRecord(pluginId) : undefined;
+      const sameArchive =
+        hash !== null &&
+        previousRecord?.archiveHash === hash &&
+        previousRecord.devMode !== true &&
+        !replacingDevInstance;
+      let purgedGrants: PluginCapabilityIdentity[] = [];
+      if (existing && !sameArchive) {
+        purgedGrants = this._readCapabilityGrants(pluginId);
         this._purgeConsentPins(pluginId, "upgrade");
       }
 
@@ -585,12 +681,6 @@ export class PluginInstaller {
       // the prior record, so omitting `installedAt` from the patch keeps it.
       // Clear any prior update signal: the user just reinstalled, so whatever
       // `updateAvailable` flagged is now resolved (#9297).
-      //
-      // Capture the prior record first: the new provenance is written before
-      // `loadPlugin`, so a post-swap load failure on an upgrade must restore the
-      // OLD record alongside the OLD directory — otherwise Settings and
-      // `checkForUpdate` would baseline against the version that never loaded.
-      const previousRecord = existing ? this.records.getInstalledRecord(pluginId) : undefined;
       this.records.upsertInstalledRecord(pluginId, {
         source: opts?.source ?? "sideload",
         originalUrl: opts?.originalUrl ?? null,
@@ -630,6 +720,7 @@ export class PluginInstaller {
           });
         }
         this.deps.broadcastProvenanceChanged();
+        this._offerCapabilityGrantsBack(pluginId, manifest, hash, purgedGrants);
         return { status: "installed", pluginId };
       }
 
@@ -651,6 +742,7 @@ export class PluginInstaller {
           finalDir,
           existing ? parked : null,
           previousRecord,
+          purgedGrants,
           `Plugin "${pluginId}" installed but failed to load: ${(err as Error).message}. Retry from Settings.`
         );
       }
@@ -663,6 +755,7 @@ export class PluginInstaller {
           finalDir,
           existing ? parked : null,
           previousRecord,
+          purgedGrants,
           `Plugin "${pluginId}" installed but failed to load. Retry from Settings.`
         );
       }
@@ -679,6 +772,9 @@ export class PluginInstaller {
 
       // setPluginArchiveHash requires the plugin to be loaded; call it after.
       if (hash) this.deps.setPluginArchiveHash(pluginId, hash);
+      // Offered before activation so the dialog queues ahead of any first-use
+      // prompt the new version raises while it starts.
+      this._offerCapabilityGrantsBack(pluginId, manifest, hash, purgedGrants, loaded);
       await this.deps.activatePlugin(pluginId);
 
       this.deps.broadcastProvenanceChanged();
@@ -749,6 +845,7 @@ export class PluginInstaller {
     finalDir: string,
     parked: string | null,
     previousRecord: InstalledPluginRecord | undefined,
+    purgedGrants: readonly PluginCapabilityIdentity[],
     message: string
   ): Promise<PluginInstallResult> {
     const failed: PluginInstallResult = {
@@ -815,7 +912,23 @@ export class PluginInstaller {
         isBuiltin: false,
         disabled: this.records.getDisabledIds(),
       });
-      if (restored) await this.deps.activatePlugin(pluginId);
+      if (restored) {
+        // The old version is running again, but the upgrade already purged its
+        // grants. They are offered back rather than restored: the directory
+        // coming back doesn't prove which code holds the id now (#14019). Only
+        // when the instance registered is the one just reloaded, and bound to it.
+        const current = this.deps.getPlugin(pluginId);
+        if (current !== undefined && current === restored && previousRecord) {
+          this._offerCapabilityGrantsBack(
+            pluginId,
+            current.manifest,
+            previousRecord.archiveHash,
+            purgedGrants,
+            current
+          );
+        }
+        await this.deps.activatePlugin(pluginId);
+      }
     } catch (reloadErr) {
       console.error(
         `[PluginService] Failed to restore "${pluginId}" runtime state after a post-swap load failure:`,
@@ -1281,4 +1394,18 @@ export class PluginInstaller {
       );
     }
   }
+}
+
+/**
+ * Whether a new version still asks for what a grant was for (#14019). A
+ * capability is asked for by declaring it; "Show in attention views" by a
+ * panel kind that reports activity. No manifest declares the sites it opens
+ * links to, so a site is never offered back and asks again on first use.
+ */
+function stillAsksFor(manifest: Readonly<PluginManifest>, capability: PluginGrantKey): boolean {
+  if (capability === EXTERNAL_LINK_CONSENT) return false;
+  if (capability === PLUGIN_PANEL_ATTENTION_GRANT) {
+    return manifest.contributes.panels.some((panel) => panel.reportsActivity === true);
+  }
+  return manifest.capabilities?.includes(capability) ?? false;
 }

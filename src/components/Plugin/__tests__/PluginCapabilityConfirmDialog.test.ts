@@ -3,6 +3,7 @@ import {
   capabilityAction,
   externalLinkTitleFor,
   reachesThisComputer,
+  restoreTitleFor,
   titleFor,
 } from "../PluginCapabilityConfirmDialog";
 import { CAPABILITY_META } from "../capabilityMeta";
@@ -64,5 +65,9 @@ describe("PluginCapabilityConfirmDialog microcopy", () => {
     expect(externalLinkTitleFor("Acme CRM", "app.example.com")).toBe(
       "Allow 'Acme CRM' to open links to app.example.com?"
     );
+  });
+
+  it("asks a question naming the plugin when offering its permissions back (#14019)", () => {
+    expect(restoreTitleFor("Agent Grid")).toBe("Restore permissions for 'Agent Grid'?");
   });
 });

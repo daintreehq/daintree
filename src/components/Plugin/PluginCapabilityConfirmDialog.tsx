@@ -5,7 +5,9 @@ import { usePluginCapabilityConfirmStore } from "@/store/pluginCapabilityConfirm
 import { CapabilityRow } from "@/components/Plugin/capabilityMeta";
 import {
   EXTERNAL_LINK_CONSENT,
+  PLUGIN_PANEL_ATTENTION_GRANT,
   type PluginCapabilityConsentDecision,
+  type PluginRestorableGrant,
 } from "@shared/types/pluginCapabilityConsent";
 import type { BuiltInPluginCapability } from "@shared/types/plugin";
 import { cn } from "@/lib/utils";
@@ -54,6 +56,41 @@ export function PluginCapabilityConfirmDialog() {
           onConfirm={() => {}}
           variant="default"
         />
+      </ErrorBoundary>
+    );
+  }
+
+  if (current.restore !== undefined) {
+    return (
+      <ErrorBoundary
+        variant="component"
+        componentName="PluginCapabilityConfirmDialog"
+        resetKeys={[resetKey]}
+      >
+        <ConfirmDialog
+          isOpen={true}
+          onClose={() => resolveOnce(current.requestId, "rejected")}
+          title={restoreTitleFor(current.pluginDisplayName)}
+          description={`'${current.pluginDisplayName}' was replaced with a different version, so the permissions you gave the previous version were turned off. Restoring gives this version the same access again. Anything else it asks for is asked separately.`}
+          confirmLabel="Restore permissions"
+          cancelLabel="Leave off"
+          onConfirm={() => resolveOnce(current.requestId, "approved-and-pin")}
+          variant="destructive"
+          // The body carries a permission list, so this is a `dialog`, not an `alertdialog`.
+          hasPreview={true}
+          hint={
+            <span className="min-w-0 leading-tight">Only what this version still declares</span>
+          }
+        >
+          <div>
+            <div className={cn(SECTION_LABEL_CLASS, "mb-1")}>Permissions</div>
+            <ul className="space-y-1.5">
+              {current.restore.map((grant) => (
+                <RestoreRow key={grant} grant={grant} />
+              ))}
+            </ul>
+          </div>
+        </ConfirmDialog>
       </ErrorBoundary>
     );
   }
@@ -144,6 +181,27 @@ export function PluginCapabilityConfirmDialog() {
       </ConfirmDialog>
     </ErrorBoundary>
   );
+}
+
+/** One permission offered back. "Show in attention views" has no capability token, so no capability row. */
+function RestoreRow({ grant }: { grant: PluginRestorableGrant }) {
+  if (grant !== PLUGIN_PANEL_ATTENTION_GRANT) return <CapabilityRow capability={grant} />;
+  return (
+    <li className="flex items-start gap-2">
+      <span className="w-1.5 h-1.5 rounded-full bg-text-primary/30 shrink-0 mt-[7px]" aria-hidden />
+      <div className="min-w-0">
+        <div className="text-xs text-text-primary">Show in attention views</div>
+        <div className="text-2xs text-text-secondary">
+          Its panels&apos; activity appears in Pilot and the attention filters
+        </div>
+      </div>
+    </li>
+  );
+}
+
+/** Title of the offer-back after a replacing install. Exported for tests. */
+export function restoreTitleFor(pluginDisplayName: string): string {
+  return `Restore permissions for '${pluginDisplayName}'?`;
 }
 
 /** Title of the per-site link prompt; the hostname is shown as text, never as a link. Exported for tests. */

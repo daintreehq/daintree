@@ -2412,7 +2412,8 @@ export interface IpcEventMap {
    * the primary) — unlike the MCP consent push there is no initiating renderer,
    * because the call originates in the plugin's own utility process. The
    * renderer replies via `plugin-capability:resolve-consent`, correlated by
-   * `requestId`.
+   * `requestId`. The same push carries the one-approval offer-back after a
+   * replacing install (#14019), told apart by its `restore` list.
    */
   "plugin-capability:consent-request": import("../pluginCapabilityConsent.js").PluginCapabilityConsentRequestEvent;
 

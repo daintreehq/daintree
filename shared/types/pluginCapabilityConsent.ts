@@ -16,7 +16,9 @@ import type { BuiltInPluginCapability, PluginScopeKey } from "./plugin.js";
  * `host.process.spawn` the plugin makes for its lifetime, not one per spawn.
  * There is no fingerprint and no rug-pull re-prompt — capabilities are static
  * manifest declarations, so a grant only resets when the plugin is uninstalled
- * (`revokeAllForPlugin`) or the user explicitly revokes it.
+ * (`revokeAllForPlugin`), replaced by a different archive, or the user
+ * explicitly revokes it. A replacing install offers back, in one approval, the
+ * grants the new version still asks for (#14019).
  */
 
 /**
@@ -183,6 +185,13 @@ export const PLUGIN_CAPABILITY_CONSENT_DELIVERY_TIMEOUT_MS = 10 * 1000;
 export const PLUGIN_CAPABILITY_CONSENT_RESEND_INTERVAL_MS = 2 * 1000;
 
 /**
+ * What a replacing install can offer back (#14019): anything a manifest asks
+ * for. A site is never one — no manifest declares the sites it opens, so each
+ * asks again on first use.
+ */
+export type PluginRestorableGrant = Exclude<PluginGrantKey, typeof EXTERNAL_LINK_CONSENT>;
+
+/**
  * Display-safe consent prompt pushed from main to the renderer over the typed
  * event bus (`plugin-capability:consent-request`) when a plugin first exercises
  * a gated capability. Unlike the MCP consent payload there is no args preview or
@@ -190,7 +199,7 @@ export const PLUGIN_CAPABILITY_CONSENT_RESEND_INTERVAL_MS = 2 * 1000;
  * into the consent dialog FIFO and replies via `plugin-capability:resolve-consent`,
  * correlated by `requestId`.
  */
-export interface PluginCapabilityConsentRequestEvent {
+export interface PluginCapabilityFirstUseRequestEvent {
   /** Correlation id for the matching `plugin-capability:resolve-consent` reply. */
   requestId: string;
   pluginId: string;
@@ -202,7 +211,29 @@ export interface PluginCapabilityConsentRequestEvent {
   site?: string;
   /** Plugin's manifest `capabilities[]` list — surfaced for transparency. */
   declaredCapabilities: readonly BuiltInPluginCapability[];
+  restore?: undefined;
 }
+
+/**
+ * The offer-back after a replacing install (#14019), on the same push and the
+ * same reply as a first-use prompt. The new code is a new trust decision, so
+ * nothing carries over on its own; this asks once whether the grants the
+ * previous version held, and this version still asks for, should come back.
+ * `approved-and-pin` restores them all and anything else leaves them off.
+ */
+export interface PluginCapabilityRestoreRequestEvent {
+  requestId: string;
+  pluginId: string;
+  pluginDisplayName: string;
+  /** Never empty. What each grant is for, not which scope holds it: main keeps those. */
+  restore: readonly PluginRestorableGrant[];
+  declaredCapabilities: readonly BuiltInPluginCapability[];
+  capability?: undefined;
+  site?: undefined;
+}
+
+export type PluginCapabilityConsentRequestEvent =
+  PluginCapabilityFirstUseRequestEvent | PluginCapabilityRestoreRequestEvent;
 
 /**
  * Renderer → main receipt for a `plugin-capability:consent-request` push

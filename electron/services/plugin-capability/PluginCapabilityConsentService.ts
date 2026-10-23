@@ -3,6 +3,7 @@ import {
   EXTERNAL_LINK_CONSENT,
   type PluginCapabilityConsentOutcome,
   type PluginCapabilityIdentity,
+  type PluginRestorableGrant,
   type PluginConsentSubject,
 } from "../../../shared/types/pluginCapabilityConsent.js";
 import type { PluginCapabilityConsentStore } from "./PluginCapabilityConsentStore.js";
@@ -14,7 +15,7 @@ export const PLUGIN_CAPABILITY_DENIED_PREFIX = "PERMISSION_REQUIRED";
  * Display-safe payload handed to the consent UI bridge when a first-use prompt
  * is required. Every field is renderer-safe.
  */
-export interface PluginCapabilityConsentRequest {
+export interface PluginCapabilityFirstUseRequest {
   pluginId: string;
   /** Human-readable plugin display name (manifest `displayName ?? name`). */
   pluginDisplayName: string;
@@ -23,6 +24,35 @@ export interface PluginCapabilityConsentRequest {
   site?: string;
   /** Plugin's manifest `capabilities[]` list — surfaced for transparency. */
   declaredCapabilities: readonly BuiltInPluginCapability[];
+  restore?: undefined;
+}
+
+/** The one-approval offer-back after a replacing install (#14019). */
+export interface PluginCapabilityRestoreRequest {
+  pluginId: string;
+  pluginDisplayName: string;
+  /** Never empty. */
+  restore: readonly PluginRestorableGrant[];
+  declaredCapabilities: readonly BuiltInPluginCapability[];
+  capability?: undefined;
+  site?: undefined;
+}
+
+export type PluginCapabilityConsentRequest =
+  PluginCapabilityFirstUseRequest | PluginCapabilityRestoreRequest;
+
+/** What a replacing install hands back to {@link PluginCapabilityConsentService.offerRestore}. */
+export interface PluginCapabilityRestoreOffer {
+  pluginId: string;
+  pluginDisplayName: string;
+  /** The grants to put back on approval, scopes included. A site grant is never offered. */
+  grants: readonly PluginCapabilityIdentity[];
+  declaredCapabilities: readonly BuiltInPluginCapability[];
+  /**
+   * Whether the version this offer was made for is still the one installed,
+   * asked again once the user answers.
+   */
+  isCurrent: () => boolean;
 }
 
 /** Bridge that owns the consent UI surface (renderer dialog). */
@@ -82,6 +112,80 @@ export class PluginCapabilityConsentService {
   revokeAllForPlugin(pluginId: string): boolean {
     this.purgeEpochs.set(pluginId, (this.purgeEpochs.get(pluginId) ?? 0) + 1);
     return this.consentStore.revokeAllForPlugin(pluginId);
+  }
+
+  /** Every grant a plugin holds, in every scope — read before a replacing install purges them. */
+  listGrantsForPlugin(pluginId: string): PluginCapabilityIdentity[] {
+    return this.consentStore
+      .listForPlugin(pluginId)
+      .map(({ pluginId: id, capability, site, scopeKey }) => ({
+        pluginId: id,
+        capability,
+        ...(site !== undefined ? { site } : {}),
+        scopeKey,
+      }));
+  }
+
+  /**
+   * Offer back, in one approval, the grants a replaced version held that the
+   * new version still asks for (#14019). The new code is a new trust decision —
+   * the plugin id is author-chosen and archives are unsigned — so nothing
+   * returns without the user's say; this only stops the reset being silent.
+   *
+   * Resolves whether the grants came back. Main decides what they are: the
+   * renderer answers yes or no and never names a grant. An answer only counts
+   * while the version it was asked about is still installed and the plugin has
+   * not been purged since, so an uninstall or another replacement while the
+   * dialog is open voids it. Every non-approval, including a prompt nobody
+   * could see, leaves the grants off.
+   */
+  async offerRestore(offer: PluginCapabilityRestoreOffer): Promise<boolean> {
+    const { pluginId } = offer;
+    const grants = offer.grants.filter((grant) => grant.capability !== EXTERNAL_LINK_CONSENT);
+    if (grants.length === 0) return false;
+    const bridge = this.bridge;
+    if (bridge === null) {
+      console.warn(
+        `[PluginCapabilityConsentService] no consent surface to offer back ${grants.length} permission(s) for replaced plugin "${pluginId}"; they stay off`
+      );
+      return false;
+    }
+
+    const epoch = this.purgeEpochs.get(pluginId) ?? 0;
+    let outcome: PluginCapabilityConsentOutcome;
+    try {
+      outcome = await bridge({
+        pluginId,
+        pluginDisplayName: offer.pluginDisplayName,
+        restore: restoreList(grants),
+        declaredCapabilities: offer.declaredCapabilities,
+      });
+    } catch (err) {
+      console.error("[PluginCapabilityConsentService] Consent bridge threw:", err);
+      outcome = "undeliverable";
+    }
+
+    if (outcome !== "approved-and-pin") {
+      if (outcome === "undeliverable") {
+        console.warn(
+          `[PluginCapabilityConsentService] could not offer back the permissions of replaced plugin "${pluginId}"; they stay off`
+        );
+      }
+      return false;
+    }
+    if ((this.purgeEpochs.get(pluginId) ?? 0) !== epoch || !offer.isCurrent()) {
+      console.warn(
+        `[PluginCapabilityConsentService] plugin "${pluginId}" was removed or replaced while its permissions were being offered back; not restoring them`
+      );
+      return false;
+    }
+    if (!this.consentStore.grantAll(grants)) {
+      console.error(
+        `[PluginCapabilityConsentService] restoring the permissions of plugin "${pluginId}" failed to persist`
+      );
+      return false;
+    }
+    return true;
   }
 
   /**
@@ -220,7 +324,16 @@ export class PluginCapabilityConsentService {
       // Fail closed — no UI to approve through.
       return Promise.resolve("undeliverable");
     }
-    const key = JSON.stringify([scopeKey ?? "global", pluginId, capability, site ?? null]);
+    // The purge epoch is part of the key: a call made after the plugin was
+    // replaced must not join a prompt the replaced version raised, or its
+    // answer would land under the new epoch and mint a grant for the new code.
+    const key = JSON.stringify([
+      scopeKey ?? "global",
+      pluginId,
+      capability,
+      site ?? null,
+      this.purgeEpochs.get(pluginId) ?? 0,
+    ]);
     const existing = this.inFlight.get(key);
     if (existing) return existing;
 
@@ -255,4 +368,13 @@ export class PluginCapabilityConsentService {
     this.inFlight.clear();
     this.purgeEpochs.clear();
   }
+}
+
+/** One row per thing granted: the same grant held in two scopes is one line to approve. */
+function restoreList(grants: readonly PluginCapabilityIdentity[]): PluginRestorableGrant[] {
+  const list = new Set<PluginRestorableGrant>();
+  for (const { capability } of grants) {
+    if (capability !== EXTERNAL_LINK_CONSENT) list.add(capability);
+  }
+  return [...list];
 }
