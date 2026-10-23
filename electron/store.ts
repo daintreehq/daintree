@@ -709,6 +709,15 @@ export interface StoreSchema {
   projectHiddenLaunchGroups?: Record<string, string[]>;
 
   /**
+   * Per-project skipped plugin setup steps (#13824): project id → plugin
+   * instance id → the `contributes.setup` step ids the user skipped there.
+   * Whether a step is done is never stored. Read and written only through
+   * `services/plugin/projectPluginSetupSkips.ts`. Daintree's own settings,
+   * never the repository. Same additive-key convention as above.
+   */
+  projectPluginSetupSkips?: Record<string, Record<string, string[]>>;
+
+  /**
    * Plugin instance ids whose toasts and notifications the user silenced
    * (#13818). A project plugin's instance id names its project, so its silence
    * is that project's alone. Read and written only through
@@ -1094,6 +1103,7 @@ const storeOptions = {
     projectFileEditorChoices: {},
     projectLayoutSeeds: {},
     projectHiddenLaunchGroups: {},
+    projectPluginSetupSkips: {},
     pluginNotificationSilences: [],
     hiddenSearchProviders: [],
     pluginContextProvidersOff: [],

@@ -404,7 +404,18 @@ import {
 import { markPerformance } from "../utils/performance.js";
 import { deepFreeze } from "../utils/deepFreeze.js";
 import { CHANNELS } from "../ipc/channels.js";
-import type { LoadedPluginInfo, PluginRequiredSettingsStatus } from "../../shared/types/plugin.js";
+import type {
+  LoadedPluginInfo,
+  PluginRequiredSettingsStatus,
+  PluginSetupStepCheck,
+  PluginSetupStepUiAction,
+  PluginSetupStepUiStatus,
+  PluginSetupUiStatus,
+} from "../../shared/types/plugin.js";
+import {
+  getProjectPluginSetupSkips,
+  setProjectPluginSetupStepSkipped,
+} from "./plugin/projectPluginSetupSkips.js";
 import type { PluginRecipeMetadataPatch, TerminalRecipe } from "../../shared/types/project.js";
 import type { PluginToolbarButtonId } from "../../shared/types/toolbar.js";
 import { getPluginActionAuditService } from "./PluginActionAuditService.js";
@@ -3037,10 +3048,12 @@ export class PluginService {
     const declaredSettings = manifest.contributes.settings;
     const pluginSettingsKindFlags = {
       ...(declaredSettings.length > 0 ||
-      manifest.contributes.views.some((v) => v.location === "settings")
+      manifest.contributes.views.some((v) => v.location === "settings") ||
+      (manifest.contributes.setup?.length ?? 0) > 0
         ? { hasPluginSettings: true }
         : {}),
       ...(declaredSettings.some((s) => s.required === true) ? { hasRequiredSettings: true } : {}),
+      ...((manifest.contributes.setup?.length ?? 0) > 0 ? { hasSetupSteps: true } : {}),
       // "Back up data…" on every panel of a plugin that declares a database;
       // main checks what actually exists when it is picked.
       ...((manifest.contributes.databases?.length ?? 0) > 0 ? { hasPluginDatabases: true } : {}),
@@ -6823,6 +6836,109 @@ export class PluginService {
       return;
     }
     broadcastToProjectRenderers(owningProjectId, CHANNELS.EVENTS_PUSH, event);
+  }
+
+  /**
+   * A plugin's setup checklist (#13824) as the host sees it against
+   * `projectId`: whether each setting and account step is done, each context
+   * step's clause for the renderer to evaluate, each step's action with a
+   * command in the instance's namespace, and which steps the user skipped
+   * there. Reads stored state only — nothing activates, signs in or refreshes.
+   */
+  async getSetupStatusForUi(
+    pluginId: string,
+    projectId: string | null
+  ): Promise<PluginSetupUiStatus> {
+    const manifest = (this.plugins.get(pluginId) ?? this.disabledPlugins.get(pluginId))?.manifest;
+    const steps = manifest?.contributes.setup ?? [];
+    if (!manifest || steps.length === 0) return { steps: [] };
+
+    const settingKeys = steps.flatMap((step) =>
+      step.done.kind === "setting" ? [step.done.key] : []
+    );
+    const needsAccount = steps.some((step) => step.done.kind === "account");
+    const [presence, account] = await Promise.all([
+      settingKeys.length > 0
+        ? this.settings.settingPresenceForUi(pluginId, settingKeys, projectId)
+        : Promise.resolve({} as Record<string, string>),
+      // An account file that can't be read answers for its own step, which
+      // stays outstanding; the rest of the checklist still stands.
+      needsAccount
+        ? this.accounts.getUiStatus(pluginId).catch((err: unknown) => {
+            console.warn(`[PluginService] Couldn't read "${pluginId}"'s account for setup:`, err);
+            return null;
+          })
+        : Promise.resolve(null),
+    ]);
+    const skipped = new Set(
+      projectId === null ? [] : getProjectPluginSetupSkips(projectId, pluginId)
+    );
+
+    const ownPrefix = `${manifest.name}.`;
+    const qualify = (actionId: string): string =>
+      projectIdFromPluginInstanceKey(pluginId) !== null && actionId.startsWith(ownPrefix)
+        ? `${pluginId}.${actionId.slice(ownPrefix.length)}`
+        : actionId;
+
+    return {
+      steps: steps.map((step): PluginSetupStepUiStatus => {
+        const { done, action } = step;
+        const check: PluginSetupStepCheck =
+          done.kind === "context"
+            ? { kind: "context", when: done.when }
+            : {
+                kind: "observed",
+                done:
+                  done.kind === "setting"
+                    ? presence[done.key] === "set"
+                    : account?.connected === true,
+              };
+        let uiAction: PluginSetupStepUiAction | null;
+        if (action?.kind === "command") {
+          uiAction = { kind: "command", actionId: qualify(action.actionId) };
+        } else if (action?.kind === "settings") {
+          uiAction = { kind: "settings", key: action.key ?? null };
+        } else if (done.kind === "setting") {
+          uiAction = { kind: "settings", key: done.key };
+        } else if (done.kind === "account") {
+          uiAction = { kind: "settings", key: null };
+        } else {
+          uiAction = null;
+        }
+        return {
+          id: step.id,
+          title: step.title,
+          description: step.description ?? null,
+          check,
+          action: uiAction,
+          skipped: skipped.has(step.id),
+        };
+      }),
+    };
+  }
+
+  /**
+   * Skip or restore one setup step of `pluginId` in `projectId`. Refuses a step
+   * the plugin doesn't declare, so nothing is remembered for a step that can't
+   * be shown. The project's own views re-read; no other project's skips moved.
+   */
+  setSetupStepSkippedFromUi(
+    projectId: string,
+    pluginId: string,
+    stepId: string,
+    skipped: boolean
+  ): void {
+    const manifest = (this.plugins.get(pluginId) ?? this.disabledPlugins.get(pluginId))?.manifest;
+    const stepIds = (manifest?.contributes.setup ?? []).map((step) => step.id);
+    if (!stepIds.includes(stepId)) {
+      throw new Error(`Plugin "${pluginId}" declares no setup step "${stepId}"`);
+    }
+    const changed = setProjectPluginSetupStepSkipped(projectId, pluginId, stepId, skipped, stepIds);
+    if (!changed || this.disposed) return;
+    broadcastToProjectRenderers(projectId, CHANNELS.EVENTS_PUSH, {
+      name: "plugin:settings-changed" as const,
+      payload: { pluginId },
+    });
   }
 
   /** {@link PluginSettingsManager.requiredStatusForUi}, for the renderer bridge. */

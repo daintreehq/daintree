@@ -147,6 +147,7 @@ import type {
   PluginAccountConnectResult,
   PluginAccountUiStatus,
   PluginRequiredSettingsStatus,
+  PluginSetupUiStatus,
   PluginPickPathRequest,
   PluginWorktreeStatus,
   PluginActivationResult,
@@ -2267,6 +2268,39 @@ async function handleSettingsRequiredStatus(
 }
 
 /**
+ * `pluginId`'s setup checklist (#13824) against the sender's own project. No
+ * values cross: a setting step says only whether something is stored.
+ */
+async function handleSetupStatus(
+  ctx: IpcContext,
+  pluginId: string,
+  projectId: string | null
+): Promise<PluginSetupUiStatus> {
+  if (typeof pluginId !== "string" || !isSafePluginInstanceId(pluginId)) {
+    throw new Error("plugin setup rejected: invalid plugin id");
+  }
+  assertSenderOwnsSettingsTarget(ctx, pluginId, projectId);
+  return (await getPluginService()).getSetupStatusForUi(pluginId, projectId);
+}
+
+/** Skip or restore one setup step in the SENDER's project; a skip is never remembered without one. */
+async function handleSetupStepSkippedSet(
+  ctx: IpcContext,
+  pluginId: string,
+  stepId: string,
+  skipped: boolean
+): Promise<void> {
+  if (!ctx.projectId) throw new Error("plugin setup: sender has no project");
+  if (typeof pluginId !== "string" || !isSafePluginInstanceId(pluginId)) {
+    throw new Error("plugin setup rejected: invalid plugin id");
+  }
+  if (typeof stepId !== "string") throw new Error("plugin setup: malformed step id");
+  if (typeof skipped !== "boolean") throw new Error("plugin setup: malformed skipped flag");
+  assertSenderOwnsSettingsTarget(ctx, pluginId, ctx.projectId);
+  (await getPluginService()).setSetupStepSkippedFromUi(ctx.projectId, pluginId, stepId, skipped);
+}
+
+/**
  * Project-local plugin rows for the SENDER's project.
  *
  * The project is resolved from the sender's own view registration, never from a
@@ -2765,6 +2799,12 @@ export const pluginNamespace = defineIpcNamespace({
       handleSettingsRequiredStatus,
       { withContext: true }
     ),
+    getSetupStatus: op(PLUGIN_METHOD_CHANNELS.getSetupStatus, handleSetupStatus, {
+      withContext: true,
+    }),
+    setSetupStepSkipped: op(PLUGIN_METHOD_CHANNELS.setSetupStepSkipped, handleSetupStepSkippedSet, {
+      withContext: true,
+    }),
     getAccountStatus: op(PLUGIN_METHOD_CHANNELS.getAccountStatus, handleAccountStatus, {
       withContext: true,
     }),

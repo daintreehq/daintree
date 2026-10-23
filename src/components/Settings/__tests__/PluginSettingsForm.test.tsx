@@ -160,6 +160,8 @@ const pluginApi = {
   revealSecretSetting: vi.fn(),
   pickPath: vi.fn(),
   pathExists: vi.fn(),
+  getSetupStatus: vi.fn(),
+  setSetupStepSkipped: vi.fn(),
 };
 
 function makePlugin(settings: SettingDefinition[]): LoadedPluginInfo {
@@ -213,6 +215,8 @@ beforeEach(() => {
   pluginApi.getSettingValues.mockResolvedValue(uiValues());
   pluginApi.pickPath.mockResolvedValue(null);
   pluginApi.pathExists.mockResolvedValue(true);
+  pluginApi.getSetupStatus.mockResolvedValue({ steps: [] });
+  pluginApi.setSetupStepSkipped.mockResolvedValue(undefined);
   (window as unknown as { electron: unknown }).electron = { plugin: pluginApi };
 });
 
@@ -1376,5 +1380,76 @@ describe("PluginSettingsForm after the plugin reloads with new declarations", ()
     );
 
     await waitFor(() => expect(pluginApi.getSettingValues).toHaveBeenCalledTimes(2));
+  });
+});
+
+describe("PluginSettingsForm setup checklist (#13824)", () => {
+  function withSetup(plugin: LoadedPluginInfo): LoadedPluginInfo {
+    return {
+      ...plugin,
+      manifest: {
+        ...plugin.manifest,
+        contributes: {
+          ...plugin.manifest.contributes,
+          setup: [
+            { id: "sync", title: "Run the first sync", done: { kind: "context", when: "x" } },
+          ],
+        },
+      },
+    } as LoadedPluginInfo;
+  }
+
+  const STATUS = {
+    steps: [
+      {
+        id: "sync",
+        title: "Run the first sync",
+        description: null,
+        check: { kind: "observed", done: false },
+        action: null,
+        skipped: false,
+      },
+    ],
+  };
+
+  it("puts the checklist above the plugin's own fields", async () => {
+    currentProjectId = "proj-1";
+    pluginApi.getSetupStatus.mockResolvedValue(STATUS);
+    render(
+      <PluginSettingsForm
+        plugin={withSetup(makePlugin([{ id: "apiKey", type: "string", label: "API key" }]))}
+      />
+    );
+
+    const group = await screen.findByRole("group", { name: "Setup · 0 of 1" });
+    const field = screen.getByLabelText("API key");
+    expect(group.compareDocumentPosition(field) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(pluginApi.getSetupStatus).toHaveBeenCalledWith("acme.test", "proj-1");
+
+    fireEvent.click(screen.getByRole("button", { name: "Skip: Run the first sync" }));
+    expect(pluginApi.setSetupStepSkipped).toHaveBeenCalledWith("acme.test", "sync", true);
+  });
+
+  it("shows a checklist for a plugin with nothing else to configure", async () => {
+    pluginApi.getSetupStatus.mockResolvedValue(STATUS);
+    render(<PluginSettingsForm plugin={withSetup(makePlugin([]))} />);
+    expect(await screen.findByRole("group", { name: "Setup · 0 of 1" })).toBeTruthy();
+  });
+
+  it("shows what it can see with no project open, and offers no skip", async () => {
+    pluginApi.getSetupStatus.mockResolvedValue(STATUS);
+    render(<PluginSettingsForm plugin={withSetup(makePlugin([]))} />);
+    await screen.findByRole("group", { name: "Setup · 0 of 1" });
+    expect(screen.queryByRole("button", { name: /^Skip/ })).toBeNull();
+  });
+
+  it("keeps an installed plugin's checklist out of Project settings", async () => {
+    currentProjectId = "proj-1";
+    pluginApi.getSetupStatus.mockResolvedValue(STATUS);
+    const { container } = render(
+      <PluginSettingsForm plugin={withSetup(makePlugin([]))} viewScope="project" />
+    );
+    expect(container.textContent).toBe("");
+    expect(pluginApi.getSetupStatus).not.toHaveBeenCalled();
   });
 });

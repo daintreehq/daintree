@@ -2003,6 +2003,14 @@ export interface GeneratedIpcInvokeMap {
     ];
     result: void;
   };
+  "plugin:setup-status": {
+    args: [pluginId: string, projectId: string | null];
+    result: import("../plugin.js").PluginSetupUiStatus;
+  };
+  "plugin:setup-step-skipped-set": {
+    args: [pluginId: string, stepId: string, skipped: boolean];
+    result: void;
+  };
   "plugin:task-cancel": {
     args: [pluginId: string, taskId: string];
     result: boolean;

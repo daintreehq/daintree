@@ -3453,6 +3453,28 @@ describe("cross-project plugin control", () => {
     ).rejects.toThrow(/invalid plugin id/);
   });
 
+  it("reads and skips setup steps only for the sender's own project (#13824)", async () => {
+    mockGetProjectForWebContents.mockReturnValue(PROJECT_B);
+    await expect(
+      getHandler("plugin:setup-status")({ sender: { id: 1 } }, INSTANCE_A, PROJECT_A)
+    ).rejects.toThrow(/different project/);
+    await expect(
+      getHandler("plugin:setup-status")({ sender: { id: 1 } }, "../evil", null)
+    ).rejects.toThrow(/invalid plugin id/);
+    await expect(
+      getHandler("plugin:setup-step-skipped-set")({ sender: { id: 1 } }, INSTANCE_A, "sync", true)
+    ).rejects.toThrow(/different project/);
+    await expect(
+      getHandler("plugin:setup-step-skipped-set")({ sender: { id: 1 } }, "acme.t", "sync", "yes")
+    ).rejects.toThrow(/malformed skipped flag/);
+
+    // A skip is remembered per project, so a window with none can't make one.
+    mockGetProjectForWebContents.mockReturnValue(null);
+    await expect(
+      getHandler("plugin:setup-step-skipped-set")({ sender: { id: 1 } }, "acme.t", "sync", true)
+    ).rejects.toThrow(/no project/);
+  });
+
   it("rejects a malformed project panel kind id rather than skipping the check", async () => {
     mockGetProjectForWebContents.mockReturnValue(PROJECT_B);
     await expect(

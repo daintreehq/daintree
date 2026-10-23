@@ -704,6 +704,8 @@ export const CHANNEL_LOCALITY = {
   "plugin:settings-required-status": "host",
   "plugin:task-cancel": "host",
   "plugin:task-dismiss": "host",
+  "plugin:setup-status": "host",
+  "plugin:setup-step-skipped-set": "host",
   "plugin:account-status": "host",
   "plugin:account-disconnect": "host",
   // Signing in needs the browser and the keychain on the same machine, and a

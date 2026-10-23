@@ -79,6 +79,7 @@ import {
 } from "../../shared/config/actionIds.js";
 import { KEY_ACTION_VALUES } from "../../shared/types/keymap.js";
 import { parse as parseWhenClause } from "../../shared/utils/whenClause/parser.js";
+import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 import type { ASTNode as WhenClauseNode } from "../../shared/utils/whenClause/types.js";
 import type {
   PluginManifest,
@@ -1996,6 +1997,45 @@ export const PluginAccountContributionSchema = z.discriminatedUnion("kind", [
     .strict(),
 ]);
 
+/** Setting ids carry no length cap of their own, so a reference to one takes none either. */
+const SetupSettingKeySchema = z.string().min(1).regex(SAFE_ID_PATTERN);
+
+export const SetupStepSettingDoneSchema = z
+  .object({ kind: z.literal("setting"), key: SetupSettingKeySchema })
+  .strict();
+export const SetupStepAccountDoneSchema = z.object({ kind: z.literal("account") }).strict();
+export const SetupStepContextDoneSchema = z
+  .object({ kind: z.literal("context"), when: z.string().trim().min(1).max(1024) })
+  .strict();
+export const SetupStepSettingsActionSchema = z
+  .object({ kind: z.literal("settings"), key: SetupSettingKeySchema.optional() })
+  .strict();
+export const SetupStepCommandActionSchema = z
+  .object({ kind: z.literal("command"), actionId: z.string().min(1).max(200) })
+  .strict();
+
+/**
+ * `contributes.setup` manifest entry (#13824). A step names how the host tells
+ * it's done and what clicking it does; whether those references resolve — a
+ * declared setting, a declared account, a clause that parses, the plugin's own
+ * command — is checked by the manifest-level `superRefine`.
+ */
+export const SetupStepContributionSchema = z
+  .object({
+    id: z.string().min(1).max(64).regex(SAFE_ID_PATTERN),
+    title: z.string().trim().min(1).max(80),
+    description: z.string().trim().min(1).max(200).optional(),
+    done: z.discriminatedUnion("kind", [
+      SetupStepSettingDoneSchema,
+      SetupStepAccountDoneSchema,
+      SetupStepContextDoneSchema,
+    ]),
+    action: z
+      .discriminatedUnion("kind", [SetupStepSettingsActionSchema, SetupStepCommandActionSchema])
+      .optional(),
+  })
+  .strict();
+
 /**
  * Upper bounds inside one `contributes.tours` entry. Like
  * {@link MANIFEST_CONTRIBUTION_CAPS} these reject pathological manifests rather
@@ -2741,6 +2781,8 @@ export const MANIFEST_CONTRIBUTION_CAPS = {
   databases: 16,
   // Each one runs, in sequence, before a new worktree is ready.
   worktreeSetupSteps: 10,
+  // A checklist the user reads through; a long one isn't setup any more.
+  setup: 10,
 } as const;
 
 /**
@@ -3261,6 +3303,10 @@ function buildPluginManifestSchema(origin: PluginOrigin) {
               .array(WorktreeSetupStepContributionSchema)
               .max(MANIFEST_CONTRIBUTION_CAPS.worktreeSetupSteps)
               .default([]),
+            setup: z
+              .array(SetupStepContributionSchema)
+              .max(MANIFEST_CONTRIBUTION_CAPS.setup)
+              .default([]),
             // Not an array, so it carries no MANIFEST_CONTRIBUTION_CAPS entry —
             // three optional fixed slots are structurally bounded already.
             surfaces: SurfaceContributionsSchema.default({}),
@@ -3300,6 +3346,7 @@ function buildPluginManifestSchema(origin: PluginOrigin) {
             tours: [],
             databases: [],
             worktreeSetupSteps: [],
+            setup: [],
             surfaces: {},
           }))
       ),
@@ -4049,6 +4096,7 @@ function buildPluginManifestSchema(origin: PluginOrigin) {
       reportDuplicateIds("tours", manifest.contributes.tours);
       reportDuplicateIds("databases", manifest.contributes.databases);
       reportDuplicateIds("worktreeSetupSteps", manifest.contributes.worktreeSetupSteps);
+      reportDuplicateIds("setup", manifest.contributes.setup);
 
       // Cross-reference integrity — a contribution that names another by id must
       // point at one that exists in the same manifest, else the reference dangles
@@ -4067,6 +4115,77 @@ function buildPluginManifestSchema(origin: PluginOrigin) {
         manifest.contributes.views.filter((view) => view.location === "sidebar").map((v) => v.id)
       );
       const panelIds = new Set(manifest.contributes.panels.map((panel) => panel.id));
+
+      // A setup step's check and action must each name something the host can
+      // see or run, or the step could never be finished (#13824). A command is
+      // the plugin's own, under the same rules as a panel menu's.
+      manifest.contributes.setup.forEach((step, index) => {
+        const path = ["contributes", "setup", index] as const;
+        const { done, action } = step;
+        if (done.kind === "setting" && !settingIds.has(done.key)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: [...path, "done", "key"],
+            message: `Setup step "${step.id}" is done when setting "${done.key}" is set, but no contributes.settings[].id matches it.`,
+            params: { errorCode: "setup_setting_unknown" },
+          });
+        }
+        if (done.kind === "account" && manifest.contributes.account === undefined) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: [...path, "done", "kind"],
+            message: `Setup step "${step.id}" is done when the account is connected, but the plugin declares no contributes.account.`,
+            params: { errorCode: "setup_account_undeclared" },
+          });
+        }
+        if (done.kind === "context") {
+          try {
+            parseWhenClause(done.when);
+          } catch (err) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              path: [...path, "done", "when"],
+              message: `Setup step "${step.id}" has a when clause that doesn't parse: ${formatErrorMessage(err, "unparseable expression")}`,
+              params: { errorCode: "setup_when_invalid" },
+            });
+          }
+        }
+        if (
+          action?.kind === "settings" &&
+          action.key !== undefined &&
+          !settingIds.has(action.key)
+        ) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: [...path, "action", "key"],
+            message: `Setup step "${step.id}" opens setting "${action.key}", but no contributes.settings[].id matches it.`,
+            params: { errorCode: "setup_setting_unknown" },
+          });
+        }
+        if (action?.kind === "command") {
+          const { actionId } = action;
+          const actionPath = [...path, "action", "actionId"];
+          if (
+            !actionId.startsWith(ownNamespacePrefix) ||
+            actionId.length === ownNamespacePrefix.length ||
+            !PANEL_MENU_ACTION_ID.test(actionId)
+          ) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              path: actionPath,
+              message: `Setup step "${step.id}" action.actionId "${actionId}" must be one of this plugin's own commands, written "${manifest.name}.<id>".`,
+              params: { errorCode: "setup_command_not_own" },
+            });
+          } else if (declaredCommandActionIds.size > 0 && !declaredCommandActionIds.has(actionId)) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              path: actionPath,
+              message: `Setup step "${step.id}" action.actionId "${actionId}" is in this plugin's "${manifest.name}" namespace but matches no entry in contributes.commands — likely a typo for a declared command.`,
+              params: { errorCode: "action_id_undeclared_command" },
+            });
+          }
+        }
+      });
 
       // `forgeProvider.settingsScopeRef` → a declared setting; `viewRefs[]` →
       // declared views. Both were validated for shape only before (#10620).

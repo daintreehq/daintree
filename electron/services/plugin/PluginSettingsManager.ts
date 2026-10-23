@@ -31,6 +31,9 @@ export function assertSettingsKey(
   }
 }
 
+/** What is stored for one declared setting, without its value. */
+export type SettingPresence = "set" | "missing" | "unreadable";
+
 interface SettingsSubscriber {
   key: string;
   scope: PluginSettingsScope;
@@ -388,22 +391,22 @@ export class PluginSettingsManager {
   }
 
   /**
-   * Declared `required: true` settings with nothing stored, in manifest order.
-   * A declared `default` never satisfies one — the user has to choose — and a
-   * key whose scope has no target (a project scope with no project) is missing,
-   * since nothing the plugin reads there can be set.
+   * Whether each of `defs` has a value stored, in order. A declared `default`
+   * never counts — the user has to choose — and a key whose scope has no
+   * target (a project scope with no project) is missing, since nothing the
+   * plugin reads there can be set.
    */
-  private async requiredStatus(
+  private async presence(
     pluginId: string,
+    defs: readonly SettingDefinition[],
     resolveFile: (def: SettingDefinition, scope: PluginSettingsScope) => string | null | undefined
-  ): Promise<PluginRequiredSettingsStatus> {
-    const required = this.uiSettingDefinitions(pluginId).filter((def) => def.required === true);
+  ): Promise<SettingPresence[]> {
     // Resolved up front, outside the per-key guard: a path that can't be
     // resolved at all (a foreign project, a malformed id) is a refused request,
     // not an unreadable value, and must reach the caller as one.
-    const files = required.map((def) => resolveFile(def, def.scope ?? "user"));
-    const states = await Promise.all(
-      required.map(async (def, index): Promise<"set" | "missing" | "unreadable"> => {
+    const files = defs.map((def) => resolveFile(def, def.scope ?? "user"));
+    return Promise.all(
+      defs.map(async (def, index): Promise<SettingPresence> => {
         const filePath = files[index];
         if (!filePath) return "missing";
         const store = this.getOrCreateSettingsStore(pluginId, filePath);
@@ -423,6 +426,15 @@ export class PluginSettingsManager {
         }
       })
     );
+  }
+
+  /** Declared `required: true` settings with nothing stored, in manifest order. */
+  private async requiredStatus(
+    pluginId: string,
+    resolveFile: (def: SettingDefinition, scope: PluginSettingsScope) => string | null | undefined
+  ): Promise<PluginRequiredSettingsStatus> {
+    const required = this.uiSettingDefinitions(pluginId).filter((def) => def.required === true);
+    const states = await this.presence(pluginId, required, resolveFile);
     const idsIn = (state: "missing" | "unreadable") =>
       required.filter((_, index) => states[index] === state).map((def) => def.id);
     const labels: Record<string, string> = {};
@@ -455,6 +467,24 @@ export class PluginSettingsManager {
     return this.requiredStatus(pluginId, (def, scope) =>
       this.resolveUiSettingsFilePathForKey(pluginId, def.id, scope, projectId)
     );
+  }
+
+  /**
+   * Whether each declared setting in `keys` has a value stored, for a renderer
+   * pinned to its own project like the form's reads. An undeclared key is
+   * left out.
+   */
+  async settingPresenceForUi(
+    pluginId: string,
+    keys: readonly string[],
+    projectId: string | null
+  ): Promise<Record<string, SettingPresence>> {
+    const wanted = new Set(keys);
+    const defs = this.uiSettingDefinitions(pluginId).filter((def) => wanted.has(def.id));
+    const states = await this.presence(pluginId, defs, (def, scope) =>
+      this.resolveUiSettingsFilePathForKey(pluginId, def.id, scope, projectId)
+    );
+    return Object.fromEntries(defs.map((def, index) => [def.id, states[index]!]));
   }
 
   clearPluginSettingsState(pluginId: string): void {
