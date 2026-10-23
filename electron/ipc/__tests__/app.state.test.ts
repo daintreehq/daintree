@@ -1548,7 +1548,7 @@ describe("app:boot handler", () => {
 
     it("still uses the cache when the seed record can't be read", async () => {
       setCurrentProject();
-      vi.mocked(getProjectLayoutSeed).mockImplementation(() => {
+      vi.mocked(getProjectLayoutSeed).mockImplementationOnce(() => {
         throw new Error("EACCES");
       });
       const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
@@ -1916,6 +1916,48 @@ describe("app:hydrate host fields", () => {
       "legacyWorkspaceStateOwnerId",
       expect.anything()
     );
+  });
+
+  it("records a remote Shell view's first open of a host project as one (#13782)", async () => {
+    // The fresh state this hydrate writes is the host's, so a later local open
+    // would find it and could never count as first.
+    const { getIpcDispatcher, _resetIpcDispatcherForTesting } = await import("../dispatcher.js");
+    const { wrapSuccess } = await import("../../../shared/utils/ipcErrorSerialization.js");
+    vi.mocked(projectStore.getProjectById).mockReturnValueOnce({
+      id: "p-remote",
+      name: "R",
+      path: "/r",
+    } as never);
+    vi.mocked(projectStore.getProjectStateWithRecovery).mockResolvedValueOnce({
+      state: null,
+    } as never);
+    _resetIpcDispatcherForTesting();
+    const dispatcher = getIpcDispatcher();
+    dispatcher.setInvokeEnveloper(async (_c, _a, call) => wrapSuccess(await call()));
+    const release = dispatcher.allowHybridOverLink("app:hydrate");
+    const cleanup = registerAppStateHandlers();
+    const endpoint = {
+      endpointId: "s1:view-3",
+      clientId: "client-1",
+      projectId: "p-remote",
+      kind: "remote-view" as const,
+      handle: -6,
+      send: vi.fn(),
+      request: vi.fn(),
+      onClose: vi.fn(() => ({ dispose: () => undefined })),
+      isClosed: () => false,
+    };
+
+    await dispatcher.invokeForEndpoint(
+      { endpoint, client: { clientId: "client-1", kind: "remote" } as never },
+      "app:hydrate",
+      []
+    );
+
+    cleanup();
+    release();
+    _resetIpcDispatcherForTesting();
+    expect(captureProjectLayoutSeed).toHaveBeenCalledWith("p-remote", true);
   });
 });
 

@@ -582,6 +582,75 @@ describe("applyPluginLayout", () => {
       expect(panels.t1?.location).toBe("dock");
     });
 
+    describe("sharing a tab group with seeded entries", () => {
+      beforeEach(() => {
+        usePluginLayoutsStore.setState({
+          layouts: [
+            layout({
+              entries: [
+                {
+                  target: { type: "browser", url: "http://localhost:3000/" },
+                  location: "grid",
+                  tabGroup: "main",
+                },
+                {
+                  target: { type: "panel", panelKindId: "acme.records" },
+                  location: "grid",
+                  tabGroup: "side",
+                },
+                {
+                  target: { type: "recipe", recipeId: "acme.pair" },
+                  location: "grid",
+                  tabGroup: "main",
+                },
+              ],
+            }),
+          ],
+        });
+      });
+
+      async function startApproved() {
+        const pending = startPluginLayoutRecipe("acme.workspace", "acme.pair", userCtx);
+        await Promise.resolve();
+        useLayoutApplyConfirmStore.getState().resolveCurrent(true);
+        return pending;
+      }
+
+      it("joins the seeded page's tab group, leaving other entries alone", async () => {
+        seed([
+          {
+            id: "page",
+            kind: "browser",
+            location: "grid",
+            worktreeId: "wt-1",
+            browserUrl: "http://localhost:3000/",
+          },
+          { id: "t1", kind: "terminal", location: "dock", worktreeId: "wt-1" },
+          { id: "t2", kind: "terminal", location: "dock", worktreeId: "wt-1" },
+        ]);
+        panelIds = ["page"];
+
+        await startApproved();
+
+        expect(addPanel).not.toHaveBeenCalled();
+        expect(createTabGroup).toHaveBeenCalledWith("grid", "wt-1", ["page", "t1", "t2"], "page");
+      });
+
+      it("never reopens a seeded page the user has closed", async () => {
+        seed([
+          { id: "t1", kind: "terminal", location: "dock", worktreeId: "wt-1" },
+          { id: "t2", kind: "terminal", location: "dock", worktreeId: "wt-1" },
+        ]);
+        panelIds = [];
+
+        const result = await startApproved();
+
+        expect(addPanel).not.toHaveBeenCalled();
+        expect(result).toEqual({ status: "applied", panelIds: ["t1", "t2"], failures: [] });
+        expect(createTabGroup).toHaveBeenCalledWith("grid", "wt-1", ["t1", "t2"], "t1");
+      });
+    });
+
     it("starts nothing when the user declines a waiting recipe", async () => {
       const pending = startPluginLayoutRecipe("acme.workspace", "acme.pair", userCtx);
       await Promise.resolve();

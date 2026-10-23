@@ -137,6 +137,22 @@ describe("ProjectLayoutSeedNotice (#13782)", () => {
     expect(screen.getByRole("button", { name: "Start Dev server" })).toBeTruthy();
   });
 
+  it("keeps a recipe waiting when it started nothing", async () => {
+    // `recipe.run` reported the failure itself; the button is how to try again.
+    startPluginLayoutRecipe.mockResolvedValue({
+      status: "applied",
+      panelIds: [],
+      failures: ["Recipe launch failed: spawn ENOENT"],
+    });
+    useProjectLayoutSeedStore.setState({ status: "settled", waiting: WAITING });
+    renderNotice();
+
+    fireEvent.click(screen.getByRole("button", { name: "Start Dev server" }));
+    await settle();
+
+    expect(screen.getByRole("button", { name: "Start Dev server" })).toBeTruthy();
+  });
+
   it("reports a recipe that couldn't start, with a retry", async () => {
     startPluginLayoutRecipe.mockRejectedValue(new Error("Recipe acme.dev isn't available"));
     useProjectLayoutSeedStore.setState({ status: "settled", waiting: WAITING });

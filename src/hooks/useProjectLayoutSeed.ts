@@ -156,8 +156,12 @@ export function useProjectLayoutSeed(enabled: boolean): void {
       usePluginLayoutsStore.subscribe((state, prev) => {
         if (state.layouts !== prev.layouts) evaluate();
       }),
+      // Only while pending, so the store's busier updates cost nothing after.
+      // Locations count as well as ids: a panel brought out of the background
+      // is opened without a new id.
       usePanelStore.subscribe((state, prev) => {
-        if (state.panelIds !== prev.panelIds) evaluate();
+        if (seed().status !== "pending") return;
+        if (state.panelIds !== prev.panelIds || state.panelsById !== prev.panelsById) evaluate();
       }),
       useWorktreeSelectionStore.subscribe((state, prev) => {
         if (state.activeWorktreeId !== prev.activeWorktreeId) evaluate();

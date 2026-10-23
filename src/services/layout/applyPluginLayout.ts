@@ -105,12 +105,16 @@ function sameUrl(a: string | undefined, b: string): boolean {
   }
 }
 
-/** Open one entry, or find the panel it already has, and return the panel ids it covers. */
+/**
+ * Open one entry, or find the panel it already has, and return the panel ids it
+ * covers. `reuseOnly` finds a panel or page without ever opening one.
+ */
 async function openEntry(
   layout: PluginLayoutConfig,
   entry: PluginLayoutEntry,
   worktreeId: string | undefined,
-  approvedDigests: ReadonlyMap<string, string>
+  approvedDigests: ReadonlyMap<string, string>,
+  reuseOnly: boolean
 ): Promise<string[]> {
   const state = usePanelStore.getState();
   const live = state.panelIds.map((id) => state.panelsById[id]).filter(isPlaceable);
@@ -123,6 +127,7 @@ async function openEntry(
     // shell must never start without the confirmation having listed it.
     const config = getPanelKindConfig(kind);
     if (config?.extensionId !== layout.pluginId || config.hasPty === true) {
+      if (reuseOnly) return [];
       throw new Error(`Panel "${kind}" isn't available`);
     }
     // Reused the way `panel.openPluginPanel` reuses: a project panel is the
@@ -135,6 +140,7 @@ async function openEntry(
         (projectScoped || (panel.worktreeId ?? undefined) === panelWorktreeId)
     );
     if (existing) return [existing.id];
+    if (reuseOnly) return [];
     const id = await state.addPanel(
       // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- documented extension-panel spawn boundary, as in panel.openPluginPanel
       {
@@ -156,6 +162,7 @@ async function openEntry(
         sameUrl(panel.browserUrl, target.url)
     );
     if (existing) return [existing.id];
+    if (reuseOnly) return [];
     const id = await state.addPanel({
       kind: "browser",
       browserUrl: target.url,
@@ -294,7 +301,8 @@ function arrange(placed: ReadonlyArray<{ entry: PluginLayoutEntry; ids: string[]
 async function applyResolved(
   layoutId: string,
   approvedDigests: ReadonlyMap<string, string>,
-  include: EntryFilter
+  include: EntryFilter,
+  reuseOnly: EntryFilter = () => false
 ): Promise<Extract<LayoutApplyResult, { status: "applied" }>> {
   // Read again at apply time: a confirmation can outlast the plugin's reload,
   // and the worktree the user is looking at may have changed while it was open.
@@ -314,7 +322,10 @@ async function applyResolved(
   for (const entry of layout.entries) {
     if (!include(entry)) continue;
     try {
-      placed.push({ entry, ids: await openEntry(layout, entry, worktreeId, approvedDigests) });
+      placed.push({
+        entry,
+        ids: await openEntry(layout, entry, worktreeId, approvedDigests, reuseOnly(entry)),
+      });
     } catch (error) {
       const reason = formatErrorMessage(error, "Couldn't open a layout entry");
       failures.push(reason);
@@ -355,14 +366,15 @@ async function applyResolved(
 export async function applyPluginLayout(
   layoutId: string,
   ctx: ActionContext,
-  include: EntryFilter = everyEntry
+  include: EntryFilter = everyEntry,
+  reuseOnly?: EntryFilter
 ): Promise<LayoutApplyResult> {
   if (ctx.dispatchSource === "agent") {
     throw new Error("Layouts are applied by the user or by the plugin that declares them");
   }
   const layout = resolveLayout(layoutId, ctx);
   const recipes = resolveLayoutRecipes(layout, include);
-  if (recipes.length === 0) return applyResolved(layout.id, new Map(), include);
+  if (recipes.length === 0) return applyResolved(layout.id, new Map(), include, reuseOnly);
 
   const approvedDigests = new Map(
     recipes.map((recipe) => [recipe.id, recipeApprovalDigest(recipe.terminals)])
@@ -380,13 +392,13 @@ export async function applyPluginLayout(
   if (ctx.dispatchSource === "plugin") {
     void approval
       .then((approved) =>
-        approved ? applyResolved(layout.id, approvedDigests, include) : undefined
+        approved ? applyResolved(layout.id, approvedDigests, include, reuseOnly) : undefined
       )
       .catch((error: unknown) => notifyApplyFailed(layout.name, error));
     return { status: "awaiting-confirmation" };
   }
   if (!(await approval)) return { status: "cancelled" };
-  return applyResolved(layout.id, approvedDigests, include);
+  return applyResolved(layout.id, approvedDigests, include, reuseOnly);
 }
 
 const isRecipeEntry: EntryFilter = (entry) => entry.target.type === "recipe";
@@ -414,17 +426,28 @@ export async function seedPluginLayout(
 /**
  * Start one recipe a seeded layout left waiting: the layout's own confirmation
  * lists its terminals, and nothing starts until the user approves. Its
- * terminals go where the layout's entry puts them.
+ * terminals go where the layout's entry puts them, into the tab group it
+ * shares with the seeded panels and pages still open; one the user has closed
+ * since is not opened again.
  */
 export function startPluginLayoutRecipe(
   layoutId: string,
   recipeId: string,
   ctx: ActionContext
 ): Promise<LayoutApplyResult> {
+  const isThisRecipe: EntryFilter = (entry) =>
+    entry.target.type === "recipe" && entry.target.recipeId === recipeId;
+  const entries = usePluginLayoutsStore.getState().layouts.find((l) => l.id === layoutId)?.entries;
+  const groups = new Set(
+    (entries ?? []).filter(isThisRecipe).flatMap((entry) => entry.tabGroup ?? [])
+  );
   return applyPluginLayout(
     layoutId,
     ctx,
-    (entry) => entry.target.type === "recipe" && entry.target.recipeId === recipeId
+    (entry) =>
+      isThisRecipe(entry) ||
+      (!isRecipeEntry(entry) && entry.tabGroup !== undefined && groups.has(entry.tabGroup)),
+    (entry) => !isRecipeEntry(entry)
   );
 }
 

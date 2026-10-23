@@ -148,7 +148,9 @@ describe("useProjectLayoutSeed (#13782)", () => {
   it("offers instead once the user has opened something, for good", async () => {
     mount();
     await flush();
-    act(() => panelStore.setState({ panelIds: ["mine"], panelsById: { mine: { location: "grid" } } }));
+    act(() =>
+      panelStore.setState({ panelIds: ["mine"], panelsById: { mine: { location: "grid" } } })
+    );
     await flush();
     expect(record?.status).toBe("offered");
 
@@ -174,6 +176,17 @@ describe("useProjectLayoutSeed (#13782)", () => {
     arrive([layout()]);
     await flush();
     expect(seedPluginLayout).not.toHaveBeenCalled();
+    expect(record?.status).toBe("offered");
+  });
+
+  it("counts a panel brought out of the background as opened", async () => {
+    // Same ids, new location: no id is added when a parked panel comes back.
+    const ids = ["parked"];
+    panelStore.setState({ panelIds: ids, panelsById: { parked: { location: "background" } } });
+    mount();
+    await flush();
+    act(() => panelStore.setState({ panelIds: ids, panelsById: { parked: { location: "grid" } } }));
+    await flush();
     expect(record?.status).toBe("offered");
   });
 

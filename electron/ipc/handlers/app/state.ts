@@ -331,10 +331,7 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
     // state read this fast path skips, so the cache cannot stand in for that
     // hydrate either. Once per project, ever.
     const layoutSeedUndecided =
-      currentProject !== null &&
-      !forRemoteShell &&
-      workspaceId !== null &&
-      isLayoutSeedUndecided(workspaceId);
+      currentProject !== null && workspaceId !== null && isLayoutSeedUndecided(workspaceId);
     const cacheEligible =
       Boolean(workspaceId) &&
       panelFilter === null &&
@@ -492,11 +489,12 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
       const { state: projectState, quarantinedPath } =
         await projectStore.getProjectStateWithRecovery(workspaceId);
       projectStateQuarantinedPath = quarantinedPath;
-      if (currentProject !== null && !forRemoteShell) {
+      if (currentProject !== null) {
         // Read before this hydrate writes the project's fresh state below. A
         // null that hid a corrupt or newer-schema file, a safe-mode boot, and a
         // project inheriting legacy or crash-restored terminals all have a
-        // history, so none of them is a first open.
+        // history, so none of them is a first open. A remote Shell's view
+        // counts too: the state it starts is this host's, written below.
         const inheritsLegacyTerminals =
           canInheritLegacyWorkspaceState &&
           Array.isArray(globalAppState.terminals) &&

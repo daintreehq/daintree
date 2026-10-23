@@ -681,6 +681,8 @@ export const CHANNEL_LOCALITY = {
   "plugin:project-surface-choice-set": "host",
   "plugin:project-surface-choices-set": "host",
   "plugin:project-surfaces-get": "host",
+  "plugin:project-layout-seed-get": "host",
+  "plugin:project-layout-seed-advance": "host",
   "plugin:project-visibility-get": "host",
   "plugin:project-visibility-set": "host",
   "plugin:recipe-metadata-update": "host",

@@ -15,7 +15,10 @@ import { notify } from "@/lib/notify";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { logWarn } from "@/utils/logger";
 
-const BANNER_CLASS = "rounded-[var(--radius-sm)] border border-border-default bg-surface-panel";
+// On the banner itself, with no wrapper of its own: the banner hands focus to
+// what survives in its parent when it leaves, and a wrapper would leave with it.
+const BANNER_CLASS =
+  "mx-1 mt-1 shrink-0 rounded-[var(--radius-sm)] border border-border-default bg-surface-panel";
 
 /**
  * A project plugin's first-open layout (#13782), at the top of the panel grid
@@ -61,35 +64,33 @@ function NoticeBody() {
   const offered = status === "offered" ? selectProjectDefaultLayout(layouts) : null;
   if (offered !== null) {
     return (
-      <div className="mx-1 mt-1 shrink-0">
-        <InlineStatusBanner
-          icon={LayoutTemplate}
-          layout="strip"
-          title={`${offered.pluginName} has a layout for this project`}
-          description={
-            offered.entries.some((entry) => entry.target.type === "recipe")
-              ? "Its terminals wait for you to start them."
-              : undefined
-          }
-          severity="neutral"
-          role="status"
-          actions={[
-            {
-              id: "open",
-              label: `Open ${offered.pluginName}'s layout`,
-              variant: "primary",
-              onClick: () => run("open", () => openOfferedLayout(offered)),
-              loading: busy === "open",
-              disabled: busy !== null && busy !== "open",
-            },
-          ]}
-          className={BANNER_CLASS}
-          onClose={() => run("dismiss", dismissLayoutOffer)}
-          closeDisabled={busy !== null}
-          closeAriaLabel="Dismiss"
-          closeTitle="Dismiss — the layout stays in the command palette"
-        />
-      </div>
+      <InlineStatusBanner
+        icon={LayoutTemplate}
+        layout="strip"
+        title={`${offered.pluginName} has a layout for this project`}
+        description={
+          offered.entries.some((entry) => entry.target.type === "recipe")
+            ? "Its terminals wait for you to start them."
+            : undefined
+        }
+        severity="neutral"
+        role="status"
+        actions={[
+          {
+            id: "open",
+            label: `Open ${offered.pluginName}'s layout`,
+            variant: "primary",
+            onClick: () => run("open", () => openOfferedLayout(offered)),
+            loading: busy === "open",
+            disabled: busy !== null && busy !== "open",
+          },
+        ]}
+        className={BANNER_CLASS}
+        onClose={() => run("dismiss", dismissLayoutOffer)}
+        closeDisabled={busy !== null}
+        closeAriaLabel="Dismiss"
+        closeTitle="Dismiss — the layout stays in the command palette"
+      />
     );
   }
 
@@ -102,7 +103,12 @@ function NoticeBody() {
     run(recipeId, () =>
       startPluginLayoutRecipe(layoutId, recipeId, { dispatchSource: "user" }).then(
         (result) => {
-          if (result.status === "applied") recipeStarted(recipeId);
+          // A recipe that started nothing comes back applied with a failure,
+          // which `recipe.run` or the layout has already reported; its button
+          // stays so the user can try again.
+          if (result.status === "applied" && result.failures.length === 0) {
+            recipeStarted(recipeId);
+          }
         },
         (error: unknown) => {
           notify({
@@ -118,28 +124,26 @@ function NoticeBody() {
     );
 
   return (
-    <div className="mx-1 mt-1 shrink-0">
-      <InlineStatusBanner
-        icon={LayoutTemplate}
-        layout="strip"
-        title={`Opened ${waiting.layoutName} from ${waiting.pluginName}`}
-        description="Its terminals haven't started. Start each one when you're ready."
-        severity="neutral"
-        role="status"
-        actions={waiting.recipes.map((recipe): BannerAction => ({
-          id: recipe.id,
-          label: `Start ${recipe.name}`,
-          variant: "primary",
-          onClick: () => start(recipe.id),
-          loading: busy === recipe.id,
-          disabled: busy !== null && busy !== recipe.id,
-        }))}
-        className={BANNER_CLASS}
-        onClose={() => setWaiting(null)}
-        closeDisabled={busy !== null}
-        closeAriaLabel="Dismiss"
-        closeTitle="Dismiss — the layout stays in the command palette"
-      />
-    </div>
+    <InlineStatusBanner
+      icon={LayoutTemplate}
+      layout="strip"
+      title={`Opened ${waiting.layoutName} from ${waiting.pluginName}`}
+      description="Its terminals haven't started. Start each one when you're ready."
+      severity="neutral"
+      role="status"
+      actions={waiting.recipes.map((recipe): BannerAction => ({
+        id: recipe.id,
+        label: `Start ${recipe.name}`,
+        variant: "primary",
+        onClick: () => start(recipe.id),
+        loading: busy === recipe.id,
+        disabled: busy !== null && busy !== recipe.id,
+      }))}
+      className={BANNER_CLASS}
+      onClose={() => setWaiting(null)}
+      closeDisabled={busy !== null}
+      closeAriaLabel="Dismiss"
+      closeTitle="Dismiss — the layout stays in the command palette"
+    />
   );
 }
