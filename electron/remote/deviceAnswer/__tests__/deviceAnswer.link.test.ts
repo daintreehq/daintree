@@ -110,11 +110,48 @@ afterEach(async () => {
 describe("answering a connected host's agents from a device paired with the Shell", () => {
   it("lists the host's runs as the host read them, under the name this Shell knows it by", async () => {
     const listed = await client.listWaiting();
-    expect(listed).toEqual([{ hostId: HOST, host: HOST, status: "ok", runs: [RUN] }]);
+    expect(listed).toEqual([
+      { hostId: HOST, host: HOST, status: "ok", runs: [RUN] },
+      { hostId: "studio-04", host: "studio-04", status: "not-connected", runs: [] },
+    ]);
     expect(hostDeps.list).toHaveBeenCalledTimes(1);
     // A device watching it is using it; a host with no link is neither read nor kept up.
     expect(touch).toHaveBeenCalledWith(HOST);
     expect(touch).not.toHaveBeenCalledWith("studio-04");
+  });
+
+  it("lists every host it knows, saying which aren't connected, and reaches only the connected", async () => {
+    const closedCall = vi.fn(async () => ({ runs: [RUN] }));
+    const failing = vi.fn(async () => {
+      throw new Error("link dropped");
+    });
+    const many = new DeviceAnswerHostsClient({
+      hosts: () => [
+        { hostId: HOST, name: "Studio" },
+        { hostId: "mini", name: "Mini" },
+        { hostId: "closed", name: "Closed" },
+        { hostId: "flaky", name: "" },
+      ],
+      sessionFor: (hostId) =>
+        hostId === HOST
+          ? sessions.client
+          : hostId === "closed"
+            ? { isOpen: false, call: closedCall }
+            : hostId === "flaky"
+              ? { isOpen: true, call: failing }
+              : null,
+      touch,
+      hold,
+    });
+    expect(await many.listWaiting()).toEqual([
+      { hostId: HOST, host: "Studio", status: "ok", runs: [RUN] },
+      { hostId: "mini", host: "Mini", status: "not-connected", runs: [] },
+      { hostId: "closed", host: "Closed", status: "not-connected", runs: [] },
+      { hostId: "flaky", host: "flaky", status: "unreachable", runs: [] },
+    ]);
+    expect(closedCall).not.toHaveBeenCalled();
+    expect(touch.mock.calls.map(([hostId]) => hostId).sort()).toEqual([HOST, "flaky"].sort());
+    expect(hold).not.toHaveBeenCalled();
   });
 
   it("names a host from before these methods as needing an update, and presses nothing there", async () => {
@@ -240,7 +277,10 @@ describe("answering a connected host's agents from a device paired with the Shel
   it("serves nothing once uninstalled", async () => {
     uninstall();
     const listed = await client.listWaiting();
-    expect(listed).toEqual([{ hostId: HOST, host: HOST, status: "needs-update", runs: [] }]);
+    expect(listed).toEqual([
+      { hostId: HOST, host: HOST, status: "needs-update", runs: [] },
+      { hostId: "studio-04", host: "studio-04", status: "not-connected", runs: [] },
+    ]);
   });
 
   it("serves a Shell that attaches after it started, until it is uninstalled", async () => {

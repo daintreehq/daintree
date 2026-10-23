@@ -187,6 +187,7 @@ describe("createDeviceAnswerService and connected hosts", () => {
       listWaiting: vi.fn(async () => [
         { hostId: "studio-03", host: "studio-03", status: "ok", runs: [{ ...HOST_RUN }] },
         { hostId: "studio-04", host: "studio-04", status: "needs-update", runs: [] },
+        { hostId: "mini", host: "Mini", status: "not-connected", runs: [] },
       ]),
       answer: vi.fn(async () => {}),
       hostName: (hostId) => (hostId === "studio-03" ? "studio-03" : null),
@@ -205,6 +206,7 @@ describe("createDeviceAnswerService and connected hosts", () => {
     expect(hosts).toEqual([
       { hostId: "studio-03", host: "studio-03", status: "ok" },
       { hostId: "studio-04", host: "studio-04", status: "needs-update" },
+      { hostId: "mini", host: "Mini", status: "not-connected" },
     ]);
   });
 
