@@ -396,6 +396,7 @@ export class ProjectViewManager {
       repaintWindowTheme(this.win, visibleProjectIdOf(this));
     });
   }
+  /** The app-wide cap on resident views, every window's current view included (#14218). */
   maxCachedViews = 1;
   memoryPressurePolicy: MemoryPressurePolicy | null = null;
   /** Consecutive sampler readings below the warning edge — see `maybeEvictUnderPressure`. */
@@ -540,7 +541,8 @@ export class ProjectViewManager {
         (entry) =>
           !entry.view.webContents.isDestroyed() && entry.view.webContents.id === webContentsId
       );
-      if (!ours || this.views.size <= this.maxCachedViews) return;
+      // Every window's count, not this one's: the cap is app-wide (#14218).
+      if (!ours || EvictionController.scopeViewCount(this) <= this.maxCachedViews) return;
       setImmediate(() => {
         if (!this.disposed) EvictionController.evictStaleViews(this, "lru");
       });
@@ -707,6 +709,14 @@ export class ProjectViewManager {
     // open signal — otherwise a relaunch straight into a trusted project would
     // load none of its plugins until the user switched away and back.
     notifyProjectPluginsOpened(projectId, projectPath);
+    // A new window adds a resident view to an app-wide cap (#14218) without the
+    // switch that would otherwise enforce it. Deferred like the switch's own
+    // sweep, so the window's registry entry and services are in place first.
+    if (EvictionController.scopeViewCount(this) > this.maxCachedViews) {
+      setImmediate(() => {
+        if (!this.disposed) EvictionController.evictStaleViews(this, "lru");
+      });
+    }
   }
 
   /**

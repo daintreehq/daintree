@@ -1,7 +1,8 @@
 const GIB = 1024 ** 3;
 
 export function computeDefaultCachedViews(totalMemBytes: number): number {
-  // The cap counts the active view, so N means N-1 warm background views.
+  // The cap is app-wide and counts every window's current view, so one window
+  // keeps N-1 warm background views and two keep N-2 between them (#14218).
   // Frozen+invisible cached renderers (setVisible(false) releases their GPU
   // tile textures) are cheap enough to keep more around, and evictStaleViews()
   // still drops to 1 when free RAM is genuinely low — so a higher default keeps

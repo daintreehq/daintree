@@ -375,6 +375,32 @@ describe("terminalConfig handlers", () => {
     expect(mockPvm.setCachedViewLimit).toHaveBeenCalledWith(4);
   });
 
+  it("setCachedProjectViews applies the cap to every window, once each (#14218)", async () => {
+    const first = { setCachedViewLimit: vi.fn() };
+    const second = {
+      setCachedViewLimit: vi.fn(() => {
+        throw new Error("window gone");
+      }),
+    };
+    const third = { setCachedViewLimit: vi.fn() };
+    const windowRegistry = {
+      all: () => [
+        { services: { projectViewManager: first } },
+        { services: { projectViewManager: second } },
+        { services: {} },
+        { services: { projectViewManager: third } },
+      ],
+    };
+    registerTerminalConfigHandlers({ projectViewManager: first, windowRegistry } as never);
+    const handler = getHandler(CHANNELS.TERMINAL_CONFIG_SET_CACHED_PROJECT_VIEWS);
+
+    await handler({}, 2);
+
+    expect(first.setCachedViewLimit).toHaveBeenCalledTimes(1);
+    expect(second.setCachedViewLimit).toHaveBeenCalledWith(2);
+    expect(third.setCachedViewLimit).toHaveBeenCalledWith(2);
+  });
+
   it("normalizes malformed terminalConfig shape before writes", async () => {
     storeState.data.terminalConfig = "corrupted";
     registerTerminalConfigHandlers();

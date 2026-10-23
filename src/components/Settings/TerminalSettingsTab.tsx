@@ -649,7 +649,7 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
               <SettingsPresetGroup
                 id="terminal-cached-project-views"
                 label="Cached project views"
-                description={`Project views kept loaded in memory. More keeps switching back near-instant; fewer saves memory. ${
+                description={`Project views kept loaded across all windows, counting the one each window shows. Shown projects always stay loaded. More keeps switching back near-instant; fewer saves memory. ${
                   defaultCachedViews !== null
                     ? `Default on this machine: ${defaultCachedViews}.`
                     : "The default scales with your RAM."

@@ -5186,3 +5186,260 @@ describe("ProjectViewManager — releasing views that sit unused (#14217)", () =
     expect(evictionLogs().every(({ reason }) => reason === "idle")).toBe(true);
   });
 });
+
+describe("ProjectViewManager — cap across windows (#14218)", () => {
+  type MemInfo = { free: number; purgeable?: number; total: number };
+  const originalSystemMemoryInfo = (process as unknown as { getSystemMemoryInfo?: () => MemInfo })
+    .getSystemMemoryInfo;
+  const stubSystemMemoryInfo = (info: MemInfo) =>
+    Object.defineProperty(process, "getSystemMemoryInfo", {
+      configurable: true,
+      value: () => info,
+    });
+
+  let nextWindowId = 1;
+  let managers: ProjectViewManager[] = [];
+  let registry: {
+    contexts: Array<{ services: { projectViewManager?: ProjectViewManager } }>;
+    all: () => Array<{ services: { projectViewManager?: ProjectViewManager } }>;
+    registerAppViewWebContents: ReturnType<typeof vi.fn>;
+    unregisterAppViewWebContents: ReturnType<typeof vi.fn>;
+  };
+
+  beforeEach(() => {
+    nextWebContentsId = 100;
+    nextOsProcessId = 1000;
+    vi.clearAllMocks();
+    mockGetAllTerminals.mockReset();
+    mockGetAllTerminals.mockResolvedValue([]);
+    mockGetAppMetrics.mockReset();
+    mockGetAppMetrics.mockReturnValue([]);
+    assistantBackends.clear();
+    liveTerminals.clear();
+    managers = [];
+    registry = {
+      contexts: [],
+      all: () => registry.contexts,
+      registerAppViewWebContents: vi.fn(),
+      unregisterAppViewWebContents: vi.fn(),
+    };
+  });
+
+  afterEach(() => {
+    for (const mgr of managers) mgr.dispose();
+    Object.defineProperty(process, "getSystemMemoryInfo", {
+      configurable: true,
+      value: originalSystemMemoryInfo,
+    });
+  });
+
+  /** A window registered in the shared registry, showing `initial` (or no project). */
+  async function openWindow(initial: string | null, cap = 5) {
+    const win = { ...createMockWindow(), id: nextWindowId++ };
+    const mgr = new ProjectViewManager(win as never, {
+      dirname: "/test",
+      paintGateTimeoutMs: 0,
+      paintGateHardTimeoutMs: 0,
+      warmPaintGateTimeoutMs: 0,
+      warmPaintGateHardTimeoutMs: 0,
+      cachedProjectViews: cap,
+      assistantBackendsForProject,
+      isTerminalLive,
+      windowRegistry: registry as never,
+    });
+    managers.push(mgr);
+    registry.contexts.push({ services: { projectViewManager: mgr } });
+    if (initial !== null) {
+      const wc = createMockWebContents();
+      mgr.registerInitialView(
+        { webContents: wc, setBounds: vi.fn() } as never,
+        initial,
+        `/p/${initial}`
+      );
+    }
+    await flushImmediates();
+    return mgr;
+  }
+
+  async function show(mgr: ProjectViewManager, projectId: string) {
+    await mgr.switchTo(projectId, `/p/${projectId}`);
+    await flushImmediates();
+  }
+
+  const ids = (mgr: ProjectViewManager) => [...mgr.views.keys()].sort();
+  const wcOf = (mgr: ProjectViewManager, projectId: string) =>
+    mgr.views.get(projectId)!.view.webContents as unknown as ReturnType<
+      typeof createMockWebContents
+    >;
+
+  it("evicts the oldest cached view in any window once the windows together exceed the cap", async () => {
+    const a = await openWindow("a1", 4);
+    await show(a, "a2");
+    await show(a, "a3");
+    const b = await openWindow("b1", 4);
+    expect(ids(a)).toEqual(["a1", "a2", "a3"]);
+    const wcA1 = wcOf(a, "a1");
+
+    // Each window alone is well inside a cap of 4; together they reach 5.
+    await show(b, "b2");
+
+    expect(wcA1.close).toHaveBeenCalled();
+    expect(ids(a)).toEqual(["a2", "a3"]);
+    expect(ids(b)).toEqual(["b1", "b2"]);
+  });
+
+  it("keeps every window's current view when there are more windows than the cap", async () => {
+    const a = await openWindow("a1");
+    await show(a, "a2");
+    const b = await openWindow("b1");
+    await show(b, "b2");
+    const c = await openWindow("c1");
+
+    a.setCachedViewLimit(1);
+    b.setCachedViewLimit(1);
+    c.setCachedViewLimit(1);
+
+    expect(ids(a)).toEqual(["a2"]);
+    expect(ids(b)).toEqual(["b2"]);
+    expect(ids(c)).toEqual(["c1"]);
+  });
+
+  it("applies the protection tiers across windows before recency", async () => {
+    const a = await openWindow("a1");
+    await show(a, "a2");
+    const b = await openWindow("b1");
+    await show(b, "b2");
+    // a1 is the oldest cached view, but a working agent ranks it behind b1.
+    mockGetAllTerminals.mockResolvedValue([{ id: "t-a1", projectId: "a1", agentState: "working" }]);
+    await a.initAgentStateCache(mockPtyClient as never);
+
+    b.setCachedViewLimit(3);
+
+    expect(ids(a)).toEqual(["a1", "a2"]);
+    expect(ids(b)).toEqual(["b2"]);
+  });
+
+  it("counts a project open in two windows twice, and evicts only the cached instance", async () => {
+    const a = await openWindow("shared", 2);
+    const b = await openWindow("shared", 2);
+    const wcAShared = wcOf(a, "shared");
+    const wcBShared = wcOf(b, "shared");
+
+    await show(b, "other");
+
+    expect(wcBShared.close).toHaveBeenCalled();
+    expect(wcAShared.close).not.toHaveBeenCalled();
+    expect(ids(a)).toEqual(["shared"]);
+    expect(ids(b)).toEqual(["other"]);
+  });
+
+  it("admits a background restore against every window's views", async () => {
+    const a = await openWindow("a1", 3);
+    await show(a, "a2");
+    expect(backgroundRestoreCapacity(a)).toBe("available");
+
+    await openWindow("b1", 3);
+
+    expect(backgroundRestoreCapacity(a)).toBe("capacity");
+  });
+
+  it("answers each memory reading once for the whole app, through the oldest window", async () => {
+    // Soft band: ~2 GB available against a 3 GB warning edge.
+    stubSystemMemoryInfo({ free: 2 * 1024 * 1024, purgeable: 0, total: 8 * 1024 * 1024 });
+    const a = await openWindow("a1");
+    await show(a, "a2");
+    const b = await openWindow("b1");
+    await show(b, "b2");
+    for (const mgr of [a, b]) {
+      mgr.setMemoryPressurePolicy({ criticalMb: 1024, warningMb: 3072 });
+      mgr.pressureSampleStreak = 0;
+      ageViewsPastPressureFloor(mgr);
+    }
+    // The other window's cached view is the app's oldest.
+    b.views.get("b1")!.lastUsed -= 60_000;
+
+    // The newer window's sampler never acts, however many readings it takes.
+    for (let tick = 0; tick < 4; tick++) b.maybeEvictUnderPressure();
+    expect(ids(a)).toEqual(["a1", "a2"]);
+    expect(ids(b)).toEqual(["b1", "b2"]);
+
+    // The leader confirms on its second reading and sheds one view app-wide.
+    a.maybeEvictUnderPressure();
+    a.maybeEvictUnderPressure();
+    b.maybeEvictUnderPressure();
+    expect(ids(a)).toEqual(["a1", "a2"]);
+    expect(ids(b)).toEqual(["b2"]);
+  });
+
+  it("keeps reclaiming when the oldest window shows no project", async () => {
+    stubSystemMemoryInfo({ free: 1100 * 1024, purgeable: 0, total: 8 * 1024 * 1024 });
+    const picker = await openWindow(null);
+    const b = await openWindow("b1");
+    await show(b, "b2");
+    for (const mgr of [picker, b]) {
+      mgr.setMemoryPressurePolicy({ criticalMb: 1024, warningMb: 3072 });
+      mgr.pressureSampleStreak = 0;
+    }
+    ageViewsPastPressureFloor(b);
+
+    picker.maybeEvictUnderPressure();
+    picker.maybeEvictUnderPressure();
+    expect(ids(b)).toEqual(["b2"]);
+  });
+
+  it("leads pressure from the oldest window that has a pressure policy", async () => {
+    stubSystemMemoryInfo({ free: 1100 * 1024, purgeable: 0, total: 8 * 1024 * 1024 });
+    const a = await openWindow("a1");
+    const b = await openWindow("b1");
+    await show(b, "b2");
+    b.setMemoryPressurePolicy({ criticalMb: 1024, warningMb: 3072 });
+    b.pressureSampleStreak = 0;
+    ageViewsPastPressureFloor(b);
+
+    a.maybeEvictUnderPressure();
+    b.maybeEvictUnderPressure();
+    b.maybeEvictUnderPressure();
+    expect(ids(a)).toEqual(["a1"]);
+    expect(ids(b)).toEqual(["b2"]);
+  });
+
+  it("drops a demoted leader's pressure episode, backoff included", async () => {
+    stubSystemMemoryInfo({ free: 1100 * 1024, purgeable: 0, total: 8 * 1024 * 1024 });
+    const a = await openWindow("a1");
+    const b = await openWindow("b1");
+    await show(b, "b2");
+    b.setMemoryPressurePolicy({ criticalMb: 1024, warningMb: 3072 });
+    b.pressureSampleStreak = 1;
+    b.softPressureUnproductivePasses = 2;
+    b.softPressureBackoffLatched = true;
+
+    a.setMemoryPressurePolicy({ criticalMb: 1024, warningMb: 3072 });
+    b.maybeEvictUnderPressure();
+
+    expect(b.pressureSampleStreak).toBe(0);
+    expect(b.softPressureUnproductivePasses).toBe(0);
+    expect(b.softPressureBackoffLatched).toBe(false);
+  });
+
+  it("hands pressure leadership to the next window when the leader closes", async () => {
+    // Just inside the soft band, where its target is the current view alone.
+    stubSystemMemoryInfo({ free: 1100 * 1024, purgeable: 0, total: 8 * 1024 * 1024 });
+    const a = await openWindow("a1");
+    const b = await openWindow("b1");
+    await show(b, "b2");
+    for (const mgr of [a, b]) {
+      mgr.setMemoryPressurePolicy({ criticalMb: 1024, warningMb: 3072 });
+      mgr.pressureSampleStreak = 0;
+    }
+    ageViewsPastPressureFloor(b);
+
+    b.maybeEvictUnderPressure();
+    b.maybeEvictUnderPressure();
+    expect(ids(b)).toEqual(["b1", "b2"]);
+
+    a.dispose();
+    b.maybeEvictUnderPressure();
+    b.maybeEvictUnderPressure();
+    expect(ids(b)).toEqual(["b2"]);
+  });
+});

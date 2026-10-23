@@ -67,7 +67,7 @@ export interface SystemMemoryThresholds {
  * to say where.
  *
  * `warningMb` is the proactive edge: crossing it starts the graduated ladder,
- * which sheds at most one renderer per 30s sample per window and restores the
+ * which sheds at most one renderer per 30s sample across all windows and restores the
  * user's cap by itself as soon as memory recovers. Flat-capping THIS edge is
  * what left reclaim as an emergency-only path on large machines (#11926), so
  * above the knee it keeps widening — slowly, and to a bound — while the
