@@ -939,6 +939,16 @@ function _typedOn<K extends Extract<keyof IpcEventMap, string>>(
 let _viewCached = false;
 ipcRenderer.on(CHANNELS.APP_VIEW_CACHED, () => {
   _viewCached = true;
+  // Blink's memory cache keeps every script the view has loaded, about 25 MB
+  // of source per view, and nothing re-reads it: loaded modules live in the
+  // module map. Dropping it on cache saves ~30 MB per cached view, and the
+  // view stays smaller after it returns (#14219). Live images and fonts are
+  // held by their elements, not by this cache.
+  try {
+    webFrame.clearCache();
+  } catch {
+    // Best-effort reclaim; a renderer mid-teardown has nothing to free.
+  }
 });
 // Warm activation — not reveal — owns the clear: main only sends
 // APP_VIEW_REVEALED while the view is still the active project, so a superseded

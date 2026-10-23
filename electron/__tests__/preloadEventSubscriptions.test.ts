@@ -34,7 +34,7 @@ const fakeElectron = {
     },
   },
   ipcRenderer,
-  webFrame: { getZoomFactor: () => 1 },
+  webFrame: { getZoomFactor: () => 1, clearCache: vi.fn() },
   webUtils: { getPathForFile: () => "" },
 };
 
@@ -50,6 +50,10 @@ interface PluginBridge {
   onWorktreeReviewChecksChanged: (cb: (payload: unknown) => void) => () => void;
 }
 
+interface AppBridge {
+  isViewCached: () => boolean;
+}
+
 interface ProjectPresentationBridge {
   onChanged: (cb: (payload: unknown) => void) => () => void;
 }
@@ -58,6 +62,7 @@ const originalWindow = (globalThis as { window?: unknown }).window;
 let terminal: TerminalBridge;
 let plugin: PluginBridge;
 let projectPresentation: ProjectPresentationBridge;
+let app: AppBridge;
 
 beforeAll(async () => {
   const fakeWindow = {
@@ -92,12 +97,14 @@ beforeAll(async () => {
         terminal?: TerminalBridge;
         plugin?: PluginBridge;
         projectPresentation?: ProjectPresentationBridge;
+        app?: AppBridge;
       }
     | undefined;
   expect(api?.terminal, "preload did not expose window.electron.terminal").toBeDefined();
   terminal = api!.terminal!;
   plugin = api!.plugin!;
   projectPresentation = api!.projectPresentation!;
+  app = api!.app!;
 });
 
 afterAll(() => {
@@ -270,5 +277,31 @@ describe("preload event subscriptions", () => {
     ipcRenderer.emit("project-presentation:changed", {}, { projectId: "p2" });
     expect(received).toEqual([{ projectId: "p1" }]);
     expect(ipcRenderer.listenerCount("project-presentation:changed")).toBe(0);
+  });
+
+  it("drops Blink's memory cache when the view is cached, and only then", () => {
+    fakeElectron.webFrame.clearCache.mockClear();
+
+    ipcRenderer.emit("app:view-warm-activated", {});
+    ipcRenderer.emit("app:view-revealed", {});
+    expect(fakeElectron.webFrame.clearCache).not.toHaveBeenCalled();
+    expect(app.isViewCached()).toBe(false);
+
+    ipcRenderer.emit("app:view-cached", {});
+    expect(fakeElectron.webFrame.clearCache).toHaveBeenCalledTimes(1);
+    expect(app.isViewCached()).toBe(true);
+
+    ipcRenderer.emit("app:view-warm-activated", {});
+    expect(app.isViewCached()).toBe(false);
+    expect(fakeElectron.webFrame.clearCache).toHaveBeenCalledTimes(1);
+  });
+
+  it("still latches the cached state when clearing the cache throws", () => {
+    fakeElectron.webFrame.clearCache.mockImplementationOnce(() => {
+      throw new Error("renderer tearing down");
+    });
+    expect(() => ipcRenderer.emit("app:view-cached", {})).not.toThrow();
+    expect(app.isViewCached()).toBe(true);
+    ipcRenderer.emit("app:view-warm-activated", {});
   });
 });
