@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { ComponentChainSchema } from "./component.js";
 import { EVIDENCE_LIMITS, FrameworkEvidenceSchema } from "./evidence.js";
-import { ElementPickerFrameworkSchema, PickerIdSchema, SourceCandidateSchema } from "./source.js";
+import { ElementPickerProviderIdSchema, PickerIdSchema, SourceCandidateSchema } from "./source.js";
 
 /** Ceilings the guest builds to and the host enforces; the guest marks what it cut. */
 export const ELEMENT_CONTEXT_LIMITS = {
@@ -87,7 +87,7 @@ export type ElementContext = z.infer<typeof ElementContextSchema>;
  * document. The signals are the evidence; the framework is only the reading.
  */
 export const FrameworkDetectionSchema = z.strictObject({
-  framework: ElementPickerFrameworkSchema,
+  framework: ElementPickerProviderIdSchema,
   signals: z
     .array(
       z.strictObject({

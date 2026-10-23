@@ -17,7 +17,7 @@ import {
   type UnavailableReason,
 } from "./resolution.js";
 import {
-  ElementPickerFrameworkSchema,
+  ElementPickerProviderIdSchema,
   PickerIdSchema,
   SourceCandidateSchema,
   type ElementPickerFramework,
@@ -71,7 +71,7 @@ export interface GuestFrameworkExtractor<TNode> {
  */
 export const FrameworkExtractionSchema = z
   .strictObject({
-    framework: ElementPickerFrameworkSchema,
+    framework: ElementPickerProviderIdSchema,
     componentChain: ComponentChainSchema,
     sourceCandidates: z.array(SourceCandidateSchema).max(OBSERVATION_LIMITS.candidates),
     frameworkEvidence: z.array(FrameworkEvidenceSchema).max(EVIDENCE_LIMITS.entries),

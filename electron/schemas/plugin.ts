@@ -30,6 +30,11 @@ import {
   SIDEBAR_VIEW_PRIORITY_MAX,
   SIDEBAR_VIEW_PRIORITY_MIN,
 } from "../../shared/types/plugin.js";
+import {
+  ELEMENT_PICKER_DETECTION_KINDS,
+  ELEMENT_PICKER_PROVIDER_LIMITS,
+} from "../../shared/elementPicker/providers.js";
+import { isCoreFramework } from "../../shared/elementPicker/source.js";
 import { LAUNCH_MCP_FORMATS } from "../../shared/config/launchMcp.js";
 import {
   PLUGIN_CONNECTION_ID_PATTERN,
@@ -1543,6 +1548,63 @@ export const ForgeProviderContributionSchema = z
   });
 
 /**
+ * `elementPickerProviders` manifest entry (#14073): a framework the core
+ * Element Picker can recognise, declared so it is known before any plugin code
+ * runs. Detection is a flat list of marker names compared exactly or by prefix,
+ * with no plugin-supplied regex, selector or script. `guestEntry` and
+ * `resolverEntry` are packaged paths the host will load in later work. The local
+ * `id` is lowercase and may not be a core framework name; the registry
+ * namespaces it as `{manifest.name}.{id}`.
+ */
+const ELEMENT_PICKER_LOCAL_ID_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+const ELEMENT_PICKER_MARKER_PATTERN = /^[A-Za-z_$][A-Za-z0-9_$:.-]*$/;
+
+export const ElementPickerDetectionRuleSchema = z
+  .object({
+    kind: z.enum(ELEMENT_PICKER_DETECTION_KINDS),
+    name: z
+      .string()
+      .min(1)
+      .max(ELEMENT_PICKER_PROVIDER_LIMITS.markerNameLength)
+      .regex(ELEMENT_PICKER_MARKER_PATTERN, {
+        message: "marker names use letters, digits and _ $ - : . only",
+      }),
+    match: z.enum(["exact", "prefix"]),
+  })
+  .strict();
+
+export const ElementPickerProviderContributionSchema = z
+  .object({
+    id: z
+      .string()
+      .min(1)
+      .max(64)
+      .regex(ELEMENT_PICKER_LOCAL_ID_PATTERN, {
+        message: "id is lowercase letters and digits, optionally hyphen-separated",
+      })
+      .refine((id) => !isCoreFramework(id), {
+        message: "id can't be a core framework name, which Daintree reserves",
+      }),
+    name: z.string().trim().min(1).max(80),
+    detection: z
+      .array(ElementPickerDetectionRuleSchema)
+      .min(1)
+      .max(ELEMENT_PICKER_PROVIDER_LIMITS.rulesPerProvider),
+    guestEntry: z
+      .string()
+      .min(1)
+      .max(ELEMENT_PICKER_PROVIDER_LIMITS.entryPathLength)
+      .refine(isSafePluginAssetPath, { message: "guestEntry must be a plugin-relative path" }),
+    resolverEntry: z
+      .string()
+      .min(1)
+      .max(ELEMENT_PICKER_PROVIDER_LIMITS.entryPathLength)
+      .refine(isSafePluginAssetPath, { message: "resolverEntry must be a plugin-relative path" })
+      .optional(),
+  })
+  .strict();
+
+/**
  * `contextProviders` manifest entry (#13795): an `@{prefix}:` the agent
  * composer offers, answered by the impl the plugin binds through
  * `host.registerContextProvider`. Declared so a project's prefixes are known
@@ -2860,6 +2922,7 @@ export const MANIFEST_CONTRIBUTION_CAPS = {
   terminalLinks: TERMINAL_LINK_MAX_PER_PLUGIN,
   contextProviders: 10,
   forgeProviders: 20,
+  elementPickerProviders: 20,
   fileDecorationProviders: 50,
   // One check per plugin: the confirmation shows one attributed answer (or one
   // "didn't answer") per plugin, never a partial answer.
@@ -3414,6 +3477,10 @@ function buildPluginManifestSchema(origin: PluginOrigin) {
               .array(ForgeProviderContributionSchema)
               .max(MANIFEST_CONTRIBUTION_CAPS.forgeProviders)
               .default([]),
+            elementPickerProviders: z
+              .array(ElementPickerProviderContributionSchema)
+              .max(MANIFEST_CONTRIBUTION_CAPS.elementPickerProviders)
+              .default([]),
             fileDecorationProviders: z
               .array(FileDecorationContributionSchema)
               .max(MANIFEST_CONTRIBUTION_CAPS.fileDecorationProviders)
@@ -3504,6 +3571,7 @@ function buildPluginManifestSchema(origin: PluginOrigin) {
             terminalLinks: [],
             contextProviders: [],
             forgeProviders: [],
+            elementPickerProviders: [],
             fileDecorationProviders: [],
             worktreeDeleteNotes: [],
             fileEditors: [],
@@ -3922,6 +3990,34 @@ function buildPluginManifestSchema(origin: PluginOrigin) {
         });
       }
 
+      // A provider reads the previewed page's DOM and runtime, so it is
+      // disclosed at install like any other capability. A source resolver
+      // additionally reads the project's files to map what the page reported
+      // onto authored source.
+      manifest.contributes.elementPickerProviders.forEach((provider, index) => {
+        if (!manifest.capabilities.includes("preview:inspect")) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ["contributes", "elementPickerProviders", index],
+            message:
+              'contributes.elementPickerProviders requires the "preview:inspect" capability to be declared in capabilities.',
+            params: { errorCode: "preview_inspect_capability_required" },
+          });
+        }
+        if (
+          provider.resolverEntry !== undefined &&
+          !manifest.capabilities.includes("fs:project-read")
+        ) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ["contributes", "elementPickerProviders", index, "resolverEntry"],
+            message:
+              'An element picker provider with a resolverEntry requires the "fs:project-read" capability to be declared in capabilities.',
+            params: { errorCode: "fs_project_read_capability_required" },
+          });
+        }
+      });
+
       // An agent-facing tools endpoint is a new way for a plugin's data to reach
       // agents, so it is disclosed at install like any other capability. Unlike
       // `mcpServers` it is allowed under `scope: "project"`: every credential for
@@ -4276,6 +4372,7 @@ function buildPluginManifestSchema(origin: PluginOrigin) {
         claimedPrefixes.add(provider.prefix);
       });
       reportDuplicateIds("forgeProviders", manifest.contributes.forgeProviders);
+      reportDuplicateIds("elementPickerProviders", manifest.contributes.elementPickerProviders);
       reportDuplicateIds("fileDecorationProviders", manifest.contributes.fileDecorationProviders);
       reportDuplicateIds("fileEditors", manifest.contributes.fileEditors);
       reportDuplicateIds("projectTemplates", manifest.contributes.projectTemplates);

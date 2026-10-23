@@ -16,7 +16,7 @@ import {
 } from "@shared/types/ipc/elementPicker";
 import type {
   ElementPickerEvent,
-  ElementPickerFramework,
+  ElementPickerProviderId,
   ProjectContextOutcome,
   ResolveRequest,
   ResolveResponse,
@@ -308,7 +308,7 @@ export interface InspectorIssue {
   /** The page's own verdict, when it came from the page. */
   code?: string;
   /** The framework the page's verdict is about, when it named one. */
-  framework?: ElementPickerFramework;
+  framework?: ElementPickerProviderId;
   /**
    * The diagnostic behind the title. Separate, because a raw error message is
    * evidence, not a headline, and the notice needs a headline to put a

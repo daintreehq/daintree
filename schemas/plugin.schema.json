@@ -242,7 +242,8 @@
           "project:dispatch",
           "panel:focus-read",
           "notification:os",
-          "artifact:store"
+          "artifact:store",
+          "preview:inspect"
         ]
       }
     },
@@ -1088,7 +1089,8 @@
                     "project:dispatch",
                     "panel:focus-read",
                     "notification:os",
-                    "artifact:store"
+                    "artifact:store",
+                    "preview:inspect"
                   ]
                 }
               }
@@ -1537,6 +1539,82 @@
               "id",
               "name",
               "matches"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "elementPickerProviders": {
+          "default": [],
+          "maxItems": 20,
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64,
+                "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+              },
+              "name": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 80
+              },
+              "detection": {
+                "minItems": 1,
+                "maxItems": 16,
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "type": "string",
+                      "enum": [
+                        "global",
+                        "expando",
+                        "attribute",
+                        "tag"
+                      ]
+                    },
+                    "name": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 128,
+                      "pattern": "^[A-Za-z_$][A-Za-z0-9_$:.-]*$"
+                    },
+                    "match": {
+                      "type": "string",
+                      "enum": [
+                        "exact",
+                        "prefix"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "name",
+                    "match"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "guestEntry": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              },
+              "resolverEntry": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              }
+            },
+            "required": [
+              "id",
+              "name",
+              "detection",
+              "guestEntry"
             ],
             "additionalProperties": false
           }

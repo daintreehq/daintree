@@ -20,7 +20,7 @@ import type { ElementPickerEvent } from "../../elementPicker/protocol.js";
 import type { ProjectContextOutcome } from "../../elementPicker/projectContext.js";
 import type { FileRevision, SourceFileRef } from "../../elementPicker/resolution.js";
 import type { ResolveRequest, ResolveResponse } from "../../elementPicker/resolver.js";
-import type { ElementPickerFramework } from "../../elementPicker/source.js";
+import type { ElementPickerProviderId } from "../../elementPicker/source.js";
 import type {
   SitePreviewBindingState,
   SitePreviewMode,
@@ -63,7 +63,7 @@ export interface ElementPickerReselectRequest {
   sessionId: string;
   /** The id the page reported the element under; it names that element only while it is still the same node. */
   elementId?: string;
-  framework?: ElementPickerFramework;
+  framework?: ElementPickerProviderId;
   locator?: ElementPickerLocator;
   /** Scroll the element into view, as picking it from the trail does; never for a reselect after an edit. */
   reveal?: boolean;
@@ -97,7 +97,7 @@ export type ElementPickerPushPayload =
       sessionId: string;
       projectId: string;
       documentEpoch: number;
-      framework: ElementPickerFramework;
+      framework: ElementPickerProviderId;
     }
   /**
    * A problem the host observed, in the guest's own issue shape. Separate from

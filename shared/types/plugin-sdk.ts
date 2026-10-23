@@ -388,6 +388,14 @@ export type {
   PluginSearchProvider,
 } from "./plugin.js";
 
+// ── Element Picker framework providers (#14073) ─────────────────────
+
+export type {
+  ElementPickerDetectionKind,
+  ElementPickerDetectionRule,
+  ElementPickerProviderContribution,
+} from "../elementPicker/providers.js";
+
 // ── Agent composer context provider contract (#13795) ───────────────
 
 export type {

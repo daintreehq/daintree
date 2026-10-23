@@ -466,6 +466,10 @@ import type {
 } from "../../shared/types/ipc/pluginDiagnostics.js";
 import { BUILT_IN_ACTION_IDS } from "../../shared/config/actionIds.js";
 import { isWindowsStoreBuild } from "../../shared/config/distribution.js";
+import {
+  registerElementPickerProviders,
+  unregisterElementPickerProviders,
+} from "./elementPickerProviderRegistry.js";
 import { CONFIRM_TRIGGERING_CAPABILITIES } from "../../shared/config/pluginCapabilities.js";
 
 /** Plugin action IDs must be `{pluginId}.{actionId}`. Built-in IDs use colons, so the formats cannot collide. */
@@ -2788,6 +2792,11 @@ export class PluginService {
       // matches" resolution so they re-evaluate against the new descriptor
       // (#9997). Covers both the startup scan and runtime install/enable.
       this.workspaceClient?.notifyForgeProviderRegistryUpdated();
+    }
+
+    const elementPickerProviders = manifest.contributes.elementPickerProviders ?? [];
+    if (elementPickerProviders.length > 0) {
+      registerElementPickerProviders(pluginId, manifest.name, elementPickerProviders);
     }
 
     if (manifest.contributes.fileDecorationProviders.length > 0) {
@@ -8146,6 +8155,9 @@ export class PluginService {
     );
     runUnloadStep(pluginId, "cancelPanelReloads", () =>
       this.panelReloadDispatcher.cancelPlugin(pluginId)
+    );
+    runUnloadStep(pluginId, "unregisterElementPickerProviders", () =>
+      unregisterElementPickerProviders(pluginId)
     );
     runUnloadStep(pluginId, "unregisterForgeProviders", () => unregisterForgeProviders(pluginId));
     runUnloadStep(pluginId, "unregisterForgeProviderImpls", () =>

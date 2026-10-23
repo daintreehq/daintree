@@ -31,7 +31,10 @@ import {
   OBSERVATION_LIMITS,
   type FrameworkDetection,
 } from "../../../shared/elementPicker/observation.js";
-import type { ElementPickerFramework } from "../../../shared/elementPicker/source.js";
+import {
+  isCoreFramework,
+  type ElementPickerFramework,
+} from "../../../shared/elementPicker/source.js";
 import type { SitePreviewMode } from "../../../shared/types/ipc/sitePreview.js";
 import type { ElementPickerReselectRequest } from "../../../shared/types/ipc/elementPicker.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
@@ -368,6 +371,9 @@ export class CoreGuest {
   private requestExtractors(epoch: number, detections: readonly FrameworkDetection[]): boolean {
     let added = false;
     for (const { framework } of detections) {
+      // Only core frameworks have a bundled extractor; an installed plugin's
+      // provider is declared but not executed yet.
+      if (!isCoreFramework(framework)) continue;
       if (!this.isCurrent(epoch) || this.extractors.has(framework)) continue;
       this.extractors.set(framework, "pending");
       added = true;

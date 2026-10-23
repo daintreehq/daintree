@@ -7,7 +7,7 @@ import {
   OBSERVATION_LIMITS,
   SelectionObservationSchema,
 } from "./observation.js";
-import { ElementPickerFrameworkSchema, PickerIdSchema } from "./source.js";
+import { ElementPickerProviderIdSchema, PickerIdSchema } from "./source.js";
 
 /**
  * The page-to-host wire contract. The page is untrusted: it is whatever the
@@ -104,7 +104,7 @@ export const ElementPickerEventSchema = z.discriminatedUnion("type", [
       "extractor-failed",
       "internal",
     ]),
-    framework: ElementPickerFrameworkSchema.optional(),
+    framework: ElementPickerProviderIdSchema.optional(),
     detail: z.string().max(512),
   }),
 ]);

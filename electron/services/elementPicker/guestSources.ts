@@ -18,7 +18,10 @@
  */
 
 import type { SitePreviewMode } from "../../../shared/types/ipc/sitePreview.js";
-import type { ElementPickerFramework } from "../../../shared/elementPicker/source.js";
+import type {
+  ElementPickerFramework,
+  ElementPickerProviderId,
+} from "../../../shared/elementPicker/source.js";
 import {
   ELEMENT_PICKER_PROTOCOL_VERSION,
   MAX_ELEMENT_PICKER_MESSAGE_BYTES,
@@ -217,7 +220,7 @@ export function buildPickerReselectSource(
   installId: number,
   request: {
     elementId?: string;
-    framework?: ElementPickerFramework;
+    framework?: ElementPickerProviderId;
     locator?: unknown;
     reveal?: boolean;
   }

@@ -20,6 +20,8 @@ import {
   ContextProviderContributionSchema,
   WorktreeDeleteNotesContributionSchema,
   FileEditorContributionSchema,
+  ElementPickerDetectionRuleSchema,
+  ElementPickerProviderContributionSchema,
   ForgeProviderContributionSchema,
   getPluginManifestSchema,
   KeybindingContributionSchema,
@@ -119,6 +121,7 @@ const TERMINAL_ACTIVITY_PATTERNS = "electron/services/pty/terminalActivityPatter
 const PLUGIN_SETTINGS_FORM = "src/components/Settings/PluginSettingsForm.tsx";
 const CODE_FORGE_TAB = "src/components/Settings/CodeForgeSettingsTab.tsx";
 const FORGE_REGISTRY = "electron/services/forgeProviderRegistry.ts";
+const ELEMENT_PICKER_REGISTRY = "electron/services/elementPickerProviderRegistry.ts";
 const AGENT_REGISTRY = "shared/config/pluginAgentRegistry.ts";
 const MCP_SUPERVISOR = "electron/services/PluginMcpSupervisor.ts";
 const PLUGIN_SCHEMA = "electron/schemas/plugin.ts";
@@ -199,6 +202,7 @@ const SWEPT_SCHEMAS = {
   terminalLinks: TerminalLinkContributionSchema,
   contextProviders: ContextProviderContributionSchema,
   forgeProviders: ForgeProviderContributionSchema,
+  elementPickerProviders: ElementPickerProviderContributionSchema,
   fileDecorationProviders: FileDecorationContributionSchema,
   worktreeDeleteNotes: WorktreeDeleteNotesContributionSchema,
   fileEditors: FileEditorContributionSchema,
@@ -231,6 +235,7 @@ const SWEPT_SCHEMAS = {
   "recipes.terminals": RecipeContributionTerminalSchema,
   "forgeProviders.credentialFields": CredentialFieldSchema,
   "forgeProviders.slots": ForgeProviderContributionSchema.shape.slots,
+  "elementPickerProviders.detection": ElementPickerDetectionRuleSchema,
   "tours.chapters": TourChapterSchema,
   "tours.chapters.captions": TourCaptionSchema,
   "tours.finish": TourFinishSchema,
@@ -275,6 +280,7 @@ const TOP_LEVEL_GROUPS = [
   "terminalLinks",
   "contextProviders",
   "forgeProviders",
+  "elementPickerProviders",
   "fileDecorationProviders",
   "worktreeDeleteNotes",
   "fileEditors",
@@ -359,6 +365,10 @@ type FieldConsumerCoverage = {
     ConsumerDescriptor
   >;
   forgeProviders: Record<keyof z.infer<typeof ForgeProviderContributionSchema>, ConsumerDescriptor>;
+  elementPickerProviders: Record<
+    keyof z.infer<typeof ElementPickerProviderContributionSchema>,
+    ConsumerDescriptor
+  >;
   fileDecorationProviders: Record<
     keyof z.infer<typeof FileDecorationContributionSchema>,
     ConsumerDescriptor
@@ -426,6 +436,10 @@ type FieldConsumerCoverage = {
     ConsumerDescriptor
   >;
   "forgeProviders.slots": Record<keyof ForgeSlots, ConsumerDescriptor>;
+  "elementPickerProviders.detection": Record<
+    keyof z.infer<typeof ElementPickerDetectionRuleSchema>,
+    ConsumerDescriptor
+  >;
   tours: Record<keyof z.infer<typeof TourContributionSchema>, ConsumerDescriptor>;
   projectTemplates: Record<
     keyof z.infer<typeof ProjectTemplateContributionSchema>,
@@ -1447,6 +1461,50 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
         { file: PLUGIN_TERMINAL_LINKS, symbol: "findPluginUrlClaim (longest prefix wins)" },
       ],
       note: "The URL's parsed path must start with it; the longest prefix wins between plugins.",
+    },
+  },
+  elementPickerProviders: {
+    id: {
+      mode: "verbatim",
+      consumers: [{ file: ELEMENT_PICKER_REGISTRY, symbol: "registerElementPickerProviders" }],
+      note: "Namespaced with the plugin name; the id a page or request must name.",
+    },
+    name: {
+      mode: "verbatim",
+      consumers: [{ file: ELEMENT_PICKER_REGISTRY, symbol: "registerElementPickerProviders" }],
+      note: "Kept on the registered descriptor for surfaces that label the provider.",
+    },
+    detection: {
+      mode: "verbatim",
+      consumers: [{ file: ELEMENT_PICKER_REGISTRY, symbol: "matchElementPickerProviders" }],
+      note: "Compared as data against observed page markers; nothing the plugin shipped runs.",
+    },
+    guestEntry: {
+      mode: "verbatim",
+      consumers: [{ file: ELEMENT_PICKER_REGISTRY, symbol: "registerElementPickerProviders" }],
+      note: "Recorded for installed guest execution, which is a follow-up; not loaded here.",
+    },
+    resolverEntry: {
+      mode: "verbatim",
+      consumers: [{ file: ELEMENT_PICKER_REGISTRY, symbol: "registerElementPickerProviders" }],
+      note: "Recorded for the resolver worker follow-up; its presence is what requires fs:project-read.",
+    },
+  },
+  "elementPickerProviders.detection": {
+    kind: {
+      mode: "verbatim",
+      consumers: [{ file: ELEMENT_PICKER_REGISTRY, symbol: "ruleMatches" }],
+      note: "Must equal the observed marker's kind.",
+    },
+    name: {
+      mode: "verbatim",
+      consumers: [{ file: ELEMENT_PICKER_REGISTRY, symbol: "ruleMatches" }],
+      note: "Compared with the observed marker name.",
+    },
+    match: {
+      mode: "verbatim",
+      consumers: [{ file: ELEMENT_PICKER_REGISTRY, symbol: "ruleMatches" }],
+      note: "Selects exact or prefix comparison.",
     },
   },
   forgeProviders: {

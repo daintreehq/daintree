@@ -165,7 +165,7 @@ interface Extraction {
   /** Every framework's answer this side could take, in install order. */
   contributions: readonly Extracted[];
   /** Frameworks whose reader looked and found nothing. */
-  empty: ReadonlySet<ElementPickerFramework>;
+  empty: ReadonlySet<string>;
 }
 
 const NO_ANSWER: Extraction = { contributions: [], empty: new Set() };
@@ -665,9 +665,7 @@ export function createPicker(host: PickerHost): PickerHandle {
     if (availability.detection !== "settled") return UNKNOWN;
     const speaker = primary?.framework ?? null;
     const described = primary?.target ?? null;
-    const frameworks = new Set<ElementPickerFramework>(
-      Object.keys(availability.extractors) as ElementPickerFramework[]
-    );
+    const frameworks = new Set<string>(Object.keys(availability.extractors));
     for (const entry of detections) frameworks.add(entry.framework);
     // A reader that answered, even with nothing, is a framework on the page.
     for (const contribution of extraction.contributions) frameworks.add(contribution.framework);

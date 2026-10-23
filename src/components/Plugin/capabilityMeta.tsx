@@ -141,6 +141,11 @@ export const CAPABILITY_META = {
     description: "Copy files you choose or it downloads into a cache it can play and upload from",
     severity: "neutral",
   },
+  "preview:inspect": {
+    label: "Inspect previewed pages",
+    description: "Read the page and DOM in a preview to recognise a framework",
+    severity: "warning",
+  },
 } satisfies Record<BuiltInPluginCapability, CapabilityMeta>;
 
 export const SEVERITY_TEXT_CLASS: Record<CapabilitySeverity, string> = {
