@@ -19,6 +19,7 @@ const OWNER = "project:acme.ledger";
 const APPLICATION: ProjectApplicationState = {
   status: "active",
   ownerId: "acme.ledger",
+  version: "1.0.0",
   instanceId: OWNER,
   application: {
     name: "Ledger",

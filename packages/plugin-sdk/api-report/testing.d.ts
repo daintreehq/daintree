@@ -2775,6 +2775,8 @@ interface PluginDatabaseLocation {
     /** For a `"project"` database, the path relative to the project root. */
     readonly projectRelativePath: string | null;
     readonly journalMode: "delete" | "wal";
+    /** The declaration's `schemaVersion`, when it has one. */
+    readonly schemaVersion?: number;
 }
 /** Positional (`?`) or named (`:name`, `$name`, `@name`) statement parameters. */
 type PluginDatabaseParams = ReadonlyArray<string | number | bigint | null | Uint8Array> | Readonly<Record<string, string | number | bigint | null | Uint8Array>>;
@@ -6881,11 +6883,15 @@ interface CreateMockHostOptions {
      * migrations and change handling run against the same `node:sqlite` the real
      * host uses. `declared` restricts which ids resolve, the way
      * `contributes.databases` does in production; omit it to accept any id.
+     * `schemaVersions` declares a `schemaVersion` per id, so a writable open
+     * whose migrations disagree with it fails `VALIDATION` here as it does in
+     * the real host.
      */
     databases?: {
         directory?: string;
         declared?: readonly string[];
         journalMode?: "delete" | "wal";
+        schemaVersions?: Readonly<Record<string, number>>;
     };
     settings?: {
         user?: Record<string, unknown>;

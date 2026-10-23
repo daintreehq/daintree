@@ -3813,6 +3813,13 @@ interface PluginDatabaseContribution {
     location: PluginDatabaseLocationKind;
     path?: string;
     journalMode: "delete" | "wal";
+    /**
+     * How many migrations this version of the plugin applies: the schema it
+     * leaves the file at. Lets the host refuse an application whose file was
+     * written by a newer copy before any of its code runs, and makes a writable
+     * `db.open` with a different number of migrations fail rather than drift.
+     */
+    schemaVersion?: number;
     /** Named statements the host serves to agents as tools of their own. */
     queries?: PluginDatabaseQueryContribution[];
 }
@@ -5154,6 +5161,8 @@ interface PluginDatabaseLocation {
     /** For a `"project"` database, the path relative to the project root. */
     readonly projectRelativePath: string | null;
     readonly journalMode: "delete" | "wal";
+    /** The declaration's `schemaVersion`, when it has one. */
+    readonly schemaVersion?: number;
 }
 /** Positional (`?`) or named (`:name`, `$name`, `@name`) statement parameters. */
 type PluginDatabaseParams = ReadonlyArray<string | number | bigint | null | Uint8Array> | Readonly<Record<string, string | number | bigint | null | Uint8Array>>;

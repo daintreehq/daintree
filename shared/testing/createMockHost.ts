@@ -765,11 +765,15 @@ export interface CreateMockHostOptions {
    * migrations and change handling run against the same `node:sqlite` the real
    * host uses. `declared` restricts which ids resolve, the way
    * `contributes.databases` does in production; omit it to accept any id.
+   * `schemaVersions` declares a `schemaVersion` per id, so a writable open
+   * whose migrations disagree with it fails `VALIDATION` here as it does in
+   * the real host.
    */
   databases?: {
     directory?: string;
     declared?: readonly string[];
     journalMode?: "delete" | "wal";
+    schemaVersions?: Readonly<Record<string, number>>;
   };
   settings?: {
     user?: Record<string, unknown>;
@@ -2037,12 +2041,16 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
       throw databaseError("TARGET_UNAVAILABLE", `database "${id}" is not a regular file`);
     }
     if (!leaf && readonly) throw notFound();
+    const schemaVersion = Object.hasOwn(options.databases?.schemaVersions ?? {}, id)
+      ? options.databases?.schemaVersions?.[id]
+      : undefined;
     return Object.freeze({
       id,
       location: "local" as const,
       path: target,
       projectRelativePath: null,
       journalMode: options.databases?.journalMode ?? "delete",
+      ...(schemaVersion !== undefined && { schemaVersion }),
     });
   };
 

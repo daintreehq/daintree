@@ -15,6 +15,7 @@ import type {
   DiscoveredProjectPlugin,
   ProjectPluginDiscoveryResult,
 } from "./projectPluginDiscovery.js";
+import type { ProjectApplicationPreflightFailure } from "./projectApplicationPreflight.js";
 import { createLogger } from "../../utils/logger.js";
 import {
   resolveProjectApplication,
@@ -76,6 +77,17 @@ export interface ProjectPluginControllerDeps {
   isEngineIncompatible: (range: string) => boolean;
   /** INSTANCE key of the plugin holding this project's Home slot, or `null`. */
   getProjectHomeHolder: (projectId: string) => string | null;
+  /**
+   * Check an application owner's payload on disk before it loads (#14113):
+   * its required files, and its databases against their declared schema. Reads
+   * only. Resolves the failure, or `null` when the payload may load.
+   */
+  preflightApplication: (args: {
+    projectId: string;
+    projectRoot: string;
+    dir: string;
+    manifest: Readonly<PluginManifest>;
+  }) => Promise<ProjectApplicationPreflightFailure | null>;
 }
 
 interface ProjectEntry {
@@ -108,6 +120,12 @@ interface ProjectEntry {
   loaded: Map<string, string>;
   /** Manifest ids whose last load was refused or threw, until the next attempt. */
   refused: Set<string>;
+  /**
+   * Application owners whose payload failed its preflight, and what it found,
+   * until the next attempt. Kept apart from `refused` because nothing of the
+   * payload ran: the reason is a fact about the files, not a load error.
+   */
+  preflight: Map<string, ProjectApplicationPreflightFailure & { at: number }>;
 }
 
 /**
@@ -737,8 +755,15 @@ export class ProjectPluginController {
       // Only a loaded instance can have failed at load or activation, and only
       // its own key answers for it: a stale row for a manifest id this project
       // no longer runs must not inherit another generation's error. A muted one
-      // never loads, so it never has one.
-      const loadError = loadedInstance ? this.deps.getPluginLoadError(loadedInstance) : undefined;
+      // never loads, so it never has one. An application payload refused by
+      // its preflight never loaded either, and its row says what was found
+      // rather than reading clean.
+      const preflight = !loadedInstance && !muted ? entry.preflight.get(manifestId) : undefined;
+      const loadError = loadedInstance
+        ? this.deps.getPluginLoadError(loadedInstance)
+        : preflight
+          ? { message: preflight.problems.join("\n"), at: preflight.at }
+          : undefined;
       return {
         projectId,
         id: manifestId,
@@ -820,8 +845,10 @@ export class ProjectPluginController {
       const manifestId = d.manifest.name;
       const instanceId = entry.loaded.get(manifestId);
       const range = d.manifest.engines?.daintree;
+      const preflight = entry.preflight.get(manifestId);
       candidates.push({
         manifestId,
+        version: d.manifest.version,
         application,
         ...(instanceId !== undefined ? { instanceId } : {}),
         staged: entry.staged.has(manifestId),
@@ -830,6 +857,9 @@ export class ProjectPluginController {
           entry.refused.has(manifestId) ||
           (instanceId !== undefined && this.deps.getPluginLoadError(instanceId) !== undefined),
         engineIncompatible: range !== undefined && this.deps.isEngineIncompatible(range),
+        ...(preflight !== undefined && {
+          preflight: { reason: preflight.reason, problems: preflight.problems },
+        }),
       });
     }
     if (candidates.length === 0) return null;
@@ -918,6 +948,7 @@ export class ProjectPluginController {
       loggedRejections: new Map(),
       loaded: new Map(),
       refused: new Set(),
+      preflight: new Map(),
     };
     this.entries.set(projectId, entry);
     return entry;
@@ -1113,9 +1144,17 @@ export class ProjectPluginController {
       return;
     }
     entry.refused.delete(manifestId);
-    // Say the application is loading while it does, so the project's views are
-    // not left on the previous state, or a failure being retried, meanwhile.
-    if (d.manifest.application !== undefined) this.emitChanged(projectId);
+    const previousPreflight = entry.preflight.get(manifestId);
+    entry.preflight.delete(manifestId);
+    if (d.manifest.application !== undefined) {
+      // Say the application is loading while it does, so the project's views
+      // are not left on the previous state, or a failure being retried,
+      // meanwhile.
+      this.emitChanged(projectId);
+      if (!(await this.passesPreflight(projectId, entry, d, generation, previousPreflight))) {
+        return;
+      }
+    }
     try {
       const ok = await this.deps.loadProjectPlugin({
         projectId,
@@ -1143,6 +1182,59 @@ export class ProjectPluginController {
     }
   }
 
+  /**
+   * An application owner's payload is checked on disk before any of its code
+   * runs (#14113), so a checkout that left a required file out, or a database
+   * a newer copy of the application already migrated, leaves the project on
+   * the standard workspace with the reason rather than running against it.
+   * Nothing of a previous payload is kept to fall back to: its files are the
+   * ones that changed. The retry is the next reconcile — a watcher settle once
+   * the files land, a project switch, or Reload from folder — which comes back
+   * through here.
+   */
+  private async passesPreflight(
+    projectId: string,
+    entry: ProjectEntry,
+    d: DiscoveredProjectPlugin & { manifest: Readonly<PluginManifest> },
+    generation: number,
+    previous: ProjectApplicationPreflightFailure | undefined
+  ): Promise<boolean> {
+    const manifestId = d.manifest.name;
+    let failure: ProjectApplicationPreflightFailure | null = null;
+    try {
+      failure = await this.deps.preflightApplication({
+        projectId,
+        projectRoot: entry.projectRoot,
+        dir: d.dir,
+        manifest: d.manifest,
+      });
+    } catch (err) {
+      // A check that could not run is not evidence against the payload, and
+      // refusing on it would hide the application over a question nobody
+      // answered. The load goes ahead as it did before there was a preflight.
+      logger.error("Project application preflight threw", err, { projectId, manifestId });
+    }
+    // A close or revoke overtook the check, so what it found describes a load
+    // nobody is waiting for.
+    if (!this.stillCurrent(projectId, entry, generation)) return false;
+    if (failure === null) return true;
+    entry.preflight.set(manifestId, { ...failure, at: Date.now() });
+    // Every project switch reconciles, so only a new finding is news.
+    if (
+      previous?.reason !== failure.reason ||
+      previous.problems.join("\n") !== failure.problems.join("\n")
+    ) {
+      logger.warn("Not loading a project application whose payload failed its preflight", {
+        projectId,
+        manifestId,
+        version: d.manifest.version,
+        reason: failure.reason,
+        problems: failure.problems.join("; "),
+      });
+    }
+    return false;
+  }
+
   private unloadOne(
     entry: ProjectEntry,
     manifestId: string,
@@ -1164,6 +1256,10 @@ export class ProjectPluginController {
     for (const [manifestId, instanceKey] of [...entry.loaded]) {
       this.unloadOne(entry, manifestId, instanceKey);
     }
+    // Nothing loads again until the next enabled reconcile, and that checks
+    // the files afresh. A finding kept until then would describe files that
+    // may since have been fixed, or replaced by another version.
+    entry.preflight.clear();
     await Promise.resolve();
   }
 

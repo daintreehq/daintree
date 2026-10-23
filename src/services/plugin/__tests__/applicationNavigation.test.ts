@@ -46,6 +46,7 @@ function application(
   return {
     status: "active",
     ownerId: "acme.ledger",
+    version: "1.0.0",
     instanceId: "project:acme.ledger",
     application: {
       name: "Ledger",

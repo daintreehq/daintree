@@ -1,5 +1,6 @@
 import type {
   PluginApplicationDescriptor,
+  ProjectApplicationPreflightReason,
   ProjectApplicationReason,
   ProjectApplicationState,
   ProjectApplicationStatus,
@@ -8,6 +9,8 @@ import type {
 /** One discovered project plugin that declares an application, as its controller sees it. */
 export interface ProjectApplicationCandidate {
   manifestId: string;
+  /** Its manifest `version`. */
+  version: string;
   application: PluginApplicationDescriptor;
   /** The instance key it is loaded under, when it is loaded. */
   instanceId?: string;
@@ -18,6 +21,8 @@ export interface ProjectApplicationCandidate {
   loadFailed: boolean;
   /** Its `engines.daintree` range does not admit the running Daintree. */
   engineIncompatible: boolean;
+  /** Its last load was refused before any of its code ran, and why. */
+  preflight?: { reason: ProjectApplicationPreflightReason; problems: readonly string[] };
 }
 
 export interface ProjectApplicationInput {
@@ -31,11 +36,17 @@ export interface ProjectApplicationInput {
 function state(
   candidate: ProjectApplicationCandidate,
   status: ProjectApplicationStatus,
-  extra: { reason?: ProjectApplicationReason; candidates?: string[]; heldBy?: string } = {}
+  extra: {
+    reason?: ProjectApplicationReason;
+    problems?: string[];
+    candidates?: string[];
+    heldBy?: string;
+  } = {}
 ): ProjectApplicationState {
   return {
     status,
     ownerId: candidate.manifestId,
+    version: candidate.version,
     ...(candidate.instanceId !== undefined ? { instanceId: candidate.instanceId } : {}),
     application: structuredClone(candidate.application),
     ...extra,
@@ -75,6 +86,12 @@ export function resolveProjectApplication(
   if (owner.staged) return state(owner, "disabled", { reason: "staged" });
   if (owner.engineIncompatible)
     return state(owner, "unavailable", { reason: "engine-incompatible" });
+  if (owner.preflight !== undefined) {
+    return state(owner, "unavailable", {
+      reason: owner.preflight.reason,
+      problems: [...owner.preflight.problems],
+    });
+  }
   if (owner.loadFailed) return state(owner, "unavailable", { reason: "load-failed" });
   if (owner.instanceId === undefined) return state(owner, "loading");
   if (

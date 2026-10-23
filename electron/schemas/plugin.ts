@@ -1039,6 +1039,7 @@ export const DatabaseContributionSchema = z
       })
       .optional(),
     journalMode: z.enum(["delete", "wal"]).default("delete"),
+    schemaVersion: z.number().int().min(0).max(100_000).optional(),
     // Capped across all of the plugin's databases by the manifest check, which
     // names the query past the limit; a per-entry cap would report first, and
     // name none.

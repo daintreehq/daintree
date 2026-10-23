@@ -43,6 +43,8 @@ interface PluginDatabaseLocation {
     /** For a `"project"` database, the path relative to the project root. */
     readonly projectRelativePath: string | null;
     readonly journalMode: "delete" | "wal";
+    /** The declaration's `schemaVersion`, when it has one. */
+    readonly schemaVersion?: number;
 }
 /** Positional (`?`) or named (`:name`, `$name`, `@name`) statement parameters. */
 type PluginDatabaseParams = ReadonlyArray<string | number | bigint | null | Uint8Array> | Readonly<Record<string, string | number | bigint | null | Uint8Array>>;

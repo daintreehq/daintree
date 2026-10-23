@@ -415,6 +415,53 @@ function assertAgentOpenable(location: PluginDatabaseLocation): void {
   }
 }
 
+/** `user_version`'s place in the 100-byte SQLite file header: 4 bytes, big-endian, signed. */
+const HEADER_USER_VERSION_OFFSET = 60;
+const SQLITE_HEADER_MAGIC = "SQLite format 3\0";
+
+/**
+ * The `user_version` an existing database is at, read straight off its header
+ * so the host can compare a file against a payload before that payload's code
+ * runs (#14113). No SQLite connection is opened: even a readonly one may
+ * create `-wal` and `-shm` beside a WAL-mode file — in the repository, for a
+ * project database — and a check that only reads must never write.
+ *
+ * The header is every committed page's word only while no `-wal` or `-journal`
+ * sits beside the file. With one there, a writer has pages the header does not
+ * show, so this rejects `DB_LOCKED` rather than guess, and looks again after
+ * reading in case a writer started meanwhile. A writer that spills page 1 and
+ * rolls back entirely between the two looks is the one case this cannot see.
+ * Rejects `DB_NOT_FOUND` when the file does not exist.
+ */
+export function readPluginDatabaseSchemaVersion(location: PluginDatabaseLocation): number {
+  assertAgentOpenable(location);
+  const assertQuiet = (): void => {
+    if (["-wal", "-journal"].some((suffix) => fs.existsSync(location.path + suffix))) {
+      throw databaseError(
+        "DB_LOCKED",
+        `database "${location.id}" has a journal beside it, so its schema version can't be read without SQLite`
+      );
+    }
+  };
+  assertQuiet();
+  const header = Buffer.alloc(100);
+  const fd = fs.openSync(location.path, "r");
+  let read: number;
+  try {
+    read = fs.readSync(fd, header, 0, header.length, 0);
+  } finally {
+    fs.closeSync(fd);
+  }
+  assertQuiet();
+  // A zero-length file is an empty database SQLite would open as version 0.
+  if (read === 0) return 0;
+  if (read < header.length || header.toString("latin1", 0, 16) !== SQLITE_HEADER_MAGIC) {
+    throw databaseError("DB_UNSUPPORTED", `database "${location.id}" is not a SQLite file`);
+  }
+  // Signed, as `PRAGMA user_version` reads it.
+  return header.readInt32BE(HEADER_USER_VERSION_OFFSET);
+}
+
 /**
  * Run one row-returning statement on a fresh readonly connection and hand each
  * row to `onRow` as an array aligned with the returned column names, until the
@@ -670,6 +717,20 @@ export async function openPluginDatabase(
     location.id,
     options
   );
+  // The declared count is what the host's preflight compares a file against
+  // before the plugin runs, so code that migrates further (or less far) than
+  // its manifest says must fail here, not leave the two disagreeing.
+  if (
+    !readonly &&
+    options.migrations !== undefined &&
+    location.schemaVersion !== undefined &&
+    migrations.length !== location.schemaVersion
+  ) {
+    throw databaseError(
+      "VALIDATION",
+      `database "${location.id}" declares schemaVersion ${location.schemaVersion}, but this open passes ${migrations.length} migration(s)`
+    );
+  }
   const sqlite = loadSqlite();
   const DatabaseSync = sqlite.DatabaseSync;
   const authorizer = sqlite.constants ? fileAccessAuthorizer(sqlite.constants) : null;

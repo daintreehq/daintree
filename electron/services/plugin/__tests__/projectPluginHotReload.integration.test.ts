@@ -9,6 +9,7 @@ import { ProjectPluginController } from "../ProjectPluginController.js";
 import type { ProjectPluginControllerDeps } from "../ProjectPluginController.js";
 import { ProjectPluginWatcher } from "../ProjectPluginWatcher.js";
 import { discoverProjectPlugins } from "../projectPluginDiscovery.js";
+import { preflightProjectApplication } from "../projectApplicationPreflight.js";
 import type { ProjectPluginTrustRecord } from "../../../../shared/types/plugin.js";
 import { makeProjectPluginInstanceKey } from "../../../../shared/types/plugin.js";
 
@@ -109,6 +110,14 @@ function makeHarness(root: string): Harness {
     isProjectClosed: () => false,
     isEngineIncompatible: () => false,
     getProjectHomeHolder: () => null,
+    // The real check, against the real files: only the load is substituted.
+    preflightApplication: ({ projectRoot, dir, manifest }) =>
+      preflightProjectApplication({
+        dir,
+        manifest,
+        projectRoot,
+        dataDir: path.join(root, ".plugin-data"),
+      }),
   };
 
   const controller = new ProjectPluginController(deps);
@@ -204,6 +213,59 @@ describe("project-local plugin hot reload (end to end)", () => {
 
     expect(await waitFor(() => harness.loads.length === 2)).toBe(true);
     expect(harness.running.has(instanceKey)).toBe(true);
+  });
+
+  it("refuses an application update that leaves a required file out, and runs it once the file lands", async () => {
+    const { root, pluginDir } = await copyFixture();
+    const manifestPath = path.join(pluginDir, "plugin.json");
+    const base = JSON.parse(await fsp.readFile(manifestPath, "utf-8")) as {
+      contributes: Record<string, unknown>;
+    };
+    const release = (version: string, componentPath: string) =>
+      JSON.stringify({
+        ...base,
+        version,
+        application: { name: "Hello", destination: "grid" },
+        contributes: {
+          ...base.contributes,
+          views: [{ id: "main", componentPath, location: "panel" }],
+        },
+      });
+    await fsp.writeFile(manifestPath, release("0.1.0", "dist/panel.js"));
+    const harness = makeHarness(root);
+    await harness.open();
+    expect(harness.controller.getProjectApplication(PROJECT_ID)).toMatchObject({
+      status: "active",
+      version: "0.1.0",
+    });
+
+    // The update's manifest lands before the view module it now points at.
+    await fsp.writeFile(manifestPath, release("0.2.0", "dist/panel-v2.js"));
+    expect(
+      await waitFor(
+        () => harness.controller.getProjectApplication(PROJECT_ID)?.reason === "assets-missing"
+      )
+    ).toBe(true);
+    expect(harness.controller.getProjectApplication(PROJECT_ID)).toMatchObject({
+      status: "unavailable",
+      version: "0.2.0",
+      fallback: "standard-workspace",
+      problems: [expect.stringContaining("dist/panel-v2.js")],
+    });
+    // Neither payload runs: the old one's files are gone, the new one is torn.
+    expect(harness.running.has(instanceKey)).toBe(false);
+    expect(harness.loads).toEqual([instanceKey]);
+    expect(harness.settles).toEqual([[instanceKey, false]]);
+
+    await fsp.copyFile(
+      path.join(pluginDir, "dist", "panel.js"),
+      path.join(pluginDir, "dist", "panel-v2.js")
+    );
+    expect(await waitFor(() => harness.running.has(instanceKey))).toBe(true);
+    expect(harness.controller.getProjectApplication(PROJECT_ID)).toMatchObject({
+      status: "active",
+      version: "0.2.0",
+    });
   });
 
   it("unloads a plugin whose folder disappears (a branch without it)", async () => {

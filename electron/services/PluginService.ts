@@ -157,6 +157,10 @@ import {
   ProjectPluginController,
   type ProjectPluginControllerDeps,
 } from "./plugin/ProjectPluginController.js";
+import {
+  applicationPreflightKey,
+  preflightProjectApplication,
+} from "./plugin/projectApplicationPreflight.js";
 import { discoverProjectPlugins } from "./plugin/projectPluginDiscovery.js";
 import { ProjectPluginWatcher } from "./plugin/ProjectPluginWatcher.js";
 import { PluginDevArtifactWatcher } from "./plugin/PluginDevArtifactWatcher.js";
@@ -2272,6 +2276,12 @@ export class PluginService {
       instanceKey?: string;
       /** The project this instance is bound to. Absent means app-global. */
       binding?: PluginHostBinding;
+      /**
+       * The manifest discovery read, which an application's preflight checked
+       * (#14113). This load reads `plugin.json` again, and refuses before it
+       * registers anything when what it reads is not what was checked.
+       */
+      checkedManifest?: Readonly<PluginManifest>;
     }
   ): Promise<LoadedPlugin | null> {
     // Every load path funnels through here — startup scans, a background-
@@ -2381,6 +2391,21 @@ export class PluginService {
         );
         return null;
       }
+    }
+    // The same second read, for an application: a payload its preflight never
+    // saw does not register, so nothing of it is published to be taken back.
+    // Either side declaring one counts, so a rewrite that adds `application`
+    // is caught as well as one that changes it.
+    const checked = opts.checkedManifest;
+    if (
+      checked !== undefined &&
+      (checked.application !== undefined || manifest.application !== undefined) &&
+      applicationPreflightKey(manifest) !== applicationPreflightKey(checked)
+    ) {
+      console.warn(
+        `[PluginService] Project application in ${dirName} changed on disk while it was being checked (${checked.version} checked, ${manifest.version} found) — not loading it`
+      );
+      return null;
     }
     // Manifest-immutability invariant: the parsed manifest is stored on
     // LoadedPlugin.manifest and read across the whole PluginService lifecycle
@@ -7502,6 +7527,13 @@ export class PluginService {
       isEngineIncompatible: (range) => checkPluginEngineRange(this.appVersion, range) !== null,
       getProjectHomeHolder: (projectId) =>
         getProjectSurfaceSlots(projectId).projectHome?.defaultOptionId ?? null,
+      preflightApplication: ({ projectId, projectRoot, dir, manifest }) =>
+        preflightProjectApplication({
+          dir,
+          manifest,
+          projectRoot,
+          dataDir: this.pluginDataDir(makeProjectPluginInstanceKey(projectId, manifest.name)),
+        }),
     };
   }
 
@@ -7921,6 +7953,7 @@ export class PluginService {
       origin: "project",
       instanceKey,
       binding: { projectId: args.projectId, projectRoot: args.projectRoot },
+      checkedManifest: args.manifest,
     });
     if (!loaded) {
       this.writePluginFileLog(

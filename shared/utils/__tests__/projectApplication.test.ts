@@ -16,6 +16,7 @@ function candidate(
 ): ProjectApplicationCandidate {
   return {
     manifestId: "acme.ledger",
+    version: "2.1.0",
     application: APP,
     instanceId: "project:acme.ledger",
     staged: false,
@@ -46,6 +47,7 @@ describe("resolveProjectApplication", () => {
     expect(resolve([candidate()], { homeHeldBy: "project:acme.ledger" })).toEqual({
       status: "active",
       ownerId: "acme.ledger",
+      version: "2.1.0",
       instanceId: "project:acme.ledger",
       application: APP,
       fallback: null,
@@ -80,6 +82,38 @@ describe("resolveProjectApplication", () => {
       reason,
       fallback: "standard-workspace",
     });
+  });
+
+  it.each(["assets-missing", "schema-too-new"] as const)(
+    "is unavailable when the payload failed its preflight (%s), naming what was found",
+    (reason) => {
+      const problems = ["one", "two"];
+      const resolved = resolve([
+        candidate({ instanceId: undefined, preflight: { reason, problems } }),
+      ])!;
+      expect(resolved).toMatchObject({
+        status: "unavailable",
+        reason,
+        version: "2.1.0",
+        problems,
+        fallback: "standard-workspace",
+      });
+      expect(resolved.problems).not.toBe(problems);
+    }
+  );
+
+  it("ranks a preflight failure after the engine range and ahead of a load failure", () => {
+    const preflight = { reason: "assets-missing" as const, problems: ["dist/home.js"] };
+    expect(resolve([candidate({ preflight, engineIncompatible: true })])).toMatchObject({
+      reason: "engine-incompatible",
+    });
+    const failed = resolve([candidate({ preflight, loadFailed: true })]);
+    expect(failed).toMatchObject({ reason: "assets-missing" });
+    expect(resolve([candidate({ preflight, muted: true })])).toMatchObject({ reason: "muted" });
+  });
+
+  it("names problems only for a preflight reason", () => {
+    expect(resolve([candidate({ loadFailed: true })])!.problems).toBeUndefined();
   });
 
   it("puts trust ahead of every other reason", () => {
