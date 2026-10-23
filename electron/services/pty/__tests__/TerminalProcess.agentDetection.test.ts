@@ -7,6 +7,7 @@ import type { DetectionResult } from "../../ProcessDetector.js";
 import { makeAgentResult, makeNoAgentResult } from "../../ProcessDetector.js";
 import { events } from "../../events.js";
 import { DEFAULT_SCROLLBACK } from "../types.js";
+import { PLAIN_SHELL_SCROLLBACK_MAX } from "../../../../shared/config/scrollback.js";
 
 vi.mock("node-pty", () => {
   return { spawn: vi.fn() };
@@ -492,15 +493,67 @@ describe("TerminalProcess.handleAgentDetection — polling loop teardown", () =>
   });
 });
 
-// Issue #5776: spawn-sealed agent behaviours on runtime-promoted panels.
-// Every PTY starts at DEFAULT_SCROLLBACK (the tiered agent-vs-plain split was
-// retired); the invariant under test is that runtime agent detection never
-// changes the headless mirror's scrollback, in either direction.
+// Issue #5776 / #14216: a plain shell's headless mirror is sized to the most
+// its renderer can ever show; agents (launch hint or runtime promotion) get
+// DEFAULT_SCROLLBACK, and nothing ever shrinks the mirror on demotion.
 describe("TerminalProcess.handleAgentDetection — runtime promotion scrollback", () => {
-  it("plain terminal starts at DEFAULT_SCROLLBACK and agent detection does not change it", () => {
-    const terminal = createPlainTerminal();
+  function getHeadlessScrollback(terminal: TerminalProcess): number | undefined {
+    return (
+      terminal as unknown as {
+        terminalInfo: { headlessTerminal?: { options: { scrollback?: number } } };
+      }
+    ).terminalInfo.headlessTerminal?.options.scrollback;
+  }
+
+  it("agent-launched terminal starts at DEFAULT_SCROLLBACK", () => {
+    const terminal = createAgentTerminal();
     try {
       expect(getScrollback(terminal)).toBe(DEFAULT_SCROLLBACK);
+    } finally {
+      terminal.dispose();
+    }
+  });
+
+  it("plain terminal starts at the plain-shell renderer ceiling", () => {
+    const terminal = createPlainTerminal();
+    try {
+      expect(getScrollback(terminal)).toBe(PLAIN_SHELL_SCROLLBACK_MAX);
+      expect(PLAIN_SHELL_SCROLLBACK_MAX).toBeLessThan(DEFAULT_SCROLLBACK);
+    } finally {
+      terminal.dispose();
+    }
+  });
+
+  it("runtime agent detection grows a plain terminal to DEFAULT_SCROLLBACK", () => {
+    const terminal = createPlainTerminal();
+    try {
+      callHandleAgentDetection(
+        terminal,
+        makeAgentResult({ agentType: "claude" as const, processIconId: "claude" }),
+        getSpawnedAt(terminal)
+      );
+
+      expect(getScrollback(terminal)).toBe(DEFAULT_SCROLLBACK);
+      expect(getHeadlessScrollback(terminal)).toBe(DEFAULT_SCROLLBACK);
+    } finally {
+      terminal.dispose();
+    }
+  });
+
+  it("plain terminal's headless mirror is created at the shell size", () => {
+    const terminal = createPlainTerminal();
+    try {
+      expect(getHeadlessScrollback(terminal)).toBe(PLAIN_SHELL_SCROLLBACK_MAX);
+    } finally {
+      terminal.dispose();
+    }
+  });
+
+  it("a governor-trimmed shell grows on promotion", () => {
+    const terminal = createPlainTerminal();
+    try {
+      terminal.trimScrollback(100);
+      expect(getScrollback(terminal)).toBe(100);
 
       callHandleAgentDetection(
         terminal,
@@ -509,6 +562,48 @@ describe("TerminalProcess.handleAgentDetection — runtime promotion scrollback"
       );
 
       expect(getScrollback(terminal)).toBe(DEFAULT_SCROLLBACK);
+    } finally {
+      terminal.dispose();
+    }
+  });
+
+  it("repeated detection of the same agent does not undo a later trim", () => {
+    const terminal = createPlainTerminal();
+    try {
+      const agent = makeAgentResult({ agentType: "claude" as const, processIconId: "claude" });
+      callHandleAgentDetection(terminal, agent, getSpawnedAt(terminal));
+      terminal.trimScrollback(100);
+
+      callHandleAgentDetection(terminal, agent, getSpawnedAt(terminal));
+
+      expect(getScrollback(terminal)).toBe(100);
+    } finally {
+      terminal.dispose();
+    }
+  });
+
+  it("agent exit does not shrink a promoted terminal back down", () => {
+    const terminal = createPlainTerminal();
+    try {
+      callHandleAgentDetection(
+        terminal,
+        makeAgentResult({ agentType: "claude" as const, processIconId: "claude" }),
+        getSpawnedAt(terminal)
+      );
+      callHandleAgentDetection(terminal, makeNoAgentResult({}), getSpawnedAt(terminal));
+
+      expect(getScrollback(terminal)).toBe(DEFAULT_SCROLLBACK);
+    } finally {
+      terminal.dispose();
+    }
+  });
+
+  it("non-agent process detection leaves a plain terminal at the shell size", () => {
+    const terminal = createPlainTerminal();
+    try {
+      callHandleAgentDetection(terminal, makeNoAgentResult({}), getSpawnedAt(terminal));
+
+      expect(getScrollback(terminal)).toBe(PLAIN_SHELL_SCROLLBACK_MAX);
     } finally {
       terminal.dispose();
     }

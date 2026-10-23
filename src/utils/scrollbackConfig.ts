@@ -1,4 +1,4 @@
-import { PTY_MIRROR_SCROLLBACK } from "@shared/config/scrollback";
+import { PLAIN_SHELL_SCROLLBACK_MAX, PTY_MIRROR_SCROLLBACK } from "@shared/config/scrollback";
 
 export const PERFORMANCE_MODE_SCROLLBACK = 100;
 
@@ -15,7 +15,11 @@ const AGENT_POLICY: ScrollbackPolicy = {
   maxLines: PTY_MIRROR_SCROLLBACK,
   minLines: 500,
 };
-const PLAIN_POLICY: ScrollbackPolicy = { multiplier: 0.3, maxLines: 2000, minLines: 200 };
+const PLAIN_POLICY: ScrollbackPolicy = {
+  multiplier: 0.3,
+  maxLines: PLAIN_SHELL_SCROLLBACK_MAX,
+  minLines: 200,
+};
 
 export const AGENT_SCROLLBACK_MAX_LINES = AGENT_POLICY.maxLines;
 export const PLAIN_SCROLLBACK_MIN_LINES = PLAIN_POLICY.minLines;

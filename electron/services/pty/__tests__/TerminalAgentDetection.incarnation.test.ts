@@ -55,6 +55,7 @@ function host(terminal: TerminalInfo): TerminalAgentDetectionHost {
     reconfigureActivityMonitor: () => {},
     startActivityMonitor: () => {},
     stopActivityMonitor: () => {},
+    growScrollback: () => {},
   };
 }
 
