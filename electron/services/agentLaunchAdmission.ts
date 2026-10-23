@@ -106,7 +106,8 @@ export function createAgentLaunchAdmission(
     // A shard that didn't answer would undercount: no count rather than a low one.
     const runningAgents = snapshot && !snapshot.degraded ? live.size : null;
     const limit = agentLaunchLimit(total);
-    // Already running here (another view started it): attaching starts nothing new.
+    // Already running here (another view started it): attaching starts nothing
+    // new, so neither pressure nor the count holds it.
     const alreadyLive = requesterId !== null && live.has(requesterId);
     const observation: AgentLaunchObservation = {
       kernelCritical: critical,
@@ -116,12 +117,15 @@ export function createAgentLaunchAdmission(
       memoryTotalBytes: total,
     };
     const atCapacity =
-      !alreadyLive &&
-      runningAgents !== null &&
-      limit !== null &&
-      runningAgents + startingAgents >= limit;
+      runningAgents !== null && limit !== null && runningAgents + startingAgents >= limit;
     return {
-      holdReason: critical ? "kernel-critical" : atCapacity ? "agent-capacity" : null,
+      holdReason: alreadyLive
+        ? null
+        : critical
+          ? "kernel-critical"
+          : atCapacity
+            ? "agent-capacity"
+            : null,
       observation,
     };
   }

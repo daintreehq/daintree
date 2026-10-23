@@ -166,8 +166,17 @@ describe("agent launch admission (#14221)", () => {
     const admission = await h.admission.request("adopt-me");
 
     expect(admission.holdReason).toBeNull();
-    // Attaching starts nothing, so it holds no place either.
-    expect((await h.admission.observe()).startingAgents).toBe(0);
+    // Attaching starts nothing, so it holds no place: once it exits, its place is free.
+    h.setTerminals([agent("live-1")]);
+    expect((await h.admission.request("next")).holdReason).toBeNull();
+  });
+
+  it("admits an already-running terminal even at critical pressure", async () => {
+    const h = harness({ isKernelCritical: async () => true });
+    h.setTerminals([agent("adopt-me")]);
+
+    expect((await h.admission.request("adopt-me")).holdReason).toBeNull();
+    expect((await h.admission.request("fresh")).holdReason).toBe("kernel-critical");
   });
 
   it("judges each read in turn, so an older read never undercounts a launch a newer one saw", async () => {

@@ -258,6 +258,28 @@ describe("agent launches held at the host's agent limit (#14221)", () => {
     expect(details().a).toBeUndefined();
   });
 
+  it("gives the only place to the next pane when one goes stale while the host answers", async () => {
+    let stale = false;
+    const gone = vi.fn();
+    const next = vi.fn();
+    holdForMemoryPressure(panelHoldKey("gone"), {
+      panelId: "gone",
+      resume: gone,
+      isStale: () => stale,
+    });
+    holdForMemoryPressure(panelHoldKey("next"), { panelId: "next", resume: next });
+    observeAdmissionMock.mockImplementation(async () => {
+      stale = true;
+      return observation({ runningAgents: 7 });
+    });
+
+    await vi.advanceTimersByTimeAsync(MEMORY_PRESSURE_POLL_MS);
+
+    expect(gone).not.toHaveBeenCalled();
+    expect(next).toHaveBeenCalledWith(false);
+    expect(heldPanels()).toEqual(["next"]);
+  });
+
   it("resumes nothing while the host is full, and the rest once agents exit", async () => {
     const resume = vi.fn();
     holdForMemoryPressure(panelHoldKey("a"), { panelId: "a", resume });
