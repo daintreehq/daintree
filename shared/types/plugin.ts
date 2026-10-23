@@ -3010,6 +3010,12 @@ export interface PluginManifest {
    */
   scopes?: PluginManifestScopes;
   activationEvents?: "onStartupFinished"[];
+  /**
+   * Events that wake the plugin and run one of its own commands (#13816).
+   * Optional in the type but always materialized by the manifest schema's
+   * `.default([])`. See {@link PluginEventRoute}.
+   */
+  eventRoutes?: PluginEventRoute[];
   contributes: {
     panels: PanelContribution[];
     toolbarButtons: ToolbarButtonContribution[];
@@ -5061,6 +5067,65 @@ export interface PluginProjectPresence {
   readonly projectId: string;
   readonly state: PluginProjectPresenceState;
 }
+
+/** Every {@link PluginEventRouteEvent}, in the order the docs list them. */
+export const PLUGIN_EVENT_ROUTE_EVENTS = [
+  "agentWaiting",
+  "worktreeAdded",
+  "worktreeRemoved",
+  "projectForeground",
+] as const;
+
+/**
+ * The events a manifest {@link PluginEventRoute} can wake a plugin on (#13816).
+ * Closed: each is the edge of an existing subscription, and the wake carries
+ * that subscription's payload.
+ *
+ * - `agentWaiting` — an agent session moved into `waiting`, as
+ *   {@link PluginActivationApi.onDidChangeAgentState} reports it. Needs
+ *   `agent:read`.
+ * - `worktreeAdded` / `worktreeRemoved` — the worktree set
+ *   {@link PluginActivationApi.onDidChangeWorktrees} reports gained or lost a
+ *   worktree.
+ * - `projectForeground` — a project became `"foreground"`, as
+ *   {@link PluginActivationApi.onDidChangeProjectPresence} reports it.
+ */
+export type PluginEventRouteEvent = (typeof PLUGIN_EVENT_ROUTE_EVENTS)[number];
+
+/**
+ * One manifest `eventRoutes` entry: when `event` happens, the host activates
+ * the plugin if it is not running and runs `command` with a
+ * {@link PluginEventRouteWake}. Unlike a live subscription, a route holds no
+ * worker open, so a plugin that only reacts through routes can still be
+ * disposed while idle.
+ */
+export interface PluginEventRoute {
+  readonly event: PluginEventRouteEvent;
+  /** Bare id of one of this plugin's own `contributes.commands` entries. */
+  readonly command: string;
+}
+
+/**
+ * The single argument a routed command receives. Each variant carries exactly
+ * what the matching subscription delivers, so a handler can share code with a
+ * live listener.
+ *
+ * Wakes are best effort: a burst coalesces to the latest value per terminal,
+ * project or worktree set, a plugin is woken at most about once a second, and
+ * nothing is delivered while its worker has failed. A transition that reverses
+ * before the wake runs (an agent that stopped waiting, a project sent back)
+ * cancels it. Nothing is replayed when the plugin loads.
+ */
+export type PluginEventRouteWake =
+  | { readonly event: "agentWaiting"; readonly agent: PluginAgentSnapshot }
+  | {
+      readonly event: "worktreeAdded" | "worktreeRemoved";
+      /** The worktree set after the change, as `onDidChangeWorktrees` lists it. */
+      readonly worktrees: readonly PluginWorktreeSnapshot[];
+      /** The net change since this route last woke the plugin. */
+      readonly change: PluginWorktreesChange;
+    }
+  | { readonly event: "projectForeground"; readonly presence: PluginProjectPresence };
 
 /** `host.agents` — the agent panes in the plugin's project. */
 export interface PluginAgentsApi {

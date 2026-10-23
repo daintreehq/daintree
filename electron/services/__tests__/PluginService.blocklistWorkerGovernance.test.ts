@@ -163,6 +163,8 @@ const devWorkerMock = vi.hoisted(() => {
     // main→worker invokes and worker→main host calls (e.g. an open prompt).
     pendingInvokeCount = 0;
     pendingHostCallCount = 0;
+    // A manifest command relayed into the worker; resolves as a handler would.
+    invokeCommand = vi.fn(async (_id: string, _path: string, _args: unknown) => undefined);
     waitForActivation = vi.fn(async () => {
       const bundlePath = this.deps.workerHost?.opts?.bundlePath;
       const onResult = this.deps.onActivationResult;
@@ -213,6 +215,10 @@ vi.mock("../plugin/PluginDevWorkerMainBridge.js", () => ({
 }));
 
 import { PluginService } from "../PluginService.js";
+import {
+  ProjectPresenceTracker,
+  _setProjectPresenceTrackerForTests,
+} from "../ProjectPresenceTracker.js";
 import { registerPanelKind } from "../../../shared/config/panelKindRegistry.js";
 import { CHANNELS } from "../../ipc/channels.js";
 import { PLUGIN_BLOCKLIST_TTL_MS } from "../../../shared/config/pluginBlocklist.js";
@@ -718,5 +724,138 @@ describe("Worker governance (idle dispose + snapshots)", () => {
       eligibility: { trim: false, dispose: false, restart: false },
     });
     expect(snapshot?.detail?.reason).toBe("malware");
+  });
+});
+
+describe("Manifest event routes (#13816)", () => {
+  const FUTURE = () => Date.now() + 31 * 60_000;
+  const ALPHA = "a".repeat(64);
+  const BETA = "b".repeat(64);
+  let shown: string[];
+  let tracker: ProjectPresenceTracker;
+
+  beforeEach(() => {
+    shown = [];
+    tracker = new ProjectPresenceTracker(() => shown);
+    _setProjectPresenceTrackerForTests(tracker);
+    tracker.markOpened(ALPHA);
+    tracker.markOpened(BETA);
+  });
+
+  afterEach(() => {
+    _setProjectPresenceTrackerForTests(null);
+  });
+
+  function show(projectId: string): void {
+    shown = [projectId];
+    tracker.refresh();
+  }
+
+  async function writeRoutedPlugin(dirName: string, name: string): Promise<void> {
+    const dir = path.join(tmpDir, dirName);
+    await fs.mkdir(path.join(dir, "src"), { recursive: true });
+    await fs.writeFile(
+      path.join(dir, "plugin.json"),
+      JSON.stringify({
+        name,
+        version: "1.0.0",
+        main: "main.mjs",
+        eventRoutes: [{ event: "projectForeground", command: "onShown" }],
+        contributes: {
+          commands: [
+            {
+              id: "onShown",
+              title: "On shown",
+              description: "Runs when a project comes to the front",
+              category: "Test",
+              kind: "command",
+              danger: "safe",
+            },
+          ],
+        },
+      })
+    );
+    await fs.writeFile(path.join(dir, "main.mjs"), "export function activate() {}\n");
+    await fs.writeFile(path.join(dir, "src", "onShown.mjs"), "export default () => {};\n");
+  }
+
+  function baseline() {
+    return { hosts: devWorkerMock.instances.length, bridges: devWorkerMock.bridges.length };
+  }
+
+  it("activates a cold plugin on its event, runs the command, and leaves it disposable", async () => {
+    const base = baseline();
+    await writeRoutedPlugin("routed", "acme.routed");
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+    // Nothing runs at load: the route is held by the host, not the plugin.
+    expect(devWorkerMock.instances).toHaveLength(base.hosts);
+
+    show(BETA);
+    await vi.waitFor(() => {
+      expect(devWorkerMock.bridges[base.bridges]?.invokeCommand).toHaveBeenCalledTimes(1);
+    });
+    expect(devWorkerMock.bridges[base.bridges].invokeCommand).toHaveBeenCalledWith(
+      "acme.routed.onShown",
+      expect.stringContaining("onShown.mjs"),
+      { event: "projectForeground", presence: { projectId: BETA, state: "foreground" } }
+    );
+
+    // The route is not a live subscription: the worker is still idle-disposable.
+    const result = service.disposeIdlePluginWorkers({ now: FUTURE() });
+    expect(result.disposed).toEqual(["acme.routed"]);
+
+    // And the route outlives the worker, waking a fresh one on the next event.
+    show(ALPHA);
+    await vi.waitFor(
+      () => {
+        expect(devWorkerMock.bridges[base.bridges + 1]?.invokeCommand).toHaveBeenCalledTimes(1);
+      },
+      { timeout: 3_000 }
+    );
+    expect(devWorkerMock.instances).toHaveLength(base.hosts + 2);
+    service.dispose();
+  });
+
+  it("wakes nothing while the worker is in its crash loop", async () => {
+    const base = baseline();
+    await writeRoutedPlugin("looping", "acme.looping");
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+    await service.activatePlugin("acme.looping");
+    const host = devWorkerMock.instances[base.hosts];
+    const onCrashLoop = host.on.mock.calls.find(([event]) => event === "crash-loop")?.[1] as
+      | ((code: number) => void)
+      | undefined;
+    expect(onCrashLoop).toBeTypeOf("function");
+    onCrashLoop?.(1);
+
+    show(BETA);
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(devWorkerMock.bridges[base.bridges].invokeCommand).not.toHaveBeenCalled();
+    expect(devWorkerMock.instances).toHaveLength(base.hosts + 1);
+    service.dispose();
+  });
+
+  it("stops listening once the plugin is disabled", async () => {
+    let listening = 0;
+    const subscribe = tracker.subscribe.bind(tracker);
+    vi.spyOn(tracker, "subscribe").mockImplementation((listener) => {
+      listening++;
+      const off = subscribe(listener);
+      return () => {
+        listening--;
+        off();
+      };
+    });
+    await writeRoutedPlugin("off", "acme.off");
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+    const whileEnabled = listening;
+    expect(whileEnabled).toBeGreaterThan(0);
+
+    await service.setEnabled("acme.off", false);
+    expect(listening).toBe(whileEnabled - 1);
+    service.dispose();
   });
 });

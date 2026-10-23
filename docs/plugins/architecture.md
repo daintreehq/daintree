@@ -95,6 +95,7 @@ A plugin's `activate(host)` function runs when something first needs the plugin'
 - An agent lists or calls tools on one of the plugin's `agentMcp` endpoints (the plugin route calls `PluginService.activatePlugin`)
 - A view's first `plugin:invoke` into one of the plugin's channels (`dispatchHandler` in `PluginService.ts` activates before routing, so handlers registered in `activate()` answer the very first call)
 - The plugin lists `"onStartupFinished"` in `activationEvents` — the one eager trigger in the manifest, fired once startup settles rather than on demand
+- An event the plugin routes in `eventRoutes` happens. `createPluginEventRoutes` (`electron/services/plugin/pluginEventRoutes.ts`) listens in main for each loaded instance, through the same scope helpers as the live subscriptions (`pluginEventScope.ts`), and runs the routed command through `dispatchHandler`, which activates first. Routes are held apart from `pluginEventCleanups`, so they never block idle disposal; they are torn down only when the instance unloads, and suspended while its worker status is `failed`
 
 Some host-side events activate a plugin whatever its `activationEvents` say:
 
@@ -142,7 +143,7 @@ Zero-build workers get the SDK the same way the worker gets everything else: bef
 - is a built-in (it runs in process) or is linked by `daintree-plugin dev`
 - contributes any `panels` or `mcpServers`
 - activates on `onStartupFinished`
-- holds a live event subscription, or registered an action with `host.registerAction` that has no matching manifest command (with no manifest descriptor to re-fork through, it could not come back); an imperative handler for a declared command does not block disposal
+- holds a live event subscription (manifest `eventRoutes` are not subscriptions and do not count), or registered an action with `host.registerAction` that has no matching manifest command (with no manifest descriptor to re-fork through, it could not come back); an imperative handler for a declared command does not block disposal
 - has an invoke or a host call in flight
 - has a managed process running or a `host.fs` watcher open
 - has no recorded activity, or has an enable/disable transition or an activation in flight

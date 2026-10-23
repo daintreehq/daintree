@@ -62,6 +62,7 @@ import {
 } from "../../shared/types/plugin.js";
 import type {
   PluginManifest,
+  PluginEventRouteWake,
   PluginIpcHandler,
   PluginIpcContext,
   PluginHostApi,
@@ -235,6 +236,7 @@ import {
   type PluginWorktreeSnapshotFetchResult,
 } from "./plugin/PluginHostFactory.js";
 import { PluginTaskRegistry } from "./plugin/PluginTaskRegistry.js";
+import { createPluginEventRoutes, type PluginEventRoutes } from "./plugin/pluginEventRoutes.js";
 import type {
   LoadedPlugin,
   ValidateFn,
@@ -388,7 +390,10 @@ import {
 } from "../ipc/utils.js";
 import type { ClientEndpoint } from "../ipc/endpoint.js";
 import { getEndpointRegistry } from "../ipc/endpointRegistry.js";
-import { PLUGIN_INVOKE_MAX_RESULT_BYTES } from "../../shared/config/pluginBudgets.js";
+import {
+  PLUGIN_INVOKE_MAX_ARGS_BYTES,
+  PLUGIN_INVOKE_MAX_RESULT_BYTES,
+} from "../../shared/config/pluginBudgets.js";
 import { assertPayloadWithinLimit, estimatePayloadBytes } from "./plugin/pluginPayloadLimits.js";
 import {
   compilePluginActionResultSchema,
@@ -1125,6 +1130,13 @@ export class PluginService {
   private projectPluginLoadErrors = new Map<string, PluginLoadError>();
   private ajv: AjvInstance | null = null;
   private pluginEventCleanups = new Map<string, Array<() => void>>();
+  /**
+   * Each loaded instance's manifest event routes (#13816). Deliberately apart
+   * from {@link pluginEventCleanups}: those are live subscriptions that keep a
+   * worker from idle disposal, while routes exist to outlive the worker. Torn
+   * down only when the instance unloads.
+   */
+  private pluginEventRoutes = new Map<string, PluginEventRoutes>();
   private workspaceClient: WorkspaceClient | null = null;
   /**
    * Service-level `worktree-activated` listener that evicts stale worktree-scoped
@@ -3348,7 +3360,115 @@ export class PluginService {
       }
     }
 
+    // After command discovery, so a route's command is registered before any
+    // event can wake it — and only if no unload or reload ran meanwhile.
+    if (this.plugins.get(pluginId) === plugin) this.startEventRoutes(pluginId, plugin);
+
     return plugin;
+  }
+
+  /**
+   * Hold a loaded instance's manifest event routes (#13816): host-side
+   * listeners that activate the plugin and run the routed command when an
+   * event happens, without keeping its worker alive in between.
+   */
+  private startEventRoutes(pluginId: string, plugin: LoadedPlugin): void {
+    const routes = plugin.manifest.eventRoutes ?? [];
+    if (routes.length === 0) return;
+    this.stopEventRoutes(pluginId);
+    try {
+      this.pluginEventRoutes.set(
+        pluginId,
+        createPluginEventRoutes(
+          {
+            plugins: this.plugins,
+            declaredCapabilities: (id) => this.declaredCapabilities(id),
+            fetchWorktreeSnapshotsResult: () => this.fetchAllWorktreeSnapshotsResult(),
+            fetchWorktreeSnapshotsForProjectResult: (projectId, projectRoot) =>
+              this.fetchWorktreeSnapshotsForProjectResult(projectId, projectRoot),
+            getWorktreeCustomTitles: (projectId) => this.readWorktreeCustomTitles(projectId),
+            attachWorktreeEvent: (event, handler) =>
+              this.attachWorktreeEvent(pluginId, event, handler),
+            isWorkerFailed: (id) => this.workerStatuses.get(id)?.state === "failed",
+            dispatch: (actionId, wake) => this.dispatchEventRouteWake(pluginId, plugin, actionId, wake),
+          },
+          pluginId,
+          plugin.binding ?? UNBOUND_PLUGIN_HOST_BINDING,
+          routes
+        )
+      );
+    } catch (err) {
+      console.error(`[PluginService] Starting event routes for "${pluginId}" failed:`, err);
+    }
+  }
+
+  private stopEventRoutes(pluginId: string): void {
+    const routes = this.pluginEventRoutes.get(pluginId);
+    if (!routes) return;
+    this.pluginEventRoutes.delete(pluginId);
+    routes.dispose();
+  }
+
+  /**
+   * Run one routed command for an event wake. Goes through
+   * {@link dispatchHandler} like a renderer's `plugin:invoke`, so activation,
+   * input validation, run tracking, metrics, result checks and the handler
+   * audit all apply; what that IPC handler adds itself — the argument cap and
+   * the audit of a failure that never reached a handler — is added here.
+   *
+   * Never rejects: a wake has no caller to report to, so a failure is audited
+   * and logged and the next event wakes the plugin again.
+   */
+  private async dispatchEventRouteWake(
+    pluginId: string,
+    generation: LoadedPlugin,
+    actionId: string,
+    wake: PluginEventRouteWake
+  ): Promise<void> {
+    if (this.plugins.get(pluginId) !== generation) return;
+    const descriptor = this.pluginActions.get(actionId);
+    if (descriptor?.pluginId !== pluginId || !this.manifestCommandIds.has(actionId)) {
+      // The command failed to register (a collision, an invalid descriptor),
+      // which load already reported.
+      return;
+    }
+    const args: unknown[] = [wake];
+    const start = Date.now();
+    let argsWithinLimit = false;
+    try {
+      assertPayloadWithinLimit(
+        pluginId,
+        `"${wake.event}" event route arguments to "${actionId}"`,
+        args,
+        PLUGIN_INVOKE_MAX_ARGS_BYTES
+      );
+      argsWithinLimit = true;
+      // No renderer made this call: `webContentsId` 0 names none, and the
+      // project is the one the instance is bound to.
+      const ctx: PluginIpcContext = {
+        projectId: generation.binding?.projectId ?? null,
+        worktreeId: null,
+        webContentsId: 0,
+        pluginId,
+      };
+      await this.dispatchHandler(pluginId, actionId, ctx, args);
+    } catch (err) {
+      if (!isAuditedHandlerFailure(err) && this.plugins.get(pluginId) === generation) {
+        safeAppendAudit({
+          pluginId,
+          actionId,
+          recordType: "action-dispatch",
+          result: "error",
+          errorMessage: formatErrorMessage(err, "event route dispatch failed"),
+          argsHash: argsWithinLimit ? safeArgsHash(args) : "",
+          durationMs: Date.now() - start,
+        });
+      }
+      console.warn(
+        `[PluginService] "${wake.event}" event route to "${actionId}" for "${pluginId}" failed:`,
+        err
+      );
+    }
   }
 
   /**
@@ -5402,29 +5522,22 @@ export class PluginService {
    * against the plugin so `unloadPlugin()` can dispose it. Returns a disposer
    * that removes just this subscription; safe to call multiple times.
    *
-   * If WorkspaceClient is not yet wired (early plugin activate during boot),
-   * the subscription is queued in `pendingWorktreeSubs` and replayed when
-   * `setWorkspaceClient()` is later called. The returned disposer handles
-   * both the queued and the live state.
+   * Tracked as one of the plugin's live subscriptions, so it keeps the
+   * plugin's worker from being disposed while idle. See
+   * {@link attachWorktreeEvent} for the untracked listener underneath.
    */
   private subscribeWorktreeEvent(
     pluginId: string,
     event: WorkspaceWorktreeEvent,
     handler: (payload?: PluginWorktreeEventPayload) => void
   ): () => void {
-    let boundClient: WorkspaceClient | null = null;
-    let pendingRecord: (typeof this.pendingWorktreeSubs)[number] | null = null;
+    const detach = this.attachWorktreeEvent(pluginId, event, handler);
     let disposed = false;
 
     const dispose = (): void => {
       if (disposed) return;
       disposed = true;
-      if (boundClient) {
-        boundClient.off(event, handler);
-      } else if (pendingRecord) {
-        const idx = this.pendingWorktreeSubs.indexOf(pendingRecord);
-        if (idx >= 0) this.pendingWorktreeSubs.splice(idx, 1);
-      }
+      detach();
       const list = this.pluginEventCleanups.get(pluginId);
       if (!list) return;
       const idx = list.indexOf(dispose);
@@ -5438,6 +5551,27 @@ export class PluginService {
       this.pluginEventCleanups.set(pluginId, list);
     }
     list.push(dispose);
+    return dispose;
+  }
+
+  /**
+   * Listen on WorkspaceClient for the given event without recording a live
+   * subscription for the plugin — what a manifest event route needs, since a
+   * route must not keep the worker from idle disposal (#13816). The caller owns
+   * the returned detach, which is safe to call more than once.
+   *
+   * If WorkspaceClient is not yet wired (early boot), the listener is queued in
+   * `pendingWorktreeSubs` and attached when `setWorkspaceClient()` is later
+   * called. The detach handles both the queued and the live state.
+   */
+  private attachWorktreeEvent(
+    pluginId: string,
+    event: WorkspaceWorktreeEvent,
+    handler: (payload?: PluginWorktreeEventPayload) => void
+  ): () => void {
+    let boundClient: WorkspaceClient | null = null;
+    let pendingRecord: (typeof this.pendingWorktreeSubs)[number] | null = null;
+    let detached = false;
 
     const client = this.workspaceClient;
     if (client) {
@@ -5449,7 +5583,7 @@ export class PluginService {
         event,
         handler,
         activate: (c: WorkspaceClient) => {
-          if (disposed) return;
+          if (detached) return;
           c.on(event, handler);
           boundClient = c;
           pendingRecord = null;
@@ -5458,7 +5592,16 @@ export class PluginService {
       this.pendingWorktreeSubs.push(pendingRecord);
     }
 
-    return dispose;
+    return () => {
+      if (detached) return;
+      detached = true;
+      if (boundClient) {
+        boundClient.off(event, handler);
+      } else if (pendingRecord) {
+        const idx = this.pendingWorktreeSubs.indexOf(pendingRecord);
+        if (idx >= 0) this.pendingWorktreeSubs.splice(idx, 1);
+      }
+    };
   }
 
   /**
@@ -7727,6 +7870,7 @@ export class PluginService {
       this.cleanupMap.delete(pluginId);
     }
     this.flushPluginEventCleanups(pluginId);
+    this.stopEventRoutes(pluginId);
 
     // Capture the unloaded plugin's declared decoration scopes before clearing
     // the registry so we can tell any renderer that was showing them to

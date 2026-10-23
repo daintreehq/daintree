@@ -38,6 +38,7 @@ Every callback a plugin hands the host has a fixed shape, and the one for `regis
 | `db` handle `onDidChange(cb)` | `({ origin })` | Frozen, and at most one per 50 ms window. Returns its disposer synchronously, not a Promise. |
 | `fs.watch(paths, cb, options?)` | `(changedPath)` | The absolute path that changed. |
 | Filesystem-convention command, `src/{id}.js` | `(args)` | Installed plugins only; a project plugin registers from `activate()` instead. |
+| A command named by a manifest [`eventRoutes`](./manifest.md#eventroutes) entry | `(wake)` | A `PluginEventRouteWake`: `{ event, ... }` carrying what the matching subscription above delivers. Runs without a live subscription, so the plugin's worker can still be disposed while idle. |
 
 An argument-less handler ignores both parameters and works whichever way it was written, which is why the bug in an argument-taking one hides: the panel looks healthy and only the buttons that pass something do nothing. If a handler's first parameter has a `webContentsId`, it is reading the context.
 
