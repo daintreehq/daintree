@@ -1745,7 +1745,9 @@ function ProjectInstancePackagePane({
         </SettingsGroup>
       </SettingsSection>
 
-      {!plugin.disabled && hasPluginSettings(instance) && (
+      {/* Only while it runs here: a stale list can still carry an instance this
+          switch just stopped, and its fields would write to nothing. */}
+      {on && !plugin.disabled && !plugin.blocklisted && hasPluginSettings(instance) && (
         <SettingsSection title="Settings" id={PLUGIN_SETTINGS_HOME_ID}>
           <PluginSettingsForm
             plugin={instance}
@@ -1941,8 +1943,15 @@ export function ProjectPluginsTab() {
       : projectPlugins.find((p) => p.instanceId === settingsRequest.pluginId);
   const requestLoaded =
     settingsRequest === null ? undefined : loadedByInstanceId.get(settingsRequest.pluginId);
+  // A per-project package's pane shows its instance's form only while it is on here.
+  const requestInstanceKey =
+    settingsRequest === null ? null : parseProjectPluginInstanceKey(settingsRequest.pluginId);
+  const requestInstanceOff =
+    requestInstanceKey?.installed === true &&
+    instanceEnabled[requestInstanceKey.manifestId] === false;
   const requestTargetHasForm =
     settingsRequest !== null &&
+    !requestInstanceOff &&
     (requestProjectPlugin === undefined ||
       isProjectPluginRunning(requestProjectPlugin, folderTrusted)) &&
     hasPluginSettings(requestLoaded) &&

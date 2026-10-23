@@ -1530,6 +1530,36 @@ describe("ProjectPluginsTab per-project packages", () => {
     usePluginManagerStore.setState({ settingsRequest: null });
   });
 
+  it("drops the instance's settings the moment it's turned off here", async () => {
+    const settings = [
+      { id: "apiKey", type: "string" as const, label: "API key", scope: "project" as const },
+    ];
+    const manifest = { ...installed().manifest, contributes: { ...EMPTY_CONTRIBUTES, settings } };
+    // The list stays stale: it still carries the running instance after the switch.
+    pluginApi.list.mockResolvedValue([
+      installed({ instanceMode: "project", enabledInProjects: [PROJECT_ID], manifest }),
+      installed({ instanceId: INSTANCE_KEY, origin: "project", projectId: PROJECT_ID, manifest }),
+    ]);
+    seed([]);
+    render(<ProjectPluginsTab />);
+    await waitFor(() => expect(pluginApi.list).toHaveBeenCalled());
+    await select("Acme Tools");
+    expect(await screen.findByLabelText("API key")).toBeTruthy();
+
+    pluginApi.setProjectInstanceEnabled.mockImplementationOnce(async () => {
+      // Main has it off now; the tab's own copy of the list has not been re-read.
+      pluginApi.list.mockResolvedValue([
+        installed({ instanceMode: "project", enabledInProjects: [], manifest }),
+      ]);
+    });
+    fireEvent.click(screen.getByTestId("installed-plugin-instance-switch"));
+
+    await waitFor(() => expect(screen.queryByLabelText("API key")).toBeNull());
+    await waitFor(() => expect(useProjectPluginStore.getState().instanceToggling.size).toBe(0));
+    expect(screen.queryByLabelText("API key")).toBeNull();
+    expect(pluginApi.setProjectInstanceEnabled).toHaveBeenCalledWith("acme.tools", false);
+  });
+
   it("states a failed toggle on its row and retries the same write", async () => {
     pluginApi.list.mockResolvedValue([packageRow()]);
     pluginApi.setProjectInstanceEnabled.mockRejectedValueOnce(new Error("EACCES"));
