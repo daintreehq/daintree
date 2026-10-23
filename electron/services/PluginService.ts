@@ -4363,11 +4363,16 @@ export class PluginService {
         targets.push(plugin.manifest.name);
       }
       if (targets.length === 0) return;
+      const errorsBefore = targets.map((id) => this.getPluginLoadError(id)?.message);
       await Promise.allSettled(targets.map((id) => this.activatePlugin(id)));
       // Catalog readers no longer wait for this fan-out (#14127), and an
       // installed plugin's activation error is persisted without a push of its
-      // own: tell the plugin list to pull the outcomes it may have missed.
-      this.broadcaster.broadcastProvenanceChanged();
+      // own: tell the plugin list to pull an outcome it may have missed. Only
+      // on a change, since every provenance push also closes the manager's
+      // open uninstall/update confirmations.
+      if (targets.some((id, i) => this.getPluginLoadError(id)?.message !== errorsBefore[i])) {
+        this.broadcaster.broadcastProvenanceChanged();
+      }
     } finally {
       // Open the init gate even if every plugin's activate() rejected — a
       // crashed plugin must not strand renderer IPC callers awaiting

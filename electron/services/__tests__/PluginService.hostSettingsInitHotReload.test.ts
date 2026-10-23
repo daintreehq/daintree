@@ -1182,24 +1182,36 @@ describe("init gate — waitForInit() and pushSnapshotTo() (#9285)", () => {
     service.dispose();
   });
 
-  it("tells the plugin list to re-pull once startup activations settle", async () => {
-    const service = new PluginService(tmpDir);
-    const activate = vi.spyOn(service, "activatePlugin").mockResolvedValue(undefined);
-    (service as unknown as { plugins: Map<string, unknown> }).plugins.set("acme.early", {
-      resolvedMain: "/x/main.mjs",
-      manifest: { name: "acme.early", activationEvents: ["onStartupFinished"] },
-    });
-    broadcastToRendererMock.mockClear();
+  it.each([
+    { outcome: "fails", loadError: { message: "boom", at: 1 }, pushes: 1 },
+    { outcome: "succeeds", loadError: null, pushes: 0 },
+  ])(
+    "re-pulls the plugin list only when a startup activation changes its load error ($outcome)",
+    async ({ loadError, pushes }) => {
+      const service = new PluginService(tmpDir);
+      const internals = service as unknown as {
+        plugins: Map<string, unknown>;
+        records: { upsertInstalledRecord: (id: string, patch: object) => void };
+      };
+      const activate = vi.spyOn(service, "activatePlugin").mockImplementation(async (id) => {
+        internals.records.upsertInstalledRecord(id, { loadError });
+      });
+      internals.plugins.set("acme.early", {
+        resolvedMain: "/x/main.mjs",
+        manifest: { name: "acme.early", activationEvents: ["onStartupFinished"] },
+      });
+      broadcastToRendererMock.mockClear();
 
-    await service.activateStartupFinishedPlugins();
-    expect(activate).toHaveBeenCalledWith("acme.early");
-    expect(broadcastToRendererMock).toHaveBeenCalledWith(expect.any(String), {
-      name: "plugin:provenance-changed",
-      payload: {},
-    });
-    (service as unknown as { plugins: Map<string, unknown> }).plugins.clear();
-    service.dispose();
-  });
+      await service.activateStartupFinishedPlugins();
+      expect(activate).toHaveBeenCalledWith("acme.early");
+      const provenancePushes = broadcastToRendererMock.mock.calls.filter(
+        (c) => (c[1] as { name?: string })?.name === "plugin:provenance-changed"
+      );
+      expect(provenancePushes).toHaveLength(pushes);
+      internals.plugins.clear();
+      service.dispose();
+    }
+  );
 
   it("dispose() resolves a pending waitForCatalog() too", async () => {
     const service = new PluginService(tmpDir);
