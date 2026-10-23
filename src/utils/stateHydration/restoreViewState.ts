@@ -8,6 +8,9 @@ import {
   useActionMruStore,
   useActionPrefsStore,
 } from "@/store";
+import { panelPersistence } from "@/store/persistence/panelPersistence";
+import { draftInputPersistence } from "@/store/persistence/draftInputPersistence";
+import { useTerminalInputStore } from "@/store/terminalInputStore";
 import type { HydrateResult } from "@shared/types/ipc/app";
 
 // Minimal shape the picker needs from a hydrated panel. We only read
@@ -77,10 +80,18 @@ export function pickBootFocusPanelId(
  * Restore this view's project — panels, tab groups, worktree selection and
  * the boot focus — from main's saved state. Boot runs it once with the
  * prefetched payload; a view that dropped to the picker and is reopened on
- * the same project runs it again with a fresh `appClient.hydrate()`, since
- * main reuses that view rather than cold-starting one (#14179).
+ * the same project runs it again with a fresh `appClient.hydrate()`, passing
+ * that project as `reopenedProjectId`, since main reuses that view rather than
+ * cold-starting one (#14179).
  */
-export async function restoreViewState(prefetchedHydrateResult?: HydrateResult): Promise<void> {
+export async function restoreViewState(
+  prefetchedHydrateResult?: HydrateResult,
+  reopenedProjectId?: string
+): Promise<void> {
+  // This view's persistence baselines predate whatever was saved while it was
+  // dropped. Re-seed them from what this restore adopts, or a panel, group or
+  // draft removed after it would never be tombstoned and would come back.
+  if (reopenedProjectId) panelPersistence.clearProjectSnapshotCache(reopenedProjectId);
   const panelStore = usePanelStore.getState();
   type AddPanelOptions = Parameters<typeof panelStore.addPanel>[0];
   await hydrateAppState({
@@ -103,6 +114,12 @@ export async function restoreViewState(prefetchedHydrateResult?: HydrateResult):
     flushHydrationBatch: panelStore.flushHydrationBatch,
     prefetchedHydrateResult,
   });
+  if (reopenedProjectId) {
+    draftInputPersistence.rebaseProject(
+      reopenedProjectId,
+      useTerminalInputStore.getState().getProjectDraftInputs(reopenedProjectId)
+    );
+  }
 
   // The batched restore skips addPanel's opportunistic focus, so pick one now:
   // the active worktree's most recently focused panel, committed without

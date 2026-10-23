@@ -19,6 +19,7 @@ const mocks = vi.hoisted(() => ({
   notify: vi.fn<(notice: Notice) => void>(),
   dispatch: vi.fn(),
   calls: [] as string[],
+  switchingTo: { value: "p1" as string | null },
 }));
 
 vi.mock("@/clients/projectClient", () => ({
@@ -31,11 +32,13 @@ vi.mock("@/store/projectStore", () => ({
       sleepProject: mocks.sleepProject,
       switchProject: mocks.storeSwitchProject,
       clearSwitching: mocks.clearSwitching,
+      switchingToProjectId: mocks.switchingTo.value,
     }),
     setState: mocks.setState,
   },
   claimDroppedViewRestore: mocks.claim,
   releaseDroppedViewRestore: mocks.release,
+  runDroppedViewRestore: (_id: string, restore: () => Promise<void>) => restore(),
   getProjectOpenErrorMessage: (error: unknown) => String(error),
 }));
 vi.mock("@/utils/stateHydration/restoreViewState", () => ({
@@ -56,6 +59,7 @@ function lastNotice(): Notice {
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.calls.length = 0;
+  mocks.switchingTo.value = "p1";
   mocks.sleepProject.mockImplementation(async () => {
     mocks.calls.push("sleep");
     return {};
@@ -135,6 +139,12 @@ describe("restartProject", () => {
     await expect(restartProject("p1")).resolves.toBe("reopened-elsewhere");
     expect(mocks.restoreViewState).not.toHaveBeenCalled();
     expect(mocks.notify).not.toHaveBeenCalled();
+  });
+
+  it("leaves the busy flags to a switch the user started meanwhile", async () => {
+    mocks.switchingTo.value = "p2";
+    await expect(restartProject("p1")).resolves.toBe("restarted");
+    expect(mocks.clearSwitching).not.toHaveBeenCalled();
   });
 
   it("reports a restore failure after the project reopened", async () => {

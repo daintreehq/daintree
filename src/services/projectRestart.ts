@@ -5,6 +5,7 @@ import {
   claimDroppedViewRestore,
   getProjectOpenErrorMessage,
   releaseDroppedViewRestore,
+  runDroppedViewRestore,
   useProjectStore,
 } from "@/store/projectStore";
 import { logErrorWithContext } from "@/utils/errorContext";
@@ -107,7 +108,7 @@ export async function restartProject(projectId: string): Promise<ProjectRestartO
     }
 
     try {
-      await restoreViewState();
+      await runDroppedViewRestore(projectId, () => restoreViewState(undefined, projectId));
     } catch (error) {
       logErrorWithContext(error, {
         operation: "restart_project_restore",
@@ -128,6 +129,9 @@ export async function restartProject(projectId: string): Promise<ProjectRestartO
 
     return "restarted";
   } finally {
-    useProjectStore.getState().clearSwitching();
+    // A switch the user started meanwhile owns the busy flags now.
+    if (useProjectStore.getState().switchingToProjectId === projectId) {
+      useProjectStore.getState().clearSwitching();
+    }
   }
 }

@@ -10,6 +10,7 @@ const { projectClientMock, panelPersistenceMock } = vi.hoisted(() => ({
     onSwitch: vi.fn(() => () => {}),
     onWorktreeLoadStatus: vi.fn(() => () => {}),
     sleepProject: vi.fn(),
+    switch: vi.fn(),
     setTerminals: vi.fn(),
     setTerminalSizes: vi.fn(),
   },
@@ -57,7 +58,12 @@ vi.mock("@/services/projectSwitchRendererCache", () => ({
   cancelPreparedProjectSwitchRendererCache: vi.fn(),
 }));
 
-import { useProjectStore } from "../projectStore";
+import {
+  claimDroppedViewRestore,
+  isDroppedViewLayoutPending,
+  runDroppedViewRestore,
+  useProjectStore,
+} from "../projectStore";
 
 const PROJECT = { id: "proj-1", name: "One", path: "/repo/one" };
 
@@ -167,6 +173,74 @@ describe("projectStore.sleepProject", () => {
       expect(panelPersistenceMock.whenIdle).not.toHaveBeenCalled();
       expect(panelPersistenceMock.cancel).not.toHaveBeenCalled();
       expect(useProjectStore.getState().currentProject).toEqual(other);
+    });
+  });
+
+  // Main reuses the dropped view when the project is reopened in it, so the
+  // layout has to be restored here, once, and nothing may save the empty store
+  // over it in the meantime (#14179).
+  describe("the dropped view", () => {
+    beforeEach(() => setCurrentProject(PROJECT));
+
+    it("holds the layout as pending until one claimed restore finishes", async () => {
+      await useProjectStore.getState().sleepProject("proj-1");
+      expect(isDroppedViewLayoutPending("proj-1")).toBe(true);
+
+      expect(claimDroppedViewRestore("other")).toBe(false);
+      expect(claimDroppedViewRestore("proj-1")).toBe(true);
+      expect(claimDroppedViewRestore("proj-1")).toBe(false);
+      // Claimed is not restored: the store still lacks the layout.
+      expect(isDroppedViewLayoutPending("proj-1")).toBe(true);
+
+      await runDroppedViewRestore("proj-1", async () => {});
+      expect(isDroppedViewLayoutPending("proj-1")).toBe(false);
+      expect(claimDroppedViewRestore("proj-1")).toBe(false);
+    });
+
+    it("hands a failed restore back for the next reopen", async () => {
+      await useProjectStore.getState().sleepProject("proj-1");
+      expect(claimDroppedViewRestore("proj-1")).toBe(true);
+
+      await expect(
+        runDroppedViewRestore("proj-1", () => Promise.reject(new Error("hydrate failed")))
+      ).rejects.toThrow("hydrate failed");
+
+      expect(isDroppedViewLayoutPending("proj-1")).toBe(true);
+      expect(claimDroppedViewRestore("proj-1")).toBe(true);
+      await runDroppedViewRestore("proj-1", async () => {});
+    });
+
+    it("sends no outgoing snapshot when switching away before the restore", async () => {
+      await useProjectStore.getState().sleepProject("proj-1");
+      // Toolbar's switch listener re-reads the current project as soon as the
+      // reopen lands, before the restore has put any panels back.
+      setCurrentProject(PROJECT);
+      projectClientMock.switch.mockResolvedValue({ outcome: "switched", project: {} });
+
+      await useProjectStore.getState().switchProject("proj-2");
+
+      expect(projectClientMock.switch).toHaveBeenCalledWith("proj-2", undefined, expect.anything());
+      expect(claimDroppedViewRestore("proj-1")).toBe(true);
+      await runDroppedViewRestore("proj-1", async () => {});
+    });
+
+    it("waits for a restore still in flight before sleeping again", async () => {
+      await useProjectStore.getState().sleepProject("proj-1");
+      expect(claimDroppedViewRestore("proj-1")).toBe(true);
+      const restore = deferred<void>();
+      const restoring = runDroppedViewRestore("proj-1", () => restore.promise);
+      setCurrentProject(PROJECT);
+      projectClientMock.sleepProject.mockClear();
+
+      const sleeping = useProjectStore.getState().sleepProject("proj-1");
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(projectClientMock.sleepProject).not.toHaveBeenCalled();
+
+      restore.resolve();
+      await restoring;
+      await sleeping;
+      expect(projectClientMock.sleepProject).toHaveBeenCalledWith("proj-1");
     });
   });
 });

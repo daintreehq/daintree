@@ -39,6 +39,7 @@ vi.mock("@/store/projectStore", () => ({
     mocks.dropped = null;
     return true;
   },
+  runDroppedViewRestore: (_id: string, restore: () => Promise<void>) => restore(),
 }));
 
 import { useDroppedViewRestore } from "../useDroppedViewRestore";
@@ -66,6 +67,7 @@ describe("useDroppedViewRestore", () => {
     emitSwitch("p1");
     emitSwitch("p1");
     expect(mocks.restoreViewState).toHaveBeenCalledTimes(1);
+    expect(mocks.restoreViewState).toHaveBeenCalledWith(undefined, "p1");
   });
 
   it("leaves views that never dropped, or that open a different project, alone", () => {

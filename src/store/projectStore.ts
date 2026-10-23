@@ -426,23 +426,61 @@ export function isSelfInitiatedSleep(projectId: string): boolean {
 
 /**
  * The project this view was showing when it last dropped to the picker through
- * {@link ProjectState.dropToNoProject}. Main keeps that view bound to the
- * project, so reopening it — from the picker, a restart, or a switch back to
- * the cached view — reuses this renderer, whose one-shot boot hydration has
- * already run. Whoever claims it restores the saved layout (#14179).
+ * {@link ProjectState.dropToNoProject}, until its layout is restored here.
+ *
+ * Main keeps that view bound to the project, so reopening it — from the
+ * picker, a restart, or a switch back to the cached view — reuses this
+ * renderer, whose one-shot boot hydration has already run. Whoever claims it
+ * restores the saved layout (#14179). Until that restore finishes the panel
+ * store doesn't hold the project's layout, so nothing here may save it.
  */
-let droppedViewProjectId: string | null = null;
+let droppedView: { projectId: string; claimed: boolean } | null = null;
+let viewRestoreInFlight: Promise<void> | null = null;
 
 /** Take the pending restore for `projectId`; true at most once per drop. */
 export function claimDroppedViewRestore(projectId: string): boolean {
-  if (droppedViewProjectId !== projectId) return false;
-  droppedViewProjectId = null;
+  if (droppedView?.projectId !== projectId || droppedView.claimed) return false;
+  droppedView = { projectId, claimed: true };
   return true;
 }
 
-/** Put back a claim whose reopen never landed, so the next reopen restores. */
+/** Put back a claim whose reopen or restore never landed, so the next one restores. */
 export function releaseDroppedViewRestore(projectId: string): void {
-  droppedViewProjectId = projectId;
+  droppedView = { projectId, claimed: false };
+}
+
+/**
+ * Run the claimed restore. Its layout counts as pending until it settles, and
+ * a sleep of the project waits for it so the teardown can't race the panels
+ * it is still adding.
+ */
+export function runDroppedViewRestore(
+  projectId: string,
+  restore: () => Promise<void>
+): Promise<void> {
+  const run = restore().then(
+    () => {
+      if (droppedView?.projectId === projectId) droppedView = null;
+    },
+    (error: unknown) => {
+      releaseDroppedViewRestore(projectId);
+      throw error;
+    }
+  );
+  const settled = run.catch(() => {});
+  viewRestoreInFlight = settled;
+  void settled.then(() => {
+    if (viewRestoreInFlight === settled) viewRestoreInFlight = null;
+  });
+  return run;
+}
+
+/**
+ * Whether this view's panel store doesn't yet hold `projectId`'s saved layout:
+ * dropped and not yet restored. A snapshot of it would erase that layout.
+ */
+export function isDroppedViewLayoutPending(projectId: string): boolean {
+  return droppedView?.projectId === projectId;
 }
 
 let projectTransitionRequestId = 0;
@@ -1049,8 +1087,13 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
 
     // Capture outgoing state just before firing, after the paint. The outgoing
     // view is not detached until the main process handles the IPC, so the panel
-    // store still reflects the outgoing project here.
-    const outgoingState = currentProjectId ? buildOutgoingState(currentProjectId) : undefined;
+    // store still reflects the outgoing project here — unless this view dropped
+    // it and hasn't restored it yet, when a snapshot of the empty store would
+    // erase the saved layout.
+    const outgoingState =
+      currentProjectId && !isDroppedViewLayoutPending(currentProjectId)
+        ? buildOutgoingState(currentProjectId)
+        : undefined;
     markSwitch(PERF_MARKS.PROJECT_SWITCH_SNAPSHOT_BUILT, {
       ...traceMeta,
       terminalCount: outgoingState?.terminals?.length ?? 0,
@@ -1306,9 +1349,13 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
     // leaves that view alive — destroying it would blank the window, since the
     // unbound first-run welcome view is closed for good once a project paints.
     clearFleetArmingThroughAccessor();
-    droppedViewProjectId = get().currentProject?.id ?? null;
+    const droppedProjectId = get().currentProject?.id;
+    droppedView = droppedProjectId ? { projectId: droppedProjectId, claimed: false } : null;
     set({ currentProject: null, worktreeLoadError: null });
-    clearPanelStoreForSwitchThroughAccessor();
+    // The project's terminals are gone, so their xterm instances go too: a
+    // restore re-adds the same ids, and reusing an instance would carry the dead
+    // process's parser state and screen modes into the respawned one.
+    clearPanelStoreForSwitchThroughAccessor({ destroyInstances: true });
   },
 
   sleepProject: async (projectId) => {
@@ -1321,6 +1368,9 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
     // asked for.
     selfInitiatedSleeps.add(projectId);
     try {
+      // A restore still adding this project's panels would keep spawning
+      // terminals after the teardown below.
+      if (isActive && viewRestoreInFlight) await viewRestoreInFlight;
       if (isActive) {
         // Sleep's whole point is that main writes each captured agentSessionId
         // back into the SAVED panel snapshots. A debounced renderer save still
@@ -1329,6 +1379,7 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
         // asking for the teardown. (Close cancels instead — it deletes the
         // state either way.)
         panelPersistence.flush();
+        draftInputPersistence.flushAll();
         await panelPersistence.whenIdle();
       }
 

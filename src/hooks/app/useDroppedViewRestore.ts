@@ -1,6 +1,6 @@
 import { useEffect } from "react";
 import { projectClient } from "@/clients/projectClient";
-import { claimDroppedViewRestore } from "@/store/projectStore";
+import { claimDroppedViewRestore, runDroppedViewRestore } from "@/store/projectStore";
 import { notify } from "@/lib/notify";
 import { actionService } from "@/services/ActionService";
 import { logError } from "@/utils/logger";
@@ -21,7 +21,8 @@ export function useDroppedViewRestore(): void {
     return projectClient.onSwitch((payload) => {
       const project = payload?.project;
       if (!project || !claimDroppedViewRestore(project.id)) return;
-      void restoreViewState().catch((error: unknown) => {
+      const restore = () => restoreViewState(undefined, project.id);
+      void runDroppedViewRestore(project.id, restore).catch((error: unknown) => {
         logError("Failed to restore a reopened project", error);
         notify({
           type: "error",

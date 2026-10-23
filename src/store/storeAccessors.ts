@@ -38,7 +38,7 @@ let _getProjectPathIndex: (() => ReadonlyMap<string, string> | null) | null = nu
 let _setPanelExtensionState: ((panelId: string, patch: Record<string, unknown>) => boolean) | null =
   null;
 let _setPanelTitle: ((panelId: string, title: string) => void) | null = null;
-let _clearPanelStoreForSwitch: (() => void) | null = null;
+let _clearPanelStoreForSwitch: ((options?: { destroyInstances?: boolean }) => void) | null = null;
 let _clearFleetArming: (() => void) | null = null;
 let _getFleetArmedIds: (() => Set<string>) | null = null;
 let _getFleetLastArmedId: (() => string | null) | null = null;
@@ -191,12 +191,17 @@ export function setPanelTitleThroughAccessor(panelId: string, title: string): vo
   _setPanelTitle?.(panelId, title);
 }
 
-export function setPanelStoreClearForSwitchAccessor(callback: () => void): void {
+export function setPanelStoreClearForSwitchAccessor(
+  callback: (options?: { destroyInstances?: boolean }) => void
+): void {
   _clearPanelStoreForSwitch = callback;
 }
 
-export function clearPanelStoreForSwitchThroughAccessor(): void {
-  _clearPanelStoreForSwitch?.();
+/** `destroyInstances` also disposes the panels' xterm instances (their PTYs are gone). */
+export function clearPanelStoreForSwitchThroughAccessor(options?: {
+  destroyInstances?: boolean;
+}): void {
+  _clearPanelStoreForSwitch?.(options);
 }
 
 export function setFleetArmingClearAccessor(callback: () => void): void {
