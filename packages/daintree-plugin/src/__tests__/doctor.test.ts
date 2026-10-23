@@ -207,6 +207,83 @@ describe("runDoctor", () => {
     expect(result.ok).toBe(false);
   });
 
+  const TOUR_MANIFEST = {
+    ...VALID_MANIFEST,
+    contributes: {
+      ...VALID_MANIFEST.contributes,
+      tours: [
+        {
+          id: "welcome",
+          title: "Welcome Tour",
+          componentPath: "dist/tour.js",
+          chapters: [
+            { id: "intro", duration: 6, audioUrl: "tours/intro.ogg", narrationHash: "3fa9c21e" },
+          ],
+        },
+      ],
+    },
+  };
+
+  it("fails a tour whose scene module is missing and only warns about missing narration", async () => {
+    await initRepo();
+    await writePlugin("acme.demo", TOUR_MANIFEST);
+    await commitAll();
+
+    const result = await runDoctor(projectRoot, { offline: true });
+    const { errors, warnings } = result.plugins[0];
+    expect(errors.find((e) => e.includes('"dist/tour.js"'))).toContain("tours[0].componentPath");
+    expect(errors.some((e) => e.includes("intro.ogg"))).toBe(false);
+    expect(warnings.find((w) => w.includes('"tours/intro.ogg"'))).toContain("silent");
+    expect(result.ok).toBe(false);
+  });
+
+  it("passes a tour whose scene module and narration are committed", async () => {
+    await initRepo();
+    await writePlugin("acme.demo", TOUR_MANIFEST, {
+      "dist/index.mjs": WORKER_ENTRY,
+      "dist/panel.js": VIEW_ENTRY,
+      "dist/tour.js": "export const scenes = {};\n",
+      "tours/intro.ogg": "OggS",
+    });
+    await commitAll();
+
+    const result = await runDoctor(projectRoot, { offline: true });
+    expect(result.plugins[0].errors).toEqual([]);
+    expect(result.plugins[0].warnings.some((w) => w.includes("intro.ogg"))).toBe(false);
+  });
+
+  it("checks nested Assistant knowledge files and refuses a symlink that leaves the plugin", async () => {
+    await initRepo();
+    await fs.writeFile(path.join(projectRoot, "outside.md"), "# outside", "utf8");
+    const dir = await writePlugin("acme.demo", {
+      ...VALID_MANIFEST,
+      contributes: {
+        ...VALID_MANIFEST.contributes,
+        databases: [{ id: "ledger", location: "local" }],
+        assistantKnowledge: {
+          instructions: "knowledge/instructions.md",
+          skills: [{ id: "deploy", path: "knowledge/deploy" }],
+        },
+      },
+    });
+    await fs.mkdir(path.join(dir, "knowledge", "deploy"), { recursive: true });
+    await fs.symlink(
+      path.join(projectRoot, "outside.md"),
+      path.join(dir, "knowledge", "instructions.md")
+    );
+    await commitAll();
+
+    const result = await runDoctor(projectRoot, { offline: true });
+    const { errors } = result.plugins[0];
+    expect(errors.find((e) => e.includes("assistantKnowledge.instructions"))).toContain(
+      "outside the plugin directory"
+    );
+    expect(errors.find((e) => e.includes("knowledge/deploy/SKILL.md"))).toContain(
+      "assistantKnowledge.skills[0].path"
+    );
+    expect(result.ok).toBe(false);
+  });
+
   it("keeps several plugin directories independent and reports them all", async () => {
     await initRepo();
     await writePlugin("acme.good", VALID_MANIFEST);

@@ -381,7 +381,79 @@ describe("verifyPluginArchive", () => {
     expect(result.valid).toBe(false);
     if (!result.valid) {
       expect(result.error).toBe(
-        'view componentPath "dist/PanelView.js" is not present in the archive'
+        'views[0].componentPath "dist/PanelView.js" is not present in the archive'
+      );
+    }
+  });
+
+  function tourManifest(audioUrl: string | null): Record<string, unknown> {
+    return validManifest({
+      contributes: {
+        tours: [
+          {
+            id: "welcome",
+            title: "Welcome Tour",
+            componentPath: "dist/tour.js",
+            chapters: [{ id: "intro", duration: 6, audioUrl, narrationHash: "3fa9c21e" }],
+          },
+        ],
+      },
+    });
+  }
+
+  it("rejects a one-file archive whose tour scene module is missing", async () => {
+    const sourceDir = path.join(tmpDir, "source");
+    await createFixture(sourceDir, {
+      "plugin.json": JSON.stringify(tourManifest("tours/welcome/intro.ogg")),
+    });
+
+    const archivePath = path.join(tmpDir, "out.dntr");
+    await packPluginArchiveFromFiles(sourceDir, archivePath, ["plugin.json"]);
+
+    const result = await verifyPluginArchive(archivePath);
+    expect(result.valid).toBe(false);
+    if (!result.valid) {
+      expect(result.error).toBe(
+        'tours[0].componentPath "dist/tour.js" is not present in the archive'
+      );
+    }
+  });
+
+  it("accepts a tour archive whose local narration is missing", async () => {
+    const sourceDir = path.join(tmpDir, "source");
+    await createFixture(sourceDir, {
+      "plugin.json": JSON.stringify(tourManifest("./tours/welcome/intro.ogg")),
+      "dist/tour.js": "export default {};",
+    });
+
+    const archivePath = path.join(tmpDir, "out.dntr");
+    await packPluginArchive(sourceDir, archivePath);
+
+    expect((await verifyPluginArchive(archivePath)).valid).toBe(true);
+  });
+
+  it("rejects an archive missing a nested Assistant knowledge skill manifest", async () => {
+    const sourceDir = path.join(tmpDir, "source");
+    await createFixture(sourceDir, {
+      "plugin.json": JSON.stringify(
+        validManifest({
+          contributes: {
+            databases: [{ id: "ledger", location: "local" }],
+            assistantKnowledge: { skills: [{ id: "deploy", path: "./knowledge/deploy/" }] },
+          },
+        })
+      ),
+      "knowledge/deploy/notes.md": "# notes",
+    });
+
+    const archivePath = path.join(tmpDir, "out.dntr");
+    await packPluginArchive(sourceDir, archivePath);
+
+    const result = await verifyPluginArchive(archivePath);
+    expect(result.valid).toBe(false);
+    if (!result.valid) {
+      expect(result.error).toBe(
+        'assistantKnowledge.skills[0].path "./knowledge/deploy/" (expected knowledge/deploy/SKILL.md) is not present in the archive'
       );
     }
   });
