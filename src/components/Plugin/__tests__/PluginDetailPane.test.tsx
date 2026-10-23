@@ -47,6 +47,10 @@ const projectTargetingMock = vi.hoisted(() => ({
   setWorktreeDeleteNotes: vi.fn((input: { pluginId: string; enabled: boolean }) =>
     Promise.resolve(input.enabled)
   ),
+  getPanelAttention: vi.fn((_input: { pluginId: string }) => Promise.resolve(false)),
+  setPanelAttention: vi.fn((input: { pluginId: string; enabled: boolean }) =>
+    Promise.resolve(input.enabled)
+  ),
 }));
 
 // The Performance tab is earned by main having a snapshot for the plugin.
@@ -64,6 +68,12 @@ beforeEach(() => {
   projectTargetingMock.getOsNotifications.mockResolvedValue(false);
   projectTargetingMock.setOsNotifications.mockReset();
   projectTargetingMock.setOsNotifications.mockImplementation((input) =>
+    Promise.resolve(input.enabled)
+  );
+  projectTargetingMock.getPanelAttention.mockReset();
+  projectTargetingMock.getPanelAttention.mockResolvedValue(false);
+  projectTargetingMock.setPanelAttention.mockReset();
+  projectTargetingMock.setPanelAttention.mockImplementation((input) =>
     Promise.resolve(input.enabled)
   );
   getPerfSnapshotsMock.mockClear();
@@ -720,6 +730,27 @@ describe("PluginDetailPane overview contributions (#11302)", () => {
     expect(screen.getAllByText("Reports activity")).toHaveLength(1);
     const row = screen.getByText("Demo board").closest("li");
     expect(row && within(row).queryByText("Reports activity")).toBeTruthy();
+  });
+
+  it("offers the attention views switch, off until turned on, only for panels that report (#13821)", async () => {
+    renderOverview(withContributes({ panels: [{ ...PANEL, reportsActivity: true }] }));
+    const attentionSwitch = () => screen.getByTestId("plugin-panel-attention-switch");
+    await vi.waitFor(() => expect(attentionSwitch().hasAttribute("disabled")).toBe(false));
+    expect(attentionSwitch().getAttribute("aria-checked")).toBe("false");
+    expect(projectTargetingMock.getPanelAttention).toHaveBeenCalledWith({ pluginId: "acme.demo" });
+
+    fireEvent.click(screen.getByRole("switch", { name: "Show in attention views" }));
+    await vi.waitFor(() => expect(attentionSwitch().getAttribute("aria-checked")).toBe("true"));
+    expect(projectTargetingMock.setPanelAttention).toHaveBeenCalledWith({
+      pluginId: "acme.demo",
+      enabled: true,
+    });
+  });
+
+  it("offers no attention views switch when no panel reports activity", () => {
+    renderOverview(withContributes({ panels: [{ ...PANEL, reportsActivity: false }] }));
+    expect(screen.queryByTestId("plugin-panel-attention-switch")).toBeNull();
+    expect(projectTargetingMock.getPanelAttention).not.toHaveBeenCalled();
   });
 
   it("omits both sections entirely when the plugin contributes neither", () => {

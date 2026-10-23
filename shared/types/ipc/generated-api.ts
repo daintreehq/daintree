@@ -1087,18 +1087,27 @@ export interface GeneratedElectronAPI {
     getOsNotifications(
       ...args: IpcInvokeMap["plugin-capability:get-os-notifications"]["args"]
     ): Promise<IpcInvokeMap["plugin-capability:get-os-notifications"]["result"]>;
+    getPanelAttention(
+      ...args: IpcInvokeMap["plugin-capability:get-panel-attention"]["args"]
+    ): Promise<IpcInvokeMap["plugin-capability:get-panel-attention"]["result"]>;
     getProjectTargeting(
       ...args: IpcInvokeMap["plugin-capability:get-project-targeting"]["args"]
     ): Promise<IpcInvokeMap["plugin-capability:get-project-targeting"]["result"]>;
     getWorktreeDeleteNotes(
       ...args: IpcInvokeMap["plugin-capability:get-worktree-delete-notes"]["args"]
     ): Promise<IpcInvokeMap["plugin-capability:get-worktree-delete-notes"]["result"]>;
+    listPanelAttention(
+      ...args: IpcInvokeMap["plugin-capability:list-panel-attention"]["args"]
+    ): Promise<IpcInvokeMap["plugin-capability:list-panel-attention"]["result"]>;
     resolveConsent(
       ...args: IpcInvokeMap["plugin-capability:resolve-consent"]["args"]
     ): Promise<IpcInvokeMap["plugin-capability:resolve-consent"]["result"]>;
     setOsNotifications(
       ...args: IpcInvokeMap["plugin-capability:set-os-notifications"]["args"]
     ): Promise<IpcInvokeMap["plugin-capability:set-os-notifications"]["result"]>;
+    setPanelAttention(
+      ...args: IpcInvokeMap["plugin-capability:set-panel-attention"]["args"]
+    ): Promise<IpcInvokeMap["plugin-capability:set-panel-attention"]["result"]>;
     setProjectTargeting(
       ...args: IpcInvokeMap["plugin-capability:set-project-targeting"]["args"]
     ): Promise<IpcInvokeMap["plugin-capability:set-project-targeting"]["result"]>;

@@ -398,9 +398,12 @@ export const CHANNEL_LEASE_POLICY = {
   // the default for every project, so an observing window cannot do it.
   "plugin-agent-mcp:set-plugin-access": "driver",
   "plugin-capability:get-os-notifications": "free",
+  "plugin-capability:get-panel-attention": "free",
   "plugin-capability:get-project-targeting": "free",
   "plugin-capability:get-worktree-delete-notes": "free",
+  "plugin-capability:list-panel-attention": "free",
   "plugin-capability:set-os-notifications": "free",
+  "plugin-capability:set-panel-attention": "free",
   "plugin-capability:set-project-targeting": "free",
   "plugin-capability:set-worktree-delete-notes": "free",
   "plugin-mcp:call-tool": "free",

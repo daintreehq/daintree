@@ -19,6 +19,7 @@ import {
   _resetPluginProjectSurfacesStoreForTest,
   usePluginProjectSurfacesStore,
 } from "@/store/pluginProjectSurfacesStore";
+import { registerPanelKind, unregisterPanelKind } from "@shared/config/panelKindRegistry";
 
 function render(ui: ReactElement, options?: Omit<RenderOptions, "queries">) {
   return rtlRender(ui, { wrapper: TooltipProvider, ...options });
@@ -459,5 +460,59 @@ describe("ProjectPluginDetailPane", () => {
       });
       expect(screen.queryByText("Performance")).toBeNull();
     });
+  });
+});
+
+describe("ProjectPluginDetailPane attention views switch (#13821)", () => {
+  const instanceId = "project__proj-a__acme.dashboard";
+  const getPanelAttention = vi.fn(() => Promise.resolve(false));
+
+  function registerKind(reportsActivity: boolean): void {
+    registerPanelKind({
+      id: "project:proj-a/acme.dashboard/board",
+      name: "Board",
+      iconId: "puzzle",
+      color: "#abcdef",
+      hasPty: false,
+      canRestart: false,
+      canConvert: false,
+      extensionId: instanceId,
+      reportsActivity,
+    });
+  }
+
+  beforeEach(() => {
+    getPanelAttention.mockClear();
+    Object.defineProperty(window, "electron", {
+      configurable: true,
+      value: {
+        plugin: { activateStagedProjectPlugin, setProjectPluginTrust, reloadProjectPlugins },
+        pluginCapability: {
+          getPanelAttention,
+          setPanelAttention: vi.fn((input: { enabled: boolean }) => Promise.resolve(input.enabled)),
+        },
+      },
+    });
+  });
+
+  afterEach(() => {
+    unregisterPanelKind("project:proj-a/acme.dashboard/board");
+  });
+
+  it("offers the switch for this project's instance once it registers a reporting panel", async () => {
+    registerKind(true);
+    render(<ProjectPluginDetailPane plugin={plugin({ state: "active", instanceId })} />);
+
+    expect(screen.getByTestId("plugin-panel-attention-switch")).toBeTruthy();
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(getPanelAttention).toHaveBeenCalledWith({ pluginId: instanceId });
+  });
+
+  it("offers nothing when its panels do not report activity", () => {
+    registerKind(false);
+    render(<ProjectPluginDetailPane plugin={plugin({ state: "active", instanceId })} />);
+    expect(screen.queryByTestId("plugin-panel-attention-switch")).toBeNull();
   });
 });

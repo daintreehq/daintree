@@ -4,6 +4,7 @@ import type { BuiltInPluginCapability } from "../../../shared/types/plugin.js";
 import { defineIpcNamespace, op } from "../define.js";
 import type { IpcContext } from "../types.js";
 import { CHANNELS } from "../channels.js";
+import { broadcastToRenderer } from "../utils.js";
 import { PLUGIN_CAPABILITY_METHOD_CHANNELS } from "./pluginCapability.preload.js";
 import {
   getPluginCapabilityConsentService,
@@ -32,11 +33,14 @@ import {
   PLUGIN_CAPABILITY_CONSENT_DELIVERY_TIMEOUT_MS,
   PLUGIN_CAPABILITY_CONSENT_RESEND_INTERVAL_MS,
   PLUGIN_CAPABILITY_CONSENT_TIMEOUT_MS,
+  PLUGIN_PANEL_ATTENTION_GRANT,
   type PluginCapabilityAcknowledgeConsentInput,
   type PluginCapabilityConsentOutcome,
   type PluginCapabilityResolveConsentInput,
   type PluginOsNotificationsQuery,
   type PluginOsNotificationsUpdate,
+  type PluginPanelAttentionQuery,
+  type PluginPanelAttentionUpdate,
   type PluginProjectTargetingQuery,
   type PluginProjectTargetingUpdate,
   type PluginWorktreeDeleteNotesQuery,
@@ -463,6 +467,54 @@ export async function handleSetWorktreeDeleteNotes(
   return setWorktreeDeleteNotesEnabled(pluginId, input.enabled);
 }
 
+function panelAttentionIdentity(pluginId: unknown) {
+  if (typeof pluginId !== "string" || pluginId.length === 0) {
+    throw new Error("pluginId must be a non-empty string");
+  }
+  // Instance-keyed like OS notifications: each project's instance of a project
+  // plugin is switched on separately.
+  return { pluginId, capability: PLUGIN_PANEL_ATTENTION_GRANT, scopeKey: "global" } as const;
+}
+
+/** Read a plugin's "Show in attention views" switch (#13821). */
+export async function handleGetPanelAttention(input: PluginPanelAttentionQuery): Promise<boolean> {
+  return getPluginCapabilityConsentStore().hasGrant(panelAttentionIdentity(input?.pluginId));
+}
+
+/**
+ * Every plugin instance with "Show in attention views" on (#13821). The
+ * attention views join reports against this set, so they never read the
+ * switch one plugin at a time.
+ */
+export async function handleListPanelAttention(): Promise<string[]> {
+  return getPluginCapabilityConsentStore()
+    .list()
+    .filter(
+      (record) => record.capability === PLUGIN_PANEL_ATTENTION_GRANT && record.scopeKey === "global"
+    )
+    .map((record) => record.pluginId);
+}
+
+/**
+ * Flip a plugin's "Show in attention views" switch (#13821) and return the
+ * persisted state. Every view re-reads the granted set on a provenance change,
+ * so the flip is announced as one — after a failed write too, since a failed
+ * "off" is still revoked in memory and the rows must go now.
+ */
+export async function handleSetPanelAttention(input: PluginPanelAttentionUpdate): Promise<boolean> {
+  const identity = panelAttentionIdentity(input?.pluginId);
+  if (typeof input.enabled !== "boolean") {
+    throw new Error("enabled must be a boolean");
+  }
+  const store = getPluginCapabilityConsentStore();
+  const saved = store.setGrant(identity, input.enabled);
+  broadcastToRenderer(CHANNELS.EVENTS_PUSH, { name: "plugin:provenance-changed", payload: {} });
+  if (!saved) {
+    throw new Error("The attention views setting could not be saved");
+  }
+  return store.hasGrant(identity);
+}
+
 export const pluginCapabilityNamespace = defineIpcNamespace({
   name: "pluginCapability",
   ops: {
@@ -497,6 +549,18 @@ export const pluginCapabilityNamespace = defineIpcNamespace({
     setWorktreeDeleteNotes: op(
       PLUGIN_CAPABILITY_METHOD_CHANNELS.setWorktreeDeleteNotes,
       handleSetWorktreeDeleteNotes
+    ),
+    getPanelAttention: op(
+      PLUGIN_CAPABILITY_METHOD_CHANNELS.getPanelAttention,
+      handleGetPanelAttention
+    ),
+    setPanelAttention: op(
+      PLUGIN_CAPABILITY_METHOD_CHANNELS.setPanelAttention,
+      handleSetPanelAttention
+    ),
+    listPanelAttention: op(
+      PLUGIN_CAPABILITY_METHOD_CHANNELS.listPanelAttention,
+      handleListPanelAttention
     ),
   },
 });

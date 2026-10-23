@@ -106,6 +106,7 @@ const { useResourceMonitoringStore } = await import("../resourceMonitoringStore"
 const { useVoiceRecordingStore } = await import("../voiceRecordingStore");
 const { usePluginPanelBadgeStore } = await import("../pluginPanelBadgeStore");
 const { usePluginPanelActivityStore } = await import("../pluginPanelActivityStore");
+const { usePluginPanelAttentionStore } = await import("../pluginPanelAttentionStore");
 const { usePluginPanelToolbarStore } = await import("../pluginPanelToolbarStore");
 const { usePluginPanelOpenRequestStore } = await import("../pluginPanelOpenRequestStore");
 const { unregisterInputController } = await import("../terminalInputStore");
@@ -142,6 +143,7 @@ describe("rendererStoreOrchestrator", () => {
     useVoiceRecordingStore.setState({ panelBuffers: {} });
     usePluginPanelBadgeStore.setState({ badgesByPanelId: {} });
     usePluginPanelActivityStore.setState({ activityByPanelId: {}, seenRevisionByPanelId: {} });
+    usePluginPanelAttentionStore.setState({ shelfByPanelId: {} });
     usePluginPanelToolbarStore.setState({ statesByPanelId: {} });
     usePluginPanelOpenRequestStore.setState({ entriesByPanelId: {} });
   });
@@ -313,6 +315,12 @@ describe("rendererStoreOrchestrator", () => {
       },
       seenRevisionByPanelId: { [panelId]: 1 },
     });
+    usePluginPanelAttentionStore.setState({
+      shelfByPanelId: {
+        [panelId]: { kind: "parked", pluginId: "plugin-1", revision: 1, at: 1 },
+        keep: { kind: "parked", pluginId: "plugin-1", revision: 2, at: 1 },
+      },
+    });
 
     usePanelStore.getState().removePanel(panelId);
 
@@ -327,6 +335,10 @@ describe("rendererStoreOrchestrator", () => {
     expect(activity.activityByPanelId.keep).toEqual({
       "plugin-1": { state: "working", revision: 2 },
     });
+    // So does a park on its attention row (#13821).
+    const shelves = usePluginPanelAttentionStore.getState().shelfByPanelId;
+    expect(shelves[panelId]).toBeUndefined();
+    expect(shelves.keep).toBeDefined();
   });
 
   it("prunes plugin panel toolbar and open-request state for the removed panel only", () => {

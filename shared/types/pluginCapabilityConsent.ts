@@ -30,6 +30,22 @@ export const EXTERNAL_LINK_CONSENT = "external-link" as const;
 export type PluginConsentSubject = BuiltInPluginCapability | typeof EXTERNAL_LINK_CONSENT;
 
 /**
+ * "Show in attention views" (#13821): lets a plugin's panel activity reports
+ * appear as their own rows in Pilot, the dock's Waiting and Unread pills and the
+ * sidebar's attention filters. A user grant with no manifest token of its own —
+ * a panel kind's `reportsActivity` is the declaration, and declaring it turns
+ * nothing on — so it lives in the grant store beside the capability grants
+ * rather than in {@link BuiltInPluginCapability}.
+ */
+export const PLUGIN_PANEL_ATTENTION_GRANT = "panel-attention";
+
+/**
+ * What a stored grant can be for: a consent subject, or a user switch that has no
+ * capability token of its own. Never a prompt's subject — nothing asks for this.
+ */
+export type PluginGrantKey = PluginConsentSubject | typeof PLUGIN_PANEL_ATTENTION_GRANT;
+
+/**
  * Stable pin-store identity for a single plugin capability grant. Keyed in the
  * store by the JSON-encoded `[scopeKey, pluginId, capability]` triple (see
  * `PluginCapabilityConsentStore.makeKey`) — JSON-encoded, never `::`-joined, so
@@ -42,8 +58,8 @@ export type PluginConsentSubject = BuiltInPluginCapability | typeof EXTERNAL_LIN
 export interface PluginCapabilityIdentity {
   /** Contributing plugin id (`manifest.name`). */
   pluginId: string;
-  /** The high-risk capability being gated. */
-  capability: PluginConsentSubject;
+  /** The high-risk capability being gated, or a user switch with no token of its own. */
+  capability: PluginGrantKey;
   /**
    * Lower-cased hostname an {@link EXTERNAL_LINK_CONSENT} grant is for. Required
    * for that subject and absent for every real capability, so a capability grant
@@ -63,7 +79,7 @@ export interface PluginCapabilityIdentity {
  */
 export interface PluginCapabilityConsentRecord {
   pluginId: string;
-  capability: PluginConsentSubject;
+  capability: PluginGrantKey;
   /** Hostname of an {@link EXTERNAL_LINK_CONSENT} grant; absent otherwise. */
   site?: string;
   /**
@@ -246,6 +262,22 @@ export interface PluginWorktreeDeleteNotesQuery {
 
 /** Renderer → main write of the "Show notes when deleting a worktree" switch (#13805). */
 export interface PluginWorktreeDeleteNotesUpdate {
+  pluginId: string;
+  enabled: boolean;
+}
+
+/**
+ * Renderer → main read of a plugin's "Show in attention views" switch (#13821)
+ * — the {@link PLUGIN_PANEL_ATTENTION_GRANT} grant in the `"global"` scope,
+ * keyed by the plugin's instance id, so each project's instance of a project
+ * plugin has its own.
+ */
+export interface PluginPanelAttentionQuery {
+  pluginId: string;
+}
+
+/** Renderer → main write of the "Show in attention views" switch (#13821). */
+export interface PluginPanelAttentionUpdate {
   pluginId: string;
   enabled: boolean;
 }

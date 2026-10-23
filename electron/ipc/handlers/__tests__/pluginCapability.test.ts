@@ -83,19 +83,28 @@ vi.mock("../../../window/windowRef.js", () => ({
   getMainWindow: () => harness?.win ?? null,
 }));
 
+vi.mock("../../utils.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../utils.js")>()),
+  broadcastToRenderer: vi.fn(),
+}));
+
 import {
   handleAcknowledgeConsent,
   handleGetOsNotifications,
+  handleGetPanelAttention,
   handleGetProjectTargeting,
+  handleListPanelAttention,
   handleResolveConsent,
   handleSetOsNotifications,
   handleGetWorktreeDeleteNotes,
   handleSetWorktreeDeleteNotes,
+  handleSetPanelAttention,
   handleSetProjectTargeting,
   registerPluginCapabilityHandlers,
   _resetCapabilityConsentBridgeForTest,
 } from "../pluginCapability.js";
 import { registerAppView, unregisterAppView } from "../../../window/webContentsRegistry.js";
+import { broadcastToRenderer } from "../../utils.js";
 import {
   getPluginCapabilityConsentService,
   getPluginCapabilityConsentStore,
@@ -679,6 +688,65 @@ describe("pluginCapability OS notifications switch (#13505)", () => {
     await expect(
       handleSetOsNotifications({ pluginId: "acme.orchestrator", enabled: true })
     ).rejects.toThrow(/could not be saved/);
+  });
+});
+
+describe("pluginCapability attention views switch (#13821)", () => {
+  const provenanceBroadcasts = () =>
+    vi
+      .mocked(broadcastToRenderer)
+      .mock.calls.filter(
+        ([channel, payload]) =>
+          channel === "events:push" &&
+          JSON.stringify(payload) ===
+            JSON.stringify({ name: "plugin:provenance-changed", payload: {} })
+      ).length;
+
+  beforeEach(() => vi.mocked(broadcastToRenderer).mockClear());
+
+  it("is its own off-by-default grant, listed by instance id", async () => {
+    expect(await handleGetPanelAttention({ pluginId: "acme.board" })).toBe(false);
+    expect(await handleListPanelAttention()).toEqual([]);
+
+    expect(await handleSetPanelAttention({ pluginId: "acme.board", enabled: true })).toBe(true);
+    await handleSetOsNotifications({ pluginId: "acme.other", enabled: true });
+
+    expect(await handleGetPanelAttention({ pluginId: "acme.board" })).toBe(true);
+    expect(await handleGetOsNotifications({ pluginId: "acme.board" })).toBe(false);
+    expect(await handleListPanelAttention()).toEqual(["acme.board"]);
+
+    expect(await handleSetPanelAttention({ pluginId: "acme.board", enabled: false })).toBe(false);
+    expect(await handleListPanelAttention()).toEqual([]);
+  });
+
+  it("announces every flip, so each view re-reads the granted set", async () => {
+    await handleSetPanelAttention({ pluginId: "acme.board", enabled: true });
+    await handleSetPanelAttention({ pluginId: "acme.board", enabled: false });
+    expect(provenanceBroadcasts()).toBe(2);
+  });
+
+  it("still announces a failed save, since a failed off is revoked in memory", async () => {
+    await handleSetPanelAttention({ pluginId: "acme.board", enabled: true });
+    vi.mocked(broadcastToRenderer).mockClear();
+    vi.spyOn(getPluginCapabilityConsentStore(), "setGrant").mockReturnValue(false);
+
+    await expect(
+      handleSetPanelAttention({ pluginId: "acme.board", enabled: false })
+    ).rejects.toThrow(/could not be saved/);
+    expect(provenanceBroadcasts()).toBe(1);
+  });
+
+  it("is purged on uninstall and rejects malformed input", async () => {
+    await handleSetPanelAttention({ pluginId: "acme.board", enabled: true });
+    getPluginCapabilityConsentService().revokeAllForPlugin("acme.board");
+    expect(await handleListPanelAttention()).toEqual([]);
+    vi.mocked(broadcastToRenderer).mockClear();
+
+    await expect(handleGetPanelAttention({ pluginId: "" })).rejects.toThrow(/pluginId/);
+    await expect(
+      handleSetPanelAttention({ pluginId: "acme.board", enabled: "yes" as never })
+    ).rejects.toThrow(/enabled/);
+    expect(provenanceBroadcasts()).toBe(0);
   });
 });
 

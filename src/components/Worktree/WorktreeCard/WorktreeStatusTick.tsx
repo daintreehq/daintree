@@ -6,7 +6,8 @@ export type WorktreeStatusTickState = Exclude<ChipState, null>;
 
 /** Shared by the tick's tooltip and its accessible name, so they cannot drift. */
 export const CHIP_LABELS: Record<WorktreeStatusTickState, string> = {
-  attention: "Agent asking for attention",
+  // An agent, or a plugin panel the user let into the attention views (#13821).
+  attention: "Asking for attention",
   cleanup: "Ready for cleanup",
   // What was observed, not a verdict: an agent at its prompt is also what a
   // missed approval dialog looks like.

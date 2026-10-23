@@ -1,5 +1,6 @@
 import type { PtyPanelData } from "@shared/types/panel";
 import { useUnreadTerminals } from "@/hooks/useTerminalSelectors";
+import { usePluginAttentionUnreadRows } from "@/hooks/usePluginPanelAttentionRows";
 import { SESSION_COLORS, SESSION_ICONS } from "@/components/Worktree/terminalStateConfig";
 import { AgentStatusContainer, type AgentStatusConfig } from "./AgentStatusContainer";
 
@@ -37,5 +38,13 @@ interface UnreadContainerProps {
  */
 export function UnreadContainer({ compact = false }: UnreadContainerProps) {
   const terminals = useUnreadTerminals();
-  return <AgentStatusContainer terminals={terminals} config={UNREAD_CONFIG} compact={compact} />;
+  const pluginRows = usePluginAttentionUnreadRows();
+  return (
+    <AgentStatusContainer
+      terminals={terminals}
+      pluginRows={pluginRows}
+      config={UNREAD_CONFIG}
+      compact={compact}
+    />
+  );
 }

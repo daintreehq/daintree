@@ -1,6 +1,7 @@
 import type { FleetRunRow } from "@shared/types/ipc/fleet";
 import type { WorktreeState } from "@shared/types/worktree";
 import { ATTENTION_FILTER_BANDS, bandForRun, FINISHED_FILTER_BANDS } from "@/lib/fleetAttention";
+import type { PluginWorktreeAttention } from "@/lib/pluginPanelAttention";
 
 /**
  * Which quick-state buckets a worktree belongs to, from the bands of its agents.
@@ -23,6 +24,11 @@ import { ATTENTION_FILTER_BANDS, bandForRun, FINISHED_FILTER_BANDS } from "@/lib
  * Working and Attention can overlap; Finished excludes both. A worktree whose
  * agents are only idle, exited, or parked or snoozed while stopped is in none
  * of them.
+ *
+ * Plugin panels the user let into the attention views (#13821) count in the
+ * same buckets by the same bands, folded in before Finished is decided — a
+ * plugin still waiting keeps its worktree out of Finished, exactly as an agent
+ * would.
  */
 export interface WorktreeAgentBuckets {
   working: boolean;
@@ -73,12 +79,13 @@ export function indexFleetRuns(
 export function deriveWorktreeAgentBuckets(
   agentPanelIds: Iterable<string>,
   runsById: ReadonlyMap<string, FleetRunRow>,
-  mergedForCleanup: boolean
+  mergedForCleanup: boolean,
+  plugin?: PluginWorktreeAttention
 ): WorktreeAgentBuckets {
-  let working = false;
-  let attention = false;
-  let handedBack = false;
-  let unseen = false;
+  let working = plugin?.working ?? false;
+  let attention = plugin?.attention ?? false;
+  let handedBack = plugin?.finished ?? false;
+  let unseen = plugin?.unseen ?? false;
   for (const id of agentPanelIds) {
     const run = runsById.get(id);
     if (!run) continue;
