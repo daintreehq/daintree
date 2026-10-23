@@ -454,6 +454,8 @@ interface HeldSelection {
   epoch: number;
   observations: SelectionObservation[];
   scope: SelectionScope;
+  /** Taken at the click: by the time the workspace opens the page may have moved. */
+  picture: Promise<PageScreenshot>;
 }
 
 export class InspectorController implements DevPreviewToolSession {
@@ -615,7 +617,10 @@ export class InspectorController implements DevPreviewToolSession {
       return;
     }
     this.patchState({ workspace: { status: "opening" }, project: null });
-    const origin = originOf(this.pageUrl);
+    // A window attached to another machine shows the page at this machine's
+    // address, which on the machine holding the source names something else:
+    // that workspace fetches no maps rather than the wrong ones.
+    const origin = this.deps.remoteWindow?.() === true ? null : originOf(this.pageUrl);
     let result: ElementPickerWorkspaceOpenResult;
     try {
       result = await this.deps.picker.openWorkspace({
@@ -703,17 +708,18 @@ export class InspectorController implements DevPreviewToolSession {
     this.endReprove();
     const workspace = this.state.workspace;
     if (workspace.status === "ready") this.releaseWorkspace(workspace.workspaceId);
-    // Source identity belongs to the workspace that minted it.
+    // Source identity belongs to the workspace that minted it. A click still
+    // waiting for a workspace waits for the next one instead.
     const selection = this.state.selection;
     this.patchState({
       workspace: { status: "idle" },
       project: null,
       selection:
-        selection.status === "ready" && selection.selection.workspaceId === null
+        this.held !== null ||
+        selection.status === "none" ||
+        (selection.status === "ready" && selection.selection.workspaceId === null)
           ? selection
-          : selection.status === "none"
-            ? selection
-            : { status: "none" },
+          : { status: "none" },
     });
   }
 
@@ -1146,7 +1152,8 @@ export class InspectorController implements DevPreviewToolSession {
     epoch: number,
     observations: SelectionObservation[],
     scope: SelectionScope,
-    cause: "user" | "document" | "reselect"
+    cause: "user" | "document" | "reselect",
+    taken?: Promise<PageScreenshot>
   ): Promise<void> {
     const request = ++this.selectionRequest;
     this.held = null;
@@ -1204,10 +1211,11 @@ export class InspectorController implements DevPreviewToolSession {
         refuse({ status: "settling" }, true);
         return;
       }
+      // Asked for again by its id in this document, or by Svelte's locator
+      // once a reload has replaced it.
       const record = this.continuityOf(primary, epoch);
       const retrying =
         (observations.length === 1 || scope.kind === "component") &&
-        record.locator !== null &&
         this.startReprove({
           record,
           component: scope.kind === "component" ? invocationSite(primary, scope.componentId) : null,
@@ -1242,15 +1250,15 @@ export class InspectorController implements DevPreviewToolSession {
       (observation) =>
         observation.sourceCandidates.length > 0 || observation.componentChain.components.length > 0
     );
-    if (traced && workspace.status === "opening" && !reproving) {
-      this.held = { request, epoch, observations, scope };
-      this.patchState({ selection: { status: "resolving", epoch, requestId: request } });
-      return;
-    }
     // The picture first: publishing the selection opens the drawer, which
     // takes its width from the page and moves the element out of the box just
     // measured.
-    const picture = this.takePicture(binding.panelId, page.viewport, observations);
+    const picture = taken ?? this.takePicture(binding.panelId, page.viewport, observations);
+    if (traced && workspace.status === "opening" && !reproving) {
+      this.held = { request, epoch, observations, scope, picture };
+      this.patchState({ selection: { status: "resolving", epoch, requestId: request } });
+      return;
+    }
     if (!traced || workspace.status !== "ready") {
       if (reproving) {
         refuse({ status: "lost" }, false);
@@ -1422,7 +1430,7 @@ export class InspectorController implements DevPreviewToolSession {
       this.patchState({ selection: { status: "lost" } });
       return;
     }
-    void this.handleSelection(held.epoch, held.observations, held.scope, "user");
+    void this.handleSelection(held.epoch, held.observations, held.scope, "user", held.picture);
   }
 
   /** The workspace did not open: a held selection is the page's account of the element after all. */
@@ -1439,16 +1447,7 @@ export class InspectorController implements DevPreviewToolSession {
       return;
     }
     const next = this.nextSelection(held.epoch, page, held.observations, held.scope, null, {});
-    // The boxes were measured at the click, and the page may have scrolled or
-    // reflowed since: a picture taken now could frame something else.
-    this.keepPicture(
-      next.selectionId,
-      Promise.resolve({
-        status: "omitted",
-        reason:
-          "it was picked before the worktree's source was open; select it again to attach one",
-      })
-    );
+    this.keepPicture(next.selectionId, held.picture);
     this.publish(next, null);
   }
 
@@ -1740,12 +1739,24 @@ export class InspectorController implements DevPreviewToolSession {
    * since let go of cannot vouch for anything.
    */
   async sourcesUnchanged(selection: PickedSelection): Promise<boolean> {
+    const workspaceId = selection.workspaceId;
+    // Nothing was resolved, so nothing is cited that could have changed.
+    if (workspaceId === null) return true;
+    if (this.currentWorkspaceId() !== workspaceId) return false;
     const revisions = citedRevisions(selection);
+    // A claim held without its file being read carries no revision to compare,
+    // but an edit reported to that file since the selection was made still
+    // moves the line it names.
+    const captured = Date.parse(selection.capturedAt);
+    for (const path of heldPaths(selection)) {
+      if (path in revisions) continue;
+      const changed = this.recentChanges.get(path);
+      // The same millisecond reads as after: a pick can't vouch for bytes it may not have seen.
+      if (changed !== undefined && changed >= captured) return false;
+    }
     const paths = Object.keys(revisions);
     if (paths.length === 0) return true;
     if (paths.some((path) => revisions[path] === null)) return false;
-    const workspaceId = selection.workspaceId;
-    if (workspaceId === null || this.currentWorkspaceId() !== workspaceId) return false;
     let now: ElementPickerSourceRevisionsResult;
     try {
       now = await this.deps.picker.sourceRevisions({ workspaceId, paths: paths.slice(0, 128) });

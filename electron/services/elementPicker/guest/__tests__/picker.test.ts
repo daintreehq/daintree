@@ -145,6 +145,24 @@ describe("createPicker", () => {
     });
   });
 
+  it("tells the host where the page has moved to before a selection made there", () => {
+    start();
+    expect(ofType("documentReady")).toHaveLength(1);
+    // A client-side navigation keeps the document, so nothing else reports it.
+    history.pushState({}, "", "/settings?tab=1");
+    document.getElementById("second")!.click();
+
+    const index = events.findIndex((event) => event.type === "selectionChanged");
+    expect(events[index - 1]).toMatchObject({
+      type: "documentReady",
+      url: expect.stringContaining("/settings?tab=1"),
+    });
+
+    // Nothing moved since: the next pick goes without another report.
+    document.getElementById("first")!.click();
+    expect(ofType("documentReady")).toHaveLength(2);
+  });
+
   it("resolves hover once per animation frame, and only when the element changes", () => {
     start();
     pointAt(document.getElementById("first")!);

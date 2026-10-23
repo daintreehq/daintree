@@ -392,9 +392,26 @@ export function createSvelteExtractor(): ElementPickerExtractor {
     const ancestry = readAncestry(readMeta(target) ?? readMeta(nearestMapped(target) ?? target));
     if (ancestry.truncated) reportTruncation();
     const evidence = evidenceOf(target, hit, loc, placeable, ancestry.frames);
+    // Unstamped, as hydration leaves a template's tail, but placed by the
+    // template's shape: the file is its stamped kin's, and the host finds the
+    // line from the shape and checks it. No position is made up to fill it.
+    const structure = evidence.structure;
+    const claims: SourceCandidate[] =
+      loc === null && structure !== undefined
+        ? [
+            {
+              kind: "template-location",
+              candidateId: "svelte-loc",
+              framework: "svelte",
+              extraction: { kind: "runtime-field", field: LOC_FIELD },
+              file: structure.file,
+              location: null,
+            },
+          ]
+        : sourceCandidates;
     return withinBudget({
       componentChain: chain,
-      sourceCandidates,
+      sourceCandidates: claims,
       frameworkEvidence: [evidence],
       capabilities: capabilitiesOf(
         audit.probe(),

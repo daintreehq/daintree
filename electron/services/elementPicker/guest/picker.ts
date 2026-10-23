@@ -925,6 +925,8 @@ export function createPicker(host: PickerHost): PickerHandle {
     if (emitting) return { sent: false, failure: "failed", detections: [] };
     emitting = true;
     try {
+      // Before the selection, so the host reads it against the page it is on.
+      if (pageMoved()) emitDocumentReady();
       return describeSelection(cause, onlyIfChanged);
     } catch {
       return { sent: false, failure: "failed", detections: [] };
@@ -1677,12 +1679,15 @@ export function createPicker(host: PickerHost): PickerHandle {
     }
   }
 
-  function emitDocumentReady(): void {
+  /** What `documentReady` last told the host, so a selection can say when that is out of date. */
+  let reportedPage = "";
+
+  function currentPage(): Extract<ElementPickerEvent, { type: "documentReady" }> {
     const scale =
       typeof devicePixelRatio === "number" && devicePixelRatio > 0
         ? Math.min(devicePixelRatio, 64)
         : 1;
-    host.post({
+    return {
       type: "documentReady",
       url: clamp(location.href, LIMITS.url),
       viewport: {
@@ -1690,7 +1695,22 @@ export function createPicker(host: PickerHost): PickerHandle {
         height: Math.max(1, Math.round(finite(innerHeight))),
         deviceScaleFactor: scale,
       },
-    });
+    };
+  }
+
+  function emitDocumentReady(): void {
+    const page = currentPage();
+    reportedPage = JSON.stringify(page);
+    host.post(page);
+  }
+
+  /**
+   * A client-side navigation or a resize leaves the document in place, so no
+   * new `documentReady` follows it, and the host would describe a selection
+   * against the page it last heard about.
+   */
+  function pageMoved(): boolean {
+    return reportedPage !== "" && reportedPage !== JSON.stringify(currentPage());
   }
 
   // Activation is all-or-nothing: suppressing listeners with no handle to

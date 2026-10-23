@@ -445,6 +445,21 @@ export class ElementPickerWorkspaceService {
     const { endpoint, projectId } = owner;
     let lease: LeaseRecord | null = null;
     const host = await this.hostOrThrow();
+    // Room first, out of this view's own leases: the host's registry is shared,
+    // and filling it would evict another view's workspace before the cap took
+    // one of this view's.
+    const held = this.endpoints.get(endpoint.endpointId);
+    while (held !== undefined && held.workspaceIds.size >= MAX_LEASES_PER_ENDPOINT) {
+      let oldestId: string | undefined;
+      for (const id of held.workspaceIds) {
+        oldestId = id;
+        break;
+      }
+      if (oldestId === undefined) break;
+      const oldest = this.leases.get(oldestId);
+      if (oldest && this.drop(oldest)) host.releaseWorkspace(oldestId);
+      else held.workspaceIds.delete(oldestId);
+    }
     let workspaceId: string;
     try {
       workspaceId = await host.registerWorkspace({
@@ -581,8 +596,9 @@ export class ElementPickerWorkspaceService {
     call: (host: WorkspaceHost) => Promise<T>
   ): Promise<T> {
     const host = await this.hostOrThrow();
+    let result: T;
     try {
-      return await call(host);
+      result = await call(host);
     } catch (error) {
       // The host let the workspace go (its registry's bound, or a shutdown):
       // so does the lease, and the view reopens.
@@ -591,5 +607,9 @@ export class ElementPickerWorkspaceService {
       }
       throw toElementPickerAppError(error);
     }
+    // Released while the call was out: what came back is the release cancelling
+    // it, not an answer, and the view hears the workspace is gone.
+    if (this.leases.get(lease.workspaceId) !== lease) throw workspaceClosedError();
+    return result;
   }
 }

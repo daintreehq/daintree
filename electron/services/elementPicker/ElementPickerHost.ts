@@ -71,6 +71,9 @@ export const MAX_SOURCE_REVISION_PATHS = 128;
 /** Reads a revision check runs at once; enough to overlap the opens, few enough not to crowd a resolve's. */
 const SOURCE_REVISION_CONCURRENCY = 4;
 
+/** Checks running at once across every workspace, and waiting behind them. */
+const SOURCE_REVISION_ADMISSION = { concurrent: 2, queued: 16 } as const;
+
 /**
  * Resolves the compiled bootstrap. This module lands in a shared chunk under
  * `dist-electron/electron/chunks/`, so step up to the electron root first.
@@ -210,6 +213,11 @@ function hostError(code: ElementPickerHostErrorCode, message: string): ElementPi
 export class ElementPickerHost {
   private readonly workspaces = new WorkspaceRegistry();
   private readonly gate = new AdmissionGate();
+  /**
+   * Its own bound, not the resolve gate's: a burst of revision checks must
+   * neither take resolve slots nor schedule every file it names at once.
+   */
+  private readonly revisionGate = new AdmissionGate(SOURCE_REVISION_ADMISSION);
   private readonly retiring = new Set<Generation>();
   private readonly fork: () => HostChild;
   private readonly kill: (pid: number) => void;
@@ -402,16 +410,27 @@ export class ElementPickerHost {
     const signal = workspace.lifetime.signal;
     const unique = [...new Set(paths)];
     const revisions: Array<FileRevision | null> = unique.map(() => null);
-    let next = 0;
-    const drain = async () => {
-      while (next < unique.length && !signal.aborted) {
-        const index = next++;
-        revisions[index] = await this.currentRevision(workspace, unique[index]!, signal);
-      }
-    };
-    await Promise.all(
-      Array.from({ length: Math.min(SOURCE_REVISION_CONCURRENCY, unique.length) }, drain)
-    );
+    let release: () => void;
+    try {
+      release = await this.revisionGate.acquire(signal);
+    } catch (error) {
+      if (!signal.aborted) throw error;
+      throw hostError("UNKNOWN_WORKSPACE", "the workspace was released");
+    }
+    try {
+      let next = 0;
+      const drain = async () => {
+        while (next < unique.length && !signal.aborted) {
+          const index = next++;
+          revisions[index] = await this.currentRevision(workspace, unique[index]!, signal);
+        }
+      };
+      await Promise.all(
+        Array.from({ length: Math.min(SOURCE_REVISION_CONCURRENCY, unique.length) }, drain)
+      );
+    } finally {
+      release();
+    }
     // A workspace released mid-check answers nothing: its reads were cut short,
     // and a null for a file that is there would read as a deletion.
     if (this.disposed) throw hostError("HOST_DISPOSED", "the source host is shutting down");

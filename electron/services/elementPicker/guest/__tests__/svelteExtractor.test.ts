@@ -582,6 +582,15 @@ describe("structural path", () => {
         { tag: "p", index: 0 },
       ],
     });
+    // Claimed by the template's file with no position, for the host to place
+    // from the shape: never a line the page didn't stamp.
+    expect(node?.sourceCandidates).toEqual([
+      expect.objectContaining({
+        kind: "template-location",
+        file: "src/routes/+page.svelte",
+        location: null,
+      }),
+    ]);
     click(document.getElementById("year")!);
     [node] = lastSelection(events);
     expect(evidenceOf(node).structure).toEqual({

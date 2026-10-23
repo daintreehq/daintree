@@ -483,6 +483,35 @@ describe("ElementPickerWorkspaceService leases", () => {
     await vi.waitFor(() => expect(host.releaseWorkspace).toHaveBeenCalledWith(ids[0]));
     expect(() => svc.get(owner, ids[0]!)).toThrow(ELEMENT_PICKER_WORKSPACE_CLOSED);
     expect(svc.get(owner, ids.at(-1)!).workspaceId).toBe(ids.at(-1));
+    // Room is made before the new one enters the shared registry, which would
+    // otherwise evict some other view's workspace to fit it.
+    const released = host.releaseWorkspace.mock.invocationCallOrder[0]!;
+    const lastRegistered = host.registerWorkspace.mock.invocationCallOrder.at(-1)!;
+    expect(released).toBeLessThan(lastRegistered);
+  });
+
+  it("says a workspace released while its resolve was out is closed, not cancelled", async () => {
+    const { svc, host, owner, workspaceId } = await opened();
+    let answer: ((value: unknown) => void) | undefined;
+    host.resolve.mockImplementationOnce(
+      (request: unknown) =>
+        new Promise((resolve) => {
+          answer = () =>
+            resolve({
+              requestId: (request as { requestId: string }).requestId,
+              documentEpoch: 0,
+              outcomes: [],
+            });
+        })
+    );
+    const resolving = svc.resolve(owner, { workspaceId });
+    await vi.waitFor(() => expect(answer).toBeDefined());
+    svc.close(owner, workspaceId);
+    answer?.(undefined);
+    await expect(resolving).rejects.toMatchObject({
+      code: "NOT_FOUND",
+      message: ELEMENT_PICKER_WORKSPACE_CLOSED,
+    });
   });
 
   it("pushes a source change to the view that holds the workspace, and only while it does", async () => {

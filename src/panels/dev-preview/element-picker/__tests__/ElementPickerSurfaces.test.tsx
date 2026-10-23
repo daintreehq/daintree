@@ -1710,6 +1710,33 @@ describe("stale selections", () => {
     );
   });
 
+  it("asks again by element id for a React pick made while its file was still settling", async () => {
+    host.template = () => reactObservation();
+    await mountBound();
+    vi.useFakeTimers();
+    await act(async () => host.sourceChanged("src/Dashboard.tsx"));
+    await act(async () => host.select(0));
+    await elapse(HMR_SETTLE_MS);
+    expect(host.picker.reselect).toHaveBeenCalledWith({
+      sessionId: "session-1",
+      elementId: "el-r",
+    });
+  });
+
+  it("won't vouch for a mapped claim whose file was edited after the pick", async () => {
+    host.template = () => reactObservation();
+    await mountBound();
+    await act(async () => host.select(0));
+    await screen.findByRole("textbox", { name: "Request for the agent" });
+    const ready = session().getSnapshot().selection;
+    if (ready.status !== "ready") throw new Error("expected a ready selection");
+    expect(await session().sourcesUnchanged(ready.selection)).toBe(true);
+
+    await act(async () => host.sourceChanged("src/Dashboard.tsx"));
+    // Even the selection as it was picked, which a queued request falls back to.
+    expect(await session().sourcesUnchanged(ready.selection)).toBe(false);
+  });
+
   it("can't find a React selection again after a reload, and says so", async () => {
     host.template = () => reactObservation();
     await mountBound();
@@ -2897,6 +2924,9 @@ describe("an element with nothing to trace", () => {
       expect(prompt).toContain(
         "- Screenshot: not attached — this window is attached to another machine"
       );
+      // This machine's address for the page names something else where the
+      // source is: the workspace is asked to fetch no maps rather than the wrong ones.
+      expect(host.calls("openWorkspace").at(-1)).not.toHaveProperty("previewOrigin");
     } finally {
       delete global.__DAINTREE_HOST_ID__;
     }
@@ -2941,6 +2971,8 @@ describe("an element with nothing to trace", () => {
     expect(session().getSnapshot().selection.status).toBe("resolving");
     expect(screen.queryByRole("textbox", { name: "Request for the agent" })).toBeNull();
     expect(host.calls("resolve")).toEqual([]);
+    // The picture is taken at the click, while the page still shows it.
+    expect(host.captureElement).toHaveBeenCalledTimes(1);
 
     await act(async () =>
       answer({
@@ -2953,9 +2985,37 @@ describe("an element with nothing to trace", () => {
     );
     await screen.findByRole("textbox", { name: "Request for the agent" });
     expect(host.calls("resolve")).toHaveLength(1);
+    expect(host.captureElement).toHaveBeenCalledTimes(1);
     expect(screen.getByRole("region", { name: "Selected element" }).textContent).toContain(
       `${FILE}:6`
     );
+  });
+
+  it("keeps a held click across the source reopening for the page's server", async () => {
+    const answers: Array<(result: ElementPickerWorkspaceOpenResult) => void> = [];
+    host.openWith = () => new Promise((resolve) => answers.push(resolve));
+    await mountBound();
+    await act(async () => host.select(0));
+    expect(session().getSnapshot().selection.status).toBe("resolving");
+
+    // The page's address only now reaches the picker, naming another origin:
+    // the source is opened again for it, and the click waits for that one.
+    await act(async () =>
+      publishDevPreviewToolContext({ ...hostContext(), url: "http://localhost:3000/pricing" })
+    );
+    await waitFor(() => expect(answers.length).toBeGreaterThan(1));
+    expect(session().getSnapshot().selection.status).toBe("resolving");
+    await act(async () =>
+      answers.at(-1)?.({
+        status: "ready",
+        workspaceId: "ws-2",
+        appPath: ".",
+        appPaths: ["."],
+        scanComplete: true,
+      })
+    );
+    await waitFor(() => expect(host.calls("resolve")).toHaveLength(1));
+    expect(host.calls("resolve")[0]?.workspaceId).toBe("ws-2");
   });
 
   it("gives a held click back as the page's account when the source can't be opened", async () => {
@@ -2973,8 +3033,11 @@ describe("an element with nothing to trace", () => {
     expect(identity.textContent).toContain("Source not checked");
     expect(host.calls("resolve")).toEqual([]);
     const prompt = await sendRequest(sent);
-    // The boxes were measured at the click, and the page may have moved since.
-    expect(prompt).toContain("- Screenshot: not attached — it was picked before");
+    // The picture taken at the click, of what was clicked.
+    expect(host.captureElement).toHaveBeenCalledTimes(1);
+    expect(prompt).toContain(
+      "- Screenshot of the selection, cropped from the preview: /tmp/daintree-clipboard/element-1.png"
+    );
     expect(prompt).toContain("not checked");
   });
 
