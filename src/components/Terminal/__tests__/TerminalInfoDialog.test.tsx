@@ -24,8 +24,11 @@ vi.mock("@/services/ActionService", () => ({
 }));
 
 vi.mock("@/store/panelStore", () => ({
-  usePanelStore: (selector: (s: { panelsById: Record<string, unknown> }) => unknown) =>
-    selector({ panelsById: mockPanelsById }),
+  usePanelStore: Object.assign(
+    (selector: (s: { panelsById: Record<string, unknown> }) => unknown) =>
+      selector({ panelsById: mockPanelsById }),
+    { getState: () => ({ panelsById: mockPanelsById }) }
+  ),
 }));
 
 vi.mock("@/lib/utils", () => ({
@@ -589,6 +592,52 @@ describe("TerminalInfoDialog", () => {
         expect(getInfo).toHaveBeenCalled();
         expect(banner.textContent).toMatch(/last successful read/);
         expect(await copyPayload()).toMatch(/NOTE: the terminal host stopped answering/);
+      } finally {
+        vi.unstubAllGlobals();
+        vi.stubGlobal(
+          "ResizeObserver",
+          class {
+            observe() {}
+            unobserve() {}
+            disconnect() {}
+          }
+        );
+      }
+    });
+
+    // A pane restore held has no host record, so the background read answers from
+    // the pane rather than reporting a lost host (#14017).
+    it("keeps refreshing a held pane without asking the host", async () => {
+      const getInfo = vi.fn().mockResolvedValue(null);
+      vi.stubGlobal("electron", { terminal: { getInfo } });
+      mockPanelsById = {
+        "test-id": {
+          id: "test-id",
+          kind: "terminal",
+          cwd: "/home/user",
+          launchAgentId: "claude",
+          hasPty: false,
+          restoreRecovery: { reason: "resume-deferred" },
+        },
+      };
+      try {
+        dispatchMock.mockResolvedValue({
+          ok: true,
+          result: { id: "test-id", kind: "terminal", cwd: "/home/user", hasPty: false },
+        });
+        renderDialog();
+        expect(await screen.findByText("/home/user")).toBeTruthy();
+
+        // The pane moves while the dialog is open; only a refresh can show it.
+        mockPanelsById = {
+          "test-id": { ...(mockPanelsById["test-id"] as object), cwd: "/worktrees/moved" },
+        };
+        expect(await screen.findByText("/worktrees/moved", {}, { timeout: 4000 })).toBeTruthy();
+
+        expect(getInfo).not.toHaveBeenCalled();
+        expect(screen.queryByTestId("terminal-info-error")).toBeNull();
+        const payload = await copyPayload();
+        expect(payload).not.toMatch(/Invalid Date|NaN/);
       } finally {
         vi.unstubAllGlobals();
         vi.stubGlobal(

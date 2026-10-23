@@ -494,6 +494,7 @@ export const BUILT_IN_ACTION_IDS = [
   // -- terminalInfoActions --
   "terminal.info.open",
   "terminal.info.get",
+  "terminal.setHoldOnRestart",
 
   // -- browserActions --
   "browser.reload",

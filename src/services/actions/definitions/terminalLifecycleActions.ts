@@ -33,6 +33,10 @@ import {
   throwTerminalMiss,
 } from "./terminalPlacement";
 import { isForegroundDispatch } from "./dispatchSource";
+import { defineAction } from "../defineAction";
+import { TerminalRestoredSchema } from "./schemas";
+import { readTerminalPaneInfo } from "@/services/terminal/readTerminalPaneInfo";
+import { UnactionableTargetError } from "@/services/actions/unactionableTarget";
 import { logWarn } from "@/utils/logger";
 import {
   MAX_KILL_BATCH_TERMINALS,
@@ -814,14 +818,16 @@ export function registerTerminalLifecycleActions(
       shell: z.string().optional(),
       command: z.string().optional(),
       agentState: z.string().optional(),
-      spawnedAt: z.number(),
-      lastInputTime: z.number(),
-      lastOutputTime: z.number(),
+      // The process measurements below are absent for a pane restore held
+      // (#14017): it has no process, and zeros would read as real values.
+      spawnedAt: z.number().optional(),
+      lastInputTime: z.number().optional(),
+      lastOutputTime: z.number().optional(),
       lastStateChange: z.number().optional(),
-      activityTier: z.string(),
-      outputBufferSize: z.number(),
-      semanticBufferLines: z.number(),
-      restartCount: z.number(),
+      activityTier: z.string().optional(),
+      outputBufferSize: z.number().optional(),
+      semanticBufferLines: z.number().optional(),
+      restartCount: z.number().optional(),
       agentIncarnation: z.number().int().nonnegative().optional(),
       hasPty: z.boolean().optional(),
       agentSessionId: z.string().optional(),
@@ -840,6 +846,7 @@ export function registerTerminalLifecycleActions(
       originalAgentPresetId: z.string().optional(),
       exitCode: z.number().optional(),
       everDetectedAgent: z.boolean().optional(),
+      restored: TerminalRestoredSchema.optional(),
     }),
     run: async (args: unknown, ctx) => {
       const { terminalId } = (args as { terminalId?: string } | undefined) ?? {};
@@ -851,9 +858,58 @@ export function registerTerminalLifecycleActions(
       if (!targetId) {
         throw new Error("No terminal selected");
       }
-      return await window.electron.terminal.getInfo(targetId);
+      return await readTerminalPaneInfo(targetId);
     },
   }));
+
+  // The plugin-side half of "Resume agents after restart" (#13509, #14017): a
+  // plugin that knows its run is over can keep the pane from resuming without
+  // the user changing a setting that covers every agent.
+  actions.set("terminal.setHoldOnRestart", () =>
+    defineAction({
+      id: "terminal.setHoldOnRestart",
+      title: "Hold agent on restart",
+      description:
+        "Plugins only: hold or release one of this plugin's own agent terminals on restart. A held terminal comes back without starting, whatever the resume setting; the user starting it clears the hold.",
+      category: "terminal",
+      kind: "command",
+      danger: "safe",
+      scope: "renderer",
+      palette: { mode: "hidden" },
+      mcpVisibility: "hidden",
+      argsSchema: z.object({
+        terminalId: z
+          .string()
+          .min(1)
+          .describe("An agent terminal this plugin started with agent.launch."),
+        hold: z.boolean().describe("False hands the terminal back to the resume setting."),
+      }),
+      resultSchema: z.object({ terminalId: z.string(), holdOnRestart: z.boolean() }),
+      run: async ({ terminalId, hold }, ctx) => {
+        // Who launched the pane comes off the host-stamped context, never an
+        // argument, so one plugin can't hold or release another's panes.
+        const caller = ctx?.dispatchSource === "plugin" ? ctx.callerPluginId : undefined;
+        if (caller === undefined) {
+          throw new UnactionableTargetError(
+            "Only the plugin that launched a terminal can hold it on restart."
+          );
+        }
+        const panel = usePanelStore.getState().panelsById[terminalId];
+        if (
+          !panel ||
+          !isPtyPanel(panel) ||
+          !panel.launchAgentId ||
+          panel.launchedByPluginId !== caller
+        ) {
+          throw new UnactionableTargetError(
+            `No agent terminal '${terminalId}' launched by this plugin in this project.`
+          );
+        }
+        usePanelStore.getState().setHoldOnRestart(terminalId, hold);
+        return { terminalId, holdOnRestart: hold };
+      },
+    })
+  );
 
   actions.set("terminal.toggleInputLock", () => ({
     id: "terminal.toggleInputLock",

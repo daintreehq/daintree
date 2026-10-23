@@ -10,6 +10,10 @@ import { readTailSnapshot, tailCapturedOutput } from "../../../shared/utils/arti
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import { readClientMetadata } from "../../../shared/utils/mcpClientMetadata.js";
 import {
+  restoredField,
+  sanitizeLiveRestoreProvenance,
+} from "../../../shared/utils/restoreProvenance.js";
+import {
   buildPanelLimitSnapshot,
   computeHardwareDefaults,
 } from "../../../shared/utils/panelLimit.js";
@@ -246,6 +250,19 @@ export async function runTerminalList(
                 ? readClientMetadata(panel.snapshot?.extensionState)
                 : null,
             }
+          : {}),
+        // Off the saved layout, and only while it still describes the pane
+        // (#14017): a running process, which by being alive has left any hold
+        // the layout still records, or a hold that is still on. Anything else
+        // is rebuilt afresh when a view next opens the project.
+        ...(isPty && panel.snapshot !== undefined
+          ? panel.record !== undefined
+            ? restoredField({
+                restoreProvenance: sanitizeLiveRestoreProvenance(panel.snapshot.restoreProvenance),
+              })
+            : panel.snapshot.restoreRecovery !== undefined
+              ? restoredField(panel.snapshot)
+              : {}
           : {}),
       },
     };

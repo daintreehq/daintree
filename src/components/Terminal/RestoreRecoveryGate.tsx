@@ -50,6 +50,11 @@ const REASON_COPY: Record<RestoreRecoveryReason, RecoveryCopy> = {
     description:
       "Agents wait to be started after a restart, as set in Settings > General > Startup. Resume its conversation or start a new one.",
   },
+  "held-by-plugin": {
+    title: "Not resumed after restart",
+    description:
+      "The plugin that started this agent asked for it to wait after a restart. Resume its conversation or start a new one.",
+  },
 };
 
 const RESUMES_ON_FOCUS_COPY: RecoveryCopy = {
@@ -128,12 +133,13 @@ export function RestoreRecoveryGate({
   isFocused = false,
   containerRef,
 }: RestoreRecoveryGateProps) {
-  const { recovery, agentId, cwd, originCwd } = usePanelStore(
+  const { recovery, heldByPlugin, agentId, cwd, originCwd } = usePanelStore(
     useShallow((state) => {
       const panel = state.panelsById[panelId];
       const pty = panel && isPtyPanel(panel) ? panel : undefined;
       return {
         recovery: pty?.restoreRecovery,
+        heldByPlugin: pty?.holdOnRestart === true,
         agentId: pty?.launchAgentId,
         cwd: pty?.cwd ?? "",
         originCwd: pty ? resolveConversationSearchCwd(pty) : "",
@@ -147,8 +153,11 @@ export function RestoreRecoveryGate({
   const resumePolicy = useAgentSettingsStore((state) =>
     state.isInitialized ? resolveResumeOnRestart(state.settings) : undefined
   );
+  // A pane its plugin asked to hold waits for an explicit choice, even one the
+  // setting held before the plugin asked (#14017).
   const resumesOnFocusId =
     recovery?.reason === "resume-deferred" &&
+    !heldByPlugin &&
     !recovery.awaitingDestination &&
     resumePolicy !== undefined &&
     resumePolicy !== "never"

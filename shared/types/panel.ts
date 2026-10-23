@@ -423,8 +423,8 @@ export type SessionLostReason =
 /**
  * Why restore held a pane instead of launching it (#12434). The first two are
  * the resume election's losers ({@link SessionLostReason}); the next two only
- * occur for an agent that can resume across directories, and the last for any
- * agent, by the user's own setting.
+ * occur for an agent that can resume across directories, and the last two for
+ * any agent, by the user's own setting or by the plugin that launched it.
  */
 export type RestoreRecoveryReason =
   | "sibling-owns-session-id"
@@ -434,7 +434,45 @@ export type RestoreRecoveryReason =
   /** Filed under a worktree this project no longer has. */
   | "destination-unavailable"
   /** The "Resume agents after restart" setting held it (#13509), not anything restore saw. */
-  | "resume-deferred";
+  | "resume-deferred"
+  /** The plugin that launched the pane asked for it to be held (#14017). */
+  | "held-by-plugin";
+
+/**
+ * What restore did with a pane it rebuilt from its saved snapshot (#14017): ran
+ * the agent's resume command, started it without its conversation (a plain
+ * shell always comes back this way), or held it. The route restore chose, not
+ * a claim that the CLI reopened anything.
+ */
+export type TerminalRestoreDisposition = "resume" | "fresh" | "held";
+
+/**
+ * An agent state Daintree's detector reported for a pane, and when that state
+ * began (#14017). Only what the host observed: never the renderer's
+ * `directing` overlay or an optimistic guess made before the host confirmed.
+ */
+export interface TerminalAgentObservation {
+  agentState: AgentState;
+  /** Epoch ms; absent only on a snapshot saved before observations were kept. */
+  at?: number;
+}
+
+/**
+ * How the pane's current process, or its hold, came from restore (#14017).
+ * Absent on a pane restore never rebuilt, and cleared once the pane is
+ * restarted. Persisted, so a pane held across several restarts keeps the
+ * last state Daintree saw before the first of them.
+ */
+export interface TerminalRestoreProvenance {
+  /** When restore rebuilt the pane from its snapshot (epoch ms). */
+  at: number;
+  disposition: TerminalRestoreDisposition;
+  /**
+   * The last agent state observed for the pane before this restore. What the
+   * screen last showed, never a verdict on whether the run had finished.
+   */
+  lastSeen?: TerminalAgentObservation;
+}
 
 /**
  * A terminal's Scratchpad (#12835): throwaway Markdown notes that belong to the
@@ -751,6 +789,27 @@ export interface PtyPanelData extends BasePanelData {
    * before that choice holds it again rather than launching fresh.
    */
   restoreRecovery?: PanelRestoreRecovery;
+  /** See {@link TerminalRestoreProvenance}. Persisted. */
+  restoreProvenance?: TerminalRestoreProvenance;
+  /**
+   * The last agent state the host reported for this pane (#14017), kept apart
+   * from `agentState`, which also carries renderer overlays. The next restore
+   * reports it as last seen. Persisted, held panes included: it describes the
+   * pane, not a process the hold would start.
+   */
+  lastAgentObservation?: TerminalAgentObservation;
+  /**
+   * The plugin whose `agent.launch` created this pane (#14017), taken from the
+   * host-stamped dispatch context, never from arguments. Only that plugin may
+   * change {@link holdOnRestart}. Persisted.
+   */
+  launchedByPluginId?: string;
+  /**
+   * The launching plugin asked restore to hold this pane rather than start it,
+   * whatever "Resume agents after restart" says (#14017). Cleared when the user
+   * starts the pane from a hold. Persisted.
+   */
+  holdOnRestart?: true;
   /** Notes column beside the terminal (#12835). Persisted. */
   scratchpad?: TerminalScratchpad;
 }

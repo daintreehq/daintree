@@ -36,6 +36,10 @@ export type PtySnapshotSource = Pick<
   | "fallbackChainIndex"
   | "conversationCwd"
   | "restoreRecovery"
+  | "restoreProvenance"
+  | "lastAgentObservation"
+  | "launchedByPluginId"
+  | "holdOnRestart"
   | "scratchpad"
   | "agentState"
   | "lastStateChange"
@@ -75,6 +79,12 @@ export function serializePtyPanel(t: PtySnapshotSource): Partial<PanelSnapshot> 
     ...(typeof t.fallbackChainIndex === "number" && { fallbackChainIndex: t.fallbackChainIndex }),
     ...(t.conversationCwd && { conversationCwd: t.conversationCwd }),
     ...(held && { restoreRecovery: t.restoreRecovery }),
+    // Both written for a held pane too: they describe the pane, and the last
+    // state observed for it, never a process the hold would start.
+    ...(t.restoreProvenance && { restoreProvenance: t.restoreProvenance }),
+    ...(t.lastAgentObservation && { lastAgentObservation: t.lastAgentObservation }),
+    ...(t.launchedByPluginId && { launchedByPluginId: t.launchedByPluginId }),
+    ...(t.holdOnRestart === true && { holdOnRestart: true as const }),
     // Written for a held pane too: the notes belong to the pane, not its process.
     ...(t.scratchpad && { scratchpad: t.scratchpad }),
     // worktreeMoveNotice intentionally omitted — it's a live prompt to tell a

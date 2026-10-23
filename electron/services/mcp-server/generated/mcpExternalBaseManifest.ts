@@ -1900,6 +1900,38 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
                   },
                 ],
               },
+              restored: {
+                type: "object",
+                properties: {
+                  at: {
+                    type: "number",
+                  },
+                  disposition: {
+                    type: "string",
+                    enum: ["resume", "fresh", "held"],
+                  },
+                  heldReason: {
+                    type: "string",
+                  },
+                  lastSeen: {
+                    type: "object",
+                    properties: {
+                      agentState: {
+                        type: "string",
+                      },
+                      at: {
+                        type: "number",
+                      },
+                    },
+                    required: ["agentState"],
+                    additionalProperties: false,
+                  },
+                },
+                required: ["at", "disposition"],
+                additionalProperties: false,
+                description:
+                  "Set when restore rebuilt the pane (`at`, epoch ms). lastSeen: agent state saved before then, not proof a run ended.",
+              },
             },
             required: [
               "id",

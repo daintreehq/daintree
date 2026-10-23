@@ -251,6 +251,7 @@ export const createRestartActions = (
   | "setRuntimeStatus"
   | "setInputLocked"
   | "toggleInputLocked"
+  | "setHoldOnRestart"
   | "activateFallbackPreset"
   | "restartTerminalOnPreset"
   | "dismissSessionLost"
@@ -961,6 +962,9 @@ export const createRestartActions = (
           lastCheckResult: undefined,
           // Same for its handback (#12488): the restarted session was never asked.
           lastHandback: undefined,
+          // The new process is the user's restart, not anything restore rebuilt
+          // (#14017). The plugin hold stays: it is a standing choice.
+          restoreProvenance: undefined,
           // A new PTY starts the session count over, matching the fresh record
           // the host builds for it (#12535). Carrying the old one forward would
           // leave this surface disagreeing with the host about a session
@@ -1435,6 +1439,21 @@ export const createRestartActions = (
     });
   },
 
+  setHoldOnRestart: (id, hold) => {
+    set((state) => {
+      const terminal = state.panelsById[id];
+      if (!terminal || !isPtyPanel(terminal)) return state;
+      if ((terminal.holdOnRestart === true) === hold) return state;
+
+      const newById = {
+        ...state.panelsById,
+        [id]: { ...terminal, holdOnRestart: hold ? (true as const) : undefined },
+      };
+      saveNormalized(newById, state.panelIds);
+      return { panelsById: newById };
+    });
+  },
+
   activateFallbackPreset: (id, nextPresetId, originalPresetId) =>
     respawnAgentOnPreset(set, get, id, nextPresetId, { kind: "fallback", originalPresetId }),
 
@@ -1634,6 +1653,8 @@ async function respawnAgentOnPreset(
         lastStateChange: Date.now(),
         stateChangeTrigger: undefined,
         stateChangeConfidence: undefined,
+        // A relaunch on another preset, not the process restore rebuilt (#14017).
+        restoreProvenance: undefined,
         command: commandToRun,
         agentPresetId: nextPreset.id,
         agentPresetColor: nextPreset.color,

@@ -770,6 +770,49 @@ describe("restartTerminal and panes that run away from their conversation (#1243
     const after = ptyAfterRestart();
     expect(after.conversationCwd).toBe("/repo");
   });
+
+  const restoredPane = {
+    ...movedPane,
+    restoreProvenance: {
+      at: 5_000,
+      disposition: "resume" as const,
+      lastSeen: { agentState: "idle" as const, at: 4_000 },
+    },
+    launchedByPluginId: "acme.orchestrator",
+    holdOnRestart: true as const,
+  };
+
+  it("drops restore's provenance on a restart, keeping the plugin's hold (#14017)", async () => {
+    usePanelStore.setState({
+      panelsById: { [restoredPane.id]: restoredPane },
+      panelIds: [restoredPane.id],
+    });
+
+    await usePanelStore.getState().restartTerminal("test-1");
+
+    const after = ptyAfterRestart();
+    expect(after.restoreProvenance).toBeUndefined();
+    expect(after.launchedByPluginId).toBe("acme.orchestrator");
+    expect(after.holdOnRestart).toBe(true);
+  });
+
+  it("drops restore's provenance when a fallback preset relaunches the pane (#14017)", async () => {
+    getMergedPresetMock.mockReturnValue({
+      id: "amber-provider",
+      name: "Amber Provider",
+      color: "#ffbb33",
+      args: ["--provider", "amber"],
+    });
+    const pane = { ...restoredPane, agentPresetId: "blue-provider" };
+    usePanelStore.setState({ panelsById: { [pane.id]: pane }, panelIds: [pane.id] });
+
+    await usePanelStore
+      .getState()
+      .activateFallbackPreset("test-1", "amber-provider", "blue-provider");
+
+    expect(mockSpawn).toHaveBeenCalled();
+    expect(ptyAfterRestart().restoreProvenance).toBeUndefined();
+  });
 });
 
 describe("restartTerminal captured live-session resume", () => {

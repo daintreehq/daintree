@@ -10,6 +10,7 @@ const RESTORE_RECOVERY_REASONS: ReadonlySet<string> = new Set<RestoreRecoveryRea
   "session-unresolved",
   "destination-unavailable",
   "resume-deferred",
+  "held-by-plugin",
 ]);
 
 // Control characters never belong in a path, and this one is later handed to

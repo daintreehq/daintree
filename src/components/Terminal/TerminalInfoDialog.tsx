@@ -4,7 +4,10 @@ import { Button } from "@/components/ui/button";
 import { ChevronRight, Info } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { SkeletonBone } from "@/components/ui/Skeleton";
-import type { TerminalInfoPayload } from "@/types/electron";
+import {
+  readTerminalPaneInfo,
+  type TerminalPaneInfo,
+} from "@/services/terminal/readTerminalPaneInfo";
 import { actionService } from "@/services/ActionService";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
@@ -299,11 +302,9 @@ export function TerminalInfoDialog({ isOpen, onClose, terminalId }: TerminalInfo
   // Keyed to the terminal it was read for. Retargeting the open dialog at another
   // terminal otherwise rendered the new panel's title beside the old one's host data
   // until the next read landed — or indefinitely, if that read failed.
-  const [read, setRead] = useState<{ terminalId: string; payload: TerminalInfoPayload } | null>(
-    null
-  );
+  const [read, setRead] = useState<{ terminalId: string; payload: TerminalPaneInfo } | null>(null);
   const info = read?.terminalId === terminalId ? read.payload : null;
-  const setInfo = (payload: TerminalInfoPayload | null, forTerminal: string) =>
+  const setInfo = (payload: TerminalPaneInfo | null, forTerminal: string) =>
     setRead(payload ? { terminalId: forTerminal, payload } : null);
   // One background read at a time, so a slow reply can never land after a newer one.
   const refreshInFlightRef = useRef(false);
@@ -361,7 +362,7 @@ export function TerminalInfoDialog({ isOpen, onClose, terminalId }: TerminalInfo
           throw new Error(result.error.message);
         }
         if (isMounted) {
-          setInfo(result.result as TerminalInfoPayload, terminalId);
+          setInfo(result.result as TerminalPaneInfo, terminalId);
           setError(null);
         }
       } catch (err) {
@@ -391,16 +392,16 @@ export function TerminalInfoDialog({ isOpen, onClose, terminalId }: TerminalInfo
     setPerformanceOpen(false);
   }, [isOpen, terminalId]);
 
-  // Straight to the IPC, not through `actionService`: a dispatch records itself as
+  // Straight to the read, not through `actionService`: a dispatch records itself as
   // the last action and emits `action:dispatched`, which is right for the read the
-  // user asked for and noise every two seconds after it.
+  // user asked for and noise every two seconds after it. The same read the action
+  // makes, so a pane restore held (#14017) refreshes instead of failing.
   const refreshInfo = () => {
-    const getInfo = window.electron?.terminal?.getInfo;
-    if (!getInfo || refreshInFlightRef.current) return;
+    if (!window.electron?.terminal?.getInfo || refreshInFlightRef.current) return;
     const generation = readGenerationRef.current;
     const forTerminal = terminalId;
     refreshInFlightRef.current = true;
-    getInfo(forTerminal)
+    readTerminalPaneInfo(forTerminal)
       .then((next) => {
         if (generation !== readGenerationRef.current) return;
         // An empty answer is the host no longer knowing the terminal. Ignoring it
@@ -409,7 +410,7 @@ export function TerminalInfoDialog({ isOpen, onClose, terminalId }: TerminalInfo
           setError("The terminal host no longer has a record of this terminal");
           return;
         }
-        setInfo(next as TerminalInfoPayload, forTerminal);
+        setInfo(next as TerminalPaneInfo, forTerminal);
         setError(null);
       })
       .catch((err: unknown) => {
@@ -635,12 +636,12 @@ Terminal internals:
 
 Runtime:
   ${hasExited ? "Started" : "Runtime"}: ${startedAt == null ? UNAVAILABLE : hasExited ? formatLastActivity(startedAt) : formatElapsedDuration(Date.now() - startedAt)}
-  Spawned at: ${info ? formatTimestamp(info.spawnedAt) : UNAVAILABLE}
+  Spawned at: ${info?.spawnedAt !== undefined ? formatTimestamp(info.spawnedAt) : UNAVAILABLE}
   Restarts: ${info?.restartCount ?? UNAVAILABLE}
 
 Activity:
-  Last input: ${info ? `${formatLastActivity(info.lastInputTime)} (${formatTimestamp(info.lastInputTime)})` : UNAVAILABLE}
-  Last output: ${info ? `${formatLastActivity(info.lastOutputTime)} (${formatTimestamp(info.lastOutputTime)})` : UNAVAILABLE}
+  Last input: ${info?.lastInputTime !== undefined ? `${formatLastActivity(info.lastInputTime)} (${formatTimestamp(info.lastInputTime)})` : UNAVAILABLE}
+  Last output: ${info?.lastOutputTime !== undefined ? `${formatLastActivity(info.lastOutputTime)} (${formatTimestamp(info.lastOutputTime)})` : UNAVAILABLE}
   Agent state: ${agentState || NONE}
   Last state change: ${info?.lastStateChange != null ? formatLastActivity(info.lastStateChange) : NONE}
   Activity tier: ${info?.activityTier ?? UNAVAILABLE}
@@ -801,7 +802,11 @@ Performance:
               />
               <Row
                 label="Last output"
-                value={info ? formatLastActivity(info.lastOutputTime) : undefined}
+                value={
+                  info?.lastOutputTime !== undefined
+                    ? formatLastActivity(info.lastOutputTime)
+                    : undefined
+                }
                 pending={pending}
                 fallback={UNAVAILABLE}
               />
@@ -932,7 +937,7 @@ Performance:
             />
             <Row
               label="Spawned"
-              value={info ? formatTimestamp(info.spawnedAt) : undefined}
+              value={info?.spawnedAt !== undefined ? formatTimestamp(info.spawnedAt) : undefined}
               pending={pending}
               fallback={UNAVAILABLE}
             />
@@ -976,13 +981,21 @@ Performance:
           <Group title="Activity">
             <Row
               label="Last input"
-              value={info ? formatLastActivity(info.lastInputTime) : undefined}
+              value={
+                info?.lastInputTime !== undefined
+                  ? formatLastActivity(info.lastInputTime)
+                  : undefined
+              }
               pending={pending}
               fallback={UNAVAILABLE}
             />
             <Row
               label="Last output"
-              value={info ? formatLastActivity(info.lastOutputTime) : undefined}
+              value={
+                info?.lastOutputTime !== undefined
+                  ? formatLastActivity(info.lastOutputTime)
+                  : undefined
+              }
               pending={pending}
               fallback={UNAVAILABLE}
             />

@@ -181,6 +181,57 @@ describe("buildRestoreRecoveryLaunchOptions (#12434)", () => {
   });
 });
 
+describe("buildRestoreRecoveryLaunchOptions — restore provenance and the plugin hold (#14017)", () => {
+  const provenance = {
+    at: 5_000,
+    disposition: "held" as const,
+    lastSeen: { agentState: "idle" as const, at: 4_000 },
+  };
+  const pane = () =>
+    heldPane({
+      restoreProvenance: provenance,
+      lastAgentObservation: { agentState: "idle", at: 4_000 },
+      launchedByPluginId: "acme.orchestrator",
+      holdOnRestart: true,
+      restoreRecovery: { reason: "held-by-plugin" },
+    });
+
+  it("leaves the hold as a resume, keeping when restore ran and what it saw", () => {
+    const options = buildRestoreRecoveryLaunchOptions(
+      pane(),
+      { kind: "resume", sessionId: "sess-1" },
+      NO_INPUTS
+    );
+
+    expect(options?.restoreProvenance).toEqual({ ...provenance, disposition: "resume" });
+  });
+
+  it("leaves the hold as a fresh start", () => {
+    const options = buildRestoreRecoveryLaunchOptions(pane(), { kind: "fresh" }, NO_INPUTS);
+
+    expect(options?.restoreProvenance).toEqual({ ...provenance, disposition: "fresh" });
+  });
+
+  it.each([{ kind: "fresh" as const }, { kind: "resume" as const, sessionId: "sess-1" }])(
+    "lets the user's $kind choice clear the plugin's hold, keeping its owner and what was seen",
+    (choice) => {
+      const options = buildRestoreRecoveryLaunchOptions(pane(), choice, NO_INPUTS);
+
+      expect(options?.holdOnRestart).toBeUndefined();
+      expect(options).toMatchObject({
+        launchedByPluginId: "acme.orchestrator",
+        lastAgentObservation: { agentState: "idle", at: 4_000 },
+      });
+    }
+  );
+
+  it("invents no provenance for a pane that carried none", () => {
+    const options = buildRestoreRecoveryLaunchOptions(heldPane(), { kind: "fresh" }, NO_INPUTS);
+
+    expect(options?.restoreProvenance).toBeUndefined();
+  });
+});
+
 describe("siblingHeldSessionIds", () => {
   it("collects other panes' conversations for the same agent only", () => {
     const held = siblingHeldSessionIds(

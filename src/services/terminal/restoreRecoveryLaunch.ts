@@ -111,6 +111,17 @@ export function buildRestoreRecoveryLaunchOptions(
     extensionStateVersion: panel.extensionStateVersion,
     pluginId: panel.pluginId,
     spawnedBy: panel.spawnedBy,
+    // The pane leaves its hold the way the user chose, still the pane restore
+    // brought back, with what was last seen before it (#14017).
+    restoreProvenance: panel.restoreProvenance && {
+      ...panel.restoreProvenance,
+      disposition: resuming ? "resume" : "fresh",
+    },
+    lastAgentObservation: panel.lastAgentObservation,
+    launchedByPluginId: panel.launchedByPluginId,
+    // The user's choice to start the pane outranks the plugin's standing request
+    // to hold it; the plugin can ask again (#14017).
+    holdOnRestart: undefined,
     excludeFromPersistence: panel.excludeFromPersistence,
     removeOnExit: panel.removeOnExit,
     lastActiveAt: panel.lastActiveAt,

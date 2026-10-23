@@ -49,6 +49,7 @@ import {
 } from "@/store/slices/panelRegistry/panelCount";
 import { buildPanelLimitSnapshot, usePanelLimitStore } from "@/store/panelLimitStore";
 import { readClientMetadata } from "@shared/utils/mcpClientMetadata";
+import { restoredField } from "@shared/utils/restoreProvenance";
 import { appendHandbackInstruction, mintHandbackCode } from "@shared/utils/handback";
 import { NOTIFY_ARG_DESCRIPTION, NotifyReplyLinesSchema } from "@shared/types/terminalNotify";
 import { WaitForReplySchema, WaitSecondsSchema } from "@shared/types/replyWait";
@@ -216,6 +217,7 @@ export function registerTerminalQueryActions(
                 : null,
             }
           : {}),
+        ...(isPtyPanel(t) ? restoredField(t) : {}),
       }));
 
       const { softWarningLimit, confirmationLimit, hardLimit } = usePanelLimitStore.getState();
