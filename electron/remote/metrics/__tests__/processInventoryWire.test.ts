@@ -5,6 +5,7 @@ import type {
 } from "../../../../shared/types/processes.js";
 import {
   MAX_PROCESS_CLOSED,
+  MAX_PROCESS_INVENTORY_BYTES,
   MAX_PROCESS_LABEL,
   MAX_PROCESS_MEMBERS,
   MAX_PROCESS_PLUGINS,
@@ -84,19 +85,64 @@ describe("boundProcessInventory", () => {
     expect(parsed).toMatchObject({ samplesAvailable: false, sampledAt: 4, truncated: false });
   });
 
-  it("cuts every list to its bound and says rows were let go", () => {
-    const bounded = boundProcessInventory(
+  it.each([
+    ["terminals", { terminals: MAX_PROCESS_TERMINALS }, MAX_PROCESS_TERMINALS],
+    ["plugins", { plugins: MAX_PROCESS_PLUGINS }, MAX_PROCESS_PLUGINS],
+    ["closedTerminalProcesses", { closed: MAX_PROCESS_CLOSED + 1 }, MAX_PROCESS_CLOSED],
+  ] as const)("cuts %s to its bound and says rows were let go", (list, counts, cap) => {
+    const atCap = boundProcessInventory(snapshot(counts));
+    if (list !== "closedTerminalProcesses") {
+      expect(atCap[list]).toHaveLength(cap);
+      expect(atCap.truncated).toBe(false);
+    }
+    const over = boundProcessInventory(
       snapshot({
-        terminals: MAX_PROCESS_TERMINALS + 1,
-        closed: MAX_PROCESS_CLOSED + 1,
-        plugins: MAX_PROCESS_PLUGINS + 1,
+        ...counts,
+        [list === "closedTerminalProcesses" ? "closed" : list]: cap + 1,
       })
     );
-    expect(bounded.terminals).toHaveLength(MAX_PROCESS_TERMINALS);
-    expect(bounded.closedTerminalProcesses).toHaveLength(MAX_PROCESS_CLOSED);
-    expect(bounded.plugins).toHaveLength(MAX_PROCESS_PLUGINS);
+    expect(over[list]).toHaveLength(cap);
+    expect(over.truncated).toBe(true);
+    expect(ProcessInventorySchema.safeParse(over).success).toBe(true);
+  });
+
+  it("keeps a full answer of long multibyte text inside the byte budget, terminals first", () => {
+    // Three bytes a character, at every length the schema allows.
+    const wide = "\u4e2d".repeat(1024);
+    const big = snapshot({
+      terminals: MAX_PROCESS_TERMINALS,
+      closed: MAX_PROCESS_CLOSED - 1,
+      plugins: MAX_PROCESS_PLUGINS,
+    });
+    for (const terminal of big.terminals) {
+      terminal.cwd = wide.repeat(4);
+      terminal.title = wide;
+      terminal.projectName = wide;
+    }
+    const bounded = boundProcessInventory(big);
+    const bytes = Buffer.byteLength(JSON.stringify(bounded), "utf8");
+    expect(bytes).toBeLessThanOrEqual(MAX_PROCESS_INVENTORY_BYTES + 1024);
+    expect(bounded.terminals.length).toBeGreaterThan(0);
+    expect(bounded.terminals.length).toBeLessThan(MAX_PROCESS_TERMINALS);
+    expect(bounded.plugins).toHaveLength(0);
+    expect(bounded.closedTerminalProcesses).toHaveLength(0);
     expect(bounded.truncated).toBe(true);
     expect(ProcessInventorySchema.safeParse(bounded).success).toBe(true);
+  });
+
+  it("zeroes readings the Shell's schema would refuse, rather than failing the whole answer", () => {
+    const odd = snapshot({ closed: 1, plugins: 1 });
+    odd.plugins[0].sample = { cpuPercent: Number.NaN, memoryKb: -1, processCount: 1, members: [] };
+    odd.closedTerminalProcesses[0].cpuPercent = Number.NaN;
+    odd.closedTerminalProcesses[0].memoryKb = -5;
+    odd.cleanup = { found: 5_000_000, ended: 0, stillRunning: 0, unchecked: 0, lastAt: 1 };
+    odd.terminals[0].worktreeId = "";
+    const parsed = ProcessInventorySchema.parse(boundProcessInventory(odd));
+    expect(parsed.plugins[0].sample).toMatchObject({ cpuPercent: 0, memoryKb: 0 });
+    expect(parsed.closedTerminalProcesses[0]).toMatchObject({ cpuPercent: null, memoryKb: null });
+    expect(parsed.cleanup?.found).toBe(5_000_000);
+    expect(parsed.terminals).toHaveLength(1);
+    expect(parsed.truncated).toBe(false);
   });
 
   it("counts a closed-process list at the pty-host's own cap as possibly cut", () => {

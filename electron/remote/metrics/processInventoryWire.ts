@@ -5,6 +5,7 @@ import type {
 } from "../../../shared/types/processes.js";
 import {
   MAX_PROCESS_CLOSED,
+  MAX_PROCESS_INVENTORY_BYTES,
   MAX_PROCESS_LABEL,
   MAX_PROCESS_MEMBERS,
   MAX_PROCESS_PLUGINS,
@@ -22,61 +23,99 @@ function clipNullable(text: string | null, max: number): string | null {
   return text === null ? null : clip(text, max);
 }
 
+function clipOptional(text: string | undefined, max: number): string | undefined {
+  return text === undefined ? undefined : clip(text, max);
+}
+
+// An OS or Electron reading can come back negative or NaN; the Shell's schema takes neither.
+function reading(value: number): number {
+  return Number.isFinite(value) && value >= 0 ? value : 0;
+}
+
+function readingOrNull(value: number | null): number | null {
+  return value !== null && Number.isFinite(value) && value >= 0 ? value : null;
+}
+
 function boundSample(sample: ProcessTreeSample | null): ProcessTreeSample | null {
   if (!sample) return null;
   return {
-    cpuPercent: sample.cpuPercent,
-    memoryKb: sample.memoryKb,
+    cpuPercent: reading(sample.cpuPercent),
+    memoryKb: reading(sample.memoryKb),
     // The tree's own totals stay whole; only the members listed are cut.
-    processCount: sample.processCount,
+    processCount: Math.trunc(reading(sample.processCount)),
     members: sample.members.slice(0, MAX_PROCESS_MEMBERS).map((member) => ({
       pid: member.pid,
       comm: clip(member.comm, MAX_PROCESS_LABEL),
-      cpuPercent: member.cpuPercent,
-      memoryKb: member.memoryKb,
+      cpuPercent: reading(member.cpuPercent),
+      memoryKb: reading(member.memoryKb),
     })),
   };
 }
 
+/** Keep rows in order while they fit what is left of the byte budget. */
+function withinBudget<T>(rows: T[], budget: { left: number }): T[] {
+  const kept: T[] = [];
+  for (const row of rows) {
+    const bytes = Buffer.byteLength(JSON.stringify(row), "utf8");
+    if (bytes > budget.left) {
+      budget.left = 0;
+      break;
+    }
+    budget.left -= bytes;
+    kept.push(row);
+  }
+  return kept;
+}
+
 /**
- * This host's inventory as it goes over a link: every list cut to its bound,
- * display text clipped, identities and paths left whole for the schema to
- * hold. A closed-process list at the pty-host's own cap may already be
- * missing some, so it counts as truncated too.
+ * This host's inventory as it goes over a link: every list cut to its bound
+ * and the whole to a byte budget, display text clipped, readings a schema
+ * would refuse zeroed, identities and paths left whole. A closed-process list
+ * at the pty-host's own cap may already be missing some, so it counts as
+ * truncated too.
  */
 export function boundProcessInventory(snapshot: ProcessInventorySnapshot): RemoteProcessInventory {
-  const truncated =
-    snapshot.terminals.length > MAX_PROCESS_TERMINALS ||
-    snapshot.closedTerminalProcesses.length >= MAX_PROCESS_CLOSED ||
-    snapshot.plugins.length > MAX_PROCESS_PLUGINS;
+  const terminals = snapshot.terminals.slice(0, MAX_PROCESS_TERMINALS).map((terminal) => ({
+    ...terminal,
+    title: clipOptional(terminal.title, MAX_TEXT),
+    projectName: clipNullable(terminal.projectName, MAX_TEXT),
+    sample: boundSample(terminal.sample),
+  }));
+  const plugins = snapshot.plugins.slice(0, MAX_PROCESS_PLUGINS).map((plugin) => ({
+    ...plugin,
+    label: clipNullable(plugin.label, MAX_PROCESS_LABEL),
+    sample: boundSample(plugin.sample),
+  }));
+  const closed = snapshot.closedTerminalProcesses.slice(0, MAX_PROCESS_CLOSED).map((process) => ({
+    ...process,
+    comm: clip(process.comm, MAX_PROCESS_LABEL),
+    memoryKb: readingOrNull(process.memoryKb),
+    cpuPercent: readingOrNull(process.cpuPercent),
+    projectName: clipNullable(process.projectName, MAX_TEXT),
+    origin: process.origin && {
+      ...process.origin,
+      title: clipOptional(process.origin.title, MAX_TEXT),
+    },
+  }));
+
+  // Live terminals first: they are what the view is for.
+  const budget = { left: MAX_PROCESS_INVENTORY_BYTES };
+  const keptTerminals = withinBudget(terminals, budget);
+  const keptPlugins = withinBudget(plugins, budget);
+  const keptClosed = withinBudget(closed, budget);
+
   return {
-    terminals: snapshot.terminals.slice(0, MAX_PROCESS_TERMINALS).map((terminal) => ({
-      ...terminal,
-      title: terminal.title === undefined ? undefined : clip(terminal.title, MAX_TEXT),
-      projectName: clipNullable(terminal.projectName, MAX_TEXT),
-      sample: boundSample(terminal.sample),
-    })),
-    closedTerminalProcesses: snapshot.closedTerminalProcesses
-      .slice(0, MAX_PROCESS_CLOSED)
-      .map((closed) => ({
-        ...closed,
-        comm: clip(closed.comm, MAX_PROCESS_LABEL),
-        projectName: clipNullable(closed.projectName, MAX_TEXT),
-        origin: closed.origin && {
-          ...closed.origin,
-          title:
-            closed.origin.title === undefined ? undefined : clip(closed.origin.title, MAX_TEXT),
-        },
-      })),
+    terminals: keptTerminals,
+    closedTerminalProcesses: keptClosed,
     cleanup: snapshot.cleanup,
-    plugins: snapshot.plugins.slice(0, MAX_PROCESS_PLUGINS).map((plugin) => ({
-      ...plugin,
-      label: clipNullable(plugin.label, MAX_PROCESS_LABEL),
-      sample: boundSample(plugin.sample),
-    })),
+    plugins: keptPlugins,
     complete: snapshot.complete,
     samplesAvailable: snapshot.samplesAvailable,
     sampledAt: snapshot.sampledAt,
-    truncated,
+    truncated:
+      snapshot.terminals.length > keptTerminals.length ||
+      snapshot.plugins.length > keptPlugins.length ||
+      snapshot.closedTerminalProcesses.length > keptClosed.length ||
+      snapshot.closedTerminalProcesses.length >= MAX_PROCESS_CLOSED,
   };
 }

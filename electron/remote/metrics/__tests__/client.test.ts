@@ -72,6 +72,19 @@ function summary(sampledAt: number, working = 0): HostMetricsSummary {
   };
 }
 
+function inventoryAnswer() {
+  return {
+    terminals: [],
+    closedTerminalProcesses: [],
+    cleanup: null,
+    plugins: [],
+    complete: true,
+    samplesAvailable: true,
+    sampledAt: 9,
+    truncated: false,
+  };
+}
+
 function harness(hosts: HostDescriptor[]) {
   let list = hosts;
   const registryListeners = new Set<() => void>();
@@ -318,6 +331,31 @@ describe("HostMetricsClient", () => {
     expect(terminal.sample?.members[0]).not.toHaveProperty("argv");
   });
 
+  it("leaves out a row it can't read and says the list is incomplete", async () => {
+    const h = harness([descriptor("studio")]);
+    h.hook.call = async () => ({
+      ...inventoryAnswer(),
+      plugins: [
+        {
+          source: "plugin-worker",
+          id: "w1",
+          pluginId: "acme",
+          label: null,
+          pid: 7,
+          spawnedAt: null,
+          sample: null,
+        },
+        { source: "plugin-from-the-future", id: "w2" },
+      ],
+    });
+    const result = await h.client.processInventory({ hostId: "studio" });
+    expect(result).toMatchObject({
+      supported: true,
+      inventory: { plugins: [{ id: "w1" }], truncated: true },
+    });
+    if (result.supported) expect(result.inventory.plugins).toHaveLength(1);
+  });
+
   it("answers this machine's own process inventory without a link", async () => {
     const h = harness([descriptor("studio")]);
     await expect(h.client.processInventory({ hostId: "local" })).resolves.toMatchObject({
@@ -337,7 +375,11 @@ describe("HostMetricsClient", () => {
       supported: false,
     });
 
-    h.hook.call = async () => ({ terminals: new Array(501).fill(null) });
+    h.hook.call = async () => ({ ...inventoryAnswer(), terminals: new Array(501).fill(null) });
+    await expect(h.client.processInventory({ hostId: "old" })).rejects.toMatchObject({
+      code: "INTERNAL",
+    });
+    h.hook.call = async () => ({ ...inventoryAnswer(), sampledAt: "soon" });
     await expect(h.client.processInventory({ hostId: "old" })).rejects.toMatchObject({
       code: "INTERNAL",
     });
