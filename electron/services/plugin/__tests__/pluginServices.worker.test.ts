@@ -88,6 +88,8 @@ function world() {
       proxy.handleMessage(msg);
       return workerHost.ready;
     });
+    // Its activate() returned: only a committed generation answers calls.
+    workerHost.emit("worker-message", { type: "activated", hasCleanup: false });
     return { bridge, proxy, workerHost, host: proxy.host };
   }
 
@@ -167,6 +169,34 @@ describe("services between plugin workers", () => {
     // The crashed generation's binding is gone until the replacement registers.
     await expect(consumer.host.services.status(ISSUES)).resolves.toMatchObject({
       running: false,
+    });
+  });
+
+  it("answers unavailable while a crashed provider's replacement is still activating", async () => {
+    const w = world();
+    const provider = w.worker("acme.jira", {
+      provides: [{ name: ISSUES, version: "1.0.0", methods: ["lookup"] }],
+    });
+    const consumer = w.worker("acme.app", { requires: [{ name: ISSUES, range: "^1.0.0" }] });
+    const handlers = { lookup: () => "answered" };
+    await provider.host.registerService(ISSUES, handlers);
+    await flush();
+    provider.workerHost.emit("exit", 139, false);
+
+    // The replacement boots and binds again from inside its own activate().
+    provider.workerHost.emit("ready");
+    await provider.host.registerService(ISSUES, handlers);
+    await flush();
+    await expect(consumer.host.services.call(ISSUES, "lookup", {})).resolves.toMatchObject({
+      ok: false,
+      reason: "unavailable",
+    });
+
+    provider.workerHost.emit("worker-message", { type: "activated", hasCleanup: false });
+    await flush();
+    await expect(consumer.host.services.call(ISSUES, "lookup", {})).resolves.toEqual({
+      ok: true,
+      value: "answered",
     });
   });
 

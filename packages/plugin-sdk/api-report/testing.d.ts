@@ -2042,7 +2042,7 @@ interface PluginServiceCallOptions {
 /**
  * Why a service call failed:
  * - `not-declared` — the caller's manifest doesn't list the service in `contributes.services.requires`.
- * - `unavailable` — no provider is installed, enabled and visible to the caller, it didn't bind the service, it unloaded or crashed mid-call, it is at its concurrent-call limit, or the caller is still inside `activate()`.
+ * - `unavailable` — no provider is installed, enabled and visible to the caller, it didn't bind the service or is still starting again after a crash, it unloaded or crashed mid-call, it is at its concurrent-call limit, or the caller is still inside `activate()`.
  * - `incompatible` — the provider is there, but its version is outside the declared range.
  * - `cycle` — the call would re-enter a service already waiting on this one.
  * - `timeout` / `cancelled` — the deadline passed, or the caller's signal aborted.

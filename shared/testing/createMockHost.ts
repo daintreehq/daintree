@@ -3962,8 +3962,11 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
           try {
             value = await fn(copied, ctx);
           } catch (err) {
+            // Cancelled first, even when the provider threw after the abort.
+            if (signal?.aborted) return fail("cancelled", "the call was cancelled");
             return fail("provider-error", formatErrorMessage(err, "the provider failed"));
           }
+          if (signal?.aborted) return fail("cancelled", "the call was cancelled");
           try {
             return { ok: true, value: structuredClone(value) };
           } catch (err) {

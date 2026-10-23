@@ -2,6 +2,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { PluginServiceBroker, type PluginServiceMethodRunner } from "../PluginServiceBroker.js";
 import type { LoadedPlugin } from "../PluginServiceTypes.js";
+import { runWithServiceInvocation } from "../pluginServiceInvocation.js";
 import type {
   PluginServiceCallContext,
   PluginServiceResult,
@@ -564,6 +565,60 @@ describe("PluginServiceBroker", () => {
       await vi.waitFor(() => expect(t.activated.has("acme.jira")).toBe(true));
       t.broker.retireInstance("acme.app");
       expectFailure(await inFlight, "cancelled");
+    });
+  });
+
+  describe("calls that outlive their call", () => {
+    it("refuses a call the method's leftover work starts after its own call ended", async () => {
+      const t = setup();
+      t.loadConsumer("acme.app", consumerOf());
+      const B = "acme.beta.svc";
+      const late = deferred<PluginServiceResult>();
+      const betaRun = vi.fn<PluginServiceMethodRunner>(() => "reached");
+      t.load(
+        "acme.jira",
+        plugin("acme.jira", {
+          provides: [{ name: ISSUES, version: "1.0.0", methods: ["lookup"] }],
+          requires: [{ name: B, range: "^1.0.0" }],
+        }),
+        () =>
+          t.broker.bind("acme.jira", t.plugins.get("acme.jira")!, ISSUES, () => {
+            setTimeout(() => {
+              void t.broker.call(t.consumer("acme.jira"), B, "run", {}).then(late.resolve);
+            }, 0);
+            return "done";
+          })
+      );
+      t.load(
+        "acme.beta",
+        plugin("acme.beta", { provides: [{ name: B, version: "1.0.0", methods: ["run"] }] }),
+        () => t.broker.bind("acme.beta", t.plugins.get("acme.beta")!, B, betaRun)
+      );
+      expect(await t.broker.call(t.consumer(), ISSUES, "lookup", {})).toEqual({
+        ok: true,
+        value: "done",
+      });
+      expectFailure(await late.promise, "cancelled");
+      expect(betaRun).not.toHaveBeenCalled();
+    });
+
+    it("refuses a nested call once the outer call's deadline has passed", async () => {
+      const t = setup();
+      t.loadConsumer("acme.app", consumerOf());
+      const run = vi.fn<PluginServiceMethodRunner>(() => "late");
+      t.load("acme.jira", providerOf(), () =>
+        t.broker.bind("acme.jira", t.plugins.get("acme.jira")!, ISSUES, run)
+      );
+      const expired = {
+        chain: [],
+        deadlineAt: Date.now() - 1,
+        signal: new AbortController().signal,
+      };
+      const result = await runWithServiceInvocation(expired, () =>
+        t.broker.call(t.consumer(), ISSUES, "lookup", {})
+      );
+      expectFailure(result, "timeout");
+      expect(run).not.toHaveBeenCalled();
     });
   });
 

@@ -24,6 +24,30 @@ export interface PluginServiceInvocation {
 
 const invocationScope = new AsyncLocalStorage<PluginServiceInvocation>();
 
+/**
+ * The scope of a service call that has already ended. Work that outlived its
+ * call — a `finally` after a cancel, or something the method left running —
+ * runs inside this, so a service call it starts is refused, never made as a
+ * fresh call with no deadline over it.
+ */
+export const ENDED_SERVICE_INVOCATION: PluginServiceInvocation = Object.freeze({
+  chain: Object.freeze([]),
+  deadlineAt: 0,
+  signal: AbortSignal.abort(),
+});
+
+/**
+ * Thrown by a provider's method runner when the provider can't take the call
+ * right now — a worker still re-running `activate()` after a crash. The broker
+ * answers `unavailable` rather than `provider-error`.
+ */
+export class PluginServiceUnavailableError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "PluginServiceUnavailableError";
+  }
+}
+
 /** The service call the current async context runs inside, if any. */
 export function currentServiceInvocation(): PluginServiceInvocation | null {
   return invocationScope.getStore() ?? null;

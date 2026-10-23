@@ -139,6 +139,8 @@ import type {
   PluginServiceCaller,
 } from "../../../shared/types/pluginServices.js";
 import {
+  ENDED_SERVICE_INVOCATION,
+  PluginServiceUnavailableError,
   currentServiceInvocation,
   runWithServiceInvocation,
   type PluginServiceInvocation,
@@ -257,8 +259,8 @@ type InvokeTarget =
       caller: PluginServiceCaller;
     };
 
-/** Settled invokes whose service scope a late nested call can still find. */
-const SETTLED_SERVICE_SCOPES_MAX = 256;
+/** Request-id prefix of a `service-method` invoke; every other kind uses `i`. */
+const SERVICE_INVOKE_PREFIX = "s";
 
 /** A runtime search provider's answer, which the worker sends as one JSON string. */
 function parseWorkerSearchResult(result: unknown): unknown {
@@ -361,14 +363,6 @@ export class PluginDevWorkerMainBridge {
   private protocolViolated = false;
   private invokeSeq = 1;
   private readonly pendingInvokes = new Map<string, PendingInvoke>();
-  /**
-   * The service scopes of invokes that have settled, by request id, so a
-   * nested `services.call` the worker makes afterwards — from a `finally`, or
-   * work the method left running — still answers to the outer call's deadline
-   * and cancellation rather than starting a fresh chain. Request ids never
-   * repeat on a bridge; the oldest entries go first past the bound.
-   */
-  private readonly settledServiceScopes = new Map<string, PluginServiceInvocation>();
 
   /** In-flight main→worker invokes — the governance "action in flight" signal. */
   get pendingInvokeCount(): number {
@@ -513,7 +507,6 @@ export class PluginDevWorkerMainBridge {
       pending.reject(new Error("Plugin dev worker bridge disposed"));
     }
     this.pendingInvokes.clear();
-    this.settledServiceScopes.clear();
     // Nothing can commit an activation after this point; drop the tracking so a
     // registration settling late can't resurrect the drain.
     this.pendingRegistrations.clear();
@@ -654,7 +647,6 @@ export class PluginDevWorkerMainBridge {
       pending.reject(new Error(reason));
     }
     this.pendingInvokes.clear();
-    this.settledServiceScopes.clear();
   }
 
   /**
@@ -699,7 +691,6 @@ export class PluginDevWorkerMainBridge {
       );
     }
     this.pendingInvokes.clear();
-    this.settledServiceScopes.clear();
   };
 
   private onCrashLoop = (code: number): void => {
@@ -889,7 +880,6 @@ export class PluginDevWorkerMainBridge {
         const pending = this.pendingInvokes.get(msg.requestId);
         if (!pending) return;
         this.pendingInvokes.delete(msg.requestId);
-        this.rememberServiceScope(msg.requestId, pending.service);
         if (msg.ok) pending.resolve(msg.result);
         else pending.reject(new Error(msg.error));
         return;
@@ -924,10 +914,12 @@ export class PluginDevWorkerMainBridge {
       const pending =
         msg.invocationId !== undefined ? this.pendingInvokes.get(msg.invocationId) : undefined;
       const scope = pending?.scope ?? null;
+      // A service method's call has ended once its invoke is gone; what its
+      // work starts afterwards is refused rather than made as a fresh call.
+      // Request ids never repeat on a bridge, so the prefix alone says so.
       const service =
         pending?.service ??
-        (msg.invocationId !== undefined ? this.settledServiceScopes.get(msg.invocationId) : null) ??
-        null;
+        (msg.invocationId?.startsWith(SERVICE_INVOKE_PREFIX) ? ENDED_SERVICE_INVOCATION : null);
       const result = await runWithPluginInvocation(scope, () =>
         runWithServiceInvocation(service, () =>
           this.dispatchHostCall(msg.method, msg.params, controller.signal)
@@ -1795,11 +1787,20 @@ export class PluginDevWorkerMainBridge {
         // the manifest; each runs in the worker under the call's signal.
         const proxy: Record<string, (args: unknown, ctx: PluginServiceCallContext) => unknown> = {};
         for (const method of methods) {
-          proxy[method] = (args, ctx) =>
-            this.invoke(
+          proxy[method] = (args, ctx) => {
+            // A crash-respawned worker binds again from inside its own
+            // activate(), while the instance still reads as activated: only a
+            // generation that has committed its activation answers.
+            if (this.activationPhase !== "succeeded") {
+              throw new PluginServiceUnavailableError(
+                `the provider of "${name}" is starting again after a crash`
+              );
+            }
+            return this.invoke(
               { kind: "service-method", serviceName: name, method, args, caller: ctx.caller },
               ctx.signal
             );
+          };
         }
         const generation = this.reloadGeneration;
         const dispose = await this.host.registerService(name, proxy);
@@ -2238,7 +2239,7 @@ export class PluginDevWorkerMainBridge {
       return Promise.reject(new Error(`Plugin "${this.pluginId}" dev worker is not running`));
     }
     if (signal?.aborted) return Promise.reject(abortErrorFor(signal));
-    const requestId = `i${this.invokeSeq++}`;
+    const requestId = `${target.kind === "service-method" ? SERVICE_INVOKE_PREFIX : "i"}${this.invokeSeq++}`;
     // Only this plugin's own invocation: another plugin's call that reached
     // this one (an action it dispatched) is not this plugin's caller.
     const current = currentPluginInvocation();
@@ -2267,7 +2268,6 @@ export class PluginDevWorkerMainBridge {
           // claimed the entry has settled the caller, and the worker has nothing
           // left to cancel.
           if (!this.pendingInvokes.delete(requestId)) return;
-          this.rememberServiceScope(requestId, service);
           detach();
           this.workerHost.send({ type: "invoke-cancel", requestId });
           reject(abortErrorFor(signal));
@@ -2372,15 +2372,6 @@ export class PluginDevWorkerMainBridge {
         reject(new Error(`Plugin "${this.pluginId}" dev worker is not running`));
       }
     });
-  }
-
-  private rememberServiceScope(requestId: string, service: PluginServiceInvocation | null): void {
-    if (service === null) return;
-    this.settledServiceScopes.set(requestId, service);
-    if (this.settledServiceScopes.size > SETTLED_SERVICE_SCOPES_MAX) {
-      const oldest = this.settledServiceScopes.keys().next().value;
-      if (oldest !== undefined) this.settledServiceScopes.delete(oldest);
-    }
   }
 
   private resolveActivation(): void {

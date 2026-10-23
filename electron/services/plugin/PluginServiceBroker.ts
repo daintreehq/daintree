@@ -31,6 +31,7 @@ import {
   snapshotPayload,
 } from "./pluginPayloadLimits.js";
 import {
+  PluginServiceUnavailableError,
   currentServiceInvocation,
   runWithServiceInvocation,
   type PluginServiceInvocation,
@@ -301,6 +302,10 @@ export class PluginServiceBroker {
         resolve(fail("cancelled", "the service call this one was made inside ended"));
         return;
       }
+      if (deadlineAt <= startedAt) {
+        resolve(fail("timeout", `the service call this one was made inside is past its deadline`));
+        return;
+      }
       const onCallerAbort = (): void =>
         call.settle(fail("cancelled", "the caller cancelled the call"));
       const onParentAbort = (): void =>
@@ -315,8 +320,10 @@ export class PluginServiceBroker {
           clearTimeout(timer);
           opts.signal?.removeEventListener("abort", onCallerAbort);
           parent?.signal.removeEventListener("abort", onParentAbort);
-          // Tells the provider to stop: its ctx.signal, or a worker's invoke-cancel.
-          if (!result.ok) controller.abort(new Error(result.message));
+          // The call has ended either way: the provider's ctx.signal (or a
+          // worker's invoke-cancel) tells it to stop, and anything its work
+          // starts from here inherits an ended scope and is refused.
+          controller.abort(new Error(result.ok ? "the call ended" : result.message));
           resolve(result);
         },
       };
@@ -394,6 +401,10 @@ export class PluginServiceBroker {
       }
       call.settle({ ok: true, value: result });
     } catch (err) {
+      if (err instanceof PluginServiceUnavailableError) {
+        call.settle(fail("unavailable", err.message));
+        return;
+      }
       const message = formatErrorMessage(err, `"${name}.${method}" failed`);
       // A worker refuses its own oversize result before the port, and only
       // that refusal's text crosses it.
