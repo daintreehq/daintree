@@ -96,7 +96,9 @@ describe("HostMetricsSampler", () => {
       "/proc/meminfo":
         "MemTotal: 1000 kB\nMemAvailable: 400 kB\nSwapTotal: 200 kB\nSwapFree: 50 kB\n",
       "/sys/class/thermal/thermal_zone0/temp": "50000",
+      "/sys/class/thermal/thermal_zone0/type": "x86_pkg_temp\n",
       "/sys/class/thermal/thermal_zone1/temp": "88000",
+      "/sys/class/thermal/thermal_zone1/type": "acpitz\n",
     };
     const sampler = new HostMetricsSampler(
       sources({
@@ -110,12 +112,17 @@ describe("HostMetricsSampler", () => {
       hostId: "local",
       platform: "linux",
       cpuPercent: 50,
-      memoryPressure: "warn",
+      metricsScope: "host",
+      cpuCapacityCores: 1,
+      memoryPressure: null,
+      memoryPressureSomeAvg10: 15,
       memoryTotalBytes: 1000 * 1024,
       memoryUsedBytes: 600 * 1024,
       swapTotalBytes: 200 * 1024,
       swapUsedBytes: 150 * 1024,
-      thermal: "serious",
+      thermal: null,
+      temperatureCelsius: 50,
+      temperatureZone: "x86_pkg_temp (thermal_zone0)",
       cpuPressure: 3.5,
       agentsObserved: { working: 2, waiting: 1, idle: 3 },
       projectCount: 4,
@@ -135,6 +142,147 @@ describe("HostMetricsSampler", () => {
     ).sample();
     expect(summary.memoryUsedBytes).toBe(1048576);
     expect(summary.memoryTotalBytes).toBe(4194304);
+    expect(summary.metricsScope).toBe("cgroup");
+  });
+
+  describe("cgroup scope", () => {
+    const slice = "/sys/fs/cgroup/system.slice/daintree.service";
+    const files: Record<string, string> = {
+      "/proc/self/cgroup": "0::/system.slice/daintree.service\n",
+      // Machine-wide readings that must not leak into a cgroup's summary.
+      "/proc/meminfo":
+        "MemTotal: 16000000 kB\nMemAvailable: 8000000 kB\nSwapTotal: 999 kB\nSwapFree: 1 kB\n",
+      "/proc/pressure/memory": "some avg10=77.00 avg60=1 avg300=1 total=1\n",
+      "/proc/pressure/cpu": "some avg10=66.00 avg60=1 avg300=1 total=1\n",
+      // The slice above the service is what bounds it.
+      "/sys/fs/cgroup/system.slice/memory.max": "2147483648",
+      "/sys/fs/cgroup/system.slice/cpu.max": "150000 100000",
+      [`${slice}/memory.max`]: "max",
+      [`${slice}/memory.current`]: "536870912",
+      [`${slice}/memory.swap.current`]: "1024",
+      [`${slice}/memory.swap.max`]: "4096",
+      [`${slice}/memory.pressure`]: "some avg10=2.50 avg60=1 avg300=1 total=1\n",
+      [`${slice}/cpu.pressure`]: "some avg10=0.50 avg60=1 avg300=1 total=1\n",
+      [`${slice}/cpuset.cpus.effective`]: "0-7",
+    };
+
+    function cgroupSampler(
+      extra: Record<string, string> = {},
+      without: string[] = [],
+      cores = 8,
+      nowMs: () => number = () => 1_000
+    ) {
+      const all = { ...files, ...extra };
+      for (const key of without) delete all[key];
+      return new HostMetricsSampler(
+        sources({
+          cpus: () =>
+            Array.from({ length: cores }, () => ({ user: 1, nice: 0, sys: 0, idle: 1, irq: 0 })),
+          loadavg: () => [4, 4, 4],
+          readText: async (path) => all[path] ?? null,
+          now: nowMs,
+        })
+      );
+    }
+
+    it("reads memory, swap, pressure and cores from the cgroup, under the tightest ancestor limit", async () => {
+      const summary = await cgroupSampler().sample();
+      expect(summary).toMatchObject({
+        metricsScope: "cgroup",
+        memoryUsedBytes: 536870912,
+        memoryTotalBytes: 2147483648,
+        swapUsedBytes: 1024,
+        swapTotalBytes: 4096,
+        memoryPressure: null,
+        memoryPressureSomeAvg10: 2.5,
+        cpuPressure: 0.5,
+        cpuCapacityCores: 1.5,
+        cpuLogicalCoreCount: null,
+        cpuLoadAverage1m: null,
+      });
+    });
+
+    it("measures CPU against the cgroup's own counter and quota", async () => {
+      let now = 1_000;
+      const usage = (usec: number) => ({ [`${slice}/cpu.stat`]: `usage_usec ${usec}\n` });
+      const sampler = new HostMetricsSampler(
+        sources({
+          cpus: () =>
+            Array.from({ length: 8 }, () => ({ user: 1, nice: 0, sys: 0, idle: 1, irq: 0 })),
+          readText: async (path) =>
+            ({ ...files, ...usage(now === 1_000 ? 0 : 750_000) })[path] ?? null,
+          now: () => now,
+        })
+      );
+      expect((await sampler.sample()).cpuPercent).toBeNull();
+      now = 2_000;
+      // 0.75 CPU-seconds in one second against 1.5 cores is half busy.
+      expect((await sampler.sample()).cpuPercent).toBe(50);
+    });
+
+    it("leaves a reading the cgroup doesn't give null, never the machine's", async () => {
+      const summary = await cgroupSampler({}, [
+        `${slice}/memory.swap.current`,
+        `${slice}/memory.swap.max`,
+        `${slice}/memory.pressure`,
+        `${slice}/cpu.pressure`,
+        "/sys/fs/cgroup/system.slice/cpu.max",
+      ]).sample();
+      expect(summary).toMatchObject({
+        metricsScope: "cgroup",
+        swapUsedBytes: null,
+        swapTotalBytes: null,
+        memoryPressureSomeAvg10: null,
+        cpuPressure: null,
+        cpuCapacityCores: 8,
+        cpuLogicalCoreCount: 8,
+      });
+    });
+
+    it("scopes to the cgroup for a CPU quota alone, with the machine's RAM as its memory ceiling", async () => {
+      const summary = await cgroupSampler({}, ["/sys/fs/cgroup/system.slice/memory.max"]).sample();
+      expect(summary).toMatchObject({
+        metricsScope: "cgroup",
+        memoryUsedBytes: 536870912,
+        memoryTotalBytes: 16000000 * 1024,
+      });
+    });
+
+    it("stays on the machine when nothing in the hierarchy limits it", async () => {
+      const summary = await cgroupSampler({}, [
+        "/sys/fs/cgroup/system.slice/memory.max",
+        "/sys/fs/cgroup/system.slice/cpu.max",
+        `${slice}/memory.swap.max`,
+      ]).sample();
+      expect(summary).toMatchObject({
+        metricsScope: "host",
+        memoryTotalBytes: 16000000 * 1024,
+        memoryUsedBytes: 8000000 * 1024,
+        memoryPressureSomeAvg10: 77,
+        cpuPressure: 66,
+        cpuCapacityCores: 8,
+        cpuLoadAverage1m: 4,
+      });
+    });
+
+    it("counts a cpuset narrower than the machine as the cores", async () => {
+      const summary = await cgroupSampler({ [`${slice}/cpuset.cpus.effective`]: "0-1,4" }, [
+        "/sys/fs/cgroup/system.slice/memory.max",
+        "/sys/fs/cgroup/system.slice/cpu.max",
+      ]).sample();
+      expect(summary).toMatchObject({
+        metricsScope: "cgroup",
+        cpuCapacityCores: 3,
+        cpuLogicalCoreCount: 3,
+      });
+    });
+
+    it("reads a v1-only host as the machine", async () => {
+      const summary = await cgroupSampler({
+        "/proc/self/cgroup": "4:memory:/docker/abc\n3:cpu:/docker/abc\n",
+      }).sample();
+      expect(summary.metricsScope).toBe("host");
+    });
   });
 
   it("reports missing sources as null, never zero", async () => {
@@ -148,6 +296,9 @@ describe("HostMetricsSampler", () => {
       swapTotalBytes: null,
       thermal: null,
       cpuPressure: null,
+      memoryPressureSomeAvg10: null,
+      temperatureCelsius: null,
+      temperatureZone: null,
     });
   });
 
