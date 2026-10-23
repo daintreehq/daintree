@@ -29,6 +29,7 @@ import { logWarn } from "@/utils/logger";
 import { isScratchWorkspaceId } from "@shared/utils/workspaceIds";
 import { suppressPaletteFocusRestore } from "@/components/ui/paletteFocusRestore";
 import { sleepIdleProjectsWithConfirm } from "@/hooks/useSleepIdleProjects";
+import { restartProject } from "@/services/projectRestart";
 
 /**
  * Wire shape of `project.getSettings`.
@@ -842,6 +843,62 @@ export function registerProjectActions(actions: ActionRegistry, callbacks: Actio
       }
       await useProjectStore.getState().sleepProject(id);
       return { slept: true };
+    },
+  }));
+
+  actions.set("project.restart", () => ({
+    id: "project.restart",
+    title: "Restart project…",
+    description:
+      "Restart the project open in this window without restarting the app: its terminals and agents stop, its workspace host is replaced, and it reopens here with its layout, scrollback and agent sessions. Other projects keep running. Defaults to the current project and only accepts that one. Always asks the user to confirm.",
+    category: "project",
+    kind: "command",
+    danger: "confirm",
+    dangerRationale:
+      "Stops the project's terminals and agent processes before reopening it. Layout and sessions come back, but anything running in them is lost.",
+    nonRepeatable: true,
+    keywords: ["reload", "relaunch", "recover", "refresh"],
+    scope: "renderer",
+    argsSchema: z.object({ projectId: z.string().optional() }),
+    run: async (args: unknown, ctx: ActionContext) => {
+      // A project's own assistant is one of the terminals the teardown stops,
+      // so an agent restarting it would end its own session mid-call.
+      if (ctx.dispatchSource === "agent") {
+        throw new Error("Restarting a project is only available to the user");
+      }
+      const { projectId } = (args ?? {}) as { projectId?: string };
+      const store = useProjectStore.getState();
+      const current = store.currentProject;
+      if (!current) throw new Error("No project is open in this window");
+      // The reopen lands in this window, so only the project it shows can be
+      // restarted here; another window's project restarts from that window.
+      if (projectId !== undefined && projectId !== current.id) {
+        throw new Error("Only the project open in this window can be restarted");
+      }
+      const id = current.id;
+      const project = store.projects.find((p) => p.id === id) ?? current;
+
+      const entry = useProjectStatsStore.getState().stats[id];
+      const ok = await useProjectSleepConfirmStore.getState().requestConfirmation({
+        kind: "restart",
+        projects: [
+          {
+            id,
+            name: project.name,
+            path: project.path,
+            terminalCount: entry?.processCount ?? 0,
+            activeAgentCount: entry?.activeAgentCount ?? 0,
+            waitingAgentCount: entry?.waitingAgentCount ?? 0,
+            isActive: true,
+          },
+        ],
+      });
+      if (!ok) return { restarted: false };
+      // The window may have moved on while the dialog was open.
+      if (useProjectStore.getState().currentProject?.id !== id) return { restarted: false };
+
+      const outcome = await restartProject(id);
+      return { restarted: outcome === "restarted", outcome };
     },
   }));
 

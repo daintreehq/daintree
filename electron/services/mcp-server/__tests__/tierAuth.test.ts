@@ -528,6 +528,18 @@ describe("shouldExposeTool", () => {
 // dispatch (isTierPermitted) — a divergence there would advertise a tool the
 // dispatcher then rejects (#7155). They deliberately differ on the metadata
 // filters, which withhold from tools/list without blocking dispatch.
+// A project's own assistant is one of the terminals a restart stops, so it
+// would end its own session mid-call; like Sleep (#14057) it stays off every
+// tier, the assistant's included (#14179).
+describe("project.restart stays off every tier (#14179)", () => {
+  it.each(["core", "full", "external"] as const)("is not on the %s tier", (tier) => {
+    expect(BUILT_IN_ACTION_IDS as readonly string[]).toContain("project.restart");
+    expect(TIER_ALLOWLISTS[tier].has("project.restart")).toBe(false);
+    expect(isTierPermitted(tier, "project.restart")).toBe(false);
+    expect(isTierPermitted(tier, "project.restart", true)).toBe(false);
+  });
+});
+
 describe("external tool surface invariants (#10701, #11537)", () => {
   const builtInIds = new Set<string>(BUILT_IN_ACTION_IDS);
 

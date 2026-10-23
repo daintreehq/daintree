@@ -4451,6 +4451,23 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
   },
   {
     "category": "project",
+    "danger": "confirm",
+    "dangerRationale": "Stops the project's terminals and agent processes before reopening it. Layout and sessions come back, but anything running in them is lost.",
+    "description": "Restart the project open in this window without restarting the app: its terminals and agents stop, its workspace host is replaced, and it reopens here with its layout, scrollback and agent sessions. Other projects keep running. Defaults to the current project and only accepts that one. Always asks the user to confirm.",
+    "examples": undefined,
+    "id": "project.restart",
+    "keywords": [
+      "reload",
+      "relaunch",
+      "recover",
+      "refresh",
+    ],
+    "kind": "command",
+    "requiresArgs": false,
+    "title": "Restart project…",
+  },
+  {
+    "category": "project",
     "danger": "safe",
     "dangerRationale": undefined,
     "description": "Run one detected project command and report its exit code and output. A failing command is a failed check, not an error, so read the result. Detection lists every script, not just checks: verify an unfamiliar one first. Never for long-lived servers; they block until timeout.",

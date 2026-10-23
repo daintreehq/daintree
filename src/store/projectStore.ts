@@ -424,6 +424,27 @@ export function isSelfInitiatedSleep(projectId: string): boolean {
   return selfInitiatedSleeps.has(projectId);
 }
 
+/**
+ * The project this view was showing when it last dropped to the picker through
+ * {@link ProjectState.dropToNoProject}. Main keeps that view bound to the
+ * project, so reopening it — from the picker, a restart, or a switch back to
+ * the cached view — reuses this renderer, whose one-shot boot hydration has
+ * already run. Whoever claims it restores the saved layout (#14179).
+ */
+let droppedViewProjectId: string | null = null;
+
+/** Take the pending restore for `projectId`; true at most once per drop. */
+export function claimDroppedViewRestore(projectId: string): boolean {
+  if (droppedViewProjectId !== projectId) return false;
+  droppedViewProjectId = null;
+  return true;
+}
+
+/** Put back a claim whose reopen never landed, so the next reopen restores. */
+export function releaseDroppedViewRestore(projectId: string): void {
+  droppedViewProjectId = projectId;
+}
+
 let projectTransitionRequestId = 0;
 let projectListRequestId = 0;
 let currentProjectRequestId = 0;
@@ -587,7 +608,7 @@ function isDubiousOwnershipError(error: unknown): boolean {
  * The substring checks below remain for the switch/reopen callers, whose
  * failures originate outside `addProject`'s classified path.
  */
-function getProjectOpenErrorMessage(error: unknown, directoryPath?: string): string {
+export function getProjectOpenErrorMessage(error: unknown, directoryPath?: string): string {
   if (isClientAppError(error)) {
     if (error.code === "NOT_A_GIT_REPO") {
       return "The selected directory is not a Git repository.";
@@ -1285,6 +1306,7 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
     // leaves that view alive — destroying it would blank the window, since the
     // unbound first-run welcome view is closed for good once a project paints.
     clearFleetArmingThroughAccessor();
+    droppedViewProjectId = get().currentProject?.id ?? null;
     set({ currentProject: null, worktreeLoadError: null });
     clearPanelStoreForSwitchThroughAccessor();
   },

@@ -194,6 +194,7 @@ export type BuiltInKeyAction =
   | "project.mruCycleOlder"
   | "project.openInNewWindow"
   | "project.sleep"
+  | "project.restart"
   | "project.sleepIdle"
 
   // Remote Hosts (bound only where Remote Hosts is supported)
@@ -390,6 +391,7 @@ export const KEY_ACTION_VALUES: ReadonlySet<string> = new Set<string>([
   "project.mruCycleOlder",
   "project.openInNewWindow",
   "project.sleep",
+  "project.restart",
   "project.sleepIdle",
   "host.switch",
   "help.shortcuts",
