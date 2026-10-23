@@ -1664,6 +1664,11 @@ export class PluginService {
       disabledPlugins: this.disabledPlugins,
       blockedPlugins: this.blockedPlugins,
       getInstalledVersion: (pluginId) => this.installedPluginVersion(pluginId),
+      getInstalledInstanceMode: (pluginId) => {
+        const installed = this.installedPluginRecord(pluginId);
+        if (!installed) return null;
+        return installed.manifest.instanceMode === "project" ? "project" : "singleton";
+      },
     });
 
     const offRegister = onPanelKindRegistered(() => this.broadcaster.schedulePanelKindsBroadcast());
@@ -6480,13 +6485,15 @@ export class PluginService {
    * disabled, or was refused by the blocklist; null when none is.
    */
   private installedPluginVersion(pluginId: string): string | null {
+    return this.installedPluginRecord(pluginId)?.manifest.version ?? null;
+  }
+
+  private installedPluginRecord(pluginId: string): { manifest: PluginManifest } | undefined {
     return (
-      (
-        this.plugins.get(pluginId) ??
-        this.disabledPlugins.get(pluginId) ??
-        this.blockedPlugins.get(pluginId) ??
-        this.projectInstancePackages.get(pluginId)
-      )?.manifest.version ?? null
+      this.plugins.get(pluginId) ??
+      this.disabledPlugins.get(pluginId) ??
+      this.blockedPlugins.get(pluginId) ??
+      this.projectInstancePackages.get(pluginId)
     );
   }
 

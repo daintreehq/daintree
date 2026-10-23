@@ -127,6 +127,38 @@ interface PluginInstallerDeps {
   blockedPlugins: Map<string, unknown>;
   /** Version of the installed plugin under this id, loaded, disabled or blocklisted; null when none. */
   getInstalledVersion: (pluginId: string) => string | null;
+  /** How the installed plugin under this id runs, loaded, disabled, blocklisted or catalogued; null when none. */
+  getInstalledInstanceMode: (pluginId: string) => InstalledInstanceMode | null;
+}
+
+/** Whether a package runs as one shared singleton or as one instance per project. */
+export type InstalledInstanceMode = "singleton" | "project";
+
+type InstalledManifestFields = { version?: unknown; instanceMode?: unknown };
+
+function instanceModeOf(manifest: { instanceMode?: unknown }): InstalledInstanceMode {
+  return manifest.instanceMode === "project" ? "project" : "singleton";
+}
+
+/** The mode a manifest read off disk declares, or null when its field isn't one the schema allows. */
+function declaredInstanceMode(manifest: { instanceMode?: unknown }): InstalledInstanceMode | null {
+  if (manifest.instanceMode === undefined) return "singleton";
+  return manifest.instanceMode === "project" ? "project" : null;
+}
+
+/** The manifest in an installed plugin's folder, or null when it can't be read. */
+async function readInstalledManifest(dir: string): Promise<InstalledManifestFields | null> {
+  try {
+    const raw: unknown = JSON.parse(
+      stripUtf8Bom(await fs.readFile(path.join(dir, "plugin.json"), "utf-8"))
+    );
+    return raw !== null && typeof raw === "object" && !Array.isArray(raw)
+      ? (raw as InstalledManifestFields)
+      : null;
+  } catch {
+    // Unreadable: the caller falls back to the service's record of it.
+    return null;
+  }
 }
 
 /**
@@ -598,9 +630,24 @@ export class PluginInstaller {
       // so a check made before queueing can't be stale by the time this
       // replaces anything: an update queued behind a newer one must not
       // downgrade it, and an install queued behind another must not replace it.
+      const installedManifest = existing ? await readInstalledManifest(finalDir) : null;
       if (replacement) {
-        const refusal = replacement(await this.installedVersion(pluginId, finalDir, existing));
+        const refusal = replacement(this.installedVersion(pluginId, installedManifest));
         if (refusal) return fail("archive_mismatch", refusal);
+      }
+
+      // A mode change strands state either way (#14256): settings, grants and
+      // enablements are keyed by the bare id for a singleton and per project
+      // for instances, and nothing carries one across to the other.
+      const installedMode = this.installedInstanceMode(pluginId, installedManifest);
+      const incomingMode = instanceModeOf(manifest);
+      if (installedMode !== null && installedMode !== incomingMode) {
+        return fail(
+          "instance_mode_changed",
+          incomingMode === "project"
+            ? `This update makes "${pluginId}" run separately in each project. Uninstall it first, then install the new version.`
+            : `This update makes "${pluginId}" run once for every project instead of separately in each. Uninstall it first, then install the new version.`
+        );
       }
 
       // Abort before the irreversible swap if the lock was compromised — a
@@ -825,23 +872,22 @@ export class PluginInstaller {
    * old manifest in memory), else what the plugin service holds for it, loaded,
    * disabled or blocklisted.
    */
-  private async installedVersion(
+  private installedVersion(
     pluginId: string,
-    finalDir: string,
-    existing: boolean
-  ): Promise<string | null> {
-    if (existing) {
-      try {
-        const raw: unknown = JSON.parse(
-          stripUtf8Bom(await fs.readFile(path.join(finalDir, "plugin.json"), "utf-8"))
-        );
-        const version = (raw as { version?: unknown } | null)?.version;
-        if (typeof version === "string") return version;
-      } catch {
-        // Unreadable: fall back to the service's record of it.
-      }
-    }
+    installedManifest: InstalledManifestFields | null
+  ): string | null {
+    const version = installedManifest?.version;
+    if (typeof version === "string") return version;
     return this.deps.getInstalledVersion(pluginId);
+  }
+
+  /** How the plugin installed under `pluginId` runs, read from the same sources as {@link installedVersion}. */
+  private installedInstanceMode(
+    pluginId: string,
+    installedManifest: InstalledManifestFields | null
+  ): InstalledInstanceMode | null {
+    const declared = installedManifest ? declaredInstanceMode(installedManifest) : null;
+    return declared ?? this.deps.getInstalledInstanceMode(pluginId);
   }
 
   /**

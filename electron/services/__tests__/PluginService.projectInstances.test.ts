@@ -232,6 +232,7 @@ vi.mock("../plugin/PluginDevWorkerMainBridge.js", () => ({
 }));
 
 import { PluginService } from "../PluginService.js";
+import { packPluginArchive } from "../PluginArchive.js";
 import {
   isInstalledProjectInstanceKey,
   makeInstalledProjectInstanceKey,
@@ -571,5 +572,125 @@ describe("installed instance identity beside a repository plugin of the same id 
     expect(seam.plugins.has(KEY_A)).toBe(false);
     expect(seam.plugins.has(KEY_B)).toBe(true);
     expect(service.getProjectInstanceProjects(PKG)).toEqual([PROJECT_B]);
+  });
+});
+
+describe("updates that change the instance mode (#14256)", () => {
+  async function packArchive(manifest: Record<string, unknown>): Promise<string> {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "daintree-plugin-archive-"));
+    extraTempRoots.push(root);
+    const src = path.join(root, "src");
+    await fs.mkdir(path.join(src, "dist"), { recursive: true });
+    await fs.writeFile(path.join(src, "plugin.json"), JSON.stringify(manifest));
+    await fs.writeFile(path.join(src, "dist", "index.js"), "module.exports = {};");
+    const out = path.join(root, "plugin.dntr");
+    await packPluginArchive(src, out);
+    return out;
+  }
+
+  async function installedVersionOnDisk(pluginId: string): Promise<string> {
+    const raw = await fs.readFile(path.join(tmpDir, pluginId, "plugin.json"), "utf-8");
+    return (JSON.parse(raw) as { version: string }).version;
+  }
+
+  const instanceGrant = {
+    pluginId: KEY_A,
+    capability: "shell:exec" as const,
+    scopeKey: PROJECT_A,
+  };
+
+  beforeEach(() => {
+    projectStoreMock.getProjectById.mockImplementation((id: string) => ({
+      path: id === PROJECT_A ? "/repo/a" : "/repo/b",
+      status: "active",
+    }));
+  });
+
+  afterEach(() => {
+    getPluginCapabilityConsentStore().revokeAllForPlugin(KEY_A);
+  });
+
+  it("refuses a singleton update that would make the package run per project", async () => {
+    await writePlugin("acme.flip", { name: "acme.flip", version: "1.0.0" });
+    const { service, seam } = await startService();
+
+    const result = await service.installPlugin(
+      await packArchive({
+        name: "acme.flip",
+        version: "2.0.0",
+        instanceMode: "project",
+        main: "dist/index.js",
+      })
+    );
+
+    expect(result.status === "failed" && result.errors[0]).toMatchObject({
+      code: "instance_mode_changed",
+      message: expect.stringMatching(/Uninstall it first/),
+    });
+    expect(seam.plugins.has("acme.flip")).toBe(true);
+    expect(seam.projectInstancePackages.has("acme.flip")).toBe(false);
+    expect(await installedVersionOnDisk("acme.flip")).toBe("1.0.0");
+  });
+
+  it("refuses a per-project update that would make the package a singleton", async () => {
+    const { service, seam } = await startService();
+    await service.setProjectInstanceEnabled(PROJECT_A, "/repo/a", PKG, true);
+    const consent = getPluginCapabilityConsentStore();
+    consent.grant(instanceGrant);
+
+    const result = await service.installPlugin(
+      await packArchive({ name: PKG, version: "2.0.0", main: "dist/index.js" })
+    );
+
+    expect(result.status === "failed" && result.errors[0]).toMatchObject({
+      code: "instance_mode_changed",
+      message: expect.stringMatching(/Uninstall it first/),
+    });
+    expect(seam.plugins.has(KEY_A)).toBe(true);
+    expect(seam.plugins.has(PKG)).toBe(false);
+    expect(seam.projectInstancePackages.has(PKG)).toBe(true);
+    expect(consent.hasGrant(instanceGrant)).toBe(true);
+    expect(service.getProjectInstanceProjects(PKG)).toEqual([PROJECT_A]);
+    expect(await installedVersionOnDisk(PKG)).toBe("1.0.0");
+  });
+
+  it("refuses the mode change for a disabled package too", async () => {
+    const { service, seam } = await startService();
+    await service.setProjectInstanceEnabled(PROJECT_A, "/repo/a", PKG, true);
+    await service.setEnabled(PKG, false);
+
+    const result = await service.installPlugin(
+      await packArchive({ name: PKG, version: "2.0.0", main: "dist/index.js" })
+    );
+
+    expect(result.status === "failed" && result.errors[0]?.code).toBe("instance_mode_changed");
+    expect(seam.plugins.has(PKG)).toBe(false);
+    expect(service.getProjectInstanceProjects(PKG)).toEqual([PROJECT_A]);
+    expect(await installedVersionOnDisk(PKG)).toBe("1.0.0");
+  });
+
+  it("a same-mode update purges instance grants and reloads enabled open projects", async () => {
+    const { service, seam } = await startService();
+    await service.setProjectInstanceEnabled(PROJECT_A, "/repo/a", PKG, true);
+    const consent = getPluginCapabilityConsentStore();
+    consent.grant(instanceGrant);
+
+    const result = await service.installPlugin(
+      await packArchive({
+        name: PKG,
+        version: "2.0.0",
+        instanceMode: "project",
+        main: "dist/index.js",
+      })
+    );
+
+    expect(result).toEqual({ status: "installed", pluginId: PKG });
+    expect(consent.hasGrant(instanceGrant)).toBe(false);
+    await vi.waitFor(() => {
+      const instance = seam.plugins.get(KEY_A) as { manifest: { version: string } } | undefined;
+      expect(instance?.manifest.version).toBe("2.0.0");
+    });
+    expect(seam.plugins.has(PKG)).toBe(false);
+    expect(service.getProjectInstanceProjects(PKG)).toEqual([PROJECT_A]);
   });
 });

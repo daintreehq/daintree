@@ -520,6 +520,35 @@ describe("installPlugin — upgrade swap", () => {
     service.dispose();
   });
 
+  it.each([
+    { from: {}, to: { instanceMode: "project" } },
+    { from: { instanceMode: "project" }, to: {} },
+  ])(
+    "refuses an update that changes the instance mode from the folder's manifest alone (%o)",
+    async ({ from, to }) => {
+      const pluginDir = path.join(pluginsRoot, "acme.modeflip");
+      await fs.mkdir(pluginDir, { recursive: true });
+      const installed = JSON.stringify({ name: "acme.modeflip", version: "1.0.0", ...from });
+      await fs.writeFile(path.join(pluginDir, "plugin.json"), installed);
+      const service = new PluginService(pluginsRoot, "0.0.0");
+
+      const archive = await makeArchive(
+        { name: "acme.modeflip", version: "2.0.0", main: "dist/index.js", ...to },
+        { "dist/index.js": "module.exports = {};" }
+      );
+      const result = await service.installPlugin(archive);
+
+      expect(result.status === "failed" && result.errors[0]?.code).toBe("instance_mode_changed");
+      expect(await fs.readFile(path.join(pluginDir, "plugin.json"), "utf-8")).toBe(installed);
+      expect(await exists(path.join(pluginDir, "dist"))).toBe(false);
+      const entries = await fs.readdir(pluginsRoot);
+      expect(entries.filter((e) => e.startsWith(".install-tmp-") || e.includes(".old-"))).toEqual(
+        []
+      );
+      service.dispose();
+    }
+  );
+
   it("preserves the plugin's separate settings file across an upgrade", async () => {
     const service = new PluginService(pluginsRoot, "0.0.0");
 

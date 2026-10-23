@@ -4814,6 +4814,9 @@ export interface InstalledPluginRecord {
  *   reviewed update) and the archive's digest or `manifest.name` differs from it;
  *   refused before extraction (digest) or before the swap (name), so nothing runs
  *   or is replaced
+ * - `instance_mode_changed` — the update switches `instanceMode` between a singleton
+ *   and per-project instances; refused before the swap because nothing carries
+ *   settings, grants or enablements across, so the user uninstalls first
  * - `unload_failed` — the existing plugin's disposer cascade threw
  * - `swap_failed` — atomic rename failed but the prior state was restored
  * - `swap_unrecoverable` — rename failed AND rollback failed; on-disk state is inconsistent
@@ -4838,6 +4841,7 @@ export type PluginInstallErrorCode =
   | "name_collision"
   | "hash_failed"
   | "archive_mismatch"
+  | "instance_mode_changed"
   | "unload_failed"
   | "swap_failed"
   | "swap_unrecoverable"
