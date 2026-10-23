@@ -1,3 +1,4 @@
+import { AnyMap, TraceMap, decodedMappings } from "@jridgewell/trace-mapping";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   COORDINATE_CONVENTIONS,
@@ -19,8 +20,19 @@ import {
   SOURCE_MAP_LIMITS,
   clearDecodedMapCache,
   createSourceMapSymbolicator,
+  mappingsExtent,
   symbolicatedResult,
 } from "../worker/symbolication.js";
+
+// Called through, so a test can tell whether a map was decoded at all.
+vi.mock("@jridgewell/trace-mapping", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@jridgewell/trace-mapping")>();
+  return {
+    ...actual,
+    AnyMap: vi.fn(actual.AnyMap),
+    decodedMappings: vi.fn(actual.decodedMappings),
+  };
+});
 
 /** [generated column, source index, source line, source column, name index?], all 0-based. */
 type Segment = [number, number, number, number] | [number, number, number, number, number];
@@ -161,7 +173,10 @@ function symbolicate(subject: Fake, location = v8(2, 10), url = MODULE) {
   return createSourceMapSymbolicator(subject.access).symbolicate({ url, location }, signal);
 }
 
-afterEach(() => clearDecodedMapCache());
+afterEach(() => {
+  clearDecodedMapCache();
+  vi.clearAllMocks();
+});
 
 describe("source map symbolication", () => {
   it("maps a V8 frame through an inline map to the authored line, and says it matched", async () => {
@@ -405,14 +420,109 @@ describe("source map symbolication", () => {
       { version: 3, sections: [{ offset: { line: -1, column: 0 }, map: cardMap() }] },
       // Nested sections: the pinned decoder misplaces their columns.
       section(section(cardMap())),
-      // The decoder would build every line before the offset, a billion of them here.
-      section(cardMap(), 1_000_000_000),
-      section(cardMap(), SOURCE_MAP_LIMITS.sectionLine + 1),
       cardMap({ sources: Array.from({ length: SOURCE_MAP_LIMITS.sources + 1 }, () => "a.ts") }),
     ]) {
       await expect(symbolicate(fake(map))).resolves.toEqual({ ok: false, reason: "map-missing" });
     }
     await expect(symbolicate(fake(section(cardMap())))).resolves.toMatchObject({ ok: true });
+  });
+
+  it("refuses a map that would decode past its limits, before decoding any of it", async () => {
+    const { lines, segments } = SOURCE_MAP_LIMITS;
+    const card = cardMap().mappings;
+    const dense = (count: number) => "AAAA" + ",C".repeat(count - 1);
+    const sectioned = (...parts: [line: number, mappings: string][]) => ({
+      version: 3,
+      sections: parts.map(([line, mappings]) => ({
+        offset: { line, column: 0 },
+        map: cardMap({ mappings }),
+      })),
+    });
+    for (const map of [
+      // A line too many, out of nothing but separators.
+      cardMap({ mappings: card + ";".repeat(lines - 1) }),
+      cardMap({ mappings: dense(segments + 1) }),
+      // As many with no comma between them: the decoder ends each after its fifth field.
+      cardMap({ mappings: "AAAAAA".repeat(segments + 1) }),
+      // The decoder builds every line before a section's offset.
+      sectioned([lines - 1, card]),
+      sectioned([1_000_000_000, card]),
+      // Inside the limits apart, past them together.
+      sectioned([0, dense(segments / 2 + 1)], [1, dense(segments / 2)]),
+      // Overlapping sections: each is decoded whole before the next cuts it short.
+      sectioned([0, card + ";".repeat(lines / 2)], [1, card + ";".repeat(lines / 2)]),
+      // At the line limit, but joining copies every line while the section is still held.
+      sectioned([0, ";".repeat(lines - 1)]),
+      // At both limits at once, which is more than the cache would hold.
+      cardMap({ mappings: dense(segments) + ";".repeat(lines - 1) }),
+    ]) {
+      const subject = fake(map);
+      await expect(symbolicate(subject)).resolves.toEqual({
+        ok: false,
+        reason: "budget-exhausted",
+      });
+      expect(decodedMappings).not.toHaveBeenCalled();
+      expect(AnyMap).not.toHaveBeenCalled();
+      expect(subject.locateSource).not.toHaveBeenCalled();
+    }
+  });
+
+  it("decodes a map right up to each limit", async () => {
+    const { lines, segments } = SOURCE_MAP_LIMITS;
+    const card = cardMap().mappings;
+    const cases: [map: unknown, at: SourceLocation][] = [
+      [cardMap({ mappings: card + ";".repeat(lines - 2) }), v8(2, 10)],
+      // Generated-only segments after the last mapped one, one column apart.
+      [cardMap({ mappings: card + ",C".repeat(segments - 3) }), v8(2, 10)],
+      // A section whose last line is the last one allowed.
+      [
+        { version: 3, sections: [{ offset: { line: lines - 2, column: 0 }, map: cardMap() }] },
+        v8(lines, 10),
+      ],
+    ];
+    for (const [map, at] of cases) {
+      await expect(symbolicate(fake(map), at)).resolves.toMatchObject({
+        ok: true,
+        target: { location: authored(2, 9) },
+      });
+    }
+    expect(decodedMappings).toHaveBeenCalled();
+  });
+
+  it("counts the lines and segments the decoder builds, however the mappings are written", () => {
+    for (const mappings of [
+      "",
+      ";;",
+      ",",
+      ",,,",
+      "A,,A",
+      "A,,,,,,B",
+      "AAAA,",
+      "AAAA;AACA,EAAE",
+      "A".repeat(30),
+      "AAAAAgB",
+      "gggg",
+      // A field still continuing at a line's end reads into the next.
+      "AAAAg;A",
+      "Ag",
+      // Every other digit that continues a field.
+      "0A,9A;+A,/A",
+      "AAAA0,A",
+      "AAA/;AA+",
+      // Characters outside base64, where the decoder reads a terminal zero.
+      "é,A;~",
+      String.fromCharCode(0, 44, 127, 59, 128, 0xd800, 0xdfff),
+      "g" + String.fromCharCode(0xd800) + "A,A",
+      cardMap().mappings,
+    ]) {
+      const decoded = decodedMappings(
+        new TraceMap({ version: 3, sources: [], names: [], mappings })
+      );
+      expect(mappingsExtent(mappings)).toEqual({
+        lines: decoded.length,
+        segments: decoded.flat().length,
+      });
+    }
   });
 
   it("never lets one section's bad source index name a source in the next", async () => {
@@ -437,26 +547,32 @@ describe("source map symbolication", () => {
   });
 
   it("charges the cache for what a map decodes to, not its text", async () => {
-    // A few bytes that decode to most of a million empty lines. Two of them
-    // cannot both be held, so the first is decoded again rather than reused.
+    // A few bytes that decode to most of a million empty lines. Either can be
+    // held but not both, so the first is decoded again rather than reused.
+    const line = SOURCE_MAP_LIMITS.lines - 100_000;
     const phantom = (tag: string) => ({
       version: 3,
       tag,
-      sections: [{ offset: { line: SOURCE_MAP_LIMITS.sectionLine, column: 0 }, map: cardMap() }],
+      sections: [{ offset: { line, column: 0 }, map: cardMap() }],
     });
+    const at = v8(line + 2, 10);
     const first = phantom("a");
-    await symbolicate(fake(first), v8(SOURCE_MAP_LIMITS.sectionLine + 2, 10));
-    await symbolicate(fake(phantom("b")), v8(SOURCE_MAP_LIMITS.sectionLine + 2, 10));
-    const replay = fake(first);
-    replay.fetchSourceMap.mockResolvedValue({
-      ok: true,
-      value: {
-        url: null,
-        revision: revisionOf(new TextEncoder().encode(JSON.stringify(first))),
-        text: "{ not json",
-      },
-    });
-    await expect(symbolicate(replay, v8(SOURCE_MAP_LIMITS.sectionLine + 2, 10))).resolves.toEqual({
+    const replay = () => {
+      const subject = fake(first);
+      subject.fetchSourceMap.mockResolvedValue({
+        ok: true,
+        value: {
+          url: null,
+          revision: revisionOf(new TextEncoder().encode(JSON.stringify(first))),
+          text: "{ not json",
+        },
+      });
+      return subject;
+    };
+    await expect(symbolicate(fake(first), at)).resolves.toMatchObject({ ok: true });
+    await expect(symbolicate(replay(), at)).resolves.toMatchObject({ ok: true });
+    await expect(symbolicate(fake(phantom("b")), at)).resolves.toMatchObject({ ok: true });
+    await expect(symbolicate(replay(), at)).resolves.toEqual({
       ok: false,
       reason: "map-missing",
     });
@@ -516,11 +632,15 @@ describe("a module asked for by more than one name", () => {
     value: { url: null, revision: revisionOf(new TextEncoder().encode(text)), text },
   });
 
-  function trying(first: SourceAccessResult<never> | "undecodable") {
+  function trying(first: SourceAccessResult<never> | "undecodable" | "oversized") {
     const subject = fake(cardMap());
     subject.fetchSourceMap.mockImplementation(async (url: string) => {
       if (url !== SERVER) return answer(JSON.stringify(cardMap()));
-      return first === "undecodable" ? answer("<!doctype html>") : first;
+      if (first === "undecodable") return answer("<!doctype html>");
+      if (first === "oversized") {
+        return answer(JSON.stringify(cardMap({ mappings: ";".repeat(SOURCE_MAP_LIMITS.lines) })));
+      }
+      return first;
     });
     return subject;
   }
@@ -549,10 +669,17 @@ describe("a module asked for by more than one name", () => {
   });
 
   it("asks the next name when one ran out of budget, which main holds each kind of read to", async () => {
-    const subject = trying({ ok: false, reason: "budget-exhausted" });
-    const result = await symbolicateFrom(subject);
-    expect(result.ok && result.target.location).toEqual(authored(2, 9));
-    expect(subject.fetchSourceMap.mock.calls.map(([url]) => url)).toEqual([SERVER, DISK]);
+    // Out of the job's network or reads, or a map too large to decode.
+    for (const first of [
+      { ok: false, reason: "budget-exhausted" } as const,
+      "oversized" as const,
+    ]) {
+      clearDecodedMapCache();
+      const subject = trying(first);
+      const result = await symbolicateFrom(subject);
+      expect(result.ok && result.target.location).toEqual(authored(2, 9));
+      expect(subject.fetchSourceMap.mock.calls.map(([url]) => url)).toEqual([SERVER, DISK]);
+    }
   });
 
   it("asks no further once the job is cancelled", async () => {
