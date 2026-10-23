@@ -18,6 +18,7 @@ import { memoryPressureTarget } from "../utils/cachedProjectViews.js";
 import { isSwapPressureConfirmed } from "../services/systemSwapPressure.js";
 import { isKernelPressureCritical } from "../services/systemKernelPressure.js";
 import { isPanelRecoveryHeldReported } from "../services/panelRecoveryQuery.js";
+import { hasPendingActivation } from "./projectActivationClaims.js";
 import {
   isWorkspaceKeepResident,
   recordWorkspaceEviction,
@@ -845,8 +846,10 @@ export function evictStaleViews(
  * dispatch in flight or unreadable MCP activity, no unrecoverable work, no live
  * assistant (#11157). A view with a working agent still goes, after the
  * ordinary ones: its PTYs live in the pty-host and the view rebuilds from their
- * mirrors. A window with a switch queued or running releases nothing until it
- * settles, so a switch already heading to a view wins.
+ * mirrors. A switch already heading to a view wins: a window with one queued
+ * or running releases nothing until it settles, and a view this window has
+ * claimed for activation is kept through the checks and persist the switch
+ * awaits before it reaches the queue.
  */
 export function evictIdleViews(host: ProjectViewManager): number {
   if (host.disposed || host.win.isDestroyed()) return 0;
@@ -859,6 +862,7 @@ export function evictIdleViews(host: ProjectViewManager): number {
   for (const [projectId, entry] of host.views) {
     if (now - entry.lastUsed < IDLE_VIEW_RELEASE_MS) continue;
     if (!host.canReleaseCachedView(projectId)) continue;
+    if (hasPendingActivation(projectId, host.win.id)) continue;
     if (host.mcpActivityFor(projectId, entry.view.webContents).liveBinding) continue;
     if (viewKeepsResident(host, projectId, entry)) continue;
     const activeAgent = viewHasActiveAgent(host, projectId, entry);

@@ -265,6 +265,7 @@ import {
   resetKernelPressureForTesting,
 } from "../../services/systemKernelPressure.js";
 import { toHostScopedKey } from "../../../shared/types/remoteHosts.js";
+import { claimProjectActivation } from "../projectActivationClaims.js";
 import {
   _resetPanelRecoveryStateForTests,
   recordPanelRecoveryState,
@@ -1342,6 +1343,10 @@ describe("ProjectViewManager — eviction safety", () => {
       expect(remaining).toContain("proj-c");
       expect(remaining).toContain("proj-d");
     } finally {
+      // Before the real clock returns: these views are stamped in 2023, so a
+      // sampler tick left running would release them as idle mid-way through a
+      // later test (#14217).
+      managerWithLimit.dispose();
       dateNow.mockRestore();
     }
   });
@@ -4828,7 +4833,8 @@ describe("ProjectViewManager — releasing a cached view to another window (#132
 });
 
 describe("ProjectViewManager — releasing views that sit unused (#14217)", () => {
-  let win: ReturnType<typeof createMockWindow>;
+  const WINDOW_ID = 7;
+  let win: ReturnType<typeof createMockWindow> & { id: number };
   let boundWorkspaces: Set<string>;
   let leasedWebContentsIds: Set<number>;
   let managers: ProjectViewManager[];
@@ -4898,7 +4904,7 @@ describe("ProjectViewManager — releasing views that sit unused (#14217)", () =
     leasedWebContentsIds = new Set();
     managers = [];
     _resetPanelRecoveryStateForTests();
-    win = createMockWindow();
+    win = { ...createMockWindow(), id: WINDOW_ID };
   });
 
   afterEach(() => {
@@ -5060,10 +5066,27 @@ describe("ProjectViewManager — releasing views that sit unused (#14217)", () =
     expect(projectIds(mgr)).toEqual(["proj-a", "proj-b", "proj-c"]);
 
     await heading;
-    await flushImmediates();
     // proj-a is in front now, and proj-c was shown moments ago; only proj-b sat unused.
     expect(mgr.evictIdleViews()).toBe(1);
     expect(projectIds(mgr)).toEqual(["proj-a", "proj-c"]);
+  });
+
+  it("keeps a view a switch has claimed before it reaches the manager's queue", async () => {
+    const mgr = makeManager();
+    await seedThreeViews(mgr);
+    ageAll(mgr);
+    // The IPC switch claims its target, then awaits repository checks and the
+    // pending persist before it calls `switchTo`.
+    const releaseClaim = claimProjectActivation("proj-a", WINDOW_ID);
+
+    try {
+      mgr.evictIdleViews();
+      expect(projectIds(mgr)).toEqual(["proj-a", "proj-c"]);
+    } finally {
+      releaseClaim();
+    }
+    mgr.evictIdleViews();
+    expect(projectIds(mgr)).toEqual(["proj-c"]);
   });
 
   it("drops a pending soft-pressure judgement it would otherwise skew", async () => {
