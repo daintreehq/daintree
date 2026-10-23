@@ -14,7 +14,7 @@ import { isAgentPinned } from "../../shared/utils/agentPinned";
 import { isAgentInstalled } from "../../shared/utils/agentAvailability";
 import { useCliAvailabilityStore } from "./cliAvailabilityStore";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
-import { setAgentSettingsEntryAccessor } from "./storeAccessors";
+import { setAgentSettingsEntryAccessor, setGlobalUseAltScreenAccessor } from "./storeAccessors";
 
 /** Bump when a future migration needs to run on existing persisted stores. */
 const CURRENT_SETTINGS_VERSION = 1;
@@ -575,3 +575,4 @@ export function cleanupAgentSettingsStore() {
 setAgentSettingsEntryAccessor(
   (agentId) => useAgentSettingsStore.getState().settings?.agents?.[agentId]
 );
+setGlobalUseAltScreenAccessor(() => useAgentSettingsStore.getState().settings?.globalUseAltScreen);

@@ -19,9 +19,14 @@ import type { HelpAdoptResult } from "@shared/types/ipc/help";
 import {
   buildResumeCommand,
   reconcileDecorationFlags,
+  reconcileInlineModeFlag,
+  resolveEffectiveInlineMode,
   resolveKeepDecorations,
 } from "@shared/types/agentSettings";
-import { getAgentSettingsEntrySnapshot } from "@/store/storeAccessors";
+import {
+  getAgentSettingsEntrySnapshot,
+  getGlobalUseAltScreenSnapshot,
+} from "@/store/storeAccessors";
 import { loadCustomLaunchFlags } from "@/lib/assistantLaunchFlags";
 import {
   type HelpSessionRef,
@@ -303,11 +308,22 @@ export interface HelpLaunchOptions {
 
 // Help sessions keep their own bypass and model settings, but a CLI's
 // decorative effects are the same pane-repaint cost whoever launched it, so
-// the per-agent "keep decorations" choice applies here too (fresh launch and
-// resume alike). A backend that declares no decorations is a no-op.
-function withDecorationChoice(flags: string[], agentId: string): string[] {
+// the per-agent "keep decorations" choice applies here too, and so does the
+// inline-mode choice: a resumed conversation must keep its scrollback in the
+// terminal buffer exactly like a fresh launch (#14186). Bypass is deliberately
+// not reconciled. A backend that declares neither capability is a no-op.
+function withResumeDisplayChoices(flags: string[], agentId: string): string[] {
   const entry = getAgentSettingsEntrySnapshot(agentId) ?? {};
-  return reconcileDecorationFlags(flags, agentId, resolveKeepDecorations(entry));
+  const effectiveInline = resolveEffectiveInlineMode(
+    entry,
+    agentId,
+    getGlobalUseAltScreenSnapshot()
+  );
+  return reconcileDecorationFlags(
+    reconcileInlineModeFlag(flags, agentId, effectiveInline),
+    agentId,
+    resolveKeepDecorations(entry)
+  );
 }
 
 const INITIAL_SNAPSHOT: HelpSessionSnapshot = Object.freeze({
@@ -1267,7 +1283,7 @@ export class HelpSessionController {
     folderPath: string,
     launchProject: HelpProjectRef
   ): Promise<ResumeSpawnResult | null> {
-    const customLaunchFlags = withDecorationChoice(
+    const customLaunchFlags = withResumeDisplayChoices(
       await loadCustomLaunchFlags(launchAgentId),
       launchAgentId
     );
@@ -1732,7 +1748,7 @@ export class HelpSessionController {
       // Fresh launches dispatch through the agent launcher, whose flag
       // generation already applies the decorations choice — adding it here
       // too would double the pair. Only the resume path (which builds its own
-      // command) needs `withDecorationChoice`.
+      // command) needs `withResumeDisplayChoices`.
       const customLaunchFlags = await loadCustomLaunchFlags(launchAgentId);
       if (gen !== this._launchGen) {
         this._abandonInFlightLaunch(reservedId, session, { resetAutoLaunch });
