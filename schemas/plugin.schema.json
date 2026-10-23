@@ -1138,6 +1138,47 @@
               "when": {
                 "type": "string",
                 "minLength": 1
+              },
+              "title": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 80
+              },
+              "description": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200
+              },
+              "pages": {
+                "minItems": 1,
+                "maxItems": 20,
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 64,
+                      "pattern": "^[a-zA-Z0-9._-]+$"
+                    },
+                    "title": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 80
+                    },
+                    "description": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 200
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "title"
+                  ],
+                  "additionalProperties": false
+                }
               }
             },
             "required": [

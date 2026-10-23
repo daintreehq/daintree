@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { Eye, EyeOff, FolderOpen } from "lucide-react";
 import {
   SettingsGroup,
@@ -22,8 +22,10 @@ import {
   accountHomeOf,
   pluginDeclaresSettingsView,
   settingsForHome,
+  settingsViewOf,
   setupHomeOf,
 } from "@/services/plugin/pluginSettingsHome";
+import type { PluginSettingsRequest, PluginSettingsSection } from "@/store/pluginManagerStore";
 import { PluginAccountRow } from "@/components/Settings/PluginAccountRow";
 import { PluginSetupSettingsGroup } from "@/components/Plugin/PluginSetupChecklist";
 import { actionService } from "@/services/ActionService";
@@ -835,10 +837,31 @@ function SettingField({
   return <SettingsRow {...rowProps} layout={settingRowLayout(def, type)} control={renderControl} />;
 }
 
-/** A deep link's "land on this setting" request; `nonce` makes a repeat land again. */
+/**
+ * A deep link's "land here" request: a declared setting, or a section of the
+ * home (with a page of the custom section). `nonce` makes a repeat land again.
+ */
 export interface PluginSettingsFocusRequest {
-  key: string;
+  key?: string;
+  section?: PluginSettingsSection;
+  page?: string;
   nonce: number;
+}
+
+/**
+ * The part of a settings request the form lands on, or `null` when it names
+ * only the plugin — its home then focuses the plugin's own heading instead.
+ */
+export function settingsFocusRequestOf(
+  request: Pick<PluginSettingsRequest, "key" | "section" | "page" | "nonce"> | null | undefined
+): PluginSettingsFocusRequest | null {
+  if (!request || (request.key === undefined && request.section === undefined)) return null;
+  return {
+    nonce: request.nonce,
+    ...(request.key !== undefined ? { key: request.key } : {}),
+    ...(request.section !== undefined ? { section: request.section } : {}),
+    ...(request.page !== undefined ? { page: request.page } : {}),
+  };
 }
 
 interface PluginSettingsFormProps {
@@ -868,6 +891,21 @@ export function pluginSettingFieldId(pluginId: string, settingId: string): strin
 /** The plugin's own settings section, where a deep link to a key it edits lands. */
 export function pluginSettingsViewId(pluginId: string): string {
   return `plugin-settings-view-${pluginId}`;
+}
+
+/** The open page's heading in the custom section, where a page deep link lands. */
+export function pluginSettingsPageHeadingId(pluginId: string): string {
+  return `plugin-settings-page-heading-${pluginId}`;
+}
+
+/** The plugin's account row, where an account deep link lands. */
+export function pluginSettingsAccountId(pluginId: string): string {
+  return `plugin-settings-account-${pluginId}`;
+}
+
+/** The plugin's setup checklist, where a setup deep link lands. */
+export function pluginSettingsSetupId(pluginId: string): string {
+  return `plugin-settings-setup-${pluginId}`;
 }
 
 /**
@@ -945,40 +983,128 @@ export function PluginSettingsForm({
     return loadScopeValues(pluginId, "local", projectId, setLocalScope);
   }, [pluginId, hasLocalScope, projectId, reloadKey, declarationsKey]);
 
+  const hasView = pluginDeclaresSettingsView(plugin);
+  const declaredPages = settingsViewOf(plugin)?.pages;
+  // The open page of the custom section; one the manifest no longer declares
+  // (a reload dropped it) reads as the section's root.
+  const [openPage, setOpenPage] = useState<string | null>(null);
+  const activePage =
+    openPage !== null && declaredPages?.some((p) => p.id === openPage) ? openPage : null;
+  // A deep link to a key the custom section edits, handed to the view until it
+  // answers or the host stops waiting.
+  const [viewFocus, setViewFocus] = useState<{ key: string; nonce: number } | null>(null);
+  const viewAckRef = useRef<{ nonce: number; settle: (landed: boolean) => void } | null>(null);
+  const acknowledgeViewFocus = useCallback((nonce: number, landed: boolean) => {
+    const pending = viewAckRef.current;
+    if (pending !== null && pending.nonce === nonce) pending.settle(landed);
+  }, []);
+
   // A deep link lands once the target's scope has resolved: before that the row
   // is disabled, and focus would skip its control for whatever comes next. It
   // also waits for the row to be on screen — the settings dialog can still be
   // switching to this tab — trying a few frames before giving up quietly.
   const focusNonce = focusRequest?.nonce;
   const focusKey = focusRequest?.key;
-  const focusDef = settings.find((def) => def.id === focusKey);
+  const focusSection = focusRequest?.section;
+  const focusPage = focusRequest?.page;
+  const focusDef = focusKey === undefined ? undefined : settings.find((def) => def.id === focusKey);
   // A key the plugin's own section edits has no row; the link lands on that section.
-  const focusInView = focusDef?.editor === "view" && pluginDeclaresSettingsView(plugin);
+  const focusInView = focusDef?.editor === "view" && hasView;
   const focusScope = focusDef ? byScope[settingScope(focusDef)] : null;
   const focusReady = focusScope === null || focusScope.values !== null || !!focusScope.failed;
+  const focusTargetId =
+    focusKey !== undefined
+      ? focusInView
+        ? pluginSettingsViewId(pluginId)
+        : pluginSettingFieldId(pluginId, focusKey)
+      : focusSection === "account"
+        ? pluginSettingsAccountId(pluginId)
+        : focusSection === "setup"
+          ? pluginSettingsSetupId(pluginId)
+          : focusSection === "custom"
+            ? pluginSettingsViewId(pluginId)
+            : null;
+  const focusPageDeclared =
+    focusSection === "custom" &&
+    focusPage !== undefined &&
+    declaredPages?.some((p) => p.id === focusPage) === true;
+  const deliverToView = focusInView && viewRunning;
   useEffect(() => {
-    if (focusNonce === undefined || focusKey === undefined || !focusReady) return;
+    if (focusNonce === undefined || focusTargetId === null || !focusReady) return;
+    if (focusPageDeclared) setOpenPage(focusPage!);
     let attempts = 0;
     let timer: ReturnType<typeof setTimeout> | undefined;
+    let settled = false;
+    const finish = () => {
+      settled = true;
+      onFocusHandled?.(focusNonce);
+    };
     const attempt = () => {
-      const row = document.getElementById(
-        focusInView ? pluginSettingsViewId(pluginId) : pluginSettingFieldId(pluginId, focusKey)
-      );
-      if (row && isOnScreen(row)) {
-        landOnSettingsElement(row);
-      } else if (row && attempts++ < LANDING_ATTEMPTS) {
-        timer = setTimeout(attempt, LANDING_RETRY_MS);
+      const target = document.getElementById(focusTargetId);
+      // A page lands once it is the one showing, on its own heading.
+      const pageHeading = focusPageDeclared
+        ? document.getElementById(pluginSettingsPageHeadingId(pluginId))
+        : null;
+      // An empty target is a section still loading (the checklist's status, the
+      // view's snapshot): there is nothing to focus yet.
+      const ready =
+        target !== null &&
+        target.firstElementChild !== null &&
+        isOnScreen(target) &&
+        (!focusPageDeclared || pageHeading !== null);
+      if (!ready) {
+        if (target && attempts++ < LANDING_ATTEMPTS) {
+          timer = setTimeout(attempt, LANDING_RETRY_MS);
+          return;
+        }
+        finish();
         return;
       }
-      onFocusHandled?.(focusNonce);
+      if (!deliverToView || focusKey === undefined) {
+        landOnSettingsElement(target);
+        pageHeading?.focus({ preventScroll: true });
+        finish();
+        return;
+      }
+      // The view lands on its own control when it can. Until it answers the
+      // section is brought into view; no answer in time, or a "can't", gets
+      // the landing every other deep link gets.
+      target.scrollIntoView({ behavior: "instant", block: "start" });
+      viewAckRef.current = {
+        nonce: focusNonce,
+        settle: (landed) => {
+          if (settled) return;
+          if (timer !== undefined) clearTimeout(timer);
+          viewAckRef.current = null;
+          setViewFocus(null);
+          if (!landed) landOnSettingsElement(target);
+          finish();
+        },
+      };
+      setViewFocus({ key: focusKey, nonce: focusNonce });
+      timer = setTimeout(() => viewAckRef.current?.settle(false), VIEW_FOCUS_ACK_MS);
     };
     attempt();
     return () => {
+      settled = true;
       if (timer !== undefined) clearTimeout(timer);
+      if (viewAckRef.current?.nonce === focusNonce) {
+        viewAckRef.current = null;
+        setViewFocus(null);
+      }
     };
-  }, [focusNonce, focusKey, focusReady, focusInView, pluginId, onFocusHandled]);
+  }, [
+    focusNonce,
+    focusKey,
+    focusTargetId,
+    focusReady,
+    focusPageDeclared,
+    focusPage,
+    deliverToView,
+    pluginId,
+    onFocusHandled,
+  ]);
 
-  const hasView = pluginDeclaresSettingsView(plugin);
   if (
     settings.length === 0 &&
     elsewhere.length === 0 &&
@@ -1014,14 +1140,20 @@ export function PluginSettingsForm({
           onRetry={() => setReloadKey((k) => k + 1)}
         />
       )}
-      {showSetup && <PluginSetupSettingsGroup key={plugin.loadedAt} pluginId={pluginId} />}
+      {showSetup && (
+        <div id={pluginSettingsSetupId(pluginId)} className="empty:hidden">
+          <PluginSetupSettingsGroup key={plugin.loadedAt} pluginId={pluginId} />
+        </div>
+      )}
       {showAccount && (
-        // Remounted on reload: a changed declaration starts from a fresh read.
-        <PluginAccountRow
-          key={`${pluginId}:${plugin.loadedAt}`}
-          plugin={plugin}
-          account={account}
-        />
+        <div id={pluginSettingsAccountId(pluginId)} className="empty:hidden">
+          {/* Remounted on reload: a changed declaration starts from a fresh read. */}
+          <PluginAccountRow
+            key={`${pluginId}:${plugin.loadedAt}`}
+            plugin={plugin}
+            account={account}
+          />
+        </div>
       )}
       {(fields.length > 0 || elsewhereRow) && (
         <SettingsGroup>
@@ -1060,6 +1192,11 @@ export function PluginSettingsForm({
             plugin={plugin}
             context={{ scope: viewScope, projectId: viewScope === "project" ? projectId : null }}
             running={viewRunning}
+            page={activePage}
+            onPageChange={setOpenPage}
+            pageHeadingId={pluginSettingsPageHeadingId(pluginId)}
+            focus={viewFocus}
+            onFocusAnswered={acknowledgeViewFocus}
           />
         </div>
       )}
@@ -1070,6 +1207,13 @@ export function PluginSettingsForm({
 /** How many times a deep link retries a row that is in the DOM but not yet shown. */
 const LANDING_ATTEMPTS = 20;
 const LANDING_RETRY_MS = 50;
+/**
+ * How long a custom section has to answer a deep link to one of its keys
+ * before the host lands on the whole section. Long enough for a mounted view
+ * to focus its own control, short enough that a view that never answers (one
+ * built before views could) still lands promptly.
+ */
+const VIEW_FOCUS_ACK_MS = 1000;
 
 /** Whether an element is actually shown — not inside a hidden settings tab panel. */
 function isOnScreen(el: HTMLElement): boolean {

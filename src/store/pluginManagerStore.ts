@@ -8,6 +8,9 @@ import { create } from "zustand";
  */
 export type PluginSettingsHome = "manager" | "project";
 
+/** The parts of a settings home a deep link can land on, besides a declared key. */
+export type PluginSettingsSection = "account" | "setup" | "custom";
+
 /**
  * A pending "show this plugin's settings" request from `plugin.openSettings`.
  * The home it names consumes it; `nonce` makes a repeat request for the same
@@ -18,6 +21,10 @@ export interface PluginSettingsRequest {
   pluginId: string;
   /** A declared setting to scroll to and highlight, when the request named one. */
   key?: string;
+  /** A section of the home to land on instead of a key: the account, the setup checklist, the custom section. */
+  section?: PluginSettingsSection;
+  /** A declared page of the custom section to open, with `section: "custom"`. */
+  page?: string;
   home: PluginSettingsHome;
   nonce: number;
 }

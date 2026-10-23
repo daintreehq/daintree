@@ -36,10 +36,11 @@ export interface SettingsSearchEntry {
   description: string;
   keywords?: string[];
   /**
-   * Set on a plugin's declared setting. Opening it goes through `plugin.openSettings`,
-   * the same landing as `host.settings.open(key)`, instead of tab navigation.
+   * Set on a plugin's settings: a declared setting, a section of its settings
+   * home, or the home itself. Opening it goes through `plugin.openSettings`, the
+   * same landing as `host.settings.open(key)`, instead of tab navigation.
    */
-  plugin?: { instanceId: string; settingId: string };
+  plugin?: PluginSettingsSearchTarget;
   /** When set, indicates this setting is only visible when a parent setting is enabled. */
   requiresEnabled?: {
     /** id of the gate entry in the search index (e.g. "mcp-server-enable") */
@@ -47,6 +48,19 @@ export interface SettingsSearchEntry {
     /** Human-readable label shown in warnings (e.g. "MCP server") */
     label: string;
   };
+}
+
+/** What a plugin search result asks `plugin.openSettings` to land on. */
+export interface PluginSettingsSearchTarget {
+  instanceId: string;
+  /** A declared setting id. */
+  settingId?: string;
+  /** A section of the home, when the result is not one setting. */
+  section?: "account" | "setup" | "custom";
+  /** A declared page of the custom section. */
+  page?: string;
+  /** Which home, for what an installed plugin shows in both. */
+  scope?: "user" | "project";
 }
 
 function sectionToEntry(

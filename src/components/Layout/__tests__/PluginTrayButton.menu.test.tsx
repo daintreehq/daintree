@@ -54,6 +54,20 @@ vi.mock("@/components/ui/context-menu", () => ({
   ContextMenuContent: ({ children }: { children: React.ReactNode }) => (
     <div data-testid="context-menu-content">{children}</div>
   ),
+  ContextMenuActionItem: ({
+    actionId,
+    args,
+    children,
+  }: {
+    actionId: string;
+    args?: unknown;
+    children: React.ReactNode;
+  }) => (
+    <div role="menuitem" data-action-id={actionId} data-args={JSON.stringify(args)}>
+      {children}
+    </div>
+  ),
+  ContextMenuSeparator: () => <hr />,
 }));
 
 vi.mock("../ToolbarContextMenuItems", () => ({
@@ -173,6 +187,45 @@ beforeEach(() => {
       ["acme.beads.pull", "Pull"],
       ["acme.beads.push", "Push"],
     ]);
+  });
+});
+
+describe("plugin settings from the toolbar (#14101)", () => {
+  const settingsItems = (root: HTMLElement) =>
+    Array.from(root.querySelectorAll('[data-action-id="plugin.openSettings"]'));
+
+  it("offers the plugin's settings once per tray group, for its own instance", () => {
+    const sync = config("sync", { actionId: "acme.beads.sync", hasPluginSettings: true });
+    const pull = config("pull", { actionId: "acme.beads.pull", hasPluginSettings: true });
+    const other = config("go", { actionId: "acme.other.go" }, "acme.other");
+    const { container } = render(
+      <PluginTrayButton
+        configs={
+          new Map([
+            [sync.id, sync],
+            [pull.id, pull],
+            [other.id, other],
+          ])
+        }
+      />
+    );
+    const items = settingsItems(container);
+    expect(items.map((el) => [el.textContent, el.getAttribute("data-args")])).toEqual([
+      ["Plugin settings…", JSON.stringify({ pluginId: "acme.beads" })],
+    ]);
+  });
+
+  it("puts it on a promoted button's right-click menu, and only when there are settings", () => {
+    const sync = config("sync", { actionId: "acme.beads.sync", hasPluginSettings: true });
+    const { getByTestId, unmount } = render(
+      <PluginToolbarButton pluginId={sync.id} config={sync} />
+    );
+    expect(settingsItems(getByTestId("context-menu-content"))).toHaveLength(1);
+    unmount();
+
+    const bare = config("bare", { actionId: "acme.beads.sync" });
+    const again = render(<PluginToolbarButton pluginId={bare.id} config={bare} />);
+    expect(settingsItems(again.getByTestId("context-menu-content"))).toHaveLength(0);
   });
 });
 

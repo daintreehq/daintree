@@ -30,6 +30,8 @@ export interface ToolbarButtonConfig {
   menu?: ToolbarButtonMenuItemConfig[];
   priority: ToolbarButtonPriority;
   pluginId: string;
+  /** The plugin has something to configure, so its chrome offers "Plugin settings…". */
+  hasPluginSettings?: boolean;
   /** Visibility clause, evaluated live against the renderer's chrome context. */
   when?: string;
 }

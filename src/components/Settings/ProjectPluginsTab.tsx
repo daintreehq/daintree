@@ -24,6 +24,7 @@ import { CapabilityRow } from "@/components/Plugin/capabilityMeta";
 import { SettingsSwitch } from "@/components/Settings/SettingsSwitch";
 import {
   PluginSettingsForm,
+  settingsFocusRequestOf,
   type PluginSettingsFocusRequest,
 } from "@/components/Settings/PluginSettingsForm";
 import { pluginHasSettings } from "@/services/plugin/pluginSettingsHome";
@@ -1765,7 +1766,8 @@ export function ProjectPluginsTab() {
     return installedMatch ? `${INSTALLED_OPTION_PREFIX}${installedMatch.instanceId}` : null;
   }, [settingsRequest, installed, projectPlugins, installedOnly]);
   const requestNonce = settingsRequest?.nonce;
-  const requestKey = settingsRequest?.key;
+  const requestFocus = settingsFocusRequestOf(settingsRequest);
+  const requestTargeted = requestFocus !== null;
   // Whether the target pane will render a settings form to land in at all.
   // A stopped project plugin gets the declaration-only section, so it counts as
   // formless even while the loaded list still carries it.
@@ -1782,8 +1784,8 @@ export function ProjectPluginsTab() {
   useEffect(() => {
     if (requestTargetId === null || requestNonce === undefined) return;
     setSelectedId(requestTargetId);
-    if (requestKey === undefined || !requestTargetHasForm) setHeadingFocusNonce(requestNonce);
-  }, [requestTargetId, requestNonce, requestKey, requestTargetHasForm]);
+    if (!requestTargeted || !requestTargetHasForm) setHeadingFocusNonce(requestNonce);
+  }, [requestTargetId, requestNonce, requestTargeted, requestTargetHasForm]);
   // With no field to land on, focus goes to the plugin's Settings heading — or
   // its pane, when it has nothing to configure here — once that pane shows and
   // the dialog has switched to this tab.
@@ -1818,10 +1820,7 @@ export function ProjectPluginsTab() {
   // Handed only to the pane the request names, and only once it is the one
   // showing — a pane being replaced must not answer for the one replacing it.
   const paneSettingsFocus: PaneSettingsFocus = {
-    request:
-      requestNonce !== undefined && requestKey !== undefined && selectedId === requestTargetId
-        ? { key: requestKey, nonce: requestNonce }
-        : null,
+    request: requestFocus !== null && selectedId === requestTargetId ? requestFocus : null,
     onHandled: consumeSettingsRequest,
   };
 

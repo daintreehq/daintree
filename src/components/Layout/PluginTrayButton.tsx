@@ -1,10 +1,16 @@
 import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent } from "react";
-import { Check, ChevronDown, Pin } from "lucide-react";
+import { Check, ChevronDown, Pin, Settings } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 import { ROW_CONTROL_CLASS, RowControlTooltip } from "@/components/ui/RowControl";
-import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from "@/components/ui/context-menu";
+import {
+  ContextMenu,
+  ContextMenuActionItem,
+  ContextMenuContent,
+  ContextMenuSeparator,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu";
 import { PopoverAnchor, PopoverTrigger } from "@/components/ui/popover";
 import {
   DropdownMenu,
@@ -113,6 +119,9 @@ export function groupPluginToolbarButtons(
   );
   return groups;
 }
+
+/** The same words every plugin surface uses for its way into the plugin's settings. */
+const PLUGIN_SETTINGS_MENU_LABEL = "Plugin settings…";
 
 /**
  * A plugin contribution the user promoted to its own top-level toolbar slot
@@ -250,6 +259,18 @@ export function PluginToolbarButton({
           redundant key behind. Routing through the dedicated action deletes it,
           keeping `pinnedButtons` sparse for the stale-plugin sweep.
         */}
+        {config.hasPluginSettings === true && (
+          <>
+            <ContextMenuActionItem
+              actionId="plugin.openSettings"
+              args={{ pluginId: config.pluginId }}
+            >
+              <Settings data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
+              {PLUGIN_SETTINGS_MENU_LABEL}
+            </ContextMenuActionItem>
+            <ContextMenuSeparator />
+          </>
+        )}
         <ToolbarContextMenuItems
           buttonId={pluginId}
           side="right"
@@ -921,6 +942,15 @@ export function PluginTrayButton({
                   onTogglePin={handleTogglePin}
                 />
               ))}
+              {group.buttons.some((config) => config.hasPluginSettings === true) && (
+                <DropdownMenuActionItem
+                  actionId="plugin.openSettings"
+                  args={{ pluginId: group.pluginId }}
+                >
+                  <Settings data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
+                  {PLUGIN_SETTINGS_MENU_LABEL}
+                </DropdownMenuActionItem>
+              )}
             </DropdownMenuGroup>
           ))}
 

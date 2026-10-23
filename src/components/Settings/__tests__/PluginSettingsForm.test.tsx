@@ -42,6 +42,9 @@ vi.mock("@/store/projectStore", () => ({
 }));
 
 const madeFor = vi.hoisted(() => [] as Array<Record<string, unknown>>);
+const lastSettingsContext = vi.hoisted(() => ({
+  current: undefined as PluginSettingsViewContext | undefined,
+}));
 
 // The loader is exercised by its own suites; here it only has to show what the
 // settings home handed it.
@@ -53,14 +56,18 @@ vi.mock("@/components/Plugin/PluginViewContent", () => ({
       settingsContext?: PluginSettingsViewContext;
       hostContext?: PluginViewHostContext;
     }) {
+      lastSettingsContext.current = props.settingsContext;
       return (
         <div
           data-testid="fake-settings-view"
           data-panel-id={props.panelId}
           data-scope={props.settingsContext?.scope}
           data-project={props.settingsContext?.projectId ?? ""}
+          data-page={props.settingsContext?.page ?? ""}
           data-host={props.hostContext?.kind}
-        />
+        >
+          <input aria-label="Fake cadence" data-testid="fake-cadence" />
+        </div>
       );
     };
   },
@@ -1352,15 +1359,134 @@ describe("PluginSettingsForm settings edited by the plugin's own section", () =>
       />
     );
 
-    await waitFor(() => expect(onFocusHandled).toHaveBeenCalledWith(3));
+    // The fake view never answers, as a view built before it could: the host
+    // stops waiting and lands on the whole section.
+    await waitFor(() => expect(onFocusHandled).toHaveBeenCalledWith(3), { timeout: 3000 });
     const section = screen.getByTestId("fake-settings-view").closest(".settings-highlight");
     expect(section).not.toBeNull();
+  });
+
+  it("hands the key to the section, which lands on its own control and answers", async () => {
+    const onFocusHandled = vi.fn();
+    render(
+      <PluginSettingsForm
+        plugin={makeViewPlugin([cadence, channel], "plugin://a/settings.js")}
+        viewScope="user"
+        focusRequest={{ key: "cadence", nonce: 4 }}
+        onFocusHandled={onFocusHandled}
+      />
+    );
+
+    await waitFor(() => expect(lastSettingsContext.current?.focus?.key).toBe("cadence"));
+    expect(onFocusHandled).not.toHaveBeenCalled();
+    const control = screen.getByTestId("fake-cadence");
+    act(() => {
+      control.focus();
+      lastSettingsContext.current!.focus!.acknowledge(true);
+    });
+
+    expect(onFocusHandled).toHaveBeenCalledWith(4);
+    expect(document.activeElement).toBe(control);
+    // Answered: the host doesn't also land on the whole section.
+    expect(document.querySelector(".settings-highlight")).toBeNull();
+    await waitFor(() => expect(lastSettingsContext.current?.focus).toBeUndefined());
+    // A second answer for the same request does nothing.
+    act(() => {
+      lastSettingsContext.current?.focus?.acknowledge(false);
+    });
+    expect(onFocusHandled).toHaveBeenCalledTimes(1);
+  });
+
+  it("falls back to landing on the section when the view can't show the key", async () => {
+    const onFocusHandled = vi.fn();
+    render(
+      <PluginSettingsForm
+        plugin={makeViewPlugin([cadence, channel], "plugin://a/settings.js")}
+        viewScope="user"
+        focusRequest={{ key: "cadence", nonce: 5 }}
+        onFocusHandled={onFocusHandled}
+      />
+    );
+
+    await waitFor(() => expect(lastSettingsContext.current?.focus?.nonce).toBe(5));
+    act(() => lastSettingsContext.current!.focus!.acknowledge(false));
+
+    expect(onFocusHandled).toHaveBeenCalledWith(5);
+    expect(
+      screen.getByTestId("fake-settings-view").closest(".settings-highlight")
+    ).not.toBeNull();
   });
 
   it("still shows the field when the plugin declares no section to edit it", () => {
     render(<PluginSettingsForm plugin={makeViewPlugin([cadence, channel])} viewScope="user" />);
 
     expect(screen.getByText("Posting cadence")).toBeTruthy();
+  });
+});
+
+describe("PluginSettingsForm custom section pages (#14101)", () => {
+  function withPages(plugin: LoadedPluginInfo): LoadedPluginInfo {
+    return {
+      ...plugin,
+      manifest: {
+        ...plugin.manifest,
+        contributes: {
+          ...plugin.manifest.contributes,
+          views: [
+            {
+              id: "prefs",
+              componentPath: "dist/prefs.js",
+              location: "settings",
+              pages: [
+                { id: "columns", title: "Column mapping", description: "Statuses to columns" },
+              ],
+            },
+          ],
+        },
+      },
+    } as LoadedPluginInfo;
+  }
+
+  it("lists the pages, opens one in the same mount, and goes back to its Open button", async () => {
+    render(
+      <PluginSettingsForm
+        plugin={withPages(makeViewPlugin([], "plugin://a/settings.js"))}
+        viewScope="user"
+      />
+    );
+    const view = screen.getByTestId("fake-settings-view");
+    expect(view.getAttribute("data-page")).toBe("");
+
+    const open = screen.getByRole("button", { name: "Open Column mapping" });
+    fireEvent.click(open);
+
+    const heading = await screen.findByRole("heading", { name: "Column mapping" });
+    expect(document.activeElement).toBe(heading);
+    // The same view instance, now told which page is open.
+    expect(screen.getByTestId("fake-settings-view")).toBe(view);
+    expect(view.getAttribute("data-page")).toBe("columns");
+    expect(screen.queryByRole("button", { name: "Open Column mapping" })).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Back to all settings" }));
+    const reopened = await screen.findByRole("button", { name: "Open Column mapping" });
+    await waitFor(() => expect(document.activeElement).toBe(reopened));
+    expect(view.getAttribute("data-page")).toBe("");
+  });
+
+  it("opens a page from a deep link and lands on its heading", async () => {
+    const onFocusHandled = vi.fn();
+    render(
+      <PluginSettingsForm
+        plugin={withPages(makeViewPlugin([], "plugin://a/settings.js"))}
+        viewScope="user"
+        focusRequest={{ section: "custom", page: "columns", nonce: 12 }}
+        onFocusHandled={onFocusHandled}
+      />
+    );
+
+    await waitFor(() => expect(onFocusHandled).toHaveBeenCalledWith(12));
+    expect(document.activeElement).toBe(screen.getByRole("heading", { name: "Column mapping" }));
+    expect(screen.getByTestId("fake-settings-view").getAttribute("data-page")).toBe("columns");
   });
 });
 
@@ -1428,6 +1554,24 @@ describe("PluginSettingsForm setup checklist (#13824)", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Skip: Run the first sync" }));
     expect(pluginApi.setSetupStepSkipped).toHaveBeenCalledWith("acme.test", "sync", true);
+  });
+
+  it("lands a setup deep link on the checklist once it has loaded", async () => {
+    pluginApi.getSetupStatus.mockResolvedValue(STATUS);
+    const onFocusHandled = vi.fn();
+    render(
+      <PluginSettingsForm
+        plugin={withSetup(makePlugin([{ id: "apiKey", type: "string", label: "API key" }]))}
+        focusRequest={{ section: "setup", nonce: 11 }}
+        onFocusHandled={onFocusHandled}
+      />
+    );
+
+    await waitFor(() => expect(onFocusHandled).toHaveBeenCalledWith(11));
+    const group = screen.getByRole("group", { name: "Setup · 0 of 1" });
+    expect(group.closest(".settings-highlight")).not.toBeNull();
+    // Landing focuses the checklist; it never runs a step.
+    expect(pluginApi.setSetupStepSkipped).not.toHaveBeenCalled();
   });
 
   it("shows a checklist for a plugin with nothing else to configure", async () => {

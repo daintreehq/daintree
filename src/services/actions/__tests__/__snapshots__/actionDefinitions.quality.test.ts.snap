@@ -3611,7 +3611,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "category": "plugins",
     "danger": "safe",
     "dangerRationale": undefined,
-    "description": "Show a plugin's settings in the one place they live: the plugin manager for an installed plugin's own settings, Project settings → Plugins for a project plugin or a project-scoped setting. A declared key is requested for landing; an undeclared one is ignored.",
+    "description": "Show a plugin's settings where they live: the plugin manager for an installed plugin's own settings, Project settings → Plugins for a project plugin or project-scoped setting. Lands on a declared key or section; anything undeclared is ignored.",
     "examples": undefined,
     "id": "plugin.openSettings",
     "keywords": undefined,

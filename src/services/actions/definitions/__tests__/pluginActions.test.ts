@@ -612,6 +612,7 @@ describe("plugin.openSettings", () => {
       pluginId: "acme.linear",
       home: "plugin-manager",
       requestedKey: "apiKey",
+      requestedSection: null,
     });
     expect(onOpenSettingsTab).not.toHaveBeenCalled();
     const state = usePluginManagerStore.getState();
@@ -679,9 +680,52 @@ describe("plugin.openSettings", () => {
       pluginId: "acme.linear",
       home: "project-settings",
       requestedKey: null,
+      requestedSection: null,
     });
     expect(onOpenSettingsTab).toHaveBeenCalledWith({ tab: "project:plugins" });
     expect(usePluginManagerStore.getState().settingsRequest?.pluginId).toBe(PROJECT_KEY);
+  });
+
+  it("lands on a section and a declared page, in the home the scope names (#14101)", async () => {
+    clientMocks.list.mockResolvedValue([
+      {
+        ...loaded("acme.linear", { settings: [] }),
+        manifest: {
+          name: "acme.linear",
+          contributes: {
+            settings: [],
+            views: [
+              {
+                id: "prefs",
+                componentPath: "dist/prefs.js",
+                location: "settings",
+                pages: [{ id: "columns", title: "Columns" }],
+              },
+            ],
+          },
+        },
+      },
+    ]);
+
+    const { result, onOpenSettingsTab } = await openSettings({
+      pluginId: "acme.linear",
+      section: "custom",
+      page: "columns",
+      scope: "project",
+    });
+    expect(result).toMatchObject({ home: "project-settings", requestedSection: "custom" });
+    expect(onOpenSettingsTab).toHaveBeenCalledWith({ tab: "project:plugins" });
+    expect(usePluginManagerStore.getState().settingsRequest).toMatchObject({
+      pluginId: "acme.linear",
+      home: "project",
+      section: "custom",
+      page: "columns",
+    });
+
+    // A section it doesn't have is dropped, like an undeclared key.
+    const account = await openSettings({ pluginId: "acme.linear", section: "account" });
+    expect(account.result).toMatchObject({ home: "plugin-manager", requestedSection: null });
+    expect(usePluginManagerStore.getState().settingsRequest?.section).toBeUndefined();
   });
 
   it("never reaches another project's plugin", async () => {

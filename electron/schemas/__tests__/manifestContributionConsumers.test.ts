@@ -1248,6 +1248,38 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
       ],
       note: "Sidebar views only: evaluated live against the chrome when context to decide whether the view is on offer.",
     },
+    title: {
+      mode: "verbatim",
+      consumers: [
+        {
+          file: "src/components/Settings/pluginSettingsSearch.ts",
+          symbol: "buildPluginSettingsSearchEntries",
+        },
+      ],
+      note: "Settings views only: the custom section's title in settings search.",
+    },
+    description: {
+      mode: "verbatim",
+      consumers: [
+        {
+          file: "src/components/Settings/pluginSettingsSearch.ts",
+          symbol: "buildPluginSettingsSearchEntries",
+        },
+      ],
+      note: "Settings views only: the custom section's description in settings search.",
+    },
+    pages: {
+      mode: "cross-reference",
+      consumers: [
+        { file: "src/components/Plugin/PluginSettingsView.tsx", symbol: "PluginSettingsView" },
+        { file: "src/services/plugin/pluginSettingsHome.ts", symbol: "resolvePluginSettingsTarget" },
+        {
+          file: "src/components/Settings/pluginSettingsSearch.ts",
+          symbol: "buildPluginSettingsSearchEntries",
+        },
+      ],
+      note: "Settings views only: listed under the custom section and opened in place, the open page's id handed to the view as settingsContext.page; deep links and search results name a page by id, and an undeclared one is dropped.",
+    },
   },
   mcpServers: {
     id: {

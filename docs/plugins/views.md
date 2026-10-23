@@ -50,6 +50,23 @@ The host mounts it in your settings home, below the generated fields. The sectio
 
 **Fields it owns.** Mark a declared setting `editor: "view"` when this section is where it is edited — a credential behind a sign-in button, a table stored as `json`. The generated form then leaves it out, and a deep link to that key (`host.settings.open(key)`, the setup strip's **Open plugin settings**) lands on your section instead of a field. The setting keeps everything else a declaration gives it: `required` still drives the setup strip, and `host.settings.get` still reads it. A plugin that declares no settings view gets the field in the generated form anyway, so the value is never left uneditable.
 
+**Landing on a key you own.** A deep link to one of those keys is handed to your view as `settingsContext.focus: { key, nonce, acknowledge }` while the host brings the section into view. Focus that setting's control and call `acknowledge(true)`; call `acknowledge(false)` when you can't show it right now. If you answer `false`, or don't answer within about a second, the host lands on the whole section instead, so a view that ignores `focus` still works. Only the first answer for a `nonce` counts, and `focus` is withdrawn once the request is settled. The `key` is always one of your declared `editor: "view"` settings that lives in this home.
+
+**Search and pages.** Settings search finds your section by the plugin's name and by the view's optional `title` and `description`; without a `title` it is listed as "More settings". A section that has grown past one screen can declare `pages`, each `{ id, title, description? }` (up to 20, ids unique):
+
+```json
+{
+  "id": "connection",
+  "componentPath": "dist/settings.js",
+  "location": "settings",
+  "title": "Board sync",
+  "description": "Which board each project syncs to",
+  "pages": [{ "id": "columns", "title": "Column mapping", "description": "Statuses to columns" }]
+}
+```
+
+The host lists the pages under your section's root as rows with an **Open** button, and each page is a search result of its own. An open page keeps the same mount: the host draws the page's title and a **Back** button, and your view reads which page is open from `settingsContext.page` (`null` on the root) and renders that page's rows. Back returns focus to the page's Open button. Pages are navigation only — the values on them are still your declared settings, stored and scoped as declared. `title`, `description` and `pages` are accepted only on a `location: "settings"` view (`view_settings_field_misplaced`).
+
 ```jsx
 import { Button, SettingsRow } from "@daintreehq/plugin-ui";
 

@@ -567,7 +567,13 @@ function SettingsDialogInner({
     await flushDialog();
     const result = await actionService.dispatch(
       "plugin.openSettings",
-      { pluginId: plugin.instanceId, key: plugin.settingId },
+      {
+        pluginId: plugin.instanceId,
+        ...(plugin.settingId !== undefined ? { key: plugin.settingId } : {}),
+        ...(plugin.section !== undefined ? { section: plugin.section } : {}),
+        ...(plugin.page !== undefined ? { page: plugin.page } : {}),
+        ...(plugin.scope !== undefined ? { scope: plugin.scope } : {}),
+      },
       { source: "user" }
     );
     if (!result.ok) {
