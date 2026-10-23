@@ -20,7 +20,7 @@ export function liveGlobalAssistantDeps(): GlobalAssistantDeps {
     agentId: async () => {
       const { liveAssistantLaunchDeps } = await launch();
       const agents = await (await liveAssistantLaunchDeps()).launchableAgents();
-      return agents[0]?.id ?? null;
+      return agents.find((agent) => agent.byDefault)?.id ?? null;
     },
     provision: async (agentId) => {
       const service = await help();
@@ -89,12 +89,14 @@ export function liveGlobalAssistantDeps(): GlobalAssistantDeps {
 }
 
 let instance: GlobalAssistantService | null = null;
+let shuttingDown = false;
 
 export function getGlobalAssistantService(): GlobalAssistantService {
   if (instance) return instance;
-  const service = new GlobalAssistantService(liveGlobalAssistantDeps());
-  instance = service;
   const deps = liveGlobalAssistantDeps();
+  const service = new GlobalAssistantService(deps);
+  if (shuttingDown) service.closeAdmission();
+  instance = service;
   onAgentDefaultsChanged(() => {
     void deps.agentId().then((agentId) => service.onAgentChanged(agentId));
   });
@@ -107,4 +109,14 @@ export function getGlobalAssistantService(): GlobalAssistantService {
 /** Whether the service has been created; shutdown must not create it just to stop it. */
 export function peekGlobalAssistantService(): GlobalAssistantService | null {
   return instance;
+}
+
+/**
+ * Quit began. Latched whether or not the service exists yet, so a window that
+ * asks for it afterwards finds admission closed instead of launching a run the
+ * shutdown capture has already passed.
+ */
+export function beginGlobalAssistantShutdown(): Promise<void> {
+  shuttingDown = true;
+  return instance ? instance.shutdown() : Promise.resolve();
 }

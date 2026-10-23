@@ -731,8 +731,9 @@ describe("HelpSessionService", () => {
       expect(service.markTerminalForToken(result.token, "term-global")).toBe(true);
 
       expect(service.getWebContentsIdForToken(result.token)).toBe(NO_VIEW_HANDLE);
-      // Fails closed at the MCP server: no project to run host actions for.
-      expect(service.getViewlessProjectForToken(result.token)).toBeNull();
+      // The host's route, so tools list; the id names no registered project, so
+      // every call is refused rather than run in the active one.
+      expect(service.getViewlessProjectForToken(result.token)).toBe(GLOBAL_ASSISTANT_ID);
 
       await service.revokeByWebContentsId(42);
       await service.revokeByWindowId(7);

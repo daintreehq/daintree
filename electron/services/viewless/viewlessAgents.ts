@@ -523,8 +523,22 @@ export async function spawnHostAssistant(
   });
   if (!plan.command) return false;
   if (plan.cliDetail && !isAgentLaunchable(plan.cliDetail.state)) return false;
+  // The executable a fresh launch found, so a CLI outside the shell's PATH resumes too.
+  const registryCommand = getEffectiveAgentConfig(agentId)?.command;
   const resumed = spec.resumeAgentSessionId
-    ? buildResumeCommand(agentId, spec.resumeAgentSessionId, plan.launchFlags)
+    ? buildResumeCommand(
+        agentId,
+        spec.resumeAgentSessionId,
+        plan.launchFlags,
+        registryCommand !== undefined
+          ? resolveAgentLaunchBaseCommandFor(
+              registryCommand,
+              plan.cliDetail,
+              deps.hostPlatform.shellDialect,
+              undefined
+            )
+          : undefined
+      )
     : undefined;
   if (spec.resumeAgentSessionId && !resumed) return false;
   const layers = await deps.getLaunchEnvLayers(project.id).catch((err: unknown) => {

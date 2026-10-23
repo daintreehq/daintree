@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi, type Mock } from "vitest";
 import { GlobalAssistantService, type GlobalAssistantDeps } from "../GlobalAssistantService.js";
 
 function deferred<T>() {
@@ -11,10 +11,14 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 
-function makeDeps(overrides: Partial<GlobalAssistantDeps> = {}) {
+type MockedDeps = {
+  [K in keyof GlobalAssistantDeps]: Mock<GlobalAssistantDeps[K]>;
+};
+
+function makeDeps(overrides: Partial<MockedDeps> = {}) {
   let n = 0;
   const calls: string[] = [];
-  const deps = {
+  const deps: MockedDeps = {
     agentId: vi.fn(async () => "claude"),
     provision: vi.fn(async () => {
       n += 1;
@@ -34,7 +38,7 @@ function makeDeps(overrides: Partial<GlobalAssistantDeps> = {}) {
       calls.push(`kill-${id}`);
     }),
     ...overrides,
-  } satisfies GlobalAssistantDeps;
+  };
   return { deps, calls };
 }
 
@@ -64,8 +68,10 @@ describe("GlobalAssistantService", () => {
     deps.spawn.mockResolvedValueOnce(false);
     const service = new GlobalAssistantService(deps);
     await expect(service.ensureSession()).rejects.toMatchObject({ code: "INTERNAL" });
-    expect(calls.indexOf("revoke-s1")).toBeGreaterThan(-1);
-    expect(calls.indexOf("revoke-s1")).toBeLessThan(calls.findIndex((c) => c.startsWith("kill-")));
+    const revokedAt = calls.indexOf("revoke-s1");
+    const killedAt = calls.findIndex((c) => c.startsWith("kill-"));
+    expect(revokedAt).toBeGreaterThan(-1);
+    expect(killedAt).toBeGreaterThan(revokedAt);
     expect(service.getState().phase).toBe("absent");
     const state = await service.ensureSession();
     expect(state.phase).toBe("running");
@@ -110,13 +116,77 @@ describe("GlobalAssistantService", () => {
     const service = new GlobalAssistantService(deps);
     const launch = service.ensureSession();
     await vi.waitFor(() => expect(deps.spawn).toHaveBeenCalled());
-    const torn = service.teardown("discard");
+    const terminalId = deps.spawn.mock.calls[0]![0].terminalId;
+    await service.teardown("discard");
+    deps.kill.mockClear();
     spawn.resolve(true);
     await expect(launch).rejects.toMatchObject({ code: "CANCELLED" });
-    await torn;
-    expect(calls.filter((c) => c === "revoke-s1").length).toBeGreaterThanOrEqual(1);
-    expect(calls.some((c) => c.startsWith("kill-"))).toBe(true);
+    expect(deps.kill).toHaveBeenCalledWith(terminalId);
+    expect(calls).toContain("revoke-s1");
     expect(service.getState().phase).toBe("absent");
+  });
+
+  it("does not publish a run whose PTY exited before the spawn confirmed", async () => {
+    const spawn = deferred<boolean>();
+    const { deps } = makeDeps();
+    deps.spawn.mockReturnValueOnce(spawn.promise);
+    const service = new GlobalAssistantService(deps);
+    const launch = service.ensureSession();
+    await vi.waitFor(() => expect(deps.spawn).toHaveBeenCalled());
+    service.handleTerminalExit(deps.spawn.mock.calls[0]![0].terminalId);
+    spawn.resolve(true);
+    await expect(launch).rejects.toMatchObject({ code: "INTERNAL" });
+    expect(service.getState().phase).toBe("absent");
+    expect((await service.ensureSession()).phase).toBe("running");
+    expect(deps.provision).toHaveBeenCalledTimes(2);
+  });
+
+  it("waits for a teardown still revoking before it provisions a replacement", async () => {
+    const revoke = deferred<void>();
+    const { deps } = makeDeps();
+    const service = new GlobalAssistantService(deps);
+    await service.ensureSession();
+    deps.revoke.mockReturnValueOnce(revoke.promise);
+    const torn = service.teardown("discard");
+    const reopened = service.ensureSession();
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(deps.provision).toHaveBeenCalledTimes(1);
+    revoke.resolve();
+    await torn;
+    expect((await reopened).phase).toBe("running");
+    expect(deps.provision).toHaveBeenCalledTimes(2);
+  });
+
+  it("cancels a launch whose agent is changed while it provisions", async () => {
+    const provision = deferred<{
+      sessionId: string;
+      sessionPath: string;
+      token: string;
+      mcpUrl: null;
+    }>();
+    const { deps } = makeDeps();
+    deps.provision.mockReturnValue(provision.promise as never);
+    const service = new GlobalAssistantService(deps);
+    const launch = service.ensureSession();
+    await vi.waitFor(() => expect(deps.provision).toHaveBeenCalled());
+    await service.onAgentChanged("codex");
+    provision.resolve({ sessionId: "late", sessionPath: "/g", token: "t", mcpUrl: null });
+    await expect(launch).rejects.toMatchObject({ code: "CANCELLED" });
+    expect(deps.spawn).not.toHaveBeenCalled();
+  });
+
+  it("a restart or discard during shutdown cannot erase the captured conversation", async () => {
+    const capture = deferred<void>();
+    const { deps } = makeDeps();
+    const service = new GlobalAssistantService(deps);
+    await service.ensureSession();
+    deps.revoke.mockReturnValueOnce(capture.promise);
+    const down = service.shutdown();
+    await expect(service.restart()).rejects.toMatchObject({ code: "CANCELLED" });
+    void service.discard();
+    capture.resolve();
+    await down;
+    expect(deps.discardResume).not.toHaveBeenCalled();
   });
 
   it("discards a provision that finishes after teardown without spawning", async () => {
@@ -143,7 +213,10 @@ describe("GlobalAssistantService", () => {
     const service = new GlobalAssistantService(deps);
     await service.ensureSession();
     await service.discard();
-    expect(calls.indexOf("revoke-s1")).toBeLessThan(calls.findIndex((c) => c.startsWith("kill-")));
+    const revokedAt = calls.indexOf("revoke-s1");
+    const killedAt = calls.findIndex((c) => c.startsWith("kill-"));
+    expect(revokedAt).toBeGreaterThan(-1);
+    expect(killedAt).toBeGreaterThan(revokedAt);
     expect(deps.discardResume).toHaveBeenCalledTimes(1);
     expect(service.getState().phase).toBe("absent");
 

@@ -94,6 +94,9 @@ export class GlobalAssistantService {
   private generation = 0;
   private launch: Promise<GlobalAssistantState> | null = null;
   private launchGeneration = -1;
+  /** The agent the launch in flight chose, so a change of agent can cancel it. */
+  private launchAgentId: string | null = null;
+  private startingExited = false;
   /** The run being started, known before its PTY is confirmed so teardown can reach it. */
   private starting: Run | null = null;
   private run: Run | null = null;
@@ -147,7 +150,10 @@ export class GlobalAssistantService {
       generation,
       options?.fresh === true
     ).finally(() => {
-      if (this.launch === launch) this.launch = null;
+      if (this.launch === launch) {
+        this.launch = null;
+        this.launchAgentId = null;
+      }
       this.emit();
     });
     this.launch = launch;
@@ -158,8 +164,15 @@ export class GlobalAssistantService {
     const superseded = () => generation !== this.generation || this.closed;
     const cancelled = () => refuse("CANCELLED", "The global assistant was stopped while starting.");
 
+    // A run being torn down may still be revoking: never provision beside it,
+    // or its cleanup could remove what this launch writes.
+    await this.teardownTail;
+    if (superseded()) throw cancelled();
+
     const agentId = await this.deps.agentId();
     if (!agentId) throw refuse("UNSUPPORTED", "No agent is available to run the global assistant.");
+    this.launchAgentId = agentId;
+    this.startingExited = false;
     if (superseded()) throw cancelled();
 
     const pending = fresh ? null : await this.deps.takeResume();
@@ -213,10 +226,12 @@ export class GlobalAssistantService {
 
     // Re-checked after the spawn: a teardown that ran during it has already
     // revoked this session, and a PTY it could not yet see is ours to end.
-    if (!spawned || superseded()) {
+    if (!spawned || this.startingExited || superseded()) {
       await this.abandon(run, "launch-failed");
       releaseResume();
-      throw spawned ? cancelled() : refuse("INTERNAL", "The global assistant failed to start.");
+      throw spawned && !this.startingExited
+        ? cancelled()
+        : refuse("INTERNAL", "The global assistant failed to start.");
     }
 
     this.starting = null;
@@ -240,6 +255,9 @@ export class GlobalAssistantService {
    * forgets the conversation; shutdown asks the agent to flush it.
    */
   teardown(reason: GlobalAssistantEndReason): Promise<void> {
+    // After quit began, only the shutdown capture may end a run: a discard or
+    // restart then would erase the conversation it is capturing.
+    if (this.closed && reason !== "shutdown") return this.teardownTail;
     this.generation += 1;
     const run = this.run ?? this.starting;
     this.run = null;
@@ -268,6 +286,7 @@ export class GlobalAssistantService {
 
   /** Start over on a new conversation. */
   async restart(): Promise<GlobalAssistantState> {
+    if (this.closed) throw refuse("CANCELLED", "The app is shutting down.");
     await this.teardown("restart");
     return this.ensureSession({ fresh: true });
   }
@@ -279,21 +298,27 @@ export class GlobalAssistantService {
 
   /** The assistant agent changed: the run belongs to the old one. Nothing starts until asked. */
   async onAgentChanged(agentId: string | null): Promise<void> {
-    const current = this.run?.agentId ?? this.starting?.agentId;
+    const current = this.run?.agentId ?? this.starting?.agentId ?? this.launchAgentId ?? undefined;
     if (current === undefined || current === agentId) return;
     await this.teardown("agent-change");
   }
 
   /** The PTY ended by itself; credentials go with it. */
   handleTerminalExit(terminalId: string): void {
+    if (this.starting?.terminalId === terminalId) this.startingExited = true;
     if (this.run?.terminalId !== terminalId) return;
     void this.teardown("exited");
   }
 
-  /** App quit: stop admitting, then end the run, capturing its conversation. */
-  async shutdown(): Promise<void> {
+  /** Quit began: nothing new starts, however late it is asked for. */
+  closeAdmission(): void {
     this.closed = true;
     this.attachments.clear();
+  }
+
+  /** App quit: stop admitting, then end the run, capturing its conversation. */
+  async shutdown(): Promise<void> {
+    this.closeAdmission();
     await this.teardown("shutdown");
   }
 

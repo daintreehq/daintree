@@ -1382,8 +1382,9 @@ export class HelpSessionService {
     if (!record || record.revoked || record.projectViewWebContentsId !== NO_VIEW_HANDLE) {
       return null;
     }
-    // No project to run host actions for: the bare pin fails closed (#14159).
-    if (isGlobalAssistantId(record.projectId)) return null;
+    // The global assistant (#14159) takes the host's route too, so it can list
+    // tools; its id names no registered project, so every call is refused as
+    // NO_FRONTEND_ATTACHED rather than run in whichever project is active.
     return record.projectId;
   }
 
