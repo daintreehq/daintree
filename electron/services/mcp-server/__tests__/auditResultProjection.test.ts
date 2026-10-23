@@ -460,3 +460,50 @@ describe("host.ensureProject audit (#14140)", () => {
     ).toMatchObject({ accept: "unpushed" });
   });
 });
+
+describe("host.settings audit (#14167)", () => {
+  it("records the hosts, settings and outcomes, never a value, name, detail or ticket", () => {
+    const result = projectAuditResult("host.settings", {
+      outcome: "ok",
+      detail: "PROSE-SENTINEL",
+      retryAfterMs: null,
+      ticket: "TICKET-SENTINEL",
+      hosts: [
+        {
+          hostId: "studio-01",
+          name: "NAME-SENTINEL",
+          outcome: "conflict",
+          detail: "PROSE-SENTINEL",
+          settings: [
+            {
+              key: "agentDefaults.defaultAgent",
+              value: "VALUE-SENTINEL",
+              proposed: "VALUE-SENTINEL",
+            },
+            { key: "KEY-SENTINEL", value: 1 },
+          ],
+        },
+      ],
+    });
+    const args = projectAuditArgs("host.settings", {
+      operation: "preview",
+      hostIds: ["studio-01"],
+      patch: { "agentDefaults.defaultAgent": "VALUE-SENTINEL", "KEY-SENTINEL": true },
+      ticket: "TICKET-SENTINEL",
+    });
+
+    expect(result).toEqual({
+      outcome: "ok",
+      ticketed: true,
+      hosts: [{ hostId: "studio-01", outcome: "conflict", keys: ["agentDefaults.defaultAgent"] }],
+    });
+    expect(args).toMatchObject({
+      operation: "preview",
+      keys: ["agentDefaults.defaultAgent"],
+      ticketed: true,
+    });
+    const audited = JSON.stringify([summarizeMcpResult(result), summarizeMcpArgs(args)]);
+    expect(audited).not.toContain("SENTINEL");
+    expect(projectAuditResult("host.settings", "nope")).toEqual({ status: "unrecognized" });
+  });
+});

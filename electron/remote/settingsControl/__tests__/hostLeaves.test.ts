@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const canopy = vi.hoisted(() => ({
   state: { mode: "unset" as "unset" | "on" | "hidden", modeRevision: 4, hostEpoch: "epoch" },
   changeCanopyMode: vi.fn(),
+  checkCanopyModeRate: vi.fn(),
 }));
 const defaults = vi.hoisted(() => ({
   values: { defaultAgent: "claude" } as Record<string, string | null>,
@@ -17,6 +18,7 @@ const idle = vi.hoisted(() => ({
 vi.mock("../../../ipc/handlers/canopy.js", () => ({
   canopyModeState: () => ({ ...canopy.state }),
   changeCanopyMode: canopy.changeCanopyMode,
+  checkCanopyModeRate: canopy.checkCanopyModeRate,
 }));
 vi.mock("../../../services/agentDefaults.js", () => ({
   readAgentDefaults: () => ({ ...defaults.values }),
@@ -35,6 +37,7 @@ import { loadHostSettingsLeaves } from "../hostLeaves.js";
 beforeEach(() => {
   canopy.state.mode = "unset";
   canopy.changeCanopyMode.mockReset();
+  canopy.checkCanopyModeRate.mockReset();
   defaults.setAgentDefaults.mockReset();
   idle.updateConfig.mockReset();
 });
@@ -64,6 +67,19 @@ describe("the host's own setters for named settings (#14167)", () => {
     // Idle alerts have no change broadcast of their own; the others do.
     expect(written.reconcile).toBe(true);
     expect(leaves.write({ "agentDefaults.defaultAgent": null }).reconcile).toBe(false);
+  });
+
+  it("holds a Canopy change to the same rate limit as this machine's views, before any write", async () => {
+    canopy.checkCanopyModeRate.mockImplementationOnce(() => {
+      throw Object.assign(new Error("Rate limit exceeded"), { code: "RATE_LIMITED" });
+    });
+    const leaves = await loadHostSettingsLeaves();
+    expect(() =>
+      leaves.write({ canopyMode: "hidden", "idleTerminalNotify.enabled": true })
+    ).toThrow(expect.objectContaining({ code: "RATE_LIMITED" }));
+    expect(idle.updateConfig).not.toHaveBeenCalled();
+    expect(leaves.write({ "idleTerminalNotify.enabled": true }).reconcile).toBe(true);
+    expect(canopy.checkCanopyModeRate).toHaveBeenCalledTimes(1);
   });
 
   it("refuses to turn a hidden Canopy on before writing anything else in the patch", async () => {

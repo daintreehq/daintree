@@ -150,6 +150,7 @@ describe("runHostControlTool (#13493)", () => {
         { operation: "preview", hostIds: ["h"], patch: { appTheme: "x" } },
         { operation: "read", hostIds: ["h"], ticket: "t" },
         { operation: "read" },
+        { operation: "read", hostIds: ["h"], keys: [] },
       ].map((args) => runHostControlTool("host.settings", args, access))
     );
     uninstall();

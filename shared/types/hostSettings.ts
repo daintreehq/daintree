@@ -152,8 +152,9 @@ export interface HostSettingsUpdatePayload {
 
 /**
  * When the host's reply was lost, its settings are read back to tell: a change
- * the readback shows is `applied` with `confirmedBy: "readback"`, one it shows
- * never landed is `not-applied`. `unconfirmed`: the host couldn't be read back
+ * the readback shows is `applied` with `confirmedBy: "readback"`, which says
+ * the host now holds what was asked for (Canopy's own count also says it was
+ * this change), and one it shows never landed is `not-applied`. `unconfirmed`: the host couldn't be read back
  * either, so whether the change landed is unknown until it is read again.
  */
 export interface HostSettingsUpdateResult {

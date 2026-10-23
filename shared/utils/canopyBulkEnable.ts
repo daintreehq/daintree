@@ -42,20 +42,14 @@ export interface BulkResult {
   seen: BulkSeen | null;
 }
 
-/**
- * The part of a host's Canopy state a run reads: a full snapshot is one, and
- * so is a host's `canopyMode` setting read by name (#14167).
- */
-export type BulkModeState = Pick<CanopySnapshot, "mode" | "hostEpoch" | "modeRevision">;
-
 /** What the run asks of one host's Canopy, and nothing else. */
 export interface BulkTransport {
-  getSnapshot(): Promise<BulkModeState>;
+  getSnapshot(): Promise<CanopySnapshot>;
   setMode(
     mode: CanopyMode,
     expectRevision: number,
     expectHostEpoch: string
-  ): Promise<BulkModeState>;
+  ): Promise<CanopySnapshot>;
   /** Dials the host if it isn't up; false when it still isn't. Absent for the window's own host. */
   connect?(): Promise<boolean>;
   /** Hands back whatever the run opened on the host. Called once the target is done. */
@@ -90,13 +84,13 @@ function done(
   return { hostId: target.hostId, name: target.name, outcome, detail, seen };
 }
 
-function seenOf(snapshot: BulkModeState): BulkSeen | null {
+function seenOf(snapshot: CanopySnapshot): BulkSeen | null {
   return snapshot.hostEpoch !== undefined && snapshot.modeRevision !== undefined
     ? { hostEpoch: snapshot.hostEpoch, modeRevision: snapshot.modeRevision }
     : null;
 }
 
-type Read = { snapshot: BulkModeState } | { snapshot: null; unsupported: boolean };
+type Read = { snapshot: CanopySnapshot } | { snapshot: null; unsupported: boolean };
 
 /** A read, dialling the host once if it isn't up. */
 async function read(transport: BulkTransport, signal: AbortSignal | undefined): Promise<Read> {
@@ -158,7 +152,7 @@ async function enableOne(
     if (signal?.aborted) {
       return done(target, "uncertain", "Stopped before this host was finished.", lastSeen);
     }
-    let reply: BulkModeState;
+    let reply: CanopySnapshot;
     try {
       reply = await transport.setMode(step, revision, seen.hostEpoch);
     } catch (error) {

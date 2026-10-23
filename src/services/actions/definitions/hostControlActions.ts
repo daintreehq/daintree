@@ -122,8 +122,8 @@ export function registerHostControlActions(actions: ActionRegistry): void {
     mcpOutputSchema: true,
     mcpAnnotations: {
       readOnlyHint: false,
-      // A ticket is spent by its first apply; a repeat writes nothing.
-      idempotentHint: true,
+      // A repeated preview makes a new ticket and can retire an older one.
+      idempotentHint: false,
       destructiveHint: false,
       openWorldHint: true,
     },

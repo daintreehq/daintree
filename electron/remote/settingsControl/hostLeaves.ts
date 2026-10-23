@@ -64,6 +64,8 @@ export async function loadHostSettingsLeaves(): Promise<HostSettingsLeaves> {
     refusal: hostSettingRefusal,
     write: (patch: HostSettingsPatch) => {
       const mode = patch.canopyMode;
+      // Every refusal comes before the first write, so a patch lands whole or not at all.
+      if (mode !== undefined) canopy.checkCanopyModeRate();
       if (mode === "on" && canopy.canopyModeState().mode === "hidden") {
         throw new AppError({
           code: "PERMISSION",

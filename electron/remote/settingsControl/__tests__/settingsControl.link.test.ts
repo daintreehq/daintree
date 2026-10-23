@@ -332,6 +332,45 @@ describe("host settings over a link, with no project or window on the host", () 
       expect(result.settings[0]?.value).toBe(45);
     });
 
+    it("never takes an incomplete readback for a confirmation", async () => {
+      const call = vi.fn(async (method: string, _payload: unknown): Promise<unknown> => {
+        if (method === SettingsControlLinkMethod.UPDATE) {
+          throw new AppError({ code: "INTERNAL", message: "No reply" });
+        }
+        return { instanceId: "launch-1", settings: [] };
+      });
+      const hollow = clientOver(() => ({ isOpen: true, call }));
+      const result = await hollow.update({
+        hostId: HOST,
+        patch: { "idleTerminalNotify.enabled": true },
+        expect: { instanceId: "launch-1", revisions: { "idleTerminalNotify.enabled": "v:false" } },
+      });
+      expect(result.outcome).toBe("unconfirmed");
+    });
+
+    it("tells Canopy reaching the asked-for mode through someone else's changes from this one landing", async () => {
+      const racing: SettingsControlSession = {
+        get isOpen() {
+          return sessions.client.isOpen;
+        },
+        call: async (method, payload, options) => {
+          if (method === SettingsControlLinkMethod.UPDATE) {
+            state.values.canopyMode = "on";
+            state.box.canopyRevision = 3;
+            throw new AppError({ code: "INTERNAL", message: "No reply" });
+          }
+          return sessions.client.call(method, payload, options);
+        },
+      };
+      const racy = clientOver(() => racing);
+      const result = await racy.update({
+        hostId: HOST,
+        patch: { canopyMode: "on" },
+        expect: { instanceId: "launch-1", revisions: { canopyMode: "0" } },
+      });
+      expect(result.outcome).toBe("conflict");
+    });
+
     it("is unconfirmed when the link is gone too, and nothing is resent", async () => {
       const call = vi.fn(async (_method: string, _payload: unknown): Promise<unknown> => {
         throw new AppError({ code: "HOST_DISCONNECTED", message: "gone" });

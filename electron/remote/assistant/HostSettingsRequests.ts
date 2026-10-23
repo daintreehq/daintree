@@ -19,11 +19,12 @@ import {
 import type { McpConfirmationDecision } from "../../../shared/types/ipc/mcpServer.js";
 import { LOCAL_HOST_ID, type HostId } from "../../../shared/types/remoteHosts.js";
 import {
-  enableCanopyOnHosts,
-  type BulkModeState,
-  type BulkResult,
-  type BulkTransport,
-} from "../../../shared/utils/canopyBulkEnable.js";
+  CANOPY_REDACTION,
+  CANOPY_STOP_ON_EACH,
+  canopySendsFrom,
+  canopySendsFromHosts,
+  canopyStopOn,
+} from "../../../shared/config/canopyTerms.js";
 
 type HostRow = HostSettingsResult["hosts"][number];
 type Detail = { outcome: HostControlOutcomeCode; detail: string | null; retryAfterMs: null };
@@ -80,6 +81,14 @@ const CONFLICT_DETAIL =
   "The setting changed there since the preview, or the host restarted. Nothing was changed; preview again.";
 const UNCONFIRMED_DETAIL =
   "The host didn't answer and couldn't be read back. Read it before trying again.";
+const ALREADY_DETAIL = "Already set that way. Nothing was changed there.";
+const PARTIAL_PREFIX = "Canopy was shown there, but not turned on. ";
+const PARTIAL_CONFLICT_DETAIL = `${PARTIAL_PREFIX}It changed there meanwhile; preview again.`;
+const PARTIAL_GONE_DETAIL = `${PARTIAL_PREFIX}The assistant was replaced or control was turned off.`;
+const RATE_LIMITED_DETAIL =
+  "The host is taking too many changes at once. Wait, then preview again.";
+const UNREADABLE_DETAIL =
+  "The host's answer couldn't be read. Its Daintree may be a different version.";
 
 interface FrozenHost {
   hostId: HostId;
@@ -123,6 +132,10 @@ function hostOutcome(error: unknown): Detail {
       return { outcome: "unsupported", detail: UNSUPPORTED_DETAIL, retryAfterMs: null };
     case "NOT_FOUND":
       return { outcome: "not_found", detail: NO_HOST_DETAIL, retryAfterMs: null };
+    case "RATE_LIMITED":
+      return { outcome: "rate_limited", detail: RATE_LIMITED_DETAIL, retryAfterMs: null };
+    case "INTERNAL":
+      return { outcome: "unsupported", detail: UNREADABLE_DETAIL, retryAfterMs: null };
     case "VALIDATION":
     case "PERMISSION": {
       const said = (error as { userMessage?: unknown } | null)?.userMessage;
@@ -299,14 +312,26 @@ export class HostSettingsRequests {
           `${host.name}: ${HOST_SETTING_LABELS[leaf.key]} ${shown(leaf.key, leaf.from)} → ${shown(leaf.key, leaf.to)}`
         );
       }
-      if (changes.some((leaf) => leaf.key === "canopyMode" && leaf.to === "on")) {
-        lines.push(
-          `${host.name}: Canopy will send that host's agent screens off the machine to be read`
-        );
-      }
-      if (changes.some((leaf) => leaf.key === "canopyMode" && leaf.from === "hidden")) {
+      if (
+        changes.some(
+          (leaf) => leaf.key === "canopyMode" && leaf.from === "hidden" && leaf.to === "on"
+        )
+      ) {
         lines.push(`${host.name}: Canopy is hidden there, and will be shown first`);
       }
+    }
+    // The same consent Settings asks for before Canopy is turned on there.
+    const reading = ticket.hosts
+      .filter((host) =>
+        host.leaves.some(
+          (leaf) => leaf.key === "canopyMode" && leaf.to === "on" && leaf.from !== "on"
+        )
+      )
+      .map((host) => host.name);
+    if (reading.length === 1) {
+      lines.push(canopySendsFrom(reading[0]!), CANOPY_REDACTION, canopyStopOn(reading[0]!));
+    } else if (reading.length > 1) {
+      lines.push(canopySendsFromHosts(reading), CANOPY_REDACTION, CANOPY_STOP_ON_EACH);
     }
     return lines;
   }
@@ -371,28 +396,24 @@ export class HostSettingsRequests {
     if (!stillRunning() || ticket.hosts.some((host) => !this.deps.controlOn(host.hostId))) {
       return none("policy_rejected", GONE_DETAIL);
     }
-    const rows = await Promise.all(ticket.hosts.map((host) => this.applyHost(host)));
+    const rows = await Promise.all(
+      ticket.hosts.map((host) =>
+        this.applyHost(host, () => stillRunning() && this.deps.controlOn(host.hostId))
+      )
+    );
     return { ...this.ok(), ticket: null, hosts: rows };
   }
 
   /**
-   * One host's part of an approved ticket. Everything but turning Canopy on is
-   * one guarded update; turning it on goes through the same run Settings'
-   * bulk enable uses, which shows a hidden Canopy first and reads back what
-   * landed, pinned to the revision and launch the preview saw.
+   * One host's part of an approved ticket: one guarded update of every
+   * setting the ticket changes there, which the host makes whole or not at
+   * all, against the revisions and launch the preview froze. A hidden Canopy
+   * being turned on takes a second guarded step, since the host shows it
+   * before it can be turned on. Before each write the person's control switch
+   * and the calling run are checked again; the values reported are the host's
+   * own answers, never what the preview assumed.
    */
-  private async applyHost(host: FrozenHost): Promise<HostRow> {
-    const client = this.deps.client();
-    if (!client) {
-      return this.refusedRow(host.hostId, host.name, {
-        outcome: "unsupported",
-        detail: UNSUPPORTED_DETAIL,
-        retryAfterMs: null,
-      });
-    }
-    const changes = host.leaves.filter((leaf) => leaf.from !== leaf.to);
-    const canopyOn = changes.find((leaf) => leaf.key === "canopyMode" && leaf.to === "on");
-    const plain = changes.filter((leaf) => leaf !== canopyOn);
+  private async applyHost(host: FrozenHost, authorized: () => boolean): Promise<HostRow> {
     const settings = new Map<HostSettingKey, HostSettingValue>(
       host.leaves.map((leaf) => [leaf.key, leaf.from])
     );
@@ -403,104 +424,64 @@ export class HostSettingsRequests {
       detail,
       settings: [...settings].map(([key, value]) => ({ key, value })),
     });
+    const changes = host.leaves.filter((leaf) => leaf.from !== leaf.to);
+    if (changes.length === 0) return row("ok", ALREADY_DETAIL);
+    const client = this.deps.client();
+    if (!client) return row("unsupported", UNSUPPORTED_DETAIL);
 
-    // Checked as a whole first, so a host where any of it moved is left
-    // untouched rather than half changed; each write is guarded again below.
-    try {
-      const now = await client.read({ hostId: host.hostId, keys: changes.map((leaf) => leaf.key) });
-      for (const leaf of now.settings) settings.set(leaf.key, leaf.value);
-      const moved =
-        now.instanceId !== host.instanceId ||
-        changes.some(
-          (leaf) => now.settings.find((fresh) => fresh.key === leaf.key)?.revision !== leaf.revision
-        );
-      if (moved) return row("conflict", CONFLICT_DETAIL);
-    } catch (error) {
-      const refusal = hostOutcome(error);
-      return row(refusal.outcome, refusal.detail);
-    }
-
-    if (plain.length > 0) {
+    const canopy = changes.find((leaf) => leaf.key === "canopyMode");
+    const showFirst = canopy?.from === "hidden" && canopy.to === "on";
+    let landed = false;
+    /** The revisions the host last reported, for a second step to be made against. */
+    const reported = new Map<HostSettingKey, string>();
+    const step = async (
+      patch: HostSettingsPatch,
+      revisions: Partial<Record<HostSettingKey, string>>
+    ): Promise<HostRow | null> => {
+      if (!authorized()) return row("policy_rejected", landed ? PARTIAL_GONE_DETAIL : GONE_DETAIL);
       let result: HostSettingsUpdateResult;
       try {
         result = await client.update({
           hostId: host.hostId,
-          patch: Object.fromEntries(plain.map((leaf) => [leaf.key, leaf.to])) as HostSettingsPatch,
-          expect: {
-            instanceId: host.instanceId,
-            revisions: Object.fromEntries(plain.map((leaf) => [leaf.key, leaf.revision])),
-          },
+          patch,
+          expect: { instanceId: host.instanceId, revisions },
         });
       } catch (error) {
         const refusal = hostOutcome(error);
-        return row(refusal.outcome, refusal.detail);
+        return row(
+          refusal.outcome,
+          landed ? `${PARTIAL_PREFIX}${refusal.detail ?? ""}` : refusal.detail
+        );
       }
-      for (const leaf of result.settings) settings.set(leaf.key, leaf.value);
-      if (result.outcome === "conflict" || result.outcome === "not-applied") {
-        return row("conflict", CONFLICT_DETAIL);
+      for (const leaf of result.settings) {
+        settings.set(leaf.key, leaf.value);
+        reported.set(leaf.key, leaf.revision);
       }
-      if (result.outcome === "unconfirmed") return row("ambiguous", UNCONFIRMED_DETAIL);
-    }
-
-    if (canopyOn) {
-      const revision = Number(canopyOn.revision);
-      const [result] = await enableCanopyOnHosts(
-        [{ hostId: host.hostId, name: host.name }],
-        { transportFor: () => this.canopyTransport(host.hostId) },
-        new Map([[host.hostId, { hostEpoch: host.instanceId, modeRevision: revision }]])
-      );
-      const outcome = (result as BulkResult).outcome;
-      if (outcome === "enabled" || outcome === "already-enabled") settings.set("canopyMode", "on");
-      switch (outcome) {
-        case "enabled":
-        case "already-enabled":
-          break;
-        case "conflicted":
-          return row("conflict", CONFLICT_DETAIL);
-        case "refused":
-          return row("policy_rejected", `${REFUSED_DETAIL_PREFIX}${result!.detail}`);
-        case "unsupported":
-          return row("unsupported", UNSUPPORTED_DETAIL);
-        case "inaccessible":
-          return row("disconnected", DISCONNECTED_DETAIL);
-        case "uncertain":
+      switch (result.outcome) {
+        case "applied":
+          landed = true;
+          return null;
+        case "conflict":
+        case "not-applied":
+          return row("conflict", landed ? PARTIAL_CONFLICT_DETAIL : CONFLICT_DETAIL);
+        case "unconfirmed":
           return row("ambiguous", UNCONFIRMED_DETAIL);
       }
+    };
+
+    const first = Object.fromEntries(
+      changes.map((leaf) => [leaf.key, leaf.key === "canopyMode" && showFirst ? "unset" : leaf.to])
+    ) as HostSettingsPatch;
+    const stopped = await step(
+      first,
+      Object.fromEntries(changes.map((leaf) => [leaf.key, leaf.revision]))
+    );
+    if (stopped) return stopped;
+    const shownAt = reported.get("canopyMode");
+    if (showFirst && shownAt !== undefined) {
+      const then = await step({ canopyMode: "on" }, { canopyMode: shownAt });
+      if (then) return then;
     }
     return row("ok", null);
-  }
-
-  /** A host's Canopy mode as the bulk run reads and changes it, by name over the link. */
-  private canopyTransport(hostId: HostId): BulkTransport {
-    const stateOf = (instanceId: string | null, settings: HostSettingsSnapshot["settings"]) => {
-      const leaf = settings.find((candidate) => candidate.key === "canopyMode");
-      if (!leaf || instanceId === null) throw new Error("No Canopy mode in the reply");
-      return {
-        mode: leaf.value as BulkModeState["mode"],
-        hostEpoch: instanceId,
-        modeRevision: Number(leaf.revision),
-      } satisfies BulkModeState;
-    };
-    return {
-      getSnapshot: async () => {
-        const client = this.deps.client();
-        if (!client) throw new Error("No settings client");
-        const snapshot = await client.read({ hostId, keys: ["canopyMode"] });
-        return stateOf(snapshot.instanceId, snapshot.settings);
-      },
-      setMode: async (mode, expectRevision, expectHostEpoch) => {
-        const client = this.deps.client();
-        if (!client) throw new Error("No settings client");
-        const result = await client.update({
-          hostId,
-          patch: { canopyMode: mode },
-          expect: { instanceId: expectHostEpoch, revisions: { canopyMode: `${expectRevision}` } },
-        });
-        // No reply and no readback: the run reads the host again itself.
-        if (result.outcome === "unconfirmed") throw new Error("Unconfirmed");
-        return stateOf(result.instanceId, result.settings);
-      },
-      release: () => {},
-    };
   }
 }

@@ -93,7 +93,12 @@ function invalidArgs(): { ok: false; code: "INVALID_ARGS"; message: string } {
 function settingsArgsFit(args: HostSettingsArgs): boolean {
   switch (args.operation) {
     case "read":
-      return args.hostIds !== undefined && args.patch === undefined && args.ticket === undefined;
+      return (
+        args.hostIds !== undefined &&
+        (args.keys === undefined || args.keys.length > 0) &&
+        args.patch === undefined &&
+        args.ticket === undefined
+      );
     case "preview":
       return (
         args.hostIds !== undefined &&

@@ -35,7 +35,11 @@ beforeEach(() => {
   api.read.mockReset();
   api.update.mockReset();
   api.read.mockResolvedValue(snapshot());
-  (window as unknown as { electron: unknown }).electron = { hostSettings: api };
+  Object.defineProperty(window, "electron", {
+    value: { hostSettings: api },
+    configurable: true,
+    writable: true,
+  });
 });
 
 async function renderSection(connected = true) {

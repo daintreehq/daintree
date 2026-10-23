@@ -1,5 +1,6 @@
 import {
   HOST_SETTING_KEYS,
+  hostSettingRefusal,
   HostSettingsPatchSchema,
   HostSettingsReadingSchema,
   HostSettingsUpdateReplySchema,
@@ -40,7 +41,28 @@ function errorCode(error: unknown): string | null {
 }
 
 /** Codes that are the host's own answer: the change was refused, not lost. */
-const REFUSALS: ReadonlySet<string> = new Set(["VALIDATION", "PERMISSION", "UNSUPPORTED"]);
+const REFUSALS: ReadonlySet<string> = new Set([
+  "VALIDATION",
+  "PERMISSION",
+  "UNSUPPORTED",
+  "RATE_LIMITED",
+]);
+
+/**
+ * Exactly the keys asked about, each once, each holding a value of its own
+ * kind. Anything less can't say what the host has, so it is never read as
+ * a confirmation.
+ */
+function coversExactly(settings: readonly HostSettingLeaf[], keys: readonly HostSettingKey[]) {
+  if (settings.length !== keys.length) return false;
+  const seen = new Set<HostSettingKey>();
+  for (const leaf of settings) {
+    if (!keys.includes(leaf.key) || seen.has(leaf.key)) return false;
+    if (hostSettingRefusal(leaf.key, leaf.value) !== null) return false;
+    seen.add(leaf.key);
+  }
+  return true;
+}
 
 function sameValue(a: unknown, b: unknown): boolean {
   return JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
@@ -89,6 +111,12 @@ export class ClientSettingsControl {
           code: "UNSUPPORTED",
           message: "The host can't be edited from here",
           userMessage: `Daintree on ${host} is too old to change its settings from here. Update it there and try again.`,
+        });
+      case "RATE_LIMITED":
+        return new AppError({
+          code: "RATE_LIMITED",
+          message: "The host is limiting changes",
+          userMessage: `${host} is taking too many changes at once. Wait a moment and try again.`,
         });
       case "HOST_DISCONNECTED":
         return new AppError({
@@ -144,7 +172,7 @@ export class ClientSettingsControl {
       );
     }
     const parsed = HostSettingsReadingSchema.safeParse(raw);
-    if (!parsed.success) {
+    if (!parsed.success || !coversExactly(parsed.data.settings, keys)) {
       throw new AppError({
         code: "INTERNAL",
         message: "The host's settings reply was malformed",
@@ -204,7 +232,7 @@ export class ClientSettingsControl {
         return { ...base, ...(await this.readBack(hostId, keys, patch, payload.expect)) };
       }
       const reply = HostSettingsUpdateReplySchema.safeParse(raw);
-      if (!reply.success) {
+      if (!reply.success || !coversExactly(reply.data.settings, keys)) {
         // A host that answered nonsense may still have written: its state says.
         return { ...base, ...(await this.readBack(hostId, keys, patch, payload.expect)) };
       }
@@ -240,7 +268,14 @@ export class ClientSettingsControl {
     });
     // A restart since the read: whatever stands there now isn't this change's doing.
     if (now.instanceId !== expect.instanceId) return result("conflict", now.settings);
-    const landed = now.settings.every((leaf) => sameValue(leaf.value, patch[leaf.key]));
+    // Canopy counts its own changes, so its readback says whose change stands:
+    // this one's is the very next revision, or none when it was already so.
+    const landed = now.settings.every((leaf) => {
+      if (!sameValue(leaf.value, patch[leaf.key])) return false;
+      if (leaf.key !== "canopyMode") return true;
+      const was = Number(expect.revisions.canopyMode);
+      return leaf.revision === `${was}` || leaf.revision === `${was + 1}`;
+    });
     if (landed) return result("applied", now.settings);
     const untouched = now.settings.every((leaf) => expect.revisions[leaf.key] === leaf.revision);
     return result(untouched ? "not-applied" : "conflict", now.settings);

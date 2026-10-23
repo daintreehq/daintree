@@ -10,6 +10,7 @@ import {
 } from "../../../../shared/types/hostSettings.js";
 import type { HostSettingsArgs } from "../../../../shared/types/hostControl.js";
 import { AppError } from "../../../utils/errorTypes.js";
+import { CANOPY_REDACTION, canopySendsFrom } from "../../../../shared/config/canopyTerms.js";
 import { HostSettingsRequests, type HostSettingsRequestDeps } from "../HostSettingsRequests.js";
 
 type Values = Record<HostSettingKey, HostSettingValue>;
@@ -353,7 +354,10 @@ describe("host.settings (#14167)", () => {
     t.hosts.get("b")!.instanceId = "b-relaunch";
     const result = await t.run({ operation: "apply", ticket: ticket! });
     expect(result.hosts.map((host) => host.outcome)).toEqual(["conflict", "conflict"]);
-    expect(t.client.update).not.toHaveBeenCalled();
+    // One guarded update per host, made whole or not at all: the idle alert
+    // whose own revision still held isn't written either.
+    expect(t.client.update).toHaveBeenCalledTimes(2);
+    expect(result.hosts[0]!.detail).toMatch(/Nothing was changed/);
     expect(t.hosts.get("a")!.values).toMatchObject({
       canopyMode: "unset",
       "idleTerminalNotify.enabled": false,
@@ -362,5 +366,107 @@ describe("host.settings (#14167)", () => {
       canopyMode: "unset",
       "idleTerminalNotify.enabled": false,
     });
+  });
+
+  it("asks the person with the same consent Settings states before Canopy reads a host", async () => {
+    const t = setup({ a: "Alpha" });
+    const { ticket } = await t.run({
+      operation: "preview",
+      hostIds: ["a"],
+      patch: { canopyMode: "on" },
+    });
+    await t.run({ operation: "apply", ticket: ticket! });
+    const lines = t.askApproval.mock.calls[0]![0].lines;
+    expect(lines).toContain(canopySendsFrom("Alpha"));
+    expect(lines).toContain(CANOPY_REDACTION);
+  });
+
+  it("leaves a host already set as asked untouched, and reports it as it is", async () => {
+    const t = setup();
+    t.hosts.get("b")!.values.canopyMode = "on";
+    const { ticket } = await t.run({
+      operation: "preview",
+      hostIds: ["a", "b"],
+      patch: { canopyMode: "on" },
+    });
+    const result = await t.run({ operation: "apply", ticket: ticket! });
+    expect(result.hosts.map(({ outcome, settings }) => [outcome, settings])).toEqual([
+      ["ok", [{ key: "canopyMode", value: "on" }]],
+      ["ok", [{ key: "canopyMode", value: "on" }]],
+    ]);
+    expect(t.updates.map((update) => update.hostId)).toEqual(["a"]);
+  });
+
+  it("stops before the next write once control is turned off, and says what had landed", async () => {
+    const t = setup({ b: "Beta" });
+    t.hosts.get("b")!.values.canopyMode = "hidden";
+    const { ticket } = await t.run({
+      operation: "preview",
+      hostIds: ["b"],
+      patch: { canopyMode: "on" },
+    });
+    const update = t.client.update.getMockImplementation()!;
+    t.client.update.mockImplementation(async (payload) => {
+      const answer = await update(payload);
+      t.control.delete("b");
+      return answer;
+    });
+    const result = await t.run({ operation: "apply", ticket: ticket! });
+    expect(t.updates.map((u) => u.patch.canopyMode)).toEqual(["unset"]);
+    expect(result.hosts[0]).toMatchObject({
+      outcome: "policy_rejected",
+      detail: expect.stringMatching(/^Canopy was shown there, but not turned on/),
+      settings: [{ key: "canopyMode", value: "unset" }],
+    });
+  });
+
+  it("reports a hidden Canopy shown but not turned on when it changes between the steps", async () => {
+    const t = setup({ b: "Beta" });
+    t.hosts.get("b")!.values.canopyMode = "hidden";
+    const { ticket } = await t.run({
+      operation: "preview",
+      hostIds: ["b"],
+      patch: { canopyMode: "on" },
+    });
+    const update = t.client.update.getMockImplementation()!;
+    t.client.update.mockImplementation(async (payload) => {
+      const answer = await update(payload);
+      if (payload.patch.canopyMode === "unset") t.hosts.get("b")!.canopyRevision += 1;
+      return answer;
+    });
+    const result = await t.run({ operation: "apply", ticket: ticket! });
+    expect(result.hosts[0]).toMatchObject({
+      outcome: "conflict",
+      detail: expect.stringMatching(/^Canopy was shown there, but not turned on/),
+      settings: [{ key: "canopyMode", value: "unset" }],
+    });
+  });
+
+  it("names a host limiting its changes as rate limited, not unreachable", async () => {
+    const t = setup({ a: "Alpha" });
+    const { ticket } = await t.run({
+      operation: "preview",
+      hostIds: ["a"],
+      patch: { canopyMode: "on" },
+    });
+    t.client.update.mockRejectedValueOnce(new AppError({ code: "RATE_LIMITED", message: "slow" }));
+    const result = await t.run({ operation: "apply", ticket: ticket! });
+    expect(result.hosts[0]!.outcome).toBe("rate_limited");
+  });
+
+  it("keeps at most four live previews per assistant, without touching another's", async () => {
+    const t = setup({ a: "Alpha" });
+    const other = await t.run(
+      { operation: "preview", hostIds: ["a"], patch: { canopyMode: "on" } },
+      "s2"
+    );
+    const mine: string[] = [];
+    for (let i = 0; i < 5; i++) {
+      mine.push(
+        (await t.run({ operation: "preview", hostIds: ["a"], patch: { canopyMode: "on" } })).ticket!
+      );
+    }
+    expect((await t.run({ operation: "apply", ticket: mine[0]! })).outcome).toBe("expired");
+    expect((await t.run({ operation: "apply", ticket: other.ticket! }, "s2")).outcome).toBe("ok");
   });
 });

@@ -10,7 +10,7 @@ import {
   type HostSettingsSnapshot,
   type HostSettingsUpdateResult,
 } from "@shared/types/hostSettings";
-import { CANOPY_REDACTION, CANOPY_SENDS } from "@/components/Canopy/canopyTerms";
+import { CANOPY_REDACTION, canopySendsFrom, canopyStopOn } from "@/components/Canopy/canopyTerms";
 import { clientErrorText } from "@/utils/clientAppError";
 import { SettingsSection } from "../SettingsSection";
 import { SettingsDependents, SettingsEmptyRow, SettingsGroup, SettingsRow } from "../SettingsGroup";
@@ -57,13 +57,18 @@ export function HostSettingsSection({ hostId, hostName, connected }: HostSetting
   const [busy, setBusy] = useState(false);
   const [confirmCanopy, setConfirmCanopy] = useState(false);
   const [threshold, setThreshold] = useState("");
-  // A read for a host this section no longer shows is dropped.
+  // A reply for a host this section no longer shows is dropped.
   const shownHost = useRef(hostId);
-  shownHost.current = hostId;
+  useEffect(() => {
+    shownHost.current = hostId;
+  }, [hostId]);
+  // One change at a time, set before any render: Enter and the blur after it
+  // would otherwise send the same change twice against one revision.
+  const inFlight = useRef(false);
 
-  const load = useCallback(() => {
+  const load = useCallback((): Promise<void> => {
     const asked = hostId;
-    window.electron.hostSettings.read({ hostId }).then(
+    return window.electron.hostSettings.read({ hostId }).then(
       (next) => {
         if (shownHost.current !== asked) return;
         setSnapshot(next);
@@ -79,7 +84,7 @@ export function HostSettingsSection({ hostId, hostName, connected }: HostSetting
   useEffect(() => {
     setSnapshot(null);
     setRowError(null);
-    if (connected) load();
+    if (connected) void load();
   }, [connected, load]);
 
   const valueOf = (key: HostSettingKey): HostSettingValue | undefined =>
@@ -92,44 +97,56 @@ export function HostSettingsSection({ hostId, hostName, connected }: HostSetting
     if (typeof value === "number") setThreshold(String(value));
   }, [snapshot]);
 
-  /** One change, made against the revision shown; the host's answer replaces what is shown. */
-  const change = async (key: HostSettingKey, value: HostSettingValue): Promise<boolean> => {
+  /**
+   * One change, made against the revision shown; the host's answer replaces
+   * what is shown. When the answer can't be trusted for that (unconfirmed, or
+   * a restarted host) the controls stay disabled until the host is read again.
+   */
+  const change = (key: HostSettingKey, value: HostSettingValue): void => {
     const leaf = snapshot?.settings.find((candidate) => candidate.key === key);
-    if (!snapshot || !leaf) return false;
+    if (!snapshot || !leaf || inFlight.current) return;
+    inFlight.current = true;
     setBusy(true);
     setRowError(null);
-    try {
-      const result = await window.electron.hostSettings.update({
+    const asked = hostId;
+    const instanceId = snapshot.instanceId;
+    const settle = () => {
+      inFlight.current = false;
+      setBusy(false);
+    };
+    window.electron.hostSettings
+      .update({
         hostId,
         patch: { [key]: value },
-        expect: { instanceId: snapshot.instanceId, revisions: { [key]: leaf.revision } },
-      });
-      if (shownHost.current !== hostId) return false;
-      const error = outcomeError(result);
-      if (error) setRowError({ key, text: error });
-      if (result.outcome === "unconfirmed" || result.instanceId !== snapshot.instanceId) {
-        load();
-      } else {
-        setSnapshot((current) =>
-          current
-            ? {
-                ...current,
-                settings: current.settings.map(
-                  (old) => result.settings.find((fresh) => fresh.key === old.key) ?? old
-                ),
-              }
-            : current
-        );
-      }
-      return result.outcome === "applied";
-    } catch (err) {
-      if (shownHost.current === hostId) {
-        setRowError({ key, text: clientErrorText(err, `Couldn't change this on ${hostName}`) });
-      }
-      return false;
-    } finally {
-      setBusy(false);
-    }
+        expect: { instanceId, revisions: { [key]: leaf.revision } },
+      })
+      .then(
+        (result) => {
+          if (shownHost.current !== asked) return settle();
+          const error = outcomeError(result);
+          if (error) setRowError({ key, text: error });
+          if (result.outcome === "unconfirmed" || result.instanceId !== instanceId) {
+            return load().then(settle);
+          }
+          setSnapshot((current) =>
+            current
+              ? {
+                  ...current,
+                  settings: current.settings.map(
+                    (old) => result.settings.find((fresh) => fresh.key === old.key) ?? old
+                  ),
+                }
+              : current
+          );
+          settle();
+        },
+        (err: unknown) => {
+          if (shownHost.current === asked) {
+            setRowError({ key, text: clientErrorText(err, `Couldn't change this on ${hostName}`) });
+          }
+          settle();
+        }
+      );
   };
 
   const canopy = valueOf("canopyMode");
@@ -151,7 +168,7 @@ export function HostSettingsSection({ hostId, hostName, connected }: HostSetting
       if (typeof current === "number") setThreshold(String(current));
       return;
     }
-    if (minutes !== current) void change("idleTerminalNotify.thresholdMinutes", minutes);
+    if (minutes !== current) change("idleTerminalNotify.thresholdMinutes", minutes);
   };
 
   const errorFor = (key: HostSettingKey) => (rowError?.key === key ? rowError.text : undefined);
@@ -161,7 +178,7 @@ export function HostSettingsSection({ hostId, hostName, connected }: HostSetting
   return (
     <SettingsSection
       title={`Settings on ${hostName}`}
-      description={`Changed on ${hostName} itself, for everyone using it. Nothing here changes this computer`}
+      description={`Changed in Daintree on ${hostName} itself. Nothing here changes this computer`}
     >
       <SettingsGroup>
         {!connected ? (
@@ -188,7 +205,7 @@ export function HostSettingsSection({ hostId, hostName, connected }: HostSetting
               control={({ labelId, descriptionId, disabled }) => (
                 <SettingsSwitch
                   checked={!canopyHidden}
-                  onCheckedChange={(show) => void change("canopyMode", show ? "unset" : "hidden")}
+                  onCheckedChange={(show) => change("canopyMode", show ? "unset" : "hidden")}
                   disabled={disabled}
                   aria-labelledby={labelId}
                   aria-describedby={descriptionId}
@@ -203,9 +220,10 @@ export function HostSettingsSection({ hostId, hostName, connected }: HostSetting
                 control={({ labelId, descriptionId, disabled }) => (
                   <SettingsSwitch
                     checked={canopyOn}
-                    onCheckedChange={(on) =>
-                      on ? setConfirmCanopy(true) : void change("canopyMode", "unset")
-                    }
+                    onCheckedChange={(on) => {
+                      if (on) setConfirmCanopy(true);
+                      else change("canopyMode", "unset");
+                    }}
                     disabled={disabled}
                     aria-labelledby={labelId}
                     aria-describedby={descriptionId}
@@ -218,7 +236,7 @@ export function HostSettingsSection({ hostId, hostName, connected }: HostSetting
               description={`The agent new terminals on ${hostName} start with`}
               value={typeof defaultAgent === "string" ? defaultAgent : NO_DEFAULT}
               onValueChange={(next) =>
-                void change("agentDefaults.defaultAgent", next === NO_DEFAULT ? null : next)
+                change("agentDefaults.defaultAgent", next === NO_DEFAULT ? null : next)
               }
               options={AGENT_OPTIONS}
               disabled={busy}
@@ -232,7 +250,7 @@ export function HostSettingsSection({ hostId, hostName, connected }: HostSetting
               control={({ labelId, descriptionId, disabled }) => (
                 <SettingsSwitch
                   checked={idleOn}
-                  onCheckedChange={(next) => void change("idleTerminalNotify.enabled", next)}
+                  onCheckedChange={(next) => change("idleTerminalNotify.enabled", next)}
                   disabled={disabled}
                   aria-labelledby={labelId}
                   aria-describedby={descriptionId}
@@ -268,11 +286,11 @@ export function HostSettingsSection({ hostId, hostName, connected }: HostSetting
         onClose={() => setConfirmCanopy(false)}
         variant="default"
         title={`Turn Canopy on for '${hostName}'?`}
-        description={`Canopy on ${hostName} reads that machine's agent terminals until it's turned off there or here. ${CANOPY_SENDS} ${CANOPY_REDACTION}`}
+        description={`${canopySendsFrom(hostName)} ${CANOPY_REDACTION} ${canopyStopOn(hostName)}`}
         confirmLabel="Turn Canopy on"
         onConfirm={() => {
           setConfirmCanopy(false);
-          void change("canopyMode", "on");
+          change("canopyMode", "on");
         }}
       />
     </SettingsSection>

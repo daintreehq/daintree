@@ -181,6 +181,11 @@ export function canopyModeState(): { mode: CanopyMode; modeRevision: number; hos
   return { mode: readCanopyMode(), modeRevision, hostEpoch };
 }
 
+/** One budget for mode changes, however they arrive: this machine's views or another's Settings. */
+export function checkCanopyModeRate(): void {
+  checkRateLimit(CANOPY_METHOD_CHANNELS.setMode, 10, 10_000);
+}
+
 /**
  * The guarded mode change behind `canopy:set-mode`, for callers that already
  * checked their arguments: Settings on another machine editing this one
@@ -1155,7 +1160,7 @@ export const canopyNamespace = defineIpcNamespace({
           }
           if (expectRevision === undefined) throw new Error("A host epoch needs a revision");
         }
-        checkRateLimit(CANOPY_METHOD_CHANNELS.setMode, 10, 10_000);
+        checkCanopyModeRate();
         return changeCanopyMode(mode, expectRevision, expectHostEpoch);
       }
     ),
