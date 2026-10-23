@@ -407,7 +407,13 @@ import {
   enforcePluginActionResult,
   type PluginActionResultCheck,
 } from "./plugin/pluginActionResultSchema.js";
-import { getPluginPushBatcher, routePluginPush } from "./plugin/pluginPushBatcher.js";
+import {
+  PLUGIN_STATE_PANEL_ACTIVITY,
+  PLUGIN_STATE_PANEL_BADGES,
+  getPluginPushBatcher,
+  getPluginStatePublisher,
+  routePluginPush,
+} from "./plugin/pluginPushBatcher.js";
 import {
   PluginMetricsService,
   classifyInvokeFailure,
@@ -8203,7 +8209,16 @@ export class PluginService {
       runUnloadStep(pluginId, "clearRunningActions", () => this.emitActionsRunning(pluginId));
     }
 
-    if (this.pluginBadges.delete(pluginId)) {
+    // The clears below are the plugin's last word, so a coalesced badge or
+    // activity publication still waiting is dropped. One may have been the
+    // clear of the last badge a renderer still shows, so it forces the clear
+    // even when the map is already empty (#14128).
+    let discarded = new Set<string>();
+    runUnloadStep(pluginId, "discardPendingState", () => {
+      discarded = getPluginStatePublisher().discard(pluginId);
+    });
+
+    if (this.pluginBadges.delete(pluginId) || discarded.has(PLUGIN_STATE_PANEL_BADGES)) {
       runUnloadStep(pluginId, "clearPanelBadges", () => {
         broadcastToRenderer(CHANNELS.EVENTS_PUSH, {
           name: "plugin:panel-badges-cleared",
@@ -8220,7 +8235,10 @@ export class PluginService {
       runUnloadStep(pluginId, "clearToolbarStates", () => this.emitToolbarStates(pluginId));
     }
 
-    if (this.pluginPanelActivity.delete(pluginId)) {
+    if (
+      this.pluginPanelActivity.delete(pluginId) ||
+      discarded.has(PLUGIN_STATE_PANEL_ACTIVITY)
+    ) {
       runUnloadStep(pluginId, "clearPanelActivity", () => this.emitPanelActivity(pluginId));
     }
 

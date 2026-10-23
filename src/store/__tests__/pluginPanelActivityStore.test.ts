@@ -76,7 +76,34 @@ describe("pluginPanelActivityStore", () => {
     const before = store().activityByPanelId;
     push!({ pluginId: "acme", activity: { p1: { state: "finished", revision: 1 } } });
     expect(store().activityByPanelId.p1?.acme).toBe(report);
-    expect(store().activityByPanelId).not.toBe(before);
+    expect(store().activityByPanelId).toBe(before);
+  });
+
+  it("one new revision in a 100-panel map invalidates only that panel, and an equal replay notifies nothing (#14128)", () => {
+    const fleet = (bumped?: number): Record<string, PluginPanelActivityReport> =>
+      Object.fromEntries(
+        Array.from({ length: 100 }, (_, i): [string, PluginPanelActivityReport] => [
+          `p${i}`,
+          i === bumped
+            ? { state: "finished", revision: 1000 }
+            : { state: "working", revision: i + 1 },
+        ])
+      );
+    push!({ pluginId: "acme", activity: fleet() });
+    store().markSeen("p7", 8);
+    const before = { ...store().activityByPanelId };
+
+    push!({ pluginId: "acme", activity: fleet(7) });
+    const after = store().activityByPanelId;
+    expect(Object.keys(before).filter((id) => after[id] !== before[id])).toEqual(["p7"]);
+    expect(after.p7?.acme?.revision).toBe(1000);
+    expect(store().seenRevisionByPanelId).toEqual({ p7: 8 });
+
+    const listener = vi.fn();
+    const unsubscribeStore = usePluginPanelActivityStore.subscribe(listener);
+    push!({ pluginId: "acme", activity: fleet(7) });
+    unsubscribeStore();
+    expect(listener).not.toHaveBeenCalled();
   });
 
   it("holds a seen mark by revision, so a replay stays seen and a new report does not", () => {

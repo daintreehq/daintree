@@ -244,10 +244,10 @@ vi.mock("../plugin/PluginDevWorkerMainBridge.js", () => ({
 }));
 
 import { PluginService } from "../PluginService.js";
-import { getPluginPushBatcher } from "../plugin/pluginPushBatcher.js";
+import { flushPluginPushes } from "../plugin/pluginPushBatcher.js";
 import { PLUGIN_TOAST_BURST, resetPluginToastBudget } from "../plugin/pluginToastBudget.js";
 
-const flushPushes = (): void => getPluginPushBatcher().flush();
+const flushPushes = (): void => flushPluginPushes();
 import { PluginProcessManager, type ManagedChildProcess } from "../plugin/PluginProcessManager.js";
 import {
   getPluginCapabilityConsentService,
@@ -606,13 +606,18 @@ describe("createHost (plugin activation API)", () => {
 
     broadcastToRendererMock.mockClear();
     await host.setPanelBadge("panel-a", { kind: "dot", color: "warning", tooltip: "2 failing" });
+    flushPushes();
     await host.setPanelBadge("panel-a", { kind: "dot", color: "warning", tooltip: "2 failing" });
+    flushPushes();
     // An omitted colour is the default one, so it is the same badge too.
     await host.setPanelBadge("panel-b", { kind: "label", text: "3" });
+    flushPushes();
     await host.setPanelBadge("panel-b", { kind: "label", text: "3", color: "default" });
+    flushPushes();
     expect(badgeEvents()).toHaveLength(2);
 
     await host.setPanelBadge("panel-a", { kind: "dot", color: "error", tooltip: "2 failing" });
+    flushPushes();
     expect(badgeEvents()).toHaveLength(3);
   });
 
@@ -650,7 +655,16 @@ describe("createHost (plugin activation API)", () => {
     await expect(host.setPanelBadge(`panel-${cap + 2}`, { kind: "dot" })).rejects.toThrow(
       /setPanelBadge: /
     );
-    expect(broadcastToRendererMock).toHaveBeenCalledTimes(3);
+    // The three accepted changes go out as one complete map.
+    flushPushes();
+    expect(broadcastToRendererMock).toHaveBeenCalledTimes(1);
+    const { badges } = (broadcastToRendererMock.mock.calls[0]![1] as {
+      payload: { badges: Record<string, { color?: string }> };
+    }).payload;
+    expect(Object.keys(badges)).toHaveLength(cap);
+    expect(badges["panel-0"]?.color).toBe("warning");
+    expect(badges["panel-1"]).toBeUndefined();
+    expect(badges[`panel-${cap + 1}`]).toBeDefined();
   });
 
   describe("host.setToolbarButtonBadge (#13503)", () => {
@@ -1900,6 +1914,7 @@ describe("createHost — invoke deadline and payload caps", () => {
     broadcastToRendererMock.mockClear();
     await host.postToPanel("tick", { n: 1 }, "panel-a");
     await host.setPanelBadge("panel-a", { kind: "dot" });
+    flushPushes();
     const channels = broadcastToRendererMock.mock.calls.map((call) => call[0]);
     expect(channels).toEqual(["plugin:acme.push-order:tick", CHANNELS.EVENTS_PUSH]);
   });

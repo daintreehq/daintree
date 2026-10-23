@@ -36,7 +36,7 @@ vi.mock("../../viewless/index.js", () => ({ runViewlessAction: vi.fn(async () =>
 
 import { createHost, type PluginHostFactoryDeps } from "../PluginHostFactory.js";
 import type { PanelOwnership } from "../PluginPanelLifecycleBroker.js";
-import { resetPluginPushBatcherForTests } from "../pluginPushBatcher.js";
+import { flushPluginPushes, resetPluginPushBatcherForTests } from "../pluginPushBatcher.js";
 import {
   registerPanelKind,
   unregisterPluginPanelKinds,
@@ -182,6 +182,7 @@ describe("host.setPanelActivity", () => {
       reason: "Importing",
       revision: 1,
     });
+    flushPluginPushes();
     expect(h.emitPanelActivity).toHaveBeenCalledWith(PLUGIN_ID);
   });
 
@@ -233,14 +234,17 @@ describe("host.setPanelActivity", () => {
     expect(h.activity.get(PLUGIN_ID)?.has("fresh")).toBe(true);
 
     h.pushTargetsFor.mockReturnValue("closed");
+    flushPluginPushes();
     h.emitPanelActivity.mockClear();
     await host.setPanelActivity("fresh", { state: "finished" });
     expect(h.activity.has(PLUGIN_ID)).toBe(false);
+    flushPluginPushes();
     expect(h.emitPanelActivity).toHaveBeenCalledTimes(1);
 
     h.emitPanelActivity.mockClear();
     await host.setPanelActivity("gone", { state: "finished" });
     expect(h.activity.has(PLUGIN_ID)).toBe(false);
+    flushPluginPushes();
     expect(h.emitPanelActivity).not.toHaveBeenCalled();
   });
 
@@ -250,11 +254,15 @@ describe("host.setPanelActivity", () => {
     const host = hostFor(h);
 
     await host.setPanelActivity("p", { state: "finished", reason: "Done" });
+    flushPluginPushes();
     await host.setPanelActivity("p", { state: "finished", reason: "Done" });
+    flushPluginPushes();
     expect(h.emitPanelActivity).toHaveBeenCalledTimes(1);
 
     await host.setPanelActivity("p", { state: "working" });
+    flushPluginPushes();
     await host.setPanelActivity("p", { state: "finished", reason: "Done" });
+    flushPluginPushes();
     expect(h.emitPanelActivity).toHaveBeenCalledTimes(3);
     expect(h.activity.get(PLUGIN_ID)?.get("p")?.revision).toBe(3);
   });
@@ -263,17 +271,34 @@ describe("host.setPanelActivity", () => {
     const h = makeHarness();
     const host = hostFor(h);
     await host.setPanelActivity("p", { state: "working" });
+    flushPluginPushes();
     h.ownership.mockClear();
     h.emitPanelActivity.mockClear();
 
     await host.setPanelActivity("p", null);
     expect(h.activity.has(PLUGIN_ID)).toBe(false);
+    flushPluginPushes();
     expect(h.emitPanelActivity).toHaveBeenCalledTimes(1);
     expect(h.ownership).not.toHaveBeenCalled();
 
     // A clear of nothing sends nothing.
     await host.setPanelActivity("p", null);
+    flushPluginPushes();
     expect(h.emitPanelActivity).toHaveBeenCalledTimes(1);
+  });
+
+  it("publishes a burst of reports across 100 panels once, with every final report (#14128)", async () => {
+    const h = makeHarness();
+    h.ownership.mockReturnValue({ kind: "owned", panelKindId: "acme.chat" });
+    const host = hostFor(h);
+
+    for (let i = 0; i < 100; i++) {
+      await host.setPanelActivity(`p${i}`, { state: "working" });
+    }
+    expect(h.emitPanelActivity).not.toHaveBeenCalled();
+    flushPluginPushes();
+    expect(h.emitPanelActivity).toHaveBeenCalledTimes(1);
+    expect(h.activity.get(PLUGIN_ID)?.size).toBe(100);
   });
 
   it("rejects an invalid report rather than throwing", async () => {
