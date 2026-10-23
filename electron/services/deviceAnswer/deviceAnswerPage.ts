@@ -21,10 +21,20 @@ const SCRIPT = String.raw`
   // Bumped when an answer starts: a list read before it is stale, and a card
   // stays pressed-out until a list read after it replaces it.
   let answerSeq = 0;
+  // When the list last stopped coming back, and when each host that had been
+  // read stopped being readable; both clear once they answer again.
+  let downSince = 0;
+  const hostRead = new Set();
+  const hostDownSince = new Map();
   try { token = localStorage.getItem(KEY); } catch {}
 
   const save = (value) => {
     token = value;
+    if (!value) {
+      downSince = 0;
+      hostRead.clear();
+      hostDownSince.clear();
+    }
     try { value ? localStorage.setItem(KEY, value) : localStorage.removeItem(KEY); } catch {}
   };
 
@@ -63,6 +73,23 @@ const SCRIPT = String.raw`
     return m < 60 ? m + " min" : Math.round(m / 60) + " h";
   };
 
+  // The device's own clock, written the same everywhere rather than by locale.
+  const clock = (ms) => {
+    const at = new Date(ms);
+    return String(at.getHours()).padStart(2, "0") + ":" + String(at.getMinutes()).padStart(2, "0");
+  };
+
+  // Whole minutes, so the count reads the same way for the whole outage.
+  const minutes = (since) => Math.max(0, Math.floor((Date.now() - since) / 60000)) + " min";
+
+  // The cards stay to read, but a list that may be old can't be answered from.
+  const markStale = () => {
+    for (const card of $("runs").querySelectorAll(".run")) {
+      card.classList.add("stale");
+      for (const b of card.querySelectorAll("button")) b.disabled = true;
+    }
+  };
+
   const render = (runs, reported) => {
     const hosts = Array.isArray(reported)
       ? reported.filter((host) => host && typeof host.host === "string")
@@ -81,13 +108,29 @@ const SCRIPT = String.raw`
         : covered[0]) + ".";
     const notes = $("hosts");
     notes.replaceChildren();
+    const listed = new Set(hosts.map((host) => host.hostId || host.host));
+    for (const key of [...hostRead]) if (!listed.has(key)) hostRead.delete(key);
+    for (const key of [...hostDownSince.keys()]) if (!listed.has(key)) hostDownSince.delete(key);
     for (const host of hosts) {
-      if (host.status === "ok") continue;
-      notes.append(el("div", "", host.status === "needs-update"
-        ? host.host + " needs a newer Daintree to show its waiting agents here."
-        : host.status === "not-connected"
-          ? "Not connected to " + host.host + ", so its agents aren't shown."
-          : "Couldn't read the waiting agents on " + host.host + "."));
+      const key = host.hostId || host.host;
+      if (host.status === "ok") {
+        hostRead.add(key);
+        hostDownSince.delete(key);
+        continue;
+      }
+      if (host.status === "needs-update") {
+        hostRead.delete(key);
+        hostDownSince.delete(key);
+        notes.append(el("div", "", host.host + " needs a newer Daintree to show its waiting agents here."));
+        continue;
+      }
+      // Only a host seen answering has a time it stopped.
+      if (hostRead.has(key) && !hostDownSince.has(key)) hostDownSince.set(key, Date.now());
+      const since = hostDownSince.get(key);
+      const at = since ? " since " + clock(since) : "";
+      notes.append(el("div", "", host.status === "not-connected"
+        ? "Not connected to " + host.host + at + ", so its agents aren't shown."
+        : "Couldn't read the waiting agents on " + host.host + at + "."));
     }
     // Machines are named once there is more than one to tell apart.
     const named = hosts.length > 0;
@@ -154,13 +197,19 @@ const SCRIPT = String.raw`
         if (busy || seq !== answerSeq) {
           // An answer began while this was in flight; the next read shows its result.
         } else if (r.ok && r.data) {
+          downSince = 0;
           $("status").textContent = "";
           render(r.data.runs, r.data.hosts);
         } else if (r.status !== 401) {
           $("status").textContent = (r.data && r.data.error) || "Couldn't read the waiting agents.";
+          markStale();
         }
       } catch {
-        $("status").textContent = "Couldn't reach Daintree.";
+        if (token && !busy && seq === answerSeq) {
+          if (!downSince) downSince = Date.now();
+          $("status").textContent = "Couldn't reach Daintree since " + clock(downSince) + " (" + minutes(downSince) + ").";
+          markStale();
+        }
       } finally {
         polling = false;
       }
@@ -221,6 +270,7 @@ input { width: 100%; padding: 10px; font: inherit; border: 1px solid var(--line)
 button { font: inherit; padding: 8px 12px; border-radius: 8px; border: 1px solid var(--line); background: var(--card); color: var(--fg); }
 button:disabled { opacity: 0.5; }
 form button { margin-top: 16px; width: 100%; }
+.run.stale .screen { opacity: 0.6; }
 .run { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 12px; margin: 0 0 12px; }
 .head { display: flex; gap: 8px; flex-wrap: wrap; align-items: baseline; }
 .title, .host, .meta, .note, .result, #status, #hosts, #empty { color: var(--muted); font-size: 13px; }
