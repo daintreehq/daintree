@@ -237,10 +237,12 @@ describe("classifyGitError — ordering and normalization", () => {
     expect(classifyGitError(msg)).toBe(expected);
   });
 
-  it("keeps a hook rejection ahead of a connection-close line in the hook's output", () => {
-    const msg =
-      "remote: Connection closed by 10.0.0.5 port 22\n" +
-      " ! [remote rejected] main -> main (pre-receive hook declined)";
+  it.each([
+    "remote: Connection closed by 10.0.0.5 port 22",
+    "remote: deploy@deploy.internal: Permission denied (password).",
+    "remote: Read from remote host deploy.internal: Connection reset by peer",
+  ])("keeps a hook rejection ahead of SSH output the hook relayed: %j", (line) => {
+    const msg = `${line}\n ! [remote rejected] main -> main (pre-receive hook declined)`;
     expect(classifyGitError(msg)).toBe("hook-rejected");
   });
 

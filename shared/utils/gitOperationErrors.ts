@@ -67,6 +67,14 @@ const PATTERNS: ReadonlyArray<readonly [GitOperationReason, RegExp]> = [
     /secondary rate limit|You have exceeded a secondary rate limit|abuse detection mechanism/i,
   ],
   [
+    // Ahead of auth-failed and network-unavailable: a declining hook's output is
+    // relayed verbatim, and a hook that shells out over SSH can print its own
+    // "Permission denied (...)" or "Connection reset" line. The rejection marker
+    // is git's own verdict on the push, so it outranks whatever the hook said.
+    "hook-rejected",
+    /\[remote rejected\].*\((?:pre-receive hook declined|pre-receive hook|update hook|post-receive hook)/i,
+  ],
+  [
     "auth-failed",
     // HTTPS 401/403/407 (auth/perm/proxy-auth) as well as the direct SSH/HTTPS messages.
     // `could not read Username for` is intentionally NOT matched here: background
@@ -96,10 +104,6 @@ const PATTERNS: ReadonlyArray<readonly [GitOperationReason, RegExp]> = [
     // found." — and an unattributed footer falls through to unknown (#14208).
     "repository-not-found",
     /Repository not found|fatal: repository '.*' not found/i,
-  ],
-  [
-    "hook-rejected",
-    /\[remote rejected\].*\((?:pre-receive hook declined|pre-receive hook|update hook|post-receive hook)/i,
   ],
   [
     "push-rejected-policy",
