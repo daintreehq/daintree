@@ -1129,6 +1129,78 @@ describe("init gate — waitForInit() and pushSnapshotTo() (#9285)", () => {
     await expect(waiter).resolves.toBeUndefined();
   });
 
+  it("holds the catalog, cold replay and complete snapshots until the scan settles (#14127)", async () => {
+    let releaseBlocklist!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      releaseBlocklist = resolve;
+    });
+    let entered!: () => void;
+    const scanReached = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const blocklistService = {
+      getStartupBlocklist: async () => {
+        entered();
+        await gate;
+        return { blocklist: null, refreshed: null };
+      },
+    } as unknown as NonNullable<ConstructorParameters<typeof PluginService>[2]>["blocklistService"];
+    const service = new PluginService(tmpDir, undefined, { blocklistService });
+    const toolbarCompleteFlags = () =>
+      broadcastToRendererMock.mock.calls
+        .map((c) => c[1] as { name?: string; payload?: { complete?: boolean } })
+        .filter((e) => e.name === "plugin:toolbar-buttons-changed")
+        .map((e) => e.payload?.complete);
+
+    const init = service.initialize();
+    // A concurrent call joins the scan rather than starting a second one.
+    expect(service.initialize()).toBe(init);
+    await scanReached;
+    let catalogReady = false;
+    void service.waitForCatalog().then(() => (catalogReady = true));
+    const send = vi.fn();
+    const wc = { id: 4251, send, isDestroyed: () => false } as unknown as Electron.WebContents;
+    const replay = service.pushSnapshotTo(wc);
+
+    broadcastToRendererMock.mockClear();
+    // An unload while the catalog is still partial owes an authoritative snapshot.
+    (
+      service as unknown as {
+        broadcaster: { scheduleToolbarButtonsBroadcast: (complete: boolean) => void };
+      }
+    ).broadcaster.scheduleToolbarButtonsBroadcast(true);
+    await vi.waitFor(() => expect(toolbarCompleteFlags()).toEqual([false]));
+    expect(catalogReady).toBe(false);
+    expect(send).not.toHaveBeenCalled();
+
+    releaseBlocklist();
+    await init;
+    await replay;
+    expect(catalogReady).toBe(true);
+    expect(send).toHaveBeenCalled();
+    await vi.waitFor(() => expect(toolbarCompleteFlags()).toEqual([false, true]));
+    service.dispose();
+  });
+
+  it("tells the plugin list to re-pull once startup activations settle", async () => {
+    const service = new PluginService(tmpDir);
+    const activate = vi.spyOn(service, "activatePlugin").mockResolvedValue(undefined);
+    (service as unknown as { plugins: Map<string, unknown> }).plugins.set("acme.early", {
+      resolvedMain: "/x/main.mjs",
+      manifest: { name: "acme.early", activationEvents: ["onStartupFinished"] },
+    });
+    broadcastToRendererMock.mockClear();
+
+    await service.activateStartupFinishedPlugins();
+    expect(activate).toHaveBeenCalledWith("acme.early");
+    expect(broadcastToRendererMock).toHaveBeenCalledWith(expect.any(String), {
+      name: "plugin:provenance-changed",
+      payload: {},
+    });
+    (service as unknown as { plugins: Map<string, unknown> }).plugins.clear();
+    service.dispose();
+  });
+
   it("dispose() resolves a pending waitForCatalog() too", async () => {
     const service = new PluginService(tmpDir);
     const waiter = service.waitForCatalog();
@@ -1183,7 +1255,10 @@ describe("init gate — waitForInit() and pushSnapshotTo() (#9285)", () => {
     const send = vi.fn();
     const wc = { id: 4250, send, isDestroyed: () => false } as unknown as Electron.WebContents;
     await service.pushSnapshotTo(wc);
-    expect(send).toHaveBeenCalled();
+    expect(send).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ name: "plugin:panel-kinds-changed" })
+    );
     expect(fullyStarted).toBe(false);
     expect(ownerActivated).toBe(false);
 

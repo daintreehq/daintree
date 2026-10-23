@@ -408,6 +408,10 @@ describe("PluginService blocklist / kill-switch (#10891)", () => {
     const isBlocked = (service: PluginService, name: string) =>
       service.listPlugins().some((p) => p.manifest.name === name && p.blocklisted);
 
+    // The fetched list persists fire-and-forget; let it land before the fixture
+    // dir is removed so a late write can't recreate it.
+    const persisted = () => vi.waitFor(() => fs.access(path.join(tmpDir, "blocklist-cache.json")));
+
     it("publishes the built-in catalog while the remote fetch is still pending", async () => {
       const builtinRoot = await fs.mkdtemp(path.join(os.tmpdir(), "daintree-builtin-test-"));
       try {
@@ -435,6 +439,7 @@ describe("PluginService blocklist / kill-switch (#10891)", () => {
         expect(service.hasPlugin("daintree.viewer")).toBe(true);
         expect(registerPanelKind).toHaveBeenCalledTimes(1);
         release();
+        await persisted();
         service.dispose();
       } finally {
         await fs.rm(builtinRoot, { recursive: true, force: true });
@@ -454,6 +459,7 @@ describe("PluginService blocklist / kill-switch (#10891)", () => {
       expect(isBlocked(service, "acme.bad")).toBe(true);
       expect(service.hasPlugin("acme.ok")).toBe(true);
       release();
+      await persisted();
       service.dispose();
     });
 
@@ -472,6 +478,8 @@ describe("PluginService blocklist / kill-switch (#10891)", () => {
       await vi.waitFor(() => expect(isBlocked(service, "acme.bad")).toBe(true));
       expect(service.hasPlugin("acme.bad")).toBe(false);
       expect(service.hasPlugin("acme.ok")).toBe(true);
+      await persisted();
+      service.dispose();
     });
 
     it("refuses a plugin discovered after the fetched list denied it", async () => {
@@ -496,6 +504,8 @@ describe("PluginService blocklist / kill-switch (#10891)", () => {
       ).loadFromDir(tmpDir, { isBuiltin: false });
       expect(service.hasPlugin("acme.late")).toBe(false);
       expect(isBlocked(service, "acme.late")).toBe(true);
+      await persisted();
+      service.dispose();
     });
 
     it("waits for the fetch when the shipped seed is malformed", async () => {
@@ -516,6 +526,8 @@ describe("PluginService blocklist / kill-switch (#10891)", () => {
         release();
         await init;
         expect(isBlocked(service, "acme.bad")).toBe(true);
+        await persisted();
+        service.dispose();
       } finally {
         warn.mockRestore();
       }

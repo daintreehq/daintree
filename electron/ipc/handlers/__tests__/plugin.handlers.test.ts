@@ -1915,8 +1915,7 @@ describe("pull handlers wait for PluginService init (#9285)", () => {
     expect(mockGetPluginToolbarButtonIds).toHaveBeenCalledTimes(1);
 
     const diagnostics = getHandler("plugin:get-diagnostics-snapshot")() as Promise<unknown>;
-    await Promise.resolve();
-    await Promise.resolve();
+    await vi.waitFor(() => expect(pluginService.waitForInit).toHaveBeenCalledTimes(1));
     expect(getDiagnosticsSnapshot).not.toHaveBeenCalled();
     releaseInit();
     await diagnostics;

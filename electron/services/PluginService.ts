@@ -1409,6 +1409,8 @@ export class PluginService {
    * published from them — see the broadcaster's `isRegistryUnsettled` dep.
    */
   private catalogScanInFlight = false;
+  /** The in-flight {@link initialize}, so a concurrent call joins it rather than scanning twice. */
+  private initializing: Promise<void> | null = null;
   /**
    * Owns the `host.dispatch()` main→renderer round-trip: the active-renderer
    * resolution, the lazy `ipcMain` response listener, and the pending-request
@@ -1808,8 +1810,15 @@ export class PluginService {
     }
   }
 
-  async initialize(): Promise<void> {
-    if (this.initialized) return;
+  initialize(): Promise<void> {
+    if (this.initialized) return Promise.resolve();
+    this.initializing ??= this.runInitialize().finally(() => {
+      this.initializing = null;
+    });
+    return this.initializing;
+  }
+
+  private async runInitialize(): Promise<void> {
     this.catalogScanInFlight = true;
     try {
       await this.scanStartupCatalog();
@@ -4355,6 +4364,10 @@ export class PluginService {
       }
       if (targets.length === 0) return;
       await Promise.allSettled(targets.map((id) => this.activatePlugin(id)));
+      // Catalog readers no longer wait for this fan-out (#14127), and an
+      // installed plugin's activation error is persisted without a push of its
+      // own: tell the plugin list to pull the outcomes it may have missed.
+      this.broadcaster.broadcastProvenanceChanged();
     } finally {
       // Open the init gate even if every plugin's activate() rejected — a
       // crashed plugin must not strand renderer IPC callers awaiting
