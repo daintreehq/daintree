@@ -1412,9 +1412,7 @@ describe("PluginSettingsForm settings edited by the plugin's own section", () =>
     act(() => lastSettingsContext.current!.focus!.acknowledge(false));
 
     expect(onFocusHandled).toHaveBeenCalledWith(5);
-    expect(
-      screen.getByTestId("fake-settings-view").closest(".settings-highlight")
-    ).not.toBeNull();
+    expect(screen.getByTestId("fake-settings-view").closest(".settings-highlight")).not.toBeNull();
   });
 
   it("still shows the field when the plugin declares no section to edit it", () => {
@@ -1541,7 +1539,9 @@ describe("PluginSettingsForm custom section links (#14101 review)", () => {
 
     rerender(<PluginSettingsForm plugin={{ ...base, loadedAt: 2 }} viewScope="user" />);
 
-    await waitFor(() => expect(screen.queryByRole("heading", { name: "Column mapping" })).toBeNull());
+    await waitFor(() =>
+      expect(screen.queryByRole("heading", { name: "Column mapping" })).toBeNull()
+    );
     const section = document.getElementById("plugin-settings-view-acme.test")!;
     await waitFor(() => expect(section.contains(document.activeElement)).toBe(true));
   });

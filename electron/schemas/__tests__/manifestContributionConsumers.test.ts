@@ -1272,7 +1272,10 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
       mode: "cross-reference",
       consumers: [
         { file: "src/components/Plugin/PluginSettingsView.tsx", symbol: "PluginSettingsView" },
-        { file: "src/services/plugin/pluginSettingsHome.ts", symbol: "resolvePluginSettingsTarget" },
+        {
+          file: "src/services/plugin/pluginSettingsHome.ts",
+          symbol: "resolvePluginSettingsTarget",
+        },
         {
           file: "src/components/Settings/pluginSettingsSearch.ts",
           symbol: "buildPluginSettingsSearchEntries",

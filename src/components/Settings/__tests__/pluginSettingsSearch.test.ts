@@ -8,7 +8,7 @@ function plugin(
   instanceId: string,
   settings: SettingDefinition[],
   origin: "global" | "project" = "global",
-  extra: Partial<LoadedPluginInfo["manifest"]["contributes"]> = {}
+  extra: Record<string, unknown> = {}
 ): LoadedPluginInfo {
   return {
     instanceId,
@@ -142,7 +142,11 @@ describe("buildPluginSettingsSearchEntries", () => {
       },
     ]);
     expect(entries.map((e) => [e.id, e.tab, e.plugin])).toEqual([
-      ["plugin:project__p1__mine:@home:project", "project:plugins", { instanceId: "project__p1__mine" }],
+      [
+        "plugin:project__p1__mine:@home:project",
+        "project:plugins",
+        { instanceId: "project__p1__mine" },
+      ],
       [
         "plugin:project__p1__mine:@setup:sync",
         "project:plugins",
@@ -168,15 +172,15 @@ describe("buildPluginSettingsSearchEntries", () => {
               componentPath: "dist/prefs.js",
               location: "settings",
               title: "Board layout",
-              pages: [{ id: "columns", title: "Column mapping", description: "Statuses to columns" }],
+              pages: [
+                { id: "columns", title: "Column mapping", description: "Statuses to columns" },
+              ],
             },
           ],
         }),
       },
     ]);
-    const custom = filterSettings(entries, "board layout").filter((e) =>
-      e.id.includes("@custom")
-    );
+    const custom = filterSettings(entries, "board layout").filter((e) => e.id.includes("@custom"));
     expect(custom.map((e) => [e.tab, e.plugin])).toEqual([
       ["plugins", { instanceId: "acme.board", section: "custom", scope: "user" }],
       ["project:plugins", { instanceId: "acme.board", section: "custom", scope: "project" }],
@@ -201,9 +205,11 @@ describe("buildPluginSettingsSearchEntries", () => {
           ] as SettingDefinition[],
           "global",
           {
-            forgeProviders: [{ id: "gitlab", name: "GitLab", slots: { settingsTab: true } }],
+            forgeProviders: [
+              { id: "gitlab", name: "GitLab", slots: { settingsTab: "gitlab.tab" } },
+            ],
             views: [{ id: "prefs", componentPath: "dist/prefs.js", location: "settings" }],
-          } as unknown as Partial<LoadedPluginInfo["manifest"]["contributes"]>
+          }
         ),
       },
     ]);

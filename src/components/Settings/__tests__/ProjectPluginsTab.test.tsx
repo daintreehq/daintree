@@ -775,7 +775,7 @@ describe("ProjectPluginsTab", () => {
 
     // Again with its pane already showing: the pane doesn't answer for the
     // heading before it is focused.
-    (document.activeElement as HTMLElement).blur();
+    if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
     act(() =>
       usePluginManagerStore
         .getState()

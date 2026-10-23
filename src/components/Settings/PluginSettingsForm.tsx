@@ -1057,10 +1057,7 @@ export function PluginSettingsForm({
       // An empty target is a section still loading (the checklist's status, the
       // view's snapshot): there is nothing to focus yet.
       const ready =
-        target !== null &&
-        target.firstElementChild !== null &&
-        isOnScreen(target) &&
-        pageSettled;
+        target !== null && target.firstElementChild !== null && isOnScreen(target) && pageSettled;
       if (!ready) {
         if (target && attempts++ < LANDING_ATTEMPTS) {
           timer = setTimeout(attempt, LANDING_RETRY_MS);
