@@ -1,5 +1,3 @@
-import type { PluginHostCallOptions } from "./plugin.js";
-
 /**
  * A file the host holds for a plugin (#14100): a copy of a file the person
  * chose or a scoped path, or a provider file downloaded into the cache. The
@@ -36,7 +34,8 @@ export interface PluginArtifactProgress {
 }
 
 /** Options every call that creates an artifact accepts. */
-export interface PluginArtifactCreateOptions extends PluginHostCallOptions {
+export interface PluginArtifactCreateOptions {
+  signal?: AbortSignal;
   /**
    * The project the artifact belongs to. A project plugin's artifacts always
    * belong to its own project, and naming another rejects. An app-global
@@ -91,7 +90,8 @@ export interface PluginArtifactUploadRequest {
 }
 
 /** Options for {@link PluginArtifactApi.upload}. */
-export interface PluginArtifactUploadOptions extends PluginHostCallOptions {
+export interface PluginArtifactUploadOptions {
+  signal?: AbortSignal;
   onProgress?: (progress: PluginArtifactProgress) => void;
 }
 

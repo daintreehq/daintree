@@ -1839,7 +1839,8 @@ interface PluginArtifactProgress {
     readonly attempt: number;
 }
 /** Options every call that creates an artifact accepts. */
-interface PluginArtifactCreateOptions extends PluginHostCallOptions {
+interface PluginArtifactCreateOptions {
+    signal?: AbortSignal;
     /**
      * The project the artifact belongs to. A project plugin's artifacts always
      * belong to its own project, and naming another rejects. An app-global
@@ -1889,7 +1890,8 @@ interface PluginArtifactUploadRequest {
     headers?: Record<string, string>;
 }
 /** Options for {@link PluginArtifactApi.upload}. */
-interface PluginArtifactUploadOptions extends PluginHostCallOptions {
+interface PluginArtifactUploadOptions {
+    signal?: AbortSignal;
     onProgress?: (progress: PluginArtifactProgress) => void;
 }
 /** The provider's answer to an upload. Any status counts as an answer; the plugin judges it. */
