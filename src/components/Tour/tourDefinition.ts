@@ -14,6 +14,8 @@ export interface TourSummary {
   minutes: number;
   /** Chapter titles in play order. */
   chapterTitles: readonly string[];
+  /** Declared content version; saved progress resumes by chapter id only while it matches. */
+  version?: string;
 }
 
 export interface TourDefinitionChapter {
@@ -30,6 +32,8 @@ export interface TourDefinition {
   /** Beside the title in the dialog header. */
   icon?: ComponentType<{ className?: string }>;
   chapters: readonly TourDefinitionChapter[];
+  /** Declared content version; saved progress resumes by chapter id only while it matches. */
+  version?: string;
   /** One timing per chapter, in chapter order. Tours that don't vary by keyboard ignore it. */
   resolveTimings: (keyboard: TourKeyboard) => TourChapterTiming[];
   /** The data the mockup kit draws agents, states and CI marks from. */

@@ -2477,6 +2477,68 @@
                   ],
                   "additionalProperties": false
                 }
+              },
+              "version": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64,
+                "pattern": "^[a-zA-Z0-9._-]+$"
+              },
+              "finish": {
+                "type": "object",
+                "properties": {
+                  "hint": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 120
+                  },
+                  "action": {
+                    "oneOf": [
+                      {
+                        "type": "object",
+                        "properties": {
+                          "kind": {
+                            "type": "string",
+                            "const": "settings"
+                          },
+                          "key": {
+                            "type": "string",
+                            "minLength": 1,
+                            "pattern": "^[a-zA-Z0-9._-]+$"
+                          }
+                        },
+                        "required": [
+                          "kind"
+                        ],
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "kind": {
+                            "type": "string",
+                            "const": "command"
+                          },
+                          "actionId": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 200
+                          }
+                        },
+                        "required": [
+                          "kind",
+                          "actionId"
+                        ],
+                        "additionalProperties": false
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "hint",
+                  "action"
+                ],
+                "additionalProperties": false
               }
             },
             "required": [

@@ -1,7 +1,8 @@
 import { useCallback, type ComponentType } from "react";
 import type { TourChapterTiming } from "@daintreehq/tour";
 import type { MockKit } from "@daintreehq/tour/mock-app";
-import type { PluginTourDescriptor } from "@shared/types/plugin";
+import type { PluginTourDescriptor, PluginTourDescriptorFinish } from "@shared/types/plugin";
+import { actionService } from "@/services/ActionService";
 import {
   PLUGIN_STYLE_ROOT_PROPS,
   preparePluginStyles,
@@ -121,11 +122,29 @@ function chapterTitle(module: PluginTourModule, chapterId: string): string {
   return typeof title === "string" && title.trim().length > 0 ? title : chapterId;
 }
 
+/**
+ * Finish is the user's click, so it dispatches as one — exactly as a setup
+ * step's button does — and the action's own danger and consent rules apply.
+ */
+function runFinish(pluginId: string, finish: PluginTourDescriptorFinish): void {
+  const { action } = finish;
+  if (action.kind === "command") {
+    void actionService.dispatch(action.actionId, undefined, { source: "user" });
+    return;
+  }
+  void actionService.dispatch(
+    "plugin.openSettings",
+    action.key === null ? { pluginId } : { pluginId, key: action.key },
+    { source: "user" }
+  );
+}
+
 /** Joins the manifest's chapters with the module's scenes, in manifest order. */
 export function buildPluginTourDefinition(
   tour: PluginTourDescriptor,
   module: PluginTourModule
 ): TourDefinition {
+  const { finish } = tour;
   const timings: TourChapterTiming[] = tour.chapters.map((chapter) => ({
     duration: chapter.duration,
     cues: { ...chapter.cues },
@@ -143,6 +162,10 @@ export function buildPluginTourDefinition(
     // Plugin timings are authored ahead of time and don't vary by keyboard.
     resolveTimings: () => timings.map((timing) => ({ ...timing })),
     ...(module.mockKit ? { mockKit: module.mockKit } : {}),
+    ...(tour.version !== undefined ? { version: tour.version } : {}),
+    ...(finish
+      ? { finish: { hint: finish.hint, run: () => runFinish(tour.pluginId, finish) } }
+      : {}),
   };
 }
 
@@ -154,6 +177,7 @@ export function pluginTourSummary(tour: PluginTourDescriptor): TourSummary {
     minutes: Math.max(1, Math.round(seconds / 60)),
     // The module holds the titles and isn't loaded until the tour opens.
     chapterTitles: tour.chapters.map((chapter) => chapter.id),
+    ...(tour.version !== undefined ? { version: tour.version } : {}),
   };
 }
 

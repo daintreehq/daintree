@@ -2877,6 +2877,23 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "title": "Daintree Tour",
   },
   {
+    "category": "help",
+    "danger": "safe",
+    "dangerRationale": undefined,
+    "description": "Read a tour's saved progress: whether it was finished, where it resumes, and how its last run ended",
+    "examples": undefined,
+    "id": "help.tour.status",
+    "keywords": [
+      "tour",
+      "progress",
+      "completed",
+      "onboarding",
+    ],
+    "kind": "query",
+    "requiresArgs": false,
+    "title": "Tour status",
+  },
+  {
     "category": "workspace",
     "danger": "safe",
     "dangerRationale": undefined,

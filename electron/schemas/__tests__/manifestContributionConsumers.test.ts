@@ -55,6 +55,7 @@ import {
   ToolbarButtonContributionSchema,
   ToolbarButtonPopoverSchema,
   TourCaptionSchema,
+  TourFinishSchema,
   TourChapterSchema,
   TourContributionSchema,
   ViewContributionSchema,
@@ -238,6 +239,7 @@ const SWEPT_SCHEMAS = {
   "forgeProviders.slots": ForgeProviderContributionSchema.shape.slots,
   "tours.chapters": TourChapterSchema,
   "tours.chapters.captions": TourCaptionSchema,
+  "tours.finish": TourFinishSchema,
   "setup.done.setting": SetupStepSettingDoneSchema,
   "setup.done.account": SetupStepAccountDoneSchema,
   "setup.done.context": SetupStepContextDoneSchema,
@@ -441,6 +443,7 @@ type FieldConsumerCoverage = {
   >;
   "tours.chapters": Record<keyof z.infer<typeof TourChapterSchema>, ConsumerDescriptor>;
   "tours.chapters.captions": Record<keyof z.infer<typeof TourCaptionSchema>, ConsumerDescriptor>;
+  "tours.finish": Record<keyof z.infer<typeof TourFinishSchema>, ConsumerDescriptor>;
   setup: Record<keyof z.infer<typeof SetupStepContributionSchema>, ConsumerDescriptor>;
   "setup.done.setting": Record<
     keyof z.infer<typeof SetupStepSettingDoneSchema>,
@@ -2543,6 +2546,43 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
         { file: TOUR_REGISTRY, symbol: "registerPluginTours" },
       ],
       note: "Played in manifest order; each needs a scene in the module.",
+    },
+    version: {
+      mode: "verbatim",
+      consumers: [
+        { file: TOUR_REGISTRY, symbol: "registerPluginTours (descriptor.version)" },
+        { file: PLUGIN_TOURS, symbol: "buildPluginTourDefinition, pluginTourSummary (version)" },
+        { file: "src/components/Tour/TourHost.tsx", symbol: "resumeChapter, Run.version" },
+        { file: "src/components/Tour/tourStatus.ts", symbol: "readTourStatus" },
+      ],
+      note: "Stamped on every progress write; saved progress resumes by chapter id only while it matches (#14098).",
+    },
+    finish: {
+      mode: "derived-input",
+      consumers: [
+        {
+          file: PLUGIN_SCHEMA,
+          symbol: "getPluginManifestSchema superRefine (tour_finish_command_not_own)",
+        },
+        { file: TOUR_REGISTRY, symbol: "registerPluginTours (descriptor.finish, qualifyActionId)" },
+        { file: PLUGIN_TOURS, symbol: "buildPluginTourDefinition (runFinish)" },
+      ],
+      note: "Becomes the tour's Finish: the hint on the last end card, then plugin.openSettings or the plugin's own command, dispatched as the user's click.",
+    },
+  },
+  "tours.finish": {
+    hint: {
+      mode: "verbatim",
+      consumers: [{ file: PLUGIN_TOURS, symbol: "buildPluginTourDefinition (finish.hint)" }],
+      note: "The line on the last end card that says what Finish does.",
+    },
+    action: {
+      mode: "derived-input",
+      consumers: [
+        { file: TOUR_REGISTRY, symbol: "registerPluginTours (qualifyActionId)" },
+        { file: PLUGIN_TOURS, symbol: "runFinish (actionService.dispatch)" },
+      ],
+      note: "The same settings/command targets as a setup step, held to the same rules; the command is rewritten into the instance's namespace.",
     },
   },
   projectTemplates: {

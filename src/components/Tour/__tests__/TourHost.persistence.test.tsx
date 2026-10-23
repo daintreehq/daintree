@@ -34,7 +34,8 @@ vi.mock("../TourDialog", () => ({
 const screenHasDialog = () => document.querySelector("[data-testid='tour-dialog-mock']") !== null;
 
 import type { TourDefinition } from "../tourDefinition";
-import { openTour, TOUR_COMPLETED_EVENT } from "../tourEvents";
+import { openTour, TOUR_COMPLETED_EVENT, TOUR_OUTCOME_EVENT } from "../tourEvents";
+import { requestTour, type TourStartResult } from "../tourRequests";
 import { resolveOpenState, TourHost } from "../TourHost";
 import { registerTour } from "../tourRegistry";
 
@@ -122,10 +123,13 @@ describe("TourHost", () => {
     });
     expect(onboarding.setTourProgress).toHaveBeenNthCalledWith(1, DAINTREE_TOUR_ID, {
       lastChapter: 3,
+      lastChapterId: "c3",
+      contentVersion: null,
     });
     expect(onboarding.setTourProgress).toHaveBeenNthCalledWith(2, DAINTREE_TOUR_ID, {
       completed: true,
       lastChapter: 0,
+      contentVersion: null,
     });
     expect(onboarding.setTourMuted).toHaveBeenCalledWith(true);
   });
@@ -163,10 +167,15 @@ describe("TourHost", () => {
     } finally {
       window.removeEventListener(TOUR_COMPLETED_EVENT, completed);
     }
-    expect(onboarding.setTourProgress).toHaveBeenNthCalledWith(1, ACME_TOUR_ID, { lastChapter: 1 });
+    expect(onboarding.setTourProgress).toHaveBeenNthCalledWith(1, ACME_TOUR_ID, {
+      lastChapter: 1,
+      lastChapterId: "two",
+      contentVersion: null,
+    });
     expect(onboarding.setTourProgress).toHaveBeenNthCalledWith(2, ACME_TOUR_ID, {
       completed: true,
       lastChapter: 0,
+      contentVersion: null,
     });
     expect(completed.mock.results[0]!.value).toEqual({ tourId: ACME_TOUR_ID });
   });
@@ -308,8 +317,12 @@ describe("TourHost", () => {
     act(() => unregister());
 
     expect(screenHasDialog()).toBe(false);
-    // Withdrawal is not completion: nothing is written on the way out.
-    expect(onboarding.setTourProgress).not.toHaveBeenCalled();
+    // Withdrawal is not completion: only how the run ended is written on the way out.
+    expect(onboarding.setTourProgress).toHaveBeenCalledTimes(1);
+    expect(onboarding.setTourProgress.mock.calls[0]).toEqual([
+      ACME_TOUR_ID,
+      { lastOutcome: "withdrawn", lastRunId: expect.any(String), contentVersion: null },
+    ]);
   });
 
   it("closes an open tour replaced under the same id, as a plugin reload does", async () => {
@@ -374,21 +387,299 @@ describe("TourHost", () => {
     expect(dialogProps.current).toBeNull();
     expect(notifyMock).not.toHaveBeenCalled();
   });
+  describe("requests and outcomes", () => {
+    let outcomes: { tourId: string; outcome: string; runId: string | null }[] = [];
+    const onOutcome = (event: Event) => {
+      if (event instanceof CustomEvent) outcomes.push(event.detail);
+    };
+    beforeEach(() => {
+      outcomes = [];
+      window.addEventListener(TOUR_OUTCOME_EVENT, onOutcome);
+      getOnboardingStateMock.mockResolvedValue({ tours: {}, tourMuted: false });
+    });
+    afterEach(() => window.removeEventListener(TOUR_OUTCOME_EVENT, onOutcome));
+
+    function registerAcme(tour: TourDefinition = acmeTour) {
+      unregister = registerTour({
+        summary: {
+          id: ACME_TOUR_ID,
+          title: "Acme Tour",
+          minutes: 1,
+          chapterTitles: [],
+          ...(tour.version !== undefined ? { version: tour.version } : {}),
+        },
+        load: () => Promise.resolve(tour),
+      });
+    }
+
+    async function request(candidates: string[], registrationTimeoutMs?: number) {
+      let result: TourStartResult | undefined;
+      act(() => {
+        void requestTour(candidates, { registrationTimeoutMs }).then((r) => (result = r));
+      });
+      await waitFor(() => expect(result).toBeDefined());
+      return result!;
+    }
+
+    it("reports started with the run id once the dialog is on screen, and completion once", async () => {
+      registerAcme();
+      render(<TourHost />);
+      const result = await request([ACME_TOUR_ID]);
+      expect(result).toEqual({
+        status: "started",
+        tourId: ACME_TOUR_ID,
+        runId: expect.any(String),
+      });
+      expect(screenHasDialog()).toBe(true);
+      // Nothing has ended yet: being asked to open is not completing.
+      expect(outcomes).toEqual([]);
+
+      const props = dialogProps.current!;
+      act(() => {
+        props.onCompleted();
+        props.onCompleted();
+        props.onClose();
+        props.onClose();
+      });
+      expect(outcomes).toEqual([
+        {
+          tourId: ACME_TOUR_ID,
+          outcome: "completed",
+          runId: result.status === "started" ? result.runId : null,
+        },
+      ]);
+      expect(onboarding.setTourProgress).toHaveBeenLastCalledWith(ACME_TOUR_ID, {
+        lastOutcome: "completed",
+        lastRunId: result.status === "started" ? result.runId : "",
+        contentVersion: null,
+      });
+    });
+
+    it("records a run closed before its end as dismissed, without touching the invitation", async () => {
+      registerAcme();
+      render(<TourHost />);
+      await request([ACME_TOUR_ID]);
+      act(() => dialogProps.current!.onClose());
+      expect(outcomes.map((o) => o.outcome)).toEqual(["dismissed"]);
+      for (const [, update] of onboarding.setTourProgress.mock.calls) {
+        expect(update).not.toHaveProperty("dismissed");
+      }
+    });
+
+    it("records the open run as superseded when another tour replaces it", async () => {
+      registerAcme();
+      render(<TourHost />);
+      await request([ACME_TOUR_ID]);
+      const next = await request([DAINTREE_TOUR_ID]);
+      expect(next.status).toBe("started");
+      expect(dialogProps.current!.tour.id).toBe(DAINTREE_TOUR_ID);
+      expect(outcomes).toEqual([
+        { tourId: ACME_TOUR_ID, outcome: "superseded", runId: expect.any(String) },
+      ]);
+    });
+
+    it("answers an earlier request still loading as superseded by a later one", async () => {
+      let resolveSlow: (tour: TourDefinition) => void = () => {};
+      unregister = registerTour({
+        summary: { id: ACME_TOUR_ID, title: "Acme Tour", minutes: 1, chapterTitles: [] },
+        load: () => new Promise((resolve) => (resolveSlow = resolve)),
+      });
+      render(<TourHost />);
+      let first: TourStartResult | undefined;
+      act(() => {
+        void requestTour([ACME_TOUR_ID]).then((r) => (first = r));
+      });
+      const second = await request([DAINTREE_TOUR_ID]);
+      await waitFor(() => expect(first).toEqual({ status: "superseded", tourId: ACME_TOUR_ID }));
+      expect(second.status).toBe("started");
+      resolveSlow(acmeTour);
+    });
+
+    it("joins a repeated request for the tour already playing to the same run", async () => {
+      registerAcme();
+      render(<TourHost />);
+      const first = await request([ACME_TOUR_ID]);
+      const again = await request([ACME_TOUR_ID]);
+      expect(again).toEqual(first);
+    });
+
+    it("reports a tour that couldn't load as failed, and saves that outcome", async () => {
+      unregister = registerTour({
+        summary: { id: ACME_TOUR_ID, title: "Acme Tour", minutes: 1, chapterTitles: [] },
+        load: () => Promise.reject(new Error("import failed")),
+      });
+      render(<TourHost />);
+      const result = await request([ACME_TOUR_ID]);
+      expect(result).toMatchObject({ status: "failed", tourId: ACME_TOUR_ID });
+      expect(outcomes).toEqual([{ tourId: ACME_TOUR_ID, outcome: "failed", runId: null }]);
+    });
+
+    it("answers a request whose tour is withdrawn while it loads as unavailable", async () => {
+      unregister = registerTour({
+        summary: { id: ACME_TOUR_ID, title: "Acme Tour", minutes: 1, chapterTitles: [] },
+        load: () => new Promise<TourDefinition>(() => {}),
+      });
+      render(<TourHost />);
+      let result: TourStartResult | undefined;
+      act(() => {
+        void requestTour([ACME_TOUR_ID]).then((r) => (result = r));
+      });
+      await waitFor(() => expect(getOnboardingStateMock).toHaveBeenCalled());
+      act(() => unregister());
+      await waitFor(() =>
+        expect(result).toEqual({
+          status: "unavailable",
+          tourId: ACME_TOUR_ID,
+          reason: "not-registered",
+        })
+      );
+    });
+
+    it("records an open run withdrawn by its plugin as withdrawn", async () => {
+      registerAcme();
+      render(<TourHost />);
+      await request([ACME_TOUR_ID]);
+      act(() => unregister());
+      expect(outcomes.map((o) => o.outcome)).toEqual(["withdrawn"]);
+    });
+
+    it("answers unavailable when nothing registers the tour within the bound", async () => {
+      render(<TourHost />);
+      const result = await request(["acme.tools.missing"], 0);
+      expect(result).toEqual({
+        status: "unavailable",
+        tourId: "acme.tools.missing",
+        reason: "not-registered",
+      });
+      expect(screenHasDialog()).toBe(false);
+    });
+
+    it("waits for a tour registered shortly after the request", async () => {
+      render(<TourHost />);
+      let result: TourStartResult | undefined;
+      act(() => {
+        void requestTour([ACME_TOUR_ID], { registrationTimeoutMs: 1_000 }).then(
+          (r) => (result = r)
+        );
+      });
+      await act(async () => {
+        await Promise.resolve();
+        registerAcme();
+      });
+      await waitFor(() => expect(result?.status).toBe("started"));
+    });
+
+    it("answers unavailable when no tour host is mounted", async () => {
+      registerAcme();
+      const result = await request([ACME_TOUR_ID]);
+      expect(result).toEqual({ status: "unavailable", tourId: ACME_TOUR_ID, reason: "no-host" });
+    });
+
+    it("prefers the first candidate registered, so a plugin's own id wins", async () => {
+      registerAcme();
+      render(<TourHost />);
+      const result = await request(["acme.tools.other", ACME_TOUR_ID]);
+      expect(result).toMatchObject({ status: "started", tourId: ACME_TOUR_ID });
+    });
+
+    it("resumes a versioned tour after a reload at the saved chapter id", async () => {
+      const versioned: TourDefinition = {
+        ...acmeTour,
+        version: "2",
+        // Reordered since the progress was saved: "two" now comes first.
+        chapters: [acmeTour.chapters[1]!, acmeTour.chapters[0]!],
+      };
+      registerAcme(versioned);
+      getOnboardingStateMock.mockResolvedValue({
+        tours: {
+          [ACME_TOUR_ID]: {
+            completed: false,
+            dismissed: false,
+            lastChapter: 1,
+            lastChapterId: "two",
+            contentVersion: "2",
+          },
+        },
+        tourMuted: false,
+      });
+      const { unmount } = render(<TourHost />);
+      unmount();
+      const props = await openHostedTour(ACME_TOUR_ID);
+      expect(props.initialChapter).toBe(0);
+      act(() => props.onChapterReached(1));
+      expect(onboarding.setTourProgress).toHaveBeenLastCalledWith(ACME_TOUR_ID, {
+        lastChapter: 1,
+        lastChapterId: "one",
+        contentVersion: "2",
+      });
+    });
+  });
 });
 
 describe("resolveOpenState", () => {
   const base = { completed: false, dismissed: false, lastChapter: 0 };
-  const CHAPTERS = 14;
+  const CHAPTERS = Array.from({ length: 14 }, (_, i) => ({ id: `c${i}` }));
+  const at = (progress: Parameters<typeof resolveOpenState>[0], version?: string) =>
+    resolveOpenState(progress, false, CHAPTERS, version).initialChapter;
 
-  it("starts a finished tour over", () => {
-    expect(
-      resolveOpenState({ ...base, completed: true, lastChapter: 4 }, false, CHAPTERS).initialChapter
-    ).toBe(0);
+  it("starts a finished tour over, including one finished before versions were kept", () => {
+    expect(at({ ...base, completed: true, lastChapter: 4 })).toBe(0);
+    expect(at({ ...base, completed: true, lastChapter: 4, lastChapterId: "c4" })).toBe(0);
   });
 
   it("ignores a chapter index the tour no longer has", () => {
+    expect(at({ ...base, lastChapter: CHAPTERS.length })).toBe(0);
+  });
+
+  it("resumes an index-only record by index while the tour is unversioned", () => {
+    expect(at({ ...base, lastChapter: 4 })).toBe(4);
+  });
+
+  it("resumes by chapter id when the chapters are reordered", () => {
+    const reordered = [{ id: "c4" }, ...CHAPTERS.filter((chapter) => chapter.id !== "c4")];
     expect(
-      resolveOpenState({ ...base, lastChapter: CHAPTERS }, false, CHAPTERS).initialChapter
+      resolveOpenState(
+        { ...base, lastChapter: 4, lastChapterId: "c4", contentVersion: "2" },
+        false,
+        reordered,
+        "2"
+      ).initialChapter
     ).toBe(0);
+    expect(
+      resolveOpenState(
+        { ...base, lastChapter: 0, lastChapterId: "c4", contentVersion: "2" },
+        false,
+        [...CHAPTERS].reverse(),
+        "2"
+      ).initialChapter
+    ).toBe(9);
+  });
+
+  it("starts over when the chapter it stopped at was removed, never falling back to the index", () => {
+    expect(at({ ...base, lastChapter: 4, lastChapterId: "gone", contentVersion: "2" }, "2")).toBe(
+      0
+    );
+  });
+
+  it("starts over when the content version changed or a record predates versioning", () => {
+    expect(at({ ...base, lastChapter: 4, lastChapterId: "c4", contentVersion: "1" }, "2")).toBe(0);
+    expect(at({ ...base, lastChapter: 4 }, "2")).toBe(0);
+    expect(at({ ...base, lastChapter: 4, lastChapterId: "c4", contentVersion: "2" })).toBe(0);
+  });
+
+  it("resumes a newer version's run after an older version was finished", () => {
+    expect(
+      at(
+        {
+          ...base,
+          completed: true,
+          completedVersion: "1",
+          lastChapter: 4,
+          lastChapterId: "c4",
+          contentVersion: "2",
+        },
+        "2"
+      )
+    ).toBe(4);
   });
 });

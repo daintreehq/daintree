@@ -2788,6 +2788,29 @@ export interface PluginTourContribution {
   /** Bare hostnames remote chapter audio is fetched from, e.g. `cdn.example.com`. */
   audioHosts?: string[];
   chapters: PluginTourChapter[];
+  /**
+   * Content version. Saved progress resumes by chapter id only while it
+   * matches; bump it when a half-watched run should start over.
+   */
+  version?: string;
+  /** What Finish does beyond closing. */
+  finish?: PluginTourFinishContribution;
+}
+
+/**
+ * A tour's Finish handoff (#14098): open this plugin's settings, optionally at
+ * one setting, or run one of its own commands, written `{manifest.name}.<id>`.
+ */
+export interface PluginTourFinishContribution {
+  /** The line on the last end card that says what Finish will do. */
+  hint: string;
+  action: { kind: "settings"; key?: string } | { kind: "command"; actionId: string };
+}
+
+/** {@link PluginTourFinishContribution} as renderers see it: the command qualified to this instance. */
+export interface PluginTourDescriptorFinish {
+  hint: string;
+  action: PluginSetupStepUiAction;
 }
 
 /** One chapter of a {@link PluginTourDescriptor}: manifest timing with its audio resolved. */
@@ -2818,6 +2841,8 @@ export interface PluginTourDescriptor {
   /** `plugin://` URL of the scene module, carrying the load's view generation. */
   moduleUrl: string;
   chapters: PluginTourDescriptorChapter[];
+  version?: string;
+  finish?: PluginTourDescriptorFinish;
 }
 
 /**
