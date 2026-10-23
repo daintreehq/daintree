@@ -40,12 +40,7 @@ const GITHUB = "daintree.github";
  */
 function seedKnownPlugins(...pluginIds: string[]): void {
   usePluginRuntimeStore.setState({
-    pluginMetaById: new Map(
-      pluginIds.map((id) => [
-        id,
-        { devMode: false, displayName: id, previewToolIds: new Set<string>() },
-      ])
-    ),
+    pluginMetaById: new Map(pluginIds.map((id) => [id, { devMode: false, displayName: id }])),
   });
 }
 

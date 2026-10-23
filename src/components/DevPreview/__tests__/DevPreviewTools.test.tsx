@@ -2,18 +2,14 @@
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-// The dev preview's own Element Picker, reduced to a toggle: these cases are
-// about how the host offers tools, not about the picker.
-vi.mock("@/panels/dev-preview/element-picker/elementPickerTool", () => ({
-  elementPickerTool: {
-    id: "element-picker",
-    label: "Element Picker",
-    Button: ({ active, onToggle }: { active: boolean; onToggle: () => void }) => (
-      <button type="button" aria-pressed={active} onClick={onToggle}>
-        Element Picker
-      </button>
-    ),
-  },
+// The dev preview's own tools, swapped for fakes: these cases are about how
+// the host offers tools, not about the picker. Mutated in place so the list
+// the host imported is the list each case sets up.
+const builtIn = vi.hoisted(() => ({ tools: [] as unknown[] }));
+vi.mock("@/services/devPreviewTools/builtInTools", () => ({
+  BUILT_IN_DEV_PREVIEW_TOOLS: builtIn.tools,
+  resolveDevPreviewTool: (toolId: string) =>
+    (builtIn.tools as Array<{ id: string }>).find((tool) => tool.id === toolId),
 }));
 
 import {
@@ -21,26 +17,21 @@ import {
   DevPreviewToolDrawer,
   DevPreviewToolToolbar,
 } from "../DevPreviewTools";
-import {
-  __resetDevPreviewToolsForTests,
-  getAvailableDevPreviewTool,
-  registerDevPreviewTool,
-  type DevPreviewTool,
-  type DevPreviewToolButtonProps,
-  type DevPreviewToolSessionContext,
-  type DevPreviewToolSurfaceProps,
-} from "@/registry/devPreviewToolRegistry";
+import type {
+  DevPreviewToolButtonProps,
+  DevPreviewToolDefinition,
+  DevPreviewToolSessionContext,
+  DevPreviewToolSurfaceProps,
+} from "@/services/devPreviewTools/types";
 import {
   __resetDevPreviewToolSessionsForTests,
   peekDevPreviewToolSession,
 } from "@/services/devPreviewTools/sessionManager";
 import { useDevPreviewToolStore } from "@/store/devPreviewToolStore";
 import { usePanelStore } from "@/store/panelStore";
-import { _resetPluginRuntimeStoreForTest, usePluginRuntimeStore } from "@/store/pluginRuntimeStore";
 
-const PLUGIN = "acme.tools";
-const TOOL = "acme.tools.picker";
-const BROKEN_TOOL = "acme.tools.broken";
+const TOOL = "picker";
+const BROKEN_TOOL = "broken";
 
 /** A stand-in for a tool's session, recording what the host tells it. */
 interface FakeSession {
@@ -122,22 +113,12 @@ function Preview(overrides: Partial<typeof host> = {}) {
   );
 }
 
-function pluginLoaded(enabled: boolean) {
-  usePluginRuntimeStore.setState({
-    pluginMetaById: new Map([
-      [
-        PLUGIN,
-        {
-          devMode: false,
-          displayName: "Acme",
-          // The registry admits a tool only when its plugin's manifest declares
-          // the id, so the fake meta must declare every tool these cases register.
-          previewToolIds: new Set([TOOL, BROKEN_TOOL]),
-        },
-      ],
-    ]),
-    disabledPluginIds: new Set(enabled ? [] : [PLUGIN]),
-  });
+/** Add a tool to the preview's own, replacing any with the same id. */
+function register(tool: DevPreviewToolDefinition): void {
+  const tools = builtIn.tools as DevPreviewToolDefinition[];
+  const index = tools.findIndex((existing) => existing.id === tool.id);
+  if (index === -1) tools.push(tool);
+  else tools[index] = tool;
 }
 
 beforeEach(() => {
@@ -147,18 +128,8 @@ beforeEach(() => {
     panelIds: [host.panelId],
     panelsById: { [host.panelId]: { id: host.panelId, kind: "dev-preview", location: "grid" } },
   } as never);
-  Object.defineProperty(window, "electron", {
-    configurable: true,
-    writable: true,
-    value: {
-      // Never resolves: the runtime store's `init` would otherwise replace the
-      // plugin set these tests seed by hand with an empty one mid-test.
-      plugin: { list: () => new Promise(() => {}), onProvenanceChanged: () => () => {} },
-    },
-  });
-  registerDevPreviewTool({
+  register({
     id: TOOL,
-    pluginId: PLUGIN,
     label: "Picker",
     Button,
     Toolbar,
@@ -170,28 +141,13 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   __resetDevPreviewToolSessionsForTests();
-  __resetDevPreviewToolsForTests();
-  _resetPluginRuntimeStoreForTest();
+  builtIn.tools.length = 0;
+  useDevPreviewToolStore.setState({ activeByPanel: {} });
   usePanelStore.setState({ panelIds: [], panelsById: {} } as never);
 });
 
 describe("dev preview tools", () => {
-  it("shows nothing until the owning plugin is known to be loaded and enabled", () => {
-    render(<Preview />);
-    // No plugin snapshot yet: a default-off built-in must not flash its button.
-    expect(screen.queryByRole("button", { name: "Picker" })).toBeNull();
-
-    act(() => pluginLoaded(false));
-    expect(screen.queryByRole("button", { name: "Picker" })).toBeNull();
-
-    act(() => pluginLoaded(true));
-    expect(screen.getByRole("button", { name: "Picker" }).getAttribute("aria-pressed")).toBe(
-      "false"
-    );
-  });
-
   it("mounts the tool's strip and drawer for this preview only while toggled on", () => {
-    pluginLoaded(true);
     render(<Preview />);
     expect(screen.queryByRole("toolbar", { name: "Picker strip" })).toBeNull();
 
@@ -211,16 +167,7 @@ describe("dev preview tools", () => {
     );
   });
 
-  it("offers a tool to actions only while its plugin is loaded and enabled", () => {
-    expect(getAvailableDevPreviewTool(TOOL)).toBeUndefined();
-    pluginLoaded(false);
-    expect(getAvailableDevPreviewTool(TOOL)).toBeUndefined();
-    pluginLoaded(true);
-    expect(getAvailableDevPreviewTool(TOOL)?.id).toBe(TOOL);
-  });
-
   it("keeps one session across the surfaces unmounting and remounting", () => {
-    pluginLoaded(true);
     const view = render(<Preview />);
     fireEvent.click(screen.getByRole("button", { name: "Picker" }));
     const live = session();
@@ -239,7 +186,6 @@ describe("dev preview tools", () => {
   });
 
   it("hands both surfaces the one session the tool's factory produced", () => {
-    pluginLoaded(true);
     render(<Preview />);
     fireEvent.click(screen.getByRole("button", { name: "Picker" }));
     const live = session();
@@ -249,12 +195,10 @@ describe("dev preview tools", () => {
   });
 
   it("mounts no surface until a deferred factory has produced the session", async () => {
-    __resetDevPreviewToolsForTests();
     let resolve!: (session: FakeSession) => void;
     let context!: DevPreviewToolSessionContext;
-    registerDevPreviewTool({
+    register({
       id: TOOL,
-      pluginId: PLUGIN,
       label: "Picker",
       Button,
       Toolbar,
@@ -266,7 +210,6 @@ describe("dev preview tools", () => {
         });
       },
     });
-    pluginLoaded(true);
     render(<Preview />);
     fireEvent.click(screen.getByRole("button", { name: "Picker" }));
     expect(screen.queryByRole("toolbar", { name: "Picker strip" })).toBeNull();
@@ -280,7 +223,6 @@ describe("dev preview tools", () => {
   });
 
   it("disposes the session when the tool is switched off", () => {
-    pluginLoaded(true);
     render(<Preview />);
     fireEvent.click(screen.getByRole("button", { name: "Picker" }));
     const live = session();
@@ -290,9 +232,8 @@ describe("dev preview tools", () => {
   });
 
   it("does not carry one tool's failed toolbar into the next tool", () => {
-    registerDevPreviewTool({
+    register({
       id: BROKEN_TOOL,
-      pluginId: PLUGIN,
       label: "Broken",
       Button: ({ onToggle }: DevPreviewToolButtonProps) => (
         <button type="button" onClick={onToggle}>
@@ -303,7 +244,6 @@ describe("dev preview tools", () => {
         throw new Error("toolbar exploded");
       },
     });
-    pluginLoaded(true);
     const errors = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
       render(<Preview />);
@@ -317,29 +257,12 @@ describe("dev preview tools", () => {
       errors.mockRestore();
     }
   });
-
-  it("drops an active tool's surfaces when its plugin is disabled", () => {
-    pluginLoaded(true);
-    render(<Preview />);
-    fireEvent.click(screen.getByRole("button", { name: "Picker" }));
-    expect(screen.getByRole("toolbar", { name: "Picker strip" })).toBeTruthy();
-
-    const live = session();
-    act(() => pluginLoaded(false));
-    expect(screen.queryByRole("toolbar", { name: "Picker strip" })).toBeNull();
-    expect(screen.queryByRole("complementary", { name: "Picker drawer" })).toBeNull();
-    // Not just hidden: a disabled plugin ends the tool, session and all.
-    expect(useDevPreviewToolStore.getState().activeByPanel).toEqual({});
-    expect(live.disposals).toBe(1);
-  });
 });
 
 /** Re-register the picker with an availability predicate, as a real tool declares one. */
-function registerWithAvailability(isAvailable: DevPreviewTool["isAvailable"]): void {
-  __resetDevPreviewToolsForTests();
-  registerDevPreviewTool({
+function registerWithAvailability(isAvailable: DevPreviewToolDefinition["isAvailable"]): void {
+  register({
     id: TOOL,
-    pluginId: PLUGIN,
     label: "Picker",
     Button,
     Toolbar,
@@ -353,7 +276,6 @@ function registerWithAvailability(isAvailable: DevPreviewTool["isAvailable"]): v
 describe("dev preview tool availability", () => {
   it("hides the toggle where the tool's predicate says it does not apply", async () => {
     registerWithAvailability(() => Promise.resolve(false));
-    pluginLoaded(true);
     render(<Preview />);
     await act(async () => {});
     expect(screen.queryByRole("button", { name: "Picker" })).toBeNull();
@@ -361,7 +283,6 @@ describe("dev preview tool availability", () => {
 
   it("shows the toggle where the predicate says it applies", async () => {
     registerWithAvailability(() => Promise.resolve(true));
-    pluginLoaded(true);
     render(<Preview />);
     await act(async () => {});
     expect(screen.getByRole("button", { name: "Picker" })).toBeTruthy();
@@ -370,7 +291,6 @@ describe("dev preview tool availability", () => {
   it("hides a toggle it had shown once the predicate stops applying", async () => {
     let applies = true;
     registerWithAvailability(() => Promise.resolve(applies));
-    pluginLoaded(true);
     const view = render(<Preview />);
     await act(async () => {});
     expect(screen.getByRole("button", { name: "Picker" })).toBeTruthy();
@@ -385,7 +305,6 @@ describe("dev preview tool availability", () => {
 
   it("keeps an active tool reachable while the predicate has not answered", () => {
     registerWithAvailability(() => new Promise<boolean>(() => {}));
-    pluginLoaded(true);
     useDevPreviewToolStore.setState({ activeByPanel: { [host.panelId]: TOOL } });
     render(<Preview />);
     // The one control that switches it off must not vanish under the user.
@@ -397,7 +316,6 @@ describe("dev preview tool availability", () => {
 
 describe("dev preview tool drawer chrome", () => {
   beforeEach(() => {
-    pluginLoaded(true);
     useDevPreviewToolStore.getState().setDrawerWidth(360);
   });
 
@@ -476,26 +394,5 @@ describe("dev preview tool drawer chrome", () => {
     fireEvent.click(close);
     // Never `document.body`: the close control was inside what it closed.
     expect(document.activeElement).toBe(screen.getByRole("button", { name: "Picker" }));
-  });
-});
-
-describe("the dev preview's own tools", () => {
-  it("offers the Element Picker with no plugin loaded or enabled", () => {
-    pluginLoaded(false);
-    render(<Preview />);
-    expect(screen.getByRole("button", { name: "Element Picker" })).not.toBeNull();
-  });
-
-  it("switches it on from its toggle, beside the plugins' tools", () => {
-    pluginLoaded(true);
-    render(<Preview />);
-    fireEvent.click(screen.getByRole("button", { name: "Element Picker" }));
-    expect(useDevPreviewToolStore.getState().activeByPanel[host.panelId]).toBe("element-picker");
-    expect(
-      screen.getByRole("button", { name: "Element Picker" }).getAttribute("aria-pressed")
-    ).toBe("true");
-    expect(screen.getByRole("button", { name: "Picker" }).getAttribute("aria-pressed")).toBe(
-      "false"
-    );
   });
 });

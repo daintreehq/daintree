@@ -23,10 +23,6 @@ vi.mock("../../../services/SitePreviewBridge.js", () => ({
   resetSitePreviewBridge: vi.fn(),
 }));
 
-vi.mock("../../../services/sitePreview/builtinGuestAdapters.js", () => ({
-  registerBuiltinGuestAdapters: () => () => undefined,
-}));
-
 const projectViews = vi.hoisted(
   () => new Map<string, Array<{ id: number; isDestroyed: () => boolean; send: unknown }>>()
 );

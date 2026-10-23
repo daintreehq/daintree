@@ -1,5 +1,5 @@
 import { lazy } from "react";
-import type { DevPreviewToolDefinition } from "@/registry/devPreviewToolRegistry";
+import type { DevPreviewToolDefinition } from "@/services/devPreviewTools/types";
 import { ElementPickerButton } from "./ElementPickerButton.js";
 import type { InspectorController } from "./inspectorController.js";
 import { ELEMENT_PICKER_TOOL_ID } from "./toolId.js";

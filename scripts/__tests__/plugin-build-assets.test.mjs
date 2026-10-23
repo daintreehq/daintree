@@ -14,14 +14,6 @@ import {
   findTypeScriptCommandHandlers,
   guestRuntimeBuildConfig,
 } from "../build-main.mjs";
-// The app's own copy of the same derivation. This script cannot import it (it
-// runs under plain `node`), so the two are restated halves of one rule and this
-// suite is what keeps them equal.
-import {
-  guestAdapterAssetPath,
-  isSafeGuestEntryPath,
-  listBuiltinGuestAdapters,
-} from "../../electron/services/sitePreview/guestAdapterAssets.ts";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 
@@ -414,38 +406,6 @@ describe("discoverGuestRuntimeAssets", () => {
     expect(discoverGuestRuntimeAssets(workDir).map((a) => a.adapterId)).toEqual([
       "acme.hostile.ok",
     ]);
-  });
-
-  it("agrees with the app's own copy of the derivation", () => {
-    // Both halves, one manifest. The build's own predicates are module-private,
-    // so they are exercised through `discoverGuestRuntimeAssets`; a change to
-    // one rule without the other would leave the build emitting an asset the
-    // host never reads back, or skipping one it does.
-    writeManifest(path.join(workDir, "plugins/builtin/alpha"), {
-      name: "acme.alpha",
-      contributes: {
-        guestAdapters: [
-          { id: "acme.alpha.guest", entry: "renderer/guest/entry.ts" },
-          { id: "acme.alpha.a-b", entry: "renderer/ab.ts" },
-          { id: "acme.alpha.a.b", entry: "renderer/collide.ts" },
-          { id: "acme.alpha.bad", entry: "../escape.ts" },
-          { id: "other.plugin.nope", entry: "renderer/x.ts" },
-        ],
-      },
-    });
-
-    const fromBuild = discoverGuestRuntimeAssets(workDir);
-    const fromApp = listBuiltinGuestAdapters(path.join(workDir, "plugins/builtin"));
-    expect(fromBuild.map((a) => a.adapterId)).toEqual(fromApp.map((d) => d.adapterId));
-    expect(fromBuild.map((a) => a.outfile)).toEqual(
-      fromApp.map((d) => `dist-electron/plugins/builtin/${d.dirName}/${d.assetPath}`)
-    );
-    for (const declaration of fromApp) {
-      expect(guestAdapterAssetPath(declaration.pluginId, declaration.adapterId)).toBe(
-        declaration.assetPath
-      );
-      expect(isSafeGuestEntryPath(declaration.entry)).toBe(true);
-    }
   });
 });
 

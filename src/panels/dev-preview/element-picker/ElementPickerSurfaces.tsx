@@ -19,7 +19,7 @@ import {
   SquareDashedMousePointer,
   Unplug,
 } from "lucide-react";
-import type { DevPreviewToolSurfaceProps } from "@/registry/devPreviewToolRegistry";
+import type { DevPreviewToolSurfaceProps } from "@/services/devPreviewTools/types";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { DismissButton } from "@/components/ui/DismissButton";

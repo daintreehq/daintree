@@ -27,7 +27,7 @@ import { RESOLVE_BUDGET_CEILINGS } from "@shared/elementPicker/resolver";
 import type {
   DevPreviewToolSession,
   DevPreviewToolSessionContext,
-} from "@/registry/devPreviewToolRegistry";
+} from "@/services/devPreviewTools/types";
 import { clientErrorText, isClientAppError } from "@/utils/clientAppError";
 import { cancelAgentRequests } from "./agentRequest.js";
 import { forgetComposerMemories } from "./composerMemory.js";
