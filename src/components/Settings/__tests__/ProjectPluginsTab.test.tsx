@@ -1469,20 +1469,65 @@ describe("ProjectPluginsTab per-project packages", () => {
     expect(screen.queryByTestId("installed-plugin-visibility-switch")).toBeNull();
   });
 
-  it("turns the instance on for the current project only", async () => {
+  it("turns the instance on for the current project only, and stays on once main has it", async () => {
     pluginApi.list.mockResolvedValue([packageRow()]);
+    pluginApi.setProjectInstanceEnabled.mockImplementationOnce(async () => {
+      // What main reports from here on: this project is in the package's list.
+      pluginApi.list.mockResolvedValue([packageRow([PROJECT_ID]), instanceRow()]);
+    });
     seed([]);
     render(<ProjectPluginsTab />);
     await waitFor(() => expect(pluginApi.list).toHaveBeenCalled());
     await select("Acme Tools");
 
-    fireEvent.click(screen.getByTestId("installed-plugin-instance-switch"));
+    const toggle = screen.getByTestId("installed-plugin-instance-switch");
+    fireEvent.click(toggle);
 
     await waitFor(() =>
       expect(pluginApi.setProjectInstanceEnabled).toHaveBeenCalledWith("acme.tools", true)
     );
+    await waitFor(() => expect(useProjectPluginStore.getState().instanceToggling.size).toBe(0));
     expect(pluginApi.setProjectInstanceEnabled).toHaveBeenCalledTimes(1);
     expect(pluginApi.setProjectPluginVisibility).not.toHaveBeenCalled();
+    await waitFor(() =>
+      expect(useProjectPluginStore.getState().instanceEnabled["acme.tools"]).toBe(true)
+    );
+    expect(toggle.getAttribute("aria-checked")).toBe("true");
+    expect(screen.getByTestId("project-plugin-selector-status").textContent).toBe("On");
+  });
+
+  it("opens a settings link for this project's instance on the package's pane", async () => {
+    Element.prototype.scrollIntoView = vi.fn();
+    const settings = [
+      { id: "apiKey", type: "string" as const, label: "API key", scope: "project" as const },
+    ];
+    const withSettings = { ...EMPTY_CONTRIBUTES, settings };
+    pluginApi.list.mockResolvedValue([
+      installed({
+        instanceMode: "project",
+        enabledInProjects: [PROJECT_ID],
+        manifest: { ...installed().manifest, contributes: withSettings },
+      }),
+      installed({
+        instanceId: INSTANCE_KEY,
+        origin: "project",
+        projectId: PROJECT_ID,
+        manifest: { ...installed().manifest, contributes: withSettings },
+      }),
+    ]);
+    seed([]);
+    act(() =>
+      usePluginManagerStore
+        .getState()
+        .requestSettings({ pluginId: INSTANCE_KEY, key: "apiKey", home: "project" })
+    );
+    render(<ProjectPluginsTab />);
+
+    const field = await screen.findByLabelText("API key");
+    expect(screen.getByTestId("installed-plugin-instance-switch")).toBeTruthy();
+    await waitFor(() => expect(document.activeElement).toBe(field));
+    await waitFor(() => expect(usePluginManagerStore.getState().settingsRequest).toBeNull());
+    usePluginManagerStore.setState({ settingsRequest: null });
   });
 
   it("states a failed toggle on its row and retries the same write", async () => {

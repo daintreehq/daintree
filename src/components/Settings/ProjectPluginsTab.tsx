@@ -63,6 +63,8 @@ import {
   BUILT_IN_PLUGIN_CAPABILITIES,
   PROJECT_PLUGIN_INSTANCE_PREFIX,
   isFileEditorSlotKey,
+  makeInstalledProjectInstanceKey,
+  parseProjectPluginInstanceKey,
   orderedProjectSurfaceSlots,
   projectSurfaceClaimFromState,
   projectSurfaceSlotDescriptor,
@@ -1648,7 +1650,16 @@ function isInstanceOn(
  * starts or stops this project's own copy; the visibility overlay doesn't apply,
  * since a project that hasn't turned it on has nothing of it to show or hide.
  */
-function ProjectInstancePackagePane({ plugin }: { plugin: LoadedPluginInfo }) {
+function ProjectInstancePackagePane({
+  plugin,
+  instance,
+  settingsFocus,
+}: {
+  plugin: LoadedPluginInfo;
+  /** This project's running instance, which owns the settings the package declares. */
+  instance: LoadedPluginInfo | undefined;
+  settingsFocus: PaneSettingsFocus;
+}) {
   const pluginId = plugin.instanceId;
   const on = useProjectPluginStore((s) =>
     isInstanceOn(plugin, s.instanceEnabled, s.viewProjectId ?? s.projectId)
@@ -1733,6 +1744,17 @@ function ProjectInstancePackagePane({ plugin }: { plugin: LoadedPluginInfo }) {
           )}
         </SettingsGroup>
       </SettingsSection>
+
+      {!plugin.disabled && hasPluginSettings(instance) && (
+        <SettingsSection title="Settings" id={PLUGIN_SETTINGS_HOME_ID}>
+          <PluginSettingsForm
+            plugin={instance}
+            viewScope="project"
+            focusRequest={settingsFocus.request}
+            onFocusHandled={settingsFocus.onHandled}
+          />
+        </SettingsSection>
+      )}
     </div>
   );
 }
@@ -1895,7 +1917,16 @@ export function ProjectPluginsTab() {
     const project = projectPlugins.find((p) => p.instanceId === settingsRequest.pluginId);
     if (project) return `${PROJECT_OPTION_PREFIX}${project.id}`;
     const installedMatch = installedOnly.find((p) => p.instanceId === settingsRequest.pluginId);
-    return installedMatch ? `${INSTALLED_OPTION_PREFIX}${installedMatch.instanceId}` : null;
+    if (installedMatch) return `${INSTALLED_OPTION_PREFIX}${installedMatch.instanceId}`;
+    // A per-project package's settings belong to this project's instance, which
+    // is listed under the package's one row.
+    const instanceKey = parseProjectPluginInstanceKey(settingsRequest.pluginId);
+    const packageMatch = instanceKey?.installed
+      ? installedOnly.find(
+          (p) => p.instanceMode === "project" && p.instanceId === instanceKey.manifestId
+        )
+      : undefined;
+    return packageMatch ? `${INSTALLED_OPTION_PREFIX}${packageMatch.instanceId}` : null;
   }, [settingsRequest, installed, projectPlugins, installedOnly]);
   const requestNonce = settingsRequest?.nonce;
   const requestFocus = settingsFocusRequestOf(settingsRequest);
@@ -2012,7 +2043,18 @@ export function ProjectPluginsTab() {
       )}
 
       {selectedInstalled?.instanceMode === "project" && (
-        <ProjectInstancePackagePane key={selectedInstalled.instanceId} plugin={selectedInstalled} />
+        <ProjectInstancePackagePane
+          key={selectedInstalled.instanceId}
+          plugin={selectedInstalled}
+          instance={
+            instanceProjectId === null
+              ? undefined
+              : loadedByInstanceId.get(
+                  makeInstalledProjectInstanceKey(instanceProjectId, selectedInstalled.instanceId)
+                )
+          }
+          settingsFocus={paneSettingsFocus}
+        />
       )}
 
       {selectedInstalled && selectedInstalled.instanceMode !== "project" && (
