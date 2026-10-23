@@ -77,6 +77,17 @@ describe("compareHostCapacity", () => {
     ).toBeNull();
   });
 
+  it("breaks the tie only past the displayed precision, whatever the float arithmetic says", () => {
+    const lead = (cpuPercent: number) =>
+      compareHostCapacity([
+        candidate("a", { cpuPercent, memoryUsedBytes: 2 * GB }),
+        candidate("b", { cpuPercent: 30, memoryUsedBytes: 8 * GB }),
+      ]).suggestedHostId;
+    // 8 cores: 0.625% of CPU is exactly 0.05 cores.
+    expect(lead(30 - 0.625)).toBeNull();
+    expect(lead(30 - 0.7)).toBe("a");
+  });
+
   it("suggests nothing for a single host", () => {
     expect(compareHostCapacity([candidate("only", {})]).suggestedHostId).toBeNull();
   });
@@ -113,10 +124,11 @@ describe("compareHostCapacity", () => {
   ] as const)("withholds the suggestion while a compared host didn't report its %s", (_, gap) => {
     const { suggestedHostId, options } = compareHostCapacity([
       candidate("calm", { cpuPercent: 5, memoryUsedBytes: 1 * GB }),
+      candidate("busy", { cpuPercent: 70, memoryUsedBytes: 12 * GB }),
       candidate("partial", { memoryUsedBytes: 12 * GB, ...gap }),
     ]);
     expect(suggestedHostId).toBeNull();
-    expect(options).toHaveLength(2);
+    expect(options).toHaveLength(3);
   });
 
   it("lists an older host with what it reported but never compares it", () => {
@@ -128,10 +140,11 @@ describe("compareHostCapacity", () => {
     };
     const { suggestedHostId, options } = compareHostCapacity([
       candidate("calm", { cpuPercent: 5, memoryUsedBytes: 1 * GB }),
+      candidate("busy", { cpuPercent: 70, memoryUsedBytes: 12 * GB }),
       older,
     ]);
     expect(suggestedHostId).toBeNull();
-    expect(options[1]!.facts).toBe("CPU 90% · Memory 4 GB of 16 GB · Memory pressure Normal");
+    expect(options[2]!.facts).toBe("CPU 90% · Memory 4 GB of 16 GB · Memory pressure Normal");
   });
 
   it("never suggests a host under critical pressure, or one under worse pressure than a peer", () => {

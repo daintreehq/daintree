@@ -297,6 +297,8 @@ export interface PlacementComparison {
 
 /** Cores whose difference is under the card's one-decimal display are the same count. */
 const CORE_TIE = 0.05;
+/** A difference of exactly the tie, as float arithmetic lands it, is still a tie. */
+const FLOAT_SLACK = 1e-9;
 
 interface FreeCapacity {
   hostId: HostId;
@@ -363,7 +365,7 @@ export function compareHostCapacity(
     compared.every(
       (peer) =>
         peer === host ||
-        (host.freeCores - peer.freeCores > CORE_TIE &&
+        (host.freeCores - peer.freeCores > CORE_TIE + FLOAT_SLACK &&
           host.availableBytes > peer.availableBytes &&
           PRESSURE_RANK[host.pressure] <= PRESSURE_RANK[peer.pressure])
     )
