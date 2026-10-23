@@ -360,7 +360,9 @@ export function XtermAdapter({
     // `disposed` so a fast unmount during either wait can't attach a terminal
     // whose cleanup has already run.
     void (async () => {
-      const service = await loadTerminalService();
+      // Only await when unloaded: a loaded service must create synchronously,
+      // before the later layout effects run against this id.
+      const service = peekTerminalService() ?? (await loadTerminalService());
       if (disposed) return;
       const managed = await service.getOrCreate(
         terminalId,

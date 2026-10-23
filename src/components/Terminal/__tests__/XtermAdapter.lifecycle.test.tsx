@@ -1242,6 +1242,7 @@ describe("XtermAdapter with the terminal service unloaded", () => {
 
   afterEach(async () => {
     cleanup();
+    vi.unstubAllGlobals();
     await loadTerminalService();
   });
 
@@ -1258,6 +1259,19 @@ describe("XtermAdapter with the terminal service unloaded", () => {
 
     await waitFor(() => expect(mocks.terminalInstanceService.attach).toHaveBeenCalled());
     expect(serviceAtCreate).toEqual([mocks.terminalInstanceService]);
+  });
+
+  it("creates synchronously within the mount once the service is loaded", async () => {
+    await loadTerminalService();
+
+    renderAdapter();
+
+    // Later layout effects (renderer policy) must find the terminal already
+    // placed, so a loaded service may not add a microtask before creation.
+    expect(mocks.terminalInstanceService.getOrCreate).toHaveBeenCalledTimes(1);
+    expect(mocks.terminalInstanceService.getOrCreate.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.terminalInstanceService.applyRendererPolicy.mock.invocationCallOrder[0]!
+    );
   });
 
   it("does not create the terminal when it unmounts while the service loads", async () => {
