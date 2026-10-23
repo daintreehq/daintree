@@ -899,13 +899,21 @@ describe("plugin list projection of installed per-project packages (#14255)", ()
 describe("an instance stays bound to its own project while another is focused (#14258)", () => {
   let rootA: string;
   let rootB: string;
-  let releaseHeldWrite: (() => void) | null = null;
+  let heldWrite: { pending: Promise<void>; release: () => void } | null = null;
 
-  afterEach(() => {
+  beforeEach(() => {
+    rootA = path.join(tmpDir, "repo-a");
+    rootB = path.join(tmpDir, "repo-b");
+  });
+
+  afterEach(async () => {
     // A test that failed between holding a write and releasing it must not
-    // leave the write parked behind the gate into teardown.
-    releaseHeldWrite?.();
-    releaseHeldWrite = null;
+    // leave the write parked behind the gate, or still running into teardown.
+    if (heldWrite) {
+      heldWrite.release();
+      await heldWrite.pending.catch(() => {});
+      heldWrite = null;
+    }
   });
 
   const rootOf = (projectId: string): string => (projectId === PROJECT_A ? rootA : rootB);
@@ -919,8 +927,6 @@ describe("an instance stays bound to its own project while another is focused (#
     contributes: Record<string, unknown> = {}
   ): Promise<{ service: PluginService; seam: Seam }> {
     const pluginsRoot = path.join(tmpDir, "plugins");
-    rootA = path.join(tmpDir, "repo-a");
-    rootB = path.join(tmpDir, "repo-b");
     const dir = path.join(pluginsRoot, PKG);
     await fs.mkdir(path.join(dir, "dist"), { recursive: true });
     await fs.mkdir(rootA, { recursive: true });
@@ -959,18 +965,34 @@ describe("an instance stays bound to its own project while another is focused (#
     return { service, seam };
   }
 
-  /** Parks the next host write at its drive-lease check, after its file is resolved. */
-  function holdNextWrite(): { entered: Promise<void>; release: () => void } {
+  /**
+   * Starts `write` and parks it at its drive-lease check, after its file is
+   * resolved and before the store writes it. Resolves once it is parked.
+   */
+  async function startHeldWrite(
+    write: () => Promise<void>
+  ): Promise<{ pending: Promise<void>; release: () => void }> {
     let open!: () => void;
     driveLeaseGate.hold = new Promise<void>((resolve) => (open = resolve));
-    const entered = new Promise<void>((resolve) => (driveLeaseGate.entered = resolve));
+    let parked = false;
+    const entered = new Promise<void>((resolve) => {
+      driveLeaseGate.entered = () => {
+        parked = true;
+        resolve();
+      };
+    });
     const release = (): void => {
       driveLeaseGate.hold = null;
       driveLeaseGate.entered = null;
       open();
     };
-    releaseHeldWrite = release;
-    return { entered, release };
+    const pending = write();
+    heldWrite = { pending, release };
+    // A write that fails, or finishes without reaching the gate, fails here
+    // rather than as a timeout.
+    await Promise.race([entered, pending]);
+    if (!parked) throw new Error("the write finished without reaching the drive-lease check");
+    return { pending, release };
   }
 
   async function readJson(file: string): Promise<Record<string, unknown> | undefined> {
@@ -1062,12 +1084,10 @@ describe("an instance stays bound to its own project while another is focused (#
       const host = service._createHostForTests(KEY_A);
       focus(PROJECT_A);
 
-      const gate = holdNextWrite();
-      const pending = w.write(host, "started-in-a");
-      await gate.entered;
+      const gate = await startHeldWrite(() => w.write(host, "started-in-a"));
       focus(PROJECT_B);
       gate.release();
-      await pending;
+      await gate.pending;
       await expectWrittenToA(w, "started-in-a");
 
       // The same host, called again now B is focused, still writes A's file.
@@ -1084,9 +1104,7 @@ describe("an instance stays bound to its own project while another is focused (#
       focus(PROJECT_B);
       const instanceA = seam.plugins.get(KEY_A);
 
-      const gate = holdNextWrite();
-      const pending = w.write(host, "held");
-      await gate.entered;
+      const gate = await startHeldWrite(() => w.write(host, "held"));
       service.forgetProjectInstances(PROJECT_B);
 
       expect(seam.plugins.has(KEY_B)).toBe(false);
@@ -1095,7 +1113,7 @@ describe("an instance stays bound to its own project while another is focused (#
       expect(service.getProjectInstanceProjects(PKG)).toEqual([PROJECT_A]);
 
       gate.release();
-      await pending;
+      await gate.pending;
       await expectWrittenToA(w, "held");
 
       await w.write(host, "after-forget");
@@ -1108,10 +1126,11 @@ describe("an instance stays bound to its own project while another is focused (#
       { webContents: { id: 1, isDestroyed: () => false }, projectId: PROJECT_A },
       { webContents: { id: 2, isDestroyed: () => false }, projectId: PROJECT_B },
     ];
+    // B is focused while both instances load and publish.
+    focus(PROJECT_B);
     await startBound({
       toolbarButtons: [{ id: "open", label: "Ledger", iconId: "list", actionId: `${PKG}.open` }],
     });
-    focus(PROJECT_B);
 
     const owners = (projectId: string): string[][] =>
       broadcastToProjectRenderersMock.mock.calls
@@ -1133,7 +1152,9 @@ describe("an instance stays bound to its own project while another is focused (#
     expect(owners(PROJECT_A).flat()).not.toContain(KEY_B);
     expect(owners(PROJECT_B).flat()).not.toContain(KEY_A);
     const unscoped = broadcastToRendererMock.mock.calls
-      .filter(([, event]) => (event as { name?: string })?.name === "plugin:toolbar-buttons-changed")
+      .filter(
+        ([, event]) => (event as { name?: string })?.name === "plugin:toolbar-buttons-changed"
+      )
       .flatMap(([, event]) =>
         (event as { payload: { buttons: Array<{ pluginId: string }> } }).payload.buttons.map(
           (b) => b.pluginId
