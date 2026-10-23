@@ -90,27 +90,14 @@ describe("collectPluginManifestAssets", () => {
     expect(assets.has("processTools[0].iconId")).toBe(false);
   });
 
-  it("requires a plugin-relative agent command but not one looked up on PATH", () => {
-    const assets = byField({
-      contributes: { agents: [{ command: "./bin/agent" }, { command: "acme-agent" }] },
-    });
-    expect(assets.get("agents[0].command")).toMatchObject({ path: "bin/agent", required: true });
-    expect(assets.has("agents[1].command")).toBe(false);
-  });
-
-  it("requires a plugin-relative MCP server command but not a PATH or settings one", () => {
-    const assets = byField({
+  it("leaves executable commands out, since Windows resolves their extensions at spawn", () => {
+    const assets = collectPluginManifestAssets({
       contributes: {
-        mcpServers: [
-          { command: "./bin/server" },
-          { command: "node", args: ["./dist/server.js"] },
-          { command: "./${settings:serverPath}" },
-        ],
+        agents: [{ command: "./bin/agent" }],
+        mcpServers: [{ command: "./bin/server" }],
       },
     });
-    expect(assets.get("mcpServers[0].command")?.path).toBe("bin/server");
-    expect(assets.has("mcpServers[1].command")).toBe(false);
-    expect(assets.has("mcpServers[2].command")).toBe(false);
+    expect(assets).toEqual([]);
   });
 
   it("reads deprecated experimental_views only when views is absent", () => {

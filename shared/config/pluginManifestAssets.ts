@@ -10,6 +10,10 @@
  * main and the standalone `daintree-plugin` CLI both bundle this module. The
  * manifest is read defensively as `unknown`, because doctor hands over raw
  * JSON that may not have passed the schema.
+ *
+ * Executable commands (`./` agent and MCP server commands) are left out: on
+ * Windows the spawn resolves `./bin/server` to `bin/server.exe`, so the name
+ * the manifest writes is not necessarily a file that ships.
  */
 
 import { isPluginCustomIconRef } from "./pluginCustomIcon.js";
@@ -129,25 +133,6 @@ export function collectPluginManifestAssets(manifest: unknown): PluginManifestAs
     }
     for (const [index, reference] of entries(knowledge.references)) {
       add(`assistantKnowledge.references[${index}].path`, reference.path);
-    }
-  }
-
-  // A `./` agent command is resolved against the plugin directory
-  // (`pluginAgentRegistry`); a bare name is looked up on PATH and ships nothing.
-  for (const [index, agent] of entries(contributes.agents)) {
-    if (typeof agent.command === "string" && agent.command.startsWith("./")) {
-      add(`agents[${index}].command`, agent.command);
-    }
-  }
-
-  // An MCP server spawns with the plugin directory as its cwd, so a `./`
-  // command is a shipped file. One built from `${settings:*}` names nothing
-  // until spawn time, and a bare name is looked up on PATH.
-  const mcpKey = Array.isArray(contributes.mcpServers) ? "mcpServers" : "experimental_mcpServers";
-  for (const [index, server] of entries(contributes[mcpKey])) {
-    const command = server.command;
-    if (typeof command === "string" && command.startsWith("./") && !command.includes("${")) {
-      add(`${mcpKey}[${index}].command`, command);
     }
   }
 
