@@ -193,6 +193,8 @@ describe("useBackgroundWindowResize", () => {
       act(() => {
         lastCallback?.({ width: 1280, height: 800 });
         emitPhase("active");
+        setVisibility("visible");
+        document.dispatchEvent(new Event("visibilitychange"));
       });
     }).not.toThrow();
 

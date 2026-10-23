@@ -237,7 +237,7 @@ describe("terminalInstanceServiceAccessor", () => {
         return () => {};
       });
       accessor.subscribeWhenReady(attach, () => order.push("late"));
-      await Promise.resolve();
+      await vi.dynamicImportSettled();
       expect(attach).not.toHaveBeenCalled();
       expect(accessor.peek()).toBeNull();
 
@@ -262,6 +262,19 @@ describe("terminalInstanceServiceAccessor", () => {
       dispose();
       dispose();
       expect(detach).toHaveBeenCalledOnce();
+    });
+
+    it("detaches and skips the late notice when attach disposes it", () => {
+      const detach = vi.fn();
+      const late = vi.fn();
+      let dispose = () => {};
+      dispose = accessor.subscribeWhenReady(() => {
+        dispose();
+        return detach;
+      }, late);
+      accessor.register(fakeService());
+      expect(detach).toHaveBeenCalledOnce();
+      expect(late).not.toHaveBeenCalled();
     });
 
     it("detaches when disposed from inside its own late notice", () => {

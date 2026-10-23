@@ -116,7 +116,13 @@ export function subscribeWhenReady(
   let disposed = false;
   const cancelReady = onReady((service) => {
     if (disposed) return;
-    detach = attach(service);
+    const off = attach(service);
+    // attach() itself may have disposed us; nothing else will call `off` then.
+    if (disposed) {
+      off();
+      return;
+    }
+    detach = off;
     onAttachedLate?.();
   });
   return () => {
