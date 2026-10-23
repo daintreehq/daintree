@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { PluginCapabilityConsentService } from "../PluginCapabilityConsentService.js";
 import { PluginCapabilityConsentStore } from "../PluginCapabilityConsentStore.js";
 import type {
@@ -432,6 +432,154 @@ describe("PluginCapabilityConsentService", () => {
       await expect(service.ensureExternalSiteAllowed("acme.x", "Acme", "", CAPS)).rejects.toThrow(
         /PERMISSION_REQUIRED/
       );
+    });
+  });
+
+  describe("offerRestore — the offer-back after a replacing install (#14019)", () => {
+    const GRANTS = [
+      { pluginId: "acme.x", capability: "terminal:read", scopeKey: "global" },
+      { pluginId: "acme.x", capability: "terminal:read", scopeKey: "project-1" },
+      { pluginId: "acme.x", capability: "project:dispatch", scopeKey: "global" },
+      { pluginId: "acme.x", capability: "external-link", site: "example.com", scopeKey: "global" },
+    ] as const;
+    const DECLARED = ["terminal:read", "project:dispatch"] as const;
+
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    function offer(isCurrent: () => boolean = () => true) {
+      return {
+        pluginId: "acme.x",
+        pluginDisplayName: "Acme",
+        grants: GRANTS,
+        declaredCapabilities: DECLARED,
+        isCurrent,
+      };
+    }
+
+    it("asks once, naming each grant once, and restores every scope on approval", async () => {
+      const { service, store } = makeService();
+      const bridge = vi.fn(async () => "approved-and-pin" as PluginCapabilityConsentDecision);
+      service.setConsentBridge(bridge);
+
+      await expect(service.offerRestore(offer())).resolves.toBe(true);
+
+      expect(bridge).toHaveBeenCalledTimes(1);
+      expect(bridge).toHaveBeenCalledWith({
+        pluginId: "acme.x",
+        pluginDisplayName: "Acme",
+        restore: ["terminal:read", "project:dispatch"],
+        declaredCapabilities: DECLARED,
+      });
+      for (const grant of GRANTS.slice(0, 3)) expect(store.hasGrant(grant)).toBe(true);
+      // No manifest declares a site, so a site is never offered or restored: it asks again on use.
+      expect(store.hasGrant(GRANTS[3])).toBe(false);
+    });
+
+    it.each(["rejected", "timeout", "approved-once", "undeliverable"] as const)(
+      "leaves every grant off on %s",
+      async (outcome) => {
+        const { service, store } = makeService();
+        vi.spyOn(console, "warn").mockImplementation(() => {});
+        service.setConsentBridge(async () => outcome as PluginCapabilityConsentOutcome);
+
+        await expect(service.offerRestore(offer())).resolves.toBe(false);
+        expect(store.list()).toEqual([]);
+      }
+    );
+
+    it("leaves every grant off when there is no surface to ask on or the bridge throws", async () => {
+      const { service, store } = makeService();
+      vi.spyOn(console, "warn").mockImplementation(() => {});
+      vi.spyOn(console, "error").mockImplementation(() => {});
+      await expect(service.offerRestore(offer())).resolves.toBe(false);
+
+      service.setConsentBridge(() => {
+        throw new Error("boom");
+      });
+      await expect(service.offerRestore(offer())).resolves.toBe(false);
+      expect(store.list()).toEqual([]);
+    });
+
+    it("does not ask when there is nothing to offer, sites included", async () => {
+      const { service } = makeService();
+      const bridge = vi.fn(async () => "approved-and-pin" as PluginCapabilityConsentDecision);
+      service.setConsentBridge(bridge);
+      await expect(service.offerRestore({ ...offer(), grants: [] })).resolves.toBe(false);
+      await expect(service.offerRestore({ ...offer(), grants: [GRANTS[3]] })).resolves.toBe(
+        false
+      );
+      expect(bridge).not.toHaveBeenCalled();
+    });
+
+    it("does not let a call after a replacement join a prompt the replaced version raised", async () => {
+      const { service, store } = makeService();
+      const releases: Array<(d: PluginCapabilityConsentDecision) => void> = [];
+      const bridge = vi.fn(
+        () =>
+          new Promise<PluginCapabilityConsentDecision>((resolve) => {
+            releases.push(resolve);
+          })
+      );
+      service.setConsentBridge(bridge);
+
+      const before = service.ensureAllowed("acme.x", "Acme", "shell:exec", CAPS);
+      const beforeRejected = expect(before).rejects.toThrow(/removed or replaced/);
+      service.revokeAllForPlugin("acme.x");
+      const after = service.ensureAllowed("acme.x", "Acme", "shell:exec", CAPS);
+
+      // The new version gets its own prompt rather than the old one's answer.
+      expect(bridge).toHaveBeenCalledTimes(2);
+      releases[0]("approved-and-pin");
+      await beforeRejected;
+      expect(store.hasGrant({ pluginId: "acme.x", capability: "shell:exec" })).toBe(false);
+
+      releases[1]("approved-and-pin");
+      await expect(after).resolves.toBeUndefined();
+      expect(store.hasGrant({ pluginId: "acme.x", capability: "shell:exec" })).toBe(true);
+    });
+
+    it("voids an approval when the plugin is purged while the offer is open", async () => {
+      const { service, store } = makeService();
+      vi.spyOn(console, "warn").mockImplementation(() => {});
+      let release!: (d: PluginCapabilityConsentDecision) => void;
+      service.setConsentBridge(
+        () => new Promise<PluginCapabilityConsentDecision>((resolve) => (release = resolve))
+      );
+      const pending = service.offerRestore(offer());
+
+      // An uninstall, or another replacement, while the dialog is open.
+      service.revokeAllForPlugin("acme.x");
+      release("approved-and-pin");
+
+      await expect(pending).resolves.toBe(false);
+      expect(store.list()).toEqual([]);
+    });
+
+    it("voids an approval when the version it was offered for is no longer installed", async () => {
+      const { service, store } = makeService();
+      vi.spyOn(console, "warn").mockImplementation(() => {});
+      service.setConsentBridge(async () => "approved-and-pin");
+      let current = true;
+      const isCurrent = vi.fn(() => current);
+      const pending = service.offerRestore(offer(isCurrent));
+      current = false;
+
+      await expect(pending).resolves.toBe(false);
+      expect(isCurrent).toHaveBeenCalled();
+      expect(store.list()).toEqual([]);
+    });
+
+    it("lists a plugin's grants with their scopes and sites, and restores them silently", () => {
+      const { service, store } = makeService();
+      expect(service.restoreGrants(GRANTS)).toBe(true);
+      store.grant({ pluginId: "acme.y", capability: "shell:exec" });
+
+      expect(service.listGrantsForPlugin("acme.x")).toEqual(
+        expect.arrayContaining(GRANTS.map((grant) => ({ ...grant })))
+      );
+      expect(service.listGrantsForPlugin("acme.x")).toHaveLength(GRANTS.length);
     });
   });
 });

@@ -99,10 +99,44 @@ export class PluginCapabilityConsentStore {
     return false;
   }
 
+  /**
+   * Mint several grants as one write and report whether it reached disk
+   * (#14019). The batch is one decision, so a failed write rolls every grant it
+   * added back out rather than leaving some of them on in memory only.
+   */
+  grantAll(identities: readonly PluginCapabilityIdentity[]): boolean {
+    this.hydrate();
+    const previous = new Map<string, PluginCapabilityConsentRecord | undefined>();
+    const approvedAt = Date.now();
+    for (const identity of identities) {
+      const key = makeKey(identity);
+      if (!previous.has(key)) previous.set(key, this.grants.get(key));
+      this.grants.set(key, {
+        pluginId: identity.pluginId,
+        capability: identity.capability,
+        ...(identity.site !== undefined ? { site: identity.site } : {}),
+        scopeKey: identity.scopeKey ?? DEFAULT_SCOPE_KEY,
+        approvedAt,
+      });
+    }
+    if (previous.size === 0) return true;
+    if (this.flush() || this.flush()) return true;
+    for (const [key, record] of previous) {
+      if (record) this.grants.set(key, record);
+      else this.grants.delete(key);
+    }
+    return false;
+  }
+
   /** Read all live grants. Newest-first. */
   list(): PluginCapabilityConsentRecord[] {
     this.hydrate();
     return [...this.grants.values()].sort((a, b) => b.approvedAt - a.approvedAt);
+  }
+
+  /** Every grant one plugin holds, in every scope. */
+  listForPlugin(pluginId: string): PluginCapabilityConsentRecord[] {
+    return this.list().filter((record) => record.pluginId === pluginId);
   }
 
   /** Drop every grant. Persists immediately. */

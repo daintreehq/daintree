@@ -32,7 +32,12 @@ const storeMock = vi.hoisted(() => {
 // installer's uninstall/upgrade purge; stub them so the upgrade-consent-reset
 // test can assert the revoke without standing up the real persistence.
 const consentMock = vi.hoisted(() => ({ revokeAllForPlugin: vi.fn(() => true) }));
-const capConsentMock = vi.hoisted(() => ({ revokeAllForPlugin: vi.fn(() => true) }));
+const capConsentMock = vi.hoisted(() => ({
+  revokeAllForPlugin: vi.fn(() => true),
+  listGrantsForPlugin: vi.fn((): unknown[] => []),
+  offerRestore: vi.fn(async () => false),
+  restoreGrants: vi.fn(() => true),
+}));
 const rateLimiterMock = vi.hoisted(() => ({ dropPlugin: vi.fn() }));
 
 vi.mock("electron", () => ({ app: appMock, ipcMain: { on: vi.fn(), removeListener: vi.fn() } }));

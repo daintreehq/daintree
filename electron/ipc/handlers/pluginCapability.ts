@@ -13,6 +13,7 @@ import {
 import type {
   PluginCapabilityConsentBridge,
   PluginCapabilityConsentRequest,
+  PluginCapabilityFirstUseRequest,
 } from "../../services/plugin-capability/PluginCapabilityConsentService.js";
 import { getMainWindow } from "../../window/windowRef.js";
 import { getAppWebContents } from "../../window/webContentsRegistry.js";
@@ -133,9 +134,11 @@ const consentBridge: PluginCapabilityConsentBridge = (request: PluginCapabilityC
     request.pluginId
   );
   if (frontend.kind === "remote") {
-    // The remote consent wire carries capabilities only. A link opens in this
+    // The remote consent wire carries one capability only. A link opens in this
     // host's browser, which `system.openExternal` already refuses for a remote
-    // driver, so a site prompt reaching here has no one to ask.
+    // driver, so a site prompt reaching here has no one to ask; an offer-back
+    // after a replacing install has no remote form, so its grants stay off.
+    if (request.restore !== undefined) return Promise.resolve("undeliverable");
     const { capability } = request;
     if (request.site !== undefined || capability === EXTERNAL_LINK_CONSENT) {
       return Promise.resolve("undeliverable");
@@ -144,7 +147,7 @@ const consentBridge: PluginCapabilityConsentBridge = (request: PluginCapabilityC
   }
   if (frontend.kind === "none") {
     console.warn(
-      `[plugin-capability] Nobody is attached to answer the consent prompt for plugin "${request.pluginId}" capability "${request.capability}" — denying it`
+      `[plugin-capability] Nobody is attached to answer the consent prompt for plugin "${request.pluginId}" ${describeRequest(request)} — denying it`
     );
     return Promise.resolve("undeliverable");
   }
@@ -168,9 +171,7 @@ const consentBridge: PluginCapabilityConsentBridge = (request: PluginCapabilityC
 async function requestRemoteConsent(
   endpoint: ClientEndpoint,
   leaseId: number | undefined,
-  request: Omit<PluginCapabilityConsentRequest, "capability"> & {
-    capability: BuiltInPluginCapability;
-  }
+  request: PluginCapabilityFirstUseRequest & { capability: BuiltInPluginCapability }
 ): Promise<PluginCapabilityConsentOutcome> {
   try {
     const answer = await endpoint.request(
@@ -229,14 +230,23 @@ export function requestConsentInWebContents(
     const push = () => {
       wc.send(CHANNELS.EVENTS_PUSH, {
         name: "plugin-capability:consent-request",
-        payload: {
-          requestId,
-          pluginId: request.pluginId,
-          pluginDisplayName: request.pluginDisplayName,
-          capability: request.capability,
-          ...(request.site !== undefined ? { site: request.site } : {}),
-          declaredCapabilities: request.declaredCapabilities,
-        },
+        payload:
+          request.restore !== undefined
+            ? {
+                requestId,
+                pluginId: request.pluginId,
+                pluginDisplayName: request.pluginDisplayName,
+                restore: request.restore,
+                declaredCapabilities: request.declaredCapabilities,
+              }
+            : {
+                requestId,
+                pluginId: request.pluginId,
+                pluginDisplayName: request.pluginDisplayName,
+                capability: request.capability,
+                ...(request.site !== undefined ? { site: request.site } : {}),
+                declaredCapabilities: request.declaredCapabilities,
+              },
       });
     };
 
@@ -263,7 +273,7 @@ export function requestConsentInWebContents(
     // rather than holding the plugin for the full five-minute decision window.
     const deliveryTimer = setTimeout(() => {
       console.warn(
-        `[plugin-capability] No renderer acknowledged the consent prompt for plugin "${request.pluginId}" capability "${request.capability}" within ${PLUGIN_CAPABILITY_CONSENT_DELIVERY_TIMEOUT_MS}ms — treating it as undeliverable`
+        `[plugin-capability] No renderer acknowledged the consent prompt for plugin "${request.pluginId}" ${describeRequest(request)} within ${PLUGIN_CAPABILITY_CONSENT_DELIVERY_TIMEOUT_MS}ms — treating it as undeliverable`
       );
       settleConsent(requestId, "undeliverable");
     }, PLUGIN_CAPABILITY_CONSENT_DELIVERY_TIMEOUT_MS);
@@ -283,6 +293,13 @@ export function requestConsentInWebContents(
       settleConsent(requestId, "undeliverable");
     }
   });
+}
+
+/** What a prompt is about, for the logs. */
+function describeRequest(request: PluginCapabilityConsentRequest): string {
+  return request.restore !== undefined
+    ? `offer-back of ${request.restore.length} permission(s)`
+    : `capability "${request.capability}"`;
 }
 
 /** Install the consent bridge once, lazily — keeps an unused boot path bridge-free. */

@@ -605,6 +605,70 @@ describe("pluginCapability consent bridge — decisions", () => {
   });
 });
 
+describe("pluginCapability consent bridge — offer-back after a replacing install (#14019)", () => {
+  const GRANTS = [
+    { pluginId: "acme.x", capability: "terminal:read", scopeKey: "global" },
+    { pluginId: "acme.x", capability: "project:dispatch", scopeKey: "global" },
+  ] as const;
+
+  function offerBack() {
+    return getPluginCapabilityConsentService().offerRestore({
+      pluginId: "acme.x",
+      pluginDisplayName: "Acme",
+      grants: GRANTS,
+      declaredCapabilities: ["terminal:read", "project:dispatch"],
+      isCurrent: () => true,
+    });
+  }
+
+  it("pushes one prompt listing the grants, and restores them all on approval", async () => {
+    const dispose = registerPluginCapabilityHandlers();
+    const restored = offerBack();
+
+    expect(harness!.appWebContents.send).toHaveBeenCalledTimes(1);
+    const pushed = harness!.appWebContents.send.mock.calls[0][1] as {
+      name: string;
+      payload: Record<string, unknown> & { requestId: string };
+    };
+    expect(pushed.name).toBe("plugin-capability:consent-request");
+    expect(pushed.payload).toEqual({
+      requestId: pushed.payload.requestId,
+      pluginId: "acme.x",
+      pluginDisplayName: "Acme",
+      restore: ["terminal:read", "project:dispatch"],
+      declaredCapabilities: ["terminal:read", "project:dispatch"],
+    });
+
+    const { requestId } = pushed.payload;
+    await handleAcknowledgeConsent(ctx(harness!.appWebContents.id), { requestId });
+    await handleResolveConsent(ctx(harness!.appWebContents.id), {
+      requestId,
+      decision: "approved-and-pin",
+    });
+
+    await expect(restored).resolves.toBe(true);
+    const store = getPluginCapabilityConsentStore();
+    for (const grant of GRANTS) expect(store.hasGrant(grant)).toBe(true);
+    // The switch reads back on, so "Allow project targeting" is on again.
+    await expect(handleGetProjectTargeting({ pluginId: "acme.x" })).resolves.toBe(true);
+
+    dispose();
+  });
+
+  it("leaves the grants off when the offer is declined", async () => {
+    const dispose = registerPluginCapabilityHandlers();
+    const restored = offerBack();
+    const requestId = pushedRequestId(harness!.appWebContents);
+
+    await handleResolveConsent(ctx(harness!.appWebContents.id), { requestId, decision: "rejected" });
+
+    await expect(restored).resolves.toBe(false);
+    expect(getPluginCapabilityConsentStore().list()).toEqual([]);
+
+    dispose();
+  });
+});
+
 describe("pluginCapability project targeting switch (#13119)", () => {
   it("is off until turned on, and off again once turned off", async () => {
     expect(await handleGetProjectTargeting({ pluginId: "acme.orchestrator" })).toBe(false);

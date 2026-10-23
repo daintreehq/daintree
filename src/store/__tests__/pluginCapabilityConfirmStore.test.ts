@@ -9,7 +9,7 @@ import {
   type PluginCapabilityConsentRequestEvent,
 } from "@shared/types/pluginCapabilityConsent";
 
-function req(id: string): Omit<PluginCapabilityConsentRequestEvent, never> {
+function req(id: string): PluginCapabilityConsentRequestEvent {
   return {
     requestId: id,
     pluginId: "acme.x",
@@ -48,6 +48,27 @@ describe("pluginCapabilityConfirmStore", () => {
 
     usePluginCapabilityConfirmStore.getState().resolveCurrent("rejected");
     await expect(p2).resolves.toBe("rejected");
+  });
+
+  it("queues an offer-back behind a first-use prompt and answers each on its own (#14019)", async () => {
+    const first = requestPluginCapabilityConsent(req("r1"));
+    const offer = requestPluginCapabilityConsent({
+      requestId: "r2",
+      pluginId: "acme.x",
+      pluginDisplayName: "Acme",
+      restore: ["terminal:read", "panel-attention"],
+      declaredCapabilities: ["terminal:read"],
+    });
+
+    expect(usePluginCapabilityConfirmStore.getState().current?.requestId).toBe("r1");
+    usePluginCapabilityConfirmStore.getState().resolveCurrent("rejected");
+    await expect(first).resolves.toBe("rejected");
+
+    const current = usePluginCapabilityConfirmStore.getState().current;
+    expect(current?.restore).toEqual(["terminal:read", "panel-attention"]);
+    usePluginCapabilityConfirmStore.getState().resolveCurrent("approved-and-pin");
+    await expect(offer).resolves.toBe("approved-and-pin");
+    expect(usePluginCapabilityConfirmStore.getState().current).toBeNull();
   });
 
   it("shares one prompt between repeat requests for the same requestId (#11708)", async () => {

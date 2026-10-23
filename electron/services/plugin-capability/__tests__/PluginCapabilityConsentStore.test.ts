@@ -257,6 +257,57 @@ describe("PluginCapabilityConsentStore", () => {
     });
   });
 
+  describe("grantAll — the offer-back after a replacing install (#14019)", () => {
+    const grants = [
+      { pluginId: "acme.x", capability: "terminal:read", scopeKey: "global" },
+      { pluginId: "acme.x", capability: "project:dispatch", scopeKey: "global" },
+      { pluginId: "acme.x", capability: "external-link", site: "example.com", scopeKey: "global" },
+    ] as const;
+
+    it("mints every grant in one write that survives a reopen", () => {
+      const { store, saveConfig, getConfig } = makeStore();
+      expect(store.grantAll(grants)).toBe(true);
+      expect(saveConfig).toHaveBeenCalledTimes(1);
+      const reopened = new PluginCapabilityConsentStore(
+        () => {},
+        () => getConfig()
+      );
+      for (const grant of grants) expect(reopened.hasGrant(grant)).toBe(true);
+    });
+
+    it("rolls the whole batch back when the write fails, keeping what was there before", () => {
+      const { store, saveConfig } = makeStore();
+      store.grant(grants[0]);
+      vi.spyOn(console, "error").mockImplementation(() => {});
+      saveConfig.mockImplementation(() => {
+        throw new Error("disk full");
+      });
+
+      expect(store.grantAll(grants)).toBe(false);
+      expect(store.hasGrant(grants[0])).toBe(true);
+      expect(store.hasGrant(grants[1])).toBe(false);
+      expect(store.hasGrant(grants[2])).toBe(false);
+    });
+
+    it("lists one plugin's grants in every scope and nobody else's", () => {
+      const { store } = makeStore();
+      store.grantAll([
+        ...grants,
+        { pluginId: "acme.x", capability: "shell:exec", scopeKey: "project-1" },
+        { pluginId: "acme.y", capability: "shell:exec" },
+      ]);
+      const listed = store.listForPlugin("acme.x");
+      expect(listed.map((r) => [r.capability, r.scopeKey]).sort()).toEqual(
+        [
+          ["external-link", "global"],
+          ["project:dispatch", "global"],
+          ["shell:exec", "project-1"],
+          ["terminal:read", "global"],
+        ].sort()
+      );
+    });
+  });
+
   describe("external-link grants", () => {
     const link = { pluginId: "acme.x", capability: "external-link", site: "example.com" } as const;
 
