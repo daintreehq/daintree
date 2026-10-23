@@ -212,16 +212,18 @@ describe("createDeviceAnswerService and connected hosts", () => {
 
   it("lists only this machine's runs where remote hosts aren't running", async () => {
     state.remote = undefined;
-    const { runs, hosts } = await wiredDeps().listWaiting({ hosts: true });
+    const { runs, hosts, hostsUnlisted } = await wiredDeps().listWaiting({ hosts: true });
     expect(runs.map((run) => run.hostId)).toEqual([LOCAL_HOST_ID]);
     expect(hosts).toEqual([]);
+    expect(hostsUnlisted).toBeFalsy();
   });
 
   it("asks no host for a page that can't answer hosts' runs", async () => {
-    const { runs, hosts } = await wiredDeps().listWaiting({ hosts: false });
+    const { runs, hosts, hostsUnlisted } = await wiredDeps().listWaiting({ hosts: false });
     expect(state.remote!.listWaiting).not.toHaveBeenCalled();
     expect(runs.map((run) => run.hostId)).toEqual([LOCAL_HOST_ID]);
     expect(hosts).toEqual([]);
+    expect(hostsUnlisted).toBeFalsy();
   });
 
   it("still lists this machine's runs when the hosts can't be listed at all", async () => {
@@ -229,8 +231,11 @@ describe("createDeviceAnswerService and connected hosts", () => {
     state.remote!.listWaiting.mockImplementationOnce(() => {
       throw new Error("registry unreadable");
     });
-    const { runs } = await wiredDeps().listWaiting({ hosts: true });
+    const { runs, hosts, hostsUnlisted } = await wiredDeps().listWaiting({ hosts: true });
     expect(runs.map((run) => run.hostId)).toEqual([LOCAL_HOST_ID]);
+    // An empty list here is one that couldn't be read, not one with no hosts.
+    expect(hosts).toEqual([]);
+    expect(hostsUnlisted).toBe(true);
     warn.mockRestore();
   });
 

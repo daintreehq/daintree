@@ -4,7 +4,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { DeviceAnswerSettings } from "../../../../shared/types/ipc/deviceAnswer.js";
 import { DeviceAnswerService, type DeviceAnswerServiceDeps } from "../DeviceAnswerService.js";
 import { defaultDeviceAnswerSettings } from "../deviceAnswerSettings.js";
-import type { DeviceWaitingHost, DeviceWaitingRun } from "../deviceAnswerRuns.js";
+import type {
+  DeviceWaitingHost,
+  DeviceWaitingList,
+  DeviceWaitingRun,
+} from "../deviceAnswerRuns.js";
 
 interface Reply {
   status: number;
@@ -84,7 +88,10 @@ async function setup(overrides: Partial<DeviceAnswerSettings> = {}) {
     { hostId: "studio-03", host: "studio-03", status: "ok" },
     { hostId: "mini", host: "Mini", status: "not-connected" },
   ];
-  const listWaiting = vi.fn(async (_options: { hosts: boolean }) => ({ runs: [RUN], hosts }));
+  const listWaiting = vi.fn(async (_options: { hosts: boolean }): Promise<DeviceWaitingList> => ({
+    runs: [RUN],
+    hosts,
+  }));
   const onStatusChanged = vi.fn();
   const service = new DeviceAnswerService({
     readSettings: () => settings,
@@ -202,6 +209,14 @@ describe("DeviceAnswerService", () => {
       { hostId: "studio-03", host: "studio-03", status: "ok" },
       { hostId: "mini", host: "Mini", status: "not-connected" },
     ]);
+    expect(waiting.json().hostsUnlisted).toBe(false);
+
+    // A host list that couldn't be read is said so, not sent as no hosts.
+    listWaiting.mockResolvedValueOnce({ runs: [RUN], hosts: [], hostsUnlisted: true });
+    const unlisted = await request(port(), "GET", "/api/waiting?hosts=1", {
+      headers: { ...api, Authorization: `Bearer ${token}` },
+    });
+    expect(unlisted.json()).toEqual({ runs: [RUN], hosts: [], hostsUnlisted: true });
 
     // A page from before hosts were listed would answer theirs as this machine's.
     await request(port(), "GET", "/api/waiting", {

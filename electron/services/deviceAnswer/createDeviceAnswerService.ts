@@ -39,6 +39,7 @@ function bySince(a: DeviceWaitingRun, b: DeviceWaitingRun): number {
 
 async function listWaiting(options: { hosts: boolean }): Promise<DeviceWaitingList> {
   const remote = options.hosts ? getRemoteService("deviceAnswerHosts") : undefined;
+  let hostsUnlisted = false;
   const [local, hosts] = await Promise.all([
     listLocalWaitingRuns(),
     // Hosts that can't be read never hide this machine's own runs.
@@ -50,6 +51,7 @@ async function listWaiting(options: { hosts: boolean }): Promise<DeviceWaitingLi
               "[DeviceAnswer] Couldn't list connected hosts:",
               (error as Error)?.message
             );
+            hostsUnlisted = true;
             return [];
           })
       : [],
@@ -64,6 +66,7 @@ async function listWaiting(options: { hosts: boolean }): Promise<DeviceWaitingLi
   return {
     runs: runs.sort(bySince),
     hosts: hosts.map(({ hostId, host, status }) => ({ hostId, host, status })),
+    ...(hostsUnlisted ? { hostsUnlisted } : {}),
   };
 }
 
