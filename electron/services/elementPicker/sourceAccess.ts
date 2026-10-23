@@ -226,6 +226,22 @@ export type NextSourceMapProvider = (
   signal: AbortSignal
 ) => Promise<SourceAccessResult<ServedSourceMap>>;
 
+/**
+ * What a selection has spent of its budget. Shared by every job a selection
+ * is split into, so the core host and each plugin's host draw on one budget
+ * between them rather than each on a full one.
+ */
+export interface ResolveUsage {
+  /** Source files, generated modules and maps read from disk. */
+  files: number;
+  networkRequests: number;
+  networkBytes: number;
+}
+
+export function createResolveUsage(): ResolveUsage {
+  return { files: 0, networkRequests: 0, networkBytes: 0 };
+}
+
 export interface JobSourceAccessOptions {
   workspaceId: string;
   roots: SourceRoots;
@@ -243,6 +259,8 @@ export interface JobSourceAccessOptions {
   nextSourceMaps?: NextSourceMapProvider;
   /** A file this job read, for the workspace's tracker. */
   onRead: (absolute: string, file: SourceFileRef, revision: FileRevision) => void;
+  /** The selection's spending, when the job is one of several sharing its budget. */
+  usage?: ResolveUsage;
 }
 
 /**
@@ -258,25 +276,25 @@ export class JobSourceAccess {
   private readonly served = new Map<string, FileRevision>();
   private readonly maps = new Map<string, Promise<SourceAccessResult<ServedSourceMap>>>();
   private readonly servedMaps = new Set<string>();
-  private networkRequests = 0;
-  private networkBytes = 0;
-  /** Generated modules and maps read from disk, which share `maxFiles` with source reads. */
-  private generatedReads = 0;
+  /** Generated modules and maps read from disk share `maxFiles` with source reads. */
+  private readonly usage: ResolveUsage;
   /** One fetch at a time, so each starts with what the ones before it left of the allowance. */
   private fetching: Promise<unknown> = Promise.resolve();
   private readonly allowance: NetworkAllowance = {
     request: () => {
-      if (this.networkRequests >= this.options.budget.maxNetworkRequests) return false;
-      this.networkRequests += 1;
+      if (this.usage.networkRequests >= this.options.budget.maxNetworkRequests) return false;
+      this.usage.networkRequests += 1;
       return true;
     },
     bytes: (count) => {
-      this.networkBytes += count;
-      return this.networkBytes <= this.options.budget.maxNetworkBytes;
+      this.usage.networkBytes += count;
+      return this.usage.networkBytes <= this.options.budget.maxNetworkBytes;
     },
   };
 
-  constructor(private readonly options: JobSourceAccessOptions) {}
+  constructor(private readonly options: JobSourceAccessOptions) {
+    this.usage = options.usage ?? createResolveUsage();
+  }
 
   /** The revision this job served for a path, if it served one: a resolver may claim no other. */
   servedRevision(relative: string): FileRevision | undefined {
@@ -306,9 +324,10 @@ export class JobSourceAccess {
     const ref = parsed.data;
     const existing = this.reads.get(ref.path);
     if (existing) return existing;
-    if (this.reads.size + this.generatedReads >= this.options.budget.maxFiles) {
+    if (this.usage.files >= this.options.budget.maxFiles) {
       return Promise.resolve({ ok: false, reason: "budget-exhausted" });
     }
+    this.usage.files += 1;
     const read = this.read(ref);
     this.reads.set(ref.path, read);
     return read;
@@ -410,8 +429,8 @@ export class JobSourceAccess {
     const { budget, previewOrigin } = this.options;
     if (previewOrigin === null) return { ok: false, reason: "unsupported" };
     if (
-      this.networkRequests >= budget.maxNetworkRequests ||
-      this.networkBytes >= budget.maxNetworkBytes
+      this.usage.networkRequests >= budget.maxNetworkRequests ||
+      this.usage.networkBytes >= budget.maxNetworkBytes
     ) {
       return { ok: false, reason: "budget-exhausted" };
     }
@@ -474,10 +493,10 @@ export class JobSourceAccess {
     if (absolute === null) return { ok: false, reason: "map-missing" };
     const ref = locateReportedFile(workspaceId, roots, absolute);
     if (ref === null) return { ok: false, reason: "outside-workspace" };
-    if (this.reads.size + this.generatedReads >= budget.maxFiles) {
+    if (this.usage.files >= budget.maxFiles) {
       return { ok: false, reason: "budget-exhausted" };
     }
-    this.generatedReads += 1;
+    this.usage.files += 1;
     const contained = await containSourcePath(roots, ref.path);
     const afterContain = this.stopped();
     if (afterContain) return afterContain;

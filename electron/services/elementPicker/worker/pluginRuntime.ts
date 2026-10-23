@@ -40,7 +40,7 @@ export function createPluginHostRuntime(
   importModule: (url: string) => Promise<unknown> = (url) => import(url)
 ): PluginHostRuntime {
   const loaders = Object.create(null) as ResolverLoaders;
-  const runtime = createHostRuntime(post, loaders);
+  const runtime = createHostRuntime(post, loaders, { isolateFailures: true });
   return {
     handle(message) {
       if (message.type !== "provider") {

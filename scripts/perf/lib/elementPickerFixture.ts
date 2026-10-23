@@ -428,6 +428,8 @@ export interface PickerHostHarness {
   readonly pluginForks: readonly ForkedHost[];
   /** Plugin resolver hosts still running. */
   livePluginForks(): number;
+  /** The most plugin resolver hosts running at once, read as each one forked. */
+  peakPluginForks(): number;
   /**
    * Installs `count` copies of the Lit fixture plugin, each its own plugin
    * with its own resolver host, plus `failing` plugins whose resolver kills
@@ -521,6 +523,7 @@ export async function createPickerHost(
   const forks: ForkedHost[] = [];
   const pluginForks: ForkedHost[] = [];
   const installed: string[] = [];
+  let peakPlugins = 0;
   let watches = 0;
   const host = new ElementPickerHost({
     fork: () => {
@@ -531,6 +534,8 @@ export async function createPickerHost(
     pluginFork: () => {
       const child = forkHost(PLUGIN_BOOTSTRAP);
       pluginForks.push(child);
+      // A host still exiting counts: the cap holds until it is gone.
+      peakPlugins = Math.max(peakPlugins, pluginForks.filter((fork) => !fork.exited).length);
       return child;
     },
     kill: (pid) => {
@@ -617,6 +622,7 @@ export async function createPickerHost(
     },
     pluginForks,
     livePluginForks: () => pluginForks.filter((child) => !child.exited).length,
+    peakPluginForks: () => peakPlugins,
     async installPlugins(count, failing = 0) {
       const install = (resolver: string) => {
         const name = `perf.lit${nextPlugin++}`;

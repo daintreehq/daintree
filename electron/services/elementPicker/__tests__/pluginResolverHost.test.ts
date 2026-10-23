@@ -32,11 +32,17 @@ import { buildFixtureResolverEntry } from "./buildFixtureGuestEntry.js";
 import {
   RuntimeChild,
   STUB_MARKER,
+  type RuntimeChildOptions,
   candidate,
   observation,
   request,
+  stallingResolver,
   stubResolver,
 } from "./fixtures.js";
+import type { ResolverLoaders } from "../worker/runtime.js";
+
+/** Real file I/O runs before a dispatch reaches its host, so waits get real time. */
+const WAIT = { timeout: 5_000 };
 
 /**
  * Plugin source resolvers, each plugin in a host of its own: the real
@@ -133,24 +139,31 @@ interface Harness {
 
 function harness(
   modules: Map<string, unknown>,
-  options: ConstructorParameters<typeof ElementPickerHost>[0] = {}
+  options: ConstructorParameters<typeof ElementPickerHost>[0] & {
+    coreLoaders?: ResolverLoaders;
+    pluginChild?: RuntimeChildOptions;
+  } = {}
 ): Harness {
+  const { coreLoaders, pluginChild, ...hostOptions } = options;
   const core: RuntimeChild[] = [];
   const plugin: Array<{ pluginId: string; child: RuntimeChild }> = [];
   let peak = 0;
   const host = new ElementPickerHost({
     fork: () => {
-      const child = new RuntimeChild({ svelte: async () => stubResolver() });
+      const child = new RuntimeChild(coreLoaders ?? { svelte: async () => stubResolver() });
       core.push(child);
       return child;
     },
     pluginFork: (pluginId) => {
-      const child = new RuntimeChild({
-        importModule: async (url) => {
-          if (modules.has(url)) return modules.get(url);
-          return import(/* @vite-ignore */ url);
+      const child = new RuntimeChild(
+        {
+          importModule: async (url) => {
+            if (modules.has(url)) return modules.get(url);
+            return import(/* @vite-ignore */ url);
+          },
         },
-      });
+        pluginChild
+      );
       plugin.push({ pluginId, child });
       peak = Math.max(peak, plugin.filter((entry) => entry.child.alive).length);
       return child;
@@ -162,7 +175,7 @@ function harness(
     },
     watch: () => () => {},
     idleMs: 60_000,
-    ...options,
+    ...hostOptions,
   });
   hosts.push(host);
   return { host, core, plugin, peak: () => peak };
@@ -355,7 +368,7 @@ describe("plugin source resolvers", () => {
     // Told about its provider once, however many jobs name it.
     expect(plugin[0]!.child.posted.filter((type) => type === "provider")).toHaveLength(1);
 
-    await vi.waitFor(() => expect(plugin[0]!.child.alive).toBe(false));
+    await vi.waitFor(() => expect(plugin[0]!.child.alive).toBe(false), WAIT);
     expect(plugin[0]!.child.posted).toContain("dispose");
     expect(host.pluginHosts).toBe(0);
 
@@ -400,12 +413,20 @@ describe("plugin source resolvers", () => {
         { projectId: "p1", signal: controller.signal }
       )
     );
-    await vi.waitFor(() => expect(entered).toBe(4));
+    await vi.waitFor(() => expect(entered).toBe(4), WAIT);
     await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(entered).toBe(4);
+    // A queued request withdrawn alone settles without ever reaching the resolver.
+    controllers[5]!.abort();
+    expect(results(await pending[5]!)).toEqual([
+      { state: "unavailable", candidateId: "c-1", claim: "file-hint", reason: "cancelled" },
+    ]);
     expect(entered).toBe(4);
     for (const controller of controllers) controller.abort();
     const settled = await Promise.all(pending);
-    expect(settled.flatMap(results).every((result) => result.state === "unavailable")).toBe(true);
+    expect(settled.flatMap(results).map((result) => result.state)).toEqual(
+      Array.from({ length: 6 }, () => "unavailable")
+    );
   });
 
   it("keeps a failing provider's failure to its own candidates", async () => {
@@ -436,10 +457,12 @@ describe("plugin source resolvers", () => {
       ]),
       { projectId: "p1" }
     );
-    await vi.waitFor(() =>
-      expect(plugin.find((entry) => entry.pluginId === "acme.crash")?.child.posted).toContain(
-        "resolve"
-      )
+    await vi.waitFor(
+      () =>
+        expect(plugin.find((entry) => entry.pluginId === "acme.crash")?.child.posted).toContain(
+          "resolve"
+        ),
+      WAIT
     );
     plugin.find((entry) => entry.pluginId === "acme.crash")!.child.exit(1);
     const response = await pending;
@@ -517,12 +540,12 @@ describe("plugin source resolvers", () => {
       request(id, [observation("el-1", [candidate("c-1", "app/src/App.svelte", providerId)])]),
       { projectId: "p1" }
     );
-    await vi.waitFor(() => expect(entered).toBe(true));
+    await vi.waitFor(() => expect(entered).toBe(true), WAIT);
     unregisterElementPickerProviders("acme.gone");
     expect(results(await pending)).toEqual([
       { state: "unavailable", candidateId: "c-1", claim: "file-hint", reason: "unsupported" },
     ]);
-    await vi.waitFor(() => expect(plugin[0]!.child.alive).toBe(false));
+    await vi.waitFor(() => expect(plugin[0]!.child.alive).toBe(false), WAIT);
     expect(host.pluginHosts).toBe(0);
   });
 
@@ -563,5 +586,160 @@ describe("plugin source resolvers", () => {
     await host.dispose();
     expect(plugin[0]!.child.alive).toBe(false);
     expect(host.pluginHosts).toBe(0);
+  });
+  it("never loads a plugin unloaded while its host was still starting", async () => {
+    const { url, providerId } = installPlugin("acme.early", "export {}");
+    const { host, plugin } = harness(new Map([[url, markerModule()]]), {
+      pluginChild: { start: false },
+    });
+    const id = await workspace(host);
+    const pending = host.resolve(
+      request(id, [observation("el-1", [candidate("c-1", "app/src/App.svelte", providerId)])]),
+      { projectId: "p1" }
+    );
+    await vi.waitFor(() => expect(plugin).toHaveLength(1), WAIT);
+    unregisterElementPickerProviders("acme.early");
+    plugin[0]!.child.start();
+    expect(results(await pending)).toEqual([
+      { state: "unavailable", candidateId: "c-1", claim: "file-hint", reason: "unsupported" },
+    ]);
+    expect(plugin[0]!.child.posted).not.toContain("provider");
+    expect(plugin[0]!.child.posted).not.toContain("resolve");
+  });
+
+  it("shares one host between a plugin's providers and keeps one's failure from the other", async () => {
+    const dir = tempDir("picker-plugin-install-");
+    for (const name of ["good", "bad"]) {
+      fs.mkdirSync(path.join(dir, name), { recursive: true });
+      fs.writeFileSync(path.join(dir, name, "resolver.mjs"), "export {}");
+    }
+    registerElementPickerProviders(
+      "acme.pair",
+      "acme.pair",
+      ["good", "bad"].map((name) => ({
+        id: name,
+        name,
+        detection: [{ kind: "global" as const, name, match: "exact" as const }],
+        guestEntry: "guest.js",
+        resolverEntry: `${name}/resolver.mjs`,
+      })),
+      dir
+    );
+    plugins.push("acme.pair");
+    const { host, plugin } = harness(
+      new Map<string, unknown>([
+        [pathToFileURL(path.join(dir, "good", "resolver.mjs")).href, markerModule()],
+        [
+          pathToFileURL(path.join(dir, "bad", "resolver.mjs")).href,
+          moduleOf(async () => {
+            throw new Error("boom");
+          }),
+        ],
+      ])
+    );
+    const id = await workspace(host);
+    const response = await host.resolve(
+      request(id, [
+        observation("el-1", [
+          candidate("c-good", "app/src/App.svelte", "acme.pair.good"),
+          candidate("c-bad", "app/src/App.svelte", "acme.pair.bad"),
+        ]),
+      ]),
+      { projectId: "p1" }
+    );
+    expect(results(response).map((result) => [result.candidateId, result.state])).toEqual([
+      ["c-good", "verified"],
+      ["c-bad", "unavailable"],
+    ]);
+    expect(plugin).toHaveLength(1);
+    expect(plugin[0]!.child.posted.filter((type) => type === "provider")).toHaveLength(2);
+  });
+
+  it("retires a plugin host that ignores a cancel, leaving core's answer standing", async () => {
+    const { url, providerId } = installPlugin("acme.hung", "export {}");
+    const hung = moduleOf(() => new Promise<ResolveResponse>(() => {}));
+    const { host, core, plugin } = harness(new Map([[url, hung]]), { cancelGraceMs: 20 });
+    const id = await workspace(host);
+    const response = await host.resolve(
+      request(
+        id,
+        [
+          observation("el-1", [
+            candidate("c-core", "app/src/App.svelte"),
+            candidate("c-hung", "app/src/App.svelte", providerId),
+          ]),
+        ],
+        { deadlineMs: 150 }
+      ),
+      { projectId: "p1" }
+    );
+    expect(results(response).map((result) => [result.candidateId, result.state])).toEqual([
+      ["c-core", "verified"],
+      ["c-hung", "unavailable"],
+    ]);
+    expect(results(response)[1]).toMatchObject({ reason: "budget-exhausted" });
+    await vi.waitFor(() => expect(plugin[0]!.child.alive).toBe(false), WAIT);
+    expect(core[0]!.alive).toBe(true);
+  });
+
+  it("keeps a plugin's failure a failure when the deadline later stops core", async () => {
+    const { url, providerId } = installPlugin("acme.fails", "export {}");
+    const { host } = harness(
+      new Map([
+        [
+          url,
+          moduleOf(async () => {
+            throw new Error("boom");
+          }),
+        ],
+      ]),
+      { coreLoaders: { svelte: async () => stallingResolver(true) } }
+    );
+    const id = await workspace(host);
+    const response = await host.resolve(
+      request(
+        id,
+        [
+          observation("el-1", [
+            candidate("c-core", "app/src/App.svelte"),
+            candidate("c-fails", "app/src/App.svelte", providerId),
+          ]),
+        ],
+        { deadlineMs: 100 }
+      ),
+      { projectId: "p1" }
+    );
+    expect(results(response)).toEqual([
+      {
+        state: "unavailable",
+        candidateId: "c-core",
+        claim: "file-hint",
+        reason: "budget-exhausted",
+      },
+      { state: "unavailable", candidateId: "c-fails", claim: "file-hint", reason: "unsupported" },
+    ]);
+  });
+
+  it("holds core and plugin reads to one budget for the selection", async () => {
+    const { url, providerId } = installPlugin("acme.reader", "export {}");
+    const { host } = harness(new Map([[url, markerModule()]]));
+    const id = await workspace(host);
+    const response = await host.resolve(
+      request(
+        id,
+        [
+          observation("el-1", [
+            candidate("c-core", "app/src/App.svelte"),
+            candidate("c-plugin", "app/src/App.svelte", providerId),
+          ]),
+        ],
+        { maxFiles: 1 }
+      ),
+      { projectId: "p1" }
+    );
+    const states = results(response).map((result) =>
+      result.state === "unavailable" ? result.reason : result.state
+    );
+    expect(states.sort()).toEqual(["budget-exhausted", "verified"]);
   });
 });

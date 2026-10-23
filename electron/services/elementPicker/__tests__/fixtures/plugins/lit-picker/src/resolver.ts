@@ -89,7 +89,10 @@ async function resolveCandidate(
   const lines = decoder.decode(read.value.bytes).split(/\r?\n/);
   const text = lines[location.line - location.lineBase];
   const at = location.column - location.columnBase;
-  if (text === undefined || !text.startsWith(`<${tag}`, at)) {
+  const opens = `<${tag}`;
+  // The tag's whole name: `<fixture-lit-card` must not pass for `<fixture-lit-cardigan`.
+  const after = text?.charAt(at + opens.length) ?? "";
+  if (text === undefined || !text.startsWith(opens, at) || !/^(?:$|[\s/>])/.test(after)) {
     return unavailable("mismatch", {
       read: { file: read.value.file, fileRevision: read.value.revision },
     });

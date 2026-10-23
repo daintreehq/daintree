@@ -181,27 +181,30 @@ async function runPluginResolvers(): Promise<ScenarioSample> {
     total += metrics.warmPluginMs;
     metrics.warmForkMisses = harness.pluginForks.length - 1;
 
-    let peak = harness.livePluginForks();
-    for (const providerId of rest) {
-      metrics.litMisses += await harness.resolvePlugins(workspace, [providerId]);
-      peak = Math.max(peak, harness.livePluginForks());
-    }
-    metrics.hostCapMisses = Math.max(0, peak - MAX_PLUGIN_HOSTS);
-    metrics.peakPluginHosts = peak;
+    // Up to the cap at once, in one selection: every host alive together.
+    const atCap = [first!, ...rest.slice(0, MAX_PLUGIN_HOSTS - 1)];
+    metrics.litMisses += await harness.resolvePlugins(workspace, atCap);
     let peakResident = 0;
     for (const child of harness.pluginForks) {
       if (!child.exited) peakResident += harness.residentBytes(child.pid) ?? 0;
     }
     if (peakResident > 0) metrics.peakPluginHostsRssMb = peakResident / MIB;
+    // One more plugin than the cap: an idle host makes room, never a fifth alive.
+    const extra = rest.at(-1)!;
+    metrics.litMisses += await harness.resolvePlugins(workspace, [extra]);
+    metrics.peakPluginHosts = harness.peakPluginForks();
+    metrics.hostCapMisses = metrics.peakPluginHosts === MAX_PLUGIN_HOSTS ? 0 : 1;
 
-    // A crashing provider beside core and another plugin in one selection.
+    // A crashing provider beside core and another plugin in one selection. The
+    // core host is asked first, so it is up and not idling out when the crash lands.
+    metrics.isolationMisses += await harness.resolve(workspace, ["svelte"]);
     const coreForks = harness.forks.length;
-    metrics.isolationMisses += await harness.resolvePlugins(workspace, [rest.at(-1)!], {
+    metrics.isolationMisses += await harness.resolvePlugins(workspace, [extra], {
       failing: plugins.failing,
       withSvelte: true,
     });
     metrics.isolationMisses += harness.forks.length - coreForks;
-    metrics.isolationMisses += await harness.resolvePlugins(workspace, [rest.at(-1)!]);
+    metrics.isolationMisses += await harness.resolvePlugins(workspace, [extra]);
 
     await harness.settle(IDLE_MS * 5);
     // Every plugin host retired once idle: the crashed one is the only exit

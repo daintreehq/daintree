@@ -143,9 +143,10 @@ export type ElementPickerResolverFactory = (providerId: string) => ElementPicker
  * plugin's own that starts on the first selection needing it and exits after
  * 30 seconds without one.
  *
- * Every read goes through `access`, which the host answers under the
- * workspace's containment, the preview's origin and the request's budget. A
- * revision you return must be one `access` gave you in this request.
+ * Read through `access`, which the host answers under the workspace's
+ * containment, the preview's origin and the request's budget. A revision you
+ * return must be one `access` gave you in this request; the process is not a
+ * sandbox, but nothing read around `access` can be cited.
  *
  * ```ts
  * export default defineElementPickerResolver(() => ({

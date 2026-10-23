@@ -1612,10 +1612,16 @@ export default defineConfig({
 
 A resolver runs in a process of its own, separate from your plugin's worker, the core resolvers and every other plugin. The host starts it on the first selection that has one of your candidates in it, not on detection or activation, shares it across every preview and worktree, and stops it after 30 seconds with nothing to do. At most four plugin resolver processes run at once; when another is needed, the longest-idle one is stopped first. A resolver that throws, crashes or hangs only costs its own candidates, which are reported as `unsupported`; core results and other plugins' are unaffected. Disabling, uninstalling or reloading the plugin stops its process.
 
-Your resolver is sent only your own provider's candidates and has no file or network access of its own: every read goes through the `access` object, which the host answers under the workspace's containment, the preview's origin, and the selection's file, byte and time budget. Each file comes back with a `revision`, and a result can only cite a revision `access` gave you in that request. An answer that names a file outside the workspace, a revision it was never served, or an element or candidate it wasn't sent is discarded whole. Echo the request's `requestId` and `documentEpoch`, and stop when `signal` aborts.
+Your resolver is sent only your own provider's candidates. Read through the `access` object: the host answers it under the workspace's containment, the preview's origin, and the selection's file, byte and time budget, and each file comes back with a `revision`. A result can cite only a revision `access` gave you in that request, so an answer that names a file outside the workspace, a revision it was never served, or an element or candidate it wasn't sent is discarded whole. The process is a separate Node runtime, not a sandbox: it isolates crashes and memory, and it does not stop plugin code from opening files itself, but nothing read that way can be cited. Echo the request's `requestId` and `documentEpoch`, and stop when `signal` aborts.
+
+This one checks that the tag a candidate's stamp points at opens at that position in the file:
 
 ```ts
-import { defineElementPickerResolver } from "@daintreehq/plugin-sdk/element-picker";
+import {
+  defineElementPickerResolver,
+  type ResolutionResult,
+  type UnavailableReason,
+} from "@daintreehq/plugin-sdk/element-picker";
 
 export default defineElementPickerResolver(() => ({
   async resolve(request, access, signal) {
@@ -1627,8 +1633,8 @@ export default defineElementPickerResolver(() => ({
         request.observations.map(async (observation) => ({
           elementId: observation.elementId,
           results: await Promise.all(
-            observation.sourceCandidates.map(async (candidate) => {
-              const unavailable = (reason) => ({
+            observation.sourceCandidates.map(async (candidate): Promise<ResolutionResult> => {
+              const unavailable = (reason: UnavailableReason): ResolutionResult => ({
                 state: "unavailable",
                 candidateId: candidate.candidateId,
                 claim: candidate.kind,
@@ -1637,25 +1643,29 @@ export default defineElementPickerResolver(() => ({
               if (candidate.kind !== "template-location" || !candidate.location) {
                 return unavailable("unsupported");
               }
+              const { location } = candidate;
               const file = await access.locateFile(candidate.file, signal);
               if (!file.ok) return unavailable(file.reason);
               const read = await access.readSource(file.value, signal);
               if (!read.ok) return unavailable(read.reason);
-              const line = decoder.decode(read.value.bytes).split("\n")[
-                candidate.location.line - 1
+              // Positions keep the convention they were read in; honour both bases.
+              const text = decoder.decode(read.value.bytes).split(/\r?\n/)[
+                location.line - location.lineBase
               ];
-              if (line === undefined) {
-                // A mismatch says what was read, so a reader can tell it from a missing file.
+              const tag = observation.tagName.toLowerCase();
+              const at = location.column - location.columnBase;
+              if (text === undefined || !new RegExp(`^<${tag}(?:[\\s/>]|$)`).test(text.slice(at))) {
+                // A mismatch names what was read, so it reads differently from a missing file.
                 return {
                   ...unavailable("mismatch"),
                   read: { file: read.value.file, fileRevision: read.value.revision },
-                };
+                } as ResolutionResult;
               }
               return {
                 state: "verified",
                 candidateId: candidate.candidateId,
                 claim: candidate.kind,
-                target: { file: read.value.file, location: candidate.location },
+                target: { file: read.value.file, location },
                 fileRevision: read.value.revision,
               };
             })

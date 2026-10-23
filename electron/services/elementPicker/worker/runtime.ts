@@ -94,9 +94,20 @@ function checkAnswer(
   return answer;
 }
 
+export interface HostRuntimeOptions {
+  /**
+   * A resolver that throws or fails to load answers its own candidates as
+   * `unsupported` instead of failing the job. A plugin's host sets it: one of
+   * its providers failing is no reason to lose another's answers. The core host
+   * keeps a throw a failed job, so a resolver bug is never mistaken for an answer.
+   */
+  isolateFailures?: boolean;
+}
+
 export function createHostRuntime(
   post: (message: HostOutbound) => void,
-  loaders: ResolverLoaders
+  loaders: ResolverLoaders,
+  options: HostRuntimeOptions = {}
 ): HostRuntime {
   const jobs = new Map<number, RuntimeJob>();
   const loaded = new Map<string, Promise<HostSourceResolver>>();
@@ -205,8 +216,9 @@ export function createHostRuntime(
             checkAnswer(framework, own, await (await resolver).resolve(own, sourceAccess, signal))
           );
         } catch (error) {
-          if (!signal.aborted) throw error;
-          answers.set(framework, "cancelled");
+          if (signal.aborted) answers.set(framework, "cancelled");
+          else if (options.isolateFailures) answers.set(framework, null);
+          else throw error;
         }
       })
     );
