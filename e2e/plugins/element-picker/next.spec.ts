@@ -8,8 +8,8 @@ import {
 } from "../helpers/frameworks/next";
 import {
   expectComponentSelected,
-  useFixtureProject,
-  usePickerSession,
+  registerFixtureProject,
+  registerPickerSession,
 } from "../helpers/pickerSession";
 import { pressInPreview, selectInPreview } from "../helpers/previewDriver";
 
@@ -19,10 +19,10 @@ import { pressInPreview, selectInPreview } from "../helpers/previewDriver";
  * on a stack naming the server file, and cards a client component drew in the
  * browser.
  */
-const projectDir = useFixtureProject(() => createSiteProject(NEXT));
+const projectDir = registerFixtureProject(() => createSiteProject(NEXT));
 
 test.describe.serial("Element Picker on a Next.js dev server", () => {
-  const { session, start } = usePickerSession({
+  const { session, start } = registerPickerSession({
     projectDir,
     projectName: NEXT.title,
     command: NEXT_COMMANDS.dev,

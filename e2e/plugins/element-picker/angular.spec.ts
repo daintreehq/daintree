@@ -3,8 +3,8 @@ import { createSiteProject } from "../helpers/frameworks/site";
 import { ANGULAR, ANGULAR_COMMANDS, APP_FILE } from "../helpers/frameworks/angular";
 import {
   expectComponentSelected,
-  useFixtureProject,
-  usePickerSession,
+  registerFixtureProject,
+  registerPickerSession,
 } from "../helpers/pickerSession";
 import { pressInPreview, selectInPreview, selectedElement } from "../helpers/previewDriver";
 
@@ -14,10 +14,10 @@ import { pressInPreview, selectInPreview, selectedElement } from "../helpers/pre
  * component and its class's file; a template line needs a compiler option this
  * site leaves off, so nothing here asks for one.
  */
-const projectDir = useFixtureProject(() => createSiteProject(ANGULAR));
+const projectDir = registerFixtureProject(() => createSiteProject(ANGULAR));
 
 test.describe.serial("Element Picker on an Angular dev server", () => {
-  const { session, start } = usePickerSession({
+  const { session, start } = registerPickerSession({
     projectDir,
     projectName: ANGULAR.title,
     command: ANGULAR_COMMANDS.dev,

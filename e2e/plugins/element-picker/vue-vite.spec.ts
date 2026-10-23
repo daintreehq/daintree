@@ -1,7 +1,7 @@
 import { test, expect } from "@playwright/test";
 import { createSiteProject } from "../helpers/frameworks/site";
 import { APP_FILE, VUE_VITE, VUE_VITE_COMMANDS } from "../helpers/frameworks/vueVite";
-import { useFixtureProject, usePickerSession } from "../helpers/pickerSession";
+import { registerFixtureProject, registerPickerSession } from "../helpers/pickerSession";
 import { selectInPreview, selectedElement } from "../helpers/previewDriver";
 
 /**
@@ -10,10 +10,10 @@ import { selectInPreview, selectedElement } from "../helpers/previewDriver";
  * reaches a file only: a stock Vue build names each component's file and
  * nothing finer.
  */
-const projectDir = useFixtureProject(() => createSiteProject(VUE_VITE));
+const projectDir = registerFixtureProject(() => createSiteProject(VUE_VITE));
 
 test.describe.serial("Element Picker on a Vue + Vite dev server", () => {
-  const { session, start } = usePickerSession({
+  const { session, start } = registerPickerSession({
     projectDir,
     projectName: VUE_VITE.title,
     command: VUE_VITE_COMMANDS.dev,

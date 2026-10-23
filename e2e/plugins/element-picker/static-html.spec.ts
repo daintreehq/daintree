@@ -1,17 +1,21 @@
 import { test, expect } from "@playwright/test";
 import { createSiteProject } from "../helpers/frameworks/site";
 import { STATIC_HTML, STATIC_HTML_COMMANDS } from "../helpers/frameworks/staticHtml";
-import { expectNotTraced, useFixtureProject, usePickerSession } from "../helpers/pickerSession";
+import {
+  expectNotTraced,
+  registerFixtureProject,
+  registerPickerSession,
+} from "../helpers/pickerSession";
 import { selectInPreview, selectedElement } from "../helpers/previewDriver";
 
 /**
  * The Element Picker on hand-written HTML from a plain file server: no
  * framework to ask, so the picker has the DOM and must not claim more.
  */
-const projectDir = useFixtureProject(() => createSiteProject(STATIC_HTML));
+const projectDir = registerFixtureProject(() => createSiteProject(STATIC_HTML));
 
 test.describe.serial("Element Picker on a static site", () => {
-  const { session, start } = usePickerSession({
+  const { session, start } = registerPickerSession({
     projectDir,
     projectName: STATIC_HTML.title,
     command: STATIC_HTML_COMMANDS.dev,

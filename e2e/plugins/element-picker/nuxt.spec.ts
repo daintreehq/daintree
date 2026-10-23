@@ -1,7 +1,7 @@
 import { test, expect } from "@playwright/test";
 import { createSiteProject } from "../helpers/frameworks/site";
 import { APP_FILE, NUXT, NUXT_COMMANDS } from "../helpers/frameworks/nuxt";
-import { useFixtureProject, usePickerSession } from "../helpers/pickerSession";
+import { registerFixtureProject, registerPickerSession } from "../helpers/pickerSession";
 import { selectInPreview, selectedElement } from "../helpers/previewDriver";
 
 /**
@@ -9,10 +9,10 @@ import { selectInPreview, selectedElement } from "../helpers/previewDriver";
  * hydrated. Tracing waits on #13888 as it does for plain Vue, and reaches the
  * component's file without a line.
  */
-const projectDir = useFixtureProject(() => createSiteProject(NUXT));
+const projectDir = registerFixtureProject(() => createSiteProject(NUXT));
 
 test.describe.serial("Element Picker on a Nuxt dev server", () => {
-  const { session, start } = usePickerSession({
+  const { session, start } = registerPickerSession({
     projectDir,
     projectName: NUXT.title,
     command: NUXT_COMMANDS.dev,

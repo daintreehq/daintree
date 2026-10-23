@@ -1,7 +1,7 @@
 import { test } from "@playwright/test";
 import { createSiteProject } from "../helpers/frameworks/site";
 import { ASTRO, ASTRO_COMMANDS, ASTRO_HEADING } from "../helpers/frameworks/astro";
-import { useFixtureProject, usePickerSession } from "../helpers/pickerSession";
+import { registerFixtureProject, registerPickerSession } from "../helpers/pickerSession";
 import { selectInPreview } from "../helpers/previewDriver";
 
 /**
@@ -10,10 +10,10 @@ import { selectInPreview } from "../helpers/previewDriver";
  * those stamps waits on #13888, which adds Astro's extractor to the core
  * catalog.
  */
-const projectDir = useFixtureProject(() => createSiteProject(ASTRO));
+const projectDir = registerFixtureProject(() => createSiteProject(ASTRO));
 
 test.describe.serial("Element Picker on an Astro dev server", () => {
-  const { session, start } = usePickerSession({
+  const { session, start } = registerPickerSession({
     projectDir,
     projectName: ASTRO.title,
     command: ASTRO_COMMANDS.dev,

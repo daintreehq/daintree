@@ -1,7 +1,7 @@
 import { test } from "@playwright/test";
 import { createSiteProject } from "../helpers/frameworks/site";
 import { PREACT, PREACT_COMMANDS, PREACT_HEADING } from "../helpers/frameworks/preact";
-import { useFixtureProject, usePickerSession } from "../helpers/pickerSession";
+import { registerFixtureProject, registerPickerSession } from "../helpers/pickerSession";
 import { selectInPreview } from "../helpers/previewDriver";
 
 /**
@@ -9,10 +9,10 @@ import { selectInPreview } from "../helpers/previewDriver";
  * transform puts each element's JSX location on its vnode. Reading it waits
  * on #13888, which adds Preact's extractor to the core catalog.
  */
-const projectDir = useFixtureProject(() => createSiteProject(PREACT));
+const projectDir = registerFixtureProject(() => createSiteProject(PREACT));
 
 test.describe.serial("Element Picker on a Preact dev server", () => {
-  const { session, start } = usePickerSession({
+  const { session, start } = registerPickerSession({
     projectDir,
     projectName: PREACT.title,
     command: PREACT_COMMANDS.dev,

@@ -17,7 +17,7 @@ import {
  * The spec file's fixture project: installed once before its first block and
  * removed after its last, so every variant serves the same install.
  */
-export function useFixtureProject(create: () => FixtureRepo): () => string {
+export function registerFixtureProject(create: () => FixtureRepo): () => string {
   let project: FixtureRepo | undefined;
   test.beforeAll(() => {
     project = create();
@@ -46,7 +46,7 @@ export interface PickerSessionOptions {
  * answer for this one. `start` is meant to be the block's first test, so a
  * server that never comes up fails by name rather than inside a hook.
  */
-export function usePickerSession(options: PickerSessionOptions) {
+export function registerPickerSession(options: PickerSessionOptions) {
   let ctx: AppContext | undefined;
   const rendererConsole: string[] = [];
 

@@ -1,7 +1,11 @@
 import { test, expect } from "@playwright/test";
 import { createSiteProject } from "../helpers/frameworks/site";
 import { SOLID, SOLID_COMMANDS } from "../helpers/frameworks/solid";
-import { expectNotTraced, useFixtureProject, usePickerSession } from "../helpers/pickerSession";
+import {
+  expectNotTraced,
+  registerFixtureProject,
+  registerPickerSession,
+} from "../helpers/pickerSession";
 import { selectInPreview, selectedElement } from "../helpers/previewDriver";
 
 /**
@@ -9,10 +13,10 @@ import { selectInPreview, selectedElement } from "../helpers/previewDriver";
  * the page to trace an element by, so the picker must select it and say so
  * rather than place it anywhere.
  */
-const projectDir = useFixtureProject(() => createSiteProject(SOLID));
+const projectDir = registerFixtureProject(() => createSiteProject(SOLID));
 
 test.describe.serial("Element Picker on a Solid dev server", () => {
-  const { session, start } = usePickerSession({
+  const { session, start } = registerPickerSession({
     projectDir,
     projectName: SOLID.title,
     command: SOLID_COMMANDS.dev,

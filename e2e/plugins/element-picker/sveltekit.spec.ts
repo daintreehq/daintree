@@ -4,8 +4,8 @@ import { viteCommand } from "../helpers/frameworks/site";
 import {
   expectComponentSelected,
   expectNotTraced,
-  useFixtureProject,
-  usePickerSession,
+  registerFixtureProject,
+  registerPickerSession,
 } from "../helpers/pickerSession";
 import { CARD_FILE, createSvelteKitProject, PAGE_FILE } from "../helpers/sveltekitProject";
 import { pressInPreview, selectInPreview } from "../helpers/previewDriver";
@@ -16,10 +16,10 @@ import { pressInPreview, selectInPreview } from "../helpers/previewDriver";
  * its own location, so the production build is the negative: the same markup
  * with no stamps, which the page reports about itself.
  */
-const projectDir = useFixtureProject(() => createSvelteKitProject("picker-sveltekit"));
+const projectDir = registerFixtureProject(() => createSvelteKitProject("picker-sveltekit"));
 
 test.describe.serial("Element Picker on a SvelteKit dev server", () => {
-  const { session, start } = usePickerSession({
+  const { session, start } = registerPickerSession({
     projectDir,
     projectName: "SvelteKit site",
     command: (port) => viteCommand("dev", port),
@@ -45,7 +45,7 @@ test.describe.serial("Element Picker on a SvelteKit dev server", () => {
 test.describe.serial("Element Picker on a SvelteKit production build", () => {
   test.beforeAll(() => runPackageScript(projectDir(), "build"));
 
-  const { session, start } = usePickerSession({
+  const { session, start } = registerPickerSession({
     projectDir,
     projectName: "SvelteKit site",
     command: (port) => viteCommand("preview", port),

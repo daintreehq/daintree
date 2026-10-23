@@ -11,8 +11,8 @@ import {
 import {
   expectComponentSelected,
   expectNotTraced,
-  useFixtureProject,
-  usePickerSession,
+  registerFixtureProject,
+  registerPickerSession,
 } from "../helpers/pickerSession";
 import { pressInPreview, selectInPreview, selectedElement } from "../helpers/previewDriver";
 
@@ -23,10 +23,10 @@ import { pressInPreview, selectInPreview, selectedElement } from "../helpers/pre
  * created on, so the two negatives check that a stack the host can't map is
  * reported as untraced rather than placed by the module URL it ran from.
  */
-const projectDir = useFixtureProject(() => createSiteProject(REACT_VITE));
+const projectDir = registerFixtureProject(() => createSiteProject(REACT_VITE));
 
 test.describe.serial("Element Picker on a React + Vite dev server", () => {
-  const { session, start } = usePickerSession({
+  const { session, start } = registerPickerSession({
     projectDir,
     projectName: REACT_VITE.title,
     command: REACT_VITE_COMMANDS.dev,
@@ -52,7 +52,7 @@ test.describe.serial("Element Picker on a React + Vite dev server", () => {
 });
 
 test.describe.serial("Element Picker on a React + Vite dev server without source maps", () => {
-  const { session, start } = usePickerSession({
+  const { session, start } = registerPickerSession({
     projectDir,
     projectName: REACT_VITE.title,
     command: REACT_VITE_COMMANDS.noSourceMaps,
@@ -72,7 +72,7 @@ test.describe.serial("Element Picker on a React + Vite dev server without source
 test.describe.serial("Element Picker on a React + Vite production build", () => {
   test.beforeAll(() => runPackageScript(projectDir(), "build"));
 
-  const { session, start } = usePickerSession({
+  const { session, start } = registerPickerSession({
     projectDir,
     projectName: REACT_VITE.title,
     command: REACT_VITE_COMMANDS.production,

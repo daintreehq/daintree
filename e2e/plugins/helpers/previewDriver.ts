@@ -160,7 +160,7 @@ export async function selectInPreview(
     .poll(
       async () => {
         await clickInPreview(ctx, selector);
-        return matches(await selected.textContent({ timeout: 2000 }).catch(() => ""));
+        return matches((await selected.textContent({ timeout: 2000 }).catch(() => null)) ?? "");
       },
       { timeout, intervals: [1000], message: `selecting ${selector} never showed ${expected}` }
     )
