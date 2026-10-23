@@ -1,4 +1,4 @@
-import type { LoadedPluginInfo, ProjectPluginInfo } from "@shared/types/plugin";
+import type { LoadedPluginInfo, PluginManifest, ProjectPluginInfo } from "@shared/types/plugin";
 import { SECTION_LABEL_CLASS } from "@/components/ui/sectionLabel";
 
 /** A plugin present here that another plugin's `worksWith` can name. */
@@ -15,8 +15,12 @@ export interface WorksWithPeer {
  * every copy is, and takes its name from one that is on.
  */
 export function buildWorksWithPeers(
-  installed: readonly LoadedPluginInfo[],
-  projectPlugins: readonly ProjectPluginInfo[]
+  installed: ReadonlyArray<
+    Pick<LoadedPluginInfo, "origin" | "disabled"> & {
+      manifest: Pick<PluginManifest, "name" | "displayName">;
+    }
+  >,
+  projectPlugins: ReadonlyArray<Pick<ProjectPluginInfo, "id" | "displayName" | "state" | "muted">>
 ): ReadonlyMap<string, WorksWithPeer> {
   const peers = new Map<string, WorksWithPeer>();
   const add = (id: string, copy: WorksWithPeer): void => {

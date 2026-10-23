@@ -2,22 +2,18 @@
 
 import { describe, expect, it } from "vitest";
 import { render, screen } from "@testing-library/react";
-import type { LoadedPluginInfo, ProjectPluginInfo } from "@shared/types/plugin";
+import type { ProjectPluginInfo } from "@shared/types/plugin";
 import { buildWorksWithPeers, PluginWorksWith } from "../PluginWorksWith";
 
 function installed(
   name: string,
-  overrides: Partial<LoadedPluginInfo> & { displayName?: string } = {}
-): LoadedPluginInfo {
-  const { displayName, ...rest } = overrides;
-  return {
-    instanceId: name,
-    origin: "global",
-    projectId: null,
-    manifest: { name, version: "1.0.0", ...(displayName ? { displayName } : {}) },
-    disabled: false,
-    ...rest,
-  } as LoadedPluginInfo;
+  {
+    displayName,
+    disabled = false,
+    origin = "global",
+  }: { displayName?: string; disabled?: boolean; origin?: "global" | "project" } = {}
+) {
+  return { origin, disabled, manifest: { name, ...(displayName ? { displayName } : {}) } };
 }
 
 function projectPlugin(id: string, overrides: Partial<ProjectPluginInfo> = {}): ProjectPluginInfo {
@@ -41,7 +37,7 @@ describe("buildWorksWithPeers", () => {
       [
         installed("acme.on", { displayName: "On" }),
         installed("acme.off", { disabled: true }),
-        installed("acme.instance", { origin: "project", instanceId: "project__p1__acme.instance" }),
+        installed("acme.instance", { origin: "project" }),
       ],
       [
         projectPlugin("acme.local", { displayName: "Local", muted: true }),

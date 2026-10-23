@@ -703,7 +703,10 @@ describe("listProjectPlugins", () => {
   it("carries the manifest's worksWith to the manager, and only when it lists some", async () => {
     const worksWith = ["acme.linear", "daintree.github"];
     h.setDiscovery(ROOT_A, [
-      { ...discovered("acme.dashboard"), manifest: { ...manifestFor("acme.dashboard"), worksWith } },
+      {
+        ...discovered("acme.dashboard"),
+        manifest: { ...manifestFor("acme.dashboard"), worksWith },
+      },
       discovered("acme.plain"),
     ]);
     await h.controller.onProjectOpened(PROJECT_A, ROOT_A);

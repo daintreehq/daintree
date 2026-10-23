@@ -856,14 +856,14 @@ export class ActionService {
           definition.pluginId && isClientAppError(err) && err.code === "RESULT_VALIDATION_ERROR"
             ? "RESULT_VALIDATION_ERROR"
             : err instanceof ConfirmationStagedError
-            ? "CONFIRMATION_REQUIRED"
-            : err instanceof PartialSuccessError
-              ? "PARTIAL_SUCCESS"
-              : err instanceof UnactionableTargetError
-                ? "VALIDATION_ERROR"
-                : err instanceof TerminalInOtherProjectError
-                  ? "TERMINAL_IN_OTHER_PROJECT"
-                  : "EXECUTION_ERROR",
+              ? "CONFIRMATION_REQUIRED"
+              : err instanceof PartialSuccessError
+                ? "PARTIAL_SUCCESS"
+                : err instanceof UnactionableTargetError
+                  ? "VALIDATION_ERROR"
+                  : err instanceof TerminalInOtherProjectError
+                    ? "TERMINAL_IN_OTHER_PROJECT"
+                    : "EXECUTION_ERROR",
         message,
         details: err instanceof TerminalInOtherProjectError ? err.toDetails() : err,
       };

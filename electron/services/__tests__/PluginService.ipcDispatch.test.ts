@@ -791,12 +791,7 @@ describe("Plugin IPC handler registration", () => {
       registerReport();
       service.registerHandler("acme.test-plugin", "raw-channel", vi.fn().mockResolvedValue("text"));
       await expect(
-        service.dispatchHandler(
-          "acme.test-plugin",
-          "raw-channel",
-          makeCtx("acme.test-plugin"),
-          []
-        )
+        service.dispatchHandler("acme.test-plugin", "raw-channel", makeCtx("acme.test-plugin"), [])
       ).resolves.toBe("text");
     });
   });

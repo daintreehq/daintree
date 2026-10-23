@@ -1291,10 +1291,12 @@ describe("createHost — registerAction", () => {
       const named = new PluginService(tmpDir);
       await named.initialize();
       const createHost = (named as unknown as { createHost: ActionHostShape }).createHost;
-      createHost.call(named, "acme.named").host.registerAction(
-        { ...descriptor(), pluginName: "Someone Else" } as ActionDescriptorInput,
-        () => undefined
-      );
+      createHost
+        .call(named, "acme.named")
+        .host.registerAction(
+          { ...descriptor(), pluginName: "Someone Else" } as ActionDescriptorInput,
+          () => undefined
+        );
       createHost.call(named, "acme.act-test").host.registerAction(descriptor(), () => undefined);
 
       const names = Object.fromEntries(

@@ -94,9 +94,9 @@ describe("enforcePluginActionResult", () => {
       properties: { at: { type: "string" } },
     }).check;
 
-    expect(
-      rejection(() => enforce(asObject, { at: new Date(0) }))?.code
-    ).toBe("RESULT_VALIDATION_ERROR");
+    expect(rejection(() => enforce(asObject, { at: new Date(0) }))?.code).toBe(
+      "RESULT_VALIDATION_ERROR"
+    );
     expect(enforce(asString, { at: new Date(0) })).toEqual({
       at: "1970-01-01T00:00:00.000Z",
     });
@@ -108,12 +108,8 @@ describe("enforcePluginActionResult", () => {
     const cyclic: Record<string, unknown> = {};
     cyclic.self = cyclic;
 
-    expect(rejection(() => enforce(check, cyclic))?.code).toBe(
-      "RESULT_VALIDATION_ERROR"
-    );
-    expect(rejection(() => enforce(check, undefined))?.code).toBe(
-      "RESULT_VALIDATION_ERROR"
-    );
+    expect(rejection(() => enforce(check, cyclic))?.code).toBe("RESULT_VALIDATION_ERROR");
+    expect(rejection(() => enforce(check, undefined))?.code).toBe("RESULT_VALIDATION_ERROR");
   });
 
   it("holds the JSON copy to the cap even when the measured value was small", () => {
@@ -149,9 +145,7 @@ describe("enforcePluginActionResult", () => {
       additionalProperties: false,
     });
 
-    const thrown = rejection(() =>
-      enforce(check, { "/home/someone/notes.txt": 1 })
-    );
+    const thrown = rejection(() => enforce(check, { "/home/someone/notes.txt": 1 }));
 
     expect(thrown?.code).toBe("RESULT_VALIDATION_ERROR");
     expect(thrown?.message).not.toContain("notes.txt");
