@@ -2014,7 +2014,8 @@ export const PLUGIN_STYLE_ROOT_ATTRIBUTE = "data-daintree-plugin-style-root";
  * - `pluginId` is the plugin's RUNTIME id, sourced from
  *   `PanelKindConfig.extensionId` — the bare manifest `name` for an installed
  *   or builtin plugin, but the instance key `project__{projectId}__{manifestId}`
- *   for a project plugin. Pass it back verbatim to `window.electron.plugin.*`;
+ *   for a project plugin and `project__{projectId}__installed__{manifestId}`
+ *   for an installed package's per-project instance. Pass it back verbatim to `window.electron.plugin.*`;
  *   a view that writes its own manifest name down instead addresses nothing.
  * - `disposeSignal` aborts on unmount AND when the host receives a
  *   `plugin:panel-kinds-changed` push that no longer contains this kind. The
@@ -4963,8 +4964,10 @@ export interface LoadedPluginInfo {
    * (settings, invoke, actions) expects.
    *
    * Equal to `manifest.name` for installed and builtin plugins. For a PROJECT
-   * plugin it is the instance key (`project__{projectId}__{name}`), and the
-   * manifest is left alone — so `manifest.name` alone cannot tell the two
+   * plugin it is the instance key (`project__{projectId}__{name}`), and for an
+   * installed package's per-project instance it is
+   * `project__{projectId}__installed__{name}`; either way the manifest is left
+   * alone — so `manifest.name` alone cannot tell the two
    * apart, and a consumer that filtered on it would treat a project plugin as
    * an installed one.
    *

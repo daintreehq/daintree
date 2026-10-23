@@ -34,7 +34,7 @@ const windowRefMock = vi.hoisted(() => ({
 const broadcastToRendererMock = vi.hoisted(() => vi.fn());
 const broadcastToProjectRenderersMock = vi.hoisted(() => vi.fn());
 const projectStoreMock = vi.hoisted(() => ({
-  getCurrentProject: vi.fn((): { path: string } | null => null),
+  getCurrentProject: vi.fn((): { id?: string; path: string } | null => null),
   getProjectById: vi.fn((_id: string): { path: string } | null => null),
 }));
 const storeMock = vi.hoisted(() => {
@@ -46,9 +46,63 @@ const storeMock = vi.hoisted(() => {
   };
 });
 
+// A reversible stand-in for Electron `safeStorage`, so a secret setting can be
+// written and its envelope found on disk.
+const safeStorageMock = vi.hoisted(() => ({
+  isEncryptionAvailable: () => true,
+  getSelectedStorageBackend: () => "gnome_libsecret",
+  encryptStringAsync: async (plaintext: string) => Buffer.from(`enc:${plaintext}`, "utf-8"),
+  decryptStringAsync: async (cipher: Buffer) => ({
+    result: cipher.toString("utf-8").slice("enc:".length),
+    shouldReEncrypt: false,
+  }),
+}));
+// Holds a settings or storage write inside its drive-lease check — after the
+// host has resolved the file, before the store writes it — so a test can move
+// focus or forget a project while the write is in flight.
+const driveLeaseGate = vi.hoisted(() => ({
+  hold: null as Promise<void> | null,
+  entered: null as (() => void) | null,
+}));
+vi.mock("../plugin/pluginDriveLease.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../plugin/pluginDriveLease.js")>();
+  return {
+    ...actual,
+    assertPluginCallerDrives: async (
+      ...args: Parameters<typeof actual.assertPluginCallerDrives>
+    ) => {
+      const hold = driveLeaseGate.hold;
+      if (hold) {
+        driveLeaseGate.entered?.();
+        await hold;
+      }
+      return actual.assertPluginCallerDrives(...args);
+    },
+  };
+});
+// The project views the contribution broadcaster fans out to. Empty by default,
+// which is what the real registry reports with no window open.
+const projectViewsMock = vi.hoisted(() => ({
+  views: [] as Array<{ webContents: { id: number; isDestroyed(): boolean }; projectId: string }>,
+}));
+vi.mock("../../window/webContentsRegistry.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../window/webContentsRegistry.js")>();
+  return {
+    ...actual,
+    getRegisteredProjectViews: () => projectViewsMock.views,
+    getAllAppWebContents: () => [],
+  };
+});
+// Holds what the loader registers, so a broadcast snapshot carries the real
+// configs `loadPlugin` built rather than an empty list.
+const toolbarRegistryMock = vi.hoisted(() => ({
+  buttons: [] as Array<{ id: string; pluginId: string }>,
+}));
+
 vi.mock("electron", () => ({
   app: appMock,
   ipcMain: ipcMainMock,
+  safeStorage: safeStorageMock,
 }));
 vi.mock("../../window/windowRef.js", () => ({
   getWindowRegistry: windowRefMock.getWindowRegistry,
@@ -85,9 +139,15 @@ vi.mock("../../../shared/config/panelKindRegistry.js", async () => {
   };
 });
 vi.mock("../../../shared/config/toolbarButtonRegistry.js", () => ({
-  registerToolbarButton: vi.fn(),
-  unregisterPluginToolbarButtons: vi.fn(),
-  getAllPluginToolbarButtonConfigs: vi.fn(() => []),
+  registerToolbarButton: vi.fn((config: { id: string; pluginId: string }) => {
+    toolbarRegistryMock.buttons.push(config);
+  }),
+  unregisterPluginToolbarButtons: vi.fn((pluginId: string) => {
+    toolbarRegistryMock.buttons = toolbarRegistryMock.buttons.filter(
+      (b) => b.pluginId !== pluginId
+    );
+  }),
+  getAllPluginToolbarButtonConfigs: vi.fn(() => [...toolbarRegistryMock.buttons]),
 }));
 vi.mock("../pluginMenuRegistry.js", () => ({
   registerPluginMenuItem: vi.fn(),
@@ -240,6 +300,7 @@ import {
   parseProjectPluginInstanceKey,
 } from "../../../shared/types/plugin.js";
 import { getPluginCapabilityConsentStore } from "../plugin-capability/instances.js";
+import { _resetSecretStorageSessionForTests } from "../plugin/secretCipher.js";
 
 let tmpDir: string;
 /** Temp roots created outside `tmpDir` (project roots), removed in `afterEach`. */
@@ -257,8 +318,14 @@ function writePlugin(name: string, manifest: Record<string, unknown>): Promise<v
 beforeEach(async () => {
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "daintree-plugin-test-"));
   vi.clearAllMocks();
+  projectStoreMock.getCurrentProject.mockImplementation(() => null);
   projectStoreMock.getProjectById.mockImplementation(() => null);
   storeMock._state.clear();
+  driveLeaseGate.hold = null;
+  driveLeaseGate.entered = null;
+  projectViewsMock.views = [];
+  toolbarRegistryMock.buttons = [];
+  _resetSecretStorageSessionForTests();
 });
 
 afterEach(async () => {
@@ -826,5 +893,274 @@ describe("plugin list projection of installed per-project packages (#14255)", ()
     expect(row).toBeDefined();
     expect(row?.instanceMode).toBeUndefined();
     expect(row?.enabledInProjects).toBeUndefined();
+  });
+});
+
+describe("an instance stays bound to its own project while another is focused (#14258)", () => {
+  let rootA: string;
+  let rootB: string;
+  let heldWrite: { pending: Promise<void>; release: () => void } | null = null;
+
+  beforeEach(() => {
+    rootA = path.join(tmpDir, "repo-a");
+    rootB = path.join(tmpDir, "repo-b");
+  });
+
+  afterEach(async () => {
+    // A test that failed between holding a write and releasing it must not
+    // leave the write parked behind the gate, or still running into teardown.
+    if (heldWrite) {
+      heldWrite.release();
+      await heldWrite.pending.catch(() => {});
+      heldWrite = null;
+    }
+  });
+
+  const rootOf = (projectId: string): string => (projectId === PROJECT_A ? rootA : rootB);
+  const keyOf = (projectId: string): string => (projectId === PROJECT_A ? KEY_A : KEY_B);
+
+  function focus(projectId: string): void {
+    projectStoreMock.getCurrentProject.mockReturnValue({ id: projectId, path: rootOf(projectId) });
+  }
+
+  async function startBound(
+    contributes: Record<string, unknown> = {}
+  ): Promise<{ service: PluginService; seam: Seam }> {
+    const pluginsRoot = path.join(tmpDir, "plugins");
+    const dir = path.join(pluginsRoot, PKG);
+    await fs.mkdir(path.join(dir, "dist"), { recursive: true });
+    await fs.mkdir(rootA, { recursive: true });
+    await fs.mkdir(rootB, { recursive: true });
+    await fs.writeFile(
+      path.join(dir, "plugin.json"),
+      JSON.stringify({
+        name: PKG,
+        version: "1.0.0",
+        instanceMode: "project",
+        main: "dist/index.js",
+        contributes: {
+          settings: [
+            { id: "projectNote", type: "string", scope: "project" },
+            { id: "localNote", type: "string", scope: "local" },
+            { id: "projectToken", type: "secret", scope: "project" },
+          ],
+          ...contributes,
+        },
+      })
+    );
+    await fs.writeFile(path.join(dir, "dist", "index.js"), "module.exports = {};");
+    projectStoreMock.getProjectById.mockImplementation((id: string) =>
+      id === PROJECT_A || id === PROJECT_B ? { path: rootOf(id), status: "active" } : null
+    );
+    // Plugins root inside tmpDir, so the settings and storage roots beside it
+    // are this test's own and go with it.
+    const service = new PluginService(pluginsRoot);
+    openedServices.push(service);
+    await service.initialize();
+    await service.setProjectInstanceEnabled(PROJECT_A, rootA, PKG, true);
+    await service.setProjectInstanceEnabled(PROJECT_B, rootB, PKG, true);
+    const seam = service as unknown as Seam;
+    expect(seam.plugins.has(KEY_A)).toBe(true);
+    expect(seam.plugins.has(KEY_B)).toBe(true);
+    return { service, seam };
+  }
+
+  /**
+   * Starts `write` and parks it at its drive-lease check, after its file is
+   * resolved and before the store writes it. Resolves once it is parked.
+   */
+  async function startHeldWrite(
+    write: () => Promise<void>
+  ): Promise<{ pending: Promise<void>; release: () => void }> {
+    let open!: () => void;
+    driveLeaseGate.hold = new Promise<void>((resolve) => (open = resolve));
+    let parked = false;
+    const entered = new Promise<void>((resolve) => {
+      driveLeaseGate.entered = () => {
+        parked = true;
+        resolve();
+      };
+    });
+    const release = (): void => {
+      driveLeaseGate.hold = null;
+      driveLeaseGate.entered = null;
+      open();
+    };
+    const pending = write();
+    heldWrite = { pending, release };
+    // A write that fails, or finishes without reaching the gate, fails here
+    // rather than as a timeout.
+    await Promise.race([entered, pending]);
+    if (!parked) throw new Error("the write finished without reaching the drive-lease check");
+    return { pending, release };
+  }
+
+  async function readJson(file: string): Promise<Record<string, unknown> | undefined> {
+    try {
+      return JSON.parse(await fs.readFile(file, "utf-8")) as Record<string, unknown>;
+    } catch {
+      return undefined;
+    }
+  }
+
+  type Host = ReturnType<PluginService["_createHostForTests"]>;
+  interface BoundWrite {
+    label: string;
+    key: string;
+    write(host: Host, value: string): Promise<void>;
+    /** The file a write by `projectId`'s instance belongs in. */
+    fileFor(projectId: string): string;
+  }
+
+  const localFile = (projectId: string, key: string): string =>
+    path.join(tmpDir, "plugin-settings", "local", projectId, `${key}.json`);
+
+  const WRITES: BoundWrite[] = [
+    {
+      label: "project settings",
+      key: "projectNote",
+      write: (host, value) => host.settings.set("projectNote", value, "project"),
+      fileFor: (id) => path.join(rootOf(id), ".daintree", "plugin-settings", `${PKG}.json`),
+    },
+    {
+      label: "local settings",
+      key: "localNote",
+      write: (host, value) => host.settings.set("localNote", value, "local"),
+      fileFor: (id) => localFile(id, keyOf(id)),
+    },
+    {
+      label: "project-scoped secret settings",
+      key: "projectToken",
+      write: (host, value) => host.settings.set("projectToken", value, "project"),
+      // A project secret is kept in this machine's local file, never the repository's.
+      fileFor: (id) => localFile(id, keyOf(id)),
+    },
+    {
+      label: "project storage",
+      key: "cursor",
+      write: (host, value) => host.storage.set("cursor", value, "project"),
+      fileFor: (id) => path.join(rootOf(id), ".daintree", "plugin-storage", `${PKG}.json`),
+    },
+    {
+      label: "user storage",
+      key: "cursor",
+      write: (host, value) => host.storage.set("cursor", value, "user"),
+      fileFor: (id) => path.join(tmpDir, "plugin-storage", `${keyOf(id)}.json`),
+    },
+  ];
+
+  /** `value` landed in A's file for `w`, and nothing of A's reached B's. */
+  async function expectWrittenToA(w: BoundWrite, value: string): Promise<void> {
+    const stored = (await readJson(w.fileFor(PROJECT_A)))?.[w.key];
+    if (w.key === "projectToken") {
+      expect(stored).toMatchObject({ __daintreeSecret: "daintree:secret:v1" });
+      expect(JSON.stringify(stored)).not.toContain(value);
+      for (const id of [PROJECT_A, PROJECT_B]) {
+        const repoFile = path.join(rootOf(id), ".daintree", "plugin-settings", `${PKG}.json`);
+        expect((await readJson(repoFile))?.projectToken).toBeUndefined();
+      }
+    } else {
+      expect(stored).toBe(value);
+    }
+    expect((await readJson(w.fileFor(PROJECT_B)))?.[w.key]).toBeUndefined();
+    // Nor A's own file filed under B's project.
+    expect(await readJson(localFile(PROJECT_B, KEY_A))).toBeUndefined();
+  }
+
+  it.each(WRITES)("lands A's $label write in A's file while B is focused", async (w) => {
+    const { service } = await startBound();
+    const host = service._createHostForTests(KEY_A);
+    focus(PROJECT_B);
+
+    await w.write(host, "from-a");
+
+    await expectWrittenToA(w, "from-a");
+  });
+
+  it.each(WRITES)(
+    "finishes A's $label write started with A focused in A after focus moves to B",
+    async (w) => {
+      const { service } = await startBound();
+      const host = service._createHostForTests(KEY_A);
+      focus(PROJECT_A);
+
+      const gate = await startHeldWrite(() => w.write(host, "started-in-a"));
+      focus(PROJECT_B);
+      gate.release();
+      await gate.pending;
+      await expectWrittenToA(w, "started-in-a");
+
+      // The same host, called again now B is focused, still writes A's file.
+      await w.write(host, "after-switch");
+      await expectWrittenToA(w, "after-switch");
+    }
+  );
+
+  it.each(WRITES)(
+    "forgetting B in the middle of A's $label write leaves A's instance and write alone",
+    async (w) => {
+      const { service, seam } = await startBound();
+      const host = service._createHostForTests(KEY_A);
+      focus(PROJECT_B);
+      const instanceA = seam.plugins.get(KEY_A);
+
+      const gate = await startHeldWrite(() => w.write(host, "held"));
+      service.forgetProjectInstances(PROJECT_B);
+
+      expect(seam.plugins.has(KEY_B)).toBe(false);
+      expect(seam.plugins.get(KEY_A)).toBe(instanceA);
+      expect(seam.installedInstanceKeys.has(KEY_A)).toBe(true);
+      expect(service.getProjectInstanceProjects(PKG)).toEqual([PROJECT_A]);
+
+      gate.release();
+      await gate.pending;
+      await expectWrittenToA(w, "held");
+
+      await w.write(host, "after-forget");
+      await expectWrittenToA(w, "after-forget");
+    }
+  );
+
+  it("sends each instance's toolbar button only to its own project's views", async () => {
+    projectViewsMock.views = [
+      { webContents: { id: 1, isDestroyed: () => false }, projectId: PROJECT_A },
+      { webContents: { id: 2, isDestroyed: () => false }, projectId: PROJECT_B },
+    ];
+    // B is focused while both instances load and publish.
+    focus(PROJECT_B);
+    await startBound({
+      toolbarButtons: [{ id: "open", label: "Ledger", iconId: "list", actionId: `${PKG}.open` }],
+    });
+
+    const owners = (projectId: string): string[][] =>
+      broadcastToProjectRenderersMock.mock.calls
+        .filter(
+          ([target, , event]) =>
+            target === projectId &&
+            (event as { name: string }).name === "plugin:toolbar-buttons-changed"
+        )
+        .map(([, , event]) =>
+          (event as { payload: { buttons: Array<{ pluginId: string }> } }).payload.buttons.map(
+            (b) => b.pluginId
+          )
+        );
+
+    await vi.waitFor(() => {
+      expect(owners(PROJECT_A).at(-1)).toEqual([KEY_A]);
+      expect(owners(PROJECT_B).at(-1)).toEqual([KEY_B]);
+    });
+    expect(owners(PROJECT_A).flat()).not.toContain(KEY_B);
+    expect(owners(PROJECT_B).flat()).not.toContain(KEY_A);
+    const unscoped = broadcastToRendererMock.mock.calls
+      .filter(
+        ([, event]) => (event as { name?: string })?.name === "plugin:toolbar-buttons-changed"
+      )
+      .flatMap(([, event]) =>
+        (event as { payload: { buttons: Array<{ pluginId: string }> } }).payload.buttons.map(
+          (b) => b.pluginId
+        )
+      );
+    expect(unscoped).not.toContain(KEY_A);
+    expect(unscoped).not.toContain(KEY_B);
   });
 });
