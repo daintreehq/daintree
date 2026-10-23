@@ -1,7 +1,6 @@
-import { useEffect, useSyncExternalStore } from "react";
+import { lazy, Suspense, useEffect, useSyncExternalStore } from "react";
 import { retainCrossHostTargetsFor } from "@/components/Fleet/crossHostFleet";
 import { useHostList } from "../hostList";
-import { HostsOverviewDialog } from "./HostsOverviewDialog";
 import { startHostMetricsFeed } from "./hostMetricsFeed";
 import {
   closeHostsOverview,
@@ -9,6 +8,10 @@ import {
   registerHostsOverviewHost,
   subscribeHostsOverview,
 } from "./hostsOverviewRequests";
+
+const LazyHostsOverviewDialog = lazy(() =>
+  import("./HostsOverviewDialog").then((m) => ({ default: m.HostsOverviewDialog }))
+);
 
 /**
  * Follows host summaries for this view (so opted-in hosts' notifications and
@@ -24,5 +27,9 @@ export function HostsOverviewHost() {
     retainCrossHostTargetsFor(new Set(hostList.hosts.map((entry) => entry.descriptor.id)));
   }, [hostList.hosts]);
   if (!open) return null;
-  return <HostsOverviewDialog onClose={closeHostsOverview} />;
+  return (
+    <Suspense fallback={null}>
+      <LazyHostsOverviewDialog onClose={closeHostsOverview} />
+    </Suspense>
+  );
 }

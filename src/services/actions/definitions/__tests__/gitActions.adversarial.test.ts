@@ -5,6 +5,9 @@ vi.mock("@/lib/notify", () => ({ notify: notifyMock }));
 
 import type { ActionCallbacks, ActionRegistry, AnyActionDefinition } from "../../actionTypes";
 import { registerGitActions } from "../gitActions";
+// The run bodies load on first dispatch (#14239). Evaluate them here, as they
+// always were, rather than under the window stub a test swaps in before run().
+import "../gitActions.impl";
 import { useGitPushConfirmStore } from "@/store/gitPushConfirmStore";
 import { useGitPullRebaseConfirmStore } from "@/store/gitPullRebaseConfirmStore";
 import { useGitForcePushStore } from "@/store/gitForcePushStore";

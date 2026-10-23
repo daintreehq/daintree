@@ -2,468 +2,808 @@
   "entryChunk": "index",
   "chunks": {
     "ActionPalette": {
-      "raw": 14339,
-      "gzip": 5652
+      "raw": 17600,
+      "gzip": 7309
     },
-    "AgentCard": {
-      "raw": 12799,
-      "gzip": 4864
+    "AgentCounts": {
+      "raw": 1979,
+      "gzip": 929
     },
     "AgentSettings": {
-      "raw": 94690,
-      "gzip": 28718
+      "raw": 112585,
+      "gzip": 37824
     },
     "App": {
-      "raw": 1267336,
-      "gzip": 366083
+      "raw": 1748384,
+      "gzip": 542429
+    },
+    "AutocompleteMenu": {
+      "raw": 6031,
+      "gzip": 2966
     },
     "AutomationTab": {
-      "raw": 33592,
-      "gzip": 9722
-    },
-    "Avatar": {
-      "raw": 2048,
-      "gzip": 1138
-    },
-    "BaseBranchDiffModal": {
-      "raw": 1142,
-      "gzip": 656
+      "raw": 23893,
+      "gzip": 8732
     },
     "BrowserPane": {
-      "raw": 22001,
-      "gzip": 7021
+      "raw": 23827,
+      "gzip": 8648
     },
-    "CelebrationConfetti": {
-      "raw": 3005,
-      "gzip": 1548
+    "BulkCreateWorktreeDialog": {
+      "raw": 26033,
+      "gzip": 8454
+    },
+    "CanopySettingsTab": {
+      "raw": 3182,
+      "gzip": 1654
+    },
+    "CanopyView": {
+      "raw": 160260,
+      "gzip": 53422
+    },
+    "ClearLogsConfirmDialog": {
+      "raw": 1341,
+      "gzip": 790
     },
     "CloneRepoDialog": {
-      "raw": 8195,
-      "gzip": 3048
+      "raw": 14012,
+      "gzip": 5119
     },
     "CodeForgeSettingsTab": {
-      "raw": 38972,
-      "gzip": 12433
+      "raw": 30483,
+      "gzip": 10735
     },
     "CodeForgeTab": {
-      "raw": 3153,
-      "gzip": 1175
-    },
-    "CodeViewer": {
-      "raw": 31922,
-      "gzip": 7530
+      "raw": 3936,
+      "gzip": 1561
     },
     "CommandOverridesTab": {
-      "raw": 13062,
-      "gzip": 4256
+      "raw": 12915,
+      "gzip": 5523
     },
     "CommitList": {
-      "raw": 12979,
-      "gzip": 5077
+      "raw": 1291,
+      "gzip": 773
     },
     "ContextTab": {
-      "raw": 12306,
-      "gzip": 2963
+      "raw": 9623,
+      "gzip": 3540
     },
     "CrashRecoveryDialog": {
-      "raw": 24249,
-      "gzip": 7620
+      "raw": 23887,
+      "gzip": 7965
     },
     "CreateProjectFolderDialog": {
-      "raw": 3580,
-      "gzip": 1518
+      "raw": 8737,
+      "gzip": 3628
     },
     "CrossWorktreeDiff": {
-      "raw": 12462,
-      "gzip": 4490
+      "raw": 14629,
+      "gzip": 5762
     },
     "DaintreeAssistantSettingsTab": {
-      "raw": 36928,
-      "gzip": 11045
+      "raw": 51123,
+      "gzip": 16456
     },
     "DemoCaptureBridge": {
       "raw": 3605,
       "gzip": 1449
     },
     "DemoCursor": {
-      "raw": 15457,
-      "gzip": 5328
+      "raw": 15442,
+      "gzip": 5315
     },
     "DemoOverlay": {
-      "raw": 7072,
-      "gzip": 3026
+      "raw": 7082,
+      "gzip": 3032
     },
     "DevPreviewPane": {
-      "raw": 100294,
-      "gzip": 30274
+      "raw": 143653,
+      "gzip": 47495
     },
     "Diagnostics": {
-      "raw": 95257,
-      "gzip": 27938
+      "raw": 109636,
+      "gzip": 33860
     },
     "DiagnosticsReviewDialogHost": {
-      "raw": 12821,
-      "gzip": 4822
+      "raw": 20828,
+      "gzip": 8595
+    },
+    "DiffPane": {
+      "raw": 70343,
+      "gzip": 24977
     },
     "DiffViewer": {
-      "raw": 55773,
-      "gzip": 20009
+      "raw": 47578,
+      "gzip": 16609
     },
-    "DiffViewerModalHost": {
-      "raw": 1148,
-      "gzip": 680
+    "ElementPickerSurfaces": {
+      "raw": 64548,
+      "gzip": 21388
     },
     "EnvironmentSettingsTab": {
-      "raw": 6488,
-      "gzip": 2589
+      "raw": 4498,
+      "gzip": 2147
     },
     "EnvironmentVariablesEditor": {
-      "raw": 7463,
-      "gzip": 2697
+      "raw": 5463,
+      "gzip": 2421
     },
-    "FileDiffModal": {
-      "raw": 5408,
-      "gzip": 2213
+    "FileBrowserPane": {
+      "raw": 78527,
+      "gzip": 26912
     },
-    "FileViewerModal": {
-      "raw": 29092,
-      "gzip": 10071
+    "FileContentContextMenu": {
+      "raw": 26817,
+      "gzip": 10974
     },
-    "FileViewerModalHost": {
-      "raw": 4692,
-      "gzip": 1908
+    "FileDecorationBadge": {
+      "raw": 3874,
+      "gzip": 1925
+    },
+    "FileMetadataFacts": {
+      "raw": 6697,
+      "gzip": 2766
+    },
+    "FileMutationConfirmDialog": {
+      "raw": 2183,
+      "gzip": 1117
+    },
+    "FilePane": {
+      "raw": 47275,
+      "gzip": 17277
+    },
+    "FilterChip": {
+      "raw": 6563,
+      "gzip": 2690
+    },
+    "FleetPickerPalette": {
+      "raw": 9651,
+      "gzip": 3816
+    },
+    "FocusHandoffGuard": {
+      "raw": 16053,
+      "gzip": 5735
     },
     "GeneralTab": {
-      "raw": 20973,
-      "gzip": 6092
+      "raw": 31298,
+      "gzip": 11508
     },
     "GettingStartedChecklist": {
-      "raw": 9153,
-      "gzip": 3770
+      "raw": 9170,
+      "gzip": 3871
+    },
+    "GitForcePushConfirmDialog": {
+      "raw": 5533,
+      "gzip": 2602
     },
     "GitHubDropdownSkeletons": {
-      "raw": 6568,
-      "gzip": 2059
+      "raw": 9932,
+      "gzip": 2937
     },
     "GitHubResourceList": {
-      "raw": 51909,
-      "gzip": 17414
+      "raw": 64604,
+      "gzip": 22869
     },
-    "GitInitDialog": {
-      "raw": 6485,
-      "gzip": 2298
+    "GitHubSettingsTab": {
+      "raw": 10705,
+      "gzip": 4158
+    },
+    "GitLabSettingsTab": {
+      "raw": 8372,
+      "gzip": 3155
+    },
+    "GitOperationPreview": {
+      "raw": 7276,
+      "gzip": 2703
     },
     "GitPullRebaseConfirmDialog": {
-      "raw": 5239,
-      "gzip": 2310
+      "raw": 9623,
+      "gzip": 4124
     },
     "GitPushConfirmDialog": {
-      "raw": 5160,
-      "gzip": 2297
+      "raw": 8011,
+      "gzip": 3537
+    },
+    "GitWorktreeOperationConfirmDialog": {
+      "raw": 9100,
+      "gzip": 3924
     },
     "GlobalBannerCoordinator": {
-      "raw": 15550,
-      "gzip": 6040
+      "raw": 27173,
+      "gzip": 9540
     },
     "HelpPanel": {
-      "raw": 100506,
-      "gzip": 28754
+      "raw": 110891,
+      "gzip": 38973
     },
-    "HighlightedText": {
-      "raw": 892,
-      "gzip": 538
+    "HelpPastSessionsPalette": {
+      "raw": 5372,
+      "gzip": 2608
+    },
+    "HostAddProjectDialog": {
+      "raw": 18777,
+      "gzip": 7653
+    },
+    "HostFilePickerHost": {
+      "raw": 27617,
+      "gzip": 10487
+    },
+    "HostNameText": {
+      "raw": 1104,
+      "gzip": 647
+    },
+    "HostSparkline": {
+      "raw": 1550,
+      "gzip": 935
+    },
+    "HostSwitchDialogHost": {
+      "raw": 54113,
+      "gzip": 19354
+    },
+    "HostsOverviewDialog": {
+      "raw": 36808,
+      "gzip": 12953
+    },
+    "HostsOverviewHost": {
+      "raw": 4089,
+      "gzip": 1861
+    },
+    "HostsSettingsTab": {
+      "raw": 117891,
+      "gzip": 37815
     },
     "HybridInputBar": {
-      "raw": 139300,
-      "gzip": 43526
+      "raw": 172819,
+      "gzip": 58228
+    },
+    "ImportExportSettingsTab": {
+      "raw": 1733,
+      "gzip": 839
     },
     "IntegrationsTab": {
-      "raw": 11529,
-      "gzip": 3386
+      "raw": 13256,
+      "gzip": 4703
     },
-    "IssuePickerDialog": {
-      "raw": 6512,
-      "gzip": 2700
+    "IssueSelector": {
+      "raw": 7824,
+      "gzip": 3449
     },
     "KeyboardShortcuts": {
-      "raw": 7289,
-      "gzip": 2746
+      "raw": 11288,
+      "gzip": 3903
     },
     "KeyboardShortcutsTab": {
-      "raw": 10513,
-      "gzip": 3414
+      "raw": 14394,
+      "gzip": 5482
+    },
+    "LayoutApplyConfirmDialog": {
+      "raw": 1893,
+      "gzip": 1012
+    },
+    "LazyHostOverviewParts": {
+      "raw": 4633,
+      "gzip": 1760
+    },
+    "LifecycleCommandApprovalDialog": {
+      "raw": 6769,
+      "gzip": 2633
+    },
+    "LinkMark": {
+      "raw": 1330,
+      "gzip": 790
     },
     "LiveTimeAgo": {
-      "raw": 3349,
-      "gzip": 1661
+      "raw": 3043,
+      "gzip": 1508
+    },
+    "LocalCommitsDropdown": {
+      "raw": 21757,
+      "gzip": 7988
     },
     "LogLevelPalette": {
-      "raw": 5427,
-      "gzip": 2324
+      "raw": 6690,
+      "gzip": 2818
+    },
+    "MarkdownDocument": {
+      "raw": 1943,
+      "gzip": 1048
+    },
+    "MarkdownEditorView": {
+      "raw": 32596,
+      "gzip": 11656
     },
     "McpConfirmDialog": {
-      "raw": 3314,
-      "gzip": 1576
+      "raw": 22227,
+      "gzip": 8368
     },
     "McpServerSettingsTab": {
-      "raw": 21363,
-      "gzip": 5965
+      "raw": 22199,
+      "gzip": 7339
+    },
+    "ModalHostLayer": {
+      "raw": 106760,
+      "gzip": 35695
+    },
+    "MoveOrRenameProjectDialog": {
+      "raw": 12519,
+      "gzip": 4562
     },
     "NewTerminalPalette": {
-      "raw": 4504,
-      "gzip": 2204
+      "raw": 4838,
+      "gzip": 2293
     },
     "NewWorktreeDialog": {
-      "raw": 52116,
-      "gzip": 16273
+      "raw": 34018,
+      "gzip": 12323
+    },
+    "NonGitFolderDialog": {
+      "raw": 16469,
+      "gzip": 5744
     },
     "NotificationCenter": {
-      "raw": 51679,
-      "gzip": 17431
+      "raw": 70065,
+      "gzip": 24288
     },
     "NotificationSettingsTab": {
-      "raw": 16415,
-      "gzip": 5189
+      "raw": 17055,
+      "gzip": 6289
     },
     "OnboardingFlow": {
-      "raw": 53678,
-      "gzip": 16812
+      "raw": 54937,
+      "gzip": 17816
+    },
+    "OpenOnHostSubmenu": {
+      "raw": 3496,
+      "gzip": 1705
+    },
+    "OtherHostsWorktrees": {
+      "raw": 4348,
+      "gzip": 1862
     },
     "PaletteOverflowNotice": {
-      "raw": 556,
-      "gzip": 406
+      "raw": 576,
+      "gzip": 405
+    },
+    "PaletteScopeChip": {
+      "raw": 1191,
+      "gzip": 734
     },
     "PaletteStrip": {
-      "raw": 675,
-      "gzip": 465
+      "raw": 1161,
+      "gzip": 684
+    },
+    "PaneLoadingState": {
+      "raw": 3209,
+      "gzip": 1239
+    },
+    "PanelDialogHost": {
+      "raw": 4039,
+      "gzip": 2008
     },
     "PanelKindIcon": {
-      "raw": 1392,
-      "gzip": 788
+      "raw": 35410,
+      "gzip": 10720
     },
     "PanelLimitConfirmDialog": {
-      "raw": 1599,
-      "gzip": 916
+      "raw": 2904,
+      "gzip": 1476
     },
     "PanelPalette": {
-      "raw": 6117,
-      "gzip": 3039
+      "raw": 6738,
+      "gzip": 3316
+    },
+    "ParkRunDialog": {
+      "raw": 6394,
+      "gzip": 3088
+    },
+    "PathTail": {
+      "raw": 653,
+      "gzip": 433
+    },
+    "PathText": {
+      "raw": 478,
+      "gzip": 342
+    },
+    "PilotRunState": {
+      "raw": 14260,
+      "gzip": 5221
+    },
+    "PilotView": {
+      "raw": 46634,
+      "gzip": 16857
+    },
+    "PlatformGlyph": {
+      "raw": 6588,
+      "gzip": 3295
     },
     "PluginActionsSettingsTab": {
-      "raw": 14810,
-      "gzip": 4963
+      "raw": 10531,
+      "gzip": 4152
+    },
+    "PluginArchiveInstallConfirmDialog": {
+      "raw": 9538,
+      "gzip": 3641
     },
     "PluginCapabilityConfirmDialog": {
-      "raw": 4075,
-      "gzip": 1744
+      "raw": 8343,
+      "gzip": 3155
     },
     "PluginConfirmDialog": {
-      "raw": 2621,
-      "gzip": 1293
+      "raw": 3977,
+      "gzip": 1899
     },
     "PluginConfirmPromptDialog": {
-      "raw": 2173,
-      "gzip": 1073
+      "raw": 2497,
+      "gzip": 1220
+    },
+    "PluginFileEditorHost": {
+      "raw": 5107,
+      "gzip": 2115
+    },
+    "PluginHostedView": {
+      "raw": 75356,
+      "gzip": 27731
     },
     "PluginInputBoxDialog": {
-      "raw": 3935,
-      "gzip": 1977
+      "raw": 4175,
+      "gzip": 2096
+    },
+    "PluginKit": {
+      "raw": 918230,
+      "gzip": 318972
+    },
+    "PluginKitIcons": {
+      "raw": 12323,
+      "gzip": 5543
     },
     "PluginManagerView": {
-      "raw": 73583,
-      "gzip": 22672
+      "raw": 124489,
+      "gzip": 41028
+    },
+    "PluginMarkdown": {
+      "raw": 910,
+      "gzip": 557
     },
     "PluginMcpConfirmDialog": {
-      "raw": 5026,
-      "gzip": 2081
+      "raw": 12652,
+      "gzip": 4722
+    },
+    "PluginProvenance": {
+      "raw": 1756,
+      "gzip": 947
     },
     "PluginQuickPickDialog": {
-      "raw": 5172,
-      "gzip": 2522
+      "raw": 6470,
+      "gzip": 2878
+    },
+    "PluginRunRecipeDialog": {
+      "raw": 6770,
+      "gzip": 2757
+    },
+    "PluginSendToAgentDialog": {
+      "raw": 11564,
+      "gzip": 5121
+    },
+    "PluginTerminalLinksSection": {
+      "raw": 27421,
+      "gzip": 9913
+    },
+    "PluginViewRuntimeBanner": {
+      "raw": 2062,
+      "gzip": 1035
     },
     "PluginsTab": {
-      "raw": 3346,
-      "gzip": 1463
+      "raw": 3380,
+      "gzip": 1465
+    },
+    "PortalDock": {
+      "raw": 46031,
+      "gzip": 15553
+    },
+    "PortalIcon": {
+      "raw": 1683,
+      "gzip": 862
     },
     "PortalSettingsTab": {
-      "raw": 14794,
-      "gzip": 5205
+      "raw": 13812,
+      "gzip": 4957
     },
     "PrivacyDataTab": {
-      "raw": 15586,
-      "gzip": 4411
+      "raw": 14749,
+      "gzip": 5430
+    },
+    "ProcessesDialog": {
+      "raw": 21245,
+      "gzip": 8020
+    },
+    "ProjectEmojiButton": {
+      "raw": 1675,
+      "gzip": 945
+    },
+    "ProjectGroupMenus": {
+      "raw": 12708,
+      "gzip": 4587
+    },
+    "ProjectIdentityEditor": {
+      "raw": 5343,
+      "gzip": 2481
     },
     "ProjectNotificationsTab": {
-      "raw": 9969,
-      "gzip": 3624
+      "raw": 6598,
+      "gzip": 2945
+    },
+    "ProjectPluginsTab": {
+      "raw": 61681,
+      "gzip": 20564
+    },
+    "ProjectPulseCard": {
+      "raw": 29612,
+      "gzip": 10003
+    },
+    "ProjectSleepConfirmDialog": {
+      "raw": 7046,
+      "gzip": 2776
+    },
+    "ProjectSurfaceConsentNotice": {
+      "raw": 3567,
+      "gzip": 1854
     },
     "ProjectSwitcherPalette": {
-      "raw": 127,
-      "gzip": 130
+      "raw": 85433,
+      "gzip": 26719
+    },
+    "ProjectThemeNotice": {
+      "raw": 11998,
+      "gzip": 4329
     },
     "QuickCreatePalette": {
-      "raw": 6736,
-      "gzip": 2723
+      "raw": 7131,
+      "gzip": 2987
+    },
+    "QuickRun": {
+      "raw": 25334,
+      "gzip": 8798
+    },
+    "QuickRunToggle": {
+      "raw": 2294,
+      "gzip": 1176
+    },
+    "QuickStateFilterBar": {
+      "raw": 37910,
+      "gzip": 14267
     },
     "QuickSwitcher": {
-      "raw": 5452,
-      "gzip": 2454
+      "raw": 8483,
+      "gzip": 3853
+    },
+    "RadioChoice": {
+      "raw": 3140,
+      "gzip": 1339
     },
     "RecipeConflictDialog": {
-      "raw": 2401,
-      "gzip": 1171
+      "raw": 3622,
+      "gzip": 1726
     },
     "RecipeEditor": {
-      "raw": 17404,
-      "gzip": 4704
+      "raw": 16063,
+      "gzip": 5794
+    },
+    "RecipeImportDialog": {
+      "raw": 2649,
+      "gzip": 1281
+    },
+    "RecipeManager": {
+      "raw": 14007,
+      "gzip": 4855
     },
     "RecipesTab": {
-      "raw": 13238,
-      "gzip": 4660
+      "raw": 9791,
+      "gzip": 3878
+    },
+    "RenderedMarkdownDiff": {
+      "raw": 22301,
+      "gzip": 8344
     },
     "ResumeSessionsPalette": {
-      "raw": 8738,
-      "gzip": 4057
-    },
-    "ReviewHub": {
-      "raw": 2360,
-      "gzip": 1235
-    },
-    "ReviewHubContent": {
-      "raw": 91905,
-      "gzip": 25103
+      "raw": 16646,
+      "gzip": 7239
     },
     "ReviewPane": {
-      "raw": 1174,
-      "gzip": 705
+      "raw": 132203,
+      "gzip": 42515
+    },
+    "RowControl": {
+      "raw": 1010,
+      "gzip": 628
     },
     "RunHistorySettingsTab": {
-      "raw": 9215,
-      "gzip": 3617
+      "raw": 10124,
+      "gzip": 4053
+    },
+    "RunParkFields": {
+      "raw": 6014,
+      "gzip": 2814
+    },
+    "SavedFleetsDialog": {
+      "raw": 45253,
+      "gzip": 15537
     },
     "SearchablePalette": {
-      "raw": 6115,
-      "gzip": 3020
+      "raw": 8824,
+      "gzip": 4112
     },
     "SendToAgentPalette": {
-      "raw": 4273,
-      "gzip": 1944
-    },
-    "SettingsCheckbox": {
-      "raw": 3215,
-      "gzip": 1585
-    },
-    "SettingsChoicebox": {
-      "raw": 4577,
-      "gzip": 1770
+      "raw": 4592,
+      "gzip": 2195
     },
     "SettingsDialog": {
-      "raw": 125101,
-      "gzip": 34941
+      "raw": 164804,
+      "gzip": 49121
     },
     "SettingsFlushRegistry": {
       "raw": 1322,
-      "gzip": 717
+      "gzip": 715
     },
     "SettingsInput": {
-      "raw": 2180,
-      "gzip": 1005
+      "raw": 3454,
+      "gzip": 1781
     },
-    "SettingsLoadErrorBanner": {
-      "raw": 1022,
-      "gzip": 590
+    "SettingsListEditor": {
+      "raw": 5303,
+      "gzip": 2250
+    },
+    "SettingsNumberInput": {
+      "raw": 341,
+      "gzip": 260
+    },
+    "SettingsPresetGroup": {
+      "raw": 3536,
+      "gzip": 1702
+    },
+    "SettingsSearchField": {
+      "raw": 1002,
+      "gzip": 634
     },
     "SettingsSection": {
-      "raw": 1577,
-      "gzip": 889
+      "raw": 1591,
+      "gzip": 863
     },
-    "SettingsSelect": {
-      "raw": 2236,
-      "gzip": 1041
+    "SettingsSubjectPicker": {
+      "raw": 6108,
+      "gzip": 2909
+    },
+    "SettingsSubpage": {
+      "raw": 714,
+      "gzip": 454
     },
     "SettingsSubtabBar": {
-      "raw": 1860,
-      "gzip": 996
+      "raw": 4641,
+      "gzip": 2124
     },
     "SettingsSwitch": {
-      "raw": 2079,
-      "gzip": 920
+      "raw": 3271,
+      "gzip": 1468
     },
     "SettingsSwitchCard": {
-      "raw": 4214,
-      "gzip": 2011
+      "raw": 12028,
+      "gzip": 4939
     },
     "SettingsValidationRegistry": {
-      "raw": 1398,
-      "gzip": 767
+      "raw": 1403,
+      "gzip": 768
     },
     "ShortcutReferenceDialog": {
-      "raw": 5545,
-      "gzip": 2488
+      "raw": 14035,
+      "gzip": 5693
+    },
+    "StreakFlame": {
+      "raw": 14343,
+      "gzip": 5794
     },
     "SurfaceHostRoot": {
-      "raw": 381,
-      "gzip": 287
+      "raw": 393,
+      "gzip": 293
     },
     "TerminalAppearanceTab": {
-      "raw": 26466,
-      "gzip": 9054
+      "raw": 35730,
+      "gzip": 12584
     },
     "TerminalSettingsTab": {
-      "raw": 20299,
-      "gzip": 5888
+      "raw": 21764,
+      "gzip": 8091
+    },
+    "ThemeBrowser": {
+      "raw": 16696,
+      "gzip": 6834
     },
     "ThemePalette": {
-      "raw": 5384,
-      "gzip": 2564
+      "raw": 8098,
+      "gzip": 3742
     },
     "ToolbarSettingsTab": {
-      "raw": 15243,
-      "gzip": 6037
+      "raw": 29509,
+      "gzip": 11649
+    },
+    "TourDialog": {
+      "raw": 23834,
+      "gzip": 8976
+    },
+    "TourInviteCard": {
+      "raw": 6650,
+      "gzip": 2807
     },
     "TroubleshootingTab": {
-      "raw": 13832,
-      "gzip": 4588
+      "raw": 15280,
+      "gzip": 5559
     },
     "TurnOutcomeDiagnostics": {
-      "raw": 37223,
-      "gzip": 8806
+      "raw": 26865,
+      "gzip": 9391
+    },
+    "UnderlineTabs": {
+      "raw": 2999,
+      "gzip": 1526
+    },
+    "UploadConfirmHost": {
+      "raw": 1746,
+      "gzip": 942
     },
     "VoiceInputSettingsTab": {
-      "raw": 33832,
-      "gzip": 11338
+      "raw": 35518,
+      "gzip": 13123
     },
     "WelcomeScreen": {
-      "raw": 18419,
-      "gzip": 5851
+      "raw": 20264,
+      "gzip": 7004
+    },
+    "WorkspaceTile": {
+      "raw": 1558,
+      "gzip": 835
     },
     "WorktreeDeleteDialog": {
-      "raw": 11088,
-      "gzip": 4180
+      "raw": 26754,
+      "gzip": 8853
+    },
+    "WorktreeDeleteNotes": {
+      "raw": 4686,
+      "gzip": 2016
     },
     "WorktreeOverviewModal": {
-      "raw": 35130,
-      "gzip": 12132
+      "raw": 67380,
+      "gzip": 24212
     },
     "WorktreePalette": {
-      "raw": 4133,
-      "gzip": 1942
+      "raw": 4176,
+      "gzip": 1920
+    },
+    "WorktreePlacementRow": {
+      "raw": 6000,
+      "gzip": 2829
     },
     "WorktreeSettingsTab": {
-      "raw": 8343,
-      "gzip": 2432
+      "raw": 11628,
+      "gzip": 4660
     },
-    "WorktreeSidebarSearchBar": {
-      "raw": 222592,
-      "gzip": 69987
+    "ZoomableImage": {
+      "raw": 7516,
+      "gzip": 3311
     },
     "actionPaletteSearch": {
-      "raw": 2487,
-      "gzip": 1190
+      "raw": 5578,
+      "gzip": 2404
+    },
+    "agentInstall": {
+      "raw": 2408,
+      "gzip": 1198
+    },
+    "agentQuota": {
+      "raw": 182,
+      "gzip": 172
     },
     "apl": {
-      "raw": 2372,
-      "gzip": 1255
+      "raw": 2663,
+      "gzip": 1241
     },
     "asciiarmor": {
       "raw": 858,
@@ -471,39 +811,63 @@
     },
     "asn1": {
       "raw": 4022,
-      "gzip": 1962
+      "gzip": 1960
+    },
+    "assistantDaintreeConfirmations": {
+      "raw": 683,
+      "gzip": 396
+    },
+    "assistantLaunchFlags": {
+      "raw": 3544,
+      "gzip": 1572
     },
     "asterisk": {
       "raw": 4147,
-      "gzip": 1807
+      "gzip": 1811
+    },
+    "auditLogParts": {
+      "raw": 8800,
+      "gzip": 3463
     },
     "boot": {
-      "raw": 63747,
-      "gzip": 20322
+      "raw": 36333,
+      "gzip": 11913
+    },
+    "boundedOutput": {
+      "raw": 21136,
+      "gzip": 8212
     },
     "brainfuck": {
       "raw": 667,
-      "gzip": 363
+      "gzip": 364
     },
-    "builtinRendererRegistry": {
-      "raw": 697,
-      "gzip": 441
+    "buildMismatchNotice": {
+      "raw": 1098,
+      "gzip": 647
+    },
+    "buildSkew": {
+      "raw": 1502,
+      "gzip": 792
     },
     "c": {
-      "raw": 2068,
-      "gzip": 1092
+      "raw": 2071,
+      "gzip": 1093
+    },
+    "canopyTerms": {
+      "raw": 1805,
+      "gzip": 648
+    },
+    "capabilityMeta": {
+      "raw": 4543,
+      "gzip": 1780
     },
     "categoryColors": {
-      "raw": 2653,
-      "gzip": 709
+      "raw": 2879,
+      "gzip": 677
     },
     "checklistItems": {
-      "raw": 916,
-      "gzip": 523
-    },
-    "clientGitError": {
-      "raw": 543,
-      "gzip": 367
+      "raw": 743,
+      "gzip": 436
     },
     "clike": {
       "raw": 22133,
@@ -511,75 +875,99 @@
     },
     "clojure": {
       "raw": 9492,
-      "gzip": 4063
+      "gzip": 4065
+    },
+    "cloudSyncWarningCopy": {
+      "raw": 308,
+      "gzip": 244
     },
     "cmake": {
       "raw": 844,
-      "gzip": 505
+      "gzip": 507
     },
     "cobol": {
       "raw": 6307,
-      "gzip": 3037
+      "gzip": 3035
     },
     "coffeescript": {
       "raw": 3931,
-      "gzip": 1730
+      "gzip": 1728
+    },
+    "commandHistoryStore": {
+      "raw": 1468,
+      "gzip": 839
     },
     "commonlisp": {
       "raw": 2390,
-      "gzip": 1144
+      "gzip": 1149
     },
     "cpp": {
       "raw": 2787,
-      "gzip": 1321
+      "gzip": 1325
     },
     "crystal": {
       "raw": 5114,
-      "gzip": 2143
+      "gzip": 2144
     },
     "csharp": {
-      "raw": 6571,
-      "gzip": 2594
+      "raw": 6574,
+      "gzip": 2597
     },
     "css": {
       "raw": 24816,
-      "gzip": 8325
+      "gzip": 8327
     },
     "cypher": {
       "raw": 3266,
-      "gzip": 1550
+      "gzip": 1553
     },
     "d": {
       "raw": 3755,
       "gzip": 1715
     },
+    "daintreeTour": {
+      "raw": 88136,
+      "gzip": 25544
+    },
     "demoSpring": {
       "raw": 869,
-      "gzip": 501
+      "gzip": 504
     },
     "deriveEffectiveTier": {
-      "raw": 341,
-      "gzip": 259
+      "raw": 365,
+      "gzip": 277
     },
     "devServerDetection": {
       "raw": 1034,
-      "gzip": 597
+      "gzip": 599
+    },
+    "diagnosticsDockLayout": {
+      "raw": 3527,
+      "gzip": 1316
     },
     "diagnosticsReviewStore": {
-      "raw": 2036,
-      "gzip": 991
+      "raw": 1958,
+      "gzip": 948
     },
     "diff": {
       "raw": 370,
-      "gzip": 276
+      "gzip": 280
+    },
+    "diffChangeSet": {
+      "raw": 718,
+      "gzip": 376
+    },
+    "diffRefractor": {
+      "raw": 30201,
+      "gzip": 10452
     },
     "dist": {
-      "raw": 43975,
-      "gzip": 15197
+      "raw": 44933,
+      "gzip": 18748
     },
     "distributionStore": {
-      "raw": 895,
-      "gzip": 520
+      "raw": 233,
+      "gzip": 186
     },
     "docker": {
       "raw": 1693,
@@ -591,31 +979,39 @@
     },
     "dtd": {
       "raw": 2154,
-      "gzip": 914
+      "gzip": 918
     },
     "dylan": {
       "raw": 4107,
-      "gzip": 1676
+      "gzip": 1677
     },
     "e2eNotificationBackdoor": {
-      "raw": 1891,
-      "gzip": 930
+      "raw": 2456,
+      "gzip": 1147
     },
     "ecl": {
       "raw": 5172,
-      "gzip": 2347
+      "gzip": 2349
+    },
+    "editorTheme": {
+      "raw": 32623,
+      "gzip": 7652
     },
     "eiffel": {
       "raw": 1758,
-      "gzip": 950
+      "gzip": 952
     },
     "elm": {
       "raw": 1946,
-      "gzip": 854
+      "gzip": 856
+    },
+    "emoji-picker": {
+      "raw": 4883,
+      "gzip": 1867
     },
     "envVars": {
-      "raw": 207,
-      "gzip": 195
+      "raw": 3949,
+      "gzip": 2006
     },
     "erlang": {
       "raw": 7938,
@@ -625,97 +1021,313 @@
       "raw": 1746,
       "gzip": 654
     },
+    "fenceLanguage": {
+      "raw": 344,
+      "gzip": 266
+    },
+    "fileEditorDefaults": {
+      "raw": 2785,
+      "gzip": 1342
+    },
+    "fileEditorGlob": {
+      "raw": 817,
+      "gzip": 493
+    },
+    "fileEditorRegistry": {
+      "raw": 4965,
+      "gzip": 2211
+    },
+    "fileListWindowing": {
+      "raw": 291,
+      "gzip": 209
+    },
+    "fileMetadataStrip": {
+      "raw": 578,
+      "gzip": 403
+    },
+    "fileMutationConfirmStore": {
+      "raw": 447,
+      "gzip": 275
+    },
+    "fleetKeys": {
+      "raw": 155,
+      "gzip": 159
+    },
     "folderName": {
       "raw": 898,
-      "gzip": 481
+      "gzip": 484
     },
     "forgeHostnames": {
-      "raw": 673,
-      "gzip": 400
+      "raw": 682,
+      "gzip": 406
     },
-    "formatRelativeTime": {
-      "raw": 425,
-      "gzip": 270
+    "forgeStatsDropdownContract": {
+      "raw": 156,
+      "gzip": 157
+    },
+    "forgetHostLocalState": {
+      "raw": 1784,
+      "gzip": 940
+    },
+    "formatCountdown": {
+      "raw": 235,
+      "gzip": 200
     },
     "forth": {
       "raw": 2607,
-      "gzip": 1356
+      "gzip": 1354
     },
     "fortran": {
       "raw": 3934,
-      "gzip": 1975
+      "gzip": 1978
     },
     "gas": {
       "raw": 4616,
-      "gzip": 1315
+      "gzip": 1319
     },
     "gherkin": {
-      "raw": 10222,
-      "gzip": 5019
+      "raw": 15929,
+      "gzip": 5245
     },
-    "gitPullRebaseConfirmStore": {
-      "raw": 543,
-      "gzip": 327
+    "gitActions.impl": {
+      "raw": 9564,
+      "gzip": 3380
+    },
+    "gitReadLimits": {
+      "raw": 145,
+      "gzip": 138
+    },
+    "gitStatusPresentation": {
+      "raw": 678,
+      "gzip": 305
+    },
+    "gitWorktreeOperationConfirmStore": {
+      "raw": 534,
+      "gzip": 312
+    },
+    "githubConfigStore": {
+      "raw": 826,
+      "gzip": 439
+    },
+    "githubFilterStore": {
+      "raw": 1037,
+      "gzip": 502
     },
     "go": {
-      "raw": 1155,
-      "gzip": 732
+      "raw": 1158,
+      "gzip": 737
     },
     "graphql": {
       "raw": 2656,
-      "gzip": 1229
+      "gzip": 1232
     },
     "groovy": {
       "raw": 4173,
-      "gzip": 1795
+      "gzip": 1798
+    },
+    "hash": {
+      "raw": 171,
+      "gzip": 169
     },
     "haskell": {
       "raw": 4241,
-      "gzip": 1918
+      "gzip": 1917
     },
     "haxe": {
       "raw": 7934,
-      "gzip": 2965
+      "gzip": 2966
+    },
+    "helpSessionControllerRegistry": {
+      "raw": 37757,
+      "gzip": 10204
+    },
+    "host-daintreehq-plugin-sdk-react": {
+      "raw": 909,
+      "gzip": 522
+    },
+    "host-daintreehq-plugin-ui": {
+      "raw": 6474,
+      "gzip": 2886
+    },
+    "host-daintreehq-tour": {
+      "raw": 466,
+      "gzip": 289
+    },
+    "host-daintreehq-tour-kit": {
+      "raw": 682,
+      "gzip": 406
+    },
+    "host-daintreehq-tour-mock-app": {
+      "raw": 640,
+      "gzip": 376
+    },
+    "host-daintreehq-tour-react": {
+      "raw": 313,
+      "gzip": 214
+    },
+    "host-react-react": {
+      "raw": 1768,
+      "gzip": 740
+    },
+    "host-react-react-dom": {
+      "raw": 791,
+      "gzip": 405
+    },
+    "host-react-react-dom-client": {
+      "raw": 270,
+      "gzip": 199
+    },
+    "host-react-react-jsx-dev-runtime": {
+      "raw": 236,
+      "gzip": 191
+    },
+    "host-react-react-jsx-runtime": {
+      "raw": 249,
+      "gzip": 193
+    },
+    "hostFilePickerQueue": {
+      "raw": 395,
+      "gzip": 281
+    },
+    "hostMemoryPauseCopy": {
+      "raw": 1106,
+      "gzip": 446
+    },
+    "hostMetricsFeed": {
+      "raw": 1166,
+      "gzip": 669
+    },
+    "hostMetricsStore": {
+      "raw": 727,
+      "gzip": 394
+    },
+    "hostModel": {
+      "raw": 10352,
+      "gzip": 3831
+    },
+    "hostPluginRequests": {
+      "raw": 532,
+      "gzip": 301
+    },
+    "hostProjects": {
+      "raw": 6881,
+      "gzip": 2784
+    },
+    "hostRestartRecovery": {
+      "raw": 5321,
+      "gzip": 2308
+    },
+    "hostSwitchRequests": {
+      "raw": 892,
+      "gzip": 460
+    },
+    "hostSwitching": {
+      "raw": 2645,
+      "gzip": 1303
+    },
+    "hostTime": {
+      "raw": 458,
+      "gzip": 271
+    },
+    "hostUpdate": {
+      "raw": 1089,
+      "gzip": 593
+    },
+    "hostsOverviewRequests": {
+      "raw": 376,
+      "gzip": 255
     },
     "idl": {
-      "raw": 9902,
-      "gzip": 4458
+      "raw": 9916,
+      "gzip": 4462
+    },
+    "ids": {
+      "raw": 678,
+      "gzip": 385
     },
     "index": {
-      "raw": 6487,
-      "gzip": 2683
+      "raw": 10043,
+      "gzip": 4407
+    },
+    "inspectorController": {
+      "raw": 56481,
+      "gzip": 17278
+    },
+    "installHostProjectsLoader": {
+      "raw": 296,
+      "gzip": 231
+    },
+    "isProseFile": {
+      "raw": 9636,
+      "gzip": 4029
+    },
+    "issueBranchName": {
+      "raw": 2247,
+      "gzip": 951
     },
     "java": {
-      "raw": 2968,
-      "gzip": 1340
+      "raw": 2971,
+      "gzip": 1342
     },
     "javascript": {
       "raw": 17095,
-      "gzip": 5727
+      "gzip": 5729
     },
     "julia": {
       "raw": 5369,
-      "gzip": 2233
+      "gzip": 2235
+    },
+    "keepAwakeStore": {
+      "raw": 368,
+      "gzip": 255
+    },
+    "kitCodeEditor": {
+      "raw": 5774,
+      "gzip": 2606
+    },
+    "kitCodeHighlight": {
+      "raw": 1424,
+      "gzip": 813
+    },
+    "kitDiagnostics": {
+      "raw": 989,
+      "gzip": 519
+    },
+    "kitDiffView": {
+      "raw": 5662,
+      "gzip": 2733
     },
     "kotlin": {
-      "raw": 2133,
-      "gzip": 1068
+      "raw": 2136,
+      "gzip": 1069
+    },
+    "layoutApplyConfirmStore": {
+      "raw": 916,
+      "gzip": 513
     },
     "less": {
-      "raw": 875,
-      "gzip": 493
+      "raw": 878,
+      "gzip": 497
     },
     "livescript": {
       "raw": 4149,
-      "gzip": 1670
+      "gzip": 1671
     },
     "lua": {
       "raw": 3202,
-      "gzip": 1446
+      "gzip": 1447
     },
     "makefile": {
       "raw": 1072,
-      "gzip": 644
+      "gzip": 647
+    },
+    "markdownLinkPolicy": {
+      "raw": 811,
+      "gzip": 470
+    },
+    "markdownRenderPolicy": {
+      "raw": 20521,
+      "gzip": 8128
     },
     "mathematica": {
       "raw": 1977,
@@ -723,147 +1335,271 @@
     },
     "mbox": {
       "raw": 1470,
-      "gzip": 707
+      "gzip": 708
     },
     "mcpConfirmStore": {
-      "raw": 981,
-      "gzip": 541
+      "raw": 1410,
+      "gzip": 734
     },
     "memoryLeakConfigStore": {
-      "raw": 504,
-      "gzip": 315
+      "raw": 426,
+      "gzip": 267
     },
     "mirc": {
       "raw": 5987,
-      "gzip": 2716
+      "gzip": 2718
     },
     "mllike": {
       "raw": 4893,
-      "gzip": 1614
+      "gzip": 1616
+    },
+    "modelUpgrades": {
+      "raw": 261,
+      "gzip": 216
     },
     "modelica": {
       "raw": 2873,
       "gzip": 1330
     },
     "motionFeatures": {
-      "raw": 231,
-      "gzip": 200
+      "raw": 160,
+      "gzip": 152
     },
     "mscgen": {
       "raw": 3569,
-      "gzip": 1012
+      "gzip": 1014
     },
     "mumps": {
       "raw": 1914,
-      "gzip": 1004
+      "gzip": 1005
     },
     "nginx": {
       "raw": 7477,
-      "gzip": 2793
+      "gzip": 2795
     },
     "notificationCount": {
       "raw": 293,
-      "gzip": 212
+      "gzip": 214
+    },
+    "notificationSettingsShared": {
+      "raw": 3303,
+      "gzip": 1414
     },
     "nsis": {
-      "raw": 6881,
-      "gzip": 2999
+      "raw": 7138,
+      "gzip": 3087
     },
     "ntriples": {
       "raw": 2141,
       "gzip": 766
     },
     "octave": {
-      "raw": 2181,
-      "gzip": 1133
+      "raw": 2195,
+      "gzip": 1129
+    },
+    "onboardingClient": {
+      "raw": 809,
+      "gzip": 433
+    },
+    "openAssistantItem": {
+      "raw": 5344,
+      "gzip": 2012
+    },
+    "openPluginAttentionPanel": {
+      "raw": 792,
+      "gzip": 494
+    },
+    "overviewModel": {
+      "raw": 6264,
+      "gzip": 2505
     },
     "oz": {
       "raw": 2963,
-      "gzip": 1323
+      "gzip": 1325
+    },
+    "paletteSummary": {
+      "raw": 203,
+      "gzip": 190
+    },
+    "panelExtensionState": {
+      "raw": 732,
+      "gzip": 414
+    },
+    "panelKindOriginCopy": {
+      "raw": 151,
+      "gzip": 145
+    },
+    "panelRestorePhase": {
+      "raw": 13829,
+      "gzip": 5243
     },
     "panelSpawning": {
-      "raw": 13004,
-      "gzip": 4960
+      "raw": 11224,
+      "gzip": 4850
+    },
+    "partitionUtils": {
+      "raw": 979,
+      "gzip": 559
     },
     "pascal": {
       "raw": 2324,
-      "gzip": 1219
+      "gzip": 1221
     },
     "pathPattern": {
       "raw": 3281,
-      "gzip": 1246
+      "gzip": 1249
     },
-    "pendingViewDiffRequest": {
-      "raw": 582,
-      "gzip": 343
-    },
-    "pendingViewFileRequest": {
-      "raw": 466,
-      "gzip": 282
-    },
-    "perfMetricsStore": {
-      "raw": 7180,
-      "gzip": 2683
+    "pendingHostSwitchFeedback": {
+      "raw": 2242,
+      "gzip": 1076
     },
     "perl": {
       "raw": 9818,
       "gzip": 3438
     },
     "php": {
-      "raw": 7681,
-      "gzip": 2587
+      "raw": 7684,
+      "gzip": 2593
     },
     "pig": {
       "raw": 2589,
-      "gzip": 1409
+      "gzip": 1407
+    },
+    "pilotKeys": {
+      "raw": 196,
+      "gzip": 164
+    },
+    "pilotStore": {
+      "raw": 581,
+      "gzip": 294
+    },
+    "plugin-sdk-react": {
+      "raw": 21964,
+      "gzip": 8328
+    },
+    "plugin-ui": {
+      "raw": 67494,
+      "gzip": 25085
+    },
+    "pluginArchiveInstallStore": {
+      "raw": 1283,
+      "gzip": 685
     },
     "pluginCapabilityConfirmStore": {
       "raw": 1276,
-      "gzip": 655
+      "gzip": 648
     },
     "pluginConfirmStore": {
-      "raw": 1008,
-      "gzip": 551
+      "raw": 930,
+      "gzip": 498
+    },
+    "pluginFileDocumentIdentity": {
+      "raw": 199,
+      "gzip": 178
+    },
+    "pluginIcons": {
+      "raw": 2417,
+      "gzip": 1275
+    },
+    "pluginLaunchEntriesStore": {
+      "raw": 1608,
+      "gzip": 742
     },
     "pluginMcpConfirmStore": {
-      "raw": 1276,
-      "gzip": 655
+      "raw": 1198,
+      "gzip": 603
     },
     "pluginPromptStore": {
-      "raw": 1012,
-      "gzip": 563
+      "raw": 1125,
+      "gzip": 612
+    },
+    "pluginSettingFields": {
+      "raw": 5062,
+      "gzip": 2252
+    },
+    "pluginSettingsHome": {
+      "raw": 2774,
+      "gzip": 1046
+    },
+    "pluginStyleOwner": {
+      "raw": 113,
+      "gzip": 127
+    },
+    "pluginStyleRuntime": {
+      "raw": 6706,
+      "gzip": 2817
+    },
+    "pluginTailwindAdapter": {
+      "raw": 59946,
+      "gzip": 12934
+    },
+    "pointerClaim": {
+      "raw": 339,
+      "gzip": 240
     },
     "powershell": {
       "raw": 7767,
       "gzip": 3305
     },
-    "project": {
-      "raw": 295,
-      "gzip": 224
+    "prChecks": {
+      "raw": 5114,
+      "gzip": 2315
+    },
+    "prStateGlyph": {
+      "raw": 375,
+      "gzip": 246
+    },
+    "previewRefusal": {
+      "raw": 7773,
+      "gzip": 2714
+    },
+    "processesClient": {
+      "raw": 5813,
+      "gzip": 2263
+    },
+    "projectEmoji": {
+      "raw": 1364,
+      "gzip": 684
+    },
+    "projectRestart": {
+      "raw": 2349,
+      "gzip": 982
+    },
+    "projectSleepConfirmStore": {
+      "raw": 452,
+      "gzip": 276
     },
     "properties": {
       "raw": 730,
-      "gzip": 387
+      "gzip": 388
     },
     "protobuf": {
-      "raw": 870,
+      "raw": 884,
       "gzip": 552
     },
     "pug": {
       "raw": 6743,
-      "gzip": 2000
+      "gzip": 2001
     },
     "puppet": {
       "raw": 2606,
-      "gzip": 1231
+      "gzip": 1233
     },
     "python": {
-      "raw": 6350,
-      "gzip": 2717
+      "raw": 2232,
+      "gzip": 1177
     },
     "q": {
       "raw": 3757,
-      "gzip": 1706
+      "gzip": 1709
+    },
+    "quickRunStorageKeys": {
+      "raw": 212,
+      "gzip": 176
+    },
+    "quickStateGlyph": {
+      "raw": 4973,
+      "gzip": 2086
     },
     "r": {
       "raw": 3090,
@@ -871,75 +1607,139 @@
     },
     "radix-deferred": {
       "raw": 318,
-      "gzip": 221
+      "gzip": 223
+    },
+    "rebaseProjectViewRuntimePaths": {
+      "raw": 1239,
+      "gzip": 620
+    },
+    "recipeNotify": {
+      "raw": 877,
+      "gzip": 492
+    },
+    "recipeRunnerUtils": {
+      "raw": 1527,
+      "gzip": 834
+    },
+    "recipeUtils": {
+      "raw": 668,
+      "gzip": 395
     },
     "recoveryCopy": {
-      "raw": 1844,
-      "gzip": 794
+      "raw": 4277,
+      "gzip": 1854
+    },
+    "remoteHostsClient": {
+      "raw": 1871,
+      "gzip": 612
+    },
+    "remoteMaterializer": {
+      "raw": 6983,
+      "gzip": 2914
+    },
+    "resolveAgentId": {
+      "raw": 361,
+      "gzip": 248
+    },
+    "resourceProfileStore": {
+      "raw": 271,
+      "gzip": 215
+    },
+    "restoreViewState": {
+      "raw": 18987,
+      "gzip": 7094
     },
     "rolldown-runtime": {
-      "raw": 826,
-      "gzip": 473
+      "raw": 1122,
+      "gzip": 637
     },
     "rpm": {
       "raw": 1368,
-      "gzip": 687
+      "gzip": 690
     },
     "ruby": {
-      "raw": 3766,
-      "gzip": 1596
+      "raw": 5226,
+      "gzip": 2197
     },
     "rust": {
       "raw": 2606,
-      "gzip": 1263
+      "gzip": 1265
+    },
+    "sanitizeMermaidSvg": {
+      "raw": 3386,
+      "gzip": 1656
     },
     "sas": {
       "raw": 9401,
-      "gzip": 4117
+      "gzip": 4118
     },
     "sass": {
-      "raw": 1285,
-      "gzip": 586
+      "raw": 1288,
+      "gzip": 588
     },
     "scheme": {
-      "raw": 6445,
-      "gzip": 2446
+      "raw": 6449,
+      "gzip": 2449
     },
     "scss": {
-      "raw": 1511,
-      "gzip": 749
+      "raw": 1514,
+      "gzip": 751
+    },
+    "secretDetection": {
+      "raw": 765,
+      "gzip": 419
     },
     "select": {
-      "raw": 9669,
-      "gzip": 3430
+      "raw": 10235,
+      "gzip": 3873
+    },
+    "sendToAgentRows": {
+      "raw": 2067,
+      "gzip": 979
+    },
+    "sessionManager": {
+      "raw": 7825,
+      "gzip": 3285
+    },
+    "settingsTabIds": {
+      "raw": 698,
+      "gzip": 400
     },
     "shell": {
       "raw": 2513,
-      "gzip": 1245
+      "gzip": 1248
     },
     "sidebarToggle": {
-      "raw": 757,
-      "gzip": 438
+      "raw": 1535,
+      "gzip": 836
     },
     "sieve": {
       "raw": 1681,
-      "gzip": 817
+      "gzip": 818
     },
     "simple-mode": {
       "raw": 2371,
       "gzip": 1153
     },
+    "sleepIdleTerminalProject": {
+      "raw": 82,
+      "gzip": 97
+    },
     "smalltalk": {
       "raw": 2078,
-      "gzip": 910
+      "gzip": 911
     },
     "sparql": {
       "raw": 3401,
-      "gzip": 1639
+      "gzip": 1643
     },
     "sql": {
       "raw": 3389,
-      "gzip": 1931
+      "gzip": 1930
+    },
+    "statePatcher": {
+      "raw": 15811,
+      "gzip": 4853
     },
     "stex": {
       "raw": 3187,
@@ -949,93 +1749,157 @@
       "raw": 23653,
       "gzip": 8668
     },
-    "svg": {
-      "raw": 237,
-      "gzip": 202
-    },
-    "svgSanitizer": {
-      "raw": 2863,
-      "gzip": 1443
-    },
     "swift": {
-      "raw": 3069,
-      "gzip": 1379
+      "raw": 3852,
+      "gzip": 1880
+    },
+    "syntax-tokens": {
+      "raw": 79,
+      "gzip": 96
+    },
+    "systemMemoryNoticeStore": {
+      "raw": 65298,
+      "gzip": 21256
     },
     "systemWakeStore": {
-      "raw": 6187,
-      "gzip": 2846
+      "raw": 966,
+      "gzip": 519
     },
     "tcl": {
       "raw": 2421,
-      "gzip": 1261
+      "gzip": 1263
     },
     "textile": {
       "raw": 6836,
-      "gzip": 2480
+      "gzip": 2481
     },
     "toml": {
-      "raw": 1256,
-      "gzip": 583
+      "raw": 1095,
+      "gzip": 593
+    },
+    "tour": {
+      "raw": 46333,
+      "gzip": 14843
+    },
+    "tourKeys": {
+      "raw": 1473,
+      "gzip": 774
+    },
+    "transparencyCheckerboard": {
+      "raw": 354,
+      "gzip": 266
     },
     "troff": {
       "raw": 1021,
-      "gzip": 483
+      "gzip": 484
     },
     "ttcn": {
       "raw": 4920,
-      "gzip": 2201
+      "gzip": 2202
     },
     "ttcn-cfg": {
       "raw": 4154,
-      "gzip": 1773
+      "gzip": 1772
     },
     "turtle": {
-      "raw": 2021,
+      "raw": 2017,
       "gzip": 936
     },
+    "unifiedDiff": {
+      "raw": 2430,
+      "gzip": 1181
+    },
+    "uploadConfirm": {
+      "raw": 910,
+      "gzip": 518
+    },
+    "useActionPalette": {
+      "raw": 12952,
+      "gzip": 5647
+    },
     "useAgentDiscoveryOnboarding": {
-      "raw": 2867,
-      "gzip": 1126
+      "raw": 2789,
+      "gzip": 1067
     },
-    "useBranchForPath": {
-      "raw": 438,
-      "gzip": 308
+    "useArmedDropTarget": {
+      "raw": 11758,
+      "gzip": 4659
     },
-    "useDebounce": {
-      "raw": 399,
-      "gzip": 285
+    "useAssistantAgentChoices": {
+      "raw": 1799,
+      "gzip": 1019
+    },
+    "useDiffContent": {
+      "raw": 23406,
+      "gzip": 8414
+    },
+    "useFileDecorations": {
+      "raw": 1277,
+      "gzip": 655
+    },
+    "useFileRowMenuItems": {
+      "raw": 12089,
+      "gzip": 4787
     },
     "useFindInPage": {
-      "raw": 35737,
-      "gzip": 10638
+      "raw": 59855,
+      "gzip": 21229
+    },
+    "useKeepAwakeSync": {
+      "raw": 1444,
+      "gzip": 745
     },
     "useMcpReadiness": {
-      "raw": 1332,
-      "gzip": 757
+      "raw": 700,
+      "gzip": 459
     },
-    "usePluginToolbarButtons": {
-      "raw": 2961,
-      "gzip": 1489
+    "useNumberDraft": {
+      "raw": 630,
+      "gzip": 423
+    },
+    "usePluginParity": {
+      "raw": 1228,
+      "gzip": 708
+    },
+    "useProgressiveRenderLimit": {
+      "raw": 790,
+      "gzip": 499
     },
     "useResizeObserverRaf": {
-      "raw": 37183,
-      "gzip": 11575
-    },
-    "useResolvedForgeProvider": {
-      "raw": 1918,
-      "gzip": 968
+      "raw": 696,
+      "gzip": 421
     },
     "useResumeAgentSession": {
-      "raw": 2304,
-      "gzip": 1172
+      "raw": 1540,
+      "gzip": 814
+    },
+    "useRovingRows": {
+      "raw": 3070,
+      "gzip": 1467
+    },
+    "useRowFocus": {
+      "raw": 1065,
+      "gzip": 548
+    },
+    "useScopedSelectAll": {
+      "raw": 1628,
+      "gzip": 869
+    },
+    "useSidebarViews": {
+      "raw": 1658,
+      "gzip": 893
+    },
+    "useUnsavedChanges": {
+      "raw": 529,
+      "gzip": 377
     },
     "useWorktreeTerminals": {
-      "raw": 2191,
-      "gzip": 1154
+      "raw": 9716,
+      "gzip": 3942
     },
     "vb": {
       "raw": 3754,
-      "gzip": 1866
+      "gzip": 1867
     },
     "vbscript": {
       "raw": 5497,
@@ -1043,147 +1907,6755 @@
     },
     "velocity": {
       "raw": 2773,
-      "gzip": 1151
+      "gzip": 1152
     },
     "vendor-editor": {
-      "raw": 474588,
-      "gzip": 157264
+      "raw": 487711,
+      "gzip": 159168
     },
     "vendor-icons": {
-      "raw": 62911,
-      "gzip": 20371
+      "raw": 134691,
+      "gzip": 40120
     },
-    "vendor-motion~index~BrowserPane~DevPreviewPane~FileViewerModal~HybridInputBar~BaseBranchDif~nt4djhlp": {
-      "raw": 144293,
-      "gzip": 47943
+    "vendor-motion~index~PluginKit": {
+      "raw": 137977,
+      "gzip": 45700
     },
     "vendor-radix": {
-      "raw": 5262,
-      "gzip": 2037
+      "raw": 7749,
+      "gzip": 2350
     },
     "vendor-radix-overlay": {
-      "raw": 108442,
-      "gzip": 34033
+      "raw": 125822,
+      "gzip": 38752
     },
     "vendor-radix-utils": {
-      "raw": 15382,
-      "gzip": 3891
+      "raw": 12509,
+      "gzip": 4755
     },
     "vendor-react": {
-      "raw": 189835,
-      "gzip": 58856
+      "raw": 219820,
+      "gzip": 67649
     },
     "vendor-xterm": {
-      "raw": 462543,
-      "gzip": 118800
+      "raw": 363177,
+      "gzip": 88230
+    },
+    "vendor-xterm-image": {
+      "raw": 79666,
+      "gzip": 24331
+    },
+    "vendor-xterm-search": {
+      "raw": 15084,
+      "gzip": 4180
+    },
+    "vendor-xterm-unicode11": {
+      "raw": 9624,
+      "gzip": 3970
     },
     "vendor-xterm-webgl": {
-      "raw": 249755,
-      "gzip": 67782
+      "raw": 253154,
+      "gzip": 67813
     },
     "vendor-zod": {
-      "raw": 78357,
-      "gzip": 21397
+      "raw": 97822,
+      "gzip": 27731
     },
-    "vendor~AgentSettings": {
-      "raw": 9461,
-      "gzip": 3812
+    "vendor~AgentSettings~PluginKit": {
+      "raw": 9582,
+      "gzip": 3877
     },
-    "vendor~DaintreeAssistantSettingsTab~index": {
-      "raw": 24337,
-      "gzip": 7296
+    "vendor~CreateProjectFolderDialog~CloneRepoDialog~NonGitFolderDialog~ProjectIdentityEditor~G~fka7onml": {
+      "raw": 25689,
+      "gzip": 8949
     },
-    "vendor~DevPreviewPane~App": {
-      "raw": 59508,
-      "gzip": 19014
+    "vendor~DevPreviewPane~DiffPane~FileBrowserPane~App~ReviewPane~PluginKit": {
+      "raw": 61132,
+      "gzip": 19495
     },
-    "vendor~FileViewerModal~BaseBranchDiffModal~CrossWorktreeDiff": {
-      "raw": 67109,
-      "gzip": 22250
+    "vendor~DiffPane~CrossWorktreeDiff~DiffViewer": {
+      "raw": 63892,
+      "gzip": 21315
     },
-    "vendor~GeneralTab": {
-      "raw": 23165,
-      "gzip": 8174
+    "vendor~MarkdownEditorView~RenderedMarkdownDiff~MarkdownDocument~PluginMarkdown": {
+      "raw": 89972,
+      "gzip": 26289
     },
-    "vendor~index": {
-      "raw": 86165,
-      "gzip": 29688
+    "vendor~MarkdownEditorView~RenderedMarkdownDiff~MarkdownDocument~PluginMarkdown~kitCodeHighlight": {
+      "raw": 11350,
+      "gzip": 4359
     },
-    "vendor~index~BrowserPane~DevPreviewPane~FileViewerModal~HybridInputBar~BaseBranchDiffModal~~d1a6vjgq": {
-      "raw": 7600,
-      "gzip": 2491
+    "vendor~PluginKit": {
+      "raw": 6075,
+      "gzip": 2186
     },
-    "vendor~index~BrowserPane~DevPreviewPane~FileViewerModal~HybridInputBar~BaseBranchDiffModal~~fo7mm5v4": {
-      "raw": 989,
-      "gzip": 510
+    "vendor~RenderedMarkdownDiff~MarkdownDocument~PluginMarkdown": {
+      "raw": 40452,
+      "gzip": 12093
     },
-    "vendor~index~BrowserPane~DevPreviewPane~FileViewerModal~HybridInputBar~BaseBranchDiffModal~~ge3ti116": {
-      "raw": 1160,
-      "gzip": 696
+    "vendor~a-arrow-down": {
+      "raw": 445,
+      "gzip": 326
     },
-    "vendor~index~BrowserPane~DevPreviewPane~FileViewerModal~HybridInputBar~BaseBranchDiffModal~~l52dwlil": {
-      "raw": 24548,
-      "gzip": 8697
+    "vendor~a-arrow-up": {
+      "raw": 443,
+      "gzip": 325
     },
-    "vendor~index~BrowserPane~DevPreviewPane~FileViewerModal~HybridInputBar~BaseBranchDiffModal~~mia6dplo": {
-      "raw": 49648,
-      "gzip": 16209
+    "vendor~abnfDiagram-WEYOIA3C": {
+      "raw": 2659,
+      "gzip": 1073
     },
-    "vendor~index~BrowserPane~DevPreviewPane~FileViewerModal~HybridInputBar~FileDiffModal~BaseBr~dg18eav4": {
-      "raw": 400,
+    "vendor~ad": {
+      "raw": 520,
+      "gzip": 355
+    },
+    "vendor~air-vent": {
+      "raw": 506,
+      "gzip": 340
+    },
+    "vendor~airplay": {
+      "raw": 392,
       "gzip": 294
     },
-    "vendor~index~BrowserPane~DevPreviewPane~FileViewerModal~HybridInputBar~FileDiffModal~BaseBr~fq8188ci": {
-      "raw": 2115,
-      "gzip": 1069
+    "vendor~alarm-clock": {
+      "raw": 505,
+      "gzip": 337
     },
-    "vendor~index~BrowserPane~DevPreviewPane~FileViewerModal~HybridInputBar~FileDiffModal~BaseBr~gc6c3scc": {
-      "raw": 27536,
-      "gzip": 8761
+    "vendor~alarm-clock-check": {
+      "raw": 537,
+      "gzip": 358
     },
-    "vendor~index~BrowserPane~DevPreviewPane~FileViewerModal~HybridInputBar~FileDiffModal~BaseBr~jnsqmdg8": {
-      "raw": 23876,
-      "gzip": 7686
+    "vendor~alarm-clock-minus": {
+      "raw": 531,
+      "gzip": 353
     },
-    "vendor~index~BrowserPane~DevPreviewPane~FileViewerModal~HybridInputBar~FileDiffModal~BaseBr~mzspqnt4": {
-      "raw": 602,
+    "vendor~alarm-clock-plus": {
+      "raw": 566,
+      "gzip": 364
+    },
+    "vendor~alarm-smoke": {
+      "raw": 589,
+      "gzip": 350
+    },
+    "vendor~align-center-horizontal": {
+      "raw": 577,
+      "gzip": 356
+    },
+    "vendor~align-center-vertical": {
+      "raw": 575,
+      "gzip": 356
+    },
+    "vendor~align-end-horizontal": {
+      "raw": 427,
+      "gzip": 308
+    },
+    "vendor~align-end-vertical": {
+      "raw": 425,
+      "gzip": 305
+    },
+    "vendor~align-horizontal-distribute-center": {
+      "raw": 551,
+      "gzip": 352
+    },
+    "vendor~align-horizontal-distribute-end": {
+      "raw": 476,
+      "gzip": 326
+    },
+    "vendor~align-horizontal-distribute-start": {
+      "raw": 477,
+      "gzip": 326
+    },
+    "vendor~align-horizontal-justify-center": {
+      "raw": 439,
+      "gzip": 316
+    },
+    "vendor~align-horizontal-justify-end": {
+      "raw": 436,
+      "gzip": 314
+    },
+    "vendor~align-horizontal-justify-start": {
+      "raw": 437,
+      "gzip": 312
+    },
+    "vendor~align-horizontal-space-around": {
+      "raw": 407,
+      "gzip": 309
+    },
+    "vendor~align-horizontal-space-between": {
+      "raw": 474,
+      "gzip": 328
+    },
+    "vendor~align-start-horizontal": {
+      "raw": 428,
+      "gzip": 301
+    },
+    "vendor~align-start-vertical": {
+      "raw": 426,
+      "gzip": 303
+    },
+    "vendor~align-vertical-distribute-center": {
+      "raw": 549,
+      "gzip": 348
+    },
+    "vendor~align-vertical-distribute-end": {
+      "raw": 474,
+      "gzip": 322
+    },
+    "vendor~align-vertical-distribute-start": {
+      "raw": 475,
+      "gzip": 321
+    },
+    "vendor~align-vertical-justify-center": {
+      "raw": 437,
+      "gzip": 313
+    },
+    "vendor~align-vertical-justify-end": {
+      "raw": 434,
+      "gzip": 310
+    },
+    "vendor~align-vertical-justify-start": {
+      "raw": 435,
+      "gzip": 309
+    },
+    "vendor~align-vertical-space-around": {
+      "raw": 405,
+      "gzip": 306
+    },
+    "vendor~align-vertical-space-between": {
+      "raw": 472,
+      "gzip": 319
+    },
+    "vendor~ambulance": {
+      "raw": 682,
+      "gzip": 417
+    },
+    "vendor~ampersand": {
+      "raw": 404,
+      "gzip": 306
+    },
+    "vendor~ampersands": {
+      "raw": 470,
+      "gzip": 301
+    },
+    "vendor~amphora": {
+      "raw": 614,
+      "gzip": 380
+    },
+    "vendor~anchor": {
+      "raw": 424,
+      "gzip": 314
+    },
+    "vendor~angle": {
+      "raw": 350,
+      "gzip": 271
+    },
+    "vendor~antenna": {
+      "raw": 479,
+      "gzip": 305
+    },
+    "vendor~anvil": {
+      "raw": 573,
+      "gzip": 347
+    },
+    "vendor~aperture": {
+      "raw": 571,
+      "gzip": 361
+    },
+    "vendor~app-window-mac": {
+      "raw": 433,
+      "gzip": 307
+    },
+    "vendor~apple": {
+      "raw": 479,
+      "gzip": 334
+    },
+    "vendor~architecture-WOLXFQ4H": {
+      "raw": 422,
+      "gzip": 264
+    },
+    "vendor~architectureDiagram-ZHVYKT53": {
+      "raw": 150381,
+      "gzip": 40863
+    },
+    "vendor~architectureDiagram-ZHVYKT53~cose-bilkent-JH36ORCC": {
+      "raw": 436442,
+      "gzip": 137408
+    },
+    "vendor~archive-x": {
+      "raw": 463,
+      "gzip": 330
+    },
+    "vendor~armchair": {
+      "raw": 529,
+      "gzip": 337
+    },
+    "vendor~armenian-dram": {
+      "raw": 380,
+      "gzip": 282
+    },
+    "vendor~arrow-big-down": {
+      "raw": 448,
+      "gzip": 312
+    },
+    "vendor~arrow-big-down-dash": {
+      "raw": 495,
+      "gzip": 334
+    },
+    "vendor~arrow-big-left": {
+      "raw": 456,
+      "gzip": 317
+    },
+    "vendor~arrow-big-left-dash": {
+      "raw": 495,
+      "gzip": 332
+    },
+    "vendor~arrow-big-right": {
+      "raw": 455,
+      "gzip": 319
+    },
+    "vendor~arrow-big-right-dash": {
+      "raw": 495,
+      "gzip": 330
+    },
+    "vendor~arrow-big-up": {
+      "raw": 448,
+      "gzip": 314
+    },
+    "vendor~arrow-big-up-dash": {
+      "raw": 496,
+      "gzip": 338
+    },
+    "vendor~arrow-down-0-1": {
+      "raw": 501,
+      "gzip": 340
+    },
+    "vendor~arrow-down-1-0": {
+      "raw": 501,
+      "gzip": 342
+    },
+    "vendor~arrow-down-left": {
+      "raw": 333,
+      "gzip": 260
+    },
+    "vendor~arrow-down-narrow-wide": {
+      "raw": 450,
+      "gzip": 305
+    },
+    "vendor~arrow-down-right": {
+      "raw": 334,
+      "gzip": 265
+    },
+    "vendor~arrow-down-to-dot": {
+      "raw": 384,
+      "gzip": 292
+    },
+    "vendor~arrow-down-wide-narrow": {
+      "raw": 472,
+      "gzip": 319
+    },
+    "vendor~arrow-down-z-a": {
+      "raw": 500,
+      "gzip": 337
+    },
+    "vendor~arrow-left-from-line": {
+      "raw": 375,
+      "gzip": 285
+    },
+    "vendor~arrow-left-to-line": {
+      "raw": 373,
+      "gzip": 283
+    },
+    "vendor~arrow-right-from-line": {
+      "raw": 377,
+      "gzip": 285
+    },
+    "vendor~arrow-right-left": {
+      "raw": 413,
+      "gzip": 301
+    },
+    "vendor~arrow-up-0-1": {
+      "raw": 496,
+      "gzip": 341
+    },
+    "vendor~arrow-up-1-0": {
+      "raw": 496,
+      "gzip": 343
+    },
+    "vendor~arrow-up-a-z": {
+      "raw": 494,
+      "gzip": 335
+    },
+    "vendor~arrow-up-from-dot": {
+      "raw": 383,
+      "gzip": 294
+    },
+    "vendor~arrow-up-left": {
+      "raw": 331,
+      "gzip": 266
+    },
+    "vendor~arrow-up-narrow-wide": {
+      "raw": 470,
+      "gzip": 320
+    },
+    "vendor~arrow-up-to-line": {
+      "raw": 372,
+      "gzip": 282
+    },
+    "vendor~arrow-up-wide-narrow": {
+      "raw": 449,
+      "gzip": 305
+    },
+    "vendor~arrow-up-z-a": {
+      "raw": 495,
+      "gzip": 337
+    },
+    "vendor~arrows-up-from-line": {
+      "raw": 452,
+      "gzip": 306
+    },
+    "vendor~asterisk": {
+      "raw": 385,
+      "gzip": 287
+    },
+    "vendor~astroid": {
+      "raw": 458,
+      "gzip": 293
+    },
+    "vendor~atom": {
+      "raw": 598,
+      "gzip": 375
+    },
+    "vendor~audio-lines": {
+      "raw": 470,
+      "gzip": 306
+    },
+    "vendor~audio-lines-off": {
+      "raw": 594,
+      "gzip": 345
+    },
+    "vendor~audio-lines-x": {
+      "raw": 554,
+      "gzip": 338
+    },
+    "vendor~audio-waveform": {
+      "raw": 385,
+      "gzip": 277
+    },
+    "vendor~avocado": {
+      "raw": 456,
+      "gzip": 346
+    },
+    "vendor~award": {
+      "raw": 439,
+      "gzip": 330
+    },
+    "vendor~axe": {
+      "raw": 541,
+      "gzip": 370
+    },
+    "vendor~axis-3d": {
+      "raw": 454,
+      "gzip": 322
+    },
+    "vendor~baby": {
+      "raw": 562,
+      "gzip": 368
+    },
+    "vendor~backpack": {
+      "raw": 554,
+      "gzip": 336
+    },
+    "vendor~bacon": {
+      "raw": 605,
+      "gzip": 414
+    },
+    "vendor~badge": {
+      "raw": 433,
+      "gzip": 294
+    },
+    "vendor~badge-alert": {
+      "raw": 553,
+      "gzip": 345
+    },
+    "vendor~badge-cent": {
+      "raw": 526,
+      "gzip": 332
+    },
+    "vendor~badge-check": {
+      "raw": 507,
+      "gzip": 336
+    },
+    "vendor~badge-dollar-sign": {
+      "raw": 551,
+      "gzip": 348
+    },
+    "vendor~badge-euro": {
+      "raw": 526,
+      "gzip": 332
+    },
+    "vendor~badge-indian-rupee": {
+      "raw": 572,
+      "gzip": 348
+    },
+    "vendor~badge-info": {
+      "raw": 551,
+      "gzip": 343
+    },
+    "vendor~badge-japanese-yen": {
+      "raw": 596,
+      "gzip": 360
+    },
+    "vendor~badge-minus": {
+      "raw": 494,
+      "gzip": 330
+    },
+    "vendor~badge-percent": {
+      "raw": 555,
+      "gzip": 345
+    },
+    "vendor~badge-plus": {
+      "raw": 548,
+      "gzip": 344
+    },
+    "vendor~badge-pound-sterling": {
+      "raw": 577,
+      "gzip": 355
+    },
+    "vendor~badge-question-mark": {
+      "raw": 594,
+      "gzip": 381
+    },
+    "vendor~badge-russian-ruble": {
+      "raw": 538,
+      "gzip": 339
+    },
+    "vendor~badge-swiss-franc": {
+      "raw": 557,
+      "gzip": 344
+    },
+    "vendor~badge-turkish-lira": {
+      "raw": 534,
+      "gzip": 340
+    },
+    "vendor~badge-x": {
+      "raw": 543,
+      "gzip": 340
+    },
+    "vendor~baggage-claim": {
+      "raw": 551,
+      "gzip": 365
+    },
+    "vendor~balloon": {
+      "raw": 435,
+      "gzip": 308
+    },
+    "vendor~banana": {
+      "raw": 482,
+      "gzip": 354
+    },
+    "vendor~bandage": {
+      "raw": 554,
+      "gzip": 337
+    },
+    "vendor~bangladeshi-taka": {
+      "raw": 370,
+      "gzip": 282
+    },
+    "vendor~banknote-arrow-down": {
+      "raw": 550,
+      "gzip": 360
+    },
+    "vendor~banknote-arrow-up": {
+      "raw": 549,
+      "gzip": 360
+    },
+    "vendor~banknote-check": {
+      "raw": 516,
+      "gzip": 349
+    },
+    "vendor~banknote-x": {
+      "raw": 539,
+      "gzip": 352
+    },
+    "vendor~barcode": {
+      "raw": 430,
+      "gzip": 283
+    },
+    "vendor~barrel": {
+      "raw": 583,
+      "gzip": 354
+    },
+    "vendor~baseline": {
+      "raw": 365,
+      "gzip": 275
+    },
+    "vendor~bath": {
+      "raw": 496,
+      "gzip": 321
+    },
+    "vendor~battery": {
+      "raw": 357,
+      "gzip": 282
+    },
+    "vendor~battery-charging": {
+      "raw": 492,
+      "gzip": 338
+    },
+    "vendor~battery-full": {
+      "raw": 466,
+      "gzip": 317
+    },
+    "vendor~battery-low": {
+      "raw": 392,
+      "gzip": 292
+    },
+    "vendor~battery-medium": {
+      "raw": 433,
+      "gzip": 305
+    },
+    "vendor~battery-plus": {
+      "raw": 516,
+      "gzip": 343
+    },
+    "vendor~battery-warning": {
+      "raw": 505,
+      "gzip": 333
+    },
+    "vendor~beaker": {
+      "raw": 389,
+      "gzip": 290
+    },
+    "vendor~bean": {
+      "raw": 466,
+      "gzip": 351
+    },
+    "vendor~bean-off": {
+      "raw": 594,
+      "gzip": 406
+    },
+    "vendor~bed": {
+      "raw": 404,
+      "gzip": 289
+    },
+    "vendor~bed-double": {
+      "raw": 462,
+      "gzip": 312
+    },
+    "vendor~bed-single": {
+      "raw": 426,
+      "gzip": 301
+    },
+    "vendor~beef": {
+      "raw": 545,
+      "gzip": 390
+    },
+    "vendor~beef-off": {
+      "raw": 726,
+      "gzip": 461
+    },
+    "vendor~beer": {
+      "raw": 632,
+      "gzip": 393
+    },
+    "vendor~beer-off": {
+      "raw": 785,
+      "gzip": 476
+    },
+    "vendor~belarusian-ruble": {
+      "raw": 381,
+      "gzip": 290
+    },
+    "vendor~bell-check": {
+      "raw": 567,
+      "gzip": 387
+    },
+    "vendor~bell-electric": {
+      "raw": 562,
+      "gzip": 372
+    },
+    "vendor~bell-plus": {
+      "raw": 524,
+      "gzip": 365
+    },
+    "vendor~between-horizontal-end": {
+      "raw": 470,
+      "gzip": 321
+    },
+    "vendor~between-horizontal-start": {
+      "raw": 472,
+      "gzip": 322
+    },
+    "vendor~between-vertical-end": {
+      "raw": 433,
+      "gzip": 305
+    },
+    "vendor~between-vertical-start": {
+      "raw": 435,
+      "gzip": 308
+    },
+    "vendor~biceps-flexed": {
+      "raw": 584,
+      "gzip": 417
+    },
+    "vendor~bike": {
+      "raw": 453,
+      "gzip": 307
+    },
+    "vendor~binoculars": {
+      "raw": 724,
+      "gzip": 396
+    },
+    "vendor~biohazard": {
+      "raw": 846,
+      "gzip": 491
+    },
+    "vendor~bird": {
+      "raw": 538,
+      "gzip": 354
+    },
+    "vendor~birdhouse": {
+      "raw": 531,
+      "gzip": 363
+    },
+    "vendor~bitcoin": {
+      "raw": 504,
+      "gzip": 367
+    },
+    "vendor~blend": {
+      "raw": 339,
+      "gzip": 259
+    },
+    "vendor~blender": {
+      "raw": 651,
+      "gzip": 407
+    },
+    "vendor~blinds": {
+      "raw": 513,
+      "gzip": 330
+    },
+    "vendor~blockDiagram-RJAE7QA3": {
+      "raw": 41918,
+      "gzip": 13423
+    },
+    "vendor~blockDiagram-RJAE7QA3~kanban-definition-FNSA4HC5~journeyDiagram-BOSHW7O7~classDiagra~d6sdnc4d": {
+      "raw": 537,
+      "gzip": 381
+    },
+    "vendor~blockDiagram-RJAE7QA3~swimlanes-B3ENRKFQ~dagre-NK4GIZVX~elk-QONTBCTQ": {
+      "raw": 43063,
+      "gzip": 14949
+    },
+    "vendor~bluetooth": {
+      "raw": 303,
+      "gzip": 253
+    },
+    "vendor~bluetooth-connected": {
+      "raw": 423,
+      "gzip": 306
+    },
+    "vendor~bluetooth-off": {
+      "raw": 391,
+      "gzip": 293
+    },
+    "vendor~bluetooth-searching": {
+      "raw": 410,
+      "gzip": 311
+    },
+    "vendor~bolt": {
+      "raw": 442,
+      "gzip": 315
+    },
+    "vendor~bomb": {
+      "raw": 443,
+      "gzip": 327
+    },
+    "vendor~bone": {
+      "raw": 465,
+      "gzip": 321
+    },
+    "vendor~bone-fracture": {
+      "raw": 856,
+      "gzip": 485
+    },
+    "vendor~book": {
+      "raw": 359,
+      "gzip": 279
+    },
+    "vendor~book-a": {
+      "raw": 443,
+      "gzip": 319
+    },
+    "vendor~book-alert": {
+      "raw": 440,
+      "gzip": 314
+    },
+    "vendor~book-audio": {
+      "raw": 472,
+      "gzip": 325
+    },
+    "vendor~book-bookmark": {
+      "raw": 505,
+      "gzip": 361
+    },
+    "vendor~book-check": {
+      "raw": 408,
+      "gzip": 303
+    },
+    "vendor~book-copy": {
+      "raw": 486,
+      "gzip": 331
+    },
+    "vendor~book-down": {
+      "raw": 443,
+      "gzip": 318
+    },
+    "vendor~book-headphones": {
+      "raw": 518,
+      "gzip": 346
+    },
+    "vendor~book-heart": {
+      "raw": 492,
+      "gzip": 345
+    },
+    "vendor~book-image": {
+      "raw": 480,
+      "gzip": 347
+    },
+    "vendor~book-key": {
+      "raw": 504,
+      "gzip": 348
+    },
+    "vendor~book-lock": {
+      "raw": 501,
+      "gzip": 358
+    },
+    "vendor~book-minus": {
+      "raw": 401,
+      "gzip": 300
+    },
+    "vendor~book-open-check": {
+      "raw": 510,
+      "gzip": 352
+    },
+    "vendor~book-open-text": {
+      "raw": 603,
+      "gzip": 371
+    },
+    "vendor~book-plus": {
+      "raw": 436,
+      "gzip": 315
+    },
+    "vendor~book-search": {
+      "raw": 484,
+      "gzip": 343
+    },
+    "vendor~book-text": {
+      "raw": 435,
+      "gzip": 313
+    },
+    "vendor~book-type": {
+      "raw": 477,
+      "gzip": 331
+    },
+    "vendor~book-up": {
+      "raw": 441,
+      "gzip": 318
+    },
+    "vendor~book-up-2": {
+      "raw": 517,
+      "gzip": 339
+    },
+    "vendor~book-user": {
+      "raw": 460,
+      "gzip": 335
+    },
+    "vendor~book-x": {
+      "raw": 444,
+      "gzip": 317
+    },
+    "vendor~bookmark-check": {
+      "raw": 443,
+      "gzip": 328
+    },
+    "vendor~bookmark-minus": {
+      "raw": 438,
+      "gzip": 324
+    },
+    "vendor~bookmark-off": {
+      "raw": 468,
+      "gzip": 339
+    },
+    "vendor~bookmark-plus": {
+      "raw": 473,
+      "gzip": 334
+    },
+    "vendor~bookmark-x": {
+      "raw": 480,
+      "gzip": 338
+    },
+    "vendor~boom-box": {
+      "raw": 584,
+      "gzip": 368
+    },
+    "vendor~bot-message-square": {
+      "raw": 586,
+      "gzip": 367
+    },
+    "vendor~bot-off": {
+      "raw": 587,
+      "gzip": 359
+    },
+    "vendor~bottle-wine": {
+      "raw": 501,
+      "gzip": 336
+    },
+    "vendor~bow-arrow": {
+      "raw": 699,
+      "gzip": 434
+    },
+    "vendor~brackets": {
+      "raw": 385,
+      "gzip": 287
+    },
+    "vendor~brain": {
+      "raw": 737,
+      "gzip": 415
+    },
+    "vendor~brain-circuit": {
+      "raw": 945,
+      "gzip": 481
+    },
+    "vendor~brain-cog": {
+      "raw": 1193,
+      "gzip": 583
+    },
+    "vendor~brain-off": {
+      "raw": 827,
+      "gzip": 469
+    },
+    "vendor~brick-wall": {
+      "raw": 569,
+      "gzip": 347
+    },
+    "vendor~brick-wall-fire": {
+      "raw": 672,
+      "gzip": 419
+    },
+    "vendor~brick-wall-shield": {
+      "raw": 806,
+      "gzip": 477
+    },
+    "vendor~bridge": {
+      "raw": 499,
+      "gzip": 325
+    },
+    "vendor~briefcase-business": {
+      "raw": 490,
+      "gzip": 343
+    },
+    "vendor~briefcase-conveyor-belt": {
+      "raw": 582,
+      "gzip": 366
+    },
+    "vendor~briefcase-medical": {
+      "raw": 540,
+      "gzip": 353
+    },
+    "vendor~briefcase-plus": {
+      "raw": 490,
+      "gzip": 326
+    },
+    "vendor~bring-to-front": {
+      "raw": 480,
+      "gzip": 325
+    },
+    "vendor~broccoli": {
+      "raw": 652,
+      "gzip": 431
+    },
+    "vendor~broom": {
+      "raw": 534,
+      "gzip": 365
+    },
+    "vendor~broom-sparkles": {
+      "raw": 761,
+      "gzip": 441
+    },
+    "vendor~brush": {
+      "raw": 474,
+      "gzip": 340
+    },
+    "vendor~brush-cleaning": {
+      "raw": 567,
+      "gzip": 364
+    },
+    "vendor~bubbles": {
+      "raw": 468,
+      "gzip": 319
+    },
+    "vendor~bug-off": {
+      "raw": 851,
+      "gzip": 465
+    },
+    "vendor~bug-play": {
+      "raw": 801,
+      "gzip": 451
+    },
+    "vendor~building": {
+      "raw": 728,
+      "gzip": 386
+    },
+    "vendor~building-complex": {
+      "raw": 577,
+      "gzip": 358
+    },
+    "vendor~building-complex-plus": {
+      "raw": 656,
+      "gzip": 390
+    },
+    "vendor~bus": {
+      "raw": 617,
+      "gzip": 390
+    },
+    "vendor~bus-front": {
+      "raw": 614,
+      "gzip": 372
+    },
+    "vendor~c4Diagram-XDPPPE54": {
+      "raw": 66356,
+      "gzip": 18967
+    },
+    "vendor~cable-car": {
+      "raw": 579,
+      "gzip": 364
+    },
+    "vendor~cake": {
+      "raw": 652,
+      "gzip": 366
+    },
+    "vendor~cake-slice": {
+      "raw": 531,
+      "gzip": 371
+    },
+    "vendor~calculator": {
+      "raw": 695,
+      "gzip": 380
+    },
+    "vendor~calendar-1": {
+      "raw": 461,
+      "gzip": 318
+    },
+    "vendor~calendar-arrow-down": {
+      "raw": 536,
+      "gzip": 345
+    },
+    "vendor~calendar-arrow-up": {
+      "raw": 531,
+      "gzip": 341
+    },
+    "vendor~calendar-check": {
+      "raw": 468,
+      "gzip": 325
+    },
+    "vendor~calendar-check-2": {
+      "raw": 725,
+      "gzip": 389
+    },
+    "vendor~calendar-chevrons-left": {
+      "raw": 538,
+      "gzip": 342
+    },
+    "vendor~calendar-chevrons-right": {
+      "raw": 540,
+      "gzip": 341
+    },
+    "vendor~calendar-cog": {
+      "raw": 907,
+      "gzip": 479
+    },
+    "vendor~calendar-fold": {
+      "raw": 514,
+      "gzip": 346
+    },
+    "vendor~calendar-heart": {
+      "raw": 575,
+      "gzip": 376
+    },
+    "vendor~calendar-minus": {
+      "raw": 482,
+      "gzip": 322
+    },
+    "vendor~calendar-minus-2": {
+      "raw": 465,
+      "gzip": 322
+    },
+    "vendor~calendar-off": {
+      "raw": 550,
+      "gzip": 353
+    },
+    "vendor~calendar-plus": {
+      "raw": 520,
+      "gzip": 334
+    },
+    "vendor~calendar-plus-2": {
+      "raw": 501,
+      "gzip": 332
+    },
+    "vendor~calendar-range": {
+      "raw": 578,
+      "gzip": 354
+    },
+    "vendor~calendar-search": {
+      "raw": 545,
+      "gzip": 360
+    },
+    "vendor~calendar-sync": {
+      "raw": 651,
+      "gzip": 393
+    },
+    "vendor~calendar-x": {
+      "raw": 500,
+      "gzip": 331
+    },
+    "vendor~calendar-x-2": {
+      "raw": 519,
+      "gzip": 333
+    },
+    "vendor~calendars": {
+      "raw": 550,
+      "gzip": 359
+    },
+    "vendor~camera-off": {
+      "raw": 582,
+      "gzip": 383
+    },
+    "vendor~can": {
+      "raw": 507,
+      "gzip": 332
+    },
+    "vendor~can-soda": {
+      "raw": 580,
+      "gzip": 358
+    },
+    "vendor~candy": {
+      "raw": 735,
+      "gzip": 409
+    },
+    "vendor~candy-cane": {
+      "raw": 560,
+      "gzip": 372
+    },
+    "vendor~candy-off": {
+      "raw": 819,
+      "gzip": 447
+    },
+    "vendor~cannabis": {
+      "raw": 552,
+      "gzip": 364
+    },
+    "vendor~cannabis-off": {
+      "raw": 803,
+      "gzip": 509
+    },
+    "vendor~captions": {
+      "raw": 402,
+      "gzip": 306
+    },
+    "vendor~captions-off": {
+      "raw": 528,
+      "gzip": 336
+    },
+    "vendor~car-battery": {
+      "raw": 499,
+      "gzip": 332
+    },
+    "vendor~car-front": {
+      "raw": 565,
+      "gzip": 376
+    },
+    "vendor~car-taxi-front": {
+      "raw": 606,
       "gzip": 394
     },
-    "vendor~index~BrowserPane~DevPreviewPane~FileViewerModal~HybridInputBar~FileDiffModal~BaseBr~nmj75boy": {
-      "raw": 824,
-      "gzip": 511
+    "vendor~caravan": {
+      "raw": 535,
+      "gzip": 349
     },
-    "vendor~latin-500": {
-      "raw": 101,
-      "gzip": 107
+    "vendor~card-sim": {
+      "raw": 525,
+      "gzip": 352
     },
-    "vendor~latin-600": {
-      "raw": 101,
-      "gzip": 107
+    "vendor~carrot": {
+      "raw": 460,
+      "gzip": 330
+    },
+    "vendor~carton": {
+      "raw": 461,
+      "gzip": 324
+    },
+    "vendor~carton-off": {
+      "raw": 619,
+      "gzip": 389
+    },
+    "vendor~case-lower": {
+      "raw": 430,
+      "gzip": 300
+    },
+    "vendor~case-sensitive": {
+      "raw": 457,
+      "gzip": 338
+    },
+    "vendor~case-upper": {
+      "raw": 471,
+      "gzip": 329
+    },
+    "vendor~cassette-tape": {
+      "raw": 541,
+      "gzip": 363
+    },
+    "vendor~cast": {
+      "raw": 483,
+      "gzip": 331
+    },
+    "vendor~castle": {
+      "raw": 584,
+      "gzip": 353
+    },
+    "vendor~cat": {
+      "raw": 624,
+      "gzip": 422
+    },
+    "vendor~cctv": {
+      "raw": 656,
+      "gzip": 412
+    },
+    "vendor~cctv-off": {
+      "raw": 707,
+      "gzip": 438
+    },
+    "vendor~certificate": {
+      "raw": 598,
+      "gzip": 401
+    },
+    "vendor~chart-area": {
+      "raw": 503,
+      "gzip": 348
+    },
+    "vendor~chart-bar": {
+      "raw": 443,
+      "gzip": 312
+    },
+    "vendor~chart-bar-big": {
+      "raw": 473,
+      "gzip": 331
+    },
+    "vendor~chart-bar-decreasing": {
+      "raw": 421,
+      "gzip": 300
+    },
+    "vendor~chart-bar-increasing": {
+      "raw": 421,
+      "gzip": 299
+    },
+    "vendor~chart-bar-stacked": {
+      "raw": 513,
+      "gzip": 339
+    },
+    "vendor~chart-candlestick": {
+      "raw": 613,
+      "gzip": 386
+    },
+    "vendor~chart-column-big": {
+      "raw": 464,
+      "gzip": 330
+    },
+    "vendor~chart-column-decreasing": {
+      "raw": 427,
+      "gzip": 307
+    },
+    "vendor~chart-column-increasing": {
+      "raw": 451,
+      "gzip": 321
+    },
+    "vendor~chart-column-stacked": {
+      "raw": 516,
+      "gzip": 346
+    },
+    "vendor~chart-gantt": {
+      "raw": 413,
+      "gzip": 297
+    },
+    "vendor~chart-network": {
+      "raw": 600,
+      "gzip": 378
+    },
+    "vendor~chart-no-axes-column-decreasing": {
+      "raw": 382,
+      "gzip": 287
+    },
+    "vendor~chart-no-axes-column-increasing": {
+      "raw": 404,
+      "gzip": 301
+    },
+    "vendor~chart-no-axes-combined": {
+      "raw": 564,
+      "gzip": 366
+    },
+    "vendor~chart-no-axes-gantt": {
+      "raw": 393,
+      "gzip": 293
+    },
+    "vendor~chart-scatter": {
+      "raw": 693,
+      "gzip": 367
+    },
+    "vendor~chart-spline": {
+      "raw": 382,
+      "gzip": 295
+    },
+    "vendor~check-line": {
+      "raw": 368,
+      "gzip": 279
+    },
+    "vendor~chef-hat": {
+      "raw": 473,
+      "gzip": 343
+    },
+    "vendor~cherry": {
+      "raw": 572,
+      "gzip": 364
+    },
+    "vendor~chess-bishop": {
+      "raw": 563,
+      "gzip": 380
+    },
+    "vendor~chess-king": {
+      "raw": 609,
+      "gzip": 409
+    },
+    "vendor~chess-knight": {
+      "raw": 627,
+      "gzip": 403
+    },
+    "vendor~chess-pawn": {
+      "raw": 515,
+      "gzip": 348
+    },
+    "vendor~chess-queen": {
+      "raw": 748,
+      "gzip": 444
+    },
+    "vendor~chess-rook": {
+      "raw": 600,
+      "gzip": 362
+    },
+    "vendor~chevron-first": {
+      "raw": 332,
+      "gzip": 265
+    },
+    "vendor~chevron-last": {
+      "raw": 331,
+      "gzip": 264
+    },
+    "vendor~chevrons-left": {
+      "raw": 339,
+      "gzip": 261
+    },
+    "vendor~chevrons-left-right-ellipsis": {
+      "raw": 467,
+      "gzip": 310
+    },
+    "vendor~chevrons-right": {
+      "raw": 338,
+      "gzip": 261
+    },
+    "vendor~church": {
+      "raw": 603,
+      "gzip": 383
+    },
+    "vendor~cigarette": {
+      "raw": 521,
+      "gzip": 327
+    },
+    "vendor~cigarette-off": {
+      "raw": 566,
+      "gzip": 348
+    },
+    "vendor~circle-arrow-down": {
+      "raw": 414,
+      "gzip": 299
+    },
+    "vendor~circle-arrow-left": {
+      "raw": 415,
+      "gzip": 302
+    },
+    "vendor~circle-arrow-out-down-left": {
+      "raw": 437,
+      "gzip": 312
+    },
+    "vendor~circle-arrow-out-down-right": {
+      "raw": 442,
+      "gzip": 311
+    },
+    "vendor~circle-arrow-out-up-left": {
+      "raw": 429,
+      "gzip": 311
+    },
+    "vendor~circle-arrow-out-up-right": {
+      "raw": 434,
+      "gzip": 311
+    },
+    "vendor~circle-arrow-right": {
+      "raw": 417,
+      "gzip": 301
+    },
+    "vendor~circle-check-big": {
+      "raw": 384,
+      "gzip": 298
+    },
+    "vendor~circle-chevron-down": {
+      "raw": 383,
+      "gzip": 288
+    },
+    "vendor~circle-chevron-left": {
+      "raw": 383,
+      "gzip": 289
+    },
+    "vendor~circle-chevron-right": {
+      "raw": 384,
+      "gzip": 288
+    },
+    "vendor~circle-chevron-up": {
+      "raw": 378,
+      "gzip": 286
+    },
+    "vendor~circle-chevrons-down": {
+      "raw": 399,
+      "gzip": 293
+    },
+    "vendor~circle-chevrons-left": {
+      "raw": 400,
+      "gzip": 296
+    },
+    "vendor~circle-chevrons-right": {
+      "raw": 400,
+      "gzip": 296
+    },
+    "vendor~circle-chevrons-up": {
+      "raw": 398,
+      "gzip": 294
+    },
+    "vendor~circle-dashed-check": {
+      "raw": 779,
+      "gzip": 422
+    },
+    "vendor~circle-divide": {
+      "raw": 493,
+      "gzip": 314
+    },
+    "vendor~circle-dollar-sign": {
+      "raw": 413,
+      "gzip": 306
+    },
+    "vendor~circle-dot-dashed": {
+      "raw": 807,
+      "gzip": 430
+    },
+    "vendor~circle-ellipsis": {
+      "raw": 420,
+      "gzip": 289
+    },
+    "vendor~circle-equal": {
+      "raw": 375,
+      "gzip": 277
+    },
+    "vendor~circle-euro": {
+      "raw": 388,
+      "gzip": 293
+    },
+    "vendor~circle-fading-arrow-up": {
+      "raw": 639,
+      "gzip": 394
+    },
+    "vendor~circle-fading-play": {
+      "raw": 676,
+      "gzip": 412
+    },
+    "vendor~circle-fading-plus": {
+      "raw": 628,
+      "gzip": 385
+    },
+    "vendor~circle-gauge": {
+      "raw": 427,
+      "gzip": 314
+    },
+    "vendor~circle-off": {
+      "raw": 414,
+      "gzip": 300
+    },
+    "vendor~circle-parking": {
+      "raw": 384,
+      "gzip": 295
+    },
+    "vendor~circle-parking-off": {
+      "raw": 594,
+      "gzip": 387
+    },
+    "vendor~circle-percent": {
+      "raw": 444,
+      "gzip": 311
+    },
+    "vendor~circle-pile": {
+      "raw": 536,
+      "gzip": 302
+    },
+    "vendor~circle-plus": {
+      "raw": 396,
+      "gzip": 290
+    },
+    "vendor~circle-pound-sterling": {
+      "raw": 435,
+      "gzip": 311
+    },
+    "vendor~circle-power": {
+      "raw": 420,
+      "gzip": 310
+    },
+    "vendor~circle-slash-2": {
+      "raw": 369,
+      "gzip": 277
+    },
+    "vendor~circle-small": {
+      "raw": 300,
+      "gzip": 240
+    },
+    "vendor~circle-star": {
+      "raw": 645,
+      "gzip": 412
+    },
+    "vendor~circle-user": {
+      "raw": 449,
+      "gzip": 318
+    },
+    "vendor~circle-user-round": {
+      "raw": 444,
+      "gzip": 321
+    },
+    "vendor~citrus": {
+      "raw": 507,
+      "gzip": 353
+    },
+    "vendor~clapperboard": {
+      "raw": 525,
+      "gzip": 364
+    },
+    "vendor~classDiagram-v2-4MYWR3UA": {
+      "raw": 51672,
+      "gzip": 16254
+    },
+    "vendor~clef-alto": {
+      "raw": 439,
+      "gzip": 316
+    },
+    "vendor~clef-bass": {
+      "raw": 445,
+      "gzip": 316
+    },
+    "vendor~clef-treble": {
+      "raw": 429,
+      "gzip": 315
+    },
+    "vendor~clipboard-check": {
+      "raw": 469,
+      "gzip": 335
+    },
+    "vendor~clipboard-clock": {
+      "raw": 534,
+      "gzip": 362
+    },
+    "vendor~clipboard-copy": {
+      "raw": 544,
+      "gzip": 360
+    },
+    "vendor~clipboard-list": {
+      "raw": 576,
+      "gzip": 360
+    },
+    "vendor~clipboard-minus": {
+      "raw": 463,
+      "gzip": 329
+    },
+    "vendor~clipboard-paste": {
+      "raw": 546,
+      "gzip": 366
+    },
+    "vendor~clipboard-pen": {
+      "raw": 618,
+      "gzip": 412
+    },
+    "vendor~clipboard-pen-line": {
+      "raw": 686,
+      "gzip": 433
+    },
+    "vendor~clipboard-plus": {
+      "raw": 500,
+      "gzip": 341
+    },
+    "vendor~clipboard-type": {
+      "raw": 541,
+      "gzip": 356
+    },
+    "vendor~clipboard-x": {
+      "raw": 508,
+      "gzip": 342
+    },
+    "vendor~clock-1": {
+      "raw": 336,
+      "gzip": 268
+    },
+    "vendor~clock-10": {
+      "raw": 338,
+      "gzip": 268
+    },
+    "vendor~clock-11": {
+      "raw": 338,
+      "gzip": 269
+    },
+    "vendor~clock-12": {
+      "raw": 333,
+      "gzip": 263
+    },
+    "vendor~clock-2": {
+      "raw": 336,
+      "gzip": 266
+    },
+    "vendor~clock-3": {
+      "raw": 334,
+      "gzip": 267
+    },
+    "vendor~clock-4": {
+      "raw": 336,
+      "gzip": 268
+    },
+    "vendor~clock-5": {
+      "raw": 336,
+      "gzip": 268
+    },
+    "vendor~clock-6": {
+      "raw": 333,
+      "gzip": 265
+    },
+    "vendor~clock-7": {
+      "raw": 337,
+      "gzip": 270
+    },
+    "vendor~clock-8": {
+      "raw": 337,
+      "gzip": 269
+    },
+    "vendor~clock-9": {
+      "raw": 334,
+      "gzip": 268
+    },
+    "vendor~clock-alert": {
+      "raw": 427,
+      "gzip": 305
+    },
+    "vendor~clock-arrow-down": {
+      "raw": 442,
+      "gzip": 317
+    },
+    "vendor~clock-arrow-left": {
+      "raw": 445,
+      "gzip": 321
+    },
+    "vendor~clock-arrow-right": {
+      "raw": 436,
+      "gzip": 312
+    },
+    "vendor~clock-arrow-up": {
+      "raw": 446,
+      "gzip": 323
+    },
+    "vendor~clock-check": {
+      "raw": 395,
+      "gzip": 300
+    },
+    "vendor~clock-fading": {
+      "raw": 589,
+      "gzip": 369
+    },
+    "vendor~clock-plus": {
+      "raw": 438,
+      "gzip": 315
+    },
+    "vendor~closed-caption": {
+      "raw": 428,
+      "gzip": 311
+    },
+    "vendor~cloud-alert": {
+      "raw": 413,
+      "gzip": 308
+    },
+    "vendor~cloud-backup": {
+      "raw": 476,
+      "gzip": 337
+    },
+    "vendor~cloud-check": {
+      "raw": 389,
+      "gzip": 303
+    },
+    "vendor~cloud-cog": {
+      "raw": 813,
+      "gzip": 448
+    },
+    "vendor~cloud-download": {
+      "raw": 453,
+      "gzip": 332
+    },
+    "vendor~cloud-drizzle": {
+      "raw": 558,
+      "gzip": 346
+    },
+    "vendor~cloud-fog": {
+      "raw": 408,
+      "gzip": 307
+    },
+    "vendor~cloud-hail": {
+      "raw": 561,
+      "gzip": 346
+    },
+    "vendor~cloud-lightning": {
+      "raw": 385,
+      "gzip": 301
+    },
+    "vendor~cloud-moon": {
+      "raw": 486,
+      "gzip": 357
+    },
+    "vendor~cloud-moon-rain": {
+      "raw": 566,
+      "gzip": 386
+    },
+    "vendor~cloud-rain": {
+      "raw": 445,
+      "gzip": 314
+    },
+    "vendor~cloud-rain-wind": {
+      "raw": 457,
+      "gzip": 323
+    },
+    "vendor~cloud-snow": {
+      "raw": 567,
+      "gzip": 346
+    },
+    "vendor~cloud-sun": {
+      "raw": 556,
+      "gzip": 362
+    },
+    "vendor~cloud-sun-rain": {
+      "raw": 633,
+      "gzip": 386
+    },
+    "vendor~cloud-sync": {
+      "raw": 549,
+      "gzip": 369
+    },
+    "vendor~cloud-upload": {
+      "raw": 441,
+      "gzip": 324
+    },
+    "vendor~cloudy": {
+      "raw": 405,
+      "gzip": 312
+    },
+    "vendor~clover": {
+      "raw": 584,
+      "gzip": 338
+    },
+    "vendor~club": {
+      "raw": 397,
+      "gzip": 296
+    },
+    "vendor~code-xml": {
+      "raw": 392,
+      "gzip": 289
+    },
+    "vendor~cog": {
+      "raw": 841,
+      "gzip": 435
+    },
+    "vendor~columns-3-cog": {
+      "raw": 920,
+      "gzip": 503
+    },
+    "vendor~columns-4": {
+      "raw": 429,
+      "gzip": 305
+    },
+    "vendor~combine": {
+      "raw": 600,
+      "gzip": 355
+    },
+    "vendor~compass": {
+      "raw": 416,
+      "gzip": 308
+    },
+    "vendor~component": {
+      "raw": 856,
+      "gzip": 367
+    },
+    "vendor~computer": {
+      "raw": 490,
+      "gzip": 328
+    },
+    "vendor~concierge-bell": {
+      "raw": 475,
+      "gzip": 320
+    },
+    "vendor~cone": {
+      "raw": 374,
+      "gzip": 295
+    },
+    "vendor~contact-round": {
+      "raw": 511,
+      "gzip": 353
+    },
+    "vendor~contrast": {
+      "raw": 351,
+      "gzip": 276
+    },
+    "vendor~cookie": {
+      "raw": 762,
+      "gzip": 435
+    },
+    "vendor~cooking-pot": {
+      "raw": 501,
+      "gzip": 343
+    },
+    "vendor~copy-check": {
+      "raw": 450,
+      "gzip": 335
+    },
+    "vendor~copy-minus": {
+      "raw": 463,
+      "gzip": 338
+    },
+    "vendor~copy-slash": {
+      "raw": 463,
+      "gzip": 338
+    },
+    "vendor~copy-x": {
+      "raw": 479,
+      "gzip": 329
+    },
+    "vendor~copyleft": {
+      "raw": 354,
+      "gzip": 281
+    },
+    "vendor~copyright": {
+      "raw": 356,
+      "gzip": 281
+    },
+    "vendor~corner-left-down": {
+      "raw": 353,
+      "gzip": 278
+    },
+    "vendor~corner-right-down": {
+      "raw": 352,
+      "gzip": 276
+    },
+    "vendor~corner-right-up": {
+      "raw": 349,
+      "gzip": 278
+    },
+    "vendor~corner-up-left": {
+      "raw": 350,
+      "gzip": 275
+    },
+    "vendor~corner-up-right": {
+      "raw": 352,
+      "gzip": 277
+    },
+    "vendor~cose-bilkent-JH36ORCC": {
+      "raw": 81785,
+      "gzip": 21443
+    },
+    "vendor~cpu-ai": {
+      "raw": 869,
+      "gzip": 422
+    },
+    "vendor~creative-commons": {
+      "raw": 497,
+      "gzip": 312
+    },
+    "vendor~credit-card-check": {
+      "raw": 456,
+      "gzip": 322
+    },
+    "vendor~credit-card-minus": {
+      "raw": 453,
+      "gzip": 317
+    },
+    "vendor~credit-card-plus": {
+      "raw": 493,
+      "gzip": 328
+    },
+    "vendor~credit-card-reader": {
+      "raw": 569,
+      "gzip": 390
+    },
+    "vendor~credit-card-x": {
+      "raw": 497,
+      "gzip": 332
+    },
+    "vendor~croissant": {
+      "raw": 757,
+      "gzip": 436
+    },
+    "vendor~crop": {
+      "raw": 350,
+      "gzip": 272
+    },
+    "vendor~cross": {
+      "raw": 473,
+      "gzip": 295
+    },
+    "vendor~crosshair": {
+      "raw": 518,
+      "gzip": 315
+    },
+    "vendor~crown": {
+      "raw": 527,
+      "gzip": 360
+    },
+    "vendor~cuboid": {
+      "raw": 513,
+      "gzip": 345
+    },
+    "vendor~cup-soda": {
+      "raw": 486,
+      "gzip": 330
+    },
+    "vendor~cupcake": {
+      "raw": 701,
+      "gzip": 443
+    },
+    "vendor~currency": {
+      "raw": 512,
+      "gzip": 309
+    },
+    "vendor~cylinder": {
+      "raw": 357,
+      "gzip": 284
+    },
+    "vendor~cynefin-EF2NZ3EQ": {
+      "raw": 417,
+      "gzip": 260
+    },
+    "vendor~cynefinDiagram-WF24UDRP": {
+      "raw": 10721,
+      "gzip": 3684
+    },
+    "vendor~dagre-NK4GIZVX": {
+      "raw": 38672,
+      "gzip": 13299
+    },
+    "vendor~dam": {
+      "raw": 677,
+      "gzip": 386
+    },
+    "vendor~database-arrow-down": {
+      "raw": 554,
+      "gzip": 365
+    },
+    "vendor~database-arrow-up": {
+      "raw": 553,
+      "gzip": 370
+    },
+    "vendor~database-check": {
+      "raw": 504,
+      "gzip": 347
+    },
+    "vendor~database-minus": {
+      "raw": 495,
+      "gzip": 342
+    },
+    "vendor~database-plus": {
+      "raw": 545,
+      "gzip": 365
+    },
+    "vendor~database-search": {
+      "raw": 560,
+      "gzip": 366
+    },
+    "vendor~database-x": {
+      "raw": 598,
+      "gzip": 380
+    },
+    "vendor~database-zap": {
+      "raw": 504,
+      "gzip": 344
+    },
+    "vendor~decimals-arrow-left": {
+      "raw": 444,
+      "gzip": 329
+    },
+    "vendor~decimals-arrow-right": {
+      "raw": 512,
+      "gzip": 337
+    },
+    "vendor~delete": {
+      "raw": 468,
+      "gzip": 328
+    },
+    "vendor~dessert": {
+      "raw": 522,
+      "gzip": 352
+    },
+    "vendor~diagram-CBK3MWTC": {
+      "raw": 11946,
+      "gzip": 4077
+    },
+    "vendor~diagram-I5XIIV2D": {
+      "raw": 5144,
+      "gzip": 2116
+    },
+    "vendor~diagram-ODIL2UCW": {
+      "raw": 9285,
+      "gzip": 3934
+    },
+    "vendor~diagram-ODIL2UCW~sequenceDiagram-BLEHNHQU~gitGraphDiagram-PDYL7XHY": {
+      "raw": 366,
+      "gzip": 273
+    },
+    "vendor~diagram-PFBEJUXE": {
+      "raw": 11764,
+      "gzip": 4476
+    },
+    "vendor~diagram-RJA3I4VV": {
+      "raw": 6876,
+      "gzip": 2807
+    },
+    "vendor~diagram-TYUNFSNR": {
+      "raw": 82647,
+      "gzip": 25176
+    },
+    "vendor~diameter": {
+      "raw": 519,
+      "gzip": 334
+    },
+    "vendor~diamond": {
+      "raw": 409,
+      "gzip": 279
+    },
+    "vendor~diamond-minus": {
+      "raw": 450,
+      "gzip": 305
+    },
+    "vendor~diamond-percent": {
+      "raw": 570,
+      "gzip": 355
+    },
+    "vendor~diamond-plus": {
+      "raw": 485,
+      "gzip": 320
+    },
+    "vendor~dice-1": {
+      "raw": 358,
+      "gzip": 279
+    },
+    "vendor~dice-2": {
+      "raw": 395,
+      "gzip": 294
+    },
+    "vendor~dice-3": {
+      "raw": 434,
+      "gzip": 306
+    },
+    "vendor~dice-4": {
+      "raw": 471,
+      "gzip": 313
+    },
+    "vendor~dice-5": {
+      "raw": 510,
+      "gzip": 324
+    },
+    "vendor~dice-6": {
+      "raw": 548,
+      "gzip": 331
+    },
+    "vendor~dices": {
+      "raw": 571,
+      "gzip": 364
+    },
+    "vendor~diff": {
+      "raw": 355,
+      "gzip": 266
+    },
+    "vendor~disc": {
+      "raw": 341,
+      "gzip": 251
+    },
+    "vendor~disc-2": {
+      "raw": 382,
+      "gzip": 275
+    },
+    "vendor~disc-3": {
+      "raw": 453,
+      "gzip": 315
+    },
+    "vendor~disc-album": {
+      "raw": 403,
+      "gzip": 305
+    },
+    "vendor~divide": {
+      "raw": 396,
+      "gzip": 288
+    },
+    "vendor~dna": {
+      "raw": 792,
+      "gzip": 444
+    },
+    "vendor~dna-off": {
+      "raw": 760,
+      "gzip": 444
+    },
+    "vendor~dock": {
+      "raw": 383,
+      "gzip": 294
+    },
+    "vendor~dog": {
+      "raw": 811,
+      "gzip": 518
+    },
+    "vendor~dollar-sign": {
+      "raw": 384,
+      "gzip": 292
+    },
+    "vendor~dome": {
+      "raw": 546,
+      "gzip": 345
+    },
+    "vendor~donut": {
+      "raw": 414,
+      "gzip": 315
+    },
+    "vendor~door-closed": {
+      "raw": 394,
+      "gzip": 294
+    },
+    "vendor~door-closed-cog": {
+      "raw": 867,
+      "gzip": 470
+    },
+    "vendor~door-closed-locked": {
+      "raw": 517,
+      "gzip": 353
+    },
+    "vendor~door-closed-package": {
+      "raw": 501,
+      "gzip": 348
+    },
+    "vendor~door-open": {
+      "raw": 521,
+      "gzip": 349
+    },
+    "vendor~door-stairwell": {
+      "raw": 516,
+      "gzip": 332
+    },
+    "vendor~dot": {
+      "raw": 291,
+      "gzip": 237
+    },
+    "vendor~drafting-compass": {
+      "raw": 503,
+      "gzip": 353
+    },
+    "vendor~drama": {
+      "raw": 723,
+      "gzip": 432
+    },
+    "vendor~drill": {
+      "raw": 652,
+      "gzip": 381
+    },
+    "vendor~drone": {
+      "raw": 715,
+      "gzip": 415
+    },
+    "vendor~droplet": {
+      "raw": 377,
+      "gzip": 297
+    },
+    "vendor~droplet-off": {
+      "raw": 512,
+      "gzip": 367
+    },
+    "vendor~droplets": {
+      "raw": 538,
+      "gzip": 390
+    },
+    "vendor~drum": {
+      "raw": 547,
+      "gzip": 349
+    },
+    "vendor~drumstick": {
+      "raw": 447,
+      "gzip": 329
+    },
+    "vendor~dynamicIconImports": {
+      "raw": 346191,
+      "gzip": 55149
+    },
+    "vendor~ear": {
+      "raw": 398,
+      "gzip": 296
+    },
+    "vendor~ear-off": {
+      "raw": 605,
+      "gzip": 406
+    },
+    "vendor~earth": {
+      "raw": 578,
+      "gzip": 381
+    },
+    "vendor~earth-lock": {
+      "raw": 624,
+      "gzip": 399
+    },
+    "vendor~ebnfDiagram-V4P3TTPT": {
+      "raw": 2872,
+      "gzip": 1070
+    },
+    "vendor~eclipse": {
+      "raw": 346,
+      "gzip": 271
+    },
+    "vendor~egg": {
+      "raw": 319,
+      "gzip": 263
+    },
+    "vendor~egg-fried": {
+      "raw": 462,
+      "gzip": 338
+    },
+    "vendor~egg-off": {
+      "raw": 456,
+      "gzip": 334
+    },
+    "vendor~eighth-note": {
+      "raw": 379,
+      "gzip": 303
+    },
+    "vendor~eighth-notes": {
+      "raw": 451,
+      "gzip": 332
+    },
+    "vendor~eject": {
+      "raw": 424,
+      "gzip": 327
+    },
+    "vendor~elk-QONTBCTQ": {
+      "raw": 1470883,
+      "gzip": 446200
+    },
+    "vendor~ellipse": {
+      "raw": 305,
+      "gzip": 242
+    },
+    "vendor~engine": {
+      "raw": 653,
+      "gzip": 399
+    },
+    "vendor~equal": {
+      "raw": 353,
+      "gzip": 260
+    },
+    "vendor~equal-approximately": {
+      "raw": 398,
+      "gzip": 278
+    },
+    "vendor~equal-approximately-not": {
+      "raw": 456,
+      "gzip": 309
+    },
+    "vendor~equal-not": {
+      "raw": 411,
+      "gzip": 280
+    },
+    "vendor~erDiagram-KYQIGQAA": {
+      "raw": 32280,
+      "gzip": 10825
+    },
+    "vendor~ethernet-port": {
+      "raw": 581,
+      "gzip": 357
+    },
+    "vendor~euro": {
+      "raw": 425,
+      "gzip": 309
+    },
+    "vendor~ev-charger": {
+      "raw": 536,
+      "gzip": 348
+    },
+    "vendor~eventmodeling-K75KTNOO": {
+      "raw": 423,
+      "gzip": 266
+    },
+    "vendor~expand": {
+      "raw": 552,
+      "gzip": 335
+    },
+    "vendor~eye-closed": {
+      "raw": 488,
+      "gzip": 322
+    },
+    "vendor~eye-dashed": {
+      "raw": 892,
+      "gzip": 468
+    },
+    "vendor~face-angry": {
+      "raw": 544,
+      "gzip": 345
+    },
+    "vendor~face-expressionless": {
+      "raw": 436,
+      "gzip": 308
+    },
+    "vendor~face-grinning": {
+      "raw": 505,
+      "gzip": 351
+    },
+    "vendor~face-neutral": {
+      "raw": 426,
+      "gzip": 308
+    },
+    "vendor~face-slightly-frowning": {
+      "raw": 448,
+      "gzip": 321
+    },
+    "vendor~face-slightly-smiling": {
+      "raw": 457,
+      "gzip": 331
+    },
+    "vendor~face-slightly-smiling-plus": {
+      "raw": 553,
+      "gzip": 366
+    },
+    "vendor~factory": {
+      "raw": 572,
+      "gzip": 358
+    },
+    "vendor~fan": {
+      "raw": 492,
+      "gzip": 320
+    },
+    "vendor~fast-forward": {
+      "raw": 450,
+      "gzip": 295
+    },
+    "vendor~faucet": {
+      "raw": 765,
+      "gzip": 458
+    },
+    "vendor~feather": {
+      "raw": 444,
+      "gzip": 326
+    },
+    "vendor~fence": {
+      "raw": 607,
+      "gzip": 341
+    },
+    "vendor~ferris-wheel": {
+      "raw": 634,
+      "gzip": 388
+    },
+    "vendor~file-axis-3d": {
+      "raw": 545,
+      "gzip": 361
+    },
+    "vendor~file-badge": {
+      "raw": 647,
+      "gzip": 426
+    },
+    "vendor~file-box": {
+      "raw": 714,
+      "gzip": 443
+    },
+    "vendor~file-braces-corner": {
+      "raw": 652,
+      "gzip": 388
+    },
+    "vendor~file-chart-column": {
+      "raw": 590,
+      "gzip": 376
+    },
+    "vendor~file-chart-column-increasing": {
+      "raw": 599,
+      "gzip": 380
+    },
+    "vendor~file-chart-line": {
+      "raw": 526,
+      "gzip": 358
+    },
+    "vendor~file-chart-pie": {
+      "raw": 660,
+      "gzip": 428
+    },
+    "vendor~file-check": {
+      "raw": 483,
+      "gzip": 335
+    },
+    "vendor~file-check-corner": {
+      "raw": 505,
+      "gzip": 348
+    },
+    "vendor~file-clock": {
+      "raw": 524,
+      "gzip": 361
+    },
+    "vendor~file-code-corner": {
+      "raw": 549,
+      "gzip": 364
+    },
+    "vendor~file-digit": {
+      "raw": 567,
+      "gzip": 377
+    },
+    "vendor~file-heart": {
+      "raw": 553,
+      "gzip": 372
+    },
+    "vendor~file-input": {
+      "raw": 524,
+      "gzip": 351
+    },
+    "vendor~file-minus": {
+      "raw": 477,
+      "gzip": 331
+    },
+    "vendor~file-minus-corner": {
+      "raw": 501,
+      "gzip": 343
+    },
+    "vendor~file-output": {
+      "raw": 537,
+      "gzip": 359
+    },
+    "vendor~file-plus-corner": {
+      "raw": 538,
+      "gzip": 360
+    },
+    "vendor~file-scan": {
+      "raw": 629,
+      "gzip": 370
+    },
+    "vendor~file-search": {
+      "raw": 541,
+      "gzip": 365
+    },
+    "vendor~file-search-corner": {
+      "raw": 560,
+      "gzip": 382
+    },
+    "vendor~file-signal": {
+      "raw": 612,
+      "gzip": 385
+    },
+    "vendor~file-sliders": {
+      "raw": 589,
+      "gzip": 363
+    },
+    "vendor~file-type-corner": {
+      "raw": 608,
+      "gzip": 385
+    },
+    "vendor~file-user": {
+      "raw": 537,
+      "gzip": 362
+    },
+    "vendor~file-video-camera": {
+      "raw": 632,
+      "gzip": 422
+    },
+    "vendor~file-volume": {
+      "raw": 680,
+      "gzip": 423
+    },
+    "vendor~files": {
+      "raw": 520,
+      "gzip": 329
+    },
+    "vendor~film": {
+      "raw": 572,
+      "gzip": 343
+    },
+    "vendor~fingerprint-pattern": {
+      "raw": 800,
+      "gzip": 478
+    },
+    "vendor~fire-extinguisher": {
+      "raw": 572,
+      "gzip": 364
+    },
+    "vendor~fish": {
+      "raw": 781,
+      "gzip": 487
+    },
+    "vendor~fish-off": {
+      "raw": 826,
+      "gzip": 528
+    },
+    "vendor~fish-symbol": {
+      "raw": 309,
+      "gzip": 258
+    },
+    "vendor~fishing-hook": {
+      "raw": 452,
+      "gzip": 338
+    },
+    "vendor~fishing-rod": {
+      "raw": 420,
+      "gzip": 315
+    },
+    "vendor~flag": {
+      "raw": 419,
+      "gzip": 317
+    },
+    "vendor~flag-off": {
+      "raw": 479,
+      "gzip": 346
+    },
+    "vendor~flag-triangle-left": {
+      "raw": 353,
+      "gzip": 283
+    },
+    "vendor~flag-triangle-right": {
+      "raw": 353,
+      "gzip": 287
+    },
+    "vendor~flame-kindling": {
+      "raw": 465,
+      "gzip": 336
+    },
+    "vendor~flashlight": {
+      "raw": 503,
+      "gzip": 345
+    },
+    "vendor~flashlight-off": {
+      "raw": 581,
+      "gzip": 380
+    },
+    "vendor~flask-conical-off": {
+      "raw": 538,
+      "gzip": 351
+    },
+    "vendor~flask-round": {
+      "raw": 381,
+      "gzip": 292
+    },
+    "vendor~flowDiagram-IUGLLWBU": {
+      "raw": 2303,
+      "gzip": 812
+    },
+    "vendor~flower": {
+      "raw": 752,
+      "gzip": 403
+    },
+    "vendor~flower-2": {
+      "raw": 608,
+      "gzip": 384
+    },
+    "vendor~fold-horizontal": {
+      "raw": 559,
+      "gzip": 332
+    },
+    "vendor~fold-vertical": {
+      "raw": 561,
+      "gzip": 339
+    },
+    "vendor~folder-archive": {
+      "raw": 533,
+      "gzip": 362
+    },
+    "vendor~folder-bookmark": {
+      "raw": 514,
+      "gzip": 361
+    },
+    "vendor~folder-check": {
+      "raw": 441,
+      "gzip": 318
+    },
+    "vendor~folder-dot": {
+      "raw": 449,
+      "gzip": 329
+    },
+    "vendor~folder-git": {
+      "raw": 518,
+      "gzip": 349
+    },
+    "vendor~folder-heart": {
+      "raw": 522,
+      "gzip": 362
+    },
+    "vendor~folder-kanban": {
+      "raw": 514,
+      "gzip": 348
+    },
+    "vendor~folder-key": {
+      "raw": 507,
+      "gzip": 348
+    },
+    "vendor~folder-lock": {
+      "raw": 505,
+      "gzip": 355
+    },
+    "vendor~folder-open-dot": {
+      "raw": 511,
+      "gzip": 359
+    },
+    "vendor~folder-search-2": {
+      "raw": 501,
+      "gzip": 349
+    },
+    "vendor~folder-sync": {
+      "raw": 589,
+      "gzip": 373
+    },
+    "vendor~folder-user": {
+      "raw": 488,
+      "gzip": 348
+    },
+    "vendor~folder-users": {
+      "raw": 590,
+      "gzip": 398
+    },
+    "vendor~footprints": {
+      "raw": 614,
+      "gzip": 408
+    },
+    "vendor~forgetHostLocalState~installHostProjectsLoader~App~buildSkew~buildMismatchNotice": {
+      "raw": 24580,
+      "gzip": 7331
+    },
+    "vendor~forklift": {
+      "raw": 614,
+      "gzip": 381
+    },
+    "vendor~form": {
+      "raw": 447,
+      "gzip": 305
+    },
+    "vendor~frame": {
+      "raw": 461,
+      "gzip": 289
+    },
+    "vendor~fuel": {
+      "raw": 485,
+      "gzip": 327
+    },
+    "vendor~fullscreen": {
+      "raw": 525,
+      "gzip": 348
+    },
+    "vendor~funnel-plus": {
+      "raw": 488,
+      "gzip": 344
+    },
+    "vendor~funnel-x": {
+      "raw": 516,
+      "gzip": 362
+    },
+    "vendor~galaxy": {
+      "raw": 605,
+      "gzip": 397
+    },
+    "vendor~gallery-horizontal": {
+      "raw": 396,
+      "gzip": 299
+    },
+    "vendor~gallery-horizontal-end": {
+      "raw": 401,
+      "gzip": 304
+    },
+    "vendor~gallery-thumbnails": {
+      "raw": 470,
+      "gzip": 316
+    },
+    "vendor~gallery-vertical": {
+      "raw": 395,
+      "gzip": 298
+    },
+    "vendor~gallery-vertical-end": {
+      "raw": 398,
+      "gzip": 304
+    },
+    "vendor~gamepad": {
+      "raw": 539,
+      "gzip": 337
+    },
+    "vendor~gamepad-2": {
+      "raw": 786,
+      "gzip": 485
+    },
+    "vendor~gamepad-directional": {
+      "raw": 895,
+      "gzip": 452
+    },
+    "vendor~ganttDiagram-R7GPNTJY": {
+      "raw": 51267,
+      "gzip": 16819
+    },
+    "vendor~gap-horizontal": {
+      "raw": 538,
+      "gzip": 330
+    },
+    "vendor~gap-vertical": {
+      "raw": 536,
+      "gzip": 331
+    },
+    "vendor~gavel": {
+      "raw": 481,
+      "gzip": 323
+    },
+    "vendor~gem": {
+      "raw": 499,
+      "gzip": 346
+    },
+    "vendor~georgian-lari": {
+      "raw": 421,
+      "gzip": 300
+    },
+    "vendor~germ": {
+      "raw": 838,
+      "gzip": 480
+    },
+    "vendor~germ-off": {
+      "raw": 910,
+      "gzip": 498
+    },
+    "vendor~ghost": {
+      "raw": 521,
+      "gzip": 339
+    },
+    "vendor~gift": {
+      "raw": 514,
+      "gzip": 354
+    },
+    "vendor~git-branch-minus": {
+      "raw": 438,
+      "gzip": 314
+    },
+    "vendor~git-commit-vertical": {
+      "raw": 380,
+      "gzip": 285
+    },
+    "vendor~git-compare-arrows": {
+      "raw": 541,
+      "gzip": 354
+    },
+    "vendor~git-graph": {
+      "raw": 513,
+      "gzip": 330
+    },
+    "vendor~git-pull-request-create": {
+      "raw": 472,
+      "gzip": 328
+    },
+    "vendor~git-pull-request-create-arrow": {
+      "raw": 520,
+      "gzip": 351
+    },
+    "vendor~gitGraph-VSP46ZUC": {
+      "raw": 418,
+      "gzip": 262
+    },
+    "vendor~gitGraphDiagram-PDYL7XHY": {
+      "raw": 29998,
+      "gzip": 8896
+    },
+    "vendor~glass-water": {
+      "raw": 450,
+      "gzip": 330
+    },
+    "vendor~glasses": {
+      "raw": 522,
+      "gzip": 339
+    },
+    "vendor~globe-check": {
+      "raw": 389,
+      "gzip": 291
+    },
+    "vendor~globe-code": {
+      "raw": 491,
+      "gzip": 334
+    },
+    "vendor~globe-lock": {
+      "raw": 508,
+      "gzip": 354
+    },
+    "vendor~globe-off": {
+      "raw": 717,
+      "gzip": 403
+    },
+    "vendor~globe-x": {
+      "raw": 419,
+      "gzip": 300
+    },
+    "vendor~goal": {
+      "raw": 413,
+      "gzip": 312
+    },
+    "vendor~gpu": {
+      "raw": 512,
+      "gzip": 335
+    },
+    "vendor~graduation-cap": {
+      "raw": 497,
+      "gzip": 350
+    },
+    "vendor~grape": {
+      "raw": 709,
+      "gzip": 383
+    },
+    "vendor~graph-hub": {
+      "raw": 575,
+      "gzip": 342
+    },
+    "vendor~graph-star": {
+      "raw": 799,
+      "gzip": 442
+    },
+    "vendor~grid-2x2-check": {
+      "raw": 444,
+      "gzip": 316
+    },
+    "vendor~grid-2x2-plus": {
+      "raw": 474,
+      "gzip": 323
+    },
+    "vendor~grid-2x2-x": {
+      "raw": 479,
+      "gzip": 323
+    },
+    "vendor~grid-3x2": {
+      "raw": 423,
+      "gzip": 303
+    },
+    "vendor~grid-3x3": {
+      "raw": 490,
+      "gzip": 329
+    },
+    "vendor~grip": {
+      "raw": 670,
+      "gzip": 326
+    },
+    "vendor~grip-horizontal": {
+      "raw": 538,
+      "gzip": 303
+    },
+    "vendor~groceries": {
+      "raw": 655,
+      "gzip": 414
+    },
+    "vendor~group": {
+      "raw": 589,
+      "gzip": 374
+    },
+    "vendor~guitar": {
+      "raw": 695,
+      "gzip": 428
+    },
+    "vendor~guitar-electric": {
+      "raw": 720,
+      "gzip": 455
+    },
+    "vendor~half-note": {
+      "raw": 354,
+      "gzip": 286
+    },
+    "vendor~ham": {
+      "raw": 586,
+      "gzip": 365
+    },
+    "vendor~hamburger": {
+      "raw": 573,
+      "gzip": 366
+    },
+    "vendor~hand": {
+      "raw": 571,
+      "gzip": 356
+    },
+    "vendor~hand-coins": {
+      "raw": 580,
+      "gzip": 389
+    },
+    "vendor~hand-fist": {
+      "raw": 692,
+      "gzip": 434
+    },
+    "vendor~hand-grab": {
+      "raw": 630,
+      "gzip": 356
+    },
+    "vendor~hand-heart": {
+      "raw": 661,
+      "gzip": 440
+    },
+    "vendor~hand-helping": {
+      "raw": 512,
+      "gzip": 368
+    },
+    "vendor~hand-metal": {
+      "raw": 559,
+      "gzip": 365
+    },
+    "vendor~hand-platter": {
+      "raw": 635,
+      "gzip": 411
+    },
+    "vendor~handbag": {
+      "raw": 426,
+      "gzip": 317
+    },
+    "vendor~handle-bottom-right": {
+      "raw": 337,
+      "gzip": 268
+    },
+    "vendor~hard-drive": {
+      "raw": 553,
+      "gzip": 361
+    },
+    "vendor~hard-drive-upload": {
+      "raw": 477,
+      "gzip": 331
+    },
+    "vendor~hard-hat": {
+      "raw": 484,
+      "gzip": 338
+    },
+    "vendor~hat-glasses": {
+      "raw": 556,
+      "gzip": 367
+    },
+    "vendor~haze": {
+      "raw": 569,
+      "gzip": 344
+    },
+    "vendor~hd": {
+      "raw": 539,
+      "gzip": 352
+    },
+    "vendor~hdmi-port": {
+      "raw": 451,
+      "gzip": 319
+    },
+    "vendor~heading": {
+      "raw": 357,
+      "gzip": 268
+    },
+    "vendor~heading-1": {
+      "raw": 399,
+      "gzip": 286
+    },
+    "vendor~heading-2": {
+      "raw": 424,
+      "gzip": 305
+    },
+    "vendor~heading-3": {
+      "raw": 499,
+      "gzip": 332
+    },
+    "vendor~heading-4": {
+      "raw": 448,
+      "gzip": 306
+    },
+    "vendor~heading-5": {
+      "raw": 491,
+      "gzip": 333
+    },
+    "vendor~heading-6": {
+      "raw": 456,
+      "gzip": 319
+    },
+    "vendor~headphone-off": {
+      "raw": 582,
+      "gzip": 366
+    },
+    "vendor~headphones": {
+      "raw": 402,
+      "gzip": 287
+    },
+    "vendor~headset": {
+      "raw": 463,
+      "gzip": 315
+    },
+    "vendor~heart-crack": {
+      "raw": 565,
+      "gzip": 394
+    },
+    "vendor~heart-handshake": {
+      "raw": 623,
+      "gzip": 402
+    },
+    "vendor~heart-minus": {
+      "raw": 478,
+      "gzip": 349
+    },
+    "vendor~heart-off": {
+      "raw": 550,
+      "gzip": 383
+    },
+    "vendor~heart-plus": {
+      "raw": 510,
+      "gzip": 360
+    },
+    "vendor~heart-x": {
+      "raw": 486,
+      "gzip": 339
+    },
+    "vendor~heater": {
+      "raw": 702,
+      "gzip": 378
+    },
+    "vendor~helicopter": {
+      "raw": 618,
+      "gzip": 368
+    },
+    "vendor~hexagon": {
+      "raw": 397,
+      "gzip": 288
+    },
+    "vendor~highlighter": {
+      "raw": 386,
+      "gzip": 295
+    },
+    "vendor~hiking-stick": {
+      "raw": 645,
+      "gzip": 409
+    },
+    "vendor~hop": {
+      "raw": 1187,
+      "gzip": 653
+    },
+    "vendor~hop-off": {
+      "raw": 1129,
+      "gzip": 644
+    },
+    "vendor~hospital": {
+      "raw": 547,
+      "gzip": 341
+    },
+    "vendor~hotel": {
+      "raw": 671,
+      "gzip": 385
+    },
+    "vendor~hourglass-cog": {
+      "raw": 961,
+      "gzip": 501
+    },
+    "vendor~house-cog": {
+      "raw": 889,
+      "gzip": 487
+    },
+    "vendor~house-heart": {
+      "raw": 510,
+      "gzip": 351
+    },
+    "vendor~house-plug": {
+      "raw": 586,
+      "gzip": 359
+    },
+    "vendor~house-plus": {
+      "raw": 520,
+      "gzip": 351
+    },
+    "vendor~house-wifi": {
+      "raw": 528,
+      "gzip": 352
+    },
+    "vendor~houses": {
+      "raw": 639,
+      "gzip": 391
+    },
+    "vendor~ice-cream-bowl": {
+      "raw": 503,
+      "gzip": 342
+    },
+    "vendor~ice-cream-cone": {
+      "raw": 456,
+      "gzip": 319
+    },
+    "vendor~id-card": {
+      "raw": 482,
+      "gzip": 339
+    },
+    "vendor~id-card-lanyard": {
+      "raw": 526,
+      "gzip": 360
+    },
+    "vendor~image-down": {
+      "raw": 502,
+      "gzip": 350
+    },
+    "vendor~image-minus": {
+      "raw": 506,
+      "gzip": 357
+    },
+    "vendor~image-play": {
+      "raw": 547,
+      "gzip": 364
+    },
+    "vendor~image-plus": {
+      "raw": 528,
+      "gzip": 355
+    },
+    "vendor~image-up": {
+      "raw": 502,
+      "gzip": 352
+    },
+    "vendor~image-upscale": {
+      "raw": 643,
+      "gzip": 402
+    },
+    "vendor~images": {
+      "raw": 535,
+      "gzip": 371
+    },
+    "vendor~index": {
+      "raw": 94397,
+      "gzip": 32224
+    },
+    "vendor~index~BrowserPane~DevPreviewPane~DiffPane~FileBrowserPane~FilePane~App~IssuePickerDi~mixrylo1": {
+      "raw": 16978,
+      "gzip": 6917
+    },
+    "vendor~index~BrowserPane~DevPreviewPane~DiffPane~FileBrowserPane~FilePane~App~ThemeBrowser~~cb6buzjd": {
+      "raw": 7600,
+      "gzip": 2492
+    },
+    "vendor~index~BrowserPane~DevPreviewPane~DiffPane~FileBrowserPane~FilePane~fileEditorDefault~i1d9a1an": {
+      "raw": 11647,
+      "gzip": 4142
+    },
+    "vendor~index~BrowserPane~DevPreviewPane~DiffPane~FileBrowserPane~FilePane~fileEditorDefault~n5wxxkh3": {
+      "raw": 12736,
+      "gzip": 3838
+    },
+    "vendor~index~PluginKit": {
+      "raw": 31351,
+      "gzip": 11373
+    },
+    "vendor~index~PluginKit~PluginMarkdown": {
+      "raw": 816,
+      "gzip": 489
+    },
+    "vendor~index~host-daintreehq-plugin-ui": {
+      "raw": 44055,
+      "gzip": 14488
+    },
+    "vendor~index~host-daintreehq-tour-kit~host-daintreehq-tour-mock-app~PluginKit~PluginMarkdown": {
+      "raw": 28888,
+      "gzip": 9092
+    },
+    "vendor~indian-rupee": {
+      "raw": 456,
+      "gzip": 312
+    },
+    "vendor~info-OHQRW6UA": {
+      "raw": 414,
+      "gzip": 258
+    },
+    "vendor~infoDiagram-MVDRKAX5": {
+      "raw": 1239,
+      "gzip": 568
+    },
+    "vendor~inspection-panel": {
+      "raw": 474,
+      "gzip": 312
+    },
+    "vendor~ishikawaDiagram-HPEHV2GE": {
+      "raw": 18080,
+      "gzip": 6756
+    },
+    "vendor~iteration-ccw": {
+      "raw": 347,
+      "gzip": 274
+    },
+    "vendor~iteration-cw": {
+      "raw": 344,
+      "gzip": 273
+    },
+    "vendor~iv-bag": {
+      "raw": 560,
+      "gzip": 376
+    },
+    "vendor~japanese-yen": {
+      "raw": 387,
+      "gzip": 293
+    },
+    "vendor~journeyDiagram-BOSHW7O7": {
+      "raw": 23877,
+      "gzip": 8439
+    },
+    "vendor~journeyDiagram-BOSHW7O7~stateDiagram-v2-A6IESKWZ~classDiagram-v2-4MYWR3UA~sequenceDi~ip87n5w8": {
+      "raw": 2465,
+      "gzip": 1071
+    },
+    "vendor~joystick": {
+      "raw": 471,
+      "gzip": 329
+    },
+    "vendor~kanban": {
+      "raw": 355,
+      "gzip": 267
+    },
+    "vendor~kanban-definition-FNSA4HC5": {
+      "raw": 21772,
+      "gzip": 7511
+    },
+    "vendor~katex": {
+      "raw": 266133,
+      "gzip": 76949
+    },
+    "vendor~kayak": {
+      "raw": 571,
+      "gzip": 367
+    },
+    "vendor~kazakh-tenge": {
+      "raw": 361,
+      "gzip": 270
+    },
+    "vendor~key": {
+      "raw": 430,
+      "gzip": 317
+    },
+    "vendor~key-square": {
+      "raw": 620,
+      "gzip": 378
+    },
+    "vendor~keyboard-music": {
+      "raw": 615,
+      "gzip": 361
+    },
+    "vendor~keyboard-off": {
+      "raw": 693,
+      "gzip": 392
+    },
+    "vendor~lambda": {
+      "raw": 376,
+      "gzip": 292
+    },
+    "vendor~lamp": {
+      "raw": 511,
+      "gzip": 349
+    },
+    "vendor~lamp-ceiling": {
+      "raw": 469,
+      "gzip": 337
+    },
+    "vendor~lamp-desk": {
+      "raw": 642,
+      "gzip": 403
+    },
+    "vendor~lamp-floor": {
+      "raw": 444,
+      "gzip": 318
+    },
+    "vendor~lamp-wall-down": {
+      "raw": 525,
+      "gzip": 346
+    },
+    "vendor~lamp-wall-up": {
+      "raw": 525,
+      "gzip": 348
+    },
+    "vendor~land-plot": {
+      "raw": 513,
+      "gzip": 349
+    },
+    "vendor~laptop": {
+      "raw": 469,
+      "gzip": 331
+    },
+    "vendor~laptop-minimal": {
+      "raw": 403,
+      "gzip": 301
+    },
+    "vendor~laptop-minimal-check": {
+      "raw": 405,
+      "gzip": 309
+    },
+    "vendor~lasso": {
+      "raw": 409,
+      "gzip": 314
+    },
+    "vendor~lasso-select": {
+      "raw": 706,
+      "gzip": 449
+    },
+    "vendor~layer-arrow-down": {
+      "raw": 531,
+      "gzip": 365
+    },
+    "vendor~layer-arrow-up": {
+      "raw": 481,
+      "gzip": 348
+    },
+    "vendor~layers-2": {
+      "raw": 498,
+      "gzip": 334
+    },
+    "vendor~layers-arrow-down": {
+      "raw": 587,
+      "gzip": 383
+    },
+    "vendor~layers-arrow-up": {
+      "raw": 583,
+      "gzip": 371
+    },
+    "vendor~layers-minus": {
+      "raw": 719,
+      "gzip": 402
+    },
+    "vendor~layers-plus": {
+      "raw": 648,
+      "gzip": 383
+    },
+    "vendor~layout-arrow-down": {
+      "raw": 466,
+      "gzip": 314
+    },
+    "vendor~layout-arrow-right": {
+      "raw": 466,
+      "gzip": 312
+    },
+    "vendor~layout-dashboard": {
+      "raw": 516,
+      "gzip": 308
+    },
+    "vendor~layout-freeform": {
+      "raw": 449,
+      "gzip": 290
+    },
+    "vendor~layout-grid-circles": {
+      "raw": 471,
+      "gzip": 285
+    },
+    "vendor~layout-list": {
+      "raw": 526,
+      "gzip": 323
+    },
+    "vendor~layout-panel-left": {
+      "raw": 452,
+      "gzip": 293
+    },
+    "vendor~leaf": {
+      "raw": 466,
+      "gzip": 344
+    },
+    "vendor~leafy-green": {
+      "raw": 606,
+      "gzip": 404
+    },
+    "vendor~lectern": {
+      "raw": 539,
+      "gzip": 361
+    },
+    "vendor~lens": {
+      "raw": 385,
+      "gzip": 294
+    },
+    "vendor~lens-concave": {
+      "raw": 391,
+      "gzip": 285
+    },
+    "vendor~lens-convex": {
+      "raw": 416,
+      "gzip": 302
+    },
+    "vendor~letter-spacing": {
+      "raw": 435,
+      "gzip": 316
+    },
+    "vendor~letters": {
+      "raw": 507,
+      "gzip": 349
+    },
+    "vendor~library": {
+      "raw": 395,
+      "gzip": 286
+    },
+    "vendor~library-big": {
+      "raw": 491,
+      "gzip": 357
+    },
+    "vendor~ligature": {
+      "raw": 450,
+      "gzip": 308
+    },
+    "vendor~lightbulb-off": {
+      "raw": 522,
+      "gzip": 353
+    },
+    "vendor~lighthouse": {
+      "raw": 782,
+      "gzip": 444
+    },
+    "vendor~line-dot-bottom-vertical": {
+      "raw": 349,
+      "gzip": 278
+    },
+    "vendor~line-dot-left-horizontal": {
+      "raw": 348,
+      "gzip": 279
+    },
+    "vendor~line-dot-right-horizontal": {
+      "raw": 356,
+      "gzip": 285
+    },
+    "vendor~line-dot-top-vertical": {
+      "raw": 345,
+      "gzip": 275
+    },
+    "vendor~line-height": {
+      "raw": 432,
+      "gzip": 315
+    },
+    "vendor~line-squiggle": {
+      "raw": 362,
+      "gzip": 292
+    },
+    "vendor~line-style": {
+      "raw": 467,
+      "gzip": 301
+    },
+    "vendor~list-check": {
+      "raw": 403,
+      "gzip": 288
+    },
+    "vendor~list-chevrons-down-up": {
+      "raw": 453,
+      "gzip": 302
+    },
+    "vendor~list-chevrons-up-down": {
+      "raw": 453,
+      "gzip": 304
+    },
+    "vendor~list-clock": {
+      "raw": 459,
+      "gzip": 319
+    },
+    "vendor~list-collapse": {
+      "raw": 450,
+      "gzip": 296
+    },
+    "vendor~list-end": {
+      "raw": 454,
+      "gzip": 308
+    },
+    "vendor~list-filter-plus": {
+      "raw": 437,
+      "gzip": 303
+    },
+    "vendor~list-indent-decrease": {
+      "raw": 452,
+      "gzip": 305
+    },
+    "vendor~list-indent-increase": {
+      "raw": 451,
+      "gzip": 305
+    },
+    "vendor~list-minus": {
+      "raw": 398,
+      "gzip": 283
+    },
+    "vendor~list-music": {
+      "raw": 445,
+      "gzip": 311
+    },
+    "vendor~list-plus": {
+      "raw": 433,
+      "gzip": 294
+    },
+    "vendor~list-restart": {
+      "raw": 502,
+      "gzip": 337
+    },
+    "vendor~list-sort-ascending": {
+      "raw": 368,
+      "gzip": 280
+    },
+    "vendor~list-sort-descending": {
+      "raw": 369,
+      "gzip": 281
+    },
+    "vendor~list-start": {
+      "raw": 455,
+      "gzip": 314
+    },
+    "vendor~list-tree": {
+      "raw": 461,
+      "gzip": 303
+    },
+    "vendor~list-video": {
+      "raw": 484,
+      "gzip": 320
+    },
+    "vendor~loader": {
+      "raw": 576,
+      "gzip": 343
+    },
+    "vendor~loader-pinwheel": {
+      "raw": 504,
+      "gzip": 333
+    },
+    "vendor~locate": {
+      "raw": 514,
+      "gzip": 313
+    },
+    "vendor~locate-fixed": {
+      "raw": 568,
+      "gzip": 328
+    },
+    "vendor~locate-off": {
+      "raw": 553,
+      "gzip": 340
+    },
+    "vendor~lock-keyhole": {
+      "raw": 420,
+      "gzip": 319
+    },
+    "vendor~lock-keyhole-open": {
+      "raw": 454,
+      "gzip": 340
+    },
+    "vendor~log-out": {
+      "raw": 395,
+      "gzip": 293
+    },
+    "vendor~logs": {
+      "raw": 568,
+      "gzip": 321
+    },
+    "vendor~lollipop": {
+      "raw": 417,
+      "gzip": 306
+    },
+    "vendor~luggage": {
+      "raw": 546,
+      "gzip": 341
+    },
+    "vendor~magnet": {
+      "raw": 566,
+      "gzip": 346
+    },
+    "vendor~mail-badge": {
+      "raw": 601,
+      "gzip": 406
+    },
+    "vendor~mail-check": {
+      "raw": 449,
+      "gzip": 327
+    },
+    "vendor~mail-clock": {
+      "raw": 516,
+      "gzip": 356
+    },
+    "vendor~mail-dot": {
+      "raw": 456,
+      "gzip": 332
+    },
+    "vendor~mail-minus": {
+      "raw": 443,
+      "gzip": 327
+    },
+    "vendor~mail-pen": {
+      "raw": 553,
+      "gzip": 378
+    },
+    "vendor~mail-plus": {
+      "raw": 479,
+      "gzip": 338
+    },
+    "vendor~mail-question-mark": {
+      "raw": 586,
+      "gzip": 401
+    },
+    "vendor~mail-search": {
+      "raw": 566,
+      "gzip": 381
+    },
+    "vendor~mail-warning": {
+      "raw": 489,
+      "gzip": 342
+    },
+    "vendor~mail-x": {
+      "raw": 494,
+      "gzip": 334
+    },
+    "vendor~mailbox": {
+      "raw": 527,
+      "gzip": 367
+    },
+    "vendor~mails": {
+      "raw": 469,
+      "gzip": 338
+    },
+    "vendor~map-minus": {
+      "raw": 582,
+      "gzip": 380
+    },
+    "vendor~map-pin": {
+      "raw": 424,
+      "gzip": 326
+    },
+    "vendor~map-pin-check": {
+      "raw": 511,
+      "gzip": 371
+    },
+    "vendor~map-pin-check-inside": {
+      "raw": 431,
+      "gzip": 326
+    },
+    "vendor~map-pin-house": {
+      "raw": 570,
+      "gzip": 387
+    },
+    "vendor~map-pin-minus": {
+      "raw": 494,
+      "gzip": 363
+    },
+    "vendor~map-pin-minus-inside": {
+      "raw": 425,
+      "gzip": 322
+    },
+    "vendor~map-pin-off": {
+      "raw": 640,
+      "gzip": 418
+    },
+    "vendor~map-pin-pen": {
+      "raw": 569,
+      "gzip": 400
+    },
+    "vendor~map-pin-plus": {
+      "raw": 530,
+      "gzip": 374
+    },
+    "vendor~map-pin-plus-inside": {
+      "raw": 460,
+      "gzip": 335
+    },
+    "vendor~map-pin-search": {
+      "raw": 549,
+      "gzip": 377
+    },
+    "vendor~map-pin-x": {
+      "raw": 536,
+      "gzip": 374
+    },
+    "vendor~map-pin-x-inside": {
+      "raw": 468,
+      "gzip": 336
+    },
+    "vendor~map-pinned": {
+      "raw": 587,
+      "gzip": 407
+    },
+    "vendor~map-plus": {
+      "raw": 618,
+      "gzip": 396
+    },
+    "vendor~mars": {
+      "raw": 374,
+      "gzip": 290
+    },
+    "vendor~mars-stroke": {
+      "raw": 418,
+      "gzip": 308
+    },
+    "vendor~martini": {
+      "raw": 424,
+      "gzip": 301
+    },
+    "vendor~maximize": {
+      "raw": 458,
+      "gzip": 305
+    },
+    "vendor~medal": {
+      "raw": 600,
+      "gzip": 388
+    },
+    "vendor~megaphone-off": {
+      "raw": 591,
+      "gzip": 380
+    },
+    "vendor~merge": {
+      "raw": 391,
+      "gzip": 297
+    },
+    "vendor~mermaid.core": {
+      "raw": 41717,
+      "gzip": 12788
+    },
+    "vendor~mermaid.core~cynefinDiagram-WF24UDRP~wardleyDiagram-IVAIDKWA~usecaseDiagram-WPOLBNNX~dhdce1lr": {
+      "raw": 19362,
+      "gzip": 7121
+    },
+    "vendor~mermaid.core~cynefinDiagram-WF24UDRP~wardleyDiagram-IVAIDKWA~usecaseDiagram-WPOLBNNX~iai7u46r": {
+      "raw": 1871,
+      "gzip": 829
+    },
+    "vendor~mermaid.core~kanban-definition-FNSA4HC5~sequenceDiagram-BLEHNHQU~swimlanesDiagram-AY~r7qu6ojr": {
+      "raw": 46525,
+      "gzip": 15424
+    },
+    "vendor~mermaid.core~pegDiagram-ECIUJNBX~abnfDiagram-WEYOIA3C~ebnfDiagram-V4P3TTPT~railroadD~d3byfp4d": {
+      "raw": 697,
+      "gzip": 372
+    },
+    "vendor~mermaid.core~pegDiagram-ECIUJNBX~abnfDiagram-WEYOIA3C~ebnfDiagram-V4P3TTPT~railroadD~f4xslagy": {
+      "raw": 227,
+      "gzip": 193
+    },
+    "vendor~mermaid.core~pegDiagram-ECIUJNBX~abnfDiagram-WEYOIA3C~ebnfDiagram-V4P3TTPT~railroadD~fayrfitb": {
+      "raw": 214171,
+      "gzip": 26789
+    },
+    "vendor~mermaid.core~pegDiagram-ECIUJNBX~abnfDiagram-WEYOIA3C~ebnfDiagram-V4P3TTPT~railroadD~jm5uqzzz": {
+      "raw": 113479,
+      "gzip": 35980
+    },
+    "vendor~mermaid.core~usecaseDiagram-WPOLBNNX~architectureDiagram-ZHVYKT53~blockDiagram-RJAE7~ock3dsbn": {
+      "raw": 52756,
+      "gzip": 16849
+    },
+    "vendor~mermaid.core~usecaseDiagram-WPOLBNNX~architectureDiagram-ZHVYKT53~diagram-ODIL2UCW~b~n1siqltl": {
+      "raw": 6499,
+      "gzip": 2934
+    },
+    "vendor~mermaid.core~usecaseDiagram-WPOLBNNX~blockDiagram-RJAE7QA3~kanban-definition-FNSA4HC~ckgdie6d": {
+      "raw": 116718,
+      "gzip": 28850
+    },
+    "vendor~mermaid.core~usecaseDiagram-WPOLBNNX~blockDiagram-RJAE7QA3~kanban-definition-FNSA4HC~h71mcppk": {
+      "raw": 1902,
+      "gzip": 1008
+    },
+    "vendor~mermaid.core~usecaseDiagram-WPOLBNNX~blockDiagram-RJAE7QA3~kanban-definition-FNSA4HC~kgpvqz2e": {
+      "raw": 828,
+      "gzip": 548
+    },
+    "vendor~mermaid.core~usecaseDiagram-WPOLBNNX~blockDiagram-RJAE7QA3~mindmap-definition-6OY57U~gqvhefqc": {
+      "raw": 38893,
+      "gzip": 8461
+    },
+    "vendor~mermaid.core~usecaseDiagram-WPOLBNNX~blockDiagram-RJAE7QA3~mindmap-definition-6OY57U~nxm0umws": {
+      "raw": 1066,
+      "gzip": 569
+    },
+    "vendor~mermaid.core~usecaseDiagram-WPOLBNNX~diagram-CBK3MWTC~blockDiagram-RJAE7QA3~kanban-d~cv03vfo1": {
+      "raw": 2234,
+      "gzip": 1072
+    },
+    "vendor~mermaid.core~usecaseDiagram-WPOLBNNX~kanban-definition-FNSA4HC5~mindmap-definition-6~bxu48har": {
+      "raw": 15879,
+      "gzip": 4263
+    },
+    "vendor~mermaid.core~usecaseDiagram-WPOLBNNX~mindmap-definition-6OY57UG3~stateDiagram-v2-A6I~bxvssg6j": {
+      "raw": 5838,
+      "gzip": 1834
+    },
+    "vendor~mermaid.core~usecaseDiagram-WPOLBNNX~vennDiagram-Q3Y3IDCW~ishikawaDiagram-HPEHV2GE~b~isbblz38": {
+      "raw": 27208,
+      "gzip": 8855
+    },
+    "vendor~message-circle-check": {
+      "raw": 459,
+      "gzip": 342
+    },
+    "vendor~message-circle-code": {
+      "raw": 496,
+      "gzip": 349
+    },
+    "vendor~message-circle-dashed": {
+      "raw": 764,
+      "gzip": 427
+    },
+    "vendor~message-circle-dashed-check": {
+      "raw": 804,
+      "gzip": 450
+    },
+    "vendor~message-circle-heart": {
+      "raw": 548,
+      "gzip": 389
+    },
+    "vendor~message-circle-more": {
+      "raw": 527,
+      "gzip": 356
+    },
+    "vendor~message-circle-off": {
+      "raw": 535,
+      "gzip": 367
+    },
+    "vendor~message-circle-plus": {
+      "raw": 483,
+      "gzip": 346
+    },
+    "vendor~message-circle-question-mark": {
+      "raw": 560,
+      "gzip": 383
+    },
+    "vendor~message-circle-reply": {
+      "raw": 507,
+      "gzip": 357
+    },
+    "vendor~message-circle-text": {
+      "raw": 503,
+      "gzip": 352
+    },
+    "vendor~message-circle-warning": {
+      "raw": 489,
+      "gzip": 348
+    },
+    "vendor~message-circle-x": {
+      "raw": 483,
+      "gzip": 346
+    },
+    "vendor~message-square-check": {
+      "raw": 444,
+      "gzip": 330
+    },
+    "vendor~message-square-code": {
+      "raw": 488,
+      "gzip": 341
+    },
+    "vendor~message-square-dashed": {
+      "raw": 706,
+      "gzip": 399
+    },
+    "vendor~message-square-diff": {
+      "raw": 512,
+      "gzip": 347
+    },
+    "vendor~message-square-dot": {
+      "raw": 440,
+      "gzip": 338
+    },
+    "vendor~message-square-heart": {
+      "raw": 628,
+      "gzip": 418
+    },
+    "vendor~message-square-lock": {
+      "raw": 511,
+      "gzip": 371
+    },
+    "vendor~message-square-off": {
+      "raw": 476,
+      "gzip": 346
+    },
+    "vendor~message-square-quote": {
+      "raw": 510,
+      "gzip": 345
+    },
+    "vendor~message-square-reply": {
+      "raw": 500,
+      "gzip": 350
+    },
+    "vendor~message-square-share": {
+      "raw": 467,
+      "gzip": 333
+    },
+    "vendor~message-square-text": {
+      "raw": 511,
+      "gzip": 349
+    },
+    "vendor~message-square-warning": {
+      "raw": 481,
+      "gzip": 342
+    },
+    "vendor~message-square-x": {
+      "raw": 483,
+      "gzip": 338
+    },
+    "vendor~messages-circle": {
+      "raw": 548,
+      "gzip": 382
+    },
+    "vendor~messages-square": {
+      "raw": 530,
+      "gzip": 356
+    },
+    "vendor~metronome": {
+      "raw": 518,
+      "gzip": 375
+    },
+    "vendor~mic-audio-lines": {
+      "raw": 618,
+      "gzip": 372
+    },
+    "vendor~mic-signal": {
+      "raw": 616,
+      "gzip": 385
+    },
+    "vendor~mic-vocal": {
+      "raw": 543,
+      "gzip": 395
+    },
+    "vendor~microchip": {
+      "raw": 641,
+      "gzip": 359
+    },
+    "vendor~microwave": {
+      "raw": 487,
+      "gzip": 324
+    },
+    "vendor~midi-port": {
+      "raw": 566,
+      "gzip": 349
+    },
+    "vendor~milestone": {
+      "raw": 480,
+      "gzip": 330
+    },
+    "vendor~milk": {
+      "raw": 537,
+      "gzip": 355
+    },
+    "vendor~milk-off": {
+      "raw": 598,
+      "gzip": 398
+    },
+    "vendor~mindmap-definition-6OY57UG3": {
+      "raw": 25311,
+      "gzip": 8375
+    },
+    "vendor~minimize": {
+      "raw": 458,
+      "gzip": 305
+    },
+    "vendor~mirror-rectangular": {
+      "raw": 400,
+      "gzip": 304
+    },
+    "vendor~mirror-round": {
+      "raw": 459,
+      "gzip": 319
+    },
+    "vendor~monitor-check": {
+      "raw": 434,
+      "gzip": 319
+    },
+    "vendor~monitor-cloud": {
+      "raw": 462,
+      "gzip": 334
+    },
+    "vendor~monitor-cog": {
+      "raw": 864,
+      "gzip": 464
+    },
+    "vendor~monitor-dot": {
+      "raw": 465,
+      "gzip": 329
+    },
+    "vendor~monitor-down": {
+      "raw": 471,
+      "gzip": 331
+    },
+    "vendor~monitor-off": {
+      "raw": 516,
+      "gzip": 343
+    },
+    "vendor~monitor-pause": {
+      "raw": 466,
+      "gzip": 323
+    },
+    "vendor~monitor-pc": {
+      "raw": 567,
+      "gzip": 364
+    },
+    "vendor~monitor-smartphone": {
+      "raw": 491,
+      "gzip": 343
+    },
+    "vendor~monitor-speaker": {
+      "raw": 513,
+      "gzip": 357
+    },
+    "vendor~monitor-stop": {
+      "raw": 455,
+      "gzip": 318
+    },
+    "vendor~monitor-up": {
+      "raw": 468,
+      "gzip": 328
+    },
+    "vendor~moon-star": {
+      "raw": 459,
+      "gzip": 336
+    },
+    "vendor~mop": {
+      "raw": 506,
+      "gzip": 355
+    },
+    "vendor~mop-sparkles": {
+      "raw": 774,
+      "gzip": 449
+    },
+    "vendor~mosque": {
+      "raw": 668,
+      "gzip": 432
+    },
+    "vendor~motorbike": {
+      "raw": 554,
+      "gzip": 362
+    },
+    "vendor~mountain": {
+      "raw": 301,
+      "gzip": 252
+    },
+    "vendor~mountain-snow": {
+      "raw": 399,
+      "gzip": 314
+    },
+    "vendor~mouse": {
+      "raw": 347,
+      "gzip": 278
+    },
+    "vendor~mouse-left": {
+      "raw": 413,
+      "gzip": 320
+    },
+    "vendor~mouse-off": {
+      "raw": 470,
+      "gzip": 324
+    },
+    "vendor~mouse-pointer": {
+      "raw": 471,
+      "gzip": 345
+    },
+    "vendor~mouse-pointer-2-off": {
+      "raw": 538,
+      "gzip": 376
+    },
+    "vendor~mouse-pointer-ban": {
+      "raw": 507,
+      "gzip": 364
+    },
+    "vendor~mouse-pointer-click": {
+      "raw": 579,
+      "gzip": 388
+    },
+    "vendor~mouse-right": {
+      "raw": 417,
+      "gzip": 324
+    },
+    "vendor~mouth": {
+      "raw": 551,
+      "gzip": 373
+    },
+    "vendor~mouth-off": {
+      "raw": 678,
+      "gzip": 436
+    },
+    "vendor~move": {
+      "raw": 485,
+      "gzip": 315
+    },
+    "vendor~move-3d": {
+      "raw": 429,
+      "gzip": 305
+    },
+    "vendor~move-diagonal": {
+      "raw": 370,
+      "gzip": 280
+    },
+    "vendor~move-diagonal-2": {
+      "raw": 372,
+      "gzip": 281
+    },
+    "vendor~move-down": {
+      "raw": 332,
+      "gzip": 264
+    },
+    "vendor~move-down-left": {
+      "raw": 333,
+      "gzip": 267
+    },
+    "vendor~move-down-right": {
+      "raw": 335,
+      "gzip": 269
+    },
+    "vendor~move-horizontal": {
+      "raw": 375,
+      "gzip": 282
+    },
+    "vendor~move-left": {
+      "raw": 329,
+      "gzip": 263
+    },
+    "vendor~move-right": {
+      "raw": 333,
+      "gzip": 265
+    },
+    "vendor~move-up": {
+      "raw": 327,
+      "gzip": 263
+    },
+    "vendor~move-up-left": {
+      "raw": 330,
+      "gzip": 267
+    },
+    "vendor~move-up-right": {
+      "raw": 332,
+      "gzip": 269
+    },
+    "vendor~move-vertical": {
+      "raw": 373,
+      "gzip": 281
+    },
+    "vendor~navigation": {
+      "raw": 313,
+      "gzip": 253
+    },
+    "vendor~navigation-2": {
+      "raw": 315,
+      "gzip": 258
+    },
+    "vendor~navigation-2-off": {
+      "raw": 428,
+      "gzip": 316
+    },
+    "vendor~navigation-off": {
+      "raw": 427,
+      "gzip": 315
+    },
+    "vendor~nepali-rupee": {
+      "raw": 499,
+      "gzip": 339
+    },
+    "vendor~nfc": {
+      "raw": 493,
+      "gzip": 331
+    },
+    "vendor~non-binary": {
+      "raw": 412,
+      "gzip": 303
+    },
+    "vendor~notebook": {
+      "raw": 494,
+      "gzip": 324
+    },
+    "vendor~notebook-dot": {
+      "raw": 575,
+      "gzip": 360
+    },
+    "vendor~notebook-tabs": {
+      "raw": 609,
+      "gzip": 357
+    },
+    "vendor~notebook-text": {
+      "raw": 577,
+      "gzip": 353
+    },
+    "vendor~notepad-text": {
+      "raw": 533,
+      "gzip": 339
+    },
+    "vendor~notepad-text-dashed": {
+      "raw": 796,
+      "gzip": 411
+    },
+    "vendor~nut": {
+      "raw": 709,
+      "gzip": 474
+    },
+    "vendor~nut-off": {
+      "raw": 795,
+      "gzip": 500
+    },
+    "vendor~octagon": {
+      "raw": 510,
+      "gzip": 324
+    },
+    "vendor~octagon-minus": {
+      "raw": 552,
+      "gzip": 346
+    },
+    "vendor~octagon-pause": {
+      "raw": 616,
+      "gzip": 371
+    },
+    "vendor~omega": {
+      "raw": 395,
+      "gzip": 298
+    },
+    "vendor~option": {
+      "raw": 374,
+      "gzip": 291
+    },
+    "vendor~orbit": {
+      "raw": 520,
+      "gzip": 343
+    },
+    "vendor~origami": {
+      "raw": 624,
+      "gzip": 419
+    },
+    "vendor~package-2": {
+      "raw": 503,
+      "gzip": 347
+    },
+    "vendor~package-check": {
+      "raw": 580,
+      "gzip": 387
+    },
+    "vendor~package-minus": {
+      "raw": 571,
+      "gzip": 377
+    },
+    "vendor~package-open": {
+      "raw": 744,
+      "gzip": 436
+    },
+    "vendor~package-plus": {
+      "raw": 611,
+      "gzip": 394
+    },
+    "vendor~package-search": {
+      "raw": 637,
+      "gzip": 413
+    },
+    "vendor~package-x": {
+      "raw": 616,
+      "gzip": 392
+    },
+    "vendor~packet-JDAUHWVQ": {
+      "raw": 416,
+      "gzip": 260
+    },
+    "vendor~paint-bucket": {
+      "raw": 717,
+      "gzip": 440
+    },
+    "vendor~paint-roller": {
+      "raw": 469,
+      "gzip": 328
+    },
+    "vendor~paintbrush": {
+      "raw": 704,
+      "gzip": 447
+    },
+    "vendor~paintbrush-vertical": {
+      "raw": 573,
+      "gzip": 358
+    },
+    "vendor~panda": {
+      "raw": 664,
+      "gzip": 405
+    },
+    "vendor~panel-bottom-dashed": {
+      "raw": 505,
+      "gzip": 335
+    },
+    "vendor~panel-left-dashed": {
+      "raw": 497,
+      "gzip": 330
+    },
+    "vendor~panel-left-right-dashed": {
+      "raw": 622,
+      "gzip": 362
+    },
+    "vendor~panel-right-dashed": {
+      "raw": 503,
+      "gzip": 334
+    },
+    "vendor~panel-top-bottom-dashed": {
+      "raw": 616,
+      "gzip": 359
+    },
+    "vendor~panel-top-dashed": {
+      "raw": 495,
+      "gzip": 332
+    },
+    "vendor~panels-left-bottom": {
+      "raw": 397,
+      "gzip": 298
+    },
+    "vendor~panels-right-bottom": {
+      "raw": 399,
+      "gzip": 300
+    },
+    "vendor~panels-top-left": {
+      "raw": 412,
+      "gzip": 310
+    },
+    "vendor~paper-bag": {
+      "raw": 556,
+      "gzip": 397
+    },
+    "vendor~parasol": {
+      "raw": 468,
+      "gzip": 349
+    },
+    "vendor~parentheses": {
+      "raw": 352,
+      "gzip": 271
+    },
+    "vendor~park": {
+      "raw": 671,
+      "gzip": 425
+    },
+    "vendor~parking-meter": {
+      "raw": 527,
+      "gzip": 345
+    },
+    "vendor~party-popper": {
+      "raw": 895,
+      "gzip": 520
+    },
+    "vendor~paw-print": {
+      "raw": 512,
+      "gzip": 347
+    },
+    "vendor~pc-case": {
+      "raw": 423,
+      "gzip": 307
+    },
+    "vendor~pegDiagram-ECIUJNBX": {
+      "raw": 2816,
+      "gzip": 1118
+    },
+    "vendor~pegDiagram-ECIUJNBX~abnfDiagram-WEYOIA3C~ebnfDiagram-V4P3TTPT~railroadDiagram-Y72NRBL7": {
+      "raw": 16176,
+      "gzip": 4503
+    },
+    "vendor~pegDiagram-ECIUJNBX~abnfDiagram-WEYOIA3C~ebnfDiagram-V4P3TTPT~railroadDiagram-Y72NRB~i9zxgkm5": {
+      "raw": 400,
+      "gzip": 280
+    },
+    "vendor~pegDiagram-ECIUJNBX~abnfDiagram-WEYOIA3C~ebnfDiagram-V4P3TTPT~railroadDiagram-Y72NRB~jcgido54": {
+      "raw": 17990,
+      "gzip": 4273
+    },
+    "vendor~pegDiagram-ECIUJNBX~abnfDiagram-WEYOIA3C~ebnfDiagram-V4P3TTPT~railroadDiagram-Y72NRB~lcw45lq4": {
+      "raw": 630617,
+      "gzip": 127469
+    },
+    "vendor~pen": {
+      "raw": 419,
+      "gzip": 319
+    },
+    "vendor~pen-off": {
+      "raw": 510,
+      "gzip": 354
+    },
+    "vendor~pen-tool": {
+      "raw": 682,
+      "gzip": 421
+    },
+    "vendor~pencil-line": {
+      "raw": 483,
+      "gzip": 344
+    },
+    "vendor~pencil-off": {
+      "raw": 551,
+      "gzip": 370
+    },
+    "vendor~pencil-sparkles": {
+      "raw": 688,
+      "gzip": 420
+    },
+    "vendor~pentagon": {
+      "raw": 415,
+      "gzip": 307
+    },
+    "vendor~perfume-bottle": {
+      "raw": 763,
+      "gzip": 469
+    },
+    "vendor~person-standing": {
+      "raw": 422,
+      "gzip": 311
+    },
+    "vendor~phi": {
+      "raw": 328,
+      "gzip": 265
+    },
+    "vendor~philippine-peso": {
+      "raw": 397,
+      "gzip": 291
+    },
+    "vendor~phone": {
+      "raw": 487,
+      "gzip": 332
+    },
+    "vendor~phone-call": {
+      "raw": 588,
+      "gzip": 372
+    },
+    "vendor~phone-forwarded": {
+      "raw": 575,
+      "gzip": 374
+    },
+    "vendor~phone-incoming": {
+      "raw": 572,
+      "gzip": 372
+    },
+    "vendor~phone-log": {
+      "raw": 569,
+      "gzip": 377
+    },
+    "vendor~phone-missed": {
+      "raw": 570,
+      "gzip": 368
+    },
+    "vendor~phone-off": {
+      "raw": 613,
+      "gzip": 389
+    },
+    "vendor~phone-outgoing": {
+      "raw": 573,
+      "gzip": 373
+    },
+    "vendor~pi": {
+      "raw": 401,
+      "gzip": 301
+    },
+    "vendor~piano": {
+      "raw": 551,
+      "gzip": 347
+    },
+    "vendor~pickaxe": {
+      "raw": 755,
+      "gzip": 449
+    },
+    "vendor~picture-in-picture": {
+      "raw": 505,
+      "gzip": 347
+    },
+    "vendor~picture-in-picture-2": {
+      "raw": 412,
+      "gzip": 318
+    },
+    "vendor~pie-XZMESJXO": {
+      "raw": 413,
+      "gzip": 258
+    },
+    "vendor~pieDiagram-GNMPY74T": {
+      "raw": 5745,
+      "gzip": 2310
+    },
+    "vendor~pilcrow": {
+      "raw": 380,
+      "gzip": 282
+    },
+    "vendor~pilcrow-left": {
+      "raw": 458,
+      "gzip": 315
+    },
+    "vendor~pilcrow-right": {
+      "raw": 459,
+      "gzip": 313
+    },
+    "vendor~pill": {
+      "raw": 378,
+      "gzip": 284
+    },
+    "vendor~pill-bottle": {
+      "raw": 454,
+      "gzip": 331
+    },
+    "vendor~pizza": {
+      "raw": 608,
+      "gzip": 387
+    },
+    "vendor~plane": {
+      "raw": 471,
+      "gzip": 352
+    },
+    "vendor~plane-landing": {
+      "raw": 574,
+      "gzip": 403
+    },
+    "vendor~plane-takeoff": {
+      "raw": 565,
+      "gzip": 395
+    },
+    "vendor~plant-pot": {
+      "raw": 513,
+      "gzip": 361
+    },
+    "vendor~play-off": {
+      "raw": 440,
+      "gzip": 325
+    },
+    "vendor~playing-card": {
+      "raw": 448,
+      "gzip": 340
+    },
+    "vendor~playing-cards": {
+      "raw": 521,
+      "gzip": 375
+    },
+    "vendor~playing-cards-fan": {
+      "raw": 617,
+      "gzip": 398
+    },
+    "vendor~plug-2": {
+      "raw": 447,
+      "gzip": 311
+    },
+    "vendor~pluginStyleRuntime~pluginTailwindAdapter": {
+      "raw": 283343,
+      "gzip": 70054
+    },
+    "vendor~pocket-knife": {
+      "raw": 552,
+      "gzip": 359
+    },
+    "vendor~podium": {
+      "raw": 486,
+      "gzip": 315
+    },
+    "vendor~pointer": {
+      "raw": 625,
+      "gzip": 375
+    },
+    "vendor~pointer-off": {
+      "raw": 654,
+      "gzip": 411
+    },
+    "vendor~popcorn": {
+      "raw": 547,
+      "gzip": 359
+    },
+    "vendor~popsicle": {
+      "raw": 406,
+      "gzip": 309
+    },
+    "vendor~pound-sterling": {
+      "raw": 419,
+      "gzip": 298
+    },
+    "vendor~power": {
+      "raw": 338,
+      "gzip": 270
+    },
+    "vendor~presentation": {
+      "raw": 399,
+      "gzip": 295
+    },
+    "vendor~printer": {
+      "raw": 484,
+      "gzip": 337
+    },
+    "vendor~printer-3d": {
+      "raw": 657,
+      "gzip": 397
+    },
+    "vendor~printer-check": {
+      "raw": 540,
+      "gzip": 344
+    },
+    "vendor~printer-x": {
+      "raw": 569,
+      "gzip": 355
+    },
+    "vendor~projector": {
+      "raw": 552,
+      "gzip": 361
+    },
+    "vendor~proportions": {
+      "raw": 406,
+      "gzip": 304
+    },
+    "vendor~purify.es~mermaid.core": {
+      "raw": 29303,
+      "gzip": 11584
+    },
+    "vendor~pyramid": {
+      "raw": 423,
+      "gzip": 314
+    },
+    "vendor~qr-code": {
+      "raw": 815,
+      "gzip": 410
+    },
+    "vendor~quadrantDiagram-D57K4MC3": {
+      "raw": 33966,
+      "gzip": 9776
+    },
+    "vendor~quote": {
+      "raw": 554,
+      "gzip": 302
+    },
+    "vendor~rabbit": {
+      "raw": 606,
+      "gzip": 396
+    },
+    "vendor~radar-ABXABTNO": {
+      "raw": 415,
+      "gzip": 259
+    },
+    "vendor~radiation": {
+      "raw": 695,
+      "gzip": 413
+    },
+    "vendor~radical": {
+      "raw": 371,
+      "gzip": 298
+    },
+    "vendor~radio-off": {
+      "raw": 606,
+      "gzip": 382
+    },
+    "vendor~radio-receiver": {
+      "raw": 431,
+      "gzip": 311
+    },
+    "vendor~radius": {
+      "raw": 456,
+      "gzip": 321
+    },
+    "vendor~railroad-I3PHUGI6": {
+      "raw": 418,
+      "gzip": 260
+    },
+    "vendor~railroad-abnf-LNEFI6M7": {
+      "raw": 422,
+      "gzip": 262
+    },
+    "vendor~railroad-ebnf-DWYD2UWJ": {
+      "raw": 422,
+      "gzip": 262
+    },
+    "vendor~railroad-peg-JR7BVNR7": {
+      "raw": 421,
+      "gzip": 261
+    },
+    "vendor~railroadDiagram-Y72NRBL7": {
+      "raw": 2464,
+      "gzip": 942
+    },
+    "vendor~rainbow": {
+      "raw": 396,
+      "gzip": 285
+    },
+    "vendor~rat": {
+      "raw": 606,
+      "gzip": 396
+    },
+    "vendor~ratio": {
+      "raw": 377,
+      "gzip": 275
+    },
+    "vendor~receipt-cent": {
+      "raw": 852,
+      "gzip": 397
+    },
+    "vendor~receipt-euro": {
+      "raw": 851,
+      "gzip": 398
+    },
+    "vendor~receipt-indian-rupee": {
+      "raw": 850,
+      "gzip": 395
+    },
+    "vendor~receipt-japanese-yen": {
+      "raw": 876,
+      "gzip": 405
+    },
+    "vendor~receipt-pound-sterling": {
+      "raw": 853,
+      "gzip": 400
+    },
+    "vendor~receipt-russian-ruble": {
+      "raw": 819,
+      "gzip": 387
+    },
+    "vendor~receipt-swiss-franc": {
+      "raw": 837,
+      "gzip": 392
+    },
+    "vendor~receipt-text": {
+      "raw": 828,
+      "gzip": 382
+    },
+    "vendor~receipt-turkish-lira": {
+      "raw": 815,
+      "gzip": 388
+    },
+    "vendor~rectangle-circle": {
+      "raw": 374,
+      "gzip": 290
+    },
+    "vendor~rectangle-ellipsis": {
+      "raw": 463,
+      "gzip": 322
+    },
+    "vendor~rectangle-goggles": {
+      "raw": 423,
+      "gzip": 309
+    },
+    "vendor~rectangle-horizontal": {
+      "raw": 326,
+      "gzip": 262
+    },
+    "vendor~rectangle-vertical": {
+      "raw": 324,
+      "gzip": 260
+    },
+    "vendor~recycle": {
+      "raw": 747,
+      "gzip": 456
+    },
+    "vendor~redo": {
+      "raw": 353,
+      "gzip": 277
+    },
+    "vendor~redo-dot": {
+      "raw": 405,
+      "gzip": 303
+    },
+    "vendor~refresh-ccw": {
+      "raw": 486,
+      "gzip": 324
+    },
+    "vendor~refresh-ccw-dot": {
+      "raw": 538,
+      "gzip": 351
+    },
+    "vendor~refresh-cw-off": {
+      "raw": 667,
+      "gzip": 416
+    },
+    "vendor~refrigerator": {
+      "raw": 424,
+      "gzip": 306
+    },
+    "vendor~regex": {
+      "raw": 475,
+      "gzip": 319
+    },
+    "vendor~remove-formatting": {
+      "raw": 450,
+      "gzip": 312
+    },
+    "vendor~repeat": {
+      "raw": 437,
+      "gzip": 304
+    },
+    "vendor~repeat-1": {
+      "raw": 478,
+      "gzip": 318
+    },
+    "vendor~repeat-2": {
+      "raw": 438,
+      "gzip": 310
+    },
+    "vendor~repeat-off": {
+      "raw": 593,
+      "gzip": 370
+    },
+    "vendor~replace": {
+      "raw": 598,
+      "gzip": 370
+    },
+    "vendor~replace-all": {
+      "raw": 732,
+      "gzip": 400
+    },
+    "vendor~reply": {
+      "raw": 341,
+      "gzip": 272
+    },
+    "vendor~reply-all": {
+      "raw": 388,
+      "gzip": 286
+    },
+    "vendor~requirementDiagram-EQYSW5RA": {
+      "raw": 32713,
+      "gzip": 10061
+    },
+    "vendor~rewind": {
+      "raw": 446,
+      "gzip": 289
+    },
+    "vendor~ribbon": {
+      "raw": 749,
+      "gzip": 465
+    },
+    "vendor~road": {
+      "raw": 478,
+      "gzip": 325
+    },
+    "vendor~robot-arm": {
+      "raw": 574,
+      "gzip": 390
+    },
+    "vendor~robot-vacuum": {
+      "raw": 577,
+      "gzip": 352
+    },
+    "vendor~rocking-chair": {
+      "raw": 463,
+      "gzip": 325
+    },
+    "vendor~roller-coaster": {
+      "raw": 570,
+      "gzip": 355
+    },
+    "vendor~rose": {
+      "raw": 609,
+      "gzip": 415
+    },
+    "vendor~rotate-3d": {
+      "raw": 474,
+      "gzip": 336
+    },
+    "vendor~rotate-ccw-key": {
+      "raw": 488,
+      "gzip": 336
+    },
+    "vendor~rotate-ccw-square": {
+      "raw": 437,
+      "gzip": 312
+    },
+    "vendor~rotate-cw-clock": {
+      "raw": 404,
+      "gzip": 305
+    },
+    "vendor~rotate-cw-fading-clock": {
+      "raw": 766,
+      "gzip": 434
+    },
+    "vendor~route": {
+      "raw": 419,
+      "gzip": 305
+    },
+    "vendor~route-off": {
+      "raw": 598,
+      "gzip": 381
+    },
+    "vendor~router": {
+      "raw": 544,
+      "gzip": 359
+    },
+    "vendor~rows-2": {
+      "raw": 366,
+      "gzip": 286
+    },
+    "vendor~rows-3": {
+      "raw": 415,
+      "gzip": 310
+    },
+    "vendor~rows-4": {
+      "raw": 426,
+      "gzip": 304
+    },
+    "vendor~rss": {
+      "raw": 389,
+      "gzip": 292
+    },
+    "vendor~rugby-ball": {
+      "raw": 611,
+      "gzip": 390
+    },
+    "vendor~ruler-dimension-line": {
+      "raw": 584,
+      "gzip": 355
+    },
+    "vendor~russian-ruble": {
+      "raw": 344,
+      "gzip": 269
+    },
+    "vendor~sailboat": {
+      "raw": 491,
+      "gzip": 336
+    },
+    "vendor~salad": {
+      "raw": 613,
+      "gzip": 402
+    },
+    "vendor~sandwich": {
+      "raw": 605,
+      "gzip": 398
+    },
+    "vendor~sankeyDiagram-SY24JHO5": {
+      "raw": 23445,
+      "gzip": 8407
+    },
+    "vendor~satellite": {
+      "raw": 773,
+      "gzip": 401
+    },
+    "vendor~satellite-dish": {
+      "raw": 527,
+      "gzip": 364
+    },
+    "vendor~saudi-riyal": {
+      "raw": 479,
+      "gzip": 337
+    },
+    "vendor~save-all": {
+      "raw": 566,
+      "gzip": 354
+    },
+    "vendor~save-check": {
+      "raw": 537,
+      "gzip": 356
+    },
+    "vendor~save-off": {
+      "raw": 589,
+      "gzip": 370
+    },
+    "vendor~save-pen": {
+      "raw": 610,
+      "gzip": 397
+    },
+    "vendor~save-plus": {
+      "raw": 547,
+      "gzip": 356
+    },
+    "vendor~scale-3d": {
+      "raw": 465,
+      "gzip": 325
+    },
+    "vendor~scaling": {
+      "raw": 451,
+      "gzip": 312
+    },
+    "vendor~scan-barcode": {
+      "raw": 572,
+      "gzip": 345
+    },
+    "vendor~scan-box": {
+      "raw": 735,
+      "gzip": 441
+    },
+    "vendor~scan-eye": {
+      "raw": 626,
+      "gzip": 384
+    },
+    "vendor~scan-face": {
+      "raw": 586,
+      "gzip": 353
+    },
+    "vendor~scan-heart": {
+      "raw": 573,
+      "gzip": 368
+    },
+    "vendor~scan-line": {
+      "raw": 496,
+      "gzip": 323
+    },
+    "vendor~scan-qr-code": {
+      "raw": 654,
+      "gzip": 393
+    },
+    "vendor~scan-search": {
+      "raw": 552,
+      "gzip": 354
+    },
+    "vendor~scan-square": {
+      "raw": 525,
+      "gzip": 343
+    },
+    "vendor~scan-text": {
+      "raw": 567,
+      "gzip": 346
+    },
+    "vendor~school": {
+      "raw": 620,
+      "gzip": 399
+    },
+    "vendor~scissors-line-dashed": {
+      "raw": 562,
+      "gzip": 356
+    },
+    "vendor~scooter": {
+      "raw": 497,
+      "gzip": 349
+    },
+    "vendor~scratch-blocks": {
+      "raw": 667,
+      "gzip": 395
+    },
+    "vendor~screen-share-off": {
+      "raw": 492,
+      "gzip": 326
+    },
+    "vendor~screw": {
+      "raw": 734,
+      "gzip": 450
+    },
+    "vendor~scroll": {
+      "raw": 434,
+      "gzip": 309
+    },
+    "vendor~search-alert": {
+      "raw": 418,
+      "gzip": 304
+    },
+    "vendor~search-check": {
+      "raw": 385,
+      "gzip": 292
+    },
+    "vendor~search-code": {
+      "raw": 437,
+      "gzip": 317
+    },
+    "vendor~search-slash": {
+      "raw": 385,
+      "gzip": 294
+    },
+    "vendor~search-x": {
+      "raw": 422,
+      "gzip": 304
+    },
+    "vendor~section": {
+      "raw": 395,
+      "gzip": 289
+    },
+    "vendor~send-to-back": {
+      "raw": 486,
+      "gzip": 321
+    },
+    "vendor~separator-horizontal": {
+      "raw": 381,
+      "gzip": 287
+    },
+    "vendor~separator-vertical": {
+      "raw": 379,
+      "gzip": 282
+    },
+    "vendor~sequenceDiagram-BLEHNHQU": {
+      "raw": 118920,
+      "gzip": 31588
+    },
+    "vendor~server-crash": {
+      "raw": 577,
+      "gzip": 343
+    },
+    "vendor~server-nas": {
+      "raw": 503,
+      "gzip": 330
+    },
+    "vendor~server-plus": {
+      "raw": 575,
+      "gzip": 348
+    },
+    "vendor~shapes": {
+      "raw": 482,
+      "gzip": 353
+    },
+    "vendor~share": {
+      "raw": 394,
+      "gzip": 288
+    },
+    "vendor~sheet": {
+      "raw": 534,
+      "gzip": 326
+    },
+    "vendor~shell": {
+      "raw": 403,
+      "gzip": 294
+    },
+    "vendor~shelving-unit": {
+      "raw": 576,
+      "gzip": 342
+    },
+    "vendor~shield-cog": {
+      "raw": 910,
+      "gzip": 510
+    },
+    "vendor~shield-cog-corner": {
+      "raw": 888,
+      "gzip": 492
+    },
+    "vendor~shield-ellipsis": {
+      "raw": 562,
+      "gzip": 378
+    },
+    "vendor~shield-half": {
+      "raw": 479,
+      "gzip": 352
+    },
+    "vendor~shield-house": {
+      "raw": 573,
+      "gzip": 396
+    },
+    "vendor~shield-keyhole": {
+      "raw": 523,
+      "gzip": 381
+    },
+    "vendor~shield-lock": {
+      "raw": 528,
+      "gzip": 387
+    },
+    "vendor~shield-minus": {
+      "raw": 479,
+      "gzip": 352
+    },
+    "vendor~shield-plus": {
+      "raw": 514,
+      "gzip": 364
+    },
+    "vendor~shield-question-mark": {
+      "raw": 582,
+      "gzip": 401
+    },
+    "vendor~shield-user": {
+      "raw": 552,
+      "gzip": 396
+    },
+    "vendor~shield-x": {
+      "raw": 547,
+      "gzip": 379
+    },
+    "vendor~ship": {
+      "raw": 640,
+      "gzip": 393
+    },
+    "vendor~ship-cargo": {
+      "raw": 724,
+      "gzip": 428
+    },
+    "vendor~ship-wheel": {
+      "raw": 684,
+      "gzip": 394
+    },
+    "vendor~shirt": {
+      "raw": 451,
+      "gzip": 331
+    },
+    "vendor~shopping-bag": {
+      "raw": 505,
+      "gzip": 346
+    },
+    "vendor~shopping-basket": {
+      "raw": 575,
+      "gzip": 360
+    },
+    "vendor~shopping-cart-minus": {
+      "raw": 602,
+      "gzip": 402
+    },
+    "vendor~shopping-cart-plus": {
+      "raw": 638,
+      "gzip": 413
+    },
+    "vendor~shovel": {
+      "raw": 615,
+      "gzip": 389
+    },
+    "vendor~shower-head": {
+      "raw": 662,
+      "gzip": 367
+    },
+    "vendor~shredder": {
+      "raw": 597,
+      "gzip": 368
+    },
+    "vendor~shrimp": {
+      "raw": 621,
+      "gzip": 411
+    },
+    "vendor~shrimp-off": {
+      "raw": 735,
+      "gzip": 458
+    },
+    "vendor~shrink": {
+      "raw": 469,
+      "gzip": 326
+    },
+    "vendor~shrub": {
+      "raw": 453,
+      "gzip": 326
+    },
+    "vendor~sigma": {
+      "raw": 380,
+      "gzip": 291
+    },
+    "vendor~signal": {
+      "raw": 433,
+      "gzip": 297
+    },
+    "vendor~signal-high": {
+      "raw": 401,
+      "gzip": 287
+    },
+    "vendor~signal-low": {
+      "raw": 325,
+      "gzip": 260
+    },
+    "vendor~signal-medium": {
+      "raw": 366,
+      "gzip": 276
+    },
+    "vendor~signal-zero": {
+      "raw": 289,
+      "gzip": 243
+    },
+    "vendor~signature": {
+      "raw": 482,
+      "gzip": 350
+    },
+    "vendor~signpost": {
+      "raw": 539,
+      "gzip": 344
+    },
+    "vendor~signpost-big": {
+      "raw": 435,
+      "gzip": 314
+    },
+    "vendor~siren": {
+      "raw": 636,
+      "gzip": 378
+    },
+    "vendor~sixteenth-notes": {
+      "raw": 496,
+      "gzip": 346
+    },
+    "vendor~sizeCapture-INFHLROL": {
+      "raw": 1086,
+      "gzip": 629
+    },
+    "vendor~skip-back": {
+      "raw": 402,
+      "gzip": 309
+    },
+    "vendor~skull": {
+      "raw": 512,
+      "gzip": 343
+    },
+    "vendor~slash": {
+      "raw": 284,
+      "gzip": 235
+    },
+    "vendor~slice": {
+      "raw": 364,
+      "gzip": 288
+    },
+    "vendor~sliders-vertical": {
+      "raw": 607,
+      "gzip": 355
+    },
+    "vendor~smartphone-charging": {
+      "raw": 387,
+      "gzip": 300
+    },
+    "vendor~smartphone-nfc": {
+      "raw": 511,
+      "gzip": 353
+    },
+    "vendor~smartphone-user-round": {
+      "raw": 477,
+      "gzip": 341
+    },
+    "vendor~snail": {
+      "raw": 527,
+      "gzip": 360
+    },
+    "vendor~snowflake": {
+      "raw": 793,
+      "gzip": 436
+    },
+    "vendor~soap-dispenser-droplet": {
+      "raw": 636,
+      "gzip": 421
+    },
+    "vendor~sofa": {
+      "raw": 562,
+      "gzip": 343
+    },
+    "vendor~solar-panel": {
+      "raw": 645,
+      "gzip": 407
+    },
+    "vendor~soup": {
+      "raw": 759,
+      "gzip": 426
+    },
+    "vendor~space": {
+      "raw": 316,
+      "gzip": 262
+    },
+    "vendor~spade": {
+      "raw": 464,
+      "gzip": 340
+    },
+    "vendor~speaker": {
+      "raw": 438,
+      "gzip": 316
+    },
+    "vendor~speech": {
+      "raw": 524,
+      "gzip": 371
+    },
+    "vendor~spell-check": {
+      "raw": 387,
+      "gzip": 295
+    },
+    "vendor~spell-check-2": {
+      "raw": 487,
+      "gzip": 308
+    },
+    "vendor~spline": {
+      "raw": 391,
+      "gzip": 292
+    },
+    "vendor~spline-pointer": {
+      "raw": 557,
+      "gzip": 378
+    },
+    "vendor~split": {
+      "raw": 424,
+      "gzip": 308
+    },
+    "vendor~spool": {
+      "raw": 500,
+      "gzip": 350
+    },
+    "vendor~sport-shoe": {
+      "raw": 520,
+      "gzip": 366
+    },
+    "vendor~spotlight": {
+      "raw": 581,
+      "gzip": 386
+    },
+    "vendor~spray-can": {
+      "raw": 689,
+      "gzip": 399
+    },
+    "vendor~square-activity": {
+      "raw": 403,
+      "gzip": 308
+    },
+    "vendor~square-arrow-down": {
+      "raw": 431,
+      "gzip": 315
+    },
+    "vendor~square-arrow-down-left": {
+      "raw": 439,
+      "gzip": 321
+    },
+    "vendor~square-arrow-down-right": {
+      "raw": 441,
+      "gzip": 318
+    },
+    "vendor~square-arrow-left": {
+      "raw": 432,
+      "gzip": 317
+    },
+    "vendor~square-arrow-out-down-left": {
+      "raw": 468,
+      "gzip": 325
+    },
+    "vendor~square-arrow-out-down-right": {
+      "raw": 473,
+      "gzip": 327
+    },
+    "vendor~square-arrow-out-up-left": {
+      "raw": 462,
+      "gzip": 326
+    },
+    "vendor~square-arrow-right": {
+      "raw": 434,
+      "gzip": 315
+    },
+    "vendor~square-arrow-right-enter": {
+      "raw": 446,
+      "gzip": 316
+    },
+    "vendor~square-arrow-right-exit": {
+      "raw": 455,
+      "gzip": 320
+    },
+    "vendor~square-arrow-up": {
+      "raw": 429,
+      "gzip": 318
+    },
+    "vendor~square-arrow-up-left": {
+      "raw": 435,
+      "gzip": 320
+    },
+    "vendor~square-arrow-up-right": {
+      "raw": 437,
+      "gzip": 323
+    },
+    "vendor~square-asterisk": {
+      "raw": 465,
+      "gzip": 327
+    },
+    "vendor~square-bookmark": {
+      "raw": 459,
+      "gzip": 347
+    },
+    "vendor~square-bottom-dashed-scissors": {
+      "raw": 716,
+      "gzip": 419
+    },
+    "vendor~square-centerline-dashed-horizontal": {
+      "raw": 587,
+      "gzip": 366
+    },
+    "vendor~square-centerline-dashed-vertical": {
+      "raw": 586,
+      "gzip": 362
+    },
+    "vendor~square-chart-gantt": {
+      "raw": 484,
+      "gzip": 332
+    },
+    "vendor~square-check": {
+      "raw": 392,
+      "gzip": 301
+    },
+    "vendor~square-chevron-down": {
+      "raw": 400,
+      "gzip": 304
+    },
+    "vendor~square-chevron-left": {
+      "raw": 400,
+      "gzip": 304
+    },
+    "vendor~square-chevron-right": {
+      "raw": 401,
+      "gzip": 302
+    },
+    "vendor~square-chevron-up": {
+      "raw": 395,
+      "gzip": 301
+    },
+    "vendor~square-code": {
+      "raw": 425,
+      "gzip": 312
+    },
+    "vendor~square-dashed": {
+      "raw": 756,
+      "gzip": 392
+    },
+    "vendor~square-dashed-bottom": {
+      "raw": 431,
+      "gzip": 302
+    },
+    "vendor~square-dashed-bottom-code": {
+      "raw": 531,
+      "gzip": 340
+    },
+    "vendor~square-dashed-kanban": {
+      "raw": 880,
+      "gzip": 430
+    },
+    "vendor~square-dashed-plus": {
+      "raw": 810,
+      "gzip": 402
+    },
+    "vendor~square-dashed-text": {
+      "raw": 887,
+      "gzip": 434
+    },
+    "vendor~square-dashed-top-solid": {
+      "raw": 641,
+      "gzip": 359
+    },
+    "vendor~square-dashed-x": {
+      "raw": 805,
+      "gzip": 403
+    },
+    "vendor~square-dashed-x-corner": {
+      "raw": 693,
+      "gzip": 384
+    },
+    "vendor~square-dimensions": {
+      "raw": 401,
+      "gzip": 301
+    },
+    "vendor~square-divide": {
+      "raw": 517,
+      "gzip": 334
+    },
+    "vendor~square-dot": {
+      "raw": 387,
+      "gzip": 292
+    },
+    "vendor~square-equal": {
+      "raw": 417,
+      "gzip": 305
+    },
+    "vendor~square-exclamation-point": {
+      "raw": 444,
+      "gzip": 312
+    },
+    "vendor~square-function": {
+      "raw": 467,
+      "gzip": 340
+    },
+    "vendor~square-library": {
+      "raw": 459,
+      "gzip": 324
+    },
+    "vendor~square-m": {
+      "raw": 442,
+      "gzip": 335
+    },
+    "vendor~square-minus": {
+      "raw": 379,
+      "gzip": 292
+    },
+    "vendor~square-mouse-pointer": {
+      "raw": 524,
+      "gzip": 368
+    },
+    "vendor~square-off": {
+      "raw": 433,
+      "gzip": 308
+    },
+    "vendor~square-parking": {
+      "raw": 401,
+      "gzip": 310
+    },
+    "vendor~square-parking-off": {
+      "raw": 567,
+      "gzip": 371
+    },
+    "vendor~square-pause": {
+      "raw": 428,
+      "gzip": 301
+    },
+    "vendor~square-pen": {
+      "raw": 525,
+      "gzip": 363
+    },
+    "vendor~square-percent": {
+      "raw": 461,
+      "gzip": 327
+    },
+    "vendor~square-pi": {
+      "raw": 461,
+      "gzip": 330
+    },
+    "vendor~square-pilcrow": {
+      "raw": 481,
+      "gzip": 339
+    },
+    "vendor~square-play": {
+      "raw": 461,
+      "gzip": 340
+    },
+    "vendor~square-plus": {
+      "raw": 413,
+      "gzip": 307
+    },
+    "vendor~square-power": {
+      "raw": 436,
+      "gzip": 326
+    },
+    "vendor~square-radical": {
+      "raw": 366,
+      "gzip": 290
+    },
+    "vendor~square-round-corner": {
+      "raw": 393,
+      "gzip": 290
+    },
+    "vendor~square-scissors": {
+      "raw": 588,
+      "gzip": 376
+    },
+    "vendor~square-sigma": {
+      "raw": 398,
+      "gzip": 311
+    },
+    "vendor~square-slash": {
+      "raw": 397,
+      "gzip": 298
+    },
+    "vendor~square-sparkles": {
+      "raw": 677,
+      "gzip": 402
+    },
+    "vendor~square-split-horizontal": {
+      "raw": 474,
+      "gzip": 326
+    },
+    "vendor~square-split-vertical": {
+      "raw": 470,
+      "gzip": 323
+    },
+    "vendor~square-square": {
+      "raw": 382,
+      "gzip": 277
+    },
+    "vendor~square-stack": {
+      "raw": 486,
+      "gzip": 330
+    },
+    "vendor~square-star": {
+      "raw": 660,
+      "gzip": 426
+    },
+    "vendor~square-stop": {
+      "raw": 381,
+      "gzip": 282
+    },
+    "vendor~square-text": {
+      "raw": 425,
+      "gzip": 306
+    },
+    "vendor~square-user": {
+      "raw": 458,
+      "gzip": 336
+    },
+    "vendor~square-user-round": {
+      "raw": 447,
+      "gzip": 334
+    },
+    "vendor~square-x": {
+      "raw": 417,
+      "gzip": 308
+    },
+    "vendor~squares-exclude": {
+      "raw": 490,
+      "gzip": 326
+    },
+    "vendor~squares-intersect": {
+      "raw": 789,
+      "gzip": 405
+    },
+    "vendor~squares-subtract": {
+      "raw": 608,
+      "gzip": 357
+    },
+    "vendor~squares-unite": {
+      "raw": 418,
+      "gzip": 294
+    },
+    "vendor~squircle": {
+      "raw": 329,
+      "gzip": 262
+    },
+    "vendor~squircle-dashed": {
+      "raw": 795,
+      "gzip": 450
+    },
+    "vendor~squirrel": {
+      "raw": 573,
+      "gzip": 376
+    },
+    "vendor~stamp": {
+      "raw": 486,
+      "gzip": 336
+    },
+    "vendor~star-check": {
+      "raw": 598,
+      "gzip": 401
+    },
+    "vendor~star-half": {
+      "raw": 484,
+      "gzip": 350
+    },
+    "vendor~star-minus": {
+      "raw": 614,
+      "gzip": 403
+    },
+    "vendor~star-off": {
+      "raw": 687,
+      "gzip": 429
+    },
+    "vendor~star-plus": {
+      "raw": 618,
+      "gzip": 399
+    },
+    "vendor~star-x": {
+      "raw": 673,
+      "gzip": 419
+    },
+    "vendor~stateDiagram-v2-A6IESKWZ": {
+      "raw": 43622,
+      "gzip": 14299
+    },
+    "vendor~step-back": {
+      "raw": 403,
+      "gzip": 312
+    },
+    "vendor~step-forward": {
+      "raw": 403,
+      "gzip": 304
+    },
+    "vendor~stethoscope": {
+      "raw": 507,
+      "gzip": 338
+    },
+    "vendor~sticker": {
+      "raw": 576,
+      "gzip": 361
+    },
+    "vendor~sticky-note-check": {
+      "raw": 483,
+      "gzip": 339
+    },
+    "vendor~sticky-note-minus": {
+      "raw": 479,
+      "gzip": 335
+    },
+    "vendor~sticky-note-off": {
+      "raw": 543,
+      "gzip": 359
+    },
+    "vendor~sticky-note-plus": {
+      "raw": 520,
+      "gzip": 351
+    },
+    "vendor~sticky-note-x": {
+      "raw": 512,
+      "gzip": 347
+    },
+    "vendor~sticky-notes": {
+      "raw": 616,
+      "gzip": 355
+    },
+    "vendor~stone": {
+      "raw": 511,
+      "gzip": 351
+    },
+    "vendor~store": {
+      "raw": 663,
+      "gzip": 393
+    },
+    "vendor~stretch-horizontal": {
+      "raw": 389,
+      "gzip": 275
+    },
+    "vendor~stretch-vertical": {
+      "raw": 387,
+      "gzip": 276
+    },
+    "vendor~strikethrough": {
+      "raw": 412,
+      "gzip": 309
+    },
+    "vendor~subscript": {
+      "raw": 467,
+      "gzip": 338
+    },
+    "vendor~summary": {
+      "raw": 451,
+      "gzip": 313
+    },
+    "vendor~sun-dim": {
+      "raw": 633,
+      "gzip": 350
+    },
+    "vendor~sun-medium": {
+      "raw": 646,
+      "gzip": 368
+    },
+    "vendor~sun-moon": {
+      "raw": 556,
+      "gzip": 373
+    },
+    "vendor~sun-snow": {
+      "raw": 733,
+      "gzip": 414
+    },
+    "vendor~sunrise": {
+      "raw": 584,
+      "gzip": 352
+    },
+    "vendor~sunset": {
+      "raw": 584,
+      "gzip": 353
+    },
+    "vendor~superscript": {
+      "raw": 486,
+      "gzip": 353
+    },
+    "vendor~swatch-book": {
+      "raw": 553,
+      "gzip": 366
+    },
+    "vendor~swimlanes-B3ENRKFQ": {
+      "raw": 107986,
+      "gzip": 35906
+    },
+    "vendor~swimlanes-B3ENRKFQ~dagre-NK4GIZVX~elk-QONTBCTQ": {
+      "raw": 11584,
+      "gzip": 4684
+    },
+    "vendor~swimlanes-B3ENRKFQ~elk-QONTBCTQ": {
+      "raw": 5716,
+      "gzip": 2628
+    },
+    "vendor~swimlanesDiagram-AYQRV4AK": {
+      "raw": 2643,
+      "gzip": 967
+    },
+    "vendor~swimlanesDiagram-AYQRV4AK~flowDiagram-IUGLLWBU": {
+      "raw": 64257,
+      "gzip": 20211
+    },
+    "vendor~swiss-franc": {
+      "raw": 364,
+      "gzip": 281
+    },
+    "vendor~switch-camera": {
+      "raw": 524,
+      "gzip": 347
+    },
+    "vendor~sword": {
+      "raw": 464,
+      "gzip": 330
+    },
+    "vendor~swords": {
+      "raw": 698,
+      "gzip": 412
+    },
+    "vendor~syringe": {
+      "raw": 526,
+      "gzip": 347
+    },
+    "vendor~table-2": {
+      "raw": 384,
+      "gzip": 290
+    },
+    "vendor~table-cells-merge": {
+      "raw": 470,
+      "gzip": 323
+    },
+    "vendor~table-cells-split": {
+      "raw": 433,
+      "gzip": 312
+    },
+    "vendor~table-columns-split": {
+      "raw": 725,
+      "gzip": 388
+    },
+    "vendor~table-of-contents": {
+      "raw": 483,
+      "gzip": 306
+    },
+    "vendor~table-properties": {
+      "raw": 432,
+      "gzip": 314
+    },
+    "vendor~table-rows-split": {
+      "raw": 728,
+      "gzip": 388
+    },
+    "vendor~tablet": {
+      "raw": 378,
+      "gzip": 287
+    },
+    "vendor~tablet-smartphone": {
+      "raw": 447,
+      "gzip": 328
+    },
+    "vendor~tablets": {
+      "raw": 429,
+      "gzip": 306
+    },
+    "vendor~tag-plus": {
+      "raw": 552,
+      "gzip": 380
+    },
+    "vendor~tag-x": {
+      "raw": 559,
+      "gzip": 373
+    },
+    "vendor~tags": {
+      "raw": 581,
+      "gzip": 383
+    },
+    "vendor~tally-1": {
+      "raw": 283,
+      "gzip": 238
+    },
+    "vendor~tally-2": {
+      "raw": 319,
+      "gzip": 253
+    },
+    "vendor~tally-3": {
+      "raw": 356,
+      "gzip": 264
+    },
+    "vendor~tally-4": {
+      "raw": 393,
+      "gzip": 271
+    },
+    "vendor~tally-5": {
+      "raw": 432,
+      "gzip": 286
+    },
+    "vendor~tangent": {
+      "raw": 453,
+      "gzip": 319
+    },
+    "vendor~tent": {
+      "raw": 414,
+      "gzip": 288
+    },
+    "vendor~tent-tree": {
+      "raw": 537,
+      "gzip": 341
+    },
+    "vendor~test-tube": {
+      "raw": 414,
+      "gzip": 304
+    },
+    "vendor~test-tube-diagonal": {
+      "raw": 452,
+      "gzip": 324
+    },
+    "vendor~test-tubes": {
+      "raw": 562,
+      "gzip": 339
+    },
+    "vendor~text-align-center": {
+      "raw": 392,
+      "gzip": 290
+    },
+    "vendor~text-align-end": {
+      "raw": 388,
+      "gzip": 288
+    },
+    "vendor~text-align-justify": {
+      "raw": 394,
+      "gzip": 282
+    },
+    "vendor~text-align-justify-center": {
+      "raw": 375,
+      "gzip": 280
+    },
+    "vendor~text-align-justify-end": {
+      "raw": 373,
+      "gzip": 278
+    },
+    "vendor~text-align-justify-start": {
+      "raw": 374,
+      "gzip": 277
+    },
+    "vendor~text-align-start": {
+      "raw": 396,
+      "gzip": 291
+    },
+    "vendor~text-cursor": {
+      "raw": 420,
+      "gzip": 294
+    },
+    "vendor~text-cursor-input": {
+      "raw": 564,
+      "gzip": 344
+    },
+    "vendor~text-initial": {
+      "raw": 498,
+      "gzip": 341
+    },
+    "vendor~text-quote": {
+      "raw": 396,
+      "gzip": 284
+    },
+    "vendor~text-search": {
+      "raw": 452,
+      "gzip": 311
+    },
+    "vendor~theater": {
+      "raw": 693,
+      "gzip": 373
+    },
+    "vendor~thermometer": {
+      "raw": 322,
+      "gzip": 265
+    },
+    "vendor~thermometer-snowflake": {
+      "raw": 639,
+      "gzip": 410
+    },
+    "vendor~thermometer-sun": {
+      "raw": 551,
+      "gzip": 351
+    },
+    "vendor~thumbs-down": {
+      "raw": 468,
+      "gzip": 343
+    },
+    "vendor~thumbs-up": {
+      "raw": 467,
+      "gzip": 338
+    },
+    "vendor~tic-tac-toe": {
+      "raw": 583,
+      "gzip": 357
+    },
+    "vendor~ticket": {
+      "raw": 486,
+      "gzip": 319
+    },
+    "vendor~ticket-check": {
+      "raw": 424,
+      "gzip": 306
+    },
+    "vendor~ticket-minus": {
+      "raw": 418,
+      "gzip": 304
+    },
+    "vendor~ticket-percent": {
+      "raw": 498,
+      "gzip": 333
+    },
+    "vendor~ticket-plus": {
+      "raw": 453,
+      "gzip": 316
+    },
+    "vendor~ticket-slash": {
+      "raw": 424,
+      "gzip": 305
+    },
+    "vendor~ticket-x": {
+      "raw": 461,
+      "gzip": 316
+    },
+    "vendor~tickets": {
+      "raw": 494,
+      "gzip": 348
+    },
+    "vendor~tickets-plane": {
+      "raw": 616,
+      "gzip": 404
+    },
+    "vendor~timeline": {
+      "raw": 819,
+      "gzip": 387
+    },
+    "vendor~timeline-definition-JXYKGLGB": {
+      "raw": 31371,
+      "gzip": 10296
+    },
+    "vendor~timer": {
+      "raw": 403,
+      "gzip": 282
+    },
+    "vendor~timer-reset": {
+      "raw": 434,
+      "gzip": 310
+    },
+    "vendor~toggle-left": {
+      "raw": 364,
+      "gzip": 288
+    },
+    "vendor~toggle-right": {
+      "raw": 366,
+      "gzip": 286
+    },
+    "vendor~toilet": {
+      "raw": 482,
+      "gzip": 333
+    },
+    "vendor~tombstone": {
+      "raw": 414,
+      "gzip": 297
+    },
+    "vendor~tool-case": {
+      "raw": 695,
+      "gzip": 445
+    },
+    "vendor~toolbox": {
+      "raw": 563,
+      "gzip": 354
+    },
+    "vendor~toothbrush": {
+      "raw": 438,
+      "gzip": 330
+    },
+    "vendor~toothbrush-sparkles": {
+      "raw": 715,
+      "gzip": 428
+    },
+    "vendor~tornado": {
+      "raw": 431,
+      "gzip": 297
+    },
+    "vendor~torus": {
+      "raw": 364,
+      "gzip": 266
+    },
+    "vendor~touchpad": {
+      "raw": 389,
+      "gzip": 295
+    },
+    "vendor~touchpad-off": {
+      "raw": 536,
+      "gzip": 344
+    },
+    "vendor~towel-rack": {
+      "raw": 452,
+      "gzip": 322
+    },
+    "vendor~tower-control": {
+      "raw": 572,
+      "gzip": 364
+    },
+    "vendor~toy-brick": {
+      "raw": 452,
+      "gzip": 323
+    },
+    "vendor~tractor": {
+      "raw": 704,
+      "gzip": 423
+    },
+    "vendor~traffic-cone": {
+      "raw": 603,
+      "gzip": 401
+    },
+    "vendor~trailer": {
+      "raw": 549,
+      "gzip": 358
+    },
+    "vendor~train-front": {
+      "raw": 548,
+      "gzip": 358
+    },
+    "vendor~train-front-tunnel": {
+      "raw": 614,
+      "gzip": 385
+    },
+    "vendor~train-track": {
+      "raw": 518,
+      "gzip": 318
+    },
+    "vendor~tram-front": {
+      "raw": 561,
+      "gzip": 360
+    },
+    "vendor~transgender": {
+      "raw": 581,
+      "gzip": 359
+    },
+    "vendor~trash-off": {
+      "raw": 616,
+      "gzip": 372
+    },
+    "vendor~tree-deciduous": {
+      "raw": 427,
+      "gzip": 321
+    },
+    "vendor~tree-palm": {
+      "raw": 649,
+      "gzip": 436
+    },
+    "vendor~tree-pine": {
+      "raw": 474,
+      "gzip": 326
+    },
+    "vendor~treeView-D4JQ5SDB": {
+      "raw": 418,
+      "gzip": 261
+    },
+    "vendor~treemap-SAJKECNS": {
+      "raw": 417,
+      "gzip": 260
+    },
+    "vendor~trees": {
+      "raw": 530,
+      "gzip": 350
+    },
+    "vendor~trending-up-down": {
+      "raw": 430,
+      "gzip": 306
+    },
+    "vendor~triangle": {
+      "raw": 344,
+      "gzip": 276
+    },
+    "vendor~triangle-dashed": {
+      "raw": 713,
+      "gzip": 406
+    },
+    "vendor~triangle-right": {
+      "raw": 355,
+      "gzip": 287
+    },
+    "vendor~triangles-centerline-dashed-horizontal": {
+      "raw": 672,
+      "gzip": 406
+    },
+    "vendor~triangles-centerline-dashed-vertical": {
+      "raw": 669,
+      "gzip": 394
+    },
+    "vendor~trophy": {
+      "raw": 670,
+      "gzip": 393
+    },
+    "vendor~truck": {
+      "raw": 571,
+      "gzip": 370
+    },
+    "vendor~truck-electric": {
+      "raw": 694,
+      "gzip": 419
+    },
+    "vendor~tube-lotion": {
+      "raw": 532,
+      "gzip": 350
+    },
+    "vendor~turkish-lira": {
+      "raw": 382,
+      "gzip": 290
+    },
+    "vendor~turntable": {
+      "raw": 458,
+      "gzip": 331
+    },
+    "vendor~turtle": {
+      "raw": 522,
+      "gzip": 341
+    },
+    "vendor~tv": {
+      "raw": 350,
+      "gzip": 278
+    },
+    "vendor~tv-minimal": {
+      "raw": 370,
+      "gzip": 293
+    },
+    "vendor~tv-minimal-play": {
+      "raw": 489,
+      "gzip": 354
+    },
+    "vendor~type": {
+      "raw": 385,
+      "gzip": 286
+    },
+    "vendor~type-outline": {
+      "raw": 503,
+      "gzip": 316
+    },
+    "vendor~umbrella": {
+      "raw": 439,
+      "gzip": 313
+    },
+    "vendor~umbrella-off": {
+      "raw": 563,
+      "gzip": 368
+    },
+    "vendor~underline": {
+      "raw": 356,
+      "gzip": 279
+    },
+    "vendor~undo": {
+      "raw": 351,
+      "gzip": 273
+    },
+    "vendor~undo-dot": {
+      "raw": 390,
+      "gzip": 298
+    },
+    "vendor~unfold-horizontal": {
+      "raw": 560,
+      "gzip": 339
+    },
+    "vendor~ungroup": {
+      "raw": 379,
+      "gzip": 275
+    },
+    "vendor~university": {
+      "raw": 708,
+      "gzip": 426
+    },
+    "vendor~unlink-2": {
+      "raw": 325,
+      "gzip": 263
+    },
+    "vendor~usb": {
+      "raw": 566,
+      "gzip": 360
+    },
+    "vendor~usb-c-port": {
+      "raw": 352,
+      "gzip": 279
+    },
+    "vendor~usecaseDiagram-WPOLBNNX": {
+      "raw": 191864,
+      "gzip": 50067
+    },
+    "vendor~usecaseDiagram-WPOLBNNX~diagram-CBK3MWTC~mindmap-definition-6OY57UG3~stateDiagram-v2~bkh3y2ud": {
+      "raw": 955,
+      "gzip": 516
+    },
+    "vendor~usecaseDiagram-WPOLBNNX~mindmap-definition-6OY57UG3~stateDiagram-v2-A6IESKWZ~classDi~mgc03pmf": {
+      "raw": 541,
+      "gzip": 339
+    },
+    "vendor~user-cog": {
+      "raw": 810,
+      "gzip": 438
+    },
+    "vendor~user-group": {
+      "raw": 561,
+      "gzip": 345
+    },
+    "vendor~user-key": {
+      "raw": 490,
+      "gzip": 332
+    },
+    "vendor~user-lock": {
+      "raw": 473,
+      "gzip": 347
+    },
+    "vendor~user-minus": {
+      "raw": 421,
+      "gzip": 317
+    },
+    "vendor~user-pen": {
+      "raw": 506,
+      "gzip": 359
+    },
+    "vendor~user-round": {
+      "raw": 366,
+      "gzip": 290
+    },
+    "vendor~user-round-arrow-left": {
+      "raw": 444,
+      "gzip": 326
+    },
+    "vendor~user-round-check": {
+      "raw": 424,
+      "gzip": 323
+    },
+    "vendor~user-round-cog": {
+      "raw": 844,
+      "gzip": 460
+    },
+    "vendor~user-round-group": {
+      "raw": 580,
+      "gzip": 364
+    },
+    "vendor~user-round-key": {
+      "raw": 480,
+      "gzip": 329
+    },
+    "vendor~user-round-minus": {
+      "raw": 419,
+      "gzip": 319
+    },
+    "vendor~user-round-pen": {
+      "raw": 514,
+      "gzip": 365
+    },
+    "vendor~user-round-plus": {
+      "raw": 454,
+      "gzip": 333
+    },
+    "vendor~user-round-search": {
+      "raw": 451,
+      "gzip": 326
+    },
+    "vendor~user-round-star": {
+      "raw": 721,
+      "gzip": 443
+    },
+    "vendor~user-round-x": {
+      "raw": 462,
+      "gzip": 330
+    },
+    "vendor~user-search": {
+      "raw": 444,
+      "gzip": 322
+    },
+    "vendor~user-shield": {
+      "raw": 580,
+      "gzip": 407
+    },
+    "vendor~user-star": {
+      "raw": 694,
+      "gzip": 435
+    },
+    "vendor~user-x": {
+      "raw": 471,
+      "gzip": 329
+    },
+    "vendor~users-collaboration": {
+      "raw": 594,
+      "gzip": 369
+    },
+    "vendor~users-round": {
+      "raw": 438,
+      "gzip": 332
+    },
+    "vendor~users-round-collaboration": {
+      "raw": 583,
+      "gzip": 381
+    },
+    "vendor~utensils-crossed": {
+      "raw": 558,
+      "gzip": 376
+    },
+    "vendor~utility-pole": {
+      "raw": 508,
+      "gzip": 315
+    },
+    "vendor~van": {
+      "raw": 594,
+      "gzip": 383
+    },
+    "vendor~variable": {
+      "raw": 457,
+      "gzip": 312
+    },
+    "vendor~vault": {
+      "raw": 832,
+      "gzip": 415
+    },
+    "vendor~vector-polygon": {
+      "raw": 659,
+      "gzip": 403
+    },
+    "vendor~vector-square": {
+      "raw": 682,
+      "gzip": 376
+    },
+    "vendor~vegan": {
+      "raw": 427,
+      "gzip": 315
+    },
+    "vendor~venetian-mask": {
+      "raw": 508,
+      "gzip": 336
+    },
+    "vendor~vennDiagram-Q3Y3IDCW": {
+      "raw": 41899,
+      "gzip": 15145
+    },
+    "vendor~venus": {
+      "raw": 365,
+      "gzip": 282
+    },
+    "vendor~venus-and-mars": {
+      "raw": 457,
+      "gzip": 321
+    },
+    "vendor~vibrate": {
+      "raw": 410,
+      "gzip": 295
+    },
+    "vendor~vibrate-off": {
+      "raw": 537,
+      "gzip": 353
+    },
+    "vendor~video": {
+      "raw": 413,
+      "gzip": 323
+    },
+    "vendor~video-off": {
+      "raw": 466,
+      "gzip": 328
+    },
+    "vendor~videotape": {
+      "raw": 482,
+      "gzip": 327
+    },
+    "vendor~view": {
+      "raw": 550,
+      "gzip": 355
+    },
+    "vendor~virus": {
+      "raw": 1097,
+      "gzip": 506
+    },
+    "vendor~virus-off": {
+      "raw": 1116,
+      "gzip": 523
+    },
+    "vendor~voicemail": {
+      "raw": 399,
+      "gzip": 284
+    },
+    "vendor~volleyball": {
+      "raw": 616,
+      "gzip": 389
+    },
+    "vendor~volume": {
+      "raw": 443,
+      "gzip": 326
+    },
+    "vendor~volume-1": {
+      "raw": 493,
+      "gzip": 347
+    },
+    "vendor~volume-off": {
+      "raw": 641,
+      "gzip": 413
+    },
+    "vendor~vote": {
+      "raw": 395,
+      "gzip": 299
+    },
+    "vendor~wallet-cards": {
+      "raw": 457,
+      "gzip": 333
+    },
+    "vendor~wallet-minimal": {
+      "raw": 416,
+      "gzip": 306
+    },
+    "vendor~wallpaper": {
+      "raw": 500,
+      "gzip": 354
+    },
+    "vendor~wand": {
+      "raw": 596,
+      "gzip": 351
+    },
+    "vendor~wand-sparkles": {
+      "raw": 697,
+      "gzip": 405
+    },
+    "vendor~wardley-7MLQ67FV": {
+      "raw": 412,
+      "gzip": 257
+    },
+    "vendor~wardleyDiagram-IVAIDKWA": {
+      "raw": 26038,
+      "gzip": 6747
+    },
+    "vendor~warehouse": {
+      "raw": 540,
+      "gzip": 357
+    },
+    "vendor~washing-machine": {
+      "raw": 513,
+      "gzip": 354
+    },
+    "vendor~watch": {
+      "raw": 529,
+      "gzip": 354
+    },
+    "vendor~waves-arrow-down": {
+      "raw": 624,
+      "gzip": 385
+    },
+    "vendor~waves-arrow-up": {
+      "raw": 565,
+      "gzip": 331
+    },
+    "vendor~waves-horizontal": {
+      "raw": 441,
+      "gzip": 291
+    },
+    "vendor~waves-ladder": {
+      "raw": 543,
+      "gzip": 341
+    },
+    "vendor~waves-vertical": {
+      "raw": 421,
+      "gzip": 279
+    },
+    "vendor~waypoints": {
+      "raw": 585,
+      "gzip": 342
+    },
+    "vendor~webcam": {
+      "raw": 417,
+      "gzip": 294
+    },
+    "vendor~webcam-off": {
+      "raw": 619,
+      "gzip": 378
+    },
+    "vendor~webhook": {
+      "raw": 517,
+      "gzip": 372
+    },
+    "vendor~webhook-off": {
+      "raw": 644,
+      "gzip": 406
+    },
+    "vendor~weight": {
+      "raw": 425,
+      "gzip": 325
+    },
+    "vendor~weight-tilde": {
+      "raw": 505,
+      "gzip": 359
+    },
+    "vendor~wheat": {
+      "raw": 1045,
+      "gzip": 445
+    },
+    "vendor~wheat-off": {
+      "raw": 1094,
+      "gzip": 558
+    },
+    "vendor~whistle": {
+      "raw": 369,
+      "gzip": 284
+    },
+    "vendor~whole-word": {
+      "raw": 488,
+      "gzip": 333
+    },
+    "vendor~wifi": {
+      "raw": 445,
+      "gzip": 309
+    },
+    "vendor~wifi-cog": {
+      "raw": 881,
+      "gzip": 473
+    },
+    "vendor~wifi-high": {
+      "raw": 397,
+      "gzip": 294
+    },
+    "vendor~wifi-lock": {
+      "raw": 538,
+      "gzip": 373
+    },
+    "vendor~wifi-low": {
+      "raw": 341,
+      "gzip": 274
+    },
+    "vendor~wifi-pen": {
+      "raw": 576,
+      "gzip": 383
+    },
+    "vendor~wifi-sync": {
+      "raw": 638,
+      "gzip": 389
+    },
+    "vendor~wifi-zero": {
+      "raw": 288,
+      "gzip": 241
+    },
+    "vendor~wind": {
+      "raw": 411,
+      "gzip": 297
+    },
+    "vendor~wind-arrow-down": {
+      "raw": 446,
+      "gzip": 313
+    },
+    "vendor~wind-arrow-up": {
+      "raw": 445,
+      "gzip": 314
+    },
+    "vendor~wine": {
+      "raw": 448,
+      "gzip": 315
+    },
+    "vendor~wine-off": {
+      "raw": 588,
+      "gzip": 403
+    },
+    "vendor~worm": {
+      "raw": 557,
+      "gzip": 385
+    },
+    "vendor~wrench-off": {
+      "raw": 561,
+      "gzip": 385
+    },
+    "vendor~x-line-top": {
+      "raw": 364,
+      "gzip": 275
+    },
+    "vendor~xychartDiagram-4URNHDU4": {
+      "raw": 44051,
+      "gzip": 12010
+    },
+    "vendor~zap-off": {
+      "raw": 587,
+      "gzip": 388
+    },
+    "vendor~zodiac-aquarius": {
+      "raw": 664,
+      "gzip": 351
+    },
+    "vendor~zodiac-aries": {
+      "raw": 365,
+      "gzip": 278
+    },
+    "vendor~zodiac-cancer": {
+      "raw": 469,
+      "gzip": 318
+    },
+    "vendor~zodiac-capricorn": {
+      "raw": 423,
+      "gzip": 314
+    },
+    "vendor~zodiac-gemini": {
+      "raw": 443,
+      "gzip": 307
+    },
+    "vendor~zodiac-leo": {
+      "raw": 396,
+      "gzip": 312
+    },
+    "vendor~zodiac-libra": {
+      "raw": 402,
+      "gzip": 313
+    },
+    "vendor~zodiac-ophiuchus": {
+      "raw": 388,
+      "gzip": 292
+    },
+    "vendor~zodiac-pisces": {
+      "raw": 392,
+      "gzip": 288
+    },
+    "vendor~zodiac-sagittarius": {
+      "raw": 372,
+      "gzip": 283
+    },
+    "vendor~zodiac-scorpio": {
+      "raw": 477,
+      "gzip": 328
+    },
+    "vendor~zodiac-taurus": {
+      "raw": 349,
+      "gzip": 283
+    },
+    "vendor~zodiac-virgo": {
+      "raw": 491,
+      "gzip": 317
     },
     "verilog": {
       "raw": 8515,
-      "gzip": 3537
+      "gzip": 3536
     },
     "vhdl": {
       "raw": 3386,
-      "gzip": 1554
+      "gzip": 1555
     },
     "viewportPresets": {
-      "raw": 1412,
-      "gzip": 672
+      "raw": 1130,
+      "gzip": 543
     },
     "webidl": {
       "raw": 2549,
-      "gzip": 1310
+      "gzip": 1311
+    },
+    "windowOpen": {
+      "raw": 195,
+      "gzip": 176
     },
     "worktreeCIStatus": {
-      "raw": 11633,
-      "gzip": 4776
+      "raw": 752,
+      "gzip": 359
+    },
+    "worktreeDevServerStore": {
+      "raw": 532,
+      "gzip": 295
     },
     "xquery": {
       "raw": 6289,
-      "gzip": 2591
+      "gzip": 2592
     },
     "yacas": {
       "raw": 2217,
@@ -1191,21 +8663,21 @@
     },
     "yaml": {
       "raw": 2113,
-      "gzip": 953
+      "gzip": 954
     },
     "z80": {
       "raw": 1821,
-      "gzip": 837
+      "gzip": 839
     }
   },
   "totals": {
     "js": {
-      "raw": 8541819,
-      "gzip": 2733010
+      "raw": 20940451,
+      "gzip": 6971156
     },
     "css": {
-      "raw": 343116,
-      "gzip": 44546
+      "raw": 410390,
+      "gzip": 60201
     }
   }
 }

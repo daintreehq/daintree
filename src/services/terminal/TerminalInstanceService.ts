@@ -1,4 +1,5 @@
-import { Terminal, IBufferRange } from "@xterm/xterm";
+import type { Terminal, IBufferRange } from "@xterm/xterm";
+import { loadXtermCore } from "./xtermCore";
 import { isMac } from "@/lib/platform";
 import { isHostWindows } from "@/hooks/useHostPlatform";
 import {
@@ -1593,6 +1594,10 @@ class TerminalInstanceService {
       return await createPromise;
     } finally {
       this.creating.delete(id);
+      // A cancellation belongs to this creation alone. Consumed on the paths
+      // that honor it; on any other failure it must not outlive the build and
+      // cancel the id's next create.
+      this.cancelledCreations.delete(id);
     }
   }
 
@@ -1639,6 +1644,12 @@ class TerminalInstanceService {
       terminalOptions.cursorBlink = false;
     }
 
+    // The first terminal fetches xterm itself (#14239); a destroy() landing
+    // during that fetch is honored before anything is built.
+    const { Terminal } = await loadXtermCore();
+    if (this.cancelledCreations.delete(id)) {
+      throw new Error(`Terminal ${id} creation cancelled: destroyed before build completed`);
+    }
     const terminal = new Terminal(terminalOptions);
     applyXtermReflowFastpath(terminal);
     this.cwdProviders.set(id, getCwd ?? (() => ""));
@@ -2604,6 +2615,9 @@ class TerminalInstanceService {
       logDebug(`[TIS] Deferring rebuild of ${id} — host has no renderable box yet`);
       return "deferred";
     }
+
+    // Already loaded (a terminal exists to rebuild), so this resolves at once.
+    const { Terminal } = await loadXtermCore();
 
     // Before anything is torn down: an undrainable buffer means we must not
     // dispose at all (see drainWritesBeforeDispose).
