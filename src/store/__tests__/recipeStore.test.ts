@@ -4213,6 +4213,13 @@ describe("plugin recipe panels, variables and agent tools (#13797)", () => {
     const results = await run({ requiresAgentTools: true }, { record: "x" });
     expect(results.spawned).toHaveLength(2);
     expect(listProjectPluginsMock).toHaveBeenCalledTimes(1);
+    // The agent's launch is held to the plugin's tools in main as well (#14096).
+    expect(addTerminalMock.mock.calls[0]?.[0].requiredPluginTools).toEqual(["acme.tools"]);
+  });
+
+  it("asks no launch to require plugin tools when the recipe doesn't", async () => {
+    await run({}, { record: "x" });
+    expect(addTerminalMock.mock.calls[0]?.[0].requiredPluginTools).toBeUndefined();
   });
 
   it("doesn't ask about agent tools for a run that starts no agent", async () => {

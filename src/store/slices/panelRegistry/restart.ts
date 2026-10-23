@@ -74,6 +74,7 @@ import {
 } from "@/utils/agentRuntimeSettings";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { isClientAppError } from "@/utils/clientAppError";
+import { requiredPluginToolsSpawnError } from "@/utils/requiredPluginToolsSpawnError";
 import { transferBetweenWorktreeIndex } from "./worktreeIndex";
 import { getViewWorkspaceId } from "@/store/viewWorkspaceId";
 import { useMemoryPressureWaitStore } from "@/store/memoryPressureWaitStore";
@@ -1049,6 +1050,10 @@ export const createRestartActions = (
         agentPresetId: nextAgentPresetId,
         agentPresetColor: nextAgentPresetColor,
         originalAgentPresetId: nextOriginalPresetId ?? nextAgentPresetId,
+        // Held to the same plugin tools on every relaunch, unless the user
+        // chose to start this one without them (#14096).
+        requiredPluginTools: isAgent ? currentTerminal.requiredPluginTools : undefined,
+        allowMissingPluginTools: options?.allowMissingPluginTools === true ? true : undefined,
         // A restart mints the pane a fresh MCP bearer, so it needs its launch
         // context again or its session falls back to live selection (#12486).
         actionContext: buildAgentLaunchContext({
@@ -1096,6 +1101,27 @@ export const createRestartActions = (
         phase = "pty-kill";
       } else if (errorMessage.includes("destroy")) {
         phase = "frontend-destroy";
+      }
+
+      // A refusal for missing plugin tools is the same blocker the first launch
+      // hit, so it shows the spawn banner with its choices again, not a
+      // generic restart failure.
+      const toolsError = requiredPluginToolsSpawnError(error);
+      if (toolsError !== null) {
+        terminalInstanceService.setInputLocked(id, false);
+        unmarkTerminalRestarting(id);
+        set((state) =>
+          updateTerminal(state, id, (t) => ({
+            ...t,
+            isRestarting: false,
+            restartError: undefined,
+            spawnStatus: "failed" as const,
+            spawnError: toolsError,
+            runtimeStatus: "error" as const,
+            ...(consumedSessionId ? { agentSessionId: consumedSessionId } : {}),
+          }))
+        );
+        return;
       }
 
       const restartError = {
@@ -1776,6 +1802,7 @@ async function respawnAgentOnPreset(
       agentPresetId: nextPreset.id,
       agentPresetColor: nextPreset.color,
       originalAgentPresetId: nextOriginalPresetId,
+      requiredPluginTools: terminal.requiredPluginTools,
       actionContext: buildAgentLaunchContext({
         launchAgentId: terminal.launchAgentId,
         terminalId: id,

@@ -83,6 +83,13 @@ vi.mock("../../../../services/pty/agentSessionRetention.js", () => ({
   getAgentSessionRetentionDays: vi.fn(() => 30),
 }));
 
+// The context the validated spawn handler sees. A launch from a local view has
+// a positive handle; one forwarded from an attached remote frontend arrives on
+// the host with a negative handle, no Electron event and the endpoint's project.
+const spawnCtx = vi.hoisted(() => ({
+  current: { webContentsId: 0, projectId: null as string | null },
+}));
+
 type SafeParseable = {
   safeParse: (v: unknown) => { success: true; data: unknown } | { success: false; error: unknown };
 };
@@ -119,7 +126,7 @@ vi.mock("../../../utils.js", () => ({
       const parsed = schema.safeParse(args[0]);
       if (!parsed.success) throw new Error(`IPC validation failed: ${channel}`);
       return (handler as (ctx: unknown, payload: unknown) => unknown)(
-        { event: _e, webContentsId: 0, senderWindow: null, projectId: null },
+        { event: _e, senderWindow: null, ...spawnCtx.current },
         parsed.data
       );
     });
@@ -218,6 +225,12 @@ import {
   setProjectAssistantAgentMcpAccess,
 } from "../../../../services/pluginAgentMcp/projectEnablement.js";
 import { pluginServerKeysFor } from "../../../../services/pluginAgentMcp/serverKeys.js";
+import {
+  clearPluginToolsLaunches,
+  listRelaunchNeeded,
+} from "../../../../services/pluginAgentMcp/agentLaunchRecords.js";
+import { mcpServerService } from "../../../../services/McpServerService.js";
+import type { AppError } from "../../../../utils/errorTypes.js";
 import {
   makeProjectPluginInstanceKey,
   type LoadedPluginInfo,
@@ -885,6 +898,209 @@ describe("terminal spawn handler - plugin MCP servers for agent launches", () =>
       expect(ptyClient.spawn.mock.calls[0][1].command).toContain(LANE_FILE);
       expect(pluginMcpGrantRegistry.listForTerminal("term-help")).toEqual([]);
       errors.mockRestore();
+    });
+  });
+
+  // A launch that requires a plugin's tools (a plugin recipe's
+  // `requiresAgentTools`) is refused rather than started without them (#14096).
+  describe("required plugin tools", () => {
+    async function refusal(options: Record<string, unknown>) {
+      const error = await spawn(options).then(
+        () => {
+          throw new Error("expected the launch to be refused");
+        },
+        (err: unknown) => err as AppError
+      );
+      expect(error.code).toBe("REQUIRED_PLUGIN_TOOLS_UNAVAILABLE");
+      expect(ptyClient.spawn).not.toHaveBeenCalled();
+      expect(pluginMcpGrantRegistry.listForTerminal(options.id as string)).toEqual([]);
+      return error.details?.code === "REQUIRED_PLUGIN_TOOLS_UNAVAILABLE"
+        ? error.details.tools
+        : null;
+    }
+
+    afterEach(() => {
+      spawnCtx.current = { webContentsId: 0, projectId: null };
+      clearPluginToolsLaunches();
+      Object.assign(mcpServerService, { isRunning: true, ensureReady: async () => true });
+    });
+
+    it("launches on first try when the required plugin's tools are handed over", async () => {
+      setProjectAgentMcpAccess(PROJECT_A, "acme.ledger", "read-write");
+
+      await spawn({ id: "term-req", requiredPluginTools: ["acme.ledger"] });
+
+      expect(ptyClient.spawn).toHaveBeenCalledTimes(1);
+      expect(pluginMcpGrantRegistry.listForTerminal("term-req")).toHaveLength(1);
+    });
+
+    it("refuses as pending-load when plugin init doesn't settle, where an ordinary launch goes ahead", async () => {
+      setProjectAgentMcpAccess(PROJECT_A, "acme.ledger", "read-write");
+      mockWaitForInit.mockImplementation(() => new Promise<void>(() => {}));
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      try {
+        const pending = refusal({ id: "term-req-timeout", requiredPluginTools: ["acme.ledger"] });
+        await vi.waitFor(() => expect(mockWaitForInit).toHaveBeenCalled());
+        await vi.advanceTimersByTimeAsync(5000);
+        expect(await pending).toEqual([
+          {
+            pluginInstanceId: "acme.ledger",
+            pluginDisplayName: "acme.ledger",
+            state: "pending-load",
+          },
+        ]);
+      } finally {
+        vi.useRealTimers();
+        warn.mockRestore();
+      }
+    });
+
+    it("refuses as pending-load while the project's plugins are still loading, and launches on retry once they have", async () => {
+      const instance = makeProjectPluginInstanceKey(PROJECT_A, "acme.ledger");
+      setProjectAgentMcpAccess(PROJECT_A, instance, "read-write");
+      let trusted = false;
+      mockWaitForProjectPlugins.mockImplementation(() => Promise.resolve(trusted));
+      mockListPlugins.mockImplementation(() =>
+        trusted ? [plugin({ instanceId: instance, origin: "project", projectId: PROJECT_A })] : []
+      );
+      mockHasPlugin.mockImplementation(() => trusted);
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+      const tools = await refusal({ id: "term-trust", requiredPluginTools: [instance] });
+      expect(tools?.map((tool) => tool.state)).toEqual(["pending-load"]);
+
+      // The folder is trusted and its plugin loads: a retry is a fresh attempt.
+      trusted = true;
+      await spawn({ id: "term-trust", requiredPluginTools: [instance] });
+      warn.mockRestore();
+
+      expect(ptyClient.spawn).toHaveBeenCalledTimes(1);
+      expect(pluginMcpGrantRegistry.listForTerminal("term-trust")).toHaveLength(1);
+    });
+
+    it("refuses as disabled-access when the plugin runs but its tools are off here", async () => {
+      expect(await refusal({ id: "term-off-req", requiredPluginTools: ["acme.ledger"] })).toEqual([
+        {
+          pluginInstanceId: "acme.ledger",
+          pluginDisplayName: "acme.ledger",
+          state: "disabled-access",
+        },
+      ]);
+
+      // Another plugin on in the project doesn't change the answer for this one.
+      mockListPlugins.mockReturnValue([plugin(), plugin({ name: "acme.other", mcpName: "other" })]);
+      setProjectAgentMcpAccess(PROJECT_A, "acme.other", "read-write");
+      const tools = await refusal({ id: "term-off-req-2", requiredPluginTools: ["acme.ledger"] });
+      expect(tools).toEqual([
+        { pluginInstanceId: "acme.ledger", pluginDisplayName: "Ledger", state: "disabled-access" },
+      ]);
+    });
+
+    it("refuses as unavailable for a plugin that isn't serving this project after a project switch", async () => {
+      const foreign = makeProjectPluginInstanceKey(PROJECT_B, "acme.ledger");
+      mockListPlugins.mockReturnValue([
+        plugin({ instanceId: foreign, origin: "project", projectId: PROJECT_B }),
+      ]);
+      setProjectAgentMcpAccess(PROJECT_A, "acme.other", "read-write");
+
+      const tools = await refusal({ id: "term-switched", requiredPluginTools: [foreign] });
+      expect(tools?.map((tool) => tool.state)).toEqual(["unavailable"]);
+    });
+
+    it("refuses as unsupported-format for an agent that can't be handed MCP servers", async () => {
+      setProjectAgentMcpAccess(PROJECT_A, "acme.ledger", "read-write");
+
+      const tools = await refusal({
+        id: "term-cursor",
+        launchAgentId: "cursor",
+        command: "cursor-agent",
+        requiredPluginTools: ["acme.ledger"],
+      });
+      expect(tools?.map((tool) => tool.state)).toEqual(["unsupported-format"]);
+    });
+
+    it("refuses as listener-failed when Daintree's MCP listener can't start", async () => {
+      setProjectAgentMcpAccess(PROJECT_A, "acme.ledger", "read-write");
+      Object.assign(mcpServerService, { isRunning: false, ensureReady: async () => false });
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+      const tools = await refusal({ id: "term-listener", requiredPluginTools: ["acme.ledger"] });
+      warn.mockRestore();
+      expect(tools?.map((tool) => tool.state)).toEqual(["listener-failed"]);
+    });
+
+    it("refuses as config-failed and leaves no grant when preparing the agent's config throws", async () => {
+      setProjectAgentMcpAccess(PROJECT_A, "acme.ledger", "read-write");
+      const prepare = vi
+        .spyOn(mcpPaneConfigService, "preparePaneConfig")
+        .mockRejectedValueOnce(new Error("disk full"));
+      const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+
+      const tools = await refusal({ id: "term-config", requiredPluginTools: ["acme.ledger"] });
+      prepare.mockRestore();
+      errors.mockRestore();
+      expect(tools?.map((tool) => tool.state)).toEqual(["config-failed"]);
+    });
+
+    it("refuses as revoked when access is taken away while the launch is prepared", async () => {
+      setProjectAgentMcpAccess(PROJECT_A, "acme.ledger", "read-write");
+      const realPrepare = mcpPaneConfigService.preparePaneConfig.bind(mcpPaneConfigService);
+      const prepare = vi
+        .spyOn(mcpPaneConfigService, "preparePaneConfig")
+        .mockImplementationOnce(async (params) => {
+          setProjectAgentMcpAccess(PROJECT_A, "acme.ledger", "off");
+          return realPrepare(params);
+        });
+
+      const tools = await refusal({ id: "term-revoked", requiredPluginTools: ["acme.ledger"] });
+      prepare.mockRestore();
+      expect(tools?.map((tool) => tool.state)).toEqual(["revoked"]);
+    });
+
+    it("starts without the tools only when the user chose to", async () => {
+      await spawn({
+        id: "term-anyway",
+        requiredPluginTools: ["acme.ledger"],
+        allowMissingPluginTools: true,
+      });
+
+      expect(ptyClient.spawn.mock.calls[0][1].command).toBe("claude");
+      expect(pluginMcpGrantRegistry.listForTerminal("term-anyway")).toEqual([]);
+    });
+
+    it("holds a launch forwarded from an attached remote frontend to the same requirement", async () => {
+      spawnCtx.current = { webContentsId: -7, projectId: PROJECT_A };
+
+      const tools = await refusal({ id: "term-remote", requiredPluginTools: ["acme.ledger"] });
+      expect(tools?.map((tool) => tool.state)).toEqual(["disabled-access"]);
+
+      setProjectAgentMcpAccess(PROJECT_A, "acme.ledger", "read-write");
+      await spawn({ id: "term-remote", requiredPluginTools: ["acme.ledger"] });
+      expect(pluginMcpGrantRegistry.listForTerminal("term-remote")).toHaveLength(1);
+    });
+
+    it("lists a running agent for relaunch once access it started without is turned on", async () => {
+      await spawn({ id: "term-before" });
+      const eligible = () => [
+        {
+          pluginInstanceId: "acme.ledger",
+          pluginDisplayName: "Ledger",
+          scope: READ_WRITE_SCOPE,
+        },
+      ];
+      expect(listRelaunchNeeded(PROJECT_A, [])).toEqual([]);
+
+      setProjectAgentMcpAccess(PROJECT_A, "acme.ledger", "read-write");
+      expect(listRelaunchNeeded(PROJECT_A, eligible())).toEqual([
+        { terminalId: "term-before", pluginDisplayNames: ["Ledger"] },
+      ]);
+
+      // An agent launched after the change has the tools and isn't listed.
+      await spawn({ id: "term-after" });
+      expect(listRelaunchNeeded(PROJECT_A, eligible()).map((s) => s.terminalId)).toEqual([
+        "term-before",
+      ]);
     });
   });
 });

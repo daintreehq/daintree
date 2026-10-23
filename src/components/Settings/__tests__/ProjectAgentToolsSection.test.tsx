@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { ProjectAgentToolsSection } from "../ProjectAgentToolsSection";
 import { __resetProjectPluginStoreForTesting } from "@/store/projectPluginStore";
+import { usePanelStore } from "@/store/panelStore";
 import type {
   ProjectAgentToolPlugin,
   ProjectAgentToolsSnapshot,
@@ -37,9 +38,10 @@ function notes(over: Partial<ProjectAgentToolPlugin> = {}): ProjectAgentToolPlug
 
 function snapshot(
   plugins: ProjectAgentToolPlugin[],
-  mcpServerEnabled = true
+  mcpServerEnabled = true,
+  relaunchNeeded: ProjectAgentToolsSnapshot["relaunchNeeded"] = []
 ): ProjectAgentToolsSnapshot {
-  return { plugins, mcpServerEnabled };
+  return { plugins, mcpServerEnabled, relaunchNeeded };
 }
 
 const agentMcpApi = {
@@ -144,6 +146,46 @@ function describedText(control: HTMLElement): string {
 }
 
 describe("ProjectAgentToolsSection", () => {
+  it("lists running agents whose tools changed, each with a restart, and only those this window shows", async () => {
+    const restartTerminal = vi.fn(() => Promise.resolve());
+    const original = usePanelStore.getState();
+    usePanelStore.setState({
+      panelsById: {
+        ...original.panelsById,
+        "term-1": { id: "term-1", kind: "terminal", title: "Fix the ledger" },
+      } as unknown as typeof original.panelsById,
+      restartTerminal,
+    });
+    try {
+      agentMcpApi.listProjectPlugins.mockResolvedValue(
+        snapshot([plugin({ access: "read-write" })], true, [
+          { terminalId: "term-1", pluginDisplayNames: ["Ledger"] },
+          { terminalId: "term-elsewhere", pluginDisplayNames: ["Ledger"] },
+        ])
+      );
+      render(<ProjectAgentToolsSection />);
+
+      const group = await screen.findByTestId("project-agent-tools-relaunch");
+      expect(group.textContent).toContain("Fix the ledger");
+      expect(group.textContent).toContain("Ledger");
+      const restarts = within(group).getAllByRole("button", { name: "Restart" });
+      expect(restarts).toHaveLength(1);
+
+      fireEvent.click(restarts[0]!);
+      expect(restartTerminal).toHaveBeenCalledWith("term-1");
+    } finally {
+      usePanelStore.setState(original, true);
+    }
+  });
+
+  it("shows no restart group when no running agent needs one", async () => {
+    agentMcpApi.listProjectPlugins.mockResolvedValue(snapshot([plugin({ access: "read-write" })]));
+    render(<ProjectAgentToolsSection />);
+
+    await screen.findByTestId("project-agent-tools");
+    expect(screen.queryByTestId("project-agent-tools-relaunch")).toBeNull();
+  });
+
   it("renders one row per plugin with its current level", async () => {
     agentMcpApi.listProjectPlugins.mockResolvedValue(
       snapshot([

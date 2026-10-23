@@ -182,6 +182,12 @@ export interface AddPanelOptionsBase {
    * reconcile the settings-derived part and re-append these untouched.
    */
   callerLaunchFlags?: string[];
+  /**
+   * Plugin instances whose agent tools this agent can't do without, from a
+   * plugin recipe's `requiresAgentTools` (#14096). Carried to every relaunch of
+   * the pane so a retry is held to the same requirement. Runtime only.
+   */
+  requiredPluginTools?: string[];
   /** Model ID selected at launch time for per-panel model selection */
   agentModelId?: string;
   /** Sticky "runtime agent ever detected" flag, rehydrated from backend during reconnect. */

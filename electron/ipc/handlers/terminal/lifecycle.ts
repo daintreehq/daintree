@@ -68,7 +68,19 @@ import {
   isAgentMcpScopeAllowed,
   isAssistantAgentMcpScopeAllowed,
 } from "../../../services/pluginAgentMcp/projectEnablement.js";
-import { resolveLaunchPlugins } from "../../../services/pluginAgentMcp/launchPlugins.js";
+import {
+  classifyRequiredPluginTools,
+  resolveLaunchPlugins,
+  resolveLaunchPluginsReport,
+  type LaunchPlugin,
+} from "../../../services/pluginAgentMcp/launchPlugins.js";
+import {
+  forgetPluginToolsLaunch,
+  recordPluginToolsLaunch,
+} from "../../../services/pluginAgentMcp/agentLaunchRecords.js";
+import type { RequiredPluginToolStatus } from "../../../../shared/types/ipc/pluginAgentMcp.js";
+import { pluginManifestIdFromInstanceKey } from "../../../../shared/types/plugin.js";
+import { describeMissingPluginTools } from "../../../../shared/utils/requiredPluginTools.js";
 import { pluginMcpGrantRegistry } from "../../../services/pluginAgentMcp/grantRegistry.js";
 
 type ValidatedTerminalSpawnOptions = z.output<typeof TerminalSpawnOptionsSchema>;
@@ -232,19 +244,43 @@ import { buildCommandLaunchShell } from "./commandLaunch.js";
 // matching the pty host's wait before it reports ready.
 const WINDOWS_SHELL_WAIT_MS = 2_000;
 
+function toPanePluginServers(plugins: readonly LaunchPlugin[]): PanePluginServer[] {
+  return plugins.map(({ plugin, serverKey, scope }) => ({
+    pluginInstanceId: plugin.pluginInstanceId,
+    serverKey,
+    scope,
+  }));
+}
+
 /** The plugin MCP servers an agent launch in this project should be handed; see `resolveLaunchPlugins`. */
 async function resolvePluginMcpServers(
   projectId: string,
   projectRoot: string,
   consumer?: "assistant"
 ): Promise<PanePluginServer[]> {
-  return (await resolveLaunchPlugins(projectId, projectRoot, consumer, getPluginService)).map(
-    ({ plugin, serverKey, scope }) => ({
-      pluginInstanceId: plugin.pluginInstanceId,
-      serverKey,
-      scope,
-    })
+  return toPanePluginServers(
+    await resolveLaunchPlugins(projectId, projectRoot, consumer, getPluginService)
   );
+}
+
+/** Every required plugin marked with one state, for a launch that never got as far as resolving them. */
+function requiredPluginToolsAll(
+  required: readonly string[],
+  state: RequiredPluginToolStatus["state"]
+): RequiredPluginToolStatus[] {
+  return [...new Set(required)].map((pluginInstanceId) => ({
+    pluginInstanceId,
+    pluginDisplayName: pluginManifestIdFromInstanceKey(pluginInstanceId),
+    state,
+  }));
+}
+
+/** Downgrade the statuses still reading ready to `state`: the launch failed past the point that confirms them. */
+function failReadyPluginTools(
+  statuses: RequiredPluginToolStatus[],
+  state: RequiredPluginToolStatus["state"]
+): RequiredPluginToolStatus[] {
+  return statuses.map((status) => (status.state === "ready" ? { ...status, state } : status));
 }
 
 /**
@@ -667,6 +703,16 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
         ? getEffectiveAgentConfig(launchAgentId)?.capabilities?.launchMcp
         : undefined;
 
+    // Plugin tools this launch can't do without (#14096). Ordinary launches
+    // list none and keep the optional behaviour: anything missing just isn't
+    // handed over. A required one that is missing refuses the launch with each
+    // plugin's state, unless the user chose to start without them this once.
+    const requiredPluginTools =
+      !isHelpLaunch && validatedOptions.allowMissingPluginTools !== true
+        ? (validatedOptions.requiredPluginTools ?? [])
+        : [];
+    let requiredPluginToolStatuses: RequiredPluginToolStatus[] = [];
+
     if (isHelpLaunch && launchAgentId) {
       const dangerous = DEFAULT_DANGEROUS_ARGS[launchAgentId];
       const bypassPermissions = helpSessionService.getBypassPermissions(helpToken);
@@ -922,15 +968,32 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
         // none of the session's own wiring either. Plugin servers reach the
         // Assistant only through its own launch, checked against its session
         // and its answer, so this one gets none.
-        const pluginServers = helpSessionService.isHelpTerminal(id)
-          ? []
-          : await resolvePluginMcpServers(resolvedProject.id, resolvedProject.path);
+        const isHelpTerminal = helpSessionService.isHelpTerminal(id);
+        const pluginReport = isHelpTerminal
+          ? null
+          : await resolveLaunchPluginsReport(
+              resolvedProject.id,
+              resolvedProject.path,
+              undefined,
+              getPluginService
+            );
+        const pluginServers = pluginReport ? toPanePluginServers(pluginReport.plugins) : [];
+        if (pluginReport && requiredPluginTools.length > 0) {
+          requiredPluginToolStatuses = classifyRequiredPluginTools(
+            pluginReport,
+            requiredPluginTools
+          );
+        }
         if (tier !== "off" || pluginServers.length > 0) {
           const mcpServerService = await getMcpServerService();
           const ready = mcpServerService.isRunning || (await mcpServerService.ensureReady());
           if (!ready) {
             console.warn(
               "[TerminalSpawn] Daintree MCP requested for agent launch, but the MCP server is not ready; continuing without MCP injection"
+            );
+            requiredPluginToolStatuses = failReadyPluginTools(
+              requiredPluginToolStatuses,
+              "listener-failed"
             );
           }
           const port = mcpServerService.currentPort;
@@ -953,6 +1016,20 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
                   }
                 : {}),
             });
+            if (!prepared) {
+              // Nothing prepared: a required plugin the eligibility recheck
+              // dropped lost its access or went away mid-launch; any other
+              // reached a failure in preparing the configuration itself.
+              const stillEligible = isPluginMcpServerStillEligible(resolvedProject.id);
+              requiredPluginToolStatuses = requiredPluginToolStatuses.map((status) => {
+                if (status.state !== "ready") return status;
+                const server = pluginServers.find(
+                  (candidate) => candidate.pluginInstanceId === status.pluginInstanceId
+                );
+                const state = server && stillEligible(server) ? "config-failed" : "revoked";
+                return { ...status, state };
+              });
+            }
             if (prepared) {
               preparedForThisLaunch = true;
               if (prepared.args.length > 0) {
@@ -1005,7 +1082,45 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
           "[TerminalSpawn] Failed to prepare Daintree MCP config; continuing without MCP injection:",
           mcpErr
         );
+        requiredPluginToolStatuses = failReadyPluginTools(
+          requiredPluginToolStatuses,
+          "config-failed"
+        );
       }
+      if (requiredPluginToolStatuses.length > 0) {
+        // Ready means handed over: a live grant for this launch, not merely
+        // eligible when resolution ran. One the eligibility recheck skipped, or
+        // revoked since, is missing from the agent's configuration.
+        const granted = new Set(
+          pluginMcpGrantRegistry.listForTerminal(id).map((grant) => grant.pluginInstanceId)
+        );
+        requiredPluginToolStatuses = requiredPluginToolStatuses.map((status) =>
+          status.state === "ready" && !granted.has(status.pluginInstanceId)
+            ? { ...status, state: "revoked" }
+            : status
+        );
+      }
+      if (requiredPluginToolStatuses.some((status) => status.state !== "ready")) {
+        if (preparedForThisLaunch) {
+          await mcpPaneConfigService.revokePaneConfig(id).catch(() => {});
+        }
+      } else if (!helpSessionService.isHelpTerminal(id)) {
+        recordPluginToolsLaunch(id, resolvedProject.id);
+      }
+    } else if (requiredPluginTools.length > 0) {
+      requiredPluginToolStatuses = requiredPluginToolsAll(
+        requiredPluginTools,
+        launchMcp === undefined ? "unsupported-format" : "unavailable"
+      );
+    }
+
+    if (requiredPluginToolStatuses.some((status) => status.state !== "ready")) {
+      throw new AppError({
+        code: "REQUIRED_PLUGIN_TOOLS_UNAVAILABLE",
+        message: "Agent launch refused: required plugin tools are not ready",
+        userMessage: describeMissingPluginTools(requiredPluginToolStatuses),
+        details: { code: "REQUIRED_PLUGIN_TOOLS_UNAVAILABLE", tools: requiredPluginToolStatuses },
+      });
     }
 
     // Expand `${settings:*}` templates a plugin agent embedded in its command
@@ -1168,6 +1283,7 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
       mcpPaneConfigService.revokePaneConfig(id).catch(() => {
         // best-effort cleanup
       });
+      forgetPluginToolsLaunch(id);
       // If we bound this terminalId to a help session above, unbind now so a
       // future provision doesn't try to kill a PTY that never spawned.
       if (isHelpLaunch) {

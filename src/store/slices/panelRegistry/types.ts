@@ -43,6 +43,11 @@ export interface RestartTerminalOptions {
    * with no launch agent.
    */
   resumeSessionId?: string;
+  /**
+   * Start the agent this once even if plugin tools it requires aren't ready
+   * (#14096). The user's explicit choice from the refusal banner; never stored.
+   */
+  allowMissingPluginTools?: boolean;
 }
 
 export interface TrashedTerminalGroupMetadata {

@@ -8,6 +8,11 @@ import {
   listDeclaredAgentMcpPlugins,
 } from "../../services/pluginAgentMcp/declaredEndpoints.js";
 import {
+  listRelaunchNeeded,
+  type EligiblePluginTools,
+} from "../../services/pluginAgentMcp/agentLaunchRecords.js";
+import {
+  agentMcpScopeFor,
   allProjectsAgentMcpAccess,
   assistantAgentMcpAccess,
   hasLegacyAgentMcpAnswer,
@@ -264,7 +269,7 @@ function retainedAccess(
 
 async function buildSnapshot(projectId: string | null): Promise<ProjectAgentToolsSnapshot> {
   const mcpServerEnabled = (await getMcpServerService()).isEnabled();
-  if (projectId === null) return { plugins: [], mcpServerEnabled };
+  if (projectId === null) return { plugins: [], mcpServerEnabled, relaunchNeeded: [] };
 
   const svc = await getPluginService();
   // A read before the deferred initialize() would see no plugins at all.
@@ -309,7 +314,23 @@ async function buildSnapshot(projectId: string | null): Promise<ProjectAgentTool
     rows.push({ ...rest, access: retainedAccess(projectId, id, manifest) });
   }
 
-  return { plugins: rows, mcpServerEnabled };
+  // What a launch would be handed now, against what each running agent holds.
+  // With the listener off a relaunch gets nothing either, so none is asked for.
+  const eligible: EligiblePluginTools[] = [];
+  if (mcpServerEnabled) {
+    for (const d of declared) {
+      const scope = agentMcpScopeFor(projectId, d);
+      if (scope === null) continue;
+      eligible.push({
+        pluginInstanceId: d.pluginInstanceId,
+        pluginDisplayName: displayName(d.pluginDisplayName, d.pluginManifestId),
+        scope,
+      });
+    }
+  }
+  const relaunchNeeded = mcpServerEnabled ? listRelaunchNeeded(projectId, eligible) : [];
+
+  return { plugins: rows, mcpServerEnabled, relaunchNeeded };
 }
 
 /** Whether a level means something for what the plugin offers. */

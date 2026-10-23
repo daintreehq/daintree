@@ -43,6 +43,7 @@ import { logDebug, logWarn, logError } from "@/utils/logger";
 import { markRendererPerformance } from "@/utils/performance";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { isClientAppError } from "@/utils/clientAppError";
+import { requiredPluginToolsSpawnError } from "@/utils/requiredPluginToolsSpawnError";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { isUnknownOutcomeError } from "@/utils/resolveUnknownOutcome";
 import { useHostConnectionStore, waitForHostConnected } from "@/store/hostConnectionStore";
@@ -870,6 +871,7 @@ export const createAddPanelActions = (
       agentSessionId: options.agentSessionId,
       agentLaunchFlags: options.agentLaunchFlags,
       callerLaunchFlags: options.callerLaunchFlags,
+      requiredPluginTools: options.requiredPluginTools,
       agentModelId: options.agentModelId,
       everDetectedAgent: options.everDetectedAgent,
       agentIncarnation: options.agentIncarnation,
@@ -1497,7 +1499,7 @@ export const createAddPanelActions = (
           // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- error shape from node-pty spawn rejection
           const err = error as { code?: string; errno?: number; syscall?: string; path?: string };
           // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- SpawnError construction from caught IPC error
-          const spawnError = {
+          const errnoSpawnError = {
             code: appError ? "UNKNOWN" : (err.code ?? "UNKNOWN"),
             message: appError
               ? (appError.userMessage ?? appError.message)
@@ -1506,6 +1508,9 @@ export const createAddPanelActions = (
             syscall: err.syscall,
             path: err.path,
           } as import("@shared/types/pty-host").SpawnError;
+          // A refusal for missing plugin tools keeps its per-plugin states, so
+          // the banner can say what's missing and offer to start without them.
+          const spawnError = requiredPluginToolsSpawnError(error) ?? errnoSpawnError;
 
           set((state) => {
             const _current = state.panelsById[id];
@@ -1857,6 +1862,7 @@ export const createAddPanelActions = (
               agentPresetColor: options.agentPresetColor,
               originalAgentPresetId: options.originalPresetId ?? options.agentPresetId,
               handbackCode: options.handbackCode,
+              requiredPluginTools: options.requiredPluginTools,
               // Launch-time context the pane's MCP session replays through its
               // workspace binding (#12486): a caller may supply one, and a Claude
               // pane's is captured here for its own worktree.

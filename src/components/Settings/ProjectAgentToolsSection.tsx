@@ -15,10 +15,13 @@ import { SettingsSwitch } from "@/components/Settings/SettingsSwitch";
 import { TriangleAlert } from "lucide-react";
 import { pluginAgentMcpClient } from "@/clients/pluginAgentMcpClient";
 import { useProjectPluginStore } from "@/store/projectPluginStore";
+import { useShallow } from "zustand/react/shallow";
+import { usePanelStore } from "@/store/panelStore";
 import { logError } from "@/utils/logger";
 import type {
   AgentMcpAccess,
   ProjectAgentToolPlugin,
+  AgentToolsRelaunchSession,
   ProjectAgentToolsSnapshot,
   SetProjectAgentToolAccessPayload,
 } from "@shared/types/ipc/pluginAgentMcp";
@@ -54,6 +57,58 @@ function FailureRow({ message, onRetry }: { message: string; onRetry: () => void
         Retry
       </Button>
     </div>
+  );
+}
+
+/**
+ * Running agents whose tools changed since they started, each with a restart:
+ * more access, or a plugin that came back with different tools, only reaches
+ * an agent when it is launched again. Agents this window doesn't show are left
+ * to the window that does.
+ */
+function RelaunchNeededGroup({
+  sessions,
+  onRestarted,
+}: {
+  sessions: readonly AgentToolsRelaunchSession[];
+  onRestarted: () => void;
+}) {
+  const titles = usePanelStore(
+    useShallow((s) =>
+      sessions.map((session) => {
+        const panel = s.panelsById[session.terminalId];
+        return panel === undefined ? null : panel.title || "Agent";
+      })
+    )
+  );
+  const restartTerminal = usePanelStore((s) => s.restartTerminal);
+  const shown = sessions.flatMap((session, index) => {
+    const title = titles[index];
+    return title === null || title === undefined ? [] : [{ session, title }];
+  });
+  if (shown.length === 0) return null;
+  return (
+    <SettingsGroup
+      label="Agents that need a restart"
+      rootAttributes={{ "data-testid": "project-agent-tools-relaunch" }}
+    >
+      {shown.map(({ session, title }) => (
+        <SettingsRow
+          key={session.terminalId}
+          label={title}
+          description={`Started before its tools from ${session.pluginDisplayNames.join(", ")} changed, so it only gets them once restarted`}
+          control={
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => void restartTerminal(session.terminalId).then(onRestarted)}
+            >
+              Restart
+            </Button>
+          }
+        />
+      ))}
+    </SettingsGroup>
   );
 }
 
@@ -577,6 +632,7 @@ export function ProjectAgentToolsSection() {
             />
           )}
         </SettingsGroup>
+        <RelaunchNeededGroup sessions={snapshot.relaunchNeeded ?? []} onRestarted={refresh} />
       </SettingsSection>
     </div>
   );

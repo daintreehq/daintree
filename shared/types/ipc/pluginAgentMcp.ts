@@ -77,6 +77,64 @@ export interface ProjectAgentToolsSnapshot {
    * on does nothing while the listener is switched off.
    */
   mcpServerEnabled: boolean;
+  /**
+   * Agents running in this project whose plugin tools no longer match what a
+   * launch would get now: access was widened, or a plugin came back with a
+   * different set of tools. Their tools only change when they are relaunched.
+   * A reload that kept the same tools never lists an agent here.
+   */
+  relaunchNeeded: AgentToolsRelaunchSession[];
+}
+
+/** One running agent that would get different plugin tools if it were relaunched. */
+export interface AgentToolsRelaunchSession {
+  terminalId: string;
+  /** The plugins whose tools it would gain or whose tools changed. */
+  pluginDisplayNames: string[];
+}
+
+/**
+ * Where a plugin's agent tools stand for one launch that requires them:
+ * - `ready`: handed to this launch with a live credential.
+ * - `unsupported-format`: the agent has no way to be handed MCP servers.
+ * - `disabled-access`: the plugin runs here, but its agent tools are off in this project.
+ * - `pending-load`: plugins were still loading when the launch stopped waiting.
+ * - `unavailable`: loading finished and the plugin isn't running here or offers no agent tools.
+ * - `listener-failed`: Daintree's MCP listener couldn't start.
+ * - `config-failed`: preparing the agent's MCP configuration failed.
+ * - `revoked`: access or the plugin changed while the launch was being prepared.
+ */
+export type RequiredPluginToolsState =
+  | "ready"
+  | "unsupported-format"
+  | "disabled-access"
+  | "pending-load"
+  | "unavailable"
+  | "listener-failed"
+  | "config-failed"
+  | "revoked";
+
+export const REQUIRED_PLUGIN_TOOLS_STATES: readonly RequiredPluginToolsState[] = [
+  "ready",
+  "unsupported-format",
+  "disabled-access",
+  "pending-load",
+  "unavailable",
+  "listener-failed",
+  "config-failed",
+  "revoked",
+];
+
+export interface RequiredPluginToolStatus {
+  pluginInstanceId: string;
+  pluginDisplayName: string;
+  state: RequiredPluginToolsState;
+}
+
+/** The structured detail a launch refused for missing required plugin tools carries. */
+export interface RequiredPluginToolsError {
+  code: "REQUIRED_PLUGIN_TOOLS_UNAVAILABLE";
+  tools: RequiredPluginToolStatus[];
 }
 
 export type SetProjectAgentToolAccessPayload =

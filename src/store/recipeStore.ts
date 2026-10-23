@@ -1551,6 +1551,12 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
               spawnedBy,
               focusPolicy,
               bypassLimits: true,
+              // Main holds the launch to the plugin's tools too: the check
+              // above reads access, not whether the tools reach the agent
+              // (#14096).
+              ...(recipe.requiresAgentTools === true && isPluginRecipe(recipe)
+                ? { requiredPluginTools: [recipe.origin.pluginId] }
+                : {}),
               ...spawnBatch,
             });
           }
