@@ -31,6 +31,7 @@ function fixtureTours(): PluginTourContribution[] {
 const context = (generation: number) => ({
   pluginName: "Acme Site Builder",
   pluginUrl: (relative: string) => `plugin://pi-abc/__dtv-${generation}/${relative}`,
+  qualifyActionId: (actionId: string) => actionId,
 });
 
 beforeEach(() => {
@@ -107,5 +108,46 @@ describe("PluginTourRegistry (#12773)", () => {
     unsubscribe();
     registerPluginTours("acme.welcome-tour", fixtureTours(), context(3));
     expect(listener).toHaveBeenCalledTimes(2);
+  });
+
+  it("carries the version and finish, with the command qualified to the instance", () => {
+    const [tour] = fixtureTours();
+    const instance = "project__p1__acme.welcome-tour";
+    registerPluginTours(
+      instance,
+      [
+        {
+          ...tour!,
+          version: "2",
+          finish: {
+            hint: "Open your first site",
+            action: { kind: "command", actionId: "acme.welcome-tour.start" },
+          },
+        },
+        {
+          ...tour!,
+          id: "settings",
+          finish: { hint: "Connect an account", action: { kind: "settings", key: "token" } },
+        },
+      ],
+      {
+        ...context(1),
+        qualifyActionId: (actionId) => actionId.replace("acme.welcome-tour.", `${instance}.`),
+      }
+    );
+    const [versioned, settings] = getPluginTours();
+    expect(versioned).toMatchObject({
+      id: `${instance}.welcome`,
+      version: "2",
+      finish: {
+        hint: "Open your first site",
+        action: { kind: "command", actionId: `${instance}.start` },
+      },
+    });
+    expect(settings!.version).toBeUndefined();
+    expect(settings!.finish).toEqual({
+      hint: "Connect an account",
+      action: { kind: "settings", key: "token" },
+    });
   });
 });

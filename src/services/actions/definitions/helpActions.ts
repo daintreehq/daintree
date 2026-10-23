@@ -23,7 +23,9 @@ import { extractHelpSessionErrorCode } from "@/utils/clientHelpSessionError";
 import { getDefaultAgentId } from "@/lib/resolveAgentId";
 import { loadCustomLaunchFlags } from "@/lib/assistantLaunchFlags";
 import { ensureHelpPanelRuntime } from "@/lib/helpPanelRuntimeGate";
-import { openTour } from "@/components/Tour/tourEvents";
+import { requestTour, type TourStartResult } from "@/components/Tour/tourRequests";
+import { readTourStatus, tourCandidates, type TourStatus } from "@/components/Tour/tourStatus";
+import { TOUR_OUTCOMES } from "@shared/utils/tourIds";
 import { isBuiltInAgentId } from "@shared/config/agentIds";
 import {
   ASSISTANT_SLOTS,
@@ -525,6 +527,30 @@ async function startHelpSessionWithAgent(
     return { outcome: "started" };
   }
 }
+
+const TourStartResultSchema = z.discriminatedUnion("status", [
+  z.object({ status: z.literal("started"), tourId: z.string(), runId: z.string() }),
+  z.object({
+    status: z.literal("unavailable"),
+    tourId: z.string(),
+    reason: z.enum(["not-registered", "no-host"]),
+  }),
+  z.object({ status: z.literal("failed"), tourId: z.string(), reason: z.string() }),
+  z.object({ status: z.literal("superseded"), tourId: z.string() }),
+]) satisfies z.ZodType<TourStartResult>;
+
+const TourStatusSchema = z.object({
+  tourId: z.string(),
+  registered: z.boolean(),
+  contentVersion: z.string().nullable(),
+  completed: z.boolean(),
+  completedCurrentVersion: z.boolean(),
+  dismissed: z.boolean(),
+  lastChapterId: z.string().nullable(),
+  progressVersion: z.string().nullable(),
+  lastOutcome: z.enum(TOUR_OUTCOMES).nullable(),
+  lastRunId: z.string().nullable(),
+}) satisfies z.ZodType<TourStatus>;
 
 export function registerHelpActions(actions: ActionRegistry, callbacks: ActionCallbacks): void {
   actions.set("help.shortcuts", () => ({
@@ -1067,15 +1093,47 @@ export function registerHelpActions(actions: ActionRegistry, callbacks: ActionCa
     scope: "renderer",
     keywords: ["tour", "tutorial", "walkthrough", "onboarding", "intro", "video"],
     // Optional so every existing zero-argument caller (menu, palette, MCP) keeps working.
-    // An id no tour is registered under is the host's to handle, not a validation error.
+    // An id no tour is registered under is reported in the result, not a validation error.
     argsSchema: z
       .object({
-        tourId: z.string().optional().describe("Tour to play; defaults to the Daintree tour"),
+        tourId: z
+          .string()
+          .optional()
+          .describe(
+            "Tour to play; defaults to the Daintree tour. A plugin names its own tours by their manifest id"
+          ),
       })
       .optional(),
-    run: async (args: { tourId?: string } | undefined) => {
-      openTour(args?.tourId);
-    },
+    resultSchema: TourStartResultSchema,
+    // Resolves once the tour is playing or can't be: how the run ends is
+    // saved with its progress, read back through `help.tour.status`.
+    run: async (args: { tourId?: string } | undefined, ctx) =>
+      requestTour(tourCandidates(args?.tourId, ctx.callerPluginId)),
+  }));
+
+  actions.set("help.tour.status", () => ({
+    id: "help.tour.status",
+    title: "Tour status",
+    description:
+      "Read a tour's saved progress: whether it was finished, where it resumes, and how its last run ended",
+    category: "help",
+    kind: "query",
+    danger: "safe",
+    scope: "renderer",
+    keywords: ["tour", "progress", "completed", "onboarding"],
+    argsSchema: z
+      .object({
+        tourId: z
+          .string()
+          .optional()
+          .describe(
+            "Tour to read; defaults to the Daintree tour. A plugin names its own tours by their manifest id"
+          ),
+      })
+      .optional(),
+    resultSchema: TourStatusSchema,
+    run: async (args: { tourId?: string } | undefined, ctx) =>
+      readTourStatus(tourCandidates(args?.tourId, ctx.callerPluginId)),
   }));
 
   actions.set("help.togglePanel", () => ({

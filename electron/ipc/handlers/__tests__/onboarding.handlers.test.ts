@@ -316,6 +316,132 @@ describe("registerOnboardingHandlers — discovery IPC", () => {
       expect(after).toEqual({ completed: true, dismissed: false, lastChapter: 1 });
     });
 
+    it("keeps the chapter id, content version and last outcome with the progress", () => {
+      registerOnboardingHandlers();
+      seedOnboarding();
+      const progress = getHandler("onboarding:tour-set-progress");
+      progress(null, PLUGIN_TOUR, { lastChapter: 2, lastChapterId: "intro", contentVersion: "2" });
+      progress(null, PLUGIN_TOUR, { lastOutcome: "dismissed", lastRunId: "run-1" });
+      expect(read().tours[PLUGIN_TOUR]).toEqual({
+        completed: false,
+        dismissed: false,
+        lastChapter: 2,
+        lastChapterId: "intro",
+        contentVersion: "2",
+        lastOutcome: "dismissed",
+        lastRunId: "run-1",
+      });
+    });
+
+    it("records the version a completion was made under, and clears it for an unversioned tour", () => {
+      registerOnboardingHandlers();
+      seedOnboarding();
+      const progress = getHandler("onboarding:tour-set-progress");
+      progress(null, PLUGIN_TOUR, { completed: true, lastChapter: 0, contentVersion: "1" });
+      expect(read().tours[PLUGIN_TOUR]).toMatchObject({
+        completed: true,
+        completedVersion: "1",
+        contentVersion: "1",
+      });
+      progress(null, PLUGIN_TOUR, { lastChapter: 1, lastChapterId: "two", contentVersion: null });
+      expect(read().tours[PLUGIN_TOUR]).not.toHaveProperty("contentVersion");
+      expect(read().tours[PLUGIN_TOUR]).toMatchObject({ completed: true, completedVersion: "1" });
+      // Finished again with the version dropped: the old version no longer describes it.
+      progress(null, PLUGIN_TOUR, { completed: true, lastChapter: 0, contentVersion: null });
+      expect(read().tours[PLUGIN_TOUR]).not.toHaveProperty("completedVersion");
+    });
+
+    it("leaves the saved chapter's version alone on an outcome-only write", () => {
+      registerOnboardingHandlers();
+      seedOnboarding();
+      const progress = getHandler("onboarding:tour-set-progress");
+      progress(null, PLUGIN_TOUR, { lastChapter: 1, lastChapterId: "setup", contentVersion: "1" });
+      progress(null, PLUGIN_TOUR, { lastOutcome: "failed" });
+      expect(read().tours[PLUGIN_TOUR]).toMatchObject({
+        lastChapterId: "setup",
+        contentVersion: "1",
+        lastOutcome: "failed",
+      });
+      expect(read().tours[PLUGIN_TOUR]).not.toHaveProperty("lastRunId");
+    });
+
+    it("reads a completion saved before versions and chapter ids were kept as completed", () => {
+      registerOnboardingHandlers();
+      seedOnboarding({
+        tours: { [PLUGIN_TOUR]: { completed: true, dismissed: false, lastChapter: 3 } },
+      });
+      expect(read().tours[PLUGIN_TOUR]).toEqual({
+        completed: true,
+        dismissed: false,
+        lastChapter: 3,
+      });
+    });
+
+    it("drops malformed chapter ids, versions and outcomes", () => {
+      registerOnboardingHandlers();
+      seedOnboarding({
+        tours: {
+          [PLUGIN_TOUR]: {
+            completed: false,
+            dismissed: false,
+            lastChapter: 1,
+            lastChapterId: 7,
+            contentVersion: "x".repeat(65),
+            lastOutcome: "exploded",
+            lastRunId: "",
+          },
+        },
+      });
+      expect(read().tours[PLUGIN_TOUR]).toEqual({
+        completed: false,
+        dismissed: false,
+        lastChapter: 1,
+      });
+      const progress = getHandler("onboarding:tour-set-progress");
+      progress(null, PLUGIN_TOUR, { lastOutcome: "exploded", lastChapterId: "" });
+      expect(read().tours[PLUGIN_TOUR]).toEqual({
+        completed: false,
+        dismissed: false,
+        lastChapter: 1,
+      });
+    });
+
+    it("drops a chapter id an index-only write leaves stale", () => {
+      registerOnboardingHandlers();
+      seedOnboarding();
+      const progress = getHandler("onboarding:tour-set-progress");
+      progress(null, PLUGIN_TOUR, { lastChapter: 3, lastChapterId: "four" });
+      progress(null, PLUGIN_TOUR, { lastChapter: 1 });
+      expect(read().tours[PLUGIN_TOUR]).not.toHaveProperty("lastChapterId");
+    });
+
+    it("merges interleaved writes from two windows without losing either", () => {
+      registerOnboardingHandlers();
+      seedOnboarding();
+      const progress = getHandler("onboarding:tour-set-progress");
+      const dismiss = getHandler("onboarding:tour-dismiss-invite");
+      // Window A plays the tour while window B finishes it and C turns down another.
+      progress(null, PLUGIN_TOUR, { lastChapter: 1, lastChapterId: "two", contentVersion: "1" });
+      progress(null, PLUGIN_TOUR, { completed: true, lastChapter: 0, contentVersion: "1" });
+      dismiss(null, OTHER_PLUGIN_TOUR);
+      // A's late chapter write and outcome arrive after B's completion.
+      progress(null, PLUGIN_TOUR, { lastChapter: 2, lastChapterId: "three", contentVersion: "1" });
+      progress(null, PLUGIN_TOUR, { lastOutcome: "dismissed", lastRunId: "run-a" });
+      expect(read().tours).toEqual({
+        [PLUGIN_TOUR]: {
+          completed: true,
+          completedVersion: "1",
+          dismissed: false,
+          lastChapter: 2,
+          lastChapterId: "three",
+          contentVersion: "1",
+          lastOutcome: "dismissed",
+          lastRunId: "run-a",
+        },
+        [OTHER_PLUGIN_TOUR]: { completed: false, dismissed: true, lastChapter: 0 },
+      });
+    });
+
     it("keeps each tour's progress separate, including dotted plugin ids", () => {
       registerOnboardingHandlers();
       seedOnboarding();

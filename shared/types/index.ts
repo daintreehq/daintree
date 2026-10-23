@@ -678,6 +678,7 @@ export type {
   ChecklistItemId,
   TourOnboardingState,
   TourProgressUpdate,
+  TourOutcome,
   HelpAssistantTier,
 } from "./ipc/maps.js";
 

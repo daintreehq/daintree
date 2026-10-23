@@ -183,11 +183,38 @@ export interface TourOnboardingState {
   dismissed: boolean;
   /** Chapter the user last reached, so a reopened tour resumes there. */
   lastChapter: number;
+  /**
+   * Id of the chapter last reached. Resume keys on it rather than on the
+   * index, so reordered chapters still land in the right place. Absent on
+   * records written before chapter ids were kept.
+   */
+  lastChapterId?: string;
+  /** The tour's declared content version this progress was recorded against. */
+  contentVersion?: string;
+  /** The content version that was playing when the tour was last completed. */
+  completedVersion?: string;
+  /** How the last run that opened ended. */
+  lastOutcome?: TourOutcome;
+  /** The run {@link lastOutcome} belongs to, as `help.tour.show` reported it. */
+  lastRunId?: string;
 }
+
+/**
+ * How one run of a tour ended. `completed`: played to the end of its last
+ * chapter. `dismissed`: closed before that. `superseded`: another tour opened
+ * over it. `withdrawn`: its plugin was disabled or reloaded while it was open.
+ * `failed`: it couldn't be loaded.
+ */
+export type TourOutcome = "completed" | "dismissed" | "superseded" | "withdrawn" | "failed";
 
 export interface TourProgressUpdate {
   completed?: boolean;
   lastChapter?: number;
+  lastChapterId?: string;
+  /** Stamped on every write by a versioned tour; `null` for an unversioned one. */
+  contentVersion?: string | null;
+  lastOutcome?: TourOutcome;
+  lastRunId?: string;
 }
 
 export interface OnboardingState {

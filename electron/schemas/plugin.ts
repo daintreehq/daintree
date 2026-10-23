@@ -2277,6 +2277,23 @@ export const TourChapterSchema = z
   });
 
 /**
+ * What a tour's Finish does beyond closing (#14098): open this plugin's
+ * settings, optionally at one setting, or run one of its own commands. The
+ * same two targets a setup step offers, checked by the same manifest-level
+ * rules, and dispatched as the user's click.
+ */
+export const TourFinishSchema = z
+  .object({
+    /** The line on the last end card that says what Finish will do. */
+    hint: z.string().trim().min(1).max(120),
+    action: z.discriminatedUnion("kind", [
+      SetupStepSettingsActionSchema,
+      SetupStepCommandActionSchema,
+    ]),
+  })
+  .strict();
+
+/**
  * One `contributes.tours` entry (#12768): a welcome tour that plays in the same
  * dialog as the Daintree tour. Without `panelKind` it is a plugin tour offered
  * from Help and the command palette; with one it is a panel tour opened from
@@ -2295,6 +2312,13 @@ export const TourContributionSchema = z
     panelKind: z.string().min(1).max(64).regex(SAFE_ID_PATTERN).optional(),
     audioHosts: z.array(TourAudioHostSchema).max(TOUR_CONTRIBUTION_LIMITS.audioHosts).default([]),
     chapters: z.array(TourChapterSchema).min(1).max(TOUR_CONTRIBUTION_LIMITS.chapters),
+    /**
+     * The tour's content version. Saved progress resumes by chapter id only
+     * while it matches; bump it when the content changes enough that a
+     * half-watched run should start over.
+     */
+    version: z.string().min(1).max(64).regex(SAFE_ID_PATTERN).optional(),
+    finish: TourFinishSchema.optional(),
   })
   .strict()
   .superRefine((tour, ctx) => {
@@ -4433,6 +4457,47 @@ function buildPluginManifestSchema(origin: PluginOrigin) {
               code: z.ZodIssueCode.custom,
               path: actionPath,
               message: `Setup step "${step.id}" action.actionId "${actionId}" is in this plugin's "${manifest.name}" namespace but matches no entry in contributes.commands — likely a typo for a declared command.`,
+              params: { errorCode: "action_id_undeclared_command" },
+            });
+          }
+        }
+      });
+
+      // A tour's Finish opens the same two targets a setup step does, held to
+      // the same rules: a declared setting, or one of this plugin's own commands.
+      manifest.contributes.tours.forEach((tour, index) => {
+        const action = tour.finish?.action;
+        const path = ["contributes", "tours", index, "finish", "action"];
+        if (
+          action?.kind === "settings" &&
+          action.key !== undefined &&
+          !settingIds.has(action.key)
+        ) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: [...path, "key"],
+            message: `Tour "${tour.id}" finishes by opening setting "${action.key}", but no contributes.settings[].id matches it.`,
+            params: { errorCode: "tour_finish_setting_unknown" },
+          });
+        }
+        if (action?.kind === "command") {
+          const { actionId } = action;
+          if (
+            !actionId.startsWith(ownNamespacePrefix) ||
+            actionId.length === ownNamespacePrefix.length ||
+            !PANEL_MENU_ACTION_ID.test(actionId)
+          ) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              path: [...path, "actionId"],
+              message: `Tour "${tour.id}" finish action.actionId "${actionId}" must be one of this plugin's own commands, written "${manifest.name}.<id>".`,
+              params: { errorCode: "tour_finish_command_not_own" },
+            });
+          } else if (declaredCommandActionIds.size > 0 && !declaredCommandActionIds.has(actionId)) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              path: [...path, "actionId"],
+              message: `Tour "${tour.id}" finish action.actionId "${actionId}" is in this plugin's "${manifest.name}" namespace but matches no entry in contributes.commands — likely a typo for a declared command.`,
               params: { errorCode: "action_id_undeclared_command" },
             });
           }

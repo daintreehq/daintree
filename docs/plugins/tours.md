@@ -362,3 +362,47 @@ Before shipping, run `daintree-plugin validate`, and check `daintree-plugin pack
 - A plugin reload closes an open tour too; reopening plays the new version.
 - A malformed tour is reported with the offending path, like any other malformed contribution. `daintree-plugin validate` and the installer refuse it; at load, Daintree logs the issues and drops only that tour, so the rest of the plugin still loads. Exceeding the tour cap is a whole-manifest error.
 - Limits: 10 tours per plugin, 32 chapters per tour, 600 seconds per chapter, 128 cues and 128 captions per chapter, 8 `audioHosts`.
+
+## Opening a tour from your plugin
+
+Dispatch `help.tour.show` with your tour's manifest `id`. From a plugin, `tourId` is read as one of your own tours first, so you never spell out your instance key (for a project-owned plugin, that key carries the project). Your own qualified id (`<your plugin id>.<tour id>`) and `daintree` also work. Another plugin's tour can't be opened or read by its qualified id, so you only ever see your own tours' run ids and outcomes.
+
+```ts
+const shown = await host.dispatch("help.tour.show", { tourId: "welcome" });
+const start = shown.ok ? (shown.result as { status: string; runId?: string }) : null;
+if (start?.status === "started") rememberRun(start.runId!);
+```
+
+The result says whether the tour started, not how it ended:
+
+| `status` | Means |
+| --- | --- |
+| `started` | The dialog is on screen playing it, or already was. Carries the `runId` its outcome is saved under. |
+| `unavailable` | `reason: "not-registered"`: nothing registered the tour within 5 seconds, or it was withdrawn while loading. `reason: "no-host"`: the view has no tour host. |
+| `failed` | The tour is registered but its scene module couldn't be loaded. |
+| `superseded` | A later request opened something else first. |
+
+A dispatch that never reaches a view (no project view, a refused `project:dispatch`) fails with `{ ok: false }` as any dispatch does.
+
+How a run ends is saved with the tour's progress. Read it with `help.tour.status`, which takes the same `tourId`:
+
+| Field | Means |
+| --- | --- |
+| `lastOutcome` | `completed` (played to the end of its last chapter), `dismissed` (closed before that), `superseded` (another tour opened over it), `withdrawn` (your plugin was disabled or reloaded, or its view closed, while it was open), `failed`, or `null`. |
+| `lastRunId` | The run `lastOutcome` belongs to. Compare it with the `runId` you were given: an outcome from another run, or `completed: true` left by an earlier one, says nothing about yours. |
+| `completed`, `completedCurrentVersion` | Finished under any version, and under the version registered now. |
+| `lastChapterId`, `progressVersion`, `contentVersion` | Where a reopened run resumes, the version that progress was saved under, and your tour's declared version. |
+
+Progress lives in Daintree's own settings on the user's machine. Nothing in a manifest or a repository can write it.
+
+## Versions and resume
+
+Progress is saved by chapter `id`, so reordering chapters keeps a half-watched run in the right place. Declare `version` on the tour and bump it when the content changes enough that a viewer part-way through should start over: saved progress resumes only while its version matches, and a chapter id the tour no longer has starts it from the beginning. A completion survives a version bump, and `completedCurrentVersion` tells the two apart.
+
+## Finishing into your plugin
+
+`finish` puts a line on the last end card and decides what Finish does after closing the tour: open your settings, optionally at one setting, or run one of your own commands, such as the first step of your workflow. These are the same two targets a setup step offers, held to the same rules: the setting must be one you declare, and the command must be yours (`{name}.<id>`, and one of your `contributes.commands` when you declare any). Finish is the user's click, so the action runs under its own danger and consent rules.
+
+```json
+"finish": { "hint": "Connect your account to start publishing", "action": { "kind": "settings", "key": "token" } }
+```

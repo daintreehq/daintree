@@ -862,6 +862,17 @@ function writeProjectPluginTrust(
   }
 }
 
+/**
+ * A manifest names its own commands `{manifest.name}.<id>`; a project-owned
+ * instance registers them under its instance key, so that is where they dispatch.
+ */
+function qualifyOwnActionId(pluginId: string, manifestName: string, actionId: string): string {
+  const ownPrefix = `${manifestName}.`;
+  return projectIdFromPluginInstanceKey(pluginId) !== null && actionId.startsWith(ownPrefix)
+    ? `${pluginId}.${actionId.slice(ownPrefix.length)}`
+    : actionId;
+}
+
 export class PluginService {
   private plugins = new Map<string, LoadedPlugin>();
   /**
@@ -3201,6 +3212,7 @@ export class PluginService {
         pluginName: manifest.displayName ?? manifest.name,
         pluginUrl: (relativePath) =>
           buildPluginViewUrl(authority, relativePath, plugin.viewGeneration),
+        qualifyActionId: (actionId) => qualifyOwnActionId(pluginId, manifest.name, actionId),
       });
       this.broadcaster.scheduleToursBroadcast();
     }
@@ -7041,11 +7053,8 @@ export class PluginService {
       projectId === null ? [] : getProjectPluginSetupSkips(projectId, pluginId)
     );
 
-    const ownPrefix = `${manifest.name}.`;
     const qualify = (actionId: string): string =>
-      projectIdFromPluginInstanceKey(pluginId) !== null && actionId.startsWith(ownPrefix)
-        ? `${pluginId}.${actionId.slice(ownPrefix.length)}`
-        : actionId;
+      qualifyOwnActionId(pluginId, manifest.name, actionId);
 
     return {
       steps: steps.map((step): PluginSetupStepUiStatus => {

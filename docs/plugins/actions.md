@@ -220,6 +220,7 @@ An argument shown as `name?` is optional. Argument names come from each action's
 | `help.openCommandsFolder` | Open assistant commands folder | safe | — |
 | `help.resumePastSession` | Resume past assistant session | safe | `agentId`, `sessionId`, `slot?` |
 | `help.tour.show` | Daintree Tour | safe | `tourId?` |
+| `help.tour.status` | Tour status | safe | `tourId?` |
 
 ## introspection
 

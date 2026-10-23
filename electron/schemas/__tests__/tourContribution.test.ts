@@ -377,3 +377,79 @@ describe("parsePluginManifestForLoad tour isolation (#12768)", () => {
     expect(projectScope.droppedTourIssues).toEqual([]);
   });
 });
+
+describe("contributes.tours version and finish (#14098)", () => {
+  const command = {
+    id: "start",
+    title: "Start",
+    description: "Start the first workflow",
+    category: "Acme",
+    kind: "command",
+    danger: "safe",
+  };
+  const settings = [{ id: "token", label: "Token" }];
+
+  it("accepts a content version and both finish targets", () => {
+    const result = parse(
+      [
+        tour({
+          version: "2",
+          finish: {
+            hint: "Start your first site",
+            action: { kind: "command", actionId: "acme.tours-plugin.start" },
+          },
+        }),
+        tour({
+          id: "connect",
+          finish: { hint: "Connect your account", action: { kind: "settings", key: "token" } },
+        }),
+      ],
+      { commands: [command], settings }
+    );
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    expect(result.data.contributes.tours[0]!.version).toBe("2");
+    expect(result.data.contributes.tours[1]!.finish).toEqual({
+      hint: "Connect your account",
+      action: { kind: "settings", key: "token" },
+    });
+  });
+
+  it("rejects a version that isn't a short safe token", () => {
+    expectOnlyAt(parse([tour({ version: "two words" })]), "contributes.tours.0.version");
+    expectOnlyAt(parse([tour({ version: "" })]), "contributes.tours.0.version");
+  });
+
+  it("only lets Finish run one of this plugin's own declared commands", () => {
+    const foreign = parse(
+      [tour({ finish: { hint: "Go", action: { kind: "command", actionId: "terminal.close" } } })],
+      { commands: [command] }
+    );
+    expect(errorCodes(foreign)).toContain("tour_finish_command_not_own");
+    const typo = parse(
+      [
+        tour({
+          finish: { hint: "Go", action: { kind: "command", actionId: "acme.tours-plugin.strat" } },
+        }),
+      ],
+      { commands: [command] }
+    );
+    expect(errorCodes(typo)).toContain("action_id_undeclared_command");
+  });
+
+  it("only lets Finish open a setting this plugin declares", () => {
+    const result = parse(
+      [tour({ finish: { hint: "Go", action: { kind: "settings", key: "missing" } } })],
+      { settings }
+    );
+    expect(errorCodes(result)).toContain("tour_finish_setting_unknown");
+  });
+
+  it("refuses progress written into a manifest, so a repository can't pre-complete a tour", () => {
+    expectOnlyAt(parse([tour({ completed: true })]), "contributes.tours.0");
+    expectOnlyAt(
+      parse([tour({ chapters: [chapter({ lastChapter: 0 })] })]),
+      "contributes.tours.0.chapters.0"
+    );
+  });
+});

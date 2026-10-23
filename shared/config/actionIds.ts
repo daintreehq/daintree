@@ -557,6 +557,7 @@ export const BUILT_IN_ACTION_IDS = [
   // -- helpActions --
   "help.gettingStarted.show",
   "help.tour.show",
+  "help.tour.status",
   "help.displayImage",
   "help.openCommandsFolder",
   "help.newSessionWithAgent",
