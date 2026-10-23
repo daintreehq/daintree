@@ -39,6 +39,7 @@ describe("contributes.assistantKnowledge", () => {
       name: "acme.ledger",
       version: "1.0.0",
     });
+    expect(result.success).toBe(true);
     expect(result.success && "assistantKnowledge" in result.data.contributes).toBe(false);
   });
 

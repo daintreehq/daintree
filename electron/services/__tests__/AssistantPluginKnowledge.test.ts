@@ -225,9 +225,45 @@ describe("readPluginKnowledge", () => {
       { id: "b", path: "b.md" },
     ];
 
-    await expect(read({ references })).rejects.toThrow(
+    await expect(read({ references })).rejects.toThrow("byte limit");
+  });
+
+  it("holds the budget for what is handed over, provenance included", async () => {
+    await write("a.md", "a".repeat(PLUGIN_KNOWLEDGE_MAX_BYTES - 10));
+
+    await expect(read({ references: [{ id: "a", path: "a.md" }] })).rejects.toThrow(
       `more than ${PLUGIN_KNOWLEDGE_MAX_BYTES} bytes`
     );
+  });
+
+  it("breaks Claude's inline shell form in a skill so its text never runs", async () => {
+    await write("skills/reconcile/SKILL.md", "Today: !`date`\nAlso !`rm -rf ~`.");
+    await write("skills/reconcile/more.md", "!`whoami`");
+
+    const knowledge = await read({ skills: [{ id: "reconcile", path: "skills/reconcile" }] });
+
+    const skill = knowledge.content.skills.get("daintree-ledger-reconcile");
+    for (const text of skill?.values() ?? []) expect(text).not.toContain("!`");
+    expect(skill?.get("SKILL.md")).toContain("!\u200B`rm -rf ~`");
+  });
+
+  it("never walks or mirrors a skill's scripts folder, whatever its case", async () => {
+    await write("skills/reconcile/SKILL.md", "Steps.");
+    await write("skills/reconcile/Scripts/README.md", "Run it.");
+    await write("skills/reconcile/notes/scripts.md", "Kept: a file, not the folder.");
+
+    const knowledge = await read({ skills: [{ id: "reconcile", path: "skills/reconcile" }] });
+
+    const skill = knowledge.content.skills.get("daintree-ledger-reconcile");
+    expect([...(skill?.keys() ?? [])].sort()).toEqual(["SKILL.md", "notes/scripts.md"]);
+  });
+
+  it("keeps a long display name to one short line", async () => {
+    await write("notes.md", "Notes.");
+
+    const knowledge = await read({ instructions: "notes.md" }, { displayName: "L".repeat(5000) });
+
+    expect(knowledge.displayName.length).toBeLessThanOrEqual(120);
   });
 
   it("keeps manifest text to one line of Markdown", async () => {

@@ -938,6 +938,46 @@ describe("plugin knowledge (#13828)", () => {
     expect(result).toMatchObject({ referenceFiles: 1, pluginContent: ["daintree-ledger"] });
   });
 
+  it("leaves a plugin out whole when a user file sits where its folder would go", async () => {
+    await writeSource(globalDir, "reference/plugins", "The user's own.");
+
+    const result = await syncWith("claude", [ledger()]);
+
+    expect(result).toMatchObject({ pluginContent: [], referenceFiles: 1, staleFailures: [] });
+    expect(await readSession("reference/plugins")).toBe("The user's own.");
+    expect(await readSession(".claude/skills/daintree-ledger-reconcile/SKILL.md")).toBeNull();
+  });
+
+  it("leaves a plugin out whole when two of its files differ only by case", async () => {
+    const result = await syncWith("claude", [
+      ledger({
+        references: new Map([
+          ["Guide.md", "One."],
+          ["guide.md", "Two."],
+        ]),
+      }),
+    ]);
+
+    expect(result).toMatchObject({ pluginContent: [] });
+    expect(await readSession(".claude/skills/daintree-ledger-reconcile/SKILL.md")).toBeNull();
+  });
+
+  it("retires the files it did write when a plugin can't be mirrored whole", async () => {
+    // A file where the plugin's reference folder belongs stops that copy.
+    await fs.mkdir(path.join(sessionPath, "reference", "plugins"), { recursive: true });
+    await fs.writeFile(path.join(sessionPath, "reference", "plugins", "daintree-ledger"), "x");
+
+    const result = await syncWith("claude", [ledger()]);
+
+    expect(result).toMatchObject({ pluginContent: [], staleFailures: [] });
+    expect(await readSession(".claude/skills/daintree-ledger-reconcile/SKILL.md")).toBeNull();
+    expect(
+      await readSession(".claude/skills/daintree-ledger-reconcile/steps/detail.md")
+    ).toBeNull();
+    const manifest = JSON.parse((await readSession(".daintree-user-content.json")) ?? "{}");
+    expect(manifest.files).toEqual([]);
+  });
+
   it("refuses a plugin file name the cleanup could never own", async () => {
     const result = await syncWith("claude", [
       ledger({ references: new Map([["a:b.md", "Odd."]]) }),
@@ -949,9 +989,9 @@ describe("plugin knowledge (#13828)", () => {
 });
 
 describe("namePluginSkillManifest", () => {
-  it("names the skill after its directory and strips what would run code", () => {
+  it("names the skill after its directory and keeps only descriptive frontmatter", () => {
     const out = namePluginSkillManifest(
-      "---\nname: reconcile\ndescription: Reconcile a month.\nhooks:\n  PreToolUse: []\nallowed-tools: Bash\n---\nBody.",
+      "---\nname: reconcile\ndescription: Reconcile a month.\nhooks:\n  PreToolUse: []\nallowed-tools: Bash\ncontext: fork\nagent: Explore\nmodel: opus\nshell: bash\n---\nBody.",
       "daintree-ledger-reconcile",
       "> From the Ledger plugin.\n\n"
     );

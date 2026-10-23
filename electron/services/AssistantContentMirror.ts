@@ -196,12 +196,27 @@ export function stripExecutableFrontmatter(content: string): string {
   return `---\n${body}---\n${content.slice(match[0].length)}`;
 }
 
+// Frontmatter a plugin skill keeps: what describes it and when it applies.
+// Every other key (tools, hooks, model, effort, a forked context or subagent,
+// a shell) changes how the CLI runs the skill, which knowledge may not.
+const PLUGIN_SKILL_FRONTMATTER_KEYS = new Set([
+  "description",
+  "when_to_use",
+  "argument-hint",
+  "arguments",
+  "disable-model-invocation",
+  "user-invocable",
+  "license",
+  "compatibility",
+  "metadata",
+]);
+
 /**
- * A plugin skill's SKILL.md as mirrored: executable keys stripped as for a
- * project skill, `name` set to the directory it is mirrored under (Agent
- * Skills requires the two to match, and the directory is what keeps two
- * plugins' skills apart), and `preamble` placed ahead of the body. Throws when
- * the frontmatter can't be parsed.
+ * A plugin skill's SKILL.md as mirrored: only descriptive frontmatter kept,
+ * `name` set to the directory it is mirrored under (Agent Skills requires the
+ * two to match, and the directory is what keeps two plugins' skills apart),
+ * and `preamble` placed ahead of the body. Throws when the frontmatter can't
+ * be parsed.
  */
 export function namePluginSkillManifest(content: string, name: string, preamble: string): string {
   const text = content.replace(/^\uFEFF/, "");
@@ -217,9 +232,7 @@ export function namePluginSkillManifest(content: string, name: string, preamble:
     }
   }
   for (const key of Object.keys(record)) {
-    if (EXECUTABLE_FRONTMATTER_KEYS.has(key.toLowerCase()) || key.toLowerCase() === "name") {
-      delete record[key];
-    }
+    if (!PLUGIN_SKILL_FRONTMATTER_KEYS.has(key.toLowerCase())) delete record[key];
   }
   const body = match ? text.slice(match[0].length) : text;
   return `---\n${dumpYaml({ name, ...record }, { lineWidth: -1 })}---\n\n${preamble}${body}`;
@@ -372,6 +385,8 @@ export interface WalkState {
   containRoot?: string;
   /** Entries skipped because they resolve outside `containRoot`. */
   escapedLinks: string[];
+  /** Relative paths not to walk into or collect. */
+  skip?: (rel: string) => boolean;
 }
 
 function isAbsentError(err: unknown): boolean {
@@ -391,7 +406,8 @@ function isWithin(real: string, root: string): boolean {
 
 export async function collectSourceFiles(
   rootAbs: string,
-  containRoot?: string
+  containRoot?: string,
+  skip?: (rel: string) => boolean
 ): Promise<WalkState> {
   const state: WalkState = {
     files: new Map(),
@@ -400,6 +416,7 @@ export async function collectSourceFiles(
     unreadableDirs: [],
     containRoot,
     escapedLinks: [],
+    skip,
   };
   try {
     const rootReal = await fs.realpath(rootAbs);
@@ -442,6 +459,7 @@ async function walkDir(
     if (entry.name.startsWith(".")) continue;
     const entryAbs = path.join(dirAbs, entry.name);
     const entryRel = relPrefix ? `${relPrefix}/${entry.name}` : entry.name;
+    if (state.skip?.(entryRel)) continue;
 
     let isDir = entry.isDirectory();
     let isFile = entry.isFile();
@@ -771,9 +789,15 @@ export async function syncAssistantContent(
       for (const [rel, text] of content.references) files.set(`${unit}/${rel}`, text);
     }
     const foldedUnits = units.map(foldPath);
-    const collides = claimed.some((rel) =>
-      foldedUnits.some((unit) => rel === unit || rel.startsWith(unit + "/"))
-    );
+    const foldedFiles = [...files.keys()].map(foldPath);
+    const nests = (a: string, b: string) =>
+      a === b || a.startsWith(b + "/") || b.startsWith(a + "/");
+    const collides =
+      claimed.some((rel) => foldedUnits.some((unit) => nests(rel, unit))) ||
+      // Two of its own files that one case-insensitive volume would merge.
+      foldedFiles.some((rel, index) =>
+        foldedFiles.some((other, j) => j > index && nests(rel, other))
+      );
     if (collides || [...files.keys()].some((rel) => !isUnderMirrorRoot(rel))) {
       console.warn(
         "[AssistantContentMirror] Leaving out plugin knowledge whose files would collide with other assistant content:",
@@ -794,20 +818,16 @@ export async function syncAssistantContent(
   const previous = await readManifest(input.sessionPath);
 
   let removed = 0;
-  const staleRels: string[] = [];
-  for (const staleRel of previous) {
-    if (desired.has(staleRel)) continue;
-    if (!isUnderMirrorRoot(staleRel)) continue;
-    staleRels.push(staleRel);
+  const removeManaged = async (staleRel: string): Promise<void> => {
     const segments = staleRel.split("/");
     const staleAbs = path.resolve(sessionBase, ...segments);
-    if (!staleAbs.startsWith(sessionBase + path.sep)) continue;
+    if (!staleAbs.startsWith(sessionBase + path.sep)) return;
     if ((await verifyRealDirChain(sessionBase, segments.slice(0, -1), chainCache)) !== "ok") {
       console.warn(
         "[AssistantContentMirror] Skipping stale-file removal through a symlinked directory:",
         staleRel
       );
-      continue;
+      return;
     }
     try {
       await fs.rm(staleAbs, { force: true });
@@ -816,6 +836,13 @@ export async function syncAssistantContent(
     } catch (err) {
       console.warn("[AssistantContentMirror] Failed to remove stale mirrored file:", staleAbs, err);
     }
+  };
+  const staleRels: string[] = [];
+  for (const staleRel of previous) {
+    if (desired.has(staleRel)) continue;
+    if (!isUnderMirrorRoot(staleRel)) continue;
+    staleRels.push(staleRel);
+    await removeManaged(staleRel);
   }
 
   // Superset manifest: every desired path is owned before its copy starts,
@@ -862,6 +889,25 @@ export async function syncAssistantContent(
     } catch (err) {
       console.warn("[AssistantContentMirror] Failed to mirror file:", sourceAbs || destRel, err);
       copyFailedRels.add(destRel);
+    }
+  }
+
+  // A plugin is delivered whole or not at all: when one of its files couldn't
+  // be written, the ones that were are retired like stale files, so the
+  // session never offers a skill the prompt doesn't introduce.
+  for (const [key, rels] of pluginRels) {
+    if (rels.every((rel) => !copyFailedRels.has(rel))) continue;
+    console.warn(
+      "[AssistantContentMirror] Retiring plugin knowledge that couldn't be mirrored whole:",
+      key
+    );
+    pluginRels.delete(key);
+    for (const rel of rels) {
+      desired.delete(rel);
+      generated.delete(rel);
+      copyFailedRels.delete(rel);
+      staleRels.push(rel);
+      await removeManaged(rel);
     }
   }
 
@@ -926,11 +972,9 @@ export async function syncAssistantContent(
     }
   }
 
-  // A plugin only counts as delivered when all of it is, so the prompt never
-  // names a skill or file the session lacks.
-  const pluginContent = [...pluginRels]
-    .filter(([, rels]) => rels.every((rel) => !copyFailedRels.has(rel)))
-    .map(([key]) => key);
+  // Only plugins delivered whole remain, so the prompt never names a skill or
+  // file the session lacks.
+  const pluginContent = [...pluginRels.keys()];
 
   return {
     copied,

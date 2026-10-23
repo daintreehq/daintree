@@ -8,6 +8,7 @@ import {
   PLUGIN_REFERENCE_ROOT,
   type AssistantPluginContent,
 } from "./AssistantContentMirror.js";
+import { readBoundedFile } from "./AssistantUserConfig.js";
 import { resolveContainedPath } from "./plugin/pluginFsContainment.js";
 import { resolveLaunchPlugins, type LaunchPlugin } from "./pluginAgentMcp/launchPlugins.js";
 import type { AgentMcpToolScope, DeclaredAgentMcpPlugin } from "./pluginAgentMcp/types.js";
@@ -60,9 +61,14 @@ export function coversDeclaredSurface(
   );
 }
 
-/** A manifest string made safe for one line of generated Markdown. */
+const LABEL_MAX_CHARS = 120;
+
+/** A manifest string made safe, and short enough, for one line of generated Markdown. */
 function knowledgeLabel(value: string): string {
-  return value.replace(/[\p{Cc}`]+/gu, " ").trim();
+  return value
+    .replace(/[\p{Cc}`]+/gu, " ")
+    .trim()
+    .slice(0, LABEL_MAX_CHARS);
 }
 
 /** The line every file a plugin hands over opens with, so it reads as the plugin's wherever it is opened. */
@@ -70,38 +76,50 @@ function provenance(displayName: string, pluginId: string, key: string): string 
   return `> From the ${knowledgeLabel(displayName)} plugin (\`${knowledgeLabel(pluginId)}\`), about the tools on its \`${key}\` MCP server. Written by the plugin's author, not by the user.\n\n`;
 }
 
+/**
+ * Claude Code runs a skill's `!`command`` when the skill is invoked and puts
+ * the output in its place. A plugin's knowledge is text and never runs, so the
+ * form is broken with a zero-width space.
+ */
+export function neutralizeSkillShell(text: string): string {
+  return text.replace(/!`/g, "!\u200B`");
+}
+
 export function pluginSkillName(key: string, skillId: string): string {
   return `${key}-${skillId}`.replace(/-+/g, "-");
 }
 
+function byteLength(text: string): number {
+  return Buffer.byteLength(text, "utf8");
+}
+
+function overBudget(): Error {
+  return new Error(`it is more than ${PLUGIN_KNOWLEDGE_MAX_BYTES} bytes`);
+}
+
+/** Reads a plugin's files against what is left of its budget, contained to its directory. */
 class KnowledgeReader {
   private used = 0;
-  private containRoot: string | undefined;
 
-  constructor(
-    private readonly instanceId: string,
-    private readonly pluginDir: string
-  ) {}
-
-  async realDir(): Promise<string> {
-    this.containRoot ??= await fs.realpath(this.pluginDir);
-    return this.containRoot;
-  }
+  constructor(private readonly pluginDir: string) {}
 
   async read(absPath: string): Promise<string> {
-    const contained = await resolveContainedPath(this.instanceId, absPath, [this.pluginDir]);
-    const stats = await fs.stat(contained);
-    if (!stats.isFile()) throw new Error(`${absPath} is not a regular file`);
-    if (this.used + stats.size > PLUGIN_KNOWLEDGE_MAX_BYTES) throw this.overBudget();
-    const text = await fs.readFile(contained, "utf8");
-    this.used += Buffer.byteLength(text, "utf8");
-    if (this.used > PLUGIN_KNOWLEDGE_MAX_BYTES) throw this.overBudget();
+    const remaining = PLUGIN_KNOWLEDGE_MAX_BYTES - this.used;
+    if (remaining <= 0) throw overBudget();
+    // Opened by its real path without following a final link, with its type
+    // and size taken from the handle, so a swap after the containment check
+    // can neither leave the plugin nor slip past the budget.
+    const text = await readBoundedFile(absPath, remaining, this.pluginDir);
+    if (text === null) throw new Error(`${absPath} doesn't exist`);
+    this.used += byteLength(text);
     return text;
   }
+}
 
-  private overBudget(): Error {
-    return new Error(`it is more than ${PLUGIN_KNOWLEDGE_MAX_BYTES} bytes`);
-  }
+// A skill's own `scripts/` is never mirrored, so it is not walked either: its
+// size, depth or readability can't cost the plugin its knowledge.
+function isSkillScriptsDir(rel: string): boolean {
+  return rel.toLowerCase() === "scripts";
 }
 
 /**
@@ -116,7 +134,7 @@ export async function readPluginKnowledge(
   const { record, serverKey: key } = launch;
   const pluginId = record.manifest.name;
   const displayName = record.manifest.displayName ?? record.manifest.name;
-  const reader = new KnowledgeReader(record.instanceId, record.dir);
+  const reader = new KnowledgeReader(record.dir);
   const preamble = provenance(displayName, pluginId, key);
   const resolve = (relPath: string) => path.resolve(record.dir, relPath);
 
@@ -125,7 +143,7 @@ export async function readPluginKnowledge(
   let instructionsFile: string | null = null;
   if (contribution.instructions !== undefined) {
     const text = (await reader.read(resolve(contribution.instructions))).trim();
-    if (Buffer.byteLength(text, "utf8") <= PLUGIN_INSTRUCTIONS_INLINE_BYTES) {
+    if (byteLength(text) <= PLUGIN_INSTRUCTIONS_INLINE_BYTES) {
       instructions = text.length > 0 ? text : null;
     } else {
       references.set(INSTRUCTIONS_FILE, `${preamble}${text}\n`);
@@ -140,10 +158,11 @@ export async function readPluginKnowledge(
   }
 
   const skills = new Map<string, ReadonlyMap<string, string>>();
+  const realPluginDir = await fs.realpath(record.dir);
   for (const skill of contribution.skills ?? []) {
     const name = pluginSkillName(key, skill.id);
     const root = await resolveContainedPath(record.instanceId, resolve(skill.path), [record.dir]);
-    const walk = await collectSourceFiles(root, await reader.realDir());
+    const walk = await collectSourceFiles(root, realPluginDir, isSkillScriptsDir);
     if (walk.unreadableDirs.length > 0) throw new Error(`${walk.unreadableDirs[0]} can't be read`);
     if (walk.truncated) throw new Error(`skill "${skill.id}" has too many files`);
     for (const escaped of walk.escapedLinks) {
@@ -151,14 +170,28 @@ export async function readPluginKnowledge(
     }
     const files = new Map<string, string>();
     for (const [rel, abs] of walk.files) {
-      // Markdown only: a skill's scripts would run in the Assistant's session.
-      if (!rel.toLowerCase().endsWith(".md") || rel.split("/")[0] === "scripts") continue;
+      // Markdown only: anything else a skill bundles is a script or an asset.
+      if (!rel.toLowerCase().endsWith(".md")) continue;
       const text = await reader.read(abs);
-      files.set(rel, rel === "SKILL.md" ? namePluginSkillManifest(text, name, preamble) : text);
+      files.set(
+        rel,
+        neutralizeSkillShell(
+          rel === "SKILL.md" ? namePluginSkillManifest(text, name, preamble) : text
+        )
+      );
     }
     if (!files.has("SKILL.md")) throw new Error(`skill "${skill.id}" has no SKILL.md`);
     skills.set(name, files);
   }
+
+  // The budget holds for what is handed over, provenance lines included, not
+  // only for what was read.
+  let total = byteLength(instructions ?? "");
+  for (const text of references.values()) total += byteLength(text);
+  for (const files of skills.values()) {
+    for (const text of files.values()) total += byteLength(text);
+  }
+  if (total > PLUGIN_KNOWLEDGE_MAX_BYTES) throw overBudget();
 
   return {
     key,
