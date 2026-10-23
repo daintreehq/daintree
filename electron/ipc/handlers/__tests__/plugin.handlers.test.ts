@@ -142,6 +142,7 @@ vi.mock("../../../services/PluginService.js", () => ({
     // settles still gets a populated snapshot — resolved-immediately in tests
     // since we don't exercise the gate here.
     waitForInit: vi.fn().mockResolvedValue(undefined),
+    waitForInitWithin: vi.fn().mockResolvedValue(undefined),
     getPluginRecipes: () => mockGetPluginRecipes(),
     getPluginTours: () => mockGetPluginTours(),
     recordPluginRecipeUse: (recipeId: string, timestamp: number) =>

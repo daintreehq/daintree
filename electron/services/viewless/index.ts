@@ -108,18 +108,15 @@ async function loadLiveDeps(): Promise<ViewlessDeps> {
     sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
     collectWorktreeDeleteNotes: async (projectId, worktreeId) => {
       const { pluginService } = await import("../PluginService.js");
-      // Startup activation can hold init for seconds. The wait for it is
-      // bounded by the notes deadline too, so startup adds at most one more
-      // deadline to the approval; whatever has loaded by then is asked.
-      let timer: ReturnType<typeof setTimeout> | undefined;
-      await Promise.race([
-        pluginService.waitForInit(),
-        new Promise<void>((resolve) => {
-          timer = setTimeout(resolve, PLUGIN_WORKTREE_DELETE_NOTES_TIMEOUT_MS);
-        }),
-      ]);
-      clearTimeout(timer);
-      return pluginService.collectWorktreeDeleteNotes(projectId, worktreeId);
+      // One deadline for the whole wait, startup included, since the approval
+      // isn't put to anyone until the notes are in.
+      const expiresAt = Date.now() + PLUGIN_WORKTREE_DELETE_NOTES_TIMEOUT_MS;
+      await pluginService.waitForInitWithin(PLUGIN_WORKTREE_DELETE_NOTES_TIMEOUT_MS);
+      return pluginService.collectWorktreeDeleteNotes(
+        projectId,
+        worktreeId,
+        Math.max(0, expiresAt - Date.now())
+      );
     },
   };
 }

@@ -54,7 +54,8 @@ export function validatePluginWorktreeDeleteNotes(value: unknown): PluginWorktre
     }
     const unknownKey = Object.keys(note).find((key) => !ALLOWED_KEYS.has(key));
     if (unknownKey !== undefined) {
-      return { ok: false, error: `${at} has an unsupported field "${unknownKey}"` };
+      // Clipped: the name is the plugin's, and an error crosses the port too.
+      return { ok: false, error: `${at} has an unsupported field "${unknownKey.slice(0, 64)}"` };
     }
     const severity = readField(note, "severity");
     const text = readField(note, "text");

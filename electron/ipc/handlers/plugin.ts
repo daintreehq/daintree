@@ -191,7 +191,10 @@ import type {
 } from "../../../shared/types/plugin.js";
 import type { ToolbarButtonConfig } from "../../../shared/config/toolbarButtonRegistry.js";
 import { assertIpcSecurityReady } from "../ipcGuard.js";
-import { PLUGIN_INVOKE_MAX_ARGS_BYTES } from "../../../shared/config/pluginBudgets.js";
+import {
+  PLUGIN_INVOKE_MAX_ARGS_BYTES,
+  PLUGIN_WORKTREE_DELETE_NOTES_TIMEOUT_MS,
+} from "../../../shared/config/pluginBudgets.js";
 import {
   assertPayloadWithinLimit,
   isPluginPayloadTooLargeError,
@@ -1778,7 +1781,9 @@ async function handleWorktreeDeleteNoteSourcesGet(
 ): Promise<WorktreeDeleteNoteSource[]> {
   if (ctx.projectId === null) return [];
   const service = await getPluginService();
-  await service.waitForInit();
+  // Bounded: at startup the dialog would otherwise sit through every other
+  // plugin's activation before it could even say who it is asking.
+  await service.waitForInitWithin(PLUGIN_WORKTREE_DELETE_NOTES_TIMEOUT_MS);
   return service.listWorktreeDeleteNoteSources(ctx.projectId);
 }
 

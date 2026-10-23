@@ -104,6 +104,13 @@ describe("validatePluginWorktreeDeleteNotes", () => {
     expect(validatePluginWorktreeDeleteNotes(value)).toEqual({ ok: false, error });
   });
 
+  it("clips an unsupported field's name in the error it gives back", () => {
+    const name = "k".repeat(100_000);
+    const result = validatePluginWorktreeDeleteNotes([{ severity: "info", text: "x", [name]: 1 }]);
+    expect(result.ok).toBe(false);
+    expect(!result.ok && result.error.length).toBeLessThan(200);
+  });
+
   it("never runs a getter on plugin data", () => {
     let reads = 0;
     const note = { severity: "info" } as Record<string, unknown>;

@@ -1541,6 +1541,22 @@ export class PluginService {
   }
 
   /**
+   * {@link waitForInit}, giving up after `ms`. Startup activation can hold init
+   * for seconds, which a caller on a deadline (a delete confirmation's notes,
+   * #13805) can't spend; whatever has loaded by then is what it gets.
+   */
+  async waitForInitWithin(ms: number): Promise<void> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    await Promise.race([
+      this.initPromise,
+      new Promise<void>((resolve) => {
+        timer = setTimeout(resolve, ms);
+      }),
+    ]);
+    clearTimeout(timer);
+  }
+
+  /**
    * Whether the manifest scan phase ({@link initialize}) has settled. Forge
    * provider descriptors register at scan-time, so once this is true a
    * hostname-match miss in `resolveForgeProvider` is a definitive "no
@@ -3787,6 +3803,10 @@ export class PluginService {
             this.setWorkerStatus(pluginId, "ready", null, null);
           } else {
             this.setWorkerStatus(pluginId, "failed", "activation-failed", result.error);
+            // A respawned or reloaded worker that throws keeps the activation
+            // latch from the generation before it, so a notes check it bound
+            // before throwing would still be asked (#13805).
+            unregisterWorktreeDeleteNotesBinding(pluginId);
           }
         }
         if (result.ok) {
@@ -4351,12 +4371,21 @@ export class PluginService {
     return getDeleteNotes(this.worktreeDeleteNotesHost(), projectId, pluginId, worktreeId);
   }
 
-  /** Every source's notes on one worktree, for a confirmation that can't stream (#13805). */
+  /**
+   * Every source's notes on one worktree, for a confirmation that can't stream
+   * (#13805). `timeoutMs` narrows the per-plugin deadline for a caller that has
+   * already spent some of it.
+   */
   collectWorktreeDeleteNotes(
     projectId: string,
-    worktreeId: string
+    worktreeId: string,
+    timeoutMs?: number
   ): Promise<WorktreeDeleteNotesReport[]> {
-    return collectDeleteNotes(this.worktreeDeleteNotesHost(), projectId, worktreeId);
+    return collectDeleteNotes(
+      { ...this.worktreeDeleteNotesHost(), ...(timeoutMs !== undefined ? { timeoutMs } : {}) },
+      projectId,
+      worktreeId
+    );
   }
 
   /**
