@@ -1125,27 +1125,33 @@ async function handleProjectLayoutSeedGet(
 const seedClaimWatches = new Map<string, () => void>();
 
 /**
- * The claim lapses with the view that holds it: a crash, a reload or its
- * window closing leaves nothing to finish the apply, so the seed reads as
- * failed and waits for a Retry.
+ * The claim lapses with the view that holds it: a crash, a reload, its window
+ * closing or a remote client dropping leaves nothing to finish the apply, so
+ * the seed reads as failed and waits for a Retry.
  */
-function watchSeedClaim(sender: Electron.WebContents, projectId: string): void {
+function watchSeedClaim(ctx: IpcContext, projectId: string): void {
   seedClaimWatches.get(projectId)?.();
-  const claimant = sender.id;
+  const claimant = ctx.webContentsId;
+  const sender = ctx.event?.sender;
   const release = (): void => {
     unwatch();
     releaseProjectLayoutSeedClaim(projectId, claimant);
   };
-  sender.once("did-navigate", release);
-  sender.once("render-process-gone", release);
-  const offDestroyed = onWebContentsDestroyed(sender, release);
+  // A remote view has no WebContents here; its endpoint closing is the only
+  // sign it went away.
+  const closed = ctx.endpoint.onClose(release);
+  sender?.once("did-navigate", release);
+  sender?.once("render-process-gone", release);
+  const offDestroyed = sender ? onWebContentsDestroyed(sender, release) : undefined;
   function unwatch(): void {
-    sender.removeListener("did-navigate", release);
-    sender.removeListener("render-process-gone", release);
-    offDestroyed();
+    closed.dispose();
+    sender?.removeListener("did-navigate", release);
+    sender?.removeListener("render-process-gone", release);
+    offDestroyed?.();
     if (seedClaimWatches.get(projectId) === unwatch) seedClaimWatches.delete(projectId);
   }
   seedClaimWatches.set(projectId, unwatch);
+  if (ctx.endpoint.isClosed()) release();
 }
 
 /**
@@ -1172,8 +1178,7 @@ async function handleProjectLayoutSeedAdvance(
   const result = advanceProjectLayoutSeed(ctx.projectId, from, to, outcome, ctx.webContentsId);
   if (result.advanced) {
     if (from === "applying") seedClaimWatches.get(ctx.projectId)?.();
-    const sender = ctx.event?.sender;
-    if (to === "applying" && sender) watchSeedClaim(sender, ctx.projectId);
+    if (to === "applying") watchSeedClaim(ctx, ctx.projectId);
   }
   return result;
 }

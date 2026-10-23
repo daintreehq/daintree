@@ -1,10 +1,13 @@
 import { useEffect } from "react";
 import { isGitBackedProject } from "@shared/types";
-import type { PluginLayoutConfig } from "@shared/types/plugin";
+import type { PluginLayoutConfig, PluginLayoutEntry } from "@shared/types/plugin";
 import { seedPluginLayout } from "@/services/layout/applyPluginLayout";
 import { usePanelStore } from "@/store/panelStore";
 import { usePluginLayoutsStore } from "@/store/pluginLayoutsStore";
-import { useProjectLayoutSeedStore } from "@/store/projectLayoutSeedStore";
+import {
+  useProjectLayoutSeedStore,
+  type WaitingLayoutRecipes,
+} from "@/store/projectLayoutSeedStore";
 import { useProjectStore } from "@/store/projectStore";
 import { useRecipeStore } from "@/store/recipeStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
@@ -36,44 +39,52 @@ function hasOpenPanels(): boolean {
   });
 }
 
-/**
- * Open the default layout's panels and pages, and leave its recipes waiting
- * for the user. This view must already hold the seed's claim (`applying`), so
- * no other view applies it meanwhile. Settled only once every entry opened; a
- * throw or an entry left unopened fails the seed instead, for the user's
- * Retry — which reuses what this attempt did open, so nothing opens twice.
- * Recipes are never started here, on a first apply or a retry.
- */
-async function applySeed(layout: PluginLayoutConfig): Promise<void> {
-  const seed = useProjectLayoutSeedStore.getState;
-  let failures: string[];
-  let deferred: Awaited<ReturnType<typeof seedPluginLayout>>["deferred"] = [];
-  try {
-    ({ failures, deferred } = await seedPluginLayout(layout.id));
-  } catch (error) {
-    failures = [String(error)];
-  }
-  if (failures.length > 0) {
-    logWarn("[ProjectLayoutSeed] Couldn't open the project's default layout", { failures });
-    await seed().advance("applying", "failed");
-    return;
-  }
+function waitingFor(
+  layout: PluginLayoutConfig,
+  deferred: readonly PluginLayoutEntry[]
+): WaitingLayoutRecipes | null {
   const recipeIds = new Set(
     deferred.flatMap((entry) => (entry.target.type === "recipe" ? [entry.target.recipeId] : []))
   );
   const { getRecipeById } = useRecipeStore.getState();
   const recipes = [...recipeIds].map((id) => ({ id, name: getRecipeById(id)?.name ?? id }));
-  seed().setWaiting(
-    recipes.length > 0
-      ? {
-          layoutId: layout.id,
-          layoutName: layout.name,
-          pluginName: layout.pluginName,
-          recipes,
-        }
-      : null
-  );
-  await seed().advance("applying", "settled");
+  return recipes.length > 0
+    ? { layoutId: layout.id, layoutName: layout.name, pluginName: layout.pluginName, recipes }
+    : null;
+}
+
+/**
+ * Open the default layout's panels and pages, and leave its recipes waiting
+ * for the user. This view must already hold the seed's claim (`applying`), so
+ * no other view applies it meanwhile. Settled only once every entry opened; a
+ * throw, an entry left unopened or a settle that didn't land fails the seed
+ * instead, for the user's Retry — which reuses what this attempt did open, so
+ * nothing opens twice. Recipes are never started here, on a first apply or a
+ * retry.
+ */
+async function applySeed(layout: PluginLayoutConfig): Promise<void> {
+  const seed = useProjectLayoutSeedStore.getState;
+  let waiting: WaitingLayoutRecipes | null = null;
+  let failed = false;
+  try {
+    const { failures, deferred } = await seedPluginLayout(layout.id);
+    if (failures.length > 0) {
+      logWarn("[ProjectLayoutSeed] Couldn't open the project's default layout", { failures });
+      failed = true;
+    } else {
+      waiting = waitingFor(layout, deferred);
+    }
+  } catch (error) {
+    logWarn("[ProjectLayoutSeed] Couldn't open the project's default layout", { error });
+    failed = true;
+  }
+  // The recipes wait only once the seed is settled: a Start beside a layout
+  // still marked unfinished would be a step ahead of the Retry.
+  if (!failed && (await seed().advance("applying", "settled"))) {
+    seed().setWaiting(waiting);
+    return;
+  }
+  await seed().advance("applying", "failed");
 }
 
 /** The user's "Open <plugin>'s layout" on an offered seed. */
@@ -152,8 +163,10 @@ export function useProjectLayoutSeed(enabled: boolean): void {
       }
       // Claimed before anything opens, so an apply cut short by a crash or a
       // view teardown is seen as failed and offered for a Retry, never
-      // replayed on its own.
-      if (!(await seed().advance("pending", "applying", "applied")) || disposed) return;
+      // replayed on its own. Once claimed it runs to the end even if this
+      // hook is torn down meanwhile: a claim left behind by a live view would
+      // read as applying forever.
+      if (!(await seed().advance("pending", "applying", "applied"))) return;
       await applySeed(layout);
     };
 
@@ -177,6 +190,11 @@ export function useProjectLayoutSeed(enabled: boolean): void {
         });
     };
 
+    const reloadUnfinished = (): void => {
+      const status = seed().status;
+      if (status === "applying" || status === "failed") void seed().load();
+    };
+
     const unsubscribers = [
       usePluginLayoutsStore.subscribe((state, prev) => {
         if (state.layouts !== prev.layouts) evaluate();
@@ -192,14 +210,13 @@ export function useProjectLayoutSeed(enabled: boolean): void {
         if (state.activeWorktreeId !== prev.activeWorktreeId) evaluate();
       }),
       // Another view's apply ends without telling this one: coming back into
-      // view re-reads it, so a failure there is offered for Retry here too.
+      // view, or this window taking focus, re-reads it, so a failure there is
+      // offered for Retry here too.
       subscribeProjectViewLifecycle((phase) => {
-        const status = seed().status;
-        if (phase === "revealed" && (status === "applying" || status === "failed")) {
-          void seed().load();
-        }
+        if (phase === "revealed") reloadUnfinished();
       }),
     ];
+    window.addEventListener("focus", reloadUnfinished);
 
     void seed()
       .load()
@@ -208,6 +225,7 @@ export function useProjectLayoutSeed(enabled: boolean): void {
     return () => {
       disposed = true;
       for (const unsubscribe of unsubscribers) unsubscribe();
+      window.removeEventListener("focus", reloadUnfinished);
     };
   }, [enabled]);
 }

@@ -7,11 +7,14 @@ import { TOUR_COMPLETED_EVENT, tourIdOf } from "@/components/Tour/tourEvents";
 import { selectProjectDefaultLayout } from "@/hooks/useProjectLayoutSeed";
 import { isProjectViewObservable, subscribeProjectViewObservability } from "@/lib/viewCacheState";
 import { notify } from "@/lib/notify";
-import { getRegisteredPluginActionsSnapshot } from "@/services/plugin/registeredPluginActions";
+import {
+  getRegisteredPluginActionsSnapshot,
+  subscribeToRegisteredPluginActions,
+} from "@/services/plugin/registeredPluginActions";
 import { usePluginLayoutsStore } from "@/store/pluginLayoutsStore";
 import { useProjectLayoutSeedStore } from "@/store/projectLayoutSeedStore";
 import { useProjectPluginStore } from "@/store/projectPluginStore";
-import { useProjectWelcomeStore } from "@/store/projectWelcomeStore";
+import { useProjectWelcomeStore, type ProjectWelcomeHandoff } from "@/store/projectWelcomeStore";
 import { useUIStore } from "@/store/uiStore";
 import { logWarn } from "@/utils/logger";
 
@@ -26,12 +29,22 @@ interface DeclaredWelcome {
 }
 
 /**
- * The welcome this view is tracking: `loading` while main's record is read,
- * `open` while it is still on offer, `answered` once skipped or finished at
- * this revision. Module state, as in `tourRequests.ts`: one view per renderer.
+ * The welcome this view is tracking. `record` is `loading` while main's record
+ * is read, `unread` when that read failed, `open` while the welcome is still
+ * on offer and `answered` once skipped or finished at this revision. `answer`
+ * is set only when the user answered in this view, and is what the hand-off
+ * strip follows. Module state, as in `tourRequests.ts`: one view per renderer.
  */
-let tracked: { identity: string; welcome: DeclaredWelcome; record: "loading" | "open" | "answered" } | null =
-  null;
+interface TrackedWelcome {
+  identity: string;
+  welcome: DeclaredWelcome;
+  record: "loading" | "unread" | "open" | "answered";
+  /** Bumped by every read, so only the latest one is believed. */
+  read: number;
+  answer: { skipped: boolean; tourTitle: string; dismissed: boolean } | null;
+}
+
+let tracked: TrackedWelcome | null = null;
 
 function declaredWelcome(): DeclaredWelcome | null {
   const application = useProjectPluginStore.getState().application;
@@ -56,31 +69,51 @@ function identityOf(welcome: DeclaredWelcome): string {
 
 /**
  * Whether the project's first-open layout comes first: it is about to be
- * applied, is being applied, failed and waits for a Retry, or left recipes
- * waiting to be started. One first-run strip at a time, in that order.
+ * applied, is being applied, is offered, failed and waits for a Retry, or left
+ * recipes waiting to be started. One first-run strip at a time, in that order.
  */
 function layoutComesFirst(): boolean {
   const { status, waiting } = useProjectLayoutSeedStore.getState();
   if (waiting !== null) return true;
   if (selectProjectDefaultLayout(usePluginLayoutsStore.getState().layouts) === null) return false;
-  return status === undefined || status === "pending" || status === "applying" || status === "failed";
+  return status !== "settled" && status !== null;
 }
 
-function handOff(welcome: DeclaredWelcome, skipped: boolean, tourTitle: string): void {
-  const { setHandoff } = useProjectWelcomeStore.getState();
-  if (welcome.firstWorkflow === undefined) {
-    setHandoff(null);
-    return;
+/**
+ * The hand-off strip, derived afresh: the application's first workflow once
+ * the user answered the welcome here, while this view has that command
+ * registered — one still registering appears when it lands, and one withdrawn
+ * takes its button with it.
+ */
+function syncHandoff(): void {
+  const { handoff, setHandoff } = useProjectWelcomeStore.getState();
+  const current = tracked;
+  const answer = current?.answer;
+  const workflow = current?.welcome.firstWorkflow;
+  let next: ProjectWelcomeHandoff | null = null;
+  if (current && answer && !answer.dismissed && workflow !== undefined) {
+    const actionId = `${current.welcome.instanceId}.${workflow}`;
+    const title = getRegisteredPluginActionsSnapshot().get(actionId);
+    if (title !== undefined) {
+      next = {
+        appName: current.welcome.appName,
+        actionId,
+        title: title || workflow,
+        skipped: answer.skipped,
+        tourTitle: answer.tourTitle,
+      };
+    }
   }
-  const actionId = `${welcome.instanceId}.${welcome.firstWorkflow}`;
-  const title = getRegisteredPluginActionsSnapshot().get(actionId);
-  // Only a command this view can run: one still registering, or withdrawn,
-  // is no next step.
-  setHandoff(
-    title === undefined
-      ? null
-      : { appName: welcome.appName, actionId, title: title || welcome.firstWorkflow, skipped, tourTitle }
-  );
+  const same =
+    next === handoff ||
+    (next !== null &&
+      handoff !== null &&
+      next.actionId === handoff.actionId &&
+      next.title === handoff.title &&
+      next.appName === handoff.appName &&
+      next.skipped === handoff.skipped &&
+      next.tourTitle === handoff.tourTitle);
+  if (!same) setHandoff(next);
 }
 
 async function answer(status: ProjectWelcomeStatus): Promise<void> {
@@ -97,13 +130,20 @@ async function answer(status: ProjectWelcomeStatus): Promise<void> {
   );
   if (tracked?.identity !== current.identity) return;
   tracked.record = "answered";
+  tracked.answer = { skipped: status === "skipped", tourTitle, dismissed: false };
   useProjectWelcomeStore.getState().setOffer(null);
-  handOff(welcome, status === "skipped", tourTitle);
+  syncHandoff();
 }
 
 /** The user's "Skip" on the welcome strip: not offered again until a new revision. */
 export async function skipProjectWelcome(): Promise<void> {
   await answer("skipped");
+}
+
+/** The user's × on the hand-off strip, for as long as this view lives. */
+export function dismissProjectWelcomeHandoff(): void {
+  if (tracked?.answer) tracked.answer.dismissed = true;
+  useProjectWelcomeStore.getState().setHandoff(null);
 }
 
 /**
@@ -115,15 +155,14 @@ export async function startProjectWelcome(): Promise<void> {
   const offer = useProjectWelcomeStore.getState().offer;
   if (offer === null) return;
   const result = await requestTour([offer.tourId]);
-  if (result.status !== "unavailable" && result.status !== "failed") return;
+  // A tour that registered but failed to load is already reported by the
+  // tour host, with the recovery that fits it.
+  if (result.status !== "unavailable") return;
   notify({
     type: "error",
     priority: "high",
-    title: "Welcome not started",
-    message:
-      result.status === "failed"
-        ? `${offer.appName}'s welcome couldn't load: ${result.reason}.`
-        : `${offer.appName}'s welcome isn't available right now.`,
+    title: "Couldn't start welcome",
+    message: `${offer.appName}'s welcome isn't available right now. It may still be loading.`,
     context: { eventKind: "uiFeedback" },
     action: { label: "Retry", onClick: () => void startProjectWelcome() },
   });
@@ -141,11 +180,13 @@ export async function startProjectWelcome(): Promise<void> {
  * - the application is active, so its plugin is trusted and loaded;
  * - main's record shows no answer at this welcome revision;
  * - the welcome tour has registered in this view;
- * - the first-open layout is done with: applied, offered, or settled;
+ * - the first-open layout is done with: applied, dismissed, or never coming;
  * - no dialog is open — host setup, trust, or another tour;
  * - this view is the one on screen, as main reports it.
  *
- * Once shown it stays until answered or the application stops being active.
+ * Once shown it stays until answered, the application stops being active, or
+ * a layout arriving late takes its turn first; another window's answer is
+ * picked up the next time this view comes on screen or its window takes focus.
  * Finishing the tour, however it was opened, records the answer and hands off
  * to the application's first workflow, which runs only on the user's click.
  */
@@ -155,19 +196,42 @@ export function useProjectApplicationWelcome(enabled: boolean): void {
     let disposed = false;
     const welcomeStore = useProjectWelcomeStore.getState;
 
-    const load = (identity: string, welcome: DeclaredWelcome): void => {
+    const load = (current: TrackedWelcome): void => {
+      const { identity, welcome } = current;
+      const read = ++current.read;
+      // Only the latest read of the same welcome, and never over an answer
+      // given here meanwhile.
+      const stale = (): boolean =>
+        disposed ||
+        tracked?.identity !== identity ||
+        tracked.read !== read ||
+        tracked.record === "answered";
       void Promise.resolve()
         .then(() => window.electron.plugin.getProjectWelcome(welcome.ownerId, welcome.localTourId))
         .then(
           (record) => {
-            if (disposed || tracked?.identity !== identity) return;
-            tracked.record = record !== null && record.version >= welcome.version ? "answered" : "open";
+            if (stale() || tracked === null) return;
+            tracked.record =
+              record !== null && record.version >= welcome.version ? "answered" : "open";
             evaluate();
           },
-          // Unread is not unanswered: offering a welcome the user may have
-          // turned down is worse than not offering it this time.
-          (error: unknown) => logWarn("[ProjectWelcome] Couldn't read the welcome record", { error })
+          (error: unknown) => {
+            // Unread is not unanswered: offering a welcome the user may have
+            // turned down is worse than not offering it this time. The next
+            // time the view comes on screen reads again.
+            if (!stale() && tracked !== null) tracked.record = "unread";
+            logWarn("[ProjectWelcome] Couldn't read the welcome record", { error });
+          }
         );
+    };
+
+    /**
+     * Another window may have answered meanwhile, and a failed read deserves
+     * another go: coming on screen or taking focus reads main's record again.
+     */
+    const reread = (): void => {
+      if (disposed || tracked === null) return;
+      if (tracked.record === "open" || tracked.record === "unread") load(tracked);
     };
 
     const evaluate = (): void => {
@@ -182,19 +246,24 @@ export function useProjectApplicationWelcome(enabled: boolean): void {
       }
       const identity = identityOf(welcome);
       if (tracked?.identity !== identity) {
-        tracked = { identity, welcome, record: "loading" };
+        tracked = { identity, welcome, record: "loading", read: 0, answer: null };
         if (offer !== null) setOffer(null);
-        load(identity, welcome);
+        if (handoff !== null) setHandoff(null);
+        load(tracked);
         return;
       }
+      // The same welcome, but the name or first workflow may have changed.
+      tracked.welcome = welcome;
+      syncHandoff();
       const tourId = makePluginTourId(welcome.instanceId, welcome.localTourId);
       const tour = getTour(tourId);
-      if (tracked.record !== "open" || tour === undefined) {
+      // A layout that arrived late, or was offered meanwhile, takes its turn
+      // first even over a welcome already shown.
+      if (tracked.record !== "open" || tour === undefined || layoutComesFirst()) {
         if (offer !== null) setOffer(null);
         return;
       }
       if (offer?.tourId === tourId) return;
-      if (layoutComesFirst()) return;
       if (useUIStore.getState().overlayStack.length > 0) return;
       if (!isProjectViewObservable()) return;
       setOffer({
@@ -232,9 +301,14 @@ export function useProjectApplicationWelcome(enabled: boolean): void {
         if (state.overlayStack !== prev.overlayStack) evaluate();
       }),
       subscribeToTourRegistry(evaluate),
-      subscribeProjectViewObservability(evaluate),
+      subscribeToRegisteredPluginActions(evaluate),
+      subscribeProjectViewObservability((observable) => {
+        if (observable) reread();
+        evaluate();
+      }),
     ];
     window.addEventListener(TOUR_COMPLETED_EVENT, onCompleted);
+    window.addEventListener("focus", reread);
     evaluate();
 
     return () => {
@@ -242,6 +316,7 @@ export function useProjectApplicationWelcome(enabled: boolean): void {
       tracked = null;
       for (const unsubscribe of unsubscribers) unsubscribe();
       window.removeEventListener(TOUR_COMPLETED_EVENT, onCompleted);
+      window.removeEventListener("focus", reread);
     };
   }, [enabled]);
 }

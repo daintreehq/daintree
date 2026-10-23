@@ -312,6 +312,22 @@ describe("useProjectLayoutSeed (#13782)", () => {
       expect(useProjectLayoutSeedStore.getState().status).toBe("failed");
     });
 
+    it("fails the seed, and leaves no recipe waiting, when the settle doesn't land", async () => {
+      record = { status: "failed", outcome: "applied", at: 0 };
+      advanceProjectLayoutSeed.mockImplementationOnce(async () => {
+        record = { status: "applying", outcome: "applied", at: 1 };
+        return { advanced: true, record };
+      });
+      // Storage refuses the settle.
+      advanceProjectLayoutSeed.mockImplementationOnce(async () => ({ advanced: false, record }));
+
+      await retryLayoutSeed(layout());
+
+      expect(advanceProjectLayoutSeed.mock.lastCall?.slice(0, 2)).toEqual(["applying", "failed"]);
+      expect(record?.status).toBe("failed");
+      expect(useProjectLayoutSeedStore.getState().waiting).toBeNull();
+    });
+
     it("settles a failed seed the user dismisses", async () => {
       record = { status: "failed", outcome: "applied", at: 0 };
       await dismissFailedLayoutSeed();

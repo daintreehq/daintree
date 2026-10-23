@@ -1,7 +1,11 @@
 import { useState } from "react";
 import { CirclePlay } from "lucide-react";
 import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
-import { skipProjectWelcome, startProjectWelcome } from "@/hooks/useProjectApplicationWelcome";
+import {
+  dismissProjectWelcomeHandoff,
+  skipProjectWelcome,
+  startProjectWelcome,
+} from "@/hooks/useProjectApplicationWelcome";
 import { actionService } from "@/services/ActionService";
 import { useProjectWelcomeStore } from "@/store/projectWelcomeStore";
 import { logWarn } from "@/utils/logger";
@@ -23,7 +27,6 @@ const BANNER_CLASS =
 export function ProjectWelcomeNotice() {
   const offer = useProjectWelcomeStore((s) => s.offer);
   const handoff = useProjectWelcomeStore((s) => s.handoff);
-  const setHandoff = useProjectWelcomeStore((s) => s.setHandoff);
   const [busy, setBusy] = useState<string | null>(null);
   // A promise chain rather than try/finally, which the React Compiler can't
   // lower even inside a handler.
@@ -74,7 +77,7 @@ export function ProjectWelcomeNotice() {
       icon={CirclePlay}
       layout="strip"
       title={`Next in ${handoff.appName}: ${handoff.title}`}
-      description={handoff.skipped ? `Replay ${handoff.tourTitle} any time from Help.` : undefined}
+      description={handoff.skipped ? `Replay ${handoff.tourTitle} any time from Help` : undefined}
       severity="neutral"
       role="status"
       actions={[
@@ -83,13 +86,13 @@ export function ProjectWelcomeNotice() {
           label: handoff.title,
           variant: "primary",
           onClick: () => {
-            setHandoff(null);
+            dismissProjectWelcomeHandoff();
             void actionService.dispatch(handoff.actionId, undefined, { source: "user" });
           },
         },
       ]}
       className={BANNER_CLASS}
-      onClose={() => setHandoff(null)}
+      onClose={dismissProjectWelcomeHandoff}
       closeAriaLabel="Dismiss"
       closeTitle="Dismiss"
     />

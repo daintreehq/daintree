@@ -13,7 +13,7 @@ const { tours, registryListeners, view, requestTour, notify, actions } = vi.hois
   view: { observable: true, listeners: new Set<(observable: boolean) => void>() },
   requestTour: vi.fn(),
   notify: vi.fn(),
-  actions: { snapshot: new Map<string, string>() },
+  actions: { snapshot: new Map<string, string>(), listeners: new Set<() => void>() },
 }));
 
 vi.mock("@/components/Tour/tourRegistry", () => ({
@@ -39,10 +39,15 @@ vi.mock("@/hooks/useProjectLayoutSeed", () => ({
 }));
 vi.mock("@/services/plugin/registeredPluginActions", () => ({
   getRegisteredPluginActionsSnapshot: () => actions.snapshot,
+  subscribeToRegisteredPluginActions: (listener: () => void) => {
+    actions.listeners.add(listener);
+    return () => actions.listeners.delete(listener);
+  },
 }));
 
 import {
   _resetProjectApplicationWelcomeForTest,
+  dismissProjectWelcomeHandoff,
   skipProjectWelcome,
   startProjectWelcome,
   useProjectApplicationWelcome,
@@ -123,6 +128,7 @@ describe("useProjectApplicationWelcome (#14106)", () => {
     view.observable = true;
     view.listeners.clear();
     actions.snapshot = new Map([[`${INSTANCE}.record-transaction`, "Record a transaction"]]);
+    actions.listeners.clear();
     vi.clearAllMocks();
     _resetProjectApplicationWelcomeForTest();
     _resetProjectWelcomeStoreForTest();
@@ -201,6 +207,22 @@ describe("useProjectApplicationWelcome (#14106)", () => {
     expect(offer()?.tourId).toBe(TOUR_ID);
   });
 
+  it("waits while the layout is offered, and steps aside for a layout that arrives late", async () => {
+    await mountActive();
+    expect(offer()?.tourId).toBe(TOUR_ID);
+
+    // The plugin's default layout registers after its application went active.
+    const layout = { id: "l", pluginId: INSTANCE, projectDefault: true } as PluginLayoutConfig;
+    act(() => {
+      useProjectLayoutSeedStore.setState({ status: "offered" });
+      usePluginLayoutsStore.setState({ layouts: [layout] });
+    });
+    expect(offer()).toBeNull();
+
+    act(() => useProjectLayoutSeedStore.setState({ status: "settled" }));
+    expect(offer()?.tourId).toBe(TOUR_ID);
+  });
+
   it("doesn't wait on a pending seed when no layout is coming", async () => {
     useProjectLayoutSeedStore.setState({ status: "pending" });
     await mountActive();
@@ -243,9 +265,44 @@ describe("useProjectApplicationWelcome (#14106)", () => {
     expect(offer()).toBeNull();
   });
 
-  it("offers nothing when reading the record fails", async () => {
+  it("offers nothing when reading the record fails, and reads again on coming back on screen", async () => {
     getProjectWelcome.mockRejectedValueOnce(new Error("EACCES"));
     await mountActive();
+    expect(offer()).toBeNull();
+
+    setObservable(false);
+    setObservable(true);
+    await flush();
+    expect(offer()?.tourId).toBe(TOUR_ID);
+  });
+
+  it("withdraws the offer once another window answered it", async () => {
+    await mountActive();
+    expect(offer()?.tourId).toBe(TOUR_ID);
+
+    // The other window skipped it; this one learns when it takes focus.
+    stored = { version: 2, status: "skipped", at: 3 };
+    act(() => {
+      window.dispatchEvent(new Event("focus"));
+    });
+    await flush();
+    expect(offer()).toBeNull();
+    // Answered elsewhere: no hand-off here.
+    expect(useProjectWelcomeStore.getState().handoff).toBeNull();
+  });
+
+  it("ignores a read that lands after the user answered here", async () => {
+    await mountActive();
+    let resolveRead: (record: ProjectWelcomeRecord | null) => void = () => {};
+    getProjectWelcome.mockImplementationOnce(
+      () => new Promise<ProjectWelcomeRecord | null>((resolve) => (resolveRead = resolve))
+    );
+    act(() => {
+      window.dispatchEvent(new Event("focus"));
+    });
+    await act(() => skipProjectWelcome());
+    resolveRead(null);
+    await flush();
     expect(offer()).toBeNull();
   });
 
@@ -281,10 +338,31 @@ describe("useProjectApplicationWelcome (#14106)", () => {
     expect(useProjectWelcomeStore.getState().handoff?.skipped).toBe(false);
   });
 
-  it("hands off nothing when the first workflow isn't registered", async () => {
+  it("follows the first workflow's registration, and stays dismissed", async () => {
     actions.snapshot = new Map();
     await mountActive();
     await act(() => skipProjectWelcome());
+    expect(useProjectWelcomeStore.getState().handoff).toBeNull();
+
+    const notifyActions = (): void =>
+      act(() => {
+        for (const listener of [...actions.listeners]) listener();
+      });
+    actions.snapshot = new Map([[`${INSTANCE}.record-transaction`, "Record a transaction"]]);
+    notifyActions();
+    expect(useProjectWelcomeStore.getState().handoff?.actionId).toBe(
+      `${INSTANCE}.record-transaction`
+    );
+
+    // Withdrawn: no dead button.
+    actions.snapshot = new Map();
+    notifyActions();
+    expect(useProjectWelcomeStore.getState().handoff).toBeNull();
+
+    actions.snapshot = new Map([[`${INSTANCE}.record-transaction`, "Record a transaction"]]);
+    notifyActions();
+    act(() => dismissProjectWelcomeHandoff());
+    notifyActions();
     expect(useProjectWelcomeStore.getState().handoff).toBeNull();
   });
 
@@ -295,9 +373,17 @@ describe("useProjectApplicationWelcome (#14106)", () => {
 
     expect(requestTour).toHaveBeenCalledWith([TOUR_ID]);
     expect(notify).toHaveBeenCalledWith(
-      expect.objectContaining({ type: "error", title: "Welcome not started" })
+      expect.objectContaining({ type: "error", title: "Couldn't start welcome" })
     );
     expect(setProjectWelcome).not.toHaveBeenCalled();
+    expect(offer()?.tourId).toBe(TOUR_ID);
+  });
+
+  it("leaves a tour that failed to load to the tour host's own report", async () => {
+    await mountActive();
+    requestTour.mockResolvedValueOnce({ status: "failed", tourId: TOUR_ID, reason: "import" });
+    await act(() => startProjectWelcome());
+    expect(notify).not.toHaveBeenCalled();
     expect(offer()?.tourId).toBe(TOUR_ID);
   });
 
