@@ -161,13 +161,18 @@ function serverRecordFor(info: ServerInfo, id: string, path: string): ComponentR
  * The half of `fiber`'s pair whose `_debugInfo` the last commit wrote. React
  * sets it on the half a render works on, so where the halves disagree the one
  * a DOM node or a return pointer names may hold an earlier render's list.
+ * `committedFiber` keeps the half it is given when it cannot tell, so only an
+ * answer naming the other half is one; asked from both sides and told
+ * nothing, which list is current is unknown, and that is null.
  */
-function debugInfoHolder(fiber: Fiber, budget: Budget): Fiber {
+function debugInfoHolder(fiber: Fiber, budget: Budget): Fiber | null {
   const alternate = field(fiber, "alternate");
   if (!isFiber(alternate) || field(alternate, "_debugInfo") === field(fiber, "_debugInfo")) {
     return fiber;
   }
-  return committedFiber(fiber, budget);
+  if (committedFiber(fiber, budget) === alternate) return alternate;
+  if (committedFiber(alternate, budget) === fiber) return fiber;
+  return null;
 }
 
 function ownerPath(path: string): string | null {
@@ -358,7 +363,10 @@ function nearestOf(host: Fiber, budget: Budget): Origin | null {
       if (tagOf(at) === FIBER_TAGS.hostRoot) return null;
       if (isComponentFiber(at)) return { kind: "client", fiber: canonicalFiber(at) };
     }
-    const { entries, cut } = serverEntries(debugInfoHolder(at, budget));
+    const holder = debugInfoHolder(at, budget);
+    // A list that may be an earlier render's names nothing, and hides what is further out.
+    if (holder === null) return null;
+    const { entries, cut } = serverEntries(holder);
     const innermost = entries.at(-1);
     if (innermost !== undefined) {
       return { kind: "server", info: innermost.info, path: `_debugInfo[${innermost.index}]` };
@@ -436,7 +444,12 @@ function selectionOf(
    * walk has to stop.
    */
   const climb = (fiber: Fiber): boolean => {
-    const { entries, cut } = serverEntries(debugInfoHolder(fiber, commitBudget));
+    const holder = debugInfoHolder(fiber, commitBudget);
+    if (holder === null) {
+      truncated = true;
+      return false;
+    }
+    const { entries, cut } = serverEntries(holder);
     for (let at = entries.length - 1; at >= 0; at -= 1) {
       const { info, index } = entries[at]!;
       // One already in the chain would make the render edges loop.

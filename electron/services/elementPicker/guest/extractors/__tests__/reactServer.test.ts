@@ -489,6 +489,32 @@ describe("the React extractor on server components", () => {
     expect(hover("p.swapped")?.componentChain.components[0]?.name?.value).toBe("After");
   });
 
+  it("names nothing from a pair whose halves disagree when it cannot tell which committed", () => {
+    // Two halves with different lists and no lineage to a root to decide between them.
+    const node = document.createElement("p");
+    document.body.appendChild(node);
+    const stale: Record<string, unknown> = {
+      tag: 5,
+      stateNode: node,
+      return: null,
+      _debugStack: null,
+      _debugInfo: [serverInfo("Stale")],
+    };
+    const fresh: Record<string, unknown> = { ...stale, _debugInfo: [serverInfo("Fresh")] };
+    stale.alternate = fresh;
+    fresh.alternate = stale;
+    (node as unknown as Record<string, unknown>)["__reactFiber$test"] = stale;
+    const extractor = createReactExtractor();
+    const refs = { ref: () => null };
+    const selected = extractor.extract(node, "selection", refs);
+    expect(selected?.componentChain).toMatchObject({
+      nearestId: null,
+      components: [],
+      truncated: true,
+    });
+    expect(extractor.extract(node, "hover", refs)?.componentChain?.components).toEqual([]);
+  });
+
   it("names nothing past a debug info list it could not read to its start", () => {
     const outer = serverInfo("Outer");
     const inner = serverInfo("Inner");
