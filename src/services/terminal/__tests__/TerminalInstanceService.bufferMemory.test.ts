@@ -113,6 +113,7 @@ describe("TerminalInstanceService renderer buffer counts (#14213)", () => {
   let service: BufferTestService;
   const report = vi.fn((_payload: Record<string, unknown>) => Promise.resolve());
   const eventListeners = new Map<string, () => void>();
+  const allSampleListeners: Array<() => void> = [];
   const unsubscribe = vi.fn();
 
   beforeEach(async () => {
@@ -123,11 +124,13 @@ describe("TerminalInstanceService renderer buffer counts (#14213)", () => {
     report.mockClear();
     unsubscribe.mockClear();
     eventListeners.clear();
+    allSampleListeners.length = 0;
     (window as unknown as { electron: unknown }).electron = {
       system: { reportTerminalRendererDiagnostics: report },
       events: {
         on: (name: string, cb: () => void) => {
-          eventListeners.set(name, cb);
+          if (!eventListeners.has(name)) eventListeners.set(name, cb);
+          if (name === "window:sample-terminal-buffers") allSampleListeners.push(cb);
           return unsubscribe;
         },
       },
@@ -186,6 +189,26 @@ describe("TerminalInstanceService renderer buffer counts (#14213)", () => {
 
     expect(report).toHaveBeenCalledTimes(1);
     expect(report.mock.calls[0]?.[0]).not.toHaveProperty("bufferMemory");
+  });
+
+  it("reports every paint surface's terminals once, from the primary service", () => {
+    const Service = service.constructor as new () => BufferTestService;
+    const aux = new Service();
+    aux.instances.set("aux-term", makeManaged(500, 0, 120));
+    try {
+      // The request reaches both services' listeners; only the primary answers.
+      for (const listener of allSampleListeners) listener();
+
+      expect(report).toHaveBeenCalledTimes(1);
+      expect(lastBufferMemory()?.terminals.map((t) => t.terminalId)).toEqual([
+        "agent",
+        "vim",
+        "aux-term",
+      ]);
+    } finally {
+      aux.instances.clear();
+      aux.dispose();
+    }
   });
 
   it("drops its sample-request subscription on dispose", () => {

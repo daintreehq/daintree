@@ -223,6 +223,46 @@ describe("rendererTerminalBuffers", () => {
       expect(silent.view.webContents.send).toHaveBeenCalledTimes(1);
     });
 
+    it("reads a view cached during the wait as last-known, not fresh", async () => {
+      const views: ReturnType<typeof fakeView>[] = [];
+      // The view is cached before it answers: what reaches main is its
+      // cache-edge push, and the collector must see the cache, not the request.
+      const caching = fakeView(1, "p", "active", () => {
+        views[0].state = "cached";
+        report(1, Date.now());
+      });
+      views.push(caching);
+
+      const slice = await collectRendererTerminalBuffers(depsFor(views));
+
+      expect(slice.views[0]).toMatchObject({ state: "cached", status: "last-known" });
+    });
+
+    it("drops a view evicted during the wait instead of reporting it", async () => {
+      const views: ReturnType<typeof fakeView>[] = [];
+      const evicted = fakeView(1, "p", "active", () => {
+        views.splice(0, 1);
+      });
+      views.push(evicted, fakeView(2, "q", "cached"));
+
+      const pending = collectRendererTerminalBuffers(depsFor(views));
+      await vi.advanceTimersByTimeAsync(RENDERER_BUFFER_SAMPLE_TIMEOUT_MS);
+      const slice = await pending;
+
+      expect(slice.views.map((v) => v.webContentsId)).toEqual([2]);
+    });
+
+    it("still settles when sending to a view throws", async () => {
+      const broken = fakeView(1, "p", "active", () => {
+        throw new Error("render frame disposed");
+      });
+
+      const pending = collectRendererTerminalBuffers(depsFor([broken]));
+      await vi.advanceTimersByTimeAsync(RENDERER_BUFFER_SAMPLE_TIMEOUT_MS);
+
+      await expect(pending).resolves.toMatchObject({ complete: false });
+    });
+
     it("returns an empty, complete slice when no views are resident", async () => {
       const slice = await collectRendererTerminalBuffers(depsFor([]));
       expect(slice).toEqual({ views: [], estimatedBytes: 0, complete: true });

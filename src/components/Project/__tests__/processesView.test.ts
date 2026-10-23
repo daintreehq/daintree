@@ -10,6 +10,7 @@ import {
   describeMembers,
   describeTerminalKind,
   formatApproxMemory,
+  describeTerminalBuffer,
   formatBufferEstimate,
   indexTerminalBuffers,
   formatCpu,
@@ -335,16 +336,24 @@ describe("renderer terminal buffer readings (#14213)", () => {
     };
   }
 
-  it("prefers a fresh reading over a newer-looking cached one for the same terminal", () => {
+  it("sums a terminal's copies across views and describes it by the fresh one", () => {
     const index = indexTerminalBuffers({
       complete: true,
       estimatedBytes: 0,
       views: [view(2, "last-known", 2_000, 500), view(1, "fresh", 1_000, 100)],
     });
-    expect(index.get("t1")).toMatchObject({ status: "fresh", normalLines: 100 });
+    expect(index.get("t1")).toMatchObject({
+      status: "fresh",
+      normalLines: 100,
+      copies: 2,
+      estimatedBytes: (500 + 100) * 80 * 12,
+    });
+    expect(describeTerminalBuffer(index.get("t1")!)).toBe(
+      "Buffer <1 MB est. · 2 windows · 100 lines × 80 cols"
+    );
   });
 
-  it("takes the newest of two cached readings and skips unavailable views", () => {
+  it("describes two cached copies by the newer and skips unavailable views", () => {
     const index = indexTerminalBuffers({
       complete: false,
       estimatedBytes: 0,
@@ -354,7 +363,7 @@ describe("renderer terminal buffer readings (#14213)", () => {
         view(3, "unavailable", 0, 0),
       ],
     });
-    expect(index.get("t1")).toMatchObject({ normalLines: 500 });
+    expect(index.get("t1")).toMatchObject({ normalLines: 500, copies: 2 });
     expect(index.size).toBe(1);
   });
 

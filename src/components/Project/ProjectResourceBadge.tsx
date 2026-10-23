@@ -21,6 +21,7 @@ import type {
   TerminalWorkloadSlice,
 } from "@shared/types/memoryAccounting";
 import type { Project } from "@shared/types";
+import { parseHostScopedKey } from "@shared/types/remoteHosts";
 import {
   type TrendDirection,
   type MemoryThresholds,
@@ -215,13 +216,22 @@ function TerminalBufferBreakdown({
 
   const rows = slice.views
     .map((view) => {
-      const name = projectNames.get(view.projectId) ?? "Unknown project";
-      const label =
-        view.state === "cached" && view.ageMs !== null
-          ? `${name} · cached ${formatAgo(view.ageMs)}`
-          : view.state === "cached"
-            ? `${name} · cached`
-            : name;
+      // A remote view is keyed host-scoped (`host:project`); the project list
+      // knows it by its bare id.
+      const name =
+        projectNames.get(view.projectId) ??
+        projectNames.get(parseHostScopedKey(view.projectId).projectId) ??
+        "Unknown project";
+      const cached = view.state === "cached" ? "cached" : null;
+      // Last-known counts carry their age whether the view is cached or an
+      // active one stopped answering; a fresh reading needs none.
+      const age =
+        view.status === "last-known" && view.ageMs !== null
+          ? cached
+            ? `cached ${formatAgo(view.ageMs)}`
+            : `from ${formatAgo(view.ageMs)}`
+          : cached;
+      const label = age ? `${name} · ${age}` : name;
       return {
         key: String(view.webContentsId),
         label,

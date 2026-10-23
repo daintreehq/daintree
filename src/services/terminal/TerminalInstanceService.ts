@@ -272,9 +272,17 @@ class TerminalInstanceService {
   private offViewLifecycle: () => void;
   private offViewObservability: () => void;
   private offBufferSampleRequest: (() => void) | null = null;
+  /**
+   * Every live service in this renderer: one, or one per surface with the
+   * paint fabric on. Main keys buffer reports by webContents, so the first
+   * (primary) service reports for all of them rather than each overwriting
+   * the others with its own share.
+   */
+  private static readonly liveServices = new Set<TerminalInstanceService>();
   private suppressedWebGLReleaseTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor() {
+    TerminalInstanceService.liveServices.add(this);
     // Subscribed before the reflow controller and watchdog so it runs first:
     // their `revealed` sweeps would otherwise find panes still suspended and
     // spend renderer-unpause repair attempts on them. `active` and `revealed`
@@ -1832,19 +1840,22 @@ class TerminalInstanceService {
   }
 
   /**
-   * Line counts and width of every live terminal's buffers (#14213). Reads
-   * `length` and `cols` only — O(1) per terminal, never a line or its content.
+   * Line counts and width of every live terminal's buffers across this
+   * renderer's services (#14213). Reads `length` and `cols` only — O(1) per
+   * terminal, never a line or its content.
    */
   private collectBufferCounts(): RendererTerminalBufferCounts[] {
     const out: RendererTerminalBufferCounts[] = [];
-    for (const [terminalId, managed] of this.instances) {
-      const { buffer, cols } = managed.terminal;
-      out.push({
-        terminalId,
-        normalLines: buffer.normal.length,
-        alternateLines: buffer.alternate.length,
-        cols,
-      });
+    for (const service of TerminalInstanceService.liveServices) {
+      for (const [terminalId, managed] of service.instances) {
+        const { buffer, cols } = managed.terminal;
+        out.push({
+          terminalId,
+          normalLines: buffer.normal.length,
+          alternateLines: buffer.alternate.length,
+          cols,
+        });
+      }
     }
     return out;
   }
@@ -1857,6 +1868,11 @@ class TerminalInstanceService {
    * preload binding is unavailable (tests).
    */
   private reportWhySlowDiagnostics(includeBuffers = false): void {
+    // The primary reports buffers for every surface; another surface's
+    // buffer report would only repeat it.
+    if (includeBuffers && TerminalInstanceService.liveServices.values().next().value !== this) {
+      return;
+    }
     try {
       const report = window.electron?.system?.reportTerminalRendererDiagnostics;
       if (typeof report !== "function") return;
@@ -4368,6 +4384,7 @@ class TerminalInstanceService {
     this.offViewObservability();
     this.offBufferSampleRequest?.();
     this.offBufferSampleRequest = null;
+    TerminalInstanceService.liveServices.delete(this);
     this.clearSuppressedWebGLReleaseTimer();
     this.stopPolling();
     this.unsubTierChanged?.();

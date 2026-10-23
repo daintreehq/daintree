@@ -207,11 +207,14 @@ export function formatBufferEstimate(bytes: number): string {
 export interface TerminalBufferReading extends RendererTerminalBufferEntry {
   status: Exclude<RendererTerminalBufferStatus, "unavailable">;
   ageMs: number | null;
+  /** Views holding a buffer for this terminal; `estimatedBytes` sums them all. */
+  copies: number;
 }
 
 /**
- * Terminal id → buffer reading. A terminal shown in two windows has a buffer in
- * each; the freshest reading stands for it.
+ * Terminal id → buffer reading. A terminal shown in two windows holds a
+ * buffer in each, and both are memory: the estimate sums every copy, while
+ * the line counts, width and age come from the freshest one.
  */
 export function indexTerminalBuffers(
   slice: RendererTerminalBufferSlice | null | undefined
@@ -225,14 +228,21 @@ export function indexTerminalBuffers(
         !prev ||
         (view.status === "fresh" && prev.status !== "fresh") ||
         (view.status === prev.status && view.sampledAt > prev.sampledAt);
-      if (better) {
-        out.set(entry.terminalId, {
-          ...entry,
-          status: view.status,
-          ageMs: view.ageMs,
-          sampledAt: view.sampledAt,
-        });
-      }
+      const totalBytes = (prev?.estimatedBytes ?? 0) + entry.estimatedBytes;
+      const copies = (prev?.copies ?? 0) + 1;
+      out.set(
+        entry.terminalId,
+        better
+          ? {
+              ...entry,
+              status: view.status,
+              ageMs: view.ageMs,
+              sampledAt: view.sampledAt,
+              estimatedBytes: totalBytes,
+              copies,
+            }
+          : { ...prev, estimatedBytes: totalBytes, copies }
+      );
     }
   }
   return out;
@@ -244,7 +254,8 @@ export function describeTerminalBuffer(reading: TerminalBufferReading): string {
     reading.alternateLines > 0
       ? `${reading.normalLines.toLocaleString()} + ${pluralize(reading.alternateLines, "line")}`
       : pluralize(reading.normalLines, "line");
-  const base = `Buffer ${formatBufferEstimate(reading.estimatedBytes)} est. · ${lines} × ${reading.cols} cols`;
+  const copies = reading.copies > 1 ? ` · ${reading.copies} windows` : "";
+  const base = `Buffer ${formatBufferEstimate(reading.estimatedBytes)} est.${copies} · ${lines} × ${reading.cols} cols`;
   return reading.status === "last-known" && reading.ageMs !== null
     ? `${base} · from ${formatAgo(reading.ageMs)}`
     : base;

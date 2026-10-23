@@ -38,6 +38,8 @@ interface ResidentView {
   windowId: number | null;
   projectId: string;
   state: "loading" | "active" | "cached";
+  // Read once at enumeration: a view torn down during the wait can't be asked for it.
+  webContentsId: number;
   webContents: WebContents;
 }
 
@@ -62,7 +64,13 @@ function listResidentViews(deps: RendererViewSource): ResidentView[] {
       for (const entry of pvm.getAllViews()) {
         const wc = entry.view.webContents;
         if (!wc || wc.isDestroyed()) continue;
-        views.push({ windowId, projectId: entry.projectId, state: entry.state, webContents: wc });
+        views.push({
+          windowId,
+          projectId: entry.projectId,
+          state: entry.state,
+          webContentsId: wc.id,
+          webContents: wc,
+        });
       }
     } catch {
       // A PVM mid-teardown must not erase every other window's views.
@@ -108,7 +116,7 @@ function isRecent(sampledAt: number | undefined, now: number): boolean {
  * recent enough to call current.
  */
 export function composeRendererTerminalBufferSlice(
-  views: Array<Omit<ResidentView, "webContents"> & { webContentsId: number }>,
+  views: Array<Omit<ResidentView, "webContents">>,
   freshIds: ReadonlySet<number>,
   now: number
 ): RendererTerminalBufferSlice {
@@ -168,32 +176,41 @@ export function composeRendererTerminalBufferSlice(
 export async function collectRendererTerminalBuffers(
   deps: RendererViewSource
 ): Promise<RendererTerminalBufferSlice> {
-  const views = listResidentViews(deps);
-  const resident = new Set(views.map((v) => v.webContents.id));
+  const requested = listResidentViews(deps);
+  const resident = new Set(requested.map((v) => v.webContentsId));
   for (const id of lastRequestedAt.keys()) {
     if (!resident.has(id)) lastRequestedAt.delete(id);
   }
   const requestedAt = Date.now();
   await Promise.all(
-    views
+    requested
       .filter((v) => v.state === "active")
       .filter(
-        (v) => !isRecent(getRendererTerminalBufferSample(v.webContents.id)?.sampledAt, requestedAt)
+        (v) => !isRecent(getRendererTerminalBufferSample(v.webContentsId)?.sampledAt, requestedAt)
       )
       .map((v) => requestSample(v.webContents, requestedAt))
   );
+  // Enumerate again rather than reuse the pre-wait list: a view cached during
+  // the wait answered with its cache-edge push and is last-known now, not
+  // fresh, and one evicted meanwhile is no longer resident at all.
+  const views = listResidentViews(deps);
   const now = Date.now();
   const freshIds = new Set<number>();
   for (const v of views) {
     if (
       v.state === "active" &&
-      isRecent(getRendererTerminalBufferSample(v.webContents.id)?.sampledAt, now)
+      isRecent(getRendererTerminalBufferSample(v.webContentsId)?.sampledAt, now)
     ) {
-      freshIds.add(v.webContents.id);
+      freshIds.add(v.webContentsId);
     }
   }
   return composeRendererTerminalBufferSlice(
-    views.map(({ webContents, ...rest }) => ({ ...rest, webContentsId: webContents.id })),
+    views.map(({ windowId, projectId, state, webContentsId }) => ({
+      windowId,
+      projectId,
+      state,
+      webContentsId,
+    })),
     freshIds,
     now
   );

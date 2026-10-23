@@ -551,6 +551,37 @@ describe("ProjectResourceBadge — popover memory honesty", () => {
     expect(text.indexOf("Backgrounded")).toBeLessThan(text.indexOf("Silent"));
   });
 
+  it("ages an active view's buffer reading once it stops answering, and names remote views", async () => {
+    mockGetAll.mockResolvedValue([makeProject({ id: "proj-a", name: "Remote repo" })]);
+    mockGetMemorySnapshot.mockResolvedValue({
+      ...makeMemorySnapshot(),
+      rendererTerminalBuffers: {
+        complete: true,
+        estimatedBytes: 4 * 1024 * 1024,
+        views: [
+          {
+            webContentsId: 1,
+            windowId: 1,
+            projectId: "studio-01:proj-a",
+            state: "active",
+            status: "last-known",
+            sampledAt: Date.now() - 90_000,
+            ageMs: 90_000,
+            estimatedBytes: 4 * 1024 * 1024,
+            terminals: [],
+          },
+        ],
+      },
+    });
+
+    const container = await renderOpenBadge();
+    const text =
+      container.ownerDocument.querySelector('[data-testid="terminal-buffer-breakdown"]')
+        ?.textContent ?? "";
+
+    expect(text).toContain("Remote repo · from 2m ago~4 MB");
+  });
+
   it("omits the buffer section when the snapshot didn't sample renderers", async () => {
     mockGetMemorySnapshot.mockResolvedValue(makeMemorySnapshot());
 
