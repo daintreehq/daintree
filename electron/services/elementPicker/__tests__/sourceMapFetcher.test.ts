@@ -1,14 +1,16 @@
 import http from "node:http";
 import type { AddressInfo } from "node:net";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { NetworkAllowance } from "../sourceAccess.js";
 import { revisionOf } from "../sourceAccess.js";
 import {
   MAX_SOURCE_MAP_REDIRECTS,
+  createNextSourceMapProvider,
   createSourceMapProvider,
-  decodeDataUrl,
-  sourceMappingReference,
 } from "../sourceMapFetcher.js";
+import { decodeDataUrl, sourceMappingReference } from "../sourceMapReference.js";
 
 type Route = (request: http.IncomingMessage, response: http.ServerResponse) => void;
 
@@ -314,6 +316,68 @@ describe("source map provider", () => {
     await expect.poll(() => preview.hits).toEqual(["/slow.js"]);
     controller.abort();
     await expect(pending).rejects.toThrow();
+  });
+});
+
+describe("Next.js source map route", () => {
+  const next = createNextSourceMapProvider();
+  const ask = (filename: string, allowance = meter()) =>
+    next({ previewOrigin: preview.origin, filename, allowance }, new AbortController().signal);
+
+  it("asks the fixed route on the preview's origin, the module named only as a query value", async () => {
+    let asked: string | null = null;
+    preview.routes.set("/__nextjs_source-map", (request, response) => {
+      asked = new URL(request.url ?? "", preview.origin).searchParams.get("filename");
+      response.writeHead(200, { "content-type": "application/json" }).end(MAP);
+    });
+    const chunk = path.resolve(
+      "/work/app/.next/dev/server/chunks/ssr/[root-of-the-server]__page._.js"
+    );
+    const result = await ask(chunk);
+    expect(asked).toBe(chunk);
+    expect(result).toMatchObject({
+      ok: true,
+      value: {
+        url: expect.stringMatching(/^http:\/\/127\.0\.0\.1:\d+\/__nextjs_source-map\?filename=/),
+        // A chunk's relative sources are beside the chunk, not under the route.
+        base: pathToFileURL(chunk).href,
+        revision: revisionOf(new TextEncoder().encode(MAP)),
+        text: MAP,
+      },
+    });
+    const module = await ask("webpack-internal:///(rsc)/./app/page.tsx");
+    expect(module.ok).toBe(true);
+    expect(module.ok && module.value.base).toBe(module.ok && module.value.url);
+  });
+
+  it("takes an empty answer, or an error, as the route having no map", async () => {
+    preview.routes.set("/__nextjs_source-map", (_request, response) =>
+      response.writeHead(204).end()
+    );
+    await expect(ask("/work/app/a.js")).resolves.toEqual({ ok: false, reason: "map-missing" });
+    preview.routes.set("/__nextjs_source-map", (_request, response) =>
+      response.writeHead(500).end()
+    );
+    await expect(ask("/work/app/a.js")).resolves.toEqual({ ok: false, reason: "map-missing" });
+  });
+
+  it("follows no redirect off the origin, and pays for every request and byte", async () => {
+    preview.routes.set("/__nextjs_source-map", redirect(`${elsewhere.origin}/map`));
+    await expect(ask("/work/app/a.js")).resolves.toEqual({
+      ok: false,
+      reason: "outside-workspace",
+    });
+    expect(elsewhere.hits).toEqual([]);
+
+    preview.routes.set("/__nextjs_source-map", body(MAP));
+    await expect(ask("/work/app/a.js", meter(0))).resolves.toEqual({
+      ok: false,
+      reason: "budget-exhausted",
+    });
+    await expect(ask("/work/app/a.js", meter(8, 4))).resolves.toEqual({
+      ok: false,
+      reason: "budget-exhausted",
+    });
   });
 });
 

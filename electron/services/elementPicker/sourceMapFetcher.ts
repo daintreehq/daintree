@@ -1,18 +1,23 @@
 import type { UnavailableReason } from "../../../shared/elementPicker/resolution.js";
 import type { SourceAccessResult } from "../../../shared/elementPicker/resolver.js";
+import { pathToFileURL } from "node:url";
+import { NEXT_SOURCE_MAP_ROUTE, isAbsolutePath, isFileUrl } from "./nextDevServer.js";
+import { decodeDataUrl, sourceMappingReference } from "./sourceMapReference.js";
 import {
   revisionOf,
   type NetworkAllowance,
+  type NextSourceMapProvider,
   type ServedSourceMap,
   type SourceMapProvider,
 } from "./sourceAccess.js";
 
 /**
- * Fetches a generated module and the map it names, from the workspace's
- * preview origin and nowhere else. Every hop is a request of its own: a
- * redirect is followed by hand, checked against the origin before anything is
- * sent to where it points, and paid for out of the job's allowance like the
- * response bodies are, byte by byte as they arrive.
+ * Fetches a generated module and the map it names, or the map a Next.js dev
+ * server's own route holds, from the workspace's preview origin and nowhere
+ * else. Every hop is a request of its own: a redirect is followed by hand,
+ * checked against the origin before anything is sent to where it points, and
+ * paid for out of the job's allowance like the response bodies are, byte by
+ * byte as they arrive.
  *
  * Main's job is only to hand the host the map's bytes. Parsing them, and
  * deciding which source a position is in, happens in the host.
@@ -39,62 +44,6 @@ const refused = (reason: UnavailableReason) => ({ ok: false as const, reason });
 
 function isHttp(url: URL): boolean {
   return url.protocol === "http:" || url.protocol === "https:";
-}
-
-/**
- * The map a module names in its trailing comments: the last annotation in the
- * run of comment and blank lines that ends the file, and none at all once a
- * line of code comes after it. A block comment counts when it opens and closes
- * on its own line. Line-based, like ECMA-426's extraction without parsing: a
- * module can contrive a template literal to fool it, which at worst picks
- * another map on the same origin. Conservative on purpose: an annotation-shaped
- * string inside the module's own code is not where its map is.
- */
-export function sourceMappingReference(text: string): string | null {
-  let end = text.length;
-  while (end > 0) {
-    const newline = text.lastIndexOf("\n", end - 1);
-    const line = text.slice(newline + 1, end).trim();
-    end = newline;
-    if (line === "") continue;
-    const match =
-      /^\/\/[#@]\s*sourceMappingURL=(\S+)$/.exec(line) ??
-      /^\/\*[#@]\s*sourceMappingURL=(\S+?)\s*\*\/$/.exec(line);
-    // `/*# sourceMappingURL=a.map*/run();/*b*/` ends in a comment but is code.
-    if (match) return match[1]!.includes("*/") ? null : match[1]!;
-    const comment =
-      line.startsWith("//") ||
-      (line.startsWith("/*") && line.endsWith("*/") && line.indexOf("*/") === line.length - 2);
-    if (!comment) return null;
-  }
-  return null;
-}
-
-/**
- * A `data:` map's bytes: base64 or percent-encoded JSON. The charset parameter
- * is read and not honoured: a source map is UTF-8 JSON whatever it claims.
- */
-export function decodeDataUrl(reference: string): Uint8Array | null {
-  const comma = reference.indexOf(",");
-  if (comma === -1) return null;
-  const parameters = reference
-    .slice("data:".length, comma)
-    .split(";")
-    .map((part) => part.trim().toLowerCase());
-  const mediaType = parameters[0];
-  if (mediaType !== "" && mediaType !== "application/json" && mediaType !== "text/plain") {
-    return null;
-  }
-  const data = reference.slice(comma + 1);
-  if (parameters.includes("base64")) {
-    if (!/^[A-Za-z0-9+/_-]*={0,2}$/.test(data)) return null;
-    return new Uint8Array(Buffer.from(data, "base64"));
-  }
-  try {
-    return new TextEncoder().encode(decodeURIComponent(data));
-  } catch {
-    return null;
-  }
 }
 
 async function readBody(
@@ -124,49 +73,69 @@ async function readBody(
   return bytes;
 }
 
-export function createSourceMapProvider(options: SourceMapProviderOptions = {}): SourceMapProvider {
-  const fetchImpl = options.fetch ?? globalThis.fetch;
-  const maxRedirects = options.maxRedirects ?? MAX_SOURCE_MAP_REDIRECTS;
+interface Fetcher {
+  fetch: typeof fetch;
+  maxRedirects: number;
+}
 
-  async function get(
-    start: URL,
-    origin: string,
-    allowance: NetworkAllowance,
-    signal: AbortSignal
-  ): Promise<Fetched> {
-    let url = start;
-    for (let hop = 0; ; hop++) {
-      // Checked before every request, so a redirect off the origin is never followed even once.
-      if (!isHttp(url) || url.origin !== origin || url.username || url.password) {
-        return refused("outside-workspace");
-      }
-      if (!allowance.request()) return refused("budget-exhausted");
-      const response = await fetchImpl(url.href, {
-        redirect: "manual",
-        credentials: "omit",
-        signal,
-      });
-      if (REDIRECTS.has(response.status)) {
-        await response.body?.cancel().catch(() => undefined);
-        const location = response.headers.get("location");
-        if (location === null || hop >= maxRedirects) return refused("map-missing");
-        try {
-          url = new URL(location, url);
-        } catch {
-          return refused("map-missing");
-        }
-        url.hash = "";
-        continue;
-      }
-      if (!response.ok) {
-        await response.body?.cancel().catch(() => undefined);
+function fetcherOf(options: SourceMapProviderOptions): Fetcher {
+  return {
+    fetch: options.fetch ?? globalThis.fetch,
+    maxRedirects: options.maxRedirects ?? MAX_SOURCE_MAP_REDIRECTS,
+  };
+}
+
+/**
+ * One resource from the preview origin, every hop a request of its own: a
+ * redirect is followed by hand, checked against the origin before anything
+ * is sent to where it points, and paid for out of the job's allowance like
+ * the bodies are, byte by byte as they arrive.
+ */
+async function getResource(
+  fetcher: Fetcher,
+  start: URL,
+  origin: string,
+  allowance: NetworkAllowance,
+  signal: AbortSignal
+): Promise<Fetched> {
+  let url = start;
+  for (let hop = 0; ; hop++) {
+    // Checked before every request, so a redirect off the origin is never followed even once.
+    if (!isHttp(url) || url.origin !== origin || url.username || url.password) {
+      return refused("outside-workspace");
+    }
+    if (!allowance.request()) return refused("budget-exhausted");
+    const response = await fetcher.fetch(url.href, {
+      redirect: "manual",
+      credentials: "omit",
+      signal,
+    });
+    if (REDIRECTS.has(response.status)) {
+      await response.body?.cancel().catch(() => undefined);
+      const location = response.headers.get("location");
+      if (location === null || hop >= fetcher.maxRedirects) return refused("map-missing");
+      try {
+        url = new URL(location, url);
+      } catch {
         return refused("map-missing");
       }
-      const bytes = await readBody(response, allowance);
-      if (bytes === null) return refused("budget-exhausted");
-      return { ok: true, url, headers: response.headers, bytes };
+      url.hash = "";
+      continue;
     }
+    if (!response.ok) {
+      await response.body?.cancel().catch(() => undefined);
+      return refused("map-missing");
+    }
+    const bytes = await readBody(response, allowance);
+    if (bytes === null) return refused("budget-exhausted");
+    return { ok: true, url, headers: response.headers, bytes };
   }
+}
+
+export function createSourceMapProvider(options: SourceMapProviderOptions = {}): SourceMapProvider {
+  const fetcher = fetcherOf(options);
+  const get = (start: URL, origin: string, allowance: NetworkAllowance, signal: AbortSignal) =>
+    getResource(fetcher, start, origin, allowance, signal);
 
   return async (request, signal): Promise<SourceAccessResult<ServedSourceMap>> => {
     const { previewOrigin, allowance } = request;
@@ -215,6 +184,48 @@ export function createSourceMapProvider(options: SourceMapProviderOptions = {}):
       value: {
         url: map.url.href,
         base: map.url.href,
+        revision: revisionOf(map.bytes),
+        text: new TextDecoder().decode(map.bytes),
+      },
+    };
+  };
+}
+
+/**
+ * The raw map a Next.js dev server holds for a module no request could fetch:
+ * a server chunk on its disk, or a Webpack module in its compilation. The
+ * route is private and fixed; the page names only the module, sent as a query
+ * value, never where the request goes. An empty answer is the route saying it
+ * has none.
+ */
+export function createNextSourceMapProvider(
+  options: SourceMapProviderOptions = {}
+): NextSourceMapProvider {
+  const fetcher = fetcherOf(options);
+  return async ({ previewOrigin, filename, allowance }, signal) => {
+    let url: URL;
+    try {
+      url = new URL(NEXT_SOURCE_MAP_ROUTE, previewOrigin);
+    } catch {
+      return refused("map-missing");
+    }
+    url.searchParams.set("filename", filename);
+    if (url.href.length > MAX_MAP_URL_LENGTH) return refused("map-missing");
+    const map = await getResource(fetcher, url, previewOrigin, allowance, signal);
+    if (!map.ok) return map;
+    if (map.bytes.byteLength === 0 || map.url.href.length > MAX_MAP_URL_LENGTH) {
+      return refused("map-missing");
+    }
+    return {
+      ok: true,
+      value: {
+        url: map.url.href,
+        // A chunk's relative sources sit beside the chunk, not under the route.
+        base: isAbsolutePath(filename)
+          ? pathToFileURL(filename).href
+          : isFileUrl(filename)
+            ? filename
+            : map.url.href,
         revision: revisionOf(map.bytes),
         text: new TextDecoder().decode(map.bytes),
       },

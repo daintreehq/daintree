@@ -137,6 +137,37 @@ describe("how the prompt says a source claim was established", () => {
     expect(prompt).not.toContain("pass@");
   });
 
+  it("says a map read from disk was, and names no path for it", () => {
+    const prompt = promptFor(FRAME, {
+      state: "mapped",
+      candidateId: "frame-0",
+      claim: "element-creation",
+      target: SAVE_BUTTON,
+      fileRevision: null,
+      sourceMap: {
+        mapUrl: "file:///repo/.next/dev/server/chunks/ssr/page.js.map",
+        mapRevision: MAP_REVISION,
+        sourceCheck: "unchecked",
+      },
+    });
+
+    expect(sourceLines(prompt)[0]).toContain(
+      "mapped through a source map read from disk, not checked against the file"
+    );
+    expect(prompt).not.toContain("about:unavailable");
+  });
+
+  it("says a server component's frame is in code the server ran, not code it sent", () => {
+    const server: SourceCandidate = {
+      ...FRAME,
+      file: "about://React/Server/file:///repo/.next/dev/server/chunks/ssr/page.js?3",
+    };
+    expect(sourceLines(promptFor(server))[0]).toContain(
+      'frame 0 of "_debugStack", a position in the code the server ran; not checked'
+    );
+    expect(sourceLines(promptFor(FRAME))[0]).toContain("the code the dev server sent");
+  });
+
   it("says an inline map is inline", () => {
     const prompt = promptFor(FRAME, {
       state: "mapped",
@@ -573,6 +604,20 @@ describe("what the prompt carries", () => {
       const prompt = promptWithChain([record("a", "A", "b"), record("b", "B", "a")], "a");
 
       expect(chainLines(prompt)).toHaveLength(2);
+    });
+
+    it("says a server component is one, and that the page lists no elements as its own", () => {
+      const page: ComponentRecord = {
+        ...record("page", "Page", "shell"),
+        name: { value: "Page", extraction: { kind: "runtime-field", field: "_debugInfo[0].name" } },
+        environment: "server",
+      };
+      const prompt = promptWithChain([page, record("shell", "ClientShell", null)], "page");
+
+      expect(chainLines(prompt)).toEqual([
+        '    - "Page" (named in runtime field "_debugInfo[0].name"), a server component the page lists no elements of its own for',
+        '    - "ClientShell" (named in runtime field "type.displayName")',
+      ]);
     });
 
     it("cites each component's own claims with how they were read", () => {

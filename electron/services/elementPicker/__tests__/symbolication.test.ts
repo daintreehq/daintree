@@ -507,6 +507,67 @@ function creation(): Extract<SourceCandidate, { kind: "element-creation" }> {
   };
 }
 
+describe("a module asked for by more than one name", () => {
+  const SERVER = "about://React/Server/file:///work/app/.next/server/page.js";
+  const DISK = "file:///work/app/.next/server/page.js";
+
+  const answer = (text: string) => ({
+    ok: true as const,
+    value: { url: null, revision: revisionOf(new TextEncoder().encode(text)), text },
+  });
+
+  function trying(first: SourceAccessResult<never> | "undecodable") {
+    const subject = fake(cardMap());
+    subject.fetchSourceMap.mockImplementation(async (url: string) => {
+      if (url !== SERVER) return answer(JSON.stringify(cardMap()));
+      return first === "undecodable" ? answer("<!doctype html>") : first;
+    });
+    return subject;
+  }
+
+  const symbolicateFrom = (subject: Fake) =>
+    createSourceMapSymbolicator(subject.access).symbolicate(
+      { url: SERVER, alternates: [DISK], location: v8(2, 10) },
+      signal
+    );
+
+  it("takes the next name's map when one has none, or none that decodes, and locates from that one", async () => {
+    for (const first of [
+      { ok: false, reason: "unsupported" } as const,
+      { ok: false, reason: "map-missing" } as const,
+      "undecodable" as const,
+    ]) {
+      clearDecodedMapCache();
+      const subject = trying(first);
+      const result = await symbolicateFrom(subject);
+      expect(result.ok && result.target.location).toEqual(authored(2, 9));
+      expect(subject.fetchSourceMap.mock.calls.map(([url]) => url)).toEqual([SERVER, DISK]);
+      expect(subject.locateSource.mock.calls.map(([location]) => location.generatedUrl)).toEqual([
+        DISK,
+      ]);
+    }
+  });
+
+  it("asks the next name when one ran out of budget, which main holds each kind of read to", async () => {
+    const subject = trying({ ok: false, reason: "budget-exhausted" });
+    const result = await symbolicateFrom(subject);
+    expect(result.ok && result.target.location).toEqual(authored(2, 9));
+    expect(subject.fetchSourceMap.mock.calls.map(([url]) => url)).toEqual([SERVER, DISK]);
+  });
+
+  it("asks no further once the job is cancelled", async () => {
+    const subject = trying({ ok: false, reason: "cancelled" });
+    await expect(symbolicateFrom(subject)).resolves.toEqual({ ok: false, reason: "cancelled" });
+    expect(subject.fetchSourceMap).toHaveBeenCalledTimes(1);
+  });
+
+  it("reports the last name's reason when none gives a map", async () => {
+    const subject = fake(cardMap(), { fetched: { ok: false, reason: "file-missing" } });
+    await expect(symbolicateFrom(subject)).resolves.toEqual({ ok: false, reason: "file-missing" });
+    expect(subject.fetchSourceMap).toHaveBeenCalledTimes(2);
+  });
+});
+
 describe("symbolicatedResult", () => {
   it("is mapped, naming the map, the file and the revision it was checked against", async () => {
     const result = symbolicatedResult(creation(), await symbolicate(fake(cardMap())));

@@ -1,15 +1,20 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { FileRevisionSchema } from "../../../../shared/elementPicker/resolution.js";
-import type { ResolveBudget } from "../../../../shared/elementPicker/resolver.js";
+import type {
+  ResolveBudget,
+  SourceAccessResult,
+} from "../../../../shared/elementPicker/resolver.js";
 import {
   JobSourceAccess,
   containSourcePath,
   readBoundedSource,
   revisionOf,
   type JobSourceAccessOptions,
+  type NextSourceMapProvider,
   type ServedSourceMap,
   type SourceMapProvider,
   type SourceRoots,
@@ -430,3 +435,146 @@ function served(
     },
   };
 }
+
+describe("JobSourceAccess for a server component's modules", () => {
+  const MAP = JSON.stringify({
+    version: 3,
+    sources: ["../../src/A.svelte"],
+    names: [],
+    mappings: "AAAA",
+  });
+  const chunk = () => path.join(root, "app", ".next", "server", "chunk.js");
+
+  function writeChunk(trailer: string, map: string | null = MAP): void {
+    fs.mkdirSync(path.dirname(chunk()), { recursive: true });
+    fs.writeFileSync(chunk(), `export const page = 1;\n${trailer}\n`);
+    if (map !== null) fs.writeFileSync(`${chunk()}.map`, map);
+  }
+
+  const served = (text: string): SourceAccessResult<ServedSourceMap> => ({
+    ok: true,
+    value: {
+      url: "http://localhost:5173/__nextjs_source-map?filename=x",
+      base: "http://localhost:5173/__nextjs_source-map?filename=x",
+      revision: revisionOf(new TextEncoder().encode(text)),
+      text,
+    },
+  });
+
+  it("asks the Next.js route only on a release it was written against, by the path React gave the page", async () => {
+    const wrapped = `about://React/Server/${encodeURI(pathToFileURL(chunk()).href)}`;
+    const nextSourceMaps = vi.fn<NextSourceMapProvider>(async () => served(MAP));
+    const gated = access({ next: { routes: true }, nextSourceMaps });
+    await expect(gated.access.fetchSourceMap(wrapped)).resolves.toMatchObject({ ok: true });
+    await gated.access.fetchSourceMap("webpack-internal:///(rsc)/./app/page.tsx");
+    expect(nextSourceMaps.mock.calls.map(([request]) => request.filename)).toEqual([
+      chunk(),
+      "webpack-internal:///(rsc)/./app/page.tsx",
+    ]);
+    expect(nextSourceMaps.mock.calls[0]![0].previewOrigin).toBe("http://localhost:5173");
+
+    nextSourceMaps.mockClear();
+    for (const next of [{ routes: false }, null]) {
+      const { access: job } = access({ next, nextSourceMaps });
+      await expect(job.fetchSourceMap(wrapped)).resolves.toEqual({
+        ok: false,
+        reason: "unsupported",
+      });
+    }
+    expect(nextSourceMaps).not.toHaveBeenCalled();
+  });
+
+  it("reads a chunk's map from disk beside it, charged against the files and tracked as neither", async () => {
+    writeChunk("//# sourceMappingURL=chunk.js.map");
+    const { access: job, onRead } = access({ budget: { ...fullBudget, maxFiles: 2 } });
+    const fetched = await job.fetchSourceMap(pathToFileURL(chunk()).href);
+    const mapUrl = pathToFileURL(`${chunk()}.map`).href;
+    expect(fetched).toEqual({
+      ok: true,
+      value: { url: mapUrl, revision: revisionOf(new TextEncoder().encode(MAP)), text: MAP },
+    });
+    expect(fetched.ok && job.servedMap(mapUrl, fetched.value.revision)).toBe(true);
+    expect(onRead).not.toHaveBeenCalled();
+    // The module and its map were two of the job's two files.
+    await expect(job.readSource(ref("app/src/A.svelte"))).resolves.toEqual({
+      ok: false,
+      reason: "budget-exhausted",
+    });
+  });
+
+  it("locates a disk map's sources from where it lies, and a server's bare path reads the same", async () => {
+    writeChunk("//# sourceMappingURL=chunk.js.map");
+    const { access: job } = access();
+    await expect(job.fetchSourceMap(chunk())).resolves.toMatchObject({ ok: true });
+    await expect(job.locateSource(chunk(), "../../src/A.svelte", null)).resolves.toEqual({
+      ok: true,
+      value: ref("app/src/A.svelte"),
+    });
+  });
+
+  it("reads no chunk or map a symlink inside the app leads out of it to", async () => {
+    fs.mkdirSync(path.dirname(chunk()), { recursive: true });
+    fs.symlinkSync(path.join(root, "outside", "secret.txt"), chunk());
+    await expect(access().access.fetchSourceMap(pathToFileURL(chunk()).href)).resolves.toEqual({
+      ok: false,
+      reason: "outside-workspace",
+    });
+    fs.rmSync(chunk());
+    fs.writeFileSync(chunk(), "export const page = 1;\n//# sourceMappingURL=chunk.js.map\n");
+    fs.symlinkSync(path.join(root, "outside", "secret.txt"), `${chunk()}.map`);
+    await expect(access().access.fetchSourceMap(pathToFileURL(chunk()).href)).resolves.toEqual({
+      ok: false,
+      reason: "outside-workspace",
+    });
+  });
+
+  it("decodes a map the chunk carries inline", async () => {
+    writeChunk(
+      `//# sourceMappingURL=data:application/json;base64,${Buffer.from(MAP).toString("base64")}`,
+      null
+    );
+    const { access: job } = access();
+    await expect(job.fetchSourceMap(pathToFileURL(chunk()).href)).resolves.toMatchObject({
+      ok: true,
+      value: { url: null, text: MAP },
+    });
+  });
+
+  it("reads nothing outside the app, and follows no map a chunk names anywhere but beside it on disk", async () => {
+    const { access: job } = access();
+    await expect(
+      job.fetchSourceMap(pathToFileURL(path.join(root, "outside", "secret.txt")).href)
+    ).resolves.toEqual({ ok: false, reason: "outside-workspace" });
+
+    writeChunk("//# sourceMappingURL=http://localhost:5173/chunk.js.map");
+    await expect(access().access.fetchSourceMap(pathToFileURL(chunk()).href)).resolves.toEqual({
+      ok: false,
+      reason: "map-missing",
+    });
+    writeChunk("//# sourceMappingURL=../../../outside/secret.txt");
+    await expect(access().access.fetchSourceMap(pathToFileURL(chunk()).href)).resolves.toEqual({
+      ok: false,
+      reason: "outside-workspace",
+    });
+    writeChunk("export const nothing = 2;", null);
+    await expect(access().access.fetchSourceMap(pathToFileURL(chunk()).href)).resolves.toEqual({
+      ok: false,
+      reason: "map-missing",
+    });
+  });
+
+  it("reads a Next.js bundler's module names as files only on a Next.js page", async () => {
+    const nextSourceMaps = vi.fn<NextSourceMapProvider>(async () => served(MAP));
+    const wrapped = "about://React/Server/webpack-internal:///(rsc)/./src/A.svelte";
+    const next = access({ next: { routes: true }, nextSourceMaps }).access;
+    await next.fetchSourceMap(wrapped);
+    await expect(
+      next.locateSource(wrapped, "webpack://_N_E/./src/A.svelte", null)
+    ).resolves.toEqual({ ok: true, value: ref("app/src/A.svelte") });
+    const plain = access({ sourceMaps: async () => served(MAP) }).access;
+    await plain.fetchSourceMap("http://localhost:5173/a.js");
+    await expect(
+      plain.locateSource("http://localhost:5173/a.js", "webpack://_N_E/./src/A.svelte", null)
+    ).resolves.toEqual({ ok: false, reason: "unsupported" });
+  });
+});

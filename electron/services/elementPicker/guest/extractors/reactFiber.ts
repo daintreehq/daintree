@@ -323,15 +323,6 @@ export function renderFunction(component: Fiber): unknown {
   return typeof type === "function" ? type : null;
 }
 
-/** The innermost component above `fiber`, the memo standing for its implementation. */
-export function nearestComponent(fiber: Fiber, budget: Budget): Fiber | null {
-  for (let next = parentOf(fiber); next !== null && budget.spend(); next = parentOf(next)) {
-    if (tagOf(next) === FIBER_TAGS.hostRoot) return null;
-    if (isComponentFiber(next)) return canonicalFiber(next);
-  }
-  return null;
-}
-
 /** Mints one id per component instance, whichever half of its pair is asked about. */
 export class FiberIds {
   private readonly ids = new WeakMap<object, string>();

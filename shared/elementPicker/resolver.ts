@@ -191,7 +191,12 @@ export interface ResolverSourceAccess {
     file: SourceFileRef,
     signal: AbortSignal
   ): Promise<SourceAccessResult<RevisionedSource>>;
-  /** Finds the map for a generated module the preview served, inline or external. */
+  /**
+   * Finds the map for a generated module, inline or external: one the
+   * preview served, a server module a React stack named (asked of a Next.js
+   * dev server's own route only where the page's release allows it), or a
+   * file in the app's build output, read with the map beside it on disk.
+   */
   fetchSourceMap(
     generatedUrl: string,
     signal: AbortSignal

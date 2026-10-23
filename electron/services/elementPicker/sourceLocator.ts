@@ -6,6 +6,7 @@ import {
 } from "../../../shared/elementPicker/resolution.js";
 import type { SourceAccessResult } from "../../../shared/elementPicker/resolver.js";
 import { hasControlCharacter, isStrictlyInside } from "./containment.js";
+import { turbopackProjectPath, webpackModulePath } from "./nextDevServer.js";
 import type { SourceRoots } from "./sourceAccess.js";
 
 /**
@@ -23,6 +24,12 @@ export interface MapSourceContext {
   previewOrigin: string;
   /** What a relative source resolves against: the map's URL, or the module's for an inline map. */
   base: string;
+  /**
+   * The page runs on a Next.js dev server, whose bundlers name sources by
+   * module rather than by file: Webpack from the project, as Next.js's own
+   * overlay reads them, and Turbopack from its project root.
+   */
+  nextjs?: boolean;
   /** The platform's own except in tests that hold Windows paths to the same rules. */
   paths?: path.PlatformPath;
 }
@@ -60,8 +67,23 @@ export function locateMapSource(
       return UNSUPPORTED;
     }
   }
+  if (context.nextjs) {
+    const located = nextSource(joined, context, paths);
+    if (located !== null) return located;
+  }
   // webpack://, turbopack://, virtual: and the like name modules, not files.
   if (scheme !== undefined && scheme !== "http" && scheme !== "https") return UNSUPPORTED;
+
+  // A map read from disk names its relative sources from where it lies.
+  if (scheme === undefined && SCHEME.exec(context.base)?.[1]?.toLowerCase() === "file") {
+    try {
+      const url = new URL(joined, context.base);
+      if (url.protocol !== "file:") return UNSUPPORTED;
+      return fileRef(fileURLToPath(url, { windows: paths === path.win32 }), context, paths);
+    } catch {
+      return UNSUPPORTED;
+    }
+  }
 
   // A rooted source is a URL path by the spec, but tools that write absolute
   // filesystem paths write them the same way. One that lands inside the
@@ -76,6 +98,32 @@ export function locateMapSource(
     return fileRef(joined, context, paths);
   }
   return urlRef(joined, context, paths);
+}
+
+/**
+ * A source a Next.js bundler named by module. Webpack's identity is the file
+ * relative to the project, which is the app. Turbopack's `[project]` is its
+ * project root, which in a monorepo is the repository rather than the app, so
+ * a path that lands in the app from the worktree is read from there and any
+ * other from the app, the rule a rooted path is read by too.
+ */
+function nextSource(
+  joined: string,
+  context: MapSourceContext,
+  paths: path.PlatformPath
+): Located | null {
+  const webpack = webpackModulePath(joined);
+  if (webpack !== null) return fileRef(paths.join(context.roots.appRoot, webpack), context, paths);
+  const turbopack = turbopackProjectPath(joined);
+  if (turbopack === null) return null;
+  const fromWorktree = paths.join(context.roots.worktreePath, turbopack);
+  return fileRef(
+    isStrictlyInside(context.roots.appRoot, fromWorktree, paths)
+      ? fromWorktree
+      : paths.join(context.roots.appRoot, turbopack),
+    context,
+    paths
+  );
 }
 
 function urlRef(joined: string, context: MapSourceContext, paths: path.PlatformPath): Located {

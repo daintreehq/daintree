@@ -31,6 +31,8 @@ import { unavailableResult } from "../outcomes.js";
 /** A position in a generated module, as a runtime's stack reported it. */
 export interface GeneratedFrame {
   url: string;
+  /** Other names the module's map can be asked for by, tried in order when one gives none. */
+  alternates?: readonly string[];
   location: SourceLocation;
 }
 
@@ -61,8 +63,9 @@ export type Symbolication =
     };
 
 /**
- * Turns generated frames into authored positions. A source map is one way to
- * do it; a dev server's own symbolication endpoint (#13885) is another.
+ * Turns generated frames into authored positions, through the source maps
+ * main serves: from the preview, from a dev server's own route for a module
+ * only it holds, or from the app's build output on disk.
  */
 export interface FrameSymbolicator {
   symbolicate(frame: GeneratedFrame, signal: AbortSignal): Promise<Symbolication>;
@@ -324,6 +327,31 @@ export function createSourceMapSymbolicator(access: ResolverSourceAccess): Frame
     return { ok: true, mapUrl, revision, decoded };
   }
 
+  /**
+   * The first of a module's names that gives a map, with the name it answered
+   * to, which is what its sources are located from. A name that gives nothing
+   * usable is no reason not to ask the next, nor is one out of budget: a route
+   * spends the job's requests and a file on disk its reads, and main holds
+   * each to its own. Cancelled, there is no next.
+   */
+  async function loadFirst(
+    urls: readonly string[],
+    signal: AbortSignal
+  ): Promise<{ url: string; loaded: LoadedMap }> {
+    let answer: { url: string; loaded: LoadedMap } | null = null;
+    for (const url of urls) {
+      let map = maps.get(url);
+      if (!map) {
+        map = loadMap(url, signal);
+        maps.set(url, map);
+      }
+      answer = { url, loaded: await map };
+      const { loaded } = answer;
+      if (loaded.ok || loaded.reason === "cancelled") break;
+    }
+    return answer!;
+  }
+
   async function check(
     url: string,
     raw: string,
@@ -393,12 +421,7 @@ export function createSourceMapSymbolicator(access: ResolverSourceAccess): Frame
       const column = location.column - location.columnBase;
       if (line < 1 || column < 0) return unavailable("map-missing");
 
-      let map = maps.get(frame.url);
-      if (!map) {
-        map = loadMap(frame.url, signal);
-        maps.set(frame.url, map);
-      }
-      const loaded = await map;
+      const { url, loaded } = await loadFirst([frame.url, ...(frame.alternates ?? [])], signal);
       if (!loaded.ok) return loaded;
 
       const trace = await loadDecoder();
@@ -409,7 +432,7 @@ export function createSourceMapSymbolicator(access: ResolverSourceAccess): Frame
         return unavailable("map-missing");
       }
       if (found.source === null || found.line === null || found.column === null) {
-        return unplaced(loaded, frame.url, signal);
+        return unplaced(loaded, url, signal);
       }
       const index = Number(found.source);
       const source = loaded.decoded.sources[index];
@@ -424,7 +447,7 @@ export function createSourceMapSymbolicator(access: ResolverSourceAccess): Frame
         return unavailable("map-missing");
       }
 
-      const verdict = await checkOnce(loaded, frame.url, index, source.raw, source, signal);
+      const verdict = await checkOnce(loaded, url, index, source.raw, source, signal);
       if (!verdict.ok) return verdict;
 
       return {
