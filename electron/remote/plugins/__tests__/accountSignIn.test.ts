@@ -169,6 +169,7 @@ describe("account sign-ins a host asks this Shell to open (#14111)", () => {
     ["a private address", authUrl().replace("auth.example.com", "192.168.1.20")],
     ["localhost", authUrl().replace("auth.example.com", "localhost")],
     ["a single-label name", authUrl().replace("auth.example.com", "intranet")],
+    ["a single-label name with a root dot", authUrl().replace("auth.example.com", "intranet.")],
     ["no state", authUrl((p) => p.delete("state"))],
     ["an empty state", authUrl((p) => p.set("state", ""))],
     ["two states", authUrl((p) => p.append("state", "other"))],
@@ -188,6 +189,15 @@ describe("account sign-ins a host asks this Shell to open (#14111)", () => {
     expect(loopback.start).not.toHaveBeenCalled();
     // A refused request doesn't use up the sign-in.
     void ask(signIn(signInId));
+    expect(loopback.start).toHaveBeenCalledTimes(1);
+    release();
+  });
+
+  it("opens a fully qualified name written with its root dot", async () => {
+    const { signInId, release } = expectAccountSignIn("studio", VIEW, PLUGIN, null);
+    void ask(
+      signIn(signInId, { authUrl: authUrl().replace("auth.example.com", "auth.example.com.") })
+    );
     expect(loopback.start).toHaveBeenCalledTimes(1);
     release();
   });

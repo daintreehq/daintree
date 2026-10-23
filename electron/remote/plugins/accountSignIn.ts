@@ -113,7 +113,12 @@ function authorizationRequest(authUrl: string): { url: URL; state: string } | nu
   if (url.protocol !== "https:" || url.username !== "" || url.password !== "" || url.hash !== "") {
     return null;
   }
-  if (isPrivateOrLoopbackHostname(url.hostname) || !url.hostname.includes(".")) return null;
+  // A trailing root dot names the same host: `intranet.` is still one label.
+  const hostname = url.hostname.replace(/\.$/, "");
+  if (isPrivateOrLoopbackHostname(hostname) || hostname.split(".").some((label) => !label)) {
+    return null;
+  }
+  if (!hostname.includes(".")) return null;
   const params = url.searchParams;
   const states = params.getAll("state");
   if (states.length !== 1 || states[0] === "") return null;
