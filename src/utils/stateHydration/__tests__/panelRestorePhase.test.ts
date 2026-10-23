@@ -290,8 +290,14 @@ function wtList(...ids: string[]): WorktreeState[] {
 }
 
 const { resolveVisiblePanelId, restorePanelsPhase } = await import("../panelRestorePhase");
+const { terminalInstanceService: terminalServiceMock } =
+  await import("@/services/TerminalInstanceService");
+const terminalServiceAccessor = await import("@/services/terminal/terminalInstanceServiceAccessor");
 
 beforeEach(() => {
+  // The service mock never evaluates the real module, so nothing registers it.
+  terminalServiceAccessor.__testing.reset();
+  terminalServiceAccessor.register(terminalServiceMock);
   initializeBackendTierMock.mockReset();
   setTargetSizeMock.mockReset();
   reconnectWithTimeoutMock.mockReset();
@@ -360,6 +366,30 @@ describe("restorePanelsPhase — saved panels", () => {
     expect(ctx.addPanel).toHaveBeenCalledTimes(1);
     expect(restoreTasks).toHaveLength(1);
     expect(initializeBackendTierMock).toHaveBeenCalledWith("p1", "background");
+  });
+
+  it("queues backend tiers set before the terminal service loads and applies them in order", async () => {
+    terminalServiceAccessor.__testing.reset();
+    reconnectWithTimeoutMock.mockResolvedValue({
+      status: "found",
+      terminal: { id: "p1", cwd: "/proj", activityTier: "background" },
+    });
+    const ctx = makeContext();
+    ctx.backendTerminalMap.set("t1", backend("t1", { activityTier: "active" }));
+    ctx.backendTerminalMap.set("t2", backend("t2", { activityTier: "background" }));
+    ctx.backendTerminalMap.set("orphan1", backend("orphan1", { activityTier: "active" }));
+
+    await restorePanelsPhase([panel("t1"), panel("t2"), panel("p1")], ctx);
+    expect(ctx.addPanel).toHaveBeenCalledTimes(4);
+    expect(initializeBackendTierMock).not.toHaveBeenCalled();
+
+    terminalServiceAccessor.register(terminalServiceMock);
+    expect(initializeBackendTierMock.mock.calls).toEqual([
+      ["t1", "active"],
+      ["t2", "background"],
+      ["p1", "background"],
+      ["orphan1", "active"],
+    ]);
   });
 
   it("recreates non-PTY panels (browser, dev-preview) without reconnect", async () => {
