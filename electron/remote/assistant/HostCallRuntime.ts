@@ -11,10 +11,11 @@ import {
   type HostListResult,
 } from "../../../shared/types/hostControl.js";
 import type { HostProjectSummary } from "../../../shared/types/ipc/remoteHosts.js";
-import type {
-  HostConnectionState,
-  HostId,
-  HostMetricsSummary,
+import {
+  LOCAL_HOST_ID,
+  type HostConnectionState,
+  type HostId,
+  type HostMetricsSummary,
 } from "../../../shared/types/remoteHosts.js";
 import type { HostControlRuntimeHandle } from "../../services/mcp-server/hostControlTools.js";
 import {
@@ -57,6 +58,19 @@ export interface ObservedHost {
   summary: HostMetricsSummary | null;
 }
 
+/**
+ * This machine's own projects as its assistants reach them (#14024): through
+ * `host.call` under this machine's own id, in process, through the same gates
+ * a host's projects are reached through.
+ */
+export interface LocalHostReach {
+  /** This machine's name, as its assistants' prompts and notices say it. */
+  name(): string;
+  /** Its projects, most used first. */
+  projects(): Promise<readonly HostProjectSummary[]>;
+  relayCall(payload: McpCallPayload): Promise<McpCallAnswer>;
+}
+
 /** The run a help session is answering in, as `host.call` pins what it arms to. */
 export interface OpenRun {
   projectId: string;
@@ -94,6 +108,11 @@ export interface HostCallRuntimeDeps {
     wake: LaneWake
   ): void;
   hosts(): ObservedHost[];
+  /**
+   * This machine's own projects (#14024): `host.list` names them first, as
+   * `local`, and `host.call` reaches them there. Absent, `local` is no host.
+   */
+  local?: LocalHostReach;
   /** A connected host's projects, most used first: the projectIds `host.call` takes. */
   listHostProjects?(hostId: HostId): Promise<readonly HostProjectSummary[]>;
   /**
@@ -306,6 +325,8 @@ function remember<V>(map: Map<string, V>, key: string, value: V, max: number): v
 const CONTROL_OFF_DETAIL =
   "Assistant control is turned off for this host in this Shell's host settings. Only the person can turn it on.";
 const CALL_NO_HOST_DETAIL = "This Shell has no host with that id. List the hosts it knows.";
+const CALL_OWN_PROJECT_DETAIL =
+  "That is this assistant's own project, so nothing was run. Call its tools directly; local reaches this machine's other projects.";
 const CALL_AMBIGUOUS_DETAIL =
   "No answer came back, so the call may have reached the host and run. Resend it under this callId, which never runs it twice.";
 const CALL_NOT_SENT_DETAIL =
@@ -337,6 +358,21 @@ const RELAY_REFUSAL_DETAILS: Record<
   "server-off": {
     code: "unsupported",
     detail: "The host's Daintree MCP server is off, so it can't run tools. Nothing was run.",
+  },
+};
+
+/** The same refusals for one of this machine's own projects (#14024), which needs no consent here. */
+const LOCAL_REFUSAL_DETAILS: Partial<
+  Record<RelayRefusal, { code: Exclude<HostControlOutcomeCode, "ok">; detail: string }>
+> = {
+  "no-project": {
+    code: "not_found",
+    detail:
+      "This machine has no project with that id. Nothing was run. The host list names its projects.",
+  },
+  "server-off": {
+    code: "unsupported",
+    detail: "This machine's Daintree MCP server is off, so it can't run tools. Nothing was run.",
   },
 };
 
@@ -520,12 +556,11 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
       lost.set(key, entry);
     }
     if (queue === undefined || lost.size === 0) return;
-    const hostName =
-      this.deps.hosts().find((host) => host.hostId === hostId)?.name ?? "remote host";
+    const hostName = this.hostName(hostId);
     for (const { run, terminalIds } of lost.values()) {
       const check = (): LaneWakeCheck => {
         if (!this.stillRunning(run)) return { kind: "unavailable", reason: "relaunched" };
-        return this.deps.controlEnabled?.(hostId) === true
+        return this.controlOn(hostId)
           ? { kind: "ready" }
           : { kind: "unavailable", reason: "control-off" };
       };
@@ -571,7 +606,7 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
       call.projectId !== payload.projectId ||
       !asksAboutCall(call, payload) ||
       !this.stillRunning(call.run) ||
-      this.deps.controlEnabled?.(hostId) !== true
+      !this.controlOn(hostId)
     ) {
       return answer("refused");
     }
@@ -595,7 +630,7 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
       decision === "approved" &&
       (this.callsInFlight.get(payload.callId) !== call ||
         !this.stillRunning(call.run) ||
-        this.deps.controlEnabled?.(hostId) !== true)
+        !this.controlOn(hostId))
     ) {
       return answer("refused");
     }
@@ -611,8 +646,7 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
   receiveNotices(hostId: HostId, payload: RelayNoticesPayload): null {
     const queue = this.deps.queueNotice;
     if (this.disposed || queue === undefined) return null;
-    const hostName =
-      this.deps.hosts().find((host) => host.hostId === hostId)?.name ?? "remote host";
+    const hostName = this.hostName(hostId);
     const receivedAt = this.now();
     for (const notice of payload.notices) {
       const seenKey = `${hostId}\u0000${notice.noticeId}`;
@@ -663,7 +697,7 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
     receivedAt: number
   ): LaneWakeCheck {
     if (!this.stillRunning(pin.run)) return { kind: "unavailable", reason: "relaunched" };
-    if (this.deps.controlEnabled?.(pin.hostId) !== true) {
+    if (!this.controlOn(pin.hostId)) {
       return { kind: "unavailable", reason: "control-off" };
     }
     // Typed after a later prompt to the same terminal, it would read as that
@@ -676,6 +710,21 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
       pending = true;
     }
     return pending ? { kind: "held", reason: "prompt-pending" } : { kind: "ready" };
+  }
+
+  /**
+   * Whether this Shell's assistants may reach a host now: this machine's own
+   * projects whenever they are reachable at all (#14024), any other host only
+   * while the person's control switch for it is on.
+   */
+  private controlOn(hostId: HostId): boolean {
+    if (hostId === LOCAL_HOST_ID) return this.deps.local !== undefined;
+    return this.deps.controlEnabled?.(hostId) === true;
+  }
+
+  private hostName(hostId: HostId): string {
+    if (hostId === LOCAL_HOST_ID && this.deps.local) return this.deps.local.name();
+    return this.deps.hosts().find((host) => host.hostId === hostId)?.name ?? "remote host";
   }
 
   private stillRunning(run: OpenRun): boolean {
@@ -773,6 +822,11 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
    * messaging. A first send mints its callId; a callId given back is always a
    * resend, which the host never runs twice and never starts if it holds no
    * record of it.
+   *
+   * This machine's own id reaches its other projects (#14024), in process
+   * and through those same gates, needing no switch: it is the person's own
+   * machine. The caller's own project is refused, since its tools reach it
+   * already and a second identity there would own what the first can't.
    */
   call(
     helpSessionId: string,
@@ -785,9 +839,17 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
       const sent = { callId, result: null };
       // A first send refused here sent nothing, so there is no call to follow.
       const unsent = { callId: resend ? callId : null, result: null };
-      const host = this.deps.hosts().find((candidate) => candidate.hostId === args.hostId);
-      if (!host) return { ...this.outcomeWith("not_found", CALL_NO_HOST_DETAIL), ...unsent };
-      if (this.deps.controlEnabled?.(args.hostId) !== true) {
+      const local = args.hostId === LOCAL_HOST_ID ? this.deps.local : undefined;
+      const host = local
+        ? undefined
+        : this.deps.hosts().find((candidate) => candidate.hostId === args.hostId);
+      if (local) {
+        if (args.projectId === caller.projectId) {
+          return { ...this.outcomeWith("policy_rejected", CALL_OWN_PROJECT_DETAIL), ...unsent };
+        }
+      } else if (!host) {
+        return { ...this.outcomeWith("not_found", CALL_NO_HOST_DETAIL), ...unsent };
+      } else if (this.deps.controlEnabled?.(args.hostId) !== true) {
         return { ...this.outcomeWith("opted_out", CONTROL_OFF_DETAIL), ...unsent };
       }
       const toolArgs = args.args ?? {};
@@ -831,11 +893,13 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
       if (inFlight !== sharing) this.callsInFlight.set(callId, inFlight);
       let answer: McpCallAnswer;
       try {
-        answer = await this.requireClient().relayCall(
-          args.hostId,
-          payload,
-          runMs + RELAY_ANSWER_GRACE_MS
-        );
+        answer = local
+          ? await local.relayCall(payload)
+          : await this.requireClient().relayCall(
+              args.hostId,
+              payload,
+              runMs + RELAY_ANSWER_GRACE_MS
+            );
       } catch (error) {
         switch (codeOf(error)) {
           case "OUTCOME_UNKNOWN":
@@ -853,9 +917,10 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
               ...this.outcomeWith("rate_limited", CALL_RATE_LIMITED_DETAIL, 1_000),
               ...unsent,
             };
+          // Only a link answers it, so only for a host this Shell knows.
           case "UNSUPPORTED":
             noted.notRun();
-            return { ...this.outcomeWith("unsupported", unsupportedCallDetail(host)), ...unsent };
+            return { ...this.outcomeWith("unsupported", unsupportedCallDetail(host!)), ...unsent };
           case "PERMISSION":
             noted.notRun();
             return {
@@ -901,7 +966,9 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
           return { ...this.outcomeWith("conflict", CALL_CONFLICT_DETAIL), ...sent };
         case "refused": {
           noted.notRun();
-          const { code, detail } = RELAY_REFUSAL_DETAILS[answer.reason];
+          const { code, detail } =
+            (local ? LOCAL_REFUSAL_DETAILS[answer.reason] : undefined) ??
+            RELAY_REFUSAL_DETAILS[answer.reason];
           return { ...this.outcomeWith(code, detail), ...sent };
         }
       }
@@ -909,7 +976,9 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
   }
 
   list(helpSessionId: string): Promise<HostControlOutcome<HostListResult>> {
-    return this.settle(helpSessionId, async () => {
+    return this.settle(helpSessionId, async (caller) => {
+      const local = this.deps.local;
+      const here = local ? this.localEntry(local, caller) : null;
       const hosts = await Promise.all(
         this.deps.hosts().map(async (seen): Promise<HostListEntry> => {
           const host = await this.dialed(seen);
@@ -938,8 +1007,40 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
           };
         })
       );
-      return { hosts };
+      return { hosts: here ? [await here, ...hosts] : hosts };
     });
+  }
+
+  /**
+   * This machine, first (#14024): the projects of its own a call under
+   * `local` reaches, which are all but the caller's own, or null when they
+   * couldn't be read in time. Nothing about it is sampled or tallied here.
+   */
+  private async localEntry(local: LocalHostReach, caller: OpenRun): Promise<HostListEntry> {
+    const projects = await withinMs(
+      Promise.resolve()
+        .then(() => local.projects())
+        .catch(() => null),
+      PROJECTS_READ_MS,
+      null
+    );
+    return {
+      hostId: LOCAL_HOST_ID,
+      name: local.name(),
+      connection: "connected",
+      rttMs: null,
+      lastSeenAt: null,
+      load: null,
+      agentsObserved: null,
+      projects:
+        projects === null
+          ? null
+          : projects
+              .filter((project) => project.id !== caller.projectId)
+              .slice(0, HOST_LIST_PROJECTS_MAX)
+              .map((project) => ({ projectId: project.id, name: project.name })),
+      control: true,
+    };
   }
 
   /**

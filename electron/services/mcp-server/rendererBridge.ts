@@ -178,7 +178,8 @@ export class DriveHolderUnavailableError extends McpRouteBindingError {
  * project (#13501), stopped by a view that took the lease after part of it
  * had already run. `withoutView` is the same refusal for this host's own
  * assistant running with no view (#13511), which has no Shell to send the
- * person to.
+ * person to. `local` is one of this machine's own assistants reaching another
+ * of its projects (#14024), stopped by a window it can't act through.
  */
 export class RelayDrivenElsewhereError extends Error {
   readonly code = "DRIVEN_ELSEWHERE";
@@ -188,21 +189,25 @@ export class RelayDrivenElsewhereError extends Error {
   constructor(
     workspaceId: string,
     holderName: string | null,
-    options?: { stopped?: boolean; withoutView?: boolean }
+    options?: { stopped?: boolean; withoutView?: boolean; local?: boolean }
   ) {
     const holder = holderName ?? "Another window";
     super(
-      options?.withoutView === true
+      options?.local === true
         ? options.stopped === true
-          ? `${holder} took control of this project, so this call stopped before changing anything more. Part of it may already have run. Your calls go through their window once it takes this assistant over.`
-          : holderName !== null
-            ? `${holderName} has control of this project, so this call can't change it. Nothing was run. Your calls go through their window once it takes this assistant over.`
-            : `Nothing on this host can tell who has control of this project, so this call can't change it with no window open. Nothing was run.`
-        : options?.stopped === true
-          ? `${holder} took control of this project on the host, so this call stopped before changing anything more. Part of it may already have run. The person can take control in a window on this Shell.`
-          : holderName !== null
-            ? `${holderName} has control of this project on the host, so this call can't change it. Nothing was run. The person can take control in a window on this Shell.`
-            : `No window on this Shell has control of this project on the host, so this call can't change it. Nothing was run. The person can open the project on the host in a window here.`
+          ? `${holder} took control of this project, so this call stopped before changing anything more. Part of it may already have run. The person can take it back in a window here.`
+          : `${holder} has control of this project, so this call can't change it. Nothing was run. The person can take it back in a window here.`
+        : options?.withoutView === true
+          ? options.stopped === true
+            ? `${holder} took control of this project, so this call stopped before changing anything more. Part of it may already have run. Your calls go through their window once it takes this assistant over.`
+            : holderName !== null
+              ? `${holderName} has control of this project, so this call can't change it. Nothing was run. Your calls go through their window once it takes this assistant over.`
+              : `Nothing on this host can tell who has control of this project, so this call can't change it with no window open. Nothing was run.`
+          : options?.stopped === true
+            ? `${holder} took control of this project on the host, so this call stopped before changing anything more. Part of it may already have run. The person can take control in a window on this Shell.`
+            : holderName !== null
+              ? `${holderName} has control of this project on the host, so this call can't change it. Nothing was run. The person can take control in a window on this Shell.`
+              : `No window on this Shell has control of this project on the host, so this call can't change it. Nothing was run. The person can open the project on the host in a window here.`
     );
     this.name = "RelayDrivenElsewhereError";
     this.workspaceId = workspaceId;
@@ -1231,7 +1236,9 @@ export function createRendererBridge(
     driver: ReturnType<typeof resolveDriver>,
     relay: WorkspaceDispatchOptions["relay"]
   ): boolean {
-    if (relay === undefined || relay.readOnly) return false;
+    if (relay === undefined) return false;
+    if (relay.local === true) return admitLocalRelay(workspaceId, actionId, driver, relay.readOnly);
+    if (relay.readOnly) return false;
     if (driver?.remote !== undefined && driver.remote.linkSessionId === relay.linkSessionId) {
       return false;
     }
@@ -1247,6 +1254,32 @@ export function createRendererBridge(
   }
 
   /**
+   * Where a call one of this machine's own assistants makes in another of its
+   * projects (#14024) runs: in this machine's own view of the project while
+   * one shows or drives it, and otherwise here, through the host's own form
+   * of the action, reads included, so a project nobody has open is still
+   * reachable. A change while another machine drives it is refused, naming
+   * that machine; a read goes to its view as any bound read does.
+   *
+   * True when the call runs on the host itself.
+   */
+  function admitLocalRelay(
+    workspaceId: string,
+    actionId: string,
+    driver: ReturnType<typeof resolveDriver>,
+    readOnly: boolean
+  ): boolean {
+    if (driver?.remote !== undefined) {
+      if (readOnly) return false;
+      throw new RelayDrivenElsewhereError(workspaceId, driver.holderName ?? null, { local: true });
+    }
+    if (driver !== null && driver.vacant !== true) return false;
+    if (getWebContentsForProject(workspaceId).some((wc) => !wc.isDestroyed())) return false;
+    if (hasViewlessImplementation(actionId)) return true;
+    throw new NoFrontendAttachedError(workspaceId, actionId);
+  }
+
+  /**
    * The check a relayed call the host runs itself makes right before each
    * change (#13501): still nobody else's to drive. The requesting Shell's own
    * view taking it over is not a refusal; anyone else's is, naming them.
@@ -1255,7 +1288,7 @@ export function createRendererBridge(
     workspaceId: string,
     relay: NonNullable<WorkspaceDispatchOptions["relay"]>
   ): (changed: boolean) => Error | null {
-    return writeCheckFor(workspaceId, relay.linkSessionId);
+    return writeCheckFor(workspaceId, relay.linkSessionId, relay.local === true);
   }
 
   /**
@@ -1265,23 +1298,29 @@ export function createRendererBridge(
    */
   function writeCheckFor(
     workspaceId: string,
-    linkSessionId: string | null
+    linkSessionId: string | null,
+    local = false
   ): (changed: boolean) => Error | null {
     const withoutView = linkSessionId === null;
     return (changed) => {
-      const standing = relayWriteStanding(workspaceId, linkSessionId);
+      const standing = relayWriteStanding(workspaceId, linkSessionId, local);
       switch (standing.kind) {
         case "vacant":
         case "own-view":
           return null;
         case "unavailable":
           return changed
-            ? new RelayDrivenElsewhereError(workspaceId, null, { stopped: true, withoutView })
+            ? new RelayDrivenElsewhereError(workspaceId, null, {
+                stopped: true,
+                withoutView,
+                local,
+              })
             : new DriveHolderUnavailableError(workspaceId);
         case "elsewhere":
           return new RelayDrivenElsewhereError(workspaceId, standing.holderName, {
             stopped: changed,
             withoutView,
+            local,
           });
       }
     };

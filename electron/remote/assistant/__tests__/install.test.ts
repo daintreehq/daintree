@@ -20,6 +20,17 @@ const queued = vi.hoisted(
     }>
 );
 const generations = vi.hoisted(() => new Map<string, number>());
+/** Who hears help sessions end, and what the MCP server was asked for this machine's own calls. */
+const ended = vi.hoisted(
+  () =>
+    new Set<
+      (event: import("../../../services/HelpSessionService.js").HelpSessionEndedEvent) => void
+    >()
+);
+const mcp = vi.hoisted(() => ({
+  opened: [] as Array<{ tier: string; workspaceId: string; caller: Record<string, unknown> }>,
+  retired: [] as Array<[string, string]>,
+}));
 
 vi.mock("electron", () => ({
   app: {
@@ -56,8 +67,23 @@ vi.mock("../../../services/HelpSessionService.js", () => ({
     setRunbooksHostState: (read: (() => unknown) | null) => {
       runbooksHostState.read = read;
     },
+    addSessionEndedListener: (listener: Parameters<(typeof ended)["add"]>[0]) => {
+      ended.add(listener);
+      return () => ended.delete(listener);
+    },
+    ensureAssistantControl: async () => {},
   },
 }));
+vi.mock("../../../services/ProjectStore.js", () => ({
+  projectStore: {
+    getProjectById: (id: string) => (["proj-1", "proj-2"].includes(id) ? { id } : null),
+    getProjectSummaries: () => [
+      { id: "proj-1", name: "daintree", path: "/repos/daintree", emoji: "" },
+      { id: "proj-2", name: "website", path: "/repos/website", emoji: "" },
+    ],
+  },
+}));
+vi.mock("../../../utils/machineName.js", () => ({ machineDisplayName: () => "greg-mbp" }));
 vi.mock("../../../window/serviceRefs.js", () => ({
   getPtyClient: () => ({ getLiveGeneration: (id: string) => generations.get(id) ?? null }),
 }));
@@ -68,6 +94,19 @@ vi.mock("../../../services/McpServerService.js", () => ({
   mcpServerService: {
     queueLaneWake: (lane: (typeof queued)[number]["lane"], wake: (typeof queued)[number]["wake"]) =>
       queued.push({ lane, wake }),
+    openRelaySession: async (spec: (typeof mcp)["opened"][number]) => {
+      mcp.opened.push(spec);
+      let open = true;
+      return {
+        isOpen: () => open,
+        callTool: async () => ({ content: [], structuredContent: { terminals: [] } }),
+        close: () => {
+          open = false;
+        },
+      };
+    },
+    retireRelayPrincipal: (senderId: string, helpSessionId: string) =>
+      mcp.retired.push([senderId, helpSessionId]),
   },
 }));
 vi.mock("../../../services/mcp-server/hostControlTools.js", async (importOriginal) => {
@@ -91,7 +130,7 @@ import { fileURLToPath } from "node:url";
 import type Database from "better-sqlite3";
 import { openDb } from "../../../services/persistence/db.js";
 import { getRemoteService } from "../../runtime.js";
-import type { ObservedHost } from "../HostCallRuntime.js";
+import type { HostCallRuntime, ObservedHost } from "../HostCallRuntime.js";
 import {
   installHostControl,
   installRetiredSendsNotice,
@@ -130,6 +169,8 @@ afterEach(() => {
   queued.length = 0;
   runbooksHostState.read = null;
   hostControl.runtime = null;
+  mcp.opened.length = 0;
+  mcp.retired.length = 0;
 });
 
 describe("observedRunbooksHostsState (#13411, #13496)", () => {
@@ -202,6 +243,59 @@ describe("installHostControl (#13493)", () => {
     expect(runtime.isCallReachable("remote")).toBe(false);
     expect(runtime.isCallReachable("nobody")).toBe(false);
     off();
+  });
+
+  it("reaches this machine's other projects as local, admitted as a local relay (#14024)", async () => {
+    const off = installHostControl({
+      observeHosts: () => [host("studio", "connected")],
+      hasHosts: () => true,
+      isHostControlEnabled: () => true,
+    });
+    runLocally("proj-1", 0, "a");
+    const runtime = hostControl.runtime as HostCallRuntime;
+
+    const listed = await runtime.list("a");
+    if (!listed.ok) throw new Error("refused");
+    expect(listed.value.hosts[0]).toMatchObject({
+      hostId: "local",
+      name: "greg-mbp",
+      projects: [{ projectId: "proj-2", name: "website" }],
+    });
+
+    const called = await runtime.call(
+      "a",
+      { hostId: "local", projectId: "proj-2", tool: "terminal.list", args: {} },
+      { tier: "core" }
+    );
+    expect(called).toMatchObject({ ok: true, value: { outcome: "ok" } });
+    expect(mcp.opened).toEqual([
+      {
+        tier: "core",
+        workspaceId: "proj-2",
+        caller: expect.objectContaining({
+          senderId: "local",
+          helpSessionId: "a",
+          shellName: "greg-mbp",
+          local: true,
+        }),
+      },
+    ]);
+    // Runbook search still hears only of the hosts this Shell reaches over a link.
+    expect(runbooksHostState.read?.()).toBe("connected");
+
+    // Relaunched onto a new PTY it is the same assistant; ended, its hold goes.
+    const end = (reason: "relaunched" | "revoked") => {
+      for (const listener of ended)
+        listener({ projectId: "proj-1", slot: 0, sessionId: "a", reason });
+    };
+    end("relaunched");
+    await vi.dynamicImportSettled();
+    expect(mcp.retired).toEqual([]);
+    end("revoked");
+    await vi.waitFor(() => expect(mcp.retired).toEqual([["local", "a"]]));
+
+    off();
+    expect(ended.size).toBe(0);
   });
 });
 

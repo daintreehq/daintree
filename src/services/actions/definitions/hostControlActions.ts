@@ -20,7 +20,8 @@ function mainProcessOnly(id: string): () => Promise<never> {
  * lives in the MCP CallTool handler
  * (electron/services/mcp-server/sessionServer.ts): any assistant running in
  * one of this machine's own views may call them (#13468), and they reach
- * hosts over the link from main. Delegating to a host's assistant is agent
+ * hosts over the link from main, and this machine's other projects in
+ * process under its own id, `local` (#14024). Delegating to a host's assistant is agent
  * messaging run through `host.call` (#13496).
  * `run()` throws if the renderer ever invokes it directly.
  */
@@ -29,7 +30,7 @@ export function registerHostControlActions(actions: ActionRegistry): void {
     id: "host.list",
     title: "List hosts",
     description:
-      "List the hosts this machine's assistant may reach, as observed: connection, last load sample, agent counts, and each connected host's projects, which a call there names. Null means not measured.",
+      "List the hosts this assistant reaches, this machine first as local, as observed: connection, load sample, agent counts and each connected host's projects, which calls name. Null means unmeasured.",
     category: "help",
     kind: "query",
     danger: "safe",
@@ -53,7 +54,7 @@ export function registerHostControlActions(actions: ActionRegistry): void {
     id: "host.call",
     title: "Run a tool on a host",
     description:
-      "Run one of a host's own Daintree tools in one of its projects and get its result, such as starting the host's assistant or sending it a prompt. Changes are refused while another machine drives that project. ambiguous: resend under its callId, which never runs twice.",
+      "Run a host's own Daintree tool in one of its projects (local reaches another project here) and get its result, such as starting its assistant. Changes are refused while another machine drives that project. ambiguous: resend under its callId, which never runs twice.",
     category: "help",
     kind: "command",
     danger: "safe",

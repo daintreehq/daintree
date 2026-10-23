@@ -2899,7 +2899,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "category": "help",
     "danger": "safe",
     "dangerRationale": undefined,
-    "description": "Run one of a host's own Daintree tools in one of its projects and get its result, such as starting the host's assistant or sending it a prompt. Changes are refused while another machine drives that project. ambiguous: resend under its callId, which never runs twice.",
+    "description": "Run a host's own Daintree tool in one of its projects (local reaches another project here) and get its result, such as starting its assistant. Changes are refused while another machine drives that project. ambiguous: resend under its callId, which never runs twice.",
     "examples": undefined,
     "id": "host.call",
     "keywords": [
@@ -2918,7 +2918,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "category": "help",
     "danger": "safe",
     "dangerRationale": undefined,
-    "description": "List the hosts this machine's assistant may reach, as observed: connection, last load sample, agent counts, and each connected host's projects, which a call there names. Null means not measured.",
+    "description": "List the hosts this assistant reaches, this machine first as local, as observed: connection, load sample, agent counts and each connected host's projects, which calls name. Null means unmeasured.",
     "examples": undefined,
     "id": "host.list",
     "keywords": [

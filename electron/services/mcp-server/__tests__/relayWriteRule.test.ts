@@ -70,4 +70,40 @@ describe("relayWriteStanding (#13501)", () => {
       holderName: null,
     });
   });
+
+  describe("this machine's own assistant in another of its projects (#14024)", () => {
+    const localView = { ...view("link-a"), kind: "local-view", linkSessionId: undefined } as never;
+
+    it("changes any project here while Host-mode routing is off", () => {
+      expect(relayWriteStanding("project-1", "local", true)).toEqual({ kind: "own-view" });
+    });
+
+    it("counts every view of this machine's as its own, and nobody driving as vacant", () => {
+      setMcpDriveTargetResolver(() => ({
+        state: "live",
+        endpoint: localView,
+        holderName: "this Mac",
+      }));
+      expect(relayWriteStanding("project-1", "local", true)).toEqual({ kind: "own-view" });
+      setMcpDriveTargetResolver(() => ({ state: "vacant" }));
+      expect(relayWriteStanding("project-1", "local", true)).toEqual({ kind: "vacant" });
+    });
+
+    it("refuses where another machine drives, whatever its link session is called", () => {
+      setMcpDriveTargetResolver(() => ({
+        state: "live",
+        endpoint: view("local"),
+        holderName: "studio-02",
+      }));
+      expect(relayWriteStanding("project-1", "local", true)).toEqual({
+        kind: "elsewhere",
+        holderName: "studio-02",
+      });
+    });
+
+    it("holds off while the holder can't be reached", () => {
+      setMcpDriveTargetResolver(() => ({ state: "unavailable", reason: "reserved" }));
+      expect(relayWriteStanding("project-1", "local", true)).toEqual({ kind: "unavailable" });
+    });
+  });
 });

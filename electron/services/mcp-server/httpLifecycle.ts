@@ -45,6 +45,7 @@ import {
 import { helpOwnershipPrincipal, relayOwnershipPrincipal } from "./resourceOwnership.js";
 import {
   DriveHolderUnavailableError,
+  NoFrontendAttachedError,
   RelayDrivenElsewhereError,
   SessionBindingError,
   WorkspaceBindingError,
@@ -2256,9 +2257,20 @@ export class HttpLifecycle {
     const requestManifest: import("./sessionServer.js").SessionServerDeps["requestManifest"] =
       () => {
         if (boundWorkspaceId !== null) {
-          return workspaceManifest
-            ? workspaceManifest(boundWorkspaceId, preferredWebContentsId)
-            : Promise.reject(missingWorkspaceRoute());
+          if (!workspaceManifest) return Promise.reject(missingWorkspaceRoute());
+          const manifest = workspaceManifest(boundWorkspaceId, preferredWebContentsId);
+          // This machine's assistant in another of its projects (#14024) runs a
+          // call here in a project no view shows, as Host mode does for every
+          // project: its tools are described by the base surface, not refused.
+          return relay?.local === true
+            ? manifest.catch((err: unknown) => {
+                throw err instanceof WorkspaceBindingError &&
+                  err.reason === "not-found" &&
+                  !(err instanceof NoFrontendAttachedError)
+                  ? new NoFrontendAttachedError(boundWorkspaceId)
+                  : err;
+              })
+            : manifest;
         }
         // No view to describe one, so the host's own: a tool only a view can
         // run is still listed, and answers NO_FRONTEND_ATTACHED when called.
@@ -2349,6 +2361,7 @@ export class HttpLifecycle {
                 linkSessionId: relay.linkSessionId,
                 readOnly:
                   relayEntry !== undefined && buildAnnotations(relayEntry).readOnlyHint === true,
+                ...(relay.local === true ? { local: true as const } : {}),
                 ...(askShell !== undefined && relayCallId !== undefined
                   ? { requestApproval: (ask) => askShell({ ...ask, callId: relayCallId }) }
                   : {}),
@@ -2687,13 +2700,20 @@ export class HttpLifecycle {
                   };
                 }
                 // Run while nobody drives the project, or while the
-                // requesting Shell's own view does (#13501).
-                const standing = relayWriteStanding(boundWorkspaceId, relay.linkSessionId);
+                // requesting Shell's own view does (#13501): for this
+                // machine's own assistant, any view of this machine's (#14024).
+                const standing = relayWriteStanding(
+                  boundWorkspaceId,
+                  relay.linkSessionId,
+                  relay.local === true
+                );
                 if (standing.kind === "vacant" || standing.kind === "own-view") return null;
                 const refused =
                   standing.kind === "unavailable"
                     ? new DriveHolderUnavailableError(boundWorkspaceId)
-                    : new RelayDrivenElsewhereError(boundWorkspaceId, standing.holderName);
+                    : new RelayDrivenElsewhereError(boundWorkspaceId, standing.holderName, {
+                        local: relay.local === true,
+                      });
                 return { code: "DRIVEN_ELSEWHERE", message: refused.message };
               },
             },
