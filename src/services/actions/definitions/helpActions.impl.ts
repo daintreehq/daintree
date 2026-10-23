@@ -14,7 +14,6 @@ import { useHelpPanelStore } from "@/store/helpPanelStore";
 import { usePanelStore } from "@/store/panelStore";
 import { useProjectStore } from "@/store/projectStore";
 import { useScratchStore } from "@/store/scratchStore";
-import { isAssistantFocused } from "@/store/macroFocusStore";
 import {
   notifyLaunchFailed,
   LAUNCH_BLOCKED_LOADING,
@@ -48,7 +47,7 @@ import { buildResumeCommand } from "@shared/types";
 import { isPtyPanel } from "@shared/types/panel";
 import { usePaletteStore } from "@/store/paletteStore";
 import type { HelpSessionController } from "@/controllers/HelpSessionController";
-import { captureHelpLaunchSnapshot, type HelpLaunchSnapshot } from "./helpLaunchSnapshot";
+import type { HelpLaunchSnapshot } from "./helpLaunchSnapshot";
 
 type HelpPanelState = ReturnType<typeof useHelpPanelStore.getState>;
 
@@ -836,25 +835,6 @@ async function openHelpCommandsFolder(): Promise<void> {
   }
 }
 
-function toggleHelpPanel(): void {
-  suppressSidebarResizes();
-  const store = useHelpPanelStore.getState();
-
-  if (!store.isOpen) {
-    // Closed → open and focus the input
-    useFocusStore.getState().clearAssistantGesture();
-    store.setOpen(true);
-    store.requestFocus();
-  } else if (!isAssistantFocused()) {
-    // Open but blurred → focus the input without closing
-    useFocusStore.getState().clearAssistantGesture();
-    store.requestFocus();
-  } else {
-    // Open and focused → close
-    store.setOpen(false);
-  }
-}
-
 type HelpActionRun = (
   args: unknown,
   ctx: ActionContext,
@@ -879,11 +859,11 @@ export const helpActionRuns = {
       "help.displayImage must be invoked through the MCP main-process path, not renderer dispatch."
     );
   },
-  "help.launchAgent": async (args, _ctx, _callbacks, launch) =>
-    launchHelpAgent(
-      readArgs<HelpLaunchArgs | undefined>(args),
-      launch ?? captureHelpLaunchSnapshot()
-    ),
+  "help.launchAgent": async (args, _ctx, _callbacks, launch) => {
+    // Read after this chunk loaded, the snapshot would reopen #8317's race.
+    if (!launch) throw new Error("help.launchAgent needs the snapshot taken at dispatch.");
+    return launchHelpAgent(readArgs<HelpLaunchArgs | undefined>(args), launch);
+  },
   "help.newSessionWithAgent": async (args) =>
     startHelpSessionWithAgent(readArgs<{ agentId: string }>(args).agentId),
   "help.resumePastSession": async (args) => {
@@ -912,7 +892,6 @@ export const helpActionRuns = {
     readTourStatus(
       tourCandidates(readArgs<{ tourId?: string } | undefined>(args)?.tourId, ctx.callerPluginId)
     ),
-  "help.togglePanel": async () => toggleHelpPanel(),
 } satisfies Record<string, HelpActionRun>;
 
 export type HelpActionRunId = keyof typeof helpActionRuns;

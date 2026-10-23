@@ -6,6 +6,10 @@ import type { TourStartResult } from "@/components/Tour/tourRequests";
 import type { TourStatus } from "@/components/Tour/tourStatus";
 import { TOUR_OUTCOMES } from "@shared/utils/tourIds";
 import { MAX_ASSISTANT_SLOTS } from "@shared/config/assistantSlots";
+import { suppressSidebarResizes } from "@/lib/sidebarToggle";
+import { useFocusStore } from "@/store/focusStore";
+import { useHelpPanelStore } from "@/store/helpPanelStore";
+import { isAssistantFocused } from "@/store/macroFocusStore";
 import { captureHelpLaunchSnapshot, type HelpLaunchSnapshot } from "./helpLaunchSnapshot";
 import type { HelpActionRunId } from "./helpActions.impl";
 
@@ -296,6 +300,25 @@ export function registerHelpActions(actions: ActionRegistry, callbacks: ActionCa
     danger: "safe",
     scope: "renderer",
     keywords: ["docs", "support", "guide", "assistant"],
-    run: (args, ctx) => runHelpAction("help.togglePanel", args, ctx, callbacks),
+    // Eager, unlike the other runs: which of the three it does is read from
+    // focus at the keystroke, and a chunk load in between could reverse it.
+    run: async () => {
+      suppressSidebarResizes();
+      const store = useHelpPanelStore.getState();
+
+      if (!store.isOpen) {
+        // Closed → open and focus the input
+        useFocusStore.getState().clearAssistantGesture();
+        store.setOpen(true);
+        store.requestFocus();
+      } else if (!isAssistantFocused()) {
+        // Open but blurred → focus the input without closing
+        useFocusStore.getState().clearAssistantGesture();
+        store.requestFocus();
+      } else {
+        // Open and focused → close
+        store.setOpen(false);
+      }
+    },
   }));
 }
