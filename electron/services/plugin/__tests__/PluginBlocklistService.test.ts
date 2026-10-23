@@ -3,11 +3,15 @@ import * as os from "node:os";
 import * as path from "node:path";
 import * as fs from "node:fs/promises";
 
+import * as semver from "semver";
+
 import {
+  PluginBlocklistSchema,
   PluginBlocklistService,
   findPluginBlocklistMatch,
   type ParsedPluginBlocklist,
 } from "../PluginBlocklistService.js";
+import { PLUGIN_BLOCKLIST_SEED } from "../pluginBlocklistSeed.js";
 import { PLUGIN_BLOCKLIST_TTL_MS } from "../../../../shared/config/pluginBlocklist.js";
 
 const BLOCKLIST: ParsedPluginBlocklist = {
@@ -264,14 +268,98 @@ describe("PluginBlocklistService", () => {
       expect((await refreshed)?.entries).toHaveLength(2);
     });
 
-    it("waits for the fetch when there is no disk cache", async () => {
+    it("enforces the seed with no disk cache, and revalidates in the background (#14127)", async () => {
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const fetchImpl = vi.fn(async () => {
+        await gate;
+        return jsonResponse(FRESH);
+      });
+      const svc = new PluginBlocklistService({ cachePath, fetchImpl, seed: BLOCKLIST });
+
+      // Resolves while the fetch is still held open.
+      const { blocklist, refreshed } = await svc.getStartupBlocklist();
+      expect(blocklist?.entries.map((e) => e.name)).toEqual(["acme.bad", "acme.multi"]);
+      expect(refreshed).not.toBeNull();
+
+      release();
+      expect((await refreshed)?.entries.map((e) => e.name)).toEqual(["acme.new"]);
+      expect(JSON.parse(await waitForFile(cachePath)).raw).toEqual(FRESH);
+    });
+
+    it("keeps enforcing the seed when the background refresh fails", async () => {
+      const fetchImpl = vi.fn(async () => {
+        throw new Error("offline");
+      });
+      const svc = new PluginBlocklistService({ cachePath, fetchImpl, seed: BLOCKLIST });
+
+      const { refreshed } = await svc.getStartupBlocklist();
+      expect((await refreshed)?.entries.map((e) => e.name)).toEqual(["acme.bad", "acme.multi"]);
+      expect((await svc.getBlocklist())?.entries).toHaveLength(2);
+    });
+
+    it("prefers a stale disk cache over the seed", async () => {
+      await fs.writeFile(cachePath, JSON.stringify({ fetchedAt: 1000, raw: FRESH }), "utf-8");
+      const svc = new PluginBlocklistService({
+        cachePath,
+        fetchImpl: vi.fn(async () => new Promise<never>(() => {})),
+        now: () => STALE_NOW,
+        seed: BLOCKLIST,
+      });
+
+      const { blocklist } = await svc.getStartupBlocklist();
+      expect(blocklist?.entries.map((e) => e.name)).toEqual(["acme.new"]);
+    });
+
+    it("waits for the fetch when there is no disk cache and no seed", async () => {
       const fetchImpl = stubFetch(FRESH);
-      const svc = new PluginBlocklistService({ cachePath, fetchImpl });
+      const svc = new PluginBlocklistService({ cachePath, fetchImpl, seed: null });
 
       const { blocklist, refreshed } = await svc.getStartupBlocklist();
       expect(blocklist?.entries.map((e) => e.name)).toEqual(["acme.new"]);
       expect(refreshed).toBeNull();
       expect(fetchImpl).toHaveBeenCalledTimes(1);
+    });
+
+    it("rejects a malformed seed rather than enforcing an invented list", async () => {
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        const fetchImpl = stubFetch(FRESH);
+        const svc = new PluginBlocklistService({
+          cachePath,
+          fetchImpl,
+          seed: { entries: [{ name: "acme.bad", ranges: [] }] },
+        });
+
+        const { blocklist, refreshed } = await svc.getStartupBlocklist();
+        expect(blocklist?.entries.map((e) => e.name)).toEqual(["acme.new"]);
+        expect(refreshed).toBeNull();
+        expect(warn).toHaveBeenCalledWith(
+          expect.stringContaining("seed rejected"),
+          expect.anything()
+        );
+      } finally {
+        warn.mockRestore();
+      }
+    });
+
+    it("fails open when the seed is malformed and the fetch fails too", async () => {
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        const svc = new PluginBlocklistService({
+          cachePath,
+          fetchImpl: vi.fn(async () => jsonResponse({}, false, 503)),
+          seed: "garbage",
+        });
+
+        const { blocklist, refreshed } = await svc.getStartupBlocklist();
+        expect(blocklist).toBeNull();
+        expect(refreshed).toBeNull();
+      } finally {
+        warn.mockRestore();
+      }
     });
 
     it("never falls back to an older disk list than one fetched this session", async () => {
@@ -304,5 +392,20 @@ describe("PluginBlocklistService", () => {
       expect(refreshed).toBeNull();
       expect(fetchImpl).not.toHaveBeenCalled();
     });
+  });
+});
+
+describe("PLUGIN_BLOCKLIST_SEED", () => {
+  it("parses with the production blocklist schema", () => {
+    expect(PluginBlocklistSchema.safeParse(PLUGIN_BLOCKLIST_SEED).success).toBe(true);
+  });
+
+  it("names only valid semver ranges, so no seeded denial is silently inert", () => {
+    const parsed = PluginBlocklistSchema.parse(PLUGIN_BLOCKLIST_SEED);
+    for (const entry of parsed.entries) {
+      for (const range of entry.ranges) {
+        expect(semver.validRange(range, { includePrerelease: true })).not.toBeNull();
+      }
+    }
   });
 });

@@ -42,8 +42,8 @@ const MAX_REFERENCES_READ = 1_000;
 export interface ContextProviderCallHost {
   getContextProvidersForProject(projectId: string | null): ContextProviderEntry[];
   activatePlugin(pluginId: string): Promise<void>;
-  /** Startup plugin loading, which a send right after launch waits on within its deadline. */
-  waitForInit(): Promise<void>;
+  /** The startup plugin scan, which a send right after launch waits on within its deadline. */
+  waitForCatalog(): Promise<void>;
 }
 
 type CallOutcome<T> = { ok: true; value: T } | { ok: false; reason: string };
@@ -146,7 +146,7 @@ export async function resolveContextReferences(
 ): Promise<ContextReferenceResolution[]> {
   if (!Array.isArray(references)) return [];
   const deadlineAt = Date.now() + CONTEXT_RESOLVE_TIMEOUT_MS;
-  await within(host.waitForInit(), CONTEXT_RESOLVE_TIMEOUT_MS);
+  await within(host.waitForCatalog(), CONTEXT_RESOLVE_TIMEOUT_MS);
   const entries = host.getContextProvidersForProject(projectId);
   const results: ContextReferenceResolution[] = references.map(() => ({ status: "unknown" }));
   const pending = new Map<string, { entry: ContextProviderEntry; id: string; indices: number[] }>();

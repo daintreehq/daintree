@@ -139,12 +139,13 @@ vi.mock("../../../services/PluginService.js", () => ({
     activatePluginsForFileDecorationScope: vi.fn().mockResolvedValue(undefined),
     listWorktreeDeleteNoteSources: vi.fn(() => []),
     getWorktreeDeleteNotes: vi.fn().mockResolvedValue(null),
-    // The three pull handlers (getActions / getPanelKinds / toolbarButtons)
-    // await waitForInit() so a renderer that mounts before startup activation
-    // settles still gets a populated snapshot — resolved-immediately in tests
-    // since we don't exercise the gate here.
+    // The pull handlers (getActions / getPanelKinds / toolbarButtons, …)
+    // await waitForCatalog() so a renderer that mounts before the startup scan
+    // settles still gets a populated snapshot; only diagnostics waits for full
+    // startup. Resolved-immediately unless a test exercises a gate.
     waitForInit: vi.fn().mockResolvedValue(undefined),
-    waitForInitWithin: vi.fn().mockResolvedValue(undefined),
+    waitForCatalog: vi.fn().mockResolvedValue(undefined),
+    waitForCatalogWithin: vi.fn().mockResolvedValue(undefined),
     getPluginRecipes: () => mockGetPluginRecipes(),
     getPluginTours: () => mockGetPluginTours(),
     recordPluginRecipeUse: (recipeId: string, timestamp: number) =>
@@ -308,11 +309,11 @@ describe("registerPluginHandlers", () => {
     expect(mockIpcMainRemoveHandler).toHaveBeenCalledWith("plugin:context-providers-enabled-set");
   });
 
-  it("PLUGIN_LIST answers only after waitForInit() resolves", async () => {
+  it("PLUGIN_LIST answers only after waitForCatalog() resolves", async () => {
     const { pluginService } = await import("../../../services/PluginService.js");
-    const waitForInit = vi.mocked(pluginService.waitForInit);
+    const waitForCatalog = vi.mocked(pluginService.waitForCatalog);
     let releaseGate: () => void = () => {};
-    waitForInit.mockReturnValueOnce(
+    waitForCatalog.mockReturnValueOnce(
       new Promise<void>((resolve) => {
         releaseGate = resolve;
       })
@@ -330,11 +331,11 @@ describe("registerPluginHandlers", () => {
     expect(mockListPlugins).toHaveBeenCalledTimes(1);
   });
 
-  it("PLUGIN_SET_ENABLED applies only after waitForInit() resolves", async () => {
+  it("PLUGIN_SET_ENABLED applies only after waitForCatalog() resolves", async () => {
     const { pluginService } = await import("../../../services/PluginService.js");
-    const waitForInit = vi.mocked(pluginService.waitForInit);
+    const waitForCatalog = vi.mocked(pluginService.waitForCatalog);
     let releaseGate: () => void = () => {};
-    waitForInit.mockReturnValueOnce(
+    waitForCatalog.mockReturnValueOnce(
       new Promise<void>((resolve) => {
         releaseGate = resolve;
       })
@@ -1760,11 +1761,11 @@ describe("pull handlers wait for PluginService init (#9285)", () => {
     ) => unknown;
   }
 
-  it("PLUGIN_ACTIONS_GET reads the registry only after waitForInit() resolves", async () => {
+  it("PLUGIN_ACTIONS_GET reads the registry only after waitForCatalog() resolves", async () => {
     const { pluginService } = await import("../../../services/PluginService.js");
-    const waitForInit = vi.mocked(pluginService.waitForInit);
+    const waitForCatalog = vi.mocked(pluginService.waitForCatalog);
     let releaseGate: () => void = () => {};
-    waitForInit.mockReturnValueOnce(
+    waitForCatalog.mockReturnValueOnce(
       new Promise<void>((resolve) => {
         releaseGate = resolve;
       })
@@ -1779,13 +1780,13 @@ describe("pull handlers wait for PluginService init (#9285)", () => {
     expect(mockListPluginActions).toHaveBeenCalledTimes(1);
   });
 
-  it("PLUGIN_PROJECT_SURFACE_CHOICE_SET records an answer only after waitForInit() resolves", async () => {
+  it("PLUGIN_PROJECT_SURFACE_CHOICE_SET records an answer only after waitForCatalog() resolves", async () => {
     // The answer is recorded against the slot's owner, read from the claim
     // registry that startup activation fills.
     const { pluginService } = await import("../../../services/PluginService.js");
-    const waitForInit = vi.mocked(pluginService.waitForInit);
+    const waitForCatalog = vi.mocked(pluginService.waitForCatalog);
     let releaseGate: () => void = () => {};
-    waitForInit.mockReturnValueOnce(
+    waitForCatalog.mockReturnValueOnce(
       new Promise<void>((resolve) => {
         releaseGate = resolve;
       })
@@ -1813,14 +1814,14 @@ describe("pull handlers wait for PluginService init (#9285)", () => {
     );
   });
 
-  it("PLUGIN_PROJECT_SURFACES_GET reads only after waitForInit() resolves", async () => {
+  it("PLUGIN_PROJECT_SURFACES_GET reads only after waitForCatalog() resolves", async () => {
     // Same await depth as the setter, so a read sent after a write lands after
     // it — and a read before init would report "no surfaces" for a project
     // whose plugins have not loaded yet.
     const { pluginService } = await import("../../../services/PluginService.js");
-    const waitForInit = vi.mocked(pluginService.waitForInit);
+    const waitForCatalog = vi.mocked(pluginService.waitForCatalog);
     let releaseGate: () => void = () => {};
-    waitForInit.mockReturnValueOnce(
+    waitForCatalog.mockReturnValueOnce(
       new Promise<void>((resolve) => {
         releaseGate = resolve;
       })
@@ -1842,12 +1843,12 @@ describe("pull handlers wait for PluginService init (#9285)", () => {
     // Renderers adopt only what main returns, so a read queued behind a write
     // must not overtake it on the way through init.
     const { pluginService } = await import("../../../services/PluginService.js");
-    const waitForInit = vi.mocked(pluginService.waitForInit);
+    const waitForCatalog = vi.mocked(pluginService.waitForCatalog);
     let releaseGate: () => void = () => {};
     const gate = new Promise<void>((resolve) => {
       releaseGate = resolve;
     });
-    waitForInit.mockReturnValueOnce(gate).mockReturnValueOnce(gate);
+    waitForCatalog.mockReturnValueOnce(gate).mockReturnValueOnce(gate);
     const project = "a".repeat(64);
     let disk = {};
     const written = { emptyCanvas: { pluginId: "acme.dashboard", choice: "stock", decidedAt: 1 } };
@@ -1877,11 +1878,11 @@ describe("pull handlers wait for PluginService init (#9285)", () => {
     expect(await read).toEqual({ projectId: project, revision: 2, slots: {}, choices: written });
   });
 
-  it("PLUGIN_TOOLBAR_BUTTONS reads the registry only after waitForInit() resolves", async () => {
+  it("PLUGIN_TOOLBAR_BUTTONS reads the registry only after waitForCatalog() resolves", async () => {
     const { pluginService } = await import("../../../services/PluginService.js");
-    const waitForInit = vi.mocked(pluginService.waitForInit);
+    const waitForCatalog = vi.mocked(pluginService.waitForCatalog);
     let releaseGate: () => void = () => {};
-    waitForInit.mockReturnValueOnce(
+    waitForCatalog.mockReturnValueOnce(
       new Promise<void>((resolve) => {
         releaseGate = resolve;
       })
@@ -1896,11 +1897,36 @@ describe("pull handlers wait for PluginService init (#9285)", () => {
     expect(mockGetPluginToolbarButtonIds).toHaveBeenCalledTimes(1);
   });
 
-  it("PLUGIN_PANEL_KINDS_GET reads the registry only after waitForInit() resolves", async () => {
+  it("catalog reads answer while startup activation is still pending; diagnostics waits for it (#14127)", async () => {
     const { pluginService } = await import("../../../services/PluginService.js");
-    const waitForInit = vi.mocked(pluginService.waitForInit);
+    let releaseInit: () => void = () => {};
+    vi.mocked(pluginService.waitForInit).mockReturnValueOnce(
+      new Promise<void>((resolve) => {
+        releaseInit = resolve;
+      })
+    );
+    const getDiagnosticsSnapshot = vi.fn(() => ({ plugins: [] }));
+    Object.assign(pluginService, { getDiagnosticsSnapshot });
+
+    await getHandler("plugin:list")();
+    await getHandler("plugin:toolbar-buttons")({ sender: { id: 1 } });
+    await getHandler("plugin:panel-kinds-get")({ sender: { id: 1 } });
+    expect(mockListPlugins).toHaveBeenCalledTimes(1);
+    expect(mockGetPluginToolbarButtonIds).toHaveBeenCalledTimes(1);
+
+    const diagnostics = getHandler("plugin:get-diagnostics-snapshot")() as Promise<unknown>;
+    await vi.waitFor(() => expect(pluginService.waitForInit).toHaveBeenCalledTimes(1));
+    expect(getDiagnosticsSnapshot).not.toHaveBeenCalled();
+    releaseInit();
+    await diagnostics;
+    expect(getDiagnosticsSnapshot).toHaveBeenCalledTimes(1);
+  });
+
+  it("PLUGIN_PANEL_KINDS_GET reads the registry only after waitForCatalog() resolves", async () => {
+    const { pluginService } = await import("../../../services/PluginService.js");
+    const waitForCatalog = vi.mocked(pluginService.waitForCatalog);
     let releaseGate: () => void = () => {};
-    waitForInit.mockReturnValueOnce(
+    waitForCatalog.mockReturnValueOnce(
       new Promise<void>((resolve) => {
         releaseGate = resolve;
       })
@@ -1923,11 +1949,11 @@ describe("pull handlers wait for PluginService init (#9285)", () => {
     expect(resolved).toBe(true);
   });
 
-  it("PLUGIN_CONTEXT_MENU_ITEMS reads the registry only after waitForInit() resolves", async () => {
+  it("PLUGIN_CONTEXT_MENU_ITEMS reads the registry only after waitForCatalog() resolves", async () => {
     const { pluginService } = await import("../../../services/PluginService.js");
-    const waitForInit = vi.mocked(pluginService.waitForInit);
+    const waitForCatalog = vi.mocked(pluginService.waitForCatalog);
     let releaseGate: () => void = () => {};
-    waitForInit.mockReturnValueOnce(
+    waitForCatalog.mockReturnValueOnce(
       new Promise<void>((resolve) => {
         releaseGate = resolve;
       })
@@ -2028,11 +2054,11 @@ describe("PLUGIN_FORGE_PROVIDERS_GET handler", () => {
     )![1] as (...args: unknown[]) => unknown;
   }
 
-  it("reads the registry only after waitForInit() resolves", async () => {
+  it("reads the registry only after waitForCatalog() resolves", async () => {
     const { pluginService } = await import("../../../services/PluginService.js");
-    const waitForInit = vi.mocked(pluginService.waitForInit);
+    const waitForCatalog = vi.mocked(pluginService.waitForCatalog);
     let releaseGate: () => void = () => {};
-    waitForInit.mockReturnValueOnce(
+    waitForCatalog.mockReturnValueOnce(
       new Promise<void>((resolve) => {
         releaseGate = resolve;
       })
@@ -2693,9 +2719,9 @@ describe("plugin install jobs (#11302)", () => {
 
     it("plugin:tours-get returns the tours after init, for a sender with no project (#12773)", async () => {
       const { pluginService } = await import("../../../services/PluginService.js");
-      const waitForInit = vi.mocked(pluginService.waitForInit);
+      const waitForCatalog = vi.mocked(pluginService.waitForCatalog);
       let releaseGate: () => void = () => {};
-      waitForInit.mockReturnValueOnce(new Promise<void>((resolve) => (releaseGate = resolve)));
+      waitForCatalog.mockReturnValueOnce(new Promise<void>((resolve) => (releaseGate = resolve)));
       const tour = { id: "acme.tools.welcome", pluginId: "acme.tools", title: "Welcome" };
       mockGetPluginTours.mockReturnValueOnce([tour]);
 
@@ -2740,9 +2766,9 @@ describe("plugin install jobs (#11302)", () => {
 
     it("plugin:recipes-get serves only the recipes the sender's project shows, after init (#13765)", async () => {
       const { pluginService } = await import("../../../services/PluginService.js");
-      const waitForInit = vi.mocked(pluginService.waitForInit);
+      const waitForCatalog = vi.mocked(pluginService.waitForCatalog);
       let releaseGate: () => void = () => {};
-      waitForInit.mockReturnValueOnce(new Promise<void>((resolve) => (releaseGate = resolve)));
+      waitForCatalog.mockReturnValueOnce(new Promise<void>((resolve) => (releaseGate = resolve)));
       mockGetPluginRecipes.mockReturnValue([registered]);
       hidePluginInProject("project-a", "acme.tools");
       mockGetProjectForWebContents.mockReturnValue("project-a");
@@ -3029,9 +3055,9 @@ describe("project-local plugin handlers", () => {
 
   it("records an answer about several slots in the sender's project, once init has run", async () => {
     const { pluginService } = await import("../../../services/PluginService.js");
-    const waitForInit = vi.mocked(pluginService.waitForInit);
+    const waitForCatalog = vi.mocked(pluginService.waitForCatalog);
     let releaseGate: () => void = () => {};
-    waitForInit.mockReturnValueOnce(
+    waitForCatalog.mockReturnValueOnce(
       new Promise<void>((resolve) => {
         releaseGate = resolve;
       })

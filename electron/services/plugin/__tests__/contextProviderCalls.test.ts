@@ -29,12 +29,12 @@ function entry(overrides: Partial<ContextProviderEntry> = {}): ContextProviderEn
 
 function host(entries: ContextProviderEntry[]): ContextProviderCallHost & {
   activatePlugin: ReturnType<typeof vi.fn>;
-  waitForInit: ReturnType<typeof vi.fn>;
+  waitForCatalog: ReturnType<typeof vi.fn>;
 } {
   return {
     getContextProvidersForProject: vi.fn(() => entries),
     activatePlugin: vi.fn(async () => {}),
-    waitForInit: vi.fn(async () => {}),
+    waitForCatalog: vi.fn(async () => {}),
   };
 }
 
@@ -142,7 +142,7 @@ describe("resolveContextReferences (#13795)", () => {
     vi.useFakeTimers();
     const h = host([entry()]);
     let ready!: () => void;
-    h.waitForInit.mockReturnValue(new Promise<void>((resolve) => (ready = resolve)));
+    h.waitForCatalog.mockReturnValue(new Promise<void>((resolve) => (ready = resolve)));
     bind({
       resolve: vi.fn(() => new Promise<never>(() => {})),
     });

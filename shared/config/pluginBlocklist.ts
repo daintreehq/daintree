@@ -28,8 +28,9 @@ export const PLUGIN_BLOCKLIST_CACHE_FILENAME = "plugin-blocklist.json";
 export const PLUGIN_BLOCKLIST_TTL_MS = 6 * 60 * 60 * 1000;
 
 /**
- * Fetch timeout ceiling. Bounds how long a hung CDN can delay plugin loading
- * at startup before the fetch aborts and enforcement falls back to the disk
- * cache (or fails open if there is none).
+ * Fetch timeout ceiling. Bounds how long a hung CDN keeps a revalidation in
+ * flight before the fetch aborts and enforcement stays on the disk cache or
+ * release-shipped seed (or fails open if there is neither). Startup does not
+ * wait on it while either exists.
  */
 export const PLUGIN_BLOCKLIST_FETCH_TIMEOUT_MS = 8000;

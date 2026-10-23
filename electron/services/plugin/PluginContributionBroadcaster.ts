@@ -261,18 +261,22 @@ interface PluginContributionBroadcasterDeps {
   isDisposed: () => boolean;
   /** Flattened plugin action snapshot — the pluginActions map stays on the facade. */
   listPluginActions: () => PluginActionDescriptor[];
-  /** Resolves once startup load + activation has settled (or dispose ran). */
-  initPromise: Promise<void>;
+  /**
+   * Resolves once the startup scan has settled (or dispose ran) — not startup
+   * activation, which one slow plugin can hold (#14127).
+   */
+  catalogReady: Promise<void>;
   /** Live per-instance runtime health, for the cold-start replay (#12277, #12278). */
   listPluginRuntimeStatuses: () => import("../../../shared/types/plugin.js").PluginRuntimeStatus[];
   /**
-   * True while a plugin is being replaced in place (a dev rebuild reconcile).
-   * The unload half of a replacement empties the registries for one turn, and a
-   * `complete` snapshot taken there is a lie the renderer acts on destructively
-   * — it sweeps persisted preferences for contributions that are about to come
-   * straight back (#12277).
+   * True while the registries hold a partial catalog: a plugin is being
+   * replaced in place (a dev rebuild reconcile), or the startup scan is still
+   * enumerating (#14127). The unload half of a replacement empties the
+   * registries for one turn, and a `complete` snapshot taken there is a lie the
+   * renderer acts on destructively — it sweeps persisted preferences for
+   * contributions that are about to come straight back (#12277).
    */
-  isReplacingPlugin: () => boolean;
+  isRegistryUnsettled: () => boolean;
 }
 
 /**
@@ -477,12 +481,12 @@ export class PluginContributionBroadcaster {
   }
 
   /**
-   * Re-publish any authoritative snapshot that was held back while a plugin was
-   * being replaced. Called once the replacement completes; a no-op when nothing
-   * was suppressed.
+   * Re-publish any authoritative snapshot that was held back while the
+   * registries were unsettled. Called once a replacement or the startup scan
+   * completes; a no-op when nothing was suppressed.
    */
   flushDeferredCompleteSnapshots(): void {
-    if (this.deps.isDisposed() || this.deps.isReplacingPlugin()) return;
+    if (this.deps.isDisposed() || this.deps.isRegistryUnsettled()) return;
     if (this.toolbarButtonsBroadcastComplete) this.scheduleToolbarButtonsBroadcast(true);
     if (this.keybindingsBroadcastComplete) this.scheduleKeybindingsBroadcast(true);
     if (this.contextMenuItemsBroadcastComplete) this.scheduleContextMenuItemsBroadcast(true);
@@ -598,7 +602,7 @@ export class PluginContributionBroadcaster {
     this.toolbarButtonsBroadcastPending = true;
     this.defer(() => {
       this.toolbarButtonsBroadcastPending = false;
-      const complete = this.toolbarButtonsBroadcastComplete && !this.deps.isReplacingPlugin();
+      const complete = this.toolbarButtonsBroadcastComplete && !this.deps.isRegistryUnsettled();
       // Cleared only when it was actually published: a `complete` suppressed
       // mid-replacement is still owed, and dropping it here would leave the
       // renderer's stale entries un-swept until some later authoritative event.
@@ -621,7 +625,7 @@ export class PluginContributionBroadcaster {
     if (this.keybindingsBroadcastPending) return;
     this.keybindingsBroadcastPending = true;
     this.defer(() => {
-      const isComplete = this.keybindingsBroadcastComplete && !this.deps.isReplacingPlugin();
+      const isComplete = this.keybindingsBroadcastComplete && !this.deps.isRegistryUnsettled();
       this.keybindingsBroadcastPending = false;
       if (isComplete) this.keybindingsBroadcastComplete = false;
       if (this.deps.isDisposed()) return;
@@ -643,7 +647,7 @@ export class PluginContributionBroadcaster {
     this.contextMenuItemsBroadcastPending = true;
     this.defer(() => {
       this.contextMenuItemsBroadcastPending = false;
-      const drained = this.contextMenuItemsBroadcastComplete && !this.deps.isReplacingPlugin();
+      const drained = this.contextMenuItemsBroadcastComplete && !this.deps.isRegistryUnsettled();
       if (drained) this.contextMenuItemsBroadcastComplete = false;
       if (this.deps.isDisposed()) return;
       this.broadcastPluginContextMenuItems(drained);
@@ -669,7 +673,7 @@ export class PluginContributionBroadcaster {
     this.agentsBroadcastPending = true;
     this.defer(() => {
       this.agentsBroadcastPending = false;
-      const drained = this.agentsBroadcastComplete && !this.deps.isReplacingPlugin();
+      const drained = this.agentsBroadcastComplete && !this.deps.isRegistryUnsettled();
       if (drained) this.agentsBroadcastComplete = false;
       if (this.deps.isDisposed()) return;
       this.broadcastPluginAgents(drained);
@@ -695,7 +699,7 @@ export class PluginContributionBroadcaster {
     this.recipesBroadcastPending = true;
     this.defer(() => {
       this.recipesBroadcastPending = false;
-      const drained = this.recipesBroadcastComplete && !this.deps.isReplacingPlugin();
+      const drained = this.recipesBroadcastComplete && !this.deps.isRegistryUnsettled();
       if (drained) this.recipesBroadcastComplete = false;
       if (this.deps.isDisposed()) return;
       this.broadcastPluginRecipes(drained);
@@ -831,7 +835,7 @@ export class PluginContributionBroadcaster {
     webContents: Pick<Electron.WebContents, "id" | "isDestroyed" | "send">,
     projectId?: string | null
   ): Promise<void> {
-    await this.deps.initPromise;
+    await this.deps.catalogReady;
     if (this.deps.isDisposed()) return;
     if (webContents.isDestroyed()) return;
     // `undefined` means "the caller did not resolve one" — look it up from the
@@ -881,7 +885,7 @@ export class PluginContributionBroadcaster {
           // Authoritative only when the registries are whole. A view attaching
           // mid-replacement would otherwise be handed a snapshot missing the
           // plugin being rebuilt and sweep its preferences against it.
-          complete: !this.deps.isReplacingPlugin(),
+          complete: !this.deps.isRegistryUnsettled(),
         },
       },
       {

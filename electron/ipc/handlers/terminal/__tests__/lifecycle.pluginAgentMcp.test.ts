@@ -191,22 +191,21 @@ vi.mock("../../../../services/McpServerService.js", () => ({
   },
 }));
 
-const { mockListPlugins, mockHasPlugin, mockWaitForInit, mockWaitForProjectPlugins } = vi.hoisted(
-  () => ({
+const { mockListPlugins, mockHasPlugin, mockWaitForCatalog, mockWaitForProjectPlugins } =
+  vi.hoisted(() => ({
     mockListPlugins: vi.fn<() => unknown[]>(() => []),
     mockHasPlugin: vi.fn<(instanceId: string) => boolean>(() => true),
-    mockWaitForInit: vi.fn<() => Promise<void>>(() => Promise.resolve()),
+    mockWaitForCatalog: vi.fn<() => Promise<void>>(() => Promise.resolve()),
     mockWaitForProjectPlugins: vi.fn<(projectId: string, timeoutMs: number) => Promise<boolean>>(
       () => Promise.resolve(true)
     ),
-  })
-);
+  }));
 
 vi.mock("../../../../services/PluginService.js", () => ({
   pluginService: {
     listPlugins: () => mockListPlugins(),
     hasPlugin: (instanceId: string) => mockHasPlugin(instanceId),
-    waitForInit: () => mockWaitForInit(),
+    waitForCatalog: () => mockWaitForCatalog(),
     waitForProjectPlugins: (projectId: string, timeoutMs: number) =>
       mockWaitForProjectPlugins(projectId, timeoutMs),
     resolveSettingTemplate: vi.fn(),
@@ -337,7 +336,7 @@ describe("terminal spawn handler - plugin MCP servers for agent launches", () =>
     mockValidateToken.mockReturnValue(false);
     mockListPlugins.mockReturnValue([plugin()]);
     mockHasPlugin.mockReturnValue(true);
-    mockWaitForInit.mockImplementation(() => Promise.resolve());
+    mockWaitForCatalog.mockImplementation(() => Promise.resolve());
     mockWaitForProjectPlugins.mockImplementation(() => Promise.resolve(true));
     mockMarkTerminalForToken.mockReturnValue(true);
     mockIsHelpTerminal.mockReturnValue(false);
@@ -431,14 +430,14 @@ describe("terminal spawn handler - plugin MCP servers for agent launches", () =>
     expect(spawnArgs.command).toBe("claude");
     expect(pluginMcpGrantRegistry.listForTerminal("term-disabled")).toEqual([]);
     expect(mockListPlugins).not.toHaveBeenCalled();
-    expect(mockWaitForInit).not.toHaveBeenCalled();
+    expect(mockWaitForCatalog).not.toHaveBeenCalled();
   });
 
   it("waits for plugin init before resolving servers for a launch at cold start", async () => {
     setProjectAgentMcpAccess(PROJECT_A, "acme.ledger", "read-write");
     let initialized = false;
     let settleInit!: () => void;
-    mockWaitForInit.mockImplementation(
+    mockWaitForCatalog.mockImplementation(
       () =>
         new Promise<void>((resolve) => {
           settleInit = () => {
@@ -451,7 +450,7 @@ describe("terminal spawn handler - plugin MCP servers for agent launches", () =>
     mockHasPlugin.mockImplementation(() => initialized);
 
     const pending = spawn({ id: "term-cold" });
-    await vi.waitFor(() => expect(mockWaitForInit).toHaveBeenCalled());
+    await vi.waitFor(() => expect(mockWaitForCatalog).toHaveBeenCalled());
     expect(ptyClient.spawn).not.toHaveBeenCalled();
     settleInit();
     await pending;
@@ -464,12 +463,12 @@ describe("terminal spawn handler - plugin MCP servers for agent launches", () =>
 
   it("launches without plugin servers when plugin init does not settle in time", async () => {
     setProjectAgentMcpAccess(PROJECT_A, "acme.ledger", "read-write");
-    mockWaitForInit.mockImplementation(() => new Promise<void>(() => {}));
+    mockWaitForCatalog.mockImplementation(() => new Promise<void>(() => {}));
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     try {
       const pending = spawn({ id: "term-init-timeout" });
-      await vi.waitFor(() => expect(mockWaitForInit).toHaveBeenCalled());
+      await vi.waitFor(() => expect(mockWaitForCatalog).toHaveBeenCalled());
       await vi.advanceTimersByTimeAsync(5000);
       await pending;
     } finally {
@@ -936,12 +935,12 @@ describe("terminal spawn handler - plugin MCP servers for agent launches", () =>
 
     it("refuses as pending-load when plugin init doesn't settle, where an ordinary launch goes ahead", async () => {
       setProjectAgentMcpAccess(PROJECT_A, "acme.ledger", "read-write");
-      mockWaitForInit.mockImplementation(() => new Promise<void>(() => {}));
+      mockWaitForCatalog.mockImplementation(() => new Promise<void>(() => {}));
       const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
       vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
       try {
         const pending = refusal({ id: "term-req-timeout", requiredPluginTools: ["acme.ledger"] });
-        await vi.waitFor(() => expect(mockWaitForInit).toHaveBeenCalled());
+        await vi.waitFor(() => expect(mockWaitForCatalog).toHaveBeenCalled());
         await vi.advanceTimersByTimeAsync(5000);
         expect(await pending).toEqual([
           {

@@ -341,12 +341,12 @@ describe("PluginService worktree delete notes (#13805)", () => {
     service.dispose();
   });
 
-  it("stops waiting on startup activation once its budget is spent", async () => {
+  it("stops waiting on the startup scan once its budget is spent", async () => {
     vi.useFakeTimers();
     try {
       const service = new PluginService(tmpDir);
       let settled = false;
-      void service.waitForInitWithin(500).then(() => (settled = true));
+      void service.waitForCatalogWithin(500).then(() => (settled = true));
       await vi.advanceTimersByTimeAsync(499);
       expect(settled).toBe(false);
       await vi.advanceTimersByTimeAsync(1);

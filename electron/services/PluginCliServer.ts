@@ -352,7 +352,7 @@ let singleton: PluginCliServer | null = null;
 
 /**
  * Start the CLI control server for this app instance. Idempotent. Wires the
- * real socket path, gates binding behind `pluginService.waitForInit()`, and
+ * real socket path, gates binding behind `pluginService.waitForCatalog()`, and
  * routes install/uninstall through the existing IPC handler trust gates.
  */
 export async function startPluginCliServer(): Promise<void> {
@@ -373,7 +373,7 @@ export async function startPluginCliServer(): Promise<void> {
 
   const server = createPluginCliServer({
     socketPath,
-    waitForReady: () => pluginService.waitForInit(),
+    waitForReady: () => pluginService.waitForCatalog(),
     handlers: {
       install: ({ path: installPath, url }) => {
         // Schema guarantees exactly one source; these branches are defensive.

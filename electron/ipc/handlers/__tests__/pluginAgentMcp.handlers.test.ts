@@ -20,7 +20,7 @@ const mocks = vi.hoisted(() => ({
   getProjectForWebContents: vi.fn<(id: number) => string | null>(() => null),
   listPlugins: vi.fn<() => LoadedPluginInfo[]>(() => []),
   hasPlugin: vi.fn<(id: string) => boolean>(() => true),
-  waitForInit: vi.fn(() => Promise.resolve()),
+  waitForCatalog: vi.fn(() => Promise.resolve()),
   isMcpEnabled: vi.fn(() => true),
   projectRoot: { current: "" },
 }));
@@ -45,7 +45,7 @@ vi.mock("../../../services/PluginService.js", () => ({
   pluginService: {
     listPlugins: () => mocks.listPlugins(),
     hasPlugin: (id: string) => mocks.hasPlugin(id),
-    waitForInit: () => mocks.waitForInit(),
+    waitForCatalog: () => mocks.waitForCatalog(),
   },
 }));
 

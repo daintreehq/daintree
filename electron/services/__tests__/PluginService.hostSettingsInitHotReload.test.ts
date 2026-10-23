@@ -1129,6 +1129,159 @@ describe("init gate — waitForInit() and pushSnapshotTo() (#9285)", () => {
     await expect(waiter).resolves.toBeUndefined();
   });
 
+  it("holds the catalog, cold replay and complete snapshots until the scan settles (#14127)", async () => {
+    let releaseBlocklist!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      releaseBlocklist = resolve;
+    });
+    let entered!: () => void;
+    const scanReached = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const blocklistService = {
+      getStartupBlocklist: async () => {
+        entered();
+        await gate;
+        return { blocklist: null, refreshed: null };
+      },
+    } as unknown as NonNullable<ConstructorParameters<typeof PluginService>[2]>["blocklistService"];
+    const service = new PluginService(tmpDir, undefined, { blocklistService });
+    const toolbarCompleteFlags = () =>
+      broadcastToRendererMock.mock.calls
+        .map((c) => c[1] as { name?: string; payload?: { complete?: boolean } })
+        .filter((e) => e.name === "plugin:toolbar-buttons-changed")
+        .map((e) => e.payload?.complete);
+
+    const init = service.initialize();
+    // A concurrent call joins the scan rather than starting a second one.
+    expect(service.initialize()).toBe(init);
+    await scanReached;
+    let catalogReady = false;
+    void service.waitForCatalog().then(() => (catalogReady = true));
+    const send = vi.fn();
+    const wc = { id: 4251, send, isDestroyed: () => false } as unknown as Electron.WebContents;
+    const replay = service.pushSnapshotTo(wc);
+
+    broadcastToRendererMock.mockClear();
+    // An unload while the catalog is still partial owes an authoritative snapshot.
+    (
+      service as unknown as {
+        broadcaster: { scheduleToolbarButtonsBroadcast: (complete: boolean) => void };
+      }
+    ).broadcaster.scheduleToolbarButtonsBroadcast(true);
+    await vi.waitFor(() => expect(toolbarCompleteFlags()).toEqual([false]));
+    expect(catalogReady).toBe(false);
+    expect(send).not.toHaveBeenCalled();
+
+    releaseBlocklist();
+    await init;
+    await replay;
+    expect(catalogReady).toBe(true);
+    expect(send).toHaveBeenCalled();
+    await vi.waitFor(() => expect(toolbarCompleteFlags()).toEqual([false, true]));
+    service.dispose();
+  });
+
+  it.each([
+    { outcome: "fails", loadError: { message: "boom", at: 1 }, pushes: 1 },
+    { outcome: "succeeds", loadError: null, pushes: 0 },
+  ])(
+    "re-pulls the plugin list only when a startup activation changes its load error ($outcome)",
+    async ({ loadError, pushes }) => {
+      const service = new PluginService(tmpDir);
+      const internals = service as unknown as {
+        plugins: Map<string, unknown>;
+        records: { upsertInstalledRecord: (id: string, patch: object) => void };
+      };
+      const activate = vi.spyOn(service, "activatePlugin").mockImplementation(async (id) => {
+        internals.records.upsertInstalledRecord(id, { loadError });
+      });
+      internals.plugins.set("acme.early", {
+        resolvedMain: "/x/main.mjs",
+        manifest: { name: "acme.early", activationEvents: ["onStartupFinished"] },
+      });
+      broadcastToRendererMock.mockClear();
+
+      await service.activateStartupFinishedPlugins();
+      expect(activate).toHaveBeenCalledWith("acme.early");
+      const provenancePushes = broadcastToRendererMock.mock.calls.filter(
+        (c) => (c[1] as { name?: string })?.name === "plugin:provenance-changed"
+      );
+      expect(provenancePushes).toHaveLength(pushes);
+      internals.plugins.clear();
+      service.dispose();
+    }
+  );
+
+  it("dispose() resolves a pending waitForCatalog() too", async () => {
+    const service = new PluginService(tmpDir);
+    const waiter = service.waitForCatalog();
+    service.dispose();
+    await expect(waiter).resolves.toBeUndefined();
+  });
+
+  it("waitForCatalog() settles when the scan does, even if a prerequisite throws", async () => {
+    const service = new PluginService(tmpDir);
+    (
+      service as unknown as { installer: { sweepStalePluginTempDirs: () => Promise<void> } }
+    ).installer.sweepStalePluginTempDirs = async () => {
+      throw new Error("EACCES");
+    };
+    await expect(service.initialize()).rejects.toThrow("EACCES");
+    await expect(service.waitForCatalog()).resolves.toBeUndefined();
+    service.dispose();
+  });
+
+  it("a held startup activation holds waitForInit() but not the catalog, and its own callers (#14127)", async () => {
+    const dir = path.join(tmpDir, "slow");
+    await fs.mkdir(dir, { recursive: true });
+    await fs.writeFile(
+      path.join(dir, "plugin.json"),
+      JSON.stringify({
+        name: "acme.slow",
+        version: "1.0.0",
+        main: "main.mjs",
+        activationEvents: ["onStartupFinished"],
+        contributes: {
+          panels: [{ id: "viewer", name: "Viewer", iconId: "eye", color: "#ff0000" }],
+        },
+      })
+    );
+    await fs.writeFile(path.join(dir, "main.mjs"), "export function activate() {}\n");
+    const service = new PluginService(tmpDir);
+    let releaseActivation!: () => void;
+    const held = new Promise<void>((resolve) => {
+      releaseActivation = resolve;
+    });
+    (service as unknown as { _doActivate: (id: string) => Promise<void> })._doActivate = () => held;
+
+    await service.initialize();
+    const startup = service.activateStartupFinishedPlugins();
+    let fullyStarted = false;
+    void service.waitForInit().then(() => (fullyStarted = true));
+    let ownerActivated = false;
+    const owner = service.activatePlugin("acme.slow").then(() => (ownerActivated = true));
+
+    await service.waitForCatalog();
+    expect(service.hasPlugin("acme.slow")).toBe(true);
+    const send = vi.fn();
+    const wc = { id: 4250, send, isDestroyed: () => false } as unknown as Electron.WebContents;
+    await service.pushSnapshotTo(wc);
+    expect(send).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ name: "plugin:panel-kinds-changed" })
+    );
+    expect(fullyStarted).toBe(false);
+    expect(ownerActivated).toBe(false);
+
+    releaseActivation();
+    await startup;
+    await owner;
+    expect(fullyStarted).toBe(true);
+    expect(ownerActivated).toBe(true);
+    service.dispose();
+  });
+
   it("pushSnapshotTo() replays a global plugin's runtime panel menus, and skips a project plugin's for another view (#13213)", async () => {
     const service = new PluginService(tmpDir);
     await service.activateStartupFinishedPlugins();

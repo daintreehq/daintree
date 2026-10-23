@@ -273,7 +273,7 @@ async function buildSnapshot(projectId: string | null): Promise<ProjectAgentTool
 
   const svc = await getPluginService();
   // A read before the deferred initialize() would see no plugins at all.
-  await svc.waitForInit();
+  await svc.waitForCatalog();
 
   const plugins = svc.listPlugins();
   await refreshProjectAgentMcpDefaults(projectId, projectStore.getProjectById(projectId)?.path);
@@ -363,7 +363,7 @@ async function setAssistantAccess(
     return;
   }
   const svc = await getPluginService();
-  await svc.waitForInit();
+  await svc.waitForCatalog();
   await refreshProjectAgentMcpDefaults(projectId, projectStore.getProjectById(projectId)?.path);
   // Checked and written with no await between, as the project answer is.
   const plugin = declaredFor(svc, projectId).find((d) => d.pluginInstanceId === pluginInstanceId);
@@ -438,7 +438,7 @@ export const pluginAgentMcpNamespace = defineIpcNamespace({
           write();
         } else {
           const svc = await getPluginService();
-          await svc.waitForInit();
+          await svc.waitForCatalog();
           // Checked and written with no await between, so a plugin unloading in
           // the gap can't leave consent for tools it never offered here.
           const plugin = declaredFor(svc, projectId).find(
