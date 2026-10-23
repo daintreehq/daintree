@@ -61,6 +61,8 @@ import { __resetCanopySeenForTests } from "@/lib/canopySeen";
 import { __resetCanopyPlaceForTests } from "../CanopyPlace";
 
 const NOW = Date.now();
+/** Past the panel's wait on the typing before it reads terminals for a search. */
+const SCREEN_SEARCH_SETTLE_MS = 250;
 
 const canopySnapshot: CanopySnapshot = {
   mode: "on",
@@ -246,9 +248,7 @@ describe("CanopyView role filter", () => {
     // The pane shows the first assistant through its own viewer, never a worker's.
     expect(document.querySelector("[data-testid=canopy-assistant-pane]")).not.toBeNull();
     expect(terminalApis.at(-1)?.runId).toBe("help-0");
-    expect(assistantApiMock).toHaveBeenLastCalledWith(
-      (directory.entries[0] as AgentDirectoryLiveEntry).subject
-    );
+    expect(assistantApiMock).toHaveBeenLastCalledWith(assistant(0).subject);
   });
 
   it("keeps assistants at their prompt quiet, and an observed ask on one lane in view", async () => {
@@ -280,7 +280,7 @@ describe("CanopyView role filter", () => {
       );
     });
     await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 250));
+      await new Promise((resolve) => setTimeout(resolve, SCREEN_SEARCH_SETTLE_MS));
     });
     // The search did reach the workers' terminals, and only theirs.
     expect(canopy.searchScreens).toHaveBeenCalled();
@@ -331,9 +331,7 @@ describe("CanopyView role filter", () => {
       row.focus();
       fireEvent.keyDown(row, { key: "Enter" });
     });
-    expect(openInAssistantMock).toHaveBeenCalledWith(
-      (directory.entries[1] as AgentDirectoryLiveEntry).subject
-    );
+    expect(openInAssistantMock).toHaveBeenCalledWith(assistant(1).subject);
     expect(dispatchMock).not.toHaveBeenCalled();
     expect(useCanopyStore.getState().isOpen).toBe(false);
   });

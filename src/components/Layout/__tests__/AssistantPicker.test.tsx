@@ -114,9 +114,7 @@ describe("AssistantPicker", () => {
     await act(async () => {
       fireEvent.keyDown(list, { key: "Enter" });
     });
-    expect(openInAssistantMock).toHaveBeenCalledWith(
-      (directory.entries[1] as AgentDirectoryLiveEntry).subject
-    );
+    expect(openInAssistantMock).toHaveBeenCalledWith(assistant(1).subject);
     expect(onClose).toHaveBeenCalled();
   });
 
