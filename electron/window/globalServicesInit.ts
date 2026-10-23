@@ -1546,6 +1546,15 @@ export async function initGlobalServices(
   });
 
   registerDeferredTask({
+    name: "assistant-run-checkpoint-retention",
+    run: async () => {
+      const { requestAssistantRunCheckpointRetention } =
+        await import("../services/AssistantRunCheckpointService.js");
+      await requestAssistantRunCheckpointRetention();
+    },
+  });
+
+  registerDeferredTask({
     name: "assistant-scratch-cleanup",
     run: async () => {
       const { startAssistantScratchCleanup } =

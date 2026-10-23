@@ -212,6 +212,10 @@ vi.mock("../../services/AssistantScratchService.js", () => ({
   runAssistantScratchCleanup: vi.fn(async () => {}),
 }));
 
+vi.mock("../../services/AssistantRunCheckpointService.js", () => ({
+  requestAssistantRunCheckpointRetention: vi.fn(async () => ({})),
+}));
+
 vi.mock("../../services/AgentCompileCacheCleanupService.js", () => ({
   initializeAgentCompileCacheCleanup: vi.fn(),
   requestAgentCompileCacheCleanup: vi.fn(async () => {}),
@@ -850,6 +854,7 @@ describe("initGlobalServices task ordering", () => {
       "trashed-pid-cleanup",
       "scratch-cleanup",
       "assistant-scratch-cleanup",
+      "assistant-run-checkpoint-retention",
     ];
 
     const telemetryIdx = registeredTaskNames.indexOf("telemetry");
@@ -1308,6 +1313,7 @@ describe("initGlobalServices task ordering", () => {
     expect(registeredTaskNames).toContain("trashed-pid-cleanup");
     expect(registeredTaskNames).toContain("scratch-cleanup");
     expect(registeredTaskNames).toContain("assistant-scratch-cleanup");
+    expect(registeredTaskNames).toContain("assistant-run-checkpoint-retention");
     expect(registeredTaskNames).toContain("agent-compile-cache-cleanup");
     // GpuCrashMonitor is intentionally NOT a deferred task — it must stay
     // eager in main.ts so the child-process-gone listener installs before
@@ -1367,6 +1373,22 @@ describe("initGlobalServices task ordering", () => {
     expect(trashedSpy).toHaveBeenCalled();
     expect(scratchSpy).toHaveBeenCalled();
     expect(assistantSpy).toHaveBeenCalled();
+  });
+
+  it("runs checkpoint retention when its deferred task executes", async () => {
+    const { requestAssistantRunCheckpointRetention } =
+      await import("../../services/AssistantRunCheckpointService.js");
+    const spy = requestAssistantRunCheckpointRetention as ReturnType<typeof vi.fn>;
+    spy.mockClear();
+
+    const fakeRegistry = { all: () => [], size: 0 } as unknown as WindowRegistry;
+    await initGlobalServices(fakeRegistry);
+    expect(spy).not.toHaveBeenCalled();
+
+    const run = registeredTaskRuns.get("assistant-run-checkpoint-retention");
+    expect(run).toBeDefined();
+    await run!();
+    expect(spy).toHaveBeenCalledTimes(1);
   });
 
   it("defers the agent compile cache sweep rather than running it during init (#11699)", async () => {

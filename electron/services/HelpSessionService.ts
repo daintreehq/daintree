@@ -32,6 +32,14 @@ import {
 import type { ActionContext } from "../../shared/types/actions.js";
 import type { PtyClient } from "./PtyClient.js";
 import { ASSISTANT_SCRATCH_ENV_VAR, getScratchDirForSession } from "./AssistantScratchService.js";
+import {
+  ASSISTANT_RUN_CHECKPOINT_ENV_VAR,
+  ASSISTANT_RUN_CHECKPOINT_WRITER_ENV_VAR,
+  ASSISTANT_GLOBAL_CHECKPOINT_BUCKET,
+  buildRunCheckpointAddendum,
+  isSafeCheckpointSegment,
+  provisionRunCheckpointBucket,
+} from "./AssistantRunCheckpointService.js";
 import { pluginMcpGrantRegistry } from "./pluginAgentMcp/grantRegistry.js";
 import { RESERVED_PLUGIN_SERVER_KEYS } from "./pluginAgentMcp/serverKeys.js";
 import {
@@ -196,9 +204,18 @@ function runbooksJsonEntry(headers: Record<string, string>): Record<string, unkn
   };
 }
 
+/** The global Assistant has no project; its checkpoints live in the reserved `global` bucket. */
+function runCheckpointKeyFor(projectId: string): string {
+  return isGlobalAssistantId(projectId) ? ASSISTANT_GLOBAL_CHECKPOINT_BUCKET : projectId;
+}
+
 const SCRATCH_BLOCK_MARKERS = {
   start: "<!-- DAINTREE_ASSISTANT_SCRATCH_START -->",
   end: "<!-- DAINTREE_ASSISTANT_SCRATCH_END -->",
+} as const;
+const RUN_CHECKPOINT_BLOCK_MARKERS = {
+  start: "<!-- DAINTREE_ASSISTANT_RUN_CHECKPOINTS_START -->",
+  end: "<!-- DAINTREE_ASSISTANT_RUN_CHECKPOINTS_END -->",
 } as const;
 const USER_INSTRUCTIONS_BLOCK_MARKERS = {
   start: "<!-- DAINTREE_USER_INSTRUCTIONS_START -->",
@@ -439,6 +456,12 @@ interface HelpSessionRecord {
    * and mentioned in the per-agent CLAUDE.md / AGENTS.md addendum.
    */
   scratchPath: string;
+  /**
+   * Durable per-project bucket under `userData/assistant-run-checkpoints/`. Unlike
+   * `scratchPath` it survives app restarts; keyed by the immutable project id so a
+   * folder move or a Claude/Codex switch keeps the same store.
+   */
+  runCheckpointPath: string;
 }
 
 interface SessionMeta {
@@ -1571,9 +1594,8 @@ export class HelpSessionService {
     // manifest, the markdown scratch addendum and the shared `.mcp.json` — all
     // of which two lanes provisioning at once would otherwise write over each
     // other.
-    const { scratchPath, port, laneMcpConfigPath, userConfig } = await this.withDirectoryLock(
-      sessionDirName,
-      async () => {
+    const { scratchPath, runCheckpointPath, port, laneMcpConfigPath, userConfig } =
+      await this.withDirectoryLock(sessionDirName, async () => {
         await fs.mkdir(sessionsRoot, { recursive: true, mode: 0o700 });
         await fs.chmod(sessionsRoot, 0o700).catch(() => {});
         // Hash-gate the template overwrite (#7525). `fs.cp` is non-atomic — a
@@ -1714,6 +1736,22 @@ export class HelpSessionService {
         // Uses managed markers so re-provision replaces the block in place instead
         // of accumulating duplicate stanzas.
         await this.writeScratchAddendum(sessionPath, scratchPath);
+
+        // The durable counterpart: kept across launches, so it is provisioned and
+        // announced on every provision (including template-hash-gate skips) and a
+        // failure fails the provision rather than launching with a phantom store.
+        const runCheckpointPath = await provisionRunCheckpointBucket(
+          runCheckpointKeyFor(input.projectId)
+        );
+        await Promise.all(
+          ["CLAUDE.md", "AGENTS.md"].map((name) =>
+            this.writeManagedBlock(
+              path.join(sessionPath, name),
+              RUN_CHECKPOINT_BLOCK_MARKERS,
+              buildRunCheckpointAddendum()
+            )
+          )
+        );
         await this.writeRunbooksAddendum(sessionPath, runbooksEnabled(settings));
         await this.writeConfirmationsAddendum(
           sessionPath,
@@ -1809,9 +1847,8 @@ export class HelpSessionService {
             this.stripClaudeSettingsHooks(sessionPath)
           );
         }
-        return { scratchPath, port, laneMcpConfigPath, userConfig };
-      }
-    );
+        return { scratchPath, runCheckpointPath, port, laneMcpConfigPath, userConfig };
+      });
     // Codex doesn't read project-scoped `.codex/config.toml` from cwd —
     // its only mechanism for overriding the global config is the `-c key=value`
     // CLI flag (verified against codex-cli 0.129.0). MCP servers are appended
@@ -1875,6 +1912,7 @@ export class HelpSessionService {
       claudeLaunchArgs,
       userMcpServerNames: Object.keys(userConfig.mcpServers),
       scratchPath,
+      runCheckpointPath,
     };
 
     await this.writeSessionMeta(sessionPath, {
@@ -3228,6 +3266,11 @@ export class HelpSessionService {
     if (typeof input.projectPath !== "string" || !input.projectPath.trim()) {
       throw new Error("projectPath is required");
     }
+    // The checkpoint bucket is keyed by this id, so refuse an unusable one here,
+    // before the prior lane is displaced.
+    if (!isSafeCheckpointSegment(runCheckpointKeyFor(input.projectId))) {
+      throw new Error("projectId is not usable as a run-checkpoint key");
+    }
     // Absent means slot 0 (pre-slot callers and fixtures). Present but invalid
     // is a caller bug: clamping it would silently displace whichever lane the
     // clamp landed on, which is exactly the cross-lane kill the slot key
@@ -3342,7 +3385,8 @@ export class HelpSessionService {
   }
 
   /**
-   * Returns the per-session env vars for the assistant scratch folder.
+   * Returns the per-session env vars for the assistant scratch folder and the
+   * durable run-checkpoint bucket (plus this session's writer id).
    * Injected into the PTY spawn env for every help-session agent — Claude,
    * Codex, and Copilot all read env vars from their PTY parent, so this
    * single getter covers them all. Pairs with the markdown addendum
@@ -3354,7 +3398,11 @@ export class HelpSessionService {
     if (!token) return null;
     const record = this.sessionsByToken.get(token);
     if (!record || record.revoked) return null;
-    return { [ASSISTANT_SCRATCH_ENV_VAR]: record.scratchPath };
+    return {
+      [ASSISTANT_SCRATCH_ENV_VAR]: record.scratchPath,
+      [ASSISTANT_RUN_CHECKPOINT_ENV_VAR]: record.runCheckpointPath,
+      [ASSISTANT_RUN_CHECKPOINT_WRITER_ENV_VAR]: record.sessionId,
+    };
   }
 
   /**
