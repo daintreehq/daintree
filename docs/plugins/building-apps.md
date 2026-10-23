@@ -109,6 +109,8 @@ Your `open` command dispatches `panel.openPluginPanel` with `{ kind: host.panelK
 
 To tie the parts together, declare the top-level [`application`](./manifest.md#application) block in `plugin.json`. It names the app and where it opens, and points at the Home, sidebar view, settings view, welcome tour, first command and agent endpoints the manifest already declares, so the host knows these contributions are one application rather than unrelated pieces.
 
+When the app has more than one place to be — a list and its records, a few tabs — declare them as [`application.navigation`](./manifest.md#applicationnavigation) sections rather than routing inside each view. Every view of the app gets the same live location through `PanelViewProps.navigation`: a click in the sidebar view moves the Home and the panels with it, back and forward work across them, and the location comes back after a restart. See [Views → Application navigation](./views.md#application-navigation).
+
 ## Choosing a store
 
 Pick by the shape of the data and by who needs to read it, not by what is quickest to code.

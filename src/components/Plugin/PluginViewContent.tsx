@@ -37,6 +37,7 @@ import {
 } from "@/services/plugin/pluginPanelLifecycle";
 import { registerPanelReloadHandler } from "@/services/plugin/pluginPanelReload";
 import { useAuthoredRunningActions } from "@/services/plugin/runningPluginActions";
+import { useApplicationNavigation } from "@/hooks/useApplicationNavigation";
 import { Package } from "lucide-react";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import type { ErrorFallbackProps } from "@/components/ErrorBoundary/ErrorFallback";
@@ -1775,6 +1776,25 @@ export function makePluginViewContent(
       () => (setPanelTitle ? (title: string | null) => setTitleFor(retryCount, title) : undefined),
       [setPanelTitle, setTitleFor, retryCount]
     );
+    // The project application's shared location (#14108), bound to this
+    // attempt and its teardown like the setters above. A user-scope settings
+    // section follows the user across projects, so it has no project to move.
+    // An attempt whose dispose signal aborted — a kind removed under a mounted
+    // view — is gone even before a retry bumps the counter.
+    const isNavigationAttemptCurrent = useCallback(
+      (attempt: number): boolean =>
+        !toolbarClosedRef.current &&
+        attempt === attemptRef.current &&
+        !controllerRef.current.signal.aborted,
+      []
+    );
+    const navigation = useApplicationNavigation({
+      pluginId,
+      panelId,
+      enabled: !(hostContext.kind === "settings" && settingsContext?.scope === "user"),
+      attempt: retryCount,
+      isAttemptCurrent: isNavigationAttemptCurrent,
+    });
     const runningActions = useAuthoredRunningActions(pluginId);
 
     // The user's reload reaches this mount through the lifecycle service, which
@@ -2038,6 +2058,7 @@ export function makePluginViewContent(
                           {...(settingsContext ? { settingsContext } : {})}
                           {...(fileDocument ? { fileDocument } : {})}
                           hostContext={hostContext}
+                          {...(navigation ? { navigation } : {})}
                         />
                       </PluginKitViewHostContext.Provider>
                     </PluginKitOwnerContext.Provider>

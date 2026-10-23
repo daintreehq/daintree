@@ -45,6 +45,7 @@ let _getFleetLastArmedId: (() => string | null) | null = null;
 let _getAgentSettingsEntry: ((agentId: string) => AgentSettingsEntry | undefined) | null = null;
 let _getGlobalUseAltScreen: (() => boolean | undefined) | null = null;
 let _exitProjectHome: (() => void) | null = null;
+let _panelMaximize: { isMaximized: () => boolean; exit: () => void } | null = null;
 
 export function setAgentSettingsEntryAccessor(
   getter: (agentId: string) => AgentSettingsEntry | undefined
@@ -240,6 +241,23 @@ export function exitProjectHome(): void {
   _exitProjectHome?.();
 }
 
+export function setPanelMaximizeAccessor(accessor: {
+  isMaximized: () => boolean;
+  exit: () => void;
+}): void {
+  _panelMaximize = accessor;
+}
+
+/** Whether a maximized panel or group is drawing over the main area. `false` until registered. */
+export function isPanelMaximized(): boolean {
+  return _panelMaximize?.isMaximized() ?? false;
+}
+
+/** Leave a maximize, so the main area underneath shows. A no-op until registered. */
+export function exitPanelMaximize(): void {
+  _panelMaximize?.exit();
+}
+
 export function resetStoreAccessorsForTesting(): void {
   _getPanelStoreState = null;
   _getWorktreeSelectionState = null;
@@ -254,4 +272,5 @@ export function resetStoreAccessorsForTesting(): void {
   _getFleetArmedIds = null;
   _getFleetLastArmedId = null;
   _exitProjectHome = null;
+  _panelMaximize = null;
 }

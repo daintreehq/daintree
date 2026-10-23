@@ -228,6 +228,67 @@ interface PluginViewHostContext {
  *   while the plugin host APIs are still live.
  * - `panelRemovedSignal` aborts ONLY when the panel is permanently gone.
  */
+/** A value a navigation parameter holds: an identifier, a safe integer or a flag. */
+type PluginNavigationParamValue = string | number | boolean;
+/** Where an application is: one of its declared sections, with its parameters. */
+interface PluginNavigationLocation {
+    readonly sectionId: string;
+    readonly params: Readonly<Record<string, PluginNavigationParamValue>>;
+}
+/** A request to go to a declared section (#14108). */
+interface PluginNavigationIntent {
+    sectionId: string;
+    /** Only parameters the section declares, each of its declared type. */
+    params?: Record<string, PluginNavigationParamValue>;
+    /** Replace the current history entry instead of adding one. */
+    replace?: boolean;
+    /**
+     * Bring the application's destination forward (its Home, or the grid) as
+     * well as moving the location. Defaults to `true`; `false` changes only the
+     * shared selection.
+     */
+    reveal?: boolean;
+}
+/**
+ * Why a navigation was refused. Nothing moved: not the location, the history,
+ * the main area nor focus.
+ *
+ * - `invalid-intent` — not an intent object.
+ * - `unknown-section` — the application declares no such section.
+ * - `invalid-params` — a parameter is undeclared, missing, or not its declared type or bounds.
+ * - `too-large` — the location is over the size cap.
+ * - `unsaved` — a view of the application reports unsaved work; save or drop it, then retry.
+ * - `no-history` — nothing to go back or forward to.
+ * - `stale` — the call came from a view attempt that is gone, or an application no longer in force.
+ */
+type PluginNavigationRefusal = "invalid-intent" | "unknown-section" | "invalid-params" | "too-large" | "unsaved" | "no-history" | "stale";
+type PluginNavigationResult = {
+    readonly ok: true;
+    readonly location: PluginNavigationLocation;
+} | {
+    readonly ok: false;
+    readonly reason: PluginNavigationRefusal;
+};
+/**
+ * The project application's shared navigation, as one of its views sees it
+ * (#14108). Every view of the application in the project — its sidebar view,
+ * its Home, its panels — holds the same location and re-renders when it moves,
+ * so selection in one is selection in all.
+ */
+interface PluginApplicationNavigationApi {
+    /** The current location. A new object only when the location changes. */
+    readonly location: PluginNavigationLocation;
+    /** The declared sections, in manifest order. */
+    readonly sections: readonly {
+        readonly id: string;
+        readonly title: string;
+    }[];
+    readonly canGoBack: boolean;
+    readonly canGoForward: boolean;
+    navigate(intent: PluginNavigationIntent): PluginNavigationResult;
+    back(): PluginNavigationResult;
+    forward(): PluginNavigationResult;
+}
 interface PanelViewProps {
     readonly panelId: string;
     readonly pluginId: string;
@@ -556,6 +617,31 @@ interface PanelViewProps {
      * sensible default rather than switching on it exhaustively.
      */
     readonly hostContext?: PluginViewHostContext;
+    /**
+     * The project application's navigation (#14108): the location its declared
+     * sections share across the application's sidebar view, Home and panels,
+     * with back and forward.
+     *
+     * Handed only to views of the plugin whose `application` is in force in
+     * this project and declares `navigation`; absent otherwise, and absent in a
+     * user-scope settings section, which belongs to no project. Live: the view
+     * re-renders with a new `location` when any view of the application moves
+     * it, without remounting, so it keeps its own state, its `initialArgs` and
+     * its {@link disposeSignal}.
+     *
+     * The location is restored per project after a remount, an evicted renderer
+     * or a restart, but only parameters declared `persist` are written to disk;
+     * the others last as long as the project's renderer, so they survive a
+     * remount but not an evicted or reloaded renderer. A location that no longer
+     * resolves — its section removed, a parameter that no longer validates, a
+     * raised `navigation.version` — restores as the default section.
+     *
+     * Navigation is refused with `unsaved` while any view of the application
+     * reports {@link setHasUnsavedChanges}, so a pending form is never replaced:
+     * persist the draft or drop it, clear the flag, and navigate again. A
+     * callback held past this view attempt refuses with `stale`.
+     */
+    readonly navigation?: PluginApplicationNavigationApi;
 }
 /**
  * Where a project is, as {@link PluginActivationApi.onDidChangeProjectPresence}

@@ -1527,6 +1527,60 @@ export interface PluginApplicationTourRef {
 }
 
 /**
+ * Bounds on an application's navigation (#14108), shared by the manifest
+ * schema and the runtime validator so a declaration the schema admits is one
+ * the host can always hold.
+ */
+export const PLUGIN_APPLICATION_NAVIGATION_LIMITS = Object.freeze({
+  maxVersion: 1_000_000,
+  maxSections: 24,
+  maxIdLength: 64,
+  maxTitleLength: 64,
+  maxParamsPerSection: 8,
+  maxParamNameLength: 32,
+  defaultStringLength: 64,
+  maxStringLength: 128,
+  /** Serialized size of one location, as UTF-8 JSON. */
+  maxLocationBytes: 2048,
+  /** Entries in one project's history, the current one included. */
+  maxHistoryEntries: 30,
+});
+
+/**
+ * One declared parameter of a section. Values are identifiers, not content:
+ * a string holds only the manifest id vocabulary (`[A-Za-z0-9._-]`), so a
+ * free-text field, a URL or a token can't be expressed. Only a parameter
+ * marked `persist` is written to disk; the rest live as long as the project's renderer.
+ */
+export type PluginApplicationNavigationParam =
+  | { type: "string"; required?: boolean; persist?: boolean; maxLength?: number }
+  | { type: "integer"; required?: boolean; persist?: boolean }
+  | { type: "boolean"; required?: boolean; persist?: boolean };
+
+/** A named destination of the application: a section, and the record parameters it takes. */
+export interface PluginApplicationSection {
+  id: string;
+  title: string;
+  params?: Record<string, PluginApplicationNavigationParam>;
+}
+
+/**
+ * `application.navigation` (#14108): the destinations the application's
+ * views navigate between. The host keeps one location and history per project
+ * for them, shared by every view of the application.
+ */
+export interface PluginApplicationNavigation {
+  /**
+   * The navigation schema's revision. Raising it drops the saved location and
+   * history, so a renamed parameter never restores with its old meaning.
+   */
+  version: number;
+  /** Where the application starts, and where a location that no longer resolves lands. */
+  defaultSectionId: string;
+  sections: PluginApplicationSection[];
+}
+
+/**
  * The top-level `application` block of a project plugin's manifest (#14097).
  *
  * Declarative only: it names the application and points at contributions the
@@ -1563,6 +1617,7 @@ export interface PluginApplicationDescriptor {
   requiredTools?: string[];
   /** Suggested presentation levels, in the host's closed vocabulary. */
   presentation?: Partial<Record<string, "shown" | "demoted" | "hidden">>;
+  navigation?: PluginApplicationNavigation;
 }
 
 /**
@@ -1943,6 +1998,73 @@ export const PLUGIN_STYLE_ROOT_ATTRIBUTE = "data-daintree-plugin-style-root";
  *   while the plugin host APIs are still live.
  * - `panelRemovedSignal` aborts ONLY when the panel is permanently gone.
  */
+/** A value a navigation parameter holds: an identifier, a safe integer or a flag. */
+export type PluginNavigationParamValue = string | number | boolean;
+
+/** Where an application is: one of its declared sections, with its parameters. */
+export interface PluginNavigationLocation {
+  readonly sectionId: string;
+  readonly params: Readonly<Record<string, PluginNavigationParamValue>>;
+}
+
+/** A request to go to a declared section (#14108). */
+export interface PluginNavigationIntent {
+  sectionId: string;
+  /** Only parameters the section declares, each of its declared type. */
+  params?: Record<string, PluginNavigationParamValue>;
+  /** Replace the current history entry instead of adding one. */
+  replace?: boolean;
+  /**
+   * Bring the application's destination forward (its Home, or the grid) as
+   * well as moving the location. Defaults to `true`; `false` changes only the
+   * shared selection.
+   */
+  reveal?: boolean;
+}
+
+/**
+ * Why a navigation was refused. Nothing moved: not the location, the history,
+ * the main area nor focus.
+ *
+ * - `invalid-intent` — not an intent object.
+ * - `unknown-section` — the application declares no such section.
+ * - `invalid-params` — a parameter is undeclared, missing, or not its declared type or bounds.
+ * - `too-large` — the location is over the size cap.
+ * - `unsaved` — a view of the application reports unsaved work; save or drop it, then retry.
+ * - `no-history` — nothing to go back or forward to.
+ * - `stale` — the call came from a view attempt that is gone, or an application no longer in force.
+ */
+export type PluginNavigationRefusal =
+  | "invalid-intent"
+  | "unknown-section"
+  | "invalid-params"
+  | "too-large"
+  | "unsaved"
+  | "no-history"
+  | "stale";
+
+export type PluginNavigationResult =
+  | { readonly ok: true; readonly location: PluginNavigationLocation }
+  | { readonly ok: false; readonly reason: PluginNavigationRefusal };
+
+/**
+ * The project application's shared navigation, as one of its views sees it
+ * (#14108). Every view of the application in the project — its sidebar view,
+ * its Home, its panels — holds the same location and re-renders when it moves,
+ * so selection in one is selection in all.
+ */
+export interface PluginApplicationNavigationApi {
+  /** The current location. A new object only when the location changes. */
+  readonly location: PluginNavigationLocation;
+  /** The declared sections, in manifest order. */
+  readonly sections: readonly { readonly id: string; readonly title: string }[];
+  readonly canGoBack: boolean;
+  readonly canGoForward: boolean;
+  navigate(intent: PluginNavigationIntent): PluginNavigationResult;
+  back(): PluginNavigationResult;
+  forward(): PluginNavigationResult;
+}
+
 export interface PanelViewProps {
   readonly panelId: string;
   readonly pluginId: string;
@@ -2274,6 +2396,31 @@ export interface PanelViewProps {
    * sensible default rather than switching on it exhaustively.
    */
   readonly hostContext?: PluginViewHostContext;
+  /**
+   * The project application's navigation (#14108): the location its declared
+   * sections share across the application's sidebar view, Home and panels,
+   * with back and forward.
+   *
+   * Handed only to views of the plugin whose `application` is in force in
+   * this project and declares `navigation`; absent otherwise, and absent in a
+   * user-scope settings section, which belongs to no project. Live: the view
+   * re-renders with a new `location` when any view of the application moves
+   * it, without remounting, so it keeps its own state, its `initialArgs` and
+   * its {@link disposeSignal}.
+   *
+   * The location is restored per project after a remount, an evicted renderer
+   * or a restart, but only parameters declared `persist` are written to disk;
+   * the others last as long as the project's renderer, so they survive a
+   * remount but not an evicted or reloaded renderer. A location that no longer
+   * resolves — its section removed, a parameter that no longer validates, a
+   * raised `navigation.version` — restores as the default section.
+   *
+   * Navigation is refused with `unsaved` while any view of the application
+   * reports {@link setHasUnsavedChanges}, so a pending form is never replaced:
+   * persist the draft or drop it, clear the flag, and navigate again. A
+   * callback held past this view attempt refuses with `stale`.
+   */
+  readonly navigation?: PluginApplicationNavigationApi;
 }
 
 /**

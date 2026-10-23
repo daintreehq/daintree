@@ -58,6 +58,17 @@ export type {
   PluginSettingsViewFocus,
   PluginSettingsPageContribution,
 } from "./plugin.js";
+
+// ── Application navigation (view-facing) ───────────────────────────
+
+export type {
+  PluginApplicationNavigationApi,
+  PluginNavigationIntent,
+  PluginNavigationLocation,
+  PluginNavigationParamValue,
+  PluginNavigationRefusal,
+  PluginNavigationResult,
+} from "./plugin.js";
 // A value, not a type: a bundled view marking its own portal container needs
 // the attribute name at runtime. A raw `plugin://` view cannot import this, so
 // `PanelViewProps.styleRootAttributes` carries the same thing as a prop.
@@ -97,6 +108,9 @@ export type {
   AssistantKnowledgeEntry,
   PluginApplicationDescriptor,
   PluginApplicationDestination,
+  PluginApplicationNavigation,
+  PluginApplicationNavigationParam,
+  PluginApplicationSection,
   PluginApplicationTourRef,
 } from "./plugin.js";
 
