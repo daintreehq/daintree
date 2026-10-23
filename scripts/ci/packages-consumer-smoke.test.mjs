@@ -1,7 +1,14 @@
 import fs from "node:fs";
 import path from "node:path";
 import { describe, it, expect } from "vitest";
-import { PUBLISH_WORKSPACES, classifySubpath, exportTargets } from "./packages-consumer-smoke.mjs";
+import {
+  PUBLISH_WORKSPACES,
+  classifySubpath,
+  exportTargets,
+  isolatedEnv,
+  normalizeExports,
+  tarballFilename,
+} from "./packages-consumer-smoke.mjs";
 
 describe("packages-consumer-smoke", () => {
   it("smokes the same workspaces the release workflow publishes", () => {
@@ -49,5 +56,55 @@ describe("packages-consumer-smoke", () => {
       typed: false,
       targets: ["./browser/preview.css"],
     });
+  });
+
+  it("fails on an export shape it cannot exercise instead of skipping it", () => {
+    expect(() => classifySubpath("./cjs", { require: "./dist/a.cjs" })).toThrow(/require/);
+    expect(() =>
+      classifySubpath("./either", { browser: "./browser/a.js", node: "./dist/a.js" })
+    ).toThrow(/browser, node/);
+    expect(() => classifySubpath("./*", "./dist/*.js")).toThrow(/wildcard/);
+  });
+
+  it("treats a bare declaration target as typed", () => {
+    expect(classifySubpath("./types", "./dist/types.d.ts")).toMatchObject({
+      importable: false,
+      typed: true,
+    });
+  });
+
+  it("expands exports shorthand to the root subpath", () => {
+    expect(normalizeExports("./index.js")).toEqual({ ".": "./index.js" });
+    expect(normalizeExports({ import: "./index.js" })).toEqual({ ".": { import: "./index.js" } });
+    expect(normalizeExports({ ".": "./index.js" })).toEqual({ ".": "./index.js" });
+    expect(normalizeExports(undefined)).toEqual({});
+  });
+
+  it("names tarballs the way npm pack writes them", () => {
+    expect(tarballFilename("@daintreehq/plugin-sdk", "0.2.0")).toBe(
+      "daintreehq-plugin-sdk-0.2.0.tgz"
+    );
+    expect(tarballFilename("daintree-plugin", "0.2.0")).toBe("daintree-plugin-0.2.0.tgz");
+  });
+
+  it("keeps the repository's tools and workspace selection out of the consumer", () => {
+    const root = path.resolve("/repo");
+    const env = isolatedEnv(
+      {
+        PATH: [
+          path.join(root, "node_modules/.bin"),
+          "/usr/bin",
+          path.join(root, "packages/x/node_modules/.bin"),
+        ].join(path.delimiter),
+        npm_config_workspace: "packages/plugin-sdk",
+        NPM_CONFIG_WORKSPACES: "true",
+        npm_config_registry: "https://registry.npmjs.org/",
+      },
+      root
+    );
+    expect(env.PATH).toBe("/usr/bin");
+    expect(env).not.toHaveProperty("npm_config_workspace");
+    expect(env).not.toHaveProperty("NPM_CONFIG_WORKSPACES");
+    expect(env.npm_config_registry).toBe("https://registry.npmjs.org/");
   });
 });

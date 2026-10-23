@@ -61,16 +61,78 @@ const CONSUMER_DEPENDENCIES = [
 // The scaffold's devDependencies that name a package released from this repo.
 const SCAFFOLD_TOOLCHAIN = ["@daintreehq/plugin-sdk", "@daintreehq/plugin-vite", "daintree-plugin"];
 
+// Named runtime exports an author relies on. Importing every subpath only
+// proves each module loads; these prove the packed JavaScript still carries
+// what the declarations promise.
+const EXPECTED_EXPORTS = {
+  "@daintreehq/plugin-sdk": {
+    PLUGIN_STYLE_ROOT_ATTRIBUTE: "string",
+    PLUGIN_PROCESS_STREAM_CHANNEL: "string",
+  },
+  "@daintreehq/plugin-sdk/testing": { createMockHost: "function" },
+  "@daintreehq/plugin-vite": { daintreePlugin: "function" },
+  "@daintreehq/tour": { TourPlayer: "function" },
+  "@daintreehq/tour/react": { useCue: "function" },
+  "@daintreehq/tour/kit": { MockCursor: "function" },
+  "@daintreehq/tour/mock-app": { MockApp: "function" },
+};
+
+// The conditions this script knows how to exercise. Anything else fails loudly
+// rather than going unchecked.
+const KNOWN_CONDITIONS = new Set(["types", "import", "default"]);
+
+export function isInside(child, parent) {
+  const rel = path.relative(parent, path.resolve(child));
+  return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
+}
+
+/**
+ * The environment for every child: no inherited workspace selection (it would
+ * retarget each npm command) and no repository `node_modules/.bin` on PATH,
+ * which `npm run` adds and which would let a scaffold script borrow a tool it
+ * never declared.
+ */
+export function isolatedEnv(env, root = repoRoot) {
+  const out = {};
+  for (const [key, value] of Object.entries(env)) {
+    if (/^npm_config_workspaces?$/i.test(key)) continue;
+    out[key] = value;
+  }
+  out.PATH = (env.PATH ?? "")
+    .split(path.delimiter)
+    .filter((entry) => entry && !isInside(entry, root))
+    .join(path.delimiter);
+  return out;
+}
+
+const childEnv = isolatedEnv(process.env);
+
 function run(cmd, args, cwd, { capture = false } = {}) {
   console.log(`$ ${cmd} ${args.join(" ")}  (in ${cwd})`);
   return execFileSync(cmd, args, {
     cwd,
     encoding: "utf8",
     stdio: capture ? ["ignore", "pipe", "inherit"] : "inherit",
-    // npm resolves `npm_config_*` from the parent's environment; a workspace
-    // flag inherited from an `npm run` wrapper would retarget every command.
-    env: { ...process.env, npm_config_workspace: undefined, npm_config_workspaces: undefined },
+    env: childEnv,
   });
+}
+
+/** The file `npm pack` writes for a package: `@scope/name` becomes `scope-name-<version>.tgz`. */
+export function tarballFilename(name, version) {
+  return `${name.replace(/^@/, "").replace("/", "-")}-${version}.tgz`;
+}
+
+/** An exports field in its subpath-map form; `"./index.js"` and bare condition maps are shorthand for `"."`. */
+export function normalizeExports(exports) {
+  if (exports === undefined || exports === null) return {};
+  if (
+    typeof exports === "string" ||
+    Array.isArray(exports) ||
+    !Object.keys(exports).some((key) => key.startsWith("."))
+  ) {
+    return { ".": exports };
+  }
+  return exports;
 }
 
 /** Every string leaf of an exports entry, with the condition path that led to it. */
@@ -85,36 +147,46 @@ export function exportTargets(entry, conditions = []) {
 /**
  * How a consumer reaches one exports subpath. Node imports a JS target, except
  * one under `./browser/`, which is a bundle served to a browser page. A subpath
- * with only a `types` condition, or a stylesheet, has nothing to import.
+ * with only a `types` condition, or a stylesheet, has nothing to import. A
+ * wildcard subpath or an unknown condition throws, so a new export shape can't
+ * slip through unchecked.
  */
 export function classifySubpath(subpath, entry) {
+  if (subpath.includes("*")) {
+    throw new Error(
+      `exports["${subpath}"]: wildcard subpaths are not smoke-tested; list each entry`
+    );
+  }
   const targets = exportTargets(entry);
-  const runtime = targets.find(
-    (t) => !t.conditions.includes("types") && /\.(m?js)$/.test(t.target)
+  const unknown = new Set(
+    targets.flatMap((t) => t.conditions).filter((c) => !KNOWN_CONDITIONS.has(c))
   );
+  if (unknown.size > 0) {
+    throw new Error(
+      `exports["${subpath}"] uses ${[...unknown].join(", ")}, which this smoke test does not exercise; teach classifySubpath to check it`
+    );
+  }
+  const runtime = targets.find((t) => !t.conditions.includes("types") && /\.m?js$/.test(t.target));
   return {
     subpath,
     targets: targets.map((t) => t.target),
     importable: Boolean(runtime) && !runtime.target.startsWith("./browser/"),
-    typed: targets.some((t) => t.conditions.includes("types")),
+    typed: targets.some((t) => t.conditions.includes("types") || /\.d\.[cm]?ts$/.test(t.target)),
   };
 }
 
 function packTarballs(destination) {
   const tarballs = new Map();
   for (const dir of PUBLISH_WORKSPACES) {
-    const out = run(
-      "npm",
-      ["pack", `--workspace=${dir}`, "--pack-destination", destination, "--json"],
-      repoRoot,
-      { capture: true }
+    // The filename comes from the manifest rather than `npm pack --json`, whose
+    // stdout lifecycle scripts (the SDK's prepack among them) write into too.
+    const { name, version } = JSON.parse(
+      fs.readFileSync(path.join(repoRoot, dir, "package.json"), "utf8")
     );
-    // Lifecycle scripts (the SDK's prepack logs a line in brackets) share
-    // stdout with npm's JSON, so find the array where it actually starts.
-    const start = out.search(/^\[\s*\{/m);
-    if (start < 0) throw new Error(`npm pack --workspace=${dir} printed no JSON:\n${out}`);
-    const [info] = JSON.parse(out.slice(start));
-    tarballs.set(info.name, { file: path.join(destination, info.filename), version: info.version });
+    run("npm", ["pack", `--workspace=${dir}`, "--pack-destination", destination], repoRoot);
+    const file = path.join(destination, tarballFilename(name, version));
+    if (!fs.existsSync(file)) throw new Error(`npm pack --workspace=${dir} did not write ${file}`);
+    tarballs.set(name, { file, version });
   }
   return tarballs;
 }
@@ -125,8 +197,10 @@ function checkEntryPoints(consumer, tarballs) {
   for (const name of tarballs.keys()) {
     const pkgDir = path.join(consumer, "node_modules", name);
     const pkg = JSON.parse(fs.readFileSync(path.join(pkgDir, "package.json"), "utf8"));
-    for (const [subpath, entry] of Object.entries(pkg.exports ?? {})) {
+    for (const [subpath, entry] of Object.entries(normalizeExports(pkg.exports))) {
       const info = classifySubpath(subpath, entry);
+      // A null target is an explicit exclusion: nothing to ship or check.
+      if (info.targets.length === 0) continue;
       for (const target of info.targets) {
         if (!fs.existsSync(path.join(pkgDir, target))) {
           throw new Error(
@@ -151,12 +225,20 @@ function checkEntryPoints(consumer, tarballs) {
     }
   }
 
+  for (const specifier of Object.keys(EXPECTED_EXPORTS)) {
+    if (!imports.includes(specifier))
+      throw new Error(`${specifier} is no longer an importable export`);
+  }
   const importScript = path.join(consumer, "import-all.mjs");
   fs.writeFileSync(
     importScript,
-    `for (const specifier of ${JSON.stringify(imports)}) {\n` +
+    `const expected = ${JSON.stringify(EXPECTED_EXPORTS)};\n` +
+      `for (const specifier of ${JSON.stringify(imports)}) {\n` +
       `  const mod = await import(specifier);\n` +
       `  if (Object.keys(mod).length === 0) throw new Error(specifier + " exports nothing");\n` +
+      `  for (const [symbol, type] of Object.entries(expected[specifier] ?? {})) {\n` +
+      `    if (typeof mod[symbol] !== type) throw new Error(specifier + ": " + symbol + " is " + typeof mod[symbol] + ", expected " + type);\n` +
+      `  }\n` +
       `  console.log("import ok: " + specifier);\n` +
       `}\n`
   );
@@ -175,7 +257,9 @@ function checkEntryPoints(consumer, tarballs) {
         lib: ["ES2022", "DOM"],
         jsx: "react-jsx",
         strict: true,
-        skipLibCheck: true,
+        // Checked, not skipped: a shipped declaration that re-exports a file
+        // left out of the tarball only errors inside that declaration.
+        skipLibCheck: false,
         noEmit: true,
       },
       files: ["types-check.ts"],
@@ -250,6 +334,11 @@ function checkScaffold(root, consumer, tarballs) {
 function main() {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "daintree-packages-smoke-")));
   try {
+    // Node and TypeScript resolve packages up the directory tree, so a consumer
+    // inside the checkout would quietly see the repository's node_modules.
+    if (isInside(root, fs.realpathSync(repoRoot))) {
+      throw new Error(`temp dir ${root} is inside the repository; point TMPDIR elsewhere`);
+    }
     const tarballDir = path.join(root, "tarballs");
     fs.mkdirSync(tarballDir);
     const tarballs = packTarballs(tarballDir);
