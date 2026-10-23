@@ -33,6 +33,12 @@ vi.mock("@/hooks/useWorktreeTerminals", () => ({
 vi.mock("@/store/projectStore", () => ({
   useProjectStore: { getState: () => ({ openGitInitDialog }) },
 }));
+// Whether the project hides the dev preview is its presentation profile's to
+// say (#14069), and the store above can't be subscribed to.
+vi.mock("@/hooks/useResolvedPresentation", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/hooks/useResolvedPresentation")>()),
+  useDevPreviewHidden: () => false,
+}));
 vi.mock("@/services/ActionService", () => ({
   actionService: {
     dispatch: (id: string, args?: unknown, opts?: unknown) => dispatch(id, args, opts),

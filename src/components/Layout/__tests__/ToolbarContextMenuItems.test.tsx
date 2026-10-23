@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, fireEvent } from "@testing-library/react";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { render, fireEvent, cleanup } from "@testing-library/react";
 import { TOOLBAR_CUSTOMIZE_LABEL } from "../toolbarMenuStrings";
 
 const dispatchMock = vi.fn();
@@ -114,6 +114,13 @@ vi.mock("@/components/ui/dropdown-menu", () => ({
 }));
 
 import { ToolbarContextMenuItems } from "../ToolbarContextMenuItems";
+import { TOOLBAR_HIDE_IN_PROJECT_LABEL } from "../toolbarMenuStrings";
+import { useProjectStore } from "@/store/projectStore";
+import {
+  _resetProjectPresentationStoreForTest,
+  useProjectPresentationStore,
+} from "@/store/projectPresentationStore";
+import type { Project } from "@shared/types/project";
 
 beforeEach(() => {
   dispatchMock.mockClear();
@@ -197,5 +204,88 @@ describe("ToolbarContextMenuItems", () => {
     fireEvent.click(unpin);
     expect(onUnpinMock).toHaveBeenCalledTimes(1);
     expect(toggleButtonVisibilityMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("ToolbarContextMenuItems — the dev preview (#14069)", () => {
+  const PROJECT = "a".repeat(64);
+  const setLevelMock = vi.fn(() => Promise.resolve(true));
+  const initialSetLevel = useProjectPresentationStore.getState().setLevel;
+
+  function profileLoaded(levels = {}) {
+    const project: Project = {
+      id: PROJECT,
+      name: "Repo",
+      path: "/repo",
+      emoji: "",
+      lastOpened: 0,
+      gitBacked: true,
+    };
+    useProjectStore.setState({ currentProject: project, projects: [project] });
+    useProjectPresentationStore.setState({
+      loaded: true,
+      projectId: PROJECT,
+      levels,
+      setLevel: setLevelMock,
+    });
+  }
+
+  function itemLabelled(label: string, testId = "context-menu-item") {
+    return Array.from(document.querySelectorAll(`[data-testid="${testId}"]`)).find(
+      (el) => (el.textContent ?? "").trim() === label
+    );
+  }
+
+  beforeEach(() => {
+    _resetProjectPresentationStoreForTest();
+    setLevelMock.mockClear();
+  });
+
+  afterEach(() => {
+    cleanup();
+    useProjectPresentationStore.setState({ setLevel: initialSetLevel });
+    _resetProjectPresentationStoreForTest();
+    useProjectStore.setState({ currentProject: null, projects: [] });
+  });
+
+  it("hides it in this project alone", () => {
+    profileLoaded();
+    render(<ToolbarContextMenuItems buttonId="dev-server" side="left" />);
+    const hide = itemLabelled(TOOLBAR_HIDE_IN_PROJECT_LABEL);
+    expect(hide).toBeDefined();
+    fireEvent.click(hide!);
+    expect(setLevelMock).toHaveBeenCalledWith("devServer", "hidden");
+    expect(toggleButtonVisibilityMock).not.toHaveBeenCalled();
+  });
+
+  it("offers it in the dropdown variant too", () => {
+    profileLoaded();
+    render(<ToolbarContextMenuItems buttonId="dev-server" side="left" variant="dropdown" />);
+    expect(itemLabelled(TOOLBAR_HIDE_IN_PROJECT_LABEL, "dropdown-menu-item")).toBeDefined();
+  });
+
+  it("isn't offered before main has answered for the project, or on another button", () => {
+    render(<ToolbarContextMenuItems buttonId="dev-server" side="left" />);
+    expect(itemLabelled(TOOLBAR_HIDE_IN_PROJECT_LABEL)).toBeUndefined();
+    cleanup();
+    profileLoaded();
+    render(<ToolbarContextMenuItems buttonId="browser" side="left" />);
+    expect(itemLabelled(TOOLBAR_HIDE_IN_PROJECT_LABEL)).toBeUndefined();
+  });
+
+  it("unpins a button this project placed itself from this project only", () => {
+    profileLoaded({ devServer: "shown" });
+    render(<ToolbarContextMenuItems buttonId="dev-server" side="left" />);
+    fireEvent.click(itemLabelled("Unpin from toolbar")!);
+    expect(setLevelMock).toHaveBeenCalledWith("devServer", "demoted");
+    expect(toggleButtonVisibilityMock).not.toHaveBeenCalled();
+  });
+
+  it("still unpins app-wide where the project set nothing", () => {
+    profileLoaded();
+    render(<ToolbarContextMenuItems buttonId="dev-server" side="left" />);
+    fireEvent.click(itemLabelled("Unpin from toolbar")!);
+    expect(toggleButtonVisibilityMock).toHaveBeenCalledWith("dev-server", "left");
+    expect(setLevelMock).not.toHaveBeenCalled();
   });
 });

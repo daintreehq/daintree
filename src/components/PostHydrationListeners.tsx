@@ -14,7 +14,11 @@ import { useForgeRateLimit } from "../hooks/useForgeRateLimit";
 import { useStoreUpdateListener } from "../hooks/useStoreUpdateListener";
 import { usePluginUpdateCheckListener } from "../hooks/usePluginUpdateCheckListener";
 import { useSoundPlaybackListener } from "../hooks/useSoundPlaybackListener";
-import { useRecipeFocusReload, useWorktreeDevServerStateSync } from "../hooks/app";
+import {
+  useDevPreviewOfferSync,
+  useRecipeFocusReload,
+  useWorktreeDevServerStateSync,
+} from "../hooks/app";
 
 /**
  * Hosts the listener hooks that only do meaningful work after app state has
@@ -43,6 +47,7 @@ export function PostHydrationListeners() {
   useForgeRateLimit();
   useRecipeFocusReload();
   useWorktreeDevServerStateSync();
+  useDevPreviewOfferSync();
   useSoundPlaybackListener();
   useStoreUpdateListener();
   usePluginUpdateCheckListener();

@@ -265,6 +265,12 @@ export interface WorktreeMenuItemsProps {
    * row keeps its action, so the palette reaches each by its id regardless.
    */
   quietGit?: boolean;
+  /**
+   * The project hides the dev preview (#14069), so the launch row goes. Its
+   * Start, Stop and Restart rows stay: a server already running is still the
+   * user's to control.
+   */
+  hideDevPreview?: boolean;
 }
 
 /**
@@ -371,6 +377,7 @@ export function WorktreeMenuItems({
   onRestartDevServer,
   pluginItems,
   quietGit = false,
+  hideDevPreview = false,
 }: WorktreeMenuItemsProps) {
   const source = useMenuActionSource();
   // Group labels in the Extensions submenu name a plugin to the user, and a
@@ -427,10 +434,12 @@ export function WorktreeMenuItems({
           <Globe className={ICON} />
           Browser
         </C.Item>
-        <C.Item onSelect={() => onLaunchAgent?.("dev-preview")} disabled={!onLaunchAgent}>
-          <MonitorPlay className={ICON} />
-          Dev preview
-        </C.Item>
+        {!hideDevPreview && (
+          <C.Item onSelect={() => onLaunchAgent?.("dev-preview")} disabled={!onLaunchAgent}>
+            <MonitorPlay className={ICON} />
+            Dev preview
+          </C.Item>
+        )}
         {onOpenPanelPalette && (
           <>
             <C.Separator />

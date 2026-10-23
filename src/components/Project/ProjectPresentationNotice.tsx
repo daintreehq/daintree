@@ -21,6 +21,7 @@ import {
 import type { PresentationSuggestionAnswer } from "@shared/types/ipc/projectPresentation";
 import { featuredRefForLaunchEntry } from "@shared/config/launcherArrangement";
 import { usePluginLaunchEntriesStore } from "@/store/pluginLaunchEntriesStore";
+import { useDevPreviewOfferStore } from "@/store/devPreviewOfferStore";
 
 export type SuggestedChange =
   | { feature: PresentationFeatureId; level: PresentationLevel }
@@ -92,22 +93,33 @@ export function usePendingSuggestion(): {
   const promotedPluginButtons = useProjectPresentationStore((s) => s.promotedPluginButtons);
   const featuredLaunchEntry = useProjectPresentationStore((s) => s.featuredLaunchEntry);
   const launchEntries = usePluginLaunchEntriesStore((s) => s.entries);
+  // The dev preview's default depends on the project (#14069), so both sides
+  // of the comparison have to resolve against the same one.
+  const devPreviewOffered = useDevPreviewOfferStore((s) => s.reason !== null);
 
   if (project == null || !loaded || profileProjectId !== project.id || suggestion === null) {
     return null;
   }
   const profile = { loaded, projectId: profileProjectId, promotedPluginButtons };
-  const current = resolvePresentationFor(project, { ...profile, levels, useProjectToolbar });
+  const current = resolvePresentationFor(
+    project,
+    { ...profile, levels, useProjectToolbar },
+    devPreviewOffered
+  );
   // Accepting toolbar levels turns this project's toolbar back on (#13783), as
   // main does, so the question names everything that would come back with it.
   const suggestsToolbar = PRESENTATION_FEATURE_IDS.some(
     (id) => suggestion.levels[id] !== undefined && isToolbarPresentationFeature(id)
   );
-  const next = resolvePresentationFor(project, {
-    ...profile,
-    levels: { ...levels, ...suggestion.levels } satisfies PresentationLevels,
-    useProjectToolbar: suggestsToolbar ? null : useProjectToolbar,
-  });
+  const next = resolvePresentationFor(
+    project,
+    {
+      ...profile,
+      levels: { ...levels, ...suggestion.levels } satisfies PresentationLevels,
+      useProjectToolbar: suggestsToolbar ? null : useProjectToolbar,
+    },
+    devPreviewOffered
+  );
   const changes: SuggestedChange[] = suggestedChanges(current, next);
   // Named even while its plugin is not loaded: accepting stores it, and it
   // applies once the plugin is.

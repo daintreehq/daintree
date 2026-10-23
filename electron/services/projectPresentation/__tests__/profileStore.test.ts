@@ -315,9 +315,19 @@ describe("project toolbar (#13783)", () => {
     expect(setProjectPresentationLevel(PROJECT_A, "gitDetail", "demoted").useProjectToolbar).toBe(
       false
     );
-    expect(setProjectPresentationLevel(PROJECT_A, "devServer", "demoted").useProjectToolbar).toBe(
+    // The dev preview is the project's on every surface (#14069), not its toolbar's.
+    expect(setProjectPresentationLevel(PROJECT_A, "devServer", "hidden").useProjectToolbar).toBe(
+      false
+    );
+    expect(setProjectPresentationLevel(PROJECT_A, "copyTree", "demoted").useProjectToolbar).toBe(
       null
     );
+  });
+
+  it("keeps the project's dev preview choice when its toolbar is reset", () => {
+    setProjectPresentationLevel(PROJECT_A, "copyTree", "demoted");
+    setProjectPresentationLevel(PROJECT_A, "devServer", "hidden");
+    expect(resetProjectToolbar(PROJECT_A).levels).toEqual({ devServer: "hidden" });
   });
 
   it("resets only the toolbar, keeping answers, other projects and the revision count", () => {

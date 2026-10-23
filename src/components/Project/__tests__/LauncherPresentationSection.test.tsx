@@ -30,6 +30,7 @@ const snapshot = (
   promotedPluginButtons: [],
   launcherGroupOrder: [],
   featuredLaunchEntry: null,
+  webProject: null,
   revision: 0,
   ...over,
 });

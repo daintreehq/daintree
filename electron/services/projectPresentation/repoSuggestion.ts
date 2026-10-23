@@ -75,22 +75,26 @@ export function parsePresentationSuggestion(raw: unknown): PresentationSuggestio
  * level on a platform without no-follow — and nothing is read past the cap,
  * even if the file grows.
  */
-async function readCapped(filePath: string, inspected: Stats): Promise<Buffer | null> {
+export async function readCapped(
+  filePath: string,
+  inspected: Stats,
+  maxBytes: number = MAX_FILE_BYTES
+): Promise<Buffer | null> {
   const flags =
     fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0) | (fsConstants.O_NONBLOCK ?? 0);
   const handle = await fs.open(filePath, flags);
   try {
     const stat = await handle.stat();
-    if (!stat.isFile() || stat.size > MAX_FILE_BYTES) return null;
+    if (!stat.isFile() || stat.size > maxBytes) return null;
     if (stat.dev !== inspected.dev || stat.ino !== inspected.ino) return null;
-    const buffer = Buffer.alloc(MAX_FILE_BYTES + 1);
+    const buffer = Buffer.alloc(maxBytes + 1);
     let length = 0;
     while (length < buffer.length) {
       const { bytesRead } = await handle.read(buffer, length, buffer.length - length, length);
       if (bytesRead === 0) break;
       length += bytesRead;
     }
-    return length > MAX_FILE_BYTES ? null : buffer.subarray(0, length);
+    return length > maxBytes ? null : buffer.subarray(0, length);
   } finally {
     await handle.close();
   }

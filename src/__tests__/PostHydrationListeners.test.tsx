@@ -15,6 +15,7 @@ const tokenHealth = vi.fn();
 const rateLimit = vi.fn();
 const recipeFocus = vi.fn();
 const devServerSync = vi.fn();
+const devPreviewOffer = vi.fn();
 const soundPlayback = vi.fn();
 const storeUpdate = vi.fn();
 const pluginUpdateCheck = vi.fn();
@@ -61,6 +62,7 @@ vi.mock("@/hooks/usePluginUpdateCheckListener", () => ({
 vi.mock("@/hooks/app", () => ({
   useRecipeFocusReload: () => recipeFocus(),
   useWorktreeDevServerStateSync: () => devServerSync(),
+  useDevPreviewOfferSync: () => devPreviewOffer(),
 }));
 vi.mock("@/utils/performance", () => ({
   markRendererPerformance: (name: string) => mark(name),
@@ -76,6 +78,7 @@ const allHooks = [
   rateLimit,
   recipeFocus,
   devServerSync,
+  devPreviewOffer,
   soundPlayback,
   storeUpdate,
   pluginUpdateCheck,

@@ -24,6 +24,9 @@ import {
 import { getToolbarButtonConfig } from "../../../shared/config/toolbarButtonRegistry.js";
 import { projectIdFromPluginInstanceKey } from "../../../shared/types/plugin.js";
 import { readPresentationSuggestion } from "../../services/projectPresentation/repoSuggestion.js";
+import { detectWebProject } from "../../services/projectPresentation/webProjectDetection.js";
+import { events } from "../../services/events.js";
+import { pathComparisonKey } from "../../../shared/utils/path.js";
 import {
   isLevelAllowed,
   isPresentationFeatureId,
@@ -42,8 +45,45 @@ import type {
  * only ever read or change the profile of the project it shows.
  */
 
-function readSuggestion(projectId: string): Promise<PresentationSuggestion | null> {
-  return readPresentationSuggestion(projectStore.getProjectById(projectId)?.path);
+/** What the project's own files say right now; read for every snapshot, never stored. */
+interface RepoFacts {
+  suggestion: PresentationSuggestion | null;
+  webProject: boolean | null;
+}
+
+/**
+ * Projects some view has read, by the root their web-project answer comes from
+ * (#14069), with the answer last broadcast to every view of the project. A
+ * read's reply reaches only the view that asked, so it never counts as told:
+ * a change under the root compares against what all of them were last sent.
+ */
+const watched = new Map<string, { rootKey: string; broadcast: boolean | null }>();
+// Bumped when the handlers go, so a read still in flight then records and publishes nothing.
+let registration = 0;
+
+/** One spelling per directory: git and the project list can disagree on NFC/NFD and case. */
+function rootKeyOf(root: string): string {
+  return pathComparisonKey(root, {
+    caseInsensitive: process.platform === "win32" || process.platform === "darwin",
+  });
+}
+
+async function readRepoFacts(projectId: string): Promise<RepoFacts> {
+  const root = projectStore.getProjectById(projectId)?.path;
+  const startedIn = registration;
+  const [suggestion, webProject] = await Promise.all([
+    readPresentationSuggestion(root),
+    detectWebProject(root),
+  ]);
+  if (root && startedIn === registration) {
+    const known = watched.get(projectId);
+    // The first read seeds it: until something is broadcast, that is what every view has.
+    watched.set(projectId, {
+      rootKey: rootKeyOf(root),
+      broadcast: known ? known.broadcast : webProject,
+    });
+  }
+  return { suggestion, webProject };
 }
 
 /**
@@ -52,20 +92,18 @@ function readSuggestion(projectId: string): Promise<PresentationSuggestion | nul
  * carries an older profile than the one before it. The revision covers what
  * this cannot — a push and a reply reaching a view out of order.
  */
-function snapshotOf(
-  projectId: string,
-  suggestion: PresentationSuggestion | null
-): ProjectPresentationSnapshot {
+function snapshotOf(projectId: string, facts: RepoFacts): ProjectPresentationSnapshot {
   const stored = getProjectPresentation(projectId);
   return {
     projectId,
     levels: stored.levels,
-    suggestion,
-    suggestionAnswer: answerFor(stored, suggestion),
+    suggestion: facts.suggestion,
+    suggestionAnswer: answerFor(stored, facts.suggestion),
     useProjectToolbar: stored.useProjectToolbar,
     promotedPluginButtons: stored.promotedPluginButtons,
     launcherGroupOrder: stored.launcherGroupOrder,
     featuredLaunchEntry: stored.featuredLaunchEntry,
+    webProject: facts.webProject,
     revision: stored.revision,
   };
 }
@@ -73,6 +111,8 @@ function snapshotOf(
 /** Every view of the project — the notice and the settings section can sit in different windows. */
 function publish(snapshot: ProjectPresentationSnapshot): ProjectPresentationSnapshot {
   broadcastToProjectRenderers(snapshot.projectId, CHANNELS.PROJECT_PRESENTATION_CHANGED, snapshot);
+  const known = watched.get(snapshot.projectId);
+  if (known) known.broadcast = snapshot.webProject;
   return snapshot;
 }
 
@@ -90,7 +130,7 @@ function requireProjectId(ctx: IpcContext): string {
 async function handleGet(ctx: IpcContext): Promise<ProjectPresentationSnapshot | null> {
   if (!ctx.projectId) return null;
   const projectId = ctx.projectId;
-  return snapshotOf(projectId, await readSuggestion(projectId));
+  return snapshotOf(projectId, await readRepoFacts(projectId));
 }
 
 async function handleSetLevel(
@@ -106,7 +146,7 @@ async function handleSetLevel(
     throw new Error("project presentation: unsupported level");
   }
   setProjectPresentationLevel(projectId, feature, level);
-  return publish(snapshotOf(projectId, await readSuggestion(projectId)));
+  return publish(snapshotOf(projectId, await readRepoFacts(projectId)));
 }
 
 async function handleAnswerSuggestion(
@@ -120,9 +160,9 @@ async function handleAnswerSuggestion(
   }
   // Re-read rather than trust the renderer: accepting copies what the file
   // suggests NOW, and only if that is what the notice showed.
-  const suggestion = await readSuggestion(projectId);
-  answerProjectPresentationSuggestion(projectId, suggestion, hash, answer);
-  return publish(snapshotOf(projectId, suggestion));
+  const facts = await readRepoFacts(projectId);
+  answerProjectPresentationSuggestion(projectId, facts.suggestion, hash, answer);
+  return publish(snapshotOf(projectId, facts));
 }
 
 async function handleSetToolbarEnabled(
@@ -134,7 +174,7 @@ async function handleSetToolbarEnabled(
     throw new Error("project presentation: enabled must be a boolean");
   }
   setProjectToolbarEnabled(projectId, enabled);
-  return publish(snapshotOf(projectId, await readSuggestion(projectId)));
+  return publish(snapshotOf(projectId, await readRepoFacts(projectId)));
 }
 
 /**
@@ -169,13 +209,13 @@ async function handleSetPluginButtonPromoted(
     }
   }
   setProjectPluginButtonPromoted(projectId, buttonId, promoted);
-  return publish(snapshotOf(projectId, await readSuggestion(projectId)));
+  return publish(snapshotOf(projectId, await readRepoFacts(projectId)));
 }
 
 async function handleResetToolbar(ctx: IpcContext): Promise<ProjectPresentationSnapshot> {
   const projectId = requireProjectId(ctx);
   resetProjectToolbar(projectId);
-  return publish(snapshotOf(projectId, await readSuggestion(projectId)));
+  return publish(snapshotOf(projectId, await readRepoFacts(projectId)));
 }
 
 async function handleSetLauncherGroupOrder(
@@ -184,7 +224,7 @@ async function handleSetLauncherGroupOrder(
 ): Promise<ProjectPresentationSnapshot> {
   const projectId = requireProjectId(ctx);
   setProjectLauncherGroupOrder(projectId, order);
-  return publish(snapshotOf(projectId, await readSuggestion(projectId)));
+  return publish(snapshotOf(projectId, await readRepoFacts(projectId)));
 }
 
 /**
@@ -211,7 +251,7 @@ async function handleSetFeaturedLaunchEntry(
     }
   }
   setProjectFeaturedLaunchEntry(projectId, ref);
-  return publish(snapshotOf(projectId, await readSuggestion(projectId)));
+  return publish(snapshotOf(projectId, await readRepoFacts(projectId)));
 }
 
 export const projectPresentationNamespace = defineIpcNamespace({
@@ -252,6 +292,62 @@ export const projectPresentationNamespace = defineIpcNamespace({
   },
 });
 
+const redetecting = new Set<string>();
+const redetectAgain = new Set<string>();
+
+/**
+ * Read a project's files again after something under its root changed, and
+ * tell its views only if that changed whether it looks like a web project: a
+ * folder added before it was scaffolded becomes one later (#13152's shape).
+ * One read per project at a time; a change landing mid-read reads once more.
+ */
+async function redetect(projectId: string): Promise<void> {
+  if (redetecting.has(projectId)) {
+    redetectAgain.add(projectId);
+    return;
+  }
+  const mine = registration;
+  redetecting.add(projectId);
+  try {
+    do {
+      redetectAgain.delete(projectId);
+      const facts = await readRepoFacts(projectId);
+      if (mine !== registration) return;
+      if (facts.webProject !== watched.get(projectId)?.broadcast) {
+        publish(snapshotOf(projectId, facts));
+      }
+    } while (redetectAgain.has(projectId));
+  } catch (err) {
+    console.warn("[ProjectPresentation] Couldn't re-read the project's files:", err);
+  } finally {
+    redetecting.delete(projectId);
+  }
+}
+
+/**
+ * Worktree updates are how main hears that files changed in a repository, and
+ * they already arrive debounced. Only a project's own root counts: that is
+ * the folder its web-project answer is read from.
+ */
+function watchProjectRoots(): () => void {
+  return events.on("sys:worktree:update", (worktree) => {
+    if (typeof worktree?.path !== "string" || worktree.path.length === 0) return;
+    const changed = rootKeyOf(worktree.path);
+    for (const [projectId, { rootKey }] of watched) {
+      if (rootKey === changed) void redetect(projectId);
+    }
+  });
+}
+
 export function registerProjectPresentationHandlers(): () => void {
-  return projectPresentationNamespace.register();
+  const unregister = projectPresentationNamespace.register();
+  const stopWatching = watchProjectRoots();
+  return () => {
+    registration++;
+    stopWatching();
+    watched.clear();
+    redetecting.clear();
+    redetectAgain.clear();
+    unregister();
+  };
 }

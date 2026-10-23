@@ -8,6 +8,7 @@ import {
   isProjectToolbarActive,
   isToolbarPresentationFeature,
   isLauncherPresentationFeature,
+  isProjectWidePresentationFeature,
   defaultPresentationLevel,
   isLevelAllowed,
   isPresentationFeatureAvailable,
@@ -129,7 +130,7 @@ describe("toolbar features (#13783)", () => {
     }
   });
 
-  it("gives each toolbar button to exactly one feature, which follows the toolbar toggle", () => {
+  it("gives each toolbar button to exactly one feature, which follows the toolbar toggle unless it is project-wide", () => {
     // Read from the definitions, not the derived map, where a duplicate would
     // already have overwritten the first.
     const buttons = PRESENTATION_FEATURE_IDS.flatMap((id) => {
@@ -138,9 +139,12 @@ describe("toolbar features (#13783)", () => {
     });
     expect(new Set(buttons).size).toBe(buttons.length);
     for (const feature of PRESENTATION_FEATURE_BY_TOOLBAR_BUTTON.values()) {
-      expect(isToolbarPresentationFeature(feature)).toBe(true);
+      expect(isToolbarPresentationFeature(feature)).toBe(
+        !isProjectWidePresentationFeature(feature)
+      );
     }
     expect(isToolbarPresentationFeature("branchChip")).toBe(true);
+    expect(PRESENTATION_FEATURE_BY_TOOLBAR_BUTTON.get("dev-server")).toBe("devServer");
   });
 
   it("only demotes the new toolbar items, never hides them", () => {
@@ -158,17 +162,55 @@ describe("toolbar features (#13783)", () => {
     const none = { levels: {}, useProjectToolbar: null, promotedPluginButtons: [] };
     expect(hasProjectToolbarOverrides(none)).toBe(false);
     expect(isProjectToolbarActive(none)).toBe(false);
-    expect(isProjectToolbarActive({ ...none, levels: { devServer: "demoted" } })).toBe(true);
+    expect(isProjectToolbarActive({ ...none, levels: { copyTree: "demoted" } })).toBe(true);
     expect(isProjectToolbarActive({ ...none, promotedPluginButtons: ["x"] })).toBe(true);
     // An explicit choice wins either way.
     expect(isProjectToolbarActive({ ...none, useProjectToolbar: true })).toBe(true);
     expect(
       isProjectToolbarActive({
         ...none,
-        levels: { devServer: "demoted" },
+        levels: { copyTree: "demoted" },
         useProjectToolbar: false,
       })
     ).toBe(false);
+  });
+});
+
+describe("the dev preview (#14069)", () => {
+  const offered = (devPreviewOffered?: boolean) => ({ gitBacked: true, devPreviewOffered });
+
+  it("can be hidden, and is by default only once nothing offers it", () => {
+    expect(isLevelAllowed("devServer", "hidden")).toBe(true);
+    expect(defaultPresentationLevel("devServer", offered(true))).toBe("shown");
+    expect(defaultPresentationLevel("devServer", offered(false))).toBe("hidden");
+    // Unknown keeps what every project drew before.
+    expect(defaultPresentationLevel("devServer", offered(undefined))).toBe("shown");
+  });
+
+  it("follows the project's own level both ways", () => {
+    expect(resolvePresentation({ devServer: "shown" }, offered(false)).devServer).toBe("shown");
+    expect(resolvePresentation({ devServer: "hidden" }, offered(true)).devServer).toBe("hidden");
+    expect(resolvePresentation({ devServer: "demoted" }, offered(false)).devServer).toBe("demoted");
+  });
+
+  it("holds its level while the project's toolbar is off, and never turns it on", () => {
+    const off = resolvePresentation({ devServer: "hidden", copyTree: "demoted" }, offered(true), {
+      toolbar: false,
+    });
+    expect(off.devServer).toBe("hidden");
+    expect(off.copyTree).toBe("shown");
+    const profile = {
+      levels: { devServer: "hidden" },
+      useProjectToolbar: null,
+      promotedPluginButtons: [],
+    } as const;
+    expect(hasProjectToolbarOverrides(profile)).toBe(false);
+    expect(isProjectToolbarActive(profile)).toBe(false);
+  });
+
+  it("publishes hidden under its existing when clause key", () => {
+    const context = buildPresentationWhenContext(resolvePresentation({}, offered(false)));
+    expect(context.presentationDevServer).toBe("hidden");
   });
 });
 

@@ -79,7 +79,7 @@ import {
   pluginBadgeOverflowSeverity,
 } from "./pluginToolbarBadge";
 import { usePluginToolbarBadgeStore } from "@/store/pluginToolbarBadgeStore";
-import { LAUNCHER_PANEL_ITEMS } from "./launcherPanelItems";
+import { LAUNCHER_PANEL_ITEMS, type LauncherPanelItem } from "./launcherPanelItems";
 import { deriveAgentAttentionStates } from "@/lib/agentAttentionStates";
 import { useHandBackRunIds } from "@/hooks/useRunHandBackState";
 import { DockLaunchButton } from "./DockLaunchButton";
@@ -309,6 +309,9 @@ interface OverflowMenuProps {
   // alongside the panels — since #11680 an unpinned agent has no other toolbar
   // route.
   launcherAgentIds: BuiltInAgentId[];
+  // The launcher's panel rows this project offers, inlined beside the agents
+  // for the same reason; a project can hide the dev preview's (#14069).
+  launcherPanelItems: readonly LauncherPanelItem[];
   // Per-item availability for the inlined launcher panel rows, mirroring the
   // gates the launcher applies to its own rows.
   panelTrayDisabled: Partial<Record<string, boolean>>;
@@ -343,6 +346,7 @@ function OverflowMenu({
   pluginTrayGroups,
   pluginConfigs,
   launcherAgentIds,
+  launcherPanelItems,
   panelTrayDisabled,
   keybindingById,
   branchRow = null,
@@ -647,7 +651,7 @@ function OverflowMenu({
               const inlinedAgents = launcherAgentIds.filter(
                 (agentId) => !overflowIds.includes(agentId) && OVERFLOW_MENU_META[agentId]
               );
-              const inlinedPanels = LAUNCHER_PANEL_ITEMS.filter(
+              const inlinedPanels = launcherPanelItems.filter(
                 (item) => !overflowIds.includes(item.id)
               );
               if (inlinedAgents.length === 0 && inlinedPanels.length === 0) return [];
@@ -853,6 +857,15 @@ export function Toolbar({
     (s) => s.setPluginButtonPromoted
   );
   const branchChipDemoted = currentProject !== null && presentation.branchChip === "demoted";
+  // The dev preview is the project's to show or hide on every surface (#14069),
+  // whatever "Use this project's toolbar" says. Hidden drops the button and its
+  // overflow row; an explicit shown or demoted puts the button on this
+  // project's toolbar even where the app-wide layout has no slot for it. A
+  // detected default never adds one: it can only take a leftover away.
+  const devPreviewHidden = currentProject !== null && presentation.devServer === "hidden";
+  const explicitDevPreviewLevel = toolbarOverlay.available ? profileLevels.devServer : undefined;
+  const devPreviewPlaced =
+    explicitDevPreviewLevel === "shown" || explicitDevPreviewLevel === "demoted";
   const workspaceIdentity = activeWorkspaceIdentity(currentProject, currentScratch);
   const loadProjects = useProjectStore((state) => state.loadProjects);
   const getCurrentProject = useProjectStore((state) => state.getCurrentProject);
@@ -1910,7 +1923,9 @@ export function Toolbar({
   // The app-wide pins with this project's toolbar laid over them. Only ever
   // read: every write still goes to the app-wide store or the profile.
   const pinnedButtons = useMemo(() => {
-    if (!projectToolbarMode) return appPinnedButtons;
+    if (!projectToolbarMode) {
+      return devPreviewPlaced ? { ...appPinnedButtons, "dev-server": true } : appPinnedButtons;
+    }
     const next = { ...appPinnedButtons };
     for (const [buttonId, feature] of PRESENTATION_FEATURE_BY_TOOLBAR_BUTTON) {
       // Demoted counts too: the button has to stay mounted to be folded into
@@ -1918,12 +1933,19 @@ export function Toolbar({
       const level = profileLevels[feature];
       if (level === "shown" || level === "demoted") next[buttonId] = true;
     }
+    if (devPreviewPlaced) next["dev-server"] = true;
     for (const id of toolbarOverlay.promotedPluginButtons) {
       // Plugin button ids are `{instanceKey}.{id}`; main only stores those.
       if (isPluginToolbarButtonIdShape(id)) next[id] = true;
     }
     return next;
-  }, [projectToolbarMode, appPinnedButtons, profileLevels, toolbarOverlay.promotedPluginButtons]);
+  }, [
+    projectToolbarMode,
+    appPinnedButtons,
+    profileLevels,
+    toolbarOverlay.promotedPluginButtons,
+    devPreviewPlaced,
+  ]);
 
   // An agent the user explicitly pinned but that sits in neither side array
   // still has to render (#11680). Two ways to get here, and neither can be
@@ -1992,6 +2014,19 @@ export function Toolbar({
     }
   }, [unpositionedLauncherItemPins, positionAgentButton]);
 
+  // A slot for the dev preview's button in a project that shows it explicitly
+  // but whose app-wide layout holds none (#14069). Render-only, like the
+  // pins above: never positioned, so the layout stays what the user made it.
+  const unpositionedDevPreview = useMemo<AnyToolbarButtonId[]>(
+    () =>
+      devPreviewPlaced &&
+      !toolbarLayout.leftButtons.includes("dev-server") &&
+      !toolbarLayout.rightButtons.includes("dev-server")
+        ? ["dev-server"]
+        : [],
+    [devPreviewPlaced, toolbarLayout.leftButtons, toolbarLayout.rightButtons]
+  );
+
   // Declared group per button, resolved against the live plugin registry so a
   // contribution is classified by membership rather than by parsing its id.
   const resolveToolbarGroup = useCallback(
@@ -2010,7 +2045,7 @@ export function Toolbar({
 
     const unpositionedLeftPins = launcherOnRight
       ? []
-      : [...unpositionedAgentPins, ...unpositionedLauncherItemPins];
+      : [...unpositionedAgentPins, ...unpositionedLauncherItemPins, ...unpositionedDevPreview];
     if (unpositionedLeftPins.length > 0) {
       // Right after the launcher they were pinned out of, so they lead the
       // agent run in registry order rather than trailing the positioned ones.
@@ -2034,6 +2069,7 @@ export function Toolbar({
     launcherOnRight,
     unpositionedAgentPins,
     unpositionedLauncherItemPins,
+    unpositionedDevPreview,
     resolveToolbarGroup,
   ]);
 
@@ -2043,6 +2079,7 @@ export function Toolbar({
       // written into the app-wide layout (#10938): the pin survives, so
       // showing the pill again puts it back where it was.
       !(forgeStatsHidden && id === "forge-stats") &&
+      !(devPreviewHidden && id === "dev-server") &&
       isToolbarButtonVisible(
         id,
         pinnedButtons,
@@ -2050,7 +2087,14 @@ export function Toolbar({
         agentAvailability,
         pluginConfigs.has(id)
       ),
-    [forgeStatsHidden, pinnedButtons, effectiveAgentSettings, agentAvailability, pluginConfigs]
+    [
+      forgeStatsHidden,
+      devPreviewHidden,
+      pinnedButtons,
+      effectiveAgentSettings,
+      agentAvailability,
+      pluginConfigs,
+    ]
   );
 
   // Filtering the grouped list yields the same sequence as grouping the filtered
@@ -2066,14 +2110,17 @@ export function Toolbar({
     const base = Array.from(new Set(toolbarLayout.rightButtons));
     if (
       launcherOnRight &&
-      (unpositionedAgentPins.length > 0 || unpositionedLauncherItemPins.length > 0)
+      (unpositionedAgentPins.length > 0 ||
+        unpositionedLauncherItemPins.length > 0 ||
+        unpositionedDevPreview.length > 0)
     ) {
       const launcherIndex = base.indexOf("launcher");
       base.splice(
         launcherIndex === -1 ? base.length : launcherIndex + 1,
         0,
         ...unpositionedAgentPins,
-        ...unpositionedLauncherItemPins
+        ...unpositionedLauncherItemPins,
+        ...unpositionedDevPreview
       );
     }
     const positioned = new Set([...base, ...toolbarLayout.leftButtons]);
@@ -2094,6 +2141,7 @@ export function Toolbar({
     launcherOnRight,
     unpositionedAgentPins,
     unpositionedLauncherItemPins,
+    unpositionedDevPreview,
     pluginButtonIds,
     pinnedButtons,
     resolveToolbarGroup,
@@ -2475,10 +2523,27 @@ export function Toolbar({
   // row stays listed with its app-wide state, but can't be changed from here:
   // this menu writes nothing app-wide while the project's toolbar is in use.
   const toolbarMenuRows = useMemo(() => {
-    if (!projectToolbarMode) return appToolbarMenuRows;
+    // The dev preview's row follows this project's level whichever toolbar is
+    // in use (#14069): hidden or demoted here it isn't on the toolbar, and
+    // shown explicitly it is, slot or no slot in the app-wide layout.
+    const toDevPreviewRow = (row: ToolbarVisibilityMenuRow): ToolbarVisibilityMenuRow => {
+      if (row.id !== "dev-server" || currentProject === null) return row;
+      const shown = presentation.devServer === "shown";
+      return {
+        ...row,
+        checked: explicitDevPreviewLevel !== undefined ? shown : row.checked && shown,
+      };
+    };
+    if (!projectToolbarMode) {
+      return {
+        left: appToolbarMenuRows.left.map(toDevPreviewRow),
+        right: appToolbarMenuRows.right.map(toDevPreviewRow),
+      };
+    }
     const ownPlugins = new Set<string>(ownProjectPluginButtonIds);
     const promoted = new Set(toolbarOverlay.promotedPluginButtons);
     const toProjectRow = (row: ToolbarVisibilityMenuRow): ToolbarVisibilityMenuRow => {
+      if (row.id === "dev-server") return toDevPreviewRow(row);
       const feature = presentationFeatureForToolbarButton(row.id);
       if (feature !== undefined) {
         const level = presentation[feature];
@@ -2497,6 +2562,8 @@ export function Toolbar({
       right: appToolbarMenuRows.right.map(toProjectRow),
     };
   }, [
+    currentProject,
+    explicitDevPreviewLevel,
     projectToolbarMode,
     appToolbarMenuRows,
     ownProjectPluginButtonIds,
@@ -2508,6 +2575,21 @@ export function Toolbar({
 
   const handleToolbarMenuToggle = useCallback(
     (buttonId: AnyToolbarButtonId, side: ToolbarSide, onToolbar: boolean) => {
+      // A level this project set for the dev preview stays its to change: an
+      // app-wide write would land in every other project and change nothing here.
+      // So does showing one this project hides by default (#14069): the layout
+      // may already hold its slot, and only the project's level can draw it.
+      if (
+        buttonId === "dev-server" &&
+        currentProject !== null &&
+        (explicitDevPreviewLevel !== undefined ||
+          (onToolbar && presentation.devServer === "hidden"))
+      ) {
+        saveProjectToolbar(() =>
+          setPresentationLevel("devServer", onToolbar ? "shown" : "demoted")
+        );
+        return;
+      }
       if (projectToolbarMode) {
         // Never falls through to an app-wide setter below.
         const feature = presentationFeatureForToolbarButton(buttonId);
@@ -2530,6 +2612,9 @@ export function Toolbar({
       });
     },
     [
+      currentProject,
+      explicitDevPreviewLevel,
+      presentation.devServer,
       projectToolbarMode,
       setPresentationLevel,
       ownProjectPluginButtonIds,
@@ -2618,6 +2703,14 @@ export function Toolbar({
     "dev-server": !currentProject,
   };
 
+  const launcherPanelItems = useMemo(
+    () =>
+      devPreviewHidden
+        ? LAUNCHER_PANEL_ITEMS.filter((item) => item.id !== "dev-server")
+        : LAUNCHER_PANEL_ITEMS,
+    [devPreviewHidden]
+  );
+
   // Same filter the launcher's own Launch section applies, so the rows the
   // overflow menu inlines are exactly the rows the dropdown would have shown.
   const launcherAgentIds = useMemo(
@@ -2649,6 +2742,7 @@ export function Toolbar({
       pluginTrayGroups={pluginTrayGroups}
       pluginConfigs={pluginConfigs}
       launcherAgentIds={launcherAgentIds}
+      launcherPanelItems={launcherPanelItems}
       panelTrayDisabled={panelTrayDisabled}
       keybindingById={OVERFLOW_KEYBINDING_BY_ID}
       branchRow={branchRow}

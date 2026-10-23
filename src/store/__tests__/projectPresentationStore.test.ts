@@ -22,6 +22,7 @@ const snapshot = (
   promotedPluginButtons: [],
   launcherGroupOrder: [],
   featuredLaunchEntry: null,
+  webProject: null,
   revision: 0,
   ...overrides,
 });
@@ -90,6 +91,82 @@ afterEach(() => {
 });
 
 describe("projectPresentationStore", () => {
+  it("follows what main read from the project's files, which a push can change at the same revision", async () => {
+    const bridge = installBridge({
+      get: () => Promise.resolve(snapshot({}, { webProject: false })),
+    });
+    state().init();
+    await flush();
+    expect(state().webProject).toBe(false);
+
+    bridge.listeners.forEach((cb) => cb(snapshot({}, { webProject: true })));
+    expect(state().webProject).toBe(true);
+  });
+
+  it("keeps a pushed answer about the files over a read that started before it", async () => {
+    const reads = [deferred<ProjectPresentationSnapshot>()];
+    const bridge = installBridge({ get: () => reads[reads.length - 1]!.promise });
+    state().init();
+    reads[0]!.resolve(snapshot({}, { webProject: false }));
+    await flush();
+
+    reads.push(deferred<ProjectPresentationSnapshot>());
+    state().refresh();
+    // The files change while that read is out, and main says so.
+    bridge.listeners.forEach((cb) => cb(snapshot({}, { webProject: true })));
+    reads.push(deferred<ProjectPresentationSnapshot>());
+    reads[1]!.resolve(snapshot({}, { webProject: false }));
+    await flush();
+    expect(state().webProject).toBe(true);
+
+    // The two disagree, so one more read settles it, and main still says so.
+    await flush();
+    expect(bridge.get).toHaveBeenCalledTimes(3);
+    reads[2]!.resolve(snapshot({}, { webProject: true }));
+    await flush();
+    expect(state().webProject).toBe(true);
+  });
+
+  it("reads once more when a read and a write's reply landing during it disagree about the files", async () => {
+    const reads = [deferred<ProjectPresentationSnapshot>()];
+    const reply = deferred<ProjectPresentationSnapshot>();
+    const bridge = installBridge({
+      get: () => reads[reads.length - 1]!.promise,
+      setLevel: () => reply.promise,
+    });
+    state().init();
+    reads[0]!.resolve(snapshot({}, { webProject: false }));
+    await flush();
+
+    // The write looked at the files before they were scaffolded; the read after.
+    const writing = state().setLevel("forgeStats", "hidden");
+    reads.push(deferred<ProjectPresentationSnapshot>());
+    state().refresh();
+    reply.resolve(snapshot({ forgeStats: "hidden" }, { webProject: false, revision: 1 }));
+    await writing;
+    reads.push(deferred<ProjectPresentationSnapshot>());
+    reads[1]!.resolve(snapshot({ forgeStats: "hidden" }, { webProject: true, revision: 1 }));
+    await flush();
+    // Which look came later can't be told yet, so the held answer stands...
+    expect(state().webProject).toBe(false);
+
+    // ...until a read nothing overtakes settles it.
+    await flush();
+    expect(bridge.get).toHaveBeenCalledTimes(3);
+    reads[2]!.resolve(snapshot({ forgeStats: "hidden" }, { webProject: true, revision: 1 }));
+    await flush();
+    expect(state().webProject).toBe(true);
+  });
+
+  it("reads a snapshot from a main that predates web-project detection as unknown", async () => {
+    const older = snapshot({}, { webProject: false });
+    Reflect.deleteProperty(older, "webProject");
+    installBridge({ get: () => Promise.resolve(older) });
+    state().init();
+    await flush();
+    expect(state()).toMatchObject({ loaded: true, webProject: null });
+  });
+
   it("pulls the sender project's profile once, without naming a project", async () => {
     const bridge = installBridge({
       get: () => Promise.resolve(snapshot({ forgeStats: "hidden" })),
