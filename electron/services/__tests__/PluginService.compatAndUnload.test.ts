@@ -240,6 +240,10 @@ import {
   unregisterPluginToolbarButtons,
 } from "../../../shared/config/toolbarButtonRegistry.js";
 import { unregisterPluginMenuItems } from "../pluginMenuRegistry.js";
+import {
+  clearPluginLayoutRegistry,
+  getAllPluginLayouts,
+} from "../../../shared/config/pluginLayoutRegistry.js";
 import { unregisterForgeProviders } from "../forgeProviderRegistry.js";
 import { CHANNELS } from "../../ipc/channels.js";
 import { agentMcpEndpointRegistry } from "../pluginAgentMcp/endpointRegistry.js";
@@ -686,6 +690,73 @@ describe("Project surface claims", () => {
       warn.mockRestore();
     }
   });
+});
+
+describe("Project default layout", () => {
+  const PROJECT = "proj-a";
+  const INSTANCE = "project__proj-a__acme.layouts";
+
+  async function loadLayoutsPlugin(service: PluginService, defaultLayout: string): Promise<void> {
+    const projectRoot = path.join(tmpDir, "project-a");
+    const pluginsParent = path.join(projectRoot, ".daintree", "plugins");
+    const dir = path.join(pluginsParent, "acme.layouts");
+    await fs.mkdir(dir, { recursive: true });
+    await fs.writeFile(
+      path.join(dir, "plugin.json"),
+      JSON.stringify({
+        name: "acme.layouts",
+        version: "1.0.0",
+        scope: "project",
+        engines: { daintree: ">=0.1.0" },
+        contributes: {
+          layouts: [
+            { id: "workbench", name: "Workbench", entries: [{ browser: "https://example.com/" }] },
+            { id: "review", name: "Review", entries: [{ browser: "https://example.com/r" }] },
+          ],
+          surfaces: { defaultLayout },
+        },
+      })
+    );
+    const seam = service as unknown as {
+      loadPlugin(
+        root: string,
+        dirName: string,
+        opts: {
+          isBuiltin: boolean;
+          disabled: Set<string>;
+          origin: "project";
+          instanceKey: string;
+          binding: { projectId: string; projectRoot: string };
+        }
+      ): Promise<unknown>;
+    };
+    await seam.loadPlugin(pluginsParent, "acme.layouts", {
+      isBuiltin: false,
+      disabled: new Set(),
+      origin: "project",
+      instanceKey: INSTANCE,
+      binding: { projectId: PROJECT, projectRoot },
+    });
+  }
+
+  beforeEach(() => clearPluginLayoutRegistry());
+  afterEach(() => clearPluginLayoutRegistry());
+
+  it.each(["workbench", "review"])(
+    "marks only the layout surfaces.defaultLayout names (%s)",
+    async (defaultLayout) => {
+      const service = new PluginService(path.join(tmpDir, "installed"), "1.0.0");
+      try {
+        await loadLayoutsPlugin(service, defaultLayout);
+        const defaults = getAllPluginLayouts()
+          .filter((layout) => layout.projectDefault === true)
+          .map((layout) => layout.id);
+        expect(defaults).toEqual([`${INSTANCE}.${defaultLayout}`]);
+      } finally {
+        service.dispose();
+      }
+    }
+  );
 });
 
 describe("Project toolbar popover buttons", () => {

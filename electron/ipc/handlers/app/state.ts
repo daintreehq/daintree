@@ -14,6 +14,10 @@ import { APP_STATE_FIELD_OWNERSHIP } from "../../../storeOwnership.js";
 import { AppStateTerminalEntrySchema, filterValidTerminalEntries } from "../../../schemas/ipc.js";
 import { filterRestorableTerminalSnapshots } from "../../../services/projectStateRestore.js";
 import { getCrashRecoveryService } from "../../../services/CrashRecoveryService.js";
+import {
+  captureProjectLayoutSeed,
+  getProjectLayoutSeed,
+} from "../../../services/plugin/projectLayoutSeeds.js";
 import { relaunchApp } from "../../../lifecycle/appRelaunch.js";
 import { getDatabaseMaintenanceService } from "../../../services/DatabaseMaintenanceService.js";
 import { USAGE_WINDOW_MS, MAX_USES_PER_ENTRY } from "../../../../shared/utils/actionUsage.js";
@@ -236,6 +240,27 @@ function withoutUndrivenHostFields(
   );
 }
 
+/** Whether `projectId` has yet to have its first-open layout seed decided (#13782). */
+function isLayoutSeedUndecided(projectId: string): boolean {
+  try {
+    return getProjectLayoutSeed(projectId) === null;
+  } catch (error) {
+    // Unreadable: nothing can be recorded either, so there is nothing for the
+    // full path to do that the cache would skip.
+    console.warn("[AppHydrate] Failed to read the project's layout seed:", error);
+    return false;
+  }
+}
+
+function recordLayoutSeed(projectId: string, firstOpen: boolean): void {
+  try {
+    captureProjectLayoutSeed(projectId, firstOpen);
+  } catch (error) {
+    // Hydration goes on; the project simply never gets a seed.
+    console.warn("[AppHydrate] Failed to record the project's layout seed:", error);
+  }
+}
+
 export function registerAppStateHandlers(deps?: HandlerDependencies): () => void {
   const handlers: Array<() => void> = [];
 
@@ -302,12 +327,21 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
     // cache is only probed when the result is actually usable.
     const cacheGuard = getCrashLoopGuard();
     const cacheInSafeMode = cacheGuard.isSafeMode();
+    // A project's first hydrate here decides its layout seed (#13782) from the
+    // state read this fast path skips, so the cache cannot stand in for that
+    // hydrate either. Once per project, ever.
+    const layoutSeedUndecided =
+      currentProject !== null &&
+      !forRemoteShell &&
+      workspaceId !== null &&
+      isLayoutSeedUndecided(workspaceId);
     const cacheEligible =
       Boolean(workspaceId) &&
       panelFilter === null &&
       !crashPanelFilterWithheld &&
       !cacheInSafeMode &&
-      persistedLegacyOwnerId !== undefined;
+      persistedLegacyOwnerId !== undefined &&
+      !layoutSeedUndecided;
     const cached = cacheEligible ? consumePrefetchedHydrateResult(workspaceId!) : undefined;
     markPerformance(PERF_MARKS.APP_HYDRATE_PREFETCH, {
       hit: Boolean(cached),
@@ -322,7 +356,9 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
               ? "panel-filter"
               : persistedLegacyOwnerId === undefined
                 ? "legacy-state-unclaimed"
-                : "miss",
+                : layoutSeedUndecided
+                  ? "layout-seed-undecided"
+                  : "miss",
     });
     if (cached) {
       return {
@@ -456,6 +492,25 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
       const { state: projectState, quarantinedPath } =
         await projectStore.getProjectStateWithRecovery(workspaceId);
       projectStateQuarantinedPath = quarantinedPath;
+      if (currentProject !== null && !forRemoteShell) {
+        // Read before this hydrate writes the project's fresh state below. A
+        // null that hid a corrupt or newer-schema file, a safe-mode boot, and a
+        // project inheriting legacy or crash-restored terminals all have a
+        // history, so none of them is a first open.
+        const inheritsLegacyTerminals =
+          canInheritLegacyWorkspaceState &&
+          Array.isArray(globalAppState.terminals) &&
+          globalAppState.terminals.length > 0;
+        recordLayoutSeed(
+          workspaceId,
+          projectState === null &&
+            quarantinedPath === undefined &&
+            !projectStore.wasStateUnreadableThisSession(workspaceId) &&
+            !cacheInSafeMode &&
+            !hasCrashRestoreTerminals &&
+            !inheritsLegacyTerminals
+        );
+      }
       // Defaults match the standalone handlers' null-state returns.
       tabGroupsToUse = projectState?.tabGroups ?? [];
       terminalSizesToUse = projectState?.terminalSizes ?? {};

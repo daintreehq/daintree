@@ -34,6 +34,11 @@ export type LayoutApplyResult =
   | { status: "awaiting-confirmation" }
   | { status: "cancelled" };
 
+/** Which of a layout's entries one apply covers. */
+type EntryFilter = (entry: PluginLayoutEntry) => boolean;
+
+const everyEntry: EntryFilter = () => true;
+
 /**
  * Find the layout a dispatch names. A plugin reaches only its own: `layoutId`
  * may be its bare manifest id or the qualified one, and either resolves inside
@@ -65,10 +70,10 @@ function resolveLayout(layoutId: string, ctx: ActionContext): PluginLayoutConfig
  * A recipe a team recipe now shadows would run the team's terminals under the
  * plugin's name, so it is refused rather than followed.
  */
-function resolveLayoutRecipes(layout: PluginLayoutConfig): TerminalRecipe[] {
+function resolveLayoutRecipes(layout: PluginLayoutConfig, include: EntryFilter): TerminalRecipe[] {
   const recipes: TerminalRecipe[] = [];
   for (const entry of layout.entries) {
-    if (entry.target.type !== "recipe") continue;
+    if (entry.target.type !== "recipe" || !include(entry)) continue;
     const { recipeId } = entry.target;
     const recipe = useRecipeStore.getState().getRecipeById(recipeId);
     if (
@@ -288,8 +293,9 @@ function arrange(placed: ReadonlyArray<{ entry: PluginLayoutEntry; ids: string[]
 
 async function applyResolved(
   layoutId: string,
-  approvedDigests: ReadonlyMap<string, string>
-): Promise<LayoutApplyResult> {
+  approvedDigests: ReadonlyMap<string, string>,
+  include: EntryFilter
+): Promise<Extract<LayoutApplyResult, { status: "applied" }>> {
   // Read again at apply time: a confirmation can outlast the plugin's reload,
   // and the worktree the user is looking at may have changed while it was open.
   const layout = usePluginLayoutsStore.getState().layouts.find((l) => l.id === layoutId);
@@ -306,6 +312,7 @@ async function applyResolved(
   // before it ran, such as a recipe that changed since approval, it never saw.
   const unreported: string[] = [];
   for (const entry of layout.entries) {
+    if (!include(entry)) continue;
     try {
       placed.push({ entry, ids: await openEntry(layout, entry, worktreeId, approvedDigests) });
     } catch (error) {
@@ -347,14 +354,15 @@ async function applyResolved(
  */
 export async function applyPluginLayout(
   layoutId: string,
-  ctx: ActionContext
+  ctx: ActionContext,
+  include: EntryFilter = everyEntry
 ): Promise<LayoutApplyResult> {
   if (ctx.dispatchSource === "agent") {
     throw new Error("Layouts are applied by the user or by the plugin that declares them");
   }
   const layout = resolveLayout(layoutId, ctx);
-  const recipes = resolveLayoutRecipes(layout);
-  if (recipes.length === 0) return applyResolved(layout.id, new Map());
+  const recipes = resolveLayoutRecipes(layout, include);
+  if (recipes.length === 0) return applyResolved(layout.id, new Map(), include);
 
   const approvedDigests = new Map(
     recipes.map((recipe) => [recipe.id, recipeApprovalDigest(recipe.terminals)])
@@ -371,12 +379,53 @@ export async function applyPluginLayout(
 
   if (ctx.dispatchSource === "plugin") {
     void approval
-      .then((approved) => (approved ? applyResolved(layout.id, approvedDigests) : undefined))
+      .then((approved) =>
+        approved ? applyResolved(layout.id, approvedDigests, include) : undefined
+      )
       .catch((error: unknown) => notifyApplyFailed(layout.name, error));
     return { status: "awaiting-confirmation" };
   }
   if (!(await approval)) return { status: "cancelled" };
-  return applyResolved(layout.id, approvedDigests);
+  return applyResolved(layout.id, approvedDigests, include);
+}
+
+const isRecipeEntry: EntryFilter = (entry) => entry.target.type === "recipe";
+
+/**
+ * Open a project's first-open layout (#13782) without starting anything: its
+ * panels and browser pages open and are arranged as the layout says, and its
+ * recipes come back unstarted, for the user to start from
+ * {@link startPluginLayoutRecipe}. Host-internal: no action dispatches it, so
+ * nothing but the seed can open a layout without the user asking.
+ */
+export async function seedPluginLayout(
+  layoutId: string
+): Promise<{ panelIds: string[]; failures: string[]; deferred: PluginLayoutEntry[] }> {
+  const layout = usePluginLayoutsStore.getState().layouts.find((l) => l.id === layoutId);
+  if (!layout) throw new Error("The layout is no longer available");
+  const { panelIds, failures } = await applyResolved(
+    layout.id,
+    new Map(),
+    (entry) => !isRecipeEntry(entry)
+  );
+  return { panelIds, failures, deferred: layout.entries.filter(isRecipeEntry) };
+}
+
+/**
+ * Start one recipe a seeded layout left waiting: the layout's own confirmation
+ * lists its terminals, and nothing starts until the user approves. Its
+ * terminals go where the layout's entry puts them.
+ */
+export function startPluginLayoutRecipe(
+  layoutId: string,
+  recipeId: string,
+  ctx: ActionContext
+): Promise<LayoutApplyResult> {
+  return applyPluginLayout(
+    layoutId,
+    ctx,
+    (entry) => entry.target.type === "recipe" && entry.target.recipeId === recipeId
+  );
 }
 
 function notifyApplyFailed(layoutName: string, error: unknown): void {

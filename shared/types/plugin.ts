@@ -558,6 +558,37 @@ export interface PluginLayoutConfig {
   pluginName: string;
   name: string;
   entries: PluginLayoutEntry[];
+  /** Set on the layout a project plugin names as `surfaces.defaultLayout` (#13782). */
+  projectDefault?: true;
+}
+
+/**
+ * Where a project's first-open layout seed stands on this machine (#13782).
+ *
+ * - `pending` — main saw the project's first open (no saved state, readable,
+ *   not safe mode) and nothing has been opened since. A default layout that
+ *   arrives while the grid and dock are empty is applied.
+ * - `offered` — the user opened something first, so a default layout is only
+ *   ever offered, never applied on its own.
+ * - `settled` — used, declined, or never eligible. Nothing more happens.
+ */
+export type ProjectLayoutSeedStatus = "pending" | "offered" | "settled";
+
+/** Why a seed settled, kept for diagnostics. */
+export type ProjectLayoutSeedOutcome = "applied" | "opened" | "dismissed" | "ineligible";
+
+export interface ProjectLayoutSeedRecord {
+  status: ProjectLayoutSeedStatus;
+  outcome?: ProjectLayoutSeedOutcome;
+  /** Epoch ms of the last change. */
+  at: number;
+}
+
+/** A compare-and-set on a project's seed: whether this call moved it, and what is stored now. */
+export interface ProjectLayoutSeedAdvance {
+  advanced: boolean;
+  /** `null` while the project's first hydrate has not been seen. */
+  record: ProjectLayoutSeedRecord | null;
 }
 
 /**
@@ -1271,9 +1302,9 @@ export interface ProjectSurfaceSlotDescriptor {
  * the persisted answers — derives from this table, so a slot is a public id
  * the same way an action id is.
  *
- * See `SurfaceContributionsSchema` in `electron/schemas/plugin.ts` for why
- * `defaultLayout` is not here yet: a slot joins the catalogue with the
- * consumer that renders it.
+ * `surfaces.defaultLayout` is deliberately not here: it replaces nothing the
+ * host draws, so it has no stock content to switch back to and no answer to
+ * remember. See {@link ProjectLayoutSeedStatus}.
  */
 export const PROJECT_SURFACE_SLOT_CATALOGUE = {
   emptyCanvas: {
@@ -1323,6 +1354,12 @@ export interface SurfaceContributions {
   emptyCanvas?: SurfaceViewSlot;
   projectHome?: SurfaceViewSlot;
   worktreeCreate?: SurfaceViewSlot;
+  /**
+   * A `contributes.layouts[].id` of this plugin, opened once on the project's
+   * first open on this machine while the grid and dock are still empty. Its
+   * recipes wait as click-to-start entries rather than starting.
+   */
+  defaultLayout?: string;
 }
 
 /**

@@ -2160,6 +2160,21 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
       ],
       note: "Claims the project's New worktree slot at load; the action opens the claimed view as the dialog in place of the stock one.",
     },
+    defaultLayout: {
+      mode: "verbatim",
+      consumers: [
+        {
+          file: PLUGIN_SCHEMA,
+          symbol: "getPluginManifestSchema superRefine (surface_default_layout_unknown)",
+        },
+        { file: PLUGIN_SERVICE, symbol: "loadPlugin (registerPluginLayout projectDefault)" },
+        {
+          file: "src/hooks/useProjectLayoutSeed.ts",
+          symbol: "useProjectLayoutSeed (selectProjectDefaultLayout)",
+        },
+      ],
+      note: "Cross-checked against declared contributes.layouts, then marks that layout as the project's default; the renderer opens it once on the project's first open on this machine.",
+    },
   },
   "toolbarButtons.popover": {
     viewId: {

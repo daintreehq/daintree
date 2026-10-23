@@ -792,6 +792,9 @@ export interface GeneratedElectronAPI {
     activateStagedProjectPlugin(
       ...args: IpcInvokeMap["plugin:project-activate-staged"]["args"]
     ): Promise<IpcInvokeMap["plugin:project-activate-staged"]["result"]>;
+    advanceProjectLayoutSeed(
+      ...args: IpcInvokeMap["plugin:project-layout-seed-advance"]["args"]
+    ): Promise<IpcInvokeMap["plugin:project-layout-seed-advance"]["result"]>;
     backupDatabases(
       ...args: IpcInvokeMap["plugin:backup-databases"]["args"]
     ): Promise<IpcInvokeMap["plugin:backup-databases"]["result"]>;
@@ -882,6 +885,9 @@ export interface GeneratedElectronAPI {
     getPerfSnapshots(
       ...args: IpcInvokeMap["plugin:perf-snapshots-get"]["args"]
     ): Promise<IpcInvokeMap["plugin:perf-snapshots-get"]["result"]>;
+    getProjectLayoutSeed(
+      ...args: IpcInvokeMap["plugin:project-layout-seed-get"]["args"]
+    ): Promise<IpcInvokeMap["plugin:project-layout-seed-get"]["result"]>;
     getProjectPlugins(
       ...args: IpcInvokeMap["plugin:project-list"]["args"]
     ): Promise<IpcInvokeMap["plugin:project-list"]["result"]>;

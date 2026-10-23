@@ -6,6 +6,7 @@ import { ProjectSurfaceView } from "@/components/Plugin/ProjectSurfaceView";
 import { SurfacePaletteAction } from "@/components/Plugin/SurfacePaletteAction";
 import { ProjectPresentationNotice } from "@/components/Project/ProjectPresentationNotice";
 import { ProjectThemeNotice } from "@/components/Project/ProjectThemeNotice";
+import { ProjectLayoutSeedNotice } from "@/components/Plugin/ProjectLayoutSeedNotice";
 import { cn } from "@/lib/utils";
 import { useProjectHomeStore } from "@/store/projectHomeStore";
 import { BatchScrollbackRestoreBar } from "./BatchScrollbackRestoreBar";
@@ -64,6 +65,7 @@ export function ContentGridProjectHome({
       <ProjectPluginTrustBanner />
       <ProjectPresentationNotice />
       <ProjectThemeNotice />
+      <ProjectLayoutSeedNotice />
       <TerminalCountWarning className="mx-1 mt-1 shrink-0" />
       <BatchScrollbackRestoreBar className="mx-1 mt-1 shrink-0" />
       <div className="relative min-h-0 flex-1">

@@ -102,6 +102,19 @@ vi.mock("../../../services/plugin/pluginNotificationSilences.js", () => ({
   },
 }));
 const mockMetricsRecordInvoke = vi.hoisted(() => vi.fn());
+const { mockGetProjectLayoutSeed, mockAdvanceProjectLayoutSeed } = vi.hoisted(() => ({
+  mockGetProjectLayoutSeed: vi.fn(),
+  mockAdvanceProjectLayoutSeed: vi.fn(),
+}));
+
+vi.mock("../../../services/plugin/projectLayoutSeeds.js", () => ({
+  getProjectLayoutSeed: mockGetProjectLayoutSeed,
+  advanceProjectLayoutSeed: mockAdvanceProjectLayoutSeed,
+  isProjectLayoutSeedStatus: (value: unknown) =>
+    value === "pending" || value === "offered" || value === "settled",
+  isProjectLayoutSeedOutcome: (value: unknown) =>
+    value === "applied" || value === "opened" || value === "dismissed" || value === "ineligible",
+}));
 
 vi.mock("../../../services/PluginService.js", () => ({
   pluginService: {
@@ -3091,6 +3104,48 @@ describe("project-local plugin handlers", () => {
       getHandler("plugin:project-visibility-set")({ sender: { id: 1 } }, "acme.tools", "maybe")
     ).rejects.toThrow(/boolean or null/);
     expect(mockSetProjectPluginVisibility).not.toHaveBeenCalled();
+  });
+
+  it("reads the SENDER project's layout seed, and nothing for a sender with no project", async () => {
+    mockGetProjectForWebContents.mockReturnValue(PROJECT);
+    mockGetProjectLayoutSeed.mockReturnValue({ status: "pending", at: 1 });
+    const get = getHandler("plugin:project-layout-seed-get");
+
+    expect(await get({ sender: { id: 1 } })).toEqual({ status: "pending", at: 1 });
+    expect(mockGetProjectLayoutSeed).toHaveBeenCalledWith(PROJECT);
+
+    mockGetProjectLayoutSeed.mockClear();
+    mockGetProjectForWebContents.mockReturnValue(null);
+    expect(await get({ sender: { id: 1 } })).toBeNull();
+    expect(mockGetProjectLayoutSeed).not.toHaveBeenCalled();
+  });
+
+  it("advances the SENDER project's layout seed and validates its arguments", async () => {
+    mockGetProjectForWebContents.mockReturnValue(PROJECT);
+    const result = { advanced: true, record: { status: "settled", outcome: "applied", at: 2 } };
+    mockAdvanceProjectLayoutSeed.mockReturnValue(result);
+    const advance = getHandler("plugin:project-layout-seed-advance");
+
+    expect(await advance({ sender: { id: 1 } }, "pending", "settled", "applied")).toEqual(result);
+    expect(mockAdvanceProjectLayoutSeed).toHaveBeenCalledWith(
+      PROJECT,
+      "pending",
+      "settled",
+      "applied"
+    );
+
+    mockAdvanceProjectLayoutSeed.mockClear();
+    await expect(advance({ sender: { id: 1 } }, "pending", "gone")).rejects.toThrow(
+      /unknown status/
+    );
+    await expect(advance({ sender: { id: 1 } }, "pending", "settled", "won")).rejects.toThrow(
+      /unknown outcome/
+    );
+    mockGetProjectForWebContents.mockReturnValue(null);
+    await expect(advance({ sender: { id: 1 } }, "pending", "offered")).rejects.toThrow(
+      /no project/
+    );
+    expect(mockAdvanceProjectLayoutSeed).not.toHaveBeenCalled();
   });
 
   it("sets the visibility default and validates its arguments", async () => {

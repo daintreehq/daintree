@@ -19,6 +19,9 @@ vi.mock("@/components/Plugin/SurfacePaletteAction", () => ({ SurfacePaletteActio
 vi.mock("@/components/Plugin/ProjectPluginTrustBanner", () => ({
   ProjectPluginTrustBanner: () => <div data-testid="trust-banner" />,
 }));
+vi.mock("@/components/Plugin/ProjectLayoutSeedNotice", () => ({
+  ProjectLayoutSeedNotice: () => null,
+}));
 vi.mock("@/components/Project/ProjectPresentationNotice", () => ({
   ProjectPresentationNotice: () => <div data-testid="presentation-notice" />,
 }));

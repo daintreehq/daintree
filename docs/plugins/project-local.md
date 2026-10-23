@@ -210,7 +210,14 @@ Rules:
 - **On Home, the slot's strip sits below your view instead**, clear of the Home/Grid switch above it. Its switch names your panel and "No home": choosing No home removes the Home entry altogether until the user turns it back on in Project settings → Plugins. Going to the grid with the Home/Grid switch never answers that question, so Home stays on offer.
 - **The box is the region below the strip, at its full height.** A surface gets the same container a panel view does — `flex flex-col flex-1 min-h-0 w-full` — so the root shape in [Views](./views.md#where-you-render) applies here unchanged, and a view with its own bottom bar can rely on that bar sitting on the region's bottom edge.
 
-`defaultLayout` appears in the design notes for this feature and is **not implemented** — the manifest schema rejects it. A recipe is launched against a worktree rather than against a project cold open, so it lands with the cold-open routing it needs, not before it.
+`defaultLayout` names one of your own `contributes.layouts` (by its bare `id`) as the arrangement the project starts in. It isn't a slot, since it replaces nothing the host draws, and it is used at most once per project on each machine:
+
+- **First open only.** Daintree decides it on the project's first open on this machine: no saved project state, not safe mode, and no saved state that existed but couldn't be read. A project opened here before, even with nothing in it, never counts again, and neither does one whose state file was later cleared or quarantined.
+- **Applied while the grid and dock are empty.** Your layout usually arrives later than that first open, once the user trusts the project's plugins, possibly in a later session. If nothing has been opened by then, the host opens your layout's panels and browser pages and arranges them. The apply is undoable like any other layout apply.
+- **Offered otherwise.** If the user opened anything first, a strip at the top of the grid offers **Open _plugin_'s layout**, and × turns the offer down for good. The layout stays in the command palette either way.
+- **Terminals never start on open.** A recipe in the layout is listed in the same strip as a **Start** button, and each one goes through the layout's usual confirmation, which lists its terminals.
+- **Recorded on this machine, never in the repository.** Changing `defaultLayout` later doesn't seed the project again. If two project plugins each declare one, the lower plugin id's is used.
+- The id must name a declared layout (`surface_default_layout_unknown`).
 
 ## Binding — which project a host call reaches
 

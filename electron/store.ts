@@ -34,6 +34,7 @@ import type {
   FileEditorChoices,
   ProjectPluginTrustRecord,
   ProjectSurfaceChoices,
+  ProjectLayoutSeedRecord,
 } from "../shared/types/plugin.js";
 import { PLUGIN_MCP_DEFAULT_MAX_TOOLS_PER_SESSION } from "../shared/types/ipc/pluginMcp.js";
 import type { ForgeAuditRecord } from "../shared/types/ipc/forge.js";
@@ -690,6 +691,15 @@ export interface StoreSchema {
   projectFileEditorChoices?: Record<string, FileEditorChoices>;
 
   /**
+   * Per-project first-open layout seed (#13782): whether a project plugin's
+   * `surfaces.defaultLayout` may still be applied or offered here. Keyed by
+   * project id. Decided once, on the project's first hydrate on this machine,
+   * so a `state.json` cleared or quarantined later can never make a project
+   * look new again. Same additive-key convention as above.
+   */
+  projectLayoutSeeds?: Record<string, ProjectLayoutSeedRecord>;
+
+  /**
    * Per-project launcher groups the user hid (#13788): plugin instance ids
    * whose launch entries this project's launcher leaves out. Keyed by project
    * id. Daintree's own settings, never the repository, and separate from
@@ -1074,6 +1084,7 @@ const storeOptions = {
     projectPluginTrust: {},
     projectSurfaceChoices: {},
     projectFileEditorChoices: {},
+    projectLayoutSeeds: {},
     projectHiddenLaunchGroups: {},
     pluginNotificationSilences: [],
     hiddenSearchProviders: [],

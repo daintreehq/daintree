@@ -40,7 +40,7 @@ vi.mock("@shared/config/panelKindRegistry", () => ({
 }));
 vi.mock("@/lib/notify", () => ({ notify }));
 
-import { applyPluginLayout } from "../applyPluginLayout";
+import { applyPluginLayout, seedPluginLayout, startPluginLayoutRecipe } from "../applyPluginLayout";
 import { usePluginLayoutsStore } from "@/store/pluginLayoutsStore";
 import {
   cancelLayoutApplyConfirmations,
@@ -541,6 +541,53 @@ describe("applyPluginLayout", () => {
       getRecipeById.mockReturnValue({ ...pairRecipe, id: "team-pair", origin: undefined });
       await expect(applyPluginLayout("acme.workspace", userCtx)).rejects.toThrow(/isn't available/);
       expect(useLayoutApplyConfirmStore.getState().current).toBeNull();
+    });
+
+    it("seeds the layout's panels without asking and leaves its recipe unstarted (#13782)", async () => {
+      const result = await seedPluginLayout("acme.workspace");
+
+      expect(useLayoutApplyConfirmStore.getState().current).toBeNull();
+      expect(dispatch).not.toHaveBeenCalled();
+      expect(addPanel).toHaveBeenCalledWith(
+        expect.objectContaining({ kind: "acme.records", location: "grid" })
+      );
+      expect(result.panelIds).toEqual(["new-1"]);
+      expect(result.deferred).toEqual([
+        { target: { type: "recipe", recipeId: "acme.pair" }, location: "dock" },
+      ]);
+      // Undoable like any other apply.
+      expect(pushLayoutSnapshot).toHaveBeenCalledTimes(1);
+    });
+
+    it("starts one waiting recipe through the layout's confirmation, and only it", async () => {
+      const pending = startPluginLayoutRecipe("acme.workspace", "acme.pair", userCtx);
+      await Promise.resolve();
+      expect(useLayoutApplyConfirmStore.getState().current?.previewLines.join("\n")).toContain(
+        "npm test"
+      );
+      expect(dispatch).not.toHaveBeenCalled();
+
+      useLayoutApplyConfirmStore.getState().resolveCurrent(true);
+      const result = await pending;
+
+      expect(dispatch).toHaveBeenCalledTimes(1);
+      expect(dispatch).toHaveBeenCalledWith(
+        "recipe.run",
+        expect.objectContaining({ recipeId: "acme.pair" }),
+        { source: "user" }
+      );
+      // The seeded panel isn't opened again.
+      expect(addPanel).not.toHaveBeenCalled();
+      expect(result).toEqual({ status: "applied", panelIds: ["t1", "t2"], failures: [] });
+      expect(panels.t1?.location).toBe("dock");
+    });
+
+    it("starts nothing when the user declines a waiting recipe", async () => {
+      const pending = startPluginLayoutRecipe("acme.workspace", "acme.pair", userCtx);
+      await Promise.resolve();
+      useLayoutApplyConfirmStore.getState().resolveCurrent(false);
+      expect(await pending).toEqual({ status: "cancelled" });
+      expect(dispatch).not.toHaveBeenCalled();
     });
   });
 

@@ -65,6 +65,12 @@ import {
   setProjectFileEditorChoice,
 } from "../../services/plugin/projectFileEditorChoices.js";
 import {
+  advanceProjectLayoutSeed,
+  getProjectLayoutSeed,
+  isProjectLayoutSeedOutcome,
+  isProjectLayoutSeedStatus,
+} from "../../services/plugin/projectLayoutSeeds.js";
+import {
   getProjectHiddenLaunchGroups,
   isHiddenGroupId,
   setProjectLaunchGroupHidden,
@@ -156,6 +162,10 @@ import type {
   PluginSearchProviderInfo,
   PluginSearchQueryRequest,
   PluginSearchQueryResponse,
+  ProjectLayoutSeedAdvance,
+  ProjectLayoutSeedOutcome,
+  ProjectLayoutSeedRecord,
+  ProjectLayoutSeedStatus,
 } from "../../../shared/types/plugin.js";
 import {
   PROJECT_SURFACE_SLOTS,
@@ -1071,6 +1081,38 @@ async function handleFileEditorChoiceSet(
     throw new Error("file editor choice: malformed choice");
   }
   return setProjectFileEditorChoice(ctx.projectId, key, choice);
+}
+
+/**
+ * The SENDER's project's first-open layout seed (#13782); `null` for a view
+ * with no project, or one whose project has not finished its first hydrate.
+ */
+async function handleProjectLayoutSeedGet(
+  ctx: IpcContext
+): Promise<ProjectLayoutSeedRecord | null> {
+  if (!ctx.projectId) return null;
+  return getProjectLayoutSeed(ctx.projectId);
+}
+
+/**
+ * Move the SENDER's project's seed from `from` to `to`, only if it is still at
+ * `from`. The renderer consumes the seed this way before it applies anything,
+ * so two views of one project can never both apply it.
+ */
+async function handleProjectLayoutSeedAdvance(
+  ctx: IpcContext,
+  from: ProjectLayoutSeedStatus,
+  to: ProjectLayoutSeedStatus,
+  outcome?: ProjectLayoutSeedOutcome
+): Promise<ProjectLayoutSeedAdvance> {
+  if (!ctx.projectId) throw new Error("layout seed: sender has no project");
+  if (!isProjectLayoutSeedStatus(from) || !isProjectLayoutSeedStatus(to)) {
+    throw new Error("layout seed: unknown status");
+  }
+  if (outcome !== undefined && !isProjectLayoutSeedOutcome(outcome)) {
+    throw new Error("layout seed: unknown outcome");
+  }
+  return advanceProjectLayoutSeed(ctx.projectId, from, to, outcome);
 }
 
 async function handleProjectSurfacesGet(ctx: IpcContext): Promise<ProjectSurfacesSnapshot | null> {
@@ -2493,6 +2535,16 @@ export const pluginNamespace = defineIpcNamespace({
     setProjectSurfaceChoices: op(
       PLUGIN_METHOD_CHANNELS.setProjectSurfaceChoices,
       handleProjectSurfaceChoicesSet,
+      { withContext: true }
+    ),
+    getProjectLayoutSeed: op(
+      PLUGIN_METHOD_CHANNELS.getProjectLayoutSeed,
+      handleProjectLayoutSeedGet,
+      { withContext: true }
+    ),
+    advanceProjectLayoutSeed: op(
+      PLUGIN_METHOD_CHANNELS.advanceProjectLayoutSeed,
+      handleProjectLayoutSeedAdvance,
       { withContext: true }
     ),
     getFileEditorChoices: op(

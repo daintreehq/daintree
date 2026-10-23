@@ -1628,7 +1628,7 @@ Rules:
 - **At most one plugin per slot per project.** The lower manifest id wins, independent of load order; the other claimant is refused and named alongside the winner in the log, Project settings → Plugins, the Plugin Manager and `daintree-plugin doctor`, so the author can tell which manifest to change. Never a silent last-wins. The refused plugin still loads and its other contributions work, and its claim is remembered — it inherits the slot if the winner later unloads.
 - The surface view receives the standard `PanelViewProps` (`panelId`, `pluginId`, `disposeSignal`) and sits inside the standard plugin error boundary, so a crash falls back with a working "Try again" rather than a blank region.
 
-`defaultLayout` (the arrangement opened on a cold first open) appears in this feature's design notes and is **not implemented** — the schema rejects it. A recipe is launched against a worktree rather than against a project cold open.
+`defaultLayout` names a `contributes.layouts[].id` of the same plugin (`surface_default_layout_unknown` otherwise) as the arrangement the project starts in. On the project's first open on this machine (no saved state, not safe mode, and nothing unreadable), the host opens that layout's panels and browser pages once, provided the grid and dock are still empty when the layout arrives, which is usually after trust is granted. If the user has opened something first, a strip at the top of the grid offers to open it instead. The layout's recipes never start on open: each is listed as a Start button that goes through the layout's confirmation. Whether the seed has run is recorded per project on this machine, so it never runs twice. It is not a slot and has no switch or answer of its own.
 
 ## Themes — _Shipped_
 
