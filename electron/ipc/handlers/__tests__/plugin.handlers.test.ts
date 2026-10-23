@@ -35,6 +35,13 @@ const mockActivateStagedProjectPlugin = vi.fn();
 const mockSetProjectPluginMuted = vi.fn();
 const mockGetProjectPluginVisibility = vi.fn();
 const mockSetProjectPluginVisibility = vi.fn();
+const mockGetInstalledPackageMode = vi.fn();
+const mockSetProjectInstanceEnabled = vi.fn();
+const mockGetProjectById = vi.fn<(projectId: string) => { path: string } | undefined>();
+
+vi.mock("../../../services/ProjectStore.js", () => ({
+  projectStore: { getProjectById: (projectId: string) => mockGetProjectById(projectId) },
+}));
 const mockSetPluginVisibilityDefault = vi.fn();
 const mockReloadProjectPlugins = vi.fn();
 const mockRestartPluginWorker = vi.fn();
@@ -186,6 +193,8 @@ vi.mock("../../../services/PluginService.js", () => ({
     setProjectPluginMuted: (...args: unknown[]) => mockSetProjectPluginMuted(...args),
     getProjectPluginVisibility: (...args: unknown[]) => mockGetProjectPluginVisibility(...args),
     setProjectPluginVisibility: (...args: unknown[]) => mockSetProjectPluginVisibility(...args),
+    getInstalledPackageMode: (...args: unknown[]) => mockGetInstalledPackageMode(...args),
+    setProjectInstanceEnabled: (...args: unknown[]) => mockSetProjectInstanceEnabled(...args),
     setPluginVisibilityDefault: (...args: unknown[]) => mockSetPluginVisibilityDefault(...args),
     reloadProjectPlugins: (...args: unknown[]) => mockReloadProjectPlugins(...args),
     restartPluginWorker: (...args: unknown[]) => mockRestartPluginWorker(...args),
@@ -3219,6 +3228,86 @@ describe("project-local plugin handlers", () => {
       getHandler("plugin:project-visibility-set")({ sender: { id: 1 } }, "acme.tools", "maybe")
     ).rejects.toThrow(/boolean or null/);
     expect(mockSetProjectPluginVisibility).not.toHaveBeenCalled();
+  });
+
+  describe("per-project enable of an installed package", () => {
+    const setEnabled = (...args: unknown[]) =>
+      getHandler("plugin:project-instance-set-enabled")({ sender: { id: 1 } }, ...args);
+
+    beforeEach(() => {
+      mockGetProjectForWebContents.mockReturnValue(PROJECT);
+      mockGetProjectById.mockImplementation((id) =>
+        id === PROJECT ? { path: "/repo/sender" } : { path: "/repo/other" }
+      );
+      mockGetInstalledPackageMode.mockReturnValue("project");
+      mockSetProjectInstanceEnabled.mockResolvedValue(undefined);
+    });
+
+    it("enables and disables in the sender's project, with the sender's root", async () => {
+      await setEnabled("acme.ledger", true);
+      await setEnabled("acme.ledger", false);
+      expect(mockSetProjectInstanceEnabled.mock.calls).toEqual([
+        [PROJECT, "/repo/sender", "acme.ledger", true],
+        [PROJECT, "/repo/sender", "acme.ledger", false],
+      ]);
+    });
+
+    it("ignores any extra argument naming another project", async () => {
+      await setEnabled("acme.ledger", true, "b".repeat(64), "/repo/other");
+      expect(mockGetProjectById).toHaveBeenCalledWith(PROJECT);
+      expect(mockSetProjectInstanceEnabled).toHaveBeenCalledWith(
+        PROJECT,
+        "/repo/sender",
+        "acme.ledger",
+        true
+      );
+    });
+
+    it("rejects a sender with no project", async () => {
+      mockGetProjectForWebContents.mockReturnValue(null);
+      await expect(setEnabled("acme.ledger", true)).rejects.toMatchObject({
+        code: "VALIDATION",
+        message: expect.stringMatching(/no project/),
+      });
+      expect(mockSetProjectInstanceEnabled).not.toHaveBeenCalled();
+    });
+
+    it("rejects a non-boolean value and a malformed id", async () => {
+      await expect(setEnabled("acme.ledger", "yes")).rejects.toMatchObject({
+        code: "VALIDATION",
+        message: expect.stringMatching(/must be a boolean/),
+      });
+      await expect(setEnabled("../../etc/passwd", true)).rejects.toMatchObject({
+        code: "VALIDATION",
+      });
+      expect(mockSetProjectInstanceEnabled).not.toHaveBeenCalled();
+    });
+
+    it("rejects an id that is not an installed package", async () => {
+      mockGetInstalledPackageMode.mockReturnValue(null);
+      await expect(setEnabled("acme.ghost", true)).rejects.toMatchObject({ code: "NOT_FOUND" });
+      expect(mockSetProjectInstanceEnabled).not.toHaveBeenCalled();
+    });
+
+    it("rejects a singleton package, and an instanced one that is switched off", async () => {
+      mockGetInstalledPackageMode.mockReturnValue("singleton");
+      await expect(setEnabled("acme.plain", true)).rejects.toMatchObject({
+        code: "UNSUPPORTED",
+        message: expect.stringMatching(/runs once for every project/),
+      });
+      mockGetInstalledPackageMode.mockReturnValue("project-unavailable");
+      await expect(setEnabled("acme.ledger", true)).rejects.toMatchObject({
+        code: "UNSUPPORTED",
+        message: expect.stringMatching(/turned off or blocked/),
+      });
+      expect(mockSetProjectInstanceEnabled).not.toHaveBeenCalled();
+    });
+
+    it("rejects a sender whose project is no longer known", async () => {
+      mockGetProjectById.mockReturnValue(undefined);
+      await expect(setEnabled("acme.ledger", true)).rejects.toMatchObject({ code: "NOT_FOUND" });
+      expect(mockSetProjectInstanceEnabled).not.toHaveBeenCalled();
+    });
   });
 
   it("reads the SENDER project's layout seed, and nothing for a sender with no project", async () => {

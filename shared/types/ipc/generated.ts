@@ -2722,6 +2722,10 @@ export interface GeneratedIpcInvokeMap {
     args: [pluginId: string];
     result: void;
   };
+  "plugin:project-instance-set-enabled": {
+    args: [pluginId: string, enabled: boolean];
+    result: void;
+  };
   "plugin:project-layout-seed-advance": {
     args: [
       from: import("../plugin.js").ProjectLayoutSeedStatus,

@@ -5047,6 +5047,15 @@ export interface LoadedPluginInfo {
    * `blocklisted` is true.
    */
   blocklistReason?: string;
+  /**
+   * Set on the package row of an installed `instanceMode: "project"` package.
+   * That row is the catalog entry: it never runs itself (`loadedAt` is 0), and
+   * each project that enabled it runs its own instance, listed as a separate
+   * `origin: "project"` row under its instance key.
+   */
+  instanceMode?: "project";
+  /** Project ids the package is enabled in. Present exactly when `instanceMode` is. */
+  enabledInProjects?: string[];
 }
 
 export interface PluginIpcContext {

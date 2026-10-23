@@ -22,6 +22,7 @@ const setProjectPluginVisibility =
   vi.fn<(pluginId: string, visible: boolean | null) => Promise<void>>();
 const setPluginVisibilityDefault = vi.fn<(pluginId: string, hidden: boolean) => Promise<void>>();
 const getProjectPluginVisibility = vi.fn<() => Promise<unknown>>();
+const setProjectInstanceEnabled = vi.fn<(pluginId: string, enabled: boolean) => Promise<void>>();
 
 function plugin(id: string, state: ProjectPluginState): ProjectPluginInfo {
   return {
@@ -54,6 +55,7 @@ beforeEach(() => {
   setProjectPluginMuted.mockReset().mockResolvedValue(undefined);
   setProjectPluginVisibility.mockReset().mockResolvedValue(undefined);
   setPluginVisibilityDefault.mockReset().mockResolvedValue(undefined);
+  setProjectInstanceEnabled.mockReset().mockResolvedValue(undefined);
   getProjectPluginVisibility
     .mockReset()
     .mockResolvedValue({ defaultHiddenPluginIds: [], overrides: {} });
@@ -67,6 +69,7 @@ beforeEach(() => {
         setProjectPluginVisibility,
         setPluginVisibilityDefault,
         getProjectPluginVisibility,
+        setProjectInstanceEnabled,
       },
     },
   });
@@ -534,6 +537,71 @@ describe("projectPluginStore mute and visibility", () => {
 
     expect(useProjectPluginStore.getState().visibility.overrides).toEqual({});
     expect(useProjectPluginStore.getState().error).toBe("main said no");
+  });
+
+  it("applies a per-project enable before main answers and keeps it once main agrees", async () => {
+    useProjectPluginStore.getState().setViewProjectId(PROJECT);
+    let resolve!: () => void;
+    setProjectInstanceEnabled.mockReturnValue(new Promise<void>((r) => (resolve = r)));
+
+    const pending = useProjectPluginStore.getState().setInstanceEnabled("acme.ledger", true);
+    expect(useProjectPluginStore.getState().instanceEnabled).toEqual({ "acme.ledger": true });
+    expect(useProjectPluginStore.getState().instanceToggling.has("acme.ledger")).toBe(true);
+    resolve();
+    await pending;
+
+    expect(setProjectInstanceEnabled).toHaveBeenCalledWith("acme.ledger", true);
+    expect(useProjectPluginStore.getState().instanceEnabled).toEqual({ "acme.ledger": true });
+    expect(useProjectPluginStore.getState().instanceToggling.size).toBe(0);
+  });
+
+  it("rolls a failed per-project enable back to the choice it replaced", async () => {
+    useProjectPluginStore.getState().setViewProjectId(PROJECT);
+    await useProjectPluginStore.getState().setInstanceEnabled("acme.ledger", true);
+    setProjectInstanceEnabled.mockRejectedValue(new Error("main said no"));
+
+    await useProjectPluginStore.getState().setInstanceEnabled("acme.ledger", false);
+
+    const state = useProjectPluginStore.getState();
+    expect(state.instanceEnabled).toEqual({ "acme.ledger": true });
+    expect(state.error).toBe("main said no");
+    expect(state.errorSource).toEqual({
+      action: "instanceEnabled",
+      pluginId: "acme.ledger",
+      enabled: false,
+      reason: "main said no",
+    });
+  });
+
+  it("drops a failed first choice entirely, so the list's record shows again", async () => {
+    useProjectPluginStore.getState().setViewProjectId(PROJECT);
+    setProjectInstanceEnabled.mockRejectedValue(new Error(""));
+
+    await useProjectPluginStore.getState().setInstanceEnabled("acme.ledger", true);
+
+    const state = useProjectPluginStore.getState();
+    expect(state.instanceEnabled).toEqual({});
+    expect(state.error).toBe("Couldn't turn on 'acme.ledger' in this project");
+  });
+
+  it("ignores a second toggle of the same package while the first is in flight", async () => {
+    useProjectPluginStore.getState().setViewProjectId(PROJECT);
+    setProjectInstanceEnabled.mockReturnValue(new Promise<void>(() => {}));
+
+    void useProjectPluginStore.getState().setInstanceEnabled("acme.ledger", true);
+    await useProjectPluginStore.getState().setInstanceEnabled("acme.ledger", false);
+
+    expect(setProjectInstanceEnabled).toHaveBeenCalledTimes(1);
+    expect(useProjectPluginStore.getState().instanceEnabled).toEqual({ "acme.ledger": true });
+  });
+
+  it("forgets this view's per-project choices when it switches to another project", async () => {
+    useProjectPluginStore.getState().setViewProjectId(PROJECT);
+    await useProjectPluginStore.getState().setInstanceEnabled("acme.ledger", true);
+
+    useProjectPluginStore.getState().setViewProjectId(OTHER);
+
+    expect(useProjectPluginStore.getState().instanceEnabled).toEqual({});
   });
 
   it("rolls back a failed default change too", async () => {

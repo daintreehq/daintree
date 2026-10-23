@@ -1144,6 +1144,9 @@ export interface GeneratedElectronAPI {
     setPluginVisibilityDefault(
       ...args: IpcInvokeMap["plugin:visibility-default-set"]["args"]
     ): Promise<IpcInvokeMap["plugin:visibility-default-set"]["result"]>;
+    setProjectInstanceEnabled(
+      ...args: IpcInvokeMap["plugin:project-instance-set-enabled"]["args"]
+    ): Promise<IpcInvokeMap["plugin:project-instance-set-enabled"]["result"]>;
     setProjectPluginMuted(
       ...args: IpcInvokeMap["plugin:project-set-muted"]["args"]
     ): Promise<IpcInvokeMap["plugin:project-set-muted"]["result"]>;

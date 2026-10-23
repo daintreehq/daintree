@@ -73,6 +73,15 @@ export interface ProjectPluginStoreState {
    * is known yet" — which is why it needs no separate loaded flag.
    */
   visibility: ProjectPluginVisibility;
+  /**
+   * This view's own on/off choices for installed per-project packages, by
+   * manifest id, applied before main confirms them. The plugin list's
+   * `enabledInProjects` is the record; an entry here wins over it, since the
+   * list only catches up once its provenance re-pull lands.
+   */
+  instanceEnabled: Readonly<Record<string, boolean>>;
+  /** Manifest ids whose per-project enable/disable call has not resolved yet. */
+  instanceToggling: ReadonlySet<string>;
   /** True while a manual reload is in flight, so its button can show progress. */
   reloading: boolean;
   /** Last mutation failure, surfaced inline by the manager. */
@@ -92,6 +101,7 @@ export type ProjectPluginFailedAction =
   | { action: "mute"; pluginId: string; muted: boolean }
   | { action: "visibility"; pluginId: string; visible: boolean | null }
   | { action: "visibilityDefault"; pluginId: string; hidden: boolean }
+  | { action: "instanceEnabled"; pluginId: string; enabled: boolean }
   | { action: "reload" }
   | { action: "loadVisibility" };
 
@@ -133,6 +143,8 @@ export interface ProjectPluginActions {
   setVisibility: (pluginId: string, visible: boolean | null) => Promise<void>;
   /** Whether an INSTALLED plugin is hidden in projects that have not decided. */
   setVisibilityDefault: (pluginId: string, hidden: boolean) => Promise<void>;
+  /** Turn an installed per-project package on or off in this project. */
+  setInstanceEnabled: (pluginId: string, enabled: boolean) => Promise<void>;
   reload: () => Promise<void>;
   clearError: () => void;
   reset: () => void;
@@ -154,6 +166,8 @@ const INITIAL: ProjectPluginStoreState = {
   activating: EMPTY_ACTIVATING,
   muting: EMPTY_ACTIVATING,
   visibility: EMPTY_VISIBILITY,
+  instanceEnabled: {},
+  instanceToggling: EMPTY_ACTIVATING,
   reloading: false,
   error: null,
   errorSource: null,
@@ -195,6 +209,9 @@ export const useProjectPluginStore = create<ProjectPluginStoreState & ProjectPlu
               visibility: EMPTY_VISIBILITY,
             }
           : {}),
+        // Choices made while the view was unnamed were its sender's, so they
+        // survive the view naming itself; a move away from a named project does not.
+        ...(state.viewProjectId !== null ? { instanceEnabled: {} } : {}),
       });
     },
 
@@ -385,6 +402,42 @@ export const useProjectPluginStore = create<ProjectPluginStoreState & ProjectPlu
             hidden,
           }),
         });
+      }
+    },
+
+    setInstanceEnabled: async (pluginId, enabled) => {
+      const state = get();
+      if (state.projectId !== null && !belongsToView(state, state.projectId)) return;
+      // One call per package at a time, so a rollback restores what this call
+      // replaced rather than a choice a later call already made.
+      if (state.instanceToggling.has(pluginId)) return;
+      const previousChoice: boolean | undefined = state.instanceEnabled[pluginId];
+      set({
+        instanceEnabled: { ...state.instanceEnabled, [pluginId]: enabled },
+        instanceToggling: new Set([...state.instanceToggling, pluginId]),
+        error: null,
+        errorSource: null,
+      });
+      try {
+        await window.electron.plugin.setProjectInstanceEnabled(pluginId, enabled);
+      } catch (err) {
+        const instanceEnabled = { ...get().instanceEnabled };
+        if (previousChoice === undefined) delete instanceEnabled[pluginId];
+        else instanceEnabled[pluginId] = previousChoice;
+        set({
+          instanceEnabled,
+          ...failure(
+            err,
+            enabled
+              ? `Couldn't turn on '${pluginId}' in this project`
+              : `Couldn't turn off '${pluginId}' in this project`,
+            { action: "instanceEnabled", pluginId, enabled }
+          ),
+        });
+      } finally {
+        const next = new Set(get().instanceToggling);
+        next.delete(pluginId);
+        set({ instanceToggling: next });
       }
     },
 
