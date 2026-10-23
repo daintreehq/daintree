@@ -423,6 +423,18 @@ describe("unsaved changes (#12611)", () => {
 
     expect(hasViewUnsavedChanges("p1")).toBe(false);
   });
+
+  it("outlives panel sweeps for a view hosted outside the grid (#14095)", () => {
+    // A sidebar or Home view reports its mounts under an id the panel store
+    // never lists; a sweep for an unrelated panel must not read it as removed.
+    const unmount = reportViewMounted("sidebar:acme/notes", { kindId: "k", pluginId: "x" });
+    setViewUnsavedChanges("sidebar:acme/notes", {}, true);
+    syncPluginPanels([panel()]);
+    syncPluginPanels([], new Set());
+
+    expect(hasViewUnsavedChanges("sidebar:acme/notes")).toBe(true);
+    unmount();
+  });
 });
 
 describe("view unsaved-change signal (#13815)", () => {

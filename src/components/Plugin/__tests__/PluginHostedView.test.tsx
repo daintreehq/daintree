@@ -47,6 +47,12 @@ vi.mock("@/components/Plugin/PluginViewContent", () => ({
   pluginViewHostContext: (kind: string) => ({ kind }),
 }));
 
+vi.mock("@/components/Plugin/PluginViewLoadError", () => ({
+  PluginViewLoadError: ({ message }: { message: string }) => (
+    <div data-testid="load-error">{message}</div>
+  ),
+}));
+
 import {
   PluginHostedView,
   _pluginHostedViewRemovalSignalForTest,
@@ -405,18 +411,51 @@ describe("PluginHostedView", () => {
       expect(h.mounts.at(-1)?.stateVersion).toBe(2);
       second.unmount();
 
-      // The same plugin downgraded to state version 1 must not read or clobber it.
+      // The same plugin downgraded to state version 1 gets the panel's version
+      // error rather than a view whose every write would be refused.
       registerPanelKind({ ...panelKind(), stateVersion: 1 });
-      render(
+      const before = h.mountCount;
+      const downgraded = render(
         <PluginHostedView
           source={{ from: "panel-kind", config: { ...panelKind(), stateVersion: 1 } }}
           host="surface"
           mountId={`surface:${KIND_ID}`}
         />
       );
-      const downgraded = h.mounts.at(-1)!;
-      expect(downgraded.initialArgs).toBeUndefined();
-      expect(downgraded.persistState?.({ layout: "narrow" })).toBe(false);
+      expect(h.mountCount).toBe(before);
+      expect(downgraded.getByTestId("load-error").textContent).toContain("state format 2");
+      downgraded.unmount();
+
+      // The newer build's bag is still there for the newer build.
+      registerPanelKind({ ...panelKind(), stateVersion: 2 });
+      render(surface());
+      expect(h.mounts.at(-1)?.initialArgs).toEqual({ layout: "wide" });
+    });
+
+    it("hands a view with no declared version no stateVersion, as a panel would", () => {
+      const { unmount } = render(sidebar());
+      h.mounts.at(-1)!.persistState?.({ tab: 1 });
+      unmount();
+      render(sidebar());
+      expect(h.mounts.at(-1)?.initialArgs).toEqual({ tab: 1 });
+      expect(h.mounts.at(-1)?.stateVersion).toBeUndefined();
+    });
+
+    it("hands a reloaded plugin's new module the latest bag, not the first mount's", () => {
+      const { rerender } = render(sidebar());
+      expect(h.mounts.at(-1)?.initialArgs).toBeUndefined();
+      h.mounts.at(-1)!.persistState?.({ draft: "kept across the reload" });
+
+      const reloaded = hostedView("plugin://acme.tools/__dtv-2/prefs.js");
+      serve([reloaded]);
+      rerender(
+        <PluginHostedView
+          source={hosted(reloaded)}
+          host="sidebar"
+          mountId="sidebar:acme.tools/prefs"
+        />
+      );
+      expect(h.mounts.at(-1)?.initialArgs).toEqual({ draft: "kept across the reload" });
     });
 
     it("leaves a file editor's draft to its document", () => {

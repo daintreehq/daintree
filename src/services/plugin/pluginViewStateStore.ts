@@ -15,8 +15,10 @@ import { logWarn } from "@/utils/logger";
  *
  * The bag lives in the renderer's `localStorage`. Every project view shares the
  * `persist:daintree` session, so it outlives the view's own renderer (eviction,
- * Sleep, a crash) and the app, and a write is on disk when it returns: what a
- * view's `persistState` accepted is what the next mount reads back. The bag
+ * Sleep, a renderer crash) and the app. A write has left the renderer when it
+ * returns — Chromium commits it to disk shortly after — so what a view's
+ * `persistState` accepted is what the next mount reads back, short of the whole
+ * app dying in that moment. The bag
  * follows the same rules a panel's does — the 64KB cap, JSON canonicalisation,
  * merge-patch semantics and the plugin's declared `stateVersion` — through the
  * same shared helpers.
@@ -64,7 +66,9 @@ interface Envelope {
 }
 
 type Stored =
-  { kind: "empty" } | { kind: "future" } | { kind: "ok"; envelope: Envelope; savedAt: number };
+  | { kind: "empty" }
+  | { kind: "future"; savedAt: number }
+  | { kind: "ok"; envelope: Envelope; savedAt: number };
 
 export function pluginViewStateKey(identity: PluginViewStateIdentity): string {
   const parts = [
@@ -97,10 +101,11 @@ function parseEnvelope(raw: string): Stored | null {
     return null;
   }
   if (!isRecord(parsed) || typeof parsed.schema !== "number") return null;
-  // Written by a newer build of the app: neither read nor overwritten.
-  if (parsed.schema > ENVELOPE_SCHEMA) return { kind: "future" };
-  if (!isRecord(parsed.state)) return null;
   const savedAt = typeof parsed.savedAt === "number" ? parsed.savedAt : 0;
+  // Written by a newer build of the app: neither read nor overwritten, but
+  // aged by its own write time so a downgrade doesn't make it the first to go.
+  if (parsed.schema > ENVELOPE_SCHEMA) return { kind: "future", savedAt };
+  if (!isRecord(parsed.state)) return null;
   const version =
     typeof parsed.version === "number" && Number.isInteger(parsed.version) && parsed.version >= 0
       ? parsed.version
@@ -147,7 +152,7 @@ function readStoredQuietly(store: Storage, key: string): number {
   try {
     const raw = store.getItem(key);
     const stored = raw === null ? null : parseEnvelope(raw);
-    return stored?.kind === "ok" ? stored.savedAt : 0;
+    return stored?.kind === "ok" || stored?.kind === "future" ? stored.savedAt : 0;
   } catch {
     return 0;
   }

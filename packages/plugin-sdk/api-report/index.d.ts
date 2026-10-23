@@ -3153,8 +3153,9 @@ interface PanelViewProps {
      * Outside the grid (a Home surface, a sidebar view, a settings section, a
      * toolbar popover) there is no panel record, so the bag is kept in the host's
      * durable view-state store instead, under the project, your plugin and the
-     * view. The same cap, merge and version rules apply, the write reaches disk
-     * before this returns, and `false` also means storage refused it. A
+     * view. The same cap, merge and version rules apply, the write is committed
+     * without a debounce, so it survives the renderer going away the moment this
+     * returns, and `false` also means storage refused it. A
      * user-scope settings section's bag follows the user across projects. The
      * least recently written of these bags are dropped beyond 200, so treat them
      * as state you can rebuild.

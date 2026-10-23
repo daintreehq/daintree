@@ -139,6 +139,21 @@ describe("pluginViewStateStore", () => {
     expect(readPluginViewState(id({ viewKey: "new" }), undefined)).not.toBeNull();
   });
 
+  it("ages a newer app's entry by its own write time, not as the oldest", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1);
+    persistPluginViewState(id({ viewKey: "old" }), { old: true }, undefined);
+    const futureKey = pluginViewStateKey(id({ viewKey: "future" }));
+    localStorage.setItem(futureKey, JSON.stringify({ schema: 99, savedAt: 5, state: {} }));
+    for (let i = 0; i < MAX_PLUGIN_VIEW_STATE_ENTRIES - 1; i++) {
+      vi.setSystemTime(10 + i);
+      persistPluginViewState(id({ viewKey: `v${i}` }), { i }, undefined);
+    }
+
+    expect(readPluginViewState(id({ viewKey: "old" }), undefined)).toBeNull();
+    expect(localStorage.getItem(futureKey)).not.toBeNull();
+  });
+
   it("makes room when the quota refuses a write, dropping only plugin view bags", () => {
     vi.useFakeTimers();
     vi.setSystemTime(1);

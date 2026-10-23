@@ -14,6 +14,7 @@ import {
   _resetPanelRecoveryStateForTests,
   installPanelRecoveryStateListener,
   isPanelRecoveryHeldReported,
+  onPanelRecoveryHoldReleased,
   readPanelRecoveryHold,
 } from "../panelRecoveryQuery.js";
 import type { ProjectViewManager } from "../../window/ProjectViewManager.js";
@@ -211,6 +212,36 @@ describe("pushed recovery state", () => {
     push(wc, true);
     wc.destroyed = true;
     expect(held(wc)).toBe(false);
+  });
+
+  it("drops a document's answer when the view navigates, and keeps listening", () => {
+    const wc = new FakeContents(null);
+    push(wc, true);
+    wc.emit("did-navigate");
+    expect(held(wc)).toBe(false);
+    push(wc, true);
+    expect(held(wc)).toBe(true);
+    expect(wc.listenerCount("did-navigate")).toBe(1);
+  });
+
+  it("announces a release only when a held view stops holding", () => {
+    const released = vi.fn();
+    const off = onPanelRecoveryHoldReleased(released);
+    const wc = new FakeContents(null);
+    push(wc, false);
+    push(wc, true);
+    push(wc, true);
+    expect(released).not.toHaveBeenCalled();
+    push(wc, false);
+    expect(released.mock.calls).toEqual([[wc.id]]);
+    push(wc, true);
+    wc.emit("did-navigate");
+    expect(released).toHaveBeenCalledTimes(2);
+    // A destroyed view is gone, not released: there is no cap to restore for it.
+    push(wc, true);
+    wc.emit("destroyed");
+    expect(released).toHaveBeenCalledTimes(2);
+    off();
   });
 
   it("stops listening once uninstalled", () => {

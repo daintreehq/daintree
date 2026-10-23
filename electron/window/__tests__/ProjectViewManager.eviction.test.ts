@@ -4246,6 +4246,33 @@ describe("ProjectViewManager — MCP bound sessions and dispatch leases (#11790)
 
       expect(mgr.getAllViews().map((v) => v.projectId)).toEqual(["proj-c"]);
     });
+
+    it("brings the cache back under its cap the moment the hold is released", async () => {
+      const mgr = makeManager(3);
+      await seedThreeViews(mgr);
+      holdFor(mgr, "proj-a", true);
+      mgr.setCachedViewLimit(2);
+      expect(mgr.getAllViews().map((v) => v.projectId)).toEqual(["proj-a", "proj-c"]);
+      mgr.setCachedViewLimit(1);
+      expect(mgr.getAllViews().map((v) => v.projectId)).toEqual(["proj-a", "proj-c"]);
+
+      // No limit change, switch or pressure tick: the release alone re-runs the cap.
+      holdFor(mgr, "proj-a", false);
+      await flushImmediates();
+
+      expect(mgr.getAllViews().map((v) => v.projectId)).toEqual(["proj-c"]);
+    });
+
+    it("won't hand a held view to another window", async () => {
+      const mgr = makeManager(3);
+      await seedThreeViews(mgr);
+      holdFor(mgr, "proj-a", true);
+
+      expect(mgr.canReleaseCachedView("proj-a")).toBe(false);
+      expect(mgr.releaseCachedView("proj-a")).toBe(false);
+      expect(mgr.getAllViews().map((v) => v.projectId)).toContain("proj-a");
+      expect(mgr.canReleaseCachedView("proj-b")).toBe(true);
+    });
   });
 
   describe("quiet bound sessions", () => {

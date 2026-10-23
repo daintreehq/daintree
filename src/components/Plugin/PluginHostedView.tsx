@@ -1,4 +1,4 @@
-import { useCallback, useMemo, type ComponentType } from "react";
+import { useCallback, useMemo, useState, type ComponentType } from "react";
 import {
   getPanelKindRegistrySnapshot,
   subscribeToPanelKindRegistry,
@@ -17,6 +17,8 @@ import {
   type PluginViewContentProps,
 } from "@/components/Plugin/PluginViewContent";
 import { usePluginHostedViewsStore } from "@/store/pluginHostedViewsStore";
+import { PluginViewLoadError } from "@/components/Plugin/PluginViewLoadError";
+import { panelExtensionStateVersionMessage } from "@shared/utils/panelExtensionState";
 import { getViewWorkspaceId } from "@/store/viewWorkspaceId";
 import { currentHostId } from "@/hooks/useHostPlatform";
 import {
@@ -252,9 +254,10 @@ export function PluginHostedView({
   className?: string;
   testId?: string;
 }) {
-  const { content: Content, removal } = getRuntime(source);
+  const { content: Content, removal, componentPath } = getRuntime(source);
   const declaredVersion = source.from === "panel-kind" ? source.config.stateVersion : undefined;
   const pluginId = source.from === "hosted" ? source.view.pluginId : source.config.extensionId;
+  const displayName = source.from === "hosted" ? source.view.name : source.config.name;
   const settingsScope = settingsContext?.scope;
   const settingsProjectId = settingsContext?.projectId ?? null;
   // One object per identity, so the callbacks below only change when it does.
@@ -263,23 +266,6 @@ export function PluginHostedView({
     [pluginId, host, mountId, settingsScope, settingsProjectId]
   );
   const stateKey = identity ? pluginViewStateKey(identity) : null;
-  // Read once per identity, like a panel's `initialArgs`: the content freezes
-  // its first bag, and later writes are for the NEXT mount.
-  const mountState = useMemo(
-    () => (identity ? readPluginViewState(identity, declaredVersion) : null),
-    [identity, declaredVersion]
-  );
-  const persistState = useCallback(
-    (patch: Record<string, unknown>): boolean =>
-      identity ? persistPluginViewState(identity, patch, declaredVersion) : false,
-    [identity, declaredVersion]
-  );
-  // What a retry restores: the latest bag on disk, not the one the mount read.
-  const readRecoveryState = useCallback(() => {
-    if (!identity) return null;
-    const decoded = readPluginViewState(identity, declaredVersion);
-    return decoded?.ok ? { state: decoded.state, version: decoded.version } : null;
-  }, [identity, declaredVersion]);
   // Per mount, never on the shared frozen context: the callback belongs to
   // this one opening, and a view that kept it must not close a later one.
   const hostContext = useMemo<PluginViewHostContext>(
@@ -295,29 +281,96 @@ export function PluginHostedView({
       style={{ contain: "layout paint" }}
       data-testid={testId}
     >
-      <Content
-        // A new identity (a settings home switching projects) is a new view:
-        // its frozen bag and unsaved flag must not carry over.
-        key={stateKey ?? mountId}
-        panelId={mountId}
-        panelRemovedSignal={removal.signal}
-        hostContext={hostContext}
-        {...(identity
-          ? {
-              // A bag a newer build of the plugin wrote stays on disk unread,
-              // and the store refuses to overwrite it.
-              initialArgs: mountState?.ok ? mountState.state : undefined,
-              stateVersion: mountState?.ok ? mountState.version : declaredVersion,
-              persistState,
-              readRecoveryState,
-              offerUnsavedChanges: true,
-            }
-          : {})}
-        {...(settingsContext ? { settingsContext } : {})}
-        {...(onRequestClose ? { onRequestClose } : {})}
-        {...(requestCloseLabel !== undefined ? { requestCloseLabel } : {})}
-        {...(fileDocument ? { fileDocument } : {})}
+      <HostedViewMount
+        // A new identity (a settings home switching projects) or a new module
+        // (a plugin reload) is a new mount: it reads the bag afresh, and the
+        // last one's frozen bag and unsaved flag don't carry over.
+        key={`${stateKey ?? mountId}\n${componentPath}`}
+        Content={Content}
+        identity={identity}
+        declaredVersion={declaredVersion}
+        pluginId={pluginId ?? ""}
+        displayName={displayName}
+        contentProps={{
+          panelId: mountId,
+          panelRemovedSignal: removal.signal,
+          hostContext,
+          ...(settingsContext ? { settingsContext } : {}),
+          ...(onRequestClose ? { onRequestClose } : {}),
+          ...(requestCloseLabel !== undefined ? { requestCloseLabel } : {}),
+          ...(fileDocument ? { fileDocument } : {}),
+        }}
       />
     </div>
+  );
+}
+
+/**
+ * One mount of a hosted view, wired to its durable state (#14095). The bag is
+ * read once, when the mount starts, like a panel's `initialArgs`: the content
+ * freezes its first bag, and later writes are for the NEXT mount.
+ */
+function HostedViewMount({
+  Content,
+  identity,
+  declaredVersion,
+  pluginId,
+  displayName,
+  contentProps,
+}: {
+  Content: ComponentType<PluginViewContentProps>;
+  identity: PluginViewStateIdentity | null;
+  declaredVersion: number | undefined;
+  pluginId: string;
+  displayName: string;
+  contentProps: PluginViewContentProps;
+}) {
+  const [mountState] = useState(() =>
+    identity ? readPluginViewState(identity, declaredVersion) : null
+  );
+  const persistState = useCallback(
+    (patch: Record<string, unknown>): boolean =>
+      identity ? persistPluginViewState(identity, patch, declaredVersion) : false,
+    [identity, declaredVersion]
+  );
+  // What a retry restores: the latest bag in storage, not the one the mount read.
+  const readRecoveryState = useCallback(() => {
+    if (!identity) return null;
+    const decoded = readPluginViewState(identity, declaredVersion);
+    return decoded?.ok ? { state: decoded.state, version: decoded.version } : null;
+  }, [identity, declaredVersion]);
+
+  if (mountState && !mountState.ok) {
+    // A bag written by a newer build of the plugin: refused, as a panel's is,
+    // rather than mounting a view whose every write would be refused. The bag
+    // stays in storage for the newer build.
+    return (
+      <PluginViewLoadError
+        pluginId={pluginId}
+        displayName={displayName}
+        message={panelExtensionStateVersionMessage(
+          displayName,
+          mountState.persistedVersion,
+          mountState.declaredVersion
+        )}
+      />
+    );
+  }
+  return (
+    <Content
+      {...contentProps}
+      {...(identity
+        ? {
+            initialArgs: mountState?.state,
+            // Absent when the plugin declares no version, as on a panel: there
+            // is nothing to migrate between.
+            stateVersion:
+              declaredVersion === undefined ? undefined : (mountState?.version ?? declaredVersion),
+            persistState,
+            readRecoveryState,
+            offerUnsavedChanges: true,
+          }
+        : {})}
+    />
   );
 }
