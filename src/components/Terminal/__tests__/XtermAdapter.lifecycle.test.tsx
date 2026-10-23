@@ -1277,6 +1277,34 @@ describe("XtermAdapter with the terminal service unloaded", () => {
     );
   });
 
+  it("follows the alt buffer from the terminal it created, and stops on unmount", async () => {
+    let onAltBuffer: ((isAltBuffer: boolean) => void) | null = null;
+    const unsubscribe = vi.fn();
+    mocks.terminalInstanceService.addAltBufferListener.mockImplementationOnce(
+      (_id: string, callback: (isAltBuffer: boolean) => void) => {
+        onAltBuffer = callback;
+        return unsubscribe;
+      }
+    );
+
+    const view = renderAdapter();
+    await waitFor(() => expect(onAltBuffer).not.toBeNull());
+    // Subscribed to the instance it created, not before it existed.
+    expect(
+      mocks.terminalInstanceService.addAltBufferListener.mock.invocationCallOrder[0]
+    ).toBeGreaterThan(mocks.terminalInstanceService.getOrCreate.mock.invocationCallOrder[0]!);
+    const wrapper = view.container.querySelector('[aria-label="Terminal output"]')!.parentElement!;
+    expect(wrapper.className).not.toContain("terminal-alt-buffer");
+
+    act(() => onAltBuffer!(true));
+    expect(wrapper.className).toContain("terminal-alt-buffer");
+    act(() => onAltBuffer!(false));
+    expect(wrapper.className).not.toContain("terminal-alt-buffer");
+
+    view.unmount();
+    expect(unsubscribe).toHaveBeenCalledTimes(1);
+  });
+
   it("does not create the terminal when it unmounts while the service loads", async () => {
     const view = renderAdapter();
     view.unmount();

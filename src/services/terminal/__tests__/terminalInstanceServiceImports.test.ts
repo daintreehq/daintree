@@ -5,19 +5,19 @@ import { fileURLToPath } from "node:url";
 import ts from "typescript";
 
 // The terminal instance service loads on a view's first terminal (#14267). A
-// static value import from anywhere outside src/services/terminal/ puts the
+// static value import from any other source file — the accessor and the rest
+// of src/services/terminal/ included, since boot imports them — puts the
 // 4,800-line module, and the ~50 only it pulls in, back on every project
-// view's boot closure. Everything else goes through
-// terminalInstanceServiceAccessor; type-only imports and dynamic `import()`
-// are the allowed shapes. Tests, mocks and benches are exempt: they import the
-// real module on purpose.
+// view's boot closure. Everything goes through terminalInstanceServiceAccessor;
+// type-only imports and dynamic `import()` are the allowed shapes. Tests,
+// mocks and benches are exempt: they import the real module on purpose.
 
 const TEST_DIR = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(TEST_DIR, "../../../..");
 const SRC_ROOT = path.join(REPO_ROOT, "src");
-const TERMINAL_DIR = path.join(SRC_ROOT, "services/terminal");
 const BARREL = path.join(SRC_ROOT, "services/TerminalInstanceService");
-const TARGETS = new Set([BARREL, path.join(TERMINAL_DIR, "TerminalInstanceService")]);
+const SERVICE = path.join(SRC_ROOT, "services/terminal/TerminalInstanceService");
+const TARGETS = new Set([BARREL, SERVICE]);
 
 const SOURCE_FILE = /\.tsx?$/;
 const EXEMPT_FILE = /\.(test|spec|bench)\.tsx?$/;
@@ -28,14 +28,14 @@ function sourceFiles(dir: string, found: string[] = []): string[] {
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
     const full = path.join(dir, entry.name);
     if (entry.isDirectory()) {
-      if (!EXEMPT_DIRS.has(entry.name) && full !== TERMINAL_DIR) sourceFiles(full, found);
+      if (!EXEMPT_DIRS.has(entry.name)) sourceFiles(full, found);
     } else if (
       SOURCE_FILE.test(entry.name) &&
       !entry.name.endsWith(".d.ts") &&
       !EXEMPT_FILE.test(entry.name) &&
-      // The barrel is the one re-export of the service, and is itself only
-      // ever imported dynamically or for types.
-      full.replace(STRIPPED_EXTENSION, "") !== BARREL
+      // The service itself, and the barrel that is its one re-export and is
+      // only ever imported dynamically or for types.
+      !TARGETS.has(full.replace(STRIPPED_EXTENSION, ""))
     ) {
       found.push(full);
     }
@@ -99,7 +99,7 @@ function staticServiceImports(fileName: string, sourceText: string): string[] {
 }
 
 describe("terminal instance service imports", () => {
-  it("has no static value import outside src/services/terminal/", () => {
+  it("has no static value import from any other source file", () => {
     const violations = sourceFiles(SRC_ROOT).flatMap((file) =>
       staticServiceImports(file, fs.readFileSync(file, "utf8"))
     );

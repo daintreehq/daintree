@@ -62,6 +62,11 @@ import {
   setWorktreePathIndexAccessor,
   setWorktreeSelectionAccessor,
 } from "../storeAccessors";
+import {
+  __testing as terminalServiceTesting,
+  load as loadTerminalService,
+  peek as peekTerminalService,
+} from "@/services/terminal/terminalInstanceServiceAccessor";
 
 const getForProject = vi.fn();
 const reconnectBulk = vi.fn();
@@ -93,6 +98,36 @@ beforeEach(() => {
 const current = { isCurrent: () => true };
 
 describe("resyncHostTerminals", () => {
+  describe("in a view whose terminal service hasn't loaded", () => {
+    beforeEach(() => {
+      terminalServiceTesting.reset();
+    });
+
+    it("leaves it unloaded when the view has no terminals", async () => {
+      panel("b-1", { kind: "browser" });
+      getForProject.mockResolvedValue([]);
+
+      await resyncHostTerminals("proj-1", current);
+
+      expect(peekTerminalService()).toBeNull();
+    });
+
+    it("hands the host's state to the service the first terminal brings", async () => {
+      getForProject.mockImplementation(async () => {
+        // Opened while the host's answer was in flight.
+        panel("t-1", { agentState: "idle", lastStateChange: 100, agentIncarnation: 1 });
+        return [{ id: "t-1", agentState: "working", lastStateChange: 200, agentIncarnation: 1 }];
+      });
+
+      await resyncHostTerminals("proj-1", current);
+      expect(peekTerminalService()).toBeNull();
+      expect(setAgentState).not.toHaveBeenCalled();
+
+      await loadTerminalService();
+      expect(setAgentState).toHaveBeenCalledWith("t-1", "working");
+    });
+  });
+
   it("keeps a directing pane directing over a newer waiting report", async () => {
     panel("t-draft", { agentState: "directing", lastStateChange: 100, agentIncarnation: 1 });
     panel("t-run", { agentState: "directing", lastStateChange: 100, agentIncarnation: 1 });
