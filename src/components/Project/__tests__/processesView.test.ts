@@ -10,6 +10,9 @@ import {
   describeMembers,
   describeTerminalKind,
   formatApproxMemory,
+  describeTerminalBuffer,
+  formatBufferEstimate,
+  indexTerminalBuffers,
   formatCpu,
   groupProcessesByProject,
   groupTerminalsByProject,
@@ -292,5 +295,79 @@ describe("unaccountedCores", () => {
         6
       )
     ).toBeNull();
+  });
+});
+
+describe("renderer terminal buffer readings (#14213)", () => {
+  it("keeps a real zero and says when a buffer is under a megabyte", () => {
+    expect(formatBufferEstimate(0)).toBe("0 MB");
+    expect(formatBufferEstimate(48 * 80 * 12)).toBe("<1 MB");
+    expect(formatBufferEstimate(10_000 * 182 * 12)).toBe("~21 MB");
+    expect(formatBufferEstimate(3 * 1024 ** 3)).toBe("~3.0 GB");
+  });
+
+  function view(
+    webContentsId: number,
+    status: "fresh" | "last-known" | "unavailable",
+    sampledAt: number,
+    normalLines: number
+  ) {
+    return {
+      webContentsId,
+      windowId: 1,
+      projectId: "p1",
+      state: status === "fresh" ? ("active" as const) : ("cached" as const),
+      status,
+      sampledAt: status === "unavailable" ? null : sampledAt,
+      ageMs: status === "unavailable" ? null : 0,
+      estimatedBytes: status === "unavailable" ? null : normalLines * 80 * 12,
+      terminals:
+        status === "unavailable"
+          ? null
+          : [
+              {
+                terminalId: "t1",
+                normalLines,
+                alternateLines: 0,
+                cols: 80,
+                estimatedBytes: normalLines * 80 * 12,
+              },
+            ],
+    };
+  }
+
+  it("sums a terminal's copies across views and describes it by the fresh one", () => {
+    const index = indexTerminalBuffers({
+      complete: true,
+      estimatedBytes: 0,
+      views: [view(2, "last-known", 2_000, 500), view(1, "fresh", 1_000, 100)],
+    });
+    expect(index.get("t1")).toMatchObject({
+      status: "fresh",
+      normalLines: 100,
+      copies: 2,
+      estimatedBytes: (500 + 100) * 80 * 12,
+    });
+    expect(describeTerminalBuffer(index.get("t1")!)).toBe(
+      "Buffer <1 MB est. · 2 windows · 100 lines × 80 cols"
+    );
+  });
+
+  it("describes two cached copies by the newer and skips unavailable views", () => {
+    const index = indexTerminalBuffers({
+      complete: false,
+      estimatedBytes: 0,
+      views: [
+        view(1, "last-known", 1_000, 100),
+        view(2, "last-known", 2_000, 500),
+        view(3, "unavailable", 0, 0),
+      ],
+    });
+    expect(index.get("t1")).toMatchObject({ normalLines: 500, copies: 2 });
+    expect(index.size).toBe(1);
+  });
+
+  it("is empty when the snapshot didn't sample renderers", () => {
+    expect(indexTerminalBuffers(undefined).size).toBe(0);
   });
 });

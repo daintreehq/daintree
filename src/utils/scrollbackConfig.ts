@@ -1,3 +1,4 @@
+import { XTERM_BYTES_PER_CELL } from "@shared/config/terminalBufferMemory";
 import { PLAIN_SHELL_SCROLLBACK_MAX, PTY_MIRROR_SCROLLBACK } from "@shared/config/scrollback";
 
 export const PERFORMANCE_MODE_SCROLLBACK = 100;
@@ -72,7 +73,7 @@ export function getScrollbackForType(isAgent: boolean, baseScrollback: number): 
 // run far wider than 80 columns, so the estimate assumes a typical wide pane
 // and the settings copy says so.
 export const SCROLLBACK_ESTIMATE_COLUMNS = 180;
-const BYTES_PER_CELL = 12;
+const BYTES_PER_CELL = XTERM_BYTES_PER_CELL;
 const BYTES_PER_LINE_OVERHEAD = 240;
 const BYTES_PER_LINE = SCROLLBACK_ESTIMATE_COLUMNS * BYTES_PER_CELL + BYTES_PER_LINE_OVERHEAD;
 

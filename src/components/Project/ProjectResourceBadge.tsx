@@ -17,9 +17,12 @@ import { actionService } from "@/services/ActionService";
 import type { ProcessMetricEntry, HeapStats, DiagnosticsInfo } from "@shared/types/ipc/system";
 import type {
   CompositeMemorySnapshot,
+  RendererTerminalBufferSlice,
   TerminalWorkloadSlice,
 } from "@shared/types/memoryAccounting";
 import type { Project } from "@shared/types";
+import { parseHostScopedKey } from "@shared/types/remoteHosts";
+import { currentHostId, hostScopedKey } from "@/hooks/useHostPlatform";
 import {
   type TrendDirection,
   type MemoryThresholds,
@@ -32,6 +35,7 @@ import {
 } from "./ProjectResourceBadge.utils";
 import { pluralize, pluralNoun } from "@/lib/pluralize";
 import { ProcessesDialog } from "./ProcessesDialog";
+import { formatAgo, formatBufferEstimate } from "./processesView";
 import { useClosedTerminalProcessNotice } from "@/hooks/app/useClosedTerminalProcessNotice";
 import { isLivePluginTask, usePluginTaskStore } from "@/store/pluginTaskStore";
 import { PluginTaskList } from "@/components/Plugin/PluginTaskList";
@@ -190,6 +194,80 @@ function MemorySummary({
       {systemAvailableMB !== null && (
         <MemoryRow label="Available on this machine" value={formatMemory(systemAvailableMB)} />
       )}
+    </div>
+  );
+}
+
+const BUFFER_ESTIMATE_HINT =
+  "Estimated from each terminal's buffer lines × columns × 12 bytes per cell, not measured. Already part of the Daintree app figure above";
+
+/**
+ * Renderer terminal buffers per project view, cached views included (#14213).
+ * A cached view shows the counts it reported on its way into the cache; one
+ * that never reported says so instead of reading as empty.
+ */
+function TerminalBufferBreakdown({
+  slice,
+  projectNames,
+}: {
+  slice: RendererTerminalBufferSlice;
+  projectNames: ReadonlyMap<string, string>;
+}) {
+  if (slice.views.length === 0) return null;
+
+  // Views are keyed host-scoped (`host:project` for a remote project) and
+  // span every window, while the project list is this window's host's, by
+  // bare id. Matching on the full key keeps a bare-id collision on another
+  // host from borrowing a name here.
+  const scopedNames = new Map<string, string>();
+  for (const [id, name] of projectNames) scopedNames.set(hostScopedKey(id), name);
+
+  const rows = slice.views
+    .map((view) => {
+      const { hostId } = parseHostScopedKey(view.projectId);
+      const name =
+        scopedNames.get(view.projectId) ??
+        (hostId !== currentHostId() ? `Project on ${hostId}` : "Unknown project");
+      const cached = view.state === "cached" ? "cached" : null;
+      // Last-known counts carry their age whether the view is cached or an
+      // active one stopped answering; a fresh reading needs none.
+      const age =
+        view.status === "last-known" && view.ageMs !== null
+          ? cached
+            ? `cached ${formatAgo(view.ageMs)}`
+            : `from ${formatAgo(view.ageMs)}`
+          : cached;
+      const label = age ? `${name} · ${age}` : name;
+      return {
+        key: String(view.webContentsId),
+        label,
+        bytes: view.estimatedBytes,
+      };
+    })
+    .sort(
+      (a, b) =>
+        Number(a.bytes === null) - Number(b.bytes === null) ||
+        (b.bytes ?? 0) - (a.bytes ?? 0) ||
+        a.label.localeCompare(b.label)
+    );
+
+  return (
+    <div className="space-y-1" data-testid="terminal-buffer-breakdown">
+      <SectionLabel>Terminal buffers (estimate)</SectionLabel>
+      <MemoryRow
+        label={slice.complete ? "All projects" : "Projects that reported"}
+        hint={BUFFER_ESTIMATE_HINT}
+        value={
+          slice.estimatedBytes !== null ? formatBufferEstimate(slice.estimatedBytes) : "Unavailable"
+        }
+      />
+      {rows.map((row) => (
+        <MemoryRow
+          key={row.key}
+          label={row.label}
+          value={row.bytes !== null ? formatBufferEstimate(row.bytes) : "Unavailable"}
+        />
+      ))}
     </div>
   );
 }
@@ -1015,6 +1093,12 @@ export function ProjectResourceBadge({
                   Each process is counted in full, so memory two processes share is counted twice
                   and these totals run high.
                 </p>
+                {memorySnapshot?.rendererTerminalBuffers && (
+                  <TerminalBufferBreakdown
+                    slice={memorySnapshot.rendererTerminalBuffers}
+                    projectNames={projectNames}
+                  />
+                )}
               </>
             )}
             {/* Mounted unconditionally: the list is its own read, so a failed

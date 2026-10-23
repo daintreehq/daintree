@@ -3541,6 +3541,17 @@ export interface GeneratedIpcInvokeMap {
         wantsWebgl: number;
         terminalCount: number;
         countsByTier: Record<string, number>;
+        bufferMemory?:
+          | {
+              sampledAt: number;
+              terminals: {
+                terminalId: string;
+                normalLines: number;
+                alternateLines: number;
+                cols: number;
+              }[];
+            }
+          | undefined;
       },
     ];
     result: void;

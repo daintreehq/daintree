@@ -1932,6 +1932,9 @@ export interface IpcEventMap {
   // blocking time so ProcessMemoryMonitor can see sustained event-loop
   // saturation. Renderer replies via SYSTEM_REPORT_RENDERER_ELU.
   "window:sample-renderer-elu": { requestId: string };
+  // Main asks an active renderer, on demand, for its xterm buffer line counts.
+  // Renderer replies through system:report-terminal-renderer-diagnostics.
+  "window:sample-terminal-buffers": { requestId: string };
   "window:disk-space-status": {
     status: "normal" | "warning" | "critical";
     availableMb: number;
@@ -2486,6 +2489,7 @@ export type IpcEventBusMap = Pick<
   | "window:disk-space-status"
   | "window:sample-blink-memory"
   | "window:sample-renderer-elu"
+  | "window:sample-terminal-buffers"
   // System wake (per-webContents)
   | "system:wake"
   // System memory pressure episode edges (window-scoped)
