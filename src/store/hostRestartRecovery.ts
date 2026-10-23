@@ -33,14 +33,26 @@ export async function relaunchTerminalsLostToHostRestart(
   const hydrate: HydrateResult = await window.electron.app.hydrate();
   if (!options.isCurrent()) return;
   if ((hydrate.workspaceId ?? hydrate.project?.id ?? null) !== projectId) return;
-  const saved = (hydrate.appState?.terminals ?? []).filter(
+  const candidates = (hydrate.appState?.terminals ?? []).filter(
     (entry) =>
       entry !== undefined &&
       entry !== null &&
       typeof entry.id === "string" &&
+      entry.id.trim() !== "" &&
       lost.has(entry.id) &&
       entry.location !== "trash"
   );
+  if (candidates.length === 0) return;
+  // Asked again just before launching: one the host runs under that id after
+  // all (another screen brought it back meanwhile) must not start twice, and
+  // one it can't say about is left alone.
+  const answers: Record<string, TerminalReconnectResult> =
+    await window.electron.terminal.reconnectBulk(candidates.slice(0, 256).map((entry) => entry.id));
+  if (!options.isCurrent()) return;
+  const saved = candidates.filter((entry) => {
+    const answer = answers[entry.id];
+    return answer !== undefined && !answer.exists && !answer.conflict;
+  });
   if (saved.length === 0) return;
 
   const [{ restorePanelsPhase }, { usePanelStore }, { useResourceProfileStore }] =
@@ -60,8 +72,19 @@ export async function relaunchTerminalsLostToHostRestart(
     // of any other kind stays as the resync left it.
     if ((args.kind ?? "terminal") !== "terminal") return id;
     if (!options.isCurrent() || !options.drives()) return id;
+    // What the view shows now outranks the host's save, which a rename or a
+    // move made while the link was down never reached.
+    const live = usePanelStore.getState().panelsById[id];
+    const shown =
+      live && (live.location === "grid" || live.location === "dock")
+        ? {
+            location: live.location,
+            ...(live.titleMode === "user" && { title: live.title, titleMode: live.titleMode }),
+          }
+        : {};
     const launched = await usePanelStore.getState().addPanel({
       ...args,
+      ...shown,
       kind: "terminal",
       replacesLostTerminal: restartKey,
       // Already counted: the pane is there, only its terminal is new.
@@ -74,10 +97,6 @@ export async function relaunchTerminalsLostToHostRestart(
   const project = hydrate.project;
   const status = worktreeClient.getAllWithStatus().catch(() => null);
   const tmpDir = hydrate.hostTmpDir ?? (isRemoteWindow() ? undefined : hydrate.systemTmpDir);
-  // Each one the host just confirmed it no longer has, so none is asked about again.
-  const gone: Record<string, TerminalReconnectResult> = Object.fromEntries(
-    saved.map((entry) => [entry.id, { exists: false }])
-  );
 
   logInfo("[HostRestart] Relaunching the terminals a host restart ended", {
     projectId,
@@ -88,7 +107,7 @@ export async function relaunchTerminalsLostToHostRestart(
     withHydrationBatch: (run) => run(),
     // Nothing the host runs now is appended: this restores only what the restart ended.
     backendTerminalMap: new Map(),
-    prefetchedReconnectResults: gone,
+    prefetchedReconnectResults: answers,
     terminalSizes: hydrate.terminalSizes ?? {},
     activeWorktreeId:
       getWorktreeSelectionSnapshot()?.activeWorktreeId ??

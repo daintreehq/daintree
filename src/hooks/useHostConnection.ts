@@ -82,11 +82,12 @@ let resyncAgain = false;
 /** A pass still owed the project state, because a request that asked for it was coalesced. */
 let resyncProjectStateOwed = false;
 /**
- * The panes a host restart ended, gathered by the passes after it until one
- * learns whether this view drives: it relaunches them, or leaves them to the
- * driver. Null when no restart is owed that.
+ * The panes a host restart ended, by the restart key each was lost under,
+ * held until the host says whether this view drives: it relaunches them, or
+ * leaves them to the driver. `gathering` while the resync after the restart
+ * is still finding them. Null when no restart is owed that.
  */
-let restartLosses: Map<string, number> | null = null;
+let restartRecovery: { lost: Map<string, number>; gathering: boolean } | null = null;
 /**
  * Bumped by teardown alone: a relaunch under way outlives the resyncs after
  * it, which only re-read what the host shows, but not the view's sync.
@@ -123,7 +124,10 @@ export interface ResyncFromHostOptions {
 export function resyncFromHost(options: ResyncFromHostOptions = {}): Promise<void> {
   resyncGeneration += 1;
   if (options.freshSession) resyncProjectStateOwed = true;
-  if (options.hostRestarted) restartLosses ??= new Map();
+  if (options.hostRestarted) {
+    restartRecovery ??= { lost: new Map(), gathering: true };
+    restartRecovery.gathering = true;
+  }
   if (resyncRunning) {
     resyncAgain = true;
     return resyncRunning;
@@ -147,9 +151,9 @@ async function runResyncPass(projectState: boolean): Promise<void> {
   const readBacks = readBacksStarted;
   const isCurrent = () => generation === resyncGeneration && getViewWorkspaceId() === projectId;
   const lease = refreshLease();
-  const losses = restartLosses;
+  const recovery = restartRecovery?.gathering ? restartRecovery : null;
   const terminals = projectId
-    ? resyncHostTerminals(projectId, { isCurrent, lost: losses ?? undefined })
+    ? resyncHostTerminals(projectId, { isCurrent, lost: recovery?.lost })
     : Promise.resolve();
   const worktrees = window.electron.worktree.refresh();
   const steps: Array<[string, () => Promise<unknown>]> = [
@@ -187,10 +191,16 @@ async function runResyncPass(projectState: boolean): Promise<void> {
       },
     ]);
   }
-  if (losses && projectId) {
+  if (recovery && projectId) {
     steps.push([
       "terminals a host restart ended",
-      () => relaunchRestartLosses(projectId, losses, { isCurrent, terminals, lease }),
+      async () => {
+        const [read] = await Promise.allSettled([terminals, lease]);
+        // A newer pass, or the next one after a failed read, carries on gathering.
+        if (!isCurrent() || restartRecovery !== recovery || read.status === "rejected") return;
+        recovery.gathering = false;
+        settleRestartRecovery();
+      },
     ]);
   }
   const results = await Promise.allSettled(steps.map(([, step]) => step()));
@@ -203,43 +213,54 @@ async function runResyncPass(projectState: boolean): Promise<void> {
 }
 
 /**
- * Once the pass knows what the restart ended and who drives: a view that
- * drives brings those panes back the way a cold launch does, and one that
- * watches, or hasn't heard from the host since the gap, starts nothing and
- * lets them go, so no later takeover relaunches the driver's agents.
+ * Settle what a host restart ended once the host has said who drives: a view
+ * that drives, over the state it drove before, brings those panes back the
+ * way a cold launch does; one that watches leaves them to the driver, now and
+ * after any later takeover. While the answer is still owed (lost on its way,
+ * or a read-back of the host's state under way) they wait for it.
  */
-async function relaunchRestartLosses(
-  projectId: string,
-  losses: Map<string, number>,
-  pass: { isCurrent: () => boolean; terminals: Promise<void>; lease: Promise<void> }
-): Promise<void> {
-  await Promise.allSettled([pass.terminals, pass.lease]);
-  // A newer pass carries on gathering into the same set and settles it.
-  if (!pass.isCurrent() || restartLosses !== losses) return;
-  if (!drivesSinceGap(projectId)) {
-    restartLosses = null;
-    if (losses.size > 0) {
+function settleRestartRecovery(): void {
+  const recovery = restartRecovery;
+  const projectId = getViewWorkspaceId();
+  if (!recovery || recovery.gathering || !projectId) return;
+  const lease = getDriveLeaseSnapshot();
+  if (lease?.projectId !== projectId || leaseBeforeGap !== undefined) return;
+  if (!lease.drivingHere) {
+    restartRecovery = null;
+    if (recovery.lost.size > 0) {
       logInfo("[HostConnection] Left the terminals a host restart ended to the project's driver", {
         projectId,
-        count: losses.size,
+        count: recovery.lost.size,
       });
     }
     return;
   }
-  if (losses.size === 0) {
-    restartLosses = null;
-    return;
-  }
-  const { relaunchTerminalsLostToHostRestart } = await import("@/store/hostRestartRecovery");
-  if (!pass.isCurrent() || restartLosses !== losses) return;
-  restartLosses = null;
+  if (readBackOwed) return;
+  restartRecovery = null;
+  if (recovery.lost.size === 0) return;
   const generation = restartRecoveryGeneration;
+  const isCurrent = () =>
+    generation === restartRecoveryGeneration && getViewWorkspaceId() === projectId;
   safeFireAndForget(
-    relaunchTerminalsLostToHostRestart(projectId, losses, {
-      isCurrent: () =>
-        generation === restartRecoveryGeneration && getViewWorkspaceId() === projectId,
-      drives: () => drivesSinceGap(projectId),
-    }),
+    (async () => {
+      try {
+        const { relaunchTerminalsLostToHostRestart } = await import("@/store/hostRestartRecovery");
+        await relaunchTerminalsLostToHostRestart(projectId, recovery.lost, {
+          isCurrent,
+          drives: () => drivesSinceGap(projectId),
+        });
+      } catch (error) {
+        // Cut short, most likely by the link: the host's next word tries again.
+        // A pane relaunched meanwhile no longer shows its loss and is skipped.
+        if (isCurrent()) {
+          const pending = (restartRecovery ??= { lost: new Map(), gathering: false });
+          for (const [id, restartKey] of recovery.lost) {
+            if (!pending.lost.has(id)) pending.lost.set(id, restartKey);
+          }
+        }
+        throw error;
+      }
+    })(),
     { context: "Relaunching the terminals a host restart ended" }
   );
 }
@@ -679,6 +700,7 @@ function settleReadBack(done: Promise<boolean>): void {
     }
     cancelLeaseRecheck();
     releaseHostOwnedWrites(reason);
+    settleRestartRecovery();
   });
 }
 
@@ -719,6 +741,7 @@ function applyLease(lease: DriveLeaseView, source: "answer" | "take-over" = "ans
   );
   if (back === "release") releaseHostOwnedWrites();
   if (settling) readBackAfterGap(lease, settling);
+  settleRestartRecovery();
 }
 
 function hostDisplayName(fallback: string): string {
@@ -830,7 +853,12 @@ function readBackAsDriver(
       : Promise.resolve(true);
     let terminalsRead = false;
     try {
-      await resyncHostTerminals(projectId, { isCurrent, follow: true });
+      await resyncHostTerminals(projectId, {
+        isCurrent,
+        follow: true,
+        // Read back after a host restart, the panes it finds gone are what the restart ended.
+        lost: restartRecovery?.gathering ? restartRecovery.lost : undefined,
+      });
       terminalsRead = true;
     } catch (error) {
       logWarn(`[HostConnection] Couldn't read the host's terminals ${occasion}`, { error });
@@ -1173,7 +1201,7 @@ function beginSync(): () => void {
     draftFollowGeneration += 1;
     takeOverGeneration += 1;
     restartRecoveryGeneration += 1;
-    restartLosses = null;
+    restartRecovery = null;
     for (const dispose of disposers.splice(0)) dispose();
     driverNavigation = null;
     navigationLeaseId = undefined;
@@ -1289,7 +1317,7 @@ export function _reloadHostConnectionSyncForTesting(): void {
   resyncRunning = null;
   resyncAgain = false;
   resyncProjectStateOwed = false;
-  restartLosses = null;
+  restartRecovery = null;
   restartRecoveryGeneration += 1;
   followRunning = null;
   followAgain = false;

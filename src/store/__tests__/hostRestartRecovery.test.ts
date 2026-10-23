@@ -2,7 +2,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PanelRestoreContext } from "@/utils/stateHydration/panelRestorePhase";
 
-const { restorePanelsPhase, addPanel, getAllWithStatus } = vi.hoisted(() => ({
+const { restorePanelsPhase, addPanel, getAllWithStatus, panelsById } = vi.hoisted(() => ({
   restorePanelsPhase: vi.fn(async (_saved: unknown[], _ctx: PanelRestoreContext) => ({
     restoreTasks: [],
     savedIdToRestoredId: new Map(),
@@ -10,6 +10,7 @@ const { restorePanelsPhase, addPanel, getAllWithStatus } = vi.hoisted(() => ({
   })),
   addPanel: vi.fn(async (args: { requestedId?: string }) => args.requestedId ?? null),
   getAllWithStatus: vi.fn(async () => ({ worktrees: [], gitBacked: true })),
+  panelsById: {} as Record<string, Record<string, unknown>>,
 }));
 
 vi.mock("@/utils/logger", () => ({
@@ -19,7 +20,9 @@ vi.mock("@/utils/logger", () => ({
   logWarn: vi.fn(),
 }));
 vi.mock("@/utils/stateHydration/panelRestorePhase", () => ({ restorePanelsPhase }));
-vi.mock("@/store/panelStore", () => ({ usePanelStore: { getState: () => ({ addPanel }) } }));
+vi.mock("@/store/panelStore", () => ({
+  usePanelStore: { getState: () => ({ addPanel, panelsById }) },
+}));
 vi.mock("@/store/resourceProfileStore", () => ({
   useResourceProfileStore: { getState: () => ({ profile: "balanced" }) },
 }));
@@ -29,6 +32,10 @@ vi.mock("@/hooks/useHostPlatform", () => ({ isRemoteWindow: () => true }));
 import { relaunchTerminalsLostToHostRestart } from "../hostRestartRecovery";
 
 const hydrate = vi.fn();
+/** The host's answer for each terminal asked about: gone, unless a test says otherwise. */
+const reconnectBulk = vi.fn(async (ids: string[]): Promise<Record<string, unknown>> =>
+  Object.fromEntries(ids.map((id) => [id, { exists: false }]))
+);
 
 function savedState(workspaceId = "proj-1") {
   return {
@@ -57,9 +64,10 @@ const lost = new Map([
 
 beforeEach(() => {
   vi.clearAllMocks();
+  for (const id of Object.keys(panelsById)) delete panelsById[id];
   hydrate.mockResolvedValue(savedState());
   Object.defineProperty(window, "electron", {
-    value: { app: { hydrate } },
+    value: { app: { hydrate }, terminal: { reconnectBulk } },
     writable: true,
     configurable: true,
   });
@@ -72,6 +80,7 @@ describe("relaunchTerminalsLostToHostRestart", () => {
       drives: () => true,
     });
 
+    expect(reconnectBulk).toHaveBeenCalledWith(["t-agent"]);
     expect(restorePanelsPhase).toHaveBeenCalledTimes(1);
     const [saved, ctx] = restorePanelsPhase.mock.calls[0]!;
     expect(saved).toEqual([savedState().appState.terminals[0]]);
@@ -114,6 +123,87 @@ describe("relaunchTerminalsLostToHostRestart", () => {
         bypassLimits: true,
         focusPolicy: "preserve",
       })
+    );
+  });
+
+  it("starts nothing in a pane the host runs again, or can't say about", async () => {
+    reconnectBulk.mockResolvedValueOnce({ "t-agent": { exists: true, hasPty: true } });
+    await relaunchTerminalsLostToHostRestart("proj-1", lost, {
+      isCurrent: () => true,
+      drives: () => true,
+    });
+    reconnectBulk.mockResolvedValueOnce({ "t-agent": { exists: false, conflict: true } });
+    await relaunchTerminalsLostToHostRestart("proj-1", lost, {
+      isCurrent: () => true,
+      drives: () => true,
+    });
+    reconnectBulk.mockResolvedValueOnce({});
+    await relaunchTerminalsLostToHostRestart("proj-1", lost, {
+      isCurrent: () => true,
+      drives: () => true,
+    });
+
+    expect(restorePanelsPhase).not.toHaveBeenCalled();
+  });
+
+  it("keeps where the view shows a pane and the name the user gave it over the host's older save", async () => {
+    panelsById["t-agent"] = {
+      id: "t-agent",
+      location: "dock",
+      title: "Auth work",
+      titleMode: "user",
+    };
+    panelsById["t-shell"] = { id: "t-shell", location: "grid", title: "zsh" };
+    hydrate.mockResolvedValueOnce({
+      ...savedState(),
+      appState: {
+        activeWorktreeId: "wt-main",
+        terminals: [
+          { id: "t-agent", kind: "terminal", launchAgentId: "claude" },
+          { id: "t-shell", kind: "terminal" },
+        ],
+      },
+    });
+    restorePanelsPhase.mockImplementationOnce(async (_saved, ctx) => {
+      await ctx.addPanel({
+        kind: "terminal",
+        requestedId: "t-agent",
+        cwd: "/repo",
+        title: "Claude",
+        location: "grid",
+      });
+      await ctx.addPanel({
+        kind: "terminal",
+        requestedId: "t-shell",
+        cwd: "/repo",
+        title: "Terminal",
+        location: "dock",
+      });
+      return { restoreTasks: [], savedIdToRestoredId: new Map(), ghostedWorktreeIds: new Set() };
+    });
+
+    await relaunchTerminalsLostToHostRestart(
+      "proj-1",
+      new Map([
+        ["t-agent", 0],
+        ["t-shell", 0],
+      ]),
+      { isCurrent: () => true, drives: () => true }
+    );
+
+    expect(addPanel).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        requestedId: "t-agent",
+        location: "dock",
+        title: "Auth work",
+        titleMode: "user",
+      })
+    );
+    // A title nobody chose is the restore's to set.
+    expect(addPanel).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ requestedId: "t-shell", location: "grid", title: "Terminal" })
     );
   });
 

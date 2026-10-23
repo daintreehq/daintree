@@ -1961,7 +1961,7 @@ describe("host restart", () => {
   });
 
   it("leaves the driver's agents to the driver in a view that watches", async () => {
-    const { electron, emitHost } = installElectron();
+    const { electron, emitHost, emitLease } = installElectron();
     electron.driveLease.get.mockResolvedValue(leaseView(holder(), false));
     electron.driveLease.takeOver.mockResolvedValue(leaseView(holder(), false));
     bindView("studio-01");
@@ -1977,6 +1977,62 @@ describe("host restart", () => {
     });
     for (let i = 0; i < 5; i += 1) await flush();
     expect(relaunchLost).not.toHaveBeenCalled();
+
+    // Taking the project over later brings back none of the driver's agents.
+    emitLease({ type: "changed", state: leaseView(holder({ endpointId: "me" }), true) });
+    for (let i = 0; i < 5; i += 1) await flush();
+    expect(relaunchLost).not.toHaveBeenCalled();
+    stop();
+  });
+
+  it("waits for the host to say who drives, and relaunches once it says this view does", async () => {
+    const { electron, emitHost, emitLease, stop } = await drivingView();
+    runningAgent("t-agent");
+    hostHasNone(electron);
+    emitHost({
+      type: "connection-changed",
+      hostId: "studio-01",
+      connection: { status: "connecting", attempt: 1 },
+    });
+    // Back up, but the host's answer about the lease is lost on its way.
+    electron.driveLease.get.mockRejectedValue(new Error("[AppError|HOST_DISCONNECTED] down"));
+    emitHost({
+      type: "connection-changed",
+      hostId: "studio-01",
+      connection: { status: "connected", rttMs: 5, handshake: HANDSHAKE },
+    });
+    emitHost({ type: "resync-required", hostId: "studio-01", reason: "host-restarted" });
+
+    await vi.waitFor(() => expect(reportLost).toHaveBeenCalledWith("t-agent", expect.any(String)), {
+      timeout: 5_000,
+    });
+    for (let i = 0; i < 5; i += 1) await flush();
+    expect(relaunchLost).not.toHaveBeenCalled();
+
+    // It says this view drives, under a lease it has to read the host's state back for first.
+    const granted = leaseView(holder({ endpointId: "me", tenureId: "tenure-2" }), true);
+    electron.driveLease.get.mockResolvedValue(granted);
+    emitLease({ type: "changed", state: granted });
+
+    await vi.waitFor(() => expect(relaunchLost).toHaveBeenCalledTimes(1), { timeout: 5_000 });
+    expect([...relaunchLost.mock.calls[0]![1]]).toEqual([["t-agent", 2]]);
+    stop();
+  });
+
+  it("tries again on the host's next word when the relaunch was cut short", async () => {
+    const { electron, emitHost, emitLease, stop } = await drivingView();
+    runningAgent("t-agent");
+    hostHasNone(electron);
+    relaunchLost.mockRejectedValueOnce(new Error("[AppError|HOST_DISCONNECTED] down"));
+
+    emitHost({ type: "resync-required", hostId: "studio-01", reason: "host-restarted" });
+    await vi.waitFor(() => expect(relaunchLost).toHaveBeenCalledTimes(1), { timeout: 5_000 });
+    for (let i = 0; i < 5; i += 1) await flush();
+
+    emitLease({ type: "changed", state: leaseView(null, true) });
+
+    await vi.waitFor(() => expect(relaunchLost).toHaveBeenCalledTimes(2));
+    expect([...relaunchLost.mock.calls[1]![1]]).toEqual([["t-agent", 2]]);
     stop();
   });
 });

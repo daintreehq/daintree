@@ -707,15 +707,26 @@ describe("HostServer session resume", () => {
   it("names its process alike on every session and through a Host mode toggle, so only a restart reads as one (#14184)", async () => {
     let server = await startServer({ resumeGraceMs: 20 });
     const seen: HostSessionContext[] = [];
+    const expired: string[] = [];
     server.onSession((ctx) => seen.push(ctx));
-    const client = startClient(server, { backoff: { initialMs: 20, maxMs: 20, jitter: 0 } });
+    server.onSessionExpired((info) => expired.push(info.sessionId));
+    // Slower to redial than the grace window, so the dropped session expires first.
+    const client = startClient(server, { backoff: { initialMs: 200, maxMs: 200, jitter: 0 } });
     const restarted: boolean[] = [];
-    client.onSession(({ hostRestarted }) => restarted.push(hostRestarted));
+    const sessions: Array<{ sessionId: string; resumed: boolean }> = [];
+    client.onSession(({ hostRestarted, sessionId, resumed }) => {
+      restarted.push(hostRestarted);
+      sessions.push({ sessionId, resumed });
+    });
     await waitFor(() => restarted.length === 1);
 
     // A session that expired while this process stayed up.
+    const firstId = seen[0]!.sessionId;
     seen[0]!.session.close("test drop");
+    await waitFor(() => expired.includes(firstId));
     await waitFor(() => restarted.length === 2);
+    expect(sessions[1]).toMatchObject({ resumed: false });
+    expect(sessions[1]!.sessionId).not.toBe(firstId);
 
     // Host mode off and on again: a new server, the same process and terminals.
     await server.close();
