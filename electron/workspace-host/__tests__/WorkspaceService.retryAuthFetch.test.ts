@@ -279,6 +279,7 @@ describe("WorkspaceService — handleAuthFailureConfirmed", () => {
     ["/Users/me/code/acme/.git/", "acme"],
     ["/srv/git/acme.git", "acme"],
     ["/srv/git/acme", "acme"],
+    ["/.git", "this repository"],
   ])("names the repo for commondir %s as %s", async (commonDir, expected) => {
     const { repoNameFromCommonDir } = await import("../WorkspaceService.js");
     expect(repoNameFromCommonDir(commonDir)).toBe(expected);

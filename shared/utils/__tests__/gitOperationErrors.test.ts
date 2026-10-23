@@ -192,6 +192,10 @@ describe("classifyGitError — ordering and normalization", () => {
     "kex_exchange_identification: read: Connection reset by peer",
     "kex_exchange_identification: Connection closed by remote host",
     "client_loop: send disconnect: Broken pipe",
+    "ssh_exchange_identification: read: Connection reset by peer",
+    "ssh_dispatch_run_fatal: Connection to 140.82.112.3 port 22: Operation timed out",
+    "Connection timed out during banner exchange",
+    "Read from remote host github.com: Connection reset by peer",
   ])("classifies SSH transport failure %j as network-unavailable", (line) => {
     const msg = `${line}\nfatal: Could not read from remote repository.\n\nPlease make sure you have the correct access rights\nand the repository exists.`;
     expect(classifyGitError(msg)).toBe("network-unavailable");
@@ -219,11 +223,30 @@ describe("classifyGitError — ordering and normalization", () => {
     expect(classifyGitError(msg)).toBe("repository-not-found");
   });
 
-  it("prefers auth-failed when a publickey denial is followed by a connection close", () => {
+  // OpenSSH prints the "Connection closed by <ip> port N" teardown line after
+  // failures that have nothing to do with connectivity; the specific diagnosis
+  // must win over it.
+  it.each<[GitOperationReason, string]>([
+    ["auth-failed", "git@github.com: Permission denied (publickey)."],
+    ["auth-failed", "git@git.example.com: Permission denied (publickey,password)."],
+    ["auth-failed", "git@git.example.com: Permission denied (password)."],
+    ["repository-not-found", "ERROR: Repository not found."],
+    ["unknown", "Host key verification failed."],
+  ])("classifies %s ahead of a trailing connection close: %j", (expected, line) => {
+    const msg = `${line}\nConnection closed by 140.82.112.3 port 22\nfatal: Could not read from remote repository.`;
+    expect(classifyGitError(msg)).toBe(expected);
+  });
+
+  it("keeps a hook rejection ahead of a connection-close line in the hook's output", () => {
     const msg =
-      "git@github.com: Permission denied (publickey).\n" +
-      "Connection closed by 140.82.112.3 port 22\n" +
-      "fatal: Could not read from remote repository.";
+      "remote: Connection closed by 10.0.0.5 port 22\n" +
+      " ! [remote rejected] main -> main (pre-receive hook declined)";
+    expect(classifyGitError(msg)).toBe("hook-rejected");
+  });
+
+  it("classifies an SSH password-method denial with only git's footer as auth-failed", () => {
+    const msg =
+      "git@git.example.com: Permission denied (publickey,password).\nfatal: Could not read from remote repository.";
     expect(classifyGitError(msg)).toBe("auth-failed");
   });
 

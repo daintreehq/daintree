@@ -211,8 +211,9 @@ function dependsOnRemote(monitor: WorktreeMonitor): string {
 export function repoNameFromCommonDir(commonDir: string): string {
   const trimmed = commonDir.replace(/[\\/]+$/, "");
   const leaf = basename(trimmed);
-  if (leaf.toLowerCase() === ".git") return basename(dirname(trimmed));
-  return leaf.replace(/\.git$/i, "");
+  const name =
+    leaf.toLowerCase() === ".git" ? basename(dirname(trimmed)) : leaf.replace(/\.git$/i, "");
+  return name || "this repository";
 }
 import { waitForPathExists } from "../utils/fs.js";
 import { markHostPerformance } from "../utils/hostPerformance.js";

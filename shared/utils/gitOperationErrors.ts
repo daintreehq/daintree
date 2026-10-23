@@ -73,15 +73,20 @@ const PATTERNS: ReadonlyArray<readonly [GitOperationReason, RegExp]> = [
     // fetches run with `GIT_TERMINAL_PROMPT=0`, so a credential-helper hiccup
     // surfaces that message transiently. Leaving it to fall through to `unknown`
     // (a short transient retry) avoids suspending the repo on a recoverable blip.
-    /Authentication failed|Permission denied \(publickey\)|unable to access.*: The requested URL returned error: 40[137]/i,
+    // The SSH denial lists whichever methods the server offered —
+    // `(publickey)`, `(publickey,password)`, `(password)` — so match the list,
+    // not one spelling of it.
+    /Authentication failed|Permission denied \((?:publickey|password|keyboard-interactive)[^)]*\)|unable to access.*: The requested URL returned error: 40[137]/i,
   ],
   [
-    // Run AFTER auth-failed: OpenSSH also prints "Connection closed by <ip> port 22"
-    // after a publickey denial, and that must stay an auth failure.
-    // The first three alternatives are curl's (HTTPS); the rest are OpenSSH's DNS,
-    // connect, handshake and session-drop lines (#14208).
+    // The first three alternatives are curl's (HTTPS); the rest are OpenSSH's
+    // DNS, connect, handshake and session-drop lines (#14208). Each one names the
+    // transport failing, so it can sit ahead of the remote-side diagnoses below.
+    // The bare "Connection closed by <ip> port N" teardown line cannot: OpenSSH
+    // prints it after auth denials, host-key refusals and remote rejections too,
+    // so it lives in its own entry at the end of this table.
     "network-unavailable",
-    /Could not resolve host:|Failed to connect to.*port.*: (?:Connection refused|Couldn't connect to server)|unable to access.*: (?:The requested URL returned error: 5\d\d|(?:Connection|Operation) timed out after|Recv failure: Connection reset by peer|SSL connection timeout|GnuTLS recv error)|ssh: Could not resolve hostname|ssh: connect to host \S+ port \d+: (?:Connection timed out|Operation timed out|Connection refused|Network is unreachable|No route to host|Bad file number|Unknown error)|kex_exchange_identification: (?:read: Connection reset by peer|Connection closed by remote host)|Connection (?:reset|closed) by \S+ port \d+|client_loop: send disconnect: Broken pipe/i,
+    /Could not resolve host:|Failed to connect to.*port.*: (?:Connection refused|Couldn't connect to server)|unable to access.*: (?:The requested URL returned error: 5\d\d|(?:Connection|Operation) timed out after|Recv failure: Connection reset by peer|SSL connection timeout|GnuTLS recv error)|ssh: Could not resolve hostname|ssh: connect to host \S+ port \d+: (?:Connection timed out|Operation timed out|Connection refused|Network is unreachable|No route to host|Bad file number|Unknown error)|(?:kex|ssh)_exchange_identification: (?:read: Connection reset by peer|Connection closed by remote host)|ssh_dispatch_run_fatal: Connection to \S+ port \d+: (?:Operation timed out|Connection timed out|Connection reset by peer|Broken pipe)|Connection timed out during banner exchange|Read from remote host \S+: (?:Connection reset by peer|Operation timed out|Connection timed out)|client_loop: send disconnect: Broken pipe/i,
   ],
   [
     // Not the bare "Could not read from remote repository" line: git's
@@ -140,6 +145,13 @@ const PATTERNS: ReadonlyArray<readonly [GitOperationReason, RegExp]> = [
     // and the variants raised when a branch resolves to no push destination or no
     // upstream to rebase onto (#11746).
     /fatal: unable to read config file|fatal: bad config|fatal: The current branch .* has no upstream branch|fatal: no upstream configured for branch|fatal: no push destination configured for branch|fatal: could not resolve the (?:push destination|upstream) for branch|fatal: the remote configured for branch .* has an unusable name/i,
+  ],
+  [
+    // Last on purpose: the SSH session-teardown line is only a network signal
+    // when nothing more specific explains it. A host-key refusal ends with the
+    // same line and is not a connectivity problem, so it stays unknown.
+    "network-unavailable",
+    /^(?![\s\S]*Host key verification failed)[\s\S]*Connection (?:reset|closed) by \S+ port \d+/i,
   ],
 ];
 

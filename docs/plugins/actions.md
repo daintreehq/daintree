@@ -205,6 +205,7 @@ An argument shown as `name?` is optional. Argument names come from each action's
 | `git.pullRebase` | Pull and rebase | confirm | `cwd?`, `worktreeId?`, `worktreePath?` |
 | `git.push` | Push | confirm | `cwd?`, `setUpstream?`, `worktreeId?`, `worktreePath?` |
 | `git.rebaseOntoBase` | Rebase onto base branch | confirm | `baseBranch`, `cwd?`, `worktreeId?`, `worktreePath?` |
+| `git.retryAuthFetch` | Retry suspended fetches | safe | — |
 | `git.stageAll` | Stage all files | safe | `cwd?`, `worktreeId?`, `worktreePath?` |
 | `git.stageFile` | Stage file | safe | `filePath`, `cwd?`, `worktreeId?`, `worktreePath?` |
 | `git.unstageAll` | Unstage all files | safe | `cwd?`, `worktreeId?`, `worktreePath?` |

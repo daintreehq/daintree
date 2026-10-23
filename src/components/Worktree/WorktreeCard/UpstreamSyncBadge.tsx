@@ -191,10 +191,10 @@ export function UpstreamSyncBadge({
   // the PR and issue badges dropped their age glyph. The age lives in the
   // tooltip as "Last fetched". Worst first, so a line never carries two: an
   // auth failure is the only one the user has to act on.
-  // The failure and the way out of it are separate facts. Without a matched
-  // forge provider there is no reconnect to offer, but the fetches are still
-  // suspended and the counts still frozen, so the key stays and only the
-  // button goes.
+  // The failure and the way out of it are separate facts. The Retry button is
+  // only offered on cards with a matched forge provider, but without one the
+  // fetches are still suspended and the counts still frozen, so the key stays
+  // and only the button goes.
   const status: SyncStatus | null = fetchAuthFailed
     ? "auth"
     : fetchNetworkFailed

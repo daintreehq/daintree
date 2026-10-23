@@ -13,7 +13,6 @@ vi.mock("@/lib/notify", () => ({
 }));
 
 const dispatchMock = vi.fn();
-const retryAuthFetchMock = vi.fn(() => Promise.resolve());
 vi.mock("@/services/ActionService", () => ({
   actionService: {
     dispatch: (...args: unknown[]) => dispatchMock(...args),
@@ -58,7 +57,6 @@ beforeEach(() => {
   initialTopologyWatcherDark = false;
   notifyMock.mockClear();
   dispatchMock.mockClear();
-  retryAuthFetchMock.mockClear();
   setCurrentProject("/repo/proj");
 
   (globalThis as unknown as { window: Window }).window.electron = {
@@ -86,7 +84,6 @@ beforeEach(() => {
     worktree: {
       getAllIssueAssociations: () => Promise.resolve({}),
       getPRStatus: () => Promise.resolve(null),
-      retryAuthFetch: retryAuthFetchMock,
     },
   } as unknown as typeof window.electron;
 });
@@ -321,18 +318,21 @@ describe("WorktreeStoreProvider — confirmed forge-auth escalation", () => {
       priority?: string;
       title?: string;
       message?: string;
-      action?: { label?: string };
+      action?: { label?: string; actionId?: string };
       supersedeKey?: string;
     };
     expect(payload.type).toBe("error");
     // Names what failed and says the forge token isn't the fix (#14208).
     expect(payload.message).toContain("acme-app");
     expect(payload.message).toContain("upstream");
-    expect(payload.message).toMatch(/forge token isn't used/);
+    expect(payload.message).toMatch(/separate from Daintree's forge token/);
     // An error toast must never be low-priority (silently dropped — lint-banned).
     expect(payload.priority).not.toBe("low");
     expect(payload.title).toBeTruthy();
     expect(payload.action?.label).toBeTruthy();
+    // The inbox keeps only actions carrying an id, so this is what keeps the
+    // retry reachable after the toast times out.
+    expect(payload.action?.actionId).toBe("git.retryAuthFetch");
     expect(payload.supersedeKey).toBeTruthy();
   });
 
@@ -353,8 +353,14 @@ describe("WorktreeStoreProvider — confirmed forge-auth escalation", () => {
       payload.action?.onClick?.();
     });
 
-    expect(retryAuthFetchMock).toHaveBeenCalledTimes(1);
-    expect(dispatchMock).not.toHaveBeenCalled();
+    expect(dispatchMock).toHaveBeenCalledWith("git.retryAuthFetch", undefined, {
+      source: "user",
+    });
+    expect(dispatchMock).not.toHaveBeenCalledWith(
+      "app.settings.openTab",
+      expect.anything(),
+      expect.anything()
+    );
   });
 
   it("stops notifying after the provider unmounts", async () => {

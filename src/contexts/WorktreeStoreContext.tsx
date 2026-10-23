@@ -32,7 +32,6 @@ import { flushPendingPerfMarks } from "@/utils/performance";
 import { markSwitch, setActiveSwitchTrace } from "@/utils/switchTrace";
 import { scheduleRevealTextReraster } from "@/utils/revealTextReraster";
 import { notify } from "@/lib/notify";
-import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { actionService } from "@/services/ActionService";
 import { attachSwitchStatusTimingStore } from "@/services/projectSwitchStatusTiming";
 import { logDebug } from "@/utils/logger";
@@ -79,10 +78,15 @@ interface WorktreeTickEvent {
   seq: number;
 }
 
-interface FetchAuthFailureConfirmedEvent {
-  type: "fetch-auth-failure-confirmed";
-  repoName: string;
-  remote: string;
+function readFetchAuthFailureTarget(data: unknown): { repoName: string; remote: string } {
+  const record = typeof data === "object" && data !== null ? data : {};
+  return {
+    repoName:
+      "repoName" in record && typeof record.repoName === "string"
+        ? record.repoName
+        : "this repository",
+    remote: "remote" in record && typeof record.remote === "string" ? record.remote : "its remote",
+  };
 }
 
 interface WorktreeRemovedEvent {
@@ -984,17 +988,16 @@ export function WorktreeStoreProvider({ children }: { children: ReactNode }) {
     // show the softer per-card "couldn't reach origin" tooltip instead).
     cleanups.push(
       worktreePort.onEvent("fetch-auth-failure-confirmed", (data) => {
-        const event = data as FetchAuthFailureConfirmedEvent;
+        const { repoName, remote } = readFetchAuthFailureTarget(data);
         notify({
           type: "error",
-          title: "Git authentication failed",
-          message: `Git keeps rejecting fetches of ${event.repoName} from ${event.remote} — check your SSH key or Git credential helper, then retry. Daintree's forge token isn't used for fetching.`,
+          title: "Couldn't fetch repository",
+          message: `Git keeps rejecting fetches of ${repoName} from ${remote} — check your SSH key or Git credential helper, then retry. This is Git's own sign-in, separate from Daintree's forge token.`,
           action: {
             label: "Retry fetch",
+            actionId: "git.retryAuthFetch",
             onClick: () => {
-              safeFireAndForget(window.electron.worktree.retryAuthFetch(), {
-                context: "Retry auth-suspended fetch from toast",
-              });
+              void actionService.dispatch("git.retryAuthFetch", undefined, { source: "user" });
             },
           },
           supersedeKey: "forge-auth-failure-confirmed",
