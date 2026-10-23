@@ -1412,15 +1412,19 @@ function chunkModulesPlugin(): Plugin {
 // Prepends the V8 explicit-compile-hints magic comment (Chrome >=136; we ship
 // Chromium 148) to a curated set of boot-hot chunks so V8 eagerly compiles all
 // their functions in one background pass instead of lazily re-parsing each
-// function at first call during boot. Biggest win on a cold app:// code cache
-// (first launch, post-update). Curated on purpose, per V8 guidance to annotate
-// only files where most functions actually run on load: the entry chunk, the
-// App chunk, vendor-react, vendor-xterm, TerminalInstanceService, and
-// appThemeStore. Everything else — explicitly including vendor-editor (~451KB
-// of CodeMirror that is mostly uncalled at boot) and palette/settings/
+// function at first call during boot. Curated on purpose, per V8 guidance to
+// annotate only files where most functions actually run on load: the entry
+// chunk, the App chunk, vendor-react, vendor-xterm, TerminalInstanceService,
+// and appThemeStore. Everything else — explicitly including vendor-editor
+// (~451KB of CodeMirror that is mostly uncalled at boot) and palette/settings/
 // per-language chunks — is excluded to avoid wasted background compile and
-// bytecode memory. Expand to the full first-render closure only if cold-cache
-// perf samples confirm a win.
+// bytecode memory.
+//
+// Measured in #14238 (docs/performance/2026-10-23-boot-compile-hints.md): the
+// set costs ~5.7 MB of compiled code per idle project view and buys ~70 ms on
+// every new project view and ~40 ms on every warm launch (the code cache only
+// holds what was compiled before it was written). The App hint carries the
+// whole new-view win, so trim App's never-called code rather than its hint.
 //
 // Must run in generateBundle (NOT renderChunk, NOT the `banner` option):
 // rolldown's native oxc minifier runs after renderChunk and would strip or
@@ -1451,12 +1455,25 @@ function compileHintsPlugin(): Plugin {
     "src/store/appThemeStore.ts",
   ];
 
+  // A/B lever for re-measuring the trade-off above, never set in a shipped
+  // build: `none` drops every hint, `no-vendor` drops vendor-react and
+  // vendor-xterm, `no-app` drops the App chunk.
+  const hintMode = process.env.DAINTREE_COMPILE_HINTS ?? "all";
+  if (!["all", "no-vendor", "no-app", "none"].includes(hintMode)) {
+    throw new Error(
+      `DAINTREE_COMPILE_HINTS must be all, no-vendor, no-app or none (got "${hintMode}")`
+    );
+  }
+
   const isHinted = (chunk: {
     isEntry: boolean;
     name: string;
     facadeModuleId?: string | null;
   }): boolean => {
+    if (hintMode === "none") return false;
+    if (hintMode === "no-vendor" && chunk.name.startsWith("vendor-")) return false;
     const facade = chunk.facadeModuleId?.split(path.sep).join("/");
+    if (hintMode === "no-app" && facade?.endsWith("src/App.tsx")) return false;
     // The host facades are entries but not boot-hot: they're re-export shims a
     // plugin pulls in on demand, so eager-compiling them costs startup time for
     // code the app itself never calls.
