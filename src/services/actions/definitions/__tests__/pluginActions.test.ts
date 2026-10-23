@@ -43,6 +43,9 @@ const captureHelpers = vi.hoisted(() => {
 vi.mock("@/services/plugin/pluginPanelCapture", () => captureHelpers);
 
 import { registerPluginActions } from "../pluginActions";
+// The run bodies load on first dispatch (#14275). Evaluate them here, as they
+// always were, rather than under the window stub a test swaps in before run().
+import "../pluginActions.impl";
 import type { ActionCallbacks, ActionRegistry, AnyActionDefinition } from "../../actionTypes";
 import type { ActionContext } from "@shared/types/actions";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
@@ -60,9 +63,9 @@ import { useProjectStore } from "@/store/projectStore";
 import { registerPanelKind, unregisterPanelKind } from "@shared/config/panelKindRegistry";
 
 /**
- * These actions ignore the callbacks entirely — they reach main through the
- * plugin client, never through renderer UI hooks — but the registrar signature
- * is shared, so the shape still has to be satisfied. Spelled out rather than
+ * Only `plugin.openSettings` uses a callback (`onOpenSettingsTab`); the rest
+ * reach main through the plugin client, never through renderer UI hooks — but
+ * the registrar signature is shared, so the shape still has to be satisfied. Spelled out rather than
  * asserted from an empty object: the assertion would be an unsafe one, and a
  * literal turns a future change to the interface into a compile error here
  * instead of a silent hole.
