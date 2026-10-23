@@ -153,7 +153,11 @@ export function HostsOverviewDialog({ onClose }: HostsOverviewDialogProps) {
         <ProcessesDialog
           isOpen={processesOpen}
           onClose={() => setProcessesOpen(false)}
-          restoreFocusTo={processesTriggerRef}
+          restoreFocusTo={() =>
+            processesTriggerRef.current?.isConnected
+              ? processesTriggerRef.current
+              : document.querySelector<HTMLElement>('[data-testid="host-overview-card"] button')
+          }
           source={processesSource}
           canKill={inspected.isCurrent}
           hostName={inspected.name}

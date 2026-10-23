@@ -606,13 +606,16 @@ describe("ProcessesDialog for another host (#14089)", () => {
     const order = () => screen.getAllByTestId("process-row").map((row) => row.dataset.terminalId);
     expect(order()).toEqual(["mem", "cpu"]);
 
-    const byCpu = screen.getByRole("button", { name: "Sort by cpu, highest first" });
+    const byCpu = screen.getByRole("button", { name: "Sort by CPU, highest first" });
     fireEvent.click(byCpu);
     expect(order()).toEqual(["cpu", "mem"]);
+    fireEvent.click(screen.getByRole("button", { name: "Sort by Memory, highest first" }));
+    expect(order()).toEqual(["mem", "cpu"]);
+    fireEvent.click(byCpu);
     expect(byCpu.getAttribute("aria-pressed")).toBe("true");
     expect(
       screen
-        .getByRole("button", { name: "Sort by memory, highest first" })
+        .getByRole("button", { name: "Sort by Memory, highest first" })
         .getAttribute("aria-pressed")
     ).toBe("false");
   });
@@ -641,12 +644,18 @@ describe("ProcessesDialog for another host (#14089)", () => {
       sourceOf({
         supported: true,
         truncated: false,
-        snapshot: snapshot({ terminals: [terminal("a")] }),
+        snapshot: snapshot({
+          terminals: [
+            terminal("a", {
+              sample: { cpuPercent: 200, memoryKb: 1024, processCount: 1, members: [] },
+            }),
+          ],
+        }),
       }),
-      { hostBusyCores: 6.04, hostPlatform: "linux" }
+      { hostBusyCores: 5, hostPlatform: "linux" }
     );
     const note = screen.getByTestId("cpu-unaccounted");
-    expect(note.textContent).toContain("Roughly 6 cores");
+    expect(note.textContent).toContain("Roughly 3 cores");
     expect(note.textContent).toContain("estimate");
     expect(document.body.textContent).toContain("average since it started");
   });
@@ -662,5 +671,36 @@ describe("ProcessesDialog for another host (#14089)", () => {
     );
     expect(mockGetAllSessions).toHaveBeenCalled();
     expect(screen.getByRole("button", { name: "Kill terminal 'shell' in Cedar" })).toBeTruthy();
+  });
+
+  it("doesn't say nothing is running when the answer was cut short", async () => {
+    await renderHost(sourceOf({ supported: true, truncated: true, snapshot: snapshot() }));
+    expect(document.body.textContent).toContain("may be incomplete");
+    expect(document.body.textContent).not.toContain("No terminals or plugin processes");
+  });
+
+  it("drops an open confirm when kills stop being allowed", async () => {
+    const source = sourceOf({
+      supported: true,
+      truncated: false,
+      snapshot: snapshot({ terminals: [terminal("a", { title: "shell" })] }),
+    });
+    const view = (canKill: boolean) => (
+      <TooltipProvider>
+        <ProcessesDialog isOpen onClose={() => {}} source={source} canKill={canKill} />
+      </TooltipProvider>
+    );
+    let rerender!: (ui: React.ReactElement) => void;
+    await act(async () => {
+      rerender = render(view(true)).rerender;
+    });
+    await act(async () => {});
+    fireEvent.click(screen.getByRole("button", { name: "Kill terminal 'shell' in Cedar" }));
+    await screen.findByRole("alertdialog");
+    await act(async () => {
+      rerender(view(false));
+    });
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    expect(mockKill).not.toHaveBeenCalled();
   });
 });

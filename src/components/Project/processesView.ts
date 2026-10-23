@@ -148,8 +148,8 @@ export function sortPluginProcesses(
 /**
  * Busy cores on the host that the listed Daintree-launched trees don't add up
  * to: the host's reading less every listed tree's, never below zero. Null when
- * the inventory is partial, truncated or unsampled, or the host reports no
- * core count — a bound from missing rows could be wrong in either direction.
+ * the inventory is partial, truncated or unsampled, any listed row has no
+ * reading, or the host reports no core count — a bound from missing rows could be wrong in either direction.
  * Per-tree readings are ps averages, so this is an approximation, not a
  * measurement of what else is running.
  */
@@ -167,9 +167,15 @@ export function unaccountedCores(
   if (hostBusyCores === null || !Number.isFinite(hostBusyCores)) return null;
   if (!inventory.complete || !inventory.samplesAvailable || inventory.truncated) return null;
   let listedPercent = 0;
-  for (const terminal of inventory.terminals) listedPercent += terminal.sample?.cpuPercent ?? 0;
-  for (const plugin of inventory.plugins) listedPercent += plugin.sample?.cpuPercent ?? 0;
-  for (const process of inventory.closedTerminalProcesses) listedPercent += process.cpuPercent ?? 0;
+  // A row with no reading is unknown, not idle: counting it as zero would inflate the remainder.
+  for (const row of [...inventory.terminals, ...inventory.plugins]) {
+    if (!row.sample) return null;
+    listedPercent += row.sample.cpuPercent;
+  }
+  for (const process of inventory.closedTerminalProcesses) {
+    if (process.cpuPercent === null) return null;
+    listedPercent += process.cpuPercent;
+  }
   return Math.max(0, hostBusyCores - listedPercent / 100);
 }
 

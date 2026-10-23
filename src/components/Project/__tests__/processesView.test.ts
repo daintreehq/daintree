@@ -212,7 +212,7 @@ function closedProc(
     comm: "node",
     memoryKb: 100,
     cpuPercent: 0,
-    origin: { kind: "terminal", id: "t", projectId: null, title: "x", spawnedAt: 1 },
+    origin: { kind: "terminal", id: "t", title: "x", spawnedAt: 1 },
     closedAt: 1,
     projectName: "Cedar",
     ...extra,
@@ -230,9 +230,9 @@ describe("sorting by CPU", () => {
     const light = sampled("light", 5, 900);
     const busy = sampled("busy", 150, 100);
     const unsampled = terminal("none", { sample: null });
-    const [leftover] = groupClosedProcesses([closedProc(9, { cpuPercent: 80, memoryKb: 50 })]);
+    const leftover = groupClosedProcesses([closedProc(9, { cpuPercent: 80, memoryKb: 50 })])[0]!;
     const rowIds = (sort: "cpu" | "memory") =>
-      groupProcessesByProject([light, busy, unsampled], [leftover], sort)[0].rows.map((row) =>
+      groupProcessesByProject([light, busy, unsampled], [leftover], sort)[0]!.rows.map((row) =>
         row.kind === "live" ? row.terminal.id : "closed"
       );
     expect(rowIds("memory")).toEqual(["light", "busy", "closed", "none"]);
@@ -279,5 +279,18 @@ describe("unaccountedCores", () => {
     expect(unaccountedCores({ ...whole, truncated: true }, 6)).toBeNull();
     expect(unaccountedCores({ ...whole, samplesAvailable: false }, 6)).toBeNull();
     expect(unaccountedCores(whole, null)).toBeNull();
+    // A row with no reading is unknown, not idle.
+    expect(
+      unaccountedCores(
+        { ...whole, terminals: [...whole.terminals, terminal("new", { sample: null })] },
+        6
+      )
+    ).toBeNull();
+    expect(
+      unaccountedCores(
+        { ...whole, closedTerminalProcesses: [closedProc(2, { cpuPercent: null })] },
+        6
+      )
+    ).toBeNull();
   });
 });

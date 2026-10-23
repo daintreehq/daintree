@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactElement } from "react";
-import { RefreshCw, Trash2 } from "lucide-react";
+import { ArrowDown, RefreshCw, Trash2 } from "lucide-react";
 import type { DevPreviewSessionState } from "@shared/types/ipc/devPreview";
 import type { HostPlatform } from "@shared/types/remoteHosts";
 import { isDevPreviewKind } from "@shared/types/panel";
@@ -43,7 +43,7 @@ import {
   trashSecondsLeft,
   unaccountedCores,
 } from "./processesView";
-import { formatCoreCount } from "./ProjectResourceBadge.utils";
+import { formatCores } from "./ProjectResourceBadge.utils";
 import {
   ATTACHED_HOST_SOURCE,
   type ProcessesReading,
@@ -208,7 +208,7 @@ function SortButton({
     <button
       type="button"
       aria-pressed={active}
-      aria-label={`Sort by ${children.toLowerCase()}, highest first`}
+      aria-label={`Sort by ${children}, highest first`}
       onClick={() => onSelect(sort)}
       className={cn(
         "justify-self-end whitespace-nowrap rounded-[var(--radius-sm)] px-1 text-right text-xs",
@@ -218,7 +218,7 @@ function SortButton({
       )}
     >
       {children}
-      {active && <span aria-hidden="true"> ↓</span>}
+      {active && <ArrowDown aria-hidden="true" className="ml-0.5 inline h-3 w-3" />}
     </button>
   );
 }
@@ -331,11 +331,13 @@ export function ProcessesDialog({
 
   useEffect(() => {
     openGenerationRef.current += 1;
-    if (!isOpen) {
+    if (!isOpen || !canKill) {
       setKillTarget(null);
       setClosedKillTarget(null);
-      return;
     }
+    if (!isOpen) return;
+    // A fresh opening asks again, so an older host's answer doesn't linger.
+    setUnsupported(false);
     let cancelled = false;
     let inFlight = false;
     let stopped = false;
@@ -352,6 +354,7 @@ export function ProcessesDialog({
       setKillError(null);
       setKillTarget(null);
       setClosedKillTarget(null);
+      setIsKilling(false);
     }
 
     const fetchSnapshot = (): Promise<void> => {
@@ -427,7 +430,9 @@ export function ProcessesDialog({
   const groups = groupProcessesByProject(terminals, closedGroups, sort);
   const cleanup = describeCleanupReport(snapshot?.cleanup ?? null);
   const isEmpty =
-    snapshot !== null && terminals.length + plugins.length + closedGroups.length === 0;
+    snapshot !== null &&
+    !truncated &&
+    terminals.length + plugins.length + closedGroups.length === 0;
   // In the order the rows render, so focus after a kill lands on a neighbour.
   const listedIds = groups.flatMap((group) =>
     group.rows.map((row) =>
@@ -472,8 +477,11 @@ export function ProcessesDialog({
     const { terminal } = target;
     const title = terminalTitle(terminal);
     const neighbours = neighboursOf(terminal.id);
+    const generation = openGenerationRef.current;
     setIsKilling(true);
     return endProcess(target).then((outcome) => {
+      // Closed, or pointed at another host, while the kill was out: its outcome belongs elsewhere.
+      if (openGenerationRef.current !== generation) return;
       setIsKilling(false);
       setKillTarget(null);
       if (outcome.status === "ended") {
@@ -507,9 +515,11 @@ export function ProcessesDialog({
     if (!group) return undefined;
     const neighbours = neighboursOf(`${CLOSED_KILL_PREFIX}${group.key}`);
     const targets = group.processes.map(({ pid, startTime }) => ({ pid, startTime }));
+    const generation = openGenerationRef.current;
     setIsKilling(true);
     return processesClient.killClosedTerminalProcesses(targets).then(
       (result) => {
+        if (openGenerationRef.current !== generation) return;
         setIsKilling(false);
         setClosedKillTarget(null);
         const shortfall = describeClosedKillShortfall(result, targets.length);
@@ -526,6 +536,7 @@ export function ProcessesDialog({
         void fetchRef.current();
       },
       (error: unknown) => {
+        if (openGenerationRef.current !== generation) return;
         setIsKilling(false);
         setClosedKillTarget(null);
         logError("[ProcessesDialog] Failed to kill closed-terminal processes", error);
@@ -780,7 +791,7 @@ export function ProcessesDialog({
             {snapshot && truncated && (
               <Callout severity="warning" size="compact">
                 {hostName ?? "This host"} listed only part of its processes to keep the answer
-                small, so some rows are missing.
+                small, so this list may be incomplete.
               </Callout>
             )}
             {snapshot && !snapshot.complete && (
@@ -834,9 +845,9 @@ export function ProcessesDialog({
                     className="text-xs leading-snug text-text-secondary"
                     data-testid="cpu-unaccounted"
                   >
-                    Roughly {formatCoreCount(unaccounted)} {unaccounted === 1 ? "core" : "cores"} of
-                    the host's busy CPU isn't in the rows below. The rows are averages, so treat
-                    this as an estimate.
+                    Roughly {formatCores(unaccounted)} of the host's busy CPU isn't matched by the
+                    rows below. Row readings are averages, not current use, so treat this as an
+                    estimate.
                   </p>
                 )}
                 {groups.map((group) => {
@@ -896,7 +907,7 @@ export function ProcessesDialog({
         </AppDialog.Body>
       </AppDialog>
       <ConfirmDialog
-        isOpen={isOpen && target !== null}
+        isOpen={isOpen && canKill && target !== null}
         restoreFocusTo={resolveConfirmFocus}
         onClose={() => setKillTarget(null)}
         variant="destructive"
@@ -919,7 +930,7 @@ export function ProcessesDialog({
         isConfirmLoading={isKilling}
       />
       <ConfirmDialog
-        isOpen={isOpen && closedTarget !== null}
+        isOpen={isOpen && canKill && closedTarget !== null}
         restoreFocusTo={resolveConfirmFocus}
         onClose={() => setClosedKillTarget(null)}
         variant="destructive"
