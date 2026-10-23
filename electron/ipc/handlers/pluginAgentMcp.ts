@@ -124,6 +124,7 @@ function groupsOnRecord(projectId: string, pluginInstanceId: string): DeclaredAg
   const groups = new Map<string, DeclaredAgentMcpToolGroup>();
   for (const choice of [
     ...agentMcpGroupChoices(projectId, pluginInstanceId),
+    ...allProjectsAgentMcpGroupChoices(pluginInstanceId),
     ...assistantAgentMcpGroupChoices(projectId, pluginInstanceId),
   ]) {
     if (choice.access === undefined || groups.has(choice.id)) continue;
@@ -490,7 +491,7 @@ async function setAssistantAccess(
   if (!plugin) {
     throw new Error("agent tools: no running plugin offers tools in this project");
   }
-  if (access === "read-write" && !isMeaningful(plugin, access)) {
+  if (!lowers && access === "read-write" && !isMeaningful(plugin, access)) {
     throw new Error(`agent tools: that plugin has nothing for "${access}" to allow`);
   }
   const projectRow = row(projectId, plugin, true);

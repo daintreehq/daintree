@@ -1286,3 +1286,18 @@ describe("tool groups (#14104)", () => {
     expect(row.toolGroups?.find((group) => group.id === "search")?.allowed).toBe(true);
   });
 });
+
+describe("tool groups for a plugin that's gone (#14104)", () => {
+  it("keeps an every-project default's groups clearable when this project overrides them", async () => {
+    setAllProjectsAgentMcpAccess("acme.ledger", "off", undefined, [
+      { id: "search", access: "read" },
+    ]);
+    setProjectAgentMcpAccess(PROJECT, "acme.ledger", "read-only", undefined, []);
+    mocks.listPlugins.mockReturnValue([]);
+
+    const [row] = (await list()).plugins;
+
+    expect(row.available).toBe(false);
+    expect(row.allProjectsGroups).toEqual(["search"]);
+  });
+});
