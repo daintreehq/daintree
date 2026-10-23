@@ -5300,6 +5300,32 @@ describe("HelpSessionService", () => {
       }
     });
 
+    it("writes the note while the session's agent is set to skip and the global is off (#14141)", async () => {
+      mockStoreGet.mockImplementation((key: string) =>
+        key === "agentSettings"
+          ? { agents: { claude: { dangerousMode: "on" } }, globalSkipPermissions: false }
+          : {}
+      );
+      const result = await service.provisionSession(provisionInput());
+      if (!result) throw new Error("expected result");
+
+      const content = await fs.readFile(path.join(result.sessionPath, "CLAUDE.md"), "utf-8");
+      expect(content.match(new RegExp(START, "g")) ?? []).toHaveLength(1);
+    });
+
+    it("writes no note while the session's agent vetoes the global (#14141)", async () => {
+      mockStoreGet.mockImplementation((key: string) =>
+        key === "agentSettings"
+          ? { agents: { claude: { dangerousMode: "off" } }, globalSkipPermissions: true }
+          : {}
+      );
+      const result = await service.provisionSession(provisionInput());
+      if (!result) throw new Error("expected result");
+
+      const content = await fs.readFile(path.join(result.sessionPath, "CLAUDE.md"), "utf-8");
+      expect(content).not.toContain(START);
+    });
+
     it.each([
       ["the global setting is off", {}, false],
       ["the assistant is set to always ask", { daintreeConfirmations: "always-ask" }, true],

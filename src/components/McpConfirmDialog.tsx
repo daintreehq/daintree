@@ -33,7 +33,10 @@ import { DAINTREE_CONFIRMATION_OPTIONS } from "@/config/assistantDaintreeConfirm
 import {
   assistantSkipsDaintreeConfirmations,
   isHelpAssistantDaintreeConfirmations,
+  resolveAssistantAgentSkip,
 } from "@shared/utils/assistantDaintreeConfirmations";
+import { useHelpPanelStore } from "@/store/helpPanelStore";
+import { getAgentConfig } from "@/config/agents";
 import type { HelpAssistantDaintreeConfirmations } from "@shared/types/ipc/api";
 import { logError } from "@/utils/logger";
 
@@ -634,7 +637,7 @@ function SessionApprovalOption({
  * Saves on change, independent of this request's answer: main reads the
  * preference per call, so a change applies from the assistant's next call and
  * the request on screen still needs Cancel or approve. The copy names the
- * setting and what it resolves to right now, because "Follow global setting"
+ * setting and what it resolves to right now, because "Follow agent setting"
  * alone hides whether that means asking or not.
  *
  * The section is laid out before the read lands, with room reserved for the
@@ -648,6 +651,12 @@ function AssistantConfirmationPreference() {
   const globalSkipPermissions = useAgentSettingsStore(
     (state) => state.settings?.globalSkipPermissions === true
   );
+  const agentEntries = useAgentSettingsStore((state) => state.settings?.agents);
+  const assistantAgentId = useHelpPanelStore((state) => state.preferredAgentId);
+  const assistantAgentSkip = resolveAssistantAgentSkip(assistantAgentId, {
+    agents: agentEntries ?? {},
+    globalSkipPermissions,
+  });
   const detailId = useId();
   const panelId = useId();
   // Collapsed on every mount: changing a standing setting is a deliberate
@@ -716,7 +725,8 @@ function AssistantConfirmationPreference() {
   };
 
   const asks =
-    preference !== null && !assistantSkipsDaintreeConfirmations(preference, globalSkipPermissions);
+    preference !== null &&
+    !assistantSkipsDaintreeConfirmations(preference, assistantAgentSkip.skips);
   const preferenceLabel =
     DAINTREE_CONFIRMATION_OPTIONS.find((option) => option.value === preference)?.label ?? "";
 
@@ -737,7 +747,10 @@ function AssistantConfirmationPreference() {
   } else if (status === "save-failed") {
     detail = "Couldn't save that change, so it's back to what it was.";
   } else if (preference === "inherit") {
-    detail = `Saves now, even if you cancel. Follows Settings > Agents > Skip permission prompts (${globalSkipPermissions ? "on" : "off"}).`;
+    const skipState = assistantAgentSkip.skips ? "on" : "off";
+    detail = assistantAgentId
+      ? `Saves now, even if you cancel. Follows ${getAgentConfig(assistantAgentId)?.name ?? assistantAgentId}'s skip permission prompts setting (${skipState}).`
+      : `Saves now, even if you cancel. Follows Settings > Agents > Skip permission prompts (${skipState}).`;
   } else {
     detail = "Saves now and applies from the assistant's next request, even if you cancel.";
   }

@@ -57,6 +57,7 @@ import { DAINTREE_CONFIRMATION_OPTIONS } from "@/config/assistantDaintreeConfirm
 import {
   assistantSkipsDaintreeConfirmations,
   isHelpAssistantDaintreeConfirmations,
+  resolveAssistantAgentSkip,
 } from "@shared/utils/assistantDaintreeConfirmations";
 import type {
   HelpAssistantIdleHibernateMinutes,
@@ -458,9 +459,14 @@ export function DaintreeAssistantSettingsTab() {
   const globalSkipPermissions = useAgentSettingsStore(
     (state) => state.settings?.globalSkipPermissions === true
   );
+  const agentEntries = useAgentSettingsStore((state) => state.settings?.agents);
+  const assistantAgentSkip = resolveAssistantAgentSkip(preferredAgentId, {
+    agents: agentEntries ?? {},
+    globalSkipPermissions,
+  });
   const confirmationsSkipped = assistantSkipsDaintreeConfirmations(
     settings.daintreeConfirmations,
-    globalSkipPermissions
+    assistantAgentSkip.skips
   );
   const bypassCopy = useMemo(
     () => getBypassCopy(preferredAgentId, settings.tier, confirmationsSkipped),
@@ -1010,6 +1016,60 @@ export function DaintreeAssistantSettingsTab() {
     );
   };
 
+  const handleGoToAssistantAgentSettings = () => {
+    if (!preferredAgentId) return;
+    void actionService.dispatch(
+      "app.settings.openTab",
+      { tab: "agents", subtab: preferredAgentId },
+      { source: "user" }
+    );
+  };
+
+  // Names the assistant's agent and where its skip value came from (#14141),
+  // so the row says why Daintree will or won't ask under the default.
+  const renderConfirmationsDefault = (): ReactNode => {
+    const skipState = assistantAgentSkip.skips ? "on" : "off";
+    const globalLink = (
+      <Button variant="link" onClick={handleGoToSkipPermissions}>
+        Settings &gt; Agents &gt; Skip permission prompts
+      </Button>
+    );
+    if (!preferredAgentId) {
+      return (
+        <>
+          By default it follows the assistant agent&apos;s skip permission prompts setting. With no
+          agent chosen, that&apos;s {globalLink}, which is {skipState}.
+        </>
+      );
+    }
+    const agentName = getAgentConfig(preferredAgentId)?.name ?? preferredAgentId;
+    if (assistantAgentSkip.source === "agent") {
+      return (
+        <>
+          By default it follows{" "}
+          <Button variant="link" onClick={handleGoToAssistantAgentSettings}>
+            {agentName}&apos;s skip permission prompts setting
+          </Button>
+          , which is {skipState}, set on {agentName}.
+        </>
+      );
+    }
+    if (assistantAgentSkip.source === "unsupported") {
+      return (
+        <>
+          By default it follows {agentName}&apos;s skip permission prompts setting, which is off
+          because {agentName} can&apos;t skip permission prompts.
+        </>
+      );
+    }
+    return (
+      <>
+        By default it follows {agentName}&apos;s skip permission prompts setting, which is{" "}
+        {skipState}, inherited from {globalLink}.
+      </>
+    );
+  };
+
   const remoteHostName = useRemoteHostName();
   const handleOpenCommandsFolder = () => {
     void actionService.dispatch("help.openCommandsFolder", undefined, { source: "user" });
@@ -1285,11 +1345,8 @@ export function DaintreeAssistantSettingsTab() {
             description={
               <>
                 Whether Daintree asks before the assistant deletes a worktree, closes a panel it
-                didn't open, or runs another action that needs confirmation. By default it follows{" "}
-                <Button variant="link" onClick={handleGoToSkipPermissions}>
-                  Settings &gt; Agents &gt; Skip permission prompts
-                </Button>
-                , which is {globalSkipPermissions ? "on" : "off"}.
+                didn't open, or runs another action that needs confirmation.{" "}
+                {renderConfirmationsDefault()}
               </>
             }
             value={settings.daintreeConfirmations}

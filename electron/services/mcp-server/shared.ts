@@ -150,6 +150,8 @@ export type HelpSessionTerminalResolver = (helpSessionId: string) => string | nu
 export interface AssistantControlBinding {
   control: NonNullable<import("./sessionServer.js").SessionServerDeps["assistantControl"]>;
   sessionProject(helpSessionId: string): string | null;
+  /** The agent the help session runs, so confirmations can follow its skip setting (#14141). */
+  sessionAgent?(helpSessionId: string): string | null;
 }
 /**
  * What an agent pane's workspace-bound dispatch carries beyond an external
