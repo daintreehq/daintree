@@ -22,6 +22,7 @@ import type {
 } from "@shared/types/memoryAccounting";
 import type { Project } from "@shared/types";
 import { parseHostScopedKey } from "@shared/types/remoteHosts";
+import { currentHostId, hostScopedKey } from "@/hooks/useHostPlatform";
 import {
   type TrendDirection,
   type MemoryThresholds,
@@ -214,14 +215,19 @@ function TerminalBufferBreakdown({
 }) {
   if (slice.views.length === 0) return null;
 
+  // Views are keyed host-scoped (`host:project` for a remote project) and
+  // span every window, while the project list is this window's host's, by
+  // bare id. Matching on the full key keeps a bare-id collision on another
+  // host from borrowing a name here.
+  const scopedNames = new Map<string, string>();
+  for (const [id, name] of projectNames) scopedNames.set(hostScopedKey(id), name);
+
   const rows = slice.views
     .map((view) => {
-      // A remote view is keyed host-scoped (`host:project`); the project list
-      // knows it by its bare id.
+      const { hostId } = parseHostScopedKey(view.projectId);
       const name =
-        projectNames.get(view.projectId) ??
-        projectNames.get(parseHostScopedKey(view.projectId).projectId) ??
-        "Unknown project";
+        scopedNames.get(view.projectId) ??
+        (hostId !== currentHostId() ? `Project on ${hostId}` : "Unknown project");
       const cached = view.state === "cached" ? "cached" : null;
       // Last-known counts carry their age whether the view is cached or an
       // active one stopped answering; a fresh reading needs none.
