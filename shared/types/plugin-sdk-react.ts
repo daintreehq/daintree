@@ -19,6 +19,7 @@ import type {
   Ref,
   RefObject,
 } from "react";
+import type { PluginArtifact } from "./pluginArtifacts.js";
 
 /**
  * Return shape of the `useHostChannel(pluginId, channel)` hook. `invoke`
@@ -3280,14 +3281,8 @@ export interface PluginTagInputProps extends PluginAriaRootAttributes {
   className?: string;
 }
 
-/**
- * Props of `FileDropzone`: a drop target with a button that opens the
- * system's file dialog. You get `File` objects: name, size, type and contents
- * (`file.text()`, `file.arrayBuffer()`), never a path on disk.
- */
-export interface PluginFileDropzoneProps extends PluginRootAttributes {
-  /** The accepted files from a drop or the dialog. Never called with an empty list. */
-  onFiles: (files: File[]) => void;
+/** What every `FileDropzone` takes, whichever way it hands over the files. */
+export interface PluginFileDropzoneBaseProps extends PluginRootAttributes {
   /** Dropped files `accept` ruled out. The dialog only offers accepted ones. */
   onReject?: (files: File[]) => void;
   /** As on `<input type="file">`: extensions (`.md`) and MIME types (`image/*`), comma-separated. */
@@ -3305,6 +3300,76 @@ export interface PluginFileDropzoneProps extends PluginRootAttributes {
   browseLabel?: string;
   /** Replaces the headline, description and icon; the button stays. */
   children?: ReactNode;
+  className?: string;
+}
+
+/**
+ * Props of `FileDropzone`: a drop target with a button that opens the
+ * system's file dialog. Pick how you want what the person chose:
+ *
+ * - `onFiles` hands over `File` objects: name, size, type and contents
+ *   (`file.text()`, `file.arrayBuffer()`), never a path on disk. Right for a
+ *   file the view reads itself.
+ * - `onArtifacts` copies each file into the host's artifact cache and hands
+ *   over {@link PluginArtifact} handles your worker can play, upload or read
+ *   from `host.artifacts` — the way in for a file too large to pass around.
+ *   Needs the `artifact:store` capability. While it copies, the zone says so;
+ *   a failure is shown in the zone and reported to `onImportError`.
+ */
+export type PluginFileDropzoneProps = PluginFileDropzoneBaseProps &
+  (
+    | {
+        /** The accepted files from a drop or the dialog. Never called with an empty list. */
+        onFiles: (files: File[]) => void;
+        onArtifacts?: never;
+        onImportError?: never;
+      }
+    | {
+        /** The accepted files, imported. Never called with an empty list. */
+        onArtifacts: (artifacts: PluginArtifact[]) => void;
+        /** The import failed; nothing was imported. The zone shows the reason too. */
+        onImportError?: (error: Error) => void;
+        onFiles?: never;
+      }
+  );
+
+/** An artifact as the media components take it: the handle, or the id of one your plugin owns. */
+export type PluginMediaSource = Pick<PluginArtifact, "id" | "mimeType" | "name"> | string;
+
+/**
+ * Props of `MediaPlayer`: an audio or video artifact played from the host's
+ * cache with the system's own accessible controls, seeking by byte range. It
+ * never plays on its own, and it pauses when the person moves away — the
+ * window hidden, the project in the background, the view parked — without
+ * resuming on return. Provider controls (share, re-download, captions from a
+ * service) are yours: render them beside it.
+ */
+export interface PluginMediaPlayerProps extends PluginRootAttributes {
+  source: PluginMediaSource;
+  /** Names the player for assistive technology. Defaults to the artifact's name. */
+  "aria-label"?: string;
+  /** An image artifact shown before a video plays. */
+  poster?: PluginMediaSource;
+  loop?: boolean;
+  muted?: boolean;
+  /** `"keep-playing"` opts out of the pause on moving away, for audio meant to run in the background. */
+  whenAway?: "pause" | "keep-playing";
+  /** The source could not be loaded or played. The player shows the reason with a Retry. */
+  onError?: (error: Error) => void;
+  className?: string;
+}
+
+/**
+ * Props of `MediaThumbnail`: a still for an artifact — the image itself, a
+ * video's first frame, or a glyph for audio and anything else. Decorative
+ * unless named: give it `alt` when it carries meaning on its own.
+ */
+export interface PluginMediaThumbnailProps extends PluginRootAttributes {
+  source: PluginMediaSource;
+  /** The thumbnail's text alternative. Without it the thumbnail is decorative. */
+  alt?: string;
+  /** Defaults to `md` (64 px). */
+  size?: "sm" | "md" | "lg";
   className?: string;
 }
 

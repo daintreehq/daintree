@@ -94,6 +94,10 @@ declare module "@daintreehq/plugin-ui" {
     PluginEmojiPickerProps,
     PluginEmptyStateProps,
     PluginFileDropzoneProps,
+    PluginFileDropzoneBaseProps,
+    PluginMediaSource,
+    PluginMediaPlayerProps,
+    PluginMediaThumbnailProps,
     PluginFileTreeEntry,
     PluginFileTreeItem,
     PluginFileTreeNode,
@@ -480,6 +484,10 @@ declare module "@daintreehq/plugin-ui" {
   export type MultiSelectProps = PluginMultiSelectProps;
   export type TagInputProps = PluginTagInputProps;
   export type FileDropzoneProps = PluginFileDropzoneProps;
+  export type FileDropzoneBaseProps = PluginFileDropzoneBaseProps;
+  export type MediaArtifactSource = PluginMediaSource;
+  export type MediaPlayerProps = PluginMediaPlayerProps;
+  export type MediaThumbnailProps = PluginMediaThumbnailProps;
   export type EmojiPickerProps = PluginEmojiPickerProps;
   export type ChartColor = PluginChartColor;
   export type ChartSeries = PluginChartSeries;
@@ -863,8 +871,12 @@ declare module "@daintreehq/plugin-ui" {
   export const MultiSelect: ComponentType<MultiSelectProps>;
   /** Free-text tags: Enter or a comma adds, Backspace removes the last, duplicates are skipped. */
   export const TagInput: ComponentType<TagInputProps>;
-  /** A drop target and a button for the system file dialog, handing you `File` objects. */
+  /** A drop target and a button for the system file dialog, handing you `File` objects or imported artifacts. */
   export const FileDropzone: ComponentType<FileDropzoneProps>;
+  /** An audio or video artifact with the system's own controls; pauses when the person moves away. */
+  export const MediaPlayer: ComponentType<MediaPlayerProps>;
+  /** A still for an artifact: the image, a video's first frame, or a glyph. */
+  export const MediaThumbnail: ComponentType<MediaThumbnailProps>;
   /** Daintree's emoji picker in a popover opened from `trigger`. The trigger shows while the kit loads. */
   export const EmojiPicker: ComponentType<EmojiPickerProps>;
   /** Categories as columns or bars, grouped or stacked, with a point tooltip and a hidden data table. */

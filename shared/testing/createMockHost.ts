@@ -74,6 +74,7 @@ import type {
   PanelMenuItemContribution,
   PluginActionContribution,
   PluginRenderPdfOptions,
+  PluginArtifact,
   PluginChannelSchema,
   PluginConfirmOptions,
   PluginDatabaseLocation,
@@ -522,6 +523,20 @@ export interface MockHostState {
    * recorded; each one also leaves a placeholder PDF in the mock filesystem.
    */
   readonly documentsRenderPdfCalls: ReadonlyArray<PluginRenderPdfOptions>;
+  /**
+   * Live `host.artifacts` handles, by id (#14100). Imports read the mock
+   * filesystem, downloads answer from {@link CreateMockHostOptions.artifactDownloads},
+   * and nothing expires unless {@link MockHostState.simulateArtifactExpiry} says so.
+   */
+  readonly artifactRecords: ReadonlyMap<string, PluginArtifact>;
+  /** Captured `host.artifacts.upload` calls, in order. */
+  readonly artifactUploadCalls: ReadonlyArray<{
+    artifactId: string;
+    url: string;
+    method: "PUT" | "POST";
+  }>;
+  /** Drop an artifact as its expiry would: `stat` answers null and `upload` rejects. */
+  simulateArtifactExpiry(artifactId: string): void;
 
   /**
    * One entry per `onDidChangeWorktrees` / `onDidChangeActiveWorktree` /
@@ -692,6 +707,12 @@ export interface MockHostState {
 
 export interface CreateMockHostOptions {
   pluginId?: string;
+  /**
+   * Bodies `host.artifacts.download` answers with, by exact URL. A URL not
+   * listed rejects with `ARTIFACT_TRANSFER_FAILED`, as an unreachable provider
+   * would.
+   */
+  artifactDownloads?: Record<string, string | Uint8Array>;
   /**
    * Project root for a project-owned `pluginId` (one shaped
    * `project__{projectId}__{manifestId}`). Defaults to a synthetic path; ignored
@@ -1354,6 +1375,21 @@ function fsWriteError(code: string, message: string): Error & { code: string } {
   return error;
 }
 
+const MOCK_ARTIFACT_TYPES: Record<string, string> = {
+  mp4: "video/mp4",
+  webm: "video/webm",
+  mov: "video/quicktime",
+  mp3: "audio/mpeg",
+  wav: "audio/wav",
+  ogg: "audio/ogg",
+  m4a: "audio/mp4",
+  png: "image/png",
+  jpg: "image/jpeg",
+  jpeg: "image/jpeg",
+  webp: "image/webp",
+  gif: "image/gif",
+};
+
 export function createMockHost(options: CreateMockHostOptions = {}): PluginHostApi & MockHostState {
   const pluginId = options.pluginId ?? "test.mock";
   let activeWorktree: PluginWorktreeSnapshot | null = options.activeWorktree ?? null;
@@ -1431,6 +1467,42 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
   const systemShowItemCalls: string[] = [];
   const systemOpenExternalCalls: string[] = [];
   const documentsRenderPdfCalls: PluginRenderPdfOptions[] = [];
+  const artifacts = new Map<string, PluginArtifact>();
+  const artifactUploadCalls: { artifactId: string; url: string; method: "PUT" | "POST" }[] = [];
+  let artifactSeq = 0;
+  const mockArtifact = (
+    origin: PluginArtifact["origin"],
+    rawName: string,
+    size: number,
+    artifactOptions?: { projectId?: string; mimeType?: string; ttlMs?: number }
+  ): PluginArtifact => {
+    // As the real host does: a project plugin's artifacts are its project's,
+    // and it can't name another.
+    if (
+      mockProjectId !== null &&
+      artifactOptions?.projectId !== undefined &&
+      artifactOptions.projectId !== mockProjectId
+    ) {
+      throw new Error(
+        "VALIDATION: mock artifacts: a project plugin's artifacts belong to its own project"
+      );
+    }
+    const name = rawName.split(/[\\/]/).pop() || "artifact";
+    const ext = name.toLowerCase().split(".").pop() ?? "";
+    const createdAt = Date.now();
+    const artifact: PluginArtifact = {
+      id: (++artifactSeq).toString(16).padStart(32, "0"),
+      projectId: artifactOptions?.projectId ?? mockProjectId,
+      name,
+      mimeType: artifactOptions?.mimeType ?? MOCK_ARTIFACT_TYPES[ext] ?? "application/octet-stream",
+      size,
+      createdAt,
+      expiresAt: createdAt + (artifactOptions?.ttlMs ?? 24 * 60 * 60 * 1000),
+      origin,
+    };
+    artifacts.set(artifact.id, artifact);
+    return artifact;
+  };
   let clipboardText = "";
 
   const activeWorktreeSubs = new Set<(snapshot: PluginWorktreeSnapshot | null) => void>();
@@ -3743,6 +3815,63 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
         };
       },
     },
+    // No disk and no network: an artifact is a record, its size the bytes the
+    // mock fs or `artifactDownloads` held. Only argument shapes are checked —
+    // capability, containment and URL scope are the real host's, tested there.
+    artifacts: {
+      async import(source, artifactOptions) {
+        const filePath = source?.path;
+        if (typeof filePath !== "string") {
+          throw new Error("VALIDATION: mock artifacts.import: source.path must be a string");
+        }
+        const text = fsFiles.get(filePath);
+        if (text === undefined) throw new Error(`INVALID_PATH: mock fs has no file "${filePath}"`);
+        return mockArtifact(
+          "import",
+          artifactOptions?.name ?? filePath,
+          new TextEncoder().encode(text).byteLength,
+          artifactOptions
+        );
+      },
+      async download(request, artifactOptions) {
+        artifactOptions?.signal?.throwIfAborted();
+        const body = options.artifactDownloads?.[request?.url];
+        if (body === undefined) {
+          throw new Error(
+            `ARTIFACT_TRANSFER_FAILED: mock artifacts.download has no body for that URL`
+          );
+        }
+        const size =
+          typeof body === "string" ? new TextEncoder().encode(body).byteLength : body.byteLength;
+        artifactOptions?.onProgress?.({ transferredBytes: size, totalBytes: size, attempt: 1 });
+        const name = new URL(request.url).pathname.split("/").filter(Boolean).pop() ?? "artifact";
+        return mockArtifact("download", artifactOptions?.name ?? name, size, artifactOptions);
+      },
+      async upload(artifactId, request, uploadOptions) {
+        uploadOptions?.signal?.throwIfAborted();
+        const artifact = artifacts.get(artifactId);
+        if (!artifact) throw new Error(`ARTIFACT_NOT_FOUND: mock has no artifact "${artifactId}"`);
+        const method = request?.method ?? "PUT";
+        artifactUploadCalls.push({ artifactId, url: request.url, method });
+        uploadOptions?.onProgress?.({
+          transferredBytes: artifact.size,
+          totalBytes: artifact.size,
+          attempt: 1,
+        });
+        return { status: 200, headers: {}, body: "", bodyTruncated: false };
+      },
+      async stat(artifactId) {
+        return artifacts.get(artifactId) ?? null;
+      },
+      async list(listOptions) {
+        return [...artifacts.values()].filter(
+          (a) => listOptions?.projectId === undefined || a.projectId === listOptions.projectId
+        );
+      },
+      async release(artifactId) {
+        return artifacts.delete(artifactId);
+      },
+    },
     settings,
     storage,
     logger: {
@@ -3802,6 +3931,11 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
     systemShowItemCalls,
     systemOpenExternalCalls,
     documentsRenderPdfCalls,
+    artifactRecords: artifacts,
+    artifactUploadCalls,
+    simulateArtifactExpiry(artifactId) {
+      artifacts.delete(artifactId);
+    },
     subscriptionOptions,
 
     simulateActiveWorktreeChange(snapshot) {

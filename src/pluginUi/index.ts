@@ -42,6 +42,8 @@ import type {
   PluginEmojiPickerProps,
   PluginEmptyStateProps,
   PluginFileDropzoneProps,
+  PluginMediaPlayerProps,
+  PluginMediaThumbnailProps,
   PluginFileTreeProps,
   PluginFilterChipProps,
   PluginFormFieldGroupProps,
@@ -552,6 +554,15 @@ export const FileDropzone: ComponentType<PluginFileDropzoneProps> = fromKit(
   "FileDropzone",
   (kit) => kit.FileDropzone
 );
+// Media: artifacts from the host's cache, played and previewed by byte range.
+export const MediaPlayer: ComponentType<PluginMediaPlayerProps> = fromKit(
+  "MediaPlayer",
+  (kit) => kit.MediaPlayer
+);
+export const MediaThumbnail: ComponentType<PluginMediaThumbnailProps> = fromKit(
+  "MediaThumbnail",
+  (kit) => kit.MediaThumbnail
+);
 export const EmojiPicker: ComponentType<PluginEmojiPickerProps> = fromKit(
   "EmojiPicker",
   (kit) => kit.EmojiPicker,
@@ -982,6 +993,10 @@ export type {
   PluginMultiSelectProps as MultiSelectProps,
   PluginTagInputProps as TagInputProps,
   PluginFileDropzoneProps as FileDropzoneProps,
+  PluginFileDropzoneBaseProps as FileDropzoneBaseProps,
+  PluginMediaSource as MediaArtifactSource,
+  PluginMediaPlayerProps as MediaPlayerProps,
+  PluginMediaThumbnailProps as MediaThumbnailProps,
   PluginEmojiPickerProps as EmojiPickerProps,
   PluginChartColor as ChartColor,
   PluginChartSeries as ChartSeries,

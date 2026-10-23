@@ -176,6 +176,23 @@ export type {
   PluginPdfMargins,
 } from "./plugin.js";
 
+// ── Artifacts (host.artifacts) ──────────────────────────────────────
+
+export type {
+  PluginArtifact,
+  PluginArtifactApi,
+  PluginArtifactCreateOptions,
+  PluginArtifactDownloadOptions,
+  PluginArtifactDownloadRequest,
+  PluginArtifactImportSource,
+  PluginArtifactListOptions,
+  PluginArtifactProgress,
+  PluginArtifactSource,
+  PluginArtifactUploadOptions,
+  PluginArtifactUploadRequest,
+  PluginArtifactUploadResult,
+} from "./pluginArtifacts.js";
+
 // ── Agent MCP endpoints (host.mcp) ──────────────────────────────────
 
 export type {

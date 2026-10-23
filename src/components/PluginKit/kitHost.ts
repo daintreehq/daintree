@@ -6,6 +6,7 @@ import type {
   ActionId,
 } from "@shared/types/actions";
 import type { DiffViewerProps } from "@/components/Worktree/DiffViewer";
+import type { PluginArtifact, PluginArtifactSource } from "@shared/types/pluginArtifacts";
 
 // What the kit needs from the app it renders in: dispatching actions, toasts,
 // a plugin's own worker, and the diff viewer. The kit reads them here instead
@@ -57,6 +58,31 @@ export interface PluginKitHost {
   invokePlugin(owner: string, channel: string, payload: unknown): Promise<unknown>;
   /** Draws a DiffView's patch; null leaves the kit's plain-text fallback. */
   DiffViewer: ComponentType<PluginKitDiffViewerProps> | null;
+  /** Imports Files the person dropped or picked as the owner plugin's artifacts (#14100). */
+  importArtifacts(owner: string, files: readonly File[]): Promise<PluginArtifact[]>;
+  /** A source for one of the owner's artifacts, leased to this view. */
+  artifactSource(owner: string, artifactId: string): Promise<PluginArtifactSource>;
+  /** Ends the lease behind a source URL `artifactSource` gave. */
+  releaseArtifactSource(url: string): void;
+  /**
+   * Calls `onChange(true)` while media in this view should hold still — the
+   * document hidden, the view cached, or its project out of the foreground —
+   * and `onChange(false)` when it may play again. Calls once with the current
+   * answer. Returns the unsubscribe.
+   */
+  watchPlaybackHold(onChange: (held: boolean) => void): () => void;
+}
+
+/** The hold an app without view lifecycle signals can see: the document hidden. */
+export function watchDocumentHidden(onChange: (held: boolean) => void): () => void {
+  if (typeof document === "undefined") {
+    onChange(false);
+    return () => {};
+  }
+  const report = () => onChange(document.hidden);
+  document.addEventListener("visibilitychange", report);
+  report();
+  return () => document.removeEventListener("visibilitychange", report);
 }
 
 const NO_HOST = "Not available outside Daintree";
@@ -73,6 +99,14 @@ const inertHost: PluginKitHost = {
     throw new Error(NO_HOST);
   },
   DiffViewer: null,
+  importArtifacts: async () => {
+    throw new Error(NO_HOST);
+  },
+  artifactSource: async () => {
+    throw new Error(NO_HOST);
+  },
+  releaseArtifactSource: () => {},
+  watchPlaybackHold: watchDocumentHidden,
 };
 
 let host: PluginKitHost = inertHost;

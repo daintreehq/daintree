@@ -1598,6 +1598,59 @@ describe("PluginDevWorkerHostProxy host.system / clipboard.writeImage (#11299)",
     await expect(promise).resolves.toEqual(result);
   });
 
+  it("relays an artifact download as a handle, its progress as a subscription, its cancel as host-cancel", async () => {
+    const { proxy, sent } = makeProxy();
+    const controller = new AbortController();
+    const onProgress = vi.fn();
+    const promise = proxy.host.artifacts.download(
+      { url: "https://api.example.com/a.mp4", headers: { authorization: "t" } },
+      { attempts: 2, signal: controller.signal, onProgress }
+    );
+    const call = sent.find((m) => m.type === "host-call" && m.method === "artifacts.download");
+    // Neither the signal nor the callback can be cloned, so neither travels.
+    expect(call.params).toEqual({
+      target: { url: "https://api.example.com/a.mp4", headers: { authorization: "t" } },
+      options: { attempts: 2 },
+      progressSubscriptionId: expect.any(String),
+    });
+    const progress = { transferredBytes: 10, totalBytes: 20, attempt: 1 };
+    proxy.handleMessage({
+      type: "subscription-event",
+      subscriptionId: call.params.progressSubscriptionId,
+      payload: progress,
+    });
+    expect(onProgress).toHaveBeenCalledWith(progress);
+    controller.abort();
+    expect(sent).toContainEqual({ type: "host-cancel", requestId: call.requestId });
+    await expect(promise).rejects.toMatchObject({ name: "AbortError" });
+    // The subscription goes with the call: a late report reaches nobody.
+    proxy.handleMessage({
+      type: "subscription-event",
+      subscriptionId: call.params.progressSubscriptionId,
+      payload: progress,
+    });
+    expect(onProgress).toHaveBeenCalledTimes(1);
+  });
+
+  it("codes a worker-side cancel ABORT_ERR whatever reason it was aborted with", async () => {
+    const { proxy } = makeProxy();
+    const controller = new AbortController();
+    const promise = proxy.host.artifacts.import(
+      { path: "/data/a.mp4" },
+      { signal: controller.signal }
+    );
+    controller.abort(new Error("changed my mind"));
+    await expect(promise).rejects.toMatchObject({ code: "ABORT_ERR", name: "AbortError" });
+  });
+
+  it("rejects a malformed artifact call before it crosses the port", async () => {
+    const { proxy, sent } = makeProxy();
+    await expect(
+      proxy.host.artifacts.upload("a".repeat(32), { url: "https://x" }, { onProgress: 3 as never })
+    ).rejects.toThrow(/VALIDATION/);
+    expect(sent.some((m) => m.type === "host-call" && m.method === "artifacts.upload")).toBe(false);
+  });
+
   it("relays clipboard.writeImage with the typed array's own bytes", async () => {
     // A subarray is the case that breaks if anything copies `.buffer`
     // wholesale — the wire payload must carry this view, not its backing

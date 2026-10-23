@@ -9,6 +9,11 @@ import crypto from "node:crypto";
 import { CHANNELS } from "../channels.js";
 import { defineIpcNamespace, op } from "../define.js";
 import { AppError } from "../../utils/errorTypes.js";
+import { consumeArtifactSelectionGrant } from "../../services/plugin/artifactSelectionGrants.js";
+import type {
+  PluginArtifact,
+  PluginArtifactSource,
+} from "../../../shared/types/pluginArtifacts.js";
 import {
   getPluginActionAuditService,
   type PluginActionAuditService,
@@ -1267,6 +1272,75 @@ async function handleTaskDismiss(
 ): Promise<boolean> {
   checkTaskTarget(ctx, pluginId, taskId, "dismiss");
   return (await getPluginService()).dismissPluginTask(pluginId, taskId);
+}
+
+/**
+ * The sender may act for this plugin's artifacts: a well-formed instance id,
+ * a project plugin only from its own project's views, and a view on this
+ * machine. A remote-bound view's files and playback live on the machine it
+ * sits at, which this host's cache cannot reach (#14100).
+ */
+function checkArtifactTarget(ctx: IpcContext, pluginId: unknown, what: string): void {
+  if (typeof pluginId !== "string" || !isSafePluginInstanceId(pluginId)) {
+    throw new Error(`plugin artifact ${what}: malformed plugin id`);
+  }
+  const owningProjectId = projectIdFromPluginInstanceKey(pluginId);
+  if (owningProjectId === null && pluginId.startsWith(PROJECT_PLUGIN_INSTANCE_PREFIX)) {
+    throw new Error(`plugin artifact ${what}: malformed project instance key`);
+  }
+  if (owningProjectId !== null && owningProjectId !== ctx.projectId) {
+    throw new Error(`plugin artifact ${what}: sender belongs to a different project`);
+  }
+  if (ctx.endpoint.kind !== "local-view") {
+    throw new AppError({
+      code: "UNSUPPORTED",
+      message: `ARTIFACT_REMOTE_UNSUPPORTED: plugin artifact ${what} is not available in a window attached to a remote host`,
+    });
+  }
+}
+
+/** Import the files the view's person chose as the plugin's artifacts. */
+async function handleArtifactsImport(
+  ctx: IpcContext,
+  pluginId: string,
+  paths: string[]
+): Promise<PluginArtifact[]> {
+  checkArtifactTarget(ctx, pluginId, "import");
+  if (!Array.isArray(paths) || paths.length === 0 || paths.length > 64) {
+    throw new Error("plugin artifact import: between 1 and 64 paths");
+  }
+  for (const filePath of paths) {
+    if (
+      typeof filePath !== "string" ||
+      !consumeArtifactSelectionGrant(ctx.webContentsId, filePath)
+    ) {
+      throw new AppError({
+        code: "PERMISSION",
+        message: "plugin artifact import: only a file chosen in this view can be imported",
+      });
+    }
+  }
+  const projectId = projectIdFromPluginInstanceKey(pluginId) ?? ctx.projectId;
+  return (await getPluginService()).importArtifactSelection(pluginId, projectId, paths);
+}
+
+/** A playback source for one of the plugin's artifacts, leased to this view. */
+async function handleArtifactSource(
+  ctx: IpcContext,
+  pluginId: string,
+  artifactId: string
+): Promise<PluginArtifactSource> {
+  checkArtifactTarget(ctx, pluginId, "source");
+  if (typeof artifactId !== "string" || !/^[0-9a-f]{32}$/.test(artifactId)) {
+    throw new Error("plugin artifact source: malformed artifact id");
+  }
+  return (await getPluginService()).mintArtifactSource(pluginId, artifactId, ctx.webContentsId);
+}
+
+/** End the lease in a source URL this view was given. */
+async function handleArtifactSourceRelease(ctx: IpcContext, url: string): Promise<boolean> {
+  if (typeof url !== "string" || url.length > 512) return false;
+  return (await getPluginService()).revokeArtifactSource(url, ctx.webContentsId);
 }
 
 /**
@@ -2774,6 +2848,17 @@ export const pluginNamespace = defineIpcNamespace({
     }),
     cancelTask: op(PLUGIN_METHOD_CHANNELS.cancelTask, handleTaskCancel, { withContext: true }),
     dismissTask: op(PLUGIN_METHOD_CHANNELS.dismissTask, handleTaskDismiss, { withContext: true }),
+    importArtifacts: op(PLUGIN_METHOD_CHANNELS.importArtifacts, handleArtifactsImport, {
+      withContext: true,
+    }),
+    getArtifactSource: op(PLUGIN_METHOD_CHANNELS.getArtifactSource, handleArtifactSource, {
+      withContext: true,
+    }),
+    releaseArtifactSource: op(
+      PLUGIN_METHOD_CHANNELS.releaseArtifactSource,
+      handleArtifactSourceRelease,
+      { withContext: true }
+    ),
     getAgents: op(PLUGIN_METHOD_CHANNELS.getAgents, handleAgentsGet),
     getRecipes: op(PLUGIN_METHOD_CHANNELS.getRecipes, handleRecipesGet, { withContext: true }),
     getTours: op(PLUGIN_METHOD_CHANNELS.getTours, handleToursGet, { withContext: true }),

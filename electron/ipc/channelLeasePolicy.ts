@@ -501,6 +501,10 @@ export const CHANNEL_LEASE_POLICY = {
   "plugin:settings-set-value": "free",
   "plugin:settings-required-status": "free",
   "plugin:task-cancel": "driver",
+  // The plugin's own cache, not the project: anyone attached may fill or play it.
+  "plugin:artifacts-import": "free",
+  "plugin:artifact-source": "free",
+  "plugin:artifact-source-release": "free",
   "plugin:task-dismiss": "free",
   "plugin:setup-status": "free",
   "plugin:setup-step-skipped-set": "driver",

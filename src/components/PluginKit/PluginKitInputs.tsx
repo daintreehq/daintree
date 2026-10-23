@@ -61,8 +61,11 @@ import {
   wholeLimit,
   rowCount,
 } from "./kitProps";
-import { useKitOverlayZClass } from "./kitScope";
+import { useKitOverlayZClass, usePluginKitOwner } from "./kitScope";
 import { safeFormat } from "./kitDiagnostics";
+import { getPluginKitHost } from "./kitHost";
+import { InlineError } from "@/components/ui/field";
+import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { invalidProp, useKitFieldControl } from "./kitField";
 
 function finite(value: unknown): number | undefined {
@@ -1490,8 +1493,16 @@ function carriesFiles(event: DragEvent): boolean {
   return Array.from(event.dataTransfer?.types ?? []).includes("Files");
 }
 
+/** An error's words without the host's leading code (`ARTIFACT_BUSY: …`). */
+function importErrorText(error: unknown): string {
+  const message = formatErrorMessage(error, "");
+  return message.replace(/^[A-Z][A-Z_]+:\s*/, "") || "The file couldn't be imported";
+}
+
 function KitFileDropzone({
   onFiles,
+  onArtifacts,
+  onImportError,
   onReject,
   accept,
   multiple,
@@ -1507,11 +1518,23 @@ function KitFileDropzone({
   const inputRef = useRef<HTMLInputElement>(null);
   // Counted, because entering a child fires `dragleave` on the parent.
   const [depth, setDepth] = useState(0);
+  const [importing, setImporting] = useState(false);
+  const [importError, setImportError] = useState<string | null>(null);
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
   const textId = useId();
-  const inert = disabled === true;
+  const owner = usePluginKitOwner();
+  const inert = disabled === true || importing;
   const many = multiple === true;
   const acceptText = nonEmpty(accept);
   const deliver = fn(onFiles);
+  const deliverArtifacts = fn(onArtifacts);
+  const reportImportError = fn(onImportError);
   const reject = fn(onReject);
   const { controlProps } = useKitFieldControl({}, undefined, false);
   const fieldLabel = str(field(controlProps, "aria-labelledby"));
@@ -1523,14 +1546,42 @@ function KitFileDropzone({
     const refused = files.filter((file) => !fileMatchesAccept(file, acceptText));
     const kept = many ? accepted : accepted.slice(0, 1);
     if (refused.length > 0) reject?.(refused);
-    if (kept.length > 0) deliver?.(kept);
+    if (kept.length === 0) return;
+    if (!deliverArtifacts) {
+      deliver?.(kept);
+      return;
+    }
+    // Artifact mode: the host copies the chosen files into its cache and the
+    // view gets handles, never bytes.
+    setImportError(null);
+    setImporting(true);
+    const pending = owner
+      ? getPluginKitHost().importArtifacts(owner, kept)
+      : Promise.reject(new Error("Importing needs a plugin view"));
+    pending.then(
+      (artifacts) => {
+        if (!mounted.current) return;
+        setImporting(false);
+        if (artifacts.length > 0) deliverArtifacts(artifacts);
+      },
+      (error: unknown) => {
+        if (!mounted.current) return;
+        setImporting(false);
+        setImportError(importErrorText(error));
+        reportImportError?.(error instanceof Error ? error : new Error(String(error)));
+      }
+    );
   };
   const openDialog = () => {
     if (!inert) inputRef.current?.click();
   };
 
   const glyph = icon === undefined ? renderIconSource("upload") : renderIconSource(icon);
-  const headline = content(label) ?? (many ? "Drop files here" : "Drop a file here");
+  const headline = importing
+    ? many
+      ? "Importing files…"
+      : "Importing file…"
+    : (content(label) ?? (many ? "Drop files here" : "Drop a file here"));
   const detail = content(description);
 
   return (
@@ -1538,6 +1589,7 @@ function KitFileDropzone({
       {...pickRootProps(rest)}
       data-drag-over={over ? "" : undefined}
       aria-disabled={inert ? true : undefined}
+      aria-busy={importing ? true : undefined}
       onDragEnter={(event) => {
         if (inert || !carriesFiles(event)) return;
         event.preventDefault();
@@ -1601,6 +1653,11 @@ function KitFileDropzone({
           {nonEmpty(browseLabel) ?? (many ? "Choose files…" : "Choose file…")}
         </span>
       </Button>
+      {importError !== null ? (
+        <InlineError role="alert" className="text-left">
+          {importError}
+        </InlineError>
+      ) : null}
       <input
         ref={inputRef}
         type="file"

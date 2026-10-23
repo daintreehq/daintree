@@ -11,6 +11,21 @@ import type {
   NormalizedPRState,
   ResourceRef,
 } from "./forge.js";
+import type { PluginArtifactApi } from "./pluginArtifacts.js";
+export type {
+  PluginArtifact,
+  PluginArtifactApi,
+  PluginArtifactCreateOptions,
+  PluginArtifactDownloadOptions,
+  PluginArtifactDownloadRequest,
+  PluginArtifactImportSource,
+  PluginArtifactListOptions,
+  PluginArtifactProgress,
+  PluginArtifactSource,
+  PluginArtifactUploadOptions,
+  PluginArtifactUploadRequest,
+  PluginArtifactUploadResult,
+} from "./pluginArtifacts.js";
 import type { NotificationType } from "./notification.js";
 import type {
   ActionDispatchResult,
@@ -1048,6 +1063,12 @@ export const BUILT_IN_PLUGIN_CAPABILITIES = [
   // confirm-triggering — it changes where a notification is shown, not what a
   // plugin can do.
   "notification:os",
+  // Hold large files in the host's artifact cache (`host.artifacts`, #14100):
+  // import a scoped or chosen file, download or upload a provider file, play
+  // one in a view. Bytes stay in main. Not confirm-triggering on its own —
+  // what reaches the cache is already gated by the fs read capabilities, the
+  // person's own selection, or `network:fetch` with a declared URL scope.
+  "artifact:store",
 ] as const;
 
 export type BuiltInPluginCapability = (typeof BUILT_IN_PLUGIN_CAPABILITIES)[number];
@@ -8276,6 +8297,15 @@ export interface PluginHostApi extends PluginActivationApi {
    * NOT revoke-guarded — same membership lifetime as {@link fs}.
    */
   readonly documents: PluginDocumentsApi;
+  /**
+   * Host-managed large files — imports, provider downloads and uploads, and
+   * playback in views — gated on `artifact:store`. Bytes never cross the
+   * plugin's channel. See {@link PluginArtifactApi}.
+   *
+   * NOT revoke-guarded — same membership lifetime as {@link fs}. Unloading
+   * cancels the plugin's transfers and drops its artifacts.
+   */
+  readonly artifacts: PluginArtifactApi;
 }
 
 /**
