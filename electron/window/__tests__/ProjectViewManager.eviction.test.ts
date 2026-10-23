@@ -5233,8 +5233,8 @@ describe("ProjectViewManager — cap across windows (#14218)", () => {
     });
   });
 
-  /** A window registered in the shared registry, showing `initial`. */
-  async function openWindow(initial: string, cap = 5) {
+  /** A window registered in the shared registry, showing `initial` (or no project). */
+  async function openWindow(initial: string | null, cap = 5) {
     const win = { ...createMockWindow(), id: nextWindowId++ };
     const mgr = new ProjectViewManager(win as never, {
       dirname: "/test",
@@ -5249,12 +5249,14 @@ describe("ProjectViewManager — cap across windows (#14218)", () => {
     });
     managers.push(mgr);
     registry.contexts.push({ services: { projectViewManager: mgr } });
-    const wc = createMockWebContents();
-    mgr.registerInitialView(
-      { webContents: wc, setBounds: vi.fn() } as never,
-      initial,
-      `/p/${initial}`
-    );
+    if (initial !== null) {
+      const wc = createMockWebContents();
+      mgr.registerInitialView(
+        { webContents: wc, setBounds: vi.fn() } as never,
+        initial,
+        `/p/${initial}`
+      );
+    }
     await flushImmediates();
     return mgr;
   }
@@ -5369,14 +5371,48 @@ describe("ProjectViewManager — cap across windows (#14218)", () => {
     expect(ids(b)).toEqual(["b2"]);
   });
 
-  it("hands pressure leadership to the next window when the leader closes", async () => {
-    // Just inside the soft band, where its target is the current view alone.
+  it("keeps reclaiming when the oldest window shows no project", async () => {
+    stubSystemMemoryInfo({ free: 1100 * 1024, purgeable: 0, total: 8 * 1024 * 1024 });
+    const picker = await openWindow(null);
+    const b = await openWindow("b1");
+    await show(b, "b2");
+    for (const mgr of [picker, b]) {
+      mgr.setMemoryPressurePolicy({ criticalMb: 1024, warningMb: 3072 });
+      mgr.pressureSampleStreak = 0;
+    }
+    ageViewsPastPressureFloor(b);
+
+    picker.maybeEvictUnderPressure();
+    picker.maybeEvictUnderPressure();
+    expect(ids(b)).toEqual(["b2"]);
+  });
+
+  it("leads pressure from the oldest window that has a pressure policy", async () => {
     stubSystemMemoryInfo({ free: 1100 * 1024, purgeable: 0, total: 8 * 1024 * 1024 });
     const a = await openWindow("a1");
     const b = await openWindow("b1");
     await show(b, "b2");
     b.setMemoryPressurePolicy({ criticalMb: 1024, warningMb: 3072 });
     b.pressureSampleStreak = 0;
+    ageViewsPastPressureFloor(b);
+
+    a.maybeEvictUnderPressure();
+    b.maybeEvictUnderPressure();
+    b.maybeEvictUnderPressure();
+    expect(ids(a)).toEqual(["a1"]);
+    expect(ids(b)).toEqual(["b2"]);
+  });
+
+  it("hands pressure leadership to the next window when the leader closes", async () => {
+    // Just inside the soft band, where its target is the current view alone.
+    stubSystemMemoryInfo({ free: 1100 * 1024, purgeable: 0, total: 8 * 1024 * 1024 });
+    const a = await openWindow("a1");
+    const b = await openWindow("b1");
+    await show(b, "b2");
+    for (const mgr of [a, b]) {
+      mgr.setMemoryPressurePolicy({ criticalMb: 1024, warningMb: 3072 });
+      mgr.pressureSampleStreak = 0;
+    }
     ageViewsPastPressureFloor(b);
 
     b.maybeEvictUnderPressure();

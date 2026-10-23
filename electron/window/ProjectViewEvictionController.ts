@@ -493,7 +493,10 @@ export function evictStaleViews(
   // app's. Read lazily, so a window that closed has already given back its share.
   const scope = cacheScope(host);
 
-  if (countViews(scope) <= baseMax || host.activeProjectId === null) {
+  // Each window without a current view is skipped below; only when none has
+  // one is there nothing to anchor a pass — a window left on the project picker
+  // must not stop the others' reclaim.
+  if (countViews(scope) <= baseMax || scope.every((pvm) => pvm.activeProjectId === null)) {
     // Nothing is over target, so whatever the last pass reported has ended; a
     // later pass that finds the cache over it again is a new episode.
     host.lastEvictionSkippedLog = null;
@@ -1093,7 +1096,8 @@ export function sampleCachedViewMemory(host: ProjectViewManager): void {
  * which owns all of that state globally and arrives via `forcePressure`.
  *
  * One window answers each reading for the whole app (#14218): the oldest live
- * one in the registry, whose pass then runs over every window's views. Each
+ * one in the registry with a pressure policy, whose pass then runs over every
+ * window's views. Each
  * window still has its own sampler, so letting all of them act would shed one
  * renderer per window on the same memory figure and split the confirmation
  * streak and the backoff between them. When the leader closes, the next
@@ -1101,7 +1105,8 @@ export function sampleCachedViewMemory(host: ProjectViewManager): void {
  */
 export function maybeEvictUnderPressure(host: ProjectViewManager): void {
   const scope = cacheScope(host);
-  if (scope[0] !== host) return;
+  const leader = scope.find((pvm) => pvm.memoryPressurePolicy != null) ?? host;
+  if (leader !== host) return;
   // Whether any window holds a view beyond the one it shows — the leader's own
   // cache may be down to its current view while another window's is not.
   const hasCachedViews = scope.some((pvm) => pvm.views.size > 1);
