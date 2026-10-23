@@ -75,7 +75,7 @@ function sources(overrides: Partial<AgentDirectorySources> = {}): AgentDirectory
     getLiveGeneration: (id) => generations[id] ?? null,
     readTerminals: async () => ({ terminals, degraded: false }),
     isHelpTerminal: () => false,
-    resumableLanes: async () => [],
+    resumableLanes: async () => ({ lanes: [], complete: true }),
     ...overrides,
   };
 }
@@ -156,7 +156,7 @@ describe("collectAgentDirectory (#14160)", () => {
       { projectId: "p2", slot: 2, agentId: "codex", capturedAt: 22 },
     ];
     const directory = await collectAgentDirectory(
-      sources({ resumableLanes: async () => pointers })
+      sources({ resumableLanes: async () => ({ lanes: pointers, complete: true }) })
     );
 
     const resumable = directory.entries.filter((entry) => entry.state === "resumable");
@@ -181,9 +181,10 @@ describe("collectAgentDirectory (#14160)", () => {
         getRunningLaneSession: () => null,
         getLiveGeneration: () => null,
         readTerminals: async () => ({ terminals: [], degraded: false }),
-        resumableLanes: async () => [
-          { projectId: "p1", slot: 0, agentId: "claude", capturedAt: 5 },
-        ],
+        resumableLanes: async () => ({
+          lanes: [{ projectId: "p1", slot: 0, agentId: "claude", capturedAt: 5 }],
+          complete: true,
+        }),
       })
     );
     expect(directory.entries.map((entry) => entry.state)).toEqual(["resumable"]);
@@ -192,7 +193,10 @@ describe("collectAgentDirectory (#14160)", () => {
   it("filters to one project before the cap", async () => {
     const directory = await collectAgentDirectory(
       sources({
-        resumableLanes: async () => [{ projectId: "p2", slot: 0, agentId: null, capturedAt: 1 }],
+        resumableLanes: async () => ({
+          lanes: [{ projectId: "p2", slot: 0, agentId: null, capturedAt: 1 }],
+          complete: true,
+        }),
       }),
       { projectId: "p2" }
     );
@@ -215,6 +219,42 @@ describe("collectAgentDirectory (#14160)", () => {
     expect(
       untracked.entries.every((entry) => entry.state === "live" && entry.role === "assistant")
     ).toBe(true);
+  });
+
+  it("does not lend a replaced run's observations to its new incarnation", async () => {
+    let generation = 7;
+    const directory = await collectAgentDirectory(
+      sources({
+        getLiveGeneration: (id) =>
+          id === "a0"
+            ? generation
+            : (({ w1: 3, w2: 4, a1: 8 } as Record<string, number>)[id] ?? null),
+        readTerminals: async () => {
+          generation = 8; // a0 restarted while the pty was read
+          return {
+            terminals: [terminal({ id: "a0", agentState: "waiting", waitingReason: "approval" })],
+            degraded: false,
+          };
+        },
+      })
+    );
+    const a0 = directory.entries.find(
+      (entry) => entry.state === "live" && entry.subject.terminalId === "a0"
+    );
+    expect(a0).toMatchObject({
+      subject: { incarnation: 8 },
+      agentState: null,
+      waitingReason: null,
+    });
+    expect(directory.complete).toBe(false);
+  });
+
+  it("is incomplete when the resume pointers of some projects were not looked up", async () => {
+    const directory = await collectAgentDirectory(
+      sources({ resumableLanes: async () => ({ lanes: [], complete: false }) })
+    );
+    expect(directory.complete).toBe(false);
+    expect(isFullAgentDirectory(directory)).toBe(false);
   });
 
   it("caps entries and counts the rest", async () => {
@@ -268,6 +308,36 @@ describe("LocalAgentDirectory last-known retention", () => {
     expect(stale.observedAt).toBe(100);
     expect(stale.entries).toEqual(fresh.entries);
     expect(isFullAgentDirectory(stale)).toBe(false);
+  });
+
+  it("keeps the last directory when a later read is degraded or slow", async () => {
+    let mode: "ok" | "degraded" | "slow" = "ok";
+    const directory = new LocalAgentDirectory(
+      sources({
+        listRunningLanes: () => [],
+        getLiveGeneration: () => 1,
+        readTerminals: async () => {
+          if (mode === "slow") return new Promise(() => {});
+          return {
+            terminals:
+              mode === "ok"
+                ? [terminal({ id: "w1", projectId: "p1", detectedAgentId: "claude" })]
+                : [],
+            degraded: mode === "degraded",
+          };
+        },
+      }),
+      20
+    );
+    const fresh = await directory.read();
+    mode = "degraded";
+    const degraded = await directory.read();
+    expect(degraded).toMatchObject({ coverage: "stale", observedAt: 9000, complete: false });
+    expect(degraded.entries).toEqual(fresh.entries);
+    mode = "slow";
+    const slow = await directory.read();
+    expect(slow).toMatchObject({ coverage: "stale", observedAt: 9000 });
+    expect(slow.entries).toEqual(fresh.entries);
   });
 
   it("is unreachable, not empty, when nothing was ever read", async () => {

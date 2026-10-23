@@ -49,7 +49,7 @@ describe("bindHostControl (#13493)", () => {
       ok: false,
       code: "NOT_ELIGIBLE",
     });
-    expect(runtime.list).toHaveBeenCalledTimes(1);
+    expect(runtime.list).toHaveBeenCalledTimes(2);
   });
 
   it("offers nothing once the runtime is gone, and keeps a newer one on a late teardown", async () => {

@@ -15,6 +15,7 @@ import {
   type HostListResult,
 } from "../../../shared/types/hostControl.js";
 import {
+  AGENT_DIRECTORY_BYTES_MAX,
   fitAgentDirectory,
   unreadAgentDirectory,
   type AgentDirectory,
@@ -451,6 +452,23 @@ class RefusalError extends Error {
 }
 
 /** Settles with `work`, or with `fallback` once `ms` pass; the timer never outlives it. */
+/**
+ * Cuts a directory so the whole `host.list` answer, not the directory alone,
+ * stays within the agent budget the MCP result is capped to.
+ */
+function fitToResponse(
+  agents: AgentDirectory,
+  entry: HostListEntry,
+  others: readonly HostListEntry[]
+): AgentDirectory {
+  const { agents: _agents, ...rest } = entry;
+  const encoder = new TextEncoder();
+  const restBytes = encoder.encode(
+    JSON.stringify({ hosts: [rest, ...others], agents: null })
+  ).length;
+  return fitAgentDirectory(agents, Math.max(0, AGENT_DIRECTORY_BYTES_MAX - restBytes));
+}
+
 function withinMs<T>(work: Promise<T>, ms: number, fallback: T): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   const late = new Promise<T>((resolve) => {
@@ -1111,7 +1129,9 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
           };
         })
       );
-      return { hosts: here ? [await here, ...hosts] : hosts };
+      const first = here ? await here : null;
+      if (first?.agents) first.agents = fitToResponse(first.agents, first, hosts);
+      return { hosts: first ? [first, ...hosts] : hosts };
     });
   }
 
@@ -1165,7 +1185,7 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
       PROJECTS_READ_MS,
       null
     );
-    return directory === null ? unreadAgentDirectory("unreachable") : fitAgentDirectory(directory);
+    return directory === null ? unreadAgentDirectory("unreachable") : directory;
   }
 
   /**

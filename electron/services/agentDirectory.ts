@@ -32,8 +32,13 @@ export interface AgentDirectorySources {
   getLiveGeneration(terminalId: string): number | null;
   readTerminals(): Promise<{ terminals: readonly PtyTerminal[]; degraded: boolean }>;
   isHelpTerminal(terminalId: string): boolean;
-  /** Stored resume pointers, read without claiming or clearing any. */
-  resumableLanes(projectId?: string): Promise<readonly ResumableLane[]>;
+  /**
+   * Stored resume pointers, read without claiming or clearing any. `complete`
+   * is false when the projects looked in were fewer than the ones that exist.
+   */
+  resumableLanes(
+    projectId?: string
+  ): Promise<{ lanes: readonly ResumableLane[]; complete: boolean }>;
 }
 
 /**
@@ -48,6 +53,19 @@ export async function collectAgentDirectory(
   options: { projectId?: string } = {}
 ): Promise<AgentDirectory> {
   const { projectId } = options;
+  // Lane runs are known before the pty is read; a run that changed while it was
+  // read must not borrow the old run's observations.
+  const lanesBefore = sources
+    .listRunningLanes()
+    .filter((lane) => projectId === undefined || lane.projectId === projectId)
+    .map((lane) => {
+      const running = sources.getRunningLaneSession(lane.projectId, lane.slot);
+      return {
+        lane,
+        running,
+        generation: running ? sources.getLiveGeneration(running.terminalId) : null,
+      };
+    });
   const { terminals, degraded } = await sources.readTerminals();
   const byId = new Map(terminals.map((terminal) => [terminal.id, terminal]));
   let complete = !degraded;
@@ -55,18 +73,18 @@ export async function collectAgentDirectory(
   const live: AgentDirectoryLiveEntry[] = [];
   const liveLanes = new Set<string>();
 
-  const lanes = sources
-    .listRunningLanes()
-    .filter((lane) => projectId === undefined || lane.projectId === projectId)
-    .sort((a, b) => a.projectId.localeCompare(b.projectId) || a.slot - b.slot);
-  for (const lane of lanes) {
-    const running = sources.getRunningLaneSession(lane.projectId, lane.slot);
-    if (!running) continue;
+  lanesBefore.sort(
+    (a, b) => a.lane.projectId.localeCompare(b.lane.projectId) || a.lane.slot - b.lane.slot
+  );
+  for (const { lane, running, generation } of lanesBefore) {
+    if (!running || generation === null) continue;
     const incarnation = sources.getLiveGeneration(running.terminalId);
     // No run to name: not a live lane, and not a conclusion about its PTY either.
     if (incarnation === null) continue;
     liveLanes.add(`${lane.projectId}\u0000${lane.slot}`);
-    const terminal = byId.get(running.terminalId);
+    const replaced = incarnation !== generation;
+    if (replaced) complete = false;
+    const terminal = replaced ? undefined : byId.get(running.terminalId);
     live.push(
       liveEntry({
         role: "assistant",
@@ -115,7 +133,9 @@ export async function collectAgentDirectory(
   );
 
   const resumable: AgentDirectoryResumableEntry[] = [];
-  for (const pointer of await sources.resumableLanes(projectId)) {
+  const stored = await sources.resumableLanes(projectId);
+  if (!stored.complete) complete = false;
+  for (const pointer of stored.lanes) {
     if (pointer.slot < 0 || pointer.slot >= MAX_ASSISTANT_SLOTS) continue;
     // A live lane wins: a pointer recorded at launch coexists with its running session.
     if (liveLanes.has(`${pointer.projectId}\u0000${pointer.slot}`)) continue;
@@ -182,6 +202,9 @@ function liveEntry(input: {
   };
 }
 
+/** How long a read may take before the last known directory answers instead. */
+const AGENT_DIRECTORY_READ_MS = 4_000;
+
 /** Scopes whose last known directory is kept; a project filter is caller-chosen. */
 const LAST_KNOWN_SCOPES_MAX = 64;
 
@@ -194,30 +217,45 @@ export class LocalAgentDirectory {
   private readonly last = new Map<string, AgentDirectory>();
   private readonly inFlight = new Map<string, Promise<AgentDirectory>>();
 
-  constructor(private readonly sources: AgentDirectorySources) {}
+  constructor(
+    private readonly sources: AgentDirectorySources,
+    private readonly deadlineMs: number = AGENT_DIRECTORY_READ_MS
+  ) {}
 
   read(options: { projectId?: string } = {}): Promise<AgentDirectory> {
     const key = options.projectId ?? "";
     const pending = this.inFlight.get(key);
     if (pending) return pending;
-    const flight = collectAgentDirectory(this.sources, options)
-      .then((directory) => {
+    const keepLast = (): AgentDirectory => {
+      const previous = this.last.get(key);
+      return previous
+        ? { ...previous, coverage: "stale", complete: false }
+        : unreadAgentDirectory("unreachable");
+    };
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const deadline = new Promise<AgentDirectory>((resolve) => {
+      timer = setTimeout(() => resolve(keepLast()), this.deadlineMs);
+    });
+    const read = collectAgentDirectory(this.sources, options).then(
+      (directory) => {
+        // A failed pty shard is not an inventory: it must not replace one that was read.
+        if (directory.coverage === "ok" && !directory.complete && this.last.has(key)) {
+          const previous = this.last.get(key);
+          if (previous && previous.complete) return keepLast();
+        }
         this.last.delete(key);
         this.last.set(key, directory);
         if (this.last.size > LAST_KNOWN_SCOPES_MAX) {
           this.last.delete(this.last.keys().next().value as string);
         }
         return directory;
-      })
-      .catch((): AgentDirectory => {
-        const previous = this.last.get(key);
-        return previous
-          ? { ...previous, coverage: "stale", complete: false }
-          : unreadAgentDirectory("unreachable");
-      })
-      .finally(() => {
-        this.inFlight.delete(key);
-      });
+      },
+      () => keepLast()
+    );
+    const flight = Promise.race([read, deadline]).finally(() => {
+      clearTimeout(timer);
+      this.inFlight.delete(key);
+    });
     this.inFlight.set(key, flight);
     return flight;
   }

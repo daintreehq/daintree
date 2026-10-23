@@ -6,7 +6,6 @@ import { AGENT_DIRECTORY_RESUMABLE_PROJECTS_MAX } from "../../../shared/types/ag
 import { MAX_ASSISTANT_SLOTS, assistantSlotKey } from "../../../shared/config/assistantSlots.js";
 import { LocalAgentDirectory, type ResumableLane } from "../../services/agentDirectory.js";
 import { getAgentAvailabilityStore } from "../../services/AgentAvailabilityStore.js";
-import { getSharedTerminalSnapshot } from "../../services/sharedTerminalSnapshot.js";
 import { getPendingHelpHibernationStore } from "../../services/PendingHelpHibernationStore.js";
 import { helpSessionService } from "../../services/HelpSessionService.js";
 import type { RunbooksHostsState } from "../../services/helpSessionRunbooks.js";
@@ -177,22 +176,19 @@ export function installHostControl(deps: HostControlInstallDeps): () => void {
     getRunningLaneSession: (projectId, slot) =>
       helpSessionService.getRunningLaneSession(projectId, slot),
     getLiveGeneration: (terminalId) => getPtyClient()?.getLiveGeneration(terminalId) ?? null,
+    // Read fresh: a cached inventory can describe a run that has since been replaced.
     readTerminals: async () => {
       const pty = getPtyClient();
       if (!pty) throw new Error("No pty client");
-      return getSharedTerminalSnapshot(pty);
+      return pty.getAllTerminalsWithCompletenessAsync();
     },
     isHelpTerminal: (terminalId) => getAgentAvailabilityStore().isHelpTerminal(terminalId),
     resumableLanes: async (projectId) => {
       const { projectStore } = await import("../../services/ProjectStore.js");
       const store = getPendingHelpHibernationStore();
       await store.load();
-      const projectIds = projectId
-        ? [projectId]
-        : projectStore
-            .getProjectSummaries()
-            .slice(0, AGENT_DIRECTORY_RESUMABLE_PROJECTS_MAX)
-            .map((project) => project.id);
+      const known = projectId ? [projectId] : projectStore.getProjectSummaries().map((p) => p.id);
+      const projectIds = known.slice(0, AGENT_DIRECTORY_RESUMABLE_PROJECTS_MAX);
       const pointers: ResumableLane[] = [];
       for (const id of projectIds) {
         for (let slot = 0; slot < MAX_ASSISTANT_SLOTS; slot++) {
@@ -207,7 +203,7 @@ export function installHostControl(deps: HostControlInstallDeps): () => void {
           }
         }
       }
-      return pointers;
+      return { lanes: pointers, complete: projectIds.length === known.length };
     },
   });
   const runtime = new HostCallRuntime({
