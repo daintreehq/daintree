@@ -826,11 +826,11 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // questions for the person with the copies they choose between, or that it
   // is still working. Offered to this machine's assistant only, so the
   // external ceiling does not move.
-  // 134_500 → MEASURE for #14160, measured at MEASURE B: `host.list`'s optional
+  // 134_500 → 137_400 for #14160, measured at 137_349 B: `host.list`'s optional
   // `includeAgents` / `projectId` arguments and the typed agent directory each
   // host entry may carry. The external ceiling does not move; `host.list` is
   // an assistant-only tool.
-  const MAX_COHORT_PAYLOAD_BYTES = 134_500;
+  const MAX_COHORT_PAYLOAD_BYTES = 137_400;
 
   const wireBytes = (t: WireTool) => t.descriptionBytes + t.paramsBytes + t.outputBytes;
 
