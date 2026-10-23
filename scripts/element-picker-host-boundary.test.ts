@@ -16,6 +16,8 @@ const RESOLVERS_DIR = `${WORKER_DIR}resolvers/`;
 const ADAPTERS_DIR = `${HOST_DIR}projectAdapters/`;
 const BOOTSTRAP = `${HOST_DIR}host-bootstrap.ts`;
 const HOST_ENTRY = `${HOST_DIR}host.ts`;
+const PLUGIN_BOOTSTRAP = `${HOST_DIR}plugin-resolver-bootstrap.ts`;
+const PLUGIN_HOST_ENTRY = `${HOST_DIR}plugin-resolver-host.ts`;
 
 /**
  * Element Picker resolvers carry parsers, compilers and source-map decoders,
@@ -82,7 +84,11 @@ function authorityImports(metafile: Metafile): string[] {
 }
 
 const isHostProcessCode = (file: string) =>
-  file.startsWith(WORKER_DIR) || file === BOOTSTRAP || file === HOST_ENTRY;
+  file.startsWith(WORKER_DIR) ||
+  file === BOOTSTRAP ||
+  file === HOST_ENTRY ||
+  file === PLUGIN_BOOTSTRAP ||
+  file === PLUGIN_HOST_ENTRY;
 
 /** Wherever the install resolves from: a worktree's node_modules can be a link to another checkout's. */
 const isSourceMapDecoder = (file: string) =>
@@ -207,6 +213,36 @@ describe("the Element Picker host boundary", () => {
     expect(
       reachable.filter((file) => file.startsWith("electron/") && !file.startsWith(HOST_DIR))
     ).toEqual(["electron/utils/bootstrapErrorGuard.ts"]);
+  }, 60_000);
+
+  it("gives a plugin's resolver host the runtime and nothing of the core resolvers", async () => {
+    // Plugin code runs in a process of its own, which must not carry the core
+    // registry's resolvers or parsers: a plugin pays for its own and no more.
+    const metafile = await metafileOf(PLUGIN_BOOTSTRAP, NATIVE_EXTERNAL);
+    const reachable = Object.keys(metafile.inputs);
+    // Not a vacuous pass: the plugin host and the shared runtime are in the build.
+    expect(reachable).toContain(PLUGIN_HOST_ENTRY);
+    expect(reachable).toContain(`${WORKER_DIR}runtime.ts`);
+    expect(reachable).not.toContain(`${WORKER_DIR}resolverRegistry.ts`);
+    expect(reachable.filter((file) => file.startsWith(RESOLVERS_DIR))).toEqual([]);
+    expect(
+      scanForbiddenModules(reachable, ELEMENT_PICKER_FRAMEWORK_PATTERNS)
+        .map((m) => m.label)
+        .filter((label) => label !== "Element Picker host process")
+    ).toEqual([]);
+    expect(authorityImports(metafile)).toEqual([]);
+    expect(
+      reachable.filter((file) => file.startsWith("electron/") && !file.startsWith(HOST_DIR))
+    ).toEqual(["electron/utils/bootstrapErrorGuard.ts"]);
+  }, 60_000);
+
+  it("keeps the plugin resolver entry locator behind main's first plugin resolve", async () => {
+    const service = `${HOST_DIR}ElementPickerHost.ts`;
+    const metafile = await metafileOf(service, NATIVE_EXTERNAL);
+    expect(Object.keys(metafile.inputs)).toContain(`${HOST_DIR}pluginResolverAssets.ts`);
+    expect([...walkEagerGraph(metafile, service)]).not.toContain(
+      `${HOST_DIR}pluginResolverAssets.ts`
+    );
   }, 60_000);
 
   it("keeps Vue's template parser behind the Vue resolver's first template check", async () => {

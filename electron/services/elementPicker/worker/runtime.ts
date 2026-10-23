@@ -7,19 +7,11 @@ import type {
   RevisionedSourceMap,
   SourceAccessResult,
 } from "../../../../shared/elementPicker/resolver.js";
-import type {
-  ResolutionResult,
-  SourceFileRef,
-} from "../../../../shared/elementPicker/resolution.js";
-import {
-  isCoreFramework,
-  type ElementPickerFramework,
-  type SourceCandidate,
-} from "../../../../shared/elementPicker/source.js";
-import type { SelectionObservation } from "../../../../shared/elementPicker/observation.js";
+import type { SourceFileRef } from "../../../../shared/elementPicker/resolution.js";
+import type { ElementPickerProviderId } from "../../../../shared/elementPicker/source.js";
 import { formatErrorMessage } from "../../../../shared/utils/errorMessage.js";
 import type { HostInbound, HostOutbound } from "../hostProtocol.js";
-import { observationCandidates, unavailableResult } from "../outcomes.js";
+import { mergeAnswers, observationCandidates, requestFor, unavailableResult } from "../outcomes.js";
 
 /**
  * The host process's dispatcher, apart from the process itself so it can be
@@ -30,10 +22,11 @@ import { observationCandidates, unavailableResult } from "../outcomes.js";
 /**
  * One explicit `import()` per framework, so loading a request's resolver loads
  * that resolver and nothing else. Never a barrel, and never a specifier built
- * from the request.
+ * from the request. The core host's are a fixed list of core frameworks; a
+ * plugin's resolver host's are the providers main told it to load.
  */
 export type ResolverLoaders = Partial<
-  Record<ElementPickerFramework, () => Promise<HostSourceResolver>>
+  Record<ElementPickerProviderId, () => Promise<HostSourceResolver>>
 >;
 
 export interface HostRuntime {
@@ -101,39 +94,29 @@ function checkAnswer(
   return answer;
 }
 
-/** The request as one framework's resolver sees it: only the candidates it owns. */
-function requestFor(request: ResolveRequest, framework: string): ResolveRequest {
-  const owns = (candidate: SourceCandidate) => candidate.framework === framework;
-  const observations: SelectionObservation[] = [];
-  for (const observation of request.observations) {
-    if (!observationCandidates(observation).some(owns)) continue;
-    observations.push({
-      ...observation,
-      sourceCandidates: observation.sourceCandidates.filter(owns),
-      componentChain: {
-        ...observation.componentChain,
-        components: observation.componentChain.components.map((record) => ({
-          ...record,
-          sourceCandidates: record.sourceCandidates.filter(owns),
-        })),
-      },
-    });
-  }
-  return { ...request, observations };
+export interface HostRuntimeOptions {
+  /**
+   * A resolver that throws or fails to load answers its own candidates as
+   * `unsupported` instead of failing the job. A plugin's host sets it: one of
+   * its providers failing is no reason to lose another's answers. The core host
+   * keeps a throw a failed job, so a resolver bug is never mistaken for an answer.
+   */
+  isolateFailures?: boolean;
 }
 
 export function createHostRuntime(
   post: (message: HostOutbound) => void,
-  loaders: ResolverLoaders
+  loaders: ResolverLoaders,
+  options: HostRuntimeOptions = {}
 ): HostRuntime {
   const jobs = new Map<number, RuntimeJob>();
-  const loaded = new Map<ElementPickerFramework, Promise<HostSourceResolver>>();
+  const loaded = new Map<string, Promise<HostSourceResolver>>();
   let nextAccessId = 1;
 
   function load(framework: string): Promise<HostSourceResolver> | null {
-    // A plugin provider has no resolver worker yet: its candidates answer `unsupported`.
-    if (!isCoreFramework(framework)) return null;
-    const loader = loaders[framework];
+    // Own keys only: an id the page sent must never reach a prototype member.
+    // A framework this host has no loader for answers `unsupported`.
+    const loader = Object.hasOwn(loaders, framework) ? loaders[framework] : undefined;
     if (!loader) return null;
     let resolver = loaded.get(framework);
     if (!resolver) {
@@ -226,38 +209,34 @@ export function createHostRuntime(
           answers.set(framework, null);
           return;
         }
-        const own = requestFor(request, framework);
+        const own = requestFor(request, (candidate) => candidate.framework === framework);
         try {
           answers.set(
             framework,
             checkAnswer(framework, own, await (await resolver).resolve(own, sourceAccess, signal))
           );
         } catch (error) {
-          if (!signal.aborted) throw error;
-          answers.set(framework, "cancelled");
+          if (signal.aborted) answers.set(framework, "cancelled");
+          else if (options.isolateFailures) answers.set(framework, null);
+          else throw error;
         }
       })
     );
 
-    const response: ResolveResponse = {
-      requestId: request.requestId,
-      documentEpoch: request.documentEpoch,
-      outcomes: request.observations.map((observation) => ({
-        elementId: observation.elementId,
-        results: observationCandidates(observation).map((candidate): ResolutionResult => {
-          const answer = answers.get(candidate.framework);
-          if (answer === null || answer === undefined)
-            return unavailableResult(candidate, "unsupported");
-          if (answer === "cancelled") return unavailableResult(candidate, "cancelled");
-          const found = answer.outcomes
-            .find((outcome) => outcome.elementId === observation.elementId)
-            ?.results.find((result) => result.candidateId === candidate.candidateId);
-          return (
-            found ?? unavailableResult(candidate, signal.aborted ? "cancelled" : "unsupported")
-          );
-        }),
-      })),
-    };
+    const response = mergeAnswers(
+      request,
+      (candidate) => {
+        const answer = answers.get(candidate.framework);
+        return answer && answer !== "cancelled" ? answer : null;
+      },
+      (candidate) => {
+        const answer = answers.get(candidate.framework);
+        if (answer === null || answer === undefined)
+          return unavailableResult(candidate, "unsupported");
+        if (answer === "cancelled") return unavailableResult(candidate, "cancelled");
+        return unavailableResult(candidate, signal.aborted ? "cancelled" : "unsupported");
+      }
+    );
     post({ type: "resolved", jobId, response });
   }
 

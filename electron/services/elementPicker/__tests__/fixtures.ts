@@ -12,9 +12,10 @@ import type {
 } from "../../../../shared/elementPicker/source.js";
 import type { ResolutionResult } from "../../../../shared/elementPicker/resolution.js";
 import type { HostChild } from "../ElementPickerHost.js";
-import type { HostInbound, HostOutbound } from "../hostProtocol.js";
+import type { HostOutbound, PluginHostInbound } from "../hostProtocol.js";
 import { observationCandidates, unavailableResult } from "../outcomes.js";
-import { createHostRuntime, type HostRuntime, type ResolverLoaders } from "../worker/runtime.js";
+import { createHostRuntime, type ResolverLoaders } from "../worker/runtime.js";
+import { createPluginHostRuntime } from "../worker/pluginRuntime.js";
 
 const unknown = { state: "unknown" } as const;
 
@@ -184,15 +185,25 @@ export interface RuntimeChildOptions {
 export class RuntimeChild extends EventEmitter implements HostChild {
   pid: number | undefined = undefined;
   alive = true;
-  readonly posted: HostInbound["type"][] = [];
-  private readonly runtime: HostRuntime;
+  readonly posted: PluginHostInbound["type"][] = [];
+  private readonly runtime: { handle(message: PluginHostInbound): void };
 
   constructor(
-    loaders: ResolverLoaders,
+    loaders: ResolverLoaders | { importModule: (url: string) => Promise<unknown> },
     private readonly options: RuntimeChildOptions = {}
   ) {
     super();
-    this.runtime = createHostRuntime((message) => this.deliver(message), loaders);
+    const post = (message: HostOutbound) => this.deliver(message);
+    if ("importModule" in loaders && typeof loaders.importModule === "function") {
+      this.runtime = createPluginHostRuntime(post, loaders.importModule);
+    } else {
+      const core = createHostRuntime(post, loaders as ResolverLoaders);
+      this.runtime = {
+        handle: (message) => {
+          if (message.type !== "provider") core.handle(message);
+        },
+      };
+    }
     if (options.start !== false) setImmediate(() => this.start());
   }
 
@@ -203,7 +214,7 @@ export class RuntimeChild extends EventEmitter implements HostChild {
     if (this.options.ready !== false) this.deliver({ type: "ready" });
   }
 
-  postMessage(message: HostInbound): void {
+  postMessage(message: PluginHostInbound): void {
     if (!this.alive) return;
     this.posted.push(message.type);
     const copy = structuredClone(message);

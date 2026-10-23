@@ -47,3 +47,52 @@ export function unavailableResponse(
     })),
   };
 }
+
+/** The request as the resolvers for `owns` see it: only the candidates they own, and only observations with one. */
+export function requestFor(
+  request: ResolveRequest,
+  owns: (candidate: SourceCandidate) => boolean
+): ResolveRequest {
+  const observations: SelectionObservation[] = [];
+  for (const observation of request.observations) {
+    if (!observationCandidates(observation).some(owns)) continue;
+    observations.push({
+      ...observation,
+      sourceCandidates: observation.sourceCandidates.filter(owns),
+      componentChain: {
+        ...observation.componentChain,
+        components: observation.componentChain.components.map((record) => ({
+          ...record,
+          sourceCandidates: record.sourceCandidates.filter(owns),
+        })),
+      },
+    });
+  }
+  return { ...request, observations };
+}
+
+/**
+ * Answers every candidate of `request` in its own order: from the answer
+ * `answerFor` names for it, or as `fallback` says when that answer is missing
+ * or did not cover it.
+ */
+export function mergeAnswers(
+  request: ResolveRequest,
+  answerFor: (candidate: SourceCandidate) => ResolveResponse | null,
+  fallback: (candidate: SourceCandidate) => ResolutionResult
+): ResolveResponse {
+  return {
+    requestId: request.requestId,
+    documentEpoch: request.documentEpoch,
+    outcomes: request.observations.map((observation) => ({
+      elementId: observation.elementId,
+      results: observationCandidates(observation).map(
+        (candidate) =>
+          answerFor(candidate)
+            ?.outcomes.find((outcome) => outcome.elementId === observation.elementId)
+            ?.results.find((result) => result.candidateId === candidate.candidateId) ??
+          fallback(candidate)
+      ),
+    })),
+  };
+}

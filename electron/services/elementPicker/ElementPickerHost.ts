@@ -15,16 +15,34 @@ import {
   type UnavailableReason,
 } from "../../../shared/elementPicker/resolution.js";
 import type { ProjectContextOutcome } from "../../../shared/elementPicker/projectContext.js";
+import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import { logError, logInfo, logWarn } from "../../utils/logger.js";
 import { minimalSpawnEnv } from "../../utils/minimalSpawnEnv.js";
 import { watchShared } from "../FileObservationService.js";
 import { noteTerminationIntent } from "../processTerminationIntent.js";
-import { AdmissionGate } from "./admissionGate.js";
-import { checkResolveResponse, relabelCancelled } from "./checkResponse.js";
-import { isElementPickerProviderAuthorized } from "../elementPickerProviderRegistry.js";
+import { AdmissionGate, MAX_CONCURRENT_RESOLVES } from "./admissionGate.js";
+import {
+  checkResolveResponse,
+  checkResolveResponseByProvider,
+  relabelCancelled,
+} from "./checkResponse.js";
+import {
+  getElementPickerProvider,
+  isElementPickerProviderAuthorized,
+  isElementPickerProviderCurrent,
+  onElementPickerProvidersChanged,
+} from "../elementPickerProviderRegistry.js";
+import type { RegisteredElementPickerProvider } from "../../../shared/elementPicker/providers.js";
+import { isCoreFramework, type SourceCandidate } from "../../../shared/elementPicker/source.js";
 import { ElementPickerHostError, type ElementPickerHostErrorCode } from "./errors.js";
-import { HostOutboundSchema, type HostInbound } from "./hostProtocol.js";
-import { observationCandidates, unavailableResponse } from "./outcomes.js";
+import { HostOutboundSchema, type PluginHostInbound } from "./hostProtocol.js";
+import {
+  mergeAnswers,
+  observationCandidates,
+  requestFor,
+  unavailableResponse,
+  unavailableResult,
+} from "./outcomes.js";
 import { isStrictlyInside } from "./containment.js";
 import { nextDevServer } from "./nextDevServer.js";
 import { ProjectContextService } from "./projectAdapters/projectContext.js";
@@ -32,6 +50,8 @@ import type { ProjectAdapterRegistration } from "./projectAdapters/types.js";
 import {
   JobSourceAccess,
   containSourcePath,
+  createResolveUsage,
+  type ResolveUsage,
   readSourceRevision,
   type NextSourceMapProvider,
   type SourceMapProvider,
@@ -46,6 +66,17 @@ const P = "[ElementPickerHost]";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 export const HOST_SERVICE_NAME = "daintree-element-picker";
+
+/** A plugin's resolver host: one process per plugin instance, apart from the core host and each other. */
+export const PLUGIN_HOST_SERVICE_NAME = "daintree-element-picker-plugin";
+
+/**
+ * Plugin resolver hosts alive at once, retiring ones included until they
+ * exit. Each resolve dispatch holds an admission slot, so with the gate full a
+ * dispatch waiting on a process finds one idle to evict, or one already
+ * leaving.
+ */
+export const MAX_PLUGIN_HOSTS = MAX_CONCURRENT_RESOLVES;
 
 /**
  * How long a host with nothing to do is kept before it is retired. Resolves
@@ -80,15 +111,15 @@ const SOURCE_REVISION_ADMISSION = { concurrent: 2, queued: 16 } as const;
  * `dist-electron/electron/chunks/`, so step up to the electron root first.
  * Mirrors `resolveVadWorkerPath()`.
  */
-function resolveHostEntryPath(): string {
+function resolveHostEntryPath(entry = "host-bootstrap.js"): string {
   const electronDir = path.basename(__dirname) === "chunks" ? path.dirname(__dirname) : __dirname;
-  return path.join(electronDir, "services", "elementPicker", "host-bootstrap.js");
+  return path.join(electronDir, "services", "elementPicker", entry);
 }
 
 /** The slice of Electron's `UtilityProcess` the host uses. */
 export interface HostChild {
   readonly pid: number | undefined;
-  postMessage(message: HostInbound): void;
+  postMessage(message: PluginHostInbound): void;
   on(event: "spawn", listener: () => void): unknown;
   on(event: "message", listener: (message: unknown) => void): unknown;
   on(event: "exit", listener: (code: number) => void): unknown;
@@ -97,6 +128,8 @@ export interface HostChild {
 
 export interface ElementPickerHostOptions {
   fork?: () => HostChild;
+  /** Forks the resolver host for one plugin instance. */
+  pluginFork?: (pluginId: string) => HostChild;
   kill?: (pid: number) => void;
   watch?: SourceTrackerOptions["watch"];
   sourceMaps?: SourceMapProvider;
@@ -153,6 +186,16 @@ function defaultFork(): HostChild {
   }) as unknown as HostChild;
 }
 
+function defaultPluginFork(): HostChild {
+  return utilityProcess.fork(resolveHostEntryPath("plugin-resolver-bootstrap.js"), [], {
+    serviceName: PLUGIN_HOST_SERVICE_NAME,
+    // A plugin's resolver is sent bytes through main like a core one; it gets
+    // none of main's environment either.
+    env: minimalSpawnEnv(),
+    stdio: "ignore",
+  }) as unknown as HostChild;
+}
+
 function defaultKill(pid: number): void {
   // Not `child.kill()`: Electron's UtilityProcess.kill() blocks main on macOS
   // until the child is gone (#11069). A raw SIGKILL does not.
@@ -165,7 +208,56 @@ function defaultKill(pid: number): void {
   }
 }
 
-type AccessResult = Extract<HostInbound, { type: "access-result" }>["result"];
+type AccessResult = Extract<PluginHostInbound, { type: "access-result" }>["result"];
+
+const CORE_KEY = "core";
+
+/** What one slice of a selection came back with: an answer, a failure of its own, or nothing because it was withdrawn. */
+type DispatchAnswer = ResolveResponse | "failed" | "withdrawn";
+
+/** `work`'s result, or null as soon as `signal` aborts; a late result is dropped. */
+function untilAborted<T>(work: Promise<T>, signal: AbortSignal): Promise<T | null> {
+  if (signal.aborted) {
+    // Nobody waits on it now, so its failure must not surface as unhandled.
+    work.catch(() => {});
+    return Promise.resolve(null);
+  }
+  return new Promise((resolve, reject) => {
+    const onAbort = () => resolve(null);
+    signal.addEventListener("abort", onAbort, { once: true });
+    work.then(
+      (value) => {
+        signal.removeEventListener("abort", onAbort);
+        resolve(value);
+      },
+      (error: unknown) => {
+        signal.removeEventListener("abort", onAbort);
+        reject(error);
+      }
+    );
+  });
+}
+
+/** A plugin's providers in one dispatch, each with the entry main located for it. */
+interface PluginTarget {
+  readonly pluginId: string;
+  readonly providers: ReadonlyArray<{
+    readonly provider: RegisteredElementPickerProvider;
+    readonly entryUrl: string;
+  }>;
+}
+
+/** Where a slice of a selection runs: the core host, or one plugin's. */
+type DispatchTarget =
+  | { readonly kind: "core" }
+  | {
+      readonly kind: "plugin";
+      readonly pluginId: string;
+      readonly providers: readonly RegisteredElementPickerProvider[];
+    };
+
+/** Where a job runs, a plugin's with its entries located. */
+type JobTarget = { readonly kind: "core" } | ({ readonly kind: "plugin" } & PluginTarget);
 
 type JobOutcome = { ok: true; response: ResolveResponse } | { ok: false; error: Error };
 
@@ -176,14 +268,19 @@ interface Job {
   readonly signal: AbortSignal;
   readonly access: JobSourceAccess;
   readonly expired: () => boolean;
+  readonly target: JobTarget;
   generation: Generation | null;
   posted: boolean;
+  settled: boolean;
   graceTimer: ReturnType<typeof setTimeout> | null;
   settle(outcome: JobOutcome): void;
 }
 
 interface Generation {
   readonly id: number;
+  /** `core`, or the plugin instance id the process resolves for. */
+  readonly key: string;
+  readonly plugin: boolean;
   readonly child: HostChild;
   readonly forkedAt: number;
   state: "starting" | "ready" | "retiring" | "exited";
@@ -192,6 +289,17 @@ interface Generation {
   killTimer: ReturnType<typeof setTimeout> | null;
   /** The kill window closed before the child had a pid to signal. */
   killDue: boolean;
+  idleTimer: ReturnType<typeof setTimeout> | null;
+  /** When its last job settled, for choosing which idle plugin host makes room. */
+  idleSince: number;
+  /**
+   * Every provider a job on this plugin host has named, as the registration
+   * that named it, from the moment the job attached: a host still starting is
+   * retired on an unload as surely as one running.
+   */
+  readonly providers: Map<string, RegisteredElementPickerProvider>;
+  /** The providers the process has been told where to load from. */
+  readonly sent: Set<string>;
   readonly exited: Promise<void>;
   markExited(): void;
 }
@@ -235,6 +343,7 @@ export class ElementPickerHost {
   private readonly revisionGate = new AdmissionGate(SOURCE_REVISION_ADMISSION);
   private readonly retiring = new Set<Generation>();
   private readonly fork: () => HostChild;
+  private readonly pluginFork: (pluginId: string) => HostChild;
   private readonly kill: (pid: number) => void;
   private readonly watch: SourceTrackerOptions["watch"];
   private readonly sourceMaps: SourceMapProvider;
@@ -246,14 +355,18 @@ export class ElementPickerHost {
   private readonly projectAdapters: readonly ProjectAdapterRegistration[] | undefined;
   private readonly projectContextDeadlineMs: number | undefined;
   private projectContext: ProjectContextService | null = null;
-  private current: Generation | null = null;
+  /** The live process for each key: the core host, and one per plugin instance resolving now. */
+  private readonly live = new Map<string, Generation>();
   private generations = 0;
   private nextJobId = 1;
-  private idleTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Woken whenever a plugin host exits, for dispatches waiting on room for theirs. */
+  private pluginRoom: { promise: Promise<void>; wake: () => void } | null = null;
+  private unsubscribeProviders: (() => void) | null = null;
   private disposed = false;
 
   constructor(options: ElementPickerHostOptions = {}) {
     this.fork = options.fork ?? defaultFork;
+    this.pluginFork = options.pluginFork ?? defaultPluginFork;
     this.kill = options.kill ?? defaultKill;
     this.watch = options.watch ?? ((directory, onChange) => watchShared(directory, onChange));
     this.sourceMaps = options.sourceMaps ?? createSourceMapProvider();
@@ -266,9 +379,17 @@ export class ElementPickerHost {
     this.projectContextDeadlineMs = options.projectContextDeadlineMs;
   }
 
-  /** Whether a host process is running or starting. Registering a workspace never starts one. */
+  /** Whether the core host process is running or starting. Registering a workspace never starts one. */
   get running(): boolean {
-    return this.current !== null;
+    return this.live.has(CORE_KEY);
+  }
+
+  /** Plugin resolver hosts alive now, retiring ones included until they exit. */
+  get pluginHosts(): number {
+    let count = 0;
+    for (const generation of this.live.values()) if (generation.plugin) count += 1;
+    for (const generation of this.retiring) if (generation.plugin) count += 1;
+    return count;
   }
 
   /**
@@ -377,24 +498,193 @@ export class ElementPickerHost {
     }
 
     try {
-      let release: () => void;
-      try {
-        release = await this.gate.acquire(controller.signal);
-      } catch (error) {
-        if (!controller.signal.aborted) throw error;
-        return this.withdrawnResponse(request, expired);
+      const dispatches = this.dispatchesFor(request, options.projectId ?? null);
+      const answers = new Map<DispatchTarget, DispatchAnswer>();
+      const usage = createResolveUsage();
+      await Promise.all(
+        dispatches.map(async ({ target, slice }) => {
+          answers.set(
+            target,
+            await this.dispatch(target, slice, workspace, controller.signal, () => expired, usage)
+          );
+        })
+      );
+      if (this.disposed) throw hostError("HOST_DISPOSED", "the source host is shutting down");
+      const targetOf = new Map<SourceCandidate, DispatchTarget>();
+      for (const { target, candidates } of dispatches) {
+        for (const candidate of candidates) targetOf.set(candidate, target);
       }
-      try {
-        return await this.runJob(request, workspace, controller.signal, () => expired);
-      } finally {
-        release();
-      }
+      const stopped: UnavailableReason | null = controller.signal.aborted
+        ? expired
+          ? "budget-exhausted"
+          : "cancelled"
+        : null;
+      const answerOf = (candidate: SourceCandidate): DispatchAnswer => {
+        const target = targetOf.get(candidate);
+        return target ? (answers.get(target) ?? "failed") : "failed";
+      };
+      return mergeAnswers(
+        request,
+        (candidate) => {
+          const answer = answerOf(candidate);
+          return typeof answer === "object" ? answer : null;
+        },
+        // A slice that failed stays failed, whatever stopped the selection after it.
+        (candidate) =>
+          unavailableResult(
+            candidate,
+            answerOf(candidate) !== "failed" && stopped !== null ? stopped : "unsupported"
+          )
+      );
     } finally {
       clearTimeout(deadline);
       for (const signal of sources) signal.removeEventListener("abort", onAbort);
       // However it settled, nothing main is still doing for this job is wanted.
       controller.abort();
     }
+  }
+
+  /**
+   * Splits a selection by who resolves it: every core candidate to the core
+   * host, and each plugin's to that plugin's own host. A plugin provider that
+   * declared no resolver gets no dispatch, so its candidates answer
+   * `unsupported` without a process.
+   */
+  private dispatchesFor(
+    request: ResolveRequest,
+    projectId: string | null
+  ): Array<{ target: DispatchTarget; slice: ResolveRequest; candidates: SourceCandidate[] }> {
+    const core: DispatchTarget = { kind: "core" };
+    const plugins = new Map<string, RegisteredElementPickerProvider[]>();
+    const owner = new Map<string, DispatchTarget | string | null>();
+    const ownerOf = (framework: string): DispatchTarget | string | null => {
+      if (owner.has(framework)) return owner.get(framework)!;
+      let found: DispatchTarget | string | null = null;
+      if (isCoreFramework(framework)) {
+        found = core;
+      } else {
+        const provider = getElementPickerProvider(framework, projectId);
+        if (provider?.resolverEntry !== undefined) {
+          const providers = plugins.get(provider.pluginId) ?? [];
+          providers.push(provider);
+          plugins.set(provider.pluginId, providers);
+          found = provider.pluginId;
+        }
+      }
+      owner.set(framework, found);
+      return found;
+    };
+    const byKey = new Map<string, SourceCandidate[]>();
+    for (const observation of request.observations) {
+      for (const candidate of observationCandidates(observation)) {
+        const found = ownerOf(candidate.framework);
+        if (found === null) continue;
+        const key = typeof found === "string" ? found : CORE_KEY;
+        const list = byKey.get(key) ?? [];
+        list.push(candidate);
+        byKey.set(key, list);
+      }
+    }
+    return [...byKey].map(([key, candidates]) => {
+      const owned = new Set(candidates);
+      const target: DispatchTarget =
+        key === CORE_KEY ? core : { kind: "plugin", pluginId: key, providers: plugins.get(key)! };
+      return {
+        target,
+        slice: requestFor(request, (candidate) => owned.has(candidate)),
+        candidates,
+      };
+    });
+  }
+
+  /**
+   * Runs one slice under its own admission slot, with its own reads under the
+   * request's budget, so what one resolver read never stands as authority for
+   * another's answer. Null is no answer: withdrawn before it ran, or a plugin
+   * that failed. A plugin's failure is its own candidates' alone; the core
+   * host's still fails the selection, as it always has.
+   */
+  private async dispatch(
+    target: DispatchTarget,
+    slice: ResolveRequest,
+    workspace: PickerWorkspace,
+    selection: AbortSignal,
+    expired: () => boolean,
+    usage: ResolveUsage
+  ): Promise<DispatchAnswer> {
+    // Its own signal, so a slice that settles stops its reads in main without
+    // waiting for the rest of the selection.
+    const controller = new AbortController();
+    const onAbort = () => controller.abort();
+    if (selection.aborted) controller.abort();
+    else selection.addEventListener("abort", onAbort, { once: true });
+    const signal = controller.signal;
+    let release: (() => void) | null = null;
+    try {
+      try {
+        release = await this.gate.acquire(signal);
+      } catch (error) {
+        if (!signal.aborted) throw error;
+        return "withdrawn";
+      }
+      if (target.kind === "core") {
+        return await this.runJob(slice, workspace, signal, expired, target, usage);
+      }
+      const located = await untilAborted(this.locateEntries(target), signal);
+      if (signal.aborted) return "withdrawn";
+      if (located === null) return "failed";
+      // Only the providers whose entries were located run; a warm host may
+      // still hold a loader for one that has since lost its entry.
+      const runnable = new Set(located.providers.map(({ provider }) => provider.id));
+      return await this.runJob(
+        requestFor(slice, (candidate) => runnable.has(candidate.framework)),
+        workspace,
+        signal,
+        expired,
+        located,
+        usage
+      );
+    } catch (error) {
+      if (target.kind === "core") throw error;
+      // A job that rejects has failed, whatever aborted after it: a withdrawn
+      // one settles with an answer instead.
+      logWarn(`${P} A plugin's resolver failed; its candidates answer unsupported`, {
+        plugin: target.pluginId,
+        error: formatErrorMessage(error, "resolver failed"),
+      });
+      return "failed";
+    } finally {
+      release?.();
+      selection.removeEventListener("abort", onAbort);
+      controller.abort();
+    }
+  }
+
+  /**
+   * The plugin target with each provider's entry located, or null when none
+   * could be. A provider whose entry is gone or refused is left out, so its
+   * candidates answer `unsupported` while its siblings' still resolve.
+   */
+  private async locateEntries(
+    target: Extract<DispatchTarget, { kind: "plugin" }>
+  ): Promise<Extract<JobTarget, { kind: "plugin" }> | null> {
+    // Behind its own import: only a selection a plugin resolver answers needs it.
+    const { locatePluginResolverEntry } = await import("./pluginResolverAssets.js");
+    const located = await Promise.all(
+      target.providers.map(async (provider) => ({
+        provider,
+        entryUrl: await locatePluginResolverEntry(provider),
+      }))
+    );
+    const providers: Array<{ provider: RegisteredElementPickerProvider; entryUrl: string }> = [];
+    for (const { provider, entryUrl } of located) {
+      if (entryUrl !== null && isElementPickerProviderCurrent(provider)) {
+        providers.push({ provider, entryUrl });
+      } else {
+        logWarn(`${P} A provider's resolver entry could not be loaded`, { provider: provider.id });
+      }
+    }
+    return providers.length > 0 ? { kind: "plugin", pluginId: target.pluginId, providers } : null;
   }
 
   /**
@@ -496,14 +786,17 @@ export class ElementPickerHost {
 
   /**
    * Stops for good: fails what is in flight, releases every workspace, retires
-   * the process and waits, briefly, for it to exit.
+   * every process and waits, briefly, for them to exit.
    */
   async dispose(): Promise<void> {
     if (!this.disposed) {
       this.disposed = true;
-      this.clearIdle();
-      if (this.current)
-        this.fail(this.current, "HOST_DISPOSED", "the source host is shutting down");
+      this.unsubscribeProviders?.();
+      this.unsubscribeProviders = null;
+      for (const generation of [...this.live.values()]) {
+        this.fail(generation, "HOST_DISPOSED", "the source host is shutting down");
+      }
+      this.wakePluginWaiters();
       this.workspaces.closeAll();
     }
     const exits = [...this.retiring].map((generation) => generation.exited);
@@ -519,25 +812,22 @@ export class ElementPickerHost {
     if (timer !== undefined) clearTimeout(timer);
   }
 
-  private withdrawnResponse(request: ResolveRequest, expired: boolean): ResolveResponse {
-    if (this.disposed) throw hostError("HOST_DISPOSED", "the source host is shutting down");
-    return unavailableResponse(request, expired ? "budget-exhausted" : "cancelled");
-  }
-
   private runJob(
     request: ResolveRequest,
     workspace: PickerWorkspace,
     signal: AbortSignal,
-    expired: () => boolean
+    expired: () => boolean,
+    target: JobTarget,
+    usage: ResolveUsage
   ): Promise<ResolveResponse> {
     return new Promise((resolve, reject) => {
-      let settled = false;
       const job: Job = {
         id: this.nextJobId++,
         request,
         roots: workspace.roots,
         signal,
         expired,
+        target,
         access: new JobSourceAccess({
           workspaceId: workspace.id,
           roots: workspace.roots,
@@ -550,19 +840,23 @@ export class ElementPickerHost {
           next: nextDevServer(request.observations),
           nextSourceMaps: this.nextSourceMaps,
           onRead: (absolute, file, revision) => workspace.tracker.observe(absolute, file, revision),
+          usage,
         }),
         generation: null,
         posted: false,
+        settled: false,
         graceTimer: null,
         settle: (outcome) => {
-          if (settled) return;
-          settled = true;
+          if (job.settled) return;
+          job.settled = true;
           signal.removeEventListener("abort", onAbort);
           if (job.graceTimer) clearTimeout(job.graceTimer);
           const generation = job.generation;
           if (generation) {
             generation.jobs.delete(job.id);
             this.armIdle(generation);
+            // An idle plugin host is room for a dispatch waiting on one.
+            if (generation.plugin && generation.jobs.size === 0) this.wakePluginWaiters();
           }
           if (outcome.ok) resolve(outcome.response);
           else reject(outcome.error);
@@ -583,25 +877,114 @@ export class ElementPickerHost {
       }
       signal.addEventListener("abort", onAbort, { once: true });
 
+      if (target.kind === "plugin") {
+        void this.attachPluginJob(job, target).catch((error: unknown) =>
+          job.settle({ ok: false, error: error as Error })
+        );
+        return;
+      }
       let generation: Generation;
       try {
-        generation = this.ensureGeneration();
+        generation = this.ensureGeneration(CORE_KEY, null);
       } catch (error) {
         job.settle({ ok: false, error: error as Error });
         return;
       }
-      this.clearIdle();
-      job.generation = generation;
-      generation.jobs.set(job.id, job);
-      if (generation.state === "ready") this.post(job);
+      this.attach(job, generation);
     });
+  }
+
+  private attach(job: Job, generation: Generation): void {
+    this.clearIdle(generation);
+    job.generation = generation;
+    generation.jobs.set(job.id, job);
+    if (job.target.kind === "plugin") {
+      for (const { provider } of job.target.providers) {
+        generation.providers.set(provider.id, provider);
+      }
+    }
+    if (generation.state === "ready") this.post(job);
+  }
+
+  /**
+   * Finds the plugin's host, or room to start one: at {@link MAX_PLUGIN_HOSTS}
+   * the longest-idle host is retired and the job waits for a process to exit.
+   * Finding and attaching happen in one turn, so nothing can retire the host
+   * as idle between the two.
+   */
+  private async attachPluginJob(job: Job, target: PluginTarget): Promise<void> {
+    for (;;) {
+      if (job.settled) return;
+      if (this.disposed) throw hostError("HOST_DISPOSED", "the source host is shutting down");
+      // A provider unloaded while this waited must not get a process loading it.
+      if (!target.providers.every(({ provider }) => isElementPickerProviderCurrent(provider))) {
+        throw hostError("RESOLVER_FAILED", "the provider was unloaded");
+      }
+      const existing = this.live.get(target.pluginId);
+      if (existing) {
+        this.attach(job, existing);
+        return;
+      }
+      if (this.pluginHosts < MAX_PLUGIN_HOSTS) {
+        this.attach(job, this.ensureGeneration(target.pluginId, target));
+        return;
+      }
+      const idle = [...this.live.values()]
+        .filter((generation) => generation.plugin && generation.jobs.size === 0)
+        .sort((a, b) => a.idleSince - b.idleSince)[0];
+      if (idle) {
+        logInfo(`${P} Retiring an idle plugin host to make room`, {
+          generation: idle.id,
+          plugin: idle.key,
+        });
+        this.retire(idle);
+      }
+      this.pluginRoom ??= (() => {
+        let wake!: () => void;
+        const promise = new Promise<void>((resolve) => {
+          wake = resolve;
+        });
+        return { promise, wake };
+      })();
+      const room = this.pluginRoom.promise;
+      await new Promise<void>((resolve) => {
+        const done = () => {
+          job.signal.removeEventListener("abort", done);
+          resolve();
+        };
+        job.signal.addEventListener("abort", done, { once: true });
+        void room.then(done);
+      });
+    }
+  }
+
+  private wakePluginWaiters(): void {
+    const room = this.pluginRoom;
+    this.pluginRoom = null;
+    room?.wake();
   }
 
   private post(job: Job): void {
     const generation = job.generation;
     if (!generation || job.posted) return;
+    if (
+      job.target.kind === "plugin" &&
+      !job.target.providers.every(({ provider }) => isElementPickerProviderCurrent(provider))
+    ) {
+      // Unloaded while the job waited for its host: nothing of it gets imported.
+      job.settle({ ok: false, error: hostError("RESOLVER_FAILED", "the provider was unloaded") });
+      return;
+    }
     job.posted = true;
     try {
+      if (job.target.kind === "plugin") {
+        // Before the job that needs them, on the same ordered channel.
+        for (const { provider, entryUrl } of job.target.providers) {
+          if (generation.sent.has(provider.id)) continue;
+          generation.sent.add(provider.id);
+          generation.child.postMessage({ type: "provider", providerId: provider.id, entryUrl });
+        }
+      }
       generation.child.postMessage({ type: "resolve", jobId: job.id, request: job.request });
     } catch {
       this.fail(generation, "HOST_CRASHED", "the source host could not be reached");
@@ -631,24 +1014,30 @@ export class ElementPickerHost {
     job.graceTimer = setTimeout(() => {
       job.graceTimer = null;
       fallback();
-      logWarn(`${P} Host did not answer a cancel; retiring it`, { generation: generation.id });
+      logWarn(`${P} Host did not answer a cancel; retiring it`, {
+        generation: generation.id,
+        key: generation.key,
+      });
       this.fail(generation, "HOST_CRASHED", "the source host stopped answering");
     }, this.cancelGraceMs);
   }
 
-  private ensureGeneration(): Generation {
-    if (this.current) return this.current;
+  private ensureGeneration(key: string, plugin: PluginTarget | null): Generation {
+    const existing = this.live.get(key);
+    if (existing) return existing;
     if (this.disposed) throw hostError("HOST_DISPOSED", "the source host is shutting down");
     let child: HostChild;
     try {
-      child = this.fork();
+      child = plugin ? this.pluginFork(plugin.pluginId) : this.fork();
     } catch (error) {
-      logError(`${P} Host fork failed`, error);
+      logError(`${P} Host fork failed`, error, { key });
       throw hostError("HOST_START_FAILED", "the source host could not be started");
     }
     let markExited!: () => void;
     const generation: Generation = {
       id: ++this.generations,
+      key,
+      plugin: plugin !== null,
       child,
       forkedAt: performance.now(),
       state: "starting",
@@ -656,40 +1045,78 @@ export class ElementPickerHost {
       startTimer: null,
       killTimer: null,
       killDue: false,
+      idleTimer: null,
+      idleSince: 0,
+      providers: new Map(),
+      sent: new Set(),
       exited: new Promise<void>((resolve) => {
         markExited = resolve;
       }),
       markExited: () => markExited(),
     };
-    this.current = generation;
+    this.live.set(key, generation);
+    // Subscribed with the first plugin host, so an install without one never listens.
+    if (plugin) {
+      this.unsubscribeProviders ??= onElementPickerProvidersChanged(() =>
+        this.retireUnloadedPlugins()
+      );
+    }
 
     child.on("spawn", () => {
-      logInfo(`${P} Host spawned`, { generation: generation.id, pid: child.pid });
+      logInfo(`${P} Host spawned`, { generation: generation.id, key, pid: child.pid });
       if (generation.killDue) this.killUnexited(generation);
     });
     child.on("message", (message) => this.handleMessage(generation, message));
     // A fatal V8 error in the child. UtilityProcess is an EventEmitter, so with
     // no listener this would throw in main. The exit that follows fails the jobs.
     child.on("error", (type, location) => {
-      logWarn(`${P} Host fatal error`, { generation: generation.id, type, location });
+      logWarn(`${P} Host fatal error`, { generation: generation.id, key, type, location });
     });
     child.on("exit", (code) => this.handleExit(generation, code));
 
     generation.startTimer = setTimeout(() => {
       generation.startTimer = null;
       if (generation.state !== "starting") return;
-      logWarn(`${P} Host did not start in time`, { generation: generation.id });
+      logWarn(`${P} Host did not start in time`, { generation: generation.id, key });
       this.fail(generation, "HOST_START_FAILED", "the source host did not start in time");
     }, this.startTimeoutMs);
     generation.startTimer.unref?.();
     return generation;
   }
 
+  /**
+   * A plugin disabled, uninstalled or reloaded: its host is retired and the
+   * jobs it held fail, so nothing keeps running code the registry let go of.
+   */
+  private retireUnloadedPlugins(): void {
+    for (const generation of [...this.live.values()]) {
+      if (!generation.plugin) continue;
+      for (const provider of generation.providers.values()) {
+        if (isElementPickerProviderCurrent(provider)) continue;
+        logInfo(`${P} Retiring the host of an unloaded plugin`, {
+          generation: generation.id,
+          plugin: generation.key,
+        });
+        this.fail(generation, "RESOLVER_FAILED", "the provider was unloaded");
+        break;
+      }
+    }
+    // A dispatch waiting for room rechecks its own providers when it wakes.
+    this.wakePluginWaiters();
+  }
+
+  private isLive(generation: Generation): boolean {
+    return this.live.get(generation.key) === generation;
+  }
+
   private handleMessage(generation: Generation, raw: unknown): void {
-    if (generation !== this.current) return;
+    if (!this.isLive(generation)) return;
     const parsed = HostOutboundSchema.safeParse(raw);
     if (!parsed.success) {
-      logWarn(`${P} Host sent a malformed message; retiring it`, { generation: generation.id });
+      logWarn(`${P} Host sent a malformed message; retiring it`, {
+        generation: generation.id,
+        key: generation.key,
+      });
       this.fail(generation, "HOST_CRASHED", "the source host sent a malformed message");
       return;
     }
@@ -702,6 +1129,7 @@ export class ElementPickerHost {
         generation.startTimer = null;
         logInfo(`${P} Host ready`, {
           generation: generation.id,
+          key: generation.key,
           msSinceFork: Math.round(performance.now() - generation.forkedAt),
         });
         for (const job of [...generation.jobs.values()]) this.post(job);
@@ -711,11 +1139,16 @@ export class ElementPickerHost {
       case "resolved": {
         const job = generation.jobs.get(message.jobId);
         if (!job) return;
-        const response = checkResolveResponse(job.request, message.response, {
+        const authority = {
           roots: job.roots,
-          servedRevision: (file) => job.access.servedRevision(file),
-          servedMap: (mapUrl, revision) => job.access.servedMap(mapUrl, revision),
-        });
+          servedRevision: (file: string) => job.access.servedRevision(file),
+          servedMap: (mapUrl: string | null, revision: FileRevision) =>
+            job.access.servedMap(mapUrl, revision),
+        };
+        const response =
+          job.target.kind === "plugin"
+            ? checkResolveResponseByProvider(job.request, message.response, authority)
+            : checkResolveResponse(job.request, message.response, authority);
         job.settle(
           response
             ? { ok: true, response: job.expired() ? relabelCancelled(response) : response }
@@ -780,6 +1213,7 @@ export class ElementPickerHost {
       case "fatal":
         logWarn(`${P} Host reported a fatal error`, {
           generation: generation.id,
+          key: generation.key,
           message: message.message.slice(0, 2_000),
         });
         return;
@@ -797,12 +1231,13 @@ export class ElementPickerHost {
     generation.markExited();
     const context = {
       generation: generation.id,
+      key: generation.key,
       code,
       msSinceFork: Math.round(performance.now() - generation.forkedAt),
     };
-    if (this.current === generation) {
-      this.current = null;
-      this.clearIdle();
+    if (this.isLive(generation)) {
+      this.live.delete(generation.key);
+      this.clearIdle(generation);
       logError(`${P} Host exited unexpectedly`, undefined, context);
     } else {
       logInfo(`${P} Host exited`, context);
@@ -811,6 +1246,7 @@ export class ElementPickerHost {
       ? hostError("HOST_START_FAILED", "the source host exited before it was ready")
       : hostError("HOST_CRASHED", "the source host exited before it answered");
     for (const job of [...generation.jobs.values()]) job.settle({ ok: false, error });
+    if (generation.plugin) this.wakePluginWaiters();
   }
 
   /** Fails every job the generation holds, then retires it. */
@@ -824,10 +1260,8 @@ export class ElementPickerHost {
   /** Asks the process to exit and arms the kill backstop. Idempotent. */
   private retire(generation: Generation): void {
     if (generation.state === "retiring" || generation.state === "exited") return;
-    if (this.current === generation) {
-      this.current = null;
-      this.clearIdle();
-    }
+    if (this.isLive(generation)) this.live.delete(generation.key);
+    this.clearIdle(generation);
     if (generation.startTimer) clearTimeout(generation.startTimer);
     generation.startTimer = null;
     generation.state = "retiring";
@@ -852,24 +1286,28 @@ export class ElementPickerHost {
       return;
     }
     generation.killDue = false;
-    noteTerminationIntent({ serviceName: HOST_SERVICE_NAME }, "retired");
+    noteTerminationIntent(
+      { serviceName: generation.plugin ? PLUGIN_HOST_SERVICE_NAME : HOST_SERVICE_NAME },
+      "retired"
+    );
     this.kill(pid);
   }
 
   private armIdle(generation: Generation): void {
-    if (generation !== this.current || generation.jobs.size > 0 || this.disposed) return;
-    this.clearIdle();
-    this.idleTimer = setTimeout(() => {
-      this.idleTimer = null;
-      if (this.current !== generation || generation.jobs.size > 0) return;
-      logInfo(`${P} Retiring idle host`, { generation: generation.id });
+    if (!this.isLive(generation) || generation.jobs.size > 0 || this.disposed) return;
+    this.clearIdle(generation);
+    generation.idleSince = performance.now();
+    generation.idleTimer = setTimeout(() => {
+      generation.idleTimer = null;
+      if (!this.isLive(generation) || generation.jobs.size > 0) return;
+      logInfo(`${P} Retiring idle host`, { generation: generation.id, key: generation.key });
       this.retire(generation);
     }, this.idleMs);
-    this.idleTimer.unref?.();
+    generation.idleTimer.unref?.();
   }
 
-  private clearIdle(): void {
-    if (this.idleTimer) clearTimeout(this.idleTimer);
-    this.idleTimer = null;
+  private clearIdle(generation: Generation): void {
+    if (generation.idleTimer) clearTimeout(generation.idleTimer);
+    generation.idleTimer = null;
   }
 }

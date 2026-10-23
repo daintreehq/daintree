@@ -516,7 +516,7 @@ const FAMILIES: readonly Family[] = [
   },
   {
     label: "element picker resolution",
-    ids: ["PERF-410", "PERF-411", "PERF-412"],
+    ids: ["PERF-410", "PERF-411", "PERF-412", "PERF-413"],
     kind: "mechanism",
     fidelity: withFidelity({
       entryPoint: "public-api",
@@ -525,7 +525,7 @@ const FAMILIES: readonly Family[] = [
       externalDependencies: "controlled-network",
     }),
     claim:
-      "The real ElementPickerHost and the real host process it forks, loading the registry's own resolvers to verify a fixed .svelte element and to map a fixed React frame through a map main fetched from a local origin. Node's fork stands in for utilityProcess, and tsx transpiles the host's own TypeScript as it loads, so a cold start reads somewhat slower than a packaged build's; the compiler, parser and decoder it loads are the shipped JavaScript. No renderer, page, extractor or click: it is not a click-to-inspector latency, and the heap reading is main's alone.",
+      "The real ElementPickerHost and the real host process it forks, loading the registry's own resolvers to verify a fixed .svelte element and to map a fixed React frame through a map main fetched from a local origin. Node's fork stands in for utilityProcess, and tsx transpiles the host's own TypeScript as it loads, so a cold start reads somewhat slower than a packaged build's; the compiler, parser and decoder it loads are the shipped JavaScript. No renderer, page, extractor or click: it is not a click-to-inspector latency, and the heap reading is main's alone. PERF-413's plugin hosts are forked the same way, so their resident memory is a Node-plus-tsx reading, not a utility process's.",
   },
   {
     label: "terminal submit lane",

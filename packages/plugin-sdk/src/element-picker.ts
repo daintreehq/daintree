@@ -1,7 +1,8 @@
 /// <reference lib="dom" />
 /**
- * `@daintreehq/plugin-sdk/element-picker` — the guest half of an Element Picker
- * provider (`contributes.elementPickerProviders`).
+ * `@daintreehq/plugin-sdk/element-picker` — both halves of an Element Picker
+ * provider (`contributes.elementPickerProviders`): the guest extractor and the
+ * optional source resolver.
  *
  * A provider's `guestEntry` is a standalone browser script the host evaluates
  * in a previewed page, only after the provider's declarative detector matched
@@ -18,6 +19,27 @@ import type { ComponentChain } from "../../../shared/elementPicker/component.js"
 import type { FrameworkEvidence } from "../../../shared/elementPicker/evidence.js";
 import type { Capabilities } from "../../../shared/elementPicker/observation.js";
 import type { SourceCandidate } from "../../../shared/elementPicker/source.js";
+import type {
+  ResolveRequest,
+  ResolveResponse,
+  ResolverSourceAccess,
+} from "../../../shared/elementPicker/resolver.js";
+
+export type {
+  MapSourceLocation,
+  ResolveRequest,
+  ResolveResponse,
+  ResolverSourceAccess,
+  RevisionedSource,
+  RevisionedSourceMap,
+  SourceAccessResult,
+} from "../../../shared/elementPicker/resolver.js";
+export type {
+  FileRevision,
+  ResolutionResult,
+  SourceFileRef,
+  UnavailableReason,
+} from "../../../shared/elementPicker/resolution.js";
 
 /** `hover` runs inside a pointer move, so read only what labels a highlight; do costly work on `selection`. */
 export type ElementPickerPhase = "hover" | "selection";
@@ -90,5 +112,50 @@ export type ElementPickerExtractorFactory = (providerId: string) => ElementPicke
 export function defineElementPickerExtractor(
   factory: ElementPickerExtractorFactory
 ): ElementPickerExtractorFactory {
+  return factory;
+}
+
+/**
+ * A provider's source resolver: given the candidates its extractor reported for
+ * a selection, it says which file and line each one is, holding every claim to
+ * bytes it read. The host sends only this provider's candidates and answers
+ * any it leaves out as `unsupported`.
+ */
+export interface ElementPickerResolver {
+  /**
+   * Echo `requestId` and `documentEpoch`, and answer only the elements and
+   * candidates you were sent: an answer that names anything else is dropped
+   * whole. Stop when `signal` aborts.
+   */
+  resolve(
+    request: ResolveRequest,
+    access: ResolverSourceAccess,
+    signal: AbortSignal
+  ): Promise<ResolveResponse>;
+}
+
+/** Called once per resolver process with the provider id the host registered, `{plugin}.{id}`. */
+export type ElementPickerResolverFactory = (providerId: string) => ElementPickerResolver;
+
+/**
+ * Marks a `resolverEntry` module's default export. An identity function that
+ * exists for the types: the host calls the factory itself, in a process of the
+ * plugin's own that starts on the first selection needing it and exits after
+ * 30 seconds without one.
+ *
+ * Read through `access`, which the host answers under the workspace's
+ * containment, the preview's origin and the request's budget. A revision you
+ * return must be one `access` gave you in this request; the process is not a
+ * sandbox, but nothing read around `access` can be cited.
+ *
+ * ```ts
+ * export default defineElementPickerResolver(() => ({
+ *   async resolve(request, access, signal) { ... },
+ * }));
+ * ```
+ */
+export function defineElementPickerResolver(
+  factory: ElementPickerResolverFactory
+): ElementPickerResolverFactory {
   return factory;
 }

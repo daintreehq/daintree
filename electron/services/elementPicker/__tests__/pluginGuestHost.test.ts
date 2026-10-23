@@ -249,6 +249,39 @@ describe("plugin framework extractors", () => {
     ]);
   });
 
+  it("reports a stamped Lit element's source on selection only, and nothing for a malformed stamp", async () => {
+    register(install());
+    const page = mountLitPage();
+    cleanups.push(page.cleanup);
+    const hero = document.getElementById("hero")!;
+    hero.setAttribute("data-fixture-lit-source", "src/card.ts:4:3");
+    const h = makeHarness(shipped);
+    await h.bind();
+    await settleUntil(() => attemptSettled(h));
+
+    (page.target as HTMLElement).click();
+    await settle();
+    const selected = h.pickerEvents("selectionChanged").at(-1)?.event as
+      { observations: Array<{ sourceCandidates: unknown[] }> } | undefined;
+    expect(selected?.observations[0]?.sourceCandidates).toEqual([
+      {
+        kind: "template-location",
+        candidateId: "lit-source",
+        framework: PROVIDER_ID,
+        extraction: { kind: "attribute", attribute: "data-fixture-lit-source" },
+        file: "src/card.ts",
+        location: { lineBase: 1, columnBase: 1, columnUnit: "utf16", line: 4, column: 3 },
+      },
+    ]);
+
+    hero.setAttribute("data-fixture-lit-source", "src/card.ts");
+    (page.target as HTMLElement).click();
+    await settle();
+    const malformed = h.pickerEvents("selectionChanged").at(-1)?.event as
+      { observations: Array<{ sourceCandidates: unknown[] }> } | undefined;
+    expect(malformed?.observations[0]?.sourceCandidates).toEqual([]);
+  });
+
   it("lets a core extractor and a plugin extractor share a mixed page", async () => {
     register(install());
     document.body.innerHTML =

@@ -24,6 +24,7 @@ const baseConfig: KnipConfig = {
     "electron/workspace-host/copytreeWorker.ts",
     // Picker utility-process and browser bundles are loaded by emitted path.
     "electron/services/elementPicker/host-bootstrap.ts",
+    "electron/services/elementPicker/plugin-resolver-bootstrap.ts",
     "electron/services/elementPicker/guest/bootstrap.ts",
     "electron/services/elementPicker/guest/probe.ts",
     "electron/services/elementPicker/guest/extractors/{angular,astro,preact,react,solid,svelte,vue}.ts",
