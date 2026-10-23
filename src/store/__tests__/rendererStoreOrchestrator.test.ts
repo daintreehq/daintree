@@ -193,6 +193,23 @@ describe("rendererStoreOrchestrator", () => {
       expect(selectProjectMainAreaRoute(useProjectHomeStore.getState(), "home")).toBe("grid");
     });
 
+    it("keeps a split the application opened on by default, without writing a choice", async () => {
+      const { exitProjectHome } = await import("../storeAccessors");
+      useProjectPluginStore.setState({
+        application: {
+          status: "active",
+          ownerId: "acme.dash",
+          application: { name: "Dash", destination: "home", arrangement: "beside-grid" },
+          fallback: null,
+        },
+      });
+
+      exitProjectHome();
+
+      expect(selectProjectMainAreaRoute(useProjectHomeStore.getState(), "split")).toBe("split");
+      expect(useProjectHomeStore.getState().routeByProject).toEqual({});
+    });
+
     it("keeps the split, where the revealed panel is already on screen (#14107)", async () => {
       const { exitProjectHome } = await import("../storeAccessors");
       useProjectHomeStore.getState().showSplit();

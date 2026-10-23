@@ -153,6 +153,24 @@ describe("projectHomeStore", () => {
     expect(readRoutes(backing)).toEqual({ "project-a": "grid", "project-b": "home" });
   });
 
+  it("merges a version 1 Home left on disk instead of writing over it", async () => {
+    const v1 = (homeByProject: Record<string, true>) =>
+      JSON.stringify({ version: 1, state: { homeByProject } });
+    const backing = installLocalStorage({ [STORAGE_KEY]: v1({ "project-b": true }) });
+    const { useProjectHomeStore } = await load();
+
+    // Another view still holding the old shape wrote after this one hydrated.
+    backing.set(STORAGE_KEY, v1({ "project-b": true, "project-c": true }));
+    useProjectHomeStore.getState().showSplit();
+
+    expect(readBlob(backing).version).toBe(2);
+    expect(readRoutes(backing)).toEqual({
+      "project-a": "split",
+      "project-b": "home",
+      "project-c": "home",
+    });
+  });
+
   it("does nothing in a view with no workspace", async () => {
     seedViewWorkspace(null);
     const backing = installLocalStorage();

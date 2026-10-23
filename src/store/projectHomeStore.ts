@@ -89,6 +89,20 @@ function migrateProjectHomeState(persisted: unknown, version: number): ProjectHo
 }
 
 /**
+ * A stored blob in this version's shape, or `null` for one this version can't
+ * read: an older blob is migrated, so a version 1 Home another view left on
+ * disk is merged rather than written over.
+ */
+function readStoredVersion(
+  value: StorageValue<unknown> | null | undefined,
+  version: number | undefined
+): ProjectHomePersistedState | null {
+  if (!value || typeof value.version !== "number" || version === undefined) return null;
+  if (value.version > version) return null;
+  return migrateProjectHomeState(value.state, value.version);
+}
+
+/**
  * Per-project three-way merge, so a stale view writing its own project's route
  * never wipes the route another view just wrote for its project (#11351).
  */
@@ -97,16 +111,15 @@ function mergeProjectHomePersistedWrite({
   onDisk,
   incoming,
 }: PersistWriteMergeContext<ProjectHomePersistedState>): StorageValue<ProjectHomePersistedState> {
-  if (!onDisk || onDisk.version !== incoming.version) return incoming;
-  const disk = toPersisted(onDisk.state);
-  if (baseline && typeof baseline.version === "number" && baseline.version !== incoming.version) {
-    return { version: incoming.version, state: disk };
-  }
+  const disk = readStoredVersion(onDisk, incoming.version);
+  if (disk === null) return incoming;
+  const known = baseline ? readStoredVersion(baseline, incoming.version) : { routeByProject: {} };
+  if (known === null) return { version: incoming.version, state: disk };
   return {
     version: incoming.version,
     state: {
       routeByProject: mergeRecordByWriterDelta(
-        toPersisted(baseline?.state).routeByProject,
+        known.routeByProject,
         toPersisted(incoming.state).routeByProject,
         disk.routeByProject
       ),

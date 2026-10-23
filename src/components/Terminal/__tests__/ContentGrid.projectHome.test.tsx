@@ -261,7 +261,9 @@ describe("ContentGrid with Home beside the grid (#14107)", () => {
       });
       expect(exitMaximize).toHaveBeenCalledTimes(1);
     } finally {
-      usePanelStore.setState({ exitMaximize: original });
+      act(() => {
+        usePanelStore.setState({ exitMaximize: original });
+      });
     }
   });
 
