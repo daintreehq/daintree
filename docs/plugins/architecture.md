@@ -586,6 +586,7 @@ The deterministic guards are:
 
 - `electron/services/__tests__/PluginService.vanilla.test.ts` loads the real shipped built-ins and asserts no plugin worker, no plugin MCP child and no `setInterval` exists afterwards. Substitute only the process boundary, and extend this test when a capability adds a new resource.
 - `src/hooks/__tests__/usePluginPanelLifecycle.test.tsx` asserts that status and title churn across 20 and 100 terminals does no lifecycle work, no kind lookup and no inventory IPC (#14126).
+- `electron/services/elementPicker/__tests__/pluginResolverHost.test.ts` asserts an Element Picker provider's resolver host starts only on a selection that names its candidates, never for a provider without a `resolverEntry`, is shared, capped and retired when idle, and is stopped on unload and dispose; the host subscribes to provider changes only once a plugin host exists. PERF-413 reads the same lifecycle with real processes.
 - `npm run check:vanilla-plugin-bundles` reads the production build and fails if anything of a default-disabled built-in beyond its view registration stub lands in a chunk loaded before first render. Run it after `npm run build`.
 
 Project plugin discovery is a known exception: opening a project watches for `.daintree/plugins` appearing (a non-recursive sentinel with a bounded existence poll), so the first plugin is found without a restart. It is accounted for rather than disabled; do not add a second observer beside it.

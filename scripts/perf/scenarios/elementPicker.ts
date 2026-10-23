@@ -1,3 +1,6 @@
+// The admission cap, which the host's plugin-host cap equals; imported from the
+// gate rather than the host so loading this module never evaluates `electron`.
+import { MAX_CONCURRENT_RESOLVES as MAX_PLUGIN_HOSTS } from "../../../electron/services/elementPicker/admissionGate";
 import type { PerfScenario, ScenarioSample } from "../types";
 import {
   createPickerHost,
@@ -7,7 +10,7 @@ import {
 } from "../lib/elementPickerFixture";
 
 /**
- * PERF-410..412: what a selection in the Element Picker costs below the
+ * PERF-410..413: what a selection in the Element Picker costs below the
  * renderer, on a fixed Svelte file and a fixed React module. Read
  * `lib/elementPickerFixture.ts` for what is and is not in frame.
  *
@@ -136,6 +139,82 @@ async function runOpenClose(): Promise<ScenarioSample> {
   return { durationMs: total, metrics };
 }
 
+/**
+ * Plugin source resolvers, each plugin in a resolver host of its own. Nothing
+ * starts for a plugin before a selection names one of its candidates; one more
+ * plugin than the cap, asked in turn, never has more than the cap alive; a
+ * plugin whose resolver kills its own process costs its own candidates and
+ * nobody else's; and every plugin host left idle exits.
+ */
+async function runPluginResolvers(): Promise<ScenarioSample> {
+  const harness = await createPickerHost({ idleMs: IDLE_MS });
+  const metrics: Record<string, number> = {
+    preUseForkMisses: 0,
+    litMisses: 0,
+    warmForkMisses: 0,
+    hostCapMisses: 0,
+    isolationMisses: 0,
+    idleReclaimMisses: 0,
+    leftoverHostMisses: 0,
+  };
+  let total = 0;
+  try {
+    const plugins = await harness.installPlugins(MAX_PLUGIN_HOSTS + 1, 1);
+    const workspace = await harness.open();
+    // Installed, registered and a core selection made: still no plugin process.
+    metrics.isolationMisses += await harness.resolve(workspace, ["svelte"]);
+    metrics.preUseForkMisses = harness.pluginForks.length;
+
+    const [first, ...rest] = plugins.lit;
+    let begin = performance.now();
+    metrics.litMisses += await harness.resolvePlugins(workspace, [first!]);
+    metrics.coldPluginMs = performance.now() - begin;
+    total += metrics.coldPluginMs;
+    const forked = harness.pluginForks[0];
+    if (forked?.readyAt != null) metrics.pluginHostStartMs = forked.readyAt - forked.forkedAt;
+    const resident = harness.residentBytes(forked?.pid);
+    if (resident !== null) metrics.pluginHostRssMb = resident / MIB;
+
+    begin = performance.now();
+    metrics.litMisses += await harness.resolvePlugins(workspace, [first!]);
+    metrics.warmPluginMs = performance.now() - begin;
+    total += metrics.warmPluginMs;
+    metrics.warmForkMisses = harness.pluginForks.length - 1;
+
+    let peak = harness.livePluginForks();
+    for (const providerId of rest) {
+      metrics.litMisses += await harness.resolvePlugins(workspace, [providerId]);
+      peak = Math.max(peak, harness.livePluginForks());
+    }
+    metrics.hostCapMisses = Math.max(0, peak - MAX_PLUGIN_HOSTS);
+    metrics.peakPluginHosts = peak;
+    let peakResident = 0;
+    for (const child of harness.pluginForks) {
+      if (!child.exited) peakResident += harness.residentBytes(child.pid) ?? 0;
+    }
+    if (peakResident > 0) metrics.peakPluginHostsRssMb = peakResident / MIB;
+
+    // A crashing provider beside core and another plugin in one selection.
+    const coreForks = harness.forks.length;
+    metrics.isolationMisses += await harness.resolvePlugins(workspace, [rest.at(-1)!], {
+      failing: plugins.failing,
+      withSvelte: true,
+    });
+    metrics.isolationMisses += harness.forks.length - coreForks;
+    metrics.isolationMisses += await harness.resolvePlugins(workspace, [rest.at(-1)!]);
+
+    await harness.settle(IDLE_MS * 5);
+    // Every plugin host retired once idle: the crashed one is the only exit
+    // that was not a clean one.
+    metrics.idleReclaimMisses =
+      harness.livePluginForks() +
+      Math.abs(harness.pluginForks.filter((child) => child.exitCode !== 0).length - 1);
+  } finally {
+    metrics.leftoverHostMisses = await teardown(harness);
+  }
+  return { durationMs: total, metrics };
+}
+
 export const elementPickerScenarios: PerfScenario[] = [
   {
     id: "PERF-410",
@@ -180,5 +259,25 @@ export const elementPickerScenarios: PerfScenario[] = [
     ],
     workloadFloors: { cycleCount: OPEN_CLOSE_CYCLES },
     run: runOpenClose,
+  },
+  {
+    id: "PERF-413",
+    name: "Element Picker Plugin Resolvers",
+    description:
+      "Plugin source resolvers in resolver hosts of their own: the packaged Lit fixture's resolver, installed as one more plugin than the host cap plus one whose resolver kills its own process. Reports a plugin's cold and warm selection, its host's start and resident memory, and the resident memory of the hosts alive at the cap. No plugin host before a selection names one, one host per plugin, never more than the cap alive, a crashing plugin costing only its own candidates, and every plugin host retiring once idle are predicates.",
+    tier: "fast",
+    modes: ["smoke", "ci", "nightly"],
+    iterations: { smoke: 3, ci: 6, nightly: 10 },
+    warmups: 1,
+    correctness: [
+      "preUseForkMisses",
+      "litMisses",
+      "warmForkMisses",
+      "hostCapMisses",
+      "isolationMisses",
+      "idleReclaimMisses",
+      "leftoverHostMisses",
+    ],
+    run: runPluginResolvers,
   },
 ];

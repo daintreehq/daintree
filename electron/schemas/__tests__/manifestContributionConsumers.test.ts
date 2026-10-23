@@ -1525,8 +1525,13 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
     },
     resolverEntry: {
       mode: "verbatim",
-      consumers: [{ file: ELEMENT_PICKER_REGISTRY, symbol: "registerElementPickerProviders" }],
-      note: "Recorded for the resolver worker follow-up; its presence is what requires fs:project-read.",
+      consumers: [
+        {
+          file: "electron/services/elementPicker/pluginResolverAssets.ts",
+          symbol: "locatePluginResolverEntry",
+        },
+      ],
+      note: "Contained in the plugin directory, then imported by that plugin's own resolver host; its presence is what requires fs:project-read.",
     },
   },
   "elementPickerProviders.detection": {

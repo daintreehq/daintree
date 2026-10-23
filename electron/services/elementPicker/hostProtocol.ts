@@ -35,6 +35,20 @@ export type HostInbound =
   /** Exit now. Main has already settled every job the host held. */
   | { type: "dispose" };
 
+/**
+ * Main → a plugin's resolver host only: the module to load a provider's
+ * resolver from, sent before the first job that names the provider. The URL is
+ * main's, resolved from the registry and contained in the plugin's directory;
+ * nothing a request carries ever chooses what the host imports.
+ */
+export interface ProviderInbound {
+  type: "provider";
+  providerId: string;
+  entryUrl: string;
+}
+
+export type PluginHostInbound = HostInbound | ProviderInbound;
+
 const JobIdSchema = z.number().int().positive();
 
 /**

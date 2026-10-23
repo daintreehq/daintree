@@ -2323,7 +2323,10 @@ interface ElementPickerProviderContribution {
     detection: ElementPickerDetectionRule[];
     /** Packaged, plugin-relative path to the guest extractor. Declared only: nothing loads it yet. */
     guestEntry: string;
-    /** Packaged path to the source resolver. Declaring one needs `fs:project-read`. */
+    /**
+     * Packaged path to the source resolver, an ES module run in the plugin's own
+     * resolver host on the first resolve that needs it. Declaring one needs `fs:project-read`.
+     */
     resolverEntry?: string;
 }
 

@@ -533,7 +533,7 @@ describe("ElementPickerHost", () => {
       });
     });
 
-    it("answers a registered provider's candidates as unsupported until a resolver exists", async () => {
+    it("answers a provider that declared no resolver as unsupported, without starting a host", async () => {
       registerElementPickerProviders("acme.qwik", "acme.qwik", [
         {
           id: "qwik",
@@ -542,12 +542,14 @@ describe("ElementPickerHost", () => {
           guestEntry: "guest/qwik.js",
         },
       ]);
-      const { host } = harness();
+      const { host, children } = harness();
       const id = await workspace(host);
       const response = await host.resolve(qwikRequest(id), { projectId: "p1" });
       expect(results(response)).toEqual([
         { state: "unavailable", candidateId: "c-1", claim: "file-hint", reason: "unsupported" },
       ]);
+      expect(children).toHaveLength(0);
+      expect(host.pluginHosts).toBe(0);
     });
 
     it("refuses the provider again once its plugin is unloaded", async () => {

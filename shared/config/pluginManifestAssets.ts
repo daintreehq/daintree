@@ -140,10 +140,13 @@ export function collectPluginManifestAssets(manifest: unknown): PluginManifestAs
   }
 
   // Element picker guest entries are scripts the host evaluates in a preview
-  // page, not modules it imports; a resolver is declared now and loaded later.
+  // page; a resolver entry is an ES module a plugin resolver host imports.
   for (const [index, provider] of entries(contributes.elementPickerProviders)) {
     add(`elementPickerProviders[${index}].guestEntry`, provider.guestEntry, { built: true });
-    add(`elementPickerProviders[${index}].resolverEntry`, provider.resolverEntry, { built: true });
+    add(`elementPickerProviders[${index}].resolverEntry`, provider.resolverEntry, {
+      built: true,
+      module: true,
+    });
   }
 
   for (const [index, theme] of entries(contributes.themes)) {

@@ -233,7 +233,9 @@ export const ELEMENT_PICKER_FRAMEWORK_PATTERNS = [
     label: "Element Picker host process",
     test: (file) =>
       file.includes("electron/services/elementPicker/worker/") ||
-      /electron\/services\/elementPicker\/host(-bootstrap)?\.ts$/.test(file),
+      /electron\/services\/elementPicker\/(host|host-bootstrap|plugin-resolver-host|plugin-resolver-bootstrap)\.ts$/.test(
+        file
+      ),
   },
   ...FORBIDDEN_EAGER_PATTERNS,
   {

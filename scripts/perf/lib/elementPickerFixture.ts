@@ -1,4 +1,4 @@
-import { fork, type ChildProcess } from "node:child_process";
+import { execFileSync, fork, type ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
@@ -42,6 +42,16 @@ import { createPerfTempRoot } from "./tempRoots";
 const HOST_BOOTSTRAP = fileURLToPath(
   new URL("../../../electron/services/elementPicker/host-bootstrap.ts", import.meta.url)
 );
+const PLUGIN_BOOTSTRAP = fileURLToPath(
+  new URL("../../../electron/services/elementPicker/plugin-resolver-bootstrap.ts", import.meta.url)
+);
+/** The packaged fixture plugin's resolver, built here as its own build would. */
+const LIT_RESOLVER_SOURCE = fileURLToPath(
+  new URL(
+    "../../../electron/services/elementPicker/__tests__/fixtures/plugins/lit-picker/src/resolver.ts",
+    import.meta.url
+  )
+);
 const SVELTE_FIXTURE = fileURLToPath(
   new URL(
     "../../../electron/services/elementPicker/__tests__/fixtures/svelte/native.svelte",
@@ -51,6 +61,17 @@ const SVELTE_FIXTURE = fileURLToPath(
 
 export const SVELTE_FILE = "src/lib/native.svelte";
 export const REACT_FILE = "src/Card.tsx";
+export const LIT_FILE = "src/lit-card.ts";
+const LIT_TAG = "fixture-lit-card";
+
+const LIT_CARD = [
+  'import { html } from "lit";',
+  "",
+  "export const card = (heading: string) => html`",
+  `  <${LIT_TAG} heading=\${heading}></${LIT_TAG}>`,
+  "`;",
+  "",
+].join("\n");
 
 const CARD = [
   'import { useState } from "react";',
@@ -128,6 +149,10 @@ interface Corpus {
   origin: string;
   svelte: { meta: Position; line: number };
   react: { url: string; frame: Position; line: number };
+  /** The stamp a Lit element carries: 1-based line and column of its tag. */
+  lit: Position;
+  /** The fixture plugin's resolver, bundled to one ES module. */
+  litResolver: string;
 }
 
 /** 1-based line and 0-based column of the first occurrence of `needle`. */
@@ -161,6 +186,7 @@ function loadCorpus(): Promise<Corpus> {
     const svelteSource = readFileSync(SVELTE_FIXTURE, "utf8");
     put(SVELTE_FILE, svelteSource);
     put(REACT_FILE, CARD);
+    put(LIT_FILE, LIT_CARD);
 
     // What a dev server serves for the module: JSX compiled to `jsxDEV` calls,
     // with its map inline, naming the file on disk.
@@ -185,6 +211,19 @@ function loadCorpus(): Promise<Corpus> {
     server.unref();
     const origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
     const call = positionOf(served.code, 'jsxDEV("h2"');
+    const resolverBuild = await (
+      await import("esbuild")
+    ).build({
+      entryPoints: [LIT_RESOLVER_SOURCE],
+      bundle: true,
+      format: "esm",
+      platform: "node",
+      target: "node22",
+      write: false,
+      logLevel: "silent",
+      outfile: "resolver.mjs",
+    });
+    const litTag = positionOf(LIT_CARD, `<${LIT_TAG}`);
 
     return {
       worktree,
@@ -196,6 +235,8 @@ function loadCorpus(): Promise<Corpus> {
         frame: { line: call.line, column: call.column + 1 },
         line: positionOf(CARD, "<h2").line,
       },
+      lit: { line: litTag.line, column: litTag.column + 1 },
+      litResolver: resolverBuild.outputFiles[0]!.text,
     };
   })();
   return corpus;
@@ -352,14 +393,14 @@ function installReaper(): void {
   }
 }
 
-function forkHost(): ForkedHost {
+function forkHost(entry = HOST_BOOTSTRAP): ForkedHost {
   installReaper();
   const child = fork(UTILITY_HOST_CHILD.entry, [], {
     execArgv: ["--import", "tsx"],
     // Structured clone, as Electron's MessagePort carries the host protocol.
     serialization: "advanced",
     stdio: ["ignore", "ignore", "pipe", "ipc"],
-    env: { ...process.env, [UTILITY_HOST_CHILD.hostEnv]: HOST_BOOTSTRAP },
+    env: { ...process.env, [UTILITY_HOST_CHILD.hostEnv]: entry },
   });
   liveChildren.add(child);
   return new ForkedHost(child);
@@ -383,6 +424,29 @@ export interface PickerHostHarness {
   dispose(): Promise<void>;
   /** Kills whatever is still running; for after a reading, never before one. */
   reap(): void;
+  /** Every plugin resolver host this harness forked, in order. */
+  readonly pluginForks: readonly ForkedHost[];
+  /** Plugin resolver hosts still running. */
+  livePluginForks(): number;
+  /**
+   * Installs `count` copies of the Lit fixture plugin, each its own plugin
+   * with its own resolver host, plus `failing` plugins whose resolver kills
+   * its own process. Registered as `loadPlugin` registers them; nothing starts.
+   */
+  installPlugins(count: number, failing?: number): Promise<{ lit: string[]; failing: string[] }>;
+  /**
+   * One selection naming a Lit element for each provider in `lit`, plus one
+   * candidate per `failing` provider and, with `withSvelte`, a Svelte element.
+   * Returns the Lit and Svelte answers that were NOT correct; a failing
+   * provider's candidates must come back `unavailable`, or they count too.
+   */
+  resolvePlugins(
+    workspaceId: string,
+    lit: readonly string[],
+    options?: { failing?: readonly string[]; withSvelte?: boolean }
+  ): Promise<number>;
+  /** Resident memory of a running process, in bytes, or null where `ps` cannot say. */
+  residentBytes(pid: number | undefined): number | null;
 }
 
 let modules: Promise<
@@ -398,6 +462,50 @@ function loadHostModule() {
   return modules;
 }
 
+/** The registry the host reads, as the same module instance it imports. */
+async function loadRegistry() {
+  await loadHostModule();
+  return import("../../../electron/services/elementPickerProviderRegistry");
+}
+
+let nextPlugin = 0;
+
+/** A plugin resolver that takes its own process down mid-selection, as a crashing one would. */
+const CRASHING_RESOLVER =
+  "export default () => ({ resolve() { setImmediate(() => process.exit(70)); return new Promise(() => {}); } });\n";
+
+function litObservation(elementId: string, providerId: string, data: Corpus): SelectionObservation {
+  return {
+    ...observation(elementId, LIT_TAG, {
+      kind: "template-location",
+      candidateId: "lit-source",
+      framework: providerId,
+      extraction: { kind: "attribute", attribute: "data-fixture-lit-source" },
+      file: LIT_FILE,
+      location: { lineBase: 1, columnBase: 1, columnUnit: "utf16", ...data.lit },
+    }),
+    frameworkEvidence: [
+      { kind: "generic", framework: providerId, fields: [{ name: "tag", value: LIT_TAG }] },
+    ],
+  };
+}
+
+function isLitCorrect(data: Corpus, result: ResolutionResult | undefined): boolean {
+  if (result?.state !== "verified") return false;
+  const target = result.target as { file: { path: string }; location: { line: number } | null };
+  return target.file.path === LIT_FILE && target.location?.line === data.lit.line;
+}
+
+function residentBytes(pid: number | undefined): number | null {
+  if (pid === undefined || process.platform === "win32") return null;
+  try {
+    const kb = Number(execFileSync("ps", ["-o", "rss=", "-p", String(pid)], { encoding: "utf8" }));
+    return Number.isFinite(kb) && kb > 0 ? kb * 1024 : null;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * A fresh `ElementPickerHost`, as main builds one on the picker's first use.
  * `resolve` returns the number of arms that were NOT answered correctly.
@@ -405,13 +513,24 @@ function loadHostModule() {
 export async function createPickerHost(
   options: { idleMs?: number } = {}
 ): Promise<PickerHostHarness> {
-  const [{ ElementPickerHost }, data] = await Promise.all([loadHostModule(), loadCorpus()]);
+  const [{ ElementPickerHost }, data, registry] = await Promise.all([
+    loadHostModule(),
+    loadCorpus(),
+    loadRegistry(),
+  ]);
   const forks: ForkedHost[] = [];
+  const pluginForks: ForkedHost[] = [];
+  const installed: string[] = [];
   let watches = 0;
   const host = new ElementPickerHost({
     fork: () => {
       const child = forkHost();
       forks.push(child);
+      return child;
+    },
+    pluginFork: () => {
+      const child = forkHost(PLUGIN_BOOTSTRAP);
+      pluginForks.push(child);
       return child;
     },
     kill: (pid) => {
@@ -480,16 +599,84 @@ export async function createPickerHost(
     },
     async settle(timeoutMs = 5_000) {
       const deadline = performance.now() + timeoutMs;
-      while (forks.some((child) => !child.exited) && performance.now() < deadline) {
+      while (
+        [...forks, ...pluginForks].some((child) => !child.exited) &&
+        performance.now() < deadline
+      ) {
         await new Promise((resolve) => setTimeout(resolve, 10));
       }
     },
     async dispose() {
       await host.dispose();
+      for (const pluginId of installed.splice(0)) {
+        registry.unregisterElementPickerProviders(pluginId);
+      }
     },
     reap() {
-      for (const child of forks) child.kill();
+      for (const child of [...forks, ...pluginForks]) child.kill();
     },
+    pluginForks,
+    livePluginForks: () => pluginForks.filter((child) => !child.exited).length,
+    async installPlugins(count, failing = 0) {
+      const install = (resolver: string) => {
+        const name = `perf.lit${nextPlugin++}`;
+        const dir = createPerfTempRoot("daintree-perf-picker-plugin-", { canonical: true });
+        mkdirSync(join(dir, "dist", "picker"), { recursive: true });
+        writeFileSync(join(dir, "dist", "picker", "resolver.mjs"), resolver);
+        registry.registerElementPickerProviders(
+          name,
+          name,
+          [
+            {
+              id: "lit",
+              name: "Lit",
+              detection: [{ kind: "global", name: "litElementVersions", match: "exact" }],
+              guestEntry: "dist/picker/lit.js",
+              resolverEntry: "dist/picker/resolver.mjs",
+            },
+          ],
+          dir
+        );
+        installed.push(name);
+        return `${name}.lit`;
+      };
+      return {
+        lit: Array.from({ length: count }, () => install(data.litResolver)),
+        failing: Array.from({ length: failing }, () => install(CRASHING_RESOLVER)),
+      };
+    },
+    async resolvePlugins(workspaceId, lit, options = {}) {
+      nextRequest += 1;
+      const failing = options.failing ?? [];
+      const observations: SelectionObservation[] = [
+        ...(options.withSvelte ? [observationFor("svelte", data)] : []),
+        ...lit.map((providerId, index) => litObservation(`el-lit-${index}`, providerId, data)),
+        ...failing.map((providerId, index) =>
+          litObservation(`el-failing-${index}`, providerId, data)
+        ),
+      ];
+      const response = await host.resolve({
+        requestId: `perf-picker-${nextRequest}`,
+        sessionId: "perf-picker",
+        documentEpoch: 1,
+        workspaceId,
+        observations,
+        knownRevisions: [],
+        budget: BUDGET,
+      } satisfies ResolveRequest);
+      const resultOf = (elementId: string) =>
+        response.outcomes.find((outcome) => outcome.elementId === elementId)?.results[0];
+      let misses = 0;
+      if (options.withSvelte && !isCorrect("svelte", data, resultOf("el-svelte"))) misses += 1;
+      lit.forEach((_, index) => {
+        if (!isLitCorrect(data, resultOf(`el-lit-${index}`))) misses += 1;
+      });
+      failing.forEach((_, index) => {
+        if (resultOf(`el-failing-${index}`)?.state !== "unavailable") misses += 1;
+      });
+      return misses;
+    },
+    residentBytes,
   };
 }
 

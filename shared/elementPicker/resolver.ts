@@ -21,6 +21,7 @@ import {
   PickerIdSchema,
   SourceCandidateSchema,
   type ElementPickerFramework,
+  type ElementPickerProviderId,
 } from "./source.js";
 
 /* Guest side. Generic over the node type: shared code compiles without the DOM. */
@@ -220,9 +221,12 @@ export interface ResolverSourceAccess {
   locateFile(reported: string, signal: AbortSignal): Promise<SourceAccessResult<SourceFileRef>>;
 }
 
-/** Resolves the candidates of one framework; the host routes each candidate by its `framework`. */
+/**
+ * Resolves the candidates of one framework or plugin provider; the host routes
+ * each candidate by its `framework`.
+ */
 export interface HostSourceResolver {
-  readonly framework: ElementPickerFramework;
+  readonly framework: ElementPickerProviderId;
   resolve(
     request: ResolveRequest,
     access: ResolverSourceAccess,

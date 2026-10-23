@@ -32,6 +32,10 @@ export const MAIN_STATIC_ESM_ENTRIES = [
   // first resolve and retired when idle, so resolvers never load in main.
   "electron/services/elementPicker/host-bootstrap.ts",
   "electron/services/elementPicker/host.ts",
+  // A plugin's own resolver host (#14075): one per plugin instance, forked on
+  // its first resolve, so plugin code never shares the core host's process.
+  "electron/services/elementPicker/plugin-resolver-bootstrap.ts",
+  "electron/services/elementPicker/plugin-resolver-host.ts",
   // Multi-threading workers: per-terminal analysis (headless xterm +
   // activity detection) inside pty-host, SQLite maintenance off the main
   // event loop, and copytree generation inside workspace-host. Each is

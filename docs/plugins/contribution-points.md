@@ -1564,7 +1564,7 @@ Named multi-terminal launch layouts a plugin ships. A contributed recipe is regi
 - **`guestEntry` is a packaged, plugin-relative path** to one standalone browser script, at most 256 KiB. The host reads it from your installed plugin directory; a renderer or a page can't name a path or supply a body. It must stay inside the plugin after symlinks are resolved, and packaging fails when the file is missing, excluded by `.dntrignore` or reached through a link that leaves the plugin.
 - **It needs `preview:inspect`**, which the install-time list discloses, and for a project plugin the project must be trusted. Disabling, uninstalling or reloading the plugin removes the extractor from any page it is installed in, calling its `dispose`.
 - **It never starts your plugin's worker** and never loads a source parser. Detection and extraction use only the packaged script. A missing, oversized or throwing script leaves DOM picking exactly as it was and shows a bounded status line.
-- **`resolverEntry`** (needs `fs:project-read`) is declared and packaged, and loaded by a later release. Declaring it today changes nothing at runtime.
+- **`resolverEntry`** (needs `fs:project-read`) is an optional ES module that turns your extractor's source candidates into checked file and line results. See [Writing a source resolver](#writing-a-source-resolver). Without one, your candidates are reported as `unsupported` and no process starts for them.
 
 ### Writing the guest entry
 
@@ -1607,6 +1607,67 @@ export default defineConfig({
   },
 });
 ```
+
+### Writing a source resolver
+
+A resolver runs in a process of its own, separate from your plugin's worker, the core resolvers and every other plugin. The host starts it on the first selection that has one of your candidates in it, not on detection or activation, shares it across every preview and worktree, and stops it after 30 seconds with nothing to do. At most four plugin resolver processes run at once; when another is needed, the longest-idle one is stopped first. A resolver that throws, crashes or hangs only costs its own candidates, which are reported as `unsupported`; core results and other plugins' are unaffected. Disabling, uninstalling or reloading the plugin stops its process.
+
+Your resolver is sent only your own provider's candidates and has no file or network access of its own: every read goes through the `access` object, which the host answers under the workspace's containment, the preview's origin, and the selection's file, byte and time budget. Each file comes back with a `revision`, and a result can only cite a revision `access` gave you in that request. An answer that names a file outside the workspace, a revision it was never served, or an element or candidate it wasn't sent is discarded whole. Echo the request's `requestId` and `documentEpoch`, and stop when `signal` aborts.
+
+```ts
+import { defineElementPickerResolver } from "@daintreehq/plugin-sdk/element-picker";
+
+export default defineElementPickerResolver(() => ({
+  async resolve(request, access, signal) {
+    const decoder = new TextDecoder();
+    return {
+      requestId: request.requestId,
+      documentEpoch: request.documentEpoch,
+      outcomes: await Promise.all(
+        request.observations.map(async (observation) => ({
+          elementId: observation.elementId,
+          results: await Promise.all(
+            observation.sourceCandidates.map(async (candidate) => {
+              const unavailable = (reason) => ({
+                state: "unavailable",
+                candidateId: candidate.candidateId,
+                claim: candidate.kind,
+                reason,
+              });
+              if (candidate.kind !== "template-location" || !candidate.location) {
+                return unavailable("unsupported");
+              }
+              const file = await access.locateFile(candidate.file, signal);
+              if (!file.ok) return unavailable(file.reason);
+              const read = await access.readSource(file.value, signal);
+              if (!read.ok) return unavailable(read.reason);
+              const line = decoder.decode(read.value.bytes).split("\n")[
+                candidate.location.line - 1
+              ];
+              if (line === undefined) {
+                // A mismatch says what was read, so a reader can tell it from a missing file.
+                return {
+                  ...unavailable("mismatch"),
+                  read: { file: read.value.file, fileRevision: read.value.revision },
+                };
+              }
+              return {
+                state: "verified",
+                candidateId: candidate.candidateId,
+                claim: candidate.kind,
+                target: { file: read.value.file, location: candidate.location },
+                fileRevision: read.value.revision,
+              };
+            })
+          ),
+        }))
+      ),
+    };
+  },
+}));
+```
+
+Build it as a single self-contained Node ES module, for example `dist/picker/resolver.mjs` (the `.mjs` extension keeps it ESM in a CommonJS package), with any parser it needs bundled in. The entry must stay inside the plugin after symlinks are resolved, and is capped at 16 MiB.
 
 ## Tours — _Shipped_
 

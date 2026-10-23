@@ -131,9 +131,12 @@ describe("collectPluginManifestAssets", () => {
       module: false,
       built: true,
     });
-    expect(assets.get("elementPickerProviders[0].resolverEntry")?.path).toBe(
-      "dist/resolver/lit.js"
-    );
+    expect(assets.get("elementPickerProviders[0].resolverEntry")).toMatchObject({
+      path: "dist/resolver/lit.js",
+      required: true,
+      module: true,
+      built: true,
+    });
     expect(assets.get("elementPickerProviders[1].guestEntry")?.path).toBe("dist/picker/other.js");
     expect(assets.has("elementPickerProviders[1].resolverEntry")).toBe(false);
   });
