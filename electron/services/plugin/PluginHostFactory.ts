@@ -98,6 +98,7 @@ import {
   PLUGIN_PANEL_ACTIVITY_MAX_PANELS,
   PLUGIN_TERMINAL_STATUS_MAX_PER_PROJECT,
   type PluginDatabaseApi,
+  type PluginDatabaseContribution,
   type PluginPanelActivityReport,
   type PluginTaskApi,
   type PluginWorktreeSetupStepHandler,
@@ -111,6 +112,7 @@ import {
 import type { PluginTaskRecord, PluginTaskRegistry } from "./PluginTaskRegistry.js";
 import {
   databaseBackupApprovers,
+  databaseWriteAuthorizers,
   fsWriteApprovers,
   pushListenerObservers,
 } from "./pluginInternalApprovers.js";
@@ -1441,8 +1443,7 @@ export function createHost(
     return approved;
   };
 
-  const resolveDatabase = async (id: string, options?: { readonly?: boolean }) => {
-    const readonly = options?.readonly === true;
+  const declaredDatabase = (id: string) => {
     if (typeof id !== "string" || id.length === 0) {
       throw new Error(`Plugin "${pluginId}" db: id must be a non-empty string`);
     }
@@ -1455,6 +1456,38 @@ export function createHost(
         `DB_NOT_DECLARED: plugin "${pluginId}" db: "${id}" is not declared in contributes.databases`
       );
     }
+    return declaration;
+  };
+
+  // Writing a project database changes the repository, so a call from a view
+  // that watches the project is refused as its `host.fs` writes are. Asked on
+  // every write, not once at open: a handle outlives the lease it was opened
+  // under. A local database is in no project and passes. The file's own path,
+  // not the bound root, since it may sit in a nested project; worked out as
+  // the resolver will, so it can be asked before anything is created.
+  // A held handle also names the file it resolved, since a link on the way
+  // may have moved since.
+  const requireCallerDrivesDatabase = async (
+    declaration: PluginDatabaseContribution,
+    op: string,
+    openedPath?: string
+  ): Promise<void> => {
+    if (declaration.location !== "project" || boundProjectRoot === null) return;
+    const target = path.resolve(
+      boundProjectRoot,
+      declaration.path ?? `.daintree/data/${manifestId}/${declaration.id}.db`
+    );
+    const paths =
+      openedPath !== undefined && openedPath !== target ? [target, openedPath] : [target];
+    await assertPluginCallerDrives(pluginId, `db.${op}`, { paths });
+    requireBoundForDb(`db.${op}`);
+  };
+
+  const resolveDatabase = async (id: string, options?: { readonly?: boolean }) => {
+    const readonly = options?.readonly === true;
+    const declaration = declaredDatabase(id);
+    // Before consent and the directory: a refused open creates nothing.
+    if (!readonly) await requireCallerDrivesDatabase(declaration, "open");
     // A project database is a file in the repository: creating its directory,
     // the file, and every migration are project writes, so they wait for the
     // same first-use consent `host.fs.writeFile` does. A local database is
@@ -1463,6 +1496,8 @@ export function createHost(
     if (declaration.location === "project" && !readonly) {
       await ensureCapabilityConsent(deps, pluginId, "fs:project-write");
       requireBoundForDb("db");
+      // Control may have moved while the prompt waited.
+      await requireCallerDrivesDatabase(declaration, "open");
     }
     const location = await resolvePluginDatabaseLocation({
       declaration,
@@ -1473,6 +1508,16 @@ export function createHost(
     });
     requireBoundForDb("db");
     return location;
+  };
+
+  const authorizeDatabaseWrite = (id: string, openedPath?: string): Promise<void> => {
+    if (
+      openedPath !== undefined &&
+      (typeof openedPath !== "string" || !path.isAbsolute(openedPath))
+    ) {
+      return Promise.reject(new Error(`Plugin "${pluginId}" db: path must be an absolute path`));
+    }
+    return requireCallerDrivesDatabase(declaredDatabase(id), "write", openedPath);
   };
 
   const dbApi: PluginDatabaseApi = {
@@ -1488,6 +1533,7 @@ export function createHost(
         ...options,
         ...schema,
         revalidate: () => resolveDatabase(id, mode),
+        authorizeWrite: () => authorizeDatabaseWrite(id, location.path),
         prepareBackup: (destPath) => prepareDatabaseBackup(id, destPath),
         onClosed: () => untrack?.(),
       });
@@ -1504,6 +1550,7 @@ export function createHost(
     },
   };
   databaseBackupApprovers.set(dbApi, prepareDatabaseBackup);
+  databaseWriteAuthorizers.set(dbApi, authorizeDatabaseWrite);
 
   // The live disposer per `agentMcp` endpoint, so a replaced roster is released
   // rather than kept reachable from the unload cascade for the host's lifetime.

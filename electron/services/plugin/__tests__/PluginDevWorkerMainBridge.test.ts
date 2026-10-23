@@ -17,7 +17,7 @@ import { inertPluginTaskHandle } from "../../../../shared/utils/pluginTasks.js";
 import { PluginDevWorkerHostProxy } from "../pluginDevWorkerHostProxy.js";
 import { PluginInvokeTimeoutError, runWithInvokeDeadline } from "../pluginInvokeDeadline.js";
 import type { PluginIpcContext } from "../../../../shared/types/plugin.js";
-import { databaseBackupApprovers } from "../pluginInternalApprovers.js";
+import { databaseBackupApprovers, databaseWriteAuthorizers } from "../pluginInternalApprovers.js";
 import { parseWorkerToHostMessage } from "../../../schemas/pluginDevWorker.js";
 import { PLUGIN_PUSH_MAX_PAYLOAD_BYTES } from "../../../../shared/config/pluginBudgets.js";
 import {
@@ -363,6 +363,30 @@ describe("PluginDevWorkerMainBridge", () => {
     });
     await flush();
     expect(workerHost.sent.find((m) => m.requestId === "c-bk2")).toMatchObject({ ok: false });
+  });
+
+  it("answers db.authorizeWrite from the host's internal authorizer, in the worker's call", async () => {
+    const { host, workerHost } = makeBridge();
+    const db = { resolve: vi.fn(), open: vi.fn() };
+    const authorize = vi.fn(async (_id: string, _path?: string) => {
+      throw Object.assign(new Error("DRIVEN_ELSEWHERE: someone else drives"), {
+        code: "DRIVEN_ELSEWHERE",
+      });
+    });
+    databaseWriteAuthorizers.set(db as never, authorize);
+    (host as unknown as { db: unknown }).db = db;
+    workerHost.emit("worker-message", {
+      type: "host-call",
+      requestId: "c-aw",
+      method: "db.authorizeWrite",
+      params: { id: "ledger", path: "/p/.daintree/data/x/ledger.db" },
+    });
+    await flush();
+    expect(authorize).toHaveBeenCalledWith("ledger", "/p/.daintree/data/x/ledger.db");
+    expect(workerHost.sent.find((m) => m.requestId === "c-aw")).toMatchObject({
+      ok: false,
+      errorFields: { code: "DRIVEN_ELSEWHERE" },
+    });
   });
 
   it("carries a host error's primitive fields to the worker, not just its message", async () => {

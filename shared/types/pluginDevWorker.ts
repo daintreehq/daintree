@@ -104,6 +104,7 @@ export type PluginHostCallMethod =
   | "storage.set"
   | "storage.delete"
   | "db.resolve"
+  | "db.authorizeWrite"
   | "db.prepareBackup"
   | "fs.readFile"
   | "fs.readFileBytes"
