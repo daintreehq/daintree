@@ -1,4 +1,4 @@
-import type { Dirent } from "node:fs";
+import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { load as loadYaml } from "js-yaml";
@@ -20,6 +20,10 @@ import { readCapped } from "./repoSuggestion.js";
 const MAX_MANIFEST_BYTES = 256 * 1024;
 /** Workspace packages looked into, across every folder named. */
 const MAX_PACKAGE_DIRS = 32;
+/** Workspace patterns read, from all three manifests together. */
+const MAX_WORKSPACE_PATTERNS = 16;
+/** Entries read from one workspace folder before the rest are left unread. */
+const MAX_DIR_ENTRIES = 256;
 
 /**
  * A dependency that only an app serving pages carries. A bare `vite` is not
@@ -59,7 +63,7 @@ const DEV_SERVER_COMMANDS: readonly RegExp[] = [
   // `vite`, `vite dev`, `vite --host`; not `vite build`, `vitest`, `vite-node` or `electron-vite`.
   /(?<![\w-])vite(?![\w.-])(?!\s+build\b)/,
   /\bnext\s+(?:dev|start)\b/,
-  /\bnuxi?\s+dev\b/,
+  /\bnux[it]\s+dev\b/,
   /\bastro\s+dev\b/,
   /\bremix\s+(?:vite:)?dev\b/,
   /\breact-router\s+dev\b/,
@@ -85,6 +89,7 @@ const HUGO_CONFIGS = ["hugo.toml", "hugo.yaml", "hugo.yml", "hugo.json"];
 /** Hugo's older config name, and Zola's: a site only when it names the URL it is served at. */
 const SITE_CONFIGS = ["config.toml", "config.yaml", "config.yml", "config.json"];
 const SITE_BASE_URL = /^\s*["']?base_?url["']?\s*[:=]/im;
+const SITE_BASE_URL_KEY = /^base_?url$/i;
 const SITE_CONTENT_DIRS = ["content", "layouts", "themes", "templates"];
 const JEKYLL_DIRS = ["_layouts", "_posts", "_includes"];
 const ELEVENTY_CONFIGS = [
@@ -104,8 +109,9 @@ type PackageJson = Record<string, unknown>;
 
 /**
  * `true` or `false` for a folder that could be read, `null` for one that could
- * not — a missing root, or one that is not a directory — so the caller keeps
- * its default rather than reading "unknown" as "not a web project".
+ * not — a missing root, one that is not a directory, or one this process may
+ * not look inside — so the caller keeps its default rather than reading
+ * "unknown" as "not a web project".
  */
 export async function detectWebProject(
   projectRoot: string | null | undefined
@@ -113,6 +119,7 @@ export async function detectWebProject(
   if (!projectRoot) return null;
   try {
     if (!(await fs.stat(projectRoot)).isDirectory()) return null;
+    await fs.access(projectRoot, fsConstants.R_OK | fsConstants.X_OK);
   } catch {
     return null;
   }
@@ -163,11 +170,18 @@ async function hasRootWebSignal(root: string): Promise<boolean> {
   if ((await isFile(at("_config.yml"))) && (await anyDirectory(root, JEKYLL_DIRS))) return true;
   for (const name of SITE_CONFIGS) {
     const config = await readText(at(name));
-    if (config !== null && SITE_BASE_URL.test(config)) {
+    if (config !== null && namesSiteUrl(name, config)) {
       return anyDirectory(root, SITE_CONTENT_DIRS);
     }
   }
   return false;
+}
+
+/** The config names the URL the site is served at, as Hugo's and Zola's do. */
+function namesSiteUrl(name: string, text: string): boolean {
+  if (!name.endsWith(".json")) return SITE_BASE_URL.test(text);
+  const config = parseJson(text);
+  return config !== null && Object.keys(config).some((key) => SITE_BASE_URL_KEY.test(key));
 }
 
 /**
@@ -181,7 +195,7 @@ async function packageDirs(root: string, pkg: PackageJson | null): Promise<strin
     ...workspacePatterns(pkg?.workspaces),
     ...workspacePatterns(parseYaml(await readText(path.join(root, "pnpm-workspace.yaml")))),
     ...workspacePatterns(parseJson(await readText(path.join(root, "lerna.json")))),
-  ];
+  ].slice(0, MAX_WORKSPACE_PATTERNS);
   const containers = new Set<string>();
   const literals = new Set<string>(FRONTEND_DIRS);
   if (
@@ -208,17 +222,7 @@ async function packageDirs(root: string, pkg: PackageJson | null): Promise<strin
   for (const container of containers) {
     if (dirs.length >= MAX_PACKAGE_DIRS) return dirs;
     if (!(await isPlainDirectory(root, container))) continue;
-    let entries: Dirent[];
-    try {
-      entries = await fs.readdir(path.join(root, container), { withFileTypes: true });
-    } catch {
-      continue;
-    }
-    const names = entries
-      .filter((entry) => entry.isDirectory() && !entry.name.startsWith("."))
-      .map((entry) => entry.name)
-      .filter((name) => name !== "node_modules")
-      .sort();
+    const names = await childDirectoryNames(path.join(root, container));
     for (const name of names) {
       if (dirs.length >= MAX_PACKAGE_DIRS) return dirs;
       const dir = path.join(root, container, name);
@@ -226,6 +230,31 @@ async function packageDirs(root: string, pkg: PackageJson | null): Promise<strin
     }
   }
   return dirs;
+}
+
+/**
+ * The real directories in `dir`, sorted, from at most `MAX_DIR_ENTRIES` of
+ * its entries: a folder holding thousands is read no further than that.
+ */
+async function childDirectoryNames(dir: string): Promise<string[]> {
+  const names: string[] = [];
+  try {
+    const handle = await fs.opendir(dir);
+    let read = 0;
+    try {
+      for await (const entry of handle) {
+        if (++read > MAX_DIR_ENTRIES) break;
+        if (entry.isDirectory() && !entry.name.startsWith(".") && entry.name !== "node_modules") {
+          names.push(entry.name);
+        }
+      }
+    } finally {
+      await handle.close().catch(() => {});
+    }
+  } catch {
+    return [];
+  }
+  return names.sort();
 }
 
 /** `["apps/*", …]` from `package.json` `workspaces`, `pnpm-workspace.yaml` or `lerna.json`. */

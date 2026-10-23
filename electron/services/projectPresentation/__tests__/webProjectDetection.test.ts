@@ -109,6 +109,17 @@ describe("detectWebProject: shown by default", () => {
     expect(await detectWebProject(root)).toBe(true);
   });
 
+  it("Hugo's older config written as compact JSON", async () => {
+    await write("config.json", '{"baseURL":"https://example.org/","title":"Site"}');
+    await mkdir("content");
+    expect(await detectWebProject(root)).toBe(true);
+  });
+
+  it("a Nuxt app run through npx, with no dependency declared", async () => {
+    await write("package.json", { scripts: { dev: "npx nuxt dev" } });
+    expect(await detectWebProject(root)).toBe(true);
+  });
+
   it("Jekyll", async () => {
     await write("_config.yml", "title: Blog\n");
     await mkdir("_posts");
@@ -195,6 +206,19 @@ describe("detectWebProject: reading", () => {
     await write("file.txt", "");
     expect(await detectWebProject(path.join(root, "file.txt"))).toBeNull();
   });
+
+  it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
+    "is unknown for a folder it may not look inside",
+    async () => {
+      await write("index.html", "<!doctype html>");
+      await fs.chmod(root, 0o000);
+      try {
+        expect(await detectWebProject(root)).toBeNull();
+      } finally {
+        await fs.chmod(root, 0o755);
+      }
+    }
+  );
 
   it("answers again once the folder is scaffolded", async () => {
     expect(await detectWebProject(root)).toBe(false);

@@ -397,6 +397,35 @@ describe("web project detection (#14069)", () => {
     );
   });
 
+  it("tells every view even after one of them read the new answer itself", async () => {
+    detectWebProjectMock.mockResolvedValue(false);
+    await invoke("project-presentation:get");
+    detectWebProjectMock.mockResolvedValue(true);
+    // One view reads first: its reply reaches it alone.
+    await invoke("project-presentation:get");
+    expect(broadcastMock).not.toHaveBeenCalled();
+
+    changeUnder("/repo");
+
+    await vi.waitFor(() => expect(broadcastMock).toHaveBeenCalledTimes(1));
+    expect(broadcastMock).toHaveBeenCalledWith(
+      PROJECT_A,
+      CHANNELS.PROJECT_PRESENTATION_CHANGED,
+      expect.objectContaining({ webProject: true })
+    );
+  });
+
+  it("matches the root however git spells it", async () => {
+    projectStoreMock.getProjectById.mockReturnValue({ path: "/work/caf\u00e9" });
+    detectWebProjectMock.mockResolvedValue(false);
+    await invoke("project-presentation:get");
+    detectWebProjectMock.mockResolvedValue(true);
+
+    changeUnder("/work/cafe\u0301/");
+
+    await vi.waitFor(() => expect(broadcastMock).toHaveBeenCalledTimes(1));
+  });
+
   it("stays quiet when the answer holds or the change is outside the root", async () => {
     await invoke("project-presentation:get");
 

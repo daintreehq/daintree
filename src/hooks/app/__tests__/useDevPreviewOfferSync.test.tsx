@@ -89,6 +89,7 @@ describe("devPreviewOfferReason", () => {
 const initialToolbar = useToolbarPreferencesStore.getState();
 const initialSettings = useProjectSettingsStore.getState();
 const initialRefresh = useProjectPresentationStore.getState().refresh;
+const initialEnsureLoaded = useProjectPresentationStore.getState().ensureLoaded;
 const loadSettings = vi.fn<(projectId: string) => Promise<void>>(() => Promise.resolve());
 
 function project(id: string): Project {
@@ -137,7 +138,10 @@ afterEach(() => {
   useToolbarPreferencesStore.setState(initialToolbar, true);
   useProjectSettingsStore.setState(initialSettings, true);
   useWorktreeDevServerStore.getState().reset();
-  useProjectPresentationStore.setState({ refresh: initialRefresh });
+  useProjectPresentationStore.setState({
+    refresh: initialRefresh,
+    ensureLoaded: initialEnsureLoaded,
+  });
   _resetProjectPresentationStoreForTest();
 });
 
@@ -255,5 +259,68 @@ describe("useDevPreviewOfferSync", () => {
     expect(refresh).not.toHaveBeenCalled();
     act(() => observability.listener?.(true));
     expect(refresh).toHaveBeenCalledTimes(1);
+  });
+
+  it("tries again on coming back into sight when the first read gave up", () => {
+    const refresh = vi.fn();
+    const ensureLoaded = vi.fn();
+    useProjectPresentationStore.setState({ loaded: false, refresh, ensureLoaded });
+    renderHook(() => useDevPreviewOfferSync());
+
+    act(() => observability.listener?.(true));
+
+    expect(ensureLoaded).toHaveBeenCalledTimes(1);
+    expect(refresh).not.toHaveBeenCalled();
+  });
+
+  it("re-reads a plain folder on screen while it doesn't look like a web project", () => {
+    vi.useFakeTimers();
+    try {
+      const plain = { ...project(PROJECT), gitBacked: false };
+      useProjectStore.setState({ currentProject: plain, projects: [plain] });
+      const refresh = vi.fn();
+      useProjectPresentationStore.setState({
+        loaded: true,
+        projectId: PROJECT,
+        webProject: false,
+        refresh,
+      });
+      renderHook(() => useDevPreviewOfferSync());
+
+      act(() => {
+        vi.advanceTimersByTime(20_000);
+      });
+      expect(refresh).toHaveBeenCalled();
+
+      // Once it looks like one, nothing is left to wait for.
+      refresh.mockClear();
+      act(() => presentationSays(true));
+      act(() => {
+        vi.advanceTimersByTime(60_000);
+      });
+      expect(refresh).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("leaves a repository to main, which hears about its files", () => {
+    vi.useFakeTimers();
+    try {
+      const refresh = vi.fn();
+      useProjectPresentationStore.setState({
+        loaded: true,
+        projectId: PROJECT,
+        webProject: false,
+        refresh,
+      });
+      renderHook(() => useDevPreviewOfferSync());
+      act(() => {
+        vi.advanceTimersByTime(60_000);
+      });
+      expect(refresh).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

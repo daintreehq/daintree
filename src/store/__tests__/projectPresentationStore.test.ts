@@ -103,6 +103,23 @@ describe("projectPresentationStore", () => {
     expect(state().webProject).toBe(true);
   });
 
+  it("keeps a pushed answer about the files over a read that started before it", async () => {
+    const reads = [deferred<ProjectPresentationSnapshot>()];
+    const bridge = installBridge({ get: () => reads[reads.length - 1]!.promise });
+    state().init();
+    reads[0]!.resolve(snapshot({}, { webProject: false }));
+    await flush();
+
+    reads.push(deferred<ProjectPresentationSnapshot>());
+    state().refresh();
+    // The files change while that read is out, and main says so.
+    bridge.listeners.forEach((cb) => cb(snapshot({}, { webProject: true })));
+    reads[1]!.resolve(snapshot({}, { webProject: false }));
+    await flush();
+
+    expect(state().webProject).toBe(true);
+  });
+
   it("reads a snapshot from a main that predates web-project detection as unknown", async () => {
     const older = snapshot({}, { webProject: false });
     Reflect.deleteProperty(older, "webProject");

@@ -2577,7 +2577,14 @@ export function Toolbar({
     (buttonId: AnyToolbarButtonId, side: ToolbarSide, onToolbar: boolean) => {
       // A level this project set for the dev preview stays its to change: an
       // app-wide write would land in every other project and change nothing here.
-      if (buttonId === "dev-server" && explicitDevPreviewLevel !== undefined) {
+      // So does showing one this project hides by default (#14069): the layout
+      // may already hold its slot, and only the project's level can draw it.
+      if (
+        buttonId === "dev-server" &&
+        currentProject !== null &&
+        (explicitDevPreviewLevel !== undefined ||
+          (onToolbar && presentation.devServer === "hidden"))
+      ) {
         saveProjectToolbar(() =>
           setPresentationLevel("devServer", onToolbar ? "shown" : "demoted")
         );
@@ -2605,7 +2612,9 @@ export function Toolbar({
       });
     },
     [
+      currentProject,
       explicitDevPreviewLevel,
+      presentation.devServer,
       projectToolbarMode,
       setPresentationLevel,
       ownProjectPluginButtonIds,

@@ -10,6 +10,23 @@ import { getViewWorkspaceId } from "@/store/viewWorkspaceId";
 import { selectViewProject } from "@/store/viewWorkspace";
 import { isLiveDevServerStatus } from "@/lib/worktreeFilters";
 import { subscribeProjectViewObservability } from "@/lib/viewCacheState";
+import { useSharedPollTick } from "@/hooks/useSharedPollTick";
+
+/**
+ * How often a folder that isn't a repository is read again while it doesn't
+ * look like a web project. Main hears about a repository's files through its
+ * worktree updates; a plain folder has none, so scaffolding one while it is on
+ * screen would otherwise go unseen until the view is left and come back to.
+ */
+const PLAIN_FOLDER_RECHECK_MS = 20_000;
+
+function readFilesAgain(): void {
+  const presentation = useProjectPresentationStore.getState();
+  // A view whose first read gave up gets another try rather than a refresh it
+  // would skip: `refresh` re-reads, `ensureLoaded` reads only what never loaded.
+  if (presentation.loaded) presentation.refresh();
+  else presentation.ensureLoaded();
+}
 
 /**
  * Keeps `devPreviewOfferStore` current for this view's project (#14069). Mount
@@ -18,11 +35,14 @@ import { subscribeProjectViewObservability } from "@/lib/viewCacheState";
  * A preview in use, a configured command, the app-wide switch and a toolbar
  * pin all keep the dev preview offered whatever the project's files say.
  * Main re-reads the files when its root changes in git; coming back to a view
- * reads them again too, which is what reaches a folder that isn't a repository.
+ * reads them again too, and a plain folder is re-read while it is on screen.
  */
 export function useDevPreviewOfferSync(): void {
   const viewWorkspaceId = getViewWorkspaceId();
   const projectId = useProjectStore((s) => selectViewProject(viewWorkspaceId, s)?.id ?? null);
+  const plainFolder = useProjectStore(
+    (s) => selectViewProject(viewWorkspaceId, s)?.gitBacked === false
+  );
   const webProject = useProjectPresentationStore((s) =>
     projectId !== null && s.loaded && s.projectId === projectId ? s.webProject : null
   );
@@ -73,10 +93,10 @@ export function useDevPreviewOfferSync(): void {
   useEffect(
     () =>
       subscribeProjectViewObservability((observable) => {
-        if (!observable) return;
-        const presentation = useProjectPresentationStore.getState();
-        if (presentation.loaded) presentation.refresh();
+        if (observable) readFilesAgain();
       }),
     []
   );
+
+  useSharedPollTick(readFilesAgain, PLAIN_FOLDER_RECHECK_MS, plainFolder && reason === null);
 }

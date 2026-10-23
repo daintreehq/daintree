@@ -144,6 +144,11 @@ export const useProjectPresentationStore = create<ProjectPresentationState>((set
     ) {
       return;
     }
+    // A read another snapshot landed during (#14069): what it says about the
+    // files is older than what that one said, which the revision can't show,
+    // since it only orders what is stored.
+    const superseded =
+      !authoritative && !acknowledgesWrites && held.loaded && held.projectId === snapshot.projectId;
     ++adoptions;
     cancelRetry();
     retries = 0;
@@ -164,7 +169,7 @@ export const useProjectPresentationStore = create<ProjectPresentationState>((set
       launcherGroupOrder: snapshot.launcherGroupOrder ?? NO_ORDER,
       featuredLaunchEntry: snapshot.featuredLaunchEntry ?? null,
       // Nor does one from before #14069 carry this; unknown keeps the default.
-      webProject: snapshot.webProject ?? null,
+      webProject: superseded ? held.webProject : (snapshot.webProject ?? null),
       revision: snapshot.revision,
       projectId: snapshot.projectId,
       loaded: true,

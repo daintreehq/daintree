@@ -11,6 +11,7 @@ import {
   _resetProjectPresentationStoreForTest,
   useProjectPresentationStore,
 } from "@/store/projectPresentationStore";
+import { useDevPreviewOfferStore } from "@/store/devPreviewOfferStore";
 import {
   ProjectPresentationNotice,
   describeChanges,
@@ -191,6 +192,23 @@ describe("ProjectPresentationNotice", () => {
     adopt({ levels: { forgeStats: "hidden" } });
     renderNotice();
     expect(screen.queryByText(QUESTION)).toBeNull();
+  });
+
+  it("weighs a dev preview suggestion against this project's own default (#14069)", () => {
+    act(() => useDevPreviewOfferStore.setState({ reason: null }));
+    try {
+      adopt({ suggestion: { levels: { devServer: "hidden" }, hash: HASH } });
+      renderNotice();
+      // This project already hides it, so accepting would change nothing.
+      expect(screen.queryByText(/suggests/)).toBeNull();
+      cleanup();
+
+      adopt({ suggestion: { levels: { devServer: "shown" }, hash: HASH } });
+      renderNotice();
+      expect(screen.queryByText(/suggests/)).not.toBeNull();
+    } finally {
+      useDevPreviewOfferStore.setState({ reason: "unknown" });
+    }
   });
 
   it("records the answer against the suggestion it showed", async () => {

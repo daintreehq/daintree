@@ -1,4 +1,3 @@
-import path from "node:path";
 import { CHANNELS } from "../channels.js";
 import { defineIpcNamespace, op } from "../define.js";
 import type { IpcContext } from "../types.js";
@@ -27,6 +26,7 @@ import { projectIdFromPluginInstanceKey } from "../../../shared/types/plugin.js"
 import { readPresentationSuggestion } from "../../services/projectPresentation/repoSuggestion.js";
 import { detectWebProject } from "../../services/projectPresentation/webProjectDetection.js";
 import { events } from "../../services/events.js";
+import { pathComparisonKey } from "../../../shared/utils/path.js";
 import {
   isLevelAllowed,
   isPresentationFeatureId,
@@ -52,19 +52,37 @@ interface RepoFacts {
 }
 
 /**
- * The last web-project answer each project's views were sent, by root, so a
- * change under that root can tell whether it changed the answer (#14069). Only
- * projects some view has read are here: nobody else is waiting on one.
+ * Projects some view has read, by the root their web-project answer comes from
+ * (#14069), with the answer last broadcast to every view of the project. A
+ * read's reply reaches only the view that asked, so it never counts as told:
+ * a change under the root compares against what all of them were last sent.
  */
-const sentWebProject = new Map<string, { root: string; webProject: boolean | null }>();
+const watched = new Map<string, { rootKey: string; broadcast: boolean | null }>();
+// Bumped when the handlers go, so a read still in flight then records and publishes nothing.
+let registration = 0;
+
+/** One spelling per directory: git and the project list can disagree on NFC/NFD and case. */
+function rootKeyOf(root: string): string {
+  return pathComparisonKey(root, {
+    caseInsensitive: process.platform === "win32" || process.platform === "darwin",
+  });
+}
 
 async function readRepoFacts(projectId: string): Promise<RepoFacts> {
   const root = projectStore.getProjectById(projectId)?.path;
+  const startedIn = registration;
   const [suggestion, webProject] = await Promise.all([
     readPresentationSuggestion(root),
     detectWebProject(root),
   ]);
-  if (root) sentWebProject.set(projectId, { root, webProject });
+  if (root && startedIn === registration) {
+    const known = watched.get(projectId);
+    // The first read seeds it: until something is broadcast, that is what every view has.
+    watched.set(projectId, {
+      rootKey: rootKeyOf(root),
+      broadcast: known ? known.broadcast : webProject,
+    });
+  }
   return { suggestion, webProject };
 }
 
@@ -93,6 +111,8 @@ function snapshotOf(projectId: string, facts: RepoFacts): ProjectPresentationSna
 /** Every view of the project — the notice and the settings section can sit in different windows. */
 function publish(snapshot: ProjectPresentationSnapshot): ProjectPresentationSnapshot {
   broadcastToProjectRenderers(snapshot.projectId, CHANNELS.PROJECT_PRESENTATION_CHANGED, snapshot);
+  const known = watched.get(snapshot.projectId);
+  if (known) known.broadcast = snapshot.webProject;
   return snapshot;
 }
 
@@ -286,13 +306,16 @@ async function redetect(projectId: string): Promise<void> {
     redetectAgain.add(projectId);
     return;
   }
+  const mine = registration;
   redetecting.add(projectId);
   try {
     do {
       redetectAgain.delete(projectId);
-      const sent = sentWebProject.get(projectId)?.webProject;
       const facts = await readRepoFacts(projectId);
-      if (facts.webProject !== sent) publish(snapshotOf(projectId, facts));
+      if (mine !== registration) return;
+      if (facts.webProject !== watched.get(projectId)?.broadcast) {
+        publish(snapshotOf(projectId, facts));
+      }
     } while (redetectAgain.has(projectId));
   } catch (err) {
     console.warn("[ProjectPresentation] Couldn't re-read the project's files:", err);
@@ -309,9 +332,9 @@ async function redetect(projectId: string): Promise<void> {
 function watchProjectRoots(): () => void {
   return events.on("sys:worktree:update", (worktree) => {
     if (typeof worktree?.path !== "string" || worktree.path.length === 0) return;
-    const changed = path.resolve(worktree.path);
-    for (const [projectId, { root }] of sentWebProject) {
-      if (path.resolve(root) === changed) void redetect(projectId);
+    const changed = rootKeyOf(worktree.path);
+    for (const [projectId, { rootKey }] of watched) {
+      if (rootKey === changed) void redetect(projectId);
     }
   });
 }
@@ -320,8 +343,10 @@ export function registerProjectPresentationHandlers(): () => void {
   const unregister = projectPresentationNamespace.register();
   const stopWatching = watchProjectRoots();
   return () => {
+    registration++;
     stopWatching();
-    sentWebProject.clear();
+    watched.clear();
+    redetecting.clear();
     redetectAgain.clear();
     unregister();
   };

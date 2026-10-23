@@ -316,6 +316,30 @@ describe("Toolbar menus while the project's toolbar is on (#13783)", () => {
     expect(useToolbarPreferencesStore.getState().layout).toBe(layoutBefore);
   });
 
+  it("shows a leftover dev preview this project hides by default, in this project only (#14069)", async () => {
+    act(() => {
+      useToolbarPreferencesStore.setState((state) => ({
+        layout: { ...state.layout, leftButtons: [...state.layout.leftButtons, "dev-server"] },
+      }));
+      useDevPreviewOfferStore.setState({ reason: null });
+    });
+    try {
+      await applyProfile({});
+      const layoutBefore = useToolbarPreferencesStore.getState().layout;
+
+      const menu = await openEmptySpaceMenu();
+      const row = within(menu).getByRole("menuitemcheckbox", { name: /Dev preview/ });
+      expect(row.getAttribute("aria-checked")).toBe("false");
+      fireEvent.click(row);
+
+      // The layout already holds its slot, so an app-wide write would change nothing.
+      expect(setLevel).toHaveBeenCalledExactlyOnceWith("devServer", "shown");
+      expect(useToolbarPreferencesStore.getState().layout).toBe(layoutBefore);
+    } finally {
+      useDevPreviewOfferStore.setState({ reason: "unknown" });
+    }
+  });
+
   it("re-checks a demoted button as explicitly shown for this project", async () => {
     await applyProfile({ resumeSessions: "demoted" });
 
