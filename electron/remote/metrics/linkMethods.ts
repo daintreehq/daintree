@@ -288,8 +288,9 @@ export const MAX_PROCESS_PLUGINS = 256;
 /** Executable basenames and plugin labels. */
 export const MAX_PROCESS_LABEL = 256;
 /**
- * What the rows of one answer may encode to: half the link's frame, since the
- * list bounds alone still allow more than a frame of long multibyte text.
+ * What the rows of one answer may encode to, by the link's own encoder: half
+ * the link's frame, since the list bounds alone still allow more than a frame
+ * of long multibyte text, and the rest is ample for the envelope.
  */
 export const MAX_PROCESS_INVENTORY_BYTES = 8 * 1024 * 1024;
 

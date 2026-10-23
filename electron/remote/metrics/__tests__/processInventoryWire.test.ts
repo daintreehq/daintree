@@ -13,6 +13,8 @@ import {
   ProcessInventorySchema,
 } from "../linkMethods.js";
 import { boundProcessInventory } from "../processInventoryWire.js";
+import { encodeValue } from "../../link/encoding.js";
+import { DEFAULT_MAX_FRAME_BYTES } from "../../link/frames.js";
 
 function sample(memberCount: number): ProcessTreeSample {
   return {
@@ -120,14 +122,23 @@ describe("boundProcessInventory", () => {
       terminal.projectName = wide;
     }
     const bounded = boundProcessInventory(big);
-    const bytes = Buffer.byteLength(JSON.stringify(bounded), "utf8");
-    expect(bytes).toBeLessThanOrEqual(MAX_PROCESS_INVENTORY_BYTES + 1024);
+    expect(encodeValue(bounded).byteLength).toBeLessThanOrEqual(MAX_PROCESS_INVENTORY_BYTES + 1024);
     expect(bounded.terminals.length).toBeGreaterThan(0);
     expect(bounded.terminals.length).toBeLessThan(MAX_PROCESS_TERMINALS);
     expect(bounded.plugins).toHaveLength(0);
     expect(bounded.closedTerminalProcesses).toHaveLength(0);
     expect(bounded.truncated).toBe(true);
     expect(ProcessInventorySchema.safeParse(bounded).success).toBe(true);
+  });
+
+  it("lets go of a row too large for the budget on its own, keeping the answer within a frame", () => {
+    const huge = snapshot({ terminals: 2 });
+    // A lone surrogate makes the encoder carry the whole string as UTF-16.
+    huge.terminals[0].worktreeId = "\ud800" + "w".repeat(MAX_PROCESS_INVENTORY_BYTES / 2);
+    const bounded = boundProcessInventory(huge);
+    expect(bounded.terminals).toHaveLength(0);
+    expect(bounded.truncated).toBe(true);
+    expect(encodeValue(bounded).byteLength).toBeLessThan(DEFAULT_MAX_FRAME_BYTES);
   });
 
   it("zeroes readings the Shell's schema would refuse, rather than failing the whole answer", () => {

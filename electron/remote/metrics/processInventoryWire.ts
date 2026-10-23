@@ -11,6 +11,7 @@ import {
   MAX_PROCESS_PLUGINS,
   MAX_PROCESS_TERMINALS,
 } from "./linkMethods.js";
+import { encodeValue } from "../link/encoding.js";
 
 /** The link schema's bound on names and titles. */
 const MAX_TEXT = 1024;
@@ -52,11 +53,20 @@ function boundSample(sample: ProcessTreeSample | null): ProcessTreeSample | null
   };
 }
 
+/** What a row costs on the link, by its own encoder; one it can't encode never fits. */
+function encodedBytes(row: unknown): number {
+  try {
+    return encodeValue(row).byteLength;
+  } catch {
+    return Number.POSITIVE_INFINITY;
+  }
+}
+
 /** Keep rows in order while they fit what is left of the byte budget. */
 function withinBudget<T>(rows: T[], budget: { left: number }): T[] {
   const kept: T[] = [];
   for (const row of rows) {
-    const bytes = Buffer.byteLength(JSON.stringify(row), "utf8");
+    const bytes = encodedBytes(row);
     if (bytes > budget.left) {
       budget.left = 0;
       break;
