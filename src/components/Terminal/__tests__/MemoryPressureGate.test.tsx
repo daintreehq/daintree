@@ -102,7 +102,10 @@ describe("MemoryPressureGate at the host's agent limit (#14221)", () => {
     render(
       <MemoryPressureGate
         agentId="claude"
-        detail={{ reason: "kernel-critical", observation: { ...observation, kernelCritical: true } }}
+        detail={{
+          reason: "kernel-critical",
+          observation: { ...observation, kernelCritical: true },
+        }}
         onLaunchAnyway={vi.fn()}
         onCancel={vi.fn()}
       />

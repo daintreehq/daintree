@@ -191,7 +191,11 @@ let cachedTotal: { value: number | null; readAt: number } | null = null;
 
 async function cachedMemoryTotalBytes(): Promise<number | null> {
   const now = Date.now();
-  if (cachedTotal && now - cachedTotal.readAt >= 0 && now - cachedTotal.readAt < MEMORY_TOTAL_CACHE_MS) {
+  if (
+    cachedTotal &&
+    now - cachedTotal.readAt >= 0 &&
+    now - cachedTotal.readAt < MEMORY_TOTAL_CACHE_MS
+  ) {
     return cachedTotal.value;
   }
   const value = await readEffectiveMemoryTotalBytes();

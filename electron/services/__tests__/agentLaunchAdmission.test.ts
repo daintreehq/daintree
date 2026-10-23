@@ -22,7 +22,10 @@ const TWO_AGENT_TOTAL = (() => {
   throw new Error("no two-agent total");
 })();
 
-const agent = (id: string, extra: Partial<AgentCountableTerminal> = {}): AgentCountableTerminal => ({
+const agent = (
+  id: string,
+  extra: Partial<AgentCountableTerminal> = {}
+): AgentCountableTerminal => ({
   id,
   launchAgentId: "claude",
   hasPty: true,
@@ -253,18 +256,30 @@ describe("readEffectiveMemoryTotalBytes", () => {
 
   it("keeps the machine's memory when a cgroup allows more, or there is no v2 cgroup", async () => {
     const roomy = async (file: string) =>
-      file === "/proc/self/cgroup" ? "0::/a\n" : file.endsWith("memory.max") ? `${128 * GIB}` : null;
+      file === "/proc/self/cgroup"
+        ? "0::/a\n"
+        : file.endsWith("memory.max")
+          ? `${128 * GIB}`
+          : null;
     await expect(readEffectiveMemoryTotalBytes(roomy, "linux", () => 32 * GIB)).resolves.toBe(
       32 * GIB
     );
     await expect(
-      readEffectiveMemoryTotalBytes(async () => null, "linux", () => 32 * GIB)
+      readEffectiveMemoryTotalBytes(
+        async () => null,
+        "linux",
+        () => 32 * GIB
+      )
     ).resolves.toBe(32 * GIB);
   });
 
   it("is unknown, never zero, when the machine's memory can't be read", async () => {
-    await expect(readEffectiveMemoryTotalBytes(async () => null, "darwin", () => 0)).resolves.toBe(
-      null
-    );
+    await expect(
+      readEffectiveMemoryTotalBytes(
+        async () => null,
+        "darwin",
+        () => 0
+      )
+    ).resolves.toBe(null);
   });
 });

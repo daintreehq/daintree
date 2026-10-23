@@ -23,6 +23,9 @@ export function agentLaunchLimit(totalBytes: number | null | undefined): number 
   if (typeof totalBytes !== "number" || !Number.isFinite(totalBytes) || totalBytes <= 0) {
     return null;
   }
-  const reserve = Math.min(totalBytes * AGENT_LAUNCH_RESERVE_FRACTION, AGENT_LAUNCH_RESERVE_MAX_BYTES);
+  const reserve = Math.min(
+    totalBytes * AGENT_LAUNCH_RESERVE_FRACTION,
+    AGENT_LAUNCH_RESERVE_MAX_BYTES
+  );
   return Math.max(1, Math.floor((totalBytes - reserve) / AGENT_LAUNCH_BUDGET_BYTES));
 }
