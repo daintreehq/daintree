@@ -1,5 +1,5 @@
 import { GLOBAL_ASSISTANT_ID } from "../../../../shared/config/globalAssistant.js";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { McpError, ErrorCode } from "@modelcontextprotocol/sdk/types.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
@@ -2937,11 +2937,19 @@ describe("CallTool live activity notifications (#9759)", () => {
       .mockResolvedValue([
         { id: "worktree.list", title: "List", description: "d", danger: "confirm" },
       ]);
+    // The clock moves on while the dispatch is out, so a settle that read the
+    // clock again could not land on the start's own time.
+    let clock = 1_000_000;
+    const now = vi.spyOn(Date, "now").mockImplementation(() => clock);
+    onTestFinished(() => now.mockRestore());
     const deps = fakeDeps({
       notifyToolCallStarted: started,
       notifyToolCallSettled: settled,
       requestManifest,
-      dispatchAction: vi.fn().mockResolvedValue({ result: { ok: true, result: null } }),
+      dispatchAction: vi.fn(async () => {
+        clock += 5_000;
+        return { result: { ok: true as const, result: null } };
+      }),
     });
     const server = createSessionServer("session-P", deps);
     await server.connect(makeMockTransport());
@@ -2949,8 +2957,14 @@ describe("CallTool live activity notifications (#9759)", () => {
     await callTool(server, { name: "worktree.list", arguments: {} });
 
     const startedAt = (started.mock.calls[0]?.[0] as { startedAt: number }).startedAt;
+    expect(clock).not.toBe(startedAt);
     expect(settled).toHaveBeenCalledWith(
-      expect.objectContaining({ sessionId: "session-P", toolId: "worktree.list", startedAt })
+      expect.objectContaining({
+        sessionId: "session-P",
+        toolId: "worktree.list",
+        startedAt,
+        danger: true,
+      })
     );
   });
 

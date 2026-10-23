@@ -320,6 +320,9 @@ export interface HttpLifecycleDeps {
  * send one — fall back to a neutral label so the settings row never shows a
  * blank.
  */
+/** Time past the dispatch deadline a confirmation is still shown, for the hop to the dialog. */
+const CONFIRMATION_DEADLINE_GRACE_MS = 2_000;
+
 /** One call of one session, as its started and settled notices both name it. */
 function confirmationCallKey(sessionId: string, toolId: string, startedAt: number): string {
   return JSON.stringify([sessionId, toolId, startedAt]);
@@ -2591,13 +2594,17 @@ export class HttpLifecycle {
             ? (this.helpSessionTerminalResolver?.(helpSessionId) ?? null)
             : null;
         if (payload.danger && helpSessionId !== undefined && helpTerminalId !== null) {
+          // Announced just before it asks: the dialog's own deadline runs from
+          // about now, not from the call's start, and a wait shown a moment
+          // late is safer than a live decision hidden early.
+          const waitingSince = Date.now();
           getAssistantConfirmations().begin(
             confirmationCallKey(payload.sessionId, payload.toolId, payload.startedAt),
             { helpSessionId, terminalId: helpTerminalId },
             {
               actionId: payload.toolId,
-              since: payload.startedAt,
-              expiresAt: payload.startedAt + MCP_DISPATCH_TIMEOUT_MS,
+              since: waitingSince,
+              expiresAt: waitingSince + MCP_DISPATCH_TIMEOUT_MS + CONFIRMATION_DEADLINE_GRACE_MS,
             }
           );
         }
@@ -2630,10 +2637,13 @@ export class HttpLifecycle {
 
     const notifyToolCallSettled: import("./sessionServer.js").SessionServerDeps["notifyToolCallSettled"] =
       (payload) => {
+        // Before the origin check: a session torn down mid-call still settles its wait.
+        if (payload.danger) {
+          getAssistantConfirmations().settle(
+            confirmationCallKey(payload.sessionId, payload.toolId, payload.startedAt)
+          );
+        }
         if (!isRendererOwned(payload.sessionId)) return;
-        getAssistantConfirmations().settle(
-          confirmationCallKey(payload.sessionId, payload.toolId, payload.startedAt)
-        );
         const id = this.deps.sessionStore.sessionWebContentsMap.get(payload.sessionId);
         if (id === undefined) return;
         // Derive result/errorCode/severity from the same classifier the audit

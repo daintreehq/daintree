@@ -197,11 +197,12 @@ export function assistantNoticeSummary(notices: AgentDirectoryNotices | null): s
   return parts.length > 0 ? parts.join(", ") : null;
 }
 
+/** Where delivery stands, by its mechanics alone: the reason isn't in the directory. */
 const NOTICE_DELIVERY_NOTE: Partial<Record<AgentDirectoryNotices["delivery"], string>> = {
   scheduled: "due shortly",
-  held: "held until it settles",
-  blocked: "held while it waits on you",
-  outstanding: "last one still being read",
+  held: "held for now",
+  blocked: "held until it's back at its prompt",
+  outstanding: "the last one's turn hasn't ended",
   failed: "last delivery unconfirmed",
 };
 
@@ -209,7 +210,7 @@ const NOTICE_DELIVERY_NOTE: Partial<Record<AgentDirectoryNotices["delivery"], st
 export function assistantCoverageNote(item: CanopyAssistantItem): string | null {
   switch (item.coverage) {
     case "stale":
-      return "Last known; this host didn't answer the latest read";
+      return "Last known; the latest read failed";
     case "unreachable":
       return "This host can't be reached";
     case "unsupported":

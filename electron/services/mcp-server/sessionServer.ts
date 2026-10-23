@@ -1363,6 +1363,8 @@ export interface SessionServerDeps extends OwnedMainExecutors {
     toolId: string;
     /** The started event's own `startedAt`, so the two pair up exactly. */
     startedAt: number;
+    /** The started event's own `danger`: whether this call announced a wait on the person. */
+    danger: boolean;
     durationMs: number;
     outcome: AuditOutcome;
     /** Turn id snapshotted at dispatch start (#10067); matches the started event's value. */
@@ -2845,6 +2847,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     // activity strip is actually showing (#9759). Pre-dispatch rejections never
     // reach the IIFE, so they never set this — and never settle the strip.
     let toolCallStartedEmitted = false;
+    let toolCallStartedDanger = false;
     const emitToolCallStarted = (danger: boolean): void => {
       if (!notifyToolCallStarted) return;
       try {
@@ -2857,6 +2860,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           capturedTurnId,
         });
         toolCallStartedEmitted = true;
+        toolCallStartedDanger = danger;
       } catch (err) {
         console.error("[MCP] Failed to notify tool-call-started:", err);
       }
@@ -4649,6 +4653,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
               sessionId,
               toolId: actionId,
               startedAt,
+              danger: toolCallStartedDanger,
               durationMs,
               outcome: settledOutcome,
               capturedTurnId,

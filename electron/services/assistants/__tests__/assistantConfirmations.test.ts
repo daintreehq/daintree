@@ -75,6 +75,15 @@ describe("AssistantConfirmations", () => {
     expect(confirmations.read(A, 500).waiting).toEqual([]);
   });
 
+  it("reclaims a wait past its deadline when another begins, with no reader at all", () => {
+    const confirmations = new AssistantConfirmations();
+    confirmations.begin("lost", A, wait("worktree.delete", 100, 1_000));
+    confirmations.begin("next", B, wait("terminal.closeAll", 2_000));
+
+    // Read with a clock before the lost wait's deadline: it is already gone.
+    expect(confirmations.read(A, 500).waiting).toEqual([]);
+  });
+
   it("names the oldest waits up to the cap and counts the rest", () => {
     const confirmations = new AssistantConfirmations();
     const total = AGENT_DIRECTORY_CONFIRMATIONS_MAX + 2;
@@ -83,7 +92,9 @@ describe("AssistantConfirmations", () => {
     }
 
     const read = confirmations.read(A, 10);
-    expect(read.waiting.map((entry) => entry.since)).toEqual([1, 2, 3, 4]);
+    expect(read.waiting.map((entry) => entry.since)).toEqual(
+      Array.from({ length: AGENT_DIRECTORY_CONFIRMATIONS_MAX }, (_, i) => i + 1)
+    );
     expect(read.omitted).toBe(2);
   });
 });

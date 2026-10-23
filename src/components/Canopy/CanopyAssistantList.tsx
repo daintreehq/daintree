@@ -176,14 +176,10 @@ export function CanopyAssistantPane({
  */
 function confirmationRoute(item: CanopyAssistantItem): string {
   const action = item.confirmation?.actionId ?? "an action";
-  if (item.subject.hostId !== LOCAL_HOST_ID) {
-    return `Its call to ${action} waits on a dialog on the host it runs on. Answer it there.`;
+  if (item.subject.hostId === LOCAL_HOST_ID && item.subject.scope.kind === "project") {
+    return item.attached
+      ? `Its call to ${action} waits on a dialog in its project's window. Open in Assistant to answer it there.`
+      : `Its call to ${action} waits on a dialog, but no window here shows this assistant. Unanswered, the call fails when it times out.`;
   }
-  if (item.subject.scope.kind === "global") {
-    return `Its call to ${action} waits on a dialog in the window the global assistant runs in. Answer it there.`;
-  }
-  if (!item.attached) {
-    return `Its call to ${action} waits on a dialog, but no window shows this assistant. It fails unanswered when it times out.`;
-  }
-  return `Its call to ${action} waits on a dialog in its project's window. Open in Assistant to answer it there.`;
+  return `Its call to ${action} waits on a dialog in the Daintree window this assistant runs through. Answer it there; it can't be answered from Canopy.`;
 }

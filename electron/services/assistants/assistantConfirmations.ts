@@ -29,6 +29,8 @@ export class AssistantConfirmations {
     owner: { helpSessionId: string; terminalId: string },
     confirmation: AgentDirectoryConfirmation
   ): void {
+    // Reclaimed here too, so waits whose settle never came don't wait for a reader.
+    this.prune(confirmation.since);
     const held = this.byCall.get(callKey);
     if (held) {
       held.count += 1;
@@ -48,12 +50,9 @@ export class AssistantConfirmations {
     owner: { helpSessionId: string; terminalId: string },
     now: number
   ): { waiting: AgentDirectoryConfirmation[]; omitted: number } {
+    this.prune(now);
     const waiting: AgentDirectoryConfirmation[] = [];
-    for (const [key, entry] of this.byCall) {
-      if (entry.expiresAt <= now) {
-        this.byCall.delete(key);
-        continue;
-      }
+    for (const entry of this.byCall.values()) {
       if (entry.helpSessionId !== owner.helpSessionId || entry.terminalId !== owner.terminalId) {
         continue;
       }
@@ -69,6 +68,12 @@ export class AssistantConfirmations {
       waiting: waiting.slice(0, AGENT_DIRECTORY_CONFIRMATIONS_MAX),
       omitted: Math.max(0, waiting.length - AGENT_DIRECTORY_CONFIRMATIONS_MAX),
     };
+  }
+
+  private prune(now: number): void {
+    for (const [key, entry] of this.byCall) {
+      if (entry.expiresAt <= now) this.byCall.delete(key);
+    }
   }
 }
 

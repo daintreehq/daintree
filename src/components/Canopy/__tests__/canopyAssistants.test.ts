@@ -251,9 +251,19 @@ describe("decisions and supervision (#14165)", () => {
     );
     expect(item!.ask).toBeNull();
     expect(item!.coverage).toBe("stale");
-    expect(assistantCoverageNote(item!)).toMatch(/didn't answer/);
+    expect(assistantCoverageNote(item!)).toMatch(/read failed/);
     const [current] = buildAssistantItems(directory([entry]), options);
     expect(assistantCoverageNote(current!)).toBeNull();
+  });
+
+  it("keeps offering a confirmation from a current read that couldn't list everything", () => {
+    const entry = live(0, { confirmations: { waiting: [waiting("worktree.delete")], omitted: 0 } });
+    const [item] = buildAssistantItems(
+      { ...directory([entry]), complete: false, omitted: 3 },
+      options
+    );
+    expect(item!.ask).toBe("confirm");
+    expect(item!.coverage).toBeNull();
   });
 
   it("keeps one lane's confirmation off the other lanes of the same project", () => {
@@ -283,7 +293,7 @@ describe("decisions and supervision (#14165)", () => {
         ready: 1,
         delivery: "blocked",
       })
-    ).toBe("Watching 2 terminals, 1 notice not delivered (held while it waits on you)");
+    ).toBe("Watching 2 terminals, 1 notice not delivered (held until it's back at its prompt)");
     expect(assistantNoticeSummary({ pending: 1, ready: 0, delivery: "idle" })).toBe(
       "Watching 1 terminal"
     );
