@@ -73,7 +73,8 @@ export function resolveProjectApplication(
   if (!input.trusted) return state(owner, "disabled", { reason: "untrusted" });
   if (owner.muted) return state(owner, "disabled", { reason: "muted" });
   if (owner.staged) return state(owner, "disabled", { reason: "staged" });
-  if (owner.engineIncompatible) return state(owner, "unavailable", { reason: "engine-incompatible" });
+  if (owner.engineIncompatible)
+    return state(owner, "unavailable", { reason: "engine-incompatible" });
   if (owner.loadFailed) return state(owner, "unavailable", { reason: "load-failed" });
   if (owner.instanceId === undefined) return state(owner, "loading");
   if (

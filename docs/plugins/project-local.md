@@ -222,7 +222,7 @@ Rules:
 
 ## Application
 
-A project plugin can declare itself the project's application with the top-level [`application`](./manifest.md#application) block: a name and icon, whether it opens on its Home or the grid, and the ids of the sidebar view, settings view, welcome tour, first workflow command and agent endpoints it already contributes. Every reference is checked against the same manifest before the plugin loads. Only one plugin per project may declare one, and while it is loading, switched off, failing or out-ranked for Home, the project shows the standard workspace.
+A project plugin can declare itself the project's application with the top-level [`application`](./manifest.md#application) block: a name and icon, whether it opens on its Home or the grid, and the ids of the sidebar view, settings view, welcome tour, first workflow command and agent endpoints it already contributes. Every reference is checked against the same manifest before the plugin loads. Only one plugin per project may declare one, and while it is loading, switched off, failing or out-ranked for Home, its state says so and names the standard workspace as the fallback.
 
 ## Binding — which project a host call reaches
 

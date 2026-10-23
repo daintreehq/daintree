@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import type { PluginApplicationDescriptor } from "../../types/plugin.js";
-import { resolveProjectApplication, type ProjectApplicationCandidate } from "../projectApplication.js";
+import {
+  resolveProjectApplication,
+  type ProjectApplicationCandidate,
+} from "../projectApplication.js";
 
 const APP: PluginApplicationDescriptor = {
   name: "Ledger",
@@ -8,7 +11,9 @@ const APP: PluginApplicationDescriptor = {
   presentation: { forgeStats: "hidden" },
 };
 
-function candidate(overrides: Partial<ProjectApplicationCandidate> = {}): ProjectApplicationCandidate {
+function candidate(
+  overrides: Partial<ProjectApplicationCandidate> = {}
+): ProjectApplicationCandidate {
   return {
     manifestId: "acme.ledger",
     application: APP,

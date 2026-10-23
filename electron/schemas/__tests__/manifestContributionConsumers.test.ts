@@ -2715,18 +2715,18 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
   },
   application: {
     name: {
-      mode: "verbatim",
+      mode: "intentional-metadata",
       consumers: [
         { file: PROJECT_PLUGIN_CONTROLLER, symbol: "getProjectApplication" },
         { file: PROJECT_APPLICATION, symbol: "resolveProjectApplication (application)" },
         { file: PROJECT_PLUGIN_STORE, symbol: "applySnapshot (application)" },
       ],
-      note: "The application's name, carried in the resolved state the project's views receive.",
+      note: "Carried in the resolved state the project's views receive; nothing draws it yet, so it has no runtime authority of its own.",
     },
     iconId: {
       mode: "intentional-metadata",
       consumers: [{ file: PLUGIN_SCHEMA, symbol: "PluginApplicationSchema" }],
-      note: "Carried in the resolved state; the same vocabulary as a sidebar view's iconId, drawn by the host's own icon set.",
+      note: "Carried in the resolved state, in the same vocabulary as a sidebar view's iconId; nothing draws it yet.",
     },
     destination: {
       mode: "verbatim",
@@ -2790,14 +2790,14 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
       note: "Each must name one of the plugin's own agentMcp endpoints; declaring one grants no access.",
     },
     presentation: {
-      mode: "cross-reference",
+      mode: "intentional-metadata",
       consumers: [
         {
           file: PLUGIN_SCHEMA,
           symbol: "PluginApplicationSchema (isPresentationFeatureId, isLevelAllowed)",
         },
       ],
-      note: "Checked against the host's closed presentation vocabulary; a suggestion only, never written over the user's profile.",
+      note: "Checked against the host's closed presentation vocabulary and carried in the resolved state; a suggestion with no authority, never written over the user's profile.",
     },
   },
   "application.welcomeTour": {

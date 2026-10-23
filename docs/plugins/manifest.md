@@ -293,7 +293,7 @@ Names a project plugin as its project's application and points at the parts of i
 
 The object is strict, so nothing undeclared rides along, and it holds no credentials, settings values or customer data.
 
-At most one plugin in a project declares an application. Cooperating plugins contribute their own parts and are listed in [`worksWith`](#workswith); a second declaration makes the application unavailable rather than picking a winner. The host resolves the application each time the project's plugins change and sends it to the project's views with their plugin inventory, as one of:
+At most one plugin in a project declares an application. Cooperating plugins contribute their own parts and are listed in [`worksWith`](#workswith); a second declaration makes the application unavailable rather than picking a winner. An owner whose `engines.daintree` range excludes the running Daintree is not loaded at all, unlike a plugin without an application, for which the range only warns. The host resolves the application each time the project's plugins change and sends it to the project's views with their plugin inventory, as one of:
 
 - `loading` — the owner is trusted and has not finished loading.
 - `active` — the owner is loaded and the application is in force.
@@ -301,7 +301,7 @@ At most one plugin in a project declares an application. Cooperating plugins con
 - `unavailable` — the owner failed to load, its `engines.daintree` range excludes the running Daintree, or a second plugin also declares an application.
 - `replaced` — the owner is loaded, but another plugin holds the project Home it opens on.
 
-Anything but `active` shows the standard workspace. Its defaults never outrank the user: an answer the user gave about Home, a surface or the project's presentation profile stands, and resolving the application writes nothing.
+Anything but `active` means the standard workspace. The descriptor and its state are a contract for the host's own application features to build on: they change nothing the workspace draws today, where the contributions it names behave exactly as they do without it, and resolving the application writes nothing. Its defaults will never outrank the user: an answer the user gave about Home, a surface or the project's presentation profile stands.
 
 ### `remote`
 

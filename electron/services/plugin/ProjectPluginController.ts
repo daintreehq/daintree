@@ -1061,6 +1061,25 @@ export class ProjectPluginController {
       }
 
       if (entry.loaded.has(manifestId)) continue;
+
+      if (d.manifest.application !== undefined) {
+        // An application's engine range is checked before it runs, not after:
+        // an owner this Daintree can't run would otherwise claim the project's
+        // Home and activate while being reported unavailable. Other plugins
+        // keep the advisory range (#12589).
+        const range = d.manifest.engines?.daintree;
+        if (range !== undefined && this.deps.isEngineIncompatible(range)) {
+          logger.warn("Not loading a project application outside its engines.daintree range", {
+            projectId,
+            manifestId,
+            range,
+          });
+          continue;
+        }
+        // Say the application is loading while it does, so the project's views
+        // are not left on the previous state for the length of the load.
+        this.emitChanged(projectId);
+      }
       await this.load(projectId, entry, d, generation);
     }
 

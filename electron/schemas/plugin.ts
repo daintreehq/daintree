@@ -4570,21 +4570,30 @@ function buildPluginManifestSchema(origin: PluginOrigin) {
             "application_engine_required"
           );
         }
-        if (application.destination === "home" && manifest.contributes.surfaces.projectHome === undefined) {
+        if (
+          application.destination === "home" &&
+          manifest.contributes.surfaces.projectHome === undefined
+        ) {
           issue(
             ["destination"],
             'application.destination "home" needs contributes.surfaces.projectHome, the Home it opens on.',
             "application_home_unclaimed"
           );
         }
-        if (application.sidebarViewId !== undefined && !sidebarViewIds.has(application.sidebarViewId)) {
+        if (
+          application.sidebarViewId !== undefined &&
+          !sidebarViewIds.has(application.sidebarViewId)
+        ) {
           issue(
             ["sidebarViewId"],
             `application.sidebarViewId "${application.sidebarViewId}" matches no contributes.views[] entry with location "sidebar".`,
             "application_sidebar_view_unknown"
           );
         }
-        if (application.settingsViewId !== undefined && !settingsViewIds.has(application.settingsViewId)) {
+        if (
+          application.settingsViewId !== undefined &&
+          !settingsViewIds.has(application.settingsViewId)
+        ) {
           issue(
             ["settingsViewId"],
             `application.settingsViewId "${application.settingsViewId}" matches no contributes.views[] entry with location "settings".`,

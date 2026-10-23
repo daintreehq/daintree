@@ -93,9 +93,12 @@ describe("manifest application descriptor (#14097)", () => {
 
   it("accepts the minimum: a name and a grid destination", () => {
     const result = parse(
-      manifest({ name: "Ledger", destination: "grid" }, {
-        contributes: {},
-      })
+      manifest(
+        { name: "Ledger", destination: "grid" },
+        {
+          contributes: {},
+        }
+      )
     );
     expect(issues(result)).toEqual([]);
   });
@@ -137,7 +140,11 @@ describe("manifest application descriptor (#14097)", () => {
   it.each([
     [{ sidebarViewId: "missing" }, "application_sidebar_view_unknown", "application.sidebarViewId"],
     [{ sidebarViewId: "prefs" }, "application_sidebar_view_unknown", "application.sidebarViewId"],
-    [{ settingsViewId: "books" }, "application_settings_view_unknown", "application.settingsViewId"],
+    [
+      { settingsViewId: "books" },
+      "application_settings_view_unknown",
+      "application.settingsViewId",
+    ],
     [
       { welcomeTour: { id: "missing", version: 1 } },
       "application_tour_unknown",
@@ -176,6 +183,17 @@ describe("manifest application descriptor (#14097)", () => {
     expect(issues(parse(withApplication({ welcomeTour: { id: "welcome", version } })))).toEqual([
       { code: expect.any(String), path: "application.welcomeTour.version" },
     ]);
+  });
+
+  it("trims the name it keeps", () => {
+    const result = parse(withApplication({ name: "  Ledger  " }));
+    expect(result.success && result.data.application?.name).toBe("Ledger");
+  });
+
+  it("rejects unknown welcome tour keys", () => {
+    expect(
+      issues(parse(withApplication({ welcomeTour: { id: "welcome", version: 1, autoplay: true } })))
+    ).toEqual([{ code: "unrecognized_keys", path: "application.welcomeTour" }]);
   });
 
   it("rejects a blank name", () => {

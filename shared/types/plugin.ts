@@ -1499,17 +1499,13 @@ export interface PluginApplicationDescriptor {
  * - `replaced` — the owner is loaded, but another plugin holds the project
  *   Home it lands on.
  *
- * Anything but `active` shows the standard workspace.
+ * Anything but `active` means the standard workspace.
  */
-export type ProjectApplicationStatus = "loading" | "active" | "disabled" | "unavailable" | "replaced";
+export type ProjectApplicationStatus =
+  "loading" | "active" | "disabled" | "unavailable" | "replaced";
 
 export type ProjectApplicationReason =
-  | "untrusted"
-  | "muted"
-  | "staged"
-  | "load-failed"
-  | "engine-incompatible"
-  | "owner-ambiguous";
+  "untrusted" | "muted" | "staged" | "load-failed" | "engine-incompatible" | "owner-ambiguous";
 
 /** One project's application, resolved. `null` where no plugin declares one. */
 export interface ProjectApplicationState {
