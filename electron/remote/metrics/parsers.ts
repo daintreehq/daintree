@@ -193,3 +193,37 @@ export function cpuPercentBetween(
   if (total <= 0) return null;
   return Math.min(100, Math.max(0, (busy / total) * 100));
 }
+
+/** A `sysctl -n` core count: a whole positive number and nothing else, or null. */
+export function parseSysctlCoreCount(text: string | null): number | null {
+  const trimmed = text?.trim();
+  if (!trimmed || !/^\d+$/.test(trimmed)) return null;
+  const value = Number(trimmed);
+  return Number.isSafeInteger(value) && value > 0 ? value : null;
+}
+
+/**
+ * Busy share of each Apple Silicon cluster between two `os.cpus()` readings.
+ * libuv lists cores in kernel logical-cpu-id order, which on Apple Silicon puts
+ * the efficiency cluster first (`ioreg -p IODeviceTree` reports `cluster-type`
+ * E for the lowest ids). That holds only while the cluster sizes account for
+ * every core, so any mismatch leaves both shares null rather than guessing.
+ */
+export function clusterCpuPercentBetween(
+  previous: readonly CpuTimes[] | null,
+  next: readonly CpuTimes[],
+  efficiencyCores: number | null,
+  performanceCores: number | null
+): { efficiency: number | null; performance: number | null } {
+  const unknown = { efficiency: null, performance: null };
+  if (!efficiencyCores || !performanceCores) return unknown;
+  if (efficiencyCores + performanceCores !== next.length) return unknown;
+  if (!previous || previous.length !== next.length) return unknown;
+  return {
+    efficiency: cpuPercentBetween(
+      previous.slice(0, efficiencyCores),
+      next.slice(0, efficiencyCores)
+    ),
+    performance: cpuPercentBetween(previous.slice(efficiencyCores), next.slice(efficiencyCores)),
+  };
+}

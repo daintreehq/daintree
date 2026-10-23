@@ -104,12 +104,20 @@ export const DriverObservationSchema = z.object({
 
 const nullableCount = z.number().finite().min(0).nullable();
 const count = z.number().int().min(0);
+const coreCount = z.number().int().min(1).max(4096);
+const percent = z.number().finite().min(0).max(100);
 
 const HostSummarySchema = z.object({
   hostId: id,
   sampledAt: epochMs,
   platform: z.enum(["darwin", "linux"]),
   cpuPercent: z.number().finite().nullable(),
+  cpuLogicalCoreCount: coreCount.nullable().optional(),
+  cpuLoadAverage1m: z.number().finite().min(0).nullable().optional(),
+  cpuPerformanceCoreCount: coreCount.nullable().optional(),
+  cpuEfficiencyCoreCount: coreCount.nullable().optional(),
+  cpuPerformancePercent: percent.nullable().optional(),
+  cpuEfficiencyPercent: percent.nullable().optional(),
   memoryPressure: z.enum(["normal", "warn", "critical"]).nullable(),
   memoryUsedBytes: nullableCount,
   memoryTotalBytes: nullableCount,

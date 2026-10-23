@@ -23,6 +23,7 @@ import {
   getWorkspaceClientRef,
 } from "../../window/serviceRefs.js";
 import { executableForSpawn } from "../../utils/windowsExecutable.js";
+import { readSystemMemorySnapshot } from "../../utils/systemMemory.js";
 import { getSanitizedProcessEnv } from "../../utils/gitEnv.js";
 import { createForgeObserver } from "./hostForges.js";
 import { nameLeases } from "./driverObservations.js";
@@ -232,7 +233,8 @@ export function createHostSampleSources(now: () => number = Date.now): HostSampl
     platform,
     cpus: () => os.cpus().map((cpu) => cpu.times),
     totalmem: () => os.totalmem(),
-    freemem: () => os.freemem(),
+    systemMemorySnapshot: () => readSystemMemorySnapshot(),
+    loadavg: () => os.loadavg(),
     readText,
     run: runCommand,
     listDir,

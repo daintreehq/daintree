@@ -9,9 +9,58 @@ import {
   messageToFrame,
 } from "../messages.js";
 import { parseInboundFrame } from "../schemas.js";
-import { MAX_HOST_SUMMARY_DRIVERS } from "../../../../shared/types/remoteHosts.js";
+import {
+  MAX_HOST_SUMMARY_DRIVERS,
+  type HostMetricsSummary,
+} from "../../../../shared/types/remoteHosts.js";
+
+const hostSummary = (extra: object) =>
+  parseInboundFrame(
+    messageToFrame({
+      lane: Lane.CONTROL,
+      kind: ControlKind.HOST_SUMMARY,
+      body: {
+        hostId: "local",
+        sampledAt: 1,
+        platform: "darwin",
+        cpuPercent: null,
+        memoryPressure: null,
+        memoryUsedBytes: null,
+        memoryTotalBytes: null,
+        swapUsedBytes: null,
+        swapTotalBytes: null,
+        thermal: null,
+        cpuPressure: null,
+        agentsObserved: null,
+        projectCount: null,
+        worktreeCount: null,
+        driver: null,
+        agentClis: [],
+        ...extra,
+      },
+    } as never)
+  ).body as HostMetricsSummary;
 
 describe("link messages", () => {
+  it("carries a summary's CPU scale and clusters, and one from a host that sends none", () => {
+    const cpu = {
+      cpuLogicalCoreCount: 14,
+      cpuLoadAverage1m: 6.4,
+      cpuPerformanceCoreCount: 10,
+      cpuEfficiencyCoreCount: 4,
+      cpuPerformancePercent: 65,
+      cpuEfficiencyPercent: 9.5,
+    };
+    expect(hostSummary(cpu)).toMatchObject(cpu);
+    const unknown = Object.fromEntries(Object.keys(cpu).map((key) => [key, null]));
+    expect(hostSummary(unknown)).toMatchObject(unknown);
+    const legacy = hostSummary({});
+    for (const key of Object.keys(cpu)) expect(legacy).not.toHaveProperty(key);
+    expect(() => hostSummary({ cpuLogicalCoreCount: 0 })).toThrow();
+    expect(() => hostSummary({ cpuPerformancePercent: 101 })).toThrow();
+    expect(() => hostSummary({ cpuLoadAverage1m: -1 })).toThrow();
+  });
+
   it("carries a summary's drivers, and one from a host that sends none, within its bound", () => {
     const summary = (extra: object) =>
       parseInboundFrame(

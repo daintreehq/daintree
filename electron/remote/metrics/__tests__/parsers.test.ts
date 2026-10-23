@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  clusterCpuPercentBetween,
   cpuPercentBetween,
   parseCgroupMemory,
   parseDarwinPressureLevel,
@@ -7,6 +8,7 @@ import {
   parseIoregGpuUtilization,
   parseMeminfo,
   parsePsi,
+  parseSysctlCoreCount,
   parseThermalZoneTemp,
   psiToMemoryPressure,
   thermalFromCelsius,
@@ -164,5 +166,43 @@ describe("cpuPercentBetween", () => {
 
   it("is null when counters went backwards", () => {
     expect(cpuPercentBetween([core(100, 100)], [core(50, 200)])).toBeNull();
+  });
+});
+
+describe("parseSysctlCoreCount", () => {
+  it("reads a whole positive count", () => {
+    expect(parseSysctlCoreCount("10\n")).toBe(10);
+  });
+
+  it("is null for a missing sysctl or anything but a positive whole number", () => {
+    for (const text of [null, "", "0", "-4", "4.5", "4 cores", "abc"]) {
+      expect(parseSysctlCoreCount(text)).toBeNull();
+    }
+  });
+});
+
+describe("clusterCpuPercentBetween", () => {
+  const core = (user: number, idle: number) => ({ user, nice: 0, sys: 0, idle, irq: 0 });
+  // Two efficiency cores barely busy, then three performance cores mostly busy.
+  const before = [core(0, 0), core(0, 0), core(0, 0), core(0, 0), core(0, 0)];
+  const after = [core(10, 90), core(10, 90), core(80, 20), core(60, 40), core(70, 30)];
+
+  it("splits the busy share with the efficiency cluster first", () => {
+    const split = clusterCpuPercentBetween(before, after, 2, 3);
+    expect(split.efficiency).toBeCloseTo(10);
+    expect(split.performance).toBeCloseTo(70);
+  });
+
+  it("leaves both shares unknown when the clusters don't account for every core", () => {
+    const unknown = { efficiency: null, performance: null };
+    expect(clusterCpuPercentBetween(before, after, 2, 2)).toEqual(unknown);
+    expect(clusterCpuPercentBetween(before, after, null, 3)).toEqual(unknown);
+    expect(clusterCpuPercentBetween(before, after, 2, null)).toEqual(unknown);
+  });
+
+  it("is unknown on the first reading or a changed core count", () => {
+    const unknown = { efficiency: null, performance: null };
+    expect(clusterCpuPercentBetween(null, after, 2, 3)).toEqual(unknown);
+    expect(clusterCpuPercentBetween(before.slice(1), after, 2, 3)).toEqual(unknown);
   });
 });

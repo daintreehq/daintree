@@ -5,14 +5,17 @@ import type {
   HostMetricsSummary,
   HostPlatform,
 } from "../../../shared/types/remoteHosts.js";
+import type { SystemMemorySnapshot } from "../../utils/systemMemory.js";
 import { LOCAL_HOST_ID, MAX_HOST_SUMMARY_DRIVERS } from "../../../shared/types/remoteHosts.js";
 import {
+  clusterCpuPercentBetween,
   cpuPercentBetween,
   parseCgroupMemory,
   parseDarwinPressureLevel,
   parseDarwinSwapUsage,
   parseMeminfo,
   parsePsi,
+  parseSysctlCoreCount,
   parseThermalZoneTemp,
   psiToMemoryPressure,
   thermalFromCelsius,
@@ -34,7 +37,10 @@ export interface HostSampleSources {
   platform: HostPlatform;
   cpus(): CpuTimes[];
   totalmem(): number;
-  freemem(): number;
+  /** Activity Monitor style memory, the reading Daintree's own reclaim uses; null when unavailable. */
+  systemMemorySnapshot(): SystemMemorySnapshot | null;
+  /** `os.loadavg()`: the 1, 5 and 15 minute load averages. */
+  loadavg(): number[];
   /** A small text file's contents, or null when it can't be read. */
   readText(path: string): Promise<string | null>;
   /** A command's stdout, or null when it failed or isn't there. No shell. */
@@ -65,6 +71,11 @@ export type SampleReaders = Pick<HostSampleSources, "agents" | "projects" | "dri
 
 const LINUX_THERMAL_DIR = "/sys/class/thermal";
 
+interface CpuClusters {
+  performance: number | null;
+  efficiency: number | null;
+}
+
 async function settle<T>(read: () => Promise<T>, fallback: T): Promise<T> {
   try {
     return await read();
@@ -80,17 +91,21 @@ async function settle<T>(read: () => Promise<T>, fallback: T): Promise<T> {
  */
 export class HostMetricsSampler {
   private previousCpus: CpuTimes[] | null = null;
+  /** Cluster sizes are hardware: read once, an unknown answer included. */
+  private clusters: Promise<CpuClusters> | null = null;
 
   constructor(private readonly sources: HostSampleSources) {}
 
   async sample(): Promise<HostMetricsSummary> {
     const s = this.sources;
     const cpus = s.cpus();
-    const cpuPercent = cpuPercentBetween(this.previousCpus, cpus);
+    const previousCpus = this.previousCpus;
+    const cpuPercent = cpuPercentBetween(previousCpus, cpus);
     this.previousCpus = cpus;
     const readers: SampleReaders = s.beginSample?.() ?? s;
 
-    const [memory, agents, projects, agentClis, forges] = await Promise.all([
+    const [clusters, memory, agents, projects, agentClis, forges] = await Promise.all([
+      this.cpuClusters(),
       settle(() => (s.platform === "darwin" ? this.darwinMemory() : this.linuxMemory()), {
         memoryPressure: null,
         memoryUsedBytes: null,
@@ -131,11 +146,24 @@ export class HostMetricsSampler {
       drivers = null;
     }
 
+    const clusterPercent = clusterCpuPercentBetween(
+      previousCpus,
+      cpus,
+      clusters.efficiency,
+      clusters.performance
+    );
+
     return {
       hostId: LOCAL_HOST_ID,
       sampledAt: s.now(),
       platform: s.platform,
       cpuPercent,
+      cpuLogicalCoreCount: cpus.length > 0 ? cpus.length : null,
+      cpuLoadAverage1m: this.loadAverage1m(),
+      cpuPerformanceCoreCount: clusters.performance,
+      cpuEfficiencyCoreCount: clusters.efficiency,
+      cpuPerformancePercent: clusterPercent.performance,
+      cpuEfficiencyPercent: clusterPercent.efficiency,
       ...memory,
       agentsObserved: agents,
       projectCount: projects.projectCount,
@@ -154,17 +182,56 @@ export class HostMetricsSampler {
       s.run("/usr/sbin/sysctl", ["-n", "vm.swapusage"]),
     ]);
     const total = s.totalmem();
-    const free = s.freemem();
     const swapUsage = parseDarwinSwapUsage(swap);
     return {
       memoryPressure: parseDarwinPressureLevel(level),
       memoryTotalBytes: total > 0 ? total : null,
-      memoryUsedBytes: total > 0 ? Math.max(0, total - free) : null,
+      memoryUsedBytes: total > 0 ? this.darwinUsedBytes(total) : null,
       swapUsedBytes: swapUsage?.usedBytes ?? null,
       swapTotalBytes: swapUsage?.totalBytes ?? null,
       thermal: s.thermalState(),
       cpuPressure: null,
     };
+  }
+
+  /**
+   * Total less what Activity Monitor counts as available (free + purgeable +
+   * file-backed), so file cache isn't read as used. Unknown, never the
+   * cache-inclusive figure, when that reading isn't there.
+   */
+  private darwinUsedBytes(total: number): number | null {
+    let snapshot: SystemMemorySnapshot | null;
+    try {
+      snapshot = this.sources.systemMemorySnapshot();
+    } catch {
+      return null;
+    }
+    if (!snapshot) return null;
+    return Math.max(0, total - snapshot.availableMb * 1024 * 1024);
+  }
+
+  private loadAverage1m(): number | null {
+    try {
+      const value = this.sources.loadavg()[0];
+      return value !== undefined && Number.isFinite(value) && value >= 0 ? value : null;
+    } catch {
+      return null;
+    }
+  }
+
+  private cpuClusters(): Promise<CpuClusters> {
+    if (this.sources.platform !== "darwin") {
+      return Promise.resolve({ performance: null, efficiency: null });
+    }
+    // perflevel0 is the performance cluster, perflevel1 efficiency; Intel Macs have neither.
+    this.clusters ??= Promise.all([
+      settle(() => this.sources.run("/usr/sbin/sysctl", ["-n", "hw.perflevel0.logicalcpu"]), null),
+      settle(() => this.sources.run("/usr/sbin/sysctl", ["-n", "hw.perflevel1.logicalcpu"]), null),
+    ]).then(([performance, efficiency]) => ({
+      performance: parseSysctlCoreCount(performance),
+      efficiency: parseSysctlCoreCount(efficiency),
+    }));
+    return this.clusters;
   }
 
   private async linuxMemory() {

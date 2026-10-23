@@ -80,6 +80,13 @@ describe("HostCallRuntime (#13493, #13496)", () => {
           summary: {
             sampledAt: 950,
             cpuPercent: 40,
+            // The summary's CPU scale stays out of host.list's MCP-facing load.
+            cpuLogicalCoreCount: 14,
+            cpuLoadAverage1m: 6.4,
+            cpuPerformanceCoreCount: 10,
+            cpuEfficiencyCoreCount: 4,
+            cpuPerformancePercent: 65,
+            cpuEfficiencyPercent: 9.5,
             memoryPressure: null,
             thermal: "nominal",
             agentsObserved: { working: 2, waiting: 1, idle: 0 },

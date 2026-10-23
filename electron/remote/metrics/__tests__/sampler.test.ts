@@ -11,7 +11,15 @@ function sources(overrides: Partial<HostSampleSources> = {}): HostSampleSources 
       return [{ user: tick * 100, nice: 0, sys: 0, idle: tick * 100, irq: 0 }];
     },
     totalmem: () => 8 * 1024 ** 3,
-    freemem: () => 2 * 1024 ** 3,
+    // 2 GiB free beside 3 GiB of reclaimable cache: what Activity Monitor counts as available.
+    systemMemorySnapshot: () => ({
+      totalMb: 8 * 1024,
+      freeMb: 2 * 1024,
+      purgeableMb: 0,
+      fileBackedMb: 3 * 1024,
+      availableMb: 5 * 1024,
+    }),
+    loadavg: () => [0, 0, 0],
     readText: async () => null,
     run: async () => null,
     listDir: async () => [],
@@ -150,7 +158,9 @@ describe("HostMetricsSampler", () => {
         run: async (_command, args) =>
           args.includes("kern.memorystatus_vm_pressure_level")
             ? "4\n"
-            : "total = 1024.00M  used = 256.00M  free = 768.00M",
+            : args.includes("vm.swapusage")
+              ? "total = 1024.00M  used = 256.00M  free = 768.00M"
+              : null,
         thermalState: () => "fair",
       })
     ).sample();
@@ -158,12 +168,119 @@ describe("HostMetricsSampler", () => {
       platform: "darwin",
       memoryPressure: "critical",
       memoryTotalBytes: 8 * 1024 ** 3,
-      memoryUsedBytes: 6 * 1024 ** 3,
+      memoryUsedBytes: 3 * 1024 ** 3,
       swapTotalBytes: 1024 * 1024 ** 2,
       swapUsedBytes: 256 * 1024 ** 2,
       thermal: "fair",
       cpuPressure: null,
     });
+  });
+
+  it("reports macOS memory used as unknown when the Activity Monitor reading isn't there", async () => {
+    for (const systemMemorySnapshot of [
+      () => null,
+      () => {
+        throw new Error("no getSystemMemoryInfo");
+      },
+    ]) {
+      const summary = await new HostMetricsSampler(
+        sources({ platform: "darwin", systemMemorySnapshot })
+      ).sample();
+      expect(summary.memoryUsedBytes).toBeNull();
+      expect(summary.memoryTotalBytes).toBe(8 * 1024 ** 3);
+    }
+  });
+
+  it("carries the core count and 1 minute load average the CPU reading covers", async () => {
+    const summary = await new HostMetricsSampler(sources({ loadavg: () => [3.25, 2, 1] })).sample();
+    expect(summary).toMatchObject({ cpuLogicalCoreCount: 1, cpuLoadAverage1m: 3.25 });
+    for (const loadavg of [
+      () => [Number.NaN, 0, 0],
+      () => [],
+      () => {
+        throw new Error("no loadavg");
+      },
+    ]) {
+      expect((await new HostMetricsSampler(sources({ loadavg })).sample()).cpuLoadAverage1m).toBe(
+        null
+      );
+    }
+  });
+
+  it("splits Apple Silicon load by cluster, efficiency cores first, reading the sizes once", async () => {
+    let tick = 0;
+    let probes = 0;
+    const sampler = new HostMetricsSampler(
+      sources({
+        platform: "darwin",
+        cpus: () => {
+          tick += 1;
+          // One efficiency core 10% busy, two performance cores 60% busy.
+          return [
+            { user: tick * 10, nice: 0, sys: 0, idle: tick * 90, irq: 0 },
+            { user: tick * 60, nice: 0, sys: 0, idle: tick * 40, irq: 0 },
+            { user: tick * 60, nice: 0, sys: 0, idle: tick * 40, irq: 0 },
+          ];
+        },
+        run: async (_command, args) => {
+          if (args.includes("hw.perflevel0.logicalcpu")) return ((probes += 1), "2\n");
+          if (args.includes("hw.perflevel1.logicalcpu")) return ((probes += 1), "1\n");
+          return null;
+        },
+      })
+    );
+    const first = await sampler.sample();
+    expect(first).toMatchObject({
+      cpuLogicalCoreCount: 3,
+      cpuPerformanceCoreCount: 2,
+      cpuEfficiencyCoreCount: 1,
+      cpuPerformancePercent: null,
+      cpuEfficiencyPercent: null,
+    });
+    const second = await sampler.sample();
+    expect(second.cpuPerformancePercent).toBeCloseTo(60);
+    expect(second.cpuEfficiencyPercent).toBeCloseTo(10);
+    expect(probes).toBe(2);
+  });
+
+  it("reports cluster sizes without a split when they don't match the cores read", async () => {
+    const sampler = new HostMetricsSampler(
+      sources({
+        platform: "darwin",
+        run: async (_command, args) =>
+          args.includes("hw.perflevel0.logicalcpu")
+            ? "10"
+            : args.includes("hw.perflevel1.logicalcpu")
+              ? "4"
+              : null,
+      })
+    );
+    await sampler.sample();
+    expect(await sampler.sample()).toMatchObject({
+      cpuPercent: 50,
+      cpuPerformanceCoreCount: 10,
+      cpuEfficiencyCoreCount: 4,
+      cpuPerformancePercent: null,
+      cpuEfficiencyPercent: null,
+    });
+  });
+
+  it("reports no clusters on Linux or a Mac without performance levels, and never probes Linux", async () => {
+    const probed: string[][] = [];
+    const run = async (_command: string, args: string[]) => (probed.push(args), null);
+    for (const platform of ["linux", "darwin"] as const) {
+      const sampler = new HostMetricsSampler(sources({ platform, run }));
+      await sampler.sample();
+      expect(await sampler.sample()).toMatchObject({
+        cpuPerformanceCoreCount: null,
+        cpuEfficiencyCoreCount: null,
+        cpuPerformancePercent: null,
+        cpuEfficiencyPercent: null,
+      });
+    }
+    expect(
+      probed.filter((args) => args.some((arg) => arg.startsWith("hw.perflevel")))
+    ).toHaveLength(2);
   });
 
   it("keeps sampling when one source throws", async () => {
