@@ -111,6 +111,7 @@ vi.mock("@/controllers/helpSessionControllerRegistry", () => ({
 }));
 
 import { registerHelpActions } from "../helpActions";
+import "../helpActions.impl";
 import {
   markHelpPanelRuntimeMounted,
   onHelpPanelRuntimeRequested,
