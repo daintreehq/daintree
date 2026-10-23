@@ -2,15 +2,14 @@
 // `runTerminalLifecycleAction` in terminalLifecycleActions.ts, which keeps the
 // metadata every view registers at boot (#14273). Nothing here may import
 // terminalLifecycleActions.ts at runtime.
-import type { ActionCallbacks } from "../actionTypes";
-import type { ActionContext, ActionSource } from "@shared/types/actions";
+import type { ActionContext } from "@shared/types/actions";
 import {
   ConfirmationStagedError,
   confirmationStagedMessage,
 } from "@/services/actions/confirmationStaged";
 import { terminalClient } from "@/clients";
 import { terminalInstanceService } from "@/services/terminal/TerminalInstanceService";
-import { flushOptimisticCloses, requestPanelClose } from "@/services/terminal/optimisticPanelClose";
+import { requestPanelClose } from "@/services/terminal/optimisticPanelClose";
 import { consultPanelCloseGuards, hasPanelCloseGuard } from "@/services/panelCloseGuard";
 import { fireWatchNotification } from "@/lib/watchNotification";
 import { usePanelStore } from "@/store/panelStore";
@@ -96,84 +95,7 @@ function clearPendingIf(kind: TerminalPendingDestructiveActionKind): void {
   }
 }
 
-/**
- * Which of `ids` have actually left the open roster, read after the canonical
- * teardown ran. `trashPanel` keeps the record and moves it to `location:
- * "trash"`, but remove-on-exit and dialog panels bypass trash entirely and are
- * removed outright, so a missing record counts as closed too.
- */
-function closedPanelIds(ids: readonly string[]): string[] {
-  const { panelsById } = usePanelStore.getState();
-  return ids.filter((id) => {
-    if (!Object.hasOwn(panelsById, id)) return true;
-    return panelsById[id]?.location === "trash";
-  });
-}
-
-/**
- * Resolve a close before returning when nobody is watching the screen.
- *
- * The optimistic coordinator defers the canonical teardown past paint, which is
- * right for a click and wrong for an automated caller: it has no frame to
- * protect and it reads the roster straight after the ack, so a deferred commit
- * hands back the panel it just closed (#11805). Flushing drains *every* queued
- * close rather than just this one — the same trade `terminal.reopenLast`
- * already makes, and the reason a duplicate close still resolves truthfully:
- * `requestPanelClose` drops it as already-closing, but the flush commits the
- * earlier request that owns it.
- */
-function settleCloseForDispatch(ids: readonly string[], ctx: { dispatchSource?: ActionSource }) {
-  if (isForegroundDispatch(ctx?.dispatchSource)) {
-    // The commit is still queued, so this names what was accepted for close.
-    // A person watching the grid is the real feedback channel here.
-    return { closedIds: [...ids] };
-  }
-  flushOptimisticCloses();
-  return { closedIds: closedPanelIds(ids) };
-}
-
 export const terminalLifecycleActionRuns = {
-  "terminal.close": async (args: unknown, ctx: ActionContext) => {
-    const { terminalId } = (args as { terminalId?: string } | undefined) ?? {};
-    // Guard before the store read: this chain falls past focus all the way to
-    // "any visible panel", so an unbound agent call would trash something
-    // essentially at random.
-    requireExplicitTerminalIdForAgentDispatch("terminal.close", terminalId, ctx);
-    const state = usePanelStore.getState();
-    // A named panel that isn't tracked is a caller mistake, not a no-op:
-    // `trashPanel` ignores an unknown id silently, so without this the call
-    // reports success for a typo (#11805). `Object.hasOwn` rather than a
-    // truthiness check: `panelsById` is a plain object, so an id like
-    // "constructor" would otherwise resolve off the prototype and get trashed
-    // as if it were a real panel.
-    if (terminalId !== undefined && !Object.hasOwn(state.panelsById, terminalId)) {
-      return throwTerminalMiss("terminal.close", terminalId);
-    }
-    const targetId =
-      terminalId ??
-      state.focusedId ??
-      state.panelIds.find(
-        (id) =>
-          state.panelsById[id]?.location !== "trash" &&
-          state.panelsById[id]?.location !== "background"
-      );
-    if (!targetId) return { closedIds: [] };
-    const target = Object.hasOwn(state.panelsById, targetId)
-      ? state.panelsById[targetId]
-      : undefined;
-    // A stale `focusedId`, or a panel already trashed. Re-trashing resets the
-    // recovery TTL and rewrites the recorded restore location, so leave it be
-    // and report that nothing closed.
-    if (!target || target.location === "trash") return { closedIds: [] };
-    // Optimistic close: hide the panel now, trash it after the removal has
-    // painted. The coordinator advances focus synchronously so a rapid Cmd+W
-    // stream keeps closing fresh panels instead of re-targeting this one.
-    requestPanelClose({
-      hideIds: [targetId],
-      commit: () => usePanelStore.getState().trashPanel(targetId),
-    });
-    return settleCloseForDispatch([targetId], ctx);
-  },
   "terminal.trash": async (args: unknown, ctx: ActionContext) => {
     const { terminalId } = args as { terminalId?: string };
     requireExplicitTerminalIdForAgentDispatch("terminal.trash", terminalId, ctx);
@@ -507,31 +429,7 @@ export const terminalLifecycleActionRuns = {
       await terminalClient.forceResume(targetId);
     }
   },
-  "terminal.closeAll": async (_args: unknown, ctx: ActionContext, callbacks: ActionCallbacks) => {
-    const state = usePanelStore.getState();
-    const activeWorktreeId = callbacks.getActiveWorktreeId();
-    // Skip tooling-internal panels — the Daintree Assistant's own dock
-    // terminal shouldn't get swept up by a "close all" command.
-    const idsToClose = state.panelIds.filter((id) => {
-      const t = state.panelsById[id];
-      if (!t) return false;
-      const isToolingInternal = isEphemeralPanel(t);
-      return (
-        !isToolingInternal &&
-        t.location !== "trash" &&
-        (t.worktreeId ?? undefined) === (activeWorktreeId ?? undefined)
-      );
-    });
-    if (idsToClose.length === 0) return { closedIds: [] };
-    requestPanelClose({
-      hideIds: idsToClose,
-      commit: () => {
-        const latest = usePanelStore.getState();
-        idsToClose.forEach((id) => latest.trashPanel(id));
-      },
-    });
-    return settleCloseForDispatch(idsToClose, ctx);
-  },
+
   "terminal.killAll": async (args: unknown, ctx: ActionContext) => {
     // Don't reuse bulkCloseAll() — it indiscriminately removes every panel,
     // including the tooling-internal assistant terminal. Filter those out
@@ -615,9 +513,6 @@ export const terminalLifecycleActionRuns = {
       }
     }
   },
-} satisfies Record<
-  string,
-  (args: unknown, ctx: ActionContext, callbacks: ActionCallbacks) => Promise<unknown>
->;
+} satisfies Record<string, (args: unknown, ctx: ActionContext) => Promise<unknown>>;
 
 export type TerminalLifecycleActionRunId = keyof typeof terminalLifecycleActionRuns;

@@ -1,8 +1,12 @@
 import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
-import type { ActionContext } from "@shared/types/actions";
+import type { ActionContext, ActionSource } from "@shared/types/actions";
 import { z } from "zod";
+import { flushOptimisticCloses, requestPanelClose } from "@/services/terminal/optimisticPanelClose";
 import { usePanelStore } from "@/store/panelStore";
-import { PanelPlacementResultSchema } from "./terminalPlacement";
+import { isEphemeralPanel } from "@/store/slices/panelRegistry/panelCount";
+import { requireExplicitTerminalIdForAgentDispatch } from "./terminalTargetBinding";
+import { isForegroundDispatch } from "./dispatchSource";
+import { PanelPlacementResultSchema, throwTerminalMiss } from "./terminalPlacement";
 import { TerminalRestoredSchema } from "./schemas";
 import {
   RestartOnPresetArgsSchema,
@@ -55,6 +59,42 @@ const TerminalKillBatchResultSchema = z.object({
 });
 
 /**
+ * Which of `ids` have actually left the open roster, read after the canonical
+ * teardown ran. `trashPanel` keeps the record and moves it to `location:
+ * "trash"`, but remove-on-exit and dialog panels bypass trash entirely and are
+ * removed outright, so a missing record counts as closed too.
+ */
+function closedPanelIds(ids: readonly string[]): string[] {
+  const { panelsById } = usePanelStore.getState();
+  return ids.filter((id) => {
+    if (!Object.hasOwn(panelsById, id)) return true;
+    return panelsById[id]?.location === "trash";
+  });
+}
+
+/**
+ * Resolve a close before returning when nobody is watching the screen.
+ *
+ * The optimistic coordinator defers the canonical teardown past paint, which is
+ * right for a click and wrong for an automated caller: it has no frame to
+ * protect and it reads the roster straight after the ack, so a deferred commit
+ * hands back the panel it just closed (#11805). Flushing drains *every* queued
+ * close rather than just this one — the same trade `terminal.reopenLast`
+ * already makes, and the reason a duplicate close still resolves truthfully:
+ * `requestPanelClose` drops it as already-closing, but the flush commits the
+ * earlier request that owns it.
+ */
+function settleCloseForDispatch(ids: readonly string[], ctx: { dispatchSource?: ActionSource }) {
+  if (isForegroundDispatch(ctx?.dispatchSource)) {
+    // The commit is still queued, so this names what was accepted for close.
+    // A person watching the grid is the real feedback channel here.
+    return { closedIds: [...ids] };
+  }
+  flushOptimisticCloses();
+  return { closedIds: closedPanelIds(ids) };
+}
+
+/**
  * Run bodies load on first dispatch (#14273). Every view registers these at
  * boot for menus, keybindings and the MCP manifest, but an empty view runs
  * none of them. A failed chunk load rejects inside `run`, which ActionService
@@ -63,11 +103,10 @@ const TerminalKillBatchResultSchema = z.object({
 async function runTerminalLifecycleAction(
   id: TerminalLifecycleActionRunId,
   args: unknown,
-  ctx: ActionContext,
-  callbacks: ActionCallbacks
+  ctx: ActionContext
 ): Promise<unknown> {
   const { terminalLifecycleActionRuns } = await import("./terminalLifecycleActions.impl");
-  return terminalLifecycleActionRuns[id](args, ctx, callbacks);
+  return terminalLifecycleActionRuns[id](args, ctx);
 }
 
 export function registerTerminalLifecycleActions(
@@ -96,8 +135,51 @@ export function registerTerminalLifecycleActions(
       .optional(),
     resultSchema: PanelCloseResultSchema,
     mcpOutputSchema: true,
-    run: (args: unknown, ctx: ActionContext) =>
-      runTerminalLifecycleAction("terminal.close", args, ctx, callbacks),
+    // Eager, unlike most runs here: the target is read from focus at the
+    // keystroke, and the optimistic hide advances focus synchronously so a
+    // rapid Cmd+W stream keeps closing fresh panels. A chunk load in between
+    // could close whatever focus moved to instead.
+    run: async (args: unknown, ctx) => {
+      const { terminalId } = (args as { terminalId?: string } | undefined) ?? {};
+      // Guard before the store read: this chain falls past focus all the way to
+      // "any visible panel", so an unbound agent call would trash something
+      // essentially at random.
+      requireExplicitTerminalIdForAgentDispatch("terminal.close", terminalId, ctx);
+      const state = usePanelStore.getState();
+      // A named panel that isn't tracked is a caller mistake, not a no-op:
+      // `trashPanel` ignores an unknown id silently, so without this the call
+      // reports success for a typo (#11805). `Object.hasOwn` rather than a
+      // truthiness check: `panelsById` is a plain object, so an id like
+      // "constructor" would otherwise resolve off the prototype and get trashed
+      // as if it were a real panel.
+      if (terminalId !== undefined && !Object.hasOwn(state.panelsById, terminalId)) {
+        return throwTerminalMiss("terminal.close", terminalId);
+      }
+      const targetId =
+        terminalId ??
+        state.focusedId ??
+        state.panelIds.find(
+          (id) =>
+            state.panelsById[id]?.location !== "trash" &&
+            state.panelsById[id]?.location !== "background"
+        );
+      if (!targetId) return { closedIds: [] };
+      const target = Object.hasOwn(state.panelsById, targetId)
+        ? state.panelsById[targetId]
+        : undefined;
+      // A stale `focusedId`, or a panel already trashed. Re-trashing resets the
+      // recovery TTL and rewrites the recorded restore location, so leave it be
+      // and report that nothing closed.
+      if (!target || target.location === "trash") return { closedIds: [] };
+      // Optimistic close: hide the panel now, trash it after the removal has
+      // painted. The coordinator advances focus synchronously so a rapid Cmd+W
+      // stream keeps closing fresh panels instead of re-targeting this one.
+      requestPanelClose({
+        hideIds: [targetId],
+        commit: () => usePanelStore.getState().trashPanel(targetId),
+      });
+      return settleCloseForDispatch([targetId], ctx);
+    },
   }));
 
   // Registered here purely for manifest metadata — schema, description, tier
@@ -194,7 +276,7 @@ export function registerTerminalLifecycleActions(
     scope: "renderer",
     argsSchema: z.object({ terminalId: z.string().optional() }),
     run: (args: unknown, ctx: ActionContext) =>
-      runTerminalLifecycleAction("terminal.trash", args, ctx, callbacks),
+      runTerminalLifecycleAction("terminal.trash", args, ctx),
   }));
 
   actions.set("terminal.background", () => ({
@@ -211,7 +293,7 @@ export function registerTerminalLifecycleActions(
     resultSchema: PanelPlacementResultSchema,
     mcpOutputSchema: true,
     run: (args: unknown, ctx: ActionContext) =>
-      runTerminalLifecycleAction("terminal.background", args, ctx, callbacks),
+      runTerminalLifecycleAction("terminal.background", args, ctx),
   }));
 
   actions.set("terminal.kill", () => ({
@@ -235,7 +317,7 @@ export function registerTerminalLifecycleActions(
         ),
     }),
     run: (args: unknown, ctx: ActionContext) =>
-      runTerminalLifecycleAction("terminal.kill", args, ctx, callbacks),
+      runTerminalLifecycleAction("terminal.kill", args, ctx),
   }));
 
   actions.set("terminal.killBatch", () => ({
@@ -259,7 +341,7 @@ export function registerTerminalLifecycleActions(
     resultSchema: TerminalKillBatchResultSchema,
     mcpOutputSchema: true,
     run: (args: unknown, ctx: ActionContext) =>
-      runTerminalLifecycleAction("terminal.killBatch", args, ctx, callbacks),
+      runTerminalLifecycleAction("terminal.killBatch", args, ctx),
   }));
 
   actions.set("terminal.restart", () => ({
@@ -284,7 +366,7 @@ export function registerTerminalLifecycleActions(
         ),
     }),
     run: (args: unknown, ctx: ActionContext) =>
-      runTerminalLifecycleAction("terminal.restart", args, ctx, callbacks),
+      runTerminalLifecycleAction("terminal.restart", args, ctx),
   }));
 
   actions.set("terminal.restartOnPreset", () => ({
@@ -304,7 +386,7 @@ export function registerTerminalLifecycleActions(
     palette: { mode: "hidden" },
     argsSchema: RestartOnPresetArgsSchema,
     run: (args: unknown, ctx: ActionContext) =>
-      runTerminalLifecycleAction("terminal.restartOnPreset", args, ctx, callbacks),
+      runTerminalLifecycleAction("terminal.restartOnPreset", args, ctx),
   }));
 
   actions.set("terminal.redraw", () => ({
@@ -318,7 +400,7 @@ export function registerTerminalLifecycleActions(
     keywords: ["refresh", "render", "repair", "display"],
     argsSchema: z.object({ terminalId: z.string().optional() }).optional(),
     run: (args: unknown, ctx: ActionContext) =>
-      runTerminalLifecycleAction("terminal.redraw", args, ctx, callbacks),
+      runTerminalLifecycleAction("terminal.redraw", args, ctx),
   }));
 
   actions.set("terminal.rename", () => ({
@@ -336,7 +418,7 @@ export function registerTerminalLifecycleActions(
       name: z.string().optional().describe("New title; omitted, opens the rename dialog."),
     }),
     run: (args: unknown, ctx: ActionContext) =>
-      runTerminalLifecycleAction("terminal.rename", args, ctx, callbacks),
+      runTerminalLifecycleAction("terminal.rename", args, ctx),
   }));
 
   actions.set("terminal.viewInfo", () => ({
@@ -350,7 +432,7 @@ export function registerTerminalLifecycleActions(
     keywords: ["details", "metadata", "inspect", "status"],
     argsSchema: z.object({ terminalId: z.string().optional() }),
     run: (args: unknown, ctx: ActionContext) =>
-      runTerminalLifecycleAction("terminal.viewInfo", args, ctx, callbacks),
+      runTerminalLifecycleAction("terminal.viewInfo", args, ctx),
   }));
 
   actions.set("terminal.info.open", () => ({
@@ -364,7 +446,7 @@ export function registerTerminalLifecycleActions(
     keywords: ["details", "metadata", "inspect", "status"],
     argsSchema: z.object({ terminalId: z.string().optional() }),
     run: (args: unknown, ctx: ActionContext) =>
-      runTerminalLifecycleAction("terminal.info.open", args, ctx, callbacks),
+      runTerminalLifecycleAction("terminal.info.open", args, ctx),
   }));
 
   actions.set("terminal.info.get", () => ({
@@ -430,7 +512,7 @@ export function registerTerminalLifecycleActions(
       restored: TerminalRestoredSchema.optional(),
     }),
     run: (args: unknown, ctx: ActionContext) =>
-      runTerminalLifecycleAction("terminal.info.get", args, ctx, callbacks),
+      runTerminalLifecycleAction("terminal.info.get", args, ctx),
   }));
 
   // The plugin-side half of "Resume agents after restart" (#13509, #14017): a
@@ -450,7 +532,7 @@ export function registerTerminalLifecycleActions(
     argsSchema: SetHoldOnRestartArgsSchema,
     resultSchema: z.object({ terminalId: z.string(), holdOnRestart: z.boolean() }),
     run: (args: unknown, ctx: ActionContext) =>
-      runTerminalLifecycleAction("terminal.setHoldOnRestart", args, ctx, callbacks),
+      runTerminalLifecycleAction("terminal.setHoldOnRestart", args, ctx),
   }));
 
   actions.set("terminal.toggleInputLock", () => ({
@@ -464,7 +546,7 @@ export function registerTerminalLifecycleActions(
     keywords: ["readonly", "typing", "disable", "keyboard"],
     argsSchema: z.object({ terminalId: z.string().optional() }),
     run: (args: unknown, ctx: ActionContext) =>
-      runTerminalLifecycleAction("terminal.toggleInputLock", args, ctx, callbacks),
+      runTerminalLifecycleAction("terminal.toggleInputLock", args, ctx),
   }));
 
   actions.set("terminal.forceResume", () => ({
@@ -478,7 +560,7 @@ export function registerTerminalLifecycleActions(
     keywords: ["wake", "unstick", "unpause", "stuck"],
     argsSchema: z.object({ terminalId: z.string().optional() }),
     run: (args: unknown, ctx: ActionContext) =>
-      runTerminalLifecycleAction("terminal.forceResume", args, ctx, callbacks),
+      runTerminalLifecycleAction("terminal.forceResume", args, ctx),
   }));
 
   actions.set("terminal.closeAll", () => ({
@@ -493,8 +575,33 @@ export function registerTerminalLifecycleActions(
     keywords: ["trash", "hide", "clear", "cleanup"],
     resultSchema: PanelCloseResultSchema,
     mcpOutputSchema: true,
-    run: (args: unknown, ctx: ActionContext) =>
-      runTerminalLifecycleAction("terminal.closeAll", args, ctx, callbacks),
+    // Eager for the same reason as terminal.close: "the active worktree" is
+    // the one at the keystroke, not the one after a chunk load.
+    run: async (_args: unknown, ctx) => {
+      const state = usePanelStore.getState();
+      const activeWorktreeId = callbacks.getActiveWorktreeId();
+      // Skip tooling-internal panels — the Daintree Assistant's own dock
+      // terminal shouldn't get swept up by a "close all" command.
+      const idsToClose = state.panelIds.filter((id) => {
+        const t = state.panelsById[id];
+        if (!t) return false;
+        const isToolingInternal = isEphemeralPanel(t);
+        return (
+          !isToolingInternal &&
+          t.location !== "trash" &&
+          (t.worktreeId ?? undefined) === (activeWorktreeId ?? undefined)
+        );
+      });
+      if (idsToClose.length === 0) return { closedIds: [] };
+      requestPanelClose({
+        hideIds: idsToClose,
+        commit: () => {
+          const latest = usePanelStore.getState();
+          idsToClose.forEach((id) => latest.trashPanel(id));
+        },
+      });
+      return settleCloseForDispatch(idsToClose, ctx);
+    },
   }));
 
   actions.set("terminal.killAll", () => ({
@@ -520,7 +627,7 @@ export function registerTerminalLifecycleActions(
       })
       .optional(),
     run: (args: unknown, ctx: ActionContext) =>
-      runTerminalLifecycleAction("terminal.killAll", args, ctx, callbacks),
+      runTerminalLifecycleAction("terminal.killAll", args, ctx),
   }));
 
   actions.set("terminal.restartAll", () => ({
@@ -536,7 +643,7 @@ export function registerTerminalLifecycleActions(
     keywords: ["relaunch", "reset", "rerun", "processes"],
     argsSchema: z.object({ confirmed: z.boolean().optional() }).optional(),
     run: (args: unknown, ctx: ActionContext) =>
-      runTerminalLifecycleAction("terminal.restartAll", args, ctx, callbacks),
+      runTerminalLifecycleAction("terminal.restartAll", args, ctx),
   }));
 
   actions.set("terminal.restartService", () => ({
@@ -556,7 +663,7 @@ export function registerTerminalLifecycleActions(
       return undefined;
     },
     run: (args: unknown, ctx: ActionContext) =>
-      runTerminalLifecycleAction("terminal.restartService", args, ctx, callbacks),
+      runTerminalLifecycleAction("terminal.restartService", args, ctx),
   }));
 
   actions.set("terminal.watch", () => ({
@@ -578,6 +685,6 @@ export function registerTerminalLifecycleActions(
       return undefined;
     },
     run: (args: unknown, ctx: ActionContext) =>
-      runTerminalLifecycleAction("terminal.watch", args, ctx, callbacks),
+      runTerminalLifecycleAction("terminal.watch", args, ctx),
   }));
 }
