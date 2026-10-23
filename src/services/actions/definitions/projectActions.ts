@@ -29,7 +29,6 @@ import { logWarn } from "@/utils/logger";
 import { isScratchWorkspaceId } from "@shared/utils/workspaceIds";
 import { suppressPaletteFocusRestore } from "@/components/ui/paletteFocusRestore";
 import { sleepIdleProjectsWithConfirm } from "@/hooks/useSleepIdleProjects";
-import { restartProject } from "@/services/projectRestart";
 
 /**
  * Wire shape of `project.getSettings`.
@@ -897,6 +896,9 @@ export function registerProjectActions(actions: ActionRegistry, callbacks: Actio
       // The window may have moved on while the dialog was open.
       if (useProjectStore.getState().currentProject?.id !== id) return { restarted: false };
 
+      // Loaded on use: the restart pulls in the whole hydration graph, which
+      // every action registration would otherwise pay for.
+      const { restartProject } = await import("@/services/projectRestart");
       const outcome = await restartProject(id);
       return { restarted: outcome === "restarted", outcome };
     },
