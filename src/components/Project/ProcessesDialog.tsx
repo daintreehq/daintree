@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type ReactElement } from "react";
 import { RefreshCw, Trash2 } from "lucide-react";
 import type { DevPreviewSessionState } from "@shared/types/ipc/devPreview";
+import type { HostPlatform } from "@shared/types/remoteHosts";
 import { isDevPreviewKind } from "@shared/types/panel";
 import type {
   ClosedProcessKillResult,
@@ -18,6 +19,7 @@ import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 import { terminalClient } from "@/clients/terminalClient";
 import { processesClient } from "@/clients/processesClient";
+import { cn } from "@/lib/utils";
 import { pluralize } from "@/lib/pluralize";
 import { isProjectViewCached } from "@/lib/viewCacheState";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
@@ -34,11 +36,19 @@ import {
   groupClosedProcesses,
   groupProcessesByProject,
   type ClosedProcessGroup,
+  type ProcessSort,
   pluginProcessTitle,
   sortPluginProcesses,
   terminalTitle,
   trashSecondsLeft,
+  unaccountedCores,
 } from "./processesView";
+import { formatCoreCount } from "./ProjectResourceBadge.utils";
+import {
+  ATTACHED_HOST_SOURCE,
+  type ProcessesReading,
+  type ProcessesSource,
+} from "./processesSource";
 
 const POLL_MS = 4_000;
 const TICK_MS = 1_000;
@@ -49,6 +59,15 @@ interface ProcessesDialogProps {
   isOpen: boolean;
   onClose: () => void;
   restoreFocusTo?: RestoreFocusTarget;
+  /** Where the list is read from; the host this window is attached to when omitted. Keep it stable. */
+  source?: ProcessesSource;
+  /** Whether rows can be ended: only for the host this window is attached to. */
+  canKill?: boolean;
+  /** Names the host in the title when the list isn't the attached host's. */
+  hostName?: string;
+  hostPlatform?: HostPlatform | null;
+  /** Cores the host reports busy, for saying how much the listed processes leave unaccounted for. */
+  hostBusyCores?: number | null;
 }
 
 /**
@@ -65,19 +84,22 @@ function incarnationKey(terminal: ProcessInventoryTerminal): string {
 }
 
 type ReadOutcome = {
-  snapshot: ProcessInventorySnapshot | null;
+  reading: ProcessesReading | null;
   snapshotError: unknown;
   sessions: DevPreviewSessionState[] | null;
 };
 
-/** Settled one by one: a failed session read must not hold back the list. */
-async function readProcesses(): Promise<ReadOutcome> {
+/**
+ * Settled one by one: a failed session read must not hold back the list.
+ * Sessions only matter to the Kill verb, so a read-only view never asks.
+ */
+async function readProcesses(source: ProcessesSource, canKill: boolean): Promise<ReadOutcome> {
   const [snapshotResult, sessionsResult] = await Promise.allSettled([
-    processesClient.getSnapshot(),
-    window.electron.devPreview.getAllSessions(),
+    source.read(),
+    canKill ? window.electron.devPreview.getAllSessions() : Promise.resolve(null),
   ]);
   return {
-    snapshot: snapshotResult.status === "fulfilled" ? snapshotResult.value : null,
+    reading: snapshotResult.status === "fulfilled" ? snapshotResult.value : null,
     snapshotError: snapshotResult.status === "rejected" ? snapshotResult.reason : null,
     sessions: sessionsResult.status === "fulfilled" ? sessionsResult.value : null,
   };
@@ -170,6 +192,37 @@ function describeClosedKillShortfall(
  */
 const ROW_GRID = "grid grid-cols-[minmax(0,1fr)_5rem_4.5rem_8rem] items-center gap-x-3";
 
+function SortButton({
+  current,
+  sort,
+  onSelect,
+  children,
+}: {
+  current: ProcessSort;
+  sort: ProcessSort;
+  onSelect: (sort: ProcessSort) => void;
+  children: string;
+}): ReactElement {
+  const active = current === sort;
+  return (
+    <button
+      type="button"
+      aria-pressed={active}
+      aria-label={`Sort by ${children.toLowerCase()}, highest first`}
+      onClick={() => onSelect(sort)}
+      className={cn(
+        "justify-self-end whitespace-nowrap rounded-[var(--radius-sm)] px-1 text-right text-xs",
+        "transition-colors hover:text-text-primary",
+        "focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-selection-outline",
+        active ? "font-medium text-text-primary" : "text-text-secondary"
+      )}
+    >
+      {children}
+      {active && <span aria-hidden="true"> ↓</span>}
+    </button>
+  );
+}
+
 function Reading({ label, value }: { label: string; value: string | null }): ReactElement {
   return (
     <span className="whitespace-nowrap text-right text-xs tabular-nums text-text-secondary">
@@ -234,8 +287,17 @@ export function ProcessesDialog({
   isOpen,
   onClose,
   restoreFocusTo,
+  source = ATTACHED_HOST_SOURCE,
+  canKill = true,
+  hostName,
+  hostPlatform = null,
+  hostBusyCores = null,
 }: ProcessesDialogProps): ReactElement {
   const [snapshot, setSnapshot] = useState<ProcessInventorySnapshot | null>(null);
+  const [truncated, setTruncated] = useState(false);
+  const [unsupported, setUnsupported] = useState(false);
+  const [sort, setSort] = useState<ProcessSort>("memory");
+  const sourceRef = useRef(source);
   const [readFailed, setReadFailed] = useState(false);
   const [now, setNow] = useState(() => Date.now());
   const [killTarget, setKillTarget] = useState<KillTarget | null>(null);
@@ -276,18 +338,43 @@ export function ProcessesDialog({
     }
     let cancelled = false;
     let inFlight = false;
+    let stopped = false;
+    if (sourceRef.current !== source) {
+      // Another host's rows, kills and confirms mean nothing here.
+      sourceRef.current = source;
+      setSnapshot(null);
+      setTruncated(false);
+      setUnsupported(false);
+      setReadFailed(false);
+      setKilledIds(new Set());
+      setEndedClosedKeys(new Set());
+      setDevSessionTerminalIds(null);
+      setKillError(null);
+      setKillTarget(null);
+      setClosedKillTarget(null);
+    }
 
     const fetchSnapshot = (): Promise<void> => {
-      if (inFlight || document.hidden || isProjectViewCached()) return Promise.resolve();
+      if (stopped || inFlight || document.hidden || isProjectViewCached()) {
+        return Promise.resolve();
+      }
       inFlight = true;
-      return readProcesses().then((result) => {
+      return readProcesses(source, canKill).then((result) => {
         inFlight = false;
         if (cancelled) return;
         if (result.sessions) {
           setDevSessionTerminalIds(sessionTerminalIdsOf(result.sessions));
         }
-        if (result.snapshot) {
-          const next = result.snapshot;
+        if (result.reading && !result.reading.supported) {
+          // Asking again won't teach an older host to answer; reopening retries.
+          stopped = true;
+          setUnsupported(true);
+          setSnapshot(null);
+          setReadFailed(false);
+        } else if (result.reading) {
+          const next = result.reading.snapshot;
+          setUnsupported(false);
+          setTruncated(result.reading.truncated);
           setSnapshot(next);
           setReadFailed(false);
           const listed = new Set(next.terminals.map(incarnationKey));
@@ -326,18 +413,18 @@ export function ProcessesDialog({
       clearInterval(tick);
       document.removeEventListener("visibilitychange", onVisible);
     };
-  }, [isOpen]);
+  }, [isOpen, source, canKill]);
 
   const terminals = (snapshot?.terminals ?? []).filter(
     (terminal) => !killedIds.has(incarnationKey(terminal))
   );
-  const plugins = sortPluginProcesses(snapshot?.plugins ?? []);
+  const plugins = sortPluginProcesses(snapshot?.plugins ?? [], sort);
   const closedGroups = groupClosedProcesses(
     (snapshot?.closedTerminalProcesses ?? []).filter(
       (process) => !endedClosedKeys.has(closedProcessKey(process))
     )
   );
-  const groups = groupProcessesByProject(terminals, closedGroups);
+  const groups = groupProcessesByProject(terminals, closedGroups, sort);
   const cleanup = describeCleanupReport(snapshot?.cleanup ?? null);
   const isEmpty =
     snapshot !== null && terminals.length + plugins.length + closedGroups.length === 0;
@@ -469,6 +556,9 @@ export function ProcessesDialog({
     );
   };
 
+  const unaccounted =
+    snapshot && !unsupported ? unaccountedCores({ ...snapshot, truncated }, hostBusyCores) : null;
+
   const sampleAge =
     snapshot && snapshot.sampledAt > 0 ? Math.max(0, now - snapshot.sampledAt) : null;
 
@@ -511,17 +601,21 @@ export function ProcessesDialog({
           />
         </div>
         <SampleReadings sample={terminal.sample} />
-        <div className="flex justify-end">
-          <Button
-            variant="ghost"
-            size="sm"
-            aria-label={`${action} '${title}' in ${projectLabel}`}
-            onClick={() => requestKill(terminal)}
-            data-process-kill={terminal.id}
-          >
-            {action}
-          </Button>
-        </div>
+        {canKill ? (
+          <div className="flex justify-end">
+            <Button
+              variant="ghost"
+              size="sm"
+              aria-label={`${action} '${title}' in ${projectLabel}`}
+              onClick={() => requestKill(terminal)}
+              data-process-kill={terminal.id}
+            >
+              {action}
+            </Button>
+          </div>
+        ) : (
+          <span aria-hidden="true" />
+        )}
       </li>
     );
   };
@@ -597,17 +691,21 @@ export function ProcessesDialog({
           label="Memory"
           value={group.memoryKb === null ? null : formatApproxMemory(group.memoryKb)}
         />
-        <div className="flex justify-end">
-          <Button
-            variant="ghost"
-            size="sm"
-            aria-label={`Kill ${pluralize(count, "process", "processes")} from '${group.title}'`}
-            onClick={() => requestClosedKill(group)}
-            data-process-kill={killId}
-          >
-            {action}
-          </Button>
-        </div>
+        {canKill ? (
+          <div className="flex justify-end">
+            <Button
+              variant="ghost"
+              size="sm"
+              aria-label={`Kill ${pluralize(count, "process", "processes")} from '${group.title}'`}
+              onClick={() => requestClosedKill(group)}
+              data-process-kill={killId}
+            >
+              {action}
+            </Button>
+          </div>
+        ) : (
+          <span aria-hidden="true" />
+        )}
       </li>
     );
   };
@@ -633,7 +731,9 @@ export function ProcessesDialog({
         data-testid="processes-dialog"
       >
         <AppDialog.Header>
-          <AppDialog.Title>Running processes</AppDialog.Title>
+          <AppDialog.Title>
+            {hostName ? `Running processes on ${hostName}` : "Running processes"}
+          </AppDialog.Title>
           <AppDialog.CloseButton />
         </AppDialog.Header>
         <AppDialog.Body>
@@ -642,7 +742,14 @@ export function ProcessesDialog({
               Every terminal and plugin process across all projects, including ones whose panel
               isn't on screen. Readings are sampled, and memory is counted per process, so memory
               two processes share is counted twice.
+              {hostPlatform === "linux" &&
+                " On Linux, a terminal's CPU is the average since it started, not what it's using now."}
             </p>
+            {!canKill && (
+              <p className="text-xs leading-snug text-text-secondary">
+                This window isn't attached to this host, so processes are listed here but not ended.
+              </p>
+            )}
             {killError && (
               <Callout severity="error" size="compact" role="alert">
                 {killError}
@@ -664,6 +771,18 @@ export function ProcessesDialog({
                   : "Couldn't read the running processes."}
               </Callout>
             )}
+            {unsupported && (
+              <Callout severity="info" size="compact">
+                {hostName ?? "This host"} runs an older version that can't list its processes.
+                Update it to see them here.
+              </Callout>
+            )}
+            {snapshot && truncated && (
+              <Callout severity="warning" size="compact">
+                {hostName ?? "This host"} listed only part of its processes to keep the answer
+                small, so some rows are missing.
+              </Callout>
+            )}
             {snapshot && !snapshot.complete && (
               <Callout severity="warning" size="compact">
                 A terminal host didn't answer, so some terminals may be missing, along with
@@ -682,7 +801,7 @@ export function ProcessesDialog({
                 {cleanup.text}
               </Callout>
             )}
-            {snapshot === null && !readFailed ? (
+            {unsupported ? null : snapshot === null && !readFailed ? (
               <Skeleton label="Loading processes" className="space-y-2">
                 <SkeletonBone className="h-4 w-full" />
                 <SkeletonBone className="h-4 w-5/6" />
@@ -702,14 +821,24 @@ export function ProcessesDialog({
                       ? `Sampled ${Math.round(sampleAge / 1000)}s ago`
                       : null}
                   </span>
-                  <span aria-hidden="true" className="text-right">
+                  <SortButton current={sort} sort="cpu" onSelect={setSort}>
                     CPU
-                  </span>
-                  <span aria-hidden="true" className="text-right">
+                  </SortButton>
+                  <SortButton current={sort} sort="memory" onSelect={setSort}>
                     Memory
-                  </span>
+                  </SortButton>
                   <span aria-hidden="true" />
                 </div>
+                {unaccounted !== null && (
+                  <p
+                    className="text-xs leading-snug text-text-secondary"
+                    data-testid="cpu-unaccounted"
+                  >
+                    Roughly {formatCoreCount(unaccounted)} {unaccounted === 1 ? "core" : "cores"} of
+                    the host's busy CPU isn't in the rows below. The rows are averages, so treat
+                    this as an estimate.
+                  </p>
+                )}
                 {groups.map((group) => {
                   const headingId = `processes-group-${group.key.replace(/[^a-zA-Z0-9_-]/g, "_")}`;
                   const leftover = group.closed.reduce(

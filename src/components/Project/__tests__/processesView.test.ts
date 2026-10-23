@@ -11,7 +11,10 @@ import {
   describeTerminalKind,
   formatApproxMemory,
   formatCpu,
+  groupProcessesByProject,
   groupTerminalsByProject,
+  sortPluginProcesses,
+  unaccountedCores,
   pluginProcessTitle,
   terminalTitle,
   trashSecondsLeft,
@@ -196,5 +199,85 @@ describe("formatCpu", () => {
     expect(formatCpu(0)).toBe("0 cores");
     expect(formatCpu(100)).toBe("1 core");
     expect(formatCpu(140)).toBe("1.4 cores");
+  });
+});
+
+function closedProc(
+  pid: number,
+  extra: Partial<ProcessInventoryClosedProcess> = {}
+): ProcessInventoryClosedProcess {
+  return {
+    pid,
+    startTime: `s${pid}`,
+    comm: "node",
+    memoryKb: 100,
+    cpuPercent: 0,
+    origin: { kind: "terminal", id: "t", projectId: null, title: "x", spawnedAt: 1 },
+    closedAt: 1,
+    projectName: "Cedar",
+    ...extra,
+  };
+}
+
+function sampled(id: string, cpuPercent: number, memoryKb: number): ProcessInventoryTerminal {
+  return terminal(id, {
+    sample: { cpuPercent, memoryKb, processCount: 1, members: [] },
+  });
+}
+
+describe("sorting by CPU", () => {
+  it("ranks terminals and closed leftovers together by the chosen reading, unsampled last", () => {
+    const light = sampled("light", 5, 900);
+    const busy = sampled("busy", 150, 100);
+    const unsampled = terminal("none", { sample: null });
+    const [leftover] = groupClosedProcesses([closedProc(9, { cpuPercent: 80, memoryKb: 50 })]);
+    const rowIds = (sort: "cpu" | "memory") =>
+      groupProcessesByProject([light, busy, unsampled], [leftover], sort)[0].rows.map((row) =>
+        row.kind === "live" ? row.terminal.id : "closed"
+      );
+    expect(rowIds("memory")).toEqual(["light", "busy", "closed", "none"]);
+    expect(rowIds("cpu")).toEqual(["busy", "closed", "light", "none"]);
+  });
+
+  it("sorts plugin processes without touching the input", () => {
+    const plugin = (id: string, cpuPercent: number, memoryKb: number) => ({
+      source: "plugin-process" as const,
+      id,
+      pluginId: "acme",
+      label: id,
+      pid: 1,
+      spawnedAt: 1,
+      sample: { cpuPercent, memoryKb, processCount: 1, members: [] },
+    });
+    const input = [plugin("a", 1, 500), plugin("b", 90, 10)];
+    expect(sortPluginProcesses(input, "cpu").map((p) => p.id)).toEqual(["b", "a"]);
+    expect(sortPluginProcesses(input).map((p) => p.id)).toEqual(["a", "b"]);
+    expect(input.map((p) => p.id)).toEqual(["a", "b"]);
+  });
+});
+
+describe("unaccountedCores", () => {
+  const whole = {
+    terminals: [sampled("a", 150, 1)],
+    closedTerminalProcesses: [closedProc(1, { cpuPercent: 50 })],
+    plugins: [],
+    complete: true,
+    samplesAvailable: true,
+    truncated: false,
+  };
+
+  it("is the host's busy cores less every listed reading, in cores", () => {
+    expect(unaccountedCores(whole, 6.5)).toBeCloseTo(4.5);
+  });
+
+  it("never goes below zero", () => {
+    expect(unaccountedCores(whole, 1)).toBe(0);
+  });
+
+  it("says nothing from a partial, truncated or unsampled inventory, or without a host reading", () => {
+    expect(unaccountedCores({ ...whole, complete: false }, 6)).toBeNull();
+    expect(unaccountedCores({ ...whole, truncated: true }, 6)).toBeNull();
+    expect(unaccountedCores({ ...whole, samplesAvailable: false }, 6)).toBeNull();
+    expect(unaccountedCores(whole, null)).toBeNull();
   });
 });
