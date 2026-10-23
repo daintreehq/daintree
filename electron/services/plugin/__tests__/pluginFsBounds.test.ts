@@ -30,6 +30,36 @@ vi.mock("../../../utils/keyedMutex.js", async (importOriginal) => {
 
 const PLUGIN_ID = "fs-leaf-test";
 
+describe("host.fs uncapped reads", () => {
+  let dir: string;
+
+  beforeEach(async () => {
+    dir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "plugin-fs-uncapped-")));
+  });
+
+  afterEach(async () => {
+    await fs.rm(dir, { recursive: true, force: true });
+  });
+
+  it("hands back a large file whole through readFile and readFileBytes", async () => {
+    // Plugins depend on these reads having no size ceiling.
+    const target = path.join(dir, "big.txt");
+    const contents = "y".repeat(2 * 1024 * 1024);
+    await fs.writeFile(target, contents);
+    const api = buildFsApi(
+      {
+        plugins: new Map([[PLUGIN_ID, {}]]),
+        declaredCapabilities: () => new Set(["fs:project-read"]),
+        expandAllowedPathEntries: async () => [{ path: dir, rootClass: "project" }],
+      } as unknown as PluginHostFactoryDeps,
+      PLUGIN_ID
+    );
+
+    expect(await api.readFile(target)).toBe(contents);
+    expect(Buffer.from(await api.readFileBytes(target)).toString()).toBe(contents);
+  });
+});
+
 /**
  * #12618: a `host.fs` leaf that changes between containment and the syscall
  * that uses it. Containment realpaths the path once; everything after that

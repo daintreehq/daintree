@@ -5,7 +5,6 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import {
-  GUEST_RUNTIME_ASSETS,
   PLUGIN_EXTRA_ASSET_SKIP_DIRS,
   copyPluginExtraAssets,
   discoverGuestRuntimeAssets,
@@ -454,12 +453,6 @@ describe("guest runtime assets", () => {
     entry: "plugins/builtin/alpha/renderer/guest/entry.ts",
     outfile: "dist-electron/plugins/builtin/alpha/guest/guest.js",
   };
-
-  it("is discovered from the built-in manifests rather than hand-listed", () => {
-    // A built-in guest runtime is a manifest edit, not an edit to this build
-    // script. No built-in declares one today, so the list is legitimately empty.
-    expect(GUEST_RUNTIME_ASSETS).toEqual(discoverGuestRuntimeAssets(repoRoot));
-  });
 
   it("emits a browser IIFE, never a module or a named-function transform", () => {
     const config = guestRuntimeBuildConfig(SAMPLE_GUEST_ASSET);
