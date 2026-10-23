@@ -361,6 +361,7 @@ describe("installHostControl (#13493)", () => {
       "devPreview.restart",
       "devPreview.reloadPreview",
       "plugin.reloadProject",
+      "agentSessionHistory.resume",
       "acme.unplacedTool",
     ]) {
       const refused = await runtime.call(

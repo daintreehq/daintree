@@ -381,7 +381,6 @@ export const GLOBAL_ALLOWED_TOOLS: ReadonlySet<string> = new Set([
   "agent.listModels",
   "agent.readQuota",
   "agentSessionHistory.list",
-  "agentSessionHistory.resume",
   "assistant.list",
   "assistant.start",
   "terminal.list",
@@ -426,7 +425,8 @@ export const GLOBAL_ALLOWED_TOOLS: ReadonlySet<string> = new Set([
  * Tools a project's assistant may reach that the global assistant may not:
  * each acts on something it neither launched nor was handed (a project's
  * commands, dev server, plugins, worktree state and view, a pane named by id,
- * the clipboard), or is an unscoped form a relay never holds. Listed so the
+ * the user's own agent sessions, the clipboard), or is an unscoped form a relay
+ * never holds. Listed so the
  * guard test can tell a deliberate refusal from a tool nobody placed.
  */
 export const GLOBAL_WITHHELD_TOOLS: ReadonlySet<string> = new Set([
@@ -457,6 +457,9 @@ export const GLOBAL_WITHHELD_TOOLS: ReadonlySet<string> = new Set([
   "worktree.delete",
   "copyTree.injectToTerminal",
   "diagnostics.openReview",
+  // Brings the user's backgrounded pane forward or relaunches their conversation,
+  // and the pane it opens is never recorded as the assistant's.
+  "agentSessionHistory.resume",
 ]);
 const CALL_AMBIGUOUS_DETAIL =
   "No answer came back, so the call may have reached the host and run. Resend it under this callId, which never runs it twice.";
