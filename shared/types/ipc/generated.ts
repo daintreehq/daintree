@@ -2556,6 +2556,14 @@ export interface GeneratedIpcInvokeMap {
     args: [];
     result: import("../plugin.js").ProjectSurfacesSnapshot | null;
   };
+  "plugin:project-template-preview": {
+    args: [payload: { pluginId: string; templateId: string }];
+    result: import("../plugin.js").ProjectTemplatePreview;
+  };
+  "plugin:project-templates-get": {
+    args: [];
+    result: import("../plugin.js").ProjectTemplateDescriptor[];
+  };
   "plugin:project-visibility-get": {
     args: [];
     result: import("../plugin.js").ProjectPluginVisibility;

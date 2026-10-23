@@ -121,6 +121,9 @@ Daintree reads the manifest eagerly at startup. Contribution points declared her
     "terminalLinks": [/* terminal text and URLs that open with one of the plugin's commands */],
     "contextProviders": [/* @prefix: context the composer resolves at send */],
     "tours": [/* welcome tours for the plugin or one of its panels */],
+    "projectTemplates": [
+      /* starting files offered in Create project; not under scope: "project" */
+    ],
     "agents": [/* requires the agent:register capability */],
     "processTools": [/* command → terminal-tab icon detections */],
     "forgeProviders": [/* ... */],

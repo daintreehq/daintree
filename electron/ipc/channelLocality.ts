@@ -676,6 +676,8 @@ export const CHANNEL_LOCALITY = {
   "plugin:report-push-listeners": "host",
   "plugin:report-view-metrics": "host",
   "plugin:tours-get": "host",
+  "plugin:project-templates-get": "host",
+  "plugin:project-template-preview": "host",
   "plugin:hosted-views-get": "host",
   // The theme selection is this machine's (`app-theme:*` is shell), so the
   // catalog it is chosen from has to be this machine's plugins too.

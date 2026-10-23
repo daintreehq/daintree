@@ -37,6 +37,7 @@ import {
   PanelMenuItemSchema,
   PanelToolbarItemSchema,
   PreviewToolContributionSchema,
+  ProjectTemplateContributionSchema,
   GuestAdapterContributionSchema,
   ProcessToolContributionSchema,
   RecipeContributionSchema,
@@ -133,6 +134,9 @@ const THEME_REGISTRY = "electron/services/plugin/PluginThemeRegistry.ts";
 const RECIPE_REGISTRY = "electron/services/plugin/PluginRecipeRegistry.ts";
 const TOUR_REGISTRY = "electron/services/plugin/PluginTourRegistry.ts";
 const PLUGIN_TOURS = "src/components/Tour/pluginTours.tsx";
+const PROJECT_TEMPLATE_REGISTRY = "electron/services/plugin/PluginProjectTemplateRegistry.ts";
+const PROJECT_TEMPLATE_FILES = "electron/services/plugin/projectTemplateFiles.ts";
+const CREATE_PROJECT_DIALOG = "src/components/Project/CreateProjectFolderDialog.tsx";
 const RECIPE_SANITIZER = "shared/utils/recipeSanitizer.ts";
 const RECIPE_AGENT_STEP = "src/utils/recipeAgentStep.ts";
 const PLUGIN_RECIPE_AGENT_TOOLS = "src/utils/pluginRecipeAgentTools.ts";
@@ -204,6 +208,7 @@ const SWEPT_SCHEMAS = {
   recipes: RecipeContributionSchema,
   agentMcp: AgentMcpContributionSchema,
   tours: TourContributionSchema,
+  projectTemplates: ProjectTemplateContributionSchema,
   databases: DatabaseContributionSchema,
   worktreeSetupSteps: WorktreeSetupStepContributionSchema,
   setup: SetupStepContributionSchema,
@@ -276,6 +281,7 @@ const TOP_LEVEL_GROUPS = [
   "recipes",
   "agentMcp",
   "tours",
+  "projectTemplates",
   "databases",
   "worktreeSetupSteps",
   "setup",
@@ -415,6 +421,10 @@ type FieldConsumerCoverage = {
   >;
   "forgeProviders.slots": Record<keyof ForgeSlots, ConsumerDescriptor>;
   tours: Record<keyof z.infer<typeof TourContributionSchema>, ConsumerDescriptor>;
+  projectTemplates: Record<
+    keyof z.infer<typeof ProjectTemplateContributionSchema>,
+    ConsumerDescriptor
+  >;
   "tours.chapters": Record<keyof z.infer<typeof TourChapterSchema>, ConsumerDescriptor>;
   "tours.chapters.captions": Record<keyof z.infer<typeof TourCaptionSchema>, ConsumerDescriptor>;
   setup: Record<keyof z.infer<typeof SetupStepContributionSchema>, ConsumerDescriptor>;
@@ -2519,6 +2529,49 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
         { file: TOUR_REGISTRY, symbol: "registerPluginTours" },
       ],
       note: "Played in manifest order; each needs a scene in the module.",
+    },
+  },
+  projectTemplates: {
+    id: {
+      mode: "derived-input",
+      consumers: [
+        {
+          file: PLUGIN_SCHEMA,
+          symbol: "ProjectTemplateContributionSchema (PROJECT_TEMPLATE_ID_PATTERN)",
+        },
+        { file: PROJECT_TEMPLATE_FILES, symbol: "resolveProjectTemplateDir" },
+        { file: PROJECT_TEMPLATE_REGISTRY, symbol: "getPluginProjectTemplatePluginDir" },
+        {
+          file: ARCHIVE_INSTALL_INTENT,
+          symbol: "runPreviewWorker (readArchiveTemplateProjectPlugins)",
+        },
+      ],
+      note: "Names the payload folder, project-templates/<id>/, the host lists and copies from; with the plugin id, it is what a create request names.",
+    },
+    title: {
+      mode: "verbatim",
+      consumers: [
+        { file: PROJECT_TEMPLATE_REGISTRY, symbol: "registerPluginProjectTemplates" },
+        { file: CREATE_PROJECT_DIALOG, symbol: "CreateProjectFolderDialog (template Select)" },
+        { file: ARCHIVE_INSTALL_INTENT, symbol: "runPreviewWorker (projectTemplates)" },
+      ],
+      note: "The choice in the Create project dialog's template picker, and the name the archive install confirmation lists.",
+    },
+    description: {
+      mode: "verbatim",
+      consumers: [
+        { file: PROJECT_TEMPLATE_REGISTRY, symbol: "registerPluginProjectTemplates" },
+        { file: CREATE_PROJECT_DIALOG, symbol: "CreateProjectFolderDialog (template hint)" },
+      ],
+      note: "Shown under the template picker once the template is chosen.",
+    },
+    iconId: {
+      mode: "verbatim",
+      consumers: [
+        { file: PROJECT_TEMPLATE_REGISTRY, symbol: "registerPluginProjectTemplates" },
+        { file: CREATE_PROJECT_DIALOG, symbol: "CreateProjectFolderDialog (resolvePluginIcon)" },
+      ],
+      note: "Advisory plugin icon id drawn beside the title in the picker; an unknown id falls back to the default plugin glyph.",
     },
   },
   "tours.chapters": {

@@ -2339,6 +2339,30 @@ export const TourContributionSchema = z
   });
 
 /**
+ * A template id names its payload folder, `project-templates/<id>/`, so it is
+ * held to a portable directory name: lowercase letters, digits and single
+ * hyphens. `SAFE_ID_PATTERN` would admit `.` and `..`.
+ */
+const PROJECT_TEMPLATE_ID_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+
+/**
+ * One `contributes.projectTemplates` entry (#13825): a starting set of files the
+ * Create project dialog offers. The files are the plugin's
+ * `project-templates/<id>/` folder; the host lists them before writing and
+ * copies them as they are, so nothing here names code to run.
+ */
+export const ProjectTemplateContributionSchema = z
+  .object({
+    id: z.string().min(1).max(64).regex(PROJECT_TEMPLATE_ID_PATTERN, {
+      message: "id must be lowercase letters, digits and single hyphens",
+    }),
+    title: z.string().trim().min(1).max(80),
+    description: z.string().trim().min(1).max(300),
+    iconId: z.string().min(1).max(200).optional(),
+  })
+  .strict();
+
+/**
  * A single attribution entry in the plugin manifest's `authors` array. `name`
  * is required; `url`, `email`, and `role` are optional. `strictObject` rejects
  * unknown keys so manifest typos surface loudly.
@@ -2856,6 +2880,8 @@ export const MANIFEST_CONTRIBUTION_CAPS = {
   recipes: 50,
   agentMcp: AGENT_MCP_MAX_ENDPOINTS_PER_PLUGIN,
   tours: 10,
+  // Each is a choice in the Create project dialog's template list.
+  projectTemplates: 10,
   databases: 16,
   // Each one runs, in sequence, before a new worktree is ready.
   worktreeSetupSteps: 10,
@@ -3384,6 +3410,10 @@ function buildPluginManifestSchema(origin: PluginOrigin) {
               .array(TourContributionSchema)
               .max(MANIFEST_CONTRIBUTION_CAPS.tours)
               .default([]),
+            projectTemplates: z
+              .array(ProjectTemplateContributionSchema)
+              .max(MANIFEST_CONTRIBUTION_CAPS.projectTemplates)
+              .default([]),
             databases: z
               .array(DatabaseContributionSchema)
               .max(MANIFEST_CONTRIBUTION_CAPS.databases)
@@ -3433,6 +3463,7 @@ function buildPluginManifestSchema(origin: PluginOrigin) {
             recipes: [],
             agentMcp: [],
             tours: [],
+            projectTemplates: [],
             databases: [],
             worktreeSetupSteps: [],
             setup: [],
@@ -3523,6 +3554,18 @@ function buildPluginManifestSchema(origin: PluginOrigin) {
             path: ["contributes", group],
             message: `contributes.${group} is not available to a "scope": "project" plugin — ${reason}`,
             params: { errorCode: `${group}_project_scope_forbidden` },
+          });
+        }
+        // Not deferred like the groups above: a template is offered while a
+        // new folder is being created, before there is any project for a
+        // project plugin to belong to.
+        if (manifest.contributes.projectTemplates.length > 0) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ["contributes", "projectTemplates"],
+            message:
+              'contributes.projectTemplates is not available to a "scope": "project" plugin — templates are offered when a new project folder is created, before any project exists for a project plugin to belong to. Ship the template from an installed plugin instead.',
+            params: { errorCode: "projectTemplates_project_scope_forbidden" },
           });
         }
       }
@@ -4231,6 +4274,7 @@ function buildPluginManifestSchema(origin: PluginOrigin) {
       reportDuplicateIds("forgeProviders", manifest.contributes.forgeProviders);
       reportDuplicateIds("fileDecorationProviders", manifest.contributes.fileDecorationProviders);
       reportDuplicateIds("fileEditors", manifest.contributes.fileEditors);
+      reportDuplicateIds("projectTemplates", manifest.contributes.projectTemplates);
       // Both of these key a registry the same way: a duplicate preview-tool id
       // would declare one admission twice, and a duplicate guest-adapter id two
       // sources for one derived asset — the build would emit one bundle over the

@@ -1,6 +1,8 @@
 import type {
   LoadedPluginInfo,
   ProjectPluginInfo,
+  ProjectTemplateDescriptor,
+  ProjectTemplatePreview,
   WorktreeDeleteNoteSource,
   WorktreeDeleteNotesAnswer,
 } from "@shared/types/plugin";
@@ -31,6 +33,14 @@ export const pluginClient = {
   getProjectPlugins: (): Promise<ProjectPluginInfo[]> => window.electron.plugin.getProjectPlugins(),
 
   reloadProjectPlugins: (): Promise<void> => window.electron.plugin.reloadProjectPlugins(),
+
+  /** Installed plugins' project templates, for the Create project dialog (#13825). */
+  getProjectTemplates: (): Promise<ProjectTemplateDescriptor[]> =>
+    window.electron.plugin.getProjectTemplates(),
+
+  /** Every file a template would write, or why it can't be used. */
+  previewProjectTemplate: (pluginId: string, templateId: string): Promise<ProjectTemplatePreview> =>
+    window.electron.plugin.previewProjectTemplate({ pluginId, templateId }),
 
   /** Snapshot a plugin's existing databases through a native save or folder dialog. */
   backupDatabases: (pluginId: string): Promise<PluginDataBackupOutcome> =>

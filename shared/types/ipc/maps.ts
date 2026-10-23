@@ -746,7 +746,14 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
     result: ProjectStats;
   };
   "project:create-folder": {
-    args: [payload: { parentPath: string; folderName: string }];
+    args: [
+      payload: {
+        parentPath: string;
+        folderName: string;
+        /** Copied in once the folder exists (#13825); the digest is the previewed list's. */
+        template?: import("../plugin.js").ProjectTemplateSelection;
+      },
+    ];
     result: string;
   };
   "project:init-git": {

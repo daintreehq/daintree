@@ -152,9 +152,19 @@ async function runPreviewWorker(): Promise<void> {
       const job = previewQueue.shift()!;
       const fileName = path.basename(job.archivePath);
       try {
-        const { readArchiveManifest } = await import("../services/PluginArchive.js");
+        const { readArchiveManifest, readArchiveTemplateProjectPlugins } =
+          await import("../services/PluginArchive.js");
         const manifest = await readArchiveManifest(job.archivePath);
         const recipeContributions = manifest.contributes?.recipes ?? [];
+        const templateContributions = manifest.contributes?.projectTemplates ?? [];
+        // Only archives that declare templates pay for the entry scan.
+        const templateProjectPlugins =
+          templateContributions.length > 0
+            ? await readArchiveTemplateProjectPlugins(
+                job.archivePath,
+                templateContributions.map((template) => template.id)
+              )
+            : new Map<string, string[]>();
         pendingIntents.push({
           intentId: randomUUID(),
           archivePath: job.archivePath,
@@ -192,6 +202,15 @@ async function runPreviewWorker(): Promise<void> {
               // regardless; the dialog bounds the viewport instead.
               names: recipeContributions.map((recipe) => clampPreviewText(recipe.name)),
             },
+            // Templates write files only after the Create project dialog lists
+            // every one, but a project plugin inside one asks for trust when
+            // that project first opens — so it is named here, before install
+            // (#13825). Folder names come from archive entry names, which are
+            // author-controlled, so they get the same clamp as titles.
+            projectTemplates: templateContributions.map((template) => ({
+              title: clampPreviewText(template.title),
+              projectPlugins: (templateProjectPlugins.get(template.id) ?? []).map(clampPreviewText),
+            })),
           },
         });
         flushArchiveInstallIntents();

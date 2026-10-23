@@ -4,7 +4,7 @@
 //
 // Two files because the manifest schema is origin-keyed and the two origins
 // genuinely disagree: a project plugin must declare `scope` and is refused
-// six contribution types an installed plugin may use. One merged file would
+// seven contribution types an installed plugin may use. One merged file would
 // have to accept the union, which is the one thing neither origin does.
 import { readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -37,7 +37,7 @@ const TARGETS: Target[] = [
     origin: "project",
     title: "Daintree project plugin manifest",
     intro:
-      'Manifest for a Daintree plugin committed into a project\'s .daintree/plugins/ directory. Such a plugin must declare "scope": "project", and six contribution types available to installed plugins are refused here.',
+      'Manifest for a Daintree plugin committed into a project\'s .daintree/plugins/ directory. Such a plugin must declare "scope": "project", and seven contribution types available to installed plugins are refused here.',
   },
 ];
 
@@ -54,7 +54,7 @@ const UNENCODED_RULES = [
   'A "project" database needs "scope": "project" and the "fs:project-write" capability; path applies only to a "project" database.',
   'A database query\'s sql must be one statement: for a "read" query, one SELECT, WITH or VALUES statement with no INSERT, UPDATE, DELETE or REPLACE; for a "write" query, one INSERT, REPLACE, UPDATE or DELETE statement, optionally after WITH. Its named placeholders must match its params exactly, and positional (?) placeholders are refused. Query names must be unique across all of a plugin\'s databases, may not be database_schema or database_query, and number at most 16 in all; with any tools the plugin registers, at most 16 together.',
   'A secret setting (type "secret" or secret: true) may not declare a default, since it would ship in plugin.json.',
-  'Under project scope, menuItems, agents, processTools, mcpServers, themes and forgeProviders are refused, and "scope": "project" is required.',
+  'Under project scope, menuItems, agents, processTools, mcpServers, themes, forgeProviders and projectTemplates are refused, and "scope": "project" is required.',
   'A fileEditors entry names exactly one of slot or view. A slot is accepted only for built-in plugins and takes no mode or paths; a view must name one of the plugin\'s location: "fileEditor" views and needs a mode. Every entry declares extensions, paths or both, and paths are accepted only under "scope": "project". default is accepted only under "scope": "project", on a view-backed "mode": "edit" entry with paths, and a pattern may be the default for one entry of a plugin.',
   'A contextMenus entry may declare kind, extensions or paths only at location "file", and extensions may not be combined with kind "folder". Paths are globs relative to the worktree root.',
   'A terminalLinks entry sets exactly one of pattern or url, and its actionId must be one of this plugin\'s own actions (written "<plugin name>.<id>", matching a declared command when the plugin declares commands). A pattern must compile as a JavaScript regular expression with the u flag, match no empty text, have at most 16 capture groups, and use no backreference, lookaround or named group; a repeated group may not itself repeat or alternate, and the product of every quantifier\'s maximum (512 for an unbounded one) and every alternation\'s branch count may not exceed 1,000,000. ignoreCase applies only to a pattern. A url host must be a lowercase public domain with at least two labels: no IP address, port, path or wildcard, and nothing loopback, private or local-only. A pathPrefix starts with "/" and has no query, fragment or dot segments.',
