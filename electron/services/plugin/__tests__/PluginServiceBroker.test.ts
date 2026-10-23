@@ -409,6 +409,37 @@ describe("PluginServiceBroker", () => {
     });
   });
 
+  it("holds no timer once its calls have settled, whether answered or cancelled", async () => {
+    vi.useFakeTimers();
+    const t = setup();
+    t.loadConsumer("acme.app", consumerOf());
+    const hold = deferred();
+    let answer = true;
+    t.load("acme.jira", providerOf(), () =>
+      t.broker.bind("acme.jira", t.plugins.get("acme.jira")!, ISSUES, () =>
+        answer ? "now" : hold.promise
+      )
+    );
+    expect(vi.getTimerCount()).toBe(0);
+    expect(await t.broker.call(t.consumer(), ISSUES, "lookup", {})).toMatchObject({ ok: true });
+    expect(vi.getTimerCount()).toBe(0);
+
+    answer = false;
+    const controller = new AbortController();
+    const pending = t.broker.call(
+      t.consumer(),
+      ISSUES,
+      "lookup",
+      {},
+      { signal: controller.signal }
+    );
+    await vi.advanceTimersByTimeAsync(0);
+    expect(vi.getTimerCount()).toBe(1);
+    controller.abort();
+    expectFailure(await pending, "cancelled");
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   describe("cancellation and deadlines", () => {
     function hanging() {
       const t = setup();
