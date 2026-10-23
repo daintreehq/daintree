@@ -287,18 +287,31 @@ describe("host.setPanelActivity", () => {
     expect(h.emitPanelActivity).toHaveBeenCalledTimes(1);
   });
 
-  it("publishes a burst of reports across 100 panels once, with every final report (#14128)", async () => {
+  it("publishes a burst changing 100 existing reports once, carrying every final report (#14128)", async () => {
     const h = makeHarness();
     h.ownership.mockReturnValue({ kind: "owned", panelKindId: "acme.chat" });
     const host = hostFor(h);
+    for (let i = 0; i < 100; i++) await host.setPanelActivity(`p${i}`, { state: "finished" });
+    flushPluginPushes();
 
+    const published: Array<Record<string, { state: string; revision: number }>> = [];
+    h.emitPanelActivity.mockReset();
+    h.emitPanelActivity.mockImplementation((pluginId: string) => {
+      published.push(Object.fromEntries(h.activity.get(pluginId) ?? []));
+    });
     for (let i = 0; i < 100; i++) {
       await host.setPanelActivity(`p${i}`, { state: "working" });
+      await host.setPanelActivity(`p${i}`, { state: "finished" });
     }
-    expect(h.emitPanelActivity).not.toHaveBeenCalled();
+    expect(published).toHaveLength(0);
     flushPluginPushes();
-    expect(h.emitPanelActivity).toHaveBeenCalledTimes(1);
-    expect(h.activity.get(PLUGIN_ID)?.size).toBe(100);
+
+    expect(published).toHaveLength(1);
+    const reports = Object.values(published[0]!);
+    expect(reports).toHaveLength(100);
+    expect(reports.every((report) => report.state === "finished")).toBe(true);
+    // Every real change still took a revision, so each completion reads as new.
+    expect(published[0]!.p99?.revision).toBe(300);
   });
 
   it("rejects an invalid report rather than throwing", async () => {

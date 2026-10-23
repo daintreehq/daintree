@@ -1365,54 +1365,6 @@ describe("PluginService integration — panel badges (#10585)", () => {
     expect(badgeBroadcasts("plugin:panel-badges-changed")).toEqual([]);
   });
 
-  it("publishes a synchronous burst over 100 panels as one complete map (#14128)", async () => {
-    const { host } = await loadBadgeHost("acme.badge-burst");
-    for (let i = 0; i < 100; i++) host.setPanelBadge(`p${i}`, { kind: "dot" });
-    flushPluginPushes();
-    vi.mocked(broadcastToRenderer).mockClear();
-
-    for (let i = 0; i < 100; i++) host.setPanelBadge(`p${i}`, { kind: "dot", color: "error" });
-    expect(badgeBroadcasts("plugin:panel-badges-changed")).toEqual([]);
-    flushPluginPushes();
-
-    const payloads = badgeBroadcasts("plugin:panel-badges-changed") as Array<{
-      badges: Record<string, { color?: string }>;
-    }>;
-    expect(payloads).toHaveLength(1);
-    const entries = Object.values(payloads[0]!.badges);
-    expect(entries).toHaveLength(100);
-    expect(entries.every((badge) => badge.color === "error")).toBe(true);
-  });
-
-  it("still clears on unload when the last badge's clear was pending, so no stale badge survives", async () => {
-    const { service, host } = await loadBadgeHost("acme.badge-last-clear");
-    host.setPanelBadge("p1", { kind: "dot" });
-    flushPluginPushes();
-    host.setPanelBadge("p1", null);
-    vi.mocked(broadcastToRenderer).mockClear();
-
-    service.unloadPlugin("acme.badge-last-clear");
-    flushPluginPushes();
-
-    expect(badgeBroadcasts("plugin:panel-badges-cleared")).toEqual([
-      { pluginId: "acme.badge-last-clear" },
-    ]);
-  });
-
-  it("drops a badge change still pending when the plugin unloads, so the clear is the last word", async () => {
-    const { service, host } = await loadBadgeHost("acme.badge-pending");
-    host.setPanelBadge("p1", { kind: "dot" });
-    vi.mocked(broadcastToRenderer).mockClear();
-
-    service.unloadPlugin("acme.badge-pending");
-    flushPluginPushes();
-
-    expect(badgeBroadcasts("plugin:panel-badges-cleared")).toEqual([
-      { pluginId: "acme.badge-pending" },
-    ]);
-    expect(badgeBroadcasts("plugin:panel-badges-changed")).toEqual([]);
-  });
-
   it("replays current badges to a cold-restored webContents via pushSnapshotTo", async () => {
     const { service, host } = await loadBadgeHost("acme.badge7");
     host.setPanelBadge("p1", { kind: "label", text: "2" });

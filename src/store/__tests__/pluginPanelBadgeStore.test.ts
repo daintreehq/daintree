@@ -191,6 +191,22 @@ describe("pluginPanelBadgeStore", () => {
       expect(after["panel-2"]).toBe(before["panel-2"]);
     });
 
+    it("a colour, tooltip or label text change alone is a change", async () => {
+      const mod = await load();
+      const state = () => mod.usePluginPanelBadgeStore.getState().badgesByPanelId;
+      changedCb!({ pluginId: "p1", badges: { panelA: { kind: "label", text: "1" } } });
+      for (const badge of [
+        { kind: "label", text: "1", color: "error" },
+        { kind: "label", text: "1", color: "error", tooltip: "failing" },
+        { kind: "label", text: "2", color: "error", tooltip: "failing" },
+      ] as PluginPanelBadge[]) {
+        const before = state().panelA;
+        changedCb!({ pluginId: "p1", badges: { panelA: badge } });
+        expect(state().panelA).not.toBe(before);
+        expect(state().panelA?.p1).toEqual(badge);
+      }
+    });
+
     it("treats an omitted colour as the default one, as main does", async () => {
       const mod = await load();
       changedCb!({ pluginId: "p1", badges: { panelA: dot("default") } });
