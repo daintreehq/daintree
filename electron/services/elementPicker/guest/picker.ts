@@ -67,6 +67,19 @@ const FRAMEWORKS: ReadonlySet<string> = new Set([
   "preact",
   "solid",
 ]);
+/**
+ * A plugin provider's id, `{publisher}.{plugin}.{provider}`. Shape only, restated
+ * from `PLUGIN_PROVIDER_ID_PATTERN` for the same reason as the limits above:
+ * the host holds every id to the registry, this only keeps the page's
+ * strings from being treated as anything but ids.
+ */
+const PLUGIN_PROVIDER_ID =
+  /^[a-z0-9]+(?:-[a-z0-9]+)*\.[a-z0-9]+(?:-[a-z0-9]+)*\.[a-z0-9]+(?:-[a-z0-9]+)*$/;
+function isFramework(value: string): boolean {
+  return FRAMEWORKS.has(value) || (value.length <= 160 && PLUGIN_PROVIDER_ID.test(value));
+}
+/** Entries read from one reply: the core frameworks plus room for the providers a mixed page can hold. */
+const MAX_REPLY_ENTRIES = FRAMEWORKS.size + 16;
 /** Replies kept per request; the first one whose id matches wins. */
 const MAX_REPLIES = 4;
 /** Reverse id lookups kept before dead ones are swept and the oldest let go. */
@@ -312,7 +325,7 @@ function isGenericEvidenceShape(value: unknown): value is EvidenceEntry {
     value.kind === "generic" &&
     hasOnlyKeys(value, GENERIC_KEYS) &&
     typeof value.framework === "string" &&
-    FRAMEWORKS.has(value.framework) &&
+    isFramework(value.framework) &&
     Array.isArray(value.fields) &&
     value.fields.length <= LIMITS.evidenceFields &&
     value.fields.every(isFieldShape)
@@ -617,16 +630,16 @@ export function createPicker(host: PickerHost): PickerHandle {
       if (parsed === null || !Array.isArray(parsed.contributions)) continue;
       const empty = new Set<ElementPickerFramework>();
       if (Array.isArray(parsed.empty)) {
-        for (const name of parsed.empty.slice(0, FRAMEWORKS.size)) {
-          if (typeof name === "string" && FRAMEWORKS.has(name)) {
+        for (const name of parsed.empty.slice(0, MAX_REPLY_ENTRIES)) {
+          if (typeof name === "string" && isFramework(name)) {
             empty.add(name as ElementPickerFramework);
           }
         }
       }
       const contributions: Extracted[] = [];
-      for (const entry of parsed.contributions.slice(0, FRAMEWORKS.size)) {
+      for (const entry of parsed.contributions.slice(0, MAX_REPLY_ENTRIES)) {
         if (!isPlainObject(entry) || typeof entry.framework !== "string") continue;
-        if (!FRAMEWORKS.has(entry.framework) || !isPlainObject(entry.data)) continue;
+        if (!isFramework(entry.framework) || !isPlainObject(entry.data)) continue;
         let target: Element | null = null;
         if (pick && entry.target !== undefined) {
           target = adopt(entry.target, received.named);
@@ -1591,7 +1604,7 @@ export function createPicker(host: PickerHost): PickerHandle {
   function reselect(request: unknown): boolean {
     if (disposed || mode !== "select" || !isPlainObject(request)) return false;
     const framework =
-      typeof request.framework === "string" && FRAMEWORKS.has(request.framework)
+      typeof request.framework === "string" && isFramework(request.framework)
         ? request.framework
         : null;
     let target = heldElement(request.elementId);
@@ -1644,7 +1657,7 @@ export function createPicker(host: PickerHost): PickerHandle {
     }
     if (!isPlainObject(parsed)) return;
     const { framework, notice } = parsed;
-    if (typeof framework !== "string" || !FRAMEWORKS.has(framework)) return;
+    if (typeof framework !== "string" || !isFramework(framework)) return;
     if (!(EXTRACTOR_NOTICES as readonly unknown[]).includes(notice)) return;
     const key = framework + " " + String(notice);
     if (noticed.has(key)) return;

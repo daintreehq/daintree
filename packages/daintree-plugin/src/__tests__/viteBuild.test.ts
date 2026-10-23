@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import {
   resolveViteBin,
+  findGuestConfig,
   findServerConfig,
   resolveVitePlan,
   spawnViteWatch,
@@ -97,5 +98,28 @@ describe("resolveVitePlan", () => {
     // a clean dist/ — carrying --no-emptyOutDir here would leak stale output
     // into every package.
     expect(resolveVitePlan(dir).oneShot.flat()).not.toContain("--no-emptyOutDir");
+  });
+
+  it("adds a guest pass after the default and server passes, none of them clearing another's output in watch", async () => {
+    await fs.writeFile(path.join(dir, "vite.config.server.ts"), "export default {};");
+    await fs.writeFile(path.join(dir, "vite.config.guest.ts"), "export default {};");
+    expect(findGuestConfig(dir)).toBe("vite.config.guest.ts");
+    const plan = resolveVitePlan(dir);
+    expect(plan.dualConfig).toBe(true);
+    expect(plan.oneShot).toEqual([
+      ["build"],
+      ["build", "--config", "vite.config.server.ts"],
+      ["build", "--config", "vite.config.guest.ts"],
+    ]);
+    expect(plan.watch).toHaveLength(3);
+    for (const args of plan.watch) expect(args).toContain("--no-emptyOutDir");
+  });
+
+  it("plans a guest pass for a plugin with no server config", async () => {
+    await fs.writeFile(path.join(dir, "vite.config.guest.mjs"), "export default {};");
+    expect(resolveVitePlan(dir).oneShot).toEqual([
+      ["build"],
+      ["build", "--config", "vite.config.guest.mjs"],
+    ]);
   });
 });

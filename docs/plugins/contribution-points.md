@@ -1535,6 +1535,79 @@ Named multi-terminal launch layouts a plugin ships. A contributed recipe is regi
 
 **Agent-initiated runs are confirmation-gated.** Any agent or MCP dispatch that carries a `recipeId` — through `recipe.run` or a composite like `worktree.createWithRecipe` — pauses for a single human approval showing the resolved recipe, its origin, and the commands each terminal will run (env keys are listed, values are not). This applies to every recipe tier, not just plugin-contributed ones. An external MCP session bound to one workspace has no one watching that view to answer the dialog, so there the dispatch is refused outright rather than paused (#11789).
 
+## Element Picker providers — _Shipped_
+
+`contributes.elementPickerProviders` teaches the dev preview's Element Picker about a framework Daintree doesn't ship an extractor for. A provider declares what to look for on a page and a packaged script that reads it; the host loads the script only when the picker is on and the declared markers match the page.
+
+```json
+{
+  "name": "acme.lit-picker",
+  "capabilities": ["preview:inspect"],
+  "contributes": {
+    "elementPickerProviders": [
+      {
+        "id": "lit",
+        "name": "Lit",
+        "detection": [
+          { "kind": "global", "name": "litElementVersions", "match": "exact" },
+          { "kind": "tag", "name": "acme-", "match": "prefix" }
+        ],
+        "guestEntry": "dist/picker/lit.js"
+      }
+    ]
+  }
+}
+```
+
+- **Detection is data.** Each rule names a `global`, an `expando` key on a node, an `attribute` or a `tag`, compared `exact` or by `prefix`. The host compares names only: it never reads a global's value, never calls into the page and never runs anything from your plugin to decide. Up to 16 rules per provider; any one matching is a detection.
+- **The provider id is `{plugin name}.{id}`** (`acme.lit-picker.lit` above). It is what shows up in an observation's `framework` field, and the reserved core names (`react`, `vue`, `svelte`, `angular`, `astro`, `preact`, `solid`) can't be used as an `id`.
+- **`guestEntry` is a packaged, plugin-relative path** to one standalone browser script, at most 256 KiB. The host reads it from your installed plugin directory; a renderer or a page can't name a path or supply a body. It must stay inside the plugin after symlinks are resolved, and packaging fails when the file is missing, excluded by `.dntrignore` or reached through a link that leaves the plugin.
+- **It needs `preview:inspect`**, which the install-time list discloses, and for a project plugin the project must be trusted. Disabling, uninstalling or reloading the plugin removes the extractor from any page it is installed in, calling its `dispose`.
+- **It never starts your plugin's worker** and never loads a source parser. Detection and extraction use only the packaged script. A missing, oversized or throwing script leaves DOM picking exactly as it was and shows a bounded status line.
+- **`resolverEntry`** (needs `fs:project-read`) is declared and packaged, and loaded by a later release. Declaring it today changes nothing at runtime.
+
+### Writing the guest entry
+
+The entry runs in the page's own world, so it can read what the page's framework exposes and nothing else: no Node, no host API, no plugin worker. Import the types and the `define` helper from `@daintreehq/plugin-sdk/element-picker` and export a factory as the default:
+
+```ts
+import { defineElementPickerExtractor } from "@daintreehq/plugin-sdk/element-picker";
+
+export default defineElementPickerExtractor((providerId) => ({
+  extract(element, phase, refs) {
+    if (!element.localName.includes("-")) return null;
+    return {
+      frameworkEvidence: [
+        {
+          kind: "generic",
+          framework: providerId,
+          fields: [{ name: "tag", value: element.localName }],
+        },
+      ],
+    };
+  },
+}));
+```
+
+`extract` is synchronous and bounded. On `hover` it runs inside a pointer move, so read only what labels a highlight and save anything costly for `selection`. Return `null` when you looked and found nothing of your framework; throw when you can't look. Optional `pick`, `locate`, `start` and `dispose` follow the same rules. Don't use `eval`, `new Function` or string timers: the page's CSP applies to them and the install then fails. Replies are held to the picker's message ceiling and every observation field is validated by the host, so anything over a limit is dropped.
+
+Build it as its own bundle with the guest target of `@daintreehq/plugin-vite`. The target produces one self-contained IIFE, with no host import map and no externals, and fails the build on a leftover import, a split chunk or an emitted asset:
+
+```ts
+// vite.config.guest.ts
+import { daintreePlugin } from "@daintreehq/plugin-vite";
+import { defineConfig } from "vite";
+
+export default defineConfig({
+  plugins: [daintreePlugin({ target: "guest" })],
+  build: {
+    outDir: "dist/picker",
+    emptyOutDir: false,
+    lib: { entry: "src/lit.ts", fileName: () => "lit.js" },
+  },
+});
+```
+
 ## Tours — _Shipped_
 
 Welcome tours that play in the same dialog as the Daintree tour. An enabled plugin's tours register when it loads and are withdrawn when it is disabled, uninstalled or hidden in the project; a tour that is open at that moment closes, keeping the viewer's progress. A reload closes it too, and reopening plays the new version.

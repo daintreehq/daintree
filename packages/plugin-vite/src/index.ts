@@ -1,7 +1,7 @@
 import { builtinModules } from "node:module";
 import { createHash } from "node:crypto";
 import path from "node:path";
-import { build } from "vite";
+import { build, parseAst } from "vite";
 import type { Plugin, UserConfig } from "vite";
 
 import { HOST_IMPORTMAP_SPECIFIERS } from "./hostImportMap.js";
@@ -245,9 +245,26 @@ const CONTRACT_POINTER =
   "utility classes in your markup; ship any plain CSS you still need as root-scoped rules in " +
   "`@layer components`. `@apply` is not part of the plugin contract.";
 
+/** Whether emitted code still loads a module at runtime; parsed, so a string spelling `import(` doesn't count. */
+export function hasImportExpression(code: string): boolean {
+  const pending: unknown[] = [parseAst(code)];
+  while (pending.length > 0) {
+    const node = pending.pop();
+    if (node === null || typeof node !== "object") continue;
+    if ((node as { type?: unknown }).type === "ImportExpression") return true;
+    for (const value of Object.values(node)) {
+      if (value !== null && typeof value === "object") pending.push(value);
+    }
+  }
+  return false;
+}
+
 /** Build target for a plugin entry. `"browser"` (default) is the renderer/panel
  * preset; `"node"` is for stdio MCP servers and other Node entries. */
-export type DaintreeBuildTarget = "browser" | "node";
+export type DaintreeBuildTarget = "browser" | "node" | "guest";
+
+/** The global an Element Picker guest entry's IIFE assigns; the host reads its `default`, the extractor factory. */
+export const GUEST_ENTRY_GLOBAL = "__daintreeExtractor";
 
 export interface DaintreePluginOptions {
   /** Explicit, separately bundled adapters imported with virtual:daintree-document-package/<name>. */
@@ -274,7 +291,11 @@ export interface DaintreePluginOptions {
    * (not browser-shimmed), node resolve conditions are preferred, and React is
    * NOT externalized (node code has no host import map). Use a separate config
    * file for the node entry (e.g. `vite.config.server.ts`) since `vite build`
-   * runs one config object at a time.
+   * runs one config object at a time. `"guest"` builds an Element Picker
+   * `guestEntry` (`contributes.elementPickerProviders`): one self-contained
+   * browser IIFE that the host evaluates in a previewed page. It has no host
+   * import map and no externals, so everything it uses is bundled; the build
+   * fails on a leftover import, a split chunk or an emitted asset.
    */
   readonly target?: DaintreeBuildTarget;
 }
@@ -316,6 +337,75 @@ export function daintreePlugin(options: DaintreePluginOptions = {}): Plugin {
   const packagePrefix = "virtual:daintree-document-package/";
   const packageModules = new Map<string, string>();
   let root = process.cwd();
+
+  if (target === "guest") {
+    if (Object.keys(documentPackages).length)
+      throw new Error("Document packages require a browser target");
+    return {
+      name: "daintree-plugin-vite",
+      config: (userConfig) => {
+        const lib = userConfig.build?.lib;
+        if (!lib)
+          throw new Error(
+            'A guest target needs build.lib.entry, e.g. lib: { entry: "src/lit.ts" }'
+          );
+        // Replaced rather than merged, since Vite concatenates arrays and a merged
+        // `formats` would add to the author's; copied so a `lib` object another
+        // build shares keeps its own settings.
+        userConfig.build = {
+          ...userConfig.build,
+          lib: { ...lib, name: GUEST_ENTRY_GLOBAL, formats: ["iife"] },
+        };
+        return {
+          // A library build leaves `process.env.NODE_ENV` alone, and the page has no `process`.
+          define: { "process.env.NODE_ENV": JSON.stringify("production") },
+          build: {
+            target: "es2022",
+            minify: true,
+            cssCodeSplit: false,
+            // The page offers no import map: nothing the entry imports may stay external.
+            rollupOptions: { external: [], output: { codeSplitting: false, exports: "named" } },
+          },
+        };
+      },
+      // After every other plugin: Vite's CSS plugin emits its stylesheet in its own
+      // `generateBundle`, and a check that ran first would never see it.
+      generateBundle: {
+        order: "post",
+        handler(_options, bundle) {
+          const files = Object.values(bundle);
+          const chunk = files[0];
+          if (files.length !== 1 || chunk?.type !== "chunk") {
+            this.error(
+              "A guest entry must build to exactly one JavaScript file; it can't emit CSS, assets or extra chunks."
+            );
+          }
+          // An inlined dynamic import still lists the chunk itself.
+          const external = [
+            ...chunk.imports,
+            ...chunk.dynamicImports.filter((id) => id !== chunk.fileName),
+          ];
+          if (external.length > 0) {
+            this.error(
+              `A guest entry must be self-contained: it has no module loader, so bundle every dependency. Still imported: ${external.join(", ")}`
+            );
+          }
+          // A specifier only known at runtime survives bundling as a bare `import()`,
+          // which would resolve against the previewed page rather than the plugin.
+          if (hasImportExpression(chunk.code)) {
+            this.error(
+              "A guest entry can't load modules at runtime: the output still contains an import() expression. Use a literal specifier so it is bundled."
+            );
+          }
+          if (/\beval\s*\(|\bnew\s+Function\s*\(/.test(chunk.code)) {
+            this.warn(
+              "This guest entry contains eval or new Function. The page's CSP can block both, and the extractor then fails to install."
+            );
+          }
+        },
+      },
+    };
+  }
 
   if (target === "node") {
     if (Object.keys(documentPackages).length)

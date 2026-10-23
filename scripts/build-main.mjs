@@ -149,6 +149,11 @@ export const CORE_PICKER_GUEST_ASSETS = [
     outfile: "dist-electron/element-picker/guest/probe.js",
   },
   {
+    id: "plugin-runtime",
+    entry: "electron/services/elementPicker/guest/pluginRuntime.ts",
+    outfile: "dist-electron/element-picker/guest/pluginRuntime.js",
+  },
+  {
     id: "extractor:svelte",
     entry: "electron/services/elementPicker/guest/extractors/svelte.ts",
     outfile: "dist-electron/element-picker/guest/extractors/svelte.js",

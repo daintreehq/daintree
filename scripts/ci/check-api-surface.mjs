@@ -56,6 +56,11 @@ const ENTRIES = [
     snapshot: path.join(root, "packages/plugin-sdk/api-report/operations.d.ts"),
   },
   {
+    name: "./element-picker",
+    dist: path.join(root, "packages/plugin-sdk/dist/element-picker.d.ts"),
+    snapshot: path.join(root, "packages/plugin-sdk/api-report/element-picker.d.ts"),
+  },
+  {
     name: "./testing",
     dist: path.join(root, "packages/plugin-sdk/dist/testing.d.ts"),
     snapshot: path.join(root, "packages/plugin-sdk/api-report/testing.d.ts"),

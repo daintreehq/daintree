@@ -11,11 +11,25 @@
  */
 
 import type { FrameworkDetection } from "../../../../shared/elementPicker/observation.js";
-import { DetectionSet, detectGlobals, sampleDocument } from "./detectors.js";
+import { DETECTION_LIMITS, DetectionSet, detectGlobals, sampleDocument } from "./detectors.js";
+import { detectProviders, type ProviderProbe } from "./providerDetection.js";
 
-declare const api: { result: FrameworkDetection[] | null };
+declare const api: { result: FrameworkDetection[] | null; providers: ProviderProbe[] };
 
 const detections = new DetectionSet();
 detectGlobals(globalThis, detections);
 sampleDocument(document, detections, { expandos: true });
-api.result = detections.toArray();
+const found = detections.toArray();
+// Core detections first: a page that saturates the wire limit keeps what it always did.
+let fromProviders: FrameworkDetection[] = [];
+try {
+  fromProviders = detectProviders(
+    api.providers,
+    globalThis,
+    document,
+    DETECTION_LIMITS.detections - found.length
+  );
+} catch {
+  // A page that breaks a plugin's detection must not cost the core detections already found.
+}
+api.result = found.concat(fromProviders);

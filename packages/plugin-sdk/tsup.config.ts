@@ -44,6 +44,7 @@ export default defineConfig((override) => {
       files: "src/files.ts",
       data: "src/data.ts",
       operations: "src/operations.ts",
+      "element-picker": "src/element-picker.ts",
       testing: "src/testing.ts",
       "testing-preview": "src/testing-preview.ts",
       "testing-playwright": "src/testing-playwright.ts",
@@ -82,6 +83,13 @@ export default defineConfig((override) => {
       // `operations` reaches `shared/types/plugin.ts` for the host's task and
       // database types, so it gets its own pass like `data`.
       entry: { operations: "src/operations.ts" },
+      dts: { ...shared.dts, only: true },
+    },
+    {
+      ...shared,
+      // `element-picker` reaches the observation types, which are zod-inferred,
+      // so it gets a declaration pass of its own like `data`.
+      entry: { "element-picker": "src/element-picker.ts" },
       dts: { ...shared.dts, only: true },
     },
     {

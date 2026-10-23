@@ -2837,7 +2837,7 @@ export class PluginService {
 
     const elementPickerProviders = manifest.contributes.elementPickerProviders ?? [];
     if (elementPickerProviders.length > 0) {
-      registerElementPickerProviders(pluginId, manifest.name, elementPickerProviders);
+      registerElementPickerProviders(pluginId, manifest.name, elementPickerProviders, pluginDir);
     }
 
     if (manifest.contributes.fileDecorationProviders.length > 0) {

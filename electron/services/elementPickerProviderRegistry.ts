@@ -20,6 +20,13 @@ const PLUGIN_ELEMENT_PICKER_PROVIDERS = new Map<
   readonly RegisteredElementPickerProvider[]
 >();
 
+/**
+ * Where each registered provider's plugin lives, kept off the shared type so a
+ * directory never rides along with a declaration. Keyed by the frozen record,
+ * so a provider replaced by a reload loses its entry with the old object.
+ */
+const PROVIDER_PLUGIN_DIRS = new WeakMap<RegisteredElementPickerProvider, string>();
+
 const CHANGE_LISTENERS = new Set<() => void>();
 
 /** Notified whenever the set of registered providers changes, so cached allowlists can be retired. */
@@ -43,7 +50,8 @@ function notifyChanged(): void {
 export function registerElementPickerProviders(
   pluginId: string,
   pluginName: string,
-  contributions: readonly ElementPickerProviderContribution[]
+  contributions: readonly ElementPickerProviderContribution[],
+  pluginDir?: string
 ): void {
   if (typeof pluginId !== "string" || pluginId.length === 0) return;
   if (!Array.isArray(contributions) || contributions.length === 0) {
@@ -67,6 +75,9 @@ export function registerElementPickerProviders(
         : {}),
     })
   );
+  if (pluginDir !== undefined) {
+    for (const provider of registered) PROVIDER_PLUGIN_DIRS.set(provider, pluginDir);
+  }
   PLUGIN_ELEMENT_PICKER_PROVIDERS.set(pluginId, Object.freeze(registered));
   notifyChanged();
 }
@@ -102,6 +113,18 @@ export function getElementPickerProvider(
  */
 export function isElementPickerProviderAuthorized(id: string, projectId: string | null): boolean {
   return isCoreFramework(id) || getElementPickerProvider(id, projectId) !== undefined;
+}
+
+/** The installed plugin directory a registered provider's assets resolve from, or undefined for one registered without it. */
+export function getElementPickerProviderPluginDir(
+  provider: RegisteredElementPickerProvider
+): string | undefined {
+  return PROVIDER_PLUGIN_DIRS.get(provider);
+}
+
+/** Whether `provider` is still the live registration (not unloaded, disabled or replaced by a reload). */
+export function isElementPickerProviderCurrent(provider: RegisteredElementPickerProvider): boolean {
+  return PLUGIN_ELEMENT_PICKER_PROVIDERS.get(provider.pluginId)?.includes(provider) === true;
 }
 
 export interface ObservedMarker {

@@ -128,7 +128,7 @@ interface MinimalManifest {
 function protectedDirs(manifest: unknown): string[] {
   const dirs = new Set<string>(["dist"]);
   for (const asset of collectPluginManifestAssets(manifest)) {
-    if (!asset.module) continue;
+    if (!asset.module && !asset.built) continue;
     const top = asset.path.replace(/\\/g, "/").split("/")[0];
     if (top && top !== "." && top !== "..") dirs.add(top);
   }
