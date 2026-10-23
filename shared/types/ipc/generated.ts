@@ -1567,6 +1567,10 @@ export interface GeneratedIpcInvokeMap {
     args: [input: import("../pluginCapabilityConsent.js").PluginOsNotificationsQuery];
     result: boolean;
   };
+  "plugin-capability:get-panel-attention": {
+    args: [input: import("../pluginCapabilityConsent.js").PluginPanelAttentionQuery];
+    result: boolean;
+  };
   "plugin-capability:get-project-targeting": {
     args: [input: import("../pluginCapabilityConsent.js").PluginProjectTargetingQuery];
     result: boolean;
@@ -1575,12 +1579,20 @@ export interface GeneratedIpcInvokeMap {
     args: [input: import("../pluginCapabilityConsent.js").PluginWorktreeDeleteNotesQuery];
     result: boolean;
   };
+  "plugin-capability:list-panel-attention": {
+    args: [];
+    result: string[];
+  };
   "plugin-capability:resolve-consent": {
     args: [input: import("../pluginCapabilityConsent.js").PluginCapabilityResolveConsentInput];
     result: void;
   };
   "plugin-capability:set-os-notifications": {
     args: [input: import("../pluginCapabilityConsent.js").PluginOsNotificationsUpdate];
+    result: boolean;
+  };
+  "plugin-capability:set-panel-attention": {
+    args: [input: import("../pluginCapabilityConsent.js").PluginPanelAttentionUpdate];
     result: boolean;
   };
   "plugin-capability:set-project-targeting": {

@@ -1,5 +1,5 @@
 import { useState, useMemo, useCallback, useEffect, useId, type ComponentType } from "react";
-import { ChevronRight, MailOpen, OctagonX } from "lucide-react";
+import { ChevronRight, Clock, MailOpen, OctagonX } from "lucide-react";
 import { useShallow } from "zustand/react/shallow";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Button } from "@/components/ui/button";
@@ -44,6 +44,25 @@ import {
 } from "./dockStatusPill";
 import { pluralize } from "@/lib/pluralize";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
+import { CirclePause } from "@/components/icons";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuSeparator,
+  ContextMenuSub,
+  ContextMenuSubContent,
+  ContextMenuSubTrigger,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu";
+import type { PluginAttentionRow } from "@/lib/pluginPanelAttention";
+import { usePluginPanelActivityStore } from "@/store/pluginPanelActivityStore";
+import {
+  PLUGIN_ATTENTION_SNOOZE_OPTIONS,
+  usePluginPanelAttentionStore,
+} from "@/store/pluginPanelAttentionStore";
+import { AGENT_SNOOZE_LABEL } from "@shared/utils/agentSnoozeDurations";
+import { openPluginAttentionPanel } from "@/components/PluginAttention/openPluginAttentionPanel";
 
 /**
  * What sets one agent pill apart from another. Everything else — the triage
@@ -78,8 +97,22 @@ export interface AgentStatusConfig {
 
 interface AgentStatusContainerProps {
   terminals: PtyPanelData[];
+  /**
+   * Plugin panels the user let into this pill (#13821). Their own section,
+   * below every agent's, so a plugin can never rank above an agent asking.
+   */
+  pluginRows?: readonly PluginAttentionRow[];
   config: AgentStatusConfig;
   compact?: boolean;
+}
+
+const NO_PLUGIN_ROWS: readonly PluginAttentionRow[] = [];
+
+/** Who the pill is counting, by kind: plugin panels are never called agents. */
+function subjectPhrase(agents: number, plugins: number): string {
+  if (plugins === 0) return pluralize(agents, "agent");
+  if (agents === 0) return pluralize(plugins, "plugin panel");
+  return `${pluralize(agents, "agent")}, ${pluralize(plugins, "plugin panel")}`;
 }
 
 interface AgentDisplaySingle {
@@ -98,6 +131,7 @@ type AgentDisplayItem = AgentDisplaySingle | AgentDisplayGroup;
 
 export function AgentStatusContainer({
   terminals,
+  pluginRows: reportedPluginRows = NO_PLUGIN_ROWS,
   config,
   compact = false,
 }: AgentStatusContainerProps) {
@@ -122,6 +156,17 @@ export function AgentStatusContainer({
   );
   const worktreeNames = useWorktreeNames();
   const focusHandoff = useDockPopoverFocusHandoff();
+  // A panel left behind by a deleted worktree is not somewhere a row can take
+  // the user, so it is dropped the way an orphaned terminal is.
+  const pluginRows = useMemo(
+    () =>
+      worktreeNames.size === 0
+        ? reportedPluginRows
+        : reportedPluginRows.filter(
+            (row) => row.worktreeId === null || worktreeNames.has(row.worktreeId)
+          ),
+    [reportedPluginRows, worktreeNames]
+  );
 
   const displayItems = useMemo((): AgentDisplayItem[] => {
     // The pill's own triage order, not insertion order. Deterministic
@@ -208,12 +253,29 @@ export function AgentStatusContainer({
   }, [displayItems, activeWorktreeId]);
 
   const hereCount = useMemo(
-    () => terminals.filter((t) => (t.worktreeId ?? null) === (activeWorktreeId ?? null)).length,
-    [terminals, activeWorktreeId]
+    () =>
+      terminals.filter((t) => (t.worktreeId ?? null) === (activeWorktreeId ?? null)).length +
+      pluginRows.filter((row) => row.worktreeId === (activeWorktreeId ?? null)).length,
+    [terminals, pluginRows, activeWorktreeId]
   );
   const worktreeCount = useMemo(
-    () => new Set(terminals.map((t) => t.worktreeId ?? null)).size,
-    [terminals]
+    () =>
+      new Set([
+        ...terminals.map((t) => t.worktreeId ?? null),
+        ...pluginRows.map((row) => row.worktreeId),
+      ]).size,
+    [terminals, pluginRows]
+  );
+
+  const handleActivatePlugin = useCallback(
+    (row: PluginAttentionRow) => {
+      focusHandoff.markHandoff();
+      setIsOpen(false);
+      safeFireAndForget(openPluginAttentionPanel(row.panelId), {
+        context: "AgentStatusContainer openPluginAttentionPanel",
+      });
+    },
+    [focusHandoff]
   );
 
   const handleActivate = useCallback(
@@ -260,7 +322,8 @@ export function AgentStatusContainer({
     setKillConfirmId(null);
   }, [killConfirmId, removePanel, terminals]);
 
-  const count = terminals.length;
+  const count = terminals.length + pluginRows.length;
+  const subject = subjectPhrase(terminals.length, pluginRows.length);
   // Lagged count keeps the label stable while the pill fades out via the
   // .dock-status-pill exit transition instead of flashing "(0)".
   const displayCount = useExitLaggedCount(count);
@@ -292,7 +355,7 @@ export function AgentStatusContainer({
                 aria-expanded={isOpen}
                 aria-controls={popoverId}
                 onClick={focusHandoff.onTriggerClick}
-                aria-label={`${config.label}: ${pluralize(displayCount, "agent")} ${dockStatusScopeDescription(displayCount, hereCount)}`}
+                aria-label={`${config.label}: ${pluginRows.length === 0 ? pluralize(displayCount, "agent") : subject} ${dockStatusScopeDescription(displayCount, hereCount)}`}
               >
                 <DockStatusPillLabel
                   icon={<config.Icon className={config.iconClassName} aria-hidden="true" />}
@@ -305,7 +368,9 @@ export function AgentStatusContainer({
             </PopoverTrigger>
           </TooltipTrigger>
           <TooltipContent side="top">
-            {`${config.tooltip} ${dockStatusScopeDescription(displayCount, hereCount)}`}
+            {pluginRows.length === 0
+              ? `${config.tooltip} ${dockStatusScopeDescription(displayCount, hereCount)}`
+              : `${config.label}: ${subject} ${dockStatusScopeDescription(displayCount, hereCount)}`}
           </TooltipContent>
         </Tooltip>
 
@@ -338,7 +403,7 @@ export function AgentStatusContainer({
             <div className={DOCK_POPOVER_HEADER_CLASS}>
               <span className="text-xs font-medium text-text-secondary">{config.heading}</span>
               <span className="text-3xs font-medium text-text-secondary tabular-nums">
-                {pluralize(count, "agent")}
+                {subject}
                 {worktreeCount > 1 && ` across ${worktreeCount} worktrees`}
               </span>
             </div>
@@ -389,6 +454,23 @@ export function AgentStatusContainer({
                   </DockPopoverSection>
                 );
               })}
+              {pluginRows.length > 0 && (
+                <DockPopoverSection label="Plugin panels">
+                  {pluginRows.map((row) => (
+                    <PluginAttentionItem
+                      key={row.panelId}
+                      kind={kind}
+                      row={row}
+                      worktreeName={
+                        row.worktreeId !== null && row.worktreeId !== (activeWorktreeId ?? null)
+                          ? worktreeNames.get(row.worktreeId)
+                          : undefined
+                      }
+                      onActivate={handleActivatePlugin}
+                    />
+                  ))}
+                </DockPopoverSection>
+              )}
             </DockPopoverList>
           </div>
         </PopoverContent>
@@ -677,5 +759,116 @@ function AgentGroupItem({
         </div>
       )}
     </div>
+  );
+}
+
+const MENU_ICON_CLASS = "w-3.5 h-3.5 mr-2 shrink-0";
+
+interface PluginAttentionItemProps {
+  kind: AgentStatusConfig["kind"];
+  row: PluginAttentionRow;
+  /** Set only when the panel lives in another worktree. */
+  worktreeName: string | undefined;
+  onActivate: (row: PluginAttentionRow) => void;
+}
+
+/**
+ * A plugin panel's row: its title, then whose report it is and what it says.
+ * Never a terminal's menu — park, snooze and read here are the plugin row's
+ * own, held in this view, and touch no agent's.
+ */
+function PluginAttentionItem({ kind, row, worktreeName, onActivate }: PluginAttentionItemProps) {
+  const context = [worktreeName, row.description].filter(Boolean).join(" · ");
+  const isUnread = row.band === "review";
+  const park = () =>
+    usePluginPanelAttentionStore.getState().park(row.panelId, row.pluginId, row.revision);
+  const markRead = () => usePluginPanelActivityStore.getState().markSeen(row.panelId, row.revision);
+
+  return (
+    <ContextMenu>
+      <ContextMenuTrigger asChild>
+        <div data-dock-row="" className={cn("group/row relative", ROW_SURFACE_CLASS)}>
+          <button
+            type="button"
+            data-testid={`${kind}-plugin-item`}
+            data-plugin-attention={row.shown}
+            onClick={() => onActivate(row)}
+            className={ROW_TARGET_CLASS}
+            aria-label={`Open ${row.title}${worktreeName ? ` in ${worktreeName}` : ""} — ${row.description}`}
+          >
+            <TerminalIcon
+              kind={row.kind}
+              chrome={deriveTerminalChrome({ kind: row.kind })}
+              className="h-3 w-3 shrink-0"
+            />
+            <span className="flex min-w-0 flex-1 items-baseline gap-1.5">
+              <TruncatedTooltip content={row.title} focusable={false} side="top" align="start">
+                <span className="min-w-0 truncate text-xs font-medium text-text-primary">
+                  {row.title}
+                </span>
+              </TruncatedTooltip>
+              <TruncatedTooltip content={context} focusable={false} side="bottom" align="start">
+                <span className="min-w-16 flex-1 basis-0 truncate text-xs text-text-secondary">
+                  {context}
+                </span>
+              </TruncatedTooltip>
+            </span>
+          </button>
+
+          <div className="absolute inset-y-0 right-0.5 flex items-center pointer-events-none invisible opacity-0 transition-[opacity,visibility] duration-150 ease-out group-hover/row:visible group-hover/row:opacity-100 group-focus-within/row:visible group-focus-within/row:opacity-100">
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  className="pointer-events-auto transition-colors"
+                  onClick={isUnread ? markRead : park}
+                  aria-label={isUnread ? `Mark ${row.title} as read` : `Park ${row.title}`}
+                  data-testid={isUnread ? `${kind}-plugin-mark-read` : `${kind}-plugin-park`}
+                >
+                  {isUnread ? <MailOpen aria-hidden="true" /> : <CirclePause aria-hidden="true" />}
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom">
+                {isUnread ? "Mark as read" : "Park until it changes"}
+              </TooltipContent>
+            </Tooltip>
+          </div>
+        </div>
+      </ContextMenuTrigger>
+      <ContextMenuContent>
+        <ContextMenuItem onSelect={() => onActivate(row)}>Open panel</ContextMenuItem>
+        <ContextMenuSeparator />
+        <ContextMenuSub>
+          <ContextMenuSubTrigger>
+            <Clock className={MENU_ICON_CLASS} aria-hidden="true" />
+            Snooze
+          </ContextMenuSubTrigger>
+          <ContextMenuSubContent>
+            {PLUGIN_ATTENTION_SNOOZE_OPTIONS.map((option) => (
+              <ContextMenuItem
+                key={option}
+                onSelect={() =>
+                  usePluginPanelAttentionStore.getState().snooze(row.panelId, row.pluginId, option)
+                }
+              >
+                <Clock className={MENU_ICON_CLASS} aria-hidden="true" />
+                {AGENT_SNOOZE_LABEL[option]}
+              </ContextMenuItem>
+            ))}
+          </ContextMenuSubContent>
+        </ContextMenuSub>
+        <ContextMenuItem onSelect={park}>
+          <CirclePause className={MENU_ICON_CLASS} aria-hidden="true" />
+          Park until it changes
+        </ContextMenuItem>
+        {isUnread && (
+          <ContextMenuItem onSelect={markRead}>
+            <MailOpen className={MENU_ICON_CLASS} aria-hidden="true" />
+            Mark as read
+          </ContextMenuItem>
+        )}
+      </ContextMenuContent>
+    </ContextMenu>
   );
 }

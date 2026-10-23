@@ -9,6 +9,9 @@ export const PLUGIN_CAPABILITY_METHOD_CHANNELS = {
   setOsNotifications: "plugin-capability:set-os-notifications",
   getWorktreeDeleteNotes: "plugin-capability:get-worktree-delete-notes",
   setWorktreeDeleteNotes: "plugin-capability:set-worktree-delete-notes",
+  getPanelAttention: "plugin-capability:get-panel-attention",
+  setPanelAttention: "plugin-capability:set-panel-attention",
+  listPanelAttention: "plugin-capability:list-panel-attention",
 } as const satisfies Record<string, keyof IpcInvokeMap>;
 
 type Methods = typeof PLUGIN_CAPABILITY_METHOD_CHANNELS;

@@ -3,6 +3,11 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
 import type { PtyPanelData } from "@shared/types/panel";
 import type { TabGroup, AgentState } from "@/types";
+import type { PluginAttentionRow } from "@/lib/pluginPanelAttention";
+import {
+  _resetPluginPanelActivityStoreForTest,
+  usePluginPanelActivityStore,
+} from "@/store/pluginPanelActivityStore";
 
 const activateTerminalMock = vi.fn();
 const pingTerminalMock = vi.fn();
@@ -16,6 +21,11 @@ let mockTabGroups = new Map<string, TabGroup>();
 
 vi.mock("@/hooks/useTerminalSelectors", () => ({
   useUnreadTerminals: () => mockTerminals,
+}));
+
+let mockPluginRows: PluginAttentionRow[] = [];
+vi.mock("@/hooks/usePluginPanelAttentionRows", () => ({
+  usePluginAttentionUnreadRows: () => mockPluginRows,
 }));
 
 vi.mock("@/hooks/useWorktrees", () => ({
@@ -208,6 +218,8 @@ beforeEach(() => {
   trackTerminalFocusMock.mockReset();
   mockTerminals = [];
   mockTabGroups = new Map();
+  mockPluginRows = [];
+  _resetPluginPanelActivityStoreForTest();
 });
 
 describe("UnreadContainer", () => {
@@ -303,5 +315,37 @@ describe("UnreadContainer", () => {
     expect(trackTerminalFocusMock).toHaveBeenCalledWith("wt-2", "t1");
     expect(selectWorktreeMock).toHaveBeenCalledWith("wt-2");
     expect(activateTerminalMock).toHaveBeenCalledWith("t1");
+  });
+});
+
+describe("UnreadContainer plugin panel rows (#13821)", () => {
+  const unreadPluginRow: PluginAttentionRow = {
+    panelId: "plugin-panel-1",
+    pluginId: "acme",
+    pluginName: "Acme Board",
+    title: "Import",
+    kind: "acme.board",
+    worktreeId: "wt-1",
+    band: "review",
+    shown: "unread",
+    reason: null,
+    description: "Reported by Acme Board: Finished, unread",
+    revision: 9,
+  };
+
+  it("lists an unread plugin report as its own row, named as a plugin panel", () => {
+    mockPluginRows = [unreadPluginRow];
+    render(<UnreadContainer />);
+    expect(screen.getByRole("button", { name: /^Unread: 1 plugin panel / })).toBeTruthy();
+    expect(screen.getByTestId("unread-plugin-item").getAttribute("aria-label")).toContain(
+      "Reported by Acme Board"
+    );
+  });
+
+  it("marks the plugin's report read in this view, not any agent's read mark", () => {
+    mockPluginRows = [unreadPluginRow];
+    render(<UnreadContainer />);
+    fireEvent.click(screen.getByTestId("unread-plugin-mark-read"));
+    expect(usePluginPanelActivityStore.getState().seenRevisionByPanelId["plugin-panel-1"]).toBe(9);
   });
 });

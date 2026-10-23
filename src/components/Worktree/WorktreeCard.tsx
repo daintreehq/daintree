@@ -803,7 +803,7 @@ export function WorktreeCard({
   // cycling: a backgrounded agent is not counted there, so it must not mark
   // the card either. Every terminal here already belongs to this (existing)
   // worktree, so the orphan check has nothing to do.
-  const { runsById } = useWorktreeAgentBucketInputs();
+  const { runsById, pluginByWorktreeId } = useWorktreeAgentBucketInputs();
   const isInTrash = usePanelStore((state) => state.isInTrash);
   const chipState = computeChipState(
     deriveWorktreeAgentBuckets(
@@ -811,7 +811,8 @@ export function WorktreeCard({
         .filter((t) => isAgentTerminal(t) && isTerminalVisible(t, isInTrash, NO_WORKTREE_IDS))
         .map((t) => t.id),
       runsById,
-      isWorktreeMergedForCleanup(worktree)
+      isWorktreeMergedForCleanup(worktree),
+      pluginByWorktreeId.get(worktree.id)
     )
   );
 

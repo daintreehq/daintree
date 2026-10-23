@@ -1304,6 +1304,14 @@ export const CHANNELS = {
   // default; off means the plugin isn't asked.
   PLUGIN_CAPABILITY_GET_WORKTREE_DELETE_NOTES: "plugin-capability:get-worktree-delete-notes",
   PLUGIN_CAPABILITY_SET_WORKTREE_DELETE_NOTES: "plugin-capability:set-worktree-delete-notes",
+  // The per-plugin "Show in attention views" switch (#13821): whether a
+  // plugin's panel activity reports appear as rows in Pilot, the dock pills and
+  // the sidebar filters. Set only from the Plugin Manager, never by a prompt.
+  PLUGIN_CAPABILITY_GET_PANEL_ATTENTION: "plugin-capability:get-panel-attention",
+  PLUGIN_CAPABILITY_SET_PANEL_ATTENTION: "plugin-capability:set-panel-attention",
+  // Every instance id with that switch on, so each view can join reports
+  // against it without one read per plugin.
+  PLUGIN_CAPABILITY_LIST_PANEL_ATTENTION: "plugin-capability:list-panel-attention",
 
   // Plugin managed-process channels (#9234) — child processes spawned by a
   // plugin via `host.process.spawn` (gated on `shell:exec`). `list` is the

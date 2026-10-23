@@ -16,6 +16,7 @@ import { useResourceMonitoringStore } from "./resourceMonitoringStore";
 import { useVoiceRecordingStore } from "./voiceRecordingStore";
 import { usePluginPanelBadgeStore } from "./pluginPanelBadgeStore";
 import { usePluginPanelActivityStore } from "./pluginPanelActivityStore";
+import { usePluginPanelAttentionStore } from "./pluginPanelAttentionStore";
 import { usePluginPanelToolbarStore } from "./pluginPanelToolbarStore";
 import { usePluginPanelMenuStore } from "./pluginPanelMenuStore";
 import { usePluginPanelOpenRequestStore } from "./pluginPanelOpenRequestStore";
@@ -420,6 +421,8 @@ export function initStoreOrchestrator(): () => void {
             usePluginPanelBadgeStore.getState().removePanel(removedId);
             // Activity reports and their seen marks, keyed the same way (#13820).
             usePluginPanelActivityStore.getState().removePanel(removedId);
+            // A park or snooze on its attention row (#13821).
+            usePluginPanelAttentionStore.getState().removePanel(removedId);
             // Header button states are keyed the same way and leak the same way.
             usePluginPanelToolbarStore.getState().clearPanel(removedId);
             usePluginPanelMenuStore.getState().removePanel(removedId);

@@ -4,6 +4,11 @@ import { fireEvent, render, screen, within } from "@testing-library/react";
 import type { PtyPanelData } from "@shared/types/panel";
 import { ESCAPE_BACKSTOP_DIALOG_ATTR } from "@/lib/dialogEscapeBackstop";
 import type { TabGroup, AgentState } from "@/types";
+import type { PluginAttentionRow } from "@/lib/pluginPanelAttention";
+import {
+  _resetPluginPanelAttentionStoreForTest,
+  usePluginPanelAttentionStore,
+} from "@/store/pluginPanelAttentionStore";
 
 const activateTerminalMock = vi.fn();
 const pingTerminalMock = vi.fn();
@@ -14,9 +19,19 @@ const trackTerminalFocusMock = vi.fn();
 
 let mockTerminals: PtyPanelData[] = [];
 let mockTabGroups = new Map<string, TabGroup>();
+let mockPluginRows: PluginAttentionRow[] = [];
+const openPluginPanelMock = vi.fn((_panelId: string) => Promise.resolve(true));
 
 vi.mock("@/hooks/useTerminalSelectors", () => ({
   useWaitingTerminals: () => mockTerminals,
+}));
+
+vi.mock("@/hooks/usePluginPanelAttentionRows", () => ({
+  usePluginAttentionWaitingRows: () => mockPluginRows,
+}));
+
+vi.mock("@/components/PluginAttention/openPluginAttentionPanel", () => ({
+  openPluginAttentionPanel: (panelId: string) => openPluginPanelMock(panelId),
 }));
 
 vi.mock("@/hooks/useWorktrees", () => ({
@@ -217,7 +232,27 @@ beforeEach(() => {
   popoverHandlers.onEscapeKeyDown = undefined;
   mockTerminals = [];
   mockTabGroups = new Map();
+  mockPluginRows = [];
+  openPluginPanelMock.mockClear();
+  _resetPluginPanelAttentionStoreForTest();
 });
+
+function makePluginRow(overrides: Partial<PluginAttentionRow> = {}): PluginAttentionRow {
+  return {
+    panelId: "plugin-panel-1",
+    pluginId: "acme",
+    pluginName: "Acme Board",
+    title: "Sync board",
+    kind: "acme.board",
+    worktreeId: "wt-1",
+    band: "needs-you",
+    shown: "waiting",
+    reason: "Pick a branch",
+    description: "Reported by Acme Board: Waiting — Pick a branch",
+    revision: 4,
+    ...overrides,
+  };
+}
 
 /** Where the real kill confirm holds focus: inside a backstop-managed dialog. */
 function focusInsideBackstopDialog() {
@@ -710,5 +745,69 @@ describe("WaitingContainer", () => {
       expect(markEscapeYieldedMock).not.toHaveBeenCalled();
       outside.remove();
     });
+  });
+});
+
+describe("WaitingContainer plugin panel rows (#13821)", () => {
+  it("shows the pill for a plugin panel alone, and never calls it an agent", () => {
+    mockPluginRows = [makePluginRow()];
+    const { container } = render(<WaitingContainer />);
+    expect(container.querySelector(".dock-status-pill")?.getAttribute("data-visible")).toBe("true");
+    expect(
+      screen.getByRole("button", {
+        name: "Waiting: 1 plugin panel across all worktrees, all in this one",
+      })
+    ).toBeTruthy();
+  });
+
+  it("counts agents and plugin panels apart", () => {
+    mockTerminals = [makeTerminal({ id: "t1" })];
+    mockPluginRows = [makePluginRow()];
+    render(<WaitingContainer />);
+    expect(
+      screen.getByRole("button", {
+        name: "Waiting: 1 agent, 1 plugin panel across all worktrees, all in this one",
+      })
+    ).toBeTruthy();
+  });
+
+  it("lists plugin rows after every agent, even an agent in another worktree", () => {
+    mockTerminals = [makeTerminal({ id: "t-elsewhere", worktreeId: "wt-2" })];
+    mockPluginRows = [makePluginRow({ worktreeId: "wt-1" })];
+    render(<WaitingContainer />);
+    const agentRow = screen.getByTestId("waiting-single-item");
+    const pluginRow = screen.getByTestId("waiting-plugin-item");
+    expect(agentRow.compareDocumentPosition(pluginRow) & Node.DOCUMENT_POSITION_FOLLOWING).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING
+    );
+    expect(pluginRow.getAttribute("aria-label")).toContain("Reported by Acme Board");
+  });
+
+  it("opens the plugin's panel, never through a terminal's activation", () => {
+    mockPluginRows = [makePluginRow()];
+    render(<WaitingContainer />);
+    fireEvent.click(screen.getByTestId("waiting-plugin-item"));
+    expect(openPluginPanelMock).toHaveBeenCalledWith("plugin-panel-1");
+    expect(activateTerminalMock).not.toHaveBeenCalled();
+  });
+
+  it("parks the row's own report in this view, touching no agent", () => {
+    mockPluginRows = [makePluginRow()];
+    render(<WaitingContainer />);
+    fireEvent.click(screen.getByTestId("waiting-plugin-park"));
+    expect(usePluginPanelAttentionStore.getState().shelfByPanelId["plugin-panel-1"]).toMatchObject({
+      kind: "parked",
+      pluginId: "acme",
+      revision: 4,
+    });
+    expect(removePanelMock).not.toHaveBeenCalled();
+  });
+
+  it("drops a plugin panel left behind in a worktree that no longer exists", () => {
+    mockPluginRows = [makePluginRow({ worktreeId: "wt-deleted" })];
+    const { container } = render(<WaitingContainer />);
+    expect(container.querySelector(".dock-status-pill")?.getAttribute("data-visible")).toBe(
+      "false"
+    );
   });
 });

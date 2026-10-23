@@ -21,9 +21,11 @@ import { composeTitledPanel } from "@/utils/terminalTitleDisplay";
 import { deriveTerminalChrome, type TerminalChromeDescriptor } from "@/utils/terminalChrome";
 import { worktreeLabels } from "@/lib/worktreeLabels";
 import { canopyEvidenceParts, type CanopyEvidenceParts } from "@/lib/canopyRefinementPresentation";
+import type { PluginAttentionRow } from "@/lib/pluginPanelAttention";
 
-export interface PilotRow {
+export interface PilotAgentRow {
   run: FleetRunRow;
+  plugin?: undefined;
   band: FleetBand;
   /**
    * The title the panel header and tab strip show for this run, composed by
@@ -102,6 +104,28 @@ export interface PilotRow {
   secondaryPhrase: string | null;
 }
 
+/**
+ * A plugin panel the user let into the attention views (#13821). Never a fleet
+ * run: it carries the plugin's report instead, its clock fields stay empty
+ * because a report has a revision and no time, and it is filed in its own
+ * trailing group so it can never rank above an agent.
+ */
+export interface PilotPluginRow extends Omit<PilotAgentRow, "run" | "plugin"> {
+  run?: undefined;
+  plugin: PluginAttentionRow;
+}
+
+export type PilotRow = PilotAgentRow | PilotPluginRow;
+
+/** The row's selection and DOM identity; a plugin panel's is namespaced off any run's. */
+export function pilotRowId(row: PilotRow): string {
+  return row.run !== undefined ? row.run.runId : `plugin-panel-${row.plugin.panelId}`;
+}
+
+export function isPilotAgentRow(row: PilotRow): row is PilotAgentRow {
+  return row.run !== undefined;
+}
+
 export type PilotWorkspaceKind = "project" | "scratch" | "unknown";
 
 /**
@@ -122,7 +146,7 @@ export interface PilotGroupCore {
    * RUN — which is where it has always been true.
    */
   groupId: string;
-  axis: "workspace" | "worktree";
+  axis: "workspace" | "worktree" | "plugin";
   name: string;
   /**
    * A second name a query may match to admit the whole group.
@@ -157,6 +181,7 @@ export interface PilotGroupCore {
 
 export interface PilotProjectGroup extends PilotGroupCore {
   axis: "workspace";
+  rows: PilotAgentRow[];
   workspaceId: string;
   kind: PilotWorkspaceKind;
   emoji: string | null;
@@ -168,6 +193,7 @@ export interface PilotProjectGroup extends PilotGroupCore {
 
 export interface PilotWorktreeGroup extends PilotGroupCore {
   axis: "worktree";
+  rows: PilotAgentRow[];
   /**
    * The run's normalized worktree path, or null for the bucket holding runs the
    * snapshot files under no worktree at all.
@@ -186,7 +212,17 @@ export interface PilotWorktreeGroup extends PilotGroupCore {
   worktreeId: string | null;
 }
 
-export type PilotDisplayGroup = PilotProjectGroup | PilotWorktreeGroup;
+/**
+ * This view's plugin panels, after every agent group on either axis (#13821).
+ * Only the view's own project has them: plugin reports reach the renderer that
+ * holds the panel and no other.
+ */
+export interface PilotPluginGroup extends PilotGroupCore {
+  axis: "plugin";
+  rows: PilotPluginRow[];
+}
+
+export type PilotDisplayGroup = PilotProjectGroup | PilotWorktreeGroup | PilotPluginGroup;
 
 export function directoryLabel(cwd: string): string | null {
   const cleaned = cwd.replace(/[/\\]+$/, "");
@@ -466,7 +502,7 @@ export function buildPilotGroups(
       return compareWithinBand(a, b, bandA);
     });
 
-    const rows: PilotRow[] = sorted.map((run) => {
+    const rows: PilotAgentRow[] = sorted.map((run) => {
       const band = bandForRun(run);
       const chrome = derivePilotRunChrome(run);
       const title = composePilotRunTitle(run, chrome);
@@ -674,7 +710,7 @@ export function buildPilotWorktreeGroups(
   project: PilotProjectGroup,
   mainWorktreeId?: string | null
 ): PilotWorktreeGroup[] {
-  const byWorktree = new Map<string | null, PilotRow[]>();
+  const byWorktree = new Map<string | null, PilotAgentRow[]>();
   for (const row of project.rows) {
     const key = worktreeKey(row.run);
     const bucket = byWorktree.get(key);
@@ -735,6 +771,53 @@ export function buildPilotWorktreeGroups(
   return groups;
 }
 
+/** The plugin group's id: one per view, and no workspace or worktree id can spell it. */
+export const PILOT_PLUGIN_GROUP_ID = "plugin-panels";
+
+/**
+ * This view's plugin panel rows as one trailing group, or null when there are
+ * none (#13821). `parentName` is the view's own project, so a query naming it
+ * admits these rows the same way it admits that project's agents.
+ *
+ * The rows arrive ranked worst band first. They are never merged into an agent
+ * group: workspace order is recency, and a plugin filed under the current
+ * project would sit above an agent asking in the next one.
+ */
+export function buildPilotPluginGroup(
+  rows: readonly PluginAttentionRow[],
+  parentName: string | null
+): PilotPluginGroup | null {
+  if (rows.length === 0) return null;
+  const pilotRows: PilotPluginRow[] = rows.map((plugin) => ({
+    plugin,
+    band: plugin.band,
+    title: plugin.title,
+    chrome: deriveTerminalChrome({ kind: plugin.kind }),
+    presetColor: undefined,
+    statusLabel: plugin.description,
+    worktreeLabel: null,
+    age: null,
+    ageLabel: null,
+    agePhrase: null,
+    parkNote: null,
+    canopyEvidence: null,
+    secondaryPhrase: null,
+  }));
+  return narrowGroup<PilotPluginGroup>(
+    {
+      groupId: PILOT_PLUGIN_GROUP_ID,
+      axis: "plugin",
+      name: "Plugin panels",
+      ...(parentName !== null ? { parentName } : {}),
+      rows: pilotRows,
+      demandCount: 0,
+      topBand: "idle",
+      attention: [],
+    },
+    pilotRows
+  );
+}
+
 /**
  * Filter groups to rows matching a query, dropping groups left with nothing.
  *
@@ -783,7 +866,11 @@ export function filterPilotGroups<T extends PilotGroupCore>(
         isFilterMatch(needle, row.chrome.label) ||
         // A park note is the user's own words about the run — the string they
         // are most likely to remember it by.
-        (row.parkNote !== null && isFilterMatch(needle, row.parkNote))
+        (row.parkNote !== null && isFilterMatch(needle, row.parkNote)) ||
+        // A plugin row is found by whose report it is and what it says.
+        (row.plugin !== undefined &&
+          (isFilterMatch(needle, row.plugin.pluginName) ||
+            (row.plugin.reason !== null && isFilterMatch(needle, row.plugin.reason))))
     );
     if (rows.length === 0) continue;
     // Recomputed, never inherited: a query that filters the blocked run out of

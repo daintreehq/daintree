@@ -16,16 +16,21 @@ import { agoPhrase, formatWaitAge } from "@/lib/projectRowStatus";
 import { bandTimestamp, FLEET_BANDS, isAttentionBand, type FleetBand } from "@/lib/fleetAttention";
 import {
   buildPilotGroups,
+  buildPilotPluginGroup,
   buildPilotWorktreeGroups,
   countPilotBands,
   filterPilotBands,
   filterPilotGroups,
   hasWorktreeAxis,
+  pilotRowId,
   summarizePilotGroups,
   PILOT_BAND_FILTER_LABEL,
   type PilotBandFilter,
   type PilotDisplayGroup,
+  type PilotAgentRow,
   type PilotGroupCore,
+  type PilotPluginGroup,
+  type PilotPluginRow,
   type PilotProjectGroup,
   type PilotRow,
   type PilotWorkspaceMeta,
@@ -51,12 +56,16 @@ import { FolderGit2 } from "@/components/icons";
 import { TILE_BASE, WorkspaceTile } from "./WorkspaceTile";
 // Direction glyphs, not app concepts, so they come straight from Lucide the way
 // every other chevron in the app does rather than through the icon aliases.
-import { ChevronLeft, ChevronRight } from "lucide-react";
+import { ChevronLeft, ChevronRight, Package } from "lucide-react";
 import { useEffectiveCombo } from "@/hooks/useKeybinding";
 // Leaf import, not the `@/hooks` barrel: palette suites routinely mock that
 // barrel and throw on an export they don't list.
 import { useOverlayClaim } from "@/hooks/useOverlayState";
 import { pluralize } from "@/lib/pluralize";
+import { usePluginPanelAttentionRows } from "@/hooks/usePluginPanelAttentionRows";
+import { usePluginPanelAttentionStore } from "@/store/pluginPanelAttentionStore";
+import { openPluginAttentionPanel } from "@/components/PluginAttention/openPluginAttentionPanel";
+import { suppressPaletteFocusRestore } from "@/components/ui/paletteFocusRestore";
 const LIST_ID = "pilot-agent-list";
 
 /** Ages are minute-grained, so a 30s tick keeps them honest without churn. */
@@ -93,7 +102,7 @@ interface PilotOrder {
 function capturePilotOrder(groups: readonly PilotGroupCore[]): PilotOrder {
   return {
     groups: groups.map((group) => group.groupId),
-    rows: new Map(groups.map((group) => [group.groupId, group.rows.map((r) => r.run.runId)])),
+    rows: new Map(groups.map((group) => [group.groupId, group.rows.map(pilotRowId)])),
   };
 }
 
@@ -123,7 +132,7 @@ function applyPilotOrder<T extends PilotGroupCore>(groups: readonly T[], order: 
     // spreading a generic widens it past the return type.
     return Object.assign({}, group, {
       rows: [...group.rows].sort(
-        (a, b) => rankOf(rowIndex, a.run.runId) - rankOf(rowIndex, b.run.runId)
+        (a, b) => rankOf(rowIndex, pilotRowId(a)) - rankOf(rowIndex, pilotRowId(b))
       ),
     });
   });
@@ -142,8 +151,13 @@ const ROW_BASE = cn(
  * the noun, which is the same correction the switcher's status line already
  * carries.
  */
-function demandPhrase(count: number): string {
-  return count === 1 ? "Agent needs you" : `${count} agents need you`;
+function demandPhrase(count: number, pluginCount = 0): string {
+  if (pluginCount === 0) return count === 1 ? "Agent needs you" : `${count} agents need you`;
+  if (count === 0) {
+    return pluginCount === 1 ? "Plugin panel needs you" : `${pluginCount} plugin panels need you`;
+  }
+  // Both, named apart: a plugin panel is never counted as an agent.
+  return `${pluralize(count, "agent")} and ${pluralize(pluginCount, "plugin panel")} need you`;
 }
 
 function agentCount(count: number): string {
@@ -207,6 +221,9 @@ function quietPhrase(count: number): string {
  * second row of its own.
  */
 const ROW_TONE = "text-text-secondary";
+
+/** An unselected row's title, a step above the row's resting tone. */
+const TITLE_TONE = "text-daintree-text/85";
 
 /**
  * A project, as a heading — never a row, and never a control.
@@ -345,6 +362,9 @@ function GroupHeader({
   );
 }
 
+/** The glyph tile a non-project heading wears: a worktree's, or the plugin panels'. */
+const HEADER_TILE_CLASS = cn(TILE_BASE, "bg-tint/[0.04] text-muted-foreground");
+
 /**
  * A worktree, as a heading — the same structure a project is, on the other axis.
  *
@@ -363,7 +383,7 @@ function WorktreeGroupHeader({ group }: { group: PilotWorktreeGroup }) {
       data-testid="pilot-worktree-header"
       className="flex w-full items-center gap-2 py-1 pr-3 pl-3 select-none"
     >
-      <div className={cn(TILE_BASE, "bg-tint/[0.04] text-muted-foreground")}>
+      <div className={HEADER_TILE_CLASS}>
         <FolderGit2 className="h-2.5 w-2.5" aria-hidden="true" />
       </div>
 
@@ -379,6 +399,29 @@ function WorktreeGroupHeader({ group }: { group: PilotWorktreeGroup }) {
   );
 }
 
+/**
+ * The heading over this view's plugin panels (#13821), after every agent group.
+ * Says "this project" because that is the whole of what it can list: a plugin's
+ * reports reach the view holding its panel and no other.
+ */
+function PluginGroupHeader({ group }: { group: PilotPluginGroup }) {
+  return (
+    <div
+      data-testid="pilot-plugin-header"
+      className="flex w-full items-center gap-2 py-1 pr-3 pl-3 select-none"
+    >
+      <div className={HEADER_TILE_CLASS}>
+        <Package className="h-2.5 w-2.5" aria-hidden="true" />
+      </div>
+      <div aria-hidden="true" className="flex min-w-0 flex-1 items-center gap-1.5">
+        <span className={cn(PALETTE_SECTION_LABEL_CLASS, "truncate")}>{group.name}</span>
+        <span className="shrink-0 text-3xs leading-none text-text-secondary">This project</span>
+      </div>
+      <GroupDemandChip group={group} />
+    </div>
+  );
+}
+
 function RunRow({
   row,
   isSelected,
@@ -386,7 +429,7 @@ function RunRow({
   onActivate,
   onPointerMove,
 }: {
-  row: PilotRow;
+  row: PilotAgentRow;
   isSelected: boolean;
   domId: string;
   onActivate: () => void;
@@ -479,7 +522,7 @@ function RunRow({
       <span
         className={cn(
           "min-w-0 flex-1 truncate text-sm leading-tight",
-          isSelected ? "text-text-primary" : "text-daintree-text/85"
+          isSelected ? "text-text-primary" : TITLE_TONE
         )}
       >
         {row.title}
@@ -550,6 +593,95 @@ function RunRow({
           {row.ageLabel === null ? row.age : `${row.ageLabel} ${row.age}`}
         </span>
       )}
+    </div>
+  );
+}
+
+/**
+ * The park verb on a plugin row. Its park and snooze are this view's own and
+ * lift in one key, so the verb names the inverse once one is in force.
+ */
+const PLUGIN_SHELF_VERB: Partial<Record<FleetBand, string>> = {
+  parked: "Unpark",
+  snoozed: "Wake now",
+};
+
+/**
+ * Park a plugin row until the plugin reports something new, or lift the park
+ * or snooze it already has. Never an agent's park: those live in main.
+ */
+function togglePluginShelf(row: PilotPluginRow): void {
+  const store = usePluginPanelAttentionStore.getState();
+  if (row.band === "parked" || row.band === "snoozed") store.release(row.plugin.panelId);
+  else store.park(row.plugin.panelId, row.plugin.pluginId, row.plugin.revision);
+}
+
+/** The words a shelved plugin row adds to its accessible name. */
+const PLUGIN_SHELF_PHRASE: Partial<Record<FleetBand, string>> = {
+  parked: "parked until it changes",
+  snoozed: "snoozed",
+};
+
+/**
+ * A plugin panel's row (#13821): the band's glyph, the panel's own mark and
+ * title, then whose report it is in the slot an agent's park note takes. The
+ * attribution is always drawn — a plugin row is never mistaken for an agent.
+ * No clock: a report has a revision, not a time.
+ */
+function PluginPanelRow({
+  row,
+  isSelected,
+  domId,
+  onActivate,
+  onPointerMove,
+}: {
+  row: PilotPluginRow;
+  isSelected: boolean;
+  domId: string;
+  onActivate: () => void;
+  onPointerMove: () => void;
+}) {
+  const { plugin } = row;
+  const accessibleName = [row.title, row.statusLabel, PLUGIN_SHELF_PHRASE[row.band] ?? null]
+    .filter((part): part is string => part !== null)
+    .join(", ");
+
+  return (
+    <div
+      id={domId}
+      role="option"
+      aria-selected={isSelected}
+      aria-label={accessibleName}
+      data-testid="pilot-plugin-row"
+      onClick={onActivate}
+      onPointerMove={onPointerMove}
+      className={cn(ROW_BASE, ROW_TONE, "gap-2 py-1 pr-3 pl-3")}
+    >
+      <span className="flex size-3.5 shrink-0 items-center justify-center">
+        <PilotRunState band={row.band} agentState={undefined} />
+      </span>
+      <span className="flex size-4 shrink-0 items-center justify-center">
+        <TerminalIcon chrome={row.chrome} className="h-4 w-4" brandColor={row.chrome.color} />
+      </span>
+      <span
+        className={cn(
+          "min-w-0 flex-1 truncate text-sm leading-tight",
+          isSelected ? "text-text-primary" : TITLE_TONE
+        )}
+      >
+        {row.title}
+      </span>
+      <span
+        aria-hidden="true"
+        data-plugin-attribution=""
+        className="flex max-w-[45%] min-w-0 shrink items-baseline gap-1 text-xs leading-tight text-text-secondary"
+      >
+        {plugin.reason !== null && <span className="min-w-0 truncate">{plugin.reason}</span>}
+        <span className="shrink-0">
+          {plugin.reason !== null ? "· " : ""}
+          {`Reported by ${plugin.pluginName}`}
+        </span>
+      </span>
     </div>
   );
 }
@@ -746,6 +878,22 @@ export function PilotView() {
     }
     return null;
   }, null);
+  /** This view's worktree ids as one string, so a plugin panel left in a deleted one drops out. */
+  const viewWorktreeIdKey = useWorktreeStoreOptional((s) => {
+    const ids: string[] = [];
+    for (const [id, worktree] of s.worktrees) {
+      ids.push(id);
+      if (worktree.worktreeId) ids.push(worktree.worktreeId);
+    }
+    return ids.join("\n");
+  }, "");
+
+  /**
+   * This view's plugin panels the user let into the attention views (#13821).
+   * Only the view's own: reports reach the renderer holding the panel and no
+   * other, so a neighbouring project's plugin rows are not this list's to show.
+   */
+  const pluginAttentionRows = usePluginPanelAttentionRows();
 
   useOverlayClaim("pilot", isOpen);
 
@@ -839,6 +987,21 @@ export function PilotView() {
     });
   }, [snapshot, workspaces, nowMs]);
 
+  const pluginGroup = useMemo(() => {
+    const worktreeIds = viewWorktreeIdKey === "" ? null : new Set(viewWorktreeIdKey.split("\n"));
+    const rows =
+      worktreeIds === null
+        ? pluginAttentionRows
+        : pluginAttentionRows.filter(
+            (row) => row.worktreeId === null || worktreeIds.has(row.worktreeId)
+          );
+    const viewWorkspaceId = getViewWorkspaceId();
+    return buildPilotPluginGroup(
+      rows,
+      viewWorkspaceId === null ? null : (workspaces.get(viewWorkspaceId)?.name ?? null)
+    );
+  }, [pluginAttentionRows, viewWorktreeIdKey, workspaces]);
+
   /**
    * The project the scope names, found among the groups actually built.
    *
@@ -866,17 +1029,29 @@ export function PilotView() {
    * scoped population rather than the whole fleet.
    */
   const displayGroups = useMemo<PilotDisplayGroup[]>(() => {
-    if (scope.kind === "fleet") return liveGroups;
-    if (scopedProject === null) return [];
+    // Plugin rows trail every agent group, so none can rank above an agent
+    // asking — and only once the fleet has been read, so they never sit beside
+    // the skeleton. Scoped, only the view's own project has any.
+    const trailing: PilotDisplayGroup[] =
+      pluginGroup !== null &&
+      snapshot !== null &&
+      (scope.kind === "fleet" || scope.workspaceId === getViewWorkspaceId())
+        ? [pluginGroup]
+        : [];
+    if (scope.kind === "fleet") return [...liveGroups, ...trailing];
+    if (scopedProject === null) return trailing;
     // The root checkout leads, and only where this view can name it: the drill
     // is reachable on a neighbouring project's heading too, and this view's
     // worktree store describes its own project only. A foreign project keeps
     // the label order, which is the honest answer there.
-    return buildPilotWorktreeGroups(
-      scopedProject,
-      scopedProject.isCurrent ? viewMainWorktreeId : null
-    );
-  }, [scope.kind, liveGroups, scopedProject, viewMainWorktreeId]);
+    return [
+      ...buildPilotWorktreeGroups(
+        scopedProject,
+        scopedProject.isCurrent ? viewMainWorktreeId : null
+      ),
+      ...trailing,
+    ];
+  }, [scope, liveGroups, scopedProject, viewMainWorktreeId, pluginGroup, snapshot]);
 
   /**
    * The project a scoped opening asked for and could not give, named.
@@ -1008,9 +1183,9 @@ export function PilotView() {
           domId: groupDomId(group.groupId),
           navigable: false,
         },
-        items: group.rows.map((row) => ({
-          rowId: row.run.runId,
-          domId: runDomId(row.run.runId),
+        items: group.rows.map((row: PilotRow) => ({
+          rowId: pilotRowId(row),
+          domId: runDomId(pilotRowId(row)),
           navigable: true,
           item: row,
         })),
@@ -1044,8 +1219,17 @@ export function PilotView() {
     let best: { rowId: string; rank: number; since: number } | null = null;
     for (const group of visibleGroups) {
       // Rows are sorted worst-first within a group, so only the first can win.
-      const row = group.rows[0];
+      const row: PilotRow | undefined = group.rows[0];
       if (row === undefined || !isAttentionBand(row.band)) continue;
+      // A plugin row ranks below every band an agent can be in: it is where the
+      // highlight starts only when no agent is asking for anything.
+      if (row.run === undefined) {
+        const rank = FLEET_BANDS.length + FLEET_BANDS.indexOf(row.band);
+        if (best === null || rank < best.rank) {
+          best = { rowId: pilotRowId(row), rank, since: Number.MAX_SAFE_INTEGER };
+        }
+        continue;
+      }
       const candidate = {
         rowId: row.run.runId,
         rank: FLEET_BANDS.indexOf(row.band),
@@ -1164,6 +1348,20 @@ export function PilotView() {
 
   const activate = useCallback((row: NavigablePaletteTreeRow<PilotDisplayGroup, PilotRow>) => {
     if (row.kind !== "item") return;
+    if (row.item.run === undefined) {
+      // Always this view's own panel, so no switch: focus it, and close only
+      // once it took focus — the panel can close between render and click.
+      const { panelId } = row.item.plugin;
+      safeFireAndForget(
+        openPluginAttentionPanel(panelId).then((opened) => {
+          if (!opened) return;
+          suppressPaletteFocusRestore();
+          usePilotStore.getState().close();
+        }),
+        { context: "PilotView openPluginAttentionPanel" }
+      );
+      return;
+    }
     void actionService.dispatch("pilot.openRun", {
       runId: row.item.run.runId,
       // Read off the RUN, never off the group. A group id names a project on
@@ -1296,6 +1494,12 @@ export function PilotView() {
     (event: KeyboardEvent<HTMLElement>): boolean => {
       if (event.key !== "Enter" || !event.altKey || event.defaultPrevented) return false;
       if (selectedRow === null || selectedRow.kind !== "item") return false;
+      // A plugin row's park is this view's own, so it needs no fleet behind it.
+      if (selectedRow.item.run === undefined) {
+        event.preventDefault();
+        togglePluginShelf(selectedRow.item);
+        return true;
+      }
       // No parking from retained data: Main rejects a park it cannot validate
       // against a healthy snapshot, so offering the editor over a stale fleet
       // would collect a note and then bounce it.
@@ -1480,7 +1684,13 @@ export function PilotView() {
    * has to deliver what it advertises: counted over the whole fleet it would
    * promise five agents and reveal the two that also match the query.
    */
-  const fleet = useMemo(() => summarizePilotGroups(queryGroups), [queryGroups]);
+  const fleet = useMemo(
+    // Agents only: every sentence below names agents, and a plugin panel is
+    // never counted as one. Its demand is named apart in the one sentence a
+    // plugin row can reach.
+    () => summarizePilotGroups(queryGroups.filter((group) => group.axis !== "plugin")),
+    [queryGroups]
+  );
 
   /**
    * The demand the footer can actually isolate.
@@ -1492,6 +1702,9 @@ export function PilotView() {
    * instead of being folded into somebody else's.
    */
   const needsYou = filterCounts["needs-you"];
+  // The segment counts plugin rows too, so the sentence names them apart and
+  // still adds up to exactly what pressing it reveals.
+  const agentNeedsYou = fleet.bands.blocked + fleet.bands["needs-you"];
   const quiet = fleet.bands.quiet;
   const review = fleet.bands.review;
 
@@ -1517,7 +1730,7 @@ export function PilotView() {
     status.kind === "loading" || status.kind === "unavailable"
       ? { phrase: "", filter: null }
       : needsYou > 0
-        ? { phrase: demandPhrase(needsYou), filter: "needs-you" }
+        ? { phrase: demandPhrase(agentNeedsYou, needsYou - agentNeedsYou), filter: "needs-you" }
         : quiet > 0
           ? { phrase: quietPhrase(quiet), filter: "quiet" }
           : review > 0
@@ -1602,14 +1815,15 @@ export function PilotView() {
   // needs a healthy snapshot (Main validates the ids against it), so the hint
   // disappears with the data that would back it.
   const parkLabel =
-    actionLabel === null ||
-    selectedRow === null ||
-    selectedRow.kind !== "item" ||
-    status.kind !== "live"
+    actionLabel === null || selectedRow === null || selectedRow.kind !== "item"
       ? null
-      : selectedRow.item.band === "parked"
-        ? "Edit park"
-        : "Park";
+      : selectedRow.item.run === undefined
+        ? (PLUGIN_SHELF_VERB[selectedRow.item.band] ?? "Park")
+        : status.kind !== "live"
+          ? null
+          : selectedRow.item.band === "parked"
+            ? "Edit park"
+            : "Park";
 
   // The drill verb rides the same "is a row actually actionable" gating as the
   // other two, and disappears with the target itself — a hint naming a chord
@@ -1944,22 +2158,35 @@ export function PilotView() {
               >
                 {group.axis === "worktree" ? (
                   <WorktreeGroupHeader group={group} />
+                ) : group.axis === "plugin" ? (
+                  <PluginGroupHeader group={group} />
                 ) : (
                   <GroupHeader
                     group={group}
                     {...(drillTo !== null ? { onDrill: () => openProject(drillTo) } : {})}
                   />
                 )}
-                {items.map((row) => (
-                  <RunRow
-                    key={row.domId}
-                    row={row.item}
-                    isSelected={row.rowId === selectedRow?.rowId}
-                    domId={row.domId}
-                    onActivate={() => navigation.activateRow(row.rowId)}
-                    onPointerMove={() => handleRowPointerMove(row.rowId)}
-                  />
-                ))}
+                {items.map((row) =>
+                  row.item.run === undefined ? (
+                    <PluginPanelRow
+                      key={row.domId}
+                      row={row.item}
+                      isSelected={row.rowId === selectedRow?.rowId}
+                      domId={row.domId}
+                      onActivate={() => navigation.activateRow(row.rowId)}
+                      onPointerMove={() => handleRowPointerMove(row.rowId)}
+                    />
+                  ) : (
+                    <RunRow
+                      key={row.domId}
+                      row={row.item}
+                      isSelected={row.rowId === selectedRow?.rowId}
+                      domId={row.domId}
+                      onActivate={() => navigation.activateRow(row.rowId)}
+                      onPointerMove={() => handleRowPointerMove(row.rowId)}
+                    />
+                  )
+                )}
               </div>
             );
           })}
@@ -1988,7 +2215,10 @@ export function PilotView() {
               if (selectedRow !== null) navigation.activateRow(selectedRow.rowId);
             }}
             onPark={() => {
-              if (selectedRow?.kind === "item") setParkTargetId(selectedRow.item.run.runId);
+              if (selectedRow?.kind === "item") {
+                if (selectedRow.item.run === undefined) togglePluginShelf(selectedRow.item);
+                else setParkTargetId(selectedRow.item.run.runId);
+              }
               // Every footer control hands focus back for the same reason: it
               // leaves focus on itself, where the body's handler bails on
               // events that did not come from the scroller, so the arrows

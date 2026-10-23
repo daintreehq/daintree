@@ -14,7 +14,7 @@ import {
   type ParkGateCandidate,
 } from "@/components/Fleet/RunParkFields";
 import { PilotFooterHint } from "./PilotFooterHint";
-import type { PilotProjectGroup, PilotRow } from "./pilotRows";
+import type { PilotAgentRow, PilotProjectGroup } from "./pilotRows";
 import type { RunParkRecord } from "@shared/types/ipc/fleet";
 
 /**
@@ -23,12 +23,12 @@ import type { RunParkRecord } from "@shared/types/ipc/fleet";
  * rows do.
  */
 export interface PilotGateCandidate {
-  row: PilotRow;
+  row: PilotAgentRow;
   group: PilotProjectGroup;
 }
 
 export interface PilotParkTarget {
-  row: PilotRow;
+  row: PilotAgentRow;
   group: PilotProjectGroup;
   existingPark: RunParkRecord | undefined;
 }

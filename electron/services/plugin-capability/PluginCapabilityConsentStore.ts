@@ -3,7 +3,7 @@ import {
   EXTERNAL_LINK_CONSENT,
   type PluginCapabilityConsentRecord,
   type PluginCapabilityIdentity,
-  type PluginConsentSubject,
+  type PluginGrantKey,
 } from "../../../shared/types/pluginCapabilityConsent.js";
 
 /**
@@ -223,7 +223,7 @@ function normalizeRecord(raw: unknown): PluginCapabilityConsentRecord | null {
   }
   return {
     pluginId: r.pluginId,
-    capability: r.capability as PluginConsentSubject,
+    capability: r.capability as PluginGrantKey,
     scopeKey: scopeKey ?? DEFAULT_SCOPE_KEY,
     approvedAt: r.approvedAt,
   };

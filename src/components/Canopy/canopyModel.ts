@@ -12,13 +12,13 @@ import {
   type CanopySeen,
   isCanopyUnread,
 } from "@shared/types/ipc/canopy";
-import type { PilotProjectGroup, PilotRow } from "@/components/Pilot/pilotRows";
+import type { PilotAgentRow, PilotProjectGroup } from "@/components/Pilot/pilotRows";
 import { getTerminalTaskTitle } from "@/utils/terminalTitleDisplay";
 
 export interface CanopyItem {
   runId: string;
   workspaceId: string;
-  row: PilotRow;
+  row: PilotAgentRow;
   workspace: Pick<PilotProjectGroup, "name" | "emoji" | "color" | "kind" | "isCurrent">;
   /** What the card is drawn as. The classifier's reading once it has one. */
   kind: CanopyCategory;

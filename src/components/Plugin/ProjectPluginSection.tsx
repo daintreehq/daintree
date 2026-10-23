@@ -1,3 +1,4 @@
+import { useSyncExternalStore } from "react";
 import { AlertTriangle, Package, RotateCw, XCircle } from "lucide-react";
 import { InlineError } from "@/components/ui/field";
 import { Callout } from "@/components/ui/Callout";
@@ -12,7 +13,11 @@ import { useTruncationDetection } from "@/hooks/useTruncationDetection";
 import { PluginGlyphTile } from "@/components/Plugin/pluginIcons";
 import { PluginDatabasesSection } from "@/components/Plugin/PluginDatabasesSection";
 import { PluginWorksWith, type WorksWithPeer } from "@/components/Plugin/PluginWorksWith";
-import { GrantSwitch } from "@/components/Plugin/PluginDetailPane";
+import { PluginGrantSwitch } from "@/components/Plugin/PluginGrantSwitch";
+import {
+  getPanelKindRegistrySnapshot,
+  subscribeToPanelKindRegistry,
+} from "@shared/config/panelKindRegistry";
 import {
   PluginPerformanceSection,
   PluginStylesSection,
@@ -243,6 +248,19 @@ export function ProjectPluginDetailPane({
   // The manager has no panel list for a project plugin, so the Styles check is
   // earned by a view having loaded this session rather than by a declaration.
   const hasLoadedViews = plugin.state === "active" && (perfSnapshot?.viewLoads.length ?? 0) > 0;
+  // The manager has no panel list for a project plugin either, so whether its
+  // panels report activity is read off the kinds it registered. Only a loaded
+  // instance has any, which is also the only one with reports to show.
+  const panelKinds = useSyncExternalStore(
+    subscribeToPanelKindRegistry,
+    getPanelKindRegistrySnapshot,
+    getPanelKindRegistrySnapshot
+  );
+  const reportsActivity =
+    instanceId !== "" &&
+    Object.values(panelKinds).some(
+      (kind) => kind.extensionId === instanceId && kind.reportsActivity === true
+    );
 
   return (
     <div className="space-y-6">
@@ -348,8 +366,12 @@ export function ProjectPluginDetailPane({
       {/* A real control, unlike the capability list above: it decides whether
           the host asks this plugin at all, per project instance (#13805). */}
       {plugin.declaresWorktreeDeleteNotes === true && plugin.instanceId && (
-        <GrantSwitch pluginId={plugin.instanceId} grant="worktree-delete-notes" />
+        <PluginGrantSwitch pluginId={plugin.instanceId} grant="worktree-delete-notes" />
       )}
+
+      {/* Decides where Daintree shows what the plugin reports, not what the
+          plugin can do (#13821). */}
+      {reportsActivity && <PluginGrantSwitch pluginId={instanceId} grant="panel-attention" />}
 
       {plugin.databases && plugin.databases.length > 0 && (
         <PluginDatabasesSection databases={plugin.databases} origin="project" />
