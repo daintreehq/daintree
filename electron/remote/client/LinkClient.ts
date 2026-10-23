@@ -1,3 +1,4 @@
+import type { Duplex } from "node:stream";
 import {
   compareHandshake,
   isBlockingMismatch,
@@ -140,6 +141,23 @@ const QUIET_AFTER_MS = 7_000;
 /** How long after a host was last heard from a "host mode off" still reads as a restart. */
 const HOST_RESTART_GRACE_MS = 2 * 60_000;
 const QUIET_CHECK_MS = 1_000;
+/** Longest a stop waits for its GOODBYE to leave before letting go of the transport. */
+const GOODBYE_WAIT_MS = 2_000;
+
+/** Settles once the socket has closed, or after `GOODBYE_WAIT_MS` whatever happens. */
+function socketClosed(socket: Duplex): Promise<void> {
+  if (socket.destroyed) return Promise.resolve();
+  return new Promise((resolve) => {
+    const done = () => {
+      clearTimeout(timer);
+      socket.off("close", done);
+      resolve();
+    };
+    const timer = setTimeout(done, GOODBYE_WAIT_MS);
+    timer.unref?.();
+    socket.once("close", done);
+  });
+}
 
 type HandshakeOutcome =
   | { kind: "welcome"; welcome: WelcomeMessage }
@@ -247,8 +265,14 @@ export class LinkClient {
     this.attemptAbort = null;
     const session = this.current;
     this.current = null;
-    session?.close("client stopped");
     const connection = this.connection;
+    // Watched before the GOODBYE goes out: disposing the transport destroys
+    // its socket, and done at once it can cut the GOODBYE off, so the host
+    // holds the session for a resume nobody makes. The session itself
+    // destroys the socket once its end grace is out.
+    const goodbye = session?.isOpen === true && connection ? socketClosed(connection.socket) : null;
+    session?.close("client stopped");
+    await goodbye;
     if (connection) void this.release(connection);
     await Promise.all([...this.releasing]);
     this.failures = 0;
