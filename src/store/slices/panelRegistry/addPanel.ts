@@ -13,7 +13,11 @@ import { getNarrowPanel } from "./selectors";
 
 type CarrierPanel = Parameters<typeof getNarrowPanel>[0][string];
 import { terminalClient, projectClient, globalEnvClient } from "@/clients";
-import { terminalInstanceService } from "@/services/TerminalInstanceService";
+import {
+  load as loadTerminalService,
+  peek as peekTerminalService,
+  with as withTerminalService,
+} from "@/services/terminal/terminalInstanceServiceAccessor";
 import { TerminalRefreshTier } from "@/types";
 import {
   panelKindUsesTerminalUi,
@@ -303,6 +307,13 @@ const TERMINAL_STARTUP_ATTACH_TIMEOUT_MS = 2500;
 const OVERLAY_CHROME_X_PX = 16;
 const OVERLAY_CHROME_Y_PX = 240;
 
+// Starts at once when the service is already up, as a direct call would.
+function fetchAndRestoreTerminal(id: string): Promise<boolean> {
+  const service = peekTerminalService();
+  if (service) return service.fetchAndRestore(id);
+  return loadTerminalService().then((loaded) => loaded.fetchAndRestore(id));
+}
+
 /**
  * Live grid of an ATTACHED renderer xterm. Returns null until the instance is
  * mounted in the real DOM — a prewarmed (never-attached) instance still holds
@@ -310,7 +321,7 @@ const OVERLAY_CHROME_Y_PX = 240;
  * measurement.
  */
 function getAttachedGridDims(id: string): { cols: number; rows: number } | null {
-  const managed = terminalInstanceService.get(id);
+  const managed = peekTerminalService()?.get(id);
   if (!managed?.terminal.element?.isConnected) return null;
   const grid = { cols: managed.terminal.cols, rows: managed.terminal.rows };
   // Attached is not the same as laid out. A pane attached into a container that
@@ -1057,7 +1068,7 @@ export const createAddPanelActions = (
         !resolvePanelKindPolicy(requestedKind).dockPopoverOnSpawn;
       // What the lost terminal showed goes, as a restart's does: the new
       // process starts on a fresh terminal, and the new restart key remounts it.
-      if (replacesLost !== undefined) terminalInstanceService.destroy(id);
+      if (replacesLost !== undefined) peekTerminalService()?.destroy(id);
       commitParked(
         set,
         terminal
@@ -1290,6 +1301,9 @@ export const createAddPanelActions = (
       const prewarmOptions = constructionDims
         ? { ...terminalOptions, cols: constructionDims.cols, rows: constructionDims.rows }
         : terminalOptions;
+      // Synchronous when the service is already up, so the prewarm claims the
+      // instance before anything else can mount it.
+      const terminalService = peekTerminalService() ?? (await loadTerminalService());
 
       // Prewarm ALL terminal types to ensure the managed instance and data
       // listeners exist before the backend PTY can emit output. Do not attach
@@ -1307,7 +1321,7 @@ export const createAddPanelActions = (
         // Awaited so the managed instance and its PTY data listener exist before
         // the queued spawn runs — prewarmTerminal is async now that the lazy
         // Unicode11 addon is loaded during terminal construction (#10840).
-        await terminalInstanceService.prewarmTerminal(id, launchAgentId, prewarmOptions, {
+        await terminalService.prewarmTerminal(id, launchAgentId, prewarmOptions, {
           offscreen: false,
           widthPx: location === "dock" ? DOCK_PREWARM_WIDTH_PX : DOCK_TERM_WIDTH,
           heightPx: location === "dock" ? DOCK_PREWARM_HEIGHT_PX : DOCK_TERM_HEIGHT,
@@ -1321,7 +1335,7 @@ export const createAddPanelActions = (
         // Awaited so the instance exists before the sendPtyResize below targets
         // it — prewarmTerminal is async now that the lazy Unicode11 addon is
         // loaded during terminal construction (#10840).
-        await terminalInstanceService.prewarmTerminal(id, launchAgentId, prewarmOptions, {
+        await terminalService.prewarmTerminal(id, launchAgentId, prewarmOptions, {
           offscreen: false,
           widthPx,
           heightPx,
@@ -1344,7 +1358,7 @@ export const createAddPanelActions = (
         if (!isDockOrInactive && !restoredDims && (location !== "overlay" || overlayDims)) {
           const { cols, rows } =
             overlayDims ?? calculateTerminalDimensions(widthPx, heightPx, fontSize);
-          terminalInstanceService.sendPtyResize(id, cols, rows);
+          terminalService.sendPtyResize(id, cols, rows);
         }
       }
     } catch (error) {
@@ -1359,10 +1373,12 @@ export const createAddPanelActions = (
     if (shouldBackground) {
       // Terminal is either in dock or in an inactive worktree.
       // Apply BACKGROUND policy to prevent renderer updates for unmounted terminals.
-      terminalInstanceService.applyRendererPolicy(id, TerminalRefreshTier.BACKGROUND);
+      withTerminalService((service) =>
+        service.applyRendererPolicy(id, TerminalRefreshTier.BACKGROUND)
+      );
     }
 
-    terminalInstanceService.setInputLocked(id, !!options.isInputLocked);
+    peekTerminalService()?.setInputLocked(id, !!options.isInputLocked);
 
     // Wake the renderer instance and clear attention indicators when a panel is
     // created as the active dock panel — the state activation was already
@@ -1382,7 +1398,7 @@ export const createAddPanelActions = (
       ptyDockPolicy.dockPopoverOnSpawn
     ) {
       try {
-        terminalInstanceService.wake(id);
+        peekTerminalService()?.wake(id);
         if (agentState === "waiting") {
           window.electron?.notification?.acknowledgeWaiting(id);
         } else if (agentState === "working") {
@@ -1432,7 +1448,7 @@ export const createAddPanelActions = (
       });
       // What it printed before this pane attached comes from the host's record.
       if (adopted) {
-        terminalInstanceService.fetchAndRestore(id).catch((error: unknown) => {
+        fetchAndRestoreTerminal(id).catch((error: unknown) => {
           logWarn("[TerminalStore] Couldn't restore an adopted terminal's output", { id, error });
         });
       }
@@ -1726,7 +1742,7 @@ export const createAddPanelActions = (
               // Whatever a fit recorded as sent during the spawn never reached a
               // PTY; forget it so a pane that detached before this point still
               // re-asserts on its next fit.
-              terminalInstanceService.invalidatePtyGrid(id);
+              peekTerminalService()?.invalidatePtyGrid(id);
               const settledDims = getAttachedGridDims(id);
               if (
                 settledDims &&
@@ -1738,7 +1754,8 @@ export const createAddPanelActions = (
 
             if (mountedPanel && waitForAttach) {
               try {
-                await terminalInstanceService.waitForAttachSettled(id, {
+                const terminalService = peekTerminalService() ?? (await loadTerminalService());
+                await terminalService.waitForAttachSettled(id, {
                   timeoutMs: TERMINAL_STARTUP_ATTACH_TIMEOUT_MS,
                 });
               } catch (error) {
@@ -1816,7 +1833,10 @@ export const createAddPanelActions = (
                     id,
                     found.record,
                     get(),
-                    terminalInstanceService,
+                    {
+                      setAgentState: (agentId, state) =>
+                        peekTerminalService()?.setAgentState(agentId, state),
+                    },
                     guessed !== undefined &&
                       isPtyPanel(guessed) &&
                       guessed.lastStateChange === lastStateChange
@@ -1831,7 +1851,7 @@ export const createAddPanelActions = (
                     // Started, and the PTY already went while the link was down.
                     get().setRuntimeStatus(id, "exited");
                     if (recovered.launchAgentId && recovered.agentState !== "exited") {
-                      terminalInstanceService.setAgentState(id, "exited");
+                      peekTerminalService()?.setAgentState(id, "exited");
                       get().updateAgentState(id, "exited");
                     }
                   }
@@ -1850,7 +1870,7 @@ export const createAddPanelActions = (
                   }
                   // A pane on a running PTY starts with only what it prints next;
                   // what it drew while the link was down comes from the host.
-                  safeFireAndForget(terminalInstanceService.fetchAndRestore(id), {
+                  safeFireAndForget(fetchAndRestoreTerminal(id), {
                     context: "Restoring a terminal found after a lost spawn answer",
                   });
                 } catch (error) {

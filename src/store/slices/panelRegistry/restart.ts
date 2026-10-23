@@ -26,7 +26,11 @@ import {
 import { agentClipboardDirectory, supportsCrossDirectoryResume } from "@shared/types/agentSettings";
 import type { AgentSettingsEntry } from "@shared/types/agentSettings";
 import type { AgentState } from "@/types";
-import { terminalInstanceService } from "@/services/TerminalInstanceService";
+import {
+  load as loadTerminalService,
+  peek as peekTerminalService,
+  with as withTerminalService,
+} from "@/services/terminal/terminalInstanceServiceAccessor";
 import { TerminalRefreshTier } from "@/types";
 import { validateTerminalConfig } from "@/utils/terminalValidation";
 import {
@@ -774,7 +778,7 @@ export const createRestartActions = (
 
     try {
       // CAPTURE LIVE DIMENSIONS before destroying the frontend
-      const managedInstance = terminalInstanceService.get(id);
+      const managedInstance = peekTerminalService()?.get(id);
       let spawnCols = currentTerminal.cols || 80;
       let spawnRows = currentTerminal.rows || 24;
       if (managedInstance?.terminal) {
@@ -786,12 +790,12 @@ export const createRestartActions = (
       // keystrokes can't leak into the kill/spawn window. Bypass the store
       // action to avoid persisting `isInputLocked: true` to disk for a
       // transient state.
-      terminalInstanceService.setInputLocked(id, true);
+      peekTerminalService()?.setInputLocked(id, true);
 
       // AGGRESSIVE TEARDOWN: Destroy frontend FIRST to prevent race condition
-      terminalInstanceService.destroy(id);
+      peekTerminalService()?.destroy(id);
 
-      terminalInstanceService.suppressNextExit(id, 10000);
+      withTerminalService((service) => service.suppressNextExit(id, 10000));
 
       // Capture project ID before async work to avoid race conditions (issue #3690).
       // The respawn keeps the panel's workspace ownership (project or scratch) so a
@@ -994,11 +998,12 @@ export const createRestartActions = (
         return { panelsById: newById };
       });
 
-      await terminalInstanceService.waitForInstance(id, { timeoutMs: 5000 });
+      const terminalService = peekTerminalService() ?? (await loadTerminalService());
+      await terminalService.waitForInstance(id, { timeoutMs: 5000 });
 
       // Re-apply the input lock on the freshly created xterm instance:
       // xterm 6.0 does not inherit `disableStdin` across instance recreation.
-      terminalInstanceService.setInputLocked(id, true);
+      peekTerminalService()?.setInputLocked(id, true);
 
       // Read at spawn time, not from the panel captured before the kill: a
       // cross-worktree move landing during the restart would otherwise respawn
@@ -1088,15 +1093,15 @@ export const createRestartActions = (
 
       // The new PTY was spawned from a grid read before the await; a resize
       // sent in between reached no PTY, so re-assert rather than trust it.
-      terminalInstanceService.invalidatePtyGrid(id);
+      peekTerminalService()?.invalidatePtyGrid(id);
       if (targetLocation === "dock") {
         optimizeForDock(id);
       } else {
-        terminalInstanceService.fit(id);
+        peekTerminalService()?.fit(id);
       }
 
       // Release the transient input lock now that the new PTY is live.
-      terminalInstanceService.setInputLocked(id, false);
+      peekTerminalService()?.setInputLocked(id, false);
 
       unmarkTerminalRestarting(id);
       set((state) => updateTerminal(state, id, respawned));
@@ -1124,7 +1129,7 @@ export const createRestartActions = (
       // generic restart failure.
       const toolsError = requiredPluginToolsSpawnError(error);
       if (toolsError !== null) {
-        terminalInstanceService.setInputLocked(id, false);
+        peekTerminalService()?.setInputLocked(id, false);
         unmarkTerminalRestarting(id);
         // Persisted, and the agent marked exited as a refused first launch is:
         // nothing started, so nothing will ever report it stopped.
@@ -1160,7 +1165,7 @@ export const createRestartActions = (
 
       // Always release the transient input lock so a failed restart can't
       // leave the (possibly recreated) instance permanently locked.
-      terminalInstanceService.setInputLocked(id, false);
+      peekTerminalService()?.setInputLocked(id, false);
 
       unmarkTerminalRestarting(id);
       set((state) =>
@@ -1332,7 +1337,7 @@ export const createRestartActions = (
       return;
     }
 
-    terminalInstanceService.applyRendererPolicy(id, TerminalRefreshTier.VISIBLE);
+    withTerminalService((service) => service.applyRendererPolicy(id, TerminalRefreshTier.VISIBLE));
   },
 
   // No transfer, no capture, no restart: creating the worktree and filing the
@@ -1460,7 +1465,7 @@ export const createRestartActions = (
       };
       saveNormalized(newById, state.panelIds);
       if (panelKindHasPty(terminal.kind ?? "terminal")) {
-        terminalInstanceService.setInputLocked(id, locked);
+        peekTerminalService()?.setInputLocked(id, locked);
       }
       return { panelsById: newById };
     });
@@ -1479,7 +1484,7 @@ export const createRestartActions = (
       };
       saveNormalized(newById, state.panelIds);
       if (panelKindHasPty(terminal.kind ?? "terminal")) {
-        terminalInstanceService.setInputLocked(id, locked);
+        peekTerminalService()?.setInputLocked(id, locked);
       }
       return { panelsById: newById };
     });
@@ -1668,7 +1673,7 @@ async function respawnAgentOnPreset(
     ];
 
     // Capture live terminal dimensions before teardown
-    const managedInstance = terminalInstanceService.get(id);
+    const managedInstance = peekTerminalService()?.get(id);
     let spawnCols = terminal.cols || 80;
     let spawnRows = terminal.rows || 24;
     if (managedInstance?.terminal) {
@@ -1676,8 +1681,8 @@ async function respawnAgentOnPreset(
       spawnRows = managedInstance.terminal.rows || spawnRows;
     }
 
-    terminalInstanceService.destroy(id);
-    terminalInstanceService.suppressNextExit(id, 10000);
+    peekTerminalService()?.destroy(id);
+    withTerminalService((service) => service.suppressNextExit(id, 10000));
     try {
       await terminalClient.kill(id, { forRestart: true });
     } catch (error) {
@@ -1737,7 +1742,8 @@ async function respawnAgentOnPreset(
       return { panelsById: newById };
     });
 
-    await terminalInstanceService.waitForInstance(id, { timeoutMs: 5000 });
+    const terminalService = peekTerminalService() ?? (await loadTerminalService());
+    await terminalService.waitForInstance(id, { timeoutMs: 5000 });
 
     const projectStore = await resolveProjectStore();
     const capturedProjectId = projectStore.getState().currentProject?.id;
@@ -1835,11 +1841,11 @@ async function respawnAgentOnPreset(
 
     // The new PTY was spawned from a grid read before the await; a resize
     // sent in between reached no PTY, so re-assert rather than trust it.
-    terminalInstanceService.invalidatePtyGrid(id);
+    peekTerminalService()?.invalidatePtyGrid(id);
     if (terminal.location === "dock") {
       optimizeForDock(id);
     } else {
-      terminalInstanceService.fit(id);
+      peekTerminalService()?.fit(id);
     }
 
     unmarkTerminalRestarting(id);

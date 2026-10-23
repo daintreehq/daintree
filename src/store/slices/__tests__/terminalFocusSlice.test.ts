@@ -18,6 +18,14 @@ const mockStampLastActive = vi.fn();
 let panelGroupInfoImpl: GetPanelGroupInfo = () => undefined;
 const mockGetPanelGroupInfo: GetPanelGroupInfo = (id) => panelGroupInfoImpl(id);
 const { terminalInstanceService } = await import("@/services/TerminalInstanceService");
+const { load: loadTerminalService } =
+  await import("@/services/terminal/terminalInstanceServiceAccessor");
+
+// The service mock never evaluates the real module, so nothing registers it;
+// loading caches the mock for the synchronous peek() call sites.
+beforeAll(async () => {
+  await loadTerminalService();
+});
 
 describe("TerminalFocusSlice - Layout Snapshot", () => {
   const mockTerminals: PtyPanelData[] = [

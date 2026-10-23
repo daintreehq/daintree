@@ -1,7 +1,7 @@
 import type { PanelRegistryStoreApi, PanelRegistrySlice } from "./types";
 import { panelKindHasPty, normalizeDockLocation } from "@shared/config/panelKindRegistry";
 import { isPtyPanel, type PanelInstance } from "@shared/types/panel";
-import { terminalInstanceService } from "@/services/TerminalInstanceService";
+import { with as withTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
 import { TerminalRefreshTier } from "@/types";
 import { saveNormalized, saveTabGroups } from "./persistence";
 import { optimizeForDock } from "./layout";
@@ -206,7 +206,9 @@ export const createOrderingActions = (
       if (effectiveLocation === "dock") {
         optimizeForDock(id);
       } else {
-        terminalInstanceService.applyRendererPolicy(id, TerminalRefreshTier.VISIBLE);
+        withTerminalService((service) =>
+          service.applyRendererPolicy(id, TerminalRefreshTier.VISIBLE)
+        );
       }
     }
   },

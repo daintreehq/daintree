@@ -12,7 +12,7 @@
  * panel when `activateDockOnCreate: true` and `location === "dock"`.
  */
 
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { beforeAll, describe, it, expect, beforeEach, vi } from "vitest";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 
 const acknowledgeWaitingMock = vi.fn();
@@ -104,6 +104,14 @@ beforeEach(() => {
 });
 
 const { usePanelStore } = await import("../../../panelStore");
+const { load: loadTerminalService } =
+  await import("@/services/terminal/terminalInstanceServiceAccessor");
+
+// The service mock never evaluates the real module, so nothing registers it;
+// loading caches the mock for the synchronous peek() call sites.
+beforeAll(async () => {
+  await loadTerminalService();
+});
 
 async function drainMicrotasks(iterations = 20): Promise<void> {
   for (let i = 0; i < iterations; i++) {

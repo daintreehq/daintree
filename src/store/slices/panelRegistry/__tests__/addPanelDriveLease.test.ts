@@ -5,7 +5,7 @@
  * drives.
  */
 
-import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { beforeAll, describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { isPtyPanel, type PtyPanelData } from "@shared/types/panel";
 import type { DriveLeaseView } from "@shared/types/ipc/driveLease";
 
@@ -87,6 +87,14 @@ beforeEach(() => {
 });
 
 const { usePanelStore } = await import("../../../panelStore");
+const { load: loadTerminalService } =
+  await import("@/services/terminal/terminalInstanceServiceAccessor");
+
+// The service mock never evaluates the real module, so nothing registers it;
+// loading caches the mock for the synchronous peek() call sites.
+beforeAll(async () => {
+  await loadTerminalService();
+});
 const clients = await import("@/clients");
 const terminalClient = {
   spawn: vi.mocked(clients.terminalClient.spawn),
@@ -283,9 +291,23 @@ describe("launches the drive lease blocks (#13913)", () => {
     await drainMicrotasks();
 
     terminalClient.reconnect.mockResolvedValue({ exists: true, id: "adopt-1", hasPty: true });
+    // The restore opens its live-output hold before its first await, so with the
+    // service loaded it has to start in the same tick the pane turns ready.
+    let seenReady = false;
+    let restoreCallsAfterReady: number | undefined;
+    const unsubscribe = usePanelStore.subscribe(() => {
+      if (seenReady || getPtyPanel("adopt-1")?.spawnStatus !== "ready") return;
+      seenReady = true;
+      queueMicrotask(() => {
+        restoreCallsAfterReady = vi.mocked(terminalInstanceService.fetchAndRestore).mock.calls
+          .length;
+      });
+    });
     setDriveLeaseSnapshot(lease(true));
     await drainMicrotasks();
+    unsubscribe();
 
+    expect(restoreCallsAfterReady).toBe(1);
     expect(terminalClient.reconnect).toHaveBeenCalledWith("adopt-1");
     expect(terminalClient.spawn).not.toHaveBeenCalled();
     expect(getPtyPanel("adopt-1")?.spawnStatus).toBe("ready");

@@ -1,6 +1,6 @@
-import { terminalInstanceService } from "@/services/TerminalInstanceService";
+import { with as withTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
 import { TerminalRefreshTier } from "@/types";
 
 export const optimizeForDock = (id: string): void => {
-  terminalInstanceService.applyRendererPolicy(id, TerminalRefreshTier.VISIBLE);
+  withTerminalService((service) => service.applyRendererPolicy(id, TerminalRefreshTier.VISIBLE));
 };
