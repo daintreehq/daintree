@@ -4,6 +4,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testi
 import { ProjectAgentToolsSection } from "../ProjectAgentToolsSection";
 import { __resetProjectPluginStoreForTesting } from "@/store/projectPluginStore";
 import { usePanelStore } from "@/store/panelStore";
+import type { PtyPanelData } from "@shared/types/panel";
 import type {
   ProjectAgentToolPlugin,
   ProjectAgentToolsSnapshot,
@@ -149,11 +150,17 @@ describe("ProjectAgentToolsSection", () => {
   it("lists running agents whose tools changed, each with a restart, and only those this window shows", async () => {
     const restartTerminal = vi.fn(() => Promise.resolve());
     const original = usePanelStore.getState();
+    const running: PtyPanelData = {
+      id: "term-1",
+      kind: "terminal",
+      title: "Fix the ledger",
+      location: "grid",
+      cwd: "/repo",
+      cols: 80,
+      rows: 24,
+    };
     usePanelStore.setState({
-      panelsById: {
-        ...original.panelsById,
-        "term-1": { id: "term-1", kind: "terminal", title: "Fix the ledger" },
-      } as unknown as typeof original.panelsById,
+      panelsById: { ...original.panelsById, "term-1": running },
       restartTerminal,
     });
     try {
