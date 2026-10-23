@@ -2011,7 +2011,7 @@ export const SetupStepSettingsActionSchema = z
   .object({ kind: z.literal("settings"), key: SetupSettingKeySchema.optional() })
   .strict();
 export const SetupStepCommandActionSchema = z
-  .object({ kind: z.literal("command"), actionId: z.string().min(1).max(256) })
+  .object({ kind: z.literal("command"), actionId: z.string().min(1).max(200) })
   .strict();
 
 /**

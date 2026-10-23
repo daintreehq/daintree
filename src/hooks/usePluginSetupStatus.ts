@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { PluginSetupUiStatus } from "@shared/types/plugin";
 import { usePluginContextKeyStore } from "@/store/pluginContextKeyStore";
 import {
@@ -34,6 +34,9 @@ export function usePluginSetupStatus(pluginId: string, projectId: string | null)
     null
   );
   const [saveError, setSaveError] = useState<{ target: string; stepId: string } | null>(null);
+  // Only the latest skip reports: an older one failing after a newer one is
+  // superseded, not the state of the row.
+  const skipAttemptRef = useRef(0);
 
   useEffect(() => {
     const bridge = window.electron?.plugin;
@@ -78,9 +81,10 @@ export function usePluginSetupStatus(pluginId: string, projectId: string | null)
     (stepId: string, skipped: boolean) => {
       const bridge = window.electron?.plugin;
       if (typeof bridge?.setSetupStepSkipped !== "function") return;
+      const attempt = ++skipAttemptRef.current;
       setSaveError(null);
       bridge.setSetupStepSkipped(pluginId, stepId, skipped).catch((err: unknown) => {
-        setSaveError({ target, stepId });
+        if (attempt === skipAttemptRef.current) setSaveError({ target, stepId });
         logError(`Failed to save a setup step skip for ${pluginId}`, err);
       });
     },

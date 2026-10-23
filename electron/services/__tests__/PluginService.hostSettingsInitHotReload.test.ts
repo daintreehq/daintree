@@ -1824,6 +1824,22 @@ describe("PluginService settings for launch-disabled plugins", () => {
       expect(cleared.steps[0]?.check).toEqual({ kind: "observed", done: false });
     });
 
+    it("keeps the other steps when the account can't be read", async () => {
+      seedDisabled(SETUP_MANIFEST);
+      const accounts = (svc as unknown as { accounts: { getUiStatus: () => Promise<unknown> } })
+        .accounts;
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+      vi.spyOn(accounts, "getUiStatus").mockRejectedValueOnce(new Error("bad JSON"));
+
+      const status = await svc.getSetupStatusForUi("acme.demo", "proj-a");
+      expect(status.steps.map((step) => [step.id, step.check])).toEqual([
+        ["team", { kind: "observed", done: false }],
+        ["connect", { kind: "observed", done: false }],
+        ["sync", { kind: "context", when: "acme.demo.synced" }],
+      ]);
+      warn.mockRestore();
+    });
+
     it("answers no steps for a plugin that declares none or isn't loaded", async () => {
       seedDisabled(manifestWith([{ id: "team", type: "string" } as SettingDefinition]));
       expect(await svc.getSetupStatusForUi("acme.demo", null)).toEqual({ steps: [] });

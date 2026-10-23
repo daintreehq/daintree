@@ -10,6 +10,7 @@ import {
 import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { ScrollShadow } from "@/components/ui/ScrollShadow";
 import {
   POPOVER_HEADER_CLASS,
   POPOVER_HEADER_META_CLASS,
@@ -61,6 +62,7 @@ export function PluginSetupStrip({ pluginId }: { pluginId: string }) {
   useEffect(() => initPluginRuntime(), [initPluginRuntime]);
   const [status, setStatus] = useState<PluginRequiredSettingsStatus>(EMPTY_STATUS);
   const setup = usePluginSetupStatus(pluginId, projectId);
+  const [checklistOpen, setChecklistOpen] = useState(false);
 
   useEffect(() => {
     const bridge = window.electron?.plugin;
@@ -95,13 +97,18 @@ export function PluginSetupStrip({ pluginId }: { pluginId: string }) {
   // Waiting on the checklist read keeps a plugin with both from showing the
   // required prompt for a moment and then swapping it out.
   if (!setup.loaded) return null;
-  if (setup.handled < setup.total) {
+  // Held while its popover is open, even once every step is handled: the
+  // popover then shows the finished list, and closing it hands focus back to
+  // the strip's own trigger rather than dropping it with the strip.
+  if (setup.total > 0 && (setup.handled < setup.total || checklistOpen)) {
     return (
       <PluginSetupChecklistStrip
         pluginId={pluginId}
         displayName={displayName}
         setup={setup}
         canSkip={projectId !== null}
+        open={checklistOpen}
+        onOpenChange={setChecklistOpen}
       />
     );
   }
@@ -149,13 +156,16 @@ function PluginSetupChecklistStrip({
   displayName,
   setup,
   canSkip,
+  open,
+  onOpenChange,
 }: {
   pluginId: string;
   displayName: string;
   setup: PluginSetupState;
   canSkip: boolean;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
 }) {
-  const [open, setOpen] = useState(false);
   const headingId = useId();
   const progress = `${setup.handled} of ${setup.total}`;
   return (
@@ -166,7 +176,7 @@ function PluginSetupChecklistStrip({
         role="status"
         layout="inline"
         trailingSlot={
-          <Popover open={open} onOpenChange={setOpen}>
+          <Popover open={open} onOpenChange={onOpenChange}>
             <PopoverTrigger asChild>
               <Button
                 variant="outline"
@@ -177,22 +187,25 @@ function PluginSetupChecklistStrip({
                 Setup steps
               </Button>
             </PopoverTrigger>
-            <PopoverContent className="w-96 p-0" aria-labelledby={headingId}>
+            <PopoverContent className="flex w-96 flex-col p-0" aria-labelledby={headingId}>
               <div className={POPOVER_HEADER_CLASS}>
                 <span id={headingId} className={POPOVER_TITLE_CLASS}>
                   {displayName} setup
                 </span>
                 <span className={POPOVER_HEADER_META_CLASS}>{progress}</span>
               </div>
-              <PluginSetupChecklist
-                pluginId={pluginId}
-                rows={setup.rows}
-                canSkip={canSkip}
-                onSetSkipped={setup.setSkipped}
-                saveErrorStepId={setup.saveErrorStepId}
-                variant="plain"
-                onAction={() => setOpen(false)}
-              />
+              {/* Ten steps with descriptions outgrow a short window. */}
+              <ScrollShadow compact className="max-h-96">
+                <PluginSetupChecklist
+                  pluginId={pluginId}
+                  rows={setup.rows}
+                  canSkip={canSkip}
+                  onSetSkipped={setup.setSkipped}
+                  saveErrorStepId={setup.saveErrorStepId}
+                  variant="plain"
+                  onAction={() => onOpenChange(false)}
+                />
+              </ScrollShadow>
             </PopoverContent>
           </Popover>
         }

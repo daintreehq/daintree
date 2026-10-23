@@ -2606,7 +2606,7 @@
                       "actionId": {
                         "type": "string",
                         "minLength": 1,
-                        "maxLength": 256
+                        "maxLength": 200
                       }
                     },
                     "required": [

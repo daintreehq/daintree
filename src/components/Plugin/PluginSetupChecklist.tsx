@@ -56,6 +56,7 @@ export function PluginSetupChecklist({
               <Button
                 variant="outline"
                 size="sm"
+                aria-label={`${actionLabel(action)}: ${step.title}`}
                 onClick={() => {
                   runSetupAction(pluginId, action);
                   onAction?.();

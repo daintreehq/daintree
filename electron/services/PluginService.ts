@@ -6861,7 +6861,14 @@ export class PluginService {
       settingKeys.length > 0
         ? this.settings.settingPresenceForUi(pluginId, settingKeys, projectId)
         : Promise.resolve({} as Record<string, string>),
-      needsAccount ? this.accounts.getUiStatus(pluginId) : Promise.resolve(null),
+      // An account file that can't be read answers for its own step, which
+      // stays outstanding; the rest of the checklist still stands.
+      needsAccount
+        ? this.accounts.getUiStatus(pluginId).catch((err: unknown) => {
+            console.warn(`[PluginService] Couldn't read "${pluginId}"'s account for setup:`, err);
+            return null;
+          })
+        : Promise.resolve(null),
     ]);
     const skipped = new Set(
       projectId === null ? [] : getProjectPluginSetupSkips(projectId, pluginId)

@@ -1412,17 +1412,28 @@ describe("PluginSettingsForm setup checklist (#13824)", () => {
     ],
   };
 
-  it("puts the checklist first, even for a plugin with nothing else to configure", async () => {
+  it("puts the checklist above the plugin's own fields", async () => {
     currentProjectId = "proj-1";
     pluginApi.getSetupStatus.mockResolvedValue(STATUS);
-    const { container } = render(<PluginSettingsForm plugin={withSetup(makePlugin([]))} />);
+    render(
+      <PluginSettingsForm
+        plugin={withSetup(makePlugin([{ id: "apiKey", type: "string", label: "API key" }]))}
+      />
+    );
 
     const group = await screen.findByRole("group", { name: "Setup · 0 of 1" });
-    expect(container.firstElementChild?.firstElementChild?.contains(group)).toBe(true);
+    const field = screen.getByLabelText("API key");
+    expect(group.compareDocumentPosition(field) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(pluginApi.getSetupStatus).toHaveBeenCalledWith("acme.test", "proj-1");
 
     fireEvent.click(screen.getByRole("button", { name: "Skip: Run the first sync" }));
     expect(pluginApi.setSetupStepSkipped).toHaveBeenCalledWith("acme.test", "sync", true);
+  });
+
+  it("shows a checklist for a plugin with nothing else to configure", async () => {
+    pluginApi.getSetupStatus.mockResolvedValue(STATUS);
+    render(<PluginSettingsForm plugin={withSetup(makePlugin([]))} />);
+    expect(await screen.findByRole("group", { name: "Setup · 0 of 1" })).toBeTruthy();
   });
 
   it("shows what it can see with no project open, and offers no skip", async () => {

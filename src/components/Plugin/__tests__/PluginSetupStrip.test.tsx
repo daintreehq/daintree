@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 
 const dispatch = vi.hoisted(() => vi.fn());
 vi.mock("@/services/ActionService", () => ({ actionService: { dispatch } }));
@@ -254,11 +254,7 @@ describe("PluginSetupStrip with a setup checklist (#13824)", () => {
     render(<PluginSetupStrip pluginId="acme.linear" />);
     await openSteps();
 
-    fireEvent.click(
-      within(document.querySelector('[data-setup-step="team"]')!).getByRole("button", {
-        name: "Open setting",
-      })
-    );
+    fireEvent.click(screen.getByRole("button", { name: "Open setting: Step team" }));
     expect(dispatch).toHaveBeenCalledWith(
       "plugin.openSettings",
       { pluginId: "acme.linear", key: "team" },
@@ -266,7 +262,7 @@ describe("PluginSetupStrip with a setup checklist (#13824)", () => {
     );
 
     await openSteps();
-    fireEvent.click(screen.getByRole("button", { name: "Run" }));
+    fireEvent.click(screen.getByRole("button", { name: "Run: Step sync" }));
     expect(dispatch).toHaveBeenCalledWith("acme.linear.sync", undefined, { source: "user" });
   });
 
@@ -279,7 +275,9 @@ describe("PluginSetupStrip with a setup checklist (#13824)", () => {
     render(<PluginSetupStrip pluginId="acme.linear" />);
     await openSteps();
 
-    fireEvent.click(screen.getByRole("button", { name: "Skip: Step team" }));
+    const skip = screen.getByRole("button", { name: "Skip: Step team" });
+    skip.focus();
+    fireEvent.click(skip);
     expect(setSetupStepSkipped).toHaveBeenCalledWith("acme.linear", "team", true);
 
     getSetupStatus.mockResolvedValue({
@@ -290,9 +288,36 @@ describe("PluginSetupStrip with a setup checklist (#13824)", () => {
       ],
     });
     await act(async () => announce("acme.linear"));
+
+    // Held while the popover is open, so the focused row isn't pulled out
+    // from under the user; it shows the finished list instead.
+    const strip = screen.getByTestId("plugin-setup-strip");
+    await waitFor(() => expect(strip.textContent).toContain("Linear setup · 3 of 3"));
+    expect(screen.getByRole("button", { name: "Undo skip: Step team" })).toBeTruthy();
+
+    fireEvent.keyDown(document.activeElement ?? document.body, { key: "Escape" });
     await waitFor(() =>
       expect(screen.getByTestId("plugin-setup-strip").textContent).toContain("Linear needs setup")
     );
+  });
+
+  it("reports only the latest skip's failure", async () => {
+    let rejectFirst!: (err: Error) => void;
+    setSetupStepSkipped
+      .mockImplementationOnce(
+        () =>
+          new Promise<void>((_, reject) => {
+            rejectFirst = reject;
+          })
+      )
+      .mockResolvedValueOnce(undefined);
+    render(<PluginSetupStrip pluginId="acme.linear" />);
+    await openSteps();
+
+    fireEvent.click(screen.getByRole("button", { name: "Skip: Step team" }));
+    fireEvent.click(screen.getByRole("button", { name: "Skip: Step team" }));
+    await act(async () => rejectFirst(new Error("late")));
+    expect(screen.queryByText("Couldn't save this choice")).toBeNull();
   });
 
   it("offers no skip with no project open, since a skip is remembered per project", async () => {
