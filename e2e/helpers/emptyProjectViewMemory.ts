@@ -103,7 +103,8 @@ export function bucketVmmapRegions(regions: VmmapRegion[]): Record<string, numbe
   const buckets: Record<string, number> = {};
   for (const { region, columns } of regions) {
     if (region.startsWith("TOTAL")) continue;
-    const dirty = (columns.dirty ?? 0) + (columns.swapped ?? 0);
+    // Older macOS releases head the column SWAP rather than SWAPPED.
+    const dirty = (columns.dirty ?? 0) + (columns.swapped ?? columns.swap ?? 0);
     if (dirty === 0) continue;
     const bucket = region.startsWith("MALLOC")
       ? "malloc"

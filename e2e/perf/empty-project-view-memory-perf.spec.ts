@@ -36,6 +36,9 @@ const OUTPUT_DIR =
   path.join(process.cwd(), ".tmp", "perf-results", "empty-project-view");
 const SETTLE_MS = Number(process.env.EMPTY_VIEW_SETTLE_MS ?? 15_000);
 const FOOTPRINT_READINGS = Number(process.env.EMPTY_VIEW_READINGS ?? 5);
+if (!Number.isInteger(FOOTPRINT_READINGS) || FOOTPRINT_READINGS < 1) {
+  throw new Error(`EMPTY_VIEW_READINGS must be a positive integer, got ${FOOTPRINT_READINGS}`);
+}
 const TERMINALS = Number(process.env.EMPTY_VIEW_TERMINALS ?? 2);
 const OUTPUT_LINES = Number(process.env.EMPTY_VIEW_OUTPUT_LINES ?? 5_500);
 // Detailed MemoryInfra dumps are cheap; heap snapshots are not, and they
@@ -166,18 +169,23 @@ async function collectGarbage(app: ElectronApplication, target: TargetView): Pro
 }
 
 async function captureMemoryInfra(app: ElectronApplication, file: string): Promise<unknown> {
-  await app.evaluate(async ({ contentTracing }) => {
-    await contentTracing.startRecording({
-      included_categories: ["disabled-by-default-memory-infra"],
-      excluded_categories: ["*"],
-      memory_dump_config: {
-        triggers: [{ mode: "detailed", periodic_interval_ms: 1_000 }],
-      },
-    } as Electron.TraceConfig);
-  });
-  await new Promise((resolve) => setTimeout(resolve, 2_500));
-  await app.evaluate(async ({ contentTracing }, out) => contentTracing.stopRecording(out), file);
   try {
+    // Start and stop share one main-process scope so a failure in between
+    // never leaves tracing running into the next phase.
+    await app.evaluate(async ({ contentTracing }, out) => {
+      await contentTracing.startRecording({
+        included_categories: ["disabled-by-default-memory-infra"],
+        excluded_categories: ["*"],
+        memory_dump_config: {
+          triggers: [{ mode: "detailed", periodic_interval_ms: 1_000 }],
+        },
+      } as Electron.TraceConfig);
+      try {
+        await new Promise((resolve) => setTimeout(resolve, 2_500));
+      } finally {
+        await contentTracing.stopRecording(out);
+      }
+    }, file);
     return JSON.parse(readFileSync(file, "utf8"));
   } finally {
     rmSync(file, { force: true });
@@ -328,11 +336,12 @@ async function samplePhase(
 
 async function emitOutput(page: Page, panelId: string, index: number): Promise<void> {
   const token = `EMPTYVIEW_${index}_DONE`;
+  // printf assembles the marker, so the echoed command line cannot match it.
   const panel = getPanelById(page, panelId);
   await runTerminalCommand(
     page,
     panel,
-    `awk 'BEGIN{for(i=0;i<${OUTPUT_LINES};i++)printf("terminal ${index} line %06d ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789\\n",i)}'; printf '${token}\\n'`
+    `awk 'BEGIN{for(i=0;i<${OUTPUT_LINES};i++)printf("terminal ${index} line %06d ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789\\n",i)}'; printf 'EMPTYVIEW_%s_DONE\\n' ${index}`
   );
   await waitForTerminalText(panel, token, 60_000);
 }

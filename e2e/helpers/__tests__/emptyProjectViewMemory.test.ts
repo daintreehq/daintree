@@ -70,6 +70,12 @@ describe("parseVmmapSummary", () => {
     expect(summary.regions.some((r) => r.region.includes("Zone"))).toBe(false);
   });
 
+  it("reads the SWAP heading older macOS releases print", () => {
+    const old = VMMAP.replace("DIRTY  SWAPPED VOLATILE", "DIRTY     SWAP VOLATILE");
+    const buckets = bucketVmmapRegions(parseVmmapSummary(old).regions);
+    expect(buckets.malloc).toBe(1408 + 512 + 112);
+  });
+
   it("returns no regions for output without a region table", () => {
     expect(parseVmmapSummary("vmmap: process not found").regions).toEqual([]);
   });

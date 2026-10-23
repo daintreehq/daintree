@@ -109,14 +109,28 @@ for (const phaseKey of ["empty", "cached", "afterSession"] as const) {
   console.log(row("JS event listeners", phaseKey, (p) => p.blink.jsEventListeners, "n"));
   const optional = [
     ...[...bucketKeys].sort().map((key) =>
-      row(`vmmap dirty: ${key}`, phaseKey, (p) => p.vmmap.dirtyByBucketKb?.[key], "mb", {
-        always: false,
-      })
+      // A successful capture omits a bucket or provider that measured
+      // nothing, so absent reads as zero there; a failed capture stays absent.
+      row(
+        `vmmap dirty: ${key}`,
+        phaseKey,
+        (p) => p.vmmap.dirtyByBucketKb && (p.vmmap.dirtyByBucketKb[key] ?? 0),
+        "mb",
+        {
+          always: false,
+        }
+      )
     ),
     ...[...providerKeys].sort().map((key) =>
-      row(`MemoryInfra: ${key}`, phaseKey, (p) => p.memoryInfra.providers?.[key]?.sizeKb, "mb", {
-        always: false,
-      })
+      row(
+        `MemoryInfra: ${key}`,
+        phaseKey,
+        (p) => p.memoryInfra.providers && (p.memoryInfra.providers[key]?.sizeKb ?? 0),
+        "mb",
+        {
+          always: false,
+        }
+      )
     ),
   ];
   for (const line of optional) if (line) console.log(line);

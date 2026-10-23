@@ -3,6 +3,7 @@
   "issue": 14219,
   "date": "2026-10-23",
   "harness": "e2e/perf/empty-project-view-memory-perf.spec.ts",
+  "note": "Run under Playwright, whose focus emulation keeps every attached page visible; cached-phase cc tile memory may not reflect the shipped app (#14237).",
   "versions": {
     "electron": "42.11.18",
     "chrome": "148.0.7778.280",
@@ -41,6 +42,7 @@
           "jsHeapUsedMb": 43.5,
           "domNodes": 1169,
           "jsEventListeners": 477,
+          "visibilityState": null,
           "memoryInfraMb": {
             "blink_gc": 13.2,
             "blink_objects": 5,
@@ -71,6 +73,7 @@
           "jsHeapUsedMb": 49.9,
           "domNodes": 1382,
           "jsEventListeners": 707,
+          "visibilityState": null,
           "memoryInfraMb": {
             "blink_gc": 15,
             "blink_objects": 5.7,
@@ -102,6 +105,7 @@
           "jsHeapUsedMb": 42.4,
           "domNodes": 1237,
           "jsEventListeners": 570,
+          "visibilityState": null,
           "memoryInfraMb": {
             "blink_gc": 14.9,
             "blink_objects": 5.2,
@@ -227,34 +231,34 @@
       }
     },
     "final": {
-      "description": "+ ASCII-escaped chunks + Blink memory cache cleared when a view is cached",
+      "description": "+ ASCII-escaped chunks + Blink memory cache cleared 2 s after a view is cached",
       "runs": 3,
-      "gitHead": "d81e81ac1a770a107b993aba8cfc61717cea1c85",
+      "gitHead": "5dfd19d2be8eb2aa3af98f672883550986dbbfa4",
       "phases": {
         "empty": {
           "rendererFootprintMb": {
-            "median": 157,
-            "readings": [156, 159, 157]
+            "median": 158,
+            "readings": [159, 156, 158]
           },
-          "gpuProcessFootprintMb": 731,
+          "gpuProcessFootprintMb": 735,
           "jsHeapUsedMb": 43.5,
           "domNodes": 1169,
           "jsEventListeners": 477,
           "visibilityState": "visible",
           "memoryInfraMb": {
-            "blink_gc": 12.9,
+            "blink_gc": 13,
             "blink_objects": 5,
             "cc": 68.8,
             "gpu": 2.2,
-            "malloc": 72,
-            "partition_alloc": 35.6,
+            "malloc": 70.2,
+            "partition_alloc": 35.9,
             "shared_memory": 3.4,
-            "v8": 47.5,
-            "web_cache": 25
+            "v8": 47.8,
+            "web_cache": 24.9
           },
           "vmmapDirtyMb": {
-            "Memory Tag 253": 90.9,
-            "Memory Tag 255": 57.9,
+            "Memory Tag 253": 92.4,
+            "Memory Tag 255": 58.2,
             "libraries": 3.1,
             "malloc": 0.7,
             "page table in kernel": 1,
@@ -265,57 +269,57 @@
         "cached": {
           "rendererFootprintMb": {
             "median": 138,
-            "readings": [139, 137, 138]
+            "readings": [138, 136, 139]
           },
-          "gpuProcessFootprintMb": 1082,
-          "jsHeapUsedMb": 44.2,
-          "domNodes": 1546,
-          "jsEventListeners": 711,
+          "gpuProcessFootprintMb": 1067,
+          "jsHeapUsedMb": 44.1,
+          "domNodes": 1382,
+          "jsEventListeners": 710,
           "visibilityState": "visible",
           "memoryInfraMb": {
-            "blink_gc": 14.6,
-            "blink_objects": 5,
+            "blink_gc": 14.7,
+            "blink_objects": 4.6,
             "canvas": 1,
-            "cc": 115.3,
+            "cc": 105.4,
             "gpu": 5.4,
-            "malloc": 52.1,
-            "partition_alloc": 21.7,
+            "malloc": 51.5,
+            "partition_alloc": 21.1,
             "shared_memory": 10.6,
             "v8": 48.4
           },
           "vmmapDirtyMb": {
-            "Memory Tag 253": 68.7,
-            "Memory Tag 255": 59.2,
+            "Memory Tag 253": 68.6,
+            "Memory Tag 255": 59.5,
             "libraries": 3.2,
             "malloc": 0.9,
             "page table in kernel": 1.1,
             "shared memory": 1.7,
-            "stacks": 1.2
+            "stacks": 1.1
           }
         },
         "afterSession": {
           "rendererFootprintMb": {
-            "median": 140,
-            "readings": [140, 140, 131]
+            "median": 139,
+            "readings": [141, 131, 139]
           },
-          "gpuProcessFootprintMb": 539,
-          "jsHeapUsedMb": 42.2,
-          "domNodes": 1391,
-          "jsEventListeners": 575,
+          "gpuProcessFootprintMb": 550,
+          "jsHeapUsedMb": 41.7,
+          "domNodes": 1233,
+          "jsEventListeners": 566,
           "visibilityState": "visible",
           "memoryInfraMb": {
             "blink_gc": 14.2,
-            "blink_objects": 4.4,
-            "cc": 59.1,
-            "gpu": 3.4,
-            "malloc": 49.7,
-            "partition_alloc": 21.3,
-            "shared_memory": 8.5,
-            "v8": 46.8
+            "blink_objects": 4.3,
+            "cc": 59.2,
+            "gpu": 3.2,
+            "malloc": 49.8,
+            "partition_alloc": 20.5,
+            "shared_memory": 8.4,
+            "v8": 46.2
           },
           "vmmapDirtyMb": {
             "Memory Tag 253": 71.1,
-            "Memory Tag 255": 55.9,
+            "Memory Tag 255": 55.3,
             "libraries": 3.2,
             "malloc": 0.9,
             "page table in kernel": 1.1,
@@ -327,7 +331,7 @@
     }
   },
   "experiments": {
-    "heapSnapshotFinal": {
+    "heapSnapshotWithCompileHints": {
       "empty": {
         "rendererFootprintMb": 157,
         "jsHeapUsedMb": 43.5,
@@ -551,7 +555,7 @@
     },
     "hideBeforeDetach": {
       "runs": 1,
-      "note": "setVisible(false) before removeChildView: cached view still reports visibilityState=visible and holds the same cc tile memory",
+      "note": "setVisible(false) before removeChildView: under Playwright the cached view still reports visibilityState=visible and holds the same cc tile memory",
       "cached": {
         "rendererFootprintMb": {
           "median": 181,

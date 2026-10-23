@@ -16,8 +16,10 @@ const SOURCE = [
   "d=/^\\p{L}é😀$/u.test(`é😀`.replace(/^/,`x`).slice(1)),",
   "e=String.raw`→${1}`,",
   'f="café",',
-  "g=`😀`.length;",
-  "globalThis.__out=[a,b,c,d,e,f,g];",
+  "g=`😀`.length,",
+  "h=/[\\p{L}--[a-z]]/v.test(`é`)&&!/[\\p{L}--[a-z]]/v.test(`a`),",
+  "i=/^[😀-😂]$/u.test(`😁`);",
+  "globalThis.__out=[a,b,c,d,e,f,g,h,i];",
 ].join("");
 
 function run(code) {
@@ -38,7 +40,10 @@ describe("escapeChunkToAscii", () => {
   const escaped = escapeChunkToAscii("chunk.js", SOURCE);
 
   it("produces the same runtime values as the original", () => {
-    expect(run(escaped)).toEqual(run(SOURCE));
+    const original = run(SOURCE);
+    // The regex cases must actually match, or equal outputs prove nothing.
+    expect(original.slice(-2)).toEqual([true, true]);
+    expect(run(escaped)).toEqual(original);
   });
 
   it("leaves no two-byte character outside tagged template quasis", () => {

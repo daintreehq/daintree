@@ -8,6 +8,8 @@
 // already-minified chunks that need it through the newer Rolldown's Oxc
 // minifier with compress and mangle off: a parse and print, nothing else.
 // Tagged template quasis keep their characters, since a tag can read `raw`.
+// Regex literals are escaped too, so `RegExp.prototype.source` reads the
+// escapes; matching is unchanged.
 
 import { minifySync } from "rolldown/utils";
 

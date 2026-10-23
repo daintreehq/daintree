@@ -279,29 +279,62 @@ describe("preload event subscriptions", () => {
     expect(ipcRenderer.listenerCount("project-presentation:changed")).toBe(0);
   });
 
-  it("drops Blink's memory cache when the view is cached, and only then", () => {
-    fakeElectron.webFrame.clearCache.mockClear();
+  it("drops Blink's memory cache once a view has stayed cached for a moment", () => {
+    vi.useFakeTimers();
+    try {
+      fakeElectron.webFrame.clearCache.mockClear();
 
-    ipcRenderer.emit("app:view-warm-activated", {});
-    ipcRenderer.emit("app:view-revealed", {});
-    expect(fakeElectron.webFrame.clearCache).not.toHaveBeenCalled();
-    expect(app.isViewCached()).toBe(false);
+      ipcRenderer.emit("app:view-cached", {});
+      expect(app.isViewCached()).toBe(true);
+      expect(fakeElectron.webFrame.clearCache).not.toHaveBeenCalled();
 
-    ipcRenderer.emit("app:view-cached", {});
-    expect(fakeElectron.webFrame.clearCache).toHaveBeenCalledTimes(1);
-    expect(app.isViewCached()).toBe(true);
+      vi.advanceTimersByTime(2_000);
+      expect(fakeElectron.webFrame.clearCache).toHaveBeenCalledTimes(1);
 
-    ipcRenderer.emit("app:view-warm-activated", {});
-    expect(app.isViewCached()).toBe(false);
-    expect(fakeElectron.webFrame.clearCache).toHaveBeenCalledTimes(1);
+      ipcRenderer.emit("app:view-warm-activated", {});
+      vi.advanceTimersByTime(10_000);
+      expect(fakeElectron.webFrame.clearCache).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("never clears the cache of a view that became active again first", () => {
+    vi.useFakeTimers();
+    try {
+      fakeElectron.webFrame.clearCache.mockClear();
+
+      // A freeze can hold the cached signal until the next activation, which
+      // then delivers both back to back.
+      ipcRenderer.emit("app:view-cached", {});
+      ipcRenderer.emit("app:view-warm-activated", {});
+      vi.advanceTimersByTime(10_000);
+      expect(fakeElectron.webFrame.clearCache).not.toHaveBeenCalled();
+
+      // A cache storm schedules one clear, not one per signal.
+      ipcRenderer.emit("app:view-cached", {});
+      vi.advanceTimersByTime(1_000);
+      ipcRenderer.emit("app:view-cached", {});
+      vi.advanceTimersByTime(2_000);
+      expect(fakeElectron.webFrame.clearCache).toHaveBeenCalledTimes(1);
+      ipcRenderer.emit("app:view-warm-activated", {});
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("still latches the cached state when clearing the cache throws", () => {
-    fakeElectron.webFrame.clearCache.mockImplementationOnce(() => {
-      throw new Error("renderer tearing down");
-    });
-    expect(() => ipcRenderer.emit("app:view-cached", {})).not.toThrow();
-    expect(app.isViewCached()).toBe(true);
-    ipcRenderer.emit("app:view-warm-activated", {});
+    vi.useFakeTimers();
+    try {
+      fakeElectron.webFrame.clearCache.mockImplementationOnce(() => {
+        throw new Error("renderer tearing down");
+      });
+      ipcRenderer.emit("app:view-cached", {});
+      expect(() => vi.advanceTimersByTime(2_000)).not.toThrow();
+      expect(app.isViewCached()).toBe(true);
+      ipcRenderer.emit("app:view-warm-activated", {});
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
