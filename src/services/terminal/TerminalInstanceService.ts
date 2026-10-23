@@ -1578,6 +1578,10 @@ class TerminalInstanceService {
       return await createPromise;
     } finally {
       this.creating.delete(id);
+      // A cancellation belongs to this creation alone. Consumed on the paths
+      // that honor it; on any other failure it must not outlive the build and
+      // cancel the id's next create.
+      this.cancelledCreations.delete(id);
     }
   }
 
@@ -1624,16 +1628,9 @@ class TerminalInstanceService {
       terminalOptions.cursorBlink = false;
     }
 
-    // The first terminal fetches xterm itself (#14239). A destroy() landing
-    // during that fetch is honored before anything is built; and a failed fetch
-    // must not leave its cancellation behind to kill the next create for this id.
-    let Terminal: Awaited<ReturnType<typeof loadXtermCore>>["Terminal"];
-    try {
-      ({ Terminal } = await loadXtermCore());
-    } catch (error) {
-      this.cancelledCreations.delete(id);
-      throw error;
-    }
+    // The first terminal fetches xterm itself (#14239); a destroy() landing
+    // during that fetch is honored before anything is built.
+    const { Terminal } = await loadXtermCore();
     if (this.cancelledCreations.delete(id)) {
       throw new Error(`Terminal ${id} creation cancelled: destroyed before build completed`);
     }
