@@ -3,6 +3,7 @@ import { actionService } from "@/services/ActionService";
 import type { ProjectFocusOnActivateIntent } from "@shared/types/ipc/project";
 import type { ActionId } from "@shared/types/actions";
 import { logWarn } from "@/utils/logger";
+import { activateAssistantLane } from "@/services/assistantSubject";
 
 /**
  * Cross-project focus intent receiver.
@@ -31,7 +32,8 @@ export function useFocusOnActivateIntent(isStateLoaded: boolean): void {
       if (
         payload?.intent !== "focus-next-waiting" &&
         payload?.intent !== "focus-panel" &&
-        payload?.intent !== "run-plugin-action"
+        payload?.intent !== "run-plugin-action" &&
+        payload?.intent !== "open-assistant"
       ) {
         return;
       }
@@ -55,6 +57,13 @@ export function useFocusOnActivateIntent(isStateLoaded: boolean): void {
             });
           }
         });
+      return;
+    }
+    if (pending.intent === "open-assistant") {
+      // Checked again on arrival: a session that ended during the switch opens nothing.
+      void activateAssistantLane(pending.subject).catch((error: unknown) => {
+        logWarn("Couldn't open the assistant lane", { error });
+      });
       return;
     }
     if (pending.intent === "focus-panel") {

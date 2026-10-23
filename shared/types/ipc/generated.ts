@@ -225,6 +225,18 @@ export interface GeneratedIpcInvokeMap {
     args: [runId: string, target: import("./canopy.js").CanopyTarget];
     result: void;
   };
+  "canopy:resolve-assistant": {
+    args: [
+      subject: {
+        hostId: string;
+        scope: { kind: "project"; projectId: string } | { kind: "global" };
+        terminalId: string;
+        incarnation: number;
+        lane?: number | undefined;
+      },
+    ];
+    result: import("./canopy.js").AssistantOpenDestination | null;
+  };
   "canopy:restore-reads": {
     args: [restores: import("./canopy.js").CanopyReadRestore[]];
     result: void;
@@ -297,6 +309,18 @@ export interface GeneratedIpcInvokeMap {
   "canopy:unwatch-terminal": {
     args: [];
     result: void;
+  };
+  "canopy:watch-assistant-terminal": {
+    args: [
+      subject: {
+        hostId: string;
+        scope: { kind: "project"; projectId: string } | { kind: "global" };
+        terminalId: string;
+        incarnation: number;
+        lane?: number | undefined;
+      },
+    ];
+    result: import("./canopy.js").CanopyTerminalView;
   };
   "canopy:watch-terminal": {
     args: [runId: string, target: import("./canopy.js").CanopyTarget];

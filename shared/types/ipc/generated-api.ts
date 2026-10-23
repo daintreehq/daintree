@@ -80,6 +80,9 @@ export interface GeneratedElectronAPI {
     reread(
       ...args: IpcInvokeMap["canopy:reread"]["args"]
     ): Promise<IpcInvokeMap["canopy:reread"]["result"]>;
+    resolveAssistant(
+      ...args: IpcInvokeMap["canopy:resolve-assistant"]["args"]
+    ): Promise<IpcInvokeMap["canopy:resolve-assistant"]["result"]>;
     restoreReads(
       ...args: IpcInvokeMap["canopy:restore-reads"]["args"]
     ): Promise<IpcInvokeMap["canopy:restore-reads"]["result"]>;
@@ -128,6 +131,9 @@ export interface GeneratedElectronAPI {
     unwatchTerminal(
       ...args: IpcInvokeMap["canopy:unwatch-terminal"]["args"]
     ): Promise<IpcInvokeMap["canopy:unwatch-terminal"]["result"]>;
+    watchAssistantTerminal(
+      ...args: IpcInvokeMap["canopy:watch-assistant-terminal"]["args"]
+    ): Promise<IpcInvokeMap["canopy:watch-assistant-terminal"]["result"]>;
     watchTerminal(
       ...args: IpcInvokeMap["canopy:watch-terminal"]["args"]
     ): Promise<IpcInvokeMap["canopy:watch-terminal"]["result"]>;
