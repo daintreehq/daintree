@@ -3182,6 +3182,78 @@ describe("useRepositoryStats", () => {
       });
     });
 
+    it("keeps this host's newer counts through a failed poll", async () => {
+      // Another host's observation, older than this host's first answer.
+      shareFromLocalHost(5_000);
+      getRepoStatsMock.mockResolvedValueOnce({
+        commitCount: 413,
+        issueCount: 20,
+        prCount: 4,
+        loading: false,
+        stale: false,
+        lastUpdated: Date.now(),
+        repoKey: REPO_KEY,
+      });
+
+      const { result } = renderHook(() => useRepositoryStats());
+      await waitFor(() => {
+        expect(result.current.stats?.issueCount).toBe(20);
+      });
+
+      // An undated failure preserves 20; it must not reset what 20 is dated
+      // by, or the next fetch would let the older shared 11 replace it.
+      getRepoStatsMock.mockResolvedValue({
+        commitCount: 413,
+        issueCount: null,
+        prCount: null,
+        loading: false,
+        stale: true,
+        error: "Network unreachable",
+      });
+      await act(async () => {
+        await result.current.refresh();
+      });
+      await act(async () => {
+        await result.current.refresh();
+      });
+
+      expect(getRepoStatsMock).toHaveBeenCalledTimes(3);
+      expect(result.current.stats?.issueCount).toBe(20);
+    });
+
+    it("keeps the repository binding through a switch-back restore", async () => {
+      getRepoStatsMock.mockResolvedValueOnce({
+        commitCount: 413,
+        issueCount: 9,
+        prCount: 4,
+        loading: false,
+        stale: false,
+        lastUpdated: Date.now(),
+        repoKey: REPO_KEY,
+      });
+      const first = renderHook(() => useRepositoryStats());
+      await waitFor(() => {
+        expect(readRepoAlias("studio", "/srv/widgets")).not.toBeNull();
+      });
+      first.unmount();
+
+      // The other host saw newer counts while this view was away.
+      publishSharedObservation(PROVIDER_ID, "octo", REPO_KEY, {
+        issueCount: 11,
+        prCount: 5,
+        observedAt: Date.now() + 1_000,
+        hostId: "local",
+      });
+      getRepoStatsMock.mockReturnValue(createDeferred<ForgeRepositoryStats>().promise);
+
+      const second = renderHook(() => useRepositoryStats());
+
+      await waitFor(() => {
+        expect(second.result.current.stats?.issueCount).toBe(11);
+      });
+      expect(readRepoAlias("studio", "/srv/widgets")).not.toBeNull();
+    });
+
     it("carries on polling when the account lookup fails", async () => {
       shareFromLocalHost();
       getCurrentUserMock.mockImplementation(() => {

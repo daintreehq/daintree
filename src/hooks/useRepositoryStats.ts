@@ -368,7 +368,20 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
   // (`onRepoStatsAndPageUpdated`). Both paths must run identical preservation
   // logic so a list-fetch-triggered update can't flash a `0` count when stale.
   const applyStatsResult = useCallback(
-    (repoStats: ForgeRepositoryStats, opts: { projectPath: string }) => {
+    (
+      repoStats: ForgeRepositoryStats,
+      opts: {
+        projectPath: string;
+        /**
+         * Set when the result replays counts this view already had (switch-back
+         * cache, persisted record, disk bootstrap) rather than a host answer:
+         * when those counts were read, if known. A seed never publishes a
+         * cross-host observation and never says anything about which
+         * repository the counts come from (#14199).
+         */
+        seed?: { observedAt: number | null };
+      }
+    ) => {
       if (!mountedRef.current) return;
 
       hasAppliedResultRef.current = true;
@@ -451,13 +464,20 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
       // from a different provider or repository. Undated answers
       // (provider-less snapshots) never retire it; stale ones and seeds carry
       // no repo key and are judged on age alone.
-      const incomingObservedAt = countsObservedAt(repoStats);
+      // A stale answer's `lastUpdated` can be a disk copy's re-stamp, so only its
+      // per-count stamps date it.
+      const incomingObservedAt = opts.seed
+        ? opts.seed.observedAt
+        : shouldPreserve
+          ? countsObservedAt({ ...repoStats, lastUpdated: undefined })
+          : countsObservedAt(repoStats);
       let displayedStats = preservedStats;
       const overlay = sharedOverlayRef.current;
       if (overlay) {
         const boundElsewhere =
           overlay.providerId !== providerIdRef.current ||
-          (!shouldPreserve &&
+          (!opts.seed &&
+            !shouldPreserve &&
             repoStats.lastUpdated !== undefined &&
             repoStats.repoKey !== overlay.repoKey);
         if (!boundElsewhere && (incomingObservedAt ?? -Infinity) < overlay.observedAt) {
@@ -473,8 +493,15 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
         }
       }
       const overlaid = displayedStats !== preservedStats;
-      shownCountsObservedAtRef.current =
-        overlaid && overlay ? overlay.observedAt : incomingObservedAt;
+      // Counts held over from an earlier result keep that result's age.
+      const countsHeldOver =
+        preservedStats.issueCount !== repoStats.issueCount ||
+        preservedStats.prCount !== repoStats.prCount;
+      if (overlaid && overlay) {
+        shownCountsObservedAtRef.current = overlay.observedAt;
+      } else if (!countsHeldOver) {
+        shownCountsObservedAtRef.current = incomingObservedAt;
+      }
 
       setStats(displayedStats);
       // Borrowed counts are never this host's fresh observation.
@@ -525,7 +552,7 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
           });
         }
 
-        if (sharingEnabledRef.current && providerIdRef.current !== null) {
+        if (!opts.seed && sharingEnabledRef.current && providerIdRef.current !== null) {
           if (repoStats.repoKey && incomingObservedAt !== null) {
             publishSharedStats(
               observerHostId,
@@ -648,7 +675,14 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
             ? { lastUpdated: persisted.lastUpdated }
             : {}),
         },
-        { projectPath }
+        {
+          projectPath,
+          // The record's time is when these counts were last read changed —
+          // a real read of them, unlike a disk copy's re-stamp.
+          seed: {
+            observedAt: providerMatches ? persisted.lastUpdated : null,
+          },
+        }
       );
     },
     [applyStatsResult]
@@ -751,7 +785,10 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
             cached.providerId === providerIdRef.current &&
             Date.now() - cached.lastUpdated < FRESH_THRESHOLD_MS
           ) {
-            applyStatsResult(cached.stats, { projectPath: project.path });
+            applyStatsResult(cached.stats, {
+              projectPath: project.path,
+              seed: { observedAt: countsObservedAt(cached.stats) },
+            });
           } else if (project.lastKnownStats) {
             // Past the freshness window, or the module cache never had this
             // project (a fresh V8 context after view eviction, or a restart),
@@ -1034,7 +1071,10 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
             stale: true,
             lastUpdated: cached.stats.lastUpdated,
           };
-          applyStatsResult(bootstrapStats, { projectPath: currentProject.path });
+          applyStatsResult(bootstrapStats, {
+            projectPath: currentProject.path,
+            seed: { observedAt: null },
+          });
         }
 
         const issuesKey = buildCacheKey(currentProject.path, "issue", "open", "created");
