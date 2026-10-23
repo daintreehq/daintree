@@ -291,6 +291,20 @@ export interface GeneratedIpcInvokeMap {
             label: string | null;
             attached: boolean | null;
             handback: { observedAt: number } | null;
+            confirmations?:
+              | {
+                  waiting: { actionId: string; since: number; expiresAt: number }[];
+                  omitted: number;
+                }
+              | undefined;
+            notices?:
+              | {
+                  pending: number;
+                  ready: number;
+                  delivery: "failed" | "blocked" | "idle" | "scheduled" | "held" | "outstanding";
+                }
+              | null
+              | undefined;
           }
         | {
             state: "resumable";
