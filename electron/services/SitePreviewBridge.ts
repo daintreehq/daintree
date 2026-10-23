@@ -17,8 +17,8 @@
  * here. What survives validation is an observation, forwarded as such.
  *
  * There is intentionally no "evaluate this script in the guest" operation, and
- * no caller-supplied body either: everything evaluated in the guest is
- * host-authored and loaded by the host from the picker's fixed asset catalog.
+ * no caller-supplied body either: what runs in the guest is loaded by the host
+ * itself, from the picker's asset catalog or a registered provider's entry.
  */
 
 import { randomBytes, randomUUID } from "node:crypto";
