@@ -8,6 +8,7 @@ import type { PanelKind, PanelTitleMode } from "../../../shared/types/panel.js";
 import type { BuiltInAgentId } from "../../../shared/config/agentIds.js";
 import type { PtyHostSpawnOptions, TerminalResizeResult } from "../../../shared/types/pty-host.js";
 import type { SerializedTerminalSnapshot } from "../../../shared/types/terminal.js";
+import { PTY_MIRROR_SCROLLBACK } from "../../../shared/config/scrollback.js";
 import type { ProcessDetector } from "../ProcessDetector.js";
 import type { HandbackTracker } from "./HandbackTracker.js";
 
@@ -383,17 +384,14 @@ export const SEMANTIC_FLUSH_INTERVAL_MS = 100;
 
 // Scrollback configuration
 // All PTY panels get the same headless-mirror scrollback; there is no "agent
-// tier" scrollback decision any more. This is the pty-host analysis mirror, NOT
-// the renderer's display buffer — the two are sized independently on purpose.
-// The renderer agent ceiling is AGENT_POLICY maxLines (10000, in
-// src/utils/scrollbackConfig.ts); this mirror is deliberately kept lower to bound
-// pty-host heap (at ~12 bytes/cell, 5000 vs 10000 halves the worst-case mirror
-// cost per terminal). The mirror only feeds analysis (terminal.getOutput caps at
-// 1000) and serialize/restore, so the trade is: a live renderer scrolls back the
-// full 10000 lines, but a session restored after project-view eviction recovers
-// only the most recent ~5000. Raise this to match the renderer ceiling only with
-// a pty-host memory review (and a re-check of the persisted-snapshot size limit).
-export const DEFAULT_SCROLLBACK = 5000;
+// tier" scrollback decision any more. This is the pty-host analysis mirror, and
+// every renderer restore (project-view eviction, cold switch, app restart,
+// poisoned-terminal rebuild) replays from it, so the renderer agent ceiling
+// (AGENT_POLICY in src/utils/scrollbackConfig.ts) is pinned to the same shared
+// constant: a warm terminal and a restored one show the same history. Raising
+// it raises both, and needs a pty-host memory review (~12 bytes/cell for every
+// terminal, shells included) and a re-check of the persisted-snapshot size limit.
+export const DEFAULT_SCROLLBACK = PTY_MIRROR_SCROLLBACK;
 
 // Preserved-snapshot eviction (issue #10839)
 // Agent terminals that exit cleanly retain their full serialized scrollback

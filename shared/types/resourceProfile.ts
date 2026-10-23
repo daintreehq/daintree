@@ -49,13 +49,13 @@ export interface ResourceProfileConfig {
    */
   webglLowerThreshold: number;
   /**
-   * Ceiling on the agent-terminal scrollback policy (lines). Caps the
-   * AGENT_POLICY maxLines in src/utils/scrollbackConfig.ts — at xterm's
-   * ~1.2KB/line each agent terminal holds up to ~maxLines×1.2KB of buffer
-   * once filled (~12MB at the 10k perf/balanced ceiling), so constrained
-   * hardware (efficiency) trades history depth for ~7MB per visible agent
-   * terminal by dropping to 4k. Applied live on profile change via
-   * useResourceProfile → restoreScrollbackAllForeground.
+   * Ceiling on the agent-terminal scrollback policy (lines). The effective
+   * cap is the lower of this and AGENT_POLICY maxLines in
+   * src/utils/scrollbackConfig.ts, which is the pty-host mirror depth
+   * (PTY_MIRROR_SCROLLBACK, 5k) — so perf/balanced's 10k is a budget the
+   * mirror cap already binds, and only efficiency's 4k lowers it further.
+   * Applied live on profile change via useResourceProfile →
+   * restoreScrollbackAllForeground.
    */
   agentScrollbackMaxLines: number;
   /** FetchScheduler focused (isCurrent) fetch interval (ms) */
@@ -243,11 +243,11 @@ export const RESOURCE_PROFILE_CONFIGS: Record<ResourceProfile, BaseResourceProfi
     processTreePollInterval: 5000,
     projectStatsPollInterval: 25000,
     memoryPressureInactiveMs: 15 * 60 * 1000, // 15 min
-    // Lower agent history ceiling on constrained hardware — ~7MB less buffer
-    // headroom per filled agent terminal versus the 10k perf/balanced ceiling,
-    // consistent with the efficiency profile's other fidelity trades. Still
-    // well above the previous 2.5k efficiency ceiling so a filled session stays
-    // scrollable.
+    // Lower agent history ceiling on constrained hardware — 1k fewer lines
+    // (~2.4MB at 180 columns) per filled agent terminal than the 5k mirror cap
+    // that binds perf/balanced, consistent with the efficiency profile's other
+    // fidelity trades. Still well above the previous 2.5k efficiency ceiling so
+    // a filled session stays scrollable.
     agentScrollbackMaxLines: 4000,
     fetchIntervalActiveMs: 45_000,
     fetchIntervalBackgroundMs: 10 * 60_000,

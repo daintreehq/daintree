@@ -33,9 +33,13 @@ import {
 import type { ScreenReaderMode } from "@/store";
 import type { PanelLayoutStrategy } from "@/types";
 import {
-  getScrollbackForType,
+  AGENT_SCROLLBACK_MAX_LINES,
   estimateMemoryUsage,
+  getScrollbackForType,
   PERFORMANCE_MODE_SCROLLBACK,
+  PLAIN_SCROLLBACK_MAX_LINES,
+  PLAIN_SCROLLBACK_MIN_LINES,
+  SCROLLBACK_ESTIMATE_COLUMNS,
 } from "@/utils/scrollbackConfig";
 import { formatBytes } from "@/lib/formatBytes";
 import { actionService } from "@/services/ActionService";
@@ -271,11 +275,6 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
       });
   }, [initializeFromHardware]);
 
-  const memoryEstimate = useMemo(() => {
-    const base = performanceMode ? PERFORMANCE_MODE_SCROLLBACK : scrollbackLines;
-    return estimateMemoryUsage(TYPICAL_TERMINAL_COUNTS, base);
-  }, [performanceMode, scrollbackLines]);
-
   const scrollbackLimits = useMemo(() => {
     const effectiveBase = performanceMode ? PERFORMANCE_MODE_SCROLLBACK : scrollbackLines;
     const types: Array<{ isAgent: boolean; label: string }> = [
@@ -283,12 +282,24 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
       { isAgent: false, label: "Shells and dev servers" },
     ];
     return types.map(({ isAgent, label }) => ({
+      isAgent,
       label,
       limit: performanceMode
         ? PERFORMANCE_MODE_SCROLLBACK
         : getScrollbackForType(isAgent, effectiveBase),
     }));
   }, [performanceMode, scrollbackLines]);
+
+  // Priced from the limits shown above, so performance mode's flat cap is
+  // estimated as what terminals actually keep rather than as a base to scale.
+  const memoryEstimate = useMemo(() => {
+    const limitFor = (isAgent: boolean) =>
+      scrollbackLimits.find((l) => l.isAgent === isAgent)?.limit ?? 0;
+    return estimateMemoryUsage(TYPICAL_TERMINAL_COUNTS, {
+      agent: limitFor(true),
+      plain: limitFor(false),
+    });
+  }, [scrollbackLimits]);
 
   const [saveFailure, setSaveFailure] = useState<SaveFailure | null>(null);
 
@@ -853,7 +864,7 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
             <SettingsGroup>
               <SettingsPresetGroup
                 label="Base scrollback"
-                description={`Every terminal scales from this: agent terminals keep 10× it and shells 0.3×, within their own limits. Default: ${SCROLLBACK_DEFAULT.toLocaleString()}.`}
+                description={`Every terminal scales from this: agent terminals keep 10× it, up to ${AGENT_SCROLLBACK_MAX_LINES.toLocaleString()} lines (fewer on the efficiency profile), and shells 0.3×, from ${PLAIN_SCROLLBACK_MIN_LINES.toLocaleString()} to ${PLAIN_SCROLLBACK_MAX_LINES.toLocaleString()}. Default: ${SCROLLBACK_DEFAULT.toLocaleString()}.`}
                 options={SCROLLBACK_OPTIONS}
                 value={scrollbackLines}
                 onChange={(value) => void handleScrollbackChange(value)}
@@ -883,7 +894,7 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
             <SettingsGroup id="memory-details">
               <SettingsRow
                 label="Estimated scrollback memory"
-                description={`A typical session of ${TYPICAL_TERMINAL_COUNTS.agent} agents (${formatBytes(memoryEstimate.agent)}) and ${TYPICAL_TERMINAL_COUNTS.plain} terminals (${formatBytes(memoryEstimate.plain)})`}
+                description={`A typical session of ${TYPICAL_TERMINAL_COUNTS.agent} agents (${formatBytes(memoryEstimate.agent)}) and ${TYPICAL_TERMINAL_COUNTS.plain} terminals (${formatBytes(memoryEstimate.plain)}) with full history, at ${SCROLLBACK_ESTIMATE_COLUMNS} columns wide`}
                 control={
                   <span className="font-mono text-xs font-medium text-text-primary">
                     {formatBytes(memoryEstimate.total)}

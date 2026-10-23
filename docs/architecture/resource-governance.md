@@ -105,7 +105,7 @@ Every host-independent per-profile knob lives in `RESOURCE_PROFILE_CONFIGS` (`sh
 | `agentRecursiveWatcherCap` | 48 | 32 | 16 | WorkspaceService agent recursive-watcher budget |
 | `processTreePollInterval` (ms) | 2000 | 2500 | 5000 | ProcessTreeCache |
 | `projectStatsPollInterval` (ms) | 5000 | 5000 | 25000 | ProjectStatsService |
-| `agentScrollbackMaxLines` | 10000 | 10000 | 4000 | Renderer agent scrollback policy (`scrollbackConfig.ts`) |
+| `agentScrollbackMaxLines` | 10000 | 10000 | 4000 | Renderer agent scrollback policy (`scrollbackConfig.ts`); the effective cap is `min(this, PTY_MIRROR_SCROLLBACK)` = 5000 / 5000 / 4000, so a warm terminal never holds more than a restore recovers |
 | `fetchIntervalActiveMs` / `fetchIntervalBackgroundMs` | 20 s / 3 min | 30 s / 5 min | 45 s / 10 min | workspace-host `FetchScheduler` |
 | `portBatchThroughputDelayMs` (ms) | 16 | 16 | 40 | pty-host PortBatcher throughput flush window |
 | `memoryPressureInactiveMs` | 60 min | 30 min | 15 min | HibernationService |

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { act, fireEvent, render, screen } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const dispatch = vi.fn().mockResolvedValue({ ok: true });
 vi.mock("@/services/ActionService", () => ({
@@ -12,7 +12,14 @@ vi.mock("@/lib/notify", () => ({ notify: (...args: unknown[]) => mockNotify(...a
 
 import { TerminalSettingsTab } from "../TerminalSettingsTab";
 import { useTwoPaneSplitStore } from "@/store/twoPaneSplitStore";
-import { useLayoutConfigStore } from "@/store";
+import { useLayoutConfigStore, usePerformanceModeStore, useScrollbackStore } from "@/store";
+import { formatBytes } from "@/lib/formatBytes";
+import {
+  bytesForScrollbackLines,
+  getScrollbackForType,
+  PERFORMANCE_MODE_SCROLLBACK,
+  SCROLLBACK_ESTIMATE_COLUMNS,
+} from "@/utils/scrollbackConfig";
 import { useResourceMonitoringStore } from "@/store/resourceMonitoringStore";
 import { usePanelLimitStore } from "@/store/panelLimitStore";
 import { useCachedProjectViewsStore } from "@/store/cachedProjectViewsStore";
@@ -60,6 +67,43 @@ describe("TerminalSettingsTab", () => {
     // The memory estimate is a plain row, not an empty disclosure.
     expect(screen.getByText("Estimated scrollback memory")).toBeTruthy();
     expect(screen.queryByRole("button", { expanded: false })).toBeNull();
+  });
+
+  describe("scrollback memory estimate", () => {
+    const initialPerformanceMode = usePerformanceModeStore.getState().performanceMode;
+    const initialScrollbackLines = useScrollbackStore.getState().scrollbackLines;
+
+    afterEach(() => {
+      usePerformanceModeStore.setState({ performanceMode: initialPerformanceMode });
+      useScrollbackStore.setState({ scrollbackLines: initialScrollbackLines });
+    });
+
+    function estimateDescription(): string {
+      return screen.getByText(/^A typical session of/).textContent ?? "";
+    }
+
+    it("prices each terminal at the lines it keeps and names the assumed width", () => {
+      usePerformanceModeStore.setState({ performanceMode: false });
+      useScrollbackStore.setState({ scrollbackLines: 1000 });
+      renderSubtab("scrollback");
+
+      const text = estimateDescription();
+      const agentBytes = bytesForScrollbackLines(getScrollbackForType(true, 1000)) * 8;
+      const plainBytes = bytesForScrollbackLines(getScrollbackForType(false, 1000)) * 8;
+      expect(text).toContain(`8 agents (${formatBytes(agentBytes)})`);
+      expect(text).toContain(`8 terminals (${formatBytes(plainBytes)})`);
+      expect(text).toContain(`${SCROLLBACK_ESTIMATE_COLUMNS} columns`);
+    });
+
+    it("estimates performance mode at its flat cap, not as a base to scale", () => {
+      usePerformanceModeStore.setState({ performanceMode: true });
+      renderSubtab("scrollback");
+
+      const capped = formatBytes(bytesForScrollbackLines(PERFORMANCE_MODE_SCROLLBACK) * 8);
+      const text = estimateDescription();
+      expect(text).toContain(`8 agents (${capped})`);
+      expect(text).toContain(`8 terminals (${capped})`);
+    });
   });
 
   it("renders grid strategies as native radio rows with descriptions", () => {
