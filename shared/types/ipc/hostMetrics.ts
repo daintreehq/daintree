@@ -1,6 +1,7 @@
 import type { AgentState } from "../agent.js";
 import type { HostDriverObservation, HostId, HostMetricsSummary } from "../remoteHosts.js";
 import type { FleetBand } from "../../utils/fleetBands.js";
+import type { ProcessInventorySnapshot } from "../processes.js";
 
 export interface HostMetricsSnapshot {
   hostId: HostId;
@@ -210,5 +211,16 @@ export type HostLinkActivityResult =
       /** This Shell's own launch, so its rows can say so. */
       self: { clientId: string; clientName: string } | null;
     }
+  /** A host from before it could report this. */
+  | { supported: false };
+
+/** A host's process inventory, as its Processes view lists it, bounded for the link. */
+export interface RemoteProcessInventory extends ProcessInventorySnapshot {
+  /** Some rows were let go to keep the answer bounded. */
+  truncated: boolean;
+}
+
+export type HostProcessInventoryResult =
+  | { supported: true; inventory: RemoteProcessInventory }
   /** A host from before it could report this. */
   | { supported: false };

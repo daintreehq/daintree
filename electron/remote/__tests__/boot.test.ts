@@ -409,6 +409,7 @@ vi.mock("../metrics/clientInstall.js", () => ({
 vi.mock("../metrics/hostMetricsHost.js", () => ({
   installHostMetricsHost: metrics.installHostMetricsHost,
   installLinkActivityHost: vi.fn((_server: unknown, _read: unknown) => () => {}),
+  installProcessInventoryHost: vi.fn((_server: unknown, _read: unknown) => () => {}),
 }));
 const canopy = vi.hoisted(() => ({
   installCanopyHostsClient: vi.fn((_options: unknown) => () => {}),

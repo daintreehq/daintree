@@ -6,8 +6,14 @@ import type {
   HostLinkActivityResult,
   HostMetricsEvent,
   HostMetricsSnapshot,
+  HostProcessInventoryResult,
   HostWorktreeEntry,
+  RemoteProcessInventory,
 } from "../../../shared/types/ipc/hostMetrics.js";
+import type {
+  ProcessInventorySnapshot,
+  ProcessTreeSample,
+} from "../../../shared/types/processes.js";
 import {
   LOCAL_HOST_ID,
   isLocalHostId,
@@ -26,9 +32,11 @@ import {
   FleetTargetListSchema,
   LinkActivitySchema,
   MetricsLinkMethod,
+  ProcessInventorySchema,
   WorktreeListSchema,
   normalizeFleetOpId,
 } from "./linkMethods.js";
+import { boundProcessInventory } from "./processInventoryWire.js";
 import { HOST_METRICS_INTERVAL_MS } from "./sampler.js";
 import { WorktreeChangeWatch } from "./worktreeChanges.js";
 import { EmptyPayloadSchema } from "../host/linkMethods.js";
@@ -82,6 +90,8 @@ export interface HostMetricsClientOptions {
       opId: string | null
     ): Promise<void>;
     listWorktrees(): Promise<HostWorktreeEntry[]>;
+    /** This machine's processes, as its own Processes view lists them. */
+    processInventory(): Promise<ProcessInventorySnapshot>;
     /** Told when this machine's worktree list may show something else. */
     onWorktreesMaybeChanged?(listener: () => void): () => void;
   };
@@ -141,6 +151,38 @@ function displaySafeActivity(activity: HostLinkActivity): HostLinkActivity {
     attached: activity.attached.map((shell) => ({
       ...shell,
       clientName: displaySafeText(shell.clientName),
+    })),
+  };
+}
+
+/** Titles, names and labels another machine wrote, made safe to show here. */
+function displaySafeInventory(inventory: RemoteProcessInventory): RemoteProcessInventory {
+  const text = (value: string | undefined) =>
+    value === undefined ? undefined : displaySafeText(value);
+  const name = (value: string | null) => (value === null ? null : displaySafeText(value));
+  const sample = (tree: ProcessTreeSample | null): ProcessTreeSample | null =>
+    tree && {
+      ...tree,
+      members: tree.members.map((member) => ({ ...member, comm: displaySafeText(member.comm) })),
+    };
+  return {
+    ...inventory,
+    terminals: inventory.terminals.map((terminal) => ({
+      ...terminal,
+      title: text(terminal.title),
+      projectName: name(terminal.projectName),
+      sample: sample(terminal.sample),
+    })),
+    closedTerminalProcesses: inventory.closedTerminalProcesses.map((closed) => ({
+      ...closed,
+      comm: displaySafeText(closed.comm),
+      projectName: name(closed.projectName),
+      origin: closed.origin && { ...closed.origin, title: text(closed.origin.title) },
+    })),
+    plugins: inventory.plugins.map((plugin) => ({
+      ...plugin,
+      label: name(plugin.label),
+      sample: sample(plugin.sample),
     })),
   };
 }
@@ -339,6 +381,35 @@ export class HostMetricsClient {
       activity: displaySafeActivity(parsed.data),
       self: self ? { clientId: self.clientId, clientName: self.clientName } : null,
     };
+  }
+
+  /**
+   * The processes a host runs, as its Processes view lists them, read over a
+   * session that needs no view bound. This machine answers from its own
+   * inventory. A host from before it could say answers `supported: false`.
+   */
+  async processInventory(payload: unknown): Promise<HostProcessInventoryResult> {
+    const hostId = this.hostIdOf(payload);
+    if (isLocalHostId(hostId)) {
+      return {
+        supported: true,
+        inventory: boundProcessInventory(await this.options.local.processInventory()),
+      };
+    }
+    let answer: unknown;
+    try {
+      answer = await this.connection(hostId).callHost(MetricsLinkMethod.PROCESS_INVENTORY, null);
+    } catch (error) {
+      if (isUnsupported(error)) return { supported: false };
+      throw error;
+    }
+    const parsed = ProcessInventorySchema.safeParse(answer);
+    if (!parsed.success)
+      throw new AppError({
+        code: "INTERNAL",
+        message: `Host ${hostId} sent an invalid process inventory`,
+      });
+    return { supported: true, inventory: displaySafeInventory(parsed.data) };
   }
 
   /** Record a summary: the host's own id in it is replaced by the id this Shell knows it by. */

@@ -9,6 +9,7 @@ import type {
   HostDescriptor,
   HostMetricsSummary,
 } from "../../../../shared/types/remoteHosts.js";
+import type { ProcessInventorySnapshot } from "../../../../shared/types/processes.js";
 import { Lane } from "../../link/frames.js";
 import { ControlKind } from "../../link/messages.js";
 import type { LinkSession } from "../../link/session.js";
@@ -89,6 +90,15 @@ function harness(hosts: HostDescriptor[]) {
     listFleetTargets: vi.fn(async () => ({ targets: [], complete: true })),
     submitFleet: vi.fn(async () => {}),
     listWorktrees: vi.fn(async (): Promise<HostWorktreeEntry[]> => []),
+    processInventory: vi.fn(async (): Promise<ProcessInventorySnapshot> => ({
+      terminals: [],
+      closedTerminalProcesses: [],
+      cleanup: null,
+      plugins: [],
+      complete: true,
+      samplesAvailable: true,
+      sampledAt: 5,
+    })),
     worktreesHeard: null as (() => void) | null,
     onWorktreesMaybeChanged(listener: () => void) {
       local.worktreesHeard = listener;
@@ -253,6 +263,91 @@ describe("HostMetricsClient", () => {
     h.hook.down.add("old");
     await expect(h.client.linkActivity({ hostId: "old" })).rejects.toMatchObject({
       code: "HOST_DISCONNECTED",
+    });
+  });
+
+  it("reads a host's process inventory over its link and shows its words as plain text", async () => {
+    const h = harness([descriptor("studio")]);
+    h.hook.call = async () => ({
+      terminals: [
+        {
+          id: "t1",
+          projectId: "p1",
+          projectName: "dain\u200btree",
+          kind: "terminal",
+          title: "build\u202e\nwatch",
+          cwd: "/srv/daintree",
+          detectedAgentId: "agent-from-the-future",
+          isAssistantTerminal: false,
+          spawnedAt: 1,
+          isTrashed: false,
+          rootPid: 40,
+          sample: {
+            cpuPercent: 250,
+            memoryKb: 10,
+            processCount: 12,
+            members: [{ pid: 41, comm: "no\nde", cpuPercent: 1, memoryKb: 2, argv: ["x"] }],
+          },
+          agentTree: "a-shape-from-the-future",
+          env: { SECRET: "1" },
+        },
+      ],
+      closedTerminalProcesses: [],
+      cleanup: null,
+      plugins: [],
+      complete: true,
+      samplesAvailable: true,
+      sampledAt: 9,
+      truncated: false,
+    });
+    const result = await h.client.processInventory({ hostId: "studio" });
+    expect(h.calls).toEqual([
+      { hostId: "studio", method: MetricsLinkMethod.PROCESS_INVENTORY, payload: null },
+    ]);
+    if (!result.supported) throw new Error("expected an inventory");
+    const [terminal] = result.inventory.terminals;
+    expect(terminal).toMatchObject({
+      title: "build watch",
+      projectName: "daintree",
+      cwd: "/srv/daintree",
+      agentTree: "unknown",
+      sample: { cpuPercent: 250, processCount: 12, members: [{ pid: 41, comm: "no de" }] },
+    });
+    expect(terminal.detectedAgentId).toBeUndefined();
+    expect(terminal).not.toHaveProperty("env");
+    expect(terminal.sample?.members[0]).not.toHaveProperty("argv");
+  });
+
+  it("answers this machine's own process inventory without a link", async () => {
+    const h = harness([descriptor("studio")]);
+    await expect(h.client.processInventory({ hostId: "local" })).resolves.toMatchObject({
+      supported: true,
+      inventory: { sampledAt: 5, truncated: false },
+    });
+    expect(h.local.processInventory).toHaveBeenCalledTimes(1);
+    expect(h.calls).toEqual([]);
+  });
+
+  it("says a host from before process inventory can't report it, and passes other failures on", async () => {
+    const h = harness([descriptor("old")]);
+    h.hook.call = async () => {
+      throw Object.assign(new Error("Unknown method"), { code: "UNSUPPORTED" });
+    };
+    await expect(h.client.processInventory({ hostId: "old" })).resolves.toEqual({
+      supported: false,
+    });
+
+    h.hook.call = async () => ({ terminals: new Array(501).fill(null) });
+    await expect(h.client.processInventory({ hostId: "old" })).rejects.toMatchObject({
+      code: "INTERNAL",
+    });
+
+    h.hook.down.add("old");
+    await expect(h.client.processInventory({ hostId: "old" })).rejects.toMatchObject({
+      code: "HOST_DISCONNECTED",
+    });
+    await expect(h.client.processInventory({ hostId: "nowhere" })).rejects.toMatchObject({
+      code: "NOT_FOUND",
     });
   });
 

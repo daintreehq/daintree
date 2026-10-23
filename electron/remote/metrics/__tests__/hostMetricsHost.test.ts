@@ -9,7 +9,13 @@ import {
   removeTempDir,
   waitFor,
 } from "../../link/__tests__/linkTestUtils.js";
-import { AttentionPayloadSchema, MetricsLinkMethod } from "../linkMethods.js";
+import {
+  AttentionPayloadSchema,
+  MAX_PROCESS_TERMINALS,
+  MetricsLinkMethod,
+  ProcessInventorySchema,
+} from "../linkMethods.js";
+import type { ProcessInventorySnapshot } from "../../../../shared/types/processes.js";
 import { EmptyPayloadSchema } from "../../host/linkMethods.js";
 import type {
   HostLinkActivity,
@@ -19,6 +25,7 @@ import {
   ATTENTION_COOLDOWN_MS,
   installHostMetricsHostWith,
   installLinkActivityHost,
+  installProcessInventoryHost,
   type MetricsHostDeps,
   type MetricsSessionSource,
   type WaitingEvent,
@@ -474,6 +481,59 @@ describe("installLinkActivityHost", () => {
     const p = await pair();
     server.attach(p.host, "late");
     await expect(p.client.call(MetricsLinkMethod.LINK_ACTIVITY, null)).rejects.toMatchObject({
+      code: "UNSUPPORTED",
+    });
+  });
+});
+
+describe("installProcessInventoryHost", () => {
+  const snapshot = (terminalCount: number): ProcessInventorySnapshot => ({
+    terminals: Array.from({ length: terminalCount }, (_, index) => ({
+      id: `t${index}`,
+      projectId: null,
+      projectName: null,
+      cwd: "/home",
+      isAssistantTerminal: false,
+      spawnedAt: 1,
+      isTrashed: false,
+      rootPid: null,
+      sample: null,
+    })),
+    closedTerminalProcesses: [],
+    cleanup: null,
+    plugins: [],
+    complete: true,
+    samplesAvailable: true,
+    sampledAt: 3,
+  });
+
+  it("answers sessions with no view bound, before and after it, reading afresh and bounded", async () => {
+    const server = new FakeServer();
+    const before = await pair();
+    server.attach(before.host, "early");
+    const read = vi.fn(async () => snapshot(MAX_PROCESS_TERMINALS + 5));
+    const dispose = installProcessInventoryHost(server, read);
+    const after = await pair();
+    server.attach(after.host, "late");
+    expect(read).not.toHaveBeenCalled();
+
+    for (const p of [before, after]) {
+      const answer = ProcessInventorySchema.parse(
+        await p.client.call(MetricsLinkMethod.PROCESS_INVENTORY, null)
+      );
+      expect(answer.terminals).toHaveLength(MAX_PROCESS_TERMINALS);
+      expect(answer.truncated).toBe(true);
+    }
+    expect(read).toHaveBeenCalledTimes(2);
+    dispose();
+  });
+
+  it("stops wiring new sessions once disposed", async () => {
+    const server = new FakeServer();
+    installProcessInventoryHost(server, async () => snapshot(1))();
+    const p = await pair();
+    server.attach(p.host, "late");
+    await expect(p.client.call(MetricsLinkMethod.PROCESS_INVENTORY, null)).rejects.toMatchObject({
       code: "UNSUPPORTED",
     });
   });
