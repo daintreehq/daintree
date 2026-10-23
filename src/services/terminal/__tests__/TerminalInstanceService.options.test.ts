@@ -238,4 +238,36 @@ describe("TerminalInstanceService - options", () => {
 
     terminalInstanceService.destroy("test-options-both");
   });
+
+  it("leaves a released terminal's scrollback alone until it is revealed (#14220)", async () => {
+    const { terminalInstanceService } = await import("../TerminalInstanceService");
+
+    window.matchMedia = vi.fn().mockReturnValue({
+      matches: false,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+    });
+
+    const managed = await terminalInstanceService.getOrCreate(
+      "test-options-released",
+      undefined,
+      { scrollback: 200 },
+      () => TerminalRefreshTier.BACKGROUND,
+      undefined
+    );
+    managed.historyReleased = true;
+
+    terminalInstanceService.updateOptions("test-options-released", {
+      scrollback: 5000,
+      fontSize: 16,
+    });
+    terminalInstanceService.applyGlobalOptions({ scrollback: 4000 });
+
+    expect(managed.terminal.options.scrollback).toBe(200);
+    expect(managed.terminal.options.fontSize).toBe(16);
+
+    terminalInstanceService.destroy("test-options-released");
+  });
 });

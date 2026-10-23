@@ -6,6 +6,7 @@ vi.mock("@/services/TerminalInstanceService", () => ({
   terminalInstanceService: {
     get: vi.fn(),
     ensureSearchAddon: vi.fn(),
+    pinHistory: vi.fn(),
   },
 }));
 
@@ -47,8 +48,12 @@ function createMockManaged(findNextResult = true) {
 }
 
 describe("TerminalSearchBar", () => {
+  const unpinHistory = vi.fn();
+
   beforeEach(() => {
     vi.useFakeTimers();
+    unpinHistory.mockClear();
+    vi.mocked(terminalInstanceService.pinHistory).mockClear().mockReturnValue(unpinHistory);
     vi.mocked(terminalInstanceService.ensureSearchAddon).mockImplementation(async (id) => {
       return terminalInstanceService.get(id)?.searchAddon ?? null;
     });
@@ -72,6 +77,15 @@ describe("TerminalSearchBar", () => {
   function renderSearchBar() {
     return render(<TerminalSearchBar terminalId="test-terminal" onClose={vi.fn()} />);
   }
+
+  it("keeps the terminal's history resident while the bar is open (#14220)", () => {
+    const { unmount } = renderSearchBar();
+    expect(terminalInstanceService.pinHistory).toHaveBeenCalledWith("test-terminal");
+    expect(unpinHistory).not.toHaveBeenCalled();
+
+    unmount();
+    expect(unpinHistory).toHaveBeenCalledTimes(1);
+  });
 
   it("renders the sr-only live region on initial mount with correct attributes", () => {
     const mock = createMockManaged(true);

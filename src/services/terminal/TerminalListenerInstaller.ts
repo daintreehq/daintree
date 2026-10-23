@@ -964,7 +964,11 @@ export function installTerminalBoundListeners(
   }
 
   const inputDisposable = terminal.onData((data) => {
-    if (managed.isInputLocked) return;
+    if (managed.isInputLocked) {
+      // A history refill holds typing, not the program's own queries (#14220).
+      if (managed.historyRefilling && isTerminalReply(data)) terminalClient.writeReply(id, data);
+      return;
+    }
     if (isHostSwitchPending()) {
       // Typing is dropped before it counts as typing: the window is leaving
       // this terminal. Its program's queries still get their answers, since

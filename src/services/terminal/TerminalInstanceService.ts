@@ -107,11 +107,13 @@ import type { PaintSurface } from "./paintFabric/PaintSurfaceRegistry";
 import { createRoundRobinPlacement } from "./paintFabric/placementPolicies";
 import {
   isPaintFabricEnabled,
+  isPaintFabricWorkerIngestEnabled,
   getPaintFabricSurfaceCount,
   paintFabricAuxSurfaceId,
   PRIMARY_SURFACE_ID,
 } from "./paintFabric/paintFabricConfig";
 import { TerminalWorkerIngestController } from "./TerminalWorkerIngestController";
+import { TerminalHistoryReleaseController } from "./TerminalHistoryReleaseController";
 import { PERF_MARKS } from "@shared/perf/marks";
 import { markRendererPerformance } from "@/utils/performance";
 import { stripAnsiAndOscCodes } from "@shared/utils/urlUtils";
@@ -252,6 +254,7 @@ class TerminalInstanceService {
   });
   private resizePassScheduler: TerminalResizePassScheduler;
   private workerIngestController: TerminalWorkerIngestController;
+  private historyRelease: TerminalHistoryReleaseController;
   private revealController: TerminalRevealController;
   private unsubTierChanged: (() => void) | null = null;
   private unsubReset: (() => void) | null = null;
@@ -373,6 +376,15 @@ class TerminalInstanceService {
       fetchAndRestore: (id) => this.restoreController.fetchAndRestore(id),
     });
 
+    this.historyRelease = new TerminalHistoryReleaseController({
+      getInstance: (id) => this.instances.get(id),
+      fetchAndRestore: (id) => this.restoreController.fetchAndRestore(id),
+      isViewObservable: isProjectViewObservable,
+      isWorkerIngestEnabled: isPaintFabricWorkerIngestEnabled,
+      applyInputLock: (managed) => this.applyInputLock(managed),
+      writeLocal,
+    });
+
     this.writeController = new TerminalWriteController({
       getInstance: (id) => this.instances.get(id),
       acknowledgePortData: (id, bytes, chunkCount, generation) =>
@@ -404,6 +416,9 @@ class TerminalInstanceService {
       applyDeferredResize: (id) => this.resizeController.applyDeferredResize(id),
       isViewSuppressed,
       onTierApplied: (id, tier, managed) => {
+        // Some reveals (drag-and-drop) set visibility directly and only re-run
+        // the tier policy, so this is the backstop that brings history back.
+        this.historyRelease.sync(id);
         // A backgrounded pane stays fully live in the renderer — it keeps full
         // scrollback, keeps its image/link addons, and is never suspended. The
         // one deliberate carve-out is the WebGL context, released below.
@@ -1049,6 +1064,7 @@ class TerminalInstanceService {
   setVisible(id: string, isVisible: boolean, expectedGeneration?: number): void {
     const wasVisible = this.instances.get(id)?.isVisible;
     this.revealController.setVisible(id, isVisible, expectedGeneration);
+    this.historyRelease.sync(id);
     const managed = this.instances.get(id);
     // A pane revealed mid-stream can stay at BURST, so the tier-upgrade
     // re-derive never fires; lift its pressure cap here instead.
@@ -1699,9 +1715,10 @@ class TerminalInstanceService {
       if (this.shouldSuppressExit(id)) {
         return;
       }
-      if (current) {
-        writeLocal(current, `\r\n\x1b[90m[Process exited with code ${exitCode}]\x1b[0m\r\n`);
-      }
+      this.historyRelease.noteExit(
+        id,
+        `\r\n\x1b[90m[Process exited with code ${exitCode}]\x1b[0m\r\n`
+      );
       exitSubscribers.forEach((cb) => cb(exitCode));
     };
     this.ensureExitSubscription();
@@ -1804,6 +1821,10 @@ class TerminalInstanceService {
     this.settleWaiters.notifyReadinessWaiters(id);
 
     this.scheduleWhySlowReport();
+
+    // A pane created hidden and never shown gets no visibility edge to start
+    // its dwell from.
+    this.historyRelease.sync(id);
 
     return managed;
   }
@@ -3158,6 +3179,7 @@ class TerminalInstanceService {
     managed.lastDetachAt = Date.now();
     managed.isVisible = false;
     managed.isDetached = true;
+    this.historyRelease.sync(id);
   }
 
   detachForProjectSwitch(id: string): void {
@@ -3197,6 +3219,7 @@ class TerminalInstanceService {
     managed.terminal.blur();
     managed.hoveredLink = null;
     managed.lastDetachAt = Date.now();
+    this.historyRelease.sync(id);
   }
 
   fit(id: string): { cols: number; rows: number } | null {
@@ -3718,6 +3741,7 @@ class TerminalInstanceService {
     if (isFocused) {
       this.webGLManager.pinFocus(id, managed);
     }
+    this.historyRelease.sync(id);
   }
 
   isFocused(id: string): boolean {
@@ -4003,6 +4027,8 @@ class TerminalInstanceService {
     const textMetricsChanged = textMetricKeys.some((key) => key in options);
 
     Object.entries(options).forEach(([key, value]) => {
+      // A released terminal's capacity is restored with its history on reveal.
+      if (key === "scrollback" && managed.historyReleased) return;
       // @ts-expect-error xterm options are indexable
       managed.terminal.options[key] = value;
     });
@@ -4033,7 +4059,9 @@ class TerminalInstanceService {
       // refit (forced layout + PTY resize RPC) every terminal on a theme change,
       // and an unchanged theme does not force an extra full repaint.
       const changedKeys = entries.filter(
-        ([key, value]) => Reflect.get(managed.terminal.options, key) !== value
+        ([key, value]) =>
+          Reflect.get(managed.terminal.options, key) !== value &&
+          !(key === "scrollback" && managed.historyReleased)
       );
       for (const [key, value] of changedKeys) {
         // @ts-expect-error xterm options are indexable
@@ -4291,6 +4319,7 @@ class TerminalInstanceService {
     this.cancelAttachReveal(managed);
     this.agentStateController.destroy(id);
     this.restoreController.destroy(id);
+    this.historyRelease.cancel(managed);
     this.burstController.destroy(id);
     this.writeController.forget(id);
     this.recoveryNotices.cancel(id);
@@ -4483,8 +4512,32 @@ class TerminalInstanceService {
     const managed = this.instances.get(id);
     if (!managed) return;
 
-    managed.isInputLocked = locked;
-    managed.terminal.options.disableStdin = locked;
+    managed.inputLockedByUser = locked;
+    this.applyInputLock(managed);
+  }
+
+  // Every input route checks `isInputLocked`, so a history refill holds typing
+  // through it. Only the user's lock reaches xterm's stdin gate: that gate
+  // also swallows the replies a program's queries need while it replays.
+  private applyInputLock(managed: ManagedTerminal): void {
+    managed.isInputLocked = managed.inputLockedByUser === true || managed.historyRefilling === true;
+    managed.terminal.options.disableStdin = managed.inputLockedByUser === true;
+  }
+
+  /**
+   * Keep this terminal's history resident while the returned release is held
+   * — for readers of lines a long-hidden release would drop (#14220).
+   */
+  pinHistory(id: string): () => void {
+    const managed = this.instances.get(id);
+    if (!managed) return () => {};
+    managed.historyPins = (managed.historyPins ?? 0) + 1;
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      managed.historyPins = Math.max(0, (managed.historyPins ?? 0) - 1);
+    };
   }
 }
 

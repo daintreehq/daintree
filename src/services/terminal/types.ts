@@ -451,6 +451,27 @@ export interface ManagedTerminal {
   // Set when a memory-pressure reduce lowered this pane's limit while hidden.
   // Policy re-derives may not raise it until the pane is revealed.
   scrollbackPressureCapped?: boolean;
+
+  // Long-hidden history release (#14220). While set, the xterm keeps parsing
+  // at RELEASED_SCROLLBACK_LINES capacity and nothing may raise it until the
+  // pane is shown again, which restores the ceiling and refills history from
+  // the host mirror.
+  historyReleased?: boolean;
+  historyReleaseTimer?: ReturnType<typeof setTimeout>;
+  // Released history still owed to the pane: set on reveal, cleared once a
+  // refill lands, so a failed one is retried on the next reveal.
+  historyRefillPending?: boolean;
+  historyRefill?: Promise<void>;
+  // While the refill replays, typing is held: `isInputLocked` is the
+  // effective lock, `inputLockedByUser` the pane's own setting under it.
+  historyRefilling?: boolean;
+  inputLockedByUser?: boolean;
+  // Holders reading history a release would drop (an open search).
+  historyPins?: number;
+  ptyExited?: boolean;
+  // The exit marker, kept so a refill that replays over it can write it again.
+  exitLine?: string;
+  exitLineShown?: boolean;
 }
 
 export const TIER_DOWNGRADE_HYSTERESIS_MS = 500;
@@ -470,6 +491,15 @@ export const WRITE_BURST_DECAY_MS = 500;
 // covers the typical ~1s flip cadence with margin. The 500ms tier-downgrade
 // hysteresis is additive, not a replacement.
 export const SCROLLBACK_REDUCE_COOLDOWN_MS = 2000;
+
+// How long a pane must stay hidden before its renderer history is released
+// (#14220). Long enough that ordinary navigation between worktrees and tabs
+// never pays a restore.
+export const HISTORY_RELEASE_DWELL_MS = 10 * 60 * 1000;
+
+// Capacity a released terminal keeps. Covers the `@terminal` token's 100-line
+// read while costing well under a megabyte at agent widths.
+export const RELEASED_SCROLLBACK_LINES = 200;
 
 // Recency window for classifying a terminal as "in an active write burst" in
 // the WebGL pool eviction scorer. A terminal whose lastWriteAt is within this
