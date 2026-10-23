@@ -1532,6 +1532,20 @@ describe("PluginSettingsForm custom section links (#14101 review)", () => {
     expect(screen.getByTestId("fake-settings-view").getAttribute("data-page")).toBe("");
   });
 
+  it("keeps focus in the section when a reload drops the open page", async () => {
+    const base = makeViewPlugin([], "plugin://a/settings.js");
+    const { rerender } = render(<PluginSettingsForm plugin={withPages(base)} viewScope="user" />);
+    fireEvent.click(screen.getByRole("button", { name: "Open Column mapping" }));
+    const heading = await screen.findByRole("heading", { name: "Column mapping" });
+    expect(document.activeElement).toBe(heading);
+
+    rerender(<PluginSettingsForm plugin={{ ...base, loadedAt: 2 }} viewScope="user" />);
+
+    await waitFor(() => expect(screen.queryByRole("heading", { name: "Column mapping" })).toBeNull());
+    const section = document.getElementById("plugin-settings-view-acme.test")!;
+    await waitFor(() => expect(section.contains(document.activeElement)).toBe(true));
+  });
+
   it("lands a page link on the section, with focus, when the plugin can't show it", async () => {
     serveHostedViews([]);
     const onFocusHandled = vi.fn();

@@ -1824,7 +1824,12 @@ export function ProjectPluginsTab() {
   // Handed only to the pane the request names, and only once it is the one
   // showing — a pane being replaced must not answer for the one replacing it.
   const paneSettingsFocus: PaneSettingsFocus = {
-    request: requestFocus !== null && selectedId === requestTargetId ? requestFocus : null,
+    // A formless pane (stopped, or pointing to Code forge) gets nothing to
+    // answer: the heading landing above settles it.
+    request:
+      requestFocus !== null && requestTargetHasForm && selectedId === requestTargetId
+        ? requestFocus
+        : null,
     onHandled: consumeSettingsRequest,
   };
 

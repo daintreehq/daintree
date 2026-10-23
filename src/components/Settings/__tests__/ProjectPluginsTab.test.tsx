@@ -772,6 +772,19 @@ describe("ProjectPluginsTab", () => {
     );
     expect(screen.getByRole("button", { name: "Open Code forge" })).toBeTruthy();
     expect(usePluginManagerStore.getState().settingsRequest).toBeNull();
+
+    // Again with its pane already showing: the pane doesn't answer for the
+    // heading before it is focused.
+    (document.activeElement as HTMLElement).blur();
+    act(() =>
+      usePluginManagerStore
+        .getState()
+        .requestSettings({ pluginId: "acme.forge", section: "custom", home: "project" })
+    );
+    await waitFor(() =>
+      expect(document.activeElement?.hasAttribute("data-settings-section-title")).toBe(true)
+    );
+    expect(usePluginManagerStore.getState().settingsRequest).toBeNull();
     usePluginManagerStore.setState({ settingsRequest: null });
   });
 

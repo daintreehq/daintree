@@ -91,11 +91,16 @@ export function PluginSettingsView({
     const active = document.activeElement;
     if (active !== null && active !== document.body && !root.contains(active)) return;
     // The page's own Open button, or — when a reload dropped that page — the
-    // first page left, rather than letting focus fall to the document.
+    // first page left, or the section itself, rather than the document.
     const trigger =
       root.querySelector<HTMLElement>(`[data-settings-page-trigger="${CSS.escape(back)}"]`) ??
       root.querySelector<HTMLElement>("[data-settings-page-trigger]");
-    trigger?.focus({ preventScroll: false });
+    if (trigger) {
+      trigger.focus({ preventScroll: false });
+      return;
+    }
+    if (!root.hasAttribute("tabindex")) root.setAttribute("tabindex", "-1");
+    root.focus({ preventScroll: true });
   }, [openPageId, pageHeadingId]);
 
   const viewFocus =
