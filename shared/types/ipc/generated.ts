@@ -2226,11 +2226,13 @@ export interface GeneratedIpcInvokeMap {
             pluginInstanceId: string;
             access: "off" | "read-only" | "read-write" | null;
             scope: "project" | "all-projects";
+            groups?: string[] | undefined;
           }
         | {
             pluginInstanceId: string;
             access: "off" | "read-only" | "read-write";
             scope: "assistant";
+            groups?: string[] | undefined;
           },
     ];
     result: import("./pluginAgentMcp.js").ProjectAgentToolsSnapshot;
