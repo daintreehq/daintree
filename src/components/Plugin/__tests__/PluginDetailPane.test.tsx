@@ -43,6 +43,10 @@ const projectTargetingMock = vi.hoisted(() => ({
   setOsNotifications: vi.fn((input: { pluginId: string; enabled: boolean }) =>
     Promise.resolve(input.enabled)
   ),
+  getWorktreeDeleteNotes: vi.fn((_input: { pluginId: string }) => Promise.resolve(true)),
+  setWorktreeDeleteNotes: vi.fn((input: { pluginId: string; enabled: boolean }) =>
+    Promise.resolve(input.enabled)
+  ),
 }));
 
 // The Performance tab is earned by main having a snapshot for the plugin.
@@ -344,6 +348,47 @@ describe("PluginDetailPane OS notifications switch (#13505)", () => {
     renderPane(withCapabilities(["project:dispatch"]));
     expect(screen.queryByTestId("plugin-os-notifications-switch")).toBeNull();
     expect(projectTargetingMock.getOsNotifications).not.toHaveBeenCalled();
+  });
+});
+
+describe("PluginDetailPane worktree delete notes switch (#13805)", () => {
+  const notesSwitch = () => screen.getByTestId("plugin-worktree-delete-notes-switch");
+  function withNotes(caps: BuiltInPluginCapability[] = []): LoadedPluginInfo {
+    const base = withCapabilities(caps);
+    return {
+      ...base,
+      manifest: {
+        ...base.manifest,
+        contributes: { ...base.manifest.contributes, worktreeDeleteNotes: [{ id: "notes" }] },
+      },
+    };
+  }
+
+  it("earns the Permissions tab on its own, starts on, and turns off for this plugin", async () => {
+    renderPane(withNotes());
+    // No capabilities, so the capability blurb stays out of the tab.
+    expect(screen.queryByText(/They aren.t a sandbox/)).toBeNull();
+    await vi.waitFor(() => expect(notesSwitch().hasAttribute("disabled")).toBe(false));
+    expect(notesSwitch().getAttribute("aria-checked")).toBe("true");
+    expect(projectTargetingMock.getWorktreeDeleteNotes).toHaveBeenCalledWith({
+      pluginId: "acme.demo",
+    });
+
+    fireEvent.click(notesSwitch());
+    await vi.waitFor(() => expect(notesSwitch().getAttribute("aria-checked")).toBe("false"));
+    expect(projectTargetingMock.setWorktreeDeleteNotes).toHaveBeenCalledWith({
+      pluginId: "acme.demo",
+      enabled: false,
+    });
+  });
+
+  it("says a failed off is still on, rather than promising it comes back after a restart", async () => {
+    projectTargetingMock.setWorktreeDeleteNotes.mockRejectedValueOnce(new Error("disk full"));
+    renderPane(withNotes());
+    await vi.waitFor(() => expect(notesSwitch().hasAttribute("disabled")).toBe(false));
+    fireEvent.click(notesSwitch());
+    await vi.waitFor(() => expect(screen.getByText("Couldn't turn this off.")).toBeTruthy());
+    expect(screen.queryByText(/after a restart/)).toBeNull();
   });
 });
 

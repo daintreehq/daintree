@@ -238,3 +238,14 @@ export interface PluginOsNotificationsUpdate {
   pluginId: string;
   enabled: boolean;
 }
+
+/** Renderer → main read of the "Show notes when deleting a worktree" switch (#13805). */
+export interface PluginWorktreeDeleteNotesQuery {
+  pluginId: string;
+}
+
+/** Renderer → main write of the "Show notes when deleting a worktree" switch (#13805). */
+export interface PluginWorktreeDeleteNotesUpdate {
+  pluginId: string;
+  enabled: boolean;
+}

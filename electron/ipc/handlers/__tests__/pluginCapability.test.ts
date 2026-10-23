@@ -89,6 +89,8 @@ import {
   handleGetProjectTargeting,
   handleResolveConsent,
   handleSetOsNotifications,
+  handleGetWorktreeDeleteNotes,
+  handleSetWorktreeDeleteNotes,
   handleSetProjectTargeting,
   registerPluginCapabilityHandlers,
   _resetCapabilityConsentBridgeForTest,
@@ -790,5 +792,32 @@ describe("pluginCapability consent bridge — a driver that lost the lease", () 
     const settled = await startGatedCall();
     expect(settled.ok).toBe(false);
     dispose();
+  });
+});
+
+describe("pluginCapability worktree delete notes switch (#13805)", () => {
+  afterEach(async () => {
+    await handleSetWorktreeDeleteNotes({ pluginId: "acme.records", enabled: true });
+  });
+
+  it("starts on, turns off for that plugin alone, and turns back on", async () => {
+    expect(await handleGetWorktreeDeleteNotes({ pluginId: "acme.records" })).toBe(true);
+    expect(await handleSetWorktreeDeleteNotes({ pluginId: "acme.records", enabled: false })).toBe(
+      false
+    );
+    expect(await handleGetWorktreeDeleteNotes({ pluginId: "acme.records" })).toBe(false);
+    expect(await handleGetWorktreeDeleteNotes({ pluginId: "acme.other" })).toBe(true);
+    expect(await handleSetWorktreeDeleteNotes({ pluginId: "acme.records", enabled: true })).toBe(
+      true
+    );
+  });
+
+  it("rejects malformed input", async () => {
+    await expect(handleGetWorktreeDeleteNotes({ pluginId: "../escape" })).rejects.toThrow(
+      /pluginId/
+    );
+    await expect(
+      handleSetWorktreeDeleteNotes({ pluginId: "acme.records", enabled: "no" as never })
+    ).rejects.toThrow(/enabled/);
   });
 });

@@ -95,6 +95,7 @@ export const STORE_KEY_OWNERSHIP = {
   pluginNotificationSilences: "host",
   hiddenSearchProviders: "host",
   pluginContextProvidersOff: "host",
+  pluginWorktreeDeleteNoteMutes: "host",
   projectPresentation: "host",
   worktreeCustomTitles: "host",
   projectAgentMcpEnablement: "host",

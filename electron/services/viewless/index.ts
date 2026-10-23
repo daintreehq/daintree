@@ -1,4 +1,5 @@
 import type { ActionDispatchResult } from "../../../shared/types/actions.js";
+import { PLUGIN_WORKTREE_DELETE_NOTES_TIMEOUT_MS } from "../../../shared/config/pluginBudgets.js";
 import {
   executeViewlessAction,
   hasViewlessImplementation,
@@ -105,6 +106,18 @@ async function loadLiveDeps(): Promise<ViewlessDeps> {
       totalMemoryBytes: os.totalmem(),
     },
     sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+    collectWorktreeDeleteNotes: async (projectId, worktreeId) => {
+      const { pluginService } = await import("../PluginService.js");
+      // One deadline for the whole wait, startup included, since the approval
+      // isn't put to anyone until the notes are in.
+      const expiresAt = Date.now() + PLUGIN_WORKTREE_DELETE_NOTES_TIMEOUT_MS;
+      await pluginService.waitForInitWithin(PLUGIN_WORKTREE_DELETE_NOTES_TIMEOUT_MS);
+      return pluginService.collectWorktreeDeleteNotes(
+        projectId,
+        worktreeId,
+        Math.max(0, expiresAt - Date.now())
+      );
+    },
   };
 }
 

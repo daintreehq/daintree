@@ -156,6 +156,13 @@ export interface PendingMcpConfirm {
    * open or whose agent is mid-task (#12881); the checklist names them.
    */
   approvalReason?: McpApprovalReason;
+  /**
+   * The worktree a `worktree.delete` would remove, for plugin notes (#13805).
+   * Set only for a preview this view builds itself: another machine's call
+   * arrives with that machine's lines, notes included. The dialog asks the
+   * plugins on its own; nothing here touches `previewPending` or the gate.
+   */
+  worktreeDeleteNotesTargetId?: string;
   enqueuedAt: number;
 }
 

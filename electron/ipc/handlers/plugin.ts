@@ -127,6 +127,8 @@ import type { FileDecoration } from "../../../shared/types/forge.js";
 import { isTrustedRendererUrl } from "../../../shared/utils/trustedRenderer.js";
 import type {
   LoadedPluginInfo,
+  WorktreeDeleteNoteSource,
+  WorktreeDeleteNotesAnswer,
   PluginInvokeOrigin,
   PluginIpcContext,
   PluginActionContribution,
@@ -189,7 +191,10 @@ import type {
 } from "../../../shared/types/plugin.js";
 import type { ToolbarButtonConfig } from "../../../shared/config/toolbarButtonRegistry.js";
 import { assertIpcSecurityReady } from "../ipcGuard.js";
-import { PLUGIN_INVOKE_MAX_ARGS_BYTES } from "../../../shared/config/pluginBudgets.js";
+import {
+  PLUGIN_INVOKE_MAX_ARGS_BYTES,
+  PLUGIN_WORKTREE_DELETE_NOTES_TIMEOUT_MS,
+} from "../../../shared/config/pluginBudgets.js";
 import {
   assertPayloadWithinLimit,
   isPluginPayloadTooLargeError,
@@ -1767,6 +1772,48 @@ async function handleFileDecorationsGet(
 }
 
 /**
+ * The plugins a worktree delete confirmation in the sender's view asks for
+ * notes (#13805). Nothing is activated to answer. A sender with no project has
+ * no worktrees to delete, so it has no sources.
+ */
+async function handleWorktreeDeleteNoteSourcesGet(
+  ctx: IpcContext
+): Promise<WorktreeDeleteNoteSource[]> {
+  if (ctx.projectId === null) return [];
+  const service = await getPluginService();
+  // Bounded: at startup the dialog would otherwise sit through every other
+  // plugin's activation before it could even say who it is asking.
+  await service.waitForInitWithin(PLUGIN_WORKTREE_DELETE_NOTES_TIMEOUT_MS);
+  return service.listWorktreeDeleteNoteSources(ctx.projectId);
+}
+
+/**
+ * One plugin's notes for a worktree in the sender's project (#13805). The
+ * project comes from the sender, never the payload, so a view can only ask
+ * about its own worktrees. `null` when the plugin is no longer one this view
+ * asks, or the worktree isn't its project's.
+ */
+async function handleWorktreeDeleteNotesGet(
+  ctx: IpcContext,
+  input: { worktreeId: string; pluginId: string }
+): Promise<WorktreeDeleteNotesAnswer | null> {
+  if (ctx.projectId === null) return null;
+  const worktreeId = input?.worktreeId;
+  const pluginId = input?.pluginId;
+  if (typeof worktreeId !== "string" || worktreeId.length === 0) {
+    throw new Error("worktreeId must be a non-empty string");
+  }
+  if (typeof pluginId !== "string" || pluginId.length === 0) {
+    throw new Error("pluginId must be a non-empty string");
+  }
+  // No init wait: the sources list this view asked first already waited, and
+  // waiting again would keep the row pending through every other plugin's
+  // startup activation.
+  const service = await getPluginService();
+  return service.getWorktreeDeleteNotes(ctx.projectId, pluginId, worktreeId);
+}
+
+/**
  * Renderer-facing read of the changed-file / git-status projection for the
  * worktree at `path` — the companion to the per-plugin `host.getWorktreeStatus`
  * so a file list outside the Review Hub can scan the changed set. Reads the
@@ -2632,6 +2679,16 @@ export const pluginNamespace = defineIpcNamespace({
     getDecorations: op(PLUGIN_METHOD_CHANNELS.getDecorations, handleFileDecorationsGet, {
       withContext: true,
     }),
+    getWorktreeDeleteNoteSources: op(
+      PLUGIN_METHOD_CHANNELS.getWorktreeDeleteNoteSources,
+      handleWorktreeDeleteNoteSourcesGet,
+      { withContext: true }
+    ),
+    getWorktreeDeleteNotes: op(
+      PLUGIN_METHOD_CHANNELS.getWorktreeDeleteNotes,
+      handleWorktreeDeleteNotesGet,
+      { withContext: true }
+    ),
     getWorktreeStatus: op(PLUGIN_METHOD_CHANNELS.getWorktreeStatus, handleWorktreeStatusGet),
     getAuditRecords: op(PLUGIN_METHOD_CHANNELS.getAuditRecords, handleGetAuditRecords),
     getAuditConfig: op(PLUGIN_METHOD_CHANNELS.getAuditConfig, handleGetAuditConfig),

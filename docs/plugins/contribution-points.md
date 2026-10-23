@@ -29,6 +29,7 @@ A plugin that declares `"scope": "project"` lives in a project's own repository 
 | `agentMcp` | Available — every credential for the plugin's server is minted per terminal and bound to one project, and a project plugin's server can only be granted to its own project |
 | `databases` | Available — a `"project"` database is a file in the repository, resolved against the bound project root; `"local"` stays in this machine's plugin data |
 | `fileDecorationProviders` | Available — consulted only for the owning project's views, ahead of installed providers in the merge |
+| `worktreeDeleteNotes` | Available — asked only when a worktree of the owning project is deleted |
 | `recipes` | Available — only in the owning project's launcher, empty state and recipe manager, and gone while the plugin is switched off or its folder is untrusted. A terminal may use `terminal`, `dev-preview`, `plugin-panel` for one of the plugin's own panels, or a built-in agent; `agents` is rejected below, so there is no plugin agent of its own to name |
 | `promptTemplates` | Available — offered only in the owning project's composer, and gone while the plugin is switched off or its folder is untrusted |
 | `worktreeSetupSteps` | Available — run only for worktrees created in the owning project |
@@ -1784,6 +1785,26 @@ At most 10 steps per plugin.
 **Where the code comes from.** The step runs from the plugin as it is loaded for the project, never from the new worktree's branch. A project plugin's step is the copy in the project root, not whatever the branch being checked out carries, and a worktree whose branch changes the plugin still gets the version that was loaded.
 
 **Not a teardown hook.** Nothing calls a plugin back when the worktree is deleted; a step still running is cancelled through its `signal`. A resource that costs money while it runs belongs in a resource environment (`resources` in `.daintree/config.json`), which pairs provision with teardown and is torn down with the worktree. Use a setup step for work that is cheap to leave behind, or that the plugin cleans up on its own schedule.
+
+## Worktree delete notes — _Shipped_
+
+Adds the plugin's notes to a worktree's delete confirmation: things the plugin knows and Daintree doesn't, such as unsynced edits on the branch or a preview deployment still running. One check per plugin.
+
+```json
+{
+  "contributes": {
+    "worktreeDeleteNotes": [{ "id": "unsynced" }]
+  }
+}
+```
+
+| Field | Required | Notes |
+| --- | --- | --- |
+| `id` | yes | Must match the `id` passed to [`host.registerWorktreeDeleteNotesProvider`](./host-api.md#registerworktreedeletenotesprovider) when the check binds in `activate()`. |
+
+Declaring the check is what lets a delete confirmation find the plugin before its code has run. When a delete is confirmed (the delete dialog, bulk remove, an agent's request over MCP, or the confirmation put to someone when no window is open), every plugin with a check that the project shows is asked about the worktree, activating it first if it isn't running. The dialogs open straight away and fill in each plugin's notes as they arrive; the no-window confirmation is sent once every plugin has answered or run out of time. A plugin that hasn't answered within 3 seconds, activation included, or that fails, is shown as "<plugin> didn't answer".
+
+Notes only annotate. They never cancel a delete, change its confirmation tier or alter its typed confirmation. The user can turn a plugin's notes off from its Permissions tab, and the plugin is then not asked. No capability is needed.
 
 ## File editors — _Shipped_
 

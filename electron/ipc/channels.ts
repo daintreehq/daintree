@@ -1189,6 +1189,10 @@ export const CHANNELS = {
   PLUGIN_RECIPE_METADATA_UPDATE: "plugin:recipe-metadata-update",
   PLUGIN_FORGE_PROVIDERS_GET: "plugin:forge-providers-get",
   PLUGIN_FILE_DECORATIONS_GET: "plugin:file-decorations-get",
+  /** The plugins a worktree delete confirmation asks for notes (#13805). */
+  PLUGIN_WORKTREE_DELETE_NOTE_SOURCES_GET: "plugin:worktree-delete-note-sources-get",
+  /** One plugin's notes for a worktree about to be deleted (#13805). */
+  PLUGIN_WORKTREE_DELETE_NOTES_GET: "plugin:worktree-delete-notes-get",
   PLUGIN_WORKTREE_STATUS_GET: "plugin:worktree-status-get",
   PLUGIN_GET_AUDIT_RECORDS: "plugin:get-audit-records",
   PLUGIN_GET_AUDIT_CONFIG: "plugin:get-audit-config",
@@ -1292,6 +1296,10 @@ export const CHANNELS = {
   // the Plugin Manager, never by a prompt.
   PLUGIN_CAPABILITY_GET_OS_NOTIFICATIONS: "plugin-capability:get-os-notifications",
   PLUGIN_CAPABILITY_SET_OS_NOTIFICATIONS: "plugin-capability:set-os-notifications",
+  // The per-plugin "Show notes when deleting a worktree" switch (#13805). On by
+  // default; off means the plugin isn't asked.
+  PLUGIN_CAPABILITY_GET_WORKTREE_DELETE_NOTES: "plugin-capability:get-worktree-delete-notes",
+  PLUGIN_CAPABILITY_SET_WORKTREE_DELETE_NOTES: "plugin-capability:set-worktree-delete-notes",
 
   // Plugin managed-process channels (#9234) — child processes spawned by a
   // plugin via `host.process.spawn` (gated on `shell:exec`). `list` is the

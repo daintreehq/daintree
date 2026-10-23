@@ -45,6 +45,7 @@ export type {
   PluginNetworkScope,
   PluginFsScope,
   PluginLocalSocketScope,
+  WorktreeDeleteNotesContribution,
 } from "./plugin.js";
 
 // ── View component props ────────────────────────────────────────────
@@ -103,6 +104,9 @@ export type {
   PluginContextValue,
   PluginWorktreeCardStatus,
   PluginWorktreeReviewCheck,
+  PluginWorktreeDeleteNote,
+  WorktreeDeleteNotesProviderDescriptor,
+  WorktreeDeleteNotesProviderImpl,
   PluginTerminalStatus,
   PluginPanelActivity,
   PluginPanelActivityState,

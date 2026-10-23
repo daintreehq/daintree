@@ -66,6 +66,7 @@ function makeHost() {
     registerFileDecorationProvider: vi.fn(() => vi.fn()),
     registerWorktreeSetupStep: vi.fn((_stepId: string, _handler: any) => vi.fn()),
     registerContextProvider: vi.fn(async () => vi.fn()),
+    registerWorktreeDeleteNotesProvider: vi.fn(() => vi.fn()),
     invalidateFileDecorations: vi.fn(),
     setPanelBadge: vi.fn(async () => {}),
     setToolbarButtonBadge: vi.fn(async () => {}),
@@ -1666,6 +1667,70 @@ describe("PluginDevWorkerMainBridge", () => {
       params: { providerId: "acme.demo.deco" },
     });
     expect(dispose).toHaveBeenCalledTimes(1);
+  });
+
+  it("registerWorktreeDeleteNotesProvider round-trips provideNotes and cancels it at the host's deadline (#13805)", async () => {
+    const { host, workerHost, bridge } = makeBridge();
+    workerHost.emit("worker-message", {
+      type: "host-notify",
+      method: "registerWorktreeDeleteNotesProvider",
+      registrationKey: "worktreeDeleteNotesProvider:notes",
+      params: { descriptor: { id: "notes" } },
+    });
+    expect(host.registerWorktreeDeleteNotesProvider).toHaveBeenCalledTimes(1);
+    const [descriptor, proxyImpl] = host.registerWorktreeDeleteNotesProvider.mock
+      .calls[0] as unknown as [
+      { id: string },
+      { provideNotes: (worktree: unknown, signal?: AbortSignal) => Promise<unknown> },
+    ];
+    expect(descriptor).toEqual({ id: "notes" });
+
+    const answered = proxyImpl.provideNotes({ id: "/repo/wt" });
+    const first = workerHost.sent.find(
+      (m) => m.type === "invoke" && m.kind === "worktree-delete-notes"
+    );
+    expect(first).toMatchObject({ providerId: "notes", worktree: { id: "/repo/wt" } });
+    workerHost.emit("worker-message", {
+      type: "invoke-result",
+      requestId: first.requestId,
+      ok: true,
+      result: [{ severity: "info", text: "hi" }],
+    });
+    await expect(answered).resolves.toEqual([{ severity: "info", text: "hi" }]);
+
+    const deadline = new AbortController();
+    const abandoned = proxyImpl.provideNotes({ id: "/repo/wt" }, deadline.signal);
+    expect(bridge.pendingInvokeCount).toBe(1);
+    deadline.abort(new Error("timed out"));
+    await expect(abandoned).rejects.toThrow();
+    expect(bridge.pendingInvokeCount).toBe(0);
+    expect(workerHost.sent.some((m) => m.type === "invoke-cancel")).toBe(true);
+  });
+
+  it("keeps worktree delete notes and decoration providers apart when they share an id", async () => {
+    const { host, workerHost } = makeBridge();
+    const disposeNotes = vi.fn();
+    const disposeDeco = vi.fn();
+    host.registerWorktreeDeleteNotesProvider.mockReturnValueOnce(disposeNotes);
+    host.registerFileDecorationProvider.mockReturnValueOnce(disposeDeco);
+    workerHost.emit("worker-message", {
+      type: "host-notify",
+      method: "registerWorktreeDeleteNotesProvider",
+      params: { descriptor: { id: "shared" } },
+    });
+    workerHost.emit("worker-message", {
+      type: "host-notify",
+      method: "registerFileDecorationProvider",
+      params: { descriptor: { id: "shared", scopes: ["pr"] } },
+    });
+    await flush();
+    workerHost.emit("worker-message", {
+      type: "host-notify",
+      method: "unregisterWorktreeDeleteNotesProvider",
+      params: { providerId: "shared" },
+    });
+    expect(disposeNotes).toHaveBeenCalledTimes(1);
+    expect(disposeDeco).not.toHaveBeenCalled();
   });
 
   it("fails pending invokes when the worker crashes (#12216)", async () => {

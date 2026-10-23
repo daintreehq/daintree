@@ -7,6 +7,8 @@ export const PLUGIN_CAPABILITY_METHOD_CHANNELS = {
   setProjectTargeting: "plugin-capability:set-project-targeting",
   getOsNotifications: "plugin-capability:get-os-notifications",
   setOsNotifications: "plugin-capability:set-os-notifications",
+  getWorktreeDeleteNotes: "plugin-capability:get-worktree-delete-notes",
+  setWorktreeDeleteNotes: "plugin-capability:set-worktree-delete-notes",
 } as const satisfies Record<string, keyof IpcInvokeMap>;
 
 type Methods = typeof PLUGIN_CAPABILITY_METHOD_CHANNELS;

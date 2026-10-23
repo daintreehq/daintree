@@ -61,6 +61,8 @@ import type {
   PluginProcessMode,
   PluginWorktreeSetupStepHandler,
   PluginSearchProvider,
+  WorktreeDeleteNotesProviderDescriptor,
+  WorktreeDeleteNotesProviderImpl,
 } from "../../../shared/types/plugin.js";
 import { SEARCH_PROVIDER_MAX_RESPONSE_BYTES } from "../../../shared/config/pluginSearchProviders.js";
 import { AsyncLocalStorage } from "node:async_hooks";
@@ -86,6 +88,7 @@ import { toPluginTerminalLifecycleEvent } from "../../../shared/utils/pluginTerm
 import { validatePluginContextEntry } from "../../../shared/utils/pluginContextKeys.js";
 import { validatePluginWorktreeCardStatus } from "../../../shared/utils/pluginWorktreeCardStatus.js";
 import { validatePluginWorktreeReviewChecks } from "../../../shared/utils/pluginWorktreeReviewChecks.js";
+import { validatePluginWorktreeDeleteNotes } from "../../../shared/utils/pluginWorktreeDeleteNotes.js";
 import { validatePluginTerminalStatus } from "../../../shared/utils/pluginTerminalStatus.js";
 import { validatePluginPanelActivity } from "../../../shared/utils/pluginPanelActivity.js";
 import { toPluginFocusedPanel } from "../../../shared/utils/pluginFocusedPanel.js";
@@ -226,6 +229,12 @@ export class PluginDevWorkerHostProxy {
   private readonly ipcHandlers = new Map<string, RegisteredHandler>();
   private readonly subscriptions = new Map<string, (payload: unknown) => void>();
   private readonly fileDecorationProviders = new Map<string, FileDecorationProviderImpl>();
+  /** Keyed by id. The entry object is the registration's identity, so a disposer
+   * only unbinds its own registration even when the same impl was registered twice. */
+  private readonly worktreeDeleteNotesProviders = new Map<
+    string,
+    { impl: WorktreeDeleteNotesProviderImpl }
+  >();
   /** Quick switcher search providers bound with `host.registerSearchProvider`, by provider id.
    * The record object per registration is its identity, so a disposer only ever
    * unbinds the registration it came from, even when a later one reused the function. */
@@ -310,6 +319,7 @@ export class PluginDevWorkerHostProxy {
     this.ipcHandlers.clear();
     this.subscriptions.clear();
     this.fileDecorationProviders.clear();
+    this.worktreeDeleteNotesProviders.clear();
     this.searchProviders.clear();
     this.contextProviders.clear();
     for (const controller of this.contextProviderAborts.values()) controller.abort();
@@ -568,7 +578,7 @@ export class PluginDevWorkerHostProxy {
     const capTarget =
       msg.kind === "handler"
         ? msg.channel
-        : msg.kind === "file-decoration-method"
+        : msg.kind === "file-decoration-method" || msg.kind === "worktree-delete-notes"
           ? null
           : msg.kind === "context-provider-method"
             ? `context provider "${msg.providerId}"`
@@ -658,6 +668,18 @@ export class PluginDevWorkerHostProxy {
         const [scope, paths] = msg.args as [string, string[]];
         const result = await impl.provideDecorations(scope, paths);
         settle({ ok: true, result });
+        return;
+      }
+      if (msg.kind === "worktree-delete-notes") {
+        const impl = this.worktreeDeleteNotesProviders.get(msg.providerId)?.impl;
+        if (!impl) {
+          throw new Error(`No worktree delete notes provider registered for "${msg.providerId}"`);
+        }
+        // Vetted here so only a bounded answer crosses the port; main vets it
+        // again, being the side that decides what is shown.
+        const vetted = validatePluginWorktreeDeleteNotes(await impl.provideNotes(msg.worktree));
+        if (!vetted.ok) throw new Error(vetted.error);
+        settle({ ok: true, result: vetted.notes });
         return;
       }
       if (msg.kind === "context-provider-method") {
@@ -1368,6 +1390,46 @@ export class PluginDevWorkerHostProxy {
             this.fileDecorationProviders.delete(providerId);
           }
           this.notify("unregisterFileDecorationProvider", { providerId });
+        };
+        return Promise.resolve(dispose);
+      },
+      registerWorktreeDeleteNotesProvider: (
+        descriptor: WorktreeDeleteNotesProviderDescriptor,
+        impl: WorktreeDeleteNotesProviderImpl
+      ) => {
+        this.assertActivationOpen("registerWorktreeDeleteNotesProvider");
+        if (!descriptor || typeof descriptor !== "object") {
+          throw new Error(
+            `Plugin "${this.pluginId}" registerWorktreeDeleteNotesProvider: descriptor must be an object`
+          );
+        }
+        if (typeof descriptor.id !== "string" || descriptor.id.length === 0) {
+          throw new Error(
+            `Plugin "${this.pluginId}" registerWorktreeDeleteNotesProvider: descriptor.id must be a non-empty string`
+          );
+        }
+        if (!impl || typeof impl !== "object" || typeof impl.provideNotes !== "function") {
+          throw new Error(
+            `Plugin "${this.pluginId}" registerWorktreeDeleteNotesProvider: impl must expose provideNotes()`
+          );
+        }
+        const providerId = descriptor.id;
+        const registration = { impl };
+        this.worktreeDeleteNotesProviders.set(providerId, registration);
+        this.notify(
+          "registerWorktreeDeleteNotesProvider",
+          { descriptor: { id: providerId } },
+          `worktreeDeleteNotesProvider:${providerId}`
+        );
+        let disposed = false;
+        const dispose = (): void => {
+          if (disposed) return;
+          disposed = true;
+          // A disposer from a binding a later register replaced is inert, here
+          // and in main: it must not unbind its successor.
+          if (this.worktreeDeleteNotesProviders.get(providerId) !== registration) return;
+          this.worktreeDeleteNotesProviders.delete(providerId);
+          this.notify("unregisterWorktreeDeleteNotesProvider", { providerId });
         };
         return Promise.resolve(dispose);
       },

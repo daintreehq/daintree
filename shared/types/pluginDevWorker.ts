@@ -144,6 +144,8 @@ export type PluginHostNotifyMethod =
   | "unregisterSearchProvider"
   | "registerContextProvider"
   | "unregisterContextProvider"
+  | "registerWorktreeDeleteNotesProvider"
+  | "unregisterWorktreeDeleteNotesProvider"
   | "mcp.registerTools"
   | "mcp.unregisterTools"
   | "logger.info"
@@ -198,6 +200,8 @@ export type PluginWorkerSubscriptionKind =
  * Callback kinds main invokes back in the worker. `file-decoration-method`
  * round-trips a registered `FileDecorationProviderImpl` method (just
  * `provideDecorations`, which is async — see {@link RegisterFileDecorationProviderParams}).
+ * `worktree-delete-notes` runs the bound `WorktreeDeleteNotesProviderImpl`'s
+ * `provideNotes` for one worktree (#13805).
  * `mcp-tool` runs one tool of a roster bound through `host.mcp.registerTools`,
  * `worktree-setup-step` one handler bound through
  * `host.registerWorktreeSetupStep`, `search-provider` asks a quick switcher
@@ -221,7 +225,8 @@ export type PluginWorkerInvokeKind =
   | "mcp-tool"
   | "worktree-setup-step"
   | "search-provider"
-  | "context-provider-method";
+  | "context-provider-method"
+  | "worktree-delete-notes";
 
 /** Messages sent main → worker. */
 export type PluginHostToWorkerMessage =
@@ -301,6 +306,14 @@ export type PluginHostToWorkerMessage =
       providerId: string;
       method: string;
       args: unknown[];
+    }
+  /** Ask the bound worktree delete notes provider about one worktree (#13805). */
+  | {
+      type: "invoke";
+      requestId: string;
+      kind: "worktree-delete-notes";
+      providerId: string;
+      worktree: PluginWorktreeSnapshot;
     }
   /**
    * Ask a registered context provider to search (the user's text after its
@@ -614,6 +627,20 @@ export interface RegisterContextProviderParams {
 
 /** Params for `unregisterContextProvider` (`host-notify`). */
 export interface UnregisterContextProviderParams {
+  providerId: string;
+}
+
+/**
+ * Params for `registerWorktreeDeleteNotesProvider` (`host-notify`, #13805). The
+ * `provideNotes` impl stays in the worker; main asks it through a
+ * `worktree-delete-notes` invoke.
+ */
+export interface RegisterWorktreeDeleteNotesProviderParams {
+  descriptor: { id: string };
+}
+
+/** Params for `unregisterWorktreeDeleteNotesProvider` (`host-notify`). */
+export interface UnregisterWorktreeDeleteNotesProviderParams {
   providerId: string;
 }
 

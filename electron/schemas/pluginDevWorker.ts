@@ -116,6 +116,8 @@ const HOST_NOTIFY_METHODS = {
   unregisterSearchProvider: true,
   registerContextProvider: true,
   unregisterContextProvider: true,
+  registerWorktreeDeleteNotesProvider: true,
+  unregisterWorktreeDeleteNotesProvider: true,
   "mcp.registerTools": true,
   "mcp.unregisterTools": true,
   "logger.info": true,

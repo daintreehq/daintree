@@ -14,6 +14,7 @@ import {
 } from "../../../shared/utils/worktreeSummary.js";
 import {
   formatTeardownPreviewLines,
+  formatWorktreeDeleteNoteLines,
   formatWorktreeDeletePreviewLines,
   summarizeWorktreeChanges,
   type WorktreeSubmoduleRiskState,
@@ -226,9 +227,13 @@ export async function previewWorktreeDelete(
   const checked = await checkWorktreeDelete(request, project, deps);
   if (!checked.ok) return checked;
   const { worktreeId, hosts } = checked;
-  const [read, worktrees] = await Promise.all([
+  // Plugin notes (#13805) are asked only once the worktree is known to be this
+  // project's, and in parallel with the host's own reads: this confirmation is
+  // put to the person complete, so they cost at most the notes deadline.
+  const [read, worktrees, notes] = await Promise.all([
     hosts.getDeletePreview(project.path, project.id, worktreeId).catch(() => null),
     readProjectWorktrees(project, deps).catch(() => null),
+    deps.collectWorktreeDeleteNotes(project.id, worktreeId).catch(() => []),
   ]);
   // A part that is null means the worktree is gone; only a failed read is unreadable.
   const changes = read === null ? "unreadable" : read.changes;
@@ -254,6 +259,7 @@ export async function previewWorktreeDelete(
                 }
           ),
           ...formatTeardownPreviewLines(teardown),
+          ...formatWorktreeDeleteNoteLines(notes),
         ];
   const worktree = worktrees?.find((candidate) => candidate.id === worktreeId);
   const subject = worktree?.branch || worktree?.name;

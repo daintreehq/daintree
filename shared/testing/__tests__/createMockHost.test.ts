@@ -1198,6 +1198,33 @@ describe("createMockHost", () => {
     });
   });
 
+  describe("registerWorktreeDeleteNotesProvider (#13805)", () => {
+    it("records the binding so a test can ask it, replacing by id with an inert prior disposer", async () => {
+      const host = createMockHost();
+      const first = { provideNotes: vi.fn(async () => []) };
+      const second = {
+        provideNotes: vi.fn(async () => [{ severity: "info" as const, text: "hi" }]),
+      };
+      const disposeFirst = await host.registerWorktreeDeleteNotesProvider({ id: "notes" }, first);
+      const disposeSecond = await host.registerWorktreeDeleteNotesProvider({ id: "notes" }, second);
+      expect(host.registeredWorktreeDeleteNotesProviders).toHaveLength(1);
+      disposeFirst();
+      expect(host.registeredWorktreeDeleteNotesProviders[0]?.impl).toBe(second);
+      disposeSecond();
+      expect(host.registeredWorktreeDeleteNotesProviders).toHaveLength(0);
+    });
+
+    it("refuses what the real host refuses structurally", () => {
+      const host = createMockHost();
+      expect(() =>
+        host.registerWorktreeDeleteNotesProvider({ id: "" }, { provideNotes: async () => [] })
+      ).toThrow(/descriptor.id/);
+      expect(() => host.registerWorktreeDeleteNotesProvider({ id: "n" }, {} as never)).toThrow(
+        /provideNotes/
+      );
+    });
+  });
+
   describe("registerFileDecorationProvider", () => {
     it("replaces a prior registration with the same id (replace-by-id)", async () => {
       const host = createMockHost();

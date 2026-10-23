@@ -20,6 +20,13 @@ const MiB = 1024 * KiB;
  */
 export const PLUGIN_INVOKE_DEFAULT_TIMEOUT_MS = 5 * 60_000;
 
+/**
+ * How long a plugin has to answer a worktree delete confirmation's note check
+ * (#13805), activating the plugin included. Short on purpose: the confirmation
+ * is already open, and a check that misses it is shown as "didn't answer".
+ */
+export const PLUGIN_WORKTREE_DELETE_NOTES_TIMEOUT_MS = 3000;
+
 /** Serialized size ceiling for the arguments of one invoke. */
 export const PLUGIN_INVOKE_MAX_ARGS_BYTES = 4 * MiB;
 

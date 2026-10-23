@@ -1571,6 +1571,10 @@ export interface GeneratedIpcInvokeMap {
     args: [input: import("../pluginCapabilityConsent.js").PluginProjectTargetingQuery];
     result: boolean;
   };
+  "plugin-capability:get-worktree-delete-notes": {
+    args: [input: import("../pluginCapabilityConsent.js").PluginWorktreeDeleteNotesQuery];
+    result: boolean;
+  };
   "plugin-capability:resolve-consent": {
     args: [input: import("../pluginCapabilityConsent.js").PluginCapabilityResolveConsentInput];
     result: void;
@@ -1581,6 +1585,10 @@ export interface GeneratedIpcInvokeMap {
   };
   "plugin-capability:set-project-targeting": {
     args: [input: import("../pluginCapabilityConsent.js").PluginProjectTargetingUpdate];
+    result: boolean;
+  };
+  "plugin-capability:set-worktree-delete-notes": {
+    args: [input: import("../pluginCapabilityConsent.js").PluginWorktreeDeleteNotesUpdate];
     result: boolean;
   };
   "plugin-mcp:call-tool": {
@@ -2022,6 +2030,14 @@ export interface GeneratedIpcInvokeMap {
   "plugin:visibility-default-set": {
     args: [pluginId: string, hidden: boolean];
     result: void;
+  };
+  "plugin:worktree-delete-note-sources-get": {
+    args: [];
+    result: import("../plugin.js").WorktreeDeleteNoteSource[];
+  };
+  "plugin:worktree-delete-notes-get": {
+    args: [input: { worktreeId: string; pluginId: string }];
+    result: import("../plugin.js").WorktreeDeleteNotesAnswer | null;
   };
   "plugin:worktree-status-get": {
     args: [path: string];

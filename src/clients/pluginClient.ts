@@ -1,4 +1,9 @@
-import type { LoadedPluginInfo, ProjectPluginInfo } from "@shared/types/plugin";
+import type {
+  LoadedPluginInfo,
+  ProjectPluginInfo,
+  WorktreeDeleteNoteSource,
+  WorktreeDeleteNotesAnswer,
+} from "@shared/types/plugin";
 import type { PluginDiagnosticsSnapshot } from "@shared/types/ipc/pluginDiagnostics";
 import type { PluginManifestValidationResult } from "@shared/types/ipc/pluginValidation";
 import type { PluginDataBackupOutcome } from "@shared/types/ipc/pluginDataBackup";
@@ -41,6 +46,20 @@ export const pluginClient = {
     silenced: boolean
   ): Promise<PluginNotificationSilence[]> =>
     window.electron.plugin.setNotificationSilenced(pluginId, silenced),
+
+  /** The plugins this view's worktree delete confirmations ask for notes (#13805). */
+  getWorktreeDeleteNoteSources: (): Promise<WorktreeDeleteNoteSource[]> =>
+    window.electron.plugin.getWorktreeDeleteNoteSources(),
+
+  /**
+   * One plugin's notes on a worktree of this view's project, activating it if
+   * need be. `null` when it is no longer asked, or the worktree is gone.
+   */
+  getWorktreeDeleteNotes: (
+    worktreeId: string,
+    pluginId: string
+  ): Promise<WorktreeDeleteNotesAnswer | null> =>
+    window.electron.plugin.getWorktreeDeleteNotes({ worktreeId, pluginId }),
 
   /** Every plugin the host is running, with the instance key each is addressed by. */
   list: (): Promise<LoadedPluginInfo[]> => window.electron.plugin.list(),

@@ -27,6 +27,9 @@ function render(ui: ReactElement, options?: Omit<RenderOptions, "queries">) {
 const activateStagedProjectPlugin = vi.fn<(pluginId: string) => Promise<void>>();
 const setProjectPluginTrust = vi.fn<(decision: string) => Promise<void>>();
 const reloadProjectPlugins = vi.fn<() => Promise<void>>();
+const getWorktreeDeleteNotes = vi.fn<(input: { pluginId: string }) => Promise<boolean>>();
+const setWorktreeDeleteNotes =
+  vi.fn<(input: { pluginId: string; enabled: boolean }) => Promise<boolean>>();
 
 function plugin(overrides: Partial<ProjectPluginInfo> & { state: ProjectPluginState }) {
   return {
@@ -52,10 +55,13 @@ beforeEach(() => {
   activateStagedProjectPlugin.mockReset().mockResolvedValue(undefined);
   setProjectPluginTrust.mockReset().mockResolvedValue(undefined);
   reloadProjectPlugins.mockReset().mockResolvedValue(undefined);
+  getWorktreeDeleteNotes.mockReset().mockResolvedValue(true);
+  setWorktreeDeleteNotes.mockReset().mockImplementation(async ({ enabled }) => enabled);
   Object.defineProperty(window, "electron", {
     configurable: true,
     value: {
       plugin: { activateStagedProjectPlugin, setProjectPluginTrust, reloadProjectPlugins },
+      pluginCapability: { getWorktreeDeleteNotes, setWorktreeDeleteNotes },
     },
   });
 });
@@ -93,6 +99,33 @@ describe("ProjectPluginSection load errors", () => {
     );
 
     expect(screen.getAllByRole("listitem")[0]!.textContent).not.toContain("Error");
+  });
+
+  it("offers the worktree delete notes switch for the project's own instance (#13805)", async () => {
+    const instanceId = "project__proj-a__acme.dashboard";
+    render(
+      <ProjectPluginDetailPane
+        plugin={plugin({ state: "active", instanceId, declaresWorktreeDeleteNotes: true })}
+      />
+    );
+    await act(async () => {});
+    expect(getWorktreeDeleteNotes).toHaveBeenCalledWith({ pluginId: instanceId });
+    const toggle = screen.getByTestId("plugin-worktree-delete-notes-switch");
+    expect(toggle.getAttribute("aria-checked")).toBe("true");
+    await act(async () => {
+      toggle.click();
+    });
+    expect(setWorktreeDeleteNotes).toHaveBeenCalledWith({ pluginId: instanceId, enabled: false });
+  });
+
+  it("has no notes switch for a plugin that declares no check", () => {
+    render(
+      <ProjectPluginDetailPane
+        plugin={plugin({ state: "active", instanceId: "project__proj-a__acme.dashboard" })}
+      />
+    );
+    expect(screen.queryByTestId("plugin-worktree-delete-notes-switch")).toBeNull();
+    expect(getWorktreeDeleteNotes).not.toHaveBeenCalled();
   });
 
   it("renders the real cause in the detail pane", () => {

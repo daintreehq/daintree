@@ -177,6 +177,9 @@ import {
   projectIdFromPluginInstanceKey,
   SIDEBAR_VIEW_DEFAULT_PRIORITY,
   type PluginHostedViewDescriptor,
+  type WorktreeDeleteNoteSource,
+  type WorktreeDeleteNotesAnswer,
+  type WorktreeDeleteNotesReport,
 } from "../../shared/types/plugin.js";
 import {
   PluginPanelLifecycleBroker,
@@ -301,6 +304,16 @@ import {
   unregisterFileDecorationProviderImpls,
   unregisterFileDecorationProviders,
 } from "./fileDecorationRegistry.js";
+import { unregisterWorktreeDeleteNotesBinding } from "./plugin/worktreeDeleteNotesRegistry.js";
+import {
+  collectWorktreeDeleteNotes as collectDeleteNotes,
+  getWorktreeDeleteNotes as getDeleteNotes,
+  listWorktreeDeleteNoteSources as listDeleteNoteSources,
+  type WorktreeDeleteNotesHost,
+  type WorktreeDeleteNotesTarget,
+} from "./plugin/worktreeDeleteNotes.js";
+import { isWorktreeDeleteNotesMuted } from "./plugin/pluginWorktreeDeleteNoteMutes.js";
+import { toPluginWorktreeSnapshot } from "../../shared/utils/pluginWorktreeSnapshot.js";
 import {
   registerWorktreeSetupSteps,
   unregisterWorktreeSetupStepHandlers,
@@ -1525,6 +1538,22 @@ export class PluginService {
    */
   waitForInit(): Promise<void> {
     return this.initPromise;
+  }
+
+  /**
+   * {@link waitForInit}, giving up after `ms`. Startup activation can hold init
+   * for seconds, which a caller on a deadline (a delete confirmation's notes,
+   * #13805) can't spend; whatever has loaded by then is what it gets.
+   */
+  async waitForInitWithin(ms: number): Promise<void> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    await Promise.race([
+      this.initPromise,
+      new Promise<void>((resolve) => {
+        timer = setTimeout(resolve, ms);
+      }),
+    ]);
+    clearTimeout(timer);
   }
 
   /**
@@ -3774,6 +3803,10 @@ export class PluginService {
             this.setWorkerStatus(pluginId, "ready", null, null);
           } else {
             this.setWorkerStatus(pluginId, "failed", "activation-failed", result.error);
+            // A respawned or reloaded worker that throws keeps the activation
+            // latch from the generation before it, so a notes check it bound
+            // before throwing would still be asked (#13805).
+            unregisterWorktreeDeleteNotesBinding(pluginId);
           }
         }
         if (result.ok) {
@@ -4311,6 +4344,80 @@ export class PluginService {
     const visible = selectContributionsForProject(targets, (id) => id, projectId);
     if (visible.length === 0) return;
     await Promise.allSettled(visible.map((id) => this.activatePlugin(id)));
+  }
+
+  private worktreeDeleteNotesHost(): WorktreeDeleteNotesHost {
+    return {
+      plugins: this.plugins,
+      activatePlugin: (pluginId) => this.activatePlugin(pluginId),
+      isActivated: (pluginId) => this.activatedPlugins.has(pluginId),
+      readWorktree: (projectId, worktreeId) =>
+        this.readWorktreeForDeleteNotes(projectId, worktreeId),
+      isMuted: isWorktreeDeleteNotesMuted,
+    };
+  }
+
+  /** The plugins a delete confirmation in `projectId` asks for notes (#13805). */
+  listWorktreeDeleteNoteSources(projectId: string): WorktreeDeleteNoteSource[] {
+    return listDeleteNoteSources(this.worktreeDeleteNotesHost(), projectId);
+  }
+
+  /** One plugin's notes on one of `projectId`'s worktrees, activating it if need be (#13805). */
+  getWorktreeDeleteNotes(
+    projectId: string,
+    pluginId: string,
+    worktreeId: string
+  ): Promise<WorktreeDeleteNotesAnswer | null> {
+    return getDeleteNotes(this.worktreeDeleteNotesHost(), projectId, pluginId, worktreeId);
+  }
+
+  /**
+   * Every source's notes on one worktree, for a confirmation that can't stream
+   * (#13805). `timeoutMs` narrows the per-plugin deadline for a caller that has
+   * already spent some of it.
+   */
+  collectWorktreeDeleteNotes(
+    projectId: string,
+    worktreeId: string,
+    timeoutMs?: number
+  ): Promise<WorktreeDeleteNotesReport[]> {
+    return collectDeleteNotes(
+      { ...this.worktreeDeleteNotesHost(), ...(timeoutMs !== undefined ? { timeoutMs } : {}) },
+      projectId,
+      worktreeId
+    );
+  }
+
+  /**
+   * The worktree a note check asks about, read from the confirmation's own
+   * project — never the ambient one an installed plugin's getters follow, which
+   * may be another window's.
+   */
+  private async readWorktreeForDeleteNotes(
+    projectId: string,
+    worktreeId: string
+  ): Promise<WorktreeDeleteNotesTarget> {
+    let projectRoot: string | undefined;
+    try {
+      const row = projectStore.getProjectById(projectId);
+      projectRoot = row?.status === "closed" ? undefined : row?.path;
+    } catch {
+      return { status: "unavailable" };
+    }
+    if (typeof projectRoot !== "string" || projectRoot.length === 0) return { status: "missing" };
+    const result = await this.fetchWorktreeSnapshotsForProjectResult(projectId, projectRoot);
+    if (result.status !== "ok") return { status: "unavailable" };
+    const snapshot = result.snapshots.find(
+      (candidate) => candidate.id === worktreeId || candidate.worktreeId === worktreeId
+    );
+    if (!snapshot) return { status: "missing" };
+    try {
+      const titles = this.readWorktreeCustomTitles(projectId);
+      const customTitle = Object.hasOwn(titles, snapshot.id) ? (titles[snapshot.id] ?? null) : null;
+      return { status: "ok", worktree: toPluginWorktreeSnapshot(snapshot, customTitle) };
+    } catch {
+      return { status: "unavailable" };
+    }
   }
 
   /**
@@ -7556,6 +7663,9 @@ export class PluginService {
     runUnloadStep(pluginId, "unregisterContextProviderImpls", () =>
       unregisterContextProviderImpls(pluginId)
     );
+    runUnloadStep(pluginId, "unregisterWorktreeDeleteNotesBinding", () =>
+      unregisterWorktreeDeleteNotesBinding(pluginId)
+    );
     runUnloadStep(pluginId, "unregisterPluginSkills", () => unregisterPluginSkills(pluginId));
     runUnloadStep(pluginId, "unregisterPluginThemes", () => {
       if (!unregisterPluginThemes(pluginId)) return;
@@ -7981,6 +8091,9 @@ export class PluginService {
     );
     runUnloadStep(pluginId, "unregisterContextProviderImpls", () =>
       unregisterContextProviderImpls(pluginId)
+    );
+    runUnloadStep(pluginId, "unregisterWorktreeDeleteNotesBinding", () =>
+      unregisterWorktreeDeleteNotesBinding(pluginId)
     );
     runUnloadStep(pluginId, "cancelUiPrompts", () =>
       this.promptDispatcher.cancelForPlugin(pluginId)

@@ -1339,6 +1339,26 @@
             "additionalProperties": false
           }
         },
+        "worktreeDeleteNotes": {
+          "default": [],
+          "maxItems": 1,
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64,
+                "pattern": "^[a-zA-Z0-9._-]+$"
+              }
+            },
+            "required": [
+              "id"
+            ],
+            "additionalProperties": false
+          }
+        },
         "fileEditors": {
           "default": [],
           "maxItems": 10,
