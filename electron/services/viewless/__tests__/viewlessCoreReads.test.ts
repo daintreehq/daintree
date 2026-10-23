@@ -110,6 +110,14 @@ describe("core reads with no frontend", () => {
       expect(context.focusedWorktreeId).toBeUndefined();
     });
 
+    it("fails rather than reporting no worktrees when the workspace host is unavailable", async () => {
+      const { deps } = makeDeps();
+
+      const result = await executeViewlessAction(request("actions.getContext", undefined), deps);
+
+      expect(result).toMatchObject({ ok: false, error: { code: "EXECUTION_ERROR" } });
+    });
+
     it("prefers the call's own worktree, and reports a stale one without its details", async () => {
       const { deps } = makeDeps(
         { getWorkspaceHosts: () => makeHosts() },
@@ -394,6 +402,25 @@ describe("core reads with no frontend", () => {
       );
 
       expect(result).toMatchObject({ ok: true, result: { presetsComplete: false } });
+    });
+
+    it("lists nothing for an agent a launch would refuse", async () => {
+      const { deps } = presetDeps();
+      deps.agents.getProjectPresets = async () => ({
+        "removed-agent": [{ id: "team", name: "Team" }],
+      });
+
+      const listed = await executeViewlessAction(
+        request("agent.listPresets", { agentId: "removed-agent" }),
+        deps
+      );
+      expect(listed).toEqual({ ok: true, result: { presetsComplete: true, presets: [] } });
+
+      const launched = await executeViewlessAction(
+        request("agent.launch", { agentId: "removed-agent", presetId: "team" }),
+        deps
+      );
+      expect(launched?.ok).toBe(false);
     });
 
     it("treats an inherited key as no agent", async () => {

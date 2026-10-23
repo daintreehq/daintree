@@ -88,10 +88,12 @@ export async function runActionsGetContext(
       readProjectWorktrees(project, deps),
       countProjectPanels(project, deps),
     ]);
+    // With no host there is no inventory to count, which is not none.
+    if (worktrees === null) return failure("EXECUTION_ERROR", "Workspace service is not available");
     const activeWorktreeId = contextWorktreeId ?? state?.activeWorktreeId;
     const activeWorktree =
       activeWorktreeId !== undefined
-        ? worktrees?.find((worktree) => worktree.id === activeWorktreeId)
+        ? worktrees.find((worktree) => worktree.id === activeWorktreeId)
         : undefined;
     return success({
       projectId: project.id,
@@ -105,7 +107,7 @@ export async function runActionsGetContext(
       portalOpen: false,
       portalActiveTabId: null,
       terminalCount,
-      worktreeCount: worktrees?.length ?? 0,
+      worktreeCount: worktrees.length,
     });
   } catch (err) {
     return failure("EXECUTION_ERROR", formatErrorMessage(err, "Failed to read the action context"));

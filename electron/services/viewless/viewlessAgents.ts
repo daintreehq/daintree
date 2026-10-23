@@ -579,7 +579,7 @@ export async function runAgentListAvailable(
 
 /**
  * One agent's launchable presets with no view (#14139), from the sources a
- * launch here resolves against. Another project's repository presets are
+ * launch here resolves against, and none for an agent it would refuse. Another project's repository presets are
  * left out and the listing marked incomplete, as a view's listing does.
  */
 export async function runAgentListPresets(
@@ -590,6 +590,11 @@ export async function runAgentListPresets(
   const parsed = AgentListPresetsArgsSchema.safeParse(request.args ?? {});
   if (!parsed.success) return validationFailure(request.actionId, parsed.error);
   const { agentId, projectId } = parsed.data;
+  // A launch here refuses an id the registry doesn't have, so none of the
+  // presets saved under it would launch.
+  if (!isEffectivelyRegisteredAgent(agentId)) {
+    return success({ presetsComplete: true, presets: [] });
+  }
   const ownProject = projectId === undefined || projectId === project.id;
   const sources = await readPresetSources(agentId, ownProject ? project.path : undefined, deps);
   const entry =
