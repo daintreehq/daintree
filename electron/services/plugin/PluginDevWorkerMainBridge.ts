@@ -157,7 +157,6 @@ import {
 } from "./pluginInternalApprovers.js";
 import {
   currentPluginInvocation,
-  isPluginFrontendRoutingEnabled,
   runWithEndedPluginInvocation,
   runWithPluginInvocation,
   type EndedPluginInvocation,
@@ -701,6 +700,7 @@ export class PluginDevWorkerMainBridge {
       );
       return;
     }
+    this.settledCallers.clear();
     // Nothing left to settle in the ordinary case; anything still here entered
     // during the gap before the process actually went away.
     if (this.pendingInvokes.size === 0 && this.hostCallAborts.size === 0) return;
@@ -711,7 +711,6 @@ export class PluginDevWorkerMainBridge {
       );
     }
     this.pendingInvokes.clear();
-    this.settledCallers.clear();
   };
 
   private onCrashLoop = (code: number): void => {
@@ -932,7 +931,8 @@ export class PluginDevWorkerMainBridge {
     const generation = this.reloadGeneration;
     try {
       // The call answers the invocation it was made for, while that invocation
-      // is still outstanding; anything else belongs to no caller.
+      // is still outstanding; once it has returned, only the drive lease still
+      // sees whose call it was (`endedInvocation`).
       const pending =
         msg.invocationId !== undefined ? this.pendingInvokes.get(msg.invocationId) : undefined;
       const scope = pending?.scope ?? null;
@@ -990,11 +990,9 @@ export class PluginDevWorkerMainBridge {
    * answers to the drive lease as that call's caller. A call that belonged to
    * nobody stays nobody's, and an id this bridge can't place — cancelled,
    * dropped out of memory, or never issued — is held as a caller nobody knows.
-   * Without routing there is no lease to answer to.
    */
   private endedInvocation(invocationId: string | undefined): EndedPluginInvocation | null {
     if (invocationId === undefined || invocationId.startsWith(SERVICE_INVOKE_PREFIX)) return null;
-    if (!isPluginFrontendRoutingEnabled()) return null;
     const caller = this.settledCallers.get(invocationId);
     if (caller === null) return null;
     return { pluginId: this.pluginId, caller: caller ?? null };

@@ -161,8 +161,9 @@ export function getPluginInvokeOrigin(pluginId: string): PluginInvocationScope |
  * made it, never as background. `caller` is null when the host can't say who
  * that was, and a caller nobody knows drives nothing.
  *
- * Kept apart from the invocation scope: a prompt or clipboard call made after
- * the call returned has nobody to reach, and still reaches nobody.
+ * Read only by the lease check, and kept apart from the invocation scope:
+ * routing a prompt or clipboard call made after the call returned doesn't
+ * follow that call's caller.
  */
 export interface EndedPluginInvocation {
   readonly pluginId: string;

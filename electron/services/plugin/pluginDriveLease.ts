@@ -48,7 +48,7 @@ export async function assertPluginCallerDrives(
 ): Promise<void> {
   const caller = callerOf(pluginId);
   if (caller === null) return;
-  // Loaded once a call is in hand: calls carry an origin only in Host mode.
+  // Loaded once a call is in hand, which outside Host mode is rare.
   const { peekDriveLeaseService, drivenElsewhereError, unmatchedTargetError } =
     await import("../DriveLeaseService.js");
   const lease = peekDriveLeaseService();

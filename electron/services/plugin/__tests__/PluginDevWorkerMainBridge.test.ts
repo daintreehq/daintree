@@ -3500,10 +3500,9 @@ describe("PluginDevWorkerMainBridge late host calls and the drive lease (#14251)
   });
 
   /** A bridge whose db and fs writes are held to the lease as the host's are. */
-  async function bridgeWithInvoke(caller: ClientEndpoint, routing = true) {
-    if (routing) {
-      setPluginFrontendRouter({ resolve: () => ({ kind: "local" }), onChange: () => () => {} });
-    }
+  /** `caller` null makes the invoke outside any caller's call. */
+  async function bridgeWithInvoke(caller: ClientEndpoint | null) {
+    setPluginFrontendRouter({ resolve: () => ({ kind: "local" }), onChange: () => () => {} });
     const { host, workerHost } = makeBridge({ capabilities: [] });
     const db = { resolve: vi.fn(), open: vi.fn() };
     databaseWriteAuthorizers.set(db as never, (id: string, p?: string) =>
@@ -3522,16 +3521,31 @@ describe("PluginDevWorkerMainBridge late host calls and the drive lease (#14251)
     });
     await flush();
     const wrapper = (host.registerHandler as any).mock.calls[0][1] as (...a: any[]) => unknown;
-    void runInPluginInvocation("acme.demo", caller, () => wrapper({}, {}));
-    await flush();
-    const invocationId = workerHost.sent.find((m) => m.type === "invoke").requestId as string;
-    const settle = () =>
-      workerHost.emit("worker-message", {
-        type: "invoke-result",
-        requestId: invocationId,
-        ok: true,
-        result: null,
-      });
+    const invokes = () => workerHost.sent.filter((m) => m.type === "invoke");
+    /** Start one invoke per caller, in order, and return their ids. */
+    const invokeAs = async (...callers: Array<ClientEndpoint | null>) => {
+      const before = invokes().length;
+      for (const by of callers) {
+        if (by === null) void wrapper({}, {});
+        else void runInPluginInvocation("acme.demo", by, () => wrapper({}, {}));
+      }
+      await flush();
+      return invokes()
+        .slice(before)
+        .map((m) => m.requestId as string);
+    };
+    const settleIds = (ids: readonly string[]) => {
+      for (const requestId of ids) {
+        workerHost.emit("worker-message", {
+          type: "invoke-result",
+          requestId,
+          ok: true,
+          result: null,
+        });
+      }
+    };
+    const [invocationId] = await invokeAs(caller);
+    const settle = () => settleIds([invocationId]);
     const answer = (requestId: string) =>
       workerHost.sent.find((m) => m.type === "host-result" && m.requestId === requestId);
     const call = async (requestId: string, method: string, params: unknown, id?: string) => {
@@ -3542,7 +3556,7 @@ describe("PluginDevWorkerMainBridge late host calls and the drive lease (#14251)
         params,
         ...(id !== undefined && { invocationId: id }),
       });
-      await vi.waitFor(() => expect(answer(requestId)).toBeDefined());
+      await vi.waitFor(() => expect(answer(requestId)).toBeDefined(), { timeout: 5000 });
       return answer(requestId);
     };
     let seq = 0;
@@ -3567,8 +3581,7 @@ describe("PluginDevWorkerMainBridge late host calls and the drive lease (#14251)
       );
       return { db, fs };
     };
-    const callAgain = () => runInPluginInvocation("acme.demo", caller, () => wrapper({}, {}));
-    return { workerHost, invocationId, settle, lateWrites, written, callAgain };
+    return { invocationId, settle, lateWrites, written, invokeAs, settleIds };
   }
 
   const refused = { ok: false, errorFields: { code: "DRIVEN_ELSEWHERE" } };
@@ -3618,23 +3631,38 @@ describe("PluginDevWorkerMainBridge late host calls and the drive lease (#14251)
     expect(written).toEqual(["/p/notes.md"]);
   });
 
-  it("forgets the oldest returned calls first, and holds their work as nobody's caller", async () => {
-    const { workerHost, invocationId, settle, lateWrites, written, callAgain } =
+  it("remembers the last 1,024 returned calls, then holds the oldest's work as nobody's", async () => {
+    const { invocationId, settle, lateWrites, invokeAs, settleIds } =
       await bridgeWithInvoke(DRIVER);
     settle();
-    for (let i = 0; i < 1024; i++) void callAgain();
-    await flush();
-    for (const m of workerHost.sent.filter((s) => s.type === "invoke").slice(1)) {
-      workerHost.emit("worker-message", {
-        type: "invoke-result",
-        requestId: m.requestId,
-        ok: true,
-        result: null,
-      });
-    }
+    settleIds(await invokeAs(...Array<ClientEndpoint>(1023).fill(DRIVER)));
+    expect((await lateWrites(invocationId)).fs).toMatchObject({ ok: true });
+
+    const [next] = await invokeAs(DRIVER);
+    settleIds([next]);
     const late = await lateWrites(invocationId);
     expect(late.db).toMatchObject(refused);
     expect(late.fs).toMatchObject(refused);
+    expect((await lateWrites(next)).fs).toMatchObject({ ok: true });
+  });
+
+  it("holds each returned call's late work to its own caller, interleaved", async () => {
+    const { invocationId, settle, lateWrites, invokeAs, settleIds } =
+      await bridgeWithInvoke(DRIVER);
+    const [watcherId] = await invokeAs(WATCHER);
+    settle();
+    settleIds([watcherId]);
+    expect((await lateWrites(watcherId)).fs).toMatchObject(refused);
+    expect((await lateWrites(invocationId)).fs).toMatchObject({ ok: true });
+    expect((await lateWrites(watcherId)).db).toMatchObject(refused);
+  });
+
+  it("still checks a returned call's work once routing is gone and the lease remains", async () => {
+    const { invocationId, settle, lateWrites, written } = await bridgeWithInvoke(WATCHER);
+    settle();
+    _resetPluginFrontendRoutingForTesting();
+    expect((await lateWrites(invocationId)).fs).toMatchObject(refused);
+    expect((await lateWrites("i999")).fs).toMatchObject(refused);
     expect(written).toEqual([]);
   });
 
@@ -3654,7 +3682,7 @@ describe("PluginDevWorkerMainBridge late host calls and the drive lease (#14251)
   });
 
   it("leaves an invocation that had no caller unchecked once it settles, as it was while open", async () => {
-    const { invocationId, settle, lateWrites, written } = await bridgeWithInvoke(WATCHER, false);
+    const { invocationId, settle, lateWrites, written } = await bridgeWithInvoke(null);
     const live = await lateWrites(invocationId);
     expect(live.fs).toMatchObject({ ok: true });
     settle();
