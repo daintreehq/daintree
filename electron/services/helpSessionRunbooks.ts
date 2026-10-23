@@ -79,8 +79,16 @@ export function resolveRunbooksMcpUrl(env: NodeJS.ProcessEnv = process.env): str
  * "ask …" phrasings were misread as the agent-question runbooks. `max_results`
  * matches the selector's own cap of three admitted runbooks; every result
  * carries its full procedure, so asking for more only buys unselected text.
+ *
+ * The tool-name line follows the caller's real surface (#14161). A project's
+ * assistant holds the unscoped terminal tools in its own project, and only
+ * there; every project `host.call` reaches admits the owned tools alone. The
+ * global assistant has no project of its own, so it is never told to swap.
  */
-export function buildRunbooksAddendum(): string {
+export function buildRunbooksAddendum(caller: { global?: boolean } = {}): string {
+  const toolNames = caller.global
+    ? "**Tool names:** you have no project of your own: `host.list` finds projects, and every step a runbook gives runs through `host.call` with that project's `hostId` and `projectId` (`local` for this machine). Call the tools it names as written, `terminal.sendCommandOwned`, `terminal.sendKeysOwned` and `terminal.closeOwned` included; they act on what you launched there or the user handed you, and you can close only what you launched. Their `notify` steps apply to you too."
+    : "**Tool names:** runbooks are written for every caller. In your own project, where one says `terminal.sendCommandOwned`, `terminal.sendKeysOwned` or `terminal.closeOwned`, yours is `terminal.sendCommand`, `terminal.sendKeys` or `terminal.close`, with the same arguments; don't look the owned names up. Through `host.call` use the owned names as written. Their `notify` steps apply to you too.";
   return [
     "## Runbooks First",
     "",
@@ -90,9 +98,9 @@ export function buildRunbooksAddendum(): string {
     "",
     '`query`: one sentence, 8–15 words, saying what the user wants done as they would type it. Keep every part of the task and any condition on how ("…and start an agent on it", "…without fixing anything"). Leave out specifics: numbers, branch, file, repo and people\'s names, pasted output, prompt text. Don\'t narrate ("User wants…", "ask whether…"). Pass `max_results: 3`.',
     "",
-    "**Tool names:** runbooks are written for every caller. Where one says `terminal.sendCommandOwned`, `terminal.sendKeysOwned` or `terminal.closeOwned`, yours is `terminal.sendCommand`, `terminal.sendKeys` or `terminal.close`, with the same arguments; don't look the owned names up. Their `notify` steps apply to you too.",
+    toolNames,
     "",
-    "Follow the runbooks with `selected: true` and the `supporting_runbooks` that come with them (the foundation they build on), and ignore the unselected ones. None selected: carry on and don't mention it. Another step naming a tool you lack: find the equivalent with `actions.search`, or tell the user. If the search fails, retry once, then proceed and say the runbook couldn't be loaded.",
+    `Follow the runbooks with \`selected: true\` and the \`supporting_runbooks\` that come with them (the foundation they build on), and ignore the unselected ones. None selected: carry on and don't mention it. Another step naming a tool you lack: find the equivalent with \`actions.search\`${caller.global ? " through `host.call`" : ""}, or tell the user. If the search fails, retry once, then proceed and say the runbook couldn't be loaded.`,
     "",
   ].join("\n");
 }

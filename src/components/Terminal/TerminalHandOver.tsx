@@ -17,6 +17,7 @@ import { closeAndAnnounce } from "@/lib/accessibility";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { getTerminalDisplayTitle } from "@/utils/terminalTitleDisplay";
 import type { TerminalAdoptionRefusal } from "@shared/types/ipc/mcpServer";
+import { GLOBAL_ASSISTANT_ID } from "@shared/config/globalAssistant";
 import { cn } from "@/lib/utils";
 import {
   HEADER_CHIP_CLASS,
@@ -26,17 +27,44 @@ import {
 
 const ICON_CLASS = "w-3.5 h-3.5 mr-2 shrink-0";
 
+/**
+ * The hand-over candidate that stands for this machine's global assistant
+ * (#14161). It is no panel, so its id can never spell a pane's.
+ */
+export const GLOBAL_ASSISTANT_CANDIDATE = GLOBAL_ASSISTANT_ID;
+const GLOBAL_ASSISTANT_NAME = "Global Assistant";
+
 /** A pane's name as its own header shows it, for naming it in hand-over copy. */
 function usePaneName(paneId: string | undefined): string | null {
   return usePanelStore((state) => {
     if (paneId === undefined) return null;
+    if (paneId === GLOBAL_ASSISTANT_CANDIDATE) return GLOBAL_ASSISTANT_NAME;
     const panel = state.panelsById[paneId];
     return panel ? getTerminalDisplayTitle(panel, "base") : null;
   });
 }
 
+/** Who drives a handed-over terminal, by name; the global assistant's PTY is no panel. */
+function useDriverName(terminalId: string): string | null {
+  const adoption = useTerminalAdoptionStore((s) => s.adoptionsByTerminalId[terminalId]);
+  return usePaneName(
+    adoption?.recipient === "global-assistant"
+      ? GLOBAL_ASSISTANT_CANDIDATE
+      : adoption?.orchestratorPaneId
+  );
+}
+
+/** Whether the global assistant is running now; false when it can't be asked. */
+function readGlobalAssistantRunning(): Promise<boolean> {
+  return Promise.resolve()
+    .then(() => window.electron.help.getGlobalAssistantState())
+    .then((state) => state.phase === "running")
+    .catch(() => false);
+}
+
 /**
- * Orchestrator panes in this view a terminal could be handed to (#12490).
+ * Orchestrator panes in this view a terminal could be handed to (#12490),
+ * then this machine's global assistant while it runs (#14161).
  *
  * Main is asked when the menu opens, not kept in a store: which panes hold a
  * live Daintree bearer changes with every agent launch and exit, and only this
@@ -55,17 +83,19 @@ export function useOrchestratorCandidates(terminalId: string): {
   const refresh = useCallback(() => {
     const request = ++latestRequestRef.current;
     safeFireAndForget(
-      window.electron.mcpServer.listOrchestratorPanes().then((paneIds) => {
+      Promise.all([
+        window.electron.mcpServer.listOrchestratorPanes(),
+        readGlobalAssistantRunning(),
+      ]).then(([paneIds, globalRunning]) => {
         // An older opening's answer must not overwrite a newer one's.
         if (request !== latestRequestRef.current) return;
         const { panelsById } = usePanelStore.getState();
-        setCandidates({
-          terminalId,
-          ids: paneIds.filter((paneId) => {
-            const panel = panelsById[paneId];
-            return paneId !== terminalId && panel !== undefined && panel.location !== "trash";
-          }),
+        const ids = paneIds.filter((paneId) => {
+          const panel = panelsById[paneId];
+          return paneId !== terminalId && panel !== undefined && panel.location !== "trash";
         });
+        if (globalRunning) ids.push(GLOBAL_ASSISTANT_CANDIDATE);
+        setCandidates({ terminalId, ids });
       }),
       { context: "TerminalHandOver listOrchestratorPanes" }
     );
@@ -109,7 +139,7 @@ export function TerminalHandOverMenuItems({
   onRequestHandOver: (orchestratorPaneId: string) => void;
 }) {
   const adoption = useTerminalAdoptionStore((s) => s.adoptionsByTerminalId[terminalId]);
-  const driverName = usePaneName(adoption?.orchestratorPaneId);
+  const driverName = useDriverName(terminalId);
 
   if (adoption !== undefined) {
     return (
@@ -145,17 +175,25 @@ export function TerminalHandOverMenuItems({
 function refusalMessage(
   reason: TerminalAdoptionRefusal,
   orchestratorName: string,
-  holderName: string | null
+  holderName: string | null,
+  toGlobal: boolean
 ): string {
   switch (reason) {
     case "self":
       return "A pane can't be handed to itself.";
+    case "assistant-terminal":
+      return "Assistants can't be handed over. They're reached through Daintree's assistant tools.";
     case "not-orchestrator":
-      return `${orchestratorName} isn't connected to Daintree anymore. Restart it to hand it terminals.`;
+      return orchestratorName === GLOBAL_ASSISTANT_NAME
+        ? "The Global Assistant isn't running anymore. Open it again to hand it terminals."
+        : `${orchestratorName} isn't connected to Daintree anymore. Restart it to hand it terminals.`;
     case "terminal-gone":
       return "This terminal isn't running anymore.";
     case "other-project":
-      return `${orchestratorName} belongs to another project.`;
+      // The global assistant has no project; the terminal is what's out of reach.
+      return toGlobal
+        ? "This terminal isn't in this window's project, so the Global Assistant can't reach it."
+        : `${orchestratorName} belongs to another project.`;
     case "launched-by-orchestrator":
       return `${orchestratorName} launched this terminal, so it already drives it.`;
     case "launched-by-another":
@@ -163,7 +201,7 @@ function refusalMessage(
     case "already-handed":
       return holderName
         ? `Already handed to ${holderName}. Choose “Take back from ${holderName}” in the terminal menu first.`
-        : "Already handed to another pane. Choose “Take back control” in the terminal menu first.";
+        : "Already handed over. Choose “Take back control” in the terminal menu first.";
   }
 }
 
@@ -185,6 +223,7 @@ export function TerminalHandOverDialog({
 }) {
   const terminalPaneName = usePaneName(terminalId);
   const orchestratorPaneName = usePaneName(orchestratorPaneId);
+  const toGlobal = orchestratorPaneId === GLOBAL_ASSISTANT_CANDIDATE;
   const terminalName = terminalPaneName ?? "this terminal";
   const orchestratorName = orchestratorPaneName ?? "the orchestrator";
   // Why the hand-over didn't happen. Shown beside the action row, where the
@@ -194,17 +233,20 @@ export function TerminalHandOverDialog({
     { reason: TerminalAdoptionRefusal; heldByPaneId?: string } | { reason: "failed" } | null
   >(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const holderName = usePaneName(
-    refusal !== null && "heldByPaneId" in refusal ? refusal.heldByPaneId : undefined
-  );
+  const heldByPaneId =
+    refusal !== null && "heldByPaneId" in refusal ? refusal.heldByPaneId : undefined;
+  const heldByPaneName = usePaneName(heldByPaneId);
+  // A holder no panel stands for is the global assistant's own PTY.
+  const holderName = heldByPaneName ?? (heldByPaneId !== undefined ? GLOBAL_ASSISTANT_NAME : null);
 
   const handleConfirm = useCallback(async () => {
     setIsSubmitting(true);
     try {
-      const result = await window.electron.mcpServer.adoptTerminal({
-        terminalId,
-        orchestratorPaneId,
-      });
+      const result = await window.electron.mcpServer.adoptTerminal(
+        toGlobal
+          ? { terminalId, recipient: "global-assistant" }
+          : { terminalId, orchestratorPaneId }
+      );
       if (result.status === "handed-over") {
         closeAndAnnounce(onClose, `${terminalName} handed to ${orchestratorName}`);
         return;
@@ -218,7 +260,7 @@ export function TerminalHandOverDialog({
     } finally {
       setIsSubmitting(false);
     }
-  }, [onClose, orchestratorName, orchestratorPaneId, terminalId, terminalName]);
+  }, [onClose, orchestratorName, orchestratorPaneId, terminalId, terminalName, toGlobal]);
 
   return (
     <ConfirmDialog
@@ -247,7 +289,7 @@ export function TerminalHandOverDialog({
           <span className="min-w-0 leading-snug" role="status">
             {refusal.reason === "failed"
               ? "Couldn't hand the terminal over. Close this and try again."
-              : refusalMessage(refusal.reason, orchestratorName, holderName)}
+              : refusalMessage(refusal.reason, orchestratorName, holderName, toGlobal)}
           </span>
         ) : undefined
       }
@@ -256,8 +298,9 @@ export function TerminalHandOverDialog({
           the consequence rather than left for a screen reader to find. */}
       <AppDialog.Description as="div" className="space-y-3">
         <p>
-          {orchestratorPaneName ?? "The orchestrator"} can type and press Enter in this terminal,
-          interrupt it, bring it on screen and read its last message.
+          {toGlobal
+            ? "The Global Assistant can type and press Enter in this terminal, interrupt it and read its last message, from any project."
+            : `${orchestratorPaneName ?? "The orchestrator"} can type and press Enter in this terminal, interrupt it, bring it on screen and read its last message.`}
         </p>
         <Callout severity="warning" title="It can approve actions for you" className="text-sm">
           Daintree doesn&apos;t filter what it sends. Answering an approval prompt with 1 can
@@ -287,7 +330,7 @@ function PaneName({ name, fallback }: { name: string | null; fallback: string })
  */
 export function TerminalDrivenByBadge({ terminalId }: { terminalId: string }) {
   const adoption = useTerminalAdoptionStore((s) => s.adoptionsByTerminalId[terminalId]);
-  const driverName = usePaneName(adoption?.orchestratorPaneId);
+  const driverName = useDriverName(terminalId);
   if (adoption === undefined) return null;
   const label = driverName ? `Driven by ${driverName}` : "Driven by an orchestrator";
   const takeBackLabel = driverName ? `Take back from ${driverName}` : "Take back control";

@@ -8,6 +8,8 @@ import { LocalAgentDirectory, type ResumableLane } from "../../services/agentDir
 import { getAgentAvailabilityStore } from "../../services/AgentAvailabilityStore.js";
 import { getPendingHelpHibernationStore } from "../../services/PendingHelpHibernationStore.js";
 import { helpSessionService } from "../../services/HelpSessionService.js";
+import { peekGlobalAssistantService } from "../../services/globalAssistant.js";
+import { isGlobalAssistantId } from "../../../shared/config/globalAssistant.js";
 import type { RunbooksHostsState } from "../../services/helpSessionRunbooks.js";
 import { setHostControlRuntime } from "../../services/mcp-server/hostControlTools.js";
 import type { LaneWake } from "../../services/mcp-server/terminalNotify.js";
@@ -20,7 +22,7 @@ import { getLocalSummaryLoop } from "../metrics/localLoop.js";
 import { getRemoteService, registerRemoteService } from "../runtime.js";
 import { HostCallRuntime, type ObservedHost, type OpenRun } from "./HostCallRuntime.js";
 import { HostControlLinkClient } from "./HostControlLinkClient.js";
-import { createLocalMcpRelay } from "./localMcpRelay.js";
+import { createLocalMcpRelay, LOCAL_RELAY_SENDER_ID } from "./localMcpRelay.js";
 import { forgetRetiredSends, readRetiredSends } from "./retiredSends.js";
 import { AssistantSenderCredentials } from "./senderCredentials.js";
 import { AppError } from "../../utils/errorTypes.js";
@@ -73,7 +75,11 @@ export function observedRunbooksHostsState(
     : "configured";
 }
 
-/** The run a help session answers in, when one of this machine's own views shows it. */
+/**
+ * The run a help session answers in, when one of this machine's own views
+ * shows it, or when it is this machine's global assistant (#14161), which
+ * main owns and no view holds.
+ */
 function localRunOf(helpSessionId: string): OpenRun | null {
   const lane = helpSessionService.getSessionLane(helpSessionId);
   if (lane === null) return null;
@@ -81,7 +87,10 @@ function localRunOf(helpSessionId: string): OpenRun | null {
   if (running === null || running.sessionId !== helpSessionId) return null;
   // An assistant a remote Shell's view runs here is that Shell's, never this one's.
   const handle = running.projectViewWebContentsId;
-  if (isRemoteEndpointHandle(handle) || getProjectForWebContents(handle) !== lane.projectId) {
+  if (
+    !isGlobalAssistantId(lane.projectId) &&
+    (isRemoteEndpointHandle(handle) || getProjectForWebContents(handle) !== lane.projectId)
+  ) {
     return null;
   }
   const launchGeneration = getPtyClient()?.getLiveGeneration(running.terminalId) ?? null;
@@ -96,6 +105,15 @@ function localRunOf(helpSessionId: string): OpenRun | null {
 }
 
 let localMachineName: string | undefined;
+let mcpServerModule: Promise<typeof import("../../services/McpServerService.js")> | undefined;
+/** Loaded once: a session's end releases and retires through the same load, in order. */
+function mcpServer(): Promise<typeof import("../../services/McpServerService.js")> {
+  mcpServerModule ??= import("../../services/McpServerService.js").catch((error: unknown) => {
+    mcpServerModule = undefined;
+    throw error;
+  });
+  return mcpServerModule;
+}
 
 /** Queues a line on a run's own notice line, the one writer that types into its prompt. */
 function queueOnNoticeLine(
@@ -158,8 +176,18 @@ export function installHostControl(deps: HostControlInstallDeps): () => void {
         },
       });
     },
+    // Nor anything the person handed it (#14161), even before its first call.
+    releaseHandOvers: (helpSessionId) => {
+      void mcpServer()
+        .then(({ mcpServerService }) =>
+          mcpServerService.releaseRelayAdoptions(LOCAL_RELAY_SENDER_ID, helpSessionId)
+        )
+        .catch((error: unknown) => {
+          logger.warn("Couldn't release what was handed to an ended assistant", { error });
+        });
+    },
     retirePrincipal: (senderId, helpSessionId) => {
-      void import("../../services/McpServerService.js")
+      void mcpServer()
         .then(({ mcpServerService }) =>
           mcpServerService.retireRelayPrincipal(senderId, helpSessionId)
         )
@@ -215,7 +243,10 @@ export function installHostControl(deps: HostControlInstallDeps): () => void {
     listHostProjects: deps.listHostProjects,
     connect: deps.connect,
     // From provisioning, before the run is confirmed: the view a session was opened in.
+    // The global assistant (#14161) is this machine's own with no view at all.
     inLocalView: (helpSessionId) => {
+      const lane = helpSessionService.getSessionLane(helpSessionId);
+      if (lane !== null && isGlobalAssistantId(lane.projectId)) return true;
       const handle = helpSessionService.getWebContentsIdForSessionId(helpSessionId);
       return handle !== null && !isRemoteEndpointHandle(handle);
     },
@@ -224,7 +255,13 @@ export function installHostControl(deps: HostControlInstallDeps): () => void {
     // the window of the assistant that made the call (#13501), never the
     // focused one: an assistant a remote Shell's view runs here has none.
     askApproval: async (ask) => {
-      const webContentsId = helpSessionService.getWebContentsIdForSessionId(ask.helpSessionId);
+      // The global assistant has no window of its own: it is asked in one that
+      // shows it, never the focused one, and not at all while none does.
+      const webContentsId = isGlobalAssistantId(
+        helpSessionService.getSessionLane(ask.helpSessionId)?.projectId ?? ""
+      )
+        ? (peekGlobalAssistantService()?.presenterWebContentsId() ?? null)
+        : helpSessionService.getWebContentsIdForSessionId(ask.helpSessionId);
       if (webContentsId === null || isRemoteEndpointHandle(webContentsId)) return null;
       const { askHostApprovalInWindow } = await import("../client/viewRequests.js");
       return askHostApprovalInWindow(webContentsId, ask);
@@ -263,7 +300,8 @@ export function installHostControl(deps: HostControlInstallDeps): () => void {
   // A help session that won't run again holds nothing it made in another
   // project; one relaunched onto a new PTY is the same assistant and keeps it.
   const offSessionEnded = helpSessionService.addSessionEndedListener(({ sessionId, reason }) => {
-    if (reason !== "relaunched") local.endHelpSession(sessionId);
+    if (reason === "relaunched") return;
+    local.endHelpSession(sessionId);
   });
   const unregisterRuntime = setHostControlRuntime(runtime);
   const unregisterCallRelay = registerRemoteService("hostCallRelayClient", runtime);

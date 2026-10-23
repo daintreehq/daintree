@@ -31,6 +31,8 @@ export interface LocalMcpRelayDeps extends Pick<
   machineName(): string;
   /** Takes the notices a local call armed, as a host's arrive over its link. */
   receiveNotices(payload: RelayNoticesPayload): void;
+  /** Ends what the person handed one of this machine's help sessions (#14161). */
+  releaseHandOvers?(helpSessionId: string): void;
   /** Puts one confirm-gated local call to the person, as a host's question would be. */
   receiveApproval(payload: RelayApprovePayload): Promise<RelayApproveAnswer>;
   newId?: () => string;
@@ -102,7 +104,10 @@ export function createLocalMcpRelay(deps: LocalMcpRelayDeps): LocalMcpRelay {
       };
       return executor.call(spec, payload);
     },
-    endHelpSession: (helpSessionId) => executor.endPrincipal(LOCAL_RELAY_SENDER_ID, helpSessionId),
+    endHelpSession: (helpSessionId) => {
+      deps.releaseHandOvers?.(helpSessionId);
+      executor.endPrincipal(LOCAL_RELAY_SENDER_ID, helpSessionId);
+    },
     dispose: () => {
       disposed = true;
       executor.dispose();

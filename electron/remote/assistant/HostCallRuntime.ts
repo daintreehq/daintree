@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { isGlobalAssistantId } from "../../../shared/config/globalAssistant.js";
 import { PROJECT_CHECK_DEFAULT_TIMEOUT_MS } from "../../../shared/types/projectCheck.js";
 import { REPLY_WAIT_DEFAULT_SECONDS } from "../../../shared/types/replyWait.js";
 import {
@@ -351,6 +352,121 @@ const CONTROL_OFF_DETAIL =
 const CALL_NO_HOST_DETAIL = "This Shell has no host with that id. List the hosts it knows.";
 const CALL_OWN_PROJECT_DETAIL =
   "That is this assistant's own project, so nothing was run. Call its tools directly; local reaches this machine's other projects.";
+const CALL_GLOBAL_WITHHELD_DETAIL =
+  "The global assistant can't do that in a project: it acts only on what it launched there or the user handed it, so nothing was run. Ask the user to do it, or to hand you the terminal.";
+/**
+ * The tools the global assistant may run through `host.call` (#14161). An
+ * allow-list, so a tool added to the relay surface later is refused until it
+ * is placed here or in {@link GLOBAL_WITHHELD_TOOLS}: reads, launches of its
+ * own, and the owned forms that reach only what it launched or was handed.
+ * `worktree.resource.teardown` and `recipe.run` are here on purpose: both are
+ * `danger: "confirm"`, so the person approves each run.
+ */
+export const GLOBAL_ALLOWED_TOOLS: ReadonlySet<string> = new Set([
+  "actions.getContext",
+  "actions.search",
+  "actions.getSchema",
+  "actions.list",
+  "mcp.surface",
+  "workspace.list",
+  "worktree.list",
+  "worktree.getCurrent",
+  "worktree.reviewReadiness",
+  "worktree.createWithRecipe",
+  "worktree.waitUntilReady",
+  "worktree.waitForPullRequest",
+  "worktree.deleteOwned",
+  "worktree.resource.status",
+  "worktree.resource.teardown",
+  "recipe.list",
+  "recipe.run",
+  "agent.launch",
+  "agent.launchMany",
+  "agent.listAvailable",
+  "agent.listPresets",
+  "agent.listModels",
+  "agent.readQuota",
+  "agentSessionHistory.list",
+  "assistant.list",
+  "assistant.start",
+  "terminal.list",
+  "terminal.getStatus",
+  "terminal.getOutput",
+  "terminal.readLastMessageOwned",
+  "terminal.new",
+  "terminal.sendCommandOwned",
+  "terminal.sendCommandMany",
+  "terminal.sendKeysOwned",
+  "terminal.injectOwned",
+  "terminal.interruptOwned",
+  "terminal.closeOwned",
+  "terminal.closeMany",
+  "terminal.revealOwned",
+  "terminal.placeOwned",
+  "terminal.waitUntilIdle",
+  "terminal.waitUntilIdleBatch",
+  "terminal.notifyWhenIdle",
+  "slashCommands.list",
+  "workflow.startWorkOnIssue",
+  "workflow.prepBranchForReview",
+  "project.detectRunners",
+  "git.getProjectPulse",
+  "forge.getPR",
+  "forge.listPRs",
+  "forge.getIssue",
+  "forge.listIssues",
+  "forge.getCIStatus",
+  "copyTree.generate",
+  "skills.search",
+  "skills.load",
+  "fleet.getRunStatus",
+  "browser.getConsoleMessages",
+  "errors.recent",
+  "notifications.recent",
+  "plugin.validate",
+  "plugin.diagnostics",
+  "plugin.capturePanel",
+]);
+/**
+ * Tools a project's assistant may reach that the global assistant may not:
+ * each acts on something it neither launched nor was handed (a project's
+ * commands, dev server, plugins, worktree state and view, a pane named by id,
+ * the user's own agent sessions, the clipboard), or is an unscoped form a relay
+ * never holds. Listed so the
+ * guard test can tell a deliberate refusal from a tool nobody placed.
+ */
+export const GLOBAL_WITHHELD_TOOLS: ReadonlySet<string> = new Set([
+  "project.runCommand",
+  "project.runCheck",
+  "project.openOnHost",
+  "worktree.setActive",
+  "worktree.setLabelColor",
+  "worktree.setCustomTitle",
+  "worktree.resource.provision",
+  "worktree.resource.pause",
+  "worktree.resource.resume",
+  "terminal.moveToWorktree",
+  "terminal.rename",
+  "terminal.setClientMetadata",
+  "devPreview.restart",
+  "devPreview.reloadPreview",
+  "plugin.reloadProject",
+  "plugin.reloadPanel",
+  "copyTree.generateAndCopyFile",
+  "terminal.sendCommand",
+  "terminal.sendKeys",
+  "terminal.inject",
+  "terminal.close",
+  "terminal.kill",
+  "terminal.restart",
+  "terminal.closeAll",
+  "worktree.delete",
+  "copyTree.injectToTerminal",
+  "diagnostics.openReview",
+  // Brings the user's backgrounded pane forward or relaunches their conversation,
+  // and the pane it opens is never recorded as the assistant's.
+  "agentSessionHistory.resume",
+]);
 const CALL_AMBIGUOUS_DETAIL =
   "No answer came back, so the call may have reached the host and run. Resend it under this callId, which never runs it twice.";
 const CALL_NOT_SENT_DETAIL =
@@ -914,6 +1030,11 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
         return { ...this.outcomeWith("not_found", CALL_NO_HOST_DETAIL), ...unsent };
       } else if (this.deps.controlEnabled?.(args.hostId) !== true) {
         return { ...this.outcomeWith("opted_out", CONTROL_OFF_DETAIL), ...unsent };
+      }
+      // The global assistant acts only on what it launched or was handed
+      // (#14161), on any host: anything not allowed is refused.
+      if (isGlobalAssistantId(caller.projectId) && !GLOBAL_ALLOWED_TOOLS.has(args.tool)) {
+        return { ...this.outcomeWith("policy_rejected", CALL_GLOBAL_WITHHELD_DETAIL), ...unsent };
       }
       const toolArgs = args.args ?? {};
       if (Buffer.byteLength(JSON.stringify(toolArgs), "utf8") > MAX_RELAY_ARGS_BYTES) {

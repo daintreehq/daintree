@@ -33,6 +33,9 @@ import {
   relayOwnershipPrincipal,
 } from "./mcp-server/resourceOwnership.js";
 import type { TerminalAdoptionRecord } from "./mcp-server/terminalAdoption.js";
+import { LOCAL_HOST_ID } from "../../shared/types/remoteHosts.js";
+import { getAgentAvailabilityStore } from "./AgentAvailabilityStore.js";
+import { isGlobalAssistantId } from "../../shared/config/globalAssistant.js";
 import { isTierPermitted } from "./mcp-server/tierAuth.js";
 import type { OrchestratorPaneIdentity } from "./McpPaneConfigService.js";
 import { AuditService, type McpAuditDiagnosticsSnapshot } from "./mcp-server/auditLog.js";
@@ -633,6 +636,9 @@ export class McpServerService {
     }
     const ptyClient = getPtyClient();
     if (!ptyClient?.hasTerminal(terminalId)) return refuse("terminal-gone");
+    // An assistant is reached only through the assistant tools (#13496), whose
+    // drive and settled-prompt checks a hand-over would step around.
+    if (this.isAssistantTerminal(terminalId)) return refuse("assistant-terminal");
     // An orchestrator's calls land in the workspace its pane was launched in
     // (#12486), so a terminal anywhere else would be handed over in name only.
     const terminalWorkspaceId = ptyClient.getTerminalProjectId(terminalId) ?? undefined;
@@ -657,6 +663,84 @@ export class McpServerService {
       principalId: orchestrator.principalId,
       ...(workspaceId !== undefined ? { workspaceId } : {}),
       ...(launchGeneration !== null ? { launchGeneration } : {}),
+    });
+    if (!outcome.ok) {
+      return { status: "refused", reason: "already-handed", heldByPaneId: outcome.heldByPaneId };
+    }
+    return { status: "handed-over", adoption: toTerminalAdoptionEntry(outcome.record) };
+  }
+
+  /**
+   * Whether a terminal is a Daintree Assistant's: by main's own binding of its
+   * bearer to the PTY, which a headless launch never reports to a renderer,
+   * or by the renderer's mark where main's isn't wired.
+   */
+  private isAssistantTerminal(terminalId: string): boolean {
+    return (
+      this.getSessionIdForTerminal(terminalId) !== null ||
+      getAgentAvailabilityStore().isHelpTerminal(terminalId)
+    );
+  }
+
+  /**
+   * Hand a running terminal to this machine's global assistant (#14161),
+   * from the same user gesture and under the same rules as a hand-over to a
+   * pane. The assistant reaches a project only through `host.call`, whose
+   * session there holds what it has under its local relay principal, so the
+   * hand-over is held by that principal: the non-destructive `*Owned` tools
+   * read it, `terminal.closeOwned` and `worktree.deleteOwned` never do.
+   *
+   * `global` is the assistant's live run, read by the caller with no await
+   * before this runs, or null when none is running. A terminal whose launch
+   * generation main can't name is refused: a hand-over must end with the
+   * process it was given for.
+   */
+  adoptTerminalForGlobalAssistant(request: {
+    terminalId: string;
+    global: { sessionId: string; terminalId: string } | null;
+    callerWorkspaceId?: string;
+  }): TerminalAdoptionResult {
+    const { terminalId, global, callerWorkspaceId } = request;
+    const refuse = (reason: TerminalAdoptionRefusal): TerminalAdoptionResult => ({
+      status: "refused",
+      reason,
+    });
+    if (global === null) return refuse("not-orchestrator");
+    if (terminalId === global.terminalId) return refuse("self");
+    const ptyClient = getPtyClient();
+    if (!ptyClient?.hasTerminal(terminalId)) return refuse("terminal-gone");
+    if (this.isAssistantTerminal(terminalId)) return refuse("assistant-terminal");
+    // Reached through `host.call` into the terminal's own project, so it must
+    // have one, and the view the user acted in must show that one.
+    const workspaceId = ptyClient.getTerminalProjectId(terminalId) ?? undefined;
+    if (
+      workspaceId === undefined ||
+      isGlobalAssistantId(workspaceId) ||
+      (callerWorkspaceId !== undefined && callerWorkspaceId !== workspaceId)
+    ) {
+      return refuse("other-project");
+    }
+    const launchGeneration = ptyClient.getLaunchGeneration(terminalId);
+    if (launchGeneration === null) return refuse("terminal-gone");
+    // This machine's own `host.call` is admitted under its own host id as the
+    // sender (`LOCAL_RELAY_SENDER_ID`), named here without loading the gated
+    // remote module into core.
+    const principalId = relayOwnershipPrincipal(LOCAL_HOST_ID, global.sessionId);
+    const creator = this.sessionStore.resourceOwnership.creatorOf("terminal", terminalId);
+    if (creator !== undefined) {
+      return refuse(
+        creator === principalOwnerKey(principalId)
+          ? "launched-by-orchestrator"
+          : "launched-by-another"
+      );
+    }
+    const outcome = this.sessionStore.terminalAdoption.adopt({
+      terminalId,
+      orchestratorPaneId: global.terminalId,
+      principalId,
+      workspaceId,
+      launchGeneration,
+      recipient: "global-assistant",
     });
     if (!outcome.ok) {
       return { status: "refused", reason: "already-handed", heldByPaneId: outcome.heldByPaneId };
@@ -1301,7 +1385,19 @@ export class McpServerService {
   retireRelayPrincipal(senderId: string, helpSessionId: string): void {
     const principal = relayOwnershipPrincipal(senderId, helpSessionId);
     this.sessionStore.resourceOwnership.revokePrincipal(principal);
+    this.sessionStore.terminalAdoption.revokePrincipal(principal);
     this.terminalNotify.revokeOwner(relayNotifyKey(principal));
+  }
+
+  /**
+   * One of this machine's help sessions ended (#14161): what was handed to
+   * it goes now, whether or not it ever made a call that would retire its
+   * principal, so a later session never finds it.
+   */
+  releaseRelayAdoptions(senderId: string, helpSessionId: string): void {
+    this.sessionStore.terminalAdoption.revokePrincipal(
+      relayOwnershipPrincipal(senderId, helpSessionId)
+    );
   }
 
   /**
@@ -1410,6 +1506,7 @@ function toTerminalAdoptionEntry(record: TerminalAdoptionRecord): TerminalAdopti
   return {
     terminalId: record.terminalId,
     orchestratorPaneId: record.orchestratorPaneId,
+    ...(record.recipient !== undefined ? { recipient: record.recipient } : {}),
     adoptedAt: record.adoptedAt,
   };
 }

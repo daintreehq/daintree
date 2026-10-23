@@ -1,4 +1,7 @@
-import { GLOBAL_ASSISTANT_ID } from "../../../shared/config/globalAssistant.js";
+import {
+  GLOBAL_ASSISTANT_ID,
+  GLOBAL_ASSISTANT_TOOL_IDS,
+} from "../../../shared/config/globalAssistant.js";
 import { randomBytes, randomUUID } from "node:crypto";
 import { app } from "electron";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
@@ -1497,6 +1500,8 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
   // `host.list` and `host.call` (#13493): any of this machine's own
   // assistants, from its start and whether or not a host exists yet. Read per
   // listing, never cached.
+  const isGlobalSession = (): boolean =>
+    sessionStore.sessionViewlessHelpMap.get(sessionId) === GLOBAL_ASSISTANT_ID;
   const hostCallOffered = (): boolean =>
     hostControl !== undefined &&
     sessionStore.sessionHelpIdMap.has(sessionId) &&
@@ -1657,8 +1662,13 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
       hostCall: hostCallOffered(),
       assistantCaller: assistantCallerNow() !== null,
     };
+    const globalSession = isGlobalSession();
     const tools = manifest
-      .filter((entry) => shouldExposeTool(entry, tier, listSurface))
+      .filter(
+        (entry) =>
+          shouldExposeTool(entry, tier, listSurface) &&
+          (!globalSession || GLOBAL_ASSISTANT_TOOL_IDS.has(entry.id))
+      )
       .map((entry) => {
         const outputSchema = buildToolOutputSchema(entry);
         const _meta =
@@ -1730,15 +1740,14 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     if (tier === null) {
       return buildToolError({ code: SESSION_GONE, message: SESSION_GONE_MESSAGE });
     }
-    // The global assistant (#14159) names no project: until shared targeting
-    // and standing exist, no tool may run for it, whichever handler answers —
-    // a main-side tool that reads a terminal by id would otherwise reach any
-    // project's. Listing stays open so it can see what is coming.
-    if (sessionStore.sessionViewlessHelpMap.get(sessionId) === GLOBAL_ASSISTANT_ID) {
+    // The global assistant (#14159) names no project, so it runs only its root
+    // tools here (#14161), whichever handler would answer: a main-side tool
+    // that reads a terminal by id would otherwise reach any project's. Every
+    // project is reached through `host.call`, admitted by its host.
+    if (isGlobalSession() && !GLOBAL_ASSISTANT_TOOL_IDS.has(actionId)) {
       return buildToolError({
         code: NO_FRONTEND_ATTACHED_CODE,
-        message:
-          "The global assistant has no project to act in yet, so Daintree tools are unavailable to it. Nothing was run.",
+        message: `The global assistant has no project of its own, so it reaches projects only through ${HOST_CALL_TOOL}. Nothing was run.`,
       });
     }
     // Snapshot the turn id once, at dispatch start, before any guard or await

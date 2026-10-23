@@ -30,6 +30,7 @@ const ended = vi.hoisted(
 const mcp = vi.hoisted(() => ({
   opened: [] as Array<{ tier: string; workspaceId: string; caller: Record<string, unknown> }>,
   retired: [] as Array<[string, string]>,
+  released: [] as Array<[string, string]>,
 }));
 
 vi.mock("electron", () => ({
@@ -39,13 +40,18 @@ vi.mock("electron", () => ({
     getAppPath: () => "/fake/appPath",
   },
 }));
+/** A lane key back into its project and slot; the global assistant's id holds a colon of its own. */
+const laneOf = vi.hoisted(() => (key: string): [string, string] => {
+  const at = key.lastIndexOf(":");
+  return [key.slice(0, at), key.slice(at + 1)];
+});
 vi.mock("../../../services/HelpSessionService.js", () => ({
   helpSessionService: {
     getRunningLaneSession: (projectId: string, slot: number) =>
       running.get(`${projectId}:${slot}`) ?? null,
     listRunningLanes: () =>
       [...running.keys()].map((key) => {
-        const [projectId, slot] = key.split(":");
+        const [projectId, slot] = laneOf(key);
         return {
           projectId: projectId!,
           slot: Number(slot),
@@ -56,14 +62,18 @@ vi.mock("../../../services/HelpSessionService.js", () => ({
     getSessionLane: (helpSessionId: string) => {
       for (const [key, run] of running) {
         if (run.sessionId !== helpSessionId) continue;
-        const [projectId, slot] = key.split(":");
+        const [projectId, slot] = laneOf(key);
         return { projectId: projectId!, slot: Number(slot) };
       }
       return null;
     },
-    getWebContentsIdForSessionId: (helpSessionId: string) =>
-      [...running.values()].find((run) => run.sessionId === helpSessionId)
-        ?.projectViewWebContentsId ?? null,
+    // No view minted a viewless session, so none reads as its own.
+    getWebContentsIdForSessionId: (helpSessionId: string) => {
+      const handle = [...running.values()].find(
+        (run) => run.sessionId === helpSessionId
+      )?.projectViewWebContentsId;
+      return handle === undefined || handle === 0 ? null : handle;
+    },
     setRunbooksHostState: (read: (() => unknown) | null) => {
       runbooksHostState.read = read;
     },
@@ -73,6 +83,9 @@ vi.mock("../../../services/HelpSessionService.js", () => ({
     },
     ensureAssistantControl: async () => {},
   },
+}));
+vi.mock("../../../services/globalAssistant.js", () => ({
+  peekGlobalAssistantService: () => null,
 }));
 vi.mock("../../../services/ProjectStore.js", () => ({
   projectStore: {
@@ -108,6 +121,8 @@ vi.mock("../../../services/McpServerService.js", () => ({
     },
     retireRelayPrincipal: (senderId: string, helpSessionId: string) =>
       mcp.retired.push([senderId, helpSessionId]),
+    releaseRelayAdoptions: (senderId: string, helpSessionId: string) =>
+      mcp.released.push([senderId, helpSessionId]),
   },
 }));
 vi.mock("../../../services/mcp-server/hostControlTools.js", async (importOriginal) => {
@@ -131,6 +146,7 @@ import { fileURLToPath } from "node:url";
 import type Database from "better-sqlite3";
 import { openDb } from "../../../services/persistence/db.js";
 import { getRemoteService } from "../../runtime.js";
+import { GLOBAL_ASSISTANT_ID } from "../../../../shared/config/globalAssistant.js";
 import type { HostCallRuntime, ObservedHost } from "../HostCallRuntime.js";
 import {
   installHostControl,
@@ -172,6 +188,7 @@ afterEach(() => {
   hostControl.runtime = null;
   mcp.opened.length = 0;
   mcp.retired.length = 0;
+  mcp.released.length = 0;
 });
 
 describe("observedRunbooksHostsState (#13411, #13496)", () => {
@@ -292,11 +309,101 @@ describe("installHostControl (#13493)", () => {
     end("relaunched");
     await vi.dynamicImportSettled();
     expect(mcp.retired).toEqual([]);
+    expect(mcp.released).toEqual([]);
     end("revoked");
     await vi.waitFor(() => expect(mcp.retired).toEqual([["local", "a"]]));
+    // What was handed to it goes with it, whether or not a call retired its principal (#14161).
+    await vi.waitFor(() => expect(mcp.released).toEqual([["local", "a"]]));
 
     off();
     expect(ended.size).toBe(0);
+  });
+
+  it("reaches every project as local for the global assistant, which no view shows (#14161)", async () => {
+    const off = installHostControl({
+      observeHosts: () => [],
+      hasHosts: () => false,
+      isHostControlEnabled: () => false,
+    });
+    running.set(`${GLOBAL_ASSISTANT_ID}:0`, {
+      sessionId: "global",
+      terminalId: "t-global",
+      projectViewWebContentsId: 0,
+    });
+    generations.set("t-global", 1);
+    const runtime = hostControl.runtime as HostCallRuntime;
+    expect(runtime.isCallReachable("global")).toBe(true);
+
+    const listed = await runtime.list("global");
+    if (!listed.ok) throw new Error("refused");
+    expect(listed.value.hosts[0]!.projects?.map((p) => p.projectId)).toEqual(["proj-1", "proj-2"]);
+
+    const called = await runtime.call(
+      "global",
+      { hostId: "local", projectId: "proj-1", tool: "terminal.list", args: {} },
+      { tier: "core" }
+    );
+    expect(called).toMatchObject({ ok: true, value: { outcome: "ok" } });
+    expect(mcp.opened).toEqual([
+      {
+        tier: "core",
+        workspaceId: "proj-1",
+        caller: expect.objectContaining({ senderId: "local", helpSessionId: "global" }),
+      },
+    ]);
+
+    // Nor anything that acts on what it neither launched nor was handed, nor
+    // any tool nobody placed for it.
+    for (const tool of [
+      "project.runCommand",
+      "project.runCheck",
+      "terminal.moveToWorktree",
+      "devPreview.restart",
+      "devPreview.reloadPreview",
+      "plugin.reloadProject",
+      "agentSessionHistory.resume",
+      "acme.unplacedTool",
+    ]) {
+      const refused = await runtime.call(
+        "global",
+        { hostId: "local", projectId: "proj-1", tool, args: { terminalId: "t-user" } },
+        { tier: "full" }
+      );
+      expect(refused).toMatchObject({
+        ok: true,
+        value: { outcome: "policy_rejected", callId: null },
+      });
+    }
+    expect(mcp.opened).toHaveLength(1);
+    // A project's own assistant keeps them: the rule is the global caller's, not the tool's.
+    runLocally("proj-2", 0, "proj-2-assistant");
+    const allowed = await runtime.call(
+      "proj-2-assistant",
+      { hostId: "local", projectId: "proj-1", tool: "project.runCheck", args: {} },
+      { tier: "full" }
+    );
+    expect(allowed).toMatchObject({ ok: true, value: { outcome: "ok" } });
+
+    off();
+  });
+
+  it("never treats a project lane with no view of its project as this machine's own", () => {
+    const off = installHostControl({
+      observeHosts: () => [],
+      hasHosts: () => false,
+      isHostControlEnabled: () => false,
+    });
+    running.set("proj-1:0", {
+      sessionId: "viewless",
+      terminalId: "t-v",
+      projectViewWebContentsId: 0,
+    });
+    generations.set("t-v", 1);
+    const runtime = hostControl.runtime as HostCallRuntime;
+    return runtime.list("viewless").then((listed) => {
+      expect(listed.ok).toBe(false);
+      off();
+    });
   });
 });
 

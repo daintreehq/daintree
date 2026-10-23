@@ -423,17 +423,32 @@ export const mcpServerNamespace = defineIpcNamespace({
       MCP_SERVER_METHOD_CHANNELS.adoptTerminal,
       async (
         ctx,
-        payload: {
-          terminalId: string;
-          orchestratorPaneId: string;
-        }
+        payload:
+          | { terminalId: string; orchestratorPaneId: string }
+          | { terminalId: string; recipient: "global-assistant" }
       ): Promise<TerminalAdoptionResult> => {
         checkRateLimit(CHANNELS.MCP_SERVER_ADOPT_TERMINAL, 20, 10_000);
         if (!payload || typeof payload !== "object") {
           throw new Error("Invalid payload");
         }
-        const { terminalId, orchestratorPaneId } = payload;
+        const { terminalId } = payload;
         assertPanelId(terminalId, "terminalId");
+        const callerWorkspace = ctx.projectId !== null ? { callerWorkspaceId: ctx.projectId } : {};
+        if ("recipient" in payload) {
+          if (payload.recipient !== "global-assistant") throw new Error("Invalid recipient");
+          const [svc, { peekGlobalAssistantService }] = await Promise.all([
+            getMcpServerService(),
+            import("../../services/globalAssistant.js"),
+          ]);
+          // The live run is read here, never from the renderer, with no await
+          // before it is recorded (#14161).
+          return svc.adoptTerminalForGlobalAssistant({
+            terminalId,
+            global: peekGlobalAssistantService()?.getRunningSession() ?? null,
+            ...callerWorkspace,
+          });
+        }
+        const { orchestratorPaneId } = payload;
         assertPanelId(orchestratorPaneId, "orchestratorPaneId");
         const [svc, paneConfig] = await Promise.all([
           getMcpServerService(),
@@ -447,7 +462,7 @@ export const mcpServerNamespace = defineIpcNamespace({
           orchestrator: paneConfig.getOrchestratorPane(orchestratorPaneId),
           // The view the user acted in must be the terminal's own project, so
           // one project's view cannot hand over another project's terminal.
-          ...(ctx.projectId !== null ? { callerWorkspaceId: ctx.projectId } : {}),
+          ...callerWorkspace,
         });
       },
       { withContext: true }

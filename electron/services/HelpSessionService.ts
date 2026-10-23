@@ -1752,7 +1752,9 @@ export class HelpSessionService {
             )
           )
         );
-        await this.writeRunbooksAddendum(sessionPath, runbooksEnabled(settings));
+        await this.writeRunbooksAddendum(sessionPath, runbooksEnabled(settings), {
+          global: input.global === true,
+        });
         await this.writeConfirmationsAddendum(
           sessionPath,
           settings.daintreeControl &&
@@ -3900,9 +3902,13 @@ export class HelpSessionService {
    * rather than removed: the session dir is reused across launches, and a
    * removed slot would put a later rule at the end of the file.
    */
-  private async writeRunbooksAddendum(sessionPath: string, enabled: boolean): Promise<void> {
+  private async writeRunbooksAddendum(
+    sessionPath: string,
+    enabled: boolean,
+    caller: { global: boolean }
+  ): Promise<void> {
     const markers = { start: RUNBOOKS_BLOCK_START, end: RUNBOOKS_BLOCK_END };
-    const body = enabled ? buildRunbooksAddendum() : "";
+    const body = enabled ? buildRunbooksAddendum(caller) : "";
     await Promise.all(
       ["CLAUDE.md", "AGENTS.md"].map((name) =>
         this.writeManagedBlock(path.join(sessionPath, name), markers, body)
