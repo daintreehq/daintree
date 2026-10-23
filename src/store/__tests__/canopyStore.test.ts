@@ -240,3 +240,48 @@ describe("the host shown", () => {
     expect((await import("../canopyStore")).useCanopyStore.getState().hostId).toBeNull();
   });
 });
+
+describe("role filter", () => {
+  afterEach(() => window.localStorage.removeItem("daintree-canopy-role"));
+  const reload = async () => {
+    vi.resetModules();
+    return (await import("../canopyStore")).useCanopyStore;
+  };
+
+  it("shows every role until one is chosen, and keeps the choice across launches", async () => {
+    const store = await reload();
+    expect(store.getState().roleFilter).toBe("all");
+    store.getState().setRoleFilter("assistants");
+    expect((await reload()).getState().roleFilter).toBe("assistants");
+  });
+
+  it("falls back to every role for a stored value it doesn't know", async () => {
+    window.localStorage.setItem("daintree-canopy-role", "everything");
+    expect((await reload()).getState().roleFilter).toBe("all");
+  });
+});
+
+describe("assistant handbacks seen", () => {
+  const KEY = "daintree-canopy-assistant-handbacks";
+  afterEach(() => window.localStorage.removeItem(KEY));
+  const reload = async () => {
+    vi.resetModules();
+    return (await import("../canopyStore")).useCanopyStore;
+  };
+
+  it("keeps the newest handback seen, never an older one", async () => {
+    const store = await reload();
+    store.getState().seeAssistantHandback("a", 2_000);
+    store.getState().seeAssistantHandback("a", 1_000);
+    expect(store.getState().assistantHandbacksSeen.a).toBe(2_000);
+    expect((await reload()).getState().assistantHandbacksSeen.a).toBe(2_000);
+  });
+
+  it("merges what a sibling view stored meanwhile, keeping the newest of each", async () => {
+    const store = await reload();
+    store.getState().seeAssistantHandback("a", 1_000);
+    window.localStorage.setItem(KEY, JSON.stringify({ a: 5_000, b: 3_000 }));
+    store.getState().seeAssistantHandback("c", 4_000);
+    expect(store.getState().assistantHandbacksSeen).toEqual({ a: 5_000, b: 3_000, c: 4_000 });
+  });
+});

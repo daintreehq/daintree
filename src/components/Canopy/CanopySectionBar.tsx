@@ -18,10 +18,13 @@ export function SectionBar({
   count,
   trailing,
   fold,
+  countNoun = "run",
 }: {
   id: string;
   label: string;
   count: number;
+  /** What the count counts, for the screen reader. */
+  countNoun?: string;
   trailing?: React.ReactNode;
   fold?: {
     expanded: boolean;
@@ -34,7 +37,7 @@ export function SectionBar({
   const heading = (
     <span id={id} className={cn(PALETTE_SECTION_LABEL_CLASS, "flex items-center gap-1.5")}>
       {label}
-      <CountBadge label={pluralize(count, "run")}>{count}</CountBadge>
+      <CountBadge label={pluralize(count, countNoun)}>{count}</CountBadge>
     </span>
   );
   if (!fold) {

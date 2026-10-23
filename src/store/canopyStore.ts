@@ -1,7 +1,13 @@
 import { create } from "zustand";
 import { getViewWorkspaceId } from "./viewWorkspaceId";
 import { LOCAL_HOST_ID, type HostId } from "@shared/types/remoteHosts";
+import { AGENT_DIRECTORY_ENTRIES_MAX } from "@shared/types/agentDirectory";
 import type { CanopyOrder } from "@/components/Canopy/canopyOrder";
+import {
+  isCanopyRoleFilter,
+  type AssistantHandbacksSeen,
+  type CanopyRoleFilter,
+} from "@/components/Canopy/canopyAssistants";
 import {
   CANOPY_URGENT_PRIORITY,
   type CanopyCard,
@@ -59,6 +65,12 @@ interface CanopyState {
   /** Every project's agents, or only the project this view shows; remembered across launches. */
   scope: CanopyScope;
   setScope: (scope: CanopyScope) => void;
+  /** Workers, Daintree Assistants or both; remembered across launches. */
+  roleFilter: CanopyRoleFilter;
+  setRoleFilter: (roleFilter: CanopyRoleFilter) => void;
+  /** Each assistant's newest handback the person has had in front of them. */
+  assistantHandbacksSeen: AssistantHandbacksSeen;
+  seeAssistantHandback: (assistantId: string, observedAt: number) => void;
 }
 
 export type CanopyScope = "all" | "project";
@@ -77,6 +89,10 @@ const ALL_HOSTS_STORAGE_KEY = "daintree-canopy-all-hosts";
 /** Read by every project view, so a view opened or reloaded since still opens on the order last shown. */
 const ORDER_STORAGE_KEY = "daintree-canopy-order";
 export const CANOPY_ACKNOWLEDGED_STORAGE_KEY = "daintree-canopy-acknowledged";
+export const CANOPY_ROLE_STORAGE_KEY = "daintree-canopy-role";
+const HANDBACKS_SEEN_STORAGE_KEY = "daintree-canopy-assistant-handbacks";
+/** Assistants whose seen handback is kept at most, the oldest seen dropped first: as many as one directory names. */
+const MAX_HANDBACKS_SEEN = AGENT_DIRECTORY_ENTRIES_MAX;
 
 function promptKey(card: Pick<CanopyCard, "spawnedAt" | "revision">): string {
   return `${card.spawnedAt}:${card.revision}`;
@@ -165,6 +181,66 @@ function loadScope(): CanopyScope {
   } catch {
     return "all";
   }
+}
+
+function loadRoleFilter(): CanopyRoleFilter {
+  try {
+    const stored = window.localStorage.getItem(CANOPY_ROLE_STORAGE_KEY);
+    return isCanopyRoleFilter(stored) ? stored : "all";
+  } catch {
+    return "all";
+  }
+}
+
+function saveRoleFilter(roleFilter: CanopyRoleFilter): void {
+  try {
+    window.localStorage.setItem(CANOPY_ROLE_STORAGE_KEY, roleFilter);
+  } catch {
+    // Best effort: the choice still holds for this session.
+  }
+}
+
+function readHandbacksSeen(): Record<string, number> {
+  try {
+    const parsed: unknown = JSON.parse(
+      window.localStorage.getItem(HANDBACKS_SEEN_STORAGE_KEY) ?? "null"
+    );
+    if (!parsed || typeof parsed !== "object") return {};
+    const clean: Record<string, number> = {};
+    for (const [id, at] of Object.entries(parsed)) {
+      if (typeof at === "number" && Number.isFinite(at)) clean[id] = at;
+    }
+    return clean;
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * Merged over what is stored and what this view holds, since every project
+ * view writes the key: the newest seen of each wins, and a failed write still
+ * leaves this view's copy right.
+ */
+function saveHandbackSeen(
+  held: AssistantHandbacksSeen,
+  assistantId: string,
+  observedAt: number
+): Record<string, number> {
+  const next: Record<string, number> = { ...held };
+  for (const [id, at] of Object.entries(readHandbacksSeen())) {
+    next[id] = Math.max(next[id] ?? -Infinity, at);
+  }
+  const newest = Math.max(next[assistantId] ?? -Infinity, observedAt);
+  delete next[assistantId];
+  next[assistantId] = newest;
+  const ids = Object.keys(next);
+  for (const id of ids.slice(0, Math.max(0, ids.length - MAX_HANDBACKS_SEEN))) delete next[id];
+  try {
+    window.localStorage.setItem(HANDBACKS_SEEN_STORAGE_KEY, JSON.stringify(next));
+  } catch {
+    // Best effort: this view still keeps it for the session.
+  }
+  return next;
 }
 
 /** Project orders kept at most, the least recently saved dropped first. */
@@ -335,6 +411,24 @@ export const useCanopyStore = create<CanopyState>((set) => ({
     saveScope(scope);
     set({ scope });
   },
+  roleFilter: loadRoleFilter(),
+  setRoleFilter: (roleFilter) => {
+    saveRoleFilter(roleFilter);
+    set({ roleFilter });
+  },
+  assistantHandbacksSeen: readHandbacksSeen(),
+  seeAssistantHandback: (assistantId, observedAt) =>
+    set((state) =>
+      (state.assistantHandbacksSeen[assistantId] ?? -Infinity) >= observedAt
+        ? state
+        : {
+            assistantHandbacksSeen: saveHandbackSeen(
+              state.assistantHandbacksSeen,
+              assistantId,
+              observedAt
+            ),
+          }
+    ),
   // Every opening starts on the window's own host, unless the user chose All hosts.
   open: () =>
     set((state) =>
@@ -368,6 +462,10 @@ export const useCanopyStore = create<CanopyState>((set) => ({
 // A sibling project view opened the panel: its badge cleared, so this one does too.
 if (typeof window !== "undefined") {
   window.addEventListener("storage", (event) => {
+    if (event.key === HANDBACKS_SEEN_STORAGE_KEY) {
+      useCanopyStore.setState({ assistantHandbacksSeen: readHandbacksSeen() });
+      return;
+    }
     if (event.key !== CANOPY_ACKNOWLEDGED_STORAGE_KEY) return;
     useCanopyStore.setState({ acknowledged: readAcknowledged() });
   });

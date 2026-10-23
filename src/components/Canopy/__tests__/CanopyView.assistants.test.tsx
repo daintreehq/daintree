@@ -1,0 +1,360 @@
+// @vitest-environment jsdom
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { act, fireEvent, render as rtlRender } from "@testing-library/react";
+import type { ReactElement } from "react";
+import { TooltipProvider } from "@/components/ui/tooltip";
+import type { FleetSnapshot } from "@shared/types/ipc/fleet";
+import type { CanopySnapshot } from "@shared/types/ipc/canopy";
+import type { AgentDirectory, AgentDirectoryLiveEntry } from "@shared/types/agentDirectory";
+
+const render = (ui: ReactElement) => rtlRender(ui, { wrapper: TooltipProvider });
+
+class ResizeObserverStub {
+  observe() {}
+  unobserve() {}
+  disconnect() {}
+}
+const originalScrollIntoView = Element.prototype.scrollIntoView;
+beforeAll(() => {
+  if (typeof globalThis.ResizeObserver === "undefined") {
+    globalThis.ResizeObserver = ResizeObserverStub as typeof ResizeObserver;
+  }
+  Object.defineProperty(Element.prototype, "scrollIntoView", {
+    value: vi.fn(),
+    configurable: true,
+  });
+});
+afterAll(() => {
+  Object.defineProperty(Element.prototype, "scrollIntoView", {
+    value: originalScrollIntoView,
+    configurable: true,
+  });
+});
+
+const dispatchMock = vi.hoisted(() => vi.fn(async () => ({ ok: true })));
+vi.mock("@/services/ActionService", () => ({ actionService: { dispatch: dispatchMock } }));
+const terminalApis = vi.hoisted(() => [] as Array<{ runId: string; api: unknown }>);
+vi.mock("../CanopyTerminal", () => ({
+  CanopyTerminal: ({ runId, api }: { runId: string; api?: unknown }) => {
+    terminalApis.push({ runId, api });
+    return <div data-canopy-terminal="" data-run={runId} />;
+  },
+}));
+vi.mock("@/components/Terminal/HybridInputBar", () => ({ HybridInputBar: () => null }));
+vi.mock("@/lib/notify", () => ({ notify: vi.fn() }));
+const openInAssistantMock = vi.hoisted(() =>
+  vi.fn(async (): Promise<{ ok: true } | { ok: false; reason: "ended" }> => ({ ok: true }))
+);
+const assistantApiMock = vi.hoisted(() =>
+  vi.fn((subject: unknown) => ({ assistantSubject: subject }))
+);
+vi.mock("@/services/assistantSubject", () => ({
+  openInAssistant: openInAssistantMock,
+  assistantTerminalApi: assistantApiMock,
+}));
+
+import { CanopyView } from "../CanopyView";
+import { useCanopyStore } from "@/store/canopyStore";
+import { useFleetSnapshotStore } from "@/store/fleetSnapshotStore";
+import { useProjectStore } from "@/store/projectStore";
+import { __resetCanopySeenForTests } from "@/lib/canopySeen";
+import { __resetCanopyPlaceForTests } from "../CanopyPlace";
+
+const NOW = Date.now();
+
+const canopySnapshot: CanopySnapshot = {
+  mode: "on",
+  activated: true,
+  tier: "priority",
+  dispositions: [],
+  seen: [],
+  reads: [],
+  scope: null,
+  active: true,
+  busy: false,
+  refreshedAt: NOW,
+  cards: [],
+  lastError: null,
+  failedRuns: [],
+  glances: [],
+};
+
+function run(runId: string, overrides: Partial<FleetSnapshot["runs"][number]> = {}) {
+  return {
+    runId,
+    workspaceId: "p1",
+    spawnedAt: NOW - 3_600_000,
+    cwd: "/repo",
+    agentId: "claude" as const,
+    ...overrides,
+  };
+}
+
+function assistant(
+  lane: number,
+  overrides: Partial<AgentDirectoryLiveEntry> = {}
+): AgentDirectoryLiveEntry {
+  return {
+    state: "live",
+    role: "assistant",
+    subject: {
+      hostId: "local",
+      scope: { kind: "project", projectId: "p1" },
+      terminalId: `help-${lane}`,
+      incarnation: 3,
+      lane,
+    },
+    agentId: "claude",
+    agentState: "waiting",
+    waitingReason: "prompt",
+    since: NOW - 10_000,
+    label: null,
+    attached: true,
+    handback: null,
+    ...overrides,
+  };
+}
+
+let directory: AgentDirectory;
+
+function installElectron() {
+  const canopy = {
+    onSnapshotUpdated: vi.fn(() => () => {}),
+    setActive: vi.fn(async () => canopySnapshot),
+    refresh: vi.fn(async () => {}),
+    setShown: vi.fn(async (_ids: string[]) => {}),
+    setScope: vi.fn(async () => {}),
+    markSeen: vi.fn(async (_runId: string, _looking?: boolean) => {}),
+    setRead: vi.fn(async () => null),
+    archive: vi.fn(async () => null),
+    unarchive: vi.fn(async () => {}),
+    trash: vi.fn(async () => null),
+    rename: vi.fn(async () => {}),
+    reread: vi.fn(async () => {}),
+    runBranch: vi.fn(async () => "main"),
+    searchScreens: vi.fn(async (_targets: Array<{ runId: string }>) => [] as string[]),
+    captureBackdrop: vi.fn(async () => null),
+    watchTerminal: vi.fn(),
+    watchAssistantTerminal: vi.fn(),
+    readAgentDirectory: vi.fn(async () => directory),
+  };
+  Object.defineProperty(window, "electron", {
+    value: { canopy, terminal: { restore: vi.fn() }, system: { openExternal: vi.fn() } },
+    configurable: true,
+    writable: true,
+  });
+  return canopy;
+}
+
+async function settle() {
+  await act(async () => {
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+  });
+}
+
+function workerIds() {
+  return [...document.querySelectorAll<HTMLElement>("[data-canopy-card]")].map((card) =>
+    card.id.replace(/^canopy-card-/, "")
+  );
+}
+
+function assistantRows() {
+  return [...document.querySelectorAll<HTMLElement>("[data-canopy-assistant]")];
+}
+
+function roleSegment(role: "all" | "workers" | "assistants") {
+  return document.querySelector<HTMLElement>(`[data-testid="canopy-role-filter-${role}"]`)!;
+}
+
+beforeEach(() => {
+  __resetCanopySeenForTests();
+  __resetCanopyPlaceForTests();
+  terminalApis.length = 0;
+  vi.spyOn(document, "hasFocus").mockReturnValue(true);
+  directory = {
+    coverage: "ok",
+    observedAt: NOW,
+    complete: true,
+    omitted: 0,
+    entries: [assistant(0), assistant(1)],
+  };
+  useProjectStore.setState({
+    projects: [{ id: "p1", path: "/repo", name: "app", lastOpened: NOW }],
+  });
+  useFleetSnapshotStore.setState({
+    snapshot: {
+      runs: [
+        run("waiting", { agentState: "waiting", waitingReason: "approval", since: NOW - 60_000 }),
+        run("working", { agentState: "working", since: NOW - 30_000 }),
+      ],
+      changedAt: NOW,
+      degraded: false,
+      lastSuccessfulAt: NOW,
+    },
+  });
+  useCanopyStore.setState({
+    isOpen: true,
+    snapshot: canopySnapshot,
+    mode: "on",
+    roleFilter: "all",
+    assistantHandbacksSeen: {},
+  });
+  installElectron();
+});
+
+afterEach(() => {
+  useCanopyStore.setState({
+    isOpen: false,
+    snapshot: null,
+    mode: "unset",
+    scope: "all",
+    orders: {},
+    unreadOnly: false,
+    roleFilter: "all",
+  });
+  window.localStorage.removeItem("daintree-canopy-order");
+  window.localStorage.removeItem("daintree-canopy-role");
+  window.localStorage.removeItem("daintree-canopy-assistant-handbacks");
+  vi.clearAllMocks();
+  vi.restoreAllMocks();
+});
+
+describe("CanopyView role filter", () => {
+  it("lists workers and each assistant lane together, workers in their own order", async () => {
+    render(<CanopyView />);
+    await settle();
+    const workersAlone = workerIds();
+    expect(workersAlone).toEqual(["waiting", "working"]);
+    const names = assistantRows().map((row) => row.getAttribute("aria-label"));
+    expect(names).toEqual([
+      "Daintree Assistant, app · Session 1",
+      "Daintree Assistant, app · Session 2",
+    ]);
+  });
+
+  it("shows only workers, then only assistants, keeping the choice for the next opening", async () => {
+    render(<CanopyView />);
+    await settle();
+    await act(async () => fireEvent.click(roleSegment("workers")));
+    expect(assistantRows()).toHaveLength(0);
+    expect(workerIds()).toEqual(["waiting", "working"]);
+
+    await act(async () => fireEvent.click(roleSegment("assistants")));
+    expect(workerIds()).toEqual([]);
+    expect(assistantRows()).toHaveLength(2);
+    expect(window.localStorage.getItem("daintree-canopy-role")).toBe("assistants");
+    // The pane shows the first assistant through its own viewer, never a worker's.
+    expect(document.querySelector("[data-testid=canopy-assistant-pane]")).not.toBeNull();
+    expect(terminalApis.at(-1)?.runId).toBe("help-0");
+    expect(assistantApiMock).toHaveBeenLastCalledWith(
+      (directory.entries[0] as AgentDirectoryLiveEntry).subject
+    );
+  });
+
+  it("keeps assistants at their prompt quiet, and an observed ask on one lane in view", async () => {
+    directory.entries = [assistant(0), assistant(1, { waitingReason: "approval" })];
+    render(<CanopyView />);
+    await settle();
+    const rows = assistantRows();
+    // The ask leads; the resting lane stays without one.
+    expect(rows.map((row) => row.getAttribute("data-ask"))).toEqual(["approval", null]);
+    // Hidden by the filter, the ask still counts on the Assistants choice.
+    await act(async () => fireEvent.click(roleSegment("workers")));
+    expect(roleSegment("assistants").textContent).toContain("1");
+    expect(roleSegment("assistants").getAttribute("aria-label")).toBe(
+      "Assistants, 1 asking for you"
+    );
+  });
+
+  it("never hands an assistant to the reader: not shown, searched or seen as a worker", async () => {
+    const canopy = installElectron();
+    render(<CanopyView />);
+    await settle();
+    await act(async () => fireEvent.click(roleSegment("assistants")));
+    await act(async () => {
+      fireEvent.change(
+        document.querySelector<HTMLInputElement>(
+          "[data-testid=canopy-dialog] input[role=combobox]"
+        )!,
+        { target: { value: "session" } }
+      );
+    });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    });
+    const told = [
+      ...canopy.setShown.mock.calls.flatMap((call) => call[0]),
+      ...canopy.searchScreens.mock.calls.flatMap((call) => call[0].map((target) => target.runId)),
+      ...canopy.markSeen.mock.calls.map((call) => call[0]),
+    ];
+    expect(told.some((id) => String(id).startsWith("help-"))).toBe(false);
+    expect(canopy.watchTerminal).not.toHaveBeenCalled();
+    expect(assistantRows()).toHaveLength(2);
+  });
+
+  it("walks from the last worker down into the assistants with the keyboard", async () => {
+    render(<CanopyView />);
+    await settle();
+    const search = document.querySelector<HTMLInputElement>(
+      "[data-testid=canopy-dialog] input[role=combobox]"
+    )!;
+    const [first, last] = [
+      document.getElementById("canopy-card-waiting")!,
+      document.getElementById("canopy-card-working")!,
+    ];
+    fireEvent.keyDown(search, { key: "Tab" });
+    expect(document.activeElement).toBe(first);
+    fireEvent.keyDown(first, { key: "ArrowDown" });
+    expect(document.activeElement).toBe(last);
+    fireEvent.keyDown(last, { key: "ArrowDown" });
+    expect(document.activeElement).toBe(assistantRows()[0]);
+    expect(assistantRows()[0]!.getAttribute("aria-selected")).toBe("true");
+    // The pane now shows that assistant, not the worker left behind.
+    expect(document.querySelector("[data-testid=canopy-assistant-pane]")).not.toBeNull();
+    fireEvent.keyDown(assistantRows()[0]!, { key: "ArrowDown" });
+    expect(document.activeElement).toBe(assistantRows()[1]);
+    fireEvent.keyDown(assistantRows()[1]!, { key: "ArrowUp" });
+    fireEvent.keyDown(assistantRows()[0]!, { key: "ArrowUp" });
+    expect(document.activeElement).toBe(last);
+    expect(document.querySelector("[data-testid=canopy-assistant-pane]")).toBeNull();
+  });
+
+  it("opens the exact lane on Enter, and offers no worker action on an assistant row", async () => {
+    render(<CanopyView />);
+    await settle();
+    const row = assistantRows()[1]!;
+    expect(row.querySelector("[data-canopy-row-archive]")).toBeNull();
+    await act(async () => {
+      row.focus();
+      fireEvent.keyDown(row, { key: "Enter" });
+    });
+    expect(openInAssistantMock).toHaveBeenCalledWith(
+      (directory.entries[1] as AgentDirectoryLiveEntry).subject
+    );
+    expect(dispatchMock).not.toHaveBeenCalled();
+    expect(useCanopyStore.getState().isOpen).toBe(false);
+  });
+
+  it("says why a lane couldn't be opened, and starts nothing in its place", async () => {
+    openInAssistantMock.mockResolvedValueOnce({ ok: false, reason: "ended" });
+    useCanopyStore.setState({ roleFilter: "assistants" });
+    render(<CanopyView />);
+    await settle();
+    const open = [...document.querySelectorAll("button")].find(
+      (button) => button.textContent === "Open in Assistant"
+    )!;
+    await act(async () => fireEvent.click(open));
+    expect(document.body.textContent).toContain("Couldn't open this assistant");
+    expect(useCanopyStore.getState().isOpen).toBe(true);
+    expect(dispatchMock).not.toHaveBeenCalled();
+  });
+
+  it("says when assistants couldn't all be listed, rather than that none run", async () => {
+    directory = { coverage: "stale", observedAt: NOW, complete: false, omitted: 0, entries: [] };
+    useCanopyStore.setState({ roleFilter: "assistants" });
+    render(<CanopyView />);
+    await settle();
+    expect(document.body.textContent).toContain("Daintree couldn't list every assistant just now.");
+    expect(document.body.textContent).not.toContain("No assistant is running");
+  });
+});

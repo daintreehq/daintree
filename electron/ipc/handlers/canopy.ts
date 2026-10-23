@@ -64,7 +64,10 @@ import {
 } from "./canopyTerminalWatch.js";
 import { isImageAttachmentPath } from "../../../shared/utils/imageAttachmentInput.js";
 import { AppError } from "../../utils/errorTypes.js";
-import type { AgentDirectorySubject } from "../../../shared/types/agentDirectory.js";
+import type {
+  AgentDirectory,
+  AgentDirectorySubject,
+} from "../../../shared/types/agentDirectory.js";
 import { resolveLiveAssistant } from "../../services/assistants/liveAssistantSubject.js";
 import { LOCAL_HOST_ID } from "../../../shared/types/remoteHosts.js";
 import { answerRunByLabel, isAnswerLabel } from "../../services/terminalAnswer.js";
@@ -1123,6 +1126,32 @@ export const canopyNamespace = defineIpcNamespace({
         return scope.kind === "project" && lane !== undefined
           ? { scope: "project", hostId, projectId: scope.projectId, lane, terminalId, incarnation }
           : { scope: "global", hostId, terminalId, incarnation };
+      },
+      { withContext: true }
+    ),
+
+    /**
+     * This machine's workers and assistants, for Canopy's role filter and the
+     * assistant picker. Passive like the directory itself, and outside Canopy's
+     * gate: listing an assistant reads no screen and sends nothing anywhere.
+     */
+    readAgentDirectory: op(
+      CANOPY_METHOD_CHANNELS.readAgentDirectory,
+      async (ctx, options?: { projectId?: string }): Promise<AgentDirectory> => {
+        checkRateLimit(CANOPY_METHOD_CHANNELS.readAgentDirectory, 60, 10_000);
+        assertViewsThisMachine(ctx);
+        if (options !== undefined && (typeof options !== "object" || options === null)) {
+          throw new AppError({ code: "VALIDATION", message: "Invalid directory options" });
+        }
+        const projectId = options?.projectId;
+        if (
+          projectId !== undefined &&
+          (typeof projectId !== "string" || projectId.length === 0 || projectId.length > 256)
+        ) {
+          throw new AppError({ code: "VALIDATION", message: "Invalid project id" });
+        }
+        const { getLocalAgentDirectory } = await import("../../services/assistants/localAgentDirectory.js");
+        return getLocalAgentDirectory().read(projectId === undefined ? {} : { projectId });
       },
       { withContext: true }
     ),

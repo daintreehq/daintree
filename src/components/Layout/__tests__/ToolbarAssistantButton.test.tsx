@@ -606,7 +606,7 @@ describe("ToolbarAssistantButton — new session on a chosen agent", () => {
       within(menu)
         .getAllByRole("menuitem")
         .map((item) => item.textContent)
-    ).toEqual(["New session with Claude", "New session with Codex"]);
+    ).toEqual(["Find an assistant…", "New session with Claude", "New session with Codex"]);
     await act(async () => {
       fireEvent.click(within(menu).getByRole("menuitem", { name: "New session with Codex" }));
     });
@@ -620,12 +620,44 @@ describe("ToolbarAssistantButton — new session on a chosen agent", () => {
     expect(useHelpPanelStore.getState().isOpen).toBe(false);
   });
 
-  it("opens no menu with only one agent to choose from", () => {
+  it("offers only finding an assistant with one agent to choose from", async () => {
     const { container } = render(<ToolbarAssistantButton />);
 
     fireEvent.contextMenu(container.querySelector("button")!);
+    const menu = await screen.findByRole("menu");
 
-    expect(screen.queryByRole("menu")).toBeNull();
+    expect(
+      within(menu)
+        .getAllByRole("menuitem")
+        .map((item) => item.textContent)
+    ).toEqual(["Find an assistant…"]);
+  });
+
+  it("finds an assistant from the menu without starting one or opening the panel", async () => {
+    const readAgentDirectory = vi.fn(async () => ({
+      coverage: "ok" as const,
+      observedAt: 1,
+      complete: true,
+      omitted: 0,
+      entries: [],
+    }));
+    Object.defineProperty(window, "electron", {
+      value: { canopy: { readAgentDirectory } },
+      configurable: true,
+      writable: true,
+    });
+    const { container } = render(<ToolbarAssistantButton />);
+
+    fireEvent.contextMenu(container.querySelector("button")!);
+    const menu = await screen.findByRole("menu");
+    await act(async () => {
+      fireEvent.click(within(menu).getByRole("menuitem", { name: "Find an assistant…" }));
+    });
+
+    expect(await screen.findByTestId("assistant-picker")).toBeTruthy();
+    expect(readAgentDirectory).toHaveBeenCalled();
+    expect(dispatch).not.toHaveBeenCalled();
+    expect(useHelpPanelStore.getState().isOpen).toBe(false);
   });
 
   it("parks the choices once every tab holds a session, and not while one is empty", async () => {
@@ -640,7 +672,7 @@ describe("ToolbarAssistantButton — new session on a chosen agent", () => {
       within(menu)
         .getAllByRole("menuitem")
         .map((item) => item.getAttribute("aria-disabled"))
-    ).toEqual(["true", "true"]);
+    ).toEqual([null, "true", "true"]);
     unmount();
 
     // An empty tab at the ceiling is still somewhere to start one.
@@ -652,7 +684,7 @@ describe("ToolbarAssistantButton — new session on a chosen agent", () => {
       within(menu)
         .getAllByRole("menuitem")
         .map((item) => item.getAttribute("aria-disabled"))
-    ).toEqual([null, null]);
+    ).toEqual([null, null, null]);
   });
 
   it("keeps the plain click a toggle and nothing more, whatever the choice", () => {
