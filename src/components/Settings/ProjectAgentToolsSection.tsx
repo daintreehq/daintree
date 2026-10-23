@@ -15,8 +15,8 @@ import { SettingsSwitch } from "@/components/Settings/SettingsSwitch";
 import { TriangleAlert } from "lucide-react";
 import { pluginAgentMcpClient } from "@/clients/pluginAgentMcpClient";
 import { useProjectPluginStore } from "@/store/projectPluginStore";
-import { useShallow } from "zustand/react/shallow";
-import { usePanelStore } from "@/store/panelStore";
+import { getPanelStoreSnapshot } from "@/store/storeAccessors";
+import { actionService } from "@/services/ActionService";
 import { logError } from "@/utils/logger";
 import type {
   AgentMcpAccess,
@@ -73,18 +73,13 @@ function RelaunchNeededGroup({
   sessions: readonly AgentToolsRelaunchSession[];
   onRestarted: () => void;
 }) {
-  const titles = usePanelStore(
-    useShallow((s) =>
-      sessions.map((session) => {
-        const panel = s.panelsById[session.terminalId];
-        return panel === undefined ? null : panel.title || "Agent";
-      })
-    )
-  );
-  const restartTerminal = usePanelStore((s) => s.restartTerminal);
-  const shown = sessions.flatMap((session, index) => {
-    const title = titles[index];
-    return title === null || title === undefined ? [] : [{ session, title }];
+  // Read through the accessor, not the panel store: settings stay off the
+  // store's import graph. Read as the snapshot arrives, which is when the
+  // list changes.
+  const panelsById = getPanelStoreSnapshot()?.panelsById ?? {};
+  const shown = sessions.flatMap((session) => {
+    const panel = panelsById[session.terminalId];
+    return panel === undefined ? [] : [{ session, title: panel.title || "Agent" }];
   });
   if (shown.length === 0) return null;
   return (
@@ -101,7 +96,16 @@ function RelaunchNeededGroup({
             <Button
               variant="outline"
               size="sm"
-              onClick={() => void restartTerminal(session.terminalId).then(onRestarted)}
+              // The action's own confirm guards interrupting a running agent.
+              onClick={() =>
+                void actionService
+                  .dispatch(
+                    "terminal.restart",
+                    { terminalId: session.terminalId },
+                    { source: "user" }
+                  )
+                  .then(onRestarted)
+              }
             >
               Restart
             </Button>

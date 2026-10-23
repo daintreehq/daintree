@@ -3,8 +3,17 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { ProjectAgentToolsSection } from "../ProjectAgentToolsSection";
 import { __resetProjectPluginStoreForTesting } from "@/store/projectPluginStore";
-import { usePanelStore } from "@/store/panelStore";
+import { setPanelStoreAccessor } from "@/store/storeAccessors";
 import type { PtyPanelData } from "@shared/types/panel";
+
+const { dispatch } = vi.hoisted(() => ({
+  dispatch: vi.fn<(...args: unknown[]) => Promise<{ ok: true }>>(() =>
+    Promise.resolve({ ok: true })
+  ),
+}));
+vi.mock("@/services/ActionService", () => ({
+  actionService: { dispatch: (...args: unknown[]) => dispatch(...args) },
+}));
 import type {
   ProjectAgentToolPlugin,
   ProjectAgentToolsSnapshot,
@@ -148,8 +157,6 @@ function describedText(control: HTMLElement): string {
 
 describe("ProjectAgentToolsSection", () => {
   it("lists running agents whose tools changed, each with a restart, and only those this window shows", async () => {
-    const restartTerminal = vi.fn(() => Promise.resolve());
-    const original = usePanelStore.getState();
     const running: PtyPanelData = {
       id: "term-1",
       kind: "terminal",
@@ -159,10 +166,11 @@ describe("ProjectAgentToolsSection", () => {
       cols: 80,
       rows: 24,
     };
-    usePanelStore.setState({
-      panelsById: { ...original.panelsById, "term-1": running },
-      restartTerminal,
-    });
+    setPanelStoreAccessor(() => ({
+      panelsById: { "term-1": running },
+      panelIds: ["term-1"],
+      tabGroups: new Map(),
+    }));
     try {
       agentMcpApi.listProjectPlugins.mockResolvedValue(
         snapshot([plugin({ access: "read-write" })], true, [
@@ -179,9 +187,13 @@ describe("ProjectAgentToolsSection", () => {
       expect(restarts).toHaveLength(1);
 
       fireEvent.click(restarts[0]!);
-      expect(restartTerminal).toHaveBeenCalledWith("term-1");
+      expect(dispatch).toHaveBeenCalledWith(
+        "terminal.restart",
+        { terminalId: "term-1" },
+        { source: "user" }
+      );
     } finally {
-      usePanelStore.setState(original, true);
+      setPanelStoreAccessor(() => ({ panelsById: {}, panelIds: [], tabGroups: new Map() }));
     }
   });
 
