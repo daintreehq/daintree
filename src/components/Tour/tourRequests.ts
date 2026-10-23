@@ -33,7 +33,19 @@ let nextRequestId = 0;
 // Bumped by every request, so one still waiting for its tour to register can
 // tell a newer one has come since.
 let requestGeneration = 0;
+// Every tour opened in this view, however it was asked for: a request that
+// waited must not open over one the person chose meanwhile.
+let opens = 0;
+let countingOpens = false;
 let hosts = 0;
+
+function countOpens(): void {
+  if (countingOpens) return;
+  countingOpens = true;
+  window.addEventListener(OPEN_TOUR_EVENT, () => {
+    opens++;
+  });
+}
 const pending = new Map<number, (result: TourStartResult) => void>();
 
 /** Called by a mounted tour host; returns its unregister. */
@@ -98,12 +110,14 @@ export async function requestTour(
   options: { registrationTimeoutMs?: number } = {}
 ): Promise<TourStartResult> {
   const fallbackId = candidates[0] ?? "";
+  countOpens();
   const generation = ++requestGeneration;
+  const opensBefore = opens;
   const tourId = await waitForRegistration(
     candidates,
     options.registrationTimeoutMs ?? TOUR_REGISTRATION_TIMEOUT_MS
   );
-  if (tourId === null || generation !== requestGeneration) {
+  if (tourId === null || generation !== requestGeneration || opens !== opensBefore) {
     return { status: "superseded", tourId: tourId ?? fallbackId };
   }
   if (tourId === undefined) {

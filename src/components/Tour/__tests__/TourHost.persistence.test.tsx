@@ -594,6 +594,20 @@ describe("TourHost", () => {
       expect(dialogProps.current!.tour.id).toBe(DAINTREE_TOUR_ID);
     });
 
+    it("supersedes a waiting request when its tour registers in the same turn another opens", async () => {
+      render(<TourHost />);
+      let waiting: TourStartResult | undefined;
+      act(() => {
+        void requestTour([ACME_TOUR_ID], { registrationTimeoutMs: 1_000 }).then(
+          (r) => (waiting = r)
+        );
+        registerAcme();
+        openTour();
+      });
+      await waitFor(() => expect(waiting).toEqual({ status: "superseded", tourId: ACME_TOUR_ID }));
+      await waitFor(() => expect(dialogProps.current?.tour.id).toBe(DAINTREE_TOUR_ID));
+    });
+
     it("records an open run as withdrawn when its view's host unmounts", async () => {
       registerAcme();
       const { unmount } = render(<TourHost />);
