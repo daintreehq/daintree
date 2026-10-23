@@ -573,6 +573,22 @@ describe("askHostApprovalInWindow (#13501)", () => {
     );
   });
 
+  it("names this machine's own assistant working in another of its projects, not a host (#14024)", async () => {
+    m.dispatchActionForHost.mockResolvedValue({
+      result: { ok: true, result: null },
+      confirmationDecision: "rejected",
+    });
+
+    await expect(askHostApprovalInWindow(7, { ...QUESTION, hostId: "local" })).resolves.toBe(
+      "rejected"
+    );
+
+    expect(m.dispatchActionForHost.mock.calls.at(-1)?.at(-1)).toEqual({
+      userAgent: "Your assistant, in another project here",
+      token4LastChars: "",
+    });
+  });
+
   it("reads a window that couldn't ask as no decision at all", async () => {
     m.dispatchActionForHost.mockResolvedValueOnce({
       result: { ok: false, error: { code: "NOT_FOUND", message: "not in this view" } },

@@ -1,18 +1,20 @@
 import type Database from "better-sqlite3";
 import type { HostProjectSummary } from "../../../shared/types/ipc/remoteHosts.js";
-import type { HostId } from "../../../shared/types/remoteHosts.js";
+import { LOCAL_HOST_ID, type HostId } from "../../../shared/types/remoteHosts.js";
 import { isRemoteEndpointHandle } from "../../ipc/endpoint.js";
 import { helpSessionService } from "../../services/HelpSessionService.js";
 import type { RunbooksHostsState } from "../../services/helpSessionRunbooks.js";
 import { setHostControlRuntime } from "../../services/mcp-server/hostControlTools.js";
 import type { LaneWake } from "../../services/mcp-server/terminalNotify.js";
 import { getSharedDb, getSharedSqlite } from "../../services/persistence/db.js";
+import { machineDisplayName } from "../../utils/machineName.js";
 import { getPtyClient } from "../../window/serviceRefs.js";
 import { getProjectForWebContents } from "../../window/webContentsRegistry.js";
 import type { LinkSession } from "../link/session.js";
 import { getRemoteService, registerRemoteService } from "../runtime.js";
 import { HostCallRuntime, type ObservedHost, type OpenRun } from "./HostCallRuntime.js";
 import { HostControlLinkClient } from "./HostControlLinkClient.js";
+import { createLocalMcpRelay } from "./localMcpRelay.js";
 import { forgetRetiredSends, readRetiredSends } from "./retiredSends.js";
 import { AssistantSenderCredentials } from "./senderCredentials.js";
 import { createLogger } from "../../utils/logger.js";
@@ -86,6 +88,8 @@ function localRunOf(helpSessionId: string): OpenRun | null {
   };
 }
 
+let localMachineName: string | undefined;
+
 /** Queues a line on a run's own notice line, the one writer that types into its prompt. */
 function queueOnNoticeLine(
   lane: { helpSessionId: string; terminalId: string; projectId: string },
@@ -120,6 +124,45 @@ export interface HostControlInstallDeps {
  * search is told of this machine's hosts; the returned teardown removes them.
  */
 export function installHostControl(deps: HostControlInstallDeps): () => void {
+  const machineName = (): string => (localMachineName ??= machineDisplayName());
+  // This machine's other projects, reached under its own id (#14024): admitted
+  // as a host admits another machine's calls, and answered back into the
+  // runtime as a host's notices and questions are.
+  const local = createLocalMcpRelay({
+    machineName,
+    hasProject: async (projectId) => {
+      const { projectStore } = await import("../../services/ProjectStore.js");
+      return projectStore.getProjectById(projectId) !== null;
+    },
+    openSession: async (spec) => {
+      const { mcpServerService } = await import("../../services/McpServerService.js");
+      await helpSessionService.ensureAssistantControl();
+      return mcpServerService.openRelaySession({
+        tier: spec.tier,
+        workspaceId: spec.projectId,
+        caller: {
+          linkSessionId: spec.linkSessionId,
+          senderId: spec.senderId,
+          helpSessionId: spec.helpSessionId,
+          shellName: spec.shellName,
+          local: true,
+          deliverNotices: spec.deliverNotices,
+          requestApproval: spec.requestApproval,
+        },
+      });
+    },
+    retirePrincipal: (senderId, helpSessionId) => {
+      void import("../../services/McpServerService.js")
+        .then(({ mcpServerService }) =>
+          mcpServerService.retireRelayPrincipal(senderId, helpSessionId)
+        )
+        .catch((error: unknown) => {
+          logger.warn("Couldn't retire a local relay principal", { error });
+        });
+    },
+    receiveNotices: (payload) => runtime.receiveNotices(LOCAL_HOST_ID, payload),
+    receiveApproval: (payload) => runtime.receiveApproval(LOCAL_HOST_ID, payload),
+  });
   const runtime = new HostCallRuntime({
     getSessionLane: (helpSessionId) => helpSessionService.getSessionLane(helpSessionId),
     callerRun: localRunOf,
@@ -144,6 +187,19 @@ export function installHostControl(deps: HostControlInstallDeps): () => void {
     },
     // A host's notice rides its run's own notice line (#13500).
     queueNotice: queueOnNoticeLine,
+    local: {
+      name: machineName,
+      projects: async () => {
+        const { projectStore } = await import("../../services/ProjectStore.js");
+        return projectStore.getProjectSummaries();
+      },
+      relayCall: (payload) => local.relayCall(payload),
+    },
+  });
+  // A help session that won't run again holds nothing it made in another
+  // project; one relaunched onto a new PTY is the same assistant and keeps it.
+  const offSessionEnded = helpSessionService.addSessionEndedListener(({ sessionId, reason }) => {
+    if (reason !== "relaunched") local.endHelpSession(sessionId);
   });
   const unregisterRuntime = setHostControlRuntime(runtime);
   const unregisterCallRelay = registerRemoteService("hostCallRelayClient", runtime);
@@ -153,9 +209,11 @@ export function installHostControl(deps: HostControlInstallDeps): () => void {
   );
   return () => {
     helpSessionService.setRunbooksHostState(null);
+    offSessionEnded();
     unregisterCallRelay();
     unregisterRuntime();
     runtime.dispose();
+    local.dispose();
   };
 }
 

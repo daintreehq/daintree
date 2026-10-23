@@ -8,6 +8,8 @@ import { z } from "zod";
  * (`assistant.list`, `assistant.start`, `terminal.sendCommand` with
  * `handback`, notices, the last-message read). Every tool runs in main for one
  * of this machine's own assistants, never through a renderer or a host's MCP key.
+ * This machine's own id, `local`, reaches its other projects the same way, in
+ * process (#14024).
  *
  * A tool answers with an `outcome` naming what happened. Only a caller that
  * isn't one of this machine's assistants, or arguments that don't parse, are

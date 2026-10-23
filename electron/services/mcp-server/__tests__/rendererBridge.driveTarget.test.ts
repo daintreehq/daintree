@@ -798,6 +798,149 @@ describe("rendererBridge — relayed calls (#13493)", () => {
   });
 });
 
+describe("rendererBridge — this machine's assistant in another of its projects (#14024)", () => {
+  let bridge: ReturnType<typeof createRendererBridge>;
+
+  /** A view of the project here that answers every dispatch with `answer`. */
+  function localView(id: number, answer: unknown) {
+    const wc = makeWebContents(id, (channel, payload) => {
+      if (channel !== CHANNELS.MCP_SERVER_DISPATCH_ACTION_REQUEST) return;
+      queueMicrotask(() =>
+        mockIpcMain.emit(
+          CHANNELS.MCP_SERVER_DISPATCH_ACTION_RESPONSE,
+          { sender: { id } },
+          { requestId: payload.requestId, result: answer }
+        )
+      );
+    });
+    mockWebContentsRegistry.set(id, wc);
+    mockProjectViews.set(WORKSPACE, [wc]);
+    return wc;
+  }
+
+  beforeEach(() => {
+    mockIpcMain.removeAllListeners();
+    mockWebContentsRegistry.clear();
+    mockProjectViews.clear();
+    _resetMcpDriveTargetResolverForTesting();
+    viewless.runViewlessAction.mockReset();
+    viewless.describeViewlessWorkspace.mockReset().mockResolvedValue(undefined);
+    viewless.hasViewlessImplementation
+      .mockReset()
+      .mockImplementation((id: string) => ["terminal.new", "terminal.list"].includes(id));
+    bridge = createRendererBridge(new Map(), new Map(), () => null);
+    bridge.setupListeners([]);
+  });
+
+  afterEach(() => {
+    _resetMcpDriveTargetResolverForTesting();
+  });
+
+  const write = { relay: { linkSessionId: "local", readOnly: false, local: true as const } };
+  const read = { relay: { linkSessionId: "local", readOnly: true, local: true as const } };
+
+  it("runs a change in this machine's own view of the project with no lease installed", async () => {
+    const view = localView(7, { ok: true, result: "from-view" });
+
+    const envelope = await bridge.dispatchActionForWorkspace(
+      WORKSPACE,
+      "terminal.new",
+      {},
+      false,
+      "external",
+      write
+    );
+
+    expect(envelope.result).toEqual({ ok: true, result: "from-view" });
+    expect(view.send).toHaveBeenCalledTimes(1);
+    expect(viewless.runViewlessAction).not.toHaveBeenCalled();
+  });
+
+  it("runs here, reads included, in a project no view shows, and stops a change only another machine's lease could", async () => {
+    viewless.runViewlessAction.mockResolvedValue({ ok: true, result: { terminals: [] } });
+
+    for (const options of [read, write]) {
+      await bridge.dispatchActionForWorkspace(
+        WORKSPACE,
+        "terminal.list",
+        {},
+        false,
+        "external",
+        options
+      );
+    }
+
+    expect(viewless.runViewlessAction).toHaveBeenCalledTimes(2);
+    const [request] = viewless.runViewlessAction.mock.calls[1] as [
+      { checkWrite: (changed: boolean) => Error | null },
+    ];
+    expect(request.checkWrite(true)).toBeNull();
+    const remote = { ...makeRemoteEndpoint(async () => null), linkSessionId: "local" };
+    setMcpDriveTargetResolver(() => ({ state: "live", endpoint: remote, holderName: "studio-02" }));
+    const stopped = request.checkWrite(true);
+    expect(stopped).toBeInstanceOf(RelayDrivenElsewhereError);
+    expect((stopped as Error).message).toContain("studio-02 took control");
+    expect((stopped as Error).message).not.toContain("Shell");
+  });
+
+  it("says no frontend is attached for what only a view can run in a project none shows", async () => {
+    const err = await bridge
+      .dispatchActionForWorkspace(WORKSPACE, "git.getProjectPulse", {}, false, "external", read)
+      .catch((e: unknown) => e);
+
+    expect(err).toBeInstanceOf(NoFrontendAttachedError);
+    expect(viewless.runViewlessAction).not.toHaveBeenCalled();
+  });
+
+  it("runs a change through the local view the lease names", async () => {
+    const view = localView(2, { ok: true, result: "driver" });
+    setMcpDriveTargetResolver(() => ({
+      state: "live",
+      endpoint: { ...makeRemoteEndpoint(async () => null), kind: "local-view", handle: 2 },
+    }));
+
+    const envelope = await bridge.dispatchActionForWorkspace(
+      WORKSPACE,
+      "terminal.new",
+      {},
+      false,
+      "external",
+      write
+    );
+
+    expect(envelope.result).toEqual({ ok: true, result: "driver" });
+    expect(view.send).toHaveBeenCalledTimes(1);
+  });
+
+  it("refuses a change another machine drives, naming it, whatever its link session is called", async () => {
+    const view = localView(7, { ok: true, result: "from-view" });
+    const remote = {
+      ...makeRemoteEndpoint(async () => ({ result: { ok: true, result: "remote" } })),
+      linkSessionId: "local",
+    };
+    setMcpDriveTargetResolver(() => ({ state: "live", endpoint: remote, holderName: "studio-02" }));
+
+    const err = await bridge
+      .dispatchActionForWorkspace(WORKSPACE, "terminal.new", {}, false, "external", write)
+      .catch((e: unknown) => e);
+
+    expect(err).toBeInstanceOf(RelayDrivenElsewhereError);
+    expect((err as Error).message).toContain("studio-02 has control");
+    expect(remote.request).not.toHaveBeenCalled();
+    expect(view.send).not.toHaveBeenCalled();
+
+    const envelope = await bridge.dispatchActionForWorkspace(
+      WORKSPACE,
+      "terminal.list",
+      {},
+      false,
+      "external",
+      read
+    );
+    expect(envelope.result).toEqual({ ok: true, result: "remote" });
+  });
+});
+
 describe("rendererBridge — a help session with no view (#13511)", () => {
   let bridge: ReturnType<typeof createRendererBridge>;
 

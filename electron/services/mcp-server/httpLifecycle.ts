@@ -2349,6 +2349,7 @@ export class HttpLifecycle {
                 linkSessionId: relay.linkSessionId,
                 readOnly:
                   relayEntry !== undefined && buildAnnotations(relayEntry).readOnlyHint === true,
+                ...(relay.local === true ? { local: true as const } : {}),
                 ...(askShell !== undefined && relayCallId !== undefined
                   ? { requestApproval: (ask) => askShell({ ...ask, callId: relayCallId }) }
                   : {}),
@@ -2687,13 +2688,20 @@ export class HttpLifecycle {
                   };
                 }
                 // Run while nobody drives the project, or while the
-                // requesting Shell's own view does (#13501).
-                const standing = relayWriteStanding(boundWorkspaceId, relay.linkSessionId);
+                // requesting Shell's own view does (#13501): for this
+                // machine's own assistant, any view of this machine's (#14024).
+                const standing = relayWriteStanding(
+                  boundWorkspaceId,
+                  relay.linkSessionId,
+                  relay.local === true
+                );
                 if (standing.kind === "vacant" || standing.kind === "own-view") return null;
                 const refused =
                   standing.kind === "unavailable"
                     ? new DriveHolderUnavailableError(boundWorkspaceId)
-                    : new RelayDrivenElsewhereError(boundWorkspaceId, standing.holderName);
+                    : new RelayDrivenElsewhereError(boundWorkspaceId, standing.holderName, {
+                        local: relay.local === true,
+                      });
                 return { code: "DRIVEN_ELSEWHERE", message: refused.message };
               },
             },

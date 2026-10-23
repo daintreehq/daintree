@@ -9,6 +9,7 @@ import {
   MCP_DISPATCH_ACTION_METHOD,
   MCP_GET_MANIFEST_METHOD,
 } from "../../services/mcp-server/driveTarget.js";
+import { LOCAL_HOST_ID } from "../../../shared/types/remoteHosts.js";
 import { AppError } from "../../utils/errorTypes.js";
 import { NOTIFICATION_SHOW_METHOD, showHostNotification } from "../hybrid/notifications.js";
 import { getRemoteService } from "../runtime.js";
@@ -101,13 +102,17 @@ function hostName(hostId: string): string {
 /**
  * The host as the person at this screen knows it, for the confirm dialog's
  * "Requested by" row. No token suffix: no bearer of this machine's is involved,
- * and a slice of the host's id beside its name only repeated it.
+ * and a slice of the host's id beside its name only repeated it. This
+ * machine's own id is an assistant here working in another project (#14024).
  */
 function describeHost(hostId: string, relayed: boolean): McpBearerIdentity {
   return {
-    userAgent: relayed
-      ? `Your assistant, through host "${hostName(hostId)}"`
-      : `Agent on host "${hostName(hostId)}"`,
+    userAgent:
+      hostId === LOCAL_HOST_ID
+        ? "Your assistant, in another project here"
+        : relayed
+          ? `Your assistant, through host "${hostName(hostId)}"`
+          : `Agent on host "${hostName(hostId)}"`,
     token4LastChars: "",
   };
 }
