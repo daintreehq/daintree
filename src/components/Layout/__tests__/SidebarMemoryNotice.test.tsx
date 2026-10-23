@@ -3,7 +3,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, waitFor } from "@testing-library/react";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { Project } from "@shared/types/project";
-import type { ProjectSleepResult, ProjectStatusEntry } from "@shared/types/ipc/project";
+import type {
+  BulkProjectStatsEntry,
+  ProjectSleepResult,
+  ProjectStatusEntry,
+} from "@shared/types/ipc/project";
 import { ProjectSleepConfirmDialog } from "@/components/Project/ProjectSleepConfirmDialog";
 import { projectClient } from "@/clients/projectClient";
 import { projectPresenceClient } from "@/clients/projectPresenceClient";
@@ -13,6 +17,23 @@ import { useProjectStatsStore } from "@/store/projectStatsStore";
 import { useProjectStore } from "@/store/projectStore";
 import { useSystemMemoryNoticeStore } from "@/store/systemMemoryNoticeStore";
 import { SidebarMemoryNotice } from "../SidebarMemoryNotice";
+
+function bulkEntry(overrides: Partial<BulkProjectStatsEntry> = {}): BulkProjectStatsEntry {
+  return {
+    processCount: 0,
+    terminalCount: 0,
+    estimatedMemoryMB: 0,
+    terminalTypes: {},
+    processIds: [],
+    activeAgentCount: 0,
+    waitingAgentCount: 0,
+    blockedAgentCount: 0,
+    completedAgentCount: 0,
+    unacknowledgedCompletedAgentCount: 0,
+    snoozedAgentCount: 0,
+    ...overrides,
+  };
+}
 
 const READING = "Swap is 91% full.";
 const DETAIL = "Swap is 91% full. Restarting your Mac clears this.";
@@ -221,8 +242,9 @@ describe("SidebarMemoryNotice", () => {
     });
     vi.spyOn(terminalClient, "getAll").mockResolvedValue([]);
     vi.spyOn(projectClient, "getBulkStats").mockResolvedValue({
-      a: { terminalMemoryMB: 512 },
-    } as Awaited<ReturnType<typeof projectClient.getBulkStats>>);
+      a: bulkEntry({ terminalMemoryMB: 512 }),
+      b: bulkEntry(),
+    });
     const { container } = renderRow();
 
     const sleepItem = openMenu(container).querySelector("[data-sidebar-memory-sleep]")!;

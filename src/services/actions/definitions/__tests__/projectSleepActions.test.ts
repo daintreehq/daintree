@@ -27,14 +27,17 @@ vi.mock("@/lib/notify", () => ({ notify: vi.fn() }));
 import { useProjectSleepConfirmStore } from "@/store/projectSleepConfirmStore";
 import { useProjectStatsStore } from "@/store/projectStatsStore";
 import type { ProjectStatusEntry } from "@shared/types/ipc/project";
-import type { ActionRegistry } from "../../actionTypes";
+import type { ActionContext } from "@shared/types/actions";
+import type { ActionCallbacks, ActionRegistry } from "../../actionTypes";
 import { registerProjectActions } from "../projectActions";
 
-const ctx = {} as never;
+const ctx: ActionContext = {};
+const agentCtx: ActionContext = { dispatchSource: "agent" };
 
 function action(id: "project.sleep" | "project.sleepIdle") {
   const actions: ActionRegistry = new Map();
-  registerProjectActions(actions, {} as never);
+  const callbacks: ActionCallbacks = Object.create(null);
+  registerProjectActions(actions, callbacks);
   const factory = actions.get(id);
   if (!factory) throw new Error(`${id} is not registered`);
   return factory();
@@ -156,9 +159,7 @@ describe("project.sleep", () => {
 
   it("does not open a second dialog for a dispatch the MCP bridge already cleared", async () => {
     useProjectStatsStore.setState({ stats: { cur: stats(), bg: stats({ processCount: 3 }) } });
-    const result = await action("project.sleep").run({ projectId: "bg" }, {
-      dispatchSource: "agent",
-    } as never);
+    const result = await action("project.sleep").run({ projectId: "bg" }, agentCtx);
     expect(pending()).toBeNull();
     expect(sleepProjectMock).toHaveBeenCalledWith("bg");
     expect(result).toEqual({ slept: true });
@@ -212,7 +213,7 @@ describe("project.sleepIdle", () => {
 
   it("skips its own dialog for an agent dispatch the MCP bridge already cleared", async () => {
     sleepIdleMock.mockResolvedValue(1);
-    await action("project.sleepIdle").run(undefined, { dispatchSource: "agent" } as never);
+    await action("project.sleepIdle").run(undefined, agentCtx);
     expect(sleepIdleMock).toHaveBeenCalledWith({ alreadyApproved: true });
   });
 });

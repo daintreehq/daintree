@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, renderHook } from "@testing-library/react";
 import type { Project } from "@shared/types/project";
 import type {
+  BulkProjectStatsEntry,
   ProjectSleepResult,
   ProjectStatusEntry,
   ProjectStatusMap,
@@ -24,6 +25,23 @@ import {
   sleepIdleProjectsWithConfirm,
   useSleepIdleProjects,
 } from "../useSleepIdleProjects";
+
+function bulkEntry(overrides: Partial<BulkProjectStatsEntry> = {}): BulkProjectStatsEntry {
+  return {
+    processCount: 0,
+    terminalCount: 0,
+    estimatedMemoryMB: 0,
+    terminalTypes: {},
+    processIds: [],
+    activeAgentCount: 0,
+    waitingAgentCount: 0,
+    blockedAgentCount: 0,
+    completedAgentCount: 0,
+    unacknowledgedCompletedAgentCount: 0,
+    snoozedAgentCount: 0,
+    ...overrides,
+  };
+}
 
 function project(id: string, status: Project["status"] = "background"): Project {
   return { id, name: `Project ${id}`, path: `/repos/${id}`, emoji: "🌲", lastOpened: 0, status };
@@ -246,9 +264,9 @@ describe("useSleepIdleProjects", () => {
 
   it("previews each project's terminal memory, leaving a missing reading unknown rather than zero", async () => {
     vi.mocked(projectClient.getBulkStats).mockResolvedValue({
-      a: { terminalMemoryMB: 512 },
-      b: {},
-    } as Awaited<ReturnType<typeof projectClient.getBulkStats>>);
+      a: bulkEntry({ terminalMemoryMB: 512 }),
+      b: bulkEntry(),
+    });
     const { result } = renderHook(() => useSleepIdleProjects());
     await openPreview(result);
     expect(vi.mocked(projectClient.getBulkStats)).toHaveBeenCalledTimes(1);
