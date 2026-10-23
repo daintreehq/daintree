@@ -1,4 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
+
+const logged = vi.hoisted(() => ({ warn: vi.fn() }));
+vi.mock("../../../utils/logger.js", () => ({
+  createLogger: () => ({ warn: logged.warn, info: vi.fn(), error: vi.fn(), debug: vi.fn() }),
+}));
 import {
   HostEnsureProjectResultSchema,
   type HostEnsureAnswer,
@@ -129,9 +134,11 @@ describe("HostCallRuntime.ensureProject (#14140)", () => {
       throw new AppError({ code, message: "/secret/path/on/host" });
     });
 
+    logged.warn.mockClear();
     const result = await runtime.ensureProject("a", { hostId: "studio" });
 
     expect(result).toMatchObject({ ok: true, value: { outcome, answer: null } });
     expect(JSON.stringify(result)).not.toContain("/secret/path");
+    expect(JSON.stringify(logged.warn.mock.calls)).not.toContain("/secret/path");
   });
 });

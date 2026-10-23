@@ -451,5 +451,12 @@ describe("host.ensureProject audit (#14140)", () => {
     expect(projectAuditArgs("host.ensureProject", { hostId: "h", copy: "new" })).toMatchObject({
       copy: "new",
     });
+    // A call refused for its arguments is audited too, keeping only answers the schema names.
+    expect(
+      projectAuditArgs("host.ensureProject", {
+        hostId: "h",
+        accept: ["unpushed", "/srv/PATH-SENTINEL", 3],
+      })
+    ).toMatchObject({ accept: "unpushed" });
   });
 });

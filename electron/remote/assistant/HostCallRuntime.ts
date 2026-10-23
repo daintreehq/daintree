@@ -1055,7 +1055,10 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
           case "NOT_FOUND":
             return { ...this.outcomeWith("conflict", ENSURE_REFUSED_DETAIL), ...none };
           default:
-            logger.warn("Bringing a project to a host ended without a known outcome", { error });
+            // Its code only: an error's message can name a folder on either machine.
+            logger.warn("Bringing a project to a host ended without a known outcome", {
+              code: codeOf(error),
+            });
             return { ...this.outcomeWith("ambiguous", ENSURE_AMBIGUOUS_DETAIL), ...none };
         }
       }

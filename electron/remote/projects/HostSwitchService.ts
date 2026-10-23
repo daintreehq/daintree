@@ -471,8 +471,9 @@ export class HostSwitchService {
     const candidates = found.map((c) => ({ ...c, remotes: stripRemoteListCredentials(c.remotes) }));
     const chosen = this.chooseCopy(candidates, request.copy, questions);
     if (chosen === undefined) return { status: "question", questions };
+    // Files only arrive with a checkout: a clone, or a worktree in a copy already there.
     if (
-      chosen === null &&
+      (chosen === null || request.worktree) &&
       source.usesLfs &&
       !environment.gitLfsAvailable &&
       !request.accept.includes("lfs_missing")
@@ -509,7 +510,9 @@ export class HostSwitchService {
         remoteUrls,
       });
       if (destination.status === "same-repository") {
-        target = { projectId: null, path: destination.path };
+        // A copy registered there is named by its id, so the host checks who holds it.
+        const known = candidates.find((c) => c.path === destination.path);
+        target = { projectId: known?.projectId ?? null, path: destination.path };
       } else if (destination.status !== "free" || source.cloneUrl === null) {
         return {
           status: "question",

@@ -1,4 +1,7 @@
-import { HOST_CONTROL_OUTCOMES } from "../../../shared/types/hostControl.js";
+import {
+  HOST_CONTROL_OUTCOMES,
+  HOST_ENSURE_ACCEPTABLE,
+} from "../../../shared/types/hostControl.js";
 import {
   AGENT_LAST_MESSAGE_UNAVAILABLE_REASONS,
   type AgentLastMessageUnavailableReason,
@@ -123,6 +126,7 @@ function finiteNumber(value: unknown): number | null {
 
 const HOST_ID_PATTERN = /^[\w.-]{1,64}$/;
 const HOST_OUTCOMES: ReadonlySet<string> = new Set(HOST_CONTROL_OUTCOMES);
+const ENSURE_ACCEPTABLE: ReadonlySet<string> = new Set(HOST_ENSURE_ACCEPTABLE);
 
 function auditHostId(value: unknown): string | null {
   return typeof value === "string" && HOST_ID_PATTERN.test(value) ? value : null;
@@ -251,8 +255,13 @@ const AUDIT_ARGS_PROJECTIONS: ReadonlyMap<string, (args: unknown) => unknown> = 
         worktree: typeof record?.worktree === "boolean" ? record.worktree : null,
         worktreePath: typeof record?.worktreePath === "string" ? "<path>" : null,
         copy: copy === "new" ? "new" : typeof copy === "string" ? "<path>" : null,
+        // A malformed call is audited too: only the answers the schema names.
         accept: Array.isArray(record?.accept)
-          ? record.accept.filter((item): item is string => typeof item === "string").join(",")
+          ? record.accept
+              .filter(
+                (item): item is string => typeof item === "string" && ENSURE_ACCEPTABLE.has(item)
+              )
+              .join(",")
           : null,
       };
     },

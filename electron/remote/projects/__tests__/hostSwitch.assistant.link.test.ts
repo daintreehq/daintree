@@ -276,6 +276,43 @@ describe("bringing a project to a host for an assistant (#14140)", () => {
     expect(r.studio.focusWorktree).not.toHaveBeenCalled();
   });
 
+  it("asks before checking out a branch in a copy already there when the host lacks LFS", async () => {
+    const r = await rig();
+    const project = sourceProject(r.local, "lfs");
+    fs.writeFileSync(path.join(project.path, ".gitattributes"), "*.bin filter=lfs diff=lfs\n");
+    const copy = path.join(root, `lfs-copy-${counter}`);
+    git(root, ["clone", "-q", URL, copy]);
+    r.studio.addProject(copy);
+
+    const asked = await r.service.ensureForAssistant(request(project.id), WAIT);
+    const without = await r.service.ensureForAssistant(
+      request(project.id, { worktree: false }),
+      WAIT
+    );
+
+    expect(asked).toMatchObject({ status: "question", questions: [{ reason: "lfs_missing" }] });
+    expect(r.studio.createWorktree).not.toHaveBeenCalled();
+    expect(without).toMatchObject({ status: "ready", project: { how: "existing" } });
+  });
+
+  it("checks who holds a registered copy in the default folder, even for a worktree it already has", async () => {
+    const r = await rig();
+    const project = sourceProject(r.local, "held-default");
+    const first = await r.service.ensureForAssistant(request(project.id), WAIT);
+    expect(first).toMatchObject({ status: "ready", project: { how: "cloned" } });
+    r.views.holder = "local:window-1";
+    r.studio.focusWorktree.mockClear();
+
+    const asked = await r.service.ensureForAssistant(request(project.id, { copy: "new" }), WAIT);
+
+    expect(asked).toMatchObject({
+      status: "question",
+      questions: [{ reason: "driven_elsewhere" }],
+    });
+    expect(r.studio.focusWorktree).not.toHaveBeenCalled();
+    expect(r.studio.clone).toHaveBeenCalledTimes(1);
+  });
+
   it("never runs a setup recipe, and says which the project carries", async () => {
     const r = await rig();
     const project = sourceProject(r.local, "recipes");
