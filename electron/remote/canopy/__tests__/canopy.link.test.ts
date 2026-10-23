@@ -53,7 +53,11 @@ import {
 } from "../../../../shared/utils/canopyBulkEnable.js";
 import type { CanopyMode } from "../../../../shared/types/ipc/canopy.js";
 import { CanopyHostsClient } from "../client.js";
-import { installCanopyHostWith } from "../host.js";
+import {
+  installCanopyHostWith,
+  type CanopySessionContext,
+  type CanopySessionSource,
+} from "../host.js";
 import { CanopyViewers } from "../viewer.js";
 import { Lane } from "../../link/frames.js";
 import { InteractiveKind } from "../../link/messages.js";
@@ -72,7 +76,38 @@ function viewersOnDispatcher(): CanopyViewers {
     source: { observeCanopy: () => () => {}, observeFleet: () => null },
     invoke: (invocation, channel, args) =>
       getIpcDispatcher().invokeForEndpoint(invocation, channel, args),
+    admitAssistantViewers: () => {
+      const offs = ["canopy:watch-assistant-terminal", "canopy:resolve-assistant"].map((channel) =>
+        getIpcDispatcher().allowHybridOverLink(channel)
+      );
+      return () => offs.forEach((off) => off());
+    },
   });
+}
+
+/** A host from before the assistant viewer: its sessions never hear of the new methods. */
+function withoutAssistantMethods(server: CanopySessionSource): CanopySessionSource {
+  const older = (ctx: CanopySessionContext): CanopySessionContext => ({
+    ...ctx,
+    session: new Proxy(ctx.session, {
+      get(target, property) {
+        if (property === "registerCallHandler") {
+          return (method: string, ...rest: unknown[]) =>
+            method.startsWith("canopy.assistant")
+              ? () => {}
+              : (target.registerCallHandler as (...args: unknown[]) => unknown)(method, ...rest);
+        }
+        const value = Reflect.get(target, property, target) as unknown;
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    }),
+  });
+  return {
+    get sessions() {
+      return server.sessions.map(older);
+    },
+    onSession: (listener) => server.onSession((ctx) => listener(older(ctx))),
+  };
 }
 
 const cleanups: Array<() => unknown> = [];
@@ -118,7 +153,7 @@ function registerFakeCanopy() {
 
 const clock = { now: 0 };
 
-async function startHost() {
+async function startHost(options: { older?: boolean; readAgents?: () => Promise<never> } = {}) {
   const dir = await makeTempDir();
   const location = hostSocketLocation({ platform: "darwin", userDataDir: dir });
   const server = new HostServer({
@@ -137,7 +172,11 @@ async function startHost() {
     listProjects: () => [],
   });
   const viewers = viewersOnDispatcher();
-  const uninstall = installCanopyHostWith(server, viewers);
+  const uninstall = installCanopyHostWith(
+    options.older ? withoutAssistantMethods(server) : server,
+    viewers,
+    options.readAgents ? { readAgents: options.readAgents } : {}
+  );
 
   const registry = new HostRegistry(memoryStore());
   const host = registry.add({ name: "studio", connection: { kind: "ssh", target: "studio" } });
@@ -425,5 +464,160 @@ describe("Canopy on a host the view isn't bound to", () => {
       expect(result).toMatchObject({ outcome: "conflicted" });
       expect(on.state.mode).toBe("unset");
     });
+  });
+});
+
+describe("a person's assistant viewer across the link (#14163)", () => {
+  const laneSubject = (hostId: string, lane: number) => ({
+    hostId,
+    scope: { kind: "project" as const, projectId: "p1" },
+    terminalId: `assistant-${lane}`,
+    incarnation: 3,
+    lane,
+  });
+
+  /** Stands in for this host's own exact-session watch: it says what it was asked for. */
+  function registerFakeAssistantWatch() {
+    const watched: Array<{ handle: number; endpointId: string; subject: unknown }> = [];
+    const closed: number[] = [];
+    cleanups.push(
+      getIpcDispatcher().registerInvoke("canopy:watch-assistant-terminal", (ctx, subject) => {
+        const { endpoint } = ctx as IpcContext;
+        watched.push({ handle: endpoint.handle, endpointId: endpoint.endpointId, subject });
+        endpoint.onClose(() => closed.push(endpoint.handle));
+        const terminalId = (subject as { terminalId: string }).terminalId;
+        endpoint.send({ type: "event", channel: "canopy:snapshot-updated", args: [{}] });
+        endpoint.send({
+          type: "event",
+          channel: "canopy:terminal-data",
+          args: [
+            { kind: "data", watchId: watched.length, runId: terminalId, data: "hi", streamEnd: 2 },
+          ],
+        });
+        return { watchId: watched.length, snapshot: null };
+      })
+    );
+    return { watched, closed };
+  }
+
+  it("watches two lanes of a host with no project open, one viewer each, as the host's own", async () => {
+    const fake = registerFakeAssistantWatch();
+    const typed: unknown[] = [];
+    cleanups.push(
+      getIpcDispatcher().registerInvoke("canopy:terminal-input", (_ctx, watchId, data) => {
+        typed.push([watchId, data]);
+      })
+    );
+    const h = await startHost();
+    const shell = shellClient(h, () => null);
+    h.manager.connect(h.hostId);
+    await waitFor(() => h.manager.connectionState(h.hostId).status === "connected");
+
+    await shell.client.watchAssistant(VIEW, "lane-1", laneSubject(h.hostId, 1));
+    await shell.client.watchAssistant(VIEW, "lane-2", laneSubject(h.hostId, 2));
+
+    // The Shell said which host; the host was only ever told the run as its own.
+    expect(fake.watched.map(({ subject }) => subject)).toEqual([
+      laneSubject("local", 1),
+      laneSubject("local", 2),
+    ]);
+    expect(fake.watched[0]!.handle).not.toBe(fake.watched[1]!.handle);
+    expect(h.manager.get(h.hostId)?.boundViews()).toEqual([]);
+
+    await waitFor(
+      () => shell.sent.filter(({ event }) => event.kind === "assistant-terminal-data").length === 2
+    );
+    expect(shell.sent.map(({ event }) => event)).toEqual([
+      expect.objectContaining({
+        kind: "assistant-terminal-data",
+        hostId: h.hostId,
+        consumer: "lane-1",
+      }),
+      expect.objectContaining({
+        kind: "assistant-terminal-data",
+        hostId: h.hostId,
+        consumer: "lane-2",
+      }),
+    ]);
+
+    await shell.client.assistantInvoke(VIEW, "lane-2", "canopy:terminal-input", [2, "y"]);
+    expect(typed).toEqual([[2, "y"]]);
+
+    shell.client.releaseAssistant(VIEW, "lane-1");
+    await waitFor(() => fake.closed.includes(fake.watched[0]!.handle));
+    expect(fake.closed).not.toContain(fake.watched[1]!.handle);
+  });
+
+  it("drops the host's viewers with the link, and has the consumer watch again", async () => {
+    const fake = registerFakeAssistantWatch();
+    const h = await startHost();
+    const shell = shellClient(h, () => null);
+    h.manager.connect(h.hostId);
+    await waitFor(() => h.manager.connectionState(h.hostId).status === "connected");
+    await shell.client.watchAssistant(VIEW, "pick", laneSubject(h.hostId, 1));
+
+    h.manager.disconnect(h.hostId);
+    await waitFor(() => fake.closed.includes(fake.watched[0]!.handle));
+    // Typing into the stream that went is refused, never carried to a new one.
+    h.manager.connect(h.hostId);
+    await waitFor(() =>
+      shell.sent.some(({ event }) => event.kind === "assistant-resync" && event.consumer === "pick")
+    );
+    await expect(
+      shell.client.assistantInvoke(VIEW, "pick", "canopy:terminal-input", [1, "y"])
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
+  });
+
+  it("says a host from before the viewer has no assistants to show, and still reads its workers", async () => {
+    registerFakeCanopy();
+    registerFakeAssistantWatch();
+    const h = await startHost({ older: true });
+    const shell = shellClient(h, () => null);
+    h.manager.connect(h.hostId);
+    await waitFor(() => h.manager.connectionState(h.hostId).status === "connected");
+
+    await expect(
+      shell.client.watchAssistant(VIEW, "pick", laneSubject(h.hostId, 1))
+    ).rejects.toMatchObject({ code: "UNSUPPORTED" });
+    await expect(shell.client.listAssistants(VIEW, h.hostId)).resolves.toMatchObject({
+      version: null,
+      directory: { coverage: "unsupported", entries: [] },
+    });
+    await expect(shell.client.invoke(VIEW, h.hostId, CHANNEL, [])).resolves.toMatchObject({
+      handle: expect.any(Number),
+    });
+  });
+
+  it("never lets a project window's own endpoint watch an assistant", async () => {
+    registerFakeAssistantWatch();
+    const h = await startHost();
+    shellClient(h, () => null);
+    h.manager.connect(h.hostId);
+    await waitFor(() => h.manager.connectionState(h.hostId).status === "connected");
+    // No assistant viewer is open, so nothing over the link is admitted.
+    const refused = await getIpcDispatcher().invokeForEndpoint(
+      {
+        endpoint: {
+          endpointId: "remote:1",
+          clientId: "client-1",
+          projectId: "p1",
+          kind: "remote-view",
+          handle: -900,
+          send: () => {},
+          request: () => Promise.resolve(null),
+          onClose: () => ({ dispose: () => {} }),
+          isClosed: () => false,
+        },
+        client: {
+          clientId: "client-1",
+          clientName: "greg-mbp",
+          platform: "darwin",
+          kind: "remote",
+        },
+      },
+      "canopy:watch-assistant-terminal",
+      [laneSubject("local", 1)]
+    );
+    expect(refused).toMatchObject({ ok: false, error: { code: "CHANNEL_NOT_REMOTABLE" } });
   });
 });

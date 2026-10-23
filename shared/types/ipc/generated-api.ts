@@ -139,12 +139,27 @@ export interface GeneratedElectronAPI {
     ): Promise<IpcInvokeMap["canopy:watch-terminal"]["result"]>;
   };
   canopyHost: {
+    assistantInvoke(
+      ...args: IpcInvokeMap["canopy-host:assistant-invoke"]["args"]
+    ): Promise<IpcInvokeMap["canopy-host:assistant-invoke"]["result"]>;
     invoke(
       ...args: IpcInvokeMap["canopy-host:invoke"]["args"]
     ): Promise<IpcInvokeMap["canopy-host:invoke"]["result"]>;
+    listAssistants(
+      ...args: IpcInvokeMap["canopy-host:list-assistants"]["args"]
+    ): Promise<IpcInvokeMap["canopy-host:list-assistants"]["result"]>;
     release(
       ...args: IpcInvokeMap["canopy-host:release"]["args"]
     ): Promise<IpcInvokeMap["canopy-host:release"]["result"]>;
+    releaseAssistant(
+      ...args: IpcInvokeMap["canopy-host:release-assistant"]["args"]
+    ): Promise<IpcInvokeMap["canopy-host:release-assistant"]["result"]>;
+    resolveAssistant(
+      ...args: IpcInvokeMap["canopy-host:resolve-assistant"]["args"]
+    ): Promise<IpcInvokeMap["canopy-host:resolve-assistant"]["result"]>;
+    watchAssistant(
+      ...args: IpcInvokeMap["canopy-host:watch-assistant"]["args"]
+    ): Promise<IpcInvokeMap["canopy-host:watch-assistant"]["result"]>;
   };
   claude: {
     listSubagents(

@@ -9,6 +9,7 @@ import type { IpcEnvelope } from "../../../shared/types/ipc/errors.js";
 import type { CanopySnapshot } from "../../../shared/types/ipc/canopy.js";
 import type { FleetSnapshot } from "../../../shared/types/ipc/fleet.js";
 import {
+  isAssistantViewerChannel,
   isCanopyHostChannel,
   isCanopyHostPushChannel,
   type CanopyHostPushChannel,
@@ -24,8 +25,15 @@ export interface CanopyViewerParams {
   onPush(channel: CanopyHostPushChannel, payload: unknown): void;
 }
 
+/**
+ * What a viewer is for: a Canopy panel, which hears this machine's snapshots,
+ * or a person's assistant viewer (#14163), which hears only its one stream.
+ */
+export type CanopyViewerPurpose = "canopy" | "assistant";
+
 /** A Canopy panel this machine serves for a view that isn't one of its own. */
 export interface CanopyViewer extends ClientEndpoint {
+  readonly purpose: CanopyViewerPurpose;
   close(): void;
 }
 
@@ -39,11 +47,15 @@ export interface CanopyViewer extends ClientEndpoint {
  * as they serve any remote view: its own handle keys its panel's state, and
  * closing it is that panel going away. It hears only Canopy's pushes.
  */
-export function createCanopyViewer(params: CanopyViewerParams): CanopyViewer {
+export function createCanopyViewer(
+  params: CanopyViewerParams,
+  purpose: CanopyViewerPurpose = "canopy"
+): CanopyViewer {
   const handle = allocateRemoteHandle();
   const listeners = new Set<() => void>();
   let closed = false;
   return {
+    purpose,
     endpointId: params.endpointId,
     clientId: params.clientId,
     projectId: null,
@@ -53,6 +65,7 @@ export function createCanopyViewer(params: CanopyViewerParams): CanopyViewer {
     handle,
     send(frame: HostFrame): void {
       if (closed || !isCanopyHostPushChannel(frame.channel)) return;
+      if (purpose === "assistant" && frame.channel !== "canopy:terminal-data") return;
       params.onPush(frame.channel, frame.args[0]);
     },
     request: (method) =>
@@ -104,6 +117,28 @@ export interface CanopyViewersDeps {
   source: CanopyPushSource;
   /** This machine's dispatcher, as a link call reaches it. */
   invoke: CanopyViewerInvoke;
+  /**
+   * Let the assistant viewer's calls through the dispatcher while any
+   * assistant viewer is open; the disposer takes that back. Without it, none
+   * is admitted and every assistant call is refused as not remotable.
+   */
+  admitAssistantViewers?: () => () => void;
+}
+
+/** An assistant viewer's call that needs its watch: none open, nothing to type into. */
+function notWatched(): AppError {
+  return new AppError({
+    code: "NOT_FOUND",
+    message: "No assistant is watched by this viewer",
+    userMessage: "That assistant isn't open here any more.",
+  });
+}
+
+function wrongPurpose(): AppError {
+  return new AppError({
+    code: "VALIDATION",
+    message: "A viewer serves Canopy or one assistant, not both",
+  });
 }
 
 /**
@@ -115,6 +150,7 @@ export class CanopyViewers {
   private readonly viewers = new Map<string, CanopyViewer>();
   private offCanopy: (() => void) | null = null;
   private offFleet: (() => void) | null = null;
+  private offAdmission: (() => void) | null = null;
 
   constructor(private readonly deps: CanopyViewersDeps) {}
 
@@ -135,6 +171,7 @@ export class CanopyViewers {
       );
     }
     let viewer = this.viewers.get(key);
+    if (viewer && viewer.purpose !== "canopy") return Promise.reject(wrongPurpose());
     // An unwatch arriving after its panel was released ends nothing: it must
     // not open the panel again here to say so.
     if (!viewer && channel === "canopy:unwatch-terminal") {
@@ -148,6 +185,40 @@ export class CanopyViewers {
     return this.deps.invoke({ endpoint: viewer, client }, channel, args);
   }
 
+  /**
+   * Run one call of a person's assistant viewer `key`. Only a watch or a
+   * lookup opens the viewer; typing needs the watch it was opened with, so it
+   * never opens one. It hears its stream alone: no snapshot is read for it.
+   */
+  invokeAssistant(
+    key: string,
+    params: () => CanopyViewerParams,
+    client: ClientRef,
+    channel: string,
+    args: unknown[]
+  ): Promise<IpcEnvelope> {
+    if (!isAssistantViewerChannel(channel)) {
+      return Promise.reject(
+        new AppError({
+          code: "VALIDATION",
+          message: `${channel} isn't an assistant viewer's call`,
+        })
+      );
+    }
+    let viewer = this.viewers.get(key);
+    if (viewer && viewer.purpose !== "assistant") return Promise.reject(wrongPurpose());
+    if (!viewer) {
+      if (channel === "canopy:unwatch-terminal") return Promise.resolve(wrapSuccess(undefined));
+      if (channel !== "canopy:watch-assistant-terminal" && channel !== "canopy:resolve-assistant") {
+        return Promise.reject(notWatched());
+      }
+      viewer = createCanopyViewer(params(), "assistant");
+      this.viewers.set(key, viewer);
+      this.offAdmission ??= this.deps.admitAssistantViewers?.() ?? null;
+    }
+    return this.deps.invoke({ endpoint: viewer, client }, channel, args);
+  }
+
   has(key: string): boolean {
     return this.viewers.has(key);
   }
@@ -158,7 +229,12 @@ export class CanopyViewers {
     if (!viewer) return false;
     this.viewers.delete(key);
     viewer.close();
-    if (this.viewers.size === 0) this.unobserve();
+    const left = [...this.viewers.values()];
+    if (!left.some((open) => open.purpose === "canopy")) this.unobserve();
+    if (!left.some((open) => open.purpose === "assistant")) {
+      this.offAdmission?.();
+      this.offAdmission = null;
+    }
     return true;
   }
 
@@ -171,12 +247,16 @@ export class CanopyViewers {
   dispose(): void {
     this.closeWhere(() => true);
     this.unobserve();
+    this.offAdmission?.();
+    this.offAdmission = null;
   }
 
   private observe(): void {
     const fanOut = (channel: CanopyHostPushChannel, payload: unknown) => {
       const frame: HostFrame = { type: "event", channel, args: [payload] };
-      for (const viewer of [...this.viewers.values()]) viewer.send(frame);
+      for (const viewer of [...this.viewers.values()]) {
+        if (viewer.purpose === "canopy") viewer.send(frame);
+      }
     };
     this.offCanopy ??= this.deps.source.observeCanopy((snapshot) =>
       fanOut("canopy:snapshot-updated", snapshot)

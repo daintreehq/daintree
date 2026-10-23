@@ -25,6 +25,7 @@ import type {
   WindowHostInfo,
 } from "../../../shared/types/ipc/remoteHosts.js";
 import type { ProjectFocusOnActivateIntent } from "../../../shared/types/ipc/project.js";
+import { AgentDirectorySubjectSchema } from "../../../shared/types/agentDirectory.js";
 import type { IpcContext } from "../../ipc/types.js";
 import type { RemoteRouter } from "../../ipc/endpoint.js";
 import { AppError } from "../../utils/errorTypes.js";
@@ -276,8 +277,29 @@ function focusIntentOf(payload: SwitchWindowHostPayload): ProjectFocusOnActivate
   const intent: unknown = payload.focusIntent;
   if (intent === undefined) return undefined;
   if (typeof intent === "object" && intent !== null) {
-    const { intent: kind, panelId } = intent as { intent?: unknown; panelId?: unknown };
+    const {
+      intent: kind,
+      panelId,
+      subject: rawSubject,
+    } = intent as { intent?: unknown; panelId?: unknown; subject?: unknown };
     if (kind === "focus-next-waiting") return { intent: kind };
+    if (kind === "open-assistant") {
+      // A remote person's "Open in Assistant" (#14163): only a project lane, and
+      // only on the host and in the project the switch itself goes to.
+      const parsed = AgentDirectorySubjectSchema.safeParse(rawSubject);
+      const subject = parsed.success ? parsed.data : null;
+      if (
+        subject &&
+        subject.scope.kind === "project" &&
+        subject.lane !== undefined &&
+        subject.scope.projectId === payload.projectId &&
+        (isLocalHostId(subject.hostId) ? LOCAL_HOST_ID : subject.hostId) ===
+          (isLocalHostId(payload.hostId) ? LOCAL_HOST_ID : payload.hostId)
+      ) {
+        return { intent: kind, subject };
+      }
+      throw invalid("focusIntent names an assistant elsewhere");
+    }
     if (
       kind === "focus-panel" &&
       typeof panelId === "string" &&

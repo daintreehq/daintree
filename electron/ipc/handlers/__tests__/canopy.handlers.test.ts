@@ -1601,6 +1601,120 @@ describe("canopy IPC", () => {
       });
     });
 
+    describe("a person's assistant viewer reading this host (#14163)", () => {
+      const subject = {
+        hostId: "local",
+        scope: { kind: "project", projectId: "project-1" },
+        terminalId: "assistant-1",
+        incarnation: 1,
+        lane: 1,
+      };
+      const admissions: Array<() => void> = [];
+
+      beforeEach(() => {
+        state.runs = [];
+        state.mode = "unset";
+        assistants.lane = { sessionId: "session-1", terminalId: "assistant-1" };
+        assistants.global = null;
+        for (const channel of [
+          CANOPY_METHOD_CHANNELS.watchAssistantTerminal,
+          CANOPY_METHOD_CHANNELS.resolveAssistant,
+        ]) {
+          admissions.push(getIpcDispatcher().allowHybridOverLink(channel));
+        }
+      });
+
+      afterEach(() => {
+        for (const admitted of admissions.splice(0)) admitted();
+      });
+
+      const viewer = (handle: number) => remoteView(handle, `canopy-viewer:a${-handle}`);
+
+      async function watch(view: ReturnType<typeof viewer>, chosen: unknown = subject) {
+        const opened = (await view.call(CANOPY_METHOD_CHANNELS.watchAssistantTerminal, chosen)) as {
+          ok: boolean;
+          data?: { watchId: number };
+        };
+        return { ok: opened.ok, watchId: opened.data?.watchId ?? null };
+      }
+
+      it("streams and answers a lane with Canopy off, and never sizes it", async () => {
+        const view = viewer(-21);
+        const { ok, watchId } = await watch(view);
+        expect(ok).toBe(true);
+        await view.call(CANOPY_METHOD_CHANNELS.terminalInput, watchId, "y");
+        await view.call(CANOPY_METHOD_CHANNELS.terminalSubmit, watchId, "carry on");
+        await view.call(CANOPY_METHOD_CHANNELS.terminalResize, watchId, 100, 30);
+        expect(state.writes).toEqual(["y"]);
+        expect(state.submits).toEqual(["carry on"]);
+        expect(ptyClient.resize).not.toHaveBeenCalled();
+        expect(fetch).not.toHaveBeenCalled();
+      });
+
+      it("reads while another machine drives the project, but types nothing", async () => {
+        lease.holder = "other";
+        const view = viewer(-22);
+        const { ok, watchId } = await watch(view);
+        expect(ok).toBe(true);
+        const typed = (await view.call(CANOPY_METHOD_CHANNELS.terminalInput, watchId, "y")) as {
+          ok: boolean;
+          error?: { code?: string };
+        };
+        expect(typed).toMatchObject({ ok: false, error: { code: "DRIVEN_ELSEWHERE" } });
+        expect(state.writes).toEqual([]);
+      });
+
+      it("refuses a stale generation or a subject naming another host", async () => {
+        const view = viewer(-23);
+        expect((await watch(view, { ...subject, incarnation: 2 })).ok).toBe(false);
+        expect((await watch(view, { ...subject, hostId: "studio" })).ok).toBe(false);
+        expect(ptyClient.acquireIpcDataMirror).not.toHaveBeenCalled();
+      });
+
+      it("only reads the global session: its input belongs to a window here", async () => {
+        assistants.global = { terminalId: "global-1", generation: 5, owner: 7 };
+        const view = viewer(-24);
+        const { ok, watchId } = await watch(view, {
+          hostId: "local",
+          scope: { kind: "global" },
+          terminalId: "global-1",
+          incarnation: 1,
+        });
+        expect(ok).toBe(true);
+        const typed = (await view.call(CANOPY_METHOD_CHANNELS.terminalInput, watchId, "y")) as {
+          ok: boolean;
+        };
+        expect(typed.ok).toBe(false);
+        expect(state.writes).toEqual([]);
+      });
+
+      it("refuses a remote project window's own endpoint, which is no viewer", async () => {
+        const view = remoteView(-25);
+        expect((await watch(view as ReturnType<typeof viewer>)).ok).toBe(false);
+        expect(ptyClient.acquireIpcDataMirror).not.toHaveBeenCalled();
+      });
+
+      it("ends the watch when the viewer closes", async () => {
+        const release = vi.fn();
+        state.releaseMirror = release;
+        const view = viewer(-26);
+        expect((await watch(view)).ok).toBe(true);
+        view.close();
+        expect(activeTerminalWatches().has(-26)).toBe(false);
+        expect(release).toHaveBeenCalledTimes(1);
+      });
+
+      it("is refused over a link while no assistant viewer is admitted", async () => {
+        for (const admitted of admissions.splice(0)) admitted();
+        const view = viewer(-27);
+        const opened = (await view.call(
+          CANOPY_METHOD_CHANNELS.watchAssistantTerminal,
+          subject
+        )) as { ok: boolean; error?: { code?: string } };
+        expect(opened).toMatchObject({ ok: false, error: { code: "CHANNEL_NOT_REMOTABLE" } });
+      });
+    });
+
     it("streams a watched terminal through the view's endpoint, and ends it when the endpoint closes", async () => {
       const release = vi.fn();
       state.releaseMirror = release;

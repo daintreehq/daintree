@@ -1,4 +1,5 @@
 import { MAX_ASSISTANT_SLOTS } from "../../shared/config/assistantSlots.js";
+import { isGlobalAssistantId } from "../../shared/config/globalAssistant.js";
 import {
   AGENT_DIRECTORY_ENTRIES_MAX,
   cutAgentLabel,
@@ -21,6 +22,12 @@ export interface ResumableLane {
   slot: number;
   agentId: string | null;
   capturedAt: number;
+}
+
+export interface AgentDirectoryReadOptions {
+  projectId?: string;
+  /** Leave workers out before the cap, for a person's assistant picker (#14163). */
+  assistantsOnly?: boolean;
 }
 
 export interface AgentDirectorySources {
@@ -50,9 +57,9 @@ export interface AgentDirectorySources {
  */
 export async function collectAgentDirectory(
   sources: AgentDirectorySources,
-  options: { projectId?: string } = {}
+  options: AgentDirectoryReadOptions = {}
 ): Promise<AgentDirectory> {
-  const { projectId } = options;
+  const { projectId, assistantsOnly = false } = options;
   // Lane runs are known before the pty is read; a run that changed while it was
   // read must not borrow the old run's observations.
   const lanesBefore = sources
@@ -92,7 +99,9 @@ export async function collectAgentDirectory(
         projectId: lane.projectId,
         terminalId: running.terminalId,
         incarnation,
-        lane: lane.slot,
+        // The global session is held as a lane of its reserved id, but is named
+        // by its own scope: a viewer resolving it as a project lane is refused.
+        ...(isGlobalAssistantId(lane.projectId) ? { global: true } : { lane: lane.slot }),
         agentId: terminal?.detectedAgentId ?? terminal?.launchAgentId ?? lane.agentId,
         attached: lane.attached !== false,
         terminal,
@@ -101,7 +110,8 @@ export async function collectAgentDirectory(
   }
 
   const workers: AgentDirectoryLiveEntry[] = [];
-  for (const terminal of terminals) {
+  // A picker of assistants reads none: workers would only crowd them out of the cap.
+  for (const terminal of assistantsOnly ? [] : terminals) {
     if (!terminal.projectId) continue;
     if (projectId !== undefined && terminal.projectId !== projectId) continue;
     if (classifyRun(terminal, (id) => sources.isHelpTerminal(id)) !== null) continue;
@@ -173,6 +183,7 @@ function liveEntry(input: {
   terminalId: string;
   incarnation: number;
   lane?: number;
+  global?: boolean;
   agentId: string | null;
   attached: boolean | null;
   terminal: PtyTerminal | undefined;
@@ -184,7 +195,7 @@ function liveEntry(input: {
     role: input.role,
     subject: {
       hostId: input.hostId,
-      scope: { kind: "project", projectId: input.projectId },
+      scope: input.global ? { kind: "global" } : { kind: "project", projectId: input.projectId },
       terminalId: input.terminalId,
       incarnation: input.incarnation,
       ...(input.lane !== undefined ? { lane: input.lane } : {}),
@@ -222,8 +233,8 @@ export class LocalAgentDirectory {
     private readonly deadlineMs: number = AGENT_DIRECTORY_READ_MS
   ) {}
 
-  read(options: { projectId?: string } = {}): Promise<AgentDirectory> {
-    const key = options.projectId ?? "";
+  read(options: AgentDirectoryReadOptions = {}): Promise<AgentDirectory> {
+    const key = `${options.assistantsOnly ? "a" : "*"}:${options.projectId ?? ""}`;
     const pending = this.inFlight.get(key);
     if (pending) return pending;
     const keepLast = (): AgentDirectory => {
