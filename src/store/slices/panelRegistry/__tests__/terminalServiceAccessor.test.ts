@@ -123,10 +123,16 @@ describe("panel registry terminal service accessor (#14261)", () => {
       cwd: "/tmp",
       location: "background",
     });
+    let added = false;
+    void adding.then(() => {
+      added = true;
+    });
 
     await vi.waitFor(() => expect(accessor.load).toHaveBeenCalled());
     await flushMicrotasks();
     expect(accessor.service.prewarmTerminal).not.toHaveBeenCalled();
+    expect(mockSpawn).not.toHaveBeenCalled();
+    expect(added).toBe(false);
 
     accessor.resolveLoad();
     await adding;
@@ -156,11 +162,16 @@ describe("panel registry terminal service accessor (#14261)", () => {
     });
 
     const restarting = usePanelStore.getState().restartTerminal("t-1");
+    let restarted = false;
+    void restarting.then(() => {
+      restarted = true;
+    });
 
     await vi.waitFor(() => expect(accessor.load).toHaveBeenCalled());
     await flushMicrotasks();
     expect(accessor.service.waitForInstance).not.toHaveBeenCalled();
     expect(mockSpawn).not.toHaveBeenCalled();
+    expect(restarted).toBe(false);
 
     accessor.resolveLoad();
     await restarting;

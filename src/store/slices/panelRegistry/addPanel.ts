@@ -307,6 +307,13 @@ const TERMINAL_STARTUP_ATTACH_TIMEOUT_MS = 2500;
 const OVERLAY_CHROME_X_PX = 16;
 const OVERLAY_CHROME_Y_PX = 240;
 
+// Starts at once when the service is already up, as a direct call would.
+function fetchAndRestoreTerminal(id: string): Promise<boolean> {
+  const service = peekTerminalService();
+  if (service) return service.fetchAndRestore(id);
+  return loadTerminalService().then((loaded) => loaded.fetchAndRestore(id));
+}
+
 /**
  * Live grid of an ATTACHED renderer xterm. Returns null until the instance is
  * mounted in the real DOM — a prewarmed (never-attached) instance still holds
@@ -1441,11 +1448,9 @@ export const createAddPanelActions = (
       });
       // What it printed before this pane attached comes from the host's record.
       if (adopted) {
-        loadTerminalService()
-          .then((service) => service.fetchAndRestore(id))
-          .catch((error: unknown) => {
-            logWarn("[TerminalStore] Couldn't restore an adopted terminal's output", { id, error });
-          });
+        fetchAndRestoreTerminal(id).catch((error: unknown) => {
+          logWarn("[TerminalStore] Couldn't restore an adopted terminal's output", { id, error });
+        });
       }
     };
 
@@ -1865,12 +1870,9 @@ export const createAddPanelActions = (
                   }
                   // A pane on a running PTY starts with only what it prints next;
                   // what it drew while the link was down comes from the host.
-                  safeFireAndForget(
-                    loadTerminalService().then((service) => service.fetchAndRestore(id)),
-                    {
-                      context: "Restoring a terminal found after a lost spawn answer",
-                    }
-                  );
+                  safeFireAndForget(fetchAndRestoreTerminal(id), {
+                    context: "Restoring a terminal found after a lost spawn answer",
+                  });
                 } catch (error) {
                   logWarn("[TerminalStore] Couldn't check a lost spawn with the host", {
                     id,
