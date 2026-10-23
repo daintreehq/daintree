@@ -1098,6 +1098,11 @@ function TerminalPaneComponent({
     inputTracker.reset();
   };
 
+  const handleStartWithoutPluginTools = () => {
+    void restartTerminal(id, { allowMissingPluginTools: true });
+    inputTracker.reset();
+  };
+
   const handleUpdateCwd = () => {
     setIsUpdateCwdOpen(true);
   };
@@ -1534,6 +1539,7 @@ function TerminalPaneComponent({
             onUpdateCwd={handleUpdateCwd}
             onRetry={handleRestart}
             onTrash={handleTrash}
+            onStartWithoutPluginTools={handleStartWithoutPluginTools}
             isRestarting={isRestarting}
           />
         )}

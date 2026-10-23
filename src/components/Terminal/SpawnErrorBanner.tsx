@@ -1,4 +1,4 @@
-import { FolderEdit, RefreshCw, Settings2, Trash2, XCircle } from "lucide-react";
+import { FolderEdit, Play, RefreshCw, Settings2, Trash2, XCircle } from "lucide-react";
 import { InlineStatusBanner, type BannerAction } from "./InlineStatusBanner";
 import { BannerOverflowMenu } from "./BannerOverflowMenu";
 import { createCopyErrorAction } from "./copyErrorAction";
@@ -22,6 +22,8 @@ export interface SpawnErrorBannerProps {
   onUpdateCwd: (id: string) => void;
   onRetry: (id: string) => void;
   onTrash: (id: string) => void;
+  /** Start the agent once without the plugin tools it requires; `REQUIRED_PLUGIN_TOOLS` only. */
+  onStartWithoutPluginTools?: (id: string) => void;
   isRestarting?: boolean;
   className?: string;
 }
@@ -33,6 +35,7 @@ export function SpawnErrorBanner({
   onUpdateCwd,
   onRetry,
   onTrash,
+  onStartWithoutPluginTools,
   isRestarting = false,
   className,
 }: SpawnErrorBannerProps) {
@@ -77,6 +80,19 @@ export function SpawnErrorBanner({
     title: "Open terminal limits settings",
     ariaLabel: "Open terminal limits settings",
   };
+  // The user's explicit choice, never a default: the launch was refused so the
+  // agent wouldn't silently start without tools it was declared to need.
+  const startWithoutToolsAction: BannerAction | null =
+    error.code === "REQUIRED_PLUGIN_TOOLS" && onStartWithoutPluginTools
+      ? {
+          id: "start-without-plugin-tools",
+          label: "Start without them",
+          icon: Play,
+          onClick: () => onStartWithoutPluginTools(terminalId),
+          title: "Start the agent without the missing plugin tools",
+          disabled: isRestarting,
+        }
+      : null;
   const trashAction: BannerAction = {
     id: "trash",
     label: "Trash terminal",
@@ -96,6 +112,7 @@ export function SpawnErrorBanner({
   const copyErrorAction = hasDiagnostics ? null : createCopyErrorAction(error.message);
   const overflowActions: BannerAction[] = [
     ...(primaryAction.id === retryAction.id ? [] : [retryAction]),
+    ...(startWithoutToolsAction ? [startWithoutToolsAction] : []),
     ...(copyErrorAction ? [copyErrorAction] : []),
     trashAction,
   ];

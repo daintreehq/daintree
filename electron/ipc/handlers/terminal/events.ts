@@ -13,6 +13,7 @@ import { resolveLiveWebContents } from "../../../window/webContentsRegistry.js";
 import { logInfo, logWarn } from "../../../utils/logger.js";
 import { events, type DaintreeEventMap } from "../../../services/events.js";
 import { mcpPaneConfigService } from "../../../services/McpPaneConfigService.js";
+import { forgetPluginToolsLaunch } from "../../../services/pluginAgentMcp/agentLaunchRecords.js";
 import { getMcpServerServiceRef } from "../../../window/serviceRefs.js";
 import { peekDriveLeaseService } from "../../../services/DriveLeaseService.js";
 import {
@@ -107,6 +108,7 @@ export function registerTerminalEventHandlers(deps: HandlerDependencies): () => 
     mcpPaneConfigService.revokePaneConfig(id).catch((err) => {
       console.error("[MCP] Failed to revoke pane config on exit:", err);
     });
+    forgetPluginToolsLaunch(id);
     // A hand-over ends with the terminal that was handed over (#12490). The
     // orchestrator's side ends with its bearer, which the revocation above
     // covers. Unloaded means nothing was ever handed over.
@@ -159,6 +161,7 @@ export function registerTerminalEventHandlers(deps: HandlerDependencies): () => 
       mcpPaneConfigService.revokePaneConfig(id).catch((err) => {
         console.error("[MCP] Failed to revoke pane config on spawn failure:", err);
       });
+      forgetPluginToolsLaunch(id);
     }
     broadcastToRenderer(CHANNELS.EVENTS_PUSH, {
       name: "terminal:spawn-result",

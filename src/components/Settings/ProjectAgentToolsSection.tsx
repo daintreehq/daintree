@@ -15,10 +15,13 @@ import { SettingsSwitch } from "@/components/Settings/SettingsSwitch";
 import { TriangleAlert } from "lucide-react";
 import { pluginAgentMcpClient } from "@/clients/pluginAgentMcpClient";
 import { useProjectPluginStore } from "@/store/projectPluginStore";
+import { getPanelStoreSnapshot } from "@/store/storeAccessors";
+import { actionService } from "@/services/ActionService";
 import { logError } from "@/utils/logger";
 import type {
   AgentMcpAccess,
   ProjectAgentToolPlugin,
+  AgentToolsRelaunchSession,
   ProjectAgentToolsSnapshot,
   SetProjectAgentToolAccessPayload,
 } from "@shared/types/ipc/pluginAgentMcp";
@@ -54,6 +57,62 @@ function FailureRow({ message, onRetry }: { message: string; onRetry: () => void
         Retry
       </Button>
     </div>
+  );
+}
+
+/**
+ * Running agents whose tools changed since they started, each with a restart:
+ * more access, or a plugin that came back with different tools, only reaches
+ * an agent when it is launched again. Agents this window doesn't show are left
+ * to the window that does.
+ */
+function RelaunchNeededGroup({
+  sessions,
+  onRestarted,
+}: {
+  sessions: readonly AgentToolsRelaunchSession[];
+  onRestarted: () => void;
+}) {
+  // Read through the accessor, not the panel store: settings stay off the
+  // store's import graph. Read as the snapshot arrives, which is when the
+  // list changes.
+  const panelsById = getPanelStoreSnapshot()?.panelsById ?? {};
+  const shown = sessions.flatMap((session) => {
+    const panel = panelsById[session.terminalId];
+    return panel === undefined ? [] : [{ session, title: panel.title || "Agent" }];
+  });
+  if (shown.length === 0) return null;
+  return (
+    <SettingsGroup
+      label="Agents that need a restart"
+      rootAttributes={{ "data-testid": "project-agent-tools-relaunch" }}
+    >
+      {shown.map(({ session, title }) => (
+        <SettingsRow
+          key={session.terminalId}
+          label={title}
+          description={`Started before its tools from ${session.pluginDisplayNames.join(", ")} changed, so it only gets them once restarted`}
+          control={
+            <Button
+              variant="outline"
+              size="sm"
+              // The action's own confirm guards interrupting a running agent.
+              onClick={() =>
+                void actionService
+                  .dispatch(
+                    "terminal.restart",
+                    { terminalId: session.terminalId },
+                    { source: "user" }
+                  )
+                  .then(onRestarted)
+              }
+            >
+              Restart
+            </Button>
+          }
+        />
+      ))}
+    </SettingsGroup>
   );
 }
 
@@ -577,6 +636,7 @@ export function ProjectAgentToolsSection() {
             />
           )}
         </SettingsGroup>
+        <RelaunchNeededGroup sessions={snapshot.relaunchNeeded ?? []} onRestarted={refresh} />
       </SettingsSection>
     </div>
   );

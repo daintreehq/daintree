@@ -90,6 +90,14 @@ export interface TerminalSpawnOptions {
    * focused at launch even if focus later changes.
    */
   actionContext?: ActionContext;
+  /**
+   * Plugin instances whose agent tools this agent launch can't do without
+   * (a plugin recipe's `requiresAgentTools`). The launch is refused with
+   * `REQUIRED_PLUGIN_TOOLS_UNAVAILABLE` rather than started without them.
+   */
+  requiredPluginTools?: string[];
+  /** Start this one launch even if required plugin tools are missing. Never persisted. */
+  allowMissingPluginTools?: boolean;
 }
 
 /** Terminal state for app state persistence */

@@ -65,6 +65,8 @@ const PTY_FIELD_CLASSIFICATION = {
   agentSessionId: true,
   agentLaunchFlags: true,
   callerLaunchFlags: true,
+  // Runtime only (#14096): a restored pane relaunches as an ordinary agent.
+  requiredPluginTools: false,
   agentModelId: true,
   agentPresetId: true,
   agentPresetColor: true,

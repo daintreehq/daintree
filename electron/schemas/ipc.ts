@@ -416,6 +416,10 @@ export const TerminalSpawnOptionsSchema = z.object({
   // Launch-time ActionContext snapshot, replayed by an agent pane's workspace
   // binding (#12486). Optional so existing spawn callers are unaffected.
   actionContext: ActionContextSchema.optional(),
+  // Listed or zod strips them, and a required launch silently starts without
+  // its plugin tools (#14096).
+  requiredPluginTools: z.array(z.string().min(1).max(512)).max(32).optional(),
+  allowMissingPluginTools: z.boolean().optional(),
 });
 
 export const TerminalResizePayloadSchema = z.object({

@@ -1,5 +1,6 @@
 import type { SpawnError, SpawnErrorCode } from "@shared/types/pty-host";
 import { boundedErrorText } from "@/utils/errorText";
+import { requiredPluginToolsReason } from "@shared/utils/requiredPluginTools";
 
 export interface SpawnErrorBannerCopy {
   title: string;
@@ -74,6 +75,20 @@ export const SPAWN_ERROR_BANNER_COPY = {
     title: "Terminal hasn't started",
     description: () =>
       "The terminal backend hasn't confirmed the launch. It may be busy — retry, or wait for it to catch up.",
+  },
+  REQUIRED_PLUGIN_TOOLS: {
+    title: "Plugin tools not ready",
+    // Each missing plugin and why, so the person knows whether waiting, a
+    // setting, or starting without them is the way forward.
+    description: (error) => {
+      const missing = (error.pluginTools ?? []).flatMap((tool) => {
+        const reason = requiredPluginToolsReason(tool.state);
+        return reason === null ? [] : [`${tool.pluginDisplayName}: ${reason}`];
+      });
+      return missing.length > 0
+        ? boundedErrorText(`This agent needs them to start. ${missing.join("; ")}.`)
+        : boundedErrorText(error.message);
+    },
   },
   UNKNOWN: {
     title: "Couldn't start terminal",

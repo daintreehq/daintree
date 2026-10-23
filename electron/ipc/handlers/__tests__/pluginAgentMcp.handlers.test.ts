@@ -62,6 +62,10 @@ vi.mock("../../../services/ProjectStore.js", () => ({
 import { ipcMain } from "electron";
 import { registerPluginAgentMcpHandlers } from "../pluginAgentMcp.js";
 import { _resetIpcGuardForTesting, markIpcSecurityReady } from "../../ipcGuard.js";
+import {
+  clearPluginToolsLaunches,
+  recordPluginToolsLaunch,
+} from "../../../services/pluginAgentMcp/agentLaunchRecords.js";
 import { pluginMcpGrantRegistry } from "../../../services/pluginAgentMcp/grantRegistry.js";
 import { _resetProjectMcpDefaultsForTests } from "../../../services/pluginAgentMcp/projectDefaults.js";
 import {
@@ -228,6 +232,7 @@ describe("plugin agent MCP access IPC", () => {
           },
         ],
         mcpServerEnabled: true,
+        relaunchNeeded: [],
       });
     });
 
@@ -317,6 +322,29 @@ describe("plugin agent MCP access IPC", () => {
 
       expect(row).toMatchObject({ hasDatabases: true, access: "off", available: true });
       expect(row.pluginTools).toBeUndefined();
+    });
+
+    it("answers an access change with the running agents that need a restart to get it", async () => {
+      recordPluginToolsLaunch("term-running", PROJECT);
+      recordPluginToolsLaunch("term-elsewhere", OTHER_PROJECT);
+      try {
+        expect((await list()).relaunchNeeded).toEqual([]);
+
+        const snapshot = await set({
+          pluginInstanceId: "acme.ledger",
+          access: "read-write",
+          scope: "project",
+        });
+        expect(snapshot.relaunchNeeded).toEqual([
+          { terminalId: "term-running", pluginDisplayNames: ["Ledger"] },
+        ]);
+
+        // With the listener off a restart gets nothing either.
+        mocks.isMcpEnabled.mockReturnValue(false);
+        expect((await list()).relaunchNeeded).toEqual([]);
+      } finally {
+        clearPluginToolsLaunches();
+      }
     });
 
     it("offers read and write for a database-only plugin whose queries write", async () => {
@@ -599,10 +627,10 @@ describe("plugin agent MCP access IPC", () => {
 
     it("answers an empty list to a sender with no project, or a scratch", async () => {
       mocks.getProjectForWebContents.mockReturnValue(null);
-      expect(await list()).toEqual({ plugins: [], mcpServerEnabled: true });
+      expect(await list()).toEqual({ plugins: [], mcpServerEnabled: true, relaunchNeeded: [] });
 
       mocks.getProjectForWebContents.mockReturnValue("12345678-1234-4123-8123-123456789abc");
-      expect(await list()).toEqual({ plugins: [], mcpServerEnabled: true });
+      expect(await list()).toEqual({ plugins: [], mcpServerEnabled: true, relaunchNeeded: [] });
       expect(mocks.listPlugins).not.toHaveBeenCalled();
     });
 

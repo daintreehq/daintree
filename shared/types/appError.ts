@@ -1,11 +1,12 @@
 import type { PluginHostError } from "./remoteHosts.js";
+import type { RequiredPluginToolsError } from "./ipc/pluginAgentMcp.js";
 
 /**
  * Structured, allowlisted error details that survive IPC serialization and
  * the packaged-build sanitiser (unlike `context`, which is stripped). Keep
  * every member small and free of paths, secrets and user content.
  */
-export type AppErrorDetails = PluginHostError;
+export type AppErrorDetails = PluginHostError | RequiredPluginToolsError;
 
 /**
  * Discriminated codes carried by `AppError` (main process) and
@@ -97,4 +98,7 @@ export type AppErrorCode =
   | "HOST_BUILD_SKEW"
   // Another frontend holds the drive lease for this project.
   | "DRIVEN_ELSEWHERE"
+  // An agent launch that requires a plugin's agent tools was refused because
+  // they couldn't be handed over; the per-plugin states travel as details.
+  | "REQUIRED_PLUGIN_TOOLS_UNAVAILABLE"
   | "INTERNAL";

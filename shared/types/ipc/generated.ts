@@ -3561,6 +3561,8 @@ export interface GeneratedIpcInvokeMap {
                 "user" | "menu" | "keybinding" | "agent" | "context-menu" | "plugin" | undefined;
             }
           | undefined;
+        requiredPluginTools?: string[] | undefined;
+        allowMissingPluginTools?: boolean | undefined;
       },
     ];
     result: string;

@@ -439,6 +439,41 @@ describe("isIpcEnvelope", () => {
 });
 
 describe("AppError details allowlist", () => {
+  it("rebuilds required plugin tools details, dropping extra fields and unknown states", () => {
+    const serialized = serializeError(
+      Object.assign(new Error("x"), {
+        details: {
+          code: "REQUIRED_PLUGIN_TOOLS_UNAVAILABLE",
+          bearer: "secret",
+          tools: [
+            {
+              pluginInstanceId: "acme.ledger",
+              pluginDisplayName: "Ledger",
+              state: "pending-load",
+              path: "/Users/me",
+            },
+          ],
+        },
+      })
+    );
+    expect(serialized.details).toEqual({
+      code: "REQUIRED_PLUGIN_TOOLS_UNAVAILABLE",
+      tools: [
+        { pluginInstanceId: "acme.ledger", pluginDisplayName: "Ledger", state: "pending-load" },
+      ],
+    });
+
+    expect(
+      pickAppErrorDetails({
+        code: "REQUIRED_PLUGIN_TOOLS_UNAVAILABLE",
+        tools: [{ pluginInstanceId: "a", pluginDisplayName: "A", state: "exploded" }],
+      })
+    ).toBeUndefined();
+    expect(
+      pickAppErrorDetails({ code: "REQUIRED_PLUGIN_TOOLS_UNAVAILABLE", tools: "nope" })
+    ).toBeUndefined();
+  });
+
   it("rebuilds each PluginHostError variant and strips extra fields", () => {
     const serialized = serializeError(
       Object.assign(new Error("x"), {
