@@ -14,6 +14,20 @@ describe("ResyncCoordinator", () => {
     ]);
   });
 
+  it("tells each reopened view the host restarted when its process changed (#14184)", () => {
+    const resync = vi.fn();
+    new ResyncCoordinator({ resync }).onSessionAttached("studio-01", {
+      resumed: false,
+      reopened: [11, 12],
+      hostRestarted: true,
+    });
+
+    expect(resync.mock.calls).toEqual([
+      [11, "studio-01", "host-restarted"],
+      [12, "studio-01", "host-restarted"],
+    ]);
+  });
+
   it("leaves a resumed session to the host's own announcement", () => {
     const resync = vi.fn();
     new ResyncCoordinator({ resync }).onSessionAttached("studio-01", {

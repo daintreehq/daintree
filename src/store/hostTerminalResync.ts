@@ -20,6 +20,12 @@ export interface HostTerminalResyncOptions {
    * knows what the driver still shows.
    */
   follow?: boolean;
+  /**
+   * Filled with each pane this pass reports gone, by its restart key: after
+   * a host restart these are what the restart ended. One whose agent had
+   * already quit is left out, since nothing in it was running to be ended.
+   */
+  lost?: Map<string, number>;
 }
 
 /**
@@ -254,6 +260,7 @@ async function observeVanishedTerminals(
       // agent as the agent rather than demoting it to a shell.
       state.setRuntimeStatus(id, "exited");
       terminalInstanceService.reportLost(id, "The host no longer has this terminal");
+      if (panel.agentState !== "exited") options.lost?.set(id, panel.restartKey ?? 0);
     }
   }
 }

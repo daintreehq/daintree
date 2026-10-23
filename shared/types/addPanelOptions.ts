@@ -238,6 +238,13 @@ export interface AddPanelOptionsBase {
    * resurrect a pane or start a second process in it.
    */
   replacesRestoreRecovery?: boolean;
+  /**
+   * PTY-only. This launch replaces, under the same `requestedId`, a pane whose
+   * terminal its host lost (#14184), and names the restart key the pane was
+   * lost under. Dropped when the pane has since been restarted, closed or
+   * seen to exit: someone got there first.
+   */
+  replacesLostTerminal?: number;
   /** PTY-only. See `PtyPanelData.restoreProvenance`. */
   restoreProvenance?: TerminalRestoreProvenance;
   /** PTY-only. See `PtyPanelData.lastAgentObservation`. */

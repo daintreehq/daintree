@@ -60,6 +60,7 @@ const WelcomeSchema = z.object({
   sessionId: id,
   resumed: z.boolean(),
   resumeSecret: z.string().max(256).optional(),
+  hostLaunchId: id.optional(),
 });
 
 const RejectSchema = z.object({

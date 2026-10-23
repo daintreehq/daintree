@@ -220,7 +220,9 @@ export class HostConnection {
   ) {
     this.hostId = options.hostId;
     this.link = new LinkClient(options);
-    this.link.onSession(({ session, resumed }) => this.attach(session, resumed));
+    this.link.onSession(({ session, resumed, hostRestarted }) =>
+      this.attach(session, resumed, hostRestarted)
+    );
     this.link.onStateChange(() => this.checkReady());
   }
 
@@ -632,7 +634,7 @@ export class HostConnection {
     return this.views.hostOf ? this.views.hostOf(webContentsId) === this.hostId : true;
   }
 
-  private attach(session: LinkSession, resumed: boolean): void {
+  private attach(session: LinkSession, resumed: boolean, hostRestarted: boolean): void {
     // A fresh session means the host dropped every endpoint of the old one,
     // including any still waiting to be closed.
     const reopen = resumed ? [] : [...this.endpoints];
@@ -765,7 +767,7 @@ export class HostConnection {
     }
     const isReconnect = this.hadSession;
     this.hadSession = true;
-    if (isReconnect) this.notifyAttached({ resumed, reopened });
+    if (isReconnect) this.notifyAttached({ resumed, reopened, hostRestarted });
     this.checkReady();
     void session.call(LinkMethod.HOST_INFO, null).then(
       (answer) => {

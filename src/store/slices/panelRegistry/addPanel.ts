@@ -265,6 +265,19 @@ function isHeldForRecovery(panel: CarrierPanel | undefined): boolean {
   );
 }
 
+/** Still exactly as its host's loss of its terminal left it, under `restartKey`. */
+function showsLostTerminal(panel: CarrierPanel | undefined, restartKey: number): boolean {
+  return (
+    panel !== undefined &&
+    panel.location !== "trash" &&
+    isPtyPanel(panel) &&
+    !panel.isRestarting &&
+    panel.runtimeStatus === "exited" &&
+    panel.exitCode === undefined &&
+    (panel.restartKey ?? 0) === restartKey
+  );
+}
+
 /**
  * A call landing on a live record — a reconnect, a double hydration, a held pane
  * being launched — carries restore-time or snapshot notes that can be older than
@@ -730,10 +743,20 @@ export const createAddPanelActions = (
       logWarn("[TerminalStore] Dropped a launch for a pane no longer held for recovery", { id });
       return null;
     }
+    const replacesLost = options.replacesLostTerminal;
+    if (replacesLost !== undefined && !showsLostTerminal(get().panelsById[id], replacesLost)) {
+      logWarn(
+        "[TerminalStore] Dropped a relaunch for a pane that moved on from its lost terminal",
+        {
+          id,
+        }
+      );
+      return null;
+    }
     // The reverse: a saved hold replayed after the user already launched that
     // pane would hide a running agent behind a gate. Only another hold may be
-    // re-committed over.
-    if (isRecoveryHold) {
+    // re-committed over, or a pane whose terminal is gone.
+    if (isRecoveryHold && replacesLost === undefined) {
       const existing = get().panelsById[id];
       if (existing !== undefined && !isHeldForRecovery(existing)) {
         logWarn("[TerminalStore] Kept a launched pane over a stale recovery hold", { id });
@@ -941,7 +964,11 @@ export const createAddPanelActions = (
 
     // A launch over a held pane adds no id, so a batch's deferred flush — which
     // only persists when ids were added — would never write the new record.
-    if (isHydrationBatchActive() && !options.replacesRestoreRecovery) {
+    if (
+      isHydrationBatchActive() &&
+      !options.replacesRestoreRecovery &&
+      replacesLost === undefined
+    ) {
       // Batched path: commit `panelsById` immediately; defer `panelIds` append.
       commitParked(
         set,
@@ -1027,6 +1054,9 @@ export const createAddPanelActions = (
       const ptyPopoverSuppressed =
         options.focusPolicy === "preserve" ||
         !resolvePanelKindPolicy(requestedKind).dockPopoverOnSpawn;
+      // What the lost terminal showed goes, as a restart's does: the new
+      // process starts on a fresh terminal, and the new restart key remounts it.
+      if (replacesLost !== undefined) terminalInstanceService.destroy(id);
       commitParked(
         set,
         terminal
@@ -1087,7 +1117,9 @@ export const createAddPanelActions = (
                 // Capability is sealed at spawn — values should match — but
                 // preserve the existing entry if a partial reconnect omits it.
               }
-            : ptyTerminal;
+            : replacesLost !== undefined
+              ? { ...ptyTerminal, restartKey: (existingPty2?.restartKey ?? 0) + 1 }
+              : ptyTerminal;
           const newById = {
             ...state.panelsById,
             [id]: carryLiveScratchpad(preservedTerminal, existingPty2),

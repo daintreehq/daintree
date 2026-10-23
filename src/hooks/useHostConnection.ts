@@ -82,6 +82,17 @@ let resyncAgain = false;
 /** A pass still owed the project state, because a request that asked for it was coalesced. */
 let resyncProjectStateOwed = false;
 /**
+ * The panes a host restart ended, gathered by the passes after it until one
+ * learns whether this view drives: it relaunches them, or leaves them to the
+ * driver. Null when no restart is owed that.
+ */
+let restartLosses: Map<string, number> | null = null;
+/**
+ * Bumped by teardown alone: a relaunch under way outlives the resyncs after
+ * it, which only re-read what the host shows, but not the view's sync.
+ */
+let restartRecoveryGeneration = 0;
+/**
  * Bumped by every resync request and by teardown. A pass applies what it read
  * only while this still matches, so an answer overtaken by a newer request
  * (or a closed sync) is dropped and the follow-up pass applies a fresh one.
@@ -95,6 +106,12 @@ export interface ResyncFromHostOptions {
    * as well, not just what events would have carried.
    */
   freshSession?: boolean;
+  /**
+   * The host's process restarted in the gap, so the terminals it no longer
+   * has ended with it: a view that drives brings them back as a cold launch
+   * would, rather than leaving them exited.
+   */
+  hostRestarted?: boolean;
 }
 
 /**
@@ -106,6 +123,7 @@ export interface ResyncFromHostOptions {
 export function resyncFromHost(options: ResyncFromHostOptions = {}): Promise<void> {
   resyncGeneration += 1;
   if (options.freshSession) resyncProjectStateOwed = true;
+  if (options.hostRestarted) restartLosses ??= new Map();
   if (resyncRunning) {
     resyncAgain = true;
     return resyncRunning;
@@ -129,7 +147,10 @@ async function runResyncPass(projectState: boolean): Promise<void> {
   const readBacks = readBacksStarted;
   const isCurrent = () => generation === resyncGeneration && getViewWorkspaceId() === projectId;
   const lease = refreshLease();
-  const terminals = projectId ? resyncHostTerminals(projectId, { isCurrent }) : Promise.resolve();
+  const losses = restartLosses;
+  const terminals = projectId
+    ? resyncHostTerminals(projectId, { isCurrent, lost: losses ?? undefined })
+    : Promise.resolve();
   const worktrees = window.electron.worktree.refresh();
   const steps: Array<[string, () => Promise<unknown>]> = [
     ["worktrees", () => worktrees],
@@ -166,6 +187,12 @@ async function runResyncPass(projectState: boolean): Promise<void> {
       },
     ]);
   }
+  if (losses && projectId) {
+    steps.push([
+      "terminals a host restart ended",
+      () => relaunchRestartLosses(projectId, losses, { isCurrent, terminals, lease }),
+    ]);
+  }
   const results = await Promise.allSettled(steps.map(([, step]) => step()));
   results.forEach((result, index) => {
     if (result.status === "rejected") {
@@ -173,6 +200,48 @@ async function runResyncPass(projectState: boolean): Promise<void> {
     }
   });
   if (projectState && !isCurrent()) resyncProjectStateOwed = true;
+}
+
+/**
+ * Once the pass knows what the restart ended and who drives: a view that
+ * drives brings those panes back the way a cold launch does, and one that
+ * watches, or hasn't heard from the host since the gap, starts nothing and
+ * lets them go, so no later takeover relaunches the driver's agents.
+ */
+async function relaunchRestartLosses(
+  projectId: string,
+  losses: Map<string, number>,
+  pass: { isCurrent: () => boolean; terminals: Promise<void>; lease: Promise<void> }
+): Promise<void> {
+  await Promise.allSettled([pass.terminals, pass.lease]);
+  // A newer pass carries on gathering into the same set and settles it.
+  if (!pass.isCurrent() || restartLosses !== losses) return;
+  if (!drivesSinceGap(projectId)) {
+    restartLosses = null;
+    if (losses.size > 0) {
+      logInfo("[HostConnection] Left the terminals a host restart ended to the project's driver", {
+        projectId,
+        count: losses.size,
+      });
+    }
+    return;
+  }
+  if (losses.size === 0) {
+    restartLosses = null;
+    return;
+  }
+  const { relaunchTerminalsLostToHostRestart } = await import("@/store/hostRestartRecovery");
+  if (!pass.isCurrent() || restartLosses !== losses) return;
+  restartLosses = null;
+  const generation = restartRecoveryGeneration;
+  safeFireAndForget(
+    relaunchTerminalsLostToHostRestart(projectId, losses, {
+      isCurrent: () =>
+        generation === restartRecoveryGeneration && getViewWorkspaceId() === projectId,
+      drives: () => drivesSinceGap(projectId),
+    }),
+    { context: "Relaunching the terminals a host restart ended" }
+  );
 }
 
 /** Bumped by every lease event and by teardown, so a slower lookup never overrides either. */
@@ -237,6 +306,21 @@ let navigationAgain = false;
 function watches(projectId: string): boolean {
   const lease = getDriveLeaseSnapshot();
   return lease?.projectId === projectId && lease.drivingHere === false;
+}
+
+/**
+ * The host has said since the link came back that this view drives
+ * `projectId`, over the state it drove before: not merely that nobody said
+ * otherwise.
+ */
+function drivesSinceGap(projectId: string): boolean {
+  const lease = getDriveLeaseSnapshot();
+  return (
+    lease?.projectId === projectId &&
+    lease.drivingHere === true &&
+    leaseBeforeGap === undefined &&
+    !readBackOwed
+  );
 }
 
 /**
@@ -1054,7 +1138,10 @@ function beginSync(): () => void {
           }
           case "resync-required":
             if (event.hostId === hostId) {
-              void resyncFromHost({ freshSession: event.reason === "reconnected" });
+              void resyncFromHost({
+                freshSession: event.reason === "reconnected" || event.reason === "host-restarted",
+                hostRestarted: event.reason === "host-restarted",
+              });
               // A dropped event may have been the driver's panels changing.
               if (projectId && watches(projectId)) void followHostPanels();
             }
@@ -1085,6 +1172,8 @@ function beginSync(): () => void {
     followGeneration += 1;
     draftFollowGeneration += 1;
     takeOverGeneration += 1;
+    restartRecoveryGeneration += 1;
+    restartLosses = null;
     for (const dispose of disposers.splice(0)) dispose();
     driverNavigation = null;
     navigationLeaseId = undefined;
@@ -1200,6 +1289,8 @@ export function _reloadHostConnectionSyncForTesting(): void {
   resyncRunning = null;
   resyncAgain = false;
   resyncProjectStateOwed = false;
+  restartLosses = null;
+  restartRecoveryGeneration += 1;
   followRunning = null;
   followAgain = false;
   draftFollowRunning = null;

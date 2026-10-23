@@ -10,9 +10,15 @@ export interface SessionAttachedInfo {
    * endpoint-side state starts over.
    */
   reopened: readonly number[];
+  /**
+   * The host's process restarted in the gap: the terminals the views showed
+   * ended with it, rather than running on unseen as they do when a session
+   * merely expired.
+   */
+  hostRestarted?: boolean;
 }
 
-export type ViewResyncReason = "reconnected";
+export type ViewResyncReason = "reconnected" | "host-restarted";
 
 export interface ResyncCoordinatorOptions {
   /** Tell one local view to refetch what it shows from its host. */
@@ -34,9 +40,10 @@ export class ResyncCoordinator {
 
   onSessionAttached(hostId: HostId, info: SessionAttachedInfo): void {
     if (info.resumed) return;
+    const reason: ViewResyncReason = info.hostRestarted ? "host-restarted" : "reconnected";
     for (const webContentsId of new Set(info.reopened)) {
       try {
-        this.options.resync(webContentsId, hostId, "reconnected");
+        this.options.resync(webContentsId, hostId, reason);
       } catch (error) {
         console.error("[RemoteHosts] Resync after reconnect failed:", error);
       }

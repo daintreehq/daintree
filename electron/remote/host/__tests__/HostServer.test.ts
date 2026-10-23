@@ -704,6 +704,37 @@ describe("HostServer session resume", () => {
     );
   });
 
+  it("names its process alike on every session and through a Host mode toggle, so only a restart reads as one (#14184)", async () => {
+    let server = await startServer({ resumeGraceMs: 20 });
+    const seen: HostSessionContext[] = [];
+    server.onSession((ctx) => seen.push(ctx));
+    const client = startClient(server, { backoff: { initialMs: 20, maxMs: 20, jitter: 0 } });
+    const restarted: boolean[] = [];
+    client.onSession(({ hostRestarted }) => restarted.push(hostRestarted));
+    await waitFor(() => restarted.length === 1);
+
+    // A session that expired while this process stayed up.
+    seen[0]!.session.close("test drop");
+    await waitFor(() => restarted.length === 2);
+
+    // Host mode off and on again: a new server, the same process and terminals.
+    await server.close();
+    server = await startServer();
+    await waitFor(() => restarted.length === 3);
+
+    // Another process listening at the same place: the host restarted.
+    await server.close();
+    await startServer({ launchId: "another-process" });
+    await waitFor(() => restarted.length === 4);
+
+    expect(restarted).toEqual([false, false, false, true]);
+    expect(logged("main:LinkClient")).toContainEqual(
+      expect.objectContaining({
+        message: "Remote host restarted; the previous session ended with it",
+      })
+    );
+  });
+
   it("does not resume a session for a different client id", async () => {
     const server = await startServer();
     const seen: HostSessionContext[] = [];
