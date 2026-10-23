@@ -1636,7 +1636,10 @@ export class PluginService {
         return after !== before ? after : null;
       },
       unloadPlugin: (pluginId, options) => {
-        this.unloadPackageInstances(pluginId, { uninstall: options?.reload !== true });
+        this.unloadPackageInstances(pluginId, {
+          uninstall: options?.reload !== true,
+          purge: true,
+        });
         this.unloadPlugin(pluginId, options);
       },
       settlePluginReload: (pluginId) => {
@@ -7692,7 +7695,15 @@ export class PluginService {
       // Woken by dispose: the getter would build a fresh controller.
       if (this.disposed) return false;
       await this.projectPlugins.whenSettled(projectId);
-      await this.installedInstanceChains.get(projectId)?.catch(() => {});
+      // Follow the queue to its end: an update can append behind the tail read here.
+      for (
+        let tail = this.installedInstanceChains.get(projectId);
+        tail;
+        tail = this.installedInstanceChains.get(projectId)
+      ) {
+        await tail.catch(() => {});
+        if (this.installedInstanceChains.get(projectId) === tail) break;
+      }
       return !this.disposed;
     })();
     try {
@@ -8119,6 +8130,9 @@ export class PluginService {
       );
     }
     if (!ok) return false;
+    // A repository-local load of the same identity can be in flight at once; the
+    // registry holds whichever landed, and only ours is ours to track and unload.
+    if (this.plugins.get(key)?.dir !== pkg.dir) return false;
     this.installedInstanceKeys.add(key);
     // A close, disable or package replacement landed while this was loading. Its
     // teardown could not see an instance that was not registered yet.
@@ -8155,15 +8169,18 @@ export class PluginService {
    * the code behind them is about to change; an uninstall also forgets where the
    * package was enabled. A plain disable keeps both.
    */
-  private unloadPackageInstances(manifestId: string, opts: { uninstall: boolean }): void {
+  private unloadPackageInstances(
+    manifestId: string,
+    opts: { uninstall: boolean; purge: boolean }
+  ): void {
     for (const key of [...this.installedInstanceKeys]) {
       if (pluginManifestIdFromInstanceKey(key) !== manifestId) continue;
       this.installedInstanceEpochs.set(key, (this.installedInstanceEpochs.get(key) ?? 0) + 1);
-      this.dropInstalledInstance(key, true);
+      this.dropInstalledInstance(key, opts.purge);
     }
     // Instances of a closed project are unloaded but keep their approvals; the
     // code behind them is about to change or go, so those are purged too.
-    if (this.projectInstancePackages.has(manifestId) || opts.uninstall) {
+    if (opts.purge) {
       for (const projectId of this.projectInstanceStore.listForPackage(manifestId)) {
         getPluginCapabilityConsentService().revokeAllForPlugin(
           makeProjectPluginInstanceKey(projectId, manifestId)
@@ -8214,7 +8231,9 @@ export class PluginService {
     } else {
       const key = makeProjectPluginInstanceKey(projectId, manifestId);
       this.installedInstanceEpochs.set(key, (this.installedInstanceEpochs.get(key) ?? 0) + 1);
-      if (this.installedInstanceKeys.has(key)) this.dropInstalledInstance(key, true);
+      // Purged even when the project is closed and the instance is not loaded:
+      // the approvals are the instance's, not the runtime's.
+      this.dropInstalledInstance(key, true);
     }
     this.broadcaster.broadcastProvenanceChanged();
   }
@@ -9366,7 +9385,7 @@ export class PluginService {
         const running = this.plugins.get(pluginId);
         const catalogued = this.projectInstancePackages.get(pluginId);
         if (!running && catalogued) {
-          this.unloadPackageInstances(pluginId, { uninstall: false });
+          this.unloadPackageInstances(pluginId, { uninstall: false, purge: false });
           this.projectInstancePackages.delete(pluginId);
           this.disabledPlugins.set(pluginId, {
             manifest: catalogued.manifest as PluginManifest,
