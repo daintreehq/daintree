@@ -88,6 +88,12 @@ export function restoreScrollback(
   managed: ManagedTerminal,
   options: RestoreScrollbackOptions = {}
 ): void {
+  // Released history only comes back on reveal, together with the restore
+  // that refills it. A hidden agent's write bursts run the tier-upgrade path
+  // on every chunk, and raising the capacity there would quietly regrow the
+  // buffer the release freed (#14220).
+  if (managed.historyReleased) return;
+
   const { scrollbackLines } = useScrollbackStore.getState();
   const { performanceMode } = usePerformanceModeStore.getState();
 
