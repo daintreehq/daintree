@@ -1,4 +1,5 @@
 import { idleTerminalClient } from "@/clients/idleTerminalClient";
+import { notifyPluginWorkStopped } from "@/lib/pluginWorkStoppedNotice";
 import { useProjectStore } from "@/store/projectStore";
 
 /**
@@ -17,5 +18,7 @@ export async function sleepIdleTerminalProject(projectId: string): Promise<void>
     await projects.sleepProject(projectId);
     return;
   }
-  await idleTerminalClient.closeProject(projectId);
+  const projectName = projects.projects.find((p) => p.id === projectId)?.name ?? "the project";
+  const pluginWorkStopped = await idleTerminalClient.closeProject(projectId);
+  notifyPluginWorkStopped(projectName, pluginWorkStopped);
 }

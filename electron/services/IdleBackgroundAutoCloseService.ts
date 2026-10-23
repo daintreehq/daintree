@@ -70,11 +70,15 @@ type CoordinationHoldProvider = (
   ownerOf: (terminalId: string) => string | null
 ) => string | null;
 
+/** The named plugin work keeping a project awake (`plugin-task:<instance>`), or null. */
+type PluginWorkProvider = (projectId: string) => string | null;
+
 /** Why a project must not be reclaimed this sweep. */
-type BlockingReason = "terminal" | "assistant" | "coordination-hold";
+type BlockingReason = "terminal" | "assistant" | "coordination-hold" | "plugin-work";
 
 /** Why a project past its threshold was left awake, as the sweep log names it. */
-type SkipReason = IdleShellSkipReason | "mcp-dispatch" | "ineligible" | "coordination-hold";
+type SkipReason =
+  IdleShellSkipReason | "mcp-dispatch" | "ineligible" | "coordination-hold" | "plugin-work";
 
 type ShellCloseResult =
   | { status: "slept"; entry: IdleBackgroundClosedProjectEntry; terminalsKilled: number }
@@ -134,6 +138,7 @@ export class IdleBackgroundAutoCloseService {
   private ptyClient: PtyClient | null = null;
   private projectViewManagersProvider: (() => ProjectViewManager[]) | null = null;
   private coordinationHoldProvider: CoordinationHoldProvider | null = null;
+  private pluginWorkProvider: PluginWorkProvider | null = null;
   /**
    * Owners from the latest terminal read. It still lists a terminal that has
    * exited, which the spawn registry and the fleet no longer do, so a record
@@ -157,7 +162,8 @@ export class IdleBackgroundAutoCloseService {
   /**
    * Inject the question of whether a project has in-memory agent coordination
    * that sleeping would drop. Read synchronously and only on the automatic
-   * path; manual Sleep never asks. A missing or throwing provider holds nothing.
+   * path; manual Sleep never asks. A missing provider holds nothing; a throwing
+   * one holds the project.
    */
   setCoordinationHoldProvider(provider: CoordinationHoldProvider | null): void {
     this.coordinationHoldProvider = provider;
@@ -174,6 +180,42 @@ export class IdleBackgroundAutoCloseService {
       // An unreadable hold is not a clear one: leave the project awake.
       return "unreadable";
     }
+  }
+
+  /**
+   * Inject the question of whether a project's plugins hold work sleep would
+   * interrupt: a live task or a call still in flight (#14093). Read
+   * synchronously at every gate a coordination hold is, and only on the
+   * automatic path; manual Sleep goes through and reports what it stopped.
+   */
+  setPluginWorkProvider(provider: PluginWorkProvider | null): void {
+    this.pluginWorkProvider = provider;
+  }
+
+  private pluginWorkHold(projectId: string): string | null {
+    try {
+      return this.pluginWorkProvider?.(projectId) ?? null;
+    } catch (error) {
+      logError("idle-background-auto-close-plugin-work-read-failed", error, { projectId });
+      return "unreadable";
+    }
+  }
+
+  /**
+   * Plugin work holding a project past the sweep's own screen, logged by name:
+   * the sleep that backs off for it reports only that it was ineligible.
+   */
+  private latePluginWorkHold(projectId: string): string | null {
+    const hold = this.pluginWorkHold(projectId);
+    if (hold !== null) {
+      logInfo("idle-background-auto-close-plugin-work-hold", { projectId, hold });
+    }
+    return hold;
+  }
+
+  /** Neither coordination nor plugin work holds the project. */
+  private isUnheld(projectId: string): boolean {
+    return this.coordinationHold(projectId) === null && this.latePluginWorkHold(projectId) === null;
   }
 
   /**
@@ -269,6 +311,7 @@ export class IdleBackgroundAutoCloseService {
       return "terminal";
     }
     if (this.coordinationHold(projectId) !== null) return "coordination-hold";
+    if (this.pluginWorkHold(projectId) !== null) return "plugin-work";
     return null;
   }
 
@@ -554,6 +597,14 @@ export class IdleBackgroundAutoCloseService {
     const skip = (reason: SkipReason, projectId: string) => {
       (skipped[reason] ??= []).push(projectId);
     };
+    /** The named plugin work holding each project the sweep screened out for it. */
+    const pluginHolds: Record<string, string> = {};
+    const holdForPluginWork = (projectId: string): boolean => {
+      const hold = this.pluginWorkHold(projectId);
+      if (hold === null) return false;
+      pluginHolds[projectId] = hold;
+      return true;
+    };
 
     for (const project of projects) {
       if (!project.id) continue;
@@ -595,6 +646,10 @@ export class IdleBackgroundAutoCloseService {
           skip("coordination-hold", pid);
           continue;
         }
+        if (holdForPluginWork(pid)) {
+          skip("plugin-work", pid);
+          continue;
+        }
         // Screen with the sweep's own snapshot first, so a project with a busy
         // shell costs no workspace or git reads. The census is read per project
         // because an earlier project's teardown can outlast its freshness bound.
@@ -634,6 +689,7 @@ export class IdleBackgroundAutoCloseService {
       if (blocked) {
         if (blocked === "assistant") assistantProtected.push(pid);
         else if (blocked === "coordination-hold") skip("coordination-hold", pid);
+        else if (blocked === "plugin-work" && holdForPluginWork(pid)) skip("plugin-work", pid);
         continue;
       }
 
@@ -693,6 +749,9 @@ export class IdleBackgroundAutoCloseService {
     }
     if (Object.keys(skipped).length > 0) {
       logInfo("idle-background-auto-close-skip-idle-shells", { reasons: skipped, trigger });
+    }
+    if (Object.keys(pluginHolds).length > 0) {
+      logInfo("idle-background-auto-close-skip-plugin-work", { holds: pluginHolds, trigger });
     }
 
     if (closed.length === 0) return terminalsKilled;
@@ -891,6 +950,9 @@ export class IdleBackgroundAutoCloseService {
     if (this.coordinationHold(projectId) !== null) {
       return { status: "skipped", reason: "coordination-hold" };
     }
+    if (this.latePluginWorkHold(projectId) !== null) {
+      return { status: "skipped", reason: "plugin-work" };
+    }
     const vetted = evaluateShellTerminals(
       projectId,
       terminals,
@@ -918,7 +980,7 @@ export class IdleBackgroundAutoCloseService {
         isStillEligible: () =>
           this.ptyClient === client &&
           this.readEligibleShellProject(projectId, thresholdMs) !== null &&
-          this.coordinationHold(projectId) === null,
+          this.isUnheld(projectId),
         allowsTerminals: (snapshot) =>
           !snapshot.degraded &&
           terminalsStillVetted(
@@ -1021,7 +1083,11 @@ export class IdleBackgroundAutoCloseService {
     if (!liveTerminals) return null;
     const project = this.readEligibleProject(projectId, now, thresholdMs);
     if (!project) return null;
-    if (this.blockingReason(projectId, liveTerminals)) return null;
+    const blocked = this.blockingReason(projectId, liveTerminals);
+    if (blocked) {
+      if (blocked === "plugin-work") this.latePluginWorkHold(projectId);
+      return null;
+    }
 
     // From here Sleep owns the order. Its capture-revoke settles whatever
     // non-live session records the project has left — the gate above floors a
@@ -1038,7 +1104,7 @@ export class IdleBackgroundAutoCloseService {
         isStillEligible: () =>
           this.ptyClient === client &&
           this.readEligibleProject(projectId, now, thresholdMs) !== null &&
-          this.coordinationHold(projectId) === null,
+          this.isUnheld(projectId),
         allowsTerminals: (snapshot) =>
           !snapshot.degraded && this.blockingReason(projectId, snapshot.terminals) === null,
       },

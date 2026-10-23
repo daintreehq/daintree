@@ -40,6 +40,7 @@ type SleepOutcome =
       terminalsKilled: number;
       rendererViewsEvicted: number;
       workspaceEvicted: boolean;
+      pluginWorkStopped?: { tasks: unknown[]; processes: number; calls: number };
     }
   | { status: "already-closed" };
 const sleepProjectMock = vi.hoisted(() =>
@@ -67,6 +68,11 @@ vi.mock("../pty/terminalSessionPersistence.js", () => ({
 }));
 
 vi.mock("../projectSleep.js", () => ({ sleepProject: sleepProjectMock }));
+
+const pluginWorkReader = vi.hoisted(() => vi.fn<(projectId: string) => unknown[]>(() => []));
+vi.mock("../plugin/projectPluginWork.js", () => ({
+  loadProjectPluginWorkReader: async () => pluginWorkReader,
+}));
 
 function slept(terminalsKilled: number): SleepOutcome {
   return { status: "slept", terminalsKilled, rendererViewsEvicted: 1, workspaceEvicted: true };
@@ -626,9 +632,9 @@ describe("IdleTerminalNotificationService", () => {
       const service = makeService();
       const provider = () => [] as ProjectViewManager[];
       service.setProjectViewManagersProvider(provider);
-      const killed = await service.closeProject("proj-1");
+      const result = await service.closeProject("proj-1");
 
-      expect(killed).toBe(2);
+      expect(result).toEqual({ terminalsKilled: 2, pluginWorkStopped: null });
       // The reminder that offered it was automatic; pressing it is not (#13845).
       expect(sleepProjectMock).toHaveBeenCalledWith(
         "proj-1",
@@ -637,10 +643,29 @@ describe("IdleTerminalNotificationService", () => {
           ptyClient: ptyManagerMock,
           workspaceClient: workspaceClientMock,
           projectViewManagers: provider,
+          pluginWork: pluginWorkReader,
         }
       );
       const dismissals = storeBacking.idleTerminalDismissals as Record<string, number>;
       expect(dismissals["proj-1"]).toBeGreaterThan(0);
+    });
+
+    it("passes on the plugin work the sleep stopped (#14093)", async () => {
+      projectStoreMock.getAllProjects.mockReturnValue([makeProject("proj-1")]);
+      const pluginWorkStopped = { tasks: [], processes: 1, calls: 0 };
+      sleepProjectMock.mockResolvedValueOnce({
+        status: "slept",
+        terminalsKilled: 0,
+        rendererViewsEvicted: 1,
+        workspaceEvicted: true,
+        pluginWorkStopped,
+      });
+
+      const service = makeService();
+      expect(await service.closeProject("proj-1")).toEqual({
+        terminalsKilled: 0,
+        pluginWorkStopped,
+      });
     });
 
     it("does NOT set a dismissal cooldown when 0 terminals were killed", async () => {
@@ -657,7 +682,10 @@ describe("IdleTerminalNotificationService", () => {
       sleepProjectMock.mockResolvedValueOnce({ status: "already-closed" });
 
       const service = makeService();
-      expect(await service.closeProject("proj-1")).toBe(0);
+      expect(await service.closeProject("proj-1")).toEqual({
+        terminalsKilled: 0,
+        pluginWorkStopped: null,
+      });
       expect(storeBacking.idleTerminalDismissals).toBeUndefined();
     });
 
@@ -671,8 +699,8 @@ describe("IdleTerminalNotificationService", () => {
 
     it("rejects empty projectId without delegating", async () => {
       const service = makeService();
-      const killed = await service.closeProject("");
-      expect(killed).toBe(0);
+      const result = await service.closeProject("");
+      expect(result).toEqual({ terminalsKilled: 0, pluginWorkStopped: null });
       expect(sleepProjectMock).not.toHaveBeenCalled();
     });
   });

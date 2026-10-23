@@ -13,7 +13,8 @@ import { readPanelRecoveryHold, type PanelRecoveryHold } from "./panelRecoveryQu
 import type { ProjectViewManagersProvider } from "../window/activeProjectIds.js";
 import type { PtyClient } from "./PtyClient.js";
 import type { WorkspaceClient } from "./WorkspaceClient.js";
-import type { ProjectSleepResult } from "../../shared/types/ipc/project.js";
+import type { PluginWorkStopped, ProjectSleepResult } from "../../shared/types/ipc/project.js";
+import { summarizePluginWorkStopped, type ProjectPluginWork } from "./plugin/projectPluginWork.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 import { AppError } from "../utils/errorTypes.js";
 import { logError, logInfo } from "../utils/logger.js";
@@ -28,6 +29,12 @@ export interface SleepProjectDependencies {
   workspaceClient?: WorkspaceClient | null;
   /** Every window's view manager, read lazily — windows open and close mid-sleep. */
   projectViewManagers: ProjectViewManagersProvider;
+  /**
+   * The project's plugin work, read once just before the commit so the result
+   * can say what the unload is about to stop (#14093). A policy keeps its own
+   * hold on that work through `isStillEligible`.
+   */
+  pluginWork?: (projectId: string) => readonly ProjectPluginWork[];
 }
 
 /**
@@ -278,6 +285,25 @@ async function runSleep(
       return skip(refusedAfterKill, terminalsKilled);
     }
 
+    // Synchronous, and nothing awaits between here and the unload being
+    // queued, so this is the work that unload will stop.
+    let pluginWorkStopped: PluginWorkStopped | null = null;
+    try {
+      pluginWorkStopped = deps.pluginWork
+        ? summarizePluginWorkStopped(deps.pluginWork(projectId))
+        : null;
+    } catch (pluginWorkError) {
+      logError("project-sleep-plugin-work-read-failed", pluginWorkError, { projectId });
+    }
+    if (pluginWorkStopped) {
+      logInfo("project-sleep-plugin-work-stopped", {
+        projectId,
+        initiator: options.initiator,
+        tasks: pluginWorkStopped.tasks.length,
+        processes: pluginWorkStopped.processes,
+      });
+    }
+
     // Past this point the terminals are gone and the kill is confirmed, so the
     // operation is COMMITTED: every remaining step is reclamation or
     // bookkeeping, and letting one of them throw would strand the row as
@@ -366,7 +392,13 @@ async function runSleep(
         }`
     );
 
-    return { status: "slept", terminalsKilled, rendererViewsEvicted, workspaceEvicted };
+    return {
+      status: "slept",
+      terminalsKilled,
+      rendererViewsEvicted,
+      workspaceEvicted,
+      ...(pluginWorkStopped ? { pluginWorkStopped } : {}),
+    };
   } catch (error) {
     console.error(`[ProjectSleep] Failed for ${projectId}:`, error);
     // Rethrow an AppError as-is so a guard rejection (the unconfirmed teardown

@@ -124,3 +124,83 @@ describe("PluginService plugin tasks (#13819)", () => {
     expect(svc.dismissPluginTask("acme.importer", task.id)).toBe(false);
   });
 });
+
+describe("PluginService project plugin work (#14093)", () => {
+  function registerInstance(instanceKey: string, name: string): PluginHostApi {
+    const seam = svc as unknown as {
+      _registerFakePluginForTests(
+        p: { manifest: PluginManifest; dir: string; loadedAt: number; isBuiltin: boolean },
+        instanceKey?: string
+      ): void;
+      _createHostForTests(id: string): PluginHostApi;
+    };
+    seam._registerFakePluginForTests(
+      {
+        manifest: {
+          name,
+          displayName: name,
+          version: "1.0.0",
+          capabilities: [],
+          contributes: { fileDecorationProviders: [], forgeProviders: [] },
+        } as unknown as PluginManifest,
+        dir: baseDir,
+        loadedAt: 0,
+        isBuiltin: false,
+      },
+      instanceKey
+    );
+    return seam._createHostForTests(instanceKey);
+  }
+
+  it("collects every instance the project owns and nothing another project or an app-global plugin runs", async () => {
+    const importer = registerInstance("project__p1__acme.importer", "acme.importer");
+    const linter = registerInstance("project__p1__acme.linter", "acme.linter");
+    const otherProject = registerInstance("project__p2__acme.importer", "acme.importer");
+    const appGlobal = registerInstance("acme.global", "acme.global");
+
+    const imported = await importer.tasks.start({ title: "Importing", retry: RETRY });
+    const linted = await linter.tasks.start({
+      title: "Linting",
+      retry: { actionId: "acme.linter.run" },
+    });
+    await otherProject.tasks.start({ title: "Elsewhere", retry: RETRY });
+    await appGlobal.tasks.start({ title: "Everywhere", retry: { actionId: "acme.global.run" } });
+
+    const work = svc.getProjectPluginWork("p1");
+    expect(work.map((entry) => entry.pluginId).sort()).toEqual([
+      "project__p1__acme.importer",
+      "project__p1__acme.linter",
+    ]);
+    expect(work.flatMap((entry) => entry.liveTasks.map((task) => task.id)).sort()).toEqual(
+      [imported.id, linted.id].sort()
+    );
+    expect(svc.getProjectPluginWork("p3")).toEqual([]);
+  });
+
+  it("keeps a cancelling task as live work until the plugin finishes it", async () => {
+    const host = registerInstance("project__p1__acme.importer", "acme.importer");
+    const task = await host.tasks.start({ title: "Sync", cancellable: true, retry: RETRY });
+
+    expect(svc.cancelPluginTask("project__p1__acme.importer", task.id)).toBe(true);
+    expect(svc.getProjectPluginWork("p1")).toHaveLength(1);
+
+    await task.finish({ outcome: "cancelled" });
+    expect(svc.getProjectPluginWork("p1")).toEqual([]);
+  });
+
+  it("releases a project only once every instance's task has ended", async () => {
+    const importer = registerInstance("project__p1__acme.importer", "acme.importer");
+    const linter = registerInstance("project__p1__acme.linter", "acme.linter");
+    const imported = await importer.tasks.start({ title: "Importing", retry: RETRY });
+    await linter.tasks.start({ title: "Linting", retry: { actionId: "acme.linter.run" } });
+
+    await imported.finish({ outcome: "succeeded" });
+    expect(svc.getProjectPluginWork("p1").map((entry) => entry.pluginId)).toEqual([
+      "project__p1__acme.linter",
+    ]);
+
+    // An unload interrupts the task; the record stays for the user but holds nothing.
+    svc.unloadPlugin("project__p1__acme.linter");
+    expect(svc.getProjectPluginWork("p1")).toEqual([]);
+  });
+});

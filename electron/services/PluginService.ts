@@ -238,6 +238,7 @@ import {
   type PluginWorktreeSnapshotFetchResult,
 } from "./plugin/PluginHostFactory.js";
 import { PluginTaskRegistry } from "./plugin/PluginTaskRegistry.js";
+import type { ProjectPluginWork } from "./plugin/projectPluginWork.js";
 import { createPluginEventRoutes, type PluginEventRoutes } from "./plugin/pluginEventRoutes.js";
 import type {
   LoadedPlugin,
@@ -8265,6 +8266,30 @@ export class PluginService {
    * Memory is joined by pid to `app.getAppMetrics()` in the governance
    * service, not here.
    */
+  /**
+   * What every plugin instance this project owns is doing right now, for the
+   * sleep paths (#14093). Synchronous, so a sleep can ask it again at each of
+   * its gates. App-global plugins are left out: closing a project never unloads
+   * them, so nothing they run is the project's to protect or report.
+   */
+  getProjectPluginWork(projectId: string): ProjectPluginWork[] {
+    const pluginIds = new Set([...this.plugins.keys(), ...this.pluginTasks.pluginIds()]);
+    const work: ProjectPluginWork[] = [];
+    for (const pluginId of pluginIds) {
+      if (projectIdFromPluginInstanceKey(pluginId) !== projectId) continue;
+      const liveTasks = this.pluginTasks
+        .snapshot(pluginId)
+        .filter((task) => task.state !== "interrupted")
+        .map((task) => ({ id: task.id, pluginName: task.pluginName, title: task.title }));
+      const bridge = this.pluginWorkers.get(pluginId)?.bridge;
+      const pendingCalls = bridge ? bridge.pendingInvokeCount + bridge.pendingHostCallCount : 0;
+      const runningProcesses = this.processManager?.runningCount(pluginId) ?? 0;
+      if (liveTasks.length === 0 && pendingCalls === 0 && runningProcesses === 0) continue;
+      work.push({ pluginId, liveTasks, pendingCalls, runningProcesses });
+    }
+    return work;
+  }
+
   getWorkerGovernanceSnapshots(): WorkerResourceSnapshot[] {
     const snapshots: WorkerResourceSnapshot[] = [];
     for (const [pluginId, plugin] of this.plugins) {

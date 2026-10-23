@@ -1,6 +1,7 @@
 import { CHANNELS } from "../channels.js";
 import { projectViewManagersFrom } from "../../window/activeProjectIds.js";
 import { sleepProject } from "../../services/projectSleep.js";
+import { loadProjectPluginWorkReader } from "../../services/plugin/projectPluginWork.js";
 import { defineIpcNamespace, op } from "../define.js";
 import type { HandlerDependencies } from "../types.js";
 import type { ProjectSleepResult } from "../../../shared/types/ipc/project.js";
@@ -21,6 +22,7 @@ export function registerProjectSleepHandlers(deps: HandlerDependencies): () => v
       sleepProject: op(
         CHANNELS.PROJECT_SLEEP,
         async (projectId: string): Promise<ProjectSleepResult> => {
+          const pluginWork = await loadProjectPluginWorkReader();
           const outcome = await sleepProject(
             projectId,
             { initiator: "user" },
@@ -28,6 +30,7 @@ export function registerProjectSleepHandlers(deps: HandlerDependencies): () => v
               ptyClient: deps.ptyClient,
               workspaceClient: deps.worktreeService,
               projectViewManagers: projectViewManagersFrom(deps.windowRegistry),
+              pluginWork,
             }
           );
           // A user sleep is never skipped — only a policy backs off — so
@@ -35,8 +38,14 @@ export function registerProjectSleepHandlers(deps: HandlerDependencies): () => v
           if (outcome.status !== "slept") {
             return { terminalsKilled: 0, rendererViewsEvicted: 0, workspaceEvicted: false };
           }
-          const { terminalsKilled, rendererViewsEvicted, workspaceEvicted } = outcome;
-          return { terminalsKilled, rendererViewsEvicted, workspaceEvicted };
+          const { terminalsKilled, rendererViewsEvicted, workspaceEvicted, pluginWorkStopped } =
+            outcome;
+          return {
+            terminalsKilled,
+            rendererViewsEvicted,
+            workspaceEvicted,
+            ...(pluginWorkStopped ? { pluginWorkStopped } : {}),
+          };
         }
       ),
     },

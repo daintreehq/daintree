@@ -63,6 +63,11 @@ const pluginLifecycleMock = vi.hoisted(() => ({
 }));
 vi.mock("../../../window/projectPluginLifecycle.js", () => pluginLifecycleMock);
 
+const pluginServiceMock = vi.hoisted(() => ({
+  getProjectPluginWork: vi.fn<(projectId: string) => unknown[]>(() => []),
+}));
+vi.mock("../../../services/PluginService.js", () => ({ pluginService: pluginServiceMock }));
+
 const broadcastMock = vi.hoisted(() => vi.fn());
 // Partial: `typedHandle` — which `defineIpcNamespace` registers through — lives
 // in this same module, so replacing it wholesale strands the registrar.
@@ -196,6 +201,42 @@ describe("project:sleep", () => {
   });
 
   describe("teardown", () => {
+    it("reports the project's plugin work the sleep stopped (#14093)", async () => {
+      pluginServiceMock.getProjectPluginWork.mockReturnValue([
+        {
+          pluginId: "project__proj-1__acme.sync",
+          liveTasks: [{ id: "t1", pluginName: "Sync", title: "Uploading assets" }],
+          pendingCalls: 0,
+          runningProcesses: 1,
+        },
+        {
+          pluginId: "project__proj-1__acme.lint",
+          liveTasks: [],
+          pendingCalls: 0,
+          runningProcesses: 1,
+        },
+      ]);
+      const { invoke } = setup();
+
+      const result = await invoke("proj-1");
+
+      expect(result.pluginWorkStopped).toEqual({
+        tasks: [{ pluginName: "Sync", title: "Uploading assets" }],
+        processes: 2,
+        calls: 0,
+      });
+      expect(pluginServiceMock.getProjectPluginWork).toHaveBeenCalledWith("proj-1");
+    });
+
+    it("leaves the plugin report off when the sleep stopped no plugin work (#14093)", async () => {
+      pluginServiceMock.getProjectPluginWork.mockReturnValue([]);
+      const { invoke } = setup();
+
+      const result = await invoke("proj-1");
+
+      expect(result).not.toHaveProperty("pluginWorkStopped");
+    });
+
     it("preserves sessions and writes captured ids back, the way a quit does", async () => {
       const { invoke } = setup();
 

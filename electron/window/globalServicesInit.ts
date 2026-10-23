@@ -1138,6 +1138,16 @@ export async function initGlobalServices(
             getMcpServerServiceRef()?.getNotifyProjectIdsWithPendingWork() ?? [],
         });
       });
+      // Resolved here rather than per read: the provider is asked synchronously
+      // at every teardown gate, and PluginService stays off this file's static
+      // graph (#9285).
+      const [{ pluginService }, { pluginWorkHold }] = await Promise.all([
+        import("../services/PluginService.js"),
+        import("../services/plugin/projectPluginWork.js"),
+      ]);
+      svc.setPluginWorkProvider((projectId) =>
+        pluginWorkHold(pluginService.getProjectPluginWork(projectId))
+      );
       svc.start();
       idleSleepService = svc;
     },

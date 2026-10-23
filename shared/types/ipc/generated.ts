@@ -1904,7 +1904,7 @@ export interface GeneratedIpcInvokeMap {
   };
   "idle-terminal:close-project": {
     args: [projectId: string];
-    result: void;
+    result: import("./project.js").PluginWorkStopped | null;
   };
   "idle-terminal:dismiss-project": {
     args: [projectId: string];

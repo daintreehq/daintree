@@ -528,6 +528,81 @@ describe("IdleBackgroundAutoCloseService", () => {
       expect(ptyClientMock.gracefulKillByProject).not.toHaveBeenCalled();
     });
 
+    it("leaves a terminal-free project awake while its plugins hold live work (#14093)", async () => {
+      enable();
+      projectStoreMock.getAllProjects.mockReturnValue([
+        makeIdleProject("proj-1"),
+        makeIdleProject("proj-2"),
+      ]);
+      const service = makeService();
+      service.setPluginWorkProvider((id) =>
+        id === "proj-1" ? "plugin-task:project__proj-1__acme.sync" : null
+      );
+      await runCheck(service);
+
+      expect(ptyClientMock.gracefulKillByProject).toHaveBeenCalledTimes(1);
+      expect(ptyClientMock.gracefulKillByProject).toHaveBeenCalledWith("proj-2", {
+        preserveSession: true,
+      });
+      expect(logInfoMock).toHaveBeenCalledWith("idle-background-auto-close-skip-plugin-work", {
+        holds: { "proj-1": "plugin-task:project__proj-1__acme.sync" },
+        trigger: "idle",
+      });
+    });
+
+    it("sleeps once the plugin work finishes or is cancelled (#14093)", async () => {
+      enable();
+      projectStoreMock.getAllProjects.mockReturnValue([makeIdleProject("proj-1")]);
+      const service = makeService();
+      let hold: string | null = "plugin-task:project__proj-1__acme.sync";
+      service.setPluginWorkProvider(() => hold);
+      await runCheck(service);
+      expect(ptyClientMock.gracefulKillByProject).not.toHaveBeenCalled();
+
+      hold = null;
+      await runCheck(service);
+      expect(ptyClientMock.gracefulKillByProject).toHaveBeenCalledWith("proj-1", {
+        preserveSession: true,
+      });
+    });
+
+    it("stops the teardown when plugin work starts during sleep's own awaits (#14093)", async () => {
+      enable();
+      projectStoreMock.getAllProjects.mockReturnValue([makeIdleProject("proj-1")]);
+      const service = makeService();
+      // The work starts while Sleep awaits the assistant revoke, past every
+      // read the sweep and the close made before handing over to it.
+      let started = false;
+      helpSessionServiceMock.revokeByProjectId.mockImplementationOnce(async () => {
+        started = true;
+      });
+      service.setPluginWorkProvider(() =>
+        started ? "plugin-operation:project__proj-1__acme.sync" : null
+      );
+      await runCheck(service);
+
+      expect(helpSessionServiceMock.revokeByProjectId).toHaveBeenCalledWith("proj-1");
+      expect(ptyClientMock.gracefulKillByProject).not.toHaveBeenCalled();
+      expect(pluginLifecycleMock.notifyProjectPluginsClosed).not.toHaveBeenCalled();
+      expect(projectStoreMock.updateProjectStatus).not.toHaveBeenCalled();
+      expect(logInfoMock).toHaveBeenCalledWith("idle-background-auto-close-plugin-work-hold", {
+        projectId: "proj-1",
+        hold: "plugin-operation:project__proj-1__acme.sync",
+      });
+    });
+
+    it("holds the project when the plugin work provider throws (#14093)", async () => {
+      enable();
+      projectStoreMock.getAllProjects.mockReturnValue([makeIdleProject("proj-1")]);
+      const service = makeService();
+      service.setPluginWorkProvider(() => {
+        throw new Error("plugin registry unreadable");
+      });
+      await runCheck(service);
+
+      expect(ptyClientMock.gracefulKillByProject).not.toHaveBeenCalled();
+    });
+
     it("unloads the reclaimed project's plugins (#12216)", async () => {
       enable();
       projectStoreMock.getAllProjects.mockReturnValue([makeIdleProject("proj-1")]);
@@ -1660,6 +1735,29 @@ describe("IdleBackgroundAutoCloseService", () => {
 
       expect(ptyClientMock.gracefulKillByProject).not.toHaveBeenCalled();
       expect(skipLog()).toEqual({ "coordination-hold": ["proj-1"] });
+    });
+
+    it("skips an idle shell project whose plugins hold live work (#14093)", async () => {
+      enableShells();
+      const service = setUpIdleShellProject();
+      service.setPluginWorkProvider(() => "plugin-task:project__proj-1__acme.sync");
+      await runCheck(service);
+
+      expect(ptyClientMock.gracefulKillByProject).not.toHaveBeenCalled();
+      expect(skipLog()).toEqual({ "plugin-work": ["proj-1"] });
+    });
+
+    it("stops an idle shell project's teardown when plugin work starts during its probes (#14093)", async () => {
+      enableShells();
+      const service = setUpIdleShellProject();
+      let reads = 0;
+      service.setPluginWorkProvider(() =>
+        ++reads > 1 ? "plugin-task:project__proj-1__acme.sync" : null
+      );
+      await runCheck(service);
+
+      expect(ptyClientMock.gracefulKillByProject).not.toHaveBeenCalled();
+      expect(skipLog()).toEqual({ "plugin-work": ["proj-1"] });
     });
 
     it("sleeps a project whose only terminal is an idle plain shell", async () => {
