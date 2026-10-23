@@ -107,6 +107,10 @@ export class PluginArtifactStore {
   private readonly records = new Map<string, ArtifactRecord>();
   private readonly reservedByPlugin = new Map<string, number>();
   private reservedTotal = 0;
+  /** Removed artifacts whose files a reader still holds: their bytes stay charged until deleted. */
+  private readonly lingering = new Set<ArtifactRecord>();
+  /** Slots allocated and not yet committed or discarded, per plugin. */
+  private readonly openSlots = new Map<string, number>();
   private readonly leases = new Map<string, Lease>();
   private readonly leasesByView = new Map<number, string[]>();
   private ready: Promise<void> | null = null;
@@ -143,7 +147,8 @@ export class PluginArtifactStore {
     await this.init();
     this.sweepExpired();
     const owned = [...this.records.values()].filter((r) => r.pluginId === pluginId);
-    if (owned.length >= this.limits.maxPerPlugin) {
+    // Slots in flight count, so concurrent transfers can't commit past the cap.
+    if (owned.length + (this.openSlots.get(pluginId) ?? 0) >= this.limits.maxPerPlugin) {
       const oldest = owned
         .filter((r) => r.readers === 0)
         .sort((a, b) => a.lastUsedAt - b.lastUsedAt)[0];
@@ -157,7 +162,21 @@ export class PluginArtifactStore {
     }
     const id = newToken(ID_BYTES);
     const dir = path.join(this.runDir, id);
-    await fs.mkdir(dir, { mode: 0o700 });
+    this.openSlots.set(pluginId, (this.openSlots.get(pluginId) ?? 0) + 1);
+    let slotOpen = true;
+    const closeSlot = () => {
+      if (!slotOpen) return;
+      slotOpen = false;
+      const left = (this.openSlots.get(pluginId) ?? 1) - 1;
+      if (left > 0) this.openSlots.set(pluginId, left);
+      else this.openSlots.delete(pluginId);
+    };
+    try {
+      await fs.mkdir(dir, { mode: 0o700 });
+    } catch (error) {
+      closeSlot();
+      throw error;
+    }
     const reservation = this.reserve(pluginId);
     let committed = false;
     const slot: ArtifactSlot & { markCommitted(): void } = {
@@ -167,11 +186,13 @@ export class PluginArtifactStore {
       reservation,
       discard: async () => {
         reservation.release();
+        closeSlot();
         if (committed) return;
         await fs.rm(dir, { recursive: true, force: true }).catch(() => {});
       },
       markCommitted: () => {
         committed = true;
+        closeSlot();
       },
     };
     return slot;
@@ -179,7 +200,9 @@ export class PluginArtifactStore {
 
   /**
    * Publish a slot whose `.part` holds exactly `size` bytes. The rename is the
-   * commit: until it lands, nothing can see the artifact.
+   * commit: until it lands, nothing can see the artifact. `stillWanted` is
+   * asked once the rename has landed — an unload or a cancel that arrived
+   * during it must not see an artifact appear afterwards.
    */
   async commit(
     slot: ArtifactSlot,
@@ -191,11 +214,15 @@ export class PluginArtifactStore {
       size: number;
       ttlMs: number;
       origin: PluginArtifact["origin"];
-    }
+    },
+    stillWanted: () => boolean = () => true
   ): Promise<PluginArtifact> {
     this.assertLive();
     const filePath = path.join(slot.dir, "payload");
     await fs.rename(slot.partPath, filePath);
+    if (this.disposed || !stillWanted()) {
+      throw artifactError("ARTIFACT_TRANSFER_FAILED", "the transfer ended before it was published");
+    }
     const createdAt = this.now();
     const artifact: PluginArtifact = Object.freeze({
       id: slot.id,
@@ -344,7 +371,7 @@ export class PluginArtifactStore {
   /** Committed bytes plus reserved, overall and for one plugin. */
   usage(pluginId?: string): number {
     let total = pluginId === undefined ? this.reservedTotal : this.reservedFor(pluginId);
-    for (const record of this.records.values()) {
+    for (const record of [...this.records.values(), ...this.lingering]) {
       if (pluginId === undefined || record.pluginId === pluginId) total += record.artifact.size;
     }
     return total;
@@ -355,6 +382,7 @@ export class PluginArtifactStore {
     if (this.disposed) return;
     this.disposed = true;
     this.records.clear();
+    this.lingering.clear();
     this.leases.clear();
     this.leasesByView.clear();
     await fs.rm(this.runDir, { recursive: true, force: true }).catch(() => {});
@@ -441,11 +469,20 @@ export class PluginArtifactStore {
     for (const [token, lease] of [...this.leases]) {
       if (lease.artifactId === record.artifact.id) this.revokeLease(token);
     }
-    if (record.readers === 0) void this.deleteFiles(record);
+    // A file a reader still holds stays charged until it is actually gone;
+    // one nobody reads frees its room now, so eviction can make space.
+    if (record.readers > 0) this.lingering.add(record);
+    else void this.deleteFiles(record);
   }
 
   private async deleteFiles(record: ArtifactRecord): Promise<void> {
-    await fs.rm(record.dir, { recursive: true, force: true }).catch(() => {});
+    try {
+      await fs.rm(record.dir, { recursive: true, force: true });
+      this.lingering.delete(record);
+    } catch {
+      // Still on disk (a permission change, a Windows handle): a lingering
+      // one stays charged, and the next run's startup sweep removes it.
+    }
   }
 
   private assertLive(): void {

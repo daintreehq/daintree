@@ -16,6 +16,7 @@ import type {
   PluginArtifactSource,
   PluginArtifactUploadResult,
 } from "../../../shared/types/pluginArtifacts.js";
+import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import { getMimeType } from "../../utils/appProtocol.js";
 import { artifactError } from "./pluginArtifactErrors.js";
 import type { ArtifactUrlMatcher } from "./pluginArtifactNetworkPolicy.js";
@@ -78,10 +79,13 @@ function throttled(
   let last = 0;
   let pending: PluginArtifactProgress | null = null;
   const send = (p: PluginArtifactProgress) => {
+    // A plugin's progress callback failing, sync or async, must not fail its
+    // transfer or surface as an unhandled rejection.
     try {
-      onProgress?.(p);
+      const result: unknown = onProgress?.(p);
+      if (result instanceof Promise) result.catch(() => {});
     } catch {
-      // A plugin's progress callback throwing must not fail its transfer.
+      // ignored, as above
     }
   };
   return {
@@ -114,7 +118,11 @@ export class PluginArtifactService {
   readonly store: PluginArtifactStore;
   private readonly deps: PluginArtifactServiceDeps;
   private readonly now: () => number;
-  private readonly transfers = new Map<string, Set<AbortController>>();
+  /** In-flight transfers by plugin, each with the project its artifact will belong to. */
+  private readonly transfers = new Map<
+    string,
+    Map<AbortController, { projectId: string | null }>
+  >();
   private activeTotal = 0;
   private readonly sweepTimer: ReturnType<typeof setInterval> | null;
   private disposed = false;
@@ -213,18 +221,22 @@ export class PluginArtifactService {
     }
     const progress = throttled(options.onProgress, this.now);
     try {
-      return await this.withSlot(options.pluginId, options.signal, (signal) =>
-        uploadFromFile({
-          request: this.deps.httpsRequest,
-          url: options.url,
-          method: options.method,
-          headers: options.headers,
-          filePath: opened.filePath,
-          size: opened.artifact.size,
-          signal,
-          onProgress: progress.report,
-          idleMs: this.deps.idleMs,
-        })
+      return await this.withSlot(
+        options.pluginId,
+        opened.artifact.projectId,
+        options.signal,
+        (signal) =>
+          uploadFromFile({
+            request: this.deps.httpsRequest,
+            url: options.url,
+            method: options.method,
+            headers: options.headers,
+            filePath: opened.filePath,
+            size: opened.artifact.size,
+            signal,
+            onProgress: progress.report,
+            idleMs: this.deps.idleMs,
+          })
       );
     } finally {
       progress.flush();
@@ -287,14 +299,22 @@ export class PluginArtifactService {
 
   /** The plugin unloaded: cancel what it has in flight and drop everything it holds. */
   forgetPlugin(pluginId: string): void {
-    for (const controller of this.transfers.get(pluginId) ?? []) {
+    for (const controller of this.transfers.get(pluginId)?.keys() ?? []) {
       controller.abort(transferAbortError());
     }
     this.store.releaseWhere((owner) => owner.pluginId === pluginId);
   }
 
-  /** A project closed: its artifacts, every plugin's, go with it. */
+  /**
+   * A project closed: its artifacts, every plugin's, go with it, and so do
+   * transfers that would have created one for it.
+   */
   forgetProject(projectId: string): void {
+    for (const byController of this.transfers.values()) {
+      for (const [controller, owner] of byController) {
+        if (owner.projectId === projectId) controller.abort(transferAbortError());
+      }
+    }
     this.store.releaseWhere((owner) => owner.projectId === projectId);
   }
 
@@ -302,8 +322,8 @@ export class PluginArtifactService {
     if (this.disposed) return;
     this.disposed = true;
     if (this.sweepTimer) clearInterval(this.sweepTimer);
-    for (const set of this.transfers.values()) {
-      for (const controller of set) controller.abort(transferAbortError());
+    for (const byController of this.transfers.values()) {
+      for (const controller of byController.keys()) controller.abort(transferAbortError());
     }
     await this.store.dispose();
   }
@@ -317,28 +337,34 @@ export class PluginArtifactService {
     ) => Promise<{ name: string; size: number; mimeType: string; origin: PluginArtifact["origin"] }>
   ): Promise<PluginArtifact> {
     const progress = throttled(meta.onProgress, this.now);
-    return this.withSlot(meta.pluginId, meta.signal, async (signal) => {
+    return this.withSlot(meta.pluginId, meta.projectId, meta.signal, async (signal) => {
       const slot = await this.store.allocate(meta.pluginId);
       try {
         const written = await write(slot, signal, progress);
         if (signal.aborted) throw transferAbortError(signal);
         progress.flush();
-        return await this.store.commit(slot, {
-          pluginId: meta.pluginId,
-          projectId: meta.projectId,
-          name: written.name,
-          mimeType: written.mimeType,
-          size: written.size,
-          ttlMs: clampTtl(meta.ttlMs),
-          origin: written.origin,
-        });
+        return await this.store.commit(
+          slot,
+          {
+            pluginId: meta.pluginId,
+            projectId: meta.projectId,
+            name: written.name,
+            mimeType: written.mimeType,
+            size: written.size,
+            ttlMs: clampTtl(meta.ttlMs),
+            origin: written.origin,
+          },
+          // An unload or project close landing during the rename aborts this
+          // signal; the artifact must not appear after it.
+          () => !signal.aborted
+        );
       } catch (error) {
         if (signal.aborted) throw transferAbortError(signal);
         const code = (error as { code?: unknown }).code;
         if (typeof code === "string" && /^[A-Z_]+$/.test(code)) throw error;
         throw artifactError(
           "ARTIFACT_TRANSFER_FAILED",
-          error instanceof Error ? error.message : String(error)
+          formatErrorMessage(error, "the transfer failed")
         );
       } finally {
         await slot.discard();
@@ -346,16 +372,22 @@ export class PluginArtifactService {
     });
   }
 
-  /** Hold one of the plugin's transfer slots for the length of `work`. */
+  /**
+   * Hold one of the plugin's transfer slots for the length of `work`. The
+   * slot registers before the first await, so a caller that checked the
+   * plugin is loaded immediately before calling cannot race its unload.
+   */
   private async withSlot<T>(
     pluginId: string,
+    projectId: string | null,
     callerSignal: AbortSignal | undefined,
     work: (signal: AbortSignal) => Promise<T>
   ): Promise<T> {
     if (this.disposed)
       throw artifactError("ARTIFACT_TRANSFER_FAILED", "the artifact cache has shut down");
     if (callerSignal?.aborted) throw transferAbortError(callerSignal);
-    const mine = this.transfers.get(pluginId) ?? new Set<AbortController>();
+    const mine =
+      this.transfers.get(pluginId) ?? new Map<AbortController, { projectId: string | null }>();
     if (
       mine.size >= PLUGIN_ARTIFACT_MAX_TRANSFERS_PER_PLUGIN ||
       this.activeTotal >= PLUGIN_ARTIFACT_MAX_TRANSFERS
@@ -366,7 +398,7 @@ export class PluginArtifactService {
       );
     }
     const controller = new AbortController();
-    mine.add(controller);
+    mine.set(controller, { projectId });
     this.transfers.set(pluginId, mine);
     this.activeTotal++;
     const signal = callerSignal

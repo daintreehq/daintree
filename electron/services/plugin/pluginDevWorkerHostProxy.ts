@@ -863,30 +863,30 @@ export class PluginDevWorkerHostProxy {
     artifactId?: unknown
   ): Promise<T> {
     const op = method.slice("artifacts.".length);
-    if (options !== undefined && (typeof options !== "object" || options === null)) {
-      return Promise.reject(
-        new Error(
-          `VALIDATION: plugin "${this.pluginId}" artifacts.${op}: options must be an object`
+    const invalid = (message: string) =>
+      Promise.reject(
+        Object.assign(
+          new Error(`VALIDATION: plugin "${this.pluginId}" artifacts.${op}: ${message}`),
+          { code: "VALIDATION" }
         )
       );
+    if (options !== undefined && (typeof options !== "object" || options === null)) {
+      return invalid("options must be an object");
     }
     const { signal, onProgress, ...rest } = (options ?? {}) as {
       signal?: AbortSignal;
       onProgress?: unknown;
     };
     if (onProgress !== undefined && typeof onProgress !== "function") {
-      return Promise.reject(
-        new Error(
-          `VALIDATION: plugin "${this.pluginId}" artifacts.${op}: onProgress must be a function`
-        )
-      );
+      return invalid("onProgress must be a function");
     }
     let progressSubscriptionId: string | undefined;
     if (typeof onProgress === "function") {
       progressSubscriptionId = `s${this.nextId++}`;
-      this.subscriptions.set(progressSubscriptionId, (payload) => {
-        (onProgress as (progress: unknown) => void)(payload);
-      });
+      // Returned, so the dispatcher sees an async callback's rejection.
+      this.subscriptions.set(progressSubscriptionId, (payload) =>
+        (onProgress as (progress: unknown) => unknown)(payload)
+      );
     }
     const params: ArtifactsTransferParams = {
       target,
@@ -904,6 +904,13 @@ export class PluginDevWorkerHostProxy {
       },
       (error: unknown) => {
         done();
+        // A cancel settled here carries the same code as one main settled.
+        if ((error as { name?: unknown } | null)?.name === "AbortError") {
+          throw Object.assign(new Error("ABORT_ERR: the transfer was cancelled"), {
+            name: "AbortError",
+            code: "ABORT_ERR",
+          });
+        }
         throw error;
       }
     );

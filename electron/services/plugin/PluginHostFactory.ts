@@ -6948,6 +6948,9 @@ function buildArtifactsApi(
         async (handle, opened) => {
           if (!opened.isFile())
             throw fail("INVALID_PATH", "import", "the source is not a regular file");
+          // Synchronously before the transfer registers: an unload during the
+          // open must not leave an import nothing will cancel.
+          admit("import");
           return service.importFromHandle({
             pluginId,
             projectId: options.projectId,

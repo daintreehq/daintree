@@ -160,6 +160,59 @@ describe("PluginArtifactStore", () => {
       .toBe(false);
   });
 
+  it("keeps a removed artifact charged while a reader still holds its file", async () => {
+    store = makeStore({ pluginQuotaBytes: 100 });
+    const artifact = await put(store, "acme.a", 60);
+    const pin = store.openForRead("acme.a", artifact.id)!;
+    store.release("acme.a", artifact.id);
+    expect(store.usage("acme.a")).toBe(60);
+    await expect(put(store, "acme.a", 60)).rejects.toMatchObject({
+      code: "ARTIFACT_QUOTA_EXCEEDED",
+    });
+    pin.unpin();
+    await expect.poll(() => store.usage("acme.a")).toBe(0);
+    await expect(put(store, "acme.a", 60)).resolves.toBeTruthy();
+  });
+
+  it("counts slots still in flight against the artifact cap", async () => {
+    store = makeStore({ maxPerPlugin: 2 });
+    await put(store, "acme.a", 1);
+    const inFlight = await store.allocate("acme.a");
+    // The committed one is evicted to make room; the open slot is not counted twice.
+    const third = await store.allocate("acme.a");
+    expect(store.list("acme.a")).toEqual([]);
+    // Two open slots fill a cap of two: nothing committed is left to evict.
+    await expect(store.allocate("acme.a")).rejects.toMatchObject({
+      code: "ARTIFACT_QUOTA_EXCEEDED",
+    });
+    await inFlight.discard();
+    await third.discard();
+  });
+
+  it("publishes nothing when the transfer ended during the commit", async () => {
+    const slot = await store.allocate("acme.a");
+    await fs.writeFile(slot.partPath, "abc");
+    await expect(
+      store.commit(
+        slot,
+        {
+          pluginId: "acme.a",
+          projectId: null,
+          name: "a.bin",
+          mimeType: "application/octet-stream",
+          size: 3,
+          ttlMs: 60_000,
+          origin: "import",
+        },
+        () => false
+      )
+    ).rejects.toMatchObject({ code: "ARTIFACT_TRANSFER_FAILED" });
+    await slot.discard();
+    expect(store.list("acme.a")).toEqual([]);
+    const [run] = await runDirs();
+    expect(await fs.readdir(path.join(root, run!))).toEqual([]);
+  });
+
   it("binds a lease to its artifact, its view and its plugin", async () => {
     const a = await put(store, "acme.a", 1);
     const b = await put(store, "acme.a", 1);

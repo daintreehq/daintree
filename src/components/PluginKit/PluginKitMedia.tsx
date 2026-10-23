@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useEffectEvent, useRef, useState } from "react";
 import { FileAudio, File as FileGlyph } from "lucide-react";
 import type {
   PluginMediaPlayerProps,
@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Callout } from "@/components/ui/Callout";
 import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
 import { cn } from "@/lib/utils";
+import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { getPluginKitHost } from "./kitHost";
 import { nonEmpty, oneOf, pickRootProps, str } from "./kitProps";
 import { usePluginKitOwner } from "./kitScope";
@@ -29,7 +30,7 @@ function sourceId(source: PluginMediaSource | null | undefined): string | null {
 }
 
 function errorParts(error: unknown): { message: string; code: string | null } {
-  const raw = error instanceof Error ? error.message : String(error);
+  const raw = formatErrorMessage(error, "");
   const code = /^([A-Z][A-Z_]+):\s*/.exec(raw)?.[1] ?? null;
   const message = code ? raw.slice(code.length + 1).trim() : raw;
   return { message: message || "The file couldn't be loaded", code };
@@ -112,9 +113,13 @@ function KitMediaPlayer(props: PluginMediaPlayerProps) {
   const { state, retry } = useArtifactSource(source);
   const posterState = useArtifactSource(poster ?? null).state;
   const mediaRef = useRef<HTMLMediaElement | null>(null);
-  const [playError, setPlayError] = useState<string | null>(null);
-  const reportError = typeof onError === "function" ? onError : undefined;
+  // Tied to the source it happened on: a new source starts clean.
+  const [playFailure, setPlayFailure] = useState<{ url: string; message: string } | null>(null);
+  const reportError = useEffectEvent((error: Error) => {
+    if (typeof onError === "function") onError(error);
+  });
   const url = state.status === "ready" ? state.url : null;
+  const playError = playFailure !== null && playFailure.url === url ? playFailure.message : null;
   useReleaseOnSourceChange(mediaRef, url);
 
   // Pausing when the person moves away is the policy, not an option a plugin
@@ -127,9 +132,10 @@ function KitMediaPlayer(props: PluginMediaPlayerProps) {
     });
   }, [keepPlaying, url]);
 
+  // Once per failed attempt, whatever the plugin's callback identity does.
   useEffect(() => {
-    if (state.status === "error") reportError?.(new Error(state.message));
-  }, [state, reportError]);
+    if (state.status === "error") reportError(new Error(state.message));
+  }, [state]);
 
   const declaredType = typeof source === "object" && source ? str(source.mimeType) : undefined;
   const mimeType = state.status === "ready" ? state.mimeType : (declaredType ?? "");
@@ -154,7 +160,7 @@ function KitMediaPlayer(props: PluginMediaPlayerProps) {
             size="sm"
             variant="outline"
             onClick={() => {
-              setPlayError(null);
+              setPlayFailure(null);
               retry();
             }}
           >
@@ -188,8 +194,8 @@ function KitMediaPlayer(props: PluginMediaPlayerProps) {
     onError: (event: { currentTarget: HTMLMediaElement }) => {
       const code = event.currentTarget.error?.code ?? 0;
       const message = MEDIA_ERROR_TEXT[code] ?? "The file couldn't be played";
-      setPlayError(message);
-      reportError?.(new Error(message));
+      setPlayFailure({ url, message });
+      if (typeof onError === "function") onError(new Error(message));
     },
   };
   return (

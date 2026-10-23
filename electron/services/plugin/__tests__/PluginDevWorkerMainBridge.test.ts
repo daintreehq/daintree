@@ -166,7 +166,7 @@ function makeHost() {
       download: vi.fn(
         async (
           _request: unknown,
-          options: { onProgress?: (p: unknown) => void }
+          options: { onProgress?: (p: unknown) => void; signal?: AbortSignal }
         ): Promise<unknown> => {
           options.onProgress?.({ transferredBytes: 5, totalBytes: 5, attempt: 1 });
           return { id: "a".repeat(32) };

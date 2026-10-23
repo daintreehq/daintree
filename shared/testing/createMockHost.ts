@@ -1476,12 +1476,23 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
     size: number,
     artifactOptions?: { projectId?: string; mimeType?: string; ttlMs?: number }
   ): PluginArtifact => {
+    // As the real host does: a project plugin's artifacts are its project's,
+    // and it can't name another.
+    if (
+      mockProjectId !== null &&
+      artifactOptions?.projectId !== undefined &&
+      artifactOptions.projectId !== mockProjectId
+    ) {
+      throw new Error(
+        "VALIDATION: mock artifacts: a project plugin's artifacts belong to its own project"
+      );
+    }
     const name = rawName.split(/[\\/]/).pop() || "artifact";
     const ext = name.toLowerCase().split(".").pop() ?? "";
     const createdAt = Date.now();
     const artifact: PluginArtifact = {
       id: (++artifactSeq).toString(16).padStart(32, "0"),
-      projectId: artifactOptions?.projectId ?? null,
+      projectId: artifactOptions?.projectId ?? mockProjectId,
       name,
       mimeType: artifactOptions?.mimeType ?? MOCK_ARTIFACT_TYPES[ext] ?? "application/octet-stream",
       size,

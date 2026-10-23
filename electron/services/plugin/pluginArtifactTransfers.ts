@@ -18,6 +18,7 @@ import type {
 } from "../../../shared/types/pluginArtifacts.js";
 import { isPrivateOrLoopbackHostname } from "../../schemas/pluginIdentifiers.js";
 import { fetchWithPrivateHostGuard } from "../../utils/pluginDownloadPolicy.js";
+import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import { artifactError } from "./pluginArtifactErrors.js";
 import type { ArtifactUrlMatcher } from "./pluginArtifactNetworkPolicy.js";
 import { headersForHop } from "./pluginArtifactNetworkPolicy.js";
@@ -137,19 +138,39 @@ export interface DownloadResult {
 
 const RETRYABLE_STATUS = new Set([408, 425, 429, 500, 502, 503, 504]);
 
-function strongValidator(response: Response): string | null {
+/**
+ * The validator a resume may rely on: a strong ETag. A `Last-Modified` date
+ * has one-second granularity, so two same-size revisions written within a
+ * second would pass for one another.
+ */
+function strongETag(response: Response): string | null {
   const etag = response.headers.get("etag");
-  if (etag && !etag.startsWith("W/")) return etag;
-  return response.headers.get("last-modified");
+  return etag && !etag.startsWith("W/") ? etag : null;
 }
 
-function parseContentRange(value: string | null): { start: number; total: number | null } | null {
+/** A body under a content coding: its wire length says nothing about the decoded bytes. */
+function isEncoded(response: Response): boolean {
+  const coding = response.headers.get("content-encoding")?.trim().toLowerCase();
+  return !!coding && coding !== "identity";
+}
+
+function parseContentRange(
+  value: string | null
+): { start: number; end: number; total: number | null } | null {
   const match = value ? /^bytes (\d+)-(\d+)\/(\d+|\*)$/.exec(value.trim()) : null;
   if (!match) return null;
   const start = Number(match[1]);
+  const end = Number(match[2]);
   const total = match[3] === "*" ? null : Number(match[3]);
-  if (!Number.isSafeInteger(start) || (total !== null && !Number.isSafeInteger(total))) return null;
-  return { start, total };
+  if (
+    !Number.isSafeInteger(start) ||
+    !Number.isSafeInteger(end) ||
+    end < start ||
+    (total !== null && !Number.isSafeInteger(total))
+  ) {
+    return null;
+  }
+  return { start, end, total };
 }
 
 function fileNameFrom(response: Response, url: URL): string | null {
@@ -182,18 +203,30 @@ function abortableSleep(ms: number, signal: AbortSignal): Promise<void> {
   });
 }
 
+/** What a resume needs to prove it continues the same file. */
+interface ResumeAnchor {
+  etag: string;
+  total: number;
+  /** The hop that answered: a redirect elsewhere is a different object, whatever its ETag. */
+  url: string;
+}
+
 /**
  * Stream a provider file into `partPath`, retrying up to `attempts` times.
  *
  * Every hop of every attempt goes through {@link fetchWithPrivateHostGuard}:
  * https only, no private targets, and each hop held to the declared scope.
- * The plugin's headers ride only on hops at the origin it asked for.
+ * The plugin's headers ride only on hops at the origin it asked for. Until
+ * the response headers arrive the attempt is held to the idle timeout too,
+ * so a provider that accepts the connection and says nothing can't pin a
+ * transfer slot.
  *
- * A retry resumes from the bytes already written when the first response
- * carried a strong validator and no content coding. It sends `Range` with
- * `If-Range`, and appends only after the 206's `Content-Range` starts exactly
- * where the file ends; any other answer truncates and starts over. Nothing
- * from an error response is ever written.
+ * A retry resumes from the bytes already on disk only when the first
+ * response proved what the file is: a strong ETag, a known length and no
+ * content coding. It sends `Range` with `If-Range`, and appends only a 206
+ * from the same final URL whose `Content-Range` runs from exactly where the
+ * file ends to exactly where it was said to end. Any other answer truncates
+ * and starts over. Nothing from an error response is ever written.
  */
 export async function downloadToPart(options: {
   netFetch: typeof ElectronNet.fetch;
@@ -211,7 +244,7 @@ export async function downloadToPart(options: {
   const idleMs = options.idleMs ?? PLUGIN_ARTIFACT_IDLE_TIMEOUT_MS;
   const backoff = options.backoffMs ?? ((attempt) => Math.min(4000, 500 * 2 ** (attempt - 1)));
   let received = 0;
-  let validator: string | null = null;
+  let anchor: ResumeAnchor | null = null;
   let lastError: unknown = null;
 
   for (let attempt = 1; attempt <= options.attempts; attempt++) {
@@ -221,30 +254,34 @@ export async function downloadToPart(options: {
       // Resume from what reached the disk, not what passed the meter: a
       // pipeline torn down by a failing body can drop chunks it never wrote.
       received =
-        validator === null ? 0 : ((await fs.stat(options.partPath).catch(() => null))?.size ?? 0);
+        anchor === null ? 0 : ((await fs.stat(options.partPath).catch(() => null))?.size ?? 0);
     }
-    const resuming = received > 0 && validator !== null;
+    const resuming = anchor !== null && received > 0 && received < anchor.total;
     const transport: Record<string, string> = resuming
-      ? { range: `bytes=${received}-`, "if-range": validator! }
+      ? { range: `bytes=${received}-`, "if-range": anchor!.etag }
       : {};
     const attemptAbort = new AbortController();
     const signal = AbortSignal.any([options.signal, attemptAbort.signal]);
+    const headerWait = setTimeout(
+      () => attemptAbort.abort(new RetryableError(`no response for ${idleMs} ms`)),
+      idleMs
+    );
+    headerWait.unref?.();
     try {
+      const init = (hop: URL): RequestInit => ({
+        signal,
+        credentials: "omit",
+        cache: "no-store",
+        headers: { ...headersForHop(options.url, hop, options.headers), ...transport },
+      });
       const guarded = await fetchWithPrivateHostGuard(
         options.netFetch,
         options.url.toString(),
-        { signal, credentials: "omit", cache: "no-store" },
+        init(options.url),
         undefined,
-        {
-          isAllowedUrl: options.isAllowed,
-          initFor: (hop) => ({
-            signal,
-            credentials: "omit",
-            cache: "no-store",
-            headers: { ...headersForHop(options.url, hop, options.headers), ...transport },
-          }),
-        }
+        { isAllowedUrl: options.isAllowed, initFor: init }
       );
+      clearTimeout(headerWait);
       if (!guarded.ok) {
         throw artifactError(
           guarded.reason === "too-many-redirects"
@@ -262,27 +299,39 @@ export async function downloadToPart(options: {
       }
 
       let append = false;
+      // Bytes the body must deliver in all (from 0), when the provider says so.
       let total: number | null = null;
       if (response.status === 206) {
         const range = parseContentRange(response.headers.get("content-range"));
-        const sameFile = validator !== null && strongValidator(response) === validator;
-        if (!resuming || !range || range.start !== received || !sameFile) {
-          // A range we did not ask for, or one that doesn't continue this file.
+        const continues =
+          resuming &&
+          anchor !== null &&
+          range !== null &&
+          range.start === received &&
+          range.end === anchor.total - 1 &&
+          range.total === anchor.total &&
+          guarded.url === anchor.url &&
+          strongETag(response) === anchor.etag &&
+          !isEncoded(response);
+        if (!continues) {
+          // A range we did not ask for, or one that doesn't finish this file.
           await response.body?.cancel().catch(() => {});
-          received = 0;
-          validator = null;
+          anchor = null;
           throw new RetryableError("the provider answered a range that doesn't continue the file");
         }
         append = true;
-        total = range.total;
+        total = anchor!.total;
       } else {
-        received = 0;
         const length = Number(response.headers.get("content-length"));
+        const encoded = isEncoded(response);
         total =
-          response.headers.has("content-length") && Number.isSafeInteger(length) ? length : null;
-        const coding = response.headers.get("content-encoding");
-        validator = coding && coding !== "identity" ? null : strongValidator(response);
+          !encoded && response.headers.has("content-length") && Number.isSafeInteger(length)
+            ? length
+            : null;
+        const etag = encoded ? null : strongETag(response);
+        anchor = etag !== null && total !== null ? { etag, total, url: guarded.url } : null;
       }
+      received = append ? received : 0;
       if (total !== null) options.reservation.ensure(total);
       if (!response.body) {
         if (total !== null && total !== received) throw new RetryableError("the body was empty");
@@ -294,11 +343,10 @@ export async function downloadToPart(options: {
         };
       }
 
-      const start = append ? received : 0;
       await pipeline(
         Readable.fromWeb(response.body as import("node:stream/web").ReadableStream),
         meter({
-          start,
+          start: received,
           reservation: options.reservation,
           maxBytes: total ?? undefined,
           idleMs,
@@ -319,22 +367,20 @@ export async function downloadToPart(options: {
         fileName: fileNameFrom(response, options.url),
       };
     } catch (error) {
+      clearTimeout(headerWait);
+      const reason: unknown = attemptAbort.signal.aborted ? attemptAbort.signal.reason : error;
       attemptAbort.abort();
       if (options.signal.aborted) throw transferAbortError(options.signal);
-      const code = (error as { code?: unknown }).code;
+      const code = (reason as { code?: unknown }).code;
       // Coded errors are verdicts (out of scope, too big, a 404); anything
       // else — a stall, a reset, a short body — is worth another attempt.
-      if (typeof code === "string" && code.startsWith("ARTIFACT_")) throw error;
-      lastError = error;
-      // Without a validator the next attempt starts from zero.
-      if (validator === null) received = 0;
+      if (typeof code === "string" && code.startsWith("ARTIFACT_")) throw reason;
+      lastError = reason;
     }
   }
   throw artifactError(
     "ARTIFACT_TRANSFER_FAILED",
-    `download failed after ${options.attempts} attempt${options.attempts === 1 ? "" : "s"}: ${
-      lastError instanceof Error ? lastError.message : String(lastError)
-    }`
+    `download failed after ${options.attempts} attempt${options.attempts === 1 ? "" : "s"}: ${formatErrorMessage(lastError, "no attempt succeeded")}`
   );
 }
 
@@ -397,14 +443,20 @@ export async function uploadFromFile(options: {
 
   return new Promise<PluginArtifactUploadResult>((resolve, reject) => {
     let settled = false;
+    // Declared before the request so `finish` can always tear it down.
+    const body = createReadStream(options.filePath);
+    // Settling stops everything: the file stream, the request, its socket. A
+    // provider that answers early (a 413 mid-body) must not keep reading the
+    // artifact after the slot and the pin are gone.
     const finish = (error: unknown, result?: PluginArtifactUploadResult) => {
       if (settled) return;
       settled = true;
       options.signal.removeEventListener("abort", onAbort);
-      if (error) {
-        req.destroy();
-        reject(options.signal.aborted ? transferAbortError(options.signal) : error);
-      } else resolve(result!);
+      body.unpipe();
+      body.destroy();
+      req.destroy();
+      if (error) reject(options.signal.aborted ? transferAbortError(options.signal) : error);
+      else resolve(result!);
     };
     const req = request(options.url, {
       method: options.method,
@@ -430,16 +482,14 @@ export async function uploadFromFile(options: {
       let truncated = false;
       res.on("data", (chunk: Buffer) => {
         const room = PLUGIN_ARTIFACT_UPLOAD_RESPONSE_MAX_BYTES - kept;
-        if (room <= 0) {
-          truncated = true;
-          res.destroy();
-          return;
-        }
-        if (chunk.length > room) truncated = true;
         const part = chunk.subarray(0, room);
         chunks.push(part);
         kept += part.length;
-        if (truncated) res.destroy();
+        // Past the cap the rest is dropped on purpose: answer with what fits.
+        if (chunk.length > room) {
+          truncated = true;
+          answer();
+        }
       });
       const answer = () => {
         const responseHeaders: Record<string, string> = {};
@@ -455,11 +505,16 @@ export async function uploadFromFile(options: {
         });
       };
       res.on("end", answer);
-      res.on("close", answer);
-      res.on("error", answer);
+      // A body that breaks off is not an answer: the plugin would read a cut
+      // response as the provider's whole word.
+      const broken = () =>
+        finish(artifactError("ARTIFACT_TRANSFER_FAILED", "the provider's answer broke off"));
+      res.on("error", broken);
+      res.on("close", () => {
+        if (!res.complete) broken();
+      });
     });
 
-    const body = createReadStream(options.filePath);
     let sent = 0;
     body.on("data", (chunk) => {
       sent += chunk.length;

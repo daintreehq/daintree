@@ -5145,6 +5145,12 @@ export class PluginService {
    * Import files a view's person chose (a drop or the file dialog) as the
    * plugin's artifacts. `paths` are only ever ones the preload resolved from
    * real Files for that view; the IPC handler checks the grant first.
+   *
+   * The leaf is refused when it is a symlink, and the opened descriptor must
+   * be the entry that `lstat` saw — on Windows `O_NOFOLLOW` does nothing, so
+   * that compare is what catches a chosen file swapped for a link. All or
+   * nothing: each finished file stays pinned until the batch ends, so a later
+   * one can't evict an earlier one to fit, and a failure releases them all.
    */
   async importArtifactSelection(
     pluginId: string,
@@ -5153,34 +5159,45 @@ export class PluginService {
   ): Promise<PluginArtifact[]> {
     const service = this.requireArtifactAccess(pluginId, "importSelection");
     const imported: PluginArtifact[] = [];
+    const pins: Array<() => void> = [];
+    const refuse = (filePath: string, why: string) =>
+      new Error(`INVALID_PATH: "${path.basename(filePath)}" ${why}`);
     try {
       for (const filePath of paths) {
+        const leaf = await fs.lstat(filePath, { bigint: true });
+        if (leaf.isSymbolicLink()) throw refuse(filePath, "is a link, not a file");
         const handle = await fs.open(
           filePath,
           fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0) | (fs.constants.O_NONBLOCK ?? 0)
         );
         try {
-          const stat = await handle.stat();
-          if (!stat.isFile()) {
-            throw new Error(`INVALID_PATH: "${path.basename(filePath)}" is not a regular file`);
+          const stat = await handle.stat({ bigint: true });
+          if (!stat.isFile()) throw refuse(filePath, "is not a regular file");
+          if (stat.dev !== leaf.dev || stat.ino !== leaf.ino) {
+            throw refuse(filePath, "changed while it was being opened");
           }
-          imported.push(
-            await service.importFromHandle({
-              pluginId,
-              projectId,
-              handle,
-              size: stat.size,
-              sourceName: path.basename(filePath),
-            })
-          );
+          // Synchronously before the transfer registers, so an unload during
+          // the opens leaves nothing running.
+          this.requireArtifactAccess(pluginId, "importSelection");
+          const artifact = await service.importFromHandle({
+            pluginId,
+            projectId,
+            handle,
+            size: Number(stat.size),
+            sourceName: path.basename(filePath),
+          });
+          imported.push(artifact);
+          const pin = service.store.openForRead(pluginId, artifact.id);
+          if (pin) pins.push(pin.unpin);
         } finally {
           await handle.close().catch(() => {});
         }
       }
     } catch (error) {
-      // All or nothing: a partly imported batch is handed back as none.
       for (const artifact of imported) service.store.release(pluginId, artifact.id);
       throw error;
+    } finally {
+      for (const unpin of pins) unpin();
     }
     return imported;
   }

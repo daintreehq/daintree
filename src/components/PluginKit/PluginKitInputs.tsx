@@ -65,6 +65,7 @@ import { useKitOverlayZClass, usePluginKitOwner } from "./kitScope";
 import { safeFormat } from "./kitDiagnostics";
 import { getPluginKitHost } from "./kitHost";
 import { InlineError } from "@/components/ui/field";
+import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { invalidProp, useKitFieldControl } from "./kitField";
 
 function finite(value: unknown): number | undefined {
@@ -1494,7 +1495,7 @@ function carriesFiles(event: DragEvent): boolean {
 
 /** An error's words without the host's leading code (`ARTIFACT_BUSY: …`). */
 function importErrorText(error: unknown): string {
-  const message = error instanceof Error ? error.message : String(error);
+  const message = formatErrorMessage(error, "");
   return message.replace(/^[A-Z][A-Z_]+:\s*/, "") || "The file couldn't be imported";
 }
 

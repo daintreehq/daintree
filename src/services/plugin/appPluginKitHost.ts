@@ -1,6 +1,8 @@
 import { lazy } from "react";
 import { setPluginKitHost } from "@/components/PluginKit/kitHost";
 import { LOCAL_HOST_ID } from "@shared/types/remoteHosts";
+import type { PluginProjectPresence } from "@shared/types/plugin";
+import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { notify } from "@/lib/notify";
 import { actionService } from "@/services/ActionService";
 import { useNotificationStore } from "@/store/notificationStore";
@@ -50,7 +52,9 @@ export function installAppPluginKitHost(): () => void {
       return window.electron.plugin.getArtifactSource(owner, artifactId);
     },
     releaseArtifactSource: (url) => {
-      void window.electron.plugin.releaseArtifactSource(url).catch(() => {});
+      safeFireAndForget(window.electron.plugin.releaseArtifactSource(url), {
+        context: "Releasing a plugin artifact source",
+      });
     },
     watchPlaybackHold,
   });
@@ -79,8 +83,12 @@ function watchPlaybackHold(onChange: (held: boolean) => void): () => void {
   const app = window.electron.app;
   const plugin = window.electron.plugin;
   let cached = app.isViewCached?.() === true;
+  /** `undefined` until main has named this view's project; `null` for a view with none. */
   let projectId: string | null | undefined;
   let background = false;
+  // A push is never older than a read it raced, so pushes that land before
+  // the read answers are kept per project and win once the project is known.
+  const early = new Map<string, PluginProjectPresence>();
   let last: boolean | null = null;
   const report = () => {
     const held = document.hidden || cached || background;
@@ -98,7 +106,11 @@ function watchPlaybackHold(onChange: (held: boolean) => void): () => void {
       report();
     }),
     plugin.onProjectPresenceChanged((presence) => {
-      if (projectId === undefined || presence.projectId !== projectId) return;
+      if (projectId === undefined) {
+        early.set(presence.projectId, presence);
+        return;
+      }
+      if (presence.projectId !== projectId) return;
       background = presence.state !== "foreground";
       report();
     }),
@@ -111,10 +123,16 @@ function watchPlaybackHold(onChange: (held: boolean) => void): () => void {
     .then((presence) => {
       if (!live) return;
       projectId = presence?.projectId ?? null;
-      background = presence !== null && presence.state !== "foreground";
+      const latest = (projectId !== null ? early.get(projectId) : undefined) ?? presence;
+      early.clear();
+      background = latest !== null && latest.state !== "foreground";
       report();
     })
-    .catch(() => {});
+    .catch(() => {
+      // No answer: the document and view signals still hold playback.
+      projectId = null;
+      early.clear();
+    });
   report();
   return () => {
     live = false;

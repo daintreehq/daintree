@@ -203,7 +203,7 @@ describe("download", () => {
     opened.unpin();
   });
 
-  it("starts over when a resumed range doesn't continue the file", async () => {
+  it("starts over when a resumed range comes back under another ETag", async () => {
     const bytes = synthetic(1024 * 1024);
     const cut = 300_000;
     netFetch
@@ -213,16 +213,18 @@ describe("download", () => {
           headers: { "content-length": String(bytes.length), etag: '"v1"' },
         })
       )
-      // Changed underneath: a different validator on the range.
-      .mockResolvedValueOnce(
-        new Response(body(bytes.subarray(cut)), {
+      // Changed underneath: the range it asked for, under a different ETag.
+      .mockImplementationOnce(async (_url: string, init: RequestInit) => {
+        const range = (init.headers as Record<string, string>).range!;
+        const from = Number(/^bytes=(\d+)-$/.exec(range)![1]);
+        return new Response(body(bytes.subarray(from)), {
           status: 206,
           headers: {
-            "content-range": `bytes ${cut}-${bytes.length - 1}/${bytes.length}`,
+            "content-range": `bytes ${from}-${bytes.length - 1}/${bytes.length}`,
             etag: '"v2"',
           },
-        })
-      )
+        });
+      })
       .mockResolvedValueOnce(
         new Response(body(bytes), {
           status: 200,
@@ -235,6 +237,107 @@ describe("download", () => {
     const opened = store.openForRead(PLUGIN, artifact.id)!;
     expect(Buffer.compare(await fs.readFile(opened.filePath), bytes)).toBe(0);
     opened.unpin();
+  });
+
+  it("never resumes on Last-Modified alone, or without a known length", async () => {
+    const bytes = synthetic(500_000);
+    netFetch
+      .mockResolvedValueOnce(
+        new Response(body(bytes, { failAfter: 100_000 }), {
+          status: 200,
+          headers: {
+            "content-length": String(bytes.length),
+            "last-modified": "Wed, 21 Oct 2026 07:28:00 GMT",
+          },
+        })
+      )
+      .mockResolvedValueOnce(
+        new Response(body(bytes, { failAfter: 100_000 }), {
+          status: 200,
+          headers: { etag: '"v1"' },
+        })
+      )
+      .mockResolvedValueOnce(
+        new Response(body(bytes), {
+          status: 200,
+          headers: { "content-length": String(bytes.length) },
+        })
+      );
+    await download("https://api.example.com/v1/files/a.bin");
+    for (const call of netFetch.mock.calls) {
+      expect((call[1] as RequestInit).headers).not.toHaveProperty("range");
+    }
+  });
+
+  it("doesn't hold a compressed body to its wire length", async () => {
+    const bytes = synthetic(5000);
+    netFetch.mockResolvedValueOnce(
+      new Response(body(bytes), {
+        status: 200,
+        headers: { "content-length": "100", "content-encoding": "gzip", etag: '"z"' },
+      })
+    );
+    const artifact = await download("https://api.example.com/v1/files/a.bin");
+    expect(artifact.size).toBe(5000);
+  });
+
+  it("refuses a resumed range that stops short of the file's end", async () => {
+    const bytes = synthetic(400_000);
+    netFetch
+      .mockResolvedValueOnce(
+        new Response(body(bytes, { failAfter: 100_000 }), {
+          status: 200,
+          headers: { "content-length": String(bytes.length), etag: '"v1"' },
+        })
+      )
+      .mockImplementationOnce(async (_url: string, init: RequestInit) => {
+        const from = Number(
+          /^bytes=(\d+)-$/.exec((init.headers as Record<string, string>).range!)![1]
+        );
+        return new Response(body(bytes.subarray(from, from + 10)), {
+          status: 206,
+          headers: { "content-range": `bytes ${from}-${from + 9}/*`, etag: '"v1"' },
+        });
+      })
+      .mockResolvedValueOnce(
+        new Response(body(bytes), {
+          status: 200,
+          headers: { "content-length": String(bytes.length), etag: '"v1"' },
+        })
+      );
+    const artifact = await download("https://api.example.com/v1/files/a.bin");
+    expect(netFetch).toHaveBeenCalledTimes(3);
+    expect(artifact.size).toBe(bytes.length);
+  });
+
+  it("fails an attempt whose provider never sends headers, then retries", async () => {
+    const quick = new PluginArtifactService({
+      store,
+      netFetch: netFetch as never,
+      sweepIntervalMs: 0,
+      backoffMs: () => 1,
+      idleMs: 30,
+    });
+    netFetch
+      .mockImplementationOnce(
+        (_url: string, init: RequestInit) =>
+          new Promise((_resolve, reject) =>
+            init.signal?.addEventListener("abort", () => reject(init.signal!.reason))
+          )
+      )
+      .mockResolvedValueOnce(
+        new Response("ok", { status: 200, headers: { "content-length": "2" } })
+      );
+    const artifact = await quick.download({
+      pluginId: PLUGIN,
+      projectId: null,
+      url: new URL("https://api.example.com/v1/x"),
+      headers: {},
+      isAllowed: allowed,
+      attempts: 2,
+    });
+    expect(artifact.size).toBe(2);
+    expect(netFetch).toHaveBeenCalledTimes(2);
   });
 
   it("gives up after the attempts it was given and leaves no partial file", async () => {
@@ -328,6 +431,28 @@ describe("download", () => {
     await begun;
     service.forgetPlugin(PLUGIN);
     await expect(pending).rejects.toMatchObject({ code: "ABORT_ERR" });
+  });
+
+  it("aborts a project's transfers when the project closes", async () => {
+    const project = "c".repeat(64);
+    netFetch.mockImplementationOnce(
+      (_url: string, init: RequestInit) =>
+        new Promise((_resolve, reject) =>
+          init.signal?.addEventListener("abort", () => reject(init.signal!.reason))
+        )
+    );
+    const pending = service.download({
+      pluginId: PLUGIN,
+      projectId: project,
+      url: new URL("https://api.example.com/v1/x"),
+      headers: {},
+      isAllowed: allowed,
+      attempts: 1,
+    });
+    await vi.waitFor(() => expect(netFetch).toHaveBeenCalled());
+    service.forgetProject(project);
+    await expect(pending).rejects.toMatchObject({ code: "ABORT_ERR" });
+    expect(store.list(PLUGIN)).toEqual([]);
   });
 
   it("refuses a third concurrent transfer for one plugin", async () => {

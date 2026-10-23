@@ -51,6 +51,7 @@ import {
 } from "@/components/PluginKit/PluginKitInputs";
 import { normalizeSelectOptions } from "@/components/PluginKit/kitOptions";
 import { setPluginKitHost } from "@/components/PluginKit/kitHost";
+import type { PluginArtifact } from "@shared/types/pluginArtifacts";
 import { PluginKitOwnerContext } from "@/components/PluginKit/kitScope";
 
 beforeAll(async () => {
@@ -1379,10 +1380,22 @@ describe("FileDropzone", () => {
     }
 
     it("imports through the host for the view's plugin and hands over the handles", async () => {
-      const artifact = { id: "a".repeat(32), name: "clip.mp4", mimeType: "video/mp4", size: 1 };
-      let finish!: (value: unknown[]) => void;
-      const importArtifacts = vi.fn(() => new Promise<unknown[]>((resolve) => (finish = resolve)));
-      uninstall = setPluginKitHost({ importArtifacts: importArtifacts as never });
+      const artifact: PluginArtifact = {
+        id: "a".repeat(32),
+        projectId: null,
+        name: "clip.mp4",
+        mimeType: "video/mp4",
+        size: 1,
+        createdAt: 0,
+        expiresAt: 1,
+        origin: "import",
+      };
+      let finish!: (value: PluginArtifact[]) => void;
+      const importArtifacts = vi.fn(
+        (_owner: string, _files: readonly File[]) =>
+          new Promise<PluginArtifact[]>((resolve) => (finish = resolve))
+      );
+      uninstall = setPluginKitHost({ importArtifacts });
       const onArtifacts = vi.fn();
       render(
         inPlugin(

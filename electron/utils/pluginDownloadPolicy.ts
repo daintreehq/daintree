@@ -65,7 +65,8 @@ export function urlHasCredentials(parsed: URL): boolean {
  * downgrades `https→http`, which would deliver the archive over cleartext.
  */
 export type GuardedFetchResult =
-  | { ok: true; response: Response }
+  /** `url` is the hop that answered: `response.url` is unreliable in Electron's net stack. */
+  | { ok: true; response: Response; url: string }
   | {
       ok: false;
       reason:
@@ -177,7 +178,7 @@ export async function fetchWithPrivateHostGuard(
     const location =
       response.status >= 300 && response.status < 400 ? response.headers.get("location") : null;
     if (!location) {
-      return { ok: true, response };
+      return { ok: true, response, url: currentUrl };
     }
     // Drop the redirect response's socket before chasing the next hop.
     await response.body?.cancel().catch(() => {});
@@ -187,7 +188,7 @@ export async function fetchWithPrivateHostGuard(
     } catch {
       // A malformed Location can't be followed — treat as a dead end and let
       // the caller's content gates reject the (already-cancelled) response.
-      return { ok: true, response };
+      return { ok: true, response, url: currentUrl };
     }
     if (isPrivateOrLoopbackHostname(next.hostname) || urlHasCredentials(next)) {
       return { ok: false, reason: "private-redirect" };
