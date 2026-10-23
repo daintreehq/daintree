@@ -657,6 +657,8 @@ if (!gotTheLock) {
         getRemoteService("windowHosts")?.viewHasActiveAgent?.(webContentsId) === true,
       remoteKeepResident: (webContentsId) =>
         getRemoteService("windowHosts")?.viewKeepsResident?.(webContentsId) === true,
+      remoteMcpBindingLive: (webContentsId) =>
+        getRemoteService("windowHosts")?.viewHasLiveMcpBinding?.(webContentsId) === true,
       // Keeps a workspace an MCP session is bound to out of the freeze sweep,
       // and out of eviction entirely while a dispatch is in flight (#11790).
       // A bound session drives a *background* workspace by design, and a frozen

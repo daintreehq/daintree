@@ -25,6 +25,7 @@ import {
   LinkMethod,
   MAX_LISTED_PROJECTS,
   type EndpointAgentActivityPayload,
+  type EndpointMcpBindingPayload,
   type EndpointResidencyPayload,
   type EndpointAssistantPayload,
   type EndpointResyncPayload,
@@ -105,6 +106,14 @@ export interface SessionHostOptions {
    * refresh; absent, every endpoint reads as having none.
    */
   keepResident?: (endpoint: RemoteViewEndpoint) => boolean;
+  /**
+   * Whether an external MCP session on this host is bound, over a live
+   * transport, to this endpoint's project. The session runs here, so the
+   * Shell's eviction pass can only rank the view with its own bound views if
+   * this host tells it (#14228). Read synchronously on every refresh; absent,
+   * every endpoint reads as having none.
+   */
+  mcpBindingLive?: (endpoint: RemoteViewEndpoint) => boolean;
   describeProject?: (projectId: string) => ProjectDescription | null;
   listProjects?: () => HostProjectList;
   eventsHighWaterBytes?: number;
@@ -144,11 +153,17 @@ const MAX_REMEMBERED_CLIENTS = 64;
 /**
  * What the host tells a Shell about each of its views, for the Shell's
  * eviction pass: a live assistant pinned to the view (#13349), an active
- * agent in the view's project (#13359), and the user's keep-resident grant for
- * the view's project (#13933).
+ * agent in the view's project (#13359), the user's keep-resident grant for
+ * the view's project (#13933), and an MCP session bound to the view's project
+ * (#14228).
  */
-type EndpointAnswer = "assistant" | "agents" | "resident";
-const ENDPOINT_ANSWERS: readonly EndpointAnswer[] = ["assistant", "agents", "resident"];
+type EndpointAnswer = "assistant" | "agents" | "resident" | "mcpBinding";
+const ENDPOINT_ANSWERS: readonly EndpointAnswer[] = [
+  "assistant",
+  "agents",
+  "resident",
+  "mcpBinding",
+];
 
 interface SessionState {
   sessionId: string;
@@ -379,6 +394,15 @@ export class SessionHost {
     for (const state of this.states.values()) this.announce(state, "resident");
   }
 
+  /**
+   * An MCP session may have bound to a project or dropped: tell each attached
+   * Shell about every endpoint whose answer changed since it was last told.
+   */
+  refreshMcpBindings(): void {
+    if (this.disposed) return;
+    for (const state of this.states.values()) this.announce(state, "mcpBinding");
+  }
+
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
@@ -417,8 +441,13 @@ export class SessionHost {
         openedOnLink: new Set(),
         createdOnLink: new Set(),
         refusedOnLink: new Map(),
-        told: { assistant: new Map(), agents: new Map(), resident: new Map() },
-        answerRetry: { assistant: null, agents: null, resident: null },
+        told: {
+          assistant: new Map(),
+          agents: new Map(),
+          resident: new Map(),
+          mcpBinding: new Map(),
+        },
+        answerRetry: { assistant: null, agents: null, resident: null, mcpBinding: null },
         overHighWaterTimer: null,
         handle: undefined as unknown as EndpointSessionHandle,
         lastActiveAt: null,
@@ -622,6 +651,7 @@ export class SessionHost {
     this.publishFrontendCount();
     this.announce(state, "agents");
     this.announce(state, "resident");
+    this.announce(state, "mcpBinding");
     for (const listener of [...this.openedListeners]) {
       try {
         listener(endpoint, state.handle);
@@ -650,10 +680,11 @@ export class SessionHost {
     state.lastActiveAt = Date.now();
     this.publishFrontendCount();
     // The assistant was the old project's, and the move revokes it. The Shell
-    // drops both answers when the view moves, so the new project's agents are
-    // owed one even when it reads the same as the old project's.
+    // drops the other answers when the view moves, so the new project's are
+    // owed even when they read the same as the old project's.
     state.told.agents.delete(clientEndpointId);
     state.told.resident.delete(clientEndpointId);
+    state.told.mcpBinding.delete(clientEndpointId);
     for (const answer of ENDPOINT_ANSWERS) this.announce(state, answer);
   }
 
@@ -816,12 +847,7 @@ export class SessionHost {
   }
 
   private announce(state: SessionState, answer: EndpointAnswer): void {
-    const read =
-      answer === "assistant"
-        ? this.options.assistantLive
-        : answer === "agents"
-          ? this.options.agentActive
-          : this.options.keepResident;
+    const read = this.answerReader(answer);
     const link = state.link;
     if (!read || !link || !link.isOpen) return;
     const told = state.told[answer];
@@ -840,30 +866,7 @@ export class SessionHost {
       changed.push({ endpointId: id, projectId: endpoint.projectId, value });
     }
     if (changed.length === 0) return;
-    const call =
-      answer === "assistant"
-        ? link.call(LinkMethod.ENDPOINT_ASSISTANT, {
-            endpoints: changed.map(({ endpointId, projectId, value }) => ({
-              endpointId,
-              projectId,
-              live: value,
-            })),
-          } satisfies EndpointAssistantPayload)
-        : answer === "agents"
-          ? link.call(LinkMethod.ENDPOINT_AGENT_ACTIVITY, {
-              endpoints: changed.map(({ endpointId, projectId, value }) => ({
-                endpointId,
-                projectId,
-                active: value,
-              })),
-            } satisfies EndpointAgentActivityPayload)
-          : link.call(LinkMethod.ENDPOINT_RESIDENCY, {
-              endpoints: changed.map(({ endpointId, projectId, value }) => ({
-                endpointId,
-                projectId,
-                keepResident: value,
-              })),
-            } satisfies EndpointResidencyPayload);
+    const call = this.callAnswer(link, answer, changed);
     void call.catch((error: unknown) => {
       // A Shell from before this call refuses it, and always will.
       const code = (error as { code?: unknown } | null)?.code;
@@ -884,6 +887,62 @@ export class SessionHost {
       retry.unref?.();
       state.answerRetry[answer] = retry;
     });
+  }
+
+  private answerReader(
+    answer: EndpointAnswer
+  ): ((endpoint: RemoteViewEndpoint) => boolean) | undefined {
+    switch (answer) {
+      case "assistant":
+        return this.options.assistantLive;
+      case "agents":
+        return this.options.agentActive;
+      case "resident":
+        return this.options.keepResident;
+      case "mcpBinding":
+        return this.options.mcpBindingLive;
+    }
+  }
+
+  private callAnswer(
+    link: LinkSession,
+    answer: EndpointAnswer,
+    changed: Array<{ endpointId: string; projectId: string | null; value: boolean }>
+  ): Promise<unknown> {
+    switch (answer) {
+      case "assistant":
+        return link.call(LinkMethod.ENDPOINT_ASSISTANT, {
+          endpoints: changed.map(({ endpointId, projectId, value }) => ({
+            endpointId,
+            projectId,
+            live: value,
+          })),
+        } satisfies EndpointAssistantPayload);
+      case "agents":
+        return link.call(LinkMethod.ENDPOINT_AGENT_ACTIVITY, {
+          endpoints: changed.map(({ endpointId, projectId, value }) => ({
+            endpointId,
+            projectId,
+            active: value,
+          })),
+        } satisfies EndpointAgentActivityPayload);
+      case "resident":
+        return link.call(LinkMethod.ENDPOINT_RESIDENCY, {
+          endpoints: changed.map(({ endpointId, projectId, value }) => ({
+            endpointId,
+            projectId,
+            keepResident: value,
+          })),
+        } satisfies EndpointResidencyPayload);
+      case "mcpBinding":
+        return link.call(LinkMethod.ENDPOINT_MCP_BINDING, {
+          endpoints: changed.map(({ endpointId, projectId, value }) => ({
+            endpointId,
+            projectId,
+            liveBinding: value,
+          })),
+        } satisfies EndpointMcpBindingPayload);
+    }
   }
 
   private expire(sessionId: string, cause: RemoteEndpointCloseCause): void {

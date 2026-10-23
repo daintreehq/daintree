@@ -25,6 +25,7 @@ import {
 import type { LinkSession, LinkSessionOptions } from "../link/session.js";
 import {
   EndpointAgentActivityPayloadSchema,
+  EndpointMcpBindingPayloadSchema,
   EndpointResidencyPayloadSchema,
   EndpointAssistantPayloadSchema,
   EndpointResyncPayloadSchema,
@@ -208,6 +209,13 @@ export class HostConnection {
    * this machine's store. Kept through a dropped link like `activeAgentViews`.
    */
   private readonly residentViews = new Set<number>();
+  /**
+   * Views whose project an MCP session on the host is bound to, live (#14228).
+   * The session runs there, so this machine's MCP service never sees it. Kept
+   * through a dropped link like `activeAgentViews`: the session lives on the
+   * host regardless, and a resumed session repeats every answer.
+   */
+  private readonly mcpBoundViews = new Set<number>();
   private readonly readyWaiters = new Set<() => void>();
   private info: HostInfo | null = null;
   private started = false;
@@ -624,6 +632,11 @@ export class HostConnection {
     return this.residentViews.has(webContentsId) && this.endpoints.has(webContentsId);
   }
 
+  /** Whether the host last said an MCP session there is bound to this view's project, live. */
+  hasLiveMcpBinding(webContentsId: number): boolean {
+    return this.mcpBoundViews.has(webContentsId) && this.endpoints.has(webContentsId);
+  }
+
   /** The view now belongs to another host (or this machine): close its endpoint here. */
   retireView(webContentsId: number): void {
     this.closeEndpoint(webContentsId, "view-moved");
@@ -714,6 +727,21 @@ export class HostConnection {
         return null;
       }
     );
+    session.registerCallHandler(
+      LinkMethod.ENDPOINT_MCP_BINDING,
+      EndpointMcpBindingPayloadSchema,
+      ({ endpoints }) => {
+        for (const { endpointId, projectId, liveBinding } of endpoints) {
+          const webContentsId = this.viewsByEndpoint.get(endpointId);
+          if (webContentsId === undefined) continue;
+          // Said about a binding the view has since left.
+          if (this.endpoints.get(webContentsId)?.projectId !== projectId) continue;
+          if (liveBinding) this.mcpBoundViews.add(webContentsId);
+          else this.mcpBoundViews.delete(webContentsId);
+        }
+        return null;
+      }
+    );
     session.onClose(() => {
       if (this.session === session) this.session = null;
       this.checkReady();
@@ -798,6 +826,7 @@ export class HostConnection {
         // The old project's agents say nothing about the new one's.
         this.activeAgentViews.delete(webContentsId);
         this.residentViews.delete(webContentsId);
+        this.mcpBoundViews.delete(webContentsId);
       }
       return open.endpointId;
     }
@@ -834,6 +863,7 @@ export class HostConnection {
     this.liveAssistants.delete(webContentsId);
     this.activeAgentViews.delete(webContentsId);
     this.residentViews.delete(webContentsId);
+    this.mcpBoundViews.delete(webContentsId);
     const posted = this.postClose(this.session, open.endpointId);
     if (!posted) this.pendingCloses.add(open.endpointId);
     this.logEndpointClosed(webContentsId, open, cause, { closeQueued: !posted });
@@ -926,6 +956,7 @@ export class HostConnection {
     this.liveAssistants.clear();
     this.activeAgentViews.clear();
     this.residentViews.clear();
+    this.mcpBoundViews.clear();
   }
 
   /**

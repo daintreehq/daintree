@@ -48,7 +48,12 @@ import type {
   ProjectSwitchTrace,
 } from "../../shared/types/ipc/project.js";
 import { PERF_MARKS } from "../../shared/perf/marks.js";
-import { toHostScopedKey, type HostId } from "../../shared/types/remoteHosts.js";
+import {
+  isLocalHostId,
+  parseHostScopedKey,
+  toHostScopedKey,
+  type HostId,
+} from "../../shared/types/remoteHosts.js";
 import { markPerformance } from "../utils/performance.js";
 import { collectGuestPids } from "./ProjectViewLifecycleController.js";
 import {
@@ -257,6 +262,12 @@ export interface ProjectViewManagerOptions {
    */
   remoteKeepResident?: (webContentsId: number) => boolean;
   /**
+   * The bound-session reading for a view of a host's project (#14228). Its MCP
+   * sessions bind on the host, so `mcpViewActivity` below never sees them; the
+   * host tells the Shell instead. Absent, no remote view reads as bound.
+   */
+  remoteMcpBindingLive?: (webContentsId: number) => boolean;
+  /**
    * Why MCP needs this view kept running right now (#11790) — a live session
    * binding, an in-flight dispatch, or neither. Injected from the composition
    * root for the same reason as `assistantBackendsForProject`: electron/window/
@@ -422,6 +433,7 @@ export class ProjectViewManager {
   remoteAssistantLive?: (webContentsId: number) => boolean;
   remoteAgentActive?: (webContentsId: number) => boolean;
   remoteKeepResident?: (webContentsId: number) => boolean;
+  remoteMcpBindingLive?: (webContentsId: number) => boolean;
   mcpViewActivity?: (workspaceId: string, webContentsId: number) => McpViewActivity | null;
   windowRegistry?: import("./WindowRegistry.js").WindowRegistry;
   private switchChain: Promise<void> = Promise.resolve();
@@ -515,6 +527,7 @@ export class ProjectViewManager {
     this.remoteAssistantLive = opts.remoteAssistantLive;
     this.remoteAgentActive = opts.remoteAgentActive;
     this.remoteKeepResident = opts.remoteKeepResident;
+    this.remoteMcpBindingLive = opts.remoteMcpBindingLive;
     this.mcpViewActivity = opts.mcpViewActivity;
     this.windowRegistry = opts.windowRegistry;
     // A view kept over the cap by its unsaved work (#14095) is evictable again
@@ -1470,7 +1483,24 @@ export class ProjectViewManager {
    * which is the same vocabulary the MCP session binding stores.
    */
   mcpActivityFor(workspaceId: string, wc: Electron.WebContents): McpViewActivityReading {
-    if (!this.mcpViewActivity || wc.isDestroyed()) return NO_MCP_ACTIVITY;
+    if (wc.isDestroyed()) return NO_MCP_ACTIVITY;
+    const activity = this.localMcpActivityFor(workspaceId, wc);
+    if (activity.liveBinding || isLocalHostId(parseHostScopedKey(workspaceId).hostId)) {
+      return activity;
+    }
+    // A host project's sessions bind on its host (#14228), which says so even
+    // when this machine has never loaded MCP. Only the binding is the host's:
+    // a dispatch lease names a renderer here.
+    return this.remoteMcpBindingLive?.(wc.id) === true
+      ? { ...activity, liveBinding: true }
+      : activity;
+  }
+
+  private localMcpActivityFor(
+    workspaceId: string,
+    wc: Electron.WebContents
+  ): McpViewActivityReading {
+    if (!this.mcpViewActivity) return NO_MCP_ACTIVITY;
     try {
       const activity = this.mcpViewActivity(workspaceId, wc.id);
       return activity ? { ...activity, unknown: false } : NO_MCP_ACTIVITY;

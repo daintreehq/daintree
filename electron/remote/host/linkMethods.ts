@@ -32,6 +32,8 @@ export const LinkMethod = {
   ENDPOINT_AGENT_ACTIVITY: "endpoint.agent-activity",
   /** Host → Shell: whether the user granted each of these endpoints' projects residency here. */
   ENDPOINT_RESIDENCY: "endpoint.residency",
+  /** Host → Shell: whether an MCP session here is bound live to each of these endpoints' projects. */
+  ENDPOINT_MCP_BINDING: "endpoint.mcp-binding",
 } as const;
 
 export interface HostInfo {
@@ -101,6 +103,20 @@ export interface EndpointResidencyState {
 
 export interface EndpointResidencyPayload {
   endpoints: EndpointResidencyState[];
+}
+
+/**
+ * Whether an external MCP session on the host is bound, over a live transport,
+ * to an endpoint's project. Same `projectId` rule as {@link EndpointAssistantState}.
+ */
+export interface EndpointMcpBindingState {
+  endpointId: string;
+  projectId: string | null;
+  liveBinding: boolean;
+}
+
+export interface EndpointMcpBindingPayload {
+  endpoints: EndpointMcpBindingState[];
 }
 
 const endpointId = z.string().min(1).max(256);
@@ -183,6 +199,18 @@ export const EndpointResidencyPayloadSchema = z.object({
         endpointId,
         projectId: z.string().min(1).max(256).nullable(),
         keepResident: z.boolean(),
+      })
+    )
+    .max(4096),
+});
+
+export const EndpointMcpBindingPayloadSchema = z.object({
+  endpoints: z
+    .array(
+      z.object({
+        endpointId,
+        projectId: z.string().min(1).max(256).nullable(),
+        liveBinding: z.boolean(),
       })
     )
     .max(4096),

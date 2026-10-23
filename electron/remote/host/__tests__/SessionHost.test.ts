@@ -1039,6 +1039,112 @@ describe("SessionHost residency (#13933)", () => {
   });
 });
 
+describe("SessionHost MCP bindings (#14228)", () => {
+  /** Projects an external MCP session here is bound to, live. */
+  let bound: Set<string>;
+  let sessions: SessionHost;
+  let fake: ReturnType<typeof fakeServer>;
+
+  beforeEach(() => {
+    bound = new Set();
+    fake = fakeServer();
+    sessions = new SessionHost(fake, {
+      dispatcher: { invokeForEndpoint: async () => wrapSuccess(null), sendForEndpoint: () => {} },
+      registry: new EndpointRegistryImpl(),
+      mcpBindingLive: (endpoint) => bound.has(endpoint.projectId ?? ""),
+    });
+  });
+
+  afterEach(() => sessions.dispose());
+
+  const flush = async () => {
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+  };
+
+  const bindingCalls = (link: ReturnType<typeof fakeLink>) =>
+    link.call.mock.calls
+      .filter(([method]) => method === LinkMethod.ENDPOINT_MCP_BINDING)
+      .map(([, payload]) => payload);
+
+  it("answers a view that opens onto a bound project, and only changes after", () => {
+    bound.add("p1");
+    const link = fakeLink();
+    fake.attach("s1", link);
+    open(link, "view-1", "p1");
+    open(link, "view-2", "p2");
+    expect(bindingCalls(link)).toEqual([
+      { endpoints: [{ endpointId: "view-1", projectId: "p1", liveBinding: true }] },
+      { endpoints: [{ endpointId: "view-2", projectId: "p2", liveBinding: false }] },
+    ]);
+
+    sessions.refreshMcpBindings();
+    expect(bindingCalls(link)).toHaveLength(2);
+
+    bound.delete("p1");
+    bound.add("p2");
+    sessions.refreshMcpBindings();
+    expect(bindingCalls(link).at(-1)).toEqual({
+      endpoints: [
+        { endpointId: "view-1", projectId: "p1", liveBinding: false },
+        { endpointId: "view-2", projectId: "p2", liveBinding: true },
+      ],
+    });
+  });
+
+  it("answers again for a view that moved between two bound projects", () => {
+    bound.add("p1");
+    bound.add("p2");
+    const link = fakeLink();
+    fake.attach("s1", link);
+    open(link, "view-1", "p1");
+
+    link.emit(Lane.CONTROL, ControlKind.ENDPOINT_REBIND, { endpointId: "view-1", projectId: "p2" });
+
+    expect(bindingCalls(link).at(-1)).toEqual({
+      endpoints: [{ endpointId: "view-1", projectId: "p2", liveBinding: true }],
+    });
+  });
+
+  it("tells a resumed Shell every view's answer, including a session that bound while it was away", () => {
+    const first = fakeLink();
+    fake.attach("s1", first);
+    open(first, "view-1", "p1");
+    first.drop();
+
+    bound.add("p1");
+    sessions.refreshMcpBindings();
+
+    const second = fakeLink();
+    fake.attach("s1", second, true);
+    expect(bindingCalls(second)).toEqual([
+      { endpoints: [{ endpointId: "view-1", projectId: "p1", liveBinding: true }] },
+    ]);
+  });
+
+  it("asks an attached Shell again when it failed to take an answer, but not one from before the call", async () => {
+    const link = fakeLink();
+    fake.attach("s1", link);
+    open(link, "view-1", "p1");
+    link.call.mockRejectedValueOnce(Object.assign(new Error("busy"), { code: "RATE_LIMITED" }));
+    bound.add("p1");
+    sessions.refreshMcpBindings();
+    await flush();
+    vi.advanceTimersByTime(ANSWER_RETRY_MS);
+    expect(bindingCalls(link)).toHaveLength(3);
+    expect(bindingCalls(link).at(-1)).toEqual({
+      endpoints: [{ endpointId: "view-1", projectId: "p1", liveBinding: true }],
+    });
+
+    link.call.mockRejectedValueOnce(Object.assign(new Error("old"), { code: "UNSUPPORTED" }));
+    bound.delete("p1");
+    sessions.refreshMcpBindings();
+    await flush();
+    vi.advanceTimersByTime(ANSWER_RETRY_MS);
+    sessions.refreshMcpBindings();
+    expect(bindingCalls(link)).toHaveLength(4);
+  });
+});
+
 describe("SessionHost agent activity (#13359)", () => {
   /** Projects with an agent working, waiting or directing here. */
   let activeProjects: Set<string>;

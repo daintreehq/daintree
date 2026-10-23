@@ -180,6 +180,7 @@ async function startHarness(
     reverseRequests?: ReverseRequestAnswerer;
     assistantLive?: SessionHostOptions["assistantLive"];
     agentActive?: SessionHostOptions["agentActive"];
+    mcpBindingLive?: SessionHostOptions["mcpBindingLive"];
     resumeGraceMs?: number;
   } = {}
 ) {
@@ -219,6 +220,7 @@ async function startHarness(
     maxEndpointsPerSession: options.maxEndpoints,
     assistantLive: options.assistantLive,
     agentActive: options.agentActive,
+    mcpBindingLive: options.mcpBindingLive,
   });
 
   const registry = new HostRegistry(memoryStore());
@@ -1255,6 +1257,94 @@ describe("remote session wiring", () => {
       h.allowConnect.value = true;
       await waitFor(() => getEndpointRegistry().getRemote().length === 1);
       await waitFor(() => connection.hasActiveAgent(VIEW_A));
+    });
+  });
+
+  describe("MCP bindings (#14228)", () => {
+    /** Projects an external MCP session on the host is bound to, live. */
+    const bound = new Set<string>();
+    const startWithBindings = (options: { resumeGraceMs?: number } = {}) =>
+      startHarness({
+        ...options,
+        mcpBindingLive: (endpoint) => bound.has(endpoint.projectId ?? ""),
+      });
+
+    beforeEach(() => bound.clear());
+
+    it("tells the Shell which views a session on the host is bound to, through a dropped link", async () => {
+      bound.add("proj-1");
+      await startWithBindings({ resumeGraceMs: 10_000 });
+      await connect();
+      await invoke(HOST_CHANNEL, VIEW_A, {});
+      await invoke(HOST_CHANNEL, VIEW_B, {});
+      const connection = h.manager.get(HOST_ID)!;
+      // Already bound when the view opened: no change needed to hear it.
+      await waitFor(() => connection.hasLiveMcpBinding(VIEW_A));
+      expect(connection.hasLiveMcpBinding(VIEW_B)).toBe(false);
+
+      bound.add("proj-2");
+      h.sessionHost.refreshMcpBindings();
+      await waitFor(() => connection.hasLiveMcpBinding(VIEW_B));
+
+      // The session lives on the host while the link is down.
+      h.allowConnect.value = false;
+      for (const socket of h.sockets.splice(0)) socket.destroy();
+      await waitFor(() => connection.unavailableEnvelope() !== null);
+      expect(connection.hasLiveMcpBinding(VIEW_A)).toBe(true);
+
+      // It drops while nobody is attached to hear; the resumed session says so.
+      bound.clear();
+      h.sessionHost.refreshMcpBindings();
+      h.allowConnect.value = true;
+      await waitFor(() => connection.unavailableEnvelope() === null);
+      await waitFor(
+        () => !connection.hasLiveMcpBinding(VIEW_A) && !connection.hasLiveMcpBinding(VIEW_B)
+      );
+    });
+
+    it("forgets a view's answer when it closes", async () => {
+      bound.add("proj-1");
+      await startWithBindings();
+      await connect();
+      await invoke(HOST_CHANNEL, VIEW_A, {});
+      const connection = h.manager.get(HOST_ID)!;
+      await waitFor(() => connection.hasLiveMcpBinding(VIEW_A));
+
+      h.sink.gone(VIEW_A);
+      expect(connection.hasLiveMcpBinding(VIEW_A)).toBe(false);
+    });
+
+    it("takes the host's word only for the project the view is on now, and only well-formed", async () => {
+      // No reader: every answer here is one this test sends.
+      await startHarness();
+      const hostSessions: LinkSession[] = [];
+      cleanups.push(h.server.onSession((ctx) => hostSessions.push(ctx.session)));
+      await connect();
+      await invoke(HOST_CHANNEL, VIEW_B, {});
+      const connection = h.manager.get(HOST_ID)!;
+      const say = (projectId: string, liveBinding: unknown) =>
+        hostSessions.at(-1)!.call(LinkMethod.ENDPOINT_MCP_BINDING, {
+          endpoints: [{ endpointId: "view-12", projectId, liveBinding }],
+        });
+
+      await say("proj-2", true);
+      expect(connection.hasLiveMcpBinding(VIEW_B)).toBe(true);
+
+      // A session bound to the old project says nothing about the new one.
+      projectKeys.set(VIEW_B, `${HOST_ID}:proj-1`);
+      await invoke(HOST_CHANNEL, VIEW_B, {});
+      expect(connection.hasLiveMcpBinding(VIEW_B)).toBe(false);
+
+      // Said about the project it left, either way: ignored.
+      await say("proj-2", true);
+      expect(connection.hasLiveMcpBinding(VIEW_B)).toBe(false);
+      await say("proj-1", true);
+      expect(connection.hasLiveMcpBinding(VIEW_B)).toBe(true);
+      await say("proj-2", false);
+      expect(connection.hasLiveMcpBinding(VIEW_B)).toBe(true);
+
+      await expect(say("proj-1", "no")).rejects.toMatchObject({ code: "VALIDATION" });
+      expect(connection.hasLiveMcpBinding(VIEW_B)).toBe(true);
     });
   });
 

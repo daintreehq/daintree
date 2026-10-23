@@ -1060,6 +1060,40 @@ describe("ProjectViewManager — MCP session bindings stay thawed (#11790)", () 
     expect(frozeProjA()).toBe(false);
   });
 
+  it("never freezes a cached view of a host's project an MCP session there is bound to (#14228)", async () => {
+    const boundRemoteViews = new Set<number>();
+    manager = new ProjectViewManager(win as never, {
+      dirname: "/test",
+      cachedProjectViews: 3,
+      paintGateTimeoutMs: 0,
+      paintGateHardTimeoutMs: 0,
+      remoteMcpBindingLive: (webContentsId) => boundRemoteViews.has(webContentsId),
+    });
+    (manager as unknown as { waitForPaint: () => Promise<string> }).waitForPaint = () =>
+      Promise.resolve("signal");
+    manager.registerInitialView(
+      { webContents: createMockWebContents(), setBounds: vi.fn() } as never,
+      "proj-a",
+      "/path/a"
+    );
+    await manager.switchToHostProject("studio-02", "proj-r", "/srv/r");
+    const remoteWc = manager.getAllViews().find((v) => v.projectId.startsWith("studio-02"))!.view
+      .webContents;
+    await manager.switchTo("proj-b", "/path/b");
+    boundRemoteViews.add(remoteWc.id);
+    const frozeRemote = () =>
+      vi.mocked(freezeWebContents).mock.calls.some((call) => (call[0] as unknown) === remoteWc);
+
+    manager.setEfficiencyFreeze(true);
+    vi.advanceTimersByTime(500);
+    expect(frozeRemote()).toBe(false);
+
+    // Once the host says the session dropped, the next pass freezes it like any other.
+    boundRemoteViews.clear();
+    manager.refreezeUnprotectedCachedViews();
+    expect(frozeRemote()).toBe(true);
+  });
+
   it("re-freezes a view thawed for a dispatch once the lease is gone", async () => {
     // The bridge thaws on demand and nothing puts the view back: freezeAllCached
     // runs only on the transition INTO efficiency, and re-entering while already
