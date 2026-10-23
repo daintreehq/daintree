@@ -145,6 +145,9 @@ export interface ResetPluginViewConsentPayload {
   pluginId?: string;
 }
 
+/** A NetBird peer's connection as `netbird status` reports it; `idle` is a lazy connection, often reachable. */
+export type NetbirdPeerStatus = "connected" | "connecting" | "idle" | "disconnected";
+
 /** A machine discovery saw. Reachability only; whether Daintree runs there is learned by connecting. */
 export interface DiscoveredHost {
   name: string;
@@ -152,6 +155,8 @@ export interface DiscoveredHost {
   source: HostDiscoverySource;
   platform: HostPlatform | null;
   online: boolean;
+  /** NetBird's own word for the peer's connection; absent for other sources or a status it didn't recognise. */
+  netbirdStatus?: NetbirdPeerStatus;
   /** True when this account on this machine is already in the host list. */
   alreadyAdded: boolean;
   /** The machine is in the host list under another account (or ssh's default one). */

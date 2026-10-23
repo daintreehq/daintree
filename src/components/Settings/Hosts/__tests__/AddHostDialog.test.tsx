@@ -3,6 +3,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type {
+  DiscoveredHost,
   HostProbeResult,
   HostInstallPlan,
   RemoteHostsEvent,
@@ -255,7 +256,7 @@ describe("AddHostDialog", () => {
     const found = (name: string, alreadyAdded = false) => ({
       name,
       connection: { kind: "ssh" as const, target: `${name}.local` },
-      source: "mdns" as const,
+      source: "bonjour" as const,
       platform: "darwin" as const,
       online: true,
       alreadyAdded,
@@ -272,6 +273,191 @@ describe("AddHostDialog", () => {
       (item) => item.querySelector(".font-medium")!.textContent
     );
     expect(names).toEqual(["studio-2", "Studio-03", "studio-10", "studio-01"]);
+  });
+
+  describe("a large mesh", () => {
+    function peer(
+      name: string,
+      overrides: Partial<DiscoveredHost> & { target?: string } = {}
+    ): DiscoveredHost {
+      const { target = `${name}.netbird.cloud`, ...rest } = overrides;
+      return {
+        name,
+        connection: { kind: "ssh", target },
+        source: "netbird",
+        platform: null,
+        online: true,
+        netbirdStatus: "connected",
+        alreadyAdded: false,
+        ...rest,
+      };
+    }
+    const idle = { online: false, netbirdStatus: "idle" } as const;
+    const mesh = (count: number) =>
+      Array.from({ length: count }, (_, i) => peer(`node-${i + 1}`, i % 2 ? idle : {}));
+    const rowNames = () =>
+      [...screen.getByTestId("add-host-discovered").querySelectorAll("li")].map(
+        (item) => item.querySelector(".font-medium")!.textContent
+      );
+    const filter = () => screen.getByLabelText("Filter machines") as HTMLInputElement;
+    const sshTarget = () => screen.getByPlaceholderText("user@devbox.local") as HTMLInputElement;
+
+    it("puts connected peers ahead of idle ones, with added machines still last", async () => {
+      remoteHosts.discover!.mockResolvedValueOnce([
+        peer("lazy-2", idle),
+        peer("added", { alreadyAdded: true }),
+        peer("dev-vm"),
+        peer("lab", { ...idle, knownMachine: true }),
+        peer("connecting", { online: false, netbirdStatus: "connecting" }),
+        peer("ci-10"),
+        peer("ci-9"),
+      ]);
+      render(<AddHostDialog isOpen onClose={() => {}} />);
+      await screen.findByText("dev-vm");
+      expect(rowNames()).toEqual([
+        "ci-9",
+        "ci-10",
+        "dev-vm",
+        "connecting",
+        "lab",
+        "lazy-2",
+        "added",
+      ]);
+    });
+
+    it("says NetBird's own word for each peer, after Added and another account", async () => {
+      remoteHosts.discover!.mockResolvedValueOnce([
+        peer("dev-vm"),
+        peer("lazy", idle),
+        peer("unknown", { online: false, netbirdStatus: undefined }),
+        peer("lab", { ...idle, knownMachine: true }),
+        peer("added", { ...idle, alreadyAdded: true }),
+      ]);
+      render(<AddHostDialog isOpen onClose={() => {}} />);
+      await screen.findByText("dev-vm");
+      const labels = [...screen.getByTestId("add-host-discovered").querySelectorAll("li")].map(
+        (item) => item.querySelector("button > span:last-child")!.textContent
+      );
+      expect(labels).toEqual([
+        "NetBird · connected",
+        "Added as another account",
+        "NetBird · idle",
+        "NetBird",
+        "Added",
+      ]);
+    });
+
+    it("offers a filter only past eight machines, and puts the keyboard in it", async () => {
+      remoteHosts.discover!.mockResolvedValueOnce(mesh(8));
+      const { unmount } = render(<AddHostDialog isOpen onClose={() => {}} />);
+      await screen.findByText("node-1");
+      expect(screen.queryByLabelText("Filter machines")).toBeNull();
+      unmount();
+
+      remoteHosts.discover!.mockResolvedValueOnce(mesh(9));
+      render(<AddHostDialog isOpen onClose={() => {}} />);
+      await screen.findByText("node-9");
+      expect(document.activeElement).toBe(filter());
+    });
+
+    it("matches part of a name or an SSH target, in any case, and only from its own field", async () => {
+      remoteHosts.discover!.mockResolvedValueOnce([
+        ...mesh(8),
+        peer("dev-vm", { target: "greg@dev-vm.corp.netbird.cloud" }),
+        peer("10.0.0.7", { target: "10.0.0.7" }),
+      ]);
+      render(<AddHostDialog isOpen onClose={() => {}} />);
+      await screen.findByText("dev-vm");
+
+      fireEvent.change(filter(), { target: { value: "DEV" } });
+      expect(rowNames()).toEqual(["dev-vm"]);
+      fireEvent.change(filter(), { target: { value: "Corp.NetBird" } });
+      expect(rowNames()).toEqual(["dev-vm"]);
+      fireEvent.change(filter(), { target: { value: "GREG@" } });
+      expect(rowNames()).toEqual(["dev-vm"]);
+      fireEvent.change(filter(), { target: { value: "10.0.0" } });
+      expect(rowNames()).toEqual(["10.0.0.7"]);
+      fireEvent.change(filter(), { target: { value: "  " } });
+      expect(rowNames()).toHaveLength(10);
+
+      fireEvent.change(sshTarget(), { target: { value: "dev-vm" } });
+      expect(rowNames()).toHaveLength(10);
+    });
+
+    it("keeps the filter when nothing matches, and points at the SSH target", async () => {
+      remoteHosts.discover!.mockResolvedValueOnce(mesh(9));
+      render(<AddHostDialog isOpen onClose={() => {}} />);
+      await screen.findByText("node-9");
+      fireEvent.change(filter(), { target: { value: " prod-db " } });
+      expect(screen.queryByTestId("add-host-discovered")).toBeNull();
+      expect(screen.getByRole("status").textContent).toBe(
+        'No machines match "prod-db". Enter an SSH target below if it isn\'t listed.'
+      );
+      expect(filter().value).toBe(" prod-db ");
+    });
+
+    it("picks the one machine left on Enter, without checking it", async () => {
+      remoteHosts.discover!.mockResolvedValueOnce([...mesh(8), peer("dev-vm")]);
+      render(<AddHostDialog isOpen onClose={() => {}} />);
+      await screen.findByText("dev-vm");
+
+      fireEvent.change(filter(), { target: { value: "node" } });
+      fireEvent.keyDown(filter(), { key: "Enter" });
+      expect(sshTarget().value).toBe("");
+
+      fireEvent.change(filter(), { target: { value: "dev" } });
+      fireEvent.keyDown(filter(), { key: "Enter", isComposing: true });
+      expect(sshTarget().value).toBe("");
+      fireEvent.keyDown(filter(), { key: "Enter" });
+      expect(sshTarget().value).toBe("dev-vm.netbird.cloud");
+      expect(screen.getByDisplayValue("dev-vm").tagName).toBe("INPUT");
+      expect(document.activeElement).toBe(sshTarget());
+      expect(remoteHosts.probe).not.toHaveBeenCalled();
+    });
+
+    it("won't pick a machine that's already added", async () => {
+      remoteHosts.discover!.mockResolvedValueOnce([
+        ...mesh(8),
+        peer("dev-vm", { alreadyAdded: true }),
+      ]);
+      render(<AddHostDialog isOpen onClose={() => {}} />);
+      await screen.findByText("dev-vm");
+      fireEvent.change(filter(), { target: { value: "dev-vm" } });
+      fireEvent.keyDown(filter(), { key: "Enter" });
+      expect(sshTarget().value).toBe("");
+    });
+
+    it("clears the filter on Escape before the dialog closes", async () => {
+      const onClose = vi.fn();
+      remoteHosts.discover!.mockResolvedValueOnce(mesh(9));
+      render(<AddHostDialog isOpen onClose={onClose} />);
+      await screen.findByText("node-9");
+      fireEvent.change(filter(), { target: { value: "node-3" } });
+      fireEvent.keyDown(filter(), { key: "Escape" });
+      expect(filter().value).toBe("");
+      expect(rowNames()).toHaveLength(9);
+      expect(onClose).not.toHaveBeenCalled();
+      fireEvent.keyDown(filter(), { key: "Escape" });
+      await waitFor(() => expect(onClose).toHaveBeenCalled());
+    });
+
+    it("takes the keyboard when a slow scan lands, unless a target is already being typed", async () => {
+      let land!: (found: DiscoveredHost[]) => void;
+      remoteHosts.discover!.mockReturnValueOnce(new Promise((r) => (land = r)));
+      const first = render(<AddHostDialog isOpen onClose={() => {}} />);
+      await waitFor(() => expect(document.activeElement).toBe(sshTarget()));
+      await act(async () => land(mesh(9)));
+      expect(document.activeElement).toBe(filter());
+      first.unmount();
+
+      remoteHosts.discover!.mockReturnValueOnce(new Promise((r) => (land = r)));
+      render(<AddHostDialog isOpen onClose={() => {}} />);
+      await waitFor(() => expect(document.activeElement).toBe(sshTarget()));
+      fireEvent.change(sshTarget(), { target: { value: "greg@" } });
+      await act(async () => land(mesh(9)));
+      expect(filter()).toBeTruthy();
+      expect(document.activeElement).toBe(sshTarget());
+    });
   });
 
   it("ends on a connection the link reported unreachable, keeping the host and retrying only the link", async () => {

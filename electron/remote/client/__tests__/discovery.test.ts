@@ -459,6 +459,12 @@ describe("discoverHosts", () => {
       ["lazy", "100.92.0.6", "netbird", null, true],
       ["100.92.0.7", "100.92.0.7", "netbird", null, false],
     ]);
+    // The status rides along when the target falls back to the peer's IP.
+    expect(hosts.map((h) => [h.name, h.online, h.netbirdStatus])).toEqual([
+      ["dev-vm", true, "connected"],
+      ["lazy", false, "idle"],
+      ["100.92.0.7", false, "connecting"],
+    ]);
     expect(asked.sort()).toEqual(["dev-vm.netbird.cloud", "lazy.netbird.cloud"]);
   });
 
@@ -584,6 +590,7 @@ describe("parseNetbirdStatus", () => {
         source: "netbird",
         platform: null,
         online: true,
+        netbirdStatus: "connected",
         aliases: ["dev-vm.netbird.cloud", "100.92.0.5"],
       },
       {
@@ -592,6 +599,7 @@ describe("parseNetbirdStatus", () => {
         source: "netbird",
         platform: null,
         online: false,
+        netbirdStatus: "idle",
         aliases: ["lazy.netbird.cloud", "100.92.0.6"],
       },
       {
@@ -600,9 +608,33 @@ describe("parseNetbirdStatus", () => {
         source: "netbird",
         platform: null,
         online: false,
+        netbirdStatus: "connecting",
         aliases: ["100.92.0.7"],
       },
     ]);
+  });
+
+  it("keeps NetBird's own word for each peer, and keeps a peer whose status it doesn't know", () => {
+    const status = JSON.stringify({
+      peers: {
+        details: [
+          { fqdn: "a.netbird.cloud", netbirdIp: "100.92.0.11", status: " CONNECTED " },
+          { fqdn: "b.netbird.cloud", netbirdIp: "100.92.0.12", status: "Disconnected" },
+          { fqdn: "c.netbird.cloud", netbirdIp: "100.92.0.13", status: "Relayed" },
+          { fqdn: "d.netbird.cloud", netbirdIp: "100.92.0.14", status: 3 },
+          { fqdn: "e.netbird.cloud", netbirdIp: "100.92.0.15" },
+        ],
+      },
+    });
+    const peers = parseNetbirdStatus(status);
+    expect(peers.map((p) => [p.name, p.online, p.netbirdStatus])).toEqual([
+      ["a", true, "connected"],
+      ["b", false, "disconnected"],
+      ["c", false, undefined],
+      ["d", false, undefined],
+      ["e", false, undefined],
+    ]);
+    expect(peers.filter((p) => "netbirdStatus" in p).map((p) => p.name)).toEqual(["a", "b"]);
   });
 
   it("reads a logged-out client, a peerless mesh or stray text as no peers", () => {

@@ -1,9 +1,10 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import { AppDialog, type DialogAction } from "@/components/ui/AppDialog";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { Field, FieldDescription, FieldError, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
+import { SearchField } from "@/components/ui/SearchField";
 import { SegmentedRadioGroup } from "@/components/ui/SegmentedRadioGroup";
 import { Spinner } from "@/components/ui/Spinner";
 import { cn } from "@/lib/utils";
@@ -77,15 +78,27 @@ const STEPS: Array<{ id: Step; label: string }> = [
 ];
 
 /**
- * Machines not yet added first, then WSL's default distro, then by name as
- * people number them (studio-2 before studio-10).
+ * Machines not yet added first, then WSL's default distro, then connected
+ * peers ahead of idle ones, then by name as people number them (studio-2
+ * before studio-10).
  */
 function sortDiscovered(found: DiscoveredHost[]): DiscoveredHost[] {
   return [...found].sort(
     (a, b) =>
       Number(a.alreadyAdded) - Number(b.alreadyAdded) ||
       Number(b.wsl?.isDefault === true) - Number(a.wsl?.isDefault === true) ||
+      Number(b.online) - Number(a.online) ||
       a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: "base" })
+  );
+}
+
+/** Above this many machines the list gets a filter: a mesh can hold dozens of peers. */
+const FILTER_THRESHOLD = 8;
+
+function matchesQuery(host: DiscoveredHost, needle: string): boolean {
+  return (
+    host.name.toLowerCase().includes(needle) ||
+    formatHostConnection(host.connection).toLowerCase().includes(needle)
   );
 }
 
@@ -96,6 +109,11 @@ const SOURCE_LABEL: Record<DiscoveredHost["source"], string> = {
   manual: "Entered",
   wsl: "WSL",
 };
+
+function sourceLabel(host: DiscoveredHost): string {
+  const label = SOURCE_LABEL[host.source];
+  return host.netbirdStatus ? `${label} · ${host.netbirdStatus}` : label;
+}
 
 /** What the dialog's one field holds for a connection: an ssh target, or a WSL distro. */
 function addressOf(connection: HostConnection): string {
@@ -178,6 +196,8 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
   const [discovered, setDiscovered] = useState<DiscoveredHost[] | null>(null);
   const [discoverError, setDiscoverError] = useState<string | null>(null);
   const [discoverAttempt, setDiscoverAttempt] = useState(0);
+  const [discoveryQuery, setDiscoveryQuery] = useState("");
+  const targetInputRef = useRef<HTMLInputElement>(null);
   // On Windows a host is a WSL distro on this PC; elsewhere a machine reached over ssh.
   // An existing host keeps its own kind: its address is never read as another kind's.
   const viaWsl = (existing?.connection.kind ?? remoteConnectionKind()) === "wsl";
@@ -236,6 +256,7 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
   const retryDiscover = () => {
     setDiscovered(null);
     setDiscoverError(null);
+    setDiscoveryQuery("");
     setDiscoverAttempt((n) => n + 1);
   };
 
@@ -666,10 +687,47 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
       loading: busy,
     };
   } else if (step === "discover") {
+    const query = discoveryQuery.trim();
+    const needle = query.toLowerCase();
+    const filterable = discovered !== null && discovered.length > FILTER_THRESHOLD;
+    const shown =
+      discovered === null
+        ? []
+        : needle
+          ? discovered.filter((host) => matchesQuery(host, needle))
+          : discovered;
+    const pick = (host: DiscoveredHost) => {
+      setTarget(sshTargetOf(host.connection) ?? "");
+      setName(host.name);
+    };
+    const pickOnlyMatch = (event: KeyboardEvent<HTMLInputElement>) => {
+      if (event.key !== "Enter" || event.nativeEvent.isComposing) return;
+      const only = shown.length === 1 ? shown[0]! : null;
+      if (!only || only.alreadyAdded || busy) return;
+      event.preventDefault();
+      pick(only);
+      targetInputRef.current?.focus();
+    };
     body = (
       <div className="space-y-4">
         <div>
           <p className="mb-2 text-sm font-medium text-text-primary">Machines found</p>
+          {filterable && (
+            <SearchField
+              fieldClassName="mb-2"
+              value={discoveryQuery}
+              onChange={(e) => setDiscoveryQuery(e.target.value)}
+              onClear={() => setDiscoveryQuery("")}
+              onKeyDown={pickOnlyMatch}
+              // It mounts when the results arrive; a target already being typed keeps the keyboard.
+              autoFocus={target.trim() === ""}
+              placeholder="Filter by name or address"
+              aria-label="Filter machines"
+              spellCheck={false}
+              autoCapitalize="off"
+              fieldProps={{ "data-testid": "add-host-filter" }}
+            />
+          )}
           {discoverError !== null ? (
             <div className="flex items-start justify-between gap-3">
               <p role="alert" className="text-sm text-text-secondary select-text">
@@ -694,19 +752,24 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
             <p className="text-sm text-text-secondary">
               No machines answered on your tailnet or local network. Enter an SSH target below.
             </p>
+          ) : shown.length === 0 ? (
+            <p className="text-sm text-text-secondary" role="status">
+              No machines match &quot;{query}&quot;. Enter an SSH target below if it isn&apos;t
+              listed.
+            </p>
           ) : (
-            <ul className="divide-y divide-border-subtle rounded-[var(--radius-lg)] border border-border-default">
-              {discovered.map((host) => (
+            <ul
+              className="max-h-64 divide-y divide-border-subtle overflow-y-auto rounded-[var(--radius-lg)] border border-border-default"
+              data-testid="add-host-discovered"
+            >
+              {shown.map((host) => (
                 <li key={`${host.source}:${formatHostConnection(host.connection)}`}>
                   <button
                     type="button"
                     disabled={host.alreadyAdded || busy}
                     data-known-machine={host.knownMachine && !host.alreadyAdded ? "" : undefined}
                     aria-pressed={target === sshTargetOf(host.connection)}
-                    onClick={() => {
-                      setTarget(sshTargetOf(host.connection) ?? "");
-                      setName(host.name);
-                    }}
+                    onClick={() => pick(host)}
                     className={cn(
                       "flex w-full items-center justify-between gap-3 px-3 py-2 text-left",
                       "hover:bg-overlay-soft disabled:cursor-default disabled:hover:bg-transparent",
@@ -727,7 +790,7 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
                         ? "Added"
                         : host.knownMachine
                           ? "Added as another account"
-                          : SOURCE_LABEL[host.source]}
+                          : sourceLabel(host)}
                     </span>
                   </button>
                 </li>
@@ -744,6 +807,7 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
         <Field>
           <FieldLabel>SSH target</FieldLabel>
           <Input
+            ref={targetInputRef}
             value={target}
             placeholder="user@devbox.local"
             disabled={busy}
