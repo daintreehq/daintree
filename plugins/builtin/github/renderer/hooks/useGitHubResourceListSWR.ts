@@ -89,6 +89,27 @@ function planWarmRevalidate(
   return "bypass";
 }
 
+/**
+ * `page` appended to `rows`, minus anything `rows` already holds. Rows are
+ * keyed by number, and one repeated key leaves orphaned rows in the virtual
+ * list (#14067). Offset-paged search and an updated sort both let a row
+ * reappear on the next page, so this holds even with every race closed.
+ */
+function appendUnseen<T extends { number: number }>(rows: T[], page: T[]): T[] {
+  const seen = new Set(rows.map((row) => row.number));
+  // Always a new array, even when every row repeats: the list remaps its
+  // cursor on data identity, and a cursor parked on Load more has to come off
+  // it once the page that removes the footer lands.
+  return [
+    ...rows,
+    ...page.filter((row) => {
+      if (seen.has(row.number)) return false;
+      seen.add(row.number);
+      return true;
+    }),
+  ];
+}
+
 function abortableDelay(ms: number, signal?: AbortSignal): Promise<void> {
   return new Promise((resolve, reject) => {
     if (signal?.aborted) {
@@ -192,6 +213,10 @@ export function useGitHubResourceListSWR({
   // Note: currentCursor is passed as a parameter (not read from state) to avoid
   // dependency cycle where updating cursor would recreate this callback
   const loadMoreAbortRef = useRef<AbortController | null>(null);
+  // Manual refresh and retry fire from handlers, not effects, so no cleanup
+  // aborts them. The load effects do it through this ref instead — otherwise a
+  // refresh still out when the filter changes lands in the new view.
+  const userFetchAbortRef = useRef<AbortController | null>(null);
   // Tracks the last time fetchData started a non-append fetch — used by the
   // visibility/focus revalidation effect to throttle repeat refreshes.
   const lastFetchAttemptRef = useRef<number>(0);
@@ -303,7 +328,10 @@ export function useGitHubResourceListSWR({
       try {
         const searchOverride =
           numberQuery?.kind === "open-ended" ? `number:>=${numberQuery.from}` : undefined;
-        // Append (load-more) always wants the next page from network.
+        // Append (load-more) always wants the next page from network: the
+        // backend caches each cursor's page for 60s, so a page fetched before
+        // a refresh could come back carrying rows that have since closed or
+        // climbed into the refreshed first page.
         // SWR revalidates default to bypassing the backend cache — that's
         // the point of a revalidate — unless the mount effect downgraded
         // this one via `options.bypass: false` (count signal says the
@@ -312,7 +340,7 @@ export function useGitHubResourceListSWR({
         // instead of bypassing — same data either way, but the cached path
         // returns synchronously and avoids the click-time round-trip the
         // user sees as "reload".
-        const usedBypass = append ? false : (options?.bypass ?? isRevalidate);
+        const usedBypass = append ? true : (options?.bypass ?? isRevalidate);
         // `merged` is a GitHub-supported PR state the provider accepts beyond
         // the contract's documented set — pass it through with a cast.
         const fetchOptions: ListOptions = {
@@ -339,9 +367,18 @@ export function useGitHubResourceListSWR({
             }
 
             if (append) {
-              setData((prev) => [...prev, ...result.items]);
+              setData((prev) => appendUnseen(prev, result.items));
               setLoadMoreError(null);
             } else {
+              // A page still out was fetched against the list this replaces,
+              // so its cursor continues a chain that no longer exists. Drop it
+              // at the commit rather than when this fetch starts: a page that
+              // lands first appends to the old list, which this then replaces,
+              // and a refresh that fails leaves it nothing to be stale against.
+              // A failed page's error goes too: the pages it was about are gone.
+              loadMoreAbortRef.current?.abort();
+              setLoadingMore(false);
+              setLoadMoreError(null);
               setData(result.items);
               setError(null);
             }
@@ -460,10 +497,17 @@ export function useGitHubResourceListSWR({
           }
         }
       } finally {
+        // Each fetch releases only its own flag: a page finishing must not
+        // stop a refresh's spinner, and a refresh failing must not re-arm
+        // Load more under a page that is still out. Whoever aborts a fetch
+        // clears what that fetch would have.
         if (!abortSignal?.aborted) {
-          setLoading(false);
-          setRefreshing(false);
-          setLoadingMore(false);
+          if (append) {
+            setLoadingMore(false);
+          } else {
+            setLoading(false);
+            setRefreshing(false);
+          }
         }
       }
     },
@@ -512,7 +556,15 @@ export function useGitHubResourceListSWR({
     setExactNumberNotFound(null);
 
     const abortController = new AbortController();
+    // Neither aborted fetch will run its cleanup, and a path below can start
+    // no fetch at all (a skip plan, a rate-limit pause), so release their
+    // flags here; a fetch that does start sets its own again. Every path also
+    // replaces the page chain, so a failed page's error goes with it.
     loadMoreAbortRef.current?.abort();
+    userFetchAbortRef.current?.abort();
+    setLoadingMore(false);
+    setRefreshing(false);
+    setLoadMoreError(null);
     const gen = nextGeneration(cacheKey);
     const isFirstMount = !mountedRef.current;
     // The cacheKey doesn't include `debouncedSearch` (search results aren't
@@ -717,6 +769,11 @@ export function useGitHubResourceListSWR({
     if (numberQuery === null) {
       return;
     }
+    // Before the guards: a list page or refresh still out belongs to the
+    // text view, and a paused lookup must not let it land in this one.
+    exactNumberAbortRef.current?.abort();
+    loadMoreAbortRef.current?.abort();
+    userFetchAbortRef.current?.abort();
     // Skip numeric fetches when no token is configured — the empty state
     // takes over the UI and any leftover store search would otherwise
     // produce a token error.
@@ -729,8 +786,6 @@ export function useGitHubResourceListSWR({
       return;
     }
 
-    exactNumberAbortRef.current?.abort();
-    loadMoreAbortRef.current?.abort();
     const abortController = new AbortController();
     exactNumberAbortRef.current = abortController;
 
@@ -879,13 +934,23 @@ export function useGitHubResourceListSWR({
     }
   }, [loadingMore, hasMore, fetchData, cursor]);
 
+  const startUserFetch = useCallback(() => {
+    userFetchAbortRef.current?.abort();
+    const abortController = new AbortController();
+    userFetchAbortRef.current = abortController;
+    return abortController.signal;
+  }, []);
+
   const handleRetry = () => {
     if (numberQuery !== null) {
       setRetryKey((k) => k + 1);
     } else {
-      setCursor(null);
+      // The cursor stays with the rows on screen until a first page replaces
+      // them. Resetting it up front meant a failed retry left page one's
+      // rows paired with a page-one cursor, and the next load-more appended
+      // the first page to itself.
       const gen = nextGeneration(cacheKey);
-      fetchData(null, false, undefined, { generation: gen, cacheKey });
+      fetchData(null, false, startUserFetch(), { generation: gen, cacheKey });
     }
   };
 
@@ -899,12 +964,12 @@ export function useGitHubResourceListSWR({
     }
     setError(null);
     const gen = nextGeneration(cacheKey);
-    void fetchData(null, false, undefined, {
+    void fetchData(null, false, startUserFetch(), {
       revalidating: true,
       generation: gen,
       cacheKey,
     });
-  }, [numberQuery, cacheKey, fetchData]);
+  }, [numberQuery, cacheKey, fetchData, startUserFetch]);
 
   const isTokenError = isTokenRelatedError(error);
 

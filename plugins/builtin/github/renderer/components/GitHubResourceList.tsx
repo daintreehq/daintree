@@ -798,27 +798,54 @@ export function GitHubResourceList({
   const cursorScope = `${projectPath}:${type}`;
   const previousScopeRef = useRef(cursorScope);
   const previousDataRef = useRef(data);
+  /**
+   * Only a move the user made may scroll the list — not a page landing, and
+   * not the remap following a row through a refresh. Either one dragged a
+   * wheel-scrolled list back to the last hovered row (#14067).
+   *
+   * `revealSeenIndexRef` is the index the reveal last looked at: a data change
+   * re-runs it before the remap has moved the cursor, and it finds the cursor
+   * unmoved. `followedIndexRef` is where the remap then moved it, so the re-run
+   * that move causes is skipped too.
+   */
+  const revealSeenIndexRef = useRef(-1);
+  const followedIndexRef = useRef<number | null>(null);
   useEffect(() => {
     const previousData = previousDataRef.current;
     const previousScope = previousScopeRef.current;
     previousDataRef.current = data;
     previousScopeRef.current = cursorScope;
     if (previousScope !== cursorScope) {
+      followedIndexRef.current = -1;
       setActiveIndex(-1);
       return;
     }
     if (previousData === data) return;
     const previousNumber =
       activeIndexRef.current >= 0 ? previousData[activeIndexRef.current]?.number : undefined;
-    if (previousNumber === undefined) {
-      setActiveIndex(-1);
-      return;
-    }
-    setActiveIndex(data.findIndex((item) => item.number === previousNumber));
+    const nextIndex =
+      previousNumber === undefined ? -1 : data.findIndex((item) => item.number === previousNumber);
+    followedIndexRef.current = nextIndex;
+    setActiveIndex(nextIndex);
   }, [data, cursorScope]);
 
+  // A hide tears the reveal down with every other effect and a reopen runs it
+  // again, so forgetting what it saw keeps reopening the panel bringing the
+  // cursor back into view.
+  useEffect(
+    () => () => {
+      revealSeenIndexRef.current = -1;
+      followedIndexRef.current = null;
+    },
+    []
+  );
+
   useEffect(() => {
-    if (activeIndex < 0) return;
+    if (activeIndex === revealSeenIndexRef.current) return;
+    revealSeenIndexRef.current = activeIndex;
+    const followedRow = activeIndex === followedIndexRef.current;
+    followedIndexRef.current = null;
+    if (followedRow || activeIndex < 0) return;
     // A row under the pointer was just claimed by it; revealing it would scroll
     // a half-visible row out from under the pointer.
     // Found by grid position, not resource id, so a refresh that swaps the
