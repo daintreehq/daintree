@@ -4,7 +4,7 @@ import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 import { pluginSdkRuntimeBuildConfig } from "./lib/plugin-sdk-runtime.mjs";
-import { mainBundleStubsPlugin } from "./lib/main-bundle.mjs";
+import { mainBundlePlugins } from "./lib/main-bundle.mjs";
 import { MAIN_EXTERNAL, MAIN_PRELOAD_ENTRY, mainEsmEntryPoints } from "./main-build-entries.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -771,7 +771,7 @@ async function run() {
     format: "esm",
     splitting: true, // Share chunks between main/hosts/plugins
     chunkNames: "electron/chunks/[name]-[hash]",
-    plugins: [mainBundleStubsPlugin(), ...(isWatch ? [createReadyMarkerPlugin()] : [])],
+    plugins: [...mainBundlePlugins({ isProd }), ...(isWatch ? [createReadyMarkerPlugin()] : [])],
     banner: {
       js: `import { createRequire } from 'module'; const require = createRequire(import.meta.url);`,
     },
