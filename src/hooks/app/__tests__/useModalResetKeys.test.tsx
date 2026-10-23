@@ -6,6 +6,7 @@ const gitPushState = vi.hoisted(() => ({ requestSeq: 1 }));
 const gitPullRebaseState = vi.hoisted(() => ({ requestSeq: 2 }));
 const gitWorktreeOperationState = vi.hoisted(() => ({ requestSeq: 6 }));
 const gitForcePushState = vi.hoisted(() => ({ requestSeq: 7 }));
+const projectSleepState = vi.hoisted(() => ({ requestSeq: 9 }));
 const fileMutationState = vi.hoisted(() => ({ requestSeq: 8 }));
 const panelLimitState = vi.hoisted(() => ({ requestSeq: 3 }));
 const recipeConflictState = vi.hoisted(() => ({ requestSeq: 4 }));
@@ -33,6 +34,9 @@ vi.mock("@/store/gitWorktreeOperationConfirmStore", () => ({
 }));
 vi.mock("@/store/gitForcePushStore", () => ({
   useGitForcePushStore: selectorMock(gitForcePushState),
+}));
+vi.mock("@/store/projectSleepConfirmStore", () => ({
+  useProjectSleepConfirmStore: selectorMock(projectSleepState),
 }));
 vi.mock("@/store/panelLimitStore", () => ({
   usePanelLimitStore: selectorMock(panelLimitState),
@@ -71,6 +75,7 @@ describe("useModalResetKeys", () => {
       gitPullRebaseResetKey: 2,
       gitWorktreeOperationResetKey: 6,
       gitForcePushResetKey: 7,
+      projectSleepResetKey: 9,
       fileMutationResetKey: 8,
       panelLimitResetKey: 3,
       recipeConflictResetKey: 4,

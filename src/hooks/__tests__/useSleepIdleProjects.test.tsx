@@ -142,13 +142,14 @@ describe("useSleepIdleProjects", () => {
   type Hook = { current: ReturnType<typeof useSleepIdleProjects> };
 
   /** Starts the flow and waits for its confirmation to open; the returned promise settles after the batch. */
-  async function openPreview(result: Hook): Promise<Promise<void>> {
+  async function openPreview(result: Hook): Promise<{ flow: Promise<void> }> {
     let flow!: Promise<void>;
     act(() => {
       flow = result.current.openPreview();
     });
     await vi.waitFor(() => expect(pending()).not.toBeNull());
-    return flow;
+    // Boxed: returning the promise itself would make the async wrapper await the whole flow.
+    return { flow };
   }
 
   async function confirm(flow: Promise<void>) {
@@ -159,7 +160,7 @@ describe("useSleepIdleProjects", () => {
   }
 
   async function openAndConfirm(result: Hook) {
-    await confirm(await openPreview(result));
+    await confirm((await openPreview(result)).flow);
   }
 
   it("leaves out a project with a working assistant the stats can't see, or one shown in another window", async () => {
@@ -198,7 +199,7 @@ describe("useSleepIdleProjects", () => {
 
   it("skips a project whose agent reached an approval after the preview", async () => {
     const { result } = renderHook(() => useSleepIdleProjects());
-    const flow = await openPreview(result);
+    const { flow } = await openPreview(result);
     expect(previewIds()).toEqual(["a", "b", "c"]);
 
     terminals = [terminal("b", "waiting", { waitingReason: "approval" })];
@@ -208,7 +209,7 @@ describe("useSleepIdleProjects", () => {
 
   it("sleeps nothing when the confirmation is cancelled", async () => {
     const { result } = renderHook(() => useSleepIdleProjects());
-    const flow = await openPreview(result);
+    const { flow } = await openPreview(result);
     await act(async () => {
       useProjectSleepConfirmStore.getState().resolveConfirmation(false);
       await flow;
@@ -245,7 +246,7 @@ describe("useSleepIdleProjects", () => {
       return SLEPT;
     });
     const { result } = renderHook(() => useSleepIdleProjects());
-    const flow = await openPreview(result);
+    const { flow } = await openPreview(result);
     expect(previewIds()).toEqual(["a", "b", "c"]);
 
     act(() => {
@@ -370,7 +371,7 @@ describe("useSleepIdleProjects", () => {
       }));
       return SLEPT;
     });
-    const flow = await openPreview(result);
+    const { flow } = await openPreview(result);
     act(() => {
       useProjectSleepConfirmStore.getState().resolveConfirmation(true);
     });
