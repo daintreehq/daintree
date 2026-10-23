@@ -1,5 +1,19 @@
 // @vitest-environment jsdom
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+// The dev preview's own tool, with its real session swapped for the fakes the
+// plugin cases use: what is under test is how the host runs it, not the picker.
+const builtIn = vi.hoisted(() => ({
+  createSession: null as ((context: DevPreviewToolSessionContext) => unknown) | null,
+}));
+vi.mock("@/panels/dev-preview/element-picker/elementPickerTool", () => ({
+  elementPickerTool: {
+    id: "element-picker",
+    label: "Element Picker",
+    Button: () => null,
+    createSession: (context: DevPreviewToolSessionContext) => builtIn.createSession?.(context),
+  },
+}));
 import {
   __resetDevPreviewToolSessionsForTests,
   peekDevPreviewToolSession,
@@ -331,5 +345,43 @@ describe("dev preview tool sessions", () => {
     await Promise.resolve();
     expect(live()).toBe(created);
     expect(created.disposals).toBe(0);
+  });
+});
+
+describe("the dev preview's own tools", () => {
+  beforeEach(() => {
+    builtIn.createSession = makeSession;
+    // No plugin at all: nothing a built-in tool may wait on.
+    usePluginRuntimeStore.setState({ pluginMetaById: new Map(), disabledPluginIds: new Set() });
+  });
+
+  afterEach(() => {
+    builtIn.createSession = null;
+  });
+
+  it("runs one with no plugin loaded, declared or enabled", () => {
+    useDevPreviewToolStore.getState().setActive(PANEL, "element-picker");
+    expect(sessions).toHaveLength(1);
+    expect(live()).toBe(sessions[0]);
+  });
+
+  it("keeps it running whatever happens to the plugins", () => {
+    useDevPreviewToolStore.getState().setActive(PANEL, "element-picker");
+    usePluginRuntimeStore.setState({
+      pluginMetaById: new Map([
+        [PLUGIN, { devMode: false, displayName: "Acme", previewToolIds: new Set<string>() }],
+      ]),
+      disabledPluginIds: new Set([PLUGIN, "daintree.sveltekit-builder"]),
+    });
+    expect(useDevPreviewToolStore.getState().activeByPanel[PANEL]).toBe("element-picker");
+    expect(sessions[0]?.disposals).toBe(0);
+    expect(live()).toBe(sessions[0]);
+  });
+
+  it("still ends it with its preview", () => {
+    useDevPreviewToolStore.getState().setActive(PANEL, "element-picker");
+    panels({ [PANEL]: "trash" });
+    expect(sessions[0]?.disposals).toBe(1);
+    expect(live()).toBeNull();
   });
 });

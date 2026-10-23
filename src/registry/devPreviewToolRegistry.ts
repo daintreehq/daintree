@@ -70,11 +70,15 @@ export interface DevPreviewToolButtonProps extends DevPreviewToolContext {
   onToggle: () => void;
 }
 
-export interface DevPreviewTool<TSession extends DevPreviewToolSession = DevPreviewToolSession> {
-  /** Namespaced by plugin, e.g. `daintree.sveltekit-builder.builder`. */
+/**
+ * A tool as the dev preview hosts it, whoever provides it: one the dev preview
+ * has of its own, or one a plugin registers here.
+ */
+export interface DevPreviewToolDefinition<
+  TSession extends DevPreviewToolSession = DevPreviewToolSession,
+> {
+  /** Unique among the tools of a preview; a plugin's are namespaced by the plugin. */
   id: string;
-  /** Owning plugin (manifest name); the tool disappears while it is disabled. */
-  pluginId: string;
   /** User-facing name, used for error fallbacks and the default tooltip. */
   label: string;
   /** The toolbar toggle. The host decides where it is shown — see `isAvailable`. */
@@ -112,6 +116,14 @@ export interface DevPreviewTool<TSession extends DevPreviewToolSession = DevPrev
   Toolbar?: ComponentType<DevPreviewToolSurfaceProps<TSession>>;
   /** A drawer docked beside the page while the tool is on. Returns null to stay closed. */
   Drawer?: ComponentType<DevPreviewToolSurfaceProps<TSession>>;
+}
+
+/** A tool a built-in plugin registers, which lives and dies with that plugin. */
+export interface DevPreviewTool<
+  TSession extends DevPreviewToolSession = DevPreviewToolSession,
+> extends DevPreviewToolDefinition<TSession> {
+  /** Owning plugin (manifest name); the tool disappears while it is disabled. */
+  pluginId: string;
 }
 
 const TOOLS = new Map<string, DevPreviewTool>();

@@ -1,120 +1,153 @@
 import { vi } from "vitest";
-import { createHash } from "node:crypto";
 import type {
-  SiteGuestNodeObservation,
-  SitePreviewBindingState,
-  SitePreviewCandidate,
-  SitePreviewMode,
-  SitePreviewPushPayload,
-} from "@shared/types/ipc/sitePreview";
-import { CHANNELS, PLUGIN_ID, type SelectedNode, type SiteSelection } from "../legacyBridge";
-
-export const sha = (text: string) => createHash("sha256").update(text, "utf8").digest("hex");
+  ElementPickerEvent,
+  FileRevision,
+  HoverObservation,
+  ProjectContextOutcome,
+  ResolutionResult,
+  ResolveRequest,
+  ResolveResponse,
+  SelectionObservation,
+  SelectionScope,
+  SourceCandidate,
+} from "@shared/elementPicker";
+import {
+  ELEMENT_PICKER_WORKSPACE_CLOSED,
+  type ElementPickerBindRequest,
+  type ElementPickerPushPayload,
+  type ElementPickerReselectRequest,
+  type ElementPickerSourceChangedPush,
+  type ElementPickerSourceRevisionsResult,
+  type ElementPickerWorkspaceOpenRequest,
+  type ElementPickerWorkspaceOpenResult,
+} from "@shared/types/ipc/elementPicker";
+import type { SitePreviewBindingState, SitePreviewMode } from "@shared/types/ipc/sitePreview";
+import {
+  CARD_FILE,
+  CARD_REVISION,
+  REVISION,
+  WORKSPACE,
+  reactResults,
+  svelteObservation,
+  svelteResults,
+} from "./fixtures.js";
 
 export const WORKTREE = "/repo";
-export const FILE = "src/routes/pricing/+page.svelte";
-export const SOURCE = [
-  "<script>",
-  "  let plan = 'pro';",
-  "</script>",
-  "",
-  '<article class="card">',
-  '  <button class="px-6 py-3 rounded-lg" type="button">Start Pro</button>',
-  "</article>",
-  "",
-].join("\n");
-export const REVISION = sha(SOURCE);
-export const BUTTON_START = SOURCE.indexOf("<button");
-export const BUTTON_END = SOURCE.indexOf("</button>") + "</button>".length;
-export const BUTTON_RANGE = { start: BUTTON_START, end: BUTTON_END };
+export const PAGE_URL = "http://localhost:5173/pricing?plan=pro";
 
-export const OBSERVATION: SiteGuestNodeObservation = {
-  runtimeOccurrenceId: "occ-1",
-  loc: { file: FILE, line: 6, column: 2 },
-  ancestry: [],
-  tagName: "BUTTON",
-  sameLocCount: 3,
-  locIndex: 2,
-  label: 'button "Start Pro"',
-  bounds: [{ x: 0, y: 0, width: 10, height: 10 }],
-  unmapped: false,
-};
+/** How the host refuses a call on a workspace it no longer holds for this view, as the preload hands it over. */
+export function workspaceClosedError(): Error {
+  return new Error(`[AppError|NOT_FOUND] ${ELEMENT_PICKER_WORKSPACE_CLOSED}`);
+}
 
-export function makeSelection(
-  overrides: {
-    documentEpoch?: number;
-    renderedOccurrences?: number;
-    selectionId?: string;
-    node?: Partial<SelectedNode>;
-  } = {}
-): SiteSelection {
-  return {
-    selectionId: overrides.selectionId ?? "sel-1",
-    workspaceSessionId: "ws-1",
-    projectId: "p1",
-    worktreeId: "wt-1",
-    appRoot: WORKTREE,
-    previewPanelId: "preview-1",
-    documentEpoch: overrides.documentEpoch ?? 0,
-    routeId: "/pricing",
-    displayedUrl: "/pricing",
-    viewport: { width: 800, height: 600, deviceScaleFactor: 1 },
-    capturedAt: "2026-09-16T00:00:00.000Z",
-    nodes: [
-      {
-        runtimeOccurrenceId: "occ-1",
-        definition: {
-          location: { file: FILE, line: 6, column: 2 },
-          range: { start: BUTTON_START, end: BUTTON_END },
-          tagName: "button",
-          revision: REVISION,
-          renderedOccurrences: overrides.renderedOccurrences ?? 1,
-        },
-        sourceFile: FILE,
-        invocation: null,
-        ancestry: [
-          {
-            kind: "component",
-            location: { file: ".svelte-kit/generated/root.svelte", line: 1, column: 0 },
-            generated: true,
-          },
-          {
-            kind: "component",
-            location: { file: "src/lib/PricingCard.svelte", line: 3, column: 0 },
-            componentTag: "PricingCard",
-            generated: false,
-          },
-          {
-            kind: "each",
-            location: { file: FILE, line: 4, column: 0 },
-            generated: false,
-          },
-        ],
-        mapping: "exact",
-        label: 'button "Start Pro"',
-        bounds: [],
-        ...overrides.node,
+/** The ids of every claim an observation makes: its own and its chain's. */
+function candidateIds(observation: SelectionObservation): Set<string> {
+  return new Set(
+    [
+      ...observation.sourceCandidates,
+      ...observation.componentChain.components.flatMap((record) => record.sourceCandidates),
+    ].map((candidate) => candidate.candidateId)
+  );
+}
+
+/**
+ * Every claim an observation makes, checked where it says, at `revision` — a
+ * host that read each file and found what the page reported there. Generated
+ * framework files are left unresolved, as the real host leaves them.
+ */
+export function verifyAll(
+  observation: SelectionObservation,
+  revision: FileRevision = REVISION
+): ResolutionResult[] {
+  const candidates: SourceCandidate[] = [
+    ...observation.sourceCandidates,
+    ...observation.componentChain.components.flatMap((record) => record.sourceCandidates),
+  ];
+  return candidates.map((candidate): ResolutionResult => {
+    if (candidate.file.includes(".svelte-kit/") || candidate.kind === "file-hint") {
+      return {
+        state: "unavailable",
+        candidateId: candidate.candidateId,
+        claim: candidate.kind,
+        reason: "unsupported",
+      };
+    }
+    return {
+      state: "verified",
+      candidateId: candidate.candidateId,
+      claim: candidate.kind,
+      target: {
+        file: { workspaceId: WORKSPACE, path: candidate.file },
+        location: candidate.location,
       },
-    ],
+      fileRevision: revision,
+    } as ResolutionResult;
+  });
+}
+
+/** The page's account of an element on hover: no context, ever. */
+export function asHover(observation: SelectionObservation): HoverObservation {
+  const { context: _context, phase: _phase, ...rest } = observation;
+  return { ...rest, phase: "hover" };
+}
+
+/** Where a locator finds the template's element: the stamp moved to its location, and which copy. */
+function atLocator(
+  observation: SelectionObservation,
+  locator: NonNullable<ElementPickerReselectRequest["locator"]>
+): SelectionObservation {
+  return {
+    ...observation,
+    sourceCandidates: observation.sourceCandidates.map((candidate) =>
+      candidate.kind === "template-location" && candidate.framework === "svelte"
+        ? {
+            ...candidate,
+            file: locator.loc.file,
+            location: {
+              lineBase: 1,
+              columnBase: 0,
+              columnUnit: "utf16",
+              line: locator.loc.line,
+              column: locator.loc.column,
+            },
+          }
+        : candidate
+    ),
+    frameworkEvidence: observation.frameworkEvidence.map((entry) =>
+      entry.kind === "svelte" ? { ...entry, locIndex: locator.index } : entry
+    ),
   };
 }
 
-type Handler = (args: Record<string, unknown>) => unknown;
+/** The component in an observation's chain invoked at a call site, as the page spells it. */
+function componentAt(
+  observation: SelectionObservation,
+  site: { file: string; line: number; column: number }
+): string | null {
+  const record = observation.componentChain.components.find((entry) =>
+    entry.sourceCandidates.some(
+      (candidate) =>
+        candidate.kind === "component-invocation" &&
+        candidate.file === site.file &&
+        candidate.location.line === site.line &&
+        candidate.location.column === site.column
+    )
+  );
+  return record?.componentId ?? null;
+}
 
 /**
- * Stand-ins for both halves the view talks to: the site-preview bridge and
- * plugin main behind `window.electron.plugin`. Pushes are delivered
- * synchronously, exactly as the preload delivers them.
+ * Stand-ins for what the picker talks to: the core Element Picker's host
+ * (`window.electron.elementPicker`), the site-preview bridge's binding
+ * lifecycle (`window.electron.sitePreview`) and the element crop. Pushes are
+ * delivered synchronously, exactly as the preload delivers them.
  */
 export function createFakeHost() {
-  let candidates: SitePreviewCandidate[] = [
-    { panelId: "preview-1", url: "http://localhost:5173/pricing", boundSessionId: null },
-  ];
-  const previewListeners = new Set<(payload: SitePreviewPushPayload) => void>();
-  const pluginListeners = new Map<string, Set<(payload: unknown) => void>>();
-  const handlers = new Map<string, Handler>();
+  const eventListeners = new Set<(payload: ElementPickerPushPayload) => void>();
+  const sourceListeners = new Set<(payload: ElementPickerSourceChangedPush) => void>();
+  let sequence = 0;
 
-  const state = (panelId: string, mode: SitePreviewMode): SitePreviewBindingState => ({
+  const binding = (panelId: string, mode: SitePreviewMode): SitePreviewBindingState => ({
     sessionId: "session-1",
     panelId,
     projectId: "p1",
@@ -125,114 +158,91 @@ export function createFakeHost() {
     suspended: false,
   });
 
-  const sitePreview = {
-    listCandidates: vi.fn(async () => candidates),
-    bind: vi.fn(async (request: { panelId: string; adapterId: string; mode?: SitePreviewMode }) =>
-      state(request.panelId, request.mode ?? "browse")
+  const picker = {
+    bind: vi.fn(async (request: ElementPickerBindRequest): Promise<SitePreviewBindingState> =>
+      binding(request.panelId, request.mode ?? "select")
     ),
+    // As the real page does: find the element (by id while it is still that
+    // node, else by Svelte's locator), select it — as a member of the
+    // component invoked at `locator.component`, when one is named — and report
+    // a fresh observation on the next tick. `reselectFinds` models a page
+    // where the element is gone.
+    reselect: vi.fn(async (request: ElementPickerReselectRequest): Promise<boolean> => {
+      if (!host.reselectFinds) return false;
+      const template = host.template();
+      const observation = request.locator
+        ? atLocator(template, request.locator)
+        : { ...template, ...(request.elementId ? { elementId: request.elementId } : {}) };
+      const site = request.locator?.component;
+      const componentId = site ? componentAt(observation, site) : null;
+      const scope: SelectionScope =
+        componentId === null ? { kind: "element" } : { kind: "component", componentId };
+      setTimeout(() => host.select(host.currentEpoch, [observation], "reselect", scope), 0);
+      return true;
+    }),
+    openWorkspace: vi.fn(
+      async (
+        request: ElementPickerWorkspaceOpenRequest
+      ): Promise<ElementPickerWorkspaceOpenResult> => {
+        const result = await host.openWith(request);
+        if (result.status === "ready") host.workspaceId = result.workspaceId;
+        return result;
+      }
+    ),
+    closeWorkspace: vi.fn(async (_request: { workspaceId: string }) => ({ closed: true })),
+    resolve: vi.fn((request: ResolveRequest): Promise<ResolveResponse> =>
+      host.answerResolve(request)
+    ),
+    describeProject: vi.fn(
+      async (request: { workspaceId: string; url: string }): Promise<ProjectContextOutcome> =>
+        host.describeWith(request)
+    ),
+    sourceRevisions: vi.fn(
+      async (request: {
+        workspaceId: string;
+        paths: string[];
+      }): Promise<ElementPickerSourceRevisionsResult> => ({
+        revisions: request.paths.map((path) => ({
+          path,
+          revision: host.diskRevisions.has(path) ? host.diskRevisions.get(path)! : REVISION,
+        })),
+      })
+    ),
+    onEvent: vi.fn((callback: (payload: ElementPickerPushPayload) => void) => {
+      eventListeners.add(callback);
+      return () => {
+        eventListeners.delete(callback);
+      };
+    }),
+    onSourceChanged: vi.fn((callback: (payload: ElementPickerSourceChangedPush) => void) => {
+      sourceListeners.add(callback);
+      return () => {
+        sourceListeners.delete(callback);
+      };
+    }),
+  };
+
+  const preview = {
     detach: vi.fn(async (_request: { sessionId: string }) => undefined),
-    setMode: vi.fn(async (request: { sessionId: string; mode: SitePreviewMode }) =>
-      state("preview-1", request.mode)
-    ),
-    // As the real guest does: find the element compiled from `loc`, select it
-    // — as a member of the component invoked at `component`, when one is
-    // named — and emit a fresh observation on the next tick. `reselectFinds`
-    // lets a test model a page where the element is gone.
-    reselect: vi.fn(
+    setMode: vi.fn(
       async (request: {
         sessionId: string;
-        loc: SiteGuestNodeObservation["loc"];
-        index?: number;
-        component?: { file: string; line: number; column: number };
-        occurrence?: string;
-      }) => {
-        if (!host.reselectFinds) return false;
-        const component = request.component;
-        setTimeout(
-          () =>
-            host.select(
-              host.currentEpoch,
-              [{ ...OBSERVATION, loc: request.loc, locIndex: request.index ?? 0 }],
-              "reselect",
-              component ? { ...component, name: host.componentNameAt(component) } : null
-            ),
-          0
-        );
-        return true;
-      }
+        mode: SitePreviewMode;
+      }): Promise<SitePreviewBindingState> => binding("preview-1", request.mode)
     ),
     clearSelection: vi.fn(async (_request: { sessionId: string }) => undefined),
     clearHover: vi.fn(async (_request: { sessionId: string }) => undefined),
-    getState: vi.fn(async (_request: { sessionId: string }) => null),
-    onEvent: vi.fn((callback: (payload: SitePreviewPushPayload) => void) => {
-      previewListeners.add(callback);
-      return () => previewListeners.delete(callback);
-    }),
   };
-
-  handlers.set(CHANNELS.workspaceOpen, () => ({
-    status: "ready",
-    workspaceSessionId: "ws-1",
-    appRoot: WORKTREE,
-    support: { level: "tested" },
-  }));
-  handlers.set(CHANNELS.selectionResolve, (args) => ({
-    status: "ok",
-    selection: makeSelection({
-      documentEpoch: args.documentEpoch as number,
-      ...(host.ancestry ? { node: { ancestry: host.ancestry } } : {}),
-    }),
-  }));
-  handlers.set(CHANNELS.workspaceClose, () => ({ closed: true }));
-  handlers.set(CHANNELS.componentDefinitions, (args) => ({
-    definitions: (args.callSites as Array<{ file: string; line: number; column: number }>).map(
-      (site) => ({
-        ...site,
-        name: null,
-        definedIn: null,
-        revision: REVISION,
-        definedInRevision: null,
-      })
-    ),
-  }));
-  /** What main would hash on disk now; a file absent here reads as the fixture source. */
-  const diskRevisions = new Map<string, string | null>();
-  handlers.set(CHANNELS.sourceRevisions, (args) => ({
-    revisions: (args.files as string[]).map((file) => ({
-      file,
-      revision: diskRevisions.has(file) ? diskRevisions.get(file)! : REVISION,
-    })),
-  }));
-
-  const invoke = vi.fn(async (pluginId: string, channel: string, args: unknown) => {
-    if (pluginId !== PLUGIN_ID) throw new Error(`unexpected plugin ${pluginId}`);
-    const handler = handlers.get(channel);
-    if (!handler) throw new Error(`fake main: no handler for ${channel}`);
-    return handler(args as Record<string, unknown>);
-  });
-  const subscribe = (channel: string, callback: (payload: unknown) => void) => {
-    let set = pluginListeners.get(channel);
-    if (!set) {
-      set = new Set();
-      pluginListeners.set(channel, set);
-    }
-    set.add(callback);
-    return () => set!.delete(callback);
-  };
-  const on = vi.fn((_pluginId: string, channel: string, callback: (payload: unknown) => void) =>
-    subscribe(channel, callback)
-  );
-  // The picker subscribes per preview panel, as main addresses its pushes.
-  const onPanel = vi.fn(
-    (_pluginId: string, channel: string, _panelId: string, callback: (payload: unknown) => void) =>
-      subscribe(channel, callback)
-  );
 
   /** The host's element crop: a picture saved where agents read pasted images. */
   const captureElement = vi.fn(
     async (
       _panelId: string,
-      _request: { rect: { x: number; y: number; width: number; height: number } }
+      _request: {
+        rect: { x: number; y: number; width: number; height: number };
+        viewportWidth: number;
+        viewportHeight: number;
+      }
     ): Promise<
       | { status: "saved"; filePath: string; width: number; height: number }
       | { status: "offscreen" }
@@ -246,84 +256,129 @@ export function createFakeHost() {
   );
 
   const host = {
-    sitePreview,
+    picker,
+    preview,
     captureElement,
-    diskRevisions,
+    /** What the host would hash on disk now; a file absent here reads as the fixture source. */
+    diskRevisions: new Map<string, FileRevision | null>([[CARD_FILE, CARD_REVISION]]),
     reselectFinds: true,
-    /** The chain main resolves for the fixture element, innermost first; null for the fixture's own. */
-    ancestry: null as SelectedNode["ancestry"] | null,
     currentEpoch: 0,
-    invoke,
-    on,
-    onPanel,
-    handlers,
+    /** The workspace the last successful open handed out: what source changes are about by default. */
+    workspaceId: WORKSPACE,
+    /** The element the page reports by default, and finds again on a reselect. */
+    template: (): SelectionObservation => svelteObservation(),
+    /** How the workspace opens. */
+    openWith: (
+      _request: ElementPickerWorkspaceOpenRequest
+    ): ElementPickerWorkspaceOpenResult | Promise<ElementPickerWorkspaceOpenResult> => ({
+      status: "ready",
+      workspaceId: WORKSPACE,
+      appPath: ".",
+      appPaths: ["."],
+      scanComplete: true,
+    }),
+    /**
+     * What the host makes of one element's claims: the fixtures' answers to the
+     * claims it carries, so an element never holds a result for a claim it
+     * didn't make.
+     */
+    resultsFor: (
+      observation: SelectionObservation,
+      _request: ResolveRequest
+    ): ResolutionResult[] => {
+      const ids = candidateIds(observation);
+      return [...svelteResults(), ...reactResults()].filter((result) =>
+        ids.has(result.candidateId)
+      );
+    },
+    describeWith: (_request: {
+      workspaceId: string;
+      url: string;
+    }): ProjectContextOutcome | Promise<ProjectContextOutcome> => ({ status: "none" }),
+    /** The default answer to a resolve, for a test that holds or wraps it. */
+    async answerResolve(request: ResolveRequest): Promise<ResolveResponse> {
+      return {
+        requestId: request.requestId,
+        documentEpoch: request.documentEpoch,
+        outcomes: request.observations.map((observation) => ({
+          elementId: observation.elementId,
+          results: host.resultsFor(observation, request),
+        })),
+      };
+    },
     listenerCounts() {
-      let plugin = 0;
-      for (const set of pluginListeners.values()) plugin += set.size;
-      return { preview: previewListeners.size, plugin };
+      return { event: eventListeners.size, source: sourceListeners.size };
     },
-    setCandidates(next: SitePreviewCandidate[]) {
-      candidates = next;
+    /** The request each call to one of the picker's methods was made with, oldest first. */
+    calls<M extends keyof typeof picker>(method: M): Array<Parameters<(typeof picker)[M]>[0]> {
+      const recorded: { mock: { calls: ReadonlyArray<readonly unknown[]> } } = picker[method];
+      return recorded.mock.calls.map((call) => call[0]) as Array<Parameters<(typeof picker)[M]>[0]>;
     },
-    calls(channel: string): Array<Record<string, unknown>> {
-      return invoke.mock.calls
-        .filter((call) => call[1] === channel)
-        .map((call) => call[2] as Record<string, unknown>);
+    pushPreview(payload: ElementPickerPushPayload) {
+      for (const listener of [...eventListeners]) listener(payload);
     },
-    pushPreview(payload: SitePreviewPushPayload) {
-      for (const listener of [...previewListeners]) listener(payload);
-    },
-    pushPlugin(channel: string, payload: unknown) {
-      for (const listener of [...(pluginListeners.get(channel) ?? [])]) listener(payload);
-    },
-    documentReady(epoch: number, sessionId = "session-1") {
-      host.currentEpoch = epoch;
+    pushEvent(event: ElementPickerEvent, epoch?: number, sessionId = "session-1"): void {
       host.pushPreview({
-        kind: "guest-event",
+        kind: "picker-event",
         sessionId,
         panelId: "preview-1",
         projectId: "p1",
-        documentEpoch: epoch,
-        sequence: 0,
-        event: {
-          type: "documentReady",
-          routeId: "/pricing",
-          url: "http://localhost:5173/pricing?plan=pro",
-          viewport: { width: 800, height: 600, deviceScaleFactor: 1 },
-        },
+        documentEpoch: epoch ?? host.currentEpoch,
+        sequence: sequence++,
+        event,
       });
     },
-    /** What the page calls the component invoked at a call site on the fixture chain. */
-    componentNameAt(site: { file: string; line: number; column: number }): string {
-      const entry = (host.ancestry ?? makeSelection().nodes[0]!.ancestry).find(
-        (candidate) =>
-          candidate.kind === "component" &&
-          candidate.location.file === site.file &&
-          candidate.location.line === site.line &&
-          candidate.location.column === site.column
+    documentReady(epoch: number, sessionId = "session-1") {
+      host.currentEpoch = epoch;
+      host.pushEvent(
+        {
+          type: "documentReady",
+          url: PAGE_URL,
+          viewport: { width: 800, height: 600, deviceScaleFactor: 1 },
+        },
+        epoch,
+        sessionId
       );
-      return entry?.componentTag ?? "Component";
     },
     select(
       epoch: number,
-      nodes: SiteGuestNodeObservation[] = [OBSERVATION],
+      observations?: SelectionObservation[],
       cause: "user" | "document" | "reselect" = "user",
-      component: { file: string; line: number; column: number; name: string } | null = null
-    ) {
-      host.pushPreview({
-        kind: "guest-event",
-        sessionId: "session-1",
-        panelId: "preview-1",
-        projectId: "p1",
-        documentEpoch: epoch,
-        sequence: 1,
-        event: {
+      scope: SelectionScope = { kind: "element" }
+    ): void {
+      host.pushEvent(
+        {
           type: "selectionChanged",
-          nodes,
+          observations: observations ?? [host.template()],
           cause,
-          ...(component ? { scope: "component", component } : {}),
+          scope,
         },
-      });
+        epoch
+      );
+    },
+    hover(observation: SelectionObservation | null, epoch?: number): void {
+      host.pushEvent(
+        { type: "hoverChanged", observation: observation === null ? null : asHover(observation) },
+        epoch
+      );
+    },
+    runtimeIssue(
+      code: Extract<ElementPickerEvent, { type: "runtimeIssue" }>["code"],
+      options: {
+        framework?: SelectionObservation["detections"][number]["framework"];
+        detail?: string;
+        epoch?: number;
+      } = {}
+    ) {
+      host.pushEvent(
+        {
+          type: "runtimeIssue",
+          code,
+          ...(options.framework ? { framework: options.framework } : {}),
+          detail: options.detail ?? "",
+        },
+        options.epoch ?? host.currentEpoch
+      );
     },
     epochAdvanced(epoch: number) {
       host.pushPreview({
@@ -333,15 +388,25 @@ export function createFakeHost() {
         documentEpoch: epoch,
       });
     },
-    install(): () => void {
-      const previous = (window as { electron?: unknown }).electron;
-      (window as unknown as { electron: unknown }).electron = {
-        sitePreview,
-        plugin: { invoke, on, onPanel },
-        webview: { captureElement },
+    sourceChanged(path: string, revision: FileRevision | null = null, workspace?: string): void {
+      const workspaceId = workspace ?? host.workspaceId;
+      const push: ElementPickerSourceChangedPush = {
+        workspaceId,
+        panelId: "preview-1",
+        file: { workspaceId, path },
+        revision,
       };
+      for (const listener of [...sourceListeners]) listener(push);
+    },
+    install(): () => void {
+      const previous: unknown = Reflect.get(window, "electron");
+      Reflect.set(window, "electron", {
+        elementPicker: picker,
+        sitePreview: preview,
+        webview: { captureElement },
+      });
       return () => {
-        (window as unknown as { electron: unknown }).electron = previous;
+        Reflect.set(window, "electron", previous);
       };
     },
   };

@@ -609,6 +609,651 @@ export interface GeneratedIpcInvokeMap {
     args: [payload: import("../editor.js").EditorSetConfigPayload];
     result: void;
   };
+  "element-picker:bind": {
+    args: [payload: { panelId: string; mode?: "browse" | "select" | undefined }];
+    result: import("./sitePreview.js").SitePreviewBindingState;
+  };
+  "element-picker:describe-project": {
+    args: [payload: { workspaceId: string; url: string }];
+    result:
+      | {
+          status: "described";
+          context: {
+            adapter: "sveltekit";
+            appPath: string;
+            route: {
+              routeId: string;
+              files: {
+                role: "data" | "page" | "layout";
+                file: { workspaceId: string; path: string };
+              }[];
+            } | null;
+            routes: {
+              directory: string;
+              source: "default" | "svelte.config" | "vite.config" | "unresolved";
+              basePath: string | null;
+              complete: boolean;
+            };
+            toolchain: {
+              versions: {
+                svelte: string | null;
+                kit: string | null;
+                tailwind: string | null;
+                vite: string | null;
+              };
+              verdict: "tested" | "untested";
+              reasons: string[];
+              missingInstall: ("svelte" | "kit" | "tailwind" | "vite")[];
+            };
+            diagnostics: {
+              code: "unresolved-layout-reset" | "duplicate-route-id" | "traversal-truncated";
+              message: string;
+              files: string[];
+            }[];
+          };
+        }
+      | { status: "none" }
+      | {
+          status: "unavailable";
+          reason: "failed" | "cancelled" | "busy" | "budget-exhausted" | "unknown-workspace";
+        };
+  };
+  "element-picker:reselect": {
+    args: [
+      payload: {
+        sessionId: string;
+        elementId?: string | undefined;
+        framework?:
+          "svelte" | "react" | "vue" | "angular" | "astro" | "preact" | "solid" | undefined;
+        locator?:
+          | {
+              loc: { file: string; line: number; column: number };
+              index: number;
+              component?: { file: string; line: number; column: number } | undefined;
+            }
+          | undefined;
+        reveal?: boolean | undefined;
+      },
+    ];
+    result: boolean;
+  };
+  "element-picker:resolve": {
+    args: [
+      payload: {
+        requestId: string;
+        sessionId: string;
+        documentEpoch: number;
+        workspaceId: string;
+        observations: {
+          elementId: string;
+          tagName: string;
+          label: string;
+          bounds: { x: number; y: number; width: number; height: number }[];
+          detections: {
+            framework: "svelte" | "react" | "vue" | "angular" | "astro" | "preact" | "solid";
+            signals: {
+              via: "global" | "expando" | "attribute" | "document-sample";
+              name: string;
+            }[];
+          }[];
+          componentChain: {
+            nearestId: string | null;
+            components: {
+              componentId: string;
+              framework: "svelte" | "react" | "vue" | "angular" | "astro" | "preact" | "solid";
+              name: {
+                value: string;
+                extraction:
+                  | { kind: "runtime-field"; field: string }
+                  | { kind: "generated-stack-frame"; field: string; frameIndex: number }
+                  | { kind: "attribute"; attribute: string };
+              } | null;
+              environment: "unknown" | "client" | "server";
+              rootElementIds: string[];
+              rootsComplete: boolean;
+              sourceCandidates: (
+                | {
+                    location: {
+                      lineBase: 0 | 1;
+                      columnBase: 0 | 1;
+                      columnUnit: "utf16";
+                      line: number;
+                      column: number;
+                      end?: { line: number; column: number } | undefined;
+                    };
+                    candidateId: string;
+                    framework:
+                      "svelte" | "react" | "vue" | "angular" | "astro" | "preact" | "solid";
+                    extraction:
+                      | { kind: "runtime-field"; field: string }
+                      | { kind: "generated-stack-frame"; field: string; frameIndex: number }
+                      | { kind: "attribute"; attribute: string };
+                    file: string;
+                    kind: "element-creation";
+                  }
+                | {
+                    location: {
+                      lineBase: 0 | 1;
+                      columnBase: 0 | 1;
+                      columnUnit: "utf16";
+                      line: number;
+                      column: number;
+                      end?: { line: number; column: number } | undefined;
+                    };
+                    candidateId: string;
+                    framework:
+                      "svelte" | "react" | "vue" | "angular" | "astro" | "preact" | "solid";
+                    extraction:
+                      | { kind: "runtime-field"; field: string }
+                      | { kind: "generated-stack-frame"; field: string; frameIndex: number }
+                      | { kind: "attribute"; attribute: string };
+                    file: string;
+                    kind: "component-invocation";
+                  }
+                | {
+                    location: {
+                      lineBase: 0 | 1;
+                      columnBase: 0 | 1;
+                      columnUnit: "utf16";
+                      line: number;
+                      column: number;
+                      end?: { line: number; column: number } | undefined;
+                    };
+                    candidateId: string;
+                    framework:
+                      "svelte" | "react" | "vue" | "angular" | "astro" | "preact" | "solid";
+                    extraction:
+                      | { kind: "runtime-field"; field: string }
+                      | { kind: "generated-stack-frame"; field: string; frameIndex: number }
+                      | { kind: "attribute"; attribute: string };
+                    file: string;
+                    kind: "component-definition";
+                  }
+                | {
+                    location: {
+                      lineBase: 0 | 1;
+                      columnBase: 0 | 1;
+                      columnUnit: "utf16";
+                      line: number;
+                      column: number;
+                      end?: { line: number; column: number } | undefined;
+                    } | null;
+                    candidateId: string;
+                    framework:
+                      "svelte" | "react" | "vue" | "angular" | "astro" | "preact" | "solid";
+                    extraction:
+                      | { kind: "runtime-field"; field: string }
+                      | { kind: "generated-stack-frame"; field: string; frameIndex: number }
+                      | { kind: "attribute"; attribute: string };
+                    file: string;
+                    kind: "template-location";
+                  }
+                | {
+                    candidateId: string;
+                    framework:
+                      "svelte" | "react" | "vue" | "angular" | "astro" | "preact" | "solid";
+                    extraction:
+                      | { kind: "runtime-field"; field: string }
+                      | { kind: "generated-stack-frame"; field: string; frameIndex: number }
+                      | { kind: "attribute"; attribute: string };
+                    file: string;
+                    kind: "file-hint";
+                  }
+              )[];
+              renderParentId?: string | null | undefined;
+              ownerId?: string | null | undefined;
+            }[];
+            truncated: boolean;
+          };
+          sourceCandidates: (
+            | {
+                location: {
+                  lineBase: 0 | 1;
+                  columnBase: 0 | 1;
+                  columnUnit: "utf16";
+                  line: number;
+                  column: number;
+                  end?: { line: number; column: number } | undefined;
+                };
+                candidateId: string;
+                framework: "svelte" | "react" | "vue" | "angular" | "astro" | "preact" | "solid";
+                extraction:
+                  | { kind: "runtime-field"; field: string }
+                  | { kind: "generated-stack-frame"; field: string; frameIndex: number }
+                  | { kind: "attribute"; attribute: string };
+                file: string;
+                kind: "element-creation";
+              }
+            | {
+                location: {
+                  lineBase: 0 | 1;
+                  columnBase: 0 | 1;
+                  columnUnit: "utf16";
+                  line: number;
+                  column: number;
+                  end?: { line: number; column: number } | undefined;
+                };
+                candidateId: string;
+                framework: "svelte" | "react" | "vue" | "angular" | "astro" | "preact" | "solid";
+                extraction:
+                  | { kind: "runtime-field"; field: string }
+                  | { kind: "generated-stack-frame"; field: string; frameIndex: number }
+                  | { kind: "attribute"; attribute: string };
+                file: string;
+                kind: "component-invocation";
+              }
+            | {
+                location: {
+                  lineBase: 0 | 1;
+                  columnBase: 0 | 1;
+                  columnUnit: "utf16";
+                  line: number;
+                  column: number;
+                  end?: { line: number; column: number } | undefined;
+                };
+                candidateId: string;
+                framework: "svelte" | "react" | "vue" | "angular" | "astro" | "preact" | "solid";
+                extraction:
+                  | { kind: "runtime-field"; field: string }
+                  | { kind: "generated-stack-frame"; field: string; frameIndex: number }
+                  | { kind: "attribute"; attribute: string };
+                file: string;
+                kind: "component-definition";
+              }
+            | {
+                location: {
+                  lineBase: 0 | 1;
+                  columnBase: 0 | 1;
+                  columnUnit: "utf16";
+                  line: number;
+                  column: number;
+                  end?: { line: number; column: number } | undefined;
+                } | null;
+                candidateId: string;
+                framework: "svelte" | "react" | "vue" | "angular" | "astro" | "preact" | "solid";
+                extraction:
+                  | { kind: "runtime-field"; field: string }
+                  | { kind: "generated-stack-frame"; field: string; frameIndex: number }
+                  | { kind: "attribute"; attribute: string };
+                file: string;
+                kind: "template-location";
+              }
+            | {
+                candidateId: string;
+                framework: "svelte" | "react" | "vue" | "angular" | "astro" | "preact" | "solid";
+                extraction:
+                  | { kind: "runtime-field"; field: string }
+                  | { kind: "generated-stack-frame"; field: string; frameIndex: number }
+                  | { kind: "attribute"; attribute: string };
+                file: string;
+                kind: "file-hint";
+              }
+          )[];
+          capabilities: {
+            names:
+              | { state: "available" }
+              | { state: "unknown" }
+              | {
+                  state: "unavailable";
+                  reason: "not-exposed" | "production-build" | "no-framework" | "unmapped";
+                };
+            chain:
+              | { state: "available" }
+              | { state: "unknown" }
+              | {
+                  state: "unavailable";
+                  reason: "not-exposed" | "production-build" | "no-framework" | "unmapped";
+                };
+            componentSelection:
+              | { state: "available" }
+              | { state: "unknown" }
+              | {
+                  state: "unavailable";
+                  reason: "not-exposed" | "production-build" | "no-framework" | "unmapped";
+                };
+            file:
+              | { state: "available" }
+              | { state: "unknown" }
+              | {
+                  state: "unavailable";
+                  reason: "not-exposed" | "production-build" | "no-framework" | "unmapped";
+                };
+            line:
+              | { state: "available" }
+              | { state: "unknown" }
+              | {
+                  state: "unavailable";
+                  reason: "not-exposed" | "production-build" | "no-framework" | "unmapped";
+                };
+            exactRange:
+              | { state: "available" }
+              | { state: "unknown" }
+              | {
+                  state: "unavailable";
+                  reason: "not-exposed" | "production-build" | "no-framework" | "unmapped";
+                };
+          };
+          frameworkEvidence: (
+            | {
+                kind: "svelte";
+                ancestry: {
+                  type: string;
+                  file: string;
+                  line: number;
+                  column: number;
+                  componentTag?: string | undefined;
+                }[];
+                sameLocCount: number;
+                unmapped: boolean;
+                sameLocCountPartial?: true | undefined;
+                locIndex?: number | undefined;
+                structure?: { file: string; path: { tag: string; index: number }[] } | undefined;
+              }
+            | {
+                kind: "generic";
+                framework: "svelte" | "react" | "vue" | "angular" | "astro" | "preact" | "solid";
+                fields: { name: string; value: string | number | boolean | null }[];
+              }
+          )[];
+          phase: "selection";
+          context?:
+            | {
+                selector: string;
+                markup: string;
+                styles: { property: string; value: string }[];
+                markupTruncated?: true | undefined;
+                shadowHosts?: { elementId: string; tagName: string; label: string }[] | undefined;
+                shadowHostsTruncated?: true | undefined;
+              }
+            | undefined;
+        }[];
+        knownRevisions: { file: { workspaceId: string; path: string }; revision: string }[];
+        budget: {
+          maxFiles: number;
+          maxFileBytes: number;
+          maxNetworkRequests: number;
+          maxNetworkBytes: number;
+          deadlineMs: number;
+        };
+      },
+    ];
+    result: {
+      requestId: string;
+      documentEpoch: number;
+      outcomes: {
+        elementId: string;
+        results: (
+          | {
+              state: "observed";
+              target: {
+                file: { workspaceId: string; path: string };
+                location: {
+                  lineBase: 0 | 1;
+                  columnBase: 0 | 1;
+                  columnUnit: "utf16";
+                  line: number;
+                  column: number;
+                  end?: { line: number; column: number } | undefined;
+                } | null;
+              };
+              fileRevision: string | null;
+              candidateId: string;
+              claim:
+                | "element-creation"
+                | "component-invocation"
+                | "component-definition"
+                | "template-location"
+                | "file-hint";
+            }
+          | {
+              state: "mapped";
+              target: {
+                file: { workspaceId: string; path: string };
+                location: {
+                  lineBase: 0 | 1;
+                  columnBase: 0 | 1;
+                  columnUnit: "utf16";
+                  line: number;
+                  column: number;
+                  end?: { line: number; column: number } | undefined;
+                } | null;
+              };
+              fileRevision: string | null;
+              sourceMap: {
+                mapUrl: string | null;
+                mapRevision: string;
+                sourceCheck: "unchecked" | "matches" | "differs";
+              };
+              candidateId: string;
+              claim:
+                | "element-creation"
+                | "component-invocation"
+                | "component-definition"
+                | "template-location"
+                | "file-hint";
+            }
+          | {
+              state: "verified";
+              target: {
+                file: { workspaceId: string; path: string };
+                location: {
+                  lineBase: 0 | 1;
+                  columnBase: 0 | 1;
+                  columnUnit: "utf16";
+                  line: number;
+                  column: number;
+                  end?: { line: number; column: number } | undefined;
+                } | null;
+              };
+              fileRevision: string;
+              candidateId: string;
+              claim:
+                | "element-creation"
+                | "component-invocation"
+                | "component-definition"
+                | "template-location"
+                | "file-hint";
+              sourceMap?:
+                | {
+                    mapUrl: string | null;
+                    mapRevision: string;
+                    sourceCheck: "unchecked" | "matches" | "differs";
+                  }
+                | undefined;
+              placedBy?: "structure" | undefined;
+              definition?:
+                | {
+                    file: { workspaceId: string; path: string };
+                    fileRevision: string;
+                    specifier: string;
+                  }
+                | undefined;
+            }
+          | {
+              alternatives: (
+                | {
+                    state: "observed";
+                    target: {
+                      file: { workspaceId: string; path: string };
+                      location: {
+                        lineBase: 0 | 1;
+                        columnBase: 0 | 1;
+                        columnUnit: "utf16";
+                        line: number;
+                        column: number;
+                        end?: { line: number; column: number } | undefined;
+                      } | null;
+                    };
+                    fileRevision: string | null;
+                  }
+                | {
+                    state: "mapped";
+                    target: {
+                      file: { workspaceId: string; path: string };
+                      location: {
+                        lineBase: 0 | 1;
+                        columnBase: 0 | 1;
+                        columnUnit: "utf16";
+                        line: number;
+                        column: number;
+                        end?: { line: number; column: number } | undefined;
+                      } | null;
+                    };
+                    fileRevision: string | null;
+                    sourceMap: {
+                      mapUrl: string | null;
+                      mapRevision: string;
+                      sourceCheck: "unchecked" | "matches" | "differs";
+                    };
+                  }
+                | {
+                    state: "verified";
+                    target: {
+                      file: { workspaceId: string; path: string };
+                      location: {
+                        lineBase: 0 | 1;
+                        columnBase: 0 | 1;
+                        columnUnit: "utf16";
+                        line: number;
+                        column: number;
+                        end?: { line: number; column: number } | undefined;
+                      } | null;
+                    };
+                    fileRevision: string;
+                    sourceMap?:
+                      | {
+                          mapUrl: string | null;
+                          mapRevision: string;
+                          sourceCheck: "unchecked" | "matches" | "differs";
+                        }
+                      | undefined;
+                    placedBy?: "structure" | undefined;
+                  }
+              )[];
+              candidateId: string;
+              claim:
+                | "element-creation"
+                | "component-invocation"
+                | "component-definition"
+                | "template-location"
+                | "file-hint";
+              state: "ambiguous";
+            }
+          | {
+              held:
+                | {
+                    state: "observed";
+                    target: {
+                      file: { workspaceId: string; path: string };
+                      location: {
+                        lineBase: 0 | 1;
+                        columnBase: 0 | 1;
+                        columnUnit: "utf16";
+                        line: number;
+                        column: number;
+                        end?: { line: number; column: number } | undefined;
+                      } | null;
+                    };
+                    fileRevision: string | null;
+                  }
+                | {
+                    state: "mapped";
+                    target: {
+                      file: { workspaceId: string; path: string };
+                      location: {
+                        lineBase: 0 | 1;
+                        columnBase: 0 | 1;
+                        columnUnit: "utf16";
+                        line: number;
+                        column: number;
+                        end?: { line: number; column: number } | undefined;
+                      } | null;
+                    };
+                    fileRevision: string | null;
+                    sourceMap: {
+                      mapUrl: string | null;
+                      mapRevision: string;
+                      sourceCheck: "unchecked" | "matches" | "differs";
+                    };
+                  }
+                | {
+                    state: "verified";
+                    target: {
+                      file: { workspaceId: string; path: string };
+                      location: {
+                        lineBase: 0 | 1;
+                        columnBase: 0 | 1;
+                        columnUnit: "utf16";
+                        line: number;
+                        column: number;
+                        end?: { line: number; column: number } | undefined;
+                      } | null;
+                    };
+                    fileRevision: string;
+                    sourceMap?:
+                      | {
+                          mapUrl: string | null;
+                          mapRevision: string;
+                          sourceCheck: "unchecked" | "matches" | "differs";
+                        }
+                      | undefined;
+                    placedBy?: "structure" | undefined;
+                  };
+              currentFileRevision: string | null;
+              reason: "file-changed" | "file-missing" | "map-changed" | "document-changed";
+              candidateId: string;
+              claim:
+                | "element-creation"
+                | "component-invocation"
+                | "component-definition"
+                | "template-location"
+                | "file-hint";
+              state: "stale";
+            }
+          | {
+              reason:
+                | "cancelled"
+                | "unsupported"
+                | "mismatch"
+                | "file-missing"
+                | "outside-workspace"
+                | "map-missing"
+                | "budget-exhausted";
+              candidateId: string;
+              claim:
+                | "element-creation"
+                | "component-invocation"
+                | "component-definition"
+                | "template-location"
+                | "file-hint";
+              state: "unavailable";
+              read?:
+                { file: { workspaceId: string; path: string }; fileRevision: string } | undefined;
+            }
+        )[];
+      }[];
+    };
+  };
+  "element-picker:source-revisions": {
+    args: [payload: { workspaceId: string; paths: string[] }];
+    result: import("./elementPicker.js").ElementPickerSourceRevisionsResult;
+  };
+  "element-picker:workspace-close": {
+    args: [payload: { workspaceId: string }];
+    result: { closed: boolean };
+  };
+  "element-picker:workspace-open": {
+    args: [
+      payload: {
+        panelId: string;
+        worktreeId: string;
+        serverCwd?: string | undefined;
+        appPath?: string | undefined;
+        previewOrigin?: string | undefined;
+      },
+    ];
+    result: import("./elementPicker.js").ElementPickerWorkspaceOpenResult;
+  };
   "event-inspector:clear": {
     args: [];
     result: void;
@@ -3020,9 +3665,9 @@ export interface GeneratedIpcInvokeMap {
           sourcePrNumber?: number | undefined;
           sourcePrTitle?: string | undefined;
           sourcePrUrl?: string | undefined;
-          sourcePrState?: "merged" | "open" | "closed" | undefined;
+          sourcePrState?: "merged" | "closed" | "open" | undefined;
           sourcePrLinkedIssueNumber?: number | undefined;
-          submoduleInit?: "inherit" | "all" | "none" | undefined;
+          submoduleInit?: "none" | "inherit" | "all" | undefined;
           collisionPolicy?: "error" | "suffix" | undefined;
         };
         opId?: string | undefined;

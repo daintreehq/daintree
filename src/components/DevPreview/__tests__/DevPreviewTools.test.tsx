@@ -1,6 +1,21 @@
 // @vitest-environment jsdom
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+// The dev preview's own Element Picker, reduced to a toggle: these cases are
+// about how the host offers tools, not about the picker.
+vi.mock("@/panels/dev-preview/element-picker/elementPickerTool", () => ({
+  elementPickerTool: {
+    id: "element-picker",
+    label: "Element Picker",
+    Button: ({ active, onToggle }: { active: boolean; onToggle: () => void }) => (
+      <button type="button" aria-pressed={active} onClick={onToggle}>
+        Element Picker
+      </button>
+    ),
+  },
+}));
+
 import {
   DevPreviewToolButtons,
   DevPreviewToolDrawer,
@@ -461,5 +476,26 @@ describe("dev preview tool drawer chrome", () => {
     fireEvent.click(close);
     // Never `document.body`: the close control was inside what it closed.
     expect(document.activeElement).toBe(screen.getByRole("button", { name: "Picker" }));
+  });
+});
+
+describe("the dev preview's own tools", () => {
+  it("offers the Element Picker with no plugin loaded or enabled", () => {
+    pluginLoaded(false);
+    render(<Preview />);
+    expect(screen.getByRole("button", { name: "Element Picker" })).not.toBeNull();
+  });
+
+  it("switches it on from its toggle, beside the plugins' tools", () => {
+    pluginLoaded(true);
+    render(<Preview />);
+    fireEvent.click(screen.getByRole("button", { name: "Element Picker" }));
+    expect(useDevPreviewToolStore.getState().activeByPanel[host.panelId]).toBe("element-picker");
+    expect(
+      screen.getByRole("button", { name: "Element Picker" }).getAttribute("aria-pressed")
+    ).toBe("true");
+    expect(screen.getByRole("button", { name: "Picker" }).getAttribute("aria-pressed")).toBe(
+      "false"
+    );
   });
 });

@@ -954,6 +954,33 @@ describe("the shipped Svelte extractor", () => {
     expect(lastSelection(h)?.observations).toHaveLength(1);
   });
 
+  it("selects again when the view asks the bridge, through the binding's own world", async () => {
+    svelteNode();
+    const h = makeHarness();
+    const state = await h.bind();
+    await settle();
+    const before = h.pickerEvents("selectionChanged").length;
+
+    const found = await h.bridge.reselectElementPicker(PROJECT_ID, state.sessionId, {
+      sessionId: state.sessionId,
+      framework: "svelte",
+      locator: { loc: { file: "src/App.svelte", line: 3, column: 2 }, index: 0 },
+    });
+    await settle();
+
+    expect(found).toBe(true);
+    expect(h.pickerEvents("selectionChanged")).toHaveLength(before + 1);
+    expect(lastSelection(h)?.cause).toBe("reselect");
+    // A locator that names nothing in the page selects nothing.
+    await expect(
+      h.bridge.reselectElementPicker(PROJECT_ID, state.sessionId, {
+        sessionId: state.sessionId,
+        framework: "svelte",
+        locator: { loc: { file: "src/Other.svelte", line: 1, column: 0 }, index: 0 },
+      })
+    ).resolves.toBe(false);
+  });
+
   it("carries none of the shared schemas into the page", () => {
     expect(assets["extractor:svelte"]).not.toMatch(/ZodError|\$ZodType/);
   });

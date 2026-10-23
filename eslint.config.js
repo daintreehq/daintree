@@ -1349,12 +1349,7 @@ export default tseslint.config(
     return [
       {
         files: ["plugins/builtin/*/renderer/**/*.{ts,tsx}"],
-        ignores: [
-          "**/__tests__/**",
-          "**/__preview__/**",
-          "**/*.{test,spec}.{ts,tsx}",
-          "plugins/builtin/sveltekit-builder/renderer/SiteBuilderButton.tsx",
-        ],
+        ignores: ["**/__tests__/**", "**/__preview__/**", "**/*.{test,spec}.{ts,tsx}"],
         rules: { "no-restricted-imports": restrict(kitCovered) },
       },
       ...kitGaps.map(({ file, allow, gap }) => ({

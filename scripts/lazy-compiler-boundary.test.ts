@@ -59,24 +59,23 @@ describe("the SvelteKit builder's activation path", () => {
   }, 60_000);
 });
 
-const PLUGIN = "plugins/builtin/sveltekit-builder/";
-const ENTRY = `${PLUGIN}renderer/index.ts`;
-const BUTTON = `${PLUGIN}renderer/SiteBuilderButton.tsx`;
+const PICKER = "src/panels/dev-preview/element-picker/";
+const ENTRY = `${PICKER}elementPickerTool.ts`;
+const BUTTON = `${PICKER}ElementPickerButton.tsx`;
+const TOOL_ID = `${PICKER}toolId.ts`;
 
 /**
- * `src/registry/builtinPluginRenderers.ts` imports every builtin renderer entry
- * through an eager `import.meta.glob`, with no enabled/disabled gate — so this
- * entry's static import closure runs for every user on every project view,
- * whether or not anyone ever turns the builder on. It is kept to a registration
- * call and a toolbar button on purpose, which is why it hardcodes its ids
- * instead of importing `shared/protocol.ts` and its zod dependency.
+ * Every dev preview's toolbar imports the Element Picker's tool definition, so
+ * its static import closure runs for every user on every project view, whether
+ * or not anyone ever switches the picker on. It is kept to the definition, the
+ * toolbar button and the tool's id on purpose.
  *
- * Nothing else pins that. The renderer budgets do not walk plugin entries, and
- * reading the source only proves how the imports are spelled, not what they
- * drag in — a re-export, a value import that used to be type-only, or a host
- * helper that quietly grew a zod dependency would widen this closure with no
- * symptom. So this builds the real entry and walks esbuild's own graph, which
- * stops at `dynamic-import` edges: exactly the boundary being asserted.
+ * Nothing else pins that. Reading the source only proves how the imports are
+ * spelled, not what they drag in — a re-export, a value import that used to be
+ * type-only, or a host helper that quietly grew a zod dependency would widen
+ * this closure with no symptom. So this builds the real entry and walks
+ * esbuild's own graph, which stops at `dynamic-import` edges: exactly the
+ * boundary being asserted.
  *
  * Host `@/…` imports are resolved rather than externalised, because the cost of
  * an eager import is whatever it transitively pulls in, and externalising the
@@ -88,7 +87,7 @@ const BUTTON = `${PLUGIN}renderer/SiteBuilderButton.tsx`;
  * imports, so eager plugin sources are separately checked for that spelling.
  *
  * Sibling of the activation-path check above, which asks the same question of
- * the plugin's main-process entry.
+ * a main-process entry.
  */
 
 // Deliberately NOT external: every module named here must be visible in the
@@ -100,10 +99,9 @@ const LAZY_ONLY = [
   },
   { label: "inspectorController", test: (file: string) => file.includes("inspectorController") },
   {
-    label: "routeMatch",
-    test: (file: string) => file.includes("shared/elementPicker/sveltekit/routeMatch"),
+    label: "resolver schemas",
+    test: (file: string) => file.endsWith("shared/elementPicker/resolver.ts"),
   },
-  { label: "protocol", test: (file: string) => file.endsWith(`${PLUGIN}shared/protocol.ts`) },
   { label: "zod", test: (file: string) => /(^|\/)node_modules\/zod(\/|$)/.test(file) },
 ];
 
@@ -144,15 +142,17 @@ function buildRendererEntry(mode: (typeof MODES)[number]) {
   return started;
 }
 
-describe.each(MODES)("the SvelteKit builder's eager renderer entry (%s)", (mode) => {
-  it("registers its tool without reaching the builder, the controller or zod", async () => {
+describe.each(MODES)("the Element Picker's eager renderer entry (%s)", (mode) => {
+  it("defines its tool without reaching the surfaces, the controller or zod", async () => {
     const { metafile } = await buildRendererEntry(mode);
     const eager = [...walkEagerGraph(metafile, ENTRY)];
 
-    // The whole plugin-side allowance, stated as a set rather than a ceiling:
-    // the entry and the button. A third eager plugin file is a decision, not a
-    // refactor, and should have to be argued for here.
-    expect(eager.filter((file) => file.includes(PLUGIN)).sort()).toEqual([BUTTON, ENTRY].sort());
+    // The whole picker-side allowance, stated as a set rather than a ceiling:
+    // the definition, the button and the id. A fourth eager picker file is a
+    // decision, not a refactor, and should have to be argued for here.
+    expect(eager.filter((file) => file.includes(PICKER)).sort()).toEqual(
+      [BUTTON, ENTRY, TOOL_ID].sort()
+    );
 
     // Over the whole eager closure, host modules included: an eager import is
     // only as cheap as everything it reaches.
@@ -161,7 +161,7 @@ describe.each(MODES)("the SvelteKit builder's eager renderer entry (%s)", (mode)
 
     // Esbuild passes `import.meta.glob` through untouched, so the graph above
     // cannot see one. Vite turns an eager glob into static imports.
-    for (const file of eager.filter((candidate) => candidate.includes(PLUGIN))) {
+    for (const file of eager.filter((candidate) => candidate.includes(PICKER))) {
       expect(fs.readFileSync(path.join(ROOT, file), "utf8"), file).not.toContain(
         "import.meta.glob"
       );
@@ -180,12 +180,12 @@ describe.each(MODES)("the SvelteKit builder's eager renderer entry (%s)", (mode)
     }
   }, 60_000);
 
-  it("keeps the Svelte compiler and the source model out of the plugin's renderer entirely", async () => {
+  it("keeps the Svelte compiler and the source model out of the picker's renderer entirely", async () => {
     const { metafile } = await buildRendererEntry(mode);
 
     // Stronger than the eager claim on purpose: the compiler and the source
     // model belong to the main process. Reaching them from any renderer chunk
-    // of this plugin, lazy or not, means a module landed on the wrong side.
+    // of the picker, lazy or not, means a module landed on the wrong side.
     const reachable = Object.keys(metafile.inputs);
     expect(scanForbiddenModules(reachable)).toEqual([]);
     // Nor the picker host's project adapters, which read the user's tree with

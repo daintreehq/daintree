@@ -20,7 +20,6 @@ import {
   Unplug,
 } from "lucide-react";
 import type { DevPreviewToolSurfaceProps } from "@/registry/devPreviewToolRegistry";
-import type { SelectedNode } from "./legacyBridge.js";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { DismissButton } from "@/components/ui/DismissButton";
@@ -42,7 +41,6 @@ import {
   INITIAL_INSPECTOR_STATE,
   type InspectorController,
   type InspectorState,
-  type WorkspaceState,
 } from "./inspectorController.js";
 import { InspectorNotice } from "./InspectorNotice.js";
 import { PropertyRow, SectionHeader } from "./InspectorSection.js";
@@ -59,16 +57,15 @@ import { WaitingRow } from "./WaitingRow.js";
 import { IdentitySkeleton } from "./IdentitySkeleton.js";
 import { useDeferredLoading, useDohertyGate, useSkeletonFloor } from "@/hooks/useDeferredLoading";
 import { UI_STILL_WORKING_MS } from "@/lib/animationUtils";
-import { scopesFor, type CallSite } from "./agentTask.js";
+import { elementPlace, scopesFor, type PickedSelection, type SourcePoint } from "./selection.js";
 import {
   DETACH_COPY,
   ORIGIN_SUSPENDED_COPY,
   UNTESTED_TOOLCHAIN_TITLE,
-  relativeTo,
   untestedToolchainDetail,
 } from "./copy.js";
 import { middleTruncatePath } from "@/utils/textParsing";
-import { SelectionTrail, trailFor, type PickedCrumb } from "./SelectionTrail.js";
+import { SelectionTrail, trailFor } from "./SelectionTrail.js";
 import { PickerIconButton } from "./PickerIconButton.js";
 
 const MODE_OPTIONS = [
@@ -81,7 +78,7 @@ const MODE_OPTIONS = [
  * preview, shared by the strip and the drawer and outliving both. The host
  * creates it when the picker is switched on, keeps it telling the controller
  * which worktree and page the preview is on, and disposes it when the picker,
- * the preview or the plugin ends — so a surface only reads it.
+ * or the preview ends — so a surface only reads it.
  */
 function useInspectorSession(props: DevPreviewToolSurfaceProps<InspectorController>): {
   controller: InspectorController | null;
@@ -127,7 +124,7 @@ function useSelectCrumb(
    * or focus is spent on a landing that has not been rendered.
    */
   landingReady = true
-): ((usedAt: CallSite) => void) | undefined {
+): ((usedAt: SourcePoint) => void) | undefined {
   // The generation the pick was made from; the answer advances it.
   const pending = useRef<{ generation: number; timer: ReturnType<typeof setTimeout> } | null>(null);
   const status = state.selection.status;
@@ -325,7 +322,7 @@ function StripStatus({
   /** The drawer is open beside the page and already names the source. */
   drawerShowing: boolean;
   /** Select a component from the trail; absent while that can't be done. */
-  selectCrumb: ((usedAt: CallSite) => void) | undefined;
+  selectCrumb: ((usedAt: SourcePoint) => void) | undefined;
 }) {
   const binding = state.binding;
   if (binding.status === "detached") {
@@ -361,38 +358,25 @@ function StripStatus({
 
   const selection = state.selection;
   if (selection.status === "ready") {
-    const node = selection.selection.nodes[0];
-    if (node) {
-      const { scopes, pickedIndex } = scopesFor(
-        selection.selection,
-        selection.scope === "component" ? selection.component : null,
-        selection.definitions
-      );
-      const picked = pickedIndex > 0 ? scopes[pickedIndex] : undefined;
+    const picked = selection.selection;
+    if (picked.observations.length > 0) {
+      const { scopes, pickedIndex } = scopesFor(picked);
+      const scope = pickedIndex > 0 ? scopes[pickedIndex] : undefined;
       // A component is located by the file it is written in, once that is
       // proven; never by the element it was reached through.
+      const place = scope ? null : elementPlace(picked);
       const location =
-        picked?.kind === "component"
-          ? picked.file
-          : node.definition
-            ? `${selection.file ?? node.definition.location.file}:${node.definition.location.line}`
+        scope && scope.kind !== "element"
+          ? scope.file
+          : place
+            ? `${place.path}${place.line === null ? "" : `:${place.line}`}`
             : null;
       return (
         <>
-          {/* The same trail the drawer draws, from the same function. The two
-              used to build their own and disagreed about where the chain starts
-              and whether `each` counts as a step. */}
-          {/* The strip has no header, so its trail ends at what is selected —
-              the component when a component was picked, the element otherwise.
-              It used to always end at the element, so a component selection was
-              presented as though an element were current. */}
-          <StripTrail
-            node={node}
-            picked={
-              picked?.kind === "component" ? { label: picked.label, usedAt: picked.usedAt } : null
-            }
-            onSelect={selectCrumb}
-          />
+          {/* The same trail the drawer draws, from the same function. The strip
+              has no header, so its trail ends at what is selected — the
+              component when a component was picked, the element otherwise. */}
+          <StripTrail selection={picked} onSelect={selectCrumb} />
           {pickedIndex > 0 ? (
             <Badge size="xs" tone="outline">
               Component
@@ -446,9 +430,7 @@ function StripStatus({
     // the drawer says the source could not be opened is two surfaces telling
     // two stories. The workspace's state is the strip's state too.
     const workspace = state.workspace;
-    // A page selection is sendable without one, so the choice isn't asked for.
-    const pagePicked = selection.status === "observed" && selection.page !== null;
-    if (workspace.status === "ambiguous" && !pagePicked) {
+    if (workspace.status === "ambiguous") {
       return <StripMessage icon={FolderTree}>Choose which app this preview shows</StripMessage>;
     }
     if (workspace.status === "failed") {
@@ -458,8 +440,8 @@ function StripStatus({
         </StripMessage>
       );
     }
-    // One sentence, whatever the project's Svelte version: what the picker
-    // offers is the same for every app it can trace.
+    // One sentence, whatever the framework: what the picker offers is the
+    // same for every page it can trace.
     return (
       <StripMessage icon={SquareDashedMousePointer}>
         Click an element to ask an agent about it
@@ -513,15 +495,13 @@ function StripMessage({
  * is its terminal crumb; every crumb above it selects that component.
  */
 function StripTrail({
-  node,
-  picked,
+  selection,
   onSelect,
 }: {
-  node: SelectedNode;
-  picked: PickedCrumb | null;
-  onSelect: ((usedAt: CallSite) => void) | undefined;
+  selection: PickedSelection;
+  onSelect: ((usedAt: SourcePoint) => void) | undefined;
 }) {
-  const { above, current } = trailFor(node, picked);
+  const { above, current } = trailFor(selection);
   return (
     <SelectionTrail
       crumbs={[...above, current]}
@@ -620,15 +600,11 @@ export function ElementPickerDrawer(props: DevPreviewToolSurfaceProps<InspectorC
           a 360px panel doing it; a disclosure would have let the user fold away
           the only thing here. `aria-label` on the composer keeps the grouping
           for assistive technology without drawing one. */}
-        {/* A page selection names no app, so choosing one is for tracing
-          Svelte elements, never a toll on sending what the page shows. */}
-        {(state.workspace.status === "ready" ||
-          state.workspace.status === "no-app" ||
-          state.workspace.status === "ambiguous") &&
-        (selection.status === "ready" ||
-          (selection.status === "observed" && selection.page !== null) ||
-          composer.draft.trim() !== "" ||
-          composer.deliveries.length > 0) ? (
+        {/* Choosing an app is for tracing source, never a toll on sending what
+          the page shows: a selection with nothing resolved is still sendable. */}
+        {selection.status === "ready" ||
+        composer.draft.trim() !== "" ||
+        composer.deliveries.length > 0 ? (
           <AgentComposer
             memoryKey={memoryKey}
             controller={controller}
@@ -647,18 +623,25 @@ function workspaceNeedsAttention(state: InspectorState): boolean {
   // Several apps keep the drawer open for the switcher: choosing the wrong one
   // must stay fixable before anything is selected, and after a switch clears it.
   //
-  // A ready workspace's only other subject is the support verdict, and a
+  // A ready workspace's only other subject is the toolchain verdict, and a
   // diagnostic nobody has to act on does not earn opening the drawer: it waits
-  // in Site source for something else to open it. It used to also raise whether
-  // direct editing and class completion were available here — neither of which
-  // the picker does, so their absence is not a gap the user can do anything
-  // about, and saying so was a warning about a road that isn't there.
-  if (workspace.status === "ready") return workspace.appRoots.length > 1;
-  // No SvelteKit app is the ordinary case for every other framework: the
-  // picker works there, and saying so is not worth opening the drawer for.
+  // in Site source for something else to open it.
+  if (workspace.status === "ready") return workspace.appPaths.length > 1;
   return (
-    workspace.status !== "idle" && workspace.status !== "opening" && workspace.status !== "no-app"
+    workspace.status === "ambiguous" ||
+    workspace.status === "failed" ||
+    workspace.status === "no-worktree"
   );
+}
+
+/** What the toolchain verdict says, when the app's layout has been read and it found something untested. */
+function untestedReasons(state: InspectorState): readonly string[] | null {
+  const project = state.project;
+  if (project?.status !== "described") return null;
+  const toolchain = project.context.toolchain;
+  return toolchain.verdict === "untested" && toolchain.reasons.length > 0
+    ? toolchain.reasons
+    : null;
 }
 
 function WorkspaceStatus({
@@ -672,7 +655,7 @@ function WorkspaceStatus({
 }) {
   const workspace = state.workspace;
   if (workspace.status === "idle" || workspace.status === "opening") return null;
-  if (workspace.status === "ready" && !readyHasSomethingToSay(workspace)) return null;
+  if (workspace.status === "ready" && !readyHasSomethingToSay(state)) return null;
   // One surface for everything about the project rather than the element, so
   // a setup problem and an element-level limitation never look like the same
   // kind of notice sat in the same column.
@@ -704,33 +687,17 @@ function SiteSourceBody({
           This preview isn't attached to a worktree, so elements can't be traced to source.
         </InspectorNotice>
       );
-    case "no-app":
-      // Two different answers wearing one status: a finished walk that found
-      // nothing, and a walk that stopped at its budget having found nothing
-      // yet. Only the first is evidence the app is not there.
-      return workspace.scanComplete ? (
-        <InspectorNotice tone="info" title="Source not traced" density="compact">
-          There's no SvelteKit app in this worktree to trace elements to, so a request carries the
-          element's selector, markup, styles and a screenshot instead.
-        </InspectorNotice>
-      ) : (
-        <InspectorNotice
-          tone="info"
-          title="Source not traced — the search stopped early"
-          density="compact"
-        >
-          This worktree was too large to search all of it, and no SvelteKit app turned up in the
-          part that was. A request carries the element's selector, markup, styles and a screenshot
-          instead.
-        </InspectorNotice>
-      );
     case "ambiguous":
       return (
         <div className="flex flex-col gap-1.5">
           <p className="text-xs text-text-secondary">
-            More than one SvelteKit app lives in this worktree. Choose the one this preview is
-            showing.
+            More than one app lives in this worktree. Choose the one this preview is showing.
           </p>
+          {workspace.scanComplete ? null : (
+            <p className="text-xs text-text-secondary">
+              The worktree was too large to search all of it, so an app may be missing here.
+            </p>
+          )}
           {/* 28px path rows with a chevron: a choice list, not three bordered
               boxes that read as empty inputs. Every path in the same face. */}
           <ul
@@ -739,21 +706,18 @@ function SiteSourceBody({
             className="-mx-2 flex flex-col divide-y divide-border-subtle"
             aria-label="Choose site source"
           >
-            {workspace.appRoots.map((appRoot) => {
-              const relative = relativeTo(worktreePath, appRoot);
+            {workspace.appPaths.map((appPath) => {
               return (
-                <li key={appRoot}>
+                <li key={appPath}>
                   <Tooltip>
                     <TooltipTrigger asChild>
                       <Button
                         variant="ghost"
                         size="sm"
                         className="h-7 w-full justify-between gap-2 px-2 font-mono text-xs font-normal"
-                        onClick={() => void controller.openWorkspace(appRoot)}
+                        onClick={() => void controller.openWorkspace(appPath)}
                       >
-                        <span className="min-w-0 truncate">
-                          {relative === "." ? "./" : relative}
-                        </span>
+                        <span className="min-w-0 truncate">{appPath === "." ? "./" : appPath}</span>
                         <ChevronRight
                           className="h-3.5 w-3.5 shrink-0 text-text-secondary"
                           aria-hidden="true"
@@ -761,7 +725,7 @@ function SiteSourceBody({
                       </Button>
                     </TooltipTrigger>
                     <TooltipContent side="bottom" align="start">
-                      {appRoot}
+                      {absoluteIn(worktreePath, appPath)}
                     </TooltipContent>
                   </Tooltip>
                 </li>
@@ -791,8 +755,8 @@ function SiteSourceBody({
         </InspectorNotice>
       );
     case "ready": {
-      if (!readyHasSomethingToSay(workspace)) return null;
-      const untested = workspace.support.level === "untested" ? workspace.support.reasons : null;
+      if (!readyHasSomethingToSay(state)) return null;
+      const untested = untestedReasons(state);
       return (
         <div className="flex flex-col gap-1">
           {untested ? (
@@ -806,11 +770,11 @@ function SiteSourceBody({
           ) : null}
           {/* Choosing the wrong app has to be recoverable from where the
               choice shows, not by closing the picker to be asked again. */}
-          {workspace.appRoots.length > 1 ? (
+          {workspace.appPaths.length > 1 ? (
             <PropertyRow label="App">
               <Select
-                value={workspace.appRoot}
-                onValueChange={(appRoot) => controller.switchApp(appRoot)}
+                value={workspace.appPath}
+                onValueChange={(appPath) => controller.switchApp(appPath)}
               >
                 <SelectTrigger
                   aria-label="Site source app"
@@ -819,19 +783,18 @@ function SiteSourceBody({
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent className="w-[var(--radix-select-trigger-width)]">
-                  {workspace.appRoots.map((appRoot) => {
-                    const relative = relativeTo(worktreePath, appRoot);
+                  {workspace.appPaths.map((appPath) => {
                     return (
                       <SelectItem
-                        key={appRoot}
-                        value={appRoot}
-                        title={appRoot}
+                        key={appPath}
+                        value={appPath}
+                        title={absoluteIn(worktreePath, appPath)}
                         className="font-mono"
                       >
                         {/* A monorepo path runs longer than a trigger-width
                             popup; without asking to truncate it is cut at the
                             edge with no ellipsis. */}
-                        <span className="block truncate">{relative === "." ? "./" : relative}</span>
+                        <span className="block truncate">{appPath === "." ? "./" : appPath}</span>
                       </SelectItem>
                     );
                   })}
@@ -846,8 +809,17 @@ function SiteSourceBody({
 }
 
 /** A ready workspace shows the section for the app switcher, or for the verdict. */
-function readyHasSomethingToSay(workspace: Extract<WorkspaceState, { status: "ready" }>): boolean {
-  return workspace.appRoots.length > 1 || workspace.support.level === "untested";
+function readyHasSomethingToSay(state: InspectorState): boolean {
+  const workspace = state.workspace;
+  if (workspace.status !== "ready") return false;
+  return workspace.appPaths.length > 1 || untestedReasons(state) !== null;
+}
+
+/** An app's directory as the user's machine spells it, for the tooltip that discloses it. */
+function absoluteIn(worktreePath: string | null, appPath: string): string {
+  if (!worktreePath) return appPath;
+  const root = worktreePath.replace(/\/+$/, "");
+  return appPath === "." ? root : `${root}/${appPath}`;
 }
 
 /**
@@ -964,23 +936,6 @@ function SelectionBody({ state }: { state: InspectorState }) {
     case "resolving":
       // The pinned header holds the skeleton; the body has nothing to add.
       return null;
-    case "observed":
-      return (
-        <section aria-label="Selected element" className="flex flex-col gap-1">
-          <p className="truncate text-sm text-text-primary">
-            {selection.nodeCount > 1
-              ? `${selection.node.label} and ${selection.nodeCount - 1} more`
-              : selection.node.label}
-          </p>
-          {selection.page !== null ? (
-            <p className="truncate font-mono text-3xs text-text-secondary">
-              {selection.page.nodes[0]?.context?.selector ?? "Source not traced"}
-            </p>
-          ) : (
-            <p className="text-xs text-text-secondary">This element couldn't be traced to source</p>
-          )}
-        </section>
-      );
     case "settling":
       // The click is kept and asked for again once the page has caught up;
       // only when that fails is it the user's to repeat.

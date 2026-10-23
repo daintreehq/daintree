@@ -4,10 +4,18 @@ import { CopyButton } from "@/components/ui/CopyButton";
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 import { actionService } from "@/services/ActionService";
 import { cn } from "@/lib/utils";
-import type { SelectedNode } from "./legacyBridge.js";
-import { worktreeRelative, type SelectionState } from "./inspectorController.js";
+import type { SelectionState } from "./inspectorController.js";
 import { InspectorNotice } from "./InspectorNotice.js";
-import { scopesFor, type CallSite } from "./agentTask.js";
+import type { Capability } from "@shared/elementPicker";
+import {
+  elementClaim,
+  elementPlace,
+  isTraced,
+  primaryObservation,
+  scopesFor,
+  type PickedSelection,
+  type SourcePoint,
+} from "./selection.js";
 import { STALE_COPY } from "./copy.js";
 import { middleTruncatePath } from "@/utils/textParsing";
 import { SelectionTrail, trailFor } from "./SelectionTrail.js";
@@ -35,45 +43,32 @@ export function SelectionIdentity({
   /** Needed only for Open in editor, which wants an absolute path. */
   worktreePath?: string | null;
   /** Select the component invoked at a call site the trail names. Read-only without it. */
-  onSelectComponent?: (usedAt: CallSite) => void;
+  onSelectComponent?: (usedAt: SourcePoint) => void;
 }) {
-  const nodes = selection.selection.nodes;
-  const node = nodes[0];
-  if (!node) return null;
-  const definition = node.definition;
+  const picked = selection.selection;
+  const observation = primaryObservation(picked);
+  if (!observation) return null;
   // While the page is being asked for the element again, "select again" would
   // be an instruction the next second usually withdraws.
   const stale = selection.stale && !selection.reproving ? STALE_COPY[selection.stale] : null;
   // A component picked on the page is named as the component, with the element
   // it was reached through left to the trail below.
-  const picked =
-    selection.scope === "component"
-      ? scopesFor(selection.selection, selection.component, selection.definitions)
-      : null;
-  const pickedScope = picked ? picked.scopes[picked.pickedIndex] : null;
+  const scopes = scopesFor(picked);
+  const pickedScope = picked.scope.kind === "component" ? scopes.scopes[scopes.pickedIndex] : null;
   const component = pickedScope?.kind === "component" ? pickedScope.label : null;
-  // Main answers component definitions relative to the app; everything this
-  // block shows, copies or opens is relative to the worktree.
-  const componentFile =
-    pickedScope?.kind === "component" && pickedScope.file
-      ? worktreeRelative(selection.selection.appRoot, worktreePath, pickedScope.file)
-      : null;
-  const file = component
-    ? componentFile
-    : definition
-      ? (selection.file ?? definition.location.file)
-      : null;
-  const line = component ? null : (definition?.location.line ?? null);
+  const place = component
+    ? pickedScope?.kind === "component" && pickedScope.file
+      ? { path: pickedScope.file, line: null }
+      : null
+    : elementPlace(picked, observation);
+  const file = place?.path ?? null;
+  const line = place?.line ?? null;
   const source = file ? `${file}${line === null ? "" : `:${line}`}` : null;
   const absolute = file ? absolutePath(worktreePath, file) : null;
   // The header names the selection, so the trail shows only what is above it.
-  const trail = trailFor(
-    node,
-    pickedScope?.kind === "component"
-      ? { label: pickedScope.label, usedAt: pickedScope.usedAt }
-      : null
-  );
+  const trail = trailFor(picked);
   const crumbs = trail.above;
+  const label = component ?? displayLabel(observation.label, observation.tagName);
 
   return (
     // Focusable so a crumb activated from the keyboard has somewhere to land
@@ -82,19 +77,16 @@ export function SelectionIdentity({
       {/* Row 1, 28px: what it is. */}
       <div className="flex h-7 min-w-0 items-center gap-2">
         <Badge size="sm" tone="neutral" className={component ? undefined : "font-mono"}>
-          {component ? "Component" : (definition?.tagName ?? tagFromLabel(node))}
+          {component ? "Component" : observation.tagName.toLowerCase()}
         </Badge>
-        <TruncatedTooltip content={component ?? node.label}>
-          <span className="min-w-0 truncate text-sm font-medium text-text-primary">
-            {component ?? displayLabel(node)}
-          </span>
+        <TruncatedTooltip content={component ?? observation.label}>
+          <span className="min-w-0 truncate text-sm font-medium text-text-primary">{label}</span>
         </TruncatedTooltip>
       </div>
 
       {/* Row 2, 24px: where it lives — and two things to do about that. The
-          path used to be inert text with a title. The filename and line are
-          a non-shrinking suffix so a narrow drawer contracts the directories,
-          never the one part the reader came for. */}
+          filename and line are a non-shrinking suffix so a narrow drawer
+          contracts the directories, never the one part the reader came for. */}
       <div className="flex h-6 min-w-0 items-center gap-1">
         {source && file ? (
           <>
@@ -123,13 +115,17 @@ export function SelectionIdentity({
               />
             ) : null}
           </>
+        ) : !isTraced(picked) && observation.context ? (
+          // Nothing to locate it by but the page's own account: the selector
+          // a request quotes, shown the way it will be read.
+          <TruncatedTooltip content={observation.context.selector}>
+            <span className="min-w-0 truncate font-mono text-2xs text-text-secondary">
+              {observation.context.selector}
+            </span>
+          </TruncatedTooltip>
         ) : (
           <p className="text-2xs text-text-secondary">
-            {component
-              ? selection.definitions === null
-                ? "Finding where it's written"
-                : "Couldn't find where it's written"
-              : "Source unknown"}
+            {component ? "Couldn't find where it's written" : "Source unknown"}
           </p>
         )}
       </div>
@@ -144,7 +140,7 @@ export function SelectionIdentity({
             <SelectionTrail
               crumbs={crumbs}
               currentIndex={crumbs.length}
-              currentLabel={component ?? displayLabel(node)}
+              currentLabel={label}
               selectionSite={trail.current.usedAt}
               onSelect={
                 onSelectComponent
@@ -157,7 +153,7 @@ export function SelectionIdentity({
             />
           </>
         ) : (
-          <span>at the top level</span>
+          <span>{chainNote(observation.capabilities.chain, isTraced(picked))}</span>
         )}
       </div>
 
@@ -173,7 +169,7 @@ export function SelectionIdentity({
         </InspectorNotice>
       ) : null}
 
-      <MappingNotice node={node} nodeCount={nodes.length} scope={selection.scope} />
+      <MappingNotice selection={picked} located={place !== null} />
     </section>
   );
 }
@@ -227,54 +223,79 @@ function absolutePath(worktreePath: string | null, file: string): string | null 
 }
 
 /**
+ * What an empty trail means, as far as the page said: an element with nothing
+ * around it, or a page that names no components at all. Never "top level" for
+ * a chain the page didn't report.
+ */
+function chainNote(chain: Capability, traced: boolean): string {
+  if (chain.state === "unavailable") return "The page doesn't name the components around it";
+  return traced ? "at the top level" : "No components reported";
+}
+
+/**
  * The element's own name without its tag prefix: the badge beside it already
  * carries the tag, and `button` `button "Start Pro"` said it twice.
  */
-function displayLabel(node: SelectedNode): string {
-  const tag = node.definition?.tagName;
-  const label = node.label || tag || "element";
-  if (!tag) return label;
+function displayLabel(label: string, tagName: string): string {
+  const tag = tagName.toLowerCase();
+  const shown = label || tag || "element";
   const prefix = `${tag} `;
-  return label.startsWith(prefix) ? label.slice(prefix.length) : label;
-}
-
-function tagFromLabel(node: SelectedNode): string {
-  return node.label.split(/\s/)[0] || "element";
+  return shown.startsWith(prefix) ? shown.slice(prefix.length) : shown;
 }
 
 function MappingNotice({
-  node,
-  nodeCount,
-  scope,
+  selection,
+  located,
 }: {
-  node: SelectedNode;
-  nodeCount: number;
-  scope: "element" | "component";
+  selection: PickedSelection;
+  /** The host holds a place for what the identity names. */
+  located: boolean;
 }) {
+  const observation = primaryObservation(selection);
+  const count = selection.observations.length;
   // A component with several root elements is one thing, not a multi-selection.
-  if (nodeCount > 1 && scope !== "component") {
+  if (count > 1 && selection.scope.kind !== "component") {
     return (
-      <InspectorNotice tone="info" title={`${nodeCount} elements selected`}>
+      <InspectorNotice tone="info" title={`${count} elements selected`}>
         A request names one element. Select a single one, or pick the component around them.
       </InspectorNotice>
     );
   }
-  if (node.mapping === "ambiguous") {
+  if (observation === undefined) return null;
+  if (elementClaim(selection, observation)?.result?.state === "ambiguous") {
     return (
       <InspectorNotice tone="warning" title="More than one source could own this element">
         A request about it can't say which file to change. Pick the component around it instead.
       </InspectorNotice>
     );
   }
-  if (node.mapping === "visual-only" || !node.definition) {
+  if (!isTraced(selection)) {
+    const chain = observation.capabilities.chain;
+    return (
+      <InspectorNotice tone="info" title="Not traced to source">
+        {chain.state === "unavailable" && chain.reason === "production-build"
+          ? "This page is a production build, which carries no source locations. "
+          : "The page reported no source for this element. "}
+        A request carries its selector, markup, styles and a screenshot instead.
+      </InspectorNotice>
+    );
+  }
+  if (selection.workspaceId === null) {
+    return (
+      <InspectorNotice tone="info" title="Source not checked">
+        The page said where this is written, but no source is open here to check it against, so a
+        request quotes the page's own report.
+      </InspectorNotice>
+    );
+  }
+  if (!located && selection.scope.kind !== "component") {
     return (
       <InspectorNotice tone="info" title="Not traced to source">
         {/* What we know is that no source location came back. Content drawn at
             runtime is the usual reason, offered as the likely one rather than
-            asserted — a missing mapping is not by itself evidence of {@html},
-            a canvas or a shadow root. */}
-        A request about it can't name a file or line. Content drawn at runtime — by {"{@html}"}, a
-        canvas or a shadow root — is the usual reason.
+            asserted — a missing location is not by itself evidence of it. */}
+        A request about it can't name a file or line. Content drawn at runtime — raw HTML, a canvas
+        or a shadow root — is the usual reason.
       </InspectorNotice>
     );
   }

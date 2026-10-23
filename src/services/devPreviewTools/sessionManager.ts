@@ -3,11 +3,12 @@ import { logError } from "@/utils/logger";
 import {
   getAvailableDevPreviewTool,
   getDevPreviewTool,
-  type DevPreviewTool,
   type DevPreviewToolContext,
+  type DevPreviewToolDefinition,
   type DevPreviewToolSession,
   type DevPreviewToolSessionContext,
 } from "@/registry/devPreviewToolRegistry";
+import { isBuiltInDevPreviewTool, resolveDevPreviewTool } from "./builtInTools";
 import { useDevPreviewToolStore } from "@/store/devPreviewToolStore";
 import { usePanelStore } from "@/store/panelStore";
 import { usePluginRuntimeStore } from "@/store/pluginRuntimeStore";
@@ -19,8 +20,8 @@ import { usePluginRuntimeStore } from "@/store/pluginRuntimeStore";
  * A tool's surfaces come and go for reasons that have nothing to do with the
  * tool: the preview's dock tab is hidden, a sibling is maximised, the grid
  * remounts. The events that really end a tool are different ones — the tool is
- * switched off, the preview is trashed or removed, its plugin is disabled — and
- * they are all the host's to see. So the session is created when
+ * switched off, the preview is trashed or removed, a plugin's tool loses its
+ * plugin — and they are all the host's to see. So the session is created when
  * `activeByPanel` names the tool, kept while that entry stands, and disposed
  * when it goes; surfaces only consume it.
  *
@@ -128,7 +129,7 @@ function disposeSession(toolId: string, session: DevPreviewToolSession): void {
   }
 }
 
-function createEntry(panelId: string, tool: DevPreviewTool): void {
+function createEntry(panelId: string, tool: DevPreviewToolDefinition): void {
   const createSession = tool.createSession;
   if (!createSession) return;
   const abort = new AbortController();
@@ -240,7 +241,7 @@ function reconcileOnce(): void {
   const active = useDevPreviewToolStore.getState().activeByPanel;
   for (const [panelId, toolId] of Object.entries(active)) {
     if (entries.has(panelId)) continue;
-    const tool = getAvailableDevPreviewTool(toolId);
+    const tool = resolveDevPreviewTool(toolId);
     if (tool?.createSession) createEntry(panelId, tool);
   }
 }
@@ -265,7 +266,8 @@ function enforceLifetime(): void {
   for (const [panelId, toolId] of Object.entries(active)) {
     const panel = panels.panelsById[panelId];
     const gone = panel === undefined || panel.location === "trash";
-    const tool = getDevPreviewTool(toolId);
+    // A preview's own tools have no plugin to lose.
+    const tool = isBuiltInDevPreviewTool(toolId) ? undefined : getDevPreviewTool(toolId);
     const disabled = tool !== undefined && disabledPluginIds.has(tool.pluginId);
     // A manifest refresh that no longer declares the tool takes its surfaces
     // away; the session must go with them, or a request it holds could still

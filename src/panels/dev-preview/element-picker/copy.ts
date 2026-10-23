@@ -1,6 +1,6 @@
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import type { SitePreviewDetachReason } from "@shared/types/ipc/sitePreview";
-import type { SelectionMismatch } from "./legacyBridge.js";
+import type { ElementPickerFramework } from "@shared/elementPicker";
 import type { StaleReason } from "./inspectorController.js";
 
 /**
@@ -30,7 +30,9 @@ export const DETACH_COPY: Record<SitePreviewDetachReason, string> = {
   "install-failed": "Couldn't start the inspector inside the preview",
   "debugger-detached": "Disconnected — DevTools may have taken over the preview",
   "guest-flooding": "Disconnected — the page sent too many invalid messages",
-  "owner-disabled": "Disconnected — the Element Picker plugin was switched off",
+  // A core binding has no owner to switch off; present because the reason is
+  // part of the wire contract.
+  "owner-disabled": "Disconnected from the dev preview",
   // Unreachable in practice: the view this would be addressed to is the one
   // that went away. Present because the reason is part of the wire contract.
   "subscriber-destroyed": "Disconnected from the dev preview",
@@ -60,19 +62,14 @@ export function relativeTo(root: string | null, path: string): string {
 }
 
 /**
- * What to show the user when a call to plugin main fails.
+ * What to show the user when a call to the source host fails.
  *
- * A schema mismatch — a plugin and a host that disagree about the wire, which
- * is what a partial upgrade looks like — arrives here as a `ZodError`, and its
- * `.message` is the raw issue array: `[{"code":"invalid_union","discriminator":
- * "status","options":["ready","ambiguous","no-app"], …}]`. That was being
- * rendered verbatim as the panel's explanation, wrapped across eight lines of
- * proportional type. It tells the user nothing they can act on and reads as a
- * crash.
- *
- * A validation failure is ours, not the user's project's, so it gets a sentence
- * that says so. Everything else is a real runtime error (EACCES, ENOENT) whose
- * message is genuinely useful, and keeps it.
+ * A schema mismatch — two halves that disagree about the wire, which is what a
+ * partial upgrade looks like — arrives here as a `ZodError`, whose `.message`
+ * is the raw issue array. Rendered verbatim it reads as a crash and tells the
+ * user nothing they can act on. A validation failure is ours, not the user's
+ * project's, so it gets a sentence that says so. Everything else is a real
+ * runtime error (EACCES, ENOENT) whose message is genuinely useful, and keeps it.
  */
 export function wireFailureMessage(error: unknown, fallback: string): string {
   if (isSchemaError(error)) {
@@ -82,9 +79,9 @@ export function wireFailureMessage(error: unknown, fallback: string): string {
 }
 
 /**
- * Structural, not `instanceof`: zod may be duplicated across the plugin and host
- * bundles, and a cross-realm `instanceof ZodError` is false exactly when this
- * guard matters most.
+ * Structural, not `instanceof`: zod may be duplicated across bundles, and a
+ * cross-realm `instanceof ZodError` is false exactly when this guard matters
+ * most.
  */
 function isSchemaError(error: unknown): boolean {
   if (typeof error !== "object" || error === null) return false;
@@ -95,26 +92,59 @@ function isSchemaError(error: unknown): boolean {
 
 /**
  * A location the page reported that the file contradicts, with no change to
- * the file to explain it. Said as what was seen — the page's claim and the
- * file's answer — because the one thing this must not be is "the page
- * changed": nothing did, and clicking again gives the same answer. The known
- * way here is a server-rendered page: Svelte's dev build tags an element with
- * a neighbour's location when a child component's root precedes it in the
- * same template (its `add_locations` counts that root while hydrating), and a
- * client-side navigation re-renders the page without that — which needs
- * Browse mode, since Inspect mode keeps the page's links from navigating.
+ * the file to explain it. Said as what was seen — the page's claim, and that
+ * the file doesn't hold it — because the one thing this must not be is "the
+ * page changed": nothing did, and clicking again gives the same answer. The
+ * known way here is a server-rendered page: Svelte's dev build tags an element
+ * with a neighbour's location when a child component's root precedes it in the
+ * same template, and a client-side navigation re-renders the page without that
+ * — which needs Browse mode, since Inspect mode keeps the page's links from
+ * navigating.
  */
-export function mismatchMessage(mismatch: SelectionMismatch): string {
-  const where = `${mismatch.file}:${mismatch.line}:${mismatch.column}`;
-  const found =
-    mismatch.found === null
-      ? "no element starts there"
-      : `the file has a <${mismatch.found}> there`;
+export function mismatchMessage(reported: { tagName: string; file: string; line: number }): string {
   return (
-    `The page places this <${mismatch.reported}> at ${where}, but ${found}. ` +
+    `The page places this <${reported.tagName.toLowerCase()}> at ${reported.file}:${reported.line}, but the file doesn't hold it there. ` +
     "A server-rendered page can report a neighbour's location — switch to Browse, " +
     "open this page from a link inside the preview, then select the element again."
   );
+}
+
+const FRAMEWORK_NAMES: Record<ElementPickerFramework, string> = {
+  svelte: "Svelte",
+  react: "React",
+  vue: "Vue",
+  angular: "Angular",
+  astro: "Astro",
+  preact: "Preact",
+  solid: "Solid",
+};
+
+/** The page's own verdict on itself, as the drawer says it; the detail goes under it. */
+export function runtimeIssueMessage(
+  code: string,
+  framework: ElementPickerFramework | undefined
+): string | null {
+  const name = framework ? FRAMEWORK_NAMES[framework] : null;
+  switch (code) {
+    case "not-dev-build":
+      return "This preview is a production build, so elements can't be traced to source";
+    case "metadata-unavailable":
+      return name
+        ? `This page carries no ${name} source locations. Run the app with its dev server to trace elements.`
+        : "This page carries no source locations. Run the app with its dev server to trace elements.";
+    case "overlay-blocked":
+      return "The page blocked the selection overlay";
+    case "capacity":
+      return "This was past a limit the Element Picker works within, so part of it was left out";
+    case "extractor-failed":
+      return name
+        ? `The Element Picker couldn't read this page's ${name} components, so elements can't be traced to source`
+        : "The Element Picker couldn't read this page's components, so elements can't be traced to source";
+    case "internal":
+      return "The inspector hit a problem inside the page";
+    default:
+      return null;
+  }
 }
 
 /**

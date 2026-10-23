@@ -168,6 +168,13 @@ export const CHANNEL_LEASE_POLICY = {
   "drive-lease:take-over": "free",
   "editor:get-config": "free",
   "editor:set-config": "free",
+  // Reads the worktree and watches what it read; nothing it does changes the project.
+  "element-picker:describe-project": "free",
+  "element-picker:resolve": "free",
+  "element-picker:source-changed": "free",
+  "element-picker:source-revisions": "free",
+  "element-picker:workspace-close": "free",
+  "element-picker:workspace-open": "free",
   "event-inspector:clear": "free",
   "event-inspector:event-batch": "free",
   "event-inspector:get-events": "free",

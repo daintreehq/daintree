@@ -97,6 +97,7 @@ import { registerPluginParityHandlers } from "./handlers/pluginParity.js";
 import { registerSettingsCopyHandlers } from "./handlers/settingsCopy.js";
 import { isEitherRemoteRoleSupported } from "../remote/buildGate.js";
 import { registerSitePreviewHandlers } from "./handlers/sitePreview.js";
+import { registerElementPickerHandlers } from "./handlers/elementPicker.js";
 import { registerWebviewEmulationHandlers } from "./handlers/webviewEmulation.js";
 import { registerDiagnosticsHandlers } from "./handlers/diagnostics.js";
 import { registerResourceProfileHandlers } from "./handlers/resourceProfile.js";
@@ -255,6 +256,7 @@ export function registerIpcHandlers(deps: HandlerDependencies): () => void {
     register(() => registerWebviewNavigationHandlers(deps));
     register(() => registerWebviewCaptureHandlers(deps));
     register(() => registerSitePreviewHandlers(deps));
+    register(() => registerElementPickerHandlers());
     register(() => registerWebviewEmulationHandlers(deps));
     register(() => registerDiagnosticsHandlers(deps));
     register(() => registerResourceProfileHandlers(deps));

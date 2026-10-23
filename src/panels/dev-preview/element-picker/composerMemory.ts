@@ -1,20 +1,15 @@
 import { useSyncExternalStore } from "react";
 import type { DeliveryState } from "@/services/agentRequests";
-import type { ComposerSubjectSelection } from "./pageSelection.js";
-import type { ComponentDefinitions, PickedComponent, SourceRevisions } from "./agentTask.js";
+import type { PickedSelection } from "./selection.js";
 
 export interface ComposerPin {
-  /** A traced selection, or — where there is no source to trace — the page's account of one. */
-  selection: ComposerSubjectSelection;
-  file: string | null;
-  /** Index into the scopes for this selection: the element, or a component around it. */
+  /**
+   * What the request is about. Everything it cites travels with it: where its
+   * components are written, and the revision every cited file had when read.
+   */
+  selection: PickedSelection;
+  /** Index into the scopes for this selection: the element, or a component or file around it. */
   scope: number;
-  /** The component picked on the page, when the selection was one. */
-  picked: PickedComponent | null;
-  /** Where the selection's components are written, as main last reported it. */
-  definitions: ComponentDefinitions;
-  /** Revisions of the files the request may cite, arriving with `definitions`. */
-  revisions: SourceRevisions;
 }
 
 export interface ComposerDelivery {

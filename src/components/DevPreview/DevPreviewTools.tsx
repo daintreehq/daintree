@@ -22,10 +22,11 @@ import {
 // which renders an empty unknown tag instead of the tool.
 import {
   useDevPreviewTools,
-  type DevPreviewTool,
   type DevPreviewToolContext,
+  type DevPreviewToolDefinition,
   type DevPreviewToolSurfaceProps,
 } from "@/registry/devPreviewToolRegistry";
+import { BUILT_IN_DEV_PREVIEW_TOOLS } from "@/services/devPreviewTools/builtInTools";
 
 export interface DevPreviewToolHostProps {
   panelId: string;
@@ -74,8 +75,17 @@ function useToolContext({
   };
 }
 
-function useActiveTool(panelId: string): DevPreviewTool | undefined {
-  const tools = useDevPreviewTools();
+/**
+ * Every tool this preview offers: its own first, which nothing gates, then
+ * those of the plugins that are enabled and declare them.
+ */
+function useHostedTools(): readonly DevPreviewToolDefinition[] {
+  const contributed = useDevPreviewTools();
+  return [...BUILT_IN_DEV_PREVIEW_TOOLS, ...contributed];
+}
+
+function useActiveTool(panelId: string): DevPreviewToolDefinition | undefined {
+  const tools = useHostedTools();
   const activeId = useDevPreviewToolStore((s) => s.activeByPanel[panelId]);
   return activeId ? tools.find((tool) => tool.id === activeId) : undefined;
 }
@@ -147,7 +157,7 @@ function focusVisible(element: Element | null | undefined): boolean {
  * worktrees never shows a button the old answer earned.
  */
 function useToolApplies(
-  tool: DevPreviewTool,
+  tool: DevPreviewToolDefinition,
   context: DevPreviewToolContext,
   active: boolean
 ): boolean {
@@ -185,7 +195,7 @@ function DevPreviewToolButton({
   active,
   onToggle,
 }: {
-  tool: DevPreviewTool;
+  tool: DevPreviewToolDefinition;
   context: DevPreviewToolContext;
   active: boolean;
   onToggle: () => void;
@@ -202,9 +212,9 @@ function DevPreviewToolButton({
   );
 }
 
-/** Toolbar toggles for every enabled tool that applies to this preview. */
+/** Toolbar toggles for every tool that applies to this preview. */
 export function DevPreviewToolButtons(props: DevPreviewToolHostProps) {
-  const tools = useDevPreviewTools();
+  const tools = useHostedTools();
   const context = useToolContext(props);
   const activeId = useDevPreviewToolStore((s) => s.activeByPanel[props.panelId]);
   const toggle = useDevPreviewToolStore((s) => s.toggle);
@@ -240,7 +250,7 @@ function DevPreviewToolSurface({
   context,
   chrome,
 }: {
-  tool: DevPreviewTool;
+  tool: DevPreviewToolDefinition;
   Surface: ComponentType<DevPreviewToolSurfaceProps>;
   role: string;
   handle: DevPreviewToolSessionHandle | null;
@@ -289,7 +299,10 @@ function DevPreviewToolSurface({
  * Whether the tool is ready to be shown: a tool that owns a session waits for
  * it, so no surface ever renders against a session that does not exist yet.
  */
-function ready(tool: DevPreviewTool, handle: DevPreviewToolSessionHandle | null): boolean {
+function ready(
+  tool: DevPreviewToolDefinition,
+  handle: DevPreviewToolSessionHandle | null
+): boolean {
   return tool.createSession === undefined || handle?.session != null;
 }
 
