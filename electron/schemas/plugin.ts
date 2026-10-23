@@ -24,6 +24,7 @@ import {
   PLUGIN_WORKTREE_SETUP_STEP_MIN_TIMEOUT_MS,
   PLUGIN_APPLICATION_DESTINATIONS,
   PLUGIN_APPLICATION_ARRANGEMENTS,
+  PLUGIN_APPLICATION_NAVIGATION_LIMITS,
   PROJECT_SURFACE_SLOT_CATALOGUE,
   PROJECT_SURFACE_SLOTS,
   SIDEBAR_VIEW_NAME_MAX_LENGTH,
@@ -98,6 +99,7 @@ import {
 import { KEY_ACTION_VALUES } from "../../shared/types/keymap.js";
 import { parse as parseWhenClause } from "../../shared/utils/whenClause/parser.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
+import { isReservedNavigationParamName } from "../../shared/utils/applicationNavigation.js";
 import type { ASTNode as WhenClauseNode } from "../../shared/utils/whenClause/types.js";
 import type {
   PluginManifest,
@@ -3263,6 +3265,89 @@ export const PluginApplicationTourRefSchema = z.strictObject({
   version: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER),
 });
 
+const NAVIGATION = PLUGIN_APPLICATION_NAVIGATION_LIMITS;
+
+const navigationParamFlags = {
+  required: z.boolean().optional(),
+  persist: z.boolean().optional(),
+};
+
+/** One declared section parameter: an identifier string, a safe integer or a flag (#14108). */
+export const PluginApplicationNavigationParamSchema = z.discriminatedUnion("type", [
+  z.strictObject({
+    type: z.literal("string"),
+    ...navigationParamFlags,
+    maxLength: z.number().int().min(1).max(NAVIGATION.maxStringLength).optional(),
+  }),
+  z.strictObject({ type: z.literal("integer"), ...navigationParamFlags }),
+  z.strictObject({ type: z.literal("boolean"), ...navigationParamFlags }),
+]);
+
+export const PluginApplicationSectionSchema = z.strictObject({
+  id: z.string().min(1).max(NAVIGATION.maxIdLength).regex(SAFE_ID_PATTERN),
+  title: z.string().trim().min(1).max(NAVIGATION.maxTitleLength),
+  params: z
+    .record(
+      z
+        .string()
+        .min(1)
+        .max(NAVIGATION.maxParamNameLength)
+        .regex(SAFE_ID_PATTERN)
+        .refine((name) => !isReservedNavigationParamName(name), {
+          message: "A parameter can't be named __proto__, constructor or prototype.",
+        }),
+      PluginApplicationNavigationParamSchema
+    )
+    .refine((params) => Object.keys(params).length <= NAVIGATION.maxParamsPerSection, {
+      message: `A section declares at most ${NAVIGATION.maxParamsPerSection} parameters.`,
+    })
+    .optional(),
+});
+
+/**
+ * `application.navigation` (#14108): the sections the application's views
+ * navigate between. Self-contained — a section names no view or command, so
+ * it is checked here rather than against the rest of the manifest.
+ */
+export const PluginApplicationNavigationSchema = z
+  .strictObject({
+    version: z.number().int().min(1).max(NAVIGATION.maxVersion),
+    defaultSectionId: z.string().min(1).max(NAVIGATION.maxIdLength).regex(SAFE_ID_PATTERN),
+    sections: z.array(PluginApplicationSectionSchema).min(1).max(NAVIGATION.maxSections),
+  })
+  .superRefine((navigation, ctx) => {
+    const seen = new Set<string>();
+    navigation.sections.forEach((section, index) => {
+      if (seen.has(section.id)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["sections", index, "id"],
+          message: `application.navigation declares section "${section.id}" twice.`,
+          params: { errorCode: "application_navigation_section_duplicate" },
+        });
+      }
+      seen.add(section.id);
+    });
+    const fallback = navigation.sections.find(
+      (section) => section.id === navigation.defaultSectionId
+    );
+    if (fallback === undefined) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["defaultSectionId"],
+        message: `application.navigation.defaultSectionId "${navigation.defaultSectionId}" matches no section.`,
+        params: { errorCode: "application_navigation_default_unknown" },
+      });
+    } else if (Object.values(fallback.params ?? {}).some((param) => param.required === true)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["defaultSectionId"],
+        message: `application.navigation.defaultSectionId "${fallback.id}" requires parameters — the default is where a location that no longer resolves lands, so it must open with none.`,
+        params: { errorCode: "application_navigation_default_requires_params" },
+      });
+    }
+  });
+
 /** Longest `application.name`, matching a sidebar view's name. */
 export const PLUGIN_APPLICATION_NAME_MAX = 64;
 
@@ -3288,6 +3373,7 @@ export const PluginApplicationSchema = z
       .max(AGENT_MCP_MAX_ENDPOINTS_PER_PLUGIN)
       .optional(),
     presentation: z.record(z.string(), z.enum(PRESENTATION_LEVELS)).optional(),
+    navigation: PluginApplicationNavigationSchema.optional(),
   })
   .superRefine((application, ctx) => {
     if (application.arrangement !== undefined && application.destination !== "home") {

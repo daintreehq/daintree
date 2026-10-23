@@ -136,6 +136,7 @@ const EXPECTED_STORE_IDS = [
   "forgeTokenCalloutStore",
   "pluginTerminalLinkPreferencesStore",
   "projectHomeStore",
+  "applicationNavigationStore",
   "sidebarViewStore",
 ] as const;
 
@@ -156,6 +157,7 @@ const EXPECTED_STORAGE_KEYS: Record<(typeof EXPECTED_STORE_IDS)[number], string>
   forgeTokenCalloutStore: "daintree-forge-token-callout",
   pluginTerminalLinkPreferencesStore: "daintree-plugin-terminal-links",
   projectHomeStore: "daintree-project-home",
+  applicationNavigationStore: "daintree-application-navigation",
   // One key per workspace; a test view has none.
   sidebarViewStore: "daintree-sidebar-view:default",
 };
@@ -181,6 +183,7 @@ describe("persisted store inventory", () => {
       import("../../forgeTokenCalloutStore"),
       import("../../pluginTerminalLinkPreferencesStore"),
       import("../../projectHomeStore"),
+      import("../../applicationNavigationStore"),
       import("../../sidebarViewStore"),
     ]);
   });

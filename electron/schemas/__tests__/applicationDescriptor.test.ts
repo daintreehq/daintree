@@ -220,3 +220,123 @@ describe("manifest application descriptor (#14097)", () => {
     ]);
   });
 });
+
+describe("manifest application navigation (#14108)", () => {
+  const NAVIGATION = {
+    version: 1,
+    defaultSectionId: "overview",
+    sections: [
+      { id: "overview", title: "Overview" },
+      {
+        id: "record",
+        title: "Record",
+        params: {
+          recordId: { type: "string", required: true, persist: true, maxLength: 64 },
+          tab: { type: "integer" },
+          pinned: { type: "boolean", persist: true },
+        },
+      },
+    ],
+  };
+
+  function withNavigation(navigation: unknown) {
+    return withApplication({ navigation });
+  }
+
+  it("accepts declared sections and parameters", () => {
+    const result = parse(withNavigation(NAVIGATION));
+    expect(issues(result)).toEqual([]);
+    expect(result.success && result.data.application?.navigation).toEqual(NAVIGATION);
+  });
+
+  it("rejects a default section the navigation does not declare", () => {
+    expect(issues(parse(withNavigation({ ...NAVIGATION, defaultSectionId: "inbox" })))).toEqual([
+      {
+        code: "application_navigation_default_unknown",
+        path: "application.navigation.defaultSectionId",
+      },
+    ]);
+  });
+
+  it("rejects a default section that requires parameters", () => {
+    expect(issues(parse(withNavigation({ ...NAVIGATION, defaultSectionId: "record" })))).toEqual([
+      {
+        code: "application_navigation_default_requires_params",
+        path: "application.navigation.defaultSectionId",
+      },
+    ]);
+  });
+
+  it("rejects a section declared twice", () => {
+    const sections = [...NAVIGATION.sections, { id: "overview", title: "Again" }];
+    expect(issues(parse(withNavigation({ ...NAVIGATION, sections })))).toEqual([
+      {
+        code: "application_navigation_section_duplicate",
+        path: "application.navigation.sections.2.id",
+      },
+    ]);
+  });
+
+  it("rejects a parameter type outside the primitive vocabulary", () => {
+    const sections = [{ id: "overview", title: "Overview", params: { blob: { type: "object" } } }];
+    expect(issues(parse(withNavigation({ ...NAVIGATION, sections })))).toEqual([
+      { code: expect.any(String), path: "application.navigation.sections.0.params.blob.type" },
+    ]);
+  });
+
+  it("rejects maxLength on a parameter that is not a string", () => {
+    const sections = [
+      { id: "overview", title: "Overview", params: { flag: { type: "boolean", maxLength: 4 } } },
+    ];
+    expect(issues(parse(withNavigation({ ...NAVIGATION, sections })))).toEqual([
+      { code: "unrecognized_keys", path: "application.navigation.sections.0.params.flag" },
+    ]);
+  });
+
+  it("rejects a string maxLength above the host's cap", () => {
+    const sections = [
+      { id: "overview", title: "Overview", params: { id: { type: "string", maxLength: 4096 } } },
+    ];
+    expect(issues(parse(withNavigation({ ...NAVIGATION, sections })))).toEqual([
+      { code: "too_big", path: "application.navigation.sections.0.params.id.maxLength" },
+    ]);
+  });
+
+  it.each(["__proto__", "constructor", "prototype"])("rejects a parameter named %s", (name) => {
+    const params = JSON.parse(`{"${name}":{"type":"string"}}`) as unknown;
+    const sections = [{ id: "overview", title: "Overview", params }];
+    const result = parse(withNavigation({ ...NAVIGATION, sections }));
+    // Refused, or (for `__proto__`, which the record parser never copies)
+    // dropped: either way the declaration can't carry it.
+    if (result.success) {
+      const declared = result.data.application?.navigation?.sections[0]?.params ?? {};
+      expect(Object.hasOwn(declared, name)).toBe(false);
+      expect(Object.getPrototypeOf(declared)).toBe(Object.prototype);
+    } else {
+      expect(result.success).toBe(false);
+    }
+  });
+
+  it("rejects more parameters than a section may declare", () => {
+    const params = Object.fromEntries(
+      Array.from({ length: 9 }, (_, i) => [`p${i}`, { type: "integer" }])
+    );
+    const sections = [{ id: "overview", title: "Overview", params }];
+    expect(issues(parse(withNavigation({ ...NAVIGATION, sections })))).toEqual([
+      { code: expect.any(String), path: "application.navigation.sections.0.params" },
+    ]);
+  });
+
+  it("rejects more sections than an application may declare", () => {
+    const sections = Array.from({ length: 25 }, (_, i) => ({ id: `s${i}`, title: `S${i}` }));
+    expect(
+      issues(parse(withNavigation({ ...NAVIGATION, defaultSectionId: "s0", sections })))
+    ).toEqual([{ code: "too_big", path: "application.navigation.sections" }]);
+  });
+
+  it("rejects an unknown navigation key, so no route or action can ride along", () => {
+    expect(issues(parse(withNavigation({ ...NAVIGATION, url: "daintree://x" })))).toEqual([
+      { code: "unrecognized_keys", path: "application.navigation" },
+    ]);
+  });
+});

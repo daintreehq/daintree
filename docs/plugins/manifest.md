@@ -291,6 +291,7 @@ Names a project plugin as its project's application and points at the parts of i
 | `firstWorkflow` | no | The bare id of a `contributes.commands` entry of kind `"command"` (`application_command_unknown`, `application_command_query`). |
 | `requiredTools` | no | `contributes.agentMcp` endpoint ids (`application_tool_unknown`), at most as many as a plugin may declare. Declaring one grants no access. |
 | `presentation` | no | Presentation features and levels the host offers (`application_presentation_unknown`, `application_presentation_level`). |
+| `navigation` | no | The application's sections, below. Self-contained: it names no view, command or URL. |
 
 The object is strict, so nothing undeclared rides along, and it holds no credentials, settings values or customer data.
 
@@ -303,6 +304,37 @@ At most one plugin in a project declares an application. Cooperating plugins con
 - `replaced` — the owner is loaded, but another plugin holds the project Home it opens on.
 
 Anything but `active` means the standard workspace. The descriptor and its state are a contract for the host's own application features to build on: they change nothing the workspace draws today, where the contributions it names behave exactly as they do without it, and resolving the application writes nothing. Its defaults will never outrank the user: an answer the user gave about Home, a surface or the project's presentation profile stands.
+
+#### `application.navigation`
+
+The sections the application's views navigate between. The host keeps one location and history per project for them and hands it to every view of the application as [`PanelViewProps.navigation`](./views.md#application-navigation), so the sidebar view, the Home and the panels select the same thing.
+
+```json
+"navigation": {
+  "version": 1,
+  "defaultSectionId": "accounts",
+  "sections": [
+    { "id": "accounts", "title": "Accounts" },
+    {
+      "id": "account",
+      "title": "Account",
+      "params": {
+        "accountId": { "type": "string", "required": true, "persist": true, "maxLength": 64 },
+        "page": { "type": "integer" }
+      }
+    }
+  ]
+}
+```
+
+| Field | Required | Meaning |
+| --- | --- | --- |
+| `version` | yes | A positive integer. Raising it drops every saved location and history, so a renamed parameter never restores with its old meaning. |
+| `defaultSectionId` | yes | A declared section that requires no parameters (`application_navigation_default_unknown`, `application_navigation_default_requires_params`): where navigation starts, and where a location that no longer resolves lands. |
+| `sections` | yes | 1-24 sections with unique ids (`application_navigation_section_duplicate`). `title` is 1-64 characters. |
+| `sections[].params` | no | At most 8 parameters. `type` is `"string"`, `"integer"` (a safe integer) or `"boolean"`; `maxLength` (strings only, default 64, at most 128); `required` and `persist` default to `false`. |
+
+Parameters are identifiers, not content. A string holds only `A-Z a-z 0-9 . _ -`, so free text, URLs and tokens can't be expressed, and a location carrying anything undeclared is refused. Only parameters marked `persist` are written to disk; the rest last for the window's session, and an entry whose required parameter isn't persisted restores as the default section. Navigation is local to the project's window: there is no `daintree://` route to a section and it runs no action.
 
 ### `remote`
 

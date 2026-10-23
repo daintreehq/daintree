@@ -45,6 +45,30 @@ Two windows showing the same project share a bag; the last write to a key wins. 
 
 **Unsaved work.** `setHasUnsavedChanges(true)` says the view holds work its `persistState` bag would not bring back. While any view in a project's renderer says so, automatic Sleep leaves the project alone and cache eviction skips its renderer. Under memory pressure eviction takes it anyway, last of all, and the unsaved work is lost; so is it in a crash. Whatever you persisted comes back either way. So the dependable form keeps its draft in `persistState` (or `usePersistentViewState`) as the user types and clears the flag, keeping the flag for work that genuinely can't be persisted. The flag belongs to the attempt that set it: a setter held past a reload or an unmount can't clear the flag a newer attempt raised.
 
+## Application navigation
+
+A project application that declares [`application.navigation`](./manifest.md#applicationnavigation) gets one shared location for it (#14108). Every view of the application in the project — its sidebar view, its Home, its panels, a project-scope settings section or popover — receives the same `navigation` prop, so selection made in one is selection in all. Views of any other plugin, and a user-scope settings section, get none.
+
+```tsx
+export default function Accounts({ navigation }: PanelViewProps) {
+  if (!navigation) return <AccountList />;
+  const selected =
+    navigation.location.sectionId === "account" ? navigation.location.params.accountId : undefined;
+  return (
+    <AccountList
+      selected={selected}
+      onSelect={(accountId) => navigation.navigate({ sectionId: "account", params: { accountId } })}
+    />
+  );
+}
+```
+
+`location` is live: when any view of the application moves it, every view re-renders with the new object, without remounting, so it keeps its own state, `initialArgs` and `disposeSignal`. Key effects on `location`; it is a new object only when the location changes. `back()`, `forward()`, `canGoBack` and `canGoForward` walk one history per project, capped at 30 entries.
+
+`navigate` returns a result and never throws. It refuses, and moves nothing, for a section or parameter the manifest doesn't declare, a value outside its declared type or bounds, a call held past the view attempt that received it (`stale`), and while any view of the application reports `setHasUnsavedChanges(true)` (`unsaved`) — a pending form is never replaced under the user. Persist the draft or drop it, clear the flag, and navigate again. By default a move also brings the application's destination forward (its own Home, or the grid); pass `reveal: false` to change only the selection, and `replace: true` to swap the current history entry instead of adding one.
+
+The location is restored per project after a Home/Grid switch, a remount, an evicted renderer or a restart. Only parameters declared `persist` are written to disk; the rest last for the window's session. A saved location that no longer resolves — a removed section, a parameter that no longer validates, a raised `navigation.version`, another plugin owning the application — restores as the default section, and while the application isn't in force the views get no `navigation` and the saved location is left as it was.
+
 ## A settings section
 
 A view with `location: "settings"` is your plugin's custom settings section, for what the generated [settings fields](./contribution-points.md#settings-schema--shipped) can't express — a sign-in, a list or a table of pairs (the kit's `ListEditor` and `KeyValueEditor`), a connection test. Declare at most one, with an `id` no panel uses:

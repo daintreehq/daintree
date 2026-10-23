@@ -38,7 +38,9 @@ import {
   PanelContributionObjectSchema,
   PanelMenuItemSchema,
   PanelToolbarItemSchema,
+  PluginApplicationNavigationSchema,
   PluginApplicationSchema,
+  PluginApplicationSectionSchema,
   PluginApplicationTourRefSchema,
   ProjectTemplateContributionSchema,
   ProcessToolContributionSchema,
@@ -174,6 +176,10 @@ const PLUGIN_SEARCH_SERVICE = "electron/services/plugin/PluginSearchService.ts";
 const QUICK_SWITCHER = "src/components/QuickSwitcher/QuickSwitcher.tsx";
 const OPEN_PLUGIN_SEARCH_HIT = "src/components/QuickSwitcher/openPluginSearchHit.ts";
 const PROJECT_APPLICATION = "shared/utils/projectApplication.ts";
+const APPLICATION_NAVIGATION = "shared/utils/applicationNavigation.ts";
+const APPLICATION_NAVIGATION_SERVICE = "src/services/plugin/applicationNavigation.ts";
+const APPLICATION_NAVIGATION_STORE = "src/store/applicationNavigationStore.ts";
+const USE_APPLICATION_NAVIGATION = "src/hooks/useApplicationNavigation.ts";
 const PROJECT_PLUGIN_CONTROLLER = "electron/services/plugin/ProjectPluginController.ts";
 const PROJECT_PLUGIN_STORE = "src/store/projectPluginStore.ts";
 const PROJECT_HOME_STORE = "src/store/projectHomeStore.ts";
@@ -253,6 +259,8 @@ const SWEPT_SCHEMAS = {
   // empty-manifest parse and is swept here by name.
   application: PluginApplicationSchema,
   "application.welcomeTour": PluginApplicationTourRefSchema,
+  "application.navigation": PluginApplicationNavigationSchema,
+  "application.navigation.sections": PluginApplicationSectionSchema,
 } as const;
 
 type SweptGroup = keyof typeof SWEPT_SCHEMAS;
@@ -421,6 +429,14 @@ type FieldConsumerCoverage = {
   application: Record<keyof z.infer<typeof PluginApplicationSchema>, ConsumerDescriptor>;
   "application.welcomeTour": Record<
     keyof z.infer<typeof PluginApplicationTourRefSchema>,
+    ConsumerDescriptor
+  >;
+  "application.navigation": Record<
+    keyof z.infer<typeof PluginApplicationNavigationSchema>,
+    ConsumerDescriptor
+  >;
+  "application.navigation.sections": Record<
+    keyof z.infer<typeof PluginApplicationSectionSchema>,
     ConsumerDescriptor
   >;
   "toolbarButtons.popover": Record<
@@ -2905,6 +2921,14 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
       ],
       note: "Checked against the host's closed presentation vocabulary and carried in the resolved state; a suggestion with no authority, never written over the user's profile.",
     },
+    navigation: {
+      mode: "verbatim",
+      consumers: [
+        { file: APPLICATION_NAVIGATION_SERVICE, symbol: "applicationNavigationContext" },
+        { file: USE_APPLICATION_NAVIGATION, symbol: "useApplicationNavigation" },
+      ],
+      note: "Puts the shared location in force for the application's views while the application is active; absent, no view is handed navigation.",
+    },
   },
   "application.welcomeTour": {
     id: {
@@ -2921,6 +2945,59 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
       mode: "intentional-metadata",
       consumers: [{ file: PLUGIN_SCHEMA, symbol: "PluginApplicationTourRefSchema" }],
       note: "The welcome revision, carried in the resolved state; the tour's own playback and progress are unchanged.",
+    },
+  },
+  "application.navigation": {
+    version: {
+      mode: "verbatim",
+      consumers: [
+        {
+          file: APPLICATION_NAVIGATION_STORE,
+          symbol: "selectApplicationNavigationRecord (version)",
+        },
+      ],
+      note: "Stamps the saved location; a raised version reads the old record as absent, so it restores as the default section.",
+    },
+    defaultSectionId: {
+      mode: "verbatim",
+      consumers: [
+        { file: APPLICATION_NAVIGATION, symbol: "defaultNavigationLocation" },
+        {
+          file: PLUGIN_SCHEMA,
+          symbol: "PluginApplicationNavigationSchema (application_navigation_default_unknown)",
+        },
+      ],
+      note: "Where navigation starts and where a location that no longer resolves lands; must name a section that requires no parameters.",
+    },
+    sections: {
+      mode: "verbatim",
+      consumers: [{ file: APPLICATION_NAVIGATION, symbol: "decodeNavigationLocation" }],
+      note: "The only destinations a location may name; an intent or a restored entry naming any other is refused or dropped.",
+    },
+  },
+  "application.navigation.sections": {
+    id: {
+      mode: "verbatim",
+      consumers: [{ file: APPLICATION_NAVIGATION, symbol: "decodeNavigationLocation (sectionId)" }],
+      note: "The name a location and an intent use for the section; unique within the application.",
+    },
+    title: {
+      mode: "verbatim",
+      consumers: [
+        {
+          file: APPLICATION_NAVIGATION_SERVICE,
+          symbol: "applicationNavigationSnapshot (sections)",
+        },
+      ],
+      note: "Handed to the application's views with the section ids, for the navigation they draw.",
+    },
+    params: {
+      mode: "verbatim",
+      consumers: [
+        { file: APPLICATION_NAVIGATION, symbol: "decodeNavigationLocation (admitsValue)" },
+        { file: APPLICATION_NAVIGATION, symbol: "persistableNavigationHistory (persist)" },
+      ],
+      note: "The only parameters a location may carry, each held to its type and bounds; only those marked persist are written to disk.",
     },
   },
 } satisfies FieldConsumerCoverage;

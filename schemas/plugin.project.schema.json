@@ -188,6 +188,129 @@
               "hidden"
             ]
           }
+        },
+        "navigation": {
+          "type": "object",
+          "properties": {
+            "version": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1000000
+            },
+            "defaultSectionId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64,
+              "pattern": "^[a-zA-Z0-9._-]+$"
+            },
+            "sections": {
+              "minItems": 1,
+              "maxItems": 24,
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 64,
+                    "pattern": "^[a-zA-Z0-9._-]+$"
+                  },
+                  "title": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 64
+                  },
+                  "params": {
+                    "type": "object",
+                    "propertyNames": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 32,
+                      "pattern": "^[a-zA-Z0-9._-]+$"
+                    },
+                    "additionalProperties": {
+                      "oneOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "type": {
+                              "type": "string",
+                              "const": "string"
+                            },
+                            "required": {
+                              "type": "boolean"
+                            },
+                            "persist": {
+                              "type": "boolean"
+                            },
+                            "maxLength": {
+                              "type": "integer",
+                              "minimum": 1,
+                              "maximum": 128
+                            }
+                          },
+                          "required": [
+                            "type"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "type": {
+                              "type": "string",
+                              "const": "integer"
+                            },
+                            "required": {
+                              "type": "boolean"
+                            },
+                            "persist": {
+                              "type": "boolean"
+                            }
+                          },
+                          "required": [
+                            "type"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "type": {
+                              "type": "string",
+                              "const": "boolean"
+                            },
+                            "required": {
+                              "type": "boolean"
+                            },
+                            "persist": {
+                              "type": "boolean"
+                            }
+                          },
+                          "required": [
+                            "type"
+                          ],
+                          "additionalProperties": false
+                        }
+                      ]
+                    }
+                  }
+                },
+                "required": [
+                  "id",
+                  "title"
+                ],
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": [
+            "version",
+            "defaultSectionId",
+            "sections"
+          ],
+          "additionalProperties": false
         }
       },
       "required": [
