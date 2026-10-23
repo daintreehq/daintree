@@ -938,7 +938,11 @@ export function ProjectResourceBadge({
         <PopoverContent
           side="top"
           align="start"
-          aria-labelledby="resource-usage-title"
+          aria-labelledby={
+            pluginTasks.length > 0
+              ? "plugin-tasks-title resource-usage-title"
+              : "resource-usage-title"
+          }
           // Focus the popover itself, not its first control. Radix's default
           // landed on the keep-awake row and painted a ring on a settings link
           // nobody had reached for; leaving focus on the readout instead strands
@@ -961,8 +965,12 @@ export function ProjectResourceBadge({
               cancelled is the most actionable thing here. */}
             {pluginTasks.length > 0 && (
               <div className="space-y-1.5 border-b border-divider pb-2">
-                <SectionLabel>Plugin tasks</SectionLabel>
-                <PluginTaskList tasks={pluginTasks} />
+                <SectionLabel id="plugin-tasks-title">Plugin tasks</SectionLabel>
+                {/* Up to 16 tasks a plugin, several plugins: the list scrolls
+                  rather than pushing the popover past the window. */}
+                <div className="max-h-60 overflow-y-auto">
+                  <PluginTaskList tasks={pluginTasks} />
+                </div>
               </div>
             )}
             <div className="space-y-1.5">

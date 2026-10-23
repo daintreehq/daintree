@@ -13,6 +13,7 @@ vi.mock("../../../utils/logger.js", () => ({
 }));
 
 import { PluginDevWorkerMainBridge } from "../PluginDevWorkerMainBridge.js";
+import { inertPluginTaskHandle } from "../../../../shared/utils/pluginTasks.js";
 import { PluginDevWorkerHostProxy } from "../pluginDevWorkerHostProxy.js";
 import { PluginInvokeTimeoutError, runWithInvokeDeadline } from "../pluginInvokeDeadline.js";
 import type { PluginIpcContext } from "../../../../shared/types/plugin.js";
@@ -568,13 +569,38 @@ describe("PluginDevWorkerMainBridge", () => {
 
     it("says so when the host handed back an inert handle", async () => {
       const { host, workerHost } = makeBridge();
-      const { controller, handle } = fakeTask();
-      controller.abort();
+      const handle = inertPluginTaskHandle();
       host.tasks.start.mockResolvedValueOnce(handle);
       expect(await start(workerHost)).toMatchObject({
         ok: true,
-        result: { id: "t-1", inert: true },
+        result: { id: handle.id, inert: true },
       });
+      expect(cancelEvents(workerHost)).toEqual([]);
+    });
+
+    it("keeps a real task cancelled before start answered, and tells the worker first", async () => {
+      const { host, workerHost } = makeBridge();
+      const { controller, handle } = fakeTask();
+      controller.abort();
+      host.tasks.start.mockResolvedValueOnce(handle);
+
+      const result = await start(workerHost);
+      expect(result).toMatchObject({ ok: true, result: { id: "t-1" } });
+      expect(result.result).not.toHaveProperty("inert");
+      const cancelAt = workerHost.sent.findIndex(
+        (m) => m.type === "subscription-event" && m.subscriptionId === "s-cancel"
+      );
+      expect(cancelAt).toBeGreaterThanOrEqual(0);
+      expect(cancelAt).toBeLessThan(workerHost.sent.indexOf(result));
+
+      workerHost.emit("worker-message", {
+        type: "host-call",
+        requestId: "c-tf",
+        method: "tasks.finish",
+        params: { taskId: "t-1", result: { outcome: "cancelled" } },
+      });
+      await flush();
+      expect(handle.finish).toHaveBeenCalledWith({ outcome: "cancelled" });
     });
 
     it("stops relaying cancels once the worker generation is retired", async () => {

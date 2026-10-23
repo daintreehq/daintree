@@ -23,6 +23,14 @@ export interface PluginTaskRecord {
   readonly retry: { actionId: string; args?: Record<string, unknown> } | null;
 }
 
+/**
+ * What an interrupted record holds in place of its task's controller: already
+ * aborted, and never handed to anyone, so a listener the plugin left on the
+ * real signal isn't kept alive by a row waiting to be dismissed.
+ */
+const STOPPED = new AbortController();
+STOPPED.abort();
+
 export interface PluginTaskStartInput {
   pluginName: string;
   title: string;
@@ -178,7 +186,7 @@ export class PluginTaskRegistry {
       const snapshot: PluginTaskSnapshot = { ...record.snapshot, state: "interrupted" };
       // A fresh record: the old one stays with the handles that held it, and
       // stops being the registry's, so nothing they do lands here again.
-      byId.set(taskId, { snapshot, controller: record.controller, retry: null });
+      byId.set(taskId, { snapshot, controller: STOPPED, retry: null });
       stopping.push(record.controller);
     }
     if (stopping.length === 0) return;

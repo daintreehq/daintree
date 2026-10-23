@@ -70,7 +70,13 @@ function vetRetryArgs(args: unknown): Vetted<Record<string, unknown>> {
     };
   }
   // A copy, so nothing the plugin still holds can change what a later Retry runs.
-  return { ok: true, value: JSON.parse(json) as Record<string, unknown> };
+  // Checked again after the round trip: a `toJSON` can turn an object into
+  // something else, and notify would then refuse the Retry the task needs.
+  const copy: unknown = JSON.parse(json);
+  if (!isPlainObject(copy)) {
+    return { ok: false, error: "retry.args must serialize to a JSON object" };
+  }
+  return { ok: true, value: copy as Record<string, unknown> };
 }
 
 /**
@@ -228,6 +234,8 @@ export function mergePluginTaskProgress(
   return older === undefined ? { ...newer } : { ...older, ...newer };
 }
 
+const inertHandles = new WeakSet<PluginTaskHandle>();
+
 /**
  * The handle `tasks.start` gives a plugin that is no longer loaded: already
  * aborted, and every method a no-op, so a timer firing after unload neither
@@ -236,10 +244,21 @@ export function mergePluginTaskProgress(
 export function inertPluginTaskHandle(): PluginTaskHandle {
   const controller = new AbortController();
   controller.abort();
-  return {
+  const handle: PluginTaskHandle = {
     id: globalThis.crypto.randomUUID(),
     signal: controller.signal,
     report: () => {},
     finish: () => Promise.resolve(),
   };
+  inertHandles.add(handle);
+  return handle;
+}
+
+/**
+ * Whether a handle is {@link inertPluginTaskHandle}'s. An aborted signal alone
+ * doesn't say: a real task the user cancelled at once is aborted too, and
+ * still needs its finish.
+ */
+export function isInertPluginTaskHandle(handle: PluginTaskHandle): boolean {
+  return inertHandles.has(handle);
 }

@@ -7920,6 +7920,8 @@ export class PluginService {
       runUnloadStep(pluginId, "clearPanelActivity", () => this.emitPanelActivity(pluginId));
     }
 
+    // After the plugin left `plugins`, so an abort listener that starts again
+    // gets an inert handle instead of a task nothing will ever finish.
     runUnloadStep(pluginId, "interruptTasks", () => this.pluginTasks.interrupt(pluginId));
 
     if (this.pluginContextKeys.delete(pluginId)) {

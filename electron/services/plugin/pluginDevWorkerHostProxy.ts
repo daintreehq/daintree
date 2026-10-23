@@ -239,6 +239,12 @@ export class PluginDevWorkerHostProxy {
    * from that late answer, so it is killed when it arrives.
    */
   private readonly abandonedSpawns = new Set<string>();
+  /**
+   * `tasks.start` calls this worker gave up on (#13819), for the same reason:
+   * a late answer names a task nobody here can finish, so it is ended quietly
+   * when it arrives rather than left running against the plugin's cap.
+   */
+  private readonly abandonedTaskStarts = new Set<string>();
   private readonly actionHandlers = new Map<string, ActionHandler>();
   private readonly ipcHandlers = new Map<string, RegisteredHandler>();
   private readonly subscriptions = new Map<string, (payload: unknown) => void>();
@@ -332,6 +338,7 @@ export class PluginDevWorkerHostProxy {
     }
     this.pendingCalls.clear();
     this.abandonedSpawns.clear();
+    this.abandonedTaskStarts.clear();
     this.actionHandlers.clear();
     this.ipcHandlers.clear();
     this.subscriptions.clear();
@@ -371,6 +378,19 @@ export class PluginDevWorkerHostProxy {
       case "host-result": {
         const pending = this.pendingCalls.get(msg.requestId);
         if (!pending) {
+          if (this.abandonedTaskStarts.delete(msg.requestId) && msg.ok) {
+            const late: unknown = msg.result;
+            const taskId =
+              typeof late === "object" && late !== null ? Reflect.get(late, "id") : undefined;
+            const inert =
+              typeof late === "object" && late !== null && Reflect.get(late, "inert") === true;
+            if (typeof taskId === "string" && !inert) {
+              const params: TaskFinishParams = { taskId, result: { outcome: "cancelled" } };
+              this.call<void>("tasks.finish", params).catch(() => {
+                // best-effort — the bridge forgets its handles at teardown regardless
+              });
+            }
+          }
           if (this.abandonedSpawns.delete(msg.requestId) && msg.ok) {
             const id = (msg.result as { id?: unknown } | undefined)?.id;
             if (typeof id === "string") {
@@ -866,6 +886,7 @@ export class PluginDevWorkerHostProxy {
           this.pendingCalls.delete(requestId);
           cleanup();
           if (method === "process.spawn") this.abandonedSpawns.add(requestId);
+          if (method === "tasks.start") this.abandonedTaskStarts.add(requestId);
           try {
             this.post({ type: "host-cancel", requestId });
           } catch {

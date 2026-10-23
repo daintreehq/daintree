@@ -7,6 +7,7 @@ import {
 } from "../../types/plugin.js";
 import {
   inertPluginTaskHandle,
+  isInertPluginTaskHandle,
   mergePluginTaskProgress,
   validatePluginTaskProgress,
   validatePluginTaskResult,
@@ -73,6 +74,13 @@ describe("validatePluginTaskStart", () => {
     const result = validatePluginTaskStart(options);
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error).toMatch(error);
+  });
+
+  it("refuses retry args that serialize to something other than an object", () => {
+    const args = { toJSON: () => [1, 2] };
+    const result = validatePluginTaskStart({ title: "T", retry: { actionId: "a.b", args } });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error).toMatch(/serialize to a JSON object/);
   });
 
   it("refuses retry args too large or not serializable", () => {
@@ -163,9 +171,20 @@ describe("mergePluginTaskProgress", () => {
 });
 
 describe("inertPluginTaskHandle", () => {
-  it("is already aborted and does nothing", async () => {
+  it("is already aborted, does nothing, and is told apart from an aborted real handle", async () => {
     const handle = inertPluginTaskHandle();
     expect(handle.signal.aborted).toBe(true);
+    expect(isInertPluginTaskHandle(handle)).toBe(true);
+    const controller = new AbortController();
+    controller.abort();
+    expect(
+      isInertPluginTaskHandle({
+        id: "real",
+        signal: controller.signal,
+        report: () => {},
+        finish: () => Promise.resolve(),
+      })
+    ).toBe(false);
     expect(() => handle.report({ fraction: 2 })).not.toThrow();
     await expect(handle.finish({ outcome: "succeeded" })).resolves.toBeUndefined();
   });

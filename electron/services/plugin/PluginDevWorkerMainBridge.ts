@@ -15,6 +15,7 @@
 
 import { createLogger } from "../../utils/logger.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
+import { isInertPluginTaskHandle } from "../../../shared/utils/pluginTasks.js";
 import { AGENT_MCP_MAX_RESULT_BYTES } from "../../../shared/types/plugin.js";
 import type {
   PluginHostApi,
@@ -1202,9 +1203,10 @@ export class PluginDevWorkerMainBridge {
         const p = params as TaskStartParams;
         const generation = this.reloadGeneration;
         const handle = await this.host.tasks.start(p.options);
-        // A live task is never already stopped when start hands it back; an
-        // aborted one is the inert handle of a plugin that has unloaded.
-        if (handle.signal.aborted) return { id: handle.id, inert: true } satisfies TaskStartResult;
+        // The plugin had unloaded: there is no task to relay or finish.
+        if (isInertPluginTaskHandle(handle)) {
+          return { id: handle.id, inert: true } satisfies TaskStartResult;
+        }
         // Disposed or reloaded while starting, or the worker gave up on the call
         // (a cancel or its deadline) and will never learn this id: nobody can
         // finish the task, so it ends here, quietly.
@@ -1220,7 +1222,10 @@ export class PluginDevWorkerMainBridge {
             payload: null,
           });
         };
-        handle.signal.addEventListener("abort", relayCancel, { once: true });
+        // Cancelled before start even answered: the worker registered its
+        // subscription before the call, so the event still lands first.
+        if (handle.signal.aborted) relayCancel();
+        else handle.signal.addEventListener("abort", relayCancel, { once: true });
         this.taskHandles.set(handle.id, {
           handle,
           detach: () => handle.signal.removeEventListener("abort", relayCancel),

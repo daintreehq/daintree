@@ -3081,13 +3081,29 @@ describe("PluginDevWorkerHostProxy tasks (#13819)", () => {
       error: 'Plugin "acme.demo" tasks.start: already has 16 unfinished tasks',
     });
     await expect(started).rejects.toThrow(/unfinished tasks/);
-    expect(() =>
-      proxy.handleMessage({
-        type: "subscription-event",
-        subscriptionId: call.params.subscriptionId,
-        payload: null,
-      })
-    ).not.toThrow();
+    const subscriptions = Reflect.get(proxy, "subscriptions") as Map<string, unknown>;
+    expect(subscriptions.has(call.params.subscriptionId)).toBe(false);
+  });
+
+  it("ends a task whose start answered only after the worker gave up on it", async () => {
+    vi.useFakeTimers();
+    const { proxy, sent } = makeProxy();
+    const started = proxy.host.tasks.start({ title: "T", retry: RETRY });
+    const rejected = expect(started).rejects.toMatchObject({ code: "TIMEOUT" });
+    const call = sent.find((m) => m.type === "host-call" && m.method === "tasks.start");
+
+    await vi.advanceTimersByTimeAsync(PLUGIN_HOST_CALL_TIMEOUT_MS);
+    await rejected;
+    proxy.handleMessage({
+      type: "host-result",
+      requestId: call.requestId,
+      ok: true,
+      result: { id: "orphan" },
+    });
+
+    expect(
+      sent.filter((m) => m.type === "host-call" && m.method === "tasks.finish").map((m) => m.params)
+    ).toEqual([{ taskId: "orphan", result: { outcome: "cancelled" } }]);
   });
 
   it("posts messages the main-side schema accepts", async () => {
