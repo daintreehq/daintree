@@ -174,6 +174,29 @@ jobs:
       - name: Test (perf scenario liveness)
         run: npx vitest run scripts/perf/__tests__/scenarioLiveness.test.ts
 
+  # The plugin packages as an outside author gets them: packed tarballs, every
+  # exports subpath, the bins, and a scaffolded plugin built against them. The
+  # release workflow runs the same script before publishing; this catches a
+  # version or export mismatch while it is still a PR.
+  packages:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Install dependencies
+        uses: ./.github/actions/install
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Build packages
+        run: npm run packages:build
+
+      - name: Package consumer smoke
+        run: node scripts/ci/packages-consumer-smoke.mjs
+
   build:
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -244,7 +267,7 @@ jobs:
   # Insulates against matrix/job name changes breaking required checks.
   ci-ok:
     if: always()
-    needs: [static, lint, test, perf-liveness, build]
+    needs: [static, lint, test, perf-liveness, packages, build]
     runs-on: ubuntu-latest
     timeout-minutes: 2
 

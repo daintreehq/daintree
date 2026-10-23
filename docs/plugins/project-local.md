@@ -45,7 +45,7 @@ What `--project` changes relative to an installed scaffold:
 - `plugin.json` gains `"scope": "project"`
 - `package.json` gains a `dev` script running `vite build --watch`, and drops the `package` script — a project plugin is distributed by being committed, not as a `.dntr`
 - `vite.config.ts` emits **inline** source maps with absolute `sources`, so DevTools breakpoints land in the real `.tsx` without a sidecar `.map` having to be served over `plugin://`
-- `.gitignore` force-includes `dist/`, and a generated `README.md` explains why — and, for the `view` template, points at the [panel preview](./dev-loop.md#preview-a-panel-outside-daintree) rather than the running app (the preview is not in the 0.1.0 release on npm; it ships in the next one)
+- `.gitignore` force-includes `dist/`, and a generated `README.md` explains why — and, for the `view` template, points at the [panel preview](./dev-loop.md#preview-a-panel-outside-daintree) rather than the running app (the preview is not in the 0.1.0 release on npm; it ships in 0.2.0)
 - no `.dntrignore` — that file only shapes a `.dntr` archive
 - a watcher recipe lands in `<projectRoot>/.daintree/recipes/`, so Daintree can start the build alongside the rest of the project environment
 

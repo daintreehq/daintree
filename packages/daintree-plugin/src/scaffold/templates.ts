@@ -6,6 +6,9 @@
  */
 
 import { safeRecipeFilename } from "../../../../shared/utils/recipeFilename.js";
+import sdkPackage from "../../../plugin-sdk/package.json" with { type: "json" };
+import vitePackage from "../../../plugin-vite/package.json" with { type: "json" };
+import { CLI_VERSION } from "../version.js";
 
 export type TemplateKind = "command" | "view" | "mcp" | "full";
 
@@ -37,11 +40,22 @@ export function projectPluginRelDir(scopedName: string): string {
   return `.daintree/plugins/${scopedName}`;
 }
 
-// Open-ended lower bound: `^0.11.0` resolves to `>=0.11.0 <0.12.0` under semver's
-// 0.x caret rule, so a scaffolded plugin would draw the host's `engines.daintree`
-// compatibility warning on every release past 0.11 (e.g. 0.19.x). Match the
-// reference manifests under `plugins/sample/`, which pin the open-ended range.
-const DAINTREE_ENGINE_RANGE = ">=0.11.0";
+// Open-ended lower bound: `^0.41.0` would resolve to `>=0.41.0 <0.42.0` under
+// semver's 0.x caret rule and draw the host's `engines.daintree` compatibility
+// warning on every later release. The floor is the first host that understands
+// everything a scaffold emits, the panel's own `iconId` SVG (v0.41.0) included,
+// so an older host warns instead of silently drawing a broken panel.
+const DAINTREE_ENGINE_RANGE = ">=0.41.0";
+
+// The sibling packages a scaffold installs, ranged from the versions built
+// alongside this CLI. On 0.x a caret spans patches only, so a hand-written
+// `^0.1.0` silently pins every new plugin to the previous minor the moment the
+// SDK moves; the SDK and Vite versions are inlined into the bundle at build time.
+export const SCAFFOLD_TOOLCHAIN_RANGES = {
+  "@daintreehq/plugin-sdk": `^${sdkPackage.version}`,
+  "@daintreehq/plugin-vite": `^${vitePackage.version}`,
+  "daintree-plugin": `^${CLI_VERSION}`,
+} as const;
 
 /**
  * A `contributes.panels` entry paired with a `views` entry of the
@@ -117,11 +131,11 @@ function manifest(ctx: ScaffoldContext, contributes: Record<string, unknown>): s
 function packageJson(ctx: ScaffoldContext, needsReact: boolean, needsServer = false): string {
   const deps: Record<string, string> = {};
   const devDeps: Record<string, string> = {
-    "@daintreehq/plugin-sdk": "^0.1.0",
-    "@daintreehq/plugin-vite": "^0.1.0",
+    "@daintreehq/plugin-sdk": SCAFFOLD_TOOLCHAIN_RANGES["@daintreehq/plugin-sdk"],
+    "@daintreehq/plugin-vite": SCAFFOLD_TOOLCHAIN_RANGES["@daintreehq/plugin-vite"],
     // The generated `validate`/`package` scripts call this CLI, so a fresh
     // clone's `npm install` must bring it in rather than rely on a global.
-    "daintree-plugin": "^0.1.0",
+    "daintree-plugin": SCAFFOLD_TOOLCHAIN_RANGES["daintree-plugin"],
     typescript: "^6.0.0",
     vite: "^8.0.0",
   };

@@ -30,7 +30,7 @@ Read `.github/workflows/release-packages.yml` once before starting; it is the so
 - **Versions are independent.** Bump only what changed. One tag push publishes every package whose `package.json` version is not yet on the registry and skips the rest, so several bumps can ride one tag.
 - **A tag must match its package's version exactly** or the run fails on purpose.
 - **Anything that publishes must be a commit on `main`.** The workflow checks ancestry. Package tags are therefore cut from `main`, after the bump has ridden a normal app release there. Never tag `develop` or a feature branch.
-- **Publishing needs no token.** Each package has this repo and this workflow registered as its npm trusted publisher, so the workflow publishes with an OIDC token and provenance. The skill never runs `npm publish` itself. The one exception is a package that has never been published: npm cannot register a trusted publisher for a package that does not exist, so its first version is published by hand from a logged-in laptop, after which the trusted publisher is added on npmjs.com. If `npm view <name> version` returns E404, tell the user that is where they are and point them at the maintainer note in `docs/plugins/dev-loop.md`. `@daintreehq/tour` is in that state until its 0.1.0 goes up by hand. It is last in the workflow's publish order, so a tag pushed before then still publishes the other packages, but the run fails at the tour's publish step; do that first publish before cutting any tag.
+- **Publishing needs no token.** Each package has this repo and this workflow registered as its npm trusted publisher, so the workflow publishes with an OIDC token and provenance. The skill never runs `npm publish` itself. The one exception is a package that has never been published: npm cannot register a trusted publisher for a package that does not exist, so its first version is published by hand from a logged-in laptop, after which the trusted publisher is added on npmjs.com. If `npm view <name> version` returns E404, tell the user that is where they are and point them at the maintainer note in `docs/plugins/dev-loop.md`. `@daintreehq/tour` is in that state until its first version (0.2.0) goes up by hand. It is last in the workflow's publish order, so a tag pushed before then still publishes the other packages, but the run fails at the tour's publish step; do that first publish before cutting any tag.
 
 ## The version cascade
 
@@ -38,9 +38,9 @@ This is the part that goes wrong when done by hand. Several places pin these pac
 
 | When this gets a minor bump | These ranges must move with it | Which means this package bumps too |
 | --- | --- | --- |
-| `@daintreehq/plugin-sdk` | `packages/daintree-plugin/src/scaffold/templates.ts` devDependency `@daintreehq/plugin-sdk` | `daintree-plugin` (patch at least) |
-| `@daintreehq/plugin-vite` | `packages/daintree-plugin/src/scaffold/templates.ts` devDependency `@daintreehq/plugin-vite` | `daintree-plugin` (patch at least) |
-| `daintree-plugin` | `packages/daintree-plugin/src/scaffold/templates.ts` devDependency `daintree-plugin`, its assertion in `packages/daintree-plugin/src/__tests__/new.test.ts`, and `packages/create-daintree-plugin/package.json` dependency `daintree-plugin` | `create-daintree-plugin` (patch at least) |
+| `@daintreehq/plugin-sdk` | none by hand: the scaffold's range is built from `packages/plugin-sdk/package.json` (`SCAFFOLD_TOOLCHAIN_RANGES` in `packages/daintree-plugin/src/scaffold/templates.ts`) | `daintree-plugin` (patch at least), so a CLI that scaffolds the new range is published |
+| `@daintreehq/plugin-vite` | none by hand: the scaffold's range is built from `packages/plugin-vite/package.json` | `daintree-plugin` (patch at least), for the same reason |
+| `daintree-plugin` | `packages/create-daintree-plugin/package.json` dependency `daintree-plugin` (the scaffold's own range follows the CLI's version) | `create-daintree-plugin` (patch at least) |
 
 `@daintreehq/tour` has no row: nothing in `packages/` pins it, so its bumps never cascade. A **patch** bump changes no ranges and cascades nowhere. Find every pinned range with `git grep -n -E '"(@daintreehq/(plugin-sdk|plugin-vite|tour)|daintree-plugin)": "\^' -- packages` rather than trusting this table; a new pin added since this was written is exactly the kind of thing that slips.
 
@@ -100,7 +100,7 @@ npm install --package-lock-only --ignore-scripts
 `--package-lock-only` rewrites `package-lock.json` without touching `node_modules`, which is what makes it safe in a worktree whose install is shared with the main checkout. Confirm with `git diff package-lock.json` that the workspace entry now carries the new version and nothing else moved.
 
 3. Apply the cascade edits from the table with `Edit`, one range at a time, and grep again for the old range afterwards so none survives.
-4. Rebuild and prove it: `npm run packages:build`, then `npx vitest run packages shared/testing plugins/sample plugins/sample-project`, then `npm run check`. A range the tests still assert at the old value is the common failure here.
+4. Rebuild and prove it: `npm run packages:build`, then `npx vitest run packages shared/testing plugins/sample plugins/sample-project`, then `node scripts/ci/packages-consumer-smoke.mjs` (packs the tarballs, imports every export, scaffolds and packages a plugin against them, and fails if a scaffold range does not accept a version being released), then `npm run check`.
 5. Show the user the full diff (`git diff`) and the file list, then commit:
 
 ```

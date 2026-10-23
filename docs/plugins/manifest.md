@@ -234,9 +234,10 @@ Plugins with only static contributions (a skills-only or recipes-only plugin, sa
 
 ### `engines.daintree`
 
-Semver range expressing which Daintree versions the plugin supports. The scaffolder (`npx daintree-plugin new`) generates `">=0.11.0"` — an open-ended lower bound, deliberately not a caret:
+Semver range expressing which Daintree versions the plugin supports. The scaffolder (`npx daintree-plugin new`) generates `">=0.41.0"`, the first release that understands everything a scaffold emits (the 0.1.0 scaffold on npm generates `">=0.11.0"`) — an open-ended lower bound, deliberately not a caret:
 
-- `">=0.11.0"` — 0.11 and every later release (scaffolder default)
+- `">=0.41.0"` — 0.41 and every later release (scaffolder default)
+- `">=0.11.0"` — 0.11 and every later release
 - `">=0.11.0 <0.13.0"` — explicit range
 - `"0.11.x"` — any 0.11 release
 
