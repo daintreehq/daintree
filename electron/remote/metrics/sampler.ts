@@ -7,6 +7,7 @@ import type {
 } from "../../../shared/types/remoteHosts.js";
 import type { SystemMemorySnapshot } from "../../utils/systemMemory.js";
 import { LOCAL_HOST_ID, MAX_HOST_SUMMARY_DRIVERS } from "../../../shared/types/remoteHosts.js";
+import { agentLaunchLimit } from "../../../shared/config/agentLaunchCapacity.js";
 import {
   clusterCpuPercentBetween,
   cpuPercentBetween,
@@ -257,6 +258,8 @@ export class HostMetricsSampler {
       cpuEfficiencyPercent: clusterPercent.efficiency,
       ...resources.memory,
       agentsObserved: agents,
+      // The same rule the host's own launches wait on, from the memory reported above.
+      agentLaunchLimit: agentLaunchLimit(resources.memory.memoryTotalBytes),
       projectCount: projects.projectCount,
       worktreeCount: projects.worktreeCount,
       driver,

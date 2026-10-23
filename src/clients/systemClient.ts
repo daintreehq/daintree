@@ -95,6 +95,18 @@ export const systemClient = {
     return window.electron.system.isMemoryPressureCritical();
   },
 
+  requestAgentLaunchAdmission: (
+    terminalId: string
+  ): ReturnType<typeof window.electron.system.requestAgentLaunchAdmission> => {
+    return window.electron.system.requestAgentLaunchAdmission(terminalId);
+  },
+
+  observeAgentLaunchAdmission: (): ReturnType<
+    typeof window.electron.system.observeAgentLaunchAdmission
+  > => {
+    return window.electron.system.observeAgentLaunchAdmission();
+  },
+
   getTmpDir: (): Promise<string> => {
     if (cachedTmpDir !== null) return Promise.resolve(cachedTmpDir);
     if (tmpDirInflight) return tmpDirInflight;

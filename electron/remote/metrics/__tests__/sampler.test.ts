@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { HostMetricsSampler, type HostSampleSources } from "../sampler.js";
 import { MAX_HOST_SUMMARY_DRIVERS } from "../../../../shared/types/remoteHosts.js";
+import { agentLaunchLimit } from "../../../../shared/config/agentLaunchCapacity.js";
 
 function sources(overrides: Partial<HostSampleSources> = {}): HostSampleSources {
   let tick = 0;
@@ -143,6 +144,8 @@ describe("HostMetricsSampler", () => {
     expect(summary.memoryUsedBytes).toBe(1048576);
     expect(summary.memoryTotalBytes).toBe(4194304);
     expect(summary.metricsScope).toBe("cgroup");
+    // The limit follows the memory the cgroup allows.
+    expect(summary.agentLaunchLimit).toBe(agentLaunchLimit(4194304));
   });
 
   describe("cgroup scope", () => {
@@ -341,6 +344,7 @@ describe("HostMetricsSampler", () => {
       memoryPressure: null,
       memoryUsedBytes: null,
       memoryTotalBytes: null,
+      agentLaunchLimit: null,
       swapUsedBytes: null,
       swapTotalBytes: null,
       thermal: null,

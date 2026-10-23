@@ -277,8 +277,21 @@ describe("HostCallRuntime (#13493, #13496)", () => {
         });
       });
 
+      it("lists the host's own agent launch limit, kept through a stale sample (#14221)", async () => {
+        expect(await loadOf({ ...fresh, agentLaunchLimit: 8 })).toMatchObject({
+          agentLaunchLimit: 8,
+        });
+        expect(
+          await loadOf({ ...fresh, agentLaunchLimit: 8, sampledAt: 1000 - 16_000 })
+        ).toMatchObject({ stale: true, agentLaunchLimit: 8 });
+        expect(await loadOf({ ...fresh, agentLaunchLimit: null })).toMatchObject({
+          agentLaunchLimit: null,
+        });
+      });
+
       it("omits the Linux readings a host never reported", async () => {
         const load = await loadOf(fresh);
+        expect(load).not.toHaveProperty("agentLaunchLimit");
         expect(load).not.toHaveProperty("metricsScope");
         expect(load).not.toHaveProperty("memoryPressureSomeAvg10");
         expect(load).not.toHaveProperty("temperatureCelsius");

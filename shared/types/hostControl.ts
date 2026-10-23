@@ -133,6 +133,13 @@ export const HostListEntrySchema = z.object({
       memoryPressureSomeAvg10: z.number().nullable().optional(),
       temperatureCelsius: z.number().nullable().optional(),
       temperatureZone: z.string().nullable().optional(),
+      agentLaunchLimit: z
+        .number()
+        .nullable()
+        .optional()
+        .describe(
+          "Agents this host starts before further launches wait, from its memory; compare with agentsObserved. Absent from older hosts."
+        ),
     })
     .nullable()
     .describe("Null: no sample. Any null field inside is unknown, never zero or unlimited."),
