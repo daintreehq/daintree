@@ -224,6 +224,23 @@ describe("projectStore.sleepProject", () => {
       await runDroppedViewRestore("proj-1", async () => {});
     });
 
+    it("keeps a newer drop pending when an older restore finishes after it", async () => {
+      // Another window can sleep the project while this one is still restoring.
+      await useProjectStore.getState().sleepProject("proj-1");
+      expect(claimDroppedViewRestore("proj-1")).toBe(true);
+      const restore = deferred<void>();
+      const restoring = runDroppedViewRestore("proj-1", () => restore.promise);
+      setCurrentProject(PROJECT);
+      useProjectStore.getState().dropToNoProject();
+
+      restore.resolve();
+      await restoring;
+
+      expect(isDroppedViewLayoutPending("proj-1")).toBe(true);
+      expect(claimDroppedViewRestore("proj-1")).toBe(true);
+      await runDroppedViewRestore("proj-1", async () => {});
+    });
+
     it("waits for a restore still in flight before sleeping again", async () => {
       await useProjectStore.getState().sleepProject("proj-1");
       expect(claimDroppedViewRestore("proj-1")).toBe(true);
