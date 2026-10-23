@@ -1659,7 +1659,10 @@ function applyWorktreeTerminalPolicy(
     // BACKGROUND->active transition. It returns early on same-tier VISIBLE,
     // so pair active grid promotion with an explicit wake to pull any bytes
     // that arrived while the renderer was hidden or not yet mounted.
-    withTerminalService((service) => service.applyRendererPolicy(terminal.id, targetTier));
+    withTerminalService(
+      (service) => service.applyRendererPolicy(terminal.id, targetTier),
+      terminal.id
+    );
     if (
       targetTier !== TerminalRefreshTier.BACKGROUND &&
       (!isPtyPanel(terminal) || terminal.hasPty !== false) &&

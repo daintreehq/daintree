@@ -16,9 +16,12 @@ vi.mock("@/utils/logger", () => ({
   logError: vi.fn(),
 }));
 
-vi.mock("@/services/TerminalInstanceService", () => ({
-  terminalInstanceService: { initializeBackendTier: vi.fn(), setTargetSize: vi.fn() },
-}));
+vi.mock("@/services/TerminalInstanceService", () => {
+  const terminalInstanceService = { initializeBackendTier: vi.fn(), setTargetSize: vi.fn() };
+  return {
+    createTerminalPaintPlane: () => terminalInstanceService,
+  };
+});
 
 const resolveResumeLatestSession = vi.hoisted(() =>
   vi.fn(async (_payload: { cwd: string }): Promise<string | null> => null)

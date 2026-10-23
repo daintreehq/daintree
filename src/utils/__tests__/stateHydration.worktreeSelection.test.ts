@@ -80,8 +80,8 @@ vi.mock("@/services/KeybindingService", () => ({
   keybindingService: { loadOverrides: vi.fn().mockResolvedValue(undefined) },
 }));
 
-vi.mock("@/services/TerminalInstanceService", () => ({
-  terminalInstanceService: {
+vi.mock("@/services/TerminalInstanceService", () => {
+  const terminalInstanceService = {
     fetchAndRestore: vi.fn().mockResolvedValue(undefined),
     restoreFetchedState: vi.fn().mockResolvedValue(undefined),
     initializeBackendTier: vi.fn(),
@@ -91,8 +91,11 @@ vi.mock("@/services/TerminalInstanceService", () => ({
     notifyScrollbackRestoreListeners: vi.fn(),
     addInstanceDestroyedListener: vi.fn(() => () => {}),
     notifyRestoreSettledWaiters: vi.fn(),
-  },
-}));
+  };
+  return {
+    createTerminalPaintPlane: () => terminalInstanceService,
+  };
+});
 
 vi.mock("@/lib/notify", () => ({ notify: vi.fn().mockReturnValue("notification-id") }));
 

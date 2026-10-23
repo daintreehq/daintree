@@ -66,8 +66,8 @@ function setHibernated(id: string, value: boolean) {
   for (const l of ls) l();
 }
 
-vi.mock("@/services/TerminalInstanceService", () => ({
-  terminalInstanceService: {
+vi.mock("@/services/TerminalInstanceService", () => {
+  const terminalInstanceService = {
     isHibernated: (id: string) => hibernationState.get(id) ?? false,
     subscribeHibernation: (id: string, listener: () => void) => {
       let set = hibernationListeners.get(id);
@@ -83,16 +83,21 @@ vi.mock("@/services/TerminalInstanceService", () => ({
         if (current.size === 0) hibernationListeners.delete(id);
       };
     },
-  },
-}));
+  };
+  return {
+    createTerminalPaintPlane: () => terminalInstanceService,
+  };
+});
 
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { useAccessibilityAnnouncements } from "../useAccessibilityAnnouncements";
-import { terminalInstanceService } from "@/services/TerminalInstanceService";
+import { createTerminalPaintPlane } from "@/services/TerminalInstanceService";
 import {
   __testing as terminalServiceTesting,
   register as registerTerminalService,
 } from "@/services/terminal/terminalInstanceServiceAccessor";
+
+const terminalInstanceService = createTerminalPaintPlane();
 
 const terminalService = terminalInstanceService;
 

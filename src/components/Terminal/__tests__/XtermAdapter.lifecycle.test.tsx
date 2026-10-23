@@ -134,9 +134,12 @@ vi.mock("@/lib/platform", async (importOriginal) => ({
   isMac: () => mocks.platform.isMac,
 }));
 
-vi.mock("@/services/TerminalInstanceService", () => ({
-  terminalInstanceService: mocks.terminalInstanceService,
-}));
+vi.mock("@/services/TerminalInstanceService", () => {
+  const terminalInstanceService = mocks.terminalInstanceService;
+  return {
+    createTerminalPaintPlane: () => terminalInstanceService,
+  };
+});
 
 vi.mock("@/services/terminal/fleetInputRouter", () => ({
   writeTerminalInputOrFleet: mocks.writeTerminalInputOrFleet,

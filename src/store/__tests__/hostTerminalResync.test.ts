@@ -33,9 +33,12 @@ vi.mock("@/store/panelStore", () => ({
     },
   },
 }));
-vi.mock("@/services/TerminalInstanceService", () => ({
-  terminalInstanceService: { setAgentState, reportLost, fetchAndRestore },
-}));
+vi.mock("@/services/TerminalInstanceService", () => {
+  const terminalInstanceService = { setAgentState, reportLost, fetchAndRestore };
+  return {
+    createTerminalPaintPlane: () => terminalInstanceService,
+  };
+});
 vi.mock("@/utils/stateHydration/statePatcher", () => ({
   buildArgsForOrphanedTerminal: (info: { id: string; cwd: string; kind?: string }) => ({
     kind: info.kind ?? "terminal",

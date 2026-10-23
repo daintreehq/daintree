@@ -3,7 +3,7 @@ import { isMac } from "@/lib/platform";
 import { runSpringLoop } from "@/lib/demoSpring";
 import { EditorView } from "@codemirror/view";
 import { Transaction } from "@codemirror/state";
-import { terminalInstanceService } from "@/services/TerminalInstanceService";
+import { peek as peekTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
 import { usePanelStore } from "@/store/panelStore";
 import type {
   DemoMoveToPayload,
@@ -684,7 +684,7 @@ export function DemoCursor() {
           }
 
           const appCursorMode =
-            terminalInstanceService.get(panelId)?.terminal.modes.applicationCursorKeysMode ?? false;
+            peekTerminalService()?.get(panelId)?.terminal.modes.applicationCursorKeysMode ?? false;
           const seq = resolveTerminalKey(payload.key, appCursorMode);
           if (seq === null) {
             sendDone(payload.requestId, `Unknown terminal key: ${payload.key}`);
@@ -1042,7 +1042,7 @@ export function DemoCursor() {
             // terminal appears mid-wait.
             const terminalDisposables: Array<{ dispose: () => void }> = [];
             for (const panelId of usePanelStore.getState().panelIds) {
-              const managed = terminalInstanceService.get(panelId);
+              const managed = peekTerminalService()?.get(panelId);
               if (!managed) continue;
               try {
                 terminalDisposables.push(managed.terminal.onWriteParsed(() => resetTimer()));

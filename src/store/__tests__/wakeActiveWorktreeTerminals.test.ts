@@ -9,15 +9,18 @@ const setFocusedMock = vi.fn();
 const logWarnMock = vi.fn();
 const notifyWarmReactivationCompleteMock = vi.fn();
 
-vi.mock("@/services/TerminalInstanceService", () => ({
-  terminalInstanceService: {
+vi.mock("@/services/TerminalInstanceService", () => {
+  const terminalInstanceService = {
     fullWakeForVisibilityRestore: fullWakeMock,
     repaintForReveal: repaintForRevealMock,
     revealTerminal: revealTerminalMock,
     isFocused: isFocusedMock,
     setFocused: setFocusedMock,
-  },
-}));
+  };
+  return {
+    createTerminalPaintPlane: () => terminalInstanceService,
+  };
+});
 
 vi.mock("@/utils/logger", () => ({
   logWarn: logWarnMock,

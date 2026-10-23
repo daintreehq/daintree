@@ -28,9 +28,12 @@ const mockState = {
 vi.mock("@/store", () => ({
   panelStoreApi: { getState: () => mockState },
 }));
-vi.mock("@/services/TerminalInstanceService", () => ({
-  terminalInstanceService: { focus: focusMock },
-}));
+vi.mock("@/services/TerminalInstanceService", () => {
+  const terminalInstanceService = { focus: focusMock };
+  return {
+    createTerminalPaintPlane: () => terminalInstanceService,
+  };
+});
 vi.mock("@/utils/logger", () => ({ logError: vi.fn() }));
 
 import {

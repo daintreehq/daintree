@@ -14,13 +14,16 @@ vi.mock("@/clients", () => ({
   },
 }));
 
-vi.mock("@/services/TerminalInstanceService", () => ({
-  terminalInstanceService: {
+vi.mock("@/services/TerminalInstanceService", () => {
+  const terminalInstanceService = {
     applyRendererPolicy: vi.fn(),
     onPanelBackgrounded: vi.fn(),
     resize: vi.fn().mockReturnValue(null),
-  },
-}));
+  };
+  return {
+    createTerminalPaintPlane: () => terminalInstanceService,
+  };
+});
 
 vi.mock("../../persistence/panelPersistence", () => ({
   panelPersistence: {
@@ -33,7 +36,9 @@ vi.mock("../../persistence/panelPersistence", () => ({
 
 const { usePanelStore } = await import("../../panelStore");
 const { terminalClient } = await import("@/clients");
-const { terminalInstanceService } = await import("@/services/TerminalInstanceService");
+const terminalInstanceService = (
+  await import("@/services/TerminalInstanceService")
+).createTerminalPaintPlane();
 const { panelPersistence } = await import("../../persistence/panelPersistence");
 
 function setTerminals(terminals: PtyPanelData[]) {

@@ -210,13 +210,19 @@ vi.mock("@/clients", () => ({
   },
 }));
 
-vi.mock("@/services/TerminalInstanceService", () => ({
-  terminalInstanceService: mocks.terminalInstanceService,
-}));
+vi.mock("@/services/TerminalInstanceService", () => {
+  const terminalInstanceService = mocks.terminalInstanceService;
+  return {
+    createTerminalPaintPlane: () => terminalInstanceService,
+  };
+});
 
-vi.mock("@/services/terminal/TerminalInstanceService", () => ({
-  terminalInstanceService: mocks.terminalInstanceService,
-}));
+vi.mock("@/services/terminal/TerminalInstanceService", () => {
+  const terminalInstanceService = mocks.terminalInstanceService;
+  return {
+    createTerminalPaintPlane: () => terminalInstanceService,
+  };
+});
 
 vi.mock("@/services/ActionService", () => ({
   actionService: mocks.actionService,

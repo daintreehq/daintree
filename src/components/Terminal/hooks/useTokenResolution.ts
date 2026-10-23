@@ -1,7 +1,7 @@
 import { useCallback, useRef, type Dispatch, type SetStateAction } from "react";
 import { EditorSelection } from "@codemirror/state";
 import type { BuiltInAgentId } from "@shared/config/agentIds";
-import { terminalInstanceService } from "@/services/TerminalInstanceService";
+import { peek as peekTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
 import { buildTerminalSendPayload } from "@/lib/terminalInput";
 import { useCommandHistoryStore } from "@/store/commandHistoryStore";
 import { useVoiceRecordingStore } from "@/store/voiceRecordingStore";
@@ -280,7 +280,7 @@ export function useTokenResolution({
         const replacements: TokenExpansion[] = [];
 
         for (const token of terminalTokens) {
-          const managed = terminalInstanceService.get(terminalId);
+          const managed = peekTerminalService()?.get(terminalId);
           let replacement: string;
           if (managed) {
             const buffer = managed.terminal.buffer.active;
@@ -299,7 +299,7 @@ export function useTokenResolution({
         }
 
         for (const token of selectionTokens) {
-          const selection = terminalInstanceService.getCachedSelection(terminalId);
+          const selection = peekTerminalService()?.getCachedSelection(terminalId);
           const replacement = selection
             ? fenceTokenExpansion(selection)
             : "[No terminal selection]";

@@ -75,7 +75,9 @@ const mockDocument = {
 
 describe("TerminalInstanceService - options", () => {
   it("disables cosmetic options for agent terminals", async () => {
-    const { terminalInstanceService } = await import("../TerminalInstanceService");
+    const terminalInstanceService = await (
+      await import("../terminalInstanceServiceAccessor")
+    ).load();
 
     window.matchMedia = vi.fn().mockReturnValue({
       matches: false,
@@ -105,7 +107,9 @@ describe("TerminalInstanceService - options", () => {
   });
 
   it("preserves agent cosmetic overrides when existing terminal is reused with fresh options", async () => {
-    const { terminalInstanceService } = await import("../TerminalInstanceService");
+    const terminalInstanceService = await (
+      await import("../terminalInstanceServiceAccessor")
+    ).load();
 
     window.matchMedia = vi.fn().mockReturnValue({
       matches: false,
@@ -145,7 +149,9 @@ describe("TerminalInstanceService - options", () => {
   });
 
   it("updateOptions with theme calls refresh but not fit", async () => {
-    const { terminalInstanceService } = await import("../TerminalInstanceService");
+    const terminalInstanceService = await (
+      await import("../terminalInstanceServiceAccessor")
+    ).load();
 
     window.matchMedia = vi.fn().mockReturnValue({
       matches: false,
@@ -177,7 +183,9 @@ describe("TerminalInstanceService - options", () => {
   });
 
   it("updateOptions with fontSize calls fit but not refresh", async () => {
-    const { terminalInstanceService } = await import("../TerminalInstanceService");
+    const terminalInstanceService = await (
+      await import("../terminalInstanceServiceAccessor")
+    ).load();
 
     window.matchMedia = vi.fn().mockReturnValue({
       matches: false,
@@ -207,7 +215,9 @@ describe("TerminalInstanceService - options", () => {
   });
 
   it("updateOptions with both theme and fontSize calls both", async () => {
-    const { terminalInstanceService } = await import("../TerminalInstanceService");
+    const terminalInstanceService = await (
+      await import("../terminalInstanceServiceAccessor")
+    ).load();
 
     window.matchMedia = vi.fn().mockReturnValue({
       matches: false,
@@ -240,7 +250,9 @@ describe("TerminalInstanceService - options", () => {
   });
 
   it("leaves a released terminal's scrollback alone until it is revealed (#14220)", async () => {
-    const { terminalInstanceService } = await import("../TerminalInstanceService");
+    const terminalInstanceService = await (
+      await import("../terminalInstanceServiceAccessor")
+    ).load();
 
     window.matchMedia = vi.fn().mockReturnValue({
       matches: false,

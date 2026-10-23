@@ -119,8 +119,8 @@ const initializeBackendTierMock = vi.fn();
 const setGPUHardwareAvailableMock = vi.fn();
 const setTargetSizeMock = vi.fn();
 
-vi.mock("@/services/TerminalInstanceService", () => ({
-  terminalInstanceService: {
+vi.mock("@/services/TerminalInstanceService", () => {
+  const terminalInstanceService = {
     fetchAndRestore: fetchAndRestoreMock,
     restoreFetchedState: restoreFetchedStateMock,
     initializeBackendTier: initializeBackendTierMock,
@@ -130,8 +130,11 @@ vi.mock("@/services/TerminalInstanceService", () => ({
     notifyScrollbackRestoreListeners: vi.fn(),
     addInstanceDestroyedListener: vi.fn(() => () => {}),
     notifyRestoreSettledWaiters: vi.fn(),
-  },
-}));
+  };
+  return {
+    createTerminalPaintPlane: () => terminalInstanceService,
+  };
+});
 
 const notifyMock = vi.fn().mockReturnValue("notification-id");
 vi.mock("@/lib/notify", () => ({
@@ -752,7 +755,9 @@ describe("hydrateAppState", () => {
   });
 
   it("replays the GPU flag to a terminal service that loads after hydration", async () => {
-    const { terminalInstanceService } = await import("@/services/TerminalInstanceService");
+    const terminalInstanceService = (
+      await import("@/services/TerminalInstanceService")
+    ).createTerminalPaintPlane();
     terminalServiceAccessorTesting.reset();
     appClientMock.hydrate.mockResolvedValue({
       appState: {

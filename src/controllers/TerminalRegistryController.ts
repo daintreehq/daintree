@@ -220,7 +220,7 @@ class TerminalRegistryController {
   applyRendererPolicy(id: string, tier: TerminalRefreshTier): void {
     // Queued rather than peeked: the policy records the id even before an
     // instance exists, so a tier set ahead of load must still land.
-    withTerminalService((service) => service.applyRendererPolicy(id, tier));
+    withTerminalService((service) => service.applyRendererPolicy(id, tier), id);
   }
 
   /**

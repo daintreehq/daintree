@@ -136,7 +136,7 @@ export function TerminalScratchpad({ terminalId }: TerminalScratchpadProps) {
       gestureActiveRef.current = false;
       if (commit) setScratchpadWidth(owner, latest);
       setDragWidth(null);
-      withTerminalService((service) => service.lockResize(owner, false));
+      withTerminalService((service) => service.lockResize(owner, false), owner);
       withTerminalService((service) => service.runResizePass([owner]));
     };
     // The column sits on the right, so dragging its left edge leftwards widens it.
@@ -150,7 +150,7 @@ export function TerminalScratchpad({ terminalId }: TerminalScratchpadProps) {
         moved = true;
         gestureActiveRef.current = true;
         // Before the first width write, so no frame publishes mid-gesture geometry.
-        withTerminalService((service) => service.lockResize(owner, true));
+        withTerminalService((service) => service.lockResize(owner, true), owner);
         document.body.style.cursor = "col-resize";
         document.body.style.userSelect = "none";
       }

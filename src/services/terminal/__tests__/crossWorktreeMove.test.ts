@@ -13,8 +13,8 @@ vi.mock("@/clients", () => ({
   appClient: { setState: vi.fn().mockResolvedValue(undefined) },
 }));
 
-vi.mock("@/services/TerminalInstanceService", () => ({
-  terminalInstanceService: {
+vi.mock("@/services/TerminalInstanceService", () => {
+  const terminalInstanceService = {
     applyRendererPolicy: vi.fn(),
     onPanelBackgrounded: vi.fn(),
     resize: vi.fn().mockReturnValue(null),
@@ -26,8 +26,11 @@ vi.mock("@/services/TerminalInstanceService", () => ({
     getAgentState: vi.fn().mockReturnValue("working"),
     addAgentStateListener: vi.fn().mockReturnValue(() => {}),
     addExitListener: vi.fn().mockReturnValue(() => {}),
-  },
-}));
+  };
+  return {
+    createTerminalPaintPlane: () => terminalInstanceService,
+  };
+});
 
 vi.mock("@/store/persistence/panelPersistence", () => ({
   panelPersistence: {
@@ -46,7 +49,9 @@ vi.mock("@/store/createWorktreeStore", async (importOriginal) => ({
   getCurrentViewStoreOrNull: () => ({ getState: () => ({ worktrees: liveWorktrees }) }),
 }));
 
-const { terminalInstanceService } = await import("@/services/TerminalInstanceService");
+const terminalInstanceService = (
+  await import("@/services/TerminalInstanceService")
+).createTerminalPaintPlane();
 const { terminalClient } = await import("@/clients");
 const { usePanelStore } = await import("@/store/panelStore");
 const { useWorktreeSelectionStore } = await import("@/store/worktreeStore");

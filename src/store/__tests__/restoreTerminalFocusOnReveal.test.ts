@@ -5,16 +5,19 @@ import { load as loadTerminalService } from "@/services/terminal/terminalInstanc
 
 const focusMock = vi.fn();
 
-vi.mock("@/services/TerminalInstanceService", () => ({
-  terminalInstanceService: {
+vi.mock("@/services/TerminalInstanceService", () => {
+  const terminalInstanceService = {
     fullWakeForVisibilityRestore: vi.fn(),
     repaintForReveal: vi.fn(),
     revealTerminal: vi.fn(),
     isFocused: vi.fn(() => false),
     setFocused: vi.fn(),
     focus: focusMock,
-  },
-}));
+  };
+  return {
+    createTerminalPaintPlane: () => terminalInstanceService,
+  };
+});
 vi.mock("@/utils/logger", () => ({ logWarn: vi.fn() }));
 vi.mock("@/utils/warmReactivationGate", () => ({ notifyWarmReactivationComplete: vi.fn() }));
 

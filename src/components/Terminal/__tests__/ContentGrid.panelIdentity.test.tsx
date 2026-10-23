@@ -79,13 +79,16 @@ vi.mock("@/store", () => ({
   useTwoPaneSplitStore: <T,>(selector: (state: typeof splitState) => T) => selector(splitState),
 }));
 vi.mock("@/store/twoPaneSplitStore", () => ({ resolveEffectiveRatio: () => undefined }));
-vi.mock("@/services/TerminalInstanceService", () => ({
-  terminalInstanceService: {
+vi.mock("@/services/TerminalInstanceService", () => {
+  const terminalInstanceService = {
     lockResize: () => {},
     runResizePass: () => {},
     scheduleBatchResize: () => {},
-  },
-}));
+  };
+  return {
+    createTerminalPaintPlane: () => terminalInstanceService,
+  };
+});
 vi.mock("@/lib/layoutTransitionLock", () => ({
   isSidebarMeasurementLocked: () => true,
   subscribeSidebarLayoutTransitionUnlock: () => () => {},

@@ -110,10 +110,9 @@ describe("TerminalInstanceService.getOrCreate concurrent-create guard (assistant
       (HTMLElement.prototype as unknown as { checkVisibility: () => boolean }).checkVisibility =
         () => true;
     }
-    ({ terminalInstanceService: service } =
-      (await import("../TerminalInstanceService")) as unknown as {
-        terminalInstanceService: CreateTestService;
-      });
+    service = (await (
+      await import("../terminalInstanceServiceAccessor")
+    ).load()) as unknown as CreateTestService;
     service.instances.clear();
   });
 

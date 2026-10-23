@@ -102,7 +102,6 @@ import { usePanelStore } from "@/store/panelStore";
 import { usePerformanceModeStore } from "@/store/performanceModeStore";
 import { useHelpPanelStore, selectSlot, selectSlotForTerminal } from "@/store/helpPanelStore";
 import { logDebug, logWarn, logError } from "@/utils/logger";
-import { register as registerTerminalInstanceService } from "./terminalInstanceServiceAccessor";
 import { getErrorMessage } from "@/utils/errorContext";
 import { PaintFabricCompositor } from "./paintFabric/PaintFabricCompositor";
 import type { PaintSurface } from "./paintFabric/PaintSurfaceRegistry";
@@ -556,6 +555,11 @@ class TerminalInstanceService {
     // The service is a page-lifetime singleton, so the unsubscribe is intentionally
     // discarded — the subscription is one-shot and never needs teardown.
     onTerminalFontArrivedLate(() => this.repairFontGrid());
+
+    // Built on first terminal, so the view may already be cached or hidden:
+    // the subscriptions above only see later edges. Same order as the edges.
+    if (isProjectViewCached()) this.handleViewCached();
+    if (!isProjectViewObservable()) this.suppressViewResources();
   }
 
   /**
@@ -4570,13 +4574,20 @@ export type TerminalPaintPlane = {
 // unchanged. Flag on: the compositor fronting the primary surface plus any
 // configured in-process aux surfaces — behaviorally identical at
 // surface-count 1, and the rollback path for every later phase.
-const primaryTerminalInstanceService = new TerminalInstanceService();
+//
+// Nothing is built at module eval: the accessor's load() calls this once, when
+// the view's first terminal needs it (#14267), so an empty view never pays for
+// the service.
+export function createTerminalPaintPlane(): TerminalPaintPlane {
+  const plane = buildTerminalPaintPlane();
+  attachE2ETerminalBridges(plane);
+  return plane;
+}
 
-function createTerminalPaintPlane(): TerminalPaintPlane {
-  if (!isPaintFabricEnabled()) return primaryTerminalInstanceService;
-  const surfaces: PaintSurface[] = [
-    { id: PRIMARY_SURFACE_ID, plane: primaryTerminalInstanceService },
-  ];
+function buildTerminalPaintPlane(): TerminalPaintPlane {
+  const primary = new TerminalInstanceService();
+  if (!isPaintFabricEnabled()) return primary;
+  const surfaces: PaintSurface[] = [{ id: PRIMARY_SURFACE_ID, plane: primary }];
   const surfaceCount = getPaintFabricSurfaceCount();
   for (let index = 1; index < surfaceCount; index += 1) {
     const aux = new TerminalInstanceService();
@@ -4595,16 +4606,14 @@ function createTerminalPaintPlane(): TerminalPaintPlane {
   });
 }
 
-export const terminalInstanceService: TerminalPaintPlane = createTerminalPaintPlane();
-registerTerminalInstanceService(terminalInstanceService);
-
 // Expose terminal introspection/control bridges for E2E tests (the WebGL
 // renderer has no DOM text, so specs read the buffer through these). Gated on
 // the preload-injected __DAINTREE_E2E_MODE__ flag (set only under
 // DAINTREE_E2E_MODE=1 on non-packaged builds), so none of these globals attach
-// in production sessions. The flag is injected via contextBridge before this
-// module evaluates, so the gate is reliable at import time.
-if (typeof window !== "undefined" && window.__DAINTREE_E2E_MODE__ === true) {
+// in production sessions. They attach with the service, on the view's first
+// terminal; every bridge takes a panel id, so a spec already has a terminal.
+function attachE2ETerminalBridges(terminalInstanceService: TerminalPaintPlane): void {
+  if (typeof window === "undefined" || window.__DAINTREE_E2E_MODE__ !== true) return;
   (window as unknown as Record<string, unknown>).__daintreeReadTerminalBuffer = (
     panelId: string
   ): string => {

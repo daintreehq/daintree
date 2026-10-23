@@ -243,14 +243,17 @@ vi.mock("@/clients", () => ({
   },
 }));
 
-vi.mock("@/services/TerminalInstanceService", () => ({
-  terminalInstanceService: {
+vi.mock("@/services/TerminalInstanceService", () => {
+  const terminalInstanceService = {
     focus: vi.fn(),
     setFocused: vi.fn(),
     notifyUserInput: (...args: unknown[]) => mockNotifyUserInput(...args),
     clearDirectingState: (...args: unknown[]) => mockClearDirectingState(...args),
-  },
-}));
+  };
+  return {
+    createTerminalPaintPlane: () => terminalInstanceService,
+  };
+});
 
 vi.mock("@/components/Terminal/MissingCliGate", () => ({
   MissingCliGate: ({ agentId, onRunAnyway }: { agentId: string; onRunAnyway: () => void }) => (
@@ -448,6 +451,11 @@ vi.mock("../FigureRail", () => ({ FigureRail: () => null }));
 import { HelpPanel } from "../HelpPanel";
 import { useEscapeStack } from "@/hooks/useEscapeStack";
 import { __resetHelpSessionControllersForTests } from "@/controllers/helpSessionControllerRegistry";
+
+import { load as loadTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
+
+// The service mock never evaluates the real module, so nothing builds it.
+await loadTerminalService();
 
 // The real `app:view-revealed` bridge fans out to every registered listener;
 // HelpPanel registers the switch-back recovery effect against it (#10739).

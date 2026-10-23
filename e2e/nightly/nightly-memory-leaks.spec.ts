@@ -175,6 +175,13 @@ async function getWebGLState(page: Page, panelId: string): Promise<WebGLState | 
   }, panelId);
 }
 
+async function hasTerminalInstance(page: Page, panelId: string): Promise<boolean> {
+  return page.evaluate((id) => {
+    const fn: unknown = Reflect.get(window, "__daintreeGetTerminalForE2E");
+    return typeof fn === "function" && Reflect.apply(fn, window, [id]) !== null;
+  }, panelId);
+}
+
 async function promoteToAgent(page: Page, panelId: string): Promise<boolean> {
   return page.evaluate(
     ({ id, agentId }) => {
@@ -205,6 +212,9 @@ async function openAgentTerminalWithWebGL(window: AppContext["window"]): Promise
   const id = newId as string;
 
   await expect(getPanelById(window, id)).toBeVisible({ timeout: T_MEDIUM });
+  // The terminal service and its bridges load with the first terminal, and
+  // the instance lands a beat after the panel shows: promote once both exist.
+  await expect.poll(() => hasTerminalInstance(window, id), { timeout: T_LONG }).toBe(true);
   await promoteToAgent(window, id);
   await expect
     .poll(async () => (await getWebGLState(window, id))?.active ?? false, { timeout: T_LONG })

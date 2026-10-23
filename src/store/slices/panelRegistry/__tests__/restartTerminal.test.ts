@@ -50,8 +50,8 @@ vi.mock("@/clients", () => ({
   },
 }));
 
-vi.mock("@/services/TerminalInstanceService", () => ({
-  terminalInstanceService: {
+vi.mock("@/services/TerminalInstanceService", () => {
+  const terminalInstanceService = {
     cleanup: vi.fn(),
     applyRendererPolicy: vi.fn(),
     onPanelBackgrounded: vi.fn(),
@@ -64,8 +64,11 @@ vi.mock("@/services/TerminalInstanceService", () => ({
     captureBufferText: vi.fn().mockReturnValue(""),
     addAgentStateListener: vi.fn().mockReturnValue(vi.fn()),
     setInputLocked: vi.fn(),
-  },
-}));
+  };
+  return {
+    createTerminalPaintPlane: () => terminalInstanceService,
+  };
+});
 
 vi.mock("@/store/restartExitSuppression", () => ({
   markTerminalRestarting: vi.fn(),
@@ -1326,7 +1329,9 @@ describe("restartTerminal input lock + parallel IPC (#9164)", () => {
   });
 
   it("locks input before destroy and unlocks on successful restart", async () => {
-    const { terminalInstanceService } = await import("@/services/TerminalInstanceService");
+    const terminalInstanceService = (
+      await import("@/services/TerminalInstanceService")
+    ).createTerminalPaintPlane();
     const setInputLocked = terminalInstanceService.setInputLocked as ReturnType<typeof vi.fn>;
     const destroy = terminalInstanceService.destroy as ReturnType<typeof vi.fn>;
 
@@ -1365,7 +1370,9 @@ describe("restartTerminal input lock + parallel IPC (#9164)", () => {
   });
 
   it("unlocks input on failed restart so the instance is not permanently locked", async () => {
-    const { terminalInstanceService } = await import("@/services/TerminalInstanceService");
+    const terminalInstanceService = (
+      await import("@/services/TerminalInstanceService")
+    ).createTerminalPaintPlane();
     const setInputLocked = terminalInstanceService.setInputLocked as ReturnType<typeof vi.fn>;
 
     // Make the spawn fail to drive the catch path.

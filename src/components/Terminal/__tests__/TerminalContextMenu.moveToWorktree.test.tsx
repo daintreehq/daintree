@@ -154,13 +154,16 @@ vi.mock("@/services/ActionService", () => ({
   actionService: { dispatch, get: () => undefined, list: () => [] },
 }));
 
-vi.mock("@/services/TerminalInstanceService", () => ({
-  terminalInstanceService: {
+vi.mock("@/services/TerminalInstanceService", () => {
+  const terminalInstanceService = {
     get: () => undefined,
     getTerminal: () => undefined,
     getSelection: () => "",
-  },
-}));
+  };
+  return {
+    createTerminalPaintPlane: () => terminalInstanceService,
+  };
+});
 
 vi.mock("@/hooks/useWorktrees", () => ({
   useWorktrees: () => ({ worktrees: worktreesRef.current }),

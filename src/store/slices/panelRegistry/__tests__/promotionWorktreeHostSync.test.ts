@@ -27,16 +27,19 @@ vi.mock("@/clients", () => ({
   appClient: { setState: vi.fn().mockResolvedValue(undefined) },
 }));
 
-vi.mock("@/services/TerminalInstanceService", () => ({
-  terminalInstanceService: {
+vi.mock("@/services/TerminalInstanceService", () => {
+  const terminalInstanceService = {
     applyRendererPolicy: vi.fn(),
     onPanelBackgrounded: vi.fn(),
     resize: vi.fn().mockReturnValue(null),
     wake: vi.fn(),
     getInstance: vi.fn(),
     setInputLocked: vi.fn(),
-  },
-}));
+  };
+  return {
+    createTerminalPaintPlane: () => terminalInstanceService,
+  };
+});
 
 vi.mock("@/lib/notify", () => ({ notify: vi.fn() }));
 

@@ -795,7 +795,7 @@ export const createRestartActions = (
       // AGGRESSIVE TEARDOWN: Destroy frontend FIRST to prevent race condition
       peekTerminalService()?.destroy(id);
 
-      withTerminalService((service) => service.suppressNextExit(id, 10000));
+      withTerminalService((service) => service.suppressNextExit(id, 10000), id);
 
       // Capture project ID before async work to avoid race conditions (issue #3690).
       // The respawn keeps the panel's workspace ownership (project or scratch) so a
@@ -1337,7 +1337,10 @@ export const createRestartActions = (
       return;
     }
 
-    withTerminalService((service) => service.applyRendererPolicy(id, TerminalRefreshTier.VISIBLE));
+    withTerminalService(
+      (service) => service.applyRendererPolicy(id, TerminalRefreshTier.VISIBLE),
+      id
+    );
   },
 
   // No transfer, no capture, no restart: creating the worktree and filing the
@@ -1682,7 +1685,7 @@ async function respawnAgentOnPreset(
     }
 
     peekTerminalService()?.destroy(id);
-    withTerminalService((service) => service.suppressNextExit(id, 10000));
+    withTerminalService((service) => service.suppressNextExit(id, 10000), id);
     try {
       await terminalClient.kill(id, { forRestart: true });
     } catch (error) {

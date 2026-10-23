@@ -1373,8 +1373,9 @@ export const createAddPanelActions = (
     if (shouldBackground) {
       // Terminal is either in dock or in an inactive worktree.
       // Apply BACKGROUND policy to prevent renderer updates for unmounted terminals.
-      withTerminalService((service) =>
-        service.applyRendererPolicy(id, TerminalRefreshTier.BACKGROUND)
+      withTerminalService(
+        (service) => service.applyRendererPolicy(id, TerminalRefreshTier.BACKGROUND),
+        id
       );
     }
 

@@ -14,10 +14,10 @@ vi.mock("@/store/accessibilityAnnouncerStore", () => ({
   useAnnouncerStore: { getState: () => ({ announce: () => {} }) },
 }));
 vi.mock("@/services/TerminalInstanceService", () => ({
-  terminalInstanceService: {
+  createTerminalPaintPlane: () => ({
     isHibernated: () => false,
     subscribeHibernation: () => () => {},
-  },
+  }),
 }));
 
 import { useAccessibilityAnnouncements } from "../useAccessibilityAnnouncements";

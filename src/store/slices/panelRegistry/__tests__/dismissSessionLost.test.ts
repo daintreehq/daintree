@@ -44,14 +44,17 @@ vi.mock("@/clients", () => ({
   },
 }));
 
-vi.mock("@/services/TerminalInstanceService", () => ({
-  terminalInstanceService: {
+vi.mock("@/services/TerminalInstanceService", () => {
+  const terminalInstanceService = {
     cleanup: vi.fn(),
     applyRendererPolicy: vi.fn(),
     onPanelBackgrounded: vi.fn(),
     destroy: vi.fn(),
-  },
-}));
+  };
+  return {
+    createTerminalPaintPlane: () => terminalInstanceService,
+  };
+});
 
 vi.mock("../persistence", async () => {
   const actual = await vi.importActual<typeof import("../persistence")>("../persistence");

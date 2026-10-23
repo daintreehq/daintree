@@ -967,8 +967,9 @@ export function useContentGridContext({
     }
     const ids = fleetPanels.map((t) => t.id);
     for (const id of ids) {
-      withTerminalService((service) =>
-        service.applyRendererPolicy(id, TerminalRefreshTier.VISIBLE)
+      withTerminalService(
+        (service) => service.applyRendererPolicy(id, TerminalRefreshTier.VISIBLE),
+        id
       );
     }
     const fleetColsChanged = prevFleetGridColsRef.current !== fleetGridCols;

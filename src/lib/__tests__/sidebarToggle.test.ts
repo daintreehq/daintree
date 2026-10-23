@@ -38,15 +38,18 @@ const helpPanelStoreMock = vi.hoisted(() => {
   };
 });
 
-vi.mock("@/services/terminal/TerminalInstanceService", () => ({
-  terminalInstanceService: {
+vi.mock("@/services/terminal/TerminalInstanceService", () => {
+  const terminalInstanceService = {
     suppressResizesDuringLayoutTransition: suppressMock,
     lockResize: lockResizeMock,
     repaintForReveal: repaintForRevealMock,
     revealTerminal: revealTerminalMock,
     waitForAttachSettled: waitForAttachSettledMock,
-  },
-}));
+  };
+  return {
+    createTerminalPaintPlane: () => terminalInstanceService,
+  };
+});
 
 vi.mock("@/store/panelStore", () => ({
   usePanelStore: { getState: getPanelStateMock },

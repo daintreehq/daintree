@@ -15,13 +15,16 @@ vi.mock("@/clients", () => ({
   },
 }));
 
-vi.mock("@/services/TerminalInstanceService", () => ({
-  terminalInstanceService: {
+vi.mock("@/services/TerminalInstanceService", () => {
+  const terminalInstanceService = {
     applyRendererPolicy: vi.fn(),
     onPanelBackgrounded: vi.fn(),
     resize: vi.fn().mockReturnValue(null),
-  },
-}));
+  };
+  return {
+    createTerminalPaintPlane: () => terminalInstanceService,
+  };
+});
 
 vi.mock("../../../persistence/panelPersistence", () => ({
   panelPersistence: {
@@ -48,7 +51,9 @@ vi.mock("@/store/layoutConfigStore", () => ({
 }));
 
 const { usePanelStore } = await import("../../../panelStore");
-const { terminalInstanceService } = await import("@/services/TerminalInstanceService");
+const terminalInstanceService = (
+  await import("@/services/TerminalInstanceService")
+).createTerminalPaintPlane();
 const { load: loadTerminalService } =
   await import("@/services/terminal/terminalInstanceServiceAccessor");
 

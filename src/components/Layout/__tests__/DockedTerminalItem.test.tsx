@@ -68,13 +68,16 @@ vi.mock("@/config/agents", () => ({
   getMergedPresets: () => [],
 }));
 
-vi.mock("@/services/TerminalInstanceService", () => ({
-  terminalInstanceService: {
+vi.mock("@/services/TerminalInstanceService", () => {
+  const terminalInstanceService = {
     fit: () => ({ cols: 80, rows: 24 }),
     applyRendererPolicy: vi.fn(),
     focus: vi.fn(),
-  },
-}));
+  };
+  return {
+    createTerminalPaintPlane: () => terminalInstanceService,
+  };
+});
 
 import { load as loadTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
 
@@ -195,8 +198,10 @@ vi.mock("@dnd-kit/core", () => ({
 import { DockedTerminalItem } from "../DockedTerminalItem";
 import { DragHandleProvider } from "@/components/DragDrop/DragHandleContext";
 import { handleDockFocusOutside } from "../dockPopoverGuard";
-import { terminalInstanceService } from "@/services/TerminalInstanceService";
+import { createTerminalPaintPlane } from "@/services/TerminalInstanceService";
 import { TerminalRefreshTier } from "@/types";
+
+const terminalInstanceService = createTerminalPaintPlane();
 
 function makeTerminal(overrides: Partial<PtyPanelData> = {}): PtyPanelData {
   return {

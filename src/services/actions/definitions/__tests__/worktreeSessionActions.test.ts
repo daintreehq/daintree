@@ -27,9 +27,12 @@ const pendingDestructiveStoreMock = vi.hoisted(() => {
 });
 
 vi.mock("@/store/panelStore", () => ({ usePanelStore: panelStoreMock }));
-vi.mock("@/services/terminal/TerminalInstanceService", () => ({
-  terminalInstanceService: terminalInstanceServiceMock,
-}));
+vi.mock("@/services/terminal/TerminalInstanceService", () => {
+  const terminalInstanceService = terminalInstanceServiceMock;
+  return {
+    createTerminalPaintPlane: () => terminalInstanceService,
+  };
+});
 vi.mock("@/store/terminalPendingDestructiveActionStore", () => ({
   useTerminalPendingDestructiveActionStore: { getState: () => pendingDestructiveStoreMock.state },
 }));

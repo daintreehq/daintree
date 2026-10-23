@@ -105,10 +105,9 @@ describe("TerminalInstanceService — PTY resize-result intake (#11641)", () => 
     capturedResizeResultCb = null;
     capturedExitCbs.length = 0;
 
-    ({ terminalInstanceService: service } =
-      (await import("../TerminalInstanceService")) as unknown as {
-        terminalInstanceService: ResizeResultTestService;
-      });
+    service = (await (
+      await import("../terminalInstanceServiceAccessor")
+    ).load()) as unknown as ResizeResultTestService;
     service.instances.clear();
   });
 

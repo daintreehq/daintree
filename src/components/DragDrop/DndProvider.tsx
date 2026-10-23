@@ -705,7 +705,7 @@ export function DndProvider({ children }: DndProviderProps) {
       const terminalId = data?.terminal?.id ?? parseAccordionDragId(dragId) ?? dragId;
 
       setActiveId(dragId);
-      withTerminalService((service) => service.lockResize(terminalId, true));
+      withTerminalService((service) => service.lockResize(terminalId, true), terminalId);
       gridInsertMemoRef.current = null;
 
       // Clear any pending stabilization timers from previous drags
@@ -915,7 +915,7 @@ export function DndProvider({ children }: DndProviderProps) {
       // when dropping outside droppable areas (over === null)
       if (draggedId) {
         setTimeout(
-          () => withTerminalService((service) => service.lockResize(draggedId, false)),
+          () => withTerminalService((service) => service.lockResize(draggedId, false), draggedId),
           DURATION_100
         );
       }
@@ -1316,7 +1316,7 @@ export function DndProvider({ children }: DndProviderProps) {
         activeData?.terminal?.id ??
         (activeId ? (parseAccordionDragId(activeId) ?? activeId) : null);
       if (terminalId) {
-        withTerminalService((service) => service.lockResize(terminalId, false));
+        withTerminalService((service) => service.lockResize(terminalId, false), terminalId);
       }
     }
 

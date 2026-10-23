@@ -5,7 +5,7 @@ import { isPtyPanel } from "@shared/types/panel";
 import type { PanelInstance, PtyPanelData } from "@shared/types/panel";
 import { join, normalize } from "@shared/utils/path";
 import { getTerminalDisplayTitle } from "@/utils/terminalTitleDisplay";
-import { terminalInstanceService } from "@/services/TerminalInstanceService";
+import { peek as peekTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
 import { terminalClient } from "@/clients";
 import { formatForTerminalPaste } from "@shared/utils/terminalInputProtocol";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
@@ -95,7 +95,8 @@ export function deliverDiffNotes(
   // Enter, which would submit it a line at a time. A pane with no mounted
   // instance has no mode to read; the palette treats that as wrapped, and so
   // does this.
-  const managed = terminalInstanceService.get(targetId);
+  const terminalService = peekTerminalService();
+  const managed = terminalService?.get(targetId);
   if (managed && !managed.terminal.modes.bracketedPasteMode) {
     return { ok: false, message: "That agent isn't accepting pasted text right now." };
   }
@@ -119,7 +120,7 @@ export function deliverDiffNotes(
   } catch (error) {
     return { ok: false, message: formatErrorMessage(error, "The paste couldn't be written.") };
   }
-  if (managed) terminalInstanceService.notifyUserInput(targetId);
+  if (managed) terminalService?.notifyUserInput(targetId);
 
   const sent = useDiffNotesStore.getState().clearSent(ordered);
   return {

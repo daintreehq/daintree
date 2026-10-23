@@ -24,8 +24,8 @@ vi.mock("@/clients", () => ({
   },
 }));
 
-vi.mock("@/services/TerminalInstanceService", () => ({
-  terminalInstanceService: {
+vi.mock("@/services/TerminalInstanceService", () => {
+  const terminalInstanceService = {
     // Mirrors the service: anything but a drop landing on its own moves the
     // input epoch, so queued drops are judged against what really happened.
     notifyUserInput: vi.fn((_id: string, _data?: string, options?: { automatic?: boolean }) => {
@@ -41,8 +41,11 @@ vi.mock("@/services/TerminalInstanceService", () => ({
           }
         : null
     ),
-  },
-}));
+  };
+  return {
+    createTerminalPaintPlane: () => terminalInstanceService,
+  };
+});
 
 // The real store constructs the terminal-instance singleton and several
 // controllers at module scope. Only the focus-preference setter and the
@@ -80,7 +83,7 @@ import { IMAGE_EXTENSIONS, useTerminalFileTransfer } from "../useTerminalFileTra
 import { useDragDrop } from "../hooks/useDragDrop";
 import { formatAtFileToken } from "../hybridInputParsing";
 import { terminalClient } from "@/clients";
-import { terminalInstanceService } from "@/services/TerminalInstanceService";
+import { createTerminalPaintPlane } from "@/services/TerminalInstanceService";
 import { notify } from "@/lib/notify";
 import { copyWithToast } from "@/lib/copyWithToast";
 import { setHostInputBlock } from "@/services/terminal/inputGate";
@@ -111,6 +114,8 @@ import type { MaterializeResult, MaterializeSource } from "@shared/types/remoteH
 import type { TransferSource } from "@/lib/transferSources";
 import { useTerminalInputStore } from "@/store/terminalInputStore";
 import { load as loadTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
+
+const terminalInstanceService = createTerminalPaintPlane();
 
 /** What `clipboard.saveImage` resolves to, taken from the IPC surface itself. */
 type SavedImage = Awaited<ReturnType<typeof window.electron.clipboard.saveImage>>;

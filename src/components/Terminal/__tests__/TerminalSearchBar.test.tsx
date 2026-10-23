@@ -2,13 +2,16 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen, fireEvent, act } from "@testing-library/react";
 
-vi.mock("@/services/TerminalInstanceService", () => ({
-  terminalInstanceService: {
+vi.mock("@/services/TerminalInstanceService", () => {
+  const terminalInstanceService = {
     get: vi.fn(),
     ensureSearchAddon: vi.fn(),
     pinHistory: vi.fn(),
-  },
-}));
+  };
+  return {
+    createTerminalPaintPlane: () => terminalInstanceService,
+  };
+});
 
 vi.mock("@/components/ui/tooltip", () => ({
   Tooltip: ({ children }: { children: React.ReactNode }) => <>{children}</>,
@@ -18,9 +21,11 @@ vi.mock("@/components/ui/tooltip", () => ({
 }));
 
 import { TerminalSearchBar } from "../TerminalSearchBar";
-import { terminalInstanceService } from "@/services/TerminalInstanceService";
+import { createTerminalPaintPlane } from "@/services/TerminalInstanceService";
 import { useTerminalSearchHistoryStore } from "@/store/terminalSearchHistoryStore";
 import { load as loadTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
+
+const terminalInstanceService = createTerminalPaintPlane();
 
 type ResultsListener = (event: { resultIndex: number; resultCount: number }) => void;
 

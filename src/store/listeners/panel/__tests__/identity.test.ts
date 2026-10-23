@@ -17,13 +17,16 @@ vi.mock("@/lib/notify", () => ({
   notify: vi.fn(),
 }));
 
-vi.mock("@/services/TerminalInstanceService", () => ({
-  terminalInstanceService: {
+vi.mock("@/services/TerminalInstanceService", () => {
+  const terminalInstanceService = {
     setAgentState: vi.fn(),
     applyAgentPromotion: vi.fn(),
     clearAgentPromotion: vi.fn(),
-  },
-}));
+  };
+  return {
+    createTerminalPaintPlane: () => terminalInstanceService,
+  };
+});
 
 const onAgentStateChangedHandlers = vi.hoisted(
   () => new Set<(data: AgentStateChangePayload) => void>()

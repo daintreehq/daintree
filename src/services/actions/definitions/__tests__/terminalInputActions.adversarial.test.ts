@@ -31,9 +31,12 @@ vi.mock("@/store/panelStore", () => ({
   usePanelStore: { getState: panelStoreMock.getState },
 }));
 vi.mock("@/lib/panelContextMenu", () => contextMenuMock);
-vi.mock("@/services/terminal/TerminalInstanceService", () => ({
-  terminalInstanceService: terminalInstanceMock,
-}));
+vi.mock("@/services/terminal/TerminalInstanceService", () => {
+  const terminalInstanceService = terminalInstanceMock;
+  return {
+    createTerminalPaintPlane: () => terminalInstanceService,
+  };
+});
 vi.mock("@/clients", () => ({ terminalClient: terminalClientMock }));
 vi.mock("@/hooks/useSendToAgentPalette", () => sendToAgentMock);
 vi.mock("@/store/terminalInputStore", () => terminalInputStoreMock);

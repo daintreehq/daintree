@@ -32,19 +32,24 @@ vi.stubGlobal("window", {
   },
 });
 
-vi.mock("@/services/TerminalInstanceService", () => ({
-  terminalInstanceService: {
+vi.mock("@/services/TerminalInstanceService", () => {
+  const terminalInstanceService = {
     applyBackgroundWindowResize: applyBackgroundWindowResizeMock,
     resetBackgroundResizeBasis: resetBackgroundResizeBasisMock,
-  },
-}));
+  };
+  return {
+    createTerminalPaintPlane: () => terminalInstanceService,
+  };
+});
 
 import { useBackgroundWindowResize } from "../useBackgroundWindowResize";
 import {
   __testing as terminalServiceTesting,
   register as registerTerminalService,
 } from "@/services/terminal/terminalInstanceServiceAccessor";
-import { terminalInstanceService as service } from "@/services/TerminalInstanceService";
+import { createTerminalPaintPlane } from "@/services/TerminalInstanceService";
+
+const service = createTerminalPaintPlane();
 
 function setVisibility(state: "visible" | "hidden") {
   Object.defineProperty(document, "visibilityState", { value: state, configurable: true });

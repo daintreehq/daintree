@@ -40,8 +40,8 @@ vi.mock("@/clients", () => ({
   },
 }));
 
-vi.mock("@/services/TerminalInstanceService", () => ({
-  terminalInstanceService: {
+vi.mock("@/services/TerminalInstanceService", () => {
+  const terminalInstanceService = {
     cleanup: vi.fn(),
     applyRendererPolicy: vi.fn(),
     onPanelBackgrounded: vi.fn(),
@@ -52,8 +52,11 @@ vi.mock("@/services/TerminalInstanceService", () => ({
     invalidatePtyGrid: vi.fn(),
     waitForAttachSettled: vi.fn().mockResolvedValue(undefined),
     get: vi.fn(() => null),
-  },
-}));
+  };
+  return {
+    createTerminalPaintPlane: () => terminalInstanceService,
+  };
+});
 
 vi.mock("@/store/helpPanelStore", () => ({
   useHelpPanelStore: {
@@ -95,7 +98,9 @@ const { usePanelLimitStore } = await import("@/store/panelLimitStore");
 const { agentLifecycleLedger } = await import("@/services/terminal/lifecycleLedger");
 const { terminalClient } = await import("@/clients");
 const spawn = vi.mocked(terminalClient.spawn);
-const { terminalInstanceService } = await import("@/services/TerminalInstanceService");
+const terminalInstanceService = (
+  await import("@/services/TerminalInstanceService")
+).createTerminalPaintPlane();
 const { saveNormalized } = await import("../persistence");
 const { beginBatch, consumeBatch } = await import("../hydrationBatch");
 
@@ -410,7 +415,9 @@ describe("spawn-time PTY geometry (#10863)", () => {
     terminalClient.spawn.mockImplementation(async ({ id }: { id?: string }) => id ?? "spawn-id");
     terminalClient.resize.mockReset();
 
-    const { terminalInstanceService } = await import("@/services/TerminalInstanceService");
+    const terminalInstanceService = (
+      await import("@/services/TerminalInstanceService")
+    ).createTerminalPaintPlane();
     vi.mocked(terminalInstanceService.get).mockReset();
     vi.mocked(terminalInstanceService.get).mockReturnValue(null as never);
     vi.mocked(terminalInstanceService.sendPtyResize).mockReset();
@@ -420,7 +427,9 @@ describe("spawn-time PTY geometry (#10863)", () => {
     const { terminalClient } = (await import("@/clients")) as unknown as {
       terminalClient: { spawn: ReturnType<typeof vi.fn> };
     };
-    const { terminalInstanceService } = await import("@/services/TerminalInstanceService");
+    const terminalInstanceService = (
+      await import("@/services/TerminalInstanceService")
+    ).createTerminalPaintPlane();
     vi.mocked(terminalInstanceService.get).mockReturnValue(makeAttachedManaged(54, 40) as never);
 
     const { addPanel } = usePanelStore.getState();
@@ -452,7 +461,9 @@ describe("spawn-time PTY geometry (#10863)", () => {
     const { terminalClient } = (await import("@/clients")) as unknown as {
       terminalClient: { spawn: ReturnType<typeof vi.fn>; resize: ReturnType<typeof vi.fn> };
     };
-    const { terminalInstanceService } = await import("@/services/TerminalInstanceService");
+    const terminalInstanceService = (
+      await import("@/services/TerminalInstanceService")
+    ).createTerminalPaintPlane();
 
     // Not attached when the spawn dims are read; attached (and fitted to
     // 54×40) by the time the spawn IPC resolves. The fit's own PTY resize was
@@ -535,7 +546,9 @@ describe("construction geometry for restored panes (#11718)", () => {
     terminalClient.spawn.mockImplementation(async ({ id }: { id?: string }) => id ?? "spawn-id");
     terminalClient.resize.mockReset();
 
-    const { terminalInstanceService } = await import("@/services/TerminalInstanceService");
+    const terminalInstanceService = (
+      await import("@/services/TerminalInstanceService")
+    ).createTerminalPaintPlane();
     vi.mocked(terminalInstanceService.get).mockReset();
     vi.mocked(terminalInstanceService.get).mockReturnValue(null as never);
     vi.mocked(terminalInstanceService.sendPtyResize).mockReset();
@@ -549,7 +562,9 @@ describe("construction geometry for restored panes (#11718)", () => {
    * is covered against a live xterm in TerminalRestoreController.replay.test.ts.)
    */
   async function prewarmDims(id: string): Promise<{ cols?: number; rows?: number } | undefined> {
-    const { terminalInstanceService } = await import("@/services/TerminalInstanceService");
+    const terminalInstanceService = (
+      await import("@/services/TerminalInstanceService")
+    ).createTerminalPaintPlane();
     const call = vi
       .mocked(terminalInstanceService.prewarmTerminal)
       .mock.calls.find((c) => c[0] === id);
@@ -560,7 +575,9 @@ describe("construction geometry for restored panes (#11718)", () => {
     const { terminalClient } = (await import("@/clients")) as unknown as {
       terminalClient: { spawn: ReturnType<typeof vi.fn>; resize: ReturnType<typeof vi.fn> };
     };
-    const { terminalInstanceService } = await import("@/services/TerminalInstanceService");
+    const terminalInstanceService = (
+      await import("@/services/TerminalInstanceService")
+    ).createTerminalPaintPlane();
 
     const { addPanel } = usePanelStore.getState();
     await addPanel({

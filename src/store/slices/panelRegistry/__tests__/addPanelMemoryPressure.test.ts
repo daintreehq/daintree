@@ -52,8 +52,8 @@ vi.mock("@/clients", () => ({
   },
 }));
 
-vi.mock("@/services/TerminalInstanceService", () => ({
-  terminalInstanceService: {
+vi.mock("@/services/TerminalInstanceService", () => {
+  const terminalInstanceService = {
     cleanup: vi.fn(),
     applyRendererPolicy: vi.fn(),
     onPanelBackgrounded: vi.fn(),
@@ -66,8 +66,11 @@ vi.mock("@/services/TerminalInstanceService", () => ({
     // No attached renderer xterm in these tests — spawn falls back to the
     // default/estimated dims path.
     get: vi.fn(() => null),
-  },
-}));
+  };
+  return {
+    createTerminalPaintPlane: () => terminalInstanceService,
+  };
+});
 
 vi.mock("../persistence", async () => {
   const actual = await vi.importActual<typeof import("../persistence")>("../persistence");

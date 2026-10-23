@@ -126,8 +126,10 @@ describe("TerminalInstanceService — remote terminal reset", () => {
     capturedResetCb = null;
     currentGeneration = 0;
     // Reached through Reflect: the test drives private members the public type hides.
-    const mod: object = await import("../TerminalInstanceService");
-    service = Reflect.get(mod, "terminalInstanceService");
+    const loaded: object = {
+      plane: await (await import("../terminalInstanceServiceAccessor")).load(),
+    };
+    service = Reflect.get(loaded, "plane");
     service.instances.clear();
   });
 
@@ -237,8 +239,10 @@ describe("TerminalInstanceService — a terminal its host lost", () => {
     vi.resetModules();
     vi.clearAllMocks();
     // Reached through Reflect: the test drives members the public type hides.
-    const mod: object = await import("../TerminalInstanceService");
-    service = Reflect.get(mod, "terminalInstanceService");
+    const loaded: object = {
+      plane: await (await import("../terminalInstanceServiceAccessor")).load(),
+    };
+    service = Reflect.get(loaded, "plane");
     service.instances.clear();
   });
 

@@ -72,18 +72,24 @@ vi.mock("@/store/panelStore", () => ({ usePanelStore: { getState: () => store.st
 vi.mock("@/store/fleetArmingStore", () => ({
   useFleetArmingStore: { getState: () => ({ armedIds: new Set<string>() }) },
 }));
-vi.mock("@/services/TerminalInstanceService", () => ({
-  terminalInstanceService: { focus: vi.fn() },
-}));
-vi.mock("@/services/terminal/TerminalInstanceService", () => ({
-  terminalInstanceService: {
+vi.mock("@/services/TerminalInstanceService", () => {
+  const terminalInstanceService = { focus: vi.fn() };
+  return {
+    createTerminalPaintPlane: () => terminalInstanceService,
+  };
+});
+vi.mock("@/services/terminal/TerminalInstanceService", () => {
+  const terminalInstanceService = {
     focus: vi.fn(),
     cleanup: vi.fn(),
     applyRendererPolicy: vi.fn(),
     onPanelBackgrounded: vi.fn(),
     resetRenderer: vi.fn(),
-  },
-}));
+  };
+  return {
+    createTerminalPaintPlane: () => terminalInstanceService,
+  };
+});
 vi.mock("@/clients", () => ({
   terminalClient: { submit: vi.fn(), killTerminal: vi.fn(), forceResume: vi.fn() },
 }));

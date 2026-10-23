@@ -15,9 +15,12 @@ vi.mock("@/store/layoutUndoStore", () => ({
 vi.mock("@/components/Panel/animatePanelMove", () => ({
   animatePanelMove: (_id: string, _direction: string, move: () => unknown) => move(),
 }));
-vi.mock("@/services/terminal/TerminalInstanceService", () => ({
-  terminalInstanceService: {},
-}));
+vi.mock("@/services/terminal/TerminalInstanceService", () => {
+  const terminalInstanceService = {};
+  return {
+    createTerminalPaintPlane: () => terminalInstanceService,
+  };
+});
 vi.mock("@/lib/watchNotification", () => ({ fireWatchNotification: vi.fn() }));
 vi.mock("@/store/layoutConfigStore", () => ({ useLayoutConfigStore: { getState: vi.fn() } }));
 vi.mock("@/components/Terminal/gridLayoutSnapshot", () => ({ getGridLayoutSnapshot: vi.fn() }));

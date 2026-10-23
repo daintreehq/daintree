@@ -706,8 +706,9 @@ export const createCorePanelActions = (
 
     // Only apply renderer policy for PTY-backed panels if move succeeded
     if (moveSucceeded && terminal && panelKindHasPty(terminal.kind ?? "terminal")) {
-      withTerminalService((service) =>
-        service.applyRendererPolicy(id, TerminalRefreshTier.VISIBLE)
+      withTerminalService(
+        (service) => service.applyRendererPolicy(id, TerminalRefreshTier.VISIBLE),
+        id
       );
     }
 

@@ -119,10 +119,9 @@ describe("#10632 rule #1 — suppression-clear preserves the redraw obligation",
   beforeEach(async () => {
     vi.clearAllMocks();
     vi.useFakeTimers();
-    ({ terminalInstanceService: service } =
-      (await import("../TerminalInstanceService")) as unknown as {
-        terminalInstanceService: ObligationService;
-      });
+    service = (await (
+      await import("../terminalInstanceServiceAccessor")
+    ).load()) as unknown as ObligationService;
     service.instances.clear();
   });
 

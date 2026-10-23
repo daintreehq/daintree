@@ -141,8 +141,9 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
   useEffect(() => {
     if (!isOpen) {
       try {
-        withTerminalService((service) =>
-          service.applyRendererPolicy(terminal.id, TerminalRefreshTier.BACKGROUND)
+        withTerminalService(
+          (service) => service.applyRendererPolicy(terminal.id, TerminalRefreshTier.BACKGROUND),
+          terminal.id
         );
       } catch (error) {
         console.warn(`Failed to apply dock state for terminal ${terminal.id}:`, error);

@@ -128,12 +128,15 @@ vi.mock("@/clients", () => ({
   },
 }));
 
-vi.mock("@/services/TerminalInstanceService", () => ({
-  terminalInstanceService: {
+vi.mock("@/services/TerminalInstanceService", () => {
+  const terminalInstanceService = {
     applyRendererPolicy: applyRendererPolicyMock,
     wake: wakeMock,
-  },
-}));
+  };
+  return {
+    createTerminalPaintPlane: () => terminalInstanceService,
+  };
+});
 
 vi.mock("@/services/terminal/worktreeRevealCoordinator", () => ({
   replaceWorktreeRevealObligations: replaceWorktreeRevealObligationsMock,

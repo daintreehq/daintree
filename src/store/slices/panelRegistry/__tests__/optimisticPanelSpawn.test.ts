@@ -45,8 +45,8 @@ vi.mock("@/clients", () => ({
   },
 }));
 
-vi.mock("@/services/TerminalInstanceService", () => ({
-  terminalInstanceService: {
+vi.mock("@/services/TerminalInstanceService", () => {
+  const terminalInstanceService = {
     cleanup: vi.fn(),
     applyRendererPolicy: vi.fn(),
     onPanelBackgrounded: vi.fn(),
@@ -61,8 +61,11 @@ vi.mock("@/services/TerminalInstanceService", () => ({
     // No attached renderer xterm in these tests — spawn falls back to the
     // default/estimated dims path.
     get: vi.fn(() => null),
-  },
-}));
+  };
+  return {
+    createTerminalPaintPlane: () => terminalInstanceService,
+  };
+});
 
 vi.mock("../persistence", async () => {
   const actual = await vi.importActual<typeof import("../persistence")>("../persistence");
@@ -124,7 +127,9 @@ describe("optimistic panel spawn (#5789)", () => {
     };
     terminalClient.spawn.mockReset();
     terminalClient.spawn.mockImplementation(async ({ id }: { id?: string }) => id ?? "spawn-id");
-    const { terminalInstanceService } = await import("@/services/TerminalInstanceService");
+    const terminalInstanceService = (
+      await import("@/services/TerminalInstanceService")
+    ).createTerminalPaintPlane();
     const waitForAttachSettledMock = vi.mocked(terminalInstanceService.waitForAttachSettled);
     waitForAttachSettledMock.mockReset();
     waitForAttachSettledMock.mockResolvedValue(undefined);
@@ -179,7 +184,9 @@ describe("optimistic panel spawn (#5789)", () => {
     const { terminalClient } = (await import("@/clients")) as unknown as {
       terminalClient: { spawn: ReturnType<typeof vi.fn> };
     };
-    const { terminalInstanceService } = await import("@/services/TerminalInstanceService");
+    const terminalInstanceService = (
+      await import("@/services/TerminalInstanceService")
+    ).createTerminalPaintPlane();
     const waitForAttachSettledMock = vi.mocked(terminalInstanceService.waitForAttachSettled);
 
     let releaseFirstSpawn: () => void = () => {};
@@ -267,7 +274,9 @@ describe("optimistic panel spawn (#5789)", () => {
     const { terminalClient } = (await import("@/clients")) as unknown as {
       terminalClient: { spawn: ReturnType<typeof vi.fn> };
     };
-    const { terminalInstanceService } = await import("@/services/TerminalInstanceService");
+    const terminalInstanceService = (
+      await import("@/services/TerminalInstanceService")
+    ).createTerminalPaintPlane();
     const waitForAttachSettledMock = vi.mocked(terminalInstanceService.waitForAttachSettled);
     const releases: Array<() => void> = [];
     const attachGates = Array.from(
@@ -543,7 +552,9 @@ describe("addPanel lifecycle ledger", () => {
     // a prior test's mockImplementation (or vitest's mock state under load)
     // can survive into the next test if not explicitly cleared — mirrors the
     // optimisticPanelSpawn test's beforeEach.
-    const { terminalInstanceService } = await import("@/services/TerminalInstanceService");
+    const terminalInstanceService = (
+      await import("@/services/TerminalInstanceService")
+    ).createTerminalPaintPlane();
     const waitForAttachSettledMock = vi.mocked(terminalInstanceService.waitForAttachSettled);
     waitForAttachSettledMock.mockReset();
     waitForAttachSettledMock.mockResolvedValue(undefined);
@@ -735,7 +746,9 @@ describe("a spawn whose answer was lost with the link (#13915)", () => {
     terminalClient.kill.mockReset().mockResolvedValue(undefined);
     hostReconnect.mockReset().mockResolvedValue({ exists: false });
     Object.assign(window.electron, { terminal: { reconnect: hostReconnect } });
-    const { terminalInstanceService } = await import("@/services/TerminalInstanceService");
+    const terminalInstanceService = (
+      await import("@/services/TerminalInstanceService")
+    ).createTerminalPaintPlane();
     vi.mocked(terminalInstanceService.waitForAttachSettled)
       .mockReset()
       .mockResolvedValue(undefined);
@@ -779,7 +792,9 @@ describe("a spawn whose answer was lost with the link (#13915)", () => {
     expect(panel?.agentState).toBe("waiting");
     expect(agentLifecycleLedger.getEntry("lost-1")?.spawnOk).toBe(true);
     // The screen the agent drew while the link was down comes from the host.
-    const { terminalInstanceService } = await import("@/services/TerminalInstanceService");
+    const terminalInstanceService = (
+      await import("@/services/TerminalInstanceService")
+    ).createTerminalPaintPlane();
     expect(terminalInstanceService.fetchAndRestore).toHaveBeenCalledWith("lost-1");
   });
 

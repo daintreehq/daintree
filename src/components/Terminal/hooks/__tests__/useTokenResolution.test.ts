@@ -8,16 +8,24 @@ import {
 } from "@shared/utils/agentContextDrag";
 import { draftUnchangedSince, useTokenResolution } from "../useTokenResolution";
 
+import { load as loadTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
+
+// The service mock never evaluates the real module, so nothing builds it.
+await loadTerminalService();
+
 const cachedSelection = vi.hoisted(() => ({ value: null as string | null }));
 
-vi.mock("@/services/TerminalInstanceService", () => ({
-  terminalInstanceService: {
+vi.mock("@/services/TerminalInstanceService", () => {
+  const terminalInstanceService = {
     get: () => undefined,
     getCachedSelection: () => cachedSelection.value,
     clearDirectingState: () => {},
     notifyUserInput: () => {},
-  },
-}));
+  };
+  return {
+    createTerminalPaintPlane: () => terminalInstanceService,
+  };
+});
 
 vi.mock("@/store/commandHistoryStore", () => ({
   useCommandHistoryStore: { getState: () => ({ recordPrompt: vi.fn() }) },

@@ -28,9 +28,12 @@ const terminalService = vi.hoisted(() => ({
   lockResize: vi.fn(),
   runResizePass: vi.fn(),
 }));
-vi.mock("@/services/TerminalInstanceService", () => ({
-  terminalInstanceService: terminalService,
-}));
+vi.mock("@/services/TerminalInstanceService", () => {
+  const terminalInstanceService = terminalService;
+  return {
+    createTerminalPaintPlane: () => terminalInstanceService,
+  };
+});
 
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { TerminalScratchpad } from "../TerminalScratchpad";

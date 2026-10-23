@@ -20,16 +20,19 @@ vi.mock("@/clients", () => ({
   },
 }));
 
-vi.mock("@/services/TerminalInstanceService", () => ({
-  terminalInstanceService: {
+vi.mock("@/services/TerminalInstanceService", () => {
+  const terminalInstanceService = {
     destroy: vi.fn(),
     applyRendererPolicy: vi.fn(),
     onPanelBackgrounded: vi.fn(),
     resize: vi.fn().mockReturnValue({ cols: 80, rows: 24 }),
     wake: vi.fn(),
     wakeForFocus: vi.fn(),
-  },
-}));
+  };
+  return {
+    createTerminalPaintPlane: () => terminalInstanceService,
+  };
+});
 
 vi.mock("../../persistence/panelPersistence", () => ({
   panelPersistence: {

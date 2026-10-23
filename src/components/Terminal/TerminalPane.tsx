@@ -1345,7 +1345,7 @@ function TerminalPaneComponent({
         bracketedPasteMode: managed ? managed.terminal.modes.bracketedPasteMode : true,
       })
     );
-    withTerminalService((service) => service.notifyUserInput(helpTid));
+    withTerminalService((service) => service.notifyUserInput(helpTid), helpTid);
     const help = useHelpPanelStore.getState();
     help.setOpen(true);
     help.requestFocus();
@@ -1822,7 +1822,7 @@ function TerminalPaneComponent({
                     onActivate={handleClick}
                     onSend={({ trackerData, text, imagePaths }) => {
                       if (!isInputLocked && !isRestarting) {
-                        withTerminalService((service) => service.notifyUserInput(id));
+                        withTerminalService((service) => service.notifyUserInput(id), id);
                         reportCanopySent(id);
                         // submit now rejects when the PTY is gone (#8706); the
                         // single-pane path has no recovery UI for that, so
@@ -1841,11 +1841,12 @@ function TerminalPaneComponent({
                     onSendKey={(key) => {
                       if (!isInputLocked && !isRestarting) {
                         if (key === "escape") {
-                          withTerminalService((service) =>
-                            service.clearDirectingState(id, "escape-key")
+                          withTerminalService(
+                            (service) => service.clearDirectingState(id, "escape-key"),
+                            id
                           );
                         } else {
-                          withTerminalService((service) => service.notifyUserInput(id));
+                          withTerminalService((service) => service.notifyUserInput(id), id);
                         }
                         if (key === "enter") reportCanopySent(id);
                         terminalClient.sendKey(id, key);

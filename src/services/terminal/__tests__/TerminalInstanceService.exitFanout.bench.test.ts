@@ -90,10 +90,9 @@ describe("terminal event fan-out benchmark", () => {
     vi.resetModules();
     exitBus.subscribers.clear();
     exitBus.invocations = 0;
-    ({ terminalInstanceService: service } =
-      (await import("../TerminalInstanceService")) as unknown as {
-        terminalInstanceService: BenchService;
-      });
+    service = (await (
+      await import("../terminalInstanceServiceAccessor")
+    ).load()) as unknown as BenchService;
     service.instances.clear();
   });
 

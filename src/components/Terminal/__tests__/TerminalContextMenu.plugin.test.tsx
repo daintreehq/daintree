@@ -90,12 +90,15 @@ vi.mock("@/services/ActionService", () => ({
   },
 }));
 
-vi.mock("@/services/TerminalInstanceService", () => ({
-  terminalInstanceService: {
+vi.mock("@/services/TerminalInstanceService", () => {
+  const terminalInstanceService = {
     getTerminal: () => undefined,
     getSelection: () => "",
-  },
-}));
+  };
+  return {
+    createTerminalPaintPlane: () => terminalInstanceService,
+  };
+});
 
 const worktreeList = vi.hoisted(() => ({
   current: [] as Array<{ id: string; path: string; name: string }>,

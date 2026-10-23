@@ -15,9 +15,12 @@ const { handleBackendCrash, handleBackendRecovery } = vi.hoisted(() => ({
   handleBackendRecovery: vi.fn(),
 }));
 
-vi.mock("@/services/TerminalInstanceService", () => ({
-  terminalInstanceService: { handleBackendCrash, handleBackendRecovery },
-}));
+vi.mock("@/services/TerminalInstanceService", () => {
+  const terminalInstanceService = { handleBackendCrash, handleBackendRecovery };
+  return {
+    createTerminalPaintPlane: () => terminalInstanceService,
+  };
+});
 
 const backendReadyHandlers = vi.hoisted(() => [] as Array<() => void>);
 const backendCrashedHandlers = vi.hoisted(() => [] as Array<(details: unknown) => void>);

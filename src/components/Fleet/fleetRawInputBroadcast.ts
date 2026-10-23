@@ -48,7 +48,7 @@ export function broadcastFleetRawInput(originId: string, data: string): boolean 
   // see #3565.
   for (const id of targets) {
     if (id === originId) continue;
-    withTerminalService((service) => service.notifyUserInput(id, data));
+    withTerminalService((service) => service.notifyUserInput(id, data), id);
   }
   // Plain Enter is a submit. Mirror the structured-submit pattern from
   // `fleetExecution.ts`: optimistically advance `directing → working` for
@@ -158,7 +158,7 @@ export function applyFleetBroadcastResult(payload: BroadcastWriteResultPayload):
       // Clear the synthetic `directing` set when we mirrored the broadcast
       // through notifyUserInput, so a dead-pipe target doesn't show the
       // blue indicator for the full 1.5s debounce window.
-      withTerminalService((service) => service.clearDirectingState(id));
+      withTerminalService((service) => service.clearDirectingState(id), id);
     }
   }
 }

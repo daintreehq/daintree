@@ -12,12 +12,14 @@ import {
   setAgentScrollbackMaxLines,
 } from "../../utils/scrollbackConfig";
 import { useResourceProfileStore } from "../../store/resourceProfileStore";
-import { terminalInstanceService } from "../../services/terminal/TerminalInstanceService";
+import { createTerminalPaintPlane } from "../../services/terminal/TerminalInstanceService";
 import {
   __testing as terminalServiceTesting,
   register as registerTerminalService,
 } from "../../services/terminal/terminalInstanceServiceAccessor";
 import type { ResourceProfilePayload } from "@shared/types/resourceProfile";
+
+const terminalInstanceService = createTerminalPaintPlane();
 
 vi.mock("@xterm/addon-webgl", () => ({
   WebglAddon: vi.fn(),

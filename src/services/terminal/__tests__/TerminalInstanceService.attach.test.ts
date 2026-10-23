@@ -136,10 +136,9 @@ describe("TerminalInstanceService attach reveal", () => {
   beforeEach(async () => {
     vi.clearAllMocks();
     vi.useFakeTimers();
-    ({ terminalInstanceService: service } =
-      (await import("../TerminalInstanceService")) as unknown as {
-        terminalInstanceService: AttachTestService;
-      });
+    service = (await (
+      await import("../terminalInstanceServiceAccessor")
+    ).load()) as unknown as AttachTestService;
     service.instances.clear();
   });
 
@@ -621,10 +620,9 @@ describe("TerminalInstanceService detach blur", () => {
 
   beforeEach(async () => {
     vi.clearAllMocks();
-    ({ terminalInstanceService: service } =
-      (await import("../TerminalInstanceService")) as unknown as {
-        terminalInstanceService: DetachTestService;
-      });
+    service = (await (
+      await import("../terminalInstanceServiceAccessor")
+    ).load()) as unknown as DetachTestService;
     service.instances.clear();
   });
 
@@ -775,10 +773,9 @@ describe("TerminalInstanceService attach layout reads", () => {
 
   beforeEach(async () => {
     vi.clearAllMocks();
-    ({ terminalInstanceService: service } =
-      (await import("../TerminalInstanceService")) as unknown as {
-        terminalInstanceService: AttachTestService;
-      });
+    service = (await (
+      await import("../terminalInstanceServiceAccessor")
+    ).load()) as unknown as AttachTestService;
     vi.useFakeTimers();
     service.instances.clear();
   });

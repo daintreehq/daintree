@@ -59,14 +59,17 @@ vi.mock("@/services/terminal/TerminalResizeController", () => ({
   getXtermCellDimensions: () => cell.current,
 }));
 const pane = vi.hoisted(() => ({ events: [] as string[] }));
-vi.mock("@/services/TerminalInstanceService", () => ({
-  terminalInstanceService: {
+vi.mock("@/services/TerminalInstanceService", () => {
+  const terminalInstanceService = {
     holdGeometry: (id: string) => {
       pane.events.push(`hold ${id}`);
       return () => pane.events.push(`release ${id}`);
     },
-  },
-}));
+  };
+  return {
+    createTerminalPaintPlane: () => terminalInstanceService,
+  };
+});
 
 vi.mock("@xterm/addon-webgl", () => {
   throw new Error("no WebGL in jsdom");
@@ -78,6 +81,11 @@ import {
   type CanopyStreamState,
 } from "../CanopyTerminal";
 import type { CanopyTerminalApi } from "../canopyHostSource";
+
+import { load as loadTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
+
+// The service mock never evaluates the real module, so nothing builds it.
+await loadTerminalService();
 
 let pushChunk: (chunk: CanopyTerminalData) => void = () => {};
 let openStream: (view: CanopyTerminalView) => void = () => {};

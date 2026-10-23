@@ -114,14 +114,17 @@ vi.mock("@/services/projectSwitchRendererCache", () => ({
 // Grids the outgoing-state builder should read, keyed by panel id. Absent =
 // non-PTY panel (or one whose xterm is gone), which `get()` reports as null.
 const mockTerminalGrids = new Map<string, { cols: number; rows: number }>();
-vi.mock("@/services/TerminalInstanceService", () => ({
-  terminalInstanceService: {
+vi.mock("@/services/TerminalInstanceService", () => {
+  const terminalInstanceService = {
     get: (id: string) => {
       const grid = mockTerminalGrids.get(id);
       return grid ? { terminal: grid } : null;
     },
-  },
-}));
+  };
+  return {
+    createTerminalPaintPlane: () => terminalInstanceService,
+  };
+});
 
 const projectA = {
   id: "project-a",

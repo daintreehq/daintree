@@ -7,15 +7,18 @@ vi.mock("@/controllers", () => ({
   },
 }));
 
-vi.mock("@/services/TerminalInstanceService", () => ({
-  terminalInstanceService: {
+vi.mock("@/services/TerminalInstanceService", () => {
+  const terminalInstanceService = {
     destroy: vi.fn(),
     detachForProjectSwitch: vi.fn(),
     suppressResizesDuringProjectSwitch: vi.fn(),
     applyRendererPolicy: vi.fn(),
     onPanelBackgrounded: vi.fn(),
-  },
-}));
+  };
+  return {
+    createTerminalPaintPlane: () => terminalInstanceService,
+  };
+});
 
 vi.mock("@/services/terminal/panelDuplicationService", () => ({
   buildPanelSnapshotOptions: vi.fn((p: { id: string }) => ({ id: p.id })),
@@ -46,8 +49,10 @@ const baseWatched = () => new Set<string>();
 
 import { usePanelStore } from "../panelStore";
 import { terminalRegistryController } from "@/controllers";
-import { terminalInstanceService } from "@/services/TerminalInstanceService";
+import { createTerminalPaintPlane } from "@/services/TerminalInstanceService";
 import { load as loadTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
+
+const terminalInstanceService = createTerminalPaintPlane();
 
 function resetStore() {
   usePanelStore.setState((s) => ({

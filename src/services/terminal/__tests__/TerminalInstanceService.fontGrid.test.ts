@@ -102,7 +102,9 @@ function stubMatchMedia(): void {
 
 describe("TerminalInstanceService - repairFontGrid (#9776)", () => {
   it("remeasures every non-hibernated instance", async () => {
-    const { terminalInstanceService } = await import("../TerminalInstanceService");
+    const terminalInstanceService = await (
+      await import("../terminalInstanceServiceAccessor")
+    ).load();
     stubMatchMedia();
 
     const m1 = await terminalInstanceService.getOrCreate(
@@ -133,7 +135,9 @@ describe("TerminalInstanceService - repairFontGrid (#9776)", () => {
   });
 
   it("pokes fontFamily to a distinct value then restores the original", async () => {
-    const { terminalInstanceService } = await import("../TerminalInstanceService");
+    const terminalInstanceService = await (
+      await import("../terminalInstanceServiceAccessor")
+    ).load();
     stubMatchMedia();
 
     const managed = await terminalInstanceService.getOrCreate(
@@ -171,7 +175,9 @@ describe("TerminalInstanceService - repairFontGrid (#9776)", () => {
   });
 
   it("falls back to the default font family when none is set", async () => {
-    const { terminalInstanceService } = await import("../TerminalInstanceService");
+    const terminalInstanceService = await (
+      await import("../terminalInstanceServiceAccessor")
+    ).load();
     stubMatchMedia();
 
     const managed = await terminalInstanceService.getOrCreate(
@@ -202,7 +208,9 @@ describe("TerminalInstanceService - repairFontGrid (#9776)", () => {
   });
 
   it("refreshes the cached host dimensions while repairing the grid", async () => {
-    const { terminalInstanceService } = await import("../TerminalInstanceService");
+    const terminalInstanceService = await (
+      await import("../terminalInstanceServiceAccessor")
+    ).load();
     stubMatchMedia();
 
     const managed = await terminalInstanceService.getOrCreate(
@@ -224,7 +232,9 @@ describe("TerminalInstanceService - repairFontGrid (#9776)", () => {
   });
 
   it("repairs every live grid when the late-arrival callback fires", async () => {
-    const { terminalInstanceService } = await import("../TerminalInstanceService");
+    const terminalInstanceService = await (
+      await import("../terminalInstanceServiceAccessor")
+    ).load();
     stubMatchMedia();
 
     expect(registeredLateArrivalCallback).toBeTypeOf("function");

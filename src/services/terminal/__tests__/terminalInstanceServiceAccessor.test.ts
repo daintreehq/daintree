@@ -1,16 +1,23 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { makeSurface } from "../paintFabric/__tests__/fakePaintPlane";
+import { setPanelStoreAccessor, type PanelStoreSnapshot } from "@/store/storeAccessors";
+import { __resetProjectViewCacheStateForTests } from "@/lib/viewCacheState";
 
-const m = vi.hoisted(() => ({
-  failLoad: false,
-  service: { setGPUHardwareAvailable: vi.fn(), focus: vi.fn() },
-}));
+const m = vi.hoisted(() => {
+  const service = { setGPUHardwareAvailable: vi.fn(), focus: vi.fn() };
+  const state = { failLoad: false };
+  return {
+    state,
+    service,
+    createTerminalPaintPlane: vi.fn(() => {
+      if (state.failLoad) throw new Error("chunk load failed");
+      return service;
+    }),
+  };
+});
 
 vi.mock("@/services/TerminalInstanceService", () => ({
-  get terminalInstanceService() {
-    if (m.failLoad) throw new Error("chunk load failed");
-    return m.service;
-  },
+  createTerminalPaintPlane: m.createTerminalPaintPlane,
 }));
 
 import * as accessor from "../terminalInstanceServiceAccessor";
@@ -22,7 +29,8 @@ function fakeService() {
 describe("terminalInstanceServiceAccessor", () => {
   beforeEach(() => {
     accessor.__testing.reset();
-    m.failLoad = false;
+    m.state.failLoad = false;
+    m.createTerminalPaintPlane.mockClear();
     m.service.setGPUHardwareAvailable.mockClear();
     m.service.focus.mockClear();
   });
@@ -44,27 +52,30 @@ describe("terminalInstanceServiceAccessor", () => {
   });
 
   describe("load", () => {
-    it("shares one load between concurrent callers and caches the result", async () => {
+    it("builds the service exactly once across concurrent and later loads", async () => {
+      expect(m.createTerminalPaintPlane).not.toHaveBeenCalled();
       const [a, b] = await Promise.all([accessor.load(), accessor.load()]);
+      expect(m.createTerminalPaintPlane).toHaveBeenCalledOnce();
       expect(a).toBe(m.service);
       expect(b).toBe(a);
       expect(await accessor.load()).toBe(a);
       expect(accessor.peek()).toBe(a);
+      expect(m.createTerminalPaintPlane).toHaveBeenCalledOnce();
     });
 
     it("resolves to an already registered instance without importing", async () => {
-      m.failLoad = true;
+      m.state.failLoad = true;
       const service = fakeService();
       accessor.register(service);
       expect(await accessor.load()).toBe(service);
     });
 
     it("lets a later call retry after a rejected import", async () => {
-      m.failLoad = true;
+      m.state.failLoad = true;
       await expect(accessor.load()).rejects.toThrow("chunk load failed");
       expect(accessor.peek()).toBeNull();
 
-      m.failLoad = false;
+      m.state.failLoad = false;
       expect(await accessor.load()).toBe(m.service);
       expect(accessor.peek()).toBe(m.service);
     });
@@ -286,6 +297,134 @@ describe("terminalInstanceServiceAccessor", () => {
       );
       accessor.register(fakeService());
       expect(detach).toHaveBeenCalledOnce();
+    });
+  });
+  describe("with, for a panel", () => {
+    let panels: Record<string, object>;
+    beforeEach(() => {
+      panels = {};
+      setPanelStoreAccessor(() => ({ panelsById: panels }) as unknown as PanelStoreSnapshot);
+    });
+
+    it("drops a queued call whose panel closed before the service loaded", () => {
+      panels.t1 = {};
+      const call = vi.fn();
+      accessor.with(call, "t1");
+      delete panels.t1;
+
+      accessor.register(fakeService());
+
+      expect(call).not.toHaveBeenCalled();
+    });
+
+    it("runs a queued call whose panel is still open", () => {
+      panels.t1 = {};
+      const call = vi.fn();
+      accessor.with(call, "t1");
+
+      const service = fakeService();
+      accessor.register(service);
+
+      expect(call).toHaveBeenCalledExactlyOnceWith(service);
+    });
+
+    it("runs a call queued before its panel joined the store", () => {
+      const call = vi.fn();
+      accessor.with(call, "t1");
+
+      accessor.register(fakeService());
+
+      expect(call).toHaveBeenCalledOnce();
+    });
+  });
+
+  describe("buffer samples while unloaded", () => {
+    let sampleRequest: (() => void) | null;
+    let viewCached: (() => void) | null;
+    let offSampleRequest: ReturnType<typeof vi.fn>;
+    let report: ReturnType<typeof vi.fn>;
+
+    function stubWindow(cachedAtStart = false): void {
+      sampleRequest = null;
+      viewCached = null;
+      offSampleRequest = vi.fn();
+      report = vi.fn(() => Promise.resolve());
+      vi.stubGlobal("window", {
+        electron: {
+          events: {
+            on: vi.fn((name: string, handler: () => void) => {
+              if (name === "window:sample-terminal-buffers") sampleRequest = handler;
+              return offSampleRequest;
+            }),
+          },
+          app: {
+            isViewCached: () => cachedAtStart,
+            onViewCached: (handler: () => void) => {
+              viewCached = handler;
+              return () => {};
+            },
+          },
+          system: { reportTerminalRendererDiagnostics: report },
+        },
+      });
+      __resetProjectViewCacheStateForTests();
+      accessor.__testing.reset();
+      accessor.answerBufferSamplesUntilLoaded();
+    }
+
+    const EMPTY_SAMPLE = {
+      webglMode: "webgl",
+      wantsWebgl: 0,
+      terminalCount: 0,
+      countsByTier: {},
+      bufferMemory: { sampledAt: expect.any(Number), terminals: [] },
+    };
+
+    afterEach(() => {
+      vi.unstubAllGlobals();
+      __resetProjectViewCacheStateForTests();
+      accessor.__testing.reset();
+    });
+
+    it("answers a buffer-sample request with an empty sample, without loading", () => {
+      stubWindow();
+      sampleRequest?.();
+
+      expect(report).toHaveBeenCalledExactlyOnceWith(EMPTY_SAMPLE);
+      expect(m.createTerminalPaintPlane).not.toHaveBeenCalled();
+    });
+
+    it("reports the empty sample on the cache edge, and not for a request after it", () => {
+      stubWindow();
+      viewCached?.();
+      expect(report).toHaveBeenCalledExactlyOnceWith(EMPTY_SAMPLE);
+
+      sampleRequest?.();
+      expect(report).toHaveBeenCalledOnce();
+    });
+
+    it("reports at once in a view already cached when it starts", () => {
+      stubWindow(true);
+      expect(report).toHaveBeenCalledExactlyOnceWith(EMPTY_SAMPLE);
+    });
+
+    it("arms only when boot asks, and never once the service is loaded", () => {
+      stubWindow();
+      accessor.__testing.reset();
+      sampleRequest = null;
+      accessor.register(fakeService());
+      accessor.answerBufferSamplesUntilLoaded();
+
+      expect(sampleRequest).toBeNull();
+    });
+
+    it("hands both edges to the service once it loads", async () => {
+      stubWindow();
+      await accessor.load();
+
+      expect(offSampleRequest).toHaveBeenCalledOnce();
+      viewCached?.();
+      expect(report).not.toHaveBeenCalled();
     });
   });
 });

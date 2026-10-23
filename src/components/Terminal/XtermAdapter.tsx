@@ -210,6 +210,7 @@ export function XtermAdapter({
   // theme colour. Changes only when the sampled edges change, not per frame.
   const [paddingPaint, setPaddingPaint] = useState<TerminalPaddingPaint>(NO_PADDING_PAINT);
   const paddingPaintUnsubRef = useRef<(() => void) | null>(null);
+  const altBufferUnsubRef = useRef<(() => void) | null>(null);
 
   // Attach image paste and file drag-and-drop handlers to the padded wrapper
   // rather than the xterm host: in normal-buffer mode the wrapper adds a 12px
@@ -769,6 +770,11 @@ export function XtermAdapter({
         onExitRef.current?.(code);
       });
       paddingPaintUnsubRef.current = service.addPaddingPaintListener(terminalId, setPaddingPaint);
+      // Subscribed once the terminal exists: before then (the service or the
+      // instance still loading) the service has nothing to attach it to. It
+      // reports the current state on attach. TUIs (OpenCode, vim, htop) in the
+      // alt buffer fill the pane, so the container drops its padding.
+      altBufferUnsubRef.current = service.addAltBufferListener(terminalId, setIsAltBuffer);
 
       if (!wasDetachedForSwitch || !hasSavedTargetDims) {
         performFit();
@@ -822,6 +828,8 @@ export function XtermAdapter({
       }
       paddingPaintUnsubRef.current?.();
       paddingPaintUnsubRef.current = null;
+      altBufferUnsubRef.current?.();
+      altBufferUnsubRef.current = null;
       setPaddingPaint(NO_PADDING_PAINT);
 
       prevDimensionsRef.current = null;
@@ -883,7 +891,10 @@ export function XtermAdapter({
   useLayoutEffect(() => {
     // Use the stable proxy to avoid stale closures in the service
     peekTerminalService()?.updateRefreshTierProvider(terminalId, stableRefreshTierProvider);
-    withTerminalService((service) => service.applyRendererPolicy(terminalId, currentTier));
+    withTerminalService(
+      (service) => service.applyRendererPolicy(terminalId, currentTier),
+      terminalId
+    );
   }, [terminalId, stableRefreshTierProvider, currentTier]);
 
   // Refit terminal when window becomes visible again after being hidden.
@@ -908,16 +919,6 @@ export function XtermAdapter({
 
     return () => document.removeEventListener("visibilitychange", handleVisibilityChange);
   }, [performFit]);
-
-  // Subscribe to alt buffer state changes for TUI applications (OpenCode, vim, htop, etc.)
-  // When in alt buffer, we need to sync the container styling
-  // Use useLayoutEffect to avoid flash before first paint
-  useLayoutEffect(() => {
-    const unsubscribe = peekTerminalService()?.addAltBufferListener(terminalId, (altBuffer) => {
-      setIsAltBuffer(altBuffer);
-    });
-    return unsubscribe;
-  }, [terminalId]);
 
   const activePaddingPaint = isAltBuffer ? NO_PADDING_PAINT : paddingPaint;
   const paddingBackgroundStyle = buildPaddingBackgroundStyle(activePaddingPaint);

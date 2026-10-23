@@ -455,7 +455,10 @@ export function useTerminalFileTransfer(
         : neutralizeControlCharacters(text);
 
       terminalClient.write(terminalId, payload);
-      withTerminalService((service) => service.notifyUserInput(terminalId, "", { automatic }));
+      withTerminalService(
+        (service) => service.notifyUserInput(terminalId, "", { automatic }),
+        terminalId
+      );
       // The unwrapped text — bracket markers must not reach input tracking.
       onInput?.(text);
     };
@@ -581,8 +584,9 @@ export function useTerminalFileTransfer(
             const segment = segments[index]!;
             const text = segment.kind === "image" ? segment.path : segment.text;
             terminalClient.write(terminalId, formatWithBracketedPaste(text));
-            withTerminalService((service) =>
-              service.notifyUserInput(terminalId, "", { automatic })
+            withTerminalService(
+              (service) => service.notifyUserInput(terminalId, "", { automatic }),
+              terminalId
             );
             onInput?.(text);
           }

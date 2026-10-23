@@ -25,11 +25,14 @@ const terminalWriteMock = vi.fn();
 // terminalInstanceService is imported at module scope by DemoCursor for
 // reading xterm cursor-key mode; mock it so tests can control the mode.
 const terminalGetMock = vi.fn();
-vi.mock("@/services/TerminalInstanceService", () => ({
-  terminalInstanceService: {
+vi.mock("@/services/TerminalInstanceService", () => {
+  const terminalInstanceService = {
     get: (id: string) => terminalGetMock(id),
-  },
-}));
+  };
+  return {
+    createTerminalPaintPlane: () => terminalInstanceService,
+  };
+});
 
 // waitForIdle enumerates terminals via usePanelStore.getState().panelIds.
 const mockPanelIds: { current: string[] } = { current: [] };
@@ -69,6 +72,11 @@ if (typeof document.getAnimations !== "function") {
 }
 
 import { DemoCursor, computeBezierKeyframes } from "../DemoCursor";
+
+import { load as loadTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
+
+// The service mock never evaluates the real module, so nothing builds it.
+await loadTerminalService();
 
 function emit(channel: string, payload: Record<string, unknown> = {}) {
   const handlers = listenerMap.get(channel) ?? [];

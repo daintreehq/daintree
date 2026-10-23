@@ -165,10 +165,9 @@ describe("TerminalInstanceService - visibility-driven WebGL lease", () => {
       terminal: { reportTitleState: vi.fn() },
     };
 
-    ({ terminalInstanceService: service } =
-      (await import("../TerminalInstanceService")) as unknown as {
-        terminalInstanceService: WebGLVisibilityService;
-      });
+    service = (await (
+      await import("../terminalInstanceServiceAccessor")
+    ).load()) as unknown as WebGLVisibilityService;
     service.instances.clear();
     await preloadMockWebglAddon();
   });

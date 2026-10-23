@@ -35,8 +35,8 @@ vi.mock("@/clients", () => ({
   },
 }));
 
-vi.mock("@/services/TerminalInstanceService", () => ({
-  terminalInstanceService: {
+vi.mock("@/services/TerminalInstanceService", () => {
+  const terminalInstanceService = {
     get: vi.fn(() => null),
     cleanup: vi.fn(),
     destroy: vi.fn(),
@@ -48,8 +48,11 @@ vi.mock("@/services/TerminalInstanceService", () => ({
     sendPtyResize: vi.fn(),
     setInputLocked: vi.fn(),
     wake: vi.fn(),
-  },
-}));
+  };
+  return {
+    createTerminalPaintPlane: () => terminalInstanceService,
+  };
+});
 
 vi.mock("@/lib/notify", () => ({
   notify: vi.fn(() => "mock-notification-id"),

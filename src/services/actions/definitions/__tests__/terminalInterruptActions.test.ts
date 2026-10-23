@@ -23,9 +23,12 @@ vi.mock("@/store/persistence/panelPersistence", () => ({
 
 vi.mock("@/hooks/useSendToAgentPalette", () => ({ openSendToAgentPalette: vi.fn() }));
 vi.mock("@/lib/panelContextMenu", () => ({ openPanelContextMenu: vi.fn() }));
-vi.mock("@/services/terminal/TerminalInstanceService", () => ({
-  terminalInstanceService: { get: vi.fn(), notifyUserInput: vi.fn() },
-}));
+vi.mock("@/services/terminal/TerminalInstanceService", () => {
+  const terminalInstanceService = { get: vi.fn(), notifyUserInput: vi.fn() };
+  return {
+    createTerminalPaintPlane: () => terminalInstanceService,
+  };
+});
 vi.mock("@/store/terminalInputStore", () => ({
   triggerPopStash: vi.fn(),
   triggerStashInput: vi.fn(),
