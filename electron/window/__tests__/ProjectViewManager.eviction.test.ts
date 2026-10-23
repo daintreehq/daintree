@@ -254,6 +254,7 @@ import {
   setPhysFootprintReaderForTesting,
 } from "../../utils/processMemory.js";
 import {
+  IDLE_VIEW_RELEASE_MS,
   MIN_CRITICAL_PRESSURE_EVICTION_AGE_MS,
   MIN_PRESSURE_EVICTION_AGE_MS,
   backgroundRestoreCapacity,
@@ -4823,5 +4824,270 @@ describe("ProjectViewManager — releasing a cached view to another window (#132
   it("keeps a cached view still loading", () => {
     mgr.views.get("proj-a")!.state = "loading";
     expect(mgr.canReleaseCachedView("proj-a")).toBe(false);
+  });
+});
+
+describe("ProjectViewManager — releasing views that sit unused (#14217)", () => {
+  let win: ReturnType<typeof createMockWindow>;
+  let boundWorkspaces: Set<string>;
+  let leasedWebContentsIds: Set<number>;
+  let managers: ProjectViewManager[];
+
+  const evictionLogs = () =>
+    vi
+      .mocked(logInfo)
+      .mock.calls.filter(([event]) => event === "projectview.eviction")
+      .map(([, ctx]) => ctx as { projectId: string; reason: string; activeAgent: boolean });
+
+  function makeManager() {
+    const mgr = new ProjectViewManager(win as never, {
+      dirname: "/test",
+      paintGateTimeoutMs: 0,
+      paintGateHardTimeoutMs: 0,
+      warmPaintGateTimeoutMs: 0,
+      warmPaintGateHardTimeoutMs: 0,
+      // Well above what the fixtures open, so nothing here is the cap's doing.
+      cachedProjectViews: 5,
+      assistantBackendsForProject,
+      isTerminalLive,
+      remoteAssistantLive,
+      remoteAgentActive,
+      remoteKeepResident,
+      mcpViewActivity: (workspaceId: string, webContentsId: number) => ({
+        liveBinding: boundWorkspaces.has(workspaceId),
+        dispatchLease: leasedWebContentsIds.has(webContentsId),
+      }),
+    });
+    managers.push(mgr);
+    return mgr;
+  }
+
+  /** Three views: proj-a and proj-b cached (oldest-first), proj-c active. */
+  async function seedThreeViews(mgr: ProjectViewManager) {
+    const wcA = createMockWebContents();
+    mgr.registerInitialView({ webContents: wcA, setBounds: vi.fn() } as never, "proj-a", "/path/a");
+    await mgr.switchTo("proj-b", "/path/b");
+    await flushImmediates();
+    await mgr.switchTo("proj-c", "/path/c");
+    await flushImmediates();
+  }
+
+  const entryOf = (mgr: ProjectViewManager, projectId: string) => mgr.views.get(projectId)!;
+  const projectIds = (mgr: ProjectViewManager) => mgr.getAllViews().map((v) => v.projectId);
+
+  /** Leave every view, the active one included, unshown for `ms`. */
+  function ageAll(mgr: ProjectViewManager, ms = IDLE_VIEW_RELEASE_MS) {
+    for (const entry of mgr.views.values()) entry.lastUsed -= ms;
+  }
+
+  beforeEach(() => {
+    nextWebContentsId = 100;
+    nextOsProcessId = 1000;
+    vi.clearAllMocks();
+    mockGetAllTerminals.mockReset();
+    mockGetAllTerminals.mockResolvedValue([]);
+    mockGetAppMetrics.mockReset();
+    mockGetAppMetrics.mockReturnValue([]);
+    assistantBackends.clear();
+    liveTerminals.clear();
+    liveRemoteViews.clear();
+    activeRemoteViews.clear();
+    residentRemoteViews.clear();
+    residentWorkspaces.clear();
+    boundWorkspaces = new Set();
+    leasedWebContentsIds = new Set();
+    managers = [];
+    _resetPanelRecoveryStateForTests();
+    win = createMockWindow();
+  });
+
+  afterEach(() => {
+    for (const mgr of managers) mgr.dispose();
+    managers = [];
+    _resetPanelRecoveryStateForTests();
+    vi.useRealTimers();
+  });
+
+  it("releases cached views left unshown past the threshold while the cache is under its cap", async () => {
+    const mgr = makeManager();
+    await seedThreeViews(mgr);
+    const wcA = entryOf(mgr, "proj-a").view.webContents;
+    entryOf(mgr, "proj-a").lastUsed -= IDLE_VIEW_RELEASE_MS;
+    entryOf(mgr, "proj-b").lastUsed -= IDLE_VIEW_RELEASE_MS - 60_000;
+
+    expect(mgr.evictIdleViews()).toBe(1);
+
+    expect(projectIds(mgr)).toEqual(["proj-b", "proj-c"]);
+    expect(wcA.close).toHaveBeenCalled();
+    expect(evictionLogs()).toEqual([
+      expect.objectContaining({ projectId: "proj-a", reason: "idle" }),
+    ]);
+    // The ledger an MCP session reads learns why its workspace went away.
+    expect(residencyLedger.recordWorkspaceEviction).toHaveBeenCalledWith("proj-a", "idle");
+  });
+
+  it("never releases the view in front, however long it has been up", async () => {
+    const mgr = makeManager();
+    await seedThreeViews(mgr);
+    ageAll(mgr);
+
+    expect(mgr.evictIdleViews()).toBe(2);
+    expect(projectIds(mgr)).toEqual(["proj-c"]);
+  });
+
+  it("releases views with a working agent after the ordinary ones", async () => {
+    const mgr = makeManager();
+    await seedThreeViews(mgr);
+    mockGetAllTerminals.mockResolvedValue([
+      { id: "t-a", projectId: "proj-a", agentState: "working" },
+    ]);
+    await mgr.initAgentStateCache(mockPtyClient as never);
+    ageAll(mgr);
+
+    mgr.evictIdleViews();
+
+    // proj-a is the older of the two; only its agent puts it second.
+    expect(evictionLogs().map(({ projectId, activeAgent }) => [projectId, activeAgent])).toEqual([
+      ["proj-b", false],
+      ["proj-a", true],
+    ]);
+  });
+
+  describe("keeps a view the cap would only rank", () => {
+    it("with a running Daintree Assistant (#11157)", async () => {
+      const mgr = makeManager();
+      await seedThreeViews(mgr);
+      const wcA = entryOf(mgr, "proj-a").view.webContents;
+      assistantBackends.set("proj-a", { terminalId: "t-help-a", webContentsId: wcA.id });
+      liveTerminals.add("t-help-a");
+      ageAll(mgr);
+
+      mgr.evictIdleViews();
+      expect(projectIds(mgr)).toEqual(["proj-a", "proj-c"]);
+    });
+
+    it("with a bound MCP session", async () => {
+      const mgr = makeManager();
+      await seedThreeViews(mgr);
+      boundWorkspaces.add("proj-a");
+      ageAll(mgr);
+
+      mgr.evictIdleViews();
+      expect(projectIds(mgr)).toEqual(["proj-a", "proj-c"]);
+    });
+
+    it("with an MCP dispatch in flight", async () => {
+      const mgr = makeManager();
+      await seedThreeViews(mgr);
+      leasedWebContentsIds.add(entryOf(mgr, "proj-a").view.webContents.id);
+      ageAll(mgr);
+
+      mgr.evictIdleViews();
+      expect(projectIds(mgr)).toEqual(["proj-a", "proj-c"]);
+    });
+
+    it("granted residency by the user", async () => {
+      const mgr = makeManager();
+      await seedThreeViews(mgr);
+      residentWorkspaces.add("proj-a");
+      ageAll(mgr);
+
+      mgr.evictIdleViews();
+      expect(projectIds(mgr)).toEqual(["proj-a", "proj-c"]);
+    });
+
+    it("holding work it could not recover (#14095)", async () => {
+      const mgr = makeManager();
+      await seedThreeViews(mgr);
+      recordPanelRecoveryState(entryOf(mgr, "proj-a").view.webContents, true);
+      ageAll(mgr);
+
+      mgr.evictIdleViews();
+      expect(projectIds(mgr)).toEqual(["proj-a", "proj-c"]);
+    });
+  });
+
+  describe("a view of a host's project", () => {
+    const remoteKey = toHostScopedKey("studio-02", "proj-r");
+
+    async function seedWithRemote(mgr: ProjectViewManager) {
+      const wcA = createMockWebContents();
+      mgr.registerInitialView({ webContents: wcA, setBounds: vi.fn() } as never, "proj-a", "/a");
+      await mgr.switchToHostProject("studio-02", "proj-r", "/srv/r");
+      await flushImmediates();
+      await mgr.switchTo("proj-c", "/path/c");
+      await flushImmediates();
+      return entryOf(mgr, remoteKey).view.webContents;
+    }
+
+    it("is released like a local one", async () => {
+      const mgr = makeManager();
+      await seedWithRemote(mgr);
+      ageAll(mgr);
+
+      mgr.evictIdleViews();
+      expect(projectIds(mgr)).toEqual(["proj-c"]);
+      // Its residency is its host's, so this machine's ledger stays out of it.
+      expect(residencyLedger.recordWorkspaceEviction).not.toHaveBeenCalledWith(
+        remoteKey,
+        expect.anything()
+      );
+    });
+
+    it("is kept while its host reports a live assistant or a residency grant", async () => {
+      const mgr = makeManager();
+      const wcR = await seedWithRemote(mgr);
+      ageAll(mgr);
+
+      liveRemoteViews.add(wcR.id);
+      mgr.evictIdleViews();
+      expect(projectIds(mgr)).toContain(remoteKey);
+
+      liveRemoteViews.clear();
+      residentRemoteViews.add(wcR.id);
+      mgr.evictIdleViews();
+      expect(projectIds(mgr)).toContain(remoteKey);
+    });
+  });
+
+  it("waits out a switch already queued, which wins the view it is heading to", async () => {
+    const mgr = makeManager();
+    await seedThreeViews(mgr);
+    ageAll(mgr);
+
+    const heading = mgr.switchTo("proj-a", "/path/a");
+    expect(mgr.evictIdleViews()).toBe(0);
+    expect(projectIds(mgr)).toEqual(["proj-a", "proj-b", "proj-c"]);
+
+    await heading;
+    await flushImmediates();
+    // proj-a is in front now, and proj-c was shown moments ago; only proj-b sat unused.
+    expect(mgr.evictIdleViews()).toBe(1);
+    expect(projectIds(mgr)).toEqual(["proj-a", "proj-c"]);
+  });
+
+  it("drops a pending soft-pressure judgement it would otherwise skew", async () => {
+    const mgr = makeManager();
+    await seedThreeViews(mgr);
+    mgr.pendingSoftPressureEviction = { availableMbBefore: 1500, evictedResidentMb: 300 };
+
+    mgr.evictIdleViews();
+    expect(mgr.pendingSoftPressureEviction).not.toBeNull();
+
+    ageAll(mgr);
+    mgr.evictIdleViews();
+    expect(mgr.pendingSoftPressureEviction).toBeNull();
+  });
+
+  it("runs on the cached-view sampler's own tick", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const mgr = makeManager();
+    await seedThreeViews(mgr);
+    ageAll(mgr);
+
+    await vi.advanceTimersByTimeAsync(30_000);
+
+    expect(projectIds(mgr)).toEqual(["proj-c"]);
+    expect(evictionLogs().every(({ reason }) => reason === "idle")).toBe(true);
   });
 });

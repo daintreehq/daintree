@@ -63,6 +63,17 @@ export const MIN_PRESSURE_EVICTION_AGE_MS = 300_000;
 export const MIN_CRITICAL_PRESSURE_EVICTION_AGE_MS = 60_000;
 
 /**
+ * How long a cached view may go unshown before the sampler releases it whatever
+ * the cap or memory reads (#14217). Each one is a full renderer (median 279 MB
+ * at eviction in a month of field logs) and keeps its project's workspace host
+ * past `CLEANUP_GRACE_MS`. An hour turns about 6% of warm switches cold, where
+ * half an hour would turn 10%. Measured from `lastUsed` like the pressure
+ * floors, and wall-clock on purpose: a machine asleep for the night was a user
+ * away for the night.
+ */
+export const IDLE_VIEW_RELEASE_MS = 60 * 60 * 1000;
+
+/**
  * Consecutive soft-band evictions that failed to move available memory before
  * the sampler stops evicting for the rest of the episode (#12885). A cached
  * renderer's pages are often already compressed or swapped, so destroying one
@@ -158,6 +169,109 @@ function viewHasActiveAgent(
   if (isLocalViewKey(projectId)) return hasActiveAgent(host, projectId);
   const wc = entry.view.webContents;
   return !wc.isDestroyed() && host.remoteAgentActive?.(wc.id) === true;
+}
+
+type EvictionMetrics = {
+  memoryByPid: ReadonlyMap<number, number>;
+  residentByPid: ReadonlyMap<number, number>;
+};
+
+/**
+ * Build pid → memory indexes from the synchronous app.getAppMetrics() snapshot,
+ * joined per view via `webContents.getOSProcessId()` so the eviction log line
+ * can record each evicted view's footprint.
+ */
+function readEvictionMetrics(): EvictionMetrics {
+  const memoryByPid = new Map<number, number>();
+  const residentByPid = new Map<number, number>();
+  try {
+    // Shared TTL snapshot: the eviction log line tolerates a few seconds of
+    // staleness, so a pass landing near another sampler's sweep reuses it.
+    for (const proc of getAppMetricsSnapshot()) {
+      const kb = getProcessMemoryKb(proc);
+      if (kb > 0) {
+        memoryByPid.set(proc.pid, kb);
+      }
+      if (proc.memory.workingSetSize > 0) {
+        residentByPid.set(proc.pid, proc.memory.workingSetSize);
+      }
+    }
+  } catch {
+    // app.getAppMetrics() throwing is non-fatal — memoryKb is simply omitted
+    // from the eviction log line.
+  }
+  return { memoryByPid, residentByPid };
+}
+
+function memoryFor(entry: ViewEntry, byPid: ReadonlyMap<number, number>): number {
+  const wc = entry.view.webContents;
+  if (wc.isDestroyed()) return 0;
+  const getPid = (wc as { getOSProcessId?: () => number }).getOSProcessId;
+  if (typeof getPid !== "function") return 0;
+  const pid = getPid.call(wc);
+  if (typeof pid !== "number" || pid <= 0) return 0;
+  return byPid.get(pid) ?? 0;
+}
+
+function guestMemoryFor(entry: ViewEntry, byPid: ReadonlyMap<number, number>): number {
+  return entry.view.webContents.isDestroyed() ? 0 : sumGuestMemoryKb(entry.view.webContents, byPid);
+}
+
+/**
+ * Log, tear down and ledger one eviction. Returns the view's resident memory
+ * (KB) so a soft pressure pass can judge what it freed.
+ */
+function evictCandidate(
+  host: ProjectViewManager,
+  candidate: EvictionCandidate,
+  reason: EvictionReason,
+  ageMs: number,
+  metrics: EvictionMetrics,
+  availableMb: number | null
+): number {
+  const {
+    projectId,
+    entry,
+    activeAgent,
+    liveAssistantBackend,
+    boundMcpSession,
+    keepResident,
+    recoveryHeld: heldWork,
+  } = candidate;
+  const memoryKb = memoryFor(entry, metrics.memoryByPid);
+  const guestMemoryKb = guestMemoryFor(entry, metrics.memoryByPid);
+  const residentKb =
+    memoryFor(entry, metrics.residentByPid) + guestMemoryFor(entry, metrics.residentByPid);
+  const ctx: Record<string, unknown> = {
+    projectId,
+    reason,
+    ageMs,
+    activeAgent,
+  };
+  if (liveAssistantBackend) ctx.liveAssistantBackend = true;
+  // Recorded so a bound session going `SESSION_BINDING_GONE` is traceable to
+  // the pass that took its view, rather than looking like the binding broke
+  // on its own.
+  if (boundMcpSession) ctx.boundMcpSession = true;
+  // The user granted this workspace residency and it is being evicted anyway
+  // — the cap could not hold every grant, or pressure took the slots. Logged
+  // so the override is attributable rather than looking like the grant was
+  // ignored (#11162).
+  if (keepResident) ctx.keepResident = true;
+  // Unsaved work the view said it could not recover is lost with it: the
+  // defined outcome of a pressure pass over a held view (#14095).
+  if (heldWork) ctx.recoveryHeld = true;
+  if (memoryKb > 0) ctx.memoryKb = memoryKb;
+  if (guestMemoryKb > 0) ctx.guestMemoryKb = guestMemoryKb;
+  if (availableMb != null) ctx.memoryAvailableMb = availableMb;
+  logInfo("projectview.eviction", ctx);
+  host.evictionTimestamps.set(projectId, Date.now());
+  cleanupEntry(host, projectId);
+  // After the teardown, because the read side is what gates the record on
+  // liveness — see `readWorkspaceBindingState` (#12313).
+  // A remote project's residency is its host's; only local keys enter this ledger.
+  if (isLocalViewKey(projectId)) recordWorkspaceEviction(projectId, reason);
+  return residentKb;
 }
 
 /**
@@ -346,41 +460,11 @@ export function evictStaleViews(
     return 0;
   }
 
-  // Build pid → memory index from the synchronous app.getAppMetrics()
-  // snapshot. Joined per-view via `webContents.getOSProcessId()` so the
-  // eviction log line can record each evicted view's footprint. Memory size
-  // does not drive eviction order — the largest renderer is typically the
-  // project the user has been working in, so size-first ordering destroys
-  // the most valuable view. Eviction is pure LRU (see #8602).
-  const memoryByPid = new Map<number, number>();
-  const residentByPid = new Map<number, number>();
-  try {
-    // Shared TTL snapshot: the eviction log line tolerates a few seconds of
-    // staleness, so a pass landing near another sampler's sweep reuses it.
-    for (const proc of getAppMetricsSnapshot()) {
-      const kb = getProcessMemoryKb(proc);
-      if (kb > 0) {
-        memoryByPid.set(proc.pid, kb);
-      }
-      if (proc.memory.workingSetSize > 0) {
-        residentByPid.set(proc.pid, proc.memory.workingSetSize);
-      }
-    }
-  } catch {
-    // app.getAppMetrics() throwing is non-fatal — memoryKb is simply omitted
-    // from the eviction log line below.
-  }
-  const memoryFor = (entry: ViewEntry, byPid: ReadonlyMap<number, number>): number => {
-    const wc = entry.view.webContents;
-    if (wc.isDestroyed()) return 0;
-    const getPid = (wc as { getOSProcessId?: () => number }).getOSProcessId;
-    if (typeof getPid !== "function") return 0;
-    const pid = getPid.call(wc);
-    if (typeof pid !== "number" || pid <= 0) return 0;
-    return byPid.get(pid) ?? 0;
-  };
-  const guestMemoryFor = (entry: ViewEntry, byPid: ReadonlyMap<number, number>): number =>
-    entry.view.webContents.isDestroyed() ? 0 : sumGuestMemoryKb(entry.view.webContents, byPid);
+  // Each evicted view's footprint is recorded on its log line. Memory size does
+  // not drive eviction order — the largest renderer is typically the project
+  // the user has been working in, so size-first ordering destroys the most
+  // valuable view. Eviction is pure LRU (see #8602).
+  const metrics = readEvictionMetrics();
 
   // Outgoing view of an open paint gate is still on-screen and serving as
   // the anti-flash bridge — treat it as non-evictable, same as the active
@@ -626,49 +710,8 @@ export function evictStaleViews(
       break;
     }
     candidates.shift();
-    const {
-      projectId,
-      entry,
-      activeAgent,
-      liveAssistantBackend,
-      boundMcpSession,
-      keepResident,
-      recoveryHeld: heldWork,
-    } = next;
-    const memoryKb = memoryFor(entry, memoryByPid);
-    const guestMemoryKb = guestMemoryFor(entry, memoryByPid);
-    const residentKb = memoryFor(entry, residentByPid) + guestMemoryFor(entry, residentByPid);
-    const ctx: Record<string, unknown> = {
-      projectId,
-      reason: effectiveReason,
-      ageMs,
-      activeAgent,
-    };
-    if (liveAssistantBackend) ctx.liveAssistantBackend = true;
-    // Recorded so a bound session going `SESSION_BINDING_GONE` is traceable to
-    // the pass that took its view, rather than looking like the binding broke
-    // on its own.
-    if (boundMcpSession) ctx.boundMcpSession = true;
-    // The user granted this workspace residency and it is being evicted anyway
-    // — the cap could not hold every grant, or pressure took the slots. Logged
-    // so the override is attributable rather than looking like the grant was
-    // ignored (#11162).
-    if (keepResident) ctx.keepResident = true;
-    // Unsaved work the view said it could not recover is lost with it: the
-    // defined outcome of a pressure pass over a held view (#14095).
-    if (heldWork) ctx.recoveryHeld = true;
-    if (memoryKb > 0) ctx.memoryKb = memoryKb;
-    if (guestMemoryKb > 0) ctx.guestMemoryKb = guestMemoryKb;
-    if (availableMb != null) ctx.memoryAvailableMb = availableMb;
-    logInfo("projectview.eviction", ctx);
-    host.evictionTimestamps.set(projectId, Date.now());
-    cleanupEntry(host, projectId);
-    // After the teardown, because the read side is what gates the record on
-    // liveness — see `readWorkspaceBindingState` (#12313).
-    // A remote project's residency is its host's; only local keys enter this ledger.
-    if (isLocalViewKey(projectId)) recordWorkspaceEviction(projectId, effectiveReason);
+    evictedResidentKb += evictCandidate(host, next, effectiveReason, ageMs, metrics, availableMb);
     evictedCount++;
-    evictedResidentKb += residentKb;
   }
 
   // A soft-band sampler eviction is judged by the next reading — see
@@ -787,6 +830,61 @@ export function evictStaleViews(
   }
 
   return evictedCount;
+}
+
+/**
+ * Release cached views nobody has shown for `IDLE_VIEW_RELEASE_MS` (#14217),
+ * independent of the cap and of memory pressure — the cap keeps recently used
+ * projects warm, this drops the ones that only sit there. Their workspace host
+ * then follows through its existing idle grace.
+ *
+ * Stricter than LRU about what it may take, because nothing is asking for the
+ * memory: a bound MCP session and a residency grant only rank a view under
+ * the cap, but here they keep it. The rest is `canReleaseCachedView`'s set — a
+ * settled background view, not the front one or a switch's outgoing bridge, no
+ * dispatch in flight or unreadable MCP activity, no unrecoverable work, no live
+ * assistant (#11157). A view with a working agent still goes, after the
+ * ordinary ones: its PTYs live in the pty-host and the view rebuilds from their
+ * mirrors. A window with a switch queued or running releases nothing until it
+ * settles, so a switch already heading to a view wins.
+ */
+export function evictIdleViews(host: ProjectViewManager): number {
+  if (host.disposed || host.win.isDestroyed()) return 0;
+  if (host.views.size <= 1 || host.activeProjectId === null) return 0;
+  if (host.pendingSwitchCount > 0) return 0;
+
+  const now = Date.now();
+  const ordinary: EvictionCandidate[] = [];
+  const withAgent: EvictionCandidate[] = [];
+  for (const [projectId, entry] of host.views) {
+    if (now - entry.lastUsed < IDLE_VIEW_RELEASE_MS) continue;
+    if (!host.canReleaseCachedView(projectId)) continue;
+    if (host.mcpActivityFor(projectId, entry.view.webContents).liveBinding) continue;
+    if (viewKeepsResident(host, projectId, entry)) continue;
+    const activeAgent = viewHasActiveAgent(host, projectId, entry);
+    (activeAgent ? withAgent : ordinary).push({
+      projectId,
+      entry,
+      activeAgent,
+      liveAssistantBackend: false,
+      boundMcpSession: false,
+      keepResident: false,
+      recoveryHeld: false,
+    });
+  }
+  if (ordinary.length === 0 && withAgent.length === 0) return 0;
+
+  const byLastUsed = (a: EvictionCandidate, b: EvictionCandidate) =>
+    a.entry.lastUsed - b.entry.lastUsed;
+  const candidates = [...ordinary.sort(byLastUsed), ...withAgent.sort(byLastUsed)];
+  const metrics = readEvictionMetrics();
+  for (const candidate of candidates) {
+    evictCandidate(host, candidate, "idle", now - candidate.entry.lastUsed, metrics, null);
+  }
+  // Like any non-pressure pass, this supersedes a pending soft-pressure
+  // judgement: the memory it freed would otherwise be credited to that eviction.
+  host.pendingSoftPressureEviction = null;
+  return candidates.length;
 }
 
 /**
