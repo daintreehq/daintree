@@ -173,6 +173,7 @@ const OPEN_PLUGIN_SEARCH_HIT = "src/components/QuickSwitcher/openPluginSearchHit
 const PROJECT_APPLICATION = "shared/utils/projectApplication.ts";
 const PROJECT_PLUGIN_CONTROLLER = "electron/services/plugin/ProjectPluginController.ts";
 const PROJECT_PLUGIN_STORE = "src/store/projectPluginStore.ts";
+const PROJECT_HOME_STORE = "src/store/projectHomeStore.ts";
 
 /**
  * The schemas swept for field coverage. The first block matches the fourteen
@@ -2760,8 +2761,20 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
           symbol: "getPluginManifestSchema superRefine (application_home_unclaimed)",
         },
         { file: PROJECT_APPLICATION, symbol: "resolveProjectApplication (replaced)" },
+        { file: PROJECT_HOME_STORE, symbol: "applicationDefaultRoute" },
       ],
-      note: "Home or Grid only. Home needs the plugin's own projectHome claim, and another plugin holding that Home makes the application replaced.",
+      note: "Home or Grid only. Home needs the plugin's own projectHome claim, and another plugin holding that Home makes the application replaced. An active application's destination is the main area's route until the user picks one.",
+    },
+    arrangement: {
+      mode: "verbatim",
+      consumers: [
+        {
+          file: PLUGIN_SCHEMA,
+          symbol: "PluginApplicationSchema superRefine (application_arrangement_needs_home)",
+        },
+        { file: PROJECT_HOME_STORE, symbol: "applicationDefaultRoute" },
+      ],
+      note: "Full or beside-grid, for a Home destination only. An active application's arrangement picks Home alone or the split until the user picks a route.",
     },
     sidebarViewId: {
       mode: "cross-reference",

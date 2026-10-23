@@ -1455,6 +1455,15 @@ export const PLUGIN_APPLICATION_DESTINATIONS = ["home", "grid"] as const;
 
 export type PluginApplicationDestination = (typeof PLUGIN_APPLICATION_DESTINATIONS)[number];
 
+/**
+ * How a Home destination shares the main area (#14107): `full` gives the Home
+ * the whole area, `beside-grid` draws it beside the host's own panels so agents
+ * launched, chosen and focused there never hide it.
+ */
+export const PLUGIN_APPLICATION_ARRANGEMENTS = ["full", "beside-grid"] as const;
+
+export type PluginApplicationArrangement = (typeof PLUGIN_APPLICATION_ARRANGEMENTS)[number];
+
 /** The welcome tour a project application starts from, and which revision of it. */
 export interface PluginApplicationTourRef {
   /** A `contributes.tours[].id` of this plugin, not scoped to a panel kind. */
@@ -1487,6 +1496,11 @@ export interface PluginApplicationDescriptor {
   iconId?: string;
   /** `"home"` requires `contributes.surfaces.projectHome`. */
   destination: PluginApplicationDestination;
+  /**
+   * The arrangement a `"home"` destination opens in; omitted means `"full"`.
+   * A default only: the user's own Home, Split or Grid choice always wins.
+   */
+  arrangement?: PluginApplicationArrangement;
   /** A `contributes.views[].id` with `location: "sidebar"`. */
   sidebarViewId?: string;
   /** A `contributes.views[].id` with `location: "settings"`: the application's settings home. */

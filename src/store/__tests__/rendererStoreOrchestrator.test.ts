@@ -117,7 +117,8 @@ const { agentSettingsClient } = await import("@/clients");
 const { DEFAULT_AGENT_SETTINGS } = await import("@shared/types");
 const { useHelpPanelStore } = await import("../helpPanelStore");
 const { usePortalStore } = await import("../portalStore");
-const { useProjectHomeStore } = await import("../projectHomeStore");
+const { useProjectHomeStore, selectProjectMainAreaRoute } = await import("../projectHomeStore");
+const { useProjectPluginStore } = await import("../projectPluginStore");
 const { initStoreOrchestrator, destroyStoreOrchestrator } =
   await import("../rendererStoreOrchestrator");
 
@@ -152,18 +153,54 @@ describe("rendererStoreOrchestrator", () => {
     destroyStoreOrchestrator();
   });
 
-  it("lets the focus and spawn paths leave Home, including after a restart", async () => {
-    // beforeEach already tore the orchestrator down, clearing every accessor,
-    // and brought it back up.
-    const { exitProjectHome } = await import("../storeAccessors");
-    const showGrid = vi.spyOn(useProjectHomeStore.getState(), "showGrid");
-    try {
+  describe("leaving Home for a revealed panel", () => {
+    // This file runs without a DOM; the route is keyed by the view's workspace,
+    // which the renderer reads off `window`.
+    beforeEach(() => {
+      vi.stubGlobal("window", { __DAINTREE_INITIAL_PROJECT__: { id: "p1" } });
+    });
+
+    afterEach(() => {
+      vi.unstubAllGlobals();
+      useProjectHomeStore.setState({ routeByProject: {} });
+      useProjectPluginStore.setState({ application: null });
+    });
+
+    it("lets the focus and spawn paths leave Home, including after a restart", async () => {
+      // beforeEach already tore the orchestrator down, clearing every accessor,
+      // and brought it back up.
+      const { exitProjectHome } = await import("../storeAccessors");
+      useProjectHomeStore.getState().showHome();
+
       exitProjectHome();
 
-      expect(showGrid).toHaveBeenCalledTimes(1);
-    } finally {
-      showGrid.mockRestore();
-    }
+      expect(selectProjectMainAreaRoute(useProjectHomeStore.getState())).toBe("grid");
+    });
+
+    it("leaves a Home the application opened on by default", async () => {
+      const { exitProjectHome } = await import("../storeAccessors");
+      useProjectPluginStore.setState({
+        application: {
+          status: "active",
+          ownerId: "acme.dash",
+          application: { name: "Dash", destination: "home" },
+          fallback: null,
+        },
+      });
+
+      exitProjectHome();
+
+      expect(selectProjectMainAreaRoute(useProjectHomeStore.getState(), "home")).toBe("grid");
+    });
+
+    it("keeps the split, where the revealed panel is already on screen (#14107)", async () => {
+      const { exitProjectHome } = await import("../storeAccessors");
+      useProjectHomeStore.getState().showSplit();
+
+      exitProjectHome();
+
+      expect(selectProjectMainAreaRoute(useProjectHomeStore.getState())).toBe("split");
+    });
   });
 
   describe("notification origin while the project's Home shows", () => {
@@ -190,13 +227,13 @@ describe("rendererStoreOrchestrator", () => {
       useProjectHomeStore.setState({ presented: true });
       expect(changed).toHaveBeenCalledTimes(1);
       // A write that leaves Home's presence alone is not a move.
-      useProjectHomeStore.setState({ homeByProject: { other: true } });
+      useProjectHomeStore.setState({ routeByProject: { other: "home" } });
       expect(changed).toHaveBeenCalledTimes(1);
 
       unsubscribe();
       useProjectHomeStore.setState({ presented: false });
       expect(changed).toHaveBeenCalledTimes(1);
-      useProjectHomeStore.setState({ homeByProject: {} });
+      useProjectHomeStore.setState({ routeByProject: {} });
     });
   });
 

@@ -23,6 +23,7 @@ import {
   PLUGIN_WORKTREE_SETUP_STEP_MAX_TIMEOUT_MS,
   PLUGIN_WORKTREE_SETUP_STEP_MIN_TIMEOUT_MS,
   PLUGIN_APPLICATION_DESTINATIONS,
+  PLUGIN_APPLICATION_ARRANGEMENTS,
   PROJECT_SURFACE_SLOT_CATALOGUE,
   PROJECT_SURFACE_SLOTS,
   SIDEBAR_VIEW_NAME_MAX_LENGTH,
@@ -3208,6 +3209,7 @@ export const PluginApplicationSchema = z
     name: z.string().trim().min(1).max(PLUGIN_APPLICATION_NAME_MAX),
     iconId: z.string().min(1).max(200).optional(),
     destination: z.enum(PLUGIN_APPLICATION_DESTINATIONS),
+    arrangement: z.enum(PLUGIN_APPLICATION_ARRANGEMENTS).optional(),
     sidebarViewId: z.string().min(1).max(64).regex(SAFE_ID_PATTERN).optional(),
     settingsViewId: z.string().min(1).max(64).regex(SAFE_ID_PATTERN).optional(),
     welcomeTour: PluginApplicationTourRefSchema.optional(),
@@ -3220,6 +3222,15 @@ export const PluginApplicationSchema = z
     presentation: z.record(z.string(), z.enum(PRESENTATION_LEVELS)).optional(),
   })
   .superRefine((application, ctx) => {
+    if (application.arrangement !== undefined && application.destination !== "home") {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["arrangement"],
+        message:
+          'application.arrangement arranges a Home, so it needs destination "home"; a grid destination has nothing to arrange.',
+        params: { errorCode: "application_arrangement_needs_home" },
+      });
+    }
     for (const [feature, level] of Object.entries(application.presentation ?? {})) {
       if (!isPresentationFeatureId(feature)) {
         ctx.addIssue({

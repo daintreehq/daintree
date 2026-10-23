@@ -132,10 +132,30 @@ export function registerNavigationActions(
     },
   }));
 
+  actions.set("nav.showProjectSplit", () => ({
+    id: "nav.showProjectSplit",
+    title: "Show project home beside grid",
+    description:
+      "Show the project's home view beside its panels, so agents launched or focused there keep it in view",
+    category: "navigation",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    nonRepeatable: true,
+    keywords: ["home", "split", "side by side", "plugin", "main area", "panels"],
+    isVisible: hasProjectHome,
+    isEnabled: hasProjectHome,
+    disabledReason: () => (hasProjectHome() ? undefined : NO_PROJECT_HOME),
+    run: async () => {
+      // A maximize stays: in a split it fills only the panels' side.
+      useProjectHomeStore.getState().showSplit();
+    },
+  }));
+
   actions.set("nav.showGrid", () => ({
     id: "nav.showGrid",
     title: "Show grid",
-    description: "Switch the main area from the project's home view back to its panels",
+    description: "Switch the main area from the project's home view to its panels alone",
     category: "navigation",
     kind: "command",
     danger: "safe",

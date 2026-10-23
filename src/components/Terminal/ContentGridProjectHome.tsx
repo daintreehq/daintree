@@ -21,39 +21,51 @@ import { TerminalCountWarning } from "./TerminalCountWarning";
  * whole session, and a restore failure or a terminal-count warning still needs
  * its way to act.
  *
- * A branch of `ContentGrid` like a maximize, not an overlay on the grid: the
- * grid unmounts and its terminals park offscreen through the same
+ * Alone, a branch of `ContentGrid` like a maximize, not an overlay on the
+ * grid: the grid unmounts and its terminals park offscreen through the same
  * `TerminalInstanceService.detach` a maximize or a worktree switch uses, so
  * nothing on the grid keeps painting or taking keys behind Home.
+ *
+ * `beside` is the split (#14107): Home shares the main area with the grid, so
+ * the grid keeps its banners, its macro-focus region and its focused panel, and
+ * this is only the application's labelled region. The same element either way,
+ * so moving between Home and the split never remounts the plugin's view.
  */
 export function ContentGridProjectHome({
   config,
+  beside = false,
   isMacroFocused,
   bindGridRegion,
   className,
 }: {
   config: PanelKindConfig;
+  beside?: boolean;
   isMacroFocused: boolean;
   bindGridRegion: (node: HTMLDivElement | null) => void;
   className?: string;
 }) {
   "use memo";
 
-  // While Home is on screen, the focused grid panel is not, so a notice it
-  // raises must not be swallowed as if the user were looking at it.
+  // While Home fills the area, the focused grid panel is not on screen, so a
+  // notice it raises must not be swallowed as if the user were looking at it.
+  // Beside the grid it is on screen, and routes like any visible panel.
   const setPresented = useProjectHomeStore((s) => s.setPresented);
   useEffect(() => {
+    if (beside) return;
     setPresented(true);
     return () => setPresented(false);
-  }, [setPresented]);
+  }, [beside, setPresented]);
+
+  const fillsArea = !beside;
 
   return (
     <div
-      ref={bindGridRegion}
+      ref={fillsArea ? bindGridRegion : undefined}
       role="region"
       tabIndex={-1}
       aria-label="Project home"
-      data-macro-focus={isMacroFocused ? "true" : undefined}
+      data-macro-focus={fillsArea && isMacroFocused ? "true" : undefined}
+      data-beside-grid={beside ? "true" : undefined}
       data-testid="project-home"
       className={cn(
         "h-full flex flex-col bg-surface-canvas outline-hidden",
@@ -61,13 +73,14 @@ export function ContentGridProjectHome({
         className
       )}
     >
-      <GridNotificationBar className="mx-1 mt-1 shrink-0" />
-      <ProjectPluginTrustBanner />
-      <ProjectPresentationNotice />
-      <ProjectThemeNotice />
-      <ProjectLayoutSeedNotice />
-      <TerminalCountWarning className="mx-1 mt-1 shrink-0" />
-      <BatchScrollbackRestoreBar className="mx-1 mt-1 shrink-0" />
+      {/* Beside the grid these are the grid's own, drawn once over its panels. */}
+      {fillsArea && <GridNotificationBar className="mx-1 mt-1 shrink-0" />}
+      {fillsArea && <ProjectPluginTrustBanner />}
+      {fillsArea && <ProjectPresentationNotice />}
+      {fillsArea && <ProjectThemeNotice />}
+      {fillsArea && <ProjectLayoutSeedNotice />}
+      {fillsArea && <TerminalCountWarning className="mx-1 mt-1 shrink-0" />}
+      {fillsArea && <BatchScrollbackRestoreBar className="mx-1 mt-1 shrink-0" />}
       <div className="relative min-h-0 flex-1">
         <ProjectSurfaceFrame slot="projectHome" surfaceActions={<SurfacePaletteAction />}>
           <ProjectSurfaceView config={config} />

@@ -477,7 +477,7 @@ If the point is for the project to present as a purpose-built application rather
 "surfaces": { "emptyCanvas": { "viewId": "main" } }
 ```
 
-`viewId` must name a declared `contributes.views` entry — a dangling id is a validation error — that is not the settings view, and that view's panel must not be `hasPty: true`. It is project-scope only, and the frame keeps a control that swaps back to the stock launcher in both directions. A second slot, `projectHome`, gives the project a persistent Home beside the grid, behind a host-drawn Home/Grid switch. See [Surfaces](./project-local.md#surfaces).
+`viewId` must name a declared `contributes.views` entry — a dangling id is a validation error — that is not the settings view, and that view's panel must not be `hasPty: true`. It is project-scope only, and the frame keeps a control that swaps back to the stock launcher in both directions. A second slot, `projectHome`, gives the project a persistent Home the main area shows alone or beside the grid, behind a host-drawn Home/Split/Grid switch. See [Surfaces](./project-local.md#surfaces).
 
 ## Work on panel UI in the preview
 

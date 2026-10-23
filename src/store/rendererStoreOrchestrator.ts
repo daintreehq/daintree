@@ -25,7 +25,12 @@ import { useCliAvailabilityStore } from "./cliAvailabilityStore";
 import { useAgentSettingsStore } from "./agentSettingsStore";
 import { useHelpPanelStore } from "./helpPanelStore";
 import { usePortalStore } from "./portalStore";
-import { useProjectHomeStore } from "./projectHomeStore";
+import {
+  applicationDefaultRoute,
+  selectProjectMainAreaRoute,
+  useProjectHomeStore,
+} from "./projectHomeStore";
+import { useProjectPluginStore } from "./projectPluginStore";
 import { removeArtifactsForTerminal } from "@/hooks/useArtifacts";
 import { forgetPanelActivity } from "@/utils/panelProps";
 import {
@@ -121,8 +126,13 @@ export function initStoreOrchestrator(): () => void {
   });
   setFleetArmedIdsAccessor(() => useFleetArmingStore.getState().armedIds);
   setFleetLastArmedIdAccessor(() => useFleetArmingStore.getState().lastArmedId);
+  // Only Home alone hides the grid. A split already shows the panel being
+  // revealed, so it stays put while agents are launched, chosen and focused
+  // beside the application (#14107).
   setProjectHomeExitAccessor(() => {
-    useProjectHomeStore.getState().showGrid();
+    const home = useProjectHomeStore.getState();
+    const fallback = applicationDefaultRoute(useProjectPluginStore.getState().application);
+    if (selectProjectMainAreaRoute(home, fallback) === "home") home.showGrid();
   });
 
   if (cleanupFn) return cleanupFn;
@@ -132,8 +142,8 @@ export function initStoreOrchestrator(): () => void {
   // navigates away within the grace window.
   setActiveContextAccessors({
     getActiveWorktreeId: () => useWorktreeSelectionStore.getState().activeWorktreeId,
-    // The project's Home hides the grid, focused panel and all, so while it
-    // shows nothing focused is on screen — and a notice from that panel is
+    // The project's Home alone hides the grid, focused panel and all, so while
+    // it shows nothing focused is on screen — and a notice from that panel is
     // exactly the attention signal Home must never swallow.
     getFocusedPanelId: () =>
       useProjectHomeStore.getState().presented ? null : usePanelStore.getState().focusedId,

@@ -1660,7 +1660,7 @@ Available to `"scope": "project"` plugins alone. An installed plugin is bound to
 | Slot | Replaces |
 | --- | --- |
 | `emptyCanvas` | What the content grid draws when the project has no panels open — the region the stock launcher lives in |
-| `projectHome` | Nothing: it adds a Home the main area can switch to beside the grid, behind a host-drawn Home/Grid switch, remembered per project |
+| `projectHome` | Nothing: it adds a Home the main area shows alone or beside the grid, behind a host-drawn Home/Split/Grid switch, remembered per project |
 | `worktreeCreate` | The stock New worktree dialog, when it opens through `worktree.createDialog.open`; the host draws a Standard dialog… link beside your view |
 
 Fleet scope and a maximized panel still draw over Home, and focusing, spawning, moving or restoring a grid panel returns to the grid. On Home the slot's own strip sits below the view, and its "No home" choice removes the Home entry. Home is a route, not a URL.
