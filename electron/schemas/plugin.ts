@@ -38,6 +38,7 @@ import {
 } from "../../shared/elementPicker/providers.js";
 import { isCoreFramework } from "../../shared/elementPicker/source.js";
 import { LAUNCH_MCP_FORMATS } from "../../shared/config/launchMcp.js";
+import { PLUGIN_SERVICE_MAX_METHODS } from "../../shared/config/pluginBudgets.js";
 import {
   PLUGIN_CONNECTION_ID_PATTERN,
   declaredPluginConnections,
@@ -2141,11 +2142,18 @@ const PLUGIN_SERVICE_METHOD_PATTERN = /^[A-Za-z][A-Za-z0-9_]*$/;
 /** Upper bounds for `contributes.services`, which is an object and so has no MANIFEST_CONTRIBUTION_CAPS entry. */
 export const MANIFEST_SERVICE_PROVIDES_CAP = 16;
 export const MANIFEST_SERVICE_REQUIRES_CAP = 16;
-export const MANIFEST_SERVICE_METHODS_CAP = 32;
+export const MANIFEST_SERVICE_METHODS_CAP = PLUGIN_SERVICE_MAX_METHODS;
 
 const PluginServiceNameSchema = z.string().max(96).regex(PLUGIN_SERVICE_NAME_PATTERN, {
   message: 'service names are "{plugin id}.{name}", e.g. "acme.jira.issues"',
 });
+
+function isCanonicalSemver(value: string): boolean {
+  const parsed = semver.parse(value);
+  if (!parsed) return false;
+  const build = parsed.build.length > 0 ? `+${parsed.build.join(".")}` : "";
+  return value === `${parsed.version}${build}`;
+}
 
 const uniqueBy =
   <T>(key: (item: T) => string) =>
@@ -2155,9 +2163,9 @@ const uniqueBy =
 export const PluginServiceProvideContributionSchema = z
   .object({
     name: PluginServiceNameSchema,
-    // Strict: `semver.valid` also accepts a leading "v" and trims, which would
-    // let two spellings of one version through.
-    version: z.string().refine((value) => semver.valid(value) === value, {
+    // Canonical spelling only: `semver.parse` also accepts a leading "v" and
+    // surrounding space, which would let two spellings of one version through.
+    version: z.string().refine(isCanonicalSemver, {
       message: "version must be a semver version such as 1.0.0",
     }),
     methods: z

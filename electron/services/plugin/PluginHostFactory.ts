@@ -3001,11 +3001,15 @@ export function createHost(
           `Plugin "${pluginId}" host revoked: registerService called after activate() returned or timed out`
         );
       }
+      // This host's own load: an activation that outlived an unload or reload
+      // must not bind its handlers for the instance loaded since.
+      const plugin = boundPlugin;
+      if (!plugin || !isBound()) {
+        throw new Error(`Plugin "${pluginId}" registerService: the plugin is no longer loaded`);
+      }
       const provided =
         typeof name === "string"
-          ? deps.plugins
-              .get(pluginId)
-              ?.manifest.contributes.services?.provides.find((p) => p.name === name)
+          ? plugin.manifest.contributes.services?.provides.find((p) => p.name === name)
           : undefined;
       if (!provided) {
         throw new Error(
@@ -3013,7 +3017,7 @@ export function createHost(
         );
       }
       const methods = serviceMethodTable(pluginId, provided, handlers);
-      const unbind = deps.services.bind(pluginId, provided.name, (method, args, ctx) => {
+      const unbind = deps.services.bind(pluginId, plugin, provided.name, (method, args, ctx) => {
         const fn = methods.get(method);
         if (!fn) throw new Error(`"${provided.name}" has no method "${method}"`);
         return fn.call(handlers, args, ctx);

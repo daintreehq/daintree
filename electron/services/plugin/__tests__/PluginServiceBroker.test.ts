@@ -11,6 +11,7 @@ import { makeProjectPluginInstanceKey } from "../../../../shared/types/plugin.js
 import {
   PLUGIN_SERVICE_MAX_ARGS_BYTES,
   PLUGIN_SERVICE_MAX_CONCURRENT_CALLS,
+  PLUGIN_SERVICE_MAX_MESSAGE_LENGTH,
 } from "../../../../shared/config/pluginBudgets.js";
 
 const PROJECT = "a".repeat(64);
@@ -86,6 +87,8 @@ function setup() {
   };
 }
 
+const flush = () => new Promise((r) => setImmediate(r));
+
 function deferred<T = unknown>() {
   let resolve!: (value: T) => void;
   let reject!: (error: unknown) => void;
@@ -113,7 +116,7 @@ describe("PluginServiceBroker", () => {
     t.loadConsumer("acme.app", consumerOf());
     const seen: Array<{ args: unknown; ctx: PluginServiceCallContext }> = [];
     t.load("acme.jira", providerOf(), () => {
-      t.broker.bind("acme.jira", ISSUES, (method, args, ctx) => {
+      t.broker.bind("acme.jira", t.plugins.get("acme.jira")!, ISSUES, (method, args, ctx) => {
         seen.push({ args, ctx });
         return { method, key: (args as { key: string }).key };
       });
@@ -136,7 +139,13 @@ describe("PluginServiceBroker", () => {
     t.loadConsumer("acme.app", plugin("acme.app", {}));
     t.load("acme.jira", providerOf());
     expectFailure(await t.broker.call(t.consumer(), ISSUES, "lookup", {}), "not-declared");
+    expect(t.broker.status(t.consumer(), ISSUES)).toMatchObject({
+      available: false,
+      required: false,
+      reason: "not-declared",
+    });
     expect(t.activatePlugin).not.toHaveBeenCalled();
+    expect(t.reports).toEqual([]);
   });
 
   it("answers unavailable for a missing provider and logs a required import once", async () => {
@@ -179,6 +188,63 @@ describe("PluginServiceBroker", () => {
     expect(t.activatePlugin).not.toHaveBeenCalled();
   });
 
+  it("holds a call to a bound provider until its activate() has finished", async () => {
+    const t = setup();
+    t.loadConsumer("acme.app", consumerOf());
+    t.load("acme.jira", providerOf());
+    const finishing = deferred<void>();
+    const run = vi.fn<PluginServiceMethodRunner>(() => "ready");
+    let bound = false;
+    // Binds early in activate(), then keeps setting up.
+    t.activatePlugin.mockImplementation(async (id: string) => {
+      if (t.activated.has(id)) return;
+      if (!bound) {
+        bound = true;
+        t.broker.bind(id, t.plugins.get(id)!, ISSUES, run);
+      }
+      await finishing.promise;
+      t.activated.add(id);
+    });
+    const first = t.broker.call(t.consumer(), ISSUES, "lookup", {});
+    await vi.waitFor(() =>
+      expect(t.broker.status(t.consumer(), ISSUES)).toMatchObject({ running: true })
+    );
+    // Bound, but still inside activate(): the second call waits too.
+    const second = t.broker.call(t.consumer(), ISSUES, "lookup", {});
+    await flush();
+    expect(run).not.toHaveBeenCalled();
+    finishing.resolve();
+    expect(await first).toEqual({ ok: true, value: "ready" });
+    expect(await second).toEqual({ ok: true, value: "ready" });
+  });
+
+  it("answers unavailable when the provider fails to start, even having bound the service", async () => {
+    const t = setup();
+    t.loadConsumer("acme.app", consumerOf());
+    t.load("acme.jira", providerOf());
+    const run = vi.fn<PluginServiceMethodRunner>(() => "never");
+    // Binds, then its activate() throws: the host never marks it activated.
+    t.activatePlugin.mockImplementation(async (id: string) => {
+      t.broker.bind(id, t.plugins.get(id)!, ISSUES, run);
+    });
+    const message = expectFailure(
+      await t.broker.call(t.consumer(), ISSUES, "lookup", {}),
+      "unavailable"
+    );
+    expect(message).toContain("failed to start");
+    expect(run).not.toHaveBeenCalled();
+  });
+
+  it("refuses to bind for a load that has since been replaced", () => {
+    const t = setup();
+    t.load("acme.jira", providerOf());
+    const outgoing = t.plugins.get("acme.jira")!;
+    t.load("acme.jira", providerOf());
+    expect(() => t.broker.bind("acme.jira", outgoing, ISSUES, () => "stale")).toThrow(
+      "no longer loaded"
+    );
+  });
+
   it("answers unavailable when the provider starts without registering the service", async () => {
     const t = setup();
     t.loadConsumer("acme.app", consumerOf());
@@ -195,7 +261,7 @@ describe("PluginServiceBroker", () => {
     const projectProviderId = makeProjectPluginInstanceKey(PROJECT, "acme.jira");
 
     function bindAnswering(t: ReturnType<typeof setup>, id: string) {
-      t.broker.bind(id, ISSUES, () => id);
+      t.broker.bind(id, t.plugins.get(id)!, ISSUES, () => id);
     }
 
     it("prefers the provider in the caller's own project over the app-global one", async () => {
@@ -274,7 +340,9 @@ describe("PluginServiceBroker", () => {
       const t = setup();
       t.loadConsumer("acme.app", consumerOf());
       const run = vi.fn<PluginServiceMethodRunner>(() => "ok");
-      t.load("acme.jira", providerOf(), () => t.broker.bind("acme.jira", ISSUES, run));
+      t.load("acme.jira", providerOf(), () =>
+        t.broker.bind("acme.jira", t.plugins.get("acme.jira")!, ISSUES, run)
+      );
       return { ...t, run };
     }
 
@@ -298,6 +366,18 @@ describe("PluginServiceBroker", () => {
       expectFailure(await t.broker.call(t.consumer(), ISSUES, "lookup", big), "payload-too-large");
       t.run.mockReturnValue("y".repeat(2 * 1024 * 1024));
       expectFailure(await t.broker.call(t.consumer(), ISSUES, "lookup", {}), "payload-too-large");
+    });
+
+    it("bounds the message a provider's error carries back", async () => {
+      const t = ready();
+      t.run.mockImplementation(() => {
+        throw new Error("x".repeat(10 * PLUGIN_SERVICE_MAX_MESSAGE_LENGTH));
+      });
+      const message = expectFailure(
+        await t.broker.call(t.consumer(), ISSUES, "lookup", {}),
+        "provider-error"
+      );
+      expect(message.length).toBeLessThanOrEqual(PLUGIN_SERVICE_MAX_MESSAGE_LENGTH);
     });
 
     it("reports a provider that throws as provider-error with its message", async () => {
@@ -337,7 +417,9 @@ describe("PluginServiceBroker", () => {
         providerSignal = ctx.signal;
         return new Promise(() => {});
       });
-      t.load("acme.jira", providerOf(), () => t.broker.bind("acme.jira", ISSUES, run));
+      t.load("acme.jira", providerOf(), () =>
+        t.broker.bind("acme.jira", t.plugins.get("acme.jira")!, ISSUES, run)
+      );
       return { ...t, run, providerSignal: () => providerSignal };
     }
 
@@ -397,7 +479,7 @@ describe("PluginServiceBroker", () => {
       t.loadConsumer("acme.app", consumerOf());
       let providerSignal: AbortSignal | undefined;
       t.load("acme.jira", providerOf(), () =>
-        t.broker.bind("acme.jira", ISSUES, (_m, _a, ctx) => {
+        t.broker.bind("acme.jira", t.plugins.get("acme.jira")!, ISSUES, (_m, _a, ctx) => {
           providerSignal = ctx.signal;
           return new Promise(() => {});
         })
@@ -412,7 +494,7 @@ describe("PluginServiceBroker", () => {
       expect(providerSignal?.aborted).toBe(true);
 
       t.load("acme.jira", providerOf("1.3.0"), () =>
-        t.broker.bind("acme.jira", ISSUES, () => "replacement")
+        t.broker.bind("acme.jira", t.plugins.get("acme.jira")!, ISSUES, () => "replacement")
       );
       expect(await t.broker.call(t.consumer(), ISSUES, "lookup", {})).toEqual({
         ok: true,
@@ -424,11 +506,16 @@ describe("PluginServiceBroker", () => {
       const t = setup();
       t.loadConsumer("acme.app", consumerOf());
       t.load("acme.jira", providerOf(), () =>
-        t.broker.bind("acme.jira", ISSUES, () => new Promise(() => {}))
+        t.broker.bind("acme.jira", t.plugins.get("acme.jira")!, ISSUES, () => new Promise(() => {}))
       );
       const inFlight = t.broker.call(t.consumer(), ISSUES, "lookup", {});
       await vi.waitFor(() => expect(t.activated.has("acme.jira")).toBe(true));
-      const dispose = t.broker.bind("acme.jira", ISSUES, () => "second");
+      const dispose = t.broker.bind(
+        "acme.jira",
+        t.plugins.get("acme.jira")!,
+        ISSUES,
+        () => "second"
+      );
       expectFailure(await inFlight, "unavailable");
       expect(await t.broker.call(t.consumer(), ISSUES, "lookup", {})).toEqual({
         ok: true,
@@ -442,9 +529,11 @@ describe("PluginServiceBroker", () => {
       const t = setup();
       t.loadConsumer("acme.app", consumerOf());
       t.load("acme.jira", providerOf());
-      t.broker.bind("acme.jira", ISSUES, () => "stale");
+      t.broker.bind("acme.jira", t.plugins.get("acme.jira")!, ISSUES, () => "stale");
       // Reloaded as a fresh object without the old binding being retired.
-      t.load("acme.jira", providerOf(), () => t.broker.bind("acme.jira", ISSUES, () => "fresh"));
+      t.load("acme.jira", providerOf(), () =>
+        t.broker.bind("acme.jira", t.plugins.get("acme.jira")!, ISSUES, () => "fresh")
+      );
       expect(await t.broker.call(t.consumer(), ISSUES, "lookup", {})).toEqual({
         ok: true,
         value: "fresh",
@@ -460,7 +549,7 @@ describe("PluginServiceBroker", () => {
       const result = t.broker.call(t.consumer(), ISSUES, "lookup", {});
       await vi.waitFor(() => expect(t.activatePlugin).toHaveBeenCalled());
       t.load("acme.jira", providerOf());
-      t.broker.bind("acme.jira", ISSUES, () => "replacement");
+      t.broker.bind("acme.jira", t.plugins.get("acme.jira")!, ISSUES, () => "replacement");
       starting.resolve();
       expectFailure(await result, "unavailable");
     });
@@ -469,7 +558,7 @@ describe("PluginServiceBroker", () => {
       const t = setup();
       t.loadConsumer("acme.app", consumerOf());
       t.load("acme.jira", providerOf(), () =>
-        t.broker.bind("acme.jira", ISSUES, () => new Promise(() => {}))
+        t.broker.bind("acme.jira", t.plugins.get("acme.jira")!, ISSUES, () => new Promise(() => {}))
       );
       const inFlight = t.broker.call(t.consumer(), ISSUES, "lookup", {});
       await vi.waitFor(() => expect(t.activated.has("acme.jira")).toBe(true));
@@ -492,7 +581,7 @@ describe("PluginServiceBroker", () => {
           requires: [{ name: B, range: "^1.0.0" }],
         }),
         () =>
-          t.broker.bind("acme.alpha", A, () =>
+          t.broker.bind("acme.alpha", t.plugins.get("acme.alpha")!, A, () =>
             t.broker.call(t.consumer("acme.alpha"), B, "run", {})
           )
       );
@@ -503,7 +592,9 @@ describe("PluginServiceBroker", () => {
           requires: [{ name: A, range: "^1.0.0" }],
         }),
         () =>
-          t.broker.bind("acme.beta", B, () => t.broker.call(t.consumer("acme.beta"), A, "run", {}))
+          t.broker.bind("acme.beta", t.plugins.get("acme.beta")!, B, () =>
+            t.broker.call(t.consumer("acme.beta"), A, "run", {})
+          )
       );
       // Each provider must have finished activating to call out.
       await t.activatePlugin("acme.alpha");
@@ -530,7 +621,7 @@ describe("PluginServiceBroker", () => {
         "acme.alpha",
         plugin("acme.alpha", { provides: [{ name: A, version: "1.0.0", methods: ["run"] }] }),
         () =>
-          t.broker.bind("acme.alpha", A, async (_m, args) => {
+          t.broker.bind("acme.alpha", t.plugins.get("acme.alpha")!, A, async (_m, args) => {
             await gate.promise;
             return args;
           })
@@ -554,7 +645,7 @@ describe("PluginServiceBroker", () => {
           requires: [{ name: B, range: "^1.0.0" }],
         }),
         () =>
-          t.broker.bind("acme.alpha", A, () => {
+          t.broker.bind("acme.alpha", t.plugins.get("acme.alpha")!, A, () => {
             nested = t.broker.call(t.consumer("acme.alpha"), B, "run", {});
             return new Promise(() => {});
           })
@@ -562,7 +653,8 @@ describe("PluginServiceBroker", () => {
       t.load(
         "acme.beta",
         plugin("acme.beta", { provides: [{ name: B, version: "1.0.0", methods: ["run"] }] }),
-        () => t.broker.bind("acme.beta", B, () => new Promise(() => {}))
+        () =>
+          t.broker.bind("acme.beta", t.plugins.get("acme.beta")!, B, () => new Promise(() => {}))
       );
       await t.activatePlugin("acme.alpha");
 

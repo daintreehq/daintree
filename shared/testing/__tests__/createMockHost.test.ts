@@ -3041,6 +3041,37 @@ describe("services (#14105)", () => {
     });
   });
 
+  it("settles a cancelled call at once and aborts the provider's signal", async () => {
+    let providerSignal: AbortSignal | undefined;
+    const host = createMockHost({
+      services: {
+        "acme.jira.issues": {
+          methods: {
+            lookup: (_args, ctx) => {
+              providerSignal = ctx.signal;
+              return new Promise(() => {});
+            },
+          },
+        },
+      },
+    });
+    const controller = new AbortController();
+    const result = host.services.call(
+      "acme.jira.issues",
+      "lookup",
+      {},
+      {
+        signal: controller.signal,
+      }
+    );
+    controller.abort();
+    await expect(result).resolves.toMatchObject({ ok: false, reason: "cancelled" });
+    expect(providerSignal?.aborted).toBe(true);
+    await expect(
+      host.services.call("acme.jira.issues", "lookup", { fn: () => 1 })
+    ).resolves.toMatchObject({ ok: false, reason: "invalid" });
+  });
+
   it("answers unavailable for a service nobody stands in for", async () => {
     const host = createMockHost();
     await expect(host.services.call("acme.jira.issues", "lookup", {})).resolves.toMatchObject({

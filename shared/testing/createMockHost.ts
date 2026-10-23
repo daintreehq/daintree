@@ -3931,18 +3931,49 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
         if (!provider) return fail("unavailable", `no enabled plugin provides "${name}"`);
         const fn = Object.hasOwn(provider.methods, method) ? provider.methods[method] : undefined;
         if (typeof fn !== "function") return fail("invalid", `"${name}" has no method "${method}"`);
-        if (callOptions?.signal?.aborted) return fail("cancelled", "the call was cancelled");
+        const signal = callOptions?.signal;
+        if (signal?.aborted) return fail("cancelled", "the call was cancelled");
+        let copied: unknown;
+        try {
+          copied = structuredClone(args);
+        } catch (err) {
+          return fail("invalid", formatErrorMessage(err, "the arguments can't be copied"));
+        }
+        // As in production, the caller is settled the moment it cancels; the
+        // provider sees the abort on its own signal.
+        const controller = new AbortController();
         const ctx: PluginServiceCallContext = {
-          signal: callOptions?.signal ?? new AbortController().signal,
+          signal: controller.signal,
           caller: {
             pluginId: pluginManifestIdFromInstanceKey(pluginId),
             projectId: projectIdFromPluginInstanceKey(pluginId),
           },
         };
+        let onAbort: (() => void) | undefined;
+        const cancelled = new Promise<PluginServiceResult>((resolve) => {
+          onAbort = () => {
+            controller.abort();
+            resolve(fail("cancelled", "the call was cancelled"));
+          };
+          signal?.addEventListener("abort", onAbort, { once: true });
+        });
+        const answered = (async (): Promise<PluginServiceResult> => {
+          let value: unknown;
+          try {
+            value = await fn(copied, ctx);
+          } catch (err) {
+            return fail("provider-error", formatErrorMessage(err, "the provider failed"));
+          }
+          try {
+            return { ok: true, value: structuredClone(value) };
+          } catch (err) {
+            return fail("invalid", formatErrorMessage(err, "the result can't be copied"));
+          }
+        })();
         try {
-          return { ok: true, value: structuredClone(await fn(structuredClone(args), ctx)) };
-        } catch (err) {
-          return fail("provider-error", formatErrorMessage(err, "the provider failed"));
+          return await Promise.race([answered, cancelled]);
+        } finally {
+          if (onAbort) signal?.removeEventListener("abort", onAbort);
         }
       }) as PluginServicesApi["call"],
       status: async (name): Promise<PluginServiceStatus> => {

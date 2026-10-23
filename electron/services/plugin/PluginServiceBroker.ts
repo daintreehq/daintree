@@ -19,11 +19,13 @@ import {
   PLUGIN_SERVICE_MAX_ARGS_BYTES,
   PLUGIN_SERVICE_MAX_CALL_DEPTH,
   PLUGIN_SERVICE_MAX_CONCURRENT_CALLS,
+  PLUGIN_SERVICE_MAX_MESSAGE_LENGTH,
   PLUGIN_SERVICE_MAX_RESULT_BYTES,
   PLUGIN_SERVICE_MAX_TIMEOUT_MS,
 } from "../../../shared/config/pluginBudgets.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import {
+  PLUGIN_PAYLOAD_TOO_LARGE,
   assertPayloadWithinLimit,
   isPluginPayloadTooLargeError,
   snapshotPayload,
@@ -96,7 +98,12 @@ interface CallOptions {
 }
 
 function fail(reason: PluginServiceFailureReason, message: string): PluginServiceResult<never> {
-  return { ok: false, reason, message };
+  // A provider's error text is its own; bounded so it can't outgrow the result cap.
+  const bounded =
+    message.length > PLUGIN_SERVICE_MAX_MESSAGE_LENGTH
+      ? `${message.slice(0, PLUGIN_SERVICE_MAX_MESSAGE_LENGTH - 1)}…`
+      : message;
+  return { ok: false, reason, message: bounded };
 }
 
 function bindingKey(instanceId: string, name: string): string {
@@ -151,10 +158,20 @@ export class PluginServiceBroker {
 
   constructor(private readonly deps: PluginServiceBrokerDeps) {}
 
-  /** Bind `name` for `instanceId`. The caller has checked it against the manifest. */
-  bind(instanceId: string, name: string, run: PluginServiceMethodRunner): () => void {
-    const plugin = this.deps.getPlugin(instanceId);
-    if (!plugin) throw new Error(`Unknown plugin: ${instanceId}`);
+  /**
+   * Bind `name` for the `plugin` load of `instanceId`. The caller has checked
+   * it against that load's manifest; a load that has since been replaced
+   * can't bind, so a late registration never answers for its successor.
+   */
+  bind(
+    instanceId: string,
+    plugin: LoadedPlugin,
+    name: string,
+    run: PluginServiceMethodRunner
+  ): () => void {
+    if (this.deps.getPlugin(instanceId) !== plugin) {
+      throw new Error(`Plugin "${instanceId}" is no longer loaded`);
+    }
     const prior = this.bindings.get(bindingKey(instanceId, name));
     if (prior) this.retireBinding(prior, `"${name}" was registered again`);
     const binding: Binding = { instanceId, plugin, name, run, calls: new Set() };
@@ -333,21 +350,26 @@ export class PluginServiceBroker {
     const name = resolution.provided.name;
     const key = bindingKey(providerId, name);
     try {
-      let binding = this.bindings.get(key);
-      if (binding?.plugin !== provider) {
+      // Even with the service bound: a provider binds during activate() and
+      // may still be setting up, so no call runs until it has finished.
+      if (!this.deps.isActivated(providerId)) {
         await this.deps.activatePlugin(providerId);
         if (!this.pending.has(call)) return;
-        // Identity, not presence: the id may have been unloaded and loaded
-        // again while it started, and that is not the provider resolved.
-        if (this.deps.getPlugin(providerId) !== provider) {
-          call.settle(fail("unavailable", `the provider of "${name}" unloaded while starting`));
-          return;
-        }
-        binding = this.bindings.get(key);
-        if (binding?.plugin !== provider) {
-          call.settle(fail("unavailable", `the provider started but didn't register "${name}"`));
-          return;
-        }
+      }
+      // Identity, not presence: the id may have been unloaded and loaded
+      // again meanwhile, and that is not the provider resolved.
+      if (this.deps.getPlugin(providerId) !== provider) {
+        call.settle(fail("unavailable", `the provider of "${name}" unloaded while starting`));
+        return;
+      }
+      if (!this.deps.isActivated(providerId)) {
+        call.settle(fail("unavailable", `the provider of "${name}" failed to start`));
+        return;
+      }
+      const binding = this.bindings.get(key);
+      if (binding?.plugin !== provider) {
+        call.settle(fail("unavailable", `the provider started but didn't register "${name}"`));
+        return;
       }
       call.binding = binding;
       binding.calls.add(call);
@@ -372,7 +394,13 @@ export class PluginServiceBroker {
       }
       call.settle({ ok: true, value: result });
     } catch (err) {
-      call.settle(fail("provider-error", formatErrorMessage(err, `"${name}.${method}" failed`)));
+      const message = formatErrorMessage(err, `"${name}.${method}" failed`);
+      // A worker refuses its own oversize result before the port, and only
+      // that refusal's text crosses it.
+      const oversize =
+        message.startsWith(`${PLUGIN_PAYLOAD_TOO_LARGE}:`) &&
+        message.includes(`"${name}.${method}"`);
+      call.settle(fail(oversize ? "payload-too-large" : "provider-error", message));
     }
   }
 

@@ -173,6 +173,23 @@ describe("host.registerService and host.services (#14105)", () => {
     ).rejects.toThrow('"extra" is not one of the declared methods');
   });
 
+  it("refuses a registration from an activation that outlived its load", async () => {
+    const t = setup();
+    const { host } = t.hostFor("acme.jira");
+    // Unloaded and loaded again while the old activate() was still running.
+    t.plugins.set(
+      "acme.jira",
+      loaded("acme.jira", {
+        provides: [{ name: ISSUES, version: "1.0.0", methods: ["lookup", "count"] }],
+      })
+    );
+    await expect(
+      host.registerService(ISSUES, { lookup: () => "stale", count: () => 0 })
+    ).rejects.toThrow("no longer loaded");
+    const consumer = t.hostFor("acme.app").host;
+    await expect(consumer.services.status(ISSUES)).resolves.toMatchObject({ running: false });
+  });
+
   it("refuses to bind once activation is over", async () => {
     const t = setup();
     const { host, revoke } = t.hostFor("acme.jira");

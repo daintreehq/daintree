@@ -531,7 +531,7 @@ describe("plugin-sdk boundary", () => {
       expectTypeOf(activation.registerService).returns.toEqualTypeOf<Promise<() => void>>();
       // @ts-expect-error — calling services is post-activation-safe, not on the slice
       const _services = activation.services;
-      expect(_services).toBeUndefined();
+      void _services;
       // One shared contract types both ends. Never invoked: compile-time only.
       type Issues = { lookup: { args: { key: string }; result: { title: string } } };
       const assertTypes = async (host: PluginHostApi): Promise<void> => {

@@ -62,6 +62,12 @@ export const PLUGIN_SERVICE_MAX_RESULT_BYTES = 1 * MiB;
 /** Service calls one provider instance runs at once; a call past it is `unavailable`. */
 export const PLUGIN_SERVICE_MAX_CONCURRENT_CALLS = 32;
 
+/** Methods one service may declare; also bounds what a worker may propose to bind. */
+export const PLUGIN_SERVICE_MAX_METHODS = 32;
+
+/** Longest failure message a service call carries back to its caller. */
+export const PLUGIN_SERVICE_MAX_MESSAGE_LENGTH = 2_000;
+
 /** Service calls that may be nested inside one another before the next is refused as a `cycle`. */
 export const PLUGIN_SERVICE_MAX_CALL_DEPTH = 8;
 
