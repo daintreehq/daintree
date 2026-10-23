@@ -1214,6 +1214,33 @@ describe("HttpLifecycle", () => {
       deps.sessionStore.sessionWebContentsMap.delete("s");
       expect(projectSeenBy(deps, skills)).toBeNull();
     });
+
+    it("reads a remote view's help session from its own lane while the pin stands", () => {
+      const { deps, lc } = setup();
+      const REMOTE_PIN = -7;
+      deps.sessionStore.sessionWebContentsMap.set("s", REMOTE_PIN);
+      deps.sessionStore.sessionHelpIdMap.set("s", "help-1");
+      const sessionProject = vi.fn((helpSessionId: string) =>
+        helpSessionId === "help-1" ? PROJECT : null
+      );
+      lc.setAssistantControl({
+        control: {} as never,
+        sessionProject,
+      });
+      const skills = buildDeps(lc, "s");
+      expect(projectSeenBy(deps, skills)).toBe(PROJECT);
+      expect(sessionProject).toHaveBeenCalledWith("help-1");
+      // A moved or closed remote view revokes the session, which drops the pin.
+      deps.sessionStore.sessionWebContentsMap.delete("s");
+      expect(projectSeenBy(deps, skills)).toBeNull();
+    });
+
+    it("gives a remote pin no project while the help service is not wired", () => {
+      const { deps, lc } = setup();
+      deps.sessionStore.sessionWebContentsMap.set("s", -7);
+      deps.sessionStore.sessionHelpIdMap.set("s", "help-1");
+      expect(projectSeenBy(deps, buildDeps(lc, "s"))).toBeNull();
+    });
   });
 
   describe("buildSessionServerDeps — turnId snapshot stamping (#10067)", () => {

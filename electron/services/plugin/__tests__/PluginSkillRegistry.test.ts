@@ -294,8 +294,13 @@ describe("PluginSkillRegistry", () => {
     });
 
     it("filters before the limit, so hidden skills cannot crowd out visible ones", () => {
-      const limited = searchPluginSkills({ query: "", limit: 1 }, { projectId: PROJECT_B });
-      expect(limited.skills.map((match) => match.id)).toEqual(["acme.installed.tdd"]);
+      // Unfiltered, both acme.installed.tdd and instance A's skill sort ahead of
+      // instance B's, so a limit applied first would return a hidden skill.
+      const limited = searchPluginSkills(
+        { query: "", limit: 1 },
+        { projectId: PROJECT_B, pluginInstanceId: instanceB }
+      );
+      expect(limited.skills.map((match) => match.id)).toEqual([`${instanceB}.tdd`]);
     });
 
     it("narrows to one plugin instance when asked", () => {
