@@ -82,11 +82,11 @@ describe("TerminalInstanceService scrollback under memory pressure (#14215)", ()
   const initialScrollbackLines = useScrollbackStore.getState().scrollbackLines;
 
   beforeEach(async () => {
-    vi.useFakeTimers();
     ({ terminalInstanceService: service } =
       (await import("../TerminalInstanceService")) as unknown as {
         terminalInstanceService: ScrollbackTestService;
       });
+    vi.useFakeTimers();
     service.instances.clear();
     usePerformanceModeStore.setState({ performanceMode: false });
     useScrollbackStore.setState({ scrollbackLines: 5000 });
