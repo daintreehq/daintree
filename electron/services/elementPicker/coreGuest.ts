@@ -170,8 +170,12 @@ export class CoreGuest {
   private readonly extractors = new Map<ElementPickerProviderId, ExtractorAvailability>();
   /** The registrations plugin extractors were requested for, so a later change can tell which went away. */
   private readonly pluginProviders = new Map<string, RegisteredElementPickerProvider>();
-  /** Ids whose extractor was taken out this document, so a registration that arrives later is looked for. */
-  private readonly revokedProviders = new Set<string>();
+  /**
+   * Ids whose extractor was taken out this document, each with the registration
+   * last probed for (null before any), so one that arrives later is looked for
+   * once, and kept until an install is reserved again.
+   */
+  private readonly revokedProviders = new Map<string, RegisteredElementPickerProvider | null>();
   /** Held from the first plugin extractor in a document until the document goes. */
   private unsubscribeProviders: (() => void) | null = null;
   /** Whether the last scheduled look at this document has come back; until it has, nothing is known to be absent. */
@@ -478,6 +482,7 @@ export class CoreGuest {
       if (provider === undefined || !signalsMatchProvider(detection, provider)) continue;
       this.extractors.set(framework, "pending");
       this.pluginProviders.set(framework, provider);
+      this.revokedProviders.delete(framework);
       this.watchProviders(epoch);
       added = true;
       void this.deps
@@ -672,16 +677,17 @@ export class CoreGuest {
       this.pluginProviders.delete(id);
       const was = this.extractors.get(id);
       this.extractors.delete(id);
-      this.revokedProviders.add(id);
+      this.revokedProviders.set(id, null);
       changed = true;
       // A failed attempt may still have left its registration in the page.
       if (was === "installed" || was === "failed") await this.removeInGuest(id);
       if (!this.isCurrent(epoch)) return;
     }
     let returned = false;
-    for (const id of [...this.revokedProviders]) {
-      if (getElementPickerProvider(id, this.deps.projectId) === undefined) continue;
-      this.revokedProviders.delete(id);
+    for (const [id, probedFor] of [...this.revokedProviders]) {
+      const current = getElementPickerProvider(id, this.deps.projectId);
+      if (current === undefined || current === probedFor) continue;
+      this.revokedProviders.set(id, current);
       returned = true;
     }
     if (changed) await this.publishAvailability(epoch);

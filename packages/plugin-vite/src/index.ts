@@ -1,7 +1,7 @@
 import { builtinModules } from "node:module";
 import { createHash } from "node:crypto";
 import path from "node:path";
-import { build } from "vite";
+import { build, parseAst } from "vite";
 import type { Plugin, UserConfig } from "vite";
 
 import { HOST_IMPORTMAP_SPECIFIERS } from "./hostImportMap.js";
@@ -245,6 +245,20 @@ const CONTRACT_POINTER =
   "utility classes in your markup; ship any plain CSS you still need as root-scoped rules in " +
   "`@layer components`. `@apply` is not part of the plugin contract.";
 
+/** Whether emitted code still loads a module at runtime; parsed, so a string spelling `import(` doesn't count. */
+export function hasImportExpression(code: string): boolean {
+  const pending: unknown[] = [parseAst(code)];
+  while (pending.length > 0) {
+    const node = pending.pop();
+    if (node === null || typeof node !== "object") continue;
+    if ((node as { type?: unknown }).type === "ImportExpression") return true;
+    for (const value of Object.values(node)) {
+      if (value !== null && typeof value === "object") pending.push(value);
+    }
+  }
+  return false;
+}
+
 /** Build target for a plugin entry. `"browser"` (default) is the renderer/panel
  * preset; `"node"` is for stdio MCP servers and other Node entries. */
 export type DaintreeBuildTarget = "browser" | "node" | "guest";
@@ -335,10 +349,13 @@ export function daintreePlugin(options: DaintreePluginOptions = {}): Plugin {
           throw new Error(
             'A guest target needs build.lib.entry, e.g. lib: { entry: "src/lit.ts" }'
           );
-        // Set in place rather than merged: Vite concatenates arrays, so a merged
-        // `formats` would add to the author's instead of replacing it.
-        lib.name = GUEST_ENTRY_GLOBAL;
-        lib.formats = ["iife"];
+        // Replaced rather than merged, since Vite concatenates arrays and a merged
+        // `formats` would add to the author's; copied so a `lib` object another
+        // build shares keeps its own settings.
+        userConfig.build = {
+          ...userConfig.build,
+          lib: { ...lib, name: GUEST_ENTRY_GLOBAL, formats: ["iife"] },
+        };
         return {
           // A library build leaves `process.env.NODE_ENV` alone, and the page has no `process`.
           define: { "process.env.NODE_ENV": JSON.stringify("production") },
@@ -375,7 +392,7 @@ export function daintreePlugin(options: DaintreePluginOptions = {}): Plugin {
           }
           // A specifier only known at runtime survives bundling as a bare `import()`,
           // which would resolve against the previewed page rather than the plugin.
-          if (/\bimport\s*\(/.test(chunk.code)) {
+          if (hasImportExpression(chunk.code)) {
             this.error(
               "A guest entry can't load modules at runtime: the output still contains an import() expression. Use a literal specifier so it is bundled."
             );

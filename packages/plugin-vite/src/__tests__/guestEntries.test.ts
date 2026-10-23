@@ -3,7 +3,7 @@ import { build } from "vite";
 import { mkdtemp, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { daintreePlugin, GUEST_ENTRY_GLOBAL } from "../index.js";
+import { daintreePlugin, GUEST_ENTRY_GLOBAL, hasImportExpression } from "../index.js";
 
 async function buildGuest(files: Record<string, string>, entry = "entry.js") {
   const root = await mkdtemp(path.join(tmpdir(), "daintree-guest-entry-"));
@@ -63,5 +63,30 @@ describe("guest entry build target", () => {
         "entry.js": 'import "./style.css"; export default () => ({});',
       })
     ).rejects.toThrow(/exactly one JavaScript file/);
+  });
+
+  it("tells a runtime import() from a string that only spells one", () => {
+    expect(hasImportExpression('const label = "import(";')).toBe(false);
+    expect(hasImportExpression("const load = (s) => import(s);")).toBe(true);
+  });
+
+  it("leaves a lib object another build shares as it was", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "daintree-guest-shared-"));
+    try {
+      await writeFile(path.join(root, "package.json"), '{"name":"guest-fixture"}');
+      await writeFile(path.join(root, "entry.js"), "export default () => ({});");
+      const lib = { entry: path.join(root, "entry.js"), fileName: () => "lit.js" };
+      await build({
+        configFile: false,
+        root,
+        logLevel: "silent",
+        plugins: [daintreePlugin({ target: "guest" })],
+        build: { write: false, lib },
+      });
+      expect(lib).not.toHaveProperty("formats");
+      expect(lib).not.toHaveProperty("name");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 });

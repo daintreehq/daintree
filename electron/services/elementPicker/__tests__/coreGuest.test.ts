@@ -791,4 +791,28 @@ describe("CoreGuest plugin providers", () => {
     expect(h.emitted.filter((p) => p.kind === "host-issue")).toHaveLength(1);
     expect(h.removals().length).toBeGreaterThan(0);
   });
+
+  it("reinstalls once after reloads in a row, and not again for an unrelated plugin", async () => {
+    registerElementPickerProviders("acme.qwik", "acme.qwik", [QWIK], "/plugins/acme.qwik");
+    const h = harness({ probeResult: QWIK_DETECTED });
+    await h.install();
+    h.guest.onGuestEvent(0, READY);
+    await h.settle();
+
+    unregisterElementPickerProviders("acme.qwik");
+    registerElementPickerProviders("acme.qwik", "acme.qwik", [QWIK], "/plugins/acme.qwik");
+    unregisterElementPickerProviders("acme.qwik");
+    registerElementPickerProviders("acme.qwik", "acme.qwik", [QWIK], "/plugins/acme.qwik");
+    await h.settle();
+    expect(h.pluginInstalls()).toHaveLength(2);
+
+    const probes = () =>
+      h.calls.filter((c) => String(c.params.expression).includes("const api = { result: null,"));
+    const before = probes().length;
+    registerElementPickerProviders("acme.marko", "acme.marko", [{ ...QWIK, id: "marko" }]);
+    await h.settle();
+    unregisterElementPickerProviders("acme.marko");
+    await h.settle();
+    expect(probes()).toHaveLength(before);
+  });
 });
