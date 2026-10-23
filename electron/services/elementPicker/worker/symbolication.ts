@@ -95,8 +95,14 @@ interface DecodedMap {
 export const SOURCE_MAP_LIMITS = {
   sections: 4_096,
   sources: 16_384,
-  /** Where a section may start: the decoder builds every generated line before it. */
-  sectionLine: 1_000_000,
+  /**
+   * Generated lines, counting every one before a section's offset, since the
+   * decoder builds each of them: a few bytes of `;` or a large offset are a
+   * million empty arrays.
+   */
+  lines: 1_000_000,
+  /** Segments across every section. A dense real map holds one per five or six bytes. */
+  segments: 750_000,
 } as const;
 
 /**
@@ -117,11 +123,57 @@ export const DECODED_MAP_CACHE_LIMITS = { entries: 32, size: 64 * 1024 * 1024 } 
 const LINE_COST = 40;
 const SEGMENT_COST = 64;
 
+function charge(textLength: number, lines: number, segments: number): number {
+  return textLength * 2 + lines * LINE_COST + segments * SEGMENT_COST;
+}
+
 function retainedSize(trace: Decoder, map: TraceMap, textLength: number): number {
   const lines = trace.decodedMappings(map);
   let segments = 0;
   for (const line of lines) segments += line.length;
-  return textLength * 2 + lines.length * LINE_COST + segments * SEGMENT_COST;
+  return charge(textLength, lines.length, segments);
+}
+
+const COMMA = 44;
+
+/** A base64 digit with the continuation bit set: another digit of the same field follows. */
+function continues(code: number): boolean {
+  return (code >= 103 && code <= 122) || (code >= 48 && code <= 57) || code === 43 || code === 47;
+}
+
+function afterField(mappings: string, pos: number): number {
+  while (continues(mappings.charCodeAt(pos++)));
+  return pos;
+}
+
+/**
+ * The lines and segments the decoder will build from `mappings`, found by
+ * reading it the way the pinned decoder does, without building any. Counting
+ * separators is not enough: the decoder ends a segment after its fifth field
+ * whether or not a comma follows, so a line with no commas can still hold
+ * hundreds of thousands.
+ */
+export function mappingsExtent(mappings: string): { lines: number; segments: number } {
+  const { length } = mappings;
+  let lines = 0;
+  let segments = 0;
+  let pos = 0;
+  do {
+    const found = mappings.indexOf(";", pos);
+    const semi = found === -1 ? length : found;
+    lines += 1;
+    while (pos < semi) {
+      pos = afterField(mappings, pos);
+      if (pos < semi && mappings.charCodeAt(pos) !== COMMA) {
+        pos = afterField(mappings, afterField(mappings, afterField(mappings, pos)));
+        if (pos < semi && mappings.charCodeAt(pos) !== COMMA) pos = afterField(mappings, pos);
+      }
+      segments += 1;
+      pos += 1;
+    }
+    pos = semi + 1;
+  } while (pos <= length);
+  return { lines, segments };
 }
 
 const decodedMaps = new Map<FileRevision, DecodedMap>();
@@ -179,6 +231,60 @@ function isCoordinate(value: unknown): value is number {
   return typeof value === "number" && Number.isInteger(value) && value >= 0;
 }
 
+type Unavailable = { ok: false; reason: UnavailableReason };
+
+const unavailable = (reason: UnavailableReason): Unavailable => ({ ok: false, reason });
+
+type Prepared = { ok: true; map: Record<string, unknown>; sources: MapSource[] } | Unavailable;
+
+/** A regular map, as far as it can be checked before any of it is decoded. */
+type Leaf = Record<string, unknown> & { mappings: string; sources: unknown[] };
+
+function isLeaf(value: unknown): value is Leaf {
+  return (
+    isRecord(value) &&
+    value.version === 3 &&
+    !("sections" in value) &&
+    typeof value.mappings === "string" &&
+    Array.isArray(value.sources) &&
+    (value.names === undefined || Array.isArray(value.names))
+  );
+}
+
+/**
+ * Whether the decoder may build what these leaves describe, totalled over all
+ * of them. Each leaf is decoded whole before the sections are joined, so its
+ * lines count even where the next section cuts it short, and the joined map
+ * has a line for every one up to the furthest a section reaches.
+ */
+function admit(
+  textLength: number,
+  leaves: readonly { line: number; map: Leaf }[]
+): Unavailable | null {
+  let sources = 0;
+  let decodedLines = 0;
+  let reach = 0;
+  let segments = 0;
+  for (const { line, map } of leaves) {
+    const extent = mappingsExtent(map.mappings);
+    sources += map.sources.length;
+    decodedLines += extent.lines;
+    reach = Math.max(reach, line + extent.lines);
+    segments += extent.segments;
+  }
+  if (sources > SOURCE_MAP_LIMITS.sources) return unavailable("map-missing");
+  const lines = Math.max(decodedLines, reach);
+  if (
+    lines > SOURCE_MAP_LIMITS.lines ||
+    segments > SOURCE_MAP_LIMITS.segments ||
+    // The cache would refuse to hold it, and it would be built all the same.
+    charge(textLength, lines, segments) > DECODED_MAP_CACHE_LIMITS.size
+  ) {
+    return unavailable("budget-exhausted");
+  }
+  return null;
+}
+
 /**
  * The map as the decoder will see it: each source swapped for an opaque id,
  * with what it named kept here by index. Left to the decoder, a source is
@@ -189,31 +295,41 @@ function isCoordinate(value: unknown): value is number {
  * An index map is taken one level deep, as bundlers write them: each section
  * embeds a regular map. The pinned decoder places a nested section's columns
  * wrongly, and a section that points at a `url` would have the host fetch.
+ * No part of a map is decoded until all of it is admitted.
  */
-function opaque(
-  trace: Decoder,
-  input: unknown
-): { map: Record<string, unknown>; sources: MapSource[] } | null {
-  if (!isRecord(input)) return null;
-  const sources: MapSource[] = [];
+function opaque(trace: Decoder, input: unknown, textLength: number): Prepared {
+  if (!isRecord(input)) return unavailable("map-missing");
   if (!("sections" in input)) {
+    if (!isLeaf(input)) return unavailable("map-missing");
+    const refused = admit(textLength, [{ line: 0, map: input }]);
+    if (refused) return refused;
+    const sources: MapSource[] = [];
     const map = opaqueLeaf(trace, input, sources);
-    return map && { map, sources };
+    return map ? { ok: true, map, sources } : unavailable("map-missing");
   }
-  if (input.version !== 3 || !Array.isArray(input.sections)) return null;
-  if (input.sections.length > SOURCE_MAP_LIMITS.sections) return null;
-  const sections: Record<string, unknown>[] = [];
+  if (input.version !== 3 || !Array.isArray(input.sections)) return unavailable("map-missing");
+  if (input.sections.length > SOURCE_MAP_LIMITS.sections) return unavailable("map-missing");
+  const leaves: { line: number; column: number; map: Leaf }[] = [];
   for (const section of input.sections) {
-    if (!isRecord(section) || "url" in section || !isRecord(section.offset)) return null;
+    if (!isRecord(section) || "url" in section || !isRecord(section.offset)) {
+      return unavailable("map-missing");
+    }
     const { line, column } = section.offset;
-    if (!isCoordinate(line) || !isCoordinate(column)) return null;
-    if (line > SOURCE_MAP_LIMITS.sectionLine) return null;
-    if (!isRecord(section.map) || "sections" in section.map) return null;
-    const map = opaqueLeaf(trace, section.map, sources);
-    if (!map) return null;
-    sections.push({ offset: { line, column }, map });
+    if (!isCoordinate(line) || !isCoordinate(column) || !isLeaf(section.map)) {
+      return unavailable("map-missing");
+    }
+    leaves.push({ line, column, map: section.map });
   }
-  return { map: { version: 3, sections }, sources };
+  const refused = admit(textLength, leaves);
+  if (refused) return refused;
+  const sources: MapSource[] = [];
+  const sections: Record<string, unknown>[] = [];
+  for (const { line, column, map } of leaves) {
+    const leaf = opaqueLeaf(trace, map, sources);
+    if (!leaf) return unavailable("map-missing");
+    sections.push({ offset: { line, column }, map: leaf });
+  }
+  return { ok: true, map: { version: 3, sections }, sources };
 }
 
 /**
@@ -223,13 +339,10 @@ function opaque(
  */
 function opaqueLeaf(
   trace: Decoder,
-  input: Record<string, unknown>,
+  input: Leaf,
   sources: MapSource[]
 ): Record<string, unknown> | null {
   const { mappings, names, sourceRoot, sourcesContent } = input;
-  if (input.version !== 3 || typeof mappings !== "string") return null;
-  if (!Array.isArray(input.sources) || (names !== undefined && !Array.isArray(names))) return null;
-  if (sources.length + input.sources.length > SOURCE_MAP_LIMITS.sources) return null;
   const ignoreList = Array.isArray(input.ignoreList)
     ? input.ignoreList
     : Array.isArray(input.x_google_ignoreList)
@@ -257,20 +370,21 @@ function opaqueLeaf(
   return { ...leaf, mappings: lines };
 }
 
-function decode(trace: Decoder, text: string): DecodedMap | null {
+function decode(trace: Decoder, text: string): { ok: true; decoded: DecodedMap } | Unavailable {
   let parsed: unknown;
   try {
     parsed = JSON.parse(text);
   } catch {
-    return null;
+    return unavailable("map-missing");
   }
   try {
-    const prepared = opaque(trace, parsed);
-    if (!prepared) return null;
+    const prepared = opaque(trace, parsed, text.length);
+    if (!prepared.ok) return prepared;
     const map = trace.AnyMap(prepared.map as Parameters<Decoder["AnyMap"]>[0]);
-    return { trace: map, sources: prepared.sources, size: retainedSize(trace, map, text.length) };
+    const size = retainedSize(trace, map, text.length);
+    return { ok: true, decoded: { trace: map, sources: prepared.sources, size } };
   } catch {
-    return null;
+    return unavailable("map-missing");
   }
 }
 
@@ -278,10 +392,6 @@ function decode(trace: Decoder, text: string): DecodedMap | null {
 function withoutBom(text: string): string {
   return text.charCodeAt(0) === 0xfeff ? text.slice(1) : text;
 }
-
-type Unavailable = { ok: false; reason: UnavailableReason };
-
-const unavailable = (reason: UnavailableReason): Unavailable => ({ ok: false, reason });
 
 type LoadedMap =
   { ok: true; mapUrl: string | null; revision: FileRevision; decoded: DecodedMap } | Unavailable;
@@ -319,9 +429,9 @@ export function createSourceMapSymbolicator(access: ResolverSourceAccess): Frame
       decoded = cached(revision);
       if (!decoded) {
         const fresh = decode(trace, text);
-        if (!fresh) return unavailable("map-missing");
-        remember(revision, fresh);
-        decoded = fresh;
+        if (!fresh.ok) return fresh;
+        remember(revision, fresh.decoded);
+        decoded = fresh.decoded;
       }
     }
     return { ok: true, mapUrl, revision, decoded };
