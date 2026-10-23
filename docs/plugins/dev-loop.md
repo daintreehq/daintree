@@ -47,8 +47,8 @@ Templates:
 
 - **`command`** — single command plugin. `src/index.ts` exports `activate(host)` and registers the command imperatively via `host.registerAction(...)`: id `run`, titled `<Display name>: Run`, showing a toast. (The filesystem-convention handler — compiled `src/{id}.js` auto-bound on first dispatch — is also supported by the host; the scaffold just shows the imperative path.)
 - **`view`** — panel view + React component (`src/index.ts` + `src/panel.tsx`)
-- **`mcp`** — skeleton MCP server plus manifest wiring (`src/index.ts` + `src/server.ts`, built by `vite.config.server.ts`)
-- **`full`** — command + view + MCP example (largest, for experimenting)
+- **`mcp`** — skeleton MCP server that Daintree calls as its client (agents don't see its tools until an `agentMcp` endpoint's `source` names them) plus manifest wiring (`src/index.ts` + `src/server.ts`, built by `vite.config.server.ts`)
+- **`full`** — command + view + host-client MCP server (largest, for experimenting)
 
 #### `--project` — scaffold into a project
 

@@ -111,6 +111,47 @@ function loadPluginService(): Promise<PluginServiceSingleton> {
   return pluginServicePromise;
 }
 
+type ContributedServerEndpointsInstance =
+  import("./pluginAgentMcp/contributedServerEndpoint.js").ContributedServerEndpoints;
+let contributedServerEndpointsPromise: Promise<ContributedServerEndpointsInstance> | null = null;
+
+/**
+ * Register a plugin's agentMcp endpoint that serves tools from its own
+ * contributed MCP server, on the first list or call that needs it. The adapter
+ * and the supervisor load only for an instance that declares one.
+ */
+async function ensureContributedServerEndpoint(
+  pluginService: PluginServiceSingleton,
+  pluginInstanceId: string
+): Promise<void> {
+  if (!pluginService.findAgentMcpServerSource(pluginInstanceId)) return;
+  contributedServerEndpointsPromise ??= Promise.all([
+    import("./pluginAgentMcp/contributedServerEndpoint.js"),
+    import("./PluginMcpSupervisor.js"),
+  ]).then(
+    ([adapter, supervisor]) =>
+      new adapter.ContributedServerEndpoints({
+        findSource: (id) => pluginService.findAgentMcpServerSource(id),
+        resolveSettings: (id, settingId) => pluginService.resolveSettingTemplate(id, settingId),
+        supervisor: supervisor.getPluginMcpSupervisor(),
+      }),
+    (err: unknown) => {
+      contributedServerEndpointsPromise = null;
+      throw err;
+    }
+  );
+  try {
+    await (await contributedServerEndpointsPromise).ensure(pluginInstanceId);
+  } catch (err) {
+    // An endpoint whose server can't be served has no roster, which the
+    // session reads as no tools; the reason stays in the main-process log.
+    console.error(
+      `[PluginAgentMcp] contributed MCP server for "${pluginInstanceId}" could not be served:`,
+      err
+    );
+  }
+}
+
 // Re-export types for backward compatibility with existing importers.
 export type { HelpTokenValidator } from "./mcp-server/shared.js";
 export type McpAuthClass = import("./mcp-server/shared.js").McpAuthClass;
@@ -470,8 +511,11 @@ export class McpServerService {
       createPluginMcpRoute({
         isPluginLoaded: async (pluginInstanceId) =>
           (await loadPluginService()).hasPlugin(pluginInstanceId),
-        activatePlugin: async (pluginInstanceId) =>
-          (await loadPluginService()).activatePlugin(pluginInstanceId),
+        activatePlugin: async (pluginInstanceId) => {
+          const pluginService = await loadPluginService();
+          await pluginService.activatePlugin(pluginInstanceId);
+          await ensureContributedServerEndpoint(pluginService, pluginInstanceId);
+        },
         observeToolCall: (grant, toolName, argNames) =>
           observeAssistantPluginToolCall(
             {

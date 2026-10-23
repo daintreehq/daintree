@@ -156,6 +156,8 @@ const PLUGIN_ICON_ASSETS = "electron/services/plugin/pluginIconAssets.ts";
 const PROCESS_DETECTOR_REGISTRIES = "electron/services/ProcessDetector/registries.ts";
 const AGENT_MCP_DECLARED = "electron/services/pluginAgentMcp/declaredEndpoints.ts";
 const AGENT_MCP_PROJECT_ENABLEMENT = "electron/services/pluginAgentMcp/projectEnablement.ts";
+const AGENT_MCP_CONTRIBUTED_SERVER =
+  "electron/services/pluginAgentMcp/contributedServerEndpoint.ts";
 const WORKTREE_SETUP_STEP_REGISTRY = "electron/services/worktreeSetupStepRegistry.ts";
 const WORKTREE_SETUP_RPC = "electron/services/worktreeSetupRpcServer.ts";
 const LIFECYCLE_COMMAND_TRUST = "electron/workspace-host/lifecycleCommandTrust.ts";
@@ -1930,6 +1932,14 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
         { file: PLUGIN_HOST_FACTORY, symbol: "mcp.registerTools (validateAgentMcpTools groups)" },
       ],
       note: "The groups the user allows one at a time, and what each registered tool must name.",
+    },
+    source: {
+      mode: "verbatim",
+      consumers: [
+        { file: PLUGIN_SERVICE, symbol: "findAgentMcpServerSource" },
+        { file: AGENT_MCP_CONTRIBUTED_SERVER, symbol: "ContributedServerEndpoints" },
+      ],
+      note: "Serves the named tools of one of the plugin's own mcpServers on this endpoint, registered by the host on the first agent demand.",
     },
   },
   "agentMcp.groups": {

@@ -30,6 +30,7 @@ import {
   setProjectAssistantAgentMcpAccess,
 } from "../projectEnablement.js";
 import { _resetProjectMcpDefaultsForTests, refreshProjectMcpDefaults } from "../projectDefaults.js";
+import { listDeclaredAgentMcpPlugins } from "../declaredEndpoints.js";
 import type { AgentMcpToolGroupRef, AgentMcpToolScope, DeclaredAgentMcpPlugin } from "../types.js";
 
 const PROJECT_A = "a".repeat(64);
@@ -196,6 +197,55 @@ describe("tool groups", () => {
   });
 
   describe("the Assistant", () => {
+    it("opts into a bridged contributed server's tools only by its own choice", () => {
+      const [declared] = listDeclaredAgentMcpPlugins(
+        [
+          {
+            instanceId: CRM_A,
+            origin: "project",
+            projectId: PROJECT_A,
+            manifest: {
+              name: CRM,
+              version: "1.0.0",
+              capabilities: ["mcp:expose"],
+              contributes: {
+                mcpServers: [{ id: "crm-server", name: "CRM server", command: "node" }],
+                databases: [],
+                agentMcp: [
+                  {
+                    id: "crm",
+                    name: "Acme CRM",
+                    mode: "tools",
+                    groups: [
+                      { ...SEARCH, name: "Search contacts" },
+                      { ...CHANGES, name: "Change contacts" },
+                    ],
+                    source: {
+                      mcpServer: "crm-server",
+                      tools: [{ name: "find", serverTool: "contacts.find", group: "search" }],
+                    },
+                  },
+                ],
+              },
+            },
+          } as never,
+        ],
+        PROJECT_A,
+        () => true
+      );
+      expect(declared?.pluginEndpoint?.id).toBe("crm");
+
+      setProjectAgentMcpAccess(PROJECT_A, CRM_A, "off", undefined, [SEARCH]);
+      expect(agentMcpScopeFor(PROJECT_A, declared!)?.pluginGroups).toEqual([SEARCH]);
+      expect(assistantAgentMcpScopeFor(PROJECT_A, declared!)?.pluginEndpointId).toBeUndefined();
+
+      setProjectAssistantAgentMcpAccess(PROJECT_A, CRM_A, "read-only", undefined, [SEARCH]);
+      expect(assistantAgentMcpScopeFor(PROJECT_A, declared!)).toMatchObject({
+        pluginEndpointId: "crm",
+        pluginGroups: [SEARCH],
+      });
+    });
+
     it("gets no group from its level, only the groups allowed for it", () => {
       setProjectAgentMcpAccess(PROJECT_A, CRM, "read-only", undefined, [SEARCH, CHANGES]);
       setProjectAssistantAgentMcpAccess(PROJECT_A, CRM, "read-write");

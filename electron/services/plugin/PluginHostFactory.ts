@@ -3052,6 +3052,13 @@ export function createHost(
             `Plugin "${pluginId}" mcp.registerTools: endpoint "${endpointId}" is not declared in contributes.agentMcp`
           );
         }
+        // The host serves a bridged endpoint's roster from the contributed
+        // server the manifest names; plugin code must not replace it.
+        if (declared.source) {
+          throw new Error(
+            `Plugin "${pluginId}" mcp.registerTools: endpoint "${endpointId}" serves tools from contributes.mcpServers "${declared.source.mcpServer}", so the host registers its roster`
+          );
+        }
         // The host serves the manifest's declared queries on the same MCP
         // server, so they take names and budget from the roster. Checked here,
         // where the manifest is, for worker and in-process plugins alike.

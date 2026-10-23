@@ -65,7 +65,8 @@ async function warnIfTargetMissing(
 
 /**
  * Every advisory a parsed manifest earns, in a stable order: deprecated
- * aliases, engine range, command discoverability, icon ids, then build targets.
+ * aliases, engine range, command discoverability, unbridged MCP servers, icon
+ * ids, then build targets.
  * Order is part of the contract — the CLI prints them in sequence and the
  * fixtures assert on the first one.
  */
@@ -103,6 +104,21 @@ export async function collectManifestAdvisories({
         `commands[${index}].keywords is empty — 2–3 terms help discoverability in the palette`
       );
     }
+  }
+
+  // `mcpServers` reads like "give agents these tools", but Daintree is the
+  // server's client: only an agentMcp endpoint whose source names its tools
+  // serves them to terminal agents and the Assistant.
+  const bridgedServers = new Set(
+    manifest.contributes.agentMcp.flatMap((endpoint) =>
+      endpoint.source ? [endpoint.source.mcpServer] : []
+    )
+  );
+  for (const server of manifest.contributes.mcpServers) {
+    if (bridgedServers.has(server.id)) continue;
+    warnings.push(
+      `mcpServers "${server.id}" is called by Daintree itself; terminal agents and the Assistant don't see its tools — to serve chosen tools to agents, name them in a contributes.agentMcp[].source`
+    );
   }
 
   // Advisory icon check: an `iconId` outside the shared registry renders as a

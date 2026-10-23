@@ -264,21 +264,22 @@ function parseTemplate(value: string): TemplateKind {
 /**
  * Templates a project-local plugin cannot use.
  *
- * The project-origin manifest schema rejects `contributes.mcpServers` — a
- * contributed server runs under one app-wide supervisor whose tools Daintree
- * and its in-app Assistant call with no project binding, so it cannot be
- * scoped to one project (`contributes.agentMcp` is the project-scoped way to
- * serve tools to agents). Scaffolding one under `--project` would write a manifest the
- * host refuses to load, and the author would only find out on the next open.
+ * The project-origin manifest schema rejects a `contributes.mcpServers` entry
+ * that no `contributes.agentMcp[].source` bridges — an unbridged server is one
+ * Daintree and its in-app Assistant call with no project binding, so it cannot
+ * be scoped to one project. These templates scaffold exactly that host-client
+ * server, so under `--project` they would write a manifest the host refuses to
+ * load, and the author would only find out on the next open.
  */
 const PROJECT_INCOMPATIBLE_TEMPLATES: readonly TemplateKind[] = ["mcp", "full"];
 
 function assertTemplateAllowedForProject(template: TemplateKind, projectLocal: boolean): void {
   if (!projectLocal || !PROJECT_INCOMPATIBLE_TEMPLATES.includes(template)) return;
   throw new Error(
-    `The "${template}" template contributes an MCP server, which a project-local plugin may not declare — ` +
-      `the host rejects the manifest at load. Use --template app (it serves tools to agents through ` +
-      `contributes.agentMcp instead), command or view with --project.`
+    `The "${template}" template contributes an MCP server for Daintree to call, which a project-local plugin may ` +
+      `only declare when a contributes.agentMcp[].source serves its tools to agents — the host rejects the manifest ` +
+      `at load. Use --template app (it serves tools to agents through contributes.agentMcp), command or view with ` +
+      `--project, or add the server yourself with an agentMcp endpoint whose source names its tools.`
   );
 }
 
@@ -476,7 +477,7 @@ function defaultTemplate(project: boolean | undefined): TemplateKind {
 const TEMPLATE_HINTS: Record<TemplateKind, string> = {
   command: "single command with a handler",
   view: "panel view + React component",
-  mcp: "skeleton MCP server Daintree connects to",
-  full: "command + view + an MCP server Daintree connects to",
+  mcp: "MCP server Daintree calls (host client; agents don't see its tools)",
+  full: "command + view + MCP server Daintree calls",
   app: "complete, built project application: Home, data, agent tools, operations, tour",
 };

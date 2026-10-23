@@ -2618,6 +2618,35 @@ export interface PluginAgentMcpContribution {
    * group the user allowed does. See {@link PluginAgentMcpToolGroup}.
    */
   groups?: PluginAgentMcpToolGroup[];
+  /**
+   * Serve chosen tools of one of the plugin's own `contributes.mcpServers`
+   * entries here instead of a roster from {@link PluginMcpApi.registerTools},
+   * which the host then refuses for this endpoint. The server stays where it
+   * is: the host supervises it, resolves its settings and environment, and
+   * starts it the first time an agent with access lists or calls a tool. Only
+   * the tools named in `tools` are served, under their agent-facing names.
+   */
+  source?: PluginAgentMcpServerSource;
+}
+
+/** An `agentMcp` endpoint's tools taken from a contributed MCP server. */
+export interface PluginAgentMcpServerSource {
+  /** The id of a `contributes.mcpServers` entry in the same manifest. */
+  mcpServer: string;
+  /** The tools served, each named explicitly; nothing else the server lists ever reaches an agent. */
+  tools: PluginAgentMcpServerSourceTool[];
+}
+
+/** One tool an `agentMcp` endpoint takes from its source server. */
+export interface PluginAgentMcpServerSourceTool {
+  /** What agents call it, in the {@link AGENT_MCP_TOOL_NAME_PATTERN} grammar. */
+  name: string;
+  /** Its exact name on the server. */
+  serverTool: string;
+  /** A group the endpoint declares; required when it declares any, refused when it declares none. */
+  group?: string;
+  /** Replaces the server's own description, which is otherwise cut to {@link AGENT_MCP_MAX_DESCRIPTION_BYTES}. */
+  description?: string;
 }
 
 /**
@@ -2752,6 +2781,8 @@ export const AGENT_MCP_MAX_SCHEMA_BYTES = 8 * 1024;
 export const AGENT_MCP_MAX_RESULT_BYTES = 256 * 1024;
 /** Wall-clock budget for one tool call before the host aborts it. */
 export const AGENT_MCP_CALL_TIMEOUT_MS = 60_000;
+/** Server tool name grammar an `agentMcp` source may select: the MCP spec's recommended tool name characters. */
+export const AGENT_MCP_SERVER_TOOL_NAME_PATTERN = /^[A-Za-z0-9_.-]{1,128}$/;
 
 /**
  * Who a tool call came from, as far as the host can say. Provenance, not

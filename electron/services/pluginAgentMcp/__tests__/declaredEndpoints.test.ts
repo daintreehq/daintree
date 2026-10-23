@@ -242,6 +242,32 @@ describe("agentMcpSurfaceOf", () => {
     expect(surface({ databases: [{ id: "main", name: "Main" }] as never })).not.toBe(base);
   });
 
+  it("covers a bridged server's launch definition, and no unbridged server", () => {
+    const withServers = (servers: unknown[], bridged: boolean) => {
+      const { manifest } = plugin({
+        agentMcp: [
+          {
+            id: "data",
+            name: "Data",
+            mode: "tools",
+            ...(bridged
+              ? { source: { mcpServer: "catalog", tools: [{ name: "find", serverTool: "find" }] } }
+              : {}),
+          },
+        ],
+      });
+      return agentMcpSurfaceOf({
+        ...manifest,
+        contributes: { ...manifest.contributes, mcpServers: servers },
+      } as never);
+    };
+    const server = { id: "catalog", name: "Catalog", command: "node", args: ["a.js"] };
+    expect(withServers([server], true)).not.toBe(
+      withServers([{ ...server, args: ["b.js"] }], true)
+    );
+    expect(withServers([server], false)).toBe(withServers([{ ...server, args: ["b.js"] }], false));
+  });
+
   it("changes when only a database's declared queries do", () => {
     const query = { name: "month_total", mode: "read", description: "Total.", params: {} };
     const withQuery = (sql: string) =>

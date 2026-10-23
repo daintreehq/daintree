@@ -603,6 +603,10 @@ function mcpEntry(ctx: ScaffoldContext): string {
  * ${c(ctx.displayName)} — MCP plugin entry. The MCP server process is declared in
  * \`contributes.mcpServers\` (see plugin.json) and spawned by
  * Daintree; \`src/server.ts\` is its skeleton implementation.
+ *
+ * Daintree is this server's client: terminal agents and the Assistant don't see
+ * its tools. To serve chosen tools to agents, name them in an
+ * \`contributes.agentMcp[].source\` endpoint (requires the "mcp:expose" capability).
  */
 export async function activate(_host: PluginHostApi): Promise<() => void> {
   return () => {};
@@ -614,7 +618,9 @@ function mcpServer(ctx: ScaffoldContext): string {
   return `#!/usr/bin/env node
 /**
  * Minimal stdio MCP server for ${c(ctx.displayName)}. Daintree spawns it per the
- * \`command\`/\`args\` in plugin.json and speaks MCP over stdio. The SDK answers
+ * \`command\`/\`args\` in plugin.json and speaks MCP over stdio as its client;
+ * agents reach its tools only through an \`agentMcp\` endpoint whose \`source\`
+ * names them. The SDK answers
  * the \`initialize\` handshake and \`tools/list\` automatically once connected —
  * the previous skeleton only listened on stdin and never replied, so the host
  * timed out and marked the server crashed.

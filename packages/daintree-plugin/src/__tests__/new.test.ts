@@ -881,15 +881,15 @@ describe("runNew --project", () => {
   it.each(["mcp", "full"] as const)(
     "refuses the %s template under --project instead of writing an unloadable manifest",
     async (template) => {
-      // The project-origin schema rejects `contributes.mcpServers`, so these two
-      // templates would scaffold a manifest the host silently declines to load.
+      // The project-origin schema rejects an unbridged `contributes.mcpServers`,
+      // so these two templates would scaffold a manifest the host declines to load.
       const root = path.join(tmpDir, `proj-${template}`);
       await fs.mkdir(path.join(root, ".daintree"), { recursive: true });
       cwdSpy = vi.spyOn(process, "cwd").mockReturnValue(root);
 
       await expect(
         runNew("dash", { yes: true, publisher: "acme", project: true, template })
-      ).rejects.toThrow(/may not declare/);
+      ).rejects.toThrow(/may only declare when a contributes\.agentMcp\[\]\.source/);
       await expect(fs.access(path.join(root, ".daintree", "plugins"))).rejects.toThrow();
     }
   );
@@ -1006,7 +1006,7 @@ describe("runNewFromArgv end to end", () => {
           "--project",
         ])
       ).rejects.toThrow(
-        `The "${template}" template contributes an MCP server, which a project-local plugin may not declare`
+        `The "${template}" template contributes an MCP server for Daintree to call, which a project-local plugin may only declare when a contributes.agentMcp[].source serves its tools to agents`
       );
 
       // Neither the plugin nor its watcher recipe, and no stray standalone

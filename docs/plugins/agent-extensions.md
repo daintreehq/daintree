@@ -7,7 +7,7 @@ Daintree is an orchestration layer for AI coding agents. Plugins touch MCP in tw
 | `mcpServers` | **Daintree.** It spawns your stdio server and talks to it. | Only a caller of the renderer's `window.electron.pluginMcp` IPC surface (`listTools`, `getFullSchema`, `callTool`), and nothing in Daintree calls those today; the plugin manager lists servers, restarts them and shows their stderr | **No.** These tools never appear in the `tools/list` a terminal agent sees. |
 | `agentMcp` (and `databases`) | **The agent.** Daintree hosts one MCP server per plugin on its own loopback listener and serves the tools you register, beside the host's database tools when the plugin declares a database. | Agents running in Daintree's terminals, in projects where the plugin has agent access: **Read only** for the database reads, **Read and write** for declared writes and your tools as well | **Yes** — Claude Code, Codex, Gemini CLI, opencode, Copilot CLI, Amp, Qwen Code and Mistral Vibe launches. See [Reaching an agent](#reaching-an-agent). |
 
-If you want an agent in a Daintree terminal to call your tools, you want `agentMcp`; if you only want it to read your plugin's SQLite data, declaring the database is enough. An `mcpServers` contribution cannot do either, however it is configured.
+If you want an agent in a Daintree terminal to call your tools, you want `agentMcp`; if you only want it to read your plugin's SQLite data, declaring the database is enough. An `mcpServers` contribution cannot do either on its own, however it is configured. To reuse an existing stdio server's tools for agents, keep it in `mcpServers` and name the tools agents get in an `agentMcp` endpoint's `source` — see [Serving a contributed server's tools](#serving-a-contributed-servers-tools). `daintree-plugin validate` and `doctor` warn about any server no endpoint bridges.
 
 Skills are a third route: the plugin ships markdown skill files that Daintree serves through `skills.search` / `skills.load` tools — on the plugin's own agent MCP server, beside its tools, and on Daintree's own MCP server. Skills are pure declarative knowledge — prompt snippets, workflow instructions, rubrics — injected into the agent's context on demand. See [Who reaches skills](#who-reaches-skills).
 
@@ -206,6 +206,42 @@ What the host does with the roster:
 - **Arguments are checked against `inputSchema`.** Each schema is compiled when the roster registers, and a call that does not match it is answered with a tool error naming the failure before your code runs. Arguments that match reach `execute` exactly as the agent sent them — nothing coerced, defaulted or stripped. Checks a schema cannot express, such as path containment or resource ownership, are still yours.
 - **Results are serialized JSON.** Whatever `execute` returns is `JSON.stringify`-ed (`undefined` becomes `null`) and sent as the tool's text content. With an `outputSchema` the result must also be a JSON object matching it, which is sent as `structuredContent`. A thrown error becomes a tool error carrying its message.
 - **Calls are cancellable.** The `signal` aborts on the 60-second timeout, when the agent cancels, when the session closes or the credential is revoked, and when the roster changes under a running call. Pass it on to anything long-running.
+
+### Serving a contributed server's tools
+
+An endpoint can take its tools from one of the plugin's own `mcpServers` instead of `registerTools`. This is the explicit adapter between the two directions: the server stays a host-client server that Daintree supervises, and the endpoint names, one by one, which of its tools agents get and under what name.
+
+```json
+{
+  "capabilities": ["mcp:expose"],
+  "contributes": {
+    "mcpServers": [
+      { "id": "catalog", "name": "Catalog", "command": "node", "args": ["dist/server.js"] }
+    ],
+    "agentMcp": [
+      {
+        "id": "catalog-tools",
+        "name": "Catalog",
+        "mode": "tools",
+        "groups": [{ "id": "search", "name": "Search the catalog", "access": "read" }],
+        "source": {
+          "mcpServer": "catalog",
+          "tools": [{ "name": "search_catalog", "serverTool": "catalog.search", "group": "search" }]
+        }
+      }
+    ]
+  }
+}
+```
+
+- **Explicit allowlist.** `source.tools` lists every tool served; `name` is the agent-facing name in the same grammar as a registered tool, `serverTool` the exact name on the server, and `description` optionally replaces the server's own (otherwise cut to 400 bytes). A tool the server lists but the manifest doesn't name never reaches an agent, including one the server adds later. The allowlist counts toward the 16-tool budget with declared queries, and `group` follows the same rules as a registered tool's.
+- **Same access model.** The endpoint is an ordinary `agentMcp` endpoint: per-project access, groups, Assistant opt-in, launch injection, revocation and the grant fingerprint all apply unchanged. The fingerprint also covers the bridged server's `command`, `args` and `env`, so changing them invalidates held credentials.
+- **Lazy, on the owning backend.** Nothing starts when the plugin loads or an agent launches. The first `tools/list` or `tools/call` from an agent with access starts the server through the supervisor, with `${settings:*}` resolved on the backend that holds the plugin; its schemas are then read and checked like a registered roster, and a missing tool or a schema the host cannot enforce leaves the endpoint with no tools. `host.mcp.registerTools` is refused for a bridged endpoint.
+- **Restarts and failures.** When the server exits, crashes, is restarted (for example after a secret rotates) or sends `notifications/tools/list_changed`, the roster is dropped and sessions get `tools/list_changed`; the next request starts the server again and reads its tools afresh. A call in flight when the server goes fails as a tool error.
+- **Calls and results.** Arguments are checked against the server's `inputSchema` before it is called. Calls keep the 60-second budget and are cancelled on the wire with `notifications/cancelled`; a late answer is dropped, and a cancelled call may already have taken effect. The server's text content and its `isError` are forwarded as they are, within the 256 KiB result limit.
+- **Unsupported.** Only stdio tools are bridged. Not forwarded: non-text content (images, audio, resource links, embedded resources — the call fails as a tool error), `structuredContent` and `outputSchema`, the server's tool annotations and `_meta`, its `instructions`, resources, prompts, completions, logging, progress notifications and tasks. Daintree declares no client capabilities, so a server's `sampling/createMessage`, `roots/list` and `elicitation/create` requests are refused; `ping` is answered.
+- **Project plugins.** A `scope: "project"` plugin may declare `mcpServers` only when every one of them is bridged this way, and Daintree's own host-client surface (`window.electron.pluginMcp`) neither lists nor calls a project plugin's servers. Each project's copy runs its own server.
+- **Installed plugins.** An installed plugin's server is one process shared by every project it has access in. Project grants decide which agents may call it; they do not partition what the server itself stores or reaches.
 
 ### Database tools
 

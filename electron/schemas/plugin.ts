@@ -11,6 +11,7 @@ import {
   AGENT_MCP_MAX_ENDPOINTS_PER_PLUGIN,
   AGENT_MCP_MAX_GROUPS_PER_ENDPOINT,
   AGENT_MCP_MAX_TOOLS_PER_ENDPOINT,
+  AGENT_MCP_SERVER_TOOL_NAME_PATTERN,
   AGENT_MCP_TOOL_NAME_PATTERN,
   BUILT_IN_PLUGIN_CAPABILITIES,
   PANEL_MENU_MAX_ITEMS,
@@ -845,12 +846,48 @@ export const AgentMcpToolGroupSchema = z
   })
   .strict();
 
+const utf8Length = (value: string): number => new TextEncoder().encode(value).length;
+
+/** One tool an `agentMcp` endpoint serves from its source server, under an agent-facing name. */
+export const AgentMcpServerSourceToolSchema = z
+  .object({
+    name: z.string().regex(AGENT_MCP_TOOL_NAME_PATTERN, {
+      message:
+        "name must be lowercase letters, digits and underscores, starting with a letter, at most 32 characters",
+    }),
+    serverTool: z.string().regex(AGENT_MCP_SERVER_TOOL_NAME_PATTERN, {
+      message: "serverTool must be 1-128 characters of letters, digits, '_', '-' or '.'",
+    }),
+    group: z.string().min(1).max(64).regex(SAFE_ID_PATTERN).optional(),
+    description: z
+      .string()
+      .refine((value) => value.trim().length > 0, { message: "description must not be blank" })
+      .refine((value) => utf8Length(value) <= AGENT_MCP_MAX_DESCRIPTION_BYTES, {
+        message: `description must be at most ${AGENT_MCP_MAX_DESCRIPTION_BYTES} UTF-8 bytes`,
+      })
+      .optional(),
+  })
+  .strict();
+
+/**
+ * `contributes.agentMcp[].source` — the endpoint's tools come from one of the
+ * plugin's own `mcpServers`, chosen one by one. Never a wildcard: a server that
+ * later lists more tools must not hand agents anything the manifest didn't name.
+ */
+export const AgentMcpServerSourceSchema = z
+  .object({
+    mcpServer: z.string().min(1).max(64).regex(SAFE_ID_PATTERN),
+    tools: z.array(AgentMcpServerSourceToolSchema).min(1).max(AGENT_MCP_MAX_TOOLS_PER_ENDPOINT),
+  })
+  .strict();
+
 /**
  * `contributes.agentMcp` manifest entry — an MCP tools endpoint the plugin
  * serves to terminal agents. Declarative only: the tool roster arrives at
- * activation through `host.mcp.registerTools`, so the manifest carries nothing
- * an agent sees beyond the name. Strict so a stray field (a `url`, a `command`)
- * is rejected rather than read as a transport the host will not honour.
+ * activation through `host.mcp.registerTools`, or from the contributed server
+ * `source` names, so the manifest carries nothing an agent sees beyond the
+ * names. Strict so a stray field (a `url`, a `command`) is rejected rather
+ * than read as a transport the host will not honour.
  */
 export const AgentMcpContributionSchema = z
   .object({
@@ -875,6 +912,7 @@ export const AgentMcpContributionSchema = z
         message: "agentMcp group ids must be unique",
       })
       .optional(),
+    source: AgentMcpServerSourceSchema.optional(),
   })
   .strict();
 
@@ -882,8 +920,6 @@ const DATABASE_FILE_EXTENSION = /\.(db|sqlite|sqlite3)$/;
 
 /** Most params one declared query may take. */
 export const DATABASE_QUERY_MAX_PARAMS = 16;
-
-const utf8Length = (value: string): number => new TextEncoder().encode(value).length;
 
 /** The JSON Schema formats a declared string param may require; the host's validator knows each. */
 export const DATABASE_QUERY_PARAM_FORMATS = [
@@ -3173,7 +3209,7 @@ export const PROJECT_SCOPE_UNSCOPED_CONTRIBUTIONS = [
   ],
   [
     "mcpServers",
-    "contributed MCP servers run under one app-wide supervisor whose tools Daintree and its in-app Assistant call with no project binding to check the contribution against. To serve tools to this project's agents, declare contributes.agentMcp instead.",
+    "contributed MCP servers run under one app-wide supervisor whose tools Daintree and its in-app Assistant call with no project binding to check the contribution against. To serve its tools to this project's agents, name it in a contributes.agentMcp[].source, which every server here must be.",
   ],
   [
     "themes",
@@ -3921,8 +3957,22 @@ function buildPluginManifestSchema(origin: PluginOrigin) {
       // Installed and builtin plugins are unaffected — they ARE app-wide, which
       // is what the absent `scope` means.
       if (projectRuntime) {
+        // A server an agentMcp endpoint bridges is reached only through that
+        // endpoint's project-bound grants, and the host-client IPC refuses a
+        // project instance's servers, so only an unbridged one is unscoped.
+        const bridgedServers = new Set(
+          manifest.contributes.agentMcp.flatMap((endpoint) =>
+            endpoint.source ? [endpoint.source.mcpServer] : []
+          )
+        );
         for (const [group, reason] of PROJECT_SCOPE_UNSCOPED_CONTRIBUTIONS) {
           if (manifest.contributes[group].length === 0) continue;
+          if (
+            group === "mcpServers" &&
+            manifest.contributes.mcpServers.every((server) => bridgedServers.has(server.id))
+          ) {
+            continue;
+          }
           ctx.addIssue({
             code: z.ZodIssueCode.custom,
             path: ["contributes", group],
@@ -4291,6 +4341,85 @@ function buildPluginManifestSchema(origin: PluginOrigin) {
           params: { errorCode: "mcp_expose_capability_required" },
         });
       }
+
+      // A bridged endpoint's roster is the manifest's allowlist, so every rule
+      // registerTools enforces on names, groups and budget is checked here,
+      // where an author sees it before any server runs.
+      manifest.contributes.agentMcp.forEach((endpoint, endpointIndex) => {
+        const source = endpoint.source;
+        if (!source) return;
+        const sourcePath = ["contributes", "agentMcp", endpointIndex, "source"] as const;
+        if (!manifest.contributes.mcpServers.some((server) => server.id === source.mcpServer)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: [...sourcePath, "mcpServer"],
+            message: `agentMcp source "${source.mcpServer}" matches no contributes.mcpServers[].id.`,
+            params: { errorCode: "agent_mcp_source_unknown_server" },
+          });
+        }
+        const declaredQueryNames = new Set(
+          manifest.contributes.databases.flatMap((database) =>
+            (database.queries ?? []).map((query) => query.name)
+          )
+        );
+        if (source.tools.length + declaredQueryNames.size > AGENT_MCP_MAX_TOOLS_PER_ENDPOINT) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: [...sourcePath, "tools"],
+            message: `agentMcp source serves ${source.tools.length} tools beside the ${declaredQueryNames.size} database queries the manifest declares; a plugin may serve at most ${AGENT_MCP_MAX_TOOLS_PER_ENDPOINT} of the two together.`,
+            params: { errorCode: "agent_mcp_source_too_many_tools" },
+          });
+        }
+        const groupIds = new Set((endpoint.groups ?? []).map((group) => group.id));
+        const names = new Set<string>();
+        const serverTools = new Set<string>();
+        source.tools.forEach((tool, toolIndex) => {
+          const toolPath = [...sourcePath, "tools", toolIndex] as const;
+          const issue = (field: string, message: string, errorCode: string) =>
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              path: [...toolPath, field],
+              message,
+              params: { errorCode },
+            });
+          if (names.has(tool.name)) {
+            issue(
+              "name",
+              `Tool name "${tool.name}" is served twice.`,
+              "agent_mcp_source_duplicate"
+            );
+          }
+          names.add(tool.name);
+          if (serverTools.has(tool.serverTool)) {
+            issue(
+              "serverTool",
+              `Server tool "${tool.serverTool}" is selected twice.`,
+              "agent_mcp_source_duplicate"
+            );
+          }
+          serverTools.add(tool.serverTool);
+          if (RESERVED_AGENT_MCP_TOOL_NAMES.has(tool.name) || declaredQueryNames.has(tool.name)) {
+            issue(
+              "name",
+              `Tool name "${tool.name}" is taken by the host's database tools on this plugin's MCP server.`,
+              "agent_mcp_source_reserved_name"
+            );
+          }
+          if (groupIds.size === 0 && tool.group !== undefined) {
+            issue(
+              "group",
+              `Tool "${tool.name}" names group "${tool.group}", but its endpoint declares no groups.`,
+              "agent_mcp_source_group_unknown"
+            );
+          } else if (groupIds.size > 0 && (tool.group === undefined || !groupIds.has(tool.group))) {
+            issue(
+              "group",
+              `Tool "${tool.name}" must name one of its endpoint's groups: ${[...groupIds].join(", ")}.`,
+              "agent_mcp_source_group_unknown"
+            );
+          }
+        });
+      });
 
       // Assistant knowledge describes the plugin's agent tools and is only
       // delivered alongside them, so a plugin with none could never deliver it.
