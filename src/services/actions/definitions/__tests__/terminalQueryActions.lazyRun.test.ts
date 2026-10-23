@@ -3,20 +3,27 @@ import type { ActionContext } from "@shared/types/actions";
 import type { ActionCallbacks, ActionRegistry } from "../../actionTypes";
 
 const m = vi.hoisted(() => ({
+  implLoads: 0,
   runLookups: 0,
   failImpl: false,
   getStatus: vi.fn(),
 }));
 
-// A getter, so each test sees its own failure mode and lookup count however
-// vitest caches the mocked module.
-vi.mock("../terminalQueryActions.impl", () => ({
-  get terminalQueryActionRuns() {
-    m.runLookups++;
+// Registered per test after the reset, so each import evaluates the module
+// afresh: `implLoads` counts real loads, a throw here is a rejected import, and
+// the getter counts lookups.
+function mockImpl(): void {
+  vi.doMock("../terminalQueryActions.impl", () => {
+    m.implLoads++;
     if (m.failImpl) throw new Error("chunk load failed");
-    return { "terminal.getStatus": m.getStatus };
-  },
-}));
+    return {
+      get terminalQueryActionRuns() {
+        m.runLookups++;
+        return { "terminal.getStatus": m.getStatus };
+      },
+    };
+  });
+}
 
 const noCallbacks: ActionCallbacks = Object.create(null);
 const ctx: ActionContext = { dispatchSource: "agent" };
@@ -31,6 +38,8 @@ async function register(): Promise<ActionRegistry> {
 describe("terminal query action run bodies (#14273)", () => {
   beforeEach(() => {
     vi.resetModules();
+    mockImpl();
+    m.implLoads = 0;
     m.runLookups = 0;
     m.failImpl = false;
     m.getStatus.mockReset().mockResolvedValue({ terminals: [] });
@@ -40,6 +49,7 @@ describe("terminal query action run bodies (#14273)", () => {
     const actions = await register();
     for (const create of actions.values()) create();
     expect(actions.size).toBeGreaterThan(0);
+    expect(m.implLoads).toBe(0);
     expect(m.runLookups).toBe(0);
   });
 
@@ -50,15 +60,18 @@ describe("terminal query action run bodies (#14273)", () => {
     await expect(def.run(args, ctx)).resolves.toEqual({ terminals: [] });
     await def.run(args, ctx);
 
+    expect(m.implLoads).toBe(1);
     expect(m.runLookups).toBe(2);
     expect(m.getStatus).toHaveBeenCalledTimes(2);
     expect(m.getStatus).toHaveBeenCalledWith(args, ctx);
   });
 
   it("rejects inside run when the run bodies fail to load", async () => {
+    // Vitest wraps the factory's throw in its own message; the rejection is the point.
     m.failImpl = true;
     const def = (await register()).get("terminal.getStatus")!();
-    await expect(def.run({ terminalIds: ["t1"] }, ctx)).rejects.toThrow("chunk load failed");
+    await expect(def.run({ terminalIds: ["t1"] }, ctx)).rejects.toThrow();
+    expect(m.implLoads).toBe(1);
     expect(m.getStatus).not.toHaveBeenCalled();
   });
 });
