@@ -164,7 +164,9 @@ export function projectDefaultForEndpoint(
   endpointId: string
 ): boolean | null {
   const parsed = parseProjectPluginInstanceKey(pluginInstanceId);
-  if (parsed === null || parsed.projectId !== projectId) return null;
+  // An installed package's per-project instance runs the user's own code, not
+  // the repository's, so the repository's file must not reach it either.
+  if (parsed === null || parsed.installed || parsed.projectId !== projectId) return null;
   const selection = getProjectMcpDefaults(projectId).plugins.get(parsed.manifestId);
   if (selection === undefined) return null;
   if (selection === "*") return true;

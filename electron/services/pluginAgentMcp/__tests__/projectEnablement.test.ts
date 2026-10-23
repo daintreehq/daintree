@@ -16,7 +16,10 @@ vi.mock("../../../store.js", () => ({ store: storeMock }));
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { makeProjectPluginInstanceKey } from "../../../../shared/types/plugin.js";
+import {
+  makeInstalledProjectInstanceKey,
+  makeProjectPluginInstanceKey,
+} from "../../../../shared/types/plugin.js";
 import { pluginMcpGrantRegistry } from "../grantRegistry.js";
 import {
   agentMcpScopeFor,
@@ -697,6 +700,18 @@ describe("projectEnablement", () => {
       expect(rosters(PROJECT_A, LEDGER)).toEqual([false, false]);
       expect(isAgentMcpEndpointEnabledByDefault(PROJECT_A, LEDGER, DB)).toBe(false);
       expect(rosters(PROJECT_A, LEDGER_B)).toEqual([false, false]);
+      expect(rosters(PROJECT_A, LEDGER_A)).toEqual([true, true]);
+    });
+
+    it("never reaches an installed package's per-project instance of the same id", async () => {
+      await withDefaults(PROJECT_A, { plugins: { [LEDGER]: "read-write" } });
+      const installedA = makeInstalledProjectInstanceKey(PROJECT_A, LEDGER);
+
+      expect(rosters(PROJECT_A, installedA)).toEqual([false, false]);
+      expect(isAgentMcpEndpointEnabledByDefault(PROJECT_A, installedA, DB)).toBe(false);
+      expect(
+        isAgentMcpEndpointEnabledByDefault(PROJECT_A, installedA, DATABASE_WRITES_ACCESS_ID)
+      ).toBe(false);
       expect(rosters(PROJECT_A, LEDGER_A)).toEqual([true, true]);
     });
 
