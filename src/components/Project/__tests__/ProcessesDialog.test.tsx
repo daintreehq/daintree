@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type {
   ProcessInventoryClosedProcess,
   ProcessInventorySnapshot,
@@ -20,6 +20,7 @@ import { terminalClient } from "@/clients/terminalClient";
 import { primeRadix } from "@/components/ui/radix-loader";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { ProcessesDialog } from "../ProcessesDialog";
+import type { ProcessesReading, ProcessesSource } from "../processesSource";
 
 const mockGetSnapshot = vi.mocked(processesClient.getSnapshot);
 const mockKillClosed = vi.mocked(processesClient.killClosedTerminalProcesses);
@@ -536,5 +537,209 @@ describe("ProcessesDialog (#13175)", () => {
         "Couldn't check 2 processes recorded by an earlier session."
       );
     });
+  });
+});
+
+describe("ProcessesDialog for another host (#14089)", () => {
+  function sourceOf(
+    reading: ProcessesReading
+  ): ProcessesSource & { read: ReturnType<typeof vi.fn> } {
+    return { read: vi.fn().mockResolvedValue(reading) };
+  }
+
+  async function renderHost(
+    source: ProcessesSource,
+    props: Partial<React.ComponentProps<typeof ProcessesDialog>> = {}
+  ) {
+    await act(async () => {
+      render(
+        <TooltipProvider>
+          <ProcessesDialog
+            isOpen
+            onClose={() => {}}
+            source={source}
+            canKill={false}
+            hostName="studio-01"
+            {...props}
+          />
+        </TooltipProvider>
+      );
+    });
+    await act(async () => {});
+  }
+
+  it("lists the host's processes under its name and offers no kill, reading no dev sessions", async () => {
+    const source = sourceOf({
+      supported: true,
+      truncated: false,
+      snapshot: snapshot({
+        terminals: [terminal("a", { title: "shell" })],
+        closedTerminalProcesses: [closed(9)],
+      }),
+    });
+    await renderHost(source);
+
+    expect(screen.getByText("Running processes on studio-01")).toBeTruthy();
+    expect(screen.getAllByTestId("process-row")).toHaveLength(1);
+    expect(screen.getAllByTestId("closed-process-row")).toHaveLength(1);
+    expect(document.querySelector("[data-process-kill]")).toBeNull();
+    expect(mockGetSnapshot).not.toHaveBeenCalled();
+    expect(mockGetAllSessions).not.toHaveBeenCalled();
+  });
+
+  it("sorts by CPU or memory from the column headers", async () => {
+    const heavyMemory = terminal("mem", {
+      title: "memory hog",
+      sample: { cpuPercent: 5, memoryKb: 900 * 1024, processCount: 1, members: [] },
+    });
+    const heavyCpu = terminal("cpu", {
+      title: "cpu hog",
+      sample: { cpuPercent: 250, memoryKb: 10 * 1024, processCount: 1, members: [] },
+    });
+    await renderHost(
+      sourceOf({
+        supported: true,
+        truncated: false,
+        snapshot: snapshot({ terminals: [heavyMemory, heavyCpu] }),
+      })
+    );
+    const order = () => screen.getAllByTestId("process-row").map((row) => row.dataset.terminalId);
+    expect(order()).toEqual(["mem", "cpu"]);
+
+    const byCpu = screen.getByRole("button", { name: "Sort by CPU, highest first" });
+    fireEvent.click(byCpu);
+    expect(order()).toEqual(["cpu", "mem"]);
+    fireEvent.click(screen.getByRole("button", { name: "Sort by Memory, highest first" }));
+    expect(order()).toEqual(["mem", "cpu"]);
+    fireEvent.click(byCpu);
+    expect(byCpu.getAttribute("aria-pressed")).toBe("true");
+    expect(
+      screen
+        .getByRole("button", { name: "Sort by Memory, highest first" })
+        .getAttribute("aria-pressed")
+    ).toBe("false");
+  });
+
+  it("says an older host can't list its processes, rather than that nothing runs", async () => {
+    await renderHost(sourceOf({ supported: false }));
+    expect(document.body.textContent).toContain("runs an older version that can't list");
+    expect(document.body.textContent).not.toContain("No terminals or plugin processes");
+  });
+
+  it("flags a truncated inventory and withholds the unaccounted CPU", async () => {
+    await renderHost(
+      sourceOf({
+        supported: true,
+        truncated: true,
+        snapshot: snapshot({ terminals: [terminal("a")] }),
+      }),
+      { hostBusyCores: 6 }
+    );
+    expect(document.body.textContent).toContain("listed only part of its processes");
+    expect(screen.queryByTestId("cpu-unaccounted")).toBeNull();
+  });
+
+  it("states the busy CPU the listed trees leave unaccounted for, as an estimate", async () => {
+    await renderHost(
+      sourceOf({
+        supported: true,
+        truncated: false,
+        snapshot: snapshot({
+          terminals: [
+            terminal("a", {
+              sample: { cpuPercent: 200, memoryKb: 1024, processCount: 1, members: [] },
+            }),
+          ],
+        }),
+      }),
+      { hostBusyCores: 5, hostPlatform: "linux" }
+    );
+    const note = screen.getByTestId("cpu-unaccounted");
+    expect(note.textContent).toContain("Roughly 3 cores");
+    expect(note.textContent).toContain("estimate");
+    expect(document.body.textContent).toContain("average since it started");
+  });
+
+  it("keeps Kill for the attached host", async () => {
+    await renderHost(
+      sourceOf({
+        supported: true,
+        truncated: false,
+        snapshot: snapshot({ terminals: [terminal("a", { title: "shell" })] }),
+      }),
+      { canKill: true }
+    );
+    expect(mockGetAllSessions).toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: "Kill terminal 'shell' in Cedar" })).toBeTruthy();
+  });
+
+  it("doesn't say nothing is running when the answer was cut short", async () => {
+    await renderHost(sourceOf({ supported: true, truncated: true, snapshot: snapshot() }));
+    expect(document.body.textContent).toContain("may be incomplete");
+    expect(document.body.textContent).not.toContain("No terminals or plugin processes");
+  });
+
+  it("drops an open confirm when kills stop being allowed", async () => {
+    const source = sourceOf({
+      supported: true,
+      truncated: false,
+      snapshot: snapshot({ terminals: [terminal("a", { title: "shell" })] }),
+    });
+    const view = (canKill: boolean) => (
+      <TooltipProvider>
+        <ProcessesDialog isOpen onClose={() => {}} source={source} canKill={canKill} />
+      </TooltipProvider>
+    );
+    let rerender!: (ui: React.ReactElement) => void;
+    await act(async () => {
+      rerender = render(view(true)).rerender;
+    });
+    await act(async () => {});
+    fireEvent.click(screen.getByRole("button", { name: "Kill terminal 'shell' in Cedar" }));
+    await screen.findByRole("alertdialog");
+    await act(async () => {
+      rerender(view(false));
+    });
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    expect(mockKill).not.toHaveBeenCalled();
+  });
+
+  it("doesn't leave the next confirm loading after a kill outlived its opening", async () => {
+    const source = sourceOf({
+      supported: true,
+      truncated: false,
+      snapshot: snapshot({ terminals: [terminal("a", { title: "shell" })] }),
+    });
+    let finishKill!: () => void;
+    mockKill.mockReturnValue(new Promise<void>((resolve) => (finishKill = resolve)));
+    const view = (isOpen: boolean) => (
+      <TooltipProvider>
+        <ProcessesDialog isOpen={isOpen} onClose={() => {}} source={source} canKill />
+      </TooltipProvider>
+    );
+    let rerender!: (ui: React.ReactElement) => void;
+    await act(async () => {
+      rerender = render(view(true)).rerender;
+    });
+    await act(async () => {});
+    fireEvent.click(screen.getByRole("button", { name: "Kill terminal 'shell' in Cedar" }));
+    await screen.findByRole("alertdialog");
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Kill terminal" }));
+    });
+    await act(async () => {
+      rerender(view(false));
+    });
+    await act(async () => {
+      rerender(view(true));
+    });
+    await act(async () => {
+      finishKill();
+    });
+    await act(async () => {});
+    fireEvent.click(screen.getByRole("button", { name: "Kill terminal 'shell' in Cedar" }));
+    const confirm = await screen.findByRole("alertdialog");
+    const button = within(confirm).getByRole("button", { name: "Kill terminal" });
+    expect(button.hasAttribute("disabled")).toBe(false);
   });
 });
