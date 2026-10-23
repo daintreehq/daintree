@@ -35,7 +35,6 @@ import {
 } from "../../../schemas/ipc.js";
 import { store } from "../../../store.js";
 import { AppError } from "../../../utils/errorTypes.js";
-import { withTimeout } from "../../../utils/withTimeout.js";
 import { armSpawnConfirmation, settleSpawnConfirmation } from "./spawnConfirmation.js";
 import type {
   AgentSessionBookmarkMetadata,
@@ -65,19 +64,12 @@ import {
   substituteSettingsTemplates,
 } from "../../../services/settingsTemplateResolver.js";
 import type * as PluginServiceModule from "../../../services/PluginService.js";
-import { listDeclaredAgentMcpPlugins } from "../../../services/pluginAgentMcp/declaredEndpoints.js";
 import {
-  agentMcpScopeFor,
-  assistantAgentMcpScopeFor,
-  hasAnyAgentMcpEnablement,
-  hasAnyAssistantAgentMcpAccess,
   isAgentMcpScopeAllowed,
   isAssistantAgentMcpScopeAllowed,
-  refreshProjectAgentMcpDefaults,
 } from "../../../services/pluginAgentMcp/projectEnablement.js";
-import { pluginServerKeysFor } from "../../../services/pluginAgentMcp/serverKeys.js";
+import { resolveLaunchPlugins } from "../../../services/pluginAgentMcp/launchPlugins.js";
 import { pluginMcpGrantRegistry } from "../../../services/pluginAgentMcp/grantRegistry.js";
-import { isProjectWorkspaceId } from "../../../../shared/utils/workspaceIds.js";
 
 type ValidatedTerminalSpawnOptions = z.output<typeof TerminalSpawnOptionsSchema>;
 
@@ -236,80 +228,23 @@ import { windowsSystemTool } from "../../../utils/windowsExecutable.js";
 import { MAX_TERMINALS_PER_RECIPE_ADMISSION_BATCH } from "../../../../shared/utils/recipeSanitizer.js";
 import { buildCommandLaunchShell } from "./commandLaunch.js";
 
-// The plugin MCP servers an agent launch in this project should be handed: one
-// per plugin instance that is running, may serve this project, and has agent
-// access here (the user's answer, else their answer for every project or the
-// repository's own `.daintree/mcp.json`). A Daintree Assistant launch gets
-// those its own answer allows as well, and nothing more. Access is read first
-// because it is a store read and one small file, and an empty answer — every
-// project with no plugin tools on — keeps the launch off the lazy PluginService
-// load entirely.
-const PLUGIN_INIT_WAIT_MS = 5000;
-const PROJECT_PLUGINS_WAIT_MS = 5000;
 // Longest a Windows command launch waits for the default shell's PATH search,
 // matching the pty host's wait before it reports ready.
 const WINDOWS_SHELL_WAIT_MS = 2_000;
 
+/** The plugin MCP servers an agent launch in this project should be handed; see `resolveLaunchPlugins`. */
 async function resolvePluginMcpServers(
   projectId: string,
   projectRoot: string,
   consumer?: "assistant"
 ): Promise<PanePluginServer[]> {
-  if (!isProjectWorkspaceId(projectId)) return [];
-  if (consumer === "assistant" && !hasAnyAssistantAgentMcpAccess(projectId)) return [];
-  await refreshProjectAgentMcpDefaults(projectId, projectRoot);
-  if (!hasAnyAgentMcpEnablement(projectId)) return [];
-  const pluginService = await getPluginService();
-  // PluginService initialises as a deferred task after first-interactive, so
-  // panes restored at startup would otherwise see no loaded plugins. Bounded so
-  // a slow init (blocklist fetch, activation) degrades to a launch without
-  // plugin tools instead of a hung pane.
-  try {
-    await withTimeout(
-      pluginService.waitForInit(),
-      PLUGIN_INIT_WAIT_MS,
-      "PluginService init did not settle"
-    );
-  } catch {
-    console.warn(
-      `[TerminalSpawn] Plugin service not ready after ${PLUGIN_INIT_WAIT_MS}ms; launching without plugin MCP servers`
-    );
-    return [];
-  }
-  // Project plugins load on their own fire-and-forget path from the project
-  // switch, so a pane restored at startup can get here while its project's
-  // plugins are still loading, or before they have started. A timeout still
-  // launches, with whatever has loaded by then.
-  let projectPluginsReady = false;
-  try {
-    projectPluginsReady = await pluginService.waitForProjectPlugins(
-      projectId,
-      PROJECT_PLUGINS_WAIT_MS
-    );
-  } catch (err) {
-    console.warn("[TerminalSpawn] Waiting for project plugins failed:", err);
-  }
-  if (!projectPluginsReady) {
-    console.warn(
-      `[TerminalSpawn] Project plugins not settled after ${PROJECT_PLUGINS_WAIT_MS}ms; launching with the plugin MCP servers loaded so far`
-    );
-  }
-  const declared = listDeclaredAgentMcpPlugins(pluginService.listPlugins(), projectId, (id) =>
-    pluginService.hasPlugin(id)
+  return (await resolveLaunchPlugins(projectId, projectRoot, consumer, getPluginService)).map(
+    ({ plugin, serverKey, scope }) => ({
+      pluginInstanceId: plugin.pluginInstanceId,
+      serverKey,
+      scope,
+    })
   );
-  // Named over every plugin that could serve here, not only those on, so a
-  // plugin's name does not change when another is switched on or off.
-  const keys = pluginServerKeysFor(declared);
-  const scopeFor = consumer === "assistant" ? assistantAgentMcpScopeFor : agentMcpScopeFor;
-  const servers: PanePluginServer[] = [];
-  for (const plugin of declared) {
-    const scope = scopeFor(projectId, plugin);
-    const serverKey = keys.get(plugin.pluginInstanceId);
-    if (scope !== null && serverKey !== undefined) {
-      servers.push({ pluginInstanceId: plugin.pluginInstanceId, serverKey, scope });
-    }
-  }
-  return servers;
 }
 
 /**

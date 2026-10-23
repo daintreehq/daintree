@@ -4,6 +4,9 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import {
+  AssistantKnowledgeContributionSchema,
+  AssistantKnowledgeReferenceSchema,
+  AssistantKnowledgeSkillSchema,
   AgentContributionSchema,
   AgentDetectionConfigSchema,
   AgentMcpContributionSchema,
@@ -119,6 +122,7 @@ const MCP_SUPERVISOR = "electron/services/PluginMcpSupervisor.ts";
 const PLUGIN_SCHEMA = "electron/schemas/plugin.ts";
 const PLUGIN_TOOLBAR_POPOVER = "src/components/Layout/PluginToolbarPopover.tsx";
 const SKILL_REGISTRY = "electron/services/plugin/PluginSkillRegistry.ts";
+const ASSISTANT_PLUGIN_KNOWLEDGE = "electron/services/AssistantPluginKnowledge.ts";
 const PROMPT_TEMPLATE_UTIL = "shared/utils/pluginPromptTemplates.ts";
 const PLUGIN_RUNTIME_STORE = "src/store/pluginRuntimeStore.ts";
 const PLUGIN_TERMINAL_LINKS = "src/services/terminal/pluginTerminalLinks.ts";
@@ -229,6 +233,11 @@ const SWEPT_SCHEMAS = {
   "setup.done.context": SetupStepContextDoneSchema,
   "setup.action.settings": SetupStepSettingsActionSchema,
   "setup.action.command": SetupStepCommandActionSchema,
+  // Optional and not defaulted, like `account`, so it is swept here rather
+  // than as one of the kinds an empty manifest materializes.
+  assistantKnowledge: AssistantKnowledgeContributionSchema,
+  "assistantKnowledge.skills": AssistantKnowledgeSkillSchema,
+  "assistantKnowledge.references": AssistantKnowledgeReferenceSchema,
 } as const;
 
 type SweptGroup = keyof typeof SWEPT_SCHEMAS;
@@ -378,6 +387,18 @@ type FieldConsumerCoverage = {
   "surfaces.projectHome": Record<keyof z.infer<typeof SurfaceViewSlotSchema>, ConsumerDescriptor>;
   "surfaces.worktreeCreate": Record<
     keyof z.infer<typeof SurfaceViewSlotSchema>,
+    ConsumerDescriptor
+  >;
+  assistantKnowledge: Record<
+    keyof z.infer<typeof AssistantKnowledgeContributionSchema>,
+    ConsumerDescriptor
+  >;
+  "assistantKnowledge.skills": Record<
+    keyof z.infer<typeof AssistantKnowledgeSkillSchema>,
+    ConsumerDescriptor
+  >;
+  "assistantKnowledge.references": Record<
+    keyof z.infer<typeof AssistantKnowledgeReferenceSchema>,
     ConsumerDescriptor
   >;
   "toolbarButtons.popover": Record<
@@ -2573,6 +2594,56 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
       mode: "verbatim",
       consumers: [{ file: PLUGIN_TOURS, symbol: "buildPluginTourDefinition (resolveTimings)" }],
       note: "The caption line shown under the stage.",
+    },
+  },
+  assistantKnowledge: {
+    instructions: {
+      mode: "verbatim",
+      consumers: [
+        { file: ASSISTANT_PLUGIN_KNOWLEDGE, symbol: "readPluginKnowledge (instructions)" },
+      ],
+      note: "Read from the plugin dir and inlined in the Assistant's prompt, or handed over as reference/plugins/<key>/instructions.md past 4 KiB.",
+    },
+    skills: {
+      mode: "verbatim",
+      consumers: [{ file: ASSISTANT_PLUGIN_KNOWLEDGE, symbol: "readPluginKnowledge (skills)" }],
+      note: "Each skill directory's Markdown is mirrored into the Assistant session's skills tree.",
+    },
+    references: {
+      mode: "verbatim",
+      consumers: [{ file: ASSISTANT_PLUGIN_KNOWLEDGE, symbol: "readPluginKnowledge (references)" }],
+      note: "Mirrored into reference/plugins/<key>/ and listed under the plugin in the prompt.",
+    },
+  },
+  "assistantKnowledge.skills": {
+    id: {
+      mode: "derived-input",
+      consumers: [{ file: ASSISTANT_PLUGIN_KNOWLEDGE, symbol: "pluginSkillName" }],
+      note: "Joined to the plugin's MCP server key to name the mirrored skill directory.",
+    },
+    path: {
+      mode: "verbatim",
+      consumers: [
+        {
+          file: ASSISTANT_PLUGIN_KNOWLEDGE,
+          symbol: "readPluginKnowledge (resolveContainedPath → collectSourceFiles)",
+        },
+      ],
+      note: "Resolved against the plugin dir, realpath-contained, and walked for Markdown.",
+    },
+  },
+  "assistantKnowledge.references": {
+    id: {
+      mode: "derived-input",
+      consumers: [{ file: ASSISTANT_PLUGIN_KNOWLEDGE, symbol: "readPluginKnowledge (<id>.md)" }],
+      note: "Names the mirrored file under reference/plugins/<key>/.",
+    },
+    path: {
+      mode: "verbatim",
+      consumers: [
+        { file: ASSISTANT_PLUGIN_KNOWLEDGE, symbol: "readPluginKnowledge (KnowledgeReader.read)" },
+      ],
+      note: "Resolved against the plugin dir, realpath-contained, and read as Markdown.",
     },
   },
 } satisfies FieldConsumerCoverage;

@@ -141,7 +141,7 @@ const utf8 = new TextDecoder("utf-8", { fatal: true });
  * symlink, and size and type come from that handle — so swapping the path
  * after the checks can't redirect the read or slip past the size cap.
  */
-async function readBoundedFile(
+export async function readBoundedFile(
   filePath: string,
   maxBytes: number,
   containWithin?: string

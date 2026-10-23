@@ -1010,6 +1010,83 @@ export const SkillContributionSchema = z
   })
   .strict();
 
+const ASSISTANT_KNOWLEDGE_ID_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+const ASSISTANT_KNOWLEDGE_PATH = z.string().min(1).max(512).refine(isSafePluginAssetPath, {
+  message:
+    "path must be a relative plugin asset path (no leading /, backslash, URL scheme, NUL, or .. segments)",
+});
+const ASSISTANT_KNOWLEDGE_MARKDOWN_PATH = ASSISTANT_KNOWLEDGE_PATH.refine(
+  (value) => value.toLowerCase().endsWith(".md"),
+  { message: "path must be a .md file" }
+);
+
+/**
+ * One skill or reference file in `contributes.assistantKnowledge`. The id
+ * becomes part of a skill's directory name, which Agent Skills limits to
+ * lowercase letters, digits and single hyphens.
+ */
+export const AssistantKnowledgeSkillSchema = z
+  .object({
+    id: z.string().min(1).max(32).regex(ASSISTANT_KNOWLEDGE_ID_PATTERN),
+    path: ASSISTANT_KNOWLEDGE_PATH,
+  })
+  .strict();
+
+export const AssistantKnowledgeReferenceSchema = z
+  .object({
+    // `instructions` is where over-long instructions are handed over.
+    id: z
+      .string()
+      .min(1)
+      .max(32)
+      .regex(ASSISTANT_KNOWLEDGE_ID_PATTERN)
+      .refine((value) => value !== "instructions", {
+        message: 'reference id "instructions" is reserved',
+      }),
+    path: ASSISTANT_KNOWLEDGE_MARKDOWN_PATH,
+  })
+  .strict();
+
+/**
+ * `contributes.assistantKnowledge` (#13828). Markdown only; every path is
+ * realpath-contained to the plugin directory when it is read, as skills are.
+ * Optional rather than defaulted, like `account`, so a manifest without it
+ * parses exactly as before.
+ */
+export const AssistantKnowledgeContributionSchema = z
+  .object({
+    instructions: ASSISTANT_KNOWLEDGE_MARKDOWN_PATH.optional(),
+    skills: z.array(AssistantKnowledgeSkillSchema).max(16).optional(),
+    references: z.array(AssistantKnowledgeReferenceSchema).max(32).optional(),
+  })
+  .strict()
+  .superRefine((knowledge, ctx) => {
+    if (
+      knowledge.instructions === undefined &&
+      (knowledge.skills ?? []).length === 0 &&
+      (knowledge.references ?? []).length === 0
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "assistantKnowledge must declare instructions, skills or references",
+      });
+    }
+    for (const list of ["skills", "references"] as const) {
+      const seen = new Set<string>();
+      (knowledge[list] ?? []).forEach((entry, index) => {
+        if (seen.has(entry.id)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: [list, index, "id"],
+            message: `Duplicate assistantKnowledge ${list} id "${entry.id}"`,
+            params: { errorCode: "duplicate_contribution_id" },
+          });
+        }
+        seen.add(entry.id);
+      });
+    }
+  });
+
 /**
  * `contributes.themes` manifest entry (#13832). A theme is a palette file the
  * plugin ships, offered in Appearance under `plugin:{pluginId}:{id}` once it
@@ -3227,6 +3304,7 @@ function buildPluginManifestSchema(origin: PluginOrigin) {
               .array(SkillContributionSchema)
               .max(MANIFEST_CONTRIBUTION_CAPS.skills)
               .default([]),
+            assistantKnowledge: AssistantKnowledgeContributionSchema.optional(),
             themes: z
               .array(ThemeContributionSchema)
               .max(MANIFEST_CONTRIBUTION_CAPS.themes)
@@ -3754,6 +3832,22 @@ function buildPluginManifestSchema(origin: PluginOrigin) {
           message:
             'contributes.agentMcp requires the "mcp:expose" capability to be declared in capabilities.',
           params: { errorCode: "mcp_expose_capability_required" },
+        });
+      }
+
+      // Assistant knowledge describes the plugin's agent tools and is only
+      // delivered alongside them, so a plugin with none could never deliver it.
+      if (
+        manifest.contributes.assistantKnowledge !== undefined &&
+        manifest.contributes.agentMcp.length === 0 &&
+        manifest.contributes.databases.length === 0
+      ) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["contributes", "assistantKnowledge"],
+          message:
+            "contributes.assistantKnowledge describes agent tools, but this plugin offers none — declare contributes.agentMcp or contributes.databases.",
+          params: { errorCode: "assistant_knowledge_requires_agent_tools" },
         });
       }
 
