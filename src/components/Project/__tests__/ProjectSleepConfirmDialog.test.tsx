@@ -137,4 +137,30 @@ describe("ProjectSleepConfirmDialog", () => {
       expect(document.querySelector('[role="dialog"]')?.textContent).toContain("Sleep 'Project b'?")
     );
   });
+
+  it("warns about a restart even with nothing counted, names the reopen, and resolves on confirm", async () => {
+    render(<ProjectSleepConfirmDialog />);
+    const answer = open({ kind: "restart", projects: [project("a", { isActive: true })] });
+    const root = await dialog();
+    expect(root.textContent).toContain("Restart 'Project a'?");
+    expect(root.textContent).toContain("Everything running in it will be stopped");
+    expect(root.textContent).toContain("reopens in this window");
+    expect(root.textContent).toContain("Other windows showing it return to the project picker");
+    expect(root.textContent).not.toContain("This window returns to the project picker");
+    expect(button(root, "Sleep project")).toBeUndefined();
+    fireEvent.click(button(root, "Restart project"));
+    await expect(answer).resolves.toBe(true);
+  });
+
+  it("lists what a restart stops when the counts are known", async () => {
+    render(<ProjectSleepConfirmDialog />);
+    void open({
+      kind: "restart",
+      projects: [project("a", { isActive: true, terminalCount: 3, activeAgentCount: 1 })],
+    });
+    const root = await dialog();
+    expect(root.textContent).toContain("3 terminals");
+    expect(root.textContent).toContain("1 active agent");
+    expect(root.textContent).not.toContain("waiting agent");
+  });
 });

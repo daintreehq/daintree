@@ -510,6 +510,7 @@ export function ModalHostLayer({
               onStopProject={(projectId) => void projectSwitcherPalette.stopProject(projectId)}
               onCloseProject={(projectId) => void projectSwitcherPalette.removeProject(projectId)}
               onSleepProject={(projectId) => void projectSwitcherPalette.sleepProject(projectId)}
+              onRestartProject={(projectId) => projectSwitcherPalette.restartProject(projectId)}
               onLocateProject={(projectId) => {
                 projectSwitcherPalette.locateProject(projectId);
               }}

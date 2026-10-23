@@ -57,6 +57,7 @@ import { logDebug, logInfo, logWarn } from "@/utils/logger";
 import { isPtyPanel } from "@shared/types/panel";
 import { isQuickSwitchablePanel } from "@/utils/quickSwitcher";
 import { terminalClient } from "@/clients";
+import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { createFocusFollowBreaker } from "./focusFollowBreaker";
 import { subscribeFocusedPanelReporter } from "./focusedPanelReporter";
 import { initAgentDefaultsSync } from "@/services/agentDefaultsSync";
@@ -89,8 +90,18 @@ export function initStoreOrchestrator(): () => void {
     const s = usePanelStore.getState();
     return { panelsById: s.panelsById, panelIds: s.panelIds, tabGroups: s.tabGroups };
   });
-  setPanelStoreClearForSwitchAccessor(() => {
-    usePanelStore.getState().clearTerminalStoreForSwitch();
+  setPanelStoreClearForSwitchAccessor((options) => {
+    const state = usePanelStore.getState();
+    if (options?.destroyInstances) {
+      for (const id of state.panelIds) {
+        try {
+          terminalInstanceService.destroy(id);
+        } catch (error) {
+          logWarn(`Failed to destroy terminal instance ${id}`, { error });
+        }
+      }
+    }
+    state.clearTerminalStoreForSwitch();
   });
   setPanelExtensionStateAccessor((panelId, patch) =>
     usePanelStore.getState().setPanelExtensionState(panelId, patch)

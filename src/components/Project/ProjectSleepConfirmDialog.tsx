@@ -41,12 +41,75 @@ function ProjectRow({
   );
 }
 
+function StoppedCounts({ project }: { project: SleepConfirmProject }) {
+  return (
+    <div>
+      {project.terminalCount > 0 && <div>• {pluralize(project.terminalCount, "terminal")}</div>}
+      {project.activeAgentCount > 0 && (
+        <div>• {pluralize(project.activeAgentCount, "active agent")}</div>
+      )}
+      {project.waitingAgentCount > 0 && (
+        <div>• {pluralize(project.waitingAgentCount, "waiting agent")}</div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * A restart always stops whatever the project is running, so the warning is
+ * shown even when the counts are zero or couldn't be read, and it names both
+ * halves of the bundled operation: the stop and the reopen.
+ */
+function RestartConfirm({
+  project,
+  onConfirm,
+  onCancel,
+}: {
+  project: SleepConfirmProject;
+  onConfirm: () => void;
+  onCancel: () => void;
+}) {
+  return (
+    <ConfirmDialog
+      isOpen={true}
+      onClose={onCancel}
+      title={`Restart '${project.name}'?`}
+      confirmLabel="Restart project"
+      cancelLabel="Cancel"
+      onConfirm={onConfirm}
+      variant="default"
+    >
+      <div className="space-y-3">
+        <ul data-sleep-projects="" className="space-y-2">
+          <ProjectRow project={project} showMemory={false} />
+        </ul>
+        <Callout severity="warning" title="Everything running in it will be stopped">
+          <StoppedCounts project={project} />
+        </Callout>
+        <div className="text-xs text-text-secondary">
+          It reopens in this window with its layout, terminal scrollback, and agent sessions. Other
+          windows showing it return to the project picker. Other projects keep running.
+        </div>
+      </div>
+    </ConfirmDialog>
+  );
+}
+
 function ProjectSleepConfirmDialogInner() {
   const pending = useProjectSleepConfirmStore((s) => s.pendingConfirm);
   const resolveConfirmation = useProjectSleepConfirmStore((s) => s.resolveConfirmation);
   if (!pending) return null;
 
   const { projects, kind } = pending.request;
+  if (kind === "restart") {
+    return (
+      <RestartConfirm
+        project={projects[0]!}
+        onConfirm={() => resolveConfirmation(true)}
+        onCancel={() => resolveConfirmation(false)}
+      />
+    );
+  }
   const single = projects.length === 1;
   const terminalCount = projects.reduce((sum, p) => sum + p.terminalCount, 0);
   const activeAgentCount = projects.reduce((sum, p) => sum + p.activeAgentCount, 0);

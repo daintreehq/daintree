@@ -18,6 +18,7 @@ import {
   Pin,
   PinOff,
   Plus,
+  RotateCw,
   Settings,
   Trash2,
   X,
@@ -166,6 +167,7 @@ export interface ProjectSwitcherPaletteProps {
   onStopProject?: (projectId: string) => void;
   onCloseProject?: (projectId: string) => void;
   onSleepProject?: (projectId: string) => void;
+  onRestartProject?: (projectId: string) => void;
   onLocateProject?: (projectId: string) => void;
   onMoveOrRenameProject?: (projectId: string) => void;
   onTogglePinProject?: (projectId: string) => void;
@@ -290,6 +292,7 @@ interface ProjectListItemProps {
   onStopProject?: (projectId: string) => void;
   onCloseProject?: (projectId: string) => void;
   onSleepProject?: (projectId: string) => void;
+  onRestartProject?: (projectId: string) => void;
   onLocateProject?: (projectId: string) => void;
   onMoveOrRenameProject?: (projectId: string) => void;
   onTogglePinProject?: (projectId: string) => void;
@@ -842,6 +845,7 @@ function ProjectListItem({
   onStopProject,
   onCloseProject,
   onSleepProject,
+  onRestartProject,
   onLocateProject,
   onMoveOrRenameProject,
   onTogglePinProject,
@@ -1017,6 +1021,7 @@ function ProjectListItem({
     onStopProject ||
     onCloseProject ||
     onSleepProject ||
+    onRestartProject ||
     onCopyPath ||
     onSelectNewWindow ||
     onMoveOrRenameProject ||
@@ -1083,7 +1088,9 @@ function ProjectListItem({
           </ContextMenuItem>
         )}
         {(onTogglePinProject || onCopyPath) &&
-          (onStopProject || onSleepProject || onCloseProject) && <ContextMenuSeparator />}
+          (onStopProject || onSleepProject || onRestartProject || onCloseProject) && (
+            <ContextMenuSeparator />
+          )}
         {showStop && onStopProject && (
           <ContextMenuItem destructive onSelect={() => onStopProject(project.id)}>
             <CircleStop className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
@@ -1108,6 +1115,12 @@ function ProjectListItem({
           <ContextMenuItem onSelect={() => onSleepProject(project.id)}>
             <Moon className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
             Sleep project
+          </ContextMenuItem>
+        )}
+        {showSleep && onRestartProject && project.isActive && (
+          <ContextMenuItem onSelect={() => onRestartProject(project.id)}>
+            <RotateCw className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
+            Restart project…
           </ContextMenuItem>
         )}
         {onCloseProject && project.isActive && (
@@ -1679,6 +1692,7 @@ interface ProjectListContentProps {
   onStopProject?: (projectId: string) => void;
   onCloseProject?: (projectId: string) => void;
   onSleepProject?: (projectId: string) => void;
+  onRestartProject?: (projectId: string) => void;
   onLocateProject?: (projectId: string) => void;
   onMoveOrRenameProject?: (projectId: string) => void;
   onTogglePinProject?: (projectId: string) => void;
@@ -1711,6 +1725,7 @@ function ProjectListContent({
   onStopProject,
   onCloseProject,
   onSleepProject,
+  onRestartProject,
   onLocateProject,
   onMoveOrRenameProject,
   onTogglePinProject,
@@ -1867,6 +1882,7 @@ function ProjectListContent({
             onStopProject={onStopProject}
             onCloseProject={onCloseProject}
             onSleepProject={onSleepProject}
+            onRestartProject={onRestartProject}
             onLocateProject={onLocateProject}
             onMoveOrRenameProject={onMoveOrRenameProject}
             onTogglePinProject={onTogglePinProject}
@@ -2709,6 +2725,7 @@ interface ProjectPaletteInnerProps {
   onStopProject?: (projectId: string) => void;
   onCloseProject?: (projectId: string) => void;
   onSleepProject?: (projectId: string) => void;
+  onRestartProject?: (projectId: string) => void;
   onLocateProject?: (projectId: string) => void;
   onMoveOrRenameProject?: (projectId: string) => void;
   onTogglePinProject?: (projectId: string) => void;
@@ -2758,6 +2775,7 @@ function ProjectPaletteInner({
   onStopProject,
   onCloseProject,
   onSleepProject,
+  onRestartProject,
   onLocateProject,
   onMoveOrRenameProject,
   onTogglePinProject,
@@ -3218,6 +3236,7 @@ function ProjectPaletteInner({
           onStopProject={onStopProject}
           onCloseProject={onCloseProject}
           onSleepProject={onSleepProject}
+          onRestartProject={onRestartProject}
           onLocateProject={onLocateProject}
           onMoveOrRenameProject={onMoveOrRenameProject}
           onTogglePinProject={onTogglePinProject}
@@ -3404,6 +3423,7 @@ function ModalContent({
         onStopProject={innerProps.onStopProject}
         onCloseProject={innerProps.onCloseProject}
         onSleepProject={innerProps.onSleepProject}
+        onRestartProject={innerProps.onRestartProject}
         onLocateProject={innerProps.onLocateProject}
         onMoveOrRenameProject={innerProps.onMoveOrRenameProject}
         onTogglePinProject={innerProps.onTogglePinProject}
@@ -3527,6 +3547,7 @@ function DropdownContent({
           onStopProject={innerProps.onStopProject}
           onCloseProject={innerProps.onCloseProject}
           onSleepProject={innerProps.onSleepProject}
+          onRestartProject={innerProps.onRestartProject}
           onLocateProject={innerProps.onLocateProject}
           onMoveOrRenameProject={innerProps.onMoveOrRenameProject}
           onTogglePinProject={innerProps.onTogglePinProject}
@@ -3656,6 +3677,7 @@ export function ProjectSwitcherPalette({
   onStopProject,
   onCloseProject,
   onSleepProject,
+  onRestartProject,
   onLocateProject,
   onMoveOrRenameProject,
   onTogglePinProject,
@@ -3729,6 +3751,7 @@ export function ProjectSwitcherPalette({
         onStopProject={onStopProject}
         onCloseProject={onCloseProject}
         onSleepProject={onSleepProject}
+        onRestartProject={onRestartProject}
         onLocateProject={onLocateProject}
         onMoveOrRenameProject={onMoveOrRenameProject}
         onTogglePinProject={onTogglePinProject}
@@ -3772,6 +3795,7 @@ export function ProjectSwitcherPalette({
         onStopProject={onStopProject}
         onCloseProject={onCloseProject}
         onSleepProject={onSleepProject}
+        onRestartProject={onRestartProject}
         onLocateProject={onLocateProject}
         onMoveOrRenameProject={onMoveOrRenameProject}
         onTogglePinProject={onTogglePinProject}

@@ -8,6 +8,7 @@ import { useAgentWaitingNudge } from "./useAgentWaitingNudge";
 import { useForgeEnableRecommendation } from "./useForgeEnableRecommendation";
 import { useFocusOnActivateIntent } from "./useFocusOnActivateIntent";
 import { useSleptProjectTransition } from "./useSleptProjectTransition";
+import { useDroppedViewRestore } from "./useDroppedViewRestore";
 import { useBackgroundWindowResize } from "./useBackgroundWindowResize";
 import { useClearSwitchBusyStateOnReveal } from "./useClearSwitchBusyStateOnReveal";
 import { usePluginDeepLink } from "./usePluginDeepLink";
@@ -84,6 +85,7 @@ export function useAppBootstrap() {
   // would silently no-op against an empty panelStore).
   useFocusOnActivateIntent(isStateLoaded);
   useSleptProjectTransition();
+  useDroppedViewRestore();
   // Background window-resize receiver — keeps PTY geometry tracking the
   // window while this project view is detached (#10415).
   useBackgroundWindowResize();

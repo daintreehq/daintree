@@ -19,8 +19,11 @@ export interface SleepConfirmProject {
 }
 
 export interface SleepConfirmRequest {
-  /** `idle` is the whole batch the preview checked; `project` is one named target. */
-  kind: "project" | "idle";
+  /**
+   * `idle` is the whole batch the preview checked; `project` is one named
+   * target; `restart` is one target slept and then reopened in this window.
+   */
+  kind: "project" | "idle" | "restart";
   projects: SleepConfirmProject[];
 }
 
@@ -38,9 +41,9 @@ interface ProjectSleepConfirmState {
 }
 
 /**
- * Deferred-Promise confirm gate for `project.sleep` and `project.sleepIdle`,
- * which the palette, a keybinding, the memory notice and MCP all reach with no
- * dialog of their own. A second request while one is pending cancels the first.
+ * Deferred-Promise confirm gate for `project.sleep`, `project.sleepIdle` and
+ * `project.restart`, which the palette, a keybinding, the memory notice and MCP
+ * all reach with no dialog of their own. A second request while one is pending cancels the first.
  */
 export const useProjectSleepConfirmStore = create<ProjectSleepConfirmState>()((set, get) => ({
   pendingConfirm: null,

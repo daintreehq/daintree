@@ -357,6 +357,7 @@ An argument shown as `name?` is optional. Argument names come from each action's
 | `project.openInNewWindow` | Open project in new window | safe | — |
 | `project.openOnHost` | Open project on host… | safe | `hostId`, `projectId`, `navigateOnly?`, `newWindow?`, `worktree?` |
 | `project.remove` | Remove project | confirm | `projectId` |
+| `project.restart` | Restart project… | confirm | `projectId?` |
 | `project.saveSettings` | Save project settings | safe | `projectId`, `settings` |
 | `project.setGroup` | Move project to group | safe | `groupId`, `projectId` |
 | `project.settings.open` | Open project settings | safe | — |

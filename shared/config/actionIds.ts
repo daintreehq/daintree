@@ -291,6 +291,7 @@ export const BUILT_IN_ACTION_IDS = [
   "project.update",
   "project.toggleNeverAutoSleep",
   "project.sleep",
+  "project.restart",
   "project.sleepIdle",
   "project.remove",
   "project.archive",

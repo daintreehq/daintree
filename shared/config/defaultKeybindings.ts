@@ -959,6 +959,15 @@ const CORE_KEYBINDINGS: KeybindingConfig[] = [
     category: "Project",
   },
   {
+    // Unbound by default; here so it can be bound (#14179).
+    actionId: "project.restart",
+    combo: "",
+    scope: "global",
+    priority: 0,
+    description: "Restart project",
+    category: "Project",
+  },
+  {
     actionId: "project.sleepIdle",
     combo: "",
     scope: "global",

@@ -24,6 +24,7 @@ import { useProjectGroupsStore } from "@/store/projectGroupsStore";
 import type { ProjectGroup } from "@shared/types/project";
 import { useProjectRelocationStore } from "@/store/projectRelocationStore";
 import { notify } from "@/lib/notify";
+import { actionService } from "@/services/ActionService";
 import { copyWithToast } from "@/lib/copyWithToast";
 import { closeAndAnnounce } from "@/lib/accessibility";
 import { useCopyWithFeedback } from "@/hooks/useCopyWithFeedback";
@@ -488,6 +489,11 @@ export interface UseProjectSwitcherPaletteReturn {
    * silently otherwise. No-op (with a toast) for the active project.
    */
   sleepProject: (projectId: string) => Promise<void>;
+  /**
+   * Close the picker and run `project.restart`, whose confirmation is the
+   * app-level sleep dialog: an open picker would sit over it.
+   */
+  restartProject: (projectId: string) => void;
   /** Missing-project recovery: open the relocation dialog in reattach mode. */
   locateProject: (projectId: string) => void;
   /** Healthy-project "Move or rename": open the relocation dialog in move mode. */
@@ -2571,6 +2577,14 @@ export function useProjectSwitcherPalette({
     [findLiveProject, close, doSleepProject]
   );
 
+  const restartProject = useCallback(
+    (projectId: string) => {
+      close();
+      void actionService.dispatch("project.restart", { projectId }, { source: "user" });
+    },
+    [close]
+  );
+
   const confirmSleep = useCallback(async () => {
     if (!sleepConfirmProject || isSleepingProject) return;
     setIsSleepingProject(true);
@@ -3000,6 +3014,7 @@ export function useProjectSwitcherPalette({
     stopProject,
     removeProject: removeProjectFromList,
     sleepProject,
+    restartProject,
     locateProject,
     moveOrRenameProject,
     togglePinProject,

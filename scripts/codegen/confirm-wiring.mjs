@@ -58,6 +58,7 @@ const EXPECTED_CONFIRM_DANGER = new Set([
   "logs.clear",
   "project.remove",
   "project.sleep",
+  "project.restart",
   "project.sleepIdle",
   "recipe.delete",
   "recipe.run",
@@ -144,6 +145,7 @@ const BYPASS_WIRED = new Set([
   "project.remove", // confirm in ProjectSwitcherPalette.tsx; action ID not co-located
   "project.sleep", // deferred-promise via projectSleepConfirmStore; ProjectSleepConfirmDialog resolves it
   "project.sleepIdle", // same store and dialog
+  "project.restart", // same store and dialog
   "terminal.arm", // agent/MCP-only confirm gate (#11346); palette-hidden, user arming goes through the fleet ribbon (not ActionService), so no user-side ConfirmDialog to co-locate
   "recipe.run", // agent-dispatch only; no user-side ConfirmDialog (danger:"confirm" gates MCP only)
   // Agent/MCP-only batch kill (#12123); palette-hidden because it acts only on

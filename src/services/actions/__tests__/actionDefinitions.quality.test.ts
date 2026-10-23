@@ -1094,6 +1094,7 @@ const EXPECTED_CONFIRM_DANGER: ReadonlyArray<ActionId> = [
   "logs.clear",
   "project.remove",
   "project.sleep",
+  "project.restart",
   "project.sleepIdle",
   "recipe.delete",
   "recipe.run",
@@ -1171,6 +1172,7 @@ const BYPASS_WIRED: ReadonlyArray<ActionId> = [
   // app-level ProjectSleepConfirmDialog before sleeping.
   "project.sleep",
   "project.sleepIdle",
+  "project.restart",
   // The fleet ribbon's own inline confirmation (useFleetPendingActionStore,
   // buildConfirmMessage), not a ConfirmDialog-family component.
   "fleet.kill",

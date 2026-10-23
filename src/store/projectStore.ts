@@ -158,6 +158,18 @@ function settleRedirectedTransition(
   }));
 }
 
+/**
+ * The outgoing snapshot, unless this view dropped the project and hasn't
+ * restored it yet: the panel store then holds none or only part of its layout,
+ * and a snapshot of it would erase the saved one.
+ */
+function buildOutgoingStateIfHeld(
+  projectId: string | undefined
+): ProjectSwitchOutgoingState | undefined {
+  if (!projectId || isDroppedViewLayoutPending(projectId)) return undefined;
+  return buildOutgoingState(projectId);
+}
+
 function buildOutgoingState(projectId: string): ProjectSwitchOutgoingState {
   const draftInputs = useTerminalInputStore.getState().getProjectDraftInputs(projectId);
   // Diff against this window's last-persisted baseline so Main merges drafts by
@@ -424,6 +436,69 @@ export function isSelfInitiatedSleep(projectId: string): boolean {
   return selfInitiatedSleeps.has(projectId);
 }
 
+/**
+ * The project this view was showing when it last dropped to the picker through
+ * {@link ProjectState.dropToNoProject}, until its layout is restored here.
+ *
+ * Main keeps that view bound to the project, so reopening it — from the
+ * picker, a restart, or a switch back to the cached view — reuses this
+ * renderer, whose one-shot boot hydration has already run. Whoever claims it
+ * restores the saved layout (#14179). Until that restore finishes the panel
+ * store doesn't hold the project's layout, so nothing here may save it.
+ */
+let droppedView: { projectId: string; claimed: boolean; generation: number } | null = null;
+let dropGeneration = 0;
+let viewRestoreInFlight: Promise<void> | null = null;
+
+/** Take the pending restore for `projectId`; true at most once per drop. */
+export function claimDroppedViewRestore(projectId: string): boolean {
+  if (droppedView?.projectId !== projectId || droppedView.claimed) return false;
+  droppedView = { ...droppedView, claimed: true };
+  return true;
+}
+
+/** Put back a claim whose reopen or restore never landed, so the next one restores. */
+export function releaseDroppedViewRestore(projectId: string): void {
+  if (droppedView?.projectId === projectId) droppedView = { ...droppedView, claimed: false };
+}
+
+/**
+ * Run the claimed restore. Its layout counts as pending until it settles, and
+ * a sleep of the project waits for it so the teardown can't race the panels
+ * it is still adding. Settling only touches the drop it restored: another
+ * window can sleep the project mid-restore, and that newer drop stays pending.
+ */
+export function runDroppedViewRestore(
+  projectId: string,
+  restore: () => Promise<void>
+): Promise<void> {
+  const generation = droppedView?.projectId === projectId ? droppedView.generation : null;
+  const ownsDrop = () => generation !== null && droppedView?.generation === generation;
+  const run = restore().then(
+    () => {
+      if (ownsDrop()) droppedView = null;
+    },
+    (error: unknown) => {
+      if (ownsDrop()) releaseDroppedViewRestore(projectId);
+      throw error;
+    }
+  );
+  const settled = run.catch(() => {});
+  viewRestoreInFlight = settled;
+  void settled.then(() => {
+    if (viewRestoreInFlight === settled) viewRestoreInFlight = null;
+  });
+  return run;
+}
+
+/**
+ * Whether this view's panel store doesn't yet hold `projectId`'s saved layout:
+ * dropped and not yet restored. A snapshot of it would erase that layout.
+ */
+export function isDroppedViewLayoutPending(projectId: string): boolean {
+  return droppedView?.projectId === projectId;
+}
+
 let projectTransitionRequestId = 0;
 let projectListRequestId = 0;
 let currentProjectRequestId = 0;
@@ -587,7 +662,7 @@ function isDubiousOwnershipError(error: unknown): boolean {
  * The substring checks below remain for the switch/reopen callers, whose
  * failures originate outside `addProject`'s classified path.
  */
-function getProjectOpenErrorMessage(error: unknown, directoryPath?: string): string {
+export function getProjectOpenErrorMessage(error: unknown, directoryPath?: string): string {
   if (isClientAppError(error)) {
     if (error.code === "NOT_A_GIT_REPO") {
       return "The selected directory is not a Git repository.";
@@ -1029,7 +1104,7 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
     // Capture outgoing state just before firing, after the paint. The outgoing
     // view is not detached until the main process handles the IPC, so the panel
     // store still reflects the outgoing project here.
-    const outgoingState = currentProjectId ? buildOutgoingState(currentProjectId) : undefined;
+    const outgoingState = buildOutgoingStateIfHeld(currentProjectId);
     markSwitch(PERF_MARKS.PROJECT_SWITCH_SNAPSHOT_BUILT, {
       ...traceMeta,
       terminalCount: outgoingState?.terminals?.length ?? 0,
@@ -1285,8 +1360,15 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
     // leaves that view alive — destroying it would blank the window, since the
     // unbound first-run welcome view is closed for good once a project paints.
     clearFleetArmingThroughAccessor();
+    const droppedProjectId = get().currentProject?.id;
+    droppedView = droppedProjectId
+      ? { projectId: droppedProjectId, claimed: false, generation: ++dropGeneration }
+      : null;
     set({ currentProject: null, worktreeLoadError: null });
-    clearPanelStoreForSwitchThroughAccessor();
+    // The project's terminals are gone, so their xterm instances go too: a
+    // restore re-adds the same ids, and reusing an instance would carry the dead
+    // process's parser state and screen modes into the respawned one.
+    clearPanelStoreForSwitchThroughAccessor({ destroyInstances: true });
   },
 
   sleepProject: async (projectId) => {
@@ -1299,6 +1381,9 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
     // asked for.
     selfInitiatedSleeps.add(projectId);
     try {
+      // A restore still adding this project's panels would keep spawning
+      // terminals after the teardown below.
+      if (isActive && viewRestoreInFlight) await viewRestoreInFlight;
       if (isActive) {
         // Sleep's whole point is that main writes each captured agentSessionId
         // back into the SAVED panel snapshots. A debounced renderer save still
@@ -1307,7 +1392,12 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
         // asking for the teardown. (Close cancels instead — it deletes the
         // state either way.)
         panelPersistence.flush();
-        await panelPersistence.whenIdle();
+        draftInputPersistence.flushAll();
+        await Promise.all([
+          panelPersistence.whenIdle(),
+          // A failed draft write mustn't block the sleep the user asked for.
+          draftInputPersistence.whenIdle().catch(() => {}),
+        ]);
       }
 
       const projectName = get().projects.find((p) => p.id === projectId)?.name ?? "the project";
@@ -1371,7 +1461,7 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
       if (requestId !== projectTransitionRequestId) return;
     }
 
-    const outgoingState = currentProjectId ? buildOutgoingState(currentProjectId) : undefined;
+    const outgoingState = buildOutgoingStateIfHeld(currentProjectId);
     markSwitch(PERF_MARKS.PROJECT_SWITCH_SNAPSHOT_BUILT, {
       ...traceMeta,
       terminalCount: outgoingState?.terminals?.length ?? 0,

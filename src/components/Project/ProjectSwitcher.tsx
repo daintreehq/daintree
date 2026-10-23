@@ -112,6 +112,13 @@ export function ProjectSwitcher() {
     [projectSwitcher]
   );
 
+  const handleRestartProject = useCallback(
+    (projectId: string) => {
+      projectSwitcher.restartProject(projectId);
+    },
+    [projectSwitcher]
+  );
+
   const handleLocateProject = useCallback(
     (projectId: string) => {
       projectSwitcher.locateProject(projectId);
@@ -226,6 +233,7 @@ export function ProjectSwitcher() {
             onStopProject={handleStopProject}
             onCloseProject={handleCloseProject}
             onSleepProject={handleSleepProject}
+            onRestartProject={handleRestartProject}
             onLocateProject={handleLocateProject}
             onMoveOrRenameProject={handleMoveOrRenameProject}
             onTogglePinProject={handleTogglePinProject}
@@ -316,6 +324,7 @@ export function ProjectSwitcher() {
         onStopProject={handleStopProject}
         onCloseProject={handleCloseProject}
         onSleepProject={handleSleepProject}
+        onRestartProject={handleRestartProject}
         onLocateProject={handleLocateProject}
         onMoveOrRenameProject={handleMoveOrRenameProject}
         onTogglePinProject={handleTogglePinProject}
