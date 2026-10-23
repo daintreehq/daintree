@@ -58,8 +58,8 @@ import {
 import { assertPluginCallerDrives } from "./pluginDriveLease.js";
 import {
   interruptLaunchedAgent,
-  launchClaimsLiveTerminal,
   launchedAgentProject,
+  type LaunchedAgentPty,
   recordPluginLaunch,
   sendKeysToLaunchedAgent,
   submitToLaunchedAgent,
@@ -1235,26 +1235,30 @@ export function createHost(
    * (#14018), in `sendToActiveAgent`'s order: the caller has checked liveness,
    * the declared capability and its arguments. A call that would answer
    * `not-found` raises no consent prompt, and the record is read again after
-   * the prompt, since the plugin can unload or the terminal move while the
-   * user decides.
+   * the prompt and before every write, since the plugin can unload or the
+   * terminal move while the user decides or a key sequence is paced out.
    */
   const withLaunchedAgent = async <T extends { readonly status: string }>(
     op: string,
     terminalId: string,
-    run: (projectId: string) => Promise<T>
+    run: (pty: LaunchedAgentPty, stillAllowed: () => boolean) => Promise<T>
   ): Promise<T | Exclude<PluginAgentInputResult, { readonly status: "sent" }>> => {
+    const owns = (): boolean => {
+      const pty = getPtyClient();
+      return (
+        pty !== null && launchedAgentProject(pty, pluginId, terminalId, boundProjectId) !== null
+      );
+    };
     if (getPtyClient() === null) return { status: "unavailable" };
-    if (launchedAgentProject(pluginId, terminalId, boundProjectId) === null) {
-      return { status: "not-found" };
-    }
+    if (!owns()) return { status: "not-found" };
     await ensureCapabilityConsent(deps, pluginId, "agent:input");
     if (!isBound()) return { status: "unavailable" };
-    const projectId = launchedAgentProject(pluginId, terminalId, boundProjectId);
-    if (projectId === null) return { status: "not-found" };
+    if (!owns()) return { status: "not-found" };
     // Typing into an agent is held to the lease its terminal's input is.
     await assertPluginCallerDrives(pluginId, `agents.${op}`, { terminalId });
-    if (!isBound()) return { status: "unavailable" };
-    return run(projectId);
+    const pty = getPtyClient();
+    if (!isBound() || pty === null) return { status: "unavailable" };
+    return run(pty, () => isBound() && owns());
   };
   /**
    * A dispatch of this plugin's, recording the agent an `agent.launch` of its
@@ -1267,12 +1271,8 @@ export function createHost(
     args: unknown,
     projectId: string | null
   ): Promise<ActionDispatchResult> => {
-    // Asked before the launch runs: once it has, its own spawn holds the id.
-    const claimsLiveTerminal = launchClaimsLiveTerminal(actionId, args);
     const result = await dispatcher.sendDispatchToRenderer(actionId, args, projectId, pluginId);
-    if (!claimsLiveTerminal && isBound()) {
-      recordPluginLaunch(pluginId, actionId, result, projectId);
-    }
+    if (isBound()) recordPluginLaunch(pluginId, actionId, args, result, projectId);
     return result;
   };
   /**
@@ -1918,17 +1918,17 @@ export function createHost(
         if (!isBound()) return { status: "unavailable" };
         assertDeclaresAgentInput("interrupt");
         const id = validateLaunchedAgentId(pluginId, "interrupt", terminalId);
-        return withLaunchedAgent("interrupt", id, (projectId) =>
-          interruptLaunchedAgent(projectId, id)
+        return withLaunchedAgent("interrupt", id, (pty, stillAllowed) =>
+          interruptLaunchedAgent(pty, id, stillAllowed)
         );
       },
       sendKeys: async (terminalId, input) => {
         if (!isBound()) return { status: "unavailable" };
         assertDeclaresAgentInput("sendKeys");
         const id = validateLaunchedAgentId(pluginId, "sendKeys", terminalId);
-        const args = validateSendKeysCall(pluginId, id, input);
-        return withLaunchedAgent("sendKeys", id, (projectId) =>
-          sendKeysToLaunchedAgent(projectId, args)
+        const keys = validateSendKeysCall(pluginId, id, input);
+        return withLaunchedAgent("sendKeys", id, (pty, stillAllowed) =>
+          sendKeysToLaunchedAgent(pty, id, keys, stillAllowed)
         );
       },
       submit: async (terminalId, text) => {
@@ -1942,8 +1942,8 @@ export function createHost(
             `Plugin "${pluginId}" agents.submit: text must be a non-empty, non-whitespace string`
           );
         }
-        return withLaunchedAgent("submit", id, (projectId) =>
-          submitToLaunchedAgent(projectId, id, text)
+        return withLaunchedAgent("submit", id, (pty, stillAllowed) =>
+          submitToLaunchedAgent(pty, id, text, stillAllowed)
         );
       },
     },

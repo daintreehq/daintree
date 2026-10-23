@@ -1906,6 +1906,22 @@ describe("createMockHost production-parity validation (#10617)", () => {
       await expect(host.agents.interrupt("gate")).resolves.toEqual({ status: "not-found" });
     });
 
+    it("counts no launch that named its own panel id, as production", async () => {
+      const host = createMockHost({
+        dispatch: async () => ({ ok: true, result: { launched: true, terminalId: "chosen" } }),
+      });
+      await host.dispatch("agent.launch", { agentId: "claude", requestedId: "chosen" });
+      await expect(host.agents.interrupt("chosen")).resolves.toEqual({ status: "not-found" });
+    });
+
+    it("rejects a sparse key list, as production", async () => {
+      const host = createMockHost();
+      host.simulateAgentLaunched("t-1");
+      await expect(host.agents.sendKeys("t-1", { keys: new Array<string>(1) })).rejects.toThrow(
+        /agents\.sendKeys/
+      );
+    });
+
     it("lets a test mark an agent as launched", async () => {
       const host = createMockHost();
       host.simulateAgentLaunched("t-1");

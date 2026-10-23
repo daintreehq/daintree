@@ -3367,8 +3367,8 @@ type PluginAgentKeysInput = {
  * - `not-found`: no running agent this plugin launched has that id. One answer
  *   for an unknown id, an agent the user, an MCP client or another plugin
  *   started, and one outside a project plugin's own project.
- * - `unavailable`: the agent's project or the terminal host could not be
- *   reached right now, or the plugin is unloaded.
+ * - `unavailable`: the terminal host did not answer, or the plugin is
+ *   unloaded. Worth retrying later.
  */
 type PluginAgentInputResult = {
     readonly status: "sent";
@@ -3437,11 +3437,14 @@ interface PluginAgentsApi {
      * Only agents this plugin started with its own `host.dispatch("agent.launch")`
      * are reachable, for as long as the plugin stays loaded — an agent the user,
      * an MCP client or another plugin started answers `not-found`, and so does
-     * one outside a project plugin's own project. The three input methods are
-     * gated on `agent:input` with the same first-use consent prompt as
-     * {@link PluginHostApi.sendToActiveAgent}; a call that would answer
+     * one outside a project plugin's own project. A launch that passes its own
+     * `requestedId` is not counted: the launcher must choose the id. The three
+     * input methods are gated on `agent:input` with the same first-use consent
+     * prompt as {@link PluginHostApi.sendToActiveAgent}; a call that would answer
      * `not-found` never raises it. Answered by the host's main process, so an
-     * agent in a project whose view is not loaded is reached too.
+     * agent in a project whose view is not loaded is reached too. In a plugin
+     * worker, a call still in flight when the worker stops rejects, since the
+     * input may already have been written.
      *
      * @throws {Error} `PERMISSION_REQUIRED:` if the plugin did not declare
      *   `agent:input`, or the user denies the consent prompt.
@@ -6600,7 +6603,8 @@ interface MockHostState {
     /**
      * Count `terminalId` as an agent this plugin launched, so the `host.agents`
      * input methods reach it. A `dispatch("agent.launch")` whose result reports
-     * `launched: true` with a terminal id counts on its own, as in production.
+     * `launched: true` with a terminal id counts on its own, as in production,
+     * unless the launch named its own `requestedId`.
      */
     simulateAgentLaunched(terminalId: string): void;
     /**

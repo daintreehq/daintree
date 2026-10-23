@@ -752,20 +752,23 @@ describe("Agents a plugin launched, across unload and reload (#14018)", () => {
     ok: true,
     result: { launched: true, terminalId: "t-launched" },
   };
+  const pty = {
+    getTerminalProjectId: (id: string) => (id === "t-launched" ? "p1" : null),
+  };
+  type ReloadingService = {
+    unloadPlugin: (id: string, options?: { reload: true }) => void;
+    settlePluginReload: (id: string) => void;
+    plugins: Map<string, unknown>;
+  };
 
   beforeEach(() => {
     _resetPluginLaunchesForTests();
-    setPtyClientRef({
-      getTerminalProjectId: (id: string) => (id === "t-launched" ? "p1" : null),
-      getLiveGeneration: () => null,
-    } as never);
   });
   afterEach(() => {
     _resetPluginLaunchesForTests();
-    setPtyClientRef(null);
   });
 
-  async function loadLauncher(): Promise<PluginService> {
+  async function loadLauncher(): Promise<ReloadingService> {
     await writePlugin("launcher", {
       name: PLUGIN,
       version: "1.0.0",
@@ -773,22 +776,31 @@ describe("Agents a plugin launched, across unload and reload (#14018)", () => {
     });
     const service = new PluginService(tmpDir);
     await service.initialize();
-    recordPluginLaunch(PLUGIN, "agent.launch", LAUNCH, null);
-    expect(launchedAgentProject(PLUGIN, "t-launched", null)).toBe("p1");
-    return service;
+    recordPluginLaunch(PLUGIN, "agent.launch", { agentId: "claude" }, LAUNCH, null);
+    expect(launchedAgentProject(pty, PLUGIN, "t-launched", null)).toBe("p1");
+    return service as unknown as ReloadingService;
   }
 
   it("ends the plugin's reach when it unloads", async () => {
     const service = await loadLauncher();
-    (service as unknown as { unloadPlugin: (id: string) => void }).unloadPlugin(PLUGIN);
-    expect(launchedAgentProject(PLUGIN, "t-launched", null)).toBeNull();
+    service.unloadPlugin(PLUGIN);
+    expect(launchedAgentProject(pty, PLUGIN, "t-launched", null)).toBeNull();
   });
 
-  it("keeps it across a reload, which leaves its agents running", async () => {
+  it("keeps it across a reload that brings the plugin back", async () => {
     const service = await loadLauncher();
-    (
-      service as unknown as { unloadPlugin: (id: string, options: { reload: true }) => void }
-    ).unloadPlugin(PLUGIN, { reload: true });
-    expect(launchedAgentProject(PLUGIN, "t-launched", null)).toBe("p1");
+    const loaded = service.plugins.get(PLUGIN);
+    service.unloadPlugin(PLUGIN, { reload: true });
+    expect(launchedAgentProject(pty, PLUGIN, "t-launched", null)).toBe("p1");
+    service.plugins.set(PLUGIN, loaded);
+    service.settlePluginReload(PLUGIN);
+    expect(launchedAgentProject(pty, PLUGIN, "t-launched", null)).toBe("p1");
+  });
+
+  it("ends it when a reload brings nothing back", async () => {
+    const service = await loadLauncher();
+    service.unloadPlugin(PLUGIN, { reload: true });
+    service.settlePluginReload(PLUGIN);
+    expect(launchedAgentProject(pty, PLUGIN, "t-launched", null)).toBeNull();
   });
 });

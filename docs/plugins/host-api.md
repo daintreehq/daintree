@@ -1641,8 +1641,11 @@ const launch = await host.dispatch("agent.launch", {
   agentId: "claude",
   prompt: "Fix the flaky test",
 });
-if (launch.ok && launch.result.launched) {
-  const { terminalId } = launch.result;
+const started = launch.ok
+  ? (launch.result as { launched?: boolean; terminalId?: string | null })
+  : null;
+if (started?.launched && started.terminalId) {
+  const terminalId = started.terminalId;
   // Later, when the agent stops at its CLI's own permission prompt:
   await host.agents.sendKeys(terminalId, { choose: "Yes" });
   // Stop the turn it is running, keeping the pane and conversation:
@@ -1652,13 +1655,13 @@ if (launch.ok && launch.result.launched) {
 }
 ```
 
-Input to the agents this plugin started with its own `host.dispatch("agent.launch")`, and nothing else. Main records a launch from its result — `launched: true` with a `terminalId` — never from anything the plugin says, so an agent the user, an MCP client or another plugin started answers `not-found`, as does one outside a project plugin's own project. The record lasts while the plugin stays loaded, across a reload, and follows the pane through a restart; the `terminal.*Owned` actions stay closed to `dispatch`.
+Input to the agents this plugin started with its own `host.dispatch("agent.launch")`, and nothing else. Main records a launch from its result — `launched: true` with a `terminalId` — never from anything the plugin says, so an agent the user, an MCP client or another plugin started answers `not-found`, as does one outside a project plugin's own project. A launch that passes its own `requestedId` is not recorded: the id has to be the launcher's choice. The record lasts while the plugin stays loaded, across a reload that brings it back, and follows the pane through a restart; the `terminal.*Owned` actions stay closed to `dispatch`.
 
 - `interrupt(terminalId)` sends the agent's cancel keystrokes. An idle agent, or one whose CLI binds a different cancel key, is refused rather than reported stopped. `cancelKey` is `advertised` when the CLI's screen shows the key it was sent, `unverified` when it is only that agent's known convention.
 - `sendKeys(terminalId, { keys } | { choose })` presses up to 16 named keys (`Up`, `Down`, `Left`, `Right`, `Enter`, `Escape`, `Tab`, `Space`, `Backspace`, a lowercase letter or digit), or moves to the option whose label the screen shows and presses Enter. The result lists the keys pressed; it carries no screen text — read that with [`terminals.readScreen`](#terminalsreadscreen--what-a-terminal-shows), which needs `terminal:read`.
 - `submit(terminalId, text)` queues `text` as one submission: the agent's next prompt, or a slash command. It resolves once queued, not once the agent reads it.
 
-Each resolves `{ status: "sent", … }`, `{ status: "refused", reason }` when nothing was written (not worth retrying unchanged), `{ status: "not-found" }`, or `{ status: "unavailable" }` when the agent's project or the terminal host can't be reached, or the plugin is unloaded. `sent` means written, not acted on: watch the agent's state or read its screen for the effect. They run in main against the terminal host's own record, so an agent in a project whose view is not loaded is reached too.
+Each resolves `{ status: "sent", … }`, `{ status: "refused", reason }` when nothing was written (not worth retrying unchanged), `{ status: "not-found" }`, or `{ status: "unavailable" }` when the terminal host didn't answer or the plugin is unloaded. `sent` means written, not acted on: watch the agent's state or read its screen for the effect. They run in main against the terminal host's own record, so an agent in a project whose view is not loaded is reached too. In a worker, a call still in flight when the worker stops rejects rather than answering `unavailable`, since the input may already have gone out.
 
 Gated on `agent:input`, with the same first-use consent prompt as `sendToActiveAgent`; a call that would answer `not-found` never raises it. They throw `PERMISSION_REQUIRED:` if the capability is missing or the user denies consent, `DRIVEN_ELSEWHERE:` when the call came from a view that doesn't drive the agent's project, and on a malformed id, key list or blank text before the prompt. NOT revoke-guarded.
 

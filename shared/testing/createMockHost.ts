@@ -647,7 +647,8 @@ export interface MockHostState {
   /**
    * Count `terminalId` as an agent this plugin launched, so the `host.agents`
    * input methods reach it. A `dispatch("agent.launch")` whose result reports
-   * `launched: true` with a terminal id counts on its own, as in production.
+   * `launched: true` with a terminal id counts on its own, as in production,
+   * unless the launch named its own `requestedId`.
    */
   simulateAgentLaunched(terminalId: string): void;
   /**
@@ -1866,9 +1867,11 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
       );
     }
   };
-  // The agent this plugin's own `agent.launch` started, as production records it.
+  // The agent this plugin's own `agent.launch` started, as production records
+  // it: never one whose panel id the launch named itself.
   const recordMockLaunch = (
     actionId: ActionId,
+    args: unknown,
     result: ActionDispatchResult
   ): ActionDispatchResult => {
     const launch = result.ok
@@ -1876,6 +1879,7 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
       : null;
     if (
       actionId === "agent.launch" &&
+      !(args !== null && typeof args === "object" && "requestedId" in args) &&
       launch?.launched === true &&
       typeof launch.terminalId === "string" &&
       launch.terminalId.length > 0
@@ -2237,7 +2241,10 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
           Array.isArray(keys) &&
           keys.length >= 1 &&
           keys.length <= 16 &&
-          keys.every((key) => typeof key === "string" && MOCK_AGENT_KEY.test(key));
+          // A dense copy, so a sparse array's holes fail as production's do.
+          Array.from(keys as unknown[]).every(
+            (key) => typeof key === "string" && MOCK_AGENT_KEY.test(key)
+          );
         const validChoose =
           typeof choose === "string" && choose.length >= 1 && choose.length <= 200;
         if (keys !== undefined && choose !== undefined) {
@@ -3143,10 +3150,11 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
           : { actionId, args, options: dispatchOptions }
       );
       const override = dispatchOverrides.get(actionId);
-      if (override) return recordMockLaunch(actionId, override);
+      if (override) return recordMockLaunch(actionId, args, override);
       if (options.dispatch) {
         return recordMockLaunch(
           actionId,
+          args,
           await (dispatchOptions === undefined
             ? options.dispatch(actionId, args)
             : options.dispatch(actionId, args, dispatchOptions))

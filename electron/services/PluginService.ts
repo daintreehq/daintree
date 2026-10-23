@@ -41,7 +41,7 @@ import {
   channelHandlerArityHint,
 } from "./plugin/pluginHandlerHints.js";
 import { PluginPtyTransport } from "./plugin/PluginPtyTransport.js";
-import { forgetPluginLaunches } from "./plugin/pluginLaunchedAgents.js";
+import { forgetPluginLaunches, forgetPluginLaunchesWhere } from "./plugin/pluginLaunchedAgents.js";
 import { PluginPathNotAllowedError } from "./plugin/pluginFsContainment.js";
 import { e2eSideloadPluginDir, isE2EMode } from "../setup/runtimeFlags.js";
 import { whenPluginDirResolverLive } from "../setup/pluginProtocolReadiness.js";
@@ -1689,6 +1689,7 @@ export class PluginService {
     // map the sweep below walks; its held credentials go now rather than
     // whenever that filesystem work settles.
     pluginMcpGrantRegistry.revokeHeld(() => true);
+    forgetPluginLaunchesWhere(() => true);
     for (const waiters of this.projectOpenWaiters.values()) {
       for (const wake of waiters) wake();
     }
@@ -7284,6 +7285,8 @@ export class PluginService {
           instanceKey,
           current ? agentMcpSurfaceOf(current.manifest) : null
         );
+        // Nothing came back, so nothing is left to drive the agents it launched.
+        if (!current) forgetPluginLaunches(instanceKey);
       },
       // Grants are held per plugin instance and an instance key names its
       // project, so revoking by instance key purges exactly this project's
@@ -7408,6 +7411,9 @@ export class PluginService {
     // the close queues behind it; its held credentials must not outlive the
     // close by however long that takes.
     pluginMcpGrantRegistry.revokeHeld(
+      (instanceId) => projectIdFromPluginInstanceKey(instanceId) === projectId
+    );
+    forgetPluginLaunchesWhere(
       (instanceId) => projectIdFromPluginInstanceKey(instanceId) === projectId
     );
     // Every plugin's statuses on the closed project's cards, app-global ones
@@ -7816,6 +7822,7 @@ export class PluginService {
       pluginId,
       current ? agentMcpSurfaceOf(current.manifest) : null
     );
+    if (!current) forgetPluginLaunches(pluginId);
   }
 
   /**

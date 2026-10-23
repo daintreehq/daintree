@@ -525,6 +525,13 @@ describe("PluginDevWorkerHostProxy agent handoff", () => {
     await expect(submit).rejects.toThrow();
   });
 
+  it("answers an input call made after disposal as unavailable, sending nothing", async () => {
+    const { proxy, sent } = makeProxy();
+    proxy.dispose();
+    await expect(proxy.host.agents.interrupt("t-1")).resolves.toEqual({ status: "unavailable" });
+    expect(sent.some((m) => m.type === "host-call" && m.method === "agents.interrupt")).toBe(false);
+  });
+
   it("answers an unavailable app-wide list when disposed mid-call", async () => {
     const { proxy } = makeProxy();
     const listAll = proxy.host.agents.listAll();
