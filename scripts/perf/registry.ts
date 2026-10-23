@@ -302,6 +302,14 @@ export const REGISTRY: Record<string, Command> = {
     gate: "RUN_PERF_SWITCH_ROTATION",
     build: "build:e2e",
   }),
+  "reference-app-lifecycle": playwrightBench({
+    summary:
+      "Request Desk reference app in six projects behind a two-view cache: warm/cold switch, memory and idle/active CPU, report only",
+    kind: "journey",
+    spec: "e2e/perf/reference-app-lifecycle-perf.spec.ts",
+    gate: "RUN_PERF_REFERENCE_APP",
+    build: "build:e2e",
+  }),
   "project-switch-stress": playwrightBench({
     summary:
       "Cold/warm project-switch churn across many projects: switch latency, FD and memory growth per round",

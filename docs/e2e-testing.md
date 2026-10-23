@@ -156,6 +156,8 @@ npm run build:e2e && npx playwright test --config=playwright.plugins.config.ts e
 
 - **`element-picker/<framework>.spec.ts`** run the Element Picker on a real, unmodified dev server for each framework it meets — SvelteKit, React + Vite, Next.js, Vue + Vite, Nuxt, Angular, Astro, Preact, Solid and static HTML — one throwaway project per spec (`e2e/plugins/helpers/frameworks/`), installed once and served fresh to each variant. Every fixture draws the same page — a heading and three cards from a child component — and each spec asserts only what that framework truly exposes; the negatives (React production build, React dev with its source maps dropped, SvelteKit production build) check that the picker reports an element as untraced rather than naming a file it can't back. Frameworks the core catalog doesn't register yet keep an active picking test and a `test.fixme` naming #13888 for the source they'll trace.
 
+- **`reference-app-lifecycle.spec.ts`** takes the committed Request Desk reference app through six projects behind a two-view cache: trust, setup, an agent's first operation, rotation, a draft through cache pressure and reload, a simulated suspend and a restart. It asserts behaviour only; its timings and resource readings are `npm run perf reference-app-lifecycle`. The matrix, workload and limitations are in `docs/plugins/reference-app-lifecycle.md`.
+
 Things these specs have to handle that bucket specs don't:
 
 - **Plugin commands can confirm.** A plugin whose manifest holds a high-risk capability (any `fs:*-write`, for one) gets a "Run '…'?" dialog on every command unless the command declares the capabilities it actually uses with `requires` — `[]` for one that only opens a panel. The dispatch stays pending until the dialog is answered.
