@@ -117,6 +117,38 @@ async function settle(): Promise<void> {
   }
 }
 
+/** What the host last told the picker about the plugin's extractor: pending, installed, failed. */
+function pluginAvailability(h: ReturnType<typeof makeHarness>): string | undefined {
+  const states = h.wc.debugger.commands.flatMap((command) => {
+    const match = /api\.setAvailability\((.*)\);/.exec(String(command.params.expression ?? ""));
+    if (match === null) return [];
+    const extractors = (JSON.parse(match[1]!) as { extractors?: Record<string, string> })
+      .extractors;
+    return [extractors?.[PROVIDER_ID]];
+  });
+  return states.at(-1);
+}
+
+/** The install attempt has come to something, whatever it was. */
+function attemptSettled(h: ReturnType<typeof makeHarness>): boolean {
+  const state = pluginAvailability(h);
+  return state !== undefined && state !== "pending";
+}
+
+/**
+ * Turns the event loop until `done` holds, against a real-time deadline: the
+ * entry read is real file I/O, which no fixed number of turns is sure to
+ * outlast on a loaded machine. Then lets whatever it set off finish.
+ */
+async function settleUntil(done: () => boolean): Promise<void> {
+  const deadline = Date.now() + 10_000;
+  while (!done() && Date.now() < deadline) {
+    await settleMicrotasks();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+  }
+  await settle();
+}
+
 beforeEach(() => {
   __resetCdpLeasesForTests();
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
@@ -186,7 +218,7 @@ describe("plugin framework extractors", () => {
     cleanups.push(page.cleanup);
     const h = makeHarness(shipped);
     await h.bind();
-    await settle();
+    await settleUntil(() => attemptSettled(h));
     expect(pluginInstalls(h)).toHaveLength(1);
     expect(h.kinds("extractor-installed")).toEqual([
       expect.objectContaining({ framework: PROVIDER_ID, documentEpoch: 0 }),
@@ -205,7 +237,8 @@ describe("plugin framework extractors", () => {
     cleanups.push(page.cleanup);
     const h = makeHarness(shipped);
     await h.bind();
-    await settle();
+    await settleUntil(() => attemptSettled(h));
+    expect(pluginAvailability(h)).toBe("installed");
 
     (page.target as HTMLElement).click();
     await settle();
@@ -222,7 +255,7 @@ describe("plugin framework extractors", () => {
       '<div id="app" data-v-app=""><fixture-lit-card></fixture-lit-card></div>';
     const h = makeHarness(shipped);
     await h.bind();
-    await settle();
+    await settleUntil(() => attemptSettled(h));
 
     expect(registry()?.has("vue")).toBe(true);
     expect(registry()?.has(PROVIDER_ID)).toBe(true);
@@ -240,7 +273,7 @@ describe("plugin framework extractors", () => {
     cleanups.push(page.cleanup);
     const h = makeHarness(shipped);
     await h.bind();
-    await settle();
+    await settleUntil(() => attemptSettled(h));
 
     expect(h.kinds("extractor-installed")).toHaveLength(0);
     const issues = h.kinds("host-issue");
@@ -260,7 +293,7 @@ describe("plugin framework extractors", () => {
       '<div id="app" data-v-app=""><fixture-lit-card></fixture-lit-card></div>';
     const h = makeHarness(shipped);
     await h.bind();
-    await settle();
+    await settleUntil(() => attemptSettled(h));
 
     expect(registry()?.has("vue")).toBe(true);
     expect(registry()?.has(PROVIDER_ID)).toBe(false);
@@ -283,8 +316,9 @@ describe("plugin framework extractors", () => {
     cleanups.push(page.cleanup);
     const h = makeHarness(shipped);
     await h.bind();
-    await settle();
+    await settleUntil(() => attemptSettled(h));
 
+    expect(pluginAvailability(h)).toBe("failed");
     expect(registry()?.has(PROVIDER_ID) ?? false).toBe(false);
     expect(h.kinds("extractor-installed")).toHaveLength(0);
   });
@@ -295,11 +329,11 @@ describe("plugin framework extractors", () => {
       '<div id="app" data-v-app=""><fixture-lit-card></fixture-lit-card></div>';
     const h = makeHarness(shipped);
     await h.bind();
-    await settle();
+    await settleUntil(() => attemptSettled(h));
     expect(registry()?.has(PROVIDER_ID)).toBe(true);
 
     unregisterElementPickerProviders(PLUGIN_ID);
-    await settle();
+    await settleUntil(() => registry()?.has(PROVIDER_ID) === false);
 
     expect(registry()?.has(PROVIDER_ID)).toBe(false);
     expect(registry()?.has("vue")).toBe(true);
@@ -312,7 +346,7 @@ describe("plugin framework extractors", () => {
     cleanups.push(page.cleanup);
     const h = makeHarness(shipped);
     await h.bind();
-    await settle();
+    await settleUntil(() => attemptSettled(h));
     expect(pluginInstalls(h)).toHaveLength(1);
 
     // The new document has no marker: nothing of the old install carries over.
@@ -329,7 +363,7 @@ describe("plugin framework extractors", () => {
     // A later document that matches installs, once.
     cleanups.push(litDetection());
     h.navigate();
-    await settle();
+    await settleUntil(() => pluginInstalls(h).length === 2 && attemptSettled(h));
     expect(pluginInstalls(h)).toHaveLength(2);
     expect(h.kinds("extractor-installed").at(-1)).toMatchObject({ framework: PROVIDER_ID });
   });
