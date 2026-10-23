@@ -5,6 +5,7 @@ import {
   computeSlope,
   getTrendDirection,
   formatMemory,
+  formatCores,
   formatProcessLabel,
   FALLBACK_THRESHOLDS,
 } from "../ProjectResourceBadge.utils";
@@ -91,6 +92,27 @@ describe("getTrendDirection", () => {
     const samples = [100, 100.3, 100.6, 100.9];
     expect(getTrendDirection(samples, 1)).toBe("stable");
     expect(getTrendDirection(samples, 60)).toBe("up");
+  });
+});
+
+describe("formatCores", () => {
+  it.each([
+    [0, "0 cores"],
+    [0.003, "<0.1 cores"],
+    [0.1, "0.1 cores"],
+    [0.124, "0.1 cores"],
+    [1, "1 core"],
+    [1.06, "1.1 cores"],
+    [1.4, "1.4 cores"],
+    [3.089, "3.1 cores"],
+    [12, "12 cores"],
+  ])("reads %s as %s", (cores, expected) => {
+    expect(formatCores(cores)).toBe(expected);
+  });
+
+  it("refuses to print a reading that cannot be real", () => {
+    expect(formatCores(Number.NaN)).toBe("—");
+    expect(formatCores(-1)).toBe("—");
   });
 });
 

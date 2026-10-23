@@ -1,3 +1,5 @@
+import { pluralNoun } from "@/lib/pluralize";
+
 export type MemoryState = "normal" | "elevated" | "critical";
 export type TrendDirection = "up" | "down" | "stable";
 
@@ -69,6 +71,19 @@ export function getTrendDirection(samples: number[], samplesPerMin: number): Tre
 export function formatMemory(mb: number): string {
   if (mb >= 1024) return `${(mb / 1024).toFixed(1)} GB`;
   return `${Math.round(mb)} MB`;
+}
+
+/**
+ * Busy cores, one decimal with a trailing ".0" dropped ("1 core", "1.4 cores").
+ * Takes a core count rather than a percentage because pane and host readings
+ * use different denominators: ps %cpu is per core, the host's is a share of all
+ * of them. A trace too small to round up reads "<0.1" rather than claiming zero.
+ */
+export function formatCores(cores: number): string {
+  if (!Number.isFinite(cores) || cores < 0) return "—";
+  const rounded = Math.round(cores * 10) / 10;
+  if (rounded === 0 && cores > 0) return "<0.1 cores";
+  return `${rounded} ${pluralNoun(rounded, "core")}`;
 }
 
 /**
