@@ -97,6 +97,7 @@ import { buildCanopyHostPreloadBindings } from "./ipc/handlers/canopyHost.preloa
 import { buildPortForwardsPreloadBindings } from "./ipc/handlers/portForwards.preload.js";
 import { buildPluginParityPreloadBindings } from "./ipc/handlers/pluginParity.preload.js";
 import { buildSettingsCopyPreloadBindings } from "./ipc/handlers/settingsCopy.preload.js";
+import { buildHostSettingsPreloadBindings } from "./ipc/handlers/hostSettings.preload.js";
 import { buildTelemetryPreloadBindings } from "./ipc/handlers/telemetry.preload.js";
 import { buildConnectivityPreloadBindings } from "./ipc/handlers/connectivity.preload.js";
 import { buildProjectPresencePreloadBindings } from "./ipc/handlers/projectPresence.preload.js";
@@ -3389,6 +3390,7 @@ function buildElectronApi(): ElectronAPI {
     },
     pluginParity: buildPluginParityPreloadBindings(_unwrappingInvoke),
     settingsCopy: buildSettingsCopyPreloadBindings(_unwrappingInvoke),
+    hostSettings: buildHostSettingsPreloadBindings(_unwrappingInvoke),
 
     onboarding: {
       ...buildOnboardingPreloadBindings(_unwrappingInvoke),

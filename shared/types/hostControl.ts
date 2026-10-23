@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { AgentDirectorySchema } from "./agentDirectory.js";
+import { HOST_SETTING_KEYS, HostSettingsPatchFieldsSchema } from "./hostSettings.js";
 
 /**
  * This Shell's reach into its Remote Hosts for its own assistants (#13493,
@@ -35,10 +36,20 @@ export const HOST_CALL_TOOL = "host.call";
  */
 export const HOST_ENSURE_PROJECT_TOOL = "host.ensureProject";
 
+/**
+ * Reads and changes a host's own named settings (#14167), such as turning
+ * Canopy on across several hosts, with no project or window there. Every
+ * change is previewed first and applied only once the person approves exactly
+ * that preview, in a dialog this Shell raises; nothing the caller says counts
+ * as approval.
+ */
+export const HOST_SETTINGS_TOOL = "host.settings";
+
 export const HOST_CONTROL_TOOL_IDS: ReadonlySet<string> = new Set([
   HOST_LIST_TOOL,
   HOST_CALL_TOOL,
   HOST_ENSURE_PROJECT_TOOL,
+  HOST_SETTINGS_TOOL,
 ]);
 
 /** Most projects `host.list` names for one host. */
@@ -287,10 +298,66 @@ export const HostEnsureProjectResultSchema = z.object({
 });
 export type HostEnsureProjectResult = z.infer<typeof HostEnsureProjectResultSchema>;
 
+/** Most hosts one `host.settings` read or preview names. */
+export const HOST_SETTINGS_HOSTS_MAX = 8;
+
+export const HostSettingsArgsSchema = z.object({
+  operation: z
+    .enum(["read", "preview", "apply"])
+    .describe(
+      "read: current values. preview: what patch would change, and a ticket. apply: run it."
+    ),
+  hostIds: z
+    .array(hostIdSchema)
+    .min(1)
+    .max(HOST_SETTINGS_HOSTS_MAX)
+    .optional()
+    .describe("For read and preview: the exact hosts, up to 8."),
+  keys: z
+    .array(z.enum(HOST_SETTING_KEYS))
+    .max(HOST_SETTING_KEYS.length)
+    .optional()
+    .describe("For read: which settings, up to 5. Default: all."),
+  patch: HostSettingsPatchFieldsSchema.optional().describe(
+    "For preview: values to set on every host named."
+  ),
+  ticket: z
+    .string()
+    .min(1)
+    .max(64)
+    .optional()
+    .describe("For apply: a preview's ticket. The person approves it in a dialog here first."),
+});
+export type HostSettingsArgs = z.infer<typeof HostSettingsArgsSchema>;
+
+const settingValueSchema = z.union([z.string(), z.number(), z.boolean(), z.null()]);
+
+export const HostSettingsResultSchema = z.object({
+  ...outcomeFields,
+  ticket: z.string().nullable(),
+  hosts: z.array(
+    z.object({
+      hostId: z.string(),
+      name: z.string(),
+      outcome: outcomeSchema,
+      detail: z.string().nullable(),
+      settings: z.array(
+        z.object({
+          key: z.enum(HOST_SETTING_KEYS),
+          value: settingValueSchema,
+          proposed: settingValueSchema.optional(),
+        })
+      ),
+    })
+  ),
+});
+export type HostSettingsResult = z.infer<typeof HostSettingsResultSchema>;
+
 /** Why a host tool refused outright: the caller isn't this machine's assistant, or its arguments don't parse. */
 export type HostControlRefusalCode = "NOT_ELIGIBLE" | "INVALID_ARGS" | "UNAVAILABLE";
 
-export type HostControlToolResult = HostListResult | HostCallResult | HostEnsureProjectResult;
+export type HostControlToolResult =
+  HostListResult | HostCallResult | HostEnsureProjectResult | HostSettingsResult;
 
 export type HostControlOutcome<T> =
   { ok: true; value: T } | { ok: false; code: HostControlRefusalCode; message: string };

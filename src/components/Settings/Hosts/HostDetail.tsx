@@ -20,6 +20,7 @@ import { ChangeHostTargetDialog } from "./ChangeHostTargetDialog";
 import { HostPluginsSection } from "./HostPluginsSection";
 import { HostSessionsSection } from "./HostSessionsSection";
 import { HostCopySettingsSection } from "./HostCopySettingsSection";
+import { HostSettingsSection } from "./HostSettingsSection";
 import { takeFirstConnect } from "./hostCopySettingsRequests";
 import { HostClipboardGrants } from "./HostClipboardGrants";
 import { HostPluginViewConsents } from "./HostPluginViewConsents";
@@ -462,6 +463,7 @@ export function HostDetail({
         </SettingsGroup>
       </SettingsSection>
 
+      <HostSettingsSection hostId={descriptor.id} hostName={hostName} connected={connected} />
       <HostCopySettingsSection
         hostId={descriptor.id}
         hostName={hostName}

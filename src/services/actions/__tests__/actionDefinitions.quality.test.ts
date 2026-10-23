@@ -530,7 +530,12 @@ describe("LLM-facing tool descriptions (#11542)", () => {
   // nothing is pushed, opened or set up, that choices come back as questions,
   // and that "working" is answered by calling again. In-app only, off the
   // external surface.
-  const MAX_COHORT_TOTAL_BYTES = 21_700;
+  // 21_700 → 21_900 for `host.settings` (#14167), measured at 21_880 B. What
+  // the prose has to carry is that a preview changes nothing and returns a
+  // ticket, that an apply asks the person to approve exactly that preview
+  // before writing it, and that this machine's own settings are never reached.
+  // In-app only, off the external surface.
+  const MAX_COHORT_TOTAL_BYTES = 21_900;
 
   const ARG_SECTION = /\b(?:args?|arguments?|parameters?)\s*(?:\([^)]*\))?\s*:|\btakes no args\b/i;
 
@@ -1529,6 +1534,7 @@ describe("plugin-dispatch injection guard (#10558)", () => {
       "host.list": {},
       "host.call": { hostId: "h-placeholder", projectId: "p-placeholder", tool: "terminal.list" },
       "host.ensureProject": { hostId: "h-placeholder" },
+      "host.settings": { operation: "read", hostIds: ["h-placeholder"] },
     };
 
     const failures: string[] = [];

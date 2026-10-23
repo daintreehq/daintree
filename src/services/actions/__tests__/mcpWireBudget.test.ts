@@ -837,7 +837,13 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // 137_600 → 138_700 for #14168, measured at 138_586 B (+1_005): the capacity
   // facts `host.list` now carries per host (cores, memory, age, platform), each
   // flat and null when unmeasured, in place of a composite score.
-  const MAX_COHORT_PAYLOAD_BYTES = 138_700;
+  // 138_700 → 141_400 for `host.settings` (#14167), measured at 141_370 B
+  // (+2_784): its description, the operation, hostIds, keys, patch and ticket
+  // arguments (the patch one value per named setting, so nothing else can be
+  // asked for), and an output schema of the shared outcome fields, the ticket,
+  // and each host's outcome with the values read and proposed. Offered to this
+  // machine's assistant only, so the external ceiling does not move.
+  const MAX_COHORT_PAYLOAD_BYTES = 141_400;
 
   const wireBytes = (t: WireTool) => t.descriptionBytes + t.paramsBytes + t.outputBytes;
 

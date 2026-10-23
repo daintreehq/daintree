@@ -2,6 +2,7 @@ import {
   HOST_CONTROL_OUTCOMES,
   HOST_ENSURE_ACCEPTABLE,
 } from "../../../shared/types/hostControl.js";
+import { isHostSettingKey } from "../../../shared/types/hostSettings.js";
 import {
   AGENT_LAST_MESSAGE_UNAVAILABLE_REASONS,
   type AgentLastMessageUnavailableReason,
@@ -225,6 +226,32 @@ const AUDIT_RESULT_PROJECTIONS: ReadonlyMap<string, (result: unknown) => unknown
       };
     },
   ],
+  [
+    "host.settings",
+    // Which hosts and settings, and how each went: never a value or the ticket (#14167).
+    (result) => {
+      const record = asRecord(result);
+      if (record === null) return { status: "unrecognized" };
+      return {
+        outcome: fromSet(record.outcome, HOST_OUTCOMES),
+        ticketed: typeof record.ticket === "string",
+        hosts: Array.isArray(record.hosts)
+          ? record.hosts.map((entry) => {
+              const host = asRecord(entry);
+              return {
+                hostId: auditHostId(host?.hostId),
+                outcome: fromSet(host?.outcome, HOST_OUTCOMES),
+                keys: Array.isArray(host?.settings)
+                  ? host.settings
+                      .map((leaf) => asRecord(leaf)?.key)
+                      .filter((key): key is string => isHostSettingKey(key))
+                  : null,
+              };
+            })
+          : null,
+      };
+    },
+  ],
   ["plugin.capturePanel", projectPanelCapture],
   ["project.runCommand", projectCommandRun],
 ]);
@@ -244,6 +271,25 @@ const AUDIT_ARGS_PROJECTIONS: ReadonlyMap<string, (args: unknown) => unknown> = 
   string,
   (args: unknown) => unknown
 >([
+  [
+    "host.settings",
+    // The hosts and settings named, never the values proposed or the ticket.
+    (args) => {
+      const record = asRecord(args);
+      const patch = asRecord(record?.patch);
+      return {
+        operation:
+          record?.operation === "read" ||
+          record?.operation === "preview" ||
+          record?.operation === "apply"
+            ? record.operation
+            : null,
+        hostIds: Array.isArray(record?.hostIds) ? record.hostIds.map(auditHostId) : null,
+        keys: patch ? Object.keys(patch).filter(isHostSettingKey) : null,
+        ticketed: typeof record?.ticket === "string",
+      };
+    },
+  ],
   [
     "host.ensureProject",
     // A host folder is the host's to keep: only whether one was named.

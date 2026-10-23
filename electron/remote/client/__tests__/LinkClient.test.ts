@@ -1,5 +1,6 @@
 import net from "node:net";
 import path from "node:path";
+import { Duplex } from "node:stream";
 import { afterEach, describe, expect, it } from "vitest";
 import { LinkClient, type LinkClientState } from "../LinkClient.js";
 import { logBuffer } from "../../../services/LogBuffer.js";
@@ -396,6 +397,76 @@ describe("LinkClient session start", () => {
       });
     } finally {
       await client?.stop();
+      server.close();
+      await removeTempDir(dir);
+    }
+  });
+});
+
+describe("LinkClient stop", () => {
+  it("lets its GOODBYE reach the host before letting go of a slow transport", async () => {
+    const dir = await makeTempDir();
+    const socketPath = path.join(dir, "h.sock");
+    const seen: number[] = [];
+    const server = net.createServer((socket) => {
+      const decoder = new FrameDecoder();
+      socket.on("data", (chunk: Buffer) => {
+        for (const frame of decoder.push(chunk)) {
+          seen.push(frame.kind);
+          if (frame.kind === ControlKind.HELLO) {
+            const welcome: LinkMessage = {
+              lane: Lane.CONTROL,
+              kind: ControlKind.WELCOME,
+              body: { handshake: TEST_HANDSHAKE, hostName: "h", sessionId: "s1", resumed: false },
+            };
+            socket.write(encodeFrame(messageToFrame(welcome)));
+          }
+          // A host ends the link on a GOODBYE, as HostServer does.
+          if (frame.kind === ControlKind.GOODBYE) socket.end();
+        }
+      });
+    });
+    await new Promise<void>((resolve) => server.listen(socketPath, resolve));
+    // Every write leaves a moment late, so the GOODBYE is still queued when
+    // the stop disposes the transport, which destroys its socket at once.
+    const slow: LinkTransport = {
+      async open() {
+        const raw = net.connect(socketPath);
+        await new Promise<void>((resolve, reject) => {
+          raw.once("connect", resolve);
+          raw.once("error", reject);
+        });
+        const socket = new Duplex({
+          read() {},
+          write(chunk, _encoding, callback) {
+            setTimeout(() => raw.write(chunk, () => callback()), 20);
+          },
+          final(callback) {
+            setTimeout(() => raw.end(callback), 20);
+          },
+          destroy(error, callback) {
+            raw.destroy();
+            callback(error);
+          },
+        });
+        raw.on("data", (chunk) => socket.push(chunk));
+        raw.on("end", () => socket.push(null));
+        return { socket, token: "t", dispose: async () => void socket.destroy() };
+      },
+    };
+    try {
+      client = new LinkClient({
+        transport: slow,
+        handshake: TEST_HANDSHAKE,
+        client: { clientId: "c", clientName: "n", platform: "linux" },
+        session: { pingIntervalMs: 0, idleTimeoutMs: 0 },
+      });
+      client.start();
+      await waitFor(() => client!.getState().status === "connected");
+      await client.stop();
+      client = null;
+      await waitFor(() => seen.includes(ControlKind.GOODBYE));
+    } finally {
       server.close();
       await removeTempDir(dir);
     }

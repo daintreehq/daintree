@@ -95,6 +95,7 @@ import { registerCanopyHostHandlers } from "./handlers/canopyHost.js";
 import { registerPortForwardsHandlers } from "./handlers/portForwards.js";
 import { registerPluginParityHandlers } from "./handlers/pluginParity.js";
 import { registerSettingsCopyHandlers } from "./handlers/settingsCopy.js";
+import { registerHostSettingsHandlers } from "./handlers/hostSettings.js";
 import { isEitherRemoteRoleSupported } from "../remote/buildGate.js";
 import { registerSitePreviewHandlers } from "./handlers/sitePreview.js";
 import { registerElementPickerHandlers } from "./handlers/elementPicker.js";
@@ -303,6 +304,7 @@ export function registerIpcHandlers(deps: HandlerDependencies): () => void {
       register(() => registerPortForwardsHandlers());
       register(() => registerPluginParityHandlers());
       register(() => registerSettingsCopyHandlers());
+      register(() => registerHostSettingsHandlers());
     }
   } catch (error) {
     runCleanups(cleanupFunctions);

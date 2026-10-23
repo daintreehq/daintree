@@ -143,6 +143,10 @@ const m = vi.hoisted(() => {
     uninstallSettingsCopyClient: vi.fn(() => record("uninstall settings copy client")),
     installSettingsCopyHost: vi.fn(),
     uninstallSettingsCopyHost: vi.fn(() => record("uninstall settings copy host")),
+    installSettingsControlClient: vi.fn(),
+    uninstallSettingsControlClient: vi.fn(() => record("uninstall settings control client")),
+    installSettingsControlHost: vi.fn(),
+    uninstallSettingsControlHost: vi.fn(() => record("uninstall settings control host")),
     uninstallPluginHost: vi.fn(() => record("uninstall plugin host")),
     attachHostPluginAssets: vi.fn(),
     hostFilesDispose: vi.fn(() => record("host files dispose")),
@@ -373,6 +377,16 @@ vi.mock("../settingsCopy/install.js", () => ({
   installSettingsCopyHost: vi.fn((server: unknown) => {
     m.installSettingsCopyHost(server);
     return m.uninstallSettingsCopyHost;
+  }),
+}));
+vi.mock("../settingsControl/install.js", () => ({
+  installSettingsControlClient: vi.fn((deps: unknown) => {
+    m.installSettingsControlClient(deps);
+    return m.uninstallSettingsControlClient;
+  }),
+  installSettingsControlHost: vi.fn((server: unknown) => {
+    m.installSettingsControlHost(server);
+    return m.uninstallSettingsControlHost;
   }),
 }));
 vi.mock("../ports/clientInstall.js", () => ({
@@ -1259,6 +1273,7 @@ describe("stopRemoteHosts", () => {
       "uninstall terminal override",
       "advertise.stop",
       "uninstall plugin host",
+      "uninstall settings control host",
       "uninstall settings copy host",
       "uninstall plugin parity host",
       "uninstall projects host",
@@ -1269,6 +1284,7 @@ describe("stopRemoteHosts", () => {
       "host.dispose",
       "server.close",
       "uninstall port forward client",
+      "uninstall settings control client",
       "uninstall settings copy client",
       "uninstall plugin parity client",
       "uninstall host switch service",

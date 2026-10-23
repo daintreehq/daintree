@@ -17,6 +17,9 @@ function fakeRuntime() {
     ensureProject: vi.fn(() =>
       ok({ outcome: "ok" as const, detail: null, retryAfterMs: null, hostId: "h", answer: null })
     ),
+    settings: vi.fn(() =>
+      ok({ outcome: "ok" as const, detail: null, retryAfterMs: null, ticket: null, hosts: [] })
+    ),
   } satisfies HostControlRuntimeHandle;
 }
 
@@ -127,6 +130,33 @@ describe("runHostControlTool (#13493)", () => {
     expect(runtime.ensureProject).toHaveBeenCalledTimes(1);
     expect(runtime.ensureProject).toHaveBeenCalledWith("hub", args);
     expect(bad).toMatchObject({ ok: false, code: "INVALID_ARGS" });
+  });
+
+  it("hands host.settings only the arguments its operation takes (#14167)", async () => {
+    const runtime = fakeRuntime();
+    const uninstall = setHostControlRuntime(runtime);
+    const access = bindHostControl(() => "hub");
+    const preview = { operation: "preview", hostIds: ["h"], patch: { canopyMode: "on" } };
+
+    await runHostControlTool("host.settings", preview, access);
+    await runHostControlTool("host.settings", { operation: "apply", ticket: "t" }, access);
+    const refused = await Promise.all(
+      [
+        // An apply carries its ticket and nothing it could swap in for what was approved.
+        { operation: "apply", ticket: "t", patch: { canopyMode: "on" } },
+        { operation: "apply", ticket: "t", hostIds: ["other"] },
+        { operation: "apply" },
+        { operation: "preview", hostIds: ["h"], patch: {} },
+        { operation: "preview", hostIds: ["h"], patch: { appTheme: "x" } },
+        { operation: "read", hostIds: ["h"], ticket: "t" },
+        { operation: "read" },
+        { operation: "read", hostIds: ["h"], keys: [] },
+      ].map((args) => runHostControlTool("host.settings", args, access))
+    );
+    uninstall();
+    expect(runtime.settings).toHaveBeenCalledTimes(2);
+    expect(runtime.settings).toHaveBeenCalledWith("hub", preview);
+    for (const answer of refused) expect(answer).toMatchObject({ ok: false, code: "INVALID_ARGS" });
   });
 
   it("refuses with no access at all", async () => {

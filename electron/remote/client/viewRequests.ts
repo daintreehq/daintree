@@ -255,6 +255,35 @@ export async function askHostApprovalInWindow(
   }
 }
 
+/**
+ * Put one of this machine's assistants' host settings changes to the person in
+ * that assistant's window (#14167): the dialog `host.settings` raises, showing
+ * the preview this Shell read from every host it names, which dispatches
+ * nothing. The decision, or null when this window couldn't ask.
+ */
+export async function askSettingsApprovalInWindow(
+  webContentsId: number,
+  ask: { actionId: string; args: Record<string, unknown>; subject: string; lines: string[] }
+): Promise<McpConfirmationDecision | null> {
+  const service = await loadMcpServerService();
+  try {
+    const envelope = await service.dispatchActionForHost(
+      webContentsId,
+      ask.actionId,
+      ask.args,
+      false,
+      undefined,
+      "external",
+      { approvalOnly: true, hostPreview: { lines: ask.lines, subject: ask.subject } },
+      { userAgent: "Your assistant, here", token4LastChars: "" }
+    );
+    return envelope.confirmationDecision ?? null;
+  } catch (error) {
+    logger.warn("Couldn't ask about a host settings change in its assistant's window", { error });
+    return null;
+  }
+}
+
 async function requestManifest(webContentsId: number): Promise<ActionManifestEntry[]> {
   const manifest = await (await loadMcpServerService()).requestManifestForHost(webContentsId);
   return manifest.filter((entry) => isHostDispatchableAction(entry.id));

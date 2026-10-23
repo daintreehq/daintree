@@ -1,4 +1,4 @@
-import { HOST_CALL_TOOL, HOST_LIST_TOOL } from "../types/hostControl.js";
+import { HOST_CALL_TOOL, HOST_LIST_TOOL, HOST_SETTINGS_TOOL } from "../types/hostControl.js";
 
 /**
  * The one Daintree Assistant an installation may run outside any project
@@ -24,9 +24,11 @@ export function isGlobalAssistantId(projectId: string): boolean {
  * project, so every project tool reaches it only through `host.call`, where
  * the target host admits it as it would another machine's assistant: the owned
  * tools alone act, on what it launched there or was handed. `host.ensureProject`
- * acts on the caller's own project, which it has none of.
+ * acts on the caller's own project, which it has none of. `host.settings`
+ * names hosts, never a project, and every change it makes the person approves.
  */
 export const GLOBAL_ASSISTANT_TOOL_IDS: ReadonlySet<string> = new Set([
   HOST_LIST_TOOL,
   HOST_CALL_TOOL,
+  HOST_SETTINGS_TOOL,
 ]);
