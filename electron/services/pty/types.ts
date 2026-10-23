@@ -383,14 +383,15 @@ export const SEMANTIC_BUFFER_TRUNCATION_MARKER = "... [truncated]";
 export const SEMANTIC_FLUSH_INTERVAL_MS = 100;
 
 // Scrollback configuration
-// All PTY panels get the same headless-mirror scrollback; there is no "agent
-// tier" scrollback decision any more. This is the pty-host analysis mirror, and
-// every renderer restore (project-view eviction, cold switch, app restart,
-// poisoned-terminal rebuild) replays from it, so the renderer agent ceiling
-// (AGENT_POLICY in src/utils/scrollbackConfig.ts) is pinned to the same shared
-// constant: a warm terminal and a restored one show the same history. Raising
-// it raises both, and needs a pty-host memory review (~12 bytes/cell for every
-// terminal, shells included) and a re-check of the persisted-snapshot size limit.
+// Agent headless-mirror scrollback (launch hint or runtime promotion). This is
+// the pty-host analysis mirror, and every renderer restore (project-view
+// eviction, cold switch, app restart, poisoned-terminal rebuild) replays from
+// it, so the renderer agent ceiling (AGENT_POLICY in src/utils/scrollbackConfig.ts)
+// is pinned to the same shared constant: a warm terminal and a restored one show
+// the same history. Plain shells start at PLAIN_SHELL_SCROLLBACK_MAX, the most
+// their renderer can keep, and grow to this on promotion (#14216). Raising it
+// needs a pty-host memory review (~12 bytes/cell per agent terminal) and a
+// re-check of the persisted-snapshot size limit.
 export const DEFAULT_SCROLLBACK = PTY_MIRROR_SCROLLBACK;
 
 // Preserved-snapshot eviction (issue #10839)

@@ -15,6 +15,7 @@ import type {
 } from "../../../shared/types/pty-host.js";
 import type { PanelTitleMode } from "../../../shared/types/panel.js";
 import { getEffectiveAgentConfig } from "../../../shared/config/agentRegistry.js";
+import { PLAIN_SHELL_SCROLLBACK_MAX } from "../../../shared/config/scrollback.js";
 import { applyXtermReflowFastpath } from "../../../shared/utils/xtermReflowFastpath.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import { PartialEscapeTracker } from "../../../shared/utils/terminalPartialEscapeTail.js";
@@ -431,9 +432,9 @@ export class TerminalProcess {
     const launchAgentId = options.launchAgentId;
     const hasLaunchHint = !!launchAgentId;
 
-    // Every PTY now gets a generous scrollback. The previous "agent tier vs
-    // plain tier" split was retired along with the tiered capability model.
-    this._scrollback = DEFAULT_SCROLLBACK;
+    // A plain shell's mirror holds no more than its renderer could ever show;
+    // runtime promotion grows it (see TerminalAgentDetection). #14216
+    this._scrollback = hasLaunchHint ? DEFAULT_SCROLLBACK : PLAIN_SHELL_SCROLLBACK_MAX;
 
     this.terminalInfo = {
       id,
@@ -2416,6 +2417,7 @@ export class TerminalProcess {
         },
         startActivityMonitor: () => this.startActivityMonitor(),
         stopActivityMonitor: () => this.stopActivityMonitor(),
+        growScrollback: (lines) => this.growScrollback(lines),
       },
       result,
       spawnedAt

@@ -2,8 +2,13 @@ export const SCROLLBACK_MIN = 100;
 export const SCROLLBACK_MAX = 10000;
 export const SCROLLBACK_DEFAULT = 1000;
 export const SCROLLBACK_BACKGROUND = 500;
+// The most scrollback a plain-shell renderer can ever keep, whatever the base
+// setting or project override. The pty-host mirror for a plain shell is sized
+// to this so restore never has more to give than the renderer can hold.
+export const PLAIN_SHELL_SCROLLBACK_MAX = 2000;
 
-// Lines each pty-host headless mirror keeps. Restores (cold switch, view
+// Lines an agent terminal's pty-host headless mirror keeps (plain shells keep
+// PLAIN_SHELL_SCROLLBACK_MAX until promoted). Restores (cold switch, view
 // eviction, app restart, poisoned-terminal rebuild) replay from this mirror, so
 // it is also the most history a renderer terminal can ever get back — the
 // renderer's agent ceiling is pinned to it rather than sized independently.
