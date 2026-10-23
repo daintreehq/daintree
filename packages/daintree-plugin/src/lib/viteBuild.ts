@@ -62,8 +62,24 @@ export function findServerConfig(dir: string): string | null {
   return SERVER_CONFIG_NAMES.find((name) => existsSync(path.join(dir, name))) ?? null;
 }
 
+// An Element Picker provider's guest entry is its own standalone browser bundle
+// (`daintreePlugin({ target: "guest" })`), so it gets a pass of its own too.
+const GUEST_CONFIG_NAMES = [
+  "vite.config.guest.js",
+  "vite.config.guest.mjs",
+  "vite.config.guest.ts",
+  "vite.config.guest.cjs",
+  "vite.config.guest.mts",
+  "vite.config.guest.cts",
+] as const;
+
+/** The plugin's guest-target Vite config filename, or null if it has none. */
+export function findGuestConfig(dir: string): string | null {
+  return GUEST_CONFIG_NAMES.find((name) => existsSync(path.join(dir, name))) ?? null;
+}
+
 export interface VitePlan {
-  /** Whether this project has a second, server-target config. */
+  /** Whether this project has more than one Vite config (a server or guest target besides the default). */
   dualConfig: boolean;
   /** Arg sets for a one-shot build, in order. Run these sequentially. */
   oneShot: string[][];
@@ -95,16 +111,18 @@ export interface VitePlan {
  * sibling target's bundle.
  */
 export function resolveVitePlan(dir: string): VitePlan {
-  const serverConfig = findServerConfig(dir);
-  if (!serverConfig) {
+  const extra = [findServerConfig(dir), findGuestConfig(dir)].filter(
+    (config): config is string => config !== null
+  );
+  if (extra.length === 0) {
     return { dualConfig: false, oneShot: [["build"]], watch: [["build", "--watch"]] };
   }
   return {
     dualConfig: true,
-    oneShot: [["build"], ["build", "--config", serverConfig]],
+    oneShot: [["build"], ...extra.map((config) => ["build", "--config", config])],
     watch: [
       ["build", "--watch", "--no-emptyOutDir"],
-      ["build", "--watch", "--config", serverConfig, "--no-emptyOutDir"],
+      ...extra.map((config) => ["build", "--watch", "--config", config, "--no-emptyOutDir"]),
     ],
   };
 }

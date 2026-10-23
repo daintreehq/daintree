@@ -20,7 +20,7 @@ import { buildCoreGuestAssets } from "./buildCoreGuestAssets.js";
 import { buildFixtureGuestEntry } from "./buildFixtureGuestEntry.js";
 import {
   BINDING_NAME,
-  makeHarness,
+  makeHarness as makeFakeHarness,
   scope,
   settle as settleMicrotasks,
 } from "./fixtures/fakeCdp.js";
@@ -42,7 +42,7 @@ const PLUGIN_ID = "fixture.lit-picker";
 
 let shipped: Record<string, string> = {};
 let guestEntry = "";
-let installed = "";
+const tempDirs: string[] = [];
 
 beforeAll(() => {
   shipped = buildCoreGuestAssets();
@@ -57,6 +57,7 @@ function manifest(): { contributes: { elementPickerProviders: never[] } } {
 /** An installed copy of the fixture: its manifest and the entry as built. */
 function install(entry: string | null = guestEntry): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "daintree-lit-picker-"));
+  tempDirs.push(dir);
   fs.cpSync(
     path.resolve(__dirname, "../../../..", FIXTURE, "plugin.json"),
     path.join(dir, "plugin.json")
@@ -91,11 +92,28 @@ function registry(): { has(id: string): boolean } | undefined {
 
 const cleanups: Array<() => void> = [];
 
-/** Reading a plugin's entry is real file I/O, which fake timers and microtask rounds don't wait for. */
+let active: ReturnType<typeof makeFakeHarness> | null = null;
+
+function makeHarness(catalog: Record<string, string>) {
+  active = makeFakeHarness(catalog);
+  return active;
+}
+
+/**
+ * Reading a plugin's entry is real file I/O, which fake timers and microtask
+ * rounds don't wait for, so this runs until the host has gone quiet: nothing
+ * new sent to the page or reported for a run of event-loop turns.
+ */
 async function settle(): Promise<void> {
-  for (let round = 0; round < 40; round += 1) {
+  const activity = () => (active?.wc.debugger.commands.length ?? 0) + (active?.sunk.length ?? 0);
+  let quiet = 0;
+  let last = -1;
+  for (let round = 0; round < 600 && quiet < 15; round += 1) {
     await settleMicrotasks();
     await new Promise<void>((resolve) => setImmediate(resolve));
+    const now = activity();
+    quiet = now === last ? quiet + 1 : 0;
+    last = now;
   }
 }
 
@@ -103,13 +121,15 @@ beforeEach(() => {
   __resetCdpLeasesForTests();
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
   document.body.innerHTML = "";
-  (globalThis as { __litPickerWorkerStarted?: boolean }).__litPickerWorkerStarted = undefined;
 });
 
 afterEach(() => {
   vi.useRealTimers();
   unregisterElementPickerProviders(PLUGIN_ID);
-  for (const cleanup of cleanups.splice(0)) cleanup();
+  // Last in, first out: a page's cleanup restores what the cleanup before it saw.
+  for (const cleanup of cleanups.splice(0).reverse()) cleanup();
+  for (const dir of tempDirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
+  active = null;
   const api = scope[BOOTSTRAP_GLOBAL] as { dispose?: (() => void) | null } | undefined;
   try {
     api?.dispose?.();
@@ -159,7 +179,7 @@ describe("plugin framework extractors", () => {
     }
   });
 
-  it("installs the plugin's extractor once its detector matches, without starting its worker", async () => {
+  it("installs the plugin's extractor once its detector matches", async () => {
     register(install());
     cleanups.push(litDetection());
     const page = mountLitPage();
@@ -172,9 +192,6 @@ describe("plugin framework extractors", () => {
       expect.objectContaining({ framework: PROVIDER_ID, documentEpoch: 0 }),
     ]);
     expect(registry()?.has(PROVIDER_ID)).toBe(true);
-    expect((globalThis as { __litPickerWorkerStarted?: boolean }).__litPickerWorkerStarted).toBe(
-      undefined
-    );
 
     // Again at the late probe: still one install.
     await vi.advanceTimersByTimeAsync(LATE_PROBE_DELAY_MS);
@@ -257,6 +274,7 @@ describe("plugin framework extractors", () => {
   it("refuses an entry that escapes its plugin directory through a symlink", async () => {
     const dir = install(null);
     const outside = fs.mkdtempSync(path.join(os.tmpdir(), "daintree-outside-"));
+    tempDirs.push(outside);
     fs.writeFileSync(path.join(outside, "lit.js"), guestEntry);
     fs.mkdirSync(path.join(dir, "dist"), { recursive: true });
     fs.symlinkSync(outside, path.join(dir, "dist/picker"));

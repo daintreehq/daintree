@@ -21,6 +21,15 @@ detectGlobals(globalThis, detections);
 sampleDocument(document, detections, { expandos: true });
 const found = detections.toArray();
 // Core detections first: a page that saturates the wire limit keeps what it always did.
-api.result = found.concat(
-  detectProviders(api.providers, globalThis, document, DETECTION_LIMITS.detections - found.length)
-);
+let fromProviders: FrameworkDetection[] = [];
+try {
+  fromProviders = detectProviders(
+    api.providers,
+    globalThis,
+    document,
+    DETECTION_LIMITS.detections - found.length
+  );
+} catch {
+  // A page that breaks a plugin's detection must not cost the core detections already found.
+}
+api.result = found.concat(fromProviders);

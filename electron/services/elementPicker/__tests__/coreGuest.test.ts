@@ -4,6 +4,7 @@ vi.mock("electron", () => ({ app: { getAppPath: () => "/app", isPackaged: false 
 
 import { ELEMENT_PICKER_PROTOCOL_VERSION } from "../../../../shared/elementPicker/protocol.js";
 import type { FrameworkDetection } from "../../../../shared/elementPicker/observation.js";
+import type { ElementPickerProviderContribution } from "../../../../shared/elementPicker/providers.js";
 import {
   registerElementPickerProviders,
   unregisterElementPickerProviders,
@@ -48,6 +49,8 @@ function harness(
     worldGone?: true;
     /** How the page answers a reselect: a value, or a thrown error. */
     reselect?: (() => unknown) | { error: Error };
+    /** Reads a plugin provider's entry; the default returns a stub body. */
+    loadPluginAsset?: CoreGuestDeps["loadPluginAsset"];
   } = {}
 ) {
   const calls: Call[] = [];
@@ -62,6 +65,7 @@ function harness(
     probe: "/* probe */",
     "extractor:svelte": "/* svelte */",
     "extractor:react": "/* react */",
+    "plugin-runtime": "/* runtime */",
     ...overrides.assets,
   };
 
@@ -108,6 +112,7 @@ function harness(
       if (asset instanceof Error) throw asset;
       return asset ?? null;
     },
+    loadPluginAsset: overrides.loadPluginAsset ?? (async () => "/* plugin entry */"),
     emit: (payload) => emitted.push(payload),
     liveEpoch: () => state.epoch,
     mainWorld: () => ({ ...main }),
@@ -137,6 +142,18 @@ function harness(
       const match = /api\.setAvailability\((.*)\);/.exec(String(call.params.expression ?? ""));
       return match === null ? [] : [JSON.parse(match[1]!) as PickerAvailability];
     });
+  const removals = () =>
+    calls.filter(
+      (call) =>
+        call.method === "Runtime.evaluate" &&
+        (call.params.expression as string).includes("registry.unregister(")
+    );
+  const pluginInstalls = () =>
+    calls.filter(
+      (call) =>
+        call.method === "Runtime.evaluate" &&
+        (call.params.expression as string).includes('framework: "acme.qwik.qwik"')
+    );
   /** The extractor assets read, in the order they were asked for. */
   const extractorsLoaded = () => loaded.filter((id) => id.startsWith("extractor:"));
   return {
@@ -153,6 +170,8 @@ function harness(
     extractorEvaluates,
     extractorsLoaded,
     availabilities,
+    removals,
+    pluginInstalls,
   };
 }
 
@@ -633,5 +652,143 @@ describe("CoreGuest", () => {
     expect(dispose.params.contextId).toBe(CONTEXT_ID);
     expect(dispose.params.expression).toContain("api.installId !== 7");
     expect(h.guest.isTrustedContext(CONTEXT_ID)).toBe(false);
+  });
+});
+
+const QWIK: ElementPickerProviderContribution = {
+  id: "qwik",
+  name: "Qwik",
+  detection: [{ kind: "global", name: "qwikevents", match: "exact" }],
+  guestEntry: "guest/qwik.js",
+};
+const QWIK_DETECTED: FrameworkDetection[] = [
+  { framework: "acme.qwik.qwik", signals: [{ via: "global", name: "qwikevents" }] },
+];
+const deferred = () => {
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => (release = resolve));
+  return { gate, release };
+};
+
+describe("CoreGuest plugin providers", () => {
+  afterEach(() => unregisterElementPickerProviders("acme.qwik"));
+
+  it("installs nothing, reads nothing and subscribes to nothing when no provider is registered", async () => {
+    const loadPluginAsset = vi.fn(async () => "x");
+    const h = harness({ probeResult: REACT, loadPluginAsset });
+    await h.install();
+    h.guest.onGuestEvent(0, READY);
+    await h.settle();
+    expect(loadPluginAsset).not.toHaveBeenCalled();
+    expect(h.loaded).not.toContain("plugin-runtime");
+    const probe = h.calls.find((c) => String(c.params.expression).includes("result: null,"));
+    expect(String(probe?.params.expression)).toContain("providers: []");
+  });
+
+  it("refuses a detection naming a registered provider by a marker it never declared", async () => {
+    registerElementPickerProviders("acme.qwik", "acme.qwik", [QWIK], "/plugins/acme.qwik");
+    const loadPluginAsset = vi.fn(async () => "x");
+    const h = harness({
+      probeResult: [
+        { framework: "acme.qwik.qwik", signals: [{ via: "global", name: "somethingElse" }] },
+        { framework: "acme.qwik.qwik", signals: [{ via: "attribute", name: "qwikevents" }] },
+      ],
+      loadPluginAsset,
+    });
+    await h.install();
+    h.guest.onGuestEvent(0, READY);
+    await h.settle();
+    expect(loadPluginAsset).not.toHaveBeenCalled();
+    expect(h.pluginInstalls()).toHaveLength(0);
+  });
+
+  it("installs once its declared marker is seen, then removes it only when the registration goes", async () => {
+    registerElementPickerProviders("acme.qwik", "acme.qwik", [QWIK], "/plugins/acme.qwik");
+    const h = harness({ probeResult: QWIK_DETECTED });
+    await h.install();
+    h.guest.onGuestEvent(0, READY);
+    await h.settle();
+    expect(h.pluginInstalls()).toHaveLength(1);
+    expect(h.removals()).toHaveLength(0);
+
+    unregisterElementPickerProviders("acme.qwik");
+    await h.settle();
+    expect(h.removals()).toHaveLength(1);
+    expect(h.availabilities().at(-1)?.extractors).toEqual({});
+  });
+
+  it("evaluates nothing, and reports nothing, for a plugin disabled while its entry was being read", async () => {
+    registerElementPickerProviders("acme.qwik", "acme.qwik", [QWIK], "/plugins/acme.qwik");
+    const read = deferred();
+    const h = harness({
+      probeResult: QWIK_DETECTED,
+      loadPluginAsset: async () => {
+        await read.gate;
+        return "/* entry */";
+      },
+    });
+    await h.install();
+    h.guest.onGuestEvent(0, READY);
+    // Not `settle`: the queue is held by the read until it is released.
+    for (let round = 0; round < 20; round += 1) await Promise.resolve();
+    unregisterElementPickerProviders("acme.qwik");
+    read.release();
+    await h.settle();
+
+    expect(h.pluginInstalls()).toHaveLength(0);
+    expect(h.emitted.filter((p) => p.kind === "host-issue")).toHaveLength(0);
+    expect(h.emitted.filter((p) => p.kind === "extractor-installed")).toHaveLength(0);
+  });
+
+  it("takes out an extractor whose plugin was disabled while it was installing, and reports no failure", async () => {
+    registerElementPickerProviders("acme.qwik", "acme.qwik", [QWIK], "/plugins/acme.qwik");
+    const h = harness({
+      probeResult: QWIK_DETECTED,
+      extractorStatus: EXTRACTOR_INSTALL_STATUS.threw,
+    });
+    const send = h.deps.send;
+    h.deps.send = async (method, params = {}) => {
+      if (String(params.expression ?? "").includes('framework: "acme.qwik.qwik"')) {
+        unregisterElementPickerProviders("acme.qwik");
+      }
+      return send(method, params);
+    };
+    await h.install();
+    h.guest.onGuestEvent(0, READY);
+    await h.settle();
+
+    expect(h.emitted.filter((p) => p.kind === "host-issue")).toHaveLength(0);
+    // Removal is idempotent in the page; what matters is that it was sent after the install.
+    expect(h.removals().length).toBeGreaterThan(0);
+  });
+
+  it("looks again when a registration returns after the plugin was unloaded", async () => {
+    registerElementPickerProviders("acme.qwik", "acme.qwik", [QWIK], "/plugins/acme.qwik");
+    const h = harness({ probeResult: QWIK_DETECTED });
+    await h.install();
+    h.guest.onGuestEvent(0, READY);
+    await h.settle();
+    expect(h.pluginInstalls()).toHaveLength(1);
+
+    // An asynchronous reload: the unload lands first, the new registration later.
+    unregisterElementPickerProviders("acme.qwik");
+    await h.settle();
+    registerElementPickerProviders("acme.qwik", "acme.qwik", [QWIK], "/plugins/acme.qwik");
+    await h.settle();
+
+    expect(h.pluginInstalls()).toHaveLength(2);
+  });
+
+  it("removes a failed attempt's leftovers, so a half-installed extractor can't outlive its plugin", async () => {
+    registerElementPickerProviders("acme.qwik", "acme.qwik", [QWIK], "/plugins/acme.qwik");
+    const h = harness({
+      probeResult: QWIK_DETECTED,
+      extractorStatus: EXTRACTOR_INSTALL_STATUS.unregistered,
+    });
+    await h.install();
+    h.guest.onGuestEvent(0, READY);
+    await h.settle();
+    expect(h.emitted.filter((p) => p.kind === "host-issue")).toHaveLength(1);
+    expect(h.removals().length).toBeGreaterThan(0);
   });
 });

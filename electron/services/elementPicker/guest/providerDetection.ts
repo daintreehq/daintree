@@ -24,6 +24,7 @@ export interface ProviderProbe {
 /** Property names read off the global object when a rule asks for a prefix. */
 const GLOBAL_NAME_LIMIT = 4096;
 const NODE_KEY_LIMIT = 32;
+const EXPANDO_NAME_LIMIT = 128;
 
 function nameMatches(rule: ProviderProbeRule, name: string): boolean {
   return rule.match === "exact" ? name === rule.name : name.startsWith(rule.name);
@@ -60,9 +61,10 @@ function nodeHas(node: Element, rule: ProviderProbeRule): boolean {
       }
       return false;
     }
-    if (rule.match === "exact" && Object.hasOwn(node, rule.name)) return true;
-    const keys = Object.keys(node);
-    const limit = Math.min(keys.length, NODE_KEY_LIMIT);
+    if (rule.match === "exact") return Object.hasOwn(node, rule.name);
+    // Own names, enumerable or not: frameworks define their expandos either way.
+    const keys = Object.getOwnPropertyNames(node);
+    const limit = Math.min(keys.length, EXPANDO_NAME_LIMIT);
     for (let index = 0; index < limit; index += 1) {
       if (nameMatches(rule, keys[index] as string)) return true;
     }

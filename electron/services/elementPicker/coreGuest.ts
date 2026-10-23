@@ -170,7 +170,9 @@ export class CoreGuest {
   private readonly extractors = new Map<ElementPickerProviderId, ExtractorAvailability>();
   /** The registrations plugin extractors were requested for, so a later change can tell which went away. */
   private readonly pluginProviders = new Map<string, RegisteredElementPickerProvider>();
-  /** Held only while a plugin extractor exists in the document. */
+  /** Ids whose extractor was taken out this document, so a registration that arrives later is looked for. */
+  private readonly revokedProviders = new Set<string>();
+  /** Held from the first plugin extractor in a document until the document goes. */
   private unsubscribeProviders: (() => void) | null = null;
   /** Whether the last scheduled look at this document has come back; until it has, nothing is known to be absent. */
   private detection: PickerAvailability["detection"] = "pending";
@@ -228,6 +230,7 @@ export class CoreGuest {
 
   private releaseProviders(): void {
     this.pluginProviders.clear();
+    this.revokedProviders.clear();
     this.unsubscribeProviders?.();
     this.unsubscribeProviders = null;
   }
@@ -540,22 +543,30 @@ export class CoreGuest {
       })) as EvaluateResult | undefined;
     } catch (err) {
       if (!this.isCurrent(epoch)) return;
+      if (plugin !== undefined && !isElementPickerProviderCurrent(plugin)) {
+        await this.dropRevoked(framework);
+        return;
+      }
       // The page's world went with its document, which the bridge has not
       // retired yet: nobody's failure, and nothing to report, but over.
-      if (isGoneContextError(err)) this.extractors.set(framework, "failed");
-      else this.fail(epoch, framework, "the extractor could not be evaluated");
+      if (isGoneContextError(err)) {
+        this.extractors.set(framework, "failed");
+      } else {
+        this.fail(epoch, framework, "the extractor could not be evaluated");
+        // A timeout can land after the registry took the extractor in.
+        if (plugin !== undefined) await this.removeInGuest(framework);
+      }
       return;
     }
     if (!this.isCurrent(epoch)) return;
+    // Revoked while it was installing, whatever came of it: no verdict on a
+    // registration that is gone, and anything it put in the page goes too.
+    if (plugin !== undefined && !isElementPickerProviderCurrent(plugin)) {
+      await this.dropRevoked(framework);
+      return;
+    }
     const status = evaluated?.exceptionDetails ? null : evaluated?.result?.value;
     if (status === EXTRACTOR_INSTALL_STATUS.installed) {
-      // Revoked while it was installing: the code is in the page now, so it goes.
-      if (plugin !== undefined && !isElementPickerProviderCurrent(plugin)) {
-        this.pluginProviders.delete(framework);
-        this.extractors.delete(framework);
-        await this.removeInGuest(framework);
-        return;
-      }
       this.extractors.set(framework, "installed");
       this.deps.emit({
         kind: "extractor-installed",
@@ -580,6 +591,14 @@ export class CoreGuest {
         ? "the extractor threw while installing"
         : "the extractor did not register"
     );
+    if (plugin !== undefined) await this.removeInGuest(framework);
+  }
+
+  /** The registration went away mid-install: no issue to report, and nothing of it left in the page. */
+  private async dropRevoked(id: ElementPickerProviderId): Promise<void> {
+    // Left in `pluginProviders` so the queued reconcile still sees the registration go.
+    this.extractors.set(id, "failed");
+    await this.removeInGuest(id);
   }
 
   private async installPluginExtractor(
@@ -619,8 +638,7 @@ export class CoreGuest {
     // Checked again after the read, and again by `runInstall` once it has run:
     // the plugin can be disabled between any two of these steps.
     if (!isElementPickerProviderCurrent(provider)) {
-      this.pluginProviders.delete(id);
-      this.extractors.delete(id);
+      this.extractors.set(id, "failed");
       return;
     }
     await this.runInstall(
@@ -631,7 +649,11 @@ export class CoreGuest {
     );
   }
 
-  /** Subscribed once a plugin extractor exists, and dropped with the document, so nothing listens on a vanilla install. */
+  /**
+   * Subscribed when the first plugin extractor is requested and kept until the
+   * document goes, so a registration that comes back after an unload (a reload
+   * is asynchronous) is still heard. Nothing listens on a vanilla install.
+   */
   private watchProviders(epoch: number): void {
     if (this.unsubscribeProviders !== null) return;
     this.unsubscribeProviders = onElementPickerProvidersChanged(() => {
@@ -645,25 +667,26 @@ export class CoreGuest {
   private async reconcileProviders(epoch: number): Promise<void> {
     if (!this.isCurrent(epoch)) return;
     let changed = false;
-    let replaced = false;
     for (const [id, provider] of [...this.pluginProviders]) {
       if (isElementPickerProviderCurrent(provider)) continue;
       this.pluginProviders.delete(id);
       const was = this.extractors.get(id);
       this.extractors.delete(id);
+      this.revokedProviders.add(id);
       changed = true;
-      if (getElementPickerProvider(id, this.deps.projectId) !== undefined) replaced = true;
-      if (was === "installed") await this.removeInGuest(id);
+      // A failed attempt may still have left its registration in the page.
+      if (was === "installed" || was === "failed") await this.removeInGuest(id);
       if (!this.isCurrent(epoch)) return;
     }
-    if (this.pluginProviders.size === 0) {
-      this.unsubscribeProviders?.();
-      this.unsubscribeProviders = null;
+    let returned = false;
+    for (const id of [...this.revokedProviders]) {
+      if (getElementPickerProvider(id, this.deps.projectId) === undefined) continue;
+      this.revokedProviders.delete(id);
+      returned = true;
     }
-    if (!changed) return;
-    await this.publishAvailability(epoch);
-    // A reload put a new registration under the same id: look again, so it installs on detection like any other.
-    if (replaced) this.queueProbe(epoch, false);
+    if (changed) await this.publishAvailability(epoch);
+    // A reload put a registration back under an id this document had: look again, so it installs on detection like any other.
+    if (returned) this.queueProbe(epoch, false);
   }
 
   private async removeInGuest(id: ElementPickerProviderId): Promise<void> {

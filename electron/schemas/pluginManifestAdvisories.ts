@@ -189,7 +189,8 @@ export async function collectManifestAdvisories({
   // `dist/` — is skipped so pre-build validation stays quiet. Packaging and
   // doctor enforce the full asset inventory; this only catches typos early.
   for (const asset of collectPluginManifestAssets(manifest)) {
-    if (asset.module) await warnIfTargetMissing(dir, asset.ref, asset.field, warnings);
+    if (asset.module || asset.built)
+      await warnIfTargetMissing(dir, asset.ref, asset.field, warnings);
   }
 
   return warnings;

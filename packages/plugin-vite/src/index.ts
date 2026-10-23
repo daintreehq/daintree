@@ -329,18 +329,28 @@ export function daintreePlugin(options: DaintreePluginOptions = {}): Plugin {
       throw new Error("Document packages require a browser target");
     return {
       name: "daintree-plugin-vite",
-      config: () => ({
-        // A library build leaves `process.env.NODE_ENV` alone, and the page has no `process`.
-        define: { "process.env.NODE_ENV": JSON.stringify("production") },
-        build: {
-          target: "es2022",
-          minify: true,
-          cssCodeSplit: false,
-          lib: { name: GUEST_ENTRY_GLOBAL, formats: ["iife"] },
-          // The page offers no import map: nothing the entry imports may stay external.
-          rollupOptions: { external: [], output: { codeSplitting: false, exports: "named" } },
-        },
-      }),
+      config: (userConfig) => {
+        const lib = userConfig.build?.lib;
+        if (!lib)
+          throw new Error(
+            'A guest target needs build.lib.entry, e.g. lib: { entry: "src/lit.ts" }'
+          );
+        // Set in place rather than merged: Vite concatenates arrays, so a merged
+        // `formats` would add to the author's instead of replacing it.
+        lib.name = GUEST_ENTRY_GLOBAL;
+        lib.formats = ["iife"];
+        return {
+          // A library build leaves `process.env.NODE_ENV` alone, and the page has no `process`.
+          define: { "process.env.NODE_ENV": JSON.stringify("production") },
+          build: {
+            target: "es2022",
+            minify: true,
+            cssCodeSplit: false,
+            // The page offers no import map: nothing the entry imports may stay external.
+            rollupOptions: { external: [], output: { codeSplitting: false, exports: "named" } },
+          },
+        };
+      },
       // After every other plugin: Vite's CSS plugin emits its stylesheet in its own
       // `generateBundle`, and a check that ran first would never see it.
       generateBundle: {
@@ -361,6 +371,13 @@ export function daintreePlugin(options: DaintreePluginOptions = {}): Plugin {
           if (external.length > 0) {
             this.error(
               `A guest entry must be self-contained: it has no module loader, so bundle every dependency. Still imported: ${external.join(", ")}`
+            );
+          }
+          // A specifier only known at runtime survives bundling as a bare `import()`,
+          // which would resolve against the previewed page rather than the plugin.
+          if (/\bimport\s*\(/.test(chunk.code)) {
+            this.error(
+              "A guest entry can't load modules at runtime: the output still contains an import() expression. Use a literal specifier so it is bundled."
             );
           }
           if (/\beval\s*\(|\bnew\s+Function\s*\(/.test(chunk.code)) {
