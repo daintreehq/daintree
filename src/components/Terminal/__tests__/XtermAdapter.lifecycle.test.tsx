@@ -83,7 +83,9 @@ const mocks = vi.hoisted(() => {
     updateRefreshTierProvider: vi.fn(),
     applyRendererPolicy: vi.fn(),
     boostRefreshRate: vi.fn(),
-    addAltBufferListener: vi.fn(() => vi.fn()),
+    addAltBufferListener: vi.fn(
+      (_id: string, _callback: (isAltBuffer: boolean) => void): (() => void) => vi.fn()
+    ),
     addPaddingPaintListener: vi.fn(
       (_id: string, handler: (paint: TerminalPaddingPaint) => void) => {
         paddingPaintHandler = handler;
