@@ -70,7 +70,7 @@ export async function ensureWorkspaceHost(
 }
 
 /** The workspace host's whole worktree listing for the project, or null with no host. */
-async function readProjectWorktreeListing(
+export async function readProjectWorktreeListing(
   project: Project,
   deps: ViewlessDeps
 ): Promise<WorktreeListResult | null> {

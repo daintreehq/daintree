@@ -11,7 +11,7 @@ import {
 import { getViewlessHelpBaseManifest } from "../mcp-server/baseManifest.js";
 import type { ViewlessActionRequest, ViewlessDeps } from "./ViewlessActionExecutor.js";
 import { countProjectPanels } from "./viewlessTerminals.js";
-import { readProjectWorktrees } from "./viewlessWorktrees.js";
+import { readProjectWorktreeListing } from "./viewlessWorktrees.js";
 import {
   viewlessFailure as failure,
   viewlessSuccess as success,
@@ -83,13 +83,17 @@ export async function runActionsGetContext(
       ? request.context?.activeWorktreeId
       : undefined;
   try {
-    const [state, worktrees, terminalCount] = await Promise.all([
+    const [state, listing, terminalCount] = await Promise.all([
       deps.getProjectState(project.id).catch(() => null),
-      readProjectWorktrees(project, deps),
+      readProjectWorktreeListing(project, deps),
       countProjectPanels(project, deps),
     ]);
-    // With no host there is no inventory to count, which is not none.
-    if (worktrees === null) return failure("EXECUTION_ERROR", "Workspace service is not available");
+    // With no host, or one that answered an empty list before classifying the
+    // folder, the inventory is unknown, which is not none.
+    const worktrees = listing?.worktrees ?? null;
+    if (worktrees === null || (worktrees.length === 0 && listing?.gitBacked === null)) {
+      return failure("EXECUTION_ERROR", "The workspace host hasn't listed this project's worktrees yet");
+    }
     const activeWorktreeId = contextWorktreeId ?? state?.activeWorktreeId;
     const activeWorktree =
       activeWorktreeId !== undefined

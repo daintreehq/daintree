@@ -118,6 +118,22 @@ describe("core reads with no frontend", () => {
       expect(result).toMatchObject({ ok: false, error: { code: "EXECUTION_ERROR" } });
     });
 
+    it("fails rather than reporting no worktrees while the host hasn't classified the folder", async () => {
+      const made = makeDeps({ getWorkspaceHosts: () => makeHosts() });
+      made.invoke.mockImplementation(async (_id, channel) =>
+        channel === CHANNELS.WORKTREE_GET_ALL_WITH_STATUS
+          ? { worktrees: [], gitBacked: null }
+          : undefined
+      );
+
+      const result = await executeViewlessAction(
+        request("actions.getContext", undefined),
+        made.deps
+      );
+
+      expect(result).toMatchObject({ ok: false, error: { code: "EXECUTION_ERROR" } });
+    });
+
     it("prefers the call's own worktree, and reports a stale one without its details", async () => {
       const { deps } = makeDeps(
         { getWorkspaceHosts: () => makeHosts() },
