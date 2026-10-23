@@ -134,7 +134,7 @@ interface PluginInstallerDeps {
 /** Whether a package runs as one shared singleton or as one instance per project. */
 export type InstalledInstanceMode = "singleton" | "project";
 
-type InstalledManifestFields = { version?: unknown; instanceMode?: unknown };
+type InstalledManifestFields = { name?: unknown; version?: unknown; instanceMode?: unknown };
 
 function instanceModeOf(manifest: { instanceMode?: unknown }): InstalledInstanceMode {
   return manifest.instanceMode === "project" ? "project" : "singleton";
@@ -639,9 +639,9 @@ export class PluginInstaller {
       // A mode change strands state either way (#14256): settings, grants and
       // enablements are keyed by the bare id for a singleton and per project
       // for instances, and nothing carries one across to the other.
-      const installedMode = this.installedInstanceMode(pluginId, installedManifest);
       const incomingMode = instanceModeOf(manifest);
-      if (installedMode !== null && installedMode !== incomingMode) {
+      const installedModes = this.installedInstanceModes(pluginId, installedManifest);
+      if (installedModes.some((mode) => mode !== incomingMode)) {
         return fail(
           "instance_mode_changed",
           incomingMode === "project"
@@ -881,13 +881,21 @@ export class PluginInstaller {
     return this.deps.getInstalledVersion(pluginId);
   }
 
-  /** How the plugin installed under `pluginId` runs, read from the same sources as {@link installedVersion}. */
-  private installedInstanceMode(
+  /**
+   * Every mode the plugin installed under `pluginId` is known to run in: the
+   * manifest in its folder when that is this plugin's, and what the plugin
+   * service holds for it. Both count, unlike {@link installedVersion}: a dev
+   * link edited while disabled can say one thing on disk while the service
+   * still runs it, and keeps its state, the other way.
+   */
+  private installedInstanceModes(
     pluginId: string,
     installedManifest: InstalledManifestFields | null
-  ): InstalledInstanceMode | null {
-    const declared = installedManifest ? declaredInstanceMode(installedManifest) : null;
-    return declared ?? this.deps.getInstalledInstanceMode(pluginId);
+  ): InstalledInstanceMode[] {
+    const declared =
+      installedManifest?.name === pluginId ? declaredInstanceMode(installedManifest) : null;
+    const recorded = this.deps.getInstalledInstanceMode(pluginId);
+    return [declared, recorded].filter((mode): mode is InstalledInstanceMode => mode !== null);
   }
 
   /**
