@@ -8,7 +8,7 @@ import { getNarrowPanel } from "./selectors";
 
 type CarrierPanel = Parameters<typeof getNarrowPanel>[0][string];
 import { isDevPreviewPanel, type PanelKind } from "@shared/types/panel";
-import { terminalInstanceService } from "@/services/TerminalInstanceService";
+import { with as withTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
 import { TerminalRefreshTier } from "@/types";
 import { saveNormalized, saveTabGroups } from "./persistence";
 import { optimizeForDock } from "./layout";
@@ -105,7 +105,9 @@ export const createBackgroundActions = (
     });
 
     if (panelKindHasPty(terminal.kind ?? "terminal")) {
-      terminalInstanceService.applyRendererPolicy(id, TerminalRefreshTier.BACKGROUND);
+      withTerminalService((service) =>
+        service.applyRendererPolicy(id, TerminalRefreshTier.BACKGROUND)
+      );
     }
   },
 
@@ -190,7 +192,9 @@ export const createBackgroundActions = (
         continue;
       }
       if (terminal && panelKindHasPty(terminal.kind ?? "terminal")) {
-        terminalInstanceService.applyRendererPolicy(bid, TerminalRefreshTier.BACKGROUND);
+        withTerminalService((service) =>
+          service.applyRendererPolicy(bid, TerminalRefreshTier.BACKGROUND)
+        );
       }
     }
   },
@@ -259,7 +263,9 @@ export const createBackgroundActions = (
       if (restoreLocation === "dock") {
         optimizeForDock(id);
       } else {
-        terminalInstanceService.applyRendererPolicy(id, TerminalRefreshTier.VISIBLE);
+        withTerminalService((service) =>
+          service.applyRendererPolicy(id, TerminalRefreshTier.VISIBLE)
+        );
       }
     }
   },
@@ -377,7 +383,9 @@ export const createBackgroundActions = (
         if (restoreLocation === "dock") {
           optimizeForDock(id);
         } else {
-          terminalInstanceService.applyRendererPolicy(id, TerminalRefreshTier.VISIBLE);
+          withTerminalService((service) =>
+            service.applyRendererPolicy(id, TerminalRefreshTier.VISIBLE)
+          );
         }
       }
     }

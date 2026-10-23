@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
+import { beforeAll, describe, it, expect, beforeEach, afterAll, vi } from "vitest";
 import { isPtyPanel, type PtyPanelData } from "@shared/types/panel";
 
 const mockSpawn = vi.fn().mockResolvedValue({ id: "test-1" });
@@ -124,6 +124,14 @@ vi.mock("@/store/projectPresetsStore", () => ({
 }));
 
 const { usePanelStore } = await import("../../../panelStore");
+const { load: loadTerminalService } =
+  await import("@/services/terminal/terminalInstanceServiceAccessor");
+
+// The service mock never evaluates the real module, so nothing registers it;
+// loading caches the mock for the synchronous peek() call sites.
+beforeAll(async () => {
+  await loadTerminalService();
+});
 
 const agentPanelBase = {
   id: "test-1",

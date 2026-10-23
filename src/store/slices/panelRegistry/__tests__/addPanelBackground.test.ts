@@ -5,7 +5,7 @@
  * back. It must also never take focus or mount in the grid on the way in.
  */
 
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { beforeAll, describe, it, expect, beforeEach, vi } from "vitest";
 import type { PanelInstance } from "@shared/types/panel";
 
 vi.mock("@/clients", () => ({
@@ -70,6 +70,14 @@ beforeEach(() => {
 });
 
 const { usePanelStore } = await import("../../../panelStore");
+const { load: loadTerminalService } =
+  await import("@/services/terminal/terminalInstanceServiceAccessor");
+
+// The service mock never evaluates the real module, so nothing registers it;
+// loading caches the mock for the synchronous peek() call sites.
+beforeAll(async () => {
+  await loadTerminalService();
+});
 const { terminalInstanceService } = await import("@/services/TerminalInstanceService");
 const { TerminalRefreshTier } = await import("@/types");
 const { saveNormalized } = await import("../persistence");

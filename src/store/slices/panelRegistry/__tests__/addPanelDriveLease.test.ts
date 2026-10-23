@@ -5,7 +5,7 @@
  * drives.
  */
 
-import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { beforeAll, describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { isPtyPanel, type PtyPanelData } from "@shared/types/panel";
 import type { DriveLeaseView } from "@shared/types/ipc/driveLease";
 
@@ -87,6 +87,14 @@ beforeEach(() => {
 });
 
 const { usePanelStore } = await import("../../../panelStore");
+const { load: loadTerminalService } =
+  await import("@/services/terminal/terminalInstanceServiceAccessor");
+
+// The service mock never evaluates the real module, so nothing registers it;
+// loading caches the mock for the synchronous peek() call sites.
+beforeAll(async () => {
+  await loadTerminalService();
+});
 const clients = await import("@/clients");
 const terminalClient = {
   spawn: vi.mocked(clients.terminalClient.spawn),

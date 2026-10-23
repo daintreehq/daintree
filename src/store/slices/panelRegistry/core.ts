@@ -2,7 +2,10 @@ import type { PanelRegistryStoreApi, PanelRegistrySlice, PanelRegistryMiddleware
 import { isPtyPanel } from "@shared/types/panel";
 import type { PanelInstance, PanelTitleMode } from "@shared/types/panel";
 import { terminalClient } from "@/clients";
-import { terminalInstanceService } from "@/services/TerminalInstanceService";
+import {
+  peek as peekTerminalService,
+  with as withTerminalService,
+} from "@/services/terminal/terminalInstanceServiceAccessor";
 import { TerminalRefreshTier } from "@/types";
 import { panelKindHasPty, panelKindIsDockable } from "@shared/config/panelKindRegistry";
 import { isDevPreviewPanel } from "@shared/types/panel";
@@ -175,7 +178,7 @@ export const createCorePanelActions = (
         });
       }
 
-      terminalInstanceService.destroy(id);
+      peekTerminalService()?.destroy(id);
     }
 
     set((state) => {
@@ -254,7 +257,7 @@ export const createCorePanelActions = (
         terminalClient.kill(id).catch((error) => {
           logError("[TerminalStore] Failed to kill terminal", error);
         });
-        terminalInstanceService.destroy(id);
+        peekTerminalService()?.destroy(id);
       }
     }
 
@@ -703,7 +706,9 @@ export const createCorePanelActions = (
 
     // Only apply renderer policy for PTY-backed panels if move succeeded
     if (moveSucceeded && terminal && panelKindHasPty(terminal.kind ?? "terminal")) {
-      terminalInstanceService.applyRendererPolicy(id, TerminalRefreshTier.VISIBLE);
+      withTerminalService((service) =>
+        service.applyRendererPolicy(id, TerminalRefreshTier.VISIBLE)
+      );
     }
 
     return moveSucceeded;

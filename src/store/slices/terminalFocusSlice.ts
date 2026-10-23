@@ -1,6 +1,6 @@
 import type { StateCreator } from "zustand";
 import { isPtyPanel, type PanelInstance } from "@shared/types/panel";
-import { terminalInstanceService } from "@/services/TerminalInstanceService";
+import { peek as peekTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
 import { panelKindHasPty } from "@shared/config/panelKindRegistry";
 import { isRuntimeAgentTerminal } from "@/utils/terminalType";
 import { isTerminalVisible } from "@/lib/terminalVisibility";
@@ -300,9 +300,9 @@ export const createTerminalFocusSlice =
           // pane take wakeForFocus. Skip non-PTY panels.
           if (focusActuallyChanged && terminal && panelKindHasPty(terminal.kind ?? "terminal")) {
             if (terminal.location === "dock" && !wasActiveDockTerminal) {
-              terminalInstanceService.wake(id);
+              peekTerminalService()?.wake(id);
             } else {
-              terminalInstanceService.wakeForFocus(id);
+              peekTerminalService()?.wakeForFocus(id);
             }
           }
           // Only ping when selection actually changes — re-focusing the already
@@ -625,9 +625,9 @@ export const createTerminalFocusSlice =
           // wakeForFocus avoids the alt-screen clobber; a first reveal from the
           // parked/offscreen dock is a genuine wake.
           if (get().activeDockTerminalId === id) {
-            terminalInstanceService.wakeForFocus(id);
+            peekTerminalService()?.wakeForFocus(id);
           } else {
-            terminalInstanceService.wake(id);
+            peekTerminalService()?.wake(id);
           }
         }
         if (isPtyPanel(terminal) && terminal.agentState === "waiting") {
@@ -748,9 +748,9 @@ export const createTerminalFocusSlice =
           const isFirstDockReveal =
             terminal.location === "dock" && get().activeDockTerminalId !== id;
           if (isFirstDockReveal) {
-            terminalInstanceService.wake(id);
+            peekTerminalService()?.wake(id);
           } else {
-            terminalInstanceService.wakeForFocus(id);
+            peekTerminalService()?.wakeForFocus(id);
           }
         }
 
