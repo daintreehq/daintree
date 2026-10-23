@@ -82,7 +82,12 @@ import { CanopyPlace } from "./CanopyPlace";
 import { CanopyPitch } from "./CanopyPitch";
 import { CANOPY_BETA_TERMS, CANOPY_TITLE, CANOPY_WAITLIST_URL } from "./canopyTerms";
 import { useListReorderMotion } from "./useListReorderMotion";
-import { CanopyHeaderCenter, CanopyHostPicker, useCanopyHostRows } from "./CanopyHostPicker";
+import {
+  ALL_HOSTS_LABEL,
+  CanopyHeaderCenter,
+  CanopyHostPicker,
+  useCanopyHostRows,
+} from "./CanopyHostPicker";
 import { CanopyHostOffer } from "./CanopyHostOffer";
 import { CanopyBulkEnableDialog } from "./CanopyBulkEnableDialog";
 import type { BulkTarget } from "@shared/utils/canopyBulkEnable";
@@ -92,13 +97,41 @@ import {
   ownCanopyTerminalApi,
   remoteCanopyApi,
   remoteCanopyTerminalApi,
+  useRemoteCanopies,
   useRemoteCanopy,
 } from "./canopyHostSource";
-import { canopyOwnHostId, type CanopyScope } from "@/store/canopyStore";
+import {
+  allHostsKey,
+  createAllHostsRoute,
+  mergeHostReadings,
+  parseAllHostsKey,
+  type HostReading,
+} from "./canopyAllHosts";
+import { ALL_HOSTS_ID, canopyOwnHostId, type CanopyScope } from "@/store/canopyStore";
 import { retryHostProjects, useHostProjectLists } from "@/components/Hosts/hostProjects";
 import { describeHostMenuState, type HostMenuRow } from "@/components/Hosts/hostModel";
 import { isNewWindowClick, switchToHost } from "@/components/Hosts/hostSwitching";
 import type { HostId } from "@shared/types/remoteHosts";
+
+/**
+ * Where a run really is. In All hosts a run is named by its host and its id
+ * there; a host of null is the window's own, which acts on it as it always has.
+ */
+function placeOf(
+  item: Pick<CanopyItem, "runId" | "workspaceId">,
+  hostId: HostId | null,
+  ownHostId: HostId
+): { hostId: HostId | null; runId: string; workspaceId: string } {
+  if (hostId !== ALL_HOSTS_ID) return { hostId, runId: item.runId, workspaceId: item.workspaceId };
+  const run = parseAllHostsKey(item.runId);
+  const workspace = parseAllHostsKey(item.workspaceId);
+  const host = run?.hostId ?? ownHostId;
+  return {
+    hostId: host === ownHostId ? null : host,
+    runId: run?.id ?? item.runId,
+    workspaceId: workspace?.id ?? item.workspaceId,
+  };
+}
 
 /** No other host's projects to list: one array, so the lookup's key stays put. */
 const NO_HOSTS: readonly HostId[] = [];
@@ -313,11 +346,15 @@ function CanopyPanel({ onEnableAll }: { onEnableAll: (rows: readonly HostMenuRow
       rows={hostRows}
       onPick={setHostId}
       onEnableAll={() => onEnableAll(hostRows)}
+      allHostsShown={allHosts}
+      onPickAll={() => setHostId(ALL_HOSTS_ID)}
     />
   ) : null;
   // The host shown was removed, or hosts can't be shown here at all: the panel
   // goes back to the window's own host, and the picker says so.
-  const hostListed = hostId === null || (hostRows?.some((row) => row.hostId === hostId) ?? false);
+  const allHosts = hostId === ALL_HOSTS_ID;
+  const hostListed =
+    hostId === null || allHosts || (hostRows?.some((row) => row.hostId === hostId) ?? false);
   useEffect(() => {
     if (!hostListed) setHostId(null);
   }, [hostListed, setHostId]);
@@ -375,7 +412,10 @@ function CanopyPanel({ onEnableAll }: { onEnableAll: (rows: readonly HostMenuRow
 
   // Main watches screens closely, and writes words, only while some view says
   // a panel is open on its host: another host's own Canopy does that for it.
-  const showingOwnHost = hostId === null;
+  // All hosts reads this one too, and needs no host list to be of any use: with
+  // no other host to join, it is this host alone.
+  const readingAll = allHosts && hostRows !== null;
+  const showingOwnHost = hostId === null || allHosts;
   useEffect(() => {
     if (!isOpen || !showingOwnHost) return;
     const unsubscribe = window.electron.canopy.onSnapshotUpdated(applySnapshot);
@@ -391,8 +431,23 @@ function CanopyPanel({ onEnableAll }: { onEnableAll: (rows: readonly HostMenuRow
       <img src={still} alt="" draggable={false} className="h-screen w-screen max-w-none" />
     );
 
+  // Every host together: each host's own Canopy says whether it is on, inside
+  // the inbox, and none is turned on by being listed.
+  if (readingAll) {
+    return (
+      <CanopyInbox
+        backdrop={backdrop}
+        restoreOpener={restoreOnReplace}
+        hostId={ALL_HOSTS_ID}
+        hostRow={null}
+        hostRows={hostRows}
+        hostPicker={hostPicker}
+      />
+    );
+  }
+
   // Another host: its own Canopy says whether it is on, inside the inbox.
-  if (hostId !== null) {
+  if (hostId !== null && !allHosts) {
     const hostRow = hostRows?.find((row) => row.hostId === hostId) ?? null;
     return (
       <CanopyInbox
@@ -400,6 +455,7 @@ function CanopyPanel({ onEnableAll }: { onEnableAll: (rows: readonly HostMenuRow
         restoreOpener={restoreOnReplace}
         hostId={hostId}
         hostRow={hostRow}
+        hostRows={null}
         hostPicker={hostPicker}
       />
     );
@@ -455,6 +511,7 @@ function CanopyPanel({ onEnableAll }: { onEnableAll: (rows: readonly HostMenuRow
       restoreOpener={restoreOnReplace}
       hostId={null}
       hostRow={null}
+      hostRows={null}
       hostPicker={hostPicker}
     />
   );
@@ -595,6 +652,7 @@ function CanopyInbox({
   restoreOpener,
   hostId,
   hostRow,
+  hostRows,
   hostPicker,
 }: {
   backdrop: React.ReactNode;
@@ -604,6 +662,8 @@ function CanopyInbox({
   hostId: HostId | null;
   /** That host as the host menu draws it, while it is in the host list. */
   hostRow: HostMenuRow | null;
+  /** The hosts read together when `hostId` is All hosts. */
+  hostRows: readonly HostMenuRow[] | null;
   hostPicker: React.ReactNode;
 }) {
   const isOpen = useCanopyStore((s) => s.isOpen);
@@ -612,29 +672,87 @@ function CanopyInbox({
   // runs can be read, archived and marked here, and nothing else is done to
   // them until it can reach them. The window's own stores never hold its data.
   const otherHost = hostId !== null;
-  const hostName = hostRow?.name ?? hostId ?? "";
-  const remote = useRemoteCanopy(hostId, isOpen);
-  const api = useMemo(() => (hostId === null ? ownCanopyApi : remoteCanopyApi(hostId)), [hostId]);
+  const everyHost = hostId === ALL_HOSTS_ID;
+  const ownHostId = canopyOwnHostId();
+  const hostName = everyHost ? ALL_HOSTS_LABEL : (hostRow?.name ?? hostId ?? "");
+  const remote = useRemoteCanopy(everyHost ? null : hostId, isOpen);
+  // Every host listed, the window's own among them, each read on its own.
+  const participantKey = everyHost ? (hostRows ?? []).map((row) => row.hostId).join("\u0000") : "";
+  const participants = useMemo(
+    () => (participantKey === "" ? NO_HOSTS : participantKey.split("\u0000")),
+    [participantKey]
+  );
+  const remoteIds = useMemo(
+    () => participants.filter((id) => id !== ownHostId),
+    [participants, ownHostId]
+  );
+  const remotes = useRemoteCanopies(remoteIds, isOpen && everyHost);
+  const route = useMemo(
+    () => (everyHost ? createAllHostsRoute(ownHostId, participants) : null),
+    [everyHost, ownHostId, participants]
+  );
+  const api = useMemo(
+    () => route?.api ?? (hostId === null || everyHost ? ownCanopyApi : remoteCanopyApi(hostId)),
+    [route, hostId, everyHost]
+  );
   const terminalApi = useMemo(
-    () => (hostId === null ? ownCanopyTerminalApi : remoteCanopyTerminalApi(hostId)),
-    [hostId]
+    () =>
+      route?.terminalApi ??
+      (hostId === null || everyHost ? ownCanopyTerminalApi : remoteCanopyTerminalApi(hostId)),
+    [route, hostId, everyHost]
   );
   const ownCanopy = useCanopyStore((s) => s.snapshot);
   const ownFleet = useFleetSnapshotStore((s) => s.snapshot);
-  const canopy = otherHost ? remote.canopy : ownCanopy;
-  const fleet = otherHost ? remote.fleet : ownFleet;
+  const readings = useMemo<HostReading[]>(
+    () =>
+      everyHost
+        ? participants.map((id) =>
+            id === ownHostId
+              ? { hostId: id, canopy: ownCanopy, fleet: ownFleet, error: null }
+              : {
+                  hostId: id,
+                  canopy: remotes.states.get(id)?.canopy ?? null,
+                  fleet: remotes.states.get(id)?.fleet ?? null,
+                  error: remotes.states.get(id)?.error ?? null,
+                }
+          )
+        : [],
+    [everyHost, participants, ownHostId, ownCanopy, ownFleet, remotes.states]
+  );
+  const merged = useMemo(
+    () => (everyHost ? mergeHostReadings(readings) : null),
+    [everyHost, readings]
+  );
+  const canopy = merged ? merged.canopy : otherHost ? remote.canopy : ownCanopy;
+  const fleet = merged ? merged.fleet : otherHost ? remote.fleet : ownFleet;
   const projects = useProjectStore((s) => s.projects);
   const scratches = useScratchStore((s) => s.scratches);
-  const hostProjects = useHostProjectLists(hostId === null ? NO_HOSTS : [hostId]);
+  const hostProjects = useHostProjectLists(
+    everyHost ? remoteIds : hostId === null ? NO_HOSTS : [hostId]
+  );
   const storedScope = useCanopyStore((s) => s.scope);
   const setScope = useCanopyStore((s) => s.setScope);
   // "This project" is the window's own project: another host shows all of its own.
   const scope: CanopyScope = otherHost ? "all" : storedScope;
   // The link came back: its project names may have changed while it was away.
-  const recoveries = remote.epoch;
+  const hostEpochs = everyHost
+    ? remoteIds.map((id) => `${id}:${remotes.states.get(id)?.epoch ?? 0}`).join(" ")
+    : "";
+  const recoveries = everyHost
+    ? [...remotes.states.values()].reduce((sum, state) => sum + state.epoch, 0)
+    : remote.epoch;
   useEffect(() => {
-    if (hostId !== null && recoveries > 0) retryHostProjects(hostId);
-  }, [hostId, recoveries]);
+    if (hostId === null || recoveries === 0) return;
+    if (!everyHost) {
+      retryHostProjects(hostId);
+      return;
+    }
+    for (const id of remoteIds) {
+      if ((remotes.states.get(id)?.epoch ?? 0) > 0) retryHostProjects(id);
+    }
+    // Said again for exactly the hosts whose link came back.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hostId, everyHost, recoveries, hostEpochs]);
 
   // Main reads only the screens in scope, so the agents a project view hides
   // cost nothing. Said again whenever another host's link comes back.
@@ -652,6 +770,38 @@ function CanopyInbox({
 
   const workspaces = useMemo(() => {
     const map = new Map<string, PilotWorkspaceMeta>();
+    if (everyHost) {
+      // A project is named with its host, and keyed by it: ids mean something only there.
+      const nameOf = (id: HostId) =>
+        (hostRows ?? []).find((row) => row.hostId === id)?.name ?? "This Mac";
+      const withHost = (name: string, id: HostId) => `${name} · ${nameOf(id)}`;
+      for (const project of projects) {
+        map.set(allHostsKey(ownHostId, project.id), {
+          kind: "project",
+          name: withHost(project.name, ownHostId),
+          lastOpened: project.lastOpened,
+          ...(project.emoji ? { emoji: project.emoji } : {}),
+          ...(project.color ? { color: project.color } : {}),
+        });
+      }
+      for (const scratch of scratches) {
+        map.set(allHostsKey(ownHostId, scratch.id), {
+          kind: "scratch",
+          name: withHost(scratch.name, ownHostId),
+          lastOpened: scratch.lastOpened,
+        });
+      }
+      for (const id of remoteIds) {
+        for (const project of hostProjects.get(id) ?? []) {
+          map.set(allHostsKey(id, project.id), {
+            kind: "project",
+            name: withHost(project.name, id),
+            ...(project.emoji ? { emoji: project.emoji } : {}),
+          });
+        }
+      }
+      return map;
+    }
     // Another host's workspace ids mean something only there: named from its own list.
     if (hostId !== null) {
       for (const project of hostProjects.get(hostId) ?? []) {
@@ -680,7 +830,7 @@ function CanopyInbox({
       });
     }
     return map;
-  }, [hostId, hostProjects, projects, scratches]);
+  }, [hostId, everyHost, hostRows, ownHostId, remoteIds, hostProjects, projects, scratches]);
 
   const baseItems = useMemo(() => {
     if (!fleet) return [];
@@ -956,9 +1106,19 @@ function CanopyInbox({
   useLayoutEffect(() => {
     // A view nobody can see acknowledges nothing, for the moment before it
     // closes; and the badge counts the window's own host, never another's runs.
-    if (!isOpen || otherHost || isProjectViewCached()) return;
+    if (!isOpen || isProjectViewCached()) return;
+    if (everyHost) {
+      // Only the asks this host's rows show: another host's run is never one of them.
+      const own = visible.flatMap((item) => {
+        const run = parseAllHostsKey(item.runId);
+        return run?.hostId === ownHostId ? [run.id] : [];
+      });
+      if (own.length > 0) acknowledge(own);
+      return;
+    }
+    if (otherHost) return;
     acknowledge(visible.map((item) => item.runId));
-  }, [isOpen, otherHost, visible, acknowledge]);
+  }, [isOpen, otherHost, everyHost, ownHostId, visible, acknowledge]);
   // Main holds a native page back only for an ask the panel shows: told the
   // rows as listed, filters included, whenever they change — and told again
   // when another host's link comes back, having dropped what it was told.
@@ -1390,17 +1550,22 @@ function CanopyInbox({
     );
   }, []);
 
+  // The host a selected run is on, for the pane beside it; null for the window's own.
+  const focusedHostId = focusedItem ? placeOf(focusedItem, hostId, ownHostId).hostId : null;
+
   const handlers = useMemo<CanopyCardHandlers>(() => {
     const openRun = (item: CanopyItem, newWindow = false) => {
       readNow(item);
-      if (hostId !== null) {
+      const place = placeOf(item, hostId, ownHostId);
+      if (place.hostId !== null) {
         // Another host's run: the window moves to that host and project (or a
         // new one opens there, or the window already showing it comes
         // forward), and the pane is focused wherever it lands. The panel
         // stays open on a switch that didn't happen; its toast says why, and
         // its Retry closes the panel once it lands.
-        const focusIntent = { intent: "focus-panel", panelId: item.runId } as const;
-        void switchToHost(hostId, newWindow, item.workspaceId, {
+        const focusIntent = { intent: "focus-panel", panelId: place.runId } as const;
+        const placeHostId = place.hostId;
+        void switchToHost(placeHostId, newWindow, place.workspaceId, {
           focusIntent,
           onLanded: () => {
             // A panel since closed, or showing another host, is the user's newer choice.
@@ -1410,8 +1575,8 @@ function CanopyInbox({
         });
         return;
       }
-      const args = { runId: item.runId, workspaceId: item.workspaceId };
-      if (item.workspaceId !== getViewWorkspaceId()) {
+      const args = { runId: place.runId, workspaceId: place.workspaceId };
+      if (place.workspaceId !== getViewWorkspaceId()) {
         // The switch replaces this view, so the panel closes first.
         close();
         void actionService.dispatch("pilot.openRun", args, { source: "user" });
@@ -1634,6 +1799,7 @@ function CanopyInbox({
     api,
     terminalApi,
     hostId,
+    ownHostId,
   ]);
 
   /** U: read or unread, by hand. Z takes it back. */
@@ -2019,6 +2185,48 @@ function CanopyInbox({
               .filter(Boolean)
               .join(" · ");
 
+  // Each host in All hosts says for itself why it can't be read; the list says so too.
+  const hostIssues = useMemo(() => {
+    if (!everyHost) return [];
+    const nameOf = (id: HostId) =>
+      (hostRows ?? []).find((row) => row.hostId === id)?.name ?? "This Mac";
+    return readings.flatMap((reading) => {
+      const name = nameOf(reading.hostId);
+      const remoteHost = reading.hostId !== ownHostId;
+      if (reading.error !== null && remoteHost) {
+        return [
+          {
+            hostId: reading.hostId,
+            text: `Can't reach ${name}`,
+            action: "Retry",
+            act: () => remotes.retry(reading.hostId),
+          },
+        ];
+      }
+      if (reading.canopy === null && reading.fleet === null && remoteHost) {
+        return [
+          { hostId: reading.hostId, text: `Connecting to ${name}…`, action: null, act: null },
+        ];
+      }
+      if (reading.canopy !== null && !reading.canopy.activated) {
+        return [
+          {
+            hostId: reading.hostId,
+            text: `Canopy is off on ${name}`,
+            action: "Set up",
+            act: () => useCanopyStore.getState().setHostId(reading.hostId),
+          },
+        ];
+      }
+      return [];
+    });
+  }, [everyHost, readings, hostRows, ownHostId, remotes]);
+  const headerWords =
+    hostSummary ??
+    (hostIssues.length > 0 && needsYou === 0 && fleet !== null
+      ? "Not every host could be read"
+      : summaryLine);
+
   const headerControls = (
     <>
       {!otherHost && (
@@ -2078,7 +2286,7 @@ function CanopyInbox({
             <span className="flex min-w-0 flex-1 basis-0 items-center">
               <AppDialog.Title icon={<Telescope />}>{CANOPY_TITLE}</AppDialog.Title>
               <span className="mx-3 min-w-0 flex-1 truncate text-sm text-text-secondary">
-                {hostSummary ?? summaryLine}
+                {headerWords}
               </span>
             </span>
             {hostPicker}
@@ -2090,7 +2298,7 @@ function CanopyInbox({
           <>
             <AppDialog.Title icon={<Telescope />}>{CANOPY_TITLE}</AppDialog.Title>
             <span className="mr-3 ml-3 min-w-0 flex-1 truncate text-sm text-text-secondary">
-              {hostSummary ?? summaryLine}
+              {headerWords}
             </span>
             {headerControls}
           </>
@@ -2124,6 +2332,24 @@ function CanopyInbox({
               {fleet !== null
                 ? "These are the agents it last showed."
                 : "Its agents show here once it answers."}
+            </Callout>
+          </div>
+        )}
+        {everyHost && hostIssues.length > 0 && (
+          <div className="flex shrink-0 flex-col gap-2 border-b border-border-default p-3">
+            <Callout severity="warning" size="compact" title="Not every host is being read">
+              <ul className="flex flex-col gap-1.5">
+                {hostIssues.map((issue) => (
+                  <li key={issue.hostId} className="flex items-center gap-2">
+                    <span className="min-w-0 flex-1 truncate">{issue.text}</span>
+                    {issue.act && (
+                      <Button variant="outline" size="xs" onClick={issue.act}>
+                        {issue.action}
+                      </Button>
+                    )}
+                  </li>
+                ))}
+              </ul>
             </Callout>
           </div>
         )}
@@ -2373,7 +2599,7 @@ function CanopyInbox({
                 <CanopyPlace
                   item={focusedItem}
                   id={`canopy-place-${focusedItem.runId}`}
-                  hostId={hostId ?? ""}
+                  hostId={everyHost ? (focusedHostId ?? "") : (hostId ?? "")}
                   runBranch={api.runBranch}
                 />
               )}
@@ -2394,7 +2620,7 @@ function CanopyInbox({
                       current?.runId === focusedItem.runId ? null : current
                     )
                   }
-                  otherHostId={hostId ?? undefined}
+                  otherHostId={(everyHost ? focusedHostId : hostId) ?? undefined}
                   terminalApi={terminalApi}
                   reconnecting={otherHost && linkStatus !== undefined && linkStatus !== "connected"}
                   {...handlers}
@@ -2447,6 +2673,12 @@ function CanopyInbox({
                   Show all projects
                 </Button>
               </>
+            ) : everyHost ? (
+              <p className="text-sm text-text-secondary">
+                {hostIssues.length > 0
+                  ? "No agents on the hosts that answered."
+                  : "No agents are running on any host. Each one shows up here once it starts."}
+              </p>
             ) : otherHost ? (
               <p className="text-sm text-text-secondary">
                 No agents are running on {hostName}. Each one shows up here once it starts.

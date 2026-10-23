@@ -13,6 +13,7 @@ import { Server } from "@/components/icons";
 import { SEVERITY_GLYPH } from "@/lib/statusSeverity";
 import { isRemoteShellSupported } from "@/lib/remoteHosts";
 import { cn } from "@/lib/utils";
+import { ALL_HOSTS_ID } from "@/store/canopyStore";
 import { AgentCounts } from "@/components/Hosts/AgentCounts";
 import { HostNameText } from "@/components/Hosts/HostNameText";
 import { PlatformGlyph } from "@/components/Hosts/PlatformGlyph";
@@ -28,6 +29,8 @@ import {
 } from "@/components/Hosts/hostModel";
 
 const TroubleGlyph = SEVERITY_GLYPH.warning;
+
+export const ALL_HOSTS_LABEL = "All hosts";
 
 /** The host's platform mark, or a plain machine until a handshake says which. */
 function HostMark({ row }: { row: HostMenuRow }) {
@@ -139,31 +142,52 @@ export function CanopyHostPicker({
   rows,
   onPick,
   onEnableAll,
+  allHostsShown = false,
+  onPickAll,
 }: {
   rows: readonly HostMenuRow[];
   onPick: (hostId: HostId) => void;
   /** Opens the one disclosure that turns Canopy on across every host listed. */
   onEnableAll?: () => void;
+  /** The panel reads every host together instead of one. */
+  allHostsShown?: boolean;
+  onPickAll?: () => void;
 }) {
   const shown = rows.find((row) => row.isCurrent) ?? rows[0]!;
-  const state = triggerState(shown);
-  const trouble = hostMenuRowHasTrouble(shown);
+  const state = allHostsShown ? null : triggerState(shown);
+  const trouble = !allHostsShown && hostMenuRowHasTrouble(shown);
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
         <button
           type="button"
           data-testid="canopy-host-picker"
-          data-host-id={shown.hostId}
-          aria-label={`Showing agents on ${shown.name}${state ? `, ${state}` : ""}`}
+          data-host-id={allHostsShown ? ALL_HOSTS_ID : shown.hostId}
+          aria-label={
+            allHostsShown
+              ? "Showing agents on all hosts"
+              : `Showing agents on ${shown.name}${state ? `, ${state}` : ""}`
+          }
           className={cn(
             "flex h-7 min-w-0 max-w-72 shrink items-center gap-1.5 rounded-[var(--radius-md)] px-2 text-xs text-text-primary",
             "transition-colors hover:bg-overlay-subtle aria-expanded:bg-overlay-subtle",
             "focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-selection-outline focus-visible:outline-offset-2"
           )}
         >
-          <HostMark row={shown} />
-          <HostNameText name={shown.name} className="font-medium" />
+          {allHostsShown ? (
+            <span
+              className="flex h-4 w-3.5 shrink-0 items-center justify-center text-text-secondary"
+              aria-hidden="true"
+            >
+              <Server className="h-3 w-3" aria-hidden="true" />
+            </span>
+          ) : (
+            <HostMark row={shown} />
+          )}
+          <HostNameText
+            name={allHostsShown ? ALL_HOSTS_LABEL : shown.name}
+            className="font-medium"
+          />
           {state && (
             <span
               data-link-trouble={trouble ? "" : undefined}
@@ -186,6 +210,32 @@ export function CanopyHostPicker({
       </DropdownMenuTrigger>
       <DropdownMenuContent align="center" className="w-80">
         <DropdownMenuLabel>Show agents on</DropdownMenuLabel>
+        {onPickAll && (
+          <DropdownMenuItem
+            className="items-start gap-2"
+            data-host-id={ALL_HOSTS_ID}
+            aria-current={allHostsShown ? "true" : undefined}
+            textValue={ALL_HOSTS_LABEL}
+            onSelect={onPickAll}
+          >
+            <span className="flex h-4 w-3.5 shrink-0 items-center" aria-hidden="true">
+              {allHostsShown && <Check className="h-3.5 w-3.5 text-text-primary" />}
+            </span>
+            <span className="flex h-4 w-3.5 shrink-0 items-center justify-center text-text-secondary">
+              <Server className="h-3 w-3" aria-hidden="true" />
+            </span>
+            <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+              <span
+                className={cn("text-text-primary", allHostsShown ? "font-semibold" : "font-medium")}
+              >
+                {ALL_HOSTS_LABEL}
+              </span>
+              <span className="text-2xs text-text-secondary">
+                Every host in one list. Each keeps its own Canopy setting.
+              </span>
+            </span>
+          </DropdownMenuItem>
+        )}
         {rows.map((row) => (
           <HostPickerItem key={row.hostId} row={row} onPick={onPick} />
         ))}
