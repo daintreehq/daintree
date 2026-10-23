@@ -7,13 +7,17 @@ import { getTour } from "./tourRegistry";
  * The ids a `help.tour.*` request may mean, most specific first. A plugin's
  * request reads `tourId` as one of its own local ids before the same string
  * as a qualified one, so it never has to spell out its instance key — which,
- * for a project-owned plugin, it shouldn't be parsing anyway.
+ * for a project-owned plugin, it shouldn't be parsing anyway. The string is
+ * only also tried as a qualified id when it is the plugin's own or the
+ * Daintree tour, so one plugin can't open another's tour and read its outcome.
  */
 export function tourCandidates(tourId: string | undefined, callerPluginId?: string): string[] {
   if (tourId === undefined) return [DAINTREE_TOUR_ID];
   if (callerPluginId === undefined) return [tourId];
   const local = makePluginTourId(callerPluginId, tourId);
-  return local === tourId ? [tourId] : [local, tourId];
+  if (local === tourId) return [tourId];
+  const qualifiedFallback = tourId === DAINTREE_TOUR_ID || tourId.startsWith(`${callerPluginId}.`);
+  return qualifiedFallback ? [local, tourId] : [local];
 }
 
 export interface TourStatus {

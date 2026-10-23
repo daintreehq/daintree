@@ -12,7 +12,19 @@ describe("tourCandidates", () => {
   it("defaults to the Daintree tour and prefers a plugin's own local id", () => {
     expect(tourCandidates(undefined, "acme.tools")).toEqual(["daintree"]);
     expect(tourCandidates("welcome")).toEqual(["welcome"]);
-    expect(tourCandidates("welcome", "acme.tools")).toEqual([TOUR_ID, "welcome"]);
+    expect(tourCandidates("welcome", "acme.tools")).toEqual([TOUR_ID]);
+  });
+
+  it("tries the string as a qualified id only for the plugin's own tours and the Daintree tour", () => {
+    expect(tourCandidates(TOUR_ID, "acme.tools")).toEqual([`acme.tools.${TOUR_ID}`, TOUR_ID]);
+    expect(tourCandidates("daintree", "acme.tools")).toEqual(["acme.tools.daintree", "daintree"]);
+    expect(tourCandidates("other.plugin.welcome", "acme.tools")).toEqual([
+      "acme.tools.other.plugin.welcome",
+    ]);
+    // A plugin whose id merely shares a prefix is still someone else's.
+    expect(tourCandidates("acme.toolsx.welcome", "acme.tools")).toEqual([
+      "acme.tools.acme.toolsx.welcome",
+    ]);
   });
 });
 
@@ -99,6 +111,27 @@ describe("readTourStatus", () => {
       registered: false,
       lastOutcome: "withdrawn",
       lastRunId: "r2",
+    });
+  });
+
+  it("doesn't read another plugin's progress through its qualified id", async () => {
+    getOnboardingStateMock.mockResolvedValue({
+      tours: {
+        [TOUR_ID]: {
+          completed: true,
+          dismissed: false,
+          lastChapter: 0,
+          lastOutcome: "completed",
+          lastRunId: "r3",
+        },
+      },
+    });
+    expect(await readTourStatus(tourCandidates(TOUR_ID, "other.plugin"))).toMatchObject({
+      tourId: `other.plugin.${TOUR_ID}`,
+      registered: false,
+      completed: false,
+      lastOutcome: null,
+      lastRunId: null,
     });
   });
 

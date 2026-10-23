@@ -365,7 +365,7 @@ Before shipping, run `daintree-plugin validate`, and check `daintree-plugin pack
 
 ## Opening a tour from your plugin
 
-Dispatch `help.tour.show` with your tour's manifest `id`. From a plugin, `tourId` is read as one of your own tours first, so you never spell out your instance key (for a project-owned plugin, that key carries the project). A string that names no tour of yours is then tried as a qualified id, as before.
+Dispatch `help.tour.show` with your tour's manifest `id`. From a plugin, `tourId` is read as one of your own tours first, so you never spell out your instance key (for a project-owned plugin, that key carries the project). Your own qualified id (`<your plugin id>.<tour id>`) and `daintree` also work. Another plugin's tour can't be opened or read by its qualified id, so you only ever see your own tours' run ids and outcomes.
 
 ```ts
 const shown = await host.dispatch("help.tour.show", { tourId: "welcome" });

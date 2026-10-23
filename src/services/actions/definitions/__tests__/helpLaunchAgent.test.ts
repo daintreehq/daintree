@@ -1695,13 +1695,13 @@ describe("help.tour.show", () => {
     expect(mockRequestTour.mock.calls).toEqual([[["daintree"]], [["daintree"]], [[acme]]]);
   });
 
-  it("reads a plugin's tour id as its own local id first, then as a qualified one", async () => {
+  it("reads a plugin's tour id as its own local id", async () => {
     mockRequestTour.mockReset();
     const started = { status: "started", tourId: "acme.tools.welcome", runId: "r1" };
     mockRequestTour.mockResolvedValue(started);
     const action = helpTourShow();
     const result = await action.run({ tourId: "welcome" }, { callerPluginId: "acme.tools" });
-    expect(mockRequestTour).toHaveBeenCalledWith(["acme.tools.welcome", "welcome"]);
+    expect(mockRequestTour).toHaveBeenCalledWith(["acme.tools.welcome"]);
     // The start result is the action's result, so the plugin's dispatch sees it.
     expect(result).toBe(started);
     expect(action.resultSchema!.safeParse(started).success).toBe(true);
@@ -1711,6 +1711,6 @@ describe("help.tour.show", () => {
     mockRequestTour.mockReset();
     const instance = "project__p1__acme.tools";
     await helpTourShow().run({ tourId: "welcome" }, { callerPluginId: instance });
-    expect(mockRequestTour).toHaveBeenCalledWith([`${instance}.welcome`, "welcome"]);
+    expect(mockRequestTour).toHaveBeenCalledWith([`${instance}.welcome`]);
   });
 });
