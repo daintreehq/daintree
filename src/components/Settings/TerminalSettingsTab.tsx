@@ -34,10 +34,11 @@ import type { ScreenReaderMode } from "@/store";
 import type { PanelLayoutStrategy } from "@/types";
 import {
   AGENT_SCROLLBACK_MAX_LINES,
-  bytesForScrollbackLines,
+  estimateMemoryUsage,
   getScrollbackForType,
   PERFORMANCE_MODE_SCROLLBACK,
   PLAIN_SCROLLBACK_MAX_LINES,
+  PLAIN_SCROLLBACK_MIN_LINES,
   SCROLLBACK_ESTIMATE_COLUMNS,
 } from "@/utils/scrollbackConfig";
 import { formatBytes } from "@/lib/formatBytes";
@@ -292,11 +293,12 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
   // Priced from the limits shown above, so performance mode's flat cap is
   // estimated as what terminals actually keep rather than as a base to scale.
   const memoryEstimate = useMemo(() => {
-    const bytesFor = (isAgent: boolean) =>
-      bytesForScrollbackLines(scrollbackLimits.find((l) => l.isAgent === isAgent)?.limit ?? 0);
-    const agent = bytesFor(true) * TYPICAL_TERMINAL_COUNTS.agent;
-    const plain = bytesFor(false) * TYPICAL_TERMINAL_COUNTS.plain;
-    return { agent, plain, total: agent + plain };
+    const limitFor = (isAgent: boolean) =>
+      scrollbackLimits.find((l) => l.isAgent === isAgent)?.limit ?? 0;
+    return estimateMemoryUsage(TYPICAL_TERMINAL_COUNTS, {
+      agent: limitFor(true),
+      plain: limitFor(false),
+    });
   }, [scrollbackLimits]);
 
   const [saveFailure, setSaveFailure] = useState<SaveFailure | null>(null);
@@ -862,7 +864,7 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
             <SettingsGroup>
               <SettingsPresetGroup
                 label="Base scrollback"
-                description={`Every terminal scales from this: agent terminals keep 10× it up to ${AGENT_SCROLLBACK_MAX_LINES.toLocaleString()} lines, the most a restored terminal recovers, and shells 0.3× up to ${PLAIN_SCROLLBACK_MAX_LINES.toLocaleString()}. Default: ${SCROLLBACK_DEFAULT.toLocaleString()}.`}
+                description={`Every terminal scales from this: agent terminals keep 10× it, up to ${AGENT_SCROLLBACK_MAX_LINES.toLocaleString()} lines (fewer on the efficiency profile), and shells 0.3×, from ${PLAIN_SCROLLBACK_MIN_LINES.toLocaleString()} to ${PLAIN_SCROLLBACK_MAX_LINES.toLocaleString()}. Default: ${SCROLLBACK_DEFAULT.toLocaleString()}.`}
                 options={SCROLLBACK_OPTIONS}
                 value={scrollbackLines}
                 onChange={(value) => void handleScrollbackChange(value)}

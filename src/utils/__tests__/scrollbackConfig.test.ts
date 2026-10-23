@@ -15,9 +15,13 @@ afterEach(() => {
   setAgentScrollbackMaxLines(originalAgentMax);
 });
 
+function limitsAt(base: number): { agent: number; plain: number } {
+  return { agent: getScrollbackForType(true, base), plain: getScrollbackForType(false, base) };
+}
+
 describe("estimateMemoryUsage", () => {
   it("computes per-type and total bytes for a typical 8-agent + 8-shell session", () => {
-    const result = estimateMemoryUsage({ agent: 8, plain: 8 }, 1000);
+    const result = estimateMemoryUsage({ agent: 8, plain: 8 }, limitsAt(1000));
     // A line at 180 columns: 180 * 12 + 240 = 2,400 bytes.
     // agent: 1000 * 10 clamps to the 5000-line mirror cap, 5000 * 2400 * 8 = 96,000,000
     // plain: 1000 * 0.3 = 300 lines/term, 300 * 2400 * 8 = 5,760,000
@@ -29,7 +33,7 @@ describe("estimateMemoryUsage", () => {
   it("computes a single agent terminal below the cap so the multiplier is exercised", () => {
     // base=300 keeps the agent value (3000) under the 5k cap, so this proves
     // the estimate flows the multiplier through rather than always using maxLines.
-    const result = estimateMemoryUsage({ agent: 1, plain: 0 }, 300);
+    const result = estimateMemoryUsage({ agent: 1, plain: 0 }, limitsAt(300));
     // 300 * 10 = 3000 lines, 3000 * 2400 = 7,200,000
     expect(result.agent).toBe(7_200_000);
     expect(result.plain).toBe(0);
@@ -37,7 +41,7 @@ describe("estimateMemoryUsage", () => {
   });
 
   it("uses maxLines for unlimited scrollback (base=0)", () => {
-    const result = estimateMemoryUsage({ agent: 8, plain: 8 }, 0);
+    const result = estimateMemoryUsage({ agent: 8, plain: 8 }, limitsAt(0));
     // agent: 5000 lines/term, plain: 2000 lines/term, 2,400 bytes a line
     expect(result.agent).toBe(96_000_000);
     expect(result.plain).toBe(38_400_000);
@@ -102,6 +106,9 @@ describe("getScrollbackForType", () => {
       const capBefore = getScrollbackForType(true, 0);
       setAgentScrollbackMaxLines(50_000);
       expect(getScrollbackForType(true, 0)).toBe(capBefore);
+      // Stored clamped too, so useResourceProfile's before/after comparison sees
+      // no change and skips re-deriving open terminals.
+      expect(getAgentScrollbackMaxLines()).toBe(capBefore);
     });
 
     it("binds the effective agent cap to the configured efficiency ceiling", () => {

@@ -18,17 +18,25 @@ const AGENT_POLICY: ScrollbackPolicy = {
 const PLAIN_POLICY: ScrollbackPolicy = { multiplier: 0.3, maxLines: 2000, minLines: 200 };
 
 export const AGENT_SCROLLBACK_MAX_LINES = AGENT_POLICY.maxLines;
+export const PLAIN_SCROLLBACK_MIN_LINES = PLAIN_POLICY.minLines;
 export const PLAIN_SCROLLBACK_MAX_LINES = PLAIN_POLICY.maxLines;
 
 // Resource-profile ceiling on the agent policy. Pushed by useResourceProfile
 // (same pattern as TerminalWebGLConfig); the initial value matches the
-// balanced profile. Held here, isolated from the profile types, so the eager
-// renderer chunk can update it without new import edges.
+// balanced profile's effective ceiling. Held here, isolated from the profile
+// types, so the eager renderer chunk can update it without new import edges.
 let agentScrollbackMaxLines = AGENT_POLICY.maxLines;
 
 export function setAgentScrollbackMaxLines(lines: number): void {
   if (!Number.isFinite(lines)) return;
-  agentScrollbackMaxLines = Math.max(AGENT_POLICY.minLines, Math.floor(lines));
+  // Stored clamped to the policy so a profile budget above the mirror cap reads
+  // back as the cap — useResourceProfile compares before/after to decide whether
+  // to re-derive every open terminal, and a raw 10k vs 5k would walk them all
+  // for no change.
+  agentScrollbackMaxLines = Math.min(
+    AGENT_POLICY.maxLines,
+    Math.max(AGENT_POLICY.minLines, Math.floor(lines))
+  );
 }
 
 export function getAgentScrollbackMaxLines(): number {
@@ -70,17 +78,17 @@ export function bytesForScrollbackLines(lines: number): number {
 }
 
 /**
- * Estimate memory usage for a mix of agent/plain terminals at the given
- * base scrollback setting.
+ * Estimate filled-scrollback memory for a mix of agent/plain terminals, each
+ * holding the given number of lines. Takes resolved limits rather than a base
+ * setting so callers price what terminals actually keep (performance mode's
+ * flat cap is not a base to scale).
  */
 export function estimateMemoryUsage(
   terminalCounts: { agent: number; plain: number },
-  baseScrollback: number
+  linesPerTerminal: { agent: number; plain: number }
 ): { agent: number; plain: number; total: number } {
-  const agentBytes =
-    bytesForScrollbackLines(getScrollbackForType(true, baseScrollback)) * terminalCounts.agent;
-  const plainBytes =
-    bytesForScrollbackLines(getScrollbackForType(false, baseScrollback)) * terminalCounts.plain;
+  const agentBytes = bytesForScrollbackLines(linesPerTerminal.agent) * terminalCounts.agent;
+  const plainBytes = bytesForScrollbackLines(linesPerTerminal.plain) * terminalCounts.plain;
   return { agent: agentBytes, plain: plainBytes, total: agentBytes + plainBytes };
 }
 
