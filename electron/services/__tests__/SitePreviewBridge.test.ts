@@ -376,10 +376,8 @@ describe("SitePreviewBridge", () => {
     callBinding(harness.wc, envelope({ sequence: 6 }), MAIN_CONTEXT_ID);
     callBinding(harness.wc, envelope({ sequence: 6 }), IFRAME_CONTEXT_ID);
     callBinding(harness.wc, envelope({ sequence: 6 }), 12345);
-    callBinding(
-      harness.wc,
-      envelope({ sequence: 6, event: { ...HOVER_CLEARED, padding: "x".repeat(300_000) } })
-    );
+    // Valid apart from its length: trailing whitespace parses, so only the size ceiling refuses it.
+    callBinding(harness.wc, envelope({ sequence: 6 }) + " ".repeat(300_000));
 
     expect(harness.sunk).toHaveLength(0);
     expect(harness.bridge.getState(PROJECT_ID, "session-1")?.droppedMessages).toBe(8);
@@ -515,6 +513,8 @@ describe("SitePreviewBridge", () => {
       expect(harness.bridge.getState(PROJECT_ID, "session-1")?.guestReady).toBe(true);
     });
     expect(harness.bridge.getState(PROJECT_ID, "session-1")?.suspended).toBe(false);
+    // The admitted `documentReady` scheduled the picker's late probe.
+    await harness.bridge.disposeAll();
   });
 
   it("withholds the bootstrap from a document that arrived while the install was in flight", async () => {

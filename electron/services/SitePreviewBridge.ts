@@ -298,9 +298,9 @@ export class SitePreviewBridge {
       }),
     };
     await this.commitBinding(binding, wc);
-    // The install's own awaits are where a shutdown most often lands. It has
-    // torn this binding down already; handing back its session would give the
-    // caller a binding that no longer exists.
+    // The install's own awaits are where a shutdown most often lands. The
+    // shutdown owns this binding's teardown; handing back its session would give
+    // the caller a binding that is gone or going.
     this.assertOpen(panelId);
     return toState(binding);
   }
