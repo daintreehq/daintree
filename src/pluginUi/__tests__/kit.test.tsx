@@ -824,15 +824,17 @@ describe("@daintreehq/plugin-ui overlay isolation, layering and ownership", () =
   describe("in a Dialog promoted by an open dock preview", () => {
     let releaseDock: (() => void) | undefined;
     afterEach(() => {
+      // Unmount first: releasing notifies the dialog's store subscription.
+      cleanup();
       releaseDock?.();
       releaseDock = undefined;
     });
 
-    function inDialogOverDock(child: ReturnType<typeof createElement>) {
+    function inDialogOverDock(child: ReturnType<typeof createElement>, onClose = () => {}) {
       releaseDock = registerDockPopoverLayer();
       return createElement(kit.Dialog, {
         open: true,
-        onClose: () => {},
+        onClose,
         title: "App settings",
         children: child,
       });
@@ -869,19 +871,21 @@ describe("@daintreehq/plugin-ui overlay isolation, layering and ownership", () =
     });
 
     it("closes only the Select on Escape and hands focus back to its trigger", async () => {
-      render(inDialogOverDock(overlays.select()));
+      const onClose = vi.fn();
+      render(inDialogOverDock(overlays.select(), onClose));
       const trigger = await screen.findByRole("combobox", { name: "Pick", hidden: true });
       await act(async () => {
         fireEvent.keyDown(trigger, { key: "Enter" });
       });
       const listbox = await screen.findByRole("listbox", { hidden: true });
+      await waitFor(() => expect(listbox.contains(document.activeElement)).toBe(true));
 
       await act(async () => {
-        fireEvent.keyDown(listbox, { key: "Escape" });
+        fireEvent.keyDown(document.activeElement ?? listbox, { key: "Escape" });
       });
 
       await waitFor(() => expect(screen.queryByRole("listbox", { hidden: true })).toBeNull());
-      expect(screen.getByRole("dialog", { hidden: true })).not.toBeNull();
+      expect(onClose).not.toHaveBeenCalled();
       await waitFor(() => expect(document.activeElement).toBe(trigger));
     });
 
@@ -896,6 +900,22 @@ describe("@daintreehq/plugin-ui overlay isolation, layering and ownership", () =
       const body = await screen.findByTestId("popover-body");
       const content = body.closest("[data-radix-popper-content-wrapper] > *");
       expect(content?.className).toContain(NESTED_OVERLAY_Z);
+    });
+
+    it("stacks an overlay in a ConfirmDialog's description above it", async () => {
+      releaseDock = registerDockPopoverLayer();
+      render(
+        createElement(kit.ConfirmDialog, {
+          open: true,
+          onClose: () => {},
+          onConfirm: () => {},
+          title: "Reset?",
+          confirmLabel: "Reset",
+          description: overlays.menu(),
+        })
+      );
+      const menu = await screen.findByRole("menu", { hidden: true });
+      expect(menu.className).toContain(NESTED_OVERLAY_Z);
     });
 
     it("leaves a Select in a main-pane Dialog at the popover tier", async () => {

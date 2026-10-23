@@ -11,6 +11,7 @@ import {
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { VirtuosoMockContext, type VirtuosoHandle } from "react-virtuoso";
+import { registerDockPopoverLayer } from "@/lib/dockPopoverLayer";
 
 // jsdom lays nothing out, so a Virtuoso never scrolls there; the palette's
 // requests to its list are recorded instead, passing through unchanged.
@@ -394,6 +395,27 @@ describe("CommandPalette", () => {
     render(inViewport(createElement(Harness)));
     const plain = await screen.findByRole("dialog", { name: "Go to" });
     expect(plain.parentElement?.className).toContain("z-[var(--z-modal)]");
+  });
+
+  it("stacks above a dialog an open dock preview promoted", async () => {
+    const release = registerDockPopoverLayer();
+    try {
+      render(
+        inViewport(
+          createElement(kit.Dialog, {
+            open: true,
+            onClose: () => {},
+            title: "Settings",
+            children: createElement(Harness),
+          })
+        )
+      );
+      const palette = await screen.findByRole("dialog", { name: "Go to" });
+      expect(palette.parentElement?.className).toContain("z-[calc(var(--z-nested-dialog)+1)]");
+    } finally {
+      cleanup();
+      release();
+    }
   });
 
   it("brings the active row into view after a search", async () => {
