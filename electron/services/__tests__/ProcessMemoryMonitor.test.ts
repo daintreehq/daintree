@@ -1327,6 +1327,24 @@ describe("ProcessMemoryMonitor", () => {
       );
     });
 
+    it("asks the renderers to trim at the same step as the host, and survives a throw (#14215)", async () => {
+      const trimPtyHostState = vi.fn(async () => makeTrimSummary());
+      const trimRendererScrollback = vi.fn(() => {
+        throw new Error("send failed");
+      });
+      mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 350 * 1024, 100)]);
+      stop = startAppMetricsMonitor({ ...mockActions, trimPtyHostState, trimRendererScrollback });
+
+      await advancePolls(WARMUP_INTERVALS + 1);
+
+      expect(trimPtyHostState).toHaveBeenCalledTimes(1);
+      expect(trimRendererScrollback).toHaveBeenCalledTimes(1);
+      expect(logInfo).toHaveBeenCalledWith(
+        "memory-pressure-tier1-reclaim",
+        expect.objectContaining({ ptyTrimFailed: false })
+      );
+    });
+
     it("awaits the pty-host trim before opening the settle window (#11674)", async () => {
       // Fire-and-forget left the host still processing the trim while the
       // sampler was already reading the "after" footprint, so the bracket
@@ -1741,6 +1759,19 @@ describe("ProcessMemoryMonitor", () => {
       await advanceMinutes(20);
 
       expect(gapsInMinutes(passes[1])).toEqual([5, 5, 5]);
+    });
+
+    it("never counts the renderer scrollback request as productive (#14215)", async () => {
+      // The request is unacknowledged: sending it proves nothing was reclaimed,
+      // so an otherwise empty pass still backs off.
+      mockActions.trimRendererScrollback = vi.fn();
+      stop = startAppMetricsMonitor(mockActions);
+
+      await advanceMinutes(15);
+
+      expect(passes[1]).toHaveLength(2);
+      expect(mockActions.trimRendererScrollback).toHaveBeenCalledTimes(2);
+      expect(gapsInMinutes(passes[1])).toEqual([10]);
     });
 
     it("neither grows nor forgets the backoff on a pass whose evidence is incomplete", async () => {

@@ -1576,7 +1576,9 @@ export interface IpcEventMap {
   // App-wide terminal-host memory pause (#12375), sent to each window's active
   // view on every change. Views that missed it pull `terminal:get-host-memory-pause`.
   "terminal:host-memory-pause": import("../pty-host.js").HostMemoryPauseSnapshot;
-  "terminal:reduce-scrollback": { terminalIds: string[]; targetLines: number };
+  // Memory-pressure reclaim for the receiving view: every terminal it isn't
+  // showing drops to `targetLines` of scrollback, under the reducer's guards.
+  "terminal:reduce-scrollback": { targetLines: number };
   "terminal:restore-scrollback": { terminalIds: string[] };
 
   // Watchdog deadlock detector — emitted once when the main-process watchdog

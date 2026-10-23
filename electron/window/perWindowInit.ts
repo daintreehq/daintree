@@ -30,6 +30,7 @@ import { notificationService } from "../services/NotificationService.js";
 import { projectStore } from "../services/ProjectStore.js";
 import { logInfo } from "../utils/logger.js";
 import { SCROLLBACK_BACKGROUND } from "../../shared/config/scrollback.js";
+import { reduceHiddenRendererScrollback } from "./rendererScrollbackReclaim.js";
 import type { HostMemoryPauseSnapshot } from "../../shared/types/pty-host.js";
 import { isDemoMode } from "../setup/environment.js";
 import type { WindowContext, WindowRegistry } from "./WindowRegistry.js";
@@ -563,6 +564,12 @@ export function ensureCriticalServices(windowRegistry: WindowRegistry | undefine
     void ptyClient!.trimState(SCROLLBACK_BACKGROUND, "all").catch(() => {
       /* non-critical */
     });
+    // The renderer's copy of the same terminals is the larger one. Its guards
+    // still hold here: the host's "all" scope is no licence to drop history
+    // the user is reading.
+    if (windowRegistry) {
+      reduceHiddenRendererScrollback(windowRegistry.all().map((wCtx) => wCtx.browserWindow));
+    }
   });
   // The memory pause reaches the UI once, app-wide, never per pane (#12375).
   // Sent on every change, the release included, to each window's active view;

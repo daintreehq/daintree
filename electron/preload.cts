@@ -1738,9 +1738,8 @@ function buildElectronApi(): ElectronAPI {
           }
         }),
 
-      onReduceScrollback: (
-        callback: (data: { terminalIds: string[]; targetLines: number }) => void
-      ) => _typedOn(CHANNELS.TERMINAL_REDUCE_SCROLLBACK, callback),
+      onReduceScrollback: (callback: (data: { targetLines: number }) => void) =>
+        _typedOn(CHANNELS.TERMINAL_REDUCE_SCROLLBACK, callback),
 
       onRestoreScrollback: (callback: (data: { terminalIds: string[] }) => void) =>
         _typedOn(CHANNELS.TERMINAL_RESTORE_SCROLLBACK, callback),

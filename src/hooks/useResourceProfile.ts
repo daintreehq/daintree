@@ -33,7 +33,7 @@ export function useResourceProfile(): void {
       const prevScrollbackMax = getAgentScrollbackMaxLines();
       setAgentScrollbackMaxLines(payload.config.agentScrollbackMaxLines);
       if (getAgentScrollbackMaxLines() !== prevScrollbackMax) {
-        terminalInstanceService.restoreScrollbackAllForeground();
+        terminalInstanceService.restoreScrollbackAll();
       }
       useResourceProfileStore.getState().setProfile(payload.profile);
     };

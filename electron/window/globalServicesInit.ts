@@ -63,6 +63,7 @@ import {
 } from "../utils/logger.js";
 import { effectiveCachedProjectViews } from "../utils/cachedProjectViews.js";
 import { SCROLLBACK_BACKGROUND } from "../../shared/config/scrollback.js";
+import { reduceHiddenRendererScrollback } from "./rendererScrollbackReclaim.js";
 import type { WorkerResourceSnapshot } from "../../shared/types/workerGovernance.js";
 import { PERF_MARKS } from "../../shared/perf/marks.js";
 import { CHANNELS } from "../ipc/channels.js";
@@ -838,6 +839,10 @@ export async function initGlobalServices(
             if (!client) return { trimmed: 0, skipped: 0, shardsTotal: 0, shardsFailed: 0 };
             // Graduated lever: never at the cost of a working agent's history.
             return client.trimState(SCROLLBACK_BACKGROUND, "idle-only");
+          },
+          trimRendererScrollback: () => {
+            if (!windowRegistry) return;
+            reduceHiddenRendererScrollback(windowRegistry.all().map((wCtx) => wCtx.browserWindow));
           },
           sampleBlinkMemory: () => {
             if (!windowRegistry) return;

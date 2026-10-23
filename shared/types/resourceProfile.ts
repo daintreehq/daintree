@@ -55,7 +55,7 @@ export interface ResourceProfileConfig {
    * (PTY_MIRROR_SCROLLBACK, 5k) — so perf/balanced's 10k is a budget the
    * mirror cap already binds, and only efficiency's 4k lowers it further.
    * Applied live on profile change via useResourceProfile →
-   * restoreScrollbackAllForeground.
+   * restoreScrollbackAll.
    */
   agentScrollbackMaxLines: number;
   /** FetchScheduler focused (isCurrent) fetch interval (ms) */

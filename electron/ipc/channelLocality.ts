@@ -1084,7 +1084,9 @@ export const CHANNEL_LOCALITY = {
   "terminal:locate": "host",
   "terminal:reconnect": "host",
   "terminal:reconnect-bulk": "host",
-  "terminal:reduce-scrollback": "host",
+  // Reclaims this machine's renderer memory, so a local view showing a remote
+  // project must still receive it.
+  "terminal:reduce-scrollback": "shell",
   "terminal:release-worker-ingest-port": "host",
   "terminal:replay-history": "host",
   "terminal:request-worker-ingest-port": "host",

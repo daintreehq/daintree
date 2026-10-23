@@ -98,6 +98,7 @@ import {
 import type { TerminalResizeResult } from "@shared/types/pty-host";
 import { applyXtermReflowFastpath } from "@shared/utils/xtermReflowFastpath";
 import { usePanelStore } from "@/store/panelStore";
+import { usePerformanceModeStore } from "@/store/performanceModeStore";
 import { useHelpPanelStore, selectSlot, selectSlotForTerminal } from "@/store/helpPanelStore";
 import { logDebug, logWarn, logError } from "@/utils/logger";
 import { getErrorMessage } from "@/utils/errorContext";
@@ -423,11 +424,14 @@ class TerminalInstanceService {
             managed.lastHeight = 0;
           }
         } else {
-          // Tier upgrade path: clear the reduce cooldown so restoreScrollback
-          // is unconditional and the next BACKGROUND drop isn't artificially
-          // delayed by stale state from a long-completed reduce.
-          managed.lastScrollbackReduceAt = undefined;
-          restoreScrollback(managed);
+          // Tier upgrade path: clear the reduce cooldown so the re-derive is
+          // unconditional and the next shrink isn't delayed by stale state.
+          // Skipped for a hidden pressure-capped pane: it climbs to BURST on
+          // every output chunk, and the cap must hold until its reveal.
+          if (managed.isVisible || !managed.scrollbackPressureCapped) {
+            managed.lastScrollbackReduceAt = undefined;
+            this.reapplyScrollbackPolicy(managed);
+          }
 
           void this.ensureDeferredAddons(id, managed);
         }
@@ -1043,8 +1047,15 @@ class TerminalInstanceService {
   }
 
   setVisible(id: string, isVisible: boolean, expectedGeneration?: number): void {
+    const wasVisible = this.instances.get(id)?.isVisible;
     this.revealController.setVisible(id, isVisible, expectedGeneration);
     const managed = this.instances.get(id);
+    // A pane revealed mid-stream can stay at BURST, so the tier-upgrade
+    // re-derive never fires; lift its pressure cap here instead.
+    if (managed?.scrollbackPressureCapped && wasVisible === false && managed.isVisible) {
+      managed.lastScrollbackReduceAt = undefined;
+      this.reapplyScrollbackPolicy(managed);
+    }
     if (
       isVisible &&
       managed?.isVisible &&
@@ -4107,17 +4118,41 @@ class TerminalInstanceService {
     reduceScrollback(managed, targetLines);
   }
 
+  // Memory-pressure reclaim for every terminal this view isn't showing.
+  // Visibility, not refresh tier: a hidden pane streaming output sits at BURST,
+  // and a just-revealed one can still read BACKGROUND. Eligibility is read
+  // here, when the request lands, so a pane revealed after main sent it is
+  // spared; the reducer's own guards and cooldown still apply.
+  reduceScrollbackHidden(targetLines: number): void {
+    for (const managed of this.instances.values()) {
+      if (managed.isVisible) continue;
+      const before = managed.terminal.options.scrollback ?? 0;
+      reduceScrollback(managed, targetLines);
+      if ((managed.terminal.options.scrollback ?? 0) < before) {
+        managed.scrollbackPressureCapped = true;
+      }
+    }
+  }
+
+  // Every policy re-derive goes through here. A hidden pressure-capped pane
+  // may be lowered further but never raised — a streaming agent would refill
+  // the memory mid-episode — until its reveal lifts the cap.
+  private reapplyScrollbackPolicy(managed: ManagedTerminal): void {
+    if (managed.isVisible) managed.scrollbackPressureCapped = undefined;
+    restoreScrollback(managed, { shrinkOnly: managed.scrollbackPressureCapped === true });
+  }
+
   restoreScrollback(id: string): void {
     const managed = this.instances.get(id);
     if (!managed) return;
-    restoreScrollback(managed);
+    this.reapplyScrollbackPolicy(managed);
   }
 
   applyAgentPromotion(id: string, agentId: string): void {
     const managed = this.instances.get(id);
     if (!managed) return;
     if (managed.runtimeAgentId === agentId) {
-      restoreScrollback(managed);
+      this.reapplyScrollbackPolicy(managed);
       return;
     }
     managed.runtimeAgentId = agentId;
@@ -4125,7 +4160,7 @@ class TerminalInstanceService {
     // life as plain terminals and may have cursorBlink:true. Force the agent
     // policy now so background promotions don't keep the blink timer alive.
     this.applyCursorBlinkPolicy(managed);
-    restoreScrollback(managed);
+    this.reapplyScrollbackPolicy(managed);
     // Route through wantsWebGLAtTier so an off-screen promotion (background
     // worktree detected mid-stream) doesn't register a fleet-wide want; the
     // reveal path re-acquires it when the pane comes on-screen (#10671).
@@ -4141,7 +4176,7 @@ class TerminalInstanceService {
     // Demoted to plain terminal — re-evaluate the blink policy so a focused
     // pane gets its blinking cursor back.
     this.applyCursorBlinkPolicy(managed);
-    restoreScrollback(managed);
+    this.reapplyScrollbackPolicy(managed);
     // Agent demotion is authoritative — cancel any pending hide-dwell so the
     // timer can't fire later and call releaseContext on a stale slot. Any
     // visible pane stays WebGL-eligible as a plain terminal now (#11193), so
@@ -4155,16 +4190,18 @@ class TerminalInstanceService {
     this.maybeReflowTerminal(managed);
   }
 
-  // Re-derive the scrollback policy for every live foreground terminal.
-  // Called on resource-profile changes after setAgentScrollbackMaxLines so
-  // the new agent ceiling applies to terminals that are already open.
-  // Background terminals are skipped: their scrollback was deliberately
-  // reduced and is restored by the tier-upgrade path.
-  restoreScrollbackAllForeground(): void {
+  // Re-derive the scrollback policy for every live terminal. Called on
+  // resource-profile changes after setAgentScrollbackMaxLines so the new agent
+  // ceiling applies to terminals that are already open — hidden ones included,
+  // since they hold most of the memory. restoreScrollback guards any shrink
+  // that would evict history.
+  //
+  // Skipped in performance mode: its fixed limit ignores the agent ceiling,
+  // and its restore writes unconditionally, past those guards.
+  restoreScrollbackAll(): void {
+    if (usePerformanceModeStore.getState().performanceMode) return;
     for (const managed of this.instances.values()) {
-      const tier = managed.lastAppliedTier ?? managed.getRefreshTier?.();
-      if (tier === TerminalRefreshTier.BACKGROUND) continue;
-      restoreScrollback(managed);
+      this.reapplyScrollbackPolicy(managed);
     }
   }
 

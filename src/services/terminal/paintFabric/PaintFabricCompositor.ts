@@ -1173,8 +1173,12 @@ export class PaintFabricCompositor implements TerminalPaintPlane {
     this.plane(id).clearAgentPromotion(id);
   }
 
-  restoreScrollbackAllForeground(): void {
-    this.planes().forEach((plane) => plane.restoreScrollbackAllForeground());
+  restoreScrollbackAll(): void {
+    this.planes().forEach((plane) => plane.restoreScrollbackAll());
+  }
+
+  reduceScrollbackHidden(targetLines: number): void {
+    this.planes().forEach((plane) => plane.reduceScrollbackHidden(targetLines));
   }
 
   reportLost(id: string, note: string): void {

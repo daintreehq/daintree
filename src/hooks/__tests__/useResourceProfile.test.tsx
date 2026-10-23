@@ -125,7 +125,7 @@ describe("useResourceProfile", () => {
   });
 
   it("propagates the agent scrollback ceiling and re-derives live terminals", () => {
-    const restoreSpy = vi.spyOn(terminalInstanceService, "restoreScrollbackAllForeground");
+    const restoreSpy = vi.spyOn(terminalInstanceService, "restoreScrollbackAll");
     renderHook(() => useResourceProfile());
 
     act(() => {
@@ -139,7 +139,7 @@ describe("useResourceProfile", () => {
 
   it("skips the live-terminal re-applies for values that did not move (#12518)", () => {
     const refreshSpy = vi.spyOn(terminalInstanceService, "refreshWebGLMode");
-    const restoreSpy = vi.spyOn(terminalInstanceService, "restoreScrollbackAllForeground");
+    const restoreSpy = vi.spyOn(terminalInstanceService, "restoreScrollbackAll");
     renderHook(() => useResourceProfile());
 
     act(() => {
@@ -196,7 +196,7 @@ describe("useResourceProfile", () => {
 
   it("applies a first pull that matches the current config without walking terminals", async () => {
     const refreshSpy = vi.spyOn(terminalInstanceService, "refreshWebGLMode");
-    const restoreSpy = vi.spyOn(terminalInstanceService, "restoreScrollbackAllForeground");
+    const restoreSpy = vi.spyOn(terminalInstanceService, "restoreScrollbackAll");
     useResourceProfileStore.getState().setProfile("balanced");
     renderHook(() => useResourceProfile());
 

@@ -41,6 +41,9 @@ const reliabilityMetricHandlers = vi.hoisted(
       }) => void
     >
 );
+const reduceScrollbackHandlers = vi.hoisted(
+  () => [] as Array<(data: { targetLines: number }) => void>
+);
 vi.mock("@/controllers", () => {
   const noopSub = () => () => {};
   return {
@@ -72,7 +75,10 @@ vi.mock("@/controllers", () => {
         }
       ),
       onSpawnResult: vi.fn(noopSub),
-      onReduceScrollback: vi.fn(noopSub),
+      onReduceScrollback: vi.fn((handler: (data: { targetLines: number }) => void) => {
+        reduceScrollbackHandlers.push(handler);
+        return () => {};
+      }),
       onRestoreScrollback: vi.fn(noopSub),
     },
   };
@@ -82,6 +88,7 @@ import { handleFallbackTriggered, setupLifecycleListeners } from "../lifecycle";
 import { notify } from "@/lib/notify";
 import { flushPanelStatusBuffer, enqueueFlowStatusUpdate } from "@/store/panelStatusBuffer";
 import { isPtyPanel } from "@shared/types/panel";
+import { terminalInstanceService } from "@/services/TerminalInstanceService";
 
 function getPtyHeldDuration(id: string): number | undefined {
   const panel = usePanelStore.getState().panelsById[id];
@@ -1092,5 +1099,26 @@ describe("onExit — session-preserving teardown (#13841)", () => {
 
     onExit("shell", 0);
     expect(getShell()?.sessionPreservingExit).toBeUndefined();
+  });
+});
+
+describe("memory-pressure scrollback reduce (#14215)", () => {
+  it("hands the target to the view-wide hidden-terminal reduce", () => {
+    const reduceHidden = vi
+      .spyOn(terminalInstanceService, "reduceScrollbackHidden")
+      .mockImplementation(() => {});
+    try {
+      reduceScrollbackHandlers.length = 0;
+      setupLifecycleListeners();
+      const handler = reduceScrollbackHandlers.at(-1);
+      if (!handler) throw new Error("onReduceScrollback handler was not registered");
+
+      handler({ targetLines: 500 });
+
+      expect(reduceHidden).toHaveBeenCalledTimes(1);
+      expect(reduceHidden).toHaveBeenCalledWith(500);
+    } finally {
+      reduceHidden.mockRestore();
+    }
   });
 });
