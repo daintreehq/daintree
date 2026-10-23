@@ -1183,4 +1183,106 @@ describe("tool groups (#14104)", () => {
     expect(row.toolGroups?.find((group) => group.id === "search")?.assistantAllowed).toBe(true);
     expect(assistantAgentMcpAccess(PROJECT, "acme.ledger")).toBe("read-only");
   });
+
+  it("turns a group off for a plugin that's gone while its database access stays", async () => {
+    setProjectAgentMcpAccess(PROJECT, "acme.ledger", "read-only", undefined, [
+      { id: "search", access: "read" },
+    ]);
+    mocks.listPlugins.mockReturnValue([]);
+
+    const [row] = (
+      await set({
+        pluginInstanceId: "acme.ledger",
+        access: "read-only",
+        scope: "project",
+        groups: [],
+      })
+    ).plugins;
+
+    expect(row.access).toBe("read-only");
+    expect(row.toolGroups ?? []).toEqual([]);
+    await expect(
+      set({ pluginInstanceId: "acme.ledger", access: "read-write", scope: "project", groups: [] })
+    ).rejects.toThrow(/no running plugin/);
+  });
+
+  it("allows a recast group again under what it says now", async () => {
+    setProjectAgentMcpAccess(PROJECT, "acme.ledger", "off", undefined, [
+      { id: "search", access: "write" },
+    ]);
+    let [row] = (await list()).plugins;
+    expect(row.toolGroups?.find((group) => group.id === "search")).toMatchObject({
+      allowed: false,
+      reclassified: true,
+    });
+
+    [row] = (
+      await set({
+        pluginInstanceId: "acme.ledger",
+        access: "off",
+        scope: "project",
+        groups: ["search"],
+      })
+    ).plugins;
+
+    expect(row.toolGroups?.find((group) => group.id === "search")?.allowed).toBe(true);
+  });
+
+  it("keeps a repository's groups when only the database level changes", async () => {
+    mocks.listPlugins.mockReturnValue([
+      plugin({
+        instanceId: PROJECT_LEDGER,
+        origin: "project",
+        projectId: PROJECT,
+        agentMcp: GROUPED,
+      }),
+    ]);
+    await writeRepositoryDefaults({ "acme.ledger": { access: "read-only", groups: ["search"] } });
+
+    const [row] = (await set({ pluginInstanceId: PROJECT_LEDGER, access: "off", scope: "project" }))
+      .plugins;
+
+    expect(row.access).toBe("off");
+    expect(row.toolGroups?.find((group) => group.id === "search")?.allowed).toBe(true);
+  });
+
+  it("keeps an Assistant group the agents lost on record, and lets it be turned off", async () => {
+    setProjectAgentMcpAccess(PROJECT, "acme.ledger", "read-only", undefined, [
+      { id: "search", access: "read" },
+      { id: "changes", access: "write" },
+    ]);
+    setProjectAssistantAgentMcpAccess(PROJECT, "acme.ledger", "read-only", undefined, [
+      { id: "search", access: "read" },
+    ]);
+    setProjectAgentMcpAccess(PROJECT, "acme.ledger", "off", undefined, [
+      { id: "changes", access: "write" },
+    ]);
+
+    let [row] = (await list()).plugins;
+    expect(row.toolGroups?.find((group) => group.id === "search")).toMatchObject({
+      allowed: false,
+      assistantAllowed: true,
+    });
+
+    [row] = (
+      await set({
+        pluginInstanceId: "acme.ledger",
+        access: "read-only",
+        scope: "assistant",
+        groups: [],
+      })
+    ).plugins;
+    expect(row.toolGroups?.find((group) => group.id === "search")?.assistantAllowed).toBe(false);
+  });
+
+  it("reports an installed plugin's default groups", async () => {
+    setAllProjectsAgentMcpAccess("acme.ledger", "off", undefined, [
+      { id: "search", access: "read" },
+    ]);
+
+    const [row] = (await list()).plugins;
+
+    expect(row.allProjectsGroups).toEqual(["search"]);
+    expect(row.toolGroups?.find((group) => group.id === "search")?.allowed).toBe(true);
+  });
 });

@@ -144,6 +144,14 @@ function agentsHaveAccess(plugin: ProjectAgentToolPlugin): boolean {
   return plugin.access !== "off" || (plugin.toolGroups ?? []).some((group) => group.allowed);
 }
 
+/** Whether the groups this project's agents have differ from an installed plugin's default for every project. */
+function groupsDifferFromDefault(plugin: ProjectAgentToolPlugin): boolean {
+  if (plugin.toolGroups === undefined || plugin.allProjectsGroups === undefined) return false;
+  const here = plugin.toolGroups.filter((group) => group.allowed).map((group) => group.id);
+  const everywhere = new Set(plugin.allProjectsGroups);
+  return here.length !== everywhere.size || here.some((id) => !everywhere.has(id));
+}
+
 /** The ids of the groups allowed, with one switched on or off. */
 function withGroup(
   groups: readonly ProjectAgentToolGroup[],
@@ -159,7 +167,7 @@ function groupDescription(group: ProjectAgentToolGroup): string[] {
   const lines = group.description ? [group.description] : [];
   lines.push(
     group.access === "read"
-      ? "The plugin says these tools read and search; your agent still asks before using them"
+      ? "The plugin says these tools read and search. That never changes whether your agent asks before using them"
       : "The plugin says these tools make changes"
   );
   if (group.reclassified) {
@@ -444,9 +452,11 @@ function AssistantAccessRows({
             <SettingsRow
               label={`Assistant can use ${group.name}`}
               description={
-                group.access === "read"
-                  ? "Tools the plugin says read and search"
-                  : "Tools the plugin says make changes"
+                group.assistantAllowed && !group.allowed
+                  ? "Agents in this project can't use this group now, so the Assistant can't either until they can again"
+                  : group.access === "read"
+                    ? "Tools the plugin says read and search"
+                    : "Tools the plugin says make changes"
               }
               disabled={busy}
               control={({ labelId, descriptionId, disabled }) => (
@@ -653,14 +663,12 @@ export function ProjectAgentToolsSection() {
             const canSetDefault =
               plugin.allProjectsAccess !== undefined &&
               plugin.available &&
-              (plugin.access !== plugin.allProjectsAccess ||
-                (plugin.source === "project" &&
-                  (plugin.toolGroups ?? []).some((group) => group.allowed)));
+              (plugin.access !== plugin.allProjectsAccess || groupsDifferFromDefault(plugin));
             // A default left on for a plugin that went away would apply in every
             // project the moment it came back, so it stays clearable from here.
             const canClearDefault =
               plugin.allProjectsAccess !== undefined &&
-              plugin.allProjectsAccess !== "off" &&
+              (plugin.allProjectsAccess !== "off" || (plugin.allProjectsGroups ?? []).length > 0) &&
               !plugin.available;
             return (
               <div

@@ -49,6 +49,8 @@ export interface ProjectAgentToolPlugin {
   source: AgentMcpAccessSource;
   /** Installed plugins only: the access every project without its own answer gets. */
   allProjectsAccess?: AgentMcpAccess;
+  /** Installed plugins with tool groups only: the groups every project without its own answer gets. */
+  allProjectsGroups?: string[];
   /** Project plugins only: what the repository's `.daintree/mcp.json` sets, when it names the plugin. */
   repositoryAccess?: AgentMcpAccess;
   /**
@@ -86,7 +88,11 @@ export interface ProjectAgentToolGroup {
   access: "read" | "write";
   /** This project's agents may use it. */
   allowed: boolean;
-  /** This project's Daintree Assistant may use it as well. Never without `allowed`. */
+  /**
+   * The user allowed this project's Daintree Assistant to use it. Reaches the
+   * Assistant only while `allowed` holds too; kept on record, and switchable
+   * off, while it doesn't.
+   */
   assistantAllowed: boolean;
   /**
    * Allowed once as reading tools, and the plugin now says they change things

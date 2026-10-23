@@ -113,10 +113,14 @@ describe("tool groups", () => {
     expect(agentMcpScopeFor(PROJECT_B, crm())).toBeNull();
   });
 
-  it("keeps an installed plugin's shared databases off when only a group is allowed", () => {
-    setProjectAgentMcpAccess(PROJECT_A, CRM, "off", undefined, [SEARCH]);
+  it("lets an answer from before access levels keep every default group off", () => {
+    storeMock.data.set("projectAgentMcpEnablement", {
+      [PROJECT_A]: { [CRM]: { crm: { decidedAt: 1, enabled: false } } },
+    });
+    setAllProjectsAgentMcpAccess(CRM, "off", undefined, [SEARCH]);
 
-    expect(agentMcpScopeFor(PROJECT_A, crm())?.databases).toBe(false);
+    expect(agentMcpScopeFor(PROJECT_A, crm())).toBeNull();
+    expect(agentMcpScopeFor(PROJECT_B, crm())?.pluginGroups).toEqual([SEARCH]);
   });
 
   it("drops a group the plugin recast from reading to writing", () => {

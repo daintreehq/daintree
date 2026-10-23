@@ -229,7 +229,8 @@ export function listLegacyAgentMcpEndpointIds(
  * the same order of precedence as its level: the user's answer for the
  * project, else for an installed plugin their answer for every project, else
  * for a project plugin the repository's. Answers kept one endpoint at a time
- * predate groups and allow none.
+ * predate groups and allow none — and, as for a level, still stand in front of
+ * every default below them until the user answers again.
  */
 export function agentMcpGroupChoices(
   projectId: string,
@@ -239,11 +240,21 @@ export function agentMcpGroupChoices(
     own(asDict(own(read(PROJECT_STORE_KEY), projectId)), pluginInstanceId)
   );
   if (project !== null && project.access !== null) return project.groups ?? [];
+  if (project === null && hasLegacyAgentMcpAnswer(projectId, pluginInstanceId)) return [];
   if (projectIdFromPluginInstanceKey(pluginInstanceId) !== null) {
     return (projectDefaultGroups(projectId, pluginInstanceId) ?? []).map((id) => ({ id }));
   }
   const allProjects = accessRecord(own(read(ALL_PROJECTS_STORE_KEY), pluginInstanceId));
   return allProjects !== null && allProjects.access !== null ? (allProjects.groups ?? []) : [];
+}
+
+/** The tool groups an installed plugin's every-project answer allows; none for a project plugin. */
+export function allProjectsAgentMcpGroupChoices(
+  pluginInstanceId: string
+): readonly AgentMcpGroupChoice[] {
+  if (projectIdFromPluginInstanceKey(pluginInstanceId) !== null) return [];
+  const record = accessRecord(own(read(ALL_PROJECTS_STORE_KEY), pluginInstanceId));
+  return record !== null && record.access !== null ? (record.groups ?? []) : [];
 }
 
 /** What a roster gets with no answer for the project: the all-projects answer, or the repository's. */

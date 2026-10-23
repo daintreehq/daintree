@@ -16,6 +16,7 @@ import {
   agentMcpGroupChoices,
   agentMcpScopeFor,
   allProjectsAgentMcpAccess,
+  allProjectsAgentMcpGroupChoices,
   assistantAgentMcpAccess,
   assistantAgentMcpGroupChoices,
   choicesAllowGroup,
@@ -237,6 +238,13 @@ function row(
     source,
     assistantAccess: assistantAgentMcpAccess(projectId, id),
     ...(installed ? { allProjectsAccess: allProjects ?? "off" } : {}),
+    ...(installed && declaredGroups !== undefined
+      ? {
+          allProjectsGroups: declaredGroups
+            .filter((group) => choicesAllowGroup(allProjectsAgentMcpGroupChoices(id), group))
+            .map((group) => group.id),
+        }
+      : {}),
     ...(!installed && repositoryNamesPlugin
       ? {
           repositoryAccess: levelOf(
@@ -274,7 +282,7 @@ function toolGroupRows(
       ...(group.description !== undefined ? { description: group.description } : {}),
       access: group.access,
       allowed,
-      assistantAllowed: allowed && choicesAllowGroup(assistantChoices, group),
+      assistantAllowed: choicesAllowGroup(assistantChoices, group),
       ...(reclassified ? { reclassified: true as const } : {}),
     };
   });
@@ -461,11 +469,12 @@ async function setAssistantAccess(
 ): Promise<void> {
   // Taking access away is always accepted, whatever became of the plugin or
   // the agents' access since it was given.
-  const kept = keptChoices(assistantAgentMcpGroupChoices(projectId, pluginInstanceId), groupIds);
-  if (
+  const stored = assistantAgentMcpGroupChoices(projectId, pluginInstanceId);
+  const kept = keptChoices(stored, groupIds);
+  const lowers =
     kept !== null &&
-    ACCESS_RANK[access] <= ACCESS_RANK[assistantAgentMcpAccess(projectId, pluginInstanceId)]
-  ) {
+    ACCESS_RANK[access] <= ACCESS_RANK[assistantAgentMcpAccess(projectId, pluginInstanceId)];
+  if (lowers && groupIds === undefined) {
     setProjectAssistantAgentMcpAccess(projectId, pluginInstanceId, access, undefined, kept);
     return;
   }
@@ -474,6 +483,10 @@ async function setAssistantAccess(
   await refreshProjectAgentMcpDefaults(projectId, projectStore.getProjectById(projectId)?.path);
   // Checked and written with no await between, as the project answer is.
   const plugin = declaredFor(svc, projectId).find((d) => d.pluginInstanceId === pluginInstanceId);
+  if (!plugin && lowers) {
+    setProjectAssistantAgentMcpAccess(projectId, pluginInstanceId, access, undefined, kept);
+    return;
+  }
   if (!plugin) {
     throw new Error("agent tools: no running plugin offers tools in this project");
   }
@@ -487,14 +500,17 @@ async function setAssistantAccess(
     projectRow.access === "off" && projectRow.toolGroups?.some((group) => group.allowed)
       ? "read-only"
       : projectRow.access;
-  if (ACCESS_RANK[access] > ACCESS_RANK[projectAccess]) {
+  if (!lowers && ACCESS_RANK[access] > ACCESS_RANK[projectAccess]) {
     throw new Error(
       "agent tools: the Daintree Assistant can't have more access than this project's agents"
     );
   }
   const groups = groupIds === undefined ? (kept ?? []) : declaredGroupChoices(plugin, groupIds);
   const projectGroups = effectiveGroupChoices(projectId, plugin);
-  if (groups.some((group) => !choicesAllowGroup(projectGroups, group))) {
+  // Only what this adds is checked: a group kept on record while the agents
+  // lost it stays the user's to turn off, and reaches nothing meanwhile.
+  const added = groups.filter((group) => !choicesAllowGroup(stored, group));
+  if (added.some((group) => !choicesAllowGroup(projectGroups, group))) {
     throw new Error(
       "agent tools: the Daintree Assistant can't use a tool group this project's agents can't"
     );
@@ -561,10 +577,21 @@ export const pluginAgentMcpNamespace = defineIpcNamespace({
           }
         };
 
-        const kept = keptChoices(agentMcpGroupChoices(projectId, pluginInstanceId), groupIds);
-        if ((access === null || access === "off") && kept !== null) {
-          // Always allowed — it is how a stale answer is cleared.
-          write(kept);
+        // The repository's groups are part of what the answer starts from.
+        await refreshProjectAgentMcpDefaults(
+          projectId,
+          projectStore.getProjectById(projectId)?.path
+        );
+        const current = agentMcpGroupChoices(projectId, pluginInstanceId);
+        const kept = keptChoices(current, groupIds);
+        if (
+          (access === null || access === "off") &&
+          groupIds === undefined &&
+          current.every((choice) => choice.access !== undefined)
+        ) {
+          // Always allowed, with no groups to resolve — it is how a stale
+          // answer is cleared.
+          write(kept ?? []);
         } else {
           const svc = await getPluginService();
           await svc.waitForCatalog();
@@ -573,17 +600,31 @@ export const pluginAgentMcpNamespace = defineIpcNamespace({
           const plugin = declaredFor(svc, projectId).find(
             (d) => d.pluginInstanceId === pluginInstanceId
           );
-          if (!plugin) {
-            throw new Error("agent tools: no running plugin offers tools in this project");
+          if (plugin) {
+            if (access !== null && !isMeaningful(plugin, access)) {
+              throw new Error(`agent tools: that plugin has nothing for "${access}" to allow`);
+            }
+            // Resolved against what it declares now, so a group recast since
+            // it was allowed is stored as it reads today, and a repository's
+            // groups survive a change of level.
+            write(
+              groupIds !== undefined
+                ? declaredGroupChoices(plugin, groupIds)
+                : effectiveGroupChoices(projectId, plugin)
+            );
+          } else {
+            // Gone: only taking away, which needs nothing it declares.
+            const level =
+              (scope === "project"
+                ? projectAgentMcpAccessAnswer(projectId, pluginInstanceId)
+                : null) ??
+              allProjectsAgentMcpAccess(pluginInstanceId) ??
+              "off";
+            if (kept === null || (access !== null && ACCESS_RANK[access] > ACCESS_RANK[level])) {
+              throw new Error("agent tools: no running plugin offers tools in this project");
+            }
+            write(kept);
           }
-          if (access !== null && !isMeaningful(plugin, access)) {
-            throw new Error(`agent tools: that plugin has nothing for "${access}" to allow`);
-          }
-          write(
-            groupIds !== undefined
-              ? declaredGroupChoices(plugin, groupIds)
-              : effectiveGroupChoices(projectId, plugin)
-          );
         }
 
         return buildSnapshot(projectId);
