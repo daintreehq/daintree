@@ -2531,6 +2531,45 @@
               "mode": {
                 "type": "string",
                 "const": "tools"
+              },
+              "groups": {
+                "minItems": 1,
+                "maxItems": 8,
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 64,
+                      "pattern": "^[a-zA-Z0-9._-]+$"
+                    },
+                    "name": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 80
+                    },
+                    "description": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 400
+                    },
+                    "access": {
+                      "type": "string",
+                      "enum": [
+                        "read",
+                        "write"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "name",
+                    "access"
+                  ],
+                  "additionalProperties": false
+                }
               }
             },
             "required": [
