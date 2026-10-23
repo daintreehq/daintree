@@ -23,7 +23,7 @@ import {
   type ApplicationNavigationRecord,
 } from "@/store/applicationNavigationStore";
 import { useMacroFocusStore } from "@/store/macroFocusStore";
-import { usePanelStore } from "@/store/panelStore";
+import { exitPanelMaximize, isPanelMaximized } from "@/store/storeAccessors";
 import { selectProjectMainAreaRoute, useProjectHomeStore } from "@/store/projectHomeStore";
 import { useProjectPluginStore } from "@/store/projectPluginStore";
 import { getViewWorkspaceId } from "@/store/viewWorkspaceId";
@@ -161,7 +161,7 @@ function pendingReveal(context: ApplicationNavigationContext): "home" | "grid" |
     const surface = currentProjectSurface("projectHome");
     if (surface === null || surface.claim.pluginId !== context.instanceId) return null;
     // A maximized panel draws over Home, so being on it isn't being shown it.
-    return onHome && usePanelStore.getState().maximizedId === null ? null : "home";
+    return onHome && !isPanelMaximized() ? null : "home";
   }
   return onHome ? "grid" : null;
 }
@@ -176,7 +176,7 @@ function pendingReveal(context: ApplicationNavigationContext): "home" | "grid" |
 function reveal(target: "home" | "grid"): void {
   const home = useProjectHomeStore.getState();
   if (target === "home") {
-    usePanelStore.getState().exitMaximize();
+    exitPanelMaximize();
     home.showHome();
   } else {
     home.showGrid();

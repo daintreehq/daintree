@@ -12,9 +12,6 @@ vi.mock("@/hooks/useHostPlatform", () => ({ hostScopedKey: (id: string) => `loca
 vi.mock("@/hooks/useRenderableSurfaceClaim", () => ({
   currentProjectSurface: () => surface.current,
 }));
-vi.mock("@/store/panelStore", () => ({
-  usePanelStore: { getState: () => ({ exitMaximize, maximizedId: panels.maximizedId }) },
-}));
 vi.mock("@/store/projectPluginStore", async () => {
   const { create } = await import("zustand");
   return {
@@ -79,6 +76,11 @@ function installLocalStorage(initial: Record<string, string> = {}): Map<string, 
 }
 
 async function load(app: ProjectApplicationState | null = application()) {
+  const { setPanelMaximizeAccessor } = await import("@/store/storeAccessors");
+  setPanelMaximizeAccessor({
+    isMaximized: () => panels.maximizedId !== null,
+    exit: exitMaximize,
+  });
   const navigation = await import("../applicationNavigation");
   const lifecycle = await import("../pluginPanelLifecycle");
   const { useProjectPluginStore } = await import("@/store/projectPluginStore");
