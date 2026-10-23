@@ -1,4 +1,4 @@
-import { Terminal } from "@xterm/xterm";
+import type { Terminal } from "@xterm/xterm";
 import { TerminalRefreshTier } from "@/types";
 import { isSidebarMeasurementLocked } from "@/lib/layoutTransitionLock";
 import { isProjectViewCached, subscribeProjectViewLifecycle } from "@/lib/viewCacheState";

@@ -1,8 +1,12 @@
-import { useState } from "react";
-import { QuickRun, QuickRunToggle, useQuickRunExpanded } from "@/components/Project/QuickRun";
+import { lazy, Suspense, useState } from "react";
+import { QuickRunToggle, useQuickRunExpanded } from "@/components/Project/QuickRunToggle";
 import { ProjectPluginIndicator } from "@/components/Plugin/ProjectPluginIndicator";
 import { SidebarMemoryNotice } from "./SidebarMemoryNotice";
 import { SidebarStatusBar } from "./SidebarStatusBar";
+
+const LazyQuickRun = lazy(() =>
+  import("@/components/Project/QuickRun").then((m) => ({ default: m.QuickRun }))
+);
 
 /**
  * The sidebar's footer, as one unit: one surface, one top divider, and one
@@ -39,7 +43,9 @@ export function SidebarFooter({ projectId }: { projectId: string | null }) {
       <SidebarMemoryNotice />
       <ProjectPluginIndicator />
       {projectId != null && runOpen && (
-        <QuickRun key={projectId} projectId={projectId} focusOnMount={openedByUser} />
+        <Suspense fallback={null}>
+          <LazyQuickRun key={projectId} projectId={projectId} focusOnMount={openedByUser} />
+        </Suspense>
       )}
       <SidebarStatusBar
         trailing={

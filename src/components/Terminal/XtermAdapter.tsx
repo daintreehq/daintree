@@ -1,6 +1,5 @@
 import { useCallback, useLayoutEffect, useMemo, useRef, useEffect, useState } from "react";
 import type { ITerminalOptions } from "@xterm/xterm";
-import "@xterm/xterm/css/xterm.css";
 import type { AgentState } from "@shared/types/agent";
 import { cn } from "@/lib/utils";
 import { reportCanopySent } from "@/lib/canopySeen";

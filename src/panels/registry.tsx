@@ -1,7 +1,7 @@
 import { Suspense, type ComponentProps, type ComponentType } from "react";
 import { lazyWithPreload } from "@/lib/lazyWithPreload";
 import type { PanelKindConfig } from "@shared/config/panelKindRegistry";
-import { getPanelKindConfig } from "@shared/config/panelKindRegistry";
+import { getPanelKindConfig, panelKindHasPty } from "@shared/config/panelKindRegistry";
 import type {
   PtyPanelData,
   BrowserPanelData,
@@ -27,6 +27,7 @@ import { BrowserPaneSkeleton } from "@/components/Browser/BrowserPaneSkeleton";
 import { ContentFadeIn } from "@/components/ui/ContentFadeIn";
 import { TerminalPane } from "@/components/Terminal/TerminalPane";
 import { logError } from "@/utils/logger";
+import { loadXtermCore } from "@/services/terminal/xtermCore";
 import type { SafeBootResult } from "@/lib/bootPromise";
 import { inferKind } from "@shared/utils/inferPanelKind";
 
@@ -124,6 +125,9 @@ export function preloadRestoredPanes(kinds: Iterable<string | undefined>): void 
   for (const kind of kinds) {
     if (!kind || seen.has(kind)) continue;
     seen.add(kind);
+    // xterm loads on first terminal creation (#14239); a session restoring a
+    // PTY panel fetches it now, beside the App chunk.
+    if (isBuiltInPanelKind(kind) && panelKindHasPty(kind)) loadXtermCore().catch(() => {});
     if (!isBuiltInPanelKind(kind) || getPanelKindConfig(kind)?.firstRenderRestore !== true) {
       continue;
     }

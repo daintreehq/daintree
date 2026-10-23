@@ -1,10 +1,10 @@
 import type { TerminalPaddingPaint } from "./terminalPaddingPaint";
-import { Terminal, IDisposable, IMarker, ILink } from "@xterm/xterm";
-import { FitAddon } from "@xterm/addon-fit";
-import { SerializeAddon } from "@xterm/addon-serialize";
+import type { Terminal, IDisposable, IMarker, ILink } from "@xterm/xterm";
+import type { FitAddon } from "@xterm/addon-fit";
+import type { SerializeAddon } from "@xterm/addon-serialize";
 import type { ImageAddon } from "@xterm/addon-image";
 import type { SearchAddon } from "@xterm/addon-search";
-import { WebLinksAddon } from "@xterm/addon-web-links";
+import type { WebLinksAddon } from "@xterm/addon-web-links";
 
 import { TerminalRefreshTier, PanelKind, AgentState } from "@/types";
 import type { TerminalScrollbackRestoreError } from "@shared/types/panel";

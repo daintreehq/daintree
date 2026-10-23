@@ -90,7 +90,8 @@ vi.mock("@/components/Project/RunningTaskList", () => ({
   },
 }));
 
-import { QuickRun, QuickRunToggle, useQuickRunExpanded } from "../QuickRun";
+import { QuickRun } from "../QuickRun";
+import { QuickRunToggle, useQuickRunExpanded } from "../QuickRunToggle";
 
 /** The panel as the sidebar footer mounts it: only while its toggle is open. */
 function Footer({ projectId }: { projectId: string }) {

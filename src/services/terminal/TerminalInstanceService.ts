@@ -1,4 +1,5 @@
-import { Terminal, IBufferRange } from "@xterm/xterm";
+import type { Terminal, IBufferRange } from "@xterm/xterm";
+import { loadXtermCore } from "./xtermCore";
 import { isMac } from "@/lib/platform";
 import { isHostWindows } from "@/hooks/useHostPlatform";
 import {
@@ -1623,6 +1624,7 @@ class TerminalInstanceService {
       terminalOptions.cursorBlink = false;
     }
 
+    const { Terminal } = await loadXtermCore();
     const terminal = new Terminal(terminalOptions);
     applyXtermReflowFastpath(terminal);
     this.cwdProviders.set(id, getCwd ?? (() => ""));
@@ -2583,6 +2585,9 @@ class TerminalInstanceService {
       logDebug(`[TIS] Deferring rebuild of ${id} — host has no renderable box yet`);
       return "deferred";
     }
+
+    // Already loaded (a terminal exists to rebuild), so this resolves at once.
+    const { Terminal } = await loadXtermCore();
 
     // Before anything is torn down: an undrainable buffer means we must not
     // dispose at all (see drainWritesBeforeDispose).

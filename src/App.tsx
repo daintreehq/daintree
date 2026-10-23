@@ -1,5 +1,4 @@
 import { Profiler, Suspense, useCallback, useEffect, useRef, useState } from "react";
-import "@xterm/xterm/css/xterm.css";
 import {
   isElectronAvailable,
   useAgentLauncher,

@@ -25,8 +25,10 @@ vi.mock("@/store/macroFocusStore", () => ({
     getState: () => ({ setRegionRef: () => {} }),
   }),
 }));
-vi.mock("@/components/Project", () => ({
+vi.mock("@/components/Project/ProjectResourceBadge", () => ({
   ProjectResourceBadge: () => null,
+}));
+vi.mock("@/components/Project/QuickRun", () => ({
   QuickRun: () => null,
 }));
 

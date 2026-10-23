@@ -1,4 +1,13 @@
-import { useEffect, useState, useCallback, useRef, useMemo, type ReactNode } from "react";
+import {
+  lazy,
+  Suspense,
+  useEffect,
+  useState,
+  useCallback,
+  useRef,
+  useMemo,
+  type ReactNode,
+} from "react";
 import { formatElapsedDuration } from "@/utils/formatElapsedDuration";
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -34,11 +43,15 @@ import {
   formatProcessLabel,
 } from "./ProjectResourceBadge.utils";
 import { pluralize, pluralNoun } from "@/lib/pluralize";
-import { ProcessesDialog } from "./ProcessesDialog";
 import { formatAgo, formatBufferEstimate } from "./processesView";
+import { useKeepMounted } from "@/hooks/useKeepMounted";
 import { useClosedTerminalProcessNotice } from "@/hooks/app/useClosedTerminalProcessNotice";
 import { isLivePluginTask, usePluginTaskStore } from "@/store/pluginTaskStore";
 import { PluginTaskList } from "@/components/Plugin/PluginTaskList";
+
+const LazyProcessesDialog = lazy(() =>
+  import("./ProcessesDialog").then((m) => ({ default: m.ProcessesDialog }))
+);
 
 const MAX_SAMPLES = 12;
 const BADGE_POLL_MS = 10_000;
@@ -529,6 +542,7 @@ export function ProjectResourceBadge({
   const samplesRef = useRef<number[]>([]);
   const popoverContentRef = useRef<HTMLDivElement>(null);
   const [processesOpen, setProcessesOpen] = useState(false);
+  const processesDialogMounted = useKeepMounted(processesOpen);
   useClosedTerminalProcessNotice(() => {
     setOpen(false);
     setProcessesOpen(true);
@@ -869,12 +883,14 @@ export function ProjectResourceBadge({
   // Mounted on every path: the readout can drop out from under an open dialog
   // (activity ending before the first read lands), and the dialog — maybe
   // mid-kill — must not go with it.
-  const processesDialog = (
-    <ProcessesDialog
-      isOpen={processesOpen}
-      onClose={() => setProcessesOpen(false)}
-      restoreFocusTo={() => (readoutRef.current?.isConnected ? readoutRef.current : null)}
-    />
+  const processesDialog = processesDialogMounted && (
+    <Suspense fallback={null}>
+      <LazyProcessesDialog
+        isOpen={processesOpen}
+        onClose={() => setProcessesOpen(false)}
+        restoreFocusTo={() => (readoutRef.current?.isConnected ? readoutRef.current : null)}
+      />
+    </Suspense>
   );
 
   if (!showReadout) {

@@ -14,7 +14,7 @@ import { PortalCloseConfirmDialog, PortalVisibilityController } from "../Portal"
 import { FleetArmingRibbon } from "@/components/Fleet";
 import { TerminalDestructiveActionConfirmDialog } from "@/components/Terminal/TerminalDestructiveActionConfirmDialog";
 import { PluginPanelReloadConfirmDialog } from "@/components/Plugin/PluginPanelReloadConfirmDialog";
-import { MoveOrRenameProjectDialog } from "@/components/Project/MoveOrRenameProjectDialog";
+import { useProjectRelocationStore } from "@/store/projectRelocationStore";
 import { ImportConfigDialog } from "@/components/Config/ImportConfigDialog";
 import { ProjectDialogHost } from "./ProjectDialogHost";
 import { ChordIndicator } from "./ChordIndicator";
@@ -138,6 +138,11 @@ const LazyDemoCursor = lazy(() =>
 const LazyDemoCaptureBridge = lazy(() =>
   import("../Demo/DemoCaptureBridge").then((m) => ({ default: m.DemoCaptureBridge }))
 );
+const LazyMoveOrRenameProjectDialog = lazy(() =>
+  import("@/components/Project/MoveOrRenameProjectDialog").then((m) => ({
+    default: m.MoveOrRenameProjectDialog,
+  }))
+);
 const LazyThemeBrowser = lazy(() =>
   import("../ThemeBrowser/ThemeBrowser").then((m) => ({ default: m.ThemeBrowser }))
 );
@@ -241,6 +246,7 @@ export function AppLayout({
   const workspaceId = getViewWorkspaceId() ?? currentProject?.id;
   const layout = useLayoutState();
   const diagnosticsMounted = useKeepMounted(layout.diagnosticsOpen);
+  const isRelocationPending = useProjectRelocationStore((s) => s.pending !== null);
   const isThemeBrowserOpen = useOverlayOpen("theme-browser");
   const themeBrowserOpen = useThemeBrowserStore((s) => s.isOpen);
   // The sheet moves like the Help panel beside it (200ms decelerating in, 120ms
@@ -995,7 +1001,11 @@ export function AppLayout({
       <TerminalDestructiveActionConfirmDialog />
       <PluginPanelReloadConfirmDialog />
       <PortalCloseConfirmDialog />
-      <MoveOrRenameProjectDialog />
+      {isRelocationPending && (
+        <Suspense fallback={null}>
+          <LazyMoveOrRenameProjectDialog />
+        </Suspense>
+      )}
       <ImportConfigDialog />
       {/* Not under the sidebar: these open from actions, the palette and
           keybindings too, so they must answer whatever the sidebar shows. */}

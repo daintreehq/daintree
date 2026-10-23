@@ -1,12 +1,15 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { ChevronDown, ChevronUp } from "lucide-react";
 import type { HeatCell } from "@shared/types";
 import { usePulseStore } from "@/store";
 import { Activity } from "@/components/icons";
-import { ProjectPulseCard } from "./ProjectPulseCard";
 import { getPulseHeatLevelBackground } from "./PulseHeatmap";
 import { StreakFlame } from "./StreakFlame";
 import { cn } from "@/lib/utils";
+
+const LazyProjectPulseCard = lazy(() =>
+  import("./ProjectPulseCard").then((m) => ({ default: m.ProjectPulseCard }))
+);
 
 interface ProjectPulseStripProps {
   worktreeId: string;
@@ -177,7 +180,9 @@ export function ProjectPulseStrip({ worktreeId }: ProjectPulseStripProps) {
           <ChevronUp className="h-3.5 w-3.5" aria-hidden="true" />
           Collapse
         </button>
-        <ProjectPulseCard worktreeId={worktreeId} />
+        <Suspense fallback={null}>
+          <LazyProjectPulseCard worktreeId={worktreeId} />
+        </Suspense>
       </div>
     );
   }

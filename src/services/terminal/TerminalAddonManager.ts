@@ -1,9 +1,10 @@
-import { Terminal, IDisposable } from "@xterm/xterm";
-import { FitAddon } from "@xterm/addon-fit";
-import { SerializeAddon } from "@xterm/addon-serialize";
+import type { Terminal, IDisposable } from "@xterm/xterm";
+import type { FitAddon } from "@xterm/addon-fit";
+import type { SerializeAddon } from "@xterm/addon-serialize";
 import type { ImageAddon } from "@xterm/addon-image";
 import type { SearchAddon } from "@xterm/addon-search";
-import { WebLinksAddon } from "@xterm/addon-web-links";
+import type { WebLinksAddon } from "@xterm/addon-web-links";
+import { getLoadedXtermCore, loadXtermCore } from "./xtermCore";
 import { systemClient } from "@/clients/systemClient";
 import { FileLinksAddon, HoverCallback } from "./FileLinksAddon";
 import { ImageLinksAddon, OnActivateFigure } from "./ImageLinksAddon";
@@ -114,6 +115,7 @@ export async function setupTerminalAddons(terminal: Terminal): Promise<TerminalA
   // restore doesn't build them for terminals that may never be shown (#9809).
   // WebGL is managed separately by TerminalWebGLManager (focused terminal only).
 
+  const { FitAddon, SerializeAddon } = await loadXtermCore();
   const fitAddon = new FitAddon();
   const serializeAddon = new SerializeAddon();
   terminal.loadAddon(fitAddon);
@@ -233,6 +235,7 @@ export function createWebLinksAddon(
   onActivate: (event: MouseEvent, uri: string) => void,
   hoverHandlers?: WebLinksHoverHandlers
 ): WebLinksAddon {
+  const { WebLinksAddon } = getLoadedXtermCore();
   const addon = new WebLinksAddon(onActivate, {
     hover: hoverHandlers ? (event, text) => hoverHandlers.hover(event, text) : undefined,
     leave: hoverHandlers ? () => hoverHandlers.leave() : undefined,

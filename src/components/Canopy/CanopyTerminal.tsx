@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type MouseEvent } from "react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Terminal } from "@xterm/xterm";
+import "@xterm/xterm/css/xterm.css";
 import type { WebglAddon } from "@xterm/addon-webgl";
 import type { CanopyTerminalData, CanopyTerminalView } from "@shared/types/ipc/canopy";
 import { isSecretPrompt } from "@shared/utils/secretPrompt";

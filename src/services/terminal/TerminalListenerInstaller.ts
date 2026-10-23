@@ -1,4 +1,4 @@
-import { Terminal } from "@xterm/xterm";
+import type { Terminal } from "@xterm/xterm";
 import { isLinux } from "@/lib/platform";
 import { terminalClient } from "@/clients";
 import { logError, logWarn } from "@/utils/logger";
