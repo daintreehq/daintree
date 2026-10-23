@@ -1,4 +1,6 @@
 import { useMemo } from "react";
+import type { ContextProviderItem } from "@shared/types/pluginContextProvider";
+import { formatContextReference } from "@shared/utils/pluginContextReference";
 import type { AutocompleteItem } from "../AutocompleteMenu";
 import {
   getDaintreeAtClaim,
@@ -6,12 +8,31 @@ import {
   type ActiveCompletionContext,
 } from "../hybridInputParsing";
 
+/** The plugin context provider an `@{prefix}:` query names (#13795). */
+export interface ContextProviderClaim {
+  prefix: string;
+  pluginId: string;
+  pluginName: string;
+  /** What the user typed after the prefix. */
+  query: string;
+}
+
 interface UseAutocompleteItemsParams {
   activeCompletionContext: ActiveCompletionContext | null;
   autocompleteFiles: string[];
   isAutocompleteLoading: boolean;
   autocompleteCommands: AutocompleteItem[];
   isCommandsLoading: boolean;
+  contextClaim?: ContextProviderClaim | null;
+  contextItems?: ContextProviderItem[];
+  isContextLoading?: boolean;
+}
+
+const NO_CONTEXT_ITEMS: ContextProviderItem[] = [];
+
+/** The menu key of a provider's row, unique across providers that reuse an id. */
+export function contextItemKey(prefix: string, id: string): string {
+  return `context:${prefix}:${id}`;
 }
 
 const DIFF_ITEMS: AutocompleteItem[] = [
@@ -71,8 +92,28 @@ export function useAutocompleteItems({
   isAutocompleteLoading,
   autocompleteCommands,
   isCommandsLoading,
+  contextClaim = null,
+  contextItems = NO_CONTEXT_ITEMS,
+  isContextLoading = false,
 }: UseAutocompleteItemsParams) {
   const query = activeCompletionContext?.query ?? "";
+  const contextPrefix = contextClaim?.prefix ?? null;
+  const contextPluginName = contextClaim?.pluginName ?? "";
+
+  // The plugin names its rows; the host decides what a row does. Picking one
+  // inserts the reference and nothing else — a provider never sends.
+  const contextRows = useMemo((): AutocompleteItem[] => {
+    if (contextPrefix === null) return [];
+    return contextItems.map((item) => ({
+      key: contextItemKey(contextPrefix, item.id),
+      label: item.label,
+      description: item.description,
+      badge: contextPluginName,
+      insertText: formatContextReference({ prefix: contextPrefix, id: item.id }),
+      enterAction: "insert",
+      insert: { insert: "resolve", resolverId: "context" },
+    }));
+  }, [contextItems, contextPrefix, contextPluginName]);
 
   const fileItems = useMemo(
     (): AutocompleteItem[] =>
@@ -111,7 +152,11 @@ export function useAutocompleteItems({
       return { autocompleteItems: autocompleteCommands, isLoading: isCommandsLoading };
     }
 
-    // ctx.triggerChar === "@": Daintree providers claim their prefix; else file.
+    // ctx.triggerChar === "@": a plugin's `@{prefix}:` and Daintree's own
+    // providers claim their prefix; else file.
+    if (contextPrefix !== null) {
+      return { autocompleteItems: contextRows, isLoading: isContextLoading };
+    }
     const claim = getDaintreeAtClaim(ctx.query);
     if (claim === "terminal") return { autocompleteItems: [TERMINAL_ITEM], isLoading: false };
     if (claim === "selection") return { autocompleteItems: [SELECTION_ITEM], isLoading: false };
@@ -124,6 +169,9 @@ export function useAutocompleteItems({
     diffItems,
     fileItems,
     isAutocompleteLoading,
+    contextPrefix,
+    contextRows,
+    isContextLoading,
   ]);
 
   return { autocompleteItems, isLoading };

@@ -1,7 +1,7 @@
 import {
   AGENT_CONTEXT_DRAG_MIME,
   decodeAgentContextDragPayload,
-  type AgentContextDragPayload,
+  type AgentContextDragData,
 } from "@shared/utils/agentContextDrag";
 
 /**
@@ -23,12 +23,14 @@ export function hasAgentContextDrag(types: readonly string[]): boolean {
 }
 
 /**
- * The payload of a drop, or `null` if it is not a valid one. Readable only at
- * `drop`: Chromium's protected mode blanks `getData` during `dragover`, so the
- * affordance is decided on the type alone and the contents are checked here.
+ * The payload of a drop — a snapshot of text, or a reference to a plugin
+ * context provider's item (#13795) — or `null` if it is not a valid one.
+ * Readable only at `drop`: Chromium's protected mode blanks `getData` during
+ * `dragover`, so the affordance is decided on the type alone and the contents
+ * are checked here.
  */
 export function readAgentContextDrag(
   dataTransfer: Pick<DataTransfer, "getData">
-): AgentContextDragPayload | null {
+): AgentContextDragData | null {
   return decodeAgentContextDragPayload(dataTransfer.getData(AGENT_CONTEXT_DRAG_MIME));
 }

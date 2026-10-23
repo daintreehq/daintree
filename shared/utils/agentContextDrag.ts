@@ -1,11 +1,18 @@
+import {
+  CONTEXT_ITEM_LABEL_MAX_LENGTH,
+  isContextItemId,
+  isContextProviderPrefix,
+} from "./pluginContextReference.js";
+
 /**
  * The contract a plugin view uses to hand a piece of work to an agent terminal
  * by drag and drop, and the text that lands in the agent's draft when it does.
  *
- * Pure and dependency-free on purpose: it ships in `@daintreehq/plugin-sdk`,
- * where a view with no build step reads it as documentation and writes the
- * same JSON by hand, and it is the one place the renderer and the host agree on
- * what a payload may hold and how it reads once drafted.
+ * Pure on purpose, depending only on the equally pure reference grammar: it
+ * ships in `@daintreehq/plugin-sdk`, where a view with no build step reads it
+ * as documentation and writes the same JSON by hand, and it is the one place
+ * the renderer and the host agree on what a payload may hold and how it reads
+ * once drafted.
  */
 
 /**
@@ -46,6 +53,27 @@ export interface AgentContextDragPayload {
   /** Where it came from, shown beside the title (e.g. `{ label: "Kanban" }`). */
   source?: { label?: string };
 }
+
+/**
+ * What a drag hands an agent when the item lives in a plugin's context provider
+ * (#13795): a reference, not a copy. It lands in the draft as the same
+ * `@{prefix}:{id}` chip picking the item from the `@` menu leaves, and is read
+ * when the user sends, so the agent gets the item as it is then.
+ */
+export interface AgentContextReferenceDragPayload {
+  v: 2;
+  reference: {
+    /** The `prefix` of one of the plugin's `contributes.contextProviders`. */
+    prefix: string;
+    /** An item id that provider's `resolve` accepts. */
+    id: string;
+    /** The item's name for the chip, at most 120 characters. */
+    label?: string;
+  };
+}
+
+/** Either drag an agent accepts: a snapshot of text, or a reference to a provider's item. */
+export type AgentContextDragData = AgentContextDragPayload | AgentContextReferenceDragPayload;
 
 /**
  * The slice of `DataTransfer` the SDK helper writes to. Structural so the
@@ -140,11 +168,51 @@ export function validateAgentContextPayload(value: unknown): AgentContextDragPay
 }
 
 /**
+ * Validate and normalise an untrusted reference payload, or `null` when it is
+ * not one. Strict like {@link validateAgentContextPayload}; whether a provider
+ * holds the prefix is the drop target's question, asked of its project.
+ */
+export function validateAgentContextReferencePayload(
+  value: unknown
+): AgentContextReferenceDragPayload | null {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
+  const record = value as Record<string, unknown>;
+  if (record.v !== 2) return null;
+  const reference = record.reference;
+  if (typeof reference !== "object" || reference === null || Array.isArray(reference)) {
+    return null;
+  }
+  const { prefix, id, label: rawLabel } = reference as Record<string, unknown>;
+  if (!isContextProviderPrefix(prefix) || !isContextItemId(id)) return null;
+  let label: string | undefined;
+  if (rawLabel !== undefined) {
+    if (typeof rawLabel !== "string") return null;
+    const normalized = normalizeLine(rawLabel);
+    if (normalized.length > CONTEXT_ITEM_LABEL_MAX_LENGTH) return null;
+    if (normalized.length > 0) label = normalized;
+  }
+  return { v: 2, reference: { prefix, id, ...(label !== undefined ? { label } : {}) } };
+}
+
+function validateAgentContextDragData(value: unknown): AgentContextDragData | null {
+  return validateAgentContextPayload(value) ?? validateAgentContextReferencePayload(value);
+}
+
+/**
  * Serialise a payload for `dataTransfer.setData`. Throws a `TypeError` naming
  * the problem when the payload would be refused at the drop, so an author finds
  * out at `dragstart` rather than from a drop that silently does nothing.
  */
-export function encodeAgentContextDragPayload(payload: AgentContextDragPayload): string {
+export function encodeAgentContextDragPayload(payload: AgentContextDragData): string {
+  if (payload?.v === 2) {
+    const valid = validateAgentContextReferencePayload(payload);
+    if (valid === null) {
+      throw new TypeError(
+        `Invalid agent context reference: expected { v: 2, reference: { prefix, id } } with a prefix of one to sixteen lowercase letters (not diff, terminal or selection), an id of letters, digits and _ - . : / # ~ + = of at most 128 characters, and an optional label of at most ${CONTEXT_ITEM_LABEL_MAX_LENGTH}`
+      );
+    }
+    return JSON.stringify(valid);
+  }
   const valid = validateAgentContextPayload(payload);
   if (valid === null) {
     throw new TypeError(
@@ -159,7 +227,7 @@ export function encodeAgentContextDragPayload(payload: AgentContextDragPayload):
  * string is untrusted — anything that can start a drag can set this type — so
  * it is parsed defensively and validated in full.
  */
-export function decodeAgentContextDragPayload(serialized: string): AgentContextDragPayload | null {
+export function decodeAgentContextDragPayload(serialized: string): AgentContextDragData | null {
   if (typeof serialized !== "string" || serialized.length === 0) return null;
   if (serialized.length > MAX_SERIALIZED_LENGTH) return null;
   let parsed: unknown;
@@ -168,22 +236,27 @@ export function decodeAgentContextDragPayload(serialized: string): AgentContextD
   } catch {
     return null;
   }
-  return validateAgentContextPayload(parsed);
+  return validateAgentContextDragData(parsed);
 }
 
 /**
  * Put `payload` on a drag: the agent-context type, plus `text/plain` so a drop
- * anywhere else (an editor, another app) still receives the text. Call it from
- * `dragstart`. Throws on an invalid payload, like
- * {@link encodeAgentContextDragPayload}.
+ * anywhere else (an editor, another app) still receives something readable —
+ * the text, or a reference's label. Call it from `dragstart`. Throws on an
+ * invalid payload, like {@link encodeAgentContextDragPayload}.
  */
 export function setAgentContextDragData(
   dataTransfer: AgentContextDataTransfer,
-  payload: AgentContextDragPayload
+  payload: AgentContextDragData
 ): void {
   const serialized = encodeAgentContextDragPayload(payload);
   dataTransfer.setData(AGENT_CONTEXT_DRAG_MIME, serialized);
-  dataTransfer.setData("text/plain", payload.text);
+  dataTransfer.setData(
+    "text/plain",
+    payload.v === 2
+      ? (payload.reference.label ?? `@${payload.reference.prefix}:${payload.reference.id}`)
+      : payload.text
+  );
   dataTransfer.effectAllowed = "copy";
 }
 
@@ -332,3 +405,6 @@ export function agentContextBlockRanges(text: string): Array<[number, number]> {
 export function sanitizeAgentContextSourceLabel(label: string): string {
   return boundedLine(label, AGENT_CONTEXT_MAX_SOURCE_LABEL_LENGTH);
 }
+
+/** The text normalisation a payload's `text` gets, for content arriving by other routes. */
+export { normalizeText as normalizeAgentContextText, boundedLine as boundedAgentContextLine };

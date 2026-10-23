@@ -1715,6 +1715,22 @@ export interface GeneratedIpcInvokeMap {
     args: [];
     result: { pluginId: string; item: import("../plugin.js").ContextMenuContribution }[];
   };
+  "plugin:context-provider-search": {
+    args: [prefix: string, query: string];
+    result: import("../pluginContextProvider.js").ContextProviderItem[];
+  };
+  "plugin:context-providers-enabled-set": {
+    args: [pluginId: string, enabled: boolean];
+    result: import("../pluginContextProvider.js").ContextProviderEntry[];
+  };
+  "plugin:context-providers-get": {
+    args: [];
+    result: import("../pluginContextProvider.js").ContextProviderEntry[];
+  };
+  "plugin:context-references-resolve": {
+    args: [references: import("../pluginContextProvider.js").ContextReference[]];
+    result: import("../pluginContextProvider.js").ContextReferenceResolution[];
+  };
   "plugin:export-audit-log": {
     args: [records: import("./pluginAudit.js").PluginActionAuditRecord[]];
     result: boolean;

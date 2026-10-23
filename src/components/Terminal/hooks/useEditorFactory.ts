@@ -24,6 +24,8 @@ import {
   createTerminalChipTooltip,
   selectionChipField,
   createSelectionChipTooltip,
+  contextReferenceChipField,
+  createContextReferenceChipTooltip,
   interimWidgetField,
   pendingAIField,
   createAutoSize,
@@ -57,6 +59,7 @@ interface UseEditorFactoryParams {
     diffChipTooltipCompartmentRef: React.RefObject<Compartment>;
     terminalChipTooltipCompartmentRef: React.RefObject<Compartment>;
     selectionChipTooltipCompartmentRef: React.RefObject<Compartment>;
+    contextChipTooltipCompartmentRef: React.RefObject<Compartment>;
     autoSizeCompartmentRef: React.RefObject<Compartment>;
     keymapCompartmentRef: React.RefObject<Compartment>;
     comboboxCompartmentRef: React.RefObject<Compartment>;
@@ -119,6 +122,7 @@ export function useEditorFactory({
       diffChipTooltipCompartmentRef,
       terminalChipTooltipCompartmentRef,
       selectionChipTooltipCompartmentRef,
+      contextChipTooltipCompartmentRef,
       autoSizeCompartmentRef,
       keymapCompartmentRef,
       comboboxCompartmentRef,
@@ -153,6 +157,10 @@ export function useEditorFactory({
         selectionChipField,
         selectionChipTooltipCompartmentRef.current.of(
           !disabled ? createSelectionChipTooltip() : []
+        ),
+        contextReferenceChipField,
+        contextChipTooltipCompartmentRef.current.of(
+          !disabled ? createContextReferenceChipTooltip() : []
         ),
         interimWidgetField,
         pendingAIField,

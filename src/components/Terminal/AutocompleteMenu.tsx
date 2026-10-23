@@ -35,8 +35,8 @@ const CATEGORY_LABEL: Partial<Record<CompletionKind, string>> = {
 /** What Enter does on the selected item: complete it, or run it. */
 export type AutocompleteEnterAction = "insert" | "execute";
 
-/** Daintree resolvers that expand a token to content at send time. */
-export type CompletionResolverId = "diff" | "terminal" | "selection";
+/** Daintree resolvers that expand a token to content at send time; `context` is a plugin's provider. */
+export type CompletionResolverId = "diff" | "terminal" | "selection" | "context";
 
 /**
  * How the inserted token behaves at send time. `literal` passes through the PTY

@@ -281,6 +281,10 @@ describe("registerPluginHandlers", () => {
     expect(mockIpcMainRemoveHandler).toHaveBeenCalledWith("plugin:panel-kinds-get");
     expect(mockIpcMainRemoveHandler).toHaveBeenCalledWith("plugin:agents-get");
     expect(mockIpcMainRemoveHandler).toHaveBeenCalledWith("plugin:forge-providers-get");
+    expect(mockIpcMainRemoveHandler).toHaveBeenCalledWith("plugin:context-providers-get");
+    expect(mockIpcMainRemoveHandler).toHaveBeenCalledWith("plugin:context-provider-search");
+    expect(mockIpcMainRemoveHandler).toHaveBeenCalledWith("plugin:context-references-resolve");
+    expect(mockIpcMainRemoveHandler).toHaveBeenCalledWith("plugin:context-providers-enabled-set");
   });
 
   it("PLUGIN_LIST answers only after waitForInit() resolves", async () => {

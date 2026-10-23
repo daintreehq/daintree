@@ -78,6 +78,20 @@ import {
   isSearchProviderKey,
   setSearchProviderShown,
 } from "../../services/plugin/searchProviderPreferences.js";
+import {
+  isContextProviderPluginId,
+  setContextProvidersEnabled,
+} from "../../services/plugin/contextProvidersOff.js";
+import {
+  resolveContextReferences,
+  searchContextProvider,
+} from "../../services/plugin/contextProviderCalls.js";
+import type {
+  ContextProviderEntry,
+  ContextProviderItem,
+  ContextReference,
+  ContextReferenceResolution,
+} from "../../../shared/types/pluginContextProvider.js";
 import { pluginInstallJobs } from "../../services/plugin/PluginInstallJobRegistry.js";
 import { sendToRendererContext } from "../utils.js";
 import { getPluginMenuItems } from "../../services/pluginMenuRegistry.js";
@@ -860,6 +874,51 @@ async function handleSearchProviderShownSet(
   setSearchProviderShown(key, shown);
   const service = await getPluginService();
   return service.searchCoordinator.list(ctx.projectId);
+}
+
+/** The `@` context providers the sender's project sees, and which of them hold their prefix (#13795). */
+async function handleContextProvidersGet(ctx: IpcContext): Promise<ContextProviderEntry[]> {
+  const service = await getPluginService();
+  await service.waitForInit();
+  return service.getContextProvidersForProject(ctx.projectId);
+}
+
+/** The provider holding `prefix` in the sender's project, asked for matches to `query` alone. */
+async function handleContextProvidersSearch(
+  ctx: IpcContext,
+  prefix: string,
+  query: string
+): Promise<ContextProviderItem[]> {
+  return searchContextProvider(await getPluginService(), ctx.projectId, prefix, query);
+}
+
+/** A draft's references, read now in the sender's project, in the order sent. */
+async function handleContextProvidersResolve(
+  ctx: IpcContext,
+  references: ContextReference[]
+): Promise<ContextReferenceResolution[]> {
+  return resolveContextReferences(await getPluginService(), ctx.projectId, references);
+}
+
+/**
+ * Switch one plugin's context providers on or off. Only a plugin whose
+ * providers the sender's project can see: one project's settings never reach
+ * another project's plugin.
+ */
+async function handleContextProvidersEnabledSet(
+  ctx: IpcContext,
+  pluginId: string,
+  enabled: boolean
+): Promise<ContextProviderEntry[]> {
+  if (!isContextProviderPluginId(pluginId))
+    throw new Error("context providers: malformed plugin id");
+  if (typeof enabled !== "boolean") throw new Error("context providers: malformed enabled flag");
+  const service = await getPluginService();
+  if (!service.getContextProvidersForProject(ctx.projectId).some((e) => e.pluginId === pluginId)) {
+    throw new Error("context providers: no such provider in this project");
+  }
+  setContextProvidersEnabled(pluginId, enabled);
+  return service.getContextProvidersForProject(ctx.projectId);
 }
 
 async function handleKeybindings(ctx: IpcContext) {
@@ -2385,6 +2444,24 @@ export const pluginNamespace = defineIpcNamespace({
     setSearchProviderShown: op(
       PLUGIN_METHOD_CHANNELS.setSearchProviderShown,
       handleSearchProviderShownSet,
+      { withContext: true }
+    ),
+    getContextProviders: op(PLUGIN_METHOD_CHANNELS.getContextProviders, handleContextProvidersGet, {
+      withContext: true,
+    }),
+    searchContextProvider: op(
+      PLUGIN_METHOD_CHANNELS.searchContextProvider,
+      handleContextProvidersSearch,
+      { withContext: true }
+    ),
+    resolveContextReferences: op(
+      PLUGIN_METHOD_CHANNELS.resolveContextReferences,
+      handleContextProvidersResolve,
+      { withContext: true }
+    ),
+    setContextProvidersEnabled: op(
+      PLUGIN_METHOD_CHANNELS.setContextProvidersEnabled,
+      handleContextProvidersEnabledSet,
       { withContext: true }
     ),
     keybindings: op(PLUGIN_METHOD_CHANNELS.keybindings, handleKeybindings, { withContext: true }),

@@ -5782,10 +5782,27 @@ interface PluginSendToAgentButtonProps extends PluginAriaRootAttributes {
  * terminal, carrying the `daintree-context` payload (and the text as plain
  * text for a drop anywhere else). Coexists with kit drags: a kit drag never
  * starts from inside it. Without children it draws a "Drag to an agent" grip.
+ *
+ * Give `reference` instead of `text` to carry an item of one of the plugin's
+ * context providers: the drop leaves the same chip as picking it from the
+ * composer's `@` menu, and the agent gets its content as it reads at send.
  */
 interface PluginContextDragSourceProps extends PluginRootAttributes {
-    /** The text that lands in the agent's draft. Non-blank, at most 32,768 characters. */
-    text: string;
+    /**
+     * The text that lands in the agent's draft. Non-blank, at most 32,768
+     * characters. Ignored when `reference` is given.
+     */
+    text?: string;
+    /**
+     * An item of one of this plugin's `contributes.contextProviders`: its
+     * `prefix`, an `id` its `resolve` accepts, and the chip's `label` (at most
+     * 120 characters).
+     */
+    reference?: {
+        prefix: string;
+        id: string;
+        label?: string;
+    };
     /** A heading above it, at most 120 characters. */
     title?: string;
     /** Where it came from, beside the heading ("Kanban"), at most 80 characters. */

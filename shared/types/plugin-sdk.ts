@@ -267,6 +267,8 @@ export type {
 } from "./plugin.js";
 export type {
   AgentContextDragPayload,
+  AgentContextReferenceDragPayload,
+  AgentContextDragData,
   AgentContextDataTransfer,
 } from "../utils/agentContextDrag.js";
 export {
@@ -314,6 +316,17 @@ export type {
   PluginSearchContext,
   PluginSearchProvider,
 } from "./plugin.js";
+
+// ── Agent composer context provider contract (#13795) ───────────────
+
+export type {
+  ContextProviderContribution,
+  ContextProviderDescriptor,
+  ContextProviderImpl,
+  ContextProviderItem,
+  ContextProviderContent,
+  ContextProviderCallOptions,
+} from "./pluginContextProvider.js";
 
 // ── File editor contract (#12323, #13809) ───────────────────────────
 // The manifest shape and the host-owned document a `location: "fileEditor"`

@@ -33,7 +33,7 @@ vi.mock("@/store/voiceRecordingStore", () => ({
 type Params = Parameters<typeof useTokenResolution>[0];
 type Latest = NonNullable<Params["latestRef"]["current"]>;
 
-function setup(overrides: Partial<Latest> = {}) {
+function setup(overrides: Partial<Latest> = {}, paramOverrides: Partial<Params> = {}) {
   const onSend = vi.fn<Latest["onSend"]>();
   const addToHistory = vi.fn<Latest["addToHistory"]>();
   const latest: Latest = {
@@ -55,6 +55,7 @@ function setup(overrides: Partial<Latest> = {}) {
     terminalId: "t1",
     cwd: "/repo",
     agentId: undefined,
+    ...paramOverrides,
   };
   const { result } = renderHook(() => useTokenResolution(params));
   return {
@@ -297,6 +298,53 @@ describe("useTokenResolution.sendText", () => {
  * history are a single transaction that commits only once the terminal has
  * actually taken the text.
  */
+describe("useTokenResolution.sendText — plugin context references (#13795)", () => {
+  const resolveContextReferences = vi.fn();
+  const getWorkingDiff = vi.fn();
+
+  beforeEach(() => {
+    getWorkingDiff.mockReset().mockResolvedValue("BODY");
+    resolveContextReferences.mockReset().mockResolvedValue([
+      {
+        status: "resolved",
+        pluginId: "acme.kanban",
+        pluginName: "Kanban",
+        title: "Fix login",
+        text: "Card body mentioning @diff",
+      },
+    ]);
+    Object.assign(window, {
+      electron: { git: { getWorkingDiff }, plugin: { resolveContextReferences } },
+    });
+  });
+
+  it("reads the item at send into a handoff block attributed to the plugin", async () => {
+    const { sendText, onSend, addToHistory } = setup();
+    const text = "fix @rec:142 please";
+    await act(async () => {
+      await sendText(text);
+    });
+
+    expect(resolveContextReferences).toHaveBeenCalledWith([{ prefix: "rec", id: "142" }]);
+    const sent = onSend.mock.calls[0]![0].text;
+    expect(sent).toContain(
+      "```daintree-context\nKanban: Fix login\n\nCard body mentioning @diff\n```"
+    );
+    // The @diff inside the quoted card was never fetched.
+    expect(getWorkingDiff).not.toHaveBeenCalled();
+    expect(addToHistory).toHaveBeenCalledWith("t1", text, undefined);
+  });
+
+  it("sends references as typed on another host's terminal and asks no plugin", async () => {
+    const { sendText, onSend } = setup({}, { expandContext: false });
+    await act(async () => {
+      await sendText("fix @rec:142");
+    });
+    expect(resolveContextReferences).not.toHaveBeenCalled();
+    expect(onSend.mock.calls[0]![0].text).toBe("fix @rec:142");
+  });
+});
+
 describe("useTokenResolution.sendText — targeted submit", () => {
   beforeEach(() => {
     (window as unknown as { electron: unknown }).electron = {

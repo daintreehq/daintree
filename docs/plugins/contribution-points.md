@@ -1389,6 +1389,56 @@ Terminal text a plugin makes clickable: the identifiers and URLs of its own worl
 
 Each plugin's matchers can be switched off from its page in the Plugin Manager, or from Project settings → Plugins for a project plugin. The choice is stored on this machine and applies in every terminal at once.
 
+## Context providers — _Shipped_
+
+`@` context the agent composer offers from the plugin's own data: a record, a page, a ticket, a row. A provider claims a short prefix such as `rec`; typing `@rec:` in an agent's input bar lists the provider's matches for what follows, and picking one leaves an `@rec:{id}` chip in the draft under the plugin's name. Nothing is read then. When the user sends, the host asks the provider for the item's current content and puts it in the same literal `daintree-context` block a hand-off drafts, so the agent gets the item as it is at that moment and nothing inside it is read as an `@` token. A provider never submits. Context providers require no capability: the host asks only for what the user picked. An installed plugin's providers are offered in every project; a [project plugin](./project-local.md)'s only in its own project.
+
+```json
+{
+  "contributes": {
+    "contextProviders": [{ "id": "records", "prefix": "rec", "label": "Records" }]
+  }
+}
+```
+
+```ts
+export async function activate(host: PluginHostApi) {
+  await host.registerContextProvider(
+    { id: "records" },
+    {
+      async search(query, { signal }) {
+        const rows = await findRecords(query, { signal });
+        return rows.map((r) => ({ id: String(r.id), label: r.title, description: r.status }));
+      },
+      async resolve(id, { signal }) {
+        const record = await loadRecord(id, { signal });
+        return record ? { title: record.title, text: renderRecord(record) } : null;
+      },
+    }
+  );
+}
+```
+
+**Fields:**
+
+| Field | Required | Notes |
+| --- | --- | --- |
+| `id` | yes | Unique within the plugin's `contextProviders`; `host.registerContextProvider` binds to it. |
+| `prefix` | yes | One to sixteen lowercase letters. Never `diff`, `terminal` or `selection`, which the composer reserves, and never two of the plugin's own providers' prefix. |
+| `label` | yes | What the provider offers ("Records"). Shown on its chips' card and in Project settings. At most 60 characters. |
+
+**The impl.** `search(query, { signal })` gets only what the user typed after `@{prefix}:` — never the rest of the draft — and returns at most 50 `{ id, label, description? }` rows, best first. `resolve(id, { signal })` returns `{ text, title? }`, or `null` when the item is gone. An item `id` is one draft token: up to 128 letters, digits and `_ - . : / # ~ + =`, not ending in `.` or `:`. Rows with any other id are dropped.
+
+**Deadlines.** A search has 3 seconds and a resolve 5, both counted from the host's request, so a plugin's first activation is inside them. When the host stops waiting it aborts `signal`. All of a draft's chips resolve in parallel, at most 20 distinct items per message. A chip whose provider fails, times out, returns `null` or returns more than 32,768 characters sends as a visible placeholder in its place (`[Couldn't attach @rec:142 from Kanban: timed out]`) rather than holding the send. Content is never cut short to fit.
+
+**Prefix collisions.** The first plugin to claim a prefix holds it wherever both are visible; a later one is refused that prefix, keeps its other contributions, and is listed under Project settings → Plugins → Context providers with the plugin that holds it. Switching the holder's providers off there hands the prefix to the next plugin in line. Project plugins in different projects never collide.
+
+**Switching off.** Each plugin's providers have one switch in Project settings → Plugins. An installed plugin's switch applies to every project; a project plugin's to its own project. A chip whose provider is switched off sends as a placeholder.
+
+**Remote terminals.** A terminal on another host keeps its context rules: chips aren't drawn there and `@{prefix}:{id}` is sent as typed, like `@diff`.
+
+**Drag.** A view can drag an item by reference instead of a snapshot: `ContextDragSource` with `reference={{ prefix, id, label }}`, or `setAgentContextDragData(dataTransfer, { v: 2, reference })` by hand. Dropping it on an agent leaves the same chip the `@` menu would. A drop is refused when no provider in the project holds the prefix.
+
 ## Recipes — _Shipped_
 
 Named multi-terminal launch layouts a plugin ships. A contributed recipe is registered under the qualified id `{pluginId}.{id}`, merged into the recipe list as a plugin-owned tier, and available in **every** project — a plugin that ships an agent can also ship a ready-made layout that runs it, with no per-project setup. A [project plugin](./project-local.md)'s recipes are the exception: they appear only in the project that owns the plugin, and come and go with its switch and its folder's trust.

@@ -26,7 +26,11 @@ import { notify } from "@/lib/notify";
 import { copyWithToast } from "@/lib/copyWithToast";
 import { pluralize } from "@/lib/pluralize";
 import { hasAgentContextDrag, readAgentContextDrag } from "@/lib/agentContextDragPayload";
-import { draftAgentContext, getDraftRefusal } from "@/services/agentHandoff/agentDraft";
+import {
+  draftAgentContext,
+  draftAgentContextReference,
+  getDraftRefusal,
+} from "@/services/agentHandoff/agentDraft";
 import { focusPanelInput } from "@/components/Panel/panelFocusRegistry";
 import { getEffectiveAgentConfig } from "@shared/config/agentRegistry";
 import {
@@ -751,11 +755,14 @@ export function useTerminalFileTransfer(
       if (hasAgentContextDrag(transfer.types)) {
         const payload = readAgentContextDrag(transfer);
         if (payload === null) return;
-        const result = draftAgentContext(terminalId, {
-          text: payload.text,
-          title: payload.title,
-          sourceLabel: payload.source?.label,
-        });
+        const result =
+          payload.v === 2
+            ? draftAgentContextReference(terminalId, payload.reference)
+            : draftAgentContext(terminalId, {
+                text: payload.text,
+                title: payload.title,
+                sourceLabel: payload.source?.label,
+              });
         if (result.status !== "drafted") return;
         // Lands like a drop on the bar itself: pane selected, keyboard in the
         // bar rather than xterm, since that is where the text went.

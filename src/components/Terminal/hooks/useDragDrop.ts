@@ -6,7 +6,11 @@ import { isRemoteWindow } from "@/hooks/useHostPlatform";
 import { fileAttachmentEntryFromSource, insertFileAttachments } from "../fileAttachments";
 import { usePanelStore } from "@/store/panelStore";
 import { hasAgentContextDrag, readAgentContextDrag } from "@/lib/agentContextDragPayload";
-import { draftAgentContext, getDraftRefusal } from "@/services/agentHandoff/agentDraft";
+import {
+  draftAgentContext,
+  draftAgentContextReference,
+  getDraftRefusal,
+} from "@/services/agentHandoff/agentDraft";
 import {
   clearPaneDragOver,
   notePaneDragOver,
@@ -184,11 +188,15 @@ export function useDragDrop(
         if (!view || terminalId === undefined) return;
         const payload = readAgentContextDrag(e.dataTransfer);
         if (payload === null) return;
-        const result = draftAgentContext(terminalId, {
-          text: payload.text,
-          title: payload.title,
-          sourceLabel: payload.source?.label,
-        });
+        // A reference (#13795) lands as the chip the `@` menu would leave.
+        const result =
+          payload.v === 2
+            ? draftAgentContextReference(terminalId, payload.reference)
+            : draftAgentContext(terminalId, {
+                text: payload.text,
+                title: payload.title,
+                sourceLabel: payload.source?.label,
+              });
         if (result.status !== "drafted") return;
         // Same landing as a file drop (#11809): pane selected, keyboard in the
         // bar. The draft sync parks the caret after the block.

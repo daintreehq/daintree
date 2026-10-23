@@ -116,6 +116,10 @@ import {
   unregisterWorktreeSetupStepHandler,
 } from "../worktreeSetupStepRegistry.js";
 import { bindSearchProviderImpl } from "./pluginSearchProviderRegistry.js";
+import {
+  registerContextProviderImpl,
+  unregisterContextProviderImpl,
+} from "../contextProviderRegistry.js";
 import { broadcastToRenderer, broadcastToProjectRenderers } from "../../ipc/utils.js";
 import {
   PLUGIN_PUSH_MAX_PAYLOAD_BYTES,
@@ -2586,6 +2590,51 @@ export function createHost(
       }
       const unbind = bindSearchProviderImpl(`${pluginId}.${id}`, provider);
       return Promise.resolve(trackPluginDisposer(deps.pluginEventCleanups, pluginId, unbind));
+    },
+    // Async so every refusal arrives as a rejection, the way a worker plugin's
+    // proxied call reports it; the binding itself still happens synchronously.
+    registerContextProvider: async (descriptor, impl) => {
+      if (revoked) {
+        throw new Error(
+          `Plugin "${pluginId}" host revoked: registerContextProvider called after activate() returned or timed out`
+        );
+      }
+      if (!descriptor || typeof descriptor !== "object") {
+        throw new Error(
+          `Plugin "${pluginId}" registerContextProvider: descriptor must be an object`
+        );
+      }
+      const providerId = descriptor.id;
+      if (typeof providerId !== "string" || providerId.length === 0) {
+        throw new Error(
+          `Plugin "${pluginId}" registerContextProvider: descriptor.id must be a non-empty string`
+        );
+      }
+      if (
+        !impl ||
+        typeof impl !== "object" ||
+        typeof impl.search !== "function" ||
+        typeof impl.resolve !== "function"
+      ) {
+        throw new Error(
+          `Plugin "${pluginId}" registerContextProvider: impl must expose search() and resolve()`
+        );
+      }
+      // The prefix a provider answers for comes from the manifest, so an
+      // undeclared id could never be asked anything.
+      const declared = (
+        deps.plugins.get(pluginId)?.manifest.contributes.contextProviders ?? []
+      ).some((c) => c.id === providerId);
+      if (!declared) {
+        throw new Error(
+          `Plugin "${pluginId}" registerContextProvider: descriptor.id "${providerId}" is not declared in contributes.contextProviders`
+        );
+      }
+
+      registerContextProviderImpl(pluginId, providerId, impl);
+      return trackPluginDisposer(deps.pluginEventCleanups, pluginId, () =>
+        unregisterContextProviderImpl(pluginId, providerId, impl)
+      );
     },
     mcp: {
       registerTools: (endpointId, tools) => {

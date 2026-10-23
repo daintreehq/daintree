@@ -36,6 +36,11 @@ import type {
 import { SEARCH_PROVIDER_MAX_RESPONSE_BYTES } from "../../../shared/config/pluginSearchProviders.js";
 import type { FileDecoration, FileDecorationProviderImpl } from "../../../shared/types/forge.js";
 import type {
+  ContextProviderContent,
+  ContextProviderImpl,
+  ContextProviderItem,
+} from "../../../shared/types/pluginContextProvider.js";
+import type {
   ActionsGetParams,
   BroadcastToRendererParams,
   DispatchParams,
@@ -58,6 +63,7 @@ import type {
   SetPanelActivityParams,
   SetPanelMenuItemsParams,
   RegisterActionParams,
+  RegisterContextProviderParams,
   RegisterFileDecorationProviderParams,
   RegisterHandlerParams,
   RegisterMcpToolsParams,
@@ -72,6 +78,7 @@ import type {
   ShowQuickPickParams,
   ShowInputBoxParams,
   ShowConfirmParams,
+  UnregisterContextProviderParams,
   UnregisterFileDecorationProviderParams,
   UnregisterMcpToolsParams,
   WorktreeSetupStepRegistrationParams,
@@ -178,6 +185,12 @@ type InvokeTarget =
   | { kind: "command"; namespacedId: string; resolvedPath: string; args: unknown }
   | { kind: "handler"; channel: string; ctx: PluginIpcContext; args: unknown[] }
   | { kind: "file-decoration-method"; providerId: string; method: string; args: unknown[] }
+  | {
+      kind: "context-provider-method";
+      providerId: string;
+      method: "search" | "resolve";
+      args: [string];
+    }
   | {
       kind: "mcp-tool";
       endpointId: string;
@@ -311,9 +324,10 @@ export class PluginDevWorkerMainBridge {
    * deliver its late `host-result` to the new worker generation, whose proxy
    * resets its requestId counter and could collide on the same id. */
   private reloadGeneration = 0;
-  /** Disposers for providers (file decoration) the worker registered on the real
-   * host, keyed by provider id. Torn down on reload and dispose so a reloaded
-   * generation re-registers cleanly. */
+  /** Disposers for providers (file decoration, and context providers under a
+   * `context:` key) the worker registered on the real host, keyed by provider
+   * id. Torn down on reload and dispose so a reloaded generation re-registers
+   * cleanly. */
   private readonly providerDisposers = new Map<string, () => void>();
   /** Disposers for the `agentMcp` rosters the worker bound, keyed by endpoint id.
    * Retired with the generation like providers: the roster's `execute`s live in
@@ -1439,6 +1453,55 @@ export class PluginDevWorkerMainBridge {
         }
         return;
       }
+      case "registerContextProvider": {
+        const { descriptor } = params as RegisterContextProviderParams;
+        const providerId = descriptor.id;
+        const key = `context:${providerId}`;
+        const prior = this.providerDisposers.get(key);
+        if (prior) {
+          try {
+            prior();
+          } catch {
+            // best-effort
+          }
+        }
+        // Both methods round-trip to the worker under the caller's signal, so a
+        // deadline the host enforces reaches the plugin as an abort.
+        const proxyImpl: ContextProviderImpl = {
+          search: (query, options) =>
+            this.invoke(
+              { kind: "context-provider-method", providerId, method: "search", args: [query] },
+              options.signal
+            ) as Promise<ContextProviderItem[]>,
+          resolve: (itemId, options) =>
+            this.invoke(
+              { kind: "context-provider-method", providerId, method: "resolve", args: [itemId] },
+              options.signal
+            ) as Promise<ContextProviderContent | null>,
+        };
+        const generation = this.reloadGeneration;
+        const dispose = await this.host.registerContextProvider({ id: providerId }, proxyImpl);
+        if (this.disposed || generation !== this.reloadGeneration) {
+          try {
+            dispose();
+          } catch {
+            // best-effort
+          }
+          return;
+        }
+        this.providerDisposers.set(key, dispose);
+        return;
+      }
+      case "unregisterContextProvider": {
+        const { providerId } = params as UnregisterContextProviderParams;
+        const key = `context:${providerId}`;
+        const dispose = this.providerDisposers.get(key);
+        if (dispose) {
+          this.providerDisposers.delete(key);
+          dispose();
+        }
+        return;
+      }
       case "mcp.registerTools": {
         const p = params as Partial<RegisterMcpToolsParams> | null | undefined;
         if (
@@ -1907,6 +1970,15 @@ export class PluginDevWorkerMainBridge {
           kind: "worktree-setup-step",
           stepId: target.stepId,
           context: target.context,
+        });
+      } else if (target.kind === "context-provider-method") {
+        sent = this.workerHost.send({
+          type: "invoke",
+          requestId,
+          kind: "context-provider-method",
+          providerId: target.providerId,
+          method: target.method,
+          args: target.args,
         });
       } else {
         sent = this.workerHost.send({

@@ -1793,6 +1793,47 @@ interface FileDecorationProviderDescriptor {
     scopes?: string[];
 }
 
+/** The descriptor `host.registerContextProvider` binds an impl to. */
+interface ContextProviderDescriptor {
+    /** Must match a `contributes.contextProviders` entry's `id`. */
+    id: string;
+}
+/** One match a provider offers for what the user typed after its prefix. */
+interface ContextProviderItem {
+    /**
+     * Opaque reference the host hands back to `resolve`. One to 128 characters
+     * from letters, digits and `_ - . : / # ~ + =`, not ending in `.` or `:`, so
+     * it reads as one token in the draft.
+     */
+    id: string;
+    /** The row's name in the `@` menu and on the chip. */
+    label: string;
+    /** Dimmed second line in the `@` menu. */
+    description?: string;
+}
+/** What an item reads as when the user sends. */
+interface ContextProviderContent {
+    /** The content itself, at most 32,768 characters. */
+    text: string;
+    /** Heading shown above the text; the chip's label when absent. */
+    title?: string;
+}
+interface ContextProviderCallOptions {
+    /** Aborted when the host stops waiting for the answer, at its deadline. */
+    signal: AbortSignal;
+}
+/**
+ * The runtime half of a context provider. Both methods are asked by the host,
+ * never by the draft: `search` sees only what the user typed after the
+ * provider's own prefix, and `resolve` only the id of an item the user picked.
+ */
+interface ContextProviderImpl {
+    /** Matches for `query`, best first. The host shows at most 50. */
+    search(query: string, options: ContextProviderCallOptions): Promise<ContextProviderItem[]>;
+    /** The item's current content, or `null` when it no longer exists. */
+    resolve(itemId: string, options: ContextProviderCallOptions): Promise<ContextProviderContent | null>;
+}
+
 /** Notification type */
 type NotificationType = "info" | "success" | "error" | "warning";
 
@@ -4566,6 +4607,20 @@ interface PluginActivationApi {
      */
     registerSearchProvider(id: string, provider: PluginSearchProvider): Promise<() => void>;
     /**
+     * Bind a runtime {@link ContextProviderImpl} to a provider declared in
+     * `contributes.contextProviders` (#13795). The host asks it for matches when
+     * the user types `@{prefix}:` in an agent composer, and for an item's content
+     * when the user sends a draft holding one of its chips — each call under a
+     * deadline, with a signal aborted when the host stops waiting. An undeclared
+     * id is rejected. Returns a disposer; every binding is removed when the plugin
+     * unloads. Must be called during `activate()`. Registering the same id again
+     * replaces the prior binding and leaves the older disposer inert.
+     *
+     * @throws {Error} If called after activation resolves or times out — the host
+     *   is revoked and registration is rejected.
+     */
+    registerContextProvider(descriptor: ContextProviderDescriptor, impl: ContextProviderImpl): Promise<() => void>;
+    /**
      * Subscribe to active-worktree changes. The callback fires with the new
      * active snapshot (or `null` when none is active). Returns a disposer;
      * calling it more than once is a no-op. All subscriptions are automatically
@@ -5774,6 +5829,11 @@ interface RegisteredSearchProviderRecord {
     id: string;
     provider: PluginSearchProvider;
 }
+/** A provider bound through `host.registerContextProvider`; call `impl` directly to test it. */
+interface RegisteredContextProviderRecord {
+    descriptor: ContextProviderDescriptor;
+    impl: ContextProviderImpl;
+}
 /**
  * A handler bound through `host.registerWorktreeSetupStep`. Call `handler`
  * with a context of your own to run the step as the host would.
@@ -5904,6 +5964,7 @@ interface MockHostState {
     readonly registeredWorktreeSetupSteps: ReadonlyArray<RegisteredWorktreeSetupStepRecord>;
     /** Live `host.registerSearchProvider` bindings, one per provider id. */
     readonly registeredSearchProviders: ReadonlyArray<RegisteredSearchProviderRecord>;
+    readonly registeredContextProviders: ReadonlyArray<RegisteredContextProviderRecord>;
     /** Live `host.mcp.registerTools` rosters, one per endpoint id. */
     readonly registeredMcpTools: ReadonlyArray<RegisteredMcpToolsRecord>;
     readonly invalidationCalls: ReadonlyArray<InvalidationRecord>;
@@ -6260,4 +6321,4 @@ interface CreateMockHostOptions {
 }
 declare function createMockHost(options?: CreateMockHostOptions): PluginHostApi & MockHostState;
 
-export { type BroadcastRecord, type CreateMockHostOptions, type DispatchedActionRecord, type InvalidationRecord, type MockHostState, type NotificationRecord, type PluginActionManifestEntry, type PluginCanDispatchResult, type ReadScreenRecord, type RegisteredActionRecord, type RegisteredFileDecorationProviderRecord, type RegisteredForgeProviderRecord, type RegisteredHandlerRecord, type RegisteredMcpToolsRecord, type RegisteredWorktreeSetupStepRecord, type RunRecipeRecord, type SentToAgentRecord, type ShowConfirmRecord, type ShowInputBoxRecord, type ShowQuickPickRecord, type ShownToastRecord, createMockHost };
+export { type BroadcastRecord, type CreateMockHostOptions, type DispatchedActionRecord, type InvalidationRecord, type MockHostState, type NotificationRecord, type PluginActionManifestEntry, type PluginCanDispatchResult, type ReadScreenRecord, type RegisteredActionRecord, type RegisteredContextProviderRecord, type RegisteredFileDecorationProviderRecord, type RegisteredForgeProviderRecord, type RegisteredHandlerRecord, type RegisteredMcpToolsRecord, type RegisteredWorktreeSetupStepRecord, type RunRecipeRecord, type SentToAgentRecord, type ShowConfirmRecord, type ShowInputBoxRecord, type ShowQuickPickRecord, type ShownToastRecord, createMockHost };

@@ -47,6 +47,10 @@ import {
 import { isAgentRecipeType } from "../../shared/types/project.js";
 import { SYSTEM_PROMPT_MAX_LENGTH } from "../../shared/utils/agentSystemPrompt.js";
 import {
+  CONTEXT_PROVIDER_PREFIX_PATTERN,
+  CONTEXT_PROVIDER_RESERVED_PREFIXES,
+} from "../../shared/utils/pluginContextReference.js";
+import {
   PROMPT_TEMPLATE_ARG_NAME_PATTERN,
   PROMPT_TEMPLATE_MAX_ARGS,
   PROMPT_TEMPLATE_MAX_BODY_LENGTH,
@@ -1406,6 +1410,29 @@ export const ForgeProviderContributionSchema = z
   });
 
 /**
+ * `contextProviders` manifest entry (#13795): an `@{prefix}:` the agent
+ * composer offers, answered by the impl the plugin binds through
+ * `host.registerContextProvider`. Declared so a project's prefixes are known
+ * before any plugin code runs. No capability: the host asks only after the
+ * user picks, and nothing is ever sent without their Enter. Strict so unknown
+ * fields fail loudly.
+ */
+export const ContextProviderContributionSchema = z
+  .object({
+    id: z.string().min(1).max(64).regex(SAFE_ID_PATTERN),
+    prefix: z
+      .string()
+      .regex(CONTEXT_PROVIDER_PREFIX_PATTERN, {
+        message: "prefix is one to sixteen lowercase letters",
+      })
+      .refine((prefix) => !CONTEXT_PROVIDER_RESERVED_PREFIXES.has(prefix), {
+        message: "prefix can't be diff, terminal or selection, which the composer reserves",
+      }),
+    label: z.string().min(1).max(60),
+  })
+  .strict();
+
+/**
  * `fileDecorationProviders` manifest entry. Declares which scopes a plugin's
  * decoration provider handles so the host can route renderer pulls without
  * the plugin's code having run yet. Strict so unknown fields from plugin
@@ -2677,6 +2704,7 @@ export const MANIFEST_CONTRIBUTION_CAPS = {
   themes: 20,
   promptTemplates: 50,
   terminalLinks: TERMINAL_LINK_MAX_PER_PLUGIN,
+  contextProviders: 10,
   forgeProviders: 20,
   fileDecorationProviders: 50,
   fileEditors: 10,
@@ -3128,6 +3156,10 @@ function buildPluginManifestSchema(origin: PluginOrigin) {
               .array(ThemeContributionSchema)
               .max(MANIFEST_CONTRIBUTION_CAPS.themes)
               .default([]),
+            contextProviders: z
+              .array(ContextProviderContributionSchema)
+              .max(MANIFEST_CONTRIBUTION_CAPS.contextProviders)
+              .default([]),
             forgeProviders: z
               .array(ForgeProviderContributionSchema)
               .max(MANIFEST_CONTRIBUTION_CAPS.forgeProviders)
@@ -3212,6 +3244,7 @@ function buildPluginManifestSchema(origin: PluginOrigin) {
             themes: [],
             promptTemplates: [],
             terminalLinks: [],
+            contextProviders: [],
             forgeProviders: [],
             fileDecorationProviders: [],
             fileEditors: [],
@@ -3889,6 +3922,20 @@ function buildPluginManifestSchema(origin: PluginOrigin) {
             message: `Prompt template "${template.id}" references {{${reference}}}, which is not a declared argument name.`,
           });
         }
+      });
+      reportDuplicateIds("contextProviders", manifest.contributes.contextProviders);
+      // One plugin answering one prefix twice would leave the second provider
+      // unreachable behind the first.
+      const claimedPrefixes = new Set<string>();
+      manifest.contributes.contextProviders.forEach((provider, index) => {
+        if (claimedPrefixes.has(provider.prefix)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ["contributes", "contextProviders", index, "prefix"],
+            message: `Prefix "${provider.prefix}" is claimed by more than one context provider.`,
+          });
+        }
+        claimedPrefixes.add(provider.prefix);
       });
       reportDuplicateIds("forgeProviders", manifest.contributes.forgeProviders);
       reportDuplicateIds("fileDecorationProviders", manifest.contributes.fileDecorationProviders);
