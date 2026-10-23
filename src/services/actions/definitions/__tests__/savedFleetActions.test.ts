@@ -60,6 +60,8 @@ const { useProjectStore } = await import("@/store/projectStore");
 const { useProjectSettingsStore } = await import("@/store/projectSettingsStore");
 const { useWorktreeSelectionStore } = await import("@/store/worktreeStore");
 const { registerFleetActions } = await import("../fleetActions");
+// The run bodies load on first dispatch; load them here, under the mocks above.
+await import("../fleetActions.impl");
 
 type ActionRegistry = Awaited<
   ReturnType<typeof import("@/services/actions/actionDefinitions").createActionDefinitions>
@@ -627,7 +629,7 @@ describe("fleet.deleteNamedFleet", () => {
 
     const registry = await buildRegistry();
     const deleting = run(registry, "fleet.deleteNamedFleet", { id: "s1" });
-    await Promise.resolve();
+    await vi.waitFor(() => expect(saveSettingsMock).toHaveBeenCalled());
     // Another fleet is saved while the delete's write is still in flight.
     useProjectSettingsStore.setState((s) => ({
       settings: {

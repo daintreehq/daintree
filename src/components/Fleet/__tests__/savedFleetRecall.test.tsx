@@ -19,7 +19,7 @@ function resolveIds(scope: { terminalIds?: string[]; stateFilter?: string }): st
   return scope.stateFilter === "finished" ? [] : ["r1", "r2"];
 }
 
-vi.mock("@/services/actions/definitions/fleetActions", () => ({
+vi.mock("@/services/actions/definitions/fleetSavedScope", () => ({
   resolveSavedScopeIds: vi.fn(resolveIds),
   computeSavedScopePaneCount: vi.fn(
     (scope: { terminalIds?: string[] }) => resolveIds(scope).length
