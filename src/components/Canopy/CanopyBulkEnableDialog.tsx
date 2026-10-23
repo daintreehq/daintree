@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { Button } from "@/components/ui/button";
+import type { CanopyMode } from "@shared/types/ipc/canopy";
 import { systemClient } from "@/clients/systemClient";
 import { pluralize } from "@/lib/pluralize";
 import {
@@ -13,7 +14,7 @@ import {
   type BulkResult,
   type BulkSeen,
   type BulkTarget,
-} from "./bulkEnable";
+} from "@shared/utils/canopyBulkEnable";
 import {
   CANOPY_BETA_TERMS,
   CANOPY_PRIVACY_URL,
@@ -31,6 +32,19 @@ const OUTCOME_LABEL: Record<BulkEnableOutcome, string> = {
   conflicted: "Changed meanwhile",
   uncertain: "Not confirmed",
 };
+
+/** What a host still to be asked is going to see, said before anyone agrees. */
+function reviewNote(
+  target: BulkTarget,
+  modes: ReadonlyMap<string, CanopyMode | null> | null
+): string | null {
+  if (modes === null) return target.connected === false ? "Not connected" : "Checking…";
+  const mode = modes.get(target.hostId) ?? null;
+  if (mode === "hidden") return "Hidden there. It will be shown, then turned on.";
+  if (mode === "on") return "Already on.";
+  if (mode === "unset") return null;
+  return "Not read yet. If Canopy is hidden there, it will be shown, then turned on.";
+}
 
 type Phase = "review" | "running" | "done";
 
@@ -52,7 +66,7 @@ export function CanopyBulkEnableDialog({
 }) {
   const [phase, setPhase] = useState<Phase>("review");
   const [results, setResults] = useState<Map<string, BulkResult>>(new Map());
-  const [hidden, setHidden] = useState<ReadonlySet<string>>(new Set());
+  const [modes, setModes] = useState<ReadonlyMap<string, CanopyMode | null> | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const depsRef = useRef(deps);
   depsRef.current = deps;
@@ -61,29 +75,35 @@ export function CanopyBulkEnableDialog({
     if (!isOpen) return;
     setPhase("review");
     setResults(new Map());
-    setHidden(new Set());
-    let live = true;
-    void previewCanopyModes(targets, depsRef.current).then((rows) => {
-      if (live)
-        setHidden(new Set(rows.filter((row) => row.mode === "hidden").map((r) => r.hostId)));
-    });
-    return () => {
-      live = false;
-      abortRef.current?.abort();
-    };
+    setModes(null);
+    const controller = new AbortController();
+    abortRef.current = controller;
+    void previewCanopyModes(targets, { ...depsRef.current, signal: controller.signal }).then(
+      (rows) => {
+        if (!controller.signal.aborted) {
+          setModes(new Map(rows.map((row) => [row.hostId, row.mode] as const)));
+        }
+      }
+    );
+    return () => controller.abort();
   }, [isOpen, targets]);
 
   const run = (subset: readonly BulkTarget[], before: ReadonlyMap<string, BulkSeen | null>) => {
     const controller = new AbortController();
+    abortRef.current?.abort();
     abortRef.current = controller;
     setPhase("running");
     void enableCanopyOnHosts(
       subset,
       { ...depsRef.current, signal: controller.signal },
       before,
-      (result) => setResults((prev) => new Map(prev).set(result.hostId, result))
+      (result) => {
+        if (abortRef.current === controller) {
+          setResults((prev) => new Map(prev).set(result.hostId, result));
+        }
+      }
     ).then(() => {
-      if (abortRef.current === controller) setPhase("done");
+      if (abortRef.current === controller && !controller.signal.aborted) setPhase("done");
     });
   };
 
@@ -105,7 +125,7 @@ export function CanopyBulkEnableDialog({
       onClose={onClose}
       dismissible={phase !== "running"}
       size="md"
-      zIndex="modal"
+      zIndex="nested"
     >
       <AppDialog.Header>
         <AppDialog.Title>Enable Canopy on all hosts?</AppDialog.Title>
@@ -150,11 +170,8 @@ export function CanopyBulkEnableDialog({
                 {result ? (
                   <span className="text-xs text-text-secondary">{result.detail}</span>
                 ) : (
-                  phase === "review" &&
-                  hidden.has(target.hostId) && (
-                    <span className="text-xs text-text-secondary">
-                      Hidden there. It will be shown, then turned on.
-                    </span>
+                  phase === "review" && (
+                    <span className="text-xs text-text-secondary">{reviewNote(target, modes)}</span>
                   )
                 )}
               </li>
@@ -181,7 +198,7 @@ export function CanopyBulkEnableDialog({
             : {
                 label: "Enable Canopy on all hosts",
                 onClick: () => run(targets, new Map()),
-                disabled: phase === "running" || targets.length === 0,
+                disabled: phase === "running" || targets.length === 0 || modes === null,
                 loading: phase === "running",
               }
         }

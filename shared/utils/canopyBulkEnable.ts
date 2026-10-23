@@ -1,5 +1,15 @@
-import type { CanopyMode, CanopySnapshot } from "@shared/types/ipc/canopy";
-import type { HostId } from "@shared/types/remoteHosts";
+import type { CanopyMode, CanopySnapshot } from "../types/ipc/canopy.js";
+import type { HostId } from "../types/remoteHosts.js";
+import { decodeAppErrorWire } from "./appErrorWire.js";
+
+/** An IPC error's AppError code: from the wire prefix, or an AppError made in this realm. */
+function clientErrorCode(error: unknown): string | undefined {
+  if (!(error instanceof Error)) return undefined;
+  const decoded = decodeAppErrorWire(error.message);
+  if (decoded) return decoded.code;
+  const code = "code" in error ? error.code : undefined;
+  return error.name === "AppError" && typeof code === "string" ? code : undefined;
+}
 
 export type BulkEnableOutcome =
   | "enabled"
@@ -14,6 +24,8 @@ export type BulkEnableOutcome =
 export interface BulkTarget {
   hostId: HostId;
   name: string;
+  /** False for a saved host that isn't up: it is dialled when the run reaches it, not before. */
+  connected?: boolean;
 }
 
 /** The last state of a host's mode this run saw: what a later attempt must still find. */
@@ -63,11 +75,6 @@ export function isSettled(result: BulkResult): boolean {
 
 const DEFAULT_CONCURRENCY = 3;
 
-function errorCode(error: unknown): string | undefined {
-  if (typeof error !== "object" || error === null || !("code" in error)) return undefined;
-  return typeof error.code === "string" ? error.code : undefined;
-}
-
 function done(
   target: BulkTarget,
   outcome: BulkEnableOutcome,
@@ -83,18 +90,24 @@ function seenOf(snapshot: CanopySnapshot): BulkSeen | null {
     : null;
 }
 
-/** A read, dialling the host once if it isn't up. Null when it can't be read. */
-async function read(transport: BulkTransport): Promise<CanopySnapshot | null> {
+type Read = { snapshot: CanopySnapshot } | { snapshot: null; unsupported: boolean };
+
+/** A read, dialling the host once if it isn't up. */
+async function read(transport: BulkTransport, signal: AbortSignal | undefined): Promise<Read> {
+  const failed = (error: unknown): Read => ({
+    snapshot: null,
+    unsupported: clientErrorCode(error) === "UNSUPPORTED",
+  });
   try {
-    return await transport.getSnapshot();
-  } catch {
-    if (!transport.connect) return null;
+    return { snapshot: await transport.getSnapshot() };
+  } catch (error) {
+    if (!transport.connect || clientErrorCode(error) === "UNSUPPORTED") return failed(error);
   }
   try {
-    if (!(await transport.connect())) return null;
-    return await transport.getSnapshot();
-  } catch {
-    return null;
+    if (!(await transport.connect()) || signal?.aborted) return failed(null);
+    return { snapshot: await transport.getSnapshot() };
+  } catch (error) {
+    return failed(error);
   }
 }
 
@@ -104,8 +117,12 @@ async function enableOne(
   before: BulkSeen | null,
   signal: AbortSignal | undefined
 ): Promise<BulkResult> {
-  const first = await read(transport);
-  if (!first) return done(target, "inaccessible", "Couldn't reach this host.", before);
+  const { snapshot: first, ...rest } = await read(transport, signal);
+  if (!first) {
+    return "unsupported" in rest && rest.unsupported
+      ? done(target, "unsupported", "This host's Daintree can't do this from here.", null)
+      : done(target, "inaccessible", "Couldn't reach this host.", before);
+  }
   if (first.mode === "on") return done(target, "already-enabled", "Already on.", seenOf(first));
 
   const seen = seenOf(first);
@@ -139,11 +156,11 @@ async function enableOne(
     try {
       reply = await transport.setMode(step, revision, seen.hostEpoch);
     } catch (error) {
-      if (errorCode(error) === "PERMISSION") {
+      if (clientErrorCode(error) === "PERMISSION") {
         return done(target, "refused", "The host wouldn't turn Canopy on.", lastSeen);
       }
       // No reply is not a verdict: the host's own state says whether it landed.
-      const now = await read(transport);
+      const { snapshot: now } = await read(transport, signal);
       if (!now) {
         return done(target, "uncertain", "Lost contact before the host answered.", lastSeen);
       }
@@ -151,7 +168,7 @@ async function enableOne(
         return done(target, "conflicted", "The host restarted. Left as it is.", seenOf(now));
       }
       lastSeen = { hostEpoch: seen.hostEpoch, modeRevision: now.modeRevision };
-      if (now.mode === step) {
+      if (now.mode === step && now.modeRevision === revision + 1) {
         reply = now;
       } else if (now.modeRevision === revision) {
         return done(
@@ -173,7 +190,9 @@ async function enableOne(
       return done(target, "conflicted", "The host restarted. Left as it is.", seenOf(reply));
     }
     lastSeen = { hostEpoch: seen.hostEpoch, modeRevision: reply.modeRevision };
-    if (reply.mode !== step) {
+    // Only the very next revision is this step's own: a later one with the same
+    // mode is somebody else's, and the choice after it is theirs.
+    if (reply.mode !== step || reply.modeRevision !== revision + 1) {
       return done(
         target,
         "conflicted",
@@ -229,22 +248,24 @@ export interface BulkPreviewRow {
   mode: CanopyMode | null;
 }
 
-/** Reads each target without dialling and without changing anything. */
+/** Reads each target that is already up, changing nothing. */
 export async function previewCanopyModes(
   targets: readonly BulkTarget[],
-  deps: Pick<BulkEnableDeps, "transportFor" | "concurrency">
+  deps: Pick<BulkEnableDeps, "transportFor" | "concurrency" | "signal">
 ): Promise<BulkPreviewRow[]> {
-  const rows: BulkPreviewRow[] = new Array(targets.length);
+  const rows: BulkPreviewRow[] = targets.map((t) => ({ hostId: t.hostId, mode: null }));
   let next = 0;
   const worker = async () => {
-    while (next < targets.length) {
+    while (next < targets.length && !deps.signal?.aborted) {
       const index = next++;
       const target = targets[index]!;
+      // Asking a host that is down would dial it before anyone has agreed to.
+      if (target.connected === false) continue;
       const transport = deps.transportFor(target);
       try {
         rows[index] = { hostId: target.hostId, mode: (await transport.getSnapshot()).mode };
       } catch {
-        rows[index] = { hostId: target.hostId, mode: null };
+        // Left unread: the dialog says so.
       } finally {
         transport.release();
       }

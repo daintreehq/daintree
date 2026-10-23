@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { canopyHostClient } from "@/clients/canopyHostClient";
 import { remoteHostsClient } from "@/clients/remoteHostsClient";
-import type { BulkTransport } from "./bulkEnable";
+import type { BulkTransport } from "@shared/utils/canopyBulkEnable";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import type { CanopyHostChannel } from "@shared/types/ipc/canopyHost";
 import type { CanopySnapshot } from "@shared/types/ipc/canopy";
@@ -91,7 +91,7 @@ const BULK_CONNECT_MS = 20_000;
  */
 export function canopyBulkTransport(
   hostId: HostId,
-  { own, keepOpen }: { own: boolean; keepOpen: boolean }
+  { own, keepOpen }: { own: boolean; keepOpen: () => boolean }
 ): BulkTransport {
   if (own) {
     return {
@@ -125,7 +125,7 @@ export function canopyBulkTransport(
               .status === "connected",
         }),
     release: () => {
-      if (opened && !keepOpen) void canopyHostClient.release(hostId).catch(() => {});
+      if (opened && !keepOpen()) void canopyHostClient.release(hostId).catch(() => {});
     },
   };
 }

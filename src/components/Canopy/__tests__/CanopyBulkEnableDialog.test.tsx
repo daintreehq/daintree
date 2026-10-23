@@ -10,7 +10,7 @@ vi.mock("react-dom", async () => {
 vi.mock("@/clients/systemClient", () => ({ systemClient: { openExternal: vi.fn() } }));
 
 import { CanopyBulkEnableDialog } from "../CanopyBulkEnableDialog";
-import type { BulkTarget, BulkTransport } from "../bulkEnable";
+import type { BulkTarget, BulkTransport } from "@shared/utils/canopyBulkEnable";
 
 const snap = (mode: CanopyMode, rev = 0): CanopySnapshot => ({
   mode,
@@ -116,7 +116,36 @@ describe("CanopyBulkEnableDialog", () => {
     });
     expect(h.setMode.mock.calls).toEqual([["studio-2", "on", 0]]);
     expect(screen.queryByRole("button", { name: "Retry failed" })).toBeNull();
-    expect(h.released.filter((id) => id === "local").length).toBeGreaterThanOrEqual(2);
+    expect(h.released.filter((id) => id === "local")).toHaveLength(2);
+  });
+
+  it("holds the enable button until every host has been read", async () => {
+    const h = setup(false);
+    let release: () => void = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const slow = (target: BulkTarget) => {
+      const transport = h.transportFor(target);
+      return target.hostId === "studio-1"
+        ? { ...transport, getSnapshot: () => gate.then(() => transport.getSnapshot()) }
+        : transport;
+    };
+    render(
+      <CanopyBulkEnableDialog
+        isOpen
+        onClose={() => {}}
+        targets={targets}
+        deps={{ transportFor: slow }}
+      />
+    );
+    const enable = screen.getByRole("button", { name: "Enable Canopy on all hosts" });
+    expect(enable.getAttribute("aria-disabled")).toBe("true");
+    await act(async () => {
+      release();
+    });
+    expect(enable.getAttribute("aria-disabled")).toBeNull();
+    expect(document.body.textContent).toContain("Hidden there");
   });
 
   it("makes no change when closed without pressing the button", async () => {

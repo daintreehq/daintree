@@ -85,7 +85,7 @@ import { useListReorderMotion } from "./useListReorderMotion";
 import { CanopyHeaderCenter, CanopyHostPicker, useCanopyHostRows } from "./CanopyHostPicker";
 import { CanopyHostOffer } from "./CanopyHostOffer";
 import { CanopyBulkEnableDialog } from "./CanopyBulkEnableDialog";
-import type { BulkTarget } from "./bulkEnable";
+import type { BulkTarget } from "@shared/utils/canopyBulkEnable";
 import {
   canopyBulkTransport,
   ownCanopyApi,
@@ -260,13 +260,27 @@ export function CanopyView() {
   const [bulkTargets, setBulkTargets] = useState<readonly BulkTarget[] | null>(null);
   // Frozen when the person opens it: hosts listed later are not in this run.
   const openBulk = useCallback((rows: readonly HostMenuRow[]) => {
-    setBulkTargets(rows.map((row) => ({ hostId: row.hostId, name: row.name })));
+    setBulkTargets(
+      rows.map((row) => ({
+        hostId: row.hostId,
+        name: row.name,
+        connected: row.connection === null || row.connection.status === "connected",
+      }))
+    );
   }, []);
+  // The panel put away — closed, or its project view cached — takes the run with it.
+  const panelOpen = useCanopyStore((s) => s.isOpen);
+  useEffect(() => {
+    if (!panelOpen) setBulkTargets(null);
+  }, [panelOpen]);
   const transportFor = useCallback(
     (target: BulkTarget) =>
       canopyBulkTransport(target.hostId, {
         own: target.hostId === canopyOwnHostId(),
-        keepOpen: target.hostId === useCanopyStore.getState().hostId,
+        keepOpen: () => {
+          const { isOpen, hostId } = useCanopyStore.getState();
+          return isOpen && target.hostId === hostId;
+        },
       }),
     []
   );

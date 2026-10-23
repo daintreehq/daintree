@@ -1,11 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
-import type { CanopyMode, CanopySnapshot } from "@shared/types/ipc/canopy";
+import type { CanopyMode, CanopySnapshot } from "../../types/ipc/canopy.js";
 import {
   enableCanopyOnHosts,
   previewCanopyModes,
   type BulkTarget,
   type BulkTransport,
-} from "../bulkEnable";
+} from "../canopyBulkEnable.js";
 
 function snap(
   mode: CanopyMode,
@@ -41,7 +41,7 @@ function fakeHost(initial: CanopySnapshot) {
       state.calls.push([mode, rev, epoch]);
       if (rev !== state.snap.modeRevision || epoch !== state.snap.hostEpoch) return state.snap;
       if (mode === "on" && state.snap.mode === "hidden")
-        throw Object.assign(new Error("x"), { code: "PERMISSION" });
+        throw new Error("[AppError|PERMISSION] Canopy is hidden");
       state.snap = snap(
         mode,
         state.snap.modeRevision! + (mode === state.snap.mode ? 0 : 1),
@@ -207,7 +207,7 @@ describe("enableCanopyOnHosts", () => {
     const refusing: BulkTransport = {
       getSnapshot: async () => snap("unset", 0),
       setMode: async () => {
-        throw Object.assign(new Error("hidden"), { code: "PERMISSION" });
+        throw new Error("[AppError|PERMISSION] Canopy is hidden");
       },
       release: () => {},
     };
@@ -233,7 +233,85 @@ describe("enableCanopyOnHosts", () => {
   });
 });
 
+describe("enableCanopyOnHosts, against another window's changes", () => {
+  it("never carries on from a later revision that merely shares the step's mode", async () => {
+    // Hidden at r0; before the run's own unset lands, another window shows,
+    // enables and switches Canopy off again: unset at r3.
+    const host = fakeHost(snap("hidden", 0));
+    const transport: BulkTransport = {
+      ...host.transport,
+      setMode: async (mode, rev, epoch) => {
+        host.state.calls.push([mode, rev, epoch]);
+        host.state.snap = snap("unset", 3);
+        return host.state.snap;
+      },
+    };
+    const [result] = await run({ s: transport });
+    expect(result!.outcome).toBe("conflicted");
+    expect(host.state.calls).toEqual([["unset", 0, "e1"]]);
+    expect(host.state.snap.mode).toBe("unset");
+  });
+
+  it("does the same when the reply is lost and a later revision is read back", async () => {
+    const host = fakeHost(snap("hidden", 0));
+    const transport: BulkTransport = {
+      ...host.transport,
+      setMode: async (mode, rev, epoch) => {
+        host.state.calls.push([mode, rev, epoch]);
+        host.state.snap = snap("unset", 3);
+        throw new Error("lost");
+      },
+    };
+    const [result] = await run({ s: transport });
+    expect(result!.outcome).toBe("conflicted");
+    expect(host.state.calls).toHaveLength(1);
+  });
+
+  it("stops between the hidden steps when the mode moved on", async () => {
+    const host = fakeHost(snap("hidden", 0));
+    const transport: BulkTransport = {
+      ...host.transport,
+      setMode: async (mode, rev, epoch) => {
+        const reply = await host.transport.setMode(mode, rev, epoch);
+        host.state.snap = snap("hidden", reply.modeRevision! + 1);
+        return reply;
+      },
+    };
+    const [result] = await run({ s: transport });
+    expect(result!.outcome).toBe("conflicted");
+    // The second step goes out on the revision the first left, and the host refuses it.
+    expect(host.state.calls).toEqual([
+      ["unset", 0, "e1"],
+      ["on", 1, "e1"],
+    ]);
+    expect(host.state.snap.mode).toBe("hidden");
+  });
+
+  it("reports a host that answers UNSUPPORTED as unsupported, not unreachable", async () => {
+    const transport: BulkTransport = {
+      getSnapshot: async () => {
+        throw new Error("[AppError|UNSUPPORTED] No such channel");
+      },
+      setMode: vi.fn(),
+      connect: vi.fn(async () => true),
+      release: () => {},
+    };
+    const [result] = await run({ s: transport });
+    expect(result!.outcome).toBe("unsupported");
+    expect(transport.connect).not.toHaveBeenCalled();
+  });
+});
+
 describe("previewCanopyModes", () => {
+  it("never asks a host that is down", async () => {
+    const getSnapshot = vi.fn(async () => snap("unset", 0));
+    const rows = await previewCanopyModes([{ hostId: "d", name: "d", connected: false }], {
+      transportFor: () => ({ getSnapshot, setMode: vi.fn(), release: () => {} }),
+    });
+    expect(rows).toEqual([{ hostId: "d", mode: null }]);
+    expect(getSnapshot).not.toHaveBeenCalled();
+  });
+
   it("reads modes without a single write and releases each target", async () => {
     const hidden = fakeHost(snap("hidden", 0));
     const rows = await previewCanopyModes([t("h"), t("x")], {
