@@ -88,6 +88,9 @@ export type {
   PluginAuthor,
   AssistantKnowledgeContribution,
   AssistantKnowledgeEntry,
+  PluginApplicationDescriptor,
+  PluginApplicationDestination,
+  PluginApplicationTourRef,
 } from "./plugin.js";
 
 // ── Activation contract ─────────────────────────────────────────────

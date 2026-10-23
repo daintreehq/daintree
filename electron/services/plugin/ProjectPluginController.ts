@@ -1,5 +1,6 @@
 import type {
   PluginLoadError,
+  ProjectApplicationState,
   ProjectPluginInfo,
   ProjectPluginTrustDecision,
   ProjectPluginTrustRecord,
@@ -15,6 +16,10 @@ import type {
   ProjectPluginDiscoveryResult,
 } from "./projectPluginDiscovery.js";
 import { createLogger } from "../../utils/logger.js";
+import {
+  resolveProjectApplication,
+  type ProjectApplicationCandidate,
+} from "../../../shared/utils/projectApplication.js";
 
 /**
  * Everything the controller needs from the rest of the host, injected exactly
@@ -67,6 +72,10 @@ export interface ProjectPluginControllerDeps {
   emitToProject: (projectId: string, name: string, payload: unknown) => void;
   /** Current row status, so a project closed behind our back can be reconciled. */
   isProjectClosed: (projectId: string) => boolean;
+  /** Whether the running Daintree falls outside an `engines.daintree` range. */
+  isEngineIncompatible: (range: string) => boolean;
+  /** INSTANCE key of the plugin holding this project's Home slot, or `null`. */
+  getProjectHomeHolder: (projectId: string) => string | null;
 }
 
 interface ProjectEntry {
@@ -97,6 +106,8 @@ interface ProjectEntry {
   loggedRejections: Map<string, string>;
   /** manifest id → instance key, for everything currently loaded. */
   loaded: Map<string, string>;
+  /** Manifest ids whose last load was refused or threw, until the next attempt. */
+  refused: Set<string>;
 }
 
 /**
@@ -793,6 +804,42 @@ export class ProjectPluginController {
     }
   }
 
+  /**
+   * The project's application (#14097), resolved from the plugins on disk and
+   * what this controller has loaded. `null` when no plugin declares one. Read
+   * live on every call, so a mute, a revoke or a failed load is reflected the
+   * moment it lands rather than when something re-registers.
+   */
+  getProjectApplication(projectId: string): ProjectApplicationState | null {
+    const entry = this.entries.get(projectId);
+    if (!entry) return null;
+    const candidates: ProjectApplicationCandidate[] = [];
+    for (const d of entry.discovered) {
+      const application = d.manifest?.application;
+      if (!d.manifest || application === undefined) continue;
+      const manifestId = d.manifest.name;
+      const instanceId = entry.loaded.get(manifestId);
+      const range = d.manifest.engines?.daintree;
+      candidates.push({
+        manifestId,
+        application,
+        ...(instanceId !== undefined ? { instanceId } : {}),
+        staged: entry.staged.has(manifestId),
+        muted: entry.muted.has(manifestId),
+        loadFailed:
+          entry.refused.has(manifestId) ||
+          (instanceId !== undefined && this.deps.getPluginLoadError(instanceId) !== undefined),
+        engineIncompatible: range !== undefined && this.deps.isEngineIncompatible(range),
+      });
+    }
+    if (candidates.length === 0) return null;
+    return resolveProjectApplication({
+      candidates,
+      trusted: this.isEnabled(entry),
+      homeHeldBy: this.deps.getProjectHomeHolder(projectId),
+    });
+  }
+
   /** The trust state a renderer needs to decide whether to prompt. */
   getTrustState(projectId: string): ProjectPluginTrustState {
     const entry = this.entries.get(projectId);
@@ -870,6 +917,7 @@ export class ProjectPluginController {
       discovered: [],
       loggedRejections: new Map(),
       loaded: new Map(),
+      refused: new Set(),
     };
     this.entries.set(projectId, entry);
     return entry;
@@ -1033,6 +1081,7 @@ export class ProjectPluginController {
   ): Promise<void> {
     const manifestId = d.manifest.name;
     const instanceKey = makeProjectPluginInstanceKey(projectId, manifestId);
+    entry.refused.delete(manifestId);
     try {
       const ok = await this.deps.loadProjectPlugin({
         projectId,
@@ -1042,7 +1091,10 @@ export class ProjectPluginController {
         manifest: d.manifest,
         isCurrent: () => this.stillCurrent(projectId, entry, generation),
       });
-      if (!ok) return;
+      if (!ok) {
+        entry.refused.add(manifestId);
+        return;
+      }
       if (!this.stillCurrent(projectId, entry, generation)) {
         // A close or revoke ran while this load was in flight, so its teardown
         // sweep never saw this instance. Undo it here rather than leaving a
@@ -1052,6 +1104,7 @@ export class ProjectPluginController {
       }
       entry.loaded.set(manifestId, instanceKey);
     } catch (err) {
+      entry.refused.add(manifestId);
       logger.error("Loading a project plugin threw", err, { projectId, manifestId });
     }
   }
@@ -1111,6 +1164,7 @@ export class ProjectPluginController {
       projectId,
       plugins: this.listProjectPlugins(projectId),
       trust: this.getTrustState(projectId),
+      application: this.getProjectApplication(projectId),
     });
   }
 }

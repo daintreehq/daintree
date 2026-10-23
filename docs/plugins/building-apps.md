@@ -107,6 +107,8 @@ A trimmed manifest for a SQLite-backed app, which is valid as written:
 
 Your `open` command dispatches `panel.openPluginPanel` with `{ kind: host.panelKindId("main") }` — see [Patterns → Open your own panel from a command](./patterns.md#open-your-own-panel-from-a-command). `requires` names what each command actually uses: `[]` keeps `open` one click, where the plugin's write and agent capabilities would otherwise put a confirm dialog on every command, and the export declares the write it makes ([Keep commands one click](./patterns.md#keep-commands-one-click)). `mcp:expose` never raises a command to confirm.
 
+To tie the parts together, declare the top-level [`application`](./manifest.md#application) block in `plugin.json`. It names the app and where it opens, and points at the Home, sidebar view, settings view, welcome tour, first command and agent endpoints the manifest already declares, so the host knows these contributions are one application rather than unrelated pieces.
+
 ## Choosing a store
 
 Pick by the shape of the data and by who needs to read it, not by what is quickest to code.

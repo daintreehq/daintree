@@ -36,6 +36,8 @@ import {
   PanelContributionObjectSchema,
   PanelMenuItemSchema,
   PanelToolbarItemSchema,
+  PluginApplicationSchema,
+  PluginApplicationTourRefSchema,
   PreviewToolContributionSchema,
   ProjectTemplateContributionSchema,
   GuestAdapterContributionSchema,
@@ -172,6 +174,9 @@ const SEARCH_PROVIDER_REGISTRY = "electron/services/plugin/pluginSearchProviderR
 const PLUGIN_SEARCH_SERVICE = "electron/services/plugin/PluginSearchService.ts";
 const QUICK_SWITCHER = "src/components/QuickSwitcher/QuickSwitcher.tsx";
 const OPEN_PLUGIN_SEARCH_HIT = "src/components/QuickSwitcher/openPluginSearchHit.ts";
+const PROJECT_APPLICATION = "shared/utils/projectApplication.ts";
+const PROJECT_PLUGIN_CONTROLLER = "electron/services/plugin/ProjectPluginController.ts";
+const PROJECT_PLUGIN_STORE = "src/store/projectPluginStore.ts";
 
 /**
  * The schemas swept for field coverage. The first block matches the fourteen
@@ -243,6 +248,10 @@ const SWEPT_SCHEMAS = {
   assistantKnowledge: AssistantKnowledgeContributionSchema,
   "assistantKnowledge.skills": AssistantKnowledgeSkillSchema,
   "assistantKnowledge.references": AssistantKnowledgeReferenceSchema,
+  // Top-level and optional, outside `contributes`, so it never shows up on the
+  // empty-manifest parse and is swept here by name.
+  application: PluginApplicationSchema,
+  "application.welcomeTour": PluginApplicationTourRefSchema,
 } as const;
 
 type SweptGroup = keyof typeof SWEPT_SCHEMAS;
@@ -405,6 +414,11 @@ type FieldConsumerCoverage = {
   >;
   "assistantKnowledge.references": Record<
     keyof z.infer<typeof AssistantKnowledgeReferenceSchema>,
+    ConsumerDescriptor
+  >;
+  application: Record<keyof z.infer<typeof PluginApplicationSchema>, ConsumerDescriptor>;
+  "application.welcomeTour": Record<
+    keyof z.infer<typeof PluginApplicationTourRefSchema>,
     ConsumerDescriptor
   >;
   "toolbarButtons.popover": Record<
@@ -2697,6 +2711,110 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
         { file: ASSISTANT_PLUGIN_KNOWLEDGE, symbol: "readPluginKnowledge (KnowledgeReader.read)" },
       ],
       note: "Resolved against the plugin dir, realpath-contained, and read as Markdown.",
+    },
+  },
+  application: {
+    name: {
+      mode: "verbatim",
+      consumers: [
+        { file: PROJECT_PLUGIN_CONTROLLER, symbol: "getProjectApplication" },
+        { file: PROJECT_APPLICATION, symbol: "resolveProjectApplication (application)" },
+        { file: PROJECT_PLUGIN_STORE, symbol: "applySnapshot (application)" },
+      ],
+      note: "The application's name, carried in the resolved state the project's views receive.",
+    },
+    iconId: {
+      mode: "intentional-metadata",
+      consumers: [{ file: PLUGIN_SCHEMA, symbol: "PluginApplicationSchema" }],
+      note: "Carried in the resolved state; the same vocabulary as a sidebar view's iconId, drawn by the host's own icon set.",
+    },
+    destination: {
+      mode: "verbatim",
+      consumers: [
+        {
+          file: PLUGIN_SCHEMA,
+          symbol: "getPluginManifestSchema superRefine (application_home_unclaimed)",
+        },
+        { file: PROJECT_APPLICATION, symbol: "resolveProjectApplication (replaced)" },
+      ],
+      note: "Home or Grid only. Home needs the plugin's own projectHome claim, and another plugin holding that Home makes the application replaced.",
+    },
+    sidebarViewId: {
+      mode: "cross-reference",
+      consumers: [
+        {
+          file: PLUGIN_SCHEMA,
+          symbol: "getPluginManifestSchema superRefine (application_sidebar_view_unknown)",
+        },
+      ],
+      note: "Must name one of the plugin's own sidebar views, which the sidebar switcher already offers.",
+    },
+    settingsViewId: {
+      mode: "cross-reference",
+      consumers: [
+        {
+          file: PLUGIN_SCHEMA,
+          symbol: "getPluginManifestSchema superRefine (application_settings_view_unknown)",
+        },
+      ],
+      note: "Must name the plugin's own settings view, which its settings home already mounts.",
+    },
+    welcomeTour: {
+      mode: "cross-reference",
+      consumers: [
+        {
+          file: PLUGIN_SCHEMA,
+          symbol: "getPluginManifestSchema superRefine (application_tour_unknown)",
+        },
+      ],
+      note: "Must name one of the plugin's own tours that is not scoped to a panel.",
+    },
+    firstWorkflow: {
+      mode: "cross-reference",
+      consumers: [
+        {
+          file: PLUGIN_SCHEMA,
+          symbol: "getPluginManifestSchema superRefine (application_command_unknown)",
+        },
+      ],
+      note: "Must name one of the plugin's own commands of kind command; the application runs nothing itself.",
+    },
+    requiredTools: {
+      mode: "cross-reference",
+      consumers: [
+        {
+          file: PLUGIN_SCHEMA,
+          symbol: "getPluginManifestSchema superRefine (application_tool_unknown)",
+        },
+      ],
+      note: "Each must name one of the plugin's own agentMcp endpoints; declaring one grants no access.",
+    },
+    presentation: {
+      mode: "cross-reference",
+      consumers: [
+        {
+          file: PLUGIN_SCHEMA,
+          symbol: "PluginApplicationSchema (isPresentationFeatureId, isLevelAllowed)",
+        },
+      ],
+      note: "Checked against the host's closed presentation vocabulary; a suggestion only, never written over the user's profile.",
+    },
+  },
+  "application.welcomeTour": {
+    id: {
+      mode: "cross-reference",
+      consumers: [
+        {
+          file: PLUGIN_SCHEMA,
+          symbol: "getPluginManifestSchema superRefine (application_tour_panel_scoped)",
+        },
+      ],
+      note: "A contributes.tours[].id of this plugin, not scoped to a panel kind.",
+    },
+    version: {
+      mode: "intentional-metadata",
+      consumers: [{ file: PLUGIN_SCHEMA, symbol: "PluginApplicationTourRefSchema" }],
+      note: "The welcome revision, carried in the resolved state; the tour's own playback and progress are unchanged.",
     },
   },
 } satisfies FieldConsumerCoverage;

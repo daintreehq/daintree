@@ -22,6 +22,7 @@ import {
   PLUGIN_WORKTREE_SETUP_STEP_LABEL_MAX,
   PLUGIN_WORKTREE_SETUP_STEP_MAX_TIMEOUT_MS,
   PLUGIN_WORKTREE_SETUP_STEP_MIN_TIMEOUT_MS,
+  PLUGIN_APPLICATION_DESTINATIONS,
   PROJECT_SURFACE_SLOT_CATALOGUE,
   PROJECT_SURFACE_SLOTS,
   SIDEBAR_VIEW_NAME_MAX_LENGTH,
@@ -29,6 +30,12 @@ import {
   SIDEBAR_VIEW_PRIORITY_MIN,
 } from "../../shared/types/plugin.js";
 import { LAUNCH_MCP_FORMATS } from "../../shared/config/launchMcp.js";
+import {
+  PRESENTATION_FEATURE_IDS,
+  PRESENTATION_LEVELS,
+  isLevelAllowed,
+  isPresentationFeatureId,
+} from "../../shared/config/presentationProfile.js";
 import { isBuiltInAgentId } from "../../shared/config/agentIds.js";
 import { PLUGIN_ACTION_CATEGORY_MAX_LENGTH } from "../../shared/config/actionCategories.js";
 import {
@@ -3201,6 +3208,57 @@ export function describeManifestIssues(
 // pattern itself, not a refinement, so the generated JSON Schema rejects them too.
 const PLUGIN_MCP_NAME_PATTERN = /^(?!(?:docs|runbooks)$)[a-z0-9][a-z0-9-]{0,15}$/;
 
+/** `application.welcomeTour`: a tour of this plugin and its welcome revision. */
+export const PluginApplicationTourRefSchema = z.strictObject({
+  id: z.string().min(1).max(64).regex(SAFE_ID_PATTERN),
+  version: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER),
+});
+
+/** Longest `application.name`, matching a sidebar view's name. */
+export const PLUGIN_APPLICATION_NAME_MAX = 64;
+
+/**
+ * The top-level `application` descriptor (#14097). Every reference is a bare
+ * id the same manifest declares; the manifest `superRefine` resolves each one
+ * and confines the block to `scope: "project"`. The presentation vocabulary
+ * needs only the block itself, so it is checked here.
+ */
+export const PluginApplicationSchema = z
+  .strictObject({
+    name: z.string().trim().min(1).max(PLUGIN_APPLICATION_NAME_MAX),
+    iconId: z.string().min(1).max(200).optional(),
+    destination: z.enum(PLUGIN_APPLICATION_DESTINATIONS),
+    sidebarViewId: z.string().min(1).max(64).regex(SAFE_ID_PATTERN).optional(),
+    settingsViewId: z.string().min(1).max(64).regex(SAFE_ID_PATTERN).optional(),
+    welcomeTour: PluginApplicationTourRefSchema.optional(),
+    firstWorkflow: z.string().min(1).max(64).regex(SAFE_ID_PATTERN).optional(),
+    // Capped at the endpoints a plugin may declare, so each names a different one.
+    requiredTools: z
+      .array(z.string().min(1).max(64).regex(SAFE_ID_PATTERN))
+      .max(AGENT_MCP_MAX_ENDPOINTS_PER_PLUGIN)
+      .optional(),
+    presentation: z.record(z.string(), z.enum(PRESENTATION_LEVELS)).optional(),
+  })
+  .superRefine((application, ctx) => {
+    for (const [feature, level] of Object.entries(application.presentation ?? {})) {
+      if (!isPresentationFeatureId(feature)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["presentation", feature],
+          message: `application.presentation names "${feature}", which is not a presentation feature (${PRESENTATION_FEATURE_IDS.join(", ")}).`,
+          params: { errorCode: "application_presentation_unknown" },
+        });
+      } else if (!isLevelAllowed(feature, level)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["presentation", feature],
+          message: `application.presentation sets "${feature}" to "${level}", a level that feature does not offer.`,
+          params: { errorCode: "application_presentation_level" },
+        });
+      }
+    }
+  });
+
 /**
  * One manifest `eventRoutes` entry (#13816): an event from the host's closed
  * list and the bare id of one of the plugin's own `contributes.commands`. The
@@ -3270,6 +3328,8 @@ function buildPluginManifestSchema(origin: PluginOrigin) {
       // here — whether it is required, optional-but-rejected, or absent is a
       // function of the discovering `origin`, enforced in `superRefine`.
       scope: z.literal("project").optional(),
+      // Project plugins only; its references are resolved in `superRefine`.
+      application: PluginApplicationSchema.optional(),
       // Whether a window attached from another machine may use the plugin.
       // Absent means supported: plugin main code runs on the host either way.
       remote: z.enum(["supported", "unsupported"]).optional(),
@@ -4478,6 +4538,104 @@ function buildPluginManifestSchema(origin: PluginOrigin) {
           path: ["contributes", "surfaces", "defaultLayout"],
           message: `surfaces.defaultLayout "${defaultLayout}" matches no contributes.layouts[].id.`,
           params: { errorCode: "surface_default_layout_unknown" },
+        });
+      }
+
+      // `application` (#14097) names one project's application and points at
+      // what this manifest already contributes. Every reference resolves here,
+      // before anything loads: one that dangles would leave the application
+      // pointing at nothing with no diagnostic.
+      const application = manifest.application;
+      if (application !== undefined) {
+        const issue = (path: (string | number)[], message: string, errorCode: string) =>
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ["application", ...path],
+            message,
+            params: { errorCode },
+          });
+        if (manifest.scope !== "project") {
+          issue(
+            [],
+            'application is available only to a "scope": "project" plugin — an application is one project\'s, and an installed plugin is bound to no project.',
+            "application_project_scope_only"
+          );
+        }
+        // Compatibility is checked against the running app before the
+        // application is put in force, so it needs a range to check.
+        if (manifest.engines?.daintree === undefined) {
+          issue(
+            [],
+            "application requires engines.daintree, so the host can tell whether this Daintree runs it before putting it in force.",
+            "application_engine_required"
+          );
+        }
+        if (application.destination === "home" && manifest.contributes.surfaces.projectHome === undefined) {
+          issue(
+            ["destination"],
+            'application.destination "home" needs contributes.surfaces.projectHome, the Home it opens on.',
+            "application_home_unclaimed"
+          );
+        }
+        if (application.sidebarViewId !== undefined && !sidebarViewIds.has(application.sidebarViewId)) {
+          issue(
+            ["sidebarViewId"],
+            `application.sidebarViewId "${application.sidebarViewId}" matches no contributes.views[] entry with location "sidebar".`,
+            "application_sidebar_view_unknown"
+          );
+        }
+        if (application.settingsViewId !== undefined && !settingsViewIds.has(application.settingsViewId)) {
+          issue(
+            ["settingsViewId"],
+            `application.settingsViewId "${application.settingsViewId}" matches no contributes.views[] entry with location "settings".`,
+            "application_settings_view_unknown"
+          );
+        }
+        if (application.welcomeTour !== undefined) {
+          const tour = manifest.contributes.tours.find(
+            (entry) => entry.id === application.welcomeTour?.id
+          );
+          if (tour === undefined) {
+            issue(
+              ["welcomeTour", "id"],
+              `application.welcomeTour.id "${application.welcomeTour.id}" matches no contributes.tours[].id.`,
+              "application_tour_unknown"
+            );
+          } else if (tour.panelKind !== undefined) {
+            issue(
+              ["welcomeTour", "id"],
+              `application.welcomeTour.id "${tour.id}" is a tour of the "${tour.panelKind}" panel — a welcome tour introduces the whole application, so it can't be scoped to one panel.`,
+              "application_tour_panel_scoped"
+            );
+          }
+        }
+        if (application.firstWorkflow !== undefined) {
+          const command = manifest.contributes.commands.find(
+            (entry) => entry.id === application.firstWorkflow
+          );
+          if (command === undefined) {
+            issue(
+              ["firstWorkflow"],
+              `application.firstWorkflow "${application.firstWorkflow}" matches no contributes.commands[].id.`,
+              "application_command_unknown"
+            );
+          } else if (command.kind !== "command") {
+            issue(
+              ["firstWorkflow"],
+              `application.firstWorkflow "${command.id}" is a query — the first workflow is something the user does, so it must be a command of kind "command".`,
+              "application_command_query"
+            );
+          }
+        }
+        const agentMcpIds = new Set(manifest.contributes.agentMcp.map((endpoint) => endpoint.id));
+        application.requiredTools?.forEach((tool, index) => {
+          if (!agentMcpIds.has(tool)) {
+            issue(
+              ["requiredTools", index],
+              `application.requiredTools "${tool}" matches no contributes.agentMcp[].id.`,
+              "application_tool_unknown"
+            );
+          }
         });
       }
 
