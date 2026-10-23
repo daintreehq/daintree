@@ -489,12 +489,30 @@ export interface GeneratedElectronAPI {
     adoptDetachedSession(
       ...args: IpcInvokeMap["help:adopt-detached-session"]["args"]
     ): Promise<IpcInvokeMap["help:adopt-detached-session"]["result"]>;
+    attachGlobalAssistant(
+      ...args: IpcInvokeMap["help:global-assistant-attach"]["args"]
+    ): Promise<IpcInvokeMap["help:global-assistant-attach"]["result"]>;
+    claimGlobalAssistantInput(
+      ...args: IpcInvokeMap["help:global-assistant-claim-input"]["args"]
+    ): Promise<IpcInvokeMap["help:global-assistant-claim-input"]["result"]>;
+    detachGlobalAssistant(
+      ...args: IpcInvokeMap["help:global-assistant-detach"]["args"]
+    ): Promise<IpcInvokeMap["help:global-assistant-detach"]["result"]>;
     discardConversation(
       ...args: IpcInvokeMap["help:discard-conversation"]["args"]
     ): Promise<IpcInvokeMap["help:discard-conversation"]["result"]>;
+    discardGlobalAssistant(
+      ...args: IpcInvokeMap["help:global-assistant-discard"]["args"]
+    ): Promise<IpcInvokeMap["help:global-assistant-discard"]["result"]>;
+    ensureGlobalAssistant(
+      ...args: IpcInvokeMap["help:global-assistant-ensure"]["args"]
+    ): Promise<IpcInvokeMap["help:global-assistant-ensure"]["result"]>;
     getFolderPath(
       ...args: IpcInvokeMap["help:get-folder-path"]["args"]
     ): Promise<IpcInvokeMap["help:get-folder-path"]["result"]>;
+    getGlobalAssistantState(
+      ...args: IpcInvokeMap["help:global-assistant-state"]["args"]
+    ): Promise<IpcInvokeMap["help:global-assistant-state"]["result"]>;
     getPinnedActionContext(
       ...args: IpcInvokeMap["help:get-pinned-action-context"]["args"]
     ): Promise<IpcInvokeMap["help:get-pinned-action-context"]["result"]>;
@@ -519,9 +537,15 @@ export interface GeneratedElectronAPI {
     provisionSession(
       ...args: IpcInvokeMap["help:provision-session"]["args"]
     ): Promise<IpcInvokeMap["help:provision-session"]["result"]>;
+    releaseGlobalAssistantInput(
+      ...args: IpcInvokeMap["help:global-assistant-release-input"]["args"]
+    ): Promise<IpcInvokeMap["help:global-assistant-release-input"]["result"]>;
     reportPanelOpen(
       ...args: IpcInvokeMap["help:report-panel-open"]["args"]
     ): Promise<IpcInvokeMap["help:report-panel-open"]["result"]>;
+    restartGlobalAssistant(
+      ...args: IpcInvokeMap["help:global-assistant-restart"]["args"]
+    ): Promise<IpcInvokeMap["help:global-assistant-restart"]["result"]>;
     restorePendingHibernation(
       ...args: IpcInvokeMap["help:restore-pending-hibernation"]["args"]
     ): Promise<IpcInvokeMap["help:restore-pending-hibernation"]["result"]>;

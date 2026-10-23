@@ -692,6 +692,10 @@ if (!gotTheLock) {
           .catch((err) => {
             console.warn("[main] revokeByWebContentsId failed during eviction:", err);
           });
+        // The global assistant is no project's: the view only stops showing it.
+        void import("./services/globalAssistant.js").then(({ peekGlobalAssistantService }) =>
+          peekGlobalAssistantService()?.detachWebContents(wcId)
+        );
       },
       onViewCached: (wcId) => {
         // Same producer cleanup as eviction: a cached view is freeze-eligible
@@ -746,6 +750,9 @@ if (!gotTheLock) {
         helpSessionService.revokeByWebContentsId(wc.id).catch((err) => {
           console.warn("[main] revokeByWebContentsId failed during crash:", err);
         });
+        void import("./services/globalAssistant.js").then(({ peekGlobalAssistantService }) =>
+          peekGlobalAssistantService()?.detachWebContents(wc.id)
+        );
       },
       onViewReady: (wc) => {
         // Re-distribute PTY MessagePort on every view load/reload.

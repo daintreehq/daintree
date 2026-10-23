@@ -13,6 +13,7 @@ import {
 } from "../endpoint.js";
 import { getEndpointRegistry } from "../endpointRegistry.js";
 import { peekDriveLeaseService } from "../../services/DriveLeaseService.js";
+import * as globalAssistant from "./helpGlobalAssistant.js";
 import { installDetachedAdoption } from "./helpDetachedAdoption.js";
 import { createLogger } from "../../utils/logger.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
@@ -745,6 +746,45 @@ export const helpNamespace = defineIpcNamespace({
       withContext: true,
     }),
     revokeSession: op(HELP_METHOD_CHANNELS.revokeSession, handleRevokeSession),
+    ensureGlobalAssistant: op(
+      HELP_METHOD_CHANNELS.ensureGlobalAssistant,
+      globalAssistant.handleEnsureGlobalAssistant,
+      { withContext: true }
+    ),
+    getGlobalAssistantState: op(
+      HELP_METHOD_CHANNELS.getGlobalAssistantState,
+      globalAssistant.handleGetGlobalAssistantState
+    ),
+    attachGlobalAssistant: op(
+      HELP_METHOD_CHANNELS.attachGlobalAssistant,
+      globalAssistant.handleAttachGlobalAssistant,
+      { withContext: true }
+    ),
+    detachGlobalAssistant: op(
+      HELP_METHOD_CHANNELS.detachGlobalAssistant,
+      globalAssistant.handleDetachGlobalAssistant,
+      { withContext: true }
+    ),
+    claimGlobalAssistantInput: op(
+      HELP_METHOD_CHANNELS.claimGlobalAssistantInput,
+      globalAssistant.handleClaimGlobalAssistantInput,
+      { withContext: true }
+    ),
+    releaseGlobalAssistantInput: op(
+      HELP_METHOD_CHANNELS.releaseGlobalAssistantInput,
+      globalAssistant.handleReleaseGlobalAssistantInput,
+      { withContext: true }
+    ),
+    restartGlobalAssistant: op(
+      HELP_METHOD_CHANNELS.restartGlobalAssistant,
+      globalAssistant.handleRestartGlobalAssistant,
+      { withContext: true }
+    ),
+    discardGlobalAssistant: op(
+      HELP_METHOD_CHANNELS.discardGlobalAssistant,
+      globalAssistant.handleDiscardGlobalAssistant,
+      { withContext: true }
+    ),
     getPinnedActionContext: op(
       HELP_METHOD_CHANNELS.getPinnedActionContext,
       handleGetPinnedActionContext,

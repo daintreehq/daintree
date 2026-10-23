@@ -14,6 +14,7 @@ import {
 } from "../../../shared/config/agentRegistry.js";
 import {
   agentClipboardDirectory,
+  buildResumeCommand,
   type AgentSettings,
 } from "../../../shared/types/agentSettings.js";
 import { NotifyReplyLinesSchema } from "../../../shared/types/terminalNotify.js";
@@ -485,6 +486,8 @@ export async function spawnHostAssistant(
     env: Record<string, string>;
     prompt: string;
     agentLaunchFlags: string[];
+    /** Reopen this exact conversation instead of starting one (#14159); never "the latest". */
+    resumeAgentSessionId?: string;
   },
   deps: ViewlessDeps
 ): Promise<boolean> {
@@ -520,6 +523,24 @@ export async function spawnHostAssistant(
   });
   if (!plan.command) return false;
   if (plan.cliDetail && !isAgentLaunchable(plan.cliDetail.state)) return false;
+  // The executable a fresh launch found, so a CLI outside the shell's PATH resumes too.
+  const registryCommand = getEffectiveAgentConfig(agentId)?.command;
+  const resumed = spec.resumeAgentSessionId
+    ? buildResumeCommand(
+        agentId,
+        spec.resumeAgentSessionId,
+        plan.launchFlags,
+        registryCommand !== undefined
+          ? resolveAgentLaunchBaseCommandFor(
+              registryCommand,
+              plan.cliDetail,
+              deps.hostPlatform.shellDialect,
+              undefined
+            )
+          : undefined
+      )
+    : undefined;
+  if (spec.resumeAgentSessionId && !resumed) return false;
   const layers = await deps.getLaunchEnvLayers(project.id).catch((err: unknown) => {
     console.warn("[Viewless] Could not read environment variables for an assistant:", err);
     return null;
@@ -536,11 +557,11 @@ export async function spawnHostAssistant(
         rows: 24,
         title: plan.title,
         ...(plan.titleMode !== undefined ? { titleMode: plan.titleMode } : {}),
-        command: plan.command,
+        command: resumed ?? plan.command,
         ...(env !== undefined ? { env } : {}),
         launchAgentId: agentId,
         agentLaunchFlags: plan.launchFlags,
-        agentSessionId: plan.assignedSessionId,
+        agentSessionId: spec.resumeAgentSessionId ?? plan.assignedSessionId,
         agentPresetId: plan.preset?.id,
         agentPresetColor: plan.preset?.color,
         originalAgentPresetId: plan.preset?.id,
