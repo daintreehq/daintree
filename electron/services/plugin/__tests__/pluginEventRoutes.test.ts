@@ -167,20 +167,13 @@ describe("createRouteWakeScheduler", () => {
     expect(starts[2] - starts[1]).toBeGreaterThanOrEqual(1_000);
   });
 
-  it("does not start a second wake while the first is still running", async () => {
-    let release!: () => void;
-    let running = 0;
-    let maxRunning = 0;
+  it("starts the next wake only once the running one settles", async () => {
+    const started: string[] = [];
+    const releases: Array<() => void> = [];
     const scheduler = createRouteWakeScheduler({
-      run: () => {
-        running++;
-        maxRunning = Math.max(maxRunning, running);
-        return new Promise<void>((resolve) => {
-          release = () => {
-            running--;
-            resolve();
-          };
-        });
+      run: (w) => {
+        started.push(w.event === "projectForeground" ? w.presence.projectId : "");
+        return new Promise<void>((resolve) => releases.push(resolve));
       },
       suspended: () => false,
       minIntervalMs: 0,
@@ -188,11 +181,13 @@ describe("createRouteWakeScheduler", () => {
     scheduler.offer("a", () => wake("a"));
     scheduler.offer("b", () => wake("b"));
     await vi.advanceTimersByTimeAsync(10_000);
-    expect(maxRunning).toBe(1);
-    release();
+    expect(started).toEqual(["a"]);
+    releases[0]();
     await vi.advanceTimersByTimeAsync(1_000);
-    release();
-    expect(maxRunning).toBe(1);
+    expect(started).toEqual(["a", "b"]);
+    releases[1]();
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(started).toEqual(["a", "b"]);
   });
 
   it("cannot be postponed by a key that keeps changing", async () => {
@@ -280,6 +275,15 @@ describe("createRouteWakeScheduler", () => {
 describe("createPluginEventRoutes", () => {
   let tracker: ProjectPresenceTracker;
   let shown: string[];
+  // Disposed after every test, pass or fail, so no route outlives its test on
+  // the shared event bus.
+  const live: Array<{ dispose(): void }> = [];
+
+  const routesFor = (...args: Parameters<typeof createPluginEventRoutes>) => {
+    const routes = createPluginEventRoutes(...args);
+    live.push(routes);
+    return routes;
+  };
 
   beforeEach(() => {
     vi.useFakeTimers();
@@ -290,6 +294,7 @@ describe("createPluginEventRoutes", () => {
   });
 
   afterEach(() => {
+    for (const routes of live.splice(0)) routes.dispose();
     _setProjectPresenceTrackerForTests(null);
     vi.useRealTimers();
   });
@@ -298,7 +303,7 @@ describe("createPluginEventRoutes", () => {
     it("runs the routed command with the projected snapshot when an agent starts waiting", async () => {
       const h = makeHarness();
       terminalProjects.set("t1", ALPHA);
-      const routes = createPluginEventRoutes(h.deps, PLUGIN_ID, UNBOUND_PLUGIN_HOST_BINDING, [
+      const routes = routesFor(h.deps, PLUGIN_ID, UNBOUND_PLUGIN_HOST_BINDING, [
         route("agentWaiting"),
       ]);
       const payload = {
@@ -324,7 +329,7 @@ describe("createPluginEventRoutes", () => {
 
     it("wakes nothing on other transitions, or on waiting to waiting", async () => {
       const h = makeHarness();
-      const routes = createPluginEventRoutes(h.deps, PLUGIN_ID, UNBOUND_PLUGIN_HOST_BINDING, [
+      const routes = routesFor(h.deps, PLUGIN_ID, UNBOUND_PLUGIN_HOST_BINDING, [
         route("agentWaiting"),
       ]);
       emitAgent("t1", "working", "idle");
@@ -337,7 +342,7 @@ describe("createPluginEventRoutes", () => {
 
     it("cancels the wake when the agent stops waiting before it runs", async () => {
       const h = makeHarness();
-      const routes = createPluginEventRoutes(h.deps, PLUGIN_ID, UNBOUND_PLUGIN_HOST_BINDING, [
+      const routes = routesFor(h.deps, PLUGIN_ID, UNBOUND_PLUGIN_HOST_BINDING, [
         route("agentWaiting"),
       ]);
       emitAgent("t1", "waiting", "working");
@@ -350,7 +355,7 @@ describe("createPluginEventRoutes", () => {
     it("hears nothing without agent:read, like the subscription", async () => {
       const h = makeHarness();
       h.capabilities.clear();
-      const routes = createPluginEventRoutes(h.deps, PLUGIN_ID, UNBOUND_PLUGIN_HOST_BINDING, [
+      const routes = routesFor(h.deps, PLUGIN_ID, UNBOUND_PLUGIN_HOST_BINDING, [
         route("agentWaiting"),
       ]);
       emitAgent("t1", "waiting", "working");
@@ -363,7 +368,7 @@ describe("createPluginEventRoutes", () => {
       const h = makeHarness();
       terminalProjects.set("mine", ALPHA);
       terminalProjects.set("theirs", BETA);
-      const routes = createPluginEventRoutes(h.deps, PLUGIN_ID, BOUND, [route("agentWaiting")]);
+      const routes = routesFor(h.deps, PLUGIN_ID, BOUND, [route("agentWaiting")]);
       emitAgent("theirs", "waiting", "working");
       emitAgent("unattributed", "waiting", "working");
       emitAgent("mine", "waiting", "working");
@@ -385,7 +390,7 @@ describe("createPluginEventRoutes", () => {
       tracker.markOpened(BETA);
       shown = [ALPHA];
       tracker.refresh();
-      const routes = createPluginEventRoutes(h.deps, PLUGIN_ID, UNBOUND_PLUGIN_HOST_BINDING, [
+      const routes = routesFor(h.deps, PLUGIN_ID, UNBOUND_PLUGIN_HOST_BINDING, [
         route("projectForeground", "onShown"),
       ]);
       await vi.advanceTimersByTimeAsync(2_000);
@@ -409,7 +414,7 @@ describe("createPluginEventRoutes", () => {
       tracker.markOpened(BETA);
       shown = [ALPHA];
       tracker.refresh();
-      const routes = createPluginEventRoutes(h.deps, PLUGIN_ID, UNBOUND_PLUGIN_HOST_BINDING, [
+      const routes = routesFor(h.deps, PLUGIN_ID, UNBOUND_PLUGIN_HOST_BINDING, [
         route("projectForeground"),
       ]);
       shown = [BETA];
@@ -426,10 +431,10 @@ describe("createPluginEventRoutes", () => {
     it("never wakes an installed plugin for a scratch, nor a project plugin for another project", async () => {
       const installed = makeHarness();
       const bound = makeHarness();
-      const a = createPluginEventRoutes(installed.deps, PLUGIN_ID, UNBOUND_PLUGIN_HOST_BINDING, [
+      const a = routesFor(installed.deps, PLUGIN_ID, UNBOUND_PLUGIN_HOST_BINDING, [
         route("projectForeground"),
       ]);
-      const b = createPluginEventRoutes(bound.deps, PLUGIN_ID, BOUND, [route("projectForeground")]);
+      const b = routesFor(bound.deps, PLUGIN_ID, BOUND, [route("projectForeground")]);
       tracker.markOpened(SCRATCH);
       tracker.markOpened(BETA);
       shown = [SCRATCH, BETA];
@@ -448,7 +453,7 @@ describe("createPluginEventRoutes", () => {
     it("seeds silently, then wakes the add route with the net change", async () => {
       const h = makeHarness();
       h.read.ambient = ok(ALPHA, [worktree("main")]);
-      const routes = createPluginEventRoutes(h.deps, PLUGIN_ID, UNBOUND_PLUGIN_HOST_BINDING, [
+      const routes = routesFor(h.deps, PLUGIN_ID, UNBOUND_PLUGIN_HOST_BINDING, [
         route("worktreeAdded", "onAdded"),
         route("worktreeRemoved", "onRemoved"),
       ]);
@@ -477,7 +482,7 @@ describe("createPluginEventRoutes", () => {
     it("wakes each route once for a change that both adds and removes", async () => {
       const h = makeHarness();
       h.read.ambient = ok(ALPHA, [worktree("main"), worktree("old")]);
-      const routes = createPluginEventRoutes(h.deps, PLUGIN_ID, UNBOUND_PLUGIN_HOST_BINDING, [
+      const routes = routesFor(h.deps, PLUGIN_ID, UNBOUND_PLUGIN_HOST_BINDING, [
         route("worktreeAdded", "onAdded"),
         route("worktreeRemoved", "onRemoved"),
       ]);
@@ -495,7 +500,7 @@ describe("createPluginEventRoutes", () => {
     it("cancels an add that is removed again while its wake waits its turn", async () => {
       const h = makeHarness();
       h.read.ambient = ok(ALPHA, [worktree("main")]);
-      const routes = createPluginEventRoutes(h.deps, PLUGIN_ID, UNBOUND_PLUGIN_HOST_BINDING, [
+      const routes = routesFor(h.deps, PLUGIN_ID, UNBOUND_PLUGIN_HOST_BINDING, [
         route("worktreeAdded"),
       ]);
       await vi.advanceTimersByTimeAsync(2_000);
@@ -515,10 +520,79 @@ describe("createPluginEventRoutes", () => {
       routes.dispose();
     });
 
+    it("wakes the remove route for a worktree whose add was delivered earlier", async () => {
+      const h = makeHarness();
+      h.read.ambient = ok(ALPHA, [worktree("main")]);
+      routesFor(h.deps, PLUGIN_ID, UNBOUND_PLUGIN_HOST_BINDING, [
+        route("worktreeAdded", "onAdded"),
+        route("worktreeRemoved", "onRemoved"),
+      ]);
+      await vi.advanceTimersByTimeAsync(2_000);
+      h.read.ambient = ok(ALPHA, [worktree("main"), worktree("feature")]);
+      h.emitWorktree();
+      await vi.advanceTimersByTimeAsync(2_000);
+      h.read.ambient = ok(ALPHA, [worktree("main")]);
+      h.emitWorktree();
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(h.dispatched.map((d) => [d.actionId, d.wake])).toEqual([
+        [
+          `${PLUGIN_ID}.onAdded`,
+          expect.objectContaining({ change: { added: ["feature"], removed: [], changed: [] } }),
+        ],
+        [
+          `${PLUGIN_ID}.onRemoved`,
+          expect.objectContaining({ change: { added: [], removed: ["feature"], changed: [] } }),
+        ],
+      ]);
+    });
+
+    it("hears a removal with only the remove route declared, after an unrouted add", async () => {
+      const h = makeHarness();
+      h.read.ambient = ok(ALPHA, [worktree("main")]);
+      routesFor(h.deps, PLUGIN_ID, UNBOUND_PLUGIN_HOST_BINDING, [route("worktreeRemoved")]);
+      await vi.advanceTimersByTimeAsync(2_000);
+      h.read.ambient = ok(ALPHA, [worktree("main"), worktree("feature")]);
+      h.emitWorktree();
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(h.dispatched).toEqual([]);
+      h.read.ambient = ok(ALPHA, [worktree("main")]);
+      h.emitWorktree();
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(h.dispatched.map((d) => d.wake)).toEqual([
+        expect.objectContaining({
+          event: "worktreeRemoved",
+          change: { added: [], removed: ["feature"], changed: [] },
+        }),
+      ]);
+    });
+
+    it("does not replay a change whose wake was dropped while the worker had failed", async () => {
+      const h = makeHarness();
+      h.read.ambient = ok(ALPHA, [worktree("main")]);
+      routesFor(h.deps, PLUGIN_ID, UNBOUND_PLUGIN_HOST_BINDING, [route("worktreeAdded")]);
+      await vi.advanceTimersByTimeAsync(2_000);
+      h.workerFailed.value = true;
+      h.read.ambient = ok(ALPHA, [worktree("main"), worktree("missed")]);
+      h.emitWorktree();
+      await vi.advanceTimersByTimeAsync(2_000);
+      h.workerFailed.value = false;
+      // A status poll with the same membership must not resurrect "missed".
+      h.emitWorktree();
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(h.dispatched).toEqual([]);
+      // A new add after recovery still wakes, and reports only itself.
+      h.read.ambient = ok(ALPHA, [worktree("main"), worktree("missed"), worktree("after")]);
+      h.emitWorktree();
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(h.dispatched.map((d) => d.wake)).toEqual([
+        expect.objectContaining({ change: { added: ["after"], removed: [], changed: [] } }),
+      ]);
+    });
+
     it("never reads an unavailable set as every worktree removed", async () => {
       const h = makeHarness();
       h.read.ambient = ok(ALPHA, [worktree("main"), worktree("feature")]);
-      const routes = createPluginEventRoutes(h.deps, PLUGIN_ID, UNBOUND_PLUGIN_HOST_BINDING, [
+      const routes = routesFor(h.deps, PLUGIN_ID, UNBOUND_PLUGIN_HOST_BINDING, [
         route("worktreeRemoved"),
       ]);
       await vi.advanceTimersByTimeAsync(2_000);
@@ -536,7 +610,7 @@ describe("createPluginEventRoutes", () => {
     it("treats focus moving to another project as a new baseline, not a change", async () => {
       const h = makeHarness();
       h.read.ambient = ok(ALPHA, [worktree("main")]);
-      const routes = createPluginEventRoutes(h.deps, PLUGIN_ID, UNBOUND_PLUGIN_HOST_BINDING, [
+      const routes = routesFor(h.deps, PLUGIN_ID, UNBOUND_PLUGIN_HOST_BINDING, [
         route("worktreeAdded"),
         route("worktreeRemoved"),
       ]);
@@ -562,7 +636,7 @@ describe("createPluginEventRoutes", () => {
     it("drops another project's worktree events for a project plugin", async () => {
       const h = makeHarness();
       h.read.bound = ok(ALPHA, [worktree("main")]);
-      const routes = createPluginEventRoutes(h.deps, PLUGIN_ID, BOUND, [route("worktreeAdded")]);
+      const routes = routesFor(h.deps, PLUGIN_ID, BOUND, [route("worktreeAdded")]);
       await vi.advanceTimersByTimeAsync(2_000);
       const reads = vi.spyOn(h.deps, "fetchWorktreeSnapshotsForProjectResult");
       h.emitWorktree({ projectPath: ROOT_B });
@@ -575,7 +649,7 @@ describe("createPluginEventRoutes", () => {
   it("delivers nothing while the worker has failed", async () => {
     const h = makeHarness();
     h.workerFailed.value = true;
-    const routes = createPluginEventRoutes(h.deps, PLUGIN_ID, UNBOUND_PLUGIN_HOST_BINDING, [
+    const routes = routesFor(h.deps, PLUGIN_ID, UNBOUND_PLUGIN_HOST_BINDING, [
       route("agentWaiting"),
     ]);
     emitAgent("t1", "waiting", "working");
@@ -594,7 +668,7 @@ describe("createPluginEventRoutes", () => {
 
   it("stops for an instance that was unloaded or replaced", async () => {
     const h = makeHarness();
-    const routes = createPluginEventRoutes(h.deps, PLUGIN_ID, UNBOUND_PLUGIN_HOST_BINDING, [
+    const routes = routesFor(h.deps, PLUGIN_ID, UNBOUND_PLUGIN_HOST_BINDING, [
       route("agentWaiting"),
     ]);
     h.plugins.set(PLUGIN_ID, { manifest: { name: PLUGIN_ID } } as unknown as LoadedPlugin);
@@ -606,15 +680,37 @@ describe("createPluginEventRoutes", () => {
 
   it("detaches every listener and drops pending wakes on dispose", async () => {
     const h = makeHarness();
-    const routes = createPluginEventRoutes(h.deps, PLUGIN_ID, UNBOUND_PLUGIN_HOST_BINDING, [
+    const busUnsubscribes: Array<ReturnType<typeof vi.fn>> = [];
+    const on = events.on.bind(events);
+    const busSpy = vi.spyOn(events, "on").mockImplementation(((
+      event: Parameters<typeof events.on>[0],
+      listener: Parameters<typeof events.on>[1]
+    ) => {
+      const unsubscribe = vi.fn(on(event, listener));
+      busUnsubscribes.push(unsubscribe);
+      return unsubscribe;
+    }) as typeof events.on);
+    const presenceUnsubscribes: Array<ReturnType<typeof vi.fn>> = [];
+    const subscribe = tracker.subscribe.bind(tracker);
+    vi.spyOn(tracker, "subscribe").mockImplementation((listener) => {
+      const unsubscribe = vi.fn(subscribe(listener));
+      presenceUnsubscribes.push(unsubscribe);
+      return unsubscribe;
+    });
+    const routes = routesFor(h.deps, PLUGIN_ID, UNBOUND_PLUGIN_HOST_BINDING, [
       route("agentWaiting"),
       route("worktreeAdded"),
       route("projectForeground"),
     ]);
+    busSpy.mockRestore();
     expect(h.attached()).toBe(2);
+    expect(busUnsubscribes).toHaveLength(1);
+    expect(presenceUnsubscribes).toHaveLength(1);
     emitAgent("t1", "waiting", "working");
     routes.dispose();
     expect(h.attached()).toBe(0);
+    expect(busUnsubscribes[0]).toHaveBeenCalledTimes(1);
+    expect(presenceUnsubscribes[0]).toHaveBeenCalledTimes(1);
     tracker.markOpened(BETA);
     shown = [BETA];
     tracker.refresh();

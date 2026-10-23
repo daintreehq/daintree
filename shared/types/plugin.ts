@@ -5122,7 +5122,10 @@ export type PluginEventRouteWake =
       readonly event: "worktreeAdded" | "worktreeRemoved";
       /** The worktree set after the change, as `onDidChangeWorktrees` lists it. */
       readonly worktrees: readonly PluginWorktreeSnapshot[];
-      /** The net change since this route last woke the plugin. */
+      /**
+       * What changed: one read's difference from the read before it, or, when
+       * the wake waited its turn, the net of every read since it was due.
+       */
       readonly change: PluginWorktreesChange;
     }
   | { readonly event: "projectForeground"; readonly presence: PluginProjectPresence };

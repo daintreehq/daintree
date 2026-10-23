@@ -13,6 +13,7 @@ import type {
   PluginEventRouteWake,
   PluginHostBinding,
   PluginWorktreeSnapshot,
+  PluginWorktreesChange,
 } from "../../../shared/types/plugin.js";
 import {
   createPluginEventScope,
@@ -29,6 +30,8 @@ export interface RouteWakeScheduler {
   offer(key: string, take: TakeWake): void;
   /** Drop the wake waiting under `key`, if any. */
   cancel(key: string): void;
+  /** Whether a wake is waiting under `key` (one already running is not). */
+  has(key: string): boolean;
   dispose(): void;
 }
 
@@ -124,11 +127,44 @@ export function createRouteWakeScheduler(options: RouteWakeSchedulerOptions): Ro
     cancel: (key) => {
       pending.delete(key);
     },
+    has: (key) => pending.has(key),
     dispose: () => {
       disposed = true;
       drop();
     },
   };
+}
+
+/** A worktree route's change across the reads since its wake was offered. */
+interface GatheredWorktreeChange {
+  added: Set<string>;
+  removed: Set<string>;
+  changed: Set<string>;
+}
+
+function emptyGatheredChange(): GatheredWorktreeChange {
+  return { added: new Set(), removed: new Set(), changed: new Set() };
+}
+
+/**
+ * Fold one read's diff into a gathered change so it stays the net change
+ * across both: added then removed is nothing, removed then added is a change.
+ */
+function gatherWorktreeChange(
+  into: GatheredWorktreeChange,
+  diff: PluginWorktreesChange
+): void {
+  for (const id of diff.added) {
+    if (into.removed.delete(id)) into.changed.add(id);
+    else into.added.add(id);
+  }
+  for (const id of diff.removed) {
+    into.changed.delete(id);
+    if (!into.added.delete(id)) into.removed.add(id);
+  }
+  for (const id of diff.changed) {
+    if (!into.added.has(id)) into.changed.add(id);
+  }
 }
 
 export interface PluginEventRouteDeps extends PluginEventScopeDeps {
@@ -186,7 +222,7 @@ export function createPluginEventRoutes(
   disposers.push(() => scheduler.dispose());
 
   if (commandFor.has("agentWaiting")) {
-    const handler = (payload: AgentStateChangePayload): void => {
+    const onAgentState = (payload: AgentStateChangePayload): void => {
       if (disposed || !scope.isBound()) return;
       // Re-read per event, like the subscription's gate at registration: the
       // capability set is the plugin's declared one, not a snapshot.
@@ -202,6 +238,15 @@ export function createPluginEventRoutes(
       }
       if (snapshot.previousState === "waiting") return;
       scheduler.offer(slot, () => Object.freeze({ event: "agentWaiting" as const, agent: snapshot }));
+    };
+    // The bus is a plain EventEmitter: a throw here would stop every listener
+    // registered after this one from hearing the transition.
+    const handler = (payload: AgentStateChangePayload): void => {
+      try {
+        onAgentState(payload);
+      } catch (err) {
+        console.error(`[PluginEventRoutes] agentWaiting route for "${pluginId}" failed:`, err);
+      }
     };
     disposers.push(events.on("agent:state-changed", handler));
   }
@@ -233,50 +278,48 @@ export function createPluginEventRoutes(
 
   /**
    * The worktree routes. Every read is the live subscription's own read and
-   * projection; what differs is when a wake is due. Each route keeps, per
-   * project, the set it last woke the plugin with, so its `change` is the net
-   * change since that wake — the subscription's semantics, with "delivered"
-   * meaning "woken". A project's first successful read only sets that base:
-   * a plugin loading, the workspace host restarting, or an installed plugin's
-   * focus moving to a project it has not seen must not read as worktrees
-   * appearing.
+   * projection, diffed against the previous read of the same project, so each
+   * add and each removal is seen as it happens however far apart they are. A
+   * route's `change` gathers those diffs while its wake waits, which is how an
+   * add removed again before the wake runs cancels it; a route with nothing
+   * waiting starts again from the current read, so a change whose wake was
+   * dropped (the worker failed, the interval was full) is never replayed later.
+   *
+   * A project's first successful read only sets its base: a plugin loading, the
+   * workspace host restarting, or an installed plugin's focus moving to a
+   * project it has not seen must not read as worktrees appearing.
    */
   function watchWorktrees(routed: readonly WorktreeRouteEvent[]): () => void {
-    const baselines = new Map<WorktreeRouteEvent, Map<string, WorktreeChangeTracker>>(
-      routed.map((event) => [event, new Map()])
-    );
+    // The last set read per project, most recently seen last.
+    const observed = new Map<string, WorktreeChangeTracker>();
+    // Each route's gathered change for the project in `latest`, kept only
+    // while a wake for it waits in the scheduler.
+    const gathered = new Map<WorktreeRouteEvent, GatheredWorktreeChange>();
     let latest: { projectId: string; worktrees: readonly PluginWorktreeSnapshot[] } | null = null;
     let chain: Promise<void> = Promise.resolve();
 
-    const baselineFor = (
-      event: WorktreeRouteEvent,
+    const observe = (
       projectId: string,
-      create: boolean
-    ): { tracker: WorktreeChangeTracker; fresh: boolean } | null => {
-      const byProject = baselines.get(event);
-      if (!byProject) return null;
-      const existing = byProject.get(projectId);
+      worktrees: readonly PluginWorktreeSnapshot[]
+    ): PluginWorktreesChange | null => {
+      const existing = observed.get(projectId);
       if (existing) {
-        // Most recently seen last, so eviction takes the longest-unseen project.
-        byProject.delete(projectId);
-        byProject.set(projectId, existing);
-        return { tracker: existing, fresh: false };
+        observed.delete(projectId);
+        observed.set(projectId, existing);
+        return existing.next(worktrees);
       }
-      if (!create) return null;
       const tracker = new WorktreeChangeTracker();
-      byProject.set(projectId, tracker);
-      if (byProject.size > PLUGIN_EVENT_ROUTE_MAX_WORKTREE_PROJECTS) {
-        const oldest = byProject.keys().next();
-        if (!oldest.done) byProject.delete(oldest.value);
+      tracker.next(worktrees);
+      observed.set(projectId, tracker);
+      if (observed.size > PLUGIN_EVENT_ROUTE_MAX_WORKTREE_PROJECTS) {
+        const oldest = observed.keys().next();
+        if (!oldest.done) observed.delete(oldest.value);
       }
-      return { tracker, fresh: true };
+      return null;
     };
 
-    const relevant = (event: WorktreeRouteEvent, tracker: WorktreeChangeTracker): boolean => {
-      if (latest === null) return false;
-      const change = tracker.peek(latest.worktrees);
-      return event === "worktreeAdded" ? change.added.length > 0 : change.removed.length > 0;
-    };
+    const relevant = (event: WorktreeRouteEvent, change: GatheredWorktreeChange): boolean =>
+      (event === "worktreeAdded" ? change.added : change.removed).size > 0;
 
     const takeFor =
       (event: WorktreeRouteEvent): TakeWake =>
@@ -284,11 +327,18 @@ export function createPluginEventRoutes(
         // Built from the newest read, so a wake held back by the interval
         // reports where things ended up, not where they were when it queued.
         const current = latest;
-        if (current === null) return null;
-        const baseline = baselineFor(event, current.projectId, false);
-        if (!baseline || !relevant(event, baseline.tracker)) return null;
-        const change = baseline.tracker.next(current.worktrees);
-        return Object.freeze({ event, worktrees: current.worktrees, change });
+        const change = gathered.get(event);
+        gathered.delete(event);
+        if (current === null || change === undefined || !relevant(event, change)) return null;
+        return Object.freeze({
+          event,
+          worktrees: current.worktrees,
+          change: Object.freeze({
+            added: Object.freeze([...change.added]),
+            removed: Object.freeze([...change.removed]),
+            changed: Object.freeze([...change.changed]),
+          }),
+        });
       };
 
     const reconcile = async (): Promise<void> => {
@@ -299,16 +349,28 @@ export function createPluginEventRoutes(
       // it as an empty set would report every worktree removed.
       if (result.status !== "ok") return;
       const worktrees = Object.freeze(result.snapshots.map(scope.pluginProjectionFor(result)));
+      const switched = latest !== null && latest.projectId !== result.projectId;
       latest = { projectId: result.projectId, worktrees };
+      const diff = observe(result.projectId, worktrees);
       for (const event of routed) {
-        const baseline = baselineFor(event, result.projectId, true);
-        if (!baseline) continue;
-        if (baseline.fresh) {
-          baseline.tracker.next(worktrees);
+        // Start over from this read when no wake is waiting (one that was
+        // dropped must not come back), when this read only seeded a project,
+        // or when focus moved: a change gathered for the project it left
+        // would describe a set the plugin can no longer read.
+        if (diff === null || switched || !scheduler.has(event)) gathered.delete(event);
+        if (diff === null) {
+          scheduler.cancel(event);
           continue;
         }
-        if (relevant(event, baseline.tracker)) scheduler.offer(event, takeFor(event));
-        else scheduler.cancel(event);
+        const change = gathered.get(event) ?? emptyGatheredChange();
+        gatherWorktreeChange(change, diff);
+        if (relevant(event, change)) {
+          gathered.set(event, change);
+          scheduler.offer(event, takeFor(event));
+        } else {
+          gathered.delete(event);
+          scheduler.cancel(event);
+        }
       }
     };
 
@@ -332,7 +394,8 @@ export function createPluginEventRoutes(
       coalescer.dispose();
       detachUpdate();
       detachRemove();
-      baselines.clear();
+      observed.clear();
+      gathered.clear();
       latest = null;
     };
   }

@@ -733,6 +733,14 @@ describe("Manifest event routes (#13816)", () => {
   const BETA = "b".repeat(64);
   let shown: string[];
   let tracker: ProjectPresenceTracker;
+  // Disposed after every test, pass or fail, so no service keeps its routes on
+  // the shared buses into the next test.
+  const services: PluginService[] = [];
+  const startService = (): PluginService => {
+    const service = new PluginService(tmpDir);
+    services.push(service);
+    return service;
+  };
 
   beforeEach(() => {
     shown = [];
@@ -743,6 +751,7 @@ describe("Manifest event routes (#13816)", () => {
   });
 
   afterEach(() => {
+    for (const service of services.splice(0)) service.dispose();
     _setProjectPresenceTrackerForTests(null);
   });
 
@@ -786,7 +795,7 @@ describe("Manifest event routes (#13816)", () => {
   it("activates a cold plugin on its event, runs the command, and leaves it disposable", async () => {
     const base = baseline();
     await writeRoutedPlugin("routed", "acme.routed");
-    const service = new PluginService(tmpDir);
+    const service = startService();
     await service.initialize();
     // Nothing runs at load: the route is held by the host, not the plugin.
     expect(devWorkerMock.instances).toHaveLength(base.hosts);
@@ -814,13 +823,12 @@ describe("Manifest event routes (#13816)", () => {
       { timeout: 3_000 }
     );
     expect(devWorkerMock.instances).toHaveLength(base.hosts + 2);
-    service.dispose();
   });
 
   it("wakes nothing while the worker is in its crash loop", async () => {
     const base = baseline();
     await writeRoutedPlugin("looping", "acme.looping");
-    const service = new PluginService(tmpDir);
+    const service = startService();
     await service.initialize();
     await service.activatePlugin("acme.looping");
     const host = devWorkerMock.instances[base.hosts];
@@ -834,7 +842,6 @@ describe("Manifest event routes (#13816)", () => {
     await new Promise((resolve) => setTimeout(resolve, 300));
     expect(devWorkerMock.bridges[base.bridges].invokeCommand).not.toHaveBeenCalled();
     expect(devWorkerMock.instances).toHaveLength(base.hosts + 1);
-    service.dispose();
   });
 
   it("stops listening once the plugin is disabled", async () => {
@@ -849,13 +856,12 @@ describe("Manifest event routes (#13816)", () => {
       };
     });
     await writeRoutedPlugin("off", "acme.off");
-    const service = new PluginService(tmpDir);
+    const service = startService();
     await service.initialize();
     const whileEnabled = listening;
     expect(whileEnabled).toBeGreaterThan(0);
 
     await service.setEnabled("acme.off", false);
     expect(listening).toBe(whileEnabled - 1);
-    service.dispose();
   });
 });

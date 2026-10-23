@@ -369,7 +369,7 @@ The events are a closed list. Each fires on the transition only, and its payload
 | `worktreeRemoved` | the worktree set loses a worktree | `{ event, worktrees, change }` | — |
 | `projectForeground` | a project comes to the foreground | `{ event, presence }`, as `onDidChangeProjectPresence` delivers it | — |
 
-The argument's type is `PluginEventRouteWake` in `@daintreehq/plugin-sdk`; narrow it on `event`. A worktree route's `change` is the net change since that route last woke the plugin. A project plugin hears about its own project only, as its subscriptions do.
+The argument's type is `PluginEventRouteWake` in `@daintreehq/plugin-sdk`; narrow it on `event`. A worktree route's `change` is what changed since the read before, or the net of every read while the wake waited its turn. A project plugin hears about its own project only, as its subscriptions do.
 
 Wakes are best effort, not a log:
 
@@ -378,6 +378,7 @@ Wakes are best effort, not a log:
 - A transition that reverses before its wake runs cancels it: an agent that stopped waiting, a project sent back, a worktree removed again.
 - Nothing is delivered while the plugin's worker has failed, including its crash loop, and events missed meanwhile are not replayed. Routes resume once the plugin is restarted or used again.
 - The command runs with no view behind it: `when` and `enablement` clauses are not consulted, and a declared `inputSchema` must accept the wake object.
+- A failed wake is not retried, whether the command threw or the wake was too large to send (the 4 MiB argument cap of any invoke). The failure is logged and audited.
 
 ### `contributes`
 
