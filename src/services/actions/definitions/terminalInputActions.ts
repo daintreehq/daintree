@@ -3,7 +3,7 @@ import { z } from "zod";
 import { terminalClient } from "@/clients";
 import { openSendToAgentPalette } from "@/hooks/useSendToAgentPalette";
 import { openPanelContextMenu } from "@/lib/panelContextMenu";
-import { terminalInstanceService } from "@/services/terminal/TerminalInstanceService";
+import { peek as peekTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
 import { useFleetArmingStore, isFleetArmEligible } from "@/store/fleetArmingStore";
 import { usePanelStore } from "@/store/panelStore";
 import { triggerPopStash, triggerStashInput } from "@/store/terminalInputStore";
@@ -161,7 +161,7 @@ export function registerTerminalInputActions(
       const state = usePanelStore.getState();
       const targetId = terminalId ?? state.focusedId;
       if (!targetId) return;
-      const managed = terminalInstanceService.get(targetId);
+      const managed = peekTerminalService()?.get(targetId);
       if (managed?.terminal) {
         const selection = managed.terminal.getSelection();
         if (selection) {
@@ -192,7 +192,7 @@ export function registerTerminalInputActions(
       if (!targetId) return;
       const terminal = state.panelsById[targetId];
       if (terminal && isPtyPanel(terminal) && terminal.isInputLocked) return;
-      const managed = terminalInstanceService.get(targetId);
+      const managed = peekTerminalService()?.get(targetId);
       if (!managed || managed.isInputLocked) return;
       try {
         const text = await navigator.clipboard.readText();
@@ -208,7 +208,7 @@ export function registerTerminalInputActions(
             bracketedPasteMode: managed.terminal.modes.bracketedPasteMode,
           })
         );
-        terminalInstanceService.notifyUserInput(targetId);
+        peekTerminalService()?.notifyUserInput(targetId);
       } catch {
         // Clipboard API may be denied
       }
@@ -335,7 +335,7 @@ export function registerTerminalInputActions(
       if (!panel || !isPtyPanel(panel)) {
         throw new UnactionableTargetError(`No terminal ${terminalId} to press keys in.`);
       }
-      if (panel.isInputLocked || terminalInstanceService.get(terminalId)?.isInputLocked) {
+      if (panel.isInputLocked || peekTerminalService()?.get(terminalId)?.isInputLocked) {
         throw new UnactionableTargetError(`Terminal ${terminalId} has its input locked.`);
       }
       let keys = args.keys;

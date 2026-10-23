@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ActionCallbacks, ActionRegistry, AnyActionDefinition } from "../../actionTypes";
 import type { ActionId } from "@shared/types/actions";
 
@@ -75,6 +75,13 @@ import { registerTerminalLifecycleActions } from "../terminalLifecycleActions";
 import type { TerminalPendingDestructiveActionSnapshot } from "@/store/terminalPendingDestructiveActionStore";
 import { MAX_KILL_BATCH_TERMINALS } from "@shared/types/terminalKillBatch";
 import { TerminalInOtherProjectError } from "@shared/utils/terminalInOtherProject";
+import { load as loadTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
+
+// The service mock never evaluates the real module, so nothing registers it;
+// loading caches the mock for the synchronous peek() call sites.
+beforeAll(async () => {
+  await loadTerminalService();
+});
 
 type MockPanel = {
   id: string;

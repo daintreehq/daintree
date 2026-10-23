@@ -27,7 +27,7 @@ import { RECONNECT_TIMEOUT_MS } from "./reconnectManager";
 import type { ActionFrecencyEntry, ActionUsageEntry } from "@shared/types/actions";
 import { panelPersistence } from "@/store/persistence/panelPersistence";
 import { draftInputPersistence } from "@/store/persistence/draftInputPersistence";
-import { terminalInstanceService } from "@/services/TerminalInstanceService";
+import { setGpuHardwareAvailable } from "@/services/terminal/terminalInstanceServiceAccessor";
 import { logDebug, logInfo, logWarn, logError } from "@/utils/logger";
 import { PERF_MARKS } from "@shared/perf/marks";
 import {
@@ -288,7 +288,7 @@ export async function hydrateAppState(options: HydrationOptions): Promise<void> 
         // The switcher reloads scratches whenever it opens; a boot miss self-heals.
       });
 
-    terminalInstanceService.setGPUHardwareAvailable(gpuWebGLHardware ?? true);
+    setGpuHardwareAvailable(gpuWebGLHardware ?? true);
 
     useDistributionStore.getState().setIsWindowsStore(Boolean(hydrateResult.isWindowsStore));
     // Before the toolbar first paints, so a hidden Canopy's button never shows.

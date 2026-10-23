@@ -6,7 +6,7 @@ import {
 } from "@/services/actions/confirmationStaged";
 import { z } from "zod";
 import { terminalClient } from "@/clients";
-import { terminalInstanceService } from "@/services/terminal/TerminalInstanceService";
+import { peek as peekTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
 import { flushOptimisticCloses, requestPanelClose } from "@/services/terminal/optimisticPanelClose";
 import { consultPanelCloseGuards, hasPanelCloseGuard } from "@/services/panelCloseGuard";
 import { fireWatchNotification } from "@/lib/watchNotification";
@@ -678,7 +678,7 @@ export function registerTerminalLifecycleActions(
         // timer IS the automatic writer the guard was written for. Non-
         // foreground dispatch still gets the renderer repair, just with the
         // deferral intact.
-        terminalInstanceService.resetRenderer(targetId, {
+        peekTerminalService()?.resetRenderer(targetId, {
           force: isForegroundDispatch(ctx?.dispatchSource),
         });
       }
