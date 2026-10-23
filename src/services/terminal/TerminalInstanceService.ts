@@ -1624,7 +1624,19 @@ class TerminalInstanceService {
       terminalOptions.cursorBlink = false;
     }
 
-    const { Terminal } = await loadXtermCore();
+    // The first terminal fetches xterm itself (#14239). A destroy() landing
+    // during that fetch is honored before anything is built; and a failed fetch
+    // must not leave its cancellation behind to kill the next create for this id.
+    let Terminal: Awaited<ReturnType<typeof loadXtermCore>>["Terminal"];
+    try {
+      ({ Terminal } = await loadXtermCore());
+    } catch (error) {
+      this.cancelledCreations.delete(id);
+      throw error;
+    }
+    if (this.cancelledCreations.delete(id)) {
+      throw new Error(`Terminal ${id} creation cancelled: destroyed before build completed`);
+    }
     const terminal = new Terminal(terminalOptions);
     applyXtermReflowFastpath(terminal);
     this.cwdProviders.set(id, getCwd ?? (() => ""));

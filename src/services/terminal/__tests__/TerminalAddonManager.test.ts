@@ -29,6 +29,7 @@ import type { Terminal } from "@xterm/xterm";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { FileLinksAddon } from "../FileLinksAddon";
 import { systemClient } from "@/clients/systemClient";
+import { loadXtermCore } from "../xtermCore";
 
 function createMockTerminal() {
   return {
@@ -39,8 +40,10 @@ function createMockTerminal() {
 }
 
 describe("TerminalAddonManager", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.clearAllMocks();
+    // Every addon factory runs after a terminal exists, so xterm is loaded.
+    await loadXtermCore();
     // ImageAddon and Unicode11Addon are lazy-loaded and cached at module scope
     // (#10840); reset that cache so each test re-imports against a clean mock.
     __testing.resetLoaderState();
