@@ -1,3 +1,4 @@
+import { GLOBAL_ASSISTANT_ID } from "../../../shared/config/globalAssistant.js";
 import { randomBytes, randomUUID } from "node:crypto";
 import { app } from "electron";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
@@ -1728,6 +1729,17 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     // banner, no grant lookup, no dedup entry, and no dispatch.
     if (tier === null) {
       return buildToolError({ code: SESSION_GONE, message: SESSION_GONE_MESSAGE });
+    }
+    // The global assistant (#14159) names no project: until shared targeting
+    // and standing exist, no tool may run for it, whichever handler answers —
+    // a main-side tool that reads a terminal by id would otherwise reach any
+    // project's. Listing stays open so it can see what is coming.
+    if (sessionStore.sessionViewlessHelpMap.get(sessionId) === GLOBAL_ASSISTANT_ID) {
+      return buildToolError({
+        code: NO_FRONTEND_ATTACHED_CODE,
+        message:
+          "The global assistant has no project to act in yet, so Daintree tools are unavailable to it. Nothing was run.",
+      });
     }
     // Snapshot the turn id once, at dispatch start, before any guard or await
     // can yield to an active→passive FSM transition that would clear it (#10067).

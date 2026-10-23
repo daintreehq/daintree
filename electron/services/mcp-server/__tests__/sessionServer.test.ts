@@ -1,3 +1,4 @@
+import { GLOBAL_ASSISTANT_ID } from "../../../../shared/config/globalAssistant.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { McpError, ErrorCode } from "@modelcontextprotocol/sdk/types.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -4491,6 +4492,25 @@ describe("help.displayImage short-circuit (#9828)", () => {
     expect(JSON.parse(result.content[0].text).code).toBe("NO_FRONTEND_ATTACHED");
     expect(notifyDisplayImage).not.toHaveBeenCalled();
     expect(store.nextFigureNumber("help-nv")).toBe(1);
+  });
+
+  it("refuses every tool for the global assistant, whichever handler would answer (#14159)", async () => {
+    const dispatchAction = vi.fn();
+    const store = helpSessionStore("sess-global", "help-global");
+    store.sessionViewlessHelpMap.set("sess-global", GLOBAL_ASSISTANT_ID);
+    const deps = fakeDeps({ sessionStore: store, dispatchAction });
+    const server = createSessionServer("sess-global", deps);
+    await server.connect(makeMockTransport());
+
+    for (const name of ["terminal.waitUntilIdle", "assistant.list", "agent.readQuota"]) {
+      const result = (await callTool(server, { name, arguments: {} })) as {
+        isError?: boolean;
+        content: { text: string }[];
+      };
+      expect(result.isError).toBe(true);
+      expect(JSON.parse(result.content[0].text).code).toBe("NO_FRONTEND_ATTACHED");
+    }
+    expect(dispatchAction).not.toHaveBeenCalled();
   });
 
   it("rejects a non-daintree URL with INVALID_URL and does not notify", async () => {
