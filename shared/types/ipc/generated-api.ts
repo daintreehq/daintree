@@ -869,6 +869,9 @@ export interface GeneratedElectronAPI {
     getAgents(
       ...args: IpcInvokeMap["plugin:agents-get"]["args"]
     ): Promise<IpcInvokeMap["plugin:agents-get"]["result"]>;
+    getArtifactSource(
+      ...args: IpcInvokeMap["plugin:artifact-source"]["args"]
+    ): Promise<IpcInvokeMap["plugin:artifact-source"]["result"]>;
     getAuditConfig(
       ...args: IpcInvokeMap["plugin:get-audit-config"]["args"]
     ): Promise<IpcInvokeMap["plugin:get-audit-config"]["result"]>;
@@ -965,6 +968,9 @@ export interface GeneratedElectronAPI {
     getWorktreeStatus(
       ...args: IpcInvokeMap["plugin:worktree-status-get"]["args"]
     ): Promise<IpcInvokeMap["plugin:worktree-status-get"]["result"]>;
+    importArtifacts(
+      ...args: IpcInvokeMap["plugin:artifacts-import"]["args"]
+    ): Promise<IpcInvokeMap["plugin:artifacts-import"]["result"]>;
     install(
       ...args: IpcInvokeMap["plugin:install"]["args"]
     ): Promise<IpcInvokeMap["plugin:install"]["result"]>;
@@ -1007,6 +1013,9 @@ export interface GeneratedElectronAPI {
     registerAction(
       ...args: IpcInvokeMap["plugin:actions-register"]["args"]
     ): Promise<IpcInvokeMap["plugin:actions-register"]["result"]>;
+    releaseArtifactSource(
+      ...args: IpcInvokeMap["plugin:artifact-source-release"]["args"]
+    ): Promise<IpcInvokeMap["plugin:artifact-source-release"]["result"]>;
     reloadProjectPlugins(
       ...args: IpcInvokeMap["plugin:project-reload"]["args"]
     ): Promise<IpcInvokeMap["plugin:project-reload"]["result"]>;

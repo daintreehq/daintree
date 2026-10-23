@@ -28,6 +28,8 @@ const SENSITIVE_READ_CAPABILITIES: ReadonlySet<BuiltInPluginCapability> = new Se
   "git:read",
   "fs:project-read",
   "fs:user-data-read",
+  // Artifacts hold files the person chose, which can be anything on disk.
+  "artifact:store",
 ]);
 const REMOTE_MUTATION_SINK_CAPABILITIES: ReadonlySet<BuiltInPluginCapability> = new Set([
   "fs:project-write",

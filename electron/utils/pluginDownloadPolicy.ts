@@ -97,7 +97,7 @@ const MAX_REDIRECT_HOPS = 5;
  * check shrinks the window to that sub-millisecond race for the local-attacker
  * threat model the SSRF guard targets.
  */
-async function resolvesToPrivateAddress(hostname: string): Promise<boolean> {
+export async function resolvesToPrivateAddress(hostname: string): Promise<boolean> {
   let records: Array<{ address: string }>;
   try {
     records = await dns.lookup(hostname, { all: true });
@@ -128,12 +128,19 @@ async function resolvesToPrivateAddress(hostname: string): Promise<boolean> {
  *
  * `isAllowedHost`, when given, must accept every hop's hostname — a caller
  * bound to a declared host list refuses a redirect off it before connecting.
+ * `hops.isAllowedUrl` is the same refusal against the whole URL, and
+ * `hops.initFor` lets a caller vary the request per hop — dropping a
+ * provider's token once a redirect leaves its origin.
  */
 export async function fetchWithPrivateHostGuard(
   netFetch: typeof ElectronNet.fetch,
   url: string,
   init: RequestInit,
-  isAllowedHost?: (hostname: string) => boolean
+  isAllowedHost?: (hostname: string) => boolean,
+  hops?: {
+    isAllowedUrl?: (hopUrl: URL) => boolean;
+    initFor?: (hopUrl: URL) => RequestInit;
+  }
 ): Promise<GuardedFetchResult> {
   let currentUrl = url;
   for (let hop = 0; hop <= MAX_REDIRECT_HOPS; hop++) {
@@ -157,10 +164,14 @@ export async function fetchWithPrivateHostGuard(
     if (isAllowedHost && (!parsedHop || !isAllowedHost(parsedHop.hostname))) {
       return { ok: false, reason: "disallowed-host" };
     }
+    if (hops?.isAllowedUrl && (!parsedHop || !hops.isAllowedUrl(parsedHop))) {
+      return { ok: false, reason: "disallowed-host" };
+    }
     if (parsedHop && (await resolvesToPrivateAddress(parsedHop.hostname))) {
       return { ok: false, reason: "private-host" };
     }
-    const response = await netFetch(currentUrl, { ...init, redirect: "manual" });
+    const hopInit = hops?.initFor && parsedHop ? hops.initFor(parsedHop) : init;
+    const response = await netFetch(currentUrl, { ...hopInit, redirect: "manual" });
     // Electron surfaces a manual-mode redirect as an opaqueredirect/3xx with a
     // populated Location header; a normal response has no Location to follow.
     const location =

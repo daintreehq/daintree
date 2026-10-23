@@ -1191,6 +1191,12 @@ export const CHANNELS = {
   PLUGIN_TASK_CANCEL: "plugin:task-cancel",
   /** The user's Dismiss on an interrupted plugin task (#13819). */
   PLUGIN_TASK_DISMISS: "plugin:task-dismiss",
+  /** A plugin view importing files its person chose as artifacts (#14100). */
+  PLUGIN_ARTIFACTS_IMPORT: "plugin:artifacts-import",
+  /** A lease-bearing playback URL for one of a plugin's artifacts, for the calling view. */
+  PLUGIN_ARTIFACT_SOURCE: "plugin:artifact-source",
+  /** The view stopped playing a source: its lease ends. */
+  PLUGIN_ARTIFACT_SOURCE_RELEASE: "plugin:artifact-source-release",
   PLUGIN_AGENTS_GET: "plugin:agents-get",
   PLUGIN_RECIPES_GET: "plugin:recipes-get",
   /** Plugin tours visible in the sender's project (#12773). */

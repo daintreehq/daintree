@@ -1765,13 +1765,12 @@ function buildElectronApi(): ElectronAPI {
       // isolation. Plugin views render inline in this same document, so any
       // code in the page can still call it — separating them would need a
       // context of their own. `""` for a File with nothing on disk behind it.
-      // In a view attached to a remote host, the paths are also recorded in
-      // main as files the person chose here: an upload reads only those.
+      // The paths are also recorded in main as files the person chose here:
+      // a remote-bound view's upload reads only those, and a local plugin view
+      // imports only those as artifacts.
       getDroppedFilePaths: buildDroppedFilePathsBinding<File>(
         (file) => webUtils.getPathForFile(file),
-        viewHostId
-          ? (paths) => ipcRenderer.send(CHANNELS.FILE_TRANSFER_GRANT_LOCAL_SOURCES, paths)
-          : undefined
+        (paths) => ipcRenderer.send(CHANNELS.FILE_TRANSFER_GRANT_LOCAL_SOURCES, paths)
       ),
     },
 

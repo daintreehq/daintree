@@ -31,6 +31,11 @@ import type {
   PluginSettingsScope,
   PluginStorageScope,
   PluginRenderPdfOptions,
+  PluginArtifactDownloadRequest,
+  PluginArtifactImportSource,
+  PluginArtifactListOptions,
+  PluginArtifactProgress,
+  PluginArtifactUploadRequest,
   PluginWorktreeSetupStepContext,
   PluginSearchProvider,
   PluginSearchResult,
@@ -106,6 +111,9 @@ import type {
   SystemOpenExternalParams,
   SystemPathParams,
   DocumentsRenderPdfParams,
+  ArtifactsIdParams,
+  ArtifactsListParams,
+  ArtifactsTransferParams,
   ProcessSpawnParams,
   ProcessHandleRefParams,
   TaskFinishParams,
@@ -1312,6 +1320,49 @@ export class PluginDevWorkerMainBridge {
         // Forwarded as sent; the host validates every option.
         return this.host.documents.renderPdf(
           (params as DocumentsRenderPdfParams).options as PluginRenderPdfOptions
+        );
+      case "artifacts.import":
+      case "artifacts.download":
+      case "artifacts.upload": {
+        // Forwarded as sent; the host validates. The worker's signal arrives
+        // as this call's own, and its progress callback as a subscription.
+        const p = params as ArtifactsTransferParams;
+        const generation = this.reloadGeneration;
+        const subscriptionId = p.progressSubscriptionId;
+        const onProgress =
+          typeof subscriptionId === "string"
+            ? (progress: PluginArtifactProgress) => {
+                if (this.disposed || generation !== this.reloadGeneration) return;
+                this.workerHost.send({
+                  type: "subscription-event",
+                  subscriptionId,
+                  payload: progress,
+                });
+              }
+            : undefined;
+        const options = {
+          ...(typeof p.options === "object" && p.options !== null ? p.options : {}),
+          signal,
+          onProgress,
+        };
+        if (method === "artifacts.upload") {
+          return this.host.artifacts.upload(
+            p.artifactId as string,
+            p.target as PluginArtifactUploadRequest,
+            options
+          );
+        }
+        return method === "artifacts.import"
+          ? this.host.artifacts.import(p.target as PluginArtifactImportSource, options)
+          : this.host.artifacts.download(p.target as PluginArtifactDownloadRequest, options);
+      }
+      case "artifacts.stat":
+        return this.host.artifacts.stat((params as ArtifactsIdParams).artifactId as string);
+      case "artifacts.release":
+        return this.host.artifacts.release((params as ArtifactsIdParams).artifactId as string);
+      case "artifacts.list":
+        return this.host.artifacts.list(
+          (params as ArtifactsListParams).options as PluginArtifactListOptions | undefined
         );
       case "clipboard.readText":
         return this.host.clipboard.readText();

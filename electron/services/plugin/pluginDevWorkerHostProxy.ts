@@ -51,6 +51,8 @@ import type {
   PluginFsWalkOptions,
   PluginFsWalkResult,
   PluginRenderPdfResult,
+  PluginArtifact,
+  PluginArtifactUploadResult,
   PluginFsStat,
   PluginGitStatus,
   PluginGitCommitResult,
@@ -156,6 +158,9 @@ import type {
   TaskReportParams,
   TaskStartParams,
   TaskStartResult,
+  ArtifactsIdParams,
+  ArtifactsListParams,
+  ArtifactsTransferParams,
 } from "../../../shared/types/pluginDevWorker.js";
 
 type Post = (message: PluginWorkerToHostMessage) => void;
@@ -843,6 +848,65 @@ export class PluginDevWorkerHostProxy {
   ): Promise<T | { readonly status: "unavailable" }> {
     if (this.disposed) return Promise.resolve({ status: "unavailable" });
     return this.call<T>(method, params);
+  }
+
+  /**
+   * An `artifacts.*` transfer: the signal rides `host-cancel`, and
+   * `onProgress` a subscription registered before the call (so no report can
+   * beat it) and dropped when the call settles. The same shape checks as the
+   * host's run first, so a bad argument rejects without a round trip.
+   */
+  private artifactTransfer<T>(
+    method: "artifacts.import" | "artifacts.download" | "artifacts.upload",
+    target: unknown,
+    options: unknown,
+    artifactId?: unknown
+  ): Promise<T> {
+    const op = method.slice("artifacts.".length);
+    if (options !== undefined && (typeof options !== "object" || options === null)) {
+      return Promise.reject(
+        new Error(
+          `VALIDATION: plugin "${this.pluginId}" artifacts.${op}: options must be an object`
+        )
+      );
+    }
+    const { signal, onProgress, ...rest } = (options ?? {}) as {
+      signal?: AbortSignal;
+      onProgress?: unknown;
+    };
+    if (onProgress !== undefined && typeof onProgress !== "function") {
+      return Promise.reject(
+        new Error(
+          `VALIDATION: plugin "${this.pluginId}" artifacts.${op}: onProgress must be a function`
+        )
+      );
+    }
+    let progressSubscriptionId: string | undefined;
+    if (typeof onProgress === "function") {
+      progressSubscriptionId = `s${this.nextId++}`;
+      this.subscriptions.set(progressSubscriptionId, (payload) => {
+        (onProgress as (progress: unknown) => void)(payload);
+      });
+    }
+    const params: ArtifactsTransferParams = {
+      target,
+      options: rest,
+      ...(artifactId !== undefined ? { artifactId } : {}),
+      ...(progressSubscriptionId ? { progressSubscriptionId } : {}),
+    };
+    const done = () => {
+      if (progressSubscriptionId) this.subscriptions.delete(progressSubscriptionId);
+    };
+    return this.call<T>(method, params, signal).then(
+      (value) => {
+        done();
+        return value;
+      },
+      (error: unknown) => {
+        done();
+        throw error;
+      }
+    );
   }
 
   private callWithGrace<T>(
@@ -2293,6 +2357,28 @@ export class PluginDevWorkerHostProxy {
       documents: {
         renderPdf: (options) =>
           this.call<PluginRenderPdfResult>("documents.renderPdf", { options }),
+      },
+      // The bytes stay in main; only handles and progress cross the port.
+      artifacts: {
+        import: (source, options) =>
+          this.artifactTransfer<PluginArtifact>("artifacts.import", source, options),
+        download: (request, options) =>
+          this.artifactTransfer<PluginArtifact>("artifacts.download", request, options),
+        upload: (artifactId, request, options) =>
+          this.artifactTransfer<PluginArtifactUploadResult>(
+            "artifacts.upload",
+            request,
+            options,
+            artifactId
+          ),
+        stat: (artifactId) =>
+          this.call<PluginArtifact | null>("artifacts.stat", {
+            artifactId,
+          } satisfies ArtifactsIdParams),
+        list: (options) =>
+          this.call<PluginArtifact[]>("artifacts.list", { options } satisfies ArtifactsListParams),
+        release: (artifactId) =>
+          this.call<boolean>("artifacts.release", { artifactId } satisfies ArtifactsIdParams),
       },
       account: {
         getState: () => this.call<PluginAccountState>("account.getState", {}),

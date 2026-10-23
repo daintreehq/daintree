@@ -128,6 +128,12 @@ export type PluginHostCallMethod =
   | "system.showItemInFolder"
   | "system.openExternal"
   | "documents.renderPdf"
+  | "artifacts.import"
+  | "artifacts.download"
+  | "artifacts.upload"
+  | "artifacts.stat"
+  | "artifacts.list"
+  | "artifacts.release"
   | "showQuickPick"
   | "showInputBox"
   | "showConfirm"
@@ -923,6 +929,31 @@ export interface SystemOpenExternalParams {
  * untrusted side.
  */
 export interface DocumentsRenderPdfParams {
+  options: unknown;
+}
+
+/**
+ * Params for the creating `artifacts.*` calls (`host-call`). Arguments travel
+ * as sent, minus what can't be cloned: the signal rides the call's own
+ * `host-cancel`, and `onProgress` becomes `progressSubscriptionId`, whose
+ * `subscription-event`s carry `PluginArtifactProgress` values.
+ */
+export interface ArtifactsTransferParams {
+  /** `import`'s source, `download`'s and `upload`'s request. */
+  target: unknown;
+  /** `upload`'s artifact id. */
+  artifactId?: unknown;
+  options: unknown;
+  progressSubscriptionId?: string;
+}
+
+/** Params for `artifacts.stat` / `artifacts.release` (`host-call`). */
+export interface ArtifactsIdParams {
+  artifactId: unknown;
+}
+
+/** Params for `artifacts.list` (`host-call`). */
+export interface ArtifactsListParams {
   options: unknown;
 }
 

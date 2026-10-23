@@ -74,14 +74,14 @@ describe("native path recovery for dropped files", () => {
     expect(grant).toHaveBeenCalledTimes(1);
   });
 
-  it("records resolved paths in main only for a view attached to a remote host", async () => {
+  it("records resolved paths in main for every view, over a send the page can't reach", async () => {
     const code = await preloadCode();
     const start = code.indexOf("    files: {");
     const end = code.indexOf("\n    },", start);
-    // The grant rides a preload-only send, gated on the view's host argument;
-    // a local view passes no grant and so sends nothing.
+    // A remote-bound view's uploads read only these, and a local plugin view
+    // imports only these as artifacts (#14100), so every view records them.
     expect(code.slice(start, end)).toMatch(
-      /viewHostId\s*\?\s*\(paths\)\s*=>\s*ipcRenderer\.send\(CHANNELS\.FILE_TRANSFER_GRANT_LOCAL_SOURCES,\s*paths\)\s*:\s*undefined/
+      /\(paths\)\s*=>\s*ipcRenderer\.send\(CHANNELS\.FILE_TRANSFER_GRANT_LOCAL_SOURCES,\s*paths\)/
     );
     // Never exposed on the page's bridge.
     expect(code.match(/FILE_TRANSFER_GRANT_LOCAL_SOURCES/g) ?? []).toHaveLength(1);

@@ -2344,6 +2344,18 @@ export interface GeneratedIpcInvokeMap {
     args: [];
     result: Record<string, import("../../config/agentRegistry.js").AgentConfig>;
   };
+  "plugin:artifact-source": {
+    args: [pluginId: string, artifactId: string];
+    result: import("../pluginArtifacts.js").PluginArtifactSource;
+  };
+  "plugin:artifact-source-release": {
+    args: [url: string];
+    result: boolean;
+  };
+  "plugin:artifacts-import": {
+    args: [pluginId: string, paths: string[]];
+    result: import("../pluginArtifacts.js").PluginArtifact[];
+  };
   "plugin:backup-databases": {
     args: [pluginId: string];
     result: import("./pluginDataBackup.js").PluginDataBackupOutcome;

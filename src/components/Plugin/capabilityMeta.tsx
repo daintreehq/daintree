@@ -136,6 +136,11 @@ export const CAPABILITY_META = {
     description: "Show notifications outside Daintree, once you turn it on",
     severity: "neutral",
   },
+  "artifact:store": {
+    label: "Keep files in Daintree's cache",
+    description: "Copy files you choose or it downloads into a cache it can play and upload from",
+    severity: "neutral",
+  },
 } satisfies Record<BuiltInPluginCapability, CapabilityMeta>;
 
 export const SEVERITY_TEXT_CLASS: Record<CapabilitySeverity, string> = {

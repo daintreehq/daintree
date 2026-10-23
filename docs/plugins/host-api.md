@@ -17,7 +17,7 @@ This page is the reference: every member, its gates and its failure modes. For a
 - Agents: [`sendToActiveAgent`](#sendtoactiveagent--inject-text-into-the-active-agent) · [`sendToAgent`](#sendtoagent--hand-work-to-an-agents-draft) · [`runRecipe`](#runrecipe--offer-to-run-one-of-your-recipes) · [`agents.list`](#agentslist--the-projects-agent-panes) · [`agents.listAll`](#agentslistall--every-agent-in-every-open-project) · [Driving agents you launched](#agentsinterrupt-sendkeys-submit--driving-agents-you-launched) · [`terminals.readScreen`](#terminalsreadscreen--what-a-terminal-shows)
 - State: [`settings`](#settings) · [`storage`](#storage--private-keyvalue-storage) · [`db`](#db--host-managed-sqlite)
 - UI: [`logger`](#logger) · [`showToast`](#showtoast) · [`notify`](#notify) · [`tasks`](#tasks--long-running-work) · [User prompts](#user-prompts--showquickpick-showinputbox-showconfirm)
-- System: [`process`](#process--managed-child-processes) · [`fs`](#fs--host-mediated-scope-contained-filesystem) · [`git`](#git--host-mediated-git-scoped-to-a-worktree) · [`clipboard`](#clipboard--host-mediated-os-clipboard) · [`system`](#system--open-and-reveal-files-in-your-own-scope) · [`documents`](#documents--render-html-to-pdf)
+- System: [`process`](#process--managed-child-processes) · [`fs`](#fs--host-mediated-scope-contained-filesystem) · [`git`](#git--host-mediated-git-scoped-to-a-worktree) · [`clipboard`](#clipboard--host-mediated-os-clipboard) · [`system`](#system--open-and-reveal-files-in-your-own-scope) · [`documents`](#documents--render-html-to-pdf) · [`artifacts`](#artifacts--large-files-the-host-holds-and-streams)
 - SDK entries: [React hooks](#react-hooks--daintreehqplugin-sdkreact) · [Root entry](#root-entry-runtime-values--daintreehqplugin-sdk) · [File listings](#file-listings--daintreehqplugin-sdkfiles) · [Data files](#data-files--daintreehqplugin-sdkdata) · [UI kit](./ui-kit.md)
 - Lifecycle and testing: [Disposables](#disposables) · [Testing against a mock host](#testing-against-a-mock-host) · [Remote hosts](#remote-hosts--when-nobody-is-sitting-at-this-machine) · [What's not exposed](#whats-not-exposed) · [Process model](#process-model-and-memory)
 
@@ -401,6 +401,13 @@ Node's own filesystem errors (`ENOENT`, `ENOTDIR`, `EISDIR`, `EACCES`) reach you
 | `RENDER_TIMEOUT` | both | `documents.renderPdf` | Not finished within 30 seconds of taking a render slot. |
 | `RENDER_FAILED` | both | `documents.renderPdf` | The page failed to load or print. |
 | `RENDER_CANCELLED` | both | `documents.renderPdf` | The plugin unloaded while the call was queued or rendering. |
+| `ARTIFACT_NOT_FOUND` | both | `artifacts.upload`, a view's source | Missing, expired, released, or another plugin's. |
+| `ARTIFACT_TOO_LARGE` | both | `artifacts.*` creating calls | Over 2 GiB. |
+| `ARTIFACT_QUOTA_EXCEEDED` | both | `artifacts.*` creating calls | Your 2 GiB, the cache's 4 GiB or your 256 artifacts are full of artifacts being read. Release some. |
+| `ARTIFACT_BUSY` | both | `artifacts.import`, `download`, `upload` | Two of your transfers are already running, or four app-wide. Retry later. |
+| `ARTIFACT_URL_NOT_ALLOWED` | both | `artifacts.download`, `upload` | The URL or a redirect hop is outside `scopes.network.allowedUrls`, not https, or resolves to a private address. |
+| `ARTIFACT_TRANSFER_FAILED` | both | `artifacts.*` | The provider answered an error, the body stopped, or every attempt failed. |
+| `ARTIFACT_REMOTE_UNSUPPORTED` | message | a view's `onArtifacts`, `MediaPlayer`, `MediaThumbnail` | The window is attached to a remote host; see below. |
 | `FRONTMATTER_INVALID` | `code` (SDK) | `parseFrontmatter`, `updateFrontmatter` | See [Data helpers](./data-helpers.md#frontmatter); the error carries `line` and `column`. |
 
 `fs.readFiles` reports a refusal per entry rather than rejecting, with its own code set (`NOT_FOUND`, `NOT_A_FILE`, `TOO_LARGE`, `RESULT_TOO_LARGE`, `READ_FAILED` beside the shared ones) — see [`readFiles` and `walk`](#readfiles-and-walk--bulk-reads).
@@ -429,8 +436,9 @@ A capability is declared in `manifest.capabilities` and checked on every call �
 | `panel:focus-read` | `onDidChangeFocusedPanel` | — |
 | `project:dispatch` | `dispatch` with `options.projectId` from an installed plugin | — (the user turns on **Allow project targeting** in the plugin's Permissions; there is no prompt) |
 | `notification:os` | `notify` with `os: true` | — (the user turns on **Allow OS notifications** in the plugin's Permissions; there is no prompt) |
+| `artifact:store` | `artifacts.*`, `FileDropzone`'s `onArtifacts`, `MediaPlayer`, `MediaThumbnail`. `import` also needs the `fs:*-read` for the path's root; `download` and `upload` also need `network:fetch` and a URL under `scopes.network.allowedUrls` | — |
 
-`network:fetch`, `agent:invoke` and `socket:connect` gate no host call: they are disclosure and danger input only (see [Manifest → `capabilities`](./manifest.md#capabilities)).
+`agent:invoke` and `socket:connect` gate no host call, and `network:fetch` gates only `artifacts.download` and `artifacts.upload`: they are disclosure and danger input only (see [Manifest → `capabilities`](./manifest.md#capabilities)).
 
 No capability: `settings`, `storage`, a `"local"` database, `logger`, `showToast`, `notify` without `os`, `tasks`, the prompts, `postToPanel`, `broadcastToRenderer`, `hasListeners`, `onDidChangeListeners`, `setPanelBadge`, `setPanelMenuItems`, `reloadPanel`, `restartWorker`, `onDidChangePanelLifecycle`, `onDidWake`, the worktree reads and subscriptions, `registerAction` and `registerHandler` (beyond their own `requires`), `registerForgeProvider`, `registerFileDecorationProvider` / `invalidateFileDecorations`, `registerWorktreeDeleteNotesProvider`, `registerWorktreeSetupStep` (the user allows each step per project instead), `registerSearchProvider`, `registerContextProvider`, `dispatch` (the action's own `danger` still applies) and `actions`. How capabilities raise an action's effective danger is in the [trust model](./trust-model.md).
 
@@ -2360,6 +2368,40 @@ Pass exactly one of `html` or `htmlPath`; `htmlPath` and `outputPath` must be ab
 A call goes through two bounded phases. While the consent prompt is open it holds no render slot and no clock runs — the prompt goes at the user's pace — but a plugin may have at most two calls waiting on it; a third rejects with `RENDER_BUSY:`. Once consent is given the call takes a render slot, and a plugin with two calls already holding slots, or a call arriving when eight are held in total, rejects with `RENDER_BUSY:`. At most two renders run at once across all plugins and the rest queue. The 30-second limit starts when the slot is taken and covers reading `htmlPath`, the queue wait and the render (`RENDER_TIMEOUT:`); a page that fails to load or print rejects with `RENDER_FAILED:`, and a call still queued or rendering when the plugin unloads is cancelled (`RENDER_CANCELLED:`). The window is destroyed on every path.
 
 `createMockHost` records each call in `documentsRenderPdfCalls` and writes a small placeholder (`%PDF-1.4 …`) to its in-memory filesystem at `outputPath`, so a plugin that reads, lists or opens its export afterwards sees a file. Nothing is rendered: the options go through the host's own validator, and `htmlPath` must exist in the in-memory filesystem. `host.documents` is NOT revoke-guarded.
+
+## `artifacts` — large files the host holds and streams
+
+Hold files too large to pass over your channel — a recording, a render, a dataset — in the host's session cache, and move them by handle. Bytes never cross the plugin's channel: the host reads, writes and streams them, so the 4 MiB call and 16 MiB result budgets never apply. Needs `artifact:store`.
+
+```ts
+// A provider file, streamed to disk with retries and progress.
+const clip = await host.artifacts.download(
+  {
+    url: "https://api.example.com/v1/renders/42.mp4",
+    headers: { authorization: `Bearer ${token}` },
+  },
+  {
+    onProgress: ({ transferredBytes, totalBytes }) =>
+      task.report({ fraction: totalBytes ? transferredBytes / totalBytes : null }),
+    signal: task.signal,
+  }
+);
+// A file under your declared fs scope.
+const local = await host.artifacts.import({ path: `${projectRoot}/out/take-3.webm` });
+// Back to a provider as one request body.
+const { status } = await host.artifacts.upload(clip.id, {
+  url: "https://upload.example.com/v1/put/42",
+});
+```
+
+A `PluginArtifact` is metadata only — `id`, `projectId`, `name`, `mimeType`, `size`, `createdAt`, `expiresAt`, `origin` — never a path, a URL or bytes. Pass its `id` to your view and play it with the kit's [`MediaPlayer`](./ui-kit.md#media); take the person's own files in with `FileDropzone`'s `onArtifacts`.
+
+- **Lifetime.** Artifacts last the session, up to 24 hours (`ttlMs`, from a minute). They go when released, expired, when their project closes, when your plugin unloads, or — least recently used first, never one being read — when the cache needs the room. A restart starts empty.
+- **Ownership.** Your instance owns its artifacts; nobody else can read or play them. A project plugin's belong to its project. An app-global plugin's are app-wide unless it names a `projectId`, which ties them to that project's close.
+- **Downloads.** https only; the URL and every redirect hop must fall under `scopes.network.allowedUrls` (same origin and port, a path prefix on a segment boundary) and resolve to a public address. Your headers ride only on hops at the origin you asked for. Up to 3 `attempts`; a retry resumes with `Range`/`If-Range` when the first response carried a strong validator, and starts over otherwise. A transfer that moves nothing for 30 seconds fails. The artifact exists only once every byte has arrived — a cancelled or failed download leaves no file behind.
+- **Uploads.** One `PUT` (or `POST`) whose body is the artifact, with its `Content-Length`. Redirects are answered, not followed. Any status resolves; the body comes back as text, cut at 64 KiB. Multipart and resumable upload protocols are yours to build.
+- **Cancellation and progress.** `signal` cancels; `onProgress` reports at most every 150 ms. Neither is a deadline: a large transfer runs as long as it keeps moving. Compose with [`tasks`](#tasks--long-running-work) to show it in the background-work readout.
+- **Remote hosts.** Your worker runs on the host, so `artifacts.*` work there unchanged. A window attached to a remote host can't yet play an artifact or import a file into one: those reject with `ARTIFACT_REMOTE_UNSUPPORTED`.
 
 ## React hooks — `@daintreehq/plugin-sdk/react`
 

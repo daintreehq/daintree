@@ -1805,6 +1805,145 @@ interface PluginActionManifestEntry {
  */
 type PluginCanDispatchResult = "ok" | "confirm" | "restricted";
 
+/**
+ * A file the host holds for a plugin (#14100): a copy of a file the person
+ * chose or a scoped path, or a provider file downloaded into the cache. The
+ * handle is metadata only. It never carries a path, a provider URL or bytes,
+ * and the id alone authorizes nothing outside the plugin that owns it.
+ *
+ * Artifacts live for the session: an index in main, the bytes under the
+ * app's data directory. They go when they expire, when the plugin releases
+ * them, when their project closes, when the plugin unloads, or when the cache
+ * needs the room, oldest use first. A restart starts with an empty cache.
+ */
+interface PluginArtifact {
+    readonly id: string;
+    /** The project the artifact belongs to; null for an app-wide artifact of an app-global plugin. */
+    readonly projectId: string | null;
+    /** Display name: the source file's base name, or the one the plugin gave. */
+    readonly name: string;
+    readonly mimeType: string;
+    /** Exact byte length of the stored file. */
+    readonly size: number;
+    readonly createdAt: number;
+    /** When the host drops it unless released earlier. */
+    readonly expiresAt: number;
+    readonly origin: "import" | "download";
+}
+/** Byte progress of one artifact transfer. */
+interface PluginArtifactProgress {
+    readonly transferredBytes: number;
+    /** Null when the provider did not say how long the body is. */
+    readonly totalBytes: number | null;
+    /** 1-based; a retried download reports its second attempt as 2. */
+    readonly attempt: number;
+}
+/** Options every call that creates an artifact accepts. */
+interface PluginArtifactCreateOptions extends PluginHostCallOptions {
+    /**
+     * The project the artifact belongs to. A project plugin's artifacts always
+     * belong to its own project, and naming another rejects. An app-global
+     * plugin may name a project so the artifact goes when that project closes;
+     * without one it is app-wide.
+     */
+    projectId?: string;
+    /** Display name; defaults to the source's base name. */
+    name?: string;
+    /** Overrides the type the host infers from the name or the response. */
+    mimeType?: string;
+    /** Lifetime from creation, clamped to 1 minute through 24 hours. */
+    ttlMs?: number;
+    /** Called at most every ~150 ms while bytes move, and once at the end. */
+    onProgress?: (progress: PluginArtifactProgress) => void;
+}
+/** What {@link PluginArtifactApi.import} copies from. */
+interface PluginArtifactImportSource {
+    /** An absolute path inside the plugin's declared `scopes.fs.allowedPaths` or its data dir. */
+    path: string;
+}
+/** A provider file {@link PluginArtifactApi.download} fetches. */
+interface PluginArtifactDownloadRequest {
+    /** HTTPS URL under one of the manifest's `scopes.network.allowedUrls`. */
+    url: string;
+    /**
+     * Request headers, for a provider token for instance. Dropped from any
+     * redirect hop that leaves the original origin, and never stored or logged.
+     */
+    headers?: Record<string, string>;
+}
+/** Options for {@link PluginArtifactApi.download}. */
+interface PluginArtifactDownloadOptions extends PluginArtifactCreateOptions {
+    /**
+     * Attempts in all, 1 to 3; default 3. A
+     * retry resumes from the bytes already received when the provider supports
+     * ranges and the file has not changed, and starts over otherwise.
+     */
+    attempts?: number;
+}
+/** Where {@link PluginArtifactApi.upload} sends an artifact. */
+interface PluginArtifactUploadRequest {
+    /** HTTPS URL under one of the manifest's `scopes.network.allowedUrls`. Redirects are refused. */
+    url: string;
+    /** Default `PUT`. The artifact is the whole request body. */
+    method?: "PUT" | "POST";
+    headers?: Record<string, string>;
+}
+/** Options for {@link PluginArtifactApi.upload}. */
+interface PluginArtifactUploadOptions extends PluginHostCallOptions {
+    onProgress?: (progress: PluginArtifactProgress) => void;
+}
+/** The provider's answer to an upload. Any status counts as an answer; the plugin judges it. */
+interface PluginArtifactUploadResult {
+    status: number;
+    /** Response headers, lower-cased. */
+    headers: Record<string, string>;
+    /** The response body as text, cut at 64 KiB. */
+    body: string;
+    bodyTruncated: boolean;
+}
+/** Options for {@link PluginArtifactApi.list}. */
+interface PluginArtifactListOptions {
+    /** Only this project's artifacts; an app-global plugin's app-wide ones when null. */
+    projectId?: string | null;
+}
+/**
+ * Host-managed large files (#14100), gated on the `artifact:store`
+ * capability. Bytes never cross the plugin's channel: the host reads, writes
+ * and streams them, and the plugin holds {@link PluginArtifact} handles. A
+ * view plays and previews one with the kit's `MediaPlayer` and
+ * `MediaThumbnail`, and takes the person's files in with `FileDropzone`'s
+ * `onArtifacts`.
+ *
+ * Every rejection carries a `code`: `ARTIFACT_NOT_FOUND` (missing, expired or
+ * released), `ARTIFACT_TOO_LARGE`, `ARTIFACT_QUOTA_EXCEEDED`, `ARTIFACT_BUSY`
+ * (too many transfers at once), `ARTIFACT_URL_NOT_ALLOWED`,
+ * `ARTIFACT_TRANSFER_FAILED`, `ABORT_ERR`, `PERMISSION_REQUIRED`,
+ * `INVALID_PATH` or `VALIDATION`.
+ */
+interface PluginArtifactApi {
+    /**
+     * Copy a scoped file into the cache. Needs the `fs:*-read` capability for the
+     * path's root, as `host.fs.readFileBytes` does. Directories, FIFOs and
+     * symlinks are refused.
+     */
+    import(source: PluginArtifactImportSource, options?: PluginArtifactCreateOptions): Promise<PluginArtifact>;
+    /**
+     * Stream a provider file into the cache. Needs `network:fetch`, and the URL
+     * and every redirect hop must fall under `scopes.network.allowedUrls`. The
+     * artifact exists only once every byte has arrived; a cancelled or failed
+     * download leaves nothing behind.
+     */
+    download(request: PluginArtifactDownloadRequest, options?: PluginArtifactDownloadOptions): Promise<PluginArtifact>;
+    /** Stream an artifact to a provider as one request body. Needs `network:fetch`. */
+    upload(artifactId: string, request: PluginArtifactUploadRequest, options?: PluginArtifactUploadOptions): Promise<PluginArtifactUploadResult>;
+    /** The artifact's current handle, or null once it is gone. */
+    stat(artifactId: string): Promise<PluginArtifact | null>;
+    /** This plugin's live artifacts, oldest first. */
+    list(options?: PluginArtifactListOptions): Promise<PluginArtifact[]>;
+    /** Drop the artifact now; false when it was already gone. Playback of it stops. */
+    release(artifactId: string): Promise<boolean>;
+}
+
 /** Notification type */
 type NotificationType = "info" | "success" | "error" | "warning";
 
@@ -2080,7 +2219,7 @@ interface PluginPanelActivity {
 }
 /** Value a plugin publishes to `when` clauses via {@link PluginHostApi.setContext}. */
 type PluginContextValue = boolean | string;
-declare const BUILT_IN_PLUGIN_CAPABILITIES: readonly ["fs:project-read", "fs:project-write", "fs:user-data-read", "fs:user-data-write", "network:fetch", "agent:invoke", "agent:read", "agent:register", "agent:input", "terminal:read", "git:read", "git:write", "clipboard:read", "clipboard:write", "shell:exec", "socket:connect", "mcp:expose", "project:dispatch", "panel:focus-read", "notification:os"];
+declare const BUILT_IN_PLUGIN_CAPABILITIES: readonly ["fs:project-read", "fs:project-write", "fs:user-data-read", "fs:user-data-write", "network:fetch", "agent:invoke", "agent:read", "agent:register", "agent:input", "terminal:read", "git:read", "git:write", "clipboard:read", "clipboard:write", "shell:exec", "socket:connect", "mcp:expose", "project:dispatch", "panel:focus-read", "notification:os", "artifact:store"];
 type BuiltInPluginCapability = (typeof BUILT_IN_PLUGIN_CAPABILITIES)[number];
 /** Third argument to {@link PluginHostApi.dispatch} (#13119). */
 interface PluginDispatchOptions {
@@ -6047,6 +6186,15 @@ interface PluginHostApi extends PluginActivationApi {
      * NOT revoke-guarded — same membership lifetime as {@link fs}.
      */
     readonly documents: PluginDocumentsApi;
+    /**
+     * Host-managed large files — imports, provider downloads and uploads, and
+     * playback in views — gated on `artifact:store`. Bytes never cross the
+     * plugin's channel. See {@link PluginArtifactApi}.
+     *
+     * NOT revoke-guarded — same membership lifetime as {@link fs}. Unloading
+     * cancels the plugin's transfers and drops its artifacts.
+     */
+    readonly artifacts: PluginArtifactApi;
 }
 /**
  * Synchronous, fire-and-forget diagnostic logger handed to a plugin via
@@ -6491,6 +6639,20 @@ interface MockHostState {
      */
     readonly documentsRenderPdfCalls: ReadonlyArray<PluginRenderPdfOptions>;
     /**
+     * Live `host.artifacts` handles, by id (#14100). Imports read the mock
+     * filesystem, downloads answer from {@link CreateMockHostOptions.artifactDownloads},
+     * and nothing expires unless {@link MockHostState.simulateArtifactExpiry} says so.
+     */
+    readonly artifactRecords: ReadonlyMap<string, PluginArtifact>;
+    /** Captured `host.artifacts.upload` calls, in order. */
+    readonly artifactUploadCalls: ReadonlyArray<{
+        artifactId: string;
+        url: string;
+        method: "PUT" | "POST";
+    }>;
+    /** Drop an artifact as its expiry would: `stat` answers null and `upload` rejects. */
+    simulateArtifactExpiry(artifactId: string): void;
+    /**
      * One entry per `onDidChangeWorktrees` / `onDidChangeActiveWorktree` /
      * `onDidChangeAgentState` subscription, in order, with the coalescing
      * window the host would apply — so a test can assert a plugin kept the
@@ -6647,6 +6809,12 @@ interface MockHostState {
 }
 interface CreateMockHostOptions {
     pluginId?: string;
+    /**
+     * Bodies `host.artifacts.download` answers with, by exact URL. A URL not
+     * listed rejects with `ARTIFACT_TRANSFER_FAILED`, as an unreachable provider
+     * would.
+     */
+    artifactDownloads?: Record<string, string | Uint8Array>;
     /**
      * Project root for a project-owned `pluginId` (one shaped
      * `project__{projectId}__{manifestId}`). Defaults to a synthetic path; ignored

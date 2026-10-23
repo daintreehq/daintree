@@ -5,6 +5,7 @@ import { getRemoteService, requireRemoteService } from "../../remote/runtime.js"
 import { store } from "../../store.js";
 import { AppError } from "../../utils/errorTypes.js";
 import { FILE_TRANSFER_METHOD_CHANNELS } from "./fileTransfer.preload.js";
+import { recordArtifactSelectionGrants } from "../../services/plugin/artifactSelectionGrants.js";
 import type {
   AnswerHostPickPayload,
   DownloadPayload,
@@ -102,13 +103,16 @@ export const fileTransferNamespace = defineIpcNamespace({
 });
 
 /**
- * Local files the person chose in a remote-bound view: the preload reports
- * each dropped or pasted File's path as it resolves it, over a channel the
- * page itself can't reach. Only these are ever read for an upload.
+ * Local files the person chose in a view: the preload reports each dropped or
+ * pasted File's path as it resolves it, over a channel the page itself can't
+ * reach. Only these are ever read for an upload from a remote-bound view, or
+ * imported as a plugin artifact from a local one.
  */
 function registerLocalSourceGrants(): () => void {
   return onWithContext(CHANNELS.FILE_TRANSFER_GRANT_LOCAL_SOURCES, (ctx, paths: unknown) => {
     getRemoteService("hostUploadClient")?.grantLocalSources(ctx.webContentsId, paths);
+    // The same choice, for a plugin view importing it as an artifact (#14100).
+    if (ctx.endpoint.kind === "local-view") recordArtifactSelectionGrants(ctx.webContentsId, paths);
   });
 }
 

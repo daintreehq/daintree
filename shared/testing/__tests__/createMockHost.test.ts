@@ -2889,3 +2889,43 @@ describe("createMockHost tasks (#13819)", () => {
     expect(() => host.simulateTaskCancel(uncancellable.id)).toThrow(/cancellable/);
   });
 });
+
+describe("createMockHost artifacts (#14100)", () => {
+  it("imports from the mock fs, downloads from the seeded bodies, and expires on demand", async () => {
+    const host = createMockHost({
+      artifactDownloads: { "https://api.example.com/v1/clip.mp4": new Uint8Array(12) },
+    });
+    await host.fs.writeFile("/data/song.mp3", "abc");
+    const imported = await host.artifacts.import({ path: "/data/song.mp3" });
+    expect(imported).toMatchObject({ name: "song.mp3", mimeType: "audio/mpeg", size: 3 });
+
+    const onProgress = vi.fn();
+    const downloaded = await host.artifacts.download(
+      { url: "https://api.example.com/v1/clip.mp4" },
+      { onProgress }
+    );
+    expect(downloaded).toMatchObject({ name: "clip.mp4", mimeType: "video/mp4", size: 12 });
+    expect(onProgress).toHaveBeenLastCalledWith({
+      transferredBytes: 12,
+      totalBytes: 12,
+      attempt: 1,
+    });
+    await expect(host.artifacts.download({ url: "https://api.example.com/v1/x" })).rejects.toThrow(
+      /ARTIFACT_TRANSFER_FAILED/
+    );
+
+    expect((await host.artifacts.list()).map((a) => a.id)).toEqual([imported.id, downloaded.id]);
+    await host.artifacts.upload(downloaded.id, { url: "https://api.example.com/v1/up" });
+    expect(host.artifactUploadCalls).toEqual([
+      { artifactId: downloaded.id, url: "https://api.example.com/v1/up", method: "PUT" },
+    ]);
+
+    host.simulateArtifactExpiry(downloaded.id);
+    expect(await host.artifacts.stat(downloaded.id)).toBeNull();
+    await expect(
+      host.artifacts.upload(downloaded.id, { url: "https://api.example.com/v1/up" })
+    ).rejects.toThrow(/ARTIFACT_NOT_FOUND/);
+    expect(await host.artifacts.release(imported.id)).toBe(true);
+    expect(host.artifactRecords.size).toBe(0);
+  });
+});

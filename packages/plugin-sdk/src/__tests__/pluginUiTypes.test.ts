@@ -592,8 +592,26 @@ export const multi = createElement(ui.MultiSelect, { options: [], value: ["a"], 
 export const singleMulti = createElement(ui.MultiSelect, { options: [], value: "a" });
 export const tags = createElement(ui.TagInput, { defaultValue: ["a"], validate: (tag: string) => tag.length > 1, "aria-label": "Tags" });
 export const drop = createElement(ui.FileDropzone, { onFiles: (files: File[]) => void files, accept: ".md", multiple: true, icon: "upload" });
-// @ts-expect-error a FileDropzone needs onFiles
+// @ts-expect-error a FileDropzone needs onFiles or onArtifacts
 export const deafDrop = createElement(ui.FileDropzone, { accept: ".md" });
+export const artifactDrop = createElement(ui.FileDropzone, {
+  onArtifacts: (artifacts: { id: string; size: number }[]) => void artifacts,
+  onImportError: (error: Error) => void error,
+  accept: "video/*",
+});
+export const doubleDrop = createElement(ui.FileDropzone, {
+  onFiles: () => {},
+  // @ts-expect-error a FileDropzone hands over Files or artifacts, not both
+  onArtifacts: () => {},
+});
+export const player = createElement(ui.MediaPlayer, {
+  source: { id: "a", mimeType: "video/mp4", name: "Clip" },
+  poster: "b",
+  whenAway: "keep-playing",
+});
+// @ts-expect-error a MediaPlayer needs a source
+export const silentPlayer = createElement(ui.MediaPlayer, {});
+export const thumb = createElement(ui.MediaThumbnail, { source: "a", size: "lg", alt: "Clip" });
 export const emoji = createElement(ui.EmojiPicker, { trigger: createElement(ui.Button, {}, "Icon"), onSelect: (e: string) => void e, value: "🙂" });
 // @ts-expect-error an EmojiPicker needs a trigger
 export const noTrigger = createElement(ui.EmojiPicker, { onSelect: () => {} });

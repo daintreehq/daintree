@@ -95,6 +95,14 @@ const HOST_CALL_DEADLINES = {
   // Waits on the user's answer to a first-use prompt.
   "system.openExternal": INTERACTIVE,
   "documents.renderPdf": INTERACTIVE,
+  // A transfer is bounded by the host's own idle timeout and attempt cap, not
+  // a wall clock: a multi-gigabyte download that keeps moving is not stuck.
+  "artifacts.import": NONE,
+  "artifacts.download": NONE,
+  "artifacts.upload": NONE,
+  "artifacts.stat": DEFAULT,
+  "artifacts.list": DEFAULT,
+  "artifacts.release": DEFAULT,
   showQuickPick: NONE,
   showInputBox: NONE,
   showConfirm: NONE,

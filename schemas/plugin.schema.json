@@ -234,7 +234,8 @@
           "mcp:expose",
           "project:dispatch",
           "panel:focus-read",
-          "notification:os"
+          "notification:os",
+          "artifact:store"
         ]
       }
     },
@@ -1079,7 +1080,8 @@
                     "mcp:expose",
                     "project:dispatch",
                     "panel:focus-read",
-                    "notification:os"
+                    "notification:os",
+                    "artifact:store"
                   ]
                 }
               }

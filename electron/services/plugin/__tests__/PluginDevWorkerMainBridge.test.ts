@@ -161,6 +161,22 @@ function makeHost() {
         revision: "a".repeat(64),
       })),
     },
+    artifacts: {
+      import: vi.fn(),
+      download: vi.fn(
+        async (
+          _request: unknown,
+          options: { onProgress?: (p: unknown) => void }
+        ): Promise<unknown> => {
+          options.onProgress?.({ transferredBytes: 5, totalBytes: 5, attempt: 1 });
+          return { id: "a".repeat(32) };
+        }
+      ),
+      upload: vi.fn(),
+      stat: vi.fn(async (): Promise<unknown> => null),
+      list: vi.fn(async (): Promise<unknown> => []),
+      release: vi.fn(async (): Promise<unknown> => true),
+    },
   };
 }
 
@@ -789,6 +805,32 @@ describe("PluginDevWorkerMainBridge", () => {
       ok: true,
       result: { path: "/data/out.pdf", bytes: 1234, revision: "a".repeat(64) },
     });
+  });
+
+  it("routes an artifact download with this call's signal and relays its progress", async () => {
+    const { host, workerHost } = makeBridge();
+    workerHost.emit("worker-message", {
+      type: "host-call",
+      requestId: "art1",
+      method: "artifacts.download",
+      params: {
+        target: { url: "https://api.example.com/a" },
+        options: { attempts: 2 },
+        progressSubscriptionId: "s9",
+      },
+    });
+    await flush();
+    const [request, options] = host.artifacts.download.mock.calls[0]!;
+    expect(request).toEqual({ url: "https://api.example.com/a" });
+    expect(options).toMatchObject({ attempts: 2 });
+    expect(options.signal).toBeInstanceOf(AbortSignal);
+    expect(workerHost.sent).toContainEqual({
+      type: "subscription-event",
+      subscriptionId: "s9",
+      payload: { transferredBytes: 5, totalBytes: 5, attempt: 1 },
+    });
+    const result = workerHost.sent.find((m) => m.type === "host-result" && m.requestId === "art1");
+    expect(result).toMatchObject({ ok: true, result: { id: "a".repeat(32) } });
   });
 
   it("replies host-result ok:false when the host method throws", async () => {

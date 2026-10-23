@@ -720,6 +720,8 @@ const HOST_FACADE_REQUIRED_EXPORTS: Record<HostFacadeSpecifier, readonly string[
     "Markdown",
     "MarkdownEditor",
     "MasterDetail",
+    "MediaPlayer",
+    "MediaThumbnail",
     "MentionTextarea",
     "Meter",
     "MultiSelect",

@@ -4,8 +4,12 @@ import { randomBytes } from "node:crypto";
 import path from "path";
 import os from "os";
 import { pathToFileURL } from "url";
-import { app } from "electron";
+import { app, net, webContents } from "electron";
 import { createLogger } from "../utils/logger.js";
+import { PluginArtifactService } from "./plugin/PluginArtifactService.js";
+import { PluginArtifactStore } from "./plugin/PluginArtifactStore.js";
+import { setArtifactSourceResolver } from "../setup/artifactSourceResolver.js";
+import type { PluginArtifact, PluginArtifactSource } from "../../shared/types/pluginArtifacts.js";
 import { PRODUCT_WEBSITE } from "../utils/productBranding.js";
 import { stripUtf8Bom } from "../utils/stripUtf8Bom.js";
 // Aliased to avoid colliding with Vite's auto-injected ESM shim
@@ -925,6 +929,13 @@ export class PluginService {
    */
   private pluginTasks = new PluginTaskRegistry((pluginId) => this.emitPluginTasks(pluginId));
   /**
+   * The session's artifact cache (#14100), created on first use so a run that
+   * never touches artifacts never creates its directory. Null after shutdown.
+   */
+  private artifactService: PluginArtifactService | null | undefined;
+  /** Views whose `destroyed` already revokes their playback leases. */
+  private readonly artifactLeaseViews = new Set<number>();
+  /**
    * Live toolbar-button state set via `host.setToolbarButtonState`, keyed
    * `pluginId → buttonId → state` (#13785). Held, scoped, cleared and replayed
    * exactly like {@link pluginToolbarBadges}.
@@ -1686,6 +1697,7 @@ export class PluginService {
    */
   dispose(): void {
     this.disposed = true;
+    void this.shutdownArtifacts();
     this.metrics.dispose();
     // Native watchers go first: a settled burst arriving mid-teardown would
     // otherwise queue a reload into a service that is going away.
@@ -4876,6 +4888,7 @@ export class PluginService {
       serializePluginPanelMenus: (pluginId) => this.serializePluginPanelMenus(pluginId),
       pluginDisplayName: (pluginId) => this.getPluginDisplayName(pluginId),
       pluginDataDir: (pluginId) => this.pluginDataDir(pluginId),
+      artifactService: () => this.getArtifactService(),
       isPathUnder: (root, candidate) => this.isPathUnder(root, candidate),
       expandAllowedPathEntries: (pluginId, options) =>
         this.expandAllowedPathEntries(pluginId, options),
@@ -5095,6 +5108,7 @@ export class PluginService {
    * the worker its cooperative shutdown.
    */
   async shutdownManagedProcesses(): Promise<void> {
+    await this.shutdownArtifacts();
     for (const { workerHost } of this.pluginWorkers.values()) {
       try {
         workerHost.dispose();
@@ -5103,6 +5117,116 @@ export class PluginService {
       }
     }
     await this.processManager?.shutdownAll();
+  }
+
+  private getArtifactService(): PluginArtifactService | null {
+    if (this.artifactService !== undefined) return this.artifactService;
+    if (this.disposed) return null;
+    const service = new PluginArtifactService({
+      store: new PluginArtifactStore({
+        rootDir: path.join(app.getPath("userData"), "plugin-artifacts"),
+      }),
+      netFetch: (input, init) => net.fetch(input, init),
+    });
+    this.artifactService = service;
+    setArtifactSourceResolver((artifactId, lease) => service.openLeased(artifactId, lease));
+    return service;
+  }
+
+  private async shutdownArtifacts(): Promise<void> {
+    const service = this.artifactService;
+    this.artifactService = null;
+    if (!service) return;
+    setArtifactSourceResolver(null);
+    await service.dispose().catch(() => {});
+  }
+
+  /**
+   * Import files a view's person chose (a drop or the file dialog) as the
+   * plugin's artifacts. `paths` are only ever ones the preload resolved from
+   * real Files for that view; the IPC handler checks the grant first.
+   */
+  async importArtifactSelection(
+    pluginId: string,
+    projectId: string | null,
+    paths: readonly string[]
+  ): Promise<PluginArtifact[]> {
+    const service = this.requireArtifactAccess(pluginId, "importSelection");
+    const imported: PluginArtifact[] = [];
+    try {
+      for (const filePath of paths) {
+        const handle = await fs.open(
+          filePath,
+          fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0) | (fs.constants.O_NONBLOCK ?? 0)
+        );
+        try {
+          const stat = await handle.stat();
+          if (!stat.isFile()) {
+            throw new Error(`INVALID_PATH: "${path.basename(filePath)}" is not a regular file`);
+          }
+          imported.push(
+            await service.importFromHandle({
+              pluginId,
+              projectId,
+              handle,
+              size: stat.size,
+              sourceName: path.basename(filePath),
+            })
+          );
+        } finally {
+          await handle.close().catch(() => {});
+        }
+      }
+    } catch (error) {
+      // All or nothing: a partly imported batch is handed back as none.
+      for (const artifact of imported) service.store.release(pluginId, artifact.id);
+      throw error;
+    }
+    return imported;
+  }
+
+  /** A playback source for `webContentsId`, revoked when that view goes away. */
+  mintArtifactSource(
+    pluginId: string,
+    artifactId: string,
+    webContentsId: number
+  ): PluginArtifactSource {
+    const service = this.requireArtifactAccess(pluginId, "source");
+    const source = service.mintSource(pluginId, artifactId, webContentsId);
+    if (!this.artifactLeaseViews.has(webContentsId)) {
+      const contents = webContents.fromId(webContentsId);
+      if (contents) {
+        this.artifactLeaseViews.add(webContentsId);
+        contents.once("destroyed", () => {
+          this.artifactLeaseViews.delete(webContentsId);
+          this.artifactService?.store.revokeLeasesForView(webContentsId);
+        });
+      }
+    }
+    return source;
+  }
+
+  revokeArtifactSource(url: string, webContentsId: number): boolean {
+    const lease = /[?&]lease=([0-9a-f]{48})(?:&|$)/.exec(url)?.[1];
+    if (!lease) return false;
+    return this.artifactService?.store.revokeLease(lease, webContentsId) ?? false;
+  }
+
+  private requireArtifactAccess(pluginId: string, op: string): PluginArtifactService {
+    if (!this.plugins.has(pluginId)) {
+      throw new Error(
+        `PLUGIN_UNLOADED: plugin "${pluginId}" artifacts.${op}: plugin is not loaded`
+      );
+    }
+    if (!this.declaredCapabilities(pluginId).has("artifact:store")) {
+      throw new Error(
+        `PERMISSION_REQUIRED: plugin "${pluginId}" artifacts.${op} requires the "artifact:store" capability`
+      );
+    }
+    const service = this.getArtifactService();
+    if (!service)
+      throw new Error(`plugin "${pluginId}" artifacts.${op}: the artifact cache has shut down`);
+    return service;
   }
 
   /**
@@ -7441,6 +7565,9 @@ export class PluginService {
     // Every plugin's statuses on the closed project's cards, app-global ones
     // included: they described worktrees nobody is looking at any more.
     this.retireWorktreeCardTarget(`p:${projectId}`);
+    // Every plugin's artifacts for this project, app-global ones included,
+    // before the controller-only early return below.
+    this.artifactService?.forgetProject(projectId);
     for (const [pluginId, byProject] of [...this.pluginWorktreeCardStatuses]) {
       if (!byProject.delete(projectId)) continue;
       if (byProject.size === 0) this.pluginWorktreeCardStatuses.delete(pluginId);
@@ -8242,6 +8369,10 @@ export class PluginService {
     // After the plugin left `plugins`, so an abort listener that starts again
     // gets an inert handle instead of a task nothing will ever finish.
     runUnloadStep(pluginId, "interruptTasks", () => this.pluginTasks.interrupt(pluginId));
+
+    // After the plugin left `plugins`, so a transfer racing the unload cannot
+    // commit into a cache whose owner is gone.
+    runUnloadStep(pluginId, "forgetArtifacts", () => this.artifactService?.forgetPlugin(pluginId));
 
     if (this.pluginContextKeys.delete(pluginId)) {
       runUnloadStep(pluginId, "clearContextKeys", () => this.emitContextKeys(pluginId));
