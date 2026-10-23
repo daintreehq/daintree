@@ -1107,7 +1107,7 @@ The host calls `provideNotes` whenever a delete of a worktree you can see is con
 
 ## `mcp.registerTools`
 
-Binds the tool roster for an endpoint declared in `contributes.agentMcp`, which Daintree then serves to agents in its terminals over MCP, on the plugin's one server (`daintree-<mcpName>`) beside the host's database tools when the plugin declares a database: `database_schema`, `database_query` and one tool per [declared query](./contribution-points.md#declared-queries), declared writes included. Agents get the roster once the plugin's agent access is at **Read and write**. Requires the `mcp:expose` capability. This is the inbound direction — for a stdio server Daintree itself connects to, see [`mcpServers`](./contribution-points.md#mcp-servers--shipped). The end-to-end walkthrough, including when an agent actually receives the endpoint, is [Agent extensions → Agent MCP endpoints](./agent-extensions.md#agent-mcp-endpoints).
+Binds the tool roster for an endpoint declared in `contributes.agentMcp`, which Daintree then serves to agents in its terminals over MCP, on the plugin's one server (`daintree-<mcpName>`) beside the host's database tools when the plugin declares a database: `database_schema`, `database_query` and one tool per [declared query](./contribution-points.md#declared-queries), declared writes included. Agents get the roster once the plugin's agent access is at **Read and write** — or, for an endpoint that declares [tool groups](./agent-extensions.md#tool-groups), only the tools of the groups the user allowed. Requires the `mcp:expose` capability. This is the inbound direction — for a stdio server Daintree itself connects to, see [`mcpServers`](./contribution-points.md#mcp-servers--shipped). The end-to-end walkthrough, including when an agent actually receives the endpoint, is [Agent extensions → Agent MCP endpoints](./agent-extensions.md#agent-mcp-endpoints).
 
 ```ts
 const dispose = await host.mcp.registerTools("ledger", {
@@ -1138,6 +1138,7 @@ interface PluginMcpToolDefinition {
   inputSchema: PluginMcpJsonSchema; // { type: "object", ... }
   outputSchema?: PluginMcpJsonSchema;
   annotations?: PluginMcpToolAnnotations;
+  group?: string; // required when the endpoint declares groups, rejected when it declares none
   execute(
     args: Record<string, unknown>,
     caller: PluginMcpCaller,

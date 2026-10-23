@@ -1702,6 +1702,9 @@ export class PluginDevWorkerHostProxy {
               ...(descriptor.annotations !== undefined
                 ? { annotations: { ...descriptor.annotations } }
                 : {}),
+              // Only its shape is checked on this side; main checks it names a
+              // group the manifest declares.
+              ...(typeof definition.group === "string" ? { group: definition.group } : {}),
             };
           }
           this.mcpRosters.set(endpointId, roster);

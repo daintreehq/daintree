@@ -66,4 +66,34 @@ describe("listRelaunchNeeded", () => {
     expect(listRelaunchNeeded(PROJECT_B, now, () => [])).toEqual([]);
     expect(listRelaunchNeeded(PROJECT_A, now, () => [])).toHaveLength(1);
   });
+
+  it("lists an agent whose groups differ, and not one whose groups only come in another order", () => {
+    const search = { id: "search", access: "read" as const };
+    const changes = { id: "changes", access: "write" as const };
+    const held = { databases: false, pluginEndpointId: "crm", pluginGroups: [search, changes] };
+    recordPluginToolsLaunch("t1", PROJECT_A);
+    const grants = [grant("t1", "crm", held)];
+
+    expect(
+      listRelaunchNeeded(
+        PROJECT_A,
+        [eligible("crm", { ...held, pluginGroups: [changes, search] })],
+        () => grants
+      )
+    ).toEqual([]);
+    expect(
+      listRelaunchNeeded(
+        PROJECT_A,
+        [eligible("crm", { ...held, pluginGroups: [search] })],
+        () => grants
+      )
+    ).toEqual([{ terminalId: "t1", pluginDisplayNames: ["CRM"] }]);
+    expect(
+      listRelaunchNeeded(
+        PROJECT_A,
+        [eligible("crm", { ...held, pluginGroups: [{ ...search, access: "write" }, changes] })],
+        () => grants
+      )
+    ).toEqual([{ terminalId: "t1", pluginDisplayNames: ["CRM"] }]);
+  });
 });

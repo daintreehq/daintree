@@ -106,3 +106,30 @@ describe("mcpName", () => {
     expect(schema.safeParse(manifestWith({ mcpName: "runbooks2" })).success).toBe(true);
   });
 });
+
+describe("contributes.agentMcp groups", () => {
+  const parse = (groups: unknown) =>
+    getPluginManifestSchema("user").safeParse(
+      manifestWith({
+        capabilities: ["mcp:expose"],
+        contributes: { agentMcp: [{ ...ENDPOINT, groups }] },
+      })
+    );
+
+  it("accepts read and write groups", () => {
+    expect(
+      parse([
+        { id: "search", name: "Search", access: "read" },
+        { id: "changes", name: "Change", description: "Commits previews.", access: "write" },
+      ]).success
+    ).toBe(true);
+  });
+
+  it("rejects duplicate ids, an empty list, an unknown access and stray fields", () => {
+    const search = { id: "search", name: "Search", access: "read" };
+    expect(parse([search, search]).success).toBe(false);
+    expect(parse([]).success).toBe(false);
+    expect(parse([{ ...search, access: "admin" }]).success).toBe(false);
+    expect(parse([{ ...search, readOnlyHint: true }]).success).toBe(false);
+  });
+});

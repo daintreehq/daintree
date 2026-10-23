@@ -1261,3 +1261,36 @@ describe("PluginMcpRoute", () => {
     expect(await outcome).toBe("rejected");
   });
 });
+
+describe("regrouped tools", () => {
+  it("revokes the credentials reaching a plugin's groups when a roster moves a tool between them", () => {
+    const SEARCH = { id: "search", access: "read" as const };
+    const grouped = (groupId: string) =>
+      compileAgentMcpTool({
+        name: "search_contacts",
+        description: "Search contacts.",
+        inputSchema: { type: "object" },
+        group: { id: groupId, access: "read" },
+      });
+    endpoints.register({
+      pluginInstanceId: INSTANCE,
+      endpointId: ENDPOINT,
+      tools: [grouped("search")],
+      invoke,
+    });
+    const groupedGrant = issue({
+      scope: { databases: false, pluginEndpointId: ENDPOINT, pluginGroups: [SEARCH] },
+    }).grant;
+    const databaseGrant = issue({ scope: { databases: true }, terminalId: "term-2" }).grant;
+
+    endpoints.register({
+      pluginInstanceId: INSTANCE,
+      endpointId: ENDPOINT,
+      tools: [grouped("lookup")],
+      invoke,
+    });
+
+    expect(pluginMcpGrantRegistry.isLive(groupedGrant.credentialId)).toBe(false);
+    expect(pluginMcpGrantRegistry.isLive(databaseGrant.credentialId)).toBe(true);
+  });
+});

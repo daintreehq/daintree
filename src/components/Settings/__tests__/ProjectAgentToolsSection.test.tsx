@@ -1099,4 +1099,151 @@ describe("ProjectAgentToolsSection", () => {
       expect(within(rowFor("Notes")).queryByTestId("project-agent-tool-assistant")).toBeNull();
     });
   });
+
+  describe("tool groups (#14104)", () => {
+    function crm(over: Partial<ProjectAgentToolPlugin> = {}): ProjectAgentToolPlugin {
+      return plugin({
+        pluginInstanceId: "acme.crm",
+        pluginDisplayName: "CRM",
+        hasDatabases: false,
+        allProjectsAccess: undefined,
+        origin: "project",
+        pluginTools: { name: "Acme CRM" },
+        toolGroups: [
+          {
+            id: "search",
+            name: "Search contacts",
+            access: "read",
+            allowed: false,
+            assistantAllowed: false,
+          },
+          {
+            id: "changes",
+            name: "Change contacts",
+            access: "write",
+            allowed: false,
+            assistantAllowed: false,
+          },
+        ],
+        ...over,
+      });
+    }
+
+    const isOn = (el: HTMLElement) => el.getAttribute("aria-checked") === "true";
+    const isDisabled = (el: HTMLElement) => el.hasAttribute("disabled");
+    const groupSwitch = (id: string) =>
+      within(rowFor("CRM")).getByTestId(`project-agent-tool-group-${id}`);
+
+    async function renderWith(plugins: ProjectAgentToolPlugin[]) {
+      agentMcpApi.listProjectPlugins.mockResolvedValue(snapshot(plugins));
+      render(<ProjectAgentToolsSection />);
+      await screen.findByTestId("project-agent-tools");
+    }
+
+    it("gives each group its own switch, and no level for a plugin without databases", async () => {
+      await renderWith([crm()]);
+
+      expect(screen.queryByRole("radiogroup", { name: /access to CRM/ })).toBeNull();
+      expect(isOn(groupSwitch("search"))).toBe(false);
+      expect(describedText(groupSwitch("search"))).toContain(
+        "The plugin says these tools read and search"
+      );
+      expect(describedText(groupSwitch("changes"))).toContain(
+        "The plugin says these tools make changes"
+      );
+    });
+
+    it("allows a read group on its own, keeping the write group off", async () => {
+      await renderWith([crm()]);
+      agentMcpApi.setPluginAccess.mockResolvedValue(snapshot([crm()]));
+
+      fireEvent.click(groupSwitch("search"));
+
+      expect(agentMcpApi.setPluginAccess).toHaveBeenCalledWith({
+        pluginInstanceId: "acme.crm",
+        access: "off",
+        scope: "project",
+        groups: ["search"],
+      });
+      await waitFor(() => expect(isDisabled(groupSwitch("search"))).toBe(false));
+    });
+
+    it("turns one group off and keeps the others", async () => {
+      const both = crm({
+        source: "project",
+        toolGroups: crm().toolGroups!.map((group) => ({ ...group, allowed: true })),
+      });
+      await renderWith([both]);
+      agentMcpApi.setPluginAccess.mockResolvedValue(snapshot([both]));
+
+      fireEvent.click(groupSwitch("changes"));
+
+      expect(agentMcpApi.setPluginAccess).toHaveBeenCalledWith(
+        expect.objectContaining({ scope: "project", groups: ["search"] })
+      );
+      await waitFor(() => expect(isDisabled(groupSwitch("changes"))).toBe(false));
+    });
+
+    it("says when a group was recast since it was allowed", async () => {
+      await renderWith([
+        crm({
+          toolGroups: [
+            {
+              id: "search",
+              name: "Search contacts",
+              access: "write",
+              allowed: false,
+              assistantAllowed: false,
+              reclassified: true,
+            },
+          ],
+        }),
+      ]);
+
+      expect(describedText(groupSwitch("search"))).toContain("stay off until allowed again");
+    });
+
+    it("offers the Assistant only the groups the project's agents have", async () => {
+      const searchOnly = crm({
+        source: "project",
+        assistantAccess: "read-only",
+        toolGroups: [
+          {
+            id: "search",
+            name: "Search contacts",
+            access: "read",
+            allowed: true,
+            assistantAllowed: false,
+          },
+          {
+            id: "changes",
+            name: "Change contacts",
+            access: "write",
+            allowed: false,
+            assistantAllowed: false,
+          },
+        ],
+      });
+      await renderWith([searchOnly]);
+      agentMcpApi.setPluginAccess.mockResolvedValue(snapshot([searchOnly]));
+      const assistantGroup = (id: string) =>
+        within(rowFor("CRM")).getByTestId(`project-agent-tool-assistant-group-${id}`);
+
+      expect(isDisabled(assistantGroup("changes"))).toBe(true);
+      expect(isDisabled(assistantGroup("search"))).toBe(false);
+      expect(
+        within(rowFor("CRM")).queryByTestId("project-agent-tool-assistant-changes")
+      ).toBeNull();
+
+      fireEvent.click(assistantGroup("search"));
+
+      expect(agentMcpApi.setPluginAccess).toHaveBeenCalledWith({
+        pluginInstanceId: "acme.crm",
+        access: "read-only",
+        scope: "assistant",
+        groups: ["search"],
+      });
+      await waitFor(() => expect(isDisabled(assistantGroup("search"))).toBe(false));
+    });
+  });
 });

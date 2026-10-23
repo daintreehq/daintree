@@ -1143,6 +1143,7 @@ Declares the tools the plugin serves to agents running in Daintree's terminals. 
 | `name` | yes | Label for the endpoint, 1–80 characters. Carried in the host's declared-endpoint metadata; agents never see it — the server's name comes from the plugin's `mcpName`. |
 | `description` | no | 1–400 characters. |
 | `mode` | yes | `"tools"` — host-managed tools, the only mode today. |
+| `groups` | no | Up to 8 tool groups the user allows one at a time, each `{ id, name, description?, access }` with `access` `"read"` or `"write"` and unique ids in the endpoint's id grammar. With groups declared every registered tool names one in its `group`, and no access level reaches the plugin's own tools. See [Agent extensions → Tool groups](./agent-extensions.md#tool-groups). |
 
 The entry is strict: an unknown field (a `url`, a `command`) is rejected rather than read as a transport the host will not honour. At most one endpoint per plugin, and the manifest is rejected unless `capabilities` includes `mcp:expose` (`mcp_expose_capability_required`).
 

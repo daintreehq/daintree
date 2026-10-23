@@ -19,6 +19,13 @@ import { DATABASE_ENDPOINT_ID, DATABASE_WRITES_ACCESS_ID } from "./types.js";
  * The list form from before access levels (`["@databases", "entries"]`, `"*"`,
  * `true`) still reads, one endpoint id at a time, exactly as it always did.
  *
+ * A plugin whose endpoint declares tool groups is reached only through groups
+ * named one by one, in the object form; no level, list or `"*"` names one:
+ *
+ * ```json
+ * { "plugins": { "acme.crm": { "access": "read-only", "groups": ["search"] } } }
+ * ```
+ *
  * Keyed by manifest id, so the file is portable across clones. A default only
  * ever reaches a project plugin of the same project: those load only after the
  * user trusts the project's plugins, which already lets their code run, so
@@ -32,7 +39,19 @@ export const PROJECT_MCP_DEFAULTS_FILE = [".daintree", "mcp.json"] as const;
 const MAX_FILE_BYTES = 64 * 1024;
 const MAX_ID_LENGTH = 128;
 
-type EndpointSelection = AgentMcpAccess | "*" | ReadonlySet<string>;
+/** The object form: a level for the plugin's rosters (none when absent), and the tool groups it allows. */
+export interface GroupedSelection {
+  readonly access: AgentMcpAccess | null;
+  readonly groups: readonly string[];
+}
+
+type EndpointSelection = AgentMcpAccess | "*" | ReadonlySet<string> | GroupedSelection;
+
+const MAX_GROUPS = 64;
+
+function isGroupedSelection(selection: EndpointSelection): selection is GroupedSelection {
+  return typeof selection === "object" && !(selection instanceof Set);
+}
 
 export interface ProjectMcpDefaults {
   /**
@@ -73,6 +92,15 @@ export function parseProjectMcpDefaults(raw: unknown): ProjectMcpDefaults {
     } else if (Array.isArray(selection)) {
       const ids = new Set(selection.filter(isId));
       if (ids.size > 0) result.set(manifestId, ids);
+    } else if (selection && typeof selection === "object") {
+      const { access, groups } = selection as Record<string, unknown>;
+      const level = (AGENT_MCP_ACCESS_LEVELS as readonly unknown[]).includes(access)
+        ? (access as AgentMcpAccess)
+        : null;
+      const ids = Array.isArray(groups)
+        ? [...new Set(groups.filter(isId))].slice(0, MAX_GROUPS)
+        : [];
+      if (level !== null || ids.length > 0) result.set(manifestId, { access: level, groups: ids });
     }
   }
   return { plugins: result };
@@ -141,9 +169,27 @@ export function projectDefaultForEndpoint(
   if (selection === undefined) return null;
   if (selection === "*") return true;
   if (typeof selection === "string") return accessAllowsEndpoint(selection, endpointId);
+  if (isGroupedSelection(selection)) {
+    return selection.access !== null && accessAllowsEndpoint(selection.access, endpointId);
+  }
   // A list names rosters, from before declared writes existed; "read-write"
   // is how a repository turns those on.
   return endpointId !== DATABASE_WRITES_ACCESS_ID && selection.has(endpointId);
+}
+
+/**
+ * The tool groups the project's own file allows, or null when it names no
+ * groups for the plugin. Never answers for an installed plugin.
+ */
+export function projectDefaultGroups(
+  projectId: string,
+  pluginInstanceId: string
+): readonly string[] | null {
+  const parsed = parseProjectPluginInstanceKey(pluginInstanceId);
+  if (parsed === null || parsed.projectId !== projectId) return null;
+  const selection = getProjectMcpDefaults(projectId).plugins.get(parsed.manifestId);
+  if (selection === undefined || !isGroupedSelection(selection)) return null;
+  return selection.groups.length > 0 ? selection.groups : null;
 }
 
 /** Whether the project's own file turns this roster on. Never true for an installed plugin. */

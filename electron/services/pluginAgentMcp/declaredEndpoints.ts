@@ -1,4 +1,8 @@
-import type { LoadedPluginInfo, PluginManifest } from "../../../shared/types/plugin.js";
+import type {
+  LoadedPluginInfo,
+  PluginAgentMcpContribution,
+  PluginManifest,
+} from "../../../shared/types/plugin.js";
 import {
   pluginManifestIdFromInstanceKey,
   projectIdFromPluginInstanceKey,
@@ -30,6 +34,27 @@ export function declaresDatabaseWrites(manifest: Readonly<PluginManifest>): bool
   return (manifest.contributes.databases ?? []).some((database) =>
     (database.queries ?? []).some((query) => query.mode === "write")
   );
+}
+
+/** An `agentMcp` endpoint as settings and scope resolution see it, groups included. */
+export function declaredPluginEndpointOf(
+  endpoint: Readonly<PluginAgentMcpContribution>
+): NonNullable<DeclaredAgentMcpPlugin["pluginEndpoint"]> {
+  return {
+    id: endpoint.id,
+    name: endpoint.name,
+    ...(endpoint.description !== undefined ? { description: endpoint.description } : {}),
+    ...(endpoint.groups !== undefined && endpoint.groups.length > 0
+      ? {
+          groups: endpoint.groups.map((group) => ({
+            id: group.id,
+            name: group.name,
+            ...(group.description !== undefined ? { description: group.description } : {}),
+            access: group.access,
+          })),
+        }
+      : {}),
+  };
 }
 
 /**
@@ -76,15 +101,7 @@ export function listDeclaredAgentMcpPlugins(
       ...(manifest.mcpName !== undefined ? { mcpName: manifest.mcpName } : {}),
       hasDatabases,
       ...(hasDatabaseWrites ? { hasDatabaseWrites: true as const } : {}),
-      ...(endpoint
-        ? {
-            pluginEndpoint: {
-              id: endpoint.id,
-              name: endpoint.name,
-              ...(endpoint.description !== undefined ? { description: endpoint.description } : {}),
-            },
-          }
-        : {}),
+      ...(endpoint ? { pluginEndpoint: declaredPluginEndpointOf(endpoint) } : {}),
     });
   }
   return declared;

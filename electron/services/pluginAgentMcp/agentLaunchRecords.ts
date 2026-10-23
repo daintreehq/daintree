@@ -31,11 +31,22 @@ export interface EligiblePluginTools {
   readonly scope: AgentMcpToolScope;
 }
 
+/** A scope's tool groups, order aside; null for a scope without any. */
+function groupsKey(scope: AgentMcpToolScope): string | null {
+  return scope.pluginGroups === undefined
+    ? null
+    : scope.pluginGroups
+        .map((group) => `${group.id}:${group.access}`)
+        .sort()
+        .join(",");
+}
+
 function sameScope(a: AgentMcpToolScope, b: AgentMcpToolScope): boolean {
   return (
     a.databases === b.databases &&
     (a.databaseWrites === true) === (b.databaseWrites === true) &&
-    a.pluginEndpointId === b.pluginEndpointId
+    a.pluginEndpointId === b.pluginEndpointId &&
+    groupsKey(a) === groupsKey(b)
   );
 }
 

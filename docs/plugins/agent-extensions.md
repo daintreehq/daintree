@@ -250,6 +250,63 @@ The setting belongs to the plugin _instance_: an installed plugin and a project 
 
 Lowering the setting revokes every live credential it no longer allows in that project, and running agents lose those tools on their next request. Unloading the plugin — disable, uninstall, project close, trust revoke, or a reload that changes what it declares for agents — does the same for its whole server. A reload here includes an upgrade and a `daintree-plugin dev` rebuild: one that keeps the agent declarations leaves running agents connected. Raising it reaches only agents launched afterwards; see [Reaching an agent](#reaching-an-agent).
 
+### Tool groups
+
+Read and write is one switch for all of a plugin's own tools, which is too coarse for a service plugin whose search tools a user would happily hand to every agent and whose commit tools they would not. Declare `groups` on the endpoint and the user allows each group on its own:
+
+```json
+"agentMcp": [
+  {
+    "id": "crm",
+    "name": "Acme CRM",
+    "mode": "tools",
+    "groups": [
+      { "id": "search", "name": "Search contacts", "access": "read" },
+      { "id": "changes", "name": "Change contacts", "access": "write" }
+    ]
+  }
+]
+```
+
+Every tool then names its group, and `registerTools` rejects the whole roster if one names none, names a group the manifest doesn't declare, or names one on an endpoint that declares no groups:
+
+```ts
+await host.mcp.registerTools("crm", {
+  search_contacts: { group: "search", description: "…", inputSchema, execute: search },
+  preview_contact_update: { group: "search", description: "…", inputSchema, execute: preview },
+  commit_contact_update: { group: "changes", description: "…", inputSchema, execute: commit },
+});
+```
+
+What changes for a grouped endpoint:
+
+- **Groups are allowed by name, never by a level.** Project settings → **Agent tools** shows a switch per group under the plugin. The access level then covers only the plugin's databases, and a plugin without databases has no level at all. An answer recorded before the plugin declared groups — **Read and write** included — allows none of them, so a plugin that adopts groups starts with its own tools off until the user picks some.
+- **`access` is your description, not a permission.** It is shown to the user as what the plugin says the group does. The host never turns it into a `readOnlyHint`, so a `read` group never changes whether an agent client asks before calling one of its tools — that stays the client's own setting — and no setting allows a group because it says `read`.
+- **The roster is what the grant allows.** `tools/list` lists only the tools of the groups allowed when the agent launched, each with `_meta["dev.daintree/toolGroup"]` naming its group and class; a call to any other tool is answered as an unknown tool and never reaches your code. A cancelled or timed-out call to a `write` group's tool says the change may have been applied, as a declared write does.
+- **Changes revoke.** Turning a group off revokes every credential that reached it. A user's choice records the group's class, so recasting a group from `read` to `write` (or back) turns it off until it is allowed again. A reload that changes the `groups` declaration revokes as any change to the agent declarations does, and registering a roster that changes which tools a group holds — adding, removing or moving one, in the same activation or after a reload — revokes every credential reaching the plugin's groups, because those were issued against the groups as they were.
+- **The Assistant gets a group only by name too.** Under the Assistant switch each group has its own **Assistant can use …** switch, offered only for groups the project's agents have. Neither the Assistant's level nor a group's `read` class gives it one, and its [knowledge](#knowledge-for-the-assistant) is delivered only once it has every group.
+- **Repository defaults name groups.** A project plugin's `.daintree/mcp.json` entry uses the object form, `{ "access": "read-only", "groups": ["search"] }`, where `access` is for its databases. A plain level, an endpoint list or `"*"` allows no group.
+- **Shared data stays shared.** Allowing a group gives agents nothing of the plugin's databases: an installed plugin's [shared database warning](#installed-plugins-and-shared-data) is about the database level alone. Your tools still scope their own data by `caller.projectId`.
+
+A recipe's `requiresAgentTools` is satisfied by a launch handed any of the plugin's tools, a single group included; it does not promise every group.
+
+#### Preview and commit
+
+A consequential operation — sending, deleting, charging, merging — is safest as two tools in two groups: one that works out exactly what would happen, and one that does it.
+
+1. **`preview_*` in a `read` group** checks the request, resolves its targets and returns the exact change it would make, with a short-lived token bound to that change. It changes nothing.
+2. **`commit_*` in a `write` group** takes the token, and refuses one that is unknown, expired, already used, issued for another `caller.projectId` or for a change the service has since moved past.
+
+A user who allows only the read group gets agents that can investigate and propose; one who allows both still gets a change that matches a preview the agent saw. Who enforces what:
+
+| Party | Enforces |
+| --- | --- |
+| **Daintree** | Which groups a credential reaches, per project and per launch; that a call names a listed tool and matches its `inputSchema`; revoking credentials when access, declarations or a tool's group change; binding `caller` to the launch's project and terminal. It cannot tell from a schema or a group's class what a tool really does. |
+| **The agent client** | When to call a tool, and whether to ask the user first. Plugin tools never carry `readOnlyHint`, so clients apply their default caution to every one of them. |
+| **The plugin** | That `preview` really changes nothing and `commit` does only what the token names; token expiry, single use and binding to `caller.projectId`; the service's own authorization and per-project data scoping; idempotency or a precondition check, so a retried commit doesn't apply twice. |
+
+Allowing a write group is consent to the kind of change, not to any one of them.
+
 ### Reaching an agent
 
 Declaring a database or an endpoint exposes nothing. A plugin's server reaches an agent only when all of these hold:

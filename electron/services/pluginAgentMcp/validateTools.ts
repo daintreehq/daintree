@@ -12,6 +12,7 @@ import {
   RESERVED_AGENT_MCP_TOOL_NAMES,
   type AgentMcpRegisteredTool,
   type AgentMcpToolDescriptor,
+  type AgentMcpToolGroupRef,
 } from "./types.js";
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -157,13 +158,24 @@ function compileSchema(
  * than refusing the roster.
  */
 export function compileAgentMcpTool(descriptor: AgentMcpToolDescriptor): AgentMcpRegisteredTool {
-  const { name, description, inputSchema, outputSchema, readOnly, databaseWrite, annotations } =
-    descriptor;
+  const {
+    name,
+    description,
+    inputSchema,
+    outputSchema,
+    readOnly,
+    databaseWrite,
+    annotations,
+    group,
+  } = descriptor;
   const checkInput = compileSchema(name, "inputSchema", inputSchema);
   const flags = {
     ...(readOnly === true ? { readOnly } : {}),
     ...(databaseWrite === true ? { databaseWrite } : {}),
     ...(annotations !== undefined ? { annotations } : {}),
+    ...(group !== undefined
+      ? { group: Object.freeze({ id: group.id, access: group.access }) }
+      : {}),
   };
   if (outputSchema === undefined) {
     return Object.freeze({ name, description, inputSchema, checkInput, ...flags });
@@ -187,6 +199,48 @@ export interface AgentMcpRosterContext {
    * their names are taken, and they count toward the same budget.
    */
   readonly declaredQueryNames?: ReadonlySet<string>;
+  /**
+   * The groups its `agentMcp` endpoint declares, empty for one that declares
+   * none. With groups every tool must name one of them, and without any no
+   * tool may name a group. Absent where the manifest is out of reach (the
+   * worker side of the port), which checks only that a `group` is well formed;
+   * the host checks membership on what arrives.
+   */
+  readonly groups?: readonly AgentMcpToolGroupRef[];
+}
+
+const GROUP_ID_PATTERN = /^[a-zA-Z0-9._-]{1,64}$/;
+
+/** The group a tool names, checked against the endpoint's declared groups when they are known. */
+function toolGroup(
+  toolName: string,
+  group: unknown,
+  declared: readonly AgentMcpToolGroupRef[] | undefined
+): AgentMcpToolGroupRef | undefined {
+  if (group !== undefined && (typeof group !== "string" || !GROUP_ID_PATTERN.test(group))) {
+    throw new Error(`tool "${toolName}" group must be a declared group id`);
+  }
+  if (declared === undefined) return undefined;
+  if (declared.length === 0) {
+    if (group === undefined) return undefined;
+    throw new Error(
+      `tool "${toolName}" names group "${group}", but its endpoint declares no groups in contributes.agentMcp`
+    );
+  }
+  if (group === undefined) {
+    // Fail closed: an unlabelled tool on a grouped endpoint would belong to no
+    // group the user could allow, or be mistaken for one they did.
+    throw new Error(
+      `tool "${toolName}" must name one of its endpoint's groups: ${declared.map((g) => g.id).join(", ")}`
+    );
+  }
+  const match = declared.find((candidate) => candidate.id === group);
+  if (match === undefined) {
+    throw new Error(
+      `tool "${toolName}" names group "${group}", which its endpoint does not declare in contributes.agentMcp`
+    );
+  }
+  return match;
 }
 
 /**
@@ -259,6 +313,7 @@ export function validateAgentMcpTools(
       );
     }
     rejectReadOnlyClaim(name, "", definition);
+    const group = toolGroup(name, definition.group, context.groups);
     const annotations = snapshotAnnotations(name, definition.annotations);
     const inputSchema = snapshotSchema(name, "inputSchema", definition.inputSchema);
     const outputSchema =
@@ -271,6 +326,7 @@ export function validateAgentMcpTools(
       inputSchema,
       ...(outputSchema !== undefined ? { outputSchema } : {}),
       ...(annotations !== undefined ? { annotations } : {}),
+      ...(group !== undefined ? { group } : {}),
     });
   }
   // Compiled only once every cheap check has passed, so a roster that is

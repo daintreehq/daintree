@@ -92,6 +92,15 @@ afterEach(async () => {
 
 describe("coversDeclaredSurface", () => {
   const endpoint = { id: "data", name: "Data" };
+  const SEARCH = { id: "search", access: "read" as const };
+  const CHANGES = { id: "changes", access: "write" as const };
+  const grouped = {
+    ...endpoint,
+    groups: [
+      { ...SEARCH, name: "Search" },
+      { ...CHANGES, name: "Changes" },
+    ],
+  };
   const cases: Array<[string, Partial<DeclaredAgentMcpPlugin>, AgentMcpToolScope, boolean]> = [
     ["read-only database plugin with no writes", {}, { databases: true }, true],
     [
@@ -129,6 +138,28 @@ describe("coversDeclaredSurface", () => {
       { pluginEndpoint: endpoint },
       { databases: false, pluginEndpointId: "data" },
       false,
+    ],
+    [
+      "grouped endpoint given only some of its groups",
+      { hasDatabases: false, pluginEndpoint: grouped },
+      { databases: false, pluginEndpointId: "data", pluginGroups: [SEARCH] },
+      false,
+    ],
+    [
+      "grouped endpoint given a group under another class",
+      { hasDatabases: false, pluginEndpoint: grouped },
+      {
+        databases: false,
+        pluginEndpointId: "data",
+        pluginGroups: [{ id: "search", access: "write" }, CHANGES],
+      },
+      false,
+    ],
+    [
+      "grouped endpoint given every group",
+      { hasDatabases: false, pluginEndpoint: grouped },
+      { databases: false, pluginEndpointId: "data", pluginGroups: [CHANGES, SEARCH] },
+      true,
     ],
   ];
   it.each(cases)("%s", (_label, plugin, scope, expected) => {

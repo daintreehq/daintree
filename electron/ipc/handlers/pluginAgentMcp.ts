@@ -3,6 +3,7 @@ import { defineIpcNamespace, op, opValidated } from "../define.js";
 import type { IpcContext } from "../types.js";
 import { PLUGIN_AGENT_MCP_METHOD_CHANNELS } from "./pluginAgentMcp.preload.js";
 import {
+  declaredPluginEndpointOf,
   declaresDatabaseWrites,
   isSharedAcrossProjects,
   listDeclaredAgentMcpPlugins,
@@ -12,9 +13,13 @@ import {
   type EligiblePluginTools,
 } from "../../services/pluginAgentMcp/agentLaunchRecords.js";
 import {
+  agentMcpGroupChoices,
   agentMcpScopeFor,
   allProjectsAgentMcpAccess,
+  allProjectsAgentMcpGroupChoices,
   assistantAgentMcpAccess,
+  assistantAgentMcpGroupChoices,
+  choicesAllowGroup,
   hasLegacyAgentMcpAnswer,
   isAgentMcpEndpointEnabled,
   isAgentMcpEndpointEnabledByDefault,
@@ -26,6 +31,7 @@ import {
   setAllProjectsAgentMcpAccess,
   setProjectAgentMcpAccess,
   setProjectAssistantAgentMcpAccess,
+  type AgentMcpGroupChoice,
 } from "../../services/pluginAgentMcp/projectEnablement.js";
 import { projectDefaultForEndpoint } from "../../services/pluginAgentMcp/projectDefaults.js";
 import { projectStore } from "../../services/ProjectStore.js";
@@ -35,6 +41,8 @@ import {
   DATABASE_ENDPOINT_ID,
   DATABASE_WRITES_ACCESS_ID,
   type DeclaredAgentMcpPlugin,
+  type AgentMcpToolGroupRef,
+  type DeclaredAgentMcpToolGroup,
 } from "../../services/pluginAgentMcp/types.js";
 import { isProjectWorkspaceId } from "../../../shared/utils/workspaceIds.js";
 import {
@@ -46,6 +54,7 @@ import {
   AGENT_MCP_ACCESS_LEVELS,
   type AgentMcpAccess,
   type AgentMcpAccessSource,
+  type ProjectAgentToolGroup,
   type ProjectAgentToolPlugin,
   type ProjectAgentToolsSnapshot,
 } from "../../../shared/types/ipc/pluginAgentMcp.js";
@@ -71,16 +80,20 @@ async function getMcpServerService(): Promise<McpServerSingleton> {
   return cachedMcpServerService;
 }
 
+const GroupIdsSchema = z.array(z.string().min(1).max(64)).max(64).optional();
+
 const SetPluginAccessSchema = z.union([
   z.object({
     pluginInstanceId: z.string().min(1).max(512),
     access: z.enum(AGENT_MCP_ACCESS_LEVELS).nullable(),
     scope: z.enum(["project", "all-projects"]),
+    groups: GroupIdsSchema,
   }),
   z.object({
     pluginInstanceId: z.string().min(1).max(512),
     access: z.enum(AGENT_MCP_ACCESS_LEVELS),
     scope: z.literal("assistant"),
+    groups: GroupIdsSchema,
   }),
 ]);
 
@@ -104,6 +117,23 @@ function declaredFor(svc: PluginServiceSingleton, projectId: string) {
 }
 
 /**
+ * The groups a plugin that is gone left on record, standing in for the ones it
+ * declared, so every group still allowed stays listed and can be turned off.
+ */
+function groupsOnRecord(projectId: string, pluginInstanceId: string): DeclaredAgentMcpToolGroup[] {
+  const groups = new Map<string, DeclaredAgentMcpToolGroup>();
+  for (const choice of [
+    ...agentMcpGroupChoices(projectId, pluginInstanceId),
+    ...allProjectsAgentMcpGroupChoices(pluginInstanceId),
+    ...assistantAgentMcpGroupChoices(projectId, pluginInstanceId),
+  ]) {
+    if (choice.access === undefined || groups.has(choice.id)) continue;
+    groups.set(choice.id, { id: choice.id, name: choice.id, access: choice.access });
+  }
+  return [...groups.values()];
+}
+
+/**
  * Rosters a plugin that is not running here can have: its manifest's while the
  * host still knows it, else whatever an answer on record names.
  */
@@ -116,6 +146,11 @@ function surfaceOf(
     const ownId = listLegacyAgentMcpEndpointIds(projectId, pluginInstanceId).find(
       (endpointId) => endpointId !== DATABASE_ENDPOINT_ID
     );
+    const groups = groupsOnRecord(projectId, pluginInstanceId);
+    if (groups.length > 0) {
+      const id = ownId ?? UNNAMED_OWN_ENDPOINT;
+      return { hasDatabases: true, pluginEndpoint: { id, name: id, groups } };
+    }
     return {
       hasDatabases: true,
       ...(ownId !== undefined ? { pluginEndpoint: { id: ownId, name: ownId } } : {}),
@@ -125,15 +160,7 @@ function surfaceOf(
   return {
     hasDatabases: (manifest.contributes.databases ?? []).length > 0,
     ...(declaresDatabaseWrites(manifest) ? { hasDatabaseWrites: true as const } : {}),
-    ...(endpoint
-      ? {
-          pluginEndpoint: {
-            id: endpoint.id,
-            name: endpoint.name,
-            ...(endpoint.description !== undefined ? { description: endpoint.description } : {}),
-          },
-        }
-      : {}),
+    ...(endpoint ? { pluginEndpoint: declaredPluginEndpointOf(endpoint) } : {}),
   };
 }
 
@@ -156,7 +183,9 @@ function row(
 ): ProjectAgentToolPlugin {
   const id = plugin.pluginInstanceId;
   const installed = projectIdFromPluginInstanceKey(id) === null;
-  const endpointId = plugin.pluginEndpoint?.id;
+  const declaredGroups = plugin.pluginEndpoint?.groups;
+  // A grouped endpoint has no level of its own: its groups are listed instead.
+  const endpointId = declaredGroups === undefined ? plugin.pluginEndpoint?.id : undefined;
   const databases =
     plugin.hasDatabases && isAgentMcpEndpointEnabled(projectId, id, DATABASE_ENDPOINT_ID);
   const own = endpointId !== undefined && isAgentMcpEndpointEnabled(projectId, id, endpointId);
@@ -203,10 +232,20 @@ function row(
           },
         }
       : {}),
+    ...(declaredGroups !== undefined
+      ? { toolGroups: toolGroupRows(projectId, id, declaredGroups) }
+      : {}),
     access: levelOf(databases, own, writes),
     source,
     assistantAccess: assistantAgentMcpAccess(projectId, id),
     ...(installed ? { allProjectsAccess: allProjects ?? "off" } : {}),
+    ...(installed && declaredGroups !== undefined
+      ? {
+          allProjectsGroups: declaredGroups
+            .filter((group) => choicesAllowGroup(allProjectsAgentMcpGroupChoices(id), group))
+            .map((group) => group.id),
+        }
+      : {}),
     ...(!installed && repositoryNamesPlugin
       ? {
           repositoryAccess: levelOf(
@@ -226,6 +265,75 @@ function row(
 
 /** Stands in for the own endpoint of a plugin whose manifest is gone; any id but `@databases`. */
 const UNNAMED_OWN_ENDPOINT = "tools";
+
+function toolGroupRows(
+  projectId: string,
+  pluginInstanceId: string,
+  declared: readonly DeclaredAgentMcpToolGroup[]
+): ProjectAgentToolGroup[] {
+  const choices = agentMcpGroupChoices(projectId, pluginInstanceId);
+  const assistantChoices = assistantAgentMcpGroupChoices(projectId, pluginInstanceId);
+  return declared.map((group) => {
+    const allowed = choicesAllowGroup(choices, group);
+    const reclassified =
+      !allowed && choices.some((choice) => choice.id === group.id && choice.access !== undefined);
+    return {
+      id: group.id,
+      name: displayName(group.name, group.id),
+      ...(group.description !== undefined ? { description: group.description } : {}),
+      access: group.access,
+      allowed,
+      assistantAllowed: choicesAllowGroup(assistantChoices, group),
+      ...(reclassified ? { reclassified: true as const } : {}),
+    };
+  });
+}
+
+/** The groups the project's agents may use now, as they would be stored: each with what the plugin declares it does. */
+function effectiveGroupChoices(
+  projectId: string,
+  plugin: Pick<DeclaredAgentMcpPlugin, "pluginInstanceId" | "pluginEndpoint">
+): AgentMcpToolGroupRef[] {
+  const declared = plugin.pluginEndpoint?.groups ?? [];
+  const choices = agentMcpGroupChoices(projectId, plugin.pluginInstanceId);
+  return declared
+    .filter((group) => choicesAllowGroup(choices, group))
+    .map((group) => ({ id: group.id, access: group.access }));
+}
+
+/** Group ids as choices to store, each as the plugin declares it now; an id it doesn't declare is refused. */
+function declaredGroupChoices(
+  plugin: Pick<DeclaredAgentMcpPlugin, "pluginEndpoint">,
+  ids: readonly string[]
+): AgentMcpToolGroupRef[] {
+  const declared = plugin.pluginEndpoint?.groups ?? [];
+  return [...new Set(ids)].map((groupId) => {
+    const group = declared.find((candidate) => candidate.id === groupId);
+    if (!group) throw new Error(`agent tools: that plugin declares no tool group "${groupId}"`);
+    return { id: group.id, access: group.access };
+  });
+}
+
+/**
+ * The choices among `current` that `ids` keeps, or null when `ids` names one
+ * `current` doesn't hold: only that is taking away, which needs no plugin.
+ */
+function keptChoices(
+  current: readonly AgentMcpGroupChoice[],
+  ids: readonly string[] | undefined
+): AgentMcpToolGroupRef[] | null {
+  const stored = current.filter(
+    (choice): choice is AgentMcpToolGroupRef => choice.access !== undefined
+  );
+  if (ids === undefined) return stored;
+  const kept: AgentMcpToolGroupRef[] = [];
+  for (const groupId of new Set(ids)) {
+    const choice = stored.find((candidate) => candidate.id === groupId);
+    if (!choice) return null;
+    kept.push(choice);
+  }
+  return kept;
+}
 
 /**
  * The access still on record for a plugin that is not running here, read from
@@ -333,11 +441,14 @@ async function buildSnapshot(projectId: string | null): Promise<ProjectAgentTool
   return { plugins: rows, mcpServerEnabled, relaunchNeeded };
 }
 
-/** Whether a level means something for what the plugin offers. */
+/** Whether a level means something for what the plugin offers. No level reaches a grouped endpoint. */
 function isMeaningful(plugin: DeclaredAgentMcpPlugin, access: AgentMcpAccess): boolean {
   if (access === "read-only") return plugin.hasDatabases;
   if (access === "read-write") {
-    return plugin.pluginEndpoint !== undefined || plugin.hasDatabaseWrites === true;
+    return (
+      (plugin.pluginEndpoint !== undefined && plugin.pluginEndpoint.groups === undefined) ||
+      plugin.hasDatabaseWrites === true
+    );
   }
   return true;
 }
@@ -354,12 +465,18 @@ function isMeaningful(plugin: DeclaredAgentMcpPlugin, access: AgentMcpAccess): b
 async function setAssistantAccess(
   projectId: string,
   pluginInstanceId: string,
-  access: AgentMcpAccess
+  access: AgentMcpAccess,
+  groupIds: readonly string[] | undefined
 ): Promise<void> {
   // Taking access away is always accepted, whatever became of the plugin or
   // the agents' access since it was given.
-  if (ACCESS_RANK[access] <= ACCESS_RANK[assistantAgentMcpAccess(projectId, pluginInstanceId)]) {
-    setProjectAssistantAgentMcpAccess(projectId, pluginInstanceId, access);
+  const stored = assistantAgentMcpGroupChoices(projectId, pluginInstanceId);
+  const kept = keptChoices(stored, groupIds);
+  const lowers =
+    kept !== null &&
+    ACCESS_RANK[access] <= ACCESS_RANK[assistantAgentMcpAccess(projectId, pluginInstanceId)];
+  if (lowers && groupIds === undefined) {
+    setProjectAssistantAgentMcpAccess(projectId, pluginInstanceId, access, undefined, kept);
     return;
   }
   const svc = await getPluginService();
@@ -367,19 +484,39 @@ async function setAssistantAccess(
   await refreshProjectAgentMcpDefaults(projectId, projectStore.getProjectById(projectId)?.path);
   // Checked and written with no await between, as the project answer is.
   const plugin = declaredFor(svc, projectId).find((d) => d.pluginInstanceId === pluginInstanceId);
+  if (!plugin && lowers) {
+    setProjectAssistantAgentMcpAccess(projectId, pluginInstanceId, access, undefined, kept);
+    return;
+  }
   if (!plugin) {
     throw new Error("agent tools: no running plugin offers tools in this project");
   }
-  if (access === "read-write" && !isMeaningful(plugin, access)) {
+  if (!lowers && access === "read-write" && !isMeaningful(plugin, access)) {
     throw new Error(`agent tools: that plugin has nothing for "${access}" to allow`);
   }
-  const projectAccess = row(projectId, plugin, true).access;
-  if (ACCESS_RANK[access] > ACCESS_RANK[projectAccess]) {
+  const projectRow = row(projectId, plugin, true);
+  // A group the agents may use is something for the Assistant to start from,
+  // as database reads are.
+  const projectAccess =
+    projectRow.access === "off" && projectRow.toolGroups?.some((group) => group.allowed)
+      ? "read-only"
+      : projectRow.access;
+  if (!lowers && ACCESS_RANK[access] > ACCESS_RANK[projectAccess]) {
     throw new Error(
       "agent tools: the Daintree Assistant can't have more access than this project's agents"
     );
   }
-  setProjectAssistantAgentMcpAccess(projectId, pluginInstanceId, access);
+  const groups = groupIds === undefined ? (kept ?? []) : declaredGroupChoices(plugin, groupIds);
+  const projectGroups = effectiveGroupChoices(projectId, plugin);
+  // Only what this adds is checked: a group kept on record while the agents
+  // lost it stays the user's to turn off, and reaches nothing meanwhile.
+  const added = groups.filter((group) => !choicesAllowGroup(stored, group));
+  if (added.some((group) => !choicesAllowGroup(projectGroups, group))) {
+    throw new Error(
+      "agent tools: the Daintree Assistant can't use a tool group this project's agents can't"
+    );
+  }
+  setProjectAssistantAgentMcpAccess(projectId, pluginInstanceId, access, undefined, groups);
 }
 
 /**
@@ -410,19 +547,27 @@ export const pluginAgentMcpNamespace = defineIpcNamespace({
         const projectId = senderProjectId(ctx);
         if (projectId === null) throw new Error("agent tools: sender has no project");
         if (payload.scope === "assistant") {
-          await setAssistantAccess(projectId, payload.pluginInstanceId, payload.access);
+          await setAssistantAccess(
+            projectId,
+            payload.pluginInstanceId,
+            payload.access,
+            payload.groups
+          );
           return buildSnapshot(projectId);
         }
-        const { pluginInstanceId, access, scope } = payload;
+        const { pluginInstanceId, access, scope, groups: groupIds } = payload;
         if (scope === "all-projects" && projectIdFromPluginInstanceKey(pluginInstanceId) !== null) {
           throw new Error("agent tools: only an installed plugin has a setting for every project");
         }
-        const write = () => {
+        // Either scope is written as a whole answer, groups included, from
+        // what this project's agents have now, so a change of level never
+        // drops a group the answer it replaces allowed.
+        const write = (groups: AgentMcpGroupChoice[] | undefined) => {
           if (scope === "project") {
-            setProjectAgentMcpAccess(projectId, pluginInstanceId, access);
+            setProjectAgentMcpAccess(projectId, pluginInstanceId, access, undefined, groups);
             return;
           }
-          setAllProjectsAgentMcpAccess(pluginInstanceId, access);
+          setAllProjectsAgentMcpAccess(pluginInstanceId, access, undefined, groups);
           // Making a level the default from a project means this project
           // follows it too, rather than keeping its own answer and silently
           // parting ways the next time the default changes. Not over an answer
@@ -433,9 +578,21 @@ export const pluginAgentMcpNamespace = defineIpcNamespace({
           }
         };
 
-        if (access === null || access === "off") {
-          // Always allowed — it is how a stale answer is cleared.
-          write();
+        // The repository's groups are part of what the answer starts from.
+        await refreshProjectAgentMcpDefaults(
+          projectId,
+          projectStore.getProjectById(projectId)?.path
+        );
+        const current = agentMcpGroupChoices(projectId, pluginInstanceId);
+        const kept = keptChoices(current, groupIds);
+        if (
+          (access === null || access === "off") &&
+          groupIds === undefined &&
+          current.every((choice) => choice.access !== undefined)
+        ) {
+          // Always allowed, with no groups to resolve — it is how a stale
+          // answer is cleared.
+          write(kept ?? []);
         } else {
           const svc = await getPluginService();
           await svc.waitForCatalog();
@@ -444,13 +601,31 @@ export const pluginAgentMcpNamespace = defineIpcNamespace({
           const plugin = declaredFor(svc, projectId).find(
             (d) => d.pluginInstanceId === pluginInstanceId
           );
-          if (!plugin) {
-            throw new Error("agent tools: no running plugin offers tools in this project");
+          if (plugin) {
+            if (access !== null && !isMeaningful(plugin, access)) {
+              throw new Error(`agent tools: that plugin has nothing for "${access}" to allow`);
+            }
+            // Resolved against what it declares now, so a group recast since
+            // it was allowed is stored as it reads today, and a repository's
+            // groups survive a change of level.
+            write(
+              groupIds !== undefined
+                ? declaredGroupChoices(plugin, groupIds)
+                : effectiveGroupChoices(projectId, plugin)
+            );
+          } else {
+            // Gone: only taking away, which needs nothing it declares.
+            const level =
+              (scope === "project"
+                ? projectAgentMcpAccessAnswer(projectId, pluginInstanceId)
+                : null) ??
+              allProjectsAgentMcpAccess(pluginInstanceId) ??
+              "off";
+            if (kept === null || (access !== null && ACCESS_RANK[access] > ACCESS_RANK[level])) {
+              throw new Error("agent tools: no running plugin offers tools in this project");
+            }
+            write(kept);
           }
-          if (!isMeaningful(plugin, access)) {
-            throw new Error(`agent tools: that plugin has nothing for "${access}" to allow`);
-          }
-          write();
         }
 
         return buildSnapshot(projectId);

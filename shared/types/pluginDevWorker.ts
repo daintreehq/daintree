@@ -684,6 +684,7 @@ export interface RegisterMcpToolsParams {
       inputSchema: PluginMcpJsonSchema;
       outputSchema?: PluginMcpJsonSchema;
       annotations?: PluginMcpToolAnnotations;
+      group?: string;
     }
   >;
 }

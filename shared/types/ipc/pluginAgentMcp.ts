@@ -1,6 +1,8 @@
 /**
  * How much of a plugin's agent tools a project's agents may use: none, the
- * host's read-only database tools, or those and the plugin's own tools.
+ * host's read-only database tools, or those and the plugin's own tools. For a
+ * plugin whose tools come in declared groups, the level covers its database
+ * tools alone; each group is allowed on its own.
  */
 export const AGENT_MCP_ACCESS_LEVELS = ["off", "read-only", "read-write"] as const;
 export type AgentMcpAccess = (typeof AGENT_MCP_ACCESS_LEVELS)[number];
@@ -38,10 +40,17 @@ export interface ProjectAgentToolPlugin {
   sharedAcrossProjects?: true;
   /** The plugin's own `agentMcp` endpoint, when it declares one. */
   pluginTools?: { name: string; description?: string };
+  /**
+   * The groups the plugin's own tools come in, when it declares any. No level
+   * reaches them; `access` is then about its database tools alone.
+   */
+  toolGroups?: ProjectAgentToolGroup[];
   access: AgentMcpAccess;
   source: AgentMcpAccessSource;
   /** Installed plugins only: the access every project without its own answer gets. */
   allProjectsAccess?: AgentMcpAccess;
+  /** Installed plugins with tool groups only: the groups every project without its own answer gets. */
+  allProjectsGroups?: string[];
   /** Project plugins only: what the repository's `.daintree/mcp.json` sets, when it names the plugin. */
   repositoryAccess?: AgentMcpAccess;
   /**
@@ -68,6 +77,28 @@ export interface ProjectAgentToolPlugin {
    * can't be turned back on until the plugin offers tools again.
    */
   available: boolean;
+}
+
+/** One declared group of a plugin's own tools, and who may use it in this project. */
+export interface ProjectAgentToolGroup {
+  id: string;
+  name: string;
+  description?: string;
+  /** What the plugin says the group's tools do. Its own description; nothing the host checked. */
+  access: "read" | "write";
+  /** This project's agents may use it. */
+  allowed: boolean;
+  /**
+   * The user allowed this project's Daintree Assistant to use it. Reaches the
+   * Assistant only while `allowed` holds too; kept on record, and switchable
+   * off, while it doesn't.
+   */
+  assistantAllowed: boolean;
+  /**
+   * Allowed once as reading tools, and the plugin now says they change things
+   * (or the other way round): off until allowed again.
+   */
+  reclassified?: true;
 }
 
 export interface ProjectAgentToolsSnapshot {
@@ -144,6 +175,11 @@ export type SetProjectAgentToolAccessPayload =
       access: AgentMcpAccess | null;
       /** `"all-projects"` is for installed plugins only. */
       scope: "project" | "all-projects";
+      /**
+       * The ids of every tool group to allow, replacing those allowed now.
+       * Absent keeps the groups this project's agents have now.
+       */
+      groups?: string[];
     }
   | {
       pluginInstanceId: string;
@@ -151,4 +187,6 @@ export type SetProjectAgentToolAccessPayload =
       access: AgentMcpAccess;
       /** The project's Daintree Assistant. */
       scope: "assistant";
+      /** As for the project: every tool group the Assistant may use, none of them more than the agents have. */
+      groups?: string[];
     };

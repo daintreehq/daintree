@@ -9,6 +9,7 @@ import {
 import {
   AGENT_MCP_MAX_DESCRIPTION_BYTES,
   AGENT_MCP_MAX_ENDPOINTS_PER_PLUGIN,
+  AGENT_MCP_MAX_GROUPS_PER_ENDPOINT,
   AGENT_MCP_MAX_TOOLS_PER_ENDPOINT,
   AGENT_MCP_TOOL_NAME_PATTERN,
   BUILT_IN_PLUGIN_CAPABILITIES,
@@ -830,6 +831,20 @@ export const McpServerContributionSchema = z
   .strict();
 
 /**
+ * One `contributes.agentMcp[].groups` entry: a set of the plugin's tools the
+ * user allows on its own. `access` is the plugin's description of the group,
+ * shown as such; it never allows anything by itself.
+ */
+export const AgentMcpToolGroupSchema = z
+  .object({
+    id: z.string().min(1).max(64).regex(SAFE_ID_PATTERN),
+    name: z.string().min(1).max(80),
+    description: z.string().min(1).max(400).optional(),
+    access: z.enum(["read", "write"]),
+  })
+  .strict();
+
+/**
  * `contributes.agentMcp` manifest entry — an MCP tools endpoint the plugin
  * serves to terminal agents. Declarative only: the tool roster arrives at
  * activation through `host.mcp.registerTools`, so the manifest carries nothing
@@ -851,6 +866,14 @@ export const AgentMcpContributionSchema = z
     name: z.string().min(1).max(80),
     description: z.string().min(1).max(400).optional(),
     mode: z.literal("tools"),
+    groups: z
+      .array(AgentMcpToolGroupSchema)
+      .min(1)
+      .max(AGENT_MCP_MAX_GROUPS_PER_ENDPOINT)
+      .refine((groups) => new Set(groups.map((group) => group.id)).size === groups.length, {
+        message: "agentMcp group ids must be unique",
+      })
+      .optional(),
   })
   .strict();
 
