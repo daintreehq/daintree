@@ -44,10 +44,14 @@ vi.mock("@/store/agentSettingsStore", () => ({
     }),
 }));
 
-const helpPanelState = vi.hoisted(() => ({ preferredAgentId: null as string | null }));
+const helpPanelState = vi.hoisted(() => ({
+  preferredAgentId: null as string | null,
+  activeSlotAgentId: null as string | null,
+}));
 
 vi.mock("@/store/helpPanelStore", () => ({
   useHelpPanelStore: (selector: (state: unknown) => unknown) => selector(helpPanelState),
+  selectActiveSlot: (state: typeof helpPanelState) => ({ agentId: state.activeSlotAgentId }),
 }));
 
 const loggerMocks = vi.hoisted(() => ({ logError: vi.fn() }));
@@ -179,6 +183,7 @@ describe("McpConfirmDialog", () => {
     agentSettingsState.globalSkipPermissions = false;
     agentSettingsState.agents = {};
     helpPanelState.preferredAgentId = null;
+    helpPanelState.activeSlotAgentId = null;
     loggerMocks.logError.mockReset();
     helpAssistantApi.getSettings = vi.fn().mockResolvedValue({ daintreeConfirmations: "inherit" });
     helpAssistantApi.setSettings = vi.fn().mockResolvedValue(undefined);
@@ -1205,6 +1210,21 @@ describe("McpConfirmDialog", () => {
       const text = document.body.textContent ?? "";
       expect(text).toContain("Follow agent setting · doesn't ask");
       expect(text).toContain("Follows Claude's skip permission prompts setting (on)");
+    });
+
+    it("follows the agent running in this view over a different chosen agent (#14141)", async () => {
+      helpPanelState.preferredAgentId = "codex";
+      helpPanelState.activeSlotAgentId = "claude";
+      agentSettingsState.agents = {
+        claude: { dangerousMode: "off" },
+        codex: { dangerousMode: "on" },
+      };
+      void enqueue({ actionTitle: "Delete worktree", sessionOrigin: "help" });
+      await renderLoaded();
+
+      const text = document.body.textContent ?? "";
+      expect(text).toContain("Follow agent setting · asks");
+      expect(text).toContain("Follows Claude's skip permission prompts setting (off)");
     });
 
     it.each([

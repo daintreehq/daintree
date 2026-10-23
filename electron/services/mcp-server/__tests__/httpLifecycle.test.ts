@@ -1303,6 +1303,22 @@ describe("HttpLifecycle", () => {
       expect(readSkipped(lc, "s")).toBe(true);
     });
 
+    it("reads the agent's setting and the preference live on every call", () => {
+      const lc = new HttpLifecycle(fakeDeps());
+      const read = (
+        lc as unknown as { buildSessionServerDeps: (id: string) => SessionServerDeps }
+      ).buildSessionServerDeps("s").readAssistantConfirmationsSkipped!;
+      storeWith({ agentId: "claude" }, { agents: { claude: { dangerousMode: "on" } } });
+      expect(read()).toBe(true);
+      storeWith({ agentId: "claude" }, { agents: { claude: { dangerousMode: "off" } } });
+      expect(read()).toBe(false);
+      storeWith(
+        { agentId: "claude", daintreeConfirmations: "never-ask" },
+        { agents: { claude: { dangerousMode: "off" } } }
+      );
+      expect(read()).toBe(true);
+    });
+
     it("still asks under always ask whatever the agent says", () => {
       const lc = new HttpLifecycle(fakeDeps());
       storeWith(

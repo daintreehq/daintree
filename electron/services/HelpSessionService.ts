@@ -2095,10 +2095,14 @@ export class HelpSessionService {
     return { projectId: record.projectId, slot: record.slot };
   }
 
-  /** The agent a live session was provisioned for. Null once revoked or ending. */
+  /**
+   * The agent a session was provisioned for. Still answered while the session
+   * is ending: its bearer works until revocation, and a call made then must not
+   * fall back to some other agent's skip setting (#14141).
+   */
   getSessionAgent(sessionId: string): string | null {
     const record = this.sessionsById.get(sessionId);
-    if (!record || record.revoked || record.ending) return null;
+    if (!record || record.revoked) return null;
     return record.agentId;
   }
 

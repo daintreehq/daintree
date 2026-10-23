@@ -481,10 +481,10 @@ describe("DaintreeAssistantSettingsTab", () => {
       );
       await waitForContent(container, "Daintree confirmations");
       expect(container.textContent).toContain(
-        "By default it follows Claude's skip permission prompts setting, which is on, set on Claude."
+        "By default it follows Claude Code's skip permission prompts setting, which is on, set on Claude Code."
       );
       const link = Array.from(container.querySelectorAll("button")).find(
-        (button) => button.textContent === "Claude's skip permission prompts setting"
+        (button) => button.textContent === "Claude Code's skip permission prompts setting"
       );
       if (!link) throw new Error("expected the agent settings link");
       fireEvent.click(link);
@@ -508,7 +508,7 @@ describe("DaintreeAssistantSettingsTab", () => {
       );
       await waitForContent(container, "Daintree confirmations");
       expect(container.textContent).toContain(
-        "Claude's skip permission prompts setting, which is on, inherited from Settings > Agents > Skip permission prompts."
+        "Claude Code's skip permission prompts setting, which is on, inherited from Settings > Agents > Skip permission prompts."
       );
     });
 

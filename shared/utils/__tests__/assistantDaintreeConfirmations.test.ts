@@ -77,6 +77,30 @@ describe("resolveAssistantAgentSkip (#14141)", () => {
     ).toEqual({ skips: false, source: "unsupported" });
   });
 
+  it("lets an agent set to skip skip, even one the global can't reach", () => {
+    expect(
+      resolveAssistantAgentSkip("gemini", {
+        agents: { gemini: { dangerousMode: "on" } },
+        globalSkipPermissions: false,
+      })
+    ).toEqual({ skips: true, source: "agent" });
+  });
+
+  it("never lets the global reach an unknown agent", () => {
+    expect(
+      resolveAssistantAgentSkip("not-a-real-agent", { agents: {}, globalSkipPermissions: true })
+    ).toEqual({ skips: false, source: "unsupported" });
+  });
+
+  it("reads missing settings or entries as inheriting an unset global", () => {
+    expect(resolveAssistantAgentSkip("claude", null)).toEqual({ skips: false, source: "global" });
+    expect(
+      resolveAssistantAgentSkip("claude", {
+        globalSkipPermissions: true,
+      } as unknown as Parameters<typeof resolveAssistantAgentSkip>[1])
+    ).toEqual({ skips: true, source: "global" });
+  });
+
   it("follows the global when no agent is chosen", () => {
     expect(resolveAssistantAgentSkip(null, { agents: {}, globalSkipPermissions: true })).toEqual({
       skips: true,

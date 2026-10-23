@@ -35,7 +35,7 @@ import {
   isHelpAssistantDaintreeConfirmations,
   resolveAssistantAgentSkip,
 } from "@shared/utils/assistantDaintreeConfirmations";
-import { useHelpPanelStore } from "@/store/helpPanelStore";
+import { selectActiveSlot, useHelpPanelStore } from "@/store/helpPanelStore";
 import { getAgentConfig } from "@/config/agents";
 import type { HelpAssistantDaintreeConfirmations } from "@shared/types/ipc/api";
 import { logError } from "@/utils/logger";
@@ -652,7 +652,11 @@ function AssistantConfirmationPreference() {
     (state) => state.settings?.globalSkipPermissions === true
   );
   const agentEntries = useAgentSettingsStore((state) => state.settings?.agents);
-  const assistantAgentId = useHelpPanelStore((state) => state.preferredAgentId);
+  // The lane running in this view first: another window can change the chosen
+  // agent without replacing it, and main follows the running session's agent.
+  const assistantAgentId = useHelpPanelStore(
+    (state) => selectActiveSlot(state).agentId ?? state.preferredAgentId
+  );
   const assistantAgentSkip = resolveAssistantAgentSkip(assistantAgentId, {
     agents: agentEntries ?? {},
     globalSkipPermissions,
