@@ -43,6 +43,9 @@ import {
   PluginApplicationSchema,
   PluginApplicationSectionSchema,
   PluginApplicationTourRefSchema,
+  PluginServiceProvideContributionSchema,
+  PluginServiceRequireContributionSchema,
+  PluginServicesContributionSchema,
   ProjectTemplateContributionSchema,
   ProcessToolContributionSchema,
   RecipeContributionSchema,
@@ -187,6 +190,7 @@ const PROJECT_PLUGIN_CONTROLLER = "electron/services/plugin/ProjectPluginControl
 const PROJECT_PLUGIN_STORE = "src/store/projectPluginStore.ts";
 const PROJECT_HOME_STORE = "src/store/projectHomeStore.ts";
 const PROJECT_APPLICATION_WELCOME = "src/hooks/useProjectApplicationWelcome.ts";
+const SERVICE_BROKER = "electron/services/plugin/PluginServiceBroker.ts";
 
 /**
  * The schemas swept for field coverage. The first block matches the fourteen
@@ -227,6 +231,9 @@ const SWEPT_SCHEMAS = {
   worktreeSetupSteps: WorktreeSetupStepContributionSchema,
   setup: SetupStepContributionSchema,
   surfaces: SurfaceContributionsSchema,
+  services: PluginServicesContributionSchema,
+  "services.provides": PluginServiceProvideContributionSchema,
+  "services.requires": PluginServiceRequireContributionSchema,
   "databases.queries": DatabaseQueryContributionSchema,
   "databases.queries.params": DatabaseQueryParamSchema,
   "agentMcp.groups": AgentMcpToolGroupSchema,
@@ -308,6 +315,7 @@ const TOP_LEVEL_GROUPS = [
   "worktreeSetupSteps",
   "setup",
   "surfaces",
+  "services",
 ] as const;
 
 /** Reduce a swept schema entry to its ZodObject and read the field keys. */
@@ -411,6 +419,15 @@ type FieldConsumerCoverage = {
   >;
   "agentMcp.groups": Record<keyof z.infer<typeof AgentMcpToolGroupSchema>, ConsumerDescriptor>;
   surfaces: Record<keyof z.infer<typeof SurfaceContributionsSchema>, ConsumerDescriptor>;
+  services: Record<keyof z.infer<typeof PluginServicesContributionSchema>, ConsumerDescriptor>;
+  "services.provides": Record<
+    keyof z.infer<typeof PluginServiceProvideContributionSchema>,
+    ConsumerDescriptor
+  >;
+  "services.requires": Record<
+    keyof z.infer<typeof PluginServiceRequireContributionSchema>,
+    ConsumerDescriptor
+  >;
   "panels.menu": Record<keyof z.infer<typeof PanelMenuItemSchema>, ConsumerDescriptor>;
   "panels.toolbar": Record<keyof z.infer<typeof PanelToolbarItemSchema>, ConsumerDescriptor>;
   "agents.detection": Record<keyof z.infer<typeof AgentDetectionConfigSchema>, ConsumerDescriptor>;
@@ -2542,6 +2559,81 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
         },
       ],
       note: "Cross-checked against declared contributes.layouts, then marks that layout as the project's default; the renderer opens it once on the project's first open on this machine.",
+    },
+  },
+  services: {
+    provides: {
+      mode: "verbatim",
+      consumers: [
+        { file: SERVICE_BROKER, symbol: "PluginServiceBroker.resolve (provides lookup)" },
+        { file: PLUGIN_HOST_FACTORY, symbol: "createHost registerService (declared provides)" },
+      ],
+      note: "The services an import can resolve to, and the only names host.registerService may bind.",
+    },
+    requires: {
+      mode: "verbatim",
+      consumers: [
+        { file: SERVICE_BROKER, symbol: "PluginServiceBroker.resolve (declared import)" },
+      ],
+      note: "A host.services call or status for a name not listed answers not-declared.",
+    },
+  },
+  "services.provides": {
+    name: {
+      mode: "verbatim",
+      consumers: [
+        {
+          file: PLUGIN_SCHEMA,
+          symbol: "getPluginManifestSchema superRefine (service_name_foreign)",
+        },
+        { file: SERVICE_BROKER, symbol: "PluginServiceBroker.resolve (provides.find by name)" },
+        { file: PLUGIN_HOST_FACTORY, symbol: "createHost registerService (provides.find)" },
+      ],
+      note: "Must sit under the provider's own id; matched against imports and registrations.",
+    },
+    version: {
+      mode: "verbatim",
+      consumers: [
+        { file: SERVICE_BROKER, symbol: "PluginServiceBroker.resolve (semver.satisfies)" },
+        { file: SERVICE_BROKER, symbol: "providerInfo (status provider.version)" },
+      ],
+      note: "Checked against each importer's range; disclosed by host.services.status.",
+    },
+    methods: {
+      mode: "verbatim",
+      consumers: [
+        { file: SERVICE_BROKER, symbol: "PluginServiceBroker.call (method allowlist)" },
+        { file: PLUGIN_HOST_FACTORY, symbol: "serviceMethodTable (exact method set)" },
+      ],
+      note: "The only methods a call may name, and exactly the functions registerService binds.",
+    },
+  },
+  "services.requires": {
+    name: {
+      mode: "verbatim",
+      consumers: [
+        {
+          file: PLUGIN_SCHEMA,
+          symbol: "getPluginManifestSchema superRefine (service_requires_self)",
+        },
+        { file: SERVICE_BROKER, symbol: "PluginServiceBroker.resolve (provider manifest id)" },
+      ],
+      note: "Names the provider by its id prefix; the broker resolves it to that plugin's instance.",
+    },
+    range: {
+      mode: "verbatim",
+      consumers: [
+        { file: SERVICE_BROKER, symbol: "PluginServiceBroker.resolve (semver.satisfies)" },
+      ],
+      note: "A provider outside the range answers incompatible.",
+    },
+    optional: {
+      mode: "verbatim",
+      consumers: [
+        { file: SERVICE_BROKER, symbol: "PluginServiceBroker.reportIfRequired" },
+        { file: SERVICE_BROKER, symbol: "PluginServiceBroker.status (required)" },
+      ],
+      note: "A required import that can't be reached is written to the plugin's log once; optional ones aren't.",
     },
   },
   "toolbarButtons.popover": {

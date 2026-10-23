@@ -59,6 +59,7 @@ import type {
   PluginWorktreesChange,
   PluginWorktreeSetupStepContext,
 } from "./plugin.js";
+import type { PluginServiceCaller } from "./pluginServices.js";
 
 /** Async host methods the worker proxy relays to main and awaits a reply for. */
 export type PluginHostCallMethod =
@@ -144,7 +145,12 @@ export type PluginHostCallMethod =
   // Plugin tasks (#13819). Starting and finishing answer the caller; progress
   // is a coalesced `tasks.report` notify below.
   | "tasks.start"
-  | "tasks.finish";
+  | "tasks.finish"
+  // Services between plugins (#14105). Both answer with a typed outcome; the
+  // call's own deadline is main's, so the worker waits past it (see
+  // pluginHostCallDeadline).
+  | "services.call"
+  | "services.status";
 
 /** Fire-and-forget host methods (no reply needed). */
 export type PluginHostNotifyMethod =
@@ -164,6 +170,8 @@ export type PluginHostNotifyMethod =
   | "unregisterSearchProvider"
   | "registerContextProvider"
   | "unregisterContextProvider"
+  | "registerService"
+  | "unregisterService"
   | "registerWorktreeDeleteNotesProvider"
   | "unregisterWorktreeDeleteNotesProvider"
   | "mcp.registerTools"
@@ -230,8 +238,10 @@ export type PluginWorkerSubscriptionKind =
  * `host.registerWorktreeSetupStep`, `search-provider` asks a quick switcher
  * provider bound through `host.registerSearchProvider`, and
  * `context-provider-method` asks a `host.registerContextProvider` impl to
- * search or resolve (#13795); they are the kinds main can cancel
- * (`invoke-cancel`), each handing the plugin a signal.
+ * search or resolve (#13795), and `service-method` runs one method of a
+ * service bound through `host.registerService` for another plugin's call
+ * (#14105); they are the kinds main can cancel (`invoke-cancel`), each handing
+ * the plugin a signal.
  * `command` is the odd one out: nothing is registered ahead of it. The handler
  * module for a manifest-declared command is imported by the worker on first
  * dispatch, from the absolute path main resolved (#12274), so there is no
@@ -249,6 +259,7 @@ export type PluginWorkerInvokeKind =
   | "worktree-setup-step"
   | "search-provider"
   | "context-provider-method"
+  | "service-method"
   | "worktree-delete-notes";
 
 /** Messages sent main → worker. */
@@ -352,6 +363,20 @@ export type PluginHostToWorkerMessage =
       args: [string];
     }
   /**
+   * Run one method of a service the worker bound through `host.registerService`
+   * for another plugin's `host.services.call` (#14105). `caller` is the host's
+   * record of who called. Cancellable like `context-provider-method`.
+   */
+  | {
+      type: "invoke";
+      requestId: string;
+      kind: "service-method";
+      serviceName: string;
+      method: string;
+      args: unknown;
+      caller: PluginServiceCaller;
+    }
+  /**
    * Run one tool of an `agentMcp` roster the worker registered. `caller` is the
    * host's provenance for the call, copied field by field on the main side so
    * nothing beyond the public descriptor crosses the port.
@@ -389,8 +414,8 @@ export type PluginHostToWorkerMessage =
       context: { mode: "scoped" | "blended"; limit: number };
     }
   /**
-   * Abort an in-flight `mcp-tool`, `worktree-setup-step`, `search-provider` or
-   * `context-provider-method` invoke — the main-side counterpart of the
+   * Abort an in-flight `mcp-tool`, `worktree-setup-step`, `search-provider`,
+   * `context-provider-method` or `service-method` invoke — the main-side counterpart of the
    * worker's `host-cancel`, since an `AbortSignal` cannot cross the port. Main
    * has already settled the caller by the time this is sent, so any
    * `invoke-result` that follows for this id is dropped.
@@ -653,6 +678,34 @@ export interface RegisterContextProviderParams {
 /** Params for `unregisterContextProvider` (`host-notify`). */
 export interface UnregisterContextProviderParams {
   providerId: string;
+}
+
+/**
+ * Params for `registerService` (`host-notify`, #14105). Only the name and the
+ * method names travel; the handlers stay in the worker and main runs them
+ * through a `service-method` invoke.
+ */
+export interface RegisterServiceParams {
+  name: string;
+  methods: string[];
+}
+
+/** Params for `unregisterService` (`host-notify`). */
+export interface UnregisterServiceParams {
+  name: string;
+}
+
+/** Params for `services.call` (`host-call`). The signal travels as `host-cancel`. */
+export interface ServicesCallParams {
+  name: string;
+  method: string;
+  args: unknown;
+  timeoutMs?: number;
+}
+
+/** Params for `services.status` (`host-call`). */
+export interface ServicesStatusParams {
+  name: string;
 }
 
 /**

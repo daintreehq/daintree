@@ -100,6 +100,8 @@ Three details that are easy to miss:
 - **The JIT grant for filesystem writes is keyed on the strongest declared write capability**, `fs:project-write` if declared and otherwise `fs:user-data-write`, whichever class the target is in.
 - **`project:dispatch` has no JIT prompt.** The user's switch is the whole grant, so an unattended plugin fails fast rather than waiting on a dialog. A project plugin can restate its own project without the capability, and can never target another one even with it.
 
+**Services between plugins need no capability, and carry none.** A plugin calls another plugin's service only after declaring the import in `contributes.services.requires`, and a provider answers only for services declared under its own manifest id, so neither side can impersonate the other. The provider runs under its own host and its own capabilities, consent grants and `host.account` connections; the consumer is told the provider's declared capabilities through `host.services.status` and gains none of them. Account tokens never cross: a provider that delegates work needing a connection does that work itself and returns the result. Nothing stops a provider's own code from returning what it chooses — that is a property of the provider, not a host guarantee.
+
 ## Project-local plugin trust
 
 Project-local plugins are the one place where code arrives without the user having chosen to install it: it comes with a clone, a pull, or an agent's commit. The gate is therefore at the point of arrival rather than at each use, and it is deliberately a single question.

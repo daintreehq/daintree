@@ -133,7 +133,15 @@ import { abortErrorFor } from "./pluginAbortError.js";
 import {
   PLUGIN_INVOKE_MAX_RESULT_BYTES,
   PLUGIN_PUSH_MAX_PAYLOAD_BYTES,
+  PLUGIN_SERVICE_MAX_ARGS_BYTES,
+  PLUGIN_SERVICE_MAX_RESULT_BYTES,
 } from "../../../shared/config/pluginBudgets.js";
+import type {
+  PluginServiceCallContext,
+  PluginServiceResult,
+  PluginServiceStatus,
+  PluginServicesApi,
+} from "../../../shared/types/pluginServices.js";
 import {
   PluginPayloadTooLargeError,
   assertPayloadWithinLimit,
@@ -164,6 +172,7 @@ import type {
   ArtifactsIdParams,
   ArtifactsListParams,
   ArtifactsTransferParams,
+  ServicesCallParams,
 } from "../../../shared/types/pluginDevWorker.js";
 
 type Post = (message: PluginWorkerToHostMessage) => void;
@@ -274,6 +283,12 @@ export class PluginDevWorkerHostProxy {
   /** Signals handed to in-flight context provider calls, keyed by invoke requestId,
    * so a main-side `invoke-cancel` (its deadline passed) reaches the plugin. */
   private readonly contextProviderAborts = new Map<string, AbortController>();
+  /** Services bound with `host.registerService`, by name. The record object per
+   * registration is its identity, so a disposer only unbinds its own. */
+  private readonly services = new Map<string, { handlers: Record<string, unknown> }>();
+  /** Signals handed to in-flight service methods, keyed by invoke requestId, so a
+   * main-side `invoke-cancel` (the caller stopped waiting) reaches the plugin. */
+  private readonly serviceInvokeAborts = new Map<string, AbortController>();
   /** Open `host.db` handles, closed on dispose so a reload never leaks a connection. */
   private readonly databases = new Set<PluginDatabase>();
   /** Bound `agentMcp` rosters, keyed by endpoint id. The map object per roster
@@ -359,6 +374,9 @@ export class PluginDevWorkerHostProxy {
     this.contextProviders.clear();
     for (const controller of this.contextProviderAborts.values()) controller.abort();
     this.contextProviderAborts.clear();
+    this.services.clear();
+    for (const controller of this.serviceInvokeAborts.values()) controller.abort();
+    this.serviceInvokeAborts.clear();
     this.mcpRosters.clear();
     for (const controller of this.mcpInvokeAborts.values()) controller.abort();
     this.mcpInvokeAborts.clear();
@@ -432,9 +450,12 @@ export class PluginDevWorkerHostProxy {
         // The invoke still holds the controller, so it still sees the abort and
         // posts nothing. A no-op once the execute settled.
         const controller =
-          this.mcpInvokeAborts.get(msg.requestId) ?? this.contextProviderAborts.get(msg.requestId);
+          this.mcpInvokeAborts.get(msg.requestId) ??
+          this.contextProviderAborts.get(msg.requestId) ??
+          this.serviceInvokeAborts.get(msg.requestId);
         this.mcpInvokeAborts.delete(msg.requestId);
         this.contextProviderAborts.delete(msg.requestId);
+        this.serviceInvokeAborts.delete(msg.requestId);
         controller?.abort();
         const setupStep = this.setupStepInvokeAborts.get(msg.requestId);
         this.setupStepInvokeAborts.delete(msg.requestId);
@@ -633,7 +654,13 @@ export class PluginDevWorkerHostProxy {
           ? null
           : msg.kind === "context-provider-method"
             ? `context provider "${msg.providerId}"`
-            : msg.namespacedId;
+            : msg.kind === "service-method"
+              ? `"${msg.serviceName}.${msg.method}"`
+              : msg.namespacedId;
+    const resultCap =
+      msg.kind === "service-method"
+        ? PLUGIN_SERVICE_MAX_RESULT_BYTES
+        : PLUGIN_INVOKE_MAX_RESULT_BYTES;
     const settle = (
       outcome: { ok: true; result: unknown } | { ok: false; error: string }
     ): void => {
@@ -644,16 +671,14 @@ export class PluginDevWorkerHostProxy {
       // Refused here, before the clone across the port, rather than only by
       // main's re-check after it has already paid for it.
       const resultBytes =
-        outcome.ok && capTarget !== null
-          ? estimatePayloadBytes(outcome.result, PLUGIN_INVOKE_MAX_RESULT_BYTES)
-          : 0;
-      if (outcome.ok && resultBytes > PLUGIN_INVOKE_MAX_RESULT_BYTES) {
+        outcome.ok && capTarget !== null ? estimatePayloadBytes(outcome.result, resultCap) : 0;
+      if (outcome.ok && resultBytes > resultCap) {
         outcome = {
           ok: false,
           error: new PluginPayloadTooLargeError(
             this.pluginId,
             `result of "${capTarget}"`,
-            PLUGIN_INVOKE_MAX_RESULT_BYTES,
+            resultCap,
             resultBytes
           ).message,
         };
@@ -759,6 +784,43 @@ export class PluginDevWorkerHostProxy {
         } finally {
           if (this.contextProviderAborts.get(msg.requestId) === controller) {
             this.contextProviderAborts.delete(msg.requestId);
+          }
+        }
+        return;
+      }
+      if (msg.kind === "service-method") {
+        const binding = this.services.get(msg.serviceName);
+        const fn =
+          binding && Object.hasOwn(binding.handlers, msg.method)
+            ? binding.handlers[msg.method]
+            : undefined;
+        if (!binding || typeof fn !== "function") {
+          throw new Error(`No method "${msg.method}" registered for service "${msg.serviceName}"`);
+        }
+        const controller = new AbortController();
+        this.serviceInvokeAborts.set(msg.requestId, controller);
+        try {
+          const ctx: PluginServiceCallContext = {
+            signal: controller.signal,
+            caller: { pluginId: msg.caller.pluginId, projectId: msg.caller.projectId },
+          };
+          let result: unknown;
+          try {
+            result = await (fn as (args: unknown, ctx: PluginServiceCallContext) => unknown).call(
+              binding.handlers,
+              msg.args,
+              ctx
+            );
+          } catch (err) {
+            // Main has stopped waiting; what the plugin made of the abort isn't sent.
+            if (controller.signal.aborted) return;
+            throw err;
+          }
+          if (controller.signal.aborted) return;
+          settle({ ok: true, result });
+        } finally {
+          if (this.serviceInvokeAborts.get(msg.requestId) === controller) {
+            this.serviceInvokeAborts.delete(msg.requestId);
           }
         }
         return;
@@ -936,6 +998,77 @@ export class PluginDevWorkerHostProxy {
     // Cancellation settles the grace value inside `call`'s abort branch, so a
     // real validation or transport error is never rewritten into a dismissal.
     return this.call<T>(method, params, signal, { value: graceValue }, options?.hostAnswersAbort);
+  }
+
+  /**
+   * `host.services.call`: main answers every outcome, a cancel included, so a
+   * failure is a typed result here too and the promise never rejects. What
+   * main can't answer — a worker-side deadline, arguments the port refuses —
+   * is mapped to the same reasons.
+   */
+  private async callService(
+    name: unknown,
+    method: unknown,
+    args: unknown,
+    options: unknown
+  ): Promise<PluginServiceResult> {
+    if (options !== undefined && options !== null && typeof options !== "object") {
+      return { ok: false, reason: "invalid", message: "options must be an object" };
+    }
+    const { signal, timeoutMs } = (options ?? {}) as { signal?: unknown; timeoutMs?: unknown };
+    if (signal !== undefined && !(signal instanceof AbortSignal)) {
+      return { ok: false, reason: "invalid", message: "options.signal must be an AbortSignal" };
+    }
+    if (signal?.aborted) {
+      return {
+        ok: false,
+        reason: "cancelled",
+        message: "the call was cancelled before it started",
+      };
+    }
+    // Refused before the clone across the port; main checks again on arrival.
+    let bytes: number;
+    try {
+      bytes = estimatePayloadBytes(args, PLUGIN_SERVICE_MAX_ARGS_BYTES);
+    } catch (err) {
+      return {
+        ok: false,
+        reason: "invalid",
+        message: formatErrorMessage(err, "unreadable arguments"),
+      };
+    }
+    if (bytes > PLUGIN_SERVICE_MAX_ARGS_BYTES) {
+      return {
+        ok: false,
+        reason: "payload-too-large",
+        message: `arguments for "${String(name)}.${String(method)}" exceed the ${PLUGIN_SERVICE_MAX_ARGS_BYTES}-byte limit`,
+      };
+    }
+    const params: ServicesCallParams = {
+      name: name as string,
+      method: method as string,
+      args,
+      ...(timeoutMs !== undefined ? { timeoutMs: timeoutMs as number } : {}),
+    };
+    try {
+      return await this.call<PluginServiceResult>("services.call", params, signal, undefined, true);
+    } catch (err) {
+      if (isHostCallTimeoutError(err)) {
+        return { ok: false, reason: "timeout", message: formatErrorMessage(err, "no answer") };
+      }
+      if (err instanceof Error && err.name === "DataCloneError") {
+        return {
+          ok: false,
+          reason: "invalid",
+          message: formatErrorMessage(err, "arguments can't be copied"),
+        };
+      }
+      return {
+        ok: false,
+        reason: "unavailable",
+        message: formatErrorMessage(err, "the call failed"),
+      };
+    }
   }
 
   /**
@@ -1664,6 +1797,40 @@ export class PluginDevWorkerHostProxy {
           this.notify("unregisterContextProvider", { providerId });
         };
       },
+      // Async so a refusal arrives as a rejection, as it does in process.
+      registerService: (async (name: unknown, handlers: unknown) => {
+        this.assertActivationOpen("registerService");
+        if (typeof name !== "string" || name.length === 0) {
+          throw new Error(
+            `Plugin "${this.pluginId}" registerService: name must be a non-empty string`
+          );
+        }
+        if (!handlers || typeof handlers !== "object") {
+          throw new Error(
+            `Plugin "${this.pluginId}" registerService("${name}"): handlers must be an object with one function per declared method`
+          );
+        }
+        const record = { handlers: handlers as Record<string, unknown> };
+        const methods = Object.keys(record.handlers);
+        const notFunction = methods.find((method) => typeof record.handlers[method] !== "function");
+        if (notFunction !== undefined) {
+          throw new Error(
+            `Plugin "${this.pluginId}" registerService("${name}"): "${notFunction}" must be a function`
+          );
+        }
+        // Main checks the name and methods against the manifest, which lives
+        // there, and reports a refusal as a `register-error` that fails activation.
+        this.services.set(name, record);
+        this.notify("registerService", { name, methods }, `service:${name}`);
+        let disposed = false;
+        return (): void => {
+          if (disposed) return;
+          disposed = true;
+          if (this.services.get(name) !== record) return;
+          this.services.delete(name);
+          this.notify("unregisterService", { name });
+        };
+      }) as PluginHostApi["registerService"],
       mcp: {
         registerTools: (endpointId, tools) => {
           this.assertActivationOpen("mcp.registerTools");
@@ -2400,6 +2567,11 @@ export class PluginDevWorkerHostProxy {
       },
       // The ref crosses as given — an omitted one as `undefined` — so main
       // alone decides which project and connection it means.
+      services: {
+        call: ((name: unknown, method: unknown, args: unknown, options?: unknown) =>
+          this.callService(name, method, args, options)) as PluginServicesApi["call"],
+        status: (name) => this.call<PluginServiceStatus>("services.status", { name }),
+      },
       account: {
         getState: (ref) => this.call<PluginAccountState>("account.getState", { ref }),
         getAccessToken: (ref) =>

@@ -17,6 +17,21 @@ const VALID: PluginWorkerToHostMessage[] = [
     method: "fs.writeFile",
     params: { path: "/a", contents: "x" },
   },
+  {
+    type: "host-call",
+    requestId: "c4",
+    method: "services.call",
+    params: { name: "acme.jira.issues", method: "lookup", args: { key: "A-1" }, timeoutMs: 500 },
+    invocationId: "i9",
+  },
+  { type: "host-call", requestId: "c5", method: "services.status", params: { name: "x.y.z" } },
+  {
+    type: "host-notify",
+    method: "registerService",
+    params: { name: "acme.jira.issues", methods: ["lookup"] },
+    registrationKey: "service:acme.jira.issues",
+  },
+  { type: "host-notify", method: "unregisterService", params: { name: "acme.jira.issues" } },
   { type: "host-cancel", requestId: "c2" },
   { type: "host-notify", method: "logger.info", params: { message: "hi" } },
   {

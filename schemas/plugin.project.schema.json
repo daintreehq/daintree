@@ -3503,6 +3503,78 @@
               }
             ]
           }
+        },
+        "services": {
+          "default": {
+            "provides": [],
+            "requires": []
+          },
+          "type": "object",
+          "properties": {
+            "provides": {
+              "default": [],
+              "maxItems": 16,
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "maxLength": 96,
+                    "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*\\.[a-z0-9]+(?:-[a-z0-9]+)*\\.[a-z0-9]+(?:-[a-z0-9]+)*$"
+                  },
+                  "version": {
+                    "type": "string"
+                  },
+                  "methods": {
+                    "minItems": 1,
+                    "maxItems": 32,
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "maxLength": 64,
+                      "pattern": "^[A-Za-z][A-Za-z0-9_]*$"
+                    }
+                  }
+                },
+                "required": [
+                  "name",
+                  "version",
+                  "methods"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "requires": {
+              "default": [],
+              "maxItems": 16,
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "maxLength": 96,
+                    "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*\\.[a-z0-9]+(?:-[a-z0-9]+)*\\.[a-z0-9]+(?:-[a-z0-9]+)*$"
+                  },
+                  "range": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 64
+                  },
+                  "optional": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "name",
+                  "range"
+                ],
+                "additionalProperties": false
+              }
+            }
+          },
+          "additionalProperties": false
         }
       },
       "additionalProperties": false

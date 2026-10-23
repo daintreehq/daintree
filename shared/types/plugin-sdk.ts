@@ -423,6 +423,24 @@ export type {
   ContextProviderCallOptions,
 } from "./pluginContextProvider.js";
 
+// ── Services between plugins (#14105) ───────────────────────────────
+
+export type {
+  PluginServiceCallContext,
+  PluginServiceCallOptions,
+  PluginServiceCaller,
+  PluginServiceContract,
+  PluginServiceFailureReason,
+  PluginServiceHandlers,
+  PluginServiceProvideContribution,
+  PluginServiceProviderInfo,
+  PluginServiceRequireContribution,
+  PluginServiceResult,
+  PluginServiceStatus,
+  PluginServicesApi,
+  PluginServicesContribution,
+} from "./pluginServices.js";
+
 // ── File editor contract (#12323, #13809) ───────────────────────────
 // The manifest shape and the host-owned document a `location: "fileEditor"`
 // view receives as `PanelViewProps.fileDocument`.

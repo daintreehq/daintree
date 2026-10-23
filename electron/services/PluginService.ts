@@ -132,6 +132,7 @@ import { PluginInstalledRecordsStore } from "./plugin/PluginInstalledRecordsStor
 import { PluginContributionBroadcaster } from "./plugin/PluginContributionBroadcaster.js";
 import {
   getProjectPluginVisibility as readProjectPluginVisibility,
+  isPluginVisibleInProject,
   setPluginVisibilityDefault as writePluginVisibilityDefault,
   setProjectPluginVisibility as writeProjectPluginVisibility,
 } from "./plugin/projectPluginVisibility.js";
@@ -213,6 +214,7 @@ import { pluginAccountBindings } from "./plugin/pluginAccountBindings.js";
 import { pluginDeclaresConnections } from "../../shared/utils/pluginConnections.js";
 import { PluginStorageManager } from "./plugin/PluginStorageManager.js";
 import { PluginChannelRegistry } from "./plugin/PluginChannelRegistry.js";
+import { PluginServiceBroker } from "./plugin/PluginServiceBroker.js";
 import {
   PluginBlocklistService,
   findPluginBlocklistMatch,
@@ -1360,6 +1362,20 @@ export class PluginService {
       if (plugin) this.recordPluginLog(plugin, pluginId, "warn", message);
     },
     hiddenProviderKeys: () => new Set(getHiddenSearchProviders()),
+  });
+  /**
+   * Services between plugins (#14105): resolves each `host.services` call to a
+   * provider instance, starts it if needed, and owns the call until it settles.
+   */
+  private readonly services = new PluginServiceBroker({
+    getPlugin: (pluginId) => this.plugins.get(pluginId),
+    isVisibleInProject: (pluginId, projectId) => isPluginVisibleInProject(pluginId, projectId),
+    isActivated: (pluginId) => this.activatedPlugins.has(pluginId),
+    activatePlugin: (pluginId) => this.activatePlugin(pluginId),
+    reportUnresolvedRequired: (pluginId, message) => {
+      const plugin = this.plugins.get(pluginId);
+      if (plugin) this.recordPluginLog(plugin, pluginId, "warn", message);
+    },
   });
   private readonly panelLifecycleBroker: PluginPanelLifecycleBroker;
   /** Per-plugin cost observations, read by the perf IPC and the dev CLI. */
@@ -4965,6 +4981,7 @@ export class PluginService {
       promptDispatcher: this.promptDispatcher,
       settings: this.settings,
       accounts: this.accounts,
+      services: this.services,
       storage: this.storage,
       getHostGitFactory: () => this.hostGitFactory,
       getProcessManager: () => this.getProcessManager(),
@@ -8106,6 +8123,9 @@ export class PluginService {
     // hit would short-circuit `_doActivate` after the new manifest landed.
     this.activatedPlugins.delete(pluginId);
     this.activationPromises.delete(pluginId);
+    // Before the plugin's own cleanup runs: no longer activated, it can start
+    // no new service call, and the calls it made or is answering settle now.
+    runUnloadStep(pluginId, "retireServices", () => this.services.retireInstance(pluginId));
     const cleanup = this.cleanupMap.get(pluginId);
     if (cleanup) {
       try {
@@ -8668,6 +8688,9 @@ export class PluginService {
     this.setWorkerStatus(pluginId, "stopped", "deactivated", null);
     this.activatedPlugins.delete(pluginId);
     this.activationPromises.delete(pluginId);
+    // The services stay declared, so the next call starts a fresh worker; the
+    // ones it bound, and any call a protocol violation cut short, go now.
+    runUnloadStep(pluginId, "retireServices", () => this.services.retireInstance(pluginId));
     const cleanup = this.cleanupMap.get(pluginId);
     if (cleanup) {
       try {

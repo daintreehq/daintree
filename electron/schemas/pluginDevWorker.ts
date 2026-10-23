@@ -109,6 +109,8 @@ const HOST_CALL_METHODS = {
   "process.restart": true,
   "tasks.start": true,
   "tasks.finish": true,
+  "services.call": true,
+  "services.status": true,
 } as const satisfies Record<PluginHostCallMethod, true>;
 
 const HOST_NOTIFY_METHODS = {
@@ -128,6 +130,8 @@ const HOST_NOTIFY_METHODS = {
   unregisterSearchProvider: true,
   registerContextProvider: true,
   unregisterContextProvider: true,
+  registerService: true,
+  unregisterService: true,
   registerWorktreeDeleteNotesProvider: true,
   unregisterWorktreeDeleteNotesProvider: true,
   "mcp.registerTools": true,

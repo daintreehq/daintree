@@ -128,7 +128,20 @@ import type {
   ProcessWriteParams,
   ProcessResizeParams,
   SearchProviderRegistrationParams,
+  RegisterServiceParams,
+  UnregisterServiceParams,
+  ServicesCallParams,
+  ServicesStatusParams,
 } from "../../../shared/types/pluginDevWorker.js";
+import type {
+  PluginServiceCallContext,
+  PluginServiceCaller,
+} from "../../../shared/types/pluginServices.js";
+import {
+  currentServiceInvocation,
+  runWithServiceInvocation,
+  type PluginServiceInvocation,
+} from "./pluginServiceInvocation.js";
 import type { PluginDevWorkerHost } from "./PluginDevWorkerHost.js";
 import { parseWorkerToHostMessage } from "../../schemas/pluginDevWorker.js";
 import { abortErrorFor } from "./pluginAbortError.js";
@@ -234,6 +247,13 @@ type InvokeTarget =
       providerId: string;
       query: string;
       context: { mode: "scoped" | "blended"; limit: number };
+    }
+  | {
+      kind: "service-method";
+      serviceName: string;
+      method: string;
+      args: unknown;
+      caller: PluginServiceCaller;
     };
 
 /** A runtime search provider's answer, which the worker sends as one JSON string. */
@@ -287,6 +307,12 @@ interface PendingInvoke {
   reject: (error: Error) => void;
   /** The frontend invocation this call runs for, re-entered for its host calls. */
   scope: PluginInvocationScope | null;
+  /**
+   * The service call this invoke runs inside (#14105), re-entered for its host
+   * calls so a nested `services.call` carries the chain and deadline it is
+   * part of — never one the worker could supply.
+   */
+  service: PluginServiceInvocation | null;
 }
 
 /**
@@ -879,12 +905,14 @@ export class PluginDevWorkerMainBridge {
     try {
       // The call answers the invocation it was made for, while that invocation
       // is still outstanding; anything else belongs to no caller.
-      const scope =
-        msg.invocationId !== undefined
-          ? (this.pendingInvokes.get(msg.invocationId)?.scope ?? null)
-          : null;
+      const pending =
+        msg.invocationId !== undefined ? this.pendingInvokes.get(msg.invocationId) : undefined;
+      const scope = pending?.scope ?? null;
+      const service = pending?.service ?? null;
       const result = await runWithPluginInvocation(scope, () =>
-        this.dispatchHostCall(msg.method, msg.params, controller.signal)
+        runWithServiceInvocation(service, () =>
+          this.dispatchHostCall(msg.method, msg.params, controller.signal)
+        )
       );
       if (this.disposed || generation !== this.reloadGeneration) return;
       this.workerHost.send({ type: "host-result", requestId: msg.requestId, ok: true, result });
@@ -1080,6 +1108,17 @@ export class PluginDevWorkerMainBridge {
         return this.host.account.getState((params as AccountCallParams | undefined)?.ref);
       case "account.getAccessToken":
         return this.host.account.getAccessToken((params as AccountCallParams | undefined)?.ref);
+      case "services.call": {
+        // The worker's signal arrives as `host-cancel`, which aborts this one;
+        // so does the worker going away, cancelling its calls in flight.
+        const p = params as ServicesCallParams;
+        return this.host.services.call(p.name, p.method, p.args, {
+          signal,
+          ...(p.timeoutMs !== undefined ? { timeoutMs: p.timeoutMs } : {}),
+        });
+      }
+      case "services.status":
+        return this.host.services.status((params as ServicesStatusParams).name);
       case "storage.get": {
         const p = params as StorageGetParams;
         return this.host.storage.get(p.key, p.scope);
@@ -1712,6 +1751,50 @@ export class PluginDevWorkerMainBridge {
         }
         return;
       }
+      case "registerService": {
+        const { name, methods } = params as RegisterServiceParams;
+        const key = `service:${name}`;
+        const prior = this.providerDisposers.get(key);
+        if (prior) {
+          try {
+            prior();
+          } catch {
+            // best-effort
+          }
+        }
+        // One proxy per method the worker bound. Main checks the set against
+        // the manifest; each runs in the worker under the call's signal.
+        const proxy: Record<string, (args: unknown, ctx: PluginServiceCallContext) => unknown> = {};
+        for (const method of methods) {
+          proxy[method] = (args, ctx) =>
+            this.invoke(
+              { kind: "service-method", serviceName: name, method, args, caller: ctx.caller },
+              ctx.signal
+            );
+        }
+        const generation = this.reloadGeneration;
+        const dispose = await this.host.registerService(name, proxy);
+        if (this.disposed || generation !== this.reloadGeneration) {
+          try {
+            dispose();
+          } catch {
+            // best-effort
+          }
+          return;
+        }
+        this.providerDisposers.set(key, dispose);
+        return;
+      }
+      case "unregisterService": {
+        const { name } = params as UnregisterServiceParams;
+        const key = `service:${name}`;
+        const dispose = this.providerDisposers.get(key);
+        if (dispose) {
+          this.providerDisposers.delete(key);
+          dispose();
+        }
+        return;
+      }
       case "mcp.registerTools": {
         const p = params as Partial<RegisterMcpToolsParams> | null | undefined;
         if (
@@ -2146,6 +2229,7 @@ export class PluginDevWorkerMainBridge {
           reject(error);
         },
         scope,
+        service: currentServiceInvocation(),
       });
       if (signal) {
         onAbort = (): void => {
@@ -2221,6 +2305,17 @@ export class PluginDevWorkerMainBridge {
           providerId: target.providerId,
           method: target.method,
           args: target.args,
+        });
+      } else if (target.kind === "service-method") {
+        sent = this.workerHost.send({
+          type: "invoke",
+          requestId,
+          kind: "service-method",
+          serviceName: target.serviceName,
+          method: target.method,
+          args: target.args,
+          // Field by field, so nothing beyond the public shape crosses the port.
+          caller: { pluginId: target.caller.pluginId, projectId: target.caller.projectId },
         });
       } else if (target.kind === "worktree-delete-notes") {
         sent = this.workerHost.send({
