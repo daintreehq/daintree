@@ -1425,6 +1425,47 @@ describe("project plugin load errors", () => {
     expect(service.getPluginRootByAuthority(INSTANCE_KEY)).toBeUndefined();
   });
 
+  it("never loads an application payload rewritten after its preflight (#14113)", async () => {
+    async function openApplication(rewriteAtGate: boolean): Promise<PluginService> {
+      const projectRoot = await writeProjectPlugin("export function activate() {}");
+      const manifestPath = path.join(projectRoot, ".daintree", "plugins", PLUGIN_ID, "plugin.json");
+      const written = JSON.parse(await fs.readFile(manifestPath, "utf-8")) as Record<
+        string,
+        unknown
+      >;
+      const asApplication = (version: string) =>
+        JSON.stringify({
+          ...written,
+          version,
+          engines: { daintree: ">=0.0.0" },
+          application: { name: "Boom", destination: "grid" },
+        });
+      await fs.writeFile(manifestPath, asApplication("1.0.0"));
+      const { service, reached, release } = gatedService();
+      const opening = service.onProjectOpened(PROJECT_ID, projectRoot);
+      try {
+        // The preflight has passed 1.0.0 and the load is parked at the gate.
+        await reached;
+        if (rewriteAtGate) await fs.writeFile(manifestPath, asApplication("2.0.0"));
+        release();
+        await opening;
+      } finally {
+        release();
+        await opening.catch(() => {});
+      }
+      return service;
+    }
+
+    // The same payload left as it was checked loads: the refusal below is the rewrite's.
+    const unchanged = await openApplication(false);
+    expect(unchanged.hasPlugin(INSTANCE_KEY)).toBe(true);
+    unchanged.dispose();
+
+    const rewritten = await openApplication(true);
+    expect(rewritten.hasPlugin(INSTANCE_KEY)).toBe(false);
+    expect(rewritten.listProjectPlugins(PROJECT_ID)[0]).toMatchObject({ state: "blocked" });
+  });
+
   it("returns the real cause from activatePluginForView instead of a clean result", async () => {
     const service = await openWithPlugin(
       "export function activate() { throw new Error('project-boom'); }"

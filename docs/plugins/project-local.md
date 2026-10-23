@@ -286,18 +286,19 @@ Each reload mints a fresh view-module generation so the renderer actually re-imp
 
 ## Updating an application
 
-An [application](#application) project updates by its files changing: a pull, a branch switch, a rebuilt `dist/`. There is no installer for it, and the host keeps no copy of a previous version. What it guarantees is the order — the new payload is checked before any of its code runs — and that loading a payload never writes over data the project or the user owns.
+An [application](#application) project updates by its files changing: a pull, a branch switch, a rebuilt `dist/`. There is no installer for it, and the host keeps no copy of a previous version. What it guarantees is the order — the new payload is checked before any of its code runs — and that switching payloads writes nothing of its own over data the project or the user owns. What the application's code writes once it runs is the application's to get right.
 
 ### What an update replaces and what it keeps
 
 | What | Where | Belongs to | Across an update |
 | --- | --- | --- | --- |
 | The payload: `plugin.json`, `dist/` and every file the manifest names | `.daintree/plugins/<dir>/` | The application | Replaced, as whatever changed the folder left it |
-| Project settings | `.daintree/plugin-settings/<manifestId>.json` | The project | Kept; read through `host.settings`, never rewritten by a load |
-| `host.storage`, `project` and `worktree` scopes | `.daintree/plugin-storage/<manifestId>.json` | The project | Kept |
-| Project databases | `.daintree/data/<manifestId>/<id>.db`, or the declared `path` | The project | Kept; changed only by your migrations, when your code opens the file |
+| Project settings | `<projectRoot>/.daintree/plugin-settings/<manifestId>.json` | The project | Kept; never rewritten by a load |
+| `host.storage`, `project` scope | `<projectRoot>/.daintree/plugin-storage/<manifestId>.json` | The project | Kept |
+| `host.storage`, `worktree` scope | `<worktreePath>/.daintree/plugin-storage/<manifestId>.json` | The worktree | Kept |
+| Project databases | `<projectRoot>/.daintree/data/<manifestId>/<id>.db`, or the declared `path` | The project | Kept; changed by your code — migrations when it opens the file, then its writes — and by agents through your declared writes, never by a load |
 | Local and user settings, `user` storage, local databases | under `~/.daintree/`, by instance key | The user, on this machine | Kept |
-| Secrets | the `local` settings file, encrypted through the OS keychain | The user, on this machine | Kept; never under the project root |
+| Secrets | encrypted through the OS keychain in the settings file of their scope; a `project` secret goes to the `local` file | The user, on this machine | Kept; never under the project root |
 | Panel state and drafts | `persistState` on the panel record; the [view-state store](./views.md#state-outside-the-grid) for Home, sidebar, settings and popover views | The user | Kept; state newer than the view's `stateVersion` is refused, not deleted |
 | Operations | the [journal](./operations.md) in its own `host.db` database | The application's data | Kept with that database; a job left `submitting` is reconciled as `uncertain` on the next start |
 | Agent configuration | `~/.claude/`, `~/.codex/` and the like | The user | Never modified |
@@ -308,19 +309,21 @@ What a switch does not keep is memory: module state in your worker and React sta
 
 ### The preflight
 
-Before an application's owner loads — on a project open, a hot reload, or **Reload from folder** — the host checks the payload on disk. It only reads:
+Every time an application's owner is about to load — a project open, a hot reload, a project switch or **Reload from folder** that finds it not running — the host checks the payload on disk. It only reads, and creates no file:
 
 - **The engine range.** `engines.daintree` must admit this Daintree (`engine-incompatible`).
 - **Every file the manifest needs.** The same inventory packaging, installation and `daintree-plugin doctor` use: `main`, view components, tour scenes, skills, knowledge files and custom icons (`assets-missing`).
-- **Every database that declares a `schemaVersion`.** An existing file whose `user_version` is past it was written by a newer copy of the application (`schema-too-new`). A file that does not exist yet passes: the first open creates it.
+- **Every database that declares a `schemaVersion`.** An existing file whose `user_version` is past it was written by a newer copy of the application (`schema-too-new`). A file that does not exist yet passes: the first open creates it. A file the host cannot read as a database is logged and passed over rather than refused; `db.open` still refuses a newer file when your code opens it.
 
 A payload that fails is not loaded. The project's application state reads `unavailable` with the reason and, in `problems`, what was found; the project shows the standard workspace, and the plugin manager's row shows the same lines. Nothing is created, migrated or deleted, and no command runs.
 
-The previous version does not keep running meanwhile. Its files are the ones that changed, and old code running against a folder of new files is the mixed state the check exists to prevent. The retry is the next reconcile: the watcher's next settle once `plugin.json` or `dist/` changes, a project switch, or **Reload from folder** for a file outside `dist/`.
+The previous version does not keep running meanwhile. Its files are the ones that changed, and old code running against a folder of new files is the mixed state the check exists to prevent. A `plugin.json` rewritten while the check ran is not loaded either, since it is not what was checked.
+
+The retry is the next reconcile: the watcher's next settle once `plugin.json` or `dist/` changes, a project switch, or **Reload from folder** — the one to use when the file you fixed is outside `dist/`, which the watcher does not watch. A running application is checked again only when it next loads: a hot reload, or reopening the project. Deleting a file outside `dist/` from under one that is running is not noticed until then.
 
 ### Migrations
 
-Declare [`schemaVersion`](./contribution-points.md#databases--shipped) on each database: how many migrations this version applies. A writable `db.open` that passes a different number fails `VALIDATION`, so the comparison the preflight makes is the one your code will.
+Declare [`schemaVersion`](./contribution-points.md#databases--shipped) on each database your code migrates: how many migrations this version applies. A writable `db.open` that passes a different number fails `VALIDATION`, so the comparison the preflight makes is the one your code will. Leave it off the database the [operations manager](./operations.md) owns: it applies migrations of its own, and their number is the SDK's, not yours.
 
 Migrations run when your code opens the database, not when the payload loads. Each runs in its own transaction and advances `user_version` with it, so a run that stops part way — a crash, a quit, a step that throws — leaves the file at the last step that committed, and the next writable open carries on from there without repeating one. That is what makes a run safe to retry: the version counter, not the SQL. A failed step is rolled back whole and rejects `DB_MIGRATION_FAILED` naming it. A step that does anything besides SQL against its own file, such as writing another file or calling a service, is outside that guarantee.
 
@@ -329,7 +332,7 @@ Migrations run when your code opens the database, not when the payload loads. Ea
 - **Code rolls back; a schema does not.** Rolling back the code is a checkout of the previous commit. A database a newer version already migrated stays migrated, and older code refuses it — at the preflight, and again at `db.open` (`DB_SCHEMA_TOO_NEW`) — rather than guessing at a schema it has never seen. There are no down-migrations, and nothing undoes a step that dropped or rewrote data.
 - **Design for a way back.** Keep a release's migrations additive (add the new column and keep reading the old one), and remove what is no longer used in a later release, once no older version needs it.
 - **Back up before a destructive release.** Nothing is snapshotted automatically. **Back up data…** on the application's panel menus, or `db.backup(destPath)` from your code, writes a consistent copy; take one before a release whose migrations drop or rewrite data.
-- **Restoring is manual.** Close the project so nothing holds the file open, keep a copy of the current file, put the backup in its place, delete any `-wal` and `-shm` files beside it, and reopen with a version whose `schemaVersion` is at or past the backup's. Restoring local data does not undo anything the application already sent elsewhere.
+- **Restoring is manual.** Stop everything that has the file open — close the project, and end any agent's `sqlite3` session on it. Move the current file aside together with any `-journal`, `-wal` and `-shm` beside it, since SQLite would replay a leftover one into whatever file takes its place. Put the backup in, and reopen with a version whose `schemaVersion` is at or past the backup's. Restoring local data does not undo anything the application already sent elsewhere.
 
 ## Layouts and missing plugins
 

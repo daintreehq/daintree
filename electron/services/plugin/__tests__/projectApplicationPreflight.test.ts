@@ -4,7 +4,10 @@ import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { PluginManifest } from "../../../../shared/types/plugin.js";
-import { preflightProjectApplication } from "../projectApplicationPreflight.js";
+import {
+  applicationPreflightKey,
+  preflightProjectApplication,
+} from "../projectApplicationPreflight.js";
 
 const { DatabaseSync } = process.getBuiltinModule("node:sqlite") as typeof import("node:sqlite");
 
@@ -129,5 +132,36 @@ describe("preflightProjectApplication", () => {
       )
     );
     expect(result?.reason).toBe("assets-missing");
+  });
+});
+
+describe("applicationPreflightKey", () => {
+  interface Editable {
+    version: string;
+    displayName?: string;
+    contributes: {
+      views: Array<{ componentPath: string }>;
+      databases: Array<{ schemaVersion?: number; path?: string }>;
+    };
+  }
+  const key = (patch: (m: Editable) => void = () => {}) => {
+    const m = structuredClone(
+      manifest([{ id: "ledger", schemaVersion: 2 }])
+    ) as unknown as Editable;
+    patch(m);
+    return applicationPreflightKey(m as unknown as Readonly<PluginManifest>);
+  };
+
+  it("is the same for manifests the preflight cannot tell apart", () => {
+    expect(key((m) => (m.displayName = "Renamed"))).toBe(key());
+  });
+
+  it.each([
+    ["version", (m: Editable) => (m.version = "0.4.0")],
+    ["a required file", (m: Editable) => (m.contributes.views[0]!.componentPath = "dist/v2.js")],
+    ["a schemaVersion", (m: Editable) => (m.contributes.databases[0]!.schemaVersion = 3)],
+    ["a database path", (m: Editable) => (m.contributes.databases[0]!.path = "data/x.db")],
+  ])("changes with %s", (_label, patch) => {
+    expect(key(patch)).not.toBe(key());
   });
 });

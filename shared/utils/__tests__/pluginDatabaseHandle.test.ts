@@ -134,7 +134,7 @@ describe("openPluginDatabase", () => {
     const db = await open({ migrations: ["CREATE TABLE a (x)", "CREATE TABLE b (x)"] });
     expect(await db.get("PRAGMA user_version")).toEqual({ user_version: 2 });
     await db.close();
-    // A readonly open, or one that passes no migrations, makes no schema claim.
+    // A readonly open makes no schema claim.
     const reader = await open({ readonly: true });
     expect(await reader.get("PRAGMA user_version")).toEqual({ user_version: 2 });
   });
@@ -150,6 +150,38 @@ describe("openPluginDatabase", () => {
     const db = await open({ migrations: ["CREATE TABLE a (x)", "CREATE TABLE b (x)"] });
     await db.close();
     expect(readPluginDatabaseSchemaVersion(location)).toBe(2);
+  });
+
+  it("reads a WAL file's committed version, adding no sidecar the file did not already have", () => {
+    location = { ...location, path: path.join(fs.realpathSync(dir), "ledger.db") };
+    const writer = new DatabaseSync(location.path);
+    writer.exec("PRAGMA journal_mode = WAL; CREATE TABLE t (x); PRAGMA user_version = 3");
+    // The last connection closing checkpoints and removes -wal and -shm.
+    writer.close();
+    const files = () => fs.readdirSync(path.dirname(location.path)).sort();
+    const before = files();
+    expect(readPluginDatabaseSchemaVersion(location)).toBe(3);
+    expect(files()).toEqual(before);
+
+    // A live writer's commit sits in the -wal, past a header that still says 3.
+    const live = new DatabaseSync(location.path);
+    try {
+      live.exec("PRAGMA wal_autocheckpoint = 0; PRAGMA user_version = 5");
+      expect(fs.existsSync(`${location.path}-wal`)).toBe(true);
+      expect(readPluginDatabaseSchemaVersion(location)).toBe(5);
+    } finally {
+      live.close();
+    }
+  });
+
+  it("reads an empty file as version 0 and refuses one that is not SQLite", () => {
+    location = { ...location, path: path.join(fs.realpathSync(dir), "ledger.db") };
+    fs.writeFileSync(location.path, "");
+    expect(readPluginDatabaseSchemaVersion(location)).toBe(0);
+    fs.writeFileSync(location.path, "x".repeat(200));
+    expect(() => readPluginDatabaseSchemaVersion(location)).toThrow(
+      expect.objectContaining({ code: "DB_UNSUPPORTED" })
+    );
   });
 
   it("re-applies definitions on every open so a view can change without a migration", async () => {

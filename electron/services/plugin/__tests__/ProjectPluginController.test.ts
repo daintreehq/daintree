@@ -1797,6 +1797,20 @@ describe("project application (#14097)", () => {
       expect(lastApplication()).toMatchObject({ status: "active" });
     });
 
+    it("drops the finding when trust is revoked, so it never describes files nobody re-checked", async () => {
+      enable(["acme.ledger"]);
+      h.deps.preflightApplication.mockResolvedValueOnce(MISSING);
+      h.setDiscovery(ROOT_A, [withApplication("acme.ledger")]);
+      await h.controller.onProjectOpened(PROJECT_A, ROOT_A);
+      expect(h.controller.listProjectPlugins(PROJECT_A)[0]!.loadError).toBeDefined();
+
+      await h.controller.setTrust(PROJECT_A, "disabled");
+
+      expect(h.controller.listProjectPlugins(PROJECT_A)[0]!.loadError).toBeUndefined();
+      expect(lastApplication()).toMatchObject({ status: "disabled", reason: "untrusted" });
+      expect((lastApplication() as Record<string, unknown>).problems).toBeUndefined();
+    });
+
     it("loads as before when the check itself throws", async () => {
       enable(["acme.ledger"]);
       h.deps.preflightApplication.mockRejectedValueOnce(new Error("disk went away"));

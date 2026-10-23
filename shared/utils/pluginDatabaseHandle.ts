@@ -415,15 +415,44 @@ function assertAgentOpenable(location: PluginDatabaseLocation): void {
   }
 }
 
+/** `user_version`'s place in the 100-byte SQLite file header: 4 bytes, big-endian, signed. */
+const HEADER_USER_VERSION_OFFSET = 60;
+const SQLITE_HEADER_MAGIC = "SQLite format 3\0";
+
 /**
- * The `user_version` an existing database is at, read on a readonly
- * connection that runs no migration, definition or journal-mode change, so the
- * host can compare a file against a payload before that payload's code runs
- * (#14113). Rejects `DB_NOT_FOUND` when the file does not exist; creates nothing.
+ * The `user_version` an existing database is at, read without running any
+ * migration, definition or journal-mode change, so the host can compare a file
+ * against a payload before that payload's code runs (#14113). Rejects
+ * `DB_NOT_FOUND` when the file does not exist.
+ *
+ * With no `-wal` or `-journal` beside the file, the main file holds every
+ * committed page, so the header is read straight off disk. Opening a
+ * connection there could create `-wal` and `-shm` beside a WAL-mode file —
+ * in the repository, for a project database — which a check that only reads
+ * must never do. With a sidecar present, only a connection reads what is
+ * committed in it, and it adds no file that is not already there.
  */
 export function readPluginDatabaseSchemaVersion(location: PluginDatabaseLocation): number {
-  const sqlite = loadSqlite();
   assertAgentOpenable(location);
+  const sidecar = ["-wal", "-journal"].some((suffix) => fs.existsSync(location.path + suffix));
+  if (!sidecar) {
+    const header = Buffer.alloc(100);
+    const fd = fs.openSync(location.path, "r");
+    let read: number;
+    try {
+      read = fs.readSync(fd, header, 0, header.length, 0);
+    } finally {
+      fs.closeSync(fd);
+    }
+    // A zero-length file is an empty database SQLite would open as version 0.
+    if (read === 0) return 0;
+    if (read < header.length || header.toString("latin1", 0, 16) !== SQLITE_HEADER_MAGIC) {
+      throw databaseError("DB_UNSUPPORTED", `database "${location.id}" is not a SQLite file`);
+    }
+    // Signed, as `PRAGMA user_version` reads it.
+    return header.readInt32BE(HEADER_USER_VERSION_OFFSET);
+  }
+  const sqlite = loadSqlite();
   const connection = new sqlite.DatabaseSync(location.path, { readOnly: true });
   try {
     const row = connection.prepare("PRAGMA user_version").get() as

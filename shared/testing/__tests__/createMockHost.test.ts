@@ -2529,6 +2529,22 @@ describe("createMockHost host.db", () => {
     await db.close();
     await expect(host.db.open("other")).rejects.toThrow(/DB_NOT_DECLARED/);
   });
+
+  it("holds a writable open to a declared schemaVersion, as the real host does", async () => {
+    const host = createMockHost({ databases: { schemaVersions: { ledger: 2 } } });
+    await expect(
+      host.db.open("ledger", { migrations: ["CREATE TABLE a (x)"] })
+    ).rejects.toMatchObject({ code: "VALIDATION" });
+    expect((await host.db.resolve("ledger")).schemaVersion).toBe(2);
+
+    const db = await host.db.open("ledger", {
+      migrations: ["CREATE TABLE a (x)", "CREATE TABLE b (x)"],
+    });
+    expect(await db.get("PRAGMA user_version")).toEqual({ user_version: 2 });
+    await db.close();
+    // An id with no declared version, or one only the prototype has, makes no claim.
+    expect((await host.db.resolve("constructor")).schemaVersion).toBeUndefined();
+  });
 });
 
 describe("createMockHost host.db readonly", () => {

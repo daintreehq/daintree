@@ -2,6 +2,7 @@ import type {
   PluginManifest,
   ProjectApplicationPreflightReason,
 } from "../../../shared/types/plugin.js";
+import { collectPluginManifestAssets } from "../../../shared/config/pluginManifestAssets.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import { createLogger } from "../../utils/logger.js";
 import {
@@ -82,4 +83,23 @@ export async function preflightProjectApplication(args: {
   if (tooNew.length > 0) return { reason: "schema-too-new", problems: tooNew };
 
   return null;
+}
+
+/**
+ * Everything {@link preflightProjectApplication} reads from a manifest, as one
+ * comparable string. The loader re-reads `plugin.json` after the check, so a
+ * rewrite landing in between would otherwise run a payload nobody checked;
+ * two manifests with the same key were checked by the same pass.
+ */
+export function applicationPreflightKey(manifest: Readonly<PluginManifest>): string {
+  return JSON.stringify([
+    manifest.version,
+    collectPluginManifestAssets(manifest).map((asset) => [asset.path, asset.required]),
+    (manifest.contributes.databases ?? []).map((d) => [
+      d.id,
+      d.location,
+      d.path ?? null,
+      d.schemaVersion ?? null,
+    ]),
+  ]);
 }

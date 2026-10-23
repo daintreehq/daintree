@@ -1256,6 +1256,10 @@ export class ProjectPluginController {
     for (const [manifestId, instanceKey] of [...entry.loaded]) {
       this.unloadOne(entry, manifestId, instanceKey);
     }
+    // Nothing loads again until the next enabled reconcile, and that checks
+    // the files afresh. A finding kept until then would describe files that
+    // may since have been fixed, or replaced by another version.
+    entry.preflight.clear();
     await Promise.resolve();
   }
 

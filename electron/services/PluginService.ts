@@ -157,7 +157,10 @@ import {
   ProjectPluginController,
   type ProjectPluginControllerDeps,
 } from "./plugin/ProjectPluginController.js";
-import { preflightProjectApplication } from "./plugin/projectApplicationPreflight.js";
+import {
+  applicationPreflightKey,
+  preflightProjectApplication,
+} from "./plugin/projectApplicationPreflight.js";
 import { discoverProjectPlugins } from "./plugin/projectPluginDiscovery.js";
 import { ProjectPluginWatcher } from "./plugin/ProjectPluginWatcher.js";
 import { PluginDevArtifactWatcher } from "./plugin/PluginDevArtifactWatcher.js";
@@ -7941,6 +7944,26 @@ export class PluginService {
       // Never registered, so no unload will come to drain its window.
       const suppressed = this.fileLogLimiter.drain(instanceKey);
       if (suppressed) this.writePluginFileLogSummary(instanceKey, suppressed);
+      return false;
+    }
+
+    // An application's payload was checked against the manifest discovery read
+    // (#14113), and `loadPlugin` reads `plugin.json` again. A rewrite landing in
+    // between is a payload nobody checked, so it never activates. The next
+    // reconcile checks it: the watcher's, when one was already watching, or a
+    // project switch or Reload from folder.
+    if (
+      args.manifest.application !== undefined &&
+      applicationPreflightKey(loaded.manifest) !== applicationPreflightKey(args.manifest)
+    ) {
+      this.writePluginFileLog(
+        instanceKey,
+        "lifecycle",
+        "Project application changed on disk while it was being checked",
+        { checked: args.manifest.version, found: loaded.manifest.version },
+        "warn"
+      );
+      this.unloadPlugin(instanceKey);
       return false;
     }
 
