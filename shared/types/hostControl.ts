@@ -80,7 +80,20 @@ export const HostListEntrySchema = z.object({
     .object({ working: z.number(), waiting: z.number(), idle: z.number() })
     .nullable(),
   /** Its projects while connected, most used first: the projectIds `host.call` takes. */
-  projects: z.array(z.object({ projectId: z.string(), name: z.string() })).nullable(),
+  projects: z
+    .array(
+      z.object({
+        projectId: z.string(),
+        name: z.string(),
+        frontendAttached: z
+          .boolean()
+          .nullable()
+          .describe(
+            "A frontend is attached: a view there or a driving Shell. If false, only tools the host runs itself run. Null: unknown."
+          ),
+      })
+    )
+    .nullable(),
   /** This Shell's "assistant control" switch for the host: whether `host.call` may reach it. */
   control: z.boolean(),
 });

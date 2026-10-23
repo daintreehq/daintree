@@ -889,6 +889,10 @@ describe("rendererBridge — this machine's assistant in another of its projects
       .catch((e: unknown) => e);
 
     expect(err).toBeInstanceOf(NoFrontendAttachedError);
+    // Read by an assistant, not a person: it says what still runs, never what to open (#14122).
+    expect((err as Error).message).toContain("'git.getProjectPulse'");
+    expect((err as Error).message).toContain("can still run here");
+    expect((err as Error).message).not.toMatch(/open the workspace/i);
     expect(viewless.runViewlessAction).not.toHaveBeenCalled();
   });
 

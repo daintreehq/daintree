@@ -24,6 +24,7 @@ import type { ActionId } from "@shared/types/actions";
 import { z } from "zod";
 import { VIEWLESS_ACTIONS } from "../../../../electron/services/viewless/viewlessActionCatalog";
 import {
+  SlashCommandsListArgsSchema,
   VIEWLESS_FORGE_ARGS_SCHEMAS,
   WorktreeCreateWithRecipeArgsSchema,
 } from "../../../../electron/services/viewless/viewlessArgsSchemas";
@@ -68,6 +69,7 @@ describe("viewless argument schemas", () => {
   const schemas: Record<string, z.ZodType> = {
     ...VIEWLESS_FORGE_ARGS_SCHEMAS,
     "worktree.createWithRecipe": WorktreeCreateWithRecipeArgsSchema,
+    "slashCommands.list": SlashCommandsListArgsSchema,
   };
 
   it.each(Object.entries(schemas))(

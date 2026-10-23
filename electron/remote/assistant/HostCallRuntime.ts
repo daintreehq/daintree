@@ -431,6 +431,17 @@ function withinMs<T>(work: Promise<T>, ms: number, fallback: T): Promise<T> {
   return Promise.race([work, late]).finally(() => clearTimeout(timer));
 }
 
+/** A project as `host.list` names it, with whether a frontend is attached as its host said. */
+function listedProject(
+  project: HostProjectSummary
+): NonNullable<HostListEntry["projects"]>[number] {
+  return {
+    projectId: project.id,
+    name: project.name,
+    frontendAttached: project.frontendAttached ?? null,
+  };
+}
+
 function observedConnection(state: HostConnectionState): HostListEntry["connection"] {
   return state.status === "connected" || state.status === "connecting"
     ? state.status
@@ -1038,7 +1049,7 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
           : projects
               .filter((project) => project.id !== caller.projectId)
               .slice(0, HOST_LIST_PROJECTS_MAX)
-              .map((project) => ({ projectId: project.id, name: project.name })),
+              .map(listedProject),
       control: true,
     };
   }
@@ -1072,11 +1083,7 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
       PROJECTS_READ_MS,
       null
     );
-    return projects === null
-      ? null
-      : projects
-          .slice(0, HOST_LIST_PROJECTS_MAX)
-          .map((project) => ({ projectId: project.id, name: project.name }));
+    return projects === null ? null : projects.slice(0, HOST_LIST_PROJECTS_MAX).map(listedProject);
   }
 
   private ok(): { outcome: "ok"; detail: null; retryAfterMs: null } {

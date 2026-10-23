@@ -2819,8 +2819,13 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
               hasLiveView: {
                 type: "boolean",
               },
+              frontendAttached: {
+                description:
+                  "A frontend is attached: a view here or a driving Shell. If false, only tools the host runs itself run. Null: unknown.",
+                type: ["boolean", "null"],
+              },
             },
-            required: ["workspaceId", "path", "name", "kind", "hasLiveView"],
+            required: ["workspaceId", "path", "name", "kind", "hasLiveView", "frontendAttached"],
             additionalProperties: false,
           },
         },

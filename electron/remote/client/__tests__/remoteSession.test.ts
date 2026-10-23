@@ -211,7 +211,7 @@ async function startHarness(
     describeProject: (projectId) =>
       projectId === "proj-1" ? { projectId, path: "/srv/proj-1", name: "one" } : null,
     listProjects: () => [
-      { id: "proj-1", name: "one", path: "/srv/proj-1", emoji: "🌲" },
+      { id: "proj-1", name: "one", path: "/srv/proj-1", emoji: "🌲", frontendAttached: false },
       // Only the listed fields cross the link, whatever else the store holds.
       { id: "proj-2", name: "two", path: "/srv/proj-2", status: "active" } as never,
     ],
@@ -748,8 +748,9 @@ describe("remote session wiring", () => {
     }
     await connect();
     const connection = h.manager.get(HOST_ID)!;
+    // Readiness crosses as the host said it, and a host that didn't say (#14122) still lists.
     await expect(connection.listProjects()).resolves.toEqual([
-      { id: "proj-1", name: "one", path: "/srv/proj-1", emoji: "🌲" },
+      { id: "proj-1", name: "one", path: "/srv/proj-1", emoji: "🌲", frontendAttached: false },
       { id: "proj-2", name: "two", path: "/srv/proj-2" },
     ]);
     expect(getEndpointRegistry().getRemote()).toHaveLength(0);

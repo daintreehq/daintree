@@ -40,8 +40,8 @@ function definition(): AnyActionDefinition {
   return factory() as AnyActionDefinition;
 }
 
-/** The five identity fields the external contract permits, in sorted order. */
-const FIELDS = ["hasLiveView", "kind", "name", "path", "workspaceId"];
+/** The fields the external contract permits, in sorted order. */
+const FIELDS = ["frontendAttached", "hasLiveView", "kind", "name", "path", "workspaceId"];
 
 const ROW = {
   workspaceId: "a".repeat(64),
@@ -49,10 +49,11 @@ const ROW = {
   name: "Alpha",
   kind: "project" as const,
   hasLiveView: true,
+  frontendAttached: true,
 };
 
 describe("workspace.list", () => {
-  it("advertises an object-rooted output schema carrying all five fields", () => {
+  it("advertises an object-rooted output schema carrying every field", () => {
     // `buildToolOutputSchema` drops any schema whose root is not an object, so
     // the array has to be wrapped or the contract silently vanishes.
     const schema = service().get("workspace.list" as ActionId)?.outputSchema as
@@ -100,6 +101,18 @@ describe("workspace.list", () => {
     const outcome = await service().dispatch("workspace.list" as ActionId, {}, {} as ActionContext);
 
     expect(outcome).toMatchObject({ ok: true, result: { workspaces: [ROW] } });
+  });
+
+  it("reports readiness as unknown for a row from a host that predates it (#14122)", async () => {
+    const { frontendAttached: _omitted, ...legacy } = ROW;
+    workspaceClientMock.list.mockResolvedValue([legacy]);
+
+    const outcome = await service().dispatch("workspace.list" as ActionId, {}, {} as ActionContext);
+
+    expect(outcome).toMatchObject({
+      ok: true,
+      result: { workspaces: [{ ...legacy, frontendAttached: null }] },
+    });
   });
 
   it("passes an empty catalog through rather than failing", async () => {

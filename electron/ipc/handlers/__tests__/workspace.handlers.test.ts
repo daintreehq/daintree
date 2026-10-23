@@ -48,6 +48,11 @@ import {
   getRegisteredProjectViews,
 } from "../../../window/webContentsRegistry.js";
 import type { WorkspaceListEntry } from "../../../../shared/types/ipc/workspace.js";
+import {
+  _resetMcpDriveTargetResolverForTesting,
+  setMcpDriveTargetResolver,
+} from "../../../services/mcp-server/driveTarget.js";
+import type { ClientEndpoint } from "../../../ipc/endpoint.js";
 
 // Real id shapes: projects are 64 lowercase hex, scratches are UUIDv4, and the
 // two spaces are disjoint by construction (`shared/utils/workspaceIds.ts`).
@@ -133,6 +138,7 @@ describe("workspace:list", () => {
 
   afterEach(() => {
     cleanup();
+    _resetMcpDriveTargetResolverForTesting();
   });
 
   it("lists every known workspace, open or not, with identity fields only", async () => {
@@ -150,6 +156,7 @@ describe("workspace:list", () => {
     expect(entries).toHaveLength(3);
     for (const entry of entries) {
       expect(Object.keys(entry).sort()).toEqual([
+        "frontendAttached",
         "hasLiveView",
         "kind",
         "name",
@@ -199,6 +206,45 @@ describe("workspace:list", () => {
     expect(byId.get(PROJECT_OPEN)).toBe(true);
     expect(byId.get(PROJECT_CACHED)).toBe(true);
     expect(byId.get(SCRATCH_OPEN)).toBe(true);
+    expect(byId.get(PROJECT_CLOSED)).toBe(false);
+  });
+
+  it("reports frontendAttached as dispatch reads it, counting a driver no window here shows (#14122)", async () => {
+    projectStoreMock.getAllProjectIdentities.mockReturnValue([
+      project(PROJECT_OPEN, "Open", "/repos/open"),
+      project(PROJECT_CLOSED, "Driven", "/repos/driven"),
+      project(PROJECT_CACHED, "Held", "/repos/held"),
+    ]);
+    openView(PROJECT_OPEN);
+    openView(PROJECT_CACHED);
+    const remoteDriver = { isClosed: () => false } as unknown as ClientEndpoint;
+    setMcpDriveTargetResolver((id) =>
+      id === PROJECT_CLOSED
+        ? { state: "live", endpoint: remoteDriver }
+        : id === PROJECT_CACHED
+          ? { state: "unavailable", reason: "reserved" }
+          : { state: "vacant" }
+    );
+
+    const byId = new Map((await list()).map((e) => [e.workspaceId, e]));
+
+    expect(byId.get(PROJECT_OPEN)).toMatchObject({ hasLiveView: true, frontendAttached: true });
+    // A Shell drives it from another machine: no view here, yet a call reaches one.
+    expect(byId.get(PROJECT_CLOSED)).toMatchObject({ hasLiveView: false, frontendAttached: true });
+    // A view here shows it, but its holder is away and the lease keeps its place.
+    expect(byId.get(PROJECT_CACHED)).toMatchObject({ hasLiveView: true, frontendAttached: false });
+  });
+
+  it("reads frontendAttached off local views alone while no drive lease is installed", async () => {
+    projectStoreMock.getAllProjectIdentities.mockReturnValue([
+      project(PROJECT_OPEN, "Open", "/repos/open"),
+      project(PROJECT_CLOSED, "Closed", "/repos/closed"),
+    ]);
+    openView(PROJECT_OPEN);
+
+    const byId = new Map((await list()).map((e) => [e.workspaceId, e.frontendAttached]));
+
+    expect(byId.get(PROJECT_OPEN)).toBe(true);
     expect(byId.get(PROJECT_CLOSED)).toBe(false);
   });
 

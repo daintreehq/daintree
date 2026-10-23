@@ -106,6 +106,11 @@ export interface HostProjectSummary {
   name: string;
   path: string;
   emoji?: string;
+  /**
+   * Whether a tool only a frontend can run would reach one there now, as that
+   * host reads it (#14122). Absent when the host didn't say.
+   */
+  frontendAttached?: boolean;
 }
 
 export interface ListHostProjectsPayload {

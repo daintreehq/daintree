@@ -57,13 +57,14 @@ import {
   runTerminalSendKeys,
 } from "./viewlessTerminals.js";
 import { runAgentLaunch, runAgentListAvailable } from "./viewlessAgents.js";
+import { runSlashCommandsList } from "./viewlessSlashCommands.js";
 import {
   previewWorktreeDelete,
   runWorktreeDelete,
   runWorktreeList,
   runWorktreeWaitUntilReady,
 } from "./viewlessWorktrees.js";
-import { runProjectDetectRunners, runProjectGetAll } from "./viewlessProjects.js";
+import { runProjectDetectRunners, runProjectGetAll, runWorkspaceList } from "./viewlessProjects.js";
 import { runForgeRead } from "./viewlessForge.js";
 import { runActionsGetSchema, runActionsList, runActionsSearch } from "./viewlessIntrospection.js";
 import { refuseRecipeWithNoView, runWorktreeCreateWithRecipe } from "./viewlessWorktreeCreation.js";
@@ -790,6 +791,8 @@ async function runAction(
       return runAgentLaunch(request, project, deps);
     case "agent.listAvailable":
       return runAgentListAvailable(request, project, deps);
+    case "slashCommands.list":
+      return runSlashCommandsList(request, project, deps);
     case "worktree.list":
       return runWorktreeList(request, project, deps);
     case "worktree.waitUntilReady":
@@ -800,6 +803,8 @@ async function runAction(
       return runProjectGetAll(request, project, deps);
     case "project.detectRunners":
       return runProjectDetectRunners(request, project, deps);
+    case "workspace.list":
+      return runWorkspaceList(request, project, deps);
     case "worktree.createWithRecipe":
       return runWorktreeCreateWithRecipe(request, project, deps);
     case "actions.list":

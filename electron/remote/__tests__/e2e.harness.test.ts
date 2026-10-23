@@ -667,7 +667,7 @@ describe("Remote Hosts end to end over a real socket, started by the real boot",
   );
 
   it(
-    "viewless: with every renderer detached, MCP terminal.new runs on the host through the real handler path; a UI-only action says no frontend is attached",
+    "viewless: with every renderer detached, MCP terminal.new and slashCommands.list run on the host through the real handler path; a UI-only action says no frontend is attached",
     async () => {
       const r = await harness();
       const spawns: Array<{
@@ -708,6 +708,30 @@ describe("Remote Hosts end to end over a real socket, started by the real boot",
       expect(harnessState.projectStates.get("proj-2")).toMatchObject({
         terminals: [{ id: terminalId, kind: "terminal" }],
       });
+
+      // The command a usage check confirms before typing it lists with no view too (#14122).
+      const listed: Array<{ ctx: IpcContext; request: { agentId: string; projectPath?: string } }> =
+        [];
+      cleanups.push(
+        typedHandleWithContext(
+          CHANNELS.SLASH_COMMANDS_LIST as never,
+          ((ctx: IpcContext, request: { agentId: string; projectPath?: string }) => {
+            listed.push({ ctx, request });
+            return [{ id: "/usage", label: "/usage", description: "", scope: "built-in" }];
+          }) as never
+        )
+      );
+      const commands = await bridge.dispatchActionForWorkspace("proj-2", "slashCommands.list", {});
+      expect(commands.result).toMatchObject({
+        ok: true,
+        result: { commands: [{ id: "/usage" }] },
+      });
+      expect(listed).toEqual([
+        {
+          ctx: expect.objectContaining({ endpoint: expect.objectContaining({ handle: 0 }) }),
+          request: { agentId: "claude", projectPath: r.projects.get("proj-2")!.path },
+        },
+      ]);
 
       await expect(
         bridge.dispatchActionForWorkspace("proj-2", "worktree.openInEditor", {})

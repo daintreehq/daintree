@@ -40,7 +40,7 @@ describe("HostCallRuntime (#13493, #13496)", () => {
     runs = new Map([["a", RUN_A]]);
     control = new Set(["studio"]);
     listHostProjects = vi.fn(async (_hostId: string) => [
-      { id: "proj-2", name: "website", path: "/repos/website" },
+      { id: "proj-2", name: "website", path: "/repos/website", frontendAttached: false },
       { id: "proj-3", name: "api", path: "/repos/api" },
     ]);
     runtime = new HostCallRuntime({
@@ -106,9 +106,10 @@ describe("HostCallRuntime (#13493, #13496)", () => {
           lastSeenAt: 900,
           load: { sampledAt: 950, cpuPercent: 40, memoryPressure: null, thermal: "nominal" },
           agentsObserved: { working: 2, waiting: 1, idle: 0 },
+          // As the host said it; an older host that didn't is unknown, not unattached.
           projects: [
-            { projectId: "proj-2", name: "website" },
-            { projectId: "proj-3", name: "api" },
+            { projectId: "proj-2", name: "website", frontendAttached: false },
+            { projectId: "proj-3", name: "api", frontendAttached: null },
           ],
           control: true,
         },

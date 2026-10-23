@@ -43,3 +43,22 @@ export async function runProjectDetectRunners(
     return failure("EXECUTION_ERROR", formatErrorMessage(err, "Failed to detect runners"));
   }
 }
+
+/**
+ * Every workspace the host knows, each with whether a frontend is attached to
+ * it (#14122), through the same handler a view's listing reaches: so an
+ * assistant on another machine can read a project's readiness with nothing
+ * open here, before a call and after it.
+ */
+export async function runWorkspaceList(
+  _request: ViewlessActionRequest,
+  project: Project,
+  deps: ViewlessDeps
+): Promise<ActionDispatchResult> {
+  try {
+    const workspaces = await deps.invoke<unknown[]>(project.id, CHANNELS.WORKSPACE_LIST, []);
+    return success({ workspaces });
+  } catch (err) {
+    return failure("EXECUTION_ERROR", formatErrorMessage(err, "Failed to list workspaces"));
+  }
+}

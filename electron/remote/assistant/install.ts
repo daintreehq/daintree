@@ -190,8 +190,14 @@ export function installHostControl(deps: HostControlInstallDeps): () => void {
     local: {
       name: machineName,
       projects: async () => {
-        const { projectStore } = await import("../../services/ProjectStore.js");
-        return projectStore.getProjectSummaries();
+        const [{ projectStore }, { isProjectFrontendAttached }] = await Promise.all([
+          import("../../services/ProjectStore.js"),
+          import("../../services/mcp-server/frontendAttachment.js"),
+        ]);
+        return projectStore.getProjectSummaries().map((project) => ({
+          ...project,
+          frontendAttached: isProjectFrontendAttached(project.id),
+        }));
       },
       relayCall: (payload) => local.relayCall(payload),
     },

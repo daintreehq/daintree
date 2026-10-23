@@ -36,4 +36,13 @@ export interface WorkspaceListEntry {
    * calls after it. Two live views are ambiguous and still get refused.
    */
   hasLiveView: boolean;
+  /**
+   * Whether a frontend is attached now (#14122), read the way dispatch reads
+   * it: a reachable driver, a remote Shell's included, or a view here while
+   * nobody drives it. Where `hasLiveView` sees only this machine's windows,
+   * this says whether a tool only a frontend can run would answer
+   * `NO_FRONTEND_ATTACHED`. False is not closed: the tools the host runs
+   * itself still run. Absent from a remote host that predates it.
+   */
+  frontendAttached?: boolean;
 }

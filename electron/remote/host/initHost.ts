@@ -4,6 +4,7 @@ import { helpSessionService } from "../../services/HelpSessionService.js";
 import { projectStore } from "../../services/ProjectStore.js";
 import type { PtyClient } from "../../services/PtyClient.js";
 import { scratchStore } from "../../services/ScratchStore.js";
+import { isProjectFrontendAttached } from "../../services/mcp-server/frontendAttachment.js";
 import { isWorkspaceKeepResident } from "../../services/workspaceResidency.js";
 import { events } from "../../services/events.js";
 import { setAttachedFrontendCount } from "../../services/PowerSaveBlockerService.js";
@@ -67,6 +68,7 @@ export function initRemoteHostsHost(
         name,
         path,
         ...(emoji && emoji.length <= MAX_PROJECT_EMOJI_LENGTH ? { emoji } : {}),
+        frontendAttached: isProjectFrontendAttached(id),
       })),
     assistantLive: assistantLiveFor,
     agentActive: (endpoint) =>

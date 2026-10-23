@@ -564,7 +564,12 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // whether it resumed, restarted or held it, and the agent state saved before
   // the restart, so an orchestrator can tell a finished, restored session from
   // live work. Output only; its description trimmed before measuring.
-  const MAX_EXTERNAL_PAYLOAD_BYTES = 56_010;
+  // 56_010 → 56_210 for #14122, measured at 56_205 B: `frontendAttached` on
+  // each `workspace.list` row, whether a call that needs a frontend reaches one
+  // there, a remote Shell's driving view included, which `hasLiveView` cannot
+  // say. Output only; `slashCommands.list`'s description gave back the clause
+  // its host-side form made untrue, and the field's own was trimmed first.
+  const MAX_EXTERNAL_PAYLOAD_BYTES = 56_210;
   // 190_000 → 192_700 for the same 2_048 B the external half above pays for.
   // Every byte #11909 spends sits on an externally advertised tool, so both
   // totals moved by the identical amount. Only this one needed the ratchet
@@ -810,7 +815,10 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // 130_130 → 130_630 for #14017, measured at 130_623 B: the same `restored`
   // object the external ceiling above pays for. The plugin-only hold action it
   // ships with is hidden from MCP and costs nothing here.
-  const MAX_COHORT_PAYLOAD_BYTES = 130_630;
+  // 130_630 → 131_000 for #14122, measured at 130_990 B: the same
+  // `workspace.list` field the external ceiling above pays for, and its twin on
+  // each project `host.list` names, null when a host doesn't say.
+  const MAX_COHORT_PAYLOAD_BYTES = 131_000;
 
   const wireBytes = (t: WireTool) => t.descriptionBytes + t.paramsBytes + t.outputBytes;
 
