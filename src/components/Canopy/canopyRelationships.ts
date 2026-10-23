@@ -33,7 +33,7 @@ export function workLinksByRun(
  * run with a new spawn time, and never borrows the earlier run's link.
  */
 export function workLinkOf(
-  item: CanopyItem,
+  item: Pick<CanopyItem, "runId"> & { row: { run: { spawnedAt: number } } },
   links: ReadonlyMap<string, AssistantWorkWorker>
 ): AssistantWorkWorker | null {
   const link = links.get(item.runId);

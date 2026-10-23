@@ -76,9 +76,20 @@ describe("WorkerCreationHistory", () => {
   it("forgets runs that are no longer alive", () => {
     const history = new WorkerCreationHistory(() => 1);
     history.note("owner", ["t1", "t2"]);
-    history.retainOnly(new Set(["t2"]));
+    history.retainOnly(new Set(["t2"]), history.mark());
     expect(history.get("t1", 1)).toBeUndefined();
     expect(history.get("t2", 1)).toBeDefined();
+  });
+
+  it("keeps a creation noted while the read it is pruned by was in flight", () => {
+    const history = new WorkerCreationHistory(() => 1);
+    history.note("owner", ["old"]);
+    const mark = history.mark();
+    // Created after the inventory was taken: absent from it without having gone.
+    history.note("owner", ["new"]);
+    history.retainOnly(new Set(), mark);
+    expect(history.get("old", 1)).toBeUndefined();
+    expect(history.get("new", 1)).toBeDefined();
   });
 });
 

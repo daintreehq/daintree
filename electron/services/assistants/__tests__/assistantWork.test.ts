@@ -40,7 +40,11 @@ function sources(options: {
     getLiveGeneration: (id) => options.generations[id] ?? null,
     isHelpTerminal: (id) => lanes.some((lane) => lane.terminalId === id),
     workOf: (id) => options.work[id] ?? null,
-    retainCreations: (live) => options.retained?.push(new Set(live)),
+    creationsMark: () => 7,
+    retainCreations: (live, mark) => {
+      expect(mark).toBe(7);
+      options.retained?.push(new Set(live));
+    },
     getSessionLane: (sessionId) => {
       const lane = lanes.find((candidate) => candidate.sessionId === sessionId);
       return lane ? { projectId: lane.projectId, slot: lane.slot } : null;

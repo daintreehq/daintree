@@ -1129,7 +1129,12 @@ function CanopyInbox({
       everyHost ? (participants.length > 0 ? participants : [ownHostId]) : [hostId ?? ownHostId],
     [everyHost, participants, ownHostId, hostId]
   );
-  const workReadings = useAssistantWork(workHosts, ownHostId, isOpen);
+  // Read only while it has something to show: worker rows' links, or the filter.
+  const workReadings = useAssistantWork(
+    workHosts,
+    ownHostId,
+    isOpen && (workersShown || workOf !== null)
+  );
   const workLinks = useMemo(
     () =>
       workLinksByRun(workReadings, everyHost ? allHostsKey : (_hostId, terminalId) => terminalId),
@@ -1158,7 +1163,14 @@ function CanopyInbox({
     [assistantsShown, workOf, searching, assistantItems, terms]
   );
   const showWork = (item: CanopyAssistantItem) => {
-    showWorkOf({ assistantId: item.id, name: `Daintree Assistant · ${item.scopeLabel}` });
+    if (workOf?.assistantId === item.id) {
+      showWorkOf(null);
+      useAnnouncerStore.getState().announce("Showing the whole inbox", "polite");
+      return;
+    }
+    const name = `Daintree Assistant · ${item.scopeLabel}`;
+    showWorkOf({ assistantId: item.id, name });
+    useAnnouncerStore.getState().announce(`Showing the work of ${name}`, "polite");
     // Its workers can be anywhere it reaches: every project, and every host when there are others.
     if (roleFilter === "assistants") setRoleFilter("all");
     if (storedScope === "project") setScope("all");
@@ -1168,16 +1180,21 @@ function CanopyInbox({
   const [assistantRefusal, setAssistantRefusal] = useState<{ id: string; text: string } | null>(
     null
   );
+  const inWork = useCallback(
+    (item: CanopyItem) =>
+      workOf === null || isWorkOf(workLinkOf(item, workLinks), workOf.assistantId),
+    [workOf, workLinks]
+  );
   const shownInbox = useMemo(() => {
     if (!workersShown) return { inbox: [], archived: [] };
     if (!searching && workOf === null) return inbox;
     const matches = (item: CanopyItem) =>
-      (workOf === null || isWorkOf(workLinkOf(item, workLinks), workOf.assistantId)) &&
+      inWork(item) &&
       (!searching ||
         onScreen?.has(item.runId) === true ||
         unmatchedTerms(item, terms).length === 0);
     return { inbox: inbox.inbox.filter(matches), archived: inbox.archived.filter(matches) };
-  }, [inbox, workersShown, searching, onScreen, terms, workOf, workLinks]);
+  }, [inbox, workersShown, searching, onScreen, terms, workOf, inWork]);
   const unreadOnly = useCanopyStore((s) => s.unreadOnly);
   const setUnreadOnly = useCanopyStore((s) => s.setUnreadOnly);
   // A run read while the Unread filter is on stays listed until the filter is
@@ -1295,7 +1312,9 @@ function CanopyInbox({
   // the pane shows it in place of a worker's.
   // A worker chosen and only folded away (Archived shut) keeps the pane.
   const workerChosen =
-    workersShown && focusedId !== null && items.some((item) => item.runId === focusedId);
+    workersShown &&
+    focusedId !== null &&
+    items.some((item) => item.runId === focusedId && inWork(item));
   const selectedAssistant: CanopyAssistantItem | null =
     shownAssistants.find((item) => item.id === assistantId) ??
     (visible.length === 0 && !workerChosen ? (shownAssistants[0] ?? null) : null);
@@ -1306,7 +1325,7 @@ function CanopyInbox({
         ? visible[focusedIndex]!
         : searching
           ? (visible[0] ?? null)
-          : (items.find((item) => item.runId === focusedId) ?? listed[0] ?? null);
+          : (items.find((item) => item.runId === focusedId && inWork(item)) ?? listed[0] ?? null);
   const visibleRef = useRef<CanopyItem[]>([]);
   const selectedRef = useRef<string | null>(null);
   // An answer or a reply settles after the panel may have closed, and a new
@@ -2502,18 +2521,24 @@ function CanopyInbox({
 
   // With assistants to list, or only assistants asked for, the list shows
   // even when no worker runs.
-  const listsAssistants = assistantsShown && (assistantItems.length > 0 || !workersShown);
+  // The relationship filter keeps the list, and its banner, up even with nothing in it.
+  const listsAssistants =
+    (assistantsShown && (assistantItems.length > 0 || !workersShown)) || workOf !== null;
   const assistantsEmpty: string | null = !assistantsReadable
     ? `Assistants on ${hostName} can't be listed from this window yet.`
-    : directory === null
-      ? null
-      : searching
-        ? `No assistant matches “${appliedQuery.trim()}”.`
-        : !isFullAgentDirectory(directory)
-          ? "Daintree couldn't list every assistant just now."
-          : scope === "project"
-            ? "No assistant is running in this project."
-            : "No assistant is running. Start one from the Assistant panel.";
+    : workOf !== null
+      ? directory !== null && isFullAgentDirectory(directory)
+        ? "This assistant isn't running any more."
+        : null
+      : directory === null
+        ? null
+        : searching
+          ? `No assistant matches “${appliedQuery.trim()}”.`
+          : !isFullAgentDirectory(directory)
+            ? "Daintree couldn't list every assistant just now."
+            : scope === "project"
+              ? "No assistant is running in this project."
+              : "No assistant is running. Start one from the Assistant panel.";
   // The assistant in the pane has had its handback in front of the person.
   // An assistant the person chose has had its handback in front of them. One
   // shown only because nothing else is listed hasn't: seeing it there would
@@ -2785,7 +2810,18 @@ function CanopyInbox({
                         </span>
                       )}
                     </span>
-                    <Button variant="outline" size="xs" onClick={() => showWorkOf(null)}>
+                    <Button
+                      variant="outline"
+                      size="xs"
+                      onClick={(event) => {
+                        // The button leaves with the banner: the keyboard stays in the panel.
+                        searchRef.current?.focus({
+                          preventScroll: true,
+                          focusVisible: event.detail === 0,
+                        });
+                        showWorkOf(null);
+                      }}
+                    >
                       Show all
                     </Button>
                   </div>
@@ -2873,7 +2909,7 @@ function CanopyInbox({
                           );
                         })}
                       </div>
-                    ) : searching &&
+                    ) : (searching || workOf !== null) &&
                       shownInbox.inbox.length === 0 &&
                       shownInbox.archived.length > 0 ? null : (
                       // A search whose only matches are archived lets their bar below say so.
@@ -2882,8 +2918,10 @@ function CanopyInbox({
                           ? shownInbox.inbox.length > 0
                             ? `Nothing unread matches “${appliedQuery.trim()}”.`
                             : `Nothing matches “${appliedQuery.trim()}”.`
-                          : workOf !== null && shownInbox.inbox.length === 0
-                            ? "No running worker was started by or handed to this assistant."
+                          : workOf !== null
+                            ? workPartial
+                              ? "None found on the hosts that could be read."
+                              : "No worker in the inbox was started by or handed to this assistant."
                             : unreadOnly && inbox.inbox.length > 0
                               ? "Nothing unread. Each agent shows here again when it does something new."
                               : "Every agent is archived. Each comes back when it has something new to say."}
@@ -2994,11 +3032,8 @@ function CanopyInbox({
                     assistantRefusal?.id === selectedAssistant.id ? assistantRefusal.text : null
                   }
                   onOpen={() => openAssistant(selectedAssistant)}
-                  onShowWork={
-                    workOf?.assistantId === selectedAssistant.id
-                      ? null
-                      : () => showWork(selectedAssistant)
-                  }
+                  showingWork={workOf?.assistantId === selectedAssistant.id}
+                  onShowWork={() => showWork(selectedAssistant)}
                 />
               ) : (
                 <>

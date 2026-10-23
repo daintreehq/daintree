@@ -3,7 +3,6 @@ import type { AgentDirectorySubject } from "@shared/types/agentDirectory";
 import type { AssistantWorkReading, AssistantWorkWorker } from "@shared/types/assistantWork";
 import { allHostsKey } from "../canopyAllHosts";
 import { canopyAssistantId } from "../canopyAssistants";
-import type { CanopyItem } from "../canopyModel";
 import {
   hostsWithPartialWork,
   isWorkOf,
@@ -43,8 +42,8 @@ function reading(
   return { coverage: "ok", observedAt: 1, complete: true, omitted: 0, workers, ...overrides };
 }
 
-function item(runId: string, spawnedAt = 100): CanopyItem {
-  return { runId, row: { run: { spawnedAt } } } as unknown as CanopyItem;
+function item(runId: string, spawnedAt = 100) {
+  return { runId, row: { run: { spawnedAt } } };
 }
 
 const names = (subject: AgentDirectorySubject) =>

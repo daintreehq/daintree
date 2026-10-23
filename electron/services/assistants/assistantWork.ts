@@ -33,8 +33,10 @@ export interface AssistantWorkSources {
   isHelpTerminal(terminalId: string): boolean;
   /** Null while no MCP server holds any records: then no assistant made or holds anything. */
   workOf(terminalId: string, launchGeneration: number): RunAssistantWork | null;
-  /** Forget creations of runs no longer alive, after a complete read. */
-  retainCreations(liveTerminalIds: ReadonlySet<string>): void;
+  /** Where the creation history stood, taken before the inventory is read. */
+  creationsMark(): number;
+  /** Forget creations noted before `mark` of runs no longer alive, after a complete read. */
+  retainCreations(liveTerminalIds: ReadonlySet<string>, mark: number): void;
   getSessionLane(helpSessionId: string): { projectId: string; slot: number } | null;
   getRunningLaneSession(projectId: string, slot: number): RunningLaneSession | null;
 }
@@ -109,6 +111,7 @@ function hostRef(
 export async function collectAssistantWork(
   sources: AssistantWorkSources
 ): Promise<AssistantWorkHostReading> {
+  const mark = sources.creationsMark();
   const { terminals, degraded } = await sources.readTerminals();
   let complete = !degraded;
   const workers: AssistantWorkHostWorker[] = [];
@@ -133,7 +136,7 @@ export async function collectAssistantWork(
       control: work.controlledBy?.basis ?? null,
     });
   }
-  if (complete) sources.retainCreations(new Set(terminals.map((terminal) => terminal.id)));
+  if (complete) sources.retainCreations(new Set(terminals.map((terminal) => terminal.id)), mark);
   const kept = workers.slice(0, ASSISTANT_WORK_WORKERS_MAX);
   return {
     coverage: "ok",

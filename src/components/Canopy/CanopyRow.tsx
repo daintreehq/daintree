@@ -342,6 +342,7 @@ export function CanopyRow({
       ? `answer with ${choices.map((choice, index) => `${index + 1} ${choice}`).join(", ")}`
       : null,
     unseenLabel !== null ? unseenLabel.toLowerCase() : null,
+    workLabel,
     where,
     asideLabel !== null ? asideLabel.toLowerCase() : handled ? "replied" : null,
     item.failed ? "read failed" : null,

@@ -1,9 +1,13 @@
 import {
   assistantPrincipalOf,
   type AssistantOwnershipPrincipal,
+  type OwnedResourceDraft,
+  type OwnedResourceKind,
   type ResourceOwnershipLedger,
 } from "./resourceOwnership.js";
 import type { TerminalAdoptionLedger } from "./terminalAdoption.js";
+
+const TERMINAL: OwnedResourceKind = "terminal";
 
 /** Most runs whose creator is remembered; the oldest go first. */
 export const WORKER_CREATION_HISTORY_MAX = 1024;
@@ -14,6 +18,8 @@ export interface WorkerCreation {
   /** The launch generation of the run created; null when main tracked none. */
   launchGeneration: number | null;
   createdAt: number;
+  /** Order of noting, for fencing a prune against creations a read could not have seen. */
+  sequence: number;
 }
 
 /**
@@ -29,12 +35,21 @@ export interface WorkerCreation {
  */
 export class WorkerCreationHistory {
   private readonly byTerminal = new Map<string, WorkerCreation>();
+  private sequence = 0;
 
   constructor(
     private readonly launchGenerationOf: (terminalId: string) => number | null = () => null,
     private readonly now: () => number = Date.now,
     private readonly max: number = WORKER_CREATION_HISTORY_MAX
   ) {}
+
+  /** Note the terminals among a trusted dispatch's created resources. */
+  noteDrafts(owner: string, drafts: readonly OwnedResourceDraft[]): void {
+    this.note(
+      owner,
+      drafts.filter((draft) => draft.kind === TERMINAL).map((draft) => draft.id)
+    );
+  }
 
   /** Note the terminals `owner` was just recorded as creating. */
   note(owner: string, terminalIds: readonly string[]): void {
@@ -44,6 +59,7 @@ export class WorkerCreationHistory {
         owner,
         launchGeneration: this.launchGenerationOf(terminalId),
         createdAt: this.now(),
+        sequence: ++this.sequence,
       });
       if (this.byTerminal.size > this.max) {
         this.byTerminal.delete(this.byTerminal.keys().next().value as string);
@@ -59,10 +75,21 @@ export class WorkerCreationHistory {
       : undefined;
   }
 
-  /** Forget runs no longer alive, after a complete read of what runs. */
-  retainOnly(liveTerminalIds: ReadonlySet<string>): void {
-    for (const terminalId of [...this.byTerminal.keys()]) {
-      if (!liveTerminalIds.has(terminalId)) this.byTerminal.delete(terminalId);
+  /** Taken before a read of what runs; see {@link retainOnly}. */
+  mark(): number {
+    return this.sequence;
+  }
+
+  /**
+   * Forget runs no longer alive, after a complete read of what runs. Only
+   * creations noted before `mark` was taken: one noted while the read was in
+   * flight may be missing from it without having gone.
+   */
+  retainOnly(liveTerminalIds: ReadonlySet<string>, mark: number): void {
+    for (const [terminalId, creation] of [...this.byTerminal]) {
+      if (creation.sequence <= mark && !liveTerminalIds.has(terminalId)) {
+        this.byTerminal.delete(terminalId);
+      }
     }
   }
 }

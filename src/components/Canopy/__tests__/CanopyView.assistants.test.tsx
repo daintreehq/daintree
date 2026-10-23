@@ -457,6 +457,25 @@ describe("CanopyView show its work", () => {
     expect(document.querySelector('[data-testid="canopy-work-of"]')!.textContent).toContain(
       "Some hosts couldn't be read, so this may be incomplete"
     );
+    // Never a claim that there is no work, on a reading that can't say so.
+    expect(document.body.textContent).toContain("None found on the hosts that could be read.");
+    expect(document.body.textContent).not.toContain("No worker in the inbox");
+  });
+
+  it("toggles back to the whole inbox from the same button, keeping it pressed while on", async () => {
+    assistantWork = { ...assistantWork, workers: [linked("waiting", 0)] };
+    await showWorkOfFirstAssistant();
+    const button = [...document.querySelectorAll("button")].find(
+      (candidate) => candidate.textContent === "Show its work"
+    )!;
+    expect(button.getAttribute("aria-pressed")).toBe("true");
+    expect(workerIds()).toEqual(["waiting"]);
+    await act(async () => {
+      fireEvent.click(button);
+    });
+    await settle();
+    expect(workerIds()).toEqual(["waiting", "working"]);
+    expect(useCanopyStore.getState().workOf).toBeNull();
   });
 
   it("ends with the panel: a reopened panel shows the whole inbox", async () => {

@@ -32,10 +32,7 @@ import {
   principalOwnerKey,
   relayOwnershipPrincipal,
 } from "./mcp-server/resourceOwnership.js";
-import {
-  readRunAssistantWork,
-  type RunAssistantWork,
-} from "./mcp-server/workerCreationHistory.js";
+import { readRunAssistantWork, type RunAssistantWork } from "./mcp-server/workerCreationHistory.js";
 import type { TerminalAdoptionRecord } from "./mcp-server/terminalAdoption.js";
 import { LOCAL_HOST_ID } from "../../shared/types/remoteHosts.js";
 import { getAgentAvailabilityStore } from "./AgentAvailabilityStore.js";
@@ -633,9 +630,14 @@ export class McpServerService {
     return readRunAssistantWork(this.sessionStore, terminalId, launchGeneration);
   }
 
-  /** Forget creations of runs no longer alive, after a complete read of what runs. */
-  retainWorkerCreations(liveTerminalIds: ReadonlySet<string>): void {
-    this.sessionStore.workerCreations.retainOnly(liveTerminalIds);
+  /** Taken before a read of what runs, to fence {@link retainWorkerCreations}. */
+  workerCreationsMark(): number {
+    return this.sessionStore.workerCreations.mark();
+  }
+
+  /** Forget creations noted before `mark` of runs no longer alive, after a complete read. */
+  retainWorkerCreations(liveTerminalIds: ReadonlySet<string>, mark: number): void {
+    this.sessionStore.workerCreations.retainOnly(liveTerminalIds, mark);
   }
 
   /**

@@ -31,7 +31,8 @@ const sources: AssistantWorkSources = {
   isHelpTerminal: (terminalId) => getAgentAvailabilityStore().isHelpTerminal(terminalId),
   workOf: (terminalId, generation) =>
     getMcpServerServiceRef()?.assistantWorkOf(terminalId, generation) ?? null,
-  retainCreations: (live) => getMcpServerServiceRef()?.retainWorkerCreations(live),
+  creationsMark: () => getMcpServerServiceRef()?.workerCreationsMark() ?? 0,
+  retainCreations: (live, mark) => getMcpServerServiceRef()?.retainWorkerCreations(live, mark),
   getSessionLane: (sessionId) => helpSessionService.getSessionLane(sessionId),
   getRunningLaneSession: (projectId, slot) =>
     helpSessionService.getRunningLaneSession(projectId, slot),
