@@ -762,6 +762,31 @@ describe("Plugin IPC handler registration", () => {
       }
     });
 
+    it("hands the caller the JSON copy it checked", async () => {
+      service.registerPluginAction("acme.test-plugin", {
+        id: "acme.test-plugin.stamp",
+        title: "Stamp",
+        description: "Stamp action",
+        category: "test",
+        kind: "query",
+        danger: "safe",
+        resultSchema: { type: "object", properties: { at: { type: "string" } } },
+      });
+      service.registerHandler(
+        "acme.test-plugin",
+        "acme.test-plugin.stamp",
+        vi.fn().mockResolvedValue({ at: new Date(0), gone: undefined })
+      );
+
+      const result = await service.dispatchHandler(
+        "acme.test-plugin",
+        "acme.test-plugin.stamp",
+        makeCtx("acme.test-plugin"),
+        []
+      );
+      expect(result).toStrictEqual({ at: "1970-01-01T00:00:00.000Z" });
+    });
+
     it("leaves a channel no action descriptor names unchecked", async () => {
       registerReport();
       service.registerHandler("acme.test-plugin", "raw-channel", vi.fn().mockResolvedValue("text"));

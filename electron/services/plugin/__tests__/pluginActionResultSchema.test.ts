@@ -2,9 +2,16 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   compilePluginActionResultSchema,
   enforcePluginActionResult,
+  type PluginActionResultCheck,
 } from "../pluginActionResultSchema.js";
 
 const ACTION = "acme.tool.report";
+
+const enforce = (
+  check: PluginActionResultCheck | undefined,
+  result: unknown,
+  maxBytes = 1024 * 1024
+): unknown => enforcePluginActionResult("acme.tool", ACTION, check, result, maxBytes);
 
 describe("compilePluginActionResultSchema", () => {
   it("resolves references inside the schema", () => {
@@ -73,7 +80,7 @@ describe("enforcePluginActionResult", () => {
 
   it("hands back the very value for an action with no schema", () => {
     const result = { at: new Date(0) };
-    expect(enforcePluginActionResult(ACTION, undefined, result)).toBe(result);
+    expect(enforce(undefined, result)).toBe(result);
   });
 
   it("checks the JSON a caller receives, so a Date can't pass for an object", () => {
@@ -88,9 +95,9 @@ describe("enforcePluginActionResult", () => {
     }).check;
 
     expect(
-      rejection(() => enforcePluginActionResult(ACTION, asObject, { at: new Date(0) }))?.code
+      rejection(() => enforce(asObject, { at: new Date(0) }))?.code
     ).toBe("RESULT_VALIDATION_ERROR");
-    expect(enforcePluginActionResult(ACTION, asString, { at: new Date(0) })).toEqual({
+    expect(enforce(asString, { at: new Date(0) })).toEqual({
       at: "1970-01-01T00:00:00.000Z",
     });
   });
@@ -101,11 +108,37 @@ describe("enforcePluginActionResult", () => {
     const cyclic: Record<string, unknown> = {};
     cyclic.self = cyclic;
 
-    expect(rejection(() => enforcePluginActionResult(ACTION, check, cyclic))?.code).toBe(
+    expect(rejection(() => enforce(check, cyclic))?.code).toBe(
       "RESULT_VALIDATION_ERROR"
     );
-    expect(rejection(() => enforcePluginActionResult(ACTION, check, undefined))?.code).toBe(
+    expect(rejection(() => enforce(check, undefined))?.code).toBe(
       "RESULT_VALIDATION_ERROR"
+    );
+  });
+
+  it("holds the JSON copy to the cap even when the measured value was small", () => {
+    const { check } = compilePluginActionResultSchema(ACTION, { type: "object" });
+    // One value referenced from many keys is counted once by the structured-clone
+    // estimate, but JSON writes it out every time.
+    const leaf = "x".repeat(1_000);
+    const shared = { items: Array.from({ length: 50 }, () => leaf) };
+    let fanOut: Record<string, unknown> = { leaf };
+    for (let depth = 0; depth < 40; depth += 1) fanOut = { a: fanOut, b: fanOut };
+
+    for (const result of [shared, fanOut]) {
+      expect(rejection(() => enforce(check, result, 10_000))?.message).toMatch(
+        /^PLUGIN_PAYLOAD_TOO_LARGE: plugin "acme.tool"/
+      );
+    }
+  });
+
+  it("measures the copy in UTF-8 bytes, not characters", () => {
+    const { check } = compilePluginActionResultSchema(ACTION, { type: "object" });
+    const result = { text: "é".repeat(600) };
+
+    expect(enforce(check, result, 1_300)).toEqual(result);
+    expect(rejection(() => enforce(check, result, 1_100))?.message).toMatch(
+      /^PLUGIN_PAYLOAD_TOO_LARGE/
     );
   });
 
@@ -117,7 +150,7 @@ describe("enforcePluginActionResult", () => {
     });
 
     const thrown = rejection(() =>
-      enforcePluginActionResult(ACTION, check, { "/home/someone/notes.txt": 1 })
+      enforce(check, { "/home/someone/notes.txt": 1 })
     );
 
     expect(thrown?.code).toBe("RESULT_VALIDATION_ERROR");

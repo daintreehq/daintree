@@ -5628,7 +5628,13 @@ export class PluginService {
         PLUGIN_INVOKE_MAX_RESULT_BYTES
       );
       // Like the size check, a failed dispatch the outer catch records.
-      actionResult = enforcePluginActionResult(channel, resultCheck, actionResult);
+      actionResult = enforcePluginActionResult(
+        pluginId,
+        channel,
+        resultCheck,
+        actionResult,
+        PLUGIN_INVOKE_MAX_RESULT_BYTES
+      );
       // Audit the success path too (#10517). A plugin calling its own
       // registered action handler from its view must leave the same durable
       // trail on success as on failure — otherwise a benign-looking action can
@@ -5740,7 +5746,13 @@ export class PluginService {
     );
     // A channel handler registered under an action's id is that action's
     // implementation, so its result answers to the action's contract too.
-    finalResult = enforcePluginActionResult(channel, resultCheck, finalResult);
+    finalResult = enforcePluginActionResult(
+      pluginId,
+      channel,
+      resultCheck,
+      finalResult,
+      PLUGIN_INVOKE_MAX_RESULT_BYTES
+    );
 
     // Audit the success path too (#10517). The catch above records IPC-handler
     // failures; without this, a plugin invoking its own registered handler via

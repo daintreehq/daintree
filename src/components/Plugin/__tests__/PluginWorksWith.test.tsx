@@ -57,6 +57,7 @@ describe("buildWorksWithPeers", () => {
   });
 
   it.each([
+    [false, false, { name: "Installed copy", turnedOff: false }],
     [false, true, { name: "Installed copy", turnedOff: false }],
     [true, false, { name: "Project copy", turnedOff: false }],
     [true, true, { name: "Installed copy", turnedOff: true }],

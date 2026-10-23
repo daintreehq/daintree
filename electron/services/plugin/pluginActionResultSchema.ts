@@ -1,6 +1,7 @@
 import type { PluginActionResultSchema } from "../../../shared/types/plugin.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import { AppError } from "../../utils/errorTypes.js";
+import { PluginPayloadTooLargeError } from "./pluginPayloadLimits.js";
 import {
   compileAgentMcpSchema,
   type AgentMcpSchemaCheck,
@@ -62,6 +63,24 @@ export function compilePluginActionResultSchema(
   }
 }
 
+class JsonBudgetExceeded extends Error {}
+
+/**
+ * `JSON.stringify`, abandoned once the output is sure to pass `maxBytes`. The
+ * structured-clone estimate that runs first counts a shared object once, while
+ * JSON writes it out at every reference, so without a running count one large
+ * value referenced from many keys would expand far past the cap in main. Each
+ * visit subtracts no more than it adds to the output, so a stop is never early.
+ */
+function stringifyWithin(value: unknown, maxBytes: number): string | undefined {
+  let remaining = maxBytes;
+  return JSON.stringify(value, (key, child: unknown) => {
+    remaining -= key.length + (typeof child === "string" ? child.length : 1);
+    if (remaining < 0) throw new JsonBudgetExceeded();
+    return child;
+  });
+}
+
 /**
  * Hold a plugin action's result to its declared schema and return what the
  * caller receives. An action without a schema gets its result back untouched.
@@ -70,24 +89,36 @@ export function compilePluginActionResultSchema(
  * goes back: a JSON Schema describes JSON, and the agent MCP path sends JSON,
  * so checking the live value would let a `Date` pass as an object here and
  * reach an agent as a string its schema refuses. A structured-clone caller then
- * receives exactly what was checked, too.
+ * receives exactly what was checked, too. The copy is held to `maxBytes` as
+ * well, since it can be larger than the value the size check measured.
  *
  * The problem description names paths and keys taken from the result itself,
  * so it stays in the main log; what the caller receives names only the action.
  */
 export function enforcePluginActionResult(
+  pluginId: string,
   actionId: string,
   check: PluginActionResultCheck | undefined,
-  result: unknown
+  result: unknown,
+  maxBytes: number
 ): unknown {
   if (!check) return result;
+  const what = `result of "${actionId}"`;
   let delivered: unknown;
   let problem: string | null;
   try {
-    const text = JSON.stringify(result);
+    const text = stringifyWithin(result, maxBytes);
+    if (text !== undefined) {
+      const bytes = Buffer.byteLength(text, "utf8");
+      if (bytes > maxBytes) throw new PluginPayloadTooLargeError(pluginId, what, maxBytes, bytes);
+    }
     delivered = text === undefined ? undefined : JSON.parse(text);
     problem = check(delivered);
   } catch (err) {
+    if (err instanceof PluginPayloadTooLargeError) throw err;
+    if (err instanceof JsonBudgetExceeded) {
+      throw new PluginPayloadTooLargeError(pluginId, `${what} as JSON`, maxBytes);
+    }
     problem = `is not JSON-serializable: ${formatErrorMessage(err, "serialization failed")}`;
   }
   if (problem === null) return delivered;

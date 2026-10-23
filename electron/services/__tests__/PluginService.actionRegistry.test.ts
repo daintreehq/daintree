@@ -1184,6 +1184,17 @@ describe("createHost — registerAction", () => {
       expect(failure?.message).toContain(ACTION);
     });
 
+    it("refuses a result whose JSON outgrows the result cap the clone estimate let through", async () => {
+      // Counted once by the structured-clone estimate, written out 20 times as JSON.
+      const leaf = { text: "x".repeat(1024 * 1024) };
+      const { host } = getHost("acme.act-test");
+      host.registerAction(descriptor({ resultSchema: { type: "object" } }), () => ({
+        items: Array.from({ length: 20 }, () => leaf),
+      }));
+
+      await expect(dispatch()).rejects.toThrow(/^PLUGIN_PAYLOAD_TOO_LARGE: .*as JSON/);
+    });
+
     it("refuses a schema it can't enforce, and registers nothing", () => {
       const { host } = getHost("acme.act-test");
       for (const resultSchema of [
