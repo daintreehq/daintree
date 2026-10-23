@@ -23,6 +23,7 @@ import { isPanelLimitError } from "@/services/actions/definitions/panelLimitErro
 import { notify } from "@/lib/notify";
 import { logError } from "@/utils/logger";
 import { StopProjectConfirmDialog } from "./components/Project/StopProjectConfirmDialog";
+import { useProjectSleepConfirmStore } from "@/store/projectSleepConfirmStore";
 import { usePilotStore } from "@/store/pilotStore";
 import { useCanopyStore } from "@/store/canopyStore";
 import { useScratchStore } from "@/store/scratchStore";
@@ -78,6 +79,7 @@ import {
   LazyFileMutationConfirmDialog,
   LazyGitWorktreeOperationConfirmDialog,
   LazyGitForcePushConfirmDialog,
+  LazyProjectSleepConfirmDialog,
   LazyRecipeConflictDialog,
   LazyOnboardingFlow,
   LazyGettingStartedChecklist,
@@ -153,6 +155,7 @@ interface ModalHostLayerProps {
   fileMutationResetKey: number;
   gitWorktreeOperationResetKey: number;
   gitForcePushResetKey: number;
+  projectSleepResetKey: number;
   recipeConflictResetKey: number;
   gitInitDialogOpen: boolean;
   shouldMountGitInitDialog: boolean;
@@ -250,6 +253,7 @@ export function ModalHostLayer({
   fileMutationResetKey,
   gitWorktreeOperationResetKey,
   gitForcePushResetKey,
+  projectSleepResetKey,
   recipeConflictResetKey,
   gitInitDialogOpen,
   shouldMountGitInitDialog,
@@ -984,6 +988,21 @@ export function ModalHostLayer({
         >
           <Suspense fallback={null}>
             <LazyGitForcePushConfirmDialog />
+          </Suspense>
+        </ErrorBoundary>
+      )}
+
+      {isStateLoaded && (
+        <ErrorBoundary
+          variant="component"
+          componentName="ProjectSleepConfirmDialog"
+          resetKeys={[projectSleepResetKey]}
+          // A failed lazy import never reaches the dialog's own boundary; settle
+          // the request the action is awaiting rather than leave it to hang.
+          onError={() => useProjectSleepConfirmStore.getState().resolveConfirmation(false)}
+        >
+          <Suspense fallback={null}>
+            <LazyProjectSleepConfirmDialog />
           </Suspense>
         </ErrorBoundary>
       )}

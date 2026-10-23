@@ -50,6 +50,7 @@ export const NATIVE_GRANT_USE_POLICY_OVERRIDES: Readonly<
   "terminal.closeAll": "per-resolved-target",
   "terminal.killAll": "per-resolved-target",
   "terminal.killBatch": "per-resolved-target",
+  "project.sleepIdle": "per-resolved-target",
 };
 
 // Keyed lookup rather than a bare index into the literal above: `toolId` is

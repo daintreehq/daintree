@@ -6,7 +6,10 @@ import { pickAgentVisibleProjectSettings } from "@shared/types";
 import { z } from "zod";
 import { PROJECT_LIST_SORT_MODES } from "@shared/types/project";
 import { projectClient, projectGroupsClient } from "@/clients";
+import { terminalClient } from "@/clients/terminalClient";
 import { useProjectStore } from "@/store/projectStore";
+import { useProjectSleepConfirmStore } from "@/store/projectSleepConfirmStore";
+import { useProjectStatsStore } from "@/store/projectStatsStore";
 import { useScratchStore } from "@/store/scratchStore";
 import { getViewWorkspaceId } from "@/store/viewWorkspaceId";
 import { isProjectViewCached } from "@/lib/viewCacheState";
@@ -25,6 +28,7 @@ import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { logWarn } from "@/utils/logger";
 import { isScratchWorkspaceId } from "@shared/utils/workspaceIds";
 import { suppressPaletteFocusRestore } from "@/components/ui/paletteFocusRestore";
+import { sleepIdleProjectsWithConfirm } from "@/hooks/useSleepIdleProjects";
 
 /**
  * Wire shape of `project.getSettings`.
@@ -763,6 +767,103 @@ export function registerProjectActions(actions: ActionRegistry, callbacks: Actio
       const projectId = useProjectStore.getState().currentProject?.id;
       if (!projectId) return;
       callbacks.onConfirmCloseActiveProject(projectId);
+    },
+  }));
+
+  actions.set("project.sleep", () => ({
+    id: "project.sleep",
+    title: "Sleep project",
+    description:
+      "Stop a project's terminals to free memory. Its layout, terminal scrollback and agent sessions come back when the project is reopened. Defaults to the current project; sleeping that one returns the window to the project picker. Asks the user to confirm unless the project is in the background with nothing running.",
+    category: "project",
+    kind: "command",
+    danger: "confirm",
+    dangerRationale:
+      "Stops the project's terminals and agent processes. Layout and sessions are kept for the reopen, but anything running in them is lost.",
+    nonRepeatable: true,
+    scope: "renderer",
+    argsSchema: z.object({ projectId: z.string().optional() }),
+    run: async (args: unknown, ctx: ActionContext) => {
+      const { projectId } = (args ?? {}) as { projectId?: string };
+      const id = resolveProjectId(projectId);
+      const store = useProjectStore.getState();
+      const project = store.projects.find((p) => p.id === id);
+      if (!project) throw new Error(`Project not found: ${id}`);
+
+      const entry = useProjectStatsStore.getState().stats[id];
+      const isActive = store.currentProject?.id === id;
+      const terminalCount = entry?.processCount ?? 0;
+      const activeAgentCount = entry?.activeAgentCount ?? 0;
+      const waitingAgentCount = entry?.waitingAgentCount ?? 0;
+      // Matches the switcher: confirm when something would be stopped, or when the
+      // project is the one on screen; a quiet background project sleeps at once.
+      // No stats entry is unknown rather than quiet.
+      let liveTerminalCount = 0;
+      let liveReadFailed = false;
+      if (!isActive && ctx.dispatchSource !== "agent") {
+        // The pushed counts leave out a hidden assistant's terminal, so read the
+        // host's own list; a read that fails is unknown, not quiet.
+        try {
+          liveTerminalCount = (await terminalClient.getAll()).filter(
+            (t) => t.projectId === id && !t.isTrashed && t.hasPty !== false
+          ).length;
+        } catch {
+          liveReadFailed = true;
+        }
+      }
+      const mayStopWork =
+        isActive ||
+        !entry ||
+        liveReadFailed ||
+        liveTerminalCount > 0 ||
+        terminalCount > 0 ||
+        activeAgentCount > 0 ||
+        waitingAgentCount > 0;
+      // An agent dispatch has already cleared the MCP bridge's own confirm, which
+      // names this project through its args; this store resolves only from a
+      // renderer dialog a headless client can't click, so asking again would
+      // hang past the dispatch deadline and could still fire afterwards (#11538).
+      if (mayStopWork && ctx.dispatchSource !== "agent") {
+        const ok = await useProjectSleepConfirmStore.getState().requestConfirmation({
+          kind: "project",
+          projects: [
+            {
+              id,
+              name: project.name,
+              path: project.path,
+              terminalCount: Math.max(terminalCount, liveTerminalCount),
+              activeAgentCount,
+              waitingAgentCount,
+              isActive,
+            },
+          ],
+        });
+        if (!ok) return { slept: false };
+      }
+      await useProjectStore.getState().sleepProject(id);
+      return { slept: true };
+    },
+  }));
+
+  actions.set("project.sleepIdle", () => ({
+    id: "project.sleepIdle",
+    title: "Sleep idle projects",
+    description:
+      "Sleep every background project that has no agent working or waiting on the user and isn't open in a window, after the user confirms a preview naming each one with an estimate of its terminal memory. Takes no arguments. The estimate sums process memory and counts shared pages, so the memory actually freed is lower.",
+    category: "project",
+    kind: "command",
+    danger: "confirm",
+    dangerRationale:
+      "Stops the terminals of every previewed project. Layout and sessions are kept for the reopen, but anything running in them is lost.",
+    nonRepeatable: true,
+    scope: "renderer",
+    run: async (_args: unknown, ctx: ActionContext) => {
+      // Targets are resolved here, from live state, so an agent's approval can't
+      // name them; the same candidate rules and per-project re-checks still apply.
+      const slept = await sleepIdleProjectsWithConfirm({
+        alreadyApproved: ctx.dispatchSource === "agent",
+      });
+      return { slept: slept > 0, count: slept };
     },
   }));
 

@@ -306,6 +306,7 @@ function AppInner() {
   const {
     gitPushResetKey,
     gitForcePushResetKey,
+    projectSleepResetKey,
     gitPullRebaseResetKey,
     fileMutationResetKey,
     gitWorktreeOperationResetKey,
@@ -638,6 +639,7 @@ function AppInner() {
                 diagnosticsReviewResetKey={diagnosticsReviewResetKey}
                 gitPushResetKey={gitPushResetKey}
                 gitForcePushResetKey={gitForcePushResetKey}
+                projectSleepResetKey={projectSleepResetKey}
                 gitPullRebaseResetKey={gitPullRebaseResetKey}
                 fileMutationResetKey={fileMutationResetKey}
                 gitWorktreeOperationResetKey={gitWorktreeOperationResetKey}
