@@ -578,6 +578,20 @@ This classification is host-side UX policy on Daintree's own action system. It d
 
 The mechanism is reserved for security responses to known-compromised plugins, not for normal version deprecation.
 
+## Vanilla install and the cheap empty path
+
+Most users run Daintree with no plugin installed and the built-ins at their shipped defaults (GitHub and GitLab on; `shared/config/pluginDefaults.ts` lists the ones that ship disabled). That install must not pay for the plugin framework: every new plugin capability has to show a cheap empty path, meaning that with no consumer there is no capability-owned worker, child process, watcher, recurring sampler or repeated publication, and the optional implementation code stays behind a demand boundary (a dynamic import or a lazy chunk). A capability proves it with a test of acquisition and of release, not only of the empty case.
+
+The deterministic guards are:
+
+- `electron/services/__tests__/PluginService.vanilla.test.ts` loads the real shipped built-ins and asserts no plugin worker, no plugin MCP child and no `setInterval` exists afterwards. Substitute only the process boundary, and extend this test when a capability adds a new resource.
+- `src/hooks/__tests__/usePluginPanelLifecycle.test.tsx` asserts that status and title churn across 20 and 100 terminals does no lifecycle work, no kind lookup and no inventory IPC (#14126).
+- `npm run check:vanilla-plugin-bundles` reads the production build and fails if anything of a default-disabled built-in beyond its view registration stub lands in a chunk loaded before first render. Run it after `npm run build`.
+
+Project plugin discovery is a known exception: opening a project watches for `.daintree/plugins` appearing (a non-recursive sentinel with a bounded existence poll), so the first plugin is found without a restart. It is accounted for rather than disabled; do not add a second observer beside it.
+
+For a reading rather than a gate, `npm run perf vanilla-plugins -- --panels 20` (or `100`) opens a fixture project with that many terminals in a fresh profile and reports idle CPU, memory, utility process count and idle wakeups over a window. It runs the built app, not an installer, does not read first interactive frame or per-channel plugin IPC counts, and reports wakeups as zero on Windows. Nothing gates on it and it never runs on a schedule.
+
 ## Why these choices
 
 A short rationale for the decisions most likely to feel arbitrary:

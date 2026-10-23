@@ -170,6 +170,12 @@ function playwrightBench({ summary, kind, spec, gate, build }: PlaywrightBench):
 }
 
 export const REGISTRY: Record<string, Command> = {
+  "vanilla-plugins": {
+    summary:
+      "Idle cost of vanilla Daintree with 20 or 100 terminals and no plugins (opt-in, #14129)",
+    kind: "diagnostic",
+    runner: tsxScript("vanilla-plugins.ts"),
+  },
   "foreground-terminal": {
     summary: "Visible single/two-agent terminal CPU and GPU time (macOS, explicit scenario)",
     kind: "mechanism",

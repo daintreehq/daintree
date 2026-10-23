@@ -82,6 +82,7 @@
     "check:channel-locality": "tsx scripts/ci/check-channel-locality.ts",
     "check:preload-backdoors": "node scripts/ci/check-preload-backdoors.mjs",
     "check:element-picker-bundles": "node scripts/ci/check-element-picker-bundles.mjs",
+    "check:vanilla-plugin-bundles": "node scripts/ci/check-vanilla-plugin-bundles.mjs",
     "check:crash-loop-constants": "node scripts/ci/check-crash-loop-constants.mjs",
     "check:node-version": "node scripts/ci/check-node-version-drift.mjs",
     "check:control-bytes": "node scripts/ci/check-no-raw-control-bytes.mjs",
