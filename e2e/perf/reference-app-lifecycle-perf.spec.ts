@@ -7,7 +7,6 @@ import path from "node:path";
 import { launchApp, closeApp, getActiveAppWindow, type AppContext } from "../helpers/launch";
 import { openAndOnboardProject } from "../helpers/project";
 import { addAndSwitchToProject } from "../helpers/workflows";
-import { openProjectPluginPanel, waitForProjectPluginPanelKind } from "../helpers/projectPlugins";
 import { mean, pct } from "../helpers/switchRotation";
 import {
   LIFECYCLE_WORKLOAD,
@@ -34,10 +33,13 @@ import {
  *   user waits for and is comparable only with itself.
  * - `memory`: working set per process type from `app.getAppMetrics()`, after
  *   the rotation, with the cache full. Shared pages are counted per process.
- * - `cpu.idle` / `cpu.active`: cumulative CPU time deltas per PID over a fixed
- *   window, as a percentage of one core; processes that started or ended inside
- *   the window are reported, not folded in. Idle is the foreground Home with one
- *   cached background project; active is the same while a report builds.
+ *   Electron reports no memory on Linux, so there it is null, not zero.
+ * - `cpu.idle` / `cpu.active`: cumulative CPU time deltas per process (PID and
+ *   creation time) over a fixed window, as a percentage of one core; processes
+ *   that started or ended inside the window are counted, not folded in, and a
+ *   window where no process exposed a counter reads null. Idle is the foreground
+ *   Home with one cached background project; active is one report build plus
+ *   the idle after it in the same window.
  *
  *   npm run perf reference-app-lifecycle
  *   RUN_PERF_REFERENCE_APP=1 npx playwright test --config=playwright.perf.config.ts --project=perf e2e/perf/reference-app-lifecycle-perf.spec.ts
@@ -68,7 +70,11 @@ interface Sample {
 interface CpuWindow {
   windowMs: number;
   byType: Record<string, number>;
-  totalPercentOfCore: number;
+  /** Null when no process exposed a cumulative counter at both ends. */
+  totalPercentOfCore: number | null;
+  measured: number;
+  unavailable: number;
+  /** Differences between the two snapshots; a process born and gone between them is invisible. */
   started: number;
   ended: number;
 }
@@ -159,11 +165,14 @@ async function trustAndOpenHome(page: Page, desk: Desk): Promise<void> {
     ([id]) => window.electron.plugin.invoke(id, "connection.connect", { workspace: "Perf" }),
     [desk.instanceId] as const
   );
-  const { kindId } = await waitForProjectPluginPanelKind(page, REFERENCE_APP_ID);
-  await openProjectPluginPanel(page, kindId, { reuseExisting: true });
-  await expect(page.getByText(desk.sentinel, { exact: true }).first()).toBeVisible({
+  await expect(homeSentinel(page, desk)).toBeVisible({
     timeout: APP_TIMEOUT,
   });
+}
+
+/** The application's Home, beside the grid, showing this project's own sentinel. */
+function homeSentinel(page: Page, desk: Desk) {
+  return page.getByTestId("project-home").getByText(desk.sentinel, { exact: true }).first();
 }
 
 async function measureSwitch(from: Page, desk: Desk): Promise<{ page: Page; sample: Sample }> {
@@ -183,7 +192,7 @@ async function measureSwitch(from: Page, desk: Desk): Promise<{ page: Page; samp
       { timeout: APP_TIMEOUT, intervals: [25] }
     )
     .toBe(true);
-  await expect(page.getByText(desk.sentinel, { exact: true }).first()).toBeVisible({
+  await expect(homeSentinel(page, desk)).toBeVisible({
     timeout: APP_TIMEOUT,
   });
   const ms = Date.now() - start;
@@ -196,8 +205,10 @@ async function metrics(app: ElectronApplication) {
     electronApp.getAppMetrics().map((m) => ({
       pid: m.pid,
       type: m.type,
-      workingSetKb: m.memory.workingSetSize,
-      privateKb: m.memory.privateBytes ?? null,
+      creationTime: m.creationTime,
+      // Electron omits \`memory\` on Linux; privateBytes is Windows-only. Both in KB.
+      workingSetKb: m.memory?.workingSetSize ?? null,
+      privateKb: m.memory?.privateBytes ?? null,
       cumulativeCpuS: (m.cpu as { cumulativeCPUUsage?: number }).cumulativeCPUUsage ?? null,
     }))
   );
@@ -209,23 +220,39 @@ async function cpuWindow(app: ElectronApplication, page: Page, windowMs: number)
   await page.waitForTimeout(windowMs); // the measured idle window itself
   const after = await metrics(app);
   const elapsed = Date.now() - t0;
-  const start = new Map(before.map((m) => [m.pid, m]));
+  // A PID alone can be reused inside the window; with its creation time it can't.
+  const key = (m: { pid: number; creationTime: number }) => `${m.pid}:${m.creationTime}`;
+  const start = new Map(before.map((m) => [key(m), m]));
   const byType: Record<string, number> = {};
   let total = 0;
+  let measured = 0;
+  let unavailable = 0;
   for (const m of after) {
-    const prior = start.get(m.pid);
-    if (!prior || prior.cumulativeCpuS === null || m.cumulativeCpuS === null) continue;
-    const percent = ((m.cumulativeCpuS - prior.cumulativeCpuS) * 1000 * 100) / elapsed;
+    const prior = start.get(key(m));
+    if (!prior) continue;
+    const delta =
+      prior.cumulativeCpuS === null || m.cumulativeCpuS === null
+        ? NaN
+        : m.cumulativeCpuS - prior.cumulativeCpuS;
+    if (!Number.isFinite(delta) || delta < 0) {
+      unavailable += 1;
+      continue;
+    }
+    // Cumulative CPU is in seconds: this is percent of one core, and may pass 100.
+    const percent = (delta * 1000 * 100) / elapsed;
     byType[m.type] = (byType[m.type] ?? 0) + percent;
     total += percent;
+    measured += 1;
   }
-  const afterPids = new Set(after.map((m) => m.pid));
+  const afterKeys = new Set(after.map(key));
   return {
     windowMs: elapsed,
     byType,
-    totalPercentOfCore: total,
-    started: after.filter((m) => !start.has(m.pid)).length,
-    ended: before.filter((m) => !afterPids.has(m.pid)).length,
+    totalPercentOfCore: measured > 0 ? total : null,
+    measured,
+    unavailable,
+    started: after.filter((m) => !start.has(key(m))).length,
+    ended: before.filter((m) => !afterKeys.has(key(m))).length,
   } satisfies CpuWindow;
 }
 
@@ -304,19 +331,35 @@ perfDescribe("Perf: reference app lifecycle (report only)", () => {
     }
 
     const memory = await metrics(ctx.app);
-    const memoryByType: Record<string, { processes: number; workingSetMb: number }> = {};
+    const memoryByType: Record<string, { processes: number; workingSetMb: number | null }> = {};
     for (const m of memory) {
-      const slot = (memoryByType[m.type] ??= { processes: 0, workingSetMb: 0 });
+      const slot = (memoryByType[m.type] ??= { processes: 0, workingSetMb: null });
       slot.processes += 1;
-      slot.workingSetMb += m.workingSetKb / 1024;
+      if (m.workingSetKb !== null)
+        slot.workingSetMb = (slot.workingSetMb ?? 0) + m.workingSetKb / 1024;
     }
 
     const idle = await cpuWindow(ctx.app, page, LIFECYCLE_WORKLOAD.perfIdleWindowMs);
-    await page.evaluate(
+    // Active is one report build (the synthetic provider takes about six
+    // seconds) and whatever idle follows it inside the same window. A build
+    // that failed makes the reading meaningless, so it is checked.
+    const report = (await page.evaluate(
       ([id]) => window.electron.plugin.invoke(id, "reports.start", { key: `perf-${Date.now()}` }),
       [current.instanceId] as const
-    );
+    )) as { operationId: string };
     const active = await cpuWindow(ctx.app, page, LIFECYCLE_WORKLOAD.perfIdleWindowMs);
+    await expect
+      .poll(
+        async () => {
+          const reports = (await page.evaluate(
+            ([id]) => window.electron.plugin.invoke(id, "reports.list"),
+            [current.instanceId] as const
+          )) as Array<{ operationId: string; state: string }>;
+          return reports.find((r) => r.operationId === report.operationId)?.state;
+        },
+        { timeout: APP_TIMEOUT }
+      )
+      .toBe("succeeded");
 
     const versions = await ctx.app.evaluate(() => ({
       electron: process.versions.electron,

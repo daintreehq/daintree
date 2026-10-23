@@ -1,4 +1,6 @@
-import { test, expect, type ElectronApplication, type Page } from "@playwright/test";
+import { test, expect, type ElectronApplication, type Locator, type Page } from "@playwright/test";
+import { appendFileSync } from "fs";
+import path from "path";
 import {
   launchApp,
   closeApp,
@@ -10,7 +12,6 @@ import {
 import { openAndOnboardProject } from "../helpers/project";
 import { addAndSwitchToProject, selectExistingProjectAndRefresh } from "../helpers/workflows";
 import { fakeAgentEnv } from "../helpers/fakeAgent";
-import { openProjectPluginPanel, waitForProjectPluginPanelKind } from "../helpers/projectPlugins";
 import { LIFECYCLE_WORKLOAD, REFERENCE_APP_ID } from "../helpers/referenceAppLifecycle";
 import { createReferenceAppProject, removeReferenceAppData } from "./helpers/referenceAppProject";
 import {
@@ -27,11 +28,15 @@ import { McpHttpClient, mcpEndpointStatus } from "./helpers/mcpClient";
  * committed Request Desk build in six independently scoped projects, against a
  * renderer cache capped at two views so every rotation evicts. One serial
  * journey — fresh trust, setup and welcome, an agent's first operation,
- * rotation, a draft through cache pressure and reload, a simulated system
+ * rotation, a draft through cache pressure and a hot reload, a simulated system
  * sleep, then a restart on the same profile. It asserts behaviour only; the
  * timings and resource readings for the same workload come from
  * `e2e/perf/reference-app-lifecycle-perf.spec.ts`, and the rows this journey
  * does not cover are listed with their reasons in `e2e/helpers/referenceAppLifecycle.ts`.
+ *
+ * Everything is read through the application's Home, which the manifest puts
+ * beside the grid. Opening the same view as a grid panel would mount a second
+ * editor with its own durable state, and the two would answer every locator.
  *
  *   npm run build:e2e && npx playwright test --config=playwright.plugins.config.ts e2e/plugins/reference-app-lifecycle.spec.ts
  */
@@ -47,6 +52,7 @@ const APP_TOOLS = [
   "list_requests",
   "update_request",
 ];
+const UNFINISHED = ["pending", "submitting", "uncertain", "running"];
 const DRAFT_NOTES = "Draft kept through eviction, reload and restart";
 
 interface DeskProject {
@@ -68,7 +74,6 @@ let ctx: AppContext;
 let binDir = "";
 const projects: DeskProject[] = [];
 const servers = new Map<string, LaunchedServer>();
-let restartOperationId = "";
 
 async function dispatch<T = unknown>(page: Page, actionId: string, args?: unknown): Promise<T> {
   const result = await page.evaluate(
@@ -126,6 +131,16 @@ async function requestTitles(page: Page, project: DeskProject): Promise<string[]
   return rows.map((row) => row.title);
 }
 
+async function reportState(page: Page, project: DeskProject, operationId: string) {
+  const reports = await invoke<Array<{ operationId: string; state: string }>>(
+    page,
+    project.instanceId,
+    "reports.list"
+  );
+  const matching = reports.filter((r) => r.operationId === operationId);
+  return matching.length === 1 ? matching[0].state : `count:${matching.length}`;
+}
+
 /** Fails loudly when the hook is missing, so no eviction assertion can pass vacuously. */
 async function withPvm<T>(app: ElectronApplication, fn: string, arg?: number | null): Promise<T> {
   return app.evaluate(
@@ -155,6 +170,11 @@ async function capCache(app: ElectronApplication): Promise<void> {
   await withPvm(app, "setCachedViewLimit", LIFECYCLE_WORKLOAD.cachedViewLimit);
 }
 
+/** The application's Home, beside the grid. */
+function home(page: Page): Locator {
+  return page.getByTestId("project-home");
+}
+
 async function switchTo(project: DeskProject): Promise<void> {
   ctx.window = await selectExistingProjectAndRefresh(ctx.app, ctx.window, project.name);
   expect(await currentProjectId(ctx.window)).toBe(project.projectId);
@@ -176,12 +196,7 @@ async function waitForApp(page: Page, project: DeskProject): Promise<void> {
 }
 
 /** Trust the project's plugins, read the app's runtime identity, wait for it to serve. */
-async function trustAndResolve(
-  page: Page,
-  name: string,
-  dir: string,
-  cleanup: () => void
-): Promise<DeskProject> {
+async function trustAndResolve(page: Page, pending: DeskProject): Promise<DeskProject> {
   await page.evaluate(() => window.electron.plugin.setProjectPluginTrust("enabled"));
   await expect
     .poll(async () => (await appRow(page))?.state, { timeout: APP_TIMEOUT })
@@ -189,15 +204,12 @@ async function trustAndResolve(
   const row = (await appRow(page))!;
   expect(row.loadError).toBeUndefined();
   expect(row.instanceId).toBeTruthy();
-  await waitForProjectPluginPanelKind(page, REFERENCE_APP_ID);
   const project: DeskProject = {
-    name,
-    dir,
-    cleanup,
+    ...pending,
     projectId: await currentProjectId(page),
     instanceId: row.instanceId!,
-    sentinel: `Sentinel for ${name}`,
-    workspace: `Workspace ${name}`,
+    sentinel: `Sentinel for ${pending.name}`,
+    workspace: `Workspace ${pending.name}`,
   };
   await waitForApp(page, project);
   return project;
@@ -220,9 +232,12 @@ async function launchClaude(page: Page): Promise<LaunchedServer> {
   return server!;
 }
 
-async function openHome(page: Page): Promise<void> {
-  const { kindId } = await waitForProjectPluginPanelKind(page, REFERENCE_APP_ID);
-  await openProjectPluginPanel(page, kindId, { reuseExisting: true });
+/** The draft and the request it edits, as Home shows them. */
+async function expectDraft(page: Page, project: DeskProject): Promise<void> {
+  await expect(home(page).getByLabel("Notes", { exact: true })).toHaveValue(DRAFT_NOTES, {
+    timeout: APP_TIMEOUT,
+  });
+  await expect(home(page).getByLabel("Title", { exact: true })).toHaveValue(project.sentinel);
 }
 
 test.describe.serial("Reference app: lifecycle across switching and recovery", () => {
@@ -275,14 +290,21 @@ test.describe.serial("Reference app: lifecycle across switching and recovery", (
   });
 
   test("a fresh project runs the app only once it is trusted", async () => {
-    const first = projects[0];
-    // No decision on record: the app is listed but never executed.
+    // No decision on record: the app is listed under its key but never executed.
     await expect.poll(async () => (await appRow(ctx.window))?.state).toBe("blocked");
-    expect((await appRow(ctx.window))?.instanceId).toBeUndefined();
+    const instanceId = (await appRow(ctx.window))?.instanceId;
+    expect(instanceId).toBeTruthy();
+    await expect(
+      ctx.window.evaluate(([id]) => window.electron.plugin.invoke(id, "requests.list"), [
+        instanceId!,
+      ] as const)
+    ).rejects.toThrow();
 
-    projects[0] = await trustAndResolve(ctx.window, first.name, first.dir, first.cleanup);
+    projects[0] = await trustAndResolve(ctx.window, projects[0]);
+    expect(projects[0].instanceId).toBe(instanceId);
     // The seeded demo records, created exactly once by the app's own migration.
     expect(await requestTitles(ctx.window, projects[0])).toHaveLength(3);
+    await expect(home(ctx.window)).toBeVisible({ timeout: APP_TIMEOUT });
   });
 
   test("setup and the welcome answer are recorded for this project only", async () => {
@@ -313,9 +335,7 @@ test.describe.serial("Reference app: lifecycle across switching and recovery", (
     await expect
       .poll(
         async () => (await ctx.window.evaluate(() => window.electron.mcpServer.getStatus())).port,
-        {
-          timeout: APP_TIMEOUT,
-        }
+        { timeout: APP_TIMEOUT }
       )
       .toBeTruthy();
 
@@ -329,11 +349,12 @@ test.describe.serial("Reference app: lifecycle across switching and recovery", (
     const listed = await agent.callJson<{ requests: Array<{ title: string }> }>("list_requests");
     expect(listed.requests.map((r) => r.title)).toContain(project.sentinel);
 
-    // The views read the same store: Home shows what the agent wrote.
-    await openHome(ctx.window);
-    await expect(ctx.window.getByText(project.sentinel, { exact: true }).first()).toBeVisible({
-      timeout: APP_TIMEOUT,
-    });
+    // Home reads the same store: it shows what the agent wrote.
+    await expect(home(ctx.window).getByText(project.sentinel, { exact: true }).first()).toBeVisible(
+      {
+        timeout: APP_TIMEOUT,
+      }
+    );
 
     const started = await agent.callJson<{ operationId: string }>("generate_report", {
       key: "first-operation",
@@ -356,7 +377,7 @@ test.describe.serial("Reference app: lifecycle across switching and recovery", (
     for (let i = 1; i < projects.length; i++) {
       const pending = projects[i];
       ctx.window = await addAndSwitchToProject(ctx.app, ctx.window, pending.dir, pending.name);
-      projects[i] = await trustAndResolve(ctx.window, pending.name, pending.dir, pending.cleanup);
+      projects[i] = await trustAndResolve(ctx.window, pending);
       const project = projects[i];
       await invoke(ctx.window, project.instanceId, "connection.connect", {
         workspace: project.workspace,
@@ -381,10 +402,17 @@ test.describe.serial("Reference app: lifecycle across switching and recovery", (
         expect(await setupDone(ctx.window, project)).toBe(true);
         // Only the first project's welcome was answered.
         expect(await welcomeStatus(ctx.window)).toBe(project === projects[0] ? "skipped" : null);
+        await expect(
+          home(ctx.window).getByText(project.sentinel, { exact: true }).first()
+        ).toBeVisible({
+          timeout: APP_TIMEOUT,
+        });
 
-        const live = await inventory(ctx.app);
-        expect(live.length).toBeLessThanOrEqual(LIFECYCLE_WORKLOAD.cachedViewLimit);
-        const id = live.find((e) => e.projectId === project.projectId)?.webContentsId;
+        // Eviction runs deferred after the switch settles; wait for it.
+        await expect
+          .poll(async () => (await inventory(ctx.app)).length, { timeout: APP_TIMEOUT })
+          .toBeLessThanOrEqual(LIFECYCLE_WORKLOAD.cachedViewLimit);
+        const id = await viewOf(ctx.app, project.projectId);
         expect(id, `${project.name} has no view`).toBeGreaterThan(0);
         seen.set(project.projectId, id!);
       }
@@ -398,36 +426,36 @@ test.describe.serial("Reference app: lifecycle across switching and recovery", (
 
   test("one project's agent credential is refused by another project", async () => {
     const [first, second] = projects;
+    const own = servers.get(first.projectId)!;
+    // Still live: the refusal below is about the project, not an expired grant.
+    expect(await mcpEndpointStatus(own.url, own.bearer)).toBe(200);
+
     await switchTo(second);
     const server = await launchClaude(ctx.window);
     servers.set(second.projectId, server);
-    const own = servers.get(first.projectId)!;
-
     expect(await mcpEndpointStatus(server.url, server.bearer)).toBe(200);
-    const crossed = await mcpEndpointStatus(server.url, own.bearer);
-    expect(crossed).toBeGreaterThanOrEqual(400);
-    expect(crossed).toBeLessThan(500);
+    expect(await mcpEndpointStatus(server.url, own.bearer)).toBe(403);
     expect(await requestTitles(ctx.window, second)).not.toContain(first.sentinel);
   });
 
   test("a draft and its request survive cache pressure, reclaim and a plugin reload", async () => {
     const [first, second, third] = projects;
     await switchTo(first);
-    await openHome(ctx.window);
-    await ctx.window.getByText(first.sentinel, { exact: true }).first().click();
-    const notes = ctx.window.getByLabel("Notes");
+    await home(ctx.window).getByText(first.sentinel, { exact: true }).first().click();
+    const notes = home(ctx.window).getByLabel("Notes", { exact: true });
     await expect(notes).toBeVisible({ timeout: APP_TIMEOUT });
     await notes.fill(DRAFT_NOTES);
-    await expect(ctx.window.getByRole("button", { name: "Discard" })).toBeEnabled();
+    await expect(home(ctx.window).getByRole("button", { name: "Discard" })).toBeEnabled();
     const before = await viewOf(ctx.app, first.projectId);
     expect(before).toBeGreaterThan(0);
 
     // Two more projects through a two-view cache would evict the first, but a
-    // view reporting unsaved work is held out of the user's cap.
+    // view reporting unsaved work is held out of the user's cap: the second,
+    // clean, goes instead.
     await switchTo(second);
     await switchTo(third);
+    await expect.poll(() => viewOf(ctx.app, second.projectId), { timeout: APP_TIMEOUT }).toBeNull();
     expect(await viewOf(ctx.app, first.projectId)).toBe(before);
-    expect((await inventory(ctx.app)).length).toBeGreaterThan(LIFECYCLE_WORKLOAD.cachedViewLimit);
 
     // Memory pressure takes it anyway; the persisted draft has to bring it back.
     expect(await withPvm<number>(ctx.app, "reclaimCachedViewsUnderPressure")).toBeGreaterThan(0);
@@ -435,15 +463,36 @@ test.describe.serial("Reference app: lifecycle across switching and recovery", (
 
     await switchTo(first);
     expect(await viewOf(ctx.app, first.projectId)).not.toBe(before);
-    await openHome(ctx.window);
-    await expect(ctx.window.getByLabel("Notes")).toHaveValue(DRAFT_NOTES, { timeout: APP_TIMEOUT });
-    await expect(ctx.window.getByLabel("Title")).toHaveValue(first.sentinel);
+    await expectDraft(ctx.window, first);
 
-    // A compatible reload: same payload, same schema, the worker and views restart.
-    await ctx.window.evaluate(() => window.electron.plugin.reloadProjectPlugins());
+    // A compatible reload: the same build rewritten, as a `dist/` rebuild does.
+    // The watcher unloads the app and loads it again; the draft is the view's.
+    await ctx.window.evaluate(() => {
+      const w = window as unknown as Record<string, unknown>;
+      w.__deskPluginChanges = 0;
+      w.__deskPluginChangesOff = window.electron.events.on("plugin:project-plugins-changed", () => {
+        w.__deskPluginChanges = (w.__deskPluginChanges as number) + 1;
+      });
+    });
+    appendFileSync(
+      path.join(first.dir, ".daintree", "plugins", REFERENCE_APP_ID, "dist", "index.js"),
+      "\n// rebuilt\n"
+    );
+    await expect
+      .poll(
+        () =>
+          ctx.window.evaluate(
+            () => (window as unknown as Record<string, unknown>).__deskPluginChanges as number
+          ),
+        { timeout: APP_TIMEOUT, message: "the rebuilt app was never reloaded" }
+      )
+      .toBeGreaterThan(0);
+    await ctx.window.evaluate(() => {
+      const off = (window as unknown as Record<string, unknown>).__deskPluginChangesOff;
+      if (typeof off === "function") off();
+    });
     await waitForApp(ctx.window, first);
-    await expect(ctx.window.getByLabel("Notes")).toHaveValue(DRAFT_NOTES, { timeout: APP_TIMEOUT });
-    await expect(ctx.window.getByLabel("Title")).toHaveValue(first.sentinel);
+    await expectDraft(ctx.window, first);
   });
 
   test("the app answers after a simulated system suspend and resume", async () => {
@@ -458,19 +507,21 @@ test.describe.serial("Reference app: lifecycle across switching and recovery", (
     });
     await waitForApp(ctx.window, first);
     expect(await requestTitles(ctx.window, first)).toContain(first.sentinel);
-    await expect(ctx.window.getByLabel("Notes")).toHaveValue(DRAFT_NOTES);
+    await expectDraft(ctx.window, first);
   });
 
   test("a restart keeps trust, setup, the draft and the report started before it", async () => {
     test.setTimeout(300_000);
     const first = projects[0];
-    const started = await invoke<{ operationId: string }>(
+    const { operationId } = await invoke<{ operationId: string }>(
       ctx.window,
       first.instanceId,
       "reports.start",
       { key: "across-restart" }
     );
-    restartOperationId = started.operationId;
+    // The synthetic provider takes about six seconds: the build is still going
+    // when the app quits, so what comes back is the worker's own recovery.
+    expect(UNFINISHED).toContain(await reportState(ctx.window, first, operationId));
 
     const { userDataDir } = ctx;
     const pid = ctx.app.process().pid!;
@@ -493,25 +544,11 @@ test.describe.serial("Reference app: lifecycle across switching and recovery", (
     expect(await setupDone(ctx.window, first)).toBe(true);
     expect(await welcomeStatus(ctx.window)).toBe("skipped");
     expect(await requestTitles(ctx.window, first)).toContain(first.sentinel);
-
-    await openHome(ctx.window);
-    await expect(ctx.window.getByLabel("Notes")).toHaveValue(DRAFT_NOTES, { timeout: APP_TIMEOUT });
-    await expect(ctx.window.getByLabel("Title")).toHaveValue(first.sentinel);
+    await expectDraft(ctx.window, first);
 
     // The same operation, reconciled by the worker that came back — not a second build.
     await expect
-      .poll(
-        async () => {
-          const reports = await invoke<Array<{ operationId: string; state: string }>>(
-            ctx.window,
-            first.instanceId,
-            "reports.list"
-          );
-          const matching = reports.filter((r) => r.operationId === restartOperationId);
-          return matching.length === 1 ? matching[0].state : `count:${matching.length}`;
-        },
-        { timeout: REPORT_TIMEOUT }
-      )
+      .poll(() => reportState(ctx.window, first, operationId), { timeout: REPORT_TIMEOUT })
       .toBe("succeeded");
   });
 });
