@@ -1521,7 +1521,11 @@ describe("project application (#14097)", () => {
   it("does not load an owner outside its engine range, and reports it unavailable", async () => {
     enable(["acme.ledger", "acme.dashboard"]);
     h.deps.isEngineIncompatible.mockReturnValue(true);
-    h.setDiscovery(ROOT_A, [withApplication("acme.ledger"), discovered("acme.dashboard")]);
+    const dashboard = discovered("acme.dashboard");
+    h.setDiscovery(ROOT_A, [
+      withApplication("acme.ledger"),
+      { ...dashboard, manifest: { ...dashboard.manifest!, engines: { daintree: ">=99.0.0" } } },
+    ]);
     await h.controller.onProjectOpened(PROJECT_A, ROOT_A);
     expect(h.deps.isEngineIncompatible).toHaveBeenCalledWith(">=0.1.0");
     // The range stays advisory for a plugin that declares no application.
@@ -1545,6 +1549,58 @@ describe("project application (#14097)", () => {
 
     finish(true);
     await opening;
+    expect(lastApplication()).toMatchObject({ status: "active" });
+  });
+
+  it("does not load an incompatible owner when it is turned on from staging", async () => {
+    h.trust.set(PROJECT_A, {
+      decision: "enabled",
+      decidedAt: 0,
+      knownPluginIds: ["acme.ledger"],
+      stagedPluginIds: ["acme.ledger"],
+      mutedPluginIds: [],
+    });
+    h.deps.isEngineIncompatible.mockReturnValue(true);
+    h.setDiscovery(ROOT_A, [withApplication("acme.ledger")]);
+    await h.controller.onProjectOpened(PROJECT_A, ROOT_A);
+    await h.controller.activateStaged(PROJECT_A, "acme.ledger");
+    expect(h.deps.loadProjectPlugin).not.toHaveBeenCalled();
+    expect(lastApplication()).toMatchObject({
+      status: "unavailable",
+      reason: "engine-incompatible",
+    });
+  });
+
+  it("takes down a loaded owner once its range no longer admits this Daintree", async () => {
+    enable(["acme.ledger"]);
+    h.setDiscovery(ROOT_A, [withApplication("acme.ledger")]);
+    await h.controller.onProjectOpened(PROJECT_A, ROOT_A);
+    expect(h.controller.loadedManifestIds(PROJECT_A)).toEqual(["acme.ledger"]);
+
+    h.deps.isEngineIncompatible.mockReturnValue(true);
+    await h.controller.onProjectOpened(PROJECT_A, ROOT_A);
+    expect(h.deps.unloadProjectPlugin).toHaveBeenCalledWith(
+      makeProjectPluginInstanceKey(PROJECT_A, "acme.ledger")
+    );
+    expect(h.controller.loadedManifestIds(PROJECT_A)).toEqual([]);
+  });
+
+  it("reports a retried load as loading, not as the failure it is retrying", async () => {
+    enable(["acme.ledger"]);
+    h.deps.loadProjectPlugin.mockResolvedValueOnce(false);
+    h.setDiscovery(ROOT_A, [withApplication("acme.ledger")]);
+    await h.controller.onProjectOpened(PROJECT_A, ROOT_A);
+    expect(lastApplication()).toMatchObject({ reason: "load-failed" });
+
+    let finish: (ok: boolean) => void = () => {};
+    h.deps.loadProjectPlugin.mockImplementationOnce(
+      () => new Promise<boolean>((resolve) => (finish = resolve))
+    );
+    const retry = h.controller.onProjectOpened(PROJECT_A, ROOT_A);
+    await vi.waitFor(() => expect(h.deps.loadProjectPlugin).toHaveBeenCalledTimes(2));
+    expect(lastApplication()).toMatchObject({ status: "loading" });
+    finish(true);
+    await retry;
     expect(lastApplication()).toMatchObject({ status: "active" });
   });
 
