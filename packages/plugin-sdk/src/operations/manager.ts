@@ -9,7 +9,6 @@ import {
   type PluginTaskHandle,
   type PluginTaskResult,
 } from "../../../../shared/types/plugin.js";
-import type { ActionId } from "../../../../shared/types/actions.js";
 
 /**
  * The slice of the host the manager needs. `PluginHostApi` satisfies it.
@@ -209,7 +208,7 @@ export interface OperationManagerOptions {
    * {@link OperationManager.retry}. Offered as Retry on a failed or
    * interrupted task.
    */
-  retryActionId: ActionId;
+  retryActionId: string;
   // Heterogeneous kinds: each entry's input and result types are its own.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   kinds: Record<string, OperationKind<any, any>>;

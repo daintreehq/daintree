@@ -453,7 +453,7 @@ interface OperationManagerOptions {
      * {@link OperationManager.retry}. Offered as Retry on a failed or
      * interrupted task.
      */
-    retryActionId: ActionId;
+    retryActionId: string;
     kinds: Record<string, OperationKind<any, any>>;
     /** Operations driven at once, each holding one host task. Default 4, at most 16. */
     concurrency?: number;
