@@ -6,7 +6,7 @@
 
 ## Protocol
 
-Reference source: `f83a95bd1b` (develop). Hardware: Apple M4 Max, 36 GB RAM, macOS 15.7.5, Electron 42.11.18. Nothing else was building or benchmarking during the runs. The evidence file [`2026-10-23-boot-compile-hints.json`](2026-10-23-boot-compile-hints.json) holds every launch and memory observation, every project-switch run summary, the bootstrap intervals and the hinted chunk sizes.
+Reference source: `f83a95bd1b` (develop), before #14219's ASCII chunk emission and cached-view cache clear landed; neither changes which functions the hints compile. Hardware: Apple M4 Max, 36 GB RAM, macOS 15.7.5, Electron 42.11.18. Nothing else was building or benchmarking during the runs. The evidence file [`2026-10-23-boot-compile-hints.json`](2026-10-23-boot-compile-hints.json) holds every launch and memory observation, every project-switch run summary, the bootstrap intervals and the hinted chunk sizes.
 
 Four arms, selected at build time with `DAINTREE_COMPILE_HINTS`:
 
@@ -73,4 +73,4 @@ RUN_PERF_SWITCH=1 PERF_SWITCH_COLD_ROUNDS=5 PERF_SWITCH_OUT=<file> \
   npx playwright test --config=playwright.perf.config.ts e2e/perf/project-switch-perf.spec.ts --workers=1
 ```
 
-For an unpackaged arm, `<exe>` is a two-line shell script that runs `node_modules/electron/dist/Electron.app/Contents/MacOS/Electron <arm-dir> "$@"`. The arm directory holds that arm's `dist/` and `dist-electron/`, with every other top-level entry of the checkout symlinked beside them. Use `npm run perf empty-view-memory` for the memory side once #14219 lands.
+For an unpackaged arm, `<exe>` is a two-line shell script that runs `node_modules/electron/dist/Electron.app/Contents/MacOS/Electron <arm-dir> "$@"`. The arm directory holds that arm's `dist/` and `dist-electron/`, with every other top-level entry of the checkout symlinked beside them. For the memory side, `npm run perf empty-view-memory` (from #14219) now measures the same reading, with `EMPTY_VIEW_HEAP_SNAPSHOTS=1` for the compiled-code split.
