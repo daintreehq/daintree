@@ -31,11 +31,18 @@ import type { LinkSession } from "../link/session.js";
 import {
   CANOPY_VIEWER_ENDPOINT_PREFIX,
   CanopyAssistantsAnswerSchema,
+  CanopyAssistantWorkAnswerSchema,
   CanopyLinkMethod,
   CanopyViewerLostPayloadSchema,
   isCanopyViewerId,
 } from "./linkMethods.js";
 import type { CanopyViewers } from "./viewer.js";
+import {
+  ASSISTANT_WORK_VERSION,
+  unreadAssistantWork,
+  type AssistantWorkReading,
+} from "../../../shared/types/assistantWork.js";
+import { resolveAssistantWork } from "../../services/assistants/assistantWork.js";
 
 export interface CanopyHostConnection {
   callHost(method: string, payload: unknown): Promise<unknown>;
@@ -74,6 +81,12 @@ export interface CanopyHostsClientOptions {
     projectId?: string;
     assistantsOnly?: boolean;
   }) => Promise<AgentDirectory>;
+  /** This machine's assistant work, for Canopy showing This Mac; absent, it reads none. */
+  readLocalAssistantWork?: () => Promise<AssistantWorkReading>;
+  /** The sender this Shell proves to a host, without minting one; null when it never has. */
+  ownSenderFor?: (hostId: HostId) => string | null;
+  /** Finds this Shell's live assistant whose session a host's reading keys, or null. */
+  localAssistants?: () => Promise<(sessionKey: string) => AgentDirectorySubject | null>;
   newViewerId?: () => string;
 }
 
@@ -335,6 +348,45 @@ export class CanopyHostsClient {
       version: answer.data.version,
       directory: directoryAs(target, assistantEntries(answer.data.directory)),
     };
+  }
+
+  /**
+   * Which of a host's workers an assistant made or holds (#14166), with every
+   * assistant named as this Shell knows it. A host that predates it reads as
+   * unsupported, and one that can't be reached as unreachable: never as a
+   * host whose workers no assistant made.
+   */
+  async readAssistantWork(webContentsId: number, hostId: unknown): Promise<AssistantWorkReading> {
+    const target = this.assistantHostOf(webContentsId, hostId, { allowOwnLocal: true });
+    if (isLocalHostId(target)) {
+      const read = this.options.readLocalAssistantWork;
+      return read
+        ? read().catch(() => unreadAssistantWork("unreachable"))
+        : unreadAssistantWork("unsupported");
+    }
+    this.options.manager.touch(target);
+    const connection = this.options.manager.get(target);
+    if (!connection) {
+      this.options.manager.connect(target);
+      return unreadAssistantWork("unreachable");
+    }
+    let raw: unknown;
+    try {
+      raw = await connection.callHost(CanopyLinkMethod.ASSISTANT_WORK, {});
+    } catch (error) {
+      return unreadAssistantWork(codeOf(error) === "UNSUPPORTED" ? "unsupported" : "unreachable");
+    }
+    const answer = CanopyAssistantWorkAnswerSchema.safeParse(raw);
+    if (!answer.success) {
+      throw new AppError({ code: "INTERNAL", message: `Host ${target} sent an invalid answer` });
+    }
+    if (answer.data.version !== ASSISTANT_WORK_VERSION) return unreadAssistantWork("unsupported");
+    const bySessionKey = (await this.options.localAssistants?.()) ?? (() => null);
+    return resolveAssistantWork(answer.data.reading, {
+      hostId: target,
+      ownSenderId: this.options.ownSenderFor?.(target) ?? null,
+      assistantBySessionKey: bySessionKey,
+    });
   }
 
   /**

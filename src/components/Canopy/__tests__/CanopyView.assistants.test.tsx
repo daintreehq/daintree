@@ -6,6 +6,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import type { FleetSnapshot } from "@shared/types/ipc/fleet";
 import type { CanopySnapshot } from "@shared/types/ipc/canopy";
 import type { AgentDirectory, AgentDirectoryLiveEntry } from "@shared/types/agentDirectory";
+import type { AssistantWorkReading } from "@shared/types/assistantWork";
 
 const render = (ui: ReactElement) => rtlRender(ui, { wrapper: TooltipProvider });
 
@@ -118,6 +119,7 @@ function assistant(
 }
 
 let directory: AgentDirectory;
+let assistantWork: AssistantWorkReading;
 
 function installElectron() {
   const canopy = {
@@ -139,6 +141,7 @@ function installElectron() {
     watchTerminal: vi.fn(),
     watchAssistantTerminal: vi.fn(),
     readAgentDirectory: vi.fn(async () => directory),
+    readAssistantWork: vi.fn(async () => assistantWork),
   };
   Object.defineProperty(window, "electron", {
     value: { canopy, terminal: { restore: vi.fn() }, system: { openExternal: vi.fn() } },
@@ -180,6 +183,7 @@ beforeEach(() => {
     omitted: 0,
     entries: [assistant(0), assistant(1)],
   };
+  assistantWork = { coverage: "ok", observedAt: NOW, complete: true, omitted: 0, workers: [] };
   useProjectStore.setState({
     projects: [{ id: "p1", path: "/repo", name: "app", emoji: "🌳", lastOpened: NOW }],
   });
@@ -213,6 +217,7 @@ afterEach(() => {
     orders: {},
     unreadOnly: false,
     roleFilter: "all",
+    workOf: null,
   });
   window.localStorage.removeItem("daintree-canopy-order");
   window.localStorage.removeItem("daintree-canopy-role");
@@ -426,5 +431,107 @@ describe("CanopyView role filter", () => {
     await settle();
     expect(document.body.textContent).toContain("Daintree couldn't list every assistant just now.");
     expect(document.body.textContent).not.toContain("No assistant is running");
+  });
+});
+
+describe("CanopyView show its work", () => {
+  function linked(runId: string, lane: number) {
+    const ref = { kind: "assistant" as const, subject: assistant(lane).subject };
+    return {
+      terminalId: runId,
+      projectId: "p1",
+      incarnation: 1,
+      spawnedAt: NOW - 3_600_000,
+      createdBy: ref,
+      controlledBy: ref,
+      control: "creation" as const,
+    };
+  }
+
+  async function showWorkOfFirstAssistant() {
+    render(<CanopyView />);
+    await settle();
+    await act(async () => {
+      fireEvent.click(assistantRows()[0]!);
+    });
+    await settle();
+    const button = [...document.querySelectorAll("button")].find(
+      (candidate) => candidate.textContent === "Show its work"
+    )!;
+    await act(async () => {
+      fireEvent.click(button);
+    });
+    await settle();
+  }
+
+  it("narrows the inbox to the assistant's workers, labels them, and shows all again", async () => {
+    assistantWork = {
+      ...assistantWork,
+      workers: [linked("waiting", 0), linked("working", 1)],
+    };
+    await showWorkOfFirstAssistant();
+    expect(workerIds()).toEqual(["waiting"]);
+    const banner = document.querySelector('[data-testid="canopy-work-of"]')!;
+    expect(banner.textContent).toContain("Daintree Assistant · app · Session 1");
+    expect(banner.textContent).not.toContain("incomplete");
+    expect(document.getElementById("canopy-card-waiting")!.textContent).toContain(
+      "Started by Daintree Assistant · app · Session 1"
+    );
+    // The other assistants step aside while one's work is shown.
+    expect(assistantRows()).toHaveLength(1);
+
+    const showAll = [...banner.querySelectorAll("button")].find(
+      (candidate) => candidate.textContent === "Show all"
+    )!;
+    await act(async () => {
+      fireEvent.click(showAll);
+    });
+    await settle();
+    expect(workerIds()).toEqual(["waiting", "working"]);
+    expect(document.querySelector('[data-testid="canopy-work-of"]')).toBeNull();
+    expect(assistantRows()).toHaveLength(2);
+  });
+
+  it("brings workers back into view when only assistants were shown", async () => {
+    useCanopyStore.setState({ roleFilter: "assistants" });
+    assistantWork = { ...assistantWork, workers: [linked("working", 0)] };
+    await showWorkOfFirstAssistant();
+    expect(useCanopyStore.getState().roleFilter).toBe("all");
+    expect(workerIds()).toEqual(["working"]);
+  });
+
+  it("says when a host's records couldn't all be read, rather than that there is no work", async () => {
+    assistantWork = { ...assistantWork, coverage: "stale", complete: false };
+    await showWorkOfFirstAssistant();
+    expect(workerIds()).toEqual([]);
+    expect(document.querySelector('[data-testid="canopy-work-of"]')!.textContent).toContain(
+      "Some hosts couldn't be read, so this may be incomplete"
+    );
+    // Never a claim that there is no work, on a reading that can't say so.
+    expect(document.body.textContent).toContain("None found on the hosts that could be read.");
+    expect(document.body.textContent).not.toContain("No worker in the inbox");
+  });
+
+  it("toggles back to the whole inbox from the same button, keeping it pressed while on", async () => {
+    assistantWork = { ...assistantWork, workers: [linked("waiting", 0)] };
+    await showWorkOfFirstAssistant();
+    const button = [...document.querySelectorAll("button")].find(
+      (candidate) => candidate.textContent === "Show its work"
+    )!;
+    expect(button.getAttribute("aria-pressed")).toBe("true");
+    expect(workerIds()).toEqual(["waiting"]);
+    await act(async () => {
+      fireEvent.click(button);
+    });
+    await settle();
+    expect(workerIds()).toEqual(["waiting", "working"]);
+    expect(useCanopyStore.getState().workOf).toBeNull();
+  });
+
+  it("ends with the panel: a reopened panel shows the whole inbox", async () => {
+    await showWorkOfFirstAssistant();
+    expect(useCanopyStore.getState().workOf).not.toBeNull();
+    act(() => useCanopyStore.getState().close());
+    expect(useCanopyStore.getState().workOf).toBeNull();
   });
 });

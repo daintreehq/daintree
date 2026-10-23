@@ -74,6 +74,9 @@ export interface GeneratedElectronAPI {
     readAgentDirectory(
       ...args: IpcInvokeMap["canopy:read-agent-directory"]["args"]
     ): Promise<IpcInvokeMap["canopy:read-agent-directory"]["result"]>;
+    readAssistantWork(
+      ...args: IpcInvokeMap["canopy:read-assistant-work"]["args"]
+    ): Promise<IpcInvokeMap["canopy:read-assistant-work"]["result"]>;
     refresh(
       ...args: IpcInvokeMap["canopy:refresh"]["args"]
     ): Promise<IpcInvokeMap["canopy:refresh"]["result"]>;
@@ -151,6 +154,9 @@ export interface GeneratedElectronAPI {
     listAssistants(
       ...args: IpcInvokeMap["canopy-host:list-assistants"]["args"]
     ): Promise<IpcInvokeMap["canopy-host:list-assistants"]["result"]>;
+    readAssistantWork(
+      ...args: IpcInvokeMap["canopy-host:read-assistant-work"]["args"]
+    ): Promise<IpcInvokeMap["canopy-host:read-assistant-work"]["result"]>;
     release(
       ...args: IpcInvokeMap["canopy-host:release"]["args"]
     ): Promise<IpcInvokeMap["canopy-host:release"]["result"]>;

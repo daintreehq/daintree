@@ -68,12 +68,25 @@ interface CanopyState {
   /** Workers, Daintree Assistants or both; remembered across launches. */
   roleFilter: CanopyRoleFilter;
   setRoleFilter: (roleFilter: CanopyRoleFilter) => void;
+  /**
+   * "Show its work": the inbox narrowed to the workers one assistant made or
+   * was handed (#14166), by its exact run. For this opening only: a closed
+   * panel opens on the whole inbox, and no other assistant ever inherits it.
+   */
+  workOf: CanopyWorkOf | null;
+  showWorkOf: (workOf: CanopyWorkOf | null) => void;
   /** Each assistant's newest handback the person has had in front of them. */
   assistantHandbacksSeen: AssistantHandbacksSeen;
   seeAssistantHandback: (assistantId: string, observedAt: number) => void;
 }
 
 export type CanopyScope = "all" | "project";
+
+/** The assistant whose work the inbox is narrowed to: its exact run, and its name as shown. */
+export interface CanopyWorkOf {
+  assistantId: string;
+  name: string;
+}
 
 export type { CanopyOrder };
 
@@ -425,6 +438,8 @@ export const useCanopyStore = create<CanopyState>((set) => ({
     saveRoleFilter(roleFilter);
     set({ roleFilter });
   },
+  workOf: null,
+  showWorkOf: (workOf) => set({ workOf }),
   assistantHandbacksSeen: readHandbacksSeen(),
   seeAssistantHandback: (assistantId, observedAt) =>
     set((state) =>
@@ -445,11 +460,11 @@ export const useCanopyStore = create<CanopyState>((set) => ({
         ? state
         : { isOpen: true, hostId: state.hostId === ALL_HOSTS_ID ? ALL_HOSTS_ID : null }
     ),
-  close: () => set({ isOpen: false }),
+  close: () => set({ isOpen: false, workOf: null }),
   toggle: () =>
     set((state) =>
       state.isOpen
-        ? { isOpen: false }
+        ? { isOpen: false, workOf: null }
         : state.mode === "hidden"
           ? state
           : { isOpen: true, hostId: state.hostId === ALL_HOSTS_ID ? ALL_HOSTS_ID : null }
@@ -463,7 +478,7 @@ export const useCanopyStore = create<CanopyState>((set) => ({
       }
       const mode = snapshot.mode;
       // Hidden from another view, or from Settings: a panel this view held open goes too.
-      if (mode === "hidden") return { snapshot, mode, isOpen: false };
+      if (mode === "hidden") return { snapshot, mode, isOpen: false, workOf: null };
       return { snapshot, mode };
     }),
 }));

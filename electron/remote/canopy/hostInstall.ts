@@ -10,5 +10,10 @@ export function installCanopyHost(server: CanopySessionSource): () => void {
         await import("../../services/assistants/localAgentDirectory.js");
       return getLocalAgentDirectory().read(options);
     },
+    readAssistantWork: async () => {
+      const { readLocalAssistantWorkForHost } =
+        await import("../../services/assistants/localAssistantWork.js");
+      return readLocalAssistantWorkForHost();
+    },
   });
 }

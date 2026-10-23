@@ -6,6 +6,7 @@ import type {
 } from "@shared/types/ipc/canopyHost";
 import type { AssistantOpenDestination, CanopyTerminalView } from "@shared/types/ipc/canopy";
 import type { AgentDirectorySubject } from "@shared/types/agentDirectory";
+import type { AssistantWorkReading } from "@shared/types/assistantWork";
 import type { IpcInvokeMap } from "@shared/types/ipc/maps";
 
 /**
@@ -32,6 +33,11 @@ export const canopyHostClient = {
   /** A host's assistants, for a person's picker; a host without the viewer says so. */
   listAssistants: (hostId: string, projectId?: string): Promise<HostAssistantDirectory> => {
     return window.electron.canopyHost.listAssistants(hostId, projectId);
+  },
+
+  /** Which of a host's workers an assistant made or holds; a host without it says so. */
+  readAssistantWork: (hostId: string): Promise<AssistantWorkReading> => {
+    return window.electron.canopyHost.readAssistantWork(hostId);
   },
 
   /** Stream the assistant `consumer` shows, by its exact subject, on its own host. */

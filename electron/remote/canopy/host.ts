@@ -6,6 +6,8 @@ import {
   CANOPY_VIEWER_ENDPOINT_PREFIX,
   CanopyAssistantInvokePayloadSchema,
   CanopyAssistantsPayloadSchema,
+  CanopyAssistantWorkPayloadSchema,
+  type CanopyAssistantWorkAnswer,
   CanopyInvokePayloadSchema,
   CanopyLinkMethod,
   CanopyReleasePayloadSchema,
@@ -14,6 +16,12 @@ import {
 import type { CanopyViewerParams, CanopyViewers } from "./viewer.js";
 import { unreadAgentDirectory, type AgentDirectory } from "../../../shared/types/agentDirectory.js";
 import { ASSISTANT_VIEWER_VERSION } from "../../../shared/types/ipc/canopyHost.js";
+import {
+  ASSISTANT_WORK_VERSION,
+  unreadAssistantWork,
+  type AssistantWorkHostReading,
+} from "../../../shared/types/assistantWork.js";
+import { AppError } from "../../utils/errorTypes.js";
 import { createLogger } from "../../utils/logger.js";
 import { createKeyedLogLimiter } from "../../utils/keyedLogLimiter.js";
 
@@ -41,6 +49,8 @@ export interface CanopyHostOptions {
     projectId?: string;
     assistantsOnly?: boolean;
   }) => Promise<AgentDirectory>;
+  /** Which of this host's workers an assistant made or holds; absent, none is read. */
+  readAssistantWork?: () => Promise<AssistantWorkHostReading>;
 }
 
 /**
@@ -180,6 +190,21 @@ export function installCanopyHostWith(
             }).catch(() => unreadAgentDirectory("unreachable"))
           : unreadAgentDirectory("unsupported");
         return { version: ASSISTANT_VIEWER_VERSION, directory: assistantsOf(directory) };
+      }
+    );
+    session.registerCallHandler(
+      CanopyLinkMethod.ASSISTANT_WORK,
+      CanopyAssistantWorkPayloadSchema,
+      async (): Promise<CanopyAssistantWorkAnswer> => {
+        const read = options.readAssistantWork;
+        if (!read) {
+          throw new AppError({
+            code: "UNSUPPORTED",
+            message: "This host doesn't read its assistants' work",
+          });
+        }
+        const reading = await read().catch(() => unreadAssistantWork("unreachable"));
+        return { version: ASSISTANT_WORK_VERSION, reading };
       }
     );
     session.registerCallHandler(

@@ -4,6 +4,7 @@ export const CANOPY_HOST_METHOD_CHANNELS = {
   invoke: "canopy-host:invoke",
   release: "canopy-host:release",
   listAssistants: "canopy-host:list-assistants",
+  readAssistantWork: "canopy-host:read-assistant-work",
   watchAssistant: "canopy-host:watch-assistant",
   resolveAssistant: "canopy-host:resolve-assistant",
   assistantInvoke: "canopy-host:assistant-invoke",

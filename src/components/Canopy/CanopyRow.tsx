@@ -159,6 +159,8 @@ interface CanopyRowProps {
   reserveDetail: boolean;
   /** What the user did to put it aside and when ("Replied 2m ago"), or null. */
   asideLabel?: string | null;
+  /** Which assistant started it or holds it, from main's own records; null when none is known. */
+  workLabel?: string | null;
   onSelect: () => void;
   /** A click on the row: the user opened it. */
   onClick: () => void;
@@ -190,6 +192,7 @@ export function CanopyRow({
   tabbable,
   reserveDetail,
   asideLabel = null,
+  workLabel = null,
   onSelect,
   onClick,
   onOpen,
@@ -285,6 +288,7 @@ export function CanopyRow({
   const facts = compact ? [] : itemFacts(item);
   const choices = compact ? [] : answerOptions(item);
   if (asideLabel !== null) metaTail.push(asideLabel);
+  if (workLabel !== null) metaTail.push(workLabel);
   // Quiet and working share the spinner and differ only in hue once motion is
   // reduced; the word says which, since the clock beside the glyph is only a time.
   if (row.band === "quiet") metaTail.push("Quiet");
@@ -338,6 +342,7 @@ export function CanopyRow({
       ? `answer with ${choices.map((choice, index) => `${index + 1} ${choice}`).join(", ")}`
       : null,
     unseenLabel !== null ? unseenLabel.toLowerCase() : null,
+    workLabel,
     where,
     asideLabel !== null ? asideLabel.toLowerCase() : handled ? "replied" : null,
     item.failed ? "read failed" : null,

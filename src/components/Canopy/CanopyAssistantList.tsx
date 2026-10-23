@@ -120,11 +120,17 @@ export function CanopyAssistantPane({
   item,
   refusal,
   onOpen,
+  showingWork,
+  onShowWork,
 }: {
   item: CanopyAssistantItem;
   /** Why the last "Open in Assistant" didn't, in words. */
   refusal: string | null;
   onOpen: () => void;
+  /** The inbox is narrowed to the workers it started or was handed. */
+  showingWork: boolean;
+  /** Narrow the inbox to its work, or, while it is, show the whole inbox again. */
+  onShowWork: () => void;
 }) {
   // Made once per pane: the pane is keyed by the exact subject, and a fresh
   // directory read hands over an equal subject that must not reopen the stream.
@@ -136,6 +142,9 @@ export function CanopyAssistantPane({
         <span className="min-w-0 flex-1 truncate text-text-secondary">
           {[item.scopeLabel, item.agentName].filter(Boolean).join(" · ")}
         </span>
+        <Button variant="outline" size="xs" pressed={showingWork} onClick={onShowWork}>
+          Show its work
+        </Button>
         {/* The global session has no panel in a project view to land in. */}
         {item.subject.scope.kind === "project" && (
           <Button variant="outline" size="xs" onClick={onOpen}>

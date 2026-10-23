@@ -4,6 +4,7 @@ import {
   CANOPY_HOST_CHANNELS,
 } from "../../../shared/types/ipc/canopyHost.js";
 import { AgentDirectorySchema } from "../../../shared/types/agentDirectory.js";
+import { AssistantWorkHostReadingSchema } from "../../../shared/types/assistantWork.js";
 
 /**
  * Session-level methods behind Canopy reading a host the view isn't bound to.
@@ -24,6 +25,12 @@ export const CanopyLinkMethod = {
   ASSISTANT_INVOKE: "canopy.assistant-invoke",
   /** Shell → Host: the assistants this host holds, for a person's picker. */
   ASSISTANTS: "canopy.assistants",
+  /**
+   * Shell → Host: which of this host's workers an assistant made or holds
+   * (#14166). A host from before this answers UNSUPPORTED, which the Shell
+   * says as unread rather than as no work.
+   */
+  ASSISTANT_WORK: "canopy.assistant-work",
 } as const;
 
 /**
@@ -79,3 +86,12 @@ export const CanopyAssistantsAnswerSchema = z.object({
   directory: AgentDirectorySchema,
 });
 export type CanopyAssistantsAnswer = z.infer<typeof CanopyAssistantsAnswerSchema>;
+
+export const CanopyAssistantWorkPayloadSchema = z.object({});
+
+/** A host's answer: its assistant work protocol, and its workers' links as it read them. */
+export const CanopyAssistantWorkAnswerSchema = z.object({
+  version: z.number().int().positive(),
+  reading: AssistantWorkHostReadingSchema,
+});
+export type CanopyAssistantWorkAnswer = z.infer<typeof CanopyAssistantWorkAnswerSchema>;
