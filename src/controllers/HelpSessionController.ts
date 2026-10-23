@@ -312,7 +312,7 @@ export interface HelpLaunchOptions {
 // inline-mode choice: a resumed conversation must keep its scrollback in the
 // terminal buffer exactly like a fresh launch (#14186). Bypass is deliberately
 // not reconciled. A backend that declares neither capability is a no-op.
-function withResumeDisplayChoices(flags: string[], agentId: string): string[] {
+export function withResumeDisplayChoices(flags: string[], agentId: string): string[] {
   const entry = getAgentSettingsEntrySnapshot(agentId) ?? {};
   const effectiveInline = resolveEffectiveInlineMode(
     entry,
