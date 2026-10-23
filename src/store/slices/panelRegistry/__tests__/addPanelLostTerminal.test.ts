@@ -41,8 +41,8 @@ vi.mock("@/clients", () => ({
   },
 }));
 
-vi.mock("@/services/TerminalInstanceService", () => ({
-  terminalInstanceService: {
+vi.mock("@/services/TerminalInstanceService", () => {
+  const terminalInstanceService = {
     cleanup: vi.fn(),
     applyRendererPolicy: vi.fn(),
     onPanelBackgrounded: vi.fn(),
@@ -53,8 +53,11 @@ vi.mock("@/services/TerminalInstanceService", () => ({
     invalidatePtyGrid: vi.fn(),
     waitForAttachSettled: vi.fn().mockResolvedValue(undefined),
     get: vi.fn(() => null),
-  },
-}));
+  };
+  return {
+    createTerminalPaintPlane: () => terminalInstanceService,
+  };
+});
 
 vi.mock("@/store/helpPanelStore", () => ({
   useHelpPanelStore: {
@@ -87,7 +90,9 @@ const { usePanelStore } = await import("../../../panelStore");
 const { usePanelLimitStore } = await import("@/store/panelLimitStore");
 const { terminalClient } = await import("@/clients");
 const spawn = vi.mocked(terminalClient.spawn);
-const { terminalInstanceService } = await import("@/services/TerminalInstanceService");
+const terminalInstanceService = (
+  await import("@/services/TerminalInstanceService")
+).createTerminalPaintPlane();
 
 async function drainMicrotasks(iterations = 100): Promise<void> {
   for (let i = 0; i < iterations; i++) {

@@ -167,10 +167,9 @@ describe("project-switch / attach burst benchmark", () => {
 
   beforeEach(async () => {
     vi.clearAllMocks();
-    ({ terminalInstanceService: service } =
-      (await import("../TerminalInstanceService")) as unknown as {
-        terminalInstanceService: BenchService;
-      });
+    service = (await (
+      await import("../terminalInstanceServiceAccessor")
+    ).load()) as unknown as BenchService;
     // performance stays real so the simulated reset cost and task spans are wall time.
     vi.useFakeTimers({
       toFake: [

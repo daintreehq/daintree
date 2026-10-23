@@ -172,7 +172,7 @@ describe("TerminalInstanceService — watching a project another frontend drives
 
     gate = (await import("../inputGate")) as InputGate;
     gate.setDriveLeaseSnapshot(null);
-    const candidate: unknown = (await import("../TerminalInstanceService")).terminalInstanceService;
+    const candidate: unknown = await (await import("../terminalInstanceServiceAccessor")).load();
     if (!reachesWatchState(candidate)) throw new Error("service shape changed");
     service = candidate;
     service.instances.clear();

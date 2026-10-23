@@ -1415,8 +1415,11 @@ function chunkModulesPlugin(): Plugin {
 // function at first call during boot. Curated on purpose, per V8 guidance to
 // annotate only files where most functions actually run on load: the entry
 // chunk, the App chunk, vendor-react, vendor-xterm, TerminalInstanceService,
-// and appThemeStore. vendor-xterm is no longer boot-loaded (it arrives with the
-// first terminal, #14239), but most of it still runs the moment it loads.
+// and appThemeStore. vendor-xterm and TerminalInstanceService are no longer
+// boot-loaded (they arrive with the first terminal, #14239, #14267), but most
+// of both still runs the moment they load: the service's constructor wires
+// every controller, and the terminal it was loaded for is created at once. A
+// view with no terminal now pays neither the parse nor the compile.
 // Everything else — explicitly including vendor-editor (~451KB of CodeMirror
 // that is mostly uncalled at boot) and palette/settings/per-language chunks —
 // is excluded to avoid wasted background compile and bytecode memory.

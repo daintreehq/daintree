@@ -260,7 +260,7 @@ export function TwoPaneSplitLayout({
         const ids = terminals.map((terminal) => terminal.id);
         dragLockedIdsRef.current = ids;
         for (const id of ids) {
-          withTerminalService((service) => service.lockResize(id, true));
+          withTerminalService((service) => service.lockResize(id, true), id);
         }
       } else {
         const ids = dragLockedIdsRef.current;
@@ -268,7 +268,7 @@ export function TwoPaneSplitLayout({
         // frame cannot restore the lock after drag end.
         dragLockedIdsRef.current = [];
         for (const id of ids) {
-          withTerminalService((service) => service.lockResize(id, false));
+          withTerminalService((service) => service.lockResize(id, false), id);
         }
         if (ids.length > 0) {
           withTerminalService((service) => service.runResizePass(ids));
@@ -303,7 +303,7 @@ export function TwoPaneSplitLayout({
       const lockedIds = dragLockedIdsRef.current;
       dragLockedIdsRef.current = [];
       for (const id of lockedIds) {
-        withTerminalService((service) => service.lockResize(id, false));
+        withTerminalService((service) => service.lockResize(id, false), id);
       }
 
       // Flush pending ratio if present

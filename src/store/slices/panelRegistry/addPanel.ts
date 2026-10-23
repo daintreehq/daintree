@@ -1303,62 +1303,71 @@ export const createAddPanelActions = (
         : terminalOptions;
       // Synchronous when the service is already up, so the prewarm claims the
       // instance before anything else can mount it.
-      const terminalService = peekTerminalService() ?? (await loadTerminalService());
+      const loadedService = peekTerminalService();
+      const terminalService = loadedService ?? (await loadTerminalService());
+      // Removing the panel while the service loaded found no instance to
+      // destroy; prewarming now would build an orphaned xterm for it.
+      const supersededDuringLoad =
+        loadedService === null &&
+        (get().panelsById[id] === undefined ||
+          !agentLifecycleLedger.isCurrent(id, launchGeneration));
 
-      // Prewarm ALL terminal types to ensure the managed instance and data
-      // listeners exist before the backend PTY can emit output. Do not attach
-      // to an offscreen or visible DOM node here. Visible xterm.open() is
-      // gated by spawnStatus below so burst-created panels realize one at a
-      // time instead of all mounting xterm/WebGL during the same grid layout.
-      const currentActiveWorktreeId = getWorktreeSelectionSnapshot()?.activeWorktreeId ?? null;
-      const isDockOrInactive =
-        location === "dock" ||
-        location === "background" ||
-        (currentActiveWorktreeId !== null &&
-          (options.worktreeId ?? null) !== (currentActiveWorktreeId ?? null));
+      if (!supersededDuringLoad) {
+        // Prewarm ALL terminal types to ensure the managed instance and data
+        // listeners exist before the backend PTY can emit output. Do not attach
+        // to an offscreen or visible DOM node here. Visible xterm.open() is
+        // gated by spawnStatus below so burst-created panels realize one at a
+        // time instead of all mounting xterm/WebGL during the same grid layout.
+        const currentActiveWorktreeId = getWorktreeSelectionSnapshot()?.activeWorktreeId ?? null;
+        const isDockOrInactive =
+          location === "dock" ||
+          location === "background" ||
+          (currentActiveWorktreeId !== null &&
+            (options.worktreeId ?? null) !== (currentActiveWorktreeId ?? null));
 
-      if (!isAgent) {
-        // Awaited so the managed instance and its PTY data listener exist before
-        // the queued spawn runs — prewarmTerminal is async now that the lazy
-        // Unicode11 addon is loaded during terminal construction (#10840).
-        await terminalService.prewarmTerminal(id, launchAgentId, prewarmOptions, {
-          offscreen: false,
-          widthPx: location === "dock" ? DOCK_PREWARM_WIDTH_PX : DOCK_TERM_WIDTH,
-          heightPx: location === "dock" ? DOCK_PREWARM_HEIGHT_PX : DOCK_TERM_HEIGHT,
-        });
-      } else {
-        // Agent terminals also need prewarm for proper tier management.
-        // This ensures they can receive wake signals when their worktree activates.
-        const widthPx = location === "dock" ? DOCK_PREWARM_WIDTH_PX : DOCK_TERM_WIDTH;
-        const heightPx = location === "dock" ? DOCK_PREWARM_HEIGHT_PX : DOCK_TERM_HEIGHT;
+        if (!isAgent) {
+          // Awaited so the managed instance and its PTY data listener exist before
+          // the queued spawn runs — prewarmTerminal is async now that the lazy
+          // Unicode11 addon is loaded during terminal construction (#10840).
+          await terminalService.prewarmTerminal(id, launchAgentId, prewarmOptions, {
+            offscreen: false,
+            widthPx: location === "dock" ? DOCK_PREWARM_WIDTH_PX : DOCK_TERM_WIDTH,
+            heightPx: location === "dock" ? DOCK_PREWARM_HEIGHT_PX : DOCK_TERM_HEIGHT,
+          });
+        } else {
+          // Agent terminals also need prewarm for proper tier management.
+          // This ensures they can receive wake signals when their worktree activates.
+          const widthPx = location === "dock" ? DOCK_PREWARM_WIDTH_PX : DOCK_TERM_WIDTH;
+          const heightPx = location === "dock" ? DOCK_PREWARM_HEIGHT_PX : DOCK_TERM_HEIGHT;
 
-        // Awaited so the instance exists before the sendPtyResize below targets
-        // it — prewarmTerminal is async now that the lazy Unicode11 addon is
-        // loaded during terminal construction (#10840).
-        await terminalService.prewarmTerminal(id, launchAgentId, prewarmOptions, {
-          offscreen: false,
-          widthPx,
-          heightPx,
-        });
+          // Awaited so the instance exists before the sendPtyResize below targets
+          // it — prewarmTerminal is async now that the lazy Unicode11 addon is
+          // loaded during terminal construction (#10840).
+          await terminalService.prewarmTerminal(id, launchAgentId, prewarmOptions, {
+            offscreen: false,
+            widthPx,
+            heightPx,
+          });
 
-        // Only send explicit resize for active grid spawns. Background/dock
-        // terminals can boot at the spawn default and will be resized on reveal.
-        // Cell metrics come from calculateTerminalDimensions so the lineHeight
-        // assumption stays in sync with xtermConfig. An overlay panel that
-        // reaches this branch (no active worktree) must use its own estimate —
-        // the DOCK_TERM-derived dims would re-poison the grid the overlay
-        // spawn path just fixed (#10863), and for a settled-strategy agent
-        // this call arms a 500ms timer that can land AFTER the spawn. When the
-        // estimate is unavailable (non-finite inputs), skip entirely and let
-        // the spawn-time dims own overlay geometry. A restored pane skips it
-        // too: its PTY is already on the persisted grid we just constructed at,
-        // and this estimate is a fixed DOCK_TERM-derived guess, not a
-        // measurement — sending it would move a healthy PTY off that grid
-        // (#11718).
-        if (!isDockOrInactive && !restoredDims && (location !== "overlay" || overlayDims)) {
-          const { cols, rows } =
-            overlayDims ?? calculateTerminalDimensions(widthPx, heightPx, fontSize);
-          terminalService.sendPtyResize(id, cols, rows);
+          // Only send explicit resize for active grid spawns. Background/dock
+          // terminals can boot at the spawn default and will be resized on reveal.
+          // Cell metrics come from calculateTerminalDimensions so the lineHeight
+          // assumption stays in sync with xtermConfig. An overlay panel that
+          // reaches this branch (no active worktree) must use its own estimate —
+          // the DOCK_TERM-derived dims would re-poison the grid the overlay
+          // spawn path just fixed (#10863), and for a settled-strategy agent
+          // this call arms a 500ms timer that can land AFTER the spawn. When the
+          // estimate is unavailable (non-finite inputs), skip entirely and let
+          // the spawn-time dims own overlay geometry. A restored pane skips it
+          // too: its PTY is already on the persisted grid we just constructed at,
+          // and this estimate is a fixed DOCK_TERM-derived guess, not a
+          // measurement — sending it would move a healthy PTY off that grid
+          // (#11718).
+          if (!isDockOrInactive && !restoredDims && (location !== "overlay" || overlayDims)) {
+            const { cols, rows } =
+              overlayDims ?? calculateTerminalDimensions(widthPx, heightPx, fontSize);
+            terminalService.sendPtyResize(id, cols, rows);
+          }
         }
       }
     } catch (error) {
@@ -1373,12 +1382,19 @@ export const createAddPanelActions = (
     if (shouldBackground) {
       // Terminal is either in dock or in an inactive worktree.
       // Apply BACKGROUND policy to prevent renderer updates for unmounted terminals.
-      withTerminalService((service) =>
-        service.applyRendererPolicy(id, TerminalRefreshTier.BACKGROUND)
+      withTerminalService(
+        (service) => service.applyRendererPolicy(id, TerminalRefreshTier.BACKGROUND),
+        id
       );
     }
 
-    peekTerminalService()?.setInputLocked(id, !!options.isInputLocked);
+    // The store's value, not the creation option: a lock toggled while the
+    // service loaded must not be reverted here.
+    const lockTarget = get().panelsById[id];
+    peekTerminalService()?.setInputLocked(
+      id,
+      lockTarget && isPtyPanel(lockTarget) ? !!lockTarget.isInputLocked : !!options.isInputLocked
+    );
 
     // Wake the renderer instance and clear attention indicators when a panel is
     // created as the active dock panel — the state activation was already

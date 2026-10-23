@@ -13,6 +13,7 @@ import { isMac } from "@/lib/platform";
 import { TerminalRefreshTier } from "@/types";
 import {
   load as loadTerminalService,
+  onReady as onTerminalServiceReady,
   peek as peekTerminalService,
   with as withTerminalService,
 } from "@/services/terminal/terminalInstanceServiceAccessor";
@@ -31,6 +32,8 @@ import { getSoftNewlineSequence } from "../../../shared/utils/terminalInputProto
 import { keybindingService } from "@/services/KeybindingService";
 import { actionService } from "@/services/ActionService";
 import { logError } from "@/utils/logger";
+import { getErrorMessage } from "@/utils/errorContext";
+import { usePanelStore } from "@/store/panelStore";
 import { useTerminalFileTransfer } from "./useTerminalFileTransfer";
 import { getOptionWordJumpSequence } from "./terminalWordNavigation";
 import {
@@ -210,6 +213,7 @@ export function XtermAdapter({
   // theme colour. Changes only when the sampled edges change, not per frame.
   const [paddingPaint, setPaddingPaint] = useState<TerminalPaddingPaint>(NO_PADDING_PAINT);
   const paddingPaintUnsubRef = useRef<(() => void) | null>(null);
+  const altBufferUnsubRef = useRef<(() => void) | null>(null);
 
   // Attach image paste and file drag-and-drop handlers to the padded wrapper
   // rather than the xterm host: in normal-buffer mode the wrapper adds a 12px
@@ -271,6 +275,12 @@ export function XtermAdapter({
   // received so the options effect below only forwards real deltas.
   const terminalOptionsRef = useRef(terminalOptions);
   const appliedOptionsRef = useRef<ITerminalOptions | null>(null);
+  // The lock effect below can't reach a terminal that doesn't exist yet, so
+  // attach re-reads the latest prop once getOrCreate has built it.
+  const isInputLockedRef = useRef(!!isInputLocked);
+  // Bumped when the service arrives after this pane's own load failed, so the
+  // attach effect runs again against it.
+  const [serviceLoadRetry, setServiceLoadRetry] = useState(0);
   useLayoutEffect(() => {
     terminalOptionsRef.current = terminalOptions;
   }, [terminalOptions]);
@@ -353,6 +363,7 @@ export function XtermAdapter({
     // closure. Stays undefined if the component unmounts before attach runs —
     // detach()/setVisible() both tolerate the never-attached state.
     let attachGen: number | undefined;
+    let cancelServiceLoadRetry: (() => void) | null = null;
 
     // The service may still be loading, and getOrCreate is async because the
     // lazy Unicode11 addon (#10840) is awaited during terminal construction.
@@ -362,8 +373,26 @@ export function XtermAdapter({
     void (async () => {
       // Only await when unloaded: a loaded service must create synchronously,
       // before the later layout effects run against this id.
-      const service = peekTerminalService() ?? (await loadTerminalService());
-      if (disposed) return;
+      let service = peekTerminalService();
+      if (!service) {
+        try {
+          service = await loadTerminalService();
+        } catch (err) {
+          if (disposed) return;
+          // Without the service there is no terminal to paint, so raise the
+          // pane's attach-error banner. Its Retry loads the service again
+          // (a failed load is not cached) and this pane attaches once it lands.
+          logError("[XtermAdapter] Terminal service failed to load", err);
+          usePanelStore.getState().setTerminalAttachError?.(terminalId, getErrorMessage(err));
+          cancelServiceLoadRetry = onTerminalServiceReady(() => {
+            if (disposed) return;
+            usePanelStore.getState().clearTerminalAttachError?.(terminalId);
+            setServiceLoadRetry((n) => n + 1);
+          });
+          return;
+        }
+        if (disposed) return;
+      }
       const managed = await service.getOrCreate(
         terminalId,
         launchAgentId,
@@ -373,6 +402,9 @@ export function XtermAdapter({
         stableCwdProvider
       );
       if (disposed) return;
+      // Lock only: never unlock here, or this would undo the temporary lock a
+      // restart holds while its replacement spawns.
+      if (isInputLockedRef.current) service.setInputLocked(terminalId, true);
       // getOrCreate applies the current options itself (creation or its internal
       // updateOptions call for existing instances) — record them so the options
       // effect doesn't re-apply the same values on this commit.
@@ -769,6 +801,11 @@ export function XtermAdapter({
         onExitRef.current?.(code);
       });
       paddingPaintUnsubRef.current = service.addPaddingPaintListener(terminalId, setPaddingPaint);
+      // Subscribed once the terminal exists: before then (the service or the
+      // instance still loading) the service has nothing to attach it to. It
+      // reports the current state on attach. TUIs (OpenCode, vim, htop) in the
+      // alt buffer fill the pane, so the container drops its padding.
+      altBufferUnsubRef.current = service.addAltBufferListener(terminalId, setIsAltBuffer);
 
       if (!wasDetachedForSwitch || !hasSavedTargetDims) {
         performFit();
@@ -799,6 +836,7 @@ export function XtermAdapter({
 
     return () => {
       disposed = true;
+      cancelServiceLoadRetry?.();
       // Pass the captured generation so stale dock→grid unmount cleanup
       // doesn't background a terminal that has already been re-attached elsewhere.
       peekTerminalService()?.setVisible(terminalId, false, attachGen);
@@ -822,6 +860,8 @@ export function XtermAdapter({
       }
       paddingPaintUnsubRef.current?.();
       paddingPaintUnsubRef.current = null;
+      altBufferUnsubRef.current?.();
+      altBufferUnsubRef.current = null;
       setPaddingPaint(NO_PADDING_PAINT);
 
       prevDimensionsRef.current = null;
@@ -836,6 +876,7 @@ export function XtermAdapter({
     stableCwdProvider,
     restoreOnAttach,
     hasVisibleBufferContent,
+    serviceLoadRetry,
   ]);
 
   // Apply appearance changes in-place. updateOptions keys on presence
@@ -871,6 +912,7 @@ export function XtermAdapter({
   }, [terminalId, terminalOptions]);
 
   useLayoutEffect(() => {
+    isInputLockedRef.current = !!isInputLocked;
     peekTerminalService()?.setInputLocked(terminalId, !!isInputLocked);
   }, [terminalId, isInputLocked]);
 
@@ -883,7 +925,10 @@ export function XtermAdapter({
   useLayoutEffect(() => {
     // Use the stable proxy to avoid stale closures in the service
     peekTerminalService()?.updateRefreshTierProvider(terminalId, stableRefreshTierProvider);
-    withTerminalService((service) => service.applyRendererPolicy(terminalId, currentTier));
+    withTerminalService(
+      (service) => service.applyRendererPolicy(terminalId, currentTier),
+      terminalId
+    );
   }, [terminalId, stableRefreshTierProvider, currentTier]);
 
   // Refit terminal when window becomes visible again after being hidden.
@@ -908,16 +953,6 @@ export function XtermAdapter({
 
     return () => document.removeEventListener("visibilitychange", handleVisibilityChange);
   }, [performFit]);
-
-  // Subscribe to alt buffer state changes for TUI applications (OpenCode, vim, htop, etc.)
-  // When in alt buffer, we need to sync the container styling
-  // Use useLayoutEffect to avoid flash before first paint
-  useLayoutEffect(() => {
-    const unsubscribe = peekTerminalService()?.addAltBufferListener(terminalId, (altBuffer) => {
-      setIsAltBuffer(altBuffer);
-    });
-    return unsubscribe;
-  }, [terminalId]);
 
   const activePaddingPaint = isAltBuffer ? NO_PADDING_PAINT : paddingPaint;
   const paddingBackgroundStyle = buildPaddingBackgroundStyle(activePaddingPaint);

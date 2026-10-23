@@ -33,8 +33,8 @@ vi.mock("@/clients", () => ({
   },
 }));
 
-vi.mock("@/services/TerminalInstanceService", () => ({
-  terminalInstanceService: {
+vi.mock("@/services/TerminalInstanceService", () => {
+  const terminalInstanceService = {
     cleanup: vi.fn(),
     applyRendererPolicy: vi.fn(),
     onPanelBackgrounded: vi.fn(),
@@ -42,11 +42,16 @@ vi.mock("@/services/TerminalInstanceService", () => ({
     setVisible: vi.fn(),
     suppressResizesDuringProjectSwitch: vi.fn(),
     detachForProjectSwitch: vi.fn(),
-  },
-}));
+  };
+  return {
+    createTerminalPaintPlane: () => terminalInstanceService,
+  };
+});
 
 const { usePanelStore } = await import("../panelStore");
-const { terminalInstanceService } = await import("@/services/TerminalInstanceService");
+const terminalInstanceService = (
+  await import("@/services/TerminalInstanceService")
+).createTerminalPaintPlane();
 const { terminalClient } = await import("@/clients");
 
 type MockTerminal = Partial<PtyPanelData> & { id: string };

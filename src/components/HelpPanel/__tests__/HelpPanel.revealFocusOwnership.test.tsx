@@ -196,14 +196,17 @@ vi.mock("./HelpPanelHeader", () => ({ HelpPanelHeader: () => null }));
 vi.mock("./HelpPanelBanners", () => ({ HelpPanelBanners: () => null }));
 vi.mock("./HelpPanelVersionGate", () => ({ HelpPanelVersionGate: () => null }));
 
-vi.mock("@/services/TerminalInstanceService", () => ({
-  terminalInstanceService: {
+vi.mock("@/services/TerminalInstanceService", () => {
+  const terminalInstanceService = {
     focus: (...args: unknown[]) => focusMock(...args),
     setFocused: vi.fn(),
     notifyUserInput: vi.fn(),
     repaintForReveal: vi.fn(),
-  },
-}));
+  };
+  return {
+    createTerminalPaintPlane: () => terminalInstanceService,
+  };
+});
 
 vi.mock("@/clients", () => ({ terminalClient: { submit: vi.fn(), sendKey: vi.fn() } }));
 vi.mock("@shared/config/agentIds", () => ({
@@ -326,6 +329,11 @@ import {
   isTooltipFocusOpenSuppressed,
   registerTooltipDismiss,
 } from "@/lib/tooltipDismissRegistry";
+
+import { load as loadTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
+
+// The service mock never evaluates the real module, so nothing builds it.
+await loadTerminalService();
 
 // rAF mock so every deferred focus frame is driven explicitly. A flush runs only
 // the callbacks already queued, so HybridInputBar's nested frame needs a second

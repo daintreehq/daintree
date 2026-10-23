@@ -9,7 +9,7 @@ import {
   type TerminalPaneInfo,
 } from "@/services/terminal/readTerminalPaneInfo";
 import { actionService } from "@/services/ActionService";
-import { terminalInstanceService } from "@/services/TerminalInstanceService";
+import { peek as peekTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { getAgentConfig } from "@shared/config/agentRegistry";
 import { usePanelStore } from "@/store/panelStore";
@@ -428,7 +428,7 @@ export function TerminalInfoDialog({ isOpen, onClose, terminalId }: TerminalInfo
     // Immediate read on open so the dialog reflects the current sync-mode
     // before the first poll lands. Also fires when the group is expanded, so the
     // first frame after opening it is current rather than up to 250ms stale.
-    setSyncMode(terminalInstanceService.getSynchronizedOutputMode(terminalId));
+    setSyncMode(peekTerminalService()?.getSynchronizedOutputMode(terminalId) ?? null);
   }, [isOpen, performanceOpen, terminalId]);
 
   // xterm 6 mutates terminal.modes asynchronously as the parser consumes
@@ -437,7 +437,7 @@ export function TerminalInfoDialog({ isOpen, onClose, terminalId }: TerminalInfo
   // while the dialog is open. Visibility-gated so the poll pauses while the
   // window is hidden and snaps back on restore.
   useVisibilityAwareInterval(
-    () => setSyncMode(terminalInstanceService.getSynchronizedOutputMode(terminalId)),
+    () => setSyncMode(peekTerminalService()?.getSynchronizedOutputMode(terminalId) ?? null),
     SYNC_MODE_POLL_MS,
     isOpen && performanceOpen
   );
@@ -649,7 +649,7 @@ Activity:
 Performance:
   Output buffer: ${info?.outputBufferSize != null ? `${info.outputBufferSize} lines` : UNAVAILABLE}
   Semantic buffer: ${info?.semanticBufferLines != null ? `${info.semanticBufferLines} lines` : UNAVAILABLE}
-  Synchronized output (DEC 2026): ${formatSyncMode(terminalInstanceService.getSynchronizedOutputMode(terminalId))}
+  Synchronized output (DEC 2026): ${formatSyncMode(peekTerminalService()?.getSynchronizedOutputMode(terminalId) ?? null)}
 `;
   }, [
     agentLaunchFlags,

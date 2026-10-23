@@ -12,8 +12,8 @@ const notifyRestoreSettledWaitersMock = vi.fn();
 const notifyScrollbackRestoreListenersMock = vi.fn();
 const destroyedListeners = new Set<(id: string) => void>();
 
-vi.mock("@/services/TerminalInstanceService", () => ({
-  terminalInstanceService: {
+vi.mock("@/services/TerminalInstanceService", () => {
+  const terminalInstanceService = {
     get: (id: string) => getMock(id),
     fetchAndRestore: (id: string) => fetchAndRestoreMock(id),
     notifyRestoreSettledWaiters: (id: string) => notifyRestoreSettledWaitersMock(id),
@@ -22,8 +22,11 @@ vi.mock("@/services/TerminalInstanceService", () => ({
       destroyedListeners.add(cb);
       return () => destroyedListeners.delete(cb);
     },
-  },
-}));
+  };
+  return {
+    createTerminalPaintPlane: () => terminalInstanceService,
+  };
+});
 
 const setScrollbackRestoreErrorMock = vi.fn();
 const clearScrollbackRestoreErrorMock = vi.fn();
@@ -64,8 +67,9 @@ const {
   retryFailedScrollbackRestoreBatch,
   resetScrollbackRestoreBatch,
 } = await import("../scrollbackRestoreScheduler");
-const { terminalInstanceService: terminalServiceMock } =
-  await import("@/services/TerminalInstanceService");
+const terminalServiceMock = (
+  await import("@/services/TerminalInstanceService")
+).createTerminalPaintPlane();
 const terminalServiceAccessor = await import("@/services/terminal/terminalInstanceServiceAccessor");
 
 function getScheduledDoRestore(callIndex = 0): () => Promise<void> {

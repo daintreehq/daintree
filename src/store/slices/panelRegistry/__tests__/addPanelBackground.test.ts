@@ -42,8 +42,8 @@ vi.mock("@/clients", () => ({
   },
 }));
 
-vi.mock("@/services/TerminalInstanceService", () => ({
-  terminalInstanceService: {
+vi.mock("@/services/TerminalInstanceService", () => {
+  const terminalInstanceService = {
     cleanup: vi.fn(),
     applyRendererPolicy: vi.fn(),
     onPanelBackgrounded: vi.fn(),
@@ -55,8 +55,11 @@ vi.mock("@/services/TerminalInstanceService", () => ({
     wake: vi.fn(),
     invalidatePtyGrid: vi.fn(),
     get: vi.fn(() => null),
-  },
-}));
+  };
+  return {
+    createTerminalPaintPlane: () => terminalInstanceService,
+  };
+});
 
 vi.mock("../persistence", async () => {
   const actual = await vi.importActual<typeof import("../persistence")>("../persistence");
@@ -78,7 +81,9 @@ const { load: loadTerminalService } =
 beforeAll(async () => {
   await loadTerminalService();
 });
-const { terminalInstanceService } = await import("@/services/TerminalInstanceService");
+const terminalInstanceService = (
+  await import("@/services/TerminalInstanceService")
+).createTerminalPaintPlane();
 const { TerminalRefreshTier } = await import("@/types");
 const { saveNormalized } = await import("../persistence");
 

@@ -37,8 +37,8 @@ vi.mock("@/clients", () => ({
   },
 }));
 
-vi.mock("@/services/TerminalInstanceService", () => ({
-  terminalInstanceService: {
+vi.mock("@/services/TerminalInstanceService", () => {
+  const terminalInstanceService = {
     // No attached renderer xterm in these tests — spawn falls back to the
     // default/estimated dims path.
     get: vi.fn(() => null),
@@ -52,8 +52,11 @@ vi.mock("@/services/TerminalInstanceService", () => ({
     sendPtyResize: vi.fn(),
     setInputLocked: vi.fn(),
     wake: vi.fn(),
-  },
-}));
+  };
+  return {
+    createTerminalPaintPlane: () => terminalInstanceService,
+  };
+});
 
 vi.mock("@/services/terminal/panelDuplicationService", () => ({
   buildPanelSnapshotOptions: vi.fn((p: { id: string }) => ({ id: p.id })),

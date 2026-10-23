@@ -39,9 +39,12 @@ vi.mock("@/clients", async (importOriginal) => {
   };
 });
 
-vi.mock("@/services/TerminalInstanceService", () => ({
-  terminalInstanceService: { notifyUserInput, notifyEnterPressed, clearDirectingState },
-}));
+vi.mock("@/services/TerminalInstanceService", () => {
+  const terminalInstanceService = { notifyUserInput, notifyEnterPressed, clearDirectingState };
+  return {
+    createTerminalPaintPlane: () => terminalInstanceService,
+  };
+});
 
 import { load as loadTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
 

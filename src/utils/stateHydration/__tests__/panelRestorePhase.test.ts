@@ -18,12 +18,15 @@ vi.mock("@/utils/logger", () => ({
 const initializeBackendTierMock = vi.fn();
 const setTargetSizeMock = vi.fn();
 
-vi.mock("@/services/TerminalInstanceService", () => ({
-  terminalInstanceService: {
+vi.mock("@/services/TerminalInstanceService", () => {
+  const terminalInstanceService = {
     initializeBackendTier: (...args: unknown[]) => initializeBackendTierMock(...args),
     setTargetSize: (...args: unknown[]) => setTargetSizeMock(...args),
-  },
-}));
+  };
+  return {
+    createTerminalPaintPlane: () => terminalInstanceService,
+  };
+});
 
 const reconnectWithTimeoutMock = vi.hoisted(() => vi.fn());
 
@@ -290,8 +293,9 @@ function wtList(...ids: string[]): WorktreeState[] {
 }
 
 const { resolveVisiblePanelId, restorePanelsPhase } = await import("../panelRestorePhase");
-const { terminalInstanceService: terminalServiceMock } =
-  await import("@/services/TerminalInstanceService");
+const terminalServiceMock = (
+  await import("@/services/TerminalInstanceService")
+).createTerminalPaintPlane();
 const terminalServiceAccessor = await import("@/services/terminal/terminalInstanceServiceAccessor");
 
 beforeEach(() => {

@@ -43,8 +43,8 @@ vi.mock("@/clients", () => ({
   cliAvailabilityClient: { refresh: vi.fn() },
 }));
 
-vi.mock("@/services/TerminalInstanceService", () => ({
-  terminalInstanceService: {
+vi.mock("@/services/TerminalInstanceService", () => {
+  const terminalInstanceService = {
     cleanup: vi.fn(),
     applyRendererPolicy: vi.fn(),
     onPanelBackgrounded: vi.fn(),
@@ -57,8 +57,11 @@ vi.mock("@/services/TerminalInstanceService", () => ({
     scheduleBatchResize: vi.fn(),
     resize: vi.fn().mockReturnValue(null),
     getInstance: vi.fn(),
-  },
-}));
+  };
+  return {
+    createTerminalPaintPlane: () => terminalInstanceService,
+  };
+});
 
 vi.mock("@/store/persistence/panelPersistence", () => ({
   panelPersistence: {

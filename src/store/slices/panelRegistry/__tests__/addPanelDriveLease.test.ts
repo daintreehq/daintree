@@ -49,8 +49,8 @@ vi.mock("@/clients/systemClient", () => ({
   systemClient: { isMemoryPressureCritical: isMemoryPressureCriticalMock },
 }));
 
-vi.mock("@/services/TerminalInstanceService", () => ({
-  terminalInstanceService: {
+vi.mock("@/services/TerminalInstanceService", () => {
+  const terminalInstanceService = {
     cleanup: vi.fn(),
     applyRendererPolicy: vi.fn(),
     onPanelBackgrounded: vi.fn(),
@@ -62,8 +62,11 @@ vi.mock("@/services/TerminalInstanceService", () => ({
     waitForAttachSettled: vi.fn().mockResolvedValue(undefined),
     fetchAndRestore: vi.fn().mockResolvedValue(true),
     get: vi.fn(() => null),
-  },
-}));
+  };
+  return {
+    createTerminalPaintPlane: () => terminalInstanceService,
+  };
+});
 
 vi.mock("../persistence", async () => {
   const actual = await vi.importActual<typeof import("../persistence")>("../persistence");
@@ -106,7 +109,9 @@ const { setDriveLeaseSnapshot, _resetTerminalInputGateForTesting } =
 const { resetDriveLeaseHoldsForTesting, useDriveLeaseWaitStore } =
   await import("@/store/driveLeaseWaitStore");
 const { ClientAppError } = await import("@/utils/clientAppError");
-const { terminalInstanceService } = await import("@/services/TerminalInstanceService");
+const terminalInstanceService = (
+  await import("@/services/TerminalInstanceService")
+).createTerminalPaintPlane();
 const {
   launchDespiteMemoryPressure,
   panelHoldKey,

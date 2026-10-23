@@ -22,12 +22,15 @@ vi.mock("@/store/paletteStore", () => ({
   usePaletteStore: { getState: () => ({ openPalette }) },
 }));
 
-vi.mock("@/services/TerminalInstanceService", () => ({
-  terminalInstanceService: {
+vi.mock("@/services/TerminalInstanceService", () => {
+  const terminalInstanceService = {
     getCachedSelection: (id: string) => getCachedSelection(id),
     get: () => undefined,
-  },
-}));
+  };
+  return {
+    createTerminalPaintPlane: () => terminalInstanceService,
+  };
+});
 
 vi.mock("@/clients", () => ({ terminalClient: { write: vi.fn() } }));
 vi.mock("@shared/config/panelKindRegistry", () => ({ panelKindHasPty: () => true }));

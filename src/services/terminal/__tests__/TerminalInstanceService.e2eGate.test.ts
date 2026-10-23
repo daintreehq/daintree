@@ -1,8 +1,9 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-// The module attaches a suite of __daintree* terminal introspection bridges to
-// `window` at eval time. They must only attach when the preload has injected
+// The service attaches a suite of __daintree* terminal introspection bridges to
+// `window` when it is built (on the view's first terminal, not at module eval).
+// They must only attach when the preload has injected
 // `window.__DAINTREE_E2E_MODE__ === true` (E2E, non-packaged builds) and must
 // never attach in production sessions. These mocks let the heavy service module
 // import cleanly under jsdom without exercising the real PTY/WebGL stack.
@@ -54,7 +55,7 @@ vi.mock("../TerminalAddonManager", () => ({
   createWebLinksAddon: vi.fn(() => ({ dispose: vi.fn() })),
 }));
 
-// Every __daintree* bridge attached at module eval — both the window-cast and
+// Every __daintree* bridge attached on construction — both the window-cast and
 // the Object.assign call sites — so we assert the whole surface is gated, not
 // just one representative.
 const E2E_TERMINAL_GLOBALS = [
@@ -86,13 +87,14 @@ function clearGlobals(): void {
   delete (window as unknown as Record<string, unknown>).__DAINTREE_E2E_MODE__;
 }
 
-async function importServiceWithMode(mode: unknown): Promise<void> {
+async function importServiceWithMode(mode: unknown, construct = true): Promise<void> {
   clearGlobals();
   if (mode !== undefined) {
     (window as unknown as Record<string, unknown>).__DAINTREE_E2E_MODE__ = mode;
   }
   vi.resetModules();
-  await import("../TerminalInstanceService");
+  const serviceModule = await import("../TerminalInstanceService");
+  if (construct) serviceModule.createTerminalPaintPlane();
 }
 
 describe("TerminalInstanceService E2E terminal-bridge gate", () => {
@@ -123,6 +125,13 @@ describe("TerminalInstanceService E2E terminal-bridge gate", () => {
 
   it("rejects truthy-but-not-true values (e.g. string 'true')", async () => {
     await importServiceWithMode("true");
+    for (const name of E2E_TERMINAL_GLOBALS) {
+      expect(windowProp(name), name).toBeUndefined();
+    }
+  });
+
+  it("attaches nothing at module eval, before the service is built", async () => {
+    await importServiceWithMode(true, false);
     for (const name of E2E_TERMINAL_GLOBALS) {
       expect(windowProp(name), name).toBeUndefined();
     }

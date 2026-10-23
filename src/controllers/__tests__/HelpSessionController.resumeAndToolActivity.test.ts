@@ -151,15 +151,20 @@ vi.mock("@/utils/logger", () => ({ logError: vi.fn() }));
 vi.mock("@/utils/safeFireAndForget", () => ({
   safeFireAndForget: (p: Promise<unknown>) => p,
 }));
-vi.mock("@/services/TerminalInstanceService", () => ({
-  terminalInstanceService: { fetchAndRestore: vi.fn().mockResolvedValue(true) },
-}));
+vi.mock("@/services/TerminalInstanceService", () => {
+  const terminalInstanceService = { fetchAndRestore: vi.fn().mockResolvedValue(true) };
+  return {
+    createTerminalPaintPlane: () => terminalInstanceService,
+  };
+});
 
 import { HelpSessionController } from "../HelpSessionController";
-import { terminalInstanceService } from "@/services/TerminalInstanceService";
+import { createTerminalPaintPlane } from "@/services/TerminalInstanceService";
 import { actionService } from "@/services/ActionService";
 import { notify } from "@/lib/notify";
 import { assistantSlotKey as slotKey } from "@shared/config/assistantSlots";
+
+const terminalInstanceService = createTerminalPaintPlane();
 
 function resetState() {
   helpPanelState.openSlots = [0];

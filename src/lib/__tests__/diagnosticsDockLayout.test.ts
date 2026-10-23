@@ -7,11 +7,14 @@ const getPanelStateMock = vi.hoisted(() => vi.fn());
 const getWorktreeSelectionStateMock = vi.hoisted(() => vi.fn());
 const getHelpPanelStateMock = vi.hoisted(() => vi.fn());
 
-vi.mock("@/services/terminal/TerminalInstanceService", () => ({
-  terminalInstanceService: {
+vi.mock("@/services/terminal/TerminalInstanceService", () => {
+  const terminalInstanceService = {
     suppressResizesDuringLayoutTransition: suppressMock,
-  },
-}));
+  };
+  return {
+    createTerminalPaintPlane: () => terminalInstanceService,
+  };
+});
 
 vi.mock("@/store/panelStore", () => ({
   usePanelStore: { getState: getPanelStateMock },

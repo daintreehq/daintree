@@ -24,7 +24,11 @@ import {
   shouldShowHybridInputBar,
 } from "@/components/Terminal/terminalFocus";
 import type { HybridInputBarHandle } from "@/components/Terminal/HybridInputBar";
-import { terminalInstanceService } from "@/services/TerminalInstanceService";
+import {
+  peek as peekTerminalService,
+  subscribeWhenReady as subscribeTerminalServiceWhenReady,
+  with as withTerminalService,
+} from "@/services/terminal/terminalInstanceServiceAccessor";
 import { terminalClient } from "@/clients";
 import { logWarn } from "@/utils/logger";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
@@ -893,7 +897,7 @@ export function HelpPanel({
             hybridCompletionRaf = null;
             pendingFocusBar = null;
           }
-          terminalInstanceService.focus(terminalId);
+          peekTerminalService()?.focus(terminalId);
           const after = document.activeElement;
           if (after?.closest?.(".xterm-helper-textarea") && panelRef.current?.contains(after)) {
             completeFocusTrigger();
@@ -983,10 +987,11 @@ export function HelpPanel({
   // release the pin — that resolves on the next grid-terminal focus).
   useEffect(() => {
     if (!terminalId) return undefined;
-    terminalInstanceService.setFocused(terminalId, isOpen && isVisible && hasDomFocus);
-    return () => {
-      terminalInstanceService.setFocused(terminalId, false);
-    };
+    const focused = isOpen && isVisible && hasDomFocus;
+    return subscribeTerminalServiceWhenReady((service) => {
+      service.setFocused(terminalId, focused);
+      return () => service.setFocused(terminalId, false);
+    });
   }, [isOpen, isVisible, hasDomFocus, terminalId]);
 
   // Resize via mouse drag
@@ -1820,7 +1825,10 @@ export function HelpPanel({
                     selected={isHighlighted}
                     onSend={({ text, imagePaths }) => {
                       if (terminalPty?.isInputLocked === true) return;
-                      terminalInstanceService.notifyUserInput(terminalId);
+                      withTerminalService(
+                        (service) => service.notifyUserInput(terminalId),
+                        terminalId
+                      );
                       reportCanopySent(terminalId);
                       // submit can now reject for dead PTYs (#8706); swallow
                       // to log so the unhandled rejection doesn't leak — the
@@ -1836,9 +1844,15 @@ export function HelpPanel({
                     onSendKey={(key) => {
                       if (terminalPty?.isInputLocked === true) return;
                       if (key === "escape") {
-                        terminalInstanceService.clearDirectingState(terminalId, "escape-key");
+                        withTerminalService(
+                          (service) => service.clearDirectingState(terminalId, "escape-key"),
+                          terminalId
+                        );
                       } else {
-                        terminalInstanceService.notifyUserInput(terminalId);
+                        withTerminalService(
+                          (service) => service.notifyUserInput(terminalId),
+                          terminalId
+                        );
                       }
                       if (key === "enter") reportCanopySent(terminalId);
                       terminalClient.sendKey(terminalId, key);

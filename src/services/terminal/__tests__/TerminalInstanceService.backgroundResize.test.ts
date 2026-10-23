@@ -112,10 +112,9 @@ describe("TerminalInstanceService applyBackgroundWindowResize", () => {
 
   beforeEach(async () => {
     vi.resetModules();
-    ({ terminalInstanceService: service } =
-      (await import("../TerminalInstanceService")) as unknown as {
-        terminalInstanceService: BackgroundResizeTestService;
-      });
+    service = (await (
+      await import("../terminalInstanceServiceAccessor")
+    ).load()) as unknown as BackgroundResizeTestService;
     service.instances.clear();
     service.resetBackgroundResizeBasis();
     applyBackgroundResizeSpy = vi

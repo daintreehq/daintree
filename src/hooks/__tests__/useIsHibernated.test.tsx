@@ -6,7 +6,7 @@ const loadMock = vi.hoisted(() => vi.fn());
 
 vi.mock("@/services/TerminalInstanceService", () => {
   loadMock();
-  return { terminalInstanceService: {} };
+  return { createTerminalPaintPlane: () => ({}) };
 });
 
 import { useIsHibernated } from "../useIsHibernated";

@@ -105,8 +105,9 @@ export const createBackgroundActions = (
     });
 
     if (panelKindHasPty(terminal.kind ?? "terminal")) {
-      withTerminalService((service) =>
-        service.applyRendererPolicy(id, TerminalRefreshTier.BACKGROUND)
+      withTerminalService(
+        (service) => service.applyRendererPolicy(id, TerminalRefreshTier.BACKGROUND),
+        id
       );
     }
   },
@@ -192,8 +193,9 @@ export const createBackgroundActions = (
         continue;
       }
       if (terminal && panelKindHasPty(terminal.kind ?? "terminal")) {
-        withTerminalService((service) =>
-          service.applyRendererPolicy(bid, TerminalRefreshTier.BACKGROUND)
+        withTerminalService(
+          (service) => service.applyRendererPolicy(bid, TerminalRefreshTier.BACKGROUND),
+          bid
         );
       }
     }
@@ -263,8 +265,9 @@ export const createBackgroundActions = (
       if (restoreLocation === "dock") {
         optimizeForDock(id);
       } else {
-        withTerminalService((service) =>
-          service.applyRendererPolicy(id, TerminalRefreshTier.VISIBLE)
+        withTerminalService(
+          (service) => service.applyRendererPolicy(id, TerminalRefreshTier.VISIBLE),
+          id
         );
       }
     }
@@ -383,8 +386,9 @@ export const createBackgroundActions = (
         if (restoreLocation === "dock") {
           optimizeForDock(id);
         } else {
-          withTerminalService((service) =>
-            service.applyRendererPolicy(id, TerminalRefreshTier.VISIBLE)
+          withTerminalService(
+            (service) => service.applyRendererPolicy(id, TerminalRefreshTier.VISIBLE),
+            id
           );
         }
       }

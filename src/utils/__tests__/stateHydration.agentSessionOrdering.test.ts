@@ -114,8 +114,8 @@ const initializeBackendTierMock = vi.fn();
 const setGPUHardwareAvailableMock = vi.fn();
 const setTargetSizeMock = vi.fn();
 
-vi.mock("@/services/TerminalInstanceService", () => ({
-  terminalInstanceService: {
+vi.mock("@/services/TerminalInstanceService", () => {
+  const terminalInstanceService = {
     fetchAndRestore: fetchAndRestoreMock,
     restoreFetchedState: restoreFetchedStateMock,
     initializeBackendTier: initializeBackendTierMock,
@@ -125,8 +125,11 @@ vi.mock("@/services/TerminalInstanceService", () => ({
     notifyScrollbackRestoreListeners: vi.fn(),
     addInstanceDestroyedListener: vi.fn(() => () => {}),
     notifyRestoreSettledWaiters: vi.fn(),
-  },
-}));
+  };
+  return {
+    createTerminalPaintPlane: () => terminalInstanceService,
+  };
+});
 
 const notifyMock = vi.fn().mockReturnValue("notification-id");
 vi.mock("@/lib/notify", () => ({

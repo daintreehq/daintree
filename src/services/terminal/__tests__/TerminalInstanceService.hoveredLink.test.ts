@@ -1,7 +1,9 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { notify } from "@/lib/notify";
-import { terminalInstanceService } from "../TerminalInstanceService";
+import { load as loadTerminalService } from "../terminalInstanceServiceAccessor";
+
+const terminalInstanceService = await loadTerminalService();
 
 vi.mock("@/lib/notify", () => ({
   notify: vi.fn(),

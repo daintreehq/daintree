@@ -4,7 +4,10 @@ import type { BackendTerminalInfo, TerminalReconnectResult } from "@shared/types
 import { getWorktreePathIndex, getWorktreeSelectionSnapshot } from "@/store/storeAccessors";
 import { cancelDriveLeaseHold, isHeldForDriveLease } from "@/store/driveLeaseWaitStore";
 import { logWarn } from "@/utils/logger";
-import { load as loadTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
+import {
+  load as loadTerminalService,
+  with as withTerminalService,
+} from "@/services/terminal/terminalInstanceServiceAccessor";
 import type { TerminalPaintPlane } from "@/services/TerminalInstanceService";
 import { isSpawnUnconfirmed } from "@/store/slices/panelRegistry/unconfirmedSpawn";
 
@@ -43,10 +46,8 @@ export async function resyncHostTerminals(
 ): Promise<void> {
   // Taken before asking, so a pane opened while the answer is in flight is
   // never judged against a list that predates it.
-  const [{ usePanelStore }, terminalInstanceService] = await Promise.all([
-    import("@/store/panelStore"),
-    loadTerminalService(),
-  ]);
+  const { usePanelStore } = await import("@/store/panelStore");
+  const terminalInstanceService = await terminalServiceForResync(usePanelStore.getState());
   const knownBefore = new Set(usePanelStore.getState().panelIds);
   const before = usePanelStore.getState();
   const exitedBefore = new Set(
@@ -86,6 +87,31 @@ export async function resyncHostTerminals(
   if (!options.isCurrent()) return;
 
   replayWatchedPanels(usePanelStore.getState());
+}
+
+type ResyncTerminalService = Pick<TerminalPaintPlane, "setAgentState" | "fetchAndRestore">;
+
+/**
+ * A view with no terminal yet has not loaded the service, and an empty host
+ * list gives it nothing to load it for (#14267): its calls wait for the
+ * service the first terminal brings instead.
+ */
+async function terminalServiceForResync(state: PanelState): Promise<ResyncTerminalService> {
+  const hasPtyPanel = state.panelIds.some((id) => {
+    const panel = state.panelsById[id];
+    return panel !== undefined && isPtyPanel(panel);
+  });
+  if (hasPtyPanel) return loadTerminalService();
+  return {
+    setAgentState: (id, agentState) =>
+      withTerminalService((service) => service.setAgentState(id, agentState), id),
+    fetchAndRestore: (id) =>
+      new Promise<boolean>((resolve, reject) =>
+        withTerminalService((service) => {
+          service.fetchAndRestore(id).then(resolve, reject);
+        }, id)
+      ),
+  };
 }
 
 type HostAgentStateRecord = Pick<

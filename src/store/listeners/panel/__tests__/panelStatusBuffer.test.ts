@@ -11,13 +11,16 @@ import {
   flushPanelStatusBuffer,
 } from "@/store/panelStatusBuffer";
 
-vi.mock("@/services/TerminalInstanceService", () => ({
-  terminalInstanceService: {
+vi.mock("@/services/TerminalInstanceService", () => {
+  const terminalInstanceService = {
     setAgentState: vi.fn(),
     injectDataLossMarker: vi.fn(),
     wake: vi.fn(),
-  },
-}));
+  };
+  return {
+    createTerminalPaintPlane: () => terminalInstanceService,
+  };
+});
 
 interface FakeRaf {
   callbacks: FrameRequestCallback[];

@@ -21,8 +21,8 @@ vi.mock("@/hooks/useWorktreeStore", () => ({
   useWorktreeStoreOptional: useWorktreeStoreOptionalMock,
 }));
 
-vi.mock("@/services/TerminalInstanceService", () => ({
-  terminalInstanceService: {
+vi.mock("@/services/TerminalInstanceService", () => {
+  const terminalInstanceService = {
     getCachedSelection: () => "",
     // Keyed by id, and the fixtures below give source and target opposite modes,
     // so reading the source pane's mode instead of the destination's fails here
@@ -30,8 +30,11 @@ vi.mock("@/services/TerminalInstanceService", () => ({
     // returns for an unknown id.
     get: (id: string) => instances.byId[id] ?? null,
     notifyUserInput: notifyUserInputMock,
-  },
-}));
+  };
+  return {
+    createTerminalPaintPlane: () => terminalInstanceService,
+  };
+});
 
 // Partial: the panel store's persistence layer reads `projectClient` from this
 // same barrel at module eval, so a bare object mock breaks the import graph.

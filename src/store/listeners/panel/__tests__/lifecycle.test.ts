@@ -88,7 +88,9 @@ import { handleFallbackTriggered, setupLifecycleListeners } from "../lifecycle";
 import { notify } from "@/lib/notify";
 import { flushPanelStatusBuffer, enqueueFlowStatusUpdate } from "@/store/panelStatusBuffer";
 import { isPtyPanel } from "@shared/types/panel";
-import { terminalInstanceService } from "@/services/TerminalInstanceService";
+import { load as loadTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
+
+const terminalInstanceService = await loadTerminalService();
 
 function getPtyHeldDuration(id: string): number | undefined {
   const panel = usePanelStore.getState().panelsById[id];

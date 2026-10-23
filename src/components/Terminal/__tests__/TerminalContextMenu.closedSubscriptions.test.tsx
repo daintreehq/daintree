@@ -81,13 +81,16 @@ vi.mock("@/services/ActionService", () => ({
     list: () => [],
   },
 }));
-vi.mock("@/services/TerminalInstanceService", () => ({
-  terminalInstanceService: {
+vi.mock("@/services/TerminalInstanceService", () => {
+  const terminalInstanceService = {
     get: () => undefined,
     getTerminal: () => undefined,
     getSelection: () => "",
-  },
-}));
+  };
+  return {
+    createTerminalPaintPlane: () => terminalInstanceService,
+  };
+});
 vi.mock("@/hooks/usePluginContextMenuItems", () => ({ usePluginContextMenuItems: () => [] }));
 vi.mock("@/store/voiceRecordingStore", () => ({
   useVoiceRecordingStore: (selector: (s: unknown) => unknown) =>

@@ -6,8 +6,8 @@ let capturedListener: (() => void) | null = null;
 let currentSnapshot = { isUserScrolledBack: false, unseen: 0 };
 let currentLastWheelAt = 0;
 
-vi.mock("@/services/TerminalInstanceService", () => ({
-  terminalInstanceService: {
+vi.mock("@/services/TerminalInstanceService", () => {
+  const terminalInstanceService = {
     subscribeUnseenOutput: vi.fn((_id: string, listener: () => void) => {
       capturedListener = listener;
       return () => {
@@ -16,15 +16,20 @@ vi.mock("@/services/TerminalInstanceService", () => ({
     }),
     getUnseenOutputSnapshot: vi.fn(() => currentSnapshot),
     getLastWheelAt: vi.fn(() => currentLastWheelAt),
-  },
-}));
+  };
+  return {
+    createTerminalPaintPlane: () => terminalInstanceService,
+  };
+});
 
 import { useUnseenOutput } from "../useUnseenOutput";
-import { terminalInstanceService } from "@/services/TerminalInstanceService";
+import { createTerminalPaintPlane } from "@/services/TerminalInstanceService";
 import {
   __testing as terminalServiceTesting,
   register as registerTerminalService,
 } from "@/services/terminal/terminalInstanceServiceAccessor";
+
+const terminalInstanceService = createTerminalPaintPlane();
 
 const service = terminalInstanceService;
 

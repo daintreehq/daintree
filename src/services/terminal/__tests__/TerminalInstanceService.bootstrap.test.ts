@@ -29,18 +29,48 @@ describe("TerminalInstanceService bootstrap", () => {
     Reflect.deleteProperty(globalThis, "window");
   });
 
-  it("registers the exported paint plane with the accessor at module eval", async () => {
-    const { terminalInstanceService } = await import("../TerminalInstanceService");
-    const accessor = await import("../terminalInstanceServiceAccessor");
+  it("builds nothing at module eval, and the accessor's load() builds it once", async () => {
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    // Each service built starts its ingest, which says so: a count of builds.
+    const builds = () =>
+      logSpy.mock.calls.filter((call) =>
+        call.some(
+          (arg) => typeof arg === "string" && arg.includes("[TerminalOutputIngestService] Using")
+        )
+      ).length;
+    Object.defineProperty(globalThis, "window", {
+      value: {
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+        electron: { terminal: { getSharedBuffers: vi.fn() } },
+      },
+      configurable: true,
+      writable: true,
+    });
 
-    expect(accessor.peek()).toBe(terminalInstanceService);
+    await import("../TerminalInstanceService");
+    const accessor = await import("../terminalInstanceServiceAccessor");
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(builds()).toBe(0);
+    expect(accessor.peek()).toBeNull();
+
+    const [first, second] = await Promise.all([accessor.load(), accessor.load()]);
+    const third = await accessor.load();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(builds()).toBe(1);
+    expect(second).toBe(first);
+    expect(third).toBe(first);
+    expect(accessor.peek()).toBe(first);
   });
 
   it("does not auto-initialize terminal ingestion without an Electron terminal bridge", async () => {
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
 
-    await import("../TerminalInstanceService");
+    (await import("../TerminalInstanceService")).createTerminalPaintPlane();
 
     expect(getSharedBuffersMock).not.toHaveBeenCalled();
     expect(
@@ -65,7 +95,7 @@ describe("TerminalInstanceService bootstrap", () => {
       writable: true,
     });
 
-    await import("../TerminalInstanceService");
+    (await import("../TerminalInstanceService")).createTerminalPaintPlane();
     await Promise.resolve();
     await Promise.resolve();
 

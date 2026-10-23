@@ -12,12 +12,17 @@ import { useCompartmentDriver } from "../useCompartmentDriver";
 import { useContextDetection } from "../useContextDetection";
 
 vi.mock("@/services/TerminalInstanceService", () => ({
-  terminalInstanceService: {
+  createTerminalPaintPlane: () => ({
     clearDirectingState: () => {},
     notifyComposerDraft: () => {},
     releaseComposerDraft: () => {},
-  },
+  }),
 }));
+
+const { load: loadTerminalService } =
+  await import("@/services/terminal/terminalInstanceServiceAccessor");
+// The draft hooks write through the accessor; loaded, they run as they would.
+await loadTerminalService();
 
 const THEME: ITheme = { background: "#000000", foreground: "#ffffff" };
 const COMMANDS = new Map<string, SlashCommand>();

@@ -3,7 +3,9 @@ import { render, screen, waitFor, fireEvent, within } from "@testing-library/rea
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { TerminalInfoDialog } from "../TerminalInfoDialog";
 import type { TerminalInfoPayload } from "@/types/electron";
-import { terminalInstanceService } from "@/services/TerminalInstanceService";
+import { load as loadTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
+
+const terminalInstanceService = await loadTerminalService();
 
 vi.stubGlobal(
   "ResizeObserver",

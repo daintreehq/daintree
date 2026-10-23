@@ -11,9 +11,12 @@ vi.mock("@/clients", () => ({
   },
 }));
 
-vi.mock("@/services/TerminalInstanceService", () => ({
-  terminalInstanceService: { cleanup: vi.fn() },
-}));
+vi.mock("@/services/TerminalInstanceService", () => {
+  const terminalInstanceService = { cleanup: vi.fn() };
+  return {
+    createTerminalPaintPlane: () => terminalInstanceService,
+  };
+});
 
 const { usePanelStore } = await import("@/store/panelStore");
 const { useGridNavigation } = await import("../useGridNavigation");

@@ -205,10 +205,9 @@ describe("TerminalInstanceService adversarial", () => {
       signalBuffer: null,
     });
 
-    ({ terminalInstanceService: service } =
-      (await import("../TerminalInstanceService")) as unknown as {
-        terminalInstanceService: AdversarialService;
-      });
+    service = (await (
+      await import("../terminalInstanceServiceAccessor")
+    ).load()) as unknown as AdversarialService;
     service.instances.clear();
 
     const { TerminalWebGLManager } = await import("../TerminalWebGLManager");

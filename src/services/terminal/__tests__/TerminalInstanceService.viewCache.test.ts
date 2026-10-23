@@ -156,10 +156,9 @@ describe("TerminalInstanceService project-view cache and window visibility (#125
     viewCache.visibilityListeners.clear();
     renderSuspension.suspendXtermRender.mockClear();
     renderSuspension.resumeXtermRender.mockClear();
-    ({ terminalInstanceService: service } =
-      (await import("../TerminalInstanceService")) as unknown as {
-        terminalInstanceService: ViewCacheTestService;
-      });
+    service = (await (
+      await import("../terminalInstanceServiceAccessor")
+    ).load()) as unknown as ViewCacheTestService;
     // Only after the import: a frozen clock on the module loader path can
     // stall the import in CI (fakeTimersImportOrder contract). Nothing here
     // needs a load-time timer faked — the cache dwell is armed per test.
@@ -491,5 +490,95 @@ describe("TerminalInstanceService project-view cache and window visibility (#125
 
     expect(releaseContext).not.toHaveBeenCalled();
     expect(applyPolicy).not.toHaveBeenCalled();
+  });
+});
+
+describe("TerminalInstanceService built inside a cached or hidden view (#14267)", () => {
+  let report: ReturnType<typeof vi.fn>;
+
+  async function build(): Promise<ViewCacheTestService> {
+    vi.resetModules();
+    report = vi.fn(() => Promise.resolve());
+    vi.stubGlobal("window", {
+      electron: { system: { reportTerminalRendererDiagnostics: report } },
+    });
+    const { createTerminalPaintPlane } = await import("../TerminalInstanceService");
+    // Reached through Reflect: the test drives members the public type hides.
+    const built: object = { plane: createTerminalPaintPlane() };
+    const service: ViewCacheTestService = Reflect.get(built, "plane");
+    return service;
+  }
+
+  beforeEach(() => {
+    viewCache.cached = false;
+    viewCache.hidden = false;
+    viewCache.listeners.clear();
+    viewCache.visibilityListeners.clear();
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it("starts cached: reports its buffers and releases WebGL after the dwell", async () => {
+    viewCache.cached = true;
+    const service = await build();
+    const releaseContext = vi
+      .spyOn(service.webGLManager, "releaseContext")
+      .mockImplementation(() => {});
+
+    expect(report).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        terminalCount: 0,
+        bufferMemory: { sampledAt: expect.any(Number), terminals: [] },
+      })
+    );
+
+    service.instances.set("a", makeManaged());
+    vi.advanceTimersByTime(20_000);
+    expect(releaseContext).toHaveBeenCalledWith("a");
+
+    service.instances.clear();
+    service.dispose();
+  });
+
+  it("starts hidden but not cached: releases WebGL after the dwell without a cache report", async () => {
+    viewCache.hidden = true;
+    const service = await build();
+    const releaseContext = vi
+      .spyOn(service.webGLManager, "releaseContext")
+      .mockImplementation(() => {});
+
+    service.instances.set("a", makeManaged());
+    vi.advanceTimersByTime(20_000);
+
+    expect(releaseContext).toHaveBeenCalledWith("a");
+    expect(report).not.toHaveBeenCalledWith(
+      expect.objectContaining({ bufferMemory: expect.anything() })
+    );
+
+    service.instances.clear();
+    service.dispose();
+  });
+
+  it("starts in a visible, active view without suppressing anything", async () => {
+    const service = await build();
+    const releaseContext = vi
+      .spyOn(service.webGLManager, "releaseContext")
+      .mockImplementation(() => {});
+
+    service.instances.set("a", makeManaged());
+    vi.advanceTimersByTime(20_000);
+
+    expect(releaseContext).not.toHaveBeenCalled();
+    expect(report).not.toHaveBeenCalledWith(
+      expect.objectContaining({ bufferMemory: expect.anything() })
+    );
+
+    service.instances.clear();
+    service.dispose();
   });
 });

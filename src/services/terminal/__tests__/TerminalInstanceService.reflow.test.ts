@@ -331,10 +331,9 @@ describe("TerminalInstanceService maybeReflowTerminal", () => {
 
   beforeEach(async () => {
     vi.resetModules();
-    ({ terminalInstanceService: service } =
-      (await import("../TerminalInstanceService")) as unknown as {
-        terminalInstanceService: ReflowTestService;
-      });
+    service = (await (
+      await import("../terminalInstanceServiceAccessor")
+    ).load()) as unknown as ReflowTestService;
     // Read the client out of the SAME post-reset module registry the service
     // just bound to — a static top-level import would hold the pre-reset
     // instance and never observe these calls.
@@ -1021,10 +1020,9 @@ describe("TerminalInstanceService getSynchronizedOutputMode", () => {
 
   beforeEach(async () => {
     vi.resetModules();
-    const mod = await import("../TerminalInstanceService");
+    const accessor = await import("../terminalInstanceServiceAccessor");
     // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-    service = (mod as unknown as { terminalInstanceService: ReflowTestService })
-      .terminalInstanceService;
+    service = (await accessor.load()) as unknown as ReflowTestService;
     service.instances.clear();
   });
 
@@ -1063,10 +1061,9 @@ describe("TerminalInstanceService reflowHeartbeatTimer visibility gate", () => {
     });
 
     vi.resetModules();
-    ({ terminalInstanceService: service } =
-      (await import("../TerminalInstanceService")) as unknown as {
-        terminalInstanceService: ReflowTestService;
-      });
+    service = (await (
+      await import("../terminalInstanceServiceAccessor")
+    ).load()) as unknown as ReflowTestService;
     service.instances.clear();
   });
 

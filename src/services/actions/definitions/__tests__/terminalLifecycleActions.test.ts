@@ -49,9 +49,12 @@ vi.mock("../../../KeybindingService", () => ({
   keybindingService: { getEffectiveCombo: vi.fn(() => null), getDisplayCombo: vi.fn(() => "") },
 }));
 vi.mock("@/lib/notify", () => ({ notify: vi.fn() }));
-vi.mock("@/services/terminal/TerminalInstanceService", () => ({
-  terminalInstanceService: terminalInstanceServiceMock,
-}));
+vi.mock("@/services/terminal/TerminalInstanceService", () => {
+  const terminalInstanceService = terminalInstanceServiceMock;
+  return {
+    createTerminalPaintPlane: () => terminalInstanceService,
+  };
+});
 vi.mock("@/clients", () => ({ terminalClient: terminalClientMock }));
 vi.mock("@/store/viewWorkspaceId", () => viewWorkspaceIdMock);
 vi.mock("@/lib/watchNotification", () => ({

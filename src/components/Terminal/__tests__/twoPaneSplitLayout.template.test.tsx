@@ -62,13 +62,16 @@ vi.mock("@/store/twoPaneSplitStore", () => ({
   resolveEffectiveRatio: (entry: { ratio: number } | undefined) => entry?.ratio,
 }));
 
-vi.mock("@/services/TerminalInstanceService", () => ({
-  terminalInstanceService: {
+vi.mock("@/services/TerminalInstanceService", () => {
+  const terminalInstanceService = {
     lockResize: services.lockResize,
     runResizePass: () => {},
     scheduleBatchResize: () => {},
-  },
-}));
+  };
+  return {
+    createTerminalPaintPlane: () => terminalInstanceService,
+  };
+});
 
 vi.mock("@/lib/layoutTransitionLock", () => ({
   isSidebarMeasurementLocked: () => true,

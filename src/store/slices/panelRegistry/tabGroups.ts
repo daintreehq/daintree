@@ -448,8 +448,9 @@ export const createTabGroupActions = (
         if (effectiveLocation === "dock") {
           optimizeForDock(panelId);
         } else {
-          withTerminalService((service) =>
-            service.applyRendererPolicy(panelId, TerminalRefreshTier.VISIBLE)
+          withTerminalService(
+            (service) => service.applyRendererPolicy(panelId, TerminalRefreshTier.VISIBLE),
+            panelId
           );
         }
       }
@@ -539,8 +540,9 @@ export const createTabGroupActions = (
       if (targetLocation === "dock") {
         optimizeForDock(panelId);
       } else {
-        withTerminalService((service) =>
-          service.applyRendererPolicy(panelId, TerminalRefreshTier.VISIBLE)
+        withTerminalService(
+          (service) => service.applyRendererPolicy(panelId, TerminalRefreshTier.VISIBLE),
+          panelId
         );
       }
     }

@@ -13,7 +13,9 @@
  */
 
 import { beforeAll, describe, it, expect, beforeEach, vi } from "vitest";
-import { terminalInstanceService } from "@/services/TerminalInstanceService";
+import { createTerminalPaintPlane } from "@/services/TerminalInstanceService";
+
+const terminalInstanceService = createTerminalPaintPlane();
 
 const acknowledgeWaitingMock = vi.fn();
 const acknowledgeWorkingPulseMock = vi.fn();
@@ -74,8 +76,8 @@ vi.mock("@/clients", () => ({
   },
 }));
 
-vi.mock("@/services/TerminalInstanceService", () => ({
-  terminalInstanceService: {
+vi.mock("@/services/TerminalInstanceService", () => {
+  const terminalInstanceService = {
     // No attached renderer xterm in these tests — spawn falls back to the
     // default/estimated dims path.
     get: vi.fn(() => null),
@@ -87,8 +89,11 @@ vi.mock("@/services/TerminalInstanceService", () => ({
     setInputLocked: vi.fn(),
     sendPtyResize: vi.fn(),
     wake: vi.fn(),
-  },
-}));
+  };
+  return {
+    createTerminalPaintPlane: () => terminalInstanceService,
+  };
+});
 
 vi.mock("../persistence", async () => {
   const actual = await vi.importActual<typeof import("../persistence")>("../persistence");

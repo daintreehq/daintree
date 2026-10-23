@@ -88,13 +88,16 @@ vi.mock("@/services/terminal/panelDuplicationService", () => ({
   buildPanelDuplicateOptions: vi.fn(),
 }));
 
-vi.mock("@/services/TerminalInstanceService", () => ({
-  terminalInstanceService: {
+vi.mock("@/services/TerminalInstanceService", () => {
+  const terminalInstanceService = {
     fit: () => ({ cols: 80, rows: 24 }),
     applyRendererPolicy: vi.fn(),
     focus: vi.fn(),
-  },
-}));
+  };
+  return {
+    createTerminalPaintPlane: () => terminalInstanceService,
+  };
+});
 
 import { load as loadTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
 
@@ -298,9 +301,11 @@ import {
   type DragHandleContextValue,
 } from "@/components/DragDrop/DragHandleContext";
 import { handleDockFocusOutside } from "../dockPopoverGuard";
-import { terminalInstanceService } from "@/services/TerminalInstanceService";
+import { createTerminalPaintPlane } from "@/services/TerminalInstanceService";
 import { buildPanelDuplicateOptions } from "@/services/terminal/panelDuplicationService";
 import { TerminalRefreshTier } from "@/types";
+
+const terminalInstanceService = createTerminalPaintPlane();
 
 function makePanel(overrides: Partial<PtyPanelData> = {}): PtyPanelData {
   return {

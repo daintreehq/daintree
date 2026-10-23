@@ -9,9 +9,16 @@ import type { PluginSendToAgentRefusalReason } from "@shared/types/plugin";
 vi.mock("@/clients", () => ({
   terminalClient: { write: vi.fn<(terminalId: string, data: string) => void>() },
 }));
-vi.mock("@/services/TerminalInstanceService", () => ({
-  terminalInstanceService: { notifyUserInput: vi.fn(), focus: vi.fn(), get: vi.fn(() => null) },
-}));
+vi.mock("@/services/TerminalInstanceService", () => {
+  const terminalInstanceService = {
+    notifyUserInput: vi.fn(),
+    focus: vi.fn(),
+    get: vi.fn(() => null),
+  };
+  return {
+    createTerminalPaintPlane: () => terminalInstanceService,
+  };
+});
 const setPreferredTerminalFocusTarget = vi.hoisted(() => vi.fn<(target: string) => void>());
 vi.mock("@/store/panelStore", () => ({
   usePanelStore: { getState: () => ({ setPreferredTerminalFocusTarget }) },

@@ -63,7 +63,7 @@ vi.mock("@/store/projectSettingsStore", () => ({
   useProjectSettingsStore: { getState: () => ({ settings: null }) },
 }));
 
-const { terminalInstanceService } = await import("../TerminalInstanceService");
+const terminalInstanceService = await (await import("../terminalInstanceServiceAccessor")).load();
 
 async function createManagedTerminal(id: string) {
   return await terminalInstanceService.getOrCreate(id, undefined, {

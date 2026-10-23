@@ -68,9 +68,12 @@ vi.mock("@/store/panelStore", () => ({
     }),
   },
 }));
-vi.mock("@/services/TerminalInstanceService", () => ({
-  terminalInstanceService: { setAgentState, reportLost },
-}));
+vi.mock("@/services/TerminalInstanceService", () => {
+  const terminalInstanceService = { setAgentState, reportLost };
+  return {
+    createTerminalPaintPlane: () => terminalInstanceService,
+  };
+});
 vi.mock("@/store/hostRestartRecovery", () => ({
   relaunchTerminalsLostToHostRestart: relaunchLost,
 }));

@@ -11,12 +11,15 @@ const mocks = vi.hoisted(() => ({
   setVisible: vi.fn(),
 }));
 
-vi.mock("@/services/TerminalInstanceService", () => ({
-  terminalInstanceService: {
+vi.mock("@/services/TerminalInstanceService", () => {
+  const terminalInstanceService = {
     getAttachGeneration: mocks.getAttachGeneration,
     setVisible: mocks.setVisible,
-  },
-}));
+  };
+  return {
+    createTerminalPaintPlane: () => terminalInstanceService,
+  };
+});
 
 /**
  * Retains every callback ever registered, including across `disconnect()`, so a

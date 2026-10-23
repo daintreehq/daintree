@@ -135,7 +135,7 @@ function submitTarget(terminalId: string, payload: string, retry: boolean): Prom
 
 function noteUserInput(terminalId: string, payload: string): void {
   if (!isCrossHostTargetId(terminalId))
-    withTerminalService((service) => service.notifyUserInput(terminalId, payload));
+    withTerminalService((service) => service.notifyUserInput(terminalId, payload), terminalId);
 }
 
 function noteSubmitted(terminalId: string): void {
@@ -144,7 +144,7 @@ function noteSubmitted(terminalId: string): void {
 
 function noteRejected(terminalId: string): void {
   if (!isCrossHostTargetId(terminalId))
-    withTerminalService((service) => service.clearDirectingState(terminalId));
+    withTerminalService((service) => service.clearDirectingState(terminalId), terminalId);
 }
 
 interface ResolvedSubmission {

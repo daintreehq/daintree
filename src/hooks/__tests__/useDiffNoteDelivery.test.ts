@@ -18,12 +18,15 @@ vi.mock("@/clients", () => ({
   terminalClient: { write: writeMock },
 }));
 
-vi.mock("@/services/TerminalInstanceService", () => ({
-  terminalInstanceService: {
+vi.mock("@/services/TerminalInstanceService", () => {
+  const terminalInstanceService = {
     get: (id: string) => managedById.get(id),
     notifyUserInput: notifyUserInputMock,
-  },
-}));
+  };
+  return {
+    createTerminalPaintPlane: () => terminalInstanceService,
+  };
+});
 
 vi.mock("@/utils/terminalChrome", () => ({
   deriveTerminalChrome: (panel: { agentFixture?: boolean }) => ({
@@ -37,6 +40,11 @@ vi.mock("@/utils/terminalTitleDisplay", () => ({
 
 import { deliverDiffNotes } from "../useDiffNoteDelivery";
 import { useDiffNotesStore } from "@/store/diffNotesStore";
+
+import { load as loadTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
+
+// The service mock never evaluates the real module, so nothing builds it.
+await loadTerminalService();
 
 function terminal(id: string, overrides: Record<string, unknown> = {}) {
   return {

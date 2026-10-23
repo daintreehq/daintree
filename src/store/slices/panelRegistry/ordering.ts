@@ -206,8 +206,9 @@ export const createOrderingActions = (
       if (effectiveLocation === "dock") {
         optimizeForDock(id);
       } else {
-        withTerminalService((service) =>
-          service.applyRendererPolicy(id, TerminalRefreshTier.VISIBLE)
+        withTerminalService(
+          (service) => service.applyRendererPolicy(id, TerminalRefreshTier.VISIBLE),
+          id
         );
       }
     }

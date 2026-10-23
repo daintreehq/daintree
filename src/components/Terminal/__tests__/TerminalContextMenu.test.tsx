@@ -81,8 +81,8 @@ vi.mock("@/services/ActionService", () => ({
   actionService: { dispatch, get: () => undefined, list: () => [] },
 }));
 
-vi.mock("@/services/TerminalInstanceService", () => ({
-  terminalInstanceService: {
+vi.mock("@/services/TerminalInstanceService", () => {
+  const terminalInstanceService = {
     // A live xterm is what unlocks the hovered-path branch; without it
     // `handleContextMenu` bails and clears every hover field.
     get: () => ({ terminal: { getSelection: () => "" } }),
@@ -94,8 +94,11 @@ vi.mock("@/services/TerminalInstanceService", () => ({
     getHoveredFilePath: () => hoveredFilePath.current,
     getHoveredFileKind: () => (hoveredFilePath.current ? hoveredFileKind.current : null),
     openHoveredLink: vi.fn(),
-  },
-}));
+  };
+  return {
+    createTerminalPaintPlane: () => terminalInstanceService,
+  };
+});
 
 vi.mock("@/services/terminal/FileLinksAddon", () => ({ reportFileLinkFailure }));
 

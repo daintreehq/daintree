@@ -191,8 +191,8 @@ vi.mock("@/clients", () => ({
 const applyAgentPromotionMock = vi.fn();
 const clearAgentPromotionMock = vi.fn();
 
-vi.mock("@/services/TerminalInstanceService", () => ({
-  terminalInstanceService: {
+vi.mock("@/services/TerminalInstanceService", () => {
+  const terminalInstanceService = {
     prewarmTerminal: vi.fn(),
     sendPtyResize: vi.fn(),
     applyRendererPolicy: vi.fn(),
@@ -212,8 +212,11 @@ vi.mock("@/services/TerminalInstanceService", () => ({
     cleanup: vi.fn(),
     applyAgentPromotion: applyAgentPromotionMock,
     clearAgentPromotion: clearAgentPromotionMock,
-  },
-}));
+  };
+  return {
+    createTerminalPaintPlane: () => terminalInstanceService,
+  };
+});
 
 // Mock window.electron for resource monitoring listener
 (globalThis as Record<string, unknown>).window = globalThis.window ?? {};
@@ -626,7 +629,7 @@ describe("terminalStore process detection listeners", () => {
     beforeEach(async () => {
       const mod = await import("@/services/TerminalInstanceService");
       terminalInstanceService =
-        mod.terminalInstanceService as unknown as typeof terminalInstanceService;
+        mod.createTerminalPaintPlane() as unknown as typeof terminalInstanceService;
     });
 
     // FUTURE_SAB: `suspended` is no longer a wake-triggering status as of

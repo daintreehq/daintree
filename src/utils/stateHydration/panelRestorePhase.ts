@@ -991,8 +991,9 @@ export async function restorePanelsPhase(
 
             if (backendTerminal.activityTier) {
               const tier = backendTerminal.activityTier;
-              withTerminalService((service) =>
-                service.initializeBackendTier(restoredTerminalId, tier)
+              withTerminalService(
+                (service) => service.initializeBackendTier(restoredTerminalId, tier),
+                restoredTerminalId
               );
             }
 
@@ -1056,8 +1057,9 @@ export async function restorePanelsPhase(
 
                 if (reconnectedTerminal.activityTier) {
                   const tier = reconnectedTerminal.activityTier;
-                  withTerminalService((service) =>
-                    service.initializeBackendTier(restoredTerminalId, tier)
+                  withTerminalService(
+                    (service) => service.initializeBackendTier(restoredTerminalId, tier),
+                    restoredTerminalId
                   );
                 }
 
@@ -1414,7 +1416,10 @@ export async function restorePanelsPhase(
 
         if (terminal.activityTier) {
           const tier = terminal.activityTier;
-          withTerminalService((service) => service.initializeBackendTier(restoredTerminalId, tier));
+          withTerminalService(
+            (service) => service.initializeBackendTier(restoredTerminalId, tier),
+            restoredTerminalId
+          );
         }
 
         restoreTasks.push({

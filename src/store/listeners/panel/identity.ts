@@ -116,7 +116,7 @@ export function setupIdentityListeners(): DisposableStore {
           });
         }
 
-        withTerminalService((service) => service.setAgentState(terminalId, state));
+        withTerminalService((service) => service.setAgentState(terminalId, state), terminalId);
 
         if (terminal.agentState === "directing" && state === "waiting") {
           return;
@@ -352,8 +352,9 @@ export function setupIdentityListeners(): DisposableStore {
 
           const promotedAgentId = result.shouldPromoteAgentId;
           if (promotedAgentId) {
-            withTerminalService((service) =>
-              service.applyAgentPromotion(terminalId, promotedAgentId)
+            withTerminalService(
+              (service) => service.applyAgentPromotion(terminalId, promotedAgentId),
+              terminalId
             );
           }
 
@@ -376,7 +377,7 @@ export function setupIdentityListeners(): DisposableStore {
         recordIdentityEventDev("exited", terminalId, {
           agentType: (data as { agentType?: string }).agentType,
         });
-        withTerminalService((service) => service.clearAgentPromotion(terminalId));
+        withTerminalService((service) => service.clearAgentPromotion(terminalId), terminalId);
 
         // `agent:exited` clears live-detection fields for both subcommand
         // demotion and preserved PTY exit. `launchAgentId` is immutable and is

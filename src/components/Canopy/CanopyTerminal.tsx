@@ -9,7 +9,7 @@ import { isSecretPrompt } from "@shared/utils/secretPrompt";
 import { isTerminalSubmission } from "@shared/utils/terminalSubmission";
 import { getEffectiveScrollbarWidth, getXtermOptions } from "@/config/xtermConfig";
 import { getXtermCellDimensions } from "@/services/terminal/TerminalResizeController";
-import { terminalInstanceService } from "@/services/TerminalInstanceService";
+import { subscribeWhenReady as subscribeTerminalServiceWhenReady } from "@/services/terminal/terminalInstanceServiceAccessor";
 import { useTerminalFontStore } from "@/store/terminalFontStore";
 import { useScreenReaderStore } from "@/store/screenReaderStore";
 import {
@@ -438,7 +438,7 @@ export function CanopyTerminal({
       view = opened;
       // The pane in this view is frozen only for a terminal this view sizes.
       if (api.holdsSize && releasePane === null) {
-        releasePane = terminalInstanceService.holdGeometry(runId);
+        releasePane = subscribeTerminalServiceWhenReady((service) => service.holdGeometry(runId));
       }
       const snapshot = opened.snapshot;
       ptySize = { cols: snapshot.cols, rows: snapshot.rows };

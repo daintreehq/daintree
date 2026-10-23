@@ -135,10 +135,9 @@ describe("TerminalInstanceService - scrollToLastActivity", () => {
   beforeEach(async () => {
     vi.clearAllMocks();
 
-    ({ terminalInstanceService: service } =
-      (await import("../TerminalInstanceService")) as unknown as {
-        terminalInstanceService: LastActivityTestService;
-      });
+    service = (await (
+      await import("../terminalInstanceServiceAccessor")
+    ).load()) as unknown as LastActivityTestService;
     service.instances.clear();
   });
 
@@ -240,10 +239,9 @@ describe("TerminalInstanceService - lastActivityMarker write tracking", () => {
       return rafCallbacks.length;
     });
 
-    ({ terminalInstanceService: service } =
-      (await import("../TerminalInstanceService")) as unknown as {
-        terminalInstanceService: LastActivityTestService;
-      });
+    service = (await (
+      await import("../terminalInstanceServiceAccessor")
+    ).load()) as unknown as LastActivityTestService;
     service.instances.clear();
   });
 
@@ -335,10 +333,9 @@ describe("TerminalInstanceService - Viewport Pinning", () => {
 
   beforeEach(async () => {
     vi.clearAllMocks();
-    ({ terminalInstanceService: service } =
-      (await import("../TerminalInstanceService")) as unknown as {
-        terminalInstanceService: ViewportTestService;
-      });
+    service = (await (
+      await import("../terminalInstanceServiceAccessor")
+    ).load()) as unknown as ViewportTestService;
     service.instances.clear();
   });
 

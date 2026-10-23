@@ -154,10 +154,9 @@ describe("TerminalInstanceService - Activity Tier", () => {
     vi.useFakeTimers();
     vi.clearAllMocks();
 
-    ({ terminalInstanceService: service } =
-      (await import("../TerminalInstanceService")) as unknown as {
-        terminalInstanceService: TierTestService;
-      });
+    service = (await (
+      await import("../terminalInstanceServiceAccessor")
+    ).load()) as unknown as TierTestService;
     service.instances.clear();
   });
 
@@ -637,10 +636,9 @@ describe("TerminalInstanceService - onUserInput wake for paused-backpressure", (
     vi.useFakeTimers();
     vi.clearAllMocks();
 
-    ({ terminalInstanceService: service } =
-      (await import("../TerminalInstanceService")) as unknown as {
-        terminalInstanceService: InputWakeService;
-      });
+    service = (await (
+      await import("../terminalInstanceServiceAccessor")
+    ).load()) as unknown as InputWakeService;
     ({ usePanelStore: panelStore } =
       (await import("@/store/panelStore")) as unknown as PanelStoreModule);
 

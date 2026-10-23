@@ -244,8 +244,9 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
 
     if (!isOpen) {
       try {
-        withTerminalService((service) =>
-          service.applyRendererPolicy(activePanelId, TerminalRefreshTier.BACKGROUND)
+        withTerminalService(
+          (service) => service.applyRendererPolicy(activePanelId, TerminalRefreshTier.BACKGROUND),
+          activePanelId
         );
       } catch (error) {
         console.warn(`Failed to apply dock state for panel ${activePanelId}:`, error);
@@ -258,8 +259,9 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
     // The policy's downgrade hysteresis absorbs rapid tab-flips (t1→t2→t1).
     if (prevId && prevId !== activePanelId) {
       try {
-        withTerminalService((service) =>
-          service.applyRendererPolicy(prevId, TerminalRefreshTier.BACKGROUND)
+        withTerminalService(
+          (service) => service.applyRendererPolicy(prevId, TerminalRefreshTier.BACKGROUND),
+          prevId
         );
       } catch (error) {
         console.warn(`Failed to background previous dock panel ${prevId}:`, error);

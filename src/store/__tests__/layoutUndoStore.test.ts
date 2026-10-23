@@ -25,8 +25,8 @@ vi.mock("@/controllers", () => ({
   },
 }));
 
-vi.mock("@/services/TerminalInstanceService", () => ({
-  terminalInstanceService: {
+vi.mock("@/services/TerminalInstanceService", () => {
+  const terminalInstanceService = {
     get: vi.fn().mockReturnValue(null),
     getAgentState: vi.fn(),
     addAgentStateListener: vi.fn(() => vi.fn()),
@@ -39,8 +39,11 @@ vi.mock("@/services/TerminalInstanceService", () => ({
     optimizeForDock: vi.fn(),
     suppressResizesDuringProjectSwitch: vi.fn(),
     detachForProjectSwitch: vi.fn(),
-  },
-}));
+  };
+  return {
+    createTerminalPaintPlane: () => terminalInstanceService,
+  };
+});
 
 vi.mock("@/clients/appClient", () => ({
   appClient: {

@@ -135,10 +135,9 @@ describe("TerminalInstanceService renderer buffer counts (#14213)", () => {
         },
       },
     };
-    ({ terminalInstanceService: service } =
-      (await import("../TerminalInstanceService")) as unknown as {
-        terminalInstanceService: BufferTestService;
-      });
+    service = (await (
+      await import("../terminalInstanceServiceAccessor")
+    ).load()) as unknown as BufferTestService;
     service.instances.clear();
     service.instances.set("agent", makeManaged(10_000, 0, 182));
     service.instances.set("vim", makeManaged(24, 24, 80));

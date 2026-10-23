@@ -131,7 +131,7 @@ function prioritizeFocusedFirst(targets: string[]): void {
 function reassertFocusedWebGLPin(targets: string[]): void {
   const focusedId = usePanelStore.getState().focusedId;
   if (!focusedId || !targets.includes(focusedId)) return;
-  withTerminalService((service) => service.setFocused(focusedId, true));
+  withTerminalService((service) => service.setFocused(focusedId, true), focusedId);
 }
 
 async function wakeActiveWorktreeTerminalsInner(): Promise<void> {

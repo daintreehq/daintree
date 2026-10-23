@@ -45,6 +45,7 @@ import { usePluginHostedViewsStore } from "./store/pluginHostedViewsStore";
 import { installAppPluginKitHost } from "./services/plugin/appPluginKitHost";
 import { getSafeBootPromise } from "./lib/bootPromise";
 import { isRemoteShellSupported } from "./lib/remoteHosts";
+import { answerBufferSamplesUntilLoaded } from "./services/terminal/terminalInstanceServiceAccessor";
 
 let cleanupGlobalErrorHandlers: (() => void) | undefined;
 let cleanupScrollbarGutterWatch: (() => void) | undefined;
@@ -101,6 +102,10 @@ async function bootstrap() {
   }
 
   cleanupOrchestrator = initStoreOrchestrator();
+
+  // The terminal service loads with the first terminal (#14267); until then,
+  // main's buffer samples get this view's empty answer instead of a timeout.
+  answerBufferSamplesUntilLoaded();
 
   // Synchronous with module evaluation, so it is listening before main's
   // `did-finish-load` gate lets it send `project:on-switch` to a new view.

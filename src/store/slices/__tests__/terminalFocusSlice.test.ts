@@ -3,12 +3,15 @@ import { createTerminalFocusSlice, type TerminalFocusSlice } from "../terminalFo
 import type { GetPanelGroupInfo } from "@/store/panelFocusFallback";
 import type { PanelLocation, PtyPanelData } from "@shared/types/panel";
 
-vi.mock("@/services/TerminalInstanceService", () => ({
-  terminalInstanceService: {
+vi.mock("@/services/TerminalInstanceService", () => {
+  const terminalInstanceService = {
     wake: vi.fn(),
     wakeForFocus: vi.fn(),
-  },
-}));
+  };
+  return {
+    createTerminalPaintPlane: () => terminalInstanceService,
+  };
+});
 
 const mockGetActiveWorktreeId = vi.fn(() => "worktree-1" as string | null);
 const mockStampLastActive = vi.fn();
@@ -17,7 +20,9 @@ const mockStampLastActive = vi.fn();
 // would never reach an already-built slice.
 let panelGroupInfoImpl: GetPanelGroupInfo = () => undefined;
 const mockGetPanelGroupInfo: GetPanelGroupInfo = (id) => panelGroupInfoImpl(id);
-const { terminalInstanceService } = await import("@/services/TerminalInstanceService");
+const terminalInstanceService = (
+  await import("@/services/TerminalInstanceService")
+).createTerminalPaintPlane();
 const { load: loadTerminalService } =
   await import("@/services/terminal/terminalInstanceServiceAccessor");
 

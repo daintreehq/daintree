@@ -63,7 +63,9 @@ vi.mock("@/store/projectSettingsStore", () => ({
   useProjectSettingsStore: { getState: () => mockProjectSettingsStore },
 }));
 
-import { terminalInstanceService as service } from "../TerminalInstanceService";
+import { load as loadTerminalService } from "../terminalInstanceServiceAccessor";
+
+const service = await loadTerminalService();
 
 describe("TerminalInstanceService - user input epoch", () => {
   beforeEach(() => {

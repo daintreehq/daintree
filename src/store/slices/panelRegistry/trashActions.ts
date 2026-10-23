@@ -142,8 +142,9 @@ export const createTrashActions = (
     scheduleTrashExpiry(id, expiresAt);
 
     if (panelKindHasPty(terminal.kind ?? "terminal")) {
-      withTerminalService((service) =>
-        service.applyRendererPolicy(id, TerminalRefreshTier.VISIBLE)
+      withTerminalService(
+        (service) => service.applyRendererPolicy(id, TerminalRefreshTier.VISIBLE),
+        id
       );
       return;
     }
@@ -252,8 +253,9 @@ export const createTrashActions = (
     for (const id of trashPanelIds) {
       const terminal = state.panelsById[id];
       if (terminal && panelKindHasPty(terminal.kind ?? "terminal")) {
-        withTerminalService((service) =>
-          service.applyRendererPolicy(id, TerminalRefreshTier.VISIBLE)
+        withTerminalService(
+          (service) => service.applyRendererPolicy(id, TerminalRefreshTier.VISIBLE),
+          id
         );
       }
     }
@@ -336,8 +338,9 @@ export const createTrashActions = (
         if (restoreLocation === "dock") {
           optimizeForDock(id);
         } else {
-          withTerminalService((service) =>
-            service.applyRendererPolicy(id, TerminalRefreshTier.VISIBLE)
+          withTerminalService(
+            (service) => service.applyRendererPolicy(id, TerminalRefreshTier.VISIBLE),
+            id
           );
         }
       }
@@ -472,8 +475,9 @@ export const createTrashActions = (
           if (restoreLocation === "dock") {
             optimizeForDock(id);
           } else {
-            withTerminalService((service) =>
-              service.applyRendererPolicy(id, TerminalRefreshTier.VISIBLE)
+            withTerminalService(
+              (service) => service.applyRendererPolicy(id, TerminalRefreshTier.VISIBLE),
+              id
             );
           }
         }
@@ -527,8 +531,9 @@ export const createTrashActions = (
       scheduleTrashExpiry(id, expiresAt);
 
       if (terminal && panelKindHasPty(terminal.kind ?? "terminal")) {
-        withTerminalService((service) =>
-          service.applyRendererPolicy(id, TerminalRefreshTier.VISIBLE)
+        withTerminalService(
+          (service) => service.applyRendererPolicy(id, TerminalRefreshTier.VISIBLE),
+          id
         );
       }
     },
@@ -592,8 +597,9 @@ export const createTrashActions = (
         if (restoreLocation === "dock") {
           optimizeForDock(id);
         } else {
-          withTerminalService((service) =>
-            service.applyRendererPolicy(id, TerminalRefreshTier.VISIBLE)
+          withTerminalService(
+            (service) => service.applyRendererPolicy(id, TerminalRefreshTier.VISIBLE),
+            id
           );
         }
       }
