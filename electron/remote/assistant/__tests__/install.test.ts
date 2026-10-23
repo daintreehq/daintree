@@ -40,13 +40,18 @@ vi.mock("electron", () => ({
     getAppPath: () => "/fake/appPath",
   },
 }));
+/** A lane key back into its project and slot; the global assistant's id holds a colon of its own. */
+const laneOf = vi.hoisted(() => (key: string): [string, string] => {
+  const at = key.lastIndexOf(":");
+  return [key.slice(0, at), key.slice(at + 1)];
+});
 vi.mock("../../../services/HelpSessionService.js", () => ({
   helpSessionService: {
     getRunningLaneSession: (projectId: string, slot: number) =>
       running.get(`${projectId}:${slot}`) ?? null,
     listRunningLanes: () =>
       [...running.keys()].map((key) => {
-        const [projectId, slot] = key.split(":");
+        const [projectId, slot] = laneOf(key);
         return {
           projectId: projectId!,
           slot: Number(slot),
@@ -57,14 +62,18 @@ vi.mock("../../../services/HelpSessionService.js", () => ({
     getSessionLane: (helpSessionId: string) => {
       for (const [key, run] of running) {
         if (run.sessionId !== helpSessionId) continue;
-        const [projectId, slot] = key.split(":");
+        const [projectId, slot] = laneOf(key);
         return { projectId: projectId!, slot: Number(slot) };
       }
       return null;
     },
-    getWebContentsIdForSessionId: (helpSessionId: string) =>
-      [...running.values()].find((run) => run.sessionId === helpSessionId)
-        ?.projectViewWebContentsId ?? null,
+    // No view minted a viewless session, so none reads as its own.
+    getWebContentsIdForSessionId: (helpSessionId: string) => {
+      const handle = [...running.values()].find(
+        (run) => run.sessionId === helpSessionId
+      )?.projectViewWebContentsId;
+      return handle === undefined || handle === 0 ? null : handle;
+    },
     setRunbooksHostState: (read: (() => unknown) | null) => {
       runbooksHostState.read = read;
     },
@@ -342,6 +351,18 @@ describe("installHostControl (#13493)", () => {
         caller: expect.objectContaining({ senderId: "local", helpSessionId: "global" }),
       },
     ]);
+
+    // A project's command runner acts on nothing it launched or was handed.
+    const refused = await runtime.call(
+      "global",
+      { hostId: "local", projectId: "proj-1", tool: "project.runCommand", args: { command: "ls" } },
+      { tier: "core" }
+    );
+    expect(refused).toMatchObject({
+      ok: true,
+      value: { outcome: "policy_rejected", callId: null },
+    });
+    expect(mcp.opened).toHaveLength(1);
 
     off();
   });

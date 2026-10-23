@@ -619,6 +619,28 @@ describe("McpServerService terminal hand-over to the global assistant (#14161)",
     expect(service.listTerminalAdoptions()).toEqual([]);
   });
 
+  it("knows an assistant by main's own binding, before any view marks it", () => {
+    terminals.set("terminal-headless", "project-a");
+    generations.set("terminal-headless", 1);
+    service.setSessionIdResolver((id) => (id === "terminal-headless" ? "help-headless" : null));
+    try {
+      expect(adoptGlobal({ terminalId: "terminal-headless" })).toMatchObject({
+        reason: "assistant-terminal",
+      });
+      expect(
+        service.adoptTerminal({
+          terminalId: "terminal-headless",
+          orchestratorPaneId: "pane-orch",
+          orchestrator: { principalId: "principal-orch", tier: "core", workspaceId: "project-a" },
+          callerWorkspaceId: "project-a",
+        })
+      ).toMatchObject({ reason: "assistant-terminal" });
+    } finally {
+      service.setSessionIdResolver(() => null);
+    }
+    expect(service.listTerminalAdoptions()).toEqual([]);
+  });
+
   it("refuses a terminal in no project or another view's, and one whose launch main can't name", () => {
     terminals.set("terminal-loose", null);
     generations.set("terminal-loose", 1);

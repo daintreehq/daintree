@@ -100,7 +100,7 @@ export function buildRunbooksAddendum(caller: { global?: boolean } = {}): string
     "",
     toolNames,
     "",
-    "Follow the runbooks with `selected: true` and the `supporting_runbooks` that come with them (the foundation they build on), and ignore the unselected ones. None selected: carry on and don't mention it. Another step naming a tool you lack: find the equivalent with `actions.search`, or tell the user. If the search fails, retry once, then proceed and say the runbook couldn't be loaded.",
+    `Follow the runbooks with \`selected: true\` and the \`supporting_runbooks\` that come with them (the foundation they build on), and ignore the unselected ones. None selected: carry on and don't mention it. Another step naming a tool you lack: find the equivalent with \`actions.search\`${caller.global ? " through `host.call`" : ""}, or tell the user. If the search fails, retry once, then proceed and say the runbook couldn't be loaded.`,
     "",
   ].join("\n");
 }

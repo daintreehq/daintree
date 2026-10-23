@@ -638,9 +638,7 @@ export class McpServerService {
     if (!ptyClient?.hasTerminal(terminalId)) return refuse("terminal-gone");
     // An assistant is reached only through the assistant tools (#13496), whose
     // drive and settled-prompt checks a hand-over would step around.
-    if (getAgentAvailabilityStore().isHelpTerminal(terminalId)) {
-      return refuse("assistant-terminal");
-    }
+    if (this.isAssistantTerminal(terminalId)) return refuse("assistant-terminal");
     // An orchestrator's calls land in the workspace its pane was launched in
     // (#12486), so a terminal anywhere else would be handed over in name only.
     const terminalWorkspaceId = ptyClient.getTerminalProjectId(terminalId) ?? undefined;
@@ -673,6 +671,18 @@ export class McpServerService {
   }
 
   /**
+   * Whether a terminal is a Daintree Assistant's: by main's own binding of its
+   * bearer to the PTY, which a headless launch never reports to a renderer,
+   * or by the renderer's mark where main's isn't wired.
+   */
+  private isAssistantTerminal(terminalId: string): boolean {
+    return (
+      this.getSessionIdForTerminal(terminalId) !== null ||
+      getAgentAvailabilityStore().isHelpTerminal(terminalId)
+    );
+  }
+
+  /**
    * Hand a running terminal to this machine's global assistant (#14161),
    * from the same user gesture and under the same rules as a hand-over to a
    * pane. The assistant reaches a project only through `host.call`, whose
@@ -699,9 +709,7 @@ export class McpServerService {
     if (terminalId === global.terminalId) return refuse("self");
     const ptyClient = getPtyClient();
     if (!ptyClient?.hasTerminal(terminalId)) return refuse("terminal-gone");
-    if (getAgentAvailabilityStore().isHelpTerminal(terminalId)) {
-      return refuse("assistant-terminal");
-    }
+    if (this.isAssistantTerminal(terminalId)) return refuse("assistant-terminal");
     // Reached through `host.call` into the terminal's own project, so it must
     // have one, and the view the user acted in must show that one.
     const workspaceId = ptyClient.getTerminalProjectId(terminalId) ?? undefined;

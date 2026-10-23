@@ -104,6 +104,15 @@ function localRunOf(helpSessionId: string): OpenRun | null {
 }
 
 let localMachineName: string | undefined;
+let mcpServerModule: Promise<typeof import("../../services/McpServerService.js")> | undefined;
+/** Loaded once: a session's end releases and retires through the same load, in order. */
+function mcpServer(): Promise<typeof import("../../services/McpServerService.js")> {
+  mcpServerModule ??= import("../../services/McpServerService.js").catch((error: unknown) => {
+    mcpServerModule = undefined;
+    throw error;
+  });
+  return mcpServerModule;
+}
 
 /** Queues a line on a run's own notice line, the one writer that types into its prompt. */
 function queueOnNoticeLine(
@@ -166,8 +175,18 @@ export function installHostControl(deps: HostControlInstallDeps): () => void {
         },
       });
     },
+    // Nor anything the person handed it (#14161), even before its first call.
+    releaseHandOvers: (helpSessionId) => {
+      void mcpServer()
+        .then(({ mcpServerService }) =>
+          mcpServerService.releaseRelayAdoptions(LOCAL_RELAY_SENDER_ID, helpSessionId)
+        )
+        .catch((error: unknown) => {
+          logger.warn("Couldn't release what was handed to an ended assistant", { error });
+        });
+    },
     retirePrincipal: (senderId, helpSessionId) => {
-      void import("../../services/McpServerService.js")
+      void mcpServer()
         .then(({ mcpServerService }) =>
           mcpServerService.retireRelayPrincipal(senderId, helpSessionId)
         )
@@ -223,7 +242,10 @@ export function installHostControl(deps: HostControlInstallDeps): () => void {
     listHostProjects: deps.listHostProjects,
     connect: deps.connect,
     // From provisioning, before the run is confirmed: the view a session was opened in.
+    // The global assistant (#14161) is this machine's own with no view at all.
     inLocalView: (helpSessionId) => {
+      const lane = helpSessionService.getSessionLane(helpSessionId);
+      if (lane !== null && isGlobalAssistantId(lane.projectId)) return true;
       const handle = helpSessionService.getWebContentsIdForSessionId(helpSessionId);
       return handle !== null && !isRemoteEndpointHandle(handle);
     },
@@ -273,17 +295,9 @@ export function installHostControl(deps: HostControlInstallDeps): () => void {
   });
   // A help session that won't run again holds nothing it made in another
   // project; one relaunched onto a new PTY is the same assistant and keeps it.
-  // Nor anything the person handed it (#14161), even before its first call.
   const offSessionEnded = helpSessionService.addSessionEndedListener(({ sessionId, reason }) => {
     if (reason === "relaunched") return;
     local.endHelpSession(sessionId);
-    void import("../../services/McpServerService.js")
-      .then(({ mcpServerService }) =>
-        mcpServerService.releaseRelayAdoptions(LOCAL_RELAY_SENDER_ID, sessionId)
-      )
-      .catch((error: unknown) => {
-        logger.warn("Couldn't release what was handed to an ended assistant", { error });
-      });
   });
   const unregisterRuntime = setHostControlRuntime(runtime);
   const unregisterCallRelay = registerRemoteService("hostCallRelayClient", runtime);

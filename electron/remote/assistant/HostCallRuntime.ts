@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { isGlobalAssistantId } from "../../../shared/config/globalAssistant.js";
 import { PROJECT_CHECK_DEFAULT_TIMEOUT_MS } from "../../../shared/types/projectCheck.js";
 import { REPLY_WAIT_DEFAULT_SECONDS } from "../../../shared/types/replyWait.js";
 import {
@@ -345,6 +346,10 @@ const CONTROL_OFF_DETAIL =
 const CALL_NO_HOST_DETAIL = "This Shell has no host with that id. List the hosts it knows.";
 const CALL_OWN_PROJECT_DETAIL =
   "That is this assistant's own project, so nothing was run. Call its tools directly; local reaches this machine's other projects.";
+const CALL_GLOBAL_WITHHELD_DETAIL =
+  "The global assistant can't run a project's commands, so nothing was run. Launch an agent there, or ask the user to run it.";
+/** Tools a host would admit for a relayed call that act on nothing the global assistant has standing for. */
+const GLOBAL_WITHHELD_TOOLS: ReadonlySet<string> = new Set(["project.runCommand"]);
 const CALL_AMBIGUOUS_DETAIL =
   "No answer came back, so the call may have reached the host and run. Resend it under this callId, which never runs it twice.";
 const CALL_NOT_SENT_DETAIL =
@@ -908,6 +913,11 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
         return { ...this.outcomeWith("not_found", CALL_NO_HOST_DETAIL), ...unsent };
       } else if (this.deps.controlEnabled?.(args.hostId) !== true) {
         return { ...this.outcomeWith("opted_out", CONTROL_OFF_DETAIL), ...unsent };
+      }
+      // The global assistant acts only on what it launched or was handed
+      // (#14161): a project's command runner acts on neither, on any host.
+      if (isGlobalAssistantId(caller.projectId) && GLOBAL_WITHHELD_TOOLS.has(args.tool)) {
+        return { ...this.outcomeWith("policy_rejected", CALL_GLOBAL_WITHHELD_DETAIL), ...unsent };
       }
       const toolArgs = args.args ?? {};
       if (Buffer.byteLength(JSON.stringify(toolArgs), "utf8") > MAX_RELAY_ARGS_BYTES) {

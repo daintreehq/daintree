@@ -102,10 +102,13 @@ describe("buildRunbooksAddendum", () => {
       expect(named).toEqual(expect.arrayContaining([...GLOBAL_ASSISTANT_TOOL_IDS]));
       for (const name of named) {
         if (GLOBAL_ASSISTANT_TOOL_IDS.has(name)) continue;
-        // Every other tool it is told of runs on a host, where only the owned ones act.
+        // Every other tool it is told of runs on a host: the owned ones, and the search for them.
+        if (name === "actions.search") continue;
         expect(name).toMatch(/Owned$/);
       }
+      expect(global).toContain("`actions.search` through `host.call`");
       expect(global).not.toContain("yours is");
+      expect(buildRunbooksAddendum()).not.toContain("through `host.call`,");
     });
 
     it("keeps a project's assistant on the unscoped names in its own project alone", () => {
