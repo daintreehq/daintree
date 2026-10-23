@@ -70,6 +70,7 @@ import type {
   SettingsGetParams,
   SettingsOpenParams,
   SettingsSetParams,
+  SettingsUnsetParams,
   StorageGetParams,
   StorageSetParams,
   StorageDeleteParams,
@@ -93,6 +94,7 @@ import type {
   GitOpParams,
   ClipboardWriteTextParams,
   ClipboardWriteImageParams,
+  SystemOpenExternalParams,
   SystemPathParams,
   DocumentsRenderPdfParams,
   ProcessSpawnParams,
@@ -1000,6 +1002,11 @@ export class PluginDevWorkerMainBridge {
         await this.host.settings.set(p.key, p.value, p.scope);
         return undefined;
       }
+      case "settings.unset": {
+        const p = params as SettingsUnsetParams;
+        await this.host.settings.unset(p.key, p.scope);
+        return undefined;
+      }
       case "settings.open": {
         const p = params as SettingsOpenParams;
         await this.host.settings.open(p.key);
@@ -1198,6 +1205,10 @@ export class PluginDevWorkerMainBridge {
       }
       case "system.showItemInFolder": {
         await this.host.system.showItemInFolder((params as SystemPathParams).targetPath);
+        return undefined;
+      }
+      case "system.openExternal": {
+        await this.host.system.openExternal((params as SystemOpenExternalParams).url);
         return undefined;
       }
       case "documents.renderPdf":

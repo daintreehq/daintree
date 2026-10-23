@@ -256,4 +256,40 @@ describe("PluginCapabilityConsentStore", () => {
       expect(reopen(getConfig()).hasGrant(identity)).toBe(false);
     });
   });
+
+  describe("external-link grants", () => {
+    const link = { pluginId: "acme.x", capability: "external-link", site: "example.com" } as const;
+
+    it("keys a grant by hostname and persists it across a reopen", () => {
+      const { store, getConfig } = makeStore();
+      store.grant(link);
+      expect(store.hasGrant(link)).toBe(true);
+      expect(store.hasGrant({ ...link, site: "other.example" })).toBe(false);
+      expect(store.hasGrant({ ...link, scopeKey: "proj-1" })).toBe(false);
+      const reopened = makeStore(getConfig()).store;
+      expect(reopened.hasGrant(link)).toBe(true);
+      expect(reopened.list()[0]?.site).toBe("example.com");
+    });
+
+    it("drops a persisted link grant that has no hostname instead of widening it", () => {
+      const { store } = makeStore({
+        grants: [
+          { pluginId: "acme.x", capability: "external-link", scopeKey: "global", approvedAt: 1 },
+          { pluginId: "acme.x", capability: "external-link", site: "", approvedAt: 1 },
+        ],
+      });
+      expect(store.list()).toEqual([]);
+      expect(store.hasGrant({ pluginId: "acme.x", capability: "external-link", site: "" })).toBe(
+        false
+      );
+    });
+
+    it("is purged with the rest of a plugin's grants", () => {
+      const { store } = makeStore();
+      store.grant(link);
+      store.grant({ pluginId: "acme.x", capability: "shell:exec" });
+      expect(store.revokeAllForPlugin("acme.x")).toBe(true);
+      expect(store.list()).toEqual([]);
+    });
+  });
 });

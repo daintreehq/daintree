@@ -1379,6 +1379,50 @@ describe("createMockHost", () => {
     });
   });
 
+  describe("settings.unset", () => {
+    it("clears a declared key, notifies with the default, and lists a required key as missing", async () => {
+      const host = createMockHost({
+        settings: { user: { token: "t", region: "us" } },
+        manifestSettings: [
+          { id: "token", type: "secret", required: true },
+          { id: "region", type: "string", default: "eu" },
+        ],
+      });
+      const heard: unknown[] = [];
+      await host.settings.onDidChange("token", (v) => heard.push(["token", v]));
+      await host.settings.onDidChange("region", (v) => heard.push(["region", v]));
+
+      await host.settings.unset("token");
+      await host.settings.unset("region");
+      await host.settings.unset("region");
+
+      expect(heard).toEqual([
+        ["token", undefined],
+        ["region", "eu"],
+      ]);
+      expect(await host.settings.get("region")).toBe("eu");
+      expect(await host.settings.missingRequired()).toEqual(["token"]);
+    });
+
+    it("rejects an undeclared key and a conflicting scope", async () => {
+      const host = createMockHost({
+        manifestSettings: [{ id: "ref", type: "string", scope: "project" }],
+      });
+      await expect(host.settings.unset("nope")).rejects.toThrow(/not declared/);
+      await expect(host.settings.unset("ref", "user")).rejects.toThrow(/declared in "project"/);
+    });
+  });
+
+  describe("system.openExternal", () => {
+    it("records the normalised https url and refuses everything else", async () => {
+      const host = createMockHost();
+      await host.system.openExternal("https://Example.com/a b");
+      expect(host.systemOpenExternalCalls).toEqual(["https://example.com/a%20b"]);
+      await expect(host.system.openExternal("http://example.com")).rejects.toThrow(/INVALID_URL/);
+      expect(host.systemOpenExternalCalls).toHaveLength(1);
+    });
+  });
+
   describe("dispatch", () => {
     it("routes through registered action handler and records the call", async () => {
       const host = createMockHost({ pluginId: "daintree.hello" });

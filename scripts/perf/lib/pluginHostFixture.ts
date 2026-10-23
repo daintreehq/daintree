@@ -1104,7 +1104,7 @@ function installElectronStub(): void {
           return [];
         }
       },
-      shell: { openPath: async () => "", showItemInFolder: noop },
+      shell: { openPath: async () => "", showItemInFolder: noop, openExternal: async () => {} },
       clipboard: { writeText: noop, readText: () => "" },
       safeStorage: { isEncryptionAvailable: () => false },
     } as Record<string, unknown>,

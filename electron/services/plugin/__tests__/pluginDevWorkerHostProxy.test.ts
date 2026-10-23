@@ -1356,6 +1356,26 @@ describe("PluginDevWorkerHostProxy host.system / clipboard.writeImage (#11299)",
     await expect(promise).resolves.toBeUndefined();
   });
 
+  it("relays host.system.openExternal with the url intact", async () => {
+    const { proxy, sent } = makeProxy();
+    const promise = proxy.host.system.openExternal("https://example.com/a");
+
+    const call = sent.find((m) => m.type === "host-call" && m.method === "system.openExternal");
+    expect(call.params).toEqual({ url: "https://example.com/a" });
+    resolveCall(proxy, sent, "system.openExternal", undefined);
+    await expect(promise).resolves.toBeUndefined();
+  });
+
+  it("relays host.settings.unset with the key and an omitted scope", async () => {
+    const { proxy, sent } = makeProxy();
+    const promise = proxy.host.settings.unset("token");
+
+    const call = sent.find((m) => m.type === "host-call" && m.method === "settings.unset");
+    expect(call.params).toEqual({ key: "token", scope: undefined });
+    resolveCall(proxy, sent, "settings.unset", undefined);
+    await expect(promise).resolves.toBeUndefined();
+  });
+
   it("relays host.documents.renderPdf with the options intact and resolves the host's result", async () => {
     const { proxy, sent } = makeProxy();
     const options = {

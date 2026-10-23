@@ -56,6 +56,7 @@ const HOST_CALL_DEADLINES = {
   "actions.get": DEFAULT,
   "settings.get": INTERACTIVE,
   "settings.set": INTERACTIVE,
+  "settings.unset": INTERACTIVE,
   "settings.open": DEFAULT,
   "settings.missingRequired": DEFAULT,
   "account.getState": DEFAULT,
@@ -86,6 +87,8 @@ const HOST_CALL_DEADLINES = {
   "clipboard.readText": INTERACTIVE,
   "system.openPath": DEFAULT,
   "system.showItemInFolder": DEFAULT,
+  // Waits on the user's answer to a first-use prompt.
+  "system.openExternal": INTERACTIVE,
   "documents.renderPdf": INTERACTIVE,
   showQuickPick: NONE,
   showInputBox: NONE,

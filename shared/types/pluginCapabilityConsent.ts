@@ -20,6 +20,16 @@ import type { BuiltInPluginCapability, PluginScopeKey } from "./plugin.js";
  */
 
 /**
+ * Consent subject for a plugin opening a link in the user's browser. Not a
+ * manifest capability, so no `capabilities[]` entry can claim it; the grant it
+ * keys is always paired with a `site` and answers for that hostname only.
+ */
+export const EXTERNAL_LINK_CONSENT = "external-link" as const;
+
+/** What a consent record or prompt is about: a gated capability, or opening links to one site. */
+export type PluginConsentSubject = BuiltInPluginCapability | typeof EXTERNAL_LINK_CONSENT;
+
+/**
  * Stable pin-store identity for a single plugin capability grant. Keyed in the
  * store by the JSON-encoded `[scopeKey, pluginId, capability]` triple (see
  * `PluginCapabilityConsentStore.makeKey`) — JSON-encoded, never `::`-joined, so
@@ -33,7 +43,13 @@ export interface PluginCapabilityIdentity {
   /** Contributing plugin id (`manifest.name`). */
   pluginId: string;
   /** The high-risk capability being gated. */
-  capability: BuiltInPluginCapability;
+  capability: PluginConsentSubject;
+  /**
+   * Lower-cased hostname an {@link EXTERNAL_LINK_CONSENT} grant is for. Required
+   * for that subject and absent for every real capability, so a capability grant
+   * can never answer a site and one site never answers another.
+   */
+  site?: string;
   /**
    * Scope the grant belongs to. Omitted means `"global"` — the app-wide scope
    * every installed and builtin plugin loads into.
@@ -47,7 +63,9 @@ export interface PluginCapabilityIdentity {
  */
 export interface PluginCapabilityConsentRecord {
   pluginId: string;
-  capability: BuiltInPluginCapability;
+  capability: PluginConsentSubject;
+  /** Hostname of an {@link EXTERNAL_LINK_CONSENT} grant; absent otherwise. */
+  site?: string;
   /**
    * Scope the grant was minted in. Records written before the key widened have
    * no `scopeKey` on disk and read back as `"global"`.
@@ -163,7 +181,9 @@ export interface PluginCapabilityConsentRequestEvent {
   /** Human-readable plugin display name (manifest `displayName ?? name`). */
   pluginDisplayName: string;
   /** The capability the plugin is asking to use for the first time. */
-  capability: BuiltInPluginCapability;
+  capability: PluginConsentSubject;
+  /** Hostname the plugin wants to open links to; set only for {@link EXTERNAL_LINK_CONSENT}. */
+  site?: string;
   /** Plugin's manifest `capabilities[]` list — surfaced for transparency. */
   declaredCapabilities: readonly BuiltInPluginCapability[];
 }

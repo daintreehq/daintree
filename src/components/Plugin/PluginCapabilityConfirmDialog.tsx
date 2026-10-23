@@ -3,7 +3,10 @@ import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { usePluginCapabilityConfirmStore } from "@/store/pluginCapabilityConfirmStore";
 import { CapabilityRow } from "@/components/Plugin/capabilityMeta";
-import type { PluginCapabilityConsentDecision } from "@shared/types/pluginCapabilityConsent";
+import {
+  EXTERNAL_LINK_CONSENT,
+  type PluginCapabilityConsentDecision,
+} from "@shared/types/pluginCapabilityConsent";
 import type { BuiltInPluginCapability } from "@shared/types/plugin";
 import { cn } from "@/lib/utils";
 import { SECTION_LABEL_CLASS } from "@/components/ui/sectionLabel";
@@ -50,6 +53,29 @@ export function PluginCapabilityConfirmDialog() {
           confirmLabel="Allow"
           onConfirm={() => {}}
           variant="default"
+        />
+      </ErrorBoundary>
+    );
+  }
+
+  if (current.site !== undefined || current.capability === EXTERNAL_LINK_CONSENT) {
+    const site = current.site ?? "";
+    return (
+      <ErrorBoundary
+        variant="component"
+        componentName="PluginCapabilityConfirmDialog"
+        resetKeys={[resetKey]}
+      >
+        <ConfirmDialog
+          isOpen={true}
+          onClose={() => resolveOnce(current.requestId, "rejected")}
+          title={externalLinkTitleFor(current.pluginDisplayName, site)}
+          description={`'${current.pluginDisplayName}' is asking to open links to ${site} in your browser${onHost} for the first time. Allowing remembers this site for the plugin until you uninstall or revoke it.`}
+          confirmLabel="Allow and remember"
+          cancelLabel="Deny"
+          onConfirm={() => resolveOnce(current.requestId, "approved-and-pin")}
+          variant="default"
+          hint={<span className="min-w-0 leading-tight">Only {site}, not other sites</span>}
         />
       </ErrorBoundary>
     );
@@ -118,6 +144,11 @@ export function PluginCapabilityConfirmDialog() {
       </ConfirmDialog>
     </ErrorBoundary>
   );
+}
+
+/** Title of the per-site link prompt; the hostname is shown as text, never as a link. Exported for tests. */
+export function externalLinkTitleFor(pluginDisplayName: string, site: string): string {
+  return `Allow '${pluginDisplayName}' to open links to ${site}?`;
 }
 
 /** Dialog title — sentence case, no trailing period (UI microcopy rules). Exported for tests. */

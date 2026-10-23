@@ -19,6 +19,7 @@ import {
 import { createHash } from "node:crypto";
 import { lstatSync, mkdirSync, mkdtempSync, realpathSync } from "node:fs";
 import { validateRenderPdfOptions } from "../utils/pluginPdfOptions.js";
+import { parsePluginExternalUrl } from "../utils/pluginExternalUrl.js";
 import { homedir, tmpdir } from "node:os";
 import path from "node:path";
 import { join as joinPath } from "node:path";
@@ -449,6 +450,12 @@ export interface MockHostState {
   readonly systemOpenPathCalls: ReadonlyArray<string>;
   /** Captured `host.system.showItemInFolder(path)` calls, in order. */
   readonly systemShowItemCalls: ReadonlyArray<string>;
+  /**
+   * Captured `host.system.openExternal(url)` calls, in order, as the normalised
+   * URL the real host would hand to the browser. Only URLs that passed the real
+   * validator are recorded; no consent prompt or rate limit is simulated.
+   */
+  readonly systemOpenExternalCalls: ReadonlyArray<string>;
   /**
    * Captured `host.documents.renderPdf(options)` calls, in order, as a shallow
    * copy of the options. Only calls that passed the mock's validation are
@@ -1340,6 +1347,7 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
   const clipboardWriteImageCalls: number[] = [];
   const systemOpenPathCalls: string[] = [];
   const systemShowItemCalls: string[] = [];
+  const systemOpenExternalCalls: string[] = [];
   const documentsRenderPdfCalls: PluginRenderPdfOptions[] = [];
   let clipboardText = "";
 
@@ -1599,6 +1607,24 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
         actionId: "plugin.openSettings",
         args: key === undefined ? { pluginId } : { pluginId, key },
       });
+    },
+    // Declared keys only, as the real host: the declared scope is the target,
+    // and subscribers hear the declared default when something was removed.
+    async unset(key: string, requestedScope?: PluginSettingsScope): Promise<void> {
+      const declaredScope = getDeclaredSettingScope(key);
+      if (declaredScope === undefined) {
+        throw new Error(`settings.unset: key "${key}" is not declared in contributes.settings`);
+      }
+      if (requestedScope !== undefined && requestedScope !== declaredScope) {
+        throw new Error(
+          `settings.unset: key "${key}" is declared in "${declaredScope}" scope, not "${requestedScope}"`
+        );
+      }
+      if (!settingsStore[declaredScope].delete(key)) return;
+      const subs = settingsSubs[declaredScope].get(key);
+      if (subs) {
+        for (const cb of subs) cb(getDeclaredSettingDefault(key));
+      }
     },
     // Manifest-aware only: with no `manifestSettings` nothing is declared, so
     // nothing can be required. A default never satisfies a required key.
@@ -3384,6 +3410,13 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
       async showItemInFolder(targetPath) {
         systemShowItemCalls.push(targetPath);
       },
+      async openExternal(url) {
+        const parsed = parsePluginExternalUrl(url);
+        if (!parsed.ok) {
+          throw new Error(`INVALID_URL: system.openExternal: ${parsed.reason}`);
+        }
+        systemOpenExternalCalls.push(parsed.link.href);
+      },
     },
     // No Chromium here, so nothing is rendered: the call is recorded and a
     // placeholder PDF lands in the in-memory fs, so a plugin that reads,
@@ -3476,6 +3509,7 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
     clipboardWriteImageCalls,
     systemOpenPathCalls,
     systemShowItemCalls,
+    systemOpenExternalCalls,
     documentsRenderPdfCalls,
     subscriptionOptions,
 
