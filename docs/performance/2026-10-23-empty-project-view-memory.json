@@ -3,7 +3,7 @@
   "issue": 14219,
   "date": "2026-10-23",
   "harness": "e2e/perf/empty-project-view-memory-perf.spec.ts",
-  "note": "Run under Playwright, whose focus emulation keeps every attached page visible; cached-phase cc tile memory may not reflect the shipped app (#14237).",
+  "note": "Run under Playwright, whose Emulation.setFocusEmulationEnabled keeps every attached page visible. cc tile memory and GPU-process figures are pinned-visible readings, not the packaged app: there a cached view goes hidden and its cc tile memory drops from 62.5 MB to 25.0 MB (#14237).",
   "versions": {
     "electron": "42.11.18",
     "chrome": "148.0.7778.280",
@@ -555,7 +555,7 @@
     },
     "hideBeforeDetach": {
       "runs": 1,
-      "note": "setVisible(false) before removeChildView: under Playwright the cached view still reports visibilityState=visible and holds the same cc tile memory",
+      "note": "setVisible(false) before removeChildView, under Playwright: the view stays visible because focus emulation pins it, so this experiment says nothing about the shipped app (#14237).",
       "cached": {
         "rendererFootprintMb": {
           "median": 181,
