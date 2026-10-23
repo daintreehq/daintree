@@ -244,6 +244,11 @@ jobs:
       - name: Check Element Picker bundles stay lazy
         run: npm run check:element-picker-bundles
 
+      # Same shape for plugins that ship disabled (#14129): only a view
+      # registration stub may sit in a startup chunk, never the plugin itself.
+      - name: Check default-disabled plugins stay lazy
+        run: npm run check:vanilla-plugin-bundles
+
       # Performance/size budgets (renderer bundle, first-render chunk, import
       # counts, compiler perf) are intentionally NOT run in CI during pre-1.0
       # development — premature gating just churns thresholds and blocks rapid

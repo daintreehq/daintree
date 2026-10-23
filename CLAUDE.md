@@ -40,6 +40,8 @@ Panels are a 7-member union in `shared/types/panel.ts` (`terminal`, `browser`, `
 
 Plugins are manifest-driven, activate out-of-process in unsandboxed `utilityProcess.fork` workers (builtins are the exception and load in-process), and contribute actions, panels, agents, toolbar buttons, and forge providers under capability + consent gating. GitHub ships as a builtin forge plugin (`plugins/builtin/github`) so the host stays forge-neutral. Author SDK = the `packages/*` npm workspace (`npm run packages:build`).
 
+**Vanilla Daintree pays nothing for plugins.** A new plugin capability must show a cheap empty path: no consumer means no capability-owned worker, child process, watcher, recurring sampler or repeated publication, and optional implementation code stays behind a demand boundary. Test both acquisition and release; `docs/plugins/architecture.md` ("Vanilla install and the cheap empty path") lists the guards.
+
 ## Generated code and ratchets
 
 **Never hand-edit generated output.** Regenerate from the source instead:

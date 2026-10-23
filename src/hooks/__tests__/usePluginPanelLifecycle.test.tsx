@@ -205,16 +205,19 @@ describe("structural gating (#14126)", () => {
     return reportPanelInventory;
   }
 
-  it("does no lifecycle work for activity or title churn with no plugin panels", () => {
-    const report = mountWithInventory(terminals(100));
+  it.each([20, 100])(
+    "does no lifecycle work for activity or title churn across %i vanilla terminals",
+    (count) => {
+      const report = mountWithInventory(terminals(count));
 
-    churn(60, "activityStatus");
-    churn(60, "title");
+      churn(60, "activityStatus");
+      churn(60, "title");
 
-    expect(syncMock).not.toHaveBeenCalled();
-    expect(kindLookups).not.toHaveBeenCalled();
-    expect(report).not.toHaveBeenCalled();
-  });
+      expect(syncMock).not.toHaveBeenCalled();
+      expect(kindLookups).not.toHaveBeenCalled();
+      expect(report).not.toHaveBeenCalled();
+    }
+  );
 
   it("does no lifecycle work for churn alongside plugin panels", () => {
     const report = mountWithInventory({
