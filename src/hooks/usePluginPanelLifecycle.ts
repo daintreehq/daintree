@@ -1,10 +1,12 @@
 import { useEffect } from "react";
-import { getPanelKindConfig } from "@shared/config/panelKindRegistry";
+import { getPanelKindConfig, subscribeToPanelKindRegistry } from "@shared/config/panelKindRegistry";
 import { usePanelStore } from "@/store/panelStore";
 import {
   syncPluginPanels,
   type PluginPanelSnapshotEntry,
 } from "@/services/plugin/pluginPanelLifecycle";
+
+type PanelsById = ReturnType<typeof usePanelStore.getState>["panelsById"];
 
 /**
  * Watch the panel store and feed plugin panel record transitions into
@@ -22,7 +24,8 @@ import {
 export function usePluginPanelLifecycle(): void {
   useEffect(() => {
     let disposed = false;
-    let lastPanelsById: unknown = null;
+    let lastPanelsById: PanelsById = usePanelStore.getState().panelsById;
+    let lastPanelCount = Object.keys(lastPanelsById).length;
     let lastNonPluginKey: string | null = null;
 
     const collect = (): void => {
@@ -76,43 +79,60 @@ export function usePluginPanelLifecycle(): void {
       });
     };
 
+    // `collect` reads only panel ids, `kind`, `pluginPanelKindId` and
+    // `location`. Activity, status and title writes replace the map (and the
+    // one entry they touch) at up to frame rate in a busy session, so compare
+    // entries by reference and those fields only: a non-structural write costs
+    // a pointer walk, not a kind lookup per panel (#14126). Every store writer
+    // patches immutably, so an untouched entry keeps its reference.
+    const isStructuralChange = (prev: PanelsById, next: PanelsById): boolean => {
+      const prevCount = lastPanelCount;
+      let nextCount = 0;
+      let changed = false;
+      for (const id in next) {
+        nextCount++;
+        if (changed) continue;
+        const before = prev[id];
+        const after = next[id];
+        if (before === after) continue;
+        if (
+          !before ||
+          !after ||
+          before.kind !== after.kind ||
+          before.pluginPanelKindId !== after.pluginPanelKindId ||
+          before.location !== after.location
+        ) {
+          changed = true;
+        }
+      }
+      lastPanelCount = nextCount;
+      // With no id added, an equal count means none was removed either.
+      return changed || nextCount !== prevCount;
+    };
+
     const unsubscribe = usePanelStore.subscribe((state) => {
-      // Most store writes (focus, resize, title) leave the panel map identical.
-      // Bail on reference equality so a busy store doesn't rescan every panel
-      // on every keystroke-driven update.
+      // Focus and resize writes leave the panel map identical.
       if (state.panelsById === lastPanelsById) return;
+      const prev = lastPanelsById;
       lastPanelsById = state.panelsById;
-      collect();
+      if (isStructuralChange(prev, state.panelsById)) collect();
     });
 
-    // A plugin loading (or unloading) changes which kinds carry an
-    // `extensionId`, and that happens without any panel-store write — a
-    // persisted panel whose plugin was still loading is invisible to `collect`
-    // until its kind registers. Re-collecting on the kind broadcast closes that
-    // window; it is also what surfaces a panel after a plugin upgrade.
-    const electron = typeof window !== "undefined" ? window.electron : undefined;
-    const stopKinds = electron?.plugin?.onPanelKindsChanged?.(() => collect());
+    // A plugin loading, unloading or upgrading changes which kinds carry an
+    // `extensionId` without any panel-store write — a persisted panel whose
+    // plugin was still loading is invisible to `collect` until its kind
+    // registers. `usePluginPanelKinds` applies both main's broadcasts and its
+    // own mount-time pull to the registry, so its change signal covers the
+    // cached `WebContentsView` that missed the cold-start broadcast too,
+    // without a second `getPanelKinds()` round-trip from here.
+    const stopKinds = subscribeToPanelKindRegistry(collect);
 
-    // Pull-on-mount pairs with push-on-change, mirroring `usePluginPanelKinds`.
-    // A `WebContentsView` that missed the cold-start broadcast gets its kinds
-    // from that hook's pull, which fires no push — so without re-collecting
-    // here, a persisted panel whose plugin was still loading stays invisible
-    // until some unrelated panel-store write happens to wake the observer.
-    void electron?.plugin
-      ?.getPanelKinds?.()
-      .then(() => collect())
-      .catch(() => {
-        // The kinds hook already surfaces this failure; a lifecycle re-collect
-        // that never happens is not worth a second warning.
-      });
-
-    lastPanelsById = usePanelStore.getState().panelsById;
     collect();
 
     return () => {
       disposed = true;
       unsubscribe();
-      stopKinds?.();
+      stopKinds();
     };
   }, []);
 }
