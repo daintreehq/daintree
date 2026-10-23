@@ -278,7 +278,7 @@ An argument shown as `name?` is optional. Argument names come from each action's
 | Action | Title | Danger | Arguments |
 | --- | --- | --- | --- |
 | `plugin.diagnostics` | Read plugin diagnostics | safe | `pluginId`, `logLimit?` |
-| `plugin.openSettings` | Open plugin settings | safe | `pluginId`, `key?` |
+| `plugin.openSettings` | Open plugin settings | safe | `pluginId`, `key?`, `page?`, `scope?`, `section?` |
 | `plugin.validate` | Validate plugin manifest | safe | `path` |
 
 ## portal
