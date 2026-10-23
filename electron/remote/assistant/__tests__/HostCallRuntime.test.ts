@@ -34,8 +34,10 @@ describe("HostCallRuntime (#13493, #13496)", () => {
     typeof vi.fn<(hostId: string) => Promise<Array<{ id: string; name: string; path: string }>>>
   >;
   let runtime: HostCallRuntime;
+  let clock: number;
 
   beforeEach(() => {
+    clock = 1000;
     hosts = [host()];
     runs = new Map([["a", RUN_A]]);
     control = new Set(["studio"]);
@@ -48,6 +50,7 @@ describe("HostCallRuntime (#13493, #13496)", () => {
       callerRun: (id) => runs.get(id) ?? null,
       client: () => null,
       hosts: () => hosts,
+      now: () => clock,
       inLocalView: () => true,
       controlEnabled: (hostId) => control.has(hostId),
       listHostProjects,
@@ -80,8 +83,10 @@ describe("HostCallRuntime (#13493, #13496)", () => {
           summary: {
             sampledAt: 950,
             cpuPercent: 40,
-            // The summary's CPU scale stays out of host.list's MCP-facing load.
+            platform: "darwin",
             cpuLogicalCoreCount: 14,
+            memoryTotalBytes: 32e9,
+            memoryUsedBytes: 20e9,
             cpuLoadAverage1m: 6.4,
             cpuPerformanceCoreCount: 10,
             cpuEfficiencyCoreCount: 4,
@@ -104,7 +109,22 @@ describe("HostCallRuntime (#13493, #13496)", () => {
           connection: "connected",
           rttMs: 12,
           lastSeenAt: 900,
-          load: { sampledAt: 950, cpuPercent: 40, memoryPressure: null, thermal: "nominal" },
+          load: {
+            sampledAt: 950,
+            ageMs: 50,
+            stale: false,
+            platform: "darwin",
+            cpuPercent: 40,
+            cpuLogicalCores: 14,
+            cpuBusyCores: 5.6,
+            cpuIdleCores: 8.4,
+            memoryTotalBytes: 32e9,
+            memoryUsedBytes: 20e9,
+            memoryAvailableBytes: 12e9,
+            memoryCapacityReported: true,
+            memoryPressure: null,
+            thermal: "nominal",
+          },
           agentsObserved: { working: 2, waiting: 1, idle: 0 },
           // As the host said it; an older host that didn't is unknown, not unattached.
           projects: [
@@ -129,34 +149,139 @@ describe("HostCallRuntime (#13493, #13496)", () => {
       expect(listHostProjects).toHaveBeenCalledTimes(1);
     });
 
-    it("lists a Linux host's raw readings and the scope they describe, with no invented bands", async () => {
-      hosts = [
-        host({
-          connection: CONNECTED,
-          summary: {
-            sampledAt: 5,
-            cpuPercent: 12,
-            memoryPressure: null,
-            thermal: null,
-            metricsScope: "cgroup",
-            memoryPressureSomeAvg10: 2.5,
-            temperatureCelsius: 55,
-            temperatureZone: "x86_pkg_temp (thermal_zone0)",
-          } as never,
-        }),
-      ];
-      const listed = await runtime.list("a");
-      if (!listed.ok) throw new Error("refused");
-      expect(HostListResultSchema.parse(listed.value)).toEqual(listed.value);
-      expect(listed.value.hosts[0]!.load).toEqual({
-        sampledAt: 5,
-        cpuPercent: 12,
-        memoryPressure: null,
-        thermal: null,
-        metricsScope: "cgroup",
-        memoryPressureSomeAvg10: 2.5,
-        temperatureCelsius: 55,
-        temperatureZone: "x86_pkg_temp (thermal_zone0)",
+    describe("load", () => {
+      const fresh = {
+        sampledAt: 990,
+        platform: "linux",
+        cpuPercent: 50,
+        cpuLogicalCoreCount: 8,
+        memoryPressure: "warn",
+        memoryUsedBytes: 4e9,
+        memoryTotalBytes: 16e9,
+        thermal: "fair",
+      };
+
+      async function loadOf(summary: object) {
+        hosts = [host({ connection: CONNECTED, summary: summary as never })];
+        const listed = await runtime.list("a");
+        if (!listed.ok) throw new Error("refused");
+        expect(HostListResultSchema.parse(listed.value)).toEqual(listed.value);
+        return listed.value.hosts[0]?.load;
+      }
+
+      it("nulls the live figures of a stale sample but keeps what hardware fixes", async () => {
+        const load = await loadOf({ ...fresh, sampledAt: 1000 - 16_000 });
+        expect(load).toMatchObject({
+          stale: true,
+          ageMs: 16_000,
+          cpuLogicalCores: 8,
+          memoryTotalBytes: 16e9,
+          cpuPercent: null,
+          cpuBusyCores: null,
+          cpuIdleCores: null,
+          memoryUsedBytes: null,
+          memoryAvailableBytes: null,
+          memoryPressure: null,
+          thermal: null,
+        });
+      });
+
+      it("treats a timestamp from the future as unusable, not fresh", async () => {
+        expect(await loadOf({ ...fresh, sampledAt: 1000 + 60_000 })).toMatchObject({
+          stale: true,
+          cpuPercent: null,
+        });
+      });
+
+      it("gives no used or available memory for an older host, and no cores it never reported", async () => {
+        const { cpuLogicalCoreCount: _omitted, ...older } = fresh;
+        expect(await loadOf(older)).toMatchObject({
+          stale: false,
+          memoryCapacityReported: false,
+          memoryUsedBytes: null,
+          memoryAvailableBytes: null,
+          memoryTotalBytes: 16e9,
+          cpuLogicalCores: null,
+          cpuBusyCores: null,
+          cpuPercent: 50,
+        });
+      });
+
+      it("keeps a measured zero apart from an unmeasured reading", async () => {
+        expect(await loadOf({ ...fresh, cpuPercent: 0 })).toMatchObject({
+          cpuBusyCores: 0,
+          cpuIdleCores: 8,
+        });
+        expect(await loadOf({ ...fresh, cpuPercent: null, memoryUsedBytes: null })).toMatchObject({
+          cpuBusyCores: null,
+          cpuIdleCores: null,
+          memoryUsedBytes: null,
+          memoryAvailableBytes: null,
+          memoryTotalBytes: 16e9,
+        });
+      });
+
+      it("ages a sample by the time the whole answer took, not the time it was read", async () => {
+        hosts = [
+          host({ connection: CONNECTED, summary: { ...fresh, sampledAt: 1000 - 14_000 } as never }),
+        ];
+        listHostProjects.mockImplementation(async () => {
+          clock += 5000;
+          return [];
+        });
+        const listed = await runtime.list("a");
+        if (!listed.ok) throw new Error("refused");
+        expect(listed.value.hosts[0]?.load).toMatchObject({
+          stale: true,
+          ageMs: 19_000,
+          cpuPercent: null,
+        });
+      });
+
+      it("keeps a small positive load from rounding to idle-looking zero", async () => {
+        expect(await loadOf({ ...fresh, cpuPercent: 0.4 })).toMatchObject({ cpuBusyCores: 0.03 });
+      });
+
+      it("lists a Linux host's raw readings and the scope they describe, with no invented bands", async () => {
+        const linux = {
+          ...fresh,
+          memoryPressure: null,
+          thermal: null,
+          metricsScope: "cgroup",
+          memoryPressureSomeAvg10: 2.5,
+          temperatureCelsius: 55,
+          temperatureZone: "x86_pkg_temp (thermal_zone0)",
+        };
+        expect(await loadOf(linux)).toMatchObject({
+          memoryPressure: null,
+          thermal: null,
+          metricsScope: "cgroup",
+          memoryPressureSomeAvg10: 2.5,
+          temperatureCelsius: 55,
+          temperatureZone: "x86_pkg_temp (thermal_zone0)",
+        });
+        expect(await loadOf({ ...linux, sampledAt: 1000 - 16_000 })).toMatchObject({
+          stale: true,
+          metricsScope: "cgroup",
+          memoryPressureSomeAvg10: null,
+          temperatureCelsius: null,
+          temperatureZone: null,
+        });
+      });
+
+      it("counts busy and idle cores against a cgroup's fractional quota", async () => {
+        expect(await loadOf({ ...fresh, cpuPercent: 50, cpuCapacityCores: 1.5 })).toMatchObject({
+          cpuLogicalCores: 8,
+          cpuBusyCores: 0.75,
+          cpuIdleCores: 0.75,
+        });
+      });
+
+      it("omits the Linux readings a host never reported", async () => {
+        const load = await loadOf(fresh);
+        expect(load).not.toHaveProperty("metricsScope");
+        expect(load).not.toHaveProperty("memoryPressureSomeAvg10");
+        expect(load).not.toHaveProperty("temperatureCelsius");
       });
     });
 

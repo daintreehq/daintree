@@ -38,6 +38,7 @@ import {
   type LaneWakeCheck,
 } from "../../services/mcp-server/terminalNotify.js";
 import { sanitizeNotifyNote } from "../../../shared/types/terminalNotify.js";
+import { projectHostLoad } from "./hostLoad.js";
 import type { HostControlLinkClient } from "./HostControlLinkClient.js";
 import type { AssistantEnsureRequest } from "../projects/HostSwitchService.js";
 import {
@@ -79,6 +80,11 @@ export interface LocalHostReach {
   name(): string;
   /** Its projects, most used first. */
   projects(): Promise<readonly HostProjectSummary[]>;
+  /**
+   * The latest sample of this machine, or null where none is held or the
+   * platform can't be measured. Reading it never starts sampling.
+   */
+  latestSummary?(): HostMetricsSummary | null;
   relayCall(payload: McpCallPayload): Promise<McpCallAnswer>;
   /** Its workers and assistants, as `host.list` shows them with `includeAgents` (#14160). */
   agents?(options: { projectId?: string }): Promise<AgentDirectory>;
@@ -1098,39 +1104,24 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
     const agentsOf = args.includeAgents === true ? { projectId: args.projectId } : null;
     return this.settle(helpSessionId, async (caller) => {
       const local = this.deps.local;
-      const here = local ? this.localEntry(local, caller, agentsOf) : null;
+      // Each load is projected after every read below settles, against one clock
+      // reading: a slow project read must not leave a sample looking fresher
+      // than it is when the answer goes out.
+      const sampled = new Map<HostListEntry, HostMetricsSummary>();
+      const here = local ? this.localEntry(local, caller, agentsOf, sampled) : null;
       const hosts = await Promise.all(
         this.deps.hosts().map(async (seen): Promise<HostListEntry> => {
           const host = await this.dialed(seen);
           const summary = host.summary;
           const connected = host.connection.status === "connected";
           const control = this.deps.controlEnabled?.(host.hostId) === true;
-          return {
+          const entry: HostListEntry = {
             hostId: host.hostId,
             name: host.name,
             connection: observedConnection(host.connection),
             rttMs: host.connection.status === "connected" ? host.connection.rttMs : null,
             lastSeenAt: host.lastSeenAt,
-            load: summary
-              ? {
-                  sampledAt: summary.sampledAt,
-                  cpuPercent: summary.cpuPercent,
-                  memoryPressure: summary.memoryPressure,
-                  thermal: summary.thermal,
-                  ...(summary.metricsScope !== undefined
-                    ? { metricsScope: summary.metricsScope }
-                    : {}),
-                  ...(summary.memoryPressureSomeAvg10 !== undefined
-                    ? { memoryPressureSomeAvg10: summary.memoryPressureSomeAvg10 }
-                    : {}),
-                  ...(summary.temperatureCelsius !== undefined
-                    ? {
-                        temperatureCelsius: summary.temperatureCelsius,
-                        temperatureZone: summary.temperatureZone ?? null,
-                      }
-                    : {}),
-                }
-              : null,
+            load: null,
             // A tally from before the link dropped is history, not what is running now.
             agentsObserved:
               connected && summary?.agentsObserved ? { ...summary.agentsObserved } : null,
@@ -1139,24 +1130,35 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
             // No link reads a host's agents yet: said so, never an empty inventory.
             ...(agentsOf ? { agents: unreadAgentDirectory("unsupported") } : {}),
           };
+          if (summary) sampled.set(entry, summary);
+          return entry;
         })
       );
-      const first = here ? await here : null;
-      if (first?.agents) first.agents = fitToResponse(first.agents, first, hosts);
-      return { hosts: first ? [first, ...hosts] : hosts };
+      const settled = here ? await here : null;
+      const now = this.now();
+      const aged = (entry: HostListEntry): HostListEntry => {
+        const summary = sampled.get(entry);
+        return summary ? { ...entry, load: projectHostLoad(summary, now) } : entry;
+      };
+      const others = hosts.map(aged);
+      const first = settled ? aged(settled) : null;
+      if (first?.agents) first.agents = fitToResponse(first.agents, first, others);
+      return { hosts: first ? [first, ...others] : others };
     });
   }
 
   /**
    * This machine, first (#14024): the projects of its own a call under
    * `local` reaches, which are all but the caller's own, or null when they
-   * couldn't be read in time. Nothing about it is sampled or tallied here.
+   * couldn't be read in time. Nothing about it is sampled or tallied here; its load is the sample already held.
    */
   private async localEntry(
     local: LocalHostReach,
     caller: OpenRun,
-    agentsOf: { projectId?: string } | null
+    agentsOf: { projectId?: string } | null,
+    sampled: Map<HostListEntry, HostMetricsSummary>
   ): Promise<HostListEntry> {
+    const summary = local.latestSummary?.() ?? null;
     const projects = await withinMs(
       Promise.resolve()
         .then(() => local.projects())
@@ -1164,7 +1166,7 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
       PROJECTS_READ_MS,
       null
     );
-    return {
+    const entry: HostListEntry = {
       hostId: LOCAL_HOST_ID,
       name: local.name(),
       connection: "connected",
@@ -1182,6 +1184,8 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
       control: true,
       ...(agentsOf ? { agents: await this.localAgents(local, agentsOf) } : {}),
     };
+    if (summary) sampled.set(entry, summary);
+    return entry;
   }
 
   private async localAgents(
