@@ -577,6 +577,7 @@ describe("TerminalInstanceService - Activity Tier", () => {
         isVisible: false,
         lastAppliedTier: TerminalRefreshTier.BACKGROUND,
         lastScrollbackReduceAt: 12345,
+        scrollbackPressureCapped: true,
       });
       managed.terminal.options.scrollback = 500;
       service.instances.set("t1", managed as unknown as Record<string, unknown>);
@@ -594,6 +595,7 @@ describe("TerminalInstanceService - Activity Tier", () => {
         isVisible: false,
         lastAppliedTier: TerminalRefreshTier.BURST,
         lastScrollbackReduceAt: 12345,
+        scrollbackPressureCapped: true,
       });
       // Below any configured target, so the restore is pure growth.
       managed.terminal.options.scrollback = 50;
@@ -603,7 +605,7 @@ describe("TerminalInstanceService - Activity Tier", () => {
 
       expect(managed.terminal.options.scrollback).toBeGreaterThan(50);
       expect(
-        (managed as unknown as { lastScrollbackReduceAt?: number }).lastScrollbackReduceAt
+        (managed as unknown as { scrollbackPressureCapped?: boolean }).scrollbackPressureCapped
       ).toBeUndefined();
     });
   });

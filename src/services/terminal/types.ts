@@ -447,6 +447,10 @@ export interface ManagedTerminal {
   // xterm CircularList back to back. Cleared on tier upgrade in onTierApplied
   // so the restore that re-derives capacity always runs.
   lastScrollbackReduceAt?: number;
+
+  // Set when a memory-pressure reduce lowered this pane's limit while hidden.
+  // Policy re-derives may not raise it until the pane is revealed.
+  scrollbackPressureCapped?: boolean;
 }
 
 export const TIER_DOWNGRADE_HYSTERESIS_MS = 500;

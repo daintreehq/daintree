@@ -405,15 +405,13 @@ class TerminalInstanceService {
             managed.lastHeight = 0;
           }
         } else {
-          // Tier upgrade path: re-derive the configured capacity, which a
-          // memory-pressure reduce may have lowered while hidden (raising it
-          // never brings back dropped lines). Only for a pane on screen: a
-          // hidden one climbs to BURST on every output chunk, and restoring
-          // there would hand a streaming agent its full buffer back moments
-          // after the reduce. The reveal itself restores it (setVisible).
-          if (managed.isVisible) {
+          // Tier upgrade path: clear the reduce cooldown so the re-derive is
+          // unconditional and the next shrink isn't delayed by stale state.
+          // Skipped for a hidden pressure-capped pane: it climbs to BURST on
+          // every output chunk, and the cap must hold until its reveal.
+          if (managed.isVisible || !managed.scrollbackPressureCapped) {
             managed.lastScrollbackReduceAt = undefined;
-            restoreScrollback(managed);
+            this.reapplyScrollbackPolicy(managed);
           }
 
           void this.ensureDeferredAddons(id, managed);
@@ -1031,16 +1029,10 @@ class TerminalInstanceService {
     this.revealController.setVisible(id, isVisible, expectedGeneration);
     const managed = this.instances.get(id);
     // A pane revealed mid-stream can stay at BURST, so the tier-upgrade
-    // restore never fires; give its capacity back here instead. The stamp
-    // marks a pane shrunk while hidden — only those need it.
-    if (
-      managed &&
-      wasVisible === false &&
-      managed.isVisible &&
-      managed.lastScrollbackReduceAt !== undefined
-    ) {
+    // re-derive never fires; lift its pressure cap here instead.
+    if (managed?.scrollbackPressureCapped && wasVisible === false && managed.isVisible) {
       managed.lastScrollbackReduceAt = undefined;
-      restoreScrollback(managed);
+      this.reapplyScrollbackPolicy(managed);
     }
     if (
       isVisible &&
@@ -4081,21 +4073,33 @@ class TerminalInstanceService {
   reduceScrollbackHidden(targetLines: number): void {
     for (const managed of this.instances.values()) {
       if (managed.isVisible) continue;
+      const before = managed.terminal.options.scrollback ?? 0;
       reduceScrollback(managed, targetLines);
+      if ((managed.terminal.options.scrollback ?? 0) < before) {
+        managed.scrollbackPressureCapped = true;
+      }
     }
+  }
+
+  // Every policy re-derive goes through here. A hidden pressure-capped pane
+  // may be lowered further but never raised — a streaming agent would refill
+  // the memory mid-episode — until its reveal lifts the cap.
+  private reapplyScrollbackPolicy(managed: ManagedTerminal): void {
+    if (managed.isVisible) managed.scrollbackPressureCapped = undefined;
+    restoreScrollback(managed, { shrinkOnly: managed.scrollbackPressureCapped === true });
   }
 
   restoreScrollback(id: string): void {
     const managed = this.instances.get(id);
     if (!managed) return;
-    restoreScrollback(managed);
+    this.reapplyScrollbackPolicy(managed);
   }
 
   applyAgentPromotion(id: string, agentId: string): void {
     const managed = this.instances.get(id);
     if (!managed) return;
     if (managed.runtimeAgentId === agentId) {
-      restoreScrollback(managed);
+      this.reapplyScrollbackPolicy(managed);
       return;
     }
     managed.runtimeAgentId = agentId;
@@ -4103,7 +4107,7 @@ class TerminalInstanceService {
     // life as plain terminals and may have cursorBlink:true. Force the agent
     // policy now so background promotions don't keep the blink timer alive.
     this.applyCursorBlinkPolicy(managed);
-    restoreScrollback(managed);
+    this.reapplyScrollbackPolicy(managed);
     // Route through wantsWebGLAtTier so an off-screen promotion (background
     // worktree detected mid-stream) doesn't register a fleet-wide want; the
     // reveal path re-acquires it when the pane comes on-screen (#10671).
@@ -4119,7 +4123,7 @@ class TerminalInstanceService {
     // Demoted to plain terminal — re-evaluate the blink policy so a focused
     // pane gets its blinking cursor back.
     this.applyCursorBlinkPolicy(managed);
-    restoreScrollback(managed);
+    this.reapplyScrollbackPolicy(managed);
     // Agent demotion is authoritative — cancel any pending hide-dwell so the
     // timer can't fire later and call releaseContext on a stale slot. Any
     // visible pane stays WebGL-eligible as a plain terminal now (#11193), so
@@ -4137,15 +4141,14 @@ class TerminalInstanceService {
   // resource-profile changes after setAgentScrollbackMaxLines so the new agent
   // ceiling applies to terminals that are already open — hidden ones included,
   // since they hold most of the memory. restoreScrollback guards any shrink
-  // that would evict history. Hidden panes only ever shrink here; their reveal
-  // restores capacity.
+  // that would evict history.
   //
   // Skipped in performance mode: its fixed limit ignores the agent ceiling,
   // and its restore writes unconditionally, past those guards.
   restoreScrollbackAll(): void {
     if (usePerformanceModeStore.getState().performanceMode) return;
     for (const managed of this.instances.values()) {
-      restoreScrollback(managed, { shrinkOnly: !managed.isVisible });
+      this.reapplyScrollbackPolicy(managed);
     }
   }
 

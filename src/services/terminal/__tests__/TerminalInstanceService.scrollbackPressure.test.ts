@@ -37,6 +37,7 @@ vi.mock("@/clients", () => ({
 
 type ScrollbackTestService = {
   instances: Map<string, Record<string, unknown>>;
+  applyAgentPromotion: (id: string, agentId: string) => void;
   reduceScrollbackHidden: (targetLines: number) => void;
   restoreScrollbackAll: () => void;
 };
@@ -110,6 +111,8 @@ describe("TerminalInstanceService scrollback under memory pressure (#14215)", ()
 
       expect(scrollbackOf(hidden)).toBe(SCROLLBACK_BACKGROUND);
       expect(scrollbackOf(visible)).toBe(AGENT_SCROLLBACK_MAX_LINES);
+      expect(hidden.scrollbackPressureCapped).toBe(true);
+      expect(visible.scrollbackPressureCapped).toBeUndefined();
     });
 
     it("selects by visibility, not refresh tier", () => {
@@ -176,21 +179,39 @@ describe("TerminalInstanceService scrollback under memory pressure (#14215)", ()
       expect(scrollbackOf(scrolledBack)).toBe(AGENT_SCROLLBACK_MAX_LINES);
     });
 
-    it("never raises a hidden terminal's pressure-reduced limit", () => {
+    it("never raises a hidden pane's pressure cap", () => {
       // Raising it would let a streaming agent refill memory mid-episode; the
-      // reveal gives the capacity back.
+      // reveal gives the capacity back. An uncapped hidden pane, or a visible
+      // one, still takes the new ceiling.
       setAgentScrollbackMaxLines(AGENT_SCROLLBACK_MAX_LINES - 1000);
-      const reduced = makeManaged();
-      const visible = makeManaged({ isVisible: true });
-      reduced.terminal.options.scrollback = SCROLLBACK_BACKGROUND;
-      visible.terminal.options.scrollback = SCROLLBACK_BACKGROUND;
-      service.instances.set("hidden", reduced);
+      const capped = makeManaged({ scrollbackPressureCapped: true });
+      const uncapped = makeManaged();
+      const visible = makeManaged({ isVisible: true, scrollbackPressureCapped: true });
+      for (const managed of [capped, uncapped, visible]) {
+        managed.terminal.options.scrollback = SCROLLBACK_BACKGROUND;
+      }
+      service.instances.set("capped", capped);
+      service.instances.set("uncapped", uncapped);
       service.instances.set("visible", visible);
 
       service.restoreScrollbackAll();
 
-      expect(scrollbackOf(reduced)).toBe(SCROLLBACK_BACKGROUND);
-      expect(scrollbackOf(visible)).toBe(getScrollbackForType(true, 5000));
+      const ceiling = getScrollbackForType(true, 5000);
+      expect(scrollbackOf(capped)).toBe(SCROLLBACK_BACKGROUND);
+      expect(scrollbackOf(uncapped)).toBe(ceiling);
+      expect(scrollbackOf(visible)).toBe(ceiling);
+      expect(visible.scrollbackPressureCapped).toBeUndefined();
+    });
+
+    it("keeps a hidden pane's pressure cap across agent promotion", () => {
+      const capped = makeManaged({ scrollbackPressureCapped: true });
+      capped.terminal.options.scrollback = SCROLLBACK_BACKGROUND;
+      service.instances.set("t1", capped);
+
+      service.applyAgentPromotion("t1", "claude");
+      service.applyAgentPromotion("t1", "codex");
+
+      expect(scrollbackOf(capped)).toBe(SCROLLBACK_BACKGROUND);
     });
 
     it("does nothing in performance mode, whose fixed limit ignores the agent ceiling", () => {

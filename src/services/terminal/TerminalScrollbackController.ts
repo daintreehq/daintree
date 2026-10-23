@@ -78,9 +78,8 @@ export function reduceScrollback(
 
 export interface RestoreScrollbackOptions {
   /**
-   * Only apply the policy where it lowers the limit. For hidden panes in a
-   * bulk re-derive: raising one would undo a memory-pressure reduce while
-   * nobody can see the pane, and its reveal restores capacity anyway.
+   * Only apply the policy where it lowers the limit — for a hidden pane whose
+   * memory-pressure cap must hold until it is revealed.
    */
   shrinkOnly?: boolean;
 }
