@@ -1,4 +1,4 @@
-import { useMemo, useState, type KeyboardEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { isFullAgentDirectory } from "@shared/types/agentDirectory";
 import { cn } from "@/lib/utils";
 import { useAgentDirectory } from "@/hooks/useAgentDirectory";
@@ -37,15 +37,34 @@ export function AssistantPicker({ open, onClose }: { open: boolean; onClose: () 
     items.findIndex((item) => item.id === activeId)
   );
   const active = items[activeIndex] ?? null;
+  // The list arrives after the popover has opened and placed focus on itself:
+  // the keyboard moves into it then, unless the person has gone elsewhere.
+  const rootRef = useRef<HTMLDivElement>(null);
+  const listRef = useRef<HTMLDivElement>(null);
+  const hasList = items.length > 0;
+  useEffect(() => {
+    if (!hasList) return;
+    const root =
+      rootRef.current?.closest<HTMLElement>("[data-radix-popper-content-wrapper]") ??
+      rootRef.current;
+    const focused = document.activeElement;
+    if (focused === null || focused === document.body || (root?.contains(focused) ?? false)) {
+      listRef.current?.focus({ preventScroll: true });
+    }
+  }, [hasList]);
 
   const choose = (index: number) => {
     const item = items[index];
     if (!item) return;
     setRefusal(null);
-    if (item.handbackAt !== null) seeHandback(item.id, item.handbackAt);
+    // Seen only once it is in front of the person: a refused open shows nothing.
     void openAssistantItem(item).then((refused) => {
-      if (refused === null) onClose();
-      else setRefusal(refused);
+      if (refused !== null) {
+        setRefusal(refused);
+        return;
+      }
+      if (item.handbackAt !== null) seeHandback(item.id, item.handbackAt);
+      onClose();
     });
   };
 
@@ -72,7 +91,7 @@ export function AssistantPicker({ open, onClose }: { open: boolean; onClose: () 
 
   const partial = directory !== null && !isFullAgentDirectory(directory);
   return (
-    <div className="flex w-80 flex-col" data-testid="assistant-picker">
+    <div ref={rootRef} className="flex w-80 flex-col" data-testid="assistant-picker">
       <div className="px-3 pt-2.5 pb-1.5 text-xs font-medium text-text-secondary">
         Daintree Assistants
       </div>
@@ -88,6 +107,7 @@ export function AssistantPicker({ open, onClose }: { open: boolean; onClose: () 
         </p>
       ) : (
         <div
+          ref={listRef}
           role="listbox"
           aria-label="Daintree Assistants"
           aria-activedescendant={active ? `picker-${canopyAssistantDomId(active.id)}` : undefined}

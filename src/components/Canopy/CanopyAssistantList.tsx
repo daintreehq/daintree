@@ -1,4 +1,4 @@
-import { useMemo, type KeyboardEvent } from "react";
+import { useState, type KeyboardEvent } from "react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Callout } from "@/components/ui/Callout";
@@ -103,7 +103,9 @@ export function CanopyAssistantPane({
   refusal: string | null;
   onOpen: () => void;
 }) {
-  const api = useMemo(() => assistantTerminalApi(item.subject), [item.subject]);
+  // Made once per pane: the pane is keyed by the exact subject, and a fresh
+  // directory read hands over an equal subject that must not reopen the stream.
+  const [api] = useState(() => assistantTerminalApi(item.subject));
   return (
     <div className="flex min-h-0 flex-1 flex-col" data-testid="canopy-assistant-pane">
       <div className="flex h-9 min-w-0 shrink-0 items-center gap-2 px-1 text-xs select-none">

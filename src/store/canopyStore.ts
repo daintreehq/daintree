@@ -216,6 +216,18 @@ function readHandbacksSeen(): Record<string, number> {
   }
 }
 
+/** Each assistant's newest seen of the two, kept to the cap. */
+function mergeHandbacksSeen(
+  held: AssistantHandbacksSeen,
+  stored: AssistantHandbacksSeen
+): Record<string, number> {
+  const next: Record<string, number> = { ...held };
+  for (const [id, at] of Object.entries(stored)) next[id] = Math.max(next[id] ?? -Infinity, at);
+  const ids = Object.keys(next);
+  for (const id of ids.slice(0, Math.max(0, ids.length - MAX_HANDBACKS_SEEN))) delete next[id];
+  return next;
+}
+
 /**
  * Merged over what is stored and what this view holds, since every project
  * view writes the key: the newest seen of each wins, and a failed write still
@@ -226,10 +238,7 @@ function saveHandbackSeen(
   assistantId: string,
   observedAt: number
 ): Record<string, number> {
-  const next: Record<string, number> = { ...held };
-  for (const [id, at] of Object.entries(readHandbacksSeen())) {
-    next[id] = Math.max(next[id] ?? -Infinity, at);
-  }
+  const next = mergeHandbacksSeen(held, readHandbacksSeen());
   const newest = Math.max(next[assistantId] ?? -Infinity, observedAt);
   delete next[assistantId];
   next[assistantId] = newest;
@@ -463,7 +472,13 @@ export const useCanopyStore = create<CanopyState>((set) => ({
 if (typeof window !== "undefined") {
   window.addEventListener("storage", (event) => {
     if (event.key === HANDBACKS_SEEN_STORAGE_KEY) {
-      useCanopyStore.setState({ assistantHandbacksSeen: readHandbacksSeen() });
+      // Merged, never replaced: a sibling's write can have raced this view's own.
+      useCanopyStore.setState((state) => ({
+        assistantHandbacksSeen: mergeHandbacksSeen(
+          state.assistantHandbacksSeen,
+          readHandbacksSeen()
+        ),
+      }));
       return;
     }
     if (event.key !== CANOPY_ACKNOWLEDGED_STORAGE_KEY) return;

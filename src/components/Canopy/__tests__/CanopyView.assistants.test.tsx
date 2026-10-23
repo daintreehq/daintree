@@ -179,7 +179,7 @@ beforeEach(() => {
     entries: [assistant(0), assistant(1)],
   };
   useProjectStore.setState({
-    projects: [{ id: "p1", path: "/repo", name: "app", lastOpened: NOW }],
+    projects: [{ id: "p1", path: "/repo", name: "app", emoji: "🌳", lastOpened: NOW }],
   });
   useFleetSnapshotStore.setState({
     snapshot: {
@@ -282,12 +282,15 @@ describe("CanopyView role filter", () => {
     await act(async () => {
       await new Promise((resolve) => setTimeout(resolve, 250));
     });
+    // The search did reach the workers' terminals, and only theirs.
+    expect(canopy.searchScreens).toHaveBeenCalled();
     const told = [
       ...canopy.setShown.mock.calls.flatMap((call) => call[0]),
       ...canopy.searchScreens.mock.calls.flatMap((call) => call[0].map((target) => target.runId)),
       ...canopy.markSeen.mock.calls.map((call) => call[0]),
     ];
-    expect(told.some((id) => String(id).startsWith("help-"))).toBe(false);
+    const workers = new Set(["waiting", "working"]);
+    expect(told.filter((id) => !workers.has(String(id)))).toEqual([]);
     expect(canopy.watchTerminal).not.toHaveBeenCalled();
     expect(assistantRows()).toHaveLength(2);
   });
@@ -347,6 +350,20 @@ describe("CanopyView role filter", () => {
     expect(document.body.textContent).toContain("Couldn't open this assistant");
     expect(useCanopyStore.getState().isOpen).toBe(true);
     expect(dispatchMock).not.toHaveBeenCalled();
+  });
+
+  it("marks only the handback shown as seen, not each one sorted up after it", async () => {
+    directory.entries = [
+      assistant(0, { handback: { observedAt: NOW - 500 } }),
+      assistant(1, { handback: { observedAt: NOW - 400 } }),
+    ];
+    useCanopyStore.setState({ roleFilter: "assistants" });
+    render(<CanopyView />);
+    await settle();
+    await settle();
+    expect(Object.values(useCanopyStore.getState().assistantHandbacksSeen)).toEqual([NOW - 500]);
+    expect(assistantRows().map((row) => row.getAttribute("data-ask"))).toEqual(["handback", null]);
+    expect(assistantRows()[1]!.getAttribute("aria-selected")).toBe("true");
   });
 
   it("says when assistants couldn't all be listed, rather than that none run", async () => {

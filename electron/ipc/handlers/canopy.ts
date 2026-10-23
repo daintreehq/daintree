@@ -1138,9 +1138,18 @@ export const canopyNamespace = defineIpcNamespace({
     readAgentDirectory: op(
       CANOPY_METHOD_CHANNELS.readAgentDirectory,
       async (ctx, options?: { projectId?: string }): Promise<AgentDirectory> => {
-        checkRateLimit(CANOPY_METHOD_CHANNELS.readAgentDirectory, 60, 10_000);
+        // Per view: every open Canopy and picker reads every few seconds, and
+        // one window's surfaces must not spend another's allowance.
+        checkRateLimit(
+          `${CANOPY_METHOD_CHANNELS.readAgentDirectory}#${ctx.webContentsId}`,
+          20,
+          10_000
+        );
         assertViewsThisMachine(ctx);
-        if (options !== undefined && (typeof options !== "object" || options === null)) {
+        if (
+          options !== undefined &&
+          (typeof options !== "object" || options === null || Array.isArray(options))
+        ) {
           throw new AppError({ code: "VALIDATION", message: "Invalid directory options" });
         }
         const projectId = options?.projectId;

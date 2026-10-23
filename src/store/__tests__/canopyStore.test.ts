@@ -285,3 +285,18 @@ describe("assistant handbacks seen", () => {
     expect(store.getState().assistantHandbacksSeen).toEqual({ a: 5_000, b: 3_000, c: 4_000 });
   });
 });
+
+describe("assistant handbacks seen across views", () => {
+  const KEY = "daintree-canopy-assistant-handbacks";
+  afterEach(() => window.localStorage.removeItem(KEY));
+
+  it("merges a sibling view's write rather than taking it whole", async () => {
+    vi.resetModules();
+    const store = (await import("../canopyStore")).useCanopyStore;
+    store.getState().seeAssistantHandback("a", 2_000);
+    // A sibling raced it, writing from a copy that never had "a".
+    window.localStorage.setItem(KEY, JSON.stringify({ b: 1_000 }));
+    window.dispatchEvent(new StorageEvent("storage", { key: KEY }));
+    expect(store.getState().assistantHandbacksSeen).toEqual({ a: 2_000, b: 1_000 });
+  });
+});

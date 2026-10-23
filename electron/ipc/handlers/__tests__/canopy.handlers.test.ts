@@ -1523,7 +1523,14 @@ describe("canopy IPC", () => {
       });
       expect(directoryRead).toHaveBeenLastCalledWith({ projectId: "project-1" });
       directoryRead.mockClear();
-      for (const options of [{ projectId: "" }, { projectId: 7 }]) {
+      for (const options of [
+        { projectId: "" },
+        { projectId: 7 },
+        { projectId: "x".repeat(257) },
+        [],
+        null,
+        "project-1",
+      ]) {
         const result = await outcome(
           invoke(CANOPY_METHOD_CHANNELS.readAgentDirectory, fakeSender(4), options)
         );

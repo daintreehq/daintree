@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -189,6 +189,7 @@ export function ToolbarAssistantButton({
   const agentChoices = useAssistantAgentChoices();
   const hasAgentChoice = agentChoices.length > 1;
   const [pickerOpen, setPickerOpen] = useState(false);
+  const pickerHandoffRef = useRef(false);
   // A view put in the background lists nothing for anyone: the picker goes with it.
   useEffect(() => {
     if (!pickerOpen) return;
@@ -267,8 +268,23 @@ export function ToolbarAssistantButton({
             </Tooltip>
           </span>
         </ContextMenuTrigger>
-        <ContextMenuContent>
-          <ContextMenuItem onSelect={() => setPickerOpen(true)}>Find an assistant…</ContextMenuItem>
+        <ContextMenuContent
+          onCloseAutoFocus={(event) => {
+            // The picker takes the keyboard: the menu closing hands it nowhere else,
+            // or focus leaving the picker would dismiss it as it opens.
+            if (!pickerHandoffRef.current) return;
+            pickerHandoffRef.current = false;
+            event.preventDefault();
+          }}
+        >
+          <ContextMenuItem
+            onSelect={() => {
+              pickerHandoffRef.current = true;
+              setPickerOpen(true);
+            }}
+          >
+            Find an assistant…
+          </ContextMenuItem>
           {hasAgentChoice && <ContextMenuSeparator />}
           {hasAgentChoice &&
             agentChoices.map((agentId) => (

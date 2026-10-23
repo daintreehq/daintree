@@ -60,7 +60,9 @@ beforeEach(() => {
     configurable: true,
     writable: true,
   });
-  useProjectStore.setState({ projects: [{ id: "p1", path: "/repo", name: "app", lastOpened: 1 }] });
+  useProjectStore.setState({
+    projects: [{ id: "p1", path: "/repo", name: "app", emoji: "🌳", lastOpened: 1 }],
+  });
   // Canopy's reading is off: the picker doesn't need it.
   useCanopyStore.setState({ mode: "unset", snapshot: null, assistantHandbacksSeen: {} });
 });
@@ -141,6 +143,23 @@ describe("AssistantPicker", () => {
       fireEvent.click(options()[0]!);
     });
     expect(Object.values(useCanopyStore.getState().assistantHandbacksSeen)).toEqual([50]);
+  });
+
+  it("keeps a handback unseen when its assistant couldn't be opened", async () => {
+    openInAssistantMock.mockResolvedValueOnce({ ok: false, reason: "not-attached" });
+    directory.entries = [assistant(0, { handback: { observedAt: 50 } })];
+    render(<AssistantPicker open onClose={() => {}} />);
+    await flush();
+    await act(async () => {
+      fireEvent.click(options()[0]!);
+    });
+    expect(useCanopyStore.getState().assistantHandbacksSeen).toEqual({});
+  });
+
+  it("takes the keyboard into the list once it arrives", async () => {
+    render(<AssistantPicker open onClose={() => {}} />);
+    await flush();
+    expect(document.activeElement?.getAttribute("role")).toBe("listbox");
   });
 
   it("says when it couldn't list every assistant, rather than that none run", async () => {

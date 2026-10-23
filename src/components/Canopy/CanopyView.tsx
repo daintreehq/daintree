@@ -1245,9 +1245,12 @@ function CanopyInbox({
   // While searching, only a match is ever open.
   // An assistant chosen in the list, or the first one listed while no worker is:
   // the pane shows it in place of a worker's.
+  // A worker chosen and only folded away (Archived shut) keeps the pane.
+  const workerChosen =
+    workersShown && focusedId !== null && items.some((item) => item.runId === focusedId);
   const selectedAssistant: CanopyAssistantItem | null =
     shownAssistants.find((item) => item.id === assistantId) ??
-    (visible.length === 0 ? (shownAssistants[0] ?? null) : null);
+    (visible.length === 0 && !workerChosen ? (shownAssistants[0] ?? null) : null);
   const focusedItem =
     selectedAssistant !== null || !workersShown
       ? null
@@ -1485,11 +1488,15 @@ function CanopyInbox({
       else setFocusedId(null);
       return;
     }
-    if (!searching || focusedIndex !== -1 || visible.length === 0) return;
+    // An assistant the person chose keeps the pane; the worker list's own
+    // recovery waits until they come back to it.
+    if (!searching || focusedIndex !== -1 || visible.length === 0 || selectedAssistant !== null) {
+      return;
+    }
     const index = topOwedRef.current ? 0 : Math.min(lastIndexRef.current, visible.length - 1);
     topOwedRef.current = false;
     selectNow(visible[index]!.runId);
-  }, [isOpen, appliedQuery, searching, focusedIndex, visible, selectNow]);
+  }, [isOpen, appliedQuery, searching, focusedIndex, visible, selectNow, selectedAssistant]);
 
   // Select a run and take the keyboard into its pane — its composer or its
   // terminal — rather than onto its row.
@@ -2165,10 +2172,14 @@ function CanopyInbox({
       return;
     }
     const plain = !event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey;
-    // No worker listed: the keys go to the assistants instead.
-    if (plain && visible.length === 0 && shownAssistants.length > 0) {
-      const target = selectedAssistant ?? shownAssistants[0]!;
-      if (event.key === "ArrowDown" || event.key === "Tab") {
+    // An assistant in the pane, or no worker row ahead of the assistants: the
+    // keys go to the assistant, never to a worker the person can't see.
+    const toAssistant =
+      selectedAssistant ??
+      (listed.length === 0 && shownAssistants.length > 0 ? shownAssistants[0]! : null);
+    if (plain && toAssistant !== null) {
+      const target = toAssistant;
+      if (event.key === "Tab" || (event.key === "ArrowDown" && listed.length === 0)) {
         event.preventDefault();
         event.stopPropagation();
         focusAssistantNow(target.id);
@@ -2447,19 +2458,24 @@ function CanopyInbox({
             ? "No assistant is running in this project."
             : "No assistant is running. Start one from the Assistant panel.";
   // The assistant in the pane has had its handback in front of the person.
+  // The one shown by default is pinned first, so a handback seen there and
+  // moving it down the list never hands the pane — and a "seen" — to the next.
   const paneAssistantId = isOpen ? (selectedAssistant?.id ?? null) : null;
   const paneHandbackAt = isOpen ? (selectedAssistant?.handbackAt ?? null) : null;
   useEffect(() => {
-    if (paneAssistantId !== null && paneHandbackAt !== null) {
-      seeAssistantHandback(paneAssistantId, paneHandbackAt);
+    if (paneAssistantId === null) return;
+    if (assistantId !== paneAssistantId) {
+      setAssistantId(paneAssistantId);
+      return;
     }
-  }, [paneAssistantId, paneHandbackAt, seeAssistantHandback]);
-  // Each opening starts from the list's own default, as the worker selection does.
+    if (paneHandbackAt !== null) seeAssistantHandback(paneAssistantId, paneHandbackAt);
+  }, [paneAssistantId, paneHandbackAt, assistantId, seeAssistantHandback]);
+  // Each opening, and each change of role, starts from the list's own default,
+  // as the worker selection does.
   useEffect(() => {
-    if (isOpen) return;
     setAssistantId(null);
     setAssistantRefusal(null);
-  }, [isOpen]);
+  }, [isOpen, roleFilter]);
 
   const headerControls = (
     <>
