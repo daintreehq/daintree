@@ -53,7 +53,7 @@ A view with `location: "settings"` is your plugin's custom settings section, for
 { "id": "connection", "componentPath": "dist/settings.js", "location": "settings" }
 ```
 
-The 0.1.0 CLI on npm accepts only `location: "panel"` views, so its `validate` and `package` refuse this entry: Not in the 0.1.0 release on npm; it ships in the next one.
+The 0.1.0 CLI on npm accepts only `location: "panel"` views, so its `validate` and `package` refuse this entry: Not in the 0.1.0 release on npm; it ships in 0.2.0.
 
 The host mounts it in your settings home, below the generated fields. The section heading is the home's own, and the host draws one `SettingsGroup` around your view, so the view renders **rows** and nothing else: kit `SettingsRow`s under one root, with no heading, no card, and no `SettingsSection` or `SettingsGroup` of its own. There is no Save either — apply each change as it is made, like every other settings row — so a `SettingsActions` Save row does not belong in a `location: "settings"` view.
 
@@ -349,13 +349,13 @@ The module has to run in both places: relative imports with their file extension
 | `loadDocumentPackage` | Loads a library the host document keeps across reloads. See [Document packages](./document-packages.md). |
 | `HostDisconnectedError`, `OutcomeUnknownError` | What a host call fails with when a remote window's link drops, before or after the call was sent. See [Host API → `useHostChannel`](./host-api.md#usehostchannel--requestresponse-the-pull-half). |
 
-A zero-build view gets every hook here from the host. A bundled view gets them from the SDK it installs, and 0.1.0 on npm has only the first row and `loadDocumentPackage`; for everything else in this table: Not in the 0.1.0 release on npm; it ships in the next one.
+A zero-build view gets every hook here from the host. A bundled view gets them from the SDK it installs, and 0.1.0 on npm has only the first row and `loadDocumentPackage`; for everything else in this table: Not in the 0.1.0 release on npm; it ships in 0.2.0.
 
-A bundled view can also import `setAgentContextDragData` from the root `@daintreehq/plugin-sdk` entry ([Handing work to an agent by drag](#handing-work-to-an-agent-by-drag)); a zero-build view writes the same JSON by hand. The helper is not in the 0.1.0 release on npm; it ships in the next one. `@daintreehq/plugin-ui` is never bundled: the preset leaves it external and the host serves it. The 0.1.0 preset on npm externalizes React alone, so with it a view names `@daintreehq/plugin-ui` in `daintreePlugin({ externals: [...] })`.
+A bundled view can also import `setAgentContextDragData` from the root `@daintreehq/plugin-sdk` entry ([Handing work to an agent by drag](#handing-work-to-an-agent-by-drag)); a zero-build view writes the same JSON by hand. The helper is not in the 0.1.0 release on npm; it ships in 0.2.0. `@daintreehq/plugin-ui` is never bundled: the preset leaves it external and the host serves it. The 0.1.0 preset on npm externalizes React alone, so with it a view names `@daintreehq/plugin-ui` in `daintreePlugin({ externals: [...] })`.
 
 There are no hooks for worktrees, settings or commands. A view reads its own worktree from the `worktreeId` prop and gets everything else from the worker.
 
-**Types.** A scaffolded plugin's `tsconfig.json` already lists `"types": ["@daintreehq/plugin-sdk/view-globals", "@daintreehq/plugin-sdk/plugin-ui"]`. The first declares `window.electron.plugin` (`invoke`, `on`, `onPanel` — and nothing else on `window.electron`, on purpose); the second declares the kit. Without them a view that calls the bridge fails `tsc` with `Property 'electron' does not exist on type 'Window'` even though Vite builds it. Add both to a hand-made tsconfig. The two type entries: Not in the 0.1.0 release on npm; it ships in the next one.
+**Types.** A scaffolded plugin's `tsconfig.json` already lists `"types": ["@daintreehq/plugin-sdk/view-globals", "@daintreehq/plugin-sdk/plugin-ui"]`. The first declares `window.electron.plugin` (`invoke`, `on`, `onPanel` — and nothing else on `window.electron`, on purpose); the second declares the kit. Without them a view that calls the bridge fails `tsc` with `Property 'electron' does not exist on type 'Window'` even though Vite builds it. Add both to a hand-made tsconfig. The two type entries: Not in the 0.1.0 release on npm; it ships in 0.2.0.
 
 ## Host UI components
 
@@ -494,7 +494,7 @@ DOM styled with token classes follows a theme switch on its own. Code that paint
 
 ### Types
 
-For TypeScript, `@daintreehq/plugin-sdk` ships the kit's declaration: `"types": ["@daintreehq/plugin-sdk/plugin-ui"]` in `compilerOptions` (a scaffolded plugin already has it), and every component's props type comes with it (`ButtonProps`, `DataTableProps`, …). The `plugin-ui` type entry: Not in the 0.1.0 release on npm; it ships in the next one.
+For TypeScript, `@daintreehq/plugin-sdk` ships the kit's declaration: `"types": ["@daintreehq/plugin-sdk/plugin-ui"]` in `compilerOptions` (a scaffolded plugin already has it), and every component's props type comes with it (`ButtonProps`, `DataTableProps`, …). The `plugin-ui` type entry: Not in the 0.1.0 release on npm; it ships in 0.2.0.
 
 ### `Markdown`
 
@@ -699,7 +699,7 @@ Daintree measures every plugin as it runs and shows it in two places:
 
 The budgets: activation 500 ms, view load 300 ms, first paint 500 ms, commit p95 16 ms, invoke p95 250 ms, 60 pushes and 1 MiB per second sustained, worker memory 256 MiB. They are observations for this session, not a verdict: a plugin that was active during a slow frame didn't necessarily cause it, invokes that waited on a consent prompt are left out of the latency, and Daintree never slows or stops a plugin for going over a budget. Use them to find what to look at, then profile it in DevTools.
 
-Before shipping, run **`npx daintree-plugin lint`** in the plugin folder (the command is not in the 0.1.0 release on npm; it ships in the next one). It reads your view and worker source and flags the patterns above — interval polling in a view, whole-state pushes, a render per event, a subscription never disposed, a bundled copy of React (an error) — and the consistency ones: stock palette colours (an error), `dark:`, raw shadows, radii and text sizes, a hand-rolled button, form control, spinner, badge or icon, a native dialog, a container query on its own container, and classes that compile to nothing. `--strict` fails on warnings too; `daintree-plugin doctor` runs it as part of its checks.
+Before shipping, run **`npx daintree-plugin lint`** in the plugin folder (the command is not in the 0.1.0 release on npm; it ships in 0.2.0). It reads your view and worker source and flags the patterns above — interval polling in a view, whole-state pushes, a render per event, a subscription never disposed, a bundled copy of React (an error) — and the consistency ones: stock palette colours (an error), `dark:`, raw shadows, radii and text sizes, a hand-rolled button, form control, spinner, badge or icon, a native dialog, a container query on its own container, and classes that compile to nothing. `--strict` fails on warnings too; `daintree-plugin doctor` runs it as part of its checks.
 
 ## When an agent captures your panel
 

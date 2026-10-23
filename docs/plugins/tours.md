@@ -4,7 +4,7 @@ A plugin can ship a narrated welcome tour that plays in the same dialog as the D
 
 For the manifest field table on its own, see [Contribution points → Tours](./contribution-points.md#tours--shipped).
 
-To have Claude Code author the tour with you, use the bundled `daintree-tour` skill: plugins scaffolded with `daintree-plugin new` already include it in `.claude/skills/daintree-tour/`, and `npx daintree-plugin skill add` copies it into an existing plugin. Start Claude Code in the plugin directory and ask for a tour, or run `/daintree-tour`. The skill and the `daintree-plugin skill` and `tour` commands this guide uses are not in the 0.1.0 release on npm; they ship in the next one.
+To have Claude Code author the tour with you, use the bundled `daintree-tour` skill: plugins scaffolded with `daintree-plugin new` already include it in `.claude/skills/daintree-tour/`, and `npx daintree-plugin skill add` copies it into an existing plugin. Start Claude Code in the plugin directory and ask for a tour, or run `/daintree-tour`. The skill and the `daintree-plugin skill` and `tour` commands this guide uses are not in the 0.1.0 release on npm; they ship in 0.2.0.
 
 Tours need Daintree 0.39.0 or later: `contributes.tours` and the `@daintreehq/tour` import-map specifiers first shipped in v0.39.0.
 
@@ -176,7 +176,7 @@ export default {
 };
 ```
 
-**`vite.config.ts`** — build it with `@daintreehq/plugin-vite`, which leaves `react` and `@daintreehq/tour` external for the host to supply. `@daintreehq/plugin-vite` 0.1.0 on npm externalizes React alone; with it, add `externals: [/^@daintreehq\/tour($|\/)/]` to `daintreePlugin()` until the next release. A scene never needs `@daintreehq/tour` installed to run: Daintree serves every `@daintreehq/tour` specifier from its import map. Installed as a dev dependency it gives you the types and is what `tour preview` plays your scenes against, alongside `lucide-react`, which the kit's icons come from and the preview needs to draw them. `@daintreehq/tour` has not been published to npm, so outside the Daintree repository type-checking a scene and running `tour preview` both wait until it is.
+**`vite.config.ts`** — build it with `@daintreehq/plugin-vite`, which leaves `react` and `@daintreehq/tour` external for the host to supply. `@daintreehq/plugin-vite` 0.1.0 on npm externalizes React alone; with it, add `externals: [/^@daintreehq\/tour($|\/)/]` to `daintreePlugin()` until 0.2.0. A scene never needs `@daintreehq/tour` installed to run: Daintree serves every `@daintreehq/tour` specifier from its import map. Installed as a dev dependency it gives you the types and is what `tour preview` plays your scenes against, alongside `lucide-react`, which the kit's icons come from and the preview needs to draw them. `@daintreehq/tour` has not been published to npm, so outside the Daintree repository type-checking a scene and running `tour preview` both wait until it is.
 
 ```ts
 import { daintreePlugin } from "@daintreehq/plugin-vite";
