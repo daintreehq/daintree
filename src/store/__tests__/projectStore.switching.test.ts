@@ -139,11 +139,15 @@ const projectB = {
   lastOpened: Date.now(),
 };
 
-beforeEach(() => {
+beforeEach(async () => {
   mockActiveWorktreeId = null;
   mockTerminalGrids.clear();
   vi.resetModules();
   vi.clearAllMocks();
+  // Fresh after the reset and the service mock never registers itself, so
+  // load it before projectStore's peek() reads the terminal sizes.
+  const { load } = await import("@/services/terminal/terminalInstanceServiceAccessor");
+  await load();
 });
 
 afterEach(() => {

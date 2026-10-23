@@ -36,7 +36,7 @@ import {
 } from "@shared/types/panel";
 import { TerminalRefreshTier as TerminalRefreshTierEnum } from "@/types";
 import { terminalRegistryController } from "@/controllers";
-import { terminalInstanceService } from "@/services/TerminalInstanceService";
+import { peek as peekTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
 import { useWorktreeSelectionStore } from "./worktreeStore";
 import { isAssistantFocused } from "./macroFocusStore";
 import { isMcpSpawnFocusSuppressed } from "./mcpSpawnFocusGuard";
@@ -1259,7 +1259,7 @@ export const usePanelStore = create<PanelGridState>()(
 
         for (const tid of state.panelIds) {
           try {
-            terminalInstanceService.destroy(tid);
+            peekTerminalService()?.destroy(tid);
           } catch (error) {
             logWarn(`Failed to destroy terminal instance ${tid}`, { error });
           }
@@ -1305,14 +1305,14 @@ export const usePanelStore = create<PanelGridState>()(
         flushPanelPersistence();
 
         const allTerminalIds = [...state.panelIds];
-        terminalInstanceService.suppressResizesDuringProjectSwitch(
+        peekTerminalService()?.suppressResizesDuringProjectSwitch(
           allTerminalIds,
           PROJECT_SWITCH_RESIZE_SUPPRESSION_MS
         );
 
         for (const tid of state.panelIds) {
           try {
-            terminalInstanceService.detachForProjectSwitch(tid);
+            peekTerminalService()?.detachForProjectSwitch(tid);
           } catch (error) {
             logWarn(`Failed to detach terminal instance ${tid}`, { error });
           }
@@ -1351,14 +1351,14 @@ export const usePanelStore = create<PanelGridState>()(
         flushPanelPersistence();
 
         const allTerminalIds = [...state.panelIds];
-        terminalInstanceService.suppressResizesDuringProjectSwitch(
+        peekTerminalService()?.suppressResizesDuringProjectSwitch(
           allTerminalIds,
           PROJECT_SWITCH_RESIZE_SUPPRESSION_MS
         );
 
         for (const tid of state.panelIds) {
           try {
-            terminalInstanceService.detachForProjectSwitch(tid);
+            peekTerminalService()?.detachForProjectSwitch(tid);
           } catch (error) {
             logWarn(`Failed to detach terminal instance ${tid}`, { error });
           }

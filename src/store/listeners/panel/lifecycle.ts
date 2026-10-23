@@ -2,7 +2,7 @@ import type { TerminalStatusPayload } from "@shared/types";
 import type { TerminalReliabilityMetricPayload } from "@shared/types/pty-host";
 import { isPtyPanel } from "@shared/types/panel";
 import { terminalRegistryController } from "@/controllers";
-import { terminalInstanceService } from "@/services/TerminalInstanceService";
+import { peek as peekTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useResourceMonitoringStore } from "@/store/resourceMonitoringStore";
 import { isAgentTerminal } from "@/utils/terminalType";
@@ -519,7 +519,7 @@ export function setupLifecycleListeners(): DisposableStore {
         // never persist via updateFlowStatus or the runtime status would
         // freeze on "data-loss" forever.
         if (status === "data-loss") {
-          terminalInstanceService.injectDataLossMarker(id, droppedBytes ?? 0);
+          peekTerminalService()?.injectDataLossMarker(id, droppedBytes ?? 0);
           return;
         }
         // FUTURE_SAB: `suspended` and `paused-user` are excluded from
@@ -666,7 +666,7 @@ export function setupLifecycleListeners(): DisposableStore {
   d.add(
     toDisposable(
       terminalRegistryController.onReduceScrollback(({ targetLines }) => {
-        terminalInstanceService.reduceScrollbackHidden(targetLines);
+        peekTerminalService()?.reduceScrollbackHidden(targetLines);
       })
     )
   );
@@ -675,7 +675,7 @@ export function setupLifecycleListeners(): DisposableStore {
     toDisposable(
       terminalRegistryController.onRestoreScrollback(({ terminalIds }) => {
         for (const id of terminalIds) {
-          terminalInstanceService.restoreScrollback(id);
+          peekTerminalService()?.restoreScrollback(id);
         }
       })
     )

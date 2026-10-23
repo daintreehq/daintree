@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/controllers", () => ({
   terminalRegistryController: {
@@ -47,6 +47,7 @@ const baseWatched = () => new Set<string>();
 import { usePanelStore } from "../panelStore";
 import { terminalRegistryController } from "@/controllers";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
+import { load as loadTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
 
 function resetStore() {
   usePanelStore.setState((s) => ({
@@ -71,6 +72,12 @@ function resetStore() {
     lastClosedConfig: null,
   }));
 }
+
+// The service mock never evaluates the real module, so nothing registers it;
+// loading caches the mock for the synchronous peek() call sites.
+beforeAll(async () => {
+  await loadTerminalService();
+});
 
 describe("panelStore adversarial", () => {
   beforeEach(() => {

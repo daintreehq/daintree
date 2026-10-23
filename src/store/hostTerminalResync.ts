@@ -4,6 +4,8 @@ import type { BackendTerminalInfo, TerminalReconnectResult } from "@shared/types
 import { getWorktreePathIndex, getWorktreeSelectionSnapshot } from "@/store/storeAccessors";
 import { cancelDriveLeaseHold, isHeldForDriveLease } from "@/store/driveLeaseWaitStore";
 import { logWarn } from "@/utils/logger";
+import { load as loadTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
+import type { TerminalPaintPlane } from "@/services/TerminalInstanceService";
 import { isSpawnUnconfirmed } from "@/store/slices/panelRegistry/unconfirmedSpawn";
 
 export interface HostTerminalResyncOptions {
@@ -41,9 +43,9 @@ export async function resyncHostTerminals(
 ): Promise<void> {
   // Taken before asking, so a pane opened while the answer is in flight is
   // never judged against a list that predates it.
-  const [{ usePanelStore }, { terminalInstanceService }] = await Promise.all([
+  const [{ usePanelStore }, terminalInstanceService] = await Promise.all([
     import("@/store/panelStore"),
-    import("@/services/TerminalInstanceService"),
+    loadTerminalService(),
   ]);
   const knownBefore = new Set(usePanelStore.getState().panelIds);
   const before = usePanelStore.getState();
@@ -229,7 +231,7 @@ async function observeVanishedTerminals(
     return;
   }
   if (!options.isCurrent()) return;
-  const { terminalInstanceService } = await import("@/services/TerminalInstanceService");
+  const terminalInstanceService = await loadTerminalService();
   if (!options.isCurrent()) return;
   const state = getState();
   for (const id of live) {
@@ -276,10 +278,7 @@ type PanelStore = typeof import("@/store/panelStore").usePanelStore;
 function adoptAwaitedTerminals(
   infos: BackendTerminalInfo[],
   store: PanelStore,
-  instances: Pick<
-    typeof import("@/services/TerminalInstanceService").terminalInstanceService,
-    "fetchAndRestore"
-  >
+  instances: Pick<TerminalPaintPlane, "fetchAndRestore">
 ): void {
   for (const info of infos) {
     if (info.hasPty === false || info.isTrashed) continue;

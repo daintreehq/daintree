@@ -3,8 +3,9 @@
  * place, on a fresh terminal, and only while it still shows that loss.
  */
 
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { beforeAll, describe, it, expect, beforeEach, vi } from "vitest";
 import { isPtyPanel, type PtyPanelData } from "@shared/types/panel";
+import { load as loadTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
 
 vi.mock("@/clients", () => ({
   terminalClient: {
@@ -136,6 +137,12 @@ function relaunch(id: string, restartKey: number, extra: Record<string, unknown>
     ...extra,
   });
 }
+
+// The service mock never evaluates the real module, so nothing registers it;
+// loading caches the mock for the synchronous peek() call sites.
+beforeAll(async () => {
+  await loadTerminalService();
+});
 
 describe("addPanel — relaunching a terminal its host lost (#14184)", () => {
   beforeEach(async () => {

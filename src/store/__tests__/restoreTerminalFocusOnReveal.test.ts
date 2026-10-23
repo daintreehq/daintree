@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { beforeAll, describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import type { PanelInstance } from "@shared/types/panel";
+import { load as loadTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
 
 const focusMock = vi.fn();
 
@@ -62,6 +63,12 @@ function mountActive(html: string): HTMLElement {
   expect(document.activeElement).toBe(el);
   return el;
 }
+
+// The service mock never evaluates the real module, so nothing registers it;
+// loading caches the mock for the synchronous peek() call sites.
+beforeAll(async () => {
+  await loadTerminalService();
+});
 
 describe("restoreTerminalFocusOnReveal", () => {
   beforeEach(() => {
