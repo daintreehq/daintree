@@ -310,6 +310,7 @@ function createWindowRegistryMock() {
   return {
     registerAppViewWebContents: vi.fn(),
     unregisterAppViewWebContents: vi.fn(),
+    all: vi.fn(() => []),
   };
 }
 

@@ -5,6 +5,7 @@ import { store } from "../../store.js";
 import { parseColorSchemeFile } from "../../utils/colorSchemeImporter.js";
 import { effectiveCachedProjectViews } from "../../utils/cachedProjectViews.js";
 import type { HandlerDependencies } from "../types.js";
+import { projectViewManagersFrom } from "../../window/activeProjectIds.js";
 import { typedHandleWithContext } from "../utils.js";
 import { defineIpcNamespace, op } from "../define.js";
 import { TERMINAL_CONFIG_METHOD_CHANNELS } from "./terminalConfig.preload.js";
@@ -240,7 +241,17 @@ export function registerTerminalConfigHandlers(deps?: HandlerDependencies): () =
             throw new Error(error);
           }
           store.set("terminalConfig.cachedProjectViews", cachedProjectViews);
-          deps?.projectViewManager?.setCachedViewLimit(cachedProjectViews);
+          // Every window holds a copy of the app-wide cap (#14218); the first
+          // one set sweeps the whole app, and the rest find it within the cap.
+          const managers = new Set(projectViewManagersFrom(deps?.windowRegistry)());
+          if (deps?.projectViewManager) managers.add(deps.projectViewManager);
+          for (const manager of managers) {
+            try {
+              manager.setCachedViewLimit(cachedProjectViews);
+            } catch (error) {
+              console.warn("[terminalConfig] setCachedViewLimit failed for a window:", error);
+            }
+          }
         }
       ),
     },
