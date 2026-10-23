@@ -279,7 +279,7 @@ export interface GeneratedIpcInvokeMap {
       entries: (
         | {
             state: "live";
-            role: "worker" | "assistant";
+            role: "assistant" | "worker";
             subject: {
               hostId: string;
               scope: { kind: "project"; projectId: string } | { kind: "global" };
