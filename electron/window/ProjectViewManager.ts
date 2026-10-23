@@ -712,9 +712,11 @@ export class ProjectViewManager {
     // A new window adds a resident view to an app-wide cap (#14218) without the
     // switch that would otherwise enforce it. Deferred like the switch's own
     // sweep, so the window's registry entry and services are in place first.
-    setImmediate(() => {
-      if (!this.disposed) EvictionController.evictStaleViews(this, "lru");
-    });
+    if (EvictionController.scopeViewCount(this) > this.maxCachedViews) {
+      setImmediate(() => {
+        if (!this.disposed) EvictionController.evictStaleViews(this, "lru");
+      });
+    }
   }
 
   /**
