@@ -47,6 +47,11 @@ import {
   removeTempDir,
   waitFor,
 } from "../../link/__tests__/linkTestUtils.js";
+import {
+  enableCanopyOnHosts,
+  type BulkTransport,
+} from "../../../../shared/utils/canopyBulkEnable.js";
+import type { CanopyMode } from "../../../../shared/types/ipc/canopy.js";
 import { CanopyHostsClient } from "../client.js";
 import { installCanopyHostWith } from "../host.js";
 import { CanopyViewers } from "../viewer.js";
@@ -314,6 +319,111 @@ describe("Canopy on a host the view isn't bound to", () => {
     expect(shell.sent).toContainEqual({
       webContentsId: VIEW,
       event: { kind: "terminal-data", hostId: h.hostId, chunk },
+    });
+  });
+
+  describe("turning Canopy on across hosts", () => {
+    /** A host whose mode behaves as the real handler's: guarded by revision and epoch. */
+    function registerModeHost(initial: CanopyMode, epoch = "boot-1") {
+      const state = { mode: initial, revision: 0, epoch, sets: [] as unknown[][] };
+      const snapshot = () => ({
+        mode: state.mode,
+        modeRevision: state.revision,
+        hostEpoch: state.epoch,
+        activated: state.mode === "on",
+      });
+      const closed: number[] = [];
+      cleanups.push(
+        getIpcDispatcher().registerInvoke(CHANNEL, (ctx) => {
+          const { endpoint } = ctx as IpcContext;
+          endpoint.onClose(() => closed.push(endpoint.handle));
+          return snapshot();
+        }),
+        getIpcDispatcher().registerInvoke("canopy:set-mode", (_ctx, ...args) => {
+          const [mode, revision, hostEpoch] = args as [CanopyMode, number, string];
+          state.sets.push([mode, revision, hostEpoch]);
+          if (revision !== state.revision || hostEpoch !== state.epoch) return snapshot();
+          if (mode === "on" && state.mode === "hidden") {
+            throw new AppError({ code: "PERMISSION", message: "Canopy is hidden" });
+          }
+          if (mode !== state.mode) state.revision += 1;
+          state.mode = mode;
+          return snapshot();
+        })
+      );
+      return { state, closed };
+    }
+
+    function bulkTransport(
+      h: Awaited<ReturnType<typeof startHost>>,
+      shell: ReturnType<typeof shellClient>
+    ): BulkTransport {
+      return {
+        getSnapshot: () => shell.client.invoke(VIEW, h.hostId, CHANNEL, []) as never,
+        setMode: (mode, revision, epoch) =>
+          shell.client.invoke(VIEW, h.hostId, "canopy:set-mode", [mode, revision, epoch]) as never,
+        connect: async () => {
+          h.manager.connect(h.hostId);
+          await waitFor(() => h.manager.connectionState(h.hostId).status === "connected");
+          return true;
+        },
+        release: () => shell.client.release(VIEW, h.hostId),
+      };
+    }
+
+    it("dials a saved, disconnected host and takes a hidden one through unset to on", async () => {
+      const host = registerModeHost("hidden");
+      const h = await startHost();
+      const shell = shellClient(h, () => null);
+      expect(h.manager.get(h.hostId)).toBeUndefined();
+
+      const [result] = await enableCanopyOnHosts([{ hostId: h.hostId, name: "studio" }], {
+        transportFor: () => bulkTransport(h, shell),
+      });
+
+      expect(result).toMatchObject({ outcome: "enabled" });
+      expect(host.state.sets).toEqual([
+        ["unset", 0, "boot-1"],
+        ["on", 1, "boot-1"],
+      ]);
+      expect(host.state.mode).toBe("on");
+      // Nothing the run opened is left: no viewer on the host, no panel reading it.
+      await waitFor(() => host.closed.length === 1);
+      expect(shell.client.isRead(h.hostId)).toBe(false);
+      expect(h.manager.get(h.hostId)?.boundViews()).toEqual([]);
+      clock.now += 1_000;
+      h.manager.sweepIdle();
+      expect(h.manager.get(h.hostId)).toBeUndefined();
+    });
+
+    it("leaves an already-on host untouched and never writes over a restarted one", async () => {
+      const on = registerModeHost("on");
+      const h = await startHost();
+      const shell = shellClient(h, () => null);
+      h.manager.connect(h.hostId);
+      await waitFor(() => h.manager.connectionState(h.hostId).status === "connected");
+
+      const run = () =>
+        enableCanopyOnHosts([{ hostId: h.hostId, name: "studio" }], {
+          transportFor: () => bulkTransport(h, shell),
+        });
+      expect((await run())[0]).toMatchObject({ outcome: "already-enabled" });
+      expect(on.state.sets).toEqual([]);
+
+      // The host restarted between the read and the write: same revision, new epoch.
+      on.state.mode = "unset";
+      const transport = bulkTransport(h, shell);
+      const [result] = await enableCanopyOnHosts([{ hostId: h.hostId, name: "studio" }], {
+        transportFor: () => ({
+          ...transport,
+          setMode: (mode, revision, epoch) => {
+            on.state.epoch = "boot-2";
+            return transport.setMode(mode, revision, epoch);
+          },
+        }),
+      });
+      expect(result).toMatchObject({ outcome: "conflicted" });
+      expect(on.state.mode).toBe("unset");
     });
   });
 });

@@ -5,6 +5,7 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuLabel,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { TimeAgo } from "@/components/ui/TimeAgo";
@@ -137,9 +138,12 @@ function HostPickerItem({ row, onPick }: { row: HostMenuRow; onPick: (hostId: Ho
 export function CanopyHostPicker({
   rows,
   onPick,
+  onEnableAll,
 }: {
   rows: readonly HostMenuRow[];
   onPick: (hostId: HostId) => void;
+  /** Opens the one disclosure that turns Canopy on across every host listed. */
+  onEnableAll?: () => void;
 }) {
   const shown = rows.find((row) => row.isCurrent) ?? rows[0]!;
   const state = triggerState(shown);
@@ -185,6 +189,14 @@ export function CanopyHostPicker({
         {rows.map((row) => (
           <HostPickerItem key={row.hostId} row={row} onPick={onPick} />
         ))}
+        {onEnableAll && (
+          <>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem data-testid="canopy-enable-all-hosts" onSelect={onEnableAll}>
+              Enable Canopy on all hosts…
+            </DropdownMenuItem>
+          </>
+        )}
       </DropdownMenuContent>
     </DropdownMenu>
   );
