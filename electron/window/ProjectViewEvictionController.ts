@@ -17,6 +17,7 @@ import { readAvailableSystemMemoryMb } from "../utils/systemMemory.js";
 import { memoryPressureTarget } from "../utils/cachedProjectViews.js";
 import { isSwapPressureConfirmed } from "../services/systemSwapPressure.js";
 import { isKernelPressureCritical } from "../services/systemKernelPressure.js";
+import { isPanelRecoveryHeldReported } from "../services/panelRecoveryQuery.js";
 import {
   isWorkspaceKeepResident,
   recordWorkspaceEviction,
@@ -30,6 +31,7 @@ type EvictionCandidate = {
   liveAssistantBackend: boolean;
   boundMcpSession: boolean;
   keepResident: boolean;
+  recoveryHeld: boolean;
 };
 
 /**
@@ -414,6 +416,19 @@ export function evictStaleViews(
   // this from becoming a floor.
   const mcpLeasedProjectIds = new Set<string>();
 
+  // Views whose renderer says it holds work its teardown would lose (#14095):
+  // the same answer automatic Sleep asks for (`readPanelRecoveryHold`), pushed
+  // by the renderer as it changes so this synchronous pass can read it. A cap
+  // the user set (LRU, limit change) never takes one — what a plugin persisted
+  // comes back on the next mount, but unsaved work does not, so these wait for
+  // the work to be saved, persisted or dropped. Memory pressure is different:
+  // a pressure pass admits them as the very last ordinary tier, logged with
+  // `recoveryHeld`, because an OOM loses the same work and everything else
+  // with it. The hold is only as wide as the views reporting unsaved work, and
+  // a view whose state is in recoverable storage reports none.
+  const recoveryHeldProjectIds = new Set<string>();
+  const pressurePass = criticalPressure || gradualPressure;
+
   const evictable = Array.from(host.views.entries())
     .filter(([id, entry]) => {
       if (
@@ -425,6 +440,10 @@ export function evictStaleViews(
       }
       if (host.mcpActivityFor(id, entry.view.webContents).dispatchLease) {
         mcpLeasedProjectIds.add(id);
+        return false;
+      }
+      if (!pressurePass && isPanelRecoveryHeldReported(entry.view.webContents)) {
+        recoveryHeldProjectIds.add(id);
         return false;
       }
       return true;
@@ -488,6 +507,7 @@ export function evictStaleViews(
   const boundMcpSessionFallback: EvictionCandidate[] = [];
   const residentGranted: EvictionCandidate[] = [];
   const assistantProtected: EvictionCandidate[] = [];
+  const recoveryHeld: EvictionCandidate[] = [];
   for (const [projectId, entry] of evictable) {
     const activeAgent = viewHasActiveAgent(host, projectId, entry);
     const mcp = host.mcpActivityFor(projectId, entry.view.webContents);
@@ -500,9 +520,19 @@ export function evictStaleViews(
     // by workspace id and nothing prunes it when a project is deleted, so a
     // stale entry only ever meets this loop for a view that actually exists.
     const keepResident = viewKeepsResident(host, projectId, entry);
-    const base = { projectId, entry, activeAgent, boundMcpSession, keepResident };
+    const held = isPanelRecoveryHeldReported(entry.view.webContents);
+    const base = {
+      projectId,
+      entry,
+      activeAgent,
+      boundMcpSession,
+      keepResident,
+      recoveryHeld: held,
+    };
     if (hasLiveAssistantBackend(host, projectId, entry)) {
       assistantProtected.push({ ...base, liveAssistantBackend: true });
+    } else if (held) {
+      recoveryHeld.push({ ...base, liveAssistantBackend: false });
     } else if (keepResident) {
       residentGranted.push({ ...base, liveAssistantBackend: false });
     } else if (boundMcpSession) {
@@ -548,6 +578,8 @@ export function evictStaleViews(
     ...activeAgentFallback,
     ...boundMcpSessionFallback,
     ...residentGranted,
+    // Only reachable on a pressure pass; see `recoveryHeldProjectIds`.
+    ...recoveryHeld,
   ];
 
   // Assistant-pinned views still count toward the cache, so without an
@@ -594,8 +626,15 @@ export function evictStaleViews(
       break;
     }
     candidates.shift();
-    const { projectId, entry, activeAgent, liveAssistantBackend, boundMcpSession, keepResident } =
-      next;
+    const {
+      projectId,
+      entry,
+      activeAgent,
+      liveAssistantBackend,
+      boundMcpSession,
+      keepResident,
+      recoveryHeld: heldWork,
+    } = next;
     const memoryKb = memoryFor(entry, memoryByPid);
     const guestMemoryKb = guestMemoryFor(entry, memoryByPid);
     const residentKb = memoryFor(entry, residentByPid) + guestMemoryFor(entry, residentByPid);
@@ -615,6 +654,9 @@ export function evictStaleViews(
     // so the override is attributable rather than looking like the grant was
     // ignored (#11162).
     if (keepResident) ctx.keepResident = true;
+    // Unsaved work the view said it could not recover is lost with it: the
+    // defined outcome of a pressure pass over a held view (#14095).
+    if (heldWork) ctx.recoveryHeld = true;
     if (memoryKb > 0) ctx.memoryKb = memoryKb;
     if (guestMemoryKb > 0) ctx.guestMemoryKb = guestMemoryKb;
     if (availableMb != null) ctx.memoryAvailableMb = availableMb;
@@ -691,7 +733,10 @@ export function evictStaleViews(
   if (
     host.views.size > baseMax &&
     (candidates.length === 0 || host.views.size <= effectiveMax) &&
-    (assistantProtected.length > 0 || pinnedAssistantCount > 0 || mcpLeasedProjectIds.size > 0)
+    (assistantProtected.length > 0 ||
+      pinnedAssistantCount > 0 ||
+      mcpLeasedProjectIds.size > 0 ||
+      recoveryHeldProjectIds.size > 0)
   ) {
     // `overflow` counts views over `baseMax`, the cap before the assistant
     // allowance; `effectiveMax` is the target the pass settled on. The counts
@@ -724,6 +769,10 @@ export function evictStaleViews(
       // each count means exactly one thing.
       mcpLeasedCount: mcpLeasedProjectIds.size,
       protectedProjectIds: assistantProtected.map(({ projectId }) => projectId),
+      // Present only when a view is waiting on its own unsaved work (#14095).
+      ...(recoveryHeldProjectIds.size > 0
+        ? { recoveryHeldProjectIds: [...recoveryHeldProjectIds] }
+        : {}),
     };
     // Once per change in what is holding the cache over, not once per pass: a
     // live assistant pins its view for as long as it runs, and the sampler

@@ -221,6 +221,13 @@ export interface PluginViewContentProps {
    */
   offerRequestReload?: boolean;
   /**
+   * Hand the view `setHasUnsavedChanges` without `requestReload`, for a host
+   * outside the grid (#14095). The flag needs no panel record — it lives in the
+   * lifecycle service under this mount's id, and automatic Sleep and eviction
+   * read it — so every host can offer it. Defaults to `offerRequestReload`.
+   */
+  offerUnsavedChanges?: boolean;
+  /**
    * Hand the view `setToolbarItemState` and `setMenuItems`, for a host that
    * draws the panel's header and menus, and with them the kind's manifest
    * `toolbar` and `menu`. Project surfaces don't.
@@ -1063,6 +1070,7 @@ export function makePluginViewContent(
     panelRemovedSignal: panelRemovedSignalOverride,
     readRecoveryState,
     offerRequestReload = false,
+    offerUnsavedChanges = offerRequestReload,
     offerToolbar = false,
     setPanelTitle,
     settingsContext,
@@ -1671,10 +1679,10 @@ export function makePluginViewContent(
     );
     const setHasUnsavedChanges = useMemo(
       () =>
-        offerRequestReload
+        offerUnsavedChanges
           ? (hasUnsavedChanges: boolean) => setHasUnsavedChangesFor(retryCount, hasUnsavedChanges)
           : undefined,
-      [offerRequestReload, setHasUnsavedChangesFor, retryCount]
+      [offerUnsavedChanges, setHasUnsavedChangesFor, retryCount]
     );
 
     /**

@@ -70,12 +70,14 @@ function isUpdater<T>(value: T | ((current: T) => T)): value is (current: T) => 
 /**
  * `useState` that the view remembers: a selected tab, a split size, a filter.
  * It survives the view unmounting (a sibling pane maximised, a dock tab left),
- * a reload and an app restart, stored on the panel through the host's
- * `persistState` under `key`. Values must be JSON; one that is not is kept
- * until the view unmounts. A saved value whose type no longer matches `initial`
- * (a string where a number is now expected) is ignored; the check is by
- * type only, not a deep shape. Where the host keeps no panel record, such as
- * a settings view, the value lasts until the view unmounts.
+ * a reload and an app restart, stored through the host's `persistState` under
+ * `key`: on the panel record for a panel, and in the durable store for views
+ * outside the grid (a Home surface, a sidebar view, a settings section, a
+ * toolbar popover). Values must be JSON; one that is not is kept until the view
+ * unmounts. A saved value whose type no longer matches `initial` (a string
+ * where a number is now expected) is ignored; the check is by type only, not a
+ * deep shape. A host with no `persistState` (a file editor) keeps the value
+ * only until the view unmounts.
  */
 export function usePersistentViewState<T>(
   key: string,

@@ -28,6 +28,23 @@ It is a request. The host may refuse it, nothing tells you whether or when the n
 
 The user can reload the panel too, from Reload panel in its menus and dialog header, and an agent can through the host's tools. That reload is the same new attempt, it is never rationed, and it is what lifts a stopped view. It does not ask first, because what you persisted comes back. If your view holds work it has not persisted — an unsaved draft, a half-filled form — call `setHasUnsavedChanges(true)` while it does and `setHasUnsavedChanges(false)` once it is saved or dropped; while it is set, the user is asked to confirm before their reload or an agent's discards the view (the agent's call fails and leaves the confirmation with the user), and before closing the panel from its close button or menu discards your work. The host asks and the user answers, so your view cannot veto a close; bulk closes and shutdown skip the question. Your own `requestReload` and your backend's `host.reloadPanel` are never held up by it. Like `requestReload`, the setter belongs to its attempt, a new attempt starts with nothing unsaved, and it is absent where there is no reload to guard.
 
+## State outside the grid
+
+A panel keeps its `persistState` bag on its panel record. A view mounted anywhere else — a project surface on Home, a sidebar view, a settings section, a toolbar popover — has no record, so the host keeps its bag in a durable view-state store instead (#14095). The contract is the same one a panel gets, so a view written for one works in the other.
+
+|  | Panel | Home surface, sidebar view, settings section, toolbar popover |
+| --- | --- | --- |
+| Identity | The panel id | This window's host and project, your plugin instance, the host kind and the host's own name for the mount. A user-scope settings section follows the user instead of the project; a project-scope one belongs to its project. |
+| Lifetime | Until the panel closes | Until the user clears app data, or the bag is one of the least recently written beyond 200 across every project and plugin |
+| Survives | Unmount, reload, restart, an evicted or slept renderer | The same: leaving Home for the grid, switching sidebar views, closing Settings or the popover, a plugin reload, an evicted or slept renderer, a crash, a restart |
+| Limit | 64KB per bag, JSON | 64KB per bag, JSON |
+| Written | Accepted, then saved with the layout (debounced) | On disk before `persistState` returns; `false` if storage refused it after making room |
+| Versioning | `stateVersion` on the panel contribution | A surface or popover showing a panel kind uses that kind's `stateVersion`; a sidebar or settings view has none to declare, so migrate inside the bag if its shape changes |
+
+Two windows showing the same project share a bag; the last write to a key wins. The bag is plaintext and only ever holds what you hand `persistState`. The host never captures a form, a settings value or anything your worker sends, and a secret the user types belongs in your plugin's secret settings, never here.
+
+**Unsaved work.** `setHasUnsavedChanges(true)` says the view holds work its `persistState` bag would not bring back. While any view in a project's renderer says so, automatic Sleep leaves the project alone and cache eviction skips its renderer. Under memory pressure eviction takes it anyway, last of all, and the unsaved work is lost; so is it in a crash. Whatever you persisted comes back either way. So the dependable form keeps its draft in `persistState` (or `usePersistentViewState`) as the user types and clears the flag, keeping the flag for work that genuinely can't be persisted. The flag belongs to the attempt that set it: a setter held past a reload or an unmount can't clear the flag a newer attempt raised.
+
 ## A settings section
 
 A view with `location: "settings"` is your plugin's custom settings section, for what the generated [settings fields](./contribution-points.md#settings-schema--shipped) can't express — a sign-in, a list or a table of pairs (the kit's `ListEditor` and `KeyValueEditor`), a connection test. Declare at most one, with an `id` no panel uses:
@@ -42,7 +59,7 @@ The host mounts it in your settings home, below the generated fields. The sectio
 
 **Which home, which scope.** It receives `settingsContext: { scope, projectId }`. An installed plugin's section mounts twice — `{ scope: "user", projectId: null }` in the plugin manager, `{ scope: "project", projectId }` in Project settings — so render the rows for the scope you're given; each mount has its own `panelId`. A project plugin's section mounts only in Project settings, with `scope: "project"`.
 
-**What it doesn't get.** There is no panel record behind it, so `initialArgs`, `openRequest`, `persistState`, `stateVersion`, `worktreeId`, `requestReload`, `setHasUnsavedChanges`, `setToolbarItemState`, `setMenuItems` and `setTitle` are absent. `pluginId`, `panelId`, `disposeSignal`, `runningActions` and `styleRootAttributes` behave as they do in a panel. `panelRemovedSignal` is one signal shared by both homes: it aborts when the plugin stops, is muted, reloads or is hidden in the project, never when Settings closes. `hostContext` is `{ kind: "settings" }`.
+**What it doesn't get.** There is no panel record behind it, so `openRequest`, `stateVersion`, `worktreeId`, `requestReload`, `setToolbarItemState`, `setMenuItems` and `setTitle` are absent. `persistState`, `initialArgs` and `setHasUnsavedChanges` work through the durable view-state store, one bag per home (see [State outside the grid](#state-outside-the-grid)). `pluginId`, `panelId`, `disposeSignal`, `runningActions` and `styleRootAttributes` behave as they do in a panel. `panelRemovedSignal` is one signal shared by both homes: it aborts when the plugin stops, is muted, reloads or is hidden in the project, never when Settings closes. `hostContext` is `{ kind: "settings" }`.
 
 **Containment.** The surface is contained like a project surface (`contain: layout paint`, overflow clipped, its own stacking context), so a `position: fixed` descendant stays inside it; portal anything that has to float with the kit's `Portal`, which marks its container as your style root.
 
@@ -108,7 +125,7 @@ A view with `location: "sidebar"` sits in the sidebar, chosen from the switcher 
 }
 ```
 
-The host mounts it in the whole region below the sidebar's header, with `hostContext` `{ kind: "sidebar" }`. The header holds only the switcher, so put your controls in your own view. The sidebar can be as narrow as 200px: lay out for that width, and let long text truncate rather than push the box wider. Like a settings view there is no panel record, so `initialArgs`, `openRequest`, `persistState`, `stateVersion`, `worktreeId`, `requestReload`, `setHasUnsavedChanges`, `setToolbarItemState` and `setMenuItems` are absent. The view unmounts when the user switches to another sidebar view, so `disposeSignal` aborts then; `panelRemovedSignal` aborts only when the plugin stops, is muted, reloads or is hidden in the project. A right-click inside your view is yours: the sidebar's own background menu never opens over it. If your view throws, its error pane offers **Show worktrees** beside **Try again**.
+The host mounts it in the whole region below the sidebar's header, with `hostContext` `{ kind: "sidebar" }`. The header holds only the switcher, so put your controls in your own view. The sidebar can be as narrow as 200px: lay out for that width, and let long text truncate rather than push the box wider. Like a settings view there is no panel record, so `openRequest`, `stateVersion`, `worktreeId`, `requestReload`, `setToolbarItemState` and `setMenuItems` are absent, and `persistState`, `initialArgs` and `setHasUnsavedChanges` work through the durable view-state store (see [State outside the grid](#state-outside-the-grid)). The view unmounts when the user switches to another sidebar view, so `disposeSignal` aborts then; `panelRemovedSignal` aborts only when the plugin stops, is muted, reloads or is hidden in the project. A right-click inside your view is yours: the sidebar's own background menu never opens over it. If your view throws, its error pane offers **Show worktrees** beside **Try again**.
 
 ## Styling
 

@@ -1,4 +1,4 @@
-import { useMemo, type ComponentType } from "react";
+import { useCallback, useMemo, type ComponentType } from "react";
 import {
   getPanelKindRegistrySnapshot,
   subscribeToPanelKindRegistry,
@@ -17,6 +17,14 @@ import {
   type PluginViewContentProps,
 } from "@/components/Plugin/PluginViewContent";
 import { usePluginHostedViewsStore } from "@/store/pluginHostedViewsStore";
+import { getViewWorkspaceId } from "@/store/viewWorkspaceId";
+import { currentHostId } from "@/hooks/useHostPlatform";
+import {
+  persistPluginViewState,
+  pluginViewStateKey,
+  readPluginViewState,
+  type PluginViewStateIdentity,
+} from "@/services/plugin/pluginViewStateStore";
 import { cn } from "@/lib/utils";
 
 /**
@@ -161,6 +169,34 @@ export function _pluginHostedViewRemovalSignalForTest(id: string): AbortSignal |
 }
 
 /**
+ * Where a hosted mount's durable state belongs (#14095), or `null` for a host
+ * whose content keeps its own: a file editor's draft is the file document's.
+ *
+ * Scoped to this window's host and workspace, so the same view open in two
+ * projects keeps two bags, and keyed by the mount's own stable name, which
+ * survives a plugin reload. A settings section belongs to its settings home
+ * instead of the window: the user-scope section in the plugin manager follows
+ * the user, the project-scope one its project.
+ */
+function stateIdentityFor(
+  pluginId: string | undefined,
+  host: Exclude<PluginViewHostKind, "panel">,
+  mountId: string,
+  settingsScope: PluginSettingsViewContext["scope"] | undefined,
+  settingsProjectId: string | null
+): PluginViewStateIdentity | null {
+  if (host === "fileEditor" || !pluginId) return null;
+  const workspaceId =
+    host === "settings" && settingsScope !== undefined
+      ? settingsScope === "user"
+        ? "user"
+        : (settingsProjectId ?? getViewWorkspaceId())
+      : getViewWorkspaceId();
+  if (!workspaceId) return null;
+  return { hostId: currentHostId(), workspaceId, pluginId, host, viewKey: mountId };
+}
+
+/**
  * Mount a plugin view outside the panel grid — the one path every such host
  * uses, so a settings section, a project surface and whatever comes next get
  * the same contract a panel view does.
@@ -170,8 +206,12 @@ export function _pluginHostedViewRemovalSignalForTest(id: string): AbortSignal |
  * `disposeSignal` and style root. The host adds only what a panel record would
  * otherwise supply — an opaque `mountId` for `panelId`, and a removal signal
  * that outlives remounts (see {@link retireStaleRuntimes}) — plus the
- * `hostContext` naming where the view is. No reload or toolbar: those police a
- * panel record a hosted view doesn't have. A host with a way out of a broken
+ * `hostContext` naming where the view is. Its `persistState` writes to the
+ * durable store for recordless hosts (`pluginViewStateStore`), so what a view
+ * persisted comes back on its next mount — after a Home/Grid switch, a sidebar
+ * switch, a plugin reload, an evicted renderer or a restart — and it may report
+ * unsaved work, which automatic Sleep and eviction respect. No reload or
+ * toolbar: those police a panel record a hosted view doesn't have. A host with a way out of a broken
  * view (the sidebar's "Show worktrees") passes it as `onRequestClose` with
  * the words for its button. A host the view may dismiss itself (the toolbar
  * popover) passes `onClose`, which reaches the view as `hostContext.close`.
@@ -213,6 +253,33 @@ export function PluginHostedView({
   testId?: string;
 }) {
   const { content: Content, removal } = getRuntime(source);
+  const declaredVersion = source.from === "panel-kind" ? source.config.stateVersion : undefined;
+  const pluginId = source.from === "hosted" ? source.view.pluginId : source.config.extensionId;
+  const settingsScope = settingsContext?.scope;
+  const settingsProjectId = settingsContext?.projectId ?? null;
+  // One object per identity, so the callbacks below only change when it does.
+  const identity = useMemo(
+    () => stateIdentityFor(pluginId, host, mountId, settingsScope, settingsProjectId),
+    [pluginId, host, mountId, settingsScope, settingsProjectId]
+  );
+  const stateKey = identity ? pluginViewStateKey(identity) : null;
+  // Read once per identity, like a panel's `initialArgs`: the content freezes
+  // its first bag, and later writes are for the NEXT mount.
+  const mountState = useMemo(
+    () => (identity ? readPluginViewState(identity, declaredVersion) : null),
+    [identity, declaredVersion]
+  );
+  const persistState = useCallback(
+    (patch: Record<string, unknown>): boolean =>
+      identity ? persistPluginViewState(identity, patch, declaredVersion) : false,
+    [identity, declaredVersion]
+  );
+  // What a retry restores: the latest bag on disk, not the one the mount read.
+  const readRecoveryState = useCallback(() => {
+    if (!identity) return null;
+    const decoded = readPluginViewState(identity, declaredVersion);
+    return decoded?.ok ? { state: decoded.state, version: decoded.version } : null;
+  }, [identity, declaredVersion]);
   // Per mount, never on the shared frozen context: the callback belongs to
   // this one opening, and a view that kept it must not close a later one.
   const hostContext = useMemo<PluginViewHostContext>(
@@ -229,9 +296,23 @@ export function PluginHostedView({
       data-testid={testId}
     >
       <Content
+        // A new identity (a settings home switching projects) is a new view:
+        // its frozen bag and unsaved flag must not carry over.
+        key={stateKey ?? mountId}
         panelId={mountId}
         panelRemovedSignal={removal.signal}
         hostContext={hostContext}
+        {...(identity
+          ? {
+              // A bag a newer build of the plugin wrote stays on disk unread,
+              // and the store refuses to overwrite it.
+              initialArgs: mountState?.ok ? mountState.state : undefined,
+              stateVersion: mountState?.ok ? mountState.version : declaredVersion,
+              persistState,
+              readRecoveryState,
+              offerUnsavedChanges: true,
+            }
+          : {})}
         {...(settingsContext ? { settingsContext } : {})}
         {...(onRequestClose ? { onRequestClose } : {})}
         {...(requestCloseLabel !== undefined ? { requestCloseLabel } : {})}

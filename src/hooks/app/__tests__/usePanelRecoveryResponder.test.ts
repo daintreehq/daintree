@@ -21,10 +21,12 @@ const projection = (overrides: Partial<FileDocumentProjection>): FileDocumentPro
 describe("usePanelRecoveryResponder", () => {
   let ask: (requestId: string) => void;
   const reply = vi.fn();
+  const report = vi.fn();
   const unsubscribe = vi.fn();
 
   beforeEach(() => {
     reply.mockReset();
+    report.mockReset();
     Object.assign(window, {
       electron: {
         project: {
@@ -33,6 +35,7 @@ describe("usePanelRecoveryResponder", () => {
             return unsubscribe;
           },
           replyPanelRecovery: reply,
+          reportPanelRecoveryState: report,
         },
       },
     });
@@ -77,5 +80,42 @@ describe("usePanelRecoveryResponder", () => {
     const { unmount } = renderHook(() => usePanelRecoveryResponder());
     unmount();
     expect(unsubscribe).toHaveBeenCalled();
+  });
+
+  describe("pushing the answer for eviction", () => {
+    it("reports the current answer on mount", () => {
+      setViewUnsavedChanges("panel", {}, true);
+      renderHook(() => usePanelRecoveryResponder());
+      expect(report.mock.calls).toEqual([[true]]);
+    });
+
+    it("reports each flip of a plugin view's unsaved flag, and only flips", () => {
+      const a = {};
+      const b = {};
+      renderHook(() => usePanelRecoveryResponder());
+      setViewUnsavedChanges("panel", a, true);
+      setViewUnsavedChanges("other", b, true);
+      setViewUnsavedChanges("panel", a, false);
+      setViewUnsavedChanges("other", b, false);
+      expect(report.mock.calls).toEqual([[false], [true], [false]]);
+    });
+
+    it("reports a file draft losing and regaining its stored recovery", () => {
+      renderHook(() => usePanelRecoveryResponder());
+      useFileDocumentStore.setState({
+        byPanelId: { a: projection({ dirty: true, recoveryStored: false }) },
+      });
+      useFileDocumentStore.setState({
+        byPanelId: { a: projection({ dirty: true, recoveryStored: true }) },
+      });
+      expect(report.mock.calls).toEqual([[false], [true], [false]]);
+    });
+
+    it("stops reporting on unmount", () => {
+      const { unmount } = renderHook(() => usePanelRecoveryResponder());
+      unmount();
+      setViewUnsavedChanges("panel", {}, true);
+      expect(report.mock.calls).toEqual([[false]]);
+    });
   });
 });

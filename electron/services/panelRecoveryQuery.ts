@@ -80,3 +80,57 @@ export async function readPanelRecoveryHold(
   if (answers.includes("unknown")) return "panel-unknown";
   return null;
 }
+
+/**
+ * What each live view last pushed unprompted: the same answer the query gets,
+ * sent whenever it changes, so eviction — which runs synchronously and cannot
+ * wait out a round trip — reads the same verdict automatic Sleep asks for.
+ * Keyed by `webContents.id` and dropped with the view, so a crashed or
+ * destroyed renderer holds nothing here: its recoverable state is on disk and
+ * the rest went with it.
+ */
+const reportedHolds = new Map<number, boolean>();
+
+/** Record a view's pushed answer. Exported for tests that cannot reach `ipcMain`. */
+export function recordPanelRecoveryState(wc: Electron.WebContents, holding: boolean): void {
+  if (wc.isDestroyed()) return;
+  const id = wc.id;
+  if (!reportedHolds.has(id)) {
+    const forget = () => {
+      reportedHolds.delete(id);
+      wc.removeListener("destroyed", forget);
+      wc.removeListener("render-process-gone", forget);
+    };
+    wc.on("destroyed", forget);
+    wc.on("render-process-gone", forget);
+  }
+  reportedHolds.set(id, holding);
+}
+
+/**
+ * Whether the view last said it holds work its teardown would lose. A view that
+ * has said nothing yet (still loading, or a build without the push) holds
+ * nothing: unlike Sleep's query, eviction has no answer to wait for, and failing
+ * closed here would pin every view that never spoke.
+ */
+export function isPanelRecoveryHeldReported(wc: Electron.WebContents): boolean {
+  if (wc.isDestroyed()) return false;
+  return reportedHolds.get(wc.id) === true;
+}
+
+/** Listen for pushed answers. Returns the teardown. */
+export function installPanelRecoveryStateListener(): () => void {
+  const onState = (event: Electron.IpcMainEvent, holding: unknown) => {
+    if (typeof holding !== "boolean") return;
+    recordPanelRecoveryState(event.sender, holding);
+  };
+  ipcMain.on(CHANNELS.PROJECT_PANEL_RECOVERY_STATE, onState);
+  return () => {
+    ipcMain.removeListener(CHANNELS.PROJECT_PANEL_RECOVERY_STATE, onState);
+  };
+}
+
+/** Test-only: forget every pushed answer. */
+export function _resetPanelRecoveryStateForTests(): void {
+  reportedHolds.clear();
+}
