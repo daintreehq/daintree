@@ -729,6 +729,15 @@ describe("HelpSessionService", () => {
       global: true as const,
     });
 
+    it("keeps its run checkpoints in the reserved global bucket", async () => {
+      const result = await service.provisionSession(globalInput());
+      if (!result) throw new Error("expected result");
+      const env = service.getAssistantScratchEnv(result.token);
+      expect(env?.DAINTREE_ASSISTANT_RUN_CHECKPOINT_DIR).toBe(
+        path.join(userData, "assistant-run-checkpoints", "global")
+      );
+    });
+
     it("runs with no view, no project route and no asker, and survives its views going", async () => {
       const result = await service.provisionSession(globalInput());
       if (!result) throw new Error("expected result");

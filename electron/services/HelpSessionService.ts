@@ -35,6 +35,7 @@ import { ASSISTANT_SCRATCH_ENV_VAR, getScratchDirForSession } from "./AssistantS
 import {
   ASSISTANT_RUN_CHECKPOINT_ENV_VAR,
   ASSISTANT_RUN_CHECKPOINT_WRITER_ENV_VAR,
+  ASSISTANT_GLOBAL_CHECKPOINT_BUCKET,
   buildRunCheckpointAddendum,
   isSafeCheckpointSegment,
   provisionRunCheckpointBucket,
@@ -201,6 +202,11 @@ function runbooksJsonEntry(headers: Record<string, string>): Record<string, unkn
     url: resolveRunbooksMcpUrl(),
     ...(Object.keys(headers).length > 0 ? { headers } : {}),
   };
+}
+
+/** The global Assistant has no project; its checkpoints live in the reserved `global` bucket. */
+function runCheckpointKeyFor(projectId: string): string {
+  return isGlobalAssistantId(projectId) ? ASSISTANT_GLOBAL_CHECKPOINT_BUCKET : projectId;
 }
 
 const SCRATCH_BLOCK_MARKERS = {
@@ -1734,7 +1740,9 @@ export class HelpSessionService {
         // The durable counterpart: kept across launches, so it is provisioned and
         // announced on every provision (including template-hash-gate skips) and a
         // failure fails the provision rather than launching with a phantom store.
-        const runCheckpointPath = await provisionRunCheckpointBucket(input.projectId);
+        const runCheckpointPath = await provisionRunCheckpointBucket(
+          runCheckpointKeyFor(input.projectId)
+        );
         await Promise.all(
           ["CLAUDE.md", "AGENTS.md"].map((name) =>
             this.writeManagedBlock(
@@ -3260,7 +3268,7 @@ export class HelpSessionService {
     }
     // The checkpoint bucket is keyed by this id, so refuse an unusable one here,
     // before the prior lane is displaced.
-    if (!isSafeCheckpointSegment(input.projectId)) {
+    if (!isSafeCheckpointSegment(runCheckpointKeyFor(input.projectId))) {
       throw new Error("projectId is not usable as a run-checkpoint key");
     }
     // Absent means slot 0 (pre-slot callers and fixtures). Present but invalid
