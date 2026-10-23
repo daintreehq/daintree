@@ -43,6 +43,7 @@ let _clearFleetArming: (() => void) | null = null;
 let _getFleetArmedIds: (() => Set<string>) | null = null;
 let _getFleetLastArmedId: (() => string | null) | null = null;
 let _getAgentSettingsEntry: ((agentId: string) => AgentSettingsEntry | undefined) | null = null;
+let _getGlobalUseAltScreen: (() => boolean | undefined) | null = null;
 let _exitProjectHome: (() => void) | null = null;
 
 export function setAgentSettingsEntryAccessor(
@@ -59,6 +60,15 @@ export function setAgentSettingsEntryAccessor(
  */
 export function getAgentSettingsEntrySnapshot(agentId: string): AgentSettingsEntry | null {
   return _getAgentSettingsEntry?.(agentId) ?? null;
+}
+
+export function setGlobalUseAltScreenAccessor(getter: () => boolean | undefined): void {
+  _getGlobalUseAltScreen = getter;
+}
+
+/** The global "use the alternate screen" switch, `undefined` until settings load. */
+export function getGlobalUseAltScreenSnapshot(): boolean | undefined {
+  return _getGlobalUseAltScreen?.();
 }
 
 export function setPanelStoreAccessor(getter: () => PanelStoreSnapshot): void {
