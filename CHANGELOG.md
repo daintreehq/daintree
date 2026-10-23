@@ -1,5 +1,12 @@
 # Changelog
 
+## [Unreleased]
+
+### Breaking Changes
+
+- Element Picker is part of every dev preview instead of a built-in plugin: there is nothing to enable in the Plugin Manager, `devPreview.toggleElementPicker` replaces the plugin's `toggle-builder` command, and a leftover `daintree.sveltekit-builder` entry in the enabled or disabled plugin lists is ignored (#13886, #13890)
+- Plugin manifests can no longer declare `contributes.previewTools` or `contributes.guestAdapters`; both were built-in only, and an empty array for either is now an unknown key, so remove them (#13891)
+
 ## [0.46.0] - 2026-10-21
 
 Memory pressure stops taking agents down: the watchdog gives a stalled main process about 120 s instead of 15 s, macOS memory reads match Activity Monitor, and at critical pressure agent launches and cold project opens wait instead of piling on. Other hosts' copies of a project show beside local worktrees, Canopy opens into search, a paired device can answer a waiting agent, SvelteKit Tools becomes Element Picker for any framework, and a robustness sweep hardens git, settings persistence and crash reports.
