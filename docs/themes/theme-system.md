@@ -138,8 +138,6 @@ Interactive mode injects a control panel (bottom-right, shadow-rooted and delibe
 
 The 19 scenes (`SCENES` in that spec) are: `workbench`, `fleet`, `terminal`, `terminal-selection`, `sidebar-hover`, `sidebar-search`, `context-menu`, `filter-popover`, `action-palette`, `project-switcher`, `notifications`, `review-hub`, `file-viewer`, `settings`, `appearance` (the theme picker with hero art), `confirm` (the destructive dialog), `agent-working`, `agent-waiting`, and `dock`. The two agent scenes drive the real agent-state FSM via `e2e/helpers/fakeAgent.ts` rather than faking a CSS class, which is why the fake `claude` has to be on `PATH` before launch.
 
-The full authoring-and-review process — including the Codex review loop, the tier model for contrast budgets, and the traps that pass every test in the repo — lives in `.claude/skills/daintree-theme-creator/resources/theme-review-workflow.md`.
-
 Green has its own rule on top of these, because it is the token most often spent on saying nothing: see [status-success-policy.md](./status-success-policy.md).
 
 ## Design review checklist
@@ -201,4 +199,3 @@ Additional checks when reviewing a theme that authors the material extension key
 - [visual-guide.md](./visual-guide.md) — what every token looks like in the running app, surface by surface.
 - [status-success-policy.md](./status-success-policy.md) — the rule green has to pass before it gets to persist.
 - [`.claude/rules/design-system.md`](../../.claude/rules/design-system.md) — the abbreviated agent rule that loads when you touch a themed file.
-- `.claude/skills/daintree-theme-creator/` — the authoring and review skill, including `theme-review-workflow.md` and `theme-preview-images.md`.

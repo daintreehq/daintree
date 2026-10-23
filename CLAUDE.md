@@ -80,7 +80,7 @@ CI on PRs: `npm run check` split into `static` (typecheck, guards, format) and `
 - Use the `gh` CLI for all GitHub operations — plain HTTP fetches fail on auth.
 - `.daintree/recipes/*.json` are intentionally tracked. Never remove or gitignore them.
 - `.planning/` is gitignored and the pre-commit hook rejects it.
-- Skip issues labelled **`human-review`** (not solvable autonomously; 10-20x cost) and **`monitoring`** (blocked on an external event — checkable, not workable; sweep monthly via the `monitoring-sweep` skill).
+- Skip issues labelled **`human-review`** (not solvable autonomously; 10-20x cost) and **`monitoring`** (blocked on an external event — checkable, not workable).
 - `AGENTS.md` and `GEMINI.md` point here. Update this file, not those.
 
 ## Product invariants
@@ -96,8 +96,6 @@ CI on PRs: `npm run check` split into `static` (typecheck, guards, format) and `
 Daintree has a strict, heavily litigated visual and interaction contract. The rules load automatically when you touch matching files: `.claude/rules/design-system.md` (colour vocabulary, accent restraint, motion, loading gates, icons), `.claude/rules/user-signals.md` (microcopy, notify routing, runtime-signal tiers, destructive-action tiers), `.claude/rules/overlay-focus.md` (tooltip and focus restoration on overlay close), `.claude/rules/settings-pages.md` (the section → group → row grammar every settings page is built from).
 
 Two things worth knowing before you write any UI: check `src/components/ui/` before hand-rolling a surface, and accent colour is at most **one** load-bearing signal per focus region — in doubt, no accent.
-
-Themes are their own discipline — use the `daintree-theme-creator` skill rather than editing palettes by hand.
 
 ## Code and prose style
 
