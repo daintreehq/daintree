@@ -109,8 +109,8 @@ import {
 import type { Issue, PR } from "@shared/types/forge";
 import {
   publishSharedObservation,
+  readNewestSharedObservation,
   readRepoAlias,
-  readSharedObservation,
   writeRepoAlias,
 } from "@/lib/sharedRepoStats";
 
@@ -3074,6 +3074,9 @@ describe("useRepositoryStats", () => {
       });
       expect(result.current.stats?.prCount).toBe(5);
       expect(result.current.stats?.commitCount).toBe(412);
+      // Dated as the other host read them, so the badge's recency arbitration
+      // ranks them against dropdown totals honestly.
+      expect(result.current.stats?.issueCountRefreshedAt).toBe(5_000);
       expect(result.current.freshnessLevel).toBe("stale-disk");
       expect(getRepoStatsMock).toHaveBeenCalledTimes(1);
     });
@@ -3138,6 +3141,91 @@ describe("useRepositoryStats", () => {
       expect(result.current.stats?.prCount).toBe(5);
     });
 
+    it("keeps them, marked stale, against an older successful answer from this host", async () => {
+      shareFromLocalHost();
+      const poll = createDeferred<ForgeRepositoryStats>();
+      getRepoStatsMock.mockReturnValue(poll.promise);
+
+      const { result } = renderHook(() => useRepositoryStats());
+      await waitFor(() => {
+        expect(result.current.stats?.issueCount).toBe(11);
+      });
+
+      await act(async () => {
+        // A probe-confirmed cache hit: re-stamped now, but its counts were read
+        // long before the other host's.
+        poll.resolve({
+          commitCount: 412,
+          issueCount: 7,
+          prCount: 3,
+          loading: false,
+          stale: false,
+          lastUpdated: Date.now(),
+          issueCountRefreshedAt: 2_000,
+          prCountRefreshedAt: 2_000,
+          repoKey: REPO_KEY,
+        });
+        await Promise.resolve();
+      });
+
+      await waitFor(() => {
+        expect(result.current.isValidating).toBe(false);
+      });
+      expect(result.current.stats?.issueCount).toBe(11);
+      expect(result.current.isStale).toBe(true);
+      // ...and this host's own observation is still recorded as its own.
+      expect(readNewestSharedObservation(PROVIDER_ID, "octo", REPO_KEY, "local")).toEqual({
+        issueCount: 7,
+        prCount: 3,
+        observedAt: 2_000,
+        hostId: "studio",
+      });
+    });
+
+    it("carries on polling when the account lookup fails", async () => {
+      shareFromLocalHost();
+      getCurrentUserMock.mockImplementation(() => {
+        throw new Error("bridge gone");
+      });
+      getRepoStatsMock.mockResolvedValue({
+        commitCount: 413,
+        issueCount: 9,
+        prCount: 4,
+        loading: false,
+        stale: false,
+        lastUpdated: Date.now(),
+        repoKey: REPO_KEY,
+      });
+
+      const { result } = renderHook(() => useRepositoryStats());
+
+      await waitFor(() => {
+        expect(result.current.stats?.issueCount).toBe(9);
+      });
+      expect(result.current.error).toBeNull();
+    });
+
+    it("forgets the repository once the issue count comes from another provider", async () => {
+      shareFromLocalHost();
+      getRepoStatsMock.mockResolvedValue({
+        commitCount: 413,
+        issueCount: 2,
+        prCount: 4,
+        loading: false,
+        stale: false,
+        lastUpdated: Date.now(),
+      });
+
+      const { result } = renderHook(() => useRepositoryStats());
+
+      await waitFor(() => {
+        expect(result.current.stats?.issueCount).toBe(2);
+      });
+      await waitFor(() => {
+        expect(readRepoAlias("studio", "/srv/widgets")).toBeNull();
+      });
+    });
+
     it("ignores an observation made under a different account", async () => {
       shareFromLocalHost();
       getCurrentUserMock.mockResolvedValue({ login: "someone-else", rawData: null });
@@ -3145,11 +3233,11 @@ describe("useRepositoryStats", () => {
 
       const { result } = renderHook(() => useRepositoryStats());
 
+      // The poll is requested only after the shared-observation decision.
       await waitFor(() => {
-        expect(getCurrentUserMock).toHaveBeenCalled();
-        expect(result.current.stats?.issueCount).toBe(7);
+        expect(getRepoStatsMock).toHaveBeenCalled();
       });
-      await wait(20);
+      expect(getCurrentUserMock).toHaveBeenCalled();
       expect(result.current.stats?.issueCount).toBe(7);
     });
 
@@ -3166,9 +3254,8 @@ describe("useRepositoryStats", () => {
       const { result } = renderHook(() => useRepositoryStats());
 
       await waitFor(() => {
-        expect(result.current.stats?.issueCount).toBe(7);
+        expect(getRepoStatsMock).toHaveBeenCalled();
       });
-      await wait(20);
       expect(result.current.stats?.issueCount).toBe(7);
       expect(getCurrentUserMock).not.toHaveBeenCalled();
     });
@@ -3188,7 +3275,7 @@ describe("useRepositoryStats", () => {
       renderHook(() => useRepositoryStats());
 
       await waitFor(() => {
-        expect(readSharedObservation(PROVIDER_ID, "octo", REPO_KEY)).toEqual({
+        expect(readNewestSharedObservation(PROVIDER_ID, "octo", REPO_KEY, "local")).toEqual({
           issueCount: 9,
           prCount: 4,
           observedAt: lastUpdated,
@@ -3203,10 +3290,15 @@ describe("useRepositoryStats", () => {
 
     it("does no cross-host work in a local-only install", async () => {
       delete window.__DAINTREE_HOST_ID__;
-      // Another host's newer observation is sitting in the store; a local-only
-      // view must neither read it nor add its own.
-      shareFromLocalHost();
+      // Another host's newer observation is sitting in the store, aliased to
+      // this project; a local-only view must neither read it nor add its own.
       writeRepoAlias("local", "/srv/widgets", { providerId: PROVIDER_ID, repoKey: REPO_KEY });
+      publishSharedObservation(PROVIDER_ID, "octo", REPO_KEY, {
+        issueCount: 11,
+        prCount: 5,
+        observedAt: 5_000,
+        hostId: "studio",
+      });
       const keysBefore = Object.keys(window.localStorage).sort();
       const poll = createDeferred<ForgeRepositoryStats>();
       getRepoStatsMock.mockReturnValue(poll.promise);
@@ -3234,7 +3326,9 @@ describe("useRepositoryStats", () => {
       await wait(20);
 
       expect(Object.keys(window.localStorage).sort()).toEqual(keysBefore);
-      expect(readSharedObservation(PROVIDER_ID, "octo", REPO_KEY)?.observedAt).toBe(5_000);
+      expect(readNewestSharedObservation(PROVIDER_ID, "octo", REPO_KEY, "local")?.observedAt).toBe(
+        5_000
+      );
       expect(getCurrentUserMock).not.toHaveBeenCalled();
     });
   });
