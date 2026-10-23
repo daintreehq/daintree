@@ -783,6 +783,37 @@ describe("All hosts", () => {
     expect(cardOf("studio", "shared-run")).toBeNull();
   });
 
+  it("hands a host over to the single-host panel without releasing it after it is read again", async () => {
+    installElectron();
+    render(<CanopyView />);
+    await settle();
+    state.invoke.mockClear();
+    state.release.mockClear();
+    act(() => useCanopyStore.getState().setHostId("studio"));
+    await settle();
+    const opened =
+      state.invoke.mock.invocationCallOrder[
+        state.invoke.mock.calls.findIndex((call) => call[1] === "canopy:set-active")
+      ]!;
+    expect(state.release).toHaveBeenCalledWith("studio");
+    // Let go of the all-hosts reader first, so it can't close what the new one opened.
+    expect(Math.max(...state.release.mock.invocationCallOrder)).toBeLessThan(opened);
+  });
+
+  it("withholds the all-clear while a host has been heard in only one of its two reads", async () => {
+    installElectron();
+    useFleetSnapshotStore.setState({ snapshot: fleet([]) });
+    state.invoke.mockImplementation(async (_hostId: string, channel: string) => {
+      if (channel === "canopy:set-active") return remoteCanopy;
+      return new Promise(() => {});
+    });
+    render(<CanopyView />);
+    await settle();
+    expect(document.body.textContent).toContain("Connecting to studio-01");
+    expect(document.body.textContent).not.toContain("No agents are running on any host");
+    expect(document.body.textContent).not.toContain("Nothing needs you");
+  });
+
   it("releases every host it opened when the panel closes", async () => {
     installElectron();
     render(<CanopyView />);

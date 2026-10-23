@@ -698,6 +698,11 @@ function CanopyInbox({
     () => (everyHost ? createAllHostsRoute(ownHostId, participants) : null),
     [everyHost, ownHostId, participants]
   );
+  useEffect(() => {
+    if (!route || !isOpen) return;
+    route.open();
+    return () => route.close();
+  }, [route, isOpen]);
   const api = useMemo(
     () => route?.api ?? (hostId === null || everyHost ? ownCanopyApi : remoteCanopyApi(hostId)),
     [route, hostId, everyHost]
@@ -1277,7 +1282,11 @@ function CanopyInbox({
   // looked at when it opens there, each minute it stays, and as it stops
   // showing — while anyone can see the panel at all. Another host's run shows
   // only its reading here, not its terminal: no look is told of it.
-  const shownRunId = isOpen && !otherHost ? (focusedItem?.runId ?? null) : null;
+  const shownPlace = focusedItem ? placeOf(focusedItem, hostId, ownHostId) : null;
+  const shownRunId =
+    isOpen && (!otherHost || (everyHost && shownPlace?.hostId === null))
+      ? (shownPlace?.runId ?? null)
+      : null;
   useEffect(() => {
     if (shownRunId === null) return;
     // One look, reconciled whenever it could stop or start being true — the
@@ -1559,6 +1568,13 @@ function CanopyInbox({
 
   // The host a selected run is on, for the pane beside it; null for the window's own.
   const focusedHostId = focusedItem ? placeOf(focusedItem, hostId, ownHostId).hostId : null;
+
+  const focusedRow =
+    everyHost && focusedHostId !== null
+      ? (hostRows ?? []).find((row) => row.hostId === focusedHostId)
+      : undefined;
+  const focusedLinkStatus =
+    focusedRow?.isLocal === false ? focusedRow.connection?.status : undefined;
 
   const handlers = useMemo<CanopyCardHandlers>(() => {
     const openRun = (item: CanopyItem, newWindow = false) => {
@@ -2195,10 +2211,9 @@ function CanopyInbox({
   // Each host in All hosts says for itself why it can't be read; the list says so too.
   const hostIssues = useMemo((): HostIssue[] => {
     if (!everyHost) return [];
-    const nameOf = (id: HostId) =>
-      (hostRows ?? []).find((row) => row.hostId === id)?.name ?? "This Mac";
     return readings.flatMap((reading): HostIssue[] => {
-      const name = nameOf(reading.hostId);
+      const row = (hostRows ?? []).find((candidate) => candidate.hostId === reading.hostId);
+      const name = row?.name ?? "This Mac";
       const remoteHost = reading.hostId !== ownHostId;
       if (reading.error !== null && remoteHost) {
         return [
@@ -2210,12 +2225,18 @@ function CanopyInbox({
           },
         ];
       }
-      if (reading.canopy === null && reading.fleet === null && remoteHost) {
+      // A host not heard in full says nothing yet: no conclusion is drawn about it.
+      if (reading.canopy === null || reading.fleet === null) {
         return [
-          { hostId: reading.hostId, text: `Connecting to ${name}…`, action: null, act: null },
+          {
+            hostId: reading.hostId,
+            text: remoteHost ? `Connecting to ${name}…` : `Reading ${name}…`,
+            action: null,
+            act: null,
+          },
         ];
       }
-      if (reading.canopy !== null && !reading.canopy.activated) {
+      if (!reading.canopy.activated) {
         return [
           {
             hostId: reading.hostId,
@@ -2225,14 +2246,40 @@ function CanopyInbox({
           },
         ];
       }
+      const linkStatus = remoteHost && row?.isLocal === false ? row.connection?.status : undefined;
+      if (linkStatus !== undefined && linkStatus !== "connected") {
+        return [
+          {
+            hostId: reading.hostId,
+            text: `${name} isn't connected. Its agents are as last seen`,
+            action: "Retry",
+            act: () => remotes.retry(reading.hostId),
+          },
+        ];
+      }
+      if (reading.canopy.lastError) {
+        return [
+          {
+            hostId: reading.hostId,
+            text: `Canopy couldn't read every agent on ${name}`,
+            action: null,
+            act: null,
+          },
+        ];
+      }
       return [];
     });
   }, [everyHost, readings, hostRows, ownHostId, remotes]);
+  const retryingSomewhere =
+    everyHost &&
+    readings.some((reading) => reading.canopy?.activated === true && reading.canopy.waiting);
   const headerWords =
     hostSummary ??
-    (hostIssues.length > 0 && needsYou === 0 && fleet !== null
+    (needsYou === 0 && fleet !== null && hostIssues.length > 0
       ? "Not every host could be read"
-      : summaryLine);
+      : needsYou === 0 && fleet !== null && retryingSomewhere
+        ? "Checking who needs you…"
+        : summaryLine);
 
   const headerControls = (
     <>
@@ -2629,7 +2676,11 @@ function CanopyInbox({
                   }
                   otherHostId={(everyHost ? focusedHostId : hostId) ?? undefined}
                   terminalApi={terminalApi}
-                  reconnecting={otherHost && linkStatus !== undefined && linkStatus !== "connected"}
+                  reconnecting={
+                    everyHost
+                      ? focusedLinkStatus !== undefined && focusedLinkStatus !== "connected"
+                      : otherHost && linkStatus !== undefined && linkStatus !== "connected"
+                  }
                   {...handlers}
                 />
               ) : (

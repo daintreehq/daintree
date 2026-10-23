@@ -137,6 +137,7 @@ export const SEARCH_CONCURRENCY = 3;
 async function mapLimited<T, R>(
   items: readonly T[],
   limit: number,
+  alive: () => boolean,
   run: (item: T) => Promise<R>
 ): Promise<PromiseSettledResult<R>[]> {
   const results: PromiseSettledResult<R>[] = new Array(items.length);
@@ -144,6 +145,11 @@ async function mapLimited<T, R>(
   const worker = async () => {
     while (next < items.length) {
       const index = next++;
+      // Work still queued when the panel closed must not open a host's viewer again.
+      if (!alive()) {
+        results[index] = { status: "rejected", reason: new Error("The panel closed.") };
+        continue;
+      }
       try {
         results[index] = { status: "fulfilled", value: await run(items[index]!) };
       } catch (reason) {
@@ -153,6 +159,17 @@ async function mapLimited<T, R>(
   };
   await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
   return results;
+}
+
+/**
+ * What the hosts that answered said. When none did, the failure is the
+ * answer: a write every host refused is not a write that was made.
+ */
+function answered<R>(settled: readonly PromiseSettledResult<R>[]): R[] {
+  const values = settled.flatMap((result) => (result.status === "fulfilled" ? [result.value] : []));
+  const refused = settled.find((result) => result.status === "rejected");
+  if (refused && values.length === 0) throw refused.reason;
+  return values;
 }
 
 function groupByHost<T>(items: readonly T[], keyOf: (item: T) => string) {
@@ -170,6 +187,9 @@ function groupByHost<T>(items: readonly T[], keyOf: (item: T) => string) {
 export interface AllHostsRoute {
   api: CanopyApi;
   terminalApi: CanopyTerminalApi;
+  /** The panel closed: searches and bulk calls still queued do not start. */
+  close: () => void;
+  open: () => void;
 }
 
 /**
@@ -188,11 +208,21 @@ export function createAllHostsRoute(ownHostId: HostId, hostIds: readonly HostId[
 
   const routed = <R>(
     key: string,
-    call: (host: CanopyApi, id: string) => Promise<R>
+    call: (host: CanopyApi, id: string, hostId: HostId) => Promise<R>
   ): Promise<R> => {
     const parsed = parseAllHostsKey(key);
     if (!parsed || !known.has(parsed.hostId)) return unknownRun();
-    return call(apiFor(parsed.hostId), parsed.id);
+    return call(apiFor(parsed.hostId), parsed.id, parsed.hostId);
+  };
+  // A mark comes back named as the host knows it: the inbox holds it by key.
+  const marked = (hostId: HostId, mark: CanopyReadMark | null) =>
+    mark ? keyed(hostId, mark) : null;
+
+  let closed = false;
+  let session = 0;
+  const aliveNow = () => {
+    const mine = session;
+    return () => !closed && mine === session;
   };
 
   let receipt = 0;
@@ -211,40 +241,52 @@ export function createAllHostsRoute(ownHostId: HostId, hostIds: readonly HostId[
         )
       );
     },
-    setRead: (key, ...rest) => routed(key, (host, id) => host.setRead(id, ...rest)),
-    archive: (key, ...rest) => routed(key, (host, id) => host.archive(id, ...rest)),
+    setRead: (key, ...rest) =>
+      routed(key, (host, id, hostId) => host.setRead(id, ...rest).then((m) => marked(hostId, m))),
+    archive: (key, ...rest) =>
+      routed(key, (host, id, hostId) => host.archive(id, ...rest).then((m) => marked(hostId, m))),
     unarchive: (key, ...rest) => routed(key, (host, id) => host.unarchive(id, ...rest)),
     reread: (key, ...rest) => routed(key, (host, id) => host.reread(id, ...rest)),
     runBranch: (key, ...rest) => routed(key, (host, id) => host.runBranch(id, ...rest)),
     rename: (key, ...rest) => routed(key, (host, id) => host.rename(id, ...rest)),
     markAllRead: async (targets) => {
       const groups = groupByHost(targets, (target) => target.runId);
-      const settled = await mapLimited([...groups], SEARCH_CONCURRENCY, ([hostId, group]) =>
-        apiFor(hostId)
-          .markAllRead(group.map(({ item, id }) => ({ ...item, runId: id })))
-          .then((marks) => marks.map((mark): CanopyReadMark => keyed(hostId, mark)))
+      const settled = await mapLimited(
+        [...groups],
+        SEARCH_CONCURRENCY,
+        aliveNow(),
+        ([hostId, group]) =>
+          apiFor(hostId)
+            .markAllRead(group.map(({ item, id }) => ({ ...item, runId: id })))
+            .then((marks) => marks.map((mark): CanopyReadMark => keyed(hostId, mark)))
       );
-      return settled.flatMap((result) => (result.status === "fulfilled" ? result.value : []));
+      return answered(settled).flat();
     },
     restoreReads: async (restores) => {
       const groups = groupByHost(restores, (restore) => restore.mark.runId);
-      await Promise.allSettled(
-        [...groups].map(([hostId, group]) =>
-          apiFor(hostId).restoreReads(
-            group.map(({ item, id }) => ({ ...item, mark: { ...item.mark, runId: id } }))
+      answered(
+        await Promise.allSettled(
+          [...groups].map(([hostId, group]) =>
+            apiFor(hostId).restoreReads(
+              group.map(({ item, id }) => ({ ...item, mark: { ...item.mark, runId: id } }))
+            )
           )
         )
       );
     },
     refresh: async () => {
-      await Promise.allSettled(hostIds.map((hostId) => apiFor(hostId).refresh()));
+      answered(await Promise.allSettled(hostIds.map((hostId) => apiFor(hostId).refresh())));
     },
     searchScreens: async (targets: CanopyScreenSearchTarget[]) => {
       const groups = groupByHost(targets, (target) => target.runId);
-      const settled = await mapLimited([...groups], SEARCH_CONCURRENCY, ([hostId, group]) =>
-        apiFor(hostId)
-          .searchScreens(group.map(({ item, id }) => ({ ...item, runId: id })))
-          .then((ids) => ids.map((id) => allHostsKey(hostId, id)))
+      const settled = await mapLimited(
+        [...groups],
+        SEARCH_CONCURRENCY,
+        aliveNow(),
+        ([hostId, group]) =>
+          apiFor(hostId)
+            .searchScreens(group.map(({ item, id }) => ({ ...item, runId: id })))
+            .then((ids) => ids.map((id) => allHostsKey(hostId, id)))
       );
       // A host that can't search still matches what the panel holds of it.
       return settled.flatMap((result) => (result.status === "fulfilled" ? result.value : []));
@@ -271,6 +313,19 @@ export function createAllHostsRoute(ownHostId: HostId, hostIds: readonly HostId[
   // hosts number their watches alike.
   let watchSeq = 0;
   const watches = new Map<number, { hostId: HostId; raw: number; key: string }>();
+  // Each opening or release is a generation: an answer from an older one is
+  // not the stream the panel wants any more.
+  let generation = 0;
+  let wantedHost: HostId | null = null;
+  const opening = new Map<HostId, number>();
+  // Output a host sent between taking the watch and its answer reaching us.
+  const early: Array<{ hostId: HostId; chunk: CanopyTerminalData }> = [];
+  const EARLY_LIMIT = 256;
+  const forgetEarly = (hostId?: HostId) => {
+    for (let i = early.length - 1; i >= 0; i -= 1) {
+      if (hostId === undefined || early[i]!.hostId === hostId) early.splice(i, 1);
+    }
+  };
   const dropWatches = (except?: HostId) => {
     for (const [mine, watch] of watches) {
       if (watch.hostId === except) continue;
@@ -282,23 +337,75 @@ export function createAllHostsRoute(ownHostId: HostId, hostIds: readonly HostId[
   };
   const watchOf = (mine: number) => watches.get(mine);
 
+  const listeners = new Set<(chunk: CanopyTerminalData) => void>();
+  const emit = (mine: number, key: string, chunk: CanopyTerminalData) => {
+    for (const listener of listeners) listener({ ...chunk, watchId: mine, runId: key });
+  };
+  const forward = (hostId: HostId) => (chunk: CanopyTerminalData) => {
+    for (const [mine, watch] of watches) {
+      if (watch.hostId === hostId && watch.raw === chunk.watchId) {
+        emit(mine, watch.key, chunk);
+        return;
+      }
+    }
+    if (!opening.has(hostId)) return;
+    early.push({ hostId, chunk });
+    if (early.length > EARLY_LIMIT) early.shift();
+  };
+  let stopForwarding: (() => void) | null = null;
+
   const terminalApi: CanopyTerminalApi = {
     holdsSize: false,
     watchTerminal: async (key, target): Promise<CanopyTerminalView> => {
       const parsed = parseAllHostsKey(key);
       if (!parsed || !known.has(parsed.hostId)) return unknownRun();
+      const mineGeneration = ++generation;
+      wantedHost = parsed.hostId;
       dropWatches(parsed.hostId);
       // The host replaces its own watch, and may number the next like the last.
       for (const [id, watch] of watches) if (watch.hostId === parsed.hostId) watches.delete(id);
-      const view = await terminalFor(parsed.hostId).watchTerminal(parsed.id, target);
+      forgetEarly(parsed.hostId);
+      opening.set(parsed.hostId, (opening.get(parsed.hostId) ?? 0) + 1);
+      let view: CanopyTerminalView;
+      try {
+        view = await terminalFor(parsed.hostId).watchTerminal(parsed.id, target);
+      } finally {
+        const left = (opening.get(parsed.hostId) ?? 1) - 1;
+        if (left > 0) opening.set(parsed.hostId, left);
+        else opening.delete(parsed.hostId);
+      }
+      if (mineGeneration !== generation) {
+        // Overtaken while the host answered: nothing may keep streaming for it.
+        if (!opening.has(parsed.hostId)) forgetEarly(parsed.hostId);
+        if (wantedHost !== parsed.hostId) {
+          void terminalFor(parsed.hostId)
+            .unwatchTerminal()
+            .catch(() => {});
+        }
+        return { watchId: null, snapshot: null };
+      }
       if (view.watchId === null) return view;
       const mine = ++watchSeq;
       watches.set(mine, { hostId: parsed.hostId, raw: view.watchId, key });
+      const rawId = view.watchId;
+      for (let i = 0; i < early.length;) {
+        const held = early[i]!;
+        if (held.hostId === parsed.hostId && held.chunk.watchId === rawId) {
+          early.splice(i, 1);
+          emit(mine, key, held.chunk);
+        } else {
+          i += 1;
+        }
+      }
       return { ...view, watchId: mine };
     },
     unwatchTerminal: async () => {
+      generation += 1;
+      wantedHost = null;
       const hosts = new Set([...watches.values()].map((watch) => watch.hostId));
+      for (const hostId of opening.keys()) hosts.add(hostId);
       watches.clear();
+      forgetEarly();
       await Promise.allSettled([...hosts].map((hostId) => terminalFor(hostId).unwatchTerminal()));
     },
     terminalInput: (mine, data) => {
@@ -322,16 +429,18 @@ export function createAllHostsRoute(ownHostId: HostId, hostIds: readonly HostId[
       return terminalFor(parsed.hostId).answer(parsed.id, target, label);
     },
     onTerminalData: (callback) => {
-      const forward = (hostId: HostId) => (chunk: CanopyTerminalData) => {
-        for (const [mine, watch] of watches) {
-          if (watch.hostId === hostId && watch.raw === chunk.watchId) {
-            callback({ ...chunk, watchId: mine, runId: watch.key });
-            return;
-          }
+      listeners.add(callback);
+      if (stopForwarding === null) {
+        const offs = hostIds.map((hostId) => terminalFor(hostId).onTerminalData(forward(hostId)));
+        stopForwarding = () => offs.forEach((off) => off());
+      }
+      return () => {
+        listeners.delete(callback);
+        if (listeners.size === 0) {
+          stopForwarding?.();
+          stopForwarding = null;
         }
       };
-      const offs = hostIds.map((hostId) => terminalFor(hostId).onTerminalData(forward(hostId)));
-      return () => offs.forEach((off) => off());
     },
     onResync: (callback) => {
       const offs = hostIds
@@ -345,5 +454,15 @@ export function createAllHostsRoute(ownHostId: HostId, hostIds: readonly HostId[
       return () => offs.forEach((off) => off());
     },
   };
-  return { api, terminalApi };
+  return {
+    api,
+    terminalApi,
+    close: () => {
+      closed = true;
+      session += 1;
+    },
+    open: () => {
+      closed = false;
+    },
+  };
 }

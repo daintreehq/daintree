@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { canopyHostClient } from "@/clients/canopyHostClient";
 import { remoteHostsClient } from "@/clients/remoteHostsClient";
 import type { BulkTransport } from "@shared/utils/canopyBulkEnable";
@@ -373,7 +373,10 @@ export function useRemoteCanopies(
   const controllers = useRef(new Map<HostId, HostController>());
   const wanted = active ? [...new Set(hostIds)].sort().join("\u0000") : "";
 
-  useEffect(() => {
+  // A host leaving is released before anything connects to it again — the
+  // single-host reader opening the same host in this commit included — since
+  // both speak through the one viewer the host has for this panel.
+  useLayoutEffect(() => {
     const open = controllers.current;
     const ids = wanted === "" ? [] : wanted.split("\u0000");
     for (const [hostId, controller] of open) {
@@ -387,6 +390,12 @@ export function useRemoteCanopies(
         return next;
       });
     }
+  }, [wanted]);
+
+  // And a host joining waits for the single-host reader to have let go of it.
+  useEffect(() => {
+    const open = controllers.current;
+    const ids = wanted === "" ? [] : wanted.split("\u0000");
     for (const hostId of ids) {
       if (open.has(hostId)) continue;
       open.set(

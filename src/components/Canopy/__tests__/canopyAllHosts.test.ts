@@ -13,6 +13,10 @@ const ownCalls = vi.hoisted(() => ({
   watchTerminal: vi.fn(() => Promise.resolve({ watchId: 1, snapshot: null })),
   unwatchTerminal: vi.fn(() => Promise.resolve()),
   terminalInput: vi.fn(() => Promise.resolve()),
+  setMode: vi.fn(() => Promise.resolve()),
+  refresh: vi.fn(() => Promise.resolve()),
+  setRead: vi.fn((): Promise<unknown> => Promise.resolve(null)),
+  onTerminalData: vi.fn((_callback: (chunk: unknown) => void) => () => {}),
 }));
 
 vi.mock("@/clients/canopyHostClient", () => ({
@@ -227,6 +231,51 @@ describe("createAllHostsRoute", () => {
     const { api } = createAllHostsRoute("own", ["own", "remote"]);
     await expect(api.setMode("on")).rejects.toThrow();
     expect(invoke).not.toHaveBeenCalled();
+    expect(ownCalls.setMode).not.toHaveBeenCalled();
+  });
+
+  it("hands back a changed read mark under the key the inbox holds it by", async () => {
+    const mark = {
+      runId: "t1",
+      spawnedAt: 4,
+      turn: 2,
+      readTurn: 2,
+      markedUnreadAt: null,
+      version: 3,
+    };
+    invoke.mockResolvedValue(mark);
+    const { api } = createAllHostsRoute("own", ["own", "remote"]);
+    const after = await api.setRead(allHostsKey("remote", "t1"), { spawnedAt: 4 }, true, 2);
+    expect(after).toEqual({ ...mark, runId: allHostsKey("remote", "t1") });
+  });
+
+  it("is refused by the hosts it writes to as a whole, not reported as done", async () => {
+    invoke.mockRejectedValue(new Error("offline"));
+    ownCalls.refresh.mockRejectedValueOnce(new Error("offline"));
+    const { api } = createAllHostsRoute("own", ["own", "remote"]);
+    await expect(api.refresh()).rejects.toThrow("offline");
+    ownCalls.refresh.mockResolvedValueOnce(undefined);
+    await expect(api.refresh()).resolves.toBeUndefined();
+  });
+
+  it("starts no search that was still queued when the panel closed", async () => {
+    const answers: Array<() => void> = [];
+    invoke.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          answers.push(() => resolve([]));
+        })
+    );
+    const hosts = ["h1", "h2", "h3", "h4"];
+    const route = createAllHostsRoute("own", hosts);
+    const pending = route.api.searchScreens(
+      hosts.map((host) => ({ runId: allHostsKey(host, "t1"), spawnedAt: 1, terms: ["x"] }))
+    );
+    expect(invoke).toHaveBeenCalledTimes(3);
+    route.close();
+    answers.forEach((answer) => answer());
+    await pending;
+    expect(invoke).toHaveBeenCalledTimes(3);
   });
 
   it("tells every host which of its rows are shown, none included", async () => {
@@ -277,6 +326,8 @@ describe("createAllHostsRoute", () => {
       hosts.map((host) => ({ runId: allHostsKey(host, "t1"), spawnedAt: 1, terms: ["x"] }))
     );
     expect(peak).toBeLessThanOrEqual(3);
+    // Bounded, and every host still asked.
+    expect(invoke).toHaveBeenCalledTimes(hosts.length);
   });
 
   it("watches one terminal at a time, on the host it is on, and renumbers the stream", async () => {
@@ -292,6 +343,54 @@ describe("createAllHostsRoute", () => {
     // A stale id of the old stream reaches nobody.
     await terminalApi.terminalInput(own.watchId!, "y");
     expect(ownCalls.terminalInput).not.toHaveBeenCalled();
+  });
+
+  it("lets go of a stream opened for a row that was left before the host answered", async () => {
+    const answers = new Map<string, (view: unknown) => void>();
+    invoke.mockImplementation(
+      (host: string, channel: string) =>
+        new Promise((resolve) => {
+          if (channel === "canopy:watch-terminal") answers.set(host, resolve);
+          else resolve(undefined);
+        })
+    );
+    const { terminalApi } = createAllHostsRoute("own", ["own", "a", "b"]);
+    const first = terminalApi.watchTerminal(allHostsKey("a", "t1"), { spawnedAt: 1 });
+    const second = terminalApi.watchTerminal(allHostsKey("b", "t1"), { spawnedAt: 1 });
+    answers.get("a")!({ watchId: 1, snapshot: null });
+    expect((await first).watchId).toBeNull();
+    expect(invoke).toHaveBeenCalledWith("a", "canopy:unwatch-terminal");
+    answers.get("b")!({ watchId: 1, snapshot: null });
+    const view = await second;
+    expect(view.watchId).not.toBeNull();
+    expect(invoke).not.toHaveBeenCalledWith("b", "canopy:unwatch-terminal");
+  });
+
+  it("keeps output a host sent before its answer, under the renumbered stream", async () => {
+    let send: (chunk: unknown) => void = () => {};
+    ownCalls.onTerminalData.mockImplementationOnce((callback) => {
+      send = callback;
+      return () => {};
+    });
+    let answer: (view: { watchId: number; snapshot: null }) => void = () => {};
+    ownCalls.watchTerminal.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          answer = resolve;
+        })
+    );
+    const { terminalApi } = createAllHostsRoute("own", ["own"]);
+    const seen: unknown[] = [];
+    terminalApi.onTerminalData((chunk) => seen.push(chunk));
+    const watching = terminalApi.watchTerminal(allHostsKey("own", "t1"), { spawnedAt: 1 });
+    send({ kind: "data", watchId: 5, runId: "t1", data: "early" });
+    answer({ watchId: 5, snapshot: null });
+    const view = await watching;
+    expect(seen).toEqual([
+      { kind: "data", watchId: view.watchId, runId: allHostsKey("own", "t1"), data: "early" },
+    ]);
+    send({ kind: "data", watchId: 5, runId: "t1", data: "later" });
+    expect(seen).toHaveLength(2);
   });
 
   it("releases every watched host on unwatch", async () => {
