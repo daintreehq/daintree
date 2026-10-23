@@ -34,9 +34,9 @@ A plugin that declares `"scope": "project"` lives in a project's own repository 
 | `promptTemplates` | Available — offered only in the owning project's composer, and gone while the plugin is switched off or its folder is untrusted |
 | `worktreeSetupSteps` | Available — run only for worktrees created in the owning project |
 | `terminalLinks` | Available — matched only in the owning project's terminals, and gone while the plugin is switched off or its folder is untrusted |
+| `skills` | Available — served only to sessions bound to the owning project, through Daintree's `skills.search` / `skills.load` and the plugin's own agent MCP server, and never to another project or to a session with no project |
 | `menuItems` | Rejected — the application menu is one OS-level menu shared by every window, with no per-project projection |
 | `agents` | Rejected — the agent roster is one app-wide registry mirrored into the shared pty-host, and launch identity outlives the project binding |
-| `skills` | Rejected — contributed skills land in one app-wide index behind the MCP server's `skills.search` / `skills.load`, which filter by no project |
 | `processTools` | Rejected — detections are mirrored into the shared pty-host as one table for every terminal |
 | `mcpServers` | Rejected — the plugin-MCP IPC surface is app-global: servers are addressed by plugin and server id alone, and a tool call carries no project to check the contribution against. To serve tools to the project's agents, declare `agentMcp` instead |
 | `tours` | Allowed — a project plugin's tours are offered only in its own project |
@@ -1160,7 +1160,7 @@ The cap was 8 tools before Daintree 0.39.0. An older host rejects a larger roste
 
 **Giving it access.** Declaring the endpoint exposes nothing, for an installed plugin or a project one. Each plugin has one agent access setting — **Off** (the default), **Read only** (the database tools and declared read queries) or **Read and write** (those, declared write queries and your own tools) — in **Project settings → Plugins → Agent tools**. It is stored in Daintree's own user store, keyed by the plugin _instance_ so an answer for an installed plugin never reaches a project plugin with the same manifest id, and never in the repository. An installed plugin can also be set once for every project, and a project's own setting overrides that. A project plugin's own repository can set a default in `.daintree/mcp.json`, which never reaches an installed plugin and which the user's answer overrides ([Agent extensions → Project defaults](./agent-extensions.md#project-defaults-daintreemcpjson)). Lowering the setting revokes every live credential it no longer allows. Once the plugin has access, each agent launched in that project afterwards receives a credential for its server — Claude Code, Codex, Gemini CLI, opencode, Copilot CLI, Amp, Qwen Code and Mistral Vibe, each in its own launch mechanism; an agent already running must be relaunched to get it ([Agent extensions → Reaching an agent](./agent-extensions.md#reaching-an-agent)). The Daintree MCP server must be enabled in Settings → MCP server, since the plugin's server is served on its listener.
 
-**Available under `scope: "project"`.** Unlike `mcpServers` and `skills`, this surface has a project axis: every credential is minted for one terminal launch in one project, the route re-checks that project's access setting on every request, and a project plugin's endpoint can only be granted to the project that loaded it. See [Trust model → Agent MCP endpoints](./trust-model.md#agent-mcp-endpoints-mcpexpose) for the credential and consent model.
+**Available under `scope: "project"`.** Unlike `mcpServers`, this surface has a project axis: every credential is minted for one terminal launch in one project, the route re-checks that project's access setting on every request, and a project plugin's endpoint can only be granted to the project that loaded it. See [Trust model → Agent MCP endpoints](./trust-model.md#agent-mcp-endpoints-mcpexpose) for the credential and consent model.
 
 ## Databases — _Shipped_
 
@@ -1300,7 +1300,7 @@ Markdown-defined instruction/knowledge snippets that extend Daintree's built-in 
 
 A skill file larger than 512 KiB is skipped with a warning, as is one that cannot be read; the rest of the plugin's skills still register. Of a leading YAML frontmatter block, only `description` is read, and it is shown in search results; the rest of the file after the block is the body.
 
-The markdown file content is returned to the agent when it calls `skills.load`, so it can be incorporated into the current task. See [Agent extensions → Skills](./agent-extensions.md#skills) for the full file format and invocation mechanics.
+The markdown file content is returned to the agent when it calls `skills.load`, so it can be incorporated into the current task. A plugin with an agent MCP server also serves its own skills there, beside its tools. An installed plugin's skills reach every project; a [project plugin](./project-local.md)'s reach only sessions bound to its own project. See [Agent extensions → Skills](./agent-extensions.md#skills) for the full file format and invocation mechanics.
 
 ## Prompt templates — _Shipped_
 

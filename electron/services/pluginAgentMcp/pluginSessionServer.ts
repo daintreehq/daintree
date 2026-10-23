@@ -19,6 +19,13 @@ import {
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import { agentMcpEndpointRegistry, type AgentMcpEndpointRegistry } from "./endpointRegistry.js";
 import {
+  pluginSkillRegistrySource,
+  runSkillTool,
+  SKILL_TOOL_NAMES,
+  skillTools,
+  type PluginSkillSource,
+} from "./skillTools.js";
+import {
   DATABASE_ENDPOINT_ID,
   RESERVED_AGENT_MCP_TOOL_NAMES,
   type AgentMcpEndpointRegistration,
@@ -51,6 +58,8 @@ export interface PluginSessionServerOptions {
   /** Workers activate lazily and register their rosters inside `activate()`. */
   activatePlugin: (pluginInstanceId: string) => Promise<void>;
   endpointRegistry?: AgentMcpEndpointRegistry;
+  /** The plugin's contributed skills, served by the host on every grant. */
+  skills?: PluginSkillSource;
   callTimeoutMs?: number;
   maxResultBytes?: number;
   /** How long a list or call waits for a roster that is not registered yet. */
@@ -82,6 +91,12 @@ const DEFAULT_ROSTER_WAIT_MS = 5_000;
 
 const RELOADING_MESSAGE = "The plugin is reloading. Retry in a moment.";
 
+/** Every name the host answers on any plugin's server, whatever its rosters hold. */
+const FIXED_HOST_TOOL_NAMES: ReadonlySet<string> = new Set([
+  ...RESERVED_AGENT_MCP_TOOL_NAMES,
+  ...SKILL_TOOL_NAMES,
+]);
+
 type AbortCause = "timeout" | "cancelled" | "session-closed" | "endpoint-changed";
 
 const ABORT_MESSAGES: Record<AbortCause, (timeoutMs: number) => string> = {
@@ -112,10 +127,69 @@ function toolError(message: string): CallToolResult {
 
 type Registration = AgentMcpEndpointRegistration | undefined;
 
+function inputProblem(toolName: string, problem: string): CallToolResult {
+  return toolError(
+    new McpError(
+      ErrorCode.InvalidParams,
+      `Input validation error: Invalid arguments for tool ${toolName}: ${problem}`
+    ).message
+  );
+}
+
+/**
+ * A tool's answer as the agent receives it: serialized, held to the result
+ * budget, and — for a tool with an output schema — checked and carried as
+ * structured content too.
+ */
+function toolResult(
+  descriptor: AgentMcpRegisteredTool,
+  value: unknown,
+  maxResultBytes: number
+): CallToolResult {
+  let text: string | undefined;
+  try {
+    text = JSON.stringify(value === undefined ? null : value);
+  } catch {
+    text = undefined;
+  }
+  if (text === undefined) {
+    return toolError("The tool returned a value that cannot be serialized to JSON.");
+  }
+  const bytes = Buffer.byteLength(text, "utf8");
+  if (bytes > maxResultBytes) {
+    return toolError(
+      `The tool result is ${bytes} bytes, over the ${maxResultBytes}-byte limit for plugin tool results.`
+    );
+  }
+
+  if (descriptor.outputSchema === undefined) {
+    return { content: [{ type: "text", text }] };
+  }
+  // A declared output schema is a client-validated contract: the SDK client
+  // refuses a successful result without structured content, so a value that
+  // cannot be one is the tool's error rather than a silent text-only answer.
+  // The parsed copy, not the raw value, so what is structured is exactly what
+  // was measured and sent as text.
+  const structured: unknown = JSON.parse(text);
+  if (!isPlainObject(structured)) {
+    return toolError(
+      "The tool declares an output schema but returned a value that is not a JSON object."
+    );
+  }
+  const outputProblem = descriptor.checkOutput(structured);
+  if (outputProblem !== null) {
+    return toolError(
+      `The tool returned a result that does not match its output schema: ${outputProblem}`
+    );
+  }
+  return { content: [{ type: "text", text }], structuredContent: structured };
+}
+
 /**
  * The MCP server behind one plugin session: the host's read-only tools for the
  * plugin's databases and the plugin's own tools, each as the grant's scope
- * allows, on one server. Tools only: no resources, no prompts, no
+ * allows, and the host's tools for the plugin's skills on any grant, on one
+ * server. Tools only: no resources, no prompts, no
  * `instructions` — the plugin-only route must never expose any of the
  * orchestration surface, and nothing a plugin returns is ever promoted out of
  * tool-result content into something an agent reads as guidance.
@@ -134,6 +208,7 @@ export function createPluginSessionServer(options: PluginSessionServerOptions): 
     sessionSignal,
     activatePlugin,
     endpointRegistry = agentMcpEndpointRegistry,
+    skills = pluginSkillRegistrySource,
     callTimeoutMs = AGENT_MCP_CALL_TIMEOUT_MS,
     maxResultBytes = AGENT_MCP_MAX_RESULT_BYTES,
     rosterWaitMs = DEFAULT_ROSTER_WAIT_MS,
@@ -229,9 +304,19 @@ export function createPluginSessionServer(options: PluginSessionServerOptions): 
    */
   const hostToolNames = (databases: Registration): ReadonlySet<string> => {
     const roster = databases ?? endpointRegistry.get(pluginInstanceId, DATABASE_ENDPOINT_ID);
-    if (!roster) return RESERVED_AGENT_MCP_TOOL_NAMES;
-    return new Set([...RESERVED_AGENT_MCP_TOOL_NAMES, ...roster.tools.map((tool) => tool.name)]);
+    if (!roster) return FIXED_HOST_TOOL_NAMES;
+    return new Set([...FIXED_HOST_TOOL_NAMES, ...roster.tools.map((tool) => tool.name)]);
   };
+
+  /**
+   * The skill tools, when the plugin has any skill to serve. They read
+   * documentation the host parsed at load, so every grant reaches them and
+   * calling one never activates the plugin. Scoped to this
+   * instance and the grant's project: never another plugin's skills, and never
+   * a project plugin's outside its own project.
+   */
+  const servedSkillTools = (): readonly AgentMcpRegisteredTool[] =>
+    skills.has(pluginInstanceId) ? skillTools() : [];
 
   const assertServable = (): void => {
     if (!isCallerServable()) {
@@ -252,6 +337,7 @@ export function createPluginSessionServer(options: PluginSessionServerOptions): 
     const hostNames = hostToolNames(databases);
     const tools: Tool[] = [
       ...(databases?.tools ?? []).filter(isGranted),
+      ...servedSkillTools(),
       // Registration already refuses the host's names; this keeps the two
       // rosters from ever advertising one name twice regardless.
       ...(own?.tools ?? []).filter((tool) => !hostNames.has(tool.name)),
@@ -270,6 +356,25 @@ export function createPluginSessionServer(options: PluginSessionServerOptions): 
     }));
     return { tools };
   });
+
+  const callSkillTool = (toolName: string, rawArgs: Record<string, unknown>): CallToolResult => {
+    const descriptor = servedSkillTools().find((tool) => tool.name === toolName);
+    if (!descriptor) {
+      throw new McpError(ErrorCode.InvalidParams, `Unknown tool: ${toolName}`);
+    }
+    const argsProblem = descriptor.checkInput(rawArgs);
+    if (argsProblem !== null) return inputProblem(toolName, argsProblem);
+    let value: unknown;
+    try {
+      value = runSkillTool(skills, toolName, rawArgs, {
+        projectId: caller.projectId,
+        pluginInstanceId,
+      });
+    } catch (err) {
+      return toolError(formatErrorMessage(err, "Tool call failed."));
+    }
+    return toolResult(descriptor, value, maxResultBytes);
+  };
 
   let inFlight = 0;
 
@@ -343,6 +448,8 @@ export function createPluginSessionServer(options: PluginSessionServerOptions): 
       if (controller.signal.aborted) return abortedResult();
       if (!isCallerServable()) return toolError(RELOADING_MESSAGE);
 
+      if (SKILL_TOOL_NAMES.has(toolName)) return callSkillTool(toolName, rawArgs);
+
       // A database tool, generic or declared, is the host's and is answered
       // without the plugin; any other name can only be the plugin's own. The
       // host's roster is read first — reading it never activates the plugin —
@@ -385,14 +492,7 @@ export function createPluginSessionServer(options: PluginSessionServerOptions): 
       // carried in a tool result rather than a protocol error, so the agent
       // reads what was wrong and can correct the call.
       const argsProblem = descriptor.checkInput(rawArgs);
-      if (argsProblem !== null) {
-        return toolError(
-          new McpError(
-            ErrorCode.InvalidParams,
-            `Input validation error: Invalid arguments for tool ${toolName}: ${argsProblem}`
-          ).message
-        );
-      }
+      if (argsProblem !== null) return inputProblem(toolName, argsProblem);
 
       // Subscribed only after the roster was read, so the registration that
       // activation itself produced does not count as a change. A replaced or
@@ -434,43 +534,7 @@ export function createPluginSessionServer(options: PluginSessionServerOptions): 
       // longer exists and is discarded.
       if (controller.signal.aborted) return abortedResult();
 
-      let text: string | undefined;
-      try {
-        text = JSON.stringify(value === undefined ? null : value);
-      } catch {
-        text = undefined;
-      }
-      if (text === undefined) {
-        return toolError("The tool returned a value that cannot be serialized to JSON.");
-      }
-      const bytes = Buffer.byteLength(text, "utf8");
-      if (bytes > maxResultBytes) {
-        return toolError(
-          `The tool result is ${bytes} bytes, over the ${maxResultBytes}-byte limit for plugin tool results.`
-        );
-      }
-
-      if (descriptor.outputSchema === undefined) {
-        return { content: [{ type: "text", text }] };
-      }
-      // A declared output schema is a client-validated contract: the SDK client
-      // refuses a successful result without structured content, so a value
-      // that cannot be one is the tool's error rather than a silent text-only
-      // answer. The parsed copy, not the raw value, so what is structured is
-      // exactly what was measured and sent as text.
-      const structured: unknown = JSON.parse(text);
-      if (!isPlainObject(structured)) {
-        return toolError(
-          "The tool declares an output schema but returned a value that is not a JSON object."
-        );
-      }
-      const outputProblem = descriptor.checkOutput(structured);
-      if (outputProblem !== null) {
-        return toolError(
-          `The tool returned a result that does not match its output schema: ${outputProblem}`
-        );
-      }
-      return { content: [{ type: "text", text }], structuredContent: structured };
+      return toolResult(descriptor, value, maxResultBytes);
     } finally {
       inFlight -= 1;
       clearTimeout(timer);

@@ -400,8 +400,8 @@ export class McpServerService {
         handleWaitUntilIdle(rawArgs, signal, options),
       handleWaitUntilIdleBatch: (rawArgs, signal, options) =>
         handleWaitUntilIdleBatch(rawArgs, signal, options),
-      handleSkillsSearch: (rawArgs) => handleSkillsSearch(rawArgs),
-      handleSkillsLoad: (rawArgs) => handleSkillsLoad(rawArgs),
+      handleSkillsSearch: (rawArgs, visibility) => handleSkillsSearch(rawArgs, visibility),
+      handleSkillsLoad: (rawArgs, visibility) => handleSkillsLoad(rawArgs, visibility),
       handleProjectRunCheck: (rawArgs, signal, authorize) =>
         handleProjectRunCheck(rawArgs, signal, authorize),
       handleProjectRunCommand: (rawArgs, signal, authorize) =>

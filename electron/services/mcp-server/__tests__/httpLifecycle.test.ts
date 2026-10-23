@@ -1125,6 +1125,97 @@ describe("HttpLifecycle", () => {
     });
   });
 
+  describe("buildSessionServerDeps — skills visibility (#13831)", () => {
+    type SkillDeps = {
+      handleSkillsSearch: (rawArgs: unknown) => unknown;
+      handleSkillsLoad: (rawArgs: unknown) => unknown;
+    };
+    const buildDeps = (
+      lc: HttpLifecycle,
+      sessionId: string,
+      workspaceBinding?: { workspaceId: string }
+    ): SkillDeps =>
+      (
+        lc as unknown as {
+          buildSessionServerDeps: (id: string, binding?: { workspaceId: string }) => SkillDeps;
+        }
+      ).buildSessionServerDeps(sessionId, workspaceBinding);
+
+    const PROJECT = "c".repeat(64);
+    const SCRATCH = "0b9a4c1e-6f2d-4a8b-9c3d-5e7f1a2b3c4d";
+    const PIN = 505;
+
+    function setup() {
+      const deps = fakeDeps();
+      const lc = new HttpLifecycle(deps);
+      return { deps, lc };
+    }
+
+    const projectSeenBy = (deps: ReturnType<typeof fakeDeps>, skills: SkillDeps) => {
+      skills.handleSkillsSearch({ query: "tdd" });
+      skills.handleSkillsLoad({ id: "x" });
+      const search = vi.mocked(deps.handleSkillsSearch).mock.calls.at(-1);
+      const load = vi.mocked(deps.handleSkillsLoad).mock.calls.at(-1);
+      expect(search?.[0]).toEqual({ query: "tdd" });
+      expect(load?.[1]).toEqual(search?.[1]);
+      return (search?.[1] as { projectId: string | null } | undefined)?.projectId;
+    };
+
+    afterEach(() => {
+      mockWebContentsById.delete(PIN);
+    });
+
+    it("reads a workspace-bound session's own project", () => {
+      const { deps, lc } = setup();
+      expect(projectSeenBy(deps, buildDeps(lc, "s", { workspaceId: PROJECT }))).toBe(PROJECT);
+    });
+
+    it("gives an unbound session no project, never the focused one", () => {
+      const { deps, lc } = setup();
+      expect(projectSeenBy(deps, buildDeps(lc, "s"))).toBeNull();
+    });
+
+    it("gives a session bound to a scratch no project", () => {
+      const { deps, lc } = setup();
+      expect(projectSeenBy(deps, buildDeps(lc, "s", { workspaceId: SCRATCH }))).toBeNull();
+    });
+
+    it("reads a viewless help session's project, and loses it at teardown", () => {
+      const { deps, lc } = setup();
+      deps.sessionStore.sessionViewlessHelpMap.set("s", PROJECT);
+      const skills = buildDeps(lc, "s");
+      expect(projectSeenBy(deps, skills)).toBe(PROJECT);
+      deps.sessionStore.sessionViewlessHelpMap.delete("s");
+      expect(projectSeenBy(deps, skills)).toBeNull();
+    });
+
+    it("reads a pinned help session's view, and loses it with the pin", () => {
+      const { deps, lc } = setup();
+      mockWebContentsById.set(PIN, { isDestroyed: () => false, send: () => undefined });
+      deps.sessionStore.sessionWebContentsMap.set("s", PIN);
+      (lc as unknown as { registry: unknown }).registry = {
+        getByWebContentsId: (id: number) =>
+          id === PIN
+            ? {
+                services: {
+                  projectViewManager: {
+                    getWorkspaceRefForWebContents: () => ({
+                      kind: "project",
+                      workspaceId: PROJECT,
+                      workspacePath: "/p",
+                    }),
+                  },
+                },
+              }
+            : undefined,
+      };
+      const skills = buildDeps(lc, "s");
+      expect(projectSeenBy(deps, skills)).toBe(PROJECT);
+      deps.sessionStore.sessionWebContentsMap.delete("s");
+      expect(projectSeenBy(deps, skills)).toBeNull();
+    });
+  });
+
   describe("buildSessionServerDeps — turnId snapshot stamping (#10067)", () => {
     // Picked from the real dep contract rather than a `Record<string, unknown>`
     // carrier: this block is the only coverage of the closure's

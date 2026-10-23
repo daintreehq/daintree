@@ -243,10 +243,15 @@ export interface HttpLifecycleDeps {
     signal: AbortSignal,
     options?: { maxTimeoutMs?: number; workspaceId?: string }
   ) => Promise<import("../../../shared/types/terminalWaitUntilIdle.js").WaitUntilIdleBatchResult>;
+  /** `visibility` is the session's bound project, resolved by {@link buildSessionServerDeps}. */
   handleSkillsSearch: (
-    rawArgs: unknown
+    rawArgs: unknown,
+    visibility: import("../plugin/PluginSkillRegistry.js").SkillVisibility
   ) => import("../../../shared/types/skills.js").SkillSearchResult;
-  handleSkillsLoad: (rawArgs: unknown) => import("../../../shared/types/skills.js").SkillLoadResult;
+  handleSkillsLoad: (
+    rawArgs: unknown,
+    visibility: import("../plugin/PluginSkillRegistry.js").SkillVisibility
+  ) => import("../../../shared/types/skills.js").SkillLoadResult;
   handleProjectRunCheck: (
     rawArgs: unknown,
     signal: AbortSignal,
@@ -2158,6 +2163,19 @@ export class HttpLifecycle {
     };
 
     /**
+     * The project whose plugins' skills `skills.search` / `skills.load` may
+     * return (#13831): the workspace the session is bound to, or for a help
+     * session the one its own view or viewless binding names. Never the
+     * focused window's, so an unbound session — and a scratch, or a pin whose
+     * view is gone — reads as no project and sees installed plugins' skills
+     * only.
+     */
+    const skillsProjectId = (): string | null => {
+      const workspaceId = boundWorkspaceId ?? pinnedWorkspaceId();
+      return workspaceId !== null && isProjectWorkspaceId(workspaceId) ? workspaceId : null;
+    };
+
+    /**
      * A bound session whose workspace route is unwired must fail, never fall
      * through (#11789). The helpers are individually optional for the same
      * reason the pinned ones are — test fixtures that don't wire routing — but
@@ -2620,8 +2638,10 @@ export class HttpLifecycle {
       requestCloseApproval,
       handleWaitUntilIdle: this.deps.handleWaitUntilIdle,
       handleWaitUntilIdleBatch: this.deps.handleWaitUntilIdleBatch,
-      handleSkillsSearch: this.deps.handleSkillsSearch,
-      handleSkillsLoad: this.deps.handleSkillsLoad,
+      handleSkillsSearch: (rawArgs) =>
+        this.deps.handleSkillsSearch(rawArgs, { projectId: skillsProjectId() }),
+      handleSkillsLoad: (rawArgs) =>
+        this.deps.handleSkillsLoad(rawArgs, { projectId: skillsProjectId() }),
       handleProjectRunCheck: this.deps.handleProjectRunCheck,
       handleProjectRunCommand: this.deps.handleProjectRunCommand,
       handleTerminalGetStatusViewless: this.deps.handleTerminalGetStatusViewless,

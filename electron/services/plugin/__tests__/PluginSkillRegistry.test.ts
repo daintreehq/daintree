@@ -7,9 +7,14 @@ import {
   registerPluginSkills,
   unregisterPluginSkills,
   clearPluginSkillRegistry,
+  hasPluginSkills,
   searchPluginSkills,
   loadPluginSkill,
+  type SkillVisibility,
 } from "../PluginSkillRegistry.js";
+import { makeProjectPluginInstanceKey } from "../../../../shared/types/plugin.js";
+
+const NO_PROJECT: SkillVisibility = { projectId: null };
 
 const SKILL_BODY = "# TDD Workflow\n\nWrite a failing test first.\n";
 const SKILL_FILE = `---\ndescription: Step-by-step test-driven development.\napplies_to:\n  - language: typescript\n---\n\n${SKILL_BODY}`;
@@ -101,7 +106,7 @@ describe("PluginSkillRegistry", () => {
       { id: "tdd-workflow", name: "TDD Workflow", path: "./skills/tdd.md", triggers: ["tdd"] },
     ]);
 
-    const loaded = loadPluginSkill("acme.plugin.tdd-workflow");
+    const loaded = loadPluginSkill("acme.plugin.tdd-workflow", NO_PROJECT);
     expect(loaded).not.toBeNull();
     expect(loaded?.id).toBe("acme.plugin.tdd-workflow");
     expect(loaded?.name).toBe("TDD Workflow");
@@ -114,8 +119,8 @@ describe("PluginSkillRegistry", () => {
       { id: "present", name: "Present", path: "./skills/tdd.md" },
       { id: "missing", name: "Missing", path: "./skills/nope.md" },
     ]);
-    expect(loadPluginSkill("acme.plugin.present")).not.toBeNull();
-    expect(loadPluginSkill("acme.plugin.missing")).toBeNull();
+    expect(loadPluginSkill("acme.plugin.present", NO_PROJECT)).not.toBeNull();
+    expect(loadPluginSkill("acme.plugin.missing", NO_PROJECT)).toBeNull();
   });
 
   it("rejects a skill whose path escapes the plugin dir via symlink", async () => {
@@ -137,7 +142,7 @@ describe("PluginSkillRegistry", () => {
     await registerPluginSkills("acme.plugin", dir, [
       { id: "escape", name: "Escape", path: "./skills/link.md" },
     ]);
-    expect(loadPluginSkill("acme.plugin.escape")).toBeNull();
+    expect(loadPluginSkill("acme.plugin.escape", NO_PROJECT)).toBeNull();
     await fs.rm(outside, { recursive: true, force: true });
   });
 
@@ -146,7 +151,7 @@ describe("PluginSkillRegistry", () => {
     await registerPluginSkills("acme.plugin", dir, [
       { id: "notfile", name: "Not A File", path: "./skills" },
     ]);
-    expect(loadPluginSkill("acme.plugin.notfile")).toBeNull();
+    expect(loadPluginSkill("acme.plugin.notfile", NO_PROJECT)).toBeNull();
   });
 
   it("skips a skill whose file exceeds the size cap without throwing", async () => {
@@ -156,8 +161,8 @@ describe("PluginSkillRegistry", () => {
       { id: "present", name: "Present", path: "./skills/tdd.md" },
       { id: "huge", name: "Huge", path: "./skills/huge.md" },
     ]);
-    expect(loadPluginSkill("acme.plugin.present")).not.toBeNull();
-    expect(loadPluginSkill("acme.plugin.huge")).toBeNull();
+    expect(loadPluginSkill("acme.plugin.present", NO_PROJECT)).not.toBeNull();
+    expect(loadPluginSkill("acme.plugin.huge", NO_PROJECT)).toBeNull();
   });
 
   describe("search", () => {
@@ -179,37 +184,37 @@ describe("PluginSkillRegistry", () => {
     });
 
     it("matches on triggers and name via token overlap", () => {
-      const { skills } = searchPluginSkills({ query: "tdd" });
+      const { skills } = searchPluginSkills({ query: "tdd" }, NO_PROJECT);
       expect(skills.map((s) => s.id)).toContain("acme.plugin.tdd-workflow");
       expect(skills.map((s) => s.id)).not.toContain("acme.plugin.code-review");
     });
 
     it("matches on description tokens", () => {
-      const { skills } = searchPluginSkills({ query: "rubric" });
+      const { skills } = searchPluginSkills({ query: "rubric" }, NO_PROJECT);
       expect(skills.map((s) => s.id)).toEqual(["acme.plugin.code-review"]);
     });
 
     it("returns no matches for an unrelated query", () => {
-      expect(searchPluginSkills({ query: "kubernetes helm chart" }).skills).toEqual([]);
+      expect(searchPluginSkills({ query: "kubernetes helm chart" }, NO_PROJECT).skills).toEqual([]);
     });
 
     it("lists all skills for an empty query, bounded by limit", () => {
-      const all = searchPluginSkills({ query: "" });
+      const all = searchPluginSkills({ query: "" }, NO_PROJECT);
       expect(all.skills.length).toBe(2);
-      const limited = searchPluginSkills({ query: "", limit: 1 });
+      const limited = searchPluginSkills({ query: "", limit: 1 }, NO_PROJECT);
       expect(limited.skills.length).toBe(1);
     });
 
     it("clamps the limit into [1, 50] and floors a fractional value", () => {
       // Fractional floors to 1; a huge value is capped by the registry (2 skills here).
-      expect(searchPluginSkills({ query: "", limit: 1.9 }).skills.length).toBe(1);
-      expect(searchPluginSkills({ query: "", limit: 10_000 }).skills.length).toBe(2);
+      expect(searchPluginSkills({ query: "", limit: 1.9 }, NO_PROJECT).skills.length).toBe(1);
+      expect(searchPluginSkills({ query: "", limit: 10_000 }, NO_PROJECT).skills.length).toBe(2);
       // A below-range value floors up to the minimum of 1.
-      expect(searchPluginSkills({ query: "", limit: 0 }).skills.length).toBe(1);
+      expect(searchPluginSkills({ query: "", limit: 0 }, NO_PROJECT).skills.length).toBe(1);
     });
 
     it("search results carry metadata but never the body", () => {
-      const match = searchPluginSkills({ query: "tdd" }).skills[0];
+      const match = searchPluginSkills({ query: "tdd" }, NO_PROJECT).skills[0];
       expect(match).toMatchObject({
         id: "acme.plugin.tdd-workflow",
         name: "TDD Workflow",
@@ -236,9 +241,9 @@ describe("PluginSkillRegistry", () => {
 
       unregisterPluginSkills("acme.plugin");
 
-      expect(loadPluginSkill("acme.plugin.tdd-workflow")).toBeNull();
-      expect(loadPluginSkill("beta.plugin.s")).not.toBeNull();
-      expect(searchPluginSkills({ query: "tdd" }).skills).toEqual([]);
+      expect(loadPluginSkill("acme.plugin.tdd-workflow", NO_PROJECT)).toBeNull();
+      expect(loadPluginSkill("beta.plugin.s", NO_PROJECT)).not.toBeNull();
+      expect(searchPluginSkills({ query: "tdd" }, NO_PROJECT).skills).toEqual([]);
       await fs.rm(other, { recursive: true, force: true });
     });
 
@@ -246,8 +251,74 @@ describe("PluginSkillRegistry", () => {
       await registerPluginSkills("acme.plugin", dir, [
         { id: "renamed", name: "Renamed", path: "./skills/tdd.md" },
       ]);
-      expect(loadPluginSkill("acme.plugin.tdd-workflow")).toBeNull();
-      expect(loadPluginSkill("acme.plugin.renamed")).not.toBeNull();
+      expect(loadPluginSkill("acme.plugin.tdd-workflow", NO_PROJECT)).toBeNull();
+      expect(loadPluginSkill("acme.plugin.renamed", NO_PROJECT)).not.toBeNull();
+    });
+  });
+
+  describe("project visibility (#13831)", () => {
+    const PROJECT_A = "a".repeat(64);
+    const PROJECT_B = "b".repeat(64);
+    const instanceA = makeProjectPluginInstanceKey(PROJECT_A, "acme.ledger");
+    const instanceB = makeProjectPluginInstanceKey(PROJECT_B, "acme.ledger");
+    const skill = [{ id: "tdd", name: "TDD", path: "./skills/tdd.md", triggers: ["tdd"] }];
+
+    beforeEach(async () => {
+      await registerPluginSkills("acme.installed", dir, skill);
+      await registerPluginSkills(instanceA, dir, skill);
+      await registerPluginSkills(instanceB, dir, skill);
+    });
+
+    const searchIds = (visibility: SkillVisibility, query = "tdd") =>
+      searchPluginSkills({ query }, visibility).skills.map((match) => match.id);
+
+    it("serves a project plugin's skills only to its own project", () => {
+      expect(searchIds({ projectId: PROJECT_A })).toEqual(
+        [`${instanceA}.tdd`, "acme.installed.tdd"].sort()
+      );
+      expect(searchIds({ projectId: PROJECT_B })).toEqual(
+        ["acme.installed.tdd", `${instanceB}.tdd`].sort()
+      );
+      expect(loadPluginSkill(`${instanceA}.tdd`, { projectId: PROJECT_A })?.body).toBe(SKILL_BODY);
+    });
+
+    it("treats no project as an identity, not a wildcard", () => {
+      expect(searchIds(NO_PROJECT)).toEqual(["acme.installed.tdd"]);
+      expect(searchIds(NO_PROJECT, "")).toEqual(["acme.installed.tdd"]);
+      expect(loadPluginSkill(`${instanceA}.tdd`, NO_PROJECT)).toBeNull();
+    });
+
+    it("answers a load of another project's skill exactly as an unknown id", () => {
+      expect(loadPluginSkill(`${instanceA}.tdd`, { projectId: PROJECT_B })).toBeNull();
+      expect(loadPluginSkill(`${instanceA}.nope`, { projectId: PROJECT_B })).toBeNull();
+    });
+
+    it("filters before the limit, so hidden skills cannot crowd out visible ones", () => {
+      const limited = searchPluginSkills({ query: "", limit: 1 }, { projectId: PROJECT_B });
+      expect(limited.skills.map((match) => match.id)).toEqual(["acme.installed.tdd"]);
+    });
+
+    it("narrows to one plugin instance when asked", () => {
+      expect(searchIds({ projectId: PROJECT_A, pluginInstanceId: instanceA })).toEqual([
+        `${instanceA}.tdd`,
+      ]);
+      expect(searchIds({ projectId: PROJECT_A, pluginInstanceId: "acme.installed" })).toEqual([
+        "acme.installed.tdd",
+      ]);
+      // The instance narrowing never widens past the project rule.
+      expect(searchIds({ projectId: PROJECT_B, pluginInstanceId: instanceA })).toEqual([]);
+      expect(
+        loadPluginSkill("acme.installed.tdd", { projectId: PROJECT_A, pluginInstanceId: instanceA })
+      ).toBeNull();
+    });
+
+    it("tears down one project's instance without touching the other's", () => {
+      unregisterPluginSkills(instanceA);
+      expect(hasPluginSkills(instanceA)).toBe(false);
+      expect(hasPluginSkills(instanceB)).toBe(true);
+      expect(searchIds({ projectId: PROJECT_B })).toEqual(
+        ["acme.installed.tdd", `${instanceB}.tdd`].sort()
+      );
     });
   });
 });

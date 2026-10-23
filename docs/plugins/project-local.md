@@ -160,6 +160,7 @@ Scoped to the owning project, and visible only in its views:
 | `worktreeSetupSteps` | Run only for worktrees created in the owning project, from the copy of the plugin in the project root, never the new worktree's branch. The user allows each step once for the project. See [Worktree setup steps](./contribution-points.md#worktree-setup-steps--shipped) |
 | `terminalLinks` | In the owning project's terminals only, and gone while the plugin is switched off or the folder is untrusted. See [Terminal links](./contribution-points.md#terminal-links--shipped) |
 | `contextProviders` | In the owning project's agent composer only. A prefix an installed plugin already holds is refused for the project plugin. The provider's switch in Project settings → Plugins applies to this project. See [Context providers](./contribution-points.md#context-providers--shipped) |
+| `skills` | Served only to sessions bound to the owning project: through `skills.search` / `skills.load` on Daintree's own MCP server, and on the plugin's agent MCP server beside its tools when it has one. Another project's sessions, and sessions bound to no project, never see them. See [Agent extensions → Who reaches skills](./agent-extensions.md#who-reaches-skills) |
 
 Forbidden under `scope: "project"`, each rejected at manifest validation with an error naming the real obstacle:
 
@@ -167,7 +168,6 @@ Forbidden under `scope: "project"`, each rejected at manifest validation with an
 | --- | --- |
 | `menuItems` | The application menu is one OS-level menu shared by every window, with no per-project projection — the item would stay on the menu bar while another project is focused, and dispatch into it |
 | `agents` | The plugin agent roster is one app-wide registry mirrored into the shared pty-host, and an agent's launch identity is persisted into terminals and sessions that outlive the project binding |
-| `skills` | Contributed skills land in one app-wide index behind the built-in MCP server's `skills.search` / `skills.load`, which answer every MCP session — terminal agents, external clients, the in-app assistant — without filtering by project |
 | `processTools` | Process-tool detections are mirrored into the shared pty-host as one detection table for every terminal in the app |
 | `mcpServers` | Daintree is the client of a contributed server, and the plugin-MCP IPC surface that reaches it is app-global: servers are addressed by plugin and server id alone, so a call through it carries no project to check the contribution against. (These tools never reach terminal agents at all — for that, use `agentMcp`.) |
 | `themes` | The app theme is one machine-wide selection painted into every window and every project's view, so there is no per-project theme for the contribution to narrow to |

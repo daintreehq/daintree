@@ -163,7 +163,6 @@ const UNSCOPED_SAMPLES: Record<UnscopedGroup, unknown[]> = {
   agents: [
     { id: "acme-agent", name: "Acme", command: "acme", color: "#123456", iconId: "sparkles" },
   ],
-  skills: [{ id: "skill", name: "Skill", path: "skills/skill.md" }],
   processTools: [{ command: "acmetool", iconId: "sparkles" }],
   mcpServers: [{ id: "srv", name: "Srv", command: "node" }],
   themes: [{ id: "midnight", name: "Midnight", type: "dark", path: "themes/midnight.json" }],
@@ -189,6 +188,19 @@ describe('contributes.tours under "scope": "project"', () => {
       },
     });
     expect(errorCodes(result)).not.toContain("tours_project_scope_forbidden");
+    expect(result.success).toBe(true);
+  });
+});
+
+describe('contributes.skills under "scope": "project"', () => {
+  // The skill index records each skill's owning project, so a project plugin's
+  // skills reach only its own project's sessions (#13831).
+  it("accepts a project plugin declaring skills and no main", () => {
+    const result = parse("project", {
+      scope: "project",
+      contributes: { skills: [{ id: "skill", name: "Skill", path: "skills/skill.md" }] },
+    });
+    expect(errorCodes(result)).not.toContain("skills_project_scope_forbidden");
     expect(result.success).toBe(true);
   });
 });
