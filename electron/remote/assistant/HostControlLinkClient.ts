@@ -1,5 +1,6 @@
 import type { HostId } from "../../../shared/types/remoteHosts.js";
 import { AppError } from "../../utils/errorTypes.js";
+import { senderIdForCredential } from "./hostSenders.js";
 import { relayCallArmsNotice } from "../../services/mcp-server/terminalNotify.js";
 import type { LinkSession } from "../link/session.js";
 import {
@@ -31,6 +32,8 @@ export interface RelayNoticeReceiver {
 export interface HostControlLinkClientDeps {
   /** This Shell's sender credential for a host, minted and saved before it is ever presented. */
   credential(hostId: HostId): string;
+  /** The credential already kept for a host, never minting one; null when there is none. */
+  existingCredential?(hostId: HostId): string | null;
   /** The host's open session, connecting it if need be; null when the host can't be reached. */
   session(hostId: HostId): Promise<LinkSession | null>;
   onSessionOpened(listener: (hostId: HostId, session: LinkSession) => void): () => void;
@@ -111,6 +114,16 @@ export class HostControlLinkClient {
   constructor(private readonly deps: HostControlLinkClientDeps) {
     this.timeoutMs = deps.callTimeoutMs ?? CALL_TIMEOUT_MS;
     this.noticeStatusDelayMs = deps.noticeStatusDelayMs ?? NOTICE_STATUS_DELAY_MS;
+  }
+
+  /**
+   * The sender this Shell is to a host, as that host derives it, for telling
+   * its own assistants in what the host reports (#14166). Never mints a
+   * credential: a host this Shell never authenticated to knows it as no one.
+   */
+  senderIdOf(hostId: HostId): string | null {
+    const credential = this.deps.existingCredential?.(hostId) ?? null;
+    return credential === null ? null : senderIdForCredential(credential);
   }
 
   start(): void {

@@ -113,6 +113,15 @@ export class TerminalAdoptionLedger {
     return this.byTerminal.get(terminalId)?.record;
   }
 
+  /**
+   * The owner key `terminalId` is held under, with its record, for showing
+   * who drives it (#14166). Read-only: it answers no authority check.
+   */
+  holderOf(terminalId: string): { record: TerminalAdoptionRecord; owner: string } | undefined {
+    const stored = this.byTerminal.get(terminalId);
+    return stored === undefined ? undefined : { record: stored.record, owner: stored.owner };
+  }
+
   /** Drop the adoption of one terminal — the user took it back, or it exited. */
   release(terminalId: string): boolean {
     if (!this.byTerminal.delete(terminalId)) return false;

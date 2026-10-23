@@ -18,10 +18,17 @@ import type { DedupCacheEntry, DedupInFlightEntry } from "./sessionDedup.js";
 import { GrantCache, type GrantLifecycleEmitter } from "./grantCache.js";
 import { ResourceOwnershipLedger } from "./resourceOwnership.js";
 import { TerminalAdoptionLedger } from "./terminalAdoption.js";
+import { WorkerCreationHistory } from "./workerCreationHistory.js";
 import { getSystemSleepService } from "../SystemSleepService.js";
 import { ToolListRouteWatch } from "./toolListRouteWatch.js";
 
 export interface SessionStoreOptions {
+  /**
+   * The launch generation main tracks for a terminal, stamped on each creation
+   * {@link SessionStore.workerCreations} notes. Optional so bare test fixtures
+   * construct without one; their creations then name no run.
+   */
+  launchGenerationOf?: (terminalId: string) => number | null;
   /**
    * Lifecycle emitter wired through to the {@link GrantCache} so audit
    * entries and renderer broadcasts fire for every `issued`/`expired`/
@@ -174,6 +181,11 @@ export class SessionStore {
    * touches it; a principal's adoptions go when its bearer is revoked.
    */
   readonly terminalAdoption = new TerminalAdoptionLedger();
+  /**
+   * Which run each terminal creation was, and by whom (#14166): display-only
+   * history the ownership ledger forgets on revocation. Authorizes nothing.
+   */
+  readonly workerCreations: WorkerCreationHistory;
 
   // Wall-clock timestamps recording when each session's idle timer was armed.
   // Used by recomputeIdleTimers() to calculate awake elapsed time across
@@ -237,6 +249,7 @@ export class SessionStore {
     this.dropBearerStateFn = options.dropBearerState ?? (() => {});
     this.onTierDecayedFn = options.onTierDecayed ?? (() => {});
     this.grantCache = new GrantCache({ emit: options.emitGrantLifecycle });
+    this.workerCreations = new WorkerCreationHistory(options.launchGenerationOf);
   }
 
   clearDedupState(sessionId: string): void {

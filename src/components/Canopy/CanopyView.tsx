@@ -93,12 +93,21 @@ import { CanopyAssistantPane, CanopyAssistantRow } from "./CanopyAssistantList";
 import {
   CANOPY_ROLE_FILTERS,
   assistantMatches,
+  canopyAssistantId,
   buildAssistantItems,
   type CanopyAssistantItem,
   type CanopyRoleFilter,
 } from "./canopyAssistants";
 import { canopyAssistantDomId, openAssistantItem } from "./openAssistantItem";
+import {
+  hostsWithPartialWork,
+  isWorkOf,
+  workLinkLabel,
+  workLinkOf,
+  workLinksByRun,
+} from "./canopyRelationships";
 import { useAgentDirectory } from "@/hooks/useAgentDirectory";
+import { useAssistantWork } from "@/hooks/useAssistantWork";
 import { isFullAgentDirectory } from "@shared/types/agentDirectory";
 import { CanopyBulkEnableDialog } from "./CanopyBulkEnableDialog";
 import type { BulkTarget } from "@shared/utils/canopyBulkEnable";
@@ -1110,26 +1119,65 @@ function CanopyInbox({
     });
   }, [assistantsReadable, directory, projects, ownHostName, handbacksSeen, scope]);
   const assistantAsks = assistantItems.filter((item) => item.ask !== null).length;
+  // "Show its work" (#14166): the workers one assistant made or was handed,
+  // from each host's own records of it. Every host shown is read, since an
+  // assistant here starts workers on others too.
+  const workOf = useCanopyStore((s) => s.workOf);
+  const showWorkOf = useCanopyStore((s) => s.showWorkOf);
+  const workHosts = useMemo(
+    () =>
+      everyHost ? (participants.length > 0 ? participants : [ownHostId]) : [hostId ?? ownHostId],
+    [everyHost, participants, ownHostId, hostId]
+  );
+  const workReadings = useAssistantWork(workHosts, ownHostId, isOpen);
+  const workLinks = useMemo(
+    () =>
+      workLinksByRun(workReadings, everyHost ? allHostsKey : (_hostId, terminalId) => terminalId),
+    [workReadings, everyHost]
+  );
+  const workPartial = workOf !== null && hostsWithPartialWork(workReadings, workHosts).length > 0;
+  const assistantNames = useMemo(
+    () =>
+      new Map(assistantItems.map((item) => [item.id, `Daintree Assistant · ${item.scopeLabel}`])),
+    [assistantItems]
+  );
+  const workLabelOf = (item: CanopyItem): string | null =>
+    workLinkLabel(
+      workLinkOf(item, workLinks),
+      (subject) => assistantNames.get(canopyAssistantId(subject)) ?? null
+    );
   const shownAssistants = useMemo(
     () =>
       !assistantsShown
         ? []
-        : searching
-          ? assistantItems.filter((item) => assistantMatches(item, terms))
-          : assistantItems,
-    [assistantsShown, searching, assistantItems, terms]
+        : workOf !== null
+          ? assistantItems.filter((item) => item.id === workOf.assistantId)
+          : searching
+            ? assistantItems.filter((item) => assistantMatches(item, terms))
+            : assistantItems,
+    [assistantsShown, workOf, searching, assistantItems, terms]
   );
+  const showWork = (item: CanopyAssistantItem) => {
+    showWorkOf({ assistantId: item.id, name: `Daintree Assistant · ${item.scopeLabel}` });
+    // Its workers can be anywhere it reaches: every project, and every host when there are others.
+    if (roleFilter === "assistants") setRoleFilter("all");
+    if (storedScope === "project") setScope("all");
+    if (!everyHost && hostPicker !== null) useCanopyStore.getState().setHostId(ALL_HOSTS_ID);
+  };
   const [assistantId, setAssistantId] = useState<string | null>(null);
   const [assistantRefusal, setAssistantRefusal] = useState<{ id: string; text: string } | null>(
     null
   );
   const shownInbox = useMemo(() => {
     if (!workersShown) return { inbox: [], archived: [] };
-    if (!searching) return inbox;
+    if (!searching && workOf === null) return inbox;
     const matches = (item: CanopyItem) =>
-      onScreen?.has(item.runId) === true || unmatchedTerms(item, terms).length === 0;
+      (workOf === null || isWorkOf(workLinkOf(item, workLinks), workOf.assistantId)) &&
+      (!searching ||
+        onScreen?.has(item.runId) === true ||
+        unmatchedTerms(item, terms).length === 0);
     return { inbox: inbox.inbox.filter(matches), archived: inbox.archived.filter(matches) };
-  }, [inbox, workersShown, searching, onScreen, terms]);
+  }, [inbox, workersShown, searching, onScreen, terms, workOf, workLinks]);
   const unreadOnly = useCanopyStore((s) => s.unreadOnly);
   const setUnreadOnly = useCanopyStore((s) => s.setUnreadOnly);
   // A run read while the Unread filter is on stays listed until the filter is
@@ -2723,6 +2771,25 @@ function CanopyInbox({
                 // Still placing runs as the open's readings land.
                 data-revealing={revealed ? undefined : "true"}
               >
+                {workOf !== null && (
+                  <div
+                    className="flex shrink-0 items-center gap-2 px-3 py-2 text-xs"
+                    data-testid="canopy-work-of"
+                  >
+                    <span className="min-w-0 flex-1 text-text-primary">
+                      Showing the work of {workOf.name}
+                      {workPartial && (
+                        <span className="text-text-secondary">
+                          {" "}
+                          · Some hosts couldn't be read, so this may be incomplete
+                        </span>
+                      )}
+                    </span>
+                    <Button variant="outline" size="xs" onClick={() => showWorkOf(null)}>
+                      Show all
+                    </Button>
+                  </div>
+                )}
                 {workersShown && (
                   <>
                     <SectionBar
@@ -2796,6 +2863,7 @@ function CanopyInbox({
                                 asideLabel={
                                   replied !== null ? `Replied ${agoPhrase(replied, nowMs)}` : null
                                 }
+                                workLabel={workLabelOf(item)}
                                 onSelect={() => selectRow(item.runId)}
                                 onClick={() => readNow(item)}
                                 onOpen={(event) => handlers.onOpen(item, isNewWindowClick(event))}
@@ -2814,9 +2882,11 @@ function CanopyInbox({
                           ? shownInbox.inbox.length > 0
                             ? `Nothing unread matches “${appliedQuery.trim()}”.`
                             : `Nothing matches “${appliedQuery.trim()}”.`
-                          : unreadOnly && inbox.inbox.length > 0
-                            ? "Nothing unread. Each agent shows here again when it does something new."
-                            : "Every agent is archived. Each comes back when it has something new to say."}
+                          : workOf !== null && shownInbox.inbox.length === 0
+                            ? "No running worker was started by or handed to this assistant."
+                            : unreadOnly && inbox.inbox.length > 0
+                              ? "Nothing unread. Each agent shows here again when it does something new."
+                              : "Every agent is archived. Each comes back when it has something new to say."}
                       </p>
                     )}
                   </>
@@ -2898,6 +2968,7 @@ function CanopyInbox({
                                   ? `Archived ${agoPhrase(item.disposition.at, nowMs)}`
                                   : null
                               }
+                              workLabel={workLabelOf(item)}
                               onSelect={() => selectRow(item.runId)}
                               onClick={() => readNow(item)}
                               onOpen={(event) => handlers.onOpen(item, isNewWindowClick(event))}
@@ -2923,6 +2994,11 @@ function CanopyInbox({
                     assistantRefusal?.id === selectedAssistant.id ? assistantRefusal.text : null
                   }
                   onOpen={() => openAssistant(selectedAssistant)}
+                  onShowWork={
+                    workOf?.assistantId === selectedAssistant.id
+                      ? null
+                      : () => showWork(selectedAssistant)
+                  }
                 />
               ) : (
                 <>

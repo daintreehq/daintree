@@ -68,6 +68,7 @@ import type {
   AgentDirectory,
   AgentDirectorySubject,
 } from "../../../shared/types/agentDirectory.js";
+import type { AssistantWorkReading } from "../../../shared/types/assistantWork.js";
 import { resolveLiveAssistant } from "../../services/assistants/liveAssistantSubject.js";
 import { LOCAL_HOST_ID } from "../../../shared/types/remoteHosts.js";
 import { answerRunByLabel, isAnswerLabel } from "../../services/terminalAnswer.js";
@@ -1162,6 +1163,27 @@ export const canopyNamespace = defineIpcNamespace({
         const { getLocalAgentDirectory } =
           await import("../../services/assistants/localAgentDirectory.js");
         return getLocalAgentDirectory().read(projectId === undefined ? {} : { projectId });
+      },
+      { withContext: true }
+    ),
+
+    /**
+     * Which of this machine's workers an assistant made or holds (#14166), for
+     * Canopy's "Show its work". Read from main's own records, passive like the
+     * directory, and outside Canopy's gate for the same reason.
+     */
+    readAssistantWork: op(
+      CANOPY_METHOD_CHANNELS.readAssistantWork,
+      async (ctx): Promise<AssistantWorkReading> => {
+        checkRateLimit(
+          `${CANOPY_METHOD_CHANNELS.readAssistantWork}#${ctx.webContentsId}`,
+          20,
+          10_000
+        );
+        assertViewsThisMachine(ctx);
+        const { readLocalAssistantWork } =
+          await import("../../services/assistants/localAssistantWork.js");
+        return readLocalAssistantWork();
       },
       { withContext: true }
     ),

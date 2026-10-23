@@ -13,6 +13,7 @@ import type {
   CanopyTerminalView,
 } from "../../../shared/types/ipc/canopy.js";
 import type { AgentDirectorySubject } from "../../../shared/types/agentDirectory.js";
+import type { AssistantWorkReading } from "../../../shared/types/assistantWork.js";
 
 export const canopyHostNamespace = defineIpcNamespace({
   name: "canopyHost",
@@ -54,6 +55,16 @@ export const canopyHostNamespace = defineIpcNamespace({
       CANOPY_HOST_METHOD_CHANNELS.listAssistants,
       async (ctx, hostId: string, projectId?: string): Promise<HostAssistantDirectory> =>
         requireRemoteService("canopyHosts").listAssistants(ctx.webContentsId, hostId, projectId),
+      { withContext: true }
+    ),
+    /**
+     * Which of a host's workers an assistant made or holds (#14166), named as
+     * this Shell knows its own assistants. A host without it says so.
+     */
+    readAssistantWork: op(
+      CANOPY_HOST_METHOD_CHANNELS.readAssistantWork,
+      async (ctx, hostId: string): Promise<AssistantWorkReading> =>
+        requireRemoteService("canopyHosts").readAssistantWork(ctx.webContentsId, hostId),
       { withContext: true }
     ),
     /** Stream the one assistant `consumer` shows, on the host the subject names. */

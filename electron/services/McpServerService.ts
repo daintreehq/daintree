@@ -32,6 +32,10 @@ import {
   principalOwnerKey,
   relayOwnershipPrincipal,
 } from "./mcp-server/resourceOwnership.js";
+import {
+  readRunAssistantWork,
+  type RunAssistantWork,
+} from "./mcp-server/workerCreationHistory.js";
 import type { TerminalAdoptionRecord } from "./mcp-server/terminalAdoption.js";
 import { LOCAL_HOST_ID } from "../../shared/types/remoteHosts.js";
 import { getAgentAvailabilityStore } from "./AgentAvailabilityStore.js";
@@ -226,6 +230,7 @@ export class McpServerService {
       },
       {
         emitGrantLifecycle: (sessionId, payload) => this.emitGrantLifecycle(sessionId, payload),
+        launchGenerationOf: (terminalId) => getPtyClient()?.getLaunchGeneration(terminalId) ?? null,
         dropAbuseState: (sessionId) => abusePolicy.dropSession(sessionId),
         // The live bearer register is owned by `httpLifecycle` (created
         // below). The closure defers the reference until teardown time, by
@@ -618,6 +623,19 @@ export class McpServerService {
   /** Lets assistants address one another (#13496); null takes it away again. */
   setAssistantControl(binding: AssistantControlBinding | null): void {
     this.httpLifecycle.setAssistantControl(binding);
+  }
+
+  /**
+   * Which assistant created one exact run, and which holds authority over it
+   * now (#14166). Display only: see {@link readRunAssistantWork}.
+   */
+  assistantWorkOf(terminalId: string, launchGeneration: number): RunAssistantWork {
+    return readRunAssistantWork(this.sessionStore, terminalId, launchGeneration);
+  }
+
+  /** Forget creations of runs no longer alive, after a complete read of what runs. */
+  retainWorkerCreations(liveTerminalIds: ReadonlySet<string>): void {
+    this.sessionStore.workerCreations.retainOnly(liveTerminalIds);
   }
 
   /**

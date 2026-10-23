@@ -2229,6 +2229,11 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
       // recorded id is offered: only terminals are ever handed over, and a
       // worktree id is an absolute path no panel id can equal.
       for (const record of recorded) sessionStore.terminalAdoption.release(record.id);
+      // What was created, by whom, kept past the authority itself (#14166).
+      sessionStore.workerCreations.note(
+        ownershipOwner,
+        recorded.filter((record) => record.kind === "terminal").map((record) => record.id)
+      );
     };
 
     // Layered authorization (#8442):

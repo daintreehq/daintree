@@ -195,6 +195,10 @@ export interface GeneratedIpcInvokeMap {
     args: [hostId: string, projectId?: string | undefined];
     result: import("./canopyHost.js").HostAssistantDirectory;
   };
+  "canopy-host:read-assistant-work": {
+    args: [hostId: string];
+    result: import("../assistantWork.js").AssistantWorkReading;
+  };
   "canopy-host:release": {
     args: [hostId: string];
     result: void;
@@ -303,6 +307,10 @@ export interface GeneratedIpcInvokeMap {
           }
       )[];
     };
+  };
+  "canopy:read-assistant-work": {
+    args: [];
+    result: import("../assistantWork.js").AssistantWorkReading;
   };
   "canopy:refresh": {
     args: [];

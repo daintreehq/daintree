@@ -114,6 +114,27 @@ function isPrincipalOwner(owner: string): boolean {
   return owner.startsWith(PRINCIPAL_OWNER_PREFIX);
 }
 
+/** A Daintree Assistant's principal, read back from the owner key its authority is held under. */
+export type AssistantOwnershipPrincipal =
+  | { kind: "help"; helpSessionId: string }
+  | { kind: "relay"; senderId: string; helpSessionId: string };
+
+/**
+ * The assistant an owner key names, or null for anything else: a pane bearer,
+ * an api-key session. Read only from keys main minted, so no caller can spell one.
+ */
+export function assistantPrincipalOf(owner: string): AssistantOwnershipPrincipal | null {
+  if (!isPrincipalOwner(owner)) return null;
+  const parts = owner.slice(PRINCIPAL_OWNER_PREFIX.length).split("\u0000");
+  if (parts[0] === "help" && parts.length === 2 && parts[1]) {
+    return { kind: "help", helpSessionId: parts[1] };
+  }
+  if (parts[0] === "relay" && parts.length === 3 && parts[1] && parts[2]) {
+    return { kind: "relay", senderId: parts[1], helpSessionId: parts[2] };
+  }
+  return null;
+}
+
 /**
  * Records are held by an *owner*: a session's own id, or the principal a
  * per-pane bearer session was bound to at handshake. Callers resolve one with

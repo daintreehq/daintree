@@ -413,6 +413,7 @@ export function installHostControlLinkClient(deps: HostControlLinkClientInstallD
   const offHosts = deps.onHostsChanged(forgetRemovedHosts);
   const client = new HostControlLinkClient({
     credential: (hostId) => credentials.credential(hostId),
+    existingCredential: (hostId) => credentials.existing(hostId),
     session: deps.session,
     onSessionOpened: deps.onSessionOpened,
     noticeReceiver: () => getRemoteService("hostCallRelayClient"),
