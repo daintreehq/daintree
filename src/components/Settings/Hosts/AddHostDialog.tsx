@@ -725,7 +725,6 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
               aria-label="Filter machines"
               spellCheck={false}
               autoCapitalize="off"
-              fieldProps={{ "data-testid": "add-host-filter" }}
             />
           )}
           {discoverError !== null ? (

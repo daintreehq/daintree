@@ -394,6 +394,9 @@ describe("AddHostDialog", () => {
         'No machines match "prod-db". Enter an SSH target below if it isn\'t listed.'
       );
       expect(filter().value).toBe(" prod-db ");
+      fireEvent.keyDown(filter(), { key: "Enter" });
+      expect(sshTarget().value).toBe("");
+      expect(document.activeElement).toBe(filter());
     });
 
     it("picks the one machine left on Enter, without checking it", async () => {
@@ -413,6 +416,34 @@ describe("AddHostDialog", () => {
       expect(screen.getByDisplayValue("dev-vm").tagName).toBe("INPUT");
       expect(document.activeElement).toBe(sshTarget());
       expect(remoteHosts.probe).not.toHaveBeenCalled();
+    });
+
+    it("won't swap the machine out from under a check in progress", async () => {
+      let answer!: (result: HostProbeResult) => void;
+      remoteHosts.probe!.mockReturnValueOnce(new Promise((r) => (answer = r)));
+      remoteHosts.discover!.mockResolvedValueOnce([...mesh(8), peer("dev-vm")]);
+      render(<AddHostDialog isOpen onClose={() => {}} />);
+      await screen.findByText("dev-vm");
+      fireEvent.click(screen.getByRole("button", { name: /node-1\b/ }));
+      fireEvent.click(screen.getByRole("button", { name: "Check host" }));
+      fireEvent.change(filter(), { target: { value: "dev-vm" } });
+      fireEvent.keyDown(filter(), { key: "Enter" });
+      expect(sshTarget().value).toBe("node-1.netbird.cloud");
+      expect(remoteHosts.probe).toHaveBeenCalledTimes(1);
+      await act(async () => answer(probeResult()));
+    });
+
+    it("keeps the filter and the pick when coming back from the check", async () => {
+      remoteHosts.discover!.mockResolvedValueOnce([...mesh(8), peer("dev-vm")]);
+      render(<AddHostDialog isOpen onClose={() => {}} />);
+      await screen.findByText("dev-vm");
+      fireEvent.change(filter(), { target: { value: "dev" } });
+      fireEvent.keyDown(filter(), { key: "Enter" });
+      fireEvent.click(screen.getByRole("button", { name: "Check host" }));
+      fireEvent.click(await screen.findByRole("button", { name: "Back" }));
+      expect(filter().value).toBe("dev");
+      expect(rowNames()).toEqual(["dev-vm"]);
+      expect(sshTarget().value).toBe("dev-vm.netbird.cloud");
     });
 
     it("won't pick a machine that's already added", async () => {
@@ -1195,6 +1226,16 @@ describe("AddHostDialog on Windows (WSL distros)", () => {
     );
     expect(await screen.findByText("Starts")).toBeTruthy();
     expect(screen.getByText("Matches this machine")).toBeTruthy();
+  });
+
+  it("lists every distro without a filter, however many there are", async () => {
+    remoteHosts.discover!.mockResolvedValueOnce(
+      Array.from({ length: 9 }, (_, i) => distro(`Distro-${i + 1}`, 2, i === 0))
+    );
+    render(<AddHostDialog isOpen onClose={() => {}} />);
+    const list = await screen.findByTestId("add-host-wsl-distros");
+    expect(list.querySelectorAll("li")).toHaveLength(9);
+    expect(screen.queryByLabelText("Filter machines")).toBeNull();
   });
 
   it("advises on a distro's lifetime with this PC's Daintree, never on sleep or lingering", async () => {

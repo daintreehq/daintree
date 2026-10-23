@@ -569,6 +569,33 @@ describe("discoverHosts", () => {
     ]);
   });
 
+  it("keeps the tailnet row, without NetBird's status, when both vouch for one address", async () => {
+    const tailnet = JSON.stringify({
+      Peer: [
+        {
+          HostName: "dev-vm",
+          DNSName: "dev-vm.ts.net.",
+          OS: "linux",
+          Online: true,
+          TailscaleIPs: ["100.92.0.5"],
+        },
+      ],
+    });
+    const run: CommandRunner = async (command) =>
+      command === "tailscale" ? ok(tailnet) : command === "netbird" ? ok(NETBIRD_STATUS) : missing;
+    const hosts = await discoverHosts({
+      run,
+      platform: "linux",
+      knownConnections: [],
+      resolves: async () => true,
+    });
+    const devVm = hosts.filter((h) => h.name === "dev-vm");
+    expect(devVm.map((h) => [sshTargetOf(h.connection), h.source])).toEqual([
+      ["dev-vm.ts.net", "tailscale"],
+    ]);
+    expect("netbirdStatus" in devVm[0]!).toBe(false);
+  });
+
   it("falls back to the macOS app's bundled CLI and survives every tool being absent", async () => {
     const tried: string[] = [];
     const run: CommandRunner = async (command) => {
