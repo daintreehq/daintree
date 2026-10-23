@@ -352,17 +352,27 @@ describe("installHostControl (#13493)", () => {
       },
     ]);
 
-    // A project's command runner acts on nothing it launched or was handed.
-    const refused = await runtime.call(
-      "global",
-      { hostId: "local", projectId: "proj-1", tool: "project.runCommand", args: { command: "ls" } },
-      { tier: "core" }
-    );
-    expect(refused).toMatchObject({
-      ok: true,
-      value: { outcome: "policy_rejected", callId: null },
-    });
+    // Nor anything that acts on what it neither launched nor was handed.
+    for (const tool of ["project.runCommand", "project.runCheck", "terminal.moveToWorktree"]) {
+      const refused = await runtime.call(
+        "global",
+        { hostId: "local", projectId: "proj-1", tool, args: { terminalId: "t-user" } },
+        { tier: "full" }
+      );
+      expect(refused).toMatchObject({
+        ok: true,
+        value: { outcome: "policy_rejected", callId: null },
+      });
+    }
     expect(mcp.opened).toHaveLength(1);
+    // A project's own assistant keeps them: the rule is the global caller's, not the tool's.
+    runLocally("proj-2", 0, "proj-2-assistant");
+    const allowed = await runtime.call(
+      "proj-2-assistant",
+      { hostId: "local", projectId: "proj-1", tool: "project.runCheck", args: {} },
+      { tier: "full" }
+    );
+    expect(allowed).toMatchObject({ ok: true, value: { outcome: "ok" } });
 
     off();
   });

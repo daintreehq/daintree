@@ -347,9 +347,21 @@ const CALL_NO_HOST_DETAIL = "This Shell has no host with that id. List the hosts
 const CALL_OWN_PROJECT_DETAIL =
   "That is this assistant's own project, so nothing was run. Call its tools directly; local reaches this machine's other projects.";
 const CALL_GLOBAL_WITHHELD_DETAIL =
-  "The global assistant can't run a project's commands, so nothing was run. Launch an agent there, or ask the user to run it.";
-/** Tools a host would admit for a relayed call that act on nothing the global assistant has standing for. */
-const GLOBAL_WITHHELD_TOOLS: ReadonlySet<string> = new Set(["project.runCommand"]);
+  "The global assistant can't do that in a project: it acts only on what it launched there or the user handed it, so nothing was run. Ask the user to do it, or to hand you the terminal.";
+/**
+ * Tools a host admits for a relayed call that act on something the global
+ * assistant holds no standing for (#14161): a project's commands and scripts,
+ * a worktree's resource commands, and any pane named by id alone.
+ */
+const GLOBAL_WITHHELD_TOOLS: ReadonlySet<string> = new Set([
+  "project.runCommand",
+  "project.runCheck",
+  "worktree.resource.provision",
+  "worktree.resource.pause",
+  "worktree.resource.resume",
+  "terminal.moveToWorktree",
+  "terminal.rename",
+]);
 const CALL_AMBIGUOUS_DETAIL =
   "No answer came back, so the call may have reached the host and run. Resend it under this callId, which never runs it twice.";
 const CALL_NOT_SENT_DETAIL =
@@ -915,7 +927,7 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
         return { ...this.outcomeWith("opted_out", CONTROL_OFF_DETAIL), ...unsent };
       }
       // The global assistant acts only on what it launched or was handed
-      // (#14161): a project's command runner acts on neither, on any host.
+      // (#14161), on any host: these act on neither.
       if (isGlobalAssistantId(caller.projectId) && GLOBAL_WITHHELD_TOOLS.has(args.tool)) {
         return { ...this.outcomeWith("policy_rejected", CALL_GLOBAL_WITHHELD_DETAIL), ...unsent };
       }
