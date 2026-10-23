@@ -13,7 +13,10 @@ vi.mock("../../../utils/logger.js", () => ({
 }));
 
 import { PluginDevWorkerMainBridge } from "../PluginDevWorkerMainBridge.js";
-import { inertPluginTaskHandle } from "../../../../shared/utils/pluginTasks.js";
+import {
+  inertPluginTaskHandle,
+  pluginTaskAbortReason,
+} from "../../../../shared/utils/pluginTasks.js";
 import { PluginDevWorkerHostProxy } from "../pluginDevWorkerHostProxy.js";
 import { PluginInvokeTimeoutError, runWithInvokeDeadline } from "../pluginInvokeDeadline.js";
 import type { PluginIpcContext } from "../../../../shared/types/plugin.js";
@@ -590,8 +593,8 @@ describe("PluginDevWorkerMainBridge", () => {
       expect(handle.report).toHaveBeenCalledTimes(1);
       expect(handle.report).toHaveBeenCalledWith({ fraction: 0.5 });
 
-      controller.abort();
-      expect(cancelEvents(workerHost)).toHaveLength(1);
+      controller.abort(pluginTaskAbortReason("cancelled"));
+      expect(cancelEvents(workerHost)).toMatchObject([{ payload: { cause: "cancelled" } }]);
 
       workerHost.emit("worker-message", {
         type: "host-call",

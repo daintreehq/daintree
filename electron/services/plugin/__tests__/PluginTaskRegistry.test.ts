@@ -118,6 +118,10 @@ describe("PluginTaskRegistry", () => {
     });
     expect(registry.requestCancel("acme", record.snapshot.id)).toBe(true);
     expect(stateSeenByListener).toBe("cancelling");
+    expect(record.controller.signal.reason).toMatchObject({
+      name: "AbortError",
+      cause: "cancelled",
+    });
     expect(claim).toMatchObject({ cancelRequested: true });
     expect(registry.requestCancel("acme", record.snapshot.id)).toBe(false);
   });
@@ -138,6 +142,7 @@ describe("PluginTaskRegistry", () => {
     });
     registry.interrupt("acme");
     expect(record.controller.signal.aborted).toBe(true);
+    expect(record.controller.signal.reason).toMatchObject({ cause: "interrupted" });
     expect(finishedFromListener).toBeNull();
     expect(registry.snapshot("acme")).toMatchObject([
       { id: record.snapshot.id, state: "interrupted" },

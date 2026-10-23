@@ -3887,6 +3887,11 @@ interface PluginTaskHandle {
      * Aborts when the user cancels the task or the host interrupts it (the
      * plugin unloading). The plugin still calls {@link finish} with
      * `"cancelled"` once it has stopped.
+     *
+     * `signal.reason` is an `AbortError` whose `cause` says which:
+     * {@link PluginTaskAbortCause}. Work that outlives the plugin — a durable
+     * operation — records a user's cancel, but treats an interruption as the
+     * plugin stopping, to be resumed when it runs again.
      */
     readonly signal: AbortSignal;
     /**
@@ -6348,12 +6353,14 @@ interface NotificationRecord {
  * One task started through `host.tasks.start` (#13819), kept up to date as the
  * plugin reports and finishes it. `state` is where the host would show it:
  * `"cancelling"` once {@link MockHostState.simulateTaskCancel} asked, then the
- * outcome the plugin finished with.
+ * outcome the plugin finished with — or `"interrupted"` once
+ * {@link MockHostState.simulateTaskInterrupt} stopped it, after which nothing
+ * the plugin does changes it.
  */
 interface MockTaskRecord {
     readonly id: string;
     readonly options: VettedPluginTaskStart;
-    state: "working" | "cancelling" | "succeeded" | "failed" | "cancelled";
+    state: "working" | "cancelling" | "succeeded" | "failed" | "cancelled" | "interrupted";
     fraction: number | null;
     detail: string | undefined;
     /** Every accepted `report()`, in order. The mock applies each at once; the host coalesces. */
@@ -6703,6 +6710,13 @@ interface MockHostState {
      * never offer.
      */
     simulateTaskCancel(taskId: string): void;
+    /**
+     * Interrupt a running task as the host does when the plugin unloads,
+     * restarts or crashes: the task turns `"interrupted"` and its `signal`
+     * aborts with the `"interrupted"` cause. A later `report` or `finish` is
+     * ignored. Throws for a task that isn't running.
+     */
+    simulateTaskInterrupt(taskId: string): void;
     /**
      * Set what `host.hasListeners(channel)` answers and, when that changes it,
      * call every `onDidChangeListeners(channel, …)` callback. Every channel

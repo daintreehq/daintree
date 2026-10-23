@@ -15,7 +15,10 @@
 
 import { createLogger } from "../../utils/logger.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
-import { isInertPluginTaskHandle } from "../../../shared/utils/pluginTasks.js";
+import {
+  isInertPluginTaskHandle,
+  pluginTaskAbortCause,
+} from "../../../shared/utils/pluginTasks.js";
 import { AGENT_MCP_MAX_RESULT_BYTES } from "../../../shared/types/plugin.js";
 import type {
   PluginHostApi,
@@ -116,6 +119,7 @@ import type {
   ArtifactsTransferParams,
   ProcessSpawnParams,
   ProcessHandleRefParams,
+  TaskAbortEvent,
   TaskFinishParams,
   TaskReportParams,
   TaskStartParams,
@@ -1244,10 +1248,13 @@ export class PluginDevWorkerMainBridge {
         }
         const relayCancel = (): void => {
           if (this.disposed || generation !== this.reloadGeneration) return;
+          // A signal can't cross the port; its cause can, so the worker side
+          // still tells a Cancel from an interruption.
+          const payload: TaskAbortEvent = { cause: pluginTaskAbortCause(handle.signal.reason) };
           this.workerHost.send({
             type: "subscription-event",
             subscriptionId: p.subscriptionId,
-            payload: null,
+            payload,
           });
         };
         // Cancelled before start even answered: the worker registered its
