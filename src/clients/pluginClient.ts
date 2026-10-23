@@ -61,6 +61,14 @@ export const pluginClient = {
   ): Promise<WorktreeDeleteNotesAnswer | null> =>
     window.electron.plugin.getWorktreeDeleteNotes({ worktreeId, pluginId }),
 
+  /** Ask a plugin to stop one of its tasks (#13819); false when it isn't running or can't be cancelled. */
+  cancelTask: (pluginId: string, taskId: string): Promise<boolean> =>
+    window.electron.plugin.cancelTask(pluginId, taskId),
+
+  /** Clear an interrupted plugin task from the list; false for any other task. */
+  dismissTask: (pluginId: string, taskId: string): Promise<boolean> =>
+    window.electron.plugin.dismissTask(pluginId, taskId),
+
   /** Every plugin the host is running, with the instance key each is addressed by. */
   list: (): Promise<LoadedPluginInfo[]> => window.electron.plugin.list(),
 

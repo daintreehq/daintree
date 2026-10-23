@@ -12,6 +12,7 @@
 import {
   PLUGIN_NOTIFY_MAX_ACTIONS,
   PLUGIN_PANEL_ACTIVITY_MAX_PANELS,
+  PLUGIN_TASK_MAX_LIVE,
   PLUGIN_TERMINAL_STATUS_MAX_PER_PROJECT,
   pluginManifestIdFromInstanceKey,
   projectIdFromPluginInstanceKey,
@@ -20,6 +21,12 @@ import { createHash } from "node:crypto";
 import { lstatSync, mkdirSync, mkdtempSync, realpathSync } from "node:fs";
 import { validateRenderPdfOptions } from "../utils/pluginPdfOptions.js";
 import { parsePluginExternalUrl } from "../utils/pluginExternalUrl.js";
+import {
+  validatePluginTaskProgress,
+  validatePluginTaskResult,
+  validatePluginTaskStart,
+  type VettedPluginTaskStart,
+} from "../utils/pluginTasks.js";
 import { homedir, tmpdir } from "node:os";
 import path from "node:path";
 import { join as joinPath } from "node:path";
@@ -91,6 +98,9 @@ import type {
   PluginToastOptions,
   PluginNotifyOptions,
   PluginNotifyResult,
+  PluginTaskHandle,
+  PluginTaskProgress,
+  PluginTaskResult,
   PluginTypedIpcHandler,
   PluginHandlerOptions,
   PluginWorktreeSnapshot,
@@ -169,6 +179,23 @@ export interface ShownToastRecord {
 export interface NotificationRecord {
   id: string;
   options: PluginNotifyOptions;
+}
+
+/**
+ * One task started through `host.tasks.start` (#13819), kept up to date as the
+ * plugin reports and finishes it. `state` is where the host would show it:
+ * `"cancelling"` once {@link MockHostState.simulateTaskCancel} asked, then the
+ * outcome the plugin finished with.
+ */
+export interface MockTaskRecord {
+  readonly id: string;
+  readonly options: VettedPluginTaskStart;
+  state: "working" | "cancelling" | "succeeded" | "failed" | "cancelled";
+  fraction: number | null;
+  detail: string | undefined;
+  /** Every accepted `report()`, in order. The mock applies each at once; the host coalesces. */
+  readonly reports: PluginTaskProgress[];
+  result: PluginTaskResult | undefined;
 }
 
 /** Captured `host.process.spawn(command, options)` calls. */
@@ -424,6 +451,12 @@ export interface MockHostState {
   readonly setTerminalStatusCalls: ReadonlyArray<SetTerminalStatusRecord>;
   /** The terminal chips this plugin shows right now, keyed by `terminalId`. */
   readonly terminalStatuses: ReadonlyMap<string, PluginTerminalStatus>;
+  /**
+   * Every task started through `host.tasks.start`, in order (#13819). A failed
+   * task's error notification, and a success's passive one, land in
+   * {@link notifications} as the real host raises them.
+   */
+  readonly startedTasks: ReadonlyArray<MockTaskRecord>;
   /** Accepted `host.setPanelActivity` calls, in order. */
   readonly setPanelActivityCalls: ReadonlyArray<SetPanelActivityRecord>;
   /** The activity this plugin reports right now, keyed by `panelId`. */
@@ -519,6 +552,14 @@ export interface MockHostState {
    * waiting for a window to regain focus.
    */
   simulateSystemWake(event: PluginSystemWakeEvent): void;
+
+  /**
+   * Press a task's Cancel as the user would (#13819): the task turns
+   * `"cancelling"` and its `signal` aborts. Throws for a task that isn't
+   * running or wasn't started `cancellable`, which the host's button would
+   * never offer.
+   */
+  simulateTaskCancel(taskId: string): void;
 
   /**
    * Set what `host.hasListeners(channel)` answers and, when that changes it,
@@ -1335,6 +1376,8 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
   const setTerminalStatusCalls: SetTerminalStatusRecord[] = [];
   const terminalStatuses = new Map<string, PluginTerminalStatus>();
   const setPanelActivityCalls: SetPanelActivityRecord[] = [];
+  const tasks: MockTaskRecord[] = [];
+  const taskControllers = new Map<string, AbortController>();
   const panelActivity = new Map<string, PluginPanelActivity>();
   const setPanelMenuItemsCalls: SetPanelMenuItemsRecord[] = [];
   const reloadPanelCalls: string[] = [];
@@ -2911,6 +2954,82 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
       notifications.push({ id, options: opts });
       return { id };
     },
+    tasks: {
+      async start(startOptions): Promise<PluginTaskHandle> {
+        const vetted = validatePluginTaskStart(startOptions);
+        if (!vetted.ok) throw new Error(`tasks.start: ${vetted.error}`);
+        const { actionId } = vetted.value.retry;
+        if (!actionId.startsWith(`${mockManifestId}.`) || actionId === `${mockManifestId}.`) {
+          throw new Error(
+            `tasks.start: retry.actionId "${actionId}" must be one of this plugin's own actions, written "${mockManifestId}.<id>"`
+          );
+        }
+        const live = tasks.filter((t) => t.state === "working" || t.state === "cancelling");
+        if (live.length >= PLUGIN_TASK_MAX_LIVE) {
+          throw new Error(
+            `tasks.start: already has ${PLUGIN_TASK_MAX_LIVE} unfinished tasks — finish one before starting another`
+          );
+        }
+        const record: MockTaskRecord = {
+          id: `mock-task-${tasks.length + 1}`,
+          options: vetted.value,
+          state: "working",
+          fraction: vetted.value.fraction,
+          detail: vetted.value.detail,
+          reports: [],
+          result: undefined,
+        };
+        tasks.push(record);
+        const controller = new AbortController();
+        taskControllers.set(record.id, controller);
+        const running = () => record.state === "working" || record.state === "cancelling";
+        return {
+          id: record.id,
+          signal: controller.signal,
+          report(progress) {
+            const vettedProgress = validatePluginTaskProgress(progress);
+            if (!vettedProgress.ok) throw new Error(`task.report: ${vettedProgress.error}`);
+            if (!running()) return;
+            record.reports.push(vettedProgress.value);
+            if (vettedProgress.value.fraction !== undefined) {
+              record.fraction = vettedProgress.value.fraction;
+            }
+            if (vettedProgress.value.detail !== undefined) {
+              record.detail = vettedProgress.value.detail || undefined;
+            }
+          },
+          async finish(result) {
+            const vettedResult = validatePluginTaskResult(result);
+            if (!vettedResult.ok) throw new Error(`task.finish: ${vettedResult.error}`);
+            if (!running()) return;
+            const cancelRequested = record.state === "cancelling";
+            const outcome = vettedResult.value;
+            record.state = outcome.outcome;
+            record.result = outcome;
+            taskControllers.delete(record.id);
+            // The same notifications the real host raises; a task the user
+            // cancelled shows nothing, however it ended.
+            if (cancelRequested) return;
+            if (outcome.outcome === "failed") {
+              await host.notify({
+                title: `${record.options.title} failed`,
+                body: outcome.message,
+                severity: "error",
+                actions: [{ id: "retry", label: "Retry", ...record.options.retry }],
+                dedupeKey: `task:${record.id}`,
+              });
+            } else if (outcome.outcome === "succeeded" && outcome.message !== undefined) {
+              await host.notify({
+                title: record.options.title,
+                body: outcome.message,
+                delivery: "passive",
+                dedupeKey: `task:${record.id}`,
+              });
+            }
+          },
+        };
+      },
+    },
     async dispatch(actionId, args, dispatchOptions) {
       dispatchedActions.push(
         dispatchOptions === undefined
@@ -3545,6 +3664,7 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
     worktreeReviewChecks,
     setTerminalStatusCalls,
     terminalStatuses,
+    startedTasks: tasks,
     setPanelActivityCalls,
     panelActivity,
     setPanelMenuItemsCalls,
@@ -3634,6 +3754,14 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
           console.error("account.onDidChange callback failed", err);
         }
       }
+    },
+    simulateTaskCancel(taskId) {
+      const record = tasks.find((t) => t.id === taskId);
+      if (!record || record.state !== "working" || !record.options.cancellable) {
+        throw new Error(`simulateTaskCancel: "${taskId}" is not a running cancellable task`);
+      }
+      record.state = "cancelling";
+      taskControllers.get(taskId)?.abort();
     },
     simulateSystemWake(event) {
       // Frozen like production delivery, for the same reason.

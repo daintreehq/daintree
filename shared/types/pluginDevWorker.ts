@@ -37,6 +37,9 @@ import type {
   PluginWorktreeReviewCheck,
   PluginTerminalStatus,
   PluginPanelActivity,
+  PluginTaskProgress,
+  PluginTaskResult,
+  PluginTaskStartOptions,
   PanelMenuItemContribution,
   BuiltInPluginCapability,
   PluginActionResultSchema,
@@ -124,7 +127,11 @@ export type PluginHostCallMethod =
   | "showInputBox"
   | "showConfirm"
   | "process.spawn"
-  | "process.restart";
+  | "process.restart"
+  // Plugin tasks (#13819). Starting and finishing answer the caller; progress
+  // is a coalesced `tasks.report` notify below.
+  | "tasks.start"
+  | "tasks.finish";
 
 /** Fire-and-forget host methods (no reply needed). */
 export type PluginHostNotifyMethod =
@@ -157,6 +164,9 @@ export type PluginHostNotifyMethod =
   // reply for the worker to await.
   | "process.write"
   | "process.resize"
+  // Task progress, the latest report per task over one coalescing window
+  // (#13819). Void in the public handle contract, like `process.write`.
+  | "tasks.report"
   // A push the worker refused before it crossed the port (over the size cap,
   // or not clonable), reported so main's metrics count it. Carries no payload.
   | "pushRejected";
@@ -915,6 +925,34 @@ export interface ProcessSpawnParams {
 export interface ProcessSpawnResult {
   id: string;
   mode: PluginProcessMode;
+}
+
+/**
+ * Params for `tasks.start` (`host-call`). The user's Cancel arrives as a
+ * `subscription-event` keyed by `subscriptionId`, which the worker registers
+ * before the call so a cancel can't race ahead of it.
+ */
+export interface TaskStartParams {
+  subscriptionId: string;
+  options: PluginTaskStartOptions;
+}
+
+/** Result of `tasks.start` (`host-call`): the host-assigned task id. */
+export interface TaskStartResult {
+  id: string;
+  /** The plugin had unloaded: the worker hands back an inert handle. */
+  inert?: true;
+}
+
+/** Params for `tasks.report` (`host-notify`): one coalescing window's latest report per task. */
+export interface TaskReportParams {
+  reports: Array<{ taskId: string; progress: PluginTaskProgress }>;
+}
+
+/** Params for `tasks.finish` (`host-call`). */
+export interface TaskFinishParams {
+  taskId: string;
+  result: PluginTaskResult;
 }
 
 /** Params for `process.kill` (`host-notify`) and `process.restart` (`host-call`). */

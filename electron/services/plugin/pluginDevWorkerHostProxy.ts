@@ -63,6 +63,8 @@ import type {
   PluginSearchProvider,
   WorktreeDeleteNotesProviderDescriptor,
   WorktreeDeleteNotesProviderImpl,
+  PluginTaskHandle,
+  PluginTaskProgress,
 } from "../../../shared/types/plugin.js";
 import { SEARCH_PROVIDER_MAX_RESPONSE_BYTES } from "../../../shared/config/pluginSearchProviders.js";
 import { AsyncLocalStorage } from "node:async_hooks";
@@ -100,7 +102,15 @@ import {
 import {
   AGENT_MCP_MAX_RESULT_BYTES,
   PLUGIN_HOST_CALL_TIMEOUT_MS,
+  PLUGIN_TASK_PROGRESS_COALESCE_MS,
 } from "../../../shared/types/plugin.js";
+import {
+  inertPluginTaskHandle,
+  mergePluginTaskProgress,
+  validatePluginTaskProgress,
+  validatePluginTaskResult,
+  validatePluginTaskStart,
+} from "../../../shared/utils/pluginTasks.js";
 import type {
   PanelReloadResult,
   WorkerRestartResult,
@@ -139,6 +149,10 @@ import type {
   PluginWorkerToHostMessage,
   RegisterMcpToolsParams,
   PluginWorkerWorktreesEvent,
+  TaskFinishParams,
+  TaskReportParams,
+  TaskStartParams,
+  TaskStartResult,
 } from "../../../shared/types/pluginDevWorker.js";
 
 type Post = (message: PluginWorkerToHostMessage) => void;
@@ -289,6 +303,9 @@ export class PluginDevWorkerHostProxy {
    * the person who made that invocation, not whoever called the plugin last.
    */
   private readonly invocation = new AsyncLocalStorage<string>();
+  /** Task progress waiting for the next `tasks.report`, the latest per task id (#13819). */
+  private readonly pendingTaskReports = new Map<string, PluginTaskProgress>();
+  private taskReportTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(pluginId: string, post: Post, identity: PluginIdentity) {
     this.pluginId = pluginId;
@@ -338,6 +355,9 @@ export class PluginDevWorkerHostProxy {
     this.listenerStates.clear();
     for (const database of this.databases) void database.close();
     this.databases.clear();
+    if (this.taskReportTimer !== null) clearTimeout(this.taskReportTimer);
+    this.taskReportTimer = null;
+    this.pendingTaskReports.clear();
   }
 
   /** Test seam: plain invokes whose result is still awaited. */
@@ -1994,6 +2014,43 @@ export class PluginDevWorkerHostProxy {
         warn: (message, fields) => this.notify("logger.warn", { message, fields }),
         error: (message, fields) => this.notify("logger.error", { message, fields }),
       },
+      tasks: {
+        // The real task lives in main's registry; `start` relays over the port
+        // and returns a handle addressing it by id (#13819). The user's Cancel
+        // comes back as a subscription event that aborts this side's signal,
+        // since a signal can't cross the port.
+        start: (options) => {
+          if (this.disposed) return Promise.resolve(inertPluginTaskHandle());
+          const vetted = validatePluginTaskStart(options);
+          if (!vetted.ok) {
+            return Promise.reject(
+              new Error(`Plugin "${this.pluginId}" tasks.start: ${vetted.error}`)
+            );
+          }
+          const subscriptionId = `s${this.nextId++}`;
+          const controller = new AbortController();
+          // Registered before the call so a cancel can't race ahead of the
+          // handle; dropped again if the start doesn't produce one.
+          this.subscriptions.set(subscriptionId, () => controller.abort());
+          const params: TaskStartParams = { subscriptionId, options: vetted.value };
+          return this.callWithGrace<TaskStartResult>("tasks.start", params, {
+            id: "",
+            inert: true,
+          }).then(
+            (result) => {
+              if (result.inert) {
+                this.subscriptions.delete(subscriptionId);
+                return inertPluginTaskHandle();
+              }
+              return this.buildTaskHandle(result.id, controller, subscriptionId);
+            },
+            (err: unknown) => {
+              this.subscriptions.delete(subscriptionId);
+              throw err;
+            }
+          );
+        },
+      },
       process: {
         // The real `PluginProcessHandle` lives in main (PluginProcessManager);
         // `spawn` relays over the port and returns a proxy handle whose id
@@ -2327,6 +2384,63 @@ export class PluginDevWorkerHostProxy {
       this.subscriptions.delete(message.subscriptionId);
       this.post({ type: "unsubscribe", subscriptionId: message.subscriptionId });
     };
+  }
+
+  /**
+   * A worker-side task handle for a task main started (#13819). Progress is
+   * held per task and sent in one `tasks.report` per window, so a plugin
+   * reporting on every item crosses the port at most once per window.
+   */
+  private buildTaskHandle(
+    taskId: string,
+    controller: AbortController,
+    subscriptionId: string
+  ): PluginTaskHandle {
+    let finished = false;
+    return {
+      id: taskId,
+      signal: controller.signal,
+      report: (progress) => {
+        const vetted = validatePluginTaskProgress(progress);
+        if (!vetted.ok) throw new Error(`Plugin "${this.pluginId}" task.report: ${vetted.error}`);
+        if (finished || this.disposed) return;
+        this.pendingTaskReports.set(
+          taskId,
+          mergePluginTaskProgress(this.pendingTaskReports.get(taskId), vetted.value)
+        );
+        // A fixed window from the first report, never re-armed, so continuous
+        // reporting still sends one batch per window.
+        this.taskReportTimer ??= setTimeout(
+          () => this.flushTaskReports(),
+          PLUGIN_TASK_PROGRESS_COALESCE_MS
+        );
+      },
+      finish: (result) => {
+        const vetted = validatePluginTaskResult(result);
+        if (!vetted.ok) {
+          return Promise.reject(
+            new Error(`Plugin "${this.pluginId}" task.finish: ${vetted.error}`)
+          );
+        }
+        if (finished) return Promise.resolve();
+        finished = true;
+        // Progress still waiting would only redraw a task that is ending.
+        this.pendingTaskReports.delete(taskId);
+        this.subscriptions.delete(subscriptionId);
+        const params: TaskFinishParams = { taskId, result: vetted.value };
+        return this.callWithGrace<void>("tasks.finish", params, undefined);
+      },
+    };
+  }
+
+  private flushTaskReports(): void {
+    this.taskReportTimer = null;
+    if (this.disposed || this.pendingTaskReports.size === 0) return;
+    const params: TaskReportParams = {
+      reports: [...this.pendingTaskReports].map(([taskId, progress]) => ({ taskId, progress })),
+    };
+    this.pendingTaskReports.clear();
+    this.notify("tasks.report", params);
   }
 
   /**

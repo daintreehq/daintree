@@ -89,8 +89,16 @@ import {
   PLUGIN_TERMINAL_STATUS_MAX_PER_PROJECT,
   type PluginDatabaseApi,
   type PluginPanelActivityReport,
+  type PluginTaskApi,
   type PluginWorktreeSetupStepHandler,
 } from "../../../shared/types/plugin.js";
+import {
+  inertPluginTaskHandle,
+  validatePluginTaskProgress,
+  validatePluginTaskResult,
+  validatePluginTaskStart,
+} from "../../../shared/utils/pluginTasks.js";
+import type { PluginTaskRecord, PluginTaskRegistry } from "./PluginTaskRegistry.js";
 import {
   databaseBackupApprovers,
   fsWriteApprovers,
@@ -731,6 +739,8 @@ export interface PluginHostFactoryDeps {
   emitPanelActivity: (pluginId: string) => void;
   /** A revision for an accepted activity change, never handed out twice in this process. */
   nextPanelActivityRevision: () => number;
+  /** Every plugin's tasks started via `host.tasks.start` (#13819), and their transitions. */
+  pluginTasks: PluginTaskRegistry;
   /** Live toolbar-button state set via `host.setToolbarButtonState`, `pluginId → buttonId → state`. */
   pluginToolbarStates: Map<string, Map<string, PluginToolbarButtonRuntimeState>>;
   /** Publish one plugin's complete toolbar-state map to the views entitled to it. */
@@ -1500,6 +1510,105 @@ export function createHost(
   // The live disposer per `agentMcp` endpoint, so a replaced roster is released
   // rather than kept reachable from the unload cascade for the host's lifetime.
   const mcpRosterDisposers = new Map<string, () => void>();
+
+  /**
+   * Hold one of the caller's actions, written in its manifest namespace, to
+   * that namespace and rewrite it to its instance's — the same rule as
+   * setPanelMenuItems, so a notification button or a task's Retry can only run
+   * what the plugin could already put in its own panel menu.
+   */
+  const resolveOwnActionId = (method: string, field: string, authored: string): string => {
+    const ownPrefix = `${manifestId}.`;
+    if (!authored.startsWith(ownPrefix) || authored.length === ownPrefix.length) {
+      throw new Error(
+        `Plugin "${pluginId}" ${method}: ${field} "${authored.slice(0, 200)}" must be one of this plugin's own actions, written "${manifestId}.<id>"`
+      );
+    }
+    const actionId = `${pluginId}.${authored.slice(ownPrefix.length)}`;
+    // A manifest name can spell a built-in's prefix ("worktree.resource"), and
+    // a click runs with the user's authority, so the rewritten id must still
+    // be the plugin's and never a built-in's.
+    if (isBuiltInActionId(actionId)) {
+      throw new Error(
+        `Plugin "${pluginId}" ${method}: ${field} "${actionId}" is a built-in action, not one of this plugin's own`
+      );
+    }
+    return actionId;
+  };
+
+  // NOT revoke-guarded: tasks start from commands and timers long after
+  // activate() (#13819). The record a handle holds is its identity in the
+  // registry, so a handle outliving an unload or a worker swap is inert.
+  const tasksApi: PluginTaskApi = {
+    start: async (options) => {
+      if (!isBound()) return inertPluginTaskHandle();
+      const vetted = validatePluginTaskStart(options);
+      if (!vetted.ok) throw new Error(`Plugin "${pluginId}" tasks.start: ${vetted.error}`);
+      // Checked here so a bad retry fails where it was written, not when a
+      // failure finally needs it. The authored id is what's kept: the failure
+      // goes out through notify, which rewrites it again.
+      resolveOwnActionId("tasks.start", "retry.actionId", vetted.value.retry.actionId);
+      let record: PluginTaskRecord;
+      try {
+        record = deps.pluginTasks.start(pluginId, {
+          ...vetted.value,
+          pluginName: deps.pluginDisplayName(pluginId),
+        });
+      } catch (err) {
+        throw new Error(
+          `Plugin "${pluginId}" tasks.start: ${formatErrorMessage(err, "could not start")}`,
+          { cause: err }
+        );
+      }
+      const taskId = record.snapshot.id;
+      return {
+        id: taskId,
+        signal: record.controller.signal,
+        report: (progress) => {
+          const vettedProgress = validatePluginTaskProgress(progress);
+          if (!vettedProgress.ok) {
+            throw new Error(`Plugin "${pluginId}" task.report: ${vettedProgress.error}`);
+          }
+          deps.pluginTasks.report(record, vettedProgress.value);
+        },
+        finish: async (result) => {
+          const vettedResult = validatePluginTaskResult(result);
+          if (!vettedResult.ok) {
+            throw new Error(`Plugin "${pluginId}" task.finish: ${vettedResult.error}`);
+          }
+          const claim = deps.pluginTasks.finish(record);
+          // A task the user cancelled shows nothing, however it ended.
+          if (!claim || claim.cancelRequested) return;
+          const outcome = vettedResult.value;
+          // Through notify, so the failure is attributed, ordered, budgeted and
+          // held back by a silence or a project mute like any other.
+          if (outcome.outcome === "failed") {
+            await host.notify({
+              title: `${claim.title} failed`,
+              body: outcome.message,
+              severity: "error",
+              actions: [
+                {
+                  id: "retry",
+                  label: "Retry",
+                  actionId: claim.retry.actionId,
+                  ...(claim.retry.args !== undefined ? { args: claim.retry.args } : {}),
+                },
+              ],
+              dedupeKey: `task:${taskId}`,
+            });
+          } else if (outcome.outcome === "succeeded" && outcome.message !== undefined) {
+            await host.notify({
+              title: claim.title,
+              body: outcome.message,
+              delivery: "passive",
+              dedupeKey: `task:${taskId}`,
+            });
+          }
+        },
+      };
+    },
+  };
 
   const host: PluginHostApi = {
     get pluginId() {
@@ -3627,28 +3736,11 @@ export function createHost(
       const { title, body, os, dedupeKey } = parsed.data;
       const severity = parsed.data.severity ?? "info";
       const passive = parsed.data.delivery === "passive";
-      const ownPrefix = `${manifestId}.`;
-      const actions = (parsed.data.actions ?? []).map((action, index) => {
-        if (!action.actionId.startsWith(ownPrefix) || action.actionId.length === ownPrefix.length) {
-          throw new Error(
-            `Plugin "${pluginId}" notify: actions.${index}.actionId "${action.actionId.slice(0, 200)}" must be one of this plugin's own actions, written "${manifestId}.<id>"`
-          );
-        }
-        const actionId = `${pluginId}.${action.actionId.slice(ownPrefix.length)}`;
-        // A manifest name can spell a built-in's prefix ("worktree.resource"),
-        // and a click runs with the user's authority, so the rewritten id must
-        // still be the plugin's and never a built-in's.
-        if (isBuiltInActionId(actionId)) {
-          throw new Error(
-            `Plugin "${pluginId}" notify: actions.${index}.actionId "${actionId}" is a built-in action, not one of this plugin's own`
-          );
-        }
-        return {
-          label: action.label,
-          actionId,
-          ...(action.args !== undefined ? { args: action.args } : {}),
-        };
-      });
+      const actions = (parsed.data.actions ?? []).map((action, index) => ({
+        label: action.label,
+        actionId: resolveOwnActionId("notify", `actions.${index}.actionId`, action.actionId),
+        ...(action.args !== undefined ? { args: action.args } : {}),
+      }));
       if (os && !deps.declaredCapabilities(pluginId).has("notification:os")) {
         throw new Error(
           `PERMISSION_REQUIRED: plugin "${pluginId}" notify with os: true requires "notification:os", which is not declared in manifest.capabilities`
@@ -3951,6 +4043,7 @@ export function createHost(
     // — once the plugin unloads `spawn` rejects and outstanding processes are
     // torn down by `killAll` in unloadPlugin.
     process: buildProcessApi(deps, pluginId, fetchWorktreeSnapshots),
+    tasks: tasksApi,
     // Host-mediated, scope-contained filesystem + git surfaces (fs-API
     // containment unit). NOT revoke-guarded — plugins read/write from
     // post-activation timers and callbacks. Every path argument is realpath-

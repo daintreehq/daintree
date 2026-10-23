@@ -5212,6 +5212,130 @@ export interface PluginNotifyResult {
   id: string;
 }
 
+/** Most unfinished tasks one plugin may hold at once through {@link PluginHostApi.tasks}. */
+export const PLUGIN_TASK_MAX_LIVE = 16;
+
+/** Most interrupted tasks the host keeps per plugin until the user dismisses them. */
+export const PLUGIN_TASK_MAX_INTERRUPTED = 16;
+
+/** Max length of a task's `title`, enforced host-side. */
+export const PLUGIN_TASK_TITLE_MAX = 120;
+
+/** Max length of a task's `detail`, enforced host-side. */
+export const PLUGIN_TASK_DETAIL_MAX = 200;
+
+/** Max length of a finished task's `message`, enforced host-side. */
+export const PLUGIN_TASK_MESSAGE_MAX = 2000;
+
+/** Serialized size cap for a task's `retry.args`, the same as a notification action's. */
+export const PLUGIN_TASK_RETRY_ARGS_MAX_BYTES = 4096;
+
+/**
+ * Window a task's progress reports are coalesced over before they cross a
+ * process boundary: the worker's port to main, and main's push to the views.
+ * The latest report in the window wins.
+ */
+export const PLUGIN_TASK_PROGRESS_COALESCE_MS = 150;
+
+/** Options for {@link PluginTaskApi.start}. */
+export interface PluginTaskStartOptions {
+  /** What the task is doing, in a few words ("Importing records"). */
+  title: string;
+  /** A second line under the title ("312 of 1,000"). */
+  detail?: string;
+  /** Whether the user may cancel it. Defaults to `false`. */
+  cancellable?: boolean;
+  /**
+   * Progress from 0 to 1, or `null` (the default) while it can't be measured.
+   */
+  fraction?: number | null;
+  /**
+   * One of the plugin's own actions that runs the work again, written
+   * `"{manifest name}.{id}"` as in `contributes.menu`. A failed task's
+   * notification offers it as Retry.
+   */
+  retry: { actionId: ActionId; args?: Record<string, unknown> };
+}
+
+/** A progress update for {@link PluginTaskHandle.report}. Omitted fields keep their last value. */
+export interface PluginTaskProgress {
+  /** Progress from 0 to 1, or `null` while it can't be measured. */
+  fraction?: number | null;
+  /** Replaces the detail line; `""` clears it. */
+  detail?: string;
+}
+
+/**
+ * How a task ended, for {@link PluginTaskHandle.finish}. A failure's `message`
+ * says what went wrong and becomes the notification body. A success's
+ * optional `message` files a passive inbox entry; without one, nothing is
+ * shown.
+ */
+export type PluginTaskResult =
+  | { outcome: "succeeded"; message?: string }
+  | { outcome: "failed"; message: string }
+  | { outcome: "cancelled" };
+
+/** A running task started with {@link PluginTaskApi.start}. */
+export interface PluginTaskHandle {
+  /** Host-assigned, unique for the session. */
+  readonly id: string;
+  /**
+   * Aborts when the user cancels the task or the host interrupts it (the
+   * plugin unloading). The plugin still calls {@link finish} with
+   * `"cancelled"` once it has stopped.
+   */
+  readonly signal: AbortSignal;
+  /**
+   * Update the task's progress. Reports are coalesced before they cross IPC,
+   * so calling this on every item is fine. Invalid progress throws; a report
+   * after the task finished is ignored.
+   */
+  report(progress: PluginTaskProgress): void;
+  /**
+   * End the task. Only the first call counts. Invalid results reject.
+   */
+  finish(result: PluginTaskResult): Promise<void>;
+}
+
+/**
+ * Long-running work the host shows in its own place for background work
+ * (#13819), with Cancel where the task allows it. A failed task raises an
+ * error notification naming the plugin, with Retry. A successful one shows at
+ * most a passive inbox entry, and a cancelled one nothing. Tasks still
+ * running when the plugin unloads are marked interrupted.
+ */
+export interface PluginTaskApi {
+  /**
+   * Start a task. Rejects on invalid options, a `retry` outside the plugin's
+   * own namespace, or more than {@link PLUGIN_TASK_MAX_LIVE} unfinished tasks.
+   * Once the plugin is unloaded it resolves with a handle whose signal is
+   * already aborted and whose methods do nothing.
+   */
+  start(options: PluginTaskStartOptions): Promise<PluginTaskHandle>;
+}
+
+/** Where a plugin task stands, as the host shows it. */
+export type PluginTaskState = "working" | "cancelling" | "interrupted";
+
+/**
+ * A plugin task as main holds and sends it to the views. Never authored by a
+ * plugin. The plugin's name is captured at start, so an interrupted task
+ * still names its plugin after the plugin has gone.
+ */
+export interface PluginTaskSnapshot {
+  id: string;
+  pluginId: string;
+  pluginName: string;
+  title: string;
+  detail?: string;
+  /** 0 to 1, or `null` when the plugin can't measure it. */
+  fraction: number | null;
+  cancellable: boolean;
+  state: PluginTaskState;
+  startedAt: number;
+}
+
 /**
  * One selectable row in a {@link PluginHostApi.showQuickPick} list. `id` is the
  * stable identity used for selection tracking and search keys; `label` is the
@@ -7612,6 +7736,15 @@ export interface PluginHostApi extends PluginActivationApi {
    * unloaded `spawn` rejects.
    */
   readonly process: PluginProcessApi;
+  /**
+   * Long-running work shown in the host's background-work readout (#13819).
+   * See {@link PluginTaskApi}. Needs no capability.
+   *
+   * NOT revoke-guarded: plugins start tasks from commands and timers long
+   * after activate(). Once the plugin is unloaded `start` hands back an inert
+   * handle, and handles it gave out earlier stop doing anything.
+   */
+  readonly tasks: PluginTaskApi;
   /**
    * Host-mediated filesystem surface contained to the plugin's declared
    * `scopes.fs.allowedPaths` — the runtime enforcement of those paths (formerly

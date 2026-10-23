@@ -2745,3 +2745,74 @@ describe("createMockHost terminals.readScreen", () => {
     await expect(host.terminals.readScreen("t-1")).resolves.toEqual({ status: "not-found" });
   });
 });
+
+describe("createMockHost tasks (#13819)", () => {
+  const retry = { actionId: "acme.demo.import", args: { source: "csv" } };
+
+  it("records a task as the plugin reports and finishes it, raising the host's failure", async () => {
+    const host = createMockHost({ pluginId: "acme.demo" });
+    const task = await host.tasks.start({ title: "Importing records", retry });
+
+    task.report({ fraction: 0.5, detail: "5 of 10" });
+    task.report({ detail: "" });
+    await task.finish({ outcome: "failed", message: "Offline" });
+    task.report({ fraction: 1 });
+
+    expect(host.startedTasks).toEqual([
+      {
+        id: task.id,
+        options: { title: "Importing records", cancellable: false, fraction: null, retry },
+        state: "failed",
+        fraction: 0.5,
+        detail: undefined,
+        reports: [{ fraction: 0.5, detail: "5 of 10" }, { detail: "" }],
+        result: { outcome: "failed", message: "Offline" },
+      },
+    ]);
+    expect(host.notifications.map((n) => n.options)).toEqual([
+      {
+        title: "Importing records failed",
+        body: "Offline",
+        severity: "error",
+        actions: [{ id: "retry", label: "Retry", ...retry }],
+        dedupeKey: `task:${task.id}`,
+      },
+    ]);
+  });
+
+  it("files a passive entry only for a success with a message", async () => {
+    const host = createMockHost({ pluginId: "acme.demo" });
+    await (await host.tasks.start({ title: "Quiet", retry })).finish({ outcome: "succeeded" });
+    const told = await host.tasks.start({ title: "Import", retry });
+    await told.finish({ outcome: "succeeded", message: "Imported 10" });
+
+    expect(host.notifications.map((n) => n.options)).toEqual([
+      { title: "Import", body: "Imported 10", delivery: "passive", dedupeKey: `task:${told.id}` },
+    ]);
+  });
+
+  it("simulates the user's Cancel, after which the task shows nothing", async () => {
+    const host = createMockHost({ pluginId: "acme.demo" });
+    const task = await host.tasks.start({ title: "Sync", cancellable: true, retry });
+
+    host.simulateTaskCancel(task.id);
+    expect(task.signal.aborted).toBe(true);
+    expect(host.startedTasks[0]?.state).toBe("cancelling");
+    await task.finish({ outcome: "failed", message: "Stopped" });
+    expect(host.notifications).toEqual([]);
+    expect(() => host.simulateTaskCancel(task.id)).toThrow(/not a running cancellable task/);
+  });
+
+  it("refuses what the real host refuses", async () => {
+    const host = createMockHost({ pluginId: "acme.demo" });
+    await expect(host.tasks.start({ title: "", retry })).rejects.toThrow(/title/);
+    await expect(
+      host.tasks.start({ title: "T", retry: { actionId: "other.import" } })
+    ).rejects.toThrow(/own actions/);
+    const task = await host.tasks.start({ title: "T", retry });
+    expect(() => task.report({ fraction: 3 })).toThrow(/fraction/);
+    await expect(task.finish({ outcome: "failed" } as never)).rejects.toThrow(/message/);
+    const uncancellable = await host.tasks.start({ title: "U", retry });
+    expect(() => host.simulateTaskCancel(uncancellable.id)).toThrow(/cancellable/);
+  });
+});

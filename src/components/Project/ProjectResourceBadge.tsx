@@ -33,6 +33,8 @@ import {
 import { pluralize, pluralNoun } from "@/lib/pluralize";
 import { ProcessesDialog } from "./ProcessesDialog";
 import { useClosedTerminalProcessNotice } from "@/hooks/app/useClosedTerminalProcessNotice";
+import { isLivePluginTask, usePluginTaskStore } from "@/store/pluginTaskStore";
+import { PluginTaskList } from "@/components/Plugin/PluginTaskList";
 
 const MAX_SAMPLES = 12;
 const BADGE_POLL_MS = 10_000;
@@ -484,6 +486,18 @@ export function ProjectResourceBadge({
     return total;
   });
 
+  /**
+   * Tasks plugins run through `host.tasks` (#13819). A running one is work in
+   * flight like an agent's, so it turns the mark over too, and the popover
+   * lists every one with its Cancel. An interrupted task stays listed until
+   * dismissed, but it isn't work.
+   */
+  const pluginTasks = usePluginTaskStore((state) => state.tasks);
+  useEffect(() => {
+    usePluginTaskStore.getState().init();
+  }, []);
+  const livePluginTasks = pluginTasks.filter(isLivePluginTask).length;
+
   // The warning reads the same fresh-or-nothing figure the popover shows, so a
   // stalled read can neither raise it nor hold it up.
   const memoryState =
@@ -754,7 +768,7 @@ export function ProjectResourceBadge({
     return () => clearInterval(tick);
   }, [open]);
 
-  const isWorking = activeAgents > 0;
+  const isWorking = activeAgents > 0 || livePluginTasks > 0;
 
   // The row used to vanish whenever nothing was running, which made "idle" and
   // "this strip isn't here" the same picture — and idle is half of the question
@@ -943,6 +957,14 @@ export function ProjectResourceBadge({
           className="w-72 p-3"
         >
           <div className="space-y-3">
+            {/* First, and independent of the memory read: work that can be
+              cancelled is the most actionable thing here. */}
+            {pluginTasks.length > 0 && (
+              <div className="space-y-1.5 border-b border-divider pb-2">
+                <SectionLabel>Plugin tasks</SectionLabel>
+                <PluginTaskList tasks={pluginTasks} />
+              </div>
+            )}
             <div className="space-y-1.5">
               {popoverMemoryState === "critical" && (
                 <div className="flex items-start gap-1.5 text-2xs text-text-primary">

@@ -97,6 +97,8 @@ const HOST_CALL_METHODS = {
   showConfirm: true,
   "process.spawn": true,
   "process.restart": true,
+  "tasks.start": true,
+  "tasks.finish": true,
 } as const satisfies Record<PluginHostCallMethod, true>;
 
 const HOST_NOTIFY_METHODS = {
@@ -126,6 +128,7 @@ const HOST_NOTIFY_METHODS = {
   "process.kill": true,
   "process.write": true,
   "process.resize": true,
+  "tasks.report": true,
   pushRejected: true,
 } as const satisfies Record<PluginHostNotifyMethod, true>;
 

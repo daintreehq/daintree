@@ -58,6 +58,8 @@ export const PLUGIN_METHOD_CHANNELS = {
   reportPanelInventory: "plugin:report-panel-inventory",
   getRuntimeStatuses: "plugin:runtime-statuses-get",
   restartWorker: "plugin:restart-worker",
+  cancelTask: "plugin:task-cancel",
+  dismissTask: "plugin:task-dismiss",
   getAgents: "plugin:agents-get",
   getRecipes: "plugin:recipes-get",
   getTours: "plugin:tours-get",

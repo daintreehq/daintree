@@ -38,6 +38,8 @@ const mockSetProjectPluginVisibility = vi.fn();
 const mockSetPluginVisibilityDefault = vi.fn();
 const mockReloadProjectPlugins = vi.fn();
 const mockRestartPluginWorker = vi.fn();
+const mockCancelPluginTask = vi.fn((_pluginId: string, _taskId: string) => true);
+const mockDismissPluginTask = vi.fn((_pluginId: string, _taskId: string) => true);
 const mockListPluginRuntimeStatuses = vi.fn();
 const mockGetDataBackupSource = vi.fn();
 const mockIsRemoteUnsupported = vi.fn<(pluginId: string) => boolean>();
@@ -161,6 +163,9 @@ vi.mock("../../../services/PluginService.js", () => ({
     setPluginVisibilityDefault: (...args: unknown[]) => mockSetPluginVisibilityDefault(...args),
     reloadProjectPlugins: (...args: unknown[]) => mockReloadProjectPlugins(...args),
     restartPluginWorker: (...args: unknown[]) => mockRestartPluginWorker(...args),
+    cancelPluginTask: (pluginId: string, taskId: string) => mockCancelPluginTask(pluginId, taskId),
+    dismissPluginTask: (pluginId: string, taskId: string) =>
+      mockDismissPluginTask(pluginId, taskId),
     listPluginRuntimeStatuses: (...args: unknown[]) => mockListPluginRuntimeStatuses(...args),
     getDataBackupSource: (...args: unknown[]) => mockGetDataBackupSource(...args),
     metrics: { recordInvoke: (...args: unknown[]) => mockMetricsRecordInvoke(...args) },
@@ -3526,6 +3531,68 @@ describe("cross-project plugin control", () => {
       `project__${PROJECT_B}__acme.dashboard`,
       "acme.dashboard",
     ]);
+  });
+});
+
+describe("plugin tasks (#13819)", () => {
+  const PROJECT_A = "a".repeat(64);
+  const PROJECT_B = "b".repeat(64);
+  const INSTANCE_A = `project__${PROJECT_A}__acme.importer`;
+
+  function getHandler(channel: string) {
+    registerPluginHandlers();
+    return mockIpcMainHandle.mock.calls.find((c: unknown[]) => c[0] === channel)![1] as (
+      ...args: unknown[]
+    ) => unknown;
+  }
+
+  beforeEach(() => {
+    mockCancelPluginTask.mockClear();
+    mockDismissPluginTask.mockClear();
+  });
+
+  it.each(["plugin:task-cancel", "plugin:task-dismiss"])(
+    "%s reaches the sender's own project plugin and an app-wide one",
+    async (channel) => {
+      mockGetProjectForWebContents.mockReturnValue(PROJECT_A);
+      expect(await getHandler(channel)(senderEvent, INSTANCE_A, "t-1")).toBe(true);
+      expect(await getHandler(channel)(senderEvent, "acme.importer", "t-2")).toBe(true);
+      const service =
+        channel === "plugin:task-cancel" ? mockCancelPluginTask : mockDismissPluginTask;
+      expect(service.mock.calls).toEqual([
+        [INSTANCE_A, "t-1"],
+        ["acme.importer", "t-2"],
+      ]);
+    }
+  );
+
+  it.each(["plugin:task-cancel", "plugin:task-dismiss"])(
+    "%s refuses another project's plugin",
+    async (channel) => {
+      mockGetProjectForWebContents.mockReturnValue(PROJECT_B);
+      await expect(getHandler(channel)(senderEvent, INSTANCE_A, "t-1")).rejects.toThrow(
+        /different project/
+      );
+      expect(mockCancelPluginTask).not.toHaveBeenCalled();
+      expect(mockDismissPluginTask).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each([
+    ["../../etc/passwd", "t-1", /malformed plugin id/],
+    ["acme.importer", "", /malformed task id/],
+    ["acme.importer", 7, /malformed task id/],
+    ["acme.importer", "x".repeat(65), /malformed task id/],
+  ])("refuses plugin id %j with task id %j", async (pluginId, taskId, error) => {
+    await expect(getHandler("plugin:task-cancel")(senderEvent, pluginId, taskId)).rejects.toThrow(
+      error
+    );
+    expect(mockCancelPluginTask).not.toHaveBeenCalled();
+  });
+
+  it("passes the service's refusal back as false", async () => {
+    mockCancelPluginTask.mockReturnValueOnce(false);
+    expect(await getHandler("plugin:task-cancel")(senderEvent, "acme.importer", "t-1")).toBe(false);
   });
 });
 

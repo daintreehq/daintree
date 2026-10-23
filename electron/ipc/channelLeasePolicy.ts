@@ -488,6 +488,8 @@ export const CHANNEL_LEASE_POLICY = {
   "plugin:settings-reveal-secret": "free",
   "plugin:settings-set-value": "free",
   "plugin:settings-required-status": "free",
+  "plugin:task-cancel": "free",
+  "plugin:task-dismiss": "free",
   "plugin:account-status": "free",
   "plugin:account-connect": "free",
   "plugin:account-cancel-connect": "free",

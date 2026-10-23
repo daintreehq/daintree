@@ -95,6 +95,9 @@ const HOST_CALL_DEADLINES = {
   showConfirm: NONE,
   "process.spawn": INTERACTIVE,
   "process.restart": DEFAULT,
+  "tasks.start": DEFAULT,
+  // Raises the failure's notification, which waits on the same lookups notify does.
+  "tasks.finish": DEFAULT,
 } as const satisfies Record<PluginHostCallMethod, DeadlinePolicy>;
 
 /** Milliseconds the worker waits for `method`'s answer; `0` means no deadline. */

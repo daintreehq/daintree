@@ -1173,6 +1173,10 @@ export const CHANNELS = {
   PLUGIN_RUNTIME_STATUSES_GET: "plugin:runtime-statuses-get",
   /** Retire a plugin's backend generation and start a fresh one (panel recovery). */
   PLUGIN_RESTART_WORKER: "plugin:restart-worker",
+  /** The user's Cancel on a plugin task (#13819). */
+  PLUGIN_TASK_CANCEL: "plugin:task-cancel",
+  /** The user's Dismiss on an interrupted plugin task (#13819). */
+  PLUGIN_TASK_DISMISS: "plugin:task-dismiss",
   PLUGIN_AGENTS_GET: "plugin:agents-get",
   PLUGIN_RECIPES_GET: "plugin:recipes-get",
   /** Plugin tours visible in the sender's project (#12773). */

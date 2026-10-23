@@ -2200,6 +2200,14 @@ export interface IpcEventMap {
     activity: Record<string, import("../plugin.js").PluginPanelActivityReport>;
   };
 
+  // A plugin's tasks changed (main → renderer, #13819). Carries the plugin's
+  // COMPLETE current list, oldest first, never a delta; an empty `tasks` clears
+  // them. Interrupted tasks stay in it after the plugin unloads, until dismissed.
+  "plugin:tasks-changed": {
+    pluginId: string;
+    tasks: import("../plugin.js").PluginTaskSnapshot[];
+  };
+
   // A plugin's toolbar-button badges changed (main → renderer, #13503). Carries
   // the plugin's COMPLETE current map (manifest button id → badge), never a
   // delta; an empty `badges` clears them, which is also how an unload is sent.
@@ -2487,6 +2495,8 @@ export type IpcEventBusMap = Pick<
   | "plugin:panel-badges-cleared"
   // Plugin panel activity reports (project-scoped for a project instance)
   | "plugin:panel-activity-changed"
+  // Plugin tasks (project-scoped for a project instance)
+  | "plugin:tasks-changed"
   // Plugin toolbar-button badges (project-scoped for a project instance)
   | "plugin:toolbar-badges-changed"
   // Plugin toolbar-button state (project-scoped for a project instance)
