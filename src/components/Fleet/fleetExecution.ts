@@ -3,7 +3,10 @@ import { useFleetArmingStore } from "@/store/fleetArmingStore";
 import { usePanelStore } from "@/store/panelStore";
 import { useFleetBroadcastProgressStore } from "@/store/fleetBroadcastProgressStore";
 import { terminalClient } from "@/clients";
-import { terminalInstanceService } from "@/services/TerminalInstanceService";
+import {
+  peek as peekTerminalService,
+  with as withTerminalService,
+} from "@/services/terminal/terminalInstanceServiceAccessor";
 import { isTerminalFleetEligible } from "@/store/fleetEligibility";
 import { getNarrowPanel } from "@/store/slices/panelRegistry/selectors";
 import { replaceRecipeVariables, detectUnresolvedVariables } from "@/utils/recipeVariables";
@@ -132,15 +135,16 @@ function submitTarget(terminalId: string, payload: string, retry: boolean): Prom
 
 function noteUserInput(terminalId: string, payload: string): void {
   if (!isCrossHostTargetId(terminalId))
-    terminalInstanceService.notifyUserInput(terminalId, payload);
+    withTerminalService((service) => service.notifyUserInput(terminalId, payload));
 }
 
 function noteSubmitted(terminalId: string): void {
-  if (!isCrossHostTargetId(terminalId)) terminalInstanceService.notifyEnterPressed(terminalId);
+  if (!isCrossHostTargetId(terminalId)) peekTerminalService()?.notifyEnterPressed(terminalId);
 }
 
 function noteRejected(terminalId: string): void {
-  if (!isCrossHostTargetId(terminalId)) terminalInstanceService.clearDirectingState(terminalId);
+  if (!isCrossHostTargetId(terminalId))
+    withTerminalService((service) => service.clearDirectingState(terminalId));
 }
 
 interface ResolvedSubmission {

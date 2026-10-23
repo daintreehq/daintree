@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { PanelInstance, PtyPanelData } from "@shared/types/panel";
 import { selectFleetMemberCount, useFleetArmingStore } from "@/store/fleetArmingStore";
 import { usePanelStore } from "@/store/panelStore";
@@ -42,6 +42,14 @@ vi.mock("@/clients", async (importOriginal) => {
 vi.mock("@/services/TerminalInstanceService", () => ({
   terminalInstanceService: { notifyUserInput, notifyEnterPressed, clearDirectingState },
 }));
+
+import { load as loadTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
+
+// The service mock never evaluates the real module, so nothing registers it;
+// loading caches the mock for the synchronous peek() call sites.
+beforeAll(async () => {
+  await loadTerminalService();
+});
 
 const submitFleet =
   vi.fn<

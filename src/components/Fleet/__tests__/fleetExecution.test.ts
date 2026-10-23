@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { buildFleetTargetPreviews, executeFleetBroadcast } from "../fleetExecution";
 import { FLEET_LARGE_PASTE_BATCH_SIZE } from "../fleetBroadcast";
 import { terminalClient } from "@/clients";
@@ -44,6 +44,14 @@ vi.mock("@/services/TerminalInstanceService", () => ({
     clearDirectingState: clearDirectingStateMock,
   },
 }));
+
+import { load as loadTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
+
+// The service mock never evaluates the real module, so nothing registers it;
+// loading caches the mock for the synchronous peek() call sites.
+beforeAll(async () => {
+  await loadTerminalService();
+});
 
 function makeAgent(id: string, overrides: Partial<PtyPanelData> = {}): PtyPanelData {
   return {
