@@ -88,6 +88,7 @@ export type PluginHostCallMethod =
   | "actions.get"
   | "settings.get"
   | "settings.set"
+  | "settings.unset"
   | "settings.open"
   | "settings.missingRequired"
   | "account.getState"
@@ -117,6 +118,7 @@ export type PluginHostCallMethod =
   | "clipboard.readText"
   | "system.openPath"
   | "system.showItemInFolder"
+  | "system.openExternal"
   | "documents.renderPdf"
   | "showQuickPick"
   | "showInputBox"
@@ -663,6 +665,12 @@ export interface SettingsSetParams {
   scope: PluginSettingsScope;
 }
 
+/** Params for `settings.unset` (`host-call`). Omitted `scope` targets the key's declared scope. */
+export interface SettingsUnsetParams {
+  key: string;
+  scope?: PluginSettingsScope;
+}
+
 /** Params for `settings.open` (`host-call`). `key` omitted opens the plugin's settings home. */
 export interface SettingsOpenParams {
   key?: string;
@@ -843,6 +851,11 @@ export interface ClipboardWriteImageParams {
 /** Params for `system.openPath` / `system.showItemInFolder` (`host-call`). */
 export interface SystemPathParams {
   targetPath: string;
+}
+
+/** Params for `system.openExternal` (`host-call`). */
+export interface SystemOpenExternalParams {
+  url: string;
 }
 
 /**

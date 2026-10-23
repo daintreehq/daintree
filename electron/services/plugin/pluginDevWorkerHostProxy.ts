@@ -2115,6 +2115,7 @@ export class PluginDevWorkerHostProxy {
         openPath: (targetPath) => this.call<void>("system.openPath", { targetPath }),
         showItemInFolder: (targetPath) =>
           this.call<void>("system.showItemInFolder", { targetPath }),
+        openExternal: (url) => this.call<void>("system.openExternal", { url }),
       },
       // Rendering needs Electron's printToPDF, which only exists in main.
       documents: {
@@ -2145,6 +2146,7 @@ export class PluginDevWorkerHostProxy {
         // Omitted scopes cross as `undefined` for the same reason as `get`.
         set: <T = unknown>(key: string, value: T, scope?: PluginSettingsScope) =>
           this.call<void>("settings.set", { key, value, scope }),
+        unset: (key, scope) => this.call<void>("settings.unset", { key, scope }),
         open: (key?: string) => this.call<void>("settings.open", key === undefined ? {} : { key }),
         missingRequired: () => this.call<string[]>("settings.missingRequired", {}),
         onDidChange: <T = unknown>(

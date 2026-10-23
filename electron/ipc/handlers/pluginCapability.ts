@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { BrowserWindow } from "electron";
+import type { BuiltInPluginCapability } from "../../../shared/types/plugin.js";
 import { defineIpcNamespace, op } from "../define.js";
 import type { IpcContext } from "../types.js";
 import { CHANNELS } from "../channels.js";
@@ -24,6 +25,7 @@ import {
 import { projectIdFromPluginInstanceKey } from "../../services/plugin/projectPluginIdentity.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import {
+  EXTERNAL_LINK_CONSENT,
   PLUGIN_CAPABILITY_CONSENT_DELIVERY_TIMEOUT_MS,
   PLUGIN_CAPABILITY_CONSENT_RESEND_INTERVAL_MS,
   PLUGIN_CAPABILITY_CONSENT_TIMEOUT_MS,
@@ -118,7 +120,14 @@ const consentBridge: PluginCapabilityConsentBridge = (request: PluginCapabilityC
     request.pluginId
   );
   if (frontend.kind === "remote") {
-    return requestRemoteConsent(frontend.endpoint, frontend.leaseId, request);
+    // The remote consent wire carries capabilities only. A link opens in this
+    // host's browser, which `system.openExternal` already refuses for a remote
+    // driver, so a site prompt reaching here has no one to ask.
+    const { capability } = request;
+    if (request.site !== undefined || capability === EXTERNAL_LINK_CONSENT) {
+      return Promise.resolve("undeliverable");
+    }
+    return requestRemoteConsent(frontend.endpoint, frontend.leaseId, { ...request, capability });
   }
   if (frontend.kind === "none") {
     console.warn(
@@ -146,7 +155,9 @@ const consentBridge: PluginCapabilityConsentBridge = (request: PluginCapabilityC
 async function requestRemoteConsent(
   endpoint: ClientEndpoint,
   leaseId: number | undefined,
-  request: PluginCapabilityConsentRequest
+  request: Omit<PluginCapabilityConsentRequest, "capability"> & {
+    capability: BuiltInPluginCapability;
+  }
 ): Promise<PluginCapabilityConsentOutcome> {
   try {
     const answer = await endpoint.request(
@@ -210,6 +221,7 @@ export function requestConsentInWebContents(
           pluginId: request.pluginId,
           pluginDisplayName: request.pluginDisplayName,
           capability: request.capability,
+          ...(request.site !== undefined ? { site: request.site } : {}),
           declaredCapabilities: request.declaredCapabilities,
         },
       });

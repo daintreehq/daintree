@@ -2481,6 +2481,19 @@ interface SettingsApi {
      */
     set<T = unknown>(key: string, value: T, scope?: PluginSettingsScope): Promise<void>;
     /**
+     * Clear a stored setting, so it reads as its declared `default` (or
+     * `undefined`) again. This is not the same as writing an empty value: a
+     * cleared `required` setting is listed by {@link missingRequired} again, and a
+     * cleared secret is removed from the keychain-backed store it was written to.
+     * Only a key the manifest declares in `contributes.settings` can be cleared,
+     * in the scope it declares; omitting `scope` targets that scope, and a
+     * conflicting one throws. Subscribers fire with the declared default when
+     * something was removed, and clearing a key that holds nothing is silent.
+     * For `"project"` scope with no active project there is nothing to clear and
+     * it resolves.
+     */
+    unset(key: string, scope?: PluginSettingsScope): Promise<void>;
+    /**
      * Subscribe to in-process writes of `key` in `scope` (default: the key's
      * declared scope, else `"user"`). The callback fires with the new value after
      * each `set` that changes it, and with the declared `default` (or
@@ -4444,6 +4457,19 @@ interface PluginSystemApi {
      * it. The path must exist.
      */
     showItemInFolder(targetPath: string): Promise<void>;
+    /**
+     * Open a web page in the user's default browser. Only `https:` URLs of at
+     * most 2048 characters and without embedded credentials are accepted
+     * (`INVALID_URL:`); `file:`, `http:`, custom schemes and `daintree:` never
+     * are. Opens are rate limited per plugin (`RATE_LIMITED:`), and the first
+     * link a plugin opens to a given site (its lower-cased hostname, any port or
+     * path) asks the user, who can allow that site or deny it
+     * (`PERMISSION_REQUIRED:`). An allowed site is remembered for that plugin in
+     * its project scope until the plugin is uninstalled or replaced. Built-in
+     * plugins are not asked. Nothing opens on a host whose
+     * project is driven from another machine (`REMOTE_FRONTEND:`).
+     */
+    openExternal(url: string): Promise<void>;
 }
 /** Paper sizes {@link PluginDocumentsApi.renderPdf} accepts. */
 type PluginPdfPageSize = "A4" | "Letter" | "Legal" | "A3" | "A5" | "Tabloid";
@@ -6151,6 +6177,12 @@ interface MockHostState {
     readonly systemOpenPathCalls: ReadonlyArray<string>;
     /** Captured `host.system.showItemInFolder(path)` calls, in order. */
     readonly systemShowItemCalls: ReadonlyArray<string>;
+    /**
+     * Captured `host.system.openExternal(url)` calls, in order, as the normalised
+     * URL the real host would hand to the browser. Only URLs that passed the real
+     * validator are recorded; no consent prompt or rate limit is simulated.
+     */
+    readonly systemOpenExternalCalls: ReadonlyArray<string>;
     /**
      * Captured `host.documents.renderPdf(options)` calls, in order, as a shallow
      * copy of the options. Only calls that passed the mock's validation are

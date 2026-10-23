@@ -1,5 +1,10 @@
 import type { BuiltInPluginCapability, PluginScopeKey } from "../../../shared/types/plugin.js";
-import type { PluginCapabilityConsentOutcome } from "../../../shared/types/pluginCapabilityConsent.js";
+import {
+  EXTERNAL_LINK_CONSENT,
+  type PluginCapabilityConsentOutcome,
+  type PluginCapabilityIdentity,
+  type PluginConsentSubject,
+} from "../../../shared/types/pluginCapabilityConsent.js";
 import type { PluginCapabilityConsentStore } from "./PluginCapabilityConsentStore.js";
 
 /** Prefix on the thrown error so a plugin view can recognise a denial. */
@@ -13,7 +18,9 @@ export interface PluginCapabilityConsentRequest {
   pluginId: string;
   /** Human-readable plugin display name (manifest `displayName ?? name`). */
   pluginDisplayName: string;
-  capability: BuiltInPluginCapability;
+  capability: PluginConsentSubject;
+  /** Hostname the plugin wants to open links to; set only for {@link EXTERNAL_LINK_CONSENT}. */
+  site?: string;
   /** Plugin's manifest `capabilities[]` list — surfaced for transparency. */
   declaredCapabilities: readonly BuiltInPluginCapability[];
 }
@@ -45,6 +52,10 @@ export type PluginCapabilityConsentBridge = (
 export class PluginCapabilityConsentService {
   private bridge: PluginCapabilityConsentBridge | null = null;
   private readonly inFlight = new Map<string, Promise<PluginCapabilityConsentOutcome>>();
+  // Bumped when a plugin's grants are purged. A prompt still open at that point
+  // belongs to the plugin that was removed, so its answer must not mint a grant
+  // a same-id reinstall would inherit.
+  private readonly purgeEpochs = new Map<string, number>();
 
   constructor(private readonly consentStore: PluginCapabilityConsentStore) {}
 
@@ -69,6 +80,7 @@ export class PluginCapabilityConsentService {
    * the purge was durably persisted so the caller can retry or escalate.
    */
   revokeAllForPlugin(pluginId: string): boolean {
+    this.purgeEpochs.set(pluginId, (this.purgeEpochs.get(pluginId) ?? 0) + 1);
     return this.consentStore.revokeAllForPlugin(pluginId);
   }
 
@@ -92,18 +104,64 @@ export class PluginCapabilityConsentService {
     declaredCapabilities: readonly BuiltInPluginCapability[],
     scopeKey?: PluginScopeKey
   ): Promise<void> {
-    if (this.consentStore.hasGrant({ pluginId, capability, scopeKey })) return;
+    return this.ensureSubjectAllowed(
+      { pluginId, capability, scopeKey },
+      pluginDisplayName,
+      declaredCapabilities
+    );
+  }
 
+  /**
+   * Gate opening links to one site. The grant is keyed by hostname as well as
+   * plugin and scope, so approving `example.com` answers for nothing else and a
+   * capability grant never answers for a site. `site` must already be a
+   * normalised hostname.
+   */
+  async ensureExternalSiteAllowed(
+    pluginId: string,
+    pluginDisplayName: string,
+    site: string,
+    declaredCapabilities: readonly BuiltInPluginCapability[],
+    scopeKey?: PluginScopeKey
+  ): Promise<void> {
+    if (site === "") {
+      throw new Error(`${PLUGIN_CAPABILITY_DENIED_PREFIX}: no site to open a link to`);
+    }
+    return this.ensureSubjectAllowed(
+      { pluginId, capability: EXTERNAL_LINK_CONSENT, site, scopeKey },
+      pluginDisplayName,
+      declaredCapabilities
+    );
+  }
+
+  private async ensureSubjectAllowed(
+    identity: PluginCapabilityIdentity,
+    pluginDisplayName: string,
+    declaredCapabilities: readonly BuiltInPluginCapability[]
+  ): Promise<void> {
+    const { pluginId, capability, scopeKey, site } = identity;
+    if (this.consentStore.hasGrant(identity)) return;
+
+    const epoch = this.purgeEpochs.get(pluginId) ?? 0;
     const outcome = await this.requestOutcome(
       pluginId,
       pluginDisplayName,
       capability,
       declaredCapabilities,
-      scopeKey
+      scopeKey,
+      site
     );
 
+    if (
+      (outcome === "approved-and-pin" || outcome === "approved-once") &&
+      (this.purgeEpochs.get(pluginId) ?? 0) !== epoch
+    ) {
+      throw new Error(
+        `${PLUGIN_CAPABILITY_DENIED_PREFIX}: plugin "${pluginId}" was removed or replaced while its consent prompt was open`
+      );
+    }
     if (outcome === "approved-and-pin") {
-      this.consentStore.grant({ pluginId, capability, scopeKey });
+      this.consentStore.grant(identity);
       return;
     }
     if (outcome === "approved-once") return;
@@ -151,15 +209,16 @@ export class PluginCapabilityConsentService {
   private requestOutcome(
     pluginId: string,
     pluginDisplayName: string,
-    capability: BuiltInPluginCapability,
+    capability: PluginConsentSubject,
     declaredCapabilities: readonly BuiltInPluginCapability[],
-    scopeKey?: PluginScopeKey
+    scopeKey?: PluginScopeKey,
+    site?: string
   ): Promise<PluginCapabilityConsentOutcome> {
     if (this.bridge === null) {
       // Fail closed — no UI to approve through.
       return Promise.resolve("undeliverable");
     }
-    const key = JSON.stringify([scopeKey ?? "global", pluginId, capability]);
+    const key = JSON.stringify([scopeKey ?? "global", pluginId, capability, site ?? null]);
     const existing = this.inFlight.get(key);
     if (existing) return existing;
 
@@ -170,7 +229,13 @@ export class PluginCapabilityConsentService {
     // reject with a raw error instead of a `PERMISSION_REQUIRED:` one — still
     // closed, but outside the contract plugins are told to expect.
     const invoke = async () =>
-      bridge({ pluginId, pluginDisplayName, capability, declaredCapabilities });
+      bridge({
+        pluginId,
+        pluginDisplayName,
+        capability,
+        ...(site !== undefined ? { site } : {}),
+        declaredCapabilities,
+      });
     const promise = invoke()
       .catch((err) => {
         console.error("[PluginCapabilityConsentService] Consent bridge threw:", err);
@@ -186,5 +251,6 @@ export class PluginCapabilityConsentService {
   _resetForTest(): void {
     this.bridge = null;
     this.inFlight.clear();
+    this.purgeEpochs.clear();
   }
 }

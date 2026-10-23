@@ -289,6 +289,8 @@ type SettingsHostShape = (
     settings: {
       get: <T = unknown>(key: string, scope?: SettingsScope) => Promise<T | undefined>;
       set: <T = unknown>(key: string, value: T, scope?: SettingsScope) => Promise<void>;
+      unset: (key: string, scope?: SettingsScope) => Promise<void>;
+      missingRequired: () => Promise<string[]>;
       onDidChange: <T = unknown>(
         key: string,
         cb: (value: T | undefined) => void,
@@ -319,7 +321,13 @@ type ServiceWithSettingsManager = {
 
 async function setupSettingsService(
   pluginId: string,
-  settings?: Array<{ id: string; type: string; scope?: SettingsScope; default?: unknown }>
+  settings?: Array<{
+    id: string;
+    type: string;
+    scope?: SettingsScope;
+    default?: unknown;
+    required?: boolean;
+  }>
 ): Promise<{ service: PluginService; settingsRoot: string }> {
   const pluginsRoot = path.join(tmpDir, "plugins");
   const dir = path.join(pluginsRoot, pluginId);
@@ -684,6 +692,138 @@ describe("createHost — settings", () => {
     expect(await host.settings.get("tags")).toEqual(["a"]);
     await host.settings.set("channel", "x");
     expect(await host.settings.get("channel")).toBe("x");
+  });
+
+  it("unset clears a stored value, reads as the default, and fires onDidChange with it", async () => {
+    const { service, settingsRoot } = await setupSettingsService("acme.settings-unset", [
+      { id: "region", type: "string", default: "eu" },
+      { id: "name", type: "string" },
+    ]);
+    const { host } = createSettingsHost(service, "acme.settings-unset");
+    const heard: unknown[] = [];
+    await host.settings.onDidChange("region", (v) => heard.push(v));
+    await host.settings.onDidChange("name", (v) => heard.push(v));
+    await host.settings.set("region", "us");
+    await host.settings.set("name", "n");
+    heard.length = 0;
+
+    await host.settings.unset("region");
+    await host.settings.unset("name");
+
+    expect(heard).toEqual(["eu", undefined]);
+    expect(await host.settings.get("region")).toBe("eu");
+    expect(await host.settings.get("name")).toBeUndefined();
+    const raw = await fs.readFile(path.join(settingsRoot, "acme.settings-unset.json"), "utf-8");
+    expect(JSON.parse(raw)).toEqual({});
+
+    heard.length = 0;
+    await host.settings.unset("region");
+    expect(heard).toEqual([]);
+  });
+
+  it("unset only clears declared keys, in their declared scope", async () => {
+    const projectDir = path.join(tmpDir, "proj-unset-guard");
+    projectStoreMock.getCurrentProject.mockReturnValue({ path: projectDir });
+    const { service } = await setupSettingsService("acme.settings-unset-guard", [
+      { id: "channel", type: "string", scope: "project" },
+    ]);
+    const { host } = createSettingsHost(service, "acme.settings-unset-guard");
+    await expect(host.settings.unset("other")).rejects.toThrow(/not declared/);
+    await expect(host.settings.unset("channel", "user")).rejects.toThrow(/declared in "project"/);
+    await expect(host.settings.unset("")).rejects.toThrow(/non-empty string/);
+
+    const { service: bare } = await setupSettingsService("acme.settings-unset-bare");
+    const { host: bareHost } = createSettingsHost(bare, "acme.settings-unset-bare");
+    await expect(bareHost.settings.unset("anything")).rejects.toThrow(/not declared/);
+  });
+
+  it("unset clears the active project's value and leaves another project's alone", async () => {
+    const projA = path.join(tmpDir, "unset-projA");
+    const projB = path.join(tmpDir, "unset-projB");
+    const { service } = await setupSettingsService("acme.settings-unset-proj", [
+      { id: "channel", type: "string", scope: "project" },
+    ]);
+    const { host } = createSettingsHost(service, "acme.settings-unset-proj");
+    const file = (root: string) =>
+      path.join(root, ".daintree", "plugin-settings", "acme.settings-unset-proj.json");
+    projectStoreMock.getCurrentProject.mockReturnValue({ path: projA });
+    await host.settings.set("channel", "a");
+    projectStoreMock.getCurrentProject.mockReturnValue({ path: projB });
+    await host.settings.set("channel", "b");
+    const heard: unknown[] = [];
+    await host.settings.onDidChange("channel", (v) => heard.push(v));
+
+    await host.settings.unset("channel");
+
+    expect(JSON.parse(await fs.readFile(file(projB), "utf-8"))).toEqual({});
+    expect(JSON.parse(await fs.readFile(file(projA), "utf-8"))).toEqual({ channel: "a" });
+    expect(heard).toEqual([undefined]);
+  });
+
+  it("unset on a bound project plugin clears its own project's value while another is active", async () => {
+    const ownId = "a".repeat(64);
+    const ownRoot = path.join(tmpDir, "unset-own");
+    const activeRoot = path.join(tmpDir, "unset-active");
+    const manifestId = "acme.settings-unset-bound";
+    const { service } = await setupSettingsService(manifestId, [
+      { id: "channel", type: "string", scope: "project" },
+    ]);
+    const instanceKey = `project__${ownId}__${manifestId}`;
+    const seam = service as unknown as {
+      plugins: Map<string, unknown>;
+      _registerFakePluginForTests: (plugin: unknown, instanceKey?: string) => void;
+    };
+    seam._registerFakePluginForTests(seam.plugins.get(manifestId), instanceKey);
+    const { host } = createSettingsHost(service, instanceKey, {
+      projectId: ownId,
+      projectRoot: ownRoot,
+    });
+    projectStoreMock.getCurrentProject.mockReturnValue({ id: ownId, path: ownRoot });
+    await host.settings.set("channel", "own");
+    projectStoreMock.getCurrentProject.mockReturnValue({ id: "b".repeat(64), path: activeRoot });
+    const file = path.join(ownRoot, ".daintree", "plugin-settings", `${manifestId}.json`);
+    expect(JSON.parse(await fs.readFile(file, "utf-8"))).toEqual({ channel: "own" });
+
+    await host.settings.unset("channel");
+
+    expect(JSON.parse(await fs.readFile(file, "utf-8"))).toEqual({});
+    await expect(fs.access(path.join(activeRoot, ".daintree"))).rejects.toThrow();
+  });
+
+  it("unset on a project key with no active project resolves without touching disk", async () => {
+    projectStoreMock.getCurrentProject.mockReturnValue(null);
+    const { service, settingsRoot } = await setupSettingsService("acme.settings-unset-noproj", [
+      { id: "channel", type: "string", scope: "project" },
+    ]);
+    const { host } = createSettingsHost(service, "acme.settings-unset-noproj");
+    const cb = vi.fn();
+    await host.settings.onDidChange("channel", cb);
+    await expect(host.settings.unset("channel")).resolves.toBeUndefined();
+    expect(cb).not.toHaveBeenCalled();
+    await expect(fs.access(settingsRoot)).rejects.toThrow();
+  });
+
+  it("unset makes a required key missing again, and removes a secret's stored envelope", async () => {
+    safeStorageMock.state.available = true;
+    const pluginId = "acme.settings-unset-secret";
+    const { service, settingsRoot } = await setupSettingsService(pluginId, [
+      { id: "token", type: "secret", required: true },
+    ]);
+    const { host } = createSettingsHost(service, pluginId);
+    const heard: unknown[] = [];
+    await host.settings.onDidChange("token", (v) => heard.push(v));
+
+    await host.settings.set("token", "sk-1");
+    expect(await host.settings.missingRequired()).toEqual([]);
+    heard.length = 0;
+
+    await host.settings.unset("token");
+
+    expect(heard).toEqual([undefined]);
+    expect(await host.settings.get("token")).toBeUndefined();
+    expect(await host.settings.missingRequired()).toEqual(["token"]);
+    const raw = await fs.readFile(path.join(settingsRoot, `${pluginId}.json`), "utf-8");
+    expect(raw).not.toContain("daintree:secret");
   });
 
   it("get throws when the explicit scope conflicts with the declared scope", async () => {

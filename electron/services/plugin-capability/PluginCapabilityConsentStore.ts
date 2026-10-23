@@ -1,7 +1,9 @@
-import type { BuiltInPluginCapability, PluginScopeKey } from "../../../shared/types/plugin.js";
-import type {
-  PluginCapabilityConsentRecord,
-  PluginCapabilityIdentity,
+import type { PluginScopeKey } from "../../../shared/types/plugin.js";
+import {
+  EXTERNAL_LINK_CONSENT,
+  type PluginCapabilityConsentRecord,
+  type PluginCapabilityIdentity,
+  type PluginConsentSubject,
 } from "../../../shared/types/pluginCapabilityConsent.js";
 
 /**
@@ -44,6 +46,7 @@ export class PluginCapabilityConsentStore {
     const record: PluginCapabilityConsentRecord = {
       pluginId: identity.pluginId,
       capability: identity.capability,
+      ...(identity.site !== undefined ? { site: identity.site } : {}),
       scopeKey: identity.scopeKey ?? DEFAULT_SCOPE_KEY,
       approvedAt: Date.now(),
     };
@@ -81,6 +84,7 @@ export class PluginCapabilityConsentStore {
       this.grants.set(key, {
         pluginId: identity.pluginId,
         capability: identity.capability,
+        ...(identity.site !== undefined ? { site: identity.site } : {}),
         scopeKey: identity.scopeKey ?? DEFAULT_SCOPE_KEY,
         approvedAt: previous?.approvedAt ?? Date.now(),
       });
@@ -177,11 +181,11 @@ export class PluginCapabilityConsentStore {
  * from inheriting another plugin's, or another scope's, grant.
  */
 function makeKey(identity: PluginCapabilityIdentity): string {
-  return JSON.stringify([
-    identity.scopeKey ?? DEFAULT_SCOPE_KEY,
-    identity.pluginId,
-    identity.capability,
-  ]);
+  const base = [identity.scopeKey ?? DEFAULT_SCOPE_KEY, identity.pluginId, identity.capability];
+  // A site grant carries a fourth element, so it can collide with no capability key.
+  return JSON.stringify(
+    identity.capability === EXTERNAL_LINK_CONSENT ? [...base, identity.site ?? ""] : base
+  );
 }
 
 /**
@@ -205,9 +209,21 @@ function normalizeRecord(raw: unknown): PluginCapabilityConsentRecord | null {
   if (scopeKey !== undefined && (typeof scopeKey !== "string" || scopeKey === "")) {
     return null;
   }
+  // A link grant without a hostname would read as approval for every site, so
+  // it is dropped; a stray `site` on a capability record is ignored.
+  if (r.capability === EXTERNAL_LINK_CONSENT) {
+    if (typeof r.site !== "string" || r.site === "") return null;
+    return {
+      pluginId: r.pluginId,
+      capability: EXTERNAL_LINK_CONSENT,
+      site: r.site,
+      scopeKey: scopeKey ?? DEFAULT_SCOPE_KEY,
+      approvedAt: r.approvedAt,
+    };
+  }
   return {
     pluginId: r.pluginId,
-    capability: r.capability as BuiltInPluginCapability,
+    capability: r.capability as PluginConsentSubject,
     scopeKey: scopeKey ?? DEFAULT_SCOPE_KEY,
     approvedAt: r.approvedAt,
   };

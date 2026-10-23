@@ -328,4 +328,110 @@ describe("PluginCapabilityConsentService", () => {
     ).toBe(true);
     expect(store.hasGrant({ pluginId: "acme.x", capability: "shell:exec" })).toBe(false);
   });
+  describe("external site consent", () => {
+    it("prompts with the site and persists the grant for that site only", async () => {
+      const { service, store } = makeService();
+      const bridge = vi.fn(async () => "approved-and-pin" as PluginCapabilityConsentDecision);
+      service.setConsentBridge(bridge);
+
+      await service.ensureExternalSiteAllowed("acme.x", "Acme", "example.com", CAPS);
+      expect(bridge).toHaveBeenCalledWith(
+        expect.objectContaining({ capability: "external-link", site: "example.com" })
+      );
+
+      await service.ensureExternalSiteAllowed("acme.x", "Acme", "example.com", CAPS);
+      expect(bridge).toHaveBeenCalledTimes(1);
+
+      await service.ensureExternalSiteAllowed("acme.x", "Acme", "other.example", CAPS);
+      expect(bridge).toHaveBeenCalledTimes(2);
+      expect(
+        store.hasGrant({ pluginId: "acme.x", capability: "external-link", site: "example.com" })
+      ).toBe(true);
+    });
+
+    it("is not answered by a capability grant, and does not answer one", async () => {
+      const { service, store } = makeService();
+      store.grant({ pluginId: "acme.x", capability: "shell:exec" });
+      const bridge = vi.fn(async () => "approved-and-pin" as PluginCapabilityConsentDecision);
+      service.setConsentBridge(bridge);
+
+      await service.ensureExternalSiteAllowed("acme.x", "Acme", "example.com", CAPS);
+      expect(bridge).toHaveBeenCalledTimes(1);
+
+      const { service: other, store: otherStore } = makeService();
+      otherStore.grant({ pluginId: "acme.x", capability: "external-link", site: "example.com" });
+      other.setConsentBridge(bridge);
+      await expect(
+        other.ensureAllowed("acme.x", "Acme", "shell:exec", CAPS)
+      ).resolves.toBeUndefined();
+      expect(bridge).toHaveBeenCalledTimes(2);
+    });
+
+    it("keeps plugins and scopes apart, and denies on rejection without remembering", async () => {
+      const { service, store } = makeService();
+      const bridge = vi.fn(async () => "rejected" as PluginCapabilityConsentDecision);
+      service.setConsentBridge(bridge);
+      await expect(
+        service.ensureExternalSiteAllowed("acme.x", "Acme", "example.com", CAPS, "proj-1")
+      ).rejects.toThrow(/PERMISSION_REQUIRED/);
+      await expect(
+        service.ensureExternalSiteAllowed("acme.x", "Acme", "example.com", CAPS, "proj-1")
+      ).rejects.toThrow(/PERMISSION_REQUIRED/);
+      expect(bridge).toHaveBeenCalledTimes(2);
+
+      store.grant({
+        pluginId: "acme.x",
+        capability: "external-link",
+        site: "example.com",
+        scopeKey: "proj-1",
+      });
+      bridge.mockClear();
+      await service.ensureExternalSiteAllowed("acme.x", "Acme", "example.com", CAPS, "proj-1");
+      await expect(
+        service.ensureExternalSiteAllowed("acme.x", "Acme", "example.com", CAPS, "proj-2")
+      ).rejects.toThrow(/PERMISSION_REQUIRED/);
+      await expect(
+        service.ensureExternalSiteAllowed("acme.y", "Acme Y", "example.com", CAPS, "proj-1")
+      ).rejects.toThrow(/PERMISSION_REQUIRED/);
+      expect(bridge).toHaveBeenCalledTimes(2);
+    });
+
+    it("coalesces concurrent prompts for one site but not for two", async () => {
+      const { service } = makeService();
+      const releases: Array<(d: PluginCapabilityConsentDecision) => void> = [];
+      const bridge = vi.fn(
+        () => new Promise<PluginCapabilityConsentDecision>((resolve) => releases.push(resolve))
+      );
+      service.setConsentBridge(bridge);
+      const a = service.ensureExternalSiteAllowed("acme.x", "Acme", "example.com", CAPS);
+      const b = service.ensureExternalSiteAllowed("acme.x", "Acme", "example.com", CAPS);
+      const c = service.ensureExternalSiteAllowed("acme.x", "Acme", "other.example", CAPS);
+      expect(bridge).toHaveBeenCalledTimes(2);
+      for (const release of releases) release("approved-once");
+      await Promise.all([a, b, c]);
+    });
+
+    it("does not mint a grant when the plugin is purged while its prompt is open", async () => {
+      const { service, store } = makeService();
+      let release!: (d: PluginCapabilityConsentDecision) => void;
+      service.setConsentBridge(
+        () => new Promise<PluginCapabilityConsentDecision>((resolve) => (release = resolve))
+      );
+      const pending = service.ensureExternalSiteAllowed("acme.x", "Acme", "example.com", CAPS);
+      const rejected = expect(pending).rejects.toThrow(/removed or replaced/);
+
+      service.revokeAllForPlugin("acme.x");
+      release("approved-and-pin");
+
+      await rejected;
+      expect(store.list()).toEqual([]);
+    });
+
+    it("refuses an empty site", async () => {
+      const { service } = makeService();
+      await expect(service.ensureExternalSiteAllowed("acme.x", "Acme", "", CAPS)).rejects.toThrow(
+        /PERMISSION_REQUIRED/
+      );
+    });
+  });
 });

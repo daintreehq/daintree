@@ -107,7 +107,11 @@ function makeHost() {
       // concrete value (the default-inferred `Promise<undefined>` would reject it).
       get: vi.fn(async (): Promise<unknown> => undefined),
       set: vi.fn(async () => {}),
+      unset: vi.fn(async () => {}),
       onDidChange: vi.fn(() => vi.fn()),
+    },
+    system: {
+      openExternal: vi.fn(async () => {}),
     },
     storage: {
       // Annotated `Promise<unknown>` so a test can `mockResolvedValueOnce` a
@@ -981,6 +985,44 @@ describe("PluginDevWorkerMainBridge", () => {
     });
     await flush();
     expect(host.settings.get).toHaveBeenCalledWith("ref", "project");
+  });
+
+  it("forwards settings.unset with an omitted scope as undefined", async () => {
+    const { host, workerHost } = makeBridge();
+    workerHost.emit("worker-message", {
+      type: "host-call",
+      requestId: "su1",
+      method: "settings.unset",
+      params: { key: "token" },
+    });
+    await flush();
+    expect(host.settings.unset).toHaveBeenCalledWith("token", undefined);
+    const reply = workerHost.sent.find((m) => m.type === "host-result" && m.requestId === "su1");
+    expect(reply).toMatchObject({ ok: true });
+  });
+
+  it("forwards system.openExternal to the host and relays its rejection", async () => {
+    const { host, workerHost } = makeBridge();
+    workerHost.emit("worker-message", {
+      type: "host-call",
+      requestId: "oe1",
+      method: "system.openExternal",
+      params: { url: "https://example.com/a" },
+    });
+    await flush();
+    expect(host.system.openExternal).toHaveBeenCalledWith("https://example.com/a");
+
+    host.system.openExternal.mockRejectedValueOnce(new Error("RATE_LIMITED: slow down"));
+    workerHost.emit("worker-message", {
+      type: "host-call",
+      requestId: "oe2",
+      method: "system.openExternal",
+      params: { url: "https://example.com/b" },
+    });
+    await flush();
+    const reply = workerHost.sent.find((m) => m.type === "host-result" && m.requestId === "oe2");
+    expect(reply).toMatchObject({ ok: false });
+    expect(JSON.stringify(reply)).toContain("RATE_LIMITED");
   });
 
   it("opens a storage subscription and pushes events to the worker", async () => {

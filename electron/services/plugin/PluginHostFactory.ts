@@ -28,6 +28,9 @@ import {
 import { resolveContainedPath, PluginPathNotAllowedError } from "./pluginFsContainment.js";
 import { PluginHostGit, resolveAddPathspecs, type HostGitFactory } from "./pluginHostGit.js";
 import { admitPluginToast } from "./pluginToastBudget.js";
+import { admitPluginExternalLink, claimPluginExternalLinkSlot } from "./pluginExternalLinks.js";
+import { parsePluginExternalUrl } from "../../../shared/utils/pluginExternalUrl.js";
+import { openExternalUrl } from "../../utils/openExternal.js";
 import {
   pluginManifestIdFromInstanceKey,
   projectIdFromPluginInstanceKey,
@@ -4018,6 +4021,38 @@ export function createHost(
         });
         if (changed) deps.settings.notifySettingsSubscribers(pluginId, scope, key, value);
       },
+      unset: async (key: string, requestedScope?: PluginSettingsScope): Promise<void> => {
+        assertSettingsKey(pluginId, "unset", key);
+        // Unlike `set`, only a declared key can be cleared: the scope it lives in
+        // is the manifest's, so nothing here guesses a file to delete from.
+        const declaredScope = deps.settings.getDeclaredScope(pluginId, key);
+        if (declaredScope === undefined) {
+          throw new Error(
+            `Plugin "${pluginId}" settings.unset: key "${key}" is not declared in contributes.settings`
+          );
+        }
+        if (requestedScope !== undefined && requestedScope !== declaredScope) {
+          throw new Error(
+            `Plugin "${pluginId}" settings.unset: key "${key}" is declared in "${declaredScope}" scope, not "${requestedScope}"`
+          );
+        }
+        const filePath = deps.settings.resolveSettingsFilePathForKey(
+          pluginId,
+          key,
+          declaredScope,
+          boundScopeRoot
+        );
+        // No active project means nothing is stored there to clear.
+        if (!filePath) return;
+        // Same guard as `set`: project settings live in the repository's `.daintree`.
+        await assertPluginCallerDrives(pluginId, "settings.unset", { paths: [filePath] });
+        const store = deps.settings.getOrCreateSettingsStore(pluginId, filePath);
+        // A secret is an encrypted envelope in the same file, so deleting the
+        // key clears it without decrypting anything.
+        const changed = await store.delete(key);
+        if (changed)
+          deps.settings.notifySettingsSubscribers(pluginId, declaredScope, key, undefined);
+      },
       onDidChange: <T = unknown>(
         key: string,
         callback: (value: T | undefined) => void,
@@ -4488,6 +4523,30 @@ async function ensureCapabilityConsent(
     capability,
     plugin.manifest.capabilities ?? [],
     scopeKey
+  );
+}
+
+/**
+ * First-use consent for a plugin opening links to one site. Keyed by hostname,
+ * so approving a site answers for that site alone. Built-ins skip it, as they
+ * skip capability consent.
+ */
+async function ensureExternalSiteConsent(
+  deps: PluginHostFactoryDeps,
+  pluginId: string,
+  site: string
+): Promise<void> {
+  const plugin = deps.plugins.get(pluginId);
+  // Unloaded mid-call: the caller's liveness guard rejects.
+  if (!plugin) return;
+  if (plugin.isBuiltin) return;
+  const displayName = plugin.manifest.displayName ?? plugin.manifest.name;
+  await getPluginCapabilityConsentService().ensureExternalSiteAllowed(
+    pluginId,
+    displayName,
+    site,
+    plugin.manifest.capabilities ?? [],
+    plugin.binding?.projectId ?? "global"
   );
 }
 
@@ -6181,6 +6240,53 @@ function buildSystemApi(
         result: "success",
         errorMessage: "",
         argsHash: deps.safeArgsHash([{ path: resolved }]),
+        durationMs: 0,
+      });
+    },
+    openExternal: async (url): Promise<void> => {
+      requireLoaded("openExternal");
+      const parsed = parsePluginExternalUrl(url);
+      if (!parsed.ok) {
+        throw new Error(`INVALID_URL: plugin "${pluginId}" system.openExternal: ${parsed.reason}`);
+      }
+      const { href, site } = parsed.link;
+      // Before the prompt, so a remote user cannot raise dialogs on this
+      // machine's screen for a link that would not open here anyway.
+      refuseForRemoteDriver("openExternal");
+      const releaseSlot = claimPluginExternalLinkSlot(pluginId);
+      // Spent before the prompt and kept on a denial, so a plugin cannot stack
+      // dialogs by asking again.
+      if (!releaseSlot || !admitPluginExternalLink(pluginId)) {
+        releaseSlot?.();
+        throw new Error(
+          `RATE_LIMITED: plugin "${pluginId}" system.openExternal: too many links opened; try again shortly`
+        );
+      }
+      try {
+        const loaded = deps.plugins.get(pluginId);
+        await ensureExternalSiteConsent(deps, pluginId, site);
+        requireLoaded("openExternal");
+        // A reinstall under the same id is a different plugin: the answer given
+        // for the old one is not this call's to use.
+        if (deps.plugins.get(pluginId) !== loaded) {
+          throw new Error(
+            `PLUGIN_UNLOADED: plugin "${pluginId}" system.openExternal: plugin was replaced`
+          );
+        }
+        refuseForRemoteDriver("openExternal");
+        await openExternalUrl(href);
+      } finally {
+        releaseSlot();
+      }
+      // The URL can carry a token, so only its hash is recorded.
+      deps.safeAppendAudit({
+        pluginId,
+        actionId: "system.openExternal",
+        recordType: "ipc-invoke",
+        channel: "plugin:system-open-external",
+        result: "success",
+        errorMessage: "",
+        argsHash: deps.safeArgsHash([{ url: href }]),
         durationMs: 0,
       });
     },
