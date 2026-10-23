@@ -1,0 +1,33 @@
+import { test, expect } from "@playwright/test";
+import { createSiteProject } from "../helpers/frameworks/site";
+import { APP_FILE, NUXT, NUXT_COMMANDS } from "../helpers/frameworks/nuxt";
+import { useFixtureProject, usePickerSession } from "../helpers/pickerSession";
+import { selectInPreview, selectedElement } from "../helpers/previewDriver";
+
+/**
+ * The Element Picker on a Nuxt 4 site: Vue rendered on the server and
+ * hydrated. Tracing waits on #13888 as it does for plain Vue, and reaches the
+ * component's file without a line.
+ */
+const projectDir = useFixtureProject(() => createSiteProject(NUXT));
+
+test.describe.serial("Element Picker on a Nuxt dev server", () => {
+  const { session, start } = usePickerSession({
+    projectDir,
+    projectName: NUXT.title,
+    command: NUXT_COMMANDS.dev,
+    readyTimeout: 180_000,
+  });
+
+  test("the site starts in a dev preview with the Element Picker on", start);
+
+  test("clicking a heading selects it", async () => {
+    await selectInPreview(session(), "h1", "h1");
+  });
+
+  test.fixme("a heading traces to its component's file, with no line (#13888)", async () => {
+    const ctx = session();
+    await selectInPreview(ctx, "h1", APP_FILE);
+    await expect(selectedElement(ctx.window)).not.toContainText(`${APP_FILE}:`);
+  });
+});

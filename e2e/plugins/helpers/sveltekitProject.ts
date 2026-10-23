@@ -1,7 +1,5 @@
-import { execFileSync } from "child_process";
-import { mkdirSync, writeFileSync } from "fs";
-import path from "path";
-import { createFixtureRepo, type FixtureRepo } from "../../helpers/fixtures";
+import type { FixtureRepo } from "../../helpers/fixtures";
+import { createFixtureProject } from "./fixtureProject";
 
 /**
  * Direct dependencies are pinned exactly so a new SvelteKit, Vite or Tailwind
@@ -66,7 +64,7 @@ const FILES: Record<string, string> = {
         private: true,
         version: "0.0.1",
         type: "module",
-        scripts: { dev: "vite dev" },
+        scripts: { dev: "vite dev", build: "vite build", preview: "vite preview" },
         devDependencies: SVELTEKIT_VERSIONS,
       },
       null,
@@ -110,39 +108,11 @@ export default defineConfig({ plugins: [tailwindcss(), sveltekit()] });
   [CARD_FILE]: CARD_SOURCE,
 };
 
-const INSTALL_TIMEOUT_MS = 5 * 60_000;
-
 /**
  * A real SvelteKit 2 + Svelte 5 + Tailwind 4 app in a throwaway git repo, with
  * its dependencies installed from the registry. Needs network on first run;
  * later runs are served from the npm cache.
  */
 export function createSvelteKitProject(name: string): FixtureRepo {
-  const repo = createFixtureRepo({ name });
-  try {
-    for (const [relative, contents] of Object.entries(FILES)) {
-      const target = path.join(repo.dir, ...relative.split("/"));
-      mkdirSync(path.dirname(target), { recursive: true });
-      writeFileSync(target, contents);
-    }
-
-    execFileSync(
-      process.platform === "win32" ? "npm.cmd" : "npm",
-      ["install", "--no-audit", "--no-fund", "--prefer-offline", "--loglevel=error"],
-      {
-        cwd: repo.dir,
-        stdio: "pipe",
-        timeout: INSTALL_TIMEOUT_MS,
-        shell: process.platform === "win32",
-      }
-    );
-
-    const git = (...args: string[]) => execFileSync("git", args, { cwd: repo.dir, stdio: "pipe" });
-    git("add", "-A");
-    git("commit", "-m", "SvelteKit fixture", "--no-gpg-sign");
-    return repo;
-  } catch (error) {
-    repo.cleanup();
-    throw error;
-  }
+  return createFixtureProject(name, FILES);
 }
