@@ -51,6 +51,7 @@ export type WorkspaceHostDisposeReason =
   | "memory-pressure"
   | "evicted"
   | "relocation"
+  | "git-initialized"
   | "ready-failed"
   | "init-failed"
   | "pool-dispose"

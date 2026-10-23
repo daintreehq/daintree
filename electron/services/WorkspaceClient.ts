@@ -214,6 +214,46 @@ export class WorkspaceClient extends EventEmitter {
   }
 
   /**
+   * A folder just became a repository. A host that loaded it beforehand probed
+   * no repository, enumerated nothing, and keeps that verdict for as long as it
+   * lives — warm reuse never re-probes. Replace it so the next load sees the
+   * main worktree (#14178). Only an explicit `false` verdict qualifies: a
+   * git-backed host is already right, and an unknown one is left to the failed
+   * load handling it already has.
+   *
+   * Resolves once the replacement is in place, not once it has loaded: a load
+   * or Retry after this waits on the entry's ready promise, which is now the
+   * new host's. Returns whether a host was replaced.
+   */
+  async refreshProjectAfterGitInit(projectPath: string): Promise<boolean> {
+    if (this.isDisposed) return false;
+    const normalized = this.pool.normalizeProjectPath(projectPath);
+    const entry = this.pool.entries.get(normalized);
+    if (!entry) return false;
+    const host = entry.host;
+
+    const { gitBacked } = await this._readStatesWithGitBackedWhenReady(entry);
+    if (gitBacked !== false) return false;
+    // A concurrent refresh, eviction or dispose may have got there first.
+    if (this.isDisposed || this.pool.entries.get(normalized) !== entry || entry.host !== host) {
+      return false;
+    }
+
+    // A coalesced read started against the old host would hand back its empty map.
+    this._statesInflight.clear();
+    this._statesWithGitBackedInflight.clear();
+    this._statesResultInflight.clear();
+
+    this.pool.replaceHost(entry, "git-initialized").catch((error) => {
+      console.error(
+        `[WorkspaceClient] Replacement host failed to load ${normalized} after git init:`,
+        error
+      );
+    });
+    return true;
+  }
+
+  /**
    * Push updated forge settings to the live host for `projectPath` so its
    * PR provider re-resolves after the user changes the provider override or
    * selected remote (#8456). No-ops when no host is loaded for the project.
