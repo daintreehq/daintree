@@ -39,6 +39,16 @@ describe("plugin work stopped notice (#14093)", () => {
     );
   });
 
+  it("mentions calls cut off alongside a stopped task", () => {
+    expect(
+      describePluginWorkStopped("Web", {
+        tasks: [{ pluginName: "Sync", title: "Uploading" }],
+        processes: 2,
+        calls: 1,
+      })
+    ).toContain("along with 1 plugin call and 2 plugin processes.");
+  });
+
   it("leaves no record when only processes stopped", () => {
     notifyPluginWorkStopped("Web", { tasks: [], processes: 3, calls: 0 });
     notifyPluginWorkStopped("Web", undefined);

@@ -23,10 +23,11 @@ export function describePluginWorkStopped(
         ? pluralize(tasks.length, "plugin task")
         : pluralize(calls, "plugin call");
   const processes = stopped?.processes ?? 0;
-  const alongside =
-    processes > 0
-      ? `, along with ${pluralize(processes, "plugin process", "plugin processes")}`
-      : "";
+  const extras = [
+    tasks.length > 0 && calls > 0 ? pluralize(calls, "plugin call") : null,
+    processes > 0 ? pluralize(processes, "plugin process", "plugin processes") : null,
+  ].filter((extra): extra is string => extra !== null);
+  const alongside = extras.length > 0 ? `, along with ${extras.join(" and ")}` : "";
   return `${what} stopped when ${projectName} went to sleep${alongside}. Run it again once the project is open.`;
 }
 
