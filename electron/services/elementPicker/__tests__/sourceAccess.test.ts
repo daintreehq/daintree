@@ -24,7 +24,7 @@ let root: string;
 let roots: SourceRoots;
 
 beforeEach(() => {
-  root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "picker-source-")));
+  root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), "picker-source-")));
   fs.mkdirSync(path.join(root, "app", "src"), { recursive: true });
   fs.mkdirSync(path.join(root, "outside"));
   fs.writeFileSync(path.join(root, "app", "src", "A.svelte"), "a");
@@ -383,7 +383,7 @@ describe("JobSourceAccess", () => {
     await expect(
       job.locateSource("http://localhost:5173/src/A.svelte?t=1", "A.svelte", null)
     ).resolves.toEqual({ ok: true, value: ref("app/src/A.svelte") });
-    const outside = `/@fs${path.join(root, "outside", "secret.txt")}`;
+    const outside = `/@fs/${path.join(root, "outside", "secret.txt").replace(/\\/g, "/")}`;
     await expect(
       job.locateSource("http://localhost:5173/src/A.svelte?t=1", outside, null)
     ).resolves.toEqual({ ok: false, reason: "outside-workspace" });

@@ -121,7 +121,7 @@ beforeEach(() => {
   Object.values(bridge).forEach((fn) => fn.mockClear());
   Object.values(host).forEach((fn) => fn.mockClear());
   projectViews.clear();
-  root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "picker-handlers-")));
+  root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), "picker-handlers-")));
   fs.writeFileSync(
     path.join(root, "package.json"),
     JSON.stringify({ devDependencies: { "@sveltejs/kit": "^2.0.0" } })

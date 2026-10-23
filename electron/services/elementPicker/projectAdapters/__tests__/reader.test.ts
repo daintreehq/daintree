@@ -9,7 +9,7 @@ let base: string;
 let root: string;
 
 beforeEach(() => {
-  base = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "picker-reader-")));
+  base = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), "picker-reader-")));
   root = path.join(base, "repo");
   fs.mkdirSync(path.join(root, "app", "src"), { recursive: true });
   fs.writeFileSync(path.join(root, "app", "package.json"), '﻿{"name":"site"}');

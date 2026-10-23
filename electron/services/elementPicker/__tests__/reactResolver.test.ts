@@ -255,7 +255,10 @@ class PageModules {
     const bare = specifier.replace(/[?#].*$/, "");
     if (bare === "/@vite/client") return { createHotContext: () => undefined };
     if (bare === "/@react-refresh") return REFRESH_RUNTIME;
-    if (bare.startsWith("/@fs/")) return require(bare.slice("/@fs".length));
+    if (bare.startsWith("/@fs/")) {
+      const absolute = bare.slice("/@fs".length);
+      return require(/^\/[A-Za-z]:\//.test(absolute) ? absolute.slice(1) : absolute);
+    }
     const local = this.loaded.get(bare);
     if (local) return local;
     throw new Error(`the page imported ${specifier}`);
@@ -384,7 +387,7 @@ describe.each([
   }
 
   beforeAll(async () => {
-    root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "picker-react-")));
+    root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), "picker-react-")));
     for (const [file, contents] of Object.entries(FILES)) {
       fs.mkdirSync(path.dirname(path.join(root, file)), { recursive: true });
       fs.writeFileSync(path.join(root, file), contents);

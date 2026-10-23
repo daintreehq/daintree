@@ -135,7 +135,7 @@ function authoredH2(text: string) {
 }
 
 beforeAll(async () => {
-  root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "picker-vite-")));
+  root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), "picker-vite-")));
   fs.mkdirSync(path.join(root, "src"));
   cardPath = path.join(root, "src", "Card.tsx");
   fs.writeFileSync(cardPath, CARD);

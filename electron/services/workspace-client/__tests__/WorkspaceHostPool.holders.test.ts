@@ -1,3 +1,4 @@
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const hosts = vi.hoisted(
@@ -36,7 +37,7 @@ vi.mock("../../ProjectStore.js", () => ({
 import { WorkspaceHostPool } from "../WorkspaceHostPool.js";
 
 const GRACE_MS = 180_000;
-const PROJECT = "/srv/pagesugar";
+const PROJECT = path.resolve("/srv/pagesugar");
 const LOCAL_WINDOW = 1;
 const REMOTE_VIEW = -9;
 

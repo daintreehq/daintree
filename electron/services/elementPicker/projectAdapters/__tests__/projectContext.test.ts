@@ -38,7 +38,7 @@ const never = <T>() => new Promise<T>(() => {});
 let root: string;
 
 beforeEach(() => {
-  root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "picker-context-")));
+  root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), "picker-context-")));
   fs.writeFileSync(
     path.join(root, "package.json"),
     JSON.stringify({ devDependencies: { "@sveltejs/kit": "^2.0.0" } })

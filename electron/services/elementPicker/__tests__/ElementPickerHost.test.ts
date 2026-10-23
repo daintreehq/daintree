@@ -46,7 +46,7 @@ let root: string;
 const hosts: ElementPickerHost[] = [];
 
 beforeEach(() => {
-  root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "picker-host-")));
+  root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), "picker-host-")));
   fs.mkdirSync(path.join(root, "app", "src"), { recursive: true });
   fs.mkdirSync(path.join(root, "other"), { recursive: true });
   fs.writeFileSync(path.join(root, "app", "src", "App.svelte"), `<h1>${STUB_MARKER}</h1>`);

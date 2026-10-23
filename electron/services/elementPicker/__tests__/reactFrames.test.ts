@@ -1,4 +1,5 @@
 import { transform } from "esbuild";
+import path from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
 import type { SourceLocation } from "../../../../shared/elementPicker/coordinates.js";
 import type { SelectionObservation } from "../../../../shared/elementPicker/observation.js";
@@ -32,7 +33,7 @@ import { observation, request } from "./fixtures.js";
 
 const WORKSPACE = "ws-react";
 const ORIGIN = "http://localhost:5173";
-const ROOTS = { worktreePath: "/work/app", appRoot: "/work/app" };
+const ROOTS = { worktreePath: path.resolve("/work/app"), appRoot: path.resolve("/work/app") };
 const encoder = new TextEncoder();
 
 const revision = (text: string | Uint8Array) =>

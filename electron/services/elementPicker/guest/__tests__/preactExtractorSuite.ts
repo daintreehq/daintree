@@ -187,14 +187,14 @@ export function describePreactExtractor(debug: boolean): void {
           candidateId: expect.any(String),
           framework: "preact",
           extraction: { kind: "runtime-field", field: "__source" },
-          file: fixture.file,
+          file: fixture.file.replace(/\\/g, "/"),
           location: at('<button class={"action'),
         },
       ]);
       expect(record(observation, "Button").sourceCandidates).toEqual([
         expect.objectContaining({
           kind: "component-invocation",
-          file: fixture.file,
+          file: fixture.file.replace(/\\/g, "/"),
           location: at('<Button label="go"'),
         }),
       ]);

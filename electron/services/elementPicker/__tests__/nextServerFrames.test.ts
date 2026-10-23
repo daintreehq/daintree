@@ -60,7 +60,7 @@ let counter = 0;
 
 beforeEach(async () => {
   clearDecodedMapCache();
-  root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "picker-next-")));
+  root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), "picker-next-")));
   roots = { worktreePath: root, appRoot: root };
   write("app/page.tsx", PAGE);
   const out = await transform(PAGE, {
@@ -299,7 +299,9 @@ describe("a Turbopack server component's frames", () => {
   });
 
   it("go unresolved, rather than anywhere else, for a chunk outside the app", async () => {
-    const outside = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "picker-next-out-")));
+    const outside = fs.realpathSync.native(
+      fs.mkdtempSync(path.join(os.tmpdir(), "picker-next-out-"))
+    );
     try {
       const results = await resolve(
         headingPick(wrapped(`file://${outside}/.next/server/chunk.js`), null)

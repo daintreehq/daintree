@@ -46,6 +46,10 @@ on:
         description: "Scoped re-run: space- or comma-separated pieces to run; empty = everything. Pieces: check test build integration core full-terminal full-worktree full-presets full-platform full-panels full-resilience full-plugins nightly. Aliases: full (all seven full-* buckets), e2e (every E2E suite). Example: `test full-terminal`."
         type: string
         default: ""
+      test_files:
+        description: "Optional space-separated unit test file paths for a focused test re-run. Leave empty for the full unit suite."
+        type: string
+        default: ""
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -167,9 +171,10 @@ jobs:
       - id: unit
         env:
           PLATFORM_MATRIX: ${{ steps.set.outputs.matrix }}
+          TEST_FILES: ${{ inputs.test_files }}
         run: |
-          MATRIX=$(jq -c '{include: [.include[] | . as $platform |
-            (if .os == "windows-2022" then 4 else 1 end) as $count |
+          MATRIX=$(jq -c --arg files "$TEST_FILES" '{include: [.include[] | . as $platform |
+            (if .os == "windows-2022" and $files == "" then 4 else 1 end) as $count |
             range(1; $count + 1) as $shard |
             $platform + {shard: $shard, shards: $count}]}' <<< "$PLATFORM_MATRIX")
           echo "matrix=$MATRIX" >> "$GITHUB_OUTPUT"
@@ -254,12 +259,25 @@ jobs:
         run: node scripts/ci/npm-ci-retry.mjs
 
       - name: Test
-        if: matrix.os != 'windows-2022'
+        if: matrix.os != 'windows-2022' && inputs.test_files == ''
         run: npm run test
 
       - name: Test (Windows shard)
-        if: matrix.os == 'windows-2022'
+        if: matrix.os == 'windows-2022' && inputs.test_files == ''
         run: npm run test -- --shard=${{ matrix.shard }}/${{ matrix.shards }}
+
+      - name: Test focused files
+        if: inputs.test_files != ''
+        shell: bash
+        env:
+          TEST_FILES: ${{ inputs.test_files }}
+        run: |
+          read -r -a files <<< "$TEST_FILES"
+          test "${#files[@]}" -gt 0
+          for file in "${files[@]}"; do
+            [[ "$file" != -* && -f "$file" && ( "$file" == *.test.ts || "$file" == *.test.tsx || "$file" == *.test.mjs ) ]] || exit 1
+          done
+          npm run test -- "${files[@]}"
 
   # Production build + launch smoke on each platform. No packaging, signing, or
   # publishing here — that surface lives in the release dry-runs

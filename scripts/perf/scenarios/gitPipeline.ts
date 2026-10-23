@@ -395,6 +395,9 @@ export const gitPipelineScenarios: PerfScenario[] = [
     async run() {
       const harness = await getScalingHarness();
       await ensureWarm(harness);
+      // First-status recovery can still be queued after a slow fixture warmup.
+      // The quiet sweep must not race those passes through the single-flight guard.
+      await harness.queue.onIdle();
       const observerMisses = spawnObserverMisses();
       // StatPrecheck stamps `baselineAt` on the skip path AND after a full
       // pass, so this advances once per tick that actually ran. It is the only
@@ -402,6 +405,10 @@ export const gitPipelineScenarios: PerfScenario[] = [
       // spawns nothing, so the spawn counter cannot tell fifty successful
       // skips apart from fifty ticks that never happened.
       const baselinesBefore = harness.monitors.map((monitor) => monitor.lastStatBaselineAt);
+      // Windows can complete warmup and start a tick in the same wall-clock
+      // quantum. Wait outside the measurement so a real tick can advance its stamp.
+      const newestBaseline = Math.max(...baselinesBefore);
+      while (Date.now() <= newestBaseline) await sleep(1);
       const mark = gitSpawnMark();
       const start = performance.now();
       const settled = await Promise.allSettled(
@@ -409,12 +416,25 @@ export const gitPipelineScenarios: PerfScenario[] = [
       );
       const durationMs = performance.now() - start;
       let tickMisses = 0;
+      const missedTicks: string[] = [];
       harness.monitors.forEach((monitor, i) => {
-        if (settled[i].status === "rejected") tickMisses += 1;
-        else if (monitor.lastStatBaselineAt <= baselinesBefore[i]) tickMisses += 1;
+        const result = settled[i];
+        if (result.status === "rejected" || monitor.lastStatBaselineAt <= baselinesBefore[i]) {
+          tickMisses += 1;
+          missedTicks.push(
+            JSON.stringify({
+              monitor: i,
+              before: baselinesBefore[i],
+              after: monitor.lastStatBaselineAt,
+              checkedAt: statusCheckedAt(monitor),
+              ...(result.status === "rejected" ? { error: String(result.reason) } : {}),
+            })
+          );
+        }
       });
       return {
         durationMs,
+        ...(missedTicks.length > 0 ? { notes: missedTicks.join("; ") } : {}),
         metrics: {
           gitSpawns: gitSpawnsSince(mark).count,
           tickMisses,

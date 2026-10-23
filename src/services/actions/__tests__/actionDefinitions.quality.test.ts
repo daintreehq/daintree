@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { z } from "zod";
 import { createStore } from "zustand/vanilla";
 import { setCurrentViewStore } from "@/store/createWorktreeStore";
@@ -1420,21 +1420,28 @@ describe("destructive-action danger metadata", () => {
       focusedWorktreeId: "wt-placeholder",
     };
 
+    // Exercise the confirmation gate even where the host handoff is unavailable.
+    const handoff = await import("@/components/Hosts/resourceHostHandoff");
+    const availability = vi.spyOn(handoff, "canOfferResourceBoxHandoff").mockReturnValue(true);
     const failures: string[] = [];
-    for (const id of EXPECTED_CONFIRM_DANGER) {
-      const result = await service.dispatch(id, placeholderArgs, {
-        source: "agent",
-        contextOverride,
-      });
-      if (result.ok) {
-        failures.push(`${id} (agent dispatch succeeded without confirmed:true)`);
-        continue;
+    try {
+      for (const id of EXPECTED_CONFIRM_DANGER) {
+        const result = await service.dispatch(id, placeholderArgs, {
+          source: "agent",
+          contextOverride,
+        });
+        if (result.ok) {
+          failures.push(`${id} (agent dispatch succeeded without confirmed:true)`);
+          continue;
+        }
+        if (result.error.code !== "CONFIRMATION_REQUIRED") {
+          failures.push(
+            `${id} (got error code "${result.error.code}", expected CONFIRMATION_REQUIRED)`
+          );
+        }
       }
-      if (result.error.code !== "CONFIRMATION_REQUIRED") {
-        failures.push(
-          `${id} (got error code "${result.error.code}", expected CONFIRMATION_REQUIRED)`
-        );
-      }
+    } finally {
+      availability.mockRestore();
     }
 
     expect(failures).toEqual([]);

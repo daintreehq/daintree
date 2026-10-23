@@ -22,6 +22,13 @@ const baseConfig: KnipConfig = {
     "electron/services/pluginAgentMcp/databaseQueryWorker.ts",
     "electron/services/voice/openaiVadWorker.ts",
     "electron/workspace-host/copytreeWorker.ts",
+    // Picker utility-process and browser bundles are loaded by emitted path.
+    "electron/services/elementPicker/host-bootstrap.ts",
+    "electron/services/elementPicker/guest/bootstrap.ts",
+    "electron/services/elementPicker/guest/probe.ts",
+    "electron/services/elementPicker/guest/extractors/{angular,astro,preact,react,solid,svelte,vue}.ts",
+    // The guest-host contract test builds this fixture by its filesystem path.
+    "electron/services/elementPicker/__tests__/fixtures/contributingExtractor.ts",
 
     // Web workers instantiated via `new Worker(new URL(...))`. Static analysis
     // can't follow those URLs, so workers read as unreachable without
@@ -125,6 +132,8 @@ const baseConfig: KnipConfig = {
     // scripts/codegen/__tests__/ipc-renderer.test.ts via path.join(__dirname,
     // "fixtures-renderer"). Knip cannot trace runtime path resolution.
     "scripts/codegen/__tests__/fixtures-renderer/*.ts",
+    // FixtureReader reads these route modules as source text, never imports them.
+    "electron/services/elementPicker/projectAdapters/sveltekit/__fixtures__/**",
 
     // why: public plugin SDK API snapshots are loaded by
     // scripts/ci/check-api-surface.mjs via readFileSync rather than static

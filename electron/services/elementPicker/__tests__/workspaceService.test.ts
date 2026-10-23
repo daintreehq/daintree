@@ -101,7 +101,7 @@ const kit = (name: string) =>
   JSON.stringify({ name, devDependencies: { "@sveltejs/kit": "^2.0.0" } });
 
 beforeEach(() => {
-  root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "picker-workspaces-")));
+  root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), "picker-workspaces-")));
   // Three SvelteKit apps in a monorepo, a plain package beside them, and a
   // folder with no package of its own.
   write("multi/package.json", JSON.stringify({ name: "root", private: true }));
