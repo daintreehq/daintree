@@ -231,10 +231,11 @@ export function PluginAccountRow({
                   <Button
                     variant="outline"
                     size="sm"
-                    disabled={busy || testing}
+                    disabled={busy}
+                    loading={testing}
                     onClick={() => void test()}
                   >
-                    {testing ? "Testing…" : "Test"}
+                    Test
                   </Button>
                 )}
                 <Button
