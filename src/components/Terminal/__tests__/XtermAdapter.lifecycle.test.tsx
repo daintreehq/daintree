@@ -14,6 +14,7 @@ import {
   load as loadTerminalService,
   peek as peekTerminalService,
 } from "@/services/terminal/terminalInstanceServiceAccessor";
+import { usePanelStore } from "@/store/panelStore";
 import { XtermAdapter } from "../XtermAdapter";
 import {
   _resetCtrlVImagePasteForTests,
@@ -102,11 +103,14 @@ const mocks = vi.hoisted(() => {
   const useTerminalFileTransfer =
     vi.fn<(containerRef: unknown, options: Record<string, unknown>) => boolean>();
 
+  const createTerminalPaintPlane = vi.fn(() => terminalInstanceService);
+
   return {
     appearance,
     managed,
     platform,
     terminalInstanceService,
+    createTerminalPaintPlane,
     writeTerminalInputOrFleet: vi.fn(),
     useTerminalFileTransfer,
     getKeyHandler: () => keyHandler,
@@ -136,12 +140,9 @@ vi.mock("@/lib/platform", async (importOriginal) => ({
   isMac: () => mocks.platform.isMac,
 }));
 
-vi.mock("@/services/TerminalInstanceService", () => {
-  const terminalInstanceService = mocks.terminalInstanceService;
-  return {
-    createTerminalPaintPlane: () => terminalInstanceService,
-  };
-});
+vi.mock("@/services/TerminalInstanceService", () => ({
+  createTerminalPaintPlane: () => mocks.createTerminalPaintPlane(),
+}));
 
 vi.mock("@/services/terminal/fleetInputRouter", () => ({
   writeTerminalInputOrFleet: mocks.writeTerminalInputOrFleet,
@@ -1305,6 +1306,66 @@ describe("XtermAdapter with the terminal service unloaded", () => {
 
     view.unmount();
     expect(unsubscribe).toHaveBeenCalledTimes(1);
+  });
+
+  it("locks a terminal mounted locked once the service has created it", async () => {
+    renderAdapter({ isInputLocked: true });
+    expect(peekTerminalService()).toBeNull();
+
+    await waitFor(() => expect(mocks.terminalInstanceService.attach).toHaveBeenCalled());
+    expect(mocks.terminalInstanceService.setInputLocked).toHaveBeenCalledWith("term-1", true);
+    expect(
+      mocks.terminalInstanceService.setInputLocked.mock.invocationCallOrder.at(-1)
+    ).toBeGreaterThan(mocks.terminalInstanceService.getOrCreate.mock.invocationCallOrder[0]!);
+    expect(mocks.managed.isInputLocked).toBe(true);
+  });
+
+  it("keeps a lock switched on while the service loads", async () => {
+    const view = renderAdapter({ isInputLocked: false });
+    view.rerender(adapterElement({ isInputLocked: true }));
+    // The lock effect ran with nothing to apply it to.
+    expect(peekTerminalService()).toBeNull();
+    expect(mocks.terminalInstanceService.setInputLocked).not.toHaveBeenCalled();
+
+    await waitFor(() => expect(mocks.terminalInstanceService.attach).toHaveBeenCalled());
+    expect(mocks.terminalInstanceService.setInputLocked).toHaveBeenCalledWith("term-1", true);
+    expect(mocks.managed.isInputLocked).toBe(true);
+  });
+
+  it("does not lock an unlocked terminal when attaching it", async () => {
+    renderAdapter({ isInputLocked: false });
+
+    await waitFor(() => expect(mocks.terminalInstanceService.attach).toHaveBeenCalled());
+    expect(mocks.terminalInstanceService.setInputLocked).not.toHaveBeenCalledWith("term-1", true);
+    expect(mocks.managed.isInputLocked).toBe(false);
+  });
+
+  it("raises the attach error when the service fails to load, and attaches on retry", async () => {
+    const setAttachError = vi.spyOn(usePanelStore.getState(), "setTerminalAttachError");
+    const clearAttachError = vi.spyOn(usePanelStore.getState(), "clearTerminalAttachError");
+    mocks.createTerminalPaintPlane.mockImplementationOnce(() => {
+      throw new Error("chunk failed to load");
+    });
+
+    renderAdapter();
+
+    await waitFor(() =>
+      expect(setAttachError).toHaveBeenCalledWith("term-1", "chunk failed to load")
+    );
+    expect(peekTerminalService()).toBeNull();
+    expect(mocks.terminalInstanceService.getOrCreate).not.toHaveBeenCalled();
+
+    // The banner's Retry loads the service again.
+    await act(async () => {
+      await loadTerminalService();
+    });
+
+    await waitFor(() => expect(mocks.terminalInstanceService.attach).toHaveBeenCalledTimes(1));
+    expect(mocks.terminalInstanceService.getOrCreate).toHaveBeenCalledTimes(1);
+    expect(clearAttachError).toHaveBeenCalledWith("term-1");
+
+    setAttachError.mockRestore();
+    clearAttachError.mockRestore();
   });
 
   it("does not create the terminal when it unmounts while the service loads", async () => {

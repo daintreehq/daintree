@@ -89,6 +89,7 @@ import { errorsClient } from "@/clients";
 import type { AgentState } from "@/types";
 import { isBuiltInAgentId, type BuiltInAgentId } from "@shared/config/agentIds";
 import {
+  load as loadTerminalService,
   peek as peekTerminalService,
   with as withTerminalService,
 } from "@/services/terminal/terminalInstanceServiceAccessor";
@@ -1138,8 +1139,17 @@ function TerminalPaneComponent({
   const isRebuildingDisplay = retryingAttachId === id;
   const handleRetryAttach = useCallback(() => {
     setRetryingAttachId(id);
+    const service = peekTerminalService();
+    // No service means its load failed: loading it again is the retry, and
+    // XtermAdapter attaches the moment it lands. A repeat failure leaves the
+    // banner up.
     void (
-      peekTerminalService()?.recoverPoisonedTerminal(id, { manual: true }) ?? Promise.resolve()
+      service
+        ? service.recoverPoisonedTerminal(id, { manual: true })
+        : loadTerminalService().then(
+            () => undefined,
+            () => undefined
+          )
     ).finally(() => setRetryingAttachId((current) => (current === id ? null : current)));
   }, [id]);
 
