@@ -31,7 +31,7 @@ import {
  * host, observed agents, CPU, memory, link.
  */
 export const HOST_SWITCHER_GRID =
-  "grid grid-cols-[minmax(0,1fr)_64px_160px_112px_48px] items-center gap-x-3";
+  "grid grid-cols-[minmax(0,1fr)_64px_140px_108px_44px] items-center gap-x-3";
 
 /** Five minutes at the host's 5 s cadence: long enough to show a trend, short enough to be now. */
 const SPARK_SAMPLES = 60;
@@ -89,10 +89,10 @@ function CpuCell({
           windowSize={SPARK_SAMPLES}
           label="CPU over the last 5 minutes"
           fit
-          className="h-4 w-10 shrink-0 text-text-secondary"
+          className="h-4 w-8 shrink-0 text-text-secondary"
         />
       ) : (
-        <span className="w-10 shrink-0" aria-hidden="true" />
+        <span className="w-8 shrink-0" aria-hidden="true" />
       )}
       <span
         className={cn(

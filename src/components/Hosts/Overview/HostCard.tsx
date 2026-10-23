@@ -29,6 +29,7 @@ import {
   isLive,
   memoryUsedSeries,
   pressureSeries,
+  reportsMemoryCapacity,
 } from "./overviewModel";
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 
@@ -202,8 +203,9 @@ export function HostCard({
   const { state, note } = describeHostMenuState(row);
   const cpuNow = summary ? describeCpu(summary) : null;
   const pressureNow = summary?.memoryPressure ?? null;
-  // Capacity charts only from a host that counts used memory without the file cache; others keep the band.
-  const capacityNow = summary ? describeMemoryCapacity(summary) : null;
+  // Capacity charts only from a host that counts used memory without the file cache; others
+  // keep the band. Decided by the host, not the sample, so a missed read is a gap, not a new chart.
+  const capacityChart = summary ? reportsMemoryCapacity(summary) : false;
   const clusters = summary ? describeCoreClusters(summary) : null;
   const placeState = [row.isCurrent ? "This window" : null, state].filter(Boolean).join(" · ");
   const chart = chartWindow(history.length);
@@ -260,9 +262,9 @@ export function HostCard({
               windowSize={chart.size}
               chartLabel={`CPU over the last ${span} on ${row.name}`}
             />
-            {capacityNow ? (
+            {summary && capacityChart ? (
               <LoadMeter
-                label={`Memory ${capacityNow}`}
+                label={`Memory ${describeMemoryCapacity(summary) ?? "not measured"}`}
                 values={memoryUsedSeries(history)}
                 windowSize={chart.size}
                 chartLabel={`Memory in use over the last ${span} on ${row.name}`}
@@ -303,7 +305,7 @@ export function HostCard({
 
       <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1 text-xs">
         {summary &&
-          (capacityNow ? (
+          (capacityChart ? (
             <Fact label="Memory pressure" value={describeMemoryPressure(summary)} />
           ) : (
             <Fact label="Memory" value={describeMemory(summary)} />

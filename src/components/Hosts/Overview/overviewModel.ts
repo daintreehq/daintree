@@ -34,13 +34,17 @@ function memoryUsedPercent(summary: HostMetricsSummary): number | null {
 }
 
 /**
- * Used and total memory from a host that counts used as Activity Monitor
- * does. Older hosts sent used bytes that included the file cache, and they
- * predate the core count that shipped alongside the fix: a present field,
- * even null, marks the newer reading.
+ * Whether the host counts used memory as Activity Monitor does. Older hosts
+ * sent used bytes that included the file cache, and they predate the core
+ * count that shipped alongside the fix: a present field, even null, marks the
+ * newer reading.
  */
+export function reportsMemoryCapacity(summary: HostMetricsSummary): boolean {
+  return summary.cpuLogicalCoreCount !== undefined;
+}
+
 function reportedCapacity(summary: HostMetricsSummary): { used: number; total: number } | null {
-  if (summary.cpuLogicalCoreCount === undefined) return null;
+  if (!reportsMemoryCapacity(summary)) return null;
   const { memoryUsedBytes: used, memoryTotalBytes: total } = summary;
   if (used === null || !Number.isFinite(used) || used < 0) return null;
   if (total === null || !Number.isFinite(total) || total <= 0) return null;

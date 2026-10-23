@@ -105,38 +105,45 @@ describe("HostCard", () => {
   });
 
   it("charts memory in use for a host on the newer memory reading", () => {
-    const summary = makeSummary({ cpuLogicalCoreCount: null });
+    const GB = 1024 ** 3;
+    // Pressure stays normal while use climbs: a pressure chart would be flat.
+    const history = [12, 8, 4].map((used) =>
+      makeSummary({ cpuLogicalCoreCount: null, memoryUsedBytes: used * GB })
+    );
     render(
-      <HostCard
-        row={makeRow({ summary })}
-        history={[summary, summary, summary]}
-        onSwitch={() => {}}
-      />
+      <HostCard row={makeRow({ summary: history[0] })} history={history} onSwitch={() => {}} />
     );
     const card = screen.getByTestId("host-overview-card");
     expect(card.textContent).toContain("CPU 20%");
-    expect(card.textContent).toContain("Memory 4 / 16 GB");
+    expect(card.textContent).toContain("Memory 12 / 16 GB");
     expect(fact(card, "Memory pressure")).toBe("Normal");
     expect(fact(card, "Memory")).toBeNull();
-    expect(screen.getByLabelText(/Memory in use over the last/)).toBeTruthy();
+    const chart = screen.getByLabelText(/Memory in use over the last/);
+    const heights = (chart.querySelector("polyline")?.getAttribute("points") ?? "")
+      .split(" ")
+      .map((point) => Number(point.split(",")[1]));
+    expect(heights).toHaveLength(3);
+    // Oldest first, rising use draws lower y values.
+    expect(heights[0]).toBeGreaterThan(heights[1]!);
+    expect(heights[1]).toBeGreaterThan(heights[2]!);
   });
 
-  it("keeps the pressure chart for a host that reports pressure but not capacity", () => {
-    const summary = makeSummary({
-      cpuLogicalCoreCount: 8,
-      memoryUsedBytes: null,
-      memoryPressure: "warn",
-    });
+  it("keeps the capacity chart through a missed memory read", () => {
+    const newer = { cpuLogicalCoreCount: 8, memoryPressure: "warn" as const };
+    const history = [
+      makeSummary({ ...newer, memoryUsedBytes: null }),
+      makeSummary(newer),
+      makeSummary(newer),
+      makeSummary(newer),
+    ];
     render(
-      <HostCard
-        row={makeRow({ summary })}
-        history={[summary, summary, summary]}
-        onSwitch={() => {}}
-      />
+      <HostCard row={makeRow({ summary: history[0] })} history={history} onSwitch={() => {}} />
     );
     const card = screen.getByTestId("host-overview-card");
-    expect(card.textContent).toContain("Memory pressure warn");
-    expect(fact(card, "Memory pressure")).toBeNull();
+    expect(card.textContent).toContain("Memory not measured");
+    expect(card.textContent).not.toContain("Memory pressure warn");
+    expect(fact(card, "Memory pressure")).toBe("High");
+    expect(screen.getByLabelText(/Memory in use over the last/)).toBeTruthy();
     expect(fact(card, "Load (1 min)")).toBeNull();
     expect(fact(card, "Core clusters")).toBeNull();
     expect(fact(card, "CPU pressure")).toBeNull();

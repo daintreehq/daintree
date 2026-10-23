@@ -211,6 +211,33 @@ describe("HostSwitcherPalette", () => {
     expect(pressed.querySelector("[data-pressure-steps]")).not.toBeNull();
   });
 
+  it("marks critical memory pressure beside capacity, and shows capacity when pressure is unread", () => {
+    const capacity = {
+      cpuLogicalCoreCount: 8,
+      memoryUsedBytes: 6 * 1024 ** 3,
+      memoryTotalBytes: 8 * 1024 ** 3,
+    };
+    hostList.value = {
+      hosts: [
+        host("h1", "studio-01", CONNECTED, {
+          summary: summary("h1", { ...capacity, memoryPressure: "critical" }),
+        }),
+        host("h2", "build-east", CONNECTED, {
+          summary: summary("h2", { ...capacity, memoryPressure: null }),
+        }),
+      ],
+      localSummary: null,
+    };
+    openPalette();
+    const critical = row("h1");
+    expect(critical.textContent).toContain("6 / 8 GB memory in use, critical pressure");
+    expect(critical.querySelector("[data-pressure-steps]")).not.toBeNull();
+    const unread = row("h2");
+    expect(unread.textContent).toContain("6 / 8 GB memory in use");
+    expect(unread.textContent).not.toContain("pressure");
+    expect(unread.querySelector("[data-pressure-steps]")).toBeNull();
+  });
+
   it("says when an unreachable host was last seen and shows no stale load", () => {
     const lastSeenAt = Date.now() - 5 * 60_000;
     hostList.value = {
