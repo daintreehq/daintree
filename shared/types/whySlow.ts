@@ -10,7 +10,7 @@
 
 import type { ResourceProfile, ResourceThermalState } from "./resourceProfile.js";
 import type { WhySlowWorkerSummary } from "./workerGovernance.js";
-import type { MemorySource } from "./memoryAccounting.js";
+import type { MemorySource, RendererTerminalBufferCounts } from "./memoryAccounting.js";
 
 export type { WhySlowWorkerSummary };
 
@@ -177,4 +177,14 @@ export interface WhySlowRendererTerminalReport {
   wantsWebgl: number;
   terminalCount: number;
   countsByTier: Record<string, number>;
+  /**
+   * Buffer line counts, present only when the renderer was asked for them
+   * (`window:sample-terminal-buffers`) or is about to be cached. Counts only,
+   * never content.
+   */
+  bufferMemory?: {
+    /** When the renderer read the counts. */
+    sampledAt: number;
+    terminals: RendererTerminalBufferCounts[];
+  };
 }

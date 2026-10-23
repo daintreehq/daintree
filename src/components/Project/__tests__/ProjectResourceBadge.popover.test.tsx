@@ -484,6 +484,83 @@ describe("ProjectResourceBadge — popover memory honesty", () => {
     expect(mockGetBulkStats).not.toHaveBeenCalled();
   });
 
+  it("lists renderer terminal buffers per project view, cached and unanswered ones included", async () => {
+    mockGetAll.mockResolvedValue([
+      makeProject({ id: "p1", name: "Agents" }),
+      makeProject({ id: "p2", name: "Backgrounded" }),
+      makeProject({ id: "p3", name: "Silent" }),
+    ]);
+    const mb = 1024 * 1024;
+    mockGetMemorySnapshot.mockResolvedValue({
+      ...makeMemorySnapshot(),
+      rendererTerminalBuffers: {
+        complete: false,
+        estimatedBytes: 30 * mb,
+        views: [
+          {
+            webContentsId: 3,
+            windowId: 1,
+            projectId: "p3",
+            state: "cached",
+            status: "unavailable",
+            sampledAt: null,
+            ageMs: null,
+            estimatedBytes: null,
+            terminals: null,
+          },
+          {
+            webContentsId: 2,
+            windowId: 1,
+            projectId: "p2",
+            state: "cached",
+            status: "last-known",
+            sampledAt: Date.now() - 120_000,
+            ageMs: 120_000,
+            estimatedBytes: 5 * mb,
+            terminals: [],
+          },
+          {
+            webContentsId: 1,
+            windowId: 1,
+            projectId: "p1",
+            state: "active",
+            status: "fresh",
+            sampledAt: Date.now(),
+            ageMs: 0,
+            estimatedBytes: 25 * mb,
+            terminals: [],
+          },
+        ],
+      },
+    });
+
+    const container = await renderOpenBadge();
+    const breakdown = container.ownerDocument.querySelector(
+      '[data-testid="terminal-buffer-breakdown"]'
+    );
+    const text = breakdown?.textContent ?? "";
+
+    expect(text).toContain("estimate");
+    // Partial coverage is named rather than passed off as the whole.
+    expect(text).toContain("Projects that reported~30 MB");
+    expect(text).toContain("Agents~25 MB");
+    expect(text).toContain("Backgrounded · cached 2m ago~5 MB");
+    expect(text).toContain("Silent · cachedUnavailable");
+    // Heaviest first, the unanswered view last.
+    expect(text.indexOf("Agents")).toBeLessThan(text.indexOf("Backgrounded"));
+    expect(text.indexOf("Backgrounded")).toBeLessThan(text.indexOf("Silent"));
+  });
+
+  it("omits the buffer section when the snapshot didn't sample renderers", async () => {
+    mockGetMemorySnapshot.mockResolvedValue(makeMemorySnapshot());
+
+    const container = await renderOpenBadge();
+
+    expect(
+      container.ownerDocument.querySelector('[data-testid="terminal-buffer-breakdown"]')
+    ).toBeNull();
+  });
+
   it("folds a long project list behind a disclosure whose label does not change", async () => {
     const projects = Array.from({ length: 8 }, (_, i) =>
       makeProject({ id: `p${i}`, name: `Project ${i}` })

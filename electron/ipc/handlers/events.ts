@@ -45,6 +45,7 @@ const EVENT_BUS_BRIDGED_MANIFEST = {
   "window:disk-space-status": "external",
   "window:sample-blink-memory": "external",
   "window:sample-renderer-elu": "external",
+  "window:sample-terminal-buffers": "external",
   "system:wake": "external",
   "system:memory-pressure": "external",
   "system:power-policy-changed": "external",

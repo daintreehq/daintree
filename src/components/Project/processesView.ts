@@ -8,6 +8,11 @@ import type {
   ProcessInventoryTerminal,
   ProcessTreeSample,
 } from "@shared/types/processes";
+import type {
+  RendererTerminalBufferEntry,
+  RendererTerminalBufferSlice,
+  RendererTerminalBufferStatus,
+} from "@shared/types/memoryAccounting";
 import { pluralize } from "@/lib/pluralize";
 import { formatCores } from "./ProjectResourceBadge.utils";
 
@@ -183,6 +188,66 @@ export function formatApproxMemory(memoryKb: number): string {
   const mb = memoryKb / 1024;
   if (mb >= 1024) return `~${(mb / 1024).toFixed(1)} GB`;
   return `~${Math.max(1, Math.round(mb))} MB`;
+}
+
+/**
+ * A terminal buffer estimate in bytes. Unlike {@link formatApproxMemory} it
+ * keeps a real zero (an empty view holds no buffers) and says when a reading
+ * is under a megabyte rather than rounding it up to one.
+ */
+export function formatBufferEstimate(bytes: number): string {
+  if (bytes <= 0) return "0 MB";
+  const mb = bytes / (1024 * 1024);
+  if (mb < 1) return "<1 MB";
+  if (mb >= 1024) return `~${(mb / 1024).toFixed(1)} GB`;
+  return `~${Math.round(mb)} MB`;
+}
+
+/** One terminal's renderer buffer reading, with the freshness of the view it came from. */
+export interface TerminalBufferReading extends RendererTerminalBufferEntry {
+  status: Exclude<RendererTerminalBufferStatus, "unavailable">;
+  ageMs: number | null;
+}
+
+/**
+ * Terminal id → buffer reading. A terminal shown in two windows has a buffer in
+ * each; the freshest reading stands for it.
+ */
+export function indexTerminalBuffers(
+  slice: RendererTerminalBufferSlice | null | undefined
+): ReadonlyMap<string, TerminalBufferReading> {
+  const out = new Map<string, TerminalBufferReading & { sampledAt: number }>();
+  for (const view of slice?.views ?? []) {
+    if (view.status === "unavailable" || !view.terminals || view.sampledAt === null) continue;
+    for (const entry of view.terminals) {
+      const prev = out.get(entry.terminalId);
+      const better =
+        !prev ||
+        (view.status === "fresh" && prev.status !== "fresh") ||
+        (view.status === prev.status && view.sampledAt > prev.sampledAt);
+      if (better) {
+        out.set(entry.terminalId, {
+          ...entry,
+          status: view.status,
+          ageMs: view.ageMs,
+          sampledAt: view.sampledAt,
+        });
+      }
+    }
+  }
+  return out;
+}
+
+/** "Buffer ~25 MB est. · 10,000 + 40 lines × 182 cols", aged when not current. */
+export function describeTerminalBuffer(reading: TerminalBufferReading): string {
+  const lines =
+    reading.alternateLines > 0
+      ? `${reading.normalLines.toLocaleString()} + ${pluralize(reading.alternateLines, "line")}`
+      : pluralize(reading.normalLines, "line");
+  const base = `Buffer ${formatBufferEstimate(reading.estimatedBytes)} est. · ${lines} × ${reading.cols} cols`;
+  return reading.status === "last-known" && reading.ageMs !== null
+    ? `${base} · from ${formatAgo(reading.ageMs)}`
+    : base;
 }
 
 /** A process tree's ps %cpu, where 100 is one core. */

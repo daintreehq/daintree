@@ -15,8 +15,13 @@ vi.mock("@/clients/terminalClient", () => ({
   terminalClient: { kill: vi.fn() },
 }));
 
+vi.mock("@/clients/systemClient", () => ({
+  systemClient: { getMemorySnapshot: vi.fn() },
+}));
+
 import { processesClient } from "@/clients/processesClient";
 import { terminalClient } from "@/clients/terminalClient";
+import { systemClient } from "@/clients/systemClient";
 import { primeRadix } from "@/components/ui/radix-loader";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { ProcessesDialog } from "../ProcessesDialog";
@@ -25,6 +30,7 @@ import type { ProcessesReading, ProcessesSource } from "../processesSource";
 const mockGetSnapshot = vi.mocked(processesClient.getSnapshot);
 const mockKillClosed = vi.mocked(processesClient.killClosedTerminalProcesses);
 const mockKill = vi.mocked(terminalClient.kill);
+const mockGetMemorySnapshot = vi.mocked(systemClient.getMemorySnapshot);
 const mockStop = vi.fn();
 const mockGetAllSessions = vi.fn();
 const mockGetInfo = vi.fn();
@@ -103,6 +109,7 @@ async function renderOpen() {
 beforeEach(() => {
   vi.clearAllMocks();
   mockGetAllSessions.mockResolvedValue([]);
+  mockGetMemorySnapshot.mockResolvedValue({ timestamp: 0 } as never);
   mockStop.mockResolvedValue(undefined);
   mockKill.mockResolvedValue(undefined);
   mockGetInfo.mockResolvedValue({ id: "a", spawnedAt: 1, hasPty: true });
@@ -150,6 +157,73 @@ describe("ProcessesDialog (#13175)", () => {
     // Plugin rows are list-only.
     const pluginRow = screen.getByTestId("plugin-process-row");
     expect(pluginRow.querySelector("button")).toBeNull();
+  });
+
+  it("shows each terminal's renderer buffer estimate from this device's views (#14213)", async () => {
+    mockGetSnapshot.mockResolvedValue(
+      snapshot({
+        terminals: [
+          terminal("agent", { title: "claude" }),
+          terminal("vim", { title: "vim" }),
+          terminal("unseen", { title: "shell" }),
+        ],
+      })
+    );
+    mockGetMemorySnapshot.mockResolvedValue({
+      timestamp: 0,
+      rendererTerminalBuffers: {
+        complete: true,
+        estimatedBytes: 0,
+        views: [
+          {
+            webContentsId: 1,
+            windowId: 1,
+            projectId: "p1",
+            state: "active",
+            status: "fresh",
+            sampledAt: Date.now(),
+            ageMs: 0,
+            estimatedBytes: 0,
+            terminals: [
+              {
+                terminalId: "agent",
+                normalLines: 10_000,
+                alternateLines: 0,
+                cols: 182,
+                estimatedBytes: 10_000 * 182 * 12,
+              },
+            ],
+          },
+          {
+            webContentsId: 2,
+            windowId: 1,
+            projectId: "p1",
+            state: "cached",
+            status: "last-known",
+            sampledAt: Date.now() - 180_000,
+            ageMs: 180_000,
+            estimatedBytes: 0,
+            terminals: [
+              {
+                terminalId: "vim",
+                normalLines: 24,
+                alternateLines: 24,
+                cols: 80,
+                estimatedBytes: 48 * 80 * 12,
+              },
+            ],
+          },
+        ],
+      },
+    } as never);
+
+    await renderOpen();
+
+    const readings = screen.getAllByTestId("terminal-buffer-reading").map((el) => el.textContent);
+    expect(readings).toContain("Buffer ~21 MB est. · 10,000 lines × 182 cols");
+    expect(readings).toContain("Buffer <1 MB est. · 24 + 24 lines × 80 cols · from 3m ago");
+    // A terminal no view reported on gets no reading rather than a zero.
+    expect(readings).toHaveLength(2);
   });
 
   it("kills a terminal only after the confirm, and drops its row", async () => {
@@ -585,6 +659,8 @@ describe("ProcessesDialog for another host (#14089)", () => {
     expect(document.querySelector("[data-process-kill]")).toBeNull();
     expect(mockGetSnapshot).not.toHaveBeenCalled();
     expect(mockGetAllSessions).not.toHaveBeenCalled();
+    // This device's renderer buffers say nothing about another host's terminals.
+    expect(mockGetMemorySnapshot).not.toHaveBeenCalled();
   });
 
   it("sorts by CPU or memory from the column headers", async () => {

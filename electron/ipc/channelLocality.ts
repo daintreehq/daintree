@@ -1301,6 +1301,7 @@ export const EVENT_LOCALITY: Readonly<Record<string, ChannelLocality>> = {
   "window:reclaim-memory": "shell",
   "window:sample-blink-memory": "shell",
   "window:sample-renderer-elu": "shell",
+  "window:sample-terminal-buffers": "shell",
 };
 
 /**

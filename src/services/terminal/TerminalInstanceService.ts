@@ -11,6 +11,7 @@ import { terminalClient } from "@/clients";
 import { getDriveLeaseSnapshot, subscribeDriveLeaseSnapshot } from "./inputGate";
 import { TerminalRefreshTier } from "@/types";
 import type { AgentState } from "@/types";
+import type { RendererTerminalBufferCounts } from "@shared/types/memoryAccounting";
 import {
   ManagedTerminal,
   RefreshTierProvider,
@@ -270,6 +271,7 @@ class TerminalInstanceService {
   private exitHandlers = new Map<string, (exitCode: number) => void>();
   private offViewLifecycle: () => void;
   private offViewObservability: () => void;
+  private offBufferSampleRequest: (() => void) | null = null;
   private suppressedWebGLReleaseTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor() {
@@ -297,6 +299,15 @@ class TerminalInstanceService {
         this.suppressViewResources();
       }
     });
+    // On-demand buffer counts for the memory readouts (#14213). Main only asks
+    // active views; a request that lands after this view was cached is
+    // dropped, since the cache edge already reported.
+    const events = typeof window === "undefined" ? undefined : window.electron?.events;
+    if (typeof events?.on === "function") {
+      this.offBufferSampleRequest = events.on("window:sample-terminal-buffers", () => {
+        if (!isProjectViewCached()) this.reportWhySlowDiagnostics(true);
+      });
+    }
 
     if (canAutoInitializeTerminalIngest()) {
       void this.dataBuffer.initialize();
@@ -533,6 +544,9 @@ class TerminalInstanceService {
    * port of its own, so it received neither path and went permanently silent.
    */
   private handleViewCached(): void {
+    // Synchronously, before a freeze can land: main never asks a cached view,
+    // so these are the counts it reports until the view comes back.
+    this.reportWhySlowDiagnostics(true);
     for (const [id, managed] of this.instances) {
       if (managed.isOpened) suspendXtermRender(managed.terminal);
       if (managed.lastAppliedTier === TerminalRefreshTier.BACKGROUND) {
@@ -1818,11 +1832,31 @@ class TerminalInstanceService {
   }
 
   /**
-   * Push this renderer's terminal WebGL mode + counts-by-refresh-tier to the
-   * main-process diagnostics cache. Best-effort: never throw into terminal
-   * lifecycle, and no-op when the preload binding is unavailable (tests).
+   * Line counts and width of every live terminal's buffers (#14213). Reads
+   * `length` and `cols` only — O(1) per terminal, never a line or its content.
    */
-  private reportWhySlowDiagnostics(): void {
+  private collectBufferCounts(): RendererTerminalBufferCounts[] {
+    const out: RendererTerminalBufferCounts[] = [];
+    for (const [terminalId, managed] of this.instances) {
+      const { buffer, cols } = managed.terminal;
+      out.push({
+        terminalId,
+        normalLines: buffer.normal.length,
+        alternateLines: buffer.alternate.length,
+        cols,
+      });
+    }
+    return out;
+  }
+
+  /**
+   * Push this renderer's terminal WebGL mode + counts-by-refresh-tier to the
+   * main-process diagnostics cache, plus buffer line counts when asked. Routine
+   * pushes leave buffers out so no create/destroy/tier event walks terminals.
+   * Best-effort: never throw into terminal lifecycle, and no-op when the
+   * preload binding is unavailable (tests).
+   */
+  private reportWhySlowDiagnostics(includeBuffers = false): void {
     try {
       const report = window.electron?.system?.reportTerminalRendererDiagnostics;
       if (typeof report !== "function") return;
@@ -1838,6 +1872,9 @@ class TerminalInstanceService {
         wantsWebgl: this.webGLManager.getWantsSize(),
         terminalCount: this.instances.size,
         countsByTier,
+        ...(includeBuffers
+          ? { bufferMemory: { sampledAt: Date.now(), terminals: this.collectBufferCounts() } }
+          : {}),
       }).catch(() => {
         // Diagnostics push is fire-and-forget; a dropped sample is harmless.
       });
@@ -4329,6 +4366,8 @@ class TerminalInstanceService {
     this.projectSwitchRedrawQueue.clear();
     this.offViewLifecycle();
     this.offViewObservability();
+    this.offBufferSampleRequest?.();
+    this.offBufferSampleRequest = null;
     this.clearSuppressedWebGLReleaseTimer();
     this.stopPolling();
     this.unsubTierChanged?.();

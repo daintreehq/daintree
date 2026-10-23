@@ -4,6 +4,8 @@ import {
   recordRendererTerminalDiagnostics,
   forgetRendererTerminalDiagnostics,
   getRendererTerminalDiagnosticsSamples,
+  getRendererTerminalBufferSample,
+  waitForRendererTerminalBufferSample,
   _clearRendererTerminalDiagnosticsForTesting,
 } from "../RendererTerminalDiagnosticsCache.js";
 
@@ -89,5 +91,76 @@ describe("RendererTerminalDiagnosticsCache", () => {
 
     // A fresh read must reflect the original recorded value, not the mutation.
     expect(getRendererTerminalDiagnosticsSamples()[0].countsByTier.FOCUSED).toBe(1);
+  });
+
+  describe("buffer counts (#14213)", () => {
+    const BUFFERS = {
+      sampledAt: 999_000,
+      terminals: [{ terminalId: "t1", normalLines: 10_000, alternateLines: 0, cols: 182 }],
+    };
+
+    it("stores buffer counts apart from the rendering state, with the renderer's timestamp", () => {
+      recordRendererTerminalDiagnostics(7, { ...REPORT, bufferMemory: BUFFERS });
+
+      expect(getRendererTerminalBufferSample(7)).toEqual(BUFFERS);
+      expect(getRendererTerminalDiagnosticsSamples()[0]).not.toHaveProperty("bufferMemory");
+    });
+
+    it("keeps the last buffer counts when a routine report carries none", () => {
+      recordRendererTerminalDiagnostics(7, { ...REPORT, bufferMemory: BUFFERS });
+      vi.advanceTimersByTime(60_000);
+      recordRendererTerminalDiagnostics(7, REPORT);
+
+      expect(getRendererTerminalBufferSample(7)?.sampledAt).toBe(999_000);
+    });
+
+    it("replaces the terminal list whole, so closed terminals drop out", () => {
+      recordRendererTerminalDiagnostics(7, { ...REPORT, bufferMemory: BUFFERS });
+      recordRendererTerminalDiagnostics(7, {
+        ...REPORT,
+        bufferMemory: { sampledAt: 1_000_000, terminals: [] },
+      });
+
+      expect(getRendererTerminalBufferSample(7)?.terminals).toEqual([]);
+    });
+
+    it("forgets buffer counts on eviction", () => {
+      recordRendererTerminalDiagnostics(7, { ...REPORT, bufferMemory: BUFFERS });
+      forgetRendererTerminalDiagnostics(7);
+
+      expect(getRendererTerminalBufferSample(7)).toBeUndefined();
+    });
+
+    it("settles a waiter when the view reports buffer counts", async () => {
+      const settled = vi.fn();
+      void waitForRendererTerminalBufferSample(7, 1_000).then(settled);
+
+      recordRendererTerminalDiagnostics(7, REPORT);
+      await Promise.resolve();
+      expect(settled).not.toHaveBeenCalled();
+
+      recordRendererTerminalDiagnostics(7, { ...REPORT, bufferMemory: BUFFERS });
+      await Promise.resolve();
+      expect(settled).toHaveBeenCalledTimes(1);
+    });
+
+    it("settles a waiter on its deadline when the view never answers", async () => {
+      const settled = vi.fn();
+      void waitForRendererTerminalBufferSample(7, 1_000).then(settled);
+
+      await vi.advanceTimersByTimeAsync(999);
+      expect(settled).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(settled).toHaveBeenCalledTimes(1);
+    });
+
+    it("settles a waiter when the view is forgotten", async () => {
+      const settled = vi.fn();
+      void waitForRendererTerminalBufferSample(7, 1_000).then(settled);
+
+      forgetRendererTerminalDiagnostics(7);
+      await Promise.resolve();
+      expect(settled).toHaveBeenCalledTimes(1);
+    });
   });
 });

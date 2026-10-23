@@ -19,6 +19,7 @@ import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 import { terminalClient } from "@/clients/terminalClient";
 import { processesClient } from "@/clients/processesClient";
+import { systemClient } from "@/clients/systemClient";
 import { cn } from "@/lib/utils";
 import { pluralize } from "@/lib/pluralize";
 import { isProjectViewCached } from "@/lib/viewCacheState";
@@ -29,14 +30,17 @@ import {
   describeCleanupReport,
   describeClosedMembers,
   describeMembers,
+  describeTerminalBuffer,
   describeTerminalKind,
   formatAgo,
   formatApproxMemory,
   formatCpu,
   groupClosedProcesses,
   groupProcessesByProject,
+  indexTerminalBuffers,
   type ClosedProcessGroup,
   type ProcessSort,
+  type TerminalBufferReading,
   pluginProcessTitle,
   sortPluginProcesses,
   terminalTitle,
@@ -87,6 +91,8 @@ type ReadOutcome = {
   reading: ProcessesReading | null;
   snapshotError: unknown;
   sessions: DevPreviewSessionState[] | null;
+  /** Null when not asked (another host's list) or the read failed. */
+  buffers: ReadonlyMap<string, TerminalBufferReading> | null;
 };
 
 /**
@@ -94,14 +100,21 @@ type ReadOutcome = {
  * Sessions only matter to the Kill verb, so a read-only view never asks.
  */
 async function readProcesses(source: ProcessesSource, canKill: boolean): Promise<ReadOutcome> {
-  const [snapshotResult, sessionsResult] = await Promise.allSettled([
+  // Renderer buffers live in this device's views, so they only describe the
+  // attached host's terminals; another host's list is never joined against them.
+  const [snapshotResult, sessionsResult, memoryResult] = await Promise.allSettled([
     source.read(),
     canKill ? window.electron.devPreview.getAllSessions() : Promise.resolve(null),
+    source === ATTACHED_HOST_SOURCE ? systemClient.getMemorySnapshot() : Promise.resolve(null),
   ]);
   return {
     reading: snapshotResult.status === "fulfilled" ? snapshotResult.value : null,
     snapshotError: snapshotResult.status === "rejected" ? snapshotResult.reason : null,
     sessions: sessionsResult.status === "fulfilled" ? sessionsResult.value : null,
+    buffers:
+      memoryResult.status === "fulfilled" && memoryResult.value
+        ? indexTerminalBuffers(memoryResult.value.rendererTerminalBuffers)
+        : null,
   };
 }
 
@@ -307,6 +320,10 @@ export function ProcessesDialog({
   const [devSessionTerminalIds, setDevSessionTerminalIds] = useState<ReadonlySet<string> | null>(
     null
   );
+  const [terminalBuffers, setTerminalBuffers] = useState<ReadonlyMap<
+    string,
+    TerminalBufferReading
+  > | null>(null);
   const [isKilling, setIsKilling] = useState(false);
   const [killError, setKillError] = useState<string | null>(null);
   // Killed rows stay hidden until the next read stops listing them: the kill
@@ -353,6 +370,7 @@ export function ProcessesDialog({
       setKilledIds(new Set());
       setEndedClosedKeys(new Set());
       setDevSessionTerminalIds(null);
+      setTerminalBuffers(null);
       setKillError(null);
       setKillTarget(null);
       setClosedKillTarget(null);
@@ -369,6 +387,7 @@ export function ProcessesDialog({
         if (result.sessions) {
           setDevSessionTerminalIds(sessionTerminalIdsOf(result.sessions));
         }
+        setTerminalBuffers(result.buffers);
         if (result.reading && !result.reading.supported) {
           // Asking again won't teach an older host to answer; reopening retries.
           stopped = true;
@@ -584,6 +603,7 @@ export function ProcessesDialog({
     const action = stops ? "Stop dev server" : "Kill terminal";
     const members = terminal.sample ? describeMembers(terminal.sample, 3) : null;
     const pid = terminal.rootPid !== null ? `PID ${terminal.rootPid}` : null;
+    const buffer = terminalBuffers?.get(terminal.id);
     return (
       <li
         key={terminal.id}
@@ -611,6 +631,16 @@ export function ProcessesDialog({
               pid,
             ]}
           />
+          {buffer && (
+            <TruncatedTooltip content={describeTerminalBuffer(buffer)}>
+              <div
+                className="truncate text-xs text-text-secondary"
+                data-testid="terminal-buffer-reading"
+              >
+                {describeTerminalBuffer(buffer)}
+              </div>
+            </TruncatedTooltip>
+          )}
         </div>
         <SampleReadings sample={terminal.sample} />
         {canKill ? (
@@ -754,6 +784,8 @@ export function ProcessesDialog({
               Every terminal and plugin process across all projects, including ones whose panel
               isn't on screen. Readings are sampled, and memory is counted per process, so memory
               two processes share is counted twice.
+              {terminalBuffers !== null &&
+                " A terminal's buffer is estimated from its lines × columns × 12 bytes per cell, and is part of Daintree's own memory rather than its processes'."}
               {hostPlatform === "linux" &&
                 " On Linux, a terminal's CPU is the average since it started, not what it's using now."}
             </p>

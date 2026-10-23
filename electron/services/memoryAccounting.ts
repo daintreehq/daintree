@@ -4,6 +4,10 @@ import {
 } from "../utils/appMetricsSnapshot.js";
 import { getMetricsMemorySource, getProcessMemoryKb } from "../utils/processMemory.js";
 import type { PtyClient } from "./PtyClient.js";
+import {
+  collectRendererTerminalBuffers,
+  type RendererViewSource,
+} from "./rendererTerminalBuffers.js";
 import type { MemoryRollup } from "../../shared/types/pty-host.js";
 import {
   TERMINAL_WORKLOAD_STALE_MS,
@@ -140,7 +144,8 @@ export function composeMemorySnapshot(
  * one metrics sweep and one pty-host round-trip per 5s across all consumers.
  */
 export async function getCompositeMemorySnapshot(
-  ptyClient: PtyClient | null
+  ptyClient: PtyClient | null,
+  options: { rendererTerminalBuffers?: RendererViewSource } = {}
 ): Promise<CompositeMemorySnapshot> {
   let metrics: Electron.ProcessMetric[] | null;
   try {
@@ -148,8 +153,22 @@ export async function getCompositeMemorySnapshot(
   } catch {
     metrics = null;
   }
-  const rollup = await getCachedMemoryRollup(ptyClient);
-  return composeMemorySnapshot(metrics, getAppMetricsSnapshotTimestamp(), rollup, Date.now());
+  // Renderer buffer sampling sends a request to every active view, so only
+  // user-pulled reads opt in; the background pressure monitor never does.
+  const [rollup, rendererTerminalBuffers] = await Promise.all([
+    getCachedMemoryRollup(ptyClient),
+    options.rendererTerminalBuffers
+      ? collectRendererTerminalBuffers(options.rendererTerminalBuffers)
+      : Promise.resolve(undefined),
+  ]);
+  const snapshot = composeMemorySnapshot(
+    metrics,
+    getAppMetricsSnapshotTimestamp(),
+    rollup,
+    Date.now()
+  );
+  if (rendererTerminalBuffers) snapshot.rendererTerminalBuffers = rendererTerminalBuffers;
+  return snapshot;
 }
 
 /** Drop the rollup cache so tests with mocked PtyClients stay isolated. */
