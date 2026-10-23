@@ -313,6 +313,27 @@ describe("bringing a project to a host for an assistant (#14140)", () => {
     expect(r.studio.clone).toHaveBeenCalledTimes(1);
   });
 
+  it("has the host refuse an assistant's branch in a held copy however its folder is named", async () => {
+    const r = await rig();
+    const copy = path.join(root, `held-path-${counter}`);
+    git(root, ["clone", "-q", URL, copy]);
+    git(copy, ["worktree", "add", "-q", `${copy}-wt`, "-b", BRANCH, `origin/${BRANCH}`]);
+    r.studio.addProject(copy);
+    r.views.holder = "local:window-1";
+
+    const opened = await r.client.call(ProjectLinkMethod.OPEN, {
+      projectId: null,
+      path: copy,
+      remoteUrls: [URL],
+      branch: { name: BRANCH, remoteBranch: BRANCH },
+      branchRemoteUrl: URL,
+      assistant: true,
+    });
+
+    expect(opened).toMatchObject({ worktreePath: null, canCheckOutBranch: true });
+    expect(r.studio.focusWorktree).not.toHaveBeenCalled();
+  });
+
   it("never runs a setup recipe, and says which the project carries", async () => {
     const r = await rig();
     const project = sourceProject(r.local, "recipes");

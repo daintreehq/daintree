@@ -533,11 +533,12 @@ export function attachProjectsHost(
       },
     };
     // An assistant's branch is never put into a project a window here holds,
-    // not even by naming a worktree it already has: that window's person decides.
-    if (p.assistant === true && p.projectId !== null && p.branch !== null) {
-      openAuthority.assertMayPlace(p.projectId);
-    }
-    const opened = await service.open(p, openAuthority);
+    // not even by naming a worktree it already has: checked once the project
+    // is resolved, however its folder was named, so that window's person decides.
+    const opened = await service.open(
+      p,
+      p.assistant === true ? { ...openAuthority, beforeAnyChange: true } : openAuthority
+    );
     if (opened.canCheckOutBranch && p.branch) {
       grants.offerCheckout(opened.projectId, p.branch);
     }

@@ -173,6 +173,12 @@ async function publishClone(staged: string, destination: string): Promise<void> 
  */
 export interface PlacementAuthority {
   assertMayPlace(projectId: string): void;
+  /**
+   * Check before the branch is touched at all, its existing worktree included
+   * (#14140): one of another machine's assistants changes nothing, not even
+   * the saved worktree, in a project another window holds.
+   */
+  beforeAnyChange?: boolean;
 }
 
 /**
@@ -1086,13 +1092,20 @@ export class ProjectAcrossHostsService {
     authority?: PlacementAuthority
   ): Promise<HostProjectOpened> {
     const project = await this.adoptCandidate(payload);
-    const remoteName = await this.matchingRemote(project.path, payload.branchRemoteUrl ?? null);
     const base = {
       projectId: project.id,
       projectPath: project.path,
       projectName: project.name,
       setupRecipeId: null,
     };
+    if (payload.branch && authority?.beforeAnyChange === true) {
+      try {
+        authority.assertMayPlace(project.id);
+      } catch {
+        return { ...base, worktreePath: null, canCheckOutBranch: true, branchNote: null };
+      }
+    }
+    const remoteName = await this.matchingRemote(project.path, payload.branchRemoteUrl ?? null);
     // Opening a copy as it is touches nothing; anything else refreshes it for what follows.
     if (remoteName && payload.navigateOnly !== true) {
       this.backgroundFetch(project.path, remoteName);
