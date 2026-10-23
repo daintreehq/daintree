@@ -1,9 +1,10 @@
 import { EventEmitter } from "node:events";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { backends, ptyRef } = vi.hoisted(() => ({
+const { backends, ptyRef, mcpRef } = vi.hoisted(() => ({
   backends: new Map<string, Array<{ terminalId: string; webContentsId: number; slot: number }>>(),
   ptyRef: { current: null as unknown },
+  mcpRef: { current: null as unknown },
 }));
 
 vi.mock("../../../services/HelpSessionService.js", () => ({
@@ -11,7 +12,10 @@ vi.mock("../../../services/HelpSessionService.js", () => ({
     getAssistantBackends: (projectId: string) => backends.get(projectId) ?? [],
   },
 }));
-vi.mock("../../../window/serviceRefs.js", () => ({ getPtyClient: () => ptyRef.current }));
+vi.mock("../../../window/serviceRefs.js", () => ({
+  getPtyClient: () => ptyRef.current,
+  getMcpServerServiceRef: () => mcpRef.current,
+}));
 vi.mock("../../../ipc/dispatcher.js", () => ({ getIpcDispatcher: () => ({}) }));
 vi.mock("../../../services/ProjectStore.js", () => ({ projectStore: {} }));
 vi.mock("../../../services/ScratchStore.js", () => ({ scratchStore: {} }));
@@ -102,6 +106,7 @@ beforeEach(() => {
   vi.useFakeTimers();
   backends.clear();
   ptyRef.current = null;
+  mcpRef.current = null;
   registry = new EndpointRegistryImpl();
   server = fakeServer();
   host = null;
@@ -301,5 +306,74 @@ describe("initRemoteHostsHost agent activity (#13359)", () => {
     pty.owners.set("t-agent", "p1");
     stateChanged("t-agent", "working");
     expect(agentAnswers(link)).toHaveLength(1);
+  });
+});
+
+describe("initRemoteHostsHost MCP bindings (#14228)", () => {
+  /** Workspaces an external MCP session here is bound to, live. */
+  let bound: Set<string>;
+  let reads: Array<[string, number]>;
+
+  beforeEach(() => {
+    bound = new Set();
+    reads = [];
+    mcpRef.current = {
+      getWorkspaceViewActivity: (workspaceId: string, webContentsId: number) => {
+        reads.push([workspaceId, webContentsId]);
+        return { liveBinding: bound.has(workspaceId), dispatchLease: true };
+      },
+    };
+  });
+
+  const bindingAnswers = (link: ReturnType<typeof fakeLink>) =>
+    link.call.mock.calls
+      .filter(([method]) => method === LinkMethod.ENDPOINT_MCP_BINDING)
+      .map(([, payload]) => payload);
+
+  it("answers a view that opens onto a project a session is already bound to", () => {
+    bound.add("p1");
+    start();
+    const link = fakeLink();
+    server.attach(link);
+    link.open("view-1", "p1");
+
+    expect(bindingAnswers(link)).toEqual([
+      { endpoints: [{ endpointId: "view-1", projectId: "p1", liveBinding: true }] },
+    ]);
+    expect(reads).toContainEqual(["p1", registry.getRemote()[0]!.handle]);
+  });
+
+  it("catches a session binding and dropping against an open view on its sweep", () => {
+    start();
+    const link = fakeLink();
+    server.attach(link);
+    link.open("view-1", "p1");
+    expect(bindingAnswers(link)).toEqual([
+      { endpoints: [{ endpointId: "view-1", projectId: "p1", liveBinding: false }] },
+    ]);
+
+    bound.add("p1");
+    vi.advanceTimersByTime(ASSISTANT_SWEEP_MS);
+    expect(bindingAnswers(link).at(-1)).toEqual({
+      endpoints: [{ endpointId: "view-1", projectId: "p1", liveBinding: true }],
+    });
+
+    bound.clear();
+    vi.advanceTimersByTime(ASSISTANT_SWEEP_MS);
+    expect(bindingAnswers(link).at(-1)).toEqual({
+      endpoints: [{ endpointId: "view-1", projectId: "p1", liveBinding: false }],
+    });
+  });
+
+  it("reads no binding before the MCP service has loaded", () => {
+    mcpRef.current = null;
+    start();
+    const link = fakeLink();
+    server.attach(link);
+    link.open("view-1", "p1");
+
+    expect(bindingAnswers(link)).toEqual([
+      { endpoints: [{ endpointId: "view-1", projectId: "p1", liveBinding: false }] },
+    ]);
   });
 });

@@ -18,6 +18,8 @@ export interface WindowHostService {
   /** Whether a view of a host's project has an agent working, waiting or directing there (#13359). */
   viewHasActiveAgent?(webContentsId: number): boolean;
   viewKeepsResident?(webContentsId: number): boolean;
+  /** Whether an MCP session on a view's host is bound to its project there, live (#14228). */
+  viewHasLiveMcpBinding?(webContentsId: number): boolean;
   /** The name the user knows a host by, or null for one this machine doesn't list. */
   hostName?(hostId: HostId): string | null;
   switchWindowToLocal(windowId: number, projectId: string): Promise<SwitchWindowHostResult>;

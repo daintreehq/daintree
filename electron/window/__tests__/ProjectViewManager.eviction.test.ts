@@ -236,6 +236,10 @@ const remoteAgentActive = (webContentsId: number): boolean => activeRemoteViews.
 const residentRemoteViews = new Set<number>();
 const remoteKeepResident = (webContentsId: number): boolean =>
   residentRemoteViews.has(webContentsId);
+// And the views whose host says an MCP session there is bound to their project (#14228).
+const boundRemoteViews = new Set<number>();
+const remoteMcpBindingLive = (webContentsId: number): boolean =>
+  boundRemoteViews.has(webContentsId);
 
 import { ProjectViewManager } from "../ProjectViewManager.js";
 import { events } from "../../services/events.js";
@@ -347,6 +351,7 @@ describe("ProjectViewManager — eviction safety", () => {
     liveRemoteViews.clear();
     activeRemoteViews.clear();
     residentRemoteViews.clear();
+    boundRemoteViews.clear();
     residentWorkspaces.clear();
     win = createMockWindow();
     manager = new ProjectViewManager(win as never, {
@@ -728,6 +733,7 @@ describe("ProjectViewManager — eviction safety", () => {
         remoteAssistantLive,
         remoteAgentActive,
         remoteKeepResident,
+        remoteMcpBindingLive,
       });
     }
 
@@ -1152,6 +1158,56 @@ describe("ProjectViewManager — eviction safety", () => {
           managerWithLimit.reclaimCachedViewsUnderPressure();
 
           expect(managerWithLimit.getAllViews().map((v) => v.projectId)).toEqual(["proj-b"]);
+        });
+      });
+
+      describe("with an MCP session bound on its host (#14228)", () => {
+        it("keeps it past a more recently used ordinary local view", async () => {
+          // This manager wires no local MCP reader: the host's word is enough.
+          const managerWithLimit = makeManager(2);
+          const wcR = await withRemoteView(managerWithLimit);
+          boundRemoteViews.add(wcR.id);
+
+          await leaveFor(managerWithLimit, "proj-b", "proj-c");
+
+          expect(managerWithLimit.getAllViews().map((v) => v.projectId)).toContain(remoteKey);
+          expect(wcR.close).not.toHaveBeenCalled();
+          expect(evictedProjectIds()).toEqual(["proj-a", "proj-b"]);
+        });
+
+        it("ranks it below a view with residency granted on its host", async () => {
+          const managerWithLimit = makeManager(4);
+          const wcR = await withRemoteView(managerWithLimit);
+          await leaveFor(managerWithLimit, "proj-b", "proj-c");
+          boundRemoteViews.add(wcR.id);
+          residentWorkspaces.add("proj-a");
+          residentWorkspaces.add("proj-b");
+
+          managerWithLimit.setCachedViewLimit(2);
+
+          // The bound view goes before either granted one, older or not.
+          expect(evictedProjectIds()).toEqual([remoteKey, "proj-a"]);
+        });
+
+        it("still yields to the forced reclaim", async () => {
+          const managerWithLimit = makeManager(3);
+          const wcR = await withRemoteView(managerWithLimit);
+          await leaveFor(managerWithLimit, "proj-b");
+          boundRemoteViews.add(wcR.id);
+
+          managerWithLimit.reclaimCachedViewsUnderPressure();
+
+          expect(managerWithLimit.getAllViews().map((v) => v.projectId)).toEqual(["proj-b"]);
+        });
+
+        it("doesn't count it as a dispatch in flight, so it can still move to another window", async () => {
+          const managerWithLimit = makeManager(3);
+          const wcR = await withRemoteView(managerWithLimit);
+          await leaveFor(managerWithLimit, "proj-b");
+          boundRemoteViews.add(wcR.id);
+
+          expect(managerWithLimit.isMcpDispatchProtected(remoteKey)).toBe(false);
+          expect(managerWithLimit.canReleaseCachedView(remoteKey)).toBe(true);
         });
       });
 
@@ -4859,6 +4915,7 @@ describe("ProjectViewManager — releasing views that sit unused (#14217)", () =
       remoteAssistantLive,
       remoteAgentActive,
       remoteKeepResident,
+      remoteMcpBindingLive,
       mcpViewActivity: (workspaceId: string, webContentsId: number) => ({
         liveBinding: boundWorkspaces.has(workspaceId),
         dispatchLease: leasedWebContentsIds.has(webContentsId),
@@ -4899,6 +4956,7 @@ describe("ProjectViewManager — releasing views that sit unused (#14217)", () =
     liveRemoteViews.clear();
     activeRemoteViews.clear();
     residentRemoteViews.clear();
+    boundRemoteViews.clear();
     residentWorkspaces.clear();
     boundWorkspaces = new Set();
     leasedWebContentsIds = new Set();
@@ -5053,6 +5111,20 @@ describe("ProjectViewManager — releasing views that sit unused (#14217)", () =
       residentRemoteViews.add(wcR.id);
       mgr.evictIdleViews();
       expect(projectIds(mgr)).toContain(remoteKey);
+    });
+
+    it("is kept while its host reports a bound MCP session, and released once it drops (#14228)", async () => {
+      const mgr = makeManager();
+      const wcR = await seedWithRemote(mgr);
+      ageAll(mgr);
+      boundRemoteViews.add(wcR.id);
+
+      mgr.evictIdleViews();
+      expect(projectIds(mgr)).toContain(remoteKey);
+
+      boundRemoteViews.clear();
+      mgr.evictIdleViews();
+      expect(projectIds(mgr)).not.toContain(remoteKey);
     });
   });
 
