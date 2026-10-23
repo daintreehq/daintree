@@ -13,6 +13,10 @@ import {
 } from "../../utils/scrollbackConfig";
 import { useResourceProfileStore } from "../../store/resourceProfileStore";
 import { terminalInstanceService } from "../../services/terminal/TerminalInstanceService";
+import {
+  __testing as terminalServiceTesting,
+  register as registerTerminalService,
+} from "../../services/terminal/terminalInstanceServiceAccessor";
 import type { ResourceProfilePayload } from "@shared/types/resourceProfile";
 
 vi.mock("@xterm/addon-webgl", () => ({
@@ -216,5 +220,34 @@ describe("useResourceProfile", () => {
     expect(useResourceProfileStore.getState().profile).toBe("performance");
     refreshSpy.mockRestore();
     restoreSpy.mockRestore();
+  });
+
+  it("still writes the config while the terminal service is unloaded, then reaches it once ready", () => {
+    const refreshSpy = vi.spyOn(terminalInstanceService, "refreshWebGLMode");
+    const restoreSpy = vi.spyOn(terminalInstanceService, "restoreScrollbackAll");
+    terminalServiceTesting.reset();
+    try {
+      renderHook(() => useResourceProfile());
+
+      act(() => {
+        capturedCallback!(makePayload(originalUpper + 3, originalLower + 1, 4321));
+      });
+      // The config modules carry the values to terminals created after load.
+      expect(getWebglUpperThreshold()).toBe(originalUpper + 3);
+      expect(getAgentScrollbackMaxLines()).toBe(4321);
+      expect(refreshSpy).not.toHaveBeenCalled();
+      expect(restoreSpy).not.toHaveBeenCalled();
+
+      registerTerminalService(terminalInstanceService);
+      act(() => {
+        capturedCallback!(makePayload(originalUpper + 4, originalLower + 1, 4321));
+      });
+      expect(refreshSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      terminalServiceTesting.reset();
+      registerTerminalService(terminalInstanceService);
+      refreshSpy.mockRestore();
+      restoreSpy.mockRestore();
+    }
   });
 });

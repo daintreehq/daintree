@@ -1,5 +1,5 @@
 import { useEffect } from "react";
-import { terminalInstanceService } from "@/services/TerminalInstanceService";
+import { peek as peekTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
 import { logError, logWarn } from "@/utils/logger";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { useTerminalFontStore, useScreenReaderStore } from "@/store";
@@ -106,7 +106,7 @@ export function useTerminalConfig() {
     // The cached selector returns the same object XtermAdapter already applied,
     // so xterm dedups the set instead of recomputing the palette a second time.
     const theme = selectEffectiveTheme(useTerminalColorSchemeStore.getState());
-    terminalInstanceService.applyGlobalOptions({
+    peekTerminalService()?.applyGlobalOptions({
       theme,
       fontSize,
       fontFamily,

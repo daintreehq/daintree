@@ -1,20 +1,39 @@
 import { useCallback, useSyncExternalStore } from "react";
-import { terminalInstanceService } from "@/services/TerminalInstanceService";
-import { UNSEEN_THRESHOLD } from "@/services/terminal/TerminalUnseenOutputTracker";
+import {
+  peek as peekTerminalService,
+  subscribeWhenReady,
+} from "@/services/terminal/terminalInstanceServiceAccessor";
+import {
+  UNSEEN_THRESHOLD,
+  type UnseenOutputSnapshot,
+} from "@/services/terminal/TerminalUnseenOutputTracker";
 
 // While this many milliseconds have elapsed since the last user wheel event,
 // suppress showing the pill so it does not flash mid-scroll-gesture.
 const ACTIVE_SCROLL_SUPPRESSION_MS = 200;
 
+// One shared reference: a fresh object per read would loop useSyncExternalStore.
+const UNLOADED_SNAPSHOT: UnseenOutputSnapshot = Object.freeze({
+  isUserScrolledBack: false,
+  unseen: 0,
+});
+
 export function useUnseenOutput(id: string) {
   const subscribe = useCallback(
-    (onStoreChange: () => void) => terminalInstanceService.subscribeUnseenOutput(id, onStoreChange),
+    (onStoreChange: () => void) =>
+      subscribeWhenReady(
+        (service) => service.subscribeUnseenOutput(id, onStoreChange),
+        onStoreChange
+      ),
     [id]
   );
-  const getSnapshot = useCallback(() => terminalInstanceService.getUnseenOutputSnapshot(id), [id]);
+  const getSnapshot = useCallback(
+    () => peekTerminalService()?.getUnseenOutputSnapshot(id) ?? UNLOADED_SNAPSHOT,
+    [id]
+  );
 
   const snapshot = useSyncExternalStore(subscribe, getSnapshot);
-  const lastWheelAt = terminalInstanceService.getLastWheelAt(id);
+  const lastWheelAt = peekTerminalService()?.getLastWheelAt(id) ?? 0;
   const isActivelyScrolling = Date.now() - lastWheelAt < ACTIVE_SCROLL_SUPPRESSION_MS;
 
   return {

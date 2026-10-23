@@ -21,6 +21,12 @@ vi.mock("@/services/TerminalInstanceService", () => ({
 
 import { useUnseenOutput } from "../useUnseenOutput";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
+import {
+  __testing as terminalServiceTesting,
+  register as registerTerminalService,
+} from "@/services/terminal/terminalInstanceServiceAccessor";
+
+const service = terminalInstanceService;
 
 describe("useUnseenOutput", () => {
   beforeEach(() => {
@@ -28,6 +34,8 @@ describe("useUnseenOutput", () => {
     currentSnapshot = { isUserScrolledBack: false, unseen: 0 };
     currentLastWheelAt = 0;
     vi.clearAllMocks();
+    terminalServiceTesting.reset();
+    registerTerminalService(service);
   });
 
   it("returns hasUnseenOutput: false when not scrolled back", () => {
@@ -102,5 +110,47 @@ describe("useUnseenOutput", () => {
       "t2",
       expect.any(Function)
     );
+  });
+});
+
+describe("useUnseenOutput before the terminal service loads", () => {
+  beforeEach(() => {
+    capturedListener = null;
+    currentSnapshot = { isUserScrolledBack: true, unseen: 5 };
+    currentLastWheelAt = 0;
+    vi.clearAllMocks();
+    terminalServiceTesting.reset();
+  });
+
+  it("reports nothing unseen and reads no service", () => {
+    const { result } = renderHook(() => useUnseenOutput("t1"));
+    expect(result.current).toEqual({ isUserScrolledBack: false, hasUnseenOutput: false });
+    expect(terminalInstanceService.subscribeUnseenOutput).not.toHaveBeenCalled();
+    expect(terminalInstanceService.getUnseenOutputSnapshot).not.toHaveBeenCalled();
+  });
+
+  it("subscribes and reports the service's values once it is ready", () => {
+    const { result } = renderHook(() => useUnseenOutput("t1"));
+    expect(result.current.hasUnseenOutput).toBe(false);
+
+    act(() => registerTerminalService(service));
+    expect(terminalInstanceService.subscribeUnseenOutput).toHaveBeenCalledWith(
+      "t1",
+      expect.any(Function)
+    );
+    expect(result.current.hasUnseenOutput).toBe(true);
+
+    currentSnapshot = { isUserScrolledBack: false, unseen: 0 };
+    act(() => capturedListener?.());
+    expect(result.current.hasUnseenOutput).toBe(false);
+  });
+
+  it("leaves no listener behind when unmounted before ready", () => {
+    const { unmount } = renderHook(() => useUnseenOutput("t1"));
+    unmount();
+
+    registerTerminalService(service);
+    expect(terminalInstanceService.subscribeUnseenOutput).not.toHaveBeenCalled();
+    expect(capturedListener).toBeNull();
   });
 });

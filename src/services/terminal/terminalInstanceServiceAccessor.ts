@@ -102,6 +102,38 @@ export function onReady(cb: ServiceCall): () => void {
   };
 }
 
+// A subscription that waits for the service instead of loading it, for
+// listeners owned by React (useSyncExternalStore, effects). Attaches now when
+// the service is loaded; otherwise on ready, then calls `onAttachedLate` so a
+// store consumer re-reads a snapshot that just stopped being its fallback. The
+// returned cleanup covers both the pending wait and the attached listener.
+export function subscribeWhenReady(
+  attach: (service: TerminalPaintPlane) => () => void,
+  onAttachedLate?: () => void
+): () => void {
+  if (instance) return attach(instance);
+  let detach: (() => void) | null = null;
+  let disposed = false;
+  const cancelReady = onReady((service) => {
+    if (disposed) return;
+    const off = attach(service);
+    // attach() itself may have disposed us; nothing else will call `off` then.
+    if (disposed) {
+      off();
+      return;
+    }
+    detach = off;
+    onAttachedLate?.();
+  });
+  return () => {
+    if (disposed) return;
+    disposed = true;
+    cancelReady();
+    detach?.();
+    detach = null;
+  };
+}
+
 export function setGpuHardwareAvailable(value: boolean): void {
   if (instance) {
     instance.setGPUHardwareAvailable(value);

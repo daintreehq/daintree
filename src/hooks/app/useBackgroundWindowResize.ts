@@ -1,6 +1,6 @@
 import { useEffect } from "react";
 import { isProjectViewCached, subscribeProjectViewLifecycle } from "@/lib/viewCacheState";
-import { terminalInstanceService } from "@/services/TerminalInstanceService";
+import { peek as peekTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
 
 /**
  * Background window-resize receiver (#10415).
@@ -25,11 +25,11 @@ export function useBackgroundWindowResize(): void {
   useEffect(() => {
     const unsubscribe = window.electron.project.onBackgroundResize((payload) => {
       if (!payload) return;
-      terminalInstanceService.applyBackgroundWindowResize(payload.width, payload.height);
+      peekTerminalService()?.applyBackgroundWindowResize(payload.width, payload.height);
     });
     const unsubscribeLifecycle = subscribeProjectViewLifecycle((phase) => {
       if (phase === "cached") return;
-      terminalInstanceService.resetBackgroundResizeBasis();
+      peekTerminalService()?.resetBackgroundResizeBasis();
     });
     const onVisibilityChange = () => {
       // Must match the service's own predicate exactly. Restoring a minimized
@@ -38,7 +38,7 @@ export function useBackgroundWindowResize(): void {
       // each terminal's `lastWidth` already holds an applied, scaled value, and
       // every later event would compound off it.
       if (!isProjectViewCached() && document.visibilityState === "visible") {
-        terminalInstanceService.resetBackgroundResizeBasis();
+        peekTerminalService()?.resetBackgroundResizeBasis();
       }
     };
     document.addEventListener("visibilitychange", onVisibilityChange);

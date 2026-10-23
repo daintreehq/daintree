@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { renderHook, act, cleanup } from "@testing-library/react";
-import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi, beforeAll } from "vitest";
 import type { PtyPanelData } from "@shared/types/panel";
 import { BRACKETED_PASTE_END, BRACKETED_PASTE_START } from "@shared/utils/terminalInputProtocol";
 
@@ -43,6 +43,16 @@ vi.mock("@/clients", async (importOriginal) => ({
 import { usePanelStore } from "@/store/panelStore";
 import { usePaletteStore } from "@/store/paletteStore";
 import { useSendToAgentPalette, openSendToAgentPaletteWithText } from "../useSendToAgentPalette";
+import {
+  __testing as terminalServiceTesting,
+  load as loadTerminalService,
+} from "@/services/terminal/terminalInstanceServiceAccessor";
+
+// The service mock never evaluates the real module, so nothing registers it;
+// loading caches the mock for the synchronous peek() call sites.
+beforeAll(async () => {
+  await loadTerminalService();
+});
 
 function panel(id: string): PtyPanelData {
   return {
@@ -167,6 +177,28 @@ describe("send to agent, wrapped and unreadable targets", () => {
     );
     expect(writeMock).toHaveBeenCalledTimes(1);
     expect(notifyUserInputMock).not.toHaveBeenCalled();
+  });
+
+  it("wraps without notifying while the terminal service is unloaded", async () => {
+    // Same branch as a missing instance: an empty view has no service to read
+    // a mode from, even when the target pane exists.
+    instances.byId = {
+      a: { terminal: { modes: { bracketedPasteMode: false } } },
+      b: { terminal: { modes: { bracketedPasteMode: false } } },
+    };
+    terminalServiceTesting.reset();
+    try {
+      sendFromSourceToTarget("ls\x1b[201~");
+
+      expect(writeMock).toHaveBeenCalledWith(
+        "b",
+        `${BRACKETED_PASTE_START}ls␛[201~${BRACKETED_PASTE_END}`
+      );
+      expect(writeMock).toHaveBeenCalledTimes(1);
+      expect(notifyUserInputMock).not.toHaveBeenCalled();
+    } finally {
+      await loadTerminalService();
+    }
   });
 });
 
