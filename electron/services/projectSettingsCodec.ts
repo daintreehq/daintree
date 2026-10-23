@@ -557,7 +557,7 @@ export function encodeEnvelope(settings: ProjectSettings): Record<string, unknow
  *
  * Notably permits both `daintreeMcpTier` and the deprecated
  * `exposeDaintreeMcpToAgents` — the agent-action wrapper at
- * `src/services/actions/definitions/projectActions.ts` strips both before
+ * `src/services/actions/definitions/projectActions.impl.ts` strips both before
  * the IPC call, and the renderer settings dialog still passes them through
  * legitimately.
  */
