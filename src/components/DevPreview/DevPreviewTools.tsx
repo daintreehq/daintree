@@ -20,12 +20,11 @@ import {
 // createElement rather than JSX on `tool.Button` and friends: the React Compiler
 // can fold an alias of a registered component into an intrinsic element name,
 // which renders an empty unknown tag instead of the tool.
-import {
-  useDevPreviewTools,
-  type DevPreviewToolContext,
-  type DevPreviewToolDefinition,
-  type DevPreviewToolSurfaceProps,
-} from "@/registry/devPreviewToolRegistry";
+import type {
+  DevPreviewToolContext,
+  DevPreviewToolDefinition,
+  DevPreviewToolSurfaceProps,
+} from "@/services/devPreviewTools/types";
 import { BUILT_IN_DEV_PREVIEW_TOOLS } from "@/services/devPreviewTools/builtInTools";
 
 export interface DevPreviewToolHostProps {
@@ -75,19 +74,9 @@ function useToolContext({
   };
 }
 
-/**
- * Every tool this preview offers: its own first, which nothing gates, then
- * those of the plugins that are enabled and declare them.
- */
-function useHostedTools(): readonly DevPreviewToolDefinition[] {
-  const contributed = useDevPreviewTools();
-  return [...BUILT_IN_DEV_PREVIEW_TOOLS, ...contributed];
-}
-
 function useActiveTool(panelId: string): DevPreviewToolDefinition | undefined {
-  const tools = useHostedTools();
   const activeId = useDevPreviewToolStore((s) => s.activeByPanel[panelId]);
-  return activeId ? tools.find((tool) => tool.id === activeId) : undefined;
+  return activeId ? BUILT_IN_DEV_PREVIEW_TOOLS.find((tool) => tool.id === activeId) : undefined;
 }
 
 /** One tool in one preview: what its toggle and its surfaces are tagged with. */
@@ -214,14 +203,12 @@ function DevPreviewToolButton({
 
 /** Toolbar toggles for every tool that applies to this preview. */
 export function DevPreviewToolButtons(props: DevPreviewToolHostProps) {
-  const tools = useHostedTools();
   const context = useToolContext(props);
   const activeId = useDevPreviewToolStore((s) => s.activeByPanel[props.panelId]);
   const toggle = useDevPreviewToolStore((s) => s.toggle);
-  if (tools.length === 0) return null;
   return (
     <>
-      {tools.map((tool) => (
+      {BUILT_IN_DEV_PREVIEW_TOOLS.map((tool) => (
         <ErrorBoundary key={tool.id} variant="component" componentName={`${tool.label} button`}>
           <DevPreviewToolButton
             tool={tool}

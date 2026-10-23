@@ -27,22 +27,6 @@ export interface PluginRuntimeMeta {
   devMode: boolean;
   /** `manifest.displayName` when the manifest declares one, else the manifest id. */
   displayName: string;
-  /**
-   * Fully qualified `contributes.previewTools[].id`s this plugin's manifest
-   * declares. `src/registry/devPreviewToolRegistry.ts` admits a registered tool
-   * only when its id is in here, so a renderer module side effect alone can no
-   * longer put a tool in the dev-preview toolbar — the manifest is the gate.
-   *
-   * Empty for every plugin that declares none, which is all but the built-ins
-   * that ship one. It arrives in the same commit as `disabledPluginIds`, so a
-   * tool is never admitted against one snapshot and enable-checked against
-   * another.
-   *
-   * Optional only for the hand-built meta literals in tests that predate the
-   * field; a real snapshot always sets it. Absent reads as "declares none",
-   * which is the conservative direction — the tool stays hidden.
-   */
-  previewToolIds?: ReadonlySet<string>;
 }
 
 /** A prompt template a loaded plugin contributes, with who it belongs to. */
@@ -131,8 +115,7 @@ function sameMeta(
     if (
       other === undefined ||
       other.devMode !== meta.devMode ||
-      other.displayName !== meta.displayName ||
-      !sameSet(meta.previewToolIds ?? new Set(), other.previewToolIds ?? new Set())
+      other.displayName !== meta.displayName
     ) {
       return false;
     }
@@ -197,12 +180,6 @@ async function pullPluginRuntimeSnapshot(
         // no min length, so a blank one is well-formed and would otherwise
         // render as an empty label everywhere a plugin is named.
         displayName: p.manifest.displayName?.trim() || p.manifest.name,
-        // Declared ids travel verbatim: unlike most contributions the host does
-        // not namespace a preview tool id, because the renderer entry registers
-        // with that same literal.
-        previewToolIds: new Set(
-          (p.manifest.contributes?.previewTools ?? []).map((tool) => tool.id)
-        ),
       });
     }
     // One commit: a consumer must never read a plugin's dev-mode flag from a

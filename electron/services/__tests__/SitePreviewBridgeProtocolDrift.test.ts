@@ -4,8 +4,8 @@
  * Only part of that contract is shared now. The host owns the envelope and the
  * one lifecycle event it acts on; the plugin owns every payload, and the host
  * does not restate them. So this pins exactly what still has to agree — the
- * envelope's field set, the `documentReady` shape, the protocol version, the
- * message ceiling and the declared adapter id — and asserts the rest is
+ * envelope's field set, the `documentReady` shape, the protocol version and the
+ * message ceiling — and asserts the rest is
  * genuinely opaque to the host, which is the property that lets a second
  * framework adapter ship without touching `electron/` or `shared/`.
  *
@@ -18,10 +18,6 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
-import {
-  guestAdapterAssetPath,
-  listBuiltinGuestAdapters,
-} from "../sitePreview/guestAdapterAssets.js";
 import {
   DOCUMENT_READY,
   GUEST_PROTOCOL_VERSION,
@@ -36,20 +32,6 @@ const PLUGIN_PROTOCOL = path.resolve(
   HERE,
   "../../../plugins/builtin/sveltekit-builder/shared/protocol.ts"
 );
-const BUILTIN_PLUGINS_ROOT = path.resolve(HERE, "../../../plugins/builtin");
-const PLUGIN_MANIFEST = path.join(BUILTIN_PLUGINS_ROOT, "sveltekit-builder/plugin.json");
-
-interface BuilderManifest {
-  name: string;
-  contributes: {
-    guestAdapters: { id: string; entry: string }[];
-  };
-}
-
-function readBuilderManifest(): BuilderManifest {
-  return JSON.parse(fs.readFileSync(PLUGIN_MANIFEST, "utf8")) as BuilderManifest;
-}
-
 function readPluginProtocol(): string {
   return fs.readFileSync(PLUGIN_PROTOCOL, "utf8");
 }
@@ -121,31 +103,6 @@ describe("site preview guest protocol", () => {
   it("agrees with the page runtime's own copy of the message ceiling", () => {
     const runtime = fs.readFileSync(GUEST_RUNTIME, "utf8");
     expect(readNumericConstant(runtime, "MAX_MESSAGE_BYTES")).toBe(MAX_GUEST_MESSAGE_BYTES);
-  });
-
-  it("agrees with the manifest on the id of the guest runtime it binds to", () => {
-    // The plugin sends this id and the host resolves it — through the manifest
-    // declaration, which is the only thing that registers an adapter at all — to
-    // the asset the build emitted. A rename on one side alone would surface as an
-    // unbindable preview, so the manifest is now the other half of this contract.
-    const match = /export const GUEST_ADAPTER_ID = "([^"]+)";/.exec(readPluginProtocol());
-    const declared = readBuilderManifest().contributes.guestAdapters.map((a) => a.id);
-    expect(declared).toContain(match?.[1]);
-  });
-
-  it("derives the guest asset path the build emits from the declared adapter id", () => {
-    // The manifest never names the built asset — the host derives it. This pins
-    // the derivation for the shipped declaration so a change to it has to be
-    // deliberate, and the build's own mirror of the rule is checked against this
-    // function in `scripts/__tests__/plugin-build-assets.test.mjs`.
-    const declarations = listBuiltinGuestAdapters(BUILTIN_PLUGINS_ROOT);
-    const builder = declarations.find((d) => d.pluginId === "daintree.sveltekit-builder");
-    expect(builder).toBeDefined();
-    expect(builder?.entry).toBe("renderer/guest/entry.ts");
-    expect(builder?.assetPath).toBe("guest/guest.js");
-    expect(guestAdapterAssetPath("daintree.sveltekit-builder", builder!.adapterId)).toBe(
-      "guest/guest.js"
-    );
   });
 
   it("agrees with the plugin on the shape of the lifecycle event", () => {

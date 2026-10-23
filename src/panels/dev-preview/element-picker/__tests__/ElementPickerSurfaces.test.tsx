@@ -2083,10 +2083,7 @@ describe("lifetime", () => {
     // that once carried a picker going away takes nothing with it.
     usePluginRuntimeStore.setState({
       pluginMetaById: new Map([
-        [
-          "daintree.sveltekit-builder",
-          { devMode: false, displayName: "SvelteKit Builder", previewToolIds: new Set<string>() },
-        ],
+        ["daintree.sveltekit-builder", { devMode: false, displayName: "SvelteKit Builder" }],
       ]),
       disabledPluginIds: new Set(["daintree.sveltekit-builder"]),
     } as never);

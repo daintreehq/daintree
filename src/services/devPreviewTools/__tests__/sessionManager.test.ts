@@ -1,18 +1,18 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-// The dev preview's own tool, with its real session swapped for the fakes the
-// plugin cases use: what is under test is how the host runs it, not the picker.
+// The dev preview's own tools, swapped for fakes: what is under test is how
+// the host runs a tool, not the picker.
 const builtIn = vi.hoisted(() => ({
-  createSession: null as ((context: DevPreviewToolSessionContext) => unknown) | null,
+  tools: [] as Array<{
+    id: string;
+    label: string;
+    Button: () => null;
+    createSession: (context: DevPreviewToolSessionContext) => unknown;
+  }>,
 }));
-vi.mock("@/panels/dev-preview/element-picker/elementPickerTool", () => ({
-  elementPickerTool: {
-    id: "element-picker",
-    label: "Element Picker",
-    Button: () => null,
-    createSession: (context: DevPreviewToolSessionContext) => builtIn.createSession?.(context),
-  },
+vi.mock("../builtInTools", () => ({
+  resolveDevPreviewTool: (toolId: string) => builtIn.tools.find((tool) => tool.id === toolId),
 }));
 import {
   __resetDevPreviewToolSessionsForTests,
@@ -21,17 +21,11 @@ import {
   retainDevPreviewToolVisibility,
   startDevPreviewToolSessions,
 } from "../sessionManager";
-import {
-  __resetDevPreviewToolsForTests,
-  registerDevPreviewTool,
-  type DevPreviewToolSessionContext,
-} from "@/registry/devPreviewToolRegistry";
+import type { DevPreviewToolSessionContext } from "../types";
 import { useDevPreviewToolStore } from "@/store/devPreviewToolStore";
 import { usePanelStore } from "@/store/panelStore";
-import { _resetPluginRuntimeStoreForTest, usePluginRuntimeStore } from "@/store/pluginRuntimeStore";
 
-const PLUGIN = "acme.tools";
-const TOOL = "acme.tools.picker";
+const TOOL = "picker";
 const PANEL = "preview-1";
 
 interface FakeSession {
@@ -61,14 +55,14 @@ function makeSession(context: DevPreviewToolSessionContext): FakeSession {
   return session;
 }
 
-function register(createSession: (context: DevPreviewToolSessionContext) => unknown): void {
-  registerDevPreviewTool({
-    id: TOOL,
-    pluginId: PLUGIN,
-    label: "Picker",
-    Button: () => null,
-    createSession: createSession as (context: DevPreviewToolSessionContext) => FakeSession,
-  });
+function register(
+  createSession: (context: DevPreviewToolSessionContext) => unknown,
+  id: string = TOOL
+): void {
+  builtIn.tools = [
+    ...builtIn.tools.filter((tool) => tool.id !== id),
+    { id, label: id, Button: () => null, createSession },
+  ];
 }
 
 function panels(entries: Record<string, "grid" | "trash">): void {
@@ -90,21 +84,6 @@ function live(): FakeSession | null {
 
 beforeEach(() => {
   sessions.length = 0;
-  usePluginRuntimeStore.setState({
-    pluginMetaById: new Map([
-      [
-        PLUGIN,
-        {
-          devMode: false,
-          displayName: "Acme",
-          // The registry admits a tool only when its plugin's manifest declares
-          // the id, so the fake meta declares every tool these cases register.
-          previewToolIds: new Set([TOOL, "acme.tools.other"]),
-        },
-      ],
-    ]),
-    disabledPluginIds: new Set(),
-  });
   panels({ [PANEL]: "grid" });
   register(makeSession);
   startDevPreviewToolSessions();
@@ -112,8 +91,8 @@ beforeEach(() => {
 
 afterEach(() => {
   __resetDevPreviewToolSessionsForTests();
-  __resetDevPreviewToolsForTests();
-  _resetPluginRuntimeStoreForTest();
+  builtIn.tools = [];
+  useDevPreviewToolStore.setState({ activeByPanel: {} });
   usePanelStore.setState({ panelIds: [], panelsById: {} } as never);
 });
 
@@ -203,37 +182,7 @@ describe("dev preview tool sessions", () => {
     expect(session?.disposals).toBe(1);
   });
 
-  it("switches the tool off and disposes when the owning plugin is disabled", () => {
-    switchOn();
-    const session = live();
-    usePluginRuntimeStore.setState({ disabledPluginIds: new Set([PLUGIN]) });
-    expect(useDevPreviewToolStore.getState().activeByPanel).toEqual({});
-    expect(session?.disposals).toBe(1);
-  });
-
-  it("switches the tool off and disposes when its manifest stops declaring it", () => {
-    switchOn();
-    const session = live();
-    expect(session).not.toBeNull();
-    // The same plugin, still enabled, whose refreshed meta no longer names the tool.
-    usePluginRuntimeStore.setState({
-      pluginMetaById: new Map([
-        [PLUGIN, { devMode: false, displayName: "Acme", previewToolIds: new Set<string>() }],
-      ]),
-    });
-    expect(useDevPreviewToolStore.getState().activeByPanel).toEqual({});
-    expect(session?.disposals).toBe(1);
-  });
-
-  it("does not build a session while the owning plugin is disabled", () => {
-    usePluginRuntimeStore.setState({ disabledPluginIds: new Set([PLUGIN]) });
-    switchOn();
-    expect(live()).toBeNull();
-    expect(sessions).toHaveLength(0);
-  });
-
   it("switches the tool off when its session cannot be built", async () => {
-    __resetDevPreviewToolsForTests();
     let signal: AbortSignal | undefined;
     register((next) => {
       signal = next.signal;
@@ -249,15 +198,8 @@ describe("dev preview tool sessions", () => {
   });
 
   it("does not switch off a tool the failing factory had itself switched to", async () => {
-    __resetDevPreviewToolsForTests();
-    const OTHER = "acme.tools.other";
-    registerDevPreviewTool({
-      id: OTHER,
-      pluginId: PLUGIN,
-      label: "Other",
-      Button: () => null,
-      createSession: makeSession,
-    });
+    const OTHER = "other";
+    register(makeSession, OTHER);
     register(() => {
       useDevPreviewToolStore.getState().setActive(PANEL, OTHER);
       return Promise.reject(new Error("the chunk failed to load"));
@@ -286,18 +228,7 @@ describe("dev preview tool sessions", () => {
     expect(useDevPreviewToolStore.getState().activeByPanel).toEqual({});
   });
 
-  it("clears a tool switched on while its plugin is disabled", () => {
-    usePluginRuntimeStore.setState({ disabledPluginIds: new Set([PLUGIN]) });
-    switchOn();
-    expect(live()).toBeNull();
-    expect(useDevPreviewToolStore.getState().activeByPanel).toEqual({});
-    // Re-enabling does not resurrect a selection that was never honoured.
-    usePluginRuntimeStore.setState({ disabledPluginIds: new Set() });
-    expect(live()).toBeNull();
-  });
-
   it("disposes a session whose factory switched its own tool off before returning", () => {
-    __resetDevPreviewToolsForTests();
     register((next) => {
       useDevPreviewToolStore.getState().setActive(PANEL, null);
       return makeSession(next);
@@ -311,7 +242,6 @@ describe("dev preview tool sessions", () => {
   it("disposes a session that resolves after its preview let go", async () => {
     let resolve: ((session: FakeSession) => void) | undefined;
     let context: DevPreviewToolSessionContext | undefined;
-    __resetDevPreviewToolsForTests();
     register((next) => {
       context = next;
       return new Promise<FakeSession>((r) => {
@@ -332,7 +262,6 @@ describe("dev preview tool sessions", () => {
   it("adopts a session that resolves while its preview still holds it", async () => {
     let resolve: ((session: FakeSession) => void) | undefined;
     let context: DevPreviewToolSessionContext | undefined;
-    __resetDevPreviewToolsForTests();
     register((next) => {
       context = next;
       return new Promise<FakeSession>((r) => {
@@ -345,43 +274,5 @@ describe("dev preview tool sessions", () => {
     await Promise.resolve();
     expect(live()).toBe(created);
     expect(created.disposals).toBe(0);
-  });
-});
-
-describe("the dev preview's own tools", () => {
-  beforeEach(() => {
-    builtIn.createSession = makeSession;
-    // No plugin at all: nothing a built-in tool may wait on.
-    usePluginRuntimeStore.setState({ pluginMetaById: new Map(), disabledPluginIds: new Set() });
-  });
-
-  afterEach(() => {
-    builtIn.createSession = null;
-  });
-
-  it("runs one with no plugin loaded, declared or enabled", () => {
-    useDevPreviewToolStore.getState().setActive(PANEL, "element-picker");
-    expect(sessions).toHaveLength(1);
-    expect(live()).toBe(sessions[0]);
-  });
-
-  it("keeps it running whatever happens to the plugins", () => {
-    useDevPreviewToolStore.getState().setActive(PANEL, "element-picker");
-    usePluginRuntimeStore.setState({
-      pluginMetaById: new Map([
-        [PLUGIN, { devMode: false, displayName: "Acme", previewToolIds: new Set<string>() }],
-      ]),
-      disabledPluginIds: new Set([PLUGIN, "daintree.sveltekit-builder"]),
-    });
-    expect(useDevPreviewToolStore.getState().activeByPanel[PANEL]).toBe("element-picker");
-    expect(sessions[0]?.disposals).toBe(0);
-    expect(live()).toBe(sessions[0]);
-  });
-
-  it("still ends it with its preview", () => {
-    useDevPreviewToolStore.getState().setActive(PANEL, "element-picker");
-    panels({ [PANEL]: "trash" });
-    expect(sessions[0]?.disposals).toBe(1);
-    expect(live()).toBeNull();
   });
 });

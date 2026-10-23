@@ -12,7 +12,7 @@ import { useDevPreviewToolStore } from "@/store/devPreviewToolStore";
 import type {
   DevPreviewToolContext,
   DevPreviewToolDefinition,
-} from "@/registry/devPreviewToolRegistry";
+} from "@/services/devPreviewTools/types";
 import {
   seedDevPreviewToolContext,
   startDevPreviewToolSessions,
@@ -139,11 +139,9 @@ async function toggleDevPreviewTool(
   // the pane is what normally starts the session manager — and the tool
   // would then sit switched on with no session behind it until one did.
   startDevPreviewToolSessions();
-  // A plugin's tool registers unconditionally; only an enabled plugin's
-  // may start or focus anything. A preview's own tools are always there.
   const tool = resolveDevPreviewTool(toolId);
   if (!tool) {
-    throw new Error(`No dev preview tool "${toolId}" is available — is its plugin enabled?`);
+    throw new Error(`No dev preview tool "${toolId}" exists`);
   }
   const panels = usePanelStore.getState();
   const isLivePreview = (id: string): boolean => {
@@ -176,11 +174,11 @@ async function toggleDevPreviewTool(
     if (!started.ok || !started.result.panelId) return { panelId: null, active: false };
     panelId = started.result.panelId;
     await refuseUnlessToolApplies(tool, panelId, ctx);
-    // Detection took a round trip: the plugin may have been disabled and
-    // the preview trashed in it, and the session manager clears an
-    // activation for either. Say what the store says, never what was asked.
+    // Detection took a round trip: the preview may have been trashed in it,
+    // and the session manager clears that activation. Say what the store
+    // says, never what was asked.
     const live = usePanelStore.getState().panelsById[panelId];
-    if (!resolveDevPreviewTool(toolId) || !live || live.location === "trash") {
+    if (!live || live.location === "trash") {
       return { panelId, active: false };
     }
     // The pane for a preview started a moment ago may not have mounted;
@@ -265,14 +263,14 @@ export function registerDevServerActions(
     id: "devPreview.toggleTool",
     title: "Toggle dev preview tool",
     description:
-      "Switch a plugin-contributed dev preview tool on or off in a dev preview of the active worktree — the focused one, else the first open one — opening a dev preview when the worktree has none. Returns the panel it acted on.",
+      "Switch a dev preview tool on or off in a dev preview of the active worktree — the focused one, else the first open one — opening a dev preview when the worktree has none. Returns the panel it acted on.",
     category: "devServer",
     kind: "command",
     danger: "safe",
     scope: "renderer",
     palette: { mode: "hidden" },
     argsSchema: z.object({
-      toolId: z.string().min(1).describe("The tool's registered id, namespaced by its plugin."),
+      toolId: z.string().min(1).describe('The tool\'s id, such as "element-picker".'),
       panelId: z
         .string()
         .min(1)

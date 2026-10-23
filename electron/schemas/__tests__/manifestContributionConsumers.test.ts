@@ -38,9 +38,7 @@ import {
   PanelToolbarItemSchema,
   PluginApplicationSchema,
   PluginApplicationTourRefSchema,
-  PreviewToolContributionSchema,
   ProjectTemplateContributionSchema,
-  GuestAdapterContributionSchema,
   ProcessToolContributionSchema,
   RecipeContributionSchema,
   RecipeContributionTerminalSchema,
@@ -148,9 +146,6 @@ const PROCESS_TOOL_REGISTRY = "shared/config/pluginProcessToolRegistry.ts";
 const PLUGIN_ICON_ASSETS = "electron/services/plugin/pluginIconAssets.ts";
 const PROCESS_DETECTOR_REGISTRIES = "electron/services/ProcessDetector/registries.ts";
 const AGENT_MCP_DECLARED = "electron/services/pluginAgentMcp/declaredEndpoints.ts";
-const DEV_PREVIEW_TOOL_REGISTRY = "src/registry/devPreviewToolRegistry.ts";
-const BUILTIN_GUEST_ADAPTERS = "electron/services/sitePreview/builtinGuestAdapters.ts";
-const GUEST_ADAPTER_ASSETS = "electron/services/sitePreview/guestAdapterAssets.ts";
 const WORKTREE_SETUP_STEP_REGISTRY = "electron/services/worktreeSetupStepRegistry.ts";
 const WORKTREE_SETUP_RPC = "electron/services/worktreeSetupRpcServer.ts";
 const LIFECYCLE_COMMAND_TRUST = "electron/workspace-host/lifecycleCommandTrust.ts";
@@ -206,8 +201,6 @@ const SWEPT_SCHEMAS = {
   fileDecorationProviders: FileDecorationContributionSchema,
   worktreeDeleteNotes: WorktreeDeleteNotesContributionSchema,
   fileEditors: FileEditorContributionSchema,
-  previewTools: PreviewToolContributionSchema,
-  guestAdapters: GuestAdapterContributionSchema,
   agents: AgentContributionSchema,
   processTools: ProcessToolContributionSchema,
   settings: SettingDefinitionObjectSchema,
@@ -284,8 +277,6 @@ const TOP_LEVEL_GROUPS = [
   "fileDecorationProviders",
   "worktreeDeleteNotes",
   "fileEditors",
-  "previewTools",
-  "guestAdapters",
   "agents",
   "processTools",
   "settings",
@@ -376,8 +367,6 @@ type FieldConsumerCoverage = {
     ConsumerDescriptor
   >;
   fileEditors: Record<keyof z.infer<typeof FileEditorContributionSchema>, ConsumerDescriptor>;
-  previewTools: Record<keyof z.infer<typeof PreviewToolContributionSchema>, ConsumerDescriptor>;
-  guestAdapters: Record<keyof z.infer<typeof GuestAdapterContributionSchema>, ConsumerDescriptor>;
   agents: Record<keyof z.infer<typeof AgentContributionSchema>, ConsumerDescriptor>;
   processTools: Record<keyof z.infer<typeof ProcessToolContributionSchema>, ConsumerDescriptor>;
   settings: Record<keyof z.infer<typeof SettingDefinitionObjectSchema>, ConsumerDescriptor>;
@@ -1646,46 +1635,6 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
       mode: "verbatim",
       consumers: [{ file: "src/panels/file/FilePane.tsx", symbol: "availableModes (edit gate)" }],
       note: "Upper bound on the loaded file's byte size before the panel offers the editor; the host document refuses larger reads and saves.",
-    },
-  },
-  previewTools: {
-    id: {
-      mode: "verbatim",
-      consumers: [
-        { file: "src/store/pluginRuntimeStore.ts", symbol: "pullPluginRuntimeSnapshot" },
-        { file: DEV_PREVIEW_TOOL_REGISTRY, symbol: "isDeclared" },
-      ],
-      note: "Admits the renderer-registered tool of the same id; an undeclared tool stays hidden.",
-    },
-    title: {
-      mode: "intentional-metadata",
-      consumers: [{ file: PLUGIN_SCHEMA, symbol: "PreviewToolContributionSchema" }],
-      note: "The tool's own registration supplies the rendered label; the manifest states the name for the catalog and for review of what a built-in ships.",
-    },
-    iconId: {
-      mode: "intentional-metadata",
-      consumers: [{ file: PLUGIN_SCHEMA, symbol: "PreviewToolContributionSchema" }],
-      note: "Advisory, like contributes.views[].iconId — the tool's Button component owns the rendered glyph.",
-    },
-    guestAdapter: {
-      mode: "cross-reference",
-      consumers: [{ file: PLUGIN_SCHEMA, symbol: "preview_tool_guest_adapter_undeclared" }],
-      note: "Validated against contributes.guestAdapters in the same manifest, so a tool cannot name a runtime nothing registers.",
-    },
-  },
-  guestAdapters: {
-    id: {
-      mode: "verbatim",
-      consumers: [
-        { file: BUILTIN_GUEST_ADAPTERS, symbol: "registerBuiltinGuestAdapters" },
-        { file: GUEST_ADAPTER_ASSETS, symbol: "guestAdapterAssetPath" },
-      ],
-      note: "Registered as the site-preview adapter id the renderer binds by, and the asset path is derived from it.",
-    },
-    entry: {
-      mode: "verbatim",
-      consumers: [{ file: GUEST_ADAPTER_ASSETS, symbol: "listBuiltinGuestAdapters" }],
-      note: "The bundle's source entry; `scripts/build-main.mjs` mirrors this same read to hand it to esbuild, which emits the derived asset the startup registration reads back.",
     },
   },
   agents: {

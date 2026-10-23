@@ -98,10 +98,9 @@ function candidatesFor(filePath: string): readonly FileEditorRegistration[] {
 }
 
 /**
- * Loaded and enabled right now — the same gate `devPreviewToolRegistry`
- * applies — and its slot actually present, because a candidate whose renderer
- * entry never registered has no editor to offer and must not shadow a later
- * one that has.
+ * Loaded and enabled right now, and its slot actually present, because a
+ * candidate whose renderer entry never registered has no editor to offer and
+ * must not shadow a later one that has.
  */
 function isUsable(
   registration: FileEditorRegistration,

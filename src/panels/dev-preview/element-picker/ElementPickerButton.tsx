@@ -1,5 +1,5 @@
 import { SquareDashedMousePointer } from "lucide-react";
-import type { DevPreviewToolButtonProps } from "@/registry/devPreviewToolRegistry";
+import type { DevPreviewToolButtonProps } from "@/services/devPreviewTools/types";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 

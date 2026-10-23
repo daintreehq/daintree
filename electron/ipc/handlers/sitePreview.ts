@@ -21,7 +21,6 @@ import { defineIpcNamespace, op, opValidated } from "../define.js";
 import { getWebContentsForProject } from "../../window/webContentsRegistry.js";
 import { AppError } from "../../utils/errorTypes.js";
 import { getSitePreviewBridge, resetSitePreviewBridge } from "../../services/SitePreviewBridge.js";
-import { registerBuiltinGuestAdapters } from "../../services/sitePreview/builtinGuestAdapters.js";
 import type { HandlerDependencies } from "../types.js";
 import type { IpcContext } from "../types.js";
 import type {
@@ -170,12 +169,6 @@ export const sitePreviewNamespace = defineIpcNamespace({
 });
 
 export function registerSitePreviewHandlers(_deps: HandlerDependencies): () => void {
-  // Registered here rather than in a plugin's activation: the bodies are app
-  // assets, and the bridge must be able to resolve one whether or not the
-  // declaring plugin's renderer view has ever been loaded. Which adapters exist
-  // comes from the built-in manifests, so no plugin is named here.
-  const disposeAdapters = registerBuiltinGuestAdapters();
-
   const bridge = getSitePreviewBridge({
     // Supplied here rather than defaulted inside the bridge: `PluginService`
     // reaches the other way for its unload step, and the bridge importing it
@@ -233,7 +226,6 @@ export function registerSitePreviewHandlers(_deps: HandlerDependencies): () => v
   const disposeNamespace = sitePreviewNamespace.register();
   return () => {
     disposeNamespace();
-    disposeAdapters();
     void bridge.disposeAll();
     resetSitePreviewBridge();
   };

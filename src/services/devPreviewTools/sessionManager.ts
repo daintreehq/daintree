@@ -1,17 +1,14 @@
 import { useSyncExternalStore } from "react";
 import { logError } from "@/utils/logger";
-import {
-  getAvailableDevPreviewTool,
-  getDevPreviewTool,
-  type DevPreviewToolContext,
-  type DevPreviewToolDefinition,
-  type DevPreviewToolSession,
-  type DevPreviewToolSessionContext,
-} from "@/registry/devPreviewToolRegistry";
-import { isBuiltInDevPreviewTool, resolveDevPreviewTool } from "./builtInTools";
+import type {
+  DevPreviewToolContext,
+  DevPreviewToolDefinition,
+  DevPreviewToolSession,
+  DevPreviewToolSessionContext,
+} from "./types";
+import { resolveDevPreviewTool } from "./builtInTools";
 import { useDevPreviewToolStore } from "@/store/devPreviewToolStore";
 import { usePanelStore } from "@/store/panelStore";
-import { usePluginRuntimeStore } from "@/store/pluginRuntimeStore";
 
 /**
  * One tool session per dev preview, owned by the host rather than by whichever
@@ -20,10 +17,10 @@ import { usePluginRuntimeStore } from "@/store/pluginRuntimeStore";
  * A tool's surfaces come and go for reasons that have nothing to do with the
  * tool: the preview's dock tab is hidden, a sibling is maximised, the grid
  * remounts. The events that really end a tool are different ones — the tool is
- * switched off, the preview is trashed or removed, a plugin's tool loses its
- * plugin — and they are all the host's to see. So the session is created when
- * `activeByPanel` names the tool, kept while that entry stands, and disposed
- * when it goes; surfaces only consume it.
+ * switched off, the preview is trashed or removed — and they are all the
+ * host's to see. So the session is created when `activeByPanel` names the
+ * tool, kept while that entry stands, and disposed when it goes; surfaces only
+ * consume it.
  *
  * Store reads all happen inside function bodies, never at module evaluation,
  * so the static store imports here cannot form an eval-time cycle
@@ -228,9 +225,9 @@ function reconcile(): void {
 }
 
 function reconcileOnce(): void {
-  // A tool switched on for a preview that is gone, or by a plugin that is off,
-  // is cleared here rather than given a session: the store's own write-time
-  // prune only looks at entries that were already there.
+  // A tool switched on for a preview that is gone is cleared here rather than
+  // given a session: the store's own write-time prune only looks at entries
+  // that were already there.
   enforceLifetime();
   const before = useDevPreviewToolStore.getState().activeByPanel;
   for (const [panelId, entry] of [...entries]) {
@@ -247,10 +244,10 @@ function reconcileOnce(): void {
 }
 
 /**
- * The transitions the tool store cannot see for itself: a preview that was
- * trashed or removed, and a plugin that was disabled. Both end the tool, so
- * both clear the active entry — which is what disposes the session and what
- * stops a restored preview coming back holding a tool nothing is running.
+ * The transition the tool store cannot see for itself: a preview that was
+ * trashed or removed. That ends the tool, so it clears the active entry —
+ * which is what disposes the session and what stops a restored preview coming
+ * back holding a tool nothing is running.
  *
  * A preview the panel store no longer holds is gone, including when it was the
  * last one: a cleared store means this view's panels are over, which is exactly
@@ -262,21 +259,9 @@ function reconcileOnce(): void {
 function enforceLifetime(): void {
   const active = useDevPreviewToolStore.getState().activeByPanel;
   const panels = usePanelStore.getState();
-  const { disabledPluginIds, pluginMetaById } = usePluginRuntimeStore.getState();
-  for (const [panelId, toolId] of Object.entries(active)) {
+  for (const panelId of Object.keys(active)) {
     const panel = panels.panelsById[panelId];
-    const gone = panel === undefined || panel.location === "trash";
-    // A preview's own tools have no plugin to lose.
-    const tool = isBuiltInDevPreviewTool(toolId) ? undefined : getDevPreviewTool(toolId);
-    const disabled = tool !== undefined && disabledPluginIds.has(tool.pluginId);
-    // A manifest refresh that no longer declares the tool takes its surfaces
-    // away; the session must go with them, or a request it holds could still
-    // send after nothing is left to show it.
-    const undeclared =
-      tool !== undefined &&
-      pluginMetaById.has(tool.pluginId) &&
-      getAvailableDevPreviewTool(toolId) === undefined;
-    if (gone || disabled || undeclared) {
+    if (panel === undefined || panel.location === "trash") {
       // Each write re-enters `reconcile`, which either runs now or asks the
       // pass in progress to go round again; both end on what the store says.
       useDevPreviewToolStore.getState().setActive(panelId, null);
@@ -296,14 +281,9 @@ export function startDevPreviewToolSessions(): void {
   if (unsubscribe) return;
   const offTools = useDevPreviewToolStore.subscribe(reconcile);
   const offPanels = usePanelStore.subscribe(enforceLifetime);
-  const offPlugins = usePluginRuntimeStore.subscribe(() => {
-    enforceLifetime();
-    reconcile();
-  });
   unsubscribe = () => {
     offTools();
     offPanels();
-    offPlugins();
   };
   enforceLifetime();
   reconcile();

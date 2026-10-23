@@ -162,8 +162,8 @@ function resolveEntry(
   // Absence from the runtime mirror is "no snapshot yet", not "enabled": the
   // disabled set starts empty, so gating on it alone renders every owned slot
   // on cold start and drops the default-off ones once the first `plugin.list()`
-  // lands. `fileEditorRegistry.isUsable` and `devPreviewToolRegistry.isDeclared`
-  // already require a known plugin for the same reason; this is the same gate.
+  // lands. `fileEditorRegistry.isUsable` already requires a known plugin for
+  // the same reason; this is the same gate.
   if (!knownPluginIds.has(entry.pluginId)) return null;
   if (disabledPluginIds.has(entry.pluginId)) return null;
   return entry;
