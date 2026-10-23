@@ -16,7 +16,7 @@ import {
   readComposerMemory,
   updateComposerMemory,
 } from "../composerMemory";
-import { LEGACY_TOOL_ID } from "../legacyBridge";
+import { ELEMENT_PICKER_TOOL_ID } from "../toolId";
 import { useDevPreviewToolStore } from "@/store/devPreviewToolStore";
 import { usePanelStore } from "@/store/panelStore";
 
@@ -88,7 +88,7 @@ function send(overrides: { subjectKey?: string; prompt?: string; words?: string 
 beforeEach(() => {
   vi.useFakeTimers();
   previewIn("wt-1");
-  useDevPreviewToolStore.setState({ activeByPanel: { "preview-1": LEGACY_TOOL_ID } });
+  useDevPreviewToolStore.setState({ activeByPanel: { "preview-1": ELEMENT_PICKER_TOOL_ID } });
 });
 
 afterEach(() => {

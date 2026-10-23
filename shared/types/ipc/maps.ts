@@ -1927,6 +1927,8 @@ export interface IpcEventMap {
   "dev-preview:state-changed": DevPreviewStateChangedPayload;
   "dev-preview:all-sessions-changed": DevPreviewAllSessionsPayload;
   "site-preview:event": import("./sitePreview.js").SitePreviewPushPayload;
+  "element-picker:event": import("./elementPicker.js").ElementPickerPushPayload;
+  "element-picker:source-changed": import("./elementPicker.js").ElementPickerSourceChangedPush;
 
   // Webview console events
   "webview:console-message": import("./webviewConsole.js").SerializedConsoleRow;

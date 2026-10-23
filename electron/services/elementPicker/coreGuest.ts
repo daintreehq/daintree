@@ -33,6 +33,7 @@ import {
 } from "../../../shared/elementPicker/observation.js";
 import type { ElementPickerFramework } from "../../../shared/elementPicker/source.js";
 import type { SitePreviewMode } from "../../../shared/types/ipc/sitePreview.js";
+import type { ElementPickerReselectRequest } from "../../../shared/types/ipc/elementPicker.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import { AppError } from "../../utils/errorTypes.js";
 import { isExpectedCdpError } from "../../utils/webContentsLifecycle.js";
@@ -47,6 +48,7 @@ import {
   buildPickerClearSelectionSource,
   buildPickerDisposeSource,
   buildPickerModeSource,
+  buildPickerReselectSource,
   buildProbeSource,
 } from "./guestSources.js";
 import type { ExtractorAvailability, PickerAvailability } from "./guest/types.js";
@@ -85,6 +87,9 @@ export interface CoreGuestDeps {
 }
 
 type EvaluateResult = { result?: { value?: unknown }; exceptionDetails?: { text?: string } };
+
+/** What the bootstrap is asked to select again; the session is the bridge's to match, not the page's to hear. */
+export type CoreGuestReselectRequest = Omit<ElementPickerReselectRequest, "sessionId">;
 
 /**
  * A call into a world or frame whose document is gone. Expected here and
@@ -468,6 +473,34 @@ export class CoreGuest {
 
   clearHover(): Promise<void> {
     return this.callBootstrap(buildPickerClearHoverSource(this.installId));
+  }
+
+  /**
+   * Asks the bootstrap this install put in the current document to select
+   * again. False for anything short of its own yes: no install, a document
+   * that changed before or during the call, a world that went with it, or a
+   * page that answered something else.
+   */
+  async reselect(request: CoreGuestReselectRequest): Promise<boolean> {
+    const contextId = this.contextId;
+    const installId = this.installId;
+    const epoch = this.epoch;
+    if (contextId === null || installId === 0 || !this.isCurrent(epoch)) return false;
+    let evaluated: EvaluateResult | undefined;
+    try {
+      evaluated = (await this.deps.send("Runtime.evaluate", {
+        expression: buildPickerReselectSource(installId, request),
+        contextId,
+        returnByValue: true,
+        timeout: this.deps.evaluateTimeoutMs,
+      })) as EvaluateResult | undefined;
+    } catch (err) {
+      if (!isGoneContextError(err)) this.warn("reselect", err);
+      return false;
+    }
+    // A yes from a document that has since been replaced selected nothing the view can use.
+    if (!this.isCurrent(epoch) || evaluated?.exceptionDetails) return false;
+    return evaluated?.result?.value === true;
   }
 
   /**

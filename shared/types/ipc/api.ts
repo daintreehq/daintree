@@ -1093,6 +1093,16 @@ export interface ElectronAPI extends GeneratedElectronAPI {
       callback: (data: import("./sitePreview.js").SitePreviewPushPayload) => void
     ): () => void;
   };
+  // The invoke methods come from GeneratedElectronAPI; these are the two
+  // pushes: a core binding's traffic, and a workspace's source changes.
+  elementPicker: GeneratedElectronAPI["elementPicker"] & {
+    onEvent(
+      callback: (data: import("./elementPicker.js").ElementPickerPushPayload) => void
+    ): () => void;
+    onSourceChanged(
+      callback: (data: import("./elementPicker.js").ElementPickerSourceChangedPush) => void
+    ): () => void;
+  };
   git: GeneratedElectronAPI["git"] & {
     getFileDiff(
       cwd: string,

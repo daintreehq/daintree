@@ -24,8 +24,6 @@ import {
   ComponentDefinitionsResultSchema,
   DetectAppsArgsSchema,
   DetectAppsResultSchema,
-  BUILDER_TOOL_ID,
-  TOGGLE_BUILDER_ACTION_ID,
 } from "../shared/protocol.js";
 import type {
   ProjectFileReader,
@@ -153,36 +151,6 @@ export async function activate(host: BuiltinPluginHostApi): Promise<() => void> 
       previewPanelId
     );
   };
-
-  // Declared in the manifest so the palette lists it before activation; the
-  // handler binds here, on the first dispatch that activates the plugin.
-  await host.registerAction(
-    {
-      id: TOGGLE_BUILDER_ACTION_ID,
-      title: "Toggle Element Picker",
-      description:
-        "Switch the Element Picker on or off in this worktree's dev preview, opening the preview if none is running.",
-      category: "Dev preview",
-      kind: "command",
-      danger: "safe",
-      keywords: [
-        "element",
-        "picker",
-        "select",
-        "svelte",
-        "sveltekit",
-        "inspect",
-        "inspector",
-        "preview",
-        "agent",
-      ],
-      // Toggling a preview tool exercises none of the plugin's capabilities, so
-      // it asks for none: the host elevates a command to a confirm prompt from
-      // what it requires, and a dialog on every run of the command is not that.
-      requires: [],
-    },
-    async () => host.dispatch("devPreview.toggleTool", { toolId: BUILDER_TOOL_ID })
-  );
 
   await host.registerHandler(
     CHANNELS.workspaceOpen,

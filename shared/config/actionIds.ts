@@ -581,6 +581,7 @@ export const BUILT_IN_ACTION_IDS = [
   "devServer.start",
   "devPreview.stop",
   "devPreview.toggleTool",
+  "devPreview.toggleElementPicker",
 
   // -- devPreviewActions --
   "devPreview.reloadPreview",

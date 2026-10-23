@@ -8,7 +8,7 @@ import {
 } from "@/services/agentRequests";
 import { useDevPreviewToolStore } from "@/store/devPreviewToolStore";
 import { usePanelStore } from "@/store/panelStore";
-import { LEGACY_TOOL_ID } from "./legacyBridge.js";
+import { ELEMENT_PICKER_TOOL_ID } from "./toolId.js";
 import {
   putComposerDelivery,
   readComposerMemory,
@@ -60,7 +60,7 @@ function stillOwned(previewPanelId: string, worktreeId: string | null): boolean 
   const panel = usePanelStore.getState().panelsById[previewPanelId];
   if (!panel || panel.location === "trash") return false;
   if ((panel.worktreeId ?? null) !== worktreeId) return false;
-  return useDevPreviewToolStore.getState().activeByPanel[previewPanelId] === LEGACY_TOOL_ID;
+  return useDevPreviewToolStore.getState().activeByPanel[previewPanelId] === ELEMENT_PICKER_TOOL_ID;
 }
 
 function sameDelivery(a: ComposerDelivery | undefined, b: AgentRequestDelivery): boolean {

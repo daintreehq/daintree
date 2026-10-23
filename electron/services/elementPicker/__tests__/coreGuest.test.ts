@@ -38,6 +38,8 @@ function harness(
     noWorld?: true;
     /** The bootstrap evaluate fails as an evaluate into a world whose document is gone does. */
     worldGone?: true;
+    /** How the page answers a reselect: a value, or a thrown error. */
+    reselect?: (() => unknown) | { error: Error };
   } = {}
 ) {
   const calls: Call[] = [];
@@ -66,6 +68,11 @@ function harness(
       const expression = params.expression as string;
       if (params.contextId === CONTEXT_ID && overrides.worldGone) {
         throw new Error("Cannot find context with specified id");
+      }
+      if (expression.includes("api.reselect(")) {
+        const reselect = overrides.reselect ?? (() => ({ result: { value: true } }));
+        if (typeof reselect !== "function") throw reselect.error;
+        return reselect();
       }
       if (expression.includes("const api = { result: null }")) {
         const next = overrides.probeResults?.shift();
@@ -400,6 +407,90 @@ describe("CoreGuest", () => {
     h.guest.onGuestEvent(0, { type: "frameworksDetected", detections: SVELTE });
     await h.settle();
     expect(h.emitted).toEqual([]);
+  });
+
+  describe("reselect", () => {
+    const request = {
+      elementId: "el-3",
+      framework: "svelte" as const,
+      locator: { loc: { file: "src/App.svelte", line: 3, column: 2 }, index: 1 },
+      reveal: true,
+    };
+    const reselects = (h: ReturnType<typeof harness>) =>
+      h.calls.filter((call) => String(call.params.expression ?? "").includes("api.reselect("));
+
+    it("asks its own bootstrap, in the picker's world, for the answer by value", async () => {
+      const h = harness();
+      await h.install();
+
+      await expect(h.guest.reselect(request)).resolves.toBe(true);
+
+      const [call] = reselects(h);
+      expect(call?.params).toMatchObject({
+        contextId: CONTEXT_ID,
+        returnByValue: true,
+        timeout: 1000,
+      });
+      expect(call?.params.uniqueContextId).toBeUndefined();
+      const expression = String(call?.params.expression);
+      expect(expression).toContain("api.installId !== 7");
+      expect(expression).toContain(JSON.stringify(request));
+    });
+
+    it("asks nothing before an install, or of a document that is no longer current", async () => {
+      const fresh = harness();
+      await expect(fresh.guest.reselect(request)).resolves.toBe(false);
+      expect(reselects(fresh)).toHaveLength(0);
+
+      const h = harness();
+      await h.install();
+      h.state.epoch = 1;
+      await expect(h.guest.reselect(request)).resolves.toBe(false);
+      h.state.epoch = 0;
+      h.guest.invalidate();
+      await expect(h.guest.reselect(request)).resolves.toBe(false);
+      expect(reselects(h)).toHaveLength(0);
+    });
+
+    it("discards a yes from a document replaced while it was asked", async () => {
+      const state = { epoch: 0 as number | null };
+      const h = harness({
+        reselect: () => {
+          state.epoch = 1;
+          return { result: { value: true } };
+        },
+      });
+      h.deps.liveEpoch = () => state.epoch;
+      await h.install();
+      await expect(h.guest.reselect(request)).resolves.toBe(false);
+      expect(reselects(h)).toHaveLength(1);
+    });
+
+    it("answers false for anything short of the page's own yes", async () => {
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        for (const reselect of [
+          () => ({ result: { value: "true" } }),
+          () => ({ result: { value: 1 } }),
+          () => ({ result: {} }),
+          () => ({ exceptionDetails: { text: "threw" }, result: { value: true } }),
+          { error: new Error("Cannot find context with specified id") },
+        ]) {
+          const h = harness({ reselect });
+          await h.install();
+          await expect(h.guest.reselect(request)).resolves.toBe(false);
+        }
+        // A world that went with its document is expected; nothing to report.
+        expect(warn).not.toHaveBeenCalled();
+
+        const h = harness({ reselect: { error: new Error("Target crashed") } });
+        await h.install();
+        await expect(h.guest.reselect(request)).resolves.toBe(false);
+        expect(warn).toHaveBeenCalledTimes(1);
+      } finally {
+        warn.mockRestore();
+      }
+    });
   });
 
   it("disposes the bootstrap it installed, by install id, and then trusts nothing", async () => {

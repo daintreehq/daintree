@@ -33,24 +33,23 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import {
-  MAX_INSTRUCTION_CHARS,
-  scopesForSubject as scopesFor,
-  matchScope,
-  isAgentBusy,
-  isUnresolvedScope,
-  type AgentTarget,
-  type TaskScope,
-} from "./agentTask.js";
+import { MAX_INSTRUCTION_CHARS, isAgentBusy, type AgentTarget } from "./agentTask.js";
 import { buildAgentTaskPrompt } from "./agentPrompt.js";
-import { pagePromptInput, sitePromptInput } from "./legacyPrompt.js";
-import { ownerFile, type InspectorController, type SelectionState } from "./inspectorController.js";
+import {
+  elementLabel,
+  isUnresolvedScope,
+  matchScope,
+  primaryObservation,
+  promptInputFor,
+  scopesFor,
+  type TaskScope,
+} from "./selection.js";
+import type { InspectorController, SelectionState } from "./inspectorController.js";
 import { InspectorNotice } from "./InspectorNotice.js";
 import { WaitingRow } from "./WaitingRow.js";
 import { useAgentTargets } from "./useAgentTargets.js";
 import {
   isSettledDelivery,
-  readComposerMemory,
   removeComposerDelivery,
   updateComposerMemory,
   useComposerMemory,
@@ -58,39 +57,9 @@ import {
   type ComposerPin,
 } from "./composerMemory.js";
 import { deliverAgentRequest, forceAgentRequest, removeAgentRequest } from "./agentRequest.js";
-import { isPageSelection } from "./pageSelection.js";
 
 const STALE_SOURCE =
   "The source changed since you picked this — select it again in the page, then send";
-
-/** Pinned drafts with a definitions lookup out, across composer remounts. */
-const pinnedLookups = new Set<string>();
-
-function settlePinnedDefinitions(
-  controller: InspectorController,
-  memoryKey: string,
-  pin: ComposerPin
-): void {
-  // A page selection cites no source, so there is nothing to look up.
-  if (isPageSelection(pin.selection)) return;
-  const selection = pin.selection;
-  const lookup = `${memoryKey}\n${selection.selectionId}`;
-  if (pinnedLookups.has(lookup)) return;
-  pinnedLookups.add(lookup);
-  void controller
-    .lookupDefinitions(selection, pin.picked)
-    .then((resolved) => {
-      if (resolved === null) return;
-      const latest = readComposerMemory(memoryKey).pinned;
-      if (
-        latest?.selection.selectionId === pin.selection.selectionId &&
-        latest.definitions === null
-      ) {
-        updateComposerMemory(memoryKey, { pinned: { ...latest, ...resolved } });
-      }
-    })
-    .finally(() => pinnedLookups.delete(lookup));
-}
 
 /**
  * A fresh session can be any agent the launcher offers — the host's own list,
@@ -161,10 +130,14 @@ function fitsSegments(scopes: TaskScope[]): boolean {
   );
 }
 
-/** `routes/pricing/+page.svelte:12:4`: enough of the path, and the column, to tell two calls apart. */
-function callSiteHint(site: { file: string; line: number; column: number }): string {
+/**
+ * `routes/pricing/+page.svelte:12`: enough of the path to tell two calls
+ * apart. The page's own line, which every runtime counts from one; columns it
+ * counts from either, so they are left out rather than shown a place off.
+ */
+function callSiteHint(site: { file: string; line: number }): string {
   const parts = site.file.split("/");
-  return `${parts.slice(-2).join("/")}:${site.line}:${site.column + 1}`;
+  return `${parts.slice(-2).join("/")}:${site.line}`;
 }
 
 type Destination =
@@ -245,33 +218,10 @@ export function AgentComposer({
   const current: Pinned | null = useMemo(
     () =>
       selection.status === "ready"
-        ? {
-            selection: selection.selection,
-            file: ownerFile(selection.selection, worktreePath),
-            // A component picked on the page is what the request is about.
-            scope: scopesFor(
-              selection.selection,
-              selection.scope === "component" ? selection.component : null,
-              selection.definitions
-            ).pickedIndex,
-            picked:
-              selection.scope === "component" && selection.component ? selection.component : null,
-            definitions: selection.definitions,
-            revisions: selection.revisions,
-          }
-        : selection.status === "observed" && selection.page !== null
-          ? {
-              // The page's account of the element: one scope, and no file
-              // whose bytes could change under it.
-              selection: selection.page,
-              file: null,
-              scope: 0,
-              picked: null,
-              definitions: {},
-              revisions: {},
-            }
-          : null,
-    [selection, worktreePath]
+        ? // A component picked on the page is what the request is about.
+          { selection: selection.selection, scope: scopesFor(selection.selection).pickedIndex }
+        : null,
+    [selection]
   );
   const [unpinnedScope, setUnpinnedScope] = useState<{ selectionId: string; scope: number } | null>(
     null
@@ -283,26 +233,6 @@ export function AgentComposer({
     (current && unpinnedScope?.selectionId === current.selection.selectionId
       ? { ...current, scope: unpinnedScope.scope }
       : current);
-  // Definitions arrive after the selection; a draft pinned before they did
-  // takes them from the live selection it was written about.
-  const live =
-    subject !== null &&
-    current !== null &&
-    subject.selection.selectionId === current.selection.selectionId;
-  const definitions = live ? current.definitions : (subject?.definitions ?? null);
-  const revisions = live ? current.revisions : (subject?.revisions ?? null);
-  // A draft pinned before its definitions arrived settles them itself: from
-  // the live selection while it is the same one, otherwise by asking main.
-  useEffect(() => {
-    if (!pinned || pinned.definitions !== null) return;
-    if (current?.selection.selectionId === pinned.selection.selectionId) {
-      if (current.definitions !== null) {
-        setPinned({ ...pinned, definitions: current.definitions, revisions: current.revisions });
-      }
-      return;
-    }
-    settlePinnedDefinitions(controller, memoryKey, pinned);
-  }, [pinned, current, controller, memoryKey, setPinned]);
   // A selection the page proved again after a hot update is the same subject
   // on newer bytes. The draft follows it: left on the old one it would cite
   // revisions that can no longer verify, and offer "use current selection" for
@@ -314,18 +244,15 @@ export function AgentComposer({
     // longer names leaves the pin alone, and the user is offered the current
     // selection.
     const scope = matchScope(
-      scopesFor(pinned.selection, pinned.picked, pinned.definitions).scopes[pinned.scope],
-      scopesFor(current.selection, current.picked, current.definitions).scopes
+      scopesFor(pinned.selection).scopes[pinned.scope],
+      scopesFor(current.selection).scopes
     );
     if (scope < 0) return;
     setPinned({ ...current, scope });
   }, [pinned, current, supersedes, setPinned]);
-  // The picked component's identity travels with the pin, so a pinned request
-  // keeps naming the component the user highlighted.
-  const scopes = subject ? scopesFor(subject.selection, subject.picked, definitions).scopes : [];
+  const scopes = subject ? scopesFor(subject.selection).scopes : [];
   const activeScope = subject ? scopes[subject.scope] : undefined;
   const scopeUnproven = isUnresolvedScope(activeScope);
-  const scopePending = scopeUnproven && definitions === null;
   const chooseScope = (scope: number) => {
     if (pinned) setPinned({ ...pinned, scope });
     else if (current) setUnpinnedScope({ selectionId: current.selection.selectionId, scope });
@@ -333,7 +260,7 @@ export function AgentComposer({
 
   const busy =
     destination?.kind === "terminal" ? isAgentBusy(destination.target.agentState) : false;
-  const needsScopeChoice = scopeUnproven && !scopePending;
+  const needsScopeChoice = scopeUnproven;
   // A selection the page or its source has moved past can't vouch for the
   // locations a request would name.
   const subjectStale =
@@ -366,14 +293,13 @@ export function AgentComposer({
     draft.trim() &&
     !uncertain &&
     !scopeUnproven &&
-    !subjectStale &&
-    revisions !== null
+    !subjectStale
   );
 
   const onDraftChange = (next: string) => {
     setDraft(next);
     if (next.trim() && chosen === null && destination) setChosen(keyOf(destination));
-    if (next.trim() && !pinned && subject) setPinned({ ...subject, definitions, revisions });
+    if (next.trim() && !pinned && subject) setPinned(subject);
     if (!next.trim() && pinned) setPinned(null);
   };
 
@@ -390,14 +316,14 @@ export function AgentComposer({
    * the selection it was made about only when nothing live stands for it.
    */
   const enqueue = (instruction: string, made: Pinned, target: Destination) => {
-    const madeScopes = scopesFor(made.selection, made.picked, made.definitions).scopes;
+    const madeScopes = scopesFor(made.selection).scopes;
     const resolve = (): { about: Pinned; scope: TaskScope | undefined } | "pending" => {
       const followed = controller.followSelection(made.selection.selectionId);
       if (followed === "pending") return "pending";
       if (followed !== null) {
-        const scopes = scopesFor(followed.selection, followed.picked, followed.definitions).scopes;
+        const scopes = scopesFor(followed).scopes;
         const scope = matchScope(madeScopes[made.scope], scopes);
-        if (scope >= 0) return { about: { ...followed, scope }, scope: scopes[scope] };
+        if (scope >= 0) return { about: { selection: followed, scope }, scope: scopes[scope] };
       }
       return { about: made, scope: madeScopes[made.scope] };
     };
@@ -409,9 +335,10 @@ export function AgentComposer({
       sentDraft: instruction,
       subject: made,
       // What the prompt is about, beside the words: the same sentence aimed at
-      // another element, another scope, or bytes that have since changed builds
-      // a different prompt, so it must not be folded into a run already going.
-      subjectKey: `${made.selection.selectionId}\n${made.scope}\n${JSON.stringify(made.revisions)}`,
+      // another element, or another scope, builds a different prompt, so it
+      // must not be folded into a run already going. A selection carries the
+      // revisions it cites, so its id stands for its bytes too.
+      subjectKey: `${made.selection.selectionId}\n${made.scope}`,
       destination:
         target.kind === "launch"
           ? { kind: "launch", agentId: target.agentId, title: target.name }
@@ -428,13 +355,7 @@ export function AgentComposer({
         const now = resolve();
         if (now === "pending") return SUBJECT_UNSETTLED;
         if (after === "built" && builtFor !== now.about.selection.selectionId) return STALE_SOURCE;
-        const about = now.about.selection;
-        if (
-          !isPageSelection(about) &&
-          !(await controller.sourcesUnchanged(about, now.about.revisions))
-        ) {
-          return STALE_SOURCE;
-        }
+        if (!(await controller.sourcesUnchanged(now.about.selection))) return STALE_SOURCE;
         if (after !== "built") checked = now;
         return null;
       },
@@ -442,20 +363,19 @@ export function AgentComposer({
         const now = checked ?? { about: made, scope: madeScopes[made.scope] };
         const about = now.about.selection;
         builtFor = about.selectionId;
-        const picture = await controller.pagePicture(about.selectionId);
+        const [picture, project] = await Promise.all([
+          controller.pagePicture(about.selectionId),
+          controller.projectFor(about),
+        ]);
         return buildAgentTaskPrompt(
-          isPageSelection(about)
-            ? pagePromptInput({ instruction, selection: about, worktreePath, picture })
-            : sitePromptInput({
-                instruction,
-                selection: about,
-                file: now.about.file,
-                worktreePath,
-                place: await controller.pagePlace(about),
-                scope: now.scope,
-                picture,
-                shown: controller.shownNodes(about.selectionId),
-              })
+          promptInputFor({
+            instruction,
+            selection: about,
+            scope: now.scope,
+            worktreePath,
+            project,
+            picture,
+          })
         );
       },
     });
@@ -463,7 +383,7 @@ export function AgentComposer({
 
   const send = () => {
     if (!subject || !destination || !canSend) return;
-    enqueue(draft, { ...subject, definitions, revisions }, destination);
+    enqueue(draft, subject, destination);
   };
 
   const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -500,13 +420,10 @@ export function AgentComposer({
   const openTerminal = (id: string) =>
     void actionService.dispatch("panel.focus", { panelId: id }, { source: "user" });
 
-  const first = subject?.selection.nodes[0];
   const subjectLabel =
-    activeScope?.kind === "component"
+    activeScope?.kind === "component" || activeScope?.kind === "file"
       ? activeScope.label
-      : first?.label ||
-        (first && "definition" in first ? first.definition?.tagName : first?.tagName) ||
-        "element";
+      : elementLabel(subject ? primaryObservation(subject.selection) : undefined);
   const retargetable =
     pinned !== null &&
     current !== null &&
@@ -571,9 +488,9 @@ export function AgentComposer({
                 options={scopes.map((scope, index) => ({
                   value: String(index),
                   label: scope.kind === "element" ? "Element" : scope.label,
-                  // The file main resolved for the component, once it has: a scope
-                  // is a promise about where the request will land.
-                  ...(scope.kind === "component" && scope.file ? { tooltip: scope.file } : {}),
+                  // The file the host found it in, once it has: a scope is a
+                  // promise about where the request will land.
+                  ...(scope.kind !== "element" && scope.file ? { tooltip: scope.file } : {}),
                 }))}
                 value={String(subject.scope)}
                 onChange={(value) => chooseScope(Number(value))}
@@ -599,7 +516,7 @@ export function AgentComposer({
                   <SelectItem
                     key={index}
                     value={String(index)}
-                    title={scope.kind === "component" ? (scope.file ?? undefined) : undefined}
+                    title={scope.kind === "element" ? undefined : (scope.file ?? undefined)}
                   >
                     {/* Two lines, so the call site that tells two `Card`s apart
                         is never the part a narrow drawer clips. */}

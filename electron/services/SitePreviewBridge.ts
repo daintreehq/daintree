@@ -64,7 +64,8 @@ import {
 } from "./sitePreview/originPolicy.js";
 import { onWebContentsDestroyed } from "../window/webContentsDestroyed.js";
 import type { CoreGuestAssetLoader } from "./elementPicker/guestAssets.js";
-import type { CoreGuest } from "./elementPicker/coreGuest.js";
+import type { CoreGuest, CoreGuestReselectRequest } from "./elementPicker/coreGuest.js";
+import type { ElementPickerReselectRequest } from "../../shared/types/ipc/elementPicker.js";
 import type { ElementPickerPushPayload, ElementPickerSink } from "./elementPicker/types.js";
 
 const DEV_PREVIEW_PANEL_KIND = "dev-preview";
@@ -745,8 +746,8 @@ export class SitePreviewBridge {
     // source paths: evaluating them there would hand a third-party page the
     // layout of the user's repository.
     if (binding.suspended) return false;
-    // Source-location reselection is the plugin runtime's; the core picker
-    // gains it with the framework extractors that know a location.
+    // This shape is the plugin runtime's; a core binding is asked through
+    // `reselectElementPicker`, by its framework's locator.
     if (binding.core !== null) return false;
     // `buildReselectSource` JSON-encodes every value, which is what keeps a
     // path from closing the literal it lands in. This bounds the shape as
@@ -765,6 +766,33 @@ export class SitePreviewBridge {
       timeout: GUEST_EVALUATE_TIMEOUT_MS,
     })) as { result?: { value?: unknown } } | undefined;
     return result?.result?.value === true;
+  }
+
+  /**
+   * Select again, in a core picker binding's page, the element the view had
+   * selected: by the id the page reported while it is still the same node,
+   * else by the framework's locator. False when the page found nothing, for a
+   * plugin binding, and while suspended, for the same reason `reselect` is:
+   * a locator is a path in the user's repository, and the document standing
+   * there is one the policy excluded.
+   */
+  async reselectElementPicker(
+    projectId: string,
+    sessionId: string,
+    request: ElementPickerReselectRequest
+  ): Promise<boolean> {
+    const binding = this.bindings.get(sessionId);
+    if (!binding || binding.projectId !== projectId) {
+      throw new AppError({
+        code: "NOT_FOUND",
+        message: "No site preview binding for that session",
+        context: { sessionId },
+      });
+    }
+    if (binding.core === null || binding.suspended) return false;
+    const plain = plainReselectRequest(request);
+    if (plain === null) return false;
+    return binding.core.reselect(plain);
   }
 
   /** Drop the guest's selection so the page stops highlighting what the drawer refused. */
@@ -1491,6 +1519,42 @@ function isSourceLocation(value: unknown): boolean {
 
 function isPlainString(value: unknown): boolean {
   return typeof value === "string";
+}
+
+/**
+ * The reselect request rebuilt from fields the bridge has looked at, as
+ * `reselect` checks its location: it is JSON-encoded into host-authored guest
+ * source, and nothing it carries is the caller's to shape beyond these.
+ */
+function plainReselectRequest(
+  request: ElementPickerReselectRequest
+): CoreGuestReselectRequest | null {
+  const out: CoreGuestReselectRequest = {};
+  if (request.elementId !== undefined) {
+    if (!isPlainString(request.elementId)) return null;
+    out.elementId = request.elementId;
+  }
+  if (request.framework !== undefined) {
+    if (!isPlainString(request.framework)) return null;
+    out.framework = request.framework;
+  }
+  if (request.locator !== undefined) {
+    const { loc, index, component } = request.locator;
+    if (!isSourceLocation(loc) || !Number.isSafeInteger(index) || index < 0) return null;
+    if (component !== undefined && !isSourceLocation(component)) return null;
+    out.locator = {
+      loc: { file: loc.file, line: loc.line, column: loc.column },
+      index,
+      ...(component === undefined
+        ? {}
+        : { component: { file: component.file, line: component.line, column: component.column } }),
+    };
+  }
+  if (request.reveal !== undefined) {
+    if (typeof request.reveal !== "boolean") return null;
+    out.reveal = request.reveal;
+  }
+  return out;
 }
 
 function toState(binding: Binding): SitePreviewBindingState {

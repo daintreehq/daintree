@@ -159,9 +159,10 @@ export async function readBoundedSource(
 /** The revision a file holds now under the same cap, or null when it is not readable source. */
 export async function readSourceRevision(
   absolute: string,
-  limitBytes: number
+  limitBytes: number,
+  signal?: AbortSignal
 ): Promise<FileRevision | null> {
-  const read = await readBoundedSource(absolute, limitBytes).catch(() => null);
+  const read = await readBoundedSource(absolute, limitBytes, signal).catch(() => null);
   return read?.status === "ok" ? revisionOf(read.bytes) : null;
 }
 

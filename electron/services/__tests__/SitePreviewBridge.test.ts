@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("electron", () => ({
   webContents: { getAllWebContents: () => [], fromId: () => null },
+  app: { getAppPath: () => "/nonexistent", isPackaged: false },
 }));
 
 import { SitePreviewBridge } from "../SitePreviewBridge.js";
@@ -142,6 +143,8 @@ function makeHarness(
       if (adapterLoad.fails) throw new Error("asset missing");
       return adapterBodies.get(adapterId) ?? "";
     },
+    // Enough of the core picker's catalog to install its bootstrap; no extractor ships.
+    loadCoreGuestAsset: async (id) => (id === "bootstrap" ? "/* bootstrap */" : null),
   });
   return {
     bridge,
@@ -1667,5 +1670,128 @@ describe("SitePreviewBridge observation addressing", () => {
     // The runtime in the user's page goes with it: nothing is left listening,
     // so leaving it observing would be a tap with no consumer.
     expect(harness.wc.debugger.methods()).toContain("Runtime.removeBinding");
+  });
+});
+
+describe("SitePreviewBridge core picker reselect", () => {
+  const ISOLATED_CONTEXT_ID = 31;
+  const request = {
+    sessionId: "session-1",
+    elementId: "el-3",
+    framework: "svelte" as const,
+    locator: {
+      loc: { file: "src/routes/+page.svelte", line: 12, column: 4 },
+      index: 1,
+      component: { file: "src/lib/Card.svelte", line: 1, column: 0 },
+    },
+    reveal: false,
+  };
+
+  beforeEach(() => {
+    __resetCdpLeasesForTests();
+  });
+
+  afterEach(() => {
+    __resetCdpLeasesForTests();
+  });
+
+  async function coreHarness() {
+    const harness = makeHarness();
+    harness.wc.debugger.responses.set("Page.createIsolatedWorld", {
+      executionContextId: ISOLATED_CONTEXT_ID,
+    });
+    const sunk: unknown[] = [];
+    const state = await harness.bridge.bindElementPicker({
+      projectId: PROJECT_ID,
+      panelId: PANEL_ID,
+      mode: "select",
+      subscriberWebContentsId: SUBSCRIBER_WC_ID,
+      sink: (payload) => sunk.push(payload),
+    });
+    return { ...harness, state, sunk };
+  }
+
+  function reselects(harness: ReturnType<typeof makeHarness>) {
+    return harness.wc.debugger.commands.filter(
+      (c) =>
+        c.method === "Runtime.evaluate" && String(c.params?.expression).includes("api.reselect(")
+    );
+  }
+
+  it("asks the binding's own guest, with the request rebuilt from fields it checked", async () => {
+    const harness = await coreHarness();
+    harness.wc.debugger.responses.set("Runtime.evaluate", { result: { value: true } });
+
+    const smuggled = { ...request, toJSON: "x", script: "alert(1)" } as typeof request;
+    await expect(
+      harness.bridge.reselectElementPicker(PROJECT_ID, harness.state.sessionId, smuggled)
+    ).resolves.toBe(true);
+
+    const [call] = reselects(harness);
+    expect(call?.params).toMatchObject({ contextId: ISOLATED_CONTEXT_ID, returnByValue: true });
+    const expression = String(call?.params?.expression);
+    const { sessionId, ...forwarded } = request;
+    expect(expression).toContain(JSON.stringify(forwarded));
+    expect(expression).not.toContain("alert(1)");
+    expect(expression).not.toContain(sessionId);
+  });
+
+  it("answers false for a plugin binding, and for a locator it cannot bound", async () => {
+    const plugin = makeHarness();
+    await plugin.bridge.bind({
+      projectId: PROJECT_ID,
+      panelId: PANEL_ID,
+      adapterId: ADAPTER_ID,
+      mode: "select",
+      subscriberWebContentsId: SUBSCRIBER_WC_ID,
+    });
+    plugin.wc.debugger.responses.set("Runtime.evaluate", { result: { value: true } });
+    await expect(
+      plugin.bridge.reselectElementPicker(PROJECT_ID, "session-1", request)
+    ).resolves.toBe(false);
+    expect(reselects(plugin)).toHaveLength(0);
+
+    const core = await coreHarness();
+    core.wc.debugger.responses.set("Runtime.evaluate", { result: { value: true } });
+    for (const locator of [
+      { ...request.locator, index: -1 },
+      { ...request.locator, loc: { ...request.locator.loc, line: Number.NaN } },
+      { ...request.locator, component: { file: "", line: 1, column: 0 } },
+    ]) {
+      await expect(
+        core.bridge.reselectElementPicker(PROJECT_ID, core.state.sessionId, {
+          ...request,
+          locator,
+        })
+      ).resolves.toBe(false);
+    }
+    expect(reselects(core)).toHaveLength(0);
+  });
+
+  it("carries no source path into a document the origin policy excluded", async () => {
+    const harness = await coreHarness();
+    announceContexts(harness.wc);
+    harness.wc.url = "https://accounts.example.com/login";
+    harness.wc.emit("did-navigate");
+    await vi.waitFor(() => {
+      expect(harness.bridge.getState(PROJECT_ID, harness.state.sessionId)?.suspended).toBe(true);
+    });
+    harness.wc.debugger.responses.set("Runtime.evaluate", { result: { value: true } });
+
+    await expect(
+      harness.bridge.reselectElementPicker(PROJECT_ID, harness.state.sessionId, request)
+    ).resolves.toBe(false);
+    expect(reselects(harness)).toHaveLength(0);
+  });
+
+  it("refuses a session that is not the caller project's", async () => {
+    const harness = await coreHarness();
+    await expect(
+      harness.bridge.reselectElementPicker("project-2", harness.state.sessionId, request)
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
+    await expect(
+      harness.bridge.reselectElementPicker(PROJECT_ID, "session-unknown", request)
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
+    expect(reselects(harness)).toHaveLength(0);
   });
 });

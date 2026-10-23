@@ -42,7 +42,6 @@ const PLUGIN_MANIFEST = path.join(BUILTIN_PLUGINS_ROOT, "sveltekit-builder/plugi
 interface BuilderManifest {
   name: string;
   contributes: {
-    previewTools: { id: string; guestAdapter?: string }[];
     guestAdapters: { id: string; entry: string }[];
   };
 }
@@ -132,32 +131,6 @@ describe("site preview guest protocol", () => {
     const match = /export const GUEST_ADAPTER_ID = "([^"]+)";/.exec(readPluginProtocol());
     const declared = readBuilderManifest().contributes.guestAdapters.map((a) => a.id);
     expect(declared).toContain(match?.[1]);
-  });
-
-  it("agrees with the manifest on the id of the preview tool the renderer registers", () => {
-    // The renderer entry restates this literal to keep zod out of the eager
-    // bundle, and `devPreviewToolRegistry` hides a tool the manifest does not
-    // declare — so an undeclared rename here is a builder that never appears.
-    const source = readPluginProtocol();
-    const pluginId = /export const PLUGIN_ID = "([^"]+)";/.exec(source)?.[1];
-    // Composed from PLUGIN_ID in the plugin, so read the suffix out of the
-    // template literal rather than expecting a plain string.
-    const suffix = /export const BUILDER_TOOL_ID = `\$\{PLUGIN_ID\}\.([a-z0-9-]+)`;/.exec(
-      source
-    )?.[1];
-    expect(pluginId).toBeDefined();
-    expect(suffix).toBeDefined();
-    const declared = readBuilderManifest().contributes.previewTools.map((t) => t.id);
-    expect(declared).toContain(`${pluginId}.${suffix}`);
-  });
-
-  it("points each declared preview tool at a guest adapter the same manifest declares", () => {
-    const { contributes } = readBuilderManifest();
-    const adapterIds = new Set(contributes.guestAdapters.map((a) => a.id));
-    for (const tool of contributes.previewTools) {
-      if (tool.guestAdapter === undefined) continue;
-      expect(adapterIds).toContain(tool.guestAdapter);
-    }
   });
 
   it("derives the guest asset path the build emits from the declared adapter id", () => {

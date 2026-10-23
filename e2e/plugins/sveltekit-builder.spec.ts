@@ -12,7 +12,7 @@ import { CARD_FILE, createSvelteKitProject, PAGE_FILE } from "./helpers/svelteki
 import { installSiteAgent } from "./helpers/siteAgent";
 
 const PLUGIN_ID = "daintree.sveltekit-builder";
-const TOGGLE_ACTION = `${PLUGIN_ID}.toggle-builder`;
+const TOGGLE_ACTION = "devPreview.toggleElementPicker";
 const TOGGLE_TITLE = "Toggle Element Picker";
 const AGENT_CLASSES = "bg-indigo-600 text-white";
 
@@ -175,7 +175,7 @@ function inspector(page: Page) {
  * Every step is its own test in a serial block, so a failure names the first
  * link in the chain that broke instead of timing out at the end.
  */
-test.describe.serial("Plugin: SvelteKit Tools", () => {
+test.describe.serial("Element Picker on a SvelteKit app", () => {
   test.beforeAll(async () => {
     ({ dir: projectDir, cleanup } = createSvelteKitProject("sveltekit-builder"));
     const agent = installSiteAgent(projectDir);
@@ -247,27 +247,19 @@ test.describe.serial("Plugin: SvelteKit Tools", () => {
     cleanup?.();
   });
 
-  test("enabling the built-in registers its command", async () => {
+  test("the Element Picker is the dev preview's own, with the old plugin switched off", async () => {
     const { window } = ctx;
     await window.evaluate(
-      (id) => globalThis.window.electron.plugin.setEnabled(id, true),
+      (id) => globalThis.window.electron.plugin.setEnabled(id, false),
       PLUGIN_ID
     );
-    await expect
-      .poll(
-        async () =>
-          (await window.evaluate(() => globalThis.window.electron.plugin.getActions())).map(
-            (action) => action.id
-          ),
-        { timeout: PLUGIN_TIMEOUT }
-      )
-      .toContain(TOGGLE_ACTION);
-    // It lives in the dev preview now, not in a panel of its own.
+    const actions = await window.evaluate(() => globalThis.window.electron.plugin.getActions());
+    expect(actions.map((action) => action.id).filter((id) => id.startsWith(PLUGIN_ID))).toEqual([]);
     const kinds = await window.evaluate(() => globalThis.window.electron.plugin.getPanelKinds());
     expect(kinds.map((kind) => kind.id).filter((id) => id.startsWith(PLUGIN_ID))).toEqual([]);
   });
 
-  test("the command switches SvelteKit Tools on, starting the site in a dev preview", async () => {
+  test("the command switches the Element Picker on, starting the site in a dev preview", async () => {
     const { window } = ctx;
     const port = await freePort();
     await saveCurrentProjectSettings(window, {
@@ -288,7 +280,7 @@ test.describe.serial("Plugin: SvelteKit Tools", () => {
     });
   });
 
-  test("the dev preview's own toolbar button toggles SvelteKit Tools", async () => {
+  test("the dev preview's own toolbar button toggles the Element Picker", async () => {
     const { window } = ctx;
     const strip = window.getByRole("toolbar", { name: "Element Picker" });
     await strip.getByRole("button", { name: "Close Element Picker" }).click();

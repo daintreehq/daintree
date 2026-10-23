@@ -12,8 +12,8 @@ import type {
   UnavailableReason,
 } from "@shared/elementPicker";
 import { pluralize } from "@/lib/pluralize";
-import { redactUrl } from "./legacyBridge.js";
-import type { PageScreenshot } from "./pageSelection.js";
+import { redactUrl } from "./pageText.js";
+import { chainOf, type PageScreenshot } from "./selection.js";
 
 /**
  * One selected element as a prompt needs it. A `SelectionObservation` is one
@@ -48,7 +48,13 @@ export type PromptScope =
        * import at its call site: its own reading, not anything the page said.
        */
       importedFrom?: SourceFileRef;
-    };
+    }
+  /**
+   * The file the outermost component the user wrote is used in: a route page
+   * or a layout. A file and nothing finer, which the host found the call site
+   * (or the element) in.
+   */
+  | { kind: "file"; file: SourceFileRef };
 
 /** The project around the page, as the host read it. Every value in it is Daintree's own. */
 export interface PromptProject {
@@ -336,26 +342,6 @@ function targetName(record: ComponentRecord | null): string {
     : "a component the page didn't name";
 }
 
-/**
- * The components an element renders inside, innermost first, by the render
- * edges the page reported. An omitted edge ends the walk: it was not observed,
- * which is not the same as there being nothing further out.
- */
-function renderChain(observation: PromptObservation): ComponentRecord[] {
-  const chain = observation.componentChain;
-  const byId = new Map(chain.components.map((record) => [record.componentId, record]));
-  const walked: ComponentRecord[] = [];
-  const seen = new Set<string>();
-  for (let id = chain.nearestId; id !== null && !seen.has(id);) {
-    const record = byId.get(id);
-    if (record === undefined) break;
-    seen.add(id);
-    walked.push(record);
-    id = record.renderParentId ?? null;
-  }
-  return walked;
-}
-
 /** Elements described in full; past these, a selection lists the rest by source and selector. */
 const DESCRIBED_NODES = 8;
 
@@ -383,7 +369,7 @@ function copiesLine(element: PromptElement): string | null {
 
 function chainLines(element: PromptElement): string[] {
   const { observation } = element;
-  const chain = renderChain(observation);
+  const chain = chainOf(observation);
   if (chain.length === 0) return [];
   const lines = chain.map((record) => {
     const claims = record.sourceCandidates.map((candidate) =>
@@ -536,6 +522,9 @@ export function buildAgentTaskPrompt(input: AgentPromptInput): string {
       );
     }
     lines.push("- Picked by clicking this element inside it:");
+  } else if (scope.kind === "file") {
+    lines.push(`- Target: the file ${hostPath(scope.file.path)}`);
+    lines.push("- Picked by clicking this element inside it:");
   }
   // Every selected element goes out, not just the first: "make these match"
   // is meaningless with one of them missing.
@@ -554,10 +543,14 @@ export function buildAgentTaskPrompt(input: AgentPromptInput): string {
 
   lines.push("");
   const target = scoped?.name ? `the ${pageData(scoped.name.value)} component` : "that component";
-  lines.push(
+  const keep =
     scope.kind === "component"
-      ? `Keep the change inside ${target} unless the request needs more. If it needs a wider change, say so and name what else you touched.`
-      : "Keep the change to this element unless the request needs more. If it needs a wider change, say so and name what else you touched."
+      ? `inside ${target}`
+      : scope.kind === "file"
+        ? "inside that file"
+        : "to this element";
+  lines.push(
+    `Keep the change ${keep} unless the request needs more. If it needs a wider change, say so and name what else you touched.`
   );
   return lines.join("\n");
 }

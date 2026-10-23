@@ -119,12 +119,15 @@ describe("the Element Picker host boundary", () => {
   }, 60_000);
 
   it("loads an adapter's code only for an app its registration detects", async () => {
-    // The context service is small and comes with the host; no adapter does.
+    // The context service is small and comes with the host; of each registered
+    // adapter only its registration does, which detects from a manifest.
     const service = `${HOST_DIR}ElementPickerHost.ts`;
     const hostGraph = await metafileOf(service, NATIVE_EXTERNAL);
     const eagerHost = [...walkEagerGraph(hostGraph, service)];
     expect(eagerHost).toContain(`${ADAPTERS_DIR}projectContext.ts`);
-    expect(eagerHost.filter((file) => file.startsWith(`${ADAPTERS_DIR}sveltekit/`))).toEqual([]);
+    expect(eagerHost.filter((file) => file.startsWith(`${ADAPTERS_DIR}sveltekit/`)).sort()).toEqual(
+      [`${ADAPTERS_DIR}sveltekit/discovery.ts`, `${ADAPTERS_DIR}sveltekit/registration.ts`]
+    );
 
     // Detection reads a manifest; the route parser and config readers wait for `load()`.
     const registration = `${ADAPTERS_DIR}sveltekit/registration.ts`;

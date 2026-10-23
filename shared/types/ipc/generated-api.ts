@@ -320,6 +320,29 @@ export interface GeneratedElectronAPI {
       ...args: IpcInvokeMap["drive-lease:take-over"]["args"]
     ): Promise<IpcInvokeMap["drive-lease:take-over"]["result"]>;
   };
+  elementPicker: {
+    bind(
+      ...args: IpcInvokeMap["element-picker:bind"]["args"]
+    ): Promise<IpcInvokeMap["element-picker:bind"]["result"]>;
+    closeWorkspace(
+      ...args: IpcInvokeMap["element-picker:workspace-close"]["args"]
+    ): Promise<IpcInvokeMap["element-picker:workspace-close"]["result"]>;
+    describeProject(
+      ...args: IpcInvokeMap["element-picker:describe-project"]["args"]
+    ): Promise<IpcInvokeMap["element-picker:describe-project"]["result"]>;
+    openWorkspace(
+      ...args: IpcInvokeMap["element-picker:workspace-open"]["args"]
+    ): Promise<IpcInvokeMap["element-picker:workspace-open"]["result"]>;
+    reselect(
+      ...args: IpcInvokeMap["element-picker:reselect"]["args"]
+    ): Promise<IpcInvokeMap["element-picker:reselect"]["result"]>;
+    resolve(
+      ...args: IpcInvokeMap["element-picker:resolve"]["args"]
+    ): Promise<IpcInvokeMap["element-picker:resolve"]["result"]>;
+    sourceRevisions(
+      ...args: IpcInvokeMap["element-picker:source-revisions"]["args"]
+    ): Promise<IpcInvokeMap["element-picker:source-revisions"]["result"]>;
+  };
   eventInspector: {
     clear(
       ...args: IpcInvokeMap["event-inspector:clear"]["args"]

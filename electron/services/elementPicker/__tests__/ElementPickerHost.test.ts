@@ -11,10 +11,15 @@ vi.mock("../../../utils/logger.js", () => ({
   logError: vi.fn(),
 }));
 
-import { ElementPickerHost, type ElementPickerHostOptions } from "../ElementPickerHost.js";
-import type {
-  HostSourceResolver,
-  ResolveResponse,
+import {
+  ElementPickerHost,
+  MAX_SOURCE_REVISION_PATHS,
+  type ElementPickerHostOptions,
+} from "../ElementPickerHost.js";
+import {
+  RESOLVE_BUDGET_CEILINGS,
+  type HostSourceResolver,
+  type ResolveResponse,
 } from "../../../../shared/elementPicker/resolver.js";
 import type { ResolverLoaders } from "../worker/runtime.js";
 import type { ProjectAdapter, ProjectAdapterRegistration } from "../projectAdapters/types.js";
@@ -928,5 +933,120 @@ describe("ElementPickerHost project context", () => {
       status: "unavailable",
       reason: "cancelled",
     });
+  });
+});
+
+describe("ElementPickerHost source revisions", () => {
+  it("answers what each file holds now, read in main without starting the host", async () => {
+    const { host, children } = harness();
+    const id = await workspace(host);
+
+    const revisions = await host.sourceRevisions(id, [
+      "app/src/App.svelte",
+      "app/src/Plain.svelte",
+    ]);
+
+    expect(revisions).toEqual([
+      { path: "app/src/App.svelte", revision: sha256(path.join(root, "app", "src", "App.svelte")) },
+      {
+        path: "app/src/Plain.svelte",
+        revision: sha256(path.join(root, "app", "src", "Plain.svelte")),
+      },
+    ]);
+    expect(children).toHaveLength(0);
+    expect(host.running).toBe(false);
+  });
+
+  it("answers null for a file it may not read or cannot, without refusing the rest", async () => {
+    const { host } = harness();
+    const id = await workspace(host);
+    fs.symlinkSync(
+      path.join(root, "other", "Elsewhere.svelte"),
+      path.join(root, "app", "src", "Escape.svelte")
+    );
+    fs.writeFileSync(
+      path.join(root, "app", "src", "Huge.svelte"),
+      Buffer.alloc(RESOLVE_BUDGET_CEILINGS.maxFileBytes + 1, 0x61)
+    );
+    fs.mkdirSync(path.join(root, "app", "src", "Folder.svelte"));
+    const refused = [
+      // Inside the worktree, outside the app the workspace is held to.
+      "other/Elsewhere.svelte",
+      // Inside the app, through a link that leads out of it.
+      "app/src/Escape.svelte",
+      "app/src/Missing.svelte",
+      "app/src/Huge.svelte",
+      "app/src/Folder.svelte",
+      // Not workspace-relative refs at all.
+      "../outside.svelte",
+      "app/../other/Elsewhere.svelte",
+      "app/./src/App.svelte",
+      path.join(root, "app", "src", "App.svelte"),
+      "app\\src\\App.svelte",
+      "",
+    ];
+
+    const revisions = await host.sourceRevisions(id, [...refused, "app/src/App.svelte"]);
+
+    expect(revisions.filter((entry) => entry.revision !== null).map((entry) => entry.path)).toEqual(
+      ["app/src/App.svelte"]
+    );
+    expect(revisions.map((entry) => entry.path)).toEqual([...refused, "app/src/App.svelte"]);
+  });
+
+  it("reads each path once, answering in the order it was first named", async () => {
+    const { host } = harness();
+    const id = await workspace(host);
+    const revisions = await host.sourceRevisions(id, [
+      "app/src/Plain.svelte",
+      "app/src/App.svelte",
+      "app/src/Plain.svelte",
+    ]);
+    expect(revisions.map((entry) => entry.path)).toEqual([
+      "app/src/Plain.svelte",
+      "app/src/App.svelte",
+    ]);
+  });
+
+  it("refuses a list past its bound or holding anything but paths", async () => {
+    const { host } = harness();
+    const id = await workspace(host);
+    const tooMany = Array.from(
+      { length: MAX_SOURCE_REVISION_PATHS + 1 },
+      (_, index) => `app/src/F${index}.svelte`
+    );
+    await expect(host.sourceRevisions(id, tooMany)).rejects.toMatchObject({
+      code: "INVALID_REQUEST",
+    });
+    await expect(
+      host.sourceRevisions(id, ["app/src/App.svelte", 7] as unknown as string[])
+    ).rejects.toMatchObject({ code: "INVALID_REQUEST" });
+    await expect(
+      host.sourceRevisions(id, tooMany.slice(0, MAX_SOURCE_REVISION_PATHS))
+    ).resolves.toHaveLength(MAX_SOURCE_REVISION_PATHS);
+  });
+
+  it("refuses an unknown or released workspace, and answers nothing once disposed", async () => {
+    const { host } = harness();
+    const id = await workspace(host);
+    await expect(host.sourceRevisions("nope", ["app/src/App.svelte"])).rejects.toMatchObject({
+      code: "UNKNOWN_WORKSPACE",
+    });
+    host.releaseWorkspace(id);
+    await expect(host.sourceRevisions(id, ["app/src/App.svelte"])).rejects.toMatchObject({
+      code: "UNKNOWN_WORKSPACE",
+    });
+    await host.dispose();
+    await expect(host.sourceRevisions(id, ["app/src/App.svelte"])).rejects.toMatchObject({
+      code: "HOST_DISPOSED",
+    });
+  });
+
+  it("answers nothing for a workspace released while it was reading", async () => {
+    const { host } = harness();
+    const id = await workspace(host);
+    const pending = host.sourceRevisions(id, ["app/src/App.svelte", "app/src/Plain.svelte"]);
+    host.releaseWorkspace(id);
+    await expect(pending).rejects.toMatchObject({ code: "UNKNOWN_WORKSPACE" });
   });
 });

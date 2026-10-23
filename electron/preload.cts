@@ -138,6 +138,7 @@ import { buildPaintFabricSurfacePreloadBindings } from "./ipc/handlers/paintFabr
 import { buildWebviewNavigationPreloadBindings } from "./ipc/handlers/webviewNavigation.preload.js";
 import { buildWebviewCapturePreloadBindings } from "./ipc/handlers/webviewCapture.preload.js";
 import { buildSitePreviewPreloadBindings } from "./ipc/handlers/sitePreview.preload.js";
+import { buildElementPickerPreloadBindings } from "./ipc/handlers/elementPicker.preload.js";
 import { buildWebviewEmulationPreloadBindings } from "./ipc/handlers/webviewEmulation.preload.js";
 import { buildWorktreeConfigPreloadBindings } from "./ipc/handlers/worktreeConfig.preload.js";
 import { buildTerminalLayoutPreloadBindings } from "./ipc/handlers/terminalLayout.preload.js";
@@ -203,6 +204,10 @@ import type {
   DevPreviewAllSessionsPayload,
 } from "../shared/types/ipc.js";
 import type { SitePreviewPushPayload } from "../shared/types/ipc/sitePreview.js";
+import type {
+  ElementPickerPushPayload,
+  ElementPickerSourceChangedPush,
+} from "../shared/types/ipc/elementPicker.js";
 import type { TerminalActivityPayload } from "../shared/types/terminal.js";
 import type { PaneNotifyState } from "../shared/types/terminalNotify.js";
 import type {
@@ -2542,6 +2547,18 @@ function buildElectronApi(): ElectronAPI {
 
       onEvent: (callback: (payload: SitePreviewPushPayload) => void) =>
         _typedOn(CHANNELS.SITE_PREVIEW_EVENT, callback),
+    },
+
+    // Core Element Picker. Like the bridge, no way to choose what runs in the
+    // page; a workspace names a worktree of the sender's project, never a path.
+    elementPicker: {
+      ...buildElementPickerPreloadBindings(_unwrappingInvoke),
+
+      onEvent: (callback: (payload: ElementPickerPushPayload) => void) =>
+        _typedOn(CHANNELS.ELEMENT_PICKER_EVENT, callback),
+
+      onSourceChanged: (callback: (payload: ElementPickerSourceChangedPush) => void) =>
+        _typedOn(CHANNELS.ELEMENT_PICKER_SOURCE_CHANGED, callback),
     },
 
     // Git API

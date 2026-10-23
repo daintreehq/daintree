@@ -1,59 +1,52 @@
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import type {
-  SiteGuestNodeObservation,
   SitePreviewBindingState,
-  SitePreviewCandidate,
   SitePreviewDetachReason,
   SitePreviewMode,
-  SitePreviewPushPayload,
 } from "@shared/types/ipc/sitePreview";
+import {
+  ELEMENT_PICKER_WORKSPACE_CLOSED,
+  type ElementPickerBindRequest,
+  type ElementPickerPushPayload,
+  type ElementPickerReselectRequest,
+  type ElementPickerSourceChangedPush,
+  type ElementPickerSourceRevisionsResult,
+  type ElementPickerWorkspaceOpenRequest,
+  type ElementPickerWorkspaceOpenResult,
+} from "@shared/types/ipc/elementPicker";
+import type {
+  ElementPickerEvent,
+  ElementPickerFramework,
+  ProjectContextOutcome,
+  ResolveRequest,
+  ResolveResponse,
+  SelectionObservation,
+  SelectionScope,
+} from "@shared/elementPicker";
+import { RESOLVE_BUDGET_CEILINGS } from "@shared/elementPicker/resolver";
 import type {
   DevPreviewToolSession,
   DevPreviewToolSessionContext,
 } from "@/registry/devPreviewToolRegistry";
+import { clientErrorText, isClientAppError } from "@/utils/clientAppError";
 import { cancelAgentRequests } from "./agentRequest.js";
-import {
-  callSiteKey,
-  citedFiles,
-  componentCallSites,
-  type SourceRevisions,
-  type ComponentDefinitions,
-  type CallSite,
-  type PickedComponent,
-  type PagePlace,
-} from "./agentTask.js";
 import { forgetComposerMemories } from "./composerMemory.js";
 import { isRemoteWindow } from "@/hooks/useHostPlatform";
-import {
-  unionBounds,
-  type ShownNode,
-  type PageScreenshot,
-  type PageSelection,
-} from "./pageSelection.js";
-import { mismatchMessage, wireFailureMessage } from "./copy.js";
+import { mismatchMessage, runtimeIssueMessage, wireFailureMessage } from "./copy.js";
 import { usePanelStore } from "@/store/panelStore";
+import { redactUrl } from "./pageText.js";
 import {
-  CHANNELS,
-  ComponentDefinitionsResultSchema,
-  GUEST_ADAPTER_ID,
-  GuestEventSchema,
-  SourceRevisionsResultSchema,
-  ProjectModelResultSchema,
-  IssuePushSchema,
-  PLUGIN_ID,
-  PUSH_CHANNELS,
-  SelectionResolveResultSchema,
-  SourceChangedPushSchema,
-  WorkspaceOpenResultSchema,
-  loadRouteMatch,
-  redactUrl,
-  singleLineLabel,
-  type ProjectModel,
-  type RouteNode,
-  type SiteSelection,
-  type SupportVerdict,
+  citedRevisions,
+  displayLine,
+  elementClaim,
+  heldPaths,
+  svelteEvidence,
+  unionBounds,
+  type PageScreenshot,
+  type PickedSelection,
+  type SourcePoint,
   type Viewport,
-} from "./legacyBridge.js";
+} from "./selection.js";
 
 /**
  * One controller per dev preview with the Element Picker switched on — the
@@ -66,32 +59,30 @@ import {
  * reach us before the `epoch-advanced` push for the same epoch.
  */
 
-export interface SitePreviewApi {
-  listCandidates(): Promise<SitePreviewCandidate[]>;
-  bind(request: {
-    panelId: string;
-    /** Names a host-registered guest runtime; the host loads its body. */
-    adapterId: string;
-    mode?: SitePreviewMode;
-  }): Promise<SitePreviewBindingState>;
+export interface ElementPickerApi {
+  bind(request: ElementPickerBindRequest): Promise<SitePreviewBindingState>;
+  reselect(request: ElementPickerReselectRequest): Promise<boolean>;
+  openWorkspace(
+    request: ElementPickerWorkspaceOpenRequest
+  ): Promise<ElementPickerWorkspaceOpenResult>;
+  closeWorkspace(request: { workspaceId: string }): Promise<{ closed: boolean }>;
+  resolve(request: ResolveRequest): Promise<ResolveResponse>;
+  describeProject(request: { workspaceId: string; url: string }): Promise<ProjectContextOutcome>;
+  sourceRevisions(request: {
+    workspaceId: string;
+    paths: string[];
+  }): Promise<ElementPickerSourceRevisionsResult>;
+  onEvent(callback: (payload: ElementPickerPushPayload) => void): () => void;
+  onSourceChanged(callback: (payload: ElementPickerSourceChangedPush) => void): () => void;
+}
+
+/** The site-preview bridge's binding lifecycle, which serves the core picker's bindings too. */
+export interface PreviewSessionApi {
   detach(request: { sessionId: string }): Promise<void>;
   setMode(request: { sessionId: string; mode: SitePreviewMode }): Promise<SitePreviewBindingState>;
-  /** Select the element compiled from `loc` in the page; false when it is not there. */
-  reselect(request: {
-    sessionId: string;
-    loc: { file: string; line: number; column: number };
-    /** Which of the elements sharing `loc`, in document order. */
-    index?: number;
-    /** The component call site to select the element as a member of. */
-    component?: { file: string; line: number; column: number };
-    /** The id the page reported the element under, to ask for it by identity while it is still that node. */
-    occurrence?: string;
-  }): Promise<boolean>;
   /** Drop the page's selection without observing anything. */
   clearSelection(request: { sessionId: string }): Promise<void>;
   clearHover(request: { sessionId: string }): Promise<void>;
-  getState(request: { sessionId: string }): Promise<SitePreviewBindingState | null>;
-  onEvent(callback: (payload: SitePreviewPushPayload) => void): () => void;
 }
 
 export interface ElementCaptureApi {
@@ -110,11 +101,10 @@ export interface ElementCaptureApi {
 }
 
 export interface InspectorDeps {
-  sitePreview: SitePreviewApi;
-  invoke(channel: string, args: unknown): Promise<unknown>;
-  on(channel: string, callback: (payload: unknown) => void): () => void;
+  picker: ElementPickerApi;
+  preview: PreviewSessionApi;
   now(): number;
-  /** Takes the picture a page selection carries; absent where the host offers none. */
+  /** Takes the picture a selection carries; absent where the host offers none. */
   capture?: ElementCaptureApi;
   /** The window is attached to another machine, where a local picture's path means nothing. */
   remoteWindow?: () => boolean;
@@ -135,7 +125,7 @@ export type BindingState =
       panelId: string;
       url: string | null;
       /**
-       * The preview shows a document outside the adapter's origins, so the
+       * The preview shows a document outside the picker's origins, so the
        * host withheld the runtime. Still bound: the next local document
        * installs on its own.
        */
@@ -151,34 +141,21 @@ export type WorkspaceState =
   | { status: "opening" }
   | {
       status: "ready";
-      workspaceSessionId: string;
-      appRoot: string;
-      /** Whether this app's Svelte and Kit versions are ones we parse. */
-      support: SupportVerdict;
-      /** Every app the worktree holds, when there is more than one to switch between. */
-      appRoots: string[];
+      workspaceId: string;
+      /** The app reads are contained to, worktree-relative; `.` for the worktree itself. */
+      appPath: string;
+      /** Every app the worktree was found to hold. */
+      appPaths: string[];
+      scanComplete: boolean;
     }
-  | { status: "ambiguous"; appRoots: string[] }
-  /** `scanComplete` false: the walk ran out of budget, so no app was found rather than none existing. */
-  | { status: "no-app"; scanComplete: boolean }
+  /** More than one app and nothing says which the preview serves: the user chooses. */
+  | { status: "ambiguous"; appPaths: string[]; scanComplete: boolean }
   | { status: "failed"; message: string };
-
-/** A frame the trail can hand to a crumb: a component invocation with a tag. */
-function namesComponent(frame: { type: string; componentTag?: string }): boolean {
-  return frame.type === "component" && frame.componentTag !== undefined;
-}
 
 export interface PageState {
   epoch: number;
-  routeId: string | null;
   url: string;
   viewport: Viewport;
-  /**
-   * What the page's Svelte dev metadata turned out to support, or null until
-   * the page has probed it. `ancestry` false means the trail can name elements
-   * but never the components above them, so a component cannot be picked.
-   */
-  metadata: { locations: boolean; ancestry: boolean } | null;
 }
 
 export type StaleReason = "document-changed" | "source-changed" | "preview-detached";
@@ -186,24 +163,9 @@ export type StaleReason = "document-changed" | "source-changed" | "preview-detac
 export type SelectionState =
   | { status: "none" }
   | { status: "resolving"; epoch: number; requestId: number }
-  /**
-   * Seen in the page, but no source identity can be resolved for it. `page`
-   * is what an agent can still be told about it — the page's own account —
-   * when there is no source to trace it to at all; null while there may yet
-   * be (a workspace still opening, a page still loading).
-   */
-  | {
-      status: "observed";
-      epoch: number;
-      node: SiteGuestNodeObservation;
-      nodeCount: number;
-      page: PageSelection | null;
-    }
   | {
       status: "ready";
-      selection: SiteSelection;
-      /** Worktree-relative file that owns the primary node's markup, when known. */
-      file: string | null;
+      selection: PickedSelection;
       stale: StaleReason | null;
       /**
        * The page is being asked for this element again after a change, so the
@@ -216,57 +178,84 @@ export type SelectionState =
        * element on newer bytes, which a draft pinned to one of them follows.
        */
       supersedes?: string[];
-      /** A whole component invocation (its rendered roots) rather than one element. */
-      scope: "element" | "component";
-      /** For a component selection: the selected component's call site. */
-      component: PickedComponent | null;
-      /**
-       * Where each component on the chain is written, read from source by main.
-       * Null until main answers; a component scope without a file can't be sent.
-       */
-      definitions: ComponentDefinitions;
-      /** The revisions every cited file had when its claims were read; null until then. */
-      revisions: SourceRevisions;
     }
   /** The document moved on before the resolve finished. */
   | { status: "lost" }
   /**
-   * The owning file changed moments ago; the page may still show the old
-   * markup. `retrying` while the click is being asked for again by itself.
+   * A file the selection cites changed moments ago; the page may still show
+   * the old markup. `retrying` while the click is being asked for again by itself.
    */
   | { status: "settling"; retrying?: boolean }
   | { status: "failed"; message: string };
 
 /**
  * The last proven element, in the terms the page can be asked for it again:
- * what {@link InspectorController.selectComponent} names when the user picks a
- * component out of the trail. Refreshed by every proven resolution, and null
- * for a copy the page could not place — "the first one" would be a guess, and
- * past the page's scan bound even a count of one is only a floor.
+ * by the id the page reported it under, while it is still that node, and by
+ * the framework's locator, which a hot update cannot invalidate. Refreshed by
+ * every proven resolution.
  */
 interface Continuity {
-  loc: { file: string; line: number; column: number };
-  locIndex: number;
-  /** What the page reported the element as; the reselect names it first. */
-  occurrence: string;
-  /** The tag it was proved as, so an answer about a different element is refused. */
-  tagName: string;
-  /** How many copies shared its location, and the render chain above it. */
-  sameLocCount: number;
-  chain: string;
+  elementId: string;
   /**
-   * The document `occurrence` was minted in. The page numbers occurrences from
-   * one again in every new document, so after a reload the same id is some
-   * other element: it names this one only while the epoch still matches.
+   * The document `elementId` was minted in. The page mints ids afresh in every
+   * new document, so after a reload the same id is some other element: it
+   * names this one only while the epoch still matches.
    */
   epoch: number;
+  /** Svelte's place for the element: the location it stamped, and which copy there. Null when it has none. */
+  locator: { loc: SourcePoint; index: number } | null;
+  /** The tag it was proved as, so an answer about a different element is refused. */
+  tagName: string;
+  /** How many copies shared its location, and what drew it, from where. */
+  sameLocCount: number | null;
+  chain: string;
 }
 
-/** The render ancestry as one comparable value: what drew the element, from where. */
-function chainOf(node: SiteGuestNodeObservation): string {
-  return node.ancestry
-    .map((frame) => `${frame.type}@${frame.file}:${frame.line}:${frame.column}`)
+/** What drew an element, from where, as one comparable value. */
+function chainKey(observation: SelectionObservation): string {
+  const evidence = svelteEvidence(observation);
+  if (evidence) {
+    return evidence.ancestry
+      .map((frame) => `${frame.type}@${frame.file}:${frame.line}:${frame.column}`)
+      .join(">");
+  }
+  return observation.componentChain.components
+    .map((record) => {
+      const site = record.sourceCandidates.find((entry) => entry.kind === "component-invocation");
+      const at = site ? `${site.file}:${site.location.line}:${site.location.column}` : "";
+      return `${record.name?.value ?? ""}@${at}`;
+    })
     .join(">");
+}
+
+/** The call site the page reported for a component in an observation's chain. */
+function invocationSite(
+  observation: SelectionObservation,
+  componentId: string
+): SourcePoint | null {
+  const record = observation.componentChain.components.find(
+    (entry) => entry.componentId === componentId
+  );
+  const site = record?.sourceCandidates.find((entry) => entry.kind === "component-invocation");
+  return site ? { file: site.file, line: site.location.line, column: site.location.column } : null;
+}
+
+/**
+ * Svelte's own place for the element: where `__svelte_meta.loc` stamped it,
+ * in the page's spelling, and which of the copies stamped there it is — the
+ * terms the page finds it again by after a hot update replaced the node.
+ */
+function svelteLocator(observation: SelectionObservation): Continuity["locator"] {
+  const evidence = svelteEvidence(observation);
+  if (evidence?.locIndex === undefined) return null;
+  const stamp = observation.sourceCandidates.find(
+    (entry) => entry.framework === "svelte" && entry.kind === "template-location"
+  );
+  if (!stamp || stamp.kind !== "template-location" || stamp.location === null) return null;
+  return {
+    loc: { file: stamp.file, line: stamp.location.line, column: stamp.location.column },
+    index: evidence.locIndex,
+  };
 }
 
 /**
@@ -279,8 +268,9 @@ function chainOf(node: SiteGuestNodeObservation): string {
  */
 interface Reprove {
   record: Continuity;
-  component: { file: string; line: number; column: number } | null;
-  /** The owning file changed, as opposed to the node simply leaving the page. */
+  /** The component call site a component selection was widened to. */
+  component: SourcePoint | null;
+  /** A cited file changed, as opposed to the node simply leaving the page. */
   sourceChanged: boolean;
   /** The page reloaded under it: a failure is said as that, not as the element having gone. */
   reloaded: boolean;
@@ -304,15 +294,6 @@ const SUPERSEDES_KEPT = 64;
  */
 const REPROVE_ATTEMPTS = 6;
 
-/** A selection a queued request can be rebuilt against: proved, with its citations known. */
-export interface FollowedSelection {
-  selection: SiteSelection;
-  file: string | null;
-  picked: PickedComponent | null;
-  definitions: NonNullable<ComponentDefinitions>;
-  revisions: NonNullable<SourceRevisions>;
-}
-
 /**
  * The one thing the picker can do about an issue, recorded where the operation
  * is known rather than guessed at by the surface. Data, not a thunk: the state
@@ -326,6 +307,8 @@ export interface InspectorIssue {
   message: string;
   /** The page's own verdict, when it came from the page. */
   code?: string;
+  /** The framework the page's verdict is about, when it named one. */
+  framework?: ElementPickerFramework;
   /**
    * The diagnostic behind the title. Separate, because a raw error message is
    * evidence, not a headline, and the notice needs a headline to put a
@@ -342,29 +325,8 @@ export interface InspectorIssue {
   recovery?: IssueRecovery;
 }
 
-/**
- * The route serving `pathname`, or null when the scan did not establish one.
- *
- * SvelteKit prefers a static segment over a `[param]`, so a dynamic match found
- * in a tree whose walk stopped early is exactly the match an unvisited static
- * route would have beaten.
- */
-function routeFor(
-  model: ProjectModel,
-  pathname: string,
-  matchRoute: (routes: RouteNode[], pathname: string, basePath?: string) => RouteNode | null
-): RouteNode | null {
-  if (model.basePath === null || model.routesDirectory?.source === "unresolved") return null;
-  const match = matchRoute(model.routes, pathname, model.basePath);
-  if (!match?.dynamic) return match;
-  const truncated = model.routeDiagnostics?.some(
-    (diagnostic) => diagnostic.code === "traversal-truncated"
-  );
-  return truncated ? null : match;
-}
-
-/** How long an agent request waits for the route files before going without them. */
-const PAGE_PLACE_TIMEOUT_MS = 3_000;
+/** How long an agent request waits for the project's route files before going without them. */
+const PROJECT_CONTEXT_TIMEOUT_MS = 3_000;
 /** How long a selection's picture may take before the request goes without it. */
 const CAPTURE_TIMEOUT_MS = 5_000;
 /** Pictures kept for the selections a draft may still be about. */
@@ -380,12 +342,8 @@ function keepRecent<T>(records: Map<string, T>, selectionId: string, record: T):
   }
 }
 
-/** Page verdicts that a traced element disproves. */
-const MAPPING_ISSUES = new Set(["no-svelte-meta", "not-dev-build", "metadata-shape"]);
-/** Cleared by a selection whose page reported a component chain after all. */
-const ANCESTRY_ISSUE = "no-ancestry";
-/** Everything said about the page's Svelte metadata: news only where there is Svelte source. */
-const SOURCE_ISSUES = new Set([...MAPPING_ISSUES, ANCESTRY_ISSUE]);
+/** Page verdicts that a traced element of the same framework disproves. */
+const TRACING_ISSUES = new Set(["not-dev-build", "metadata-unavailable", "extractor-failed"]);
 
 export interface InspectorState {
   binding: BindingState;
@@ -395,6 +353,8 @@ export interface InspectorState {
   epoch: number | null;
   page: PageState | null;
   workspace: WorkspaceState;
+  /** What the app's layout says about the page, once the workspace has read it. */
+  project: ProjectContextOutcome | null;
   selection: SelectionState;
   issue: InspectorIssue | null;
   /** Advances on every new selection, so a surface can start clean on one. */
@@ -409,6 +369,7 @@ export const INITIAL_INSPECTOR_STATE: InspectorState = {
   epoch: null,
   page: null,
   workspace: { status: "idle" },
+  project: null,
   selection: { status: "none" },
   issue: null,
   selectionGeneration: 0,
@@ -426,65 +387,33 @@ const REATTACH_DELAY_MS = 300;
 const CONNECT_RETRY_DELAYS_MS = [500, 1000, 2000, 4000, 8000, 15000, 30000, 60000];
 const CONNECT_RETRY_PAGE_READY_MAX_MS = 2000;
 
-const RUNTIME_ISSUE_COPY: Record<string, string> = {
-  "no-svelte-meta":
-    "This page carries no Svelte source locations. Run the app with the Vite dev server to select elements.",
-  "not-dev-build": "This preview is a production build, so elements can't be traced to source",
-  "overlay-blocked": "The page blocked the selection overlay",
-  capacity: "This was past a limit the Element Picker works within, so part of it was left out",
-  internal: "The inspector hit a problem inside the page",
-  "metadata-shape":
-    "This page's Svelte metadata has a shape the Element Picker doesn't recognise, so elements can't be traced to source. Check the Svelte version against the supported baseline.",
-  [ANCESTRY_ISSUE]:
-    "This Svelte version reports where elements come from but not the components above them, so the trail names elements only.",
+/** What one resolve may spend: the host's own ceilings, which are what a selection needs. */
+const RESOLVE_BUDGET = {
+  maxFiles: RESOLVE_BUDGET_CEILINGS.maxFiles,
+  maxFileBytes: RESOLVE_BUDGET_CEILINGS.maxFileBytes,
+  maxNetworkRequests: RESOLVE_BUDGET_CEILINGS.maxNetworkRequests,
+  maxNetworkBytes: RESOLVE_BUDGET_CEILINGS.maxNetworkBytes,
+  deadlineMs: RESOLVE_BUDGET_CEILINGS.deadlineMs,
 };
 
 /**
- * The host services for the picker of one dev preview. Pushes are subscribed
- * per panel: main addresses each one to the preview whose workspace it is
- * about, so nothing another preview's workspace reports arrives here.
+ * The host services for the picker of one dev preview. Source changes arrive
+ * for every workspace this view holds open; the controller keeps only its own.
  */
-export function defaultInspectorDeps(previewPanelId: string): InspectorDeps {
+export function defaultInspectorDeps(): InspectorDeps {
   return {
-    sitePreview: window.electron.sitePreview,
-    invoke: (channel, args) => window.electron.plugin.invoke(PLUGIN_ID, channel, args),
-    on: (channel, callback) =>
-      window.electron.plugin.onPanel(PLUGIN_ID, channel, previewPanelId, callback),
+    picker: window.electron.elementPicker,
+    preview: window.electron.sitePreview,
     now: () => Date.now(),
     capture: window.electron.webview,
     remoteWindow: isRemoteWindow,
   };
 }
 
-/**
- * Worktree-relative path of the file that owns a node. `__svelte_meta` paths are
- * relative to the Vite root, which is the app root — not necessarily the
- * worktree root in a monorepo.
- */
-/**
- * The app a dev preview's server runs: its working directory's own app, or the
- * nearest app containing it. Null when the preview's directory is above every
- * app (a monorepo root script), which only the user can resolve.
- */
 function isWithin(root: string, path: string): boolean {
   const base = trimSlash(root);
   const target = trimSlash(path);
   return target === base || target.startsWith(`${base}/`);
-}
-
-/**
- * Nothing Svelte at or above any node: no location, no template shape and no
- * component chain. Raw `{@html}` markup keeps its `structure`, and a canvas or
- * shadow root reports its nearest stamped ancestor, so both stay traced; one
- * traced node keeps a whole multi-selection traced.
- */
-export function selectionHasNoSource(nodes: readonly SiteGuestNodeObservation[]): boolean {
-  return (
-    nodes.length > 0 &&
-    nodes.every(
-      (node) => node.loc === null && node.structure === undefined && node.ancestry.length === 0
-    )
-  );
 }
 
 /** The directory a panel's process runs from, when the panel says. */
@@ -493,63 +422,23 @@ function panelCwd(panel: unknown): string | null {
   return typeof panel.cwd === "string" && panel.cwd.length > 0 ? panel.cwd : null;
 }
 
-/**
- * The preview's dev server runs from a directory known to be beside every one
- * of `appRoots`: neither inside one nor above one. A missing directory, or a
- * monorepo root script above them, says nothing about which app is showing.
- */
-export function previewBesideApps(appRoots: readonly string[], panel: unknown): boolean {
-  const cwd = panelCwd(panel);
-  if (cwd === null || appRoots.length === 0) return false;
-  return appRoots.every((root) => !isWithin(root, cwd) && !isWithin(cwd, root));
-}
-
-export function appRunningIn(appRoots: readonly string[], panel: unknown): string | null {
-  const cwd = panelCwd(panel);
-  if (cwd === null) return null;
-  const directory = trimSlash(cwd);
-  let best: string | null = null;
-  for (const appRoot of appRoots) {
-    const root = trimSlash(appRoot);
-    const contains = directory === root || directory.startsWith(`${root}/`);
-    if (contains && (best === null || root.length > trimSlash(best).length)) best = appRoot;
+/** The preview's origin, which source maps may be fetched from; null for anything but a plain HTTP(S) page. */
+function originOf(url: string): string | null {
+  try {
+    const parsed = new URL(url);
+    return parsed.protocol === "http:" || parsed.protocol === "https:" ? parsed.origin : null;
+  } catch {
+    return null;
   }
-  return best;
-}
-
-export function ownerFile(selection: SiteSelection, worktreePath: string | null): string | null {
-  const node = selection.nodes[0];
-  if (!node?.definition) return null;
-  return worktreeRelative(selection.appRoot, worktreePath, node.definition.location.file);
-}
-
-export function worktreeRelative(
-  appRoot: string,
-  worktreePath: string | null,
-  appRelativeFile: string
-): string | null {
-  if (!worktreePath) return appRelativeFile;
-  const root = trimSlash(worktreePath);
-  const app = trimSlash(appRoot);
-  if (app === root) return appRelativeFile;
-  if (!app.startsWith(root + "/")) return null;
-  return `${app.slice(root.length + 1)}/${appRelativeFile}`;
 }
 
 /**
- * Main reports a workspace it no longer holds — after the plugin was disabled
- * or its worker restarted — as a thrown `WORKSPACE_CLOSED`, or as an
- * `OUT_OF_SCOPE`/unavailable result naming the closed workspace.
+ * The host reports a workspace it no longer holds for this view — released,
+ * evicted, or never this view's — as a `NOT_FOUND` naming the closed workspace.
  */
-export function isWorkspaceClosed(value: unknown): boolean {
-  let text: string;
-  if (typeof value === "object" && value !== null && !(value instanceof Error)) {
-    const record = value as { message?: unknown; reason?: unknown };
-    text = String(record.message ?? record.reason ?? "");
-  } else {
-    text = formatErrorMessage(value, "");
-  }
-  return text.includes("WORKSPACE_CLOSED") || text.includes("source workspace is not open");
+export function isWorkspaceClosed(error: unknown): boolean {
+  if (!isClientAppError(error) || error.code !== "NOT_FOUND") return false;
+  return clientErrorText(error, "").includes(ELEMENT_PICKER_WORKSPACE_CLOSED);
 }
 
 function trimSlash(path: string): string {
@@ -559,6 +448,16 @@ function trimSlash(path: string): string {
 /** How long after a source change a click may still land on the pre-HMR DOM. */
 export const HMR_SETTLE_MS = 1000;
 
+/** A selection made while the workspace was opening: resolved once it is open, if its document still stands. */
+interface HeldSelection {
+  request: number;
+  epoch: number;
+  observations: SelectionObservation[];
+  scope: SelectionScope;
+  /** Taken at the click: by the time the workspace opens the page may have moved. */
+  picture: Promise<PageScreenshot>;
+}
+
 export class InspectorController implements DevPreviewToolSession {
   readonly panelId: string;
   private state: InspectorState = INITIAL_INSPECTOR_STATE;
@@ -567,9 +466,11 @@ export class InspectorController implements DevPreviewToolSession {
   private context: InspectorContext = { projectId: null, worktreeId: null, worktreePath: null };
   private workspaceKey: string | null = null;
   private workspaceRequest = 0;
+  private projectRequest = 0;
   private bindRequest = 0;
-  /** The host's last word on whether the preview is showing a page. */
+  /** The host's last word on whether the preview is showing a page, and which. */
   private pageReady = false;
+  private pageUrl = "";
   private reattachTimer: ReturnType<typeof setTimeout> | null = null;
   private connectRetryTimer: ReturnType<typeof setTimeout> | null = null;
   private connectAttempts = 0;
@@ -579,26 +480,20 @@ export class InspectorController implements DevPreviewToolSession {
   private reproveTimer: ReturnType<typeof setTimeout> | null = null;
   /** The reprove resolve that is out, while the state stays on the selection it is about. */
   private quietResolve: number | null = null;
-  private bufferedEvents: SitePreviewPushPayload[] = [];
-  /** Files main reported changed while the current resolve was in flight. */
+  private bufferedEvents: ElementPickerPushPayload[] = [];
+  /** Files the host reported changed while the current resolve was in flight. */
   private readonly changedDuringResolve = new Set<string>();
   /** Worktree-relative file → when it last changed, for the HMR settle window. */
   private readonly recentChanges = new Map<string, number>();
-  private chosenAppRoot: string | undefined;
+  private chosenAppPath: string | undefined;
   private recoveringWorkspace: string | null = null;
+  private held: HeldSelection | null = null;
   private disposed = false;
-  private warnedUnusableGuestEvent = false;
-  private pageSelectionCount = 0;
-  /**
-   * The nodes behind the current `observed` selection. One made while the
-   * workspace was still being looked for has no page account yet, and gets
-   * one if the answer turns out to be that there is no source to trace.
-   */
-  private lastObserved: { epoch: number; nodes: SiteGuestNodeObservation[] } | null = null;
+  private selectionCount = 0;
+  /** The last proven element, for asking the page for it again. */
+  private continuity: Continuity | null = null;
   /** Each selection's picture, taken when it was made: oldest first, bounded. */
   private readonly captures = new Map<string, Promise<PageScreenshot>>();
-  /** What the page showed of each traced selection's elements, kept the same way. */
-  private readonly shown = new Map<string, ReadonlyMap<string, ShownNode>>();
 
   constructor(
     panelId: string,
@@ -606,9 +501,8 @@ export class InspectorController implements DevPreviewToolSession {
   ) {
     this.panelId = panelId;
     this.unsubscribers.push(
-      deps.sitePreview.onEvent((payload) => this.handlePreviewPush(payload)),
-      deps.on(PUSH_CHANNELS.sourceChanged, (payload) => this.handleSourceChanged(payload)),
-      deps.on(PUSH_CHANNELS.issue, (payload) => this.handleIssue(payload))
+      deps.picker.onEvent((payload) => this.handlePreviewPush(payload)),
+      deps.picker.onSourceChanged((payload) => this.handleSourceChanged(payload))
     );
   }
 
@@ -638,12 +532,13 @@ export class InspectorController implements DevPreviewToolSession {
    * want of a page gets its retry.
    */
   update(context: DevPreviewToolSessionContext): void {
+    const pageReady = context.isWebviewReady && context.url.length > 0;
+    if (context.url.length > 0) this.pageUrl = context.url;
     this.updateContext({
       projectId: context.projectId,
       worktreeId: context.worktreeId,
       worktreePath: context.worktreePath,
     });
-    const pageReady = context.isWebviewReady && context.url.length > 0;
     // The page arriving is a new round whatever the binding is doing: a bind
     // already in flight when it arrives would otherwise fail into a budget
     // the wait for the server had spent, and stop trying beside a live page.
@@ -668,38 +563,42 @@ export class InspectorController implements DevPreviewToolSession {
       // A preview belongs to a worktree. Observations from the old one must
       // never resolve against the new worktree's source.
       if (binding.status === "bound") {
-        void this.deps.sitePreview.detach({ sessionId: binding.sessionId }).catch(() => undefined);
+        void this.deps.preview.detach({ sessionId: binding.sessionId }).catch(() => undefined);
       }
       // A request still waiting on an agent was about the old worktree's source.
       cancelAgentRequests(this.panelId);
       void this.connect();
     }
+    // The origin is part of what a workspace is: source maps are fetched from
+    // it and nowhere else, so another server is another workspace.
+    const origin = originOf(this.pageUrl) ?? "";
     const key =
       context.projectId && context.worktreeId && context.worktreePath
-        ? `${context.projectId}\n${context.worktreeId}\n${context.worktreePath}`
+        ? `${context.projectId}\n${context.worktreeId}\n${context.worktreePath}\n${origin}`
         : null;
     if (key === this.workspaceKey) {
       if (key !== null && this.state.workspace.status === "idle") void this.openWorkspace();
       return;
     }
-    this.chosenAppRoot = undefined;
-    this.knownAppRoots = [];
+    // Only a server change keeps the app the user chose.
+    const sameWorktree =
+      key !== null &&
+      this.workspaceKey !== null &&
+      key.slice(0, key.lastIndexOf("\n")) ===
+        this.workspaceKey.slice(0, this.workspaceKey.lastIndexOf("\n"));
+    if (!sameWorktree) this.chosenAppPath = undefined;
     this.closeWorkspace();
     this.workspaceKey = key;
     if (key === null) {
       this.patchState({ workspace: { status: "no-worktree" } });
+      this.releaseHeld();
       return;
     }
     void this.openWorkspace();
   }
 
-  /** The last proven element, for asking the page for it again. */
-  private continuity: Continuity | null = null;
-  /** The apps a worktree offered when it held more than one. */
-  private knownAppRoots: string[] = [];
-
-  async openWorkspace(appRoot: string | undefined = this.chosenAppRoot): Promise<void> {
-    this.chosenAppRoot = appRoot;
+  async openWorkspace(appPath: string | undefined = this.chosenAppPath): Promise<void> {
+    this.chosenAppPath = appPath;
     const { projectId, worktreeId, worktreePath } = this.context;
     if (!projectId || !worktreeId || !worktreePath) return;
     const request = ++this.workspaceRequest;
@@ -714,119 +613,159 @@ export class InspectorController implements DevPreviewToolSession {
             "This preview's dev server runs from another worktree. Restart it from this worktree to trace elements.",
         },
       });
+      this.releaseHeld();
       return;
     }
-    this.patchState({ workspace: { status: "opening" } });
+    this.patchState({ workspace: { status: "opening" }, project: null });
+    // A window attached to another machine shows the page at this machine's
+    // address, which on the machine holding the source names something else:
+    // that workspace fetches no maps rather than the wrong ones.
+    const origin = this.deps.remoteWindow?.() === true ? null : originOf(this.pageUrl);
+    let result: ElementPickerWorkspaceOpenResult;
     try {
-      const raw = await this.deps.invoke(CHANNELS.workspaceOpen, {
-        projectId,
+      result = await this.deps.picker.openWorkspace({
+        panelId: this.panelId,
         worktreeId,
-        worktreePath,
-        previewPanelId: this.panelId,
-        ...(appRoot ? { appRoot } : {}),
+        ...(cwd !== null ? { serverCwd: cwd } : {}),
+        ...(appPath !== undefined ? { appPath } : {}),
+        ...(origin !== null ? { previewOrigin: origin } : {}),
       });
-      const result = WorkspaceOpenResultSchema.parse(raw);
-      if (request !== this.workspaceRequest) {
-        if (result.status === "ready") this.releaseWorkspace(result.workspaceSessionId);
-        return;
-      }
-      switch (result.status) {
-        case "ready":
-          this.patchState({
-            workspace: {
-              status: "ready",
-              workspaceSessionId: result.workspaceSessionId,
-              appRoot: result.appRoot,
-              support: result.support,
-              appRoots: this.knownAppRoots.includes(result.appRoot) ? this.knownAppRoots : [],
-            },
-          });
-          this.dropMootMappingIssue();
-          return;
-        case "ambiguous": {
-          this.knownAppRoots = result.appRoots;
-          // The dev server runs in one of them: that is the app this preview shows.
-          const running = appRunningIn(
-            result.appRoots,
-            usePanelStore.getState().panelsById[this.panelId]
-          );
-          if (running && appRoot === undefined) {
-            void this.openWorkspace(running);
-            return;
-          }
-          this.patchState({ workspace: { status: "ambiguous", appRoots: result.appRoots } });
-          this.dropMootMappingIssue();
-          return;
-        }
-        case "no-app": {
-          const code = this.state.issue?.code;
-          this.patchState({
-            workspace: { status: "no-app", scanComplete: result.scanComplete ?? true },
-            ...(code !== undefined && SOURCE_ISSUES.has(code) ? { issue: null } : {}),
-          });
-          this.describeObserved();
-          return;
-        }
-      }
     } catch (error) {
       if (request !== this.workspaceRequest) return;
       this.patchState({
         workspace: {
           status: "failed",
-          message: wireFailureMessage(error, "Couldn't open the site source"),
+          message: wireFailureMessage(error, "Couldn't open the source"),
         },
       });
+      this.releaseHeld();
+      return;
+    }
+    if (request !== this.workspaceRequest || this.disposed) {
+      if (result.status === "ready") this.releaseWorkspace(result.workspaceId);
+      return;
+    }
+    switch (result.status) {
+      case "ready":
+        this.patchState({
+          workspace: {
+            status: "ready",
+            workspaceId: result.workspaceId,
+            appPath: result.appPath,
+            appPaths: result.appPaths,
+            scanComplete: result.scanComplete,
+          },
+        });
+        void this.refreshProject();
+        this.resumeHeld();
+        return;
+      case "ambiguous":
+        this.patchState({
+          workspace: {
+            status: "ambiguous",
+            appPaths: result.appPaths,
+            scanComplete: result.scanComplete,
+          },
+        });
+        this.releaseHeld();
+        return;
+      case "unavailable":
+        this.patchState({
+          workspace: {
+            status: "failed",
+            message:
+              result.reason === "invalid-app"
+                ? "That app isn't in this worktree any more."
+                : "This worktree isn't one of the project's open worktrees.",
+          },
+        });
+        this.releaseHeld();
+        return;
     }
   }
 
-  private releaseWorkspace(workspaceSessionId: string): void {
-    void this.deps.invoke(CHANNELS.workspaceClose, { workspaceSessionId }).catch(() => undefined);
+  private releaseWorkspace(workspaceId: string): void {
+    void this.deps.picker.closeWorkspace({ workspaceId }).catch(() => undefined);
   }
 
   /**
    * Point the picker at another app in the same worktree. The selection was
    * proven against the old one, so it belongs to it and goes.
    */
-  switchApp(appRoot: string): void {
+  switchApp(appPath: string): void {
     const workspace = this.state.workspace;
-    if (workspace.status === "ready" && workspace.appRoot === appRoot) return;
+    if (workspace.status === "ready" && workspace.appPath === appPath) return;
     // A request on its way cites the old app's files; it must not land after the switch.
     cancelAgentRequests(this.panelId);
+    // So does a click still waiting for the old app's source: it is not the
+    // other app's to resolve.
+    if (this.held !== null) {
+      this.held = null;
+      this.selectionRequest++;
+    }
     this.closeWorkspace();
-    void this.openWorkspace(appRoot);
+    void this.openWorkspace(appPath);
   }
 
   private closeWorkspace(): void {
     this.workspaceRequest++;
+    this.projectRequest++;
     this.continuity = null;
     this.endReprove();
     const workspace = this.state.workspace;
-    if (workspace.status === "ready") this.releaseWorkspace(workspace.workspaceSessionId);
-    // Source identity belongs to the workspace that minted it.
+    if (workspace.status === "ready") this.releaseWorkspace(workspace.workspaceId);
+    // Source identity belongs to the workspace that minted it. A click still
+    // waiting for a workspace waits for the next one instead.
+    const selection = this.state.selection;
     this.patchState({
       workspace: { status: "idle" },
-      selection: this.state.selection.status === "none" ? this.state.selection : { status: "none" },
+      project: null,
+      selection:
+        this.held !== null ||
+        selection.status === "none" ||
+        (selection.status === "ready" && selection.selection.workspaceId === null)
+          ? selection
+          : { status: "none" },
     });
   }
 
   private currentWorkspaceId(): string | null {
     const workspace = this.state.workspace;
-    return workspace.status === "ready" ? workspace.workspaceSessionId : null;
+    return workspace.status === "ready" ? workspace.workspaceId : null;
   }
 
   /**
-   * Main no longer holds our workspace (plugin disabled and re-enabled, or its
-   * worker restarted), so the selection it proved is gone too. Reopen once per
-   * lost session; a second failure is reported, not looped on.
+   * The host no longer holds our workspace, so the selection it proved is gone
+   * too. Reopen once per lost workspace; a second failure is reported, not
+   * looped on.
    */
-  private recoverClosedWorkspace(workspaceSessionId: string): void {
-    if (this.currentWorkspaceId() !== workspaceSessionId) return;
-    if (this.recoveringWorkspace === workspaceSessionId) return;
-    this.recoveringWorkspace = workspaceSessionId;
+  private recoverClosedWorkspace(workspaceId: string): void {
+    if (this.currentWorkspaceId() !== workspaceId) return;
+    if (this.recoveringWorkspace === workspaceId) return;
+    this.recoveringWorkspace = workspaceId;
     this.selectionRequest++;
     this.endReprove();
     this.patchState({ workspace: { status: "idle" }, selection: { status: "none" } });
     void this.openWorkspace();
+  }
+
+  /**
+   * What the app's layout says about the page the preview shows: its route
+   * files and toolchain. Beside the selection, never on its path.
+   */
+  private async refreshProject(): Promise<void> {
+    const workspaceId = this.currentWorkspaceId();
+    const url = this.state.page?.url ?? this.pageUrl;
+    if (workspaceId === null || url === "") return;
+    const request = ++this.projectRequest;
+    let outcome: ProjectContextOutcome;
+    try {
+      outcome = await this.deps.picker.describeProject({ workspaceId, url });
+    } catch {
+      return;
+    }
+    if (request !== this.projectRequest || this.currentWorkspaceId() !== workspaceId) return;
+    this.patchState({ project: outcome });
   }
 
   /* ------------------------------------------------------------------------ */
@@ -845,10 +784,10 @@ export class InspectorController implements DevPreviewToolSession {
     const request = ++this.bindRequest;
     const previous = this.state.binding;
     if (previous.status === "bound" && previous.panelId !== previewPanelId) {
-      void this.deps.sitePreview.detach({ sessionId: previous.sessionId }).catch(() => undefined);
+      void this.deps.preview.detach({ sessionId: previous.sessionId }).catch(() => undefined);
     }
     this.bufferedEvents = [];
-    this.warnedUnusableGuestEvent = false;
+    this.releaseHeld();
     this.patchState({
       binding: { status: "binding", panelId: previewPanelId },
       epoch: null,
@@ -857,16 +796,12 @@ export class InspectorController implements DevPreviewToolSession {
       ...this.staleSelectionPatch("preview-detached"),
     });
 
-    // Always a fresh bind, never adoption of a listed session: `getState` can't
-    // replay the page snapshot a selection needs, and a session listed on the
-    // candidate isn't proof it was this panel's.
+    // Always a fresh bind, never adoption of an existing session: its page
+    // snapshot can't be replayed, and a session on the panel isn't proof it
+    // was this controller's.
     let state: SitePreviewBindingState;
     try {
-      state = await this.deps.sitePreview.bind({
-        panelId: previewPanelId,
-        adapterId: GUEST_ADAPTER_ID,
-        mode: this.state.mode,
-      });
+      state = await this.deps.picker.bind({ panelId: previewPanelId, mode: this.state.mode });
     } catch (error) {
       if (request !== this.bindRequest) return;
       this.bufferedEvents = [];
@@ -877,7 +812,7 @@ export class InspectorController implements DevPreviewToolSession {
       this.patchState({
         binding: {
           status: "failed",
-          message: formatErrorMessage(error, "Couldn't connect to the dev preview"),
+          message: clientErrorText(error, "Couldn't connect to the dev preview"),
           retrying,
         },
       });
@@ -886,7 +821,7 @@ export class InspectorController implements DevPreviewToolSession {
     this.connectAttempts = 0;
     if (request !== this.bindRequest || this.disposed) {
       // Superseded or disposed while binding: the session we just got is nobody's.
-      void this.deps.sitePreview.detach({ sessionId: state.sessionId }).catch(() => undefined);
+      void this.deps.preview.detach({ sessionId: state.sessionId }).catch(() => undefined);
       return;
     }
 
@@ -916,12 +851,6 @@ export class InspectorController implements DevPreviewToolSession {
     for (const payload of buffered) this.handlePreviewPush(payload);
   }
 
-  /**
-   * The grid recreates a preview's page when panels are added or moved, and
-   * that detaches the session exactly as a closed preview would. Reattach to
-   * the same panel a few times before leaving it to the user; when DevTools
-   * really does own the page, every attempt fails fast and the notice stays.
-   */
   /**
    * The grid recreates a preview's page when panels are added or moved, and
    * that detaches the session exactly as a closed preview would. Reattach to
@@ -990,11 +919,12 @@ export class InspectorController implements DevPreviewToolSession {
       this.patchState({ binding: { ...binding, retrying: false } });
     }
     if (binding.status !== "bound") return;
+    this.releaseHeld();
     this.patchState({
       binding: { status: "detached", panelId: binding.panelId, reason: "requested" },
       ...this.staleSelectionPatch("preview-detached"),
     });
-    await this.deps.sitePreview.detach({ sessionId: binding.sessionId }).catch(() => undefined);
+    await this.deps.preview.detach({ sessionId: binding.sessionId }).catch(() => undefined);
   }
 
   async setMode(mode: SitePreviewMode): Promise<void> {
@@ -1003,7 +933,7 @@ export class InspectorController implements DevPreviewToolSession {
     const previous = this.state.mode;
     this.patchState({ mode, modePending: true });
     try {
-      const next = await this.deps.sitePreview.setMode({ sessionId: binding.sessionId, mode });
+      const next = await this.deps.preview.setMode({ sessionId: binding.sessionId, mode });
       if (!this.isBoundTo(binding.sessionId)) return;
       this.noteEpoch(next.documentEpoch);
       this.patchState({ mode: next.mode, modePending: false });
@@ -1015,9 +945,8 @@ export class InspectorController implements DevPreviewToolSession {
         modePending: false,
         issue: {
           severity: "error",
-          // `formatErrorMessage` hands back the error's own message and only
-          // falls back when there isn't one, so it belongs in the body — used
-          // as the title it puts a raw diagnostic where the headline goes.
+          // The error's own words belong in the body: used as the title they
+          // put a raw diagnostic where the headline goes.
           message: "Couldn't switch the preview mode",
           detail: formatErrorMessage(error, "") || undefined,
           // The target, not the reverted current mode: retrying has to ask for
@@ -1029,42 +958,17 @@ export class InspectorController implements DevPreviewToolSession {
     }
   }
 
-  /**
-   * Said once per binding attempt: a page emitting one unusable event will emit
-   * thousands, and the first is the only informative one. Scoped to the
-   * binding, not the controller's whole life, so junk from one document cannot
-   * silence the next one's.
-   */
-  private warnUnusableGuestEvent(type: string): void {
-    if (this.warnedUnusableGuestEvent) return;
-    this.warnedUnusableGuestEvent = true;
-    console.warn(
-      `[element-picker] dropped a guest "${type}" event whose payload did not match the adapter schema; further ones are silent`
-    );
-  }
-
   private isBoundTo(sessionId: string): boolean {
     const binding = this.state.binding;
     return binding.status === "bound" && binding.sessionId === sessionId;
   }
 
-  private handlePreviewPush(payload: SitePreviewPushPayload): void {
+  private handlePreviewPush(payload: ElementPickerPushPayload): void {
     const binding = this.state.binding;
     if (binding.status === "binding") {
-      if (payload.kind === "guest-event") {
-        // Hover traffic is worthless after the fact; keep the newest of the
-        // rest, since readiness and epoch pushes are what the replay needs
-        // most.
-        if (payload.event.type === "hoverChanged") return;
-        // An event whose body we cannot read is never worth a buffer slot: it
-        // would evict a readiness push and then be dropped on replay anyway.
-        // The replay parses again rather than carrying the parsed value, which
-        // keeps one parse the authority for everything downstream of it.
-        if (!GuestEventSchema.safeParse(payload.event).success) {
-          this.warnUnusableGuestEvent(String(payload.event.type));
-          return;
-        }
-      }
+      // Hover traffic is worthless after the fact; keep the newest of the
+      // rest, since readiness and epoch pushes are what the replay needs most.
+      if (payload.kind === "picker-event" && payload.event.type === "hoverChanged") return;
       this.bufferedEvents.push(payload);
       if (this.bufferedEvents.length > MAX_BUFFERED_EVENTS) this.bufferedEvents.shift();
       return;
@@ -1074,6 +978,7 @@ export class InspectorController implements DevPreviewToolSession {
     switch (payload.kind) {
       case "detached":
         this.bindRequest++;
+        this.releaseHeld();
         this.patchState({
           binding: { status: "detached", panelId: binding.panelId, reason: payload.reason },
           ...this.staleSelectionPatch("preview-detached"),
@@ -1091,8 +996,15 @@ export class InspectorController implements DevPreviewToolSession {
           this.patchState({ binding: { ...binding, suspended: payload.suspended } });
         }
         return;
-      case "guest-event":
-        this.handleGuestEvent(payload);
+      case "picker-event":
+        this.handleGuestEvent(payload.documentEpoch, payload.event);
+        return;
+      case "host-issue":
+        if (this.state.epoch !== null && payload.documentEpoch < this.state.epoch) return;
+        this.raiseRuntimeIssue(payload.issue);
+        return;
+      case "frameworks-probed":
+      case "extractor-installed":
         return;
     }
   }
@@ -1107,17 +1019,18 @@ export class InspectorController implements DevPreviewToolSession {
     if (current !== null && epoch <= current) return;
     const patch: Partial<InspectorState> = { epoch };
     if (this.state.page && this.state.page.epoch < epoch) patch.page = null;
+    if (this.held !== null && this.held.epoch < epoch) this.held = null;
     const selection = this.state.selection;
     if (
       selection.status === "ready" &&
       selection.selection.documentEpoch < epoch &&
       (selection.stale === null || this.reprove !== null)
     ) {
-      // A reload is what an edit does as often as a hot update — a Tailwind
-      // class the stylesheet has never held reloads the page — so it is not
-      // the end of the selection either. The new page is asked for the same
-      // element, by position, under the same checks; only if it can't vouch
-      // for it does the selection say the page reloaded.
+      // A reload is what an edit does as often as a hot update — a class the
+      // stylesheet has never held reloads the page — so it is not the end of
+      // the selection either. The new page is asked for the same element under
+      // the same checks; only if it can't vouch for it does the selection say
+      // the page reloaded.
       if (this.state.issue) patch.issue = null;
       this.patchState(patch);
       // An answer still being resolved is about the old document.
@@ -1128,197 +1041,151 @@ export class InspectorController implements DevPreviewToolSession {
       }
       return;
     }
-    if (selection.status === "observed" && selection.epoch < epoch) {
-      Object.assign(patch, this.staleSelectionPatch("document-changed"));
-    } else if (selection.status === "resolving" && selection.epoch < epoch) {
+    if (selection.status === "resolving" && selection.epoch < epoch) {
       patch.selection = { status: "lost" };
     }
     if (this.state.issue) patch.issue = null;
     this.patchState(patch);
   }
 
-  private handleGuestEvent(
-    payload: Extract<SitePreviewPushPayload, { kind: "guest-event" }>
-  ): void {
-    const epoch = payload.documentEpoch;
-    // Epoch bookkeeping comes off the envelope, which the host validated, so it
-    // holds even for an event whose body turns out to be unusable.
+  private handleGuestEvent(epoch: number, event: ElementPickerEvent): void {
+    // Epoch bookkeeping comes off the envelope, which the host validated.
     this.noteEpoch(epoch);
     if (this.state.epoch !== null && epoch < this.state.epoch) return;
 
-    // The host validated the envelope and that the event has a `type`; the body
-    // is ours to prove. Nothing below may read a field before this parse.
-    const parsed = GuestEventSchema.safeParse(payload.event);
-    if (!parsed.success) {
-      this.warnUnusableGuestEvent(String(payload.event.type));
-      return;
-    }
-
-    const event = parsed.data;
     switch (event.type) {
       case "documentReady": {
-        // The page reports itself again on a client-side navigation or a
-        // resize, within the same document; its metadata has not changed and
-        // the probe that described it will not run again.
-        const current = this.state.page;
+        const previousUrl = this.state.page?.url ?? null;
         const patch: Partial<InspectorState> = {
-          page: {
-            epoch,
-            routeId: event.routeId,
-            url: event.url,
-            viewport: event.viewport,
-            metadata: current !== null && current.epoch === epoch ? current.metadata : null,
-          },
+          page: { epoch, url: event.url, viewport: event.viewport },
         };
         const binding = this.state.binding;
         if (binding.status === "bound") patch.binding = { ...binding, url: event.url };
         this.patchState(patch);
+        // The route around the page changes with the page.
+        if (previousUrl !== event.url) void this.refreshProject();
         return;
       }
       case "selectionChanged":
-        this.clearDisprovedMappingIssue(event.nodes);
-        void this.handleSelection(
-          epoch,
-          event.nodes,
-          event.scope ?? "element",
-          event.component ?? null,
-          event.cause ?? "user"
-        );
+        this.clearDisprovedIssue(event.observations);
+        void this.handleSelection(epoch, event.observations, event.scope, event.cause);
         return;
       case "runtimeIssue":
-        // A page with no Svelte metadata is only news where there is Svelte
-        // source to trace it to; anywhere else it is every page there is.
-        if (MAPPING_ISSUES.has(event.code) && this.mappingIssuesMoot()) return;
-        this.patchState({
-          issue: {
-            severity: event.code === "internal" ? "error" : "warning",
-            message: RUNTIME_ISSUE_COPY[event.code] ?? event.detail,
-            code: event.code,
-            // The page's own words, under ours. A known code has a headline
-            // that says what kind of thing happened; the detail is the only
-            // thing that says which one.
-            ...(RUNTIME_ISSUE_COPY[event.code] === undefined || event.detail === ""
-              ? {}
-              : { detail: event.detail }),
-            // The other codes name a limitation of the page itself, which
-            // nothing here can lift; an internal fault is the guest runtime
-            // failing, and a fresh session is what replaces it.
-            ...(event.code === "internal" ? { recovery: { kind: "reconnect" } as const } : {}),
-          },
-        });
+        this.raiseRuntimeIssue(event);
         return;
       case "hoverChanged":
-        if (event.node !== null) this.clearDisprovedMappingIssue([event.node]);
-        this.watchPointerLeaving(event.node !== null);
+        if (event.observation !== null) this.clearDisprovedIssue([event.observation]);
+        this.watchPointerLeaving(event.observation !== null);
         return;
-      case "mappingRevisionSeen":
+      case "frameworksDetected":
         return;
-      case "metadataProbed": {
-        const page = this.state.page;
-        if (page === null || page.epoch !== epoch) return;
-        // What the page's metadata supports is recorded either way; what it
-        // lacks is only worth saying where there is source to trace.
-        if (this.isSourceless()) {
-          this.patchState({
-            page: { ...page, metadata: { locations: event.locations, ancestry: event.ancestry } },
-          });
-          return;
-        }
-        const metadata = { locations: event.locations, ancestry: event.ancestry };
-        const patch: Partial<InspectorState> = { page: { ...page, metadata } };
-        // A page that hydrated late can be probed after the audit already
-        // called it a production build; the probe's answer is the newer fact.
-        const code = this.state.issue?.code;
-        if (event.locations && code !== undefined && MAPPING_ISSUES.has(code)) patch.issue = null;
-        // A shape the runtime could not read is said once, up front, rather
-        // than discovered click by click; a chain it could not follow narrows
-        // the trail and says why.
-        if (!event.locations) {
-          if (this.mappingIssuesMoot()) {
-            this.patchState(patch);
-            return;
-          }
-          patch.issue = {
-            severity: "warning",
-            message: RUNTIME_ISSUE_COPY["metadata-shape"]!,
-            code: "metadata-shape",
-          };
-        } else if (!event.ancestry) {
-          patch.issue = {
-            severity: "warning",
-            message: RUNTIME_ISSUE_COPY[ANCESTRY_ISSUE]!,
-            code: ANCESTRY_ISSUE,
-          };
-        }
-        this.patchState(patch);
-        return;
-      }
     }
   }
 
+  private raiseRuntimeIssue(event: Extract<ElementPickerEvent, { type: "runtimeIssue" }>): void {
+    const message = runtimeIssueMessage(event.code, event.framework);
+    this.patchState({
+      issue: {
+        severity: event.code === "internal" ? "error" : "warning",
+        message: message ?? event.detail,
+        code: event.code,
+        ...(event.framework ? { framework: event.framework } : {}),
+        // The page's own words, under ours. A known code has a headline that
+        // says what kind of thing happened; the detail is the only thing that
+        // says which one.
+        ...(message === null || event.detail === "" ? {} : { detail: event.detail }),
+        // The other codes name a limitation of the page itself, which nothing
+        // here can lift; an internal fault is the guest runtime failing, and a
+        // fresh session is what replaces it.
+        ...(event.code === "internal" ? { recovery: { kind: "reconnect" } as const } : {}),
+      },
+    });
+  }
+
   /**
-   * An element with a source location is proof of dev metadata, whatever the
-   * page concluded earlier — a verdict reached while it was still hydrating
-   * must not sit above a selection that plainly traced.
+   * An element the page traced is proof of that framework's dev metadata,
+   * whatever the page concluded earlier — a verdict reached while it was
+   * still hydrating must not sit above a selection that plainly traced.
    */
-  private clearDisprovedMappingIssue(nodes: SiteGuestNodeObservation[]): void {
-    const traced = nodes.some((node) => node.loc !== null);
-    // A chain is only a chain the trail can use when it names a component: a
-    // block frame on its own gives a crumb nothing to select.
-    const chained = nodes.some((node) => node.ancestry.some(namesComponent));
-    const patch: Partial<InspectorState> = {};
-    // What the page shows outranks what its probe sampled: a chain the sample
-    // lacked can turn up on a deeper element, whether or not the notice about
-    // it is still on screen.
-    const page = this.state.page;
-    const metadata = page?.metadata ?? null;
-    if (metadata && ((traced && !metadata.locations) || (chained && !metadata.ancestry))) {
-      patch.page = {
-        ...page!,
-        metadata: {
-          locations: metadata.locations || traced,
-          ancestry: metadata.ancestry || chained,
-        },
-      };
-    }
-    const code = this.state.issue?.code;
-    if (code !== undefined) {
-      if (MAPPING_ISSUES.has(code) && traced) patch.issue = null;
-      if (code === ANCESTRY_ISSUE && chained) patch.issue = null;
-    }
-    if (Object.keys(patch).length > 0) this.patchState(patch);
+  private clearDisprovedIssue(
+    observations: ReadonlyArray<Pick<SelectionObservation, "sourceCandidates" | "componentChain">>
+  ): void {
+    const issue = this.state.issue;
+    if (issue?.code === undefined || !TRACING_ISSUES.has(issue.code)) return;
+    const traced = observations.some(
+      (observation) =>
+        observation.sourceCandidates.some(
+          (candidate) => issue.framework === undefined || candidate.framework === issue.framework
+        ) ||
+        observation.componentChain.components.some(
+          (record) => issue.framework === undefined || record.framework === issue.framework
+        )
+    );
+    if (traced) this.patchState({ issue: null });
   }
 
   /* ------------------------------------------------------------------------ */
   /* Selection                                                                */
   /* ------------------------------------------------------------------------ */
 
+  private nextSelection(
+    epoch: number,
+    page: PageState,
+    observations: SelectionObservation[],
+    scope: SelectionScope,
+    workspace: { workspaceId: string; appPath: string } | null,
+    results: PickedSelection["results"]
+  ): PickedSelection {
+    const binding = this.state.binding;
+    this.selectionCount += 1;
+    return {
+      selectionId: `${this.panelId}:${epoch}:${this.selectionCount}`,
+      previewPanelId: this.panelId,
+      sessionId: binding.status === "bound" ? binding.sessionId : "",
+      documentEpoch: epoch,
+      workspaceId: workspace?.workspaceId ?? null,
+      appPath: workspace?.appPath ?? null,
+      displayedUrl: redactUrl(page.url),
+      viewport: page.viewport,
+      observations,
+      results,
+      scope,
+      capturedAt: new Date(this.deps.now()).toISOString(),
+    };
+  }
+
   private async handleSelection(
     epoch: number,
-    nodes: SiteGuestNodeObservation[],
-    scope: "element" | "component" = "element",
-    component: PickedComponent | null = null,
-    cause: "user" | "document" | "reselect" = "user"
+    observations: SelectionObservation[],
+    scope: SelectionScope,
+    cause: "user" | "document" | "reselect",
+    taken?: Promise<PageScreenshot>
   ): Promise<void> {
     const request = ++this.selectionRequest;
+    this.held = null;
     this.quietResolve = null;
     this.changedDuringResolve.clear();
     // The page's answer to a reprove. It resolves behind the selection it is
-    // about, which stays on screen; only a proven answer replaces it.
-    // Only an answer that was asked for counts: a crumb pick answers through the
-    // same event, and must resolve as the user's choice it is.
+    // about, which stays on screen; only a proven answer replaces it. Only an
+    // answer that was asked for counts: a crumb pick answers through the same
+    // event, and must resolve as the user's choice it is.
     const pending = cause === "reselect" && this.reprove?.awaiting ? this.reprove : null;
     const reproving = pending !== null;
     if (pending !== null) pending.awaiting = false;
-    if (nodes.length === 0) {
+    if (observations.length === 0) {
       // A node the page was showing left the document. After a hot update that
       // is the same element drawn again, so it is asked for before it is
       // given up.
       if (cause === "document" && this.beginReprove(false)) return;
       // A click being held for the page to catch up named a node the update
       // has now replaced; that is the update it was waiting for.
-      const held = this.state.selection;
-      if (cause === "document" && held.status === "settling" && held.retrying && this.reprove) {
+      const settling = this.state.selection;
+      if (
+        cause === "document" &&
+        settling.status === "settling" &&
+        settling.retrying &&
+        this.reprove
+      ) {
         this.scheduleReprove();
         return;
       }
@@ -1330,7 +1197,7 @@ export class InspectorController implements DevPreviewToolSession {
     }
     // A pick of the user's own outranks one being asked for on their behalf.
     if (!reproving) this.endReprove();
-    const primary = nodes[0]!;
+    const primary = observations[0]!;
     /** Where a pick that can't be proved ends: said, or for a reprove, retried. */
     const refuse = (next: SelectionState, retry: boolean): void => {
       if (!reproving) {
@@ -1342,7 +1209,7 @@ export class InspectorController implements DevPreviewToolSession {
       else this.failReprove();
     };
     /**
-     * The page hasn't caught up with a change to the file. The click is kept
+     * The page hasn't caught up with a change to a file. The click is kept
      * and asked for again once it has, rather than handed back to the user.
      */
     const settle = (): void => {
@@ -1350,24 +1217,14 @@ export class InspectorController implements DevPreviewToolSession {
         refuse({ status: "settling" }, true);
         return;
       }
+      // Asked for again by its id in this document, or by Svelte's locator
+      // once a reload has replaced it.
+      const record = this.continuityOf(primary, epoch);
       const retrying =
-        (nodes.length === 1 || scope === "component") &&
-        primary.loc !== null &&
-        primary.locIndex !== undefined &&
+        (observations.length === 1 || scope.kind === "component") &&
         this.startReprove({
-          record: {
-            loc: { ...primary.loc },
-            locIndex: primary.locIndex,
-            occurrence: primary.runtimeOccurrenceId,
-            tagName: primary.tagName,
-            sameLocCount: primary.sameLocCount,
-            chain: chainOf(primary),
-            epoch,
-          },
-          component:
-            scope === "component" && component !== null
-              ? { file: component.file, line: component.line, column: component.column }
-              : null,
+          record,
+          component: scope.kind === "component" ? invocationSite(primary, scope.componentId) : null,
           sourceChanged: true,
           reloaded: false,
           attempts: 0,
@@ -1375,184 +1232,229 @@ export class InspectorController implements DevPreviewToolSession {
         });
       this.patchState({ selection: { status: "settling", retrying } });
     };
-    if (pending !== null && !this.answersReprove(pending, primary, scope, component, epoch)) {
+    if (pending !== null && !this.answersReprove(pending, primary, scope, epoch)) {
       // Something else now sits where the element was written, or the page
       // can no longer tell. A selection is not re-pointed at what took its
       // place, and the page stops outlining the stand-in.
       this.failReprove(true);
       return;
     }
-    const workspace = this.state.workspace;
     const page = this.state.page;
     const binding = this.state.binding;
-    // An untested toolchain is still traced, and its selection can still go to
-    // an agent: the verdict is about which compiler proved the range, not about
-    // what the drawer offers.
-    // What a selection is about is decided per selection: a click with nothing
-    // Svelte to trace is a page selection whichever app the worktree holds,
-    // and asking main would name that app's files for an element it never drew.
-    const untraceable = !reproving && selectionHasNoSource(nodes);
-    if (untraceable || workspace.status !== "ready" || binding.status !== "bound") {
-      if (!reproving) this.lastObserved = { epoch, nodes };
-      const described =
-        !reproving &&
-        (untraceable || this.isSourceless()) &&
-        binding.status === "bound" &&
-        page?.epoch === epoch
-          ? this.pageSelectionOf(binding.panelId, epoch, page, nodes)
-          : null;
-      // The picture first: publishing the selection opens the drawer, which
-      // takes its width from the page and moves the element out of the box
-      // just measured.
-      if (described !== null) {
-        this.keepPicture(
-          described.selectionId,
-          this.takePicture(described.previewPanelId, described.viewport, nodes)
-        );
-      }
-      refuse(
-        { status: "observed", epoch, node: primary, nodeCount: nodes.length, page: described },
-        false
-      );
-      return;
-    }
+    if (binding.status !== "bound") return;
     if (!page || page.epoch !== epoch) {
       refuse({ status: "failed", message: "The page is still loading — select again" }, true);
       return;
     }
 
-    // HMR doesn't advance the epoch, so right after an agent's write the page
-    // can still show the old markup while main resolves the click against the
-    // new bytes — and lands on a different element of the same tag.
-    const clickedFiles = nodes.flatMap((node) =>
-      node.loc
-        ? [worktreeRelative(workspace.appRoot, this.context.worktreePath, node.loc.file)]
-        : []
+    const workspace = this.state.workspace;
+    // What a selection is about is decided per selection: a click with nothing
+    // the page could trace is the page's account of the element, whichever
+    // app the worktree holds, and asking the host would name that app's files
+    // for an element it never drew.
+    const traced = observations.some(
+      (observation) =>
+        observation.sourceCandidates.length > 0 || observation.componentChain.components.length > 0
     );
-    if (clickedFiles.some((file) => file !== null && this.changedRecently(file))) {
-      settle();
+    // The picture first: publishing the selection opens the drawer, which
+    // takes its width from the page and moves the element out of the box just
+    // measured.
+    const picture = taken ?? this.takePicture(binding.panelId, page.viewport, observations);
+    if (traced && workspace.status === "opening" && !reproving) {
+      this.held = { request, epoch, observations, scope, picture };
+      this.patchState({ selection: { status: "resolving", epoch, requestId: request } });
+      return;
+    }
+    if (!traced || workspace.status !== "ready") {
+      if (reproving) {
+        refuse({ status: "lost" }, false);
+        return;
+      }
+      const selection = this.nextSelection(epoch, page, observations, scope, null, {});
+      this.keepPicture(selection.selectionId, picture);
+      this.publish(selection, null);
       return;
     }
 
-    // A traced selection goes out with its picture too, taken before anything
-    // is published for the same reason as a page selection's: the drawer
-    // opening moves the element out of the box the page just measured.
-    const picture = this.takePicture(binding.panelId, page.viewport, nodes);
     if (reproving) this.quietResolve = request;
     else this.patchState({ selection: { status: "resolving", epoch, requestId: request } });
-    let raw: unknown;
+    await this.resolveSelection(request, epoch, page, observations, scope, workspace, picture, {
+      reproving,
+      refuse,
+      settle,
+    });
+  }
+
+  private async resolveSelection(
+    request: number,
+    epoch: number,
+    page: PageState,
+    observations: SelectionObservation[],
+    scope: SelectionScope,
+    workspace: Extract<WorkspaceState, { status: "ready" }>,
+    picture: Promise<PageScreenshot>,
+    outcome: {
+      reproving: boolean;
+      refuse: (next: SelectionState, retry: boolean) => void;
+      settle: () => void;
+    }
+  ): Promise<void> {
+    const { reproving, refuse, settle } = outcome;
+    const binding = this.state.binding;
+    if (binding.status !== "bound") return;
+    let response: ResolveResponse;
     try {
-      raw = await this.deps.invoke(CHANNELS.selectionResolve, {
-        workspaceSessionId: workspace.workspaceSessionId,
-        previewPanelId: binding.panelId,
+      response = await this.deps.picker.resolve({
+        requestId: `${binding.sessionId}:${request}`,
+        sessionId: binding.sessionId,
         documentEpoch: epoch,
-        routeId: page.routeId,
-        url: page.url,
-        viewport: page.viewport,
-        // Main traces source; what the page says the element looks like is
+        workspaceId: workspace.workspaceId,
+        // The host traces source; what the page says the element looks like is
         // the renderer's to quote, and has no business in that payload.
-        nodes: nodes.map(({ context: _context, ...node }) => node),
+        observations: observations.map(({ context: _context, ...observation }) => observation),
+        knownRevisions: [],
+        budget: RESOLVE_BUDGET,
       });
     } catch (error) {
       if (!this.isCurrentResolve(request, reproving)) return;
       if (isWorkspaceClosed(error)) {
         this.endReprove();
-        this.recoverClosedWorkspace(workspace.workspaceSessionId);
+        this.recoverClosedWorkspace(workspace.workspaceId);
         return;
       }
       refuse(
         {
           status: "failed",
-          message: formatErrorMessage(error, "Couldn't find the source for this element"),
+          message: clientErrorText(error, "Couldn't find the source for this element"),
         },
         false
       );
       return;
     }
     if (!this.isCurrentResolve(request, reproving)) return;
-    const parsed = SelectionResolveResultSchema.safeParse(raw);
-    if (!parsed.success) {
-      refuse({ status: "failed", message: "Couldn't find the source for this element" }, false);
-      return;
-    }
-    const result = parsed.data;
-    // The page's location for the element and the file disagree. When the
-    // file is known to have just changed, that is the page still catching up
-    // and the usual notices apply; otherwise nothing moved, "select again"
-    // would be the same click for the same answer, and the notice says what
-    // was seen instead.
-    if (result.status === "stale" && result.mismatch !== undefined) {
-      const changed = worktreeRelative(
-        workspace.appRoot,
-        this.context.worktreePath,
-        result.mismatch.file
-      );
-      if (
-        changed !== null &&
-        (this.changedDuringResolve.has(changed) || this.changedRecently(changed))
-      ) {
-        settle();
-        return;
-      }
-      refuse({ status: "failed", message: mismatchMessage(result.mismatch) }, false);
-      return;
-    }
     if (
-      result.status === "stale" ||
+      response.documentEpoch !== epoch ||
       this.state.epoch !== epoch ||
-      result.selection.documentEpoch !== epoch ||
-      result.selection.workspaceSessionId !== workspace.workspaceSessionId
+      this.currentWorkspaceId() !== workspace.workspaceId
     ) {
       refuse({ status: "lost" }, true);
       return;
     }
-    const selection = result.selection;
-    const file = ownerFile(selection, this.context.worktreePath);
-    // The observation predates the change, but main resolved it against the
-    // newer bytes; the pairing can't be trusted, so it is asked for again once
-    // the page has caught up.
-    if (file !== null && (this.changedDuringResolve.has(file) || this.changedRecently(file))) {
+    const results: Record<string, PickedSelection["results"][string]> = {};
+    for (const entry of response.outcomes) results[entry.elementId] = entry.results;
+    const selection = this.nextSelection(
+      epoch,
+      page,
+      observations,
+      scope,
+      { workspaceId: workspace.workspaceId, appPath: workspace.appPath },
+      results
+    );
+    const primary = observations[0]!;
+    const claim = elementClaim(selection, primary);
+    const changed = (path: string) =>
+      this.changedDuringResolve.has(path) || this.changedRecently(path);
+    if (claim?.result?.state === "stale") {
+      // The host read newer bytes than the page is showing; give it a moment.
+      if (changed(claim.result.held.target.file.path)) settle();
+      else refuse({ status: "lost" }, true);
+      return;
+    }
+    if (claim?.result?.state === "unavailable" && claim.result.reason === "mismatch") {
+      // The page's location for the element and the file disagree. When the
+      // file is known to have just changed, that is the page still catching
+      // up; otherwise nothing moved, "select again" would be the same click
+      // for the same answer, and the notice says what was seen instead.
+      const read = claim.result.read?.file.path;
+      if (read !== undefined && changed(read)) {
+        settle();
+        return;
+      }
+      const at = claim.candidate.kind === "file-hint" ? null : claim.candidate.location;
+      refuse(
+        {
+          status: "failed",
+          message: mismatchMessage({
+            tagName: primary.tagName,
+            file: claim.candidate.file,
+            line: at === null ? 0 : displayLine(at),
+          }),
+        },
+        false
+      );
+      return;
+    }
+    // The observation predates the change, but the host resolved it against
+    // the newer bytes; the pairing can't be trusted, so it is asked for again
+    // once the page has caught up.
+    if ([...heldPaths(selection)].some(changed)) {
       settle();
       return;
     }
-    const after = selection.nodes[0]?.definition ?? null;
-    const location = after?.location ?? null;
-    const pickedOccurrence = primary.locIndex;
-    this.continuity =
-      location !== null && pickedOccurrence !== undefined
-        ? {
-            loc: { ...location },
-            locIndex: pickedOccurrence,
-            occurrence: primary.runtimeOccurrenceId,
-            tagName: primary.tagName,
-            sameLocCount: primary.sameLocCount,
-            chain: chainOf(primary),
-            epoch,
-          }
-        : null;
-    const before = this.state.selection;
+    this.keepPicture(selection.selectionId, picture);
+    this.publish(selection, reproving ? this.state.selection : null);
+  }
+
+  /** Put a proven selection on screen, superseding the one it was asked again for. */
+  private publish(selection: PickedSelection, before: SelectionState | null): void {
     const supersedes =
-      reproving && before.status === "ready"
+      before?.status === "ready"
         ? [...(before.supersedes ?? []), before.selection.selectionId].slice(-SUPERSEDES_KEPT)
         : undefined;
-    this.keepPicture(selection.selectionId, picture);
-    this.keepShown(selection.selectionId, nodes);
+    this.continuity = this.continuityOf(selection.observations[0]!, selection.documentEpoch);
     this.endReprove();
     this.patchState({
       selection: {
         status: "ready",
         selection,
-        file,
         stale: null,
-        scope,
-        component,
-        definitions: null,
-        revisions: null,
         ...(supersedes ? { supersedes } : {}),
       },
       selectionGeneration: this.state.selectionGeneration + 1,
     });
-    void this.resolveDefinitions(selection, component);
+  }
+
+  private continuityOf(observation: SelectionObservation, epoch: number): Continuity {
+    return {
+      elementId: observation.elementId,
+      epoch,
+      locator: svelteLocator(observation),
+      tagName: observation.tagName,
+      sameLocCount: svelteEvidence(observation)?.sameLocCount ?? null,
+      chain: chainKey(observation),
+    };
+  }
+
+  /** A selection made while the workspace opened, now that it has. */
+  private resumeHeld(): void {
+    const held = this.held;
+    this.held = null;
+    if (held === null || held.request !== this.selectionRequest) return;
+    const selection = this.state.selection;
+    if (selection.status !== "resolving" || selection.requestId !== held.request) return;
+    if (this.state.epoch !== held.epoch) {
+      this.patchState({ selection: { status: "lost" } });
+      return;
+    }
+    void this.handleSelection(held.epoch, held.observations, held.scope, "user", held.picture);
+  }
+
+  /** The workspace did not open: a held selection is the page's account of the element after all. */
+  private releaseHeld(): void {
+    const held = this.held;
+    this.held = null;
+    if (held === null || held.request !== this.selectionRequest) return;
+    const selection = this.state.selection;
+    if (selection.status !== "resolving" || selection.requestId !== held.request) return;
+    const page = this.state.page;
+    const binding = this.state.binding;
+    if (page === null || page.epoch !== held.epoch || binding.status !== "bound") {
+      this.patchState({ selection: { status: "lost" } });
+      return;
+    }
+    const next = this.nextSelection(held.epoch, page, held.observations, held.scope, null, {});
+    this.keepPicture(next.selectionId, held.picture);
+    this.publish(next, null);
   }
 
   /* ------------------------------------------------------------------------ */
@@ -1564,7 +1466,7 @@ export class InspectorController implements DevPreviewToolSession {
    * doubt. It is marked stale either way — a request must not cite it until it
    * is proved — but as provisional, so no surface asks the user to redo a click
    * the page may be able to answer itself. False when there is nothing to ask
-   * for: no ready selection, or one the page could not place.
+   * for: no ready selection, or one the page could not find again.
    */
   private beginReprove(sourceChanged: boolean, reloaded = false): boolean {
     const selection = this.state.selection;
@@ -1573,13 +1475,24 @@ export class InspectorController implements DevPreviewToolSession {
     // A selection the preview dropped or the page reloaded past is not this
     // page's to answer for.
     if (selection.stale !== null && this.reprove === null) return false;
+    // An untraced selection cites nothing that could have changed.
+    if (selection.selection.workspaceId === null) return false;
     // The page is asked for one element, or one component's roots; a hand-built
     // set of several would come back as its first.
-    if (selection.selection.nodes.length > 1 && selection.scope !== "component") return false;
-    const picked = selection.scope === "component" ? selection.component : null;
+    if (
+      selection.selection.observations.length > 1 &&
+      selection.selection.scope.kind !== "component"
+    ) {
+      return false;
+    }
+    // After a reload only the framework's own locator can find it again.
+    if (reloaded && record.locator === null) return false;
+    const scope = selection.selection.scope;
+    const primary = selection.selection.observations[0];
     const started = this.startReprove({
       record,
-      component: picked ? { file: picked.file, line: picked.line, column: picked.column } : null,
+      component:
+        scope.kind === "component" && primary ? invocationSite(primary, scope.componentId) : null,
       sourceChanged: sourceChanged || (this.reprove?.sourceChanged ?? false),
       reloaded: reloaded || (this.reprove?.reloaded ?? false),
       attempts: 0,
@@ -1601,40 +1514,44 @@ export class InspectorController implements DevPreviewToolSession {
 
   /**
    * Whether the page's answer is the element that was proved. The same node
-   * (its occurrence id) is; one found again by position is only when nothing
-   * about its position's meaning moved — same tag, same number of copies at
-   * that location, same render chain — and a component selection must come
-   * back as that component, not as the element it was reached through. What
-   * this cannot see is a same-tag element written into the exact line and
-   * column the original was pushed out of.
+   * (its element id, in the same document) is; one found again by position
+   * is only when nothing about its position's meaning moved — same tag, same
+   * number of copies at that location, same chain — and a component selection
+   * must come back as that component, not as the element it was reached
+   * through. What this cannot see is a same-tag element written into the exact
+   * line and column the original was pushed out of.
    */
   private answersReprove(
     reprove: Reprove,
-    node: SiteGuestNodeObservation,
-    scope: "element" | "component",
-    component: PickedComponent | null,
+    observation: SelectionObservation,
+    scope: SelectionScope,
     epoch: number
   ): boolean {
     const wanted = reprove.component;
     if (wanted !== null) {
-      if (scope !== "component" || component === null) return false;
+      if (scope.kind !== "component") return false;
+      const site = invocationSite(observation, scope.componentId);
       if (
-        component.file !== wanted.file ||
-        component.line !== wanted.line ||
-        component.column !== wanted.column
+        site === null ||
+        site.file !== wanted.file ||
+        site.line !== wanted.line ||
+        site.column !== wanted.column
       ) {
         return false;
       }
-    } else if (scope !== "element") {
+    } else if (scope.kind !== "element") {
       return false;
     }
-    if (node.tagName !== reprove.record.tagName) return false;
+    if (observation.tagName.toLowerCase() !== reprove.record.tagName.toLowerCase()) return false;
     // The same node, which only an id from the same document can say.
-    if (epoch === reprove.record.epoch && node.runtimeOccurrenceId === reprove.record.occurrence) {
+    if (epoch === reprove.record.epoch && observation.elementId === reprove.record.elementId) {
       return true;
     }
+    const count = svelteEvidence(observation)?.sameLocCount ?? null;
     return (
-      node.sameLocCount === reprove.record.sameLocCount && chainOf(node) === reprove.record.chain
+      reprove.record.sameLocCount !== null &&
+      count === reprove.record.sameLocCount &&
+      chainKey(observation) === reprove.record.chain
     );
   }
 
@@ -1665,6 +1582,29 @@ export class InspectorController implements DevPreviewToolSession {
     }, HMR_SETTLE_MS);
   }
 
+  /** What the page is asked for an element by: its id while it is still that node, else its locator. */
+  private reselectRequest(
+    sessionId: string,
+    record: Continuity,
+    component: SourcePoint | null,
+    reveal: boolean
+  ): ElementPickerReselectRequest | null {
+    const sameDocument = record.epoch === this.state.epoch;
+    if (!sameDocument && record.locator === null) return null;
+    return {
+      sessionId,
+      // Never an id from another document: there it is some other element.
+      ...(sameDocument ? { elementId: record.elementId } : {}),
+      ...(record.locator !== null
+        ? {
+            framework: "svelte" as const,
+            locator: { ...record.locator, ...(component ? { component } : {}) },
+          }
+        : {}),
+      ...(reveal ? { reveal: true } : {}),
+    };
+  }
+
   private async attemptReprove(): Promise<void> {
     const reprove = this.reprove;
     const binding = this.state.binding;
@@ -1684,20 +1624,21 @@ export class InspectorController implements DevPreviewToolSession {
       this.failReprove();
       return;
     }
+    const request = this.reselectRequest(
+      binding.sessionId,
+      reprove.record,
+      reprove.component,
+      false
+    );
+    if (request === null) {
+      this.failReprove();
+      return;
+    }
     reprove.attempts += 1;
     reprove.awaiting = true;
     let found: boolean;
     try {
-      found = await this.deps.sitePreview.reselect({
-        sessionId: binding.sessionId,
-        loc: reprove.record.loc,
-        index: reprove.record.locIndex,
-        // Never an id from another document: there it is some other element.
-        ...(reprove.record.epoch === this.state.epoch
-          ? { occurrence: reprove.record.occurrence }
-          : {}),
-        ...(reprove.component ? { component: reprove.component } : {}),
-      });
+      found = await this.deps.picker.reselect(request);
     } catch {
       found = false;
     }
@@ -1721,7 +1662,7 @@ export class InspectorController implements DevPreviewToolSession {
     const selection = this.state.selection;
     const binding = this.state.binding;
     if (standIn && binding.status === "bound") {
-      void this.deps.sitePreview
+      void this.deps.preview
         .clearSelection({ sessionId: binding.sessionId })
         .catch(() => undefined);
     }
@@ -1741,7 +1682,7 @@ export class InspectorController implements DevPreviewToolSession {
 
   /**
    * The page or the preview the ask was for is gone: a reload mints new
-   * occurrence ids, and a detached preview answers nothing.
+   * element ids, and a detached preview answers nothing.
    */
   private abandonReprove(): void {
     if (this.reprove === null) return;
@@ -1773,9 +1714,7 @@ export class InspectorController implements DevPreviewToolSession {
       if (this.pointerLeft === left) this.pointerLeft = null;
       const binding = this.state.binding;
       if (binding.status !== "bound") return;
-      void this.deps.sitePreview
-        .clearHover({ sessionId: binding.sessionId })
-        .catch(() => undefined);
+      void this.deps.preview.clearHover({ sessionId: binding.sessionId }).catch(() => undefined);
     };
     this.pointerLeft = left;
     document.addEventListener("pointermove", left, true);
@@ -1791,146 +1730,51 @@ export class InspectorController implements DevPreviewToolSession {
   /** Drop the selection, here and on the page. */
   async clearSelection(): Promise<void> {
     this.selectionRequest++;
+    this.held = null;
     this.endReprove();
     this.continuity = null;
     this.patchState({ selection: { status: "none" } });
     const binding = this.state.binding;
     if (binding.status !== "bound") return;
-    await this.deps.sitePreview
-      .clearSelection({ sessionId: binding.sessionId })
-      .catch(() => undefined);
-  }
-
-  private async resolveDefinitions(
-    selection: SiteSelection,
-    component: PickedComponent | null
-  ): Promise<void> {
-    // The live selection always settles: unanswerable means unproven, and a
-    // file whose revision couldn't be read can't vouch for anything.
-    const facts = (await this.lookupDefinitions(selection, component)) ?? {
-      definitions: Object.fromEntries(
-        componentCallSites(selection, component).map((site) => [callSiteKey(site), null])
-      ),
-      revisions: {},
-    };
-    const current = this.state.selection;
-    if (current.status !== "ready" || current.selection.selectionId !== selection.selectionId) {
-      return;
-    }
-    this.patchState({ selection: { ...current, ...facts } });
-  }
-
-  /**
-   * What a request about a selection may claim: where its components are
-   * written, read from source by main, and the revision of every file those
-   * claims come from. Asked through the workspace open now — a draft pinned to
-   * an older selection may carry a session that has since closed. Null when
-   * there is nobody to ask yet (no open workspace for that app, or it closed
-   * mid-request), so the caller can try again.
-   */
-  async lookupDefinitions(
-    selection: SiteSelection,
-    component: PickedComponent | null
-  ): Promise<{
-    definitions: Record<string, string | null>;
-    revisions: Record<string, string | null>;
-  } | null> {
-    const workspace = this.state.workspace;
-    if (workspace.status !== "ready" || workspace.appRoot !== selection.appRoot) return null;
-    const callSites = componentCallSites(selection, component).slice(0, 64);
-    const definitions: Record<string, string | null> = {};
-    // Revisions come from the very reads the answers were drawn from, so a
-    // file edited in between can't lend its newer hash to an older mapping.
-    const revisions: Record<string, string | null> = {};
-    const record = (file: string, revision: string | null) => {
-      // Two reads of one file that disagree prove neither.
-      revisions[file] = file in revisions && revisions[file] !== revision ? null : revision;
-    };
-    if (callSites.length > 0) {
-      try {
-        const parsed = ComponentDefinitionsResultSchema.safeParse(
-          await this.deps.invoke(CHANNELS.componentDefinitions, {
-            workspaceSessionId: workspace.workspaceSessionId,
-            callSites,
-          })
-        );
-        if (parsed.success) {
-          for (const entry of parsed.data.definitions) {
-            definitions[callSiteKey(entry)] = entry.definedIn;
-            record(entry.file, entry.revision);
-            if (entry.definedIn) record(entry.definedIn, entry.definedInRevision);
-          }
-        }
-      } catch (error) {
-        if (isWorkspaceClosed(error)) {
-          this.recoverClosedWorkspace(workspace.workspaceSessionId);
-          return null;
-        }
-        // Anything else: unproven is the answer, and no component scope is sendable.
-      }
-    }
-    for (const site of callSites) {
-      const key = callSiteKey(site);
-      if (!(key in definitions)) definitions[key] = null;
-    }
-    // An element's own file is held to the revision it was resolved against —
-    // and a mapping read from other bytes of that file leaves it unprovable.
-    for (const node of selection.nodes) {
-      if (node.definition) record(node.definition.location.file, node.definition.revision);
-    }
-    // Anything cited that no read vouched for can't be verified, so it fails.
-    for (const file of citedFiles(selection, component, definitions)) {
-      if (!(file in revisions)) revisions[file] = null;
-    }
-    return { definitions, revisions };
+    await this.deps.preview.clearSelection({ sessionId: binding.sessionId }).catch(() => undefined);
   }
 
   /**
    * Whether every file a request cites still has the bytes its claims were
-   * read from. Checked against disk through the workspace open now.
+   * checked against. Asked of the workspace open now: one the picker has
+   * since let go of cannot vouch for anything.
    */
-  async sourcesUnchanged(selection: SiteSelection, revisions: SourceRevisions): Promise<boolean> {
-    if (revisions === null) return false;
-    const workspace = this.state.workspace;
-    if (workspace.status !== "ready" || workspace.appRoot !== selection.appRoot) return false;
-    const files = Object.keys(revisions);
-    if (files.length === 0) return true;
-    const now = await this.readRevisions(files);
-    // The app may have been switched while the read was out: its answer is
-    // about files the picker no longer has open.
-    const after = this.state.workspace;
-    if (after.status !== "ready" || after.workspaceSessionId !== workspace.workspaceSessionId) {
+  async sourcesUnchanged(selection: PickedSelection): Promise<boolean> {
+    const workspaceId = selection.workspaceId;
+    // Nothing was resolved, so nothing is cited that could have changed.
+    if (workspaceId === null) return true;
+    if (this.currentWorkspaceId() !== workspaceId) return false;
+    const revisions = citedRevisions(selection);
+    // A claim held without its file being read carries no revision to compare,
+    // but an edit reported to that file since the selection was made still
+    // moves the line it names.
+    const captured = Date.parse(selection.capturedAt);
+    for (const path of heldPaths(selection)) {
+      if (path in revisions) continue;
+      const changed = this.recentChanges.get(path);
+      // The same millisecond reads as after: a pick can't vouch for bytes it may not have seen.
+      if (changed !== undefined && changed >= captured) return false;
+    }
+    const paths = Object.keys(revisions);
+    if (paths.length === 0) return true;
+    if (paths.some((path) => revisions[path] === null)) return false;
+    let now: ElementPickerSourceRevisionsResult;
+    try {
+      now = await this.deps.picker.sourceRevisions({ workspaceId, paths: paths.slice(0, 128) });
+    } catch (error) {
+      if (isWorkspaceClosed(error)) this.recoverClosedWorkspace(workspaceId);
       return false;
     }
-    return (
-      now !== null &&
-      files.every((file) => revisions[file] !== null && now[file] === revisions[file])
-    );
-  }
-
-  private async readRevisions(files: string[]): Promise<Record<string, string | null> | null> {
-    const workspace = this.state.workspace;
-    if (workspace.status !== "ready") return null;
-    const revisions: Record<string, string | null> = {};
-    if (files.length === 0) return revisions;
-    try {
-      const parsed = SourceRevisionsResultSchema.safeParse(
-        await this.deps.invoke(CHANNELS.sourceRevisions, {
-          workspaceSessionId: workspace.workspaceSessionId,
-          files: files.slice(0, 128),
-        })
-      );
-      if (parsed.success) {
-        for (const entry of parsed.data.revisions) revisions[entry.file] = entry.revision;
-      }
-    } catch (error) {
-      if (isWorkspaceClosed(error)) {
-        this.recoverClosedWorkspace(workspace.workspaceSessionId);
-        return null;
-      }
-    }
-    for (const file of files) if (!(file in revisions)) revisions[file] = null;
-    return revisions;
+    // The app may have been switched while the read was out: its answer is
+    // about files the picker no longer has open.
+    if (this.currentWorkspaceId() !== workspaceId) return false;
+    const current = new Map(now.revisions.map((entry) => [entry.path, entry.revision]));
+    return paths.every((path) => current.get(path) === revisions[path]);
   }
 
   private changedRecently(file: string): boolean {
@@ -1963,23 +1807,21 @@ export class InspectorController implements DevPreviewToolSession {
     } else if (selection.status === "resolving") {
       this.selectionRequest++;
       patch.selection = { status: "lost" };
-    } else if (selection.status === "observed") {
-      patch.selection = { status: "none" };
     }
     return patch;
   }
 
-  private handleSourceChanged(raw: unknown): void {
-    const parsed = SourceChangedPushSchema.safeParse(raw);
-    if (!parsed.success) return;
-    const push = parsed.data;
-    const workspace = this.state.workspace;
-    if (workspace.status !== "ready" || push.workspaceSessionId !== workspace.workspaceSessionId) {
-      return;
-    }
-    this.noteChanged(push.file);
+  private handleSourceChanged(push: ElementPickerSourceChangedPush): void {
+    const workspaceId = this.currentWorkspaceId();
+    if (workspaceId === null || push.workspaceId !== workspaceId) return;
+    const path = push.file.path;
+    this.noteChanged(path);
     const selection = this.state.selection;
-    if (selection.status === "ready" && selection.file === push.file) {
+    if (
+      selection.status === "ready" &&
+      selection.selection.workspaceId === workspaceId &&
+      heldPaths(selection.selection).has(path)
+    ) {
       if (!this.beginReprove(true)) this.patchState(this.staleSelectionPatch("source-changed"));
     } else if (this.reprove !== null && this.reproveTimer !== null) {
       // Still being written: wait out this change too.
@@ -1987,27 +1829,13 @@ export class InspectorController implements DevPreviewToolSession {
     }
   }
 
-  private handleIssue(raw: unknown): void {
-    const parsed = IssuePushSchema.safeParse(raw);
-    if (!parsed.success) return;
-    this.patchState({
-      issue: {
-        severity: parsed.data.severity,
-        message: parsed.data.message,
-        // Pushed errors arrive without a cause we can act on individually, so
-        // the recovery is the one that repairs the session they came through.
-        ...(parsed.data.severity === "error" ? { recovery: { kind: "reconnect" } as const } : {}),
-      },
-    });
-  }
-
   /**
    * Whether a component on the trail can be selected right now — the one rule
    * the crumbs and {@link selectComponent} share, so a crumb is never a button
    * that does nothing. The page only answers a selection request in Select
-   * mode; a stale trail describes an element the page no longer shows; and a
-   * selection the page could not place (no proven location, or an occurrence
-   * it could not count) cannot be asked for again.
+   * mode; a stale trail describes an element the page no longer shows; and the
+   * page finds a component around an element by the framework's own locator,
+   * which only Svelte's dev runtime gives it.
    */
   canSelectComponent(): boolean {
     const state = this.state;
@@ -2016,10 +1844,7 @@ export class InspectorController implements DevPreviewToolSession {
       state.mode === "select" &&
       state.selection.status === "ready" &&
       state.selection.stale === null &&
-      // A page whose metadata names no component chain has no component to
-      // hand the crumb to; the crumbs stay text.
-      state.page?.metadata?.ancestry !== false &&
-      this.continuity !== null
+      this.continuity?.locator != null
     );
   }
 
@@ -2027,28 +1852,19 @@ export class InspectorController implements DevPreviewToolSession {
    * Select the component invoked at `usedAt` — what a crumb in the trail names
    * — the way Option/Alt+Up would, aimed: the page re-selects the element it
    * last proved as a member of that invocation and reports it back, and the
-   * answer resolves as any fresh pick does. Clicking the page lands on the
-   * innermost thing under the pointer, and the component a request should be
-   * about is usually a step or two up; the trail names those steps.
-   *
-   * The page's answer is taken for what it is — the user's choice — and
-   * resolves as any fresh pick does. False when the pick can't be made
+   * answer resolves as any fresh pick does. False when the pick can't be made
    * ({@link canSelectComponent}) or the page no longer has the element.
    */
-  async selectComponent(usedAt: CallSite): Promise<boolean> {
+  async selectComponent(usedAt: SourcePoint): Promise<boolean> {
     const record = this.continuity;
     const binding = this.state.binding;
     if (record === null || binding.status !== "bound" || !this.canSelectComponent()) {
       return false;
     }
+    const request = this.reselectRequest(binding.sessionId, record, usedAt, true);
+    if (request === null) return false;
     try {
-      return await this.deps.sitePreview.reselect({
-        sessionId: binding.sessionId,
-        loc: record.loc,
-        index: record.locIndex,
-        ...(record.epoch === this.state.epoch ? { occurrence: record.occurrence } : {}),
-        component: { file: usedAt.file, line: usedAt.line, column: usedAt.column },
-      });
+      return await this.deps.picker.reselect(request);
     } catch {
       return false;
     }
@@ -2057,13 +1873,12 @@ export class InspectorController implements DevPreviewToolSession {
   /**
    * The live selection standing for `selectionId` — itself, or one proved again
    * from it after an edit — for a request that was made about it and is only
-   * now going out. "pending" while that is still being established: the page
-   * is being asked, or main has not yet said where its components are written.
-   * Null when nothing live stands for it: the user selected something else, or
-   * the page could not vouch for it. The request is then held to the selection
-   * it was made about, and fails honestly if that has changed.
+   * now going out. "pending" while that is still being established. Null when
+   * nothing live stands for it: the user selected something else, or the page
+   * could not vouch for it. The request is then held to the selection it was
+   * made about, and fails honestly if that has changed.
    */
-  followSelection(selectionId: string): FollowedSelection | "pending" | null {
+  followSelection(selectionId: string): PickedSelection | "pending" | null {
     const state = this.state.selection;
     if (state.status !== "ready") return null;
     const stands =
@@ -2072,14 +1887,7 @@ export class InspectorController implements DevPreviewToolSession {
     if (!stands) return null;
     if (this.reprove !== null) return "pending";
     if (state.stale !== null) return null;
-    if (state.definitions === null || state.revisions === null) return "pending";
-    return {
-      selection: state.selection,
-      file: state.file,
-      picked: state.scope === "component" ? state.component : null,
-      definitions: state.definitions,
-      revisions: state.revisions,
-    };
+    return state.selection;
   }
 
   dismissIssue(): void {
@@ -2103,139 +1911,29 @@ export class InspectorController implements DevPreviewToolSession {
   }
 
   /**
-   * Where the selected page sits in the project, for an agent task: the app,
-   * its toolchain versions, and the route files serving the page's URL. Read
+   * Where the selected page sits in the project, for an agent request: the
+   * app, its toolchain, and the route files serving the page's address. Read
    * fresh — routes are exactly what an agent adds while the panel is open.
-   * Null when the model can't be read; the task then goes without.
+   * Null when it can't be read in time; the request then goes without.
    */
-  async pagePlace(selection: SiteSelection): Promise<PagePlace | null> {
+  async projectFor(selection: PickedSelection): Promise<ProjectContextOutcome | null> {
+    const workspaceId = selection.workspaceId;
+    if (workspaceId === null) return null;
+    let timer: ReturnType<typeof setTimeout> | undefined;
     try {
-      // Optional context: a slow project scan must not hold the request up.
-      // The timeout abandons the wait, not the scan — main has no request-level
-      // cancellation to reach, so the inspection runs on and this caller simply
-      // stops listening for it.
-      const raw = await Promise.race([
-        this.deps.invoke(CHANNELS.projectModel, {
-          workspaceSessionId: selection.workspaceSessionId,
+      // Optional context: a slow read must not hold the request up. The host
+      // bounds its own walk; this only stops listening.
+      return await Promise.race([
+        this.deps.picker.describeProject({ workspaceId, url: selection.displayedUrl }),
+        new Promise<null>((resolve) => {
+          timer = setTimeout(() => resolve(null), PROJECT_CONTEXT_TIMEOUT_MS);
         }),
-        new Promise<null>((resolve) => setTimeout(() => resolve(null), PAGE_PLACE_TIMEOUT_MS)),
       ]);
-      if (raw === null) return null;
-      const parsed = ProjectModelResultSchema.safeParse(raw);
-      if (!parsed.success) return null;
-      const model = parsed.data;
-      let pathname: string;
-      try {
-        pathname = new URL(selection.displayedUrl, "http://localhost").pathname;
-      } catch {
-        return null;
-      }
-      const { matchRoute } = await loadRouteMatch();
-      const worktreePath = this.context.worktreePath;
-      return {
-        appPath: worktreePath
-          ? (worktreeRelative(model.appRoot, worktreePath, "") ?? "").replace(/\/$/, "")
-          : "",
-        versions: {
-          svelte: model.versions.svelte,
-          kit: model.versions.kit,
-          tailwind: model.versions.tailwind,
-        },
-        // Three ways the route is not ours to name: a base the config computes
-        // cannot be stripped from the URL; routes walked in the default
-        // directory because the config was unreadable describe a tree the app
-        // may not have; and a dynamic match on a walk that stopped early may be
-        // standing in for a static route we never reached. Naming files in any
-        // of the three hands an agent a guess dressed as a reading.
-        route: routeFor(model, pathname, matchRoute),
-      };
     } catch {
       return null;
+    } finally {
+      clearTimeout(timer);
     }
-  }
-
-  /** Give the observed selection its page account, now that there is known to be no source. */
-  private describeObserved(): void {
-    const selection = this.state.selection;
-    const observed = this.lastObserved;
-    const page = this.state.page;
-    const binding = this.state.binding;
-    if (
-      selection.status !== "observed" ||
-      selection.page !== null ||
-      observed === null ||
-      observed.epoch !== selection.epoch ||
-      page?.epoch !== selection.epoch ||
-      binding.status !== "bound"
-    ) {
-      return;
-    }
-    const described = this.pageSelectionOf(binding.panelId, selection.epoch, page, observed.nodes);
-    // The boxes were measured at the click, and the page may have scrolled or
-    // reflowed since: a picture taken now could frame something else.
-    this.keepPicture(
-      described.selectionId,
-      Promise.resolve({
-        status: "omitted",
-        reason: "it was picked before the worktree search finished; select it again to attach one",
-      })
-    );
-    this.patchState({ selection: { ...selection, page: described } });
-  }
-
-  /** No source exists here to trace an element to: the page is all there is to describe. */
-  private isSourceless(): boolean {
-    const status = this.state.workspace.status;
-    return status === "no-app" || status === "no-worktree";
-  }
-
-  /**
-   * Whether the page's verdict on its Svelte metadata is beside the point: no
-   * source here at all, or the preview is known to run some other app. "Run the
-   * app with the Vite dev server" is advice for a misconfigured Svelte app,
-   * not for a Next.js one sitting next to it.
-   */
-  private mappingIssuesMoot(): boolean {
-    if (this.isSourceless()) return true;
-    const workspace = this.state.workspace;
-    const appRoots =
-      workspace.status === "ready"
-        ? [workspace.appRoot]
-        : workspace.status === "ambiguous"
-          ? workspace.appRoots
-          : [];
-    return previewBesideApps(appRoots, usePanelStore.getState().panelsById[this.panelId]);
-  }
-
-  /** A verdict reached before the workspace said which app this is, and now moot. */
-  private dropMootMappingIssue(): void {
-    const code = this.state.issue?.code;
-    if (code !== undefined && MAPPING_ISSUES.has(code) && this.mappingIssuesMoot()) {
-      this.patchState({ issue: null });
-    }
-  }
-
-  private pageSelectionOf(
-    previewPanelId: string,
-    epoch: number,
-    page: PageState,
-    nodes: SiteGuestNodeObservation[]
-  ): PageSelection {
-    this.pageSelectionCount += 1;
-    return {
-      kind: "page",
-      selectionId: `page:${epoch}:${this.pageSelectionCount}`,
-      previewPanelId,
-      documentEpoch: epoch,
-      displayedUrl: redactUrl(page.url),
-      viewport: page.viewport,
-      nodes: nodes.map((node) => ({
-        label: singleLineLabel(node.label),
-        tagName: node.tagName,
-        context: node.context ?? null,
-      })),
-      capturedAt: new Date(this.deps.now()).toISOString(),
-    };
   }
 
   /**
@@ -2246,12 +1944,12 @@ export class InspectorController implements DevPreviewToolSession {
   private takePicture(
     previewPanelId: string,
     viewport: { width: number; height: number },
-    nodes: SiteGuestNodeObservation[]
+    observations: SelectionObservation[]
   ): Promise<PageScreenshot> {
     const capture = this.deps.capture;
     const omitted = (reason: string): Promise<PageScreenshot> =>
       Promise.resolve({ status: "omitted", reason });
-    const rect = unionBounds(nodes.flatMap((node) => node.bounds));
+    const rect = unionBounds(observations.flatMap((observation) => observation.bounds));
     if (capture === undefined) return omitted("this host can't capture the preview");
     if (this.deps.remoteWindow?.() === true) {
       return omitted("this window is attached to another machine");
@@ -2293,36 +1991,6 @@ export class InspectorController implements DevPreviewToolSession {
     keepRecent(this.captures, selectionId, picture);
   }
 
-  /**
-   * What the page showed of a traced selection's elements. A resolve carries
-   * the source and leaves the page's own account behind, so it is kept here
-   * for the request to quote beside the source.
-   */
-  private keepShown(selectionId: string, nodes: SiteGuestNodeObservation[]): void {
-    keepRecent(
-      this.shown,
-      selectionId,
-      new Map(
-        nodes.map((node) => [
-          node.runtimeOccurrenceId,
-          {
-            label: singleLineLabel(node.label),
-            tagName: node.tagName,
-            context: node.context ?? null,
-            stamp: node.loc
-              ? { file: node.loc.file, line: node.loc.line, column: node.loc.column }
-              : null,
-          },
-        ])
-      )
-    );
-  }
-
-  /** What the page showed of a traced selection's elements, by occurrence id; null once too old to be kept. */
-  shownNodes(selectionId: string): ReadonlyMap<string, ShownNode> | null {
-    return this.shown.get(selectionId) ?? null;
-  }
-
   /** The picture taken of a selection, or why a request about it goes without one. */
   pagePicture(selectionId: string): Promise<PageScreenshot> {
     return (
@@ -2341,10 +2009,11 @@ export class InspectorController implements DevPreviewToolSession {
     this.clearConnectRetry();
     this.endReprove();
     this.watchPointerLeaving(false);
+    this.held = null;
     this.bindRequest++;
     const binding = this.state.binding;
     if (binding.status === "bound") {
-      void this.deps.sitePreview.detach({ sessionId: binding.sessionId }).catch(() => undefined);
+      void this.deps.preview.detach({ sessionId: binding.sessionId }).catch(() => undefined);
     }
     this.closeWorkspace();
     this.disposed = true;
@@ -2355,21 +2024,22 @@ export class InspectorController implements DevPreviewToolSession {
 }
 
 /**
- * The picker for one dev preview, as the host's session for the Element
- * Picker. The host owns its lifetime — created when the picker is switched on,
- * kept across surface unmounts, disposed when the tool goes off or the preview
- * or plugin does — so nothing here reconstructs those events.
+ * The picker for one dev preview, as the dev preview's session for it. The
+ * host owns its lifetime — created when the picker is switched on, kept across
+ * surface unmounts, disposed when the picker goes off or the preview does — so
+ * nothing here reconstructs those events.
  */
 export function createElementPickerSession(
   context: DevPreviewToolSessionContext,
-  deps: (previewPanelId: string) => InspectorDeps = defaultInspectorDeps
+  deps: () => InspectorDeps = defaultInspectorDeps
 ): InspectorController {
   // The chunk can land after the host let this preview go. Disposing what we
   // would build here cancels agent requests and forgets composer drafts for the
   // whole panel — which by then may belong to the next session.
-  if (context.signal.aborted)
+  if (context.signal.aborted) {
     throw new Error("The Element Picker was switched off while it loaded");
-  const controller = new InspectorController(context.panelId, deps(context.panelId));
+  }
+  const controller = new InspectorController(context.panelId, deps());
   controller.update(context);
   return controller;
 }

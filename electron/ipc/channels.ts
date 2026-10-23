@@ -601,6 +601,19 @@ export const CHANNELS = {
   SITE_PREVIEW_GET_STATE: "site-preview:get-state",
   SITE_PREVIEW_EVENT: "site-preview:event",
 
+  // Core Element Picker — the dev preview's own picker. Binding and the page's
+  // traffic stay on the machine showing the preview; the source workspace and
+  // what is read through it run where the worktree is. See handlers/elementPicker.ts.
+  ELEMENT_PICKER_BIND: "element-picker:bind",
+  ELEMENT_PICKER_RESELECT: "element-picker:reselect",
+  ELEMENT_PICKER_WORKSPACE_OPEN: "element-picker:workspace-open",
+  ELEMENT_PICKER_WORKSPACE_CLOSE: "element-picker:workspace-close",
+  ELEMENT_PICKER_RESOLVE: "element-picker:resolve",
+  ELEMENT_PICKER_DESCRIBE_PROJECT: "element-picker:describe-project",
+  ELEMENT_PICKER_SOURCE_REVISIONS: "element-picker:source-revisions",
+  ELEMENT_PICKER_EVENT: "element-picker:event",
+  ELEMENT_PICKER_SOURCE_CHANGED: "element-picker:source-changed",
+
   COMMANDS_LIST: "commands:list",
   COMMANDS_GET: "commands:get",
   COMMANDS_EXECUTE: "commands:execute",

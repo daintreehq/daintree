@@ -1,8 +1,16 @@
 import { ChevronRight } from "lucide-react";
-import type { AncestryEntry, SelectedNode } from "./legacyBridge.js";
 import type { ReactElement } from "react";
 import { cn } from "@/lib/utils";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import {
+  componentsOf,
+  elementLabel,
+  pickedComponent,
+  primaryObservation,
+  type ComponentView,
+  type PickedSelection,
+  type SourcePoint,
+} from "./selection.js";
 
 /**
  * One definition of "where this element sits", shared by the strip and the
@@ -20,20 +28,14 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
  */
 export interface TrailCrumb {
   readonly label: string;
-  /** Components carry a file; the element itself does not. */
+  /** Components carry the file they are written in, once the host found it; the element does not. */
   readonly file: string | null;
   /**
-   * Where the component was invoked — the identity a picked component is
-   * matched on. Two nested components can share a label; they cannot share a
-   * call site.
+   * Where the component was invoked, as the page reported it — the identity a
+   * picked component is matched on. Two nested components can share a label;
+   * they cannot share a call site.
    */
-  readonly usedAt: { file: string; line: number; column: number } | null;
-}
-
-/** The component picked on the page, when the selection is one. */
-export interface PickedCrumb {
-  readonly label: string;
-  readonly usedAt: { file: string; line: number; column: number } | null;
+  readonly usedAt: SourcePoint | null;
 }
 
 /**
@@ -41,76 +43,42 @@ export interface PickedCrumb {
  * first, and then the selection itself — the component when one was picked,
  * the element otherwise.
  *
- * A picked component is matched by its call site, never by label, since two
- * nested components can share a name; innermost first, which is the order the
- * page itself matches a call site in, so a recursive component invoked from
- * the same line twice names the same invocation here and there. The crumbs
- * inside it are the route the selection was reached THROUGH, not where it is,
- * so they are dropped. A picked call site that is not on the chain at all is
- * still what the user picked — but the chain was trimmed from the outside to
- * fit, so every frame that survived is inside it; none of them is above.
+ * A picked component is matched by its id in the page's chain, never by
+ * label, since two nested components can share a name. The crumbs inside it
+ * are the route the selection was reached THROUGH, not where it is, so they
+ * are dropped. A picked component the chain does not name is still what the
+ * user picked — but the chain was trimmed from the outside to fit, so every
+ * frame that survived is inside it; none of them is above.
  *
  * Split in two because the callers sit differently: the strip has no header,
  * so it shows both to say what is selected at all; the drawer names the
  * selection in its identity block two lines up and shows only what is above.
  */
-export function trailFor(
-  node: SelectedNode,
-  picked: PickedCrumb | null = null
-): { above: TrailCrumb[]; current: TrailCrumb } {
-  // Innermost first, as the page reports it. Only a component frame can be
-  // the pick, as on the page: a block whose location collides with a call
-  // site is control flow, not an invocation.
-  const ancestry = node.ancestry;
-  const site = picked?.usedAt ?? null;
+export function trailFor(selection: PickedSelection): { above: TrailCrumb[]; current: TrailCrumb } {
+  // Innermost first, as the page reports it.
+  const components = componentsOf(selection);
+  const picked = pickedComponent(selection);
   const pickedAt =
-    site === null
+    picked === null
       ? -1
-      : ancestry.findIndex(
-          (entry) =>
-            entry.kind === "component" &&
-            entry.location.file === site.file &&
-            entry.location.line === site.line &&
-            entry.location.column === site.column
-        );
-  const outerFrom = picked === null ? 0 : pickedAt === -1 ? ancestry.length : pickedAt + 1;
-  const above: TrailCrumb[] = [];
-  for (const entry of ancestry.slice(outerFrom)) {
-    if (isNamedComponent(entry)) above.push(crumbFor(entry));
-  }
-  above.reverse();
+      : components.findIndex((component) => component.componentId === picked.componentId);
+  const outerFrom = picked === null ? 0 : pickedAt === -1 ? components.length : pickedAt + 1;
+  const above = components.slice(outerFrom).map(crumbFor).reverse();
   if (picked === null) {
-    return { above, current: { label: elementLabel(node), file: null, usedAt: null } };
+    return {
+      above,
+      current: { label: elementLabel(primaryObservation(selection)), file: null, usedAt: null },
+    };
   }
-  const found = pickedAt === -1 ? undefined : ancestry[pickedAt];
-  const current =
-    found !== undefined && isNamedComponent(found)
-      ? crumbFor(found)
-      : { label: picked.label, file: null, usedAt: site };
-  return { above, current };
+  return { above, current: crumbFor(pickedAt === -1 ? picked : components[pickedAt]!) };
 }
 
-function crumbFor(entry: AncestryEntry & { kind: "component"; componentTag: string }): TrailCrumb {
+function crumbFor(component: ComponentView): TrailCrumb {
   return {
-    label: entry.componentTag,
-    file: entry.location.file,
-    usedAt: {
-      file: entry.location.file,
-      line: entry.location.line,
-      column: entry.location.column,
-    },
+    label: component.name ?? "component",
+    file: component.definedIn?.path ?? null,
+    usedAt: component.usedAt,
   };
-}
-
-/** `each`, `if` and `await` frames are control flow; generated frames are not the user's. */
-function isNamedComponent(
-  entry: AncestryEntry
-): entry is AncestryEntry & { kind: "component"; componentTag: string } {
-  return entry.kind === "component" && !entry.generated && typeof entry.componentTag === "string";
-}
-
-function elementLabel(node: SelectedNode): string {
-  return node.label || node.definition?.tagName || "element";
 }
 
 /**
@@ -150,7 +118,7 @@ export function SelectionTrail({
   /** Select the component a crumb names. Without it the trail is read-only. */
   onSelect?: (crumb: TrailCrumb) => void;
   /** The selection's own call site when it is not among `crumbs`. */
-  selectionSite?: { file: string; line: number; column: number } | null;
+  selectionSite?: SourcePoint | null;
   className?: string;
   itemClassName?: string;
 }) {

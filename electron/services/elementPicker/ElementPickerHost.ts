@@ -9,7 +9,11 @@ import {
   type ResolveRequest,
   type ResolveResponse,
 } from "../../../shared/elementPicker/resolver.js";
-import type { UnavailableReason } from "../../../shared/elementPicker/resolution.js";
+import {
+  SourceFileRefSchema,
+  type FileRevision,
+  type UnavailableReason,
+} from "../../../shared/elementPicker/resolution.js";
 import type { ProjectContextOutcome } from "../../../shared/elementPicker/projectContext.js";
 import { logError, logInfo, logWarn } from "../../utils/logger.js";
 import { minimalSpawnEnv } from "../../utils/minimalSpawnEnv.js";
@@ -26,6 +30,7 @@ import { ProjectContextService } from "./projectAdapters/projectContext.js";
 import type { ProjectAdapterRegistration } from "./projectAdapters/types.js";
 import {
   JobSourceAccess,
+  containSourcePath,
   readSourceRevision,
   type NextSourceMapProvider,
   type SourceMapProvider,
@@ -59,6 +64,15 @@ export const HOST_CANCEL_GRACE_MS = 1_000;
 
 /** How long a retired host gets to exit before it is sent SIGKILL. */
 export const HOST_DISPOSE_KILL_MS = 1_000;
+
+/** Paths one revision check may name: a view checks what it holds, which is a selection's files, not a tree. */
+export const MAX_SOURCE_REVISION_PATHS = 128;
+
+/** Reads a revision check runs at once; enough to overlap the opens, few enough not to crowd a resolve's. */
+const SOURCE_REVISION_CONCURRENCY = 4;
+
+/** Checks running at once across every workspace, and waiting behind them. */
+const SOURCE_REVISION_ADMISSION = { concurrent: 2, queued: 16 } as const;
 
 /**
  * Resolves the compiled bootstrap. This module lands in a shared chunk under
@@ -199,6 +213,11 @@ function hostError(code: ElementPickerHostErrorCode, message: string): ElementPi
 export class ElementPickerHost {
   private readonly workspaces = new WorkspaceRegistry();
   private readonly gate = new AdmissionGate();
+  /**
+   * Its own bound, not the resolve gate's: a burst of revision checks must
+   * neither take resolve slots nor schedule every file it names at once.
+   */
+  private readonly revisionGate = new AdmissionGate(SOURCE_REVISION_ADMISSION);
   private readonly retiring = new Set<Generation>();
   private readonly fork: () => HostChild;
   private readonly kill: (pid: number) => void;
@@ -364,6 +383,79 @@ export class ElementPickerHost {
       deadlineMs: this.projectContextDeadlineMs,
     });
     return this.projectContext.describe(workspace, url, options.signal);
+  }
+
+  /**
+   * What each file holds on disk now, for a view deciding whether what it
+   * holds from a resolve is stale. Read in main under the same containment and
+   * size cap as a resolve's reads, and never starts the resolver process. A
+   * path that is not a workspace-relative ref, lands outside the app, is gone,
+   * unreadable or past the cap reads as null. Each path is read once and
+   * answered once, in the order it was first named.
+   */
+  async sourceRevisions(
+    workspaceId: string,
+    paths: readonly string[]
+  ): Promise<Array<{ path: string; revision: FileRevision | null }>> {
+    if (this.disposed) throw hostError("HOST_DISPOSED", "the source host is shutting down");
+    if (
+      !Array.isArray(paths) ||
+      paths.length > MAX_SOURCE_REVISION_PATHS ||
+      !paths.every((entry) => typeof entry === "string")
+    ) {
+      throw hostError("INVALID_REQUEST", "the paths are malformed");
+    }
+    const workspace = this.workspaces.get(workspaceId);
+    if (!workspace) throw hostError("UNKNOWN_WORKSPACE", "no open workspace has this id");
+    const signal = workspace.lifetime.signal;
+    const unique = [...new Set(paths)];
+    const revisions: Array<FileRevision | null> = unique.map(() => null);
+    let release: () => void;
+    try {
+      release = await this.revisionGate.acquire(signal);
+    } catch (error) {
+      if (!signal.aborted) throw error;
+      throw hostError("UNKNOWN_WORKSPACE", "the workspace was released");
+    }
+    try {
+      let next = 0;
+      const drain = async () => {
+        while (next < unique.length && !signal.aborted) {
+          const index = next++;
+          revisions[index] = await this.currentRevision(workspace, unique[index]!, signal);
+        }
+      };
+      await Promise.all(
+        Array.from({ length: Math.min(SOURCE_REVISION_CONCURRENCY, unique.length) }, drain)
+      );
+    } finally {
+      release();
+    }
+    // A workspace released mid-check answers nothing: its reads were cut short,
+    // and a null for a file that is there would read as a deletion.
+    if (this.disposed) throw hostError("HOST_DISPOSED", "the source host is shutting down");
+    if (signal.aborted) throw hostError("UNKNOWN_WORKSPACE", "the workspace was released");
+    return unique.map((path, index) => ({ path, revision: revisions[index] ?? null }));
+  }
+
+  private async currentRevision(
+    workspace: PickerWorkspace,
+    relative: string,
+    signal: AbortSignal
+  ): Promise<FileRevision | null> {
+    const ref = SourceFileRefSchema.safeParse({ workspaceId: workspace.id, path: relative });
+    if (!ref.success) return null;
+    try {
+      const contained = await containSourcePath(workspace.roots, ref.data.path);
+      if (!contained.ok || signal.aborted) return null;
+      return await readSourceRevision(
+        contained.absolute,
+        RESOLVE_BUDGET_CEILINGS.maxFileBytes,
+        signal
+      );
+    } catch {
+      return null;
+    }
   }
 
   /**

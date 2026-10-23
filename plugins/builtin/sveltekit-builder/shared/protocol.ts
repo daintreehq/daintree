@@ -32,10 +32,6 @@ import { RectSchema, SiteSelectionSchema, SourceLocationSchema, ViewportSchema }
  */
 
 export const PLUGIN_ID = "daintree.sveltekit-builder";
-/** The dev preview tool the renderer registers; the toggle command names it. */
-export const BUILDER_TOOL_ID = `${PLUGIN_ID}.builder`;
-/** Declared in `contributes.commands`; bound by main on first dispatch. */
-export const TOGGLE_BUILDER_ACTION_ID = "toggle-builder";
 
 /**
  * Bumped whenever a guest-visible shape changes. The host refuses envelopes
