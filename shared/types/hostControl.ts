@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { AgentDirectorySchema } from "./agentDirectory.js";
 
 /**
  * This Shell's reach into its Remote Hosts for its own assistants (#13493,
@@ -71,7 +72,19 @@ const outcomeFields = {
   retryAfterMs: z.number().nullable(),
 };
 
-export const HostListArgsSchema = z.object({});
+export const HostListArgsSchema = z.object({
+  includeAgents: z
+    .boolean()
+    .optional()
+    .describe(
+      "Also list each host's agents: its workers and Daintree Assistants, as observed. Read the coverage before reading an empty list as nothing running."
+    ),
+  projectId: idSchema
+    .optional()
+    .describe(
+      "With includeAgents, list only the agents of this project (a projectId from the list)."
+    ),
+});
 export type HostListArgs = z.infer<typeof HostListArgsSchema>;
 
 export const HostListEntrySchema = z.object({
@@ -108,6 +121,8 @@ export const HostListEntrySchema = z.object({
     .nullable(),
   /** This Shell's "assistant control" switch for the host: whether `host.call` may reach it. */
   control: z.boolean(),
+  /** Present only when `includeAgents` asked for it (#14160). */
+  agents: AgentDirectorySchema.optional(),
 });
 export type HostListEntry = z.infer<typeof HostListEntrySchema>;
 

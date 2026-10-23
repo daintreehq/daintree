@@ -13,6 +13,7 @@ import {
   type HostControlToolResult,
   type HostEnsureProjectArgs,
   type HostEnsureProjectResult,
+  type HostListArgs,
   type HostListResult,
 } from "../../../shared/types/hostControl.js";
 
@@ -27,7 +28,7 @@ import {
 export interface HostControlRuntimeHandle {
   /** Whether this session is offered the host tools (#13493): from its start, hosts or not. */
   isCallReachable(helpSessionId: string): boolean;
-  list(helpSessionId: string): Promise<HostControlOutcome<HostListResult>>;
+  list(helpSessionId: string, args: HostListArgs): Promise<HostControlOutcome<HostListResult>>;
   call(
     helpSessionId: string,
     args: HostCallArgs,
@@ -104,8 +105,8 @@ async function dispatch(
       return parsed.success ? runtime.ensureProject(helpSessionId, parsed.data) : invalidArgs();
     }
     case HOST_LIST_TOOL: {
-      if (!HostListArgsSchema.safeParse(raw).success) return invalidArgs();
-      return runtime.list(helpSessionId);
+      const parsed = HostListArgsSchema.safeParse(raw);
+      return parsed.success ? runtime.list(helpSessionId, parsed.data) : invalidArgs();
     }
     default:
       return invalidArgs();

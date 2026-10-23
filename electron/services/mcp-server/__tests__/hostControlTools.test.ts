@@ -35,7 +35,13 @@ describe("bindHostControl (#13493)", () => {
 
     expect(access.isCallReachable()).toBe(true);
     await access.run("host.list", {});
-    expect(runtime.list).toHaveBeenCalledWith("hub");
+    expect(runtime.list).toHaveBeenCalledWith("hub", {});
+    await access.run("host.list", { includeAgents: true, projectId: "p1" });
+    expect(runtime.list).toHaveBeenLastCalledWith("hub", { includeAgents: true, projectId: "p1" });
+    expect(await access.run("host.list", { includeAgents: "yes" })).toMatchObject({
+      ok: false,
+      code: "INVALID_ARGS",
+    });
 
     bound = undefined;
     expect(access.isCallReachable()).toBe(false);
