@@ -1462,13 +1462,19 @@ export function createHost(
   // Writing a project database changes the repository, so a call from a view
   // that watches the project is refused as its `host.fs` writes are. Asked on
   // every write, not once at open: a handle outlives the lease it was opened
-  // under. A local database is in no project and passes.
+  // under. A local database is in no project and passes. The file's own path,
+  // not the bound root, since it may sit in a nested project; worked out as
+  // the resolver will, so it can be asked before anything is created.
   const requireCallerDrivesDatabase = async (
     declaration: PluginDatabaseContribution,
     op: string
   ): Promise<void> => {
     if (declaration.location !== "project" || boundProjectRoot === null) return;
-    await assertPluginCallerDrives(pluginId, `db.${op}`, { paths: [boundProjectRoot] });
+    const target = path.resolve(
+      boundProjectRoot,
+      declaration.path ?? `.daintree/data/${manifestId}/${declaration.id}.db`
+    );
+    await assertPluginCallerDrives(pluginId, `db.${op}`, { paths: [target] });
     requireBoundForDb(`db.${op}`);
   };
 

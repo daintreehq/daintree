@@ -65,6 +65,7 @@ const INSTANCE = makeProjectPluginInstanceKey(PROJECT_ID, "acme.ledger");
 const DATABASES: PluginDatabaseContribution[] = [
   { id: "ledger", location: "project", path: "data/finance.db", journalMode: "delete" },
   { id: "cache", location: "local", journalMode: "delete" },
+  { id: "vendored", location: "project", path: "vendor/lib/notes.db", journalMode: "delete" },
 ];
 
 function endpoint(endpointId: string, clientId: string): ClientEndpoint {
@@ -258,6 +259,28 @@ describe("plugin database writes from a view that doesn't drive the project", ()
     );
     expect(await rows(db)).toEqual([1]);
     await db.close();
+  });
+
+  it("holds a database in a nested project to that project's lease, not the bound one's", async () => {
+    const nested = path.join(projectRoot, "vendor", "lib");
+    owners.projectsForPath = (p) =>
+      p.startsWith(nested + path.sep)
+        ? ["p2"]
+        : p === projectRoot || p.startsWith(projectRoot + path.sep)
+          ? ["p1"]
+          : [];
+    installLeases(
+      new Map([
+        ["p1", WATCHER],
+        ["p2", HOLDER],
+      ])
+    );
+    const host = makeHost();
+
+    await expect(
+      asCaller(WATCHER, () => host.db.open("vendored", { migrations: ["CREATE TABLE t (x)"] }))
+    ).rejects.toMatchObject({ code: "DRIVEN_ELSEWHERE" });
+    expect(fs.existsSync(nested)).toBe(false);
   });
 
   it("lets a watcher write the plugin's local database, which is in no project", async () => {
