@@ -21,6 +21,10 @@ export function registerProjectSleepHandlers(deps: HandlerDependencies): () => v
       sleepProject: op(
         CHANNELS.PROJECT_SLEEP,
         async (projectId: string): Promise<ProjectSleepResult> => {
+          // Resolved before the sleep starts: it is read synchronously at the
+          // commit, and PluginService stays off the handler's static graph.
+          const { pluginService } = await import("../../services/PluginService.js");
+          const pluginWork = (id: string) => pluginService.getProjectPluginWork(id);
           const outcome = await sleepProject(
             projectId,
             { initiator: "user" },
@@ -28,6 +32,7 @@ export function registerProjectSleepHandlers(deps: HandlerDependencies): () => v
               ptyClient: deps.ptyClient,
               workspaceClient: deps.worktreeService,
               projectViewManagers: projectViewManagersFrom(deps.windowRegistry),
+              pluginWork,
             }
           );
           // A user sleep is never skipped — only a policy backs off — so
@@ -35,8 +40,14 @@ export function registerProjectSleepHandlers(deps: HandlerDependencies): () => v
           if (outcome.status !== "slept") {
             return { terminalsKilled: 0, rendererViewsEvicted: 0, workspaceEvicted: false };
           }
-          const { terminalsKilled, rendererViewsEvicted, workspaceEvicted } = outcome;
-          return { terminalsKilled, rendererViewsEvicted, workspaceEvicted };
+          const { terminalsKilled, rendererViewsEvicted, workspaceEvicted, pluginWorkStopped } =
+            outcome;
+          return {
+            terminalsKilled,
+            rendererViewsEvicted,
+            workspaceEvicted,
+            ...(pluginWorkStopped ? { pluginWorkStopped } : {}),
+          };
         }
       ),
     },

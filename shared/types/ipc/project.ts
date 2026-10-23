@@ -201,6 +201,20 @@ export interface ProjectSleepResult {
   rendererViewsEvicted: number;
   /** True when the project's workspace-host process was evicted. */
   workspaceEvicted: boolean;
+  /**
+   * Plugin work the sleep stopped, as observed just before its plugins were
+   * unloaded (#14093). Absent when it stopped none. The unload itself runs
+   * after the sleep returns, so the processes are signalled, not confirmed gone.
+   */
+  pluginWorkStopped?: PluginWorkStopped;
+}
+
+/** What a sleep interrupted in the project's own plugins. */
+export interface PluginWorkStopped {
+  /** Unfinished tasks, which return as interrupted rather than resuming. */
+  tasks: Array<{ pluginName: string; title: string }>;
+  /** Managed processes with a live OS child. */
+  processes: number;
 }
 
 /** Project resource statistics */

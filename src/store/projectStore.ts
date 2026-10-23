@@ -11,6 +11,7 @@ import type { ProjectOpenDisposition } from "@shared/types/windowOpen";
 import { projectClient, worktreeClient } from "@/clients";
 import type { NonGitFolderStep } from "@/components/Project/NonGitFolderDialog";
 import { notify } from "@/lib/notify";
+import { notifyPluginWorkStopped } from "@/lib/pluginWorkStoppedNotice";
 import { setProjectPathIndexAccessor } from "@/store/storeAccessors";
 import { actionService } from "@/services/ActionService";
 import { logErrorWithContext } from "@/utils/errorContext";
@@ -1309,7 +1310,9 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
         await panelPersistence.whenIdle();
       }
 
+      const projectName = get().projects.find((p) => p.id === projectId)?.name ?? "the project";
       const result = await projectClient.sleepProject(projectId);
+      notifyPluginWorkStopped(projectName, result.pluginWorkStopped);
 
       if (isActive) {
         logDebug("[ProjectStore] Slept active project, transitioning to no-project state", {

@@ -326,6 +326,62 @@ describe("sleepProject", () => {
   });
 
   describe("a user sleep", () => {
+    it("reports the plugin work it stopped, read after the kill and before the unload (#14093)", async () => {
+      const order: string[] = [];
+      teardownMock.gracefulTeardownAndJournalProject.mockImplementationOnce(async () => {
+        order.push("kill");
+        return {
+          confirmed: true,
+          aborted: false,
+          terminalsKilled: 0,
+          sessions: [],
+        };
+      });
+      pluginLifecycleMock.notifyProjectPluginsClosed.mockImplementationOnce(() => {
+        order.push("unload");
+      });
+      const pluginWork = vi.fn(() => {
+        order.push("read");
+        return [
+          {
+            pluginId: "project__proj-1__acme.sync",
+            liveTasks: [{ id: "t1", pluginName: "Sync", title: "Uploading" }],
+            pendingCalls: 1,
+            runningProcesses: 1,
+          },
+        ];
+      });
+
+      const outcome = await sleepProject(
+        "proj-1",
+        { initiator: "user" },
+        { ...makeDeps(), pluginWork }
+      );
+
+      expect(outcome).toMatchObject({
+        status: "slept",
+        pluginWorkStopped: { tasks: [{ pluginName: "Sync", title: "Uploading" }], processes: 1 },
+      });
+      expect(order).toEqual(["kill", "read", "unload"]);
+    });
+
+    it("still sleeps when the plugin work can't be read (#14093)", async () => {
+      const outcome = await sleepProject(
+        "proj-1",
+        { initiator: "user" },
+        {
+          ...makeDeps(),
+          pluginWork: () => {
+            throw new Error("registry gone");
+          },
+        }
+      );
+
+      expect(outcome.status).toBe("slept");
+      expect(outcome).not.toHaveProperty("pluginWorkStopped");
+      expect(pluginLifecycleMock.notifyProjectPluginsClosed).toHaveBeenCalledWith("proj-1");
+    });
+
     it("does not ask the views about unsaved work", async () => {
       panelRecoveryMock.readPanelRecoveryHold.mockResolvedValue("panel-unrecoverable");
 

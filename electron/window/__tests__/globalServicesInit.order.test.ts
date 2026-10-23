@@ -41,12 +41,14 @@ const {
   pluginInitialize,
   pluginGetPluginRoot,
   pluginActivateStartup,
+  pluginGetProjectWork,
   setPluginDirResolver,
   activateOpenFileInstaller,
 } = vi.hoisted(() => ({
   pluginInitialize: vi.fn(async () => {}),
   pluginGetPluginRoot: vi.fn((authority: string) => `/plugins/${authority}`),
   pluginActivateStartup: vi.fn(),
+  pluginGetProjectWork: vi.fn<(projectId: string) => unknown[]>(() => []),
   setPluginDirResolver: vi.fn(),
   activateOpenFileInstaller: vi.fn(async (_svc?: unknown) => {}),
 }));
@@ -133,6 +135,7 @@ vi.mock("../../services/PluginService.js", () => ({
     initialize: pluginInitialize,
     getPluginRootByAuthority: pluginGetPluginRoot,
     activateStartupFinishedPlugins: pluginActivateStartup,
+    getProjectPluginWork: pluginGetProjectWork,
   },
 }));
 
@@ -239,6 +242,7 @@ const idleAutoCloseServiceMock = vi.hoisted(() => ({
   setPtyClient: vi.fn(),
   setProjectViewManagersProvider: vi.fn(),
   setCoordinationHoldProvider: vi.fn(),
+  setPluginWorkProvider: vi.fn(),
   start: vi.fn(),
   sleepUnderMemoryPressure: vi.fn(async () => 0),
 }));
@@ -934,6 +938,37 @@ describe("initGlobalServices task ordering", () => {
       getStopAppMetricsMonitor()?.();
       setStopAppMetricsMonitor(previousStop);
     }
+  });
+
+  it("wires the plugin work hold into automatic sleep before it starts (#14093)", async () => {
+    idleAutoCloseServiceMock.setPluginWorkProvider.mockClear();
+    idleAutoCloseServiceMock.start.mockClear();
+    const fakeRegistry = { all: () => [], size: 0 } as unknown as WindowRegistry;
+    await initGlobalServices(fakeRegistry);
+    await registeredTaskRuns.get("idle-background-auto-close-service")!();
+
+    expect(idleAutoCloseServiceMock.setPluginWorkProvider).toHaveBeenCalledTimes(1);
+    expect(
+      idleAutoCloseServiceMock.setPluginWorkProvider.mock.invocationCallOrder[0]!
+    ).toBeLessThan(idleAutoCloseServiceMock.start.mock.invocationCallOrder[0]!);
+
+    const provider = idleAutoCloseServiceMock.setPluginWorkProvider.mock.calls[0]![0] as (
+      projectId: string
+    ) => string | null;
+    pluginGetProjectWork.mockReturnValueOnce([
+      { pluginId: "project__p1__acme.sync", liveTasks: [], pendingCalls: 0, runningProcesses: 2 },
+    ]);
+    expect(provider("p1")).toBeNull();
+    pluginGetProjectWork.mockReturnValueOnce([
+      {
+        pluginId: "project__p1__acme.sync",
+        liveTasks: [{ id: "t1", title: "Syncing" }],
+        pendingCalls: 0,
+        runningProcesses: 0,
+      },
+    ]);
+    expect(provider("p1")).toBe("plugin-task:project__p1__acme.sync");
+    expect(pluginGetProjectWork).toHaveBeenLastCalledWith("p1");
   });
 
   it("wires a lazy ProjectViewManager provider into HibernationService (#10668)", async () => {
