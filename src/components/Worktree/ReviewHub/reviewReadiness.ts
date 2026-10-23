@@ -9,36 +9,13 @@ import { getGitRecoveryHint } from "@shared/utils/gitOperationErrors";
 import { isProtectedBranch } from "@shared/utils/gitConstants";
 import { isGeneratedFile } from "../generatedFileClassifier";
 import { pluralize } from "@/lib/pluralize";
+import type { ReviewReadinessItemId } from "./reviewReadinessItemIds";
 
 export type ReviewReadinessLevel = "ready" | "needs-review" | "blocked" | "unknown";
 
 export type ReviewReadinessSeverity = "blocker" | "warning" | "info";
 
-/** Closed vocabulary, exported so result schemas can enumerate it. */
-export const REVIEW_READINESS_ITEM_IDS = [
-  "operation-in-progress",
-  "conflicts",
-  "detached-head",
-  "push-failed",
-  "forge-auth-unhealthy",
-  "forge-rate-limited",
-  "behind-remote",
-  "ci-failing",
-  "review-changes-requested",
-  "generated-only",
-  "nothing-staged",
-  "ci-pending",
-  "review-required",
-  "pr-draft",
-  "pr-closed",
-  "pr-merged",
-  "pr-missing",
-  "protected-branch",
-  "no-remote",
-  "unpushed-commits",
-] as const;
-
-export type ReviewReadinessItemId = (typeof REVIEW_READINESS_ITEM_IDS)[number];
+export { REVIEW_READINESS_ITEM_IDS, type ReviewReadinessItemId } from "./reviewReadinessItemIds";
 
 /**
  * Safe, renderer-dispatchable next steps. Each kind maps onto a handler that
