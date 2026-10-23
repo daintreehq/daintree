@@ -41,6 +41,7 @@ vi.mock("electron", () => ({
 }));
 vi.mock("../../ipc/utils.js", () => ({
   broadcastToRenderer: vi.fn(),
+  broadcastToProjectRenderers: vi.fn(),
   isWithheldFromView: vi.fn(() => false),
 }));
 vi.mock("../../store.js", () => ({
@@ -900,9 +901,9 @@ describe("PluginService integration — skill contributions (#10892)", () => {
     await service.initialize();
 
     // Searchable and loadable through the main-process registry the MCP tools use.
-    const found = searchPluginSkills({ query: "tdd" });
+    const found = searchPluginSkills({ query: "tdd" }, { projectId: null });
     expect(found.skills.map((s) => s.id)).toContain("acme.skill-plugin.tdd-workflow");
-    const loaded = loadPluginSkill("acme.skill-plugin.tdd-workflow");
+    const loaded = loadPluginSkill("acme.skill-plugin.tdd-workflow", { projectId: null });
     expect(loaded?.name).toBe("TDD Workflow");
     expect(loaded?.description).toBe("Test-driven development workflow.");
     expect(loaded?.body).toContain("Write a failing test first.");
@@ -911,8 +912,61 @@ describe("PluginService integration — skill contributions (#10892)", () => {
     service.unloadPlugin("acme.skill-plugin");
     await Promise.resolve();
 
-    expect(loadPluginSkill("acme.skill-plugin.tdd-workflow")).toBeNull();
-    expect(searchPluginSkills({ query: "tdd" }).skills).toEqual([]);
+    expect(loadPluginSkill("acme.skill-plugin.tdd-workflow", { projectId: null })).toBeNull();
+    expect(searchPluginSkills({ query: "tdd" }, { projectId: null }).skills).toEqual([]);
+  });
+
+  it("loads a project plugin's skills for its own project only (#13831)", async () => {
+    const projectId = "d".repeat(64);
+    const instanceKey = `project__${projectId}__acme.project-skills`;
+    const projectRoot = path.join(tmpDir, "project-skills");
+    const pluginsParent = path.join(projectRoot, ".daintree", "plugins");
+    const dir = path.join(pluginsParent, "acme.project-skills");
+    await fs.mkdir(path.join(dir, "skills"), { recursive: true });
+    await fs.writeFile(
+      path.join(dir, "plugin.json"),
+      JSON.stringify({
+        name: "acme.project-skills",
+        version: "1.0.0",
+        scope: "project",
+        engines: { daintree: ">=0.0.0" },
+        contributes: {
+          skills: [{ id: "reconcile", name: "Reconcile", path: "./skills/reconcile.md" }],
+        },
+      })
+    );
+    await fs.writeFile(path.join(dir, "skills", "reconcile.md"), "# Reconcile\n", "utf8");
+
+    const service = new PluginService(path.join(tmpDir, "installed"), "0.0.0");
+    const seam = service as unknown as {
+      loadPlugin(
+        root: string,
+        dirName: string,
+        opts: {
+          isBuiltin: boolean;
+          disabled: Set<string>;
+          origin: "project";
+          instanceKey: string;
+          binding: { projectId: string; projectRoot: string };
+        }
+      ): Promise<unknown>;
+    };
+    await seam.loadPlugin(pluginsParent, "acme.project-skills", {
+      isBuiltin: false,
+      disabled: new Set(),
+      origin: "project",
+      instanceKey,
+      binding: { projectId, projectRoot },
+    });
+
+    const skillId = `${instanceKey}.reconcile`;
+    expect(loadPluginSkill(skillId, { projectId })?.body).toBe("# Reconcile\n");
+    expect(loadPluginSkill(skillId, { projectId: "e".repeat(64) })).toBeNull();
+    expect(searchPluginSkills({}, { projectId: null }).skills).toEqual([]);
+
+    service.unloadPlugin(instanceKey);
+    await Promise.resolve();
+    expect(loadPluginSkill(skillId, { projectId })).toBeNull();
   });
 });
 

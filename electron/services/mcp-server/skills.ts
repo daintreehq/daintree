@@ -1,5 +1,9 @@
 import { McpError, ErrorCode } from "@modelcontextprotocol/sdk/types.js";
-import { searchPluginSkills, loadPluginSkill } from "../plugin/PluginSkillRegistry.js";
+import {
+  searchPluginSkills,
+  loadPluginSkill,
+  type SkillVisibility,
+} from "../plugin/PluginSkillRegistry.js";
 import type { SkillSearchResult, SkillLoadResult } from "../../../shared/types/skills.js";
 
 /**
@@ -11,6 +15,10 @@ import type { SkillSearchResult, SkillLoadResult } from "../../../shared/types/s
  * pattern (`waitUntilIdle.ts`). Both handlers are synchronous reads against the
  * in-memory registry; they throw {@link McpError} for invalid args or an
  * unknown skill so the session server maps them to a clean tool error.
+ *
+ * `visibility` is the calling session's bound project (#13831), resolved by
+ * the session's builder, never by the arguments: a project plugin's skills
+ * reach only sessions bound to that project.
  */
 
 /** Longest unknown skill id echoed back in the "no skill found" error. */
@@ -24,7 +32,10 @@ function asArgsObject(rawArgs: unknown): Record<string, unknown> {
   throw new McpError(ErrorCode.InvalidParams, "skills tool arguments must be an object.");
 }
 
-export function handleSkillsSearch(rawArgs: unknown): SkillSearchResult {
+export function handleSkillsSearch(
+  rawArgs: unknown,
+  visibility: SkillVisibility
+): SkillSearchResult {
   const args = asArgsObject(rawArgs);
 
   const queryRaw = args["query"];
@@ -44,10 +55,10 @@ export function handleSkillsSearch(rawArgs: unknown): SkillSearchResult {
     limit = limitRaw;
   }
 
-  return searchPluginSkills({ query: queryRaw, limit });
+  return searchPluginSkills({ query: queryRaw, limit }, visibility);
 }
 
-export function handleSkillsLoad(rawArgs: unknown): SkillLoadResult {
+export function handleSkillsLoad(rawArgs: unknown, visibility: SkillVisibility): SkillLoadResult {
   const args = asArgsObject(rawArgs);
 
   const idRaw = args["id"];
@@ -56,7 +67,7 @@ export function handleSkillsLoad(rawArgs: unknown): SkillLoadResult {
   }
   const id = idRaw.trim();
 
-  const skill = loadPluginSkill(id);
+  const skill = loadPluginSkill(id, visibility);
   if (!skill) {
     // Clamp the echoed id: this message becomes a JSON-RPC error, which bypasses
     // the `tools/call` response budget entirely, so reflecting the argument

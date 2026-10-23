@@ -2876,7 +2876,7 @@ function reportReservedTourCueNames(raw: unknown, ctx: z.RefinementCtx): void {
  * keybindings, contextMenus, recipes) reach only the owning project's views, and `settings`
  * resolves through the bound instance handle. Everything here registers into a
  * registry with no project axis — a single app menu, one agent roster mirrored
- * into the shared pty-host, one skill index behind the MCP server — so the
+ * into the shared pty-host, one detection table for every terminal — so the
  * contribution is published app-wide no matter which project loaded it.
  *
  * Exported so tests enumerate the set instead of restating it, and so a group
@@ -2890,10 +2890,6 @@ export const PROJECT_SCOPE_UNSCOPED_CONTRIBUTIONS = [
   [
     "agents",
     "the plugin agent roster is a single app-wide registry mirrored into the shared pty-host, and an agent's launch identity is persisted into terminals and sessions that outlive the project binding — the agent would be launchable from every project.",
-  ],
-  [
-    "skills",
-    "contributed skills land in one app-wide index behind the built-in MCP server's skills.search/skills.load, which external agent sessions query with no project context to filter on.",
   ],
   [
     "processTools",

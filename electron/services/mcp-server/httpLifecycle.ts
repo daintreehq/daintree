@@ -51,7 +51,7 @@ import {
 } from "./rendererBridge.js";
 import { relayWriteStanding } from "./relayWriteRule.js";
 import { getViewlessHelpBaseManifest } from "./baseManifest.js";
-import { NO_VIEW_HANDLE } from "../../ipc/endpoint.js";
+import { isRemoteEndpointHandle, NO_VIEW_HANDLE } from "../../ipc/endpoint.js";
 import { PLUGIN_MCP_ROUTE_PREFIX, type PluginMcpRouteHandler } from "../pluginAgentMcp/types.js";
 import { isProjectWorkspaceId, isScratchWorkspaceId } from "../../../shared/utils/workspaceIds.js";
 import type {
@@ -243,10 +243,15 @@ export interface HttpLifecycleDeps {
     signal: AbortSignal,
     options?: { maxTimeoutMs?: number; workspaceId?: string }
   ) => Promise<import("../../../shared/types/terminalWaitUntilIdle.js").WaitUntilIdleBatchResult>;
+  /** `visibility` is the session's bound project, resolved by {@link buildSessionServerDeps}. */
   handleSkillsSearch: (
-    rawArgs: unknown
+    rawArgs: unknown,
+    visibility: import("../plugin/PluginSkillRegistry.js").SkillVisibility
   ) => import("../../../shared/types/skills.js").SkillSearchResult;
-  handleSkillsLoad: (rawArgs: unknown) => import("../../../shared/types/skills.js").SkillLoadResult;
+  handleSkillsLoad: (
+    rawArgs: unknown,
+    visibility: import("../plugin/PluginSkillRegistry.js").SkillVisibility
+  ) => import("../../../shared/types/skills.js").SkillLoadResult;
   handleProjectRunCheck: (
     rawArgs: unknown,
     signal: AbortSignal,
@@ -2158,6 +2163,36 @@ export class HttpLifecycle {
     };
 
     /**
+     * A remote view's pin is its endpoint handle, which no WebContents answers
+     * to. Its sessions are revoked when the endpoint moves to another project,
+     * so while the pin stands, the project the session was provisioned for is
+     * the view's.
+     */
+    const remotePinnedProjectId = (): string | null => {
+      if (pinnedWebContentsId === null || !isRemoteEndpointHandle(pinnedWebContentsId)) {
+        return null;
+      }
+      if (helpSessionId === null) return null;
+      if (this.deps.sessionStore.sessionWebContentsMap.get(sessionId) !== pinnedWebContentsId) {
+        return null;
+      }
+      return this.assistantControlBinding?.sessionProject(helpSessionId) ?? null;
+    };
+
+    /**
+     * The project whose plugins' skills `skills.search` / `skills.load` may
+     * return (#13831): the workspace the session is bound to, or for a help
+     * session the one its own view, remote view or viewless binding names.
+     * Never the focused window's, so an unbound session — and a scratch, or a
+     * pin whose view is gone — reads as no project and sees installed plugins'
+     * skills only.
+     */
+    const skillsProjectId = (): string | null => {
+      const workspaceId = boundWorkspaceId ?? pinnedWorkspaceId() ?? remotePinnedProjectId();
+      return workspaceId !== null && isProjectWorkspaceId(workspaceId) ? workspaceId : null;
+    };
+
+    /**
      * A bound session whose workspace route is unwired must fail, never fall
      * through (#11789). The helpers are individually optional for the same
      * reason the pinned ones are — test fixtures that don't wire routing — but
@@ -2620,8 +2655,10 @@ export class HttpLifecycle {
       requestCloseApproval,
       handleWaitUntilIdle: this.deps.handleWaitUntilIdle,
       handleWaitUntilIdleBatch: this.deps.handleWaitUntilIdleBatch,
-      handleSkillsSearch: this.deps.handleSkillsSearch,
-      handleSkillsLoad: this.deps.handleSkillsLoad,
+      handleSkillsSearch: (rawArgs) =>
+        this.deps.handleSkillsSearch(rawArgs, { projectId: skillsProjectId() }),
+      handleSkillsLoad: (rawArgs) =>
+        this.deps.handleSkillsLoad(rawArgs, { projectId: skillsProjectId() }),
       handleProjectRunCheck: this.deps.handleProjectRunCheck,
       handleProjectRunCommand: this.deps.handleProjectRunCommand,
       handleTerminalGetStatusViewless: this.deps.handleTerminalGetStatusViewless,

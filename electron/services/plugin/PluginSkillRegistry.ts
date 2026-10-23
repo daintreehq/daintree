@@ -4,7 +4,10 @@ import { load as parseYaml } from "js-yaml";
 import { YAML_MERGE_SCHEMA } from "../../utils/yamlMergeSchema.js";
 import { resolveContainedPath } from "./pluginFsContainment.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
-import type { SkillContribution } from "../../../shared/types/plugin.js";
+import {
+  projectIdFromPluginInstanceKey,
+  type SkillContribution,
+} from "../../../shared/types/plugin.js";
 import type {
   SkillSearchMatch,
   SkillSearchResult,
@@ -26,6 +29,12 @@ import type {
  * so `search` is filesystem-free and `load` returns a cached body; a malformed
  * or unreadable file is skipped with a warning rather than failing the whole
  * plugin load.
+ *
+ * `pluginId` is the plugin's instance key, so a project plugin's skills are
+ * owned by the project its key names (#13831). Every read takes a
+ * {@link SkillVisibility}: a project plugin's skills are served only to a caller
+ * bound to that same project, never to another project or to a caller with no
+ * project.
  */
 
 /**
@@ -41,20 +50,40 @@ const MAX_SKILL_FILE_BYTES = 512 * 1024;
 const FRONTMATTER_MAX_BYTES = 16 * 1024;
 /** Default and maximum number of matches `skills.search` returns. */
 const DEFAULT_SEARCH_LIMIT = 20;
-const MAX_SEARCH_LIMIT = 50;
+export const MAX_SKILL_SEARCH_LIMIT = 50;
 
 interface RegisteredSkill {
   /** `{pluginId}.{skillId}` */
   qualifiedId: string;
   pluginId: string;
+  /** The project a project plugin's instance is bound to; null for an installed plugin. */
+  ownerProjectId: string | null;
   name: string;
   description: string | null;
   triggers: string[];
   body: string;
 }
 
+/**
+ * Who is reading. `projectId` is the project the caller is bound to, or null
+ * when it has none; null is an identity, not a wildcard, so it sees installed
+ * plugins' skills and no project plugin's. `pluginInstanceId` narrows the read
+ * to one plugin instance, for that plugin's own agent MCP server.
+ */
+export interface SkillVisibility {
+  readonly projectId: string | null;
+  readonly pluginInstanceId?: string;
+}
+
 const skillsByQualifiedId = new Map<string, RegisteredSkill>();
 const qualifiedIdsByPlugin = new Map<string, Set<string>>();
+
+function isVisible(skill: RegisteredSkill, visibility: SkillVisibility): boolean {
+  if (visibility.pluginInstanceId !== undefined && skill.pluginId !== visibility.pluginInstanceId) {
+    return false;
+  }
+  return skill.ownerProjectId === null || skill.ownerProjectId === visibility.projectId;
+}
 
 /**
  * Split a skill markdown file into its frontmatter-derived `description` and its
@@ -143,6 +172,7 @@ export async function registerPluginSkills(
       indexSkill({
         qualifiedId,
         pluginId,
+        ownerProjectId: projectIdFromPluginInstanceKey(pluginId),
         name: contribution.name,
         description,
         triggers: contribution.triggers ?? [],
@@ -169,6 +199,11 @@ export function unregisterPluginSkills(pluginId: string): void {
   qualifiedIdsByPlugin.delete(pluginId);
 }
 
+/** Whether `pluginInstanceId` has any skill registered. */
+export function hasPluginSkills(pluginInstanceId: string): boolean {
+  return (qualifiedIdsByPlugin.get(pluginInstanceId)?.size ?? 0) > 0;
+}
+
 /** Reset the whole registry (test isolation / full plugin-system teardown). */
 export function clearPluginSkillRegistry(): void {
   skillsByQualifiedId.clear();
@@ -183,20 +218,23 @@ function tokenize(value: string): string[] {
 }
 
 /**
- * Keyword search over all registered skills (minimal first cut — token overlap,
- * no ranking/embeddings). Scores each skill by how many distinct query tokens
- * appear in its id/name/description/triggers, drops zero-score skills, and sorts
- * by score then id (stable/deterministic). An empty query lists all skills
- * (bounded by `limit`) so an agent can enumerate what's available.
+ * Keyword search over the skills `visibility` reaches (minimal first cut — token
+ * overlap, no ranking/embeddings). Scores each skill by how many distinct query
+ * tokens appear in its id/name/description/triggers, drops zero-score skills,
+ * and sorts by score then id (stable/deterministic). An empty query lists every
+ * visible skill (bounded by `limit`) so an agent can enumerate what's available.
  */
-export function searchPluginSkills(args: { query?: string; limit?: number }): SkillSearchResult {
+export function searchPluginSkills(
+  args: { query?: string; limit?: number },
+  visibility: SkillVisibility
+): SkillSearchResult {
   const limit = Math.min(
     Math.max(Math.floor(args.limit ?? DEFAULT_SEARCH_LIMIT), 1),
-    MAX_SEARCH_LIMIT
+    MAX_SKILL_SEARCH_LIMIT
   );
   // Dedupe so a repeated query term (`"tdd tdd"`) can't overweight a skill.
   const queryTokens = [...new Set(tokenize(args.query ?? ""))];
-  const all = [...skillsByQualifiedId.values()];
+  const all = [...skillsByQualifiedId.values()].filter((skill) => isVisible(skill, visibility));
 
   const scored = all.map((skill) => {
     if (queryTokens.length === 0) return { skill, score: 0 };
@@ -226,10 +264,14 @@ export function searchPluginSkills(args: { query?: string; limit?: number }): Sk
   return { skills };
 }
 
-/** Return a skill's full body by its `{pluginId}.{skillId}` id, or null if unknown. */
-export function loadPluginSkill(id: string): SkillLoadResult | null {
+/**
+ * Return a skill's full body by its `{pluginId}.{skillId}` id, or null when it
+ * is unknown or not visible to the caller — the two read the same, so an id
+ * from another project can't be probed for.
+ */
+export function loadPluginSkill(id: string, visibility: SkillVisibility): SkillLoadResult | null {
   const skill = skillsByQualifiedId.get(id);
-  if (!skill) return null;
+  if (!skill || !isVisible(skill, visibility)) return null;
   return {
     id: skill.qualifiedId,
     name: skill.name,

@@ -1,8 +1,18 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { ToolListChangedNotificationSchema } from "@modelcontextprotocol/sdk/types.js";
-import type { PluginMcpCaller } from "../../../../shared/types/plugin.js";
+import {
+  makeProjectPluginInstanceKey,
+  type PluginMcpCaller,
+} from "../../../../shared/types/plugin.js";
+import {
+  clearPluginSkillRegistry,
+  registerPluginSkills,
+} from "../../plugin/PluginSkillRegistry.js";
 import { AgentMcpEndpointRegistry } from "../endpointRegistry.js";
 import { createPluginSessionServer, type PluginToolCallObserver } from "../pluginSessionServer.js";
 import {
@@ -12,6 +22,7 @@ import {
   type AgentMcpToolScope,
 } from "../types.js";
 import { compileAgentMcpTool, validateAgentMcpTools } from "../validateTools.js";
+import type { PluginSkillSource } from "../skillTools.js";
 
 const INSTANCE = "acme.ledger";
 const ENDPOINT = "data";
@@ -99,6 +110,7 @@ async function connect(
     activation?: "fails" | "registers-nothing";
     isCallerServable?: () => boolean;
     observeToolCall?: PluginToolCallObserver;
+    skills?: PluginSkillSource;
   } = {}
 ): Promise<Harness> {
   const registry = new AgentMcpEndpointRegistry();
@@ -142,6 +154,7 @@ async function connect(
       ? { isCallerServable: options.isCallerServable }
       : {}),
     ...(options.observeToolCall !== undefined ? { observeToolCall: options.observeToolCall } : {}),
+    ...(options.skills !== undefined ? { skills: options.skills } : {}),
   });
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   const client = new Client({ name: "test-client", version: "1.0.0" });
@@ -1030,5 +1043,174 @@ describe("observing tool calls", () => {
 
     expect(result.isError).toBeFalsy();
     errors.mockRestore();
+  });
+});
+
+describe("createPluginSessionServer — the plugin's skills (#13831)", () => {
+  const SKILL = {
+    id: `${INSTANCE}.reconcile`,
+    name: "Reconcile",
+    description: "How to reconcile a month.",
+    triggers: ["month"],
+  };
+
+  function skillSource(overrides: Partial<PluginSkillSource> = {}) {
+    return {
+      has: vi.fn((instance: string) => instance === INSTANCE),
+      search: vi.fn(() => ({ skills: [SKILL] })),
+      load: vi.fn((id: string) =>
+        id === SKILL.id
+          ? { id: SKILL.id, name: SKILL.name, description: SKILL.description, body: "# Steps" }
+          : null
+      ),
+      ...overrides,
+    } satisfies PluginSkillSource;
+  }
+
+  const OWN_VISIBILITY = { projectId: CALLER.projectId, pluginInstanceId: INSTANCE };
+
+  it("lists no skill tools, and answers none, for a plugin with no skills", async () => {
+    const skills = skillSource({ has: vi.fn(() => false) });
+    const { client } = await connect(vi.fn(), { skills });
+
+    const { tools } = await client.listTools();
+    expect(tools.map((tool) => tool.name)).toEqual(["lookup"]);
+    await expect(client.callTool({ name: "skills.search", arguments: {} })).rejects.toThrow(
+      /Unknown tool/
+    );
+    expect(skills.search).not.toHaveBeenCalled();
+  });
+
+  it("lists both as read-only host tools on a database-only grant, without activating", async () => {
+    const skills = skillSource();
+    const { client, activatePlugin } = await connect(vi.fn(), {
+      scope: DATABASES_ONLY,
+      databaseInvoke: vi.fn(),
+      skills,
+    });
+
+    const { tools } = await client.listTools();
+    const skillTools = tools.filter((tool) => tool.name.startsWith("skills."));
+    expect(skillTools.map((tool) => tool.name)).toEqual(["skills.search", "skills.load"]);
+    for (const tool of skillTools) {
+      expect(tool.annotations).toEqual({ readOnlyHint: true });
+      expect(tool.outputSchema).toBeDefined();
+    }
+
+    const result = await client.callTool({ name: "skills.search", arguments: { query: "month" } });
+    expect(result.isError).toBeUndefined();
+    expect(result.structuredContent).toEqual({ skills: [SKILL] });
+    expect(activatePlugin).not.toHaveBeenCalled();
+  });
+
+  it("reads only this instance's skills, for the grant's own project", async () => {
+    const skills = skillSource();
+    const invoke = vi.fn();
+    const { client, activatePlugin } = await connect(invoke, { register: false, skills });
+
+    await client.callTool({ name: "skills.search", arguments: { query: "month", limit: 5 } });
+    expect(skills.search).toHaveBeenCalledWith({ query: "month", limit: 5 }, OWN_VISIBILITY);
+
+    const loaded = await client.callTool({ name: "skills.load", arguments: { id: SKILL.id } });
+    expect(loaded.structuredContent).toMatchObject({ id: SKILL.id, body: "# Steps" });
+    expect(skills.load).toHaveBeenCalledWith(SKILL.id, OWN_VISIBILITY);
+    // Documentation reads never reach the plugin's own code.
+    expect(activatePlugin).not.toHaveBeenCalled();
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
+  it("fails a load the caller cannot see as a tool error", async () => {
+    const { client } = await connect(vi.fn(), { skills: skillSource() });
+    const result = await client.callTool({
+      name: "skills.load",
+      arguments: { id: "other.plugin.secret" },
+    });
+    expect(result.isError).toBe(true);
+    expect(textOf(result)).toMatch(/No skill found with id "other\.plugin\.secret"/);
+  });
+
+  it("checks arguments against the advertised schema before reading", async () => {
+    const skills = skillSource();
+    const { client } = await connect(vi.fn(), { skills });
+    const result = await client.callTool({ name: "skills.search", arguments: { limit: 0 } });
+    expect(result.isError).toBe(true);
+    expect(textOf(result)).toMatch(/Input validation error/);
+    expect(skills.search).not.toHaveBeenCalled();
+  });
+
+  it("holds a skill body to the plugin result budget", async () => {
+    const skills = skillSource({
+      load: vi.fn(() => ({ id: SKILL.id, name: "Big", description: null, body: "x".repeat(4096) })),
+    });
+    const { client } = await connect(vi.fn(), { skills, maxResultBytes: 1024 });
+    const result = await client.callTool({ name: "skills.load", arguments: { id: SKILL.id } });
+    expect(result.isError).toBe(true);
+    expect(textOf(result)).toMatch(/over the 1024-byte limit/);
+  });
+
+  it("reads nothing while the credential is not servable", async () => {
+    const skills = skillSource();
+    const { client } = await connect(vi.fn(), { skills, isCallerServable: () => false });
+    const result = await client.callTool({ name: "skills.search", arguments: {} });
+    expect(result.isError).toBe(true);
+    expect(textOf(result)).toMatch(/reloading/);
+    expect(skills.search).not.toHaveBeenCalled();
+  });
+
+  it("answers a skill tool name itself even if a roster claims it", async () => {
+    const skills = skillSource();
+    const invoke = vi.fn();
+    const impostor = compileAgentMcpTool({
+      name: "skills.search",
+      description: "Not the host's.",
+      inputSchema: { type: "object" },
+    });
+    const { client } = await connect(invoke, { tools: [LOOKUP, impostor], skills });
+
+    const { tools } = await client.listTools();
+    expect(tools.filter((tool) => tool.name === "skills.search")).toHaveLength(1);
+    const result = await client.callTool({ name: "skills.search", arguments: {} });
+    expect(result.structuredContent).toEqual({ skills: [SKILL] });
+    expect(invoke).not.toHaveBeenCalled();
+  });
+});
+
+describe("createPluginSessionServer — skills from the real registry (#13831)", () => {
+  let dir: string;
+
+  afterEach(async () => {
+    clearPluginSkillRegistry();
+    if (dir) await fs.rm(dir, { recursive: true, force: true });
+  });
+
+  it("serves only this instance's skills, refusing another's exactly as an unknown id", async () => {
+    dir = await fs.mkdtemp(path.join(os.tmpdir(), "plugin-session-skills-"));
+    await fs.writeFile(path.join(dir, "skill.md"), "# Steps\n", "utf8");
+    const skill = [{ id: "reconcile", name: "Reconcile", path: "./skill.md" }];
+    const otherProjectInstance = makeProjectPluginInstanceKey("b".repeat(64), INSTANCE);
+    await registerPluginSkills(INSTANCE, dir, skill);
+    await registerPluginSkills("acme.other", dir, skill);
+    await registerPluginSkills(otherProjectInstance, dir, skill);
+
+    const { client } = await connect(vi.fn());
+
+    const search = await client.callTool({ name: "skills.search", arguments: {} });
+    expect(search.structuredContent).toEqual({
+      skills: [{ id: `${INSTANCE}.reconcile`, name: "Reconcile", description: null, triggers: [] }],
+    });
+    const own = await client.callTool({
+      name: "skills.load",
+      arguments: { id: `${INSTANCE}.reconcile` },
+    });
+    expect(own.structuredContent).toMatchObject({ body: "# Steps\n" });
+
+    const refusal = async (id: string) => {
+      const result = await client.callTool({ name: "skills.load", arguments: { id } });
+      expect(result.isError).toBe(true);
+      return textOf(result).replace(id, "<id>");
+    };
+    const unknown = await refusal(`${INSTANCE}.nope`);
+    expect(await refusal("acme.other.reconcile")).toBe(unknown);
+    expect(await refusal(`${otherProjectInstance}.reconcile`)).toBe(unknown);
   });
 });
