@@ -1272,6 +1272,20 @@ describe("issues bound to a separate provider (#13700)", () => {
     expect(page.items[0]).toMatchObject({ number: 42, providerId: "acme.tracker.tracker" });
   });
 
+  it("names the repository behind unsplit counts so hosts can match it (#14199)", async () => {
+    const code = codeImplWithStats();
+    resolveForCwdMock.mockResolvedValue({
+      namespaceId: "fake.provider",
+      repoRef: { ...repoRef, host: "Fake.Test" },
+      impl: code,
+    });
+    registerForgeDataHandlers();
+
+    const stats = await findHandler("forge:get-repo-stats")(null, { cwd: "/repo" });
+
+    expect(stats).toMatchObject({ issueCount: 99, prCount: 4, repoKey: "fake.test/acme/widgets" });
+  });
+
   it("takes the issue count from the issues provider and keeps PRs from the code forge", async () => {
     const code = codeImplWithStats();
     resolveForCwdMock.mockResolvedValue({ namespaceId: "fake.provider", repoRef, impl: code });
@@ -1292,6 +1306,9 @@ describe("issues bound to a separate provider (#13700)", () => {
     const stats = await findHandler("forge:get-repo-stats")(null, { cwd: "/repo" });
 
     expect(stats).toMatchObject({ issueCount: 7, prCount: 4, commitCount: 12 });
+    // No one repository reported both counts, so there is nothing to match
+    // across hosts (#14199).
+    expect(stats).not.toHaveProperty("repoKey");
     expect(trackerList).toHaveBeenCalledWith(trackerRef, {
       state: "open",
       perPage: 1,

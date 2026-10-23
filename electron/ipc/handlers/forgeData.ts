@@ -554,6 +554,11 @@ async function handleForgeGetRepoStats(payload: {
     : codeSnapshot;
   const { count: commitCount, reliable: commitReliable } = await readCommitCount(cwd);
   const stats = buildForgeRepositoryStats(commitCount, snapshot.counts);
+  // A split blend's issue count belongs to another tracker, so no one key names
+  // both counts' source.
+  if (!split) {
+    stats.repoKey = `${repoRef.host.toLowerCase()}/${repoRef.owner}/${repoRef.repo}`;
+  }
 
   const fresh = snapshot.source === "network" && !snapshot.counts.stale && overrideClean;
 
