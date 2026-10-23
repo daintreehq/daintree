@@ -4,11 +4,16 @@ import { EventKind, InteractiveKind, type LinkClientInfo } from "../link/message
 import type { LinkSession } from "../link/session.js";
 import {
   CANOPY_VIEWER_ENDPOINT_PREFIX,
+  CanopyAssistantInvokePayloadSchema,
+  CanopyAssistantsPayloadSchema,
   CanopyInvokePayloadSchema,
   CanopyLinkMethod,
   CanopyReleasePayloadSchema,
+  type CanopyAssistantsAnswer,
 } from "./linkMethods.js";
-import type { CanopyViewers } from "./viewer.js";
+import type { CanopyViewerParams, CanopyViewers } from "./viewer.js";
+import { unreadAgentDirectory, type AgentDirectory } from "../../../shared/types/agentDirectory.js";
+import { ASSISTANT_VIEWER_VERSION } from "../../../shared/types/ipc/canopyHost.js";
 import { createLogger } from "../../utils/logger.js";
 import { createKeyedLogLimiter } from "../../utils/keyedLogLimiter.js";
 
@@ -30,6 +35,22 @@ export interface CanopySessionSource {
   onSession(listener: (ctx: CanopySessionContext) => void): () => void;
 }
 
+export interface CanopyHostOptions {
+  /** This host's agent directory, read when a Shell's picker asks; absent, none is read. */
+  readAgents?: (options: { projectId?: string }) => Promise<AgentDirectory>;
+}
+
+/**
+ * A directory's assistants alone, read as it was: a read that missed or cut
+ * entries still says so, so the picker never takes it for every assistant.
+ */
+export function assistantsOf(directory: AgentDirectory): AgentDirectory {
+  return {
+    ...directory,
+    entries: directory.entries.filter((entry) => entry.role === "assistant"),
+  };
+}
+
 function clientRefOf(client: LinkClientInfo): ClientRef {
   return {
     clientId: client.clientId,
@@ -49,7 +70,8 @@ function clientRefOf(client: LinkClientInfo): ClientRef {
  */
 export function installCanopyHostWith(
   server: CanopySessionSource,
-  viewers: CanopyViewers
+  viewers: CanopyViewers,
+  options: CanopyHostOptions = {}
 ): () => void {
   const wired = new WeakSet<LinkSession>();
   let nextSession = 0;
@@ -90,48 +112,71 @@ export function installCanopyHostWith(
         if (viewers.close(prefix + viewerId)) tell(viewerId, 0);
       });
     };
+    const paramsFor =
+      (viewerId: string, interactive: boolean | undefined) => (): CanopyViewerParams => ({
+        endpointId: CANOPY_VIEWER_ENDPOINT_PREFIX + viewerId,
+        clientId: client.clientId,
+        onPush: (pushed, payload) => {
+          if (!session.isOpen) return;
+          const endpointId = CANOPY_VIEWER_ENDPOINT_PREFIX + viewerId;
+          let result: string;
+          try {
+            // Its terminal's bytes take turns with grid panes' output, so
+            // busy terminals elsewhere on this host don't hold up its echo.
+            result =
+              interactive === true && pushed === "canopy:terminal-data"
+                ? session.post({
+                    lane: Lane.INTERACTIVE,
+                    kind: InteractiveKind.CANOPY_TERMINAL,
+                    body: { endpointId, channel: pushed, args: [payload] },
+                  })
+                : session.post({
+                    lane: Lane.EVENTS,
+                    kind: EventKind.EVENT,
+                    body: { endpointId, channel: pushed, args: [payload] },
+                  });
+          } catch (error) {
+            const suppressedCount = logLimiter.take("push-viewer");
+            if (suppressedCount !== null) {
+              logger.warn("Couldn't push to a Shell's viewer", { error, suppressedCount });
+            }
+            result = "refused";
+          }
+          if (result === "refused") lose(viewerId);
+        },
+      });
     session.registerCallHandler(
       CanopyLinkMethod.INVOKE,
       CanopyInvokePayloadSchema,
       ({ viewerId, channel, args, interactive }) =>
-        viewers.invoke(
+        viewers.invoke(prefix + viewerId, paramsFor(viewerId, interactive), ref, channel, args)
+    );
+    // A person's assistant viewer: the subject names this host as its own,
+    // and this host's own hold on that run answers, never the Shell's word.
+    session.registerCallHandler(
+      CanopyLinkMethod.ASSISTANT_INVOKE,
+      CanopyAssistantInvokePayloadSchema,
+      ({ viewerId, channel, args, interactive }) =>
+        viewers.invokeAssistant(
           prefix + viewerId,
-          () => ({
-            endpointId: CANOPY_VIEWER_ENDPOINT_PREFIX + viewerId,
-            clientId: client.clientId,
-            onPush: (pushed, payload) => {
-              if (!session.isOpen) return;
-              const endpointId = CANOPY_VIEWER_ENDPOINT_PREFIX + viewerId;
-              let result: string;
-              try {
-                // Its terminal's bytes take turns with grid panes' output, so
-                // busy terminals elsewhere on this host don't hold up its echo.
-                result =
-                  interactive === true && pushed === "canopy:terminal-data"
-                    ? session.post({
-                        lane: Lane.INTERACTIVE,
-                        kind: InteractiveKind.CANOPY_TERMINAL,
-                        body: { endpointId, channel: pushed, args: [payload] },
-                      })
-                    : session.post({
-                        lane: Lane.EVENTS,
-                        kind: EventKind.EVENT,
-                        body: { endpointId, channel: pushed, args: [payload] },
-                      });
-              } catch (error) {
-                const suppressedCount = logLimiter.take("push-viewer");
-                if (suppressedCount !== null) {
-                  logger.warn("Couldn't push to a Shell's viewer", { error, suppressedCount });
-                }
-                result = "refused";
-              }
-              if (result === "refused") lose(viewerId);
-            },
-          }),
+          paramsFor(viewerId, interactive),
           ref,
           channel,
           args
         )
+    );
+    session.registerCallHandler(
+      CanopyLinkMethod.ASSISTANTS,
+      CanopyAssistantsPayloadSchema,
+      async ({ projectId }): Promise<CanopyAssistantsAnswer> => {
+        const read = options.readAgents;
+        const directory = read
+          ? await read(projectId === undefined ? {} : { projectId }).catch(() =>
+              unreadAgentDirectory("unreachable")
+            )
+          : unreadAgentDirectory("unsupported");
+        return { version: ASSISTANT_VIEWER_VERSION, directory: assistantsOf(directory) };
+      }
     );
     session.registerCallHandler(
       CanopyLinkMethod.RELEASE,

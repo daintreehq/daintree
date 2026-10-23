@@ -3,6 +3,11 @@ import type { IpcInvokeMap } from "../../types/index.js";
 export const CANOPY_HOST_METHOD_CHANNELS = {
   invoke: "canopy-host:invoke",
   release: "canopy-host:release",
+  listAssistants: "canopy-host:list-assistants",
+  watchAssistant: "canopy-host:watch-assistant",
+  resolveAssistant: "canopy-host:resolve-assistant",
+  assistantInvoke: "canopy-host:assistant-invoke",
+  releaseAssistant: "canopy-host:release-assistant",
 } as const satisfies Record<string, keyof IpcInvokeMap>;
 
 type Methods = typeof CANOPY_HOST_METHOD_CHANNELS;

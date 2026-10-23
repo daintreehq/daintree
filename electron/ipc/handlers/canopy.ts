@@ -901,12 +901,16 @@ function isViewer(ctx: IpcContext): boolean {
 }
 
 /**
- * An assistant is watched from a window of the machine it runs on. A window
- * bound to another host forwards its terminal input there, so a stream opened
- * here would take keystrokes meant for that host's terminal of the same id.
+ * An assistant is watched from a window of the machine it runs on, or by a
+ * viewer this machine serves for a person reading it from elsewhere (#14163).
+ * A window bound to another host forwards its terminal input there, so a
+ * stream opened here would take keystrokes meant for that host's terminal of
+ * the same id; and a remote view's own endpoint is a project's window, not a
+ * viewer of this machine's assistants.
  */
 function assertViewsThisMachine(ctx: IpcContext): void {
-  if (isViewer(ctx) || getIpcDispatcher().hostForSender(ctx.webContentsId) !== null) {
+  if (isViewer(ctx)) return;
+  if (!ctx.event || getIpcDispatcher().hostForSender(ctx.webContentsId) !== null) {
     throw new AppError({
       code: "UNSUPPORTED",
       message: "Assistants are viewed from the machine they run on.",
@@ -1082,8 +1086,9 @@ export const canopyNamespace = defineIpcNamespace({
           binding.spawnedAt,
           ticket,
           binding.launchGeneration,
-          // Resize authority follows input: a global session's other windows only read it.
-          () => drivesRun(ctx, terminalId) && binding.mayType(viewId),
+          // Resize authority follows input: a global session's other windows only read it,
+          // and a viewer follows the size this machine's own window gave the terminal.
+          isViewer(ctx) ? () => false : () => drivesRun(ctx, terminalId) && binding.mayType(viewId),
           binding
         );
       },

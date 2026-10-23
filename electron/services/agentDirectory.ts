@@ -1,4 +1,5 @@
 import { MAX_ASSISTANT_SLOTS } from "../../shared/config/assistantSlots.js";
+import { isGlobalAssistantId } from "../../shared/config/globalAssistant.js";
 import {
   AGENT_DIRECTORY_ENTRIES_MAX,
   cutAgentLabel,
@@ -92,7 +93,9 @@ export async function collectAgentDirectory(
         projectId: lane.projectId,
         terminalId: running.terminalId,
         incarnation,
-        lane: lane.slot,
+        // The global session is held as a lane of its reserved id, but is named
+        // by its own scope: a viewer resolving it as a project lane is refused.
+        ...(isGlobalAssistantId(lane.projectId) ? { global: true } : { lane: lane.slot }),
         agentId: terminal?.detectedAgentId ?? terminal?.launchAgentId ?? lane.agentId,
         attached: lane.attached !== false,
         terminal,
@@ -173,6 +176,7 @@ function liveEntry(input: {
   terminalId: string;
   incarnation: number;
   lane?: number;
+  global?: boolean;
   agentId: string | null;
   attached: boolean | null;
   terminal: PtyTerminal | undefined;
@@ -184,7 +188,7 @@ function liveEntry(input: {
     role: input.role,
     subject: {
       hostId: input.hostId,
-      scope: { kind: "project", projectId: input.projectId },
+      scope: input.global ? { kind: "global" } : { kind: "project", projectId: input.projectId },
       terminalId: input.terminalId,
       incarnation: input.incarnation,
       ...(input.lane !== undefined ? { lane: input.lane } : {}),

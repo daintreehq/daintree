@@ -527,6 +527,10 @@ export const HYBRID_SPLITS: Readonly<Record<string, HybridSplit>> = {
   [CHANNELS.KEEP_AWAKE_UPDATE_CONFIG]: localOnly,
   // Action breadcrumbs describe this machine's UI.
   [CHANNELS.EVENTS_EMIT]: localOnly,
+  // A window answers for this machine's assistants, which refuse one bound
+  // elsewhere; another host's are read through a viewer it serves (#14163).
+  [CHANNELS.CANOPY_WATCH_ASSISTANT_TERMINAL]: localOnly,
+  [CHANNELS.CANOPY_RESOLVE_ASSISTANT]: localOnly,
   // The preview's browser and its proxy live on this machine.
   [CHANNELS.DEV_PREVIEW_GET_PROXY_PORT]: localOnly,
   [CHANNELS.DEV_PREVIEW_MINT_BROWSER_TOKEN]: localOnly,

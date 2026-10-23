@@ -1557,6 +1557,11 @@ export const CHANNELS = {
   // Remote Hosts: canopyHost (shell).
   CANOPY_HOST_INVOKE: "canopy-host:invoke",
   CANOPY_HOST_RELEASE: "canopy-host:release",
+  CANOPY_HOST_LIST_ASSISTANTS: "canopy-host:list-assistants",
+  CANOPY_HOST_WATCH_ASSISTANT: "canopy-host:watch-assistant",
+  CANOPY_HOST_RESOLVE_ASSISTANT: "canopy-host:resolve-assistant",
+  CANOPY_HOST_ASSISTANT_INVOKE: "canopy-host:assistant-invoke",
+  CANOPY_HOST_RELEASE_ASSISTANT: "canopy-host:release-assistant",
   CANOPY_HOST_EVENT: "canopy-host:event",
 
   // Remote Hosts: portForwards (shell).

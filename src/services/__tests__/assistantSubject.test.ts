@@ -31,7 +31,34 @@ const panel = vi.hoisted(() => {
   return store;
 });
 const switchProject = vi.hoisted(() => vi.fn(async () => {}));
+const viewHost = vi.hoisted(() => ({ id: null as string | null }));
+const hostEvents = vi.hoisted(() => new Set<(event: unknown) => void>());
+const canopyHost = vi.hoisted(() => ({
+  watchAssistant: vi.fn(async (_consumer: string, _subject: unknown) => ({
+    watchId: 4,
+    snapshot: null,
+  })),
+  resolveAssistant: vi.fn(),
+  assistantInvoke: vi.fn(async () => undefined),
+  releaseAssistant: vi.fn(async () => {}),
+  onEvent: vi.fn((callback: (event: unknown) => void) => {
+    hostEvents.add(callback);
+    return () => hostEvents.delete(callback);
+  }),
+}));
+const remoteHosts = vi.hoisted(() => ({
+  switchWindowHost: vi.fn(
+    async (
+      _payload: unknown
+    ): Promise<{ outcome: string; hostId: string; projectId?: string }> => ({
+      outcome: "switched",
+      hostId: "studio",
+      projectId: "p2",
+    })
+  ),
+}));
 
+vi.mock("@/hooks/useHostConnection", () => ({ getViewHostId: () => viewHost.id }));
 vi.mock("@/store/viewWorkspaceId", () => ({ getViewWorkspaceId: () => view.workspaceId }));
 vi.mock("@/store/helpPanelStore", () => ({
   useHelpPanelStore: {
@@ -71,7 +98,9 @@ describe("assistant subject adapter", () => {
     view.workspaceId = "p1";
     panel.sessions = {};
     panel.listeners.clear();
-    Object.assign(window, { electron: { canopy } });
+    viewHost.id = null;
+    hostEvents.clear();
+    Object.assign(window, { electron: { canopy, canopyHost, remoteHosts } });
   });
 
   it("watches by the exact subject, never by terminal id", async () => {
@@ -155,5 +184,91 @@ describe("assistant subject adapter", () => {
     canopy.resolveAssistant.mockResolvedValue(destination);
     expect(await activateAssistantLane(subject)).toEqual({ ok: false, reason: "ended" });
     expect(panel.setActiveSlot).not.toHaveBeenCalled();
+  });
+
+  describe("an assistant on another host (#14163)", () => {
+    const remote = { ...subject, hostId: "studio" };
+
+    it("reads it through its own viewer, never sizing it, and lets the viewer go", async () => {
+      const api = assistantTerminalApi(remote);
+      expect(api.holdsSize).toBe(false);
+      await api.watchTerminal("t1", { spawnedAt: 1 });
+      const consumer = canopyHost.watchAssistant.mock.calls[0]![0];
+      expect(canopyHost.watchAssistant).toHaveBeenCalledWith(consumer, remote);
+      await api.terminalSubmit(4, "carry on");
+      expect(canopyHost.assistantInvoke).toHaveBeenCalledWith(consumer, "canopy:terminal-submit", [
+        4,
+        "carry on",
+      ]);
+      await api.terminalResize(4, 80, 24);
+      expect(canopyHost.assistantInvoke).toHaveBeenCalledTimes(1);
+      expect(canopy.watchAssistantTerminal).not.toHaveBeenCalled();
+      api.dispose();
+      expect(canopyHost.releaseAssistant).toHaveBeenCalledWith(consumer);
+    });
+
+    it("hears only its own consumer's bytes and resyncs", async () => {
+      const api = assistantTerminalApi(remote);
+      const other = assistantTerminalApi(remote);
+      await api.watchTerminal("t1", { spawnedAt: 1 });
+      await other.watchTerminal("t1", { spawnedAt: 1 });
+      const [mine, theirs] = canopyHost.watchAssistant.mock.calls.map(([consumer]) => consumer);
+      const data = vi.fn();
+      const resync = vi.fn();
+      api.onTerminalData(data);
+      api.onResync(resync);
+      const chunk = { kind: "data", watchId: 4 };
+      for (const callback of [...hostEvents]) {
+        callback({ kind: "assistant-terminal-data", hostId: "studio", consumer: theirs, chunk });
+        callback({ kind: "assistant-terminal-data", hostId: "studio", consumer: mine, chunk });
+        callback({ kind: "terminal-data", hostId: "studio", chunk });
+        callback({ kind: "assistant-resync", hostId: "studio", consumer: mine });
+      }
+      expect(data.mock.calls).toEqual([[chunk]]);
+      expect(resync).toHaveBeenCalledTimes(1);
+    });
+
+    it("reads This Mac's assistant through a viewer from a window bound elsewhere", async () => {
+      viewHost.id = "studio";
+      const api = assistantTerminalApi(subject);
+      await api.watchTerminal("t1", { spawnedAt: 1 });
+      expect(canopy.watchAssistantTerminal).not.toHaveBeenCalled();
+      expect(canopyHost.watchAssistant).toHaveBeenCalled();
+    });
+
+    it("opens it by moving this window to its host, carrying the exact subject", async () => {
+      canopyHost.resolveAssistant.mockResolvedValue({ ...destination, hostId: "studio" });
+      expect(await openInAssistant(remote)).toEqual({ ok: true });
+      expect(remoteHosts.switchWindowHost).toHaveBeenCalledWith({
+        hostId: "studio",
+        newWindow: false,
+        projectId: "p2",
+        focusIntent: { intent: "open-assistant", subject: remote },
+      });
+      expect(switchProject).not.toHaveBeenCalled();
+      // The lookup's own viewer goes once it has answered.
+      expect(canopyHost.releaseAssistant).toHaveBeenCalledTimes(1);
+    });
+
+    it("says so when the window didn't move, or the session ended", async () => {
+      canopyHost.resolveAssistant.mockResolvedValueOnce({ ...destination, hostId: "studio" });
+      remoteHosts.switchWindowHost.mockResolvedValueOnce({
+        outcome: "superseded",
+        hostId: "studio",
+      });
+      expect(await openInAssistant(remote)).toEqual({ ok: false, reason: "not-switched" });
+      canopyHost.resolveAssistant.mockResolvedValueOnce(null);
+      expect(await openInAssistant(remote)).toEqual({ ok: false, reason: "ended" });
+    });
+
+    it("shows the lane once this window, now on that host, holds it", async () => {
+      viewHost.id = "studio";
+      view.workspaceId = "p2";
+      panel.sessions = { 2: { terminalId: "t1" } };
+      canopyHost.resolveAssistant.mockResolvedValue({ ...destination, hostId: "studio" });
+      expect(await activateAssistantLane(remote)).toEqual({ ok: true });
+      expect(panel.setActiveSlot).toHaveBeenCalledWith(2);
+      expect(canopy.resolveAssistant).not.toHaveBeenCalled();
+    });
   });
 });

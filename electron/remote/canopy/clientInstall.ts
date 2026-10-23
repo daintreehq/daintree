@@ -64,6 +64,11 @@ export function installCanopyHostsClient(options: InstallCanopyHostsClientOption
     localClient: getLocalClientRef(),
     send,
     watchView,
+    readLocalAgents: async (options) => {
+      const { getLocalAgentDirectory } =
+        await import("../../services/assistants/localAgentDirectory.js");
+      return getLocalAgentDirectory().read(options);
+    },
   });
   client.start();
   const unregister = registerRemoteService("canopyHosts", client);

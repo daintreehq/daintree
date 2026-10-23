@@ -106,9 +106,14 @@ export const CHANNEL_LOCALITY = {
   "artifact:save-to-file": "hybrid",
   // Canopy on a host the view names, which this Shell reaches itself: This
   // Mac's handlers, or another host's through its session.
+  "canopy-host:assistant-invoke": "shell",
   "canopy-host:event": "shell",
   "canopy-host:invoke": "shell",
+  "canopy-host:list-assistants": "shell",
   "canopy-host:release": "shell",
+  "canopy-host:release-assistant": "shell",
+  "canopy-host:resolve-assistant": "shell",
+  "canopy-host:watch-assistant": "shell",
   // Canopy reads the agents of the machine it runs on, which for a remote
   // window is the host. Only its backdrop, a picture of this window, is the Shell's.
   "canopy:answer": "host",
@@ -122,7 +127,7 @@ export const CHANNEL_LOCALITY = {
   "canopy:rename": "host",
   "canopy:rename-requested": "host",
   "canopy:reread": "host",
-  "canopy:resolve-assistant": "shell",
+  "canopy:resolve-assistant": "hybrid",
   "canopy:restore-reads": "host",
   "canopy:restore-requested": "host",
   "canopy:run-branch": "host",
@@ -143,7 +148,7 @@ export const CHANNEL_LOCALITY = {
   "canopy:unarchive": "host",
   "canopy:untrash": "host",
   "canopy:unwatch-terminal": "host",
-  "canopy:watch-assistant-terminal": "shell",
+  "canopy:watch-assistant-terminal": "hybrid",
   "canopy:watch-terminal": "host",
   "claude:list-subagents": "host",
   "claude:read-subagent-transcript": "host",

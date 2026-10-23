@@ -81,6 +81,24 @@ function sources(overrides: Partial<AgentDirectorySources> = {}): AgentDirectory
 }
 
 describe("collectAgentDirectory (#14160)", () => {
+  it("names the global session by its own scope, as a viewer resolves it (#14163)", async () => {
+    const directory = await collectAgentDirectory(
+      sources({
+        listRunningLanes: () => [
+          { projectId: "daintree:global-assistant", slot: 0, agentId: "claude", attached: false },
+        ],
+      })
+    );
+    expect(AgentDirectorySchema.safeParse(directory).success).toBe(true);
+    const assistants = directory.entries.filter((entry) => entry.role === "assistant");
+    expect(assistants).toHaveLength(1);
+    expect(assistants[0]).toMatchObject({
+      state: "live",
+      subject: { hostId: "local", scope: { kind: "global" }, terminalId: "a0", incarnation: 7 },
+    });
+    expect(assistants[0]!.state === "live" && "lane" in assistants[0]!.subject).toBe(false);
+  });
+
   it("types two assistant lanes and the workers once each, role apart from agent", async () => {
     const directory = await collectAgentDirectory(sources());
 

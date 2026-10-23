@@ -391,6 +391,49 @@ describe("RemoteHostsClient", () => {
     );
   });
 
+  it("carries Open in Assistant only to the host and project its lane is in (#14163)", async () => {
+    const subject = {
+      hostId: "studio-01",
+      scope: { kind: "project" as const, projectId: "proj-1" },
+      terminalId: "t1",
+      incarnation: 2,
+      lane: 1,
+    };
+    const focusIntent = { intent: "open-assistant", subject } as const;
+    await client.switchWindowHost(ctxFor(5, 1), {
+      hostId: "studio-01",
+      newWindow: false,
+      projectId: "proj-1",
+      focusIntent,
+    });
+    expect(windows.openRemoteProject).toHaveBeenCalledWith(
+      1,
+      "studio-01",
+      "proj-1",
+      "/srv/proj-1",
+      focusIntent,
+      { requesterWebContentsId: 5 }
+    );
+    vi.mocked(windows.openRemoteProject).mockClear();
+    for (const wrong of [
+      { ...subject, hostId: "local" },
+      { ...subject, scope: { kind: "project" as const, projectId: "proj-2" } },
+      { ...subject, lane: undefined },
+      { ...subject, incarnation: -1 },
+      { hostId: "studio-01", scope: { kind: "global" as const }, terminalId: "g", incarnation: 1 },
+    ]) {
+      await expect(
+        client.switchWindowHost(ctxFor(5, 1), {
+          hostId: "studio-01",
+          newWindow: false,
+          projectId: "proj-1",
+          focusIntent: { intent: "open-assistant", subject: wrong } as never,
+        })
+      ).rejects.toMatchObject({ code: "VALIDATION" });
+    }
+    expect(windows.openRemoteProject).not.toHaveBeenCalled();
+  });
+
   it("names the asking renderer as the switch's requester, in its own window only", async () => {
     await client.switchWindowHost(ctxFor(5, 1), {
       hostId: "studio-01",

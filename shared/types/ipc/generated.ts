@@ -130,6 +130,24 @@ export interface GeneratedIpcInvokeMap {
     args: [options: import("./agent.js").SaveArtifactOptions];
     result: import("./agent.js").SaveArtifactResult | null;
   };
+  "canopy-host:assistant-invoke": {
+    args: [
+      consumer: string,
+      channel:
+        | "canopy:resolve-assistant"
+        | "canopy:terminal-input"
+        | "canopy:terminal-send-key"
+        | "canopy:terminal-submit"
+        | "canopy:unwatch-terminal"
+        | "canopy:watch-assistant-terminal",
+      args: unknown[],
+    ];
+    result:
+      | void
+      | import("./canopy.js").CanopyTerminalView
+      | import("./canopy.js").AssistantOpenDestination
+      | null;
+  };
   "canopy-host:invoke": {
     args: [
       hostId: string,
@@ -173,9 +191,43 @@ export interface GeneratedIpcInvokeMap {
       | import("./fleet.js").FleetSnapshot
       | null;
   };
+  "canopy-host:list-assistants": {
+    args: [hostId: string, projectId?: string | undefined];
+    result: import("./canopyHost.js").HostAssistantDirectory;
+  };
   "canopy-host:release": {
     args: [hostId: string];
     result: void;
+  };
+  "canopy-host:release-assistant": {
+    args: [consumer: string];
+    result: void;
+  };
+  "canopy-host:resolve-assistant": {
+    args: [
+      consumer: string,
+      subject: {
+        hostId: string;
+        scope: { kind: "project"; projectId: string } | { kind: "global" };
+        terminalId: string;
+        incarnation: number;
+        lane?: number | undefined;
+      },
+    ];
+    result: import("./canopy.js").AssistantOpenDestination | null;
+  };
+  "canopy-host:watch-assistant": {
+    args: [
+      consumer: string,
+      subject: {
+        hostId: string;
+        scope: { kind: "project"; projectId: string } | { kind: "global" };
+        terminalId: string;
+        incarnation: number;
+        lane?: number | undefined;
+      },
+    ];
+    result: import("./canopy.js").CanopyTerminalView;
   };
   "canopy:answer": {
     args: [runId: string, target: import("./canopy.js").CanopyTarget, label: string];
