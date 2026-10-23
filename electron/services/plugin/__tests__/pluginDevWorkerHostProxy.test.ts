@@ -769,6 +769,58 @@ describe("PluginDevWorkerHostProxy host.db", () => {
   });
 });
 
+describe("PluginDevWorkerHostProxy host.db write authority", () => {
+  it("asks main before each write a call makes to a project database, never for background work", async () => {
+    const { mkdtempSync, rmSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const dir = mkdtempSync(join(tmpdir(), "proxy-db-lease-"));
+    try {
+      const { proxy, sent } = makeProxy();
+      const opening = proxy.host.db.open("ledger", { migrations: ["CREATE TABLE t (x)"] });
+      resolveCall(proxy, sent, "db.resolve", {
+        id: "ledger",
+        location: "project",
+        path: join(dir, "ledger.db"),
+        projectRelativePath: ".daintree/data/acme.demo/ledger.db",
+        journalMode: "delete",
+      });
+      const db = await opening;
+      await db.run("INSERT INTO t VALUES (1)");
+      expect(sent.some((m) => m.method === "db.authorizeWrite")).toBe(false);
+
+      let settled: Promise<unknown> | undefined;
+      proxy.host.registerHandler("save", async () => {
+        settled = db.run("INSERT INTO t VALUES (2)");
+        return null;
+      });
+      proxy.handleMessage({
+        type: "invoke",
+        requestId: "i-save",
+        kind: "handler",
+        channel: "save",
+        ctx: { projectId: null, worktreeId: null, webContentsId: 1, pluginId: "acme.demo" },
+        args: [],
+      });
+      await flush();
+      const ask = sent.find((m) => m.type === "host-call" && m.method === "db.authorizeWrite");
+      expect(ask).toMatchObject({ params: { id: "ledger" }, invocationId: "i-save" });
+      proxy.handleMessage({
+        type: "host-result",
+        requestId: ask.requestId,
+        ok: false,
+        error: "DRIVEN_ELSEWHERE: greg-mbp has control of this project. Take control first.",
+        errorFields: { code: "DRIVEN_ELSEWHERE" },
+      });
+      await expect(settled).rejects.toMatchObject({ code: "DRIVEN_ELSEWHERE" });
+      expect(await db.query("SELECT x FROM t")).toEqual([{ x: 1 }]);
+      await db.close();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("PluginDevWorkerHostProxy host error fields", () => {
   it("rebuilds a rejected host call with the fields the host attached", async () => {
     const { proxy, sent } = makeProxy();

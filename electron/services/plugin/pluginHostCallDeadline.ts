@@ -70,6 +70,7 @@ const HOST_CALL_DEADLINES = {
   "storage.set": DEFAULT,
   "storage.delete": DEFAULT,
   "db.resolve": INTERACTIVE,
+  "db.authorizeWrite": DEFAULT,
   "db.prepareBackup": INTERACTIVE,
   "fs.readFile": DEFAULT,
   "fs.readFileBytes": DEFAULT,

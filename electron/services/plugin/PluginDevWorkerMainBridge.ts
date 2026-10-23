@@ -123,6 +123,7 @@ import { invokeSignalFor } from "./pluginInvokeDeadline.js";
 import { serializableErrorFields } from "./pluginHostErrorFields.js";
 import {
   approvePluginDatabaseBackup,
+  approvePluginDatabaseWrite,
   observePluginPushListeners,
 } from "./pluginInternalApprovers.js";
 import {
@@ -1083,6 +1084,8 @@ export class PluginDevWorkerMainBridge {
         const p = params as { id: string; destPath: string };
         return approvePluginDatabaseBackup(this.host.db, p.id, p.destPath);
       }
+      case "db.authorizeWrite":
+        return approvePluginDatabaseWrite(this.host.db, (params as { id: string }).id);
       case "db.resolve": {
         const p = params as { id: string; readonly?: unknown };
         return p.readonly === true

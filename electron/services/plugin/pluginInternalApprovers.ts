@@ -33,6 +33,22 @@ export function approvePluginDatabaseBackup(
 }
 
 /**
+ * Refuses a write to a declared database when the call it runs in may not
+ * change the project the database is in. Resolves when the write may go ahead.
+ */
+export const databaseWriteAuthorizers = new WeakMap<
+  PluginDatabaseApi,
+  (id: string) => Promise<void>
+>();
+
+/** Ask whether the current call may write a plugin's database. Used by the worker bridge. */
+export function approvePluginDatabaseWrite(db: PluginDatabaseApi, id: string): Promise<void> {
+  const authorize = databaseWriteAuthorizers.get(db);
+  if (!authorize) return Promise.reject(new Error("db writes are not available on this host"));
+  return authorize(id);
+}
+
+/**
  * Observes whether a renderer in the host's scope listens on a push channel,
  * without registering a plugin event subscription: the observation backs a
  * worker's synchronous `host.hasListeners` cache, so it must not count towards

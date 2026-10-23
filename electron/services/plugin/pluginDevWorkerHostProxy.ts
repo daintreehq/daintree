@@ -2140,6 +2140,14 @@ export class PluginDevWorkerHostProxy {
             ...options,
             ...schema,
             revalidate: () => this.call<PluginDatabaseLocation>("db.resolve", params),
+            // Only a call has a caller to hold to the lease; background work
+            // skips the round trip, as the host would pass it anyway.
+            authorizeWrite: async () => {
+              if (location.location !== "project" || this.invocation.getStore() === undefined) {
+                return;
+              }
+              await this.call<void>("db.authorizeWrite", { id });
+            },
             prepareBackup: (destPath) => this.call<string>("db.prepareBackup", { id, destPath }),
             onClosed: () => this.databases.delete(database),
           });

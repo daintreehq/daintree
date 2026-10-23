@@ -98,6 +98,7 @@ import {
   PLUGIN_PANEL_ACTIVITY_MAX_PANELS,
   PLUGIN_TERMINAL_STATUS_MAX_PER_PROJECT,
   type PluginDatabaseApi,
+  type PluginDatabaseContribution,
   type PluginPanelActivityReport,
   type PluginTaskApi,
   type PluginWorktreeSetupStepHandler,
@@ -111,6 +112,7 @@ import {
 import type { PluginTaskRecord, PluginTaskRegistry } from "./PluginTaskRegistry.js";
 import {
   databaseBackupApprovers,
+  databaseWriteAuthorizers,
   fsWriteApprovers,
   pushListenerObservers,
 } from "./pluginInternalApprovers.js";
@@ -1441,8 +1443,7 @@ export function createHost(
     return approved;
   };
 
-  const resolveDatabase = async (id: string, options?: { readonly?: boolean }) => {
-    const readonly = options?.readonly === true;
+  const declaredDatabase = (id: string) => {
     if (typeof id !== "string" || id.length === 0) {
       throw new Error(`Plugin "${pluginId}" db: id must be a non-empty string`);
     }
@@ -1455,6 +1456,27 @@ export function createHost(
         `DB_NOT_DECLARED: plugin "${pluginId}" db: "${id}" is not declared in contributes.databases`
       );
     }
+    return declaration;
+  };
+
+  // Writing a project database changes the repository, so a call from a view
+  // that watches the project is refused as its `host.fs` writes are. Asked on
+  // every write, not once at open: a handle outlives the lease it was opened
+  // under. A local database is in no project and passes.
+  const requireCallerDrivesDatabase = async (
+    declaration: PluginDatabaseContribution,
+    op: string
+  ): Promise<void> => {
+    if (declaration.location !== "project" || boundProjectRoot === null) return;
+    await assertPluginCallerDrives(pluginId, `db.${op}`, { paths: [boundProjectRoot] });
+    requireBoundForDb(`db.${op}`);
+  };
+
+  const resolveDatabase = async (id: string, options?: { readonly?: boolean }) => {
+    const readonly = options?.readonly === true;
+    const declaration = declaredDatabase(id);
+    // Before consent and the directory: a refused open creates nothing.
+    if (!readonly) await requireCallerDrivesDatabase(declaration, "open");
     // A project database is a file in the repository: creating its directory,
     // the file, and every migration are project writes, so they wait for the
     // same first-use consent `host.fs.writeFile` does. A local database is
@@ -1475,6 +1497,9 @@ export function createHost(
     return location;
   };
 
+  const authorizeDatabaseWrite = (id: string): Promise<void> =>
+    requireCallerDrivesDatabase(declaredDatabase(id), "write");
+
   const dbApi: PluginDatabaseApi = {
     resolve: (id: string, options?: { readonly?: boolean }) => resolveDatabase(id, options),
     open: async (id, options) => {
@@ -1488,6 +1513,7 @@ export function createHost(
         ...options,
         ...schema,
         revalidate: () => resolveDatabase(id, mode),
+        authorizeWrite: () => authorizeDatabaseWrite(id),
         prepareBackup: (destPath) => prepareDatabaseBackup(id, destPath),
         onClosed: () => untrack?.(),
       });
@@ -1504,6 +1530,7 @@ export function createHost(
     },
   };
   databaseBackupApprovers.set(dbApi, prepareDatabaseBackup);
+  databaseWriteAuthorizers.set(dbApi, authorizeDatabaseWrite);
 
   // The live disposer per `agentMcp` endpoint, so a replaced roster is released
   // rather than kept reachable from the unload cascade for the host's lifetime.

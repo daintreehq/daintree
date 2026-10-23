@@ -372,6 +372,13 @@ export interface OpenPluginDatabaseOptions extends PluginDatabaseOpenOptions {
    * symlink is refused on reopen exactly as it would be on first open.
    */
   revalidate?: () => Promise<PluginDatabaseLocation>;
+  /**
+   * Re-prove, before each call on a writable handle, that whoever the call is
+   * for may still change the file. A query can write too (`RETURNING`), and
+   * authority can move while a handle is held, so the open's answer is not
+   * kept. Readonly handles never ask.
+   */
+  authorizeWrite?: () => Promise<void>;
   /** Called once when the handle closes, so an owner can stop tracking it. */
   onClosed?: () => void;
   /**
@@ -1076,6 +1083,8 @@ export async function openPluginDatabase(
   // undid, so a rolled-back transaction announces nothing.
   const run = <R>(work: (tracker: WriteTracker) => Promise<R>): Promise<R> =>
     serialize(async () => {
+      // Before a reopen, which can recreate and migrate the file.
+      if (!readonly && options.authorizeWrite) await options.authorizeWrite();
       if (needsReopen()) {
         await reopen();
         emit("external");
