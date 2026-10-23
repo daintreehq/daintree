@@ -31,17 +31,15 @@ Everything a unit needs on a worker goes through `host.call` with that worker's 
 
 ## The pick
 
-Work out Flow's refill count per worker, against its own cap and its own working and queued units. `<size>` is their sum, and the filters say `across <k> instances` and give each instance its own count (`instance 1 gets up to 3, instance 2 up to 5`), or `choosing-models.md`'s rules. Without counts, `/next-batch` splits evenly, so always give them in words. A worker with nothing to refill gets no instance. Instance *i* is the *i*-th worker in the order you wrote them. The hand-back adds a line per instance after `BATCH:`:
+Work out Flow's refill count per worker, against its own cap and its own working and queued units. `<size>` is their sum. A worker with nothing to refill gets nothing. `/next-batch` splits only into even counts (`floor(B / K)` each, the first `B mod K` one more), so ask it for one unsplit ranked list of `<size>` and place the issues here, with SKILL.md's pick prompt and no instance count. With a model split, `choosing-models.md` places them instead.
 
-`… then INSTANCE 1: <its issue numbers, comma-separated, without #> and INSTANCE 2: <its issue numbers>; or BATCH: none if nothing qualifies.`
-
-Check each against the report's `🟩 instance <i> ·` line. Together the instance lists must be the `🟩 all ·` line, each issue in exactly one, and none over its instance's count; otherwise it is an invalid pick (SKILL.md, Pick step 2). An issue the re-check drops leaves its instance's list. Save every unit with its worker.
+**Placing.** Walk the `🟩 all ·` line in order, which is priority order. Give each issue to the worker with the lowest load among those still under their refill count, where load is the sum of the sizes already given to it (small 1, medium 2, large 3, each issue's `· <size>` in the report). Break ties by fewer issues, then by the order the user named the workers. So every worker opens on top-priority work and large issues spread out, as `/next-batch`'s own split does. An issue the re-check drops leaves its worker's list. Save every unit with its worker.
 
 ## Tidy on a worker
 
 - One `project.runCommand` checks all the finished units' worktrees there: a loop printing each path with its `git -C <path> status --porcelain` line count. Judge each line, not the exit code, which a trailing `[ -n … ] && …` makes non-zero.
 - `terminal.list` there, once as is and once with `location: "background"`, for panes this run didn't open; then one `terminal.closeMany` there.
-- `worktree.deleteOwned` there opens its confirmation on this machine. A hidden window times out with `CONFIRMATION_TIMEOUT`, which declines nothing and names where it asked: stop deleting on that worker, ask the user once to bring that window forward, and delete the rest when they say. Never route around it with `/worker:reset`, the shell or another agent.
+- `worktree.deleteOwned` there opens its confirmation on this machine. A hidden window times out with `CONFIRMATION_TIMEOUT`, which declines nothing and names where it asked: stop deleting on that worker, ask the user once to bring that window forward, and delete the rest when they say. Never route around it with `/reset-worker`, the shell or another agent.
 
 ## Allowance, load and restarts
 

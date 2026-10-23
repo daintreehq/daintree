@@ -10,7 +10,7 @@ Work from this run's measured throughput, not issue counts alone: issues landed 
 | Sync, create worktrees, launch | about 12 minutes |
 | `/work`, first to last unit | 25 minutes to 2 hours, average about 75 minutes |
 | CI gate and tidy | about 5 minutes |
-| `/prs:merge`, 16 PRs in trains | about 45 minutes |
+| `/merge-prs`, 16 PRs in trains | about 45 minutes |
 | One whole batch, one at a time, measured end to end | about 2 h 50 m |
 
 The flow hides the pick and the merge, so while there are enough ready issues to keep every slot busy, throughput is about the slot count over the average `/work` time: 20 slots at 75 minutes is about 16 issues an hour.
