@@ -86,8 +86,11 @@ import type {
   PluginCheckUpdateResult,
   PluginSettingsScope,
   PluginSettingsUiValues,
+  PluginAccountBinding,
+  PluginAccountBindingUiStatus,
   PluginAccountConnectResult,
   PluginAccountUiStatus,
+  PluginAccountVerification,
   PluginWorktreeStatus,
   PluginPanelBadge,
   PluginToolbarButtonRuntimeState,
@@ -202,6 +205,8 @@ import { PluginPanelReloadDispatcher } from "./plugin/PluginPanelReloadDispatche
 import { PluginUIPromptDispatcher } from "./plugin/PluginUIPromptDispatcher.js";
 import { PluginSettingsManager } from "./plugin/PluginSettingsManager.js";
 import { PluginAccountService } from "./plugin/PluginAccountService.js";
+import { pluginAccountBindings } from "./plugin/pluginAccountBindings.js";
+import { pluginDeclaresConnections } from "../../shared/utils/pluginConnections.js";
 import { PluginStorageManager } from "./plugin/PluginStorageManager.js";
 import { PluginChannelRegistry } from "./plugin/PluginChannelRegistry.js";
 import {
@@ -1535,6 +1540,7 @@ export class PluginService {
         (this.plugins.get(pluginId) ?? this.disabledPlugins.get(pluginId))?.manifest,
       // The settings row listens for the same event to re-read its status.
       onAccountChanged: (pluginId) => this.emitSettingsChanged(pluginId),
+      bindings: pluginAccountBindings,
     });
 
     this.storage = new PluginStorageManager({
@@ -2617,7 +2623,7 @@ export class PluginService {
       manifest.contributes.settings.length > 0 ||
       manifest.contributes.views.some((v) => v.location === "settings") ||
       (manifest.contributes.setup?.length ?? 0) > 0 ||
-      manifest.contributes.account !== undefined;
+      pluginDeclaresConnections(manifest);
 
     for (const btn of manifest.contributes.toolbarButtons) {
       // Canonical `{pluginId}.{id}` form (#9281) — matches `registerPluginAction`
@@ -7157,19 +7163,32 @@ export class PluginService {
     const settingKeys = steps.flatMap((step) =>
       step.done.kind === "setting" ? [step.done.key] : []
     );
-    const needsAccount = steps.some((step) => step.done.kind === "account");
-    const [presence, account] = await Promise.all([
+    // One read per distinct connection the steps ask about; `""` is the one
+    // the project uses. An account file that can't be read answers for its
+    // own steps, which stay outstanding; the rest of the checklist stands.
+    const connectionRefs = [
+      ...new Set(
+        steps.flatMap((step) => (step.done.kind === "account" ? [step.done.connection ?? ""] : []))
+      ),
+    ];
+    const [presence, accountStates] = await Promise.all([
       settingKeys.length > 0
         ? this.settings.settingPresenceForUi(pluginId, settingKeys, projectId)
         : Promise.resolve({} as Record<string, string>),
-      // An account file that can't be read answers for its own step, which
-      // stays outstanding; the rest of the checklist still stands.
-      needsAccount
-        ? this.accounts.getUiStatus(pluginId).catch((err: unknown) => {
-            console.warn(`[PluginService] Couldn't read "${pluginId}"'s account for setup:`, err);
-            return null;
-          })
-        : Promise.resolve(null),
+      Promise.all(
+        connectionRefs.map((connection) =>
+          this.accounts
+            .getStateFor(pluginId, {
+              ...(connection === "" ? {} : { connection }),
+              ...(projectId === null ? {} : { projectId }),
+            })
+            .then((state) => [connection, state.connected] as const)
+            .catch((err: unknown) => {
+              console.warn(`[PluginService] Couldn't read "${pluginId}"'s account for setup:`, err);
+              return [connection, false] as const;
+            })
+        )
+      ).then((entries) => new Map(entries)),
     ]);
     const skipped = new Set(
       projectId === null ? [] : getProjectPluginSetupSkips(projectId, pluginId)
@@ -7189,7 +7208,7 @@ export class PluginService {
                 done:
                   done.kind === "setting"
                     ? presence[done.key] === "set"
-                    : account?.connected === true,
+                    : accountStates.get(done.connection ?? "") === true,
               };
         let uiAction: PluginSetupStepUiAction | null;
         if (action?.kind === "command") {
@@ -9532,24 +9551,60 @@ export class PluginService {
     return this.settings.revealSecretSettingForUi(pluginId, key, scope, projectId);
   }
 
-  getAccountStatusForUi(pluginId: string): Promise<PluginAccountUiStatus | null> {
-    return this.accounts.getUiStatus(pluginId);
+  getAccountStatusForUi(
+    pluginId: string,
+    connectionId?: string
+  ): Promise<PluginAccountUiStatus | null> {
+    return this.accounts.getUiStatus(pluginId, connectionId);
   }
 
-  connectAccountFromUi(pluginId: string): Promise<PluginAccountConnectResult> {
-    return this.accounts.connect(pluginId);
+  listAccountConnectionsForUi(pluginId: string): Promise<PluginAccountUiStatus[]> {
+    return this.accounts.listUiStatus(pluginId);
   }
 
-  cancelAccountConnectFromUi(pluginId: string): void {
-    this.accounts.cancelConnect(pluginId);
+  connectAccountFromUi(
+    pluginId: string,
+    connectionId?: string
+  ): Promise<PluginAccountConnectResult> {
+    return this.accounts.connect(pluginId, connectionId);
   }
 
-  setAccountTokenFromUi(pluginId: string, token: string): Promise<PluginAccountUiStatus> {
-    return this.accounts.setToken(pluginId, token);
+  cancelAccountConnectFromUi(pluginId: string, connectionId?: string): void {
+    this.accounts.cancelConnect(pluginId, connectionId);
   }
 
-  disconnectAccountFromUi(pluginId: string): Promise<void> {
-    return this.accounts.disconnect(pluginId);
+  setAccountTokenFromUi(
+    pluginId: string,
+    token: string,
+    connectionId?: string
+  ): Promise<PluginAccountUiStatus> {
+    return this.accounts.setToken(pluginId, token, connectionId);
+  }
+
+  disconnectAccountFromUi(pluginId: string, connectionId?: string): Promise<void> {
+    return this.accounts.disconnect(pluginId, connectionId);
+  }
+
+  testAccountConnectionFromUi(
+    pluginId: string,
+    connectionId?: string
+  ): Promise<PluginAccountVerification> {
+    return this.accounts.testConnection(pluginId, connectionId);
+  }
+
+  getAccountBindingForUi(
+    pluginId: string,
+    projectId: string
+  ): Promise<PluginAccountBindingUiStatus> {
+    return this.accounts.getBindingUiStatus(pluginId, projectId);
+  }
+
+  setAccountBindingFromUi(
+    pluginId: string,
+    projectId: string,
+    binding: PluginAccountBinding | null
+  ): Promise<PluginAccountBindingUiStatus> {
+    return this.accounts.setBinding(pluginId, projectId, binding);
   }
 
   /**

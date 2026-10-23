@@ -513,6 +513,11 @@ export const CHANNEL_LEASE_POLICY = {
   "plugin:account-cancel-connect": "free",
   "plugin:account-set-token": "free",
   "plugin:account-disconnect": "free",
+  "plugin:account-list": "free",
+  "plugin:account-test": "free",
+  "plugin:account-binding-get": "free",
+  // A project's choice, like a setup skip.
+  "plugin:account-binding-set": "driver",
   "plugin:toolbar-buttons": "free",
   "plugin:launch-entries": "free",
   "plugin:layouts": "free",
@@ -934,6 +939,7 @@ export const CHANNEL_LEASE_TARGETS = {
   // caller's too.
   "plugin:task-cancel": CALLER,
   "plugin:setup-step-skipped-set": CALLER,
+  "plugin:account-binding-set": CALLER,
   "plugin:search-provider-shown-set": CALLER,
   "plugin:context-providers-enabled-set": CALLER,
   "plugin:project-surface-choice-set": CALLER,

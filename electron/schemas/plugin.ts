@@ -32,6 +32,10 @@ import {
 } from "../../shared/types/plugin.js";
 import { LAUNCH_MCP_FORMATS } from "../../shared/config/launchMcp.js";
 import {
+  PLUGIN_CONNECTION_ID_PATTERN,
+  declaredPluginConnections,
+} from "../../shared/utils/pluginConnections.js";
+import {
   PRESENTATION_FEATURE_IDS,
   PRESENTATION_LEVELS,
   isLevelAllowed,
@@ -1977,10 +1981,16 @@ const PluginAccountIdentitySchema = z
   })
   .strict();
 
+/** A connection test: a bearer GET to a fixed endpoint, judged by its status alone. */
+const PluginAccountTestSchema = z
+  .object({ url: accountUrlSchema("contributes.account.test.url") })
+  .strict();
+
 const PluginAccountBaseShape = {
   label: z.string().trim().min(1).max(64),
   description: z.string().trim().min(1).max(200).optional(),
   identity: PluginAccountIdentitySchema.optional(),
+  test: PluginAccountTestSchema.optional(),
 };
 
 /**
@@ -2019,13 +2029,28 @@ export const PluginAccountContributionSchema = z.discriminatedUnion("kind", [
     .strict(),
 ]);
 
+/**
+ * One `contributes.connections` entry (#14102): an account declaration plus the
+ * id `host.account` and project bindings address it by.
+ */
+const PluginConnectionIdSchema = z.string().regex(PLUGIN_CONNECTION_ID_PATTERN, {
+  message: "connection ids are 1-32 lowercase letters, digits or dashes, starting with a letter",
+});
+
+export const PluginConnectionContributionSchema = z.discriminatedUnion("kind", [
+  PluginAccountContributionSchema.options[0].extend({ id: PluginConnectionIdSchema }),
+  PluginAccountContributionSchema.options[1].extend({ id: PluginConnectionIdSchema }),
+]);
+
 /** Setting ids carry no length cap of their own, so a reference to one takes none either. */
 const SetupSettingKeySchema = z.string().min(1).regex(SAFE_ID_PATTERN);
 
 export const SetupStepSettingDoneSchema = z
   .object({ kind: z.literal("setting"), key: SetupSettingKeySchema })
   .strict();
-export const SetupStepAccountDoneSchema = z.object({ kind: z.literal("account") }).strict();
+export const SetupStepAccountDoneSchema = z
+  .object({ kind: z.literal("account"), connection: PluginConnectionIdSchema.optional() })
+  .strict();
 export const SetupStepContextDoneSchema = z
   .object({ kind: z.literal("context"), when: z.string().trim().min(1).max(1024) })
   .strict();
@@ -2853,6 +2878,8 @@ export const MANIFEST_CONTRIBUTION_CAPS = {
   worktreeSetupSteps: 10,
   // A checklist the user reads through; a long one isn't setup any more.
   setup: 10,
+  // Each is a row the user signs in to by hand.
+  connections: 8,
 } as const;
 
 /**
@@ -3451,6 +3478,10 @@ function buildPluginManifestSchema(origin: PluginOrigin) {
             // three optional fixed slots are structurally bounded already.
             surfaces: SurfaceContributionsSchema.default({}),
             account: PluginAccountContributionSchema.optional(),
+            connections: z
+              .array(PluginConnectionContributionSchema)
+              .max(MANIFEST_CONTRIBUTION_CAPS.connections)
+              .optional(),
           })
           // A factory, not a literal: zod only shallow-clones a default value,
           // so a literal's arrays would be shared by every parse of the cached
@@ -3663,15 +3694,37 @@ function buildPluginManifestSchema(origin: PluginOrigin) {
       // An account exists to reach an online service, and the consent dialog
       // and plugin manager disclose that through `network:fetch`. Declaring
       // the account without it would hide the plugin's network use.
+      if (manifest.contributes.account !== undefined && manifest.contributes.connections) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["contributes", "connections"],
+          message:
+            'Declare contributes.account or contributes.connections, not both — account is shorthand for one connection named "default".',
+          params: { errorCode: "account_and_connections" },
+        });
+      }
+      const connectionIds = new Set<string>();
+      (manifest.contributes.connections ?? []).forEach((connection, index) => {
+        if (connectionIds.has(connection.id)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ["contributes", "connections", index, "id"],
+            message: `Duplicate connection id "${connection.id}".`,
+            params: { errorCode: "connection_duplicate_id" },
+          });
+        }
+        connectionIds.add(connection.id);
+      });
       if (
-        manifest.contributes.account !== undefined &&
+        (manifest.contributes.account !== undefined ||
+          (manifest.contributes.connections?.length ?? 0) > 0) &&
         !manifest.capabilities.includes("network:fetch")
       ) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
           path: ["contributes", "account"],
           message:
-            'contributes.account requires the "network:fetch" capability — the account is for an online service, and the capability is how the user is told the plugin reaches the network.',
+            'contributes.account and contributes.connections require the "network:fetch" capability — an account is for an online service, and the capability is how the user is told the plugin reaches the network.',
           params: { errorCode: "account_requires_network_fetch" },
         });
       }
@@ -4267,13 +4320,26 @@ function buildPluginManifestSchema(origin: PluginOrigin) {
             params: { errorCode: "setup_setting_unknown" },
           });
         }
-        if (done.kind === "account" && manifest.contributes.account === undefined) {
-          ctx.addIssue({
-            code: z.ZodIssueCode.custom,
-            path: [...path, "done", "kind"],
-            message: `Setup step "${step.id}" is done when the account is connected, but the plugin declares no contributes.account.`,
-            params: { errorCode: "setup_account_undeclared" },
-          });
+        if (done.kind === "account") {
+          const declared = declaredPluginConnections(manifest);
+          if (declared.length === 0) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              path: [...path, "done", "kind"],
+              message: `Setup step "${step.id}" is done when the account is connected, but the plugin declares no contributes.account or contributes.connections.`,
+              params: { errorCode: "setup_account_undeclared" },
+            });
+          } else if (
+            done.connection !== undefined &&
+            !declared.some((connection) => connection.id === done.connection)
+          ) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              path: [...path, "done", "connection"],
+              message: `Setup step "${step.id}" is done when connection "${done.connection}" is connected, but no declared connection has that id.`,
+              params: { errorCode: "setup_connection_unknown" },
+            });
+          }
         }
         if (done.kind === "context") {
           try {

@@ -10,6 +10,7 @@
  */
 
 import {
+  DEFAULT_PLUGIN_CONNECTION_ID,
   PLUGIN_NOTIFY_MAX_ACTIONS,
   PLUGIN_PANEL_ACTIVITY_MAX_PANELS,
   PLUGIN_TASK_MAX_LIVE,
@@ -619,9 +620,13 @@ export interface MockHostState {
    * `accessToken` to change what `getAccessToken()` answers while connected.
    */
   simulateAccountChange(
-    account:
+    account: (
       | ({ connected: true; identity?: string | null } & Partial<PluginAccountAccessToken>)
       | { connected: false }
+    ) & {
+      /** Which connection changes. Defaults to `"default"`, `contributes.account`'s. */
+      connection?: string;
+    }
   ): void;
 
   /**
@@ -797,9 +802,12 @@ export interface CreateMockHostOptions {
   reportsActivityPanelIds?: readonly string[];
   /**
    * Seed `host.account`. Omitted, the account starts disconnected. The mock
-   * models a plugin that declares `contributes.account`.
+   * models a plugin that declares `contributes.account`, or with `connection`
+   * one of its `contributes.connections`; a call without `ref.connection`
+   * reads `"default"`. It has no project bindings.
    */
   account?: {
+    connection?: string;
     identity?: string | null;
     accessToken?: string;
     expiresAt?: number | null;
@@ -1530,11 +1538,31 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
   const terminalLifecycleSubs = new Set<(event: PluginTerminalLifecycleEvent) => void>();
   const panelLifecycleSubs = new Set<(event: PluginPanelLifecycleEvent) => void>();
   const systemWakeSubs = new Set<(event: PluginSystemWakeEvent) => void>();
-  const accountSubs = new Set<(state: PluginAccountState) => unknown>();
-  let accountToken: PluginAccountAccessToken | null = options.account?.accessToken
-    ? { accessToken: options.account.accessToken, expiresAt: options.account.expiresAt ?? null }
-    : null;
-  let accountIdentity: string | null = accountToken ? (options.account?.identity ?? null) : null;
+  // Connections by id. The mock has no manifest, so a call without
+  // `ref.connection` means `"default"`, the id `contributes.account` gets.
+  const accountSubs = new Set<{
+    connection: string;
+    cb: (state: PluginAccountState) => unknown;
+  }>();
+  const accountConnections = new Map<
+    string,
+    { token: PluginAccountAccessToken; identity: string | null }
+  >();
+  if (options.account?.accessToken) {
+    accountConnections.set(options.account.connection ?? DEFAULT_PLUGIN_CONNECTION_ID, {
+      token: {
+        accessToken: options.account.accessToken,
+        expiresAt: options.account.expiresAt ?? null,
+      },
+      identity: options.account.identity ?? null,
+    });
+  }
+  const accountConnectionOf = (ref: { connection?: string } | undefined): string =>
+    ref?.connection ?? DEFAULT_PLUGIN_CONNECTION_ID;
+  const accountStateOf = (connection: string): PluginAccountState => {
+    const stored = accountConnections.get(connection);
+    return { connected: stored !== undefined, identity: stored?.identity ?? null };
+  };
   /** Channels a test marked as having no listener; every other channel has one. */
   const unlistenedChannels = new Set<string>();
   const listenerSubs = new Map<string, Set<(hasListeners: boolean) => void>>();
@@ -3813,13 +3841,19 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
       },
     },
     account: {
-      getState: async () => ({ connected: accountToken !== null, identity: accountIdentity }),
-      getAccessToken: async () => (accountToken ? { ...accountToken } : null),
-      onDidChange(callback) {
+      getState: async (ref) => accountStateOf(accountConnectionOf(ref)),
+      getAccessToken: async (ref) => {
+        const stored = accountConnections.get(accountConnectionOf(ref));
+        return stored ? { ...stored.token } : null;
+      },
+      onDidChange(callback, ref) {
         if (typeof callback !== "function") {
           throw new Error("account.onDidChange: callback must be a function");
         }
-        const registered = (state: PluginAccountState): unknown => callback(state);
+        const registered = {
+          connection: accountConnectionOf(ref),
+          cb: (state: PluginAccountState): unknown => callback(state),
+        };
         accountSubs.add(registered);
         return () => {
           accountSubs.delete(registered);
@@ -3993,19 +4027,23 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
       for (const cb of [...(listenerSubs.get(channel) ?? [])]) cb(hasListeners);
     },
     simulateAccountChange(account) {
+      const connection = account.connection ?? DEFAULT_PLUGIN_CONNECTION_ID;
       if (account.connected) {
-        accountToken = {
-          accessToken: account.accessToken ?? accountToken?.accessToken ?? "mock-access-token",
-          expiresAt: account.expiresAt ?? null,
-        };
-        accountIdentity = account.identity ?? null;
+        const previous = accountConnections.get(connection);
+        accountConnections.set(connection, {
+          token: {
+            accessToken: account.accessToken ?? previous?.token.accessToken ?? "mock-access-token",
+            expiresAt: account.expiresAt ?? null,
+          },
+          identity: account.identity ?? null,
+        });
       } else {
-        accountToken = null;
-        accountIdentity = null;
+        accountConnections.delete(connection);
       }
-      const state = { connected: accountToken !== null, identity: accountIdentity };
+      const state = accountStateOf(connection);
       // One failing subscriber doesn't stop the rest, as in the real host.
-      for (const cb of [...accountSubs]) {
+      for (const { connection: heard, cb } of [...accountSubs]) {
+        if (heard !== connection) continue;
         try {
           const result: unknown = cb({ ...state });
           if (result instanceof Promise) {

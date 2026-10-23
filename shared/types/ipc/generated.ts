@@ -2308,25 +2308,41 @@ export interface GeneratedIpcInvokeMap {
     args: [pluginId?: string | undefined];
     result: import("./pluginProcess.js").PluginProcessInfo[];
   };
-  "plugin:account-cancel-connect": {
+  "plugin:account-binding-get": {
     args: [pluginId: string];
+    result: import("../plugin.js").PluginAccountBindingUiStatus;
+  };
+  "plugin:account-binding-set": {
+    args: [pluginId: string, binding: import("../plugin.js").PluginAccountBinding | null];
+    result: import("../plugin.js").PluginAccountBindingUiStatus;
+  };
+  "plugin:account-cancel-connect": {
+    args: [pluginId: string, connectionId?: string | undefined];
     result: void;
   };
   "plugin:account-connect": {
-    args: [pluginId: string];
+    args: [pluginId: string, connectionId?: string | undefined];
     result: import("../plugin.js").PluginAccountConnectResult;
   };
   "plugin:account-disconnect": {
-    args: [pluginId: string];
+    args: [pluginId: string, connectionId?: string | undefined];
     result: void;
   };
+  "plugin:account-list": {
+    args: [pluginId: string];
+    result: import("../plugin.js").PluginAccountUiStatus[];
+  };
   "plugin:account-set-token": {
-    args: [pluginId: string, token: string];
+    args: [pluginId: string, token: string, connectionId?: string | undefined];
     result: import("../plugin.js").PluginAccountUiStatus;
   };
   "plugin:account-status": {
-    args: [pluginId: string];
+    args: [pluginId: string, connectionId?: string | undefined];
     result: import("../plugin.js").PluginAccountUiStatus | null;
+  };
+  "plugin:account-test": {
+    args: [pluginId: string, connectionId?: string | undefined];
+    result: import("../plugin.js").PluginAccountVerification;
   };
   "plugin:actions-get": {
     args: [];

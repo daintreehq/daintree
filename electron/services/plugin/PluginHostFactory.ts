@@ -989,6 +989,33 @@ function runAgentMcpTool(
 }
 
 /**
+ * A `host.account` call's `ref`, checked at the boundary: an object whose two
+ * optional fields are strings. Which project and connection it means is
+ * decided by the account service alone.
+ */
+function accountRef(
+  pluginId: string,
+  method: string,
+  ref: unknown
+): { connection?: string; projectId?: string } {
+  if (ref === undefined) return {};
+  if (ref === null || typeof ref !== "object" || Array.isArray(ref)) {
+    throw new Error(`Plugin "${pluginId}" account.${method}: ref must be an object`);
+  }
+  const { connection, projectId } = ref as Record<string, unknown>;
+  if (connection !== undefined && typeof connection !== "string") {
+    throw new Error(`Plugin "${pluginId}" account.${method}: ref.connection must be a string`);
+  }
+  if (projectId !== undefined && typeof projectId !== "string") {
+    throw new Error(`Plugin "${pluginId}" account.${method}: ref.projectId must be a string`);
+  }
+  return {
+    ...(connection !== undefined ? { connection } : {}),
+    ...(projectId !== undefined ? { projectId } : {}),
+  };
+}
+
+/**
  * Build one plugin's host object.
  *
  * `binding` names the project this host acts for and is captured here, once —
@@ -4161,28 +4188,37 @@ export function createHost(
     // NOT revoke-guarded: a plugin asks for a token from timers and callbacks.
     // Signing in and out are not here at all — only the host's settings row
     // can start either.
+    // `ref.projectId` is resolved once, in the account service: a project
+    // plugin's host may only name its own project, an installed plugin's names
+    // the project it is acting in.
     account: {
-      getState: async () => {
+      getState: async (ref) => {
         assertAccountHostLoaded("getState");
-        return deps.accounts.getState(pluginId);
+        return deps.accounts.getStateFor(pluginId, accountRef(pluginId, "getState", ref));
       },
-      getAccessToken: async () => {
+      getAccessToken: async (ref) => {
         assertAccountHostLoaded("getAccessToken");
-        const token = await deps.accounts.getAccessToken(pluginId);
+        const token = await deps.accounts.getAccessTokenFor(
+          pluginId,
+          accountRef(pluginId, "getAccessToken", ref)
+        );
         // A token read that outlives an unload or reload doesn't reach a host
         // that no longer speaks for the plugin.
         assertAccountHostLoaded("getAccessToken");
         return token;
       },
-      onDidChange: (callback) => {
+      onDidChange: (callback, ref) => {
         if (typeof callback !== "function") {
           throw new Error(`Plugin "${pluginId}" account.onDidChange: callback must be a function`);
         }
+        const target = accountRef(pluginId, "onDidChange", ref);
         // An undeclared account never changes. Same answer in a worker, which
         // can't see the manifest to refuse synchronously.
         if (!isBound() || !deps.accounts.declaredAccount(pluginId)) return () => {};
-        const unsubscribe = deps.accounts.subscribe(pluginId, (state) =>
-          isBound() ? callback(state) : undefined
+        const unsubscribe = deps.accounts.subscribe(
+          pluginId,
+          (state) => (isBound() ? callback(state) : undefined),
+          target
         );
         return trackPluginDisposer(deps.pluginEventCleanups, pluginId, unsubscribe);
       },

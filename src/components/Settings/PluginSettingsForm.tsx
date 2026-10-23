@@ -19,6 +19,7 @@ import { SettingsLoadErrorBanner } from "@/components/Settings/SettingsLoadError
 import { landOnSettingsElement } from "@/components/Settings/settingsLanding";
 import { PluginSettingsView } from "@/components/Plugin/PluginSettingsView";
 import {
+  accountBindingHomeOf,
   accountHomeOf,
   pluginDeclaresSettingsView,
   settingsForHome,
@@ -27,6 +28,8 @@ import {
 } from "@/services/plugin/pluginSettingsHome";
 import type { PluginSettingsRequest, PluginSettingsSection } from "@/store/pluginManagerStore";
 import { PluginAccountRow } from "@/components/Settings/PluginAccountRow";
+import { PluginAccountBindingRow } from "@/components/Settings/PluginAccountBindingRow";
+import { declaredPluginConnections } from "@shared/utils/pluginConnections";
 import { PluginSetupSettingsGroup } from "@/components/Plugin/PluginSetupChecklist";
 import { actionService } from "@/services/ActionService";
 import { Badge } from "@/components/ui/badge";
@@ -935,12 +938,13 @@ export function PluginSettingsForm({
   const home = viewScope === "user" ? "manager" : "project";
   const settings = settingsForHome(plugin, home);
   const elsewhere = settingsForHome(plugin, home === "manager" ? "project" : "manager");
-  const account = plugin.manifest.contributes.account;
+  const connections = declaredPluginConnections(plugin.manifest);
   const accountHome = accountHomeOf(plugin);
-  const showAccount = account !== undefined && accountHome === home;
-  const accountElsewhere = account !== undefined && accountHome !== home;
+  const showAccount = connections.length > 0 && accountHome === home;
+  const accountElsewhere = connections.length > 0 && accountHome !== home;
   const showSetup = setupHomeOf(plugin) === home;
   const projectId = useProjectStore((s) => s.currentProject?.id ?? null);
+  const showBinding = accountBindingHomeOf(plugin) === home && projectId !== null;
 
   const [reloadKey, setReloadKey] = useState(0);
   // What a failed secret save learned about the keychain since the scopes
@@ -1157,14 +1161,24 @@ export function PluginSettingsForm({
           <PluginSetupSettingsGroup key={plugin.loadedAt} pluginId={pluginId} />
         </div>
       )}
-      {showAccount && (
-        <div id={pluginSettingsAccountId(pluginId)} className="empty:hidden">
-          {/* Remounted on reload: a changed declaration starts from a fresh read. */}
-          <PluginAccountRow
-            key={`${pluginId}:${plugin.loadedAt}`}
-            plugin={plugin}
-            account={account}
-          />
+      {(showAccount || showBinding) && (
+        <div id={pluginSettingsAccountId(pluginId)} className="space-y-4 empty:hidden">
+          {/* Remounted on reload or project switch: a changed declaration or project starts from a fresh read. */}
+          {showBinding && (
+            <PluginAccountBindingRow
+              key={`${pluginId}:${plugin.loadedAt}:${projectId}`}
+              plugin={plugin}
+            />
+          )}
+          {showAccount &&
+            connections.map((connection) => (
+              <PluginAccountRow
+                key={`${pluginId}:${plugin.loadedAt}:${connection.id}`}
+                plugin={plugin}
+                account={connection}
+                connectionId={connection.id}
+              />
+            ))}
         </div>
       )}
       {(fields.length > 0 || elsewhereRow) && (

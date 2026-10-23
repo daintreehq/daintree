@@ -18,6 +18,7 @@
 // class instances. Requests that expect a reply carry a `requestId`.
 
 import type {
+  PluginAccountRef,
   PluginIdentity,
   PluginIpcContext,
   PluginSettingsScope,
@@ -470,6 +471,8 @@ export type PluginWorkerToHostMessage =
       debounceMs?: number;
       /** Handle id for `process-exit` / `process-crash` / `process-data` subscriptions. */
       processId?: string;
+      /** The project an `account` subscription's binding is read for; its `key` names the connection. */
+      projectId?: string;
     }
   /** Close a previously opened subscription. */
   | { type: "unsubscribe"; subscriptionId: string }
@@ -723,6 +726,11 @@ export interface SettingsUnsetParams {
 /** Params for `settings.open` (`host-call`). `key` omitted opens the plugin's settings home. */
 export interface SettingsOpenParams {
   key?: string;
+}
+
+/** Params for `account.getState` / `account.getAccessToken` (`host-call`). Omitted means no ref. */
+export interface AccountCallParams {
+  ref?: PluginAccountRef;
 }
 
 /** Params for `storage.get` (`host-call`). */

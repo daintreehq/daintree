@@ -85,6 +85,7 @@ import type {
   RegisterMcpToolsParams,
   SettingsGetParams,
   SettingsOpenParams,
+  AccountCallParams,
   SettingsSetParams,
   SettingsUnsetParams,
   StorageGetParams,
@@ -1074,10 +1075,11 @@ export class PluginDevWorkerMainBridge {
       }
       case "settings.missingRequired":
         return this.host.settings.missingRequired();
+      // An omitted ref crosses as `undefined` and is resolved by the host.
       case "account.getState":
-        return this.host.account.getState();
+        return this.host.account.getState((params as AccountCallParams | undefined)?.ref);
       case "account.getAccessToken":
-        return this.host.account.getAccessToken();
+        return this.host.account.getAccessToken((params as AccountCallParams | undefined)?.ref);
       case "storage.get": {
         const p = params as StorageGetParams;
         return this.host.storage.get(p.key, p.scope);
@@ -2030,7 +2032,15 @@ export class PluginDevWorkerMainBridge {
               ? handle.onCrash((info) => push(info))
               : handle.onData((chunk) => push(chunk));
       } else if (kind === "account") {
-        dispose = this.host.account.onDidChange((state) => push(state));
+        dispose = this.host.account.onDidChange(
+          (state) => push(state),
+          msg.key === undefined && msg.projectId === undefined
+            ? undefined
+            : {
+                ...(msg.key !== undefined ? { connection: msg.key } : {}),
+                ...(msg.projectId !== undefined ? { projectId: msg.projectId } : {}),
+              }
+        );
       } else if (kind === "storage") {
         if (!msg.key) {
           logger.warn(`[${this.pluginId}] storage subscribe missing key`);

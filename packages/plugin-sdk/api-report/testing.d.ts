@@ -2397,6 +2397,16 @@ interface PluginMcpApi {
      */
     registerTools(endpointId: string, tools: Record<string, PluginMcpToolDefinition>): Promise<() => void>;
 }
+/**
+ * Which connection a `host.account` call means. `connection` names a declared
+ * one; without it the project's bound connection, else the first declared.
+ * `projectId` says which project's binding applies: an installed plugin serves
+ * every project and passes it, a project plugin's host already knows its own.
+ */
+interface PluginAccountRef {
+    connection?: string;
+    projectId?: string;
+}
 /** What a plugin hears about its account. Never carries a token. */
 interface PluginAccountState {
     connected: boolean;
@@ -2415,7 +2425,7 @@ interface PluginAccountAccessToken {
  */
 interface PluginAccountApi {
     /** Whether the account is connected, and as whom. */
-    getState(): Promise<PluginAccountState>;
+    getState(ref?: PluginAccountRef): Promise<PluginAccountState>;
     /**
      * A current access token, refreshed first when it is about to expire, or
      * `null` when the account isn't connected (including after the service
@@ -2423,13 +2433,14 @@ interface PluginAccountApi {
      * don't keep it. Rejects when the plugin declares no `contributes.account`,
      * or when a refresh fails for a reason that may pass (offline, server error).
      */
-    getAccessToken(): Promise<PluginAccountAccessToken | null>;
+    getAccessToken(ref?: PluginAccountRef): Promise<PluginAccountAccessToken | null>;
     /**
-     * Called when the account connects, disconnects or reports a new identity.
+     * Called when the account connects, disconnects or reports a new identity,
+     * and when the project's binding moves `ref` to another connection.
      * Returns a disposer; every subscription is disposed when the plugin unloads.
      * Without a declared account nothing ever changes, so the callback never runs.
      */
-    onDidChange(callback: (state: PluginAccountState) => void | Promise<void>): () => void;
+    onDidChange(callback: (state: PluginAccountState) => void | Promise<void>, ref?: PluginAccountRef): () => void;
 }
 /**
  * Field control kind for a {@link SettingDefinition}. Drives which input the
@@ -6729,11 +6740,14 @@ interface MockHostState {
      * the settings row, and call every `account.onDidChange` subscriber. Pass an
      * `accessToken` to change what `getAccessToken()` answers while connected.
      */
-    simulateAccountChange(account: ({
+    simulateAccountChange(account: (({
         connected: true;
         identity?: string | null;
     } & Partial<PluginAccountAccessToken>) | {
         connected: false;
+    }) & {
+        /** Which connection changes. Defaults to `"default"`, `contributes.account`'s. */
+        connection?: string;
     }): void;
     /**
      * Pre-seed a deterministic `dispatch()` result for one action id. Overrides
@@ -6904,9 +6918,12 @@ interface CreateMockHostOptions {
     reportsActivityPanelIds?: readonly string[];
     /**
      * Seed `host.account`. Omitted, the account starts disconnected. The mock
-     * models a plugin that declares `contributes.account`.
+     * models a plugin that declares `contributes.account`, or with `connection`
+     * one of its `contributes.connections`; a call without `ref.connection`
+     * reads `"default"`. It has no project bindings.
      */
     account?: {
+        connection?: string;
         identity?: string | null;
         accessToken?: string;
         expiresAt?: number | null;

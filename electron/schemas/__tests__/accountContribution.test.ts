@@ -74,3 +74,89 @@ describe("contributes.account", () => {
     expect(parse({ kind: "token", label: "Tracker", identity }).success).toBe(false);
   });
 });
+
+describe("contributes.connections (#14102)", () => {
+  function parseConnections(
+    contributes: Record<string, unknown>,
+    capabilities: string[] = ["network:fetch"]
+  ) {
+    return getPluginManifestSchema("user").safeParse({
+      name: "acme.tracker",
+      version: "1.0.0",
+      capabilities,
+      contributes,
+    });
+  }
+
+  it("accepts named connections with a test endpoint", () => {
+    const result = parseConnections({
+      connections: [
+        { ...OAUTH, id: "work", label: "Work", test: { url: "https://api.example.com/ping" } },
+        { kind: "token", id: "personal", label: "Personal" },
+      ],
+    });
+    expect(result.success).toBe(true);
+    expect(result.success && result.data.contributes.connections?.map((c) => c.id)).toEqual([
+      "work",
+      "personal",
+    ]);
+  });
+
+  it("refuses account and connections together", () => {
+    expect(
+      errorCodes(
+        parseConnections({
+          account: OAUTH,
+          connections: [{ kind: "token", id: "work", label: "Work" }],
+        })
+      )
+    ).toContain("account_and_connections");
+  });
+
+  it("refuses duplicate ids", () => {
+    expect(
+      errorCodes(
+        parseConnections({
+          connections: [
+            { kind: "token", id: "work", label: "A" },
+            { kind: "token", id: "work", label: "B" },
+          ],
+        })
+      )
+    ).toContain("connection_duplicate_id");
+  });
+
+  it.each(["Work", "1st", "a:b", "__proto__", "x".repeat(33), ""])("refuses the id %j", (id) => {
+    expect(parseConnections({ connections: [{ kind: "token", id, label: "A" }] }).success).toBe(
+      false
+    );
+  });
+
+  it("requires the network:fetch capability", () => {
+    expect(
+      errorCodes(parseConnections({ connections: [{ kind: "token", id: "a", label: "A" }] }, []))
+    ).toContain("account_requires_network_fetch");
+  });
+
+  it("holds a test URL to the same endpoint rules", () => {
+    expect(
+      errorCodes(
+        parseConnections({
+          connections: [
+            { kind: "token", id: "a", label: "A", test: { url: "http://api.example.com/ping" } },
+          ],
+        })
+      )
+    ).toContain("scope_url_not_https");
+  });
+
+  it("checks an account setup step's named connection", () => {
+    const steps = (connection: string) =>
+      parseConnections({
+        connections: [{ kind: "token", id: "work", label: "Work" }],
+        setup: [{ id: "s", title: "Connect", done: { kind: "account", connection } }],
+      });
+    expect(steps("work").success).toBe(true);
+    expect(errorCodes(steps("personal"))).toContain("setup_connection_unknown");
+  });
+});

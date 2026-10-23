@@ -1758,17 +1758,28 @@ A project plugin's `"project"` and `"local"` scopes always mean its own project.
 
 ## `account` — host-managed sign-in
 
-For a plugin that declares [`contributes.account`](./manifest.md#contributes). The user connects and disconnects from the row the host draws in the plugin's settings; nothing on `host.account` can start a sign-in or store a token.
+For a plugin that declares [`contributes.account`](./manifest.md#contributes) or `contributes.connections`. The user connects, reconnects, tests and disconnects from the rows the host draws in the plugin's settings; nothing on `host.account` can start a sign-in or store a token.
 
 | Member | Returns |
 | --- | --- |
-| `getState()` | `{ connected, identity }` — `identity` is the reported name or `null` |
-| `getAccessToken()` | `{ accessToken, expiresAt }` or `null` when not connected |
-| `onDidChange(callback)` | A disposer. Called with the new state on connect, disconnect and a new identity |
+| `getState(ref?)` | `{ connected, identity }` — `identity` is the reported name or `null` |
+| `getAccessToken(ref?)` | `{ accessToken, expiresAt }` or `null` when not connected |
+| `onDidChange(callback, ref?)` | A disposer. Called with the new state on connect, disconnect, a new identity, and when the project's binding moves `ref` to another connection |
 
-Ask `getAccessToken()` each time you need a token rather than keeping one. Within 60 seconds of expiry the host refreshes it first, one refresh per account however many callers ask. A refresh the service refuses with `invalid_grant` disconnects the account and resolves `null`; a refresh that fails for a reason that may pass (offline, a server error) rejects and leaves the account connected. `expiresAt` is epoch milliseconds, or `null` when the service gave no lifetime. The refresh token never leaves the host, and an account connected under an earlier `contributes.account` (a different token URL, client id or scopes) reads as disconnected until the user connects again.
+`ref` is `{ connection?, projectId? }`. `connection` names one of your `contributes.connections` ids; `contributes.account` is the connection `"default"`. Without it the host uses the connection the project is bound to, else the first one declared. `projectId` says whose binding applies: an installed plugin serves every project and passes the project it is acting in (omitted, there is no binding and the first connection is used); a project plugin's host already knows its project, and naming another one rejects. A plugin with a single `contributes.account` can ignore `ref` entirely.
 
-`getState()` and `getAccessToken()` reject when the manifest declares no account, and after the plugin unloads; `onDidChange` then never calls back. An installed plugin has one account on the machine; a project plugin's account belongs to its project.
+Ask `getAccessToken()` each time you need a token rather than keeping one. Within 60 seconds of expiry the host refreshes it first, one refresh per connection however many callers and projects ask. A refresh the service refuses with `invalid_grant` disconnects that connection and resolves `null`; the settings row then says the service ended the sign-in, and every project's binding to it stays. A refresh that fails for a reason that may pass (offline, a server error) rejects and leaves it connected. `expiresAt` is epoch milliseconds, or `null` when the service gave no lifetime. The refresh token never leaves the host, and a connection signed in under an earlier declaration (a different token URL, client id or scopes) reads as disconnected until the user connects again. A token read during which the project's binding changed is dropped and read again from the newly bound connection.
+
+`getState()` and `getAccessToken()` reject when the manifest declares no account or names an undeclared connection, and after the plugin unloads; `onDidChange` then never calls back.
+
+**Stored versus verified.** `connected` means tokens are stored in the OS keychain for the current declaration — nothing more. Whether the service still accepts them is only known when they are used: the settings row's Test sends a bearer GET to the connection's `test.url` (else its `identity.url`) and shows what came back, and a successful refresh counts too. That result is kept in memory until the connection next changes and is never handed to the plugin; a refused test is shown, not acted on.
+
+**Machine-shared versus instance-private.** Connections live in the owning instance's account file under Daintree's settings, never in a repository:
+
+- An installed plugin's connections belong to this machine. Every project sees the same ones, and Project settings → Plugins picks which one a project uses when there are several.
+- A project plugin's connections are private to its project; another project's instance of the same plugin never sees them. Its project may instead be bound to the installed plugin's connection of the same id — only when both declare it identically, since the tokens were issued for that declaration. Nothing is copied: disconnecting the machine connection disconnects it for every project bound to it, and a changed declaration on either side makes the binding read as disconnected rather than fall back to something else.
+
+A binding is a reference stored in Daintree's settings per project. Removing it (the row's reset) returns the project to the default connection; disconnecting a connection keeps every binding to it, so connecting again restores each project's choice.
 
 ## `storage` — private key/value storage
 

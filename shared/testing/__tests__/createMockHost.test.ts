@@ -2943,3 +2943,35 @@ describe("createMockHost artifacts (#14100)", () => {
     expect(host.artifactRecords.size).toBe(0);
   });
 });
+
+describe("createMockHost account connections (#14102)", () => {
+  it('keeps each named connection apart and defaults to "default"', async () => {
+    const host = createMockHost({ account: { accessToken: "synthetic-default" } });
+    const heardWork: unknown[] = [];
+    const heardDefault: unknown[] = [];
+    host.account.onDidChange((state) => void heardWork.push(state), { connection: "work" });
+    host.account.onDidChange((state) => void heardDefault.push(state));
+
+    host.simulateAccountChange({
+      connected: true,
+      identity: "octo",
+      accessToken: "synthetic-work",
+      connection: "work",
+    });
+
+    expect((await host.account.getAccessToken())?.accessToken).toBe("synthetic-default");
+    expect((await host.account.getAccessToken({ connection: "work" }))?.accessToken).toBe(
+      "synthetic-work"
+    );
+    expect(await host.account.getState({ connection: "work" })).toEqual({
+      connected: true,
+      identity: "octo",
+    });
+    expect(heardWork).toEqual([{ connected: true, identity: "octo" }]);
+    expect(heardDefault).toEqual([]);
+
+    host.simulateAccountChange({ connected: false, connection: "work" });
+    expect(await host.account.getAccessToken({ connection: "work" })).toBeNull();
+    expect((await host.account.getState()).connected).toBe(true);
+  });
+});

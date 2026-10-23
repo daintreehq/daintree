@@ -863,6 +863,9 @@ export interface GeneratedElectronAPI {
     exportAuditLog(
       ...args: IpcInvokeMap["plugin:export-audit-log"]["args"]
     ): Promise<IpcInvokeMap["plugin:export-audit-log"]["result"]>;
+    getAccountBinding(
+      ...args: IpcInvokeMap["plugin:account-binding-get"]["args"]
+    ): Promise<IpcInvokeMap["plugin:account-binding-get"]["result"]>;
     getAccountStatus(
       ...args: IpcInvokeMap["plugin:account-status"]["args"]
     ): Promise<IpcInvokeMap["plugin:account-status"]["result"]>;
@@ -998,6 +1001,9 @@ export interface GeneratedElectronAPI {
     list(
       ...args: IpcInvokeMap["plugin:list"]["args"]
     ): Promise<IpcInvokeMap["plugin:list"]["result"]>;
+    listAccountConnections(
+      ...args: IpcInvokeMap["plugin:account-list"]["args"]
+    ): Promise<IpcInvokeMap["plugin:account-list"]["result"]>;
     pathExists(
       ...args: IpcInvokeMap["plugin:path-exists"]["args"]
     ): Promise<IpcInvokeMap["plugin:path-exists"]["result"]>;
@@ -1040,6 +1046,9 @@ export interface GeneratedElectronAPI {
     searchContextProvider(
       ...args: IpcInvokeMap["plugin:context-provider-search"]["args"]
     ): Promise<IpcInvokeMap["plugin:context-provider-search"]["result"]>;
+    setAccountBinding(
+      ...args: IpcInvokeMap["plugin:account-binding-set"]["args"]
+    ): Promise<IpcInvokeMap["plugin:account-binding-set"]["result"]>;
     setAccountToken(
       ...args: IpcInvokeMap["plugin:account-set-token"]["args"]
     ): Promise<IpcInvokeMap["plugin:account-set-token"]["result"]>;
@@ -1094,6 +1103,9 @@ export interface GeneratedElectronAPI {
     setSetupStepSkipped(
       ...args: IpcInvokeMap["plugin:setup-step-skipped-set"]["args"]
     ): Promise<IpcInvokeMap["plugin:setup-step-skipped-set"]["result"]>;
+    testAccountConnection(
+      ...args: IpcInvokeMap["plugin:account-test"]["args"]
+    ): Promise<IpcInvokeMap["plugin:account-test"]["result"]>;
     toolbarButtons(
       ...args: IpcInvokeMap["plugin:toolbar-buttons"]["args"]
     ): Promise<IpcInvokeMap["plugin:toolbar-buttons"]["result"]>;
