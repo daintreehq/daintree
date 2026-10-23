@@ -16,10 +16,10 @@ import {
   describeSwap,
   memoryUsedSeries,
   pressureSeries,
-  rankPlacement,
+  compareHostCapacity,
   type PlacementCandidate,
 } from "../overviewModel";
-import { makeSummary } from "./fixtures";
+import { makeCapacitySummary, makeSummary } from "./fixtures";
 
 function candidate(
   hostId: string,
@@ -29,77 +29,150 @@ function candidate(
   return {
     hostId,
     name: hostId,
-    summary: overrides === null ? null : makeSummary({ hostId, ...overrides }),
+    summary: overrides === null ? null : makeCapacitySummary({ hostId, ...overrides }),
     reachable,
   };
 }
 
-describe("rankPlacement", () => {
-  it("puts the least-loaded host first by CPU, memory pressure and working agents", () => {
-    const ranked = rankPlacement([
-      candidate("busy", { cpuPercent: 80, agentsObserved: { working: 3, waiting: 0, idle: 0 } }),
-      candidate("pressured", {
-        cpuPercent: 5,
-        memoryPressure: "critical",
-        agentsObserved: { working: 0, waiting: 0, idle: 0 },
-      }),
-      candidate("calm", { cpuPercent: 30, agentsObserved: { working: 1, waiting: 0, idle: 0 } }),
+const GB = 1024 ** 3;
+
+describe("compareHostCapacity", () => {
+  it("suggests the host with strictly more free cores and available memory than every other", () => {
+    const { suggestedHostId } = compareHostCapacity([
+      candidate("busy", { cpuPercent: 80, memoryUsedBytes: 12 * GB }),
+      candidate("calm", { cpuPercent: 10, memoryUsedBytes: 2 * GB }),
+      candidate("middling", { cpuPercent: 40, memoryUsedBytes: 6 * GB }),
     ]);
-    expect(ranked.map((choice) => choice.hostId)).toEqual(["calm", "pressured", "busy"]);
-    expect(ranked[0]!.reason).toBe("CPU 30% · memory normal · 1 working (observed)");
+    expect(suggestedHostId).toBe("calm");
   });
 
-  it("leaves out hosts it can't compare or reach", () => {
-    const ranked = rankPlacement([
-      candidate("unmeasured", { cpuPercent: null, memoryPressure: null }),
+  it("weighs free cores, not CPU share: a bigger host at a higher share can lead", () => {
+    const { suggestedHostId } = compareHostCapacity([
+      candidate("small", { cpuPercent: 10, cpuLogicalCoreCount: 4, memoryUsedBytes: 8 * GB }),
+      candidate("big", { cpuPercent: 50, cpuLogicalCoreCount: 32, memoryUsedBytes: 4 * GB }),
+    ]);
+    expect(suggestedHostId).toBe("big");
+  });
+
+  it("suggests nothing when no host leads on both free cores and available memory", () => {
+    const { suggestedHostId } = compareHostCapacity([
+      candidate("cores", { cpuPercent: 5, memoryUsedBytes: 12 * GB }),
+      candidate("memory", { cpuPercent: 60, memoryUsedBytes: 2 * GB }),
+    ]);
+    expect(suggestedHostId).toBeNull();
+  });
+
+  it("treats equal memory, or core counts that display alike, as no lead", () => {
+    expect(
+      compareHostCapacity([
+        candidate("a", { cpuPercent: 10, memoryUsedBytes: 4 * GB }),
+        candidate("b", { cpuPercent: 60, memoryUsedBytes: 4 * GB }),
+      ]).suggestedHostId
+    ).toBeNull();
+    expect(
+      compareHostCapacity([
+        candidate("a", { cpuPercent: 10, memoryUsedBytes: 2 * GB }),
+        candidate("b", { cpuPercent: 10.2, memoryUsedBytes: 8 * GB }),
+      ]).suggestedHostId
+    ).toBeNull();
+  });
+
+  it("suggests nothing for a single host", () => {
+    expect(compareHostCapacity([candidate("only", {})]).suggestedHostId).toBeNull();
+  });
+
+  it("lists every candidate with its facts, in the order given", () => {
+    const { options } = compareHostCapacity([
+      candidate("b", { cpuPercent: 50, memoryUsedBytes: 4 * GB, cpuLoadAverage1m: 3.5 }),
       candidate("silent", null),
       candidate("away", { cpuPercent: 1 }, false),
-      candidate("ok", { cpuPercent: 50 }),
     ]);
-    expect(ranked.map((choice) => choice.hostId)).toEqual(["ok"]);
+    expect(options.map((option) => option.hostId)).toEqual(["b", "silent", "away"]);
+    expect(options[0]!.facts).toBe(
+      "CPU 4 of 8 cores · Memory 4 / 16 GB · Memory pressure Normal · Load (1 min) 3.50"
+    );
+    expect(options[1]!.facts).toBe("No measurements reported");
+    expect(options[2]!.facts).toBe("Not connected");
   });
 
-  it("never lets a host with a missing measurement beat one that measured a light load", () => {
-    const ranked = rankPlacement([
-      // Reported only normal pressure: its CPU could be anything.
-      candidate("pressure-only", {
-        cpuPercent: null,
-        memoryPressure: "normal",
-        agentsObserved: { working: 0, waiting: 0, idle: 0 },
-      }),
-      candidate("measured", {
+  it("ignores hosts it can't reach or hear from when looking for a lead", () => {
+    const { suggestedHostId } = compareHostCapacity([
+      candidate("away", { cpuPercent: 1, memoryUsedBytes: 0 }, false),
+      candidate("silent", null),
+      candidate("calm", { cpuPercent: 10, memoryUsedBytes: 2 * GB }),
+      candidate("busy", { cpuPercent: 70, memoryUsedBytes: 9 * GB }),
+    ]);
+    expect(suggestedHostId).toBe("calm");
+  });
+
+  it.each([
+    ["CPU", { cpuPercent: null }],
+    ["pressure", { memoryPressure: null }],
+    ["memory", { memoryUsedBytes: null }],
+    ["core count", { cpuLogicalCoreCount: null }],
+  ] as const)("withholds the suggestion while a compared host didn't report its %s", (_, gap) => {
+    const { suggestedHostId, options } = compareHostCapacity([
+      candidate("calm", { cpuPercent: 5, memoryUsedBytes: 1 * GB }),
+      candidate("partial", { memoryUsedBytes: 12 * GB, ...gap }),
+    ]);
+    expect(suggestedHostId).toBeNull();
+    expect(options).toHaveLength(2);
+  });
+
+  it("lists an older host with what it reported but never compares it", () => {
+    const older: PlacementCandidate = {
+      hostId: "older",
+      name: "older",
+      summary: makeSummary({ hostId: "older", cpuPercent: 90 }),
+      reachable: true,
+    };
+    const { suggestedHostId, options } = compareHostCapacity([
+      candidate("calm", { cpuPercent: 5, memoryUsedBytes: 1 * GB }),
+      older,
+    ]);
+    expect(suggestedHostId).toBeNull();
+    expect(options[1]!.facts).toBe("CPU 90% · Memory 4 GB of 16 GB · Memory pressure Normal");
+  });
+
+  it("never suggests a host under critical pressure, or one under worse pressure than a peer", () => {
+    expect(
+      compareHostCapacity([
+        candidate("a", { cpuPercent: 5, memoryUsedBytes: 1 * GB, memoryPressure: "critical" }),
+        candidate("b", { cpuPercent: 50, memoryUsedBytes: 8 * GB, memoryPressure: "critical" }),
+      ]).suggestedHostId
+    ).toBeNull();
+    expect(
+      compareHostCapacity([
+        candidate("a", { cpuPercent: 5, memoryUsedBytes: 1 * GB, memoryPressure: "warn" }),
+        candidate("b", { cpuPercent: 50, memoryUsedBytes: 8 * GB, memoryPressure: "normal" }),
+      ]).suggestedHostId
+    ).toBeNull();
+    expect(
+      compareHostCapacity([
+        candidate("a", { cpuPercent: 5, memoryUsedBytes: 1 * GB, memoryPressure: "warn" }),
+        candidate("b", { cpuPercent: 50, memoryUsedBytes: 8 * GB, memoryPressure: "warn" }),
+      ]).suggestedHostId
+    ).toBe("a");
+  });
+
+  it("is not moved by observed agents or the load average", () => {
+    const base = [
+      candidate("calm", { cpuPercent: 5, memoryUsedBytes: 1 * GB }),
+      candidate("busy", { cpuPercent: 70, memoryUsedBytes: 9 * GB }),
+    ];
+    const noisy = [
+      candidate("calm", {
         cpuPercent: 5,
-        memoryPressure: "normal",
-        agentsObserved: { working: 0, waiting: 0, idle: 0 },
+        memoryUsedBytes: 1 * GB,
+        cpuLoadAverage1m: 40,
+        agentsObserved: { working: 9, waiting: 0, idle: 0 },
       }),
-      candidate("cpu-only", {
-        cpuPercent: 1,
-        memoryPressure: null,
-        agentsObserved: { working: 0, waiting: 0, idle: 0 },
-      }),
-      candidate("agents-unknown", {
-        cpuPercent: 2,
-        memoryPressure: "normal",
-        agentsObserved: null,
-      }),
-    ]);
-    expect(ranked[0]!.hostId).toBe("measured");
-    expect(ranked.find((c) => c.hostId === "pressure-only")!.reason).toBe(
-      "CPU not reported · memory normal · 0 working (observed)"
+      candidate("busy", { cpuPercent: 70, memoryUsedBytes: 9 * GB, agentsObserved: null }),
+    ];
+    expect(compareHostCapacity(noisy).suggestedHostId).toBe(
+      compareHostCapacity(base).suggestedHostId
     );
-    expect(ranked.find((c) => c.hostId === "agents-unknown")!.reason).toBe(
-      "CPU 2% · memory normal · agents unknown"
-    );
-  });
-
-  it("breaks ties toward the host that reported more, then by name", () => {
-    const idle = { working: 0, waiting: 0, idle: 0 };
-    const ranked = rankPlacement([
-      candidate("b-full", { cpuPercent: 100, memoryPressure: "normal", agentsObserved: idle }),
-      candidate("a-partial", { cpuPercent: null, memoryPressure: "normal", agentsObserved: idle }),
-      candidate("a-full", { cpuPercent: 100, memoryPressure: "normal", agentsObserved: idle }),
-    ]);
-    expect(ranked.map((choice) => choice.hostId)).toEqual(["a-full", "b-full", "a-partial"]);
+    expect(compareHostCapacity(noisy).suggestedHostId).toBe("calm");
   });
 });
 
