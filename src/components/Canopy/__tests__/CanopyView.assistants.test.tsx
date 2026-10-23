@@ -352,7 +352,7 @@ describe("CanopyView role filter", () => {
     expect(dispatchMock).not.toHaveBeenCalled();
   });
 
-  it("marks only the handback shown as seen, not each one sorted up after it", async () => {
+  it("marks a handback seen only for the assistant chosen, never by default", async () => {
     directory.entries = [
       assistant(0, { handback: { observedAt: NOW - 500 } }),
       assistant(1, { handback: { observedAt: NOW - 400 } }),
@@ -360,9 +360,14 @@ describe("CanopyView role filter", () => {
     useCanopyStore.setState({ roleFilter: "assistants" });
     render(<CanopyView />);
     await settle();
+    // Shown in the pane only because it leads the list: both still ask.
+    expect(document.querySelector("[data-testid=canopy-assistant-pane]")).not.toBeNull();
+    expect(useCanopyStore.getState().assistantHandbacksSeen).toEqual({});
+    await act(async () => fireEvent.click(assistantRows()[1]!));
     await settle();
-    expect(Object.values(useCanopyStore.getState().assistantHandbacksSeen)).toEqual([NOW - 500]);
+    expect(Object.values(useCanopyStore.getState().assistantHandbacksSeen)).toEqual([NOW - 400]);
     expect(assistantRows().map((row) => row.getAttribute("data-ask"))).toEqual(["handback", null]);
+    // The chosen one keeps the pane as it moves down the list.
     expect(assistantRows()[1]!.getAttribute("aria-selected")).toBe("true");
   });
 

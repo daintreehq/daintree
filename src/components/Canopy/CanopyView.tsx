@@ -1490,13 +1490,22 @@ function CanopyInbox({
     }
     // An assistant the person chose keeps the pane; the worker list's own
     // recovery waits until they come back to it.
-    if (!searching || focusedIndex !== -1 || visible.length === 0 || selectedAssistant !== null) {
-      return;
-    }
+    const assistantChosen =
+      assistantId !== null && shownAssistants.some((item) => item.id === assistantId);
+    if (!searching || focusedIndex !== -1 || visible.length === 0 || assistantChosen) return;
     const index = topOwedRef.current ? 0 : Math.min(lastIndexRef.current, visible.length - 1);
     topOwedRef.current = false;
     selectNow(visible[index]!.runId);
-  }, [isOpen, appliedQuery, searching, focusedIndex, visible, selectNow, selectedAssistant]);
+  }, [
+    isOpen,
+    appliedQuery,
+    searching,
+    focusedIndex,
+    visible,
+    selectNow,
+    assistantId,
+    shownAssistants,
+  ]);
 
   // Select a run and take the keyboard into its pane — its composer or its
   // terminal — rather than onto its row.
@@ -2458,18 +2467,19 @@ function CanopyInbox({
             ? "No assistant is running in this project."
             : "No assistant is running. Start one from the Assistant panel.";
   // The assistant in the pane has had its handback in front of the person.
-  // The one shown by default is pinned first, so a handback seen there and
-  // moving it down the list never hands the pane — and a "seen" — to the next.
-  const paneAssistantId = isOpen ? (selectedAssistant?.id ?? null) : null;
-  const paneHandbackAt = isOpen ? (selectedAssistant?.handbackAt ?? null) : null;
+  // An assistant the person chose has had its handback in front of them. One
+  // shown only because nothing else is listed hasn't: seeing it there would
+  // re-sort the list and hand the pane, and a "seen", to each in turn.
+  const chosenAssistantId =
+    isOpen && selectedAssistant !== null && selectedAssistant.id === assistantId
+      ? assistantId
+      : null;
+  const chosenHandbackAt = chosenAssistantId !== null ? selectedAssistant!.handbackAt : null;
   useEffect(() => {
-    if (paneAssistantId === null) return;
-    if (assistantId !== paneAssistantId) {
-      setAssistantId(paneAssistantId);
-      return;
+    if (chosenAssistantId !== null && chosenHandbackAt !== null) {
+      seeAssistantHandback(chosenAssistantId, chosenHandbackAt);
     }
-    if (paneHandbackAt !== null) seeAssistantHandback(paneAssistantId, paneHandbackAt);
-  }, [paneAssistantId, paneHandbackAt, assistantId, seeAssistantHandback]);
+  }, [chosenAssistantId, chosenHandbackAt, seeAssistantHandback]);
   // Each opening, and each change of role, starts from the list's own default,
   // as the worker selection does.
   useEffect(() => {
