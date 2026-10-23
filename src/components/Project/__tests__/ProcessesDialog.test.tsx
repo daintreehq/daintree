@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type {
   ProcessInventoryClosedProcess,
   ProcessInventorySnapshot,
@@ -702,5 +702,44 @@ describe("ProcessesDialog for another host (#14089)", () => {
     });
     await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
     expect(mockKill).not.toHaveBeenCalled();
+  });
+
+  it("doesn't leave the next confirm loading after a kill outlived its opening", async () => {
+    const source = sourceOf({
+      supported: true,
+      truncated: false,
+      snapshot: snapshot({ terminals: [terminal("a", { title: "shell" })] }),
+    });
+    let finishKill!: () => void;
+    mockKill.mockReturnValue(new Promise<void>((resolve) => (finishKill = resolve)));
+    const view = (isOpen: boolean) => (
+      <TooltipProvider>
+        <ProcessesDialog isOpen={isOpen} onClose={() => {}} source={source} canKill />
+      </TooltipProvider>
+    );
+    let rerender!: (ui: React.ReactElement) => void;
+    await act(async () => {
+      rerender = render(view(true)).rerender;
+    });
+    await act(async () => {});
+    fireEvent.click(screen.getByRole("button", { name: "Kill terminal 'shell' in Cedar" }));
+    await screen.findByRole("alertdialog");
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Kill terminal" }));
+    });
+    await act(async () => {
+      rerender(view(false));
+    });
+    await act(async () => {
+      rerender(view(true));
+    });
+    await act(async () => {
+      finishKill();
+    });
+    await act(async () => {});
+    fireEvent.click(screen.getByRole("button", { name: "Kill terminal 'shell' in Cedar" }));
+    const confirm = await screen.findByRole("alertdialog");
+    const button = within(confirm).getByRole("button", { name: "Kill terminal" });
+    expect(button.hasAttribute("disabled")).toBe(false);
   });
 });

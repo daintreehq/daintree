@@ -331,6 +331,8 @@ export function ProcessesDialog({
 
   useEffect(() => {
     openGenerationRef.current += 1;
+    // A kill still out belongs to the generation just ended and will not report back here.
+    setIsKilling(false);
     if (!isOpen || !canKill) {
       setKillTarget(null);
       setClosedKillTarget(null);
@@ -354,7 +356,6 @@ export function ProcessesDialog({
       setKillError(null);
       setKillTarget(null);
       setClosedKillTarget(null);
-      setIsKilling(false);
     }
 
     const fetchSnapshot = (): Promise<void> => {
