@@ -1,12 +1,5 @@
-import { useCallback, useSyncExternalStore } from "react";
-import { terminalInstanceService } from "@/services/TerminalInstanceService";
-
-export function useIsHibernated(id: string): boolean {
-  const subscribe = useCallback(
-    (onStoreChange: () => void) => terminalInstanceService.subscribeHibernation(id, onStoreChange),
-    [id]
-  );
-  const getSnapshot = useCallback(() => terminalInstanceService.isHibernated(id), [id]);
-
-  return useSyncExternalStore(subscribe, getSnapshot);
+// Hibernation no longer occurs: `isHibernated` is always false and
+// `subscribeHibernation` never notifies, so the hook needs no service at all.
+export function useIsHibernated(_id: string): boolean {
+  return false;
 }

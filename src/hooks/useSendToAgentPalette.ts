@@ -4,7 +4,7 @@ import { usePanelStore, usePreferencesStore } from "@/store";
 import { isPtyPanel, type PanelKind, type PtyPanelData } from "@shared/types/panel";
 import { useSearchablePalette } from "./useSearchablePalette";
 import { getTerminalDisplayTitle } from "@/utils/terminalTitleDisplay";
-import { terminalInstanceService } from "@/services/TerminalInstanceService";
+import { peek as peekTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
 import { terminalClient } from "@/clients";
 import { formatForTerminalPaste } from "@shared/utils/terminalInputProtocol";
 import { usePaletteStore } from "@/store/paletteStore";
@@ -57,7 +57,7 @@ function hasSendTargets(sourceTerminalId: string | null): boolean {
 }
 
 export function openSendToAgentPalette(sourceTerminalId: string): boolean {
-  const selection = terminalInstanceService.getCachedSelection(sourceTerminalId);
+  const selection = peekTerminalService()?.getCachedSelection(sourceTerminalId);
   if (!selection) return false;
   if (!hasSendTargets(sourceTerminalId)) return false;
 
@@ -143,7 +143,8 @@ function sendSelectionToTarget(targetId: string): void {
   // goes through the paste boundary in either mode. Without a managed instance
   // there is no mode to read — wrapped is the safe reading — and nothing to
   // notify either, which is why that branch stays separate.
-  const managed = terminalInstanceService.get(targetId);
+  const service = peekTerminalService();
+  const managed = service?.get(targetId);
   if (managed) {
     terminalClient.write(
       targetId,
@@ -151,7 +152,7 @@ function sendSelectionToTarget(targetId: string): void {
         bracketedPasteMode: managed.terminal.modes.bracketedPasteMode,
       })
     );
-    terminalInstanceService.notifyUserInput(targetId);
+    service?.notifyUserInput(targetId);
   } else {
     terminalClient.write(targetId, formatForTerminalPaste(text, { bracketedPasteMode: true }));
   }

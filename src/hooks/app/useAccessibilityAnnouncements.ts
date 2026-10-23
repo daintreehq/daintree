@@ -1,7 +1,7 @@
 import { useEffect, useRef } from "react";
 import { usePanelStore } from "@/store";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
-import { terminalInstanceService } from "@/services/TerminalInstanceService";
+import { subscribeWhenReady } from "@/services/terminal/terminalInstanceServiceAccessor";
 import type { AgentState, WaitingReason } from "@shared/types/agent";
 import { describeWaiting } from "@shared/utils/waitingReasonDisplay";
 import { isPtyPanel } from "@shared/types/panel";
@@ -133,9 +133,9 @@ function basePanelId(debounceKey: string): string {
 export function useAccessibilityAnnouncements() {
   const previousStatesRef = useRef<Map<string, TerminalStateSnapshot>>(new Map());
   const debounceTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
-  // Per-terminal hibernation subscriptions. Hibernation lives on
-  // `terminalInstanceService`, not in panelStore — so we observe transitions
-  // through the same subscribe-and-snapshot path as `useIsHibernated`.
+  // Per-terminal hibernation subscriptions. Hibernation lives on the terminal
+  // instance service, not in panelStore — so we observe transitions through
+  // its subscribe-and-snapshot pair.
   const hibernationUnsubsRef = useRef<Map<string, () => void>>(new Map());
   const hibernationStateRef = useRef<Map<string, boolean>>(new Map());
 
@@ -283,20 +283,23 @@ export function useAccessibilityAnnouncements() {
 
         // Hibernation: subscribe once per panel; the listener fires on
         // hibernate/unhibernate. Snapshot is read inline so the cb sees the
-        // current value without closure staleness.
+        // current value without closure staleness. An empty view has no
+        // service yet, so the listener attaches once it is ready.
         if (!hibernationUnsubsRef.current.has(terminal.id)) {
           const panelId = terminal.id;
-          // Seed initial state so the first event reflects a true transition.
-          hibernationStateRef.current.set(panelId, terminalInstanceService.isHibernated(panelId));
-          const unsubscribe = terminalInstanceService.subscribeHibernation(panelId, () => {
-            const prevHib = hibernationStateRef.current.get(panelId) ?? false;
-            const nextHib = terminalInstanceService.isHibernated(panelId);
-            if (prevHib === nextHib) return;
-            hibernationStateRef.current.set(panelId, nextHib);
-            const current = usePanelStore.getState().panelsById[panelId];
-            const title = current?.title ?? "Terminal";
-            const msg = nextHib ? `${title}: hibernated` : `${title}: woke up`;
-            useAnnouncerStore.getState().announce(msg, "polite");
+          const unsubscribe = subscribeWhenReady((service) => {
+            // Seed initial state so the first event reflects a true transition.
+            hibernationStateRef.current.set(panelId, service.isHibernated(panelId));
+            return service.subscribeHibernation(panelId, () => {
+              const prevHib = hibernationStateRef.current.get(panelId) ?? false;
+              const nextHib = service.isHibernated(panelId);
+              if (prevHib === nextHib) return;
+              hibernationStateRef.current.set(panelId, nextHib);
+              const current = usePanelStore.getState().panelsById[panelId];
+              const title = current?.title ?? "Terminal";
+              const msg = nextHib ? `${title}: hibernated` : `${title}: woke up`;
+              useAnnouncerStore.getState().announce(msg, "polite");
+            });
           });
           hibernationUnsubsRef.current.set(panelId, unsubscribe);
         }

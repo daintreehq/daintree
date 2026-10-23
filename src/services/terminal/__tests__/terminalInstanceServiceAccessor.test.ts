@@ -213,4 +213,66 @@ describe("terminalInstanceServiceAccessor", () => {
       expect(m.service.setGPUHardwareAvailable).not.toHaveBeenCalled();
     });
   });
+
+  describe("subscribeWhenReady", () => {
+    it("attaches synchronously when the service is loaded, without a late notice", () => {
+      const service = fakeService();
+      accessor.register(service);
+      const detach = vi.fn();
+      const attach = vi.fn(() => detach);
+      const late = vi.fn();
+
+      const dispose = accessor.subscribeWhenReady(attach, late);
+      expect(attach).toHaveBeenCalledExactlyOnceWith(service);
+      expect(late).not.toHaveBeenCalled();
+
+      dispose();
+      expect(detach).toHaveBeenCalledOnce();
+    });
+
+    it("waits for ready without loading, then attaches before the late notice", async () => {
+      const order: string[] = [];
+      const attach = vi.fn(() => {
+        order.push("attach");
+        return () => {};
+      });
+      accessor.subscribeWhenReady(attach, () => order.push("late"));
+      await Promise.resolve();
+      expect(attach).not.toHaveBeenCalled();
+      expect(accessor.peek()).toBeNull();
+
+      const service = fakeService();
+      accessor.register(service);
+      expect(attach).toHaveBeenCalledExactlyOnceWith(service);
+      expect(order).toEqual(["attach", "late"]);
+    });
+
+    it("never attaches when disposed before ready", () => {
+      const attach = vi.fn(() => () => {});
+      const dispose = accessor.subscribeWhenReady(attach);
+      dispose();
+      accessor.register(fakeService());
+      expect(attach).not.toHaveBeenCalled();
+    });
+
+    it("detaches a late attachment once, however often it is disposed", () => {
+      const detach = vi.fn();
+      const dispose = accessor.subscribeWhenReady(() => detach);
+      accessor.register(fakeService());
+      dispose();
+      dispose();
+      expect(detach).toHaveBeenCalledOnce();
+    });
+
+    it("detaches when disposed from inside its own late notice", () => {
+      const detach = vi.fn();
+      let dispose = () => {};
+      dispose = accessor.subscribeWhenReady(
+        () => detach,
+        () => dispose()
+      );
+      accessor.register(fakeService());
+      expect(detach).toHaveBeenCalledOnce();
+    });
+  });
 });
