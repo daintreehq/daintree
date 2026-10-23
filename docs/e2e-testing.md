@@ -159,7 +159,7 @@ npm run build:e2e && npx playwright test --config=playwright.plugins.config.ts e
 Things these specs have to handle that bucket specs don't:
 
 - **Plugin commands can confirm.** A plugin whose manifest holds a high-risk capability (any `fs:*-write`, for one) gets a "Run '…'?" dialog on every command unless the command declares the capabilities it actually uses with `requires` — `[]` for one that only opens a panel. The dispatch stays pending until the dialog is answered.
-- **Built-ins are default-off.** Enable with `window.electron.plugin.setEnabled(id, true)` and poll `getPanelKinds()` / `getActions()`.
+- **Some built-ins are default-off.** Enable one with `window.electron.plugin.setEnabled(id, true)` and poll `getPanelKinds()` / `getActions()`.
 - **The preview's page is only reachable from main.** The host renderer's Trusted Types policy rejects `webview.executeJavaScript`; use `app.evaluate` over `webContents.getAllWebContents()` filtered to `getType() === "webview"`. Click at the element's real position: the webview's bounding box plus the element's client rect.
 - **A fixture project's `package.json` type applies to scripts in it.** An extensionless fake CLI inside a `"type": "module"` project loads as ESM, so `require` throws; use `process.getBuiltinModule`.
 - **Print diagnostics on failure.** A blank panel or a silent preview has no assertion message worth reading; the Element Picker specs (`e2e/plugins/helpers/pickerSession.ts`) dump the inspector's text, the renderer console and the preview's console (collected from `web-contents-created`).

@@ -1,0 +1,249 @@
+# Element Picker
+
+Pick an element in any dev preview, see what the page's framework says about it and which source it traces to, and hand it to your own coding agent. The picker is part of the dev preview panel: no plugin owns it, so nothing enables, declares or activates it, and every dev preview has its toolbar button. It writes nothing. It reads what the page's dev build already exposes, resolves that against the files on disk, and the agent it hands a selection to is what edits.
+
+This file covers mechanism: how a page is detected, what loads and when, where source is resolved, and what each claim the picker shows is allowed to mean.
+
+## Shape
+
+```
+┌──────────────────────────────────────────────────────────────────────┐
+│ RENDERER · dev preview panel                                         │
+│   toolbar button (eager) · strip, drawer, composer (lazy chunk)      │
+│   InspectorController — the preview's tool session                   │
+└───────────────┬──────────────────────────────────┬───────────────────┘
+                │ elementPicker IPC                │ sitePreview IPC
+                │ (bind/reselect where the preview │ (mode, detach,
+                │  is; workspace ops where the     │  clear hover and
+                │  worktree is)                    │  selection)
+┌───────────────┴──────────────────────────────────┴───────────────────┐
+│ MAIN                                                                 │
+│   SitePreviewBridge + CoreGuest — CDP binding, epochs, origin        │
+│     policy, guest asset catalog, extractor installs                  │
+│   ElementPickerWorkspaceService — leases, app discovery              │
+│   ElementPickerHost — forks/retires the host, owns every read:       │
+│     sourceAccess, sourceMapFetcher, sourceTracker, project adapters  │
+└───────────────┬──────────────────────────────────┬───────────────────┘
+                │ CDP (isolated world + main world) │ utilityProcess port
+┌───────────────┴────────────────────┐  ┌──────────┴───────────────────┐
+│ PAGE · the user's site, untrusted  │  │ HOST · daintree-element-     │
+│   bootstrap (isolated world):      │  │   picker utility process     │
+│     overlay, hit-test, detectors   │  │   runtime, resolvers (one    │
+│   probe + extractors (main world): │  │   import() per framework),   │
+│     read framework dev metadata    │  │   symbolication; no fs/net   │
+└────────────────────────────────────┘  └──────────────────────────────┘
+```
+
+| Part | Where |
+| --- | --- |
+| Cross-process contracts and schemas | `shared/elementPicker/` |
+| Guest sources (bootstrap, probe, detectors, picker, extractors) | `electron/services/elementPicker/guest/`, built only as assets by `scripts/build-main.mjs` |
+| Guest asset catalog, preludes, install sequence | `electron/services/elementPicker/guestAssets.ts`, `guestSources.ts`, `coreGuest.ts` |
+| Resolver host and its reads | `electron/services/elementPicker/ElementPickerHost.ts`, `host.ts`, `worker/`, `sourceAccess.ts`, `sourceMapFetcher.ts`, `sourceTracker.ts` |
+| Workspace authority | `electron/services/elementPicker/workspaceService.ts`, `workspaceRegistry.ts` |
+| Project adapters (SvelteKit routes and versions) | `electron/services/elementPicker/projectAdapters/` |
+| IPC | `electron/ipc/handlers/elementPicker.ts`, `shared/types/ipc/elementPicker.ts` |
+| Renderer controller, surfaces, composer, prompt | `src/panels/dev-preview/element-picker/` |
+| The Svelte compiler | `packages/svelte-source-model` |
+
+The picker is the one built-in dev preview tool (`src/services/devPreviewTools/builtInTools.ts`), toggled by its toolbar button or the `devPreview.toggleElementPicker` action. Only the button is in the eager bundle; the controller, its schemas and the surfaces load lazily the first time someone switches it on, and main evaluates nothing under `services/elementPicker/` until a view first asks.
+
+## Detection
+
+Detection is cheap, passive and decides everything downstream: an extractor is injected only for a framework a detector named. The detectors (`guest/detectors.ts`) read names — a global, an expando key, an attribute, a tag — and report which fixed marker matched. They never call a framework's own functions, never install a hook, and name only the fixed marker they matched. That vocabulary is Daintree's, but the probe runs in the page's own world, where a hostile page can shape what comes back, so main validates its result like any other page message and treats a detection as a reason to try an extractor, nothing more.
+
+| Framework | Globals | Expandos | Attributes and tags |
+| --- | --- | --- | --- |
+| Svelte | `__svelte`, `__sveltekit_*` | `__svelte_meta` | `data-sveltekit-*` |
+| React | `__NEXT_DATA__`, `__next_f` | `__reactFiber$*`, `__reactContainer$*`, `__reactProps$*` | `<next-route-announcer>`, `<nextjs-portal>` |
+| Vue | `__VUE__`, `__NUXT__` | `__vue_app__`, `__vueParentComponent`, `__vnode` | `data-v-app`, `data-v-*` |
+| Angular | — | `__ngContext__` | `ng-version`, `_nghost-*`, `_ngcontent-*` |
+| Astro | — | — | `data-astro-cid-*`, `data-astro-source-file`, `<astro-island>`, `<astro-slot>`, `<astro-static-slot>` |
+| Preact | — | `__k` | — |
+| Solid | `_$HY`, `Solid$$` | — | `data-hk` |
+
+The framework set is a fixed enum (`ElementPickerFrameworkSchema` in `shared/elementPicker/source.ts`). Meta-frameworks are evidence for the framework they render with: SvelteKit is Svelte, Next.js is React, Nuxt is Vue. An Astro island's `renderer-url` names its renderer through a fixed table, so an island of React counts as React too. Globals are ones the framework sets itself, never a devtools extension's hook: an extension says the extension is installed, not that the page uses the framework.
+
+Detection runs in two worlds because each sees different things. The bootstrap, in the picker's isolated world, sees only the DOM — attributes, tags and classes. The probe (`guest/probe.ts`) runs once in the page's main world, where globals and node expandos are visible, and keeps nothing there afterwards. The probe runs when a document reports ready and once more `LATE_PROBE_DELAY_MS` (2.5 s) later for a client-rendered app that mounts after load. After that, selecting an element runs the bootstrap's markup detectors up its ancestry, which catches an island that hydrates later still by its attributes and tags; a framework that appears later with only globals or expandos is not picked up that way. Results are bounded: 8 detections, 16 signals each, a 256-element document sample, 64 elements up the ancestry chain, the selected one included. A marker is evidence, not a verdict — a class that happens to start with `svelte-` costs at most an extractor that finds nothing.
+
+## Lazy loading
+
+Per-framework code is bundled in the app but loaded only once that framework is detected, so someone on React never pays for Svelte, and someone who never opens the picker pays for the toolbar button and nothing else.
+
+| Code | Loads when |
+| --- | --- |
+| Toolbar button | Eagerly, with the dev preview |
+| Controller, surfaces, composer, schemas | The picker is first switched on in a preview |
+| Main's picker services (`SitePreviewBridge` core path, `coreGuest.ts`, asset loader) | The first core bind |
+| Bootstrap and probe assets | Every bound document |
+| `extractor:<framework>` asset | An admitted detection names that framework, once per framework per document |
+| Resolver host process | The first resolve; retired after 30 s idle |
+| A framework's resolver and its parser | A resolve request carries a candidate of that framework |
+| Source-map decoder (`@jridgewell/trace-mapping`) | The first generated frame symbolicated |
+| A project adapter | A registration detected its app on disk |
+
+**The asset catalog is fixed.** `CORE_GUEST_ASSET_FILES` (`guestAssets.ts`) lists what the app builds, and `CORE_PICKER_GUEST_ASSETS` in `scripts/build-main.mjs` restates it (`scripts/__tests__/core-picker-assets.test.mjs` pins the two together). A page can only name a framework from the enum; whether that unlocks an extractor is the catalog's answer, so a framework the app has no extractor for stays detected and uninstalled. Assets are read from `dist-electron/element-picker/guest/` on demand, capped at 512 KiB each (`MAX_CORE_GUEST_ASSET_BYTES`), cached in a packaged build and re-read in dev, where the esbuild watcher rewrites them. Concurrent installs that detect the same framework share one read.
+
+**Extractors install into one registry.** The first extractor installed for a bootstrap creates the main-world registry (`guest/registry.ts`) and later ones join it, so a page with Astro islands of React and Svelte is asked about both by one request. An extractor answers synchronously inside the bootstrap's own `dispatchEvent`, so no reply can arrive late into a different request; the reply is still checked by id and size, because page code shares the main world and can send its own. An element crosses between worlds only as the target of an event the registry dispatches on that element, carrying the reference token the reply named it by. Each install reports a status from `EXTRACTOR_INSTALL_STATUS` — `installed`, `absent` (the document changed under the evaluate), `threw`, `unregistered`.
+
+**Resolvers load on demand, each on its own.** `worker/resolverRegistry.ts` reaches each resolver through one explicit `import()`, never a barrel and never a specifier built from the request, so the host evaluates only the frameworks a request names; a request carrying candidates of two frameworks loads and runs both concurrently. A framework with no entry resolves every candidate as `unsupported`. `scripts/element-picker-host-boundary.test.ts` walks the bundler's graph for the claims that matter most: main never evaluates the host's code, the host entry statically imports no resolver, and none of the tested graphs reaches a file, process or network module. The Svelte resolver's compiler is `packages/svelte-source-model`'s lazy `loadParse()`; React's is `@babel/parser`; Vue's template compiler (`@vue/compiler-dom`) is itself imported on first use.
+
+**Hover stays cheap.** A hover pays for no computed-style read, no markup walk, no map fetch and no parse. The pointer records only the latest hit and one animation frame resolves it; pointer movement reports a hover only when the hovered element changes, and an extractor installing under the pointer re-reports the same element with what it can now say. Each extractor reads on hover only what labels the highlight — React, Vue, Angular and Preact one walk up to the nearest component and its name, Svelte the node's own stamp and its frame chain — and leaves owners, roots, stacks, document sweeps and structural walks for a selection; a reader that reads nothing on hover is left out of a hover's reply rather than reported as having found nothing. `HoverObservationSchema` has no element context field at all.
+
+## The guest boundary
+
+The dev-preview guest has **no preload** — `electron/window/createWindow.ts` deletes it and forces `sandbox`, `contextIsolation` and `nodeIntegration: false` — so the picker's scripts reach the page only over CDP, through a lease on the guest's debugger session (`electron/services/cdp/WebContentsCdpService.ts`).
+
+The page is untrusted. It is an application under development, and a same-origin compromise can forge anything it sends. The rule that follows: **the guest reports observations; the host resolves identity.** A guest message carries what the page's runtime said — names, fields, frames, stamps — plus geometry and document-local ids. It never carries a file path the host will act on, a source range or a revision. The host contains every reported path to the workspace, reads the file itself and derives the range, so the worst a lying page can do is point the picker at the wrong element of its own project. Sending a request to an agent comes from a trusted UI action, never from a message.
+
+**Two worlds, two guards** (`guestSources.ts`, `coreGuest.ts`):
+
+- The bootstrap runs in an isolated world the host creates per binding and per document (`Page.createIsolatedWorld`, named `daintree-element-picker-<random>`). The CDP binding is exposed to that world by name only, so page script never sees it, and `CoreGuest.isTrustedContext` drops a binding call from any other context — the main world, an iframe, a world from a previous document. Page script can neither reach the bootstrap's state nor read what it draws.
+- The probe and extractors run in the page's main world. Each evaluate is aimed at that document's main world by its unique context id, recorded with the document generation when the bootstrap's world was made, so it fails outright once that document is gone rather than landing in its replacement. The prelude also dispatches a cancelable handshake that only this install's bootstrap cancels; page script shares the main world and can see it, so it is a second check, not the guard. A newer bootstrap retires older ones in the same document through a fixed `SUPERSEDE_EVENT` and a strictly increasing `installId`.
+
+**The host chooses the script, not the caller.** Every body comes from the app's own asset catalog, never from a renderer or a page. Data a script carries — host-minted ids, the channel, a validated mode, a framework from the enum, the availability it reports, a reselect request — goes in through `JSON.stringify`, so none can close the literal it lands in; the rest are host-controlled numbers. There is no "evaluate in the page" call on any IPC surface.
+
+**Every envelope is admitted before it is acted on.** The bridge first drops a binding call from any context but the picker's world, parses at most 240 envelopes per second per binding, and detaches a binding that has dropped 5,000 within 10 s (`guest-flooding`); every guest evaluate has a 5 s timeout, because a hostile page can make an expression never return. `admitElementPickerMessage` (`shared/elementPicker/protocol.ts`) then checks size before `JSON.parse` (256 KiB, measured in UTF-8 bytes), validates the whole envelope, event included, against its schema (a protocol version other than `ELEMENT_PICKER_PROTOCOL_VERSION`, bumped whenever a guest-visible shape changes, is reported as such), and only then compares the session, the exact document epoch the host baked into the runtime it installed, and a sequence that may skip but never repeat or go back. A stale runtime, a replayed message or an oversized body is dropped without being acted on. The schemas establish that a message is well formed and current, and confer no authority.
+
+**The runtime goes only where the policy allows.** A core binding always carries the `local-preview` origin policy (`electron/services/sitePreview/originPolicy.ts`): HTTP(S) on loopback, `0.0.0.0`, `[::]`, `*.localhost`, `*.local` and RFC 1918 addresses, plus the browser's own error page. It is checked at bind and after each committed navigation. On a document outside it the bridge suspends rather than detaches, and the next document back inside installs without a rebind. The policy also travels with the script — the bootstrap prelude evaluates the host's own predicate against `location.href` first — because a navigation can commit between the host's check and the evaluate.
+
+## The resolver host
+
+Source resolution runs in its own `utilityProcess` (`daintree-element-picker`), because resolvers carry parsers, compilers and source-map decoders, and an ESM import that has loaded never unloads. `ElementPickerHost` forks it on the first resolve and retires it after `HOST_IDLE_MS` (30 s) with nothing to do: resolves come in bursts while someone is picking, and exiting is the only way to give the memory back. A host that is not ready within 10 s is retired and its jobs fail.
+
+**The host has no authority of its own.** Its code never opens a file or a socket — the boundary test above fails a resolver that imports `fs`, `net`, `http` or their kin — so every read a resolver makes is a message to main (`ResolverSourceAccess` in `shared/elementPicker/resolver.ts`), which main answers from `sourceAccess.ts` — contained to the workspace, counted against the request's budget, and returned as bytes with the revision of exactly those bytes. Source maps come through main too: from disk, inline or beside a generated module inside the app, or over HTTP (`sourceMapFetcher.ts`) from the preview's own origin and nowhere else, every redirect hop checked against it. Main registers a preview origin only for this machine's own dev server — HTTP(S) on a loopback host, no credentials — so a preview on a `.local` or private-network address, or in a remote-host window, fetches nothing and traces only what it can read on disk. This is an architectural boundary, not an OS sandbox: the utility process is not confined by the operating system, the resolvers simply have no route to a file but main.
+
+**Workspaces are leased, never named by path.** A view names one of its own project's worktrees; main reads where that worktree is, picks the app inside it — an app path or the dev server's directory may narrow the choice, but only to a directory contained in that worktree — and leases the workspace to that view (`workspaceService.ts`). Every later call re-checks the lease against the caller, so a workspace id that leaks to another view or project reads nothing. Main holds the roots (`workspaceRegistry.ts`); the host only ever sees ids. A view holds at most 8 leases, the oldest it opened released first, and they all go when its endpoint closes; main holds at most 32 workspaces across views, the least recently used released first, so a crashed renderer cannot leak watchers forever. The IPC handlers take the project from the IPC context, never from a payload.
+
+**Admission refuses rather than queues deep.** `admissionGate.ts` runs 4 resolves at once across every workspace and queues 32 behind them; past that a request is refused with `HOST_BUSY`, because a queue that grows faster than it drains only answers selections the user has moved on from. Each resolve also carries a budget main's source access enforces (`RESOLVE_BUDGET_CEILINGS`): 32 files, 1 MiB per file, 8 network requests and 4 MiB over the network, and 5 s from the moment it arrives, so queueing and a cold start spend it too. A released workspace aborts its queued and running resolves. Cancellation is cooperative: a cancelled job's resolver gets `HOST_CANCEL_GRACE_MS` (1 s) to answer with what it has, and a host that cannot answer a cancel in that time is stuck, not slow, and is retired.
+
+**Results are checked on the way out.** Well formed is not enough (`checkResponse.ts`): a response must be for this request and epoch, speak only of the elements and candidates the request carried, keep each candidate's claim, name files only inside the request's own workspace and app, and claim only revisions and maps main actually served in that job, except what a stale result says it used to hold, which is history. Anything else is a resolver bug, and none of it reaches the renderer.
+
+**Staleness is watched in main.** `sourceTracker.ts` watches the parent directory of each file a resolve read (non-recursively, at most 256 files and 64 directories per workspace), re-hashes when an event names a tracked file (overlapping checks coalesce), and pushes a change only when the bytes differ from the revision it holds. An event is a hint, never proof. A file past either cap is not tracked; one whose directory cannot be watched keeps its record and first check but hears of no later change. Tracking never wakes the host.
+
+## The provenance model
+
+The whole contract turns on one rule from the product invariants: surface observations, not interpretations. Every name and location the picker shows carries where it came from, and how far it was checked, in the types themselves (`shared/elementPicker/`).
+
+**A candidate is a claim of one kind** (`SourceCandidateSchema`, `source.ts`). The five kinds are different facts about different source, and substituting one for another is how a tool names the wrong line:
+
+| Claim | Means |
+| --- | --- |
+| `element-creation` | Where the element itself was created (a JSX site) |
+| `template-location` | Where the element is written in a template; `location: null` only for an element the page rendered but never stamped, placed by structure or not at all |
+| `component-invocation` | The call site that produced this instance of a component |
+| `component-definition` | Where the component is written |
+| `file-hint` | A file and nothing finer. The schema has no `location` field, so no consumer can present it as a line |
+
+**Every claim names its extraction** (`ExtractionSchema`): a `runtime-field` (`__svelte_meta.loc`, `type.__file`), an `attribute` (`data-v-inspector`, `data-astro-source-loc`), or a `generated-stack-frame` (`_debugStack`, with its frame index) — a position in what the dev server served, which the host must map before it names an authored line. Component names are claims too (`ObservedNameSchema`) and carry the field they were read from.
+
+**Resolution states replace confidence numbers** (`ResolutionResultSchema`, `resolution.ts`). Each says how far a claim got, rather than flattening all of them onto one scale nobody can audit:
+
+| State | Means |
+| --- | --- |
+| `observed` | As the runtime reported it, contained to a workspace file, not mapped and not checked |
+| `mapped` | Through the named source map (`mapUrl`, a hash of the map bytes, and whether the map's embedded source matches the file on disk: `matches`, `differs` or `unchecked`), not checked against the file |
+| `verified` | Checked against the file at `fileRevision`; `placedBy: "structure"` when the location was found from the page's structure because the stamp was contradicted or missing |
+| `ambiguous` | Two to eight targets fit, and none is chosen |
+| `stale` | What the claim held, which no longer holds: file or map changed, file missing, document changed |
+| `unavailable` | No target, with a code: `outside-workspace`, `file-missing`, `map-missing`, `mismatch` (read, and the claim does not hold — the result names what was read), `unsupported`, `budget-exhausted`, `cancelled` |
+
+A `fileRevision` is `sha256:` of the raw bytes, before decoding or BOM handling: a content hash, because an agent's same-second, same-size rewrite has to read as a change. It is required wherever a file is named and null only where the host never read it. A verified `component-invocation` may carry a `definition` — the file the call site's tag is bound to — only when the call site's own bytes prove that binding through an import; a rendered parent chain is never the evidence, since a wrapper or a snippet makes it name a plausible wrong file.
+
+**The component chain is a flat graph** (`ComponentChainSchema`, `component.ts`), bounded at 64 records. Render parent and owner are separate edges because they are different facts — the render parent has this instance in its output tree, the owner created the element that made it, and they diverge whenever JSX or a snippet is passed down as children. An edge is omitted when it was not observed and `null` when it was observed to be absent. Identity is a per-document `componentId`, never a name, file or call site, which wrappers and repeated invocations share. A record says its `environment` (`client`, `server`, `unknown`), lists its rendered roots with `rootsComplete`, and a walk that hit its bound reports `truncated` rather than pointing edges at records it never sent.
+
+**Capabilities say what a page does not give us** (`CapabilitiesSchema`, `observation.ts`). Every observation answers for `names`, `chain`, `componentSelection`, `file`, `line` and `exactRange`: `available`, `unknown` (not yet established, such as a line waiting on the host to map a frame), or `unavailable` with a code — `not-exposed`, `production-build`, `no-framework`, `unmapped`. The UI says what a framework does not give us instead of leaving it blank.
+
+**Framework evidence stays in the framework's terms** (`evidence.ts`). Svelte has its own variant, because its parent chain interleaves `if`, `each`, `await`, `key`, `snippet` and `render` blocks with component call sites, and those blocks are how a selection in one branch is told apart from the same markup in another. Anything else is a flat list of named primitive fields, so neutral code can show it without trusting a structure the page shaped.
+
+**What every page gets.** Whatever its framework says, a selection carries the element context (`elementContext.ts`, read on selection only): a selector that finds it now, a markup excerpt (descriptive and `aria-*` attribute values kept, URLs and user input redacted, other values replaced with `…`), the computed styles that say something about it, and, for an element inside shadow roots, the hosts of each enclosing root. It is best effort: a selection the guest could not read it for has none. A page with no framework to read gets exactly that, plus a cropped screenshot when the request attaches one.
+
+## What each framework gives us
+
+What each framework's stock dev build exposes, as the extractor reads it and the resolver checks it. Nothing is injected to get more: no Babel or Vite plugin, nothing written into the project. Where a dev build does not expose something, the picker says it is not available.
+
+| Framework | Names and chain | Source | What it can't give us |
+| --- | --- | --- | --- |
+| Svelte 5, SvelteKit 2 | `__svelte_meta.parent`: the component call sites above the element, interleaved with blocks | Element: `__svelte_meta.loc`, `verified` against the `.svelte` file, placed by template structure when hydration left a neighbour's stamp or none. Invocation: the call site, `verified`, with its definition when the import proves it. SvelteKit route and its files from the project adapter | Anything in a production build. Content inside `{@html}`, a canvas or a shadow root (`unmapped`). Render-parent and owner edges between components: a snippet passed down is rendered by one component and written by another, and the chain alone does not say which a frame is, so both are left unobserved. The metadata is a private runtime detail, so a shape the reader cannot follow narrows what is offered |
+| React 19 | Fibers: render parent and owner (`_debugOwner`), each component's DOM roots. Server components from the `_debugInfo` Flight leaves on the fibers below them, `environment: "server"` | `_debugStack` creation frames, mapped through the dev server's source maps and checked against the JSX at the first frame in the app's own code — `verified` when the map's embedded source matches the file on disk, `mapped` when the map embeds none, `stale` when it differs: the element, each invocation, and the definition from the frame React called the component through | `_debugSource` (removed in React 19; no Babel plugin is injected to restore it). Source without a dev build and a dev server that serves maps; names, the render chain and roots survive a production build, source does not. One answer where an app helper calls `createElement` or `jsx` for its caller: the app's frames come back as `ambiguous` alternatives. A definition for a component that only passes its children through. DOM roots for a server component |
+| Next.js 16 (React) | As React, server components included | As React. Server frames (`about://React/<env>/…`, `rsc://React/…` before 19.3) and `webpack-internal:///` modules are mapped through the private `/__nextjs_source-map` route (`nextDevServer.ts`), with maps on disk as the fallback for a frame that names a file; an unmapped Webpack module still names its file, without a position | The private route on any major but 16: they have moved between releases, so any other major, a future one included, is asked nothing of them |
+| Vue 3, Nuxt 4 | Component instances (`__vueParentComponent`, `__vnode`): render parent and owner, roots, names | `type.__file` as a `file-hint` only. Lines only from `vite-plugin-vue-inspector` stamps (`data-v-inspector`, or from v7 the vnode's `props.__v_inspector`), `verified` where a tag opens exactly there; for an invocation, which file the tag binds to is not claimed | A line without the inspector plugin. A checked line in an external template, a non-HTML template language, or for a tag only the project's compiler options would read as a component. A chain when the bounded lookup up from the node finds no instance before an app or foreign-framework boundary: a production build sets no instance fields, nor does Vapor mode, which keeps no vnodes. Files in `node_modules`, `.nuxt` or `.output`, never the user's to edit |
+| Angular | The published debug API (`window.ng`) plus `__ngContext__`: the components whose hosts enclose the element and the template that declared each | The class's file from `ɵcmp.debugInfo` as a `file-hint`, `verified` once the file declares that class. Template positions only from `data-ng-source-location`, stamped when the app opts into `enableTemplateSourceLocations` | A template line in a default build. Anything without the debug API, which a production build omits. The class line becomes evidence, never a position. Internal view structures are never read |
+| Astro 7 | None: Astro leaves no component instances. An island hands off to its renderer's extractor, with evidence of which framework hydrates it, when, and under what name | `data-astro-source-file` and `data-astro-source-loc` on the element itself, only while the dev toolbar is on. The location is where the compiler stamps it — usually the element's first child, its own name only when it has none or is a custom element — and is `verified` when an opening tag of that name would get exactly that stamp from the compiler, `observed` when the file cannot settle it; a file attribute with no usable location is a `file-hint` | A component tree. Island props. An exact element range. A location borrowed from an ancestor's stamp, which would name another element's line |
+| Preact 11 | The vnode tree: render parent and roots | `__source` objects a dev JSX transform left on vnodes, already in authored coordinates, `verified` where an element of that kind starts exactly there | Owner edges and stacks, which Preact never records. A file or line without `__source`. On hover, a portal's unseen tree, so a hover finding nothing gives no answer |
+| Solid 1.9 | None: the stock dev build erases component boundaries | `data-source-loc`, only when the user turned on solid-devtools' locator, quoted as the element's own JSX site with the attribute it came from | Component names, chain and definitions. `SolidDevtools$$` is the debugger's API, not data, and is never touched |
+| No framework | None | None | Everything but the element context above: selector, redacted markup, styles, screenshot |
+
+**Shipping status.** The shipped guest catalog holds the Svelte, React, Solid, Vue, Angular, Astro and Preact extractors (`CORE_GUEST_ASSET_FILES`), and the host resolves Svelte, React, Vue, Angular, Astro and Preact (`worker/resolverRegistry.ts`). Solid has no resolver, so a locator stamp stays the page's report and is never checked.
+
+## Svelte
+
+**A Svelte dev build already stamps the elements its templates create with their source location.** The dev runtime assigns `__svelte_meta` to each generated element: `loc` (the file relative to the Vite root, POSIX, 1-based line, 0-based column) and `parent`, a linked list of `{ type, file, line, column, componentTag? }` frames where `type` is `component`, `each`, `if`, `await`, `key`, `render` or `snippet`. A `component` frame names the call site in the parent file. That chain is the breadcrumb, the invocation mapping and the "which branch rendered this" answer, for free — which is why no companion package or compile-time attribute is ever added to the user's project, and why a production build cannot contain picker markers by construction rather than by test.
+
+**What it does not give.** `__svelte_meta` is attached by the dev runtime only, so a development build is the precondition, not a detail: the extractor's audit (`guest/svelte/audit.ts`) reports `not-dev-build` or `metadata-unavailable` for a Svelte page without stamps, but only once the document has settled, since SvelteKit hydrates after `load` through a chain of dev-server module fetches. It is also a private detail, not an API: the audit probes what the page's metadata supports the first time it sees a stamped element, and the picker narrows what it offers to match. And it does not survive a hot update as an object identity — Vite replaces the DOM nodes — so a selection is stored as an identity, never a node handle.
+
+**Placing a stamp the file contradicts.** On a server-rendered page, Svelte's dev `add_locations` counts a child component's rendered root as one of the template's own elements while hydrating, so every element after it in that template carries the next element's location and the ones past the end carry none (not fixed upstream as of Svelte 5.57; a client-side navigation re-renders with correct locations). The extractor therefore also reports each node's structure — its template's file and, outermost first, each step's tag and index among siblings sharing its frame — and when the stamp and the file disagree, or there is no stamp, the resolver walks the template down that path (`packages/svelte-source-model/src/resolve/structure.ts`), re-checks the answer at the location it names, and reports it `verified` with `placedBy: "structure"`. The shape is placed only where the page and the source count alike, and refused where a construct is known to defeat that correspondence (`{@html}`, a `<slot>` with fallback, `<svelte:element>`, `<svelte:fragment>`, `<svelte:boundary>`, a multi-root `{#each}` body past its first iteration, a node after an inline `{@render}` of a local snippet).
+
+**Why the compiler lives in a workspace package.** `packages/svelte-source-model` exists to own the `svelte` dependency. Putting `svelte` in Daintree's root manifest would make Daintree read as a Svelte application. Resolving the user's own `svelte/compiler` would execute project-controlled JavaScript, and "a SvelteKit app has Svelte installed" is false for a fresh checkout, an uninstalled monorepo app or Yarn PnP. A bare `package.json` outside the `workspaces` array would never be installed by CI, and the build would copy its `node_modules` into the app bundle. `svelte/compiler` is reached only through the package's own lazy `loadParse()`, so it appears in exactly one source file and only the Svelte resolver in the host process ever loads it. The SvelteKit project adapter reads the installed `svelte` and `@sveltejs/kit` versions and answers `untested` when either is outside the major the bundled compiler was tested against, or unreadable; that verdict is a diagnostic, never a gate on parsing. When the versions it read are outside the tested majors, the agent prompt gets one line saying so.
+
+## Project adapters
+
+A project adapter describes an app from its files on disk, for context the page does not give (`projectAdapters/catalog.ts`). A registration is detection and a loader only; what an adapter brings loads behind `load()`, for an app it detected. SvelteKit is the one adapter: it reads the route tree and matches the page's URL with SvelteKit's own pattern and ranking rules (a port of Kit 2.x `parse_route_id` and `sort_routes`), after stripping a literal `kit.paths.base`. A route behind a param matcher, a computed base, or an endpoint winning the URL names no route rather than a guess. A route file is evidence about the page, never a location for an element.
+
+## Selecting and asking an agent
+
+The renderer side is the dev preview's tool session for that preview (`inspectorController.ts`): the host creates it when the picker is switched on, keeps it while the picker stays on — so hiding the preview, maximising a sibling or a grid remount keeps the binding and in-flight state — and disposes it when the picker is switched off or the preview is trashed or removed. Every piece of preview state is keyed on the document epoch an observation carries, never on arrival order. The strip and drawer receive the session through their props and never own its lifetime (`src/services/devPreviewTools/sessionManager.ts`). The drawer fills the dev preview's own frame (`DevPreviewToolDrawerChrome.tsx`): 360px by default, drag-resizable across a nominal 280–560px, a `@container/drawer` so its rows answer to the width it was given, and floating over the page instead of docking whenever docking would leave the page under 480px (capped so a strip of the page stays clear, which can take it below 280px), since a page pushed through its own breakpoints stops being the thing the user is building.
+
+**On the page.** The bootstrap draws a Web Inspector-style overlay in a closed shadow root, styled through the CSSOM so a strict `style-src` cannot block it. Selection is by click; arrow keys walk the rendered tree, and Alt+Up widens to the next component out that the page can name, selecting the roots of that one invocation the page can find (a component past the root cap, or with roots it could not read, is marked incomplete). A component pick from the trail asks the page to re-select it (`elementPicker.reselect`), and the answer resolves as a fresh selection.
+
+**Keeping a selection through an edit.** The loop is select, ask, look, ask again, and the agent's edit used to end it. A change to the selection's file (from the source tracker) or the page reporting its node gone marks the selection stale — nothing may be sent citing it — and, one settle window later and once the page is in Inspect mode, the controller asks the page to select the same identity again: the same node while it is still in the document, for any framework, and for Svelte its template position when the node was replaced, checked against the same tag, the same render chain and the same number of copies. The new selection lists the ids it replaces (`supersedes`), and a draft pinned to one re-pins to it. An answer that fails those checks is refused, and the selection says it is stale.
+
+**Handing it to an agent.** The composer submits one prompt to an agent terminal in the preview's own worktree: a live agent there or a new session of a built-in agent whose prompt the host can recognise, never a terminal in another worktree. Delivery is the host's agent-request service (`src/services/agentRequests/`, adapted by `agentRequest.ts`): requests queue per composer, are typed once the agent is reported waiting (**Send now** skips that signal but keeps the destination and ownership checks), report `Sent`, `Delivery unconfirmed` or a partial delivery honestly, and block the next request behind an unconfirmed one until the user answers it. The prompt (`agentPrompt.ts`) carries the user's words, then references rather than contents: the app and its installed versions, the page and viewport (URL redacted), the route's files, the target and each claim with its state, the element context, and a screenshot cropped from the preview when one is attached (never in a remote-host window, where the prompt says it was omitted). Every target a request cites with a revision — an `observed`, `mapped` or `verified` result, or a verified definition — is held to that revision, and `elementPicker.sourceRevisions` reads them again before the prompt is built and immediately before it is typed in; a mismatch fails the request with its words kept. Ambiguous alternatives and targets the host never read carry no revision and are not held, and route files are context read at send time.
+
+## What a mapping does not prove
+
+A selection is coordinates the page reported, resolved against the bytes on disk now. No dev runtime reports which revision of the source produced its DOM, so when a same-tag element has come to occupy the position an observation was stamped with, nothing available here tells it from the element the user clicked; it resolves cleanly. A `fileRevision` names the bytes the host read, and a later check can say only that the file still hashes to it — never which bytes the page rendered from. The tracker, the tag check, the reprove's chain and copy-count checks, and the send-time revision checks each narrow that window; a same-tag element written into the exact position the original was pushed out of, under the same chain, passes all of them. Closing it needs a witness tying the rendered DOM to its source revision, which would have to be arranged in the user's own build — exactly what the picker never touches.
+
+## Traps found building it
+
+### CDP and the guest
+
+- **Install into documents, not ahead of them.** A new-document script would carry the picker into every document the preview later shows, including ones it was never bound to; the core picker creates its world and evaluates its bootstrap per document instead. The cost is that a capture-phase `window` listener the page registered before the picker arrived still runs first.
+- `Runtime.addBinding` reaches every execution context unless it is scoped. The core binding names its isolated world (`executionContextName`), and the bridge still accepts a call only from the context it created.
+- `Runtime.enable` replays existing contexts only the first time it is enabled on a debugger session, and the webview console capture shares that session. Both go through one per-guest lease service (`WebContentsCdpService.ts`): a domain stays on while anyone holds a lease, and `Page` is never disabled because other host code enables it without a lease.
+- The guest's sequence restarts at 0 on every document, and a hot update that does not navigate does not advance the epoch. The host reinstalls per document with the epoch baked in and skips a second install for an epoch it already served.
+- Give every guest `Runtime.evaluate` a timeout: a hostile page can make an expression never return.
+- A value import from `shared/` bundles zod into the page, so guest sources restate the limits they need, and tests such as `detectors.test.ts` and `elementContext.test.ts` pin the restated values to the schemas'.
+- `Number.isInteger(2 ** 53)` is true and zod's `.int()` rejects it; one unsafe number drops the whole envelope. Use `Number.isSafeInteger`.
+- A page can install its own `Error.prepareStackTrace` (source-map-support, an error reporter), which would decide the format of React's `_debugStack`. The React extractor sets it aside for the read and restores it, as React's own `formatOwnerStack` does.
+
+### Svelte compiler
+
+- A whole-expression attribute value (`class={x}`, `{plan}`) is a bare `ExpressionTag` on `Attribute.value`; only a quoted literal is a one-element `[Text]` array.
+- An `ExpressionTag` range covers the braces (`{3}`); its inner `Literal` covers `3`. Say which one a range means.
+- `parse()` and `compile()` strip a byte-order mark, so AST offsets are one code unit behind the raw bytes of a BOM file.
+- Component call sites are emitted through `add_svelte_meta(…, 'component', …, { componentTag })`, dynamic elements through a trailing location on `$.element`, everything else through the `add_locations` table. A test that only reads `add_locations` misses every invocation.
+
+### SvelteKit routing
+
+- `+page.server.ts` or `+page.ts` with no `+page.svelte` is still a navigable page (a redirect route), not an endpoint.
+- Never split a route filename on `.`: layout reset targets can contain dots and brackets (`+layout@(app.v2).svelte`).
+- Module extensions default to `.js`/`.ts` and match case-sensitively — `+server.mjs` is not an endpoint.
+- `src/routes/build/` and `src/routes/dist/` are ordinary routes. A build-output exclusion list is right for app discovery and wrong inside the routes tree.
+
+### Running the real thing
+
+- **Daintree's own `NODE_ENV` used to reach every terminal.** Started with `NODE_ENV=production` (the E2E launcher does this), `vite dev` in a Daintree terminal compiled for production and no element carried dev metadata. Terminals now drop the inherited `NODE_ENV` (`EnvironmentFilter.ts`).
+- **The grid recreates a preview's page when panels are added or moved**, which detaches the binding with `debugger-detached` or `guest-destroyed`. The controller reattaches to the same panel on a short backoff before showing **Reconnect**.
+
+### Parallel build
+
+- Freezing the wire messages between two halves is not enough: freeze who owns the envelope and who derives a source range alongside the shapes.
+- A mock host that enforces fewer rules than the real one lets a whole phase pass against a contract the app rejects.
+- Code built against a mock of its neighbour needs one test that runs both real halves together. Every cross-phase defect in the first version of this picker was found by such a test or by review of the combined change, never by a phase's own suite.
+
+## Related
+
+- `docs/architecture/dev-preview-event-routing.md` — the preview lifecycle and its notification tiers, which the picker reuses.
+- `docs/architecture/process-and-window-model.md` — the utility processes the resolver host sits beside.
+- `docs/feature-curation.md` — the rubric this was scoped against, and the limits it set.

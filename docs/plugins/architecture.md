@@ -40,7 +40,7 @@ A built-in plugin is Daintree code that happens to use the plugin contract. It d
 - **Its renderer lives in the host bundle.** There is no `plugin://` module for it, which changes how its panel views resolve — see [Built-in plugin views](#built-in-plugin-views).
 - **Activation failures are swallowed.** Main reports a built-in's activation as successful even when `activate()` throws, so a built-in's panel can still render against handlers that never registered. Handle missing handlers in the view rather than assuming activation succeeded.
 
-Five built-ins ship today, one directory each under `plugins/builtin/`:
+Four built-ins ship today, one directory each under `plugins/builtin/`:
 
 | Plugin                     | Contributes                                 | Default |
 | -------------------------- | ------------------------------------------- | ------- |

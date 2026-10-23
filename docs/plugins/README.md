@@ -40,7 +40,7 @@ The two entry points are at the top of this page. Everything below is reference 
 | --- | --- |
 | [Getting started](./getting-started.md) | Scaffold, build, and install your first plugin |
 | [Manifest reference](./manifest.md) | Every field `plugin.json` accepts, and what the schema rejects |
-| [Contribution points](./contribution-points.md) | Every contribution type (three of them built-in only) — shape, example, status, project-scope availability |
+| [Contribution points](./contribution-points.md) | Every contribution type — shape, example, status, project-scope availability |
 | [Host API](./host-api.md) | The runtime `host` object your `activate()` receives — files, SQLite, settings, agent hand-off, PDF export and the rest — the calling conventions, the renderer hooks, and the mock host for tests |
 | [Built-in actions](./actions.md) | Every built-in action a plugin may `host.dispatch`, with its danger tier and arguments — generated from the action manifest |
 | [Patterns](./patterns.md) | The working patterns a real plugin is made of: subscribe then pull, push deltas, stream progress, large lists, watch and badge, file UIs, refresh when the user comes back, clocks, canvas, open files, export a document, launch an agent or hand it work, own the canvas |

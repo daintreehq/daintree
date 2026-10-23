@@ -275,7 +275,7 @@ Numbers, ages and paths go through one formatter each, so the same value never r
 Text that clips reveals its full form through `TruncatedTooltip`, never a native `title`. The OS tooltip opens late, cannot be reached from the keyboard and ignores the theme, so one row revealed itself one way and its neighbour the other.
 
 - **`TruncatedTooltip`** when the tooltip is the clipped text itself. It opens only while the text overflows and takes a tab stop only then. Text shortened in code (`middleTruncatePath`, a sliced digest) passes `isTruncated` so the tooltip does not depend on CSS overflow alone.
-- **`focusable={false}`** inside anything that already owns the keyboard: a button (an expandable call row, an artifact header), an `option` or `menuitem`, or a roving toolbar (the Site Builder strip). The tooltip is then a pointer disclosure, and the row carries the keyboard route: expanding it, or a drawer that names the same thing.
+- **`focusable={false}`** inside anything that already owns the keyboard: a button (an expandable call row, an artifact header), an `option` or `menuitem`, or a roving toolbar (the Element Picker strip). The tooltip is then a pointer disclosure, and the row carries the keyboard route: expanding it, or a drawer that names the same thing.
 - **The shared `Tooltip`** when the tooltip adds something the text does not say — a symlink target, a caller's user agent, a dev server's last log line, the prompt behind a suggestion chip.
 - **Neither** inside a surface that is already the disclosure. The commit hover card wraps its co-author byline and names everyone rather than hiding the rest behind "and 2 others".
 

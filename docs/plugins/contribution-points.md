@@ -1535,7 +1535,7 @@ Named multi-terminal launch layouts a plugin ships. A contributed recipe is regi
 
 Welcome tours that play in the same dialog as the Daintree tour. An enabled plugin's tours register when it loads and are withdrawn when it is disabled, uninstalled or hidden in the project; a tour that is open at that moment closes, keeping the viewer's progress. A reload closes it too, and reopening plays the new version.
 
-A tour without `panelKind` is a **plugin tour**, offered from Help and the command palette as "<plugin display name>: <title>" (for example "SvelteKit Site Builder: Welcome Tour"). A tour with `panelKind` is a **panel tour**, opened from that panel's three-dots menu as "<Panel name> Welcome Tour"; it keeps to a couple of chapters but is held to the same standard as any other tour. The panel's Welcome Tour item appears once its tour is registered and disappears when it is withdrawn, so the item never appears with nothing to play.
+A tour without `panelKind` is a **plugin tour**, offered from Help and the command palette as "<plugin display name>: <title>" (for example "Acme Site Builder: Welcome Tour"). A tour with `panelKind` is a **panel tour**, opened from that panel's three-dots menu as "<Panel name> Welcome Tour"; it keeps to a couple of chapters but is held to the same standard as any other tour. The panel's Welcome Tour item appears once its tour is registered and disappears when it is withdrawn, so the item never appears with nothing to play.
 
 ```json
 {
