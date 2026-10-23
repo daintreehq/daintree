@@ -4183,6 +4183,21 @@ describe("FilePane edit mode (#12323)", () => {
         expect(screen.getByRole("alert").textContent).toContain("Couldn't save the editor choice");
       });
 
+      it("leaves the pane alone when main ends up holding a different answer", async () => {
+        // Another view kept the plugin's editor while this answer was in flight.
+        await renderAsked(async () => ({
+          projectId: "p1",
+          revision: 1,
+          slots: { [SLOT]: owned },
+          choices: { [SLOT]: { pluginId: "acme.records", choice: "surface", decidedAt: 2 } },
+        }));
+
+        await act(async () => {
+          fireEvent.click(screen.getByRole("button", { name: "Use Daintree's" }));
+        });
+        expect(setFileViewModeMock).not.toHaveBeenCalled();
+      });
+
       it("doesn't ask in a pane where the default's editor isn't on offer", async () => {
         seedWorktree();
         fileEditorState.resolved = null;

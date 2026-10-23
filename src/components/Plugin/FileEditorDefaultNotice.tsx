@@ -9,12 +9,18 @@ import { ProjectSurfaceConsentNotice } from "@/components/Plugin/ProjectSurfaceC
 import { frameSurfaceSlot } from "@/components/Plugin/framedSurfaceSlots";
 import {
   selectFailedSave,
+  selectSurfaceChoice,
   usePluginProjectSurfacesStore,
 } from "@/store/pluginProjectSurfacesStore";
 
-/** Whether main recorded the answer about `slot` — a failed save leaves it unanswered. */
-function recorded(slot: FileEditorSlotKey): boolean {
-  return selectFailedSave(usePluginProjectSurfacesStore.getState(), slot) === null;
+/**
+ * Whether main now holds exactly `choice` about `slot`, for the plugin that
+ * owns it. Read from what was adopted, never inferred from the absence of a
+ * failure: a failure superseded by a later save is not reported, and another
+ * view may have recorded a different answer meanwhile.
+ */
+function recordedAs(slot: FileEditorSlotKey, choice: ProjectSurfaceChoice): boolean {
+  return selectSurfaceChoice(usePluginProjectSurfacesStore.getState(), slot) === choice;
 }
 
 /**
@@ -24,7 +30,7 @@ function recorded(slot: FileEditorSlotKey): boolean {
  * panel is the one that asks: one plugin, one question, however many panels
  * and slots it appears in.
  *
- * `onAnswered` hears only an answer main recorded. One that failed to save
+ * `onAnswered` hears only an answer main recorded as given. One that failed to save
  * leaves the default unanswered, so the pane keeps what it shows and says why,
  * with a retry — the same row a framed slot draws.
  */
@@ -45,7 +51,7 @@ export function FileEditorDefaultNotice({
     const choice = failedSave.updates.find((update) => update.slot === slot)?.choice ?? null;
     const retry = async () => {
       await setSurfaceChoices(failedSave.updates);
-      if (choice !== null && recorded(slot)) onAnswered(choice);
+      if (choice !== null && recordedAs(slot, choice)) onAnswered(choice);
     };
     return (
       <InlineStatusBanner
@@ -62,7 +68,7 @@ export function FileEditorDefaultNotice({
       slot={slot}
       frameId={frameId}
       onAnswered={(choice) => {
-        if (recorded(slot)) onAnswered(choice);
+        if (recordedAs(slot, choice)) onAnswered(choice);
       }}
     />
   );
