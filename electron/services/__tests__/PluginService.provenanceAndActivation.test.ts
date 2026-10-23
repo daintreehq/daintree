@@ -859,6 +859,16 @@ describe("Deferred activation — activatePlugin", () => {
     // The manifest id is an alias for the same root, because plugin authors
     // write `plugin://{pluginId}/…` by hand.
     expect(service.getPluginRootByAuthority("acme.view-authority")).toBe(pluginDir);
+    // Both keys name the load that owns them, so a request is judged by that
+    // instance and never by another instance sharing its root (#14257).
+    expect(service.resolvePluginAuthority(authority)).toEqual({
+      dir: pluginDir,
+      pluginId: "acme.view-authority",
+    });
+    expect(service.resolvePluginAuthority("acme.view-authority")).toEqual({
+      dir: pluginDir,
+      pluginId: "acme.view-authority",
+    });
 
     service.unloadPlugin("acme.view-authority");
 
@@ -866,6 +876,7 @@ describe("Deferred activation — activatePlugin", () => {
     // not the old root, and not whatever next occupies that plugin id.
     expect(service.getPluginRootByAuthority(authority)).toBeUndefined();
     expect(service.getPluginRootByAuthority("acme.view-authority")).toBeUndefined();
+    expect(service.resolvePluginAuthority(authority)).toBeUndefined();
   });
 
   it("activatePluginForView mints one shared recovery view generation per load (#11728)", async () => {

@@ -891,8 +891,14 @@ export class PluginService {
    * rather than resolving into whatever next occupies that plugin id. The alias
    * keeps plain id semantics by construction — a reload rebinds it — which is
    * exactly what a hand-written `plugin://{pluginId}/…` URL asks for.
+   *
+   * The alias is the registry key, so a project instance's is its qualified
+   * instance key, never the bare manifest id. Each key also records the
+   * instance that owns it: per-project instances of
+   * one installed package share a root, so the root alone can't say whose
+   * authority a request named (#14257).
    */
-  private pluginRootsByAuthority = new Map<string, string>();
+  private pluginRootsByAuthority = new Map<string, { dir: string; pluginId: string }>();
   /** pluginId → the authority minted for its current load; the invalidation and URL-building side. */
   private pluginAuthorities = new Map<string, PluginProtocolAuthority>();
   /**
@@ -5442,7 +5448,7 @@ export class PluginService {
   }
 
   _registerFakePluginForTests(plugin: LoadedPlugin, instanceKey?: string): void {
-    this.mintPluginAuthority(plugin.manifest.name, plugin.dir);
+    this.mintPluginAuthority(instanceKey ?? plugin.manifest.name, plugin.dir);
     // `instanceKey` mirrors the real `loadPlugin`, which keys a project plugin
     // by `project__{projectId}__{name}` while leaving `manifest.name` bare.
     // Without it a test cannot reproduce the shape the registry actually holds
@@ -9388,7 +9394,13 @@ export class PluginService {
    * roots without exposing the private `plugins` map.
    */
   getPluginRootByAuthority(authority: string): string | undefined {
-    return this.pluginRootsByAuthority.get(authority);
+    return this.pluginRootsByAuthority.get(authority)?.dir;
+  }
+
+  /** The root a `plugin://` authority serves and the instance key of the load that owns it. */
+  resolvePluginAuthority(authority: string): { dir: string; pluginId: string } | undefined {
+    const entry = this.pluginRootsByAuthority.get(authority);
+    return entry ? { ...entry } : undefined;
   }
 
   /**
@@ -9403,8 +9415,8 @@ export class PluginService {
     this.invalidatePluginAuthority(pluginId);
     const authority = `pi-${randomBytes(16).toString("hex")}` as PluginProtocolAuthority;
     this.pluginAuthorities.set(pluginId, authority);
-    this.pluginRootsByAuthority.set(authority, dir);
-    this.pluginRootsByAuthority.set(pluginId, dir);
+    this.pluginRootsByAuthority.set(authority, { dir, pluginId });
+    this.pluginRootsByAuthority.set(pluginId, { dir, pluginId });
     return authority;
   }
 

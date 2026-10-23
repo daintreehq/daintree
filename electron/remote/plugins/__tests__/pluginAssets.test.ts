@@ -5,7 +5,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { z } from "zod";
 import type { LinkSession } from "../../link/session.js";
-import { PLUGIN_ASSET_METHOD } from "../assetLinkMethods.js";
+import { PLUGIN_ASSET_METHOD, PLUGIN_VIEW_MANIFEST_METHOD } from "../assetLinkMethods.js";
 import { ClientPluginAssets } from "../ClientPluginAssets.js";
 import { createMemoryPluginViewConsent } from "../pluginViewConsent.js";
 import {
@@ -69,18 +69,23 @@ function setup(options: {
   gate?: PluginViewAdmitter;
   /** The files the host lists for the bundle. */
   listed?: string[];
+  /** The authorities the host resolves, each to its root and owning instance. */
+  authorities?: Record<string, { root: string; instanceId: string }>;
 }) {
   let body = options.body ?? "export default 1;";
   let driving = options.driving ?? true;
   const fetchAsset = vi.fn(async (request: Request) => {
-    expect(request.url).toMatch(/^plugin:\/\/pi-abc\//);
+    expect(request.url).toMatch(/^plugin:\/\/pi-[a-z]+\//);
     return new Response(body, {
       status: 200,
       headers: { "Last-Modified": new Date(5_000).toUTCString() },
     });
   });
+  const authorities = options.authorities ?? {
+    "pi-abc": { root: "/plugins/graph", instanceId: "acme.graph" },
+  };
   const service = new HostPluginAssetService({
-    rootForAuthority: (authority) => (authority === "pi-abc" ? "/plugins/graph" : undefined),
+    resolveAuthority: (authority) => authorities[authority],
     loadedPlugins: async () =>
       options.plugins ?? [
         {
@@ -109,6 +114,7 @@ function setup(options: {
   client.noteEndpointOpened(HOST, { session, webContentsId: 9, endpointId: "ep-1" });
   return {
     client,
+    session,
     calls,
     fetchAsset,
     endpoint,
@@ -271,6 +277,9 @@ describe("host plugin view assets", () => {
           remoteUnsupported: false,
         },
       ],
+      authorities: {
+        "pi-abc": { root: "/plugins/graph", instanceId: `project__${OTHER}__acme.graph` },
+      },
     });
     expect((await other.client.proxy(request)).status).toBe(404);
     expect(other.fetchAsset).not.toHaveBeenCalled();
@@ -286,6 +295,56 @@ describe("host plugin view assets", () => {
       ],
     });
     expect((await localOnly.client.proxy(request)).status).toBe(404);
+  });
+
+  it("admits an authority only under the instance that owns it, not a sibling sharing its package dir", async () => {
+    const instanceA = `project__${OTHER}__installed__acme.graph`;
+    const instanceB = `project__${PROJECT}__installed__acme.graph`;
+    const { session, fetchAsset, setDriving } = setup({
+      plugins: [
+        {
+          instanceId: instanceA,
+          projectId: OTHER,
+          dir: "/plugins/graph",
+          remoteUnsupported: false,
+        },
+        {
+          instanceId: instanceB,
+          projectId: PROJECT,
+          dir: "/plugins/graph",
+          remoteUnsupported: false,
+        },
+      ],
+      authorities: {
+        "pi-aaa": { root: "/plugins/graph", instanceId: instanceA },
+        "pi-bbb": { root: "/plugins/graph", instanceId: instanceB },
+      },
+    });
+    const asset = (authority: string) =>
+      session.call(PLUGIN_ASSET_METHOD, {
+        endpointIds: ["ep-1"],
+        authority,
+        path: "dist/view.js",
+        method: "GET",
+      }) as Promise<{ status: number; pluginId: string | null }>;
+    const manifest = (authority: string) =>
+      session.call(PLUGIN_VIEW_MANIFEST_METHOD, { endpointIds: ["ep-1"], authority }) as Promise<{
+        status: number;
+        pluginId: string | null;
+      }>;
+
+    expect(await asset("pi-aaa")).toMatchObject({ status: 404, pluginId: null });
+    expect(await manifest("pi-aaa")).toMatchObject({ status: 404, pluginId: null });
+    expect(fetchAsset).not.toHaveBeenCalled();
+
+    expect(await asset("pi-bbb")).toMatchObject({ status: 200, pluginId: instanceB });
+    expect(await manifest("pi-bbb")).toMatchObject({ status: 200, pluginId: instanceB });
+
+    // Losing the drive lease refuses the endpoint's own plugin, but another
+    // project's stays a 404: the refusal never admits it exists.
+    setDriving(false);
+    expect((await asset("pi-bbb")).status).toBe(403);
+    expect((await asset("pi-aaa")).status).toBe(404);
   });
 
   it("refuses an oversized asset, or one that isn't a file in the plugin, before reading it", async () => {
