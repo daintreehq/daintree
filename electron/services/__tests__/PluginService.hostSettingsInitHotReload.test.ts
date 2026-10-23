@@ -737,6 +737,59 @@ describe("createHost — settings", () => {
     await expect(bareHost.settings.unset("anything")).rejects.toThrow(/not declared/);
   });
 
+  it("unset clears the active project's value and leaves another project's alone", async () => {
+    const projA = path.join(tmpDir, "unset-projA");
+    const projB = path.join(tmpDir, "unset-projB");
+    const { service } = await setupSettingsService("acme.settings-unset-proj", [
+      { id: "channel", type: "string", scope: "project" },
+    ]);
+    const { host } = createSettingsHost(service, "acme.settings-unset-proj");
+    const file = (root: string) =>
+      path.join(root, ".daintree", "plugin-settings", "acme.settings-unset-proj.json");
+    projectStoreMock.getCurrentProject.mockReturnValue({ path: projA });
+    await host.settings.set("channel", "a");
+    projectStoreMock.getCurrentProject.mockReturnValue({ path: projB });
+    await host.settings.set("channel", "b");
+    const heard: unknown[] = [];
+    await host.settings.onDidChange("channel", (v) => heard.push(v));
+
+    await host.settings.unset("channel");
+
+    expect(JSON.parse(await fs.readFile(file(projB), "utf-8"))).toEqual({});
+    expect(JSON.parse(await fs.readFile(file(projA), "utf-8"))).toEqual({ channel: "a" });
+    expect(heard).toEqual([undefined]);
+  });
+
+  it("unset on a bound project plugin clears its own project's value while another is active", async () => {
+    const ownId = "a".repeat(64);
+    const ownRoot = path.join(tmpDir, "unset-own");
+    const activeRoot = path.join(tmpDir, "unset-active");
+    const manifestId = "acme.settings-unset-bound";
+    const { service } = await setupSettingsService(manifestId, [
+      { id: "channel", type: "string", scope: "project" },
+    ]);
+    const instanceKey = `project__${ownId}__${manifestId}`;
+    const seam = service as unknown as {
+      plugins: Map<string, unknown>;
+      _registerFakePluginForTests: (plugin: unknown, instanceKey?: string) => void;
+    };
+    seam._registerFakePluginForTests(seam.plugins.get(manifestId), instanceKey);
+    const { host } = createSettingsHost(service, instanceKey, {
+      projectId: ownId,
+      projectRoot: ownRoot,
+    });
+    projectStoreMock.getCurrentProject.mockReturnValue({ id: ownId, path: ownRoot });
+    await host.settings.set("channel", "own");
+    projectStoreMock.getCurrentProject.mockReturnValue({ id: "b".repeat(64), path: activeRoot });
+    const file = path.join(ownRoot, ".daintree", "plugin-settings", `${manifestId}.json`);
+    expect(JSON.parse(await fs.readFile(file, "utf-8"))).toEqual({ channel: "own" });
+
+    await host.settings.unset("channel");
+
+    expect(JSON.parse(await fs.readFile(file, "utf-8"))).toEqual({});
+    await expect(fs.access(path.join(activeRoot, ".daintree"))).rejects.toThrow();
+  });
+
   it("unset on a project key with no active project resolves without touching disk", async () => {
     projectStoreMock.getCurrentProject.mockReturnValue(null);
     const { service, settingsRoot } = await setupSettingsService("acme.settings-unset-noproj", [

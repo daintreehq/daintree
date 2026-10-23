@@ -28,7 +28,7 @@ import {
 import { resolveContainedPath, PluginPathNotAllowedError } from "./pluginFsContainment.js";
 import { PluginHostGit, resolveAddPathspecs, type HostGitFactory } from "./pluginHostGit.js";
 import { admitPluginToast } from "./pluginToastBudget.js";
-import { admitPluginExternalLink } from "./pluginExternalLinks.js";
+import { admitPluginExternalLink, claimPluginExternalLinkSlot } from "./pluginExternalLinks.js";
 import { parsePluginExternalUrl } from "../../../shared/utils/pluginExternalUrl.js";
 import { openExternalUrl } from "../../utils/openExternal.js";
 import {
@@ -6253,17 +6253,31 @@ function buildSystemApi(
       // Before the prompt, so a remote user cannot raise dialogs on this
       // machine's screen for a link that would not open here anyway.
       refuseForRemoteDriver("openExternal");
+      const releaseSlot = claimPluginExternalLinkSlot(pluginId);
       // Spent before the prompt and kept on a denial, so a plugin cannot stack
       // dialogs by asking again.
-      if (!admitPluginExternalLink(pluginId)) {
+      if (!releaseSlot || !admitPluginExternalLink(pluginId)) {
+        releaseSlot?.();
         throw new Error(
           `RATE_LIMITED: plugin "${pluginId}" system.openExternal: too many links opened; try again shortly`
         );
       }
-      await ensureExternalSiteConsent(deps, pluginId, site);
-      requireLoaded("openExternal");
-      refuseForRemoteDriver("openExternal");
-      await openExternalUrl(href);
+      try {
+        const loaded = deps.plugins.get(pluginId);
+        await ensureExternalSiteConsent(deps, pluginId, site);
+        requireLoaded("openExternal");
+        // A reinstall under the same id is a different plugin: the answer given
+        // for the old one is not this call's to use.
+        if (deps.plugins.get(pluginId) !== loaded) {
+          throw new Error(
+            `PLUGIN_UNLOADED: plugin "${pluginId}" system.openExternal: plugin was replaced`
+          );
+        }
+        refuseForRemoteDriver("openExternal");
+        await openExternalUrl(href);
+      } finally {
+        releaseSlot();
+      }
       // The URL can carry a token, so only its hash is recorded.
       deps.safeAppendAudit({
         pluginId,

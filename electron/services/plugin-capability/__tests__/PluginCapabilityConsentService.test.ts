@@ -411,6 +411,22 @@ describe("PluginCapabilityConsentService", () => {
       await Promise.all([a, b, c]);
     });
 
+    it("does not mint a grant when the plugin is purged while its prompt is open", async () => {
+      const { service, store } = makeService();
+      let release!: (d: PluginCapabilityConsentDecision) => void;
+      service.setConsentBridge(
+        () => new Promise<PluginCapabilityConsentDecision>((resolve) => (release = resolve))
+      );
+      const pending = service.ensureExternalSiteAllowed("acme.x", "Acme", "example.com", CAPS);
+      const rejected = expect(pending).rejects.toThrow(/removed or replaced/);
+
+      service.revokeAllForPlugin("acme.x");
+      release("approved-and-pin");
+
+      await rejected;
+      expect(store.list()).toEqual([]);
+    });
+
     it("refuses an empty site", async () => {
       const { service } = makeService();
       await expect(service.ensureExternalSiteAllowed("acme.x", "Acme", "", CAPS)).rejects.toThrow(

@@ -1404,6 +1404,20 @@ describe("createMockHost", () => {
       expect(await host.settings.missingRequired()).toEqual(["token"]);
     });
 
+    it("lets a throwing subscriber fail neither the clear nor the others", async () => {
+      const host = createMockHost({
+        settings: { user: { token: "t" } },
+        manifestSettings: [{ id: "token", type: "secret" }],
+      });
+      const heard: unknown[] = [];
+      await host.settings.onDidChange("token", () => {
+        throw new Error("boom");
+      });
+      await host.settings.onDidChange("token", (v) => heard.push(v));
+      await expect(host.settings.unset("token")).resolves.toBeUndefined();
+      expect(heard).toEqual([undefined]);
+    });
+
     it("rejects an undeclared key and a conflicting scope", async () => {
       const host = createMockHost({
         manifestSettings: [{ id: "ref", type: "string", scope: "project" }],

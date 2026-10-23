@@ -70,7 +70,7 @@ export function PluginCapabilityConfirmDialog() {
           isOpen={true}
           onClose={() => resolveOnce(current.requestId, "rejected")}
           title={externalLinkTitleFor(current.pluginDisplayName, site)}
-          description={`'${current.pluginDisplayName}' is asking to open links to ${site} in your browser${onHost} for the first time. Allowing remembers this site for the plugin until you uninstall or revoke it.`}
+          description={`'${current.pluginDisplayName}' is asking to open links to ${site} in your browser${onHost} for the first time. Allowing remembers this site for the plugin until you uninstall or replace the plugin.`}
           confirmLabel="Allow and remember"
           cancelLabel="Deny"
           onConfirm={() => resolveOnce(current.requestId, "approved-and-pin")}

@@ -5989,8 +5989,11 @@ export interface PluginSystemApi {
    * most 2048 characters and without embedded credentials are accepted
    * (`INVALID_URL:`); `file:`, `http:`, custom schemes and `daintree:` never
    * are. Opens are rate limited per plugin (`RATE_LIMITED:`), and the first
-   * link a plugin opens to a given site asks the user, who can allow that site
-   * for good or deny it (`PERMISSION_REQUIRED:`). Nothing opens on a host whose
+   * link a plugin opens to a given site (its lower-cased hostname, any port or
+   * path) asks the user, who can allow that site or deny it
+   * (`PERMISSION_REQUIRED:`). An allowed site is remembered for that plugin in
+   * its project scope until the plugin is uninstalled or replaced. Built-in
+   * plugins are not asked. Nothing opens on a host whose
    * project is driven from another machine (`REMOTE_FRONTEND:`).
    */
   openExternal(url: string): Promise<void>;

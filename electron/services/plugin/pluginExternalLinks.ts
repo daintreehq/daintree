@@ -29,7 +29,28 @@ export function admitPluginExternalLink(pluginId: string, now = performance.now(
   return true;
 }
 
+// Tokens bound admissions, not opens: calls waiting on one unanswered prompt
+// would all open together once it is approved. Capping what can wait keeps the
+// burst honest.
+const waiting = new Map<string, number>();
+
+/** Claim a place among the opens a plugin has waiting; null when it already has a burst's worth. */
+export function claimPluginExternalLinkSlot(pluginId: string): (() => void) | null {
+  const count = waiting.get(pluginId) ?? 0;
+  if (count >= PLUGIN_EXTERNAL_LINK_BURST) return null;
+  waiting.set(pluginId, count + 1);
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    const left = (waiting.get(pluginId) ?? 1) - 1;
+    if (left <= 0) waiting.delete(pluginId);
+    else waiting.set(pluginId, left);
+  };
+}
+
 /** Forget every plugin's recent opens (tests). */
 export function resetPluginExternalLinkBudget(): void {
   buckets.clear();
+  waiting.clear();
 }

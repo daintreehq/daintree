@@ -1623,7 +1623,14 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
       if (!settingsStore[declaredScope].delete(key)) return;
       const subs = settingsSubs[declaredScope].get(key);
       if (subs) {
-        for (const cb of subs) cb(getDeclaredSettingDefault(key));
+        // As the real host: one throwing listener does not hide the rest or fail the clear.
+        for (const cb of subs) {
+          try {
+            cb(getDeclaredSettingDefault(key));
+          } catch {
+            /* isolated */
+          }
+        }
       }
     },
     // Manifest-aware only: with no `manifestSettings` nothing is declared, so

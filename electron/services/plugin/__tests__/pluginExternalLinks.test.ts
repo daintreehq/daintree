@@ -3,6 +3,7 @@ import {
   PLUGIN_EXTERNAL_LINK_BURST,
   PLUGIN_EXTERNAL_LINK_REFILL_MS,
   admitPluginExternalLink,
+  claimPluginExternalLinkSlot,
   resetPluginExternalLinkBudget,
 } from "../pluginExternalLinks.js";
 
@@ -29,5 +30,23 @@ describe("admitPluginExternalLink", () => {
     for (let i = 0; i < PLUGIN_EXTERNAL_LINK_BURST; i++) admitPluginExternalLink("acme.x", 100_000);
     expect(admitPluginExternalLink("acme.x", 0)).toBe(false);
     expect(admitPluginExternalLink("acme.x", 100_000)).toBe(false);
+  });
+});
+
+describe("claimPluginExternalLinkSlot", () => {
+  beforeEach(() => resetPluginExternalLinkBudget());
+
+  it("caps what one plugin can have waiting, and frees a place on release", () => {
+    const releases = Array.from({ length: PLUGIN_EXTERNAL_LINK_BURST }, () =>
+      claimPluginExternalLinkSlot("acme.x")
+    );
+    expect(releases.every((r) => r !== null)).toBe(true);
+    expect(claimPluginExternalLinkSlot("acme.x")).toBeNull();
+    expect(claimPluginExternalLinkSlot("acme.y")).not.toBeNull();
+
+    releases[0]?.();
+    releases[0]?.();
+    expect(claimPluginExternalLinkSlot("acme.x")).not.toBeNull();
+    expect(claimPluginExternalLinkSlot("acme.x")).toBeNull();
   });
 });

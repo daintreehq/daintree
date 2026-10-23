@@ -487,6 +487,43 @@ describe("host.system.openExternal", () => {
     expect(bridge).toHaveBeenCalledTimes(PLUGIN_EXTERNAL_LINK_BURST);
   });
 
+  it("bounds the links waiting on one unanswered prompt", async () => {
+    let release!: (d: PluginCapabilityConsentDecision) => void;
+    const bridge = vi.fn(
+      () => new Promise<PluginCapabilityConsentDecision>((resolve) => (release = resolve))
+    );
+    getPluginCapabilityConsentService().setConsentBridge(bridge);
+    const host = registerPlugin([]);
+
+    const waiting = Array.from({ length: PLUGIN_EXTERNAL_LINK_BURST }, () =>
+      host.system.openExternal("https://example.com/x")
+    );
+    await expect(host.system.openExternal("https://example.com/y")).rejects.toThrow(
+      /^RATE_LIMITED:/
+    );
+    expect(shellMock.openExternal).not.toHaveBeenCalled();
+
+    release("approved-once");
+    await Promise.all(waiting);
+    expect(shellMock.openExternal).toHaveBeenCalledTimes(PLUGIN_EXTERNAL_LINK_BURST);
+  });
+
+  it("opens nothing when the plugin is unloaded while its prompt is open", async () => {
+    let release!: (d: PluginCapabilityConsentDecision) => void;
+    getPluginCapabilityConsentService().setConsentBridge(
+      () => new Promise<PluginCapabilityConsentDecision>((resolve) => (release = resolve))
+    );
+    const host = registerPlugin([]);
+    const pending = host.system.openExternal("https://example.com");
+    const rejected = expect(pending).rejects.toThrow(/PLUGIN_UNLOADED/);
+
+    svc.unloadPlugin("acme.sys");
+    release("approved-and-pin");
+
+    await rejected;
+    expect(shellMock.openExternal).not.toHaveBeenCalled();
+  });
+
   it("is refused for a driver on another machine, before any prompt", async () => {
     const bridge = allowAll();
     frontend = {

@@ -52,6 +52,10 @@ export type PluginCapabilityConsentBridge = (
 export class PluginCapabilityConsentService {
   private bridge: PluginCapabilityConsentBridge | null = null;
   private readonly inFlight = new Map<string, Promise<PluginCapabilityConsentOutcome>>();
+  // Bumped when a plugin's grants are purged. A prompt still open at that point
+  // belongs to the plugin that was removed, so its answer must not mint a grant
+  // a same-id reinstall would inherit.
+  private readonly purgeEpochs = new Map<string, number>();
 
   constructor(private readonly consentStore: PluginCapabilityConsentStore) {}
 
@@ -76,6 +80,7 @@ export class PluginCapabilityConsentService {
    * the purge was durably persisted so the caller can retry or escalate.
    */
   revokeAllForPlugin(pluginId: string): boolean {
+    this.purgeEpochs.set(pluginId, (this.purgeEpochs.get(pluginId) ?? 0) + 1);
     return this.consentStore.revokeAllForPlugin(pluginId);
   }
 
@@ -137,6 +142,7 @@ export class PluginCapabilityConsentService {
     const { pluginId, capability, scopeKey, site } = identity;
     if (this.consentStore.hasGrant(identity)) return;
 
+    const epoch = this.purgeEpochs.get(pluginId) ?? 0;
     const outcome = await this.requestOutcome(
       pluginId,
       pluginDisplayName,
@@ -146,6 +152,14 @@ export class PluginCapabilityConsentService {
       site
     );
 
+    if (
+      (outcome === "approved-and-pin" || outcome === "approved-once") &&
+      (this.purgeEpochs.get(pluginId) ?? 0) !== epoch
+    ) {
+      throw new Error(
+        `${PLUGIN_CAPABILITY_DENIED_PREFIX}: plugin "${pluginId}" was removed or replaced while its consent prompt was open`
+      );
+    }
     if (outcome === "approved-and-pin") {
       this.consentStore.grant(identity);
       return;
@@ -237,5 +251,6 @@ export class PluginCapabilityConsentService {
   _resetForTest(): void {
     this.bridge = null;
     this.inFlight.clear();
+    this.purgeEpochs.clear();
   }
 }
