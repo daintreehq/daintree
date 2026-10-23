@@ -19,6 +19,7 @@ import type {
 import { isPrivateOrLoopbackHostname } from "../../schemas/pluginIdentifiers.js";
 import { fetchWithPrivateHostGuard } from "../../utils/pluginDownloadPolicy.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
+import { pluralize } from "../../../shared/utils/pluralize.js";
 import { artifactError } from "./pluginArtifactErrors.js";
 import type { ArtifactUrlMatcher } from "./pluginArtifactNetworkPolicy.js";
 import { headersForHop } from "./pluginArtifactNetworkPolicy.js";
@@ -380,7 +381,7 @@ export async function downloadToPart(options: {
   }
   throw artifactError(
     "ARTIFACT_TRANSFER_FAILED",
-    `download failed after ${options.attempts} attempt${options.attempts === 1 ? "" : "s"}: ${formatErrorMessage(lastError, "no attempt succeeded")}`
+    `download failed after ${pluralize(options.attempts, "attempt")}: ${formatErrorMessage(lastError, "no attempt succeeded")}`
   );
 }
 

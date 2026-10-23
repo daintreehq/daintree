@@ -136,7 +136,7 @@ describe("fetchWithPrivateHostGuard — DNS-rebinding guard", () => {
       {}
     );
 
-    expect(result).toEqual({ ok: true, response: ok });
+    expect(result).toEqual({ ok: true, response: ok, url: "https://example.com/p.dntr" });
     expect(netFetch).toHaveBeenCalledTimes(1);
   });
 
@@ -207,7 +207,12 @@ describe("fetchWithPrivateHostGuard — DNS-rebinding guard", () => {
       "https://start.example/p.dntr",
       {}
     );
-    expect(okResult).toEqual({ ok: true, response: expect.objectContaining({ status: 200 }) });
+    // The hop that answered, not the one asked for.
+    expect(okResult).toEqual({
+      ok: true,
+      response: expect.objectContaining({ status: 200 }),
+      url: "https://hop5.example/p.dntr",
+    });
 
     // One redirect past the cap → too-many-redirects.
     const overCap = vi.fn(async () => resp(302, "https://loop.example/p.dntr"));
@@ -232,7 +237,11 @@ describe("fetchWithPrivateHostGuard — DNS-rebinding guard", () => {
       {}
     );
 
-    expect(result).toEqual({ ok: true, response: ok });
+    expect(result).toEqual({
+      ok: true,
+      response: ok,
+      url: "https://unresolvable.example/p.dntr",
+    });
     expect(netFetch).toHaveBeenCalledTimes(1);
   });
 });

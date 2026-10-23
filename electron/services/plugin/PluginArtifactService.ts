@@ -17,6 +17,7 @@ import type {
   PluginArtifactUploadResult,
 } from "../../../shared/types/pluginArtifacts.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
+import { pluralize } from "../../../shared/utils/pluralize.js";
 import { getMimeType } from "../../utils/appProtocol.js";
 import { artifactError } from "./pluginArtifactErrors.js";
 import type { ArtifactUrlMatcher } from "./pluginArtifactNetworkPolicy.js";
@@ -402,7 +403,7 @@ export class PluginArtifactService {
     ) {
       throw artifactError(
         "ARTIFACT_BUSY",
-        `plugin "${pluginId}" already has ${mine.size} transfer${mine.size === 1 ? "" : "s"} running`
+        `plugin "${pluginId}" already has ${pluralize(mine.size, "transfer")} running`
       );
     }
     const controller = new AbortController();
