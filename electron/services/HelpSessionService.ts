@@ -6,6 +6,7 @@ import path from "node:path";
 import { app } from "electron";
 import type { WindowRegistry } from "../window/WindowRegistry.js";
 import { isRemoteEndpointHandle, NO_VIEW_HANDLE } from "../ipc/endpoint.js";
+import { isGlobalAssistantId } from "../../shared/config/globalAssistant.js";
 import { store } from "../store.js";
 import { getHelpFolderPath } from "./HelpService.js";
 import { resilientAtomicWriteFile } from "../utils/fs.js";
@@ -257,6 +258,11 @@ interface ProvisionInput {
    * `NO_VIEW_HANDLE`.
    */
   startedBy?: HelpSessionStartedBy;
+  /**
+   * The installation's one global assistant (#14159): provisioned with no view
+   * and no one to ask, under `GLOBAL_ASSISTANT_ID`, and never a project lane.
+   */
+  global?: true;
 }
 
 /**
@@ -1376,6 +1382,8 @@ export class HelpSessionService {
     if (!record || record.revoked || record.projectViewWebContentsId !== NO_VIEW_HANDLE) {
       return null;
     }
+    // No project to run host actions for: the bare pin fails closed (#14159).
+    if (isGlobalAssistantId(record.projectId)) return null;
     return record.projectId;
   }
 
@@ -1859,6 +1867,7 @@ export class HelpSessionService {
             panelOpenAtDetach: false,
           }
         : {}),
+      ...(input.global ? { outlivesView: true as const } : {}),
       codexLaunchArgs,
       copilotLaunchArgs,
       laneMcpConfigPath,
@@ -3248,7 +3257,13 @@ export class HelpSessionService {
     // No view means another assistant started it, and names which one.
     const noView =
       input.windowId === NO_VIEW_HANDLE && input.projectViewWebContentsId === NO_VIEW_HANDLE;
-    if (noView !== (input.startedBy !== undefined)) {
+    if (input.global === true) {
+      if (!noView || input.startedBy !== undefined || !isGlobalAssistantId(input.projectId)) {
+        throw new Error("The global assistant has no view, no asker and its own id");
+      }
+    } else if (isGlobalAssistantId(input.projectId)) {
+      throw new Error("That project id is reserved for the global assistant");
+    } else if (noView !== (input.startedBy !== undefined)) {
       throw new Error("A session provisioned with no view must say who started it, and only then");
     }
     if (input.startedBy && !isValidStartedBy(input.startedBy)) {

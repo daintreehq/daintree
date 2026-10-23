@@ -429,6 +429,22 @@ async function runShutdownChain(deps: ShutdownDeps): Promise<ShutdownOutcome> {
         console.warn("[MAIN] Assistant lane snapshot at quit failed:", err);
       }
 
+      // The global assistant belongs to no project, so the per-project kills
+      // below never reach it: admission closes and its conversation is
+      // captured here, bounded so a stuck agent cannot hold the quit (#14159).
+      try {
+        const { peekGlobalAssistantService } = await import("../services/globalAssistant.js");
+        const globalAssistant = peekGlobalAssistantService();
+        if (globalAssistant) {
+          await Promise.race([
+            globalAssistant.shutdown(),
+            new Promise<void>((resolve) => setTimeout(resolve, 5_000).unref?.()),
+          ]);
+        }
+      } catch (err) {
+        console.warn("[MAIN] Global assistant shutdown failed:", err);
+      }
+
       const allProjects = projectStore.getAllProjects();
       const projectIds = allProjects.map((p) => p.id);
       // Cap each project's graceful kill independently (in parallel) rather

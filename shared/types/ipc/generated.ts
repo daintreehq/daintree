@@ -1748,6 +1748,38 @@ export interface GeneratedIpcInvokeMap {
     args: [projectId: string];
     result: string[];
   };
+  "help:global-assistant-attach": {
+    args: [];
+    result: import("./help.js").GlobalAssistantAttachment;
+  };
+  "help:global-assistant-claim-input": {
+    args: [attachmentId: string];
+    result: import("./help.js").GlobalAssistantState;
+  };
+  "help:global-assistant-detach": {
+    args: [attachmentId: string];
+    result: void;
+  };
+  "help:global-assistant-discard": {
+    args: [];
+    result: import("./help.js").GlobalAssistantState;
+  };
+  "help:global-assistant-ensure": {
+    args: [];
+    result: import("./help.js").GlobalAssistantState;
+  };
+  "help:global-assistant-release-input": {
+    args: [attachmentId: string];
+    result: import("./help.js").GlobalAssistantState;
+  };
+  "help:global-assistant-restart": {
+    args: [];
+    result: import("./help.js").GlobalAssistantState;
+  };
+  "help:global-assistant-state": {
+    args: [];
+    result: import("./help.js").GlobalAssistantState;
+  };
   "help:list-past-sessions": {
     args: [projectId: string];
     result: import("./help.js").HelpPastSession[];

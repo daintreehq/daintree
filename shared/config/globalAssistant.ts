@@ -1,0 +1,18 @@
+/**
+ * The one Daintree Assistant an installation may run outside any project
+ * (#14159). It is not a project lane: it has no project, no view and no slot
+ * of the project model, so nothing that sweeps lanes by project or by view
+ * can reach it. The id is an opaque workspace id — a spawn naming it resolves
+ * to no Project, so it never inherits the active one.
+ */
+export const GLOBAL_ASSISTANT_ID = "daintree:global-assistant";
+
+/** The lane its resume pointer is stored under, in the project hibernation store. */
+export const GLOBAL_ASSISTANT_SLOT = 0;
+
+/** Folder under userData whose path stands in for the project path, so its session directory is stable. */
+export const GLOBAL_ASSISTANT_DIR_NAME = "global-assistant";
+
+export function isGlobalAssistantId(projectId: string): boolean {
+  return projectId === GLOBAL_ASSISTANT_ID;
+}

@@ -1,3 +1,4 @@
+import { GLOBAL_ASSISTANT_ID } from "../../../shared/config/globalAssistant.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createHash } from "node:crypto";
 import os from "node:os";
@@ -711,6 +712,67 @@ describe("HelpSessionService", () => {
         );
         await vi.waitFor(() => expect(service.validateToken(result.token)).toBe(false));
       });
+    });
+  });
+
+  describe("the global assistant (#14159)", () => {
+    const globalInput = () => ({
+      projectId: GLOBAL_ASSISTANT_ID,
+      projectPath: "/tmp/global-assistant",
+      agentId: "claude",
+      windowId: NO_VIEW_HANDLE,
+      projectViewWebContentsId: NO_VIEW_HANDLE,
+      global: true as const,
+    });
+
+    it("runs with no view, no project route and no asker, and survives its views going", async () => {
+      const result = await service.provisionSession(globalInput());
+      if (!result) throw new Error("expected result");
+      expect(service.markTerminalForToken(result.token, "term-global")).toBe(true);
+
+      expect(service.getWebContentsIdForToken(result.token)).toBe(NO_VIEW_HANDLE);
+      // Fails closed at the MCP server: no project to run host actions for.
+      expect(service.getViewlessProjectForToken(result.token)).toBeNull();
+
+      await service.revokeByWebContentsId(42);
+      await service.revokeByWindowId(7);
+      expect(service.validateToken(result.token)).not.toBe(false);
+    });
+
+    it("does not displace a project's lane, nor is displaced by one", async () => {
+      const lane = await service.provisionSession(provisionInput());
+      const global = await service.provisionSession(globalInput());
+      if (!lane || !global) throw new Error("expected results");
+      expect(service.validateToken(lane.token)).not.toBe(false);
+      expect(service.validateToken(global.token)).not.toBe(false);
+      await service.provisionSession(provisionInput());
+      expect(service.validateToken(global.token)).not.toBe(false);
+    });
+
+    it("ends with its PTY, credentials and all", async () => {
+      const result = await service.provisionSession(globalInput());
+      if (!result) throw new Error("expected result");
+      service.markTerminalForToken(result.token, "term-global");
+      service.handleTerminalExit("term-global");
+      await vi.waitFor(() => expect(service.validateToken(result.token)).toBe(false));
+    });
+
+    it("keeps its id for itself and refuses a view or an asker", async () => {
+      await expect(
+        service.provisionSession({ ...provisionInput(), projectId: GLOBAL_ASSISTANT_ID })
+      ).rejects.toThrow(/reserved/);
+      await expect(
+        service.provisionSession({ ...globalInput(), windowId: 7, projectViewWebContentsId: 42 })
+      ).rejects.toThrow(/no view/);
+      await expect(
+        service.provisionSession({
+          ...globalInput(),
+          startedBy: { kind: "local", askingHelpSessionId: "h" },
+        })
+      ).rejects.toThrow(/no view/);
+      await expect(
+        service.provisionSession({ ...globalInput(), projectId: "proj-1" })
+      ).rejects.toThrow(/own id/);
     });
   });
 
