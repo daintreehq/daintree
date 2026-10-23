@@ -33,37 +33,30 @@ let initialized = false;
 let unsubscribeChanged: (() => void) | null = null;
 
 /**
- * Replace one plugin's reports. Unaffected panels keep their object reference
- * so their subscribers don't re-render.
+ * Replace one plugin's reports. Only panels whose report from this plugin
+ * changed revision get a new object; an equal replay returns `current` itself,
+ * so nothing downstream sees a change that did not happen (#14128).
  */
 function applyPluginActivity(
   current: ActivityByPanelId,
   pluginId: string,
   activity: Record<string, PluginPanelActivityReport>
 ): ActivityByPanelId {
-  const affected = new Set<string>(Object.keys(activity));
+  let next: ActivityByPanelId | null = null;
   for (const [panelId, byPlugin] of Object.entries(current)) {
-    if (pluginId in byPlugin) affected.add(panelId);
+    if (!Object.hasOwn(byPlugin, pluginId) || Object.hasOwn(activity, panelId)) continue;
+    const { [pluginId]: _removed, ...rest } = byPlugin;
+    next ??= { ...current };
+    if (Object.keys(rest).length > 0) next[panelId] = rest;
+    else delete next[panelId];
   }
-  if (affected.size === 0) return current;
-
-  const next: ActivityByPanelId = {};
-  for (const [panelId, byPlugin] of Object.entries(current)) {
-    if (!affected.has(panelId)) next[panelId] = byPlugin;
+  for (const [panelId, report] of Object.entries(activity)) {
+    const byPlugin = current[panelId];
+    if (byPlugin?.[pluginId]?.revision === report.revision) continue;
+    next ??= { ...current };
+    next[panelId] = { ...byPlugin, [pluginId]: report };
   }
-  for (const panelId of affected) {
-    const inner = { ...current[panelId] };
-    delete inner[pluginId];
-    const report = activity[panelId];
-    if (report) {
-      const previous = current[panelId]?.[pluginId];
-      // A replay of the report already held keeps its object, so nothing
-      // downstream sees a change that did not happen.
-      inner[pluginId] = previous?.revision === report.revision ? previous : report;
-    }
-    if (Object.keys(inner).length > 0) next[panelId] = inner;
-  }
-  return next;
+  return next ?? current;
 }
 
 /** Seen marks only outlive their panel's reports by as long as the panel has any. */

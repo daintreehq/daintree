@@ -161,7 +161,14 @@ import {
 import { isAssistantTerminalRecord } from "../assistantTerminal.js";
 import { assertPayloadWithinLimit, snapshotPayload } from "./pluginPayloadLimits.js";
 import { resolveInvokeTimeoutMs, runWithInvokeDeadline } from "./pluginInvokeDeadline.js";
-import { flushPluginPushes, routePluginPush, withPushFlushBarrier } from "./pluginPushBatcher.js";
+import {
+  PLUGIN_STATE_PANEL_ACTIVITY,
+  PLUGIN_STATE_PANEL_BADGES,
+  flushPluginPushes,
+  getPluginStatePublisher,
+  routePluginPush,
+  withPushFlushBarrier,
+} from "./pluginPushBatcher.js";
 import { getPluginPushListenerRegistry } from "./pluginPushListenerRegistry.js";
 import { runWalk, validateWalkCall } from "./pluginFsWalk.js";
 import { checkIgnoredPaths, hasTrackedIgnoredPaths } from "../../utils/gitCheckIgnore.js";
@@ -3107,9 +3114,14 @@ export function createHost(
         }
         panelMap.set(panelId, validated);
       }
-      pushToRenderers(CHANNELS.EVENTS_PUSH, {
-        name: "plugin:panel-badges-changed",
-        payload: { pluginId, badges: deps.serializePluginBadges(pluginId) },
+      // Coalesced: a fleet badged one panel at a time sends the final map once,
+      // not one complete map per panel (#14128).
+      getPluginStatePublisher().publish(PLUGIN_STATE_PANEL_BADGES, pluginId, () => {
+        if (!deps.plugins.has(pluginId)) return;
+        sendToScope(CHANNELS.EVENTS_PUSH, {
+          name: "plugin:panel-badges-changed",
+          payload: { pluginId, badges: deps.serializePluginBadges(pluginId) },
+        });
       });
       return Promise.resolve();
     },
@@ -3143,9 +3155,12 @@ export function createHost(
       const target = entry.panelId;
       let panelMap = deps.pluginPanelActivity.get(pluginId);
       const previous = panelMap?.get(target);
+      // Coalesced like a badge; the flush still delivers this plugin's earlier
+      // panel pushes first.
       const publish = (): void => {
-        flushPluginPushes();
-        deps.emitPanelActivity(pluginId);
+        getPluginStatePublisher().publish(PLUGIN_STATE_PANEL_ACTIVITY, pluginId, () =>
+          deps.emitPanelActivity(pluginId)
+        );
       };
       const drop = (): void => {
         if (!panelMap || previous === undefined) return;

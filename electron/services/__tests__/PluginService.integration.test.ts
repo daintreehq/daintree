@@ -171,6 +171,7 @@ import {
   clearPluginSkillRegistry,
 } from "../plugin/PluginSkillRegistry.js";
 import { broadcastToRenderer } from "../../ipc/utils.js";
+import { flushPluginPushes } from "../plugin/pluginPushBatcher.js";
 
 function makeCtx(pluginId: string, overrides: Partial<PluginIpcContext> = {}): PluginIpcContext {
   return {
@@ -1299,6 +1300,7 @@ describe("PluginService integration — panel badges (#10585)", () => {
     vi.mocked(broadcastToRenderer).mockClear();
 
     host.setPanelBadge("panel-1", { kind: "label", text: "CI", color: "success" });
+    flushPluginPushes();
 
     const payloads = badgeBroadcasts("plugin:panel-badges-changed");
     expect(payloads).toContainEqual({
@@ -1314,6 +1316,7 @@ describe("PluginService integration — panel badges (#10585)", () => {
     vi.mocked(broadcastToRenderer).mockClear();
 
     host.setPanelBadge("p1", null); // clear just p1
+    flushPluginPushes();
 
     const last = badgeBroadcasts("plugin:panel-badges-changed").at(-1) as {
       badges: Record<string, unknown>;
@@ -1358,6 +1361,7 @@ describe("PluginService integration — panel badges (#10585)", () => {
     vi.mocked(broadcastToRenderer).mockClear();
 
     expect(() => host.setPanelBadge("p1", { kind: "dot" })).not.toThrow();
+    flushPluginPushes();
     expect(badgeBroadcasts("plugin:panel-badges-changed")).toEqual([]);
   });
 

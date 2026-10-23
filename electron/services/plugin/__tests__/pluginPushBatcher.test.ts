@@ -7,7 +7,10 @@ vi.mock("../../../ipc/utils.js", () => utilsMock);
 
 import {
   PluginPushBatcher,
+  PluginStatePublisher,
+  flushPluginPushes,
   getPluginPushBatcher,
+  getPluginStatePublisher,
   resetPluginPushBatcherForTests,
   routePluginPush,
   withPushFlushBarrier,
@@ -425,5 +428,112 @@ describe("withPushFlushBarrier", () => {
     // Private fields still work through the wrapper: methods run on the target.
     expect(dispatcher.reload("panel-1")).toBe(1);
     expect(order).toEqual(["push", "reload:panel-1"]);
+  });
+});
+
+describe("PluginStatePublisher (#14128)", () => {
+  beforeEach(() => {
+    resetPluginPushBatcherForTests();
+    utilsMock.getProjectPushTargets.mockReset();
+  });
+
+  function manualPublisher() {
+    const scheduled: Array<() => void> = [];
+    const publisher = new PluginStatePublisher({ schedule: (flush) => scheduled.push(flush) });
+    return { publisher, scheduled };
+  }
+
+  it("schedules nothing until something is published", () => {
+    const { publisher, scheduled } = manualPublisher();
+    publisher.flush();
+    expect(scheduled).toHaveLength(0);
+    expect(publisher.pendingCount()).toBe(0);
+  });
+
+  it("sends a burst of changes to one plugin's state once, reading what is current at flush", () => {
+    const { publisher, scheduled } = manualPublisher();
+    const state = new Map<string, number>();
+    const sent: Array<Record<string, number>> = [];
+    for (let i = 0; i < 100; i++) {
+      state.set(`panel-${i}`, i);
+      publisher.publish("panel-badges", "acme", () => sent.push(Object.fromEntries(state)));
+    }
+    expect(scheduled).toHaveLength(1);
+    expect(publisher.pendingCount()).toBe(1);
+
+    scheduled[0]!();
+    expect(sent).toHaveLength(1);
+    expect(Object.keys(sent[0]!)).toHaveLength(100);
+    expect(publisher.pendingCount()).toBe(0);
+
+    scheduled[0]!();
+    expect(sent).toHaveLength(1);
+  });
+
+  it("keeps kinds and plugins apart, in the order of their latest change", () => {
+    const { publisher, scheduled } = manualPublisher();
+    const order: string[] = [];
+    publisher.publish("panel-badges", "acme", () => order.push("acme:badges"));
+    publisher.publish("panel-activity", "acme", () => order.push("acme:activity"));
+    publisher.publish("panel-badges", "other", () => order.push("other:badges"));
+    publisher.publish("panel-badges", "acme", () => order.push("acme:badges"));
+    scheduled[0]!();
+    expect(order).toEqual(["acme:activity", "other:badges", "acme:badges"]);
+  });
+
+  it("discard drops only that plugin's pending publications", () => {
+    const { publisher, scheduled } = manualPublisher();
+    const sent: string[] = [];
+    publisher.publish("panel-badges", "acme", () => sent.push("acme"));
+    publisher.publish("panel-activity", "acme", () => sent.push("acme"));
+    publisher.publish("panel-badges", "other", () => sent.push("other"));
+    expect([...publisher.discard("acme")].sort()).toEqual(["panel-activity", "panel-badges"]);
+    expect(publisher.discard("acme").size).toBe(0);
+    scheduled[0]!();
+    expect(sent).toEqual(["other"]);
+  });
+
+  it("a test reset leaves a flush already scheduled with nothing to send", () => {
+    const sent: string[] = [];
+    getPluginStatePublisher().publish("panel-badges", "acme", () => sent.push("acme"));
+    const stale = getPluginStatePublisher();
+    resetPluginPushBatcherForTests();
+    stale.flush();
+    expect(sent).toEqual([]);
+  });
+
+  it("a throwing send does not stop the others", () => {
+    const { publisher } = manualPublisher();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const sent: string[] = [];
+    publisher.publish("panel-badges", "acme", () => {
+      throw new Error("boom");
+    });
+    publisher.publish("panel-badges", "other", () => sent.push("other"));
+    publisher.flush();
+    expect(sent).toEqual(["other"]);
+    warn.mockRestore();
+  });
+
+  it("flushPluginPushes delivers earlier panel pushes, then pending state, before a direct send", () => {
+    const order: string[] = [];
+    const a = fakeTarget(1);
+    a.send.mockImplementation(() => order.push("push"));
+    utilsMock.getProjectPushTargets.mockReturnValue([a]);
+
+    routePluginPush({
+      pluginId: "acme",
+      projectId: null,
+      channel: "plugin:acme:tick",
+      panelId: null,
+      payload: 1,
+      bytes: 1,
+    });
+    getPluginStatePublisher().publish("panel-badges", "acme", () => order.push("badges"));
+    const dispatcher = withPushFlushBarrier({ prompt: () => order.push("prompt") });
+    dispatcher.prompt();
+    flushPluginPushes();
+
+    expect(order).toEqual(["push", "badges", "prompt"]);
   });
 });
