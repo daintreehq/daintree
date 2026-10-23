@@ -1760,4 +1760,127 @@ describe("PluginService settings for launch-disabled plugins", () => {
     await svc.setSettingValueFromUi("acme.demo", "apiKey", "xyz", "user", null);
     expect((await svc.getRequiredSettingsStatusForUi("acme.demo", null)).missing).toEqual([]);
   });
+
+  describe("setup checklist (#13824)", () => {
+    const SETUP_MANIFEST = {
+      name: "acme.demo",
+      version: "1.0.0",
+      contributes: {
+        settings: [{ id: "team", type: "string", scope: "user", default: "core" }],
+        account: { kind: "token", label: "Acme token" },
+        commands: [],
+        setup: [
+          { id: "team", title: "Pick a team", done: { kind: "setting", key: "team" } },
+          { id: "connect", title: "Connect", done: { kind: "account" } },
+          {
+            id: "sync",
+            title: "Run the first sync",
+            description: "Pulls your projects",
+            done: { kind: "context", when: "acme.demo.synced" },
+            action: { kind: "command", actionId: "acme.demo.sync" },
+          },
+        ],
+      },
+    } as unknown as PluginManifest;
+
+    it("works each step out from stored state, never from a default", async () => {
+      seedDisabled(SETUP_MANIFEST);
+
+      const before = await svc.getSetupStatusForUi("acme.demo", "proj-a");
+      expect(before.steps).toEqual([
+        {
+          id: "team",
+          title: "Pick a team",
+          description: null,
+          check: { kind: "observed", done: false },
+          action: { kind: "settings", key: "team" },
+          skipped: false,
+        },
+        {
+          id: "connect",
+          title: "Connect",
+          description: null,
+          check: { kind: "observed", done: false },
+          action: { kind: "settings", key: null },
+          skipped: false,
+        },
+        {
+          id: "sync",
+          title: "Run the first sync",
+          description: "Pulls your projects",
+          check: { kind: "context", when: "acme.demo.synced" },
+          action: { kind: "command", actionId: "acme.demo.sync" },
+          skipped: false,
+        },
+      ]);
+
+      await svc.setSettingValueFromUi("acme.demo", "team", "core", "user", null);
+      const after = await svc.getSetupStatusForUi("acme.demo", "proj-a");
+      expect(after.steps[0]?.check).toEqual({ kind: "observed", done: true });
+
+      // Cleared again, the step is outstanding again: nothing was latched.
+      await svc.deleteSettingValueFromUi("acme.demo", "team", "user", null);
+      const cleared = await svc.getSetupStatusForUi("acme.demo", "proj-a");
+      expect(cleared.steps[0]?.check).toEqual({ kind: "observed", done: false });
+    });
+
+    it("answers no steps for a plugin that declares none or isn't loaded", async () => {
+      seedDisabled(manifestWith([{ id: "team", type: "string" } as SettingDefinition]));
+      expect(await svc.getSetupStatusForUi("acme.demo", null)).toEqual({ steps: [] });
+      expect(await svc.getSetupStatusForUi("acme.unknown", null)).toEqual({ steps: [] });
+    });
+
+    it("remembers a skip per project and tells only that project's views", async () => {
+      seedDisabled(SETUP_MANIFEST);
+      ipcViewMocks.broadcastToProjectRenderers.mockClear();
+      broadcastToRendererMock.mockClear();
+
+      svc.setSetupStepSkippedFromUi("proj-a", "acme.demo", "connect", true);
+
+      const skippedIn = async (projectId: string | null) =>
+        (await svc.getSetupStatusForUi("acme.demo", projectId)).steps
+          .filter((step) => step.skipped)
+          .map((step) => step.id);
+      expect(await skippedIn("proj-a")).toEqual(["connect"]);
+      expect(await skippedIn("proj-b")).toEqual([]);
+      expect(await skippedIn(null)).toEqual([]);
+      expect(ipcViewMocks.broadcastToProjectRenderers).toHaveBeenCalledWith(
+        "proj-a",
+        expect.any(String),
+        { name: "plugin:settings-changed", payload: { pluginId: "acme.demo" } }
+      );
+      expect(broadcastToRendererMock).not.toHaveBeenCalled();
+
+      // Asking again changes nothing and announces nothing.
+      ipcViewMocks.broadcastToProjectRenderers.mockClear();
+      svc.setSetupStepSkippedFromUi("proj-a", "acme.demo", "connect", true);
+      expect(ipcViewMocks.broadcastToProjectRenderers).not.toHaveBeenCalled();
+
+      svc.setSetupStepSkippedFromUi("proj-a", "acme.demo", "connect", false);
+      expect(await skippedIn("proj-a")).toEqual([]);
+    });
+
+    it("refuses to remember a skip for a step the plugin doesn't declare", () => {
+      seedDisabled(SETUP_MANIFEST);
+      expect(() => svc.setSetupStepSkippedFromUi("proj-a", "acme.demo", "nope", true)).toThrow();
+      expect(() => svc.setSetupStepSkippedFromUi("proj-a", "acme.unknown", "sync", true)).toThrow();
+    });
+
+    it("runs a project plugin's command in its own instance's namespace", async () => {
+      const instanceId = "project__proj-a__acme.demo";
+      const manifest = {
+        ...SETUP_MANIFEST,
+        contributes: { commands: [], setup: [SETUP_MANIFEST.contributes.setup![2]] },
+      } as unknown as PluginManifest;
+      (svc as unknown as { disabledPlugins: Map<string, unknown> }).disabledPlugins.set(
+        instanceId,
+        { manifest, source: "sideload", installedAt: 0 }
+      );
+      const status = await svc.getSetupStatusForUi(instanceId, "proj-a");
+      expect(status.steps[0]?.action).toEqual({
+        kind: "command",
+        actionId: `${instanceId}.sync`,
+      });
+    });
+  });
 });

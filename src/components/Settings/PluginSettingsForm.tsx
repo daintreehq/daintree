@@ -22,8 +22,10 @@ import {
   accountHomeOf,
   pluginDeclaresSettingsView,
   settingsForHome,
+  setupHomeOf,
 } from "@/services/plugin/pluginSettingsHome";
 import { PluginAccountRow } from "@/components/Settings/PluginAccountRow";
+import { PluginSetupSettingsGroup } from "@/components/Plugin/PluginSetupChecklist";
 import { actionService } from "@/services/ActionService";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -899,6 +901,7 @@ export function PluginSettingsForm({
   const accountHome = accountHomeOf(plugin);
   const showAccount = account !== undefined && accountHome === home;
   const accountElsewhere = account !== undefined && accountHome !== home;
+  const showSetup = setupHomeOf(plugin) === home;
   const projectId = useProjectStore((s) => s.currentProject?.id ?? null);
 
   const [reloadKey, setReloadKey] = useState(0);
@@ -981,7 +984,8 @@ export function PluginSettingsForm({
     elsewhere.length === 0 &&
     !hasView &&
     !showAccount &&
-    !accountElsewhere
+    !accountElsewhere &&
+    !showSetup
   ) {
     return null;
   }
@@ -1010,6 +1014,7 @@ export function PluginSettingsForm({
           onRetry={() => setReloadKey((k) => k + 1)}
         />
       )}
+      {showSetup && <PluginSetupSettingsGroup key={plugin.loadedAt} pluginId={pluginId} />}
       {showAccount && (
         // Remounted on reload: a changed declaration starts from a fresh read.
         <PluginAccountRow

@@ -3160,7 +3160,83 @@ export interface PluginManifest {
      * through `host.account`. A project plugin's account is per project.
      */
     account?: PluginAccountContribution;
+    /**
+     * A short setup checklist (#13824), shown on the plugin's setup strip and
+     * at the top of its settings. The host works out which steps are done from
+     * what it can see; only the user's "Skip" is remembered, per project.
+     * Optional in the type but always materialized by the manifest schema's
+     * `.default([])`, like `agentMcp`.
+     */
+    setup?: PluginSetupStepContribution[];
   };
+}
+
+/**
+ * How the host tells a setup step is done. Never stored: a cleared setting, a
+ * disconnected account or a context key that turns false makes the step
+ * outstanding again.
+ *
+ * - `setting`: the declared setting `key` has a stored value. A declared
+ *   `default` doesn't count, the same rule `required` settings follow.
+ * - `account`: the plugin's `contributes.account` is connected.
+ * - `context`: the `when` clause holds over the context keys plugins publish
+ *   with `host.setContext`, written `publisher.name.key`.
+ */
+export type PluginSetupStepDone =
+  { kind: "setting"; key: string } | { kind: "account" } | { kind: "context"; when: string };
+
+/**
+ * What clicking a setup step does.
+ *
+ * - `settings`: open the plugin's settings, at the declared setting `key` when
+ *   one is given.
+ * - `command`: run one of the plugin's own commands, written
+ *   `"<manifest name>.<id>"` like every other action reference in the manifest.
+ *   It runs with no arguments.
+ */
+export type PluginSetupStepAction =
+  { kind: "settings"; key?: string } | { kind: "command"; actionId: string };
+
+/** One `contributes.setup` entry (#13824). */
+export interface PluginSetupStepContribution {
+  /** Unique within the plugin; what a skip is remembered by. */
+  id: string;
+  title: string;
+  description?: string;
+  done: PluginSetupStepDone;
+  /**
+   * Defaults to opening the step's setting for a `setting` step and the
+   * plugin's settings for an `account` step. A `context` step has none unless
+   * it declares one.
+   */
+  action?: PluginSetupStepAction;
+}
+
+/** A setup step's action as the renderer runs it: a command already in the instance's namespace. */
+export type PluginSetupStepUiAction =
+  { kind: "settings"; key: string | null } | { kind: "command"; actionId: string };
+
+/**
+ * What the host saw for one setup step. A `context` step carries its clause
+ * instead of an answer: the renderer evaluates it against the context keys its
+ * own view mirrors.
+ */
+export type PluginSetupStepCheck =
+  { kind: "observed"; done: boolean } | { kind: "context"; when: string };
+
+export interface PluginSetupStepUiStatus {
+  id: string;
+  title: string;
+  description: string | null;
+  check: PluginSetupStepCheck;
+  action: PluginSetupStepUiAction | null;
+  /** The user skipped this step in the requested project. Always false with no project. */
+  skipped: boolean;
+}
+
+/** A plugin's setup checklist, in manifest order; empty when it declares none. */
+export interface PluginSetupUiStatus {
+  steps: PluginSetupStepUiStatus[];
 }
 
 /** Where "Connected as …" comes from: a bearer GET whose JSON holds the name at `field`. */

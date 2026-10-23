@@ -33,6 +33,7 @@ A plugin that declares `"scope": "project"` lives in a project's own repository 
 | `recipes` | Available — only in the owning project's launcher, empty state and recipe manager, and gone while the plugin is switched off or its folder is untrusted. A terminal may use `terminal`, `dev-preview`, `plugin-panel` for one of the plugin's own panels, or a built-in agent; `agents` is rejected below, so there is no plugin agent of its own to name |
 | `promptTemplates` | Available — offered only in the owning project's composer, and gone while the plugin is switched off or its folder is untrusted |
 | `worktreeSetupSteps` | Available — run only for worktrees created in the owning project |
+| `setup` | Available — the checklist shows on the owning project's panels and in Project settings, and its skips are that project's |
 | `terminalLinks` | Available — matched only in the owning project's terminals, and gone while the plugin is switched off or its folder is untrusted |
 | `menuItems` | Rejected — the application menu is one OS-level menu shared by every window, with no per-project projection |
 | `agents` | Rejected — the agent roster is one app-wide registry mirrored into the shared pty-host, and launch identity outlives the project binding |
@@ -1805,6 +1806,72 @@ Adds the plugin's notes to a worktree's delete confirmation: things the plugin k
 Declaring the check is what lets a delete confirmation find the plugin before its code has run. When a delete is confirmed (the delete dialog, bulk remove, an agent's request over MCP, or the confirmation put to someone when no window is open), every plugin with a check that the project shows is asked about the worktree, activating it first if it isn't running. The dialogs open straight away and fill in each plugin's notes as they arrive; the no-window confirmation is sent once every plugin has answered or run out of time. A plugin that hasn't answered within 3 seconds, activation included, or that fails, is shown as "<plugin> didn't answer".
 
 Notes only annotate. They never cancel a delete, change its confirmation tier or alter its typed confirmation. The user can turn a plugin's notes off from its Permissions tab, and the plugin is then not asked. No capability is needed.
+
+## Setup checklist — _Shipped_
+
+A short list of what the plugin needs before it's useful: connect an account, choose a default, run a first sync. Daintree shows it on the plugin's panels as "Acme setup · 1 of 3" while a step is outstanding, opens the steps in a popover from there, and lists them at the top of the plugin's settings (the plugin manager for an installed plugin, Project settings for a project plugin).
+
+```json
+{
+  "contributes": {
+    "account": { "kind": "token", "label": "Acme API token" },
+    "settings": [{ "id": "workspace", "label": "Workspace", "type": "string" }],
+    "commands": [
+      {
+        "id": "sync",
+        "title": "Run first sync",
+        "description": "Pull your Acme projects",
+        "category": "Acme",
+        "kind": "command",
+        "danger": "safe"
+      }
+    ],
+    "setup": [
+      { "id": "connect", "title": "Connect your Acme account", "done": { "kind": "account" } },
+      {
+        "id": "workspace",
+        "title": "Choose a workspace",
+        "description": "Issues are read from this workspace",
+        "done": { "kind": "setting", "key": "workspace" }
+      },
+      {
+        "id": "sync",
+        "title": "Run the first sync",
+        "done": { "kind": "context", "when": "acme.tracker.synced" },
+        "action": { "kind": "command", "actionId": "acme.tracker.sync" }
+      }
+    ]
+  }
+}
+```
+
+**Fields:**
+
+| Field         | Required | Notes                                                   |
+| ------------- | -------- | ------------------------------------------------------- |
+| `id`          | yes      | Unique within the plugin. What a skip is remembered by. |
+| `title`       | yes      | Up to 80 characters.                                    |
+| `description` | no       | Up to 200 characters, under the title.                  |
+| `done`        | yes      | How the host tells the step is done; see below.         |
+| `action`      | no       | What clicking the step does; see below.                 |
+
+At most 10 steps per plugin.
+
+**Done is observed, never stored.** The host works it out each time from state it can see, so a cleared setting, a disconnected account or a context key that turns false makes the step outstanding again. There is no API for a plugin to mark a step done.
+
+| `done` | The step is done when |
+| --- | --- |
+| `{ "kind": "setting", "key": "<id>" }` | the declared setting has a stored value. A declared `default` doesn't count, the same rule as `required`. |
+| `{ "kind": "account" }` | the plugin's `contributes.account` is connected. |
+| `{ "kind": "context", "when": "<clause>" }` | the `when` clause holds over the context keys plugins publish with [`host.setContext`](./host-api.md#setcontext), written `publisher.name.key`. |
+
+**Actions.** `{ "kind": "settings", "key"?: "<id>" }` opens the plugin's settings, at that setting when `key` is given. `{ "kind": "command", "actionId": "<name>.<id>" }` runs one of the plugin's own commands with no arguments, written in your manifest namespace like a toolbar button's `actionId`; a project plugin's is rewritten to its instance for you. Without an `action`, a `setting` step opens its setting, an `account` step opens the plugin's settings, and a `context` step has no button.
+
+**Validation.** A `setting` step's `key` and a `settings` action's `key` must name a declared setting (`setup_setting_unknown`), an `account` step needs `contributes.account` (`setup_account_undeclared`), a `when` clause must parse (`setup_when_invalid`), and a command must be your own (`setup_command_not_own`) and match a declared command when you declare any (`action_id_undeclared_command`).
+
+**Skip.** Each outstanding step has a **Skip**, remembered per project in Daintree's own settings, never the repository, and undone from the same row. The strip goes away once every step is done or skipped; if a `required` setting is still unset then, its "needs setup" strip takes over. With no project open, the settings checklist shows what the host can see and offers no skip.
+
+**Never modal, never automatic.** Nothing opens on its own: no dialog on install, nothing from `activate()`. The user reaches the steps from the strip or the settings.
 
 ## File editors — _Shipped_
 

@@ -204,6 +204,11 @@ export interface PanelKindConfig {
    */
   hasRequiredSettings?: boolean;
   /**
+   * The owning plugin declares a `contributes.setup` checklist, so the kind's
+   * host shows its setup strip while a step is still outstanding.
+   */
+  hasSetupSteps?: boolean;
+  /**
    * The owning plugin declares `contributes.databases`, so the kind's menus
    * offer "Back up data…". Absent for built-ins and plugins with none.
    */

@@ -1,4 +1,4 @@
-import { useEffect, useState, useSyncExternalStore } from "react";
+import { useEffect, useId, useState, useSyncExternalStore } from "react";
 import {
   getPanelKindRegistrySnapshot,
   subscribeToPanelKindRegistry,
@@ -8,10 +8,19 @@ import {
   type PluginRequiredSettingsStatus,
 } from "@shared/types/plugin";
 import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
+import { Button } from "@/components/ui/button";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import {
+  POPOVER_HEADER_CLASS,
+  POPOVER_HEADER_META_CLASS,
+  POPOVER_TITLE_CLASS,
+} from "@/components/ui/popoverHeader";
+import { usePluginSetupStatus, type PluginSetupState } from "@/hooks/usePluginSetupStatus";
 import { actionService } from "@/services/ActionService";
 import { usePluginRuntimeStore } from "@/store/pluginRuntimeStore";
 import { useProjectStore } from "@/store/projectStore";
 import { logError } from "@/utils/logger";
+import { PluginSetupChecklist } from "./PluginSetupChecklist";
 
 /**
  * "<Plugin> needs setup", above a plugin surface whose plugin declares a
@@ -36,6 +45,12 @@ import { logError } from "@/utils/logger";
  * leave the panel silent while `host.settings.missingRequired()` tells the
  * plugin the same key is unusable. An unset key takes precedence: the setup
  * prompt is the one the user can act on directly.
+ *
+ * A plugin that declares a `contributes.setup` checklist (#13824) gets one
+ * strip for it instead — "<Plugin> setup · 2 of 3" — while any step is neither
+ * done nor skipped, and the steps open in a popover from it. Once every step is
+ * handled, the required-settings prompt above takes over again, so a required
+ * key the checklist doesn't cover is still asked for.
  */
 export function PluginSetupStrip({ pluginId }: { pluginId: string }) {
   const projectId = useProjectStore((s) => s.currentProject?.id ?? null);
@@ -45,6 +60,7 @@ export function PluginSetupStrip({ pluginId }: { pluginId: string }) {
   const initPluginRuntime = usePluginRuntimeStore((s) => s.init);
   useEffect(() => initPluginRuntime(), [initPluginRuntime]);
   const [status, setStatus] = useState<PluginRequiredSettingsStatus>(EMPTY_STATUS);
+  const setup = usePluginSetupStatus(pluginId, projectId);
 
   useEffect(() => {
     const bridge = window.electron?.plugin;
@@ -75,6 +91,20 @@ export function PluginSetupStrip({ pluginId }: { pluginId: string }) {
       unsubscribe?.();
     };
   }, [pluginId, projectId]);
+
+  // Waiting on the checklist read keeps a plugin with both from showing the
+  // required prompt for a moment and then swapping it out.
+  if (!setup.loaded) return null;
+  if (setup.handled < setup.total) {
+    return (
+      <PluginSetupChecklistStrip
+        pluginId={pluginId}
+        displayName={displayName}
+        setup={setup}
+        canSkip={projectId !== null}
+      />
+    );
+  }
 
   const firstMissing = status.missing[0];
   const firstUnreadable = status.unreadable[0];
@@ -114,11 +144,69 @@ export function PluginSetupStrip({ pluginId }: { pluginId: string }) {
 
 const EMPTY_STATUS: PluginRequiredSettingsStatus = { missing: [], unreadable: [], labels: {} };
 
+function PluginSetupChecklistStrip({
+  pluginId,
+  displayName,
+  setup,
+  canSkip,
+}: {
+  pluginId: string;
+  displayName: string;
+  setup: PluginSetupState;
+  canSkip: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const headingId = useId();
+  const progress = `${setup.handled} of ${setup.total}`;
+  return (
+    <div className="shrink-0" data-testid="plugin-setup-strip">
+      <InlineStatusBanner
+        title={`${displayName} setup · ${progress}`}
+        severity="neutral"
+        role="status"
+        layout="inline"
+        trailingSlot={
+          <Popover open={open} onOpenChange={setOpen}>
+            <PopoverTrigger asChild>
+              <Button
+                variant="outline"
+                size="xs"
+                className="shadow-none inset-shadow-none aria-expanded:bg-overlay-hover"
+                data-notification-action="primary"
+              >
+                Setup steps
+              </Button>
+            </PopoverTrigger>
+            <PopoverContent className="w-96 p-0" aria-labelledby={headingId}>
+              <div className={POPOVER_HEADER_CLASS}>
+                <span id={headingId} className={POPOVER_TITLE_CLASS}>
+                  {displayName} setup
+                </span>
+                <span className={POPOVER_HEADER_META_CLASS}>{progress}</span>
+              </div>
+              <PluginSetupChecklist
+                pluginId={pluginId}
+                rows={setup.rows}
+                canSkip={canSkip}
+                onSetSkipped={setup.setSkipped}
+                saveErrorStepId={setup.saveErrorStepId}
+                variant="plain"
+                onAction={() => setOpen(false)}
+              />
+            </PopoverContent>
+          </Popover>
+        }
+      />
+    </div>
+  );
+}
+
 /**
  * The strip for a surface identified by its panel kind — a PTY-backed plugin
  * panel or a project surface — read reactively off the kind registry, so a
  * plugin reload that adds or drops a required setting takes effect at once.
- * Renders nothing for a built-in kind or a plugin with nothing required.
+ * Renders nothing for a built-in kind or a plugin with nothing required and no
+ * setup steps.
  */
 export function PluginKindSetupStrip({ kind }: { kind: string }) {
   const registry = useSyncExternalStore(
@@ -127,6 +215,11 @@ export function PluginKindSetupStrip({ kind }: { kind: string }) {
     getPanelKindRegistrySnapshot
   );
   const config = registry[kind];
-  if (config?.hasRequiredSettings !== true || !config.extensionId) return null;
+  if (
+    (config?.hasRequiredSettings !== true && config?.hasSetupSteps !== true) ||
+    !config.extensionId
+  ) {
+    return null;
+  }
   return <PluginSetupStrip pluginId={config.extensionId} />;
 }

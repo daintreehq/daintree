@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 
 const dispatch = vi.hoisted(() => vi.fn());
 vi.mock("@/services/ActionService", () => ({ actionService: { dispatch } }));
@@ -26,6 +26,8 @@ vi.mock("@/store/pluginRuntimeStore", () => ({
 
 import { PluginKindSetupStrip, PluginSetupStrip } from "../PluginSetupStrip";
 import { registerPanelKind, unregisterPanelKind } from "@shared/config/panelKindRegistry";
+import type { PluginSetupStepUiStatus, PluginSetupUiStatus } from "@shared/types/plugin";
+import { _resetPluginContextKeyStoreForTest } from "@/store/pluginContextKeyStore";
 
 const getRequiredSettingsStatus = vi.fn();
 let settingsListeners: Array<(payload: { pluginId: string }) => void> = [];
@@ -152,6 +154,181 @@ describe("PluginSetupStrip", () => {
 
     const strip = await screen.findByTestId("plugin-setup-strip");
     expect(strip.textContent).toContain("Linear needs setup");
+  });
+});
+
+describe("PluginSetupStrip with a setup checklist (#13824)", () => {
+  const getSetupStatus =
+    vi.fn<(pluginId: string, projectId: string | null) => Promise<PluginSetupUiStatus>>();
+  const setSetupStepSkipped =
+    vi.fn<(pluginId: string, stepId: string, skipped: boolean) => Promise<void>>();
+  let contextListeners: Array<
+    (payload: { pluginId: string; keys: Record<string, unknown> | null }) => void
+  > = [];
+
+  const step = (
+    id: string,
+    check: PluginSetupStepUiStatus["check"],
+    action: PluginSetupStepUiStatus["action"],
+    skipped = false
+  ): PluginSetupStepUiStatus => ({
+    id,
+    title: `Step ${id}`,
+    description: null,
+    check,
+    action,
+    skipped,
+  });
+
+  const STEPS = [
+    step("connect", { kind: "observed", done: true }, { kind: "settings", key: null }),
+    step("team", { kind: "observed", done: false }, { kind: "settings", key: "team" }),
+    step(
+      "sync",
+      { kind: "context", when: "acme.linear.synced" },
+      { kind: "command", actionId: "acme.linear.sync" }
+    ),
+  ];
+
+  beforeEach(() => {
+    _resetPluginContextKeyStoreForTest();
+    contextListeners = [];
+    getSetupStatus.mockResolvedValue({ steps: STEPS });
+    setSetupStepSkipped.mockResolvedValue(undefined);
+    getRequiredSettingsStatus.mockResolvedValue({ missing: [], unreadable: [], labels: {} });
+    Object.assign(window.electron.plugin, {
+      getSetupStatus,
+      setSetupStepSkipped,
+      onContextKeysChanged: (
+        cb: (payload: { pluginId: string; keys: Record<string, unknown> | null }) => void
+      ) => {
+        contextListeners.push(cb);
+        return () => {
+          contextListeners = contextListeners.filter((l) => l !== cb);
+        };
+      },
+    });
+  });
+
+  afterEach(() => {
+    _resetPluginContextKeyStoreForTest();
+  });
+
+  async function openSteps() {
+    fireEvent.click(await screen.findByRole("button", { name: "Setup steps" }));
+    return screen.findByText("Step team");
+  }
+
+  it("shows progress over the declared steps and lists them in a popover", async () => {
+    render(<PluginSetupStrip pluginId="acme.linear" />);
+
+    const strip = await screen.findByTestId("plugin-setup-strip");
+    await waitFor(() => expect(strip.textContent).toContain("Linear setup · 1 of 3"));
+    expect(strip.textContent).not.toContain("needs setup");
+    expect(getSetupStatus).toHaveBeenCalledWith("acme.linear", "proj-1");
+
+    await openSteps();
+    const connect = document.querySelector('[data-setup-step="connect"]');
+    expect(connect?.textContent).toContain("Done");
+    // A done step has nothing to skip.
+    expect(screen.queryByRole("button", { name: "Skip: Step connect" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Skip: Step team" })).toBeTruthy();
+  });
+
+  it("counts a context step as done once the plugin publishes the key", async () => {
+    render(<PluginSetupStrip pluginId="acme.linear" />);
+    const strip = await screen.findByTestId("plugin-setup-strip");
+    await waitFor(() => expect(strip.textContent).toContain("1 of 3"));
+
+    await act(async () => {
+      for (const listener of contextListeners) {
+        listener({ pluginId: "acme.linear", keys: { synced: true } });
+      }
+    });
+    expect(strip.textContent).toContain("2 of 3");
+    // Observed on this side alone: main wasn't asked again.
+    expect(getSetupStatus).toHaveBeenCalledTimes(1);
+  });
+
+  it("opens a step's setting, and runs a step's command, from its row", async () => {
+    render(<PluginSetupStrip pluginId="acme.linear" />);
+    await openSteps();
+
+    fireEvent.click(
+      within(document.querySelector('[data-setup-step="team"]')!).getByRole("button", {
+        name: "Open setting",
+      })
+    );
+    expect(dispatch).toHaveBeenCalledWith(
+      "plugin.openSettings",
+      { pluginId: "acme.linear", key: "team" },
+      { source: "user" }
+    );
+
+    await openSteps();
+    fireEvent.click(screen.getByRole("button", { name: "Run" }));
+    expect(dispatch).toHaveBeenCalledWith("acme.linear.sync", undefined, { source: "user" });
+  });
+
+  it("skips a step, and gives way to the required prompt once every step is handled", async () => {
+    getRequiredSettingsStatus.mockResolvedValue({
+      missing: ["apiKey"],
+      unreadable: [],
+      labels: {},
+    });
+    render(<PluginSetupStrip pluginId="acme.linear" />);
+    await openSteps();
+
+    fireEvent.click(screen.getByRole("button", { name: "Skip: Step team" }));
+    expect(setSetupStepSkipped).toHaveBeenCalledWith("acme.linear", "team", true);
+
+    getSetupStatus.mockResolvedValue({
+      steps: [
+        STEPS[0]!,
+        { ...STEPS[1]!, skipped: true },
+        { ...STEPS[2]!, check: { kind: "observed", done: true } },
+      ],
+    });
+    await act(async () => announce("acme.linear"));
+    await waitFor(() =>
+      expect(screen.getByTestId("plugin-setup-strip").textContent).toContain("Linear needs setup")
+    );
+  });
+
+  it("offers no skip with no project open, since a skip is remembered per project", async () => {
+    currentProjectId = null;
+    render(<PluginSetupStrip pluginId="acme.linear" />);
+    await openSteps();
+    expect(screen.queryByRole("button", { name: /^Skip/ })).toBeNull();
+  });
+
+  it("says when a skip couldn't be saved", async () => {
+    setSetupStepSkipped.mockRejectedValue(new Error("disk full"));
+    render(<PluginSetupStrip pluginId="acme.linear" />);
+    await openSteps();
+    fireEvent.click(screen.getByRole("button", { name: "Skip: Step team" }));
+    expect(await screen.findByText("Couldn't save this choice")).toBeTruthy();
+  });
+
+  it("draws the strip for a kind whose plugin declares setup steps", async () => {
+    registerPanelKind({
+      id: "acme.linear.shell",
+      name: "Linear shell",
+      iconId: "terminal",
+      color: "#abcdef",
+      hasPty: true,
+      canRestart: false,
+      canConvert: false,
+      extensionId: "acme.linear",
+      hasSetupSteps: true,
+    });
+    try {
+      render(<PluginKindSetupStrip kind="acme.linear.shell" />);
+      const strip = await screen.findByTestId("plugin-setup-strip");
+      await waitFor(() => expect(strip.textContent).toContain("Linear setup · 1 of 3"));
+    } finally {
+      unregisterPanelKind("acme.linear.shell");
+    }
   });
 });
 

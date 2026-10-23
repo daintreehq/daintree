@@ -490,6 +490,8 @@ export const CHANNEL_LEASE_POLICY = {
   "plugin:settings-required-status": "free",
   "plugin:task-cancel": "driver",
   "plugin:task-dismiss": "free",
+  "plugin:setup-status": "free",
+  "plugin:setup-step-skipped-set": "driver",
   "plugin:account-status": "free",
   "plugin:account-connect": "free",
   "plugin:account-cancel-connect": "free",
@@ -915,6 +917,7 @@ export const CHANNEL_LEASE_TARGETS = {
   // plugin's task is always the caller's project's; an app-wide one's, the
   // caller's too.
   "plugin:task-cancel": CALLER,
+  "plugin:setup-step-skipped-set": CALLER,
   "plugin:search-provider-shown-set": CALLER,
   "plugin:context-providers-enabled-set": CALLER,
   "plugin:project-surface-choice-set": CALLER,

@@ -36,7 +36,8 @@ export function pluginHasSettings(plugin: LoadedPluginInfo): boolean {
   return (
     (plugin.manifest.contributes.settings?.length ?? 0) > 0 ||
     pluginDeclaresSettingsView(plugin) ||
-    plugin.manifest.contributes.account !== undefined
+    plugin.manifest.contributes.account !== undefined ||
+    (plugin.manifest.contributes.setup?.length ?? 0) > 0
   );
 }
 
@@ -48,6 +49,16 @@ export function pluginHasSettings(plugin: LoadedPluginInfo): boolean {
  */
 export function accountHomeOf(plugin: LoadedPluginInfo): PluginSettingsHome | null {
   if (plugin.manifest.contributes.account === undefined) return null;
+  return plugin.origin === "project" ? "project" : "manager";
+}
+
+/**
+ * Where a plugin's `contributes.setup` checklist sits at the top of the
+ * settings, or `null` when it declares none: beside its account, for the same
+ * reason.
+ */
+export function setupHomeOf(plugin: LoadedPluginInfo): PluginSettingsHome | null {
+  if ((plugin.manifest.contributes.setup?.length ?? 0) === 0) return null;
   return plugin.origin === "project" ? "project" : "manager";
 }
 
@@ -127,7 +138,8 @@ export function resolvePluginSettingsTarget(
     const managerHasContent =
       settingsForHome(plugin, "manager").length > 0 ||
       pluginDeclaresSettingsView(plugin) ||
-      accountHomeOf(plugin) === "manager";
+      accountHomeOf(plugin) === "manager" ||
+      setupHomeOf(plugin) === "manager";
     home = managerHasContent ? "manager" : "project";
   }
   if (home === "project" && projectId === null) return { ok: false, reason: "needs-project" };

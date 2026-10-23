@@ -85,6 +85,8 @@ export const PLUGIN_METHOD_CHANNELS = {
   deleteSettingValue: "plugin:settings-delete-value",
   revealSecretSetting: "plugin:settings-reveal-secret",
   getRequiredSettingsStatus: "plugin:settings-required-status",
+  getSetupStatus: "plugin:setup-status",
+  setSetupStepSkipped: "plugin:setup-step-skipped-set",
   getAccountStatus: "plugin:account-status",
   connectAccount: "plugin:account-connect",
   cancelAccountConnect: "plugin:account-cancel-connect",

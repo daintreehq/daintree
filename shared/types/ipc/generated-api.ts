@@ -921,6 +921,9 @@ export interface GeneratedElectronAPI {
     getSettingValues(
       ...args: IpcInvokeMap["plugin:settings-get-values"]["args"]
     ): Promise<IpcInvokeMap["plugin:settings-get-values"]["result"]>;
+    getSetupStatus(
+      ...args: IpcInvokeMap["plugin:setup-status"]["args"]
+    ): Promise<IpcInvokeMap["plugin:setup-status"]["result"]>;
     getThemes(
       ...args: IpcInvokeMap["plugin:themes-get"]["args"]
     ): Promise<IpcInvokeMap["plugin:themes-get"]["result"]>;
@@ -1047,6 +1050,9 @@ export interface GeneratedElectronAPI {
     setSettingValue(
       ...args: IpcInvokeMap["plugin:settings-set-value"]["args"]
     ): Promise<IpcInvokeMap["plugin:settings-set-value"]["result"]>;
+    setSetupStepSkipped(
+      ...args: IpcInvokeMap["plugin:setup-step-skipped-set"]["args"]
+    ): Promise<IpcInvokeMap["plugin:setup-step-skipped-set"]["result"]>;
     toolbarButtons(
       ...args: IpcInvokeMap["plugin:toolbar-buttons"]["args"]
     ): Promise<IpcInvokeMap["plugin:toolbar-buttons"]["result"]>;

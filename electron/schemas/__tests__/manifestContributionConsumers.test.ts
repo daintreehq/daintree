@@ -53,6 +53,12 @@ import {
   TourContributionSchema,
   ViewContributionSchema,
   WorktreeSetupStepContributionSchema,
+  SetupStepContributionSchema,
+  SetupStepSettingDoneSchema,
+  SetupStepAccountDoneSchema,
+  SetupStepContextDoneSchema,
+  SetupStepSettingsActionSchema,
+  SetupStepCommandActionSchema,
 } from "../plugin.js";
 
 /**
@@ -147,6 +153,9 @@ const GENERIC_PANEL_MENU = "src/components/Panel/genericPanelMenu.ts";
 const PLUGIN_PANEL_TOOLBAR = "src/components/Panel/PluginPanelToolbar.tsx";
 const SIDEBAR_VIEWS = "src/lib/sidebarViews.ts";
 const SIDEBAR_VIEW_HOST = "src/components/Sidebar/SidebarViewHost.tsx";
+const PLUGIN_SETUP_CHECKLIST = "src/components/Plugin/PluginSetupChecklist.tsx";
+const PLUGIN_SETUP_PROGRESS = "src/services/plugin/pluginSetupProgress.ts";
+const PLUGIN_SETUP_SKIPS = "electron/services/plugin/projectPluginSetupSkips.ts";
 const SIDEBAR_VIEW_SWITCHER = "src/components/Sidebar/SidebarViewSwitcher.tsx";
 const LAUNCH_ENTRY_REGISTRY = "shared/config/pluginLaunchEntryRegistry.ts";
 const DOCK_LAUNCH_ITEMS = "src/components/Layout/dockLaunchItems.ts";
@@ -193,6 +202,7 @@ const SWEPT_SCHEMAS = {
   tours: TourContributionSchema,
   databases: DatabaseContributionSchema,
   worktreeSetupSteps: WorktreeSetupStepContributionSchema,
+  setup: SetupStepContributionSchema,
   surfaces: SurfaceContributionsSchema,
   "databases.queries": DatabaseQueryContributionSchema,
   "databases.queries.params": DatabaseQueryParamSchema,
@@ -214,6 +224,11 @@ const SWEPT_SCHEMAS = {
   "forgeProviders.slots": ForgeProviderContributionSchema.shape.slots,
   "tours.chapters": TourChapterSchema,
   "tours.chapters.captions": TourCaptionSchema,
+  "setup.done.setting": SetupStepSettingDoneSchema,
+  "setup.done.account": SetupStepAccountDoneSchema,
+  "setup.done.context": SetupStepContextDoneSchema,
+  "setup.action.settings": SetupStepSettingsActionSchema,
+  "setup.action.command": SetupStepCommandActionSchema,
 } as const;
 
 type SweptGroup = keyof typeof SWEPT_SCHEMAS;
@@ -254,6 +269,7 @@ const TOP_LEVEL_GROUPS = [
   "tours",
   "databases",
   "worktreeSetupSteps",
+  "setup",
   "surfaces",
 ] as const;
 
@@ -380,6 +396,27 @@ type FieldConsumerCoverage = {
   tours: Record<keyof z.infer<typeof TourContributionSchema>, ConsumerDescriptor>;
   "tours.chapters": Record<keyof z.infer<typeof TourChapterSchema>, ConsumerDescriptor>;
   "tours.chapters.captions": Record<keyof z.infer<typeof TourCaptionSchema>, ConsumerDescriptor>;
+  setup: Record<keyof z.infer<typeof SetupStepContributionSchema>, ConsumerDescriptor>;
+  "setup.done.setting": Record<
+    keyof z.infer<typeof SetupStepSettingDoneSchema>,
+    ConsumerDescriptor
+  >;
+  "setup.done.account": Record<
+    keyof z.infer<typeof SetupStepAccountDoneSchema>,
+    ConsumerDescriptor
+  >;
+  "setup.done.context": Record<
+    keyof z.infer<typeof SetupStepContextDoneSchema>,
+    ConsumerDescriptor
+  >;
+  "setup.action.settings": Record<
+    keyof z.infer<typeof SetupStepSettingsActionSchema>,
+    ConsumerDescriptor
+  >;
+  "setup.action.command": Record<
+    keyof z.infer<typeof SetupStepCommandActionSchema>,
+    ConsumerDescriptor
+  >;
 };
 
 const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
@@ -1773,6 +1810,131 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
       mode: "verbatim",
       consumers: [{ file: WORKTREE_SETUP_RPC, symbol: "WorktreeSetupRpcServer.runStep" }],
       note: "The step's deadline: its signal aborts and it is recorded as timed out. Part of what is approved.",
+    },
+  },
+  setup: {
+    id: {
+      mode: "verbatim",
+      consumers: [
+        { file: PLUGIN_SERVICE, symbol: "getSetupStatusForUi / setSetupStepSkippedFromUi" },
+        { file: PLUGIN_SETUP_SKIPS, symbol: "setProjectPluginSetupStepSkipped" },
+      ],
+      note: "What a skip is remembered by, per project; a skip for an undeclared step is refused.",
+    },
+    title: {
+      mode: "verbatim",
+      consumers: [{ file: PLUGIN_SETUP_CHECKLIST, symbol: "PluginSetupChecklist (row label)" }],
+      note: "The step's row label on the setup strip's popover and the settings checklist.",
+    },
+    description: {
+      mode: "verbatim",
+      consumers: [
+        { file: PLUGIN_SETUP_CHECKLIST, symbol: "PluginSetupChecklist (row description)" },
+      ],
+      note: "The step's row description.",
+    },
+    done: {
+      mode: "derived-input",
+      consumers: [
+        { file: PLUGIN_SERVICE, symbol: "getSetupStatusForUi (check)" },
+        { file: PLUGIN_SETUP_PROGRESS, symbol: "resolvePluginSetupProgress" },
+      ],
+      note: "Which host-observable state decides the step is done; never stored.",
+    },
+    action: {
+      mode: "derived-input",
+      consumers: [
+        { file: PLUGIN_SERVICE, symbol: "getSetupStatusForUi (action, with defaults)" },
+        { file: PLUGIN_SETUP_CHECKLIST, symbol: "runSetupAction" },
+      ],
+      note: "What clicking the step does; absent defaults to the step's setting or the plugin's settings.",
+    },
+  },
+  "setup.done.setting": {
+    kind: {
+      mode: "verbatim",
+      consumers: [{ file: PLUGIN_SERVICE, symbol: "getSetupStatusForUi (check)" }],
+      note: "Selects the setting-presence check.",
+    },
+    key: {
+      mode: "verbatim",
+      consumers: [
+        {
+          file: PLUGIN_SCHEMA,
+          symbol: "getPluginManifestSchema superRefine (setup_setting_unknown)",
+        },
+        {
+          file: "electron/services/plugin/PluginSettingsManager.ts",
+          symbol: "settingPresenceForUi",
+        },
+      ],
+      note: "Cross-checked against contributes.settings, then read for presence only — a default never counts.",
+    },
+  },
+  "setup.done.account": {
+    kind: {
+      mode: "verbatim",
+      consumers: [
+        {
+          file: PLUGIN_SCHEMA,
+          symbol: "getPluginManifestSchema superRefine (setup_account_undeclared)",
+        },
+        { file: PLUGIN_SERVICE, symbol: "getSetupStatusForUi (accounts.getUiStatus)" },
+      ],
+      note: "Done while the declared contributes.account is connected.",
+    },
+  },
+  "setup.done.context": {
+    kind: {
+      mode: "verbatim",
+      consumers: [{ file: PLUGIN_SERVICE, symbol: "getSetupStatusForUi (check)" }],
+      note: "Hands the clause to the renderer instead of an answer.",
+    },
+    when: {
+      mode: "verbatim",
+      consumers: [
+        { file: PLUGIN_SCHEMA, symbol: "getPluginManifestSchema superRefine (setup_when_invalid)" },
+        { file: PLUGIN_SETUP_PROGRESS, symbol: "resolvePluginSetupProgress (evaluateWhenClause)" },
+      ],
+      note: "Parsed at the gate, then evaluated against the context keys the view mirrors.",
+    },
+  },
+  "setup.action.settings": {
+    kind: {
+      mode: "verbatim",
+      consumers: [{ file: PLUGIN_SETUP_CHECKLIST, symbol: "runSetupAction (plugin.openSettings)" }],
+      note: "Opens the plugin's settings.",
+    },
+    key: {
+      mode: "verbatim",
+      consumers: [
+        {
+          file: PLUGIN_SCHEMA,
+          symbol: "getPluginManifestSchema superRefine (setup_setting_unknown)",
+        },
+        { file: PLUGIN_SETUP_CHECKLIST, symbol: "runSetupAction (plugin.openSettings key)" },
+      ],
+      note: "Cross-checked against contributes.settings; the settings open at that row.",
+    },
+  },
+  "setup.action.command": {
+    kind: {
+      mode: "verbatim",
+      consumers: [
+        { file: PLUGIN_SETUP_CHECKLIST, symbol: "runSetupAction (actionService.dispatch)" },
+      ],
+      note: "Runs one of the plugin's own commands.",
+    },
+    actionId: {
+      mode: "verbatim",
+      consumers: [
+        {
+          file: PLUGIN_SCHEMA,
+          symbol: "getPluginManifestSchema superRefine (setup_command_not_own)",
+        },
+        { file: PLUGIN_SERVICE, symbol: "getSetupStatusForUi (qualify)" },
+      ],
+      note: "Own-namespace only, cross-checked against contributes.commands, then rewritten into the instance's namespace.",
     },
   },
   databases: {

@@ -1211,6 +1211,10 @@ export const CHANNELS = {
   PLUGIN_SETTINGS_REVEAL_SECRET: "plugin:settings-reveal-secret",
   /** Which declared `required` settings a plugin still has unset, for the panel setup strip. */
   PLUGIN_SETTINGS_REQUIRED_STATUS: "plugin:settings-required-status",
+  /** A plugin's `contributes.setup` checklist as the host sees it, for the setup strip and settings (#13824). */
+  PLUGIN_SETUP_STATUS: "plugin:setup-status",
+  /** Skip or restore one setup step in the sender's project. */
+  PLUGIN_SETUP_STEP_SKIPPED_SET: "plugin:setup-step-skipped-set",
   /** A plugin's `contributes.account` status for its settings row. Never carries a token. */
   PLUGIN_ACCOUNT_STATUS: "plugin:account-status",
   /** Start the declared OAuth sign-in from the settings row's click (#13823). */

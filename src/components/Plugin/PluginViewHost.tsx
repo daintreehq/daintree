@@ -59,7 +59,7 @@ export function makePluginViewHost(config: PanelKindConfig): ComponentType<Plugi
   const kindId = config.id;
   const displayName = config.name;
   const stateVersion = config.stateVersion;
-  const hasRequiredSettings = config.hasRequiredSettings === true;
+  const hasSetupStrip = config.hasRequiredSettings === true || config.hasSetupSteps === true;
 
   if (!componentPath || !pluginId) {
     // The else-branch of usePluginPanelKinds guards this, but a defensive
@@ -188,7 +188,7 @@ export function makePluginViewHost(config: PanelKindConfig): ComponentType<Plugi
       >
         {/* Above the view and outside its box, so no plugin layout can cover
             the way to finish setting the plugin up. */}
-        {hasRequiredSettings && <PluginSetupStrip pluginId={ownerPluginId} />}
+        {hasSetupStrip && <PluginSetupStrip pluginId={ownerPluginId} />}
         {/* `extensionState` is how the panel store persists a view's spawn
             arguments; the content layer speaks the SDK's presentation-neutral
             `initialArgs` instead, so the mapping happens here at the seam. */}

@@ -188,6 +188,14 @@ export type {
   PluginAccountState,
 } from "./plugin.js";
 
+// ── Setup checklist (contributes.setup) ─────────────────────────────
+
+export type {
+  PluginSetupStepAction,
+  PluginSetupStepContribution,
+  PluginSetupStepDone,
+} from "./plugin.js";
+
 // ── Storage (host.storage) ──────────────────────────────────────────
 
 export type { StorageApi, PluginStorageScope } from "./plugin.js";

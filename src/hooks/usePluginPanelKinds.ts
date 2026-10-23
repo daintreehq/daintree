@@ -70,9 +70,10 @@ const PANEL_KIND_META_KEYS = [
   // the panel menus read it off the registered config.
   "tourId",
   // Read off the registered config by the panel menus ("Plugin settings…") and
-  // by the view host (the "needs setup" strip).
+  // by the view host (the setup strip).
   "hasPluginSettings",
   "hasRequiredSettings",
+  "hasSetupSteps",
   // Read off the registered config by the panel menus ("Back up data…").
   "hasPluginDatabases",
 ] as const satisfies readonly (keyof PanelKindConfig)[];
