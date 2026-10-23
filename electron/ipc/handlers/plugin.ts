@@ -2729,6 +2729,18 @@ async function handleProjectInstanceEnabledSet(
     });
   }
   const svc = await getPluginService();
+  // A read before the deferred initialize() would find no packages at all.
+  await svc.waitForCatalog();
+  const { projectStore } = await import("../../services/ProjectStore.js");
+  const projectRoot = projectStore.getProjectById(projectId)?.path;
+  if (!projectRoot) {
+    throw new AppError({
+      code: "NOT_FOUND",
+      message: "project plugins: sender's project is unknown",
+    });
+  }
+  // Checked after the last await above, and the service persists before its
+  // own first await, so a global disable cannot slip in between.
   const mode = svc.getInstalledPackageMode(pluginId);
   if (mode === "singleton") {
     throw new AppError({
@@ -2744,14 +2756,6 @@ async function handleProjectInstanceEnabledSet(
   }
   if (mode !== "project") {
     throw new AppError({ code: "NOT_FOUND", message: `"${pluginId}" is not an installed plugin` });
-  }
-  const { projectStore } = await import("../../services/ProjectStore.js");
-  const projectRoot = projectStore.getProjectById(projectId)?.path;
-  if (!projectRoot) {
-    throw new AppError({
-      code: "NOT_FOUND",
-      message: "project plugins: sender's project is unknown",
-    });
   }
   await svc.setProjectInstanceEnabled(projectId, projectRoot, pluginId, enabled);
 }

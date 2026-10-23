@@ -126,4 +126,25 @@ describe("buildPluginInventory", () => {
     expect(withSecrets.plugins[0]!.missingSecrets).toEqual(["apiToken"]);
     expect(source.getSettingValuesForUi).toHaveBeenCalledWith("acme.linear", "user", null);
   });
+
+  it("lists a per-project package without reading secrets its package id never holds", async () => {
+    const settings = [{ id: "apiToken", type: "secret" }];
+    const source = {
+      listPlugins: () => [
+        info(
+          "acme.ledger",
+          { instanceMode: "project", enabledInProjects: [] },
+          { contributes: { settings } as never }
+        ),
+      ],
+      getSettingValuesForUi: vi.fn(),
+    };
+
+    const inventory = await buildPluginInventory(source, { ...options, includeSecrets: true });
+
+    expect(inventory.plugins.map((p) => [p.pluginId, p.missingSecrets])).toEqual([
+      ["acme.ledger", []],
+    ]);
+    expect(source.getSettingValuesForUi).not.toHaveBeenCalled();
+  });
 });

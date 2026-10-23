@@ -172,12 +172,17 @@ async function showPluginViewDialog(question: PluginViewQuestion): Promise<boole
 
 async function loadedPlugins(): Promise<HostPluginAssetPlugin[]> {
   const { pluginService } = await import("../../services/PluginService.js");
-  return pluginService.listPlugins().map((info) => ({
-    instanceId: info.instanceId,
-    projectId: info.projectId,
-    dir: info.dir,
-    remoteUnsupported: info.manifest.remote === "unsupported",
-  }));
+  // A per-project package's own row serves nothing: its assets are reached
+  // through each instance's project-bound row.
+  return pluginService
+    .listPlugins()
+    .filter((info) => info.instanceMode !== "project")
+    .map((info) => ({
+      instanceId: info.instanceId,
+      projectId: info.projectId,
+      dir: info.dir,
+      remoteUnsupported: info.manifest.remote === "unsupported",
+    }));
 }
 
 /**

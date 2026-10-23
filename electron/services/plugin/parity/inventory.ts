@@ -156,7 +156,9 @@ export async function buildPluginInventory(
     seen.add(info.instanceId);
     const manifest = info.manifest;
     let missingSecrets: string[] = [];
-    if (options.includeSecrets && !info.blocklisted) {
+    // A per-project package keeps its secrets per instance, so the package id
+    // holds none and would read every declared secret as missing.
+    if (options.includeSecrets && !info.blocklisted && info.instanceMode !== "project") {
       const declared = (manifest.contributes.settings ?? [])
         .filter(
           (setting) =>

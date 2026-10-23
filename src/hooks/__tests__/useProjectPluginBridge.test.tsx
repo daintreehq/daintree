@@ -26,6 +26,18 @@ function Harness() {
 const listeners = new Map<string, (payload: unknown) => void>();
 let getProjectPlugins: ReturnType<typeof vi.fn>;
 let getProjectPluginVisibility: ReturnType<typeof vi.fn>;
+let list: ReturnType<typeof vi.fn>;
+let provenanceListener: (() => void) | null = null;
+
+function packageRow(enabledInProjects: string[]) {
+  return {
+    instanceId: "acme.ledger",
+    origin: "global",
+    projectId: null,
+    instanceMode: "project",
+    enabledInProjects,
+  };
+}
 
 function row(
   state: ProjectPluginInfo["state"],
@@ -56,6 +68,8 @@ beforeEach(() => {
   listeners.clear();
   getProjectPlugins = vi.fn(() => Promise.resolve([]));
   getProjectPluginVisibility = vi.fn(() => Promise.resolve({}));
+  list = vi.fn(() => Promise.resolve([]));
+  provenanceListener = null;
   Object.defineProperty(window, "electron", {
     configurable: true,
     writable: true,
@@ -66,7 +80,15 @@ beforeEach(() => {
           return vi.fn();
         }),
       },
-      plugin: { getProjectPlugins, getProjectPluginVisibility },
+      plugin: {
+        getProjectPlugins,
+        getProjectPluginVisibility,
+        list,
+        onProvenanceChanged: vi.fn((cb: () => void) => {
+          provenanceListener = cb;
+          return vi.fn();
+        }),
+      },
     },
   });
 });
@@ -77,6 +99,20 @@ afterEach(() => {
 });
 
 describe("useProjectPluginBridge", () => {
+  it("reads which per-project packages are on here, and reads again on a provenance change", async () => {
+    list.mockResolvedValueOnce([packageRow(["proj-b"])]);
+    render(<Harness />);
+    await waitFor(() => {
+      expect(useProjectPluginStore.getState().instanceEnabled).toEqual({ "acme.ledger": false });
+    });
+
+    list.mockResolvedValueOnce([packageRow(["proj-a", "proj-b"])]);
+    act(() => provenanceListener?.());
+    await waitFor(() => {
+      expect(useProjectPluginStore.getState().instanceEnabled).toEqual({ "acme.ledger": true });
+    });
+  });
+
   it("pulls the visibility overlay on mount and applies later pushes", async () => {
     getProjectPluginVisibility.mockReturnValue(Promise.resolve({ "acme.tools": false }));
     render(<Harness />);

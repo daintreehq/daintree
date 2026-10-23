@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import type {
+  LoadedPluginInfo,
   ProjectApplicationState,
   ProjectPluginInfo,
   ProjectPluginTrustDecision,
@@ -74,10 +75,10 @@ export interface ProjectPluginStoreState {
    */
   visibility: ProjectPluginVisibility;
   /**
-   * This view's own on/off choices for installed per-project packages, by
-   * manifest id, applied before main confirms them. The plugin list's
-   * `enabledInProjects` is the record; an entry here wins over it, since the
-   * list only catches up once its provenance re-pull lands.
+   * Whether each installed per-project package is on in this project, by
+   * manifest id. Read from the plugin list's `enabledInProjects` on every
+   * {@link ProjectPluginActions.loadInstanceProjection}; a package whose toggle
+   * is in flight keeps its optimistic value until that toggle settles.
    */
   instanceEnabled: Readonly<Record<string, boolean>>;
   /** Manifest ids whose per-project enable/disable call has not resolved yet. */
@@ -102,6 +103,7 @@ export type ProjectPluginFailedAction =
   | { action: "visibility"; pluginId: string; visible: boolean | null }
   | { action: "visibilityDefault"; pluginId: string; hidden: boolean }
   | { action: "instanceEnabled"; pluginId: string; enabled: boolean }
+  | { action: "loadInstances" }
   | { action: "reload" }
   | { action: "loadVisibility" };
 
@@ -143,6 +145,8 @@ export interface ProjectPluginActions {
   setVisibility: (pluginId: string, visible: boolean | null) => Promise<void>;
   /** Whether an INSTALLED plugin is hidden in projects that have not decided. */
   setVisibilityDefault: (pluginId: string, hidden: boolean) => Promise<void>;
+  /** Re-read which installed per-project packages are on in this project. */
+  loadInstanceProjection: () => Promise<void>;
   /** Turn an installed per-project package on or off in this project. */
   setInstanceEnabled: (pluginId: string, enabled: boolean) => Promise<void>;
   reload: () => Promise<void>;
@@ -151,6 +155,28 @@ export interface ProjectPluginActions {
 }
 
 const EMPTY_ACTIVATING: ReadonlySet<string> = new Set<string>();
+
+/**
+ * Bumped whenever this store stops describing the project its per-project
+ * package calls were made for (a switch, a reset), so a late reply cannot roll
+ * back or clear state that now belongs to another project.
+ */
+let instanceGeneration = 0;
+/** Orders projection pulls: only the newest reply may land. */
+let instancePullSeq = 0;
+
+/** This project's on/off state for every per-project package in `list`. */
+function instanceProjection(
+  list: readonly LoadedPluginInfo[],
+  projectId: string
+): Record<string, boolean> {
+  const out: Record<string, boolean> = {};
+  for (const info of list) {
+    if (info.instanceMode !== "project") continue;
+    out[info.instanceId] = (info.enabledInProjects ?? []).includes(projectId);
+  }
+  return out;
+}
 
 const EMPTY_VISIBILITY: ProjectPluginVisibility = { defaultHiddenPluginIds: [], overrides: {} };
 
@@ -190,6 +216,7 @@ export const useProjectPluginStore = create<ProjectPluginStoreState & ProjectPlu
     setViewProjectId: (projectId) => {
       const state = get();
       if (state.viewProjectId === projectId) return;
+      if (state.viewProjectId !== null) instanceGeneration++;
       // Anything already held for a different project is dropped the moment the
       // view names itself: a prompt would be asking about a folder the user is
       // not looking at, and the rows beneath it would describe someone else's
@@ -209,9 +236,11 @@ export const useProjectPluginStore = create<ProjectPluginStoreState & ProjectPlu
               visibility: EMPTY_VISIBILITY,
             }
           : {}),
-        // Choices made while the view was unnamed were its sender's, so they
-        // survive the view naming itself; a move away from a named project does not.
-        ...(state.viewProjectId !== null ? { instanceEnabled: {} } : {}),
+        // State read while the view was unnamed was its sender's, so it
+        // survives the view naming itself; a move away from a named project does not.
+        ...(state.viewProjectId !== null
+          ? { instanceEnabled: {}, instanceToggling: EMPTY_ACTIVATING }
+          : {}),
       });
     },
 
@@ -405,40 +434,76 @@ export const useProjectPluginStore = create<ProjectPluginStoreState & ProjectPlu
       }
     },
 
+    loadInstanceProjection: async () => {
+      const seq = ++instancePullSeq;
+      const generation = instanceGeneration;
+      try {
+        const list = await window.electron.plugin.list();
+        if (seq !== instancePullSeq || generation !== instanceGeneration) return;
+        const state = get();
+        const projectId = state.viewProjectId ?? state.projectId;
+        if (projectId === null) return;
+        const next = instanceProjection(list, projectId);
+        for (const pluginId of state.instanceToggling) {
+          const pending = state.instanceEnabled[pluginId];
+          if (pending !== undefined && pluginId in next) next[pluginId] = pending;
+        }
+        set(
+          state.errorSource?.action === "loadInstances"
+            ? { instanceEnabled: next, error: null, errorSource: null }
+            : { instanceEnabled: next }
+        );
+      } catch (err) {
+        if (seq !== instancePullSeq || generation !== instanceGeneration) return;
+        set(failure(err, "Couldn't read this project's plugins", { action: "loadInstances" }));
+      }
+    },
+
     setInstanceEnabled: async (pluginId, enabled) => {
       const state = get();
       if (state.projectId !== null && !belongsToView(state, state.projectId)) return;
       // One call per package at a time, so a rollback restores what this call
       // replaced rather than a choice a later call already made.
       if (state.instanceToggling.has(pluginId)) return;
-      const previousChoice: boolean | undefined = state.instanceEnabled[pluginId];
+      const generation = instanceGeneration;
+      const previous: boolean | undefined = state.instanceEnabled[pluginId];
       set({
         instanceEnabled: { ...state.instanceEnabled, [pluginId]: enabled },
         instanceToggling: new Set([...state.instanceToggling, pluginId]),
         error: null,
         errorSource: null,
       });
+      let failed: unknown;
+      let ok = false;
       try {
         await window.electron.plugin.setProjectInstanceEnabled(pluginId, enabled);
+        ok = true;
       } catch (err) {
-        const instanceEnabled = { ...get().instanceEnabled };
-        if (previousChoice === undefined) delete instanceEnabled[pluginId];
-        else instanceEnabled[pluginId] = previousChoice;
-        set({
-          instanceEnabled,
-          ...failure(
-            err,
-            enabled
-              ? `Couldn't turn on '${pluginId}' in this project`
-              : `Couldn't turn off '${pluginId}' in this project`,
-            { action: "instanceEnabled", pluginId, enabled }
-          ),
-        });
-      } finally {
-        const next = new Set(get().instanceToggling);
-        next.delete(pluginId);
-        set({ instanceToggling: next });
+        failed = err;
       }
+      // The view moved on or was reset while this call was out: what it would
+      // roll back or clear now belongs to another project.
+      if (generation !== instanceGeneration) return;
+      const toggling = new Set(get().instanceToggling);
+      toggling.delete(pluginId);
+      if (ok) {
+        set({ instanceToggling: toggling });
+        return;
+      }
+      const instanceEnabled = { ...get().instanceEnabled };
+      if (previous === undefined) delete instanceEnabled[pluginId];
+      else instanceEnabled[pluginId] = previous;
+      set({
+        instanceEnabled,
+        instanceToggling: toggling,
+        ...failure(
+          failed,
+          enabled
+            ? `Couldn't turn on '${pluginId}' in this project`
+            : `Couldn't turn off '${pluginId}' in this project`,
+          { action: "instanceEnabled", pluginId, enabled }
+        ),
+      });
     },
 
     reload: async () => {
@@ -457,7 +522,10 @@ export const useProjectPluginStore = create<ProjectPluginStoreState & ProjectPlu
 
     clearError: () => set({ error: null, errorSource: null }),
 
-    reset: () => set({ ...INITIAL }),
+    reset: () => {
+      instanceGeneration++;
+      set({ ...INITIAL });
+    },
   })
 );
 
