@@ -106,6 +106,9 @@ vi.mock("@/clients", async (importOriginal) => {
 });
 
 import { registerAgentActions } from "../agentActions";
+// The run bodies load on first dispatch (#14268). Evaluate them here, as they
+// always were, rather than under the window stub a test swaps in before run().
+import "../agentActions.impl";
 import { BUILT_IN_AGENT_IDS } from "@shared/config/agentIds";
 
 /**
@@ -1630,8 +1633,9 @@ describe("agent.listAvailable", () => {
         // rejection and trips vitest's unhandled-rejection guard.
         const rejects = expect(pending).rejects.toThrow(/still waiting on: agentRegistry$/);
         // The deadline must be the only timer in flight, so advancing to "next"
-        // provably lands on it rather than on something scheduled nearby.
-        expect(vi.getTimerCount()).toBe(1);
+        // provably lands on it rather than on something scheduled nearby. It
+        // arms once the lazily loaded run body starts, not synchronously.
+        await vi.waitFor(() => expect(vi.getTimerCount()).toBe(1));
 
         await vi.advanceTimersToNextTimerAsync();
         await rejects;

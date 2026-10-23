@@ -55,6 +55,9 @@ vi.mock("@/clients", async (importOriginal) => {
 });
 
 import { registerAgentActions } from "../agentActions";
+// The run bodies load on first dispatch (#14268). Evaluate them here, as they
+// always were, rather than under the window stub each test installs.
+import "../agentActions.impl";
 
 const RESUME_ID = "agentSessionHistory.resume";
 const WT_A = "/repo/wt-a";
