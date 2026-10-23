@@ -41,7 +41,9 @@ interface CanopyState {
   /**
    * The host the panel shows when it isn't the window's own: picked in the
    * panel's header, and back to the window's own host each time it opens.
-   * Only the panel reads it; the toolbar always counts the window's own host.
+   * `ALL_HOSTS_ID` is the one exception, a read scope over every host that is
+   * restored on open. Only the panel reads it; the toolbar always counts the
+   * window's own host.
    */
   hostId: HostId | null;
   setHostId: (hostId: HostId | null) => void;
@@ -63,7 +65,15 @@ export type CanopyScope = "all" | "project";
 
 export type { CanopyOrder };
 
+/** The panel's "All hosts" scope: not a host, and never a target for anything that writes. */
+export const ALL_HOSTS_ID: HostId = "*";
+
+export function isAllHosts(hostId: HostId | null): boolean {
+  return hostId === ALL_HOSTS_ID;
+}
+
 const SCOPE_STORAGE_KEY = "daintree-canopy-scope";
+const ALL_HOSTS_STORAGE_KEY = "daintree-canopy-all-hosts";
 /** Read by every project view, so a view opened or reloaded since still opens on the order last shown. */
 const ORDER_STORAGE_KEY = "daintree-canopy-order";
 export const CANOPY_ACKNOWLEDGED_STORAGE_KEY = "daintree-canopy-acknowledged";
@@ -130,6 +140,23 @@ export function isCanopyUnacknowledged(
   card: Pick<CanopyCard, "runId" | "spawnedAt" | "revision">
 ): boolean {
   return acknowledged[card.runId] !== promptKey(card);
+}
+
+function loadHostId(): HostId | null {
+  try {
+    return window.localStorage.getItem(ALL_HOSTS_STORAGE_KEY) === "1" ? ALL_HOSTS_ID : null;
+  } catch {
+    return null;
+  }
+}
+
+function saveAllHosts(on: boolean): void {
+  try {
+    if (on) window.localStorage.setItem(ALL_HOSTS_STORAGE_KEY, "1");
+    else window.localStorage.removeItem(ALL_HOSTS_STORAGE_KEY);
+  } catch {
+    // Best effort: the choice still holds for this session.
+  }
 }
 
 function loadScope(): CanopyScope {
@@ -289,8 +316,11 @@ export const useCanopyStore = create<CanopyState>((set) => ({
       }
       return { orders: { ...state.orders, [scope]: order } };
     }),
-  hostId: null,
-  setHostId: (hostId) => set({ hostId: hostId === canopyOwnHostId() ? null : hostId }),
+  hostId: loadHostId(),
+  setHostId: (hostId) => {
+    saveAllHosts(hostId === ALL_HOSTS_ID);
+    set({ hostId: hostId === canopyOwnHostId() ? null : hostId });
+  },
   setHostOrder: (hostId, order) =>
     set((state) => {
       if (!sameIds(state.hostOrders[hostId]?.ids, order.ids)) saveOrder(hostId, "all", order.ids);
@@ -305,10 +335,12 @@ export const useCanopyStore = create<CanopyState>((set) => ({
     saveScope(scope);
     set({ scope });
   },
-  // Every opening starts on the window's own host.
+  // Every opening starts on the window's own host, unless the user chose All hosts.
   open: () =>
     set((state) =>
-      state.mode === "hidden" || state.isOpen ? state : { isOpen: true, hostId: null }
+      state.mode === "hidden" || state.isOpen
+        ? state
+        : { isOpen: true, hostId: state.hostId === ALL_HOSTS_ID ? ALL_HOSTS_ID : null }
     ),
   close: () => set({ isOpen: false }),
   toggle: () =>
@@ -317,7 +349,7 @@ export const useCanopyStore = create<CanopyState>((set) => ({
         ? { isOpen: false }
         : state.mode === "hidden"
           ? state
-          : { isOpen: true, hostId: null }
+          : { isOpen: true, hostId: state.hostId === ALL_HOSTS_ID ? ALL_HOSTS_ID : null }
     ),
   applySnapshot: (snapshot) =>
     set((state) => {

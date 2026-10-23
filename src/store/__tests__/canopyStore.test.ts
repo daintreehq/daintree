@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { isCanopyUnread, type CanopySnapshot } from "@shared/types/ipc/canopy";
-import { useCanopyStore } from "../canopyStore";
+import { ALL_HOSTS_ID, useCanopyStore } from "../canopyStore";
 
 const SPAWNED = 1_000;
 
@@ -212,5 +212,31 @@ describe("the host shown", () => {
     expect(useCanopyStore.getState().hostId).toBeNull();
     useCanopyStore.getState().setHostId("local");
     expect(useCanopyStore.getState().hostId).toBe("local");
+  });
+
+  it("opens on All hosts again once it is chosen, until another host is", () => {
+    useCanopyStore.getState().open();
+    useCanopyStore.getState().setHostId(ALL_HOSTS_ID);
+    useCanopyStore.getState().close();
+    useCanopyStore.getState().open();
+    expect(useCanopyStore.getState().hostId).toBe(ALL_HOSTS_ID);
+    useCanopyStore.getState().close();
+    useCanopyStore.getState().toggle();
+    expect(useCanopyStore.getState().hostId).toBe(ALL_HOSTS_ID);
+
+    useCanopyStore.getState().setHostId("studio");
+    useCanopyStore.getState().close();
+    useCanopyStore.getState().open();
+    expect(useCanopyStore.getState().hostId).toBeNull();
+  });
+
+  it("restores All hosts in a view opened after the choice", async () => {
+    useCanopyStore.getState().setHostId(ALL_HOSTS_ID);
+    vi.resetModules();
+    const reloaded = (await import("../canopyStore")).useCanopyStore;
+    expect(reloaded.getState().hostId).toBe(ALL_HOSTS_ID);
+    useCanopyStore.getState().setHostId(null);
+    vi.resetModules();
+    expect((await import("../canopyStore")).useCanopyStore.getState().hostId).toBeNull();
   });
 });
