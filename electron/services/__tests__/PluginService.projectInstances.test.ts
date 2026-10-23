@@ -753,3 +753,78 @@ describe("updates that change the instance mode (#14256)", () => {
     expect(await fs.readFile(path.join(tmpDir, PKG, "plugin.json"), "utf-8")).toBe(contents);
   });
 });
+
+describe("plugin list projection of installed per-project packages (#14255)", () => {
+  const packageRows = (service: PluginService) =>
+    service.listPlugins().filter((info) => info.instanceId === PKG);
+
+  it("lists a catalog-only package once, never as running, with the projects it is enabled in", async () => {
+    const { service } = await startService();
+    expect(packageRows(service)).toEqual([
+      expect.objectContaining({
+        origin: "global",
+        loadedAt: 0,
+        disabled: false,
+        pendingRestart: false,
+        instanceMode: "project",
+        enabledInProjects: [],
+      }),
+    ]);
+
+    await service.setProjectInstanceEnabled(PROJECT_A, "/repo/a", PKG, true);
+    await service.setProjectInstanceEnabled(PROJECT_B, "/repo/b", PKG, true);
+
+    const rows = packageRows(service);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].enabledInProjects?.sort()).toEqual([PROJECT_A, PROJECT_B]);
+    // Each instance is its own project row, not a second copy of the package.
+    const instanceRows = service.listPlugins().filter((info) => info.manifest.name === PKG);
+    expect(instanceRows.map((info) => info.instanceId).sort()).toEqual([PKG, KEY_A, KEY_B].sort());
+    expect(instanceRows.filter((info) => info.instanceMode === "project")).toHaveLength(1);
+  });
+
+  it("keeps the package listed after it is disabled and enabled again", async () => {
+    const { service } = await startService();
+    await service.setProjectInstanceEnabled(PROJECT_A, "/repo/a", PKG, true);
+
+    await service.setEnabled(PKG, false);
+    expect(packageRows(service)).toEqual([
+      expect.objectContaining({
+        disabled: true,
+        instanceMode: "project",
+        enabledInProjects: [PROJECT_A],
+      }),
+    ]);
+
+    await service.setEnabled(PKG, true);
+    expect(packageRows(service)).toEqual([
+      expect.objectContaining({
+        disabled: false,
+        pendingRestart: false,
+        instanceMode: "project",
+        enabledInProjects: [PROJECT_A],
+      }),
+    ]);
+  });
+
+  it("tells an instanced package apart from a singleton, a switched-off one and an unknown id", async () => {
+    await writePlugin("acme.plain", { name: "acme.plain", version: "1.0.0" });
+    const { service } = await startService();
+
+    expect(service.getInstalledPackageMode(PKG)).toBe("project");
+    expect(service.getInstalledPackageMode("acme.plain")).toBe("singleton");
+    expect(service.getInstalledPackageMode("acme.ghost")).toBeNull();
+
+    await service.setEnabled(PKG, false);
+    expect(service.getInstalledPackageMode(PKG)).toBe("project-unavailable");
+  });
+
+  it("leaves a singleton plugin's row without per-project fields", async () => {
+    await writePlugin("acme.plain", { name: "acme.plain", version: "1.0.0" });
+    const { service } = await startService();
+    const row = service.listPlugins().find((info) => info.instanceId === "acme.plain");
+    expect(row).toBeDefined();
+    expect(row?.instanceMode).toBeUndefined();
+    expect(row?.enabledInProjects).toBeUndefined();
+  });
+});

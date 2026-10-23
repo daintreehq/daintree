@@ -2703,6 +2703,64 @@ async function handleProjectPluginVisibilitySet(
 }
 
 /**
+ * Turn an installed `instanceMode: "project"` package on or off in the sender's
+ * project. The project and its root are both resolved from the sender, so no
+ * payload field can reach another project's instance.
+ */
+async function handleProjectInstanceEnabledSet(
+  ctx: IpcContext,
+  pluginId: string,
+  enabled: boolean
+): Promise<void> {
+  const projectId = ctx.projectId;
+  if (!projectId) {
+    throw new AppError({ code: "VALIDATION", message: "project plugins: sender has no project" });
+  }
+  if (typeof pluginId !== "string" || !SCOPED_PLUGIN_NAME_PATTERN.test(pluginId)) {
+    throw new AppError({
+      code: "VALIDATION",
+      message: "project plugins: pluginId must be a scoped plugin name (publisher.name)",
+    });
+  }
+  if (typeof enabled !== "boolean") {
+    throw new AppError({
+      code: "VALIDATION",
+      message: "project plugins: enabled must be a boolean",
+    });
+  }
+  const svc = await getPluginService();
+  // A read before the deferred initialize() would find no packages at all.
+  await svc.waitForCatalog();
+  const { projectStore } = await import("../../services/ProjectStore.js");
+  const projectRoot = projectStore.getProjectById(projectId)?.path;
+  if (!projectRoot) {
+    throw new AppError({
+      code: "NOT_FOUND",
+      message: "project plugins: sender's project is unknown",
+    });
+  }
+  // Checked after the last await above, and the service persists before its
+  // own first await, so a global disable cannot slip in between.
+  const mode = svc.getInstalledPackageMode(pluginId);
+  if (mode === "singleton") {
+    throw new AppError({
+      code: "UNSUPPORTED",
+      message: `"${pluginId}" runs once for every project and can't be turned on per project`,
+    });
+  }
+  if (mode === "project-unavailable") {
+    throw new AppError({
+      code: "UNSUPPORTED",
+      message: `"${pluginId}" is turned off or blocked, so it can't be turned on in a project`,
+    });
+  }
+  if (mode !== "project") {
+    throw new AppError({ code: "NOT_FOUND", message: `"${pluginId}" is not an installed plugin` });
+  }
+  await svc.setProjectInstanceEnabled(projectId, projectRoot, pluginId, enabled);
+}
+
+/**
  * Whether one installed plugin is hidden in projects that have made no explicit
  * choice — the "everywhere" / "only where I turn it on" switch. Global in
  * effect, but reached from a project's settings, so the sender's project is
@@ -3012,6 +3070,11 @@ export const pluginNamespace = defineIpcNamespace({
     setProjectPluginVisibility: op(
       PLUGIN_METHOD_CHANNELS.setProjectPluginVisibility,
       handleProjectPluginVisibilitySet,
+      { withContext: true }
+    ),
+    setProjectInstanceEnabled: op(
+      PLUGIN_METHOD_CHANNELS.setProjectInstanceEnabled,
+      handleProjectInstanceEnabledSet,
       { withContext: true }
     ),
     setPluginVisibilityDefault: op(

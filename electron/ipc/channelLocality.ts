@@ -724,6 +724,7 @@ export const CHANNEL_LOCALITY = {
   "plugin:project-welcome-set": "host",
   "plugin:project-visibility-get": "host",
   "plugin:project-visibility-set": "host",
+  "plugin:project-instance-set-enabled": "host",
   "plugin:recipe-metadata-update": "host",
   "plugin:recipe-record-use": "host",
   "plugin:recipes-get": "host",

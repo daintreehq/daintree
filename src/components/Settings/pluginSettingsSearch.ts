@@ -158,7 +158,8 @@ export function selectSearchablePlugins(
     if (plugin.instanceId.startsWith(PROJECT_PLUGIN_INSTANCE_PREFIX)) {
       const project = running.get(plugin.instanceId);
       if (project) result.push({ plugin, name: project.displayName });
-    } else {
+    } else if (plugin.instanceMode !== "project") {
+      // A per-project package's settings belong to its instances, not to the package row.
       result.push({ plugin, name: plugin.manifest.displayName ?? plugin.instanceId });
     }
   }

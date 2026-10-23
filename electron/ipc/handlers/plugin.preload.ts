@@ -54,6 +54,7 @@ export const PLUGIN_METHOD_CHANNELS = {
   setProjectPluginMuted: "plugin:project-set-muted",
   getProjectPluginVisibility: "plugin:project-visibility-get",
   setProjectPluginVisibility: "plugin:project-visibility-set",
+  setProjectInstanceEnabled: "plugin:project-instance-set-enabled",
   setPluginVisibilityDefault: "plugin:visibility-default-set",
   activateForView: "plugin:activate-for-view",
   reportPanelLifecycle: "plugin:report-panel-lifecycle",

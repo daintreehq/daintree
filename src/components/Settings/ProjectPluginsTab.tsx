@@ -1690,7 +1690,13 @@ export function ProjectPluginsTab() {
   // — the manifest is left untouched for a project plugin, so its name is the
   // bare id and indistinguishable from an installed plugin's.
   const installedOnly = useMemo(
-    () => (installed ?? []).filter((p) => !p.instanceId.startsWith(PROJECT_PLUGIN_INSTANCE_PREFIX)),
+    () =>
+      (installed ?? []).filter(
+        // A per-project package is turned on here by its own control, not the
+        // visibility switch these rows carry.
+        (p) =>
+          !p.instanceId.startsWith(PROJECT_PLUGIN_INSTANCE_PREFIX) && p.instanceMode !== "project"
+      ),
     [installed]
   );
   const loadedByInstanceId = useMemo(

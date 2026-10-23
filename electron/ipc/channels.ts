@@ -1175,6 +1175,8 @@ export const CHANNELS = {
   PLUGIN_PROJECT_VISIBILITY_GET: "plugin:project-visibility-get",
   /** Installed plugins: hide or show one installed plugin in the SENDER's project. */
   PLUGIN_PROJECT_VISIBILITY_SET: "plugin:project-visibility-set",
+  /** Installed per-project packages: turn one on or off in the SENDER's project. */
+  PLUGIN_PROJECT_INSTANCE_SET_ENABLED: "plugin:project-instance-set-enabled",
   /** Installed plugins: whether one plugin is hidden in projects that have not decided. */
   PLUGIN_VISIBILITY_DEFAULT_SET: "plugin:visibility-default-set",
   /** Lazy activation: force the plugin owning a contributed panel view to `activate()` before its module loads. */

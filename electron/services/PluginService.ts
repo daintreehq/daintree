@@ -8298,6 +8298,29 @@ export class PluginService {
   }
 
   /**
+   * How an installed or builtin package with this manifest id runs, so a caller
+   * can tell an id that may be turned on per project from one that never can.
+   * `"project-unavailable"` is an instanced package switched off in
+   * Preferences or refused by the blocklist: it is out of the catalog until
+   * that changes.
+   */
+  getInstalledPackageMode(
+    manifestId: string
+  ): "project" | "project-unavailable" | "singleton" | null {
+    if (this.projectInstancePackages.has(manifestId)) {
+      // A disable is persisted before its transition leaves the catalog.
+      return this.records.getDisabledIds().has(manifestId) ? "project-unavailable" : "project";
+    }
+    const parked = this.disabledPlugins.get(manifestId) ?? this.blockedPlugins.get(manifestId);
+    if (parked) {
+      return parked.manifest.instanceMode === "project" && !parked.isBuiltin
+        ? "project-unavailable"
+        : "singleton";
+    }
+    return this.plugins.has(manifestId) ? "singleton" : null;
+  }
+
+  /**
    * Load one project plugin under its instance key, bound to its project.
    * Returns false when the manifest was rejected at load.
    */
@@ -9387,7 +9410,33 @@ export class PluginService {
     // never ran (`loadedAt: 0`); the reason drives the "Blocked" badge/banner.
     const blocked = [...this.blockedPlugins].map(([id, p]) => toInfo(id, p, 0, false, p.reason));
 
-    return [...running, ...skipped, ...blocked];
+    // Installed packages that run one instance per project. The package itself
+    // never loads, so its row would otherwise exist only while it is switched
+    // off — and re-enabling one used to drop it from the list entirely. An
+    // enable in flight briefly holds it in both the catalog and the disabled
+    // map; the disabled row stands in until the transition settles.
+    const catalog = [...this.projectInstancePackages]
+      .filter(([id]) => !this.disabledPlugins.has(id) && !this.blockedPlugins.has(id))
+      .map(([id, p]) => ({
+        ...toInfo(
+          id,
+          { manifest: p.manifest as PluginManifest, dir: p.dir, isBuiltin: false },
+          0,
+          false
+        ),
+        // Not running is the steady state of a catalog entry, not a load waiting on a restart.
+        pendingRestart: false,
+      }));
+
+    return [...running, ...skipped, ...blocked, ...catalog].map((info) =>
+      info.origin === "global" && !info.isBuiltin && info.manifest.instanceMode === "project"
+        ? {
+            ...info,
+            instanceMode: "project" as const,
+            enabledInProjects: this.projectInstanceStore.listForPackage(info.instanceId),
+          }
+        : info
+    );
   }
 
   /**

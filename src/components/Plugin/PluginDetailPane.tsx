@@ -365,7 +365,9 @@ export function PluginDetailPane({
   const blocklisted = plugin.blocklisted === true;
   // From the manifest, not the running instance: a stopped plugin's settings
   // stay reachable, and its custom section says it needs the plugin enabled.
-  const hasSettings = pluginHasSettings(plugin);
+  // A per-project package's settings belong to each project's instance; the
+  // package id itself has nowhere to keep them.
+  const hasSettings = plugin.instanceMode !== "project" && pluginHasSettings(plugin);
   const mcpServers = plugin.manifest.contributes.mcpServers ?? [];
   const hasMcpServers = mcpServers.length > 0;
   const granted = grantedCapabilities(plugin);

@@ -47,6 +47,11 @@ export function useProjectPluginBridge(): void {
 
   useEffect(() => {
     useProjectPluginStore.getState().setViewProjectId(viewProjectId);
+    // Which installed per-project packages are on is per project, so a view
+    // that names (or changes) its project reads it again.
+    safeFireAndForget(useProjectPluginStore.getState().loadInstanceProjection(), {
+      context: "useProjectPluginBridge: per-project packages",
+    });
   }, [viewProjectId]);
 
   useEffect(() => {
@@ -118,6 +123,14 @@ export function useProjectPluginBridge(): void {
       }
     );
 
+    // Enabling a package anywhere, installing or removing one, and switching one
+    // off globally all arrive as a provenance change.
+    const offProvenance = window.electron.plugin.onProvenanceChanged(() => {
+      safeFireAndForget(useProjectPluginStore.getState().loadInstanceProjection(), {
+        context: "useProjectPluginBridge: per-project packages after a provenance change",
+      });
+    });
+
     const offStaged = window.electron.events.on("plugin:project-plugin-staged", (payload) => {
       notify({
         type: "info",
@@ -177,6 +190,7 @@ export function useProjectPluginBridge(): void {
       offPrompt();
       offChanged();
       offVisibility();
+      offProvenance();
       offStaged();
     };
   }, []);

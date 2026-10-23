@@ -145,8 +145,10 @@ async function pullPluginRuntimeSnapshot(
       // silently overwrite the other's metadata.
       const id = p.instanceId;
       if (p.disabled) disabledPluginIds.add(id);
-      // A disabled or blocklisted plugin never ran, so what it declares is not on offer.
-      if (!p.disabled && !p.blocklisted) {
+      // A disabled or blocklisted plugin never ran, so what it declares is not on
+      // offer. Nor does a per-project package's own row: only its instances
+      // run, and each arrives as its own row.
+      if (!p.disabled && !p.blocklisted && p.instanceMode !== "project") {
         const pluginName = p.manifest.displayName?.trim() || p.manifest.name;
         for (const template of p.manifest.contributes?.promptTemplates ?? []) {
           promptTemplates.push({

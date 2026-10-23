@@ -25,6 +25,7 @@ function makePlugin(opts: {
   promptTemplates?: PromptTemplateContribution[];
   terminalLinks?: TerminalLinkContribution[];
   blocklisted?: boolean;
+  instanceMode?: "project";
 }): LoadedPluginInfo {
   const projectId = opts.projectId ?? null;
   const instanceId = projectId === null ? opts.id : `project__${projectId}__${opts.id}`;
@@ -70,6 +71,7 @@ function makePlugin(opts: {
     devMode: opts.devMode ?? false,
     pluginDanger: "safe",
     blocklisted: opts.blocklisted ?? false,
+    ...(opts.instanceMode ? { instanceMode: opts.instanceMode, enabledInProjects: [] } : {}),
   };
 }
 
@@ -431,6 +433,32 @@ describe("usePluginRuntimeStore", () => {
       ["acme.a::t", "Acme A", null],
       ["project__p1__acme.a::t", "acme.a", "p1"],
     ]);
+  });
+
+  it("offers nothing from a per-project package's own row, only from its instances", async () => {
+    const template = { id: "t", title: "T", description: "d", body: "b", args: [] };
+    const link = { id: "l", pattern: "x", actionId: "acme.ledger.open" };
+    listMock.mockResolvedValue([
+      makePlugin({
+        id: "acme.ledger",
+        instanceMode: "project",
+        promptTemplates: [template],
+        terminalLinks: [link],
+      }),
+      makePlugin({
+        id: "acme.ledger",
+        projectId: "p1",
+        promptTemplates: [template],
+        terminalLinks: [link],
+      }),
+    ]);
+
+    usePluginRuntimeStore.getState().init();
+
+    await vi.waitFor(() => expect(usePluginRuntimeStore.getState().promptTemplates.length).toBe(1));
+    const state = usePluginRuntimeStore.getState();
+    expect(state.promptTemplates.map((e) => e.pluginId)).toEqual(["project__p1__acme.ledger"]);
+    expect(state.terminalLinks.map((e) => e.pluginId)).toEqual(["project__p1__acme.ledger"]);
   });
 
   it("keeps the template list's identity across an identical refresh", async () => {
