@@ -299,6 +299,26 @@ describe("PluginSetupStrip with a setup checklist (#13824)", () => {
     await waitFor(() =>
       expect(screen.getByTestId("plugin-setup-strip").textContent).toContain("Linear needs setup")
     );
+    // The trigger went with the checklist; focus moved to what replaced it.
+    await waitFor(() =>
+      expect(document.activeElement).toBe(
+        screen.getByRole("button", { name: "Open plugin settings" })
+      )
+    );
+  });
+
+  it("never reopens the popover for another plugin, or on coming back", async () => {
+    const { rerender } = render(<PluginSetupStrip pluginId="acme.linear" />);
+    await openSteps();
+
+    rerender(<PluginSetupStrip pluginId="acme.other" />);
+    await waitFor(() => expect(getSetupStatus).toHaveBeenCalledWith("acme.other", "proj-1"));
+    await screen.findByRole("button", { name: "Setup steps" });
+    expect(screen.queryByText("Step team")).toBeNull();
+
+    rerender(<PluginSetupStrip pluginId="acme.linear" />);
+    await screen.findByRole("button", { name: "Setup steps" });
+    expect(screen.queryByText("Step team")).toBeNull();
   });
 
   it("reports only the latest skip's failure", async () => {

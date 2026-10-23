@@ -1,4 +1,4 @@
-import { useEffect, useId, useState, useSyncExternalStore } from "react";
+import { useEffect, useId, useRef, useState, useSyncExternalStore, type RefObject } from "react";
 import {
   getPanelKindRegistrySnapshot,
   subscribeToPanelKindRegistry,
@@ -17,9 +17,11 @@ import {
   POPOVER_TITLE_CLASS,
 } from "@/components/ui/popoverHeader";
 import { usePluginSetupStatus, type PluginSetupState } from "@/hooks/usePluginSetupStatus";
+import { getVisibleTabbableElements, restoreFocusTo } from "@/lib/accessibility";
 import { actionService } from "@/services/ActionService";
 import { usePluginRuntimeStore } from "@/store/pluginRuntimeStore";
 import { useProjectStore } from "@/store/projectStore";
+import { cn } from "@/lib/utils";
 import { logError } from "@/utils/logger";
 import { PluginSetupChecklist } from "./PluginSetupChecklist";
 
@@ -62,7 +64,16 @@ export function PluginSetupStrip({ pluginId }: { pluginId: string }) {
   useEffect(() => initPluginRuntime(), [initPluginRuntime]);
   const [status, setStatus] = useState<PluginRequiredSettingsStatus>(EMPTY_STATUS);
   const setup = usePluginSetupStatus(pluginId, projectId);
-  const [checklistOpen, setChecklistOpen] = useState(false);
+  // The popover belongs to one plugin's checklist in one project: a switch to
+  // another, or a checklist that goes away, never reopens it on its own.
+  const checklistKey = setup.total > 0 ? `${pluginId}\u0000${projectId ?? ""}` : null;
+  const [popover, setPopover] = useState<ChecklistPopoverState>(CLOSED_POPOVER);
+  const ownPopover =
+    popover.key !== null && popover.key === checklistKey ? popover : CLOSED_POPOVER;
+  useEffect(() => {
+    setPopover((current) => (current.key === checklistKey ? current : CLOSED_POPOVER));
+  }, [checklistKey]);
+  const stripRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     const bridge = window.electron?.plugin;
@@ -97,18 +108,38 @@ export function PluginSetupStrip({ pluginId }: { pluginId: string }) {
   // Waiting on the checklist read keeps a plugin with both from showing the
   // required prompt for a moment and then swapping it out.
   if (!setup.loaded) return null;
-  // Held while its popover is open, even once every step is handled: the
-  // popover then shows the finished list, and closing it hands focus back to
-  // the strip's own trigger rather than dropping it with the strip.
-  if (setup.total > 0 && (setup.handled < setup.total || checklistOpen)) {
+  // Held from the popover opening until its close has put focus back on the
+  // trigger, even once every step is handled: the popover shows the finished
+  // list meanwhile. When the strip then goes, focus moves to whatever now
+  // leads its container — the required prompt's action, or the surface —
+  // instead of falling to <body> with the trigger.
+  if (checklistKey !== null && (setup.handled < setup.total || ownPopover.held)) {
     return (
       <PluginSetupChecklistStrip
+        stripRef={stripRef}
         pluginId={pluginId}
         displayName={displayName}
         setup={setup}
         canSkip={projectId !== null}
-        open={checklistOpen}
-        onOpenChange={setChecklistOpen}
+        open={ownPopover.open}
+        onOpenChange={(open) =>
+          setPopover((current) => ({
+            key: checklistKey,
+            open,
+            held: open || (current.key === checklistKey && current.held),
+          }))
+        }
+        onCloseSettled={() => {
+          const strip = stripRef.current;
+          const home = strip?.parentElement ?? null;
+          const focusWasHere = strip?.contains(document.activeElement) === true;
+          setPopover((current) => ({ ...current, held: false }));
+          if (!focusWasHere || !home) return;
+          requestAnimationFrame(() => {
+            if (document.activeElement && document.activeElement !== document.body) return;
+            restoreFocusTo(getVisibleTabbableElements(home)[0]);
+          });
+        }}
       />
     );
   }
@@ -151,25 +182,39 @@ export function PluginSetupStrip({ pluginId }: { pluginId: string }) {
 
 const EMPTY_STATUS: PluginRequiredSettingsStatus = { missing: [], unreadable: [], labels: {} };
 
+interface ChecklistPopoverState {
+  key: string | null;
+  open: boolean;
+  /** Keeps the strip mounted until the popover's close has restored focus. */
+  held: boolean;
+}
+
+const CLOSED_POPOVER: ChecklistPopoverState = { key: null, open: false, held: false };
+
 function PluginSetupChecklistStrip({
+  stripRef,
   pluginId,
   displayName,
   setup,
   canSkip,
   open,
   onOpenChange,
+  onCloseSettled,
 }: {
+  stripRef: RefObject<HTMLDivElement | null>;
   pluginId: string;
   displayName: string;
   setup: PluginSetupState;
   canSkip: boolean;
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  /** After a close has restored focus, which happens once the content is gone. */
+  onCloseSettled: () => void;
 }) {
   const headingId = useId();
   const progress = `${setup.handled} of ${setup.total}`;
   return (
-    <div className="shrink-0" data-testid="plugin-setup-strip">
+    <div ref={stripRef} className="shrink-0" data-testid="plugin-setup-strip">
       <InlineStatusBanner
         title={`${displayName} setup · ${progress}`}
         severity="neutral"
@@ -187,15 +232,21 @@ function PluginSetupChecklistStrip({
                 Setup steps
               </Button>
             </PopoverTrigger>
-            <PopoverContent className="flex w-96 flex-col p-0" aria-labelledby={headingId}>
-              <div className={POPOVER_HEADER_CLASS}>
+            <PopoverContent
+              // A short window gets the space there is, and the rows scroll.
+              className="flex max-h-[var(--radix-popover-content-available-height)] w-96 flex-col p-0"
+              aria-labelledby={headingId}
+              // Radix restores focus to the trigger after this returns, so the
+              // strip lets go a frame later.
+              onCloseAutoFocus={() => requestAnimationFrame(onCloseSettled)}
+            >
+              <div className={cn(POPOVER_HEADER_CLASS, "shrink-0")}>
                 <span id={headingId} className={POPOVER_TITLE_CLASS}>
                   {displayName} setup
                 </span>
                 <span className={POPOVER_HEADER_META_CLASS}>{progress}</span>
               </div>
-              {/* Ten steps with descriptions outgrow a short window. */}
-              <ScrollShadow compact className="max-h-96">
+              <ScrollShadow compact className="max-h-96 flex-1">
                 <PluginSetupChecklist
                   pluginId={pluginId}
                   rows={setup.rows}
