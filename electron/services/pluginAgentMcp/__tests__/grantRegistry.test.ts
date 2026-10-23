@@ -416,3 +416,39 @@ describe("PluginMcpGrantRegistry", () => {
     });
   });
 });
+
+describe("PluginMcpGrantRegistry tool groups", () => {
+  const SEARCH = { id: "search", access: "read" as const };
+
+  it("freezes a copy of the groups and refuses groups without the endpoint", () => {
+    const registry = new PluginMcpGrantRegistry();
+    const groups = [{ ...SEARCH }];
+    const { grant } = issue(registry, {
+      scope: { databases: false, pluginEndpointId: "data", pluginGroups: groups },
+    });
+    groups[0].id = "changes";
+
+    expect(grant.scope.pluginGroups).toEqual([SEARCH]);
+    expect(Object.isFrozen(grant.scope.pluginGroups)).toBe(true);
+    expect(() => issue(registry, { scope: { databases: true, pluginGroups: [SEARCH] } })).toThrow(
+      /tool groups need the plugin's endpoint/
+    );
+    expect(() =>
+      issue(registry, { scope: { databases: false, pluginEndpointId: "data", pluginGroups: [] } })
+    ).toThrow(/at least one group/);
+  });
+
+  it("revokes only the grants reaching a regrouped endpoint's groups, held ones included", () => {
+    const registry = new PluginMcpGrantRegistry();
+    const grouped = issue(registry, {
+      scope: { databases: false, pluginEndpointId: "data", pluginGroups: [SEARCH] },
+    }).grant;
+    const databases = issue(registry, { scope: { databases: true }, terminalId: "term-2" }).grant;
+    registry.holdPlugin("acme.ledger", "surface");
+
+    const revoked = registry.revokeRegrouped("acme.ledger", "data");
+
+    expect(revoked.map((grant) => grant.credentialId)).toEqual([grouped.credentialId]);
+    expect(registry.isLive(databases.credentialId)).toBe(true);
+  });
+});

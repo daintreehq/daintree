@@ -10,6 +10,7 @@ import {
   AgentContributionSchema,
   AgentDetectionConfigSchema,
   AgentMcpContributionSchema,
+  AgentMcpToolGroupSchema,
   CommandContributionSchema,
   ContextMenuContributionSchema,
   CredentialFieldSchema,
@@ -151,6 +152,7 @@ const PROCESS_TOOL_REGISTRY = "shared/config/pluginProcessToolRegistry.ts";
 const PLUGIN_ICON_ASSETS = "electron/services/plugin/pluginIconAssets.ts";
 const PROCESS_DETECTOR_REGISTRIES = "electron/services/ProcessDetector/registries.ts";
 const AGENT_MCP_DECLARED = "electron/services/pluginAgentMcp/declaredEndpoints.ts";
+const AGENT_MCP_PROJECT_ENABLEMENT = "electron/services/pluginAgentMcp/projectEnablement.ts";
 const WORKTREE_SETUP_STEP_REGISTRY = "electron/services/worktreeSetupStepRegistry.ts";
 const WORKTREE_SETUP_RPC = "electron/services/worktreeSetupRpcServer.ts";
 const LIFECYCLE_COMMAND_TRUST = "electron/workspace-host/lifecycleCommandTrust.ts";
@@ -226,6 +228,7 @@ const SWEPT_SCHEMAS = {
   surfaces: SurfaceContributionsSchema,
   "databases.queries": DatabaseQueryContributionSchema,
   "databases.queries.params": DatabaseQueryParamSchema,
+  "agentMcp.groups": AgentMcpToolGroupSchema,
   "panels.menu": PanelMenuItemSchema,
   "panels.toolbar": PanelToolbarItemSchema,
   "agents.detection": AgentDetectionConfigSchema,
@@ -405,6 +408,7 @@ type FieldConsumerCoverage = {
     keyof z.infer<typeof DatabaseQueryParamSchema>,
     ConsumerDescriptor
   >;
+  "agentMcp.groups": Record<keyof z.infer<typeof AgentMcpToolGroupSchema>, ConsumerDescriptor>;
   surfaces: Record<keyof z.infer<typeof SurfaceContributionsSchema>, ConsumerDescriptor>;
   "panels.menu": Record<keyof z.infer<typeof PanelMenuItemSchema>, ConsumerDescriptor>;
   "panels.toolbar": Record<keyof z.infer<typeof PanelToolbarItemSchema>, ConsumerDescriptor>;
@@ -1895,6 +1899,42 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
       mode: "intentional-metadata",
       consumers: [{ file: PLUGIN_SCHEMA, symbol: "AgentMcpContributionSchema (literal 'tools')" }],
       note: "Only 'tools' is accepted; kept explicit so a later endpoint mode is additive.",
+    },
+    groups: {
+      mode: "verbatim",
+      consumers: [
+        { file: AGENT_MCP_DECLARED, symbol: "declaredPluginEndpointOf" },
+        { file: PLUGIN_HOST_FACTORY, symbol: "mcp.registerTools (validateAgentMcpTools groups)" },
+      ],
+      note: "The groups the user allows one at a time, and what each registered tool must name.",
+    },
+  },
+  "agentMcp.groups": {
+    id: {
+      mode: "cross-reference",
+      consumers: [
+        { file: PLUGIN_HOST_FACTORY, symbol: "mcp.registerTools (validateAgentMcpTools groups)" },
+        { file: AGENT_MCP_PROJECT_ENABLEMENT, symbol: "agentMcpScopeFor" },
+      ],
+      note: "What a tool's `group` names, and what the user's choice and a grant's scope are kept under.",
+    },
+    name: {
+      mode: "verbatim",
+      consumers: [{ file: AGENT_MCP_DECLARED, symbol: "declaredPluginEndpointOf" }],
+      note: "Shown on the group's switch in the plugin's agent access row.",
+    },
+    description: {
+      mode: "verbatim",
+      consumers: [{ file: AGENT_MCP_DECLARED, symbol: "declaredPluginEndpointOf" }],
+      note: "Shown beneath the group's name.",
+    },
+    access: {
+      mode: "verbatim",
+      consumers: [
+        { file: AGENT_MCP_DECLARED, symbol: "declaredPluginEndpointOf" },
+        { file: AGENT_MCP_PROJECT_ENABLEMENT, symbol: "choicesAllowGroup" },
+      ],
+      note: "Shown as the plugin's own description; a choice made under one class never allows the other.",
     },
   },
   worktreeSetupSteps: {

@@ -48,16 +48,24 @@ export interface AssistantPluginKnowledge {
 /**
  * Whether the Assistant was given everything the plugin declares. Its notes
  * may describe any of its tools, so they go only to an Assistant that has them
- * all: at read only, that is a database plugin that declares no writes.
+ * all: at read only, that is a database plugin that declares no writes, and
+ * for a plugin with tool groups, every group it declares.
  */
 export function coversDeclaredSurface(
   plugin: DeclaredAgentMcpPlugin,
   scope: AgentMcpToolScope
 ): boolean {
+  const endpoint = plugin.pluginEndpoint;
   return (
     (!plugin.hasDatabases || scope.databases) &&
     (plugin.hasDatabaseWrites !== true || scope.databaseWrites === true) &&
-    (plugin.pluginEndpoint === undefined || scope.pluginEndpointId === plugin.pluginEndpoint.id)
+    (endpoint === undefined ||
+      (scope.pluginEndpointId === endpoint.id &&
+        (endpoint.groups ?? []).every((group) =>
+          (scope.pluginGroups ?? []).some(
+            (granted) => granted.id === group.id && granted.access === group.access
+          )
+        )))
   );
 }
 

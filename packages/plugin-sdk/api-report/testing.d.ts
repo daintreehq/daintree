@@ -2381,6 +2381,12 @@ interface PluginMcpToolDefinition {
     outputSchema?: PluginMcpJsonSchema;
     /** MCP tool annotations advertised on `tools/list`. See {@link PluginMcpToolAnnotations}. */
     annotations?: PluginMcpToolAnnotations;
+    /**
+     * The declared group the tool belongs to: required when the endpoint
+     * declares `groups`, rejected when it declares none. The tool is listed and
+     * callable only on credentials for a project whose user allowed that group.
+     */
+    group?: string;
     execute(args: Record<string, unknown>, caller: PluginMcpCaller, signal: AbortSignal): unknown | Promise<unknown>;
 }
 /** Host API for serving `contributes.agentMcp` endpoints. Requires `mcp:expose`. */
@@ -2391,8 +2397,10 @@ interface PluginMcpApi {
      * manifest's declared database queries comes to more than
      * {@link AGENT_MCP_MAX_TOOLS_PER_ENDPOINT}, a tool named like one of those
      * queries, or a tool breaking the name, description or schema limits is
-     * rejected whole. Calling it again for the same endpoint replaces the
-     * roster. Returns a disposer; every roster is dropped when the plugin
+     * rejected whole, and so is a tool naming no declared group on an endpoint
+     * that declares groups. Calling it again for the same endpoint replaces the
+     * roster; a replacement that changes which tools a group holds revokes
+     * the credentials agents hold for the plugin's groups. Returns a disposer; every roster is dropped when the plugin
      * unloads. Must be called during `activate()`.
      */
     registerTools(endpointId: string, tools: Record<string, PluginMcpToolDefinition>): Promise<() => void>;

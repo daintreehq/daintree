@@ -211,6 +211,8 @@ export type {
 
 export type {
   PluginAgentMcpContribution,
+  PluginAgentMcpToolGroup,
+  PluginAgentMcpToolGroupAccess,
   PluginMcpApi,
   PluginMcpToolDefinition,
   PluginMcpToolAnnotations,

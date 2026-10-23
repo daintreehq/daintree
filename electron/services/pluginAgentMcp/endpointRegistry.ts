@@ -2,6 +2,15 @@ import type { AgentMcpEndpointRegistration } from "./types.js";
 
 type RegistryListener = (pluginInstanceId: string, endpointId: string) => void;
 
+/** Which group each grouped tool of a roster is in, as one comparable string; empty with no groups. */
+function groupingOf(registration: AgentMcpEndpointRegistration): string {
+  return registration.tools
+    .filter((tool) => tool.group !== undefined)
+    .map((tool) => `${tool.name}=${tool.group!.id}:${tool.group!.access}`)
+    .sort()
+    .join(",");
+}
+
 /**
  * Live tool rosters, keyed by plugin instance then endpoint. Keyed by instance
  * and never by manifest id: two projects can each load their own copy of the
@@ -10,6 +19,13 @@ type RegistryListener = (pluginInstanceId: string, endpointId: string) => void;
 export class AgentMcpEndpointRegistry {
   private readonly endpoints = new Map<string, Map<string, AgentMcpEndpointRegistration>>();
   private readonly listeners = new Set<RegistryListener>();
+  private readonly regroupListeners = new Set<RegistryListener>();
+  /**
+   * The last grouping each endpoint registered, kept after its roster is
+   * dropped: a reload unregisters before the next generation registers, and
+   * comparing against nothing would miss a tool that moved group across it.
+   */
+  private readonly groupings = new Map<string, Map<string, string>>();
 
   /**
    * Bind a roster, replacing any earlier one for the same endpoint. The
@@ -18,6 +34,18 @@ export class AgentMcpEndpointRegistry {
    */
   register(registration: AgentMcpEndpointRegistration): () => void {
     const { pluginInstanceId, endpointId } = registration;
+    let groupings = this.groupings.get(pluginInstanceId);
+    if (!groupings) {
+      groupings = new Map();
+      this.groupings.set(pluginInstanceId, groupings);
+    }
+    const grouping = groupingOf(registration);
+    const previous = groupings.get(endpointId);
+    groupings.set(endpointId, grouping);
+    // Before the roster is bound, so no grant issued against the old grouping
+    // ever lists or calls the new one.
+    if (previous !== undefined && previous !== grouping)
+      this.emitTo(this.regroupListeners, pluginInstanceId, endpointId);
     let byEndpoint = this.endpoints.get(pluginInstanceId);
     if (!byEndpoint) {
       byEndpoint = new Map();
@@ -54,12 +82,32 @@ export class AgentMcpEndpointRegistry {
     };
   }
 
+  /**
+   * Fires before a roster is bound whose tools sit in different groups from the
+   * endpoint's last roster, this generation's or an earlier one's.
+   */
+  onDidRegroup(listener: RegistryListener): () => void {
+    this.regroupListeners.add(listener);
+    return () => {
+      this.regroupListeners.delete(listener);
+    };
+  }
+
   clear(): void {
     this.endpoints.clear();
+    this.groupings.clear();
   }
 
   private emit(pluginInstanceId: string, endpointId: string): void {
-    for (const listener of this.listeners) {
+    this.emitTo(this.listeners, pluginInstanceId, endpointId);
+  }
+
+  private emitTo(
+    listeners: ReadonlySet<RegistryListener>,
+    pluginInstanceId: string,
+    endpointId: string
+  ): void {
+    for (const listener of listeners) {
       try {
         listener(pluginInstanceId, endpointId);
       } catch (err) {

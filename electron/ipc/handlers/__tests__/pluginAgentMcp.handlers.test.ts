@@ -1067,3 +1067,120 @@ describe("plugin agent MCP access IPC", () => {
     });
   });
 });
+
+describe("tool groups (#14104)", () => {
+  const GROUPED = [
+    {
+      id: "data",
+      name: "Household ledger",
+      mode: "tools",
+      groups: [
+        { id: "search", name: "Search entries", access: "read" },
+        { id: "changes", name: "Change entries", access: "write" },
+      ],
+    },
+  ] as unknown as PluginManifest["contributes"]["agentMcp"];
+
+  beforeEach(() => {
+    mocks.listPlugins.mockReturnValue([plugin({ agentMcp: GROUPED })]);
+  });
+
+  it("lists each group, none allowed by an answer from before the plugin declared them", async () => {
+    setProjectAgentMcpAccess(PROJECT, "acme.ledger", "read-write");
+
+    const [row] = (await list()).plugins;
+
+    expect(row.access).toBe("read-only");
+    expect(row.toolGroups?.map((group) => [group.id, group.access, group.allowed])).toEqual([
+      ["search", "read", false],
+      ["changes", "write", false],
+    ]);
+  });
+
+  it("allows a group by name, keeping the database level, and turns it back off", async () => {
+    setProjectAgentMcpAccess(PROJECT, "acme.ledger", "read-only");
+
+    let [row] = (
+      await set({
+        pluginInstanceId: "acme.ledger",
+        access: "read-only",
+        scope: "project",
+        groups: ["search"],
+      })
+    ).plugins;
+    expect(row.access).toBe("read-only");
+    expect(row.toolGroups?.filter((group) => group.allowed).map((group) => group.id)).toEqual([
+      "search",
+    ]);
+
+    // A level change alone keeps the group.
+    [row] = (
+      await set({ pluginInstanceId: "acme.ledger", access: "off", scope: "project" })
+    ).plugins;
+    expect(row.toolGroups?.find((group) => group.id === "search")?.allowed).toBe(true);
+
+    [row] = (
+      await set({
+        pluginInstanceId: "acme.ledger",
+        access: "off",
+        scope: "project",
+        groups: [],
+      })
+    ).plugins;
+    expect(row.toolGroups?.some((group) => group.allowed)).toBe(false);
+  });
+
+  it("refuses a group the plugin doesn't declare", async () => {
+    await expect(
+      set({ pluginInstanceId: "acme.ledger", access: "off", scope: "project", groups: ["admin"] })
+    ).rejects.toThrow(/declares no tool group "admin"/);
+  });
+
+  it("keeps a group still allowed for a plugin that's gone listed, and lets it be turned off", async () => {
+    setProjectAgentMcpAccess(PROJECT, "acme.ledger", "off", undefined, [
+      { id: "search", access: "read" },
+    ]);
+    mocks.listPlugins.mockReturnValue([]);
+
+    let [row] = (await list()).plugins;
+    expect(row.available).toBe(false);
+    expect(row.toolGroups).toEqual([expect.objectContaining({ id: "search", allowed: true })]);
+
+    [row] =
+      (
+        await set({
+          pluginInstanceId: "acme.ledger",
+          access: "off",
+          scope: "project",
+          groups: [],
+        })
+      ).plugins ?? [];
+    expect(row).toBeUndefined();
+  });
+
+  it("gives the Assistant only groups the project's agents have", async () => {
+    setProjectAgentMcpAccess(PROJECT, "acme.ledger", "off", undefined, [
+      { id: "search", access: "read" },
+    ]);
+
+    await expect(
+      set({
+        pluginInstanceId: "acme.ledger",
+        access: "read-only",
+        scope: "assistant",
+        groups: ["changes"],
+      })
+    ).rejects.toThrow(/can't use a tool group/);
+
+    const [row] = (
+      await set({
+        pluginInstanceId: "acme.ledger",
+        access: "read-only",
+        scope: "assistant",
+        groups: ["search"],
+      })
+    ).plugins;
+    expect(row.toolGroups?.find((group) => group.id === "search")?.assistantAllowed).toBe(true);
+    expect(assistantAgentMcpAccess(PROJECT, "acme.ledger")).toBe("read-only");
+  });
+});

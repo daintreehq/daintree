@@ -2974,7 +2974,7 @@ export function createHost(
         // a roster for an undeclared endpoint could never be reached — reject it
         // rather than hold an orphan.
         const contributes = deps.plugins.get(pluginId)?.manifest.contributes;
-        const declared = contributes?.agentMcp?.some((endpoint) => endpoint.id === endpointId);
+        const declared = contributes?.agentMcp?.find((endpoint) => endpoint.id === endpointId);
         if (!declared) {
           throw new Error(
             `Plugin "${pluginId}" mcp.registerTools: endpoint "${endpointId}" is not declared in contributes.agentMcp`
@@ -2990,7 +2990,13 @@ export function createHost(
         );
         let descriptors: ReturnType<typeof validateAgentMcpTools>;
         try {
-          descriptors = validateAgentMcpTools(tools, { declaredQueryNames });
+          descriptors = validateAgentMcpTools(tools, {
+            declaredQueryNames,
+            groups: (declared.groups ?? []).map((group) => ({
+              id: group.id,
+              access: group.access,
+            })),
+          });
         } catch (err) {
           throw new Error(
             `Plugin "${pluginId}" mcp.registerTools("${endpointId}"): ${formatErrorMessage(err, "invalid tool roster")}`,

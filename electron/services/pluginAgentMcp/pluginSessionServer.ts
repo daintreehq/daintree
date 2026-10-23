@@ -108,6 +108,9 @@ const ABORT_MESSAGES: Record<AbortCause, (timeoutMs: number) => string> = {
 };
 
 /** Said after any abort of a write that had started: the commit may have landed first. */
+/** The `_meta` key a grouped tool's group is advertised under on `tools/list`. */
+export const TOOL_GROUP_META_KEY = "dev.daintree/toolGroup";
+
 const WRITE_MAY_HAVE_APPLIED =
   " The write may still have been applied; read the data before retrying.";
 
@@ -285,9 +288,18 @@ export function createPluginSessionServer(options: PluginSessionServerOptions): 
   const databaseRegistration = (signal: AbortSignal): Promise<Registration> =>
     scope.databases ? awaitRegistration(DATABASE_ENDPOINT_ID, signal) : Promise.resolve(undefined);
 
-  /** A declared write is this grant's only with read and write access when it was minted. */
+  /**
+   * A declared write is this grant's only with read and write access when it
+   * was minted, and a grouped tool only when the user had allowed its group,
+   * as the manifest classed it then. A grant without groups reaches no grouped
+   * tool, so a roster that gained groups is never served whole.
+   */
   const isGranted = (tool: AgentMcpRegisteredTool): boolean =>
-    tool.databaseWrite !== true || scope.databaseWrites === true;
+    (tool.databaseWrite !== true || scope.databaseWrites === true) &&
+    (tool.group === undefined ||
+      (scope.pluginGroups ?? []).some(
+        (group) => group.id === tool.group!.id && group.access === tool.group!.access
+      ));
 
   /** The plugin's own roster, which only exists once the plugin has activated. */
   const pluginRegistration = async (signal: AbortSignal): Promise<Registration> => {
@@ -340,7 +352,7 @@ export function createPluginSessionServer(options: PluginSessionServerOptions): 
       ...servedSkillTools(),
       // Registration already refuses the host's names; this keeps the two
       // rosters from ever advertising one name twice regardless.
-      ...(own?.tools ?? []).filter((tool) => !hostNames.has(tool.name)),
+      ...(own?.tools ?? []).filter((tool) => !hostNames.has(tool.name) && isGranted(tool)),
     ].map((tool) => ({
       name: tool.name,
       description: tool.description,
@@ -353,6 +365,12 @@ export function createPluginSessionServer(options: PluginSessionServerOptions): 
         : tool.annotations !== undefined
           ? { annotations: { ...tool.annotations } }
           : {}),
+      // Which group the tool was served under and what the manifest says the
+      // group does: the host's account, set here and never by the plugin. It
+      // describes the tool; it is not a read-only hint, so clients still ask.
+      ...(tool.group !== undefined
+        ? { _meta: { [TOOL_GROUP_META_KEY]: { id: tool.group.id, access: tool.group.access } } }
+        : {}),
     }));
     return { tools };
   });
@@ -510,7 +528,8 @@ export function createPluginSessionServer(options: PluginSessionServerOptions): 
       if (controller.signal.aborted) return abortedResult();
       if (!isCallerServable()) return toolError(RELOADING_MESSAGE);
 
-      state.writeStarted = descriptor.databaseWrite === true;
+      state.writeStarted =
+        descriptor.databaseWrite === true || descriptor.group?.access === "write";
       let invocation: Promise<unknown>;
       try {
         invocation = Promise.resolve(

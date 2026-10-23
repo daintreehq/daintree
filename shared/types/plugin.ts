@@ -2574,9 +2574,10 @@ export interface McpServerContribution {
  * the existing loopback listener), the per-terminal credential, the project
  * binding and revocation. The plugin supplies the tool roster at activation via
  * {@link PluginMcpApi.registerTools}. Requires the `mcp:expose` capability, and
- * reaches no agent until the user gives the plugin read-and-write access. Its
- * tools share one MCP server with the host's tools for the plugin's databases,
- * so `database_schema` and `database_query` are reserved.
+ * reaches no agent until the user gives the plugin read-and-write access — or,
+ * when it declares `groups`, until the user allows a group. Its tools share
+ * one MCP server with the host's tools for the plugin's databases, so
+ * `database_schema` and `database_query` are reserved.
  */
 export interface PluginAgentMcpContribution {
   id: string;
@@ -2585,6 +2586,31 @@ export interface PluginAgentMcpContribution {
   description?: string;
   /** Host-managed tools. The only mode today; kept explicit so a later mode is additive. */
   mode: "tools";
+  /**
+   * Sets of tools the user allows one at a time, such as a `search` group apart
+   * from a `commit` group. With groups declared, every registered tool names
+   * one, and access levels no longer reach the plugin's own tools: only a
+   * group the user allowed does. See {@link PluginAgentMcpToolGroup}.
+   */
+  groups?: PluginAgentMcpToolGroup[];
+}
+
+/**
+ * Whether a group's tools read and search, or change things. The plugin's own
+ * description of its tools, shown to the user as such: the host can't check
+ * it, never turns it into a `readOnlyHint`, and never allows a group because
+ * of it.
+ */
+export type PluginAgentMcpToolGroupAccess = "read" | "write";
+
+/** One `contributes.agentMcp[].groups` entry. */
+export interface PluginAgentMcpToolGroup {
+  /** What tools name in {@link PluginMcpToolDefinition.group}, and what the user's choice is kept under. */
+  id: string;
+  /** Shown in the per-project access UI. */
+  name: string;
+  description?: string;
+  access: PluginAgentMcpToolGroupAccess;
 }
 
 /**
@@ -2677,6 +2703,8 @@ export interface PluginDatabaseQueryContribution {
 export const AGENT_MCP_MAX_TOOLS_PER_ENDPOINT = 16;
 /** Most `agentMcp` endpoints one manifest may declare. */
 export const AGENT_MCP_MAX_ENDPOINTS_PER_PLUGIN = 1;
+/** Most tool groups one `agentMcp` endpoint may declare. */
+export const AGENT_MCP_MAX_GROUPS_PER_ENDPOINT = 8;
 /**
  * Tool name grammar — the subset every MCP client accepts unmangled. Capped at
  * 32 characters because Claude exposes a server's tools as
@@ -2744,6 +2772,12 @@ export interface PluginMcpToolDefinition {
   outputSchema?: PluginMcpJsonSchema;
   /** MCP tool annotations advertised on `tools/list`. See {@link PluginMcpToolAnnotations}. */
   annotations?: PluginMcpToolAnnotations;
+  /**
+   * The declared group the tool belongs to: required when the endpoint
+   * declares `groups`, rejected when it declares none. The tool is listed and
+   * callable only on credentials for a project whose user allowed that group.
+   */
+  group?: string;
   execute(
     args: Record<string, unknown>,
     caller: PluginMcpCaller,
@@ -2759,8 +2793,10 @@ export interface PluginMcpApi {
    * manifest's declared database queries comes to more than
    * {@link AGENT_MCP_MAX_TOOLS_PER_ENDPOINT}, a tool named like one of those
    * queries, or a tool breaking the name, description or schema limits is
-   * rejected whole. Calling it again for the same endpoint replaces the
-   * roster. Returns a disposer; every roster is dropped when the plugin
+   * rejected whole, and so is a tool naming no declared group on an endpoint
+   * that declares groups. Calling it again for the same endpoint replaces the
+   * roster; a replacement that changes which tools a group holds revokes
+   * the credentials agents hold for the plugin's groups. Returns a disposer; every roster is dropped when the plugin
    * unloads. Must be called during `activate()`.
    */
   registerTools(

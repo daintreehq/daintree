@@ -198,6 +198,7 @@ export class PluginMcpRoute implements PluginMcpRouteHandler {
   private readonly observeToolCall: PluginMcpRouteDeps["observeToolCall"];
   private readonly offRevoked: () => void;
   private readonly offKept: () => void;
+  private readonly offRegroup: () => void;
   /** When each kind of rejection or eviction was last logged, by kind and credential. */
   private readonly rejectionsLoggedAt = new Map<string, number>();
   /**
@@ -222,6 +223,11 @@ export class PluginMcpRoute implements PluginMcpRouteHandler {
     // already fails authentication; this only has to reap what is open.
     this.offRevoked = this.grants.onRevoked((revoked) => {
       for (const grant of revoked) this.closeCredentialSessions(grant.credentialId);
+    });
+    // A grant names the groups the user allowed, not tools; once the plugin
+    // moves a tool between groups, it no longer says which tools those are.
+    this.offRegroup = this.endpoints.onDidRegroup((pluginInstanceId, endpointId) => {
+      this.grants.revokeRegrouped(pluginInstanceId, endpointId);
     });
     // The reload's roster changes may have reached a client while its
     // credential was held, or not at all (a lazy plugin registers nothing until
@@ -269,6 +275,7 @@ export class PluginMcpRoute implements PluginMcpRouteHandler {
   dispose(): void {
     this.offRevoked();
     this.offKept();
+    this.offRegroup();
     this.closeAllSessions();
   }
 

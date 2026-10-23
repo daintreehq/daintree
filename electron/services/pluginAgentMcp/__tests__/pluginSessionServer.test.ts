@@ -1214,3 +1214,73 @@ describe("createPluginSessionServer — skills from the real registry (#13831)",
     expect(await refusal(`${otherProjectInstance}.reconcile`)).toBe(unknown);
   });
 });
+
+describe("tool groups", () => {
+  const SEARCH = { id: "search", access: "read" as const };
+  const CHANGES = { id: "changes", access: "write" as const };
+  const SEARCH_TOOL = compileAgentMcpTool({
+    name: "search_contacts",
+    description: "Search contacts.",
+    inputSchema: { type: "object" },
+    group: SEARCH,
+  });
+  const COMMIT_TOOL = compileAgentMcpTool({
+    name: "commit_change",
+    description: "Commit a previewed change.",
+    inputSchema: { type: "object" },
+    group: CHANGES,
+  });
+  const GROUPED = [SEARCH_TOOL, COMMIT_TOOL];
+
+  it("lists only the allowed group's tools, labelled by the host and never read-only", async () => {
+    const { client } = await connect(vi.fn(), {
+      tools: GROUPED,
+      scope: { databases: false, pluginEndpointId: ENDPOINT, pluginGroups: [SEARCH] },
+    });
+
+    const { tools } = await client.listTools();
+
+    expect(tools.map((tool) => tool.name)).toEqual(["search_contacts"]);
+    expect(tools[0]._meta).toEqual({ "dev.daintree/toolGroup": SEARCH });
+    expect(tools[0].annotations?.readOnlyHint).toBeUndefined();
+  });
+
+  it("answers a call to a disabled group as an unknown tool without running it", async () => {
+    const invoke = vi.fn<AgentMcpToolInvoker>(async () => ({ ok: true }));
+    const { client } = await connect(invoke, {
+      tools: GROUPED,
+      scope: { databases: false, pluginEndpointId: ENDPOINT, pluginGroups: [SEARCH] },
+    });
+
+    await expect(client.callTool({ name: "commit_change", arguments: {} })).rejects.toThrow(
+      /Unknown tool/
+    );
+    await client.callTool({ name: "search_contacts", arguments: {} });
+
+    expect(invoke).toHaveBeenCalledTimes(1);
+    expect(invoke.mock.calls[0][0]).toBe("search_contacts");
+  });
+
+  it("serves no grouped tool to a grant minted without groups", async () => {
+    const { client } = await connect(vi.fn(), { tools: [...GROUPED, LOOKUP], scope: PLUGIN_ONLY });
+
+    const { tools } = await client.listTools();
+
+    expect(tools.map((tool) => tool.name)).toEqual(["lookup"]);
+  });
+
+  it("serves nothing of a group the plugin recast since the grant was minted", async () => {
+    const recast = compileAgentMcpTool({
+      name: "search_contacts",
+      description: "Search contacts.",
+      inputSchema: { type: "object" },
+      group: { id: "search", access: "write" },
+    });
+    const { client } = await connect(vi.fn(), {
+      tools: [recast],
+      scope: { databases: false, pluginEndpointId: ENDPOINT, pluginGroups: [SEARCH] },
+    });
+
+    expect((await client.listTools()).tools).toEqual([]);
+  });
+});

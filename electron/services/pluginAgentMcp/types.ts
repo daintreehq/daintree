@@ -1,5 +1,6 @@
 import type http from "node:http";
 import type {
+  PluginAgentMcpToolGroupAccess,
   PluginMcpCaller,
   PluginMcpJsonSchema,
   PluginMcpToolAnnotations,
@@ -38,6 +39,12 @@ export function pluginMcpRoutePath(pluginInstanceId: string): string {
   return `${PLUGIN_MCP_ROUTE_PREFIX}${encodeURIComponent(pluginInstanceId)}`;
 }
 
+/** One declared tool group as a grant or an answer names it: its id, and what the plugin declared it does. */
+export interface AgentMcpToolGroupRef {
+  readonly id: string;
+  readonly access: PluginAgentMcpToolGroupAccess;
+}
+
 /**
  * Which of a plugin's rosters one grant reaches: the host's read-only database
  * tools, the plugin's own `agentMcp` endpoint, or both. Fixed when the grant is
@@ -48,6 +55,12 @@ export interface AgentMcpToolScope {
   /** The plugin's declared write queries as well; only with `databases`. */
   readonly databaseWrites?: true;
   readonly pluginEndpointId?: string;
+  /**
+   * For an endpoint that declares groups, the groups the user allowed, and
+   * only their tools: never absent with `pluginEndpointId` on such an
+   * endpoint, and never empty. Absent, a grouped tool is not this grant's.
+   */
+  readonly pluginGroups?: readonly AgentMcpToolGroupRef[];
 }
 
 /** The part of a registered tool an agent is shown. The implementation stays behind {@link AgentMcpToolInvoker}. */
@@ -70,6 +83,12 @@ export interface AgentMcpToolDescriptor {
   readonly databaseWrite?: true;
   /** The hints the plugin declared, snapshotted at registration. Never `readOnlyHint`. */
   readonly annotations?: Readonly<PluginMcpToolAnnotations>;
+  /**
+   * The declared group a plugin tool belongs to, with what the manifest says
+   * the group does, checked against the manifest at registration. A grouped
+   * tool is listed and callable only on a grant whose scope names its group.
+   */
+  readonly group?: AgentMcpToolGroupRef;
 }
 
 /**
@@ -124,7 +143,15 @@ export interface DeclaredAgentMcpPlugin {
     readonly id: string;
     readonly name: string;
     readonly description?: string;
+    /** Its declared tool groups; absent for an endpoint that declares none. */
+    readonly groups?: readonly DeclaredAgentMcpToolGroup[];
   };
+}
+
+/** A declared tool group as settings and scope resolution see it. */
+export interface DeclaredAgentMcpToolGroup extends AgentMcpToolGroupRef {
+  readonly name: string;
+  readonly description?: string;
 }
 
 /**

@@ -61,3 +61,52 @@ describe("AgentMcpEndpointRegistry", () => {
     ]);
   });
 });
+
+describe("AgentMcpEndpointRegistry regrouping", () => {
+  function grouped(groupId: string, toolName = "search"): AgentMcpEndpointRegistration {
+    return {
+      pluginInstanceId: "acme.crm",
+      endpointId: "crm",
+      tools: [
+        compileAgentMcpTool({
+          name: toolName,
+          description: "d",
+          inputSchema: { type: "object" },
+          group: { id: groupId, access: "read" },
+        }),
+      ],
+      invoke: vi.fn(async () => null),
+    };
+  }
+
+  it("reports a roster that moves a tool to another group before binding it, across a drop", () => {
+    const registry = new AgentMcpEndpointRegistry();
+    const seen: string[] = [];
+    registry.onDidRegroup((instance) => {
+      seen.push(`${instance}:${registry.get("acme.crm", "crm")?.tools[0].group?.id ?? "none"}`);
+    });
+
+    registry.register(grouped("search"));
+    registry.register(grouped("search"));
+    expect(seen).toEqual([]);
+
+    registry.unregisterPlugin("acme.crm");
+    registry.register(grouped("lookup"));
+
+    // Fired with the endpoint still empty: the new roster wasn't bound yet.
+    expect(seen).toEqual(["acme.crm:none"]);
+  });
+
+  it("reports a group that gains a tool", () => {
+    const registry = new AgentMcpEndpointRegistry();
+    const listener = vi.fn();
+    registry.onDidRegroup(listener);
+    registry.register(grouped("search", "search"));
+    registry.register({
+      ...grouped("search", "search"),
+      tools: [...grouped("search", "search").tools, ...grouped("search", "delete_all").tools],
+    });
+
+    expect(listener).toHaveBeenCalledWith("acme.crm", "crm");
+  });
+});
