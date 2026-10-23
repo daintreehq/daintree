@@ -31,7 +31,6 @@ import { COORDINATE_CONVENTIONS } from "../../../../shared/elementPicker/coordin
 import type { SourceCandidate } from "../../../../shared/elementPicker/source.js";
 import type { SelectionObservation } from "../../../../shared/elementPicker/observation.js";
 import type { ResolutionResult } from "../../../../shared/elementPicker/resolution.js";
-import type { SelectionObservation } from "../../../../shared/elementPicker/observation.js";
 import {
   RuntimeChild,
   STUB_MARKER,
