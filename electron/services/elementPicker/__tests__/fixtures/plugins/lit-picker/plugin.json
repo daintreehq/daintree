@@ -3,9 +3,7 @@
   "version": "1.0.0",
   "displayName": "Lit Element Picker (fixture)",
   "description": "Test fixture: a framework outside the built-in enum, loaded on detection.",
-  "capabilities": [
-    "preview:inspect"
-  ],
+  "capabilities": ["preview:inspect"],
   "contributes": {
     "elementPickerProviders": [
       {

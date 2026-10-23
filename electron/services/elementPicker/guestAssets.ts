@@ -21,10 +21,7 @@ export const CORE_GUEST_ASSET_DIR = "element-picker/guest";
 
 /** `plugin-runtime` is the registration half a plugin's guest entry is evaluated beside. */
 export type CoreGuestAssetId =
-  | "bootstrap"
-  | "probe"
-  | "plugin-runtime"
-  | `extractor:${ElementPickerFramework}`;
+  "bootstrap" | "probe" | "plugin-runtime" | `extractor:${ElementPickerFramework}`;
 
 export const CORE_GUEST_ASSET_FILES: Readonly<Partial<Record<CoreGuestAssetId, string>>> = {
   bootstrap: "bootstrap.js",

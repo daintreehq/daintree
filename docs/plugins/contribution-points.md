@@ -1574,7 +1574,11 @@ export default defineElementPickerExtractor((providerId) => ({
     if (!element.localName.includes("-")) return null;
     return {
       frameworkEvidence: [
-        { kind: "generic", framework: providerId, fields: [{ name: "tag", value: element.localName }] },
+        {
+          kind: "generic",
+          framework: providerId,
+          fields: [{ name: "tag", value: element.localName }],
+        },
       ],
     };
   },
