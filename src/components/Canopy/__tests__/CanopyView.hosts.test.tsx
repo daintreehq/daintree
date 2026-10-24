@@ -212,7 +212,7 @@ function installElectron() {
     setScope: vi.fn(async () => {}),
     setShown: vi.fn(async () => {}),
     setRead: vi.fn(async () => null),
-    archive: vi.fn(async () => null),
+    archive: vi.fn(async (): Promise<unknown> => null),
     unarchive: vi.fn(async () => {}),
     markSeen: vi.fn(async () => {}),
     runBranch: vi.fn(async () => "main"),
@@ -614,6 +614,47 @@ describe("the Canopy host picker", () => {
     });
     expect(state.invoke).toHaveBeenCalledWith("studio", "canopy:untrash", 7);
     expect(own.untrash).not.toHaveBeenCalled();
+  });
+
+  it("starts another host's list afresh: no run open from the last, and Z takes nothing back from it", async () => {
+    const own = installElectron();
+    let land: (mark: unknown) => void = () => {};
+    own.archive.mockImplementationOnce(() => new Promise((resolve) => (land = resolve)));
+    useFleetSnapshotStore.setState({ snapshot: fleet(["local-run", "shared"]) });
+    // The same run id on the other host, under a run that ranks above it.
+    remoteFleet = fleet(["remote-first", "shared"]);
+    remoteCanopy = canopySnapshot({ cards: [approvalCard("remote-first")] });
+    render(<CanopyView />);
+    await settle();
+    const row = document.getElementById("canopy-card-local-run")!;
+    act(() => row.focus());
+    // Archiving moves the cursor on, onto the run whose id the other host shares.
+    fireEvent.keyDown(row, { key: "e" });
+    expect(own.archive).toHaveBeenCalledWith("local-run", { spawnedAt: NOW - 3_600_000 });
+    expect(document.getElementById("canopy-detail-shared")).not.toBeNull();
+
+    act(() => useCanopyStore.getState().setHostId("studio"));
+    await settle();
+    expect(document.getElementById("canopy-detail-remote-first")).not.toBeNull();
+    expect(document.getElementById("canopy-detail-shared")).toBeNull();
+
+    // Pressed before main answers this host's archive, and again after: neither is its Z.
+    const remoteRow = document.getElementById("canopy-card-remote-first")!;
+    fireEvent.keyDown(remoteRow, { key: "z" });
+    await act(async () => {
+      land({
+        runId: "local-run",
+        spawnedAt: NOW - 3_600_000,
+        turn: 1,
+        readTurn: 1,
+        markedUnreadAt: null,
+        version: 2,
+      });
+    });
+    fireEvent.keyDown(remoteRow, { key: "z" });
+    await settle();
+    expect(own.unarchive).not.toHaveBeenCalled();
+    expect(channelsCalled()).not.toContain("studio canopy:unarchive");
   });
 
   it("presses no answer into another host's run while the link to it is down", async () => {

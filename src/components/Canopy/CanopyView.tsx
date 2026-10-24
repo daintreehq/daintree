@@ -1,47 +1,21 @@
-import {
-  useCallback,
-  useDeferredValue,
-  useEffect,
-  useLayoutEffect,
-  useMemo,
-  useRef,
-  useState,
-} from "react";
-import type { KeyboardEvent } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Keyboard, RefreshCw } from "lucide-react";
 import { formatWaitAge } from "@/lib/projectRowStatus";
 import { Telescope } from "@/components/icons";
 import { useCanopyStore } from "@/store/canopyStore";
-import { useFleetSnapshotStore } from "@/store/fleetSnapshotStore";
-import { useProjectStore } from "@/store/projectStore";
-import { useScratchStore } from "@/store/scratchStore";
-import { getViewWorkspaceId } from "@/store/viewWorkspaceId";
 import { actionService } from "@/services/ActionService";
 import { notify } from "@/lib/notify";
 import { latestUndoOnly, UNDO_TOAST_DURATION_MS } from "@/lib/undoToast";
 import { pluralize } from "@/lib/pluralize";
-import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
-import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { isMac } from "@/lib/platform";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { clientErrorCode } from "@/utils/clientAppError";
-import {
-  CANOPY_URGENT_PRIORITY,
-  type CanopyReadMark,
-  type CanopyScreenSearchTarget,
-} from "@shared/types/ipc/canopy";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
-import { CANOPY_SEEN_HEARTBEAT_MS, canopyViewIsWatched, reportCanopySeen } from "@/lib/canopySeen";
-import {
-  isProjectViewCached,
-  subscribeProjectViewLifecycle,
-  subscribeProjectViewObservability,
-} from "@/lib/viewCacheState";
+import { isProjectViewCached, subscribeProjectViewLifecycle } from "@/lib/viewCacheState";
 import { useOverlayClaim } from "@/hooks/useOverlayState";
 import { useEffectiveCombo } from "@/hooks";
 import { usePreferencesStore } from "@/store/preferencesStore";
 import { AppDialog } from "@/components/ui/AppDialog";
-import { consumePaletteFocusRestoreSuppression } from "@/components/ui/paletteFocusRestore";
 import { Button } from "@/components/ui/button";
 import { KbdChord } from "@/components/ui/Kbd";
 import { SearchField } from "@/components/ui/SearchField";
@@ -53,105 +27,36 @@ import { systemClient } from "@/clients/systemClient";
 import { useFrozenBackdrop } from "./useFrozenBackdrop";
 import { SegmentedRadioGroup } from "@/components/ui/SegmentedRadioGroup";
 import { Callout } from "@/components/ui/Callout";
-import { buildPilotGroups, type PilotWorkspaceMeta } from "@/components/Pilot/pilotRows";
-import {
-  buildCanopyInbox,
-  itemArchived,
-  itemNeedsAttention,
-  itemPriority,
-  itemSubject,
-  repliedAt,
-  searchTerms,
-  splitInbox,
-  unmatchedTerms,
-  type CanopyItem,
-} from "./canopyModel";
-import { CANOPY_REVEAL_MS, nextCanopyOrder } from "./canopyOrder";
-import {
-  CanopyCard,
-  canopyCardDomId,
-  type CanopyCardHandle,
-  type CanopyCardHandlers,
-  type CanopyPaneFocus,
-} from "./CanopyCard";
+import { itemNeedsAttention, repliedAt, type CanopyItem } from "./canopyModel";
+import { CanopyCard, canopyCardDomId } from "./CanopyCard";
 import { CanopyRow } from "./CanopyRow";
-import { CanopyRowMenu, type CanopyRowMenuActions } from "./CanopyRowMenu";
+import { CanopyRowMenu } from "./CanopyRowMenu";
 import { SectionBar } from "./CanopySectionBar";
 import { CanopyStatusBar } from "./CanopyStatusBar";
 import { CanopyPlace } from "./CanopyPlace";
 import { CanopyPitch } from "./CanopyPitch";
 import { CANOPY_BETA_TERMS, CANOPY_TITLE, CANOPY_WAITLIST_URL } from "./canopyTerms";
-import { useListReorderMotion } from "./useListReorderMotion";
-import {
-  ALL_HOSTS_LABEL,
-  CanopyHeaderCenter,
-  CanopyHostPicker,
-  useCanopyHostRows,
-} from "./CanopyHostPicker";
+import { CanopyHeaderCenter, CanopyHostPicker, useCanopyHostRows } from "./CanopyHostPicker";
 import { CanopyHostOffer } from "./CanopyHostOffer";
+import { useCanopyInboxData } from "./useCanopyInboxData";
+import { useCanopyInboxOrder } from "./useCanopyInboxOrder";
+import { useCanopyInboxSearch } from "./useCanopyInboxSearch";
+import { useCanopyInboxFilters } from "./useCanopyInboxFilters";
+import { useCanopyInboxFocus } from "./useCanopyInboxFocus";
+import { useCanopyInboxUndo } from "./useCanopyInboxUndo";
+import { useCanopyInboxActions } from "./useCanopyInboxActions";
+import { useCanopyInboxKeyboard } from "./useCanopyInboxKeyboard";
+import { placeOf } from "./canopyInboxPlace";
 import { CanopyAssistantPane, CanopyAssistantRow } from "./CanopyAssistantList";
-import {
-  CANOPY_ROLE_FILTERS,
-  assistantMatches,
-  canopyAssistantId,
-  buildAssistantItems,
-  type CanopyAssistantItem,
-  type CanopyRoleFilter,
-} from "./canopyAssistants";
-import { canopyAssistantDomId, openAssistantItem } from "./openAssistantItem";
-import {
-  hostsWithPartialWork,
-  isWorkOf,
-  workLinkLabel,
-  workLinkOf,
-  workLinksByRun,
-} from "./canopyRelationships";
-import { useAgentDirectory } from "@/hooks/useAgentDirectory";
-import { useAssistantWork } from "@/hooks/useAssistantWork";
+import { CANOPY_ROLE_FILTERS, type CanopyRoleFilter } from "./canopyAssistants";
 import { isFullAgentDirectory } from "@shared/types/agentDirectory";
 import { CanopyBulkEnableDialog } from "./CanopyBulkEnableDialog";
 import type { BulkTarget } from "@shared/utils/canopyBulkEnable";
-import {
-  canopyBulkTransport,
-  ownCanopyApi,
-  ownCanopyTerminalApi,
-  remoteCanopyApi,
-  remoteCanopyTerminalApi,
-  useRemoteCanopies,
-  useRemoteCanopy,
-} from "./canopyHostSource";
-import {
-  allHostsKey,
-  createAllHostsRoute,
-  mergeHostReadings,
-  parseAllHostsKey,
-  type HostReading,
-} from "./canopyAllHosts";
-import { ALL_HOSTS_ID, canopyOwnHostId, type CanopyScope } from "@/store/canopyStore";
-import { retryHostProjects, useHostProjectLists } from "@/components/Hosts/hostProjects";
+import { canopyBulkTransport } from "./canopyHostSource";
+import { ALL_HOSTS_ID, canopyOwnHostId } from "@/store/canopyStore";
 import { describeHostMenuState, type HostMenuRow } from "@/components/Hosts/hostModel";
-import { isNewWindowClick, switchToHost } from "@/components/Hosts/hostSwitching";
+import { isNewWindowClick } from "@/components/Hosts/hostSwitching";
 import type { HostId } from "@shared/types/remoteHosts";
-
-/**
- * Where a run really is. In All hosts a run is named by its host and its id
- * there; a host of null is the window's own, which acts on it as it always has.
- */
-function placeOf(
-  item: Pick<CanopyItem, "runId" | "workspaceId">,
-  hostId: HostId | null,
-  ownHostId: HostId
-): { hostId: HostId | null; runId: string; workspaceId: string } {
-  if (hostId !== ALL_HOSTS_ID) return { hostId, runId: item.runId, workspaceId: item.workspaceId };
-  const run = parseAllHostsKey(item.runId);
-  const workspace = parseAllHostsKey(item.workspaceId);
-  const host = run?.hostId ?? ownHostId;
-  return {
-    hostId: host === ownHostId ? null : host,
-    runId: run?.id ?? item.runId,
-    workspaceId: workspace?.id ?? item.workspaceId,
-  };
-}
 
 interface HostIssue {
   hostId: HostId;
@@ -160,74 +65,10 @@ interface HostIssue {
   act: (() => void) | null;
 }
 
-/** No other host's projects to list: one array, so the lookup's key stays put. */
-const NO_HOSTS: readonly HostId[] = [];
-
-/** Ages are minute-grained, as in Pilot. */
-const AGE_TICK_MS = 30_000;
-
-/** How long the search waits on the typing before reading terminals for it. */
-const SCREEN_SEARCH_DEBOUNCE_MS = 150;
-/** The most runs, words and word length one search asks of the terminals: main's own caps. */
-const SCREEN_SEARCH_MAX_RUNS = 500;
-const SCREEN_SEARCH_MAX_TERMS = 16;
-const SCREEN_SEARCH_MAX_TERM_LENGTH = 200;
-
 /** "3m ago", or "just now" — never "just now ago". */
 function agoPhrase(sinceMs: number, nowMs: number): string {
   const age = formatWaitAge(sinceMs, nowMs);
   return age === "just now" ? age : `${age} ago`;
-}
-/** An ask that pages the user: placed in the list at once, whatever is held. */
-function isUrgentItem(item: CanopyItem): boolean {
-  const card = item.card;
-  return (
-    card !== null &&
-    card.priority >= CANOPY_URGENT_PRIORITY &&
-    card.handledAt === null &&
-    item.disposition === null
-  );
-}
-
-/** An error toast whose one recovery is the place the action can be done by hand. */
-function failToast(
-  title: string,
-  error: unknown,
-  recovery: { label: string; onClick: () => void }
-) {
-  notify({
-    type: "error",
-    title,
-    message: formatErrorMessage(error, "Something went wrong."),
-    context: { eventKind: "agent" },
-    duration: 6000,
-    actions: [recovery],
-  });
-}
-
-/**
- * ⌘↑/⌘↓ on macOS, Alt+↑/↓ elsewhere (Slack's channel switch): the agent above
- * or below, from anywhere in the panel. Ctrl+↑/↓ is not used off the Mac
- * because terminals send it to the program as its own key.
- */
-function agentStepOf(event: KeyboardEvent<HTMLElement>): -1 | 1 | null {
-  if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return null;
-  // An input method's own keys: switching agents would unmount what it is composing in.
-  if (event.nativeEvent.isComposing || event.keyCode === 229) return null;
-  if (event.shiftKey) return null;
-  const chord = isMac()
-    ? event.metaKey && !event.ctrlKey && !event.altKey
-    : event.altKey && !event.ctrlKey && !event.metaKey;
-  if (!chord) return null;
-  return event.key === "ArrowUp" ? -1 : 1;
-}
-
-/** Where the keyboard is inside the pane: the reply composer, the live terminal, or neither. */
-function paneFocusOf(element: Element | null): CanopyPaneFocus {
-  if (!element) return null;
-  if (element.closest("[data-canopy-detail] .cm-editor")) return "composer";
-  if (element.closest("[data-canopy-detail] [data-canopy-terminal]")) return "terminal";
-  return null;
 }
 
 const FEEDBACK_MAILTO = "mailto:greg@daintree.org?subject=Canopy%20beta%20feedback";
@@ -695,1021 +536,175 @@ function CanopyInbox({
 }) {
   const isOpen = useCanopyStore((s) => s.isOpen);
   const close = useCanopyStore((s) => s.close);
-  // Another host is read through its own Canopy and shown as it read it: its
-  // runs can be read, archived and marked here, and nothing else is done to
-  // them until it can reach them. The window's own stores never hold its data.
-  const otherHost = hostId !== null;
-  const everyHost = hostId === ALL_HOSTS_ID;
-  const ownHostId = canopyOwnHostId();
-  const hostName = everyHost ? ALL_HOSTS_LABEL : (hostRow?.name ?? hostId ?? "");
-  const remote = useRemoteCanopy(everyHost ? null : hostId, isOpen);
-  // Every host listed, the window's own among them, each read on its own.
-  const participantKey = everyHost ? (hostRows ?? []).map((row) => row.hostId).join("\u0000") : "";
-  const participants = useMemo(
-    () => (participantKey === "" ? NO_HOSTS : participantKey.split("\u0000")),
-    [participantKey]
-  );
-  const remoteIds = useMemo(
-    () => participants.filter((id) => id !== ownHostId),
-    [participants, ownHostId]
-  );
-  const remotes = useRemoteCanopies(remoteIds, isOpen && everyHost);
-  const route = useMemo(
-    () => (everyHost ? createAllHostsRoute(ownHostId, participants) : null),
-    [everyHost, ownHostId, participants]
-  );
-  useEffect(() => {
-    if (!route || !isOpen) return;
-    route.open();
-    return () => route.close();
-  }, [route, isOpen]);
-  const api = useMemo(
-    () => route?.api ?? (hostId === null || everyHost ? ownCanopyApi : remoteCanopyApi(hostId)),
-    [route, hostId, everyHost]
-  );
-  const terminalApi = useMemo(
-    () =>
-      route?.terminalApi ??
-      (hostId === null || everyHost ? ownCanopyTerminalApi : remoteCanopyTerminalApi(hostId)),
-    [route, hostId, everyHost]
-  );
-  const ownCanopy = useCanopyStore((s) => s.snapshot);
-  const ownFleet = useFleetSnapshotStore((s) => s.snapshot);
-  const readings = useMemo<HostReading[]>(
-    () =>
-      everyHost
-        ? participants.map((id) =>
-            id === ownHostId
-              ? { hostId: id, canopy: ownCanopy, fleet: ownFleet, error: null }
-              : {
-                  hostId: id,
-                  canopy: remotes.states.get(id)?.canopy ?? null,
-                  fleet: remotes.states.get(id)?.fleet ?? null,
-                  error: remotes.states.get(id)?.error ?? null,
-                }
-          )
-        : [],
-    [everyHost, participants, ownHostId, ownCanopy, ownFleet, remotes.states]
-  );
-  const merged = useMemo(
-    () => (everyHost ? mergeHostReadings(readings) : null),
-    [everyHost, readings]
-  );
-  const canopy = merged ? merged.canopy : otherHost ? remote.canopy : ownCanopy;
-  const fleet = merged ? merged.fleet : otherHost ? remote.fleet : ownFleet;
-  const projects = useProjectStore((s) => s.projects);
-  const scratches = useScratchStore((s) => s.scratches);
-  const hostProjects = useHostProjectLists(
-    everyHost ? remoteIds : hostId === null ? NO_HOSTS : [hostId]
-  );
-  const storedScope = useCanopyStore((s) => s.scope);
-  const setScope = useCanopyStore((s) => s.setScope);
-  // "This project" is the window's own project: another host shows all of its own.
-  const scope: CanopyScope = otherHost ? "all" : storedScope;
-  // The link came back: its project names may have changed while it was away.
-  const hostEpochs = everyHost
-    ? remoteIds.map((id) => `${id}:${remotes.states.get(id)?.epoch ?? 0}`).join(" ")
-    : "";
-  const recoveries = everyHost
-    ? [...remotes.states.values()].reduce((sum, state) => sum + state.epoch, 0)
-    : remote.epoch;
-  useEffect(() => {
-    if (hostId === null || recoveries === 0) return;
-    if (!everyHost) {
-      retryHostProjects(hostId);
-      return;
-    }
-    // Said again for exactly the hosts whose link came back.
-    for (const entry of hostEpochs.split(" ")) {
-      const cut = entry.lastIndexOf(":");
-      if (cut > 0 && Number(entry.slice(cut + 1)) > 0) retryHostProjects(entry.slice(0, cut));
-    }
-  }, [hostId, everyHost, recoveries, hostEpochs]);
-
-  // Main reads only the screens in scope, so the agents a project view hides
-  // cost nothing. Said again whenever another host's link comes back.
-  useEffect(() => {
-    if (!isOpen) return;
-    safeFireAndForget(api.setScope(scope === "project" ? getViewWorkspaceId() : null));
-  }, [isOpen, scope, api, recoveries]);
-
-  const [nowMs, setNowMs] = useState(() => Date.now());
-  useEffect(() => {
-    if (!isOpen) return;
-    const handle = setInterval(() => setNowMs(Date.now()), AGE_TICK_MS);
-    return () => clearInterval(handle);
-  }, [isOpen]);
-
-  const workspaces = useMemo(() => {
-    const map = new Map<string, PilotWorkspaceMeta>();
-    if (everyHost) {
-      // A project is named with its host, and keyed by it: ids mean something only there.
-      const nameOf = (id: HostId) =>
-        (hostRows ?? []).find((row) => row.hostId === id)?.name ?? "This Mac";
-      const withHost = (name: string, id: HostId) => `${name} · ${nameOf(id)}`;
-      for (const project of projects) {
-        map.set(allHostsKey(ownHostId, project.id), {
-          kind: "project",
-          name: withHost(project.name, ownHostId),
-          lastOpened: project.lastOpened,
-          ...(project.emoji ? { emoji: project.emoji } : {}),
-          ...(project.color ? { color: project.color } : {}),
-        });
-      }
-      for (const scratch of scratches) {
-        map.set(allHostsKey(ownHostId, scratch.id), {
-          kind: "scratch",
-          name: withHost(scratch.name, ownHostId),
-          lastOpened: scratch.lastOpened,
-        });
-      }
-      for (const id of remoteIds) {
-        for (const project of hostProjects.get(id) ?? []) {
-          map.set(allHostsKey(id, project.id), {
-            kind: "project",
-            name: withHost(project.name, id),
-            ...(project.emoji ? { emoji: project.emoji } : {}),
-          });
-        }
-      }
-      return map;
-    }
-    // Another host's workspace ids mean something only there: named from its own list.
-    if (hostId !== null) {
-      for (const project of hostProjects.get(hostId) ?? []) {
-        map.set(project.id, {
-          kind: "project",
-          name: project.name,
-          ...(project.emoji ? { emoji: project.emoji } : {}),
-        });
-      }
-      return map;
-    }
-    for (const project of projects) {
-      map.set(project.id, {
-        kind: "project",
-        name: project.name,
-        lastOpened: project.lastOpened,
-        ...(project.emoji ? { emoji: project.emoji } : {}),
-        ...(project.color ? { color: project.color } : {}),
-      });
-    }
-    for (const scratch of scratches) {
-      map.set(scratch.id, {
-        kind: "scratch",
-        name: scratch.name,
-        lastOpened: scratch.lastOpened,
-      });
-    }
-    return map;
-  }, [hostId, everyHost, hostRows, ownHostId, remoteIds, hostProjects, projects, scratches]);
-
-  const baseItems = useMemo(() => {
-    if (!fleet) return [];
-    // No project on another host is the one this window shows.
-    const here = otherHost ? null : getViewWorkspaceId();
-    const runs =
-      scope === "project" ? fleet.runs.filter((run) => run.workspaceId === here) : fleet.runs;
-    const groups = buildPilotGroups(runs, {
-      workspaces,
-      currentWorkspaceId: here,
-      nowMs,
-    });
-    const cards = new Map((canopy?.cards ?? []).map((card) => [card.runId, card]));
-    return buildCanopyInbox(
-      groups,
-      cards,
-      {
-        failed: (canopy?.lastError ?? null) !== null,
-        failedRuns: new Set(canopy?.failedRuns ?? []),
-      },
-      new Map((canopy?.dispositions ?? []).map((entry) => [entry.runId, entry])),
-      new Map((canopy?.seen ?? []).map((entry) => [entry.runId, entry])),
-      nowMs,
-      new Map((canopy?.glances ?? []).map((entry) => [entry.runId, entry])),
-      new Map((canopy?.reads ?? []).map((entry) => [entry.runId, entry]))
-    );
-  }, [fleet, workspaces, nowMs, canopy, scope, otherHost]);
-
-  // Every run shows the moment the panel opens, in the order it was left — or,
-  // the first time, by what Daintree observes of each — and moves to its place
-  // as the readings the open set off land. Once they have, or after
-  // CANOPY_REVEAL_MS, the list holds still between pauses like always. Only
-  // words not yet written show as skeletons.
-  const owedOnOpen = useMemo(() => {
-    // Main hasn't answered the open yet: the snapshot in hand is from before
-    // it, and says nothing about what the open will read.
-    if (canopy?.active !== true) return true;
-    const due = new Set(canopy.wordsDue ?? []);
-    const reading = canopy.busy;
-    return baseItems.some(
-      (item) =>
-        due.has(item.runId) ||
-        item.card?.describing === true ||
-        (reading && item.card === null && item.disposition === null)
-    );
-  }, [baseItems, canopy]);
-  const openedAtRef = useRef<number | null>(null);
-  const [revealed, setRevealed] = useState(false);
-  const [revealWake, setRevealWake] = useState(0);
-  // Showing another host is an opening of its own list.
-  const revealHostRef = useRef(hostId);
-  useLayoutEffect(() => {
-    if (!isOpen) {
-      openedAtRef.current = null;
-      setRevealed(false);
-      return;
-    }
-    if (revealHostRef.current !== hostId) {
-      revealHostRef.current = hostId;
-      openedAtRef.current = null;
-      if (revealed) {
-        setRevealed(false);
-        return;
-      }
-    }
-    if (revealed) return;
-    if (openedAtRef.current === null) openedAtRef.current = Date.now();
-    const left = openedAtRef.current + CANOPY_REVEAL_MS - Date.now();
-    if (!owedOnOpen || left <= 0) {
-      setRevealed(true);
-      return;
-    }
-    const timer = setTimeout(() => setRevealWake((n) => n + 1), left);
-    return () => clearTimeout(timer);
-  }, [isOpen, revealed, owedOnOpen, revealWake, hostId]);
-
-  // The list moves only at moments the user can expect it to; see `nextCanopyOrder`.
-  // Each host keeps its own order: the same run ids mean other runs elsewhere.
-  const refreshedAt = canopy?.refreshedAt ?? null;
-  const ownOrder = useCanopyStore((s) => s.orders[scope]);
-  const hostOrder = useCanopyStore((s) => (hostId === null ? undefined : s.hostOrders[hostId]));
-  const order = (otherHost ? hostOrder : ownOrder) ?? null;
-  const setOrder = useCanopyStore((s) => s.setOrder);
-  const setHostOrder = useCanopyStore((s) => s.setHostOrder);
-  const orderKey = `${hostId ?? ""}|${scope}`;
-  const [pointerInList, setPointerInList] = useState(false);
-  const lastInteractionRef = useRef(0);
-  const pressingRef = useRef(false);
-  // A row's context menu is open: the list holds still under it.
-  const menuOpenRef = useRef(false);
-  const lastRankRef = useRef(0);
-  const openedRef = useRef(false);
-  const orderKeyRef = useRef(orderKey);
-  const [rankWake, setRankWake] = useState(0);
-  const [rankRequest, setRankRequest] = useState(0);
-  const rankRequestSeenRef = useRef(0);
-  useLayoutEffect(() => {
-    if (!isOpen) {
-      openedRef.current = false;
-      return;
-    }
-    if (baseItems.length === 0) return;
-    const now = Date.now();
-    const opening = !openedRef.current || orderKeyRef.current !== orderKey;
-    if (opening) {
-      openedRef.current = true;
-      orderKeyRef.current = orderKey;
-      // What the user sees on opening counts as just ranked.
-      lastRankRef.current = now;
-    }
-    const step = nextCanopyOrder(order, {
-      fresh: baseItems.map((item) => item.runId),
-      priorities: new Map(baseItems.map((item) => [item.runId, itemPriority(item, nowMs)])),
-      urgent: baseItems.filter(isUrgentItem).map((item) => item.runId),
-      refreshedAt,
-      now,
-      opening,
-      revealing: !revealed,
-      requested: rankRequest !== rankRequestSeenRef.current,
-      pressing: pressingRef.current || menuOpenRef.current,
-      pointerInList,
-      lastInteractionAt: lastInteractionRef.current,
-      lastRankAt: lastRankRef.current,
-    });
-    if (step.kind === "set") {
-      if (step.ranked) {
-        lastRankRef.current = now;
-        rankRequestSeenRef.current = rankRequest;
-      }
-      if (hostId === null) setOrder(scope, step.order);
-      else setHostOrder(hostId, step.order);
-      return;
-    }
-    if (step.kind === "hold") return;
-    const timer = setTimeout(() => setRankWake((n) => n + 1), step.ms);
-    return () => clearTimeout(timer);
-  }, [
-    isOpen,
-    scope,
-    hostId,
-    orderKey,
-    baseItems,
-    order,
-    setOrder,
-    setHostOrder,
-    refreshedAt,
-    pointerInList,
-    rankWake,
-    rankRequest,
-    revealed,
-    nowMs,
-  ]);
-  const items = useMemo(() => {
-    const ranks = new Map((order?.ids ?? []).map((id, index) => [id, index]));
-    const rankOf = (item: CanopyItem, index: number) => ranks.get(item.runId) ?? ranks.size + index;
-    return baseItems
-      .map((item, index) => ({ item, rank: rankOf(item, index) }))
-      .sort((a, b) => a.rank - b.rank)
-      .map(({ item }) => item);
-  }, [baseItems, order]);
-  const inbox = useMemo(() => splitInbox(items), [items]);
-  // The search the panel opens on: the runs whose names, words or terminal
-  // hold every word of it. Typed straight into, it never reaches a row's keys.
-  const [query, setQuery] = useState("");
-  const searchRef = useRef<HTMLInputElement>(null);
-  const appliedQuery = useDeferredValue(query);
-  const terms = useMemo(() => searchTerms(appliedQuery), [appliedQuery]);
-  const searching = terms.length > 0;
-  const searchKey = `${hostId ?? ""}|${terms.join(" ")}`;
-  // The words each run's names and words leave unfound, asked of its terminal
-  // on the host it runs on: only ids come back. A run with more words left
-  // than main takes is not asked, rather than the whole ask refused.
-  const screenTargets = useMemo(() => {
-    const targets: CanopyScreenSearchTarget[] = [];
-    if (terms.length === 0) return targets;
-    for (const item of items) {
-      const left = unmatchedTerms(item, terms);
-      if (
-        left.length === 0 ||
-        left.length > SCREEN_SEARCH_MAX_TERMS ||
-        left.some((term) => term.length > SCREEN_SEARCH_MAX_TERM_LENGTH)
-      ) {
-        continue;
-      }
-      targets.push({ runId: item.runId, spawnedAt: item.row.run.spawnedAt, terms: left });
-      if (targets.length === SCREEN_SEARCH_MAX_RUNS) break;
-    }
-    return targets;
-  }, [items, terms]);
-  // The ask as a value: a terminal's matches stand only for the very runs,
-  // incarnations and words they were found for, on the host that found them.
-  const screenAsk = useMemo(
-    () => (screenTargets.length === 0 ? null : `${hostId ?? ""}|${JSON.stringify(screenTargets)}`),
-    [screenTargets, hostId]
-  );
-  const screenTargetsRef = useRef(screenTargets);
-  useEffect(() => {
-    screenTargetsRef.current = screenTargets;
-  });
-  const [screenHits, setScreenHits] = useState<{
-    ask: string;
-    runIds: ReadonlySet<string>;
-  } | null>(null);
-  // Asked again as screens are read anew, since a terminal's words move on.
-  useEffect(() => {
-    if (!isOpen || screenAsk === null) return;
-    let live = true;
-    const timer = setTimeout(() => {
-      api.searchScreens(screenTargetsRef.current).then(
-        (runIds) => {
-          if (live) setScreenHits({ ask: screenAsk, runIds: new Set(runIds) });
-        },
-        // A host that can't search its screens still matches what the panel
-        // holds, and its search has still settled.
-        () => {
-          if (!live) return;
-          setScreenHits((hits) =>
-            hits?.ask === screenAsk ? hits : { ask: screenAsk, runIds: new Set() }
-          );
-        }
-      );
-    }, SCREEN_SEARCH_DEBOUNCE_MS);
-    return () => {
-      live = false;
-      clearTimeout(timer);
-    };
-  }, [isOpen, screenAsk, api, refreshedAt]);
-  const onScreen = screenHits !== null && screenHits.ask === screenAsk ? screenHits.runIds : null;
-  // Workers, Daintree Assistants or both. A role the filter hides keeps its
-  // asks: nothing hidden is marked seen, and the Assistants choice counts them.
-  const roleFilter = useCanopyStore((s) => s.roleFilter);
-  const setRoleFilter = useCanopyStore((s) => s.setRoleFilter);
-  const workersShown = roleFilter !== "assistants";
-  const assistantsShown = roleFilter !== "workers";
-  // Assistants come from this machine's own directory, never from the reader:
-  // another host's can't be listed from here yet, and All hosts lists this one's.
-  const assistantsReadable = !otherHost || everyHost;
-  const directory = useAgentDirectory(isOpen && assistantsReadable);
-  const handbacksSeen = useCanopyStore((s) => s.assistantHandbacksSeen);
-  const seeAssistantHandback = useCanopyStore((s) => s.seeAssistantHandback);
-  const ownHostName = everyHost
-    ? ((hostRows ?? []).find((row) => row.hostId === ownHostId)?.name ?? "This Mac")
-    : null;
-  const assistantItems = useMemo(() => {
-    if (!assistantsReadable) return [];
-    const names = new Map(projects.map((project) => [project.id, project.name]));
-    return buildAssistantItems(directory, {
-      projectName: (id) => {
-        const name = names.get(id) ?? null;
-        return name !== null && ownHostName !== null ? `${name} · ${ownHostName}` : name;
-      },
-      seen: handbacksSeen,
-      projectId: scope === "project" ? getViewWorkspaceId() : null,
-    });
-  }, [assistantsReadable, directory, projects, ownHostName, handbacksSeen, scope]);
-  const assistantAsks = assistantItems.filter((item) => item.ask !== null).length;
-  // "Show its work" (#14166): the workers one assistant made or was handed,
-  // from each host's own records of it. Every host shown is read, since an
-  // assistant here starts workers on others too.
-  const workOf = useCanopyStore((s) => s.workOf);
-  const showWorkOf = useCanopyStore((s) => s.showWorkOf);
-  const workHosts = useMemo(
-    () =>
-      everyHost ? (participants.length > 0 ? participants : [ownHostId]) : [hostId ?? ownHostId],
-    [everyHost, participants, ownHostId, hostId]
-  );
-  // Read only while it has something to show: worker rows' links, or the filter.
-  const workReadings = useAssistantWork(
-    workHosts,
+  const {
+    otherHost,
+    everyHost,
     ownHostId,
-    isOpen && (workersShown || workOf !== null)
-  );
-  const workLinks = useMemo(
-    () =>
-      workLinksByRun(workReadings, everyHost ? allHostsKey : (_hostId, terminalId) => terminalId),
-    [workReadings, everyHost]
-  );
-  const workPartial = workOf !== null && hostsWithPartialWork(workReadings, workHosts).length > 0;
-  const assistantNames = useMemo(
-    () =>
-      new Map(assistantItems.map((item) => [item.id, `Daintree Assistant · ${item.scopeLabel}`])),
-    [assistantItems]
-  );
-  const workLabelOf = (item: CanopyItem): string | null =>
-    workLinkLabel(
-      workLinkOf(item, workLinks),
-      (subject) => assistantNames.get(canopyAssistantId(subject)) ?? null
-    );
-  const shownAssistants = useMemo(
-    () =>
-      !assistantsShown
-        ? []
-        : workOf !== null
-          ? assistantItems.filter((item) => item.id === workOf.assistantId)
-          : searching
-            ? assistantItems.filter((item) => assistantMatches(item, terms))
-            : assistantItems,
-    [assistantsShown, workOf, searching, assistantItems, terms]
-  );
-  const showWork = (item: CanopyAssistantItem) => {
-    if (workOf?.assistantId === item.id) {
-      showWorkOf(null);
-      useAnnouncerStore.getState().announce("Showing the whole inbox", "polite");
-      return;
-    }
-    const name = `Daintree Assistant · ${item.scopeLabel}`;
-    showWorkOf({ assistantId: item.id, name });
-    useAnnouncerStore.getState().announce(`Showing the work of ${name}`, "polite");
-    // Its workers can be anywhere it reaches: every project, and every host when there are others.
-    if (roleFilter === "assistants") setRoleFilter("all");
-    if (storedScope === "project") setScope("all");
-    if (!everyHost && hostPicker !== null) useCanopyStore.getState().setHostId(ALL_HOSTS_ID);
-  };
-  const [assistantId, setAssistantId] = useState<string | null>(null);
-  const [assistantRefusal, setAssistantRefusal] = useState<{ id: string; text: string } | null>(
-    null
-  );
-  const inWork = useCallback(
-    (item: CanopyItem) =>
-      workOf === null || isWorkOf(workLinkOf(item, workLinks), workOf.assistantId),
-    [workOf, workLinks]
-  );
-  const shownInbox = useMemo(() => {
-    if (!workersShown) return { inbox: [], archived: [] };
-    if (!searching && workOf === null) return inbox;
-    const matches = (item: CanopyItem) =>
-      inWork(item) &&
-      (!searching ||
-        onScreen?.has(item.runId) === true ||
-        unmatchedTerms(item, terms).length === 0);
-    return { inbox: inbox.inbox.filter(matches), archived: inbox.archived.filter(matches) };
-  }, [inbox, workersShown, searching, onScreen, terms, workOf, inWork]);
-  const unreadOnly = useCanopyStore((s) => s.unreadOnly);
-  const setUnreadOnly = useCanopyStore((s) => s.setUnreadOnly);
-  // A run read while the Unread filter is on stays listed until the filter is
-  // turned off — or the panel closes, or shows another scope: reading the row
-  // in front of you must not pull it out from under you, nor shift every row
-  // beneath it, but a fresh look starts from what is unread now.
-  const [keptUnread, setKeptUnread] = useState<ReadonlySet<string>>(() => new Set());
-  useEffect(() => {
-    setKeptUnread((kept) => (kept.size === 0 ? kept : new Set()));
-  }, [isOpen, scope, hostId]);
-  useEffect(() => {
-    setKeptUnread((kept) => {
-      if (!unreadOnly) return kept.size === 0 ? kept : new Set();
-      const added = inbox.inbox.filter((item) => item.unread && !kept.has(item.runId));
-      return added.length === 0 ? kept : new Set([...kept, ...added.map((item) => item.runId)]);
-    });
-  }, [unreadOnly, inbox]);
-  // The inbox as listed: every run in it, or with the filter on, the unread.
-  const listed = useMemo(
-    () =>
-      unreadOnly
-        ? shownInbox.inbox.filter((item) => item.unread || keptUnread.has(item.runId))
-        : shownInbox.inbox,
-    [unreadOnly, shownInbox, keptUnread]
-  );
-  const archivedExpanded = useCanopyStore((s) => s.archivedExpanded);
-  const setArchivedExpanded = useCanopyStore((s) => s.setArchivedExpanded);
-  // A search finds archived runs too, shown under their bar without unfolding it for good.
-  const archivedShown = archivedExpanded || searching;
-  // What the keyboard walks: the list, then the archived runs once they are shown.
-  const visible = useMemo(
-    () => [...listed, ...(archivedShown ? shownInbox.archived : [])],
-    [listed, shownInbox, archivedShown]
-  );
-  // What the open panel shows counts as seen: its urgent prompts leave the
-  // toolbar badge. Runs another scope or the Unread filter hides stay on it.
-  // Before paint, so a close in the same moment can't lose it.
-  const acknowledge = useCanopyStore((s) => s.acknowledge);
-  useLayoutEffect(() => {
-    // A view nobody can see acknowledges nothing, for the moment before it
-    // closes; and the badge counts the window's own host, never another's runs.
-    if (!isOpen || isProjectViewCached()) return;
-    if (everyHost) {
-      // Only the asks this host's rows show: another host's run is never one of them.
-      const own = visible.flatMap((item) => {
-        const run = parseAllHostsKey(item.runId);
-        return run?.hostId === ownHostId ? [run.id] : [];
-      });
-      if (own.length > 0) acknowledge(own);
-      return;
-    }
-    if (otherHost) return;
-    acknowledge(visible.map((item) => item.runId));
-  }, [isOpen, otherHost, everyHost, ownHostId, visible, acknowledge]);
-  // Main holds a native page back only for an ask the panel shows: told the
-  // rows as listed, filters included, whenever they change — and told again
-  // when another host's link comes back, having dropped what it was told.
-  const shownKey = isOpen ? visible.map((item) => item.runId).join(" ") : null;
-  useEffect(() => {
-    if (shownKey === null) return;
-    safeFireAndForget(api.setShown(shownKey === "" ? [] : shownKey.split(" ")));
-  }, [shownKey, api, recoveries]);
-  const listRef = useRef<HTMLDivElement>(null);
-  // A search narrows the list, and a terminal's matches landing widen it: neither is a move.
-  const filterKey = searching ? `${searchKey}|${[...(onScreen ?? [])].join(" ")}` : "";
-  useListReorderMotion(listRef, listed.map((item) => item.runId).join(" "), filterKey);
-  // A list unmounted under the pointer never says the pointer left.
-  const listShown = listed.length > 0;
-  useEffect(() => {
-    if (!listShown) setPointerInList(false);
-  }, [listShown]);
+    hostName,
+    remote,
+    remotes,
+    participants,
+    api,
+    terminalApi,
+    readings,
+    canopy,
+    fleet,
+    projects,
+    storedScope,
+    setScope,
+    scope,
+    recoveries,
+    nowMs,
+    baseItems,
+  } = useCanopyInboxData({ isOpen, hostId, hostRow, hostRows });
 
-  // The search found runs, but only read ones the Unread filter hides: every
-  // place that says why the list is empty says that, not "no match".
-  const onlyReadMatch = searching && visible.length === 0 && shownInbox.inbox.length > 0;
-  // A search's outcome is said once, when it settles: the runs are in, the
-  // terminals have answered and the typing has stopped. Never per keystroke,
-  // and never again for a match a terminal adds later.
-  const searchSettled = fleet !== null && (screenAsk === null || onScreen !== null);
-  const outcome =
-    !searching || !searchSettled
-      ? null
-      : visible.length > 0
-        ? pluralize(visible.length, "match", "matches")
-        : onlyReadMatch
-          ? "No unread matches"
-          : "No matches";
-  const announceKey = `${searchKey}|${unreadOnly}`;
-  const announcedRef = useRef<string | null>(null);
-  useEffect(() => {
-    if (!searching) {
-      announcedRef.current = null;
-      return;
-    }
-    if (outcome === null || query !== appliedQuery || announcedRef.current === announceKey) return;
-    const timer = window.setTimeout(() => {
-      announcedRef.current = announceKey;
-      useAnnouncerStore.getState().announce(outcome, "polite");
-    }, UI_DOHERTY_THRESHOLD);
-    return () => window.clearTimeout(timer);
-  }, [searching, outcome, announceKey, query, appliedQuery]);
-
-  const [focusedId, setFocusedId] = useState<string | null>(null);
-  // Where the keyboard goes in the next agent's pane, for the run it was meant for.
-  const [paneFocus, setPaneFocus] = useState<{ runId: string; focus: CanopyPaneFocus } | null>(
-    null
-  );
-  const focusedIndex = visible.findIndex((item) => item.runId === focusedId);
-  const activeIndex = focusedIndex === -1 ? 0 : focusedIndex;
-  // Nothing is open until a run is chosen or landed on; before that the pane
-  // shows the list's first run. A chosen run stays open when it moves into the
-  // folded Archived group, so the pane never vanishes under the user's typing.
-  // While searching, only a match is ever open.
-  // An assistant chosen in the list, or the first one listed while no worker is:
-  // the pane shows it in place of a worker's.
-  // A worker chosen and only folded away (Archived shut) keeps the pane.
-  const workerChosen =
-    workersShown &&
-    focusedId !== null &&
-    items.some((item) => item.runId === focusedId && inWork(item));
-  const selectedAssistant: CanopyAssistantItem | null =
-    shownAssistants.find((item) => item.id === assistantId) ??
-    (visible.length === 0 && !workerChosen ? (shownAssistants[0] ?? null) : null);
-  const focusedItem =
-    selectedAssistant !== null || !workersShown
-      ? null
-      : focusedIndex !== -1
-        ? visible[focusedIndex]!
-        : searching
-          ? (visible[0] ?? null)
-          : (items.find((item) => item.runId === focusedId && inWork(item)) ?? listed[0] ?? null);
-  const visibleRef = useRef<CanopyItem[]>([]);
-  const selectedRef = useRef<string | null>(null);
-  // An answer or a reply settles after the panel may have closed, and a new
-  // one opened over the same ids: only this one's own may move the keyboard.
-  const mountedRef = useRef(false);
-  useEffect(() => {
-    mountedRef.current = true;
-    return () => {
-      mountedRef.current = false;
-    };
-  }, []);
-  // The host the list shows: two hosts can each have a run under the same id.
-  const listHostRef = useRef(hostId);
-  useEffect(() => {
-    visibleRef.current = visible;
-    selectedRef.current = focusedItem?.runId ?? null;
-    listHostRef.current = hostId;
-  });
-  const bodyRef = useRef<HTMLDivElement>(null);
-  // Anything the user does in the panel holds the list still for a while, and
-  // a press holds it until it is let go.
-  useEffect(() => {
-    const body = bodyRef.current;
-    if (!isOpen || !body) return;
-    const note = () => {
-      lastInteractionRef.current = Date.now();
-    };
-    const press = () => {
-      pressingRef.current = true;
-    };
-    const release = () => {
-      if (!pressingRef.current) return;
-      pressingRef.current = false;
-      note();
-      setRankWake((n) => n + 1);
-    };
-    const events = ["pointerdown", "keydown", "wheel", "input"] as const;
-    for (const type of events) body.addEventListener(type, note, { capture: true, passive: true });
-    body.addEventListener("pointerdown", press, { capture: true, passive: true });
-    window.addEventListener("pointerup", release, { capture: true, passive: true });
-    window.addEventListener("pointercancel", release, { capture: true, passive: true });
-    return () => {
-      for (const type of events) body.removeEventListener(type, note, { capture: true });
-      body.removeEventListener("pointerdown", press, { capture: true });
-      window.removeEventListener("pointerup", release, { capture: true });
-      window.removeEventListener("pointercancel", release, { capture: true });
-      pressingRef.current = false;
-    };
-  }, [isOpen]);
-  const detailRef = useRef<CanopyCardHandle>(null);
-
-  // Where the keyboard goes when the panel closes: the terminal "Go to
-  // terminal" just focused, rather than whatever opened the panel.
-  const focusAfterCloseRef = useRef<HTMLElement | null>(null);
-  // A deliberate act on a run reads it at once — going to it, a click,
-  // answering, replying — through the turn it showed. Merely arriving on it
-  // reads it only once it has stayed in front of the user (main's dwell).
-  const readNow = useCallback(
-    (item: CanopyItem) => {
-      if (!item.unread) return;
-      safeFireAndForget(
-        api.setRead(item.runId, { spawnedAt: item.row.run.spawnedAt }, true, item.readMark?.turn)
-      );
-    },
-    [api]
-  );
-
-  // The run selected, its row brought into view, the keyboard left where it is.
-  const selectNow = useCallback((runId: string) => {
-    setPaneFocus(null);
-    setAssistantId(null);
-    setFocusedId(runId);
-    document.getElementById(canopyCardDomId(runId))?.scrollIntoView({ block: "nearest" });
-  }, []);
-
-  const focusCardNow = useCallback((runId: string) => {
-    setPaneFocus(null);
-    setAssistantId(null);
-    setFocusedId(runId);
-    const element = document.getElementById(canopyCardDomId(runId));
-    element?.focus({ preventScroll: false });
-    element?.scrollIntoView({ block: "nearest" });
-  }, []);
-
-  // The run the pane shows is one the user has in front of them: it counts as
-  // looked at when it opens there, each minute it stays, and as it stops
-  // showing — while anyone can see the panel at all. Another host's run shows
-  // only its reading here, not its terminal: no look is told of it.
-  const shownPlace = focusedItem ? placeOf(focusedItem, hostId, ownHostId) : null;
-  const shownRunId =
-    isOpen && (!otherHost || (everyHost && shownPlace?.hostId === null))
-      ? (shownPlace?.runId ?? null)
-      : null;
-  useEffect(() => {
-    if (shownRunId === null) return;
-    // One look, reconciled whenever it could stop or start being true — the
-    // window behind another app, the view cached — so it always ends.
-    let looking = false;
-    const sync = () => {
-      const next = canopyViewIsWatched();
-      if (next === looking) return;
-      looking = next;
-      reportCanopySeen(shownRunId, next, "panel");
-    };
-    sync();
-    const heartbeat = window.setInterval(() => {
-      sync();
-      if (looking) reportCanopySeen(shownRunId, true, "panel");
-    }, CANOPY_SEEN_HEARTBEAT_MS);
-    const offObservable = subscribeProjectViewObservability(sync);
-    window.addEventListener("focus", sync);
-    window.addEventListener("blur", sync);
-    return () => {
-      window.clearInterval(heartbeat);
-      offObservable();
-      window.removeEventListener("focus", sync);
-      window.removeEventListener("blur", sync);
-      if (looking) reportCanopySeen(shownRunId, false, "panel");
-    };
-  }, [shownRunId]);
-
-  // Land the keyboard in the search on open, with the top of the list selected —
-  // at once when the search is there, so nothing typed goes astray. Otherwise
-  // two frames, so it lands after the palette's own first-tabbable focus rather
-  // than racing it, and cancelled on cleanup so a StrictMode replay schedules it afresh.
-  const landedRef = useRef(false);
-  // The user pressed something in the panel since it opened, header included:
-  // where they put the keyboard stands, and the landing gives way to it.
-  const touchedRef = useRef(false);
-  useEffect(() => {
-    if (!isOpen) return;
-    touchedRef.current = false;
-    const touch = (event: Event) => {
-      const target = event.target;
-      if (target instanceof Element && target.closest('[data-testid="canopy-dialog"]')) {
-        touchedRef.current = true;
-      }
-    };
-    window.addEventListener("pointerdown", touch, { capture: true, passive: true });
-    window.addEventListener("keydown", touch, { capture: true, passive: true });
-    return () => {
-      window.removeEventListener("pointerdown", touch, { capture: true });
-      window.removeEventListener("keydown", touch, { capture: true });
-    };
-  }, [isOpen]);
-  useEffect(() => {
-    if (!isOpen) {
-      landedRef.current = false;
-      setFocusedId(null);
-      setQuery("");
-      return;
-    }
-    focusAfterCloseRef.current = null;
-    if (landedRef.current || items.length === 0) return;
-    const target = visible[0]?.runId ?? null;
-    const land = () => {
-      landedRef.current = true;
-      // The user got there first — clicked a row, a control or into a
-      // terminal while the frames were held back: their place stands.
-      if (touchedRef.current) return;
-      const search = searchRef.current;
-      if (search) {
-        if (target !== null) setFocusedId(target);
-        search.focus();
-      } else if (target !== null) {
-        focusCardNow(target);
-      }
-    };
-    if (searchRef.current) {
-      land();
-      return;
-    }
-    let inner = 0;
-    const outer = requestAnimationFrame(() => {
-      inner = requestAnimationFrame(land);
-    });
-    return () => {
-      cancelAnimationFrame(outer);
-      cancelAnimationFrame(inner);
-    };
-  }, [isOpen, items, visible, focusCardNow]);
-
-  // The focused card left (trashed, answered into another section, exited):
-  // put the keyboard on the card that took its place instead of dropping it on
-  // the page. Only when focus really was lost — a composer the user is typing
-  // in elsewhere keeps it.
-  const lastIndexRef = useRef(0);
-  const refreshRef = useRef<HTMLButtonElement>(null);
-  useEffect(() => {
-    if (focusedIndex !== -1) lastIndexRef.current = focusedIndex;
-    if (!landedRef.current || focusedId === null) return;
-    // The keyboard is on its way into the new run's pane (⌘↑/⌘↓, or Send):
-    // the old pane unmounting drops it on the page for a moment, which is not
-    // a run leaving.
-    if (paneFocus?.runId === focusedId && items.some((item) => item.runId === focusedId)) return;
-    const active = document.activeElement;
-    if (active !== null && active !== document.body && active.isConnected) return;
-    if (visible.length === 0) {
-      // The last run left: the one control still in reach is Refresh.
-      refreshRef.current?.focus();
-      return;
-    }
-    // Either the card left, or it moved section and its node was replaced.
-    const target =
-      focusedIndex !== -1
-        ? visible[focusedIndex]!
-        : visible[Math.min(lastIndexRef.current, visible.length - 1)]!;
-    focusCardNow(target.runId);
-  }, [focusedIndex, focusedId, visible, focusCardNow, paneFocus, items]);
-
-  // A new search selects its top match, as opening selects the top run; a
-  // match leaving under the same search gives its place to the next.
-  // A search with no match yet still owes its top match, should a terminal find one.
-  const searchedRef = useRef(appliedQuery);
-  const topOwedRef = useRef(false);
-  useEffect(() => {
-    if (!isOpen) {
-      searchedRef.current = "";
-      topOwedRef.current = false;
-      return;
-    }
-    if (searchedRef.current !== appliedQuery) {
-      searchedRef.current = appliedQuery;
-      const top = visible[0];
-      topOwedRef.current = top === undefined;
-      if (top) selectNow(top.runId);
-      else setFocusedId(null);
-      return;
-    }
-    // An assistant the person chose keeps the pane; the worker list's own
-    // recovery waits until they come back to it.
-    const assistantChosen =
-      assistantId !== null && shownAssistants.some((item) => item.id === assistantId);
-    if (!searching || focusedIndex !== -1 || visible.length === 0 || assistantChosen) return;
-    const index = topOwedRef.current ? 0 : Math.min(lastIndexRef.current, visible.length - 1);
-    topOwedRef.current = false;
-    selectNow(visible[index]!.runId);
-  }, [
-    isOpen,
-    appliedQuery,
-    searching,
-    focusedIndex,
-    visible,
-    selectNow,
-    assistantId,
+  const {
+    items,
+    inbox,
+    owedOnOpen,
+    revealed,
+    refreshedAt,
+    bodyRef,
+    enterList,
+    leaveList,
+    listHidden,
+    menuOpenChanged,
+    requestRank,
+  } = useCanopyInboxOrder({ isOpen, hostId, otherHost, scope, canopy, baseItems, nowMs });
+  const { query, setQuery, appliedQuery, terms, searching, searchKey, screenAsk, onScreen } =
+    useCanopyInboxSearch({ isOpen, hostId, items, api, refreshedAt });
+  const {
+    roleFilter,
+    setRoleFilter,
+    workersShown,
+    assistantsShown,
+    assistantsReadable,
+    directory,
+    seeAssistantHandback,
+    assistantItems,
+    assistantAsks,
+    workOf,
+    showWorkOf,
+    workPartial,
+    workLabelOf,
     shownAssistants,
-  ]);
+    showWork,
+    inWork,
+    shownInbox,
+    unreadOnly,
+    setUnreadOnly,
+    listed,
+    archivedExpanded,
+    setArchivedExpanded,
+    archivedShown,
+    visible,
+    listRef,
+    onlyReadMatch,
+  } = useCanopyInboxFilters({
+    isOpen,
+    hostId,
+    otherHost,
+    everyHost,
+    ownHostId,
+    hostRows,
+    hasHostPicker: hostPicker !== null,
+    participants,
+    projects,
+    storedScope,
+    scope,
+    setScope,
+    api,
+    recoveries,
+    fleet,
+    inbox,
+    query,
+    appliedQuery,
+    terms,
+    searching,
+    searchKey,
+    screenAsk,
+    onScreen,
+    listHidden,
+  });
+  const {
+    searchRef,
+    refreshRef,
+    detailRef,
+    focusedIndex,
+    activeIndex,
+    focusedItem,
+    paneFocus,
+    assistantRefusal,
+    selectedAssistant,
+    selectNow,
+    focusCardNow,
+    openPaneNow,
+    selectRow,
+    selectAssistant,
+    focusAssistantNow,
+    openAssistant,
+    settlePaneFocus,
+    nextAfter,
+    leavePane,
+    showsHost,
+    isSelected,
+    captureFocusAfterClose,
+    focusAfterClose,
+  } = useCanopyInboxFocus({
+    isOpen,
+    close,
+    hostId,
+    ownHostId,
+    otherHost,
+    everyHost,
+    items,
+    listed,
+    visible,
+    workersShown,
+    shownAssistants,
+    inWork,
+    searching,
+    appliedQuery,
+    setQuery,
+    roleFilter,
+    seeAssistantHandback,
+  });
 
-  // Select a run and take the keyboard into its pane — its composer or its
-  // terminal — rather than onto its row.
-  const openPaneNow = useCallback((runId: string, focus: CanopyPaneFocus) => {
-    setPaneFocus({ runId, focus });
-    setFocusedId(runId);
-    document.getElementById(canopyCardDomId(runId))?.scrollIntoView({ block: "nearest" });
-  }, []);
-
-  // The last triage the user did here, to take back with Z or the toast's
-  // Undo. One deep, as in mail: only the newest action can be undone.
-  const undoRef = useRef<(() => void) | null>(null);
-  // Another host's list starts afresh: no run open from the last one, and Z
-  // never takes back, unseen, what was done on a host no longer shown.
-  const shownHostRef = useRef(hostId);
-  useEffect(() => {
-    if (shownHostRef.current === hostId) return;
-    shownHostRef.current = hostId;
-    setFocusedId(null);
-    setPaneFocus(null);
-    undoRef.current = null;
-  }, [hostId]);
-  /**
-   * Holds Z for an action from its press, not from when main answers: a Z
-   * pressed before then waits for it, and an action pressed after takes Z
-   * over. `land` hands over the action's undo once main has done it (with an
-   * Undo toast when one is given); `forget` gives Z up when main did nothing.
-   */
-  const reserveUndo = useCallback(() => {
-    let landed: (() => void) | null = null;
-    let asked = false;
-    const undo = () => {
-      if (landed) landed();
-      else asked = true;
-    };
-    undoRef.current = undo;
-    return {
-      land: (restoreOnce: () => void, toast?: { title: string; message: string }) => {
-        // Z and the toast's Undo take back the same one action, once: the
-        // second of them finds it done.
-        let done = false;
-        const restore = () => {
-          if (done) return;
-          done = true;
-          restoreOnce();
-        };
-        landed = restore;
-        if (asked) {
-          restore();
-          return;
-        }
-        if (!toast) return;
-        notify({
-          type: "success",
-          transient: true,
-          title: toast.title,
-          message: toast.message,
-          context: { eventKind: "agent" },
-          duration: UNDO_TOAST_DURATION_MS,
-          actions: [
-            {
-              label: "Undo",
-              onClick: () => {
-                if (undoRef.current === undo) undoRef.current = null;
-                restore();
-              },
-            },
-          ],
-        });
-      },
-      forget: () => {
-        if (undoRef.current === undo) undoRef.current = null;
-      },
-    };
-  }, []);
-  // Z takes the newest action back from anywhere in the panel: a row, the
-  // folded Archived bar, or Refresh once the last row archived away — never
-  // from the pane's terminal or composer, or any text field, where Z is a letter.
-  useEffect(() => {
-    const onKeyDown = (event: globalThis.KeyboardEvent) => {
-      if (event.defaultPrevented || event.shiftKey || event.altKey) return;
-      if (event.key !== "z" && event.key !== "Z") return;
-      const target = event.target instanceof Element ? event.target : null;
-      if (!target?.closest('[data-testid="canopy-dialog"]')) return;
-      if (
-        target.closest(
-          'input, textarea, select, [contenteditable="true"], [data-canopy-terminal], [data-canopy-detail] .cm-editor'
-        )
-      ) {
-        return;
-      }
-      event.preventDefault();
-      // Held down, Z undoes once: a repeat must not take the slot from an
-      // action pressed since.
-      if (event.repeat) return;
-      const undo = undoRef.current;
-      undoRef.current = null;
-      undo?.();
-    };
-    document.addEventListener("keydown", onKeyDown);
-    return () => document.removeEventListener("keydown", onKeyDown);
-  }, []);
-  /**
-   * Undo of a read change: each run back to what it was (`before`), wherever
-   * it is still as the change left it (`after`) — a new turn, or a change from
-   * another view since, stands.
-   */
-  const undoReads = useCallback(
-    (before: CanopyReadMark[], after: CanopyReadMark[]) => {
-      const was = new Map(before.map((mark) => [mark.runId, mark]));
-      const restores = after.flatMap((left) => {
-        const mark = was.get(left.runId);
-        return mark !== undefined && mark.spawnedAt === left.spawnedAt
-          ? [{ mark, expectVersion: left.version }]
-          : [];
-      });
-      if (restores.length > 0) safeFireAndForget(api.restoreReads(restores));
-    },
-    [api]
-  );
-
-  /**
-   * Where the cursor goes once a run is dealt with — archived, answered,
-   * replied to: the next run after it that needs you or has something unread,
-   * else the one before it that does, else simply its neighbour.
-   */
-  const nextAfter = useCallback((runId: string): CanopyItem | undefined => {
-    const order = visibleRef.current;
-    const index = order.findIndex((candidate) => candidate.runId === runId);
-    const wanted = (candidate: CanopyItem) =>
-      candidate.runId !== runId && (itemNeedsAttention(candidate) || candidate.unread);
-    return (
-      order.slice(index + 1).find(wanted) ??
-      order.slice(0, Math.max(index, 0)).find(wanted) ??
-      (index === -1 ? undefined : (order[index + 1] ?? order[index - 1]))
-    );
-  }, []);
+  const { reserveUndo, undoReads } = useCanopyInboxUndo({ hostId, api });
+  const {
+    readNow,
+    handlers,
+    toggleRead,
+    markAllRead,
+    askRename,
+    rowMenu,
+    trashArm,
+    renameAsk,
+    refreshes,
+    refresh,
+  } = useCanopyInboxActions({
+    hostId,
+    ownHostId,
+    close,
+    api,
+    terminalApi,
+    listed,
+    focusedItem,
+    searchRef,
+    detailRef,
+    selectNow,
+    focusCardNow,
+    openPaneNow,
+    nextAfter,
+    leavePane,
+    showsHost,
+    isSelected,
+    captureFocusAfterClose,
+    reserveUndo,
+    undoReads,
+    menuOpenChanged,
+    requestRank,
+  });
 
   // The host a selected run is on, for the pane beside it; null for the window's own.
   const focusedHostId = focusedItem ? placeOf(focusedItem, hostId, ownHostId).hostId : null;
@@ -1721,663 +716,15 @@ function CanopyInbox({
   const focusedLinkStatus =
     focusedRow?.isLocal === false ? focusedRow.connection?.status : undefined;
 
-  const handlers = useMemo<CanopyCardHandlers>(() => {
-    const openRun = (item: CanopyItem, newWindow = false) => {
-      readNow(item);
-      const place = placeOf(item, hostId, ownHostId);
-      if (place.hostId !== null) {
-        // Another host's run: the window moves to that host and project (or a
-        // new one opens there, or the window already showing it comes
-        // forward), and the pane is focused wherever it lands. The panel
-        // stays open on a switch that didn't happen; its toast says why, and
-        // its Retry closes the panel once it lands.
-        const focusIntent = { intent: "focus-panel", panelId: place.runId } as const;
-        const placeHostId = place.hostId;
-        void switchToHost(placeHostId, newWindow, place.workspaceId, {
-          focusIntent,
-          onLanded: () => {
-            // A panel since closed, or showing another host, is the user's newer choice.
-            if (!mountedRef.current || listHostRef.current !== hostId) return;
-            if (useCanopyStore.getState().isOpen) close();
-          },
-        });
-        return;
-      }
-      const args = { runId: place.runId, workspaceId: place.workspaceId };
-      if (place.workspaceId !== getViewWorkspaceId()) {
-        // The switch replaces this view, so the panel closes first.
-        close();
-        void actionService.dispatch("pilot.openRun", args, { source: "user" });
-        return;
-      }
-      // Here already: focus the terminal while the panel is still open, and
-      // close only once that worked. `pilot.openRun` arms the palette's
-      // focus-restore suppression on success, so the close can't hand focus
-      // back to whatever opened the panel.
-      void actionService.dispatch("pilot.openRun", args, { source: "user" }).then((result) => {
-        if (!result.ok) return;
-        // `pilot.openRun` arms the palettes' one-shot restore suppression; this
-        // is a dialog, which hands focus on by its own target instead, so the
-        // flag is taken here rather than left for the next palette to close.
-        consumePaletteFocusRestoreSuppression();
-        focusAfterCloseRef.current =
-          document.activeElement instanceof HTMLElement ? document.activeElement : null;
-        close();
-      });
-    };
-    // The incarnation on screen, so main refuses a terminal respawned since.
-    const target = (item: CanopyItem) => ({ spawnedAt: item.row.run.spawnedAt });
-    const goTo = (item: CanopyItem) => ({ label: "Go to terminal", onClick: () => openRun(item) });
-    const archive = (item: CanopyItem, expectTurn?: number) =>
-      expectTurn === undefined
-        ? api.archive(item.runId, target(item))
-        : api.archive(item.runId, target(item), expectTurn);
-    const unarchive = (item: CanopyItem) => api.unarchive(item.runId, target(item));
-    const archiveFailed =
-      (item: CanopyItem) =>
-      (error: unknown): void =>
-        failToast("Couldn't archive", error, goTo(item));
-    const unarchiveFailed =
-      (item: CanopyItem) =>
-      (error: unknown): void =>
-        failToast("Couldn't move to inbox", error, goTo(item));
-    return {
-      onOpen: openRun,
-      // Escape from the pane lands on the run's row; a run folded away in
-      // Archived has no row to land on, so the keyboard takes the fold instead
-      // — still in the list, where the next Escape closes the panel.
-      // With no row to land on (folded into Archived, or hidden by Unread),
-      // the fold takes it, else the list's first row, else Refresh: always
-      // somewhere in the list, where the next Escape closes the panel.
-      onLeavePane: (item) => {
-        if (document.getElementById(canopyCardDomId(item.runId))) {
-          focusCardNow(item.runId);
-          return;
-        }
-        const fold = document.querySelector<HTMLElement>('[aria-controls="canopy-archived"]');
-        if (fold) {
-          fold.focus();
-          return;
-        }
-        const first = visibleRef.current[0];
-        if (first) focusCardNow(first.runId);
-        else refreshRef.current?.focus();
-      },
-      onSent: (item, via) => {
-        readNow(item);
-        // Typed straight into the terminal: the keys stay there, since a menu
-        // or a prompt may have more to ask. The reply still moves the run out
-        // of the queue, and its pane stays open where the user is typing.
-        if (via === "terminal") return;
-        // The user moved to another run while the reply was on its way, or
-        // closed the panel: their choice stands.
-        if (
-          !mountedRef.current ||
-          listHostRef.current !== hostId ||
-          selectedRef.current !== item.runId
-        ) {
-          return;
-        }
-        // Replied from the composer: on to the next run that needs you, into
-        // its composer, as Send moves on in a mail queue. The answered one
-        // leaves the queue when main's handled reading lands.
-        const next = nextAfter(item.runId);
-        if (!next || next.runId === item.runId) return;
-        if (searchRef.current !== null && document.activeElement === searchRef.current) {
-          selectNow(next.runId);
-        } else {
-          openPaneNow(next.runId, "composer");
-        }
-      },
-      onArchive: (item) => {
-        if (itemArchived(item)) {
-          const turn = item.readMark?.turn ?? 0;
-          const undo = reserveUndo();
-          safeFireAndForget(
-            unarchive(item).then(
-              () =>
-                undo.land(() =>
-                  // Main archives it again only while it has done nothing since
-                  // it came back: otherwise that would hide what it did.
-                  safeFireAndForget(archive(item, turn).catch(archiveFailed(item)))
-                ),
-              (error: unknown) => {
-                undo.forget();
-                unarchiveFailed(item)(error);
-              }
-            )
-          );
-          return;
-        }
-        // The cursor moves on before the run leaves, as archiving does in mail —
-        // only off the run it is on: a row archived from its hover button
-        // leaves the user where they were.
-        if (selectedRef.current === item.runId) {
-          const next = nextAfter(item.runId);
-          if (next) focusCardNow(next.runId);
-        }
-        const before = item.readMark;
-        // No toast: the user archived it and watched it leave, and Z takes it back.
-        const undo = reserveUndo();
-        safeFireAndForget(
-          archive(item).then(
-            (after) => {
-              // Refused — the run left, or was respawned: nothing to undo.
-              if (after === null) return undo.forget();
-              undo.land(() => {
-                safeFireAndForget(unarchive(item).catch(unarchiveFailed(item)));
-                // Archiving read it; taking it back puts back what was unread.
-                if (before) undoReads([before], [after]);
-              });
-            },
-            (error: unknown) => {
-              undo.forget();
-              archiveFailed(item)(error);
-            }
-          )
-        );
-      },
-      onSendFailed: (item, error) => failToast("Couldn't send to agent", error, goTo(item)),
-      onAnswer: function answer(item, label) {
-        readNow(item);
-        // On to the next run that needs you, as a reply from the composer does —
-        // on its row, where the next answer is one key away.
-        const next = nextAfter(item.runId);
-        safeFireAndForget(
-          terminalApi.answer(item.runId, target(item), label).then(
-            () => {
-              if (
-                !mountedRef.current ||
-                listHostRef.current !== hostId ||
-                selectedRef.current !== item.runId
-              ) {
-                return;
-              }
-              if (!next || next.runId === item.runId) return;
-              // Back in the search since: the selection moves on, the keyboard stays to type.
-              if (searchRef.current !== null && document.activeElement === searchRef.current) {
-                selectNow(next.runId);
-              } else {
-                focusCardNow(next.runId);
-              }
-            },
-            (error: unknown) => failToast("Couldn't answer", error, goTo(item))
-          )
-        );
-      },
-      // No toast on success: the user watched the name change. A refusal says
-      // so and keeps the name it had.
-      onRename: (item, title) => {
-        const rename = (): Promise<void> =>
-          api.rename(item.runId, target(item), title).catch((error: unknown) => {
-            failToast("Couldn't rename terminal", error, {
-              label: "Retry",
-              onClick: () => safeFireAndForget(rename()),
-            });
-            throw error;
-          });
-        return rename();
-      },
-      onTrash: (item) => {
-        // The trash keeps a terminal only briefly, and its own countdown sits
-        // behind this panel, in whichever project the run is in: so the way
-        // back is offered here, on the toast and on Z. The receipt means
-        // something only to the host that trashed it, so Undo goes back there
-        // whichever host the panel shows by then.
-        const trashedOn = api;
-        const undo = reserveUndo();
-        safeFireAndForget(
-          trashedOn.trash(item.runId, target(item)).then(
-            (receipt) => {
-              if (receipt === null) return undo.forget();
-              undo.land(
-                () =>
-                  safeFireAndForget(
-                    trashedOn.untrash(receipt).catch((error: unknown) =>
-                      // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
-                      notify({
-                        type: "error",
-                        title: "Couldn't restore terminal",
-                        message: formatErrorMessage(error, "It has left the trash."),
-                        context: { eventKind: "agent" },
-                        duration: 6000,
-                      })
-                    )
-                  ),
-                { title: "Terminal trashed", message: itemSubject(item) }
-              );
-            },
-            (error: unknown) => {
-              undo.forget();
-              failToast("Couldn't trash terminal", error, goTo(item));
-            }
-          )
-        );
-      },
-    };
-  }, [
-    close,
-    readNow,
-    focusCardNow,
-    selectNow,
-    openPaneNow,
-    nextAfter,
-    reserveUndo,
-    undoReads,
-    api,
-    terminalApi,
-    hostId,
-    ownHostId,
-  ]);
-
-  /** U: read or unread, by hand. Z takes it back. */
-  const toggleRead = useCallback(
-    (item: CanopyItem) => {
-      if (itemArchived(item)) return;
-      const read = item.unread;
-      const send = () =>
-        api.setRead(item.runId, { spawnedAt: item.row.run.spawnedAt }, read, item.readMark?.turn);
-      const undo = reserveUndo();
-      safeFireAndForget(
-        send().then(
-          (after) => {
-            if (!after) return undo.forget();
-            // A run Canopy had no mark for had nothing unread.
-            const before = item.readMark ?? {
-              ...after,
-              readTurn: after.turn,
-              markedUnreadAt: null,
-            };
-            undo.land(() => undoReads([before], [after]));
-          },
-          (error: unknown) => {
-            undo.forget();
-            failToast(read ? "Couldn't mark as read" : "Couldn't mark as unread", error, {
-              label: "Retry",
-              onClick: () => safeFireAndForget(send()),
-            });
-          }
-        )
-      );
-    },
-    [reserveUndo, undoReads, api]
-  );
-
-  /**
-   * Every unread run in the inbox as listed, read through the turn the list
-   * showed: anything that lands after the press stays unread. Undo puts back
-   * what each was, unless it has done something since.
-   */
-  const markAllRead = () => {
-    const unread = listed.filter((item) => item.unread);
-    if (unread.length === 0) return;
-    const before = unread.flatMap((item) => (item.readMark ? [item.readMark] : []));
-    const undo = reserveUndo();
-    safeFireAndForget(
-      api
-        .markAllRead(
-          unread.map((item) => ({
-            runId: item.runId,
-            spawnedAt: item.row.run.spawnedAt,
-            turn: item.readMark?.turn ?? 0,
-          }))
-        )
-        .then(
-          (after) =>
-            undo.land(() => undoReads(before, after), {
-              title: "Marked as read",
-              message: pluralize(unread.length, "agent"),
-            }),
-          (error: unknown) => {
-            undo.forget();
-            failToast("Couldn't mark as read", error, { label: "Retry", onClick: markAllRead });
-          }
-        )
-    );
-  };
-
   // Each group is its own Tab stop: the selected row when it is in the group,
   // else the group's first.
   const tabStop = (group: readonly CanopyItem[], item: CanopyItem, index: number) =>
     focusedItem !== null && group.some((run) => run.runId === focusedItem.runId)
       ? focusedItem.runId === item.runId
       : index === 0;
-  // A row took focus (click, Tab, pointer): it is the selection, with the
-  // keyboard on the row rather than carried into the pane.
-  const selectRow = (runId: string) => {
-    setPaneFocus(null);
-    setAssistantId(null);
-    setFocusedId(runId);
-  };
-  const focusAssistantNow = (id: string) => {
-    setAssistantId(id);
-    const element = document.getElementById(canopyAssistantDomId(id));
-    element?.focus({ preventScroll: false });
-    element?.scrollIntoView({ block: "nearest" });
-  };
-  // Into the assistant's own lane; nothing is launched or resumed, and a
-  // refusal is said in its pane.
-  const openAssistant = (item: CanopyAssistantItem) => {
-    if (item.handbackAt !== null) seeAssistantHandback(item.id, item.handbackAt);
-    setAssistantId(item.id);
-    setAssistantRefusal(null);
-    void openAssistantItem(item).then((refused) => {
-      if (!mountedRef.current) return;
-      if (refused === null) close();
-      else setAssistantRefusal({ id: item.id, text: refused });
-    });
-  };
-  // The assistant list's own keys: its rows walk among themselves, and step
-  // off either end into the worker list around them, or back to the search.
-  const onAssistantKeyDown = (event: KeyboardEvent<HTMLElement>, index: number) => {
-    if (event.metaKey || event.ctrlKey || event.altKey) return;
-    const last = shownAssistants.length - 1;
-    let next: number | null = null;
-    if (event.key === "ArrowDown" || event.key === "j") {
-      if (index === last && archivedShown && shownInbox.archived.length > 0) {
-        event.preventDefault();
-        event.stopPropagation();
-        focusCardNow(shownInbox.archived[0]!.runId);
-        return;
-      }
-      next = Math.min(last, index + 1);
-    } else if (event.key === "ArrowUp" || event.key === "k") {
-      if (index === 0) {
-        event.preventDefault();
-        event.stopPropagation();
-        if (listed.length > 0) focusCardNow(listed[listed.length - 1]!.runId);
-        else searchRef.current?.focus();
-        return;
-      }
-      next = index - 1;
-    } else if (event.key === "Home") {
-      next = 0;
-    } else if (event.key === "End") {
-      next = last;
-    } else if (event.key === "/") {
-      event.preventDefault();
-      event.stopPropagation();
-      searchRef.current?.focus();
-      searchRef.current?.select();
-      return;
-    } else if (event.key === "Enter") {
-      event.preventDefault();
-      event.stopPropagation();
-      openAssistant(shownAssistants[index]!);
-      return;
-    }
-    if (next === null) return;
-    event.preventDefault();
-    event.stopPropagation();
-    focusAssistantNow(shownAssistants[next]!.id);
-  };
-
-  // ⌘↑/⌘↓ from anywhere in the panel, the live terminal and the composer
-  // included: taken in the capture phase, before xterm or CodeMirror can, so
-  // the user can work down the list — reply, next, reply — without leaving the
-  // keyboard where it is. The keyboard lands in the same place on the next run.
-  const onAgentStepKeyDownCapture = (event: KeyboardEvent<HTMLElement>) => {
-    const step = agentStepOf(event);
-    if (step === null || visible.length === 0) return;
-    // Renaming: ⌘↑/↓ move the caret in the name, not to another agent.
-    if (event.target instanceof Element && event.target.closest("[data-canopy-rename]")) return;
-    event.preventDefault();
-    event.stopPropagation();
-    // From the open run, clamped at the ends rather than wrapping: the bottom
-    // of the list is the end of it. An open run that is not in the list
-    // (archived and folded away) steps onto the list's first or last row.
-    const current = visible.findIndex((item) => item.runId === focusedItem?.runId);
-    const next =
-      current === -1
-        ? visible[step > 0 ? 0 : visible.length - 1]!
-        : visible[Math.min(visible.length - 1, Math.max(0, current + step))]!;
-    if (next.runId === focusedItem?.runId) return;
-    const focus = paneFocusOf(document.activeElement);
-    // From the search the selection moves and the keyboard stays to type.
-    if (event.target === searchRef.current) selectNow(next.runId);
-    else if (focus === null) focusCardNow(next.runId);
-    else openPaneNow(next.runId, focus);
-  };
-
-  // On the list's own wrapper rather than the palette body: the body only acts
-  // on keys aimed at itself, and here focus is always on a card or its controls.
-  const onNavigationKeyDown = (event: KeyboardEvent<HTMLElement>) => {
-    if (visible.length === 0) return;
-    // Only from a row of the list: the pane holds a live terminal and a
-    // composer whose keys belong to the agent, and the fold owns its own keys.
-    if (!(event.target instanceof Element) || !event.target.closest("[data-canopy-card]")) return;
-    // Shift+F10 or the Menu key: the selected row's menu, as a right-click
-    // opens it. Replayed as a contextmenu on the row, since the menu has no
-    // way to be opened by hand, and macOS sends none for these keys itself.
-    if (
-      event.key === "ContextMenu" ||
-      (event.key === "F10" && event.shiftKey && !event.ctrlKey && !event.metaKey && !event.altKey)
-    ) {
-      const row = visible[activeIndex]
-        ? document.getElementById(canopyCardDomId(visible[activeIndex]!.runId))
-        : null;
-      if (!row) return;
-      event.preventDefault();
-      event.stopPropagation();
-      const rect = row.getBoundingClientRect();
-      row.dispatchEvent(
-        new MouseEvent("contextmenu", {
-          bubbles: true,
-          cancelable: true,
-          clientX: rect.left + 8,
-          clientY: rect.top + rect.height / 2,
-        })
-      );
-      return;
-    }
-    // The selected run's own chords (Trash is ⌘⌫) go to it before the
-    // modifier guard below, which keeps app shortcuts out of plain navigation.
-    if ((event.metaKey || event.ctrlKey) && event.key === "Backspace") {
-      if (detailRef.current?.handleKey(event)) return;
-    }
-    // ⌥U marks every unread run listed read. By the key's place, not its
-    // character: on a Mac ⌥U is the umlaut dead key and types no "u".
-    if (event.code === "KeyU" && event.altKey && !event.metaKey && !event.ctrlKey) {
-      event.preventDefault();
-      if (!event.repeat) markAllRead();
-      return;
-    }
-    if (event.metaKey || event.ctrlKey || event.altKey) return;
-    // The assistants sit between the inbox and the archived runs: down off the
-    // inbox's end, or up off the archived runs' top, steps into them.
-    if (shownAssistants.length > 0 && focusedIndex !== -1) {
-      const down = event.key === "ArrowDown" || event.key === "j";
-      const up = event.key === "ArrowUp" || event.key === "k";
-      if ((down && focusedIndex === listed.length - 1) || (up && focusedIndex === listed.length)) {
-        event.preventDefault();
-        focusAssistantNow(shownAssistants[down ? 0 : shownAssistants.length - 1]!.id);
-        return;
-      }
-    }
-    // Back to the search: "/" from any row, or up off the top of the list.
-    const search = searchRef.current;
-    if (search && (event.key === "/" || (event.key === "ArrowUp" && activeIndex === 0))) {
-      event.preventDefault();
-      search.focus();
-      if (event.key === "/") search.select();
-      return;
-    }
-    let next: number | null = null;
-    if (event.key === "ArrowDown" || event.key === "j") {
-      next = Math.min(visible.length - 1, activeIndex + 1);
-    } else if (event.key === "ArrowUp" || event.key === "k") {
-      next = Math.max(0, activeIndex - 1);
-    } else if (event.key === "Home") {
-      next = 0;
-    } else if (event.key === "End") {
-      next = visible.length - 1;
-    }
-    if (next !== null) {
-      event.preventDefault();
-      focusCardNow(visible[next]!.runId);
-      return;
-    }
-    // Keys aimed at the list's selected row act on the selected agent.
-    const selected = visible[activeIndex];
-    if (!selected) return;
-    if (event.key === "Enter") {
-      event.preventDefault();
-      handlers.onOpen(selected);
-      return;
-    }
-    if (event.key === "F2") {
-      event.preventDefault();
-      askRename(selected);
-      return;
-    }
-    if ((event.key === "u" || event.key === "U") && !event.shiftKey) {
-      event.preventDefault();
-      if (!event.repeat) toggleRead(selected);
-      return;
-    }
-    detailRef.current?.handleKey(event);
-  };
-
-  // The search keeps every plain key for its text; only the list's moves, Go to
-  // terminal and the modifier chords act from it, on the selected run. Tab takes
-  // the keyboard down to that run's row, where the one-key actions are.
-  const onSearchKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
-    // The IME owns the key: nothing of the search's or the panel's acts on it.
-    if (event.nativeEvent.isComposing || event.keyCode === 229) {
-      event.stopPropagation();
-      return;
-    }
-    const plain = !event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey;
-    // An assistant in the pane, or no worker row ahead of the assistants: the
-    // keys go to the assistant, never to a worker the person can't see.
-    const toAssistant =
-      selectedAssistant ??
-      (listed.length === 0 && shownAssistants.length > 0 ? shownAssistants[0]! : null);
-    if (plain && toAssistant !== null) {
-      const target = toAssistant;
-      if (event.key === "Tab" || (event.key === "ArrowDown" && listed.length === 0)) {
-        event.preventDefault();
-        event.stopPropagation();
-        focusAssistantNow(target.id);
-        return;
-      }
-      if (event.key === "Enter") {
-        event.preventDefault();
-        openAssistant(target);
-        return;
-      }
-    }
-    const selected = focusedIndex !== -1 ? visible[focusedIndex]! : (visible[0] ?? null);
-    if (plain && (event.key === "ArrowDown" || event.key === "ArrowUp")) {
-      event.preventDefault();
-      if (visible.length === 0) return;
-      const step = event.key === "ArrowDown" ? 1 : -1;
-      selectNow(visible[Math.min(visible.length - 1, Math.max(0, activeIndex + step))]!.runId);
-      return;
-    }
-    if (plain && event.key === "Enter") {
-      if (!selected) return;
-      event.preventDefault();
-      handlers.onOpen(selected);
-      return;
-    }
-    if (plain && event.key === "Tab") {
-      if (!selected) return;
-      event.preventDefault();
-      // The dialog's own Tab wrap must not take the keyboard on from the row.
-      event.stopPropagation();
-      focusCardNow(selected.runId);
-      return;
-    }
-    if ((event.metaKey || event.ctrlKey) && event.key === "Backspace") {
-      if (selected?.runId === focusedItem?.runId) detailRef.current?.handleKey(event);
-      return;
-    }
-    if (event.code === "KeyU" && event.altKey && !event.metaKey && !event.ctrlKey) {
-      event.preventDefault();
-      if (!event.repeat) markAllRead();
-    }
-  };
-
   // Over the whole inbox, whatever the filter shows: a read approval still blocks its agent.
   const needsYou = inbox.inbox.filter(itemNeedsAttention).length;
-  // Trash from a row's menu arms it as its first press does; the pane's
-  // button or ⌘⌫ confirms. Bumped per request, for the run it names.
-  const [trashArm, setTrashArm] = useState<{ runId: string; request: number } | null>(null);
-  // A request is for the run it named while it stays open: coming back to it
-  // later must not find Trash armed.
-  const openRunId = focusedItem?.runId ?? null;
-  useEffect(() => {
-    if (trashArm !== null && openRunId !== trashArm.runId) setTrashArm(null);
-  }, [trashArm, openRunId]);
-  // Rename from a row — its menu, or F2 — opens the run and starts the rename
-  // in its title bar, where a grid pane's is.
-  const [renameAsk, setRenameAsk] = useState<{ runId: string; request: number } | null>(null);
-  useEffect(() => {
-    if (renameAsk !== null && openRunId !== renameAsk.runId) setRenameAsk(null);
-  }, [renameAsk, openRunId]);
-  // Requests are for a run on the host they were made on.
-  useEffect(() => {
-    setTrashArm(null);
-    setRenameAsk(null);
-  }, [hostId]);
-  const askRename = (item: CanopyItem) => {
-    focusCardNow(item.runId);
-    setRenameAsk((ask) => ({ runId: item.runId, request: (ask?.request ?? 0) + 1 }));
-  };
 
-  const rowMenu: CanopyRowMenuActions = {
-    onOpen: handlers.onOpen,
-    // The run already open keeps its pane mounted, so the composer is focused
-    // directly; another run's pane takes the keyboard there as it opens.
-    onReply: (item) => {
-      if (focusedItem?.runId === item.runId && detailRef.current?.focusComposer()) return;
-      openPaneNow(item.runId, "composer");
-    },
-    onToggleRead: toggleRead,
-    onReread: function reread(item) {
-      safeFireAndForget(
-        api.reread(item.runId, { spawnedAt: item.row.run.spawnedAt }).catch((error: unknown) =>
-          failToast("Couldn't read the screen again", error, {
-            label: "Go to terminal",
-            onClick: () => handlers.onOpen(item),
-          })
-        )
-      );
-    },
-    onArchive: handlers.onArchive,
-    onRename: askRename,
-    onTrash: (item) => {
-      focusCardNow(item.runId);
-      setTrashArm((arm) => ({ runId: item.runId, request: (arm?.request ?? 0) + 1 }));
-    },
-    onOpenChange: (open) => {
-      menuOpenRef.current = open;
-      if (open) return;
-      // Closing releases the hold, it doesn't move the list: the idle wait starts from here.
-      lastInteractionRef.current = Date.now();
-      setRankWake((n) => n + 1);
-    },
-  };
-
-  // A press spins the button until the refresh it asked for is done, cards
-  // included. The background polls never do: they are not news.
-  const [refreshes, setRefreshes] = useState(0);
-  const refresh = () => {
-    setRefreshes((n) => n + 1);
-    safeFireAndForget(
-      api
-        .refresh()
-        .catch((error: unknown) =>
-          failToast("Couldn't refresh Canopy", error, { label: "Retry", onClick: refresh })
-        )
-        .finally(() => {
-          setRefreshes((n) => n - 1);
-          // What the user asked to see, in order now.
-          setRankRequest((n) => n + 1);
-        })
-    );
-  };
   const unreadCount = inbox.inbox.filter((item) => item.unread).length;
   // The section bar speaks for what the search shows; the header keeps the whole inbox.
   const shownUnreadCount = shownInbox.inbox.filter((item) => item.unread).length;
@@ -2399,6 +746,30 @@ function CanopyInbox({
     otherHost && (remote.error !== null || linkDown) && !(connecting && fleet === null);
   // Canopy is off on that host: its own offer, for it alone.
   const hostOffer = otherHost && canopy?.activated === false;
+
+  const { onAssistantKeyDown, onAgentStepKeyDownCapture, onNavigationKeyDown, onSearchKeyDown } =
+    useCanopyInboxKeyboard({
+      visible,
+      listed,
+      shownInbox,
+      shownAssistants,
+      archivedShown,
+      focusedIndex,
+      activeIndex,
+      focusedItem,
+      selectedAssistant,
+      searchRef,
+      detailRef,
+      selectNow,
+      focusCardNow,
+      openPaneNow,
+      focusAssistantNow,
+      openAssistant,
+      onOpen: handlers.onOpen,
+      askRename,
+      toggleRead,
+      markAllRead,
+    });
 
   // What the panel can say about another host before it has its agents.
   const hostSummary =
@@ -2539,26 +910,6 @@ function CanopyInbox({
             : scope === "project"
               ? "No assistant is running in this project."
               : "No assistant is running. Start one from the Assistant panel.";
-  // The assistant in the pane has had its handback in front of the person.
-  // An assistant the person chose has had its handback in front of them. One
-  // shown only because nothing else is listed hasn't: seeing it there would
-  // re-sort the list and hand the pane, and a "seen", to each in turn.
-  const chosenAssistantId =
-    isOpen && selectedAssistant !== null && selectedAssistant.id === assistantId
-      ? assistantId
-      : null;
-  const chosenHandbackAt = chosenAssistantId !== null ? selectedAssistant!.handbackAt : null;
-  useEffect(() => {
-    if (chosenAssistantId !== null && chosenHandbackAt !== null) {
-      seeAssistantHandback(chosenAssistantId, chosenHandbackAt);
-    }
-  }, [chosenAssistantId, chosenHandbackAt, seeAssistantHandback]);
-  // Each opening, and each change of role, starts from the list's own default,
-  // as the worker selection does.
-  useEffect(() => {
-    setAssistantId(null);
-    setAssistantRefusal(null);
-  }, [isOpen, roleFilter]);
 
   const headerControls = (
     <>
@@ -2624,7 +975,7 @@ function CanopyInbox({
       // first-control focus would race it. With no rows to land on, the first
       // control takes focus instead of leaving it on whatever opened the panel.
       initialFocus={items.length > 0 && !hostOffer ? "none" : "first"}
-      restoreFocusTo={() => focusAfterCloseRef.current ?? restoreOpener()}
+      restoreFocusTo={() => focusAfterClose() ?? restoreOpener()}
       preferRestoreFocusTo
       backdrop={backdrop}
       data-testid="canopy-dialog"
@@ -2875,16 +1226,8 @@ function CanopyInbox({
                         id="canopy-inbox-list"
                         role="listbox"
                         aria-labelledby="canopy-inbox-label"
-                        // A mouse or pen resting over a row; a touch has no hover to hold for.
-                        onPointerEnter={(event) => {
-                          if (event.pointerType !== "touch") setPointerInList(true);
-                        }}
-                        onPointerLeave={() => {
-                          // Leaving releases the hold, it doesn't move the list:
-                          // the idle wait starts from here.
-                          lastInteractionRef.current = Date.now();
-                          setPointerInList(false);
-                        }}
+                        onPointerEnter={(event) => enterList(event.pointerType)}
+                        onPointerLeave={leaveList}
                       >
                         {listed.map((item, index) => {
                           const replied = repliedAt(item);
@@ -2957,7 +1300,7 @@ function CanopyInbox({
                                 ? selectedAssistant.id === item.id
                                 : index === 0
                             }
-                            onSelect={() => setAssistantId(item.id)}
+                            onSelect={() => selectAssistant(item.id)}
                             onOpen={() => openAssistant(item)}
                             onKeyDown={(event) => onAssistantKeyDown(event, index)}
                           />
@@ -3063,11 +1406,7 @@ function CanopyInbox({
                       renameRequest={
                         renameAsk?.runId === focusedItem.runId ? renameAsk.request : undefined
                       }
-                      onInitialFocusSettled={() =>
-                        setPaneFocus((current) =>
-                          current?.runId === focusedItem.runId ? null : current
-                        )
-                      }
+                      onInitialFocusSettled={() => settlePaneFocus(focusedItem.runId)}
                       otherHostId={(everyHost ? focusedHostId : hostId) ?? undefined}
                       terminalApi={terminalApi}
                       reconnecting={
