@@ -15,132 +15,15 @@
 
 import { createLogger } from "../../utils/logger.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
-import {
-  isInertPluginTaskHandle,
-  pluginTaskAbortCause,
-} from "../../../shared/utils/pluginTasks.js";
-import { AGENT_MCP_MAX_RESULT_BYTES } from "../../../shared/types/plugin.js";
-import { PLUGIN_SERVICE_MAX_METHODS } from "../../../shared/config/pluginBudgets.js";
+import type { PluginHostApi, PluginMcpCaller } from "../../../shared/types/plugin.js";
 import type {
-  PluginHostApi,
-  PluginIpcContext,
-  PluginMcpCaller,
-  PluginMcpToolDefinition,
-  PluginProcessHandle,
-  PluginTaskHandle,
-  PluginDuplexProcessHandle,
-  PluginPtyProcessHandle,
-  PluginProcessSpawnOptions,
-  PluginProcessMode,
-  PluginSettingsScope,
-  PluginStorageScope,
-  PluginRenderPdfOptions,
-  PluginArtifactDownloadRequest,
-  PluginArtifactImportSource,
-  PluginArtifactListOptions,
-  PluginArtifactProgress,
-  PluginArtifactUploadRequest,
-  PluginWorktreeSetupStepContext,
-  PluginSearchProvider,
-  PluginSearchResult,
-  PluginWorktreeDeleteNote,
-  PluginWorktreeSnapshot,
-} from "../../../shared/types/plugin.js";
-import { SEARCH_PROVIDER_MAX_RESPONSE_BYTES } from "../../../shared/config/pluginSearchProviders.js";
-import type { FileDecoration, FileDecorationProviderImpl } from "../../../shared/types/forge.js";
-import type {
-  ContextProviderContent,
-  ContextProviderImpl,
-  ContextProviderItem,
-} from "../../../shared/types/pluginContextProvider.js";
-import type {
-  ActionsGetParams,
-  BroadcastToRendererParams,
-  DispatchParams,
-  SendToActiveAgentParams,
-  SendToAgentParams,
-  RunRecipeParams,
-  TerminalsReadScreenParams,
-  AgentsInterruptParams,
-  AgentsSendKeysParams,
-  AgentsSubmitParams,
-  InvalidateFileDecorationsParams,
-  LoggerParams,
+  PluginHostCallMethod,
+  PluginHostNotifyMethod,
+  PluginWorkerSubscriptionKind,
   PluginWorkerToHostMessage,
-  PostToPanelParams,
-  ReloadPanelParams,
-  SetPanelBadgeParams,
-  SetToolbarButtonBadgeParams,
-  SetToolbarButtonStateParams,
-  SetContextParams,
-  SetWorktreeCardStatusParams,
-  SetWorktreeReviewChecksParams,
-  SetTerminalStatusParams,
-  SetPanelActivityParams,
-  SetPanelMenuItemsParams,
-  RegisterActionParams,
-  RegisterContextProviderParams,
-  RegisterFileDecorationProviderParams,
-  RegisterWorktreeDeleteNotesProviderParams,
-  RegisterHandlerParams,
-  RegisterMcpToolsParams,
-  SettingsGetParams,
-  SettingsOpenParams,
-  AccountCallParams,
-  SettingsSetParams,
-  SettingsUnsetParams,
-  StorageGetParams,
-  StorageSetParams,
-  StorageDeleteParams,
-  ShowToastParams,
-  NotifyParams,
-  ShowQuickPickParams,
-  ShowInputBoxParams,
-  ShowConfirmParams,
-  UnregisterContextProviderParams,
-  UnregisterFileDecorationProviderParams,
-  UnregisterWorktreeDeleteNotesProviderParams,
-  UnregisterMcpToolsParams,
-  WorktreeSetupStepRegistrationParams,
-  WorktreeSetupStepWireContext,
-  FsPathParams,
-  FsReadFilesParams,
-  FsWalkParams,
-  PluginWorkerWorktreesEvent,
-  FsWriteFileParams,
-  FsAppendFileParams,
-  FsWatchParams,
-  GitOpParams,
-  ClipboardWriteTextParams,
-  ClipboardWriteImageParams,
-  SystemOpenExternalParams,
-  SystemPathParams,
-  DocumentsRenderPdfParams,
-  ArtifactsIdParams,
-  ArtifactsListParams,
-  ArtifactsTransferParams,
-  ProcessSpawnParams,
-  ProcessHandleRefParams,
-  TaskAbortEvent,
-  TaskFinishParams,
-  TaskReportParams,
-  TaskStartParams,
-  TaskStartResult,
-  ProcessWriteParams,
-  ProcessResizeParams,
-  SearchProviderRegistrationParams,
-  RegisterServiceParams,
-  UnregisterServiceParams,
-  ServicesCallParams,
-  ServicesStatusParams,
 } from "../../../shared/types/pluginDevWorker.js";
-import type {
-  PluginServiceCallContext,
-  PluginServiceCaller,
-} from "../../../shared/types/pluginServices.js";
 import {
   ENDED_SERVICE_INVOCATION,
-  PluginServiceUnavailableError,
   currentServiceInvocation,
   runWithServiceInvocation,
   type PluginServiceInvocation,
@@ -148,13 +31,7 @@ import {
 import type { PluginDevWorkerHost } from "./PluginDevWorkerHost.js";
 import { parseWorkerToHostMessage } from "../../schemas/pluginDevWorker.js";
 import { abortErrorFor } from "./pluginAbortError.js";
-import { invokeSignalFor } from "./pluginInvokeDeadline.js";
 import { serializableErrorFields } from "./pluginHostErrorFields.js";
-import {
-  approvePluginDatabaseBackup,
-  approvePluginDatabaseWrite,
-  observePluginPushListeners,
-} from "./pluginInternalApprovers.js";
 import {
   currentPluginInvocation,
   runWithEndedPluginInvocation,
@@ -162,35 +39,47 @@ import {
   type EndedPluginInvocation,
   type PluginInvocationScope,
 } from "./pluginFrontendRouting.js";
+import {
+  routesFrom,
+  type ActivationPhase,
+  type DevWorkerBridgeContext,
+  type HostCallHandler,
+  type HostNotifyHandler,
+  type InvokeTarget,
+  type RoutesCover,
+  type SubscribeHandler,
+} from "./devWorkerBridge/bridgeContext.js";
+import { ContributionsDomain } from "./devWorkerBridge/contributionsDomain.js";
+import { DataDomain } from "./devWorkerBridge/dataDomain.js";
+import { ResourcesDomain } from "./devWorkerBridge/resourcesDomain.js";
+import { WorkspaceDomain } from "./devWorkerBridge/workspaceDomain.js";
 
 const logger = createLogger("main:PluginDevWorkerBridge");
 
-/** A worker's prompt may only opt in to waiting; any other value is the default. */
-function promptQueueOption(value: unknown): { whenNoFrontend?: "queue" } {
-  return value === "queue" ? { whenNoFrontend: "queue" } : {};
-}
-
-/**
- * Structural narrowing for an interactive process handle (#11300). The host adds
- * `resize` only for a real PTY, so its presence — not what the worker
- * requested — is what decides whether the resize relay is available.
- *
- * Must be tested BEFORE {@link isWritableHandle}: a PTY handle satisfies both.
- */
-function isPtyHandle(handle: PluginProcessHandle): handle is PluginPtyProcessHandle {
-  const candidate = handle as Partial<PluginPtyProcessHandle>;
-  return typeof candidate.write === "function" && typeof candidate.resize === "function";
-}
-
-/**
- * Structural narrowing for any handle whose input the plugin can drive (#11871)
- * — a duplex child's stdin or a PTY. Same principle as {@link isPtyHandle}: the
- * shape the host actually built decides what the relay forwards, so a worker
- * cannot fabricate a `write` onto a pipe-mode process that has no stdin.
- */
-function isWritableHandle(handle: PluginProcessHandle): handle is PluginDuplexProcessHandle {
-  return typeof (handle as Partial<PluginDuplexProcessHandle>).write === "function";
-}
+// Every method and kind the protocol allows has a route: one added to the
+// shared vocabulary without a handler fails typecheck here.
+void ([true, true, true] satisfies [
+  RoutesCover<
+    PluginHostCallMethod,
+    | keyof WorkspaceDomain["hostCalls"]
+    | keyof DataDomain["hostCalls"]
+    | keyof ResourcesDomain["hostCalls"]
+  >,
+  RoutesCover<
+    PluginHostNotifyMethod,
+    | keyof WorkspaceDomain["notifications"]
+    | keyof ContributionsDomain["notifications"]
+    | keyof ResourcesDomain["notifications"]
+    | "pushRejected"
+  >,
+  RoutesCover<
+    PluginWorkerSubscriptionKind,
+    | keyof WorkspaceDomain["subscriptions"]
+    | keyof DataDomain["subscriptions"]
+    | keyof ContributionsDomain["subscriptions"]
+    | keyof ResourcesDomain["subscriptions"]
+  >,
+]);
 
 /**
  * The provenance an `mcp-tool` invoke carries into the worker, copied field by
@@ -209,58 +98,6 @@ function projectMcpCaller(caller: PluginMcpCaller): PluginMcpCaller {
   };
 }
 
-/**
- * A worker tool result arrives as the JSON text the worker serialized. The size
- * is checked before parsing, so a worker cannot make main build a value larger
- * than the result budget; everything downstream then handles plain JSON data.
- */
-function parseWorkerToolResult(result: unknown): unknown {
-  if (typeof result !== "string") {
-    throw new Error("plugin worker returned a tool result that is not serialized JSON");
-  }
-  const bytes = Buffer.byteLength(result, "utf8");
-  if (bytes > AGENT_MCP_MAX_RESULT_BYTES) {
-    throw new Error(
-      `the tool result is ${bytes} bytes, over the ${AGENT_MCP_MAX_RESULT_BYTES}-byte limit for plugin tool results`
-    );
-  }
-  return JSON.parse(result) as unknown;
-}
-
-type InvokeTarget =
-  | { kind: "action"; namespacedId: string; args: unknown }
-  | { kind: "command"; namespacedId: string; resolvedPath: string; args: unknown }
-  | { kind: "handler"; channel: string; ctx: PluginIpcContext; args: unknown[] }
-  | { kind: "file-decoration-method"; providerId: string; method: string; args: unknown[] }
-  | { kind: "worktree-delete-notes"; providerId: string; worktree: PluginWorktreeSnapshot }
-  | {
-      kind: "context-provider-method";
-      providerId: string;
-      method: "search" | "resolve";
-      args: [string];
-    }
-  | {
-      kind: "mcp-tool";
-      endpointId: string;
-      toolName: string;
-      args: Record<string, unknown>;
-      caller: PluginMcpCaller;
-    }
-  | { kind: "worktree-setup-step"; stepId: string; context: WorktreeSetupStepWireContext }
-  | {
-      kind: "search-provider";
-      providerId: string;
-      query: string;
-      context: { mode: "scoped" | "blended"; limit: number };
-    }
-  | {
-      kind: "service-method";
-      serviceName: string;
-      method: string;
-      args: unknown;
-      caller: PluginServiceCaller;
-    };
-
 /** Request-id prefix of a `service-method` invoke; every other kind uses `i`. */
 const SERVICE_INVOKE_PREFIX = "s";
 
@@ -270,19 +107,6 @@ const SERVICE_INVOKE_PREFIX = "s";
  * as a caller nobody knows, which drives nothing.
  */
 const SETTLED_CALLERS_MAX = 1024;
-
-/** A runtime search provider's answer, which the worker sends as one JSON string. */
-function parseWorkerSearchResult(result: unknown): unknown {
-  if (typeof result !== "string") {
-    throw new Error("plugin worker returned search results that are not serialized JSON");
-  }
-  if (Buffer.byteLength(result, "utf8") > SEARCH_PROVIDER_MAX_RESPONSE_BYTES) {
-    throw new Error(
-      `the search results are over the ${SEARCH_PROVIDER_MAX_RESPONSE_BYTES}-byte limit for one answer`
-    );
-  }
-  return JSON.parse(result) as unknown;
-}
 
 export interface PluginDevWorkerMainBridgeDeps {
   pluginId: string;
@@ -340,18 +164,6 @@ interface PendingRegistration {
   readonly registrationKey: string;
 }
 
-/**
- * Where the current generation's activation stands (#12282).
- *
- * `activating` → the worker has not reported `activated` yet; a registration
- * settling now must not commit anything. `draining` → `activated` arrived and
- * the commit is waiting on the last required registration. `succeeded` /
- * `failed` are terminal for the generation, and `failed` latches: the FIRST
- * failure is the one the author sees, so a rejected contribution isn't
- * overwritten by a later, vaguer `activate-error`.
- */
-type ActivationPhase = "activating" | "draining" | "succeeded" | "failed";
-
 export class PluginDevWorkerMainBridge {
   private readonly pluginId: string;
   private readonly host: PluginHostApi;
@@ -403,39 +215,13 @@ export class PluginDevWorkerMainBridge {
    * deliver its late `host-result` to the new worker generation, whose proxy
    * resets its requestId counter and could collide on the same id. */
   private reloadGeneration = 0;
-  /** Disposers for providers (file decoration, and context providers under a
-   * `context:` key) the worker registered on the real host, keyed by provider
-   * id. Torn down on reload and dispose so a reloaded generation re-registers
-   * cleanly. */
-  private readonly providerDisposers = new Map<string, () => void>();
-  /** The same for worktree delete notes providers (#13805). Kept apart from
-   * decoration providers so the two kinds can share an id. */
-  private readonly worktreeDeleteNotesDisposers = new Map<string, () => void>();
-  /** Disposers for the `agentMcp` rosters the worker bound, keyed by endpoint id.
-   * Retired with the generation like providers: the roster's `execute`s live in
-   * the outgoing worker, and the replacement re-registers its own on activate. */
-  private readonly mcpRosterDisposers = new Map<string, () => void>();
-  /** Disposers for the worktree setup step handlers the worker bound, keyed by
-   * step id. Retired with the generation like providers. */
-  private readonly setupStepDisposers = new Map<string, () => void>();
-  /** Disposers for the quick switcher search providers the worker bound, keyed by
-   * provider id. Kept apart from {@link providerDisposers}: a decoration provider
-   * and a search provider may share an id. Retired with the generation too. */
-  private readonly searchProviderDisposers = new Map<string, () => void>();
-  /** Live handles for processes the worker spawned via `host.process.spawn`,
-   * keyed by the host-assigned handle id. The worker addresses `kill` /
-   * `restart` / `onExit` / `onCrash` by id; all are killed when a generation is
-   * retired and on dispose (the next generation re-spawns from its fresh module
-   * realm). */
-  private readonly processHandles = new Map<string, PluginProcessHandle>();
-  /** Live handles for tasks the worker started via `host.tasks.start` (#13819),
-   * keyed by task id, each with the detach for the listener that relays the
-   * user's Cancel to the worker. Forgotten when a generation is retired: main's
-   * registry marks the tasks themselves interrupted. */
-  private readonly taskHandles = new Map<
-    string,
-    { handle: PluginTaskHandle; detach: () => void }
-  >();
+  private readonly workspace: WorkspaceDomain;
+  private readonly data: DataDomain;
+  private readonly contributions: ContributionsDomain;
+  private readonly resources: ResourcesDomain;
+  private readonly hostCallRoutes: ReadonlyMap<string, HostCallHandler>;
+  private readonly hostNotifyRoutes: ReadonlyMap<string, HostNotifyHandler>;
+  private readonly subscribeRoutes: ReadonlyMap<string, SubscribeHandler>;
 
   /**
    * Required registrations still awaiting main-side deep validation (#12282).
@@ -477,6 +263,46 @@ export class PluginDevWorkerMainBridge {
     this.onTerminalFailure = deps.onTerminalFailure;
     this.onPushRejected = deps.onPushRejected;
 
+    const context: DevWorkerBridgeContext = {
+      pluginId: this.pluginId,
+      host: this.host,
+      isDisposed: () => this.disposed,
+      generation: () => this.reloadGeneration,
+      activationPhase: () => this.activationPhase,
+      getCapabilities: () => this.getCapabilities(),
+      send: (message) => this.workerHost.send(message),
+      invoke: (target, signal) => this.invoke(target, signal),
+      trackSubscription: (subscriptionId, dispose) => {
+        this.subscriptionDisposers.set(subscriptionId, dispose);
+      },
+    };
+    this.workspace = new WorkspaceDomain(context);
+    this.data = new DataDomain(context);
+    this.contributions = new ContributionsDomain(context);
+    this.resources = new ResourcesDomain(context);
+    this.hostCallRoutes = routesFrom<HostCallHandler>([
+      this.workspace.hostCalls,
+      this.data.hostCalls,
+      this.resources.hostCalls,
+    ]);
+    this.hostNotifyRoutes = routesFrom<HostNotifyHandler>([
+      this.workspace.notifications,
+      this.contributions.notifications,
+      this.resources.notifications,
+      {
+        pushRejected: async () => {
+          if (this.disposed) return;
+          this.onPushRejected?.();
+        },
+      },
+    ]);
+    this.subscribeRoutes = routesFrom<SubscribeHandler>([
+      this.workspace.subscriptions,
+      this.data.subscriptions,
+      this.contributions.subscriptions,
+      this.resources.subscriptions,
+    ]);
+
     this.activationPromise = new Promise<void>((resolve, reject) => {
       this.activationResolve = resolve;
       this.activationReject = reject;
@@ -516,9 +342,9 @@ export class PluginDevWorkerMainBridge {
       }
     }
     this.subscriptionDisposers.clear();
-    this.disposeProviders();
-    this.disposeProcessHandles();
-    this.disposeTaskHandles();
+    this.contributions.disposeProviders();
+    this.resources.disposeProcessHandles();
+    this.resources.disposeTaskHandles();
     this.abortAllHostCalls();
     for (const pending of this.pendingInvokes.values()) {
       pending.reject(new Error("Plugin dev worker bridge disposed"));
@@ -558,47 +384,6 @@ export class PluginDevWorkerMainBridge {
       }
     }
     this.hostCallAborts.clear();
-  }
-
-  /** Tear down every provider and MCP roster the worker registered on the real host. */
-  private disposeProviders(): void {
-    for (const dispose of [
-      ...this.providerDisposers.values(),
-      ...this.worktreeDeleteNotesDisposers.values(),
-      ...this.mcpRosterDisposers.values(),
-      ...this.setupStepDisposers.values(),
-      ...this.searchProviderDisposers.values(),
-    ]) {
-      try {
-        dispose();
-      } catch {
-        // best-effort
-      }
-    }
-    this.providerDisposers.clear();
-    this.worktreeDeleteNotesDisposers.clear();
-    this.mcpRosterDisposers.clear();
-    this.setupStepDisposers.clear();
-    this.searchProviderDisposers.clear();
-  }
-
-  /** Kill every process the worker spawned (the worker is going away — a fresh
-   * generation re-spawns from its own module realm). */
-  private disposeProcessHandles(): void {
-    for (const handle of this.processHandles.values()) {
-      try {
-        handle.kill();
-      } catch {
-        // best-effort
-      }
-    }
-    this.processHandles.clear();
-  }
-
-  /** Stop relaying cancels for the worker's tasks and forget their handles. */
-  private disposeTaskHandles(): void {
-    for (const { detach } of this.taskHandles.values()) detach();
-    this.taskHandles.clear();
   }
 
   /** The crash-respawned child booted — everything from here belongs to it. */
@@ -658,9 +443,9 @@ export class PluginDevWorkerMainBridge {
       }
     }
     this.subscriptionDisposers.clear();
-    this.disposeProviders();
-    this.disposeProcessHandles();
-    this.disposeTaskHandles();
+    this.contributions.disposeProviders();
+    this.resources.disposeProcessHandles();
+    this.resources.disposeTaskHandles();
     for (const pending of this.pendingInvokes.values()) {
       pending.reject(new Error(reason));
     }
@@ -998,486 +783,10 @@ export class PluginDevWorkerMainBridge {
     return { pluginId: this.pluginId, caller: caller ?? null };
   }
 
-  private async dispatchHostCall(
-    method: string,
-    params: unknown,
-    signal: AbortSignal
-  ): Promise<unknown> {
-    switch (method) {
-      case "getActiveWorktree":
-        return this.host.getActiveWorktree();
-      case "getWorktrees":
-        return this.host.getWorktrees();
-      case "getWorktreesResult":
-        return this.host.getWorktreesResult();
-      case "getWorktreeStatus":
-        return this.host.getWorktreeStatus(params as string, { signal });
-      case "getAgentState":
-        return this.host.getAgentState();
-      case "showToast": {
-        const p = params as ShowToastParams;
-        // `type` is validated against the NotificationType enum by the host's
-        // PluginToastOptionsSchema, so an invalid value rejects there.
-        await this.host.showToast({
-          message: p.message,
-          type: p.type as Parameters<PluginHostApi["showToast"]>[0]["type"],
-          durationMs: p.durationMs,
-        });
-        return undefined;
-      }
-      case "notify": {
-        const p = params as NotifyParams;
-        return this.host.notify(p.options as Parameters<PluginHostApi["notify"]>[0]);
-      }
-      case "dispatch": {
-        const p = params as DispatchParams;
-        return this.host.dispatch(
-          p.actionId,
-          p.args,
-          p.options as Parameters<PluginHostApi["dispatch"]>[2]
-        );
-      }
-      case "reloadPanel": {
-        const p = params as ReloadPanelParams;
-        return this.host.reloadPanel(p.panelId);
-      }
-      case "setContext": {
-        const p = params as SetContextParams;
-        await this.host.setContext(p.key, p.value);
-        return undefined;
-      }
-      case "setToolbarButtonState": {
-        const p = params as SetToolbarButtonStateParams;
-        await this.host.setToolbarButtonState(p.buttonId, p.state);
-        return undefined;
-      }
-      case "setWorktreeCardStatus": {
-        const p = params as SetWorktreeCardStatusParams;
-        await this.host.setWorktreeCardStatus(p.worktreeId, p.status);
-        return undefined;
-      }
-      case "setWorktreeReviewChecks": {
-        const p = params as SetWorktreeReviewChecksParams;
-        await this.host.setWorktreeReviewChecks(p.worktreeId, p.checks);
-        return undefined;
-      }
-      case "setTerminalStatus": {
-        const p = params as SetTerminalStatusParams;
-        await this.host.setTerminalStatus(p.terminalId, p.status);
-        return undefined;
-      }
-      case "setPanelActivity": {
-        const p = params as SetPanelActivityParams;
-        await this.host.setPanelActivity(p.panelId, p.activity);
-        return undefined;
-      }
-      case "restartWorker":
-        // The host defers the restart past this result's post, so the worker
-        // hears "scheduled" before it is torn down (#13410).
-        return this.host.restartWorker();
-      case "actions.list":
-        return this.host.actions.list();
-      case "actions.get": {
-        const p = params as ActionsGetParams;
-        return this.host.actions.get(p.actionId);
-      }
-      case "sendToActiveAgent": {
-        const p = params as SendToActiveAgentParams;
-        await this.host.sendToActiveAgent(p.text, p.options);
-        return undefined;
-      }
-      case "agents.list":
-        return this.host.agents.list();
-      case "agents.listAll":
-        return this.host.agents.listAll();
-      case "agents.interrupt": {
-        const p = params as AgentsInterruptParams;
-        return this.host.agents.interrupt(p.terminalId);
-      }
-      case "agents.sendKeys": {
-        const p = params as AgentsSendKeysParams;
-        return this.host.agents.sendKeys(p.terminalId, p.input);
-      }
-      case "agents.submit": {
-        const p = params as AgentsSubmitParams;
-        return this.host.agents.submit(p.terminalId, p.text);
-      }
-      case "terminals.readScreen": {
-        const p = params as TerminalsReadScreenParams;
-        return this.host.terminals.readScreen(p.terminalId, p.options);
-      }
-      case "sendToAgent": {
-        // `signal` ties an open picker to this generation, like showQuickPick:
-        // a retired worker's question comes off the screen with it.
-        const p = params as SendToAgentParams;
-        return this.host.sendToAgent(p.text, p.options, { signal });
-      }
-      case "runRecipe": {
-        // Same as sendToAgent: the dialog belongs to this generation.
-        const p = params as RunRecipeParams;
-        return this.host.runRecipe(p.recipeId, p.options, { signal });
-      }
-      case "showQuickPick": {
-        // Reuse the real host so validation/provenance/cancellation all match
-        // the installed-plugin path. `signal` is what ties the dialog to this
-        // generation: retiring one aborts every in-flight host call, which
-        // dismisses the question rather than leaving it on screen owned by a
-        // worker that no longer exists (#12279).
-        const p = params as ShowQuickPickParams;
-        return this.host.showQuickPick(p.items, p.options ?? {}, {
-          signal,
-          ...promptQueueOption(p.whenNoFrontend),
-        });
-      }
-      case "showInputBox": {
-        const p = params as ShowInputBoxParams;
-        return this.host.showInputBox(p.options, {
-          signal,
-          ...promptQueueOption(p.whenNoFrontend),
-        });
-      }
-      case "showConfirm": {
-        const p = params as ShowConfirmParams;
-        return this.host.showConfirm(p.options, {
-          signal,
-          ...promptQueueOption(p.whenNoFrontend),
-        });
-      }
-      case "settings.get": {
-        const p = params as SettingsGetParams;
-        return this.host.settings.get(p.key, p.scope);
-      }
-      case "settings.set": {
-        const p = params as SettingsSetParams;
-        await this.host.settings.set(p.key, p.value, p.scope);
-        return undefined;
-      }
-      case "settings.unset": {
-        const p = params as SettingsUnsetParams;
-        await this.host.settings.unset(p.key, p.scope);
-        return undefined;
-      }
-      case "settings.open": {
-        const p = params as SettingsOpenParams;
-        await this.host.settings.open(p.key);
-        return undefined;
-      }
-      case "settings.missingRequired":
-        return this.host.settings.missingRequired();
-      // An omitted ref crosses as `undefined` and is resolved by the host.
-      case "account.getState":
-        return this.host.account.getState((params as AccountCallParams | undefined)?.ref);
-      case "account.getAccessToken":
-        return this.host.account.getAccessToken((params as AccountCallParams | undefined)?.ref);
-      case "services.call": {
-        // The worker's signal arrives as `host-cancel`, which aborts this one;
-        // so does the worker going away, cancelling its calls in flight.
-        const p = params as ServicesCallParams;
-        return this.host.services.call(p.name, p.method, p.args, {
-          signal,
-          ...(p.timeoutMs !== undefined ? { timeoutMs: p.timeoutMs } : {}),
-        });
-      }
-      case "services.status":
-        return this.host.services.status((params as ServicesStatusParams).name);
-      case "storage.get": {
-        const p = params as StorageGetParams;
-        return this.host.storage.get(p.key, p.scope);
-      }
-      case "storage.set": {
-        const p = params as StorageSetParams;
-        await this.host.storage.set(p.key, p.value, p.scope);
-        return undefined;
-      }
-      case "storage.delete": {
-        const p = params as StorageDeleteParams;
-        await this.host.storage.delete(p.key, p.scope);
-        return undefined;
-      }
-      case "db.prepareBackup": {
-        const p = params as { id: string; destPath: string };
-        return approvePluginDatabaseBackup(this.host.db, p.id, p.destPath);
-      }
-      case "db.authorizeWrite": {
-        const p = params as { id: string; path?: string };
-        return approvePluginDatabaseWrite(this.host.db, p.id, p.path);
-      }
-      case "db.resolve": {
-        const p = params as { id: string; readonly?: unknown };
-        return p.readonly === true
-          ? this.host.db.resolve(p.id, { readonly: true })
-          : this.host.db.resolve(p.id);
-      }
-      case "fs.readFile":
-        return this.host.fs.readFile((params as FsPathParams).path, { signal });
-      case "fs.readFileBytes":
-        return this.host.fs.readFileBytes((params as FsPathParams).path, { signal });
-      case "fs.readFileWithRevision":
-        return this.host.fs.readFileWithRevision((params as FsPathParams).path, { signal });
-      case "fs.readFiles": {
-        const p = params as FsReadFilesParams;
-        const fsApi = this.host.fs;
-        if (!fsApi.readFiles) throw new Error("fs.readFiles is not available on this host");
-        // Forwarded as given so the host validates exactly what the worker
-        // sent; the overloads only exist to type a literal `encoding`.
-        const readFiles = fsApi.readFiles as (
-          paths: readonly string[],
-          options: unknown
-        ) => Promise<unknown>;
-        return readFiles.call(fsApi, p.paths, {
-          signal,
-          ...(p.encoding !== undefined && { encoding: p.encoding }),
-          ...(p.maxBytesPerFile !== undefined && { maxBytesPerFile: p.maxBytesPerFile }),
-        });
-      }
-      case "fs.mkdir":
-        await this.host.fs.mkdir((params as FsPathParams).path);
-        return undefined;
-      case "fs.appendFile": {
-        const p = params as FsAppendFileParams;
-        await this.host.fs.appendFile(p.path, p.contents);
-        return undefined;
-      }
-      case "fs.writeFile": {
-        const p = params as FsWriteFileParams;
-        // Forwarded exactly as sent so a malformed options value is refused
-        // by the host rather than read as absent.
-        return p.options === undefined
-          ? this.host.fs.writeFile(p.path, p.contents)
-          : this.host.fs.writeFile(p.path, p.contents, p.options);
-      }
-      case "fs.readdir": {
-        const p = params as FsPathParams;
-        return this.host.fs.readdir(p.path, { signal, ...(p.detail === true && { detail: true }) });
-      }
-      case "fs.walk": {
-        const p = params as FsWalkParams;
-        const fsApi = this.host.fs;
-        if (!fsApi.walk) throw new Error("fs.walk is not available on this host");
-        // Options forwarded as sent so the host validates exactly what the
-        // worker passed; only the bridge's own signal is added.
-        const options: unknown = p.options;
-        if (options === undefined) return fsApi.walk(p.root, { signal });
-        if (options === null || typeof options !== "object") {
-          return fsApi.walk(p.root, options as never);
-        }
-        return fsApi.walk(p.root, { ...options, signal });
-      }
-      case "fs.stat":
-        return this.host.fs.stat((params as FsPathParams).path, { signal });
-      case "fs.watch": {
-        const p = params as FsWatchParams;
-        const generation = this.reloadGeneration;
-        // The real watcher lives in main; relay each change as a
-        // subscription-event keyed by the worker-supplied subscription id.
-        const dispose = await this.host.fs.watch(
-          p.paths,
-          (changedPath) => {
-            if (this.disposed) return;
-            this.workerHost.send({
-              type: "subscription-event",
-              subscriptionId: p.subscriptionId,
-              payload: changedPath,
-            });
-          },
-          {
-            signal,
-            // Forwarded as given so the host rejects a malformed value.
-            ...(p.recursive !== undefined && { recursive: p.recursive }),
-            ...(p.debounceMs !== undefined && { debounceMs: p.debounceMs }),
-            ...(p.allowMissing !== undefined && { allowMissing: p.allowMissing }),
-          }
-        );
-        // Disposed, reloaded or cancelled while the watch was settling — tear
-        // it down rather than leak it: the cleanup pass already ran, or the
-        // worker already rejected the call and dropped its callback.
-        if (this.disposed || generation !== this.reloadGeneration || signal.aborted) {
-          try {
-            dispose();
-          } catch {
-            // best-effort
-          }
-          return undefined;
-        }
-        this.subscriptionDisposers.set(p.subscriptionId, dispose);
-        return undefined;
-      }
-      case "process.spawn": {
-        const p = params as ProcessSpawnParams;
-        const generation = this.reloadGeneration;
-        const handle = await this.host.process.spawn(
-          p.command,
-          p.options as PluginProcessSpawnOptions
-        );
-        // Report the mode from the handle the host actually built, not from what
-        // the worker asked for, so the proxy can't hand a plugin `write()` on a
-        // process that has no writable input. PTY is tested first — it satisfies
-        // the writable check too.
-        const mode: PluginProcessMode = isPtyHandle(handle)
-          ? "pty"
-          : isWritableHandle(handle)
-            ? "duplex"
-            : "pipe";
-        // Disposed or reloaded while the spawn was settling — the worker that
-        // requested it is gone — or the worker gave up on the call (a cancel
-        // or its deadline, #13410) and will never learn this handle's id;
-        // kill the orphan rather than leak it.
-        if (this.disposed || generation !== this.reloadGeneration || signal.aborted) {
-          try {
-            handle.kill();
-          } catch {
-            // best-effort
-          }
-          return { id: handle.id, mode };
-        }
-        this.processHandles.set(handle.id, handle);
-        return { id: handle.id, mode };
-      }
-      case "tasks.start": {
-        const p = params as TaskStartParams;
-        const generation = this.reloadGeneration;
-        const handle = await this.host.tasks.start(p.options);
-        // The plugin had unloaded: there is no task to relay or finish.
-        if (isInertPluginTaskHandle(handle)) {
-          return { id: handle.id, inert: true } satisfies TaskStartResult;
-        }
-        // Disposed or reloaded while starting, or the worker gave up on the call
-        // (a cancel or its deadline) and will never learn this id: nobody can
-        // finish the task, so it ends here, quietly.
-        if (this.disposed || generation !== this.reloadGeneration || signal.aborted) {
-          void handle.finish({ outcome: "cancelled" }).catch(() => {});
-          return { id: handle.id } satisfies TaskStartResult;
-        }
-        const relayCancel = (): void => {
-          if (this.disposed || generation !== this.reloadGeneration) return;
-          // A signal can't cross the port; its cause can, so the worker side
-          // still tells a Cancel from an interruption.
-          const payload: TaskAbortEvent = { cause: pluginTaskAbortCause(handle.signal.reason) };
-          this.workerHost.send({
-            type: "subscription-event",
-            subscriptionId: p.subscriptionId,
-            payload,
-          });
-        };
-        // Cancelled before start even answered: the worker registered its
-        // subscription before the call, so the event still lands first.
-        if (handle.signal.aborted) relayCancel();
-        else handle.signal.addEventListener("abort", relayCancel, { once: true });
-        this.taskHandles.set(handle.id, {
-          handle,
-          detach: () => handle.signal.removeEventListener("abort", relayCancel),
-        });
-        return { id: handle.id } satisfies TaskStartResult;
-      }
-      case "tasks.finish": {
-        const p = params as TaskFinishParams;
-        const entry = this.taskHandles.get(p.taskId);
-        // Retired with its generation, or never this worker's: already ended.
-        if (!entry) return undefined;
-        await entry.handle.finish(p.result);
-        if (this.taskHandles.get(p.taskId) === entry) {
-          this.taskHandles.delete(p.taskId);
-          entry.detach();
-        }
-        return undefined;
-      }
-      case "process.restart": {
-        const p = params as ProcessHandleRefParams;
-        const handle = this.processHandles.get(p.processId);
-        if (!handle) {
-          throw new Error(`No live process "${p.processId}" to restart`);
-        }
-        await handle.restart();
-        return undefined;
-      }
-      case "git.status":
-        return this.host.git.status((params as GitOpParams).worktreePath, { signal });
-      case "git.diff": {
-        const p = params as GitOpParams;
-        return this.host.git.diff(p.worktreePath, p.filePath, { signal });
-      }
-      case "git.add": {
-        const p = params as GitOpParams;
-        await this.host.git.add(p.worktreePath, p.paths, { signal });
-        return undefined;
-      }
-      case "git.commit": {
-        const p = params as GitOpParams;
-        return this.host.git.commit(p.worktreePath, { message: p.message ?? "" }, { signal });
-      }
-      case "clipboard.writeText": {
-        await this.host.clipboard.writeText((params as ClipboardWriteTextParams).text);
-        return undefined;
-      }
-      case "clipboard.writeImage": {
-        await this.host.clipboard.writeImage((params as ClipboardWriteImageParams).pngData);
-        return undefined;
-      }
-      case "system.openPath": {
-        await this.host.system.openPath((params as SystemPathParams).targetPath);
-        return undefined;
-      }
-      case "system.showItemInFolder": {
-        await this.host.system.showItemInFolder((params as SystemPathParams).targetPath);
-        return undefined;
-      }
-      case "system.openExternal": {
-        await this.host.system.openExternal((params as SystemOpenExternalParams).url);
-        return undefined;
-      }
-      case "documents.renderPdf":
-        // Forwarded as sent; the host validates every option.
-        return this.host.documents.renderPdf(
-          (params as DocumentsRenderPdfParams).options as PluginRenderPdfOptions
-        );
-      case "artifacts.import":
-      case "artifacts.download":
-      case "artifacts.upload": {
-        // Forwarded as sent; the host validates. The worker's signal arrives
-        // as this call's own, and its progress callback as a subscription.
-        const p = params as ArtifactsTransferParams;
-        const generation = this.reloadGeneration;
-        const subscriptionId = p.progressSubscriptionId;
-        const onProgress =
-          typeof subscriptionId === "string"
-            ? (progress: PluginArtifactProgress) => {
-                if (this.disposed || generation !== this.reloadGeneration) return;
-                this.workerHost.send({
-                  type: "subscription-event",
-                  subscriptionId,
-                  payload: progress,
-                });
-              }
-            : undefined;
-        const options = {
-          ...(typeof p.options === "object" && p.options !== null ? p.options : {}),
-          signal,
-          onProgress,
-        };
-        if (method === "artifacts.upload") {
-          return this.host.artifacts.upload(
-            p.artifactId as string,
-            p.target as PluginArtifactUploadRequest,
-            options
-          );
-        }
-        return method === "artifacts.import"
-          ? this.host.artifacts.import(p.target as PluginArtifactImportSource, options)
-          : this.host.artifacts.download(p.target as PluginArtifactDownloadRequest, options);
-      }
-      case "artifacts.stat":
-        return this.host.artifacts.stat((params as ArtifactsIdParams).artifactId as string);
-      case "artifacts.release":
-        return this.host.artifacts.release((params as ArtifactsIdParams).artifactId as string);
-      case "artifacts.list":
-        return this.host.artifacts.list(
-          (params as ArtifactsListParams).options as PluginArtifactListOptions | undefined
-        );
-      case "clipboard.readText":
-        return this.host.clipboard.readText();
-      default:
-        throw new Error(`Unknown host-call method "${method}"`);
-    }
+  private dispatchHostCall(method: string, params: unknown, signal: AbortSignal): Promise<unknown> {
+    const handler = this.hostCallRoutes.get(method);
+    if (!handler) return Promise.reject(new Error(`Unknown host-call method "${method}"`));
+    return handler(params, signal, method);
   }
 
   private async handleHostNotify(
@@ -1563,540 +872,12 @@ export class PluginDevWorkerMainBridge {
   }
 
   private async dispatchHostNotify(method: string, params: unknown): Promise<void> {
-    switch (method) {
-      case "registerAction": {
-        const { descriptor } = params as RegisterActionParams;
-        const namespacedId = `${this.pluginId}.${descriptor.id}`;
-        // The host registers synchronously and resolves; await so a deep-
-        // validation rejection routes to the register-error channel.
-        await this.host.registerAction(descriptor, (args) =>
-          this.invoke({ kind: "action", namespacedId, args })
-        );
-        return;
-      }
-      case "registerHandler": {
-        const p = params as RegisterHandlerParams;
-        if (p.hasSchema && p.requires && p.requires.length > 0) {
-          // Fail-closed capability gate — the untyped wrapper we register on the
-          // host doesn't carry the schema's `requires`, so enforce it here to
-          // match the typed overload's contract.
-          const declared = new Set(this.getCapabilities());
-          const missing = p.requires.filter((cap) => !declared.has(cap));
-          if (missing.length > 0) {
-            throw new Error(
-              `PERMISSION_REQUIRED: channel "${p.channel}" requires capabilities not declared in the manifest: ${missing.join(", ")}`
-            );
-          }
-        }
-        // The deadline wrapper main installs around this handler hands its
-        // signal over beside the context; aborting it cancels the worker invoke.
-        const handler = (ctx: PluginIpcContext, ...args: unknown[]) =>
-          this.invoke({ kind: "handler", channel: p.channel, ctx, args }, invokeSignalFor(ctx));
-        if (p.timeoutMs !== undefined) {
-          await this.host.registerHandler(p.channel, handler, { timeoutMs: p.timeoutMs });
-        } else {
-          await this.host.registerHandler(p.channel, handler);
-        }
-        return;
-      }
-      case "broadcastToRenderer": {
-        const p = params as BroadcastToRendererParams;
-        await this.host.broadcastToRenderer(p.channel, p.payload);
-        return;
-      }
-      case "postToPanel": {
-        const p = params as PostToPanelParams;
-        await this.host.postToPanel(p.channel, p.payload, p.panelId);
-        return;
-      }
-      case "invalidateFileDecorations": {
-        const p = params as InvalidateFileDecorationsParams;
-        await this.host.invalidateFileDecorations(p.scope, p.paths);
-        return;
-      }
-      case "setPanelBadge": {
-        const p = params as SetPanelBadgeParams;
-        await this.host.setPanelBadge(p.panelId, p.badge);
-        return;
-      }
-      case "setToolbarButtonBadge": {
-        const p = params as SetToolbarButtonBadgeParams;
-        await this.host.setToolbarButtonBadge(p.buttonId, p.badge);
-        return;
-      }
-      case "setPanelMenuItems": {
-        const p = params as SetPanelMenuItemsParams;
-        await this.host.setPanelMenuItems(p.panelId, p.items);
-        return;
-      }
-      case "registerFileDecorationProvider": {
-        const { descriptor } = params as RegisterFileDecorationProviderParams;
-        const providerId = descriptor.id;
-        // A re-register on the same id replaces the prior binding — dispose it
-        // first so the host registry doesn't accumulate stale proxy impls.
-        const prior = this.providerDisposers.get(providerId);
-        if (prior) {
-          try {
-            prior();
-          } catch {
-            // best-effort
-          }
-        }
-        // The impl lives in the worker; register a thin proxy whose single
-        // method round-trips each call back over the port (mirrors the action
-        // wrapper). `provideDecorations` is async, so this composes cleanly.
-        const proxyImpl: FileDecorationProviderImpl = {
-          provideDecorations: (scope: string, paths: string[]) =>
-            this.invoke({
-              kind: "file-decoration-method",
-              providerId,
-              method: "provideDecorations",
-              args: [scope, paths],
-            }) as Promise<Record<string, FileDecoration>>,
-        };
-        const generation = this.reloadGeneration;
-        const dispose = await this.host.registerFileDecorationProvider(descriptor, proxyImpl);
-        // The bridge may have been torn down (dispose) or reloaded while the host
-        // registration was settling — don't leak the freshly bound provider past
-        // the cleanup pass that already ran.
-        if (this.disposed || generation !== this.reloadGeneration) {
-          try {
-            dispose();
-          } catch {
-            // best-effort
-          }
-          return;
-        }
-        this.providerDisposers.set(providerId, dispose);
-        return;
-      }
-      case "unregisterFileDecorationProvider": {
-        const { providerId } = params as UnregisterFileDecorationProviderParams;
-        const dispose = this.providerDisposers.get(providerId);
-        if (dispose) {
-          this.providerDisposers.delete(providerId);
-          dispose();
-        }
-        return;
-      }
-      case "registerWorktreeDeleteNotesProvider": {
-        const { descriptor } = params as RegisterWorktreeDeleteNotesProviderParams;
-        const providerId = descriptor.id;
-        const prior = this.worktreeDeleteNotesDisposers.get(providerId);
-        if (prior) {
-          try {
-            prior();
-          } catch {
-            // best-effort
-          }
-        }
-        // The impl lives in the worker. The host hands this proxy its deadline
-        // as a second argument, so a missed deadline cancels the invoke rather
-        // than leaving it pending until the worker answers.
-        const proxyImpl = {
-          provideNotes: (worktree: PluginWorktreeSnapshot, signal?: AbortSignal) =>
-            this.invoke({ kind: "worktree-delete-notes", providerId, worktree }, signal) as Promise<
-              PluginWorktreeDeleteNote[]
-            >,
-        };
-        const generation = this.reloadGeneration;
-        const dispose = await this.host.registerWorktreeDeleteNotesProvider(descriptor, proxyImpl);
-        if (this.disposed || generation !== this.reloadGeneration) {
-          try {
-            dispose();
-          } catch {
-            // best-effort
-          }
-          return;
-        }
-        this.worktreeDeleteNotesDisposers.set(providerId, dispose);
-        return;
-      }
-      case "unregisterWorktreeDeleteNotesProvider": {
-        const { providerId } = params as UnregisterWorktreeDeleteNotesProviderParams;
-        const dispose = this.worktreeDeleteNotesDisposers.get(providerId);
-        if (dispose) {
-          this.worktreeDeleteNotesDisposers.delete(providerId);
-          dispose();
-        }
-        return;
-      }
-      case "registerWorktreeSetupStep": {
-        const { stepId } = params as WorktreeSetupStepRegistrationParams;
-        if (typeof stepId !== "string" || stepId.length === 0) {
-          throw new Error("registerWorktreeSetupStep: stepId must be a non-empty string");
-        }
-        const prior = this.setupStepDisposers.get(stepId);
-        if (prior) {
-          try {
-            prior();
-          } catch {
-            // best-effort
-          }
-        }
-        // The handler lives in the worker. Its signal cannot cross the port, so
-        // the wrapper forwards the context without it and cancels the invoke
-        // when it aborts; the worker aborts a signal of its own in turn.
-        const handler = ({ signal, ...context }: PluginWorktreeSetupStepContext) =>
-          this.invoke({ kind: "worktree-setup-step", stepId, context }, signal).then(
-            () => undefined
-          );
-        const generation = this.reloadGeneration;
-        const dispose = await this.host.registerWorktreeSetupStep(stepId, handler);
-        if (this.disposed || generation !== this.reloadGeneration) {
-          try {
-            dispose();
-          } catch {
-            // best-effort
-          }
-          return;
-        }
-        this.setupStepDisposers.set(stepId, dispose);
-        return;
-      }
-      case "unregisterWorktreeSetupStep": {
-        const { stepId } = params as WorktreeSetupStepRegistrationParams;
-        const dispose = this.setupStepDisposers.get(stepId);
-        if (dispose) {
-          this.setupStepDisposers.delete(stepId);
-          dispose();
-        }
-        return;
-      }
-      case "registerContextProvider": {
-        const { descriptor } = params as RegisterContextProviderParams;
-        const providerId = descriptor.id;
-        const key = `context:${providerId}`;
-        const prior = this.providerDisposers.get(key);
-        if (prior) {
-          try {
-            prior();
-          } catch {
-            // best-effort
-          }
-        }
-        // Both methods round-trip to the worker under the caller's signal, so a
-        // deadline the host enforces reaches the plugin as an abort.
-        const proxyImpl: ContextProviderImpl = {
-          search: (query, options) =>
-            this.invoke(
-              { kind: "context-provider-method", providerId, method: "search", args: [query] },
-              options.signal
-            ) as Promise<ContextProviderItem[]>,
-          resolve: (itemId, options) =>
-            this.invoke(
-              { kind: "context-provider-method", providerId, method: "resolve", args: [itemId] },
-              options.signal
-            ) as Promise<ContextProviderContent | null>,
-        };
-        const generation = this.reloadGeneration;
-        const dispose = await this.host.registerContextProvider({ id: providerId }, proxyImpl);
-        if (this.disposed || generation !== this.reloadGeneration) {
-          try {
-            dispose();
-          } catch {
-            // best-effort
-          }
-          return;
-        }
-        this.providerDisposers.set(key, dispose);
-        return;
-      }
-      case "unregisterContextProvider": {
-        const { providerId } = params as UnregisterContextProviderParams;
-        const key = `context:${providerId}`;
-        const dispose = this.providerDisposers.get(key);
-        if (dispose) {
-          this.providerDisposers.delete(key);
-          dispose();
-        }
-        return;
-      }
-      case "registerService": {
-        const { name, methods } = params as RegisterServiceParams;
-        // Bounded before anything is built from it; main then holds the set
-        // to the manifest's declaration.
-        if (
-          typeof name !== "string" ||
-          !Array.isArray(methods) ||
-          methods.length > PLUGIN_SERVICE_MAX_METHODS ||
-          methods.some((method) => typeof method !== "string")
-        ) {
-          throw new Error(`registerService: malformed registration for "${String(name)}"`);
-        }
-        const key = `service:${name}`;
-        const prior = this.providerDisposers.get(key);
-        if (prior) {
-          try {
-            prior();
-          } catch {
-            // best-effort
-          }
-        }
-        // One proxy per method the worker bound. Main checks the set against
-        // the manifest; each runs in the worker under the call's signal.
-        const proxy: Record<string, (args: unknown, ctx: PluginServiceCallContext) => unknown> = {};
-        for (const method of methods) {
-          proxy[method] = (args, ctx) => {
-            // A crash-respawned worker binds again from inside its own
-            // activate(), while the instance still reads as activated: only a
-            // generation that has committed its activation answers.
-            if (this.activationPhase !== "succeeded") {
-              throw new PluginServiceUnavailableError(
-                `the provider of "${name}" is starting again after a crash`
-              );
-            }
-            return this.invoke(
-              { kind: "service-method", serviceName: name, method, args, caller: ctx.caller },
-              ctx.signal
-            );
-          };
-        }
-        const generation = this.reloadGeneration;
-        const dispose = await this.host.registerService(name, proxy);
-        if (this.disposed || generation !== this.reloadGeneration) {
-          try {
-            dispose();
-          } catch {
-            // best-effort
-          }
-          return;
-        }
-        this.providerDisposers.set(key, dispose);
-        return;
-      }
-      case "unregisterService": {
-        const { name } = params as UnregisterServiceParams;
-        const key = `service:${name}`;
-        const dispose = this.providerDisposers.get(key);
-        if (dispose) {
-          this.providerDisposers.delete(key);
-          dispose();
-        }
-        return;
-      }
-      case "mcp.registerTools": {
-        const p = params as Partial<RegisterMcpToolsParams> | null | undefined;
-        if (
-          !p ||
-          typeof p !== "object" ||
-          typeof p.endpointId !== "string" ||
-          !p.tools ||
-          typeof p.tools !== "object"
-        ) {
-          throw new Error("mcp.registerTools: malformed roster");
-        }
-        const endpointId = p.endpointId;
-        const wire = p.tools as Record<string, unknown>;
-        const generation = this.reloadGeneration;
-        // Null prototype: the names are worker-chosen, and one spelled
-        // `__proto__` must land as an own key for the host to reject by name
-        // rather than silently re-parent this object.
-        const tools = Object.create(null) as Record<string, PluginMcpToolDefinition>;
-        for (const toolName of Object.keys(wire)) {
-          const entry = wire[toolName];
-          if (!entry || typeof entry !== "object") {
-            throw new Error(`mcp.registerTools: tool "${toolName}" is malformed`);
-          }
-          // Checked here because the rebuild below would drop the field, and a
-          // roster making a read-only claim must fail whole, as it does in-process.
-          for (const key of ["readOnly", "readOnlyHint"]) {
-            if (Object.hasOwn(entry, key)) {
-              throw new Error(
-                `mcp.registerTools: tool "${toolName}" ${key} is not allowed: only the host may mark a tool read-only`
-              );
-            }
-          }
-          const { description, inputSchema, outputSchema, annotations, group } = entry as Partial<
-            RegisterMcpToolsParams["tools"][string]
-          >;
-          // Descriptor fields are handed to the host as the worker sent them —
-          // the host's roster validation is the one check, for both paths.
-          tools[toolName] = {
-            description: description as string,
-            inputSchema: inputSchema as PluginMcpToolDefinition["inputSchema"],
-            ...(outputSchema !== undefined ? { outputSchema } : {}),
-            ...(annotations !== undefined ? { annotations } : {}),
-            ...(group !== undefined ? { group } : {}),
-            execute: (args, caller, signal) => {
-              // Fenced to the generation that registered it. Retirement unbinds
-              // the roster, but a caller that looked it up just before can still
-              // call in, and relaying that to the replacement — booting, its
-              // proxy not built yet — would be dropped and hang until the
-              // caller's own deadline.
-              if (generation !== this.reloadGeneration) {
-                return Promise.reject(
-                  new Error(
-                    `Plugin "${this.pluginId}" worker restarted before tool "${toolName}" could run`
-                  )
-                );
-              }
-              return this.invoke(
-                { kind: "mcp-tool", endpointId, toolName, args, caller },
-                signal
-              ).then(parseWorkerToolResult);
-            },
-          };
-        }
-        const dispose = await this.host.mcp.registerTools(endpointId, tools);
-        if (this.disposed || generation !== this.reloadGeneration) {
-          try {
-            dispose();
-          } catch {
-            // best-effort
-          }
-          return;
-        }
-        // Replace, then release the prior disposer: the host registry swaps the
-        // roster atomically and makes the superseded disposer inert, so an agent
-        // never sees the endpoint drop out between the two rosters.
-        const prior = this.mcpRosterDisposers.get(endpointId);
-        this.mcpRosterDisposers.set(endpointId, dispose);
-        if (prior) {
-          try {
-            prior();
-          } catch {
-            // best-effort
-          }
-        }
-        return;
-      }
-      case "registerSearchProvider": {
-        const { providerId } = params as SearchProviderRegistrationParams;
-        if (typeof providerId !== "string" || providerId.length === 0) {
-          throw new Error("registerSearchProvider: malformed provider id");
-        }
-        const generation = this.reloadGeneration;
-        // The function lives in the worker; this proxy asks it over the port and
-        // forwards the caller's signal, so a superseded query is cancelled there.
-        const proxy: PluginSearchProvider = (query, context) => {
-          // Fenced to the generation that registered it, as MCP tools are: a
-          // replacement worker hasn't bound its own provider yet.
-          if (generation !== this.reloadGeneration) {
-            return Promise.reject(
-              new Error(`Plugin "${this.pluginId}" worker restarted before the search could run`)
-            );
-          }
-          return this.invoke(
-            {
-              kind: "search-provider",
-              providerId,
-              query,
-              context: { mode: context.mode, limit: context.limit },
-            },
-            context.signal
-          ).then(parseWorkerSearchResult) as Promise<PluginSearchResult[]>;
-        };
-        const dispose = await this.host.registerSearchProvider(providerId, proxy);
-        if (this.disposed || generation !== this.reloadGeneration) {
-          try {
-            dispose();
-          } catch {
-            // best-effort
-          }
-          return;
-        }
-        const prior = this.searchProviderDisposers.get(providerId);
-        this.searchProviderDisposers.set(providerId, dispose);
-        // The registry's own disposer is identity-checked, so releasing the
-        // superseded binding after the swap can't drop the new one.
-        if (prior) {
-          try {
-            prior();
-          } catch {
-            // best-effort
-          }
-        }
-        return;
-      }
-      case "unregisterSearchProvider": {
-        const { providerId } = params as SearchProviderRegistrationParams;
-        const dispose = this.searchProviderDisposers.get(providerId);
-        if (dispose) {
-          this.searchProviderDisposers.delete(providerId);
-          dispose();
-        }
-        return;
-      }
-      case "mcp.unregisterTools": {
-        const { endpointId } = params as UnregisterMcpToolsParams;
-        const dispose = this.mcpRosterDisposers.get(endpointId);
-        if (dispose) {
-          this.mcpRosterDisposers.delete(endpointId);
-          dispose();
-        }
-        return;
-      }
-      case "logger.info":
-      case "logger.warn":
-      case "logger.error": {
-        const p = params as LoggerParams;
-        const level = method.split(".")[1] as "info" | "warn" | "error";
-        // Logger stays synchronous fire-and-forget (the #10519 carve-out).
-        this.host.logger[level](p.message, p.fields);
-        return;
-      }
-      case "tasks.report": {
-        // One coalescing window's latest report per task. Fire-and-forget, so a
-        // report the host refuses is logged rather than answered.
-        const { reports } = params as TaskReportParams;
-        if (!Array.isArray(reports)) return;
-        for (const report of reports as unknown[]) {
-          if (typeof report !== "object" || report === null) continue;
-          const { taskId, progress } = report as { taskId?: unknown; progress?: unknown };
-          if (typeof taskId !== "string") continue;
-          const entry = this.taskHandles.get(taskId);
-          if (!entry) continue;
-          try {
-            entry.handle.report(progress as TaskReportParams["reports"][number]["progress"]);
-          } catch (err) {
-            logger.warn(
-              `[${this.pluginId}] tasks.report refused: ${formatErrorMessage(err, "invalid progress")}`
-            );
-          }
-        }
-        return;
-      }
-      case "process.kill": {
-        // `PluginProcessHandle.kill()` is sync (no reply) — fire-and-forget. A
-        // no-op if the handle already exited or was torn down on reload.
-        const { processId } = params as ProcessHandleRefParams;
-        this.processHandles.get(processId)?.kill();
-        return;
-      }
-      case "process.write": {
-        const p = params as ProcessWriteParams;
-        const handle = this.processHandles.get(p.processId);
-        // Silently ignored for a pipe-mode handle: the worker proxy only exposes
-        // `write` on a writable handle (duplex or PTY), so reaching here means a
-        // plugin fabricated the call. Warn rather than throw — this is a notify.
-        if (!handle || !isWritableHandle(handle)) {
-          logger.warn(`[${this.pluginId}] process.write on non-writable "${p.processId}"`);
-          return;
-        }
-        if (typeof p.data !== "string") return;
-        handle.write(p.data);
-        return;
-      }
-      case "process.resize": {
-        const p = params as ProcessResizeParams;
-        const handle = this.processHandles.get(p.processId);
-        // Stays PTY-only: a duplex child has no terminal to resize.
-        if (!handle || !isPtyHandle(handle)) {
-          logger.warn(`[${this.pluginId}] process.resize on non-interactive "${p.processId}"`);
-          return;
-        }
-        handle.resize(p.cols, p.rows);
-        return;
-      }
-      case "pushRejected": {
-        if (this.disposed) return;
-        this.onPushRejected?.();
-        return;
-      }
-      default:
-        logger.warn(`[${this.pluginId}] unknown host-notify method "${method}"`);
+    const handler = this.hostNotifyRoutes.get(method);
+    if (!handler) {
+      logger.warn(`[${this.pluginId}] unknown host-notify method "${method}"`);
+      return;
     }
+    await handler(params, method);
   }
 
   private async handleSubscribe(
@@ -2112,121 +893,13 @@ export class PluginDevWorkerMainBridge {
       this.workerHost.send({ type: "subscription-event", subscriptionId, payload });
     };
     try {
-      let dispose: () => void;
-      // An absent `debounceMs` is passed through as undefined, which the host
-      // reads as "use the default window" — the same as an in-process plugin.
-      if (kind === "active-worktree") {
-        dispose = await this.host.onDidChangeActiveWorktree((snapshot) => push(snapshot), {
-          debounceMs: msg.debounceMs,
-        });
-      } else if (kind === "worktrees") {
-        dispose = await this.host.onDidChangeWorktrees(
-          (snapshots, change) => push({ snapshots, change } satisfies PluginWorkerWorktreesEvent),
-          { debounceMs: msg.debounceMs }
-        );
-      } else if (kind === "agent-state") {
-        dispose = await this.host.onDidChangeAgentState((snapshot) => push(snapshot), {
-          debounceMs: msg.debounceMs,
-        });
-      } else if (kind === "terminal-lifecycle") {
-        dispose = await this.host.onDidChangeTerminalLifecycle((event) => push(event));
-      } else if (kind === "all-agents") {
-        dispose = await this.host.onDidChangeAllAgents((snapshot) => push(snapshot), {
-          debounceMs: msg.debounceMs,
-        });
-      } else if (kind === "focused-panel") {
-        dispose = await this.host.onDidChangeFocusedPanel((focus) => push(focus), {
-          debounceMs: msg.debounceMs,
-        });
-      } else if (kind === "project-presence") {
-        dispose = await this.host.onDidChangeProjectPresence((presence) => push(presence), {
-          debounceMs: msg.debounceMs,
-        });
-      } else if (kind === "panel-lifecycle") {
-        dispose = await this.host.onDidChangePanelLifecycle((event) => push(event));
-      } else if (kind === "system-wake") {
-        dispose = await this.host.onDidWake((event) => push(event));
-      } else if (kind === "push-listeners") {
-        const channel = msg.key;
-        if (!channel) {
-          logger.warn(`[${this.pluginId}] push-listeners subscribe missing key`);
-          return;
-        }
-        const { hasListeners, onDidChangeListeners } = this.host;
-        if (!hasListeners || !onDidChangeListeners) {
-          push(true);
-          return;
-        }
-        // Watch first, then send the current value, so no change can fall
-        // between the two. The worker ignores a value it already holds.
-        dispose = onDidChangeListeners.call(this.host, channel, (has) => push(has));
-        push(hasListeners.call(this.host, channel));
-      } else if (kind === "push-listeners-observe") {
-        const channel = msg.key;
-        if (!channel) {
-          logger.warn(`[${this.pluginId}] push-listeners-observe subscribe missing key`);
-          return;
-        }
-        // Untracked by idle governance (see `observePluginPushListeners`); this
-        // bridge's own subscription cleanup is what releases it.
-        const observation = observePluginPushListeners(this.host, channel, (has) => push(has));
-        if (!observation) {
-          push(true);
-          return;
-        }
-        dispose = observation.dispose;
-        push(observation.current);
-      } else if (kind === "process-exit" || kind === "process-crash" || kind === "process-data") {
-        if (!msg.processId) {
-          logger.warn(`[${this.pluginId}] ${kind} subscribe missing processId`);
-          return;
-        }
-        const handle = this.processHandles.get(msg.processId);
-        if (!handle) {
-          // The handle was killed (reload/dispose) between spawn and subscribe.
-          logger.warn(
-            `[${this.pluginId}] ${kind} subscribe for unknown process "${msg.processId}"`
-          );
-          return;
-        }
-        dispose =
-          kind === "process-exit"
-            ? handle.onExit((info) => push(info))
-            : kind === "process-crash"
-              ? handle.onCrash((info) => push(info))
-              : handle.onData((chunk) => push(chunk));
-      } else if (kind === "account") {
-        dispose = this.host.account.onDidChange(
-          (state) => push(state),
-          msg.key === undefined && msg.projectId === undefined
-            ? undefined
-            : {
-                ...(msg.key !== undefined ? { connection: msg.key } : {}),
-                ...(msg.projectId !== undefined ? { projectId: msg.projectId } : {}),
-              }
-        );
-      } else if (kind === "storage") {
-        if (!msg.key) {
-          logger.warn(`[${this.pluginId}] storage subscribe missing key`);
-          return;
-        }
-        dispose = await this.host.storage.onDidChange(
-          msg.key,
-          (value) => push(value),
-          msg.scope as PluginStorageScope | undefined
-        );
-      } else {
-        // settings
-        if (!msg.key) {
-          logger.warn(`[${this.pluginId}] settings subscribe missing key`);
-          return;
-        }
-        dispose = await this.host.settings.onDidChange(
-          msg.key,
-          (value) => push(value),
-          msg.scope as PluginSettingsScope | undefined
-        );
+      const subscribe = this.subscribeRoutes.get(kind);
+      if (!subscribe) {
+        logger.warn(`[${this.pluginId}] unknown subscription kind "${kind}"`);
+        return;
       }
+      const dispose = await subscribe(msg, push);
+      if (!dispose) return;
       // The bridge may have been disposed or reloaded while the subscription was
       // settling — tear it down rather than leak it past the cleanup pass.
       if (this.disposed || generation !== this.reloadGeneration) {
@@ -2252,7 +925,7 @@ export class PluginDevWorkerMainBridge {
    * lazily, worker-side, from `resolvedPath` — the absolute path
    * `PluginService.resolveCommandHandlerPath` already probed and containment-
    * checked. Public because `PluginService` is the caller; every other kind is
-   * driven from `dispatchHostNotify` inside this class.
+   * driven by the proxies `ContributionsDomain` registers on the host.
    */
   invokeCommand(namespacedId: string, resolvedPath: string, args: unknown): Promise<unknown> {
     // Only a generation that has COMMITTED activation can serve a command.
