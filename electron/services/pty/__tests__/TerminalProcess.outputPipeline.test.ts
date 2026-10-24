@@ -198,8 +198,12 @@ describe("TerminalProcess output pipeline ordering and throttling", () => {
     await vi.advanceTimersByTimeAsync(1);
     ptyOnDataCallback!("\x1b[H\x1b[2Jframe b");
     await vi.advanceTimersByTimeAsync(1);
+    const analysis = (terminal as unknown as { analysis: { agentOutputNoteTimer: unknown } })
+      .analysis;
+    expect(analysis.agentOutputNoteTimer).not.toBeNull();
 
     terminal.dispose();
+    expect(analysis.agentOutputNoteTimer).toBeNull();
     const afterDispose = snapshotSpy.mock.calls.length;
     await vi.advanceTimersByTimeAsync(200);
     // A live trailing timer would fire another comparison after teardown.

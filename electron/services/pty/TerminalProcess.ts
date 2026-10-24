@@ -309,7 +309,7 @@ export class TerminalProcess {
 
   constructor(
     public readonly id: string,
-    private options: PtySpawnOptions,
+    options: PtySpawnOptions,
     private callbacks: TerminalProcessCallbacks,
     private deps: TerminalProcessDependencies,
     spawnContext: SpawnContext,
