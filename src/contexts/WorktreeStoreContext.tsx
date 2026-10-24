@@ -1142,6 +1142,7 @@ export function WorktreeStoreProvider({ children }: { children: ReactNode }) {
           store,
           retry: () => worktreeClient.retryProjectLoad(),
           hasProject: () => useProjectStore.getState().currentProject !== null,
+          subscribeProject: (listener) => useProjectStore.subscribe(listener),
           isObserved: isProjectViewObservable,
           subscribeObserved: subscribeProjectViewObservability,
           isLinkUp: () => isHostLinkUp(useHostConnectionStore.getState()),

@@ -23,6 +23,7 @@ export interface WorktreeReconnectRecoveryDeps {
   retry(): Promise<void>;
   /** Whether a Retry has anything to reload: a project is open in this view. */
   hasProject(): boolean;
+  subscribeProject(listener: () => void): () => void;
   /** Whether someone can see this view: it is neither cached nor in a hidden window. */
   isObserved(): boolean;
   subscribeObserved(listener: () => void): () => void;
@@ -45,7 +46,7 @@ export interface WorktreeReconnectRecoveryDeps {
  * since nothing a reload does can cross a dead link and the host banner
  * covers that. It reads `exhausted` once every attempt has failed, which is
  * what lets the stalled banner and its Retry show. Coming back into view, or
- * the link coming back up, starts a fresh round.
+ * the link coming back up, after that starts a fresh round.
  */
 export function startWorktreeReconnectRecovery(deps: WorktreeReconnectRecoveryDeps): () => void {
   const { store } = deps;
@@ -138,12 +139,15 @@ export function startWorktreeReconnectRecovery(deps: WorktreeReconnectRecoveryDe
     else schedule(wait, () => void attempt());
   }
 
-  // A fresh round on a real return: the host may hold the project again.
+  // A return after giving up earns a fresh round: the host may hold the
+  // project again. One mid-round keeps its budget and backoff, so a flapping
+  // link can't hold off the banner by restarting the count.
   const resumed = () => {
+    cancelTimer();
+    if (store.getState().reconnectRecovery !== "exhausted") return;
     attempts = 0;
     lastAttemptRedelivered = false;
-    cancelTimer();
-    if (store.getState().reconnectRecovery === "exhausted") setPhase("recovering");
+    setPhase("recovering");
   };
 
   const offStore = store.subscribe((state, prev) => {
@@ -157,6 +161,15 @@ export function startWorktreeReconnectRecovery(deps: WorktreeReconnectRecoveryDe
     if (!state.isReconnecting && prev.isReconnecting && attempts > 0) {
       logInfo("Worktree reconnect recovered", { attempts });
     }
+    evaluate();
+  });
+
+  // A project that binds after the port dropped has a stall to pick up.
+  let hadProject = deps.hasProject();
+  const offProject = deps.subscribeProject(() => {
+    const hasProject = deps.hasProject();
+    if (hasProject === hadProject) return;
+    hadProject = hasProject;
     evaluate();
   });
 
@@ -184,6 +197,7 @@ export function startWorktreeReconnectRecovery(deps: WorktreeReconnectRecoveryDe
     disposed = true;
     cancelTimer();
     offStore();
+    offProject();
     offObserved();
     offLink();
   };

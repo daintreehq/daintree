@@ -19,6 +19,8 @@ let observed: boolean;
 let linkUp: boolean;
 let observedListeners: Array<() => void>;
 let linkListeners: Array<() => void>;
+let hasProject: boolean;
+let projectListeners: Array<() => void>;
 let retry: ReturnType<typeof vi.fn<() => Promise<void>>>;
 let stop: (() => void) | null;
 
@@ -36,7 +38,13 @@ function start() {
   stop = startWorktreeReconnectRecovery({
     store,
     retry,
-    hasProject: () => true,
+    hasProject: () => hasProject,
+    subscribeProject: (listener) => {
+      projectListeners.push(listener);
+      return () => {
+        projectListeners = projectListeners.filter((l) => l !== listener);
+      };
+    },
     isObserved: () => observed,
     subscribeObserved: (listener) => {
       observedListeners.push(listener);
@@ -73,6 +81,8 @@ beforeEach(() => {
   linkUp = true;
   observedListeners = [];
   linkListeners = [];
+  hasProject = true;
+  projectListeners = [];
   retry = vi.fn<() => Promise<void>>();
   stop = null;
   vi.mocked(logInfo).mockClear();
@@ -168,7 +178,7 @@ describe("startWorktreeReconnectRecovery (#14313)", () => {
     expect(bannerOffered()).toBe(true);
   });
 
-  it("pauses while the link is down, and starts a fresh round when it returns", async () => {
+  it("pauses while the link is down, keeping the round's budget", async () => {
     retry.mockRejectedValue(new Error("no host"));
     start();
     store.getState().setReconnecting(true);
@@ -182,11 +192,44 @@ describe("startWorktreeReconnectRecovery (#14313)", () => {
     expect(bannerOffered()).toBe(false);
 
     setLinkUp(true);
-    await vi.advanceTimersByTimeAsync(0);
-    expect(retry).toHaveBeenCalledTimes(2);
-    await vi.advanceTimersByTimeAsync(3_000 + 8_000 + 15_000);
-    expect(retry).toHaveBeenCalledTimes(5);
+    await vi.advanceTimersByTimeAsync(2_999);
+    expect(retry).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1 + 8_000 + 15_000);
+    expect(retry).toHaveBeenCalledTimes(4);
     expect(bannerOffered()).toBe(true);
+  });
+
+  it("can't hold off the banner with a flapping link", async () => {
+    retry.mockRejectedValue(new Error("no host"));
+    start();
+    store.getState().setReconnecting(true);
+    await vi.advanceTimersByTimeAsync(STALLED_MS);
+    for (let i = 0; i < 20; i += 1) {
+      setLinkUp(false);
+      setLinkUp(true);
+      await vi.advanceTimersByTimeAsync(500);
+    }
+    expect(retry).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(retry).toHaveBeenCalledTimes(4);
+    expect(bannerOffered()).toBe(true);
+  });
+
+  it("picks up a stall once a project binds", async () => {
+    retry.mockImplementation(async () => {
+      hydrate();
+    });
+    hasProject = false;
+    start();
+    store.getState().setReconnecting(true);
+    await vi.advanceTimersByTimeAsync(STALLED_MS * 2);
+    expect(retry).not.toHaveBeenCalled();
+
+    hasProject = true;
+    for (const listener of projectListeners) listener();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(retry).toHaveBeenCalledTimes(1);
+    expect(store.getState().isReconnecting).toBe(false);
   });
 
   it("gives an exhausted reconnect a fresh round when the view is seen again", async () => {
