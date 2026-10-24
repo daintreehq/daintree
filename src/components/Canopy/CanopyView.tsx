@@ -94,6 +94,7 @@ import { useCanopyInboxOrder } from "./useCanopyInboxOrder";
 import { useCanopyInboxSearch } from "./useCanopyInboxSearch";
 import { useCanopyInboxFilters } from "./useCanopyInboxFilters";
 import { useCanopyInboxFocus } from "./useCanopyInboxFocus";
+import { useCanopyInboxUndo } from "./useCanopyInboxUndo";
 import { placeOf } from "./canopyInboxPlace";
 import { CanopyAssistantPane, CanopyAssistantRow } from "./CanopyAssistantList";
 import {
@@ -805,114 +806,7 @@ function CanopyInbox({
     [api]
   );
 
-  // The last triage the user did here, to take back with Z or the toast's
-  // Undo. One deep, as in mail: only the newest action can be undone.
-  const undoRef = useRef<(() => void) | null>(null);
-  // Z never takes back, unseen, what was done on a host no longer shown.
-  const shownHostRef = useRef(hostId);
-  useEffect(() => {
-    if (shownHostRef.current === hostId) return;
-    shownHostRef.current = hostId;
-    undoRef.current = null;
-  }, [hostId]);
-  /**
-   * Holds Z for an action from its press, not from when main answers: a Z
-   * pressed before then waits for it, and an action pressed after takes Z
-   * over. `land` hands over the action's undo once main has done it (with an
-   * Undo toast when one is given); `forget` gives Z up when main did nothing.
-   */
-  const reserveUndo = useCallback(() => {
-    let landed: (() => void) | null = null;
-    let asked = false;
-    const undo = () => {
-      if (landed) landed();
-      else asked = true;
-    };
-    undoRef.current = undo;
-    return {
-      land: (restoreOnce: () => void, toast?: { title: string; message: string }) => {
-        // Z and the toast's Undo take back the same one action, once: the
-        // second of them finds it done.
-        let done = false;
-        const restore = () => {
-          if (done) return;
-          done = true;
-          restoreOnce();
-        };
-        landed = restore;
-        if (asked) {
-          restore();
-          return;
-        }
-        if (!toast) return;
-        notify({
-          type: "success",
-          transient: true,
-          title: toast.title,
-          message: toast.message,
-          context: { eventKind: "agent" },
-          duration: UNDO_TOAST_DURATION_MS,
-          actions: [
-            {
-              label: "Undo",
-              onClick: () => {
-                if (undoRef.current === undo) undoRef.current = null;
-                restore();
-              },
-            },
-          ],
-        });
-      },
-      forget: () => {
-        if (undoRef.current === undo) undoRef.current = null;
-      },
-    };
-  }, []);
-  // Z takes the newest action back from anywhere in the panel: a row, the
-  // folded Archived bar, or Refresh once the last row archived away — never
-  // from the pane's terminal or composer, or any text field, where Z is a letter.
-  useEffect(() => {
-    const onKeyDown = (event: globalThis.KeyboardEvent) => {
-      if (event.defaultPrevented || event.shiftKey || event.altKey) return;
-      if (event.key !== "z" && event.key !== "Z") return;
-      const target = event.target instanceof Element ? event.target : null;
-      if (!target?.closest('[data-testid="canopy-dialog"]')) return;
-      if (
-        target.closest(
-          'input, textarea, select, [contenteditable="true"], [data-canopy-terminal], [data-canopy-detail] .cm-editor'
-        )
-      ) {
-        return;
-      }
-      event.preventDefault();
-      // Held down, Z undoes once: a repeat must not take the slot from an
-      // action pressed since.
-      if (event.repeat) return;
-      const undo = undoRef.current;
-      undoRef.current = null;
-      undo?.();
-    };
-    document.addEventListener("keydown", onKeyDown);
-    return () => document.removeEventListener("keydown", onKeyDown);
-  }, []);
-  /**
-   * Undo of a read change: each run back to what it was (`before`), wherever
-   * it is still as the change left it (`after`) — a new turn, or a change from
-   * another view since, stands.
-   */
-  const undoReads = useCallback(
-    (before: CanopyReadMark[], after: CanopyReadMark[]) => {
-      const was = new Map(before.map((mark) => [mark.runId, mark]));
-      const restores = after.flatMap((left) => {
-        const mark = was.get(left.runId);
-        return mark !== undefined && mark.spawnedAt === left.spawnedAt
-          ? [{ mark, expectVersion: left.version }]
-          : [];
-      });
-      if (restores.length > 0) safeFireAndForget(api.restoreReads(restores));
-    },
-    [api]
-  );
+  const { reserveUndo, undoReads } = useCanopyInboxUndo({ hostId, api });
 
   // The host a selected run is on, for the pane beside it; null for the window's own.
   const focusedHostId = focusedItem ? placeOf(focusedItem, hostId, ownHostId).hostId : null;
