@@ -25,7 +25,7 @@ describe("readPluginManifestForLoad", () => {
     await fs.rm(root, { recursive: true, force: true });
   });
 
-  it("returns the parsed manifest without touching anything else", async () => {
+  it("returns the parsed manifest", async () => {
     const dir = await writeManifest("acme.ok", { name: "acme.ok", version: "1.0.0" });
     const result = await readPluginManifestForLoad(dir, "acme.ok", {
       isBuiltin: false,
@@ -64,13 +64,21 @@ describe("readPluginManifestForLoad", () => {
     });
   });
 
-  it("refuses a project manifest whose id differs from the discovered instance key", async () => {
-    const dir = await writeManifest("renamed", { name: "acme.other", version: "1.0.0" });
-    const result = await readPluginManifestForLoad(dir, "renamed", {
-      isBuiltin: false,
-      origin: "project",
-      instanceKey: "project__p1__acme.original",
+  it("loads a project manifest only under the instance key it was discovered as", async () => {
+    const dir = await writeManifest("acme.dash", {
+      name: "acme.dash",
+      version: "1.0.0",
+      scope: "project",
     });
-    expect(result).toEqual({ ok: false });
+    const load = (instanceKey: string) =>
+      readPluginManifestForLoad(dir, "acme.dash", {
+        isBuiltin: false,
+        origin: "project",
+        instanceKey,
+      });
+
+    const matching = await load("project__p1__acme.dash");
+    expect(matching.ok).toBe(true);
+    expect(await load("project__p1__acme.other")).toEqual({ ok: false });
   });
 });
