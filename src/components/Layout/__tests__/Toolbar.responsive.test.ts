@@ -1,6 +1,4 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import fs from "fs/promises";
-import path from "path";
 import { readToolbarCss } from "@/__tests__/support/cssManifest";
 import { extractAtRuleBlocks } from "./cssBlocks";
 import { readToolbarSource } from "./toolbarSource";
@@ -308,7 +306,7 @@ describe("Toolbar responsive design — issue #4133", () => {
       // round `ring-*` utility — CSS data-attribute selectors own shape/ring so
       // they always agree (a round ring on a square dot would look like a bug).
       const badgeMatch = source.match(
-        /<span[\s\S]*?data-testid="toolbar-overflow-badge"[\s\S]*?\/>/
+        /<span(?:(?!<span)[\s\S])*?data-testid="toolbar-overflow-badge"[\s\S]*?\/>/
       );
       expect(badgeMatch).toBeDefined();
       expect(badgeMatch![0]).not.toContain("rounded-full");

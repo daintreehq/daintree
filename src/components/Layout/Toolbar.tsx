@@ -536,6 +536,9 @@ export function Toolbar({
     event.preventDefault();
     requestAnimationFrame(() => target.focus({ preventScroll: true }));
   }, []);
+  const recordCopyTreeEvictionFocus = useCallback((target: HTMLElement | null) => {
+    copyTreeEvictionFocusRef.current = target;
+  }, []);
 
   // The menu's pinned entry: the old one-click behavior, now one row deeper.
   // Radix closes the menu on select; the handlers only dispatch.
@@ -1322,7 +1325,7 @@ export function Toolbar({
     copyTreeOnRight,
     toolbarRef,
     forgeStatsRef,
-    copyTreeEvictionFocusRef,
+    recordCopyTreeEvictionFocus,
     setCopyTreeOpen,
   });
 

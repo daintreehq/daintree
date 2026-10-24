@@ -92,6 +92,31 @@ describe("Toolbar layout — issue #2584 project switcher collision", () => {
     });
   });
 
+  describe("Composition of the extracted modules — issue #14347", () => {
+    // Every guard here reads the toolbar's modules as one surface, so it would
+    // still pass on a hook nothing calls. Toolbar.tsx itself has to wire them.
+    it("calls each extracted hook and renders the overflow menu", async () => {
+      const shell = await fs.readFile(path.resolve(__dirname, "../Toolbar.tsx"), "utf-8");
+      for (const call of [
+        "useToolbarItemPlacement({",
+        "useToolbarOverflowStatus({",
+        "useToolbarOverflowEviction({",
+        "useToolbarCustomization({",
+        "useToolbarProjectPill({",
+        "<OverflowMenu",
+      ]) {
+        expect(shell).toContain(call);
+      }
+    });
+
+    it("keys eviction on measured overflow and the demoted set, not the merged lists", async () => {
+      const shell = await fs.readFile(path.resolve(__dirname, "../Toolbar.tsx"), "utf-8");
+      expect(shell).toMatch(
+        /useToolbarOverflowEviction\(\{\s*measuredLeftOverflow,\s*measuredRightOverflow,\s*demotedIds,/
+      );
+    });
+  });
+
   describe("Empty-space context menu — issue #12355", () => {
     // The menu's behaviour is covered for real in ToolbarButtonsContextMenu and
     // toolbarVisibilityMenu tests; these only pin Toolbar.tsx's wiring to it.

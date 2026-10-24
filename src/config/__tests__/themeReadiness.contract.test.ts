@@ -14,6 +14,7 @@ const CRITICAL_THEME_FILES = [
   "src/components/Layout/Toolbar.tsx",
   "src/components/Layout/ToolbarOverflowMenu.tsx",
   "src/components/Layout/useToolbarProjectPill.tsx",
+  "src/components/Layout/toolbarItemClasses.ts",
   "src/components/Project/QuickRun.tsx",
   "src/components/Settings/GeneralTab.tsx",
   "src/components/Terminal/HybridInputBar.tsx",

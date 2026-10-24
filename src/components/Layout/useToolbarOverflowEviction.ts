@@ -12,7 +12,7 @@ export interface ToolbarOverflowEvictionInput {
   copyTreeOnRight: boolean;
   toolbarRef: React.RefObject<HTMLDivElement | null>;
   forgeStatsRef: React.RefObject<ForgeStatsHandle | null>;
-  copyTreeEvictionFocusRef: React.RefObject<HTMLElement | null>;
+  recordCopyTreeEvictionFocus: (target: HTMLElement | null) => void;
   setCopyTreeOpen: (open: boolean) => void;
 }
 
@@ -23,7 +23,7 @@ export function useToolbarOverflowEviction({
   copyTreeOnRight,
   toolbarRef,
   forgeStatsRef,
-  copyTreeEvictionFocusRef,
+  recordCopyTreeEvictionFocus,
   setCopyTreeOpen,
 }: ToolbarOverflowEvictionInput) {
   // Close open dropdowns when their buttons move into overflow. Keyed on the
@@ -66,10 +66,11 @@ export function useToolbarOverflowEviction({
       // happens in the menu's own onCloseAutoFocus, once the trap has let go.
       if (focusWasInPanel) {
         const side = copyTreeOnRight ? "right" : "left";
-        copyTreeEvictionFocusRef.current =
+        recordCopyTreeEvictionFocus(
           toolbarRef.current?.querySelector<HTMLElement>(
             `[data-toolbar-overflow-trigger][data-toolbar-overflow-side="${side}"][data-visible="true"]`
-          ) ?? null;
+          ) ?? null
+        );
       }
       setCopyTreeOpen(false);
     }
@@ -93,10 +94,10 @@ export function useToolbarOverflowEviction({
     measuredRightOverflow,
     demotedIds,
     copyTreeOnRight,
-    // Stable refs and a state setter: listed for the linter, never a rerun.
+    // Stable refs and callbacks: listed for the linter, never a rerun.
     toolbarRef,
     forgeStatsRef,
-    copyTreeEvictionFocusRef,
+    recordCopyTreeEvictionFocus,
     setCopyTreeOpen,
   ]);
 }
