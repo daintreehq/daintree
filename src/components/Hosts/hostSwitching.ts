@@ -10,6 +10,7 @@ import {
   openHostsSettingsTab,
   requestHostSettings,
 } from "@/components/Settings/Hosts/hostSettingsRequests";
+import { usePendingHostSwitchStore } from "@/store/pendingHostSwitchStore";
 import { getHostListSnapshot } from "./hostList";
 import { clientPlatform, localHostLabel } from "./hostModel";
 import { hostUpdateOffer, runHostUpdate } from "./hostUpdate";
@@ -64,6 +65,24 @@ export interface HostSwitchRecovery {
  */
 export function isFailureOnSwitchScreen(error: unknown): boolean {
   return isClientAppError(error) && error.details?.code === "HOST_SWITCH_ON_SCREEN";
+}
+
+/**
+ * Run `callback` once the failed switch's screen goes with nothing in its
+ * place: Cancel took the window back to where it was. A Retry or any other
+ * switch that takes the screen over ends the watch without it.
+ */
+function whenSwitchScreenCancelled(error: unknown, callback: () => void): void {
+  const switchId = isClientAppError(error)
+    ? error.details?.code === "HOST_SWITCH_ON_SCREEN" && error.details.switchId
+    : null;
+  if (!switchId) return;
+  const store = usePendingHostSwitchStore;
+  const stop = store.subscribe((state) => {
+    if (state.pending?.switchId === switchId) return;
+    stop();
+    if (state.pending === null) callback();
+  });
 }
 
 /**
@@ -183,8 +202,13 @@ export async function switchToHost(
     }
     followSwitchResult(result);
   } catch (error) {
-    // The window is on the switch's screen, saying why: it didn't stay.
-    if (isFailureOnSwitchScreen(error)) return;
+    // The window is on the switch's screen, saying why: it stays only once
+    // the person cancels there, and then whoever asked hears so.
+    if (isFailureOnSwitchScreen(error)) {
+      const onStayed = options?.onStayed;
+      if (onStayed) whenSwitchScreenCancelled(error, onStayed);
+      return;
+    }
     options?.onStayed?.();
     // The retry is the same switch, heard by the same caller.
     notifyHostSwitchFailure(

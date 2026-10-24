@@ -797,6 +797,37 @@ describe("RemoteHostsClient", () => {
         expect(client.getPendingSwitch(ctxFor(5, 1))).toBeNull();
       });
 
+      it("goes when its host is removed, so a Retry never asks a host that is gone", async () => {
+        await failedSwitch();
+        await client.forget({ hostId: "studio-01" });
+        expect(client.getPendingSwitch(ctxFor(5, 1))).toBeNull();
+      });
+
+      it("keeps typing held for an earlier switch still opening when its screen is left", async () => {
+        registry.add({ name: "studio-02", connection: { kind: "ssh", target: "studio2.example" } });
+        let releaseOpen!: () => void;
+        vi.mocked(windows.openRemoteProject).mockImplementationOnce(
+          () => new Promise<void>((resolve) => (releaseOpen = resolve))
+        );
+        const first = client.switchWindowHost(ctxFor(5, 1), {
+          hostId: "studio-02",
+          newWindow: false,
+          projectId: "proj-2",
+        });
+        await vi.waitFor(() => expect(windows.openRemoteProject).toHaveBeenCalled());
+        const committed = client.getPendingSwitch(ctxFor(5, 1))!;
+        expect(committed.committed).toBe(true);
+
+        await failedSwitch();
+        const { switchId } = client.getPendingSwitch(ctxFor(5, 1))!;
+        expect(client.cancelPendingSwitch(ctxFor(5, 1), { switchId })).toBe(true);
+        expect(client.getPendingSwitch(ctxFor(5, 1))).toEqual(committed);
+
+        releaseOpen();
+        await first;
+        expect(client.getPendingSwitch(ctxFor(5, 1))).toBeNull();
+      });
+
       it("is left to the caller for a view's own switch to another of its host's projects", async () => {
         const error = await failedSwitch({ failureOnScreen: false });
         expect(client.getPendingSwitch(ctxFor(5, 1))).toBeNull();

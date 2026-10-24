@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { SkeletonBone } from "@/components/ui/Skeleton";
 import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
 import { cn } from "@/lib/utils";
+import { registerEscape } from "@/lib/escapeStack";
 import { ClientAppError } from "@/utils/clientAppError";
 import { hostSwitchRecovery, switchToHost } from "@/components/Hosts/hostSwitching";
 import { STILL_WORKING_MS, pendingHostSwitchTitle } from "./pendingHostSwitchFeedback";
@@ -33,8 +34,12 @@ export function HostSwitchScreen({ pending }: { pending: PendingHostSwitch }) {
   // Waiting on the link is known to be slow, so it shows at once.
   const [shown, setShown] = useState(pending.phase !== "opening");
   const [stillWorking, setStillWorking] = useState(false);
+  const screenRef = useRef<HTMLDivElement>(null);
   const primaryRef = useRef<HTMLButtonElement>(null);
   const restoreFocusRef = useRef<Element | null>(null);
+  const tookFocusRef = useRef(false);
+  const cancellable = failed || !pending.committed;
+  const escapeRef = useRef<() => void>(() => {});
 
   useEffect(() => {
     if (shown) return;
@@ -60,9 +65,34 @@ export function HostSwitchScreen({ pending }: { pending: PendingHostSwitch }) {
       }
     };
   }, []);
+  // Later changes move focus only while the screen still has it: a palette
+  // opened over it keeps the focus it took.
   useEffect(() => {
-    if (shown) primaryRef.current?.focus({ preventScroll: true });
+    if (!shown) return;
+    const active = document.activeElement;
+    const ownsFocus =
+      !tookFocusRef.current ||
+      active === null ||
+      active === document.body ||
+      screenRef.current?.contains(active) === true;
+    if (!ownsFocus) return;
+    tookFocusRef.current = true;
+    primaryRef.current?.focus({ preventScroll: true });
   }, [shown, pending.switchId, failed, pending.committed]);
+
+  // On the escape stack for as long as it is up, so Escape and Cmd/Ctrl+W
+  // leave the screen rather than reach the project behind it. A palette
+  // opened over it stacks above and closes first. Once the window is moving
+  // there is nothing to leave, and the keys still go nowhere.
+  useEffect(() => {
+    escapeRef.current = () => {
+      if (cancellable) cancel(pending);
+    };
+  }, [cancellable, pending]);
+  useEffect(() => {
+    const { unregister } = registerEscape(() => escapeRef.current());
+    return unregister;
+  }, []);
 
   const recovery = failed
     ? hostSwitchRecovery(
@@ -85,8 +115,6 @@ export function HostSwitchScreen({ pending }: { pending: PendingHostSwitch }) {
     if (recovery.label !== "Retry") cancel(pending);
     recovery.run();
   };
-  const cancellable = failed || !pending.committed;
-
   const message = failed
     ? (pending.failure?.message ?? "Couldn't reach this host. Check that it is on and try again.")
     : stillWorking
@@ -104,11 +132,16 @@ export function HostSwitchScreen({ pending }: { pending: PendingHostSwitch }) {
         "fixed inset-0 z-[calc(var(--z-toolbar)+1)] flex flex-col bg-surface-canvas",
         !shown && "opacity-0"
       )}
+      ref={screenRef}
       onKeyDown={(event) => {
-        if (event.key !== "Escape" || !cancellable) return;
+        // Tab stays on the screen: the controls behind it are not there.
+        if (event.key !== "Tab") return;
+        const buttons = [...(screenRef.current?.querySelectorAll("button") ?? [])];
         event.preventDefault();
-        event.stopPropagation();
-        cancel(pending);
+        if (buttons.length === 0) return;
+        const at = buttons.findIndex((button) => button === document.activeElement);
+        const step = event.shiftKey ? -1 : 1;
+        buttons[(at + step + buttons.length) % buttons.length]?.focus();
       }}
     >
       <div

@@ -12,6 +12,7 @@ vi.mock("@/components/Hosts/hostSwitching", async (importOriginal) => ({
   switchToHost: m.switchToHost,
 }));
 
+import { _resetForTests, dispatchEscape, registerEscape } from "@/lib/escapeStack";
 import { HostSwitchScreen } from "../HostSwitchScreen";
 
 function pending(overrides: Partial<PendingHostSwitch> = {}): PendingHostSwitch {
@@ -26,7 +27,9 @@ function pending(overrides: Partial<PendingHostSwitch> = {}): PendingHostSwitch 
 }
 
 function screen(): HTMLElement {
-  return document.querySelector('[data-testid="host-switch-screen"]') as HTMLElement;
+  const element = document.querySelector<HTMLElement>('[data-testid="host-switch-screen"]');
+  if (!element) throw new Error("no switch screen");
+  return element;
 }
 
 function button(label: string): HTMLButtonElement | null {
@@ -40,13 +43,14 @@ beforeEach(() => {
   vi.useFakeTimers();
   m.switchToHost.mockClear();
   m.cancelPendingSwitch.mockClear();
-  (window as unknown as { electron: unknown }).electron = {
+  Reflect.set(window, "electron", {
     remoteHosts: { cancelPendingSwitch: m.cancelPendingSwitch },
-  };
+  });
 });
 
 afterEach(() => {
   cleanup();
+  _resetForTests();
   vi.useRealTimers();
 });
 
@@ -60,8 +64,51 @@ describe("HostSwitchScreen", () => {
     fireEvent.click(button("Cancel")!);
     expect(m.cancelPendingSwitch).toHaveBeenCalledWith({ switchId: "sw-1" });
 
-    fireEvent.keyDown(screen(), { key: "Escape" });
+    // Escape and Cmd/Ctrl+W both reach the escape stack, where the screen is on top.
+    expect(dispatchEscape()).toBe(true);
     expect(m.cancelPendingSwitch).toHaveBeenCalledTimes(2);
+  });
+
+  it("lets a palette opened over it close first, and keeps the focus that palette took", () => {
+    const { rerender } = render(<HostSwitchScreen pending={pending()} />);
+    const closePalette = vi.fn();
+    const palette = registerEscape(closePalette);
+    const input = document.createElement("input");
+    document.body.append(input);
+    input.focus();
+
+    rerender(
+      <HostSwitchScreen
+        pending={pending({
+          phase: "failed",
+          failure: { code: "HOST_DISCONNECTED", message: "down" },
+        })}
+      />
+    );
+    expect(document.activeElement).toBe(input);
+    dispatchEscape();
+    expect(closePalette).toHaveBeenCalled();
+    expect(m.cancelPendingSwitch).not.toHaveBeenCalled();
+    palette.unregister();
+    input.remove();
+  });
+
+  it("keeps Tab on its own controls", () => {
+    render(
+      <HostSwitchScreen
+        pending={pending({
+          phase: "failed",
+          failure: { code: "HOST_DISCONNECTED", message: "down" },
+        })}
+      />
+    );
+    expect(document.activeElement).toBe(button("Retry"));
+    fireEvent.keyDown(screen(), { key: "Tab" });
+    expect(document.activeElement).toBe(button("Cancel"));
+    fireEvent.keyDown(screen(), { key: "Tab" });
+    expect(document.activeElement).toBe(button("Retry"));
+    fireEvent.keyDown(screen(), { key: "Tab", shiftKey: true });
+    expect(document.activeElement).toBe(button("Cancel"));
   });
 
   it("holds back a host that is answering until the loading gate, and stays up across phases", () => {
@@ -87,7 +134,8 @@ describe("HostSwitchScreen", () => {
   it("can't be cancelled once the window is moving", () => {
     render(<HostSwitchScreen pending={pending({ phase: "opening", committed: true })} />);
     expect(button("Cancel")).toBeNull();
-    fireEvent.keyDown(screen(), { key: "Escape" });
+    // Still on the escape stack: the key goes nowhere rather than to the project behind.
+    expect(dispatchEscape()).toBe(true);
     expect(m.cancelPendingSwitch).not.toHaveBeenCalled();
   });
 

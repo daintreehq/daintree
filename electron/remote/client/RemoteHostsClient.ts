@@ -490,6 +490,10 @@ export class RemoteHostsClient {
   private retire(descriptor: HostDescriptor): void {
     this.retiring.set(descriptor.id, descriptor.connection);
     this.epochs.set(descriptor.id, (this.epochs.get(descriptor.id) ?? 0) + 1);
+    // A failed switch's Retry would ask the old machine, or a host now gone.
+    for (const [windowId, pending] of [...this.pendingSwitches]) {
+      if (pending.hostId === descriptor.id) this.clearFailedSwitch(windowId);
+    }
   }
 
   private async returnWindowsHome(
@@ -921,7 +925,7 @@ export class RemoteHostsClient {
       const current = this.pendingSwitches.get(pendingWindowId);
       // An earlier failure's screen this switch never got as far as replacing.
       if (current?.phase === "failed" && current.switchId !== ticket.id && ticket.isCurrent()) {
-        this.publishPendingSwitch(pendingWindowId, null);
+        this.clearFailedSwitch(pendingWindowId);
         return;
       }
       if (current?.switchId === ticket.id) {
@@ -947,7 +951,9 @@ export class RemoteHostsClient {
         return error;
       }
       keptFailure = true;
-      this.committedSwitches.delete(pendingWindowId);
+      if (this.committedSwitches.get(pendingWindowId)?.switchId === ticket.id) {
+        this.committedSwitches.delete(pendingWindowId);
+      }
       this.publishPendingSwitch(pendingWindowId, {
         switchId: ticket.id,
         hostId,
@@ -1409,10 +1415,13 @@ export class RemoteHostsClient {
     this.clearFailedSwitch(windowId);
   }
 
-  /** The window has left a failed switch's screen: nothing is left of that switch. */
+  /**
+   * The window has left a failed switch's screen: nothing is left of that
+   * switch. An earlier one still opening keeps typing held until it lands.
+   */
   private clearFailedSwitch(windowId: number): void {
     if (this.pendingSwitches.get(windowId)?.phase === "failed") {
-      this.publishPendingSwitch(windowId, null);
+      this.publishPendingSwitch(windowId, this.committedSwitches.get(windowId) ?? null);
     }
   }
 
