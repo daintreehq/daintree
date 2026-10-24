@@ -122,10 +122,25 @@ describe("watchHostConnectionAnnouncements", () => {
     expect(spoken()[1]).toBe("Reconnected to studio-01");
   });
 
+  it("says a drop at the deadline from when the link went down, whatever it turned into meanwhile", () => {
+    stop = watchHostConnectionAnnouncements("studio-01");
+    link(RECONNECTING);
+    vi.advanceTimersByTime(20_000);
+    link(RESTART_DIAL_FAILED);
+    vi.advanceTimersByTime(9_900);
+    expect(announce).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(100);
+    expect(spoken()).toEqual([
+      "studio-01 is restarting. Terminals are read-only until it reconnects.",
+    ]);
+  });
+
   it("says unreachable once a restart outlasts its grace, and reconnected after", () => {
     stop = watchHostConnectionAnnouncements("studio-01");
     link(RESTART_DIAL_FAILED);
-    vi.advanceTimersByTime(30_000);
+    vi.advanceTimersByTime(29_900);
+    expect(announce).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(100);
     link(UNREACHABLE);
     vi.advanceTimersByTime(400);
     link(CONNECTED);

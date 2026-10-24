@@ -102,6 +102,33 @@ describe("HostConnectionBanner", () => {
     expect(connect).toHaveBeenCalledWith({ hostId: "studio-01", restart: true });
   });
 
+  it("shows a stalled drop at the settle deadline from when it went down, however often it backs off", () => {
+    vi.useFakeTimers();
+    seed({ status: "connecting", attempt: 1 });
+    const { container } = render(<HostConnectionBanner />);
+    for (let attempt = 2; attempt < 9; attempt++) {
+      act(() => {
+        seed({ status: "unreachable", lastSeenAt: null, detail: "Connection refused" });
+      });
+      act(() => {
+        vi.advanceTimersByTime(2_000);
+      });
+      act(() => {
+        seed({ status: "connecting", attempt });
+      });
+      act(() => {
+        vi.advanceTimersByTime(2_000);
+      });
+    }
+    // 28 s down, through seven back-off swaps.
+    expect(container.firstChild).toBeNull();
+    act(() => {
+      vi.advanceTimersByTime(2_000);
+    });
+    expect(screen.getByText("Connection to studio-01 lost. Reconnecting…")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
+  });
+
   it("never shows a drop that recovers inside the settle window, however often it backs off", () => {
     vi.useFakeTimers();
     seed({ status: "connecting", attempt: 1 });
@@ -165,6 +192,22 @@ describe("HostConnectionBanner", () => {
     expect([...titles].every((text) => text.includes("studio-01 is restarting…"))).toBe(true);
     expect(titles.size).toBeGreaterThan(0);
     expect(container.textContent).not.toMatch(/lost|unreachable/);
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(connect).toHaveBeenCalledWith({ hostId: "studio-01", restart: true });
+  });
+
+  it("holds a restart behind the settle window like any other drop", () => {
+    vi.useFakeTimers();
+    seed({ status: "connecting", attempt: 1, restarting: true });
+    const { container } = render(<HostConnectionBanner />);
+    act(() => {
+      vi.advanceTimersByTime(29_000);
+    });
+    expect(container.firstChild).toBeNull();
+    act(() => {
+      vi.advanceTimersByTime(1_000);
+    });
+    expect(screen.getByText("studio-01 is restarting…")).toBeTruthy();
   });
 
   it("says unreachable with when it was last seen, and retries on request", () => {

@@ -200,6 +200,7 @@ export class LinkClient {
    * moved by later refusals, so the restart it starts has one deadline.
    */
   private shutdownHeardAt: number | null = null;
+  private restartExpiry: ReturnType<typeof setTimeout> | null = null;
   /** What the last logged failure said, so a host down for hours logs once, not every retry. */
   private lastLoggedFailure: string | null = null;
   private generation = 0;
@@ -307,7 +308,7 @@ export class LinkClient {
     await Promise.all([...this.releasing]);
     this.failures = 0;
     this.restartSeen = false;
-    this.shutdownHeardAt = null;
+    this.clearShutdown();
     this.setState({ status: "disconnected" });
   }
 
@@ -391,12 +392,19 @@ export class LinkClient {
       return;
     }
 
+    // Heard before the release, which can take as long as a stalled transport:
+    // the restart's grace runs from when the host said it.
+    if (outcome.kind === "reject") {
+      if (outcome.reject.reason === "shutting-down") this.heardShutdown();
+    } else if (session.closedWith) {
+      // A GOODBYE in place of the WELCOME, from a host already on its way down.
+      this.noteClose(session.closedWith);
+    }
     await this.release(connection);
     // Another attempt (a retryNow while this one was releasing) owns the link now.
     if (stale()) return;
     if (outcome.kind === "reject") {
       const { reject } = outcome;
-      if (reject.reason === "shutting-down") this.heardShutdown();
       const mismatch = reject.handshake
         ? compareHandshake(this.options.handshake, reject.handshake)
         : null;
@@ -409,8 +417,6 @@ export class LinkClient {
       );
       return;
     }
-    // A GOODBYE in place of the WELCOME, from a host already on its way down.
-    if (session.closedWith) this.noteClose(session.closedWith);
     this.fail(outcome.reason);
   }
 
@@ -419,7 +425,25 @@ export class LinkClient {
   }
 
   private heardShutdown(): void {
-    this.shutdownHeardAt ??= this.now();
+    if (this.shutdownHeardAt !== null) return;
+    this.shutdownHeardAt = this.now();
+    // A dial under way when the grace runs out would otherwise keep saying
+    // restarting until it finishes, which a stalled transport makes 30 s.
+    this.restartExpiry = setTimeout(() => {
+      this.restartExpiry = null;
+      const state = this.state;
+      if ((state.status === "connecting" || state.status === "unreachable") && state.restarting) {
+        const { restarting: _restarting, ...rest } = state;
+        this.setState(rest);
+      }
+    }, HOST_RESTART_GRACE_MS);
+    this.restartExpiry.unref?.();
+  }
+
+  private clearShutdown(): void {
+    this.shutdownHeardAt = null;
+    if (this.restartExpiry) clearTimeout(this.restartExpiry);
+    this.restartExpiry = null;
   }
 
   /** When the host was last heard from, by this link or by one before it. */
@@ -514,7 +538,7 @@ export class LinkClient {
     }
     this.lastLoggedFailure = null;
     this.restartSeen = false;
-    this.shutdownHeardAt = null;
+    this.clearShutdown();
     this.current = session;
     this.sessionId = welcome.sessionId;
     this.resumeSecret = welcome.resumeSecret ?? null;

@@ -73,9 +73,9 @@ export function HostConnectionBanner() {
     detail
   );
 
-  if (variant === "reconnecting" || variant === "restarting" || transient) {
-    // Still retrying by itself, so calm; but a drop shown at all has stalled
-    // past the settle window, and Retry doesn't wait for the next dial.
+  if (variant === "restarting") {
+    // The host's own word that it is coming back: calm for as long as that
+    // holds, and Retry doesn't wait for the next dial.
     return (
       <InlineStatusBanner
         icon={Spinner}
@@ -85,16 +85,22 @@ export function HostConnectionBanner() {
         role="status"
         ariaLive="off"
         animated={false}
-        {...(dropped
-          ? {
-              action: {
-                id: "reconnect",
-                label: "Retry",
-                variant: "primary" as const,
-                onClick: reconnectHost,
-              },
-            }
-          : { actions: [] })}
+        action={{ id: "reconnect", label: "Retry", variant: "primary", onClick: reconnectHost }}
+      />
+    );
+  }
+
+  if (transient) {
+    return (
+      <InlineStatusBanner
+        icon={Spinner}
+        title={title}
+        description={description}
+        severity="warning"
+        role="status"
+        ariaLive="off"
+        animated={false}
+        actions={[]}
       />
     );
   }

@@ -185,10 +185,11 @@ export function describeHostRowStatus(row: HostMenuRow, now: number = Date.now()
   if (connection && connection.status !== "connected" && connection.status !== "local") {
     switch (connection.status) {
       case "connecting":
-        return "Connecting…";
+        return connection.restarting ? "Restarting…" : "Connecting…";
       case "disconnected":
         return `Not connected${lastSeenSuffix(row.lastSeenAt, now)}`;
       case "unreachable":
+        if (connection.restarting) return "Restarting…";
         return connection.hostModeOff
           ? `Not listening${lastSeenSuffix(row.lastSeenAt, now)}`
           : `Unreachable${lastSeenSuffix(row.lastSeenAt, now)}`;
@@ -243,10 +244,12 @@ export function describeHostMenuState(
     case "local":
       return { state: "Connected", note: null };
     case "connecting":
-      return { state: "Connecting…", note: null };
+      return { state: connection.restarting ? "Restarting…" : "Connecting…", note: null };
     case "disconnected":
       return { state: "Not connected", note: null };
     case "unreachable":
+      // The host said it was shutting down: one restart, not a failed dial each time.
+      if (connection.restarting) return { state: "Restarting…", note: null };
       // The machine answered and no Daintree is listening there: quit, not
       // started since a reboot, or never set up all look the same from here.
       if (connection.hostModeOff) {
@@ -284,6 +287,7 @@ export function hostMenuNoteAge(row: HostMenuRow): { prefix: string; at: number 
   // The same rows describeHostMenuState gives a last-seen note: not one ssh refused.
   if (
     connection.status === "unreachable" &&
+    !connection.restarting &&
     (connection.hostModeOff === true || !connection.stoppedRetrying) &&
     row.lastSeenAt !== null
   ) {
@@ -300,7 +304,8 @@ export function hostMenuRowHasTrouble(row: HostMenuRow): boolean {
   const connection = row.connection;
   if (!connection) return false;
   if (connection.status === "connected") return connection.quietSince !== undefined;
-  return connection.status === "unreachable" || connection.status === "version-mismatch";
+  if (connection.status === "unreachable") return !connection.restarting;
+  return connection.status === "version-mismatch";
 }
 
 /** The host's installed agent CLIs, as its own detection reported them. */
@@ -350,6 +355,8 @@ export function hostChipStatus(
     case "local":
       return drivenBy ? "driven-elsewhere" : "connected";
     case "unreachable":
+      // Between dials of an announced restart: still on its way back.
+      if (connection.restarting) return "connecting";
       // The machine answered in both; what it said is the state, not "unreachable".
       if (connection.hostModeOff) return "host-mode-off";
       if (connection.stoppedRetrying) return "access-denied";
