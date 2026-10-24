@@ -90,6 +90,7 @@ import {
 } from "./CanopyHostPicker";
 import { CanopyHostOffer } from "./CanopyHostOffer";
 import { useCanopyInboxData } from "./useCanopyInboxData";
+import { useCanopyInboxOrder } from "./useCanopyInboxOrder";
 import { CanopyAssistantPane, CanopyAssistantRow } from "./CanopyAssistantList";
 import {
   CANOPY_ROLE_FILTERS,
@@ -172,16 +173,6 @@ const SCREEN_SEARCH_MAX_TERM_LENGTH = 200;
 function agoPhrase(sinceMs: number, nowMs: number): string {
   const age = formatWaitAge(sinceMs, nowMs);
   return age === "just now" ? age : `${age} ago`;
-}
-/** An ask that pages the user: placed in the list at once, whatever is held. */
-function isUrgentItem(item: CanopyItem): boolean {
-  const card = item.card;
-  return (
-    card !== null &&
-    card.priority >= CANOPY_URGENT_PRIORITY &&
-    card.handledAt === null &&
-    item.disposition === null
-  );
 }
 
 /** An error toast whose one recovery is the place the action can be done by hand. */
@@ -712,139 +703,19 @@ function CanopyInbox({
     baseItems,
   } = useCanopyInboxData({ isOpen, hostId, hostRow, hostRows });
 
-  // Every run shows the moment the panel opens, in the order it was left — or,
-  // the first time, by what Daintree observes of each — and moves to its place
-  // as the readings the open set off land. Once they have, or after
-  // CANOPY_REVEAL_MS, the list holds still between pauses like always. Only
-  // words not yet written show as skeletons.
-  const owedOnOpen = useMemo(() => {
-    // Main hasn't answered the open yet: the snapshot in hand is from before
-    // it, and says nothing about what the open will read.
-    if (canopy?.active !== true) return true;
-    const due = new Set(canopy.wordsDue ?? []);
-    const reading = canopy.busy;
-    return baseItems.some(
-      (item) =>
-        due.has(item.runId) ||
-        item.card?.describing === true ||
-        (reading && item.card === null && item.disposition === null)
-    );
-  }, [baseItems, canopy]);
-  const openedAtRef = useRef<number | null>(null);
-  const [revealed, setRevealed] = useState(false);
-  const [revealWake, setRevealWake] = useState(0);
-  // Showing another host is an opening of its own list.
-  const revealHostRef = useRef(hostId);
-  useLayoutEffect(() => {
-    if (!isOpen) {
-      openedAtRef.current = null;
-      setRevealed(false);
-      return;
-    }
-    if (revealHostRef.current !== hostId) {
-      revealHostRef.current = hostId;
-      openedAtRef.current = null;
-      if (revealed) {
-        setRevealed(false);
-        return;
-      }
-    }
-    if (revealed) return;
-    if (openedAtRef.current === null) openedAtRef.current = Date.now();
-    const left = openedAtRef.current + CANOPY_REVEAL_MS - Date.now();
-    if (!owedOnOpen || left <= 0) {
-      setRevealed(true);
-      return;
-    }
-    const timer = setTimeout(() => setRevealWake((n) => n + 1), left);
-    return () => clearTimeout(timer);
-  }, [isOpen, revealed, owedOnOpen, revealWake, hostId]);
-
-  // The list moves only at moments the user can expect it to; see `nextCanopyOrder`.
-  // Each host keeps its own order: the same run ids mean other runs elsewhere.
-  const refreshedAt = canopy?.refreshedAt ?? null;
-  const ownOrder = useCanopyStore((s) => s.orders[scope]);
-  const hostOrder = useCanopyStore((s) => (hostId === null ? undefined : s.hostOrders[hostId]));
-  const order = (otherHost ? hostOrder : ownOrder) ?? null;
-  const setOrder = useCanopyStore((s) => s.setOrder);
-  const setHostOrder = useCanopyStore((s) => s.setHostOrder);
-  const orderKey = `${hostId ?? ""}|${scope}`;
-  const [pointerInList, setPointerInList] = useState(false);
-  const lastInteractionRef = useRef(0);
-  const pressingRef = useRef(false);
-  // A row's context menu is open: the list holds still under it.
-  const menuOpenRef = useRef(false);
-  const lastRankRef = useRef(0);
-  const openedRef = useRef(false);
-  const orderKeyRef = useRef(orderKey);
-  const [rankWake, setRankWake] = useState(0);
-  const [rankRequest, setRankRequest] = useState(0);
-  const rankRequestSeenRef = useRef(0);
-  useLayoutEffect(() => {
-    if (!isOpen) {
-      openedRef.current = false;
-      return;
-    }
-    if (baseItems.length === 0) return;
-    const now = Date.now();
-    const opening = !openedRef.current || orderKeyRef.current !== orderKey;
-    if (opening) {
-      openedRef.current = true;
-      orderKeyRef.current = orderKey;
-      // What the user sees on opening counts as just ranked.
-      lastRankRef.current = now;
-    }
-    const step = nextCanopyOrder(order, {
-      fresh: baseItems.map((item) => item.runId),
-      priorities: new Map(baseItems.map((item) => [item.runId, itemPriority(item, nowMs)])),
-      urgent: baseItems.filter(isUrgentItem).map((item) => item.runId),
-      refreshedAt,
-      now,
-      opening,
-      revealing: !revealed,
-      requested: rankRequest !== rankRequestSeenRef.current,
-      pressing: pressingRef.current || menuOpenRef.current,
-      pointerInList,
-      lastInteractionAt: lastInteractionRef.current,
-      lastRankAt: lastRankRef.current,
-    });
-    if (step.kind === "set") {
-      if (step.ranked) {
-        lastRankRef.current = now;
-        rankRequestSeenRef.current = rankRequest;
-      }
-      if (hostId === null) setOrder(scope, step.order);
-      else setHostOrder(hostId, step.order);
-      return;
-    }
-    if (step.kind === "hold") return;
-    const timer = setTimeout(() => setRankWake((n) => n + 1), step.ms);
-    return () => clearTimeout(timer);
-  }, [
-    isOpen,
-    scope,
-    hostId,
-    orderKey,
-    baseItems,
-    order,
-    setOrder,
-    setHostOrder,
-    refreshedAt,
-    pointerInList,
-    rankWake,
-    rankRequest,
+  const {
+    items,
+    inbox,
+    owedOnOpen,
     revealed,
-    nowMs,
-  ]);
-  const items = useMemo(() => {
-    const ranks = new Map((order?.ids ?? []).map((id, index) => [id, index]));
-    const rankOf = (item: CanopyItem, index: number) => ranks.get(item.runId) ?? ranks.size + index;
-    return baseItems
-      .map((item, index) => ({ item, rank: rankOf(item, index) }))
-      .sort((a, b) => a.rank - b.rank)
-      .map(({ item }) => item);
-  }, [baseItems, order]);
-  const inbox = useMemo(() => splitInbox(items), [items]);
+    refreshedAt,
+    bodyRef,
+    enterList,
+    leaveList,
+    listHidden,
+    menuOpenChanged,
+    requestRank,
+  } = useCanopyInboxOrder({ isOpen, hostId, otherHost, scope, canopy, baseItems, nowMs });
   // The search the panel opens on: the runs whose names, words or terminal
   // hold every word of it. Typed straight into, it never reaches a row's keys.
   const [query, setQuery] = useState("");
@@ -1085,8 +956,8 @@ function CanopyInbox({
   // A list unmounted under the pointer never says the pointer left.
   const listShown = listed.length > 0;
   useEffect(() => {
-    if (!listShown) setPointerInList(false);
-  }, [listShown]);
+    if (!listShown) listHidden();
+  }, [listShown, listHidden]);
 
   // The search found runs, but only read ones the Unread filter hides: every
   // place that says why the list is empty says that, not "no match".
@@ -1165,37 +1036,6 @@ function CanopyInbox({
     selectedRef.current = focusedItem?.runId ?? null;
     listHostRef.current = hostId;
   });
-  const bodyRef = useRef<HTMLDivElement>(null);
-  // Anything the user does in the panel holds the list still for a while, and
-  // a press holds it until it is let go.
-  useEffect(() => {
-    const body = bodyRef.current;
-    if (!isOpen || !body) return;
-    const note = () => {
-      lastInteractionRef.current = Date.now();
-    };
-    const press = () => {
-      pressingRef.current = true;
-    };
-    const release = () => {
-      if (!pressingRef.current) return;
-      pressingRef.current = false;
-      note();
-      setRankWake((n) => n + 1);
-    };
-    const events = ["pointerdown", "keydown", "wheel", "input"] as const;
-    for (const type of events) body.addEventListener(type, note, { capture: true, passive: true });
-    body.addEventListener("pointerdown", press, { capture: true, passive: true });
-    window.addEventListener("pointerup", release, { capture: true, passive: true });
-    window.addEventListener("pointercancel", release, { capture: true, passive: true });
-    return () => {
-      for (const type of events) body.removeEventListener(type, note, { capture: true });
-      body.removeEventListener("pointerdown", press, { capture: true });
-      window.removeEventListener("pointerup", release, { capture: true });
-      window.removeEventListener("pointercancel", release, { capture: true });
-      pressingRef.current = false;
-    };
-  }, [isOpen]);
   const detailRef = useRef<CanopyCardHandle>(null);
 
   // Where the keyboard goes when the panel closes: the terminal "Go to
@@ -2172,13 +2012,7 @@ function CanopyInbox({
       focusCardNow(item.runId);
       setTrashArm((arm) => ({ runId: item.runId, request: (arm?.request ?? 0) + 1 }));
     },
-    onOpenChange: (open) => {
-      menuOpenRef.current = open;
-      if (open) return;
-      // Closing releases the hold, it doesn't move the list: the idle wait starts from here.
-      lastInteractionRef.current = Date.now();
-      setRankWake((n) => n + 1);
-    },
+    onOpenChange: menuOpenChanged,
   };
 
   // A press spins the button until the refresh it asked for is done, cards
@@ -2195,7 +2029,7 @@ function CanopyInbox({
         .finally(() => {
           setRefreshes((n) => n - 1);
           // What the user asked to see, in order now.
-          setRankRequest((n) => n + 1);
+          requestRank();
         })
     );
   };
@@ -2696,16 +2530,8 @@ function CanopyInbox({
                         id="canopy-inbox-list"
                         role="listbox"
                         aria-labelledby="canopy-inbox-label"
-                        // A mouse or pen resting over a row; a touch has no hover to hold for.
-                        onPointerEnter={(event) => {
-                          if (event.pointerType !== "touch") setPointerInList(true);
-                        }}
-                        onPointerLeave={() => {
-                          // Leaving releases the hold, it doesn't move the list:
-                          // the idle wait starts from here.
-                          lastInteractionRef.current = Date.now();
-                          setPointerInList(false);
-                        }}
+                        onPointerEnter={(event) => enterList(event.pointerType)}
+                        onPointerLeave={leaveList}
                       >
                         {listed.map((item, index) => {
                           const replied = repliedAt(item);
