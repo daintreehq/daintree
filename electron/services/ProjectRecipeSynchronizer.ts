@@ -14,7 +14,6 @@ import { isInRepoRecipeId } from "../../shared/utils/recipeFilename.js";
  * usage metadata the in-repo files never carry.
  */
 export class ProjectRecipeSynchronizer {
-
   // SHA-256 of the raw on-disk bytes for each in-repo recipe, captured on
   // every successful read/write. Used by `writeInRepoRecipeChecked` to refuse
   // a write when an external tool (git pull, branch switch, stash pop) changed
@@ -26,7 +25,6 @@ export class ProjectRecipeSynchronizer {
     private readonly identityFiles: ProjectIdentityFiles,
     private readonly fileStore: Pick<ProjectFileStore, "enqueueRecipesUpdate">
   ) {}
-
 
   private hashKey(projectPath: string, recipeId: string): string {
     return `${projectPath}|${recipeId}`;
