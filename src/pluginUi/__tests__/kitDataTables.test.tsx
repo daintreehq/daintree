@@ -272,6 +272,31 @@ describe("DataTable, rich", () => {
     expect(loadSubRows).toHaveBeenCalledTimes(2);
   });
 
+  it("keeps each table's lazily loaded rows to itself, over the same row", async () => {
+    const shared: Deploy = { id: "d1", name: "web", env: "production" };
+    const table = (label: string, child: string) =>
+      createElement(kit.DataTable<Deploy>, {
+        "aria-label": label,
+        rows: [shared],
+        rowKey: "id",
+        columns: COLUMNS,
+        hasSubRows: () => true,
+        loadSubRows: () => Promise.resolve([{ id: `${label}-c`, name: child, env: "production" }]),
+        defaultExpandedRowKeys: ["d1"],
+      });
+    render(
+      inViewport(
+        createElement("div", null, table("Left", "left-child"), table("Right", "right-child"))
+      )
+    );
+    const left = screen.getByRole("treegrid", { name: "Left" });
+    const right = screen.getByRole("treegrid", { name: "Right" });
+    expect(await within(left).findByText("left-child")).toBeTruthy();
+    expect(await within(right).findByText("right-child")).toBeTruthy();
+    expect(within(left).queryByText("right-child")).toBeNull();
+    expect(within(right).queryByText("left-child")).toBeNull();
+  });
+
   it("keeps the cursor on a branch closed over it, and numbers columns logically", () => {
     render(
       inViewport(
@@ -340,6 +365,37 @@ describe("DataTable, rich", () => {
     expect(screen.getByRole("columnheader", { name: "Environment", hidden: true })).toBeTruthy();
   });
 
+  it("draws the first column when every column is hidden, and keeps it shown", async () => {
+    const onHidden = vi.fn();
+    render(
+      inViewport(
+        createElement(kit.DataTable<Deploy>, {
+          "aria-label": "Bare",
+          rows: DEPLOYS,
+          rowKey: "id",
+          columns: COLUMNS,
+          columnsMenu: true,
+          hiddenColumns: ["name", "env", "region"],
+          onHiddenColumnsChange: onHidden,
+        })
+      )
+    );
+    expect(screen.getByRole("columnheader", { name: "Name" })).toBeTruthy();
+    expect(screen.queryByRole("columnheader", { name: "Environment" })).toBeNull();
+    expect(screen.queryByRole("columnheader", { name: "Region" })).toBeNull();
+    expect(onHidden).not.toHaveBeenCalled();
+    await act(async () => {
+      fireEvent.keyDown(screen.getByRole("button", { name: "Columns" }), { key: "Enter" });
+    });
+    const name = await screen.findByRole("menuitemcheckbox", { name: "Name" });
+    expect(name.getAttribute("aria-checked")).toBe("true");
+    expect(name.hasAttribute("data-disabled")).toBe(true);
+    const env = screen.getByRole("menuitemcheckbox", { name: "Environment" });
+    expect(env.hasAttribute("data-disabled")).toBe(false);
+    fireEvent.click(env);
+    expect(onHidden).toHaveBeenLastCalledWith(["name", "region"]);
+  });
+
   it("resizes from the keyboard, resets on double-click, and remembers widths by key", () => {
     const onWidths = vi.fn();
     const table = () =>
@@ -368,6 +424,39 @@ describe("DataTable, rich", () => {
     ).toBe("132");
     fireEvent.doubleClick(screen.getByRole("separator", { name: /^Resize Name/ }));
     expect(onWidths).toHaveBeenLastCalledWith({});
+  });
+
+  it("shows a dragged width live and reports it once, on release", () => {
+    const onWidths = vi.fn();
+    render(
+      inViewport(
+        createElement(kit.DataTable<Deploy>, {
+          "aria-label": "Dragged",
+          rows: DEPLOYS,
+          rowKey: "id",
+          columns: [
+            { id: "name", header: "Name", width: 120, resizable: true, maxWidth: 200 },
+            { id: "env", header: "Environment" },
+          ],
+          onColumnWidthsChange: onWidths,
+        })
+      )
+    );
+    const handle = screen.getByRole("separator", { name: /^Resize Name/ });
+    const header = () => screen.getByRole("columnheader", { name: "Name" });
+    fireEvent.pointerDown(handle, { button: 0, pointerId: 1, clientX: 100 });
+    fireEvent.pointerMove(handle, { pointerId: 1, clientX: 140 });
+    expect(header().style.width).toBe("160px");
+    fireEvent.pointerMove(handle, { pointerId: 1, clientX: 400 });
+    expect(header().style.width).toBe("200px");
+    expect(onWidths).not.toHaveBeenCalled();
+    fireEvent.pointerUp(handle, { pointerId: 1, clientX: 400 });
+    expect(onWidths).toHaveBeenCalledTimes(1);
+    expect(onWidths).toHaveBeenLastCalledWith({ name: 200 });
+    // The drag is over: a stray move neither reports nor resizes.
+    fireEvent.pointerMove(handle, { pointerId: 1, clientX: 100 });
+    expect(onWidths).toHaveBeenCalledTimes(1);
+    expect(header().style.width).toBe("200px");
   });
 
   it("pins the first column after the checkboxes", () => {
